@@ -111,9 +111,13 @@ spec:
               value: {{ .Values.worldserver.rateXp.kill | quote }}
             - name: AC_RATE_XP_QUEST
               value: {{ .Values.worldserver.rateXp.quest | quote }}
-            # SOAP stays off. The harness has no privileged control path into
-            # the world by design (docs/CONTRACTS.md); actions go through the
-            # module, over the same opcode handlers a client would hit.
+            # SOAP is off until the party staging turns it on, in-cluster
+            # only, for the operator's admin STAGER account; a run pod's
+            # NetworkPolicy and the sandbox's port rule keep it out of the
+            # agent's reach (docs/proposals/GROUP-PLAY.md). The agent itself
+            # has no privileged control path into the world (docs/CONTRACTS.md
+            # binds what it sees and does); actions go through the module,
+            # over the same opcode handlers a client would hit.
             - name: AC_SOAP_ENABLED
               value: "0"
             # Server.log to the CONSOLE. The compose value was a File appender

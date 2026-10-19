@@ -147,17 +147,19 @@ export class CompactionAsk {
  * catalogue and the field's default. So 475,000 reported is 450,000 (GPT-6.1
  * Sol: no call at or above it went uncompacted across 72 cycles) and 258,400
  * is 244,800 (GPT-6 Astra, whose context peaked about 242k). Re-checked at
- * every CLI bump, like `DISABLED_FEATURES`. The driver sets no
- * `model_auto_compact_token_limit`; should a codex compaction window ever be
- * a run dimension (#131), the CLI takes the smaller of it and this 90%, and
- * so must this.
+ * every CLI bump, like `DISABLED_FEATURES`. A run's `compactWindow` reaches
+ * the CLI as `model_auto_compact_token_limit` (`codexArgs`), which replaces
+ * the catalogue's own limit; the CLI then takes the smaller of it and this
+ * 90% (`ModelInfo::auto_compact_token_limit`), and so does this.
  */
 export const CODEX_AUTO_COMPACT_PERCENT = 90;
 export const CODEX_EFFECTIVE_WINDOW_PERCENT = 95;
 
-export function codexAutoCompactLimit(reportedWindow: number): number {
+export function codexAutoCompactLimit(reportedWindow: number, compactWindow?: string | undefined): number {
   const window = Math.round((reportedWindow * 100) / CODEX_EFFECTIVE_WINDOW_PERCENT);
-  return Math.floor((window * CODEX_AUTO_COMPACT_PERCENT) / 100);
+  const cap = Math.floor((window * CODEX_AUTO_COMPACT_PERCENT) / 100);
+  const configured = compactWindowTokens(compactWindow);
+  return configured === undefined ? cap : Math.min(configured, cap);
 }
 
 /**
@@ -195,6 +197,47 @@ export function claudeAutoCompactLimit(o: {
   const reserve = Math.min(o.maxOutputTokens !== undefined && o.maxOutputTokens > 0 ? o.maxOutputTokens : CLAUDE_SUMMARY_OUTPUT_RESERVE, CLAUDE_SUMMARY_OUTPUT_RESERVE);
   const limit = window - reserve - CLAUDE_AUTO_COMPACT_BUFFER;
   return limit > 0 ? limit : undefined;
+}
+
+// ------------------------------------------------- a window the CLI caps
+
+/**
+ * Why a run's compaction window cannot be recorded as what the CLI applied,
+ * or null when it can. Each pinned CLI caps the window it is given: Codex
+ * compacts at min(window, 90% of the catalogue window) (`codexAutoCompactLimit`),
+ * Claude Code at min(window, the model's context window). A window at or above
+ * that cap is one the CLI silently replaces by its own limit, so the run
+ * would be stamped with a condition it never ran under (#131). Neither cap is
+ * knowable before the CLI reports it: the codex catalogue window and the
+ * claude-code model window come from the provider, not the pinned image, and
+ * the repository keeps no per-model table of either. So each driver asks this
+ * at the first turn boundary that reports the model's window and, on a reason,
+ * ends the run as `harness-error` — never evidence — before a second turn.
+ *
+ * `cap` is in tokens; `what` names it for the reason.
+ */
+export function compactWindowCapRefusal(compactWindow: string | undefined, cap: number, what: string): string | null {
+  const configured = compactWindowTokens(compactWindow);
+  if (configured === undefined || !(cap > 0) || configured < cap) return null;
+  return (
+    `compactWindow ${compactWindow} (${configured} tokens) is at or above ${what} (${cap} tokens), ` +
+    `so the CLI applies its own limit and the run would record a window it never ran under — choose a smaller window or auto`
+  );
+}
+
+/** The codex form: the reported window's 90% cap. */
+export function codexWindowCapRefusal(compactWindow: string | undefined, reportedWindow: number): string | null {
+  if (!(reportedWindow > 0)) return null;
+  return compactWindowCapRefusal(
+    compactWindow,
+    codexAutoCompactLimit(reportedWindow),
+    `the Codex CLI's own auto-compaction limit for this model (90% of the ${Math.round((reportedWindow * 100) / CODEX_EFFECTIVE_WINDOW_PERCENT)}-token catalogue window)`,
+  );
+}
+
+/** The claude-code form: the model's context window off `modelUsage`. */
+export function claudeWindowCapRefusal(compactWindow: string | undefined, contextWindow: number): string | null {
+  return compactWindowCapRefusal(compactWindow, contextWindow, "the model's context window, which the Claude Code CLI caps the window to");
 }
 
 /**

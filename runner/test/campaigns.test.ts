@@ -109,14 +109,24 @@ describe("pairs that cannot launch", () => {
     ],
   });
 
-  test("an arm setting the window refuses an entry that sets one too, and any entry off claude-code", () => {
-    const roster = { plain: { driver: "claude-code" }, windowed: { driver: "claude-code", compactWindow: "100k" }, astra: { driver: "codex" }, glm: {} };
-    const c = joined([windows], { w: { version: 1, assignments: ["plain", "windowed", "astra", "glm"].map((model) => ({ model })) } }).campaigns[0]!;
+  test("an arm setting the window refuses an entry that sets one too, and any entry off claude-code and codex", () => {
+    const roster = {
+      plain: { driver: "claude-code" },
+      windowed: { driver: "claude-code", compactWindow: "100k" },
+      astra: { driver: "codex" },
+      astraWindowed: { driver: "codex", compactWindow: "100k" },
+      glm: {},
+      stub: { driver: "stub" },
+    };
+    const refs = ["plain", "windowed", "astra", "astraWindowed", "glm", "stub"];
+    const c = joined([windows], { w: { version: 1, assignments: refs.map((model) => ({ model })) } }).campaigns[0]!;
     const refused = campaignPairRefusals(c, roster);
-    expect(refused.map((p) => `${p.ref}:${p.arm}`)).toEqual(["windowed:w200k", "astra:w200k", "glm:w200k"]);
+    // A codex entry with no window of its own runs the arm (operator, 2026-10-11).
+    expect(refused.map((p) => `${p.ref}:${p.arm}`)).toEqual(["windowed:w200k", "astraWindowed:w200k", "glm:w200k", "stub:w200k"]);
     expect(refused[0]!.reason).toContain("already sets compactWindow 100k");
-    expect(refused[1]!.reason).toContain("codex driver");
+    expect(refused[1]!.reason).toContain("already sets compactWindow 100k");
     expect(refused[2]!.reason).toContain("openai driver");
+    expect(refused[3]!.reason).toContain("stub driver");
   });
 
   test("read with the roster, they are refused by `<id>@<v>:<ref>:<arm>` and their squares are never work", () => {

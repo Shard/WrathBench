@@ -147,9 +147,11 @@ compose), which is read when the worldserver is recreated.
 
 `bootstrap.ts` writes SQL directly rather than using SOAP or the worldserver
 console. SOAP cannot create the *first* account — `ACSoap.cpp` requires the caller to be
-`SEC_ADMINISTRATOR` and the base auth schema seeds no accounts at all — and it
-would mean enabling a privileged control path into the world, which the harness
-deliberately does not have. The console (attaching to the worldserver, then
+`SEC_ADMINISTRATOR` and the base auth schema seeds no accounts at all — and
+SOAP is nothing the *agent* may ever reach: `docs/CONTRACTS.md` binds the
+agent's path, and its one use, the operator's party staging, is in-cluster
+and on an admin account no bench session can open
+(`docs/proposals/GROUP-PLAY.md`). The console (attaching to the worldserver, then
 `account create ...`, which is what AzerothCore's docker README tells you
 to do by hand) is interactive, races the world load, and is not idempotent.
 The cost of direct SQL is a small reimplementation of SRP6, pinned to
@@ -208,9 +210,12 @@ observes what a client could observe and still only acts through the module. A
 fixture is the operator arranging the world before a run, the same way the
 operator picks which account a smoke logs into.
 
-**Why direct SQL.** The same reason as bootstrap above: the harness has no
-privileged control path into the running world. SOAP is off by contract and the
-worldserver console is interactive and racy. Setting up a *character* has the
+**Why direct SQL.** The same reason as bootstrap above: the agent has no
+privileged control path into the running world (`docs/CONTRACTS.md` binds the
+agent's path; the operator's party staging uses SOAP in-cluster, on an admin
+account, for the one write SQL cannot make guid-safely,
+`docs/proposals/GROUP-PLAY.md`) and the worldserver console is interactive and
+racy. Setting up a *character* has the
 extra constraint that it must never be something the agent can reach, which is
 why it lives in `infra/` and refuses any account not matching
 `^(SMOKE\d*|PROBE)$`. Runner and shakeout accounts are never fixtured — a

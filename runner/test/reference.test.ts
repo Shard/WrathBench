@@ -36,6 +36,7 @@ import { referenceTick, type ReferenceEnv } from "../src/reference/program";
 import { NORTHSHIRE_PALADIN, REFERENCE_ROUTE, referenceModelId, type Route } from "../src/reference/route";
 import { createApi } from "../viewer/api";
 import { tempDirs } from "./fixtures/temp-dirs";
+import { requestsOf } from "./fixtures/requests";
 import { northshireOpening, referenceSandbox } from "./fixtures/reference-world";
 
 const tempDir = tempDirs();
@@ -68,6 +69,11 @@ describe("the program", () => {
       // The adapter imports the program (to send its text) and nothing that reaches the world.
       for (const i of imports) expect(i).toMatch(/from "\.\/program"/);
       expect(src).not.toMatch(/\bfetch\(|node:fs|bun:sqlite|Bun\.file|readFileSync/);
+    }
+    // The sandbox refuses a snippet's own fetch and WebSocket: the ambient `sdk`
+    // is its only path to the module, and the text the snippets carry uses no other.
+    for (const text of [referenceTick.toString(), JSON.stringify(REFERENCE_ROUTE)]) {
+      expect(text).not.toMatch(/\bfetch\b|WebSocket|new WrathClient|globalThis\.fetch/);
     }
   });
 
@@ -270,6 +276,16 @@ describe("through the fixed loop and the sandbox's own compiler", () => {
     expect(String(snippets[0]!["code"])).toContain("tick: (");
     expect(results.every((r) => /\[log\] REF \{/.test(String(r["text"])))).toBe(true);
     expect(records.filter((r) => r.t === "response").length).toBe(40);
+    // Forty turns trim the window and fold its older block's results to one
+    // line each; the driver reads only the newest result, which is never
+    // folded, so it went on advancing through every folded window.
+    const sent = requestsOf(dir);
+    const folded = sent.filter((r) => r.messages.some((m) => m.role === "tool" && (m.content ?? "").startsWith("[folded by harness]")));
+    expect(folded.length).toBeGreaterThan(0);
+    for (const r of folded) {
+      const newest = [...r.messages].reverse().find((m) => m.role === "tool");
+      expect(newest?.content ?? "").toContain("[log] REF {");
+    }
     trajectory.close();
   });
 

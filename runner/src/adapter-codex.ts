@@ -157,7 +157,7 @@ import { DEFAULT_CODEX_HOME_ENV, harnessOf, type PauseReason, type RunConfig, ty
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { McpServer } from "./mcp";
 import { CodexLastCallReader, CodexRolloutFollower, removeThreadRollouts, writeCodexThread, type CodexCompaction } from "./codex-rollout";
-import { CompactionAsk, codexAutoCompactLimit, compactionNotice, summaryFields, type CompactionRecord } from "./cli-compaction";
+import { CompactionAsk, codexAutoCompactLimit, codexWindowCapRefusal, compactionNotice, compactWindowTokens, summaryFields, type CompactionRecord } from "./cli-compaction";
 import { codexUsageDelta, codexUsageRegressed, normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 import { SUBSCRIPTION_PAUSE } from "./lapse";
 import { SubscriptionUsageTracker, describeWindows, newestLaneUsage, subscriptionLaneOf, subscriptionThresholds } from "./subscription-usage";
@@ -461,6 +461,12 @@ export interface CodexArgsOptions {
   model?: string | undefined;
   /** `model_reasoning_effort`, when the run declares one. Must be a `CODEX_EFFORTS` level. */
   effort?: string | undefined;
+  /**
+   * The run's compaction window (`RunConfig.compactWindow`, canonical `100k`…`1M`),
+   * passed as the integer `model_auto_compact_token_limit`. Absent is the CLI's
+   * own `auto`, and nothing is sent.
+   */
+  compactWindow?: string | undefined;
   /** The fixed system prompt, written to disk: replaces the CLI's base instructions. */
   instructionsPath: string;
   /** The interpreter and the bridge script the CLI launches as the MCP server, plus the runner's port. */
@@ -480,12 +486,19 @@ export interface CodexArgsOptions {
 export function codexArgs(o: CodexArgsOptions): string[] {
   const refusal = codexEffortRefusal(o.effort);
   if (refusal !== null) throw new Error(refusal);
+  const windowTokens = compactWindowTokens(o.compactWindow);
+  if (o.compactWindow !== undefined && windowTokens === undefined) {
+    throw new Error(`compactWindow ${JSON.stringify(o.compactWindow)} is not a canonical window (parseCompactWindow)`);
+  }
   const config: string[] = [
     `web_search="disabled"`,
     `approval_policy="never"`,
     `sandbox_mode="read-only"`,
     `model_instructions_file=${tomlString(o.instructionsPath)}`,
     ...(o.effort !== undefined ? [`model_reasoning_effort=${tomlString(o.effort)}`] : []),
+    // A bare TOML integer: the pinned CLI reads it as `Option<i64>` and
+    // applies min(it, 90% of the catalogue window) (`codexAutoCompactLimit`).
+    ...(windowTokens !== undefined ? [`model_auto_compact_token_limit=${windowTokens}`] : []),
     `mcp_servers.${MCP_SERVER_NAME}.command=${tomlString(o.bunBin)}`,
     `mcp_servers.${MCP_SERVER_NAME}.args=[${tomlString(o.bridgePath)},${tomlString(String(o.mcpPort))}]`,
     // Without this every call fails under approval_policy=never; see the header.
@@ -793,6 +806,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       threadId,
       model: config.model,
       ...(config.effort !== undefined ? { effort: config.effort } : {}),
+      ...(config.compactWindow !== undefined ? { compactWindow: config.compactWindow } : {}),
       instructionsPath,
       bunBin: process.execPath,
       bridgePath,
@@ -813,6 +827,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     mcpPort: listener.port,
     systemPromptChars: systemPrompt.length,
     ...(config.objective !== undefined ? { objective: config.objective } : {}),
+    // Named beside its `-c` key, as the claude driver names its env-borne one.
+    ...(config.compactWindow !== undefined ? { compactWindow: config.compactWindow } : {}),
   });
   const version = cliVersion(bin, env);
   if (version !== null) trajectory.recordResolved(runId, { model: null, cliVersion: version });
@@ -986,6 +1002,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     trajectory.append({ t: "harness", kind: "session_note", text: `codex compaction reader unavailable: ${reason}` });
   });
   const compactionAsk = new CompactionAsk();
+  /** Whether the run's window has been checked against the first window the CLI reported (`codexWindowCapRefusal`). */
+  let windowChecked = config.compactWindow === undefined;
   const pushResponse = (entry: Record<string, unknown> & { t: string }): void => {
     flushPendingResponse();
     pendingResponse = entry;
@@ -1349,6 +1367,15 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
         trajectory.append({ t: "harness", kind: "session_note", text: `turn ${turn} produced no assistant output` });
       }
 
+      // A window the CLI would cap to its own limit ends the run at the first
+      // turn that reports the model's window, before it records a condition
+      // nothing applied (`compactWindowCapRefusal`, cli-compaction.ts).
+      const reportedWindow = followed.context?.window;
+      if (!windowChecked && reportedWindow !== undefined) {
+        windowChecked = true;
+        const capped = codexWindowCapRefusal(config.compactWindow, reportedWindow);
+        if (capped !== null) return terminate("harness-error", capped);
+      }
       if (config.maxTurns !== undefined && turn >= config.maxTurns) {
         return terminate("turn-limit", `${turn} turns`);
       }
@@ -1368,11 +1395,12 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       }
       // The episodic-log ask, delivered in the next turn's context: the
       // context is the last call's input plus output as the rollout reported
-      // it, the threshold the pinned CLI's rule over the window it reported.
-      const reportedWindow = followed.context?.window;
+      // it, the threshold the pinned CLI's rule over the window it reported,
+      // never above the run's own window.
       const ask = compactionAsk.noteTurn({
         context: followed.context?.total,
-        threshold: reportedWindow !== undefined ? codexAutoCompactLimit(reportedWindow) : undefined,
+        threshold:
+          reportedWindow !== undefined ? codexAutoCompactLimit(reportedWindow, config.compactWindow) : compactWindowTokens(config.compactWindow),
         compactions: followed.compactions.map((c) => c.preTokens),
       });
       if (ask !== null) {

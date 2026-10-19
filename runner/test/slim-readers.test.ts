@@ -104,16 +104,21 @@ describe("the viewer reads old, new and mixed alike", () => {
     const mixed = await tailOf(variants.mixed);
     const requestAt = legacy.entries.filter((e) => e.t === "request").map((e) => e.i);
     expect(requestAt.length).toBe(SEGMENT_TURNS[0] + SEGMENT_TURNS[1] + 2);
+    let folded = 0;
     for (const i of requestAt) {
       const want = (JSON.parse((await legacy.raw(i))!) as { messages: unknown }).messages;
       for (const tail of [slim, mixed]) {
-        const got = JSON.parse((await tail.raw(i))!) as { messages?: unknown; rebuilt?: unknown; slim?: unknown };
+        const got = JSON.parse((await tail.raw(i))!) as { messages?: unknown; rebuilt?: unknown; slim?: unknown; window?: { fold?: number } };
         expect(got.messages).toEqual(want);
         // A rebuilt body says so, and says it verified.
         if (got.slim !== undefined) expect(got.rebuilt).toEqual({ verified: true });
         else expect(got.rebuilt).toBeUndefined();
+        if ((got.window?.fold ?? 0) > 0) folded++;
       }
     }
+    // The viewer walks a window back from its request and folds it by the
+    // recorded count, which is relative to the window's start for that reason.
+    expect(folded).toBeGreaterThan(5);
   });
 
   test("a raw request whose window no longer matches is served with a failed verdict, never as verified", async () => {

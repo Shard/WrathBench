@@ -78,8 +78,10 @@ model that cannot be configured out is stated with its label (principle 3):
 `codex` gives GPT-6 models its code mode and collaboration tools. A harness
 setting has the harness's default and may be overridden per roster entry, as a
 recorded run dimension like effort rather than per-model tuning (operator,
-2026-10-16); the claude-code compaction window is one, with the CLI's own
-`auto` as the default (2026-10-09).
+2026-10-16); the compaction window is one (claude-code, 2026-10-09), and a
+general one that covers codex too, with each CLI's own `auto` staying the
+default on every driver and a probe campaign comparing windows (arms `auto`,
+100k, 200k and 300k) (operator, 2026-10-11).
 
 ## Client fidelity
 
@@ -150,7 +152,15 @@ One fixed context for every model (`runner/src/context.ts`): the fixed system
 prompt, a window of recent messages trimmed in blocks so the provider cache
 prefix survives, and one fresh deterministic message — goal, harness notices,
 a HUD summary of already-observed fields, recent events and the full
-scratchpad. Old turns are dropped, so the scratchpad is the only durable
+scratchpad. Within the window only the most recent block is verbatim: in the
+older block each tool result is folded to a deterministic one-line record —
+tool, arguments cut short, ok or error, duration where known — while the
+model's own calls stay as sent (operator, 2026-10-19). Kept verbatim, one
+timeout hint rode about twenty requests. The fold moves only at a trim, so it
+breaks no cache prefix of its own, and the last two turns are never folded, so
+a result is read in full on the turn it arrives and the turn after. The CLI
+scaffolds keep and compact their own conversation, so neither the trim nor the
+fold applies to them. Old turns are dropped, so the scratchpad is the only durable
 memory and the prompt says so; models with weak note-taking underperform at
 equal reasoning strength, which is signal, not bias. A write that would take
 the scratchpad past its 32,000-character cap is refused and saves nothing,

@@ -141,7 +141,7 @@ its own, is `dashboard/README.md`'s.
 
 ```
 /v1/manifest.json                    mutable   max-age=30   { gen, artifacts: {name: key}, generatedAt }
-/v1/live.json                        mutable   max-age=30   fleet + positions fast lane, trace tails inline
+/v1/live.json                        mutable   max-age=30   fleet + positions fast lane, trace tails and nearby units inline
 /v1/snap/<ver>/runs.json …           immutable max-age=1y   one aggregate, at its own content version
 /v1/run/<id>/<ver>/detail.json …     immutable max-age=1y   per-run detail and track
 /v1/run/<id>/trace/<t0>.json         immutable max-age=1y   one closed five-minute trace window
@@ -268,6 +268,41 @@ period plus the two 30 s caches, a poll and a margin, with the period learned
 from the `generatedAt`s the page sees (`dashboard/README.md`, "The map's
 player"). That is the price of movement rather than a jump per pass.
 
+### The units around a live run
+
+The live map draws the creatures around each live character under its pip,
+and the public site draws them too, live only. Each pass reads every run the
+position feed flags `nearby` (its ring is being written) and carries that
+run's window inline in `live.json`, under `nearby` by run id, with the
+position's flag kept only where the window is. There is no object of its own.
+
+- **Live only, by construction.** A window is the last `PUBLIC_NEARBY_SPAN_MS`
+  (twelve minutes) of the ring, the next pass overwrites it, and a run that
+  stops being live leaves the feed and takes its window with it; a ring that
+  goes on a pause or a stop is gone from the next pass. Nothing else in the
+  bucket names a unit: no segment, no track, nothing in a replay. The edge
+  holds `live.json` for 30 s, so nothing outlives the live window there either.
+- **Twelve minutes, because of the live clock.** The public map plays about
+  nine minutes behind the newest `live.json`, and from one pass to the next
+  its playhead reaches about nine minutes behind the pass in hand at the
+  nominal cadence and eleven with passes ten minutes apart. Twelve covers both
+  (`runner/viewer/nearby.ts`; `dashboard/test/nearbyplayer.test.ts` runs the
+  clock against it). A slower publisher leaves the layer empty for part of a
+  cycle rather than showing old units. The window is read straight after the
+  feed, at the top of the pass, so it reaches as far back as the playhead.
+- **One projection.** `projectLiveNearby` keeps the flagged runs, passes each
+  window through `projectNearby` (the private viewer's public mode, unchanged)
+  and cuts it to the span, so the bucket's verifier re-projects it like any
+  other body, and checks independently that it is live (`live-only`) and
+  holds no player, pet or withheld key.
+- **The cost** is bytes, not writes: `live.json` is PUT every pass anyway.
+  A real ring measured 13–25 KB gzipped per character per five-minute private
+  window, so a twelve-minute window is roughly 30–60 KB gzipped per live
+  character per pass (a busy town can be more), less what the projection drops (other players, their
+  pets, subnames, guids and the 3D fields; on the render rig's fixture the
+  public window is about 70% of the private one). Every reader of
+  `live.json` fetches it, the home page's fleet table included.
+
 ### Data plane: R2 behind a custom domain with a cache rule
 
 R2 has free egress and a free tier (10 GB stored, 10M reads, 1M writes per
@@ -313,8 +348,8 @@ CORS-free posture (the bucket carries the project's first and only CORS
 policy, scoped to the app hostname).
 
 The public site includes the live fleet and map: pips and
-fleet state at the push cadence, and the map over real minimap
-tiles. Where a tile comes from is
+fleet state at the push cadence, the units around each live character, and the
+map over real minimap tiles. Where a tile comes from is
 `dashboard/src/lib/tiles.ts` and nowhere else — the data hostname in the public
 build, same-origin in the private viewer — so the two shapes share one path and
 neither is special-cased. Replaying a freeplay character end to end works there too: the
@@ -460,6 +495,15 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   projector passes such a window back unchanged, so the bucket's verifier
   still reads it as a fixed point. The `tail` in `live.json` crosses the
   same projector.
+- **The units around a live character ship, live only.** Creatures only, by
+  `projectNearby`: no other player, no unit another player owns, charms or
+  drives, and none while it targets another player or their pet. Each keeps
+  its guid, entry id, name, creature type, level, health, the dead flag, its
+  service roles and quest marker, and whether it targets this character; the
+  map colours by those packet fields and never by client data. Withheld: the
+  subname, every other guid (a target, an owner, a charmer), the unit flags and
+  the 3D fields, and the character's own guid and target. Only `live.json`
+  carries them, overwritten every pass ("The units around a live run").
 - **The trace's character sheet ships as numbers and item names**
   (operator, 2026-10-18). Money, equipment with its random property id, worn
   bags, carried items, durability (public with deaths), the quest log's ids,
@@ -552,7 +596,10 @@ because the build reads none of what was left out.
 
 Published and unread, left as they were because each is stated as public above
 or is the operator's to decide: the `campaignVersion` and `arm` stamps on a
-result row and a run's row (for matching a run to its campaign pane).
+result row and a run's row (for matching a run to its campaign pane), and a
+nearby unit's `entry` and `ctype` in `live.json` (entry ids are public, and
+both are in the key set `projectNearby` already gives the viewer's public
+mode; the map's layer reads neither).
 
 **The map's quest count is the run's.** A live position's `questsCompleted` in
 `live.json`, and each point's in a track, is summed across the counter's
@@ -880,9 +927,9 @@ per live character per closed window, and that count does not depend on the
 cadence: a window closes every five minutes, whenever the pass that uploads it
 runs. A character live around the clock adds 288 a day, about **8.6k a month**.
 Three such characters take the month to about 116k, roughly 12% of the free
-tier. Nothing else per pass moves: the tail rides inside the `live.json` PUT
-already made, and the window list inside a `track.json` a live run rewrites
-every pass anyway.
+tier. Nothing else per pass moves: the tail and the units around each live
+character ride inside the `live.json` PUT already made, and the window list
+inside a `track.json` a live run rewrites every pass anyway.
 
 Unverified at research time (primary pages blocked from the research
 environment; confirm before relying on them): the exact Pro-plan feature

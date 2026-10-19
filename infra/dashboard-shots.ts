@@ -27,8 +27,9 @@
  *
  * The named states, each shot on each site as `<site>-<state>.png`: `home`,
  * `run-live` (the live run's page), `map-live`, `map-live-selected` (its
- * character clicked, so the sidebar shows its sheet), and `map-replay` (the
- * ended run, paused halfway). `--path P` adds a shot of any path, named after it.
+ * character clicked, so the sidebar shows its sheet), `map-live-nearby` (zoomed
+ * in on it, where the units around it draw), and `map-replay` (the ended run,
+ * paused halfway). `--path P` adds a shot of any path, named after it.
  * `facts.json` beside the shots holds each page's uncaught errors, console
  * errors and third-party requests. For states that need clicks, import
  * `startRig` and drive `rig.page(...)` from a script of your own.
@@ -85,6 +86,8 @@ export interface RigPage {
   seek(fraction: number): Promise<boolean>;
   /** Click the map outward from its centre until the sidebar names `character`; false when no click did. */
   select(character: string): Promise<boolean>;
+  /** Wheel the map in on its centre by `steps` notches (each about ×1.57); false when there is no map. */
+  zoom(steps: number): Promise<boolean>;
   /** `<out>/<name>.png`, of the viewport or of the first match of `selector`. */
   shot(name: string, selector?: string): Promise<string>;
   close(): Promise<void>;
@@ -162,6 +165,7 @@ export async function startRig(opts: RigOptions): Promise<Rig> {
   let fixture: Fixture | null = null;
   if (opts.runs === undefined || opts.runs.length === 0) {
     fixture = writeFixture(runsDir);
+    await fixture.ready;
     log(`fixture runs: ${fixture.live} (live), ${fixture.ended} (ended)`);
   } else {
     for (const src of opts.runs) {
@@ -287,6 +291,17 @@ export async function startRig(opts: RigOptions): Promise<Rig> {
           }
           return false;
         },
+        async zoom(steps) {
+          const box = await page.eval<{ x: number; y: number } | null>(
+            `(() => { const c = document.querySelector(".map-stage canvas"); if (!c) return null; const r = c.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`,
+          );
+          if (box === null) return false;
+          for (let i = 0; i < steps; i++) {
+            await page.wheel(box.x, box.y, -300);
+            await sleep(150);
+          }
+          return true;
+        },
         async shot(name, selector) {
           const path = join(out, `${name}.png`);
           await page.screenshot(path, selector);
@@ -322,6 +337,8 @@ export interface State {
   seek?: number;
   /** A character to select on the map first. */
   select?: string;
+  /** Notches to wheel the map in on its centre first. */
+  zoom?: number;
 }
 
 /** The named states, for the runs the rig picked: a state whose run is missing is left out. */
@@ -329,7 +346,11 @@ export function defaultStates(live: string | null, ended: string | null, liveCha
   const states: State[] = [{ name: "home", path: "/", wait: "main" }];
   if (live !== null) states.push({ name: "run-live", path: `/run/${encodeURIComponent(live)}`, wait: "main" });
   states.push({ name: "map-live", path: "/map", wait: "canvas" });
-  if (liveCharacter !== null) states.push({ name: "map-live-selected", path: "/map", wait: "canvas", select: liveCharacter });
+  if (liveCharacter !== null) {
+    states.push({ name: "map-live-selected", path: "/map", wait: "canvas", select: liveCharacter });
+    // The map opens fitted on the live character; six notches is past the nearby layer's gate and its names'.
+    states.push({ name: "map-live-nearby", path: "/map", wait: "canvas", zoom: 6, select: liveCharacter });
+  }
   if (ended !== null) states.push({ name: "map-replay", path: `/map?run=${encodeURIComponent(ended)}`, wait: "input.scrubber", seek: 0.5 });
   return states;
 }
@@ -433,13 +454,15 @@ async function main(argv: readonly string[]): Promise<number> {
         const p = await rig.page(site, { ...c.viewport, scheme: c.scheme });
         const found = await p.open(st.path, st.wait, c.settle);
         const seeked = st.seek === undefined ? undefined : await p.seek(st.seek);
+        const zoomed = st.zoom === undefined ? undefined : await p.zoom(st.zoom);
         const selected = st.select === undefined ? undefined : await p.select(st.select);
-        if (seeked === true || selected === true) await sleep(c.settle);
+        if (seeked === true || zoomed === true || selected === true) await sleep(c.settle);
         const file = await p.shot(name);
         facts[name] = { path: st.path, found, ...(seeked !== undefined ? { seeked } : {}), ...(selected !== undefined ? { selected } : {}), ...p.page.facts };
         const trouble = [
           found ? null : `never saw ${st.wait}`,
           seeked === false ? "no scrubber to seek" : null,
+          zoomed === false ? "no map to zoom" : null,
           selected === false ? `no click selected ${st.select}` : null,
           p.page.facts.errors.length > 0 ? `${p.page.facts.errors.length} page error(s)` : null,
         ].filter(Boolean);

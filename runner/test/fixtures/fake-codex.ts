@@ -136,7 +136,9 @@ const record = await loadRecord();
 record["cwd"] = process.cwd();
 record["model"] = flagValue("-m") ?? null;
 record["effort"] = cfg["model_reasoning_effort"] !== undefined ? unToml(cfg["model_reasoning_effort"]) : null;
-record["sandboxMode"] = cfg["sandbox_mode"] !== undefined ? unToml(cfg["sandbox_mode"]) : null;
+// Raw, not unquoted: the CLI reads it as a TOML integer, so a quoted value is a bug.
+record["autoCompactLimit"] = cfg["model_auto_compact_token_limit"] ?? null;
+record["sandboxMode"] =cfg["sandbox_mode"] !== undefined ? unToml(cfg["sandbox_mode"]) : null;
 record["approvalPolicy"] = cfg["approval_policy"] !== undefined ? unToml(cfg["approval_policy"]) : null;
 record["webSearch"] = cfg["web_search"] !== undefined ? unToml(cfg["web_search"]) : null;
 record["mcpApproval"] = cfg["mcp_servers.wrathbench.default_tools_approval_mode"] !== undefined ? unToml(cfg["mcp_servers.wrathbench.default_tools_approval_mode"]) : null;

@@ -151,9 +151,15 @@ has at least one; a sweep that tests nothing harness-side has one arm
   (`--compact-window`) is the one exception, because varying it is what such
   an arm is for (operator, 2026-10-11). An arm that sets the window cannot run
   an assignment whose roster entry sets one too, nor one off the claude-code
-  driver: the planner refuses that (assignment, arm) pair before any launch,
-  under the key `<id>@<v>:<ref>:<arm>`, because a launch that fails spends an
-  attempt.
+  and codex drivers: the planner refuses that (assignment, arm) pair before
+  any launch, under the key `<id>@<v>:<ref>:<arm>`, because a launch that
+  fails spends an attempt. A window the CLI would cap to its own limit is
+  known only once the CLI reports the model's window, so that run ends as
+  `harness-error` after its first turn (runner/README.md, "The compaction
+  window"). The arm's window is in the run's tuple, not the entry's identity:
+  the run stays the entry's it ran as (`config.ref`) for its lane, its ladder
+  and its resume, and it counts in its own arm's square, so two arms that
+  differ only by window never pool.
 
 **The launch rule.** Before a probe starts, the launcher writes
 `runs/<id>/campaign.json` (`runner/src/campaign-file.ts`): the campaign, its

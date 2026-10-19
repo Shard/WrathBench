@@ -19,12 +19,21 @@
  * and a scratchpad. The state line's quest count starts again at zero halfway
  * (`questsAt`), as a resumed process's does, so the map's quest figure shows
  * the run's sum (3) where the newest sample says 1.
+ *
+ * The live run also has a nearby ring (`nearbyScene`), written by the
+ * runner's own `NearbyWriter` and reaching back fourteen minutes so the public
+ * map, which plays about nine behind, has units at its playhead: boars that
+ * wander, one fighting the character, one dead, a questgiver of each mark,
+ * and another player with their pet and a creature chasing them, which only
+ * the private map draws.
  */
 
 import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { comparabilityOf } from "../../runner/src/comparability";
 import { loadRunConfig, unscoredStamp } from "../../runner/src/config";
+import { NearbyWriter } from "../../runner/src/nearby";
+import type { NearbyRow, NearbyUnit } from "../../runner/src/nearby-row";
 import { Trajectory } from "../../runner/src/trajectory";
 import type { TraceDict, TraceKeyData, TraceRow } from "../../runner/src/trace-row";
 import { TRACE_WINDOW_MS } from "../../runner/src/trace-row";
@@ -291,10 +300,116 @@ const PAD = (character: string): string => `# ${character}: an invented plan
 2. Rest above 60% health.
 `;
 
+/* ------------------------------------------------------------ the ring --- */
+
+/** A unit guid: high type (0xF130 creature, 0xF140 pet), entry in bits 24..47, a low counter. */
+const unitGuid = (entry: number, low: number, high = 0xf130): string => ((BigInt(high) << 48n) | (BigInt(entry) << 24n) | BigInt(low)).toString(10);
+/** The live character's own guid, as its ring's self names it. */
+const SELF_GUID = "7";
+const OTHER_PLAYER = "4242";
+/** One step of every moving unit: a spline from where it is to where it will be. */
+const STEP_MS = 5_000;
+
+interface SceneUnit {
+  id: string;
+  ty: NearbyUnit["ty"];
+  s: NearbyUnit["s"];
+  /** Where it is at `t`; constant for a unit that stands. */
+  at: (t: number) => { x: number; y: number };
+  moves: boolean;
+}
+
+/** The units around the live character: invented names and entries, all within a few dozen yards of its loop. */
+function nearbyScene(): SceneUnit[] {
+  const still = (dx: number, dy: number) => () => ({ x: CENTRE.x + dx, y: CENTRE.y + dy });
+  const wander = (cx: number, cy: number, r: number, periodMs: number, phase: number) => (t: number) => {
+    const a = (2 * Math.PI * ((t + phase) % periodMs)) / periodMs;
+    return { x: CENTRE.x + cx + r * Math.cos(a), y: CENTRE.y + cy + r * Math.sin(a) };
+  };
+  /** A step behind the character on its loop: the boar it is fighting. */
+  const follow = (t: number) => {
+    const p = position(t - 1_500, 0);
+    return { x: p.x + 2, y: p.y + 2 };
+  };
+  const boar = (low: number) => ({ entry: 90001, name: "Invented Boar", level: 6 + (low % 2), hp: 100 });
+  return [
+    { id: unitGuid(90001, 1), ty: "creature", s: boar(1), at: wander(-40, 12, 6, 70_000, 0), moves: true },
+    { id: unitGuid(90001, 2), ty: "creature", s: boar(2), at: wander(38, -18, 5, 55_000, 20_000), moves: true },
+    { id: unitGuid(90001, 3), ty: "creature", s: boar(3), at: wander(12, 42, 7, 90_000, 40_000), moves: true },
+    { id: unitGuid(90001, 4), ty: "creature", s: boar(4), at: wander(-18, -44, 4, 60_000, 10_000), moves: true },
+    { id: unitGuid(90001, 5), ty: "creature", s: { ...boar(5), tg: SELF_GUID, tgs: true }, at: follow, moves: true },
+    { id: unitGuid(90001, 6), ty: "creature", s: { ...boar(6), hp: 0, df: 0x20 }, at: still(30, 20), moves: false },
+    { id: unitGuid(90002, 7), ty: "creature", s: { entry: 90002, name: "Invented Quartermaster", sub: "Supplies", level: 30, hp: 100, nf: 0x3, qg: 8 }, at: still(-6, 8), moves: false },
+    { id: unitGuid(90003, 8), ty: "creature", s: { entry: 90003, name: "Invented Scout", level: 12, hp: 100, nf: 0x2, qg: 10 }, at: still(6, -8), moves: false },
+    { id: unitGuid(90004, 9), ty: "creature", s: { entry: 90004, name: "Invented Hare", ctype: 8, level: 1, hp: 100 }, at: wander(-30, 34, 3, 40_000, 0), moves: true },
+    // Private only: another player, their pet, and a creature chasing them.
+    { id: OTHER_PLAYER, ty: "player", s: { name: "Otherwick", level: 9 }, at: wander(48, 30, 9, 120_000, 0), moves: true },
+    { id: unitGuid(90005, 10, 0xf140), ty: "pet", s: { entry: 90005, name: "Otherwick's Hound", ow: OTHER_PLAYER }, at: wander(48, 30, 9, 120_000, -2_000), moves: true },
+    { id: unitGuid(90006, 11), ty: "creature", s: { entry: 90006, name: "Invented Prowler", level: 8, hp: 100, tg: OTHER_PLAYER, tgs: false }, at: wander(48, 30, 9, 120_000, -4_000), moves: true },
+  ];
+}
+
+/** The ring's rows from `from` (exclusive) to `to`: each moving unit's spline per step. */
+function sceneRows(scene: readonly SceneUnit[], from: number, to: number): NearbyRow[] {
+  const rows: NearbyRow[] = [];
+  for (let t = from - (from % STEP_MS) + STEP_MS; t <= to; t += STEP_MS) {
+    for (const u of scene) {
+      if (!u.moves) continue;
+      const a = u.at(t);
+      const b = u.at(t + STEP_MS);
+      rows.push({ ts: t, kind: "mv", id: u.id, m: { k: "mv", t, p: [a.x, a.y, CENTRE.z], to: [b.x, b.y, CENTRE.z], ms: STEP_MS } });
+    }
+  }
+  return rows;
+}
+
+/** The live run's ring, written by the runner's own writer: a key `backMs` ago, the scene since, and a ticker to keep it going. */
+function writeRing(runDir: string, now: number, backMs: number): { ready: Promise<void>; tick: (t: number) => void; close: () => void } {
+  const scene = nearbyScene();
+  const from = now - backMs;
+  let pending: NearbyRow[] = [
+    {
+      ts: from,
+      kind: "key",
+      self: { guid: SELF_GUID, map: 0, target: null, down: false },
+      units: scene.map((u) => {
+        const p = u.at(from);
+        return { id: u.id, ty: u.ty, s: u.s, m: { k: "pos", t: from, p: [p.x, p.y, CENTRE.z, 0] } };
+      }),
+    },
+    ...sceneRows(scene, from, now),
+  ];
+  let through = now;
+  const writer = new NearbyWriter({
+    runDir,
+    sandbox: {
+      nearbyDrain: async () => {
+        const rows = pending;
+        pending = [];
+        return { rows, dropped: 0, through };
+      },
+    },
+    log: () => {},
+  });
+  let last = now;
+  return {
+    ready: writer.drain(),
+    tick(t) {
+      pending.push(...sceneRows(scene, last, t));
+      last = t;
+      through = t;
+      void writer.drain();
+    },
+    close: () => writer.close(),
+  };
+}
+
 export interface Fixture {
   runsDir: string;
   live: string;
   ended: string;
+  /** Resolves once the live run's nearby ring is on disk. */
+  ready: Promise<void>;
   /** Keep the live run live: a position, a heartbeat and now and then a state sample. */
   tick(now?: number): void;
   close(): void;
@@ -337,11 +452,14 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
     utimesSync(heartbeat, t / 1000, t / 1000);
   };
   beat(now);
+  const ring = writeRing(join(runsDir, LIVE_RUN), now, 14 * 60_000);
   return {
     runsDir,
     live: LIVE_RUN,
     ended: ENDED_RUN,
+    ready: ring.ready,
     tick(t = Date.now()) {
+      ring.tick(t);
       const to = at(t);
       if (to > last) {
         live.recordTrace(LIVE_RUN, traceRows({ ...liveSpec, traceTo: to }, last + 2_000, to, false));
@@ -355,6 +473,7 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
       beat(t);
     },
     close() {
+      ring.close();
       live.close();
     },
   };

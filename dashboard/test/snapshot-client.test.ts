@@ -39,6 +39,7 @@ import type {
   RunDetailResponse,
   TrackResponse,
 } from "../../runner/viewer/api-types";
+import { emptyNearbyWindow } from "../../runner/viewer/nearby";
 import { ApiError } from "../src/api/client";
 import {
   SNAPSHOT_EDGE_TTL_MS,
@@ -583,12 +584,23 @@ describe("per-run artifacts", () => {
     expect(b.urls).toEqual([`${BASE}/v1/run/r%201/trace/${t0}.json`]);
   });
 
-  test("nearby units are not published yet: an empty window, and nothing asked of the bucket", async () => {
-    const b = bucket({});
+  test("a live run's nearby window is read out of the fast lane, and a run it carries none for answers an empty one", async () => {
+    const t0 = 1_760_000_100_000;
+    const w1 = { ...emptyNearbyWindow("r1", t0, t0 + 600_000), ids: ["17370386017530052609"], ty: [0] };
+    const positions = { positions: [{ runId: "r1", nearby: true }, { runId: "r2" }] };
+    const b = bucket({ [`${BASE}/v1/live.json`]: { generatedAt: GENERATED_AT, fleet: { present: false }, positions, nearby: { r1: w1 } } });
     const c = createSnapshotClient(BASE, { fetch: b.fetch });
-    const w = await c.nearby("r1", 60_000);
-    expect(w).toMatchObject({ v: 1, run: "r1", ids: [], ev: [] });
-    expect(b.urls).toEqual([]);
+    // Whatever span is asked for: the published window is the one there is.
+    expect(await c.nearby("r1", 60_000)).toEqual(w1);
+    expect(await c.nearby("r2", 60_000)).toMatchObject({ v: 1, run: "r2", t0: GENERATED_AT, ids: [], ev: [] });
+    // One read of the fast lane for both; no object of its own is ever asked for.
+    expect(b.urls).toEqual([`${BASE}/v1/live.json`]);
+  });
+
+  test("a fast lane from before the nearby layer answers an empty window", async () => {
+    const b = bucket({ [`${BASE}/v1/live.json`]: { generatedAt: GENERATED_AT, fleet: { present: false }, positions: { positions: [] } } });
+    const c = createSnapshotClient(BASE, { fetch: b.fetch });
+    expect(await c.nearby("r1", 60_000)).toMatchObject({ v: 1, run: "r1", ids: [], ev: [] });
   });
 
   test("the fast lane says how often it lands and how long its caches hold it", () => {

@@ -166,7 +166,11 @@ describe("the snippet child's stdout and stderr", () => {
     try {
       const res = await host.evalSnippet(
         [
-          "const s = process.env.WRATHBENCH_SECRET;",
+          // The secret is no longer in the child's environment (#74; it is
+          // struck at startup), so the snippet stands one in — a secret that
+          // surfaced in output by any means is still scrubbed everywhere it is
+          // written.
+          `const s = ${JSON.stringify(FAKE_LEASE)};`,
           'console.log("env WRATHBENCH_SECRET=" + s);',
           'console.error("refused with " + s);',
           'console.log("plain line, é ✓");',
@@ -229,13 +233,16 @@ describe("a tool result the model reads, from a real snippet child", () => {
   test("the secret a snippet logs, returns or throws is [redacted]", async () => {
     const { ctx, host, trajectory } = setup();
     try {
+      // The secret is struck from the child's env (#74), so these stand in a
+      // literal copy — the point is that the redactor scrubs the secret from
+      // what the model reads however it surfaced.
       const logged = await callTool(ctx, "run_snippet", {
-        code: 'console.log("env " + process.env.WRATHBENCH_SECRET); console.error("refused with " + process.env.WRATHBENCH_SECRET); console.log("plain line, é ✓")',
+        code: `console.log("env " + ${JSON.stringify(FAKE_LEASE)}); console.error("refused with " + ${JSON.stringify(FAKE_LEASE)}); console.log("plain line, é ✓")`,
       });
       expect(logged.text).toContain(`--- console ---\n[log] env ${REDACTED}\n[error] refused with ${REDACTED}\n[log] plain line, é ✓`);
-      const returned = await callTool(ctx, "run_snippet", { code: "process.env.WRATHBENCH_SECRET" });
+      const returned = await callTool(ctx, "run_snippet", { code: JSON.stringify(FAKE_LEASE) });
       expect(returned.text).toContain(`=> "${REDACTED}"`);
-      const thrown = await callTool(ctx, "run_snippet", { code: 'throw new Error("refused with " + process.env.WRATHBENCH_SECRET)' });
+      const thrown = await callTool(ctx, "run_snippet", { code: `throw new Error("refused with " + ${JSON.stringify(FAKE_LEASE)})` });
       expect(thrown.isError).toBe(true);
       expect(thrown.text).toContain(`Error: refused with ${REDACTED}`);
       for (const r of [logged, returned, thrown]) expect(r.text).not.toContain(FAKE_LEASE);
@@ -254,7 +261,8 @@ describe("a tool result the model reads, from a real snippet child", () => {
     try {
       const res = await callTool(ctx, "run_snippet", {
         code: [
-          "const s = process.env.WRATHBENCH_SECRET;",
+          // Struck from the child's env (#74); a literal stands in.
+          `const s = ${JSON.stringify(FAKE_LEASE)};`,
           'process.stderr.write("dumping " + s.slice(0, 20));',
           "await sleep(50);",
           `process.stderr.write(s.slice(20) + "x".repeat(${filler}) + "\\n");`,
@@ -277,8 +285,10 @@ describe("a tool result the model reads, from a real snippet child", () => {
   test("a secret a snippet writes to the scratchpad is stored [redacted], so the pad the model is shown is the pad it can edit", async () => {
     const { ctx, host, scratchpad, trajectory } = setup();
     try {
-      await callTool(ctx, "run_snippet", { code: 'await scratchpad.write("# plan\\nkey: " + process.env.WRATHBENCH_SECRET)' });
-      await callTool(ctx, "run_snippet", { code: 'await scratchpad.append("again " + process.env.WRATHBENCH_SECRET)' });
+      // Struck from the child's env (#74); a literal stands in for a secret
+      // that surfaced by any means.
+      await callTool(ctx, "run_snippet", { code: `await scratchpad.write("# plan\\nkey: " + ${JSON.stringify(FAKE_LEASE)})` });
+      await callTool(ctx, "run_snippet", { code: `await scratchpad.append("again " + ${JSON.stringify(FAKE_LEASE)})` });
       expect(scratchpad.read()).toBe(`# plan\nkey: ${REDACTED}\nagain ${REDACTED}`);
       const edited = await callTool(ctx, "edit_scratchpad", { old: `key: ${REDACTED}`, new: "key: held by the SDK" });
       expect(edited.isError).toBeFalsy();

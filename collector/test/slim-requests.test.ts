@@ -59,7 +59,7 @@ describe("the collector reads old, new and mixed alike", () => {
     const slim = requests.filter((r) => r["messages"] === "");
     expect(full.length).toBeGreaterThan(0);
     expect(slim.length).toBeGreaterThan(0);
-    for (const r of slim) expect(JSON.parse(String(r["raw"]))).toMatchObject({ t: "request", slim: 1 });
+    for (const r of slim) expect(JSON.parse(String(r["raw"]))).toMatchObject({ t: "request", slim: 2 });
     for (const r of full) expect(Array.isArray(JSON.parse(String(r["messages"])))).toBe(true);
   });
 
