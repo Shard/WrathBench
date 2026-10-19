@@ -18,6 +18,10 @@
  *               reason if this snippet is abandoned; an awaited sleep asked
  *               for at least the time the snippet had left is named in the
  *               abandon message, and is never shortened for it
+ *   wait({ on, maxMs })  only on a run with the in-snippet wake option
+ *               (`../wake.ts`): holds the snippet open past its limit until a
+ *               named event, a promise or a predicate, up to five minutes of
+ *               waiting per snippet. Absent on every other run
  *   signal      AbortSignal for the *current* snippet; fires when the host
  *               abandons it (timeout). Every SDK wait honors it by default.
  *   scratchpad  { read(), write(content), append(text) } — the run's markdown
@@ -81,6 +85,7 @@ import { CONTEXT_POLICY, foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../contex
 import { NearbyRecorder } from "./nearby-recorder";
 import { TraceRecorder } from "./trace-recorder";
 import type { ActionBatch, ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, FlightSignal, HostToChild, HostcallResult, LogEntry, MoveIntentNote } from "./ipc";
+import { WAKE_CAP_MS, WAKE_ENV, wakeOptionsFromEnv, type WakeFactKey } from "../wake";
 
 const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086";
 // The host always passes WRATHBENCH_TOKEN; the fallback only covers running
@@ -585,7 +590,14 @@ function drainHints(): ActionHintNote[] {
  * is the host's id for it, which the action log groups by: a routine a snippet
  * launched shares that snippet's context, and so its id.
  */
-const evalContext = new AsyncLocalStorage<{ evalId: number; signal: AbortSignal; deadline?: number; timeoutMs?: number }>();
+const evalContext = new AsyncLocalStorage<{
+  evalId: number;
+  signal: AbortSignal;
+  deadline?: number;
+  timeoutMs?: number;
+  /** How much of the in-snippet wait budget (`WAKE_CAP_MS`) this eval's `wait`s are holding; `wait` keeps it, and `deadline` moves with it. */
+  waitHeldMs?: number;
+}>();
 const currentSignal = (): AbortSignal | undefined => evalContext.getStore()?.signal;
 /** When the host will abandon the snippet we are inside, if it said. */
 const currentDeadline = (): number | undefined => evalContext.getStore()?.deadline;
@@ -800,7 +812,12 @@ function releasePadCalls(id: number): void {
 // result, so read it in slices (one `## ` section, or lines filtered by name).
 // Resolved from this file's location — sdk and runner are sibling workspaces —
 // rather than the cwd, which the child does not control.
-const API_MD_PATH = join(import.meta.dir, "..", "..", "..", "sdk", "API.md");
+//
+// A run with the in-snippet wait reads the wake variant, which is API.md with
+// the `wait` entry added (`sdk/generate-api-docs.ts`), so every other run reads
+// the file it always did.
+const WAKE = wakeOptionsFromEnv(process.env[WAKE_ENV]);
+const API_MD_PATH = join(import.meta.dir, "..", "..", "..", "sdk", WAKE?.inSnippet === true ? "API-wake.md" : "API.md");
 
 /**
  * Why `sleep` resolves. `elapsed` is the timer; the other two are the world
@@ -951,6 +968,228 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
   });
 }
 
+// ------------------------------------------------------------ wake-on-event
+
+/**
+ * Wake-on-event (`../wake.ts`), installed only in a child started with an
+ * option on (`WAKE`); a child without one registers none of this.
+ *
+ * The tap turns the event stream into the wake facts both waits read: a death
+ * (own health reaching zero from a reading that was not, the transition only,
+ * as `sleep` reads it), the stream closing, a level gained, a quest's
+ * objectives done (the quest log's completion bit rising), and a unit starting
+ * to attack us. The level and the completion bits seed silently from the
+ * first reading (the first non-empty quest log), so a restarted child does not
+ * report the run's past as news. With
+ * the turn-end wait the facts go to the host as they happen (`wake_fact`);
+ * in-snippet waits listen here.
+ */
+type WakeListener = (key: WakeFactKey, detail?: string) => void;
+const wakeListeners = new Set<WakeListener>();
+/** Every in-snippet wait still open, by the function that ends it; `wake_waits` and a harness notice end them all. */
+const openWaits = new Set<(woke: string) => void>();
+
+function emitWake(key: WakeFactKey, detail?: string): void {
+  if (WAKE?.turnEnd === true) send({ t: "wake_fact", key, ts: Date.now(), ...(detail !== undefined ? { detail } : {}) });
+  for (const l of [...wakeListeners]) l(key, detail);
+}
+
+/** End every open in-snippet wait: the run is stopping, or the harness has a notice for the model. */
+function wakeOpenWaits(woke: string): void {
+  for (const end of [...openWaits]) end(woke);
+}
+
+if (WAKE !== null) {
+  let lastDead = client.state.self.health?.value.current === 0;
+  let lastLevel: number | undefined;
+  let completeQuests: Set<number> | undefined;
+  client.events.onAny((event) => {
+    const self = client.state.self;
+    const dead = self.health?.value.current === 0;
+    if (dead && !lastDead) emitWake("died");
+    lastDead = dead;
+    const level = self.level?.value;
+    if (typeof level === "number") {
+      if (lastLevel !== undefined && level > lastLevel) emitWake("levelUp", `level ${level}`);
+      lastLevel = level;
+    }
+    const log = client.state.questLog;
+    // Seeded from the first log that holds anything: the empty log before the
+    // login backlog arrives would make every quest already complete in it a
+    // fresh completion after each restart or resume.
+    if (Array.isArray(log) && (completeQuests !== undefined || log.length > 0)) {
+      const done = new Set(log.filter((q) => q.complete).map((q) => q.questId));
+      if (completeQuests !== undefined) {
+        for (const q of log) if (q.complete && !completeQuests.has(q.questId)) emitWake("questComplete", q.title ?? `quest ${q.questId}`);
+      }
+      completeQuests = done;
+    }
+    if (event.opcode === "SMSG_ATTACKSTART") {
+      const d = event.data as { victimGuid?: unknown } | null;
+      const me = self.guid;
+      if (me !== undefined && typeof d?.victimGuid === "string" && d.victimGuid === me) emitWake("attacked");
+    }
+  });
+  // The stream has no close hook, so its state is read once a second: a drop
+  // the reconnect ladder repairs within the second is not a wake.
+  let wasConnected = client.events.connected;
+  const streamWatch = setInterval(() => {
+    const now = client.events.connected;
+    if (wasConnected && !now) emitWake("streamClosed");
+    wasConnected = now;
+  }, 1_000);
+  streamWatch.unref?.();
+}
+
+/** What `wait` accepts as a name: the optional wake keys, and `died` (always on, accepted anyway). */
+const WAIT_NAMES: readonly string[] = ["levelUp", "questComplete", "attacked", "died"];
+const OPCODE_NAME = /^(?:SMSG|MSG|WB)_[A-Z0-9_]+$/;
+/** How often a predicate is checked between events. */
+const WAIT_POLL_MS = 1_000;
+
+type WaitOn = string | PromiseLike<unknown> | (() => unknown);
+
+/** What a `wait` resolves with: what fired — the name or opcode passed, `promise`, `predicate`, a mandatory wake, or `maxMs` — and how long it waited. */
+interface WaitResult {
+  woke: string;
+  waitedMs: number;
+}
+
+function isThenable(v: unknown): v is PromiseLike<unknown> {
+  return v !== null && (typeof v === "object" || typeof v === "function") && typeof (v as { then?: unknown }).then === "function";
+}
+
+/**
+ * `wait({ on, maxMs })` — hold the snippet open past its time limit until
+ * something named happens (in-snippet option only; `../wake.ts`).
+ *
+ * `on` is one or an array of: a wake name (`levelUp`, `questComplete`,
+ * `attacked`), an event opcode (`WB_MOVE_RESULT`, any `SMSG_*`), a promise
+ * (wakes when it settles, either way), or a function returning true (checked
+ * at once, on every event and every second; a throw rejects the wait). A
+ * death, the stream closing and a harness notice always wake it. `maxMs`
+ * defaults to, and may not exceed, `WAKE_CAP_MS`.
+ *
+ * The snippet's time limit is held for the time the wait may take, out of a
+ * budget of `WAKE_CAP_MS` per snippet, and what it did not use is handed back
+ * as it wakes: the host moves the eval's timeout (`wait_hold` /
+ * `wait_release`) and the snippet's own deadline moves with it. Past the
+ * budget, waiting counts like any other time. A wait in a routine whose
+ * snippet has already returned holds nothing; it is a timer that wakes on
+ * events. The ambient signal still aborts it, as it does `sleep`.
+ */
+function wait(options?: { on?: WaitOn | readonly WaitOn[]; maxMs?: number }): Promise<WaitResult> {
+  if (options !== undefined && (options === null || typeof options !== "object" || Array.isArray(options))) {
+    throw new TypeError(`wait(options) takes an object { on, maxMs }, got ${options === null ? "null" : Array.isArray(options) ? "an array" : typeof options} — e.g. wait({ on: "levelUp", maxMs: 120000 })`);
+  }
+  const extra = Object.keys(options ?? {}).filter((k) => k !== "on" && k !== "maxMs");
+  if (extra.length > 0) throw new TypeError(`wait({ on, maxMs }) has no option ${extra.join(", ")}`);
+  const maxMs = options?.maxMs ?? WAKE_CAP_MS;
+  if (typeof maxMs !== "number" || !Number.isFinite(maxMs) || maxMs < 0 || maxMs > WAKE_CAP_MS) {
+    throw new TypeError(`wait({ maxMs }) takes 0 to ${WAKE_CAP_MS} milliseconds (five minutes), got ${typeof maxMs === "number" ? maxMs : typeof maxMs}`);
+  }
+  const raw = options?.on;
+  const ons: readonly WaitOn[] = raw === undefined ? [] : Array.isArray(raw) ? raw : [raw as WaitOn];
+  const names: string[] = [];
+  const opcodes: string[] = [];
+  const promises: PromiseLike<unknown>[] = [];
+  const predicates: (() => unknown)[] = [];
+  for (const o of ons) {
+    if (typeof o === "string" && WAIT_NAMES.includes(o)) names.push(o);
+    else if (typeof o === "string" && OPCODE_NAME.test(o)) opcodes.push(o);
+    else if (typeof o === "function") predicates.push(o as () => unknown);
+    else if (isThenable(o)) promises.push(o);
+    else {
+      throw new TypeError(
+        `wait({ on }) takes a wake name (${WAIT_NAMES.filter((n) => n !== "died").map((n) => JSON.stringify(n)).join(", ")}), an event opcode such as "WB_MOVE_RESULT", ` +
+          `a promise or a function returning true, or an array of these — got ${typeof o === "string" ? JSON.stringify(o) : typeof o}`,
+      );
+    }
+  }
+
+  return new Promise<WaitResult>((resolve, reject) => {
+    const signal = currentSignal();
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const started = Date.now();
+    const store = evalContext.getStore();
+    // Hold the snippet open for what this wait may take, out of what is left.
+    let held = 0;
+    if (store !== undefined && evalControllers.has(store.evalId)) {
+      held = Math.max(0, Math.min(maxMs, WAKE_CAP_MS - (store.waitHeldMs ?? 0)));
+      if (held > 0) {
+        store.waitHeldMs = (store.waitHeldMs ?? 0) + held;
+        if (store.deadline !== undefined) store.deadline += held;
+        send({ t: "wait_hold", id: store.evalId, ms: held });
+      }
+    }
+    let settled = false;
+    const offs: (() => void)[] = [];
+    const finish = (woke: string, err?: unknown): void => {
+      if (settled) return;
+      settled = true;
+      for (const off of offs) off();
+      const waitedMs = Date.now() - started;
+      const unused = Math.max(0, held - waitedMs);
+      if (unused > 0 && store !== undefined) {
+        store.waitHeldMs = Math.max(0, (store.waitHeldMs ?? 0) - unused);
+        if (store.deadline !== undefined) store.deadline -= unused;
+        if (evalControllers.has(store.evalId)) send({ t: "wait_release", id: store.evalId, ms: unused });
+      }
+      send({ t: "wait_done", evalId: store?.evalId ?? null, woke: err === undefined ? woke : "error", waitedMs, maxMs });
+      if (err !== undefined) reject(err);
+      else resolve({ woke, waitedMs });
+    };
+    // The stream closing is the tap's fact (`listener`, below), a transition
+    // like a death: a wait begun on a closed stream can still be woken by a
+    // promise, a predicate or its own maxMs.
+    const check = (): void => {
+      for (const p of predicates) {
+        let hit: unknown;
+        try {
+          hit = p();
+        } catch (err) {
+          return finish("predicate", err);
+        }
+        if (hit === true) return finish("predicate");
+      }
+    };
+
+    const timer = setTimeout(() => finish("maxMs"), maxMs);
+    offs.push(() => clearTimeout(timer));
+    const onAbort = (): void => finish("abandoned", signal?.reason);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    offs.push(() => signal?.removeEventListener("abort", onAbort));
+    openWaits.add(finish);
+    offs.push(() => openWaits.delete(finish));
+    const listener: WakeListener = (key) => {
+      if (key === "died" || key === "streamClosed" || names.includes(key)) finish(key);
+    };
+    wakeListeners.add(listener);
+    offs.push(() => wakeListeners.delete(listener));
+    if (opcodes.length > 0 || predicates.length > 0) {
+      offs.push(
+        client.events.onAny((event) => {
+          if (opcodes.includes(event.opcode)) return finish(event.opcode);
+          if (predicates.length > 0) check();
+        }),
+      );
+    }
+    const poll = setInterval(check, WAIT_POLL_MS);
+    poll.unref?.();
+    offs.push(() => clearInterval(poll));
+    for (const p of promises) {
+      Promise.resolve(p).then(
+        () => finish("promise"),
+        () => finish("promise"),
+      );
+    }
+    check();
+  });
+}
+
 const ambient: Record<string, unknown> = {
   API_MD_PATH,
   /**
@@ -981,6 +1220,9 @@ const ambient: Record<string, unknown> = {
     append: (text: string): Promise<unknown> => padWrite("scratchpad_append", text),
   },
 };
+// The in-snippet wait is ambient only on a run with it on; every other run's
+// snippets see the surface they always did.
+if (WAKE?.inSnippet === true) ambient["wait"] = wait;
 Object.assign(globalThis, ambient);
 // `signal` is per-eval, so it is a getter over the async context rather than a
 // value: an abandoned snippet keeps seeing its own (aborted) signal after the
@@ -1601,6 +1843,9 @@ function handle(msg: HostToChild | HostcallResult): void {
     case "client_cache_seed":
       seedClientCache(msg.frames);
       return;
+    case "wake_waits":
+      wakeOpenWaits(msg.reason);
+      return;
     case "hostcall_result": {
       const pending = hostcallPending.get(msg.id);
       if (pending) {
@@ -1692,6 +1937,16 @@ function faultSignature(kind: string, reason: unknown): string {
   return `${kind}: ${Bun.inspect(reason).slice(0, 120)}`;
 }
 
+/**
+ * A background fault's notice to the host, which raises it as a harness
+ * notice. An in-snippet wait wakes for a harness notice, so the open ones end
+ * here too (no-op without the in-snippet wait: there are none).
+ */
+function sendFatal(error: string): void {
+  send({ t: "fatal", error });
+  wakeOpenWaits("notice");
+}
+
 function reportBackgroundError(kind: string, reason: unknown): void {
   const now = Date.now();
   const text = reason instanceof Error ? renderError(reason) : Bun.inspect(reason, { depth: 4 }).slice(0, 1_000);
@@ -1724,7 +1979,7 @@ function reportBackgroundError(kind: string, reason: unknown): void {
   if (stat.count === 1 && immediateReports < FAULT_IMMEDIATE_CAP) {
     immediateReports++;
     realConsole.error?.(`[sandbox] ${kind}:`, text);
-    send({ t: "fatal", error: `${kind} (sandbox survived; bindings and routines intact): ${text}` });
+    sendFatal(`${kind} (sandbox survived; bindings and routines intact): ${text}`);
     lastFaultNoticeAt = now;
     return;
   }
@@ -1741,7 +1996,7 @@ function reportBackgroundError(kind: string, reason: unknown): void {
       `loops check so they exit, then restart the routine with a try/catch inside it. ` +
       `Further identical faults will only be reported as periodic rollups.`;
     realConsole.error?.(`[sandbox] ${escalation}`);
-    send({ t: "fatal", error: escalation });
+    sendFatal(escalation);
     lastFaultNoticeAt = now;
     return;
   }
@@ -1753,7 +2008,7 @@ function reportBackgroundError(kind: string, reason: unknown): void {
     rollupPending.clear();
     const rollup = `background faults continuing (aggregated; sandbox alive): ${summary} since the last report`;
     realConsole.error?.(`[sandbox] ${rollup}`);
-    send({ t: "fatal", error: rollup });
+    sendFatal(rollup);
     lastFaultNoticeAt = now;
   }
 }

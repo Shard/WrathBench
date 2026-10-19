@@ -38,6 +38,7 @@ import type { ItemSample, Trajectory } from "./trajectory";
 import { NearbyWriter } from "./nearby";
 import { TraceWriter } from "./trace";
 import type { Watchdogs } from "./watchdogs";
+import { sleepUntilWoken, wakeCursor } from "./wake";
 
 /**
  * `TRADE_STATUS_TRADE_COMPLETE` on 3.3.5a: what `SMSG_TRADE_STATUS` carries
@@ -1160,6 +1161,17 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     builder,
     tickMs: o.stateTickMs,
     stopped: () => finished || stopRequestOf(o.signal) !== null,
+    // A snippet held open by an in-snippet wait (`wake.ts`) would hold the
+    // turn boundary, where this loop reads its watchdogs, for minutes: once a
+    // watchdog has a verdict the open waits are woken, so the snippet returns
+    // and the boundary enforces it. A wake, not enforcement.
+    ...(config.wake?.inSnippet === true
+      ? {
+          onSample: () => {
+            if (watchdogs.check() !== null) o.sandbox.wakeWaits();
+          },
+        }
+      : {}),
   });
   try {
     for (;;) {
@@ -1228,7 +1240,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         return terminate(integrity.reason, integrity.detail);
       }
 
-      const systemText = buildSystemPrompt(config.objective, config.episode, harnessOf(config.driver), config.wiki);
+      const systemText = buildSystemPrompt(config.objective, config.episode, harnessOf(config.driver), config.wiki, config.wake);
       const messages: ChatMessage[] = [
         { role: "system", content: systemText },
         ...messageWindow(history),
@@ -1257,6 +1269,9 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       } else {
         trajectory.append({ t: "harness", kind: "request_replay_mismatch", turn, detail: mismatch });
       }
+      // The turn-end wake counts from the request (`wake.ts`): a wake that
+      // lands while the model is replying still wakes the wait that follows.
+      const wakeFrom = config.wake?.turnEnd === true ? wakeCursor(o.sandbox) : null;
       const outcome = await o.adapter.complete({ messages, tools: toolsFor({ wikiCoords: config.wikiCoords, wikiSearch: config.wiki }), signal: o.signal });
       if (outcome.kind === "stub-complete") return terminate("stub-complete");
       if (outcome.kind === "pause") {
@@ -1430,7 +1445,24 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           }
         }
       }
-      await sleep(config.stepIntervalMs);
+      if (wakeFrom !== null && outcome.turn.toolCalls.length === 0) {
+        // Wake-on-event (`wake.ts`): a reply with no tool call sleeps until a
+        // wake fires or the cap passes, the step interval its floor. The next
+        // message says what fired; the record says how long it slept.
+        await sleepUntilWoken({
+          source: o.sandbox,
+          cursor: wakeFrom,
+          pendingNotices,
+          stopped: () => stopRequestOf(o.signal) !== null || watchdogs.check() !== null,
+          stepIntervalMs: config.stepIntervalMs,
+          turn: builder.currentTurn,
+          append: (r) => trajectory.append(r),
+          now: o.now ?? Date.now,
+          sleep,
+        });
+      } else {
+        await sleep(config.stepIntervalMs);
+      }
     }
   } catch (err) {
     // An abandoned request throws; the stop request is the real outcome.

@@ -200,6 +200,18 @@ export const comparabilitySchema = z.object({
    */
   compactWindow: z.string().nullable().optional(),
   /**
+   * Wake-on-event (`wake.ts`, `RunConfig.wake`), a probe arm's harness change.
+   * A KEY: a run that sleeps until woken and one re-prompted every few seconds
+   * are two loops, and the arms of one campaign run on one image, so neither
+   * the harness version nor its series can tell them apart. The rendered
+   * prompt differs too, so `promptHash` already separates them; this field is
+   * what makes the separation readable. A key for now (operator, 2026-10-19).
+   *
+   * ABSENT, never `{false, false}`, on a run with both options off, which keeps
+   * every such tuple byte-for-byte what it was before the field existed.
+   */
+  wake: z.object({ turnEnd: z.boolean(), inSnippet: z.boolean() }).optional(),
+  /**
    * The model id the provider said it actually served — `claude-sonnet-5` for a
    * run launched as `sonnet`.
    *
@@ -286,7 +298,7 @@ export function comparabilityOf(
   const harness = harnessOf(config.driver);
   // Rendered for THIS run's harness: the prompt's context sentence differs
   // between them, so the hash below is per-harness by design.
-  const prompt = buildSystemPrompt(config.objective, config.episode, harness, config.wiki);
+  const prompt = buildSystemPrompt(config.objective, config.episode, harness, config.wiki, config.wake);
   const routing = routingForRun(config);
   return {
     harnessVersion,
@@ -317,6 +329,8 @@ export function comparabilityOf(
     ...(config.wiki ? {} : { wiki: false as const }),
     // After `wiki`, for the same reason again; absent is the CLI's `auto`.
     ...(config.compactWindow !== undefined ? { compactWindow: config.compactWindow } : {}),
+    // After `compactWindow`, for the same reason; absent with both options off.
+    ...(config.wake !== undefined ? { wake: { ...config.wake } } : {}),
   };
 }
 

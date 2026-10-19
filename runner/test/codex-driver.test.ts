@@ -245,6 +245,29 @@ describe("codex driver", () => {
     trajectory.close();
   }, 30_000);
 
+  test("the turn-end wake: between two exec processes the driver waits for a wake, and the next message says what fired", async () => {
+    // Every codex turn ends on a reply with no tool call and no process runs
+    // between turns, so the wait holds nothing open (runner/src/wake.ts).
+    const { recordPath, runDir, trajectory, options } = setupEpisode("tools", { maxTurns: 2, episode: "probing", wake: { turnEnd: true, inSnippet: true } });
+    let restarts = 0;
+    let t = 1_000_000;
+    Object.assign(options.sandbox, { noticesRaised: 0, wakeFactSeq: 0, wakeFactsAfter: () => [] });
+    Object.defineProperty(options.sandbox, "totalRestarts", { get: () => restarts });
+    options.now = () => t;
+    options.sleep = async (ms: number) => {
+      t += ms;
+      if (t >= 1_000_000 + 125_000) restarts = 1;
+    };
+    await runCodexEpisode(options);
+    const wakes = readTrajectory(runDir).filter((r) => r.t === "wake");
+    expect(wakes).toEqual([expect.objectContaining({ via: "turn-end", turn: 1, fired: "sandboxRestart", sleptMs: 125_000 })]);
+    const record = readRecord(recordPath);
+    expect((record["userMessages"] as string[])[1]).toContain("woke: you slept 2m 5s after ending your turn without a tool call; woken by a sandbox restart.");
+    // The in-snippet wait raises the MCP tool timeout past the longest call it can hold.
+    expect(JSON.stringify(record["argvs"])).toContain("tool_timeout_sec=600");
+    trajectory.close();
+  }, 20_000);
+
   test("the turn's usage lands once, on the last response entry of the turn", async () => {
     const { runDir, trajectory, options } = setupEpisode("tools", { maxTurns: 1 });
     await runCodexEpisode(options);

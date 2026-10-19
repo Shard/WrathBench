@@ -5,6 +5,7 @@
  */
 
 import type { ClientCacheFrame } from "./client-cache";
+import type { WakeFactKey } from "../wake";
 
 /**
  * A hint-bearing failure the SDK recorded, tallied per (action, status). The
@@ -220,6 +221,11 @@ export type HostToChild =
    * any snippet or event reaches it.
    */
   | { t: "client_cache_seed"; frames: ClientCacheFrame[] }
+  /**
+   * Wake every in-snippet `wait` now (`wake.ts`, inSnippet only): the run is
+   * stopping, and a wait held open for minutes must not outlive the pause.
+   */
+  | { t: "wake_waits"; reason: "stopped" }
   | { t: "shutdown" };
 
 export interface EvalResultMsg {
@@ -295,7 +301,25 @@ export type ChildToHost =
    * only: the model reads these answers through its own cache and nowhere else.
    */
   | { t: "client_cache"; frames: ClientCacheFrame[] }
-  | { t: "fatal"; error: string };
+  | { t: "fatal"; error: string }
+  /**
+   * Wake-on-event (`wake.ts`), sent only by a child started with it on.
+   *
+   * `wake_fact` is one observation the turn-end wait reads (a death, the
+   * stream closing, a level, a quest's objectives done, a unit attacking us),
+   * pushed as it happens so the host never polls or drains for it.
+   *
+   * `wait_hold` / `wait_release` move eval `id`'s timeout by `ms`: an
+   * in-snippet `wait` holds its snippet open for the time it may wait, and
+   * hands back what it did not use. The host honours them only for an eval it
+   * is still waiting on, so a background routine's wait extends nothing.
+   *
+   * `wait_done` is the record of one in-snippet wait, for the trajectory.
+   */
+  | { t: "wake_fact"; key: WakeFactKey; ts: number; detail?: string }
+  | { t: "wait_hold"; id: number; ms: number }
+  | { t: "wait_release"; id: number; ms: number }
+  | { t: "wait_done"; evalId: number | null; woke: string; waitedMs: number; maxMs: number };
 
 // host -> child, reply to hostcall
 export type HostcallResult = { t: "hostcall_result"; id: number; ok: boolean; value?: unknown; error?: string };

@@ -23,6 +23,7 @@ import type { NearbyDrain } from "../nearby-row";
 import type { TraceDrain } from "../trace-row";
 import type { ClientCacheStore } from "./client-cache";
 import type { ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, EvalResultMsg, FlightSignal, HostToChild, HostcallResult, LogEntry } from "./ipc";
+import { WAKE_CAP_MS, WAKE_ENV, wakeEnvValue, type WakeFact, type WakeOptions, type WakeRecord, type WakeSource } from "../wake";
 
 export interface SnippetResult {
   ok: boolean;
@@ -89,7 +90,9 @@ export interface HarnessNotice {
     | "compaction_pending"
     | "compacted"
     // A reflection window closed on its circuit breaker (`reflect.ts`).
-    | "reflect_ended";
+    | "reflect_ended"
+    // What ended a turn-end wake wait, and how long it slept (`wake.ts`).
+    | "woke";
   text: string;
 }
 
@@ -144,6 +147,13 @@ export interface SandboxHostOptions {
    * Undefined keeps nothing, and every child starts with an empty cache.
    */
   clientCache?: ClientCacheStore;
+  /**
+   * The run's wake-on-event options (`wake.ts`). Absent, the child is started
+   * exactly as it always was: no wake env, no `wait`, no facts pushed.
+   */
+  wake?: WakeOptions;
+  /** Called with the record of every in-snippet `wait`, linked to its tool call (inSnippet only). */
+  onWait?: (record: WakeRecord) => void;
   now?: () => number;
 }
 
@@ -218,11 +228,31 @@ function defaultLogSink(stream: "stdout" | "stderr", text: string): void {
 /** How many evals' links the host keeps for routines still dispatching under them. */
 const EVAL_LINKS_MAX = 256;
 
+/** How many wake facts the host keeps; a turn-end wait reads only those since its own request. */
+const WAKE_FACTS_MAX = 64;
+
 /** How often a repeat still going is counted in the log (`RepeatFolder.flush`), so a reader of a live log sees it. */
 const LOG_FOLD_FLUSH_MS = 60_000;
 
-export class SandboxHost {
+export class SandboxHost implements WakeSource {
   private proc: Subprocess | null = null;
+  /**
+   * Wake facts the child pushed (`wake_fact`, turnEnd only), numbered as they
+   * arrived. Read by the turn-end wait through a cursor, never drained: it
+   * owns nothing another reader needs. Bounded; a wait only ever reads the
+   * newest few.
+   */
+  private readonly wakeFacts: WakeFact[] = [];
+  private lastWakeSeq = 0;
+  /** Notices raised so far, a counter the turn-end wait compares; `drainNotices` is the context builder's. */
+  noticesRaised = 0;
+  /**
+   * For each eval still pending, the function that moves its timeout
+   * (`wait_hold` / `wait_release`), and how much of the wait budget it has
+   * been given. Absent for an eval that has settled, so a background
+   * routine's wait moves nothing.
+   */
+  private readonly evalHolds = new Map<number, { move: (deltaMs: number) => void; held: number }>();
   private markReady: () => void = () => {};
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
@@ -266,6 +296,7 @@ export class SandboxHost {
 
   private notice(kind: HarnessNotice["kind"], text: string): void {
     const n: HarnessNotice = { ts: (this.opts.now ?? Date.now)(), kind, text };
+    this.noticesRaised++;
     this.notices.push(n);
     if (this.notices.length > 50) this.notices.splice(0, this.notices.length - 50);
     this.opts.onNotice?.(n);
@@ -326,6 +357,9 @@ export class SandboxHost {
         // the account this run was actually assigned, never a stray one, and
         // sandboxChildEnv forwards no WRATHBENCH_ACCOUNT of its own.
         WRATHBENCH_ACCOUNT: this.opts.account ?? "",
+        // Only when an option is on, so a child without one is started with
+        // the environment it always had.
+        ...(this.opts.wake !== undefined ? { [WAKE_ENV]: wakeEnvValue(this.opts.wake) } : {}),
       }),
       stdio: ["ignore", "pipe", "pipe"],
       serialization: "json",
@@ -471,6 +505,43 @@ export class SandboxHost {
       case "fatal":
         this.notice("session_note", `sandbox reported fatal error: ${msg.error}`);
         return;
+      case "wake_fact": {
+        this.lastWakeSeq++;
+        this.wakeFacts.push({ seq: this.lastWakeSeq, key: msg.key, ts: msg.ts, ...(msg.detail !== undefined ? { detail: msg.detail } : {}) });
+        if (this.wakeFacts.length > WAKE_FACTS_MAX) this.wakeFacts.splice(0, this.wakeFacts.length - WAKE_FACTS_MAX);
+        return;
+      }
+      case "wait_hold":
+      case "wait_release": {
+        const hold = this.evalHolds.get(msg.id);
+        if (hold === undefined || !Number.isFinite(msg.ms) || msg.ms <= 0) return;
+        // The child keeps its own budget; the host enforces it too, so no
+        // message can hold one snippet open past the cap.
+        const ms = msg.t === "wait_hold" ? Math.min(msg.ms, WAKE_CAP_MS - hold.held) : -Math.min(msg.ms, hold.held);
+        if (ms === 0) return;
+        hold.held += ms;
+        hold.move(ms);
+        return;
+      }
+      case "wait_done": {
+        const sink = this.opts.onWait;
+        if (sink === undefined) return;
+        const link = msg.evalId === null ? undefined : this.evalLinks.get(msg.evalId);
+        try {
+          sink({
+            t: "wake",
+            via: "in-snippet",
+            turn: link?.turn ?? 0,
+            fired: msg.woke,
+            sleptMs: msg.waitedMs,
+            maxMs: msg.maxMs,
+            ...(link?.callTs !== undefined ? { callTs: link.callTs } : {}),
+          });
+        } catch {
+          // A record that failed to write must not take the sandbox's IPC with it.
+        }
+        return;
+      }
       case "actions": {
         const sink = this.opts.onActions;
         if (sink === undefined) return;
@@ -497,19 +568,40 @@ export class SandboxHost {
     this.proc.send(msg);
   }
 
-  private request<T extends ChildToHost>(msg: HostToChild & { id: number }, timeoutMs: number): Promise<T> {
+  /**
+   * One request and its timeout. `holdable` (an eval on a run with the
+   * in-snippet wait) lets the child move the timeout while the request is
+   * pending (`wait_hold` / `wait_release`); every other request's timeout is
+   * fixed, exactly as it always was.
+   */
+  private request<T extends ChildToHost>(msg: HostToChild & { id: number }, timeoutMs: number, holdable = false): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
+      let deadline = Date.now() + timeoutMs;
+      const expire = (): void => {
         this.pending.delete(msg.id);
+        this.evalHolds.delete(msg.id);
         reject(new SandboxTimeoutError(msg.id));
-      }, timeoutMs);
+      };
+      let timer = setTimeout(expire, timeoutMs);
+      if (holdable) {
+        this.evalHolds.set(msg.id, {
+          held: 0,
+          move: (deltaMs) => {
+            clearTimeout(timer);
+            deadline += deltaMs;
+            timer = setTimeout(expire, Math.max(0, deadline - Date.now()));
+          },
+        });
+      }
       this.pending.set(msg.id, {
         resolve: (v) => {
           clearTimeout(timer);
+          this.evalHolds.delete(msg.id);
           resolve(v as T);
         },
         reject: (e) => {
           clearTimeout(timer);
+          this.evalHolds.delete(msg.id);
           reject(e);
         },
       });
@@ -518,9 +610,34 @@ export class SandboxHost {
       } catch (err) {
         clearTimeout(timer);
         this.pending.delete(msg.id);
+        this.evalHolds.delete(msg.id);
         reject(err instanceof Error ? err : new Error(String(err)));
       }
     });
+  }
+
+  /** Wake facts with `seq` above `seq` (`WakeSource`). Never spawns a child and never drains anything. */
+  wakeFactsAfter(seq: number): readonly WakeFact[] {
+    return this.wakeFacts.filter((f) => f.seq > seq);
+  }
+
+  /** The newest wake fact's number, 0 before any. */
+  get wakeFactSeq(): number {
+    return this.lastWakeSeq;
+  }
+
+  /**
+   * Wake every in-snippet `wait` in the child now, because the run is
+   * stopping. A no-op without the in-snippet wait or without a child, so it
+   * never starts one.
+   */
+  wakeWaits(): void {
+    if (this.opts.wake?.inSnippet !== true || this.proc === null) return;
+    try {
+      this.send({ t: "wake_waits", reason: "stopped" });
+    } catch {
+      // a child already gone has no waits
+    }
   }
 
   /**
@@ -553,6 +670,9 @@ export class SandboxHost {
           timeoutMs: this.opts.snippetTimeoutMs,
         },
         this.opts.snippetTimeoutMs,
+        // The in-snippet wait may hold this eval open (`wake.ts`); nothing
+        // else moves a snippet's limit.
+        this.opts.wake?.inSnippet === true,
       );
       this.consecutiveRestarts = 0;
       return {

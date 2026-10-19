@@ -524,8 +524,63 @@ function main(): void {
   void EventAbortedError;
 
   const out = join(import.meta.dir, "API.md");
-  Bun.write(out, render());
+  const doc = render();
+  Bun.write(out, doc);
   console.error(`wrote ${out}`);
+  // The wake variant: the same reference plus the in-snippet `wait` entry,
+  // read only on a run with that option (`runner/src/wake.ts`), so every other
+  // run reads API.md exactly as it was.
+  const wakeOut = join(import.meta.dir, "API-wake.md");
+  Bun.write(wakeOut, withWaitSection(doc));
+  console.error(`wrote ${wakeOut}`);
+}
+
+/**
+ * Model-facing text (wording approved, operator, 2026-10-19). The in-snippet
+ * `wait` is the runner sandbox's ambient, not an SDK method, so it lives here
+ * as prose rather than as a generated row; it goes before the errors section.
+ */
+const WAIT_SECTION = `## Waiting (\`wait\`)
+
+\`wait({ on, maxMs })\` is ambient in a snippet, like \`sleep\`. It holds the
+snippet open past its time limit until what you name happens, and resolves with
+\`{ woke, waitedMs }\`.
+
+| Option | Takes | Wakes when |
+| --- | --- | --- |
+| \`on\` | \`"levelUp"\` | you gain a level |
+| | \`"questComplete"\` | a quest in your log has all its objectives done |
+| | \`"attacked"\` | a unit starts attacking you |
+| | an event opcode, e.g. \`"WB_MOVE_RESULT"\`, \`"SMSG_LOOT_RESPONSE"\` | that event arrives |
+| | a promise, e.g. a background routine's | it settles, resolved or rejected (\`woke: "promise"\`) |
+| | a function, e.g. \`() => state.self.health.value.current < 50\` | it returns \`true\`; checked at once, on every event and every second (\`woke: "predicate"\`); if it throws, \`wait\` rejects with that error |
+| | an array of any of these | the first of them |
+| \`maxMs\` | 0 to 300000 (five minutes); the default is 300000 | that time passes (\`woke: "maxMs"\`) |
+
+Three things always wake it, whatever \`on\` says: your character dying
+(\`woke: "died"\`; only a death after the wait began), the event stream closing
+(\`"streamClosed"\`) and a harness notice (\`"notice"\`). Otherwise \`woke\` is
+the name or opcode that fired, \`"promise"\`, \`"predicate"\` or \`"maxMs"\`.
+
+The time a snippet spends in \`wait\` does not count against its limit, up to
+five minutes of waiting per snippet; past that, waiting counts like any other
+time. A \`wait\` in a background routine whose snippet has returned holds
+nothing open: it is a timer that wakes on the same things. An abandoned
+snippet's \`wait\` rejects like any other wait.
+
+\`\`\`ts
+globalThis.grind = (async () => { /* … */ })().catch(String);
+const r = await wait({ on: [grind, "levelUp", "questComplete"], maxMs: 240000 });
+r; // { woke: "questComplete", waitedMs: 131250 }
+\`\`\`
+
+`;
+
+/** API.md with the wait entry before its errors section. */
+function withWaitSection(doc: string): string {
+  const at = doc.indexOf("## Errors & exported values");
+  if (at < 0) throw new Error("API.md has no errors section to put the wait entry before");
+  return `${doc.slice(0, at)}${WAIT_SECTION}${doc.slice(at)}`;
 }
 
 main();
