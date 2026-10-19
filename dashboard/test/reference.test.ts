@@ -15,6 +15,9 @@ import {
   ceilingLabel,
   empiricalCeiling,
   referenceScale,
+  scriptedReference,
+  scriptedReferenceLabel,
+  scriptedReferenceScale,
   speedrunBand,
 } from "../src/lib/reference";
 
@@ -169,5 +172,57 @@ describe("what the page draws", () => {
     expect(referenceScale({ episode: "e30", series: "0.5", ceiling: null, reached: null })).toBeNull();
     // e90 still has the constant even before a single run exists.
     expect(referenceScale({ episode: "e90", series: null, ceiling: null, reached: null })!.marks).toHaveLength(1);
+  });
+});
+
+describe("the scripted reference line", () => {
+  const ref = (p: Partial<ResultRun>): ResultRun =>
+    ({
+      runId: "ref-1",
+      model: "reference/elwynn-human-paladin@1",
+      driver: "reference",
+      episode: "e90",
+      terminationReason: "episode-limit",
+      maxLevel: 9,
+      xp: 1200,
+      startedAt: 100,
+      unscored: "unscored (scripted reference)",
+      ...p,
+    }) as unknown as ResultRun;
+
+  test("is the newest finished reference run of the tier in view, never a model's run", () => {
+    const runs = [
+      ref({ runId: "old", startedAt: 1, maxLevel: 7 }),
+      ref({ runId: "new", startedAt: 2, maxLevel: 9 }),
+      ref({ runId: "other-tier", startedAt: 3, episode: "e360", maxLevel: 15 }),
+      ref({ runId: "a-model", startedAt: 4, maxLevel: 12, driver: "openai", unscored: null }),
+    ];
+    expect(scriptedReference(runs, "e90")).toEqual({ runId: "new", route: "reference/elwynn-human-paladin@1", level: 9, xp: 1200 });
+    expect(scriptedReference(runs, "e360")?.runId).toBe("other-tier");
+  });
+
+  test("is found by its driver or by its stamp, either one alone", () => {
+    expect(scriptedReference([ref({ driver: null })], "e90")?.runId).toBe("ref-1");
+    expect(scriptedReference([ref({ unscored: null })], "e90")?.runId).toBe("ref-1");
+    expect(scriptedReference([ref({ driver: "openai", unscored: "unscored (operator objective)" })], "e90")).toBeNull();
+  });
+
+  test("a live run, or one with no level reading, is no line yet", () => {
+    expect(scriptedReference([ref({ terminationReason: null })], "e90")).toBeNull();
+    expect(scriptedReference([ref({ maxLevel: null })], "e90")).toBeNull();
+    expect(scriptedReference([], "e90")).toBeNull();
+  });
+
+  test("draws one labelled line, links its run, and stretches past the rows on screen", () => {
+    const reference = scriptedReference([ref({})], "e90");
+    const scale = scriptedReferenceScale({ episode: "e90", series: "0.9", reference, reached: 11 })!;
+    expect(scale.marks).toHaveLength(1);
+    expect(scale.marks[0]!.id).toBe("scripted");
+    expect([scale.marks[0]!.low, scale.marks[0]!.high, scale.marks[0]!.runId]).toEqual([9, 9, "ref-1"]);
+    expect(scale.marks[0]!.label).toBe(scriptedReferenceLabel("e90", "0.9"));
+    expect(scale.marks[0]!.label).toContain("harness 0.9");
+    expect(scale.marks[0]!.provenance).toContain("never scored");
+    expect(scale.max).toBeGreaterThan(11);
+    expect(scriptedReferenceScale({ episode: "e90", series: "0.9", reference: null, reached: 11 })).toBeNull();
   });
 });
