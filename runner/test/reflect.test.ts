@@ -595,9 +595,22 @@ describe("the window-trim notices", () => {
     // The last prompt of the run has no following turn to carry its trim.
     expect(trimmed).toEqual(pending.filter((t) => t + 1 < requests.length).map((t) => t + 1));
     expect(lastContent(requests[pending[0]!]!)).toContain(
-      "Older conversation will be trimmed after this turn. Record a short status entry",
+      "Older conversation will be trimmed, and older tool results folded to one-line records, after this turn. Record a short status entry",
     );
     expect(lastContent(requests[trimmed[0]!]!)).toContain("your scratchpad is your memory");
+    // Every trim folds the block behind the verbatim one, and its notice counts
+    // the results it folded: exactly the lines that were verbatim the turn before.
+    for (const t of trimmed) {
+      const n = Number(/, (\d+) older tool results? folded to one-line records\)/.exec(lastContent(requests[t]!))?.[1]);
+      const foldedIn = (r: (typeof requests)[number]): number =>
+        r.messages.filter((m) => m.role === "tool" && String(m.content).startsWith("[folded by harness] ")).length;
+      const dropped = Number(/\((\d+) messages? dropped/.exec(lastContent(requests[t]!))?.[1]);
+      expect(n).toBeGreaterThan(0);
+      // Folded now, less what was already folded and still in the window.
+      const before = requests[t - 1]!.messages.slice(1 + dropped, -1);
+      const stillFolded = before.filter((m) => m.role === "tool" && String(m.content).startsWith("[folded by harness] ")).length;
+      expect(foldedIn(requests[t]!) - stillFolded).toBe(n);
+    }
     trajectory.close();
   });
 

@@ -140,7 +140,7 @@ import { campaignFileOf, runCampaignFile, writeCampaignFile, type CampaignFile }
 import { checkedIn, defsBlock, definition, joined, seedPublished } from "../runner/test/fixtures/campaigns";
 import { backoffMs, drainMarkerPath, drainRequested, episodeArgv, resolve, writeLaunchFailure } from "./run-roster";
 import { holdsOnlyLaunchFiles } from "../runner/src/launch-files";
-import { isCounted, readRunFacts } from "../runner/src/models";
+import { isCounted, readRunFacts, sameRosterIdentity } from "../runner/src/models";
 import { listRuns } from "../runner/viewer/runs";
 import { STALL_PAUSE } from "../runner/src/lapse";
 import { tempDirs } from "./temp-dirs";
@@ -434,7 +434,7 @@ describe("parseFleet", () => {
   });
 
   // The claude-code compaction window (operator decision 2026-10-09): a run
-  // dimension like effort, on any claude-code entry and nowhere else.
+  // dimension like effort, on any claude-code entry (and, below, codex).
   test("a claude-code entry may name its compaction window, canonicalised, and `auto` is the absent field", () => {
     const config = parseFleet(
       fleetJson([{ ref: "hk", episode: "e360" }], {
@@ -460,6 +460,33 @@ describe("parseFleet", () => {
     const plainSpawn = jobSpawn({ ...plain.jobs[0]!, attempt: 2 }, plain.roster, "RUNNER", "20261009").entries[0]!;
     expect(plainSpawn.runId).toBe("fleet-son-e90-sonnet-20261009-a2");
     expect("compactWindow" in plainSpawn).toBe(false);
+  });
+
+  // The same dimension on codex since the operator's 2026-10-11 decision.
+  test("a codex entry's window is its identity like claude-code's; one without spawns the id it always did", () => {
+    const config = parseFleet(
+      fleetJson([{ ref: "astra200", episode: "e90" }, { ref: "astra", episode: "e90" }], {
+        roster: {
+          astra: { tier: "t1", model: "gpt-6-astra", driver: "codex", effort: "high" },
+          astra200: { tier: "t1", model: "gpt-6-astra", driver: "codex", effort: "high", compactWindow: "200K" },
+        },
+      }),
+    );
+    expect(config.refusals).toEqual([]);
+    expect(config.roster["astra200"]!.compactWindow).toBe("200k");
+    expect("compactWindow" in config.roster["astra"]!).toBe(false);
+    const windowed = jobSpawn({ ...config.jobs[0]!, attempt: 2 }, config.roster, "RUNNER", "20261009").entries[0]!;
+    expect(windowed.compactWindow).toBe("200k");
+    expect(windowed.runId).toBe("fleet-astra200-e90-gpt-6-astra-high-200k-20261009-a2");
+    const plain = jobSpawn({ ...config.jobs[1]!, attempt: 2 }, config.roster, "RUNNER", "20261009").entries[0]!;
+    expect(plain.runId).toBe("fleet-astra-e90-gpt-6-astra-high-20261009-a2");
+    expect("compactWindow" in plain).toBe(false);
+    // Each entry owns only its own runs: the identity separates them, and a run
+    // stamped before the field existed is the windowless entry's.
+    expect(sameRosterIdentity(config.roster["astra200"]!, { model: "gpt-6-astra", effort: "high", compactWindow: "200k" })).toBe(true);
+    expect(sameRosterIdentity(config.roster["astra"]!, { model: "gpt-6-astra", effort: "high", compactWindow: "200k" })).toBe(false);
+    expect(sameRosterIdentity(config.roster["astra"]!, { model: "gpt-6-astra", effort: "high" })).toBe(true);
+    expect(sameRosterIdentity(config.roster["astra200"]!, { model: "gpt-6-astra", effort: "high", compactWindow: null })).toBe(false);
   });
 
   test("runs map back to the entry with their own window: affinity and resumes", () => {
@@ -488,13 +515,13 @@ describe("parseFleet", () => {
     expect(resumed.entries[0]).toMatchObject({ runId: "b", compactWindow: "100k" });
   });
 
-  test("a compaction window off claude-code, or out of range, takes the file down by name", () => {
+  test("a compaction window off the CLI harnesses, or out of range, takes the file down by name", () => {
     expect(() =>
       parseFleet(fleetJson([], { roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free", compactWindow: "100k" } } })),
-    ).toThrow(/compactWindow is the Claude Code CLI's auto-compaction window — the openai driver has none/);
-    expect(() =>
-      parseFleet(fleetJson([], { roster: { cx: { tier: "t1", model: "gpt-6-astra", driver: "codex", compactWindow: "100k" } } })),
-    ).toThrow(/the codex driver has none/);
+    ).toThrow(/compactWindow is a CLI harness's auto-compaction window \(claude-code, codex\) — the openai driver has none/);
+    // A codex entry takes one since 2026-10-11, canonicalised like claude-code's.
+    const cx = parseFleet(fleetJson([], { roster: { cx: { tier: "t1", model: "gpt-6-astra", driver: "codex", compactWindow: "200K" } } }));
+    expect(cx.roster["cx"]!.compactWindow).toBe("200k");
     for (const bad of ["50k", "2M", "100000", "big"]) {
       expect(() =>
         parseFleet(fleetJson([], { roster: { son: { tier: "t1", model: "sonnet", driver: "claude-code", compactWindow: bad } } })),
@@ -2739,6 +2766,45 @@ describe("pause and resume across a fleet stop", () => {
     expect(planResumes({ runs: [run], config: off, running: new Map(), held, now: NOW, campaignFileOf: fileOf }).listed[0]?.why).toContain("campaign race-probe is disabled");
     // A run with its own file comes back on it and nothing is written.
     expect(plan.resume[0]!.writeCampaignFile).toBeUndefined();
+  });
+
+  test("a paused probe whose window came from its arm resumes under its own job, the window kept from meta, on both CLIs", () => {
+    // The run's tuple carries the arm's 200k; the roster entry it borrowed
+    // credentials from has no window. The entry's identity is the entry's,
+    // not the arm's, so the run is still that entry's run.
+    const files = new Map<string, CampaignFile>();
+    const fileOf = (runId: string): CampaignFile | null => files.get(runId) ?? null;
+    const withCodex = { ...roster, astra: { model: "gpt-6-astra", driver: "codex", effort: "high", tier: "t1", idle: "none" } as FleetRosterEntry };
+    const join = joined([WINDOWS], { "window-probe": { version: 1, assignments: [{ model: "astra" }, { model: "nav" }] } });
+    const cfg = { ...config(), roster: withCodex, policy: { ...DEFAULT_POLICY, runPods: "probes" as const }, campaigns: join.campaigns };
+    for (const [ref, model, effort] of [["astra", "gpt-6-astra", "high"], ["nav", "sonnet", null]] as const) {
+      const run = paused({
+        runId: `fleet-${ref}-window-probe-a-w200k-${model}${effort !== null ? `-${effort}` : ""}-20261010`,
+        model,
+        effort,
+        compactWindow: "200k",
+        account: "RUNNER3",
+        episode: "probing",
+        episodeMs: 12 * H,
+        campaign: "window-probe",
+        campaignVersion: 1,
+        cell: "a",
+        ref,
+        arm: "w200k",
+      });
+      files.set(run.runId, campaignFileOf(join.definitions[0]!, "a", "w200k"));
+      const plan = planResumes({ runs: [run], config: cfg, running: new Map(), held, now: NOW, campaignFileOf: fileOf });
+      expect(plan.end).toEqual([]);
+      expect(plan.listed).toEqual([]);
+      expect(plan.resume.map((r) => [r.job.name, r.runId])).toEqual([[`${ref}-window-probe-a-w200k`, run.runId]]);
+      expect(plan.resume[0]!.job.probe).toEqual({ campaign: "window-probe", version: 1, cell: "a", arm: "w200k" });
+      // The resume names the entry's identity, which the arm's window is not
+      // part of: the run reads its own window back from meta.json.
+      expect(plan.resume[0]!.job.resume).toEqual({ runId: run.runId, model, ...(effort !== null ? { effort } : {}) });
+      const argv = episodeArgv(resolve(fillEntries(jobSpawn(plan.resume[0]!.job, withCodex, "RUNNER3", "20261010", undefined, cfg.campaigns), "20261010"), "20261010")[0]!, true);
+      expect(argv.slice(1, 3)).toEqual(["--resume", run.runId]);
+      expect(argv).not.toContain("--compact-window");
+    }
   });
 
   test("a probe paused before campaign files resumes on a file rebuilt from the published definition its stamps name", () => {

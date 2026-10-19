@@ -115,7 +115,10 @@ request is a billed read against the bucket.
 1. **Mutable** — `Hostname equals wrathbench-data.shard.page` *and* `URI Path is
    in {"/v1/manifest.json", "/v1/live.json"}` → eligible for cache, **Edge TTL
    30s**, **Browser TTL 30s**. Worst-case staleness is the push cadence plus
-   this, about 90–120s.
+   this, about 90–120s. The units around each live run ride inside
+   `live.json` (docs/PUBLIC-DASHBOARD.md, "The units around a live run"),
+   which is why they need no rule of their own: they are live only, and an
+   object of theirs anywhere else would match rule 2's year or no rule.
 2. **Immutable** — `Hostname equals wrathbench-data.shard.page` *and* `URI Path
    starts with "/v1/snap/" or "/v1/run/"` → eligible for cache, **Edge TTL 1
    year**, **Browser TTL 1 year**. These are content-addressed and never

@@ -185,9 +185,10 @@ export const comparabilitySchema = z.object({
    */
   wiki: z.literal(false).optional(),
   /**
-   * The Claude Code CLI's auto-compaction window (`RunConfig.compactWindow`),
-   * canonical `100k`…`1M`. A KEY with `effort`'s standing (operator decision
-   * 2026-10-09): where the CLI compacts decides how much history the model
+   * The CLI harness's auto-compaction window (`RunConfig.compactWindow`,
+   * claude-code or codex), canonical `100k`…`1M`. A KEY with `effort`'s
+   * standing (operator decisions 2026-10-09, and 2026-10-11 for codex): where
+   * the CLI compacts decides how much history the model
    * carries and what each turn costs, so a 100k run and an `auto` run are two
    * conditions and must not share a chart.
    *

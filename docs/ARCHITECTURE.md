@@ -41,7 +41,7 @@ The SDK is versioned. Its surface is part of the harness version.
 - Snippet sandbox: a persistent runtime per session so snippets share state and can leave routines running. Executes in a separate process with an allowlisted environment carrying only the run's own leased session secret (never the module's port secret or a provider key), under a Linux Landlock ruleset applied before exec (`runner/src/sandbox/confine.ts`): it can read the interpreter, `runner/`, `sdk/`, `node_modules/` and its own `/proc` entry and nothing else — not `.env`, not the home directory, not another process's command line, not `/dev/shm` — open TCP connections only to the module URL's port, bind nothing, execute no binary but the interpreter, and signal nothing outside itself. Per-host and non-TCP egress are the deployment's network policy (`docs/CONTRACTS.md`, "Control-surface authentication"). Hard per-snippet timeout.
 - Agent loop: model-agnostic. Fixed prompt, fixed event window and state summary, fixed retry policy. Persists scratchpad and summary so a session can resume after a process failure.
 - Watchdogs: idle timeout, no-XP timeout, episode time limit, snippet runaway. Each ends the episode with a named termination reason.
-- Trajectory log: JSONL per run containing every snippet, its result, every action the snippet dispatched (below), every event batch the model saw, and a periodic state line (level, zone, XP, position). A fixed-loop `request` record carries the turn's fresh user message whole and points at the rest of the prompt instead of re-logging it: the system prompt text once per process segment, and the message window as bounds over the `response` and result records already on the file, with a hash of the bytes sent. `runner/src/replay.ts` rebuilds every request from the file alone and fails on any that does not hash to what was sent; the CLI scaffolds' requests keep their own shape (`runner/README.md`, "The request record and the replay").
+- Trajectory log: JSONL per run containing every snippet, its result, every action the snippet dispatched (below), every event batch the model saw, and a periodic state line (level, zone, XP, position). A fixed-loop `request` record carries the turn's fresh user message whole and points at the rest of the prompt instead of re-logging it: the system prompt text once per process segment, and the message window as bounds over the `response` and result records already on the file, with the count of its folded messages and a hash of the bytes sent. `runner/src/replay.ts` rebuilds every request from the file alone and fails on any that does not hash to what was sent; the CLI scaffolds' requests keep their own shape (`runner/README.md`, "The request record and the replay").
 - Model adapter: one OpenAI-compatible chat layer. Provider and model are run config.
 - Drivers: the fixed loop's adapter is one, and the Claude Code and Codex CLIs are the others. The driver contract (`runner/README.md`, "The driver contract") says what the runner keeps for every driver, what a driver may vary, and what the trajectory records regardless.
 
@@ -71,7 +71,9 @@ rather than reading silence as "not resting" or "not flying" — the same latch
 discipline the ghost flag has.
 
 The fixed loop asks for an entry (`trim_pending`) on the last turn before a
-block trim and says so afterwards (`window_trimmed`). That is exact rather than
+block trim and says so afterwards (`window_trimmed`, with how many older tool
+results the same trim folded to one-line records; `runner/README.md`, "The
+context, the prompt and the scratchpad tools"). That is exact rather than
 predicted: a turn's message count is not known until the model has answered it,
 so the cut is applied one turn *after* the crossing that earns it
 (`laggedLength`), which turns an unanswerable question about the future into a
@@ -79,10 +81,11 @@ fact already sitting in the history. Every trim is preceded by exactly one
 prompt, on the turn immediately before it, whatever the model's tool-call count
 does; the price is that the window sits at most one turn's growth above
 `MESSAGE_WINDOW_MAX` for that one turn, and the prefix stays byte-stable
-because the cut still moves only in whole blocks.
+because the cut, and the fold boundary with it, still moves only in whole
+blocks.
 
 The CLI drivers run no message window of ours, so they never raise either
-trim notice; what loses their context is the CLI's own compaction, and that is
+trim notice and fold nothing; what loses their context is the CLI's own compaction, and that is
 what they ask on (`runner/src/cli-compaction.ts`). Neither CLI says ahead of
 time when it will compact, so at each turn boundary the driver compares the
 context the CLI last reported against the CLI's auto-compaction threshold —
@@ -412,6 +415,10 @@ Every episode starts with a freshly created character at level 1 in its starting
   15 minutes, unlinked as they age, deleted on every pause, stop and exit and
   swept at start, never in `run.sqlite`, `trajectory.jsonl` or
   the store. It is a delay line for a reader a few seconds behind, not a record.
+  The public site sees it the same way: each publisher pass puts the last
+  twelve minutes of each live run's projected window inside `live.json`,
+  overwritten by the next pass and gone with the run, never under a key of
+  its own (docs/PUBLIC-DASHBOARD.md, "The units around a live run").
 - The client's query-answer cache, `client-cache.json`: the creature, game
   object, item, quest, player and pet name, and page and letter answers this
   run's event stream carried, kept by the sandbox host

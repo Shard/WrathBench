@@ -134,7 +134,10 @@ and `codex` already do, and what another driver would have to.
   express is refused by name, never mapped to a neighbour**: the tuple would
   otherwise carry a level the run never had. codex refuses `none` and
   `minimal`; a dimension a driver has no setting for at all is refused at
-  config time, as `compactWindow` is off claude-code (`loadRunConfig`).
+  config time, as `compactWindow` is off claude-code and codex
+  (`loadRunConfig`). A value the scaffold would silently cap to its own limit
+  is refused too, at the first turn that reports the limit ("The compaction
+  window", below).
   Reaching the same level by another mechanism is not a neighbour:
   claude-code's `none` is `MAX_THINKING_TOKENS=0`, because its `--effort` has
   no such level.
@@ -158,9 +161,9 @@ and `codex` already do, and what another driver would have to.
 
 **Harness settings.** A harness setting is a knob of one harness's machinery:
 it has the harness's default, a roster entry may override it, and it is
-recorded like effort. The claude-code compaction window (`compactWindow`) is
-the one that exists, and its shape is the pattern. Absent, or `auto`, is the
-scaffold's own default and stamps nothing, so every run that says nothing
+recorded like effort. The compaction window (`compactWindow`), on claude-code
+and codex, is the one that exists, and its shape is the pattern. Absent, or
+`auto`, is the scaffold's own default and stamps nothing, so every run that says nothing
 shares one tuple. A named value is a roster-entry field normalised to one
 spelling. It keys the tuple, and it is part of `RosterIdentity`, so an entry
 that differs from another only in it owns its own runs and its own row. A
@@ -298,18 +301,23 @@ scratchpad, not the chat history, is the durable memory.
 
 ### The compaction window
 
-The CLI summarises its own history once the prompt nears its auto-compaction
-window, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: `auto` or 100k–1M tokens in 2.1.293.
+A harness setting of both CLI scaffolds since the operator's decision of
+2026-10-11; this section is claude-code's mechanics, and "The codex driver"
+below has codex's. The CLI summarises its own history once the prompt nears
+its auto-compaction window, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: `auto` or
+100k–1M tokens in 2.1.293.
 `auto` sits near the model's whole context — with `--debug` the CLI logs
 `autocompact: … effectiveWindow=980000` for Claude Haiku 5.5 — so a long run
 replays close to a million tokens per call before anything is summarised, and
 pays for it above a model's long-prompt price tier. `100k` logs
 `effectiveWindow=80000`, and the CLI compacts about 13K below that.
 
-A roster entry (`compactWindow`, docs/RUNBOOK.md) or `--compact-window` sets it
-for a run (`RunConfig.compactWindow`); every other driver refuses it. It is a
-run dimension like effort: canonicalised to `<n>k` or `1M`, recorded in
-`meta.json` and the comparability tuple, matched on beside model and effort
+A roster entry (`compactWindow`, docs/RUNBOOK.md), a campaign arm's
+`--compact-window` (docs/EPISODES.md) or `--compact-window` by hand sets it
+for a run (`RunConfig.compactWindow`); claude-code and codex take it, and
+every other driver refuses it. It is a run dimension like effort:
+canonicalised to `<n>k` or `1M`, recorded in `meta.json` and the
+comparability tuple, matched on beside model and effort
 wherever a run is mapped back to its roster entry (`sameRosterIdentity`), and
 shown after the effort on the pages (`max · 100k`). Absent is the CLI's
 `auto`: nothing is sent and the tuple carries no field, so every run from
@@ -318,6 +326,18 @@ through the constructed environment (`compactEnv`); a value in the runner's own
 environment is dropped like `MAX_THINKING_TOKENS`, so nothing unrecorded can
 move it. The CLI's `autoCompactWindow` setting cannot either: the config dir is
 the run's own.
+
+**A window the CLI would cap is refused.** The CLI applies the smaller of the
+window and the model's context window, so a window at or above the model's
+context is one it replaces by its own, and the run would be stamped with a
+condition it never ran under. The model's context window is known only from
+the CLI's own `modelUsage` (the provider's, not the pinned image's; the
+repository keeps no per-model table), and the CLI reports it only on a
+turn's `result`, so the driver checks the window at the first turn boundary
+and, at or past it, ends the run as `harness-error` with both numbers in the
+detail (`claudeWindowCapRefusal`, `src/cli-compaction.ts`). That is never
+evidence, and it spends the first turn, however long that turn ran. On
+today's all-1M Claude roster `1M` is therefore always refused.
 
 Each compaction the CLI streams — a `system` envelope with subtype
 `compact_boundary` and `compact_metadata` (`trigger`, `pre_tokens`, and when
@@ -510,6 +530,28 @@ and differs only where the CLI does:
   and `retainedTurns`, the turns whose context messages the CLI kept verbatim.
   The same reading drives the episodic-log ask, with the threshold above
   (`src/cli-compaction.ts`; the claude-code section "The compaction window").
+- **The compaction window is `model_auto_compact_token_limit`.** A run's
+  `compactWindow` (operator, 2026-10-11; the claude-code section "The
+  compaction window" has what it is as a run dimension) reaches the CLI as
+  the integer `-c model_auto_compact_token_limit=<tokens>` (`codexArgs`):
+  `200k` is `200000`, a bare TOML integer, which the pinned CLI reads as an
+  `Option<i64>` (`codex-rs/core/src/config/mod.rs` at `rust-v0.159.3`). It
+  replaces the catalogue's own limit for the model, and the CLI then compacts
+  at the smaller of it and 90% of the catalogue window
+  (`ModelInfo::auto_compact_token_limit`), measured against the full active
+  context: the run sets neither `model_auto_compact_token_limit_scope`
+  (default `total`) nor `model_context_window`, so the 90% cap stands. Unlike
+  claude-code there is no summary reserve, so `200k` compacts at 200,000
+  tokens, not 167,000; the two harnesses are separate comparability groups
+  anyway. The episodic-log ask's threshold is the same minimum. A window at
+  or above the 90% cap is one the CLI replaces by its own limit, and the
+  catalogue window is the provider's, so the driver checks it at the first
+  turn whose rollout reports the window and, at or past the cap, ends the run
+  as `harness-error` with both numbers (`codexWindowCapRefusal`). On a
+  272,000-token catalogue window (258,400 reported) that refuses `300k`;
+  raising the cap would take `model_context_window`, a second dimension the
+  run does not set. The window rides on the `driver` record's argv and, by
+  name, as its `compactWindow`.
 - **The subscription's usage window is in the rollout.** Exec's stdout never
   carries it (upstream declined to add it), but every `token_count` the CLI
   persists carries the account's `rate_limits`. After each turn the driver
@@ -597,6 +639,49 @@ prefix that goes over the wire). The HUD state summary is a fixed-format
 presentation of already-observed fields, never new observation; a field no
 event carried reads `unobserved`.
 
+The message window keeps up to `MESSAGE_WINDOW_MAX` (48) messages, each up to
+`WINDOW_MESSAGE_CHARS` (4,000) characters, and trims the oldest
+`MESSAGE_WINDOW_TRIM` (24) in one block. Once a trim has happened, the tool
+results of the window's older block are folded (`messageWindowFold`,
+`foldToolResult`; operator, 2026-10-19), each to one line:
+
+```
+[folded by harness] <tool> <args>: <ok|error>[, <n>ms], <m> chars
+```
+
+`<args>` is the call's argument string as sent, whitespace runs made one
+space, cut at `FOLD_ARGS_CHARS` (80) with `…`; `<n>ms` is the duration a
+snippet result opens with, and no other tool reports one; `<m>` is the length
+of the whole result, which the trajectory keeps in full. The fold boundary is
+the raw cut plus one trim block, snapped back to the start of a turn, so:
+
+- It moves only on the request the cut moves on. Between trims the folded
+  part is the same messages rendered the same way and the verbatim part only
+  grows at its tail, so the request is byte-stable to the end of the window and
+  the fold costs no cache miss beyond the trim's own.
+- The raw cut leaves more than one block above it, so the boundary always falls
+  in the turn before last or earlier, and the last two turns are verbatim on
+  every request: a hint is read in full on the request it arrives in and the
+  one after, the trim's included.
+
+The assistant messages, snippet code included, stay as the model sent them.
+Re-rendered over six local fixed-loop runs, the fold of results alone cuts
+5–17% of the prompt characters per request, and the code in the folded block
+is larger than the results beside it in four of the six, so folding it too
+would take that to roughly 20–45%. It is kept because it is the model's own turn
+— a call shown back truncated invites truncated calls — and because the
+sandbox keeps a snippet's top-level bindings, so the code is the window's only
+record of what has been defined. The fold is a harness rule, identical for
+every model; nothing is summarised and nothing is scaled per model. The
+history holds each result's `isError` for the line and never sends it. The
+`trim_pending` and `window_trimmed` notices name the fold, the latter with how
+many results it folded, and the prompt's context sentence says older tool
+results are folded.
+
+The CLI drivers (claude-code, codex) keep and compact their own conversation;
+neither the trim nor the fold applies to them, and their prompt sentence
+describes their own regime instead.
+
 The system prompt states that this is the complete, unmodified 3.3.5a world —
 every zone, city, road, flight path, boat and tram a player could use exists
 and is reachable, and nothing has been walled off for the benchmark. It names
@@ -659,8 +744,8 @@ message is its `response` record's `message`, each tool message its
 read positionally off the response it answers. So the record carries:
 
 ```json
-{"ts":…,"t":"request","turn":30,"adapter":"openai-compatible:…","slim":1,
- "systemHash":"sha256:…16 hex","window":{"from":24,"to":49,"fromTurn":13,"cap":4000},
+{"ts":…,"t":"request","turn":30,"adapter":"openai-compatible:…","slim":2,
+ "systemHash":"sha256:…16 hex","window":{"from":24,"to":49,"fromTurn":13,"cap":4000,"fold":24},
  "user":"[turn 30] Goal: …","requestHash":"sha256:…64 hex",
  "messageCount":27,"systemChars":15012,"promptChars":59321}
 ```
@@ -670,7 +755,12 @@ read positionally off the response it answers. So the record carries:
   history's length, so `to: 0` opens a segment (a resumed run starts with an
   empty history), read off the writer's own state rather than inferred from
   `resume` or `meta` records. `fromTurn` is the turn whose response opens the
-  window; `cap` is the per-message cap it was cut with.
+  window; `cap` is the per-message cap it was cut with; `fold` is how many of
+  the window's messages, from its start, lie in its folded part ("The context,
+  the prompt and the scratchpad tools"). It counts from `from`, not from the
+  history's start, because the viewer walks a window back from its request and
+  holds nothing below it, and the replay takes it as recorded, never
+  recomputed.
 - `systemText` — the system prompt itself — rides on a segment's first request,
   and again whenever its hash changes; `systemHash` is `promptHash()`, the
   function the comparability tuple stamps, so it equals the run's
@@ -688,7 +778,9 @@ and if the rebuild would not reproduce the bytes it writes the whole message
 array instead (with `slimFallback` naming why) plus a `harness` record of kind
 `request_replay_mismatch`: a slim record is only written when it is known to
 replay. A build that changes how a request is put together from these parts
-writes a new `slim` version and keeps this one's rebuild.
+(the cap's suffix, the fold's line or its constants, the message shapes)
+writes a new `slim` version and keeps this one's rebuild: `slim: 1`, written
+before the fold, has no `fold` and rebuilds as a window with nothing folded.
 
 `src/replay.ts` rebuilds every slim request of a run from the trajectory alone,
 streaming the file, and checks each against `requestHash`; a mismatch is

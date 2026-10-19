@@ -131,7 +131,7 @@ describe("the context sentence is the harness's, and says what that harness does
   // stated something false about the machinery the model was running under.
   test("the fixed loop states the trim, and the scratchpad as the memory", () => {
     expect(contextSentence("wrathbench")).toBe(
-      "Older conversation is trimmed aggressively — the scratchpad is your memory, not the chat history.",
+      "Older conversation is trimmed aggressively, and older tool results are folded to one-line records first — the scratchpad is your memory, not the chat history.",
     );
     expect(SYSTEM_PROMPT).toContain(contextSentence("wrathbench"));
     expect(SYSTEM_PROMPT).not.toContain("does not trim");
@@ -205,22 +205,23 @@ describe("episode sentence", () => {
 
   test("every rendering hashes as pinned, so a prompt edit has to move its pins on purpose", () => {
     // Pinned by value, not by rebuilding from the same parts, so a change to
-    // any rendering fails here. The last edit to move them is the state
-    // line's objective kinds gaining "explore" (an exploration objective has
-    // a row in state.quest(id).objectives, issue #115); it is in every
-    // rendering, so it moved every row.
+    // any rendering fails here. The last edit to move them is the fixed
+    // loop's context sentence naming the fold of older tool results (issue
+    // #39), which is in the wrathbench renderings only, so it moved those six
+    // and left the CLI rows where the state line's "explore" objective kind
+    // (issue #115) last put them.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:c97877408a428fc0", off: "sha256:9425d09e7baf6c2f" },
+        wrathbench: { on: "sha256:13b8c3a352fa1662", off: "sha256:0659e9aaa3f75164" },
         cli: { on: "sha256:8d3dab50f9cd0fe4", off: "sha256:0754bad6bcc70931" },
       },
       e90: {
-        wrathbench: { on: "sha256:d15c6917ac78750a", off: "sha256:3c4b2c3d421710fe" },
+        wrathbench: { on: "sha256:a17ac395e1dc047d", off: "sha256:14f23cb24377c5be" },
         cli: { on: "sha256:9d3a92cc5139ca7b", off: "sha256:86bbcf62fe5d670e" },
       },
       e360: {
-        wrathbench: { on: "sha256:60a59323f81ebe1e", off: "sha256:a55bd1077bec0975" },
+        wrathbench: { on: "sha256:286f474da4199787", off: "sha256:547b588a4e80cd68" },
         cli: { on: "sha256:09e0fcd1c038bbf8", off: "sha256:4b9b44b639c343b9" },
       },
     };

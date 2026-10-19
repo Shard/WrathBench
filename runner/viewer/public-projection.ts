@@ -127,6 +127,7 @@ import type {
   TraceSegRuns,
   TraceState,
   TrackTrace,
+  LiveNearby,
   NearbySelfView,
   NearbyStateView,
   NearbyWindow,
@@ -153,6 +154,7 @@ import {
 } from "./trace";
 import {
   NEARBY_VERSION,
+  PUBLIC_NEARBY_SPAN_MS,
   emptyNearbyWindow,
   emptySelf,
   encodeNearby,
@@ -721,6 +723,9 @@ export function projectPositions(p: PositionsResponse): PositionsResponse {
         // The newest windows and the tail, the tail through the segment
         // projection. Absent stays absent: a run with no trace says nothing.
         ...(a.trace === undefined ? {} : { trace: projectPositionTrace(a.trace) }),
+        // The cue to read the run's units out of `live.json`'s `nearby`
+        // (`projectLiveNearby`); a flag, nothing about the units themselves.
+        ...(a.nearby === true ? { nearby: true as const } : {}),
       }),
     ),
   });
@@ -1676,7 +1681,7 @@ export function projectTraceIndex(i: TraceIndexResponse): TraceIndexResponse {
  * whereabouts), the unit flags, and the 3D fields (display, scale, movement
  * flags, a player's race, class and gender) until a public reader exists.
  */
-const PUBLIC_NEARBY_KEYS = ["entry", "name", "ctype", "level", "hp", "df", "nf", "qg", "tgs"] as const satisfies readonly NearbyStateKey[];
+export const PUBLIC_NEARBY_KEYS = ["entry", "name", "ctype", "level", "hp", "df", "nf", "qg", "tgs"] as const satisfies readonly NearbyStateKey[];
 /** Of the dynamic flags only "dead": "tapped" says another player is fighting it, "lootable" whose kill it was. */
 const PUBLIC_DYNAMIC_FLAGS = 0x20;
 /** `UNIT_FLAG_PLAYER_CONTROLLED`: a player is driving it (a pet, a charmed mob, a vehicle). */
@@ -1864,6 +1869,31 @@ export function projectNearby(w: NearbyWindow): NearbyWindow {
   const t1 = typeof w.t1 === "number" && Number.isFinite(w.t1) ? w.t1 : t0;
   if (w.v !== NEARBY_VERSION) return scrubPathsValue<NearbyWindow>(emptyNearbyWindow(run, t0, t1));
   return scrubPathsValue<NearbyWindow>(encodeNearby(publicNearbyRows(windowRows(w)), { run, from: t0 }));
+}
+
+/**
+ * `live.json`'s `nearby`: each live run's window through `projectNearby`, for
+ * the runs whose position in the same file is flagged `nearby` and no other,
+ * each cut to its last `PUBLIC_NEARBY_SPAN_MS`. That is what keeps the public
+ * layer live only: a run that stops being live leaves the feed, and its
+ * window goes with it on the next pass, and no window reaches back further
+ * than the live map plays. A window filed under another run's id is dropped.
+ * A fixed point, so the bucket's verifier re-projects it like any other body.
+ */
+export function projectLiveNearby(windows: unknown, positions: PositionsResponse): LiveNearby {
+  const out: LiveNearby = {};
+  if (windows === null || typeof windows !== "object" || Array.isArray(windows)) return out;
+  const live = new Set(positions.positions.filter((p) => p.nearby === true).map((p) => p.runId));
+  for (const id of Object.keys(windows).sort()) {
+    const w = (windows as Record<string, unknown>)[id];
+    if (!live.has(id) || w === null || typeof w !== "object" || (w as { run?: unknown }).run !== id) continue;
+    let pub = projectNearby(w as NearbyWindow);
+    if (pub.t1 - pub.t0 > PUBLIC_NEARBY_SPAN_MS) {
+      pub = scrubPathsValue<NearbyWindow>(encodeNearby(windowRows(pub), { run: id, from: pub.t1 - PUBLIC_NEARBY_SPAN_MS }));
+    }
+    out[id] = pub;
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------- entries --- */

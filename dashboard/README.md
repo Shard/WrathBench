@@ -78,7 +78,8 @@ bun wb dashboard shots --serve                        # the same stack, no brows
 directories it is given), serves them through the viewer's own `createApi`
 with a private build, runs one publisher pass into a local bucket for a public
 build, and drives a headless Chromium over the DevTools protocol to named
-states: `home`, `run-live`, `map-live`, `map-live-selected` and `map-replay`.
+states: `home`, `run-live`, `map-live`, `map-live-selected`, `map-live-nearby`
+and `map-replay`.
 Wowhead's tooltip script is stubbed and every other third party refused, so a
 page renders as it does where the script is blocked; `--real-wowhead` lets it
 through. Nothing reads the operator's ClickHouse, config store or runs. For
@@ -250,8 +251,10 @@ the feed flagged `nearby` whose pip is on or near the screen. NPCs nearly
 always move, so their motion alone redraws the map at most ten times a second
 rather than at frame rate. Past a window's horizon the layer is empty rather
 than frozen, bar a second of slack for the two pods' clocks. A replay has no
-units: the ring is live only and keeps 15 minutes. The public build asks for
-none either; nothing publishes them yet.
+units: the ring is live only and keeps 15 minutes. The public build draws the
+same layer from the windows `live.json` carries (`api/snapshot-client.ts`),
+one per live run, with no request of its own: creatures only, and no target
+ring, since the public window does not say whom the character targets.
 
 ## The replay's route
 

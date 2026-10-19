@@ -105,6 +105,8 @@ export interface NearbyStoreOptions {
 
 export function createNearbyStore(opts: NearbyStoreOptions = {}): NearbyStore {
   const windows = new Map<string, DecodedNearby>();
+  /** Each run's window as last handed in, by identity. */
+  const raw = new Map<string, NearbyWindow>();
   const changed = (): void => opts.onChange?.();
   /** The run's window and the instant to read it at, or null when it cannot say. */
   const at = (runId: string, t: number): { d: DecodedNearby; t: number } | null => {
@@ -115,6 +117,9 @@ export function createNearbyStore(opts: NearbyStoreOptions = {}): NearbyStore {
   };
   return {
     set(runId, w) {
+      // The same window again (the public build's, until the next pass lands) is not decoded twice.
+      if (raw.get(runId) === w) return;
+      raw.set(runId, w);
       let d: DecodedNearby;
       try {
         d = decodeNearby(w);
@@ -130,6 +135,7 @@ export function createNearbyStore(opts: NearbyStoreOptions = {}): NearbyStore {
     retain(runIds) {
       const keep = new Set(runIds);
       let any = false;
+      for (const id of [...raw.keys()]) if (!keep.has(id)) raw.delete(id);
       for (const id of [...windows.keys()]) {
         if (keep.has(id)) continue;
         windows.delete(id);
