@@ -1585,6 +1585,29 @@ on a cluster deployment they have nothing to read on a workstation. Do not
 run a second supervisor against the same config store while the fleet is up:
 they would both spawn jobs on the same accounts.
 
+### The scripted reference run
+
+Once per harness series, by hand, on `PROBE` (docs/EPISODES.md, "The scripted
+reference run"). The runner pod runs the image's code, so launch it after the
+release that carries the series:
+
+```
+bun wb run episode --driver reference --episode e90 --account PROBE
+```
+
+It needs no key, no lane and no `--model`: the route is the model
+(`reference/<route>@<version>`). Nothing schedules it. The fleet config refuses
+`driver: reference`, and the scheduler counts it toward nothing, so it can run
+beside the fleet. The only thing it shares is the account, and `PROBE` is
+nobody's pool. It plays the full 90 minutes and ends `episode-limit`. A pause
+is not resumed. Check it with `bun wb inspect run <run-id>` and `bun wb
+inspect trajectory <run-id> --grep 'REF'`. Every turn's result ends in one
+`[log] REF {…}` line: the step, `advance`, what the tick did, and the level, xp
+and health. A step stuck on `move …` or `npc … not in view` is a route
+position to correct in `runner/src/reference/route.ts`. Bump the route's
+`version` with the correction, so the next run is a new line rather than the
+old one moved.
+
 ### Archiving runs
 
 A run that terminates without a single model response — the provider was dead
