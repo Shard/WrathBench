@@ -4,11 +4,8 @@
  *
  * ### What a snippet sees (the whole ambient surface, documented once, here)
  *
- *   sdk         the WrathClient for this session (constructed, not connected).
- *               The only path to the module: it holds the session credential,
- *               which is not readable off it, and no second client a snippet
- *               builds can reach the module (see "Network posture"). A getter —
- *               `sdk = …` is ignored and the next read returns the live client
+ *   sdk         the WrathClient for this session (constructed, not connected),
+ *               and the only path to the module. Assigning to it is ignored.
  *   state       alias for sdk.state (the StateCache); a getter, like `sdk`
  *   events      alias for sdk.events (the EventStream); a getter, like `sdk`
  *   connect()   open the event stream; call before createSession. A no-op while
@@ -150,7 +147,7 @@ const RealWebSocket = globalThis.WebSocket;
 type FetchInput = Parameters<typeof fetch>[0];
 
 const SNIPPET_NET_REFUSAL =
-  "drive the world through the ambient sdk, state and events — the only connection to the module is sdk's own, and snippet code may not open another";
+  "use the ambient sdk, state and events; snippets may not open their own connection to the module.";
 
 /**
  * The client's own transport: `realFetch`, bounded to the module host so a
