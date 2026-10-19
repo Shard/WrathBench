@@ -2775,6 +2775,23 @@ export type ReclaimCorpseReason =
   | "still_ghost"
   | "no_observation";
 
+export interface AcceptResurrectionOptions {
+  /** How long to wait for the resurrection after accepting, in ms. Default 15000. */
+  timeout?: number;
+}
+
+/**
+ * The outcome of `acceptResurrection`. `resurrected` is the resurrect observed
+ * (`SMSG_DEATH_RELEASE_LOC { map: -1 }`, which every resurrection sends
+ * first); `no_offer` means nothing was sent because no offer is pending;
+ * `unconfirmed` means the accept went out and no resurrect was seen — the
+ * server ignores an accept silently (alive, or the offer was replaced).
+ */
+export type AcceptResurrectionResult =
+  | { readonly ok: true; readonly status: "resurrected"; readonly casterGuid: string }
+  | { readonly ok: false; readonly status: "no_offer"; readonly hint: string }
+  | { readonly ok: false; readonly status: "unconfirmed"; readonly casterGuid: string; readonly hint: string };
+
 /** `CORPSE_RECLAIM_RADIUS` in the core: a reclaim further than this is dropped silently. */
 export const CORPSE_RECLAIM_RADIUS = 39;
 
@@ -4162,6 +4179,54 @@ export class WrathClient {
       }
       signal.addEventListener("abort", onAbort, { once: true });
     });
+  }
+
+  /**
+   * Accept the pending resurrection offer (`state.pendingResurrect`, from
+   * `SMSG_RESURRECT_REQUEST`) with `CMSG_RESURRECT_RESPONSE`, the answer a
+   * client's dialog sends, and wait for the resurrect. The server moves the
+   * character to the caster and resurrects it there; the verdict is read off
+   * `SMSG_DEATH_RELEASE_LOC { map: -1 }`. Nothing is sent without an offer.
+   * Declining is the same opcode with status 0, through `raw`.
+   */
+  async acceptResurrection(options: AcceptResurrectionOptions = {}): Promise<AcceptResurrectionResult> {
+    const offer = this.state.pendingResurrect;
+    if (offer === undefined) {
+      const hint =
+        "nobody is offering to resurrect you (state.pendingResurrect is undefined): an offer arrives as " +
+        "SMSG_RESURRECT_REQUEST when someone casts a resurrection on you while you are dead";
+      this.noteActionHint("acceptResurrection", "no_offer", hint);
+      return { ok: false, status: "no_offer", hint };
+    }
+    let released = false;
+    const offRelease = this.events.on("SMSG_DEATH_RELEASE_LOC", (e) => {
+      if (isDecodeError(e.data)) return;
+      if ((e.data as DeathReleaseLocData).map < 0) released = true;
+    });
+    const timeout = options.timeout ?? 15_000;
+    try {
+      await this.raw("CMSG_RESURRECT_RESPONSE", [{ guid: offer.casterGuid }, { u8: 1 }]);
+      if (!released) {
+        try {
+          await this.waitEvent(() => released, {
+            timeout,
+            includeBuffered: false,
+            description: "the resurrect after CMSG_RESURRECT_RESPONSE (SMSG_DEATH_RELEASE_LOC clearing the marker)",
+          });
+        } catch (e) {
+          if (!(e instanceof EventTimeoutError)) throw e;
+        }
+      }
+    } finally {
+      offRelease();
+    }
+    if (released) return { ok: true, status: "resurrected", casterGuid: offer.casterGuid };
+    const hint =
+      `the accept was sent but no resurrection was observed within ${Math.round(timeout / 1000)}s — the server ` +
+      "ignores it silently when you are already alive or the offer was replaced by another; re-read " +
+      "state.self.health and state.pendingResurrect";
+    this.noteActionHint("acceptResurrection", "unconfirmed", hint);
+    return { ok: false, status: "unconfirmed", casterGuid: offer.casterGuid, hint };
   }
 
   /**
