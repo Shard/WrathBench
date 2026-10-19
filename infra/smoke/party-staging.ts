@@ -16,11 +16,13 @@
  *
  * The reaping half — that nothing staged is deleted by the next worldserver
  * boot's one-time DELETEs above its item-guid watermark — cannot be shown
- * without a boot, so it is shown once, in the release window that enables
- * SOAP, across the recreate that window does anyway:
+ * without a boot, so it is shown once. The boot cannot be the recreate of
+ * the window that enables SOAP, since nothing can be staged before SOAP
+ * exists. It is the next one: a second window, or a restart the operator
+ * makes with the fleet drained (docs/RUNBOOK.md, "Party staging"):
  *
- *   bun wb smoke party-staging --keep       # before the recreate: stage, check, leave staged
- *   ...the window recreates the worldserver...
+ *   bun wb smoke party-staging --keep       # last in the window: stage, check, leave staged
+ *   ...the next worldserver recreate...
  *   bun wb smoke party-staging --recheck    # after: the same checks on what survived, then delete
  *
  * From then on the construction is the proof (stage-party.ts says why).

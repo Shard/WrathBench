@@ -47,8 +47,8 @@
  * handed out by the live generator and saved by the player, so the next
  * boot's `SELECT MAX(guid)` covers it and the boot's one-time DELETEs above
  * that watermark never reach it. The smoke proves that once, across the
- * recreate of the release window that turns SOAP on (party-staging.ts
- * --keep, then --recheck).
+ * first worldserver recreate after SOAP is on (party-staging.ts --keep,
+ * then --recheck; docs/RUNBOOK.md, "Party staging").
  */
 
 import type { SQL } from "bun";

@@ -1963,33 +1963,39 @@ The compose quickstart keeps SOAP off.
 **Turning it on** happens in one deploy window, because SOAP, the allowlist and
 the module are all read when the worldserver is recreated:
 
-1. Before the window, with the server up:
-   `bun wb accounts ensure PARTY1 PARTY2 PARTY3 PARTY4 PARTY5`. Then
-   `read -rs P && printf '%s\n' "$P" | bun wb accounts stager` creates STAGER
-   with gmlevel 3. Pick its password yourself (at most 16 characters). It has
-   no default.
-2. Put the same password into the env Secret as
-   `WRATHBENCH_STAGER_PASSWORD`. In the cluster repo that is the SOPS-encrypted
-   Secret, the same way as every other key there. Never put it in this
-   repository.
+1. Before the window, with the server up, run
+   `bun wb accounts ensure PARTY1 PARTY2 PARTY3 PARTY4 PARTY5`. That works with
+   any deployed image.
+2. Pick STAGER's password: at most 16 characters, and there is no default. Put
+   it into the env Secret as `WRATHBENCH_STAGER_PASSWORD`. In the cluster repo
+   that is the SOPS-encrypted Secret, done the same way as every other key
+   there. Never put it in this repository. The key has to be in the Secret
+   before the pods start: env from a Secret is resolved when a container
+   starts, and the reference is optional, so a pod started without the key
+   carries it empty until it restarts.
 3. The values commit: `staging: { enabled: true }`. Then run the window as
    usual (`bun wb release run`, or `bun wb release deploy`).
-4. Inside the window, before the fleet resumes:
+4. Inside the window, once the new images are up and before the fleet
+   resumes, run these in this order:
+   - `read -rs P && printf '%s\n' "$P" | bun wb accounts stager` creates STAGER
+     with gmlevel 3, using the password from step 2. It cannot run before the
+     window, because `infra/stager-account.ts` only exists in the new image.
    - `bun wb smoke deadmines-entry` checks the mine's mesh and the portal.
-   - `bun wb smoke party-staging --keep` stages the party, checks every member
-     at login, and leaves the party staged.
+   - `bun wb smoke party-entry` stages a party, walks it into map 36 together,
+     checks that it is one instance, and deletes the characters.
+   - `bun wb smoke party-staging --keep`, last of all, stages the party, checks
+     every member at login, and leaves the party staged. It has to be last:
+     every staging deletes whatever the party accounts hold.
 5. The one-time reaping proof. Staged items carry guids the live server
    allocated, so the next boot's one-time DELETEs above its watermark must not
-   touch them. Show it once: recreate the worldserver while the fleet is still
-   drained (`kubectl -n wrathbench rollout restart deploy/wrathbench-worldserver`
-   with nothing running, or a second window), then run
-   `bun wb smoke party-staging --recheck`. It repeats the checks on what
-   survived the boot and then deletes the five characters. From then on, the
-   construction is the proof.
-6. `bun wb smoke party-entry` stages a fresh party, walks it into map 36
-   together, and checks that it is one instance. It then deletes the
-   characters. `deadmines-entry` joins the deploy smokes while the campaign
-   is enabled.
+   touch them. That boot cannot be the window's own recreate: SOAP exists only
+   after it, so nothing can be staged before it. It has to be the next
+   recreate. That can be a second deploy window, or a worldserver restart with
+   the fleet drained and no run live. Which one is the operator's call. After
+   it, run `bun wb smoke party-staging --recheck`. It repeats the checks on
+   what survived the boot and then deletes the five characters. Leave the party
+   accounts alone until then. From then on, the construction is the proof.
+6. `deadmines-entry` joins the deploy smokes while the campaign is enabled.
 
 To turn it off, set `staging.enabled` back to false in another window. The
 policy, the port and the env go away. The PARTY and STAGER accounts stay in
@@ -1999,8 +2005,9 @@ auth, where they are harmless.
 calls `stageParty`. By hand, in the runner pod, run
 `bun infra/fixtures/stage-party.ts [--campaign <id>] [--accounts …] [--roles …]`.
 It deletes every character on the party accounts, so never run it while a
-party run holds those accounts. It takes about two minutes, with the five
-members done in parallel. A failure names the step and the member. If a
+party run holds those accounts. The five members are staged in parallel.
+The duration has not been measured yet; it is a few logins and logout saves
+per member. A failure names the step and the member. If a
 member does not wear its loadout at login, the loader refused an item and
 mailed it, and the stager says so.
 
