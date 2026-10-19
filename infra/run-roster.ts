@@ -54,11 +54,11 @@ import { openRunDb } from "../runner/src/rundb";
 // overrides (runner/src/config.ts). Importing it keeps roster, fleet and
 // runner validating the same shape instead of three hand-rolled copies.
 import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
-import { compactWindowDriverRefusal, DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV, driverHasCompactWindow, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
+import { compactWindowDriverRefusal, DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV, driverHasCompactWindow, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema, type TerminationReason, type WatchdogOverride } from "../runner/src/config";
 import { moduleAuthHeaders } from "../runner/src/module-auth";
 import { isOpenRouterBase, parseRouting, resolveRouting, routingLabel, type RoutingSpec } from "../runner/src/routing";
 import { DEFAULT_API_BASE, DEFAULT_API_KEY_ENV } from "../runner/src/providers";
-import { classifyLapse, resumesOnPause, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
+import { classifyLapse, PARTY_PAUSE, resumesOnPause, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
 import { readLaneUsage, laneOfSpec, subscriptionGate } from "./run-fleet-gate";
 import { subscriptionThresholds } from "../runner/src/subscription-usage";
 import { Trajectory } from "../runner/src/trajectory";
@@ -81,6 +81,9 @@ import {
 } from "./episode-launcher";
 import { K8sClient } from "./k8s-client";
 import { harnessStampOf, IMAGE_RECORD_FILE, loadPodLauncher, parseImageRef } from "./run-pod";
+import { partyConfigOf, type PartyStamp } from "../runner/src/party";
+import { runParty, type MemberVerdict, type PartyMemberRun } from "./party-fate";
+import { commandStager, STAGER_SCRIPT, type PartyStager, type StageRequest } from "./party-stager";
 
 // ------------------------------------------------------------------ types
 
@@ -218,6 +221,15 @@ export interface RosterSpec {
    * allow (`chooseLauncher`); an arm with an image is refused elsewhere.
    */
   launch?: LaunchSpec;
+  /**
+   * A party member's stamp (docs/proposals/GROUP-PLAY.md §1): the party id
+   * (the attempt's run-id stem), which member, its role and the size. Set by
+   * the fleet's `partySpawn` on each of a party's entries, with the member's
+   * own account, run id and campaign file; a roster whose entries carry it is
+   * one party, launched, stopped and given its fate together
+   * (`infra/party-fate.ts`). Absent on every other entry.
+   */
+  party?: PartyStamp;
 }
 
 export interface Resolved {
@@ -258,6 +270,7 @@ export interface Resolved {
   keepCharacters: string[];
   continueDropped: { runId: string; reason: string } | undefined;
   launch: LaunchSpec | undefined;
+  party: PartyStamp | undefined;
 }
 
 type Outcome =
@@ -616,9 +629,35 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       keepCharacters: s.keepCharacters ?? [],
       continueDropped: s.continueDropped,
       launch: s.launch === undefined ? undefined : parseLaunchSpec(s.launch, `roster entry ${s.model}`),
+      party: s.party === undefined ? undefined : partyStampOf(s, `roster entry ${s.model}`),
     });
   }
   return out;
+}
+
+/**
+ * A party entry's stamp, checked against its campaign file: the file names
+ * this member of this party, under this run id and account. The roster file
+ * is a boundary, and an entry that disagrees with its own file would launch
+ * a member as somebody else.
+ */
+function partyStampOf(s: RosterSpec, where: string): PartyStamp {
+  const p = s.party!;
+  const launch = s.campaignFile?.party;
+  if (launch === undefined) throw new Error(`${where}: a party member launches from a campaign file that names its party`);
+  if (launch.id !== p.id || launch.member !== p.member) throw new Error(`${where}: its party stamp (${p.id} ${p.member}) is not its campaign file's (${launch.id} ${launch.member})`);
+  const me = launch.members.find((m) => m.member === p.member);
+  if (me === undefined || (s.runId !== undefined && me.runId !== s.runId) || (s.account !== undefined && me.account.toUpperCase() !== s.account.toUpperCase())) {
+    throw new Error(`${where}: member ${p.member}'s run id or account is not the one its campaign file names`);
+  }
+  if (launch.members.length !== p.size) throw new Error(`${where}: a party of ${p.size} whose campaign file names ${launch.members.length}`);
+  return { id: p.id, member: p.member, role: p.role, size: p.size };
+}
+
+/** The character a staged member is launched on: its own record in the party's campaign file. */
+export function partyCharacterOf(spec: Pick<Resolved, "campaignFile">): string | undefined {
+  const launch = spec.campaignFile?.party;
+  return launch?.members.find((m) => m.member === launch.member)?.character;
 }
 
 /**
@@ -731,6 +770,10 @@ export function episodeFlags(spec: Resolved, resume: boolean): string[] {
   if (spec.campaignFile !== undefined) {
     argv.push("--episode", "probing", "--campaign-file", campaignFilePath(spec.runId));
     if (spec.ref !== undefined) argv.push("--ref", spec.ref);
+    // A party member runs on the character the stager made for it, named in
+    // its campaign file; every other probe's argv is what it was.
+    const character = partyCharacterOf(spec);
+    if (character !== undefined) argv.push("--character", character);
     return [...argv, ...(spec.campaignFile.arm.args ?? [])];
   }
   if (spec.objective !== undefined) argv.push("--objective", spec.objective);
@@ -1482,6 +1525,8 @@ function drainSeen(): boolean {
 }
 /** The episode in flight — a child process or a run pod — behind one handle. */
 let episode: EpisodeHandle | undefined;
+/** A party's episodes in flight, one handle per member: the shared stop stops them all. */
+const partyEpisodes = new Map<string, EpisodeHandle>();
 let childRunId: string | undefined;
 const wakeups: (() => void)[] = [];
 /** `--run-pods`, as the supervisor read the fleet setting; off for a hand-run roster. */
@@ -1537,6 +1582,15 @@ function requestStop(sig: string): void {
       if (id !== undefined) signalInContainer(id, "KILL");
     }, CHILD_TERM_GRACE_MS).unref();
   }
+  // A party: the same stop for every member, through the same handle each was
+  // started on, so a drain, a fleet stop or a deploy window pauses all of
+  // them at once as it pauses one.
+  for (const [id, e] of partyEpisodes) {
+    say(`${sig}: pausing party member ${id} (${e.describe()}) — operator-pause on SIGTERM (grace ${CHILD_TERM_GRACE_MS / 1000}s)`);
+    void e.stop(CHILD_TERM_GRACE_MS);
+    signalInContainer(id, "TERM");
+    setTimeout(() => signalInContainer(id, "KILL"), CHILD_TERM_GRACE_MS).unref();
+  }
 }
 
 /** Sleep that wakes early on stop, and never sleeps past the budget. */
@@ -1591,6 +1645,31 @@ async function runEpisode(spec: Resolved, resume: boolean): Promise<EpisodeExit>
   episode = undefined;
   childRunId = undefined;
   return exit;
+}
+
+/**
+ * Start one party member's episode and hand its handle back without waiting:
+ * a party's members run at once, so each is tracked for the shared stop
+ * (`partyEpisodes`) until it exits, and nothing global is held for it.
+ */
+async function startPartyEpisode(spec: Resolved, resume: boolean): Promise<EpisodeHandle> {
+  const launcher = launcherFor(spec);
+  if ("refused" in launcher) return refusedEpisode(launcher.refused);
+  const handle = await launcher.start({
+    spec,
+    resume,
+    runDir: join(REPO_ROOT, RUNS_DIR, spec.runId),
+    argv: episodeArgv(spec, resume, { container: CONTAINER }),
+    args: episodeFlags(spec, resume),
+    env: CONTAINER ? { WRATHBENCH_HARNESS_VERSION: harnessVersion() } : {},
+    log: say,
+  });
+  if (launcher.kind === "pod") say(`episode ${spec.runId} runs as ${handle.describe()}`);
+  partyEpisodes.set(spec.runId, handle);
+  // A stop that lands while the launch was in flight still reaches it.
+  if (stopping) void handle.stop(CHILD_TERM_GRACE_MS);
+  void handle.exited.then(() => partyEpisodes.delete(spec.runId));
+  return handle;
 }
 
 /**
@@ -1716,6 +1795,9 @@ export function writeLaunchFailure(runDir: string, spec: Resolved, detail: strin
   const file = spec.campaignFile;
   if (file === undefined) throw new Error(`${spec.runId}: only a probe launch leaves a launch-failed stub`);
   const now = opts.now ?? Date.now();
+  // A party member's stub carries the member's own start and the party it was
+  // to be part of, so its square tallies it with the rest of the attempt.
+  const member = file.party === undefined ? undefined : file.definition.party?.members.find((m) => m.id === file.party!.member);
   const config = {
     runId: spec.runId,
     driver: spec.driver,
@@ -1730,9 +1812,12 @@ export function writeLaunchFailure(runDir: string, spec: Resolved, detail: strin
     cell: file.cell.id,
     arm: file.arm.id,
     ...(spec.ref !== undefined ? { ref: spec.ref } : {}),
-    race: file.cell.race,
-    class: file.cell.class,
+    race: member?.race ?? file.cell.race,
+    class: member?.class ?? file.cell.class,
     ...(spec.launch?.image != null ? { image: spec.launch.image } : {}),
+    ...(member !== undefined && file.party !== undefined && file.definition.party !== undefined
+      ? { character: member.character, party: partyConfigOf(file.definition.party, file.party) }
+      : {}),
   };
   mkdirSync(runDir, { recursive: true });
   // The run store's own schema, and nothing appended: no trajectory.
@@ -2072,6 +2157,178 @@ async function attemptSpec(
   }
 }
 
+/**
+ * A roster whose entries are one party's members (`RosterSpec.party`), or
+ * null for an ordinary roster. Refused when the entries do not make one whole
+ * party — a party is launched whole or not at all.
+ */
+export function partyOfRoster(specs: readonly Resolved[]): { id: string; size: number } | null {
+  const members = specs.filter((s) => s.party !== undefined);
+  if (members.length === 0) return null;
+  if (members.length !== specs.length) throw new Error("a party roster holds the party's members and nothing else");
+  const id = members[0]!.party!.id;
+  const size = members[0]!.party!.size;
+  if (members.some((s) => s.party!.id !== id)) throw new Error("a party roster holds one party");
+  if (members.length !== size) throw new Error(`party ${id}: a party of ${size} with ${members.length} entries`);
+  if (new Set(members.map((s) => s.party!.member)).size !== size) throw new Error(`party ${id}: a member is listed twice`);
+  return { id, size };
+}
+
+/** What the stager is asked for a fresh party launch: every member, in member order. */
+export function stageRequestOf(specs: readonly Resolved[]): StageRequest {
+  const file = specs[0]!.campaignFile!;
+  const launch = file.party!;
+  const def = file.definition;
+  const start = def.start;
+  if (start === undefined || start === "fresh") throw new Error(`party ${launch.id}: ${file.campaign}@${file.version} does not start staged`);
+  return {
+    party: launch.id,
+    campaign: file.campaign,
+    version: file.version,
+    scenario: start.staged,
+    level: start.level,
+    members: def.party!.members.map((m) => {
+      const rec = launch.members.find((r) => r.member === m.id)!;
+      return { member: m.id, role: m.role, race: m.race, class: m.class, character: m.character, account: rec.account, runId: rec.runId };
+    }),
+  };
+}
+
+/**
+ * The stager the roster process runs before a fresh party launch. A test or
+ * a hand roster may swap it (`setPartyStager`); the fleet's is the script
+ * the staging track installs (`party-stager.ts`).
+ */
+let partyStager: PartyStager = commandStager({ cwd: REPO_ROOT });
+export function setPartyStager(s: PartyStager): void {
+  partyStager = s;
+}
+
+/**
+ * Re-pause a party member the roster's stop paused (`operator-pause`) as
+ * `party-paused`, keeping the episode clock the runner's own mark recorded,
+ * so the resume continues the clock and the planner groups the party.
+ */
+function repauseMember(runId: string, detail: string): void {
+  const dir = runDir(runId);
+  const t = new Trajectory(dir);
+  try {
+    let meta: Record<string, unknown> | null = null;
+    try {
+      meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as Record<string, unknown>;
+    } catch {
+      meta = null;
+    }
+    const prior = (meta?.["pause"] ?? {}) as { episodeElapsedMs?: unknown };
+    t.clearPause(runId);
+    t.pauseWithMark(
+      runId,
+      {
+        reason: PARTY_PAUSE,
+        detail,
+        at: Date.now(),
+        episodeElapsedMs: typeof prior.episodeElapsedMs === "number" ? prior.episodeElapsedMs : 0,
+      },
+      (meta ?? { runId, harnessVersion: harnessVersion(), startedAt: Date.now(), config: {} }) as never,
+    );
+  } finally {
+    t.close();
+  }
+}
+
+/** Write a termination through the runner's own writer. */
+function endMember(runId: string, reason: TerminationReason, detail: string | undefined): void {
+  const t = new Trajectory(runDir(runId));
+  try {
+    t.setTermination(runId, reason, detail);
+  } finally {
+    t.close();
+  }
+}
+
+/**
+ * One party, as one attempt (docs/proposals/GROUP-PLAY.md §1): every
+ * member's account free, the stager before a fresh launch, the members
+ * launched in one pass, and the fate of `runParty` written through the
+ * runner's own writers. A party is never retried in place or put on the
+ * defer ladder: a pause leaves it for the supervisor to resume whole.
+ */
+async function attemptParty(party: readonly Attempt[], opts: { deadline: number | undefined }): Promise<void> {
+  const id = party[0]!.spec.party!.id;
+  // Every account, before anything is touched: half a party cannot start.
+  for (const a of party) {
+    if (!(await awaitAccount(a.spec, opts.deadline, false))) {
+      say(`party ${id}: account ${a.spec.account ?? "RUNNER"} of ${a.spec.party!.member} is not free — not launching any member`);
+      return;
+    }
+  }
+  const resume = party.every((a) => a.resume);
+  if (resume) {
+    for (const a of party) {
+      const owner = liveOwnerOf(join(REPO_ROOT, RUNS_DIR), a.spec.runId);
+      if (owner !== null) {
+        say(`party ${id}: resume of ${a.spec.runId} refused, the run has a live owner — ${owner}`);
+        record({ runId: a.spec.runId, model: a.spec.model, outcome: "unknown", detail: `party resume refused, live owner: ${owner}` });
+        return;
+      }
+    }
+  }
+  const bySpec = new Map(party.map((a) => [a.spec.runId, a]));
+  const specOf = (m: PartyMemberRun): Resolved => bySpec.get(m.runId)!.spec;
+  const members: PartyMemberRun[] = party.map((a) => ({ member: a.spec.party!.member, runId: a.spec.runId, resume: a.resume }));
+  say(`party ${id}: ${resume ? "resuming" : "launching"} ${members.map((m) => `${m.member} as ${m.runId}`).join(", ")}`);
+  const outcome = await runParty<EpisodeExit>(members, {
+    ...(resume ? {} : { stage: () => partyStager.stage(stageRequestOf(party.map((a) => a.spec))) }),
+    launch: async (m) => {
+      const spec = specOf(m);
+      await freeSession(spec, m.resume ? "pre-resume hygiene" : "pre-launch hygiene", false);
+      if (!m.resume && spec.campaignFile !== undefined) writeCampaignFile(join(REPO_ROOT, RUNS_DIR, spec.runId), spec.campaignFile);
+      say(`launch ${spec.model} as ${spec.runId} (party ${id}, ${m.member})${m.resume ? " (--resume)" : ""}`);
+      return startPartyEpisode(spec, m.resume);
+    },
+    verdict: (m, exit) => classify(specOf(m), exit) as MemberVerdict,
+    end: (m, reason, detail) => endMember(m.runId, reason as TerminationReason, detail),
+    repause: (m, detail) => repauseMember(m.runId, detail),
+    launchFailed: (m, detail) => {
+      const spec = specOf(m);
+      const dir = join(REPO_ROOT, RUNS_DIR, spec.runId);
+      if (existsSync(join(dir, "meta.json"))) return;
+      try {
+        writeLaunchFailure(dir, spec, detail, { harnessVersion: launchStamp(spec) });
+      } catch (e) {
+        say(`launch-failed ${spec.runId}: could not record the attempt — ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+    endOwnPause: (m, v) => {
+      const spec = specOf(m);
+      const lapse = classifyLapse({ episode: spec.episode, pause: { reason: v.reason }, staleForMs: null });
+      const reason = lapse.reason ?? "attempt-failed";
+      endMember(m.runId, reason, lapse.detail);
+      return reason;
+    },
+    stopping: () => stopping,
+    resumeOnPause: party[0]!.spec.resumeOnPause,
+    graceMs: CHILD_TERM_GRACE_MS,
+    log: say,
+  });
+  for (const a of party) {
+    const m = a.spec.party!.member;
+    const v = outcome.verdicts[m];
+    const wrote = outcome.written.find((w) => w.member === m)?.wrote;
+    const level = readLevel(a.spec.runId);
+    record({
+      runId: a.spec.runId,
+      model: a.spec.model,
+      outcome: v?.kind === "launch-failed" ? "launch-failed" : v?.kind === "paused" && wrote === undefined ? "paused-operator" : "done",
+      ...(level !== undefined ? { level } : {}),
+      detail: `party ${id} ${outcome.fate}${outcome.trigger !== undefined ? ` (${outcome.trigger.member}: ${outcome.trigger.reason})` : ""}; ${m}: ${v === undefined ? "?" : `${v.kind}${v.kind === "terminated" || v.kind === "paused" ? ` ${v.reason}` : ""}`}${wrote !== undefined ? `; wrote ${wrote}` : ""}`,
+    });
+    // A member paused on its provider keeps its session for an in-place
+    // retry, which a party never makes: the account goes back now.
+    if (v?.kind === "paused") await freeSession(a.spec, `party ${outcome.fate}`, false);
+  }
+}
+
 function computeDeadline(until: string | undefined, maxHours: number | undefined): number | undefined {
   const now = Date.now();
   const candidates: number[] = [];
@@ -2131,6 +2388,11 @@ async function main(): Promise<void> {
   }
   logPath = args.log ?? join(REPO_ROOT, RUNS_DIR, `roster-${stampToday}.jsonl`);
   runPodsMode = args.runPods;
+  const party = partyOfRoster(specs);
+  if (party !== null && args.loop) {
+    console.error(`run-roster: party ${party.id} is one attempt — a party roster does not --loop`);
+    process.exit(2);
+  }
 
   let pending: Attempt[] = [];
   for (const spec of specs) {
@@ -2194,6 +2456,12 @@ async function main(): Promise<void> {
 
   if (args.dryRun) {
     console.log("\n--- plan (dry run; nothing launched, nothing logged) ---");
+    if (party !== null) {
+      console.log(
+        `\nparty ${party.id}: ${party.size} members launched together after the stager (bun ${STAGER_SCRIPT} --request -), on a fresh launch only;` +
+          `\n      the first member to leave the world ends the others (party-ended) or pauses them (party-paused); a shared stop pauses all`,
+      );
+    }
     for (const [i, a] of pending.entries()) {
       const s = a.spec;
       // A resumed episode reloads identity from meta.json; the derived values
@@ -2274,6 +2542,22 @@ async function main(): Promise<void> {
 
   process.on("SIGINT", () => requestStop("SIGINT"));
   process.on("SIGTERM", () => requestStop("SIGTERM"));
+
+  // A party is one attempt over all its entries: launched together, once,
+  // never looped, never retried or deferred here (`attemptParty`).
+  if (party !== null) {
+    if (pending.every((a) => a.doneCycle1 === true)) {
+      say(`party ${party.id}: every member is already done — nothing to launch`);
+    } else if (pending.some((a) => a.doneCycle1 === true) || pending.some((a) => a.resume) !== pending.every((a) => a.resume)) {
+      const states = pending.map((a) => `${a.spec.party!.member} ${a.doneCycle1 === true ? "done" : a.resume ? "paused" : "fresh"}`).join(", ");
+      say(`party ${party.id}: its members are not in one state (${states}) — a party launches or resumes whole; nothing launched`);
+      for (const a of pending) record({ runId: a.spec.runId, model: a.spec.model, outcome: "skipped", detail: `party ${party.id} not whole: ${states}` });
+    } else if (!stopping && !drainSeen() && (deadline === undefined || Date.now() < deadline)) {
+      if (await awaitSubscriptionGate(pending[0]!.spec, deadline)) await attemptParty(pending, { deadline });
+    }
+    say("roster complete");
+    return;
+  }
 
   // Stale sessions from hand-started runs hold the shared account too.
   for (const token of args.freeTokens) {

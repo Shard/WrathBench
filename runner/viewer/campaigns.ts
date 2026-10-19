@@ -22,6 +22,7 @@ import {
   armArg,
   campaignProgress,
   campaignSquares,
+  partyAttempt,
   type Campaign,
   type CampaignRefusal,
   type CampaignSquare,
@@ -118,7 +119,33 @@ export function campaignsView(
       arm: r.arm ?? null,
       counted: !isLive(r) && counted(r),
       live: isLive(r),
+      ...(r.party !== undefined ? { party: { id: r.party.id, size: r.party.size }, terminationReason: r.terminationReason } : {}),
     }));
+    const probeOf = new Map(mine.map((r, i) => [r.runId, probeRuns[i]!]));
+    /**
+     * A square's runs as its attempts: a run each, or one party per id. A
+     * party's attempt is live while any member is, and counts as the tally
+     * says (`partyAttempt`), so the grid's numbers and the square's `want`
+     * speak of the same thing.
+     */
+    const attemptsOf = (runs: readonly ResultRun[]): { ended: number; counted: number; live: number } => {
+      if (def.party === undefined) {
+        const ended = runs.filter((r) => !isLive(r));
+        return { ended: ended.length, counted: ended.filter(counted).length, live: runs.length - ended.length };
+      }
+      const byParty = new Map<string, ProbeRun[]>();
+      for (const r of runs) {
+        const key = r.party?.id ?? r.runId;
+        byParty.set(key, [...(byParty.get(key) ?? []), probeOf.get(r.runId)!]);
+      }
+      const all = [...byParty.values()].map(partyAttempt);
+      return { ended: all.filter((a) => !a.live).length, counted: all.filter((a) => a.counted).length, live: all.filter((a) => a.live).length };
+    };
+    /** The start a run was launched on: its party member's, else its cell's. */
+    const startOf = (r: ResultRun, cellId: string): { race: number; class: number } | undefined => {
+      const m = r.party === undefined ? undefined : def.party?.members.find((x) => x.id === r.party!.member);
+      return m ?? cellOf(def, cellId);
+    };
     const squares: CampaignSquare[] = row === undefined ? [] : campaignSquares(row, catalog, probeRuns);
     const progress = campaignProgress(squares);
 
@@ -152,18 +179,18 @@ export function campaignsView(
       const good = ended.filter(counted);
       const minutes = good.map((r) => minutesTo(r, target)).filter((m): m is number => m !== null);
       const levels = runs.map((r) => r.maxLevel).filter((l): l is number => l !== null);
-      const decl = cellOf(def, cellId);
       const tally = squares.find((s) => s.cell.id === cellId && s.ref === ref && s.arm.id === arm.id);
+      const attempts = attemptsOf(runs);
       return {
         column: columnKey(ref, arm.id),
-        runs: ended.length,
-        counted: good.length,
+        runs: attempts.ended,
+        counted: attempts.counted,
         reached: target === null ? 0 : good.filter((r) => (r.maxLevel ?? 0) >= target).length,
-        live: runs.length - ended.length,
+        live: attempts.live,
         minutesToStop: minutes.length === 0 ? null : { min: Math.min(...minutes), median: median(minutes)!, max: Math.max(...minutes) },
         bestLevel: levels.length > 0 ? Math.max(...levels) : null,
         costUsd: sumOrNull(runs.map(billedUsd)),
-        mismatchedStart: runs.filter((r) => startMismatch(decl, { race: r.race, class: r.class })).length,
+        mismatchedStart: runs.filter((r) => startMismatch(startOf(r, cellId), { race: r.race, class: r.class })).length,
         builds: buildsOf(runs),
         runIds: [...runs].sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0)).map((r) => r.runId),
         want: tally?.want ?? 0,

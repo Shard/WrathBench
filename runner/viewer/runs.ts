@@ -119,10 +119,15 @@ export function platformOf(apiBase: string | null, driver: string | null): strin
  */
 export function campaignFieldsOf(
   config: Readonly<Record<string, unknown>> | null | undefined,
-): Pick<RunRow, "campaign" | "cell" | "campaignVersion" | "arm" | "ref" | "image"> {
+): Pick<RunRow, "campaign" | "cell" | "campaignVersion" | "arm" | "ref" | "image" | "party"> {
   const s = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
   const campaign = s(config?.["campaign"]);
   const version = config?.["campaignVersion"];
+  const p = config?.["party"] as { id?: unknown; member?: unknown; size?: unknown } | null | undefined;
+  const party =
+    campaign !== null && p !== null && typeof p === "object" && s(p.id) !== null && s(p.member) !== null && typeof p.size === "number"
+      ? { id: s(p.id)!, member: s(p.member)!, size: p.size }
+      : null;
   return {
     campaign,
     cell: campaign === null ? null : s(config?.["cell"]),
@@ -130,6 +135,8 @@ export function campaignFieldsOf(
     arm: campaign === null ? null : s(config?.["arm"]),
     ref: s(config?.["ref"]),
     image: s(config?.["image"]),
+    // Only on a party member, so every other row keeps its shape.
+    ...(party !== null ? { party } : {}),
   };
 }
 

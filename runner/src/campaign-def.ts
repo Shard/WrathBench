@@ -163,6 +163,12 @@ export const campaignDefinitionSchema = z
     for (const id of dupes(d.cells.map((c) => c.id))) ctx.addIssue({ code: "custom", path: ["cells"], message: `cell ${id} is declared twice` });
     for (const id of dupes(d.arms.map((a) => a.id))) ctx.addIssue({ code: "custom", path: ["arms"], message: `arm ${id} is declared twice` });
     if (d.wikiCoords && !d.wiki) ctx.addIssue({ code: "custom", path: ["wikiCoords"], message: "wikiCoords needs the reference wiki, and wiki is false" });
+    // The fleet launches a staged run on a character the definition names,
+    // and only a party names its characters; a single staged start would be
+    // a launch with nothing to launch on.
+    if (d.party === undefined && d.start !== undefined && d.start !== "fresh") {
+      ctx.addIssue({ code: "custom", path: ["start"], message: "a staged start names its characters in a party block; give party, or start fresh" });
+    }
     if (d.party !== undefined) {
       // Characters the model did not create: they are the stager's.
       if (d.start === undefined || d.start === "fresh") {

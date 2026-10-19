@@ -107,6 +107,8 @@ import {
 } from "./run-fleet-config";
 import {
   affinityFrom,
+  partyAdmission,
+  sessionsOf,
   affinityOf,
   applyPause,
   bootMarker,
@@ -1036,11 +1038,17 @@ async function main(): Promise<void> {
     /** A job's lane: what it was scheduled on, else what its live run says. */
     const laneOf = (job: { subscription?: string; refs: readonly string[] }): string | undefined =>
       job.subscription ?? job.refs.map((r) => runLanes.get(r)).find((l) => l !== undefined);
-    const countKey = (refs: readonly string[], lane?: string): void => {
+    /** Count a job's sessions on its keys: one per ref, or a party's every member (`sessionsOf`). */
+    const countKey = (refs: readonly string[], lane?: string, sessions = 1): void => {
       for (const r of refs) {
-        for (const k of keysOfIn(keyOf, r, lane ?? runLanes.get(r))) keyCount.set(k, (keyCount.get(k) ?? 0) + 1);
+        for (const k of keysOfIn(keyOf, r, lane ?? runLanes.get(r))) keyCount.set(k, (keyCount.get(k) ?? 0) + sessions);
       }
     };
+    /**
+     * Pinned parties this tick would start, admitted only once every other
+     * session is counted: all of a party under every cap, or none of it.
+     */
+    const partyAdmissions: { job: FleetJob; placed: FleetJob; idx: number }[] = [];
     /**
      * The lane a claude-code job that nothing has placed yet should take: the
      * first subscription with a slot free, else the default one. Pinned jobs,
@@ -1136,7 +1144,8 @@ async function main(): Promise<void> {
         // An enabled pinned job spawns this tick if it is not already running,
         // so it counts against the driver cap either way — otherwise the first
         // tick after a restart fills the pool before the pinned session exists.
-        countKey(placed.refs, placed.subscription);
+        countKey(placed.refs, placed.subscription, sessionsOf(placed));
+        if (placed.accounts !== undefined && job.enabled && !sets.running.has(job.name)) partyAdmissions.push({ job, placed, idx: out.length - 1 });
       }
     }
     // Pool jobs with a live process: keep running whatever the file now says,
@@ -1201,9 +1210,28 @@ async function main(): Promise<void> {
         // Words only: what the drain line says about a job nothing yields.
         drainReasons.set(name, unyieldedDrainReason(job, cfg.campaigns, Object.keys(cfg.roster), probes));
         for (const r of job.refs) runningRefs.add(r);
-        countKey(job.refs, laneOf(job));
+        countKey(job.refs, laneOf(job), sessionsOf(job));
         for (const r of job.refs) if (billingOf.get(r) === "paid") paidRunning++;
       }
+    }
+    // A party starts whole or not at all (GROUP-PLAY.md §1): with every other
+    // session counted, a pinned party that would not fit under a cap on one
+    // of its keys — its lane, the claude total, the paid cap — is held this
+    // tick with the reason, and gives back the slots it was counted for.
+    for (const p of partyAdmissions) {
+      const size = sessionsOf(p.placed);
+      const keys = p.placed.refs.flatMap((r) => keysOfIn(keyOf, r, p.placed.subscription ?? runLanes.get(r)));
+      const without = new Map(keyCount);
+      for (const k of keys) without.set(k, (without.get(k) ?? size) - size);
+      const paid = billingOf.get(p.placed.ref) === "paid" && cfg.policy.paid !== null ? { running: paidRunning, cap: cfg.policy.paid.maxConcurrent } : undefined;
+      const why = partyAdmission({ size, keys, running: without, max: cfg.maxConcurrent, paid });
+      if (why === undefined) {
+        if (paid !== undefined) paidRunning += size;
+        continue;
+      }
+      pinnedSkips.push({ job: p.job, reason: why });
+      out[p.idx] = { ...out[p.idx]!, enabled: false };
+      for (const k of keys) keyCount.set(k, (keyCount.get(k) ?? size) - size);
     }
     // A live fleet run none of this supervisor's jobs is playing — the two
     // minutes a killed runner's heartbeat stays warm after a pod recreate, or
@@ -1303,6 +1331,24 @@ async function main(): Promise<void> {
       // rebuilds its config from meta.json, and the lane is in it. Stamped on
       // the spawn too so the count and the state file agree with the run.
       const resumed = assignLane(r.job);
+      // A paused party comes back whole under the caps, as it starts: every
+      // member counted, or the resume waits for a tick with room.
+      if (resumed.accounts !== undefined) {
+        const size = sessionsOf(resumed);
+        const keys = resumed.refs.flatMap((ref) => keysOfIn(keyOf, ref, resumed.subscription ?? runLanes.get(ref)));
+        const paid = billingOf.get(resumed.ref) === "paid" && cfg.policy.paid !== null ? { running: paidRunning, cap: cfg.policy.paid.maxConcurrent } : undefined;
+        const why = partyAdmission({ size, keys, running: keyCount, max: cfg.maxConcurrent, paid });
+        if (why !== undefined) {
+          const key = `party-held:${r.runId}:${why}`;
+          if (!announcedPicks.has(key)) {
+            announcedPicks.add(key);
+            say(`resume ${name}: held — ${why}`);
+          }
+          continue;
+        }
+        countKey(resumed.refs, resumed.subscription, size);
+        if (paid !== undefined) paidRunning += size;
+      }
       const spawn = jobSpawn(resumed, cfg.roster, r.account, stampToday, undefined, cfg.campaigns);
       if (r.job.account !== undefined) {
         pending.set(name, resumed);

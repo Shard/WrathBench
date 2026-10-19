@@ -28,7 +28,7 @@ import {
   parseRunArgs,
 } from "../runner/src/run-flags";
 import { configFromArgs } from "../runner/src/run";
-import { checkedIn, definition, joined } from "../runner/test/fixtures/campaigns";
+import { checkedIn, definition, joined, partyDefinition } from "../runner/test/fixtures/campaigns";
 import type { FleetJob, FleetRosterEntry } from "./run-fleet-config";
 import { jobSpawn } from "./run-fleet-plan";
 import { campaignFilePath, episodeArgv, episodeFlags, resolve, type Resolved, type RosterSpec } from "./run-roster";
@@ -82,10 +82,29 @@ const windows = definition({
     { id: "w200k", image: "registry.example/wb/runner:t1", args: ["--compact-window", "200k", "--step-interval-ms", "4000"] },
   ],
 });
-const { campaigns } = joined([race, windows], {
+const party = partyDefinition();
+const PARTY_ACCOUNTS = ["PARTY1", "PARTY2", "PARTY3", "PARTY4", "PARTY5"];
+const { campaigns } = joined([race, windows, party], {
   "race-probe": { version: 1, assignments: [{ model: "glm-free" }] },
   "window-probe": { version: 1, assignments: [{ model: "sonnet" }] },
+  deadmines: { version: 1, assignments: [{ model: "sonnet" }], accounts: PARTY_ACCOUNTS },
 });
+/** A party job's five member specs, as the roster reads them back. */
+function partySpecs(): Resolved[] {
+  return specsOf(
+    job({
+      ref: "sonnet",
+      episode: "probing",
+      name: "deadmines-party-base",
+      source: "pinned",
+      account: "PARTY1",
+      accounts: PARTY_ACCOUNTS,
+      subscription: "CLAUDE_CODE_OAUTH_TOKEN_2",
+      probe: { campaign: "deadmines", version: 1, cell: "party", arm: "base" },
+    }),
+    campaigns,
+  );
+}
 
 /** One spec per lane and launch shape the roster emits. */
 function everyLane(): { name: string; spec: Resolved; resume: boolean }[] {
@@ -122,6 +141,7 @@ function everyLane(): { name: string; spec: Resolved; resume: boolean }[] {
   );
   // A hand-written roster may say what the fleet never does: an objective,
   // coordinates, no wiki. The roster still builds argv for it.
+  add("probe, a party's members on the second lane", partySpecs());
   add("hand roster, steered, on an account", resolve([{ model: "x/y", objective: "go north", wikiCoords: true, episode: "probing", account: "SHAKEOUT" } as RosterSpec], STAMP));
   add("hand roster, no wiki, no clock", resolve([{ model: "x/y", wiki: false, watchdogs: { episodeMs: null, idleMs: 0 } } as RosterSpec], STAMP));
   for (const { name, spec } of [...out]) out.push({ name: `${name}, resumed`, spec, resume: true });
@@ -171,6 +191,25 @@ describe("the roster's argv, every lane, through run.ts's parser", () => {
     // A resume restates none of it: the arm's args are in the stored config.
     expect(episodeFlags(spec!, true)).not.toContain("--compact-window");
     expect(episodeFlags(spec!, true)).not.toContain("--campaign-file");
+  });
+
+  test("a party member's argv names its staged character, and the fresh-launch seam takes it as the member", () => {
+    const specs = partySpecs();
+    expect(specs.map((s) => [s.party?.member, s.account, s.tokenEnv])).toEqual([
+      ["tank", "PARTY1", "CLAUDE_CODE_OAUTH_TOKEN_2"],
+      ["healer", "PARTY2", "CLAUDE_CODE_OAUTH_TOKEN_2"],
+      ["mage", "PARTY3", "CLAUDE_CODE_OAUTH_TOKEN_2"],
+      ["rogue", "PARTY4", "CLAUDE_CODE_OAUTH_TOKEN_2"],
+      ["hunter", "PARTY5", "CLAUDE_CODE_OAUTH_TOKEN_2"],
+    ]);
+    const healer = specs[1]!;
+    const flags = episodeFlags(healer, false);
+    expect(flags.slice(flags.indexOf("--episode"))).toEqual(["--episode", "probing", "--campaign-file", campaignFilePath(healer.runId), "--ref", "sonnet", "--character", "Brenna"]);
+    const config = probeConfig(healer);
+    expect(config).toMatchObject({ character: "Brenna", race: 1, class: 5, account: "PARTY2", subscription: "CLAUDE_CODE_OAUTH_TOKEN_2", party: { member: "healer", role: "healer", size: 5 } });
+    expect(config.party!.id).toBe(specs[0]!.party!.id);
+    // A resume restates none of it.
+    expect(episodeFlags(healer, true)).not.toContain("--character");
   });
 
   test("a probe on the release image runs through the fresh-launch seam with the cell's shape", () => {

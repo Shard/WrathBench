@@ -70,6 +70,14 @@ export const campaignRowSchema = z
      */
     account: z.string().min(1).nullable().optional(),
     /**
+     * A party campaign's accounts (docs/proposals/GROUP-PLAY.md §2): the pin
+     * generalised to a list, one account per member in member order, so the
+     * whole party is pinned. Only a definition with a `party` takes it, and it
+     * must take it, with exactly the party's size; `account` is then absent.
+     * Each account follows the pinned-job account rules.
+     */
+    accounts: z.array(z.string().min(2).max(16)).min(1).optional(),
+    /**
      * Skip a model the projection considers unhealthy (retired, or cooling on
      * the defer ladder). Default true: burning a square against a dead
      * endpoint produces no observation.
@@ -99,7 +107,10 @@ export interface Campaign {
   def: CampaignDefinition;
   enabled: boolean;
   assignments: CampaignAssignment[];
+  /** The account the campaign is pinned to; for a party, its leader's (`accounts[0]`). */
   account?: string;
+  /** A party campaign's pinned accounts, one per member in member order. */
+  accounts?: string[];
   excludeUnhealthy: boolean;
   /** The definition's cells and arms, here because every planner walks them. */
   cells: readonly CampaignCell[];
@@ -276,7 +287,7 @@ export function campaignRowProblem(name: string, spec: unknown): string | null {
   if (!CAMPAIGN_NAME.test(name)) return `campaign ${name}: the id must match ${CAMPAIGN_NAME}`;
   const parsed = campaignRowSchema.safeParse(spec);
   if (parsed.success) return null;
-  return `campaign ${name}: ${issuesOf(parsed.error)} — a row is { version, enabled, assignments [{ model, runsPerCell }], account?, excludeUnhealthy? }`;
+  return `campaign ${name}: ${issuesOf(parsed.error)} — a row is { version, enabled, assignments [{ model, runsPerCell }], account?, accounts?, excludeUnhealthy? }`;
 }
 
 /**
@@ -320,6 +331,12 @@ export function parseCampaigns(
       continue;
     }
     const def = published.def;
+    const partyProblem = partyRowProblem(def, row);
+    if (partyProblem !== null) {
+      refused.push({ key: `campaigns/${name}`, campaign: name, reason: `campaign ${name}: ${partyProblem}` });
+      continue;
+    }
+    const accounts = def.party !== undefined ? row.accounts : undefined;
     campaigns.push({
       name,
       version: def.version,
@@ -329,6 +346,9 @@ export function parseCampaigns(
       enabled: row.enabled,
       assignments: row.assignments,
       ...(row.account !== undefined && row.account !== null ? { account: row.account } : {}),
+      // A party is pinned whole: the leader's account stands for the pin
+      // wherever one account is read, and the list carries the rest.
+      ...(accounts !== undefined ? { account: accounts[0]!, accounts: [...accounts] } : {}),
       excludeUnhealthy: row.excludeUnhealthy,
       cells: def.cells,
       arms: def.arms,
@@ -338,6 +358,23 @@ export function parseCampaigns(
     });
   }
   return { campaigns, refused };
+}
+
+/**
+ * Why a row cannot sweep its definition as a party, or null. A party is
+ * pinned to its members' accounts, one each and no two alike — a party drawn
+ * from the pool is a later generalisation (GROUP-PLAY.md §1) — and only a
+ * party takes a list.
+ */
+function partyRowProblem(def: CampaignDefinition, row: z.infer<typeof campaignRowSchema>): string | null {
+  if (def.party === undefined) return row.accounts !== undefined ? "accounts is a party's pin, and this definition is no party — pin it with account" : null;
+  const size = def.party.size;
+  if (row.account !== undefined && row.account !== null) return `a party of ${size} is pinned with accounts (one per member), not account`;
+  if (row.accounts === undefined) return `a party of ${size} is pinned to its members' accounts: give accounts with ${size} names`;
+  if (row.accounts.length !== size) return `a party of ${size} needs ${size} accounts, and accounts names ${row.accounts.length}`;
+  const upper = row.accounts.map((a) => a.toUpperCase());
+  if (new Set(upper).size !== upper.length) return "two members share an account — the module holds one session per account";
+  return null;
 }
 
 /**
@@ -440,6 +477,36 @@ export interface ProbeRun {
   counted: boolean;
   /** Still in flight: an attempt that may yet count. */
   live: boolean;
+  /**
+   * The party the run is a member of (`config.party`): its id and size. A
+   * party is one launch of all its members, so a square tallies parties by
+   * this id, not runs. Null or absent on a run that is no party member.
+   */
+  party?: { id: string; size: number } | null;
+  /** The run's termination reason, which a party's count reads; null while it has none. */
+  terminationReason?: string | null;
+}
+
+/**
+ * One party's members as one attempt (GROUP-PLAY.md §1, "Counting"): live
+ * while any member is; counted once it is whole on disk, nothing is in
+ * flight, no member is `launch-failed`, and every member that ended on a
+ * verdict of its own counts. A `party-ended` member inherits the party's
+ * fate rather than voting: it was ended because another member's verdict
+ * ended the attempt, so whether the attempt counts is that verdict's
+ * question — an `episode-limit` counts, an `adapter-error` does not.
+ */
+export function partyAttempt(members: readonly ProbeRun[]): { live: boolean; counted: boolean } {
+  const live = members.some((m) => m.live);
+  const size = members.find((m) => m.party != null)?.party?.size ?? members.length;
+  const own = members.filter((m) => m.terminationReason !== "party-ended");
+  const counted =
+    !live &&
+    members.length >= size &&
+    !members.some((m) => m.terminationReason === "launch-failed") &&
+    own.length > 0 &&
+    own.every((m) => m.counted);
+  return { live, counted };
 }
 
 /** One (assignment, arm, cell) of a campaign, and what is on disk for it. */
@@ -483,15 +550,27 @@ function squareKey(campaign: string, version: number, ref: string, arm: string, 
  */
 export function campaignSquares(c: Campaign, catalog: readonly string[], probeRuns: readonly ProbeRun[]): CampaignSquare[] {
   const tally = new Map<string, { done: number; attempts: number; live: number }>();
+  const bump = (k: string, a: { live: boolean; counted: boolean }): void => {
+    const t = tally.get(k) ?? { done: 0, attempts: 0, live: 0 };
+    t.attempts++;
+    if (a.live) t.live++;
+    if (a.counted) t.done++;
+    tally.set(k, t);
+  };
+  // A party member is a fifth of one attempt: its square tallies the party.
+  const parties = new Map<string, { key: string; members: ProbeRun[] }>();
   for (const r of probeRuns) {
     if (r.campaign !== c.name || r.version !== c.version || r.cell === null || r.ref === null || r.arm === null) continue;
     const k = squareKey(r.campaign, r.version, r.ref, r.arm, r.cell);
-    const t = tally.get(k) ?? { done: 0, attempts: 0, live: 0 };
-    t.attempts++;
-    if (r.live) t.live++;
-    if (r.counted) t.done++;
-    tally.set(k, t);
+    if (r.party == null) {
+      bump(k, r);
+      continue;
+    }
+    const p = parties.get(`${k}\u0000${r.party.id}`) ?? { key: k, members: [] };
+    p.members.push(r);
+    parties.set(`${k}\u0000${r.party.id}`, p);
   }
+  for (const p of parties.values()) bump(p.key, partyAttempt(p.members));
   const out: CampaignSquare[] = [];
   for (const a of campaignAssignments(c, catalog)) {
     for (const cell of c.cells) {

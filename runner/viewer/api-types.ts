@@ -353,6 +353,12 @@ export interface RunRow {
   ref?: string | null;
   /** The image a run pod was asked to run (`WRATHBENCH_RUN_IMAGE`); null on a child-process launch. */
   image?: string | null;
+  /**
+   * The party a campaign run is a member of (`config.party`): its id (the
+   * attempt's run-id stem), which member, and the size. Absent on every run
+   * that is no party member, so no other row changes shape.
+   */
+  party?: PartyStampView;
   /** An extra run: past the policy target, scored like any other, never counted by the fleet. */
   extra: boolean;
   character: string | null;
@@ -1785,6 +1791,13 @@ export interface TradeMarkView {
 }
 
 /** One run as the results charts read it: identity, comparability, level marks. */
+/** A party member's stamp as a row carries it. */
+export interface PartyStampView {
+  id: string;
+  member: string;
+  size: number;
+}
+
 export interface ResultRun {
   runId: string;
   model: string | null;
@@ -1834,6 +1847,8 @@ export interface ResultRun {
   arm?: string | null;
   ref?: string | null;
   image?: string | null;
+  /** As on `RunRow`: absent on a run that is no party member. */
+  party?: PartyStampView;
   effort: string | null;
   /**
    * The CLI compaction window, off the comparability stamp. A key like

@@ -362,7 +362,12 @@ campaign-defs  published campaign definitions, `<id>@<version>` → { definition
             fresh store gets its definitions by publishing them, then seeding the rest.
 campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only —
             { <id>: { version, enabled, assignments [{ model: <roster name>, runsPerCell }],
-            account?, excludeUnhealthy? } }, strict. The shape (cells, arms, start, leash, stop
+            account?, accounts?, excludeUnhealthy? } }, strict. A PARTY definition is pinned with
+            `accounts` (one per member, member order, the leader first) and never `account`; any
+            other count, a shared account or a clash on any one of them refuses the whole pin. Its
+            square launches one roster of all members together, after the stager, counts every
+            member against the lane and paid caps, starts only when all fit, and resumes whole
+            (docs/proposals/GROUP-PLAY.md; `infra/party-fate.ts`). The shape (cells, arms, start, leash, stop
             level, resume, attempt cap) is the published definition `<id>@<version>`. A row the store
             will not write (no version, an unknown key) or one naming a version nobody published is
             refused by name on read, alone: the roster, the policy and every other campaign load.
