@@ -25,7 +25,11 @@
  * plus the radius; the raw probe checks the facts it is built from.
  *
  * The resurrection leg (the party taps): a second account
- * (MODULE_ACCOUNT2, default SMOKE2) logs in a level-10 Human Priest placed
+ * (MODULE_ACCOUNT_PRIEST, default SMOKE4 — on the module's allowlist and on
+ * neither the preflight gate's accounts nor the deploy smokes', so the leg
+ * runs beside them without pausing anything; a busy account is a FAIL line
+ * within seconds, never a long wait and never a takeover of the other
+ * session) logs in a level-10 Human Priest placed
  * by the `vineyard-priest` fixture, which grants Resurrection (2006). The
  * warrior dies a second time and does not release; the priest walks to the
  * body and casts Resurrection on it (a dead, unreleased player is a unit
@@ -54,15 +58,16 @@ const TOKEN = `probe-death-${crypto.randomUUID()}`;
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // Fresh character every run: the arc needs a level 1 that kobolds can kill.
 import { connect, type WrathClient } from "../../sdk/src/index";
-import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
+import { applyScenario, characterNames, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase, moduleWsBase } from "./lib/module";
 
 const CHARACTER = probeName("Bd");
-// The resurrection leg's priest: a throwaway on the second account, placed by
-// the vineyard-priest fixture (level 10, Resurrection known).
-const PRIEST_ACCOUNT = process.env.MODULE_ACCOUNT2 ?? "SMOKE2";
+// The resurrection leg's priest: a throwaway on an account no gate or deploy
+// smoke logs into (the store's preflight uses SMOKE and SMOKE2), placed by the
+// vineyard-priest fixture (level 10, Resurrection known).
+const PRIEST_ACCOUNT = process.env.MODULE_ACCOUNT_PRIEST ?? "SMOKE4";
 const PRIEST = probeName("Bdp");
 const PRIEST_TOKEN = `probe-death-priest-${crypto.randomUUID()}`;
 const PRIEST_SCENARIO = "vineyard-priest";
@@ -283,6 +288,31 @@ async function dieToVermin() {
   }
 }
 
+const priestBusyHint =
+  " — the priest leg needs an account nothing else is logged into; set MODULE_ACCOUNT_PRIEST to a free SMOKE account on the module's allowlist";
+
+// The priest's login. POST /session never answers account_in_use — it takes
+// the account over from whatever holds it — so a busy account is caught first
+// by POST /characters, the read-only call that does answer account_in_use
+// (characterNames: one short retry, then the FAIL above), and only a free one
+// is logged into. A busy or unknown account fails with a line saying so,
+// never a wait and never an eviction of someone else's session.
+async function priestLogin(c: WrathClient): Promise<void> {
+  await characterNames(priestFixture());
+  try {
+    await c.createSession({ account: PRIEST_ACCOUNT, character: PRIEST, race: 1, class: 5 });
+  } catch (e) {
+    const code = (e as { code?: string }).code;
+    if (code === "token_in_use" || code === "timeout") {
+      fail(`priest account ${PRIEST_ACCOUNT} did not come free for the login (${code})${priestBusyHint}`);
+    }
+    if (code === "unknown_account" || code === "account_not_permitted") {
+      fail(`priest account ${PRIEST_ACCOUNT} is not usable (${code}): it must exist (bun wb accounts ensure ${PRIEST_ACCOUNT}) and be on worldserver.accounts`);
+    }
+    throw e;
+  }
+}
+
 // The priest of the resurrection leg: placed by its fixture before the arc
 // starts (apply.ts waits for the character to be offline, which a fresh one
 // is), logged in only when the leg begins.
@@ -293,13 +323,15 @@ function priestFixture(): FixtureContext {
     character: PRIEST,
     token: PRIEST_TOKEN,
     log,
-    fail,
-    contendedDeadlineMs: 60_000,
-    contendedRetryMs: 10_000,
+    fail: (msg: string) => fail(`priest account ${PRIEST_ACCOUNT}: ${msg}${priestBusyHint}`),
+    // One short retry, then a FAIL: the account is meant to be free, so a busy
+    // one is a misconfiguration to report, not something to wait out.
+    contendedDeadlineMs: 5_000,
+    contendedRetryMs: 5_000,
     createAndLogout: async () => {
       const c = await connect({ baseUrl: BASE, token: `${PRIEST_TOKEN}-create`, secret: MODULE_SECRET });
       try {
-        await c.createSession({ account: PRIEST_ACCOUNT, character: PRIEST, race: 1, class: 5 });
+        await priestLogin(c);
         await c.logout();
       } finally {
         c.close();
@@ -439,7 +471,7 @@ async function main() {
 
   step = "resurrect-cast";
   priest = await connect({ baseUrl: BASE, token: PRIEST_TOKEN, secret: MODULE_SECRET });
-  await priest.createSession({ account: PRIEST_ACCOUNT, character: PRIEST, race: 1, class: 5 });
+  await priestLogin(priest);
   const priestGuid = priest.state.self.guid ?? fail("the priest has no guid after login");
   if (priest.state.spell(SPELL_RESURRECTION) === undefined) fail(`${PRIEST} does not know Resurrection (${SPELL_RESURRECTION}) — did apply.ts place the vineyard-priest fixture?`);
   const near = { x: bodyPos.x + 4, y: bodyPos.y, z: bodyPos.z };
