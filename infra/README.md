@@ -1,6 +1,10 @@
 # infra
 
-WrathBench runs in containers, two ways, from the same Dockerfiles and code:
+Everything that runs WrathBench as containers: the Dockerfiles, the compose
+quickstart, the Helm chart the project's own fleet runs on, the fleet
+supervisor, the smoke scripts, the publisher for the public site, and the
+`bun wb` operator commands that tie them together. WrathBench runs two ways,
+from the same Dockerfiles and code:
 
 - **On one machine, `infra/compose.yml`.** The quickstart: a way to try
   WrathBench that needs nothing installed beyond Docker, plus an AzerothCore

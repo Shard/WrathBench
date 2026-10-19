@@ -3,6 +3,7 @@
 # Operator entry point for one episode.
 #
 #   ./infra/run-episode.sh --model <id> [--driver openai|claude-code|codex|stub]
+#   ./infra/run-episode.sh --driver reference --episode e90 --account PROBE   # the scripted reference
 #   ./infra/run-episode.sh --resume <run-id>
 #   ./infra/run-episode.sh --model <id> --local           # outside the container
 #   ./infra/run-episode.sh --model <id> --k8s             # into the runner pod
@@ -45,7 +46,7 @@ K8S_NAMESPACE="${WRATHBENCH_K8S_NAMESPACE:-wrathbench}"
 K8S_RELEASE="${WRATHBENCH_K8S_RELEASE:-wrathbench}"
 
 usage() {
-  sed -n '3,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '3,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # ---------------------------------------------------------------- arguments
@@ -139,7 +140,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if [ -z "${RESUME}" ] && [ -z "${MODEL}" ] && [ "${DRIVER}" != "stub" ]; then
+# The stub and the scripted reference are not models: the stub's script and
+# the reference's route name what drives them (the reference's route is its model id).
+if [ -z "${RESUME}" ] && [ -z "${MODEL}" ] && [ "${DRIVER}" != "stub" ] && [ "${DRIVER}" != "reference" ]; then
   echo "run-episode.sh: --model <id> is required (or --resume <run-id>)" >&2
   usage >&2
   exit 2

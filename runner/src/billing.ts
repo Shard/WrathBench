@@ -67,6 +67,8 @@ export function declaredBillingOf(run: Pick<BillableRun, "driver" | "declaredBil
 
 /** Did this run cost money? See the module comment for why it is not `billingOf`. */
 export function runBilling(run: BillableRun): Billing {
+  // The scripted reference reaches no model and no provider: nothing bills.
+  if (run.driver === "reference") return "free";
   if (isSubscriptionHarness(run.harness) || isSubscriptionHarness(run.driver)) return "paid";
   const declared = declaredBillingOf(run);
   if (declared !== undefined) return declared;

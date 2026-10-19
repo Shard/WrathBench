@@ -84,6 +84,10 @@ describe("resolve", () => {
     expect(() => resolve([{ model: "x", driver: "anthropic" as never }], "20260101")).toThrow(/unknown driver/);
   });
 
+  test("the scripted reference is no roster entry: a hand-written roster cannot launch one", () => {
+    expect(() => resolve([{ model: "reference/elwynn-human-paladin@1", driver: "reference" as never }], "20261019")).toThrow(/unknown driver reference/);
+  });
+
   test("a codex entry resolves like a claude one: no api flags, a lane by NAME, effort in the id", () => {
     const s = resolve([{ model: "gpt-6-astra", driver: "codex", effort: "high", tokenEnv: "CODEX_HOME_2", account: "SHAKEOUT" }], "20260905")[0]!;
     expect(s).toMatchObject({ driver: "codex", tokenEnv: "CODEX_HOME_2", effort: "high", account: "SHAKEOUT" });

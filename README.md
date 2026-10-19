@@ -2,23 +2,37 @@
 
 **An agent workbench for World of Warcraft.**
 
-WrathBench evaluates AI agents on their ability to play World of Warcraft: Wrath of the Lich King through a TypeScript SDK on a private AzerothCore server. A model writes and supervises code that drives one character in a live game world. Watching an agent observe, decide and act over hours of play, levelling and questing its way out into the world, gives perspective on its long-horizon planning, memory and problem solving capabilities.
+WrathBench evaluates AI agents on their ability to play World of Warcraft: Wrath of the Lich King through a TypeScript SDK on a private AzerothCore server. A model writes and supervises code that drives one character in a live game world. Watching an agent observe, decide and act over hours of play, levelling and questing its way out into the world, gives perspective on its long-horizon planning, memory and problem solving.
 
-The long-term goals for the project include, all using fresh level-1 characters with no direction:
-- An agent reaching the level cap in freeplay
-- A group of agents form a group and enter and completes a dungeon together.
-- A raid of agents clears Icecrown Citadel
+The long-term goals, all from fresh level-1 characters with no direction:
+
+- An agent reaches the level cap in freeplay.
+- A group of agents forms a party, enters a dungeon and completes it together.
+- A raid of agents clears Icecrown Citadel.
 - Community agents can join a shared server over the same protocol.
 
-The pieces that make up WrathBench include:
-- A thin AzerothCore server module that exposes what a game client could see and do
-- A TypeScript SDK
-- A runner harness that gives a model the SDK in a sandbox and logs everything
-- A Dashboard that is also the public site at <https://wrathbench.shard.page>.
-- Other tools for setting up your own harness: Docker Compose to try WrathBench on one machine, and a Helm chart to run it on Kubernetes.
+## What is in the repository
+
+Each directory has its own README that says what it is for and how to use it.
+
+| Directory | What it is |
+| --- | --- |
+| `module/` | A thin AzerothCore module: an HTTP/WebSocket bridge that exposes what a game client could see and do, and nothing more. |
+| `sdk/` | The TypeScript library a model's snippets call to drive a character. |
+| `runner/` | The agent loop: hands a model the SDK in a sandbox, supervises the episode and records everything that happened. |
+| `runner/viewer/` | The read-only API over recorded runs that the dashboard reads. |
+| `dashboard/` | The web UI over that API, which is also the public site at <https://wrathbench.shard.page>. |
+| `collector/` | Tails recorded runs into ClickHouse so the viewer can answer questions about many runs at once. |
+| `wiki/` | Builds the searchable reference bundle the runner serves to the model, from a locally held wiki dump. |
+| `minimap/` | Extracts and bakes the map tiles the dashboard's map draws. |
+| `infra/` | Docker Compose to try WrathBench on one machine, the Helm chart the project's own fleet runs on, and the operator commands. |
+| `docs/` | Architecture, the contracts the agent is held to, the methodology behind the results, and the runbook. |
+
+`docs/ARCHITECTURE.md` is the map of how the pieces fit; `docs/CONTRACTS.md` says what the agent may see and do; `docs/METHODOLOGY.md` holds the decisions that shape what a result means.
 
 ## Try it on one machine
-`infra/compose.yml` brings the whole stack up on one machine with nothing installed beyond Docker with compose. It also needs an [AzerothCore](https://www.azerothcore.org/) 3.3.5a server data directory (`dbc/ maps/ vmaps/ mmaps/`) at `data/client`. Producing that directory is outside this repository's scope. Nothing Blizzard-derived is hosted within this repo.
+
+`infra/compose.yml` brings the whole stack up on one machine with nothing installed beyond Docker with compose. It also needs an [AzerothCore](https://www.azerothcore.org/) 3.3.5a server data directory (`dbc/ maps/ vmaps/ mmaps/`) at `data/client`. Producing that directory is outside this repository's scope, and nothing Blizzard-derived is hosted in this repository.
 
 ```sh
 git clone --recurse-submodules git@github.com:Shard/WrathBench.git && cd WrathBench
@@ -41,20 +55,20 @@ Trajectories land under `data/runs/<run-id>/`. `infra/README.md` has the service
 
 ## Running it for real
 
-The compose stack is a quickstart, not a deployment, and has no tooling for updating or operating it over time. The project's own fleet runs on Kubernetes from the Helm chart at `infra/chart/wrathbench`, which is also the reference for a more serious deployment. `infra/README.md` ("Releasing on Kubernetes") and `docs/RUNBOOK.md` cover building, releasing and operating it, through `bun wb <group> <command>` from the repository root (`bun wb` lists the commands).
+The compose stack is a quickstart, not a deployment, and has no tooling for updating or operating it over time. The project's own fleet runs on Kubernetes from the Helm chart at `infra/chart/wrathbench`, which is also the reference for a more serious deployment. `infra/README.md` ("Releasing on Kubernetes") and `docs/RUNBOOK.md` cover building, releasing and operating it. The operator commands are `bun wb <group> <command>` from the repository root; `bun wb` lists them.
 
 ## Developing without game data
 
-The harness itself needs none of the above. From a bare clone, `bun install` at the root (Bun is pinned in `.bun-version`), then:
+The harness itself needs none of the above. From a bare clone, `bun install --frozen-lockfile` at the root (Bun is pinned in `.bun-version`), then:
 
 ```sh
-bun test                     # every workspace, all fixture-based
-bun run typecheck
+bun run test                 # every workspace's suite, all fixture-based
+bun run typecheck            # every project, infra included
 bun run dashboard:build
 bun run viewer               # serves the dashboard with empty states
 ```
 
-The worldserver, the smoke scripts, the wiki reference bundle and the minimap tiles all need operator-supplied data and stay out of reach without it; the module compiles only inside the worldserver image.
+Bun strips types without checking them, so a green test run says nothing about types; run both. The worldserver, the smoke scripts, the wiki reference bundle and the minimap tiles all need operator-supplied data and stay out of reach without it; the module compiles only inside the worldserver image.
 
 ## Licence
 

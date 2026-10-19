@@ -127,6 +127,17 @@ describe("scored", () => {
     expect(scored(rows).map((r) => r.runId)).toEqual(["good"]);
     expect(ladderRows(rows).map((r) => r.model)).toEqual(["good"]);
   });
+
+  test("the scripted reference is no row and moves no row, however far it got", () => {
+    const rows = [
+      run({ runId: "low", model: "low", maxLevel: 3 }),
+      run({ runId: "high", model: "high", maxLevel: 6 }),
+      run({ runId: "ref", model: "reference/elwynn-human-paladin@1", maxLevel: 10, driver: "reference", unscored: "unscored (scripted reference)" }),
+    ];
+    expect(scored(rows).map((r) => r.runId)).toEqual(["low", "high"]);
+    expect(ladderRows(rows).map((r) => r.model)).toEqual(ladderRows(rows.slice(0, 2)).map((r) => r.model));
+    expect(ladderRows(rows).map((r) => r.model)).not.toContain("reference/elwynn-human-paladin@1");
+  });
 });
 
 describe("the resolved model id on a ladder row", () => {

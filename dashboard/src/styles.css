@@ -992,6 +992,22 @@ button.update:hover { background: var(--panel); }
 .page.prose p { line-height: 1.6; }
 .page.prose .scroller { margin: 0 -20px; padding: 0 20px; }
 
+/* The ladder's reference line, under the rung table: the scripted reference
+   run (operator, 2026-10-19), on the rail the withdrawn reference lines used.
+   Outside the table's `.scroller` so a phone never scrolls to find it; the
+   legend carries the number so the rail never has to be measured. The rail is
+   percentage-positioned HTML rather than an SVG, so a tick label stays legible
+   while the strip stretches. */
+.reference { margin: 4px 0 12px; }
+.reference-rail { position: relative; height: 30px; border-bottom: 1px solid var(--line); margin-top: 8px; }
+.reference-rail .ref-mark { position: absolute; top: 0; bottom: 0; }
+.reference-rail .ref-mark.line { width: 2px; margin-left: -1px; background: var(--accent); }
+/* Level labels sit under the rail, centred on their tick. */
+.reference-rail .ref-tick { position: absolute; top: 100%; transform: translateX(-50%); font-size: var(--fs-2xs); white-space: nowrap; }
+.reference-legend { list-style: none; margin: 16px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: var(--fs-sm); }
+.reference-legend li { display: flex; align-items: center; gap: 6px; }
+.reference-legend .swatch.line { width: 2px; height: 12px; display: inline-block; background: var(--accent); }
+
 /*
  * The character page: one character across its sessions.
  *

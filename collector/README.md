@@ -1,23 +1,27 @@
 # collector
 
-Tails `data/runs/` and writes it into ClickHouse, so the viewer can answer a
-question about a thousand runs with one query instead of a thousand file opens.
+The service that tails the recorded runs under `data/runs/` into ClickHouse.
+It exists for the viewer (`runner/viewer/`), which can then answer a question
+about a thousand runs with one query instead of a thousand file opens. It runs
+as a container beside the fleet, in both the compose quickstart and the Helm
+chart, and nothing else in the system depends on it: the runner does not know
+it exists, and a viewer with no ClickHouse builds the same rows in memory.
 
 The store is **derived and disposable**. The files under `data/runs/` are the
-evidence record and the only write path; nothing here ever writes to them, and
-the runner does not know this service exists. Drop the ClickHouse database,
-delete `data/collector.sqlite`, run `--replay`, and everything comes back.
+evidence record and the only write path; nothing here ever writes to them.
+Drop the ClickHouse database, delete `data/collector.sqlite`, run `--replay`,
+and everything comes back.
 
-It holds no copy of a run's module session token. meta.json keeps the token,
+It holds no copy of a run's module session token. `meta.json` keeps the token,
 because `--resume` reads it back, and nothing else the runner writes now
-carries it; but runs recorded by an older build do, in their `meta` records,
-in `run.sqlite`'s `config_json`, and wherever a snippet logged a module reply
-that echoed it. As a backstop for those, the collector strikes the run's
-token by value from every text it copies — each trajectory and
-`episodic.jsonl` line before it is read, `meta_json`, `config_json`
-(`runner/src/session-token.ts`) — and copies everything else byte for byte.
-A `--replay` therefore cleans a store an older collector filled, once the
-merge has dropped the superseded rows (`OPTIMIZE TABLE … FINAL` forces it).
+carries it. Runs recorded by an older build do, though: in their `meta`
+records, in `run.sqlite`'s `config_json`, and wherever a snippet logged a
+module reply that echoed it. As a backstop for those, the collector strikes
+the run's token by value from every text it copies (each trajectory and
+`episodic.jsonl` line before it is read, `meta_json`, `config_json`;
+`runner/src/session-token.ts`) and copies everything else byte for byte. A
+`--replay` therefore cleans a store an older collector filled, once the merge
+has dropped the superseded rows (`OPTIMIZE TABLE … FINAL` forces it).
 
 ## Running it
 
@@ -214,7 +218,7 @@ primary-index caches, then `background_pool_size`, then the profile's
 
 ## Tests
 
-`bun test` from the repository root, or from here. Fixture-based and green from
-a bare clone: the tests build small synthetic run directories in a temp dir and
-insert into a memory sink, so nothing under `data/` and no ClickHouse is
-needed.
+`bun run test collector/` from the repository root. Fixture-based and green
+from a bare clone: the tests build small synthetic run directories in a temp
+dir and insert into a memory sink, so nothing under `data/` and no ClickHouse
+is needed.
