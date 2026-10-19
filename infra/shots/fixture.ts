@@ -5,7 +5,12 @@
  * is invented here; nothing reads `data/`.
  *
  *   fixture-live   unterminated, a fresh heartbeat, a trace to now, walking a
- *                  loop; `tickLive` keeps it live while the rig runs
+ *                  loop; `tick` keeps it live while the rig runs
+ *   fixture-live-2, fixture-live-3
+ *                  two more live characters for the map's live list, at other
+ *                  levels and models: one a few hundred yards off on the same
+ *                  continent, one on Kalimdor, so a pick from the list has a
+ *                  camera move to show and a continent to cross to
  *   fixture-ended  terminated `episode-limit` half an hour ago, two and a half
  *                  hours of trace to replay
  *   fixture-e90, fixture-reference
@@ -41,8 +46,16 @@ import { TRACE_WINDOW_MS } from "../../runner/src/trace-row";
 export const LIVE_RUN = "fixture-live";
 export const ENDED_RUN = "fixture-ended";
 
-/** Map 0, an open field: where both characters walk. */
-const CENTRE = { x: -9460, y: 60, z: 57 };
+/** Where a character walks its loop: a map and the loop's centre. */
+interface Ground {
+  map: number;
+  x: number;
+  y: number;
+  z: number;
+}
+
+/** Map 0, an open field: where the live and the ended characters walk. */
+const CENTRE: Ground = { map: 0, x: -9460, y: 60, z: 57 };
 const LOOP_MS = 240_000;
 
 const DICT: TraceDict = {
@@ -66,9 +79,9 @@ const DICT: TraceDict = {
 
 const ITEM_NAMES = new Map((DICT.items ?? []).map(([id, quality, name]) => [id, { quality, name }]));
 
-function position(t: number, phase: number): { x: number; y: number; o: number } {
+function position(t: number, phase: number, at: Ground = CENTRE): { x: number; y: number; o: number } {
   const a = (2 * Math.PI * ((t + phase) % LOOP_MS)) / LOOP_MS;
-  return { x: CENTRE.x + 25 * Math.cos(a), y: CENTRE.y + 25 * Math.sin(a), o: (a + Math.PI / 2) % (2 * Math.PI) };
+  return { x: at.x + 25 * Math.cos(a), y: at.y + 25 * Math.sin(a), o: (a + Math.PI / 2) % (2 * Math.PI) };
 }
 
 /** The whole sheet at a moment: pelts collected so far grow with time. */
@@ -133,6 +146,9 @@ interface Spec {
   traceTo: number;
   phase: number;
   scratchpad: string;
+  /** Where it walks, and its level; the open field and 7 when left out. */
+  ground?: Ground;
+  level?: number;
 }
 
 /** The trace of one span: a key row at each window's start, a position every 2 s, a state delta as the counters move. */
@@ -145,16 +161,17 @@ function traceRows(spec: Spec, from: number, to: number, keyAtFrom = true): Trac
   const money = (t: number): number => 2500 + Math.floor((t - spec.traceFrom) / 60_000) * 7;
   let lastPelts = -1;
   let lastComplete: boolean | null = null;
+  const at = spec.ground ?? CENTRE;
   for (let t = from; t <= to; t += 2_000) {
-    const p = position(t, spec.phase);
+    const p = position(t, spec.phase, at);
     const windowStart = t - (t % TRACE_WINDOW_MS);
     if ((t === from && keyAtFrom) || t - windowStart < 2_000) {
-      rows.push({ ts: t, kind: "key", map: 0, x: p.x, y: p.y, z: CENTRE.z, o: p.o, data: keyData(7, xp(t), pelts(t), money(t), complete(t)) });
+      rows.push({ ts: t, kind: "key", map: at.map, x: p.x, y: p.y, z: at.z, o: p.o, data: keyData(spec.level ?? 7, xp(t), pelts(t), money(t), complete(t)) });
       lastPelts = pelts(t);
       lastComplete = complete(t);
       continue;
     }
-    rows.push({ ts: t, kind: "pos", map: 0, x: p.x, y: p.y, z: CENTRE.z, o: p.o });
+    rows.push({ ts: t, kind: "pos", map: at.map, x: p.x, y: p.y, z: at.z, o: p.o });
     if (pelts(t) !== lastPelts || complete(t) !== lastComplete) {
       const done = complete(t) && lastComplete === false;
       rows.push({
@@ -207,16 +224,17 @@ function writeRun(runsDir: string, spec: Spec, ended: number | null): Trajectory
   // The 60 s state line, from the start.
   const until = ended ?? spec.traceTo;
   let turn = 0;
+  const at = spec.ground ?? CENTRE;
   for (let t = spec.startedAt + 30_000; t <= until; t += 60_000) {
     clock = t;
-    const p = position(t, spec.phase);
+    const p = position(t, spec.phase, at);
     const pelts = 1 + Math.min(4, Math.floor(((t - spec.startedAt) / Math.max(1, until - spec.startedAt)) * 5));
     traj.recordState(spec.runId, {
-      level: 7,
+      level: spec.level ?? 7,
       xp: 1000 + Math.floor(((t - spec.startedAt) / (until - spec.startedAt)) * 3000),
-      map: 0,
+      map: at.map,
       ...p,
-      z: CENTRE.z,
+      z: at.z,
       money: 2500 + Math.floor((t - spec.startedAt) / 60_000) * 7,
       questsCompleted: questsAt((t - spec.startedAt) / Math.max(1, until - spec.startedAt)),
       turn: ++turn,
@@ -406,7 +424,10 @@ function writeRing(runDir: string, now: number, backMs: number): { ready: Promis
 
 export interface Fixture {
   runsDir: string;
+  /** The live run the rig's states are about: the one with a nearby ring. */
   live: string;
+  /** Every live run, `live` first. */
+  lives: string[];
   ended: string;
   /** Resolves once the live run's nearby ring is on disk. */
   ready: Promise<void>;
@@ -415,7 +436,10 @@ export interface Fixture {
   close(): void;
 }
 
-/** Write both runs into `runsDir` relative to `now`, and hand back the live run's ticker. */
+export const LIVE_RUN_2 = "fixture-live-2";
+export const LIVE_RUN_3 = "fixture-live-3";
+
+/** Write the runs into `runsDir` relative to `now`, and hand back the live runs' ticker. */
 export function writeFixture(runsDir: string, now = Date.now()): Fixture {
   mkdirSync(runsDir, { recursive: true });
   const at = (t: number): number => t - (t % 2_000);
@@ -443,38 +467,70 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
   writeRun(runsDir, endedSpec, endedAt).close();
   writeLadderRun(runsDir, E90_RUN, { driver: "openai", model: "fixture/e90-model", character: "Laddera" }, 6, at(now - 5 * 3_600_000));
   writeLadderRun(runsDir, REFERENCE_RUN, { driver: "reference", character: "Routeric" }, 9, at(now - 4 * 3_600_000));
-  const live = writeRun(runsDir, liveSpec, null);
-  const heartbeat = join(runsDir, LIVE_RUN, "heartbeat");
-  let last = liveSpec.traceTo;
-  let lastState = liveSpec.traceTo;
+  const liveSpecs: Spec[] = [
+    liveSpec,
+    {
+      ...liveSpec,
+      runId: LIVE_RUN_2,
+      character: "Quillara",
+      model: "fixture/second-model",
+      startedAt: at(now - 80 * 60_000),
+      phase: LOOP_MS / 2,
+      scratchpad: PAD("Quillara"),
+      ground: { map: 0, x: -9180, y: 420, z: 57 },
+      level: 12,
+    },
+    {
+      ...liveSpec,
+      runId: LIVE_RUN_3,
+      character: "Thornelle",
+      model: "fixture/third-model",
+      startedAt: at(now - 30 * 60_000),
+      phase: LOOP_MS / 4,
+      scratchpad: PAD("Thornelle"),
+      ground: { map: 1, x: -600, y: -4250, z: 38 },
+      level: 3,
+    },
+  ];
+  const lives = liveSpecs.map((spec) => {
+    const traj = writeRun(runsDir, spec, null);
+    const heartbeat = join(runsDir, spec.runId, "heartbeat");
+    return { spec, traj, heartbeat, last: spec.traceTo, lastState: spec.traceTo };
+  });
   const beat = (t: number): void => {
-    writeFileSync(heartbeat, "fixture 0\n");
-    utimesSync(heartbeat, t / 1000, t / 1000);
+    for (const l of lives) {
+      writeFileSync(l.heartbeat, "fixture 0\n");
+      utimesSync(l.heartbeat, t / 1000, t / 1000);
+    }
   };
   beat(now);
   const ring = writeRing(join(runsDir, LIVE_RUN), now, 14 * 60_000);
   return {
     runsDir,
     live: LIVE_RUN,
+    lives: liveSpecs.map((s) => s.runId),
     ended: ENDED_RUN,
     ready: ring.ready,
     tick(t = Date.now()) {
       ring.tick(t);
       const to = at(t);
-      if (to > last) {
-        live.recordTrace(LIVE_RUN, traceRows({ ...liveSpec, traceTo: to }, last + 2_000, to, false));
-        last = to;
-      }
-      if (to - lastState >= 60_000) {
-        const p = position(to, 0);
-        live.recordState(LIVE_RUN, { level: 7, xp: 4000, map: 0, ...p, z: CENTRE.z, money: 2800, questsCompleted: 1, items: itemsOf(5) });
-        lastState = to;
+      for (const l of lives) {
+        if (to > l.last) {
+          l.traj.recordTrace(l.spec.runId, traceRows({ ...l.spec, traceTo: to }, l.last + 2_000, to, false));
+          l.last = to;
+        }
+        if (to - l.lastState >= 60_000) {
+          const g = l.spec.ground ?? CENTRE;
+          const p = position(to, l.spec.phase, g);
+          l.traj.recordState(l.spec.runId, { level: l.spec.level ?? 7, xp: 4000, map: g.map, ...p, z: g.z, money: 2800, questsCompleted: 1, items: itemsOf(5) });
+          l.lastState = to;
+        }
       }
       beat(t);
     },
     close() {
       ring.close();
-      live.close();
+      for (const l of lives) l.traj.close();
     },
   };
 }

@@ -17,7 +17,6 @@ import {
   displayedChoice,
   filterBySeries,
   pageSeries,
-  seriesFilteredOut,
   seriesOptions,
 } from "../lib/harness";
 
@@ -54,32 +53,22 @@ export function SeriesSelect() {
 }
 
 /**
- * What the shell's series filter left of this page's rows.
- *
- * It used to be paired with a line under the heading saying how many rows it
- * had removed. That line is gone: the control doing the
- * dropping is in the header, it is labelled, and it says what it does in its
- * own hover — a counter under every table was a sentence the reader had
- * already read. `filteredOut` stays because the map still reads it.
+ * What the shell's series filter left of this page's rows. No count of what
+ * it removed: the control doing the dropping is in the header, labelled, and
+ * says what it does in its own hover.
  */
 export interface SeriesFilterResult<T> {
   /** What the shell's choice resolves to for this page's rows, or null for "all". */
   series: () => string | null;
   /** The rows that survive the filter. */
   kept: () => T[];
-  /** How many of the input rows the filter removed. */
-  filteredOut: () => number;
 }
 
 /**
- * The shell's series filter, applied to one page's rows.
- *
- * Every page that shows runs did `pageSeries` → `filterBySeries` →
- * `seriesFilteredOut` as three separate call sites; this is that triple as one
- * hook, so a page reads its filtered rows without re-deriving the same three
- * values. `active` lets a page keep the
- * shell's series available without applying it — the map's replay mode, which
- * is one named run and must not vanish because of a header control.
+ * The shell's series filter, applied to one page's rows: `pageSeries` then
+ * `filterBySeries` as one hook. `active` lets a page keep the shell's series
+ * available without applying it — the ladder's freeplay view, where a
+ * character is durable across series.
  */
 export function useSeriesFilter<
   T extends { harnessSeries?: string | null; harnessVersion?: string | null },
@@ -88,6 +77,5 @@ export function useSeriesFilter<
   const series = (): string | null =>
     active() ? pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), rows()) : null;
   const kept = (): T[] => filterBySeries(rows(), series());
-  const filteredOut = (): number => seriesFilteredOut(rows().length, kept().length);
-  return { series, kept, filteredOut };
+  return { series, kept };
 }

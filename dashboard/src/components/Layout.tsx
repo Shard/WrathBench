@@ -150,9 +150,13 @@ export function Layout(props: ParentProps) {
           * The one series filter for the whole dashboard, next to
           * the badge for the same reason the badge is here: it is a property of
           * the whole view rather than of any page, and a per-page copy of it
-          * was four controls that could disagree.
+          * was four controls that could disagree. Not on the map: it shows
+          * every live character whatever its harness, so the control would
+          * filter nothing there.
           */}
-        <SeriesSelect />
+        <Show when={!flush()}>
+          <SeriesSelect />
+        </Show>
         <StatusBadge />
       </header>
       {/*

@@ -206,8 +206,6 @@ describe("the play bar across the route swap", () => {
         get count() {
           return count();
         },
-        seriesHidden: 0,
-        liveSeries: null,
         get selected() {
           return selected();
         },
@@ -328,8 +326,6 @@ describe("the play bar across the route swap", () => {
         playing: false,
         speed: 1,
         count: 0,
-        seriesHidden: 0,
-        liveSeries: null,
         selected: null,
         onSeek: () => {},
         onTogglePlay: () => {},
@@ -398,8 +394,6 @@ describe("the play bar across the route swap", () => {
         playing: false,
         speed: 1,
         count: 0,
-        seriesHidden: 0,
-        liveSeries: null,
         selected: null,
         onSeek: () => {},
         onTogglePlay: () => {},
@@ -441,8 +435,6 @@ describe("the play bar across the route swap", () => {
         playing: false,
         speed: 1,
         count: 0,
-        seriesHidden: 0,
-        liveSeries: null,
         selected: null,
         onSeek: () => {},
         onTogglePlay: () => {},

@@ -69,10 +69,8 @@ export interface PlayBarProps {
   span?: Span | null;
   playing: boolean;
   speed: Speed;
-  /** Live: how many characters the feed shows, and how many the series hid. */
+  /** Live: how many characters the feed shows. */
   count: number;
-  seriesHidden: number;
-  liveSeries: string | null;
   /** Live: the reading whose pip was clicked, for the way into its replay. */
   selected: AgentPosition | null;
   /** A scrub: the page pauses and moves the cursor. */
@@ -110,10 +108,6 @@ export function PlayBar(props: PlayBarProps) {
                 fallback={<span class="err">{props.feedError}</span>}
               >
                 {props.count} {props.count === 1 ? "character" : "characters"}
-                <Show when={props.seriesHidden > 0}>
-                  {" "}
-                  · {props.seriesHidden} hidden by series {props.liveSeries}
-                </Show>
               </Show>
             </span>
             <span class="grow" />
