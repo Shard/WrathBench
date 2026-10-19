@@ -343,7 +343,7 @@ export function harnessOfRun(meta: {
   const d = meta.driver;
   if (d === "claude-code") return "claude-code";
   if (d === "codex") return "codex";
-  if (d === "openai" || d === "stub") return "wrathbench";
+  if (d === "openai" || d === "stub" || d === "reference") return "wrathbench";
   return null;
 }
 

@@ -59,7 +59,7 @@ import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { openRunDb } from "./rundb";
 import { harnessSeries } from "./comparability";
-import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isCodexHomeEnvName, isDriver, isTokenEnvName, type Driver, type Harness } from "./config";
+import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isCodexHomeEnvName, isDriver, isTokenEnvName, isUnscoredDriverName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
 import { badEvidenceReason, neverStale, OFFLINE_PAUSE, SUBSCRIPTION_PAUSE, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
@@ -1607,7 +1607,9 @@ export function subscriptionLaneOfConfig(r: {
  * surface (`concurrencyKeyOf`). Widening validation from drivers to these keys
  * is purely additive — an old per-driver cap still parses.
  */
-export const CONCURRENCY_KEYS: readonly string[] = [...DRIVERS, "openrouter", "opencode", OPENCODE_GO_KEY];
+// Not `reference`: the scripted reference is never a roster entry, so the
+// policy has nothing of it to cap (run-fleet-config.ts refuses the driver).
+export const CONCURRENCY_KEYS: readonly string[] = [...DRIVERS.filter((d) => d !== "reference"), "openrouter", "opencode", OPENCODE_GO_KEY];
 
 /**
  * A claude-code run counts against TWO keys, and needs a free slot in both.
@@ -1716,7 +1718,7 @@ export function concurrencyKeyOf(r: Pick<RosterModel, "name" | "driver" | "apiBa
 /** A roster entry's driver; `openai` when it names none. A name outside the vocabulary is a config error. */
 export function driverOf(r: { name: string; driver?: string }): Driver {
   const d = r.driver ?? "openai";
-  if (!isDriver(d)) throw new Error(`roster.${r.name}: driver "${d}" is not one of openai|claude-code|codex|stub`);
+  if (!isDriver(d)) throw new Error(`roster.${r.name}: driver "${d}" is not one of ${DRIVERS.join("|")}`);
   return d;
 }
 
@@ -1828,6 +1830,12 @@ export function isFailedAttempt(f: RunFact): boolean {
 
 export function isCounted(f: RunFact): boolean {
   if (f.extra || f.episodeOverride) return false;
+  // A driver that is not a model (the scripted stub, the scripted reference)
+  // is never evidence about one, whatever episode it was launched under and
+  // whatever model id it carries: no target, no promotion witness, no repeat
+  // (docs/METHODOLOGY.md, "Scoring"). Read off the run's own config, so it
+  // holds for a fact the cache wrote before this line existed.
+  if (isUnscoredDriverName(f.driver)) return false;
   return (
     badEvidenceReason({
       live: f.live,
@@ -1931,7 +1939,10 @@ export function projectModel(
   opts: { now: number; clearedAt?: number },
 ): ModelState {
   const billing = rosterBilling(r);
-  const all = runs.filter((f) => matchesRoster(f, r));
+  // A run whose driver is not a model is no roster entry's, even under a
+  // colliding model id: it is neither an attempt, a best level, a strike nor
+  // a ladder rung of the model it names.
+  const all = runs.filter((f) => matchesRoster(f, r) && !isUnscoredDriverName(f.driver));
   // Another series' runs are shown, never counted: not witnesses, not ladder.
   // The ladder is about the provider, but a run that old says nothing about
   // tonight's provider either. They DO number attempts: the attempt index is

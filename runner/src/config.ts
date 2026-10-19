@@ -20,6 +20,7 @@ import { z } from "zod";
 import { EPISODES, episodeIdSchema, matchesTier, watchdogsFor, type EpisodeId } from "./episodes";
 import { STALL_PAUSE, SUBSCRIPTION_PAUSE } from "./lapse";
 import { routingSchema } from "./routing";
+import { REFERENCE_ROUTE, referenceModelId } from "./reference/route";
 
 // ---------------------------------------------------------------- watchdogs
 
@@ -164,8 +165,11 @@ export function isValidCharacterName(name: string): boolean {
   return /^[A-Za-z]{2,12}$/.test(name) && !/(.)\1\1/i.test(name);
 }
 
-/** Every driver a run can be started with. `stub` never scores. */
-export const DRIVERS = ["openai", "claude-code", "codex", "stub"] as const;
+/**
+ * Every driver a run can be started with. `stub` and `reference` never score:
+ * neither is a model (`isUnscoredDriver`).
+ */
+export const DRIVERS = ["openai", "claude-code", "codex", "stub", "reference"] as const;
 export type Driver = (typeof DRIVERS)[number];
 
 export function isDriver(raw: string): raw is Driver {
@@ -253,6 +257,9 @@ export type Harness = (typeof HARNESSES)[number];
 export const HARNESS_OF_DRIVER: Readonly<Record<Driver, Harness>> = {
   openai: "wrathbench",
   stub: "wrathbench",
+  // The scripted reference plays through the fixed loop, so its snippets reach
+  // the sandbox exactly as a model's do (`reference/adapter.ts`).
+  reference: "wrathbench",
   "claude-code": "claude-code",
   codex: "codex",
 };
@@ -384,6 +391,11 @@ export const runConfigSchema = z.object({
    *    OpenAI-compatible endpoint.
    *  - `stub`: the fixed loop over a scripted response file. Harness testing
    *    without a model; never scores.
+   *  - `reference`: the fixed loop over the scripted reference program
+   *    (`reference/adapter.ts`), a TypeScript route played through
+   *    `run_snippet` against the SDK: the per-series ceiling on what the
+   *    surface allows (docs/METHODOLOGY.md, "Scoring"). Stamped
+   *    `REFERENCE_STAMP`; never scores and is never scheduled.
    *  - `claude-code`: the Claude Code CLI is both transport and harness — it
    *    owns its own history, compaction and preamble, so the run belongs to the
    *    `claude-code` harness and is tagged with it on every row.
@@ -631,6 +643,20 @@ export const runConfigSchema = z.object({
 export const STUB_STAMP = "unscored (scripted stub)";
 
 /**
+ * The stamp carried by a scripted reference run (`--driver reference`). It is
+ * a labelled line on the ladder, never a row: outside every comparability
+ * group, never counted toward a target, never in the row order (operator,
+ * 2026-10-19; docs/METHODOLOGY.md, "Scoring").
+ */
+export const REFERENCE_STAMP = "unscored (scripted reference)";
+
+/** The stamp each driver that is not a model carries; a model's driver has none. */
+export const DRIVER_STAMPS: Readonly<Partial<Record<Driver, string>>> = {
+  stub: STUB_STAMP,
+  reference: REFERENCE_STAMP,
+};
+
+/**
  * The stamp carried by a run with an operator objective. It is a probe, not a
  * result: the run was steered at a named task, so it can never enter a scored
  * comparison against free-play runs.
@@ -748,7 +774,7 @@ export function loadRunConfig(raw: unknown): RunConfig {
   const o = (raw ?? {}) as Record<string, unknown>;
   if (o["driver"] === undefined && o["adapter"] !== undefined) {
     throw new Error(
-      `config names the driver as "adapter" (${JSON.stringify(o["adapter"])}); the current shape is driver: "openai" | "claude-code" | "codex" | "stub"`,
+      `config names the driver as "adapter" (${JSON.stringify(o["adapter"])}); the current shape is driver: ${DRIVERS.map((d) => `"${d}"`).join(" | ")}`,
     );
   }
   const config = runConfigSchema.parse(withEpisodeDefaults(raw));
@@ -763,25 +789,64 @@ export function loadRunConfig(raw: unknown): RunConfig {
   if (config.compactWindow !== undefined && config.driver !== "claude-code") {
     throw new Error(`compactWindow is the Claude Code CLI's auto-compaction window — driver ${config.driver} has none`);
   }
+  // Refused, never ignored: the reference program reads no prompt, so an
+  // objective would be stamped on a run nothing steered, and its route is a
+  // fresh character's, so it neither continues one nor fills a campaign cell.
+  if (config.driver === "reference") {
+    const steered = [
+      config.objective !== undefined ? "objective" : null,
+      config.continuedFrom !== undefined ? "continuedFrom" : null,
+      config.campaign !== undefined ? "campaign" : null,
+    ].filter((k) => k !== null);
+    if (steered.length > 0) {
+      throw new Error(`the reference driver plays its own fixed route from a fresh character; ${steered.join(", ")} cannot apply to it`);
+    }
+    // The route is written for one start, and its id and version are the
+    // run's model: what a reader groups its line by.
+    const route = REFERENCE_ROUTE;
+    if (config.race !== route.race || config.class !== route.class) {
+      throw new Error(
+        `the reference route ${route.id}@${route.version} is written for race ${route.race}, class ${route.class}; this run asked for race ${config.race}, class ${config.class}`,
+      );
+    }
+    const model = referenceModelId(route);
+    if (config.model !== undefined && config.model !== model) {
+      throw new Error(`the reference driver's model is its route, ${model}; --model ${config.model} cannot apply to it`);
+    }
+    return { ...config, model };
+  }
   return config;
 }
 
-/** True when this driver's runs can never be read as a score (only `stub`). */
+/**
+ * True when this driver's runs can never be read as a score: `stub` and
+ * `reference`, the two drivers that are not a model.
+ */
 export function isUnscoredDriver(driver: Driver): boolean {
-  return driver === "stub";
+  return DRIVER_STAMPS[driver] !== undefined;
+}
+
+/**
+ * `isUnscoredDriver` over whatever a stored record names — a run fact, a
+ * result row, a meta.json — where the driver is an unchecked string or absent.
+ * Absent or unknown is not an unscored driver; the other predicates still
+ * decide those runs.
+ */
+export function isUnscoredDriverName(driver: string | null | undefined): boolean {
+  return typeof driver === "string" && isDriver(driver) && isUnscoredDriver(driver);
 }
 
 /**
  * The stamp a run gets, or undefined for a run that can score.
  *
  * Two independent reasons a run never scores, and a run can carry both: the
- * driver is the scripted stub, and/or the operator steered the run with an
- * objective. The driver's stamp stays the *prefix* so anything
+ * driver is not a model (the scripted stub or the scripted reference), and/or
+ * the operator steered the run with an objective. The driver's stamp stays the *prefix* so anything
  * matching on it keeps matching. The harness is *not* a reason: a
  * `claude-code` or `codex` run scores, tagged with its harness.
  */
 export function unscoredStamp(driver: Driver, objective?: string | undefined): string | undefined {
-  const byDriver = driver === "stub" ? STUB_STAMP : undefined;
+  const byDriver = DRIVER_STAMPS[driver];
   const byObjective = objective !== undefined && objective.length > 0 ? OBJECTIVE_STAMP : undefined;
   if (byDriver !== undefined && byObjective !== undefined) return `${byDriver}; ${byObjective}`;
   return byDriver ?? byObjective;

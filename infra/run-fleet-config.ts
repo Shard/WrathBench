@@ -652,6 +652,12 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
       fail(`${where}: entry without a model: ${JSON.stringify(e)}`);
     }
     const driver: string = e.driver ?? "openai";
+    // The scripted reference is not a model: it is launched by hand, once per
+    // harness series, and the policy may never schedule one (docs/EPISODES.md,
+    // "The scripted reference run").
+    if (driver === "reference") {
+      fail(`${where}: entry ${e.model}: driver reference is the scripted reference run — launched by hand on PROBE, never a roster entry`);
+    }
     if (driver !== "openai" && driver !== "claude-code" && driver !== "codex") {
       fail(`${where}: entry ${e.model}: unknown driver ${String(e.driver)} (openai | claude-code | codex)`);
     }
