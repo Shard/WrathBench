@@ -1157,6 +1157,17 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     builder,
     tickMs: o.stateTickMs,
     stopped: () => finished || stopRequestOf(o.signal) !== null,
+    // A snippet held open by an in-snippet wait (`wake.ts`) would hold the
+    // turn boundary, where this loop reads its watchdogs, for minutes: once a
+    // watchdog has a verdict the open waits are woken, so the snippet returns
+    // and the boundary enforces it. A wake, not enforcement.
+    ...(config.wake?.inSnippet === true
+      ? {
+          onSample: () => {
+            if (watchdogs.check() !== null) o.sandbox.wakeWaits();
+          },
+        }
+      : {}),
   });
   try {
     for (;;) {

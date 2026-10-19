@@ -914,8 +914,9 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
  * (own health reaching zero from a reading that was not, the transition only,
  * as `sleep` reads it), the stream closing, a level gained, a quest's
  * objectives done (the quest log's completion bit rising), and a unit starting
- * to attack us. Levels and the completion bit seed silently from the first
- * reading, so a restarted child does not report the run's past as news. With
+ * to attack us. The level and the completion bits seed silently from the
+ * first reading (the first non-empty quest log), so a restarted child does not
+ * report the run's past as news. With
  * the turn-end wait the facts go to the host as they happen (`wake_fact`);
  * in-snippet waits listen here.
  */
@@ -949,7 +950,10 @@ if (WAKE !== null) {
       lastLevel = level;
     }
     const log = client.state.questLog;
-    if (Array.isArray(log)) {
+    // Seeded from the first log that holds anything: the empty log before the
+    // login backlog arrives would make every quest already complete in it a
+    // fresh completion after each restart or resume.
+    if (Array.isArray(log) && (completeQuests !== undefined || log.length > 0)) {
       const done = new Set(log.filter((q) => q.complete).map((q) => q.questId));
       if (completeQuests !== undefined) {
         for (const q of log) if (q.complete && !completeQuests.has(q.questId)) emitWake("questComplete", q.title ?? `quest ${q.questId}`);

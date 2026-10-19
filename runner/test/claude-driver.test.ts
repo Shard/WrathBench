@@ -256,6 +256,37 @@ describe("claude-code driver", () => {
     trajectory.close();
   }, 20_000);
 
+  test("the turn-end wake counts from the model's last tool result, not from the start of a long turn", async () => {
+    // A fact that lands while the turn is still working — here, during its
+    // tool call — was there for the model to see, so it wakes nothing.
+    const { runDir, trajectory, options } = setupEpisode("tools", { maxTurns: 2, episode: "probing", wake: { turnEnd: true, inSnippet: false } });
+    const facts: { seq: number; key: string; ts: number }[] = [];
+    Object.assign(options.sandbox, {
+      noticesRaised: 0,
+      wakeFactsAfter: (seq: number) => facts.filter((f) => f.seq > seq),
+      evalSnippet: (code: string): Promise<SnippetResult> => {
+        facts.push({ seq: facts.length + 1, key: "levelUp", ts: 0 });
+        return Promise.resolve({ ok: true, value: `ran:${code}`, logs: [], durationMs: 1 });
+      },
+    });
+    Object.defineProperty(options.sandbox, "wakeFactSeq", { get: () => facts.length });
+    let t = 1_000_000;
+    options.now = () => t;
+    options.sleep = async (ms: number) => {
+      t += ms;
+    };
+    await runClaudeEpisode(options);
+    expect(readTrajectory(runDir).filter((r) => r.t === "wake")).toEqual([expect.objectContaining({ turn: 1, fired: "cap" })]);
+    trajectory.close();
+  }, 20_000);
+
+  test("the in-snippet wait raises the CLI's MCP tool timeout past the longest call it can hold", async () => {
+    const { recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 1, episode: "probing", wake: { turnEnd: false, inSnippet: true } });
+    await runClaudeEpisode(options);
+    expect(readRecord(recordPath)["envKeys"] as string[]).toContain("MCP_TOOL_TIMEOUT");
+    trajectory.close();
+  }, 20_000);
+
   test("no trim notice is ever raised here: this harness runs no message window", async () => {
     // docs/METHODOLOGY.md, "An episodic log, asked for at each trim or
     // compaction": the CLI owns its own history, so there is no block trim to

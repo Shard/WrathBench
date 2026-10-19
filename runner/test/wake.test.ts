@@ -384,6 +384,43 @@ describe("the turn-end wait in the fixed loop", () => {
     options.trajectory.close();
   });
 
+  test("a watchdog verdict wakes a snippet held in a wait, so the boundary enforces it on time", async () => {
+    // The loop reads its watchdogs at the turn boundary; a wait could hold
+    // that boundary for minutes past the clock, which the control arm's
+    // 30 s snippets never could.
+    const source = new FakeSource();
+    const dir = tempDir("wrathbench-wake-held-");
+    const config = {
+      ...loadRunConfig({ driver: "stub", stepIntervalMs: 0, stateIntervalMs: 1, episode: "probing", wake: BOTH, watchdogs: { episodeMs: 300 } }),
+      runId: "run-test",
+      token: "run-test",
+    };
+    const trajectory = new Trajectory(dir);
+    trajectory.writeMeta({ runId: "run-test", harnessVersion: "t", startedAt: Date.now(), config });
+    let release: (() => void) | undefined;
+    const sandbox = wakeSandbox(source) as unknown as Record<string, unknown>;
+    sandbox["evalSnippet"] = () =>
+      new Promise<SnippetResult>((resolve) => {
+        release = () => resolve({ ok: true, value: `"stopped"`, logs: [], durationMs: 1 });
+      });
+    sandbox["wakeWaits"] = () => release?.();
+    const started = Date.now();
+    const outcome = await runLoop({
+      config,
+      adapter: new StubAdapter([{ content: "hold", toolCalls: [{ name: "run_snippet", arguments: { code: "await wait({ maxMs: 300000 })" } }] }]),
+      sandbox: sandbox as unknown as SandboxHost,
+      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
+      trajectory,
+      watchdogs: new Watchdogs(config.watchdogs),
+      sleep: () => Promise.resolve(),
+      stateTickMs: 50,
+    });
+    expect(outcome).toMatchObject({ kind: "terminated", reason: "episode-limit" });
+    expect(Date.now() - started).toBeLessThan(3_000);
+    trajectory.close();
+  });
+
   test("with nothing to wake it the loop sleeps the cap, then carries on", async () => {
     const { dir, options } = loopSetup({ wake: TURN_END, episode: "probing" }, [{ content: "nothing to do", toolCalls: [] }]);
     await runLoop(options);
@@ -497,6 +534,13 @@ selfFields({ health: 40, maxHealth: 40, level: 1 });
       ["levelUp", "level 2"],
       ["died", null],
     ]);
+    // A quest log arriving already holding a complete quest (the login backlog
+    // after a restart or a resume) is the run's past; a quest completing later is news.
+    const before = h.wakeFactSeq;
+    await h.evalSnippet(`selfFields({ quest0Id: 33, quest0State: 1, quest1Id: 34, quest1State: 0 }); 1`);
+    await h.evalSnippet(`selfFields({ quest1State: 1 }); 1`);
+    await Bun.sleep(100);
+    expect(h.wakeFactsAfter(before).map((f) => [f.key, f.detail ?? null])).toEqual([["questComplete", "quest 34"]]);
     // Without it, nothing is pushed.
     const off = host(undefined);
     expect((await off.evalSnippet(PRELUDE)).ok).toBe(true);

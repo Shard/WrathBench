@@ -608,6 +608,9 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     ended = { reason, detail };
     if (record !== undefined) trajectory.append(record);
     trajectory.setTermination(runId, reason, detail);
+    // A snippet held open by an in-snippet wait (`wake.ts`) would keep the
+    // CLI from closing its turn inside the grace: it is woken first.
+    if (config.wake?.inSnippet === true) o.sandbox.wakeWaits?.();
     if (opts?.windDown === true && turnInFlight && windDownGraceMs > 0) {
       const since = Date.now();
       windDown = { deadline: since + windDownGraceMs, since, reason };
@@ -620,6 +623,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     if (ended !== null || pausedAs !== null) return;
     pausedAs = { reason, detail };
     trajectory.setPause(runId, reason, detail, watchdogs.elapsedMs());
+    if (config.wake?.inSnippet === true) o.sandbox.wakeWaits?.();
     killCodex();
   };
   const done = (): boolean => ended !== null || pausedAs !== null;
@@ -680,6 +684,12 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   let turn = 0;
   let restartsBefore = 0;
   let toolCalls = 0;
+  /**
+   * Where the turn-end wake counts from (`wake.ts`): the request, then each
+   * answered tool call, so only what happens after the model's last tool
+   * result can wake the wait that follows its turn. Null with the option off.
+   */
+  let wakeFrom: WakeCursor | null = null;
 
   const enforceLimits = (): boolean => {
     if (done()) return false;
@@ -707,6 +717,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       // defensively so both drivers' records read alike. Appended after the
       // call ran, so `dispatchTs` carries when it started.
       const short = name.replace(`mcp__${MCP_SERVER_NAME}__`, "").replace(`mcp__${MCP_SERVER_NAME}.`, "");
+      if (wakeFrom !== null) wakeFrom = wakeCursor(o.sandbox);
       trajectory.append({ t: "tool_call", turn, call: toolCalls, name: short, args, dispatchTs });
       if (short === "run_snippet") {
         trajectory.append({ t: "snippet", turn, call: toolCalls, code: (args as { code?: string }).code ?? "" });
@@ -1102,7 +1113,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
         ...(threadId !== undefined ? { threadId } : {}),
       });
       // The turn-end wake counts from the request (`wake.ts`).
-      const wakeFrom: WakeCursor | null = config.wake?.turnEnd === true ? wakeCursor(o.sandbox) : null;
+      wakeFrom = config.wake?.turnEnd === true ? wakeCursor(o.sandbox) : null;
 
       /**
        * `detached`: the CLI leads its own process group so a signal to -pid

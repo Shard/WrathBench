@@ -688,6 +688,9 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     ended = { reason, detail };
     if (record !== undefined) trajectory.append(record);
     trajectory.setTermination(runId, reason, detail);
+    // A snippet held open by an in-snippet wait (`wake.ts`) would keep the
+    // CLI from closing its turn inside the grace: it is woken first.
+    if (config.wake?.inSnippet === true) o.sandbox.wakeWaits?.();
     // The termination is on record either way. What differs is whether the CLI
     // is killed now or given a bounded chance to close its turn — see the
     // header. Only the harness's own limits wind down, and only mid-turn:
@@ -707,6 +710,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     if (ended !== null || pausedAs !== null) return;
     pausedAs = { reason, detail };
     trajectory.setPause(runId, reason, detail, watchdogs.elapsedMs());
+    if (config.wake?.inSnippet === true) o.sandbox.wakeWaits?.();
     killClaude();
   };
   /** Whether an end or a pause is already on record. */
@@ -769,6 +773,13 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   let turn = 0;
   let restartsBefore = 0;
   let toolCalls = 0;
+  /**
+   * Where the turn-end wake counts from (`wake.ts`): the request, then each
+   * answered tool call, so only what happens after the model's last tool
+   * result can wake the wait that follows its turn — one turn here can run
+   * for many minutes. Null with the option off.
+   */
+  let wakeFrom: WakeCursor | null = null;
 
   /**
    * Evaluated at every tool dispatch, which for this driver is the only place
@@ -806,6 +817,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
       // `call` is the monotonic tool-call index that turn-style analysis of
       // this driver should key on instead. These records are appended after
       // the call ran, so `dispatchTs` is when it started, not their `ts`.
+      if (wakeFrom !== null) wakeFrom = wakeCursor(o.sandbox);
       trajectory.append({ t: "tool_call", turn, call: toolCalls, name: short, args, dispatchTs });
       if (short === "run_snippet") {
         trajectory.append({ t: "snippet", turn, call: toolCalls, code: (args as { code?: string }).code ?? "" });
@@ -1286,7 +1298,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
         messages: [{ role: "user", content: contextText }],
       });
       // The turn-end wake counts from the request (`wake.ts`).
-      const wakeFrom: WakeCursor | null = config.wake?.turnEnd === true ? wakeCursor(o.sandbox) : null;
+      wakeFrom = config.wake?.turnEnd === true ? wakeCursor(o.sandbox) : null;
 
       try {
         stdin.write(

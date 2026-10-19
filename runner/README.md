@@ -868,16 +868,19 @@ prompt hashes. A scored episode refuses them.
   turn boundary (the CLI idles on stdin, or no codex process runs). The wake
   is read from counters and from facts the child pushes as they happen
   (`wake_fact`), never by draining the death signals or the notices the
-  state sample and the context builder own. The next message carries a
-  `woke` notice.
+  state sample and the context builder own. It counts from the request on
+  the fixed loop and from the last answered tool call on the CLIs, whose
+  turns run for minutes, so only what the model has not seen wakes it. The
+  next message carries a `woke` notice.
 - `--wake-in-snippet true`: the ambient `wait({ on, maxMs })` holds a snippet
   open past its limit, up to five minutes of waiting per snippet. The child
   asks the host to move the pending eval's timeout for the time a wait may
   take and hands back what it did not use (`wait_hold` / `wait_release`); the
   host honours that only for an eval still pending and never past the cap.
   The child reads `sdk/API-wake.md`, API.md with the `wait` entry, and the
-  CLIs' tool timeouts are raised to cover a held call. A stopping run wakes
-  every open wait (`wake_waits`).
+  CLIs' tool timeouts are raised to cover a held call. A stopping run, a
+  watchdog verdict and a CLI episode's end wake every open wait
+  (`wake_waits`), so no wait holds a run past its clock.
 
 Mandatory wakes are a death, the event stream closing, a sandbox restart and
 a harness notice. `attacked` never is: it fires on every pull of a grind. The
