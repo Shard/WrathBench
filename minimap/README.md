@@ -1,9 +1,18 @@
 # minimap
 
-One-time tooling that reads the WoW 3.3.5a minimap textures out of the client
-MPQ archives and writes them as PNG tiles under `data/minimap/`. Tooling lives
-in git, output does not — same shape as `wiki/`. The map view this feeds is
-described in docs/ARCHITECTURE.md (dashboard section).
+The tooling that makes the map tiles the dashboard's map draws. The operator
+runs it once, on the host, against a local client extraction: `extract` reads
+the 3.3.5a minimap textures out of the client's MPQ archives and writes them as
+PNG tiles under `data/minimap/`, `bake` builds the zoomed-out levels from those,
+and `bake-art` paints the zone maps over the same grid. The viewer serves the
+result under `/tiles/`, and the public site gets it by a separate upload
+(`infra/publish-tiles.ts`). Tooling lives in git, output does not, the same
+shape as `wiki/`. The map view this feeds is described in docs/ARCHITECTURE.md
+(dashboard section).
+
+Most of this file is the record of how each format and orientation was
+verified against the real archives. Read "Usage" to run it and "Output and the
+tile convention" to consume it; the rest is for anyone changing the tooling.
 
 Nothing here is Blizzard-derived: the MPQ reader, BLP2 decoder and PNG encoder
 are ours, the tests build synthetic archives and textures in code, and every
@@ -53,7 +62,8 @@ Idempotent: a tile that already exists is skipped unless `--force`. A full
 extraction of the four continents takes about 17 s and produces 3636 tiles /
 ~104 MiB; map 369 adds 12 tiles / 214 KiB on top.
 
-Tests: `bun test minimap/`. Typecheck: `bun run --cwd minimap typecheck`.
+Tests: `bun run test minimap/` from the repository root. Typecheck:
+`bun run --cwd minimap typecheck`.
 
 ## Inputs
 
@@ -190,8 +200,8 @@ What was verified, and how — the same standard the ADT orientation was held to
    at a seam. Composited correctly, the tunnel has no coverage hole anywhere
    between its two stations, and every group's painted span matches its own
    bounding box to within half a yard.
-3. **The mirror sign**, against our own trajectories. The two Fable freeplay
-   runs that rode the tram (34 state samples between them) sit at world x −45.4
+3. **The mirror sign**, against our own trajectories. The two freeplay runs
+   that rode the tram (34 state samples between them) sit at world x −45.4
    and 4.5 — symmetric to a quarter yard about the tunnel's centre line under
    `worldX = −x`, and outside the tunnel
    entirely under the other sign. Overlaying all 34 on the finished composite

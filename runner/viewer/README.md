@@ -1,8 +1,17 @@
 # Run viewer
 
-A read-only web view of run trajectories, live and finished. It exists so an
-operator can watch a run and see where it is stuck without tailing 3 MB of
-JSONL by hand.
+The read-only HTTP API over recorded runs, and the process that hosts the
+dashboard. It reads `data/runs/` (and the collector's ClickHouse store when
+there is one) and answers the dashboard's questions: which runs are live, what
+a run did and spent, where every character is. It exists so an operator can
+watch a run and see where it is stuck without tailing 3 MB of JSONL by hand.
+The UI is `dashboard/`; the public site is a static snapshot rendered through
+this same code (`docs/PUBLIC-DASHBOARD.md`), never this process on the open
+internet.
+
+The first sections say how to run it and what it refuses to serve. The rest
+records, route by route, how each figure is derived, for anyone who has to
+read or change one.
 
 ## Running
 
@@ -182,9 +191,8 @@ record that hands the model something to answer — the `request` on the fixed
 loop, the `snippet_result` or `tool_result` the CLI was waiting on under
 claude-code — and closes at the last `response` before the next such record.
 Replies rather than turns because a turn is not the same unit under the two
-drivers: `fleet-sonnet-e360-sonnet-20260824` is one `request` and 2,833
-`response` records, so timing "a turn" there would time the whole six-hour
-episode. Ambient records (`state`, `milestone`, `claude_system`) are ignored
+drivers: one claude-code run on disk is one `request` and 2,833 `response`
+records, so timing "a turn" there would time the whole six-hour episode. Ambient records (`state`, `milestone`, `claude_system`) are ignored
 rather than treated as boundaries — they are written by timers while the model
 is mid-reply, and one restarting the clock reads as a speed the model never had.
 A span still in flight, and one a `pause`/`resume`/`termination` landed inside,
@@ -443,10 +451,9 @@ A run from before the recorder has no table, and every one of these answers as
 the bytes it always was. The track's window list is memoised on the database
 file's size and mtime, which is what keeps the publisher from opening every
 run's sqlite on every pass. In public mode a segment crosses
-`projectTraceSegment`: no `target`. Deaths are public (operator, 2026-10-18), so
-`dead`, `ghost` and the gauges at a corpse pass. The sheet passes as numbers
-with its items' template names (operator, 2026-10-18), and never the bank or
-the vendor buyback slots.
+`projectTraceSegment`: no `target`. Deaths are public, so `dead`, `ghost` and
+the gauges at a corpse pass. The sheet passes as numbers with its items'
+template names, and never the bank or the vendor buyback slots.
 
 ## Nearby units: the live map's ring
 

@@ -18,7 +18,7 @@
 
 import { runBilling } from "../src/billing";
 import { harnessSeries } from "../src/comparability";
-import { STUB_STAMP, isDriver, isUnscoredDriver } from "../src/config";
+import { DRIVER_STAMPS, isDriver } from "../src/config";
 import { badEvidenceReason } from "../src/lapse";
 import { stillbornOf } from "../src/models";
 import { EPISODES } from "../src/episodes";
@@ -324,10 +324,12 @@ export function episodeOf(run: RunRow): EpisodeOf {
  * Why a run cannot enter a scored comparison, or null when it can.
  *
  * One predicate, so the charts and the ladder cannot disagree about what counts.
- * The reasons are the ones recorded: a stub run stamps unscored, and an
- * operator objective stamps unscored. The driver check is separate
- * from the stamp so a stub run launched before the stamp existed still reads
- * as one. The harness is deliberately *not* a reason (it is a tag, not a partition): a
+ * The reasons are the ones recorded: a run whose driver is not a model (the
+ * scripted stub, the scripted reference) stamps unscored, and an operator
+ * objective stamps unscored. The driver check is separate from the stamp so a
+ * stub run launched before the stamp existed still reads as one, and a
+ * reference run whose stamp went missing still reads as the reference it is.
+ * The harness is deliberately *not* a reason (it is a tag, not a partition): a
  * `claude-code` run is a tagged row.
  *
  * The live results projection passes the response count explicitly. A direct
@@ -336,7 +338,8 @@ export function episodeOf(run: RunRow): EpisodeOf {
  */
 export function unscoredReason(run: RunRow, modelResponses?: number | null): string | null {
   if (run.shakeout !== null) return run.shakeout;
-  if (run.driver !== null && isDriver(run.driver) && isUnscoredDriver(run.driver)) return STUB_STAMP;
+  const byDriver = run.driver !== null && isDriver(run.driver) ? DRIVER_STAMPS[run.driver] : undefined;
+  if (byDriver !== undefined) return byDriver;
   if (run.objective !== null) return "unscored (operator objective)";
   /*
    * The tier decides too: `freeplay` is unscored by definition, whether it was

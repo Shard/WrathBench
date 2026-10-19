@@ -367,6 +367,49 @@ standing sandbox that never finishes. Duration separates neither pair.
 separates them — steering is. `e360` is the standing goal with a longer clock;
 `freeplay` is where a human is allowed to point.
 
+## The scripted reference run
+
+Not an episode id and not a model: the ceiling on what the SDK surface allows,
+one per harness series (docs/METHODOLOGY.md, "Scoring"; operator, 2026-10-19).
+It is launched under a scored id's shape and is never a member of that id's
+group.
+
+- **Driver.** `--driver reference` (`runner/src/reference/`). The fixed loop
+  runs it the way it runs a model: each turn is one `run_snippet` call, played
+  in the run's one sandbox and session, under the run's `snippetTimeoutMs`, and
+  recorded as a model's turns are. What the driver reads is the tool result a
+  model would read, and nothing else. The program in the snippet makes every
+  decision from the state cache and acts only through SDK calls a model could
+  make, so the run gets no observation and no action a client could not.
+- **Route.** `runner/src/reference/route.ts`: a Human Paladin from Northshire
+  Valley to Goldshire, quest by quest, then hunting Elwynn until the clock
+  runs out. It is a speedrunner's route knowledge written as data: creature
+  entries, quest ids and approximate positions, with no game text. The
+  program still finds every NPC and every mob by looking at what is in view,
+  and it skips a quest the NPC does not offer. The route's id and version are
+  the run's `model` (`reference/elwynn-human-paladin@1`), so a changed route is
+  a new line, never the old one moved.
+- **Shape.** `--episode e90`: the 90-minute clock, `e90`'s watchdogs and its
+  tool-call ceiling, `objective: none`, the reference wiki present and unused.
+  The start is the route's (race 1, class 2). `loadRunConfig` refuses any
+  other start, an objective, a continuation, a campaign and any `--model`
+  other than the route's.
+- **Stamped, never scored.** Every record carries `unscored (scripted
+  reference)` (`REFERENCE_STAMP`), and the driver alone says the same for a
+  record whose stamp went missing. The scheduler's `isCounted` refuses it
+  whatever model id it carries, so it is no attempt, no counted run, no
+  promotion witness and no best level of any roster entry. The episodes table
+  does not count it as a member, and the ladder's rows and their order never
+  hold it. The fleet config and a hand-written roster refuse `driver:
+  reference`, so the policy can never launch one.
+- **Ends.** It never ends itself: the route's last step hunts, so the verdict
+  is the episode's, normally `episode-limit`. A run that pauses is not
+  resumed, under `e90`'s lane rule: the attempt is spent and a fresh one is
+  launched by hand.
+- **Launch.** By hand, on `PROBE`, once per harness series after the release
+  that carries the series: `bun wb run episode --driver reference --episode
+  e90 --account PROBE` (`docs/RUNBOOK.md`, "The scripted reference run").
+
 ## Runs that produced nothing
 
 A run that terminates without a single model response is archived by the runner

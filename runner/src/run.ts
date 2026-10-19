@@ -4,6 +4,7 @@
  *
  *   bun runner/src/run.ts --driver openai --model <id> [--api-base URL] [--effort low] [flags]
  *   bun runner/src/run.ts --driver stub --stub <script.json> [flags]
+ *   bun runner/src/run.ts --driver reference --episode e90 --account PROBE  [the scripted reference; never scored]
  *   bun runner/src/run.ts --driver claude-code --model opus  [claude-code harness]
  *   bun runner/src/run.ts --driver claude-code --model opus --token-env CLAUDE_CODE_OAUTH_TOKEN_2
  *   bun runner/src/run.ts --driver claude-code --model haiku --effort max --compact-window 100k
@@ -58,6 +59,8 @@ import { RunArgsError, parseRunArgs } from "./run-flags";
 import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
 import { openWikiBundle, wikiBundleMeta } from "./wiki";
 import { OpenAiChatAdapter, StubAdapter, type ChatAdapter } from "./adapter";
+import { ReferenceAdapter } from "./reference/adapter";
+import { REFERENCE_ROUTE } from "./reference/route";
 import { parseRouting, routingForRun, type RoutingSpec } from "./routing";
 import { apiKeyRefusal } from "./providers";
 import { runClaudeEpisode } from "./adapter-claude";
@@ -648,6 +651,16 @@ async function main(): Promise<void> {
       process.exit(2);
     }
     adapter = StubAdapter.fromScriptFile(config.stubScript);
+  } else if (config.driver === "reference") {
+    // The scripted reference: its route through `run_snippet`, in this run's
+    // sandbox and session like any model (`reference/adapter.ts`). No key, no
+    // lane; `loadRunConfig` has already checked the start and named the model.
+    adapter = new ReferenceAdapter({
+      route: REFERENCE_ROUTE,
+      snippetTimeoutMs: config.snippetTimeoutMs,
+      race: config.race,
+      class: config.class,
+    });
   } else if (config.driver === "claude-code") {
     // The subscription lane: a var NAME, defaulting to the one the CLI itself
     // knows. Everything below says the CHOSEN name, so an operator reading a

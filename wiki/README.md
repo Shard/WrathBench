@@ -1,18 +1,25 @@
 # wiki
 
-Turns a locally held wowwiki dump into a searchable sqlite bundle, and provides the
-search function behind the runner's `search_reference` MCP tool.
+The tooling that builds the reference bundle a model can search during a run.
+It turns a locally held wowwiki dump into one sqlite file, and it provides the
+search function the runner's `search_reference` tool answers with. The model
+only ever sees search results; the operator runs the build once per dump and
+again when the rules change.
 
 The bundle is a concise reference for **this world**: patch 3.3.5a, Wrath of the
 Lich King. Nothing in it is labelled by era, because content that is not 3.3.5 is
-not in it — the build drops it, by deterministic rules, with a count in `meta` for
-every rule. Removal is verifiable by rebuilding from the same dump.
+not in it. The build drops it, by deterministic rules, with a count in `meta` for
+every rule, so a removal can be verified by rebuilding from the same dump.
 
 The dump and the bundle are Blizzard-derived. Both live under `data/`, which is
 gitignored at the directory level, and neither is ever committed or published.
 Every contributor builds their own bundle from their own dump.
 
-## Build
+The rest of this file is in three parts: how to build, verify and swap a bundle;
+the rules that decide what is in it, for anyone changing them; and the search
+API the runner calls.
+
+## Building a bundle
 
 ```
 bun wiki/src/build.ts data/wiki/<dump>.7z [--out data/wiki/bundle.sqlite]
@@ -89,10 +96,11 @@ The rename is atomic and each runner process holds its bundle open by handle, so
 live run keeps reading the file it opened and the next process to start picks up
 the new one. Nothing has to be drained to swap a bundle.
 
-## Decisions
+## The rules
 
-The rules below state themselves; the fuller reasoning behind the reference bundle
-lives in docs/METHODOLOGY.md "The reference bundle".
+Everything from here to "Search" is for someone changing what the bundle
+keeps. The rules below state themselves; the fuller reasoning behind the
+reference bundle lives in docs/METHODOLOGY.md, "The reference bundle".
 
 - **Era cutoff 2010-10-12, and prose is split from structure.** A surviving page is
   built from two revisions: the newest before the cutoff (patch 4.0.1) supplies the
@@ -133,10 +141,10 @@ lives in docs/METHODOLOGY.md "The reference bundle".
   agent still sees wiki text and only wiki text. The honest residue is one bit per
   admitted page — that the page's own claim checks out — which buys the agent
   nothing a search of the page did not.
-- **A rebuild that changes page text is a patch within the harness series**
-  (operator, 2026-10-16). The reference surface changes for every lane at once,
-  so the bundle's `built_at`, stamped on every run, is what tells the runs
-  before a rebuild from the runs after it.
+- **A rebuild that changes page text is a patch within the harness series.**
+  The reference surface changes for every lane at once, so the bundle's
+  `built_at`, stamped on every run, is what tells the runs before a rebuild
+  from the runs after it.
 - **Every rule counts itself in `meta`, and the counters close.** Six admission and
   drop reasons plus `empty_pages` account for every page the parser yields except
   those that were a `#REDIRECT` at the cutoff, asserted as an identity by the build
@@ -455,6 +463,7 @@ bun wiki/src/search.ts [--db path] [--limit n] <query>
 
 ## Tests
 
-`bun test wiki/` covers the streaming parser, the wikitext stripper, search, and an
-end-to-end build. All fixtures are synthetic and invented; no dump or bundle is
-needed to run them, and no game text appears in this directory.
+`bun run test wiki/` from the repository root covers the streaming parser, the
+wikitext stripper, search, and an end-to-end build. All fixtures are synthetic
+and invented; no dump or bundle is needed to run them, and no game text appears
+in this directory.
