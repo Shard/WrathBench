@@ -9,7 +9,7 @@
 import { join } from "node:path";
 import type { RosterSpec } from "./run-roster";
 import { harnessSeries } from "../runner/src/comparability";
-import { harnessClash, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
+import { compactWindowDriverRefusal, driverHasCompactWindow, harnessClash, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
 import type { Billing } from "../runner/src/model-cost";
 import { isOpenRouterBase, parseRouting } from "../runner/src/routing";
 import { QUEUE_JOB_KEYS, rosterEntryRefusal, strictKeyWhy, unknownKeysOf } from "../runner/src/roster-refusal";
@@ -695,15 +695,15 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
     if (e.wiki === false && e.wikiCoords === true) {
       fail(`${where}: entry ${e.model}: wikiCoords needs the reference wiki, and this entry has wiki: false`);
     }
-    // The Claude Code CLI's auto-compaction window (operator decision
-    // 2026-10-09): a run dimension like effort, settable on any claude-code
-    // entry and refused on every other driver, whose CLI or API has no such
-    // window to set. NORMALISED like routing: one canonical spelling for every
+    // A CLI harness's auto-compaction window (operator decisions 2026-10-09,
+    // and 2026-10-11 for codex): a run dimension like effort, settable on any
+    // claude-code or codex entry and refused on every other driver, whose API
+    // has no such window to set. NORMALISED like routing: one canonical spelling for every
     // reader, and `auto` — the CLI's own default — is the absent field, so it
     // can never make a second identity for the same condition.
     if (e.compactWindow !== undefined) {
-      if (driver !== "claude-code") {
-        fail(`${where}: entry ${e.model}: compactWindow is the Claude Code CLI's auto-compaction window — the ${driver} driver has none`);
+      if (!driverHasCompactWindow(driver)) {
+        fail(`${where}: entry ${e.model}: ${compactWindowDriverRefusal(driver)}`);
       }
       let window: string | undefined;
       try {

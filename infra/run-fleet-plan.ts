@@ -869,7 +869,7 @@ export interface EndedRun {
   model: string;
   /** Part of the model's identity: opus-low and opus-high are two rows. */
   effort: string | null;
-  /** Identity too: the claude-code compaction window; absent or null is `auto`. */
+  /** Identity too: the CLI compaction window (claude-code or codex); absent or null is `auto`. */
   compactWindow?: string | null;
   /** The job ref it was launched under, when the run id names one. */
   ref: string | null;

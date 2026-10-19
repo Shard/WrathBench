@@ -134,7 +134,10 @@ and `codex` already do, and what another driver would have to.
   express is refused by name, never mapped to a neighbour**: the tuple would
   otherwise carry a level the run never had. codex refuses `none` and
   `minimal`; a dimension a driver has no setting for at all is refused at
-  config time, as `compactWindow` is off claude-code (`loadRunConfig`).
+  config time, as `compactWindow` is off claude-code and codex
+  (`loadRunConfig`). A value the scaffold would silently cap to its own limit
+  is refused too, at the first turn that reports the limit ("The compaction
+  window", below).
   Reaching the same level by another mechanism is not a neighbour:
   claude-code's `none` is `MAX_THINKING_TOKENS=0`, because its `--effort` has
   no such level.
@@ -158,9 +161,9 @@ and `codex` already do, and what another driver would have to.
 
 **Harness settings.** A harness setting is a knob of one harness's machinery:
 it has the harness's default, a roster entry may override it, and it is
-recorded like effort. The claude-code compaction window (`compactWindow`) is
-the one that exists, and its shape is the pattern. Absent, or `auto`, is the
-scaffold's own default and stamps nothing, so every run that says nothing
+recorded like effort. The compaction window (`compactWindow`), on claude-code
+and codex, is the one that exists, and its shape is the pattern. Absent, or
+`auto`, is the scaffold's own default and stamps nothing, so every run that says nothing
 shares one tuple. A named value is a roster-entry field normalised to one
 spelling. It keys the tuple, and it is part of `RosterIdentity`, so an entry
 that differs from another only in it owns its own runs and its own row. A
@@ -298,18 +301,23 @@ scratchpad, not the chat history, is the durable memory.
 
 ### The compaction window
 
-The CLI summarises its own history once the prompt nears its auto-compaction
-window, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: `auto` or 100k–1M tokens in 2.1.293.
+A harness setting of both CLI scaffolds since the operator's decision of
+2026-10-11; this section is claude-code's mechanics, and "The codex driver"
+below has codex's. The CLI summarises its own history once the prompt nears
+its auto-compaction window, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: `auto` or
+100k–1M tokens in 2.1.293.
 `auto` sits near the model's whole context — with `--debug` the CLI logs
 `autocompact: … effectiveWindow=980000` for Claude Haiku 5.5 — so a long run
 replays close to a million tokens per call before anything is summarised, and
 pays for it above a model's long-prompt price tier. `100k` logs
 `effectiveWindow=80000`, and the CLI compacts about 13K below that.
 
-A roster entry (`compactWindow`, docs/RUNBOOK.md) or `--compact-window` sets it
-for a run (`RunConfig.compactWindow`); every other driver refuses it. It is a
-run dimension like effort: canonicalised to `<n>k` or `1M`, recorded in
-`meta.json` and the comparability tuple, matched on beside model and effort
+A roster entry (`compactWindow`, docs/RUNBOOK.md), a campaign arm's
+`--compact-window` (docs/EPISODES.md) or `--compact-window` by hand sets it
+for a run (`RunConfig.compactWindow`); claude-code and codex take it, and
+every other driver refuses it. It is a run dimension like effort:
+canonicalised to `<n>k` or `1M`, recorded in `meta.json` and the
+comparability tuple, matched on beside model and effort
 wherever a run is mapped back to its roster entry (`sameRosterIdentity`), and
 shown after the effort on the pages (`max · 100k`). Absent is the CLI's
 `auto`: nothing is sent and the tuple carries no field, so every run from
@@ -318,6 +326,18 @@ through the constructed environment (`compactEnv`); a value in the runner's own
 environment is dropped like `MAX_THINKING_TOKENS`, so nothing unrecorded can
 move it. The CLI's `autoCompactWindow` setting cannot either: the config dir is
 the run's own.
+
+**A window the CLI would cap is refused.** The CLI applies the smaller of the
+window and the model's context window, so a window at or above the model's
+context is one it replaces by its own, and the run would be stamped with a
+condition it never ran under. The model's context window is known only from
+the CLI's own `modelUsage` (the provider's, not the pinned image's; the
+repository keeps no per-model table), and the CLI reports it only on a
+turn's `result`, so the driver checks the window at the first turn boundary
+and, at or past it, ends the run as `harness-error` with both numbers in the
+detail (`claudeWindowCapRefusal`, `src/cli-compaction.ts`). That is never
+evidence, and it spends the first turn, however long that turn ran. On
+today's all-1M Claude roster `1M` is therefore always refused.
 
 Each compaction the CLI streams — a `system` envelope with subtype
 `compact_boundary` and `compact_metadata` (`trigger`, `pre_tokens`, and when
@@ -510,6 +530,28 @@ and differs only where the CLI does:
   and `retainedTurns`, the turns whose context messages the CLI kept verbatim.
   The same reading drives the episodic-log ask, with the threshold above
   (`src/cli-compaction.ts`; the claude-code section "The compaction window").
+- **The compaction window is `model_auto_compact_token_limit`.** A run's
+  `compactWindow` (operator, 2026-10-11; the claude-code section "The
+  compaction window" has what it is as a run dimension) reaches the CLI as
+  the integer `-c model_auto_compact_token_limit=<tokens>` (`codexArgs`):
+  `200k` is `200000`, a bare TOML integer, which the pinned CLI reads as an
+  `Option<i64>` (`codex-rs/core/src/config/mod.rs` at `rust-v0.159.3`). It
+  replaces the catalogue's own limit for the model, and the CLI then compacts
+  at the smaller of it and 90% of the catalogue window
+  (`ModelInfo::auto_compact_token_limit`), measured against the full active
+  context: the run sets neither `model_auto_compact_token_limit_scope`
+  (default `total`) nor `model_context_window`, so the 90% cap stands. Unlike
+  claude-code there is no summary reserve, so `200k` compacts at 200,000
+  tokens, not 167,000; the two harnesses are separate comparability groups
+  anyway. The episodic-log ask's threshold is the same minimum. A window at
+  or above the 90% cap is one the CLI replaces by its own limit, and the
+  catalogue window is the provider's, so the driver checks it at the first
+  turn whose rollout reports the window and, at or past the cap, ends the run
+  as `harness-error` with both numbers (`codexWindowCapRefusal`). On a
+  272,000-token catalogue window (258,400 reported) that refuses `300k`;
+  raising the cap would take `model_context_window`, a second dimension the
+  run does not set. The window rides on the `driver` record's argv and, by
+  name, as its `compactWindow`.
 - **The subscription's usage window is in the rollout.** Exec's stdout never
   carries it (upstream declined to add it), but every `token_count` the CLI
   persists carries the account's `rate_limits`. After each turn the driver

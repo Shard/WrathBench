@@ -410,8 +410,9 @@ export interface RosterModel {
   model: string;
   effort?: string;
   /**
-   * The claude-code compaction window (`RunConfig.compactWindow`); absent is
-   * the CLI's own `auto`. Part of the entry's identity, like effort.
+   * The CLI harness's compaction window (`RunConfig.compactWindow`,
+   * claude-code or codex); absent is the CLI's own `auto`. Part of the
+   * entry's identity, like effort.
    */
   compactWindow?: string;
   driver?: string;
@@ -527,7 +528,7 @@ export interface RunFact {
   model: string;
   effort: string | null;
   /**
-   * The claude-code compaction window the run was stamped with. Absent or null
+   * The CLI compaction window the run was stamped with. Absent or null
    * is the CLI's own `auto` — every run that set none, and every run written
    * before the field existed.
    */
@@ -699,7 +700,7 @@ export interface ModelState {
   name: string;
   model: string;
   effort: string | null;
-  /** The entry's claude-code compaction window; absent is the CLI's `auto`. */
+  /** The entry's CLI compaction window (claude-code or codex); absent is the CLI's `auto`. */
   compactWindow?: string;
   platform: string | null;
   /** The harness this entry's runs go through, from its driver; a tag, not a partition. */
@@ -1854,8 +1855,8 @@ export interface RosterIdentity {
 
 /**
  * Whether two identities are one roster row: same model, same effort, same
- * claude-code compaction window. Absent and null read alike (the provider's
- * default effort, the CLI's `auto` window), so a run written before a field
+ * CLI compaction window (claude-code or codex). Absent and null read alike
+ * (the provider's default effort, the CLI's `auto` window), so a run written before a field
  * existed still matches the entry that never set it. Every place that maps a
  * run back to an entry asks this, so an entry that differs from another only
  * in its window — a 100k copy of an `auto` entry — owns its own runs.
@@ -1864,7 +1865,27 @@ export function sameRosterIdentity(a: RosterIdentity, b: RosterIdentity): boolea
   return a.model === b.model && (a.effort ?? null) === (b.effort ?? null) && (a.compactWindow ?? null) === (b.compactWindow ?? null);
 }
 
-function matchesRoster(f: RunFact, r: Pick<RosterModel, "model" | "effort" | "compactWindow">): boolean {
+/**
+ * Whether a run is this entry's. A fleet probe names the entry it ran as
+ * (`config.ref`), and that stamp is the authority, as it is for the square
+ * the probe counts in (`campaignSquares`): the probe is the named entry's
+ * when its model and effort are the entry's, and its window is the entry's or
+ * the entry has none — an arm may set the window itself (`--compact-window`,
+ * operator 2026-10-11), and that window is in the run's tuple without being
+ * the entry's identity. Matched by identity alone, such a run belonged to no
+ * entry, or to a windowed copy it never ran as, and its lane and its ladder
+ * went unseen. Every other run matches by identity (`sameRosterIdentity`).
+ * Arms that differ only by window still never pool: the square is keyed on
+ * the arm, and the results on the tuple.
+ */
+function matchesRoster(f: RunFact, r: Pick<RosterModel, "name" | "model" | "effort" | "compactWindow">): boolean {
+  if (f.campaign !== null && f.arm != null && f.ref != null) {
+    return (
+      f.ref === r.name &&
+      sameRosterIdentity({ model: f.model, effort: f.effort }, { model: r.model, effort: r.effort }) &&
+      (r.compactWindow === undefined || r.compactWindow === f.compactWindow)
+    );
+  }
   return sameRosterIdentity(f, r);
 }
 

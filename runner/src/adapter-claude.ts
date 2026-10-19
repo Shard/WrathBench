@@ -121,6 +121,7 @@ import {
   claudeAutoCompactLimit,
   claudeCompactSummary,
   claudeModelWindow,
+  claudeWindowCapRefusal,
   compactionNotice,
   messageText,
   summaryFields,
@@ -1194,6 +1195,8 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
    * goes out when it is found or when the turn closes without it.
    */
   const compactionAsk = new CompactionAsk();
+  /** Whether the run's window has been checked against the first model window the CLI reported (`claudeWindowCapRefusal`). */
+  let windowChecked = config.compactWindow === undefined;
   interface PendingCompaction {
     record: CompactionRecord;
     uuid: string | undefined;
@@ -1533,6 +1536,14 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
         trajectory.append({ t: "harness", kind: "session_note", text: `turn ${turn} produced no assistant output` });
       }
 
+      // A window the CLI would cap to the model's own ends the run at the
+      // first turn that reports the model's window, before it records a
+      // condition nothing applied (`compactWindowCapRefusal`, cli-compaction.ts).
+      if (!windowChecked && modelWindow !== undefined) {
+        windowChecked = true;
+        const capped = claudeWindowCapRefusal(config.compactWindow, modelWindow.contextWindow);
+        if (capped !== null) return terminate("harness-error", capped);
+      }
       if (config.maxTurns !== undefined && turn >= config.maxTurns) {
         return terminate("turn-limit", `${turn} turns`);
       }

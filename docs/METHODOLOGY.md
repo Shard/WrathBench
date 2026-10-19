@@ -78,8 +78,10 @@ model that cannot be configured out is stated with its label (principle 3):
 `codex` gives GPT-6 models its code mode and collaboration tools. A harness
 setting has the harness's default and may be overridden per roster entry, as a
 recorded run dimension like effort rather than per-model tuning (operator,
-2026-10-16); the claude-code compaction window is one, with the CLI's own
-`auto` as the default (2026-10-09).
+2026-10-16); the compaction window is one (claude-code, 2026-10-09), and a
+general one that covers codex too, with each CLI's own `auto` staying the
+default on every driver and a probe campaign comparing windows (arms `auto`,
+100k, 200k and 300k) (operator, 2026-10-11).
 
 ## Client fidelity
 

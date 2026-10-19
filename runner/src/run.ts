@@ -230,7 +230,7 @@ export function configFromArgs(
     // Identity, like model and driver: a resumed run keeps the effort it was
     // launched with, so --effort is not an override on --resume.
     effort: typeof args["effort"] === "string" ? args["effort"] : undefined,
-    // The Claude Code CLI's auto-compaction window (claude-code only); identity
+    // A CLI harness's auto-compaction window (claude-code, codex); identity
     // like effort, so --compact-window is not an override on --resume either.
     compactWindow: typeof args["compact-window"] === "string" ? args["compact-window"] : undefined,
     // A probe arm's wake-on-event options (`wake.ts`); absent unless one is

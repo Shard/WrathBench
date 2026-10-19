@@ -29,6 +29,7 @@
  */
 
 import { z } from "zod";
+import { driverHasCompactWindow } from "./config";
 import type { RunPodsMode } from "./models";
 import {
   CAMPAIGN_NAME,
@@ -178,7 +179,7 @@ export interface PairLaunchContext {
  * - **The compaction window**, which an arm may vary (operator, 2026-10-11):
  *   an arm that sets `--compact-window` cannot run an assignment whose roster
  *   entry sets one too (the run would get the flag twice), nor one off the
- *   claude-code driver (no other harness has the window).
+ *   claude-code and codex drivers (no other harness has the window).
  * - **A refused roster entry.** Every pair of an assignment whose entry the
  *   parser refused: nothing schedules that entry, so its squares are parked
  *   here rather than offered. Otherwise a pinned campaign's next square could
@@ -212,7 +213,7 @@ export function campaignPairRefusals(
       const window = armArg(arm, "compact-window");
       if (window !== undefined) {
         const driver = entry.driver ?? "openai";
-        if (driver !== "claude-code") {
+        if (!driverHasCompactWindow(driver)) {
           reasons.push(`arm ${arm.id} sets --compact-window ${window}, and ${a.model} runs on the ${driver} driver, which has no compaction window`);
         } else if (entry.compactWindow !== undefined) {
           reasons.push(`arm ${arm.id} sets --compact-window ${window}, and roster entry ${a.model} already sets compactWindow ${entry.compactWindow} — assign an entry with no window`);

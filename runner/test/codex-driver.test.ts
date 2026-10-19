@@ -551,6 +551,65 @@ describe("codex driver", () => {
     trajectory.close();
   }, 20_000);
 
+  test("a compaction window reaches the CLI as an integer model_auto_compact_token_limit; absent sends nothing", async () => {
+    const windowed = setupEpisode("tools", { maxTurns: 1, compactWindow: "200K" });
+    await runCodexEpisode(windowed.options);
+    // A bare TOML integer, the canonical window in tokens.
+    expect(readRecord(windowed.recordPath)["autoCompactLimit"]).toBe("200000");
+    // Named on the driver record beside the args that carry it, and run identity in meta.json.
+    const driver = readTrajectory(windowed.runDir).find((r) => r.t === "driver");
+    expect(driver?.["compactWindow"]).toBe("200k");
+    expect(driver?.["args"] as string[]).toContain("model_auto_compact_token_limit=200000");
+    expect(readMeta(windowed.runDir)?.config.compactWindow).toBe("200k");
+    windowed.trajectory.close();
+
+    const plain = setupEpisode("tools", { maxTurns: 1 });
+    await runCodexEpisode(plain.options);
+    expect(readRecord(plain.recordPath)["autoCompactLimit"]).toBeNull();
+    const plainDriver = readTrajectory(plain.runDir).find((r) => r.t === "driver");
+    expect("compactWindow" in plainDriver!).toBe(false);
+    expect((plainDriver?.["args"] as string[]).some((a) => a.startsWith("model_auto_compact_token_limit"))).toBe(false);
+    plain.trajectory.close();
+  }, 30_000);
+
+  test("the ask's threshold is the smaller of the run's window and the CLI's own limit", async () => {
+    // 475,000 reported is a 450,000 limit; a 200k window is the smaller. 100k
+    // + 2 × 50k reaches 200k at the end of turn 2, where `auto` would not ask.
+    const rollout = [{ total: 50_000 }, { total: 100_000 }, { total: 150_000 }];
+    const env = { WB_FAKE_THREAD_ID: "01a119da-ef89-7a63-ac51-314ac6a70a52", WB_FAKE_ROLLOUT: JSON.stringify(rollout) };
+    const windowed = setupEpisode("tools", { maxTurns: 3, compactWindow: "200k" }, env);
+    expect(await runCodexEpisode(windowed.options)).toMatchObject({ kind: "terminated", reason: "turn-limit" });
+    expect(readTrajectory(windowed.runDir).filter((r) => r.t === "harness" && r["kind"] === "compaction_ask")).toEqual([
+      expect.objectContaining({ turn: 2, ask: "before", context: 100_000, threshold: 200_000, growth: 50_000 }),
+    ]);
+    windowed.trajectory.close();
+    const auto = setupEpisode("tools", { maxTurns: 3 }, env);
+    await runCodexEpisode(auto.options);
+    expect(readTrajectory(auto.runDir).filter((r) => r.t === "harness" && r["kind"] === "compaction_ask")).toEqual([]);
+    auto.trajectory.close();
+  }, 30_000);
+
+  test("a window at or above the CLI's own limit ends the run as harness-error at the first turn that reports it", async () => {
+    // 475,000 reported is a 500,000 catalogue window and a 450,000 limit:
+    // 450k is the limit itself, which the CLI would apply anyway; 449k is a real window.
+    const rollout = [{ total: 50_000 }, { total: 60_000 }, { total: 70_000 }];
+    const env = { WB_FAKE_THREAD_ID: "01a119da-ef89-7a63-ac51-314ac6a70a52", WB_FAKE_ROLLOUT: JSON.stringify(rollout) };
+    const capped = setupEpisode("tools", { maxTurns: 3, compactWindow: "450k" }, env);
+    const outcome = await runCodexEpisode(capped.options);
+    expect(outcome).toMatchObject({ kind: "terminated", reason: "harness-error" });
+    const detail = String((outcome as { detail?: unknown }).detail);
+    expect(detail).toContain("compactWindow 450k (450000 tokens) is at or above");
+    expect(detail).toContain("(450000 tokens)");
+    expect(detail).toContain("500000-token catalogue window");
+    // One turn, and no second one.
+    expect(readRecord(capped.recordPath)["userMessages"] as string[]).toHaveLength(1);
+    capped.trajectory.close();
+
+    const real = setupEpisode("tools", { maxTurns: 3, compactWindow: "449k" }, env);
+    expect(await runCodexEpisode(real.options)).toMatchObject({ kind: "terminated", reason: "turn-limit" });
+    real.trajectory.close();
+  }, 30_000);
+
   test("a declared effort reaches the CLI as model_reasoning_effort; an undeclared one sends nothing", async () => {
     const plain = setupEpisode("tools", { maxTurns: 1 });
     await runCodexEpisode(plain.options);
@@ -881,6 +940,40 @@ describe("codex driver", () => {
     expect(resumed.slice(0, 3)).toEqual(["exec", "resume", "01a06f87-aa52-7a53-8057-ce41ff444cab"]);
     expect(resumed.filter((a) => a.startsWith("model_reasoning_effort"))).toHaveLength(0);
     expect(tomlString('a"b\\c')).toBe('"a\\"b\\\\c"');
+  });
+
+  test("codexArgs: a window adds exactly one integer -c key, and a run without one is byte-identical to before", () => {
+    const base = { instructionsPath: "/i.md", bunBin: "/usr/bin/bun", bridgePath: "/b.ts", mcpPort: 1, model: "gpt-6-astra", effort: "high" };
+    // Captured before the window existed on this driver: nothing may move for a run that sets none.
+    const before = [
+      "exec", "--json", "--ignore-user-config", "--skip-git-repo-check", "-m", "gpt-6-astra",
+      "--disable", "shell_tool", "--disable", "unified_exec", "--disable", "image_generation", "--disable", "tool_suggest",
+      "--disable", "multi_agent", "--disable", "request_permissions_tool", "--disable", "apps", "--disable", "plugins",
+      "--disable", "browser_use", "--disable", "computer_use", "--disable", "sleep_tool",
+      "-c", 'web_search="disabled"', "-c", 'approval_policy="never"', "-c", 'sandbox_mode="read-only"',
+      "-c", 'model_instructions_file="/i.md"', "-c", 'model_reasoning_effort="high"',
+      "-c", 'mcp_servers.wrathbench.command="/usr/bin/bun"', "-c", 'mcp_servers.wrathbench.args=["/b.ts","1"]',
+      "-c", 'mcp_servers.wrathbench.default_tools_approval_mode="approve"',
+      "-c", "mcp_servers.wrathbench.tool_timeout_sec=300", "-c", "mcp_servers.wrathbench.startup_timeout_sec=30", "-",
+    ];
+    expect(codexArgs(base)).toEqual(before);
+    const windowed = codexArgs({ ...base, compactWindow: "1M" });
+    expect(windowed.filter((a) => !before.includes(a))).toEqual(["model_auto_compact_token_limit=1000000"]);
+    expect(windowed.length).toBe(before.length + 2);
+    expect(codexArgs({ ...base, threadId: "t-1", compactWindow: "300k" })).toContain("model_auto_compact_token_limit=300000");
+    // Only the canonical spelling reaches it: the config boundary canonicalises.
+    expect(() => codexArgs({ ...base, compactWindow: "300K" })).toThrow(/not a canonical window/);
+  });
+
+  test("a codex run with a window stamps it into the tuple; one without stamps exactly what it did", () => {
+    const plain = comparabilityOf(loadRunConfig({ driver: "codex", model: "gpt-6-astra", effort: "high" }), "t");
+    expect("compactWindow" in plain).toBe(false);
+    const windowed = comparabilityOf(loadRunConfig({ driver: "codex", model: "gpt-6-astra", effort: "high", compactWindow: "200k" }), "t");
+    expect(windowed.compactWindow).toBe("200k");
+    // The window is the only difference, and it is the last key.
+    const { compactWindow: _w, ...rest } = windowed;
+    expect(JSON.stringify(rest)).toBe(JSON.stringify(plain));
+    expect(Object.keys(windowed).at(-1)).toBe("compactWindow");
   });
 
   test("the sample exec JSONL parses into the shapes the driver reads", () => {

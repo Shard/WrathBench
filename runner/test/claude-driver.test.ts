@@ -459,6 +459,27 @@ describe("claude-code driver", () => {
     expect(asks).toEqual([expect.objectContaining({ turn: 2, ask: "before", threshold: 267_000, growth: 100_000 })]);
   }, 30_000);
 
+  test("a window at or above the model's context window ends the run as harness-error at the first turn that reports it", async () => {
+    // The CLI caps the window to the model's context: on a 300k model a 300k
+    // window is the context itself, and on a 1M model so is 1M.
+    for (const [window, context] of [["300k", "300000"], ["1M", "1000000"]] as const) {
+      const capped = setupEpisode("tools", { maxTurns: 3, compactWindow: window }, { WB_FAKE_CONTEXT_WINDOW: context });
+      const outcome = await runClaudeEpisode(capped.options);
+      expect(outcome).toMatchObject({ kind: "terminated", reason: "harness-error" });
+      expect(String((outcome as { detail?: unknown }).detail)).toContain(`compactWindow ${window} (${Number(context)} tokens) is at or above the model's context window`);
+      expect(readRecord(capped.recordPath)["userMessages"] as string[]).toHaveLength(1);
+      capped.trajectory.close();
+    }
+    // Below it, the window is real and the run plays on; a threshold below the window's.
+    const real = setupEpisode("tools", { maxTurns: 2, compactWindow: "200k" }, { WB_FAKE_CONTEXT_WINDOW: "300000" });
+    expect(await runClaudeEpisode(real.options)).toMatchObject({ kind: "terminated", reason: "turn-limit" });
+    real.trajectory.close();
+    // No reported window, nothing to check against: the run is not refused on a guess.
+    const unknown = setupEpisode("tools", { maxTurns: 2, compactWindow: "1M" });
+    expect(await runClaudeEpisode(unknown.options)).toMatchObject({ kind: "terminated", reason: "turn-limit" });
+    unknown.trajectory.close();
+  }, 30_000);
+
   test("the CLI's init word is promoted onto the run: meta.json, the tuple and the run row", async () => {
     const { runDir, trajectory, options } = setupEpisode("tools", { maxTurns: 1 });
     // Launched with a stamped tuple, the way run.ts launches one: the resolved
@@ -1052,10 +1073,12 @@ describe("driver selection and stamping", () => {
     }
     expect(() => cc(100_000)).toThrow();
     expect(parseCompactWindow("500k")).toBe("500k");
-    // The CLI's window, so every other driver refuses it rather than recording
-    // a dimension nothing applied.
-    for (const driver of ["openai", "codex", "stub"]) {
-      expect(() => loadRunConfig({ driver, compactWindow: "100k" })).toThrow(/Claude Code CLI's auto-compaction window/);
+    // A CLI harness's window (claude-code and, since 2026-10-11, codex), so
+    // every other driver refuses it rather than recording a dimension nothing
+    // applied.
+    expect(loadRunConfig({ driver: "codex", compactWindow: "200K" }).compactWindow).toBe("200k");
+    for (const driver of ["openai", "stub"]) {
+      expect(() => loadRunConfig({ driver, compactWindow: "100k" })).toThrow(new RegExp(`auto-compaction window \\(claude-code, codex\\) — the ${driver} driver has none`));
       // `auto` is nothing to refuse.
       expect(loadRunConfig({ driver, compactWindow: "auto" }).compactWindow).toBeUndefined();
     }
