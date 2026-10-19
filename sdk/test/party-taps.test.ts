@@ -2,8 +2,8 @@
  * The party taps of the Deadmines design (docs/proposals/GROUP-PLAY.md, phases
  * 1 and 2): the map's Map.dbc row on `WB_AREA` / `WB_SESSION_STATE` folded
  * into `state.self.map`, `SMSG_PARTYKILLLOG`, and `SMSG_RESURRECT_REQUEST`
- * with `state.pendingResurrect` and `acceptResurrection`. Every frame is
- * hand-written from module/PROTOCOL.md's tables.
+ * with `state.pendingResurrect` and `acceptResurrection`, and the chat `type`
+ * on `say`. Every frame is hand-written from module/PROTOCOL.md's tables.
  */
 import { describe, expect, test } from "bun:test";
 
@@ -164,6 +164,43 @@ describe("client: acceptResurrection", () => {
     const result = await client.acceptResurrection({ timeout: 100 });
     expect(result).toMatchObject({ ok: false, status: "unconfirmed", casterGuid: CASTER });
     expect(client.drainActionHints().map((h) => `${h.action}:${h.status}`)).toEqual(["acceptResurrection:no_offer", "acceptResurrection:unconfirmed"]);
+    client.close();
+    await stub.stop();
+  });
+});
+
+describe("client: say with a chat type", () => {
+  const world = () => frames([...loginSequence, selfCreate]);
+  const u32Hex = (n: number) => (n >>> 0).toString(16).padStart(8, "0").match(/../g)!.reverse().join("");
+  const cstr = (s: string) => Buffer.from(s, "utf8").toString("hex") + "00";
+
+  test("plain say stays the module's say action; party, yell and whisper are CMSG_MESSAGECHAT in the race's language", async () => {
+    const stub = startStub({ onConnect: () => world() });
+    const client = await inWorld(stub);
+    expect((await client.say("hello")).action).toBe("say");
+    expect(stub.actions.at(-1)).toMatchObject({ action: "say", text: "hello" });
+    // Fenwick is race 1 (the char-enum row): Common, 7.
+    await client.say("pull at the door", { type: "party" });
+    expect(stub.actions.at(-1)).toMatchObject({ action: "raw", opcode: "CMSG_MESSAGECHAT", payload: u32Hex(2) + u32Hex(7) + cstr("pull at the door") });
+    await client.say("oom", { type: "whisper", to: "Quilby" });
+    expect(stub.actions.at(-1)).toMatchObject({ opcode: "CMSG_MESSAGECHAT", payload: u32Hex(7) + u32Hex(7) + cstr("Quilby") + cstr("oom") });
+    // The self block's race wins once it is seen: a Horde race speaks Orcish, 1.
+    stub.push(JSON.stringify(frame(500, "SMSG_UPDATE_OBJECT", { blocks: 1, objects: [{ update: "values", guid: SELF_GUID, fields: { race: 2 } }] })));
+    await client.events.waitFor((e) => e.seq === 500, { timeout: 2000 });
+    await client.say("run", { type: "yell" });
+    expect(stub.actions.at(-1)).toMatchObject({ opcode: "CMSG_MESSAGECHAT", payload: u32Hex(6) + u32Hex(1) + cstr("run") });
+    client.close();
+    await stub.stop();
+  });
+
+  test("a whisper needs to, and to is only for a whisper; an unknown type is refused before sending", async () => {
+    const stub = startStub({ onConnect: () => world() });
+    const client = await inWorld(stub);
+    const sent = stub.actions.length;
+    expect(() => client.say("hi", { type: "whisper" })).toThrow(/to is the name/);
+    expect(() => client.say("hi", { to: "Quilby" })).toThrow(/only for type "whisper"/);
+    expect(() => client.say("hi", { type: "raid" as never })).toThrow(/type must be/);
+    expect(stub.actions.length).toBe(sent);
     client.close();
     await stub.stop();
   });

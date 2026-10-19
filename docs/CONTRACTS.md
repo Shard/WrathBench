@@ -38,7 +38,7 @@ The action set:
 - Loot: open loot, take item, take money, take all. Chests: the core ignores `CMSG_GAMEOBJ_USE` on a chest and drops `CMSG_LOOT` on a game object guid, so a chest is opened as a client opens one — `CMSG_CAST_SPELL` of the lock's Opening spell (`SPELL_EFFECT_OPEN_LOCK`) at it, then the same store/money/release sequence.
 - Vendor: list, buy, sell, repair.
 - Inventory: equip item, use item, destroy item.
-- Chat: say. (Other chat types are reachable through the raw passthrough's `CMSG_MESSAGECHAT` until a trajectory earns them a helper.)
+- Chat: say. Party chat, yell and whisper are the same `CMSG_MESSAGECHAT` sent through the raw passthrough, which the SDK's `say` builds for its `type` option (the Deadmines eval's coordination channel); the other chat types stay raw until a trajectory earns them a helper.
 - Death: release spirit, reclaim corpse, spirit healer resurrection (the graveyard fallback when the corpse is unreachable).
 - Trainers: list, buy spell.
 - Talents: learn talent, learn preview talents.

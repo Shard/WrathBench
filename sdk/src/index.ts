@@ -57,6 +57,8 @@ export type {
   GroupOptions,
   InviteResult,
   LootRollOptions,
+  SayOptions,
+  SayType,
   AcceptResurrectionOptions,
   AcceptResurrectionResult,
   LootRollRefusalStatus,
