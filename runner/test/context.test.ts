@@ -7,10 +7,13 @@ import {
   formatStateSummary,
   messageWindow,
   messageWindowCut,
+  messageWindowFold,
+  foldToolResult,
   lastTurnGrowth,
   trimExpected,
   type ChatMessage,
   type ContextInputs,
+  type HistoryMessage,
 } from "../src/context";
 import { parseEventFrame } from "@wrathbench/sdk";
 import type { EventSummary } from "../src/sandbox/ipc";
@@ -708,7 +711,11 @@ describe("messageWindow", () => {
 
     const after = h.slice(0, MESSAGE_WINDOW_MAX + 4);
     expect(messageWindowCut(after)).toBe(MESSAGE_WINDOW_TRIM);
-    expect(messageWindow(after)).toEqual(after.slice(MESSAGE_WINDOW_TRIM));
+    // The trim also folds the block behind the verbatim one (see the fold's own
+    // tests below); the window's messages are the same ones, in the same order.
+    expect(messageWindow(after).length).toBe(after.length - MESSAGE_WINDOW_TRIM);
+    expect(messageWindow(after).map((m) => m.role)).toEqual(after.slice(MESSAGE_WINDOW_TRIM).map((m) => m.role));
+    expect(messageWindow(after).slice(MESSAGE_WINDOW_TRIM)).toEqual(after.slice(2 * MESSAGE_WINDOW_TRIM));
     expect(messageWindow(after)[0]!.role).toBe("assistant");
     expect(trimExpected(after)).toBe(false);
   });
@@ -847,6 +854,182 @@ describe("messageWindow", () => {
       const rebuilt = JSON.parse(JSON.stringify(live)) as ChatMessage[];
       expect(messageWindowCut(rebuilt)).toBe(messageWindowCut(live));
       expect(JSON.stringify(messageWindow(rebuilt))).toBe(JSON.stringify(messageWindow(live)));
+    }
+  });
+});
+
+describe("the fold: aged tool results become one-line records", () => {
+  const FOLDED = "[folded by harness] ";
+  const HINT = "snippet timed out: the sandbox abandoned it after 30000ms. ".repeat(16);
+  const CAP = CONTEXT_POLICY.WINDOW_MESSAGE_CHARS;
+
+  /**
+   * One turn: an assistant message with `calls` snippet calls and their
+   * results. Every seventh call errors with a long hint, as a timeout does.
+   */
+  const turn = (i: number, calls: number): HistoryMessage[] => {
+    const out: HistoryMessage[] = [
+      {
+        role: "assistant",
+        content: `thinking ${i}`,
+        ...(calls > 0
+          ? {
+              tool_calls: Array.from({ length: calls }, (_, k) => ({
+                // Repeated across turns on purpose: the fold matches by position.
+                id: `call_${k}`,
+                type: "function" as const,
+                function: { name: "run_snippet", arguments: JSON.stringify({ code: `await step(${i}, ${k})` }) },
+              })),
+            }
+          : {}),
+      },
+    ];
+    for (let k = 0; k < calls; k++) {
+      const error = (i * 5 + k) % 7 === 0;
+      out.push({
+        role: "tool",
+        content: error ? `error (30000ms)\n${HINT}` : `ok (${10 + i}ms)\n=> ${i}.${k}`,
+        tool_call_id: `call_${k}`,
+        isError: error,
+      });
+    }
+    return out;
+  };
+
+  /** Varied turn sizes, an empty turn, and one resume-shaped jump of 30 calls. */
+  const SIZES = Array.from({ length: 70 }, (_, i) => (i === 41 ? 30 : i === 17 ? 0 : [1, 3, 2, 1, 4][i % 5]!));
+
+  interface Boundary {
+    history: HistoryMessage[];
+    /** Where each turn so far starts in `history`. */
+    turns: number[];
+    window: ChatMessage[];
+  }
+
+  /** The request window at every turn boundary, with the history it was cut from. */
+  const boundaries = (): Boundary[] => {
+    const history: HistoryMessage[] = [];
+    const starts: number[] = [];
+    const out: Boundary[] = [];
+    SIZES.forEach((n, i) => {
+      starts.push(history.length);
+      history.push(...turn(i, n));
+      const h = history.slice();
+      out.push({ history: h, turns: starts.slice(), window: messageWindow(h) });
+    });
+    return out;
+  };
+
+  const isFolded = (m: ChatMessage): boolean => m.role === "tool" && String(m.content).startsWith(FOLDED);
+
+  /** A history message as it is sent verbatim: capped, without the history's flag. */
+  const sentVerbatim = (m: HistoryMessage): ChatMessage => {
+    const { isError: _e, ...sent } = m;
+    return typeof sent.content === "string" && sent.content.length > CAP
+      ? { ...sent, content: `${sent.content.slice(0, CAP)}\n…[truncated ${sent.content.length - CAP} chars]` }
+      : sent;
+  };
+
+  test("the line names the tool, the arguments cut short, ok or error, and a snippet's duration", () => {
+    const call = (name: string, args: string) => ({ name, arguments: args });
+    const ok: HistoryMessage = { role: "tool", content: "ok (412ms)\n=> 3", tool_call_id: "c", isError: false };
+    expect(foldToolResult(call("run_snippet", '{"code":"state.self.level"}'), ok)).toEqual({
+      role: "tool",
+      content: '[folded by harness] run_snippet {"code":"state.self.level"}: ok, 412ms, 15 chars',
+      tool_call_id: "c",
+    });
+    const err: HistoryMessage = { role: "tool", content: `error (30012ms)\n${HINT}`, tool_call_id: "c", isError: true };
+    const code = JSON.stringify({ code: "await sdk.moveTo(-8913, -136, 81)" });
+    expect(foldToolResult(call("run_snippet", code), err).content).toBe(
+      `[folded by harness] run_snippet {"code":"await sdk.moveTo(-8913, -136, 81)"}: error, 30012ms, ${err.content!.length} chars`,
+    );
+    // Past FOLD_ARGS_CHARS the arguments end in "…"; a whitespace run is one space.
+    const long = `{"query":  "${"Northshire  ".repeat(12)}"}`;
+    const line = foldToolResult(call("search_reference", long), { role: "tool", content: "no results", isError: false }).content!;
+    const shown = line.slice(FOLDED.length + "search_reference ".length, line.indexOf("…") + 1);
+    expect(shown.length).toBe(CONTEXT_POLICY.FOLD_ARGS_CHARS);
+    expect(shown).not.toContain("  ");
+    expect(line.endsWith(": ok, 10 chars")).toBe(true);
+    // Only a snippet's result opens with a duration; empty arguments show nothing.
+    expect(foldToolResult(call("reflect", "{}"), { role: "tool", content: "ok (5ms) is not a header here", isError: true }).content).toBe(
+      "[folded by harness] reflect {}: error, 29 chars",
+    );
+    expect(foldToolResult(call("state_summary", ""), { role: "tool", content: "== state ==", isError: false }).content).toBe(
+      "[folded by harness] state_summary: ok, 11 chars",
+    );
+  });
+
+  test("nothing folds before the first trim, and after it the boundary moves only with the cut", () => {
+    let lastCut = -1;
+    let lastFold = -1;
+    let trims = 0;
+    for (const { history, window } of boundaries()) {
+      const cut = messageWindowCut(history);
+      const fold = messageWindowFold(history);
+      if (cut === 0) {
+        expect(fold).toBe(0);
+        expect(window.some(isFolded)).toBe(false);
+      }
+      expect(fold).toBeGreaterThanOrEqual(cut);
+      if (fold < history.length) expect(history[fold]!.role).toBe("assistant"); // whole turns only
+      if (cut === lastCut) expect(fold).toBe(lastFold);
+      else if (lastCut >= 0) trims++;
+      // The folded part is exactly the window's first `fold - cut` messages' results.
+      window.forEach((m, i) => expect(isFolded(m)).toBe(i < fold - cut && m.role === "tool"));
+      lastCut = cut;
+      lastFold = fold;
+    }
+    expect(trims).toBeGreaterThanOrEqual(4);
+  });
+
+  test("a result is verbatim on the request it arrives in and on the one after, trim requests included", () => {
+    // Boundary k holds turns 0..k: turns k and k-1 must be verbatim in it.
+    let trimRequests = 0;
+    let previousCut = 0;
+    for (const { history, turns, window } of boundaries()) {
+      const cut = messageWindowCut(history);
+      const recent = turns.length >= 2 ? turns[turns.length - 2]! : 0;
+      expect(recent).toBeGreaterThanOrEqual(cut);
+      expect(window.slice(recent - cut)).toEqual(history.slice(recent).map(sentVerbatim));
+      if (cut > previousCut) trimRequests++;
+      previousCut = cut;
+    }
+    expect(trimRequests).toBeGreaterThanOrEqual(4);
+  });
+
+  test("between trims the request is byte-stable to the end of the window", () => {
+    // The provider-cache property: while the cut holds, the window only grows
+    // at its tail, folded part and all, so the whole of it stays a cached prefix.
+    const all = boundaries();
+    let compared = 0;
+    for (let k = 1; k < all.length; k++) {
+      const prev = all[k - 1]!;
+      const next = all[k]!;
+      if (messageWindowCut(next.history) !== messageWindowCut(prev.history)) continue;
+      expect(JSON.stringify(next.window.slice(0, prev.window.length))).toBe(JSON.stringify(prev.window));
+      compared++;
+    }
+    expect(compared).toBeGreaterThan(40);
+    expect(all.some(({ window }) => window.some(isFolded))).toBe(true);
+  });
+
+  test("errors stay visible as errors, and the history's own flag is never sent", () => {
+    const all = boundaries();
+    const folded = all.flatMap(({ window }) => window.filter(isFolded));
+    const timeout = `error (30000ms)\n${HINT}`;
+    expect(folded.some((m) => String(m.content).endsWith(`: error, 30000ms, ${timeout.length} chars`))).toBe(true);
+    expect(folded.some((m) => /: ok, \d+ms, \d+ chars$/.test(String(m.content)))).toBe(true);
+    for (const { window } of all) for (const m of window) expect("isError" in m).toBe(false);
+    // A folded line is a fraction of the hint it stands for.
+    expect(Math.max(...folded.map((m) => String(m.content).length))).toBeLessThan(timeout.length / 5);
+  });
+
+  test("deterministic, and a history rebuilt from records folds to the same bytes", () => {
+    for (const { history, window } of boundaries()) {
+      const rebuilt = JSON.parse(JSON.stringify(history)) as HistoryMessage[];
+      expect(JSON.stringify(messageWindow(rebuilt))).toBe(JSON.stringify(window));
+      expect(JSON.stringify(messageWindow(history))).toBe(JSON.stringify(window));
+      expect(messageWindowFold(rebuilt)).toBe(messageWindowFold(history));
     }
   });
 });
