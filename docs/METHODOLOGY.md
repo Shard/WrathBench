@@ -360,10 +360,11 @@ usually one and never more than three, printed beside it; one run has spread,
 and a gap of a level or two sits inside it. The cap is what the operator can
 pay for today, expected to rise as episodes get cheaper (2026-09-19).
 
-**There is no floor.** No scripted baseline has run through this harness, so
-nothing distinguishes a model that planned well from one that remembered a
-guide or simply held the SDK correctly. Until one does, a rung means "a model
-got here", never "this is hard".
+**There is no floor.** The scripted reference run is a ceiling; no scripted
+floor or baseline has run through this harness, so nothing distinguishes a
+model that planned well from one that remembered a guide or simply held the
+SDK correctly. Until one does, a rung means "a model got here", never "this is
+hard".
 
 **Provenance is stamped, and partial.** Every run carries the harness build
 and the comparability tuple — series, prompt hash of the rendered bytes,

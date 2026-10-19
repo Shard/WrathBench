@@ -31,7 +31,7 @@ Observation decodes the wire's own delta shape. The module serves whitelisted fi
 
 ### sdk/ (Bun/TypeScript, MIT)
 
-The surface the model programs against. Thin typed wrappers over module actions, a typed event stream, and a small set of composed helpers that emerged from real runs (for example `moveTo`, `killTarget`, `lootNearby`, `acceptQuestFrom`). Helpers are added because a run needed them, not in anticipation.
+The surface the model programs against. Thin typed wrappers over module actions, a typed event stream, and a small set of composed helpers that emerged from real runs (for example `moveTo`, `killTarget`, `lootCorpse`, `acceptQuestFrom`). Helpers are added because a run needed them, not in anticipation.
 
 The SDK is versioned. Its surface is part of the harness version.
 

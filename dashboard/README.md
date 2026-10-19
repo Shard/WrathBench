@@ -1,10 +1,15 @@
 # Dashboard
 
-The operator SPA over the viewer's read-only API: fleet overview, one page per
-run, and the live map. SolidJS + Vite, TypeScript strict, no CSS framework.
+The web UI over the viewer's read-only API: the fleet overview, one page per
+run, the ladder and the live map. It is what the operator opens to watch runs,
+and the same build, pointed at published JSON instead of a viewer, is the
+public site at <https://wrathbench.shard.page>. SolidJS + Vite, TypeScript
+strict, no CSS framework.
 
 Why an SPA and why a dependency at all, and which page owns which grain:
-docs/ARCHITECTURE.md (dashboard section). The routes are `src/main.tsx`.
+docs/ARCHITECTURE.md (dashboard section). The routes are `src/main.tsx`. How
+to run it comes first below; the rest records how the ladder and the map
+derive what they draw, then the structure, tests and conventions.
 
 ## Running
 
