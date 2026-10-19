@@ -222,8 +222,10 @@ account, for the one write SQL cannot make guid-safely,
 racy. Setting up a *character* has the
 extra constraint that it must never be something the agent can reach, which is
 why it lives in `infra/` and refuses any account not matching
-`^(SMOKE\d*|PROBE)$`. Runner and shakeout accounts are never fixtured — a
-benchmark run must start from a character the agent itself created.
+`^(SMOKE\d*|PROBE|PARTY\d)$`. Runner and shakeout accounts are never
+fixtured — a benchmark run must start from a character the agent itself
+created. The PARTY accounts are the party eval's, whose staged loadouts are
+the operator's decision for that lane (`docs/proposals/GROUP-PLAY.md` §2).
 
 **The `online = 0` wait.** The core reads the `characters` row on login and
 writes it back on logout, so a fixture applied under a live session is simply
@@ -243,6 +245,17 @@ watermark (`ObjectMgr.cpp` runs one-time DELETEs against `character_inventory`,
 `mail_items`, `auctionhouse`, `guild_bank_item`). Gear a smoke needs has to
 come through the module: a vendor purchase, a quest reward. `at_login` is left
 alone for the same "leave the core's own flags to the core" reason.
+
+**Party staging** (`fixtures/stage-party.ts`, `stageParty({ campaign,
+accounts, roles })`) is the one place gear is staged, and it still inserts no
+item: the member is logged in and STAGER's SOAP `.additem` stores each piece
+through the live server, whose generator allocates the guid and whose logout
+save writes the row; the only item write here is the offline move of those
+rows into their equipment and bag slots (`buildEquipStatements`), which
+changes `bag` and `slot` and never a guid. The loadouts — items, talents,
+spells and why each was chosen — are `fixtures/loadouts.ts`; turning SOAP on
+and the one-time proof across a worldserver recreate are in
+`docs/RUNBOOK.md`, "Party staging".
 
 The `fixtures` compose service sits behind the `tools` profile so a bare `up`
 never starts it, and its flags come after an `entrypoint` (not a `command`), so

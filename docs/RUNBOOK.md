@@ -1938,6 +1938,72 @@ resume, watch three things:
 To roll back, set the switch off again. The policies are deleted and nothing
 else changes.
 
+### Party staging
+
+The Deadmines eval (`docs/proposals/GROUP-PLAY.md`) runs on five staged
+characters, put into their loadouts by `infra/fixtures/stage-party.ts`.
+Gear is the one thing SQL cannot stage guid-safely, so it goes through the
+worldserver's SOAP console as `.additem` on an admin account, STAGER. SOAP is
+off until the chart's `staging` switch turns it on. The switch also does
+these things, and nothing else:
+
+- binds SOAP to the worldserver pod's own address, and adds 7878 to the
+  ClusterIP Service;
+- admits 7878 only from the fleet and runner pods, through an ingress policy on
+  the worldserver, and adds the matching rule to the fleet's egress when the
+  egress policies are on;
+- adds PARTY1 to PARTY5 to the module's allowlist (STAGER is never on it, and
+  the chart refuses to render it there);
+- gives the fleet and runner pods the SOAP URL and STAGER's password. Run
+  pods get neither, and `infra/run-pod.ts` refuses any SOAP or STAGER
+  variable outright.
+
+The compose quickstart keeps SOAP off.
+
+**Turning it on** happens in one deploy window, because SOAP, the allowlist and
+the module are all read when the worldserver is recreated:
+
+1. Before the window, with the server up:
+   `bun wb accounts ensure PARTY1 PARTY2 PARTY3 PARTY4 PARTY5`. Then
+   `read -rs P && printf '%s\n' "$P" | bun wb accounts stager` creates STAGER
+   with gmlevel 3. Pick its password yourself (at most 16 characters). It has
+   no default.
+2. Put the same password into the env Secret as
+   `WRATHBENCH_STAGER_PASSWORD`. In the cluster repo that is the SOPS-encrypted
+   Secret, the same way as every other key there. Never put it in this
+   repository.
+3. The values commit: `staging: { enabled: true }`. Then run the window as
+   usual (`bun wb release run`, or `bun wb release deploy`).
+4. Inside the window, before the fleet resumes:
+   - `bun wb smoke deadmines-entry` checks the mine's mesh and the portal.
+   - `bun wb smoke party-staging --keep` stages the party, checks every member
+     at login, and leaves the party staged.
+5. The one-time reaping proof. Staged items carry guids the live server
+   allocated, so the next boot's one-time DELETEs above its watermark must not
+   touch them. Show it once: recreate the worldserver while the fleet is still
+   drained (`kubectl -n wrathbench rollout restart deploy/wrathbench-worldserver`
+   with nothing running, or a second window), then run
+   `bun wb smoke party-staging --recheck`. It repeats the checks on what
+   survived the boot and then deletes the five characters. From then on, the
+   construction is the proof.
+6. `bun wb smoke party-entry` stages a fresh party, walks it into map 36
+   together, and checks that it is one instance. It then deletes the
+   characters. `deadmines-entry` joins the deploy smokes while the campaign
+   is enabled.
+
+To turn it off, set `staging.enabled` back to false in another window. The
+policy, the port and the env go away. The PARTY and STAGER accounts stay in
+auth, where they are harmless.
+
+**Restaging** happens before each fresh party launch. The fleet's party mode
+calls `stageParty`. By hand, in the runner pod, run
+`bun infra/fixtures/stage-party.ts [--campaign <id>] [--accounts …] [--roles …]`.
+It deletes every character on the party accounts, so never run it while a
+party run holds those accounts. It takes about two minutes, with the five
+members done in parallel. A failure names the step and the member. If a
+member does not wear its loadout at login, the loader refused an item and
+mailed it, and the stager says so.
+
 ### Harness version stamping
 
 Every episode is stamped with `git describe --tags --always --dirty`, computed
