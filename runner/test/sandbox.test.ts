@@ -271,11 +271,73 @@ describe("sandbox evaluation", () => {
     expect((await host.evalSnippet('await scratchpad.write("abc")')).value).toBe("{\n  chars: 3,\n}");
   });
 
-  test("fetch to a non-module host is refused in-process", async () => {
+  test("snippet fetch is refused in-process, the module host included, pointing at the ambient sdk", async () => {
     const host = makeHost();
-    const res = await host.evalSnippet('await fetch("http://example.com/")');
+    const other = await host.evalSnippet('await fetch("http://example.com/")');
+    expect(other.ok).toBe(false);
+    expect(other.error).toContain("not available");
+    expect(other.error).toContain("ambient sdk");
+    // The module host too: a snippet may not open its own connection to the
+    // module (#74; operator, 2026-10-19). The ambient client reaches it through
+    // its own transport, which does not go through `globalThis.fetch`.
+    const mod = await host.evalSnippet('await fetch("http://worldserver:8086/action", { method: "POST", body: "{}" })');
+    expect(mod.ok).toBe(false);
+    expect(mod.error).toContain("not available");
+  });
+
+  test("snippet WebSocket is refused, the module host included", async () => {
+    const host = makeHost();
+    const res = await host.evalSnippet('new WebSocket("ws://worldserver:8086/events")');
     expect(res.ok).toBe(false);
-    expect(res.error).toContain("not permitted");
+    expect(res.error).toContain("not available");
+    expect(res.error).toContain("ambient sdk");
+  });
+
+  test("a snippet cannot lose the session by nulling or overwriting sdk/state/events", async () => {
+    const host = makeHost();
+    // Null all three within one snippet; the no-op setter swallows it.
+    const within = await host.evalSnippet('sdk = null; state = null; events = null; return JSON.stringify({ sdk: typeof sdk, state: typeof state, events: typeof events })');
+    expect(within.ok).toBe(true);
+    expect(JSON.parse(JSON.parse(within.value ?? '""') as string)).toEqual({ sdk: "object", state: "object", events: "object" });
+    // And a `let sdk = …` (keyword-stripped to a global assignment by
+    // rewrite.ts) cannot clobber it either: the getter is intact next snippet.
+    const after = await host.evalSnippet('let sdk = undefined; typeof sdk');
+    expect(after.ok).toBe(true);
+    const next = await host.evalSnippet('typeof sdk.createSession');
+    expect(next.value).toBe('"function"');
+  });
+
+  test("a snippet cannot build a usable client of its own (constructor reach-through)", async () => {
+    const host = makeHost();
+    // The class is reachable as `sdk.constructor`, but a client built from it
+    // has no credential (the leased secret is a #-private field, struck from
+    // the env) and its default transport is the refusing `globalThis.fetch`, so
+    // it cannot send to the module.
+    const res = await host.evalSnippet(
+      'const C = sdk.constructor; const c2 = new C({ baseUrl: "http://worldserver:8086", token: "tok-0123456789abcdef0123456789abcdef" }); try { await c2.createSession({ character: "Xx", race: 1, class: 1 }); return "CREATED"; } catch (e) { return String(e.message ?? e); }',
+    );
+    expect(res.ok).toBe(true);
+    expect(res.value).not.toContain("CREATED");
+    expect(res.value).toContain("not available");
+  });
+
+  test("the leased secret is not readable off the ambient sdk, by field, reflection or stringify", async () => {
+    const host = makeHost({ secret: "leaked-secret-0123456789abcdef0123456789abcdef" });
+    const res = await host.evalSnippet(
+      'JSON.stringify({ secret: sdk.secret ?? null, evSecret: sdk.events.secret ?? null, inKeys: Object.keys(sdk).includes("secret"), inOwn: Object.getOwnPropertyNames(sdk).includes("secret"), inInspect: Bun.inspect(sdk).includes("leaked-secret"), inJson: (() => { try { return JSON.stringify(sdk).includes("leaked-secret"); } catch { return false; } })() })',
+    );
+    expect(res.ok).toBe(true);
+    expect(JSON.parse(JSON.parse(res.value ?? '""') as string)).toEqual({ secret: null, evSecret: null, inKeys: false, inOwn: false, inInspect: false, inJson: false });
+  });
+
+  test("the leased secret and account are struck from the child's environment", async () => {
+    const host = makeHost({ secret: "env-secret-0123456789abcdef0123456789abcdef", account: "RUNNER" });
+    const res = await host.evalSnippet('JSON.stringify({ secret: process.env.WRATHBENCH_SECRET ?? null, account: process.env.WRATHBENCH_ACCOUNT ?? null, bunSecret: Bun.env.WRATHBENCH_SECRET ?? null })');
+    expect(res.ok).toBe(true);
+    expect(JSON.parse(JSON.parse(res.value ?? '""') as string)).toEqual({ secret: null, account: null, bunSecret: null });
+    // The session still works: the client read and kept the secret before it
+    // was struck.
+    expect((await host.evalSnippet("typeof sdk.createSession")).value).toBe('"function"');
   });
 
   test("the child env is exactly the allowlist: host credentials never reach a snippet", async () => {
@@ -328,6 +390,12 @@ describe("sandbox evaluation", () => {
       expect(keys).not.toContain("OPENCODE_KEY");
       expect(keys).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
       for (const k of Object.keys(prefixed)) expect(keys).not.toContain(k);
+      // The leased secret and the bound account reach the child's spawn env but
+      // entry.ts strikes them before any snippet runs, so even the credential
+      // the child legitimately uses is not readable from its own environment
+      // (#74; operator, 2026-10-19).
+      expect(keys).not.toContain("WRATHBENCH_SECRET");
+      expect(keys).not.toContain("WRATHBENCH_ACCOUNT");
     } finally {
       delete process.env["WB_CANARY_SECRET"];
       delete process.env["OPENROUTER_KEY"];
