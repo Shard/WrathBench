@@ -8,6 +8,9 @@
  *                  loop; `tickLive` keeps it live while the rig runs
  *   fixture-ended  terminated `episode-limit` half an hour ago, two and a half
  *                  hours of trace to replay
+ *   fixture-e90, fixture-reference
+ *                  two finished `e90` runs, a model's row and the scripted
+ *                  reference's line, for the ladder (`writeLadderRun`)
  *
  * Both carry a character sheet on the trace (money, worn and carried items, a
  * quest log with one quest that completes, one in progress and one of four
@@ -20,7 +23,8 @@
 
 import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadRunConfig } from "../../runner/src/config";
+import { comparabilityOf } from "../../runner/src/comparability";
+import { loadRunConfig, unscoredStamp } from "../../runner/src/config";
 import { Trajectory } from "../../runner/src/trajectory";
 import type { TraceDict, TraceKeyData, TraceRow } from "../../runner/src/trace-row";
 import { TRACE_WINDOW_MS } from "../../runner/src/trace-row";
@@ -241,6 +245,40 @@ function writeRun(runsDir: string, spec: Spec, ended: number | null): Trajectory
   return traj;
 }
 
+/**
+ * Two finished `e90` runs for the ladder: a model's, which is a row, and the
+ * scripted reference's, which is only the labelled line under the table. Both
+ * are stamped like a launch stamps them, so the ladder reads them as members
+ * and non-members of the tier for the same reasons a real run's are.
+ */
+export const E90_RUN = "fixture-e90";
+export const REFERENCE_RUN = "fixture-reference";
+
+function writeLadderRun(runsDir: string, runId: string, raw: Record<string, unknown>, level: number, startedAt: number): void {
+  const dir = join(runsDir, runId);
+  mkdirSync(dir, { recursive: true });
+  let clock = startedAt;
+  const traj = new Trajectory(dir, { now: () => clock });
+  const config = { ...loadRunConfig({ episode: "e90", account: "FIXTURE", ...raw }), runId, token: `${runId}-fixture-token-000000000000`, runsDir };
+  const shakeout = unscoredStamp(config.driver);
+  traj.writeMeta({
+    runId,
+    harnessVersion: "harness-fixture",
+    startedAt,
+    config,
+    comparability: comparabilityOf(config, "harness-fixture"),
+    ...(shakeout !== undefined ? { shakeout } : {}),
+  });
+  for (let l = 1, t = startedAt + 60_000; l <= level; l++, t += 9 * 60_000) {
+    clock = t;
+    traj.append({ t: "response", turn: l, message: { role: "assistant", content: `Turn ${l}.` } });
+    traj.recordState(runId, { level: l, xp: 100 * l, map: 0, x: CENTRE.x, y: CENTRE.y, z: CENTRE.z, money: 50 * l, turn: l });
+  }
+  clock = startedAt + 90 * 60_000;
+  traj.setTermination(runId, "episode-limit", "episode limit reached");
+  traj.close();
+}
+
 const PAD = (character: string): string => `# ${character}: an invented plan
 
 ## Goal
@@ -288,6 +326,8 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
     scratchpad: PAD("Replayna"),
   };
   writeRun(runsDir, endedSpec, endedAt).close();
+  writeLadderRun(runsDir, E90_RUN, { driver: "openai", model: "fixture/e90-model", character: "Laddera" }, 6, at(now - 5 * 3_600_000));
+  writeLadderRun(runsDir, REFERENCE_RUN, { driver: "reference", character: "Routeric" }, 9, at(now - 4 * 3_600_000));
   const live = writeRun(runsDir, liveSpec, null);
   const heartbeat = join(runsDir, LIVE_RUN, "heartbeat");
   let last = liveSpec.traceTo;

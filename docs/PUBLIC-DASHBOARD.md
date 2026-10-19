@@ -658,9 +658,35 @@ different XP rates than 3.3.5a.
 Neither mark is a score, neither enters the row order, and neither is on the
 page: the rail that carried them was hard to read, and one entry per category
 is not enough data to earn the space. It returns if and when there are several
-runs to state a distribution from. Nothing else reads the figures. A scripted
-greedy-XP grinder and a deterministic walkthrough were considered as baselines
-and not chosen: no scripted agent is built and nothing new is run.
+runs to state a distribution from. Nothing else reads the figures. The rail
+itself came back for the scripted reference line, below.
+
+### The scripted reference line (operator, 2026-10-19)
+
+Under the rung table, on the rail the withdrawn references used, the ladder
+draws one labelled line: the level the **scripted reference run** of the tier
+and series in view reached at the clock's end. That run is a TypeScript
+program played through `run_snippet` against the SDK, under the models'
+sandbox, session, contracts and snippet timeout (docs/EPISODES.md, "The
+scripted reference run"). It is the ceiling on what this series' surface lets
+a player do. A human speedrun says nothing about that, which is why this line
+and not the band is the one drawn.
+
+- **It is never a row.** The run's result reads `unscored (scripted
+  reference)`, so `scored()` keeps it out of the table, the chart, every rung
+  count and the row order, whatever level it reached.
+- **Which run.** `scriptedReference` in `dashboard/src/lib/reference.ts` picks
+  the newest finished run with driver `reference`, episode in view and a level
+  reading. It is taken from the series-filtered set, before the reader's
+  filters: "exclude free" would otherwise hide it, since the reference bills
+  nothing, and a line that moved when a box was ticked would make its own
+  label false. A live run is still climbing and draws nothing.
+- **What the page shows.** The legend item is the level, linked to the run,
+  and the label `scripted reference, <tier>, harness <series>`. The hover
+  carries the route, the xp and the run id. Nothing else is printed: the rest
+  is here, per "No explanatory prose on the page" above.
+- **No line** before a series' reference run has finished, on a tier it was
+  not run on, and on freeplay.
 
 ## The social card
 

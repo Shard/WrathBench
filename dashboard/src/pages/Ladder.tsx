@@ -75,6 +75,7 @@ import {
   representativeEfforts,
 } from "../lib/ladderfilter";
 import { resolvedSummary } from "../lib/models";
+import { type ReferenceMark, type ReferenceScale, scriptedReference, scriptedReferenceScale } from "../lib/reference";
 import { fmtWhen, modelDisplay, shortRunId } from "../lib/format";
 import { statusTitle, statusTone } from "../lib/runs";
 import { poll } from "../lib/poll";
@@ -250,6 +251,22 @@ export default function Ladder() {
   const billingUnknown = (): boolean =>
     excludeFree() && all().length > 0 && !billingKnown(all());
   const rows = createMemo(() => ladderRows(runs()));
+  /*
+   * The scripted reference line, from the series-filtered set before the
+   * reader's filters (`scriptedReference`); the rows on screen only decide how
+   * far the rail stretches. Never a row: its result is unscored, so `rows`
+   * above cannot hold it.
+   */
+  const reference = createMemo((): ReferenceScale | null =>
+    freeplay()
+      ? null
+      : scriptedReferenceScale({
+          episode: episode(),
+          series: seriesFilter.series(),
+          reference: scriptedReference(all(), episode()),
+          reached: rows().reduce<number | null>((m, r) => (r.bestLevel === null ? m : Math.max(m ?? 0, r.bestLevel)), null),
+        }),
+  );
   return (
     <div class="page">
       <Show when={feed.error !== undefined}>
@@ -464,6 +481,8 @@ export default function Ladder() {
           </table>
         </div>
 
+        <Show when={reference()}>{(ref) => <ReferenceStrip scale={ref()} />}</Show>
+
         <h2 class="section">the rungs, and how each is decided</h2>
         <div class="scroller">
           <table>
@@ -579,6 +598,64 @@ function CharacterTable(props: { rows: readonly CharacterRow[] }) {
           </Show>
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/**
+ * The scripted reference, as a labelled line on a level scale under the table.
+ *
+ * The rail the withdrawn reference lines used, carrying one mark now: the
+ * scripted reference run of this tier and series (`lib/reference.ts`). It sits
+ * below the table rather than inside it, because the rung table scrolls
+ * sideways on a phone and a reference behind a scroll is not one. The rail is
+ * percentage-positioned HTML so it needs no measuring, and the legend carries
+ * the number, linked to the run, so nothing has to be read off the rail. What
+ * the line is, is on the hover and in docs/PUBLIC-DASHBOARD.md, never in a
+ * paragraph on the page.
+ */
+function ReferenceStrip(props: { scale: ReferenceScale }) {
+  const span = (): number => Math.max(props.scale.max - props.scale.min, 1);
+  /** A level's position along the rail, as a percentage. */
+  const at = (level: number): string => `${(((level - props.scale.min) / span()) * 100).toFixed(2)}%`;
+  /** Every level the rail labels: the ends and each mark. */
+  const ticks = (): number[] =>
+    [...new Set([props.scale.min, ...props.scale.marks.map((m) => m.low), props.scale.max])].sort((a, b) => a - b);
+  const aria = (): string =>
+    `A level scale from L${props.scale.min} to L${props.scale.max} carrying ${props.scale.marks
+      .map((m: ReferenceMark) => `${m.label} at L${m.low}`)
+      .join(" and ")}`;
+  return (
+    <div class="reference">
+      <div class="reference-rail" role="img" aria-label={aria()} title={aria()}>
+        <For each={props.scale.marks}>
+          {(m) => <span class={`ref-mark line ${m.id}`} style={{ left: at(m.low) }} title={`${m.label} — ${m.provenance}`} />}
+        </For>
+        <For each={ticks()}>
+          {(t) => (
+            <span class="ref-tick mono dim" style={{ left: at(t) }}>
+              L{t}
+            </span>
+          )}
+        </For>
+      </div>
+      <ul class="reference-legend dim">
+        <For each={props.scale.marks}>
+          {(m) => (
+            <li title={m.provenance}>
+              <span class="swatch line" aria-hidden="true" />
+              <Show when={m.runId} fallback={<span class="mono">L{m.low}</span>}>
+                {(id) => (
+                  <A class="mono" href={`/run/${encodeURIComponent(id())}`}>
+                    L{m.low}
+                  </A>
+                )}
+              </Show>{" "}
+              {m.label}
+            </li>
+          )}
+        </For>
+      </ul>
     </div>
   );
 }
