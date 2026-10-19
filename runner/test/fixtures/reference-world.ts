@@ -54,6 +54,8 @@ export class FakeWorld {
   selfKey: string | undefined;
   pad = "";
   calls: string[] = [];
+  /** The carried items and the free slots `state.bag()` answers. */
+  bag: { items: { bag: number; slot: number; guid: string; itemId: number; name: string; count: number; quality: number }[]; freeSlots: number } = { items: [], freeSlots: 16 };
   private next = 1000;
 
   constructor(
@@ -169,7 +171,7 @@ export class FakeWorld {
         const e = w.log.get(id);
         return e === undefined ? undefined : w.questEntry(e);
       },
-      bag: () => ({ items: [], freeSlots: 16, totalSlots: 16, bags: [] }),
+      bag: () => ({ items: w.bag.items, freeSlots: w.bag.freeSlots, totalSlots: 16, bags: [] }),
       spell: () => undefined,
       aurasOf: () => [],
     };
@@ -234,7 +236,12 @@ export class FakeWorld {
       },
       trainerList: async () => ({ ok: true, trainerType: 0, spells: [] }),
       buySpell: async () => ({ ok: true, status: "learned" }),
-      sellItem: async () => ({ ok: true, status: "sold" }),
+      sellItem: async (_v: unknown, guid: string) => {
+        w.bag.items = w.bag.items.filter((i) => i.guid !== guid);
+        w.bag.freeSlots++;
+        w.calls.push(`sell ${guid}`);
+        return { ok: true, status: "sold" };
+      },
       equipItem: async () => ({ ok: true, status: "equipped" }),
       castSpell: async () => ({ ok: true }),
       repop: async () => ({ ok: true }),
@@ -316,6 +323,7 @@ export function northshireOpening(): FakeWorld {
       { entry: 823, x: -8948, y: -132, z: 84, roles: ["questGiver"] },
       { entry: 197, x: -8903, y: -163, z: 82, roles: ["questGiver"] },
       { entry: 925, x: -8915, y: -215, z: 82, roles: ["trainer"] },
+      { entry: 78, x: -8909, y: -104, z: 82, roles: ["vendor"] },
       { entry: 196, x: -8869, y: -163, z: 81, roles: ["questGiver"] },
       { entry: 6, x: -8790, y: -165, z: 83 },
       { entry: 6, x: -8780, y: -175, z: 83 },

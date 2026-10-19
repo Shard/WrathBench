@@ -177,11 +177,12 @@ export const NORTHSHIRE_PALADIN: Route = {
   steps: [
     { kind: "visit", npc: NPC.willem, at: AT.willem, accept: [783, 5261] },
     { kind: "visit", npc: NPC.mcbride, at: AT.mcbride, turnIn: [783], accept: [7] },
-    { kind: "visit", npc: NPC.sammuel, at: AT.sammuel, turnIn: [3101] },
     { kind: "visit", npc: NPC.eagan, at: AT.eagan, turnIn: [5261], accept: [33] },
     { kind: "objectives", quests: [7, 33], drops: [MOB.youngWolf, MOB.timberWolf], areas: [...GROUND.vineyardEast, ...GROUND.wolves] },
     { kind: "visit", npc: NPC.eagan, at: AT.eagan, turnIn: [33] },
-    { kind: "visit", npc: NPC.mcbride, at: AT.mcbride, turnIn: [7], accept: [15] },
+    // The class letter is McBride's to offer once 7 is in (models' runs took it here, beside 15).
+    { kind: "visit", npc: NPC.mcbride, at: AT.mcbride, turnIn: [7], accept: [15, 3101] },
+    { kind: "visit", npc: NPC.sammuel, at: AT.sammuel, turnIn: [3101] },
     { kind: "visit", npc: NPC.willem, at: AT.willem, accept: [18, 3903] },
     { kind: "objectives", quests: [15], areas: GROUND.koboldCamp },
     { kind: "visit", npc: NPC.mcbride, at: AT.mcbride, turnIn: [15], accept: [21] },
@@ -225,8 +226,13 @@ export const NORTHSHIRE_PALADIN: Route = {
         MOB.mangyWolf,
         MOB.prowler,
         MOB.timberWolf,
+        MOB.koboldLaborer,
+        MOB.defiasThug,
       ],
-      areas: GROUND.elwynn,
+      // Elwynn's grounds are the unverified ones; the observed Northshire
+      // grounds close the loop, so a hunt that finds nothing there still finds
+      // something before the no-XP watchdog does.
+      areas: [...GROUND.elwynn, ...GROUND.vineyardSouth, ...GROUND.echoRidge],
     },
   ],
 };

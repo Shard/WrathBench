@@ -837,6 +837,17 @@ export function isUnscoredDriverName(driver: string | null | undefined): boolean
 }
 
 /**
+ * Whether a stored run was driven by something that is not a model, by its
+ * driver or by the stamp that driver leaves: either one is enough, so a row
+ * that lost one of the two still reads as what it was.
+ */
+export function isNotAModelRun(r: { driver?: string | null | undefined; unscored?: string | null | undefined }): boolean {
+  if (isUnscoredDriverName(r.driver)) return true;
+  const stamp = r.unscored;
+  return typeof stamp === "string" && Object.values(DRIVER_STAMPS).some((s) => s !== undefined && stamp.startsWith(s));
+}
+
+/**
  * The stamp a run gets, or undefined for a run that can score.
  *
  * Two independent reasons a run never scores, and a run can carry both: the

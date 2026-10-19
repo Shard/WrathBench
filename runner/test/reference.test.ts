@@ -17,6 +17,7 @@ import {
   DRIVERS,
   REFERENCE_STAMP,
   STUB_STAMP,
+  isNotAModelRun,
   isUnscoredDriver,
   isUnscoredDriverName,
   loadRunConfig,
@@ -79,6 +80,28 @@ describe("the program", () => {
     expect(world.calls[0]).toBe("createSession Kobaru 1/2");
   });
 
+  test("full bags divert to the vendor only for junk, and never park the character there", async () => {
+    const world = northshireOpening();
+    const env = { ...world.ambient(), mem: {} } as unknown as ReferenceEnv;
+    const args = { cursor: 0, budgetMs: 20_000, race: 1, class: 2 };
+    await referenceTick(env, NORTHSHIRE_PALADIN, args);
+    const item = (i: number, quality: number) => ({ bag: 255, slot: 23 + i, guid: `item-${i}`, itemId: 100 + i, name: `i${i}`, count: 1, quality });
+    // Full of white gear and quest items: nothing a vendor visit frees, so the step plays on.
+    world.bag = { items: [item(0, 1), item(1, 1)], freeSlots: 0 };
+    const playing = await referenceTick(env, NORTHSHIRE_PALADIN, args);
+    expect(playing.advance).toBe(true);
+    expect(world.calls.some((c) => c === "moveTo -8909,-104")).toBe(false);
+    // Junk in full bags: one visit sells it, then the vendor is not visited again for a while.
+    world.bag = { items: [item(0, 1), item(1, 0), item(2, 0)], freeSlots: 0 };
+    const selling = await referenceTick(env, NORTHSHIRE_PALADIN, { ...args, cursor: 1 });
+    expect(selling.advance).toBe(false);
+    expect(world.calls.filter((c) => c.startsWith("sell "))).toEqual(["sell item-1", "sell item-2"]);
+    world.bag = { items: [item(0, 1), item(3, 0)], freeSlots: 0 };
+    const after = await referenceTick(env, NORTHSHIRE_PALADIN, { ...args, cursor: 1 });
+    expect(after.advance).toBe(true);
+    expect(world.calls.filter((c) => c.startsWith("sell "))).toHaveLength(2);
+  });
+
   test("a step whose quest is not offered is noted and passed, never forced", async () => {
     const world = northshireOpening();
     const env = { ...world.ambient(), mem: {} } as unknown as ReferenceEnv;
@@ -108,7 +131,7 @@ describe("the route", () => {
     expect(copy[0]).toMatchObject({ kind: "visit", npc: 823 });
     expect(copy[0]!.accept).toContain(783);
     expect(copy[1]).toMatchObject({ kind: "visit", npc: 197, turnIn: [783], accept: [7] });
-    const taken = new Set<number>([3101]); // the class letter is in the bags from creation
+    const taken = new Set<number>();
     for (const s of steps) {
       if (s.kind === "objectives") for (const q of s.quests) expect(taken.has(q)).toBe(true);
       if (s.kind === "visit") {
@@ -285,6 +308,14 @@ describe("the stamp", () => {
     expect(unscoredStamp("reference")).toBe(REFERENCE_STAMP);
     expect(unscoredStamp("stub")).toBe(STUB_STAMP);
     expect(REFERENCE_STAMP).not.toBe(STUB_STAMP);
+  });
+
+  test("a stored run is not a model's by its driver or by its stamp, either one alone", () => {
+    expect(isNotAModelRun({ driver: "reference", unscored: null })).toBe(true);
+    expect(isNotAModelRun({ driver: null, unscored: REFERENCE_STAMP })).toBe(true);
+    expect(isNotAModelRun({ unscored: `${STUB_STAMP}; unscored (operator objective)` })).toBe(true);
+    expect(isNotAModelRun({ driver: "openai", unscored: "unscored (operator objective)" })).toBe(false);
+    expect(isNotAModelRun({ driver: "codex", unscored: null })).toBe(false);
   });
 
   test("a launch is e90's shape under the fixed loop, carrying the route as its model", () => {

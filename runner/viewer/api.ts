@@ -26,7 +26,7 @@ import { join } from "node:path";
 import { harnessSeries } from "../src/comparability";
 import { moduleAuthHeaders } from "../src/module-auth";
 import { EPISODES, EPISODE_IDS, EPISODE_LIST } from "../src/episodes";
-import { HARNESSES, isUnscoredDriverName } from "../src/config";
+import { HARNESSES, isNotAModelRun } from "../src/config";
 import { badEvidenceReason } from "../src/lapse";
 import type {
   ApiInfoResponse,
@@ -1090,7 +1090,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // A run whose driver is not a model ran an episode's shape and is no
         // member of its group: the scripted reference is a labelled line, not
         // a run of the tier (docs/METHODOLOGY.md, "Scoring").
-        const tagged = all.filter((r) => r.episode === tier.id && !isUnscoredDriverName(r.driver));
+        const tagged = all.filter((r) => r.episode === tier.id && !isNotAModelRun(r));
         const stamped = tagged.filter((r) => r.episodeSource === "stamped");
         // An attempt that never became an episode is not a member of the tier's
         // group — the same predicate the ladder filters on, so this
