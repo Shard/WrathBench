@@ -54,7 +54,7 @@ import { openRunDb } from "../runner/src/rundb";
 // overrides (runner/src/config.ts). Importing it keeps roster, fleet and
 // runner validating the same shape instead of three hand-rolled copies.
 import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
-import { DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
+import { compactWindowDriverRefusal, DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV, driverHasCompactWindow, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
 import { moduleAuthHeaders } from "../runner/src/module-auth";
 import { isOpenRouterBase, parseRouting, resolveRouting, routingLabel, type RoutingSpec } from "../runner/src/routing";
 import { DEFAULT_API_BASE, DEFAULT_API_KEY_ENV } from "../runner/src/providers";
@@ -101,9 +101,10 @@ export interface RosterSpec {
   /** Reasoning effort. Omitted -> the provider's own default, not a level. */
   effort?: string;
   /**
-   * `claude-code` only: the CLI's auto-compaction window, `auto` or 100k–1M
-   * tokens (`parseCompactWindow`). Omitted or `auto` -> the CLI's own default.
-   * Part of the run's identity like effort (operator decision 2026-10-09).
+   * `claude-code` and `codex` only: the CLI's auto-compaction window, `auto`
+   * or 100k–1M tokens (`parseCompactWindow`). Omitted or `auto` -> the CLI's
+   * own default. Part of the run's identity like effort (operator decisions
+   * 2026-10-09, and 2026-10-11 for codex).
    */
   compactWindow?: string;
   apiBase?: string;
@@ -541,11 +542,11 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       throw new Error(`roster entry ${s.model}: wikiCoords needs the reference wiki, and this entry has wiki: false`);
     }
     // Canonicalised here too, for a hand-written roster that never went
-    // through `parseFleet`; refused off claude-code, never ignored.
+    // through `parseFleet`; refused off the CLI harnesses, never ignored.
     let compactWindow: string | undefined;
     if (s.compactWindow !== undefined) {
-      if (driver !== "claude-code") {
-        throw new Error(`roster entry ${s.model}: compactWindow is the Claude Code CLI's auto-compaction window — the ${driver} driver has none`);
+      if (!driverHasCompactWindow(driver)) {
+        throw new Error(`roster entry ${s.model}: ${compactWindowDriverRefusal(driver)}`);
       }
       try {
         compactWindow = parseCompactWindow(s.compactWindow);

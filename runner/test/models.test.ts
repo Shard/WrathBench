@@ -1223,6 +1223,38 @@ describe("the claude-code compaction window is part of an entry's identity", () 
     expect(projectModel(small, [run(1)], DEFAULT_POLICY, { now: NOW3 }).perEpisode.e360?.attempts ?? 0).toBe(0);
   });
 
+  test("a probe whose arm set the window is the entry's it ran as, by its stamp; a windowed entry's runs stay its own", () => {
+    const astra: RosterModel = { name: "astra", model: "gpt-6-astra", effort: "high", driver: "codex", tier: "t1" };
+    const astra200: RosterModel = { ...astra, name: "astra-200k", compactWindow: "200k" };
+    const probe = (i: number, arm: string, window: string | undefined, over: Partial<RunFact> = {}): RunFact =>
+      run(i, {
+        model: "gpt-6-astra",
+        effort: "high",
+        episode: "probing",
+        campaign: "compact-window",
+        campaignVersion: 1,
+        cell: "a",
+        ref: "astra",
+        arm,
+        ...(window !== undefined ? { compactWindow: window } : {}),
+        ...over,
+      });
+    const runs = [probe(1, "auto", undefined), probe(2, "w200k", "200k"), probe(3, "w300k", "300k", { live: true, terminationReason: null, endedAt: null, subscription: "CODEX_HOME_2" })];
+    // Every arm's run is the entry's: the arm's window is not the entry's identity.
+    expect(projectModel(astra, runs, DEFAULT_POLICY, { now: NOW3 }).perEpisode.probing!.attempts).toBe(3);
+    // Not a windowed copy's, whose identity the 200k arm's run shares: the
+    // stamp names the entry it ran as.
+    expect(projectModel(astra200, runs, DEFAULT_POLICY, { now: NOW3 }).perEpisode.probing?.attempts ?? 0).toBe(0);
+    // The copy's own probes are its, on its own window only.
+    const own = [probe(5, "auto", "200k", { ref: "astra-200k" }), probe(6, "w300k", "300k", { ref: "astra-200k" })];
+    expect(projectModel(astra200, own, DEFAULT_POLICY, { now: NOW3 }).perEpisode.probing!.attempts).toBe(1);
+    // The live 300k arm's lane is the entry's, so a restart sees the lane taken.
+    expect(liveSubscriptions(runs, [astra, astra200]).get("astra")).toBe("CODEX_HOME_2");
+    // A run with no roster stamp still matches by identity alone.
+    expect(projectModel(astra, [probe(4, "w200k", "200k", { ref: null })], DEFAULT_POLICY, { now: NOW3 }).perEpisode.probing?.attempts ?? 0).toBe(0);
+    expect(projectModel(astra200, [probe(4, "w200k", "200k", { ref: null })], DEFAULT_POLICY, { now: NOW3 }).perEpisode.probing!.attempts).toBe(1);
+  });
+
   test("a run's window is read off its tuple, then its config, and absent stays absent", () => {
     const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-window-facts-"));
     try {
