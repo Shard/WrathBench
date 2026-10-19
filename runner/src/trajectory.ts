@@ -248,6 +248,20 @@ export interface ItemSample {
  *   sides of the window as soon as the trade stops being open, so by the time a
  *   sample lands only the completion itself survives. Two completions inside
  *   one sampling gap record one — the usual lower bound.
+ * - `group` / `instance` / `kill`: the party records (docs/proposals/
+ *   GROUP-PLAY.md §6), latched in the sandbox child off the packets the server
+ *   sends (`sandbox/party-watch.ts`), never off a map id read from a state
+ *   sample. `group` is `SMSG_GROUP_LIST` as `state.group()` folds it —
+ *   joined, changed or left, guids and counts only, `count` the party's size
+ *   with self; a staged party's login list writes `joined`, which is the
+ *   record that the party existed for the run. `instance` is a map transfer
+ *   whose instance type changed, read off the `WB_AREA` that follows it
+ *   (`instanceType` is the module's `Map.dbc` reading): `entered` into a type
+ *   other than 0, `left` back to 0, ids only. `kill` is one
+ *   `SMSG_PARTYKILLLOG` whose victim is of rank 1 or above (or of a rank the
+ *   creature query never answered), with the victim's template `entry` and
+ *   `rank`, and `self` when this character struck the blow. `observedTs` is
+ *   the packet's own timestamp on all three.
  */
 export type MilestoneLine =
   | {
@@ -322,6 +336,37 @@ export type MilestoneLine =
   | {
       kind: "trade";
       /** The cache's stamp for the completion packet; the dedup key. */
+      observedTs?: number | undefined;
+      turn?: number | undefined;
+    }
+  | {
+      kind: "group";
+      event: "joined" | "changed" | "left";
+      groupGuid?: string | undefined;
+      leaderGuid?: string | undefined;
+      /** The other members' guids, in the server's order. */
+      members: string[];
+      /** The party's size, self included; 0 on `left`. */
+      count: number;
+      observedTs?: number | undefined;
+      turn?: number | undefined;
+    }
+  | {
+      kind: "instance";
+      event: "entered" | "left";
+      map: number;
+      instanceType: number;
+      from: { map: number; instanceType: number };
+      observedTs?: number | undefined;
+      turn?: number | undefined;
+    }
+  | {
+      kind: "kill";
+      killerGuid: string;
+      victimGuid: string;
+      entry?: number | undefined;
+      rank?: number | undefined;
+      self: boolean;
       observedTs?: number | undefined;
       turn?: number | undefined;
     };

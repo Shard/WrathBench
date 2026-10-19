@@ -80,3 +80,25 @@ export function seedPublished(store: Pick<ConfigStore, "publishDefinition" | "se
   for (const pub of Object.values(defs)) store.publishDefinition(pub);
   store.seed(doc);
 }
+
+/** The five members a party fixture stages: the Deadmines roles, invented names. */
+export const PARTY_MEMBERS = [
+  { id: "tank", role: "tank", race: 1, class: 1, character: "Aldric", objective: "You are Aldric, the party's tank." },
+  { id: "healer", role: "healer", race: 1, class: 5, character: "Brenna", objective: "You are Brenna, the party's healer." },
+  { id: "mage", role: "damage", race: 7, class: 8, character: "Corvin", objective: "You are Corvin, the party's damage." },
+  { id: "rogue", role: "damage", race: 1, class: 4, character: "Dagny", objective: "You are Dagny, the party's damage." },
+  { id: "hunter", role: "damage", race: 3, class: 3, character: "Edrin", objective: "You are Edrin, the party's damage." },
+] as const;
+
+/** A party definition: one cell (the party, carrying the leader's start), staged at level 20. */
+export function partyDefinition(over: Partial<CampaignDefinition> = {}): CampaignDefinition {
+  return definition({
+    id: "deadmines",
+    cells: [{ id: "party", race: 1, class: 1 }],
+    stopAtLevel: null,
+    budget: { episodeMs: 14_400_000, idleMs: 1_200_000, noXpMs: null, maxToolCalls: 8000 },
+    start: { staged: "moonbrook-mine", level: 20 },
+    party: { size: 5, members: PARTY_MEMBERS.map((m) => ({ ...m })) },
+    ...over,
+  });
+}

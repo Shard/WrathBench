@@ -62,7 +62,7 @@ import { harnessSeries } from "./comparability";
 import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isCodexHomeEnvName, isDriver, isTokenEnvName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
-import { badEvidenceReason, neverStale, OFFLINE_PAUSE, SUBSCRIPTION_PAUSE, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
+import { badEvidenceReason, neverStale, OFFLINE_PAUSE, PARTY_PAUSE, SUBSCRIPTION_PAUSE, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
 import { parseSubscriptionUsage, subscriptionLaneOf, type SubscriptionUsage } from "./subscription-usage";
 import { billingOf, type Billing } from "./model-cost";
 import { hostOfBase, isOpenCodeGoBase, platformOfBase } from "./platform";
@@ -371,13 +371,15 @@ export const RESUME_RECORD = "resume";
  * (`operator-pause`), its runner died before it could write a verdict
  * (`offline`, derived and never on disk), or the subscription usage gate
  * stopped a freeplay run at the freeplay threshold (`subscription-budget`,
- * operator 2026-10-16). All three are the harness's own doing, so the pause
+ * operator 2026-10-16), or a party member was paused because another member
+ * paused first (`party-paused`, whose party waits on that member's own
+ * pause). All four are the harness's own doing, so the pause
  * streak neither counts them nor resets on them; `resumeNotBefore` brings the
- * first two back without cooling and the third at its window's reset, under
+ * first two and the fourth back without cooling and the third at its window's reset, under
  * the lane gate. Every other pause — a provider's refusal, a dead login, a CLI
  * failing on its host, a stalled observation — is on the ladder.
  */
-export const LADDER_EXEMPT_PAUSES: ReadonlySet<string> = new Set(["operator-pause", OFFLINE_PAUSE, SUBSCRIPTION_PAUSE]);
+export const LADDER_EXEMPT_PAUSES: ReadonlySet<string> = new Set(["operator-pause", OFFLINE_PAUSE, SUBSCRIPTION_PAUSE, PARTY_PAUSE]);
 
 /** Whether a pause of this reason cools on the backoff ladder and counts toward its streak. */
 export function onPauseLadder(reason: unknown): boolean {
@@ -618,6 +620,15 @@ export interface RunFact {
   campaignVersion?: number | null;
   ref?: string | null;
   arm?: string | null;
+  /**
+   * The party this run is a member of (`config.party`): its id — the attempt's
+   * run-id stem, shared by every member — which member, and the size. Null on
+   * every run that is not a party member; optional so a fact built by hand
+   * need not spell it. A party is one attempt, so a campaign square tallies
+   * parties by this id (`campaignSquares`) and the resume planner brings a
+   * paused party back whole.
+   */
+  party?: { id: string; member: string; size: number } | null;
   /**
    * The Claude subscription lane this run bills, as the env var NAME holding
    * its token (`RunConfig.subscription`); null on anything that is not a
@@ -1202,6 +1213,15 @@ export function tallyRecordsCached(
  * Tolerant everywhere: a run mid-write or an unreadable database degrades to
  * "no data", never to an exception that costs the whole projection.
  */
+/** `config.party` as a fact reads it: id, member and size, or null when the run is no party member. */
+function partyOfConfig(p: { id?: unknown; member?: unknown; size?: unknown } | undefined): RunFact["party"] {
+  if (p === undefined || p === null || typeof p !== "object") return null;
+  const id = str(p.id);
+  const member = str(p.member);
+  const size = num(p.size);
+  return id === null || member === null || size === null ? null : { id, member, size };
+}
+
 export function readRunFact(
   runsDir: string,
   runId: string,
@@ -1226,6 +1246,7 @@ export function readRunFact(
       campaignVersion?: unknown;
       ref?: unknown;
       arm?: unknown;
+      party?: { id?: unknown; member?: unknown; size?: unknown };
       subscription?: unknown;
       driver?: unknown;
       apiBase?: unknown;
@@ -1276,6 +1297,7 @@ export function readRunFact(
     campaignVersion: num(meta.config?.campaignVersion),
     ref: str(meta.config?.ref),
     arm: str(meta.config?.arm),
+    party: partyOfConfig(meta.config?.party),
     subscription: str(meta.config?.subscription),
     driver: str(meta.config?.driver),
     subscriptionUsage: parseSubscriptionUsage(meta.subscriptionUsage) ?? null,
@@ -1403,7 +1425,7 @@ export function runFactCacheVersion(): string {
     .update(
       [
         String(RUN_FACT_CACHE_SCHEMA),
-        ...[readRunFact, runFactKey, tallyRecords, RecordCountScanner, harnessSeries, isEpisodeId, heartbeatAt, openRunDb, str, num, parseSubscriptionUsage, subscriptionLaneOfConfig, goKeyEnvOf, isOpenCodeGoBase, billingOf].map(String),
+        ...[readRunFact, partyOfConfig, runFactKey, tallyRecords, RecordCountScanner, harnessSeries, isEpisodeId, heartbeatAt, openRunDb, str, num, parseSubscriptionUsage, subscriptionLaneOfConfig, goKeyEnvOf, isOpenCodeGoBase, billingOf].map(String),
         JSON.stringify([EPISODE_IDS, MODEL_RESPONSE_RECORD, HEARTBEAT_FILE]),
       ].join("\n"),
     )

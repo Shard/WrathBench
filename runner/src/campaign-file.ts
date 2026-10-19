@@ -37,6 +37,7 @@ import {
   type CampaignDefinition,
 } from "./campaign-def";
 import type { PublishedCampaign } from "./campaigns";
+import { partyLaunchProblem, partyLaunchSchema, type PartyLaunch } from "./party";
 
 /** The file a probe's run directory holds; one of the `LAUNCH_FILES`. */
 export const CAMPAIGN_FILE = "campaign.json";
@@ -52,6 +53,8 @@ export const campaignFileSchema = z
     cell: z.unknown(),
     arm: z.unknown(),
     definition: campaignDefinitionSchema,
+    /** A party member's launch: the party id, which member this run is, and every member's run. */
+    party: partyLaunchSchema.optional(),
   })
   .strict();
 
@@ -64,6 +67,12 @@ export interface CampaignFile {
   cell: CampaignCell;
   arm: CampaignArm;
   definition: CampaignDefinition;
+  /**
+   * A party definition's launch half, one per member (`party.ts`): absent on
+   * every file that is not a party member's. A file of a party definition
+   * without it is a square's file before the spawn has placed its members.
+   */
+  party?: PartyLaunch;
 }
 
 /** A campaign file that cannot be built or read. The message is the operator's whole notice. */
@@ -119,7 +128,21 @@ export function parseCampaignFile(raw: unknown, where = CAMPAIGN_FILE): Campaign
   if (cell === undefined) throw new CampaignFileError(`${where}: its cell is not one of ${campaignRef(def)}'s`);
   const arm = def.arms.find((a) => canonicalJson(a) === canonicalJson(f.arm));
   if (arm === undefined) throw new CampaignFileError(`${where}: its arm is not one of ${campaignRef(def)}'s`);
-  return { campaign: f.campaign, version: f.version, hash: f.hash, source: f.source, cell, arm, definition: def };
+  if (f.party !== undefined) {
+    if (def.party === undefined) throw new CampaignFileError(`${where}: names a party member, and ${campaignRef(def)} is not a party`);
+    const problem = partyLaunchProblem(def.party, f.party);
+    if (problem !== null) throw new CampaignFileError(`${where}: its party is not ${campaignRef(def)}'s — ${problem}`);
+  }
+  return {
+    campaign: f.campaign,
+    version: f.version,
+    hash: f.hash,
+    source: f.source,
+    cell,
+    arm,
+    definition: def,
+    ...(f.party !== undefined ? { party: f.party } : {}),
+  };
 }
 
 /** Read and check a campaign file from disk. */
@@ -203,6 +226,12 @@ async function main(argv: string[]): Promise<number> {
     console.error(
       `campaign-file: arm ${file.arm.id} of ${ref} pins ${file.arm.image !== undefined ? `image ${file.arm.image}` : `command ${file.arm.command!.join(" ")}`} — ` +
         "a hand launch runs this image's run.ts; let the fleet launch it in a run pod",
+    );
+    return 2;
+  }
+  if (file.definition.party !== undefined) {
+    console.error(
+      `campaign-file: ${ref} is a party of ${file.definition.party.size} — its members are staged, launched and stopped together by the fleet's roster, never one by hand`,
     );
     return 2;
   }

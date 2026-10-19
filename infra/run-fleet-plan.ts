@@ -45,7 +45,7 @@ import { cellDimensions } from "../runner/src/campaign-def";
 import { campaignFileOf, type CampaignFile } from "../runner/src/campaign-file";
 import { DEFAULT_CLAUDE_TOKEN_ENV, type TerminationReason } from "../runner/src/config";
 import { isScoredEpisode } from "../runner/src/episodes";
-import { classifyLapse, OFFLINE_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
+import { classifyLapse, OFFLINE_PAUSE, PARTY_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
 import { jobHoldOf, laneOfEntry, laneOfRun, type FleetSubscriptionGate } from "./run-fleet-gate";
 import {
   ACCOUNT_CLASSES,
@@ -937,6 +937,10 @@ export function providerResetOf(pause: NonNullable<RunFact["pause"]>): number | 
  */
 export function resumeNotBefore(pause: NonNullable<RunFact["pause"]>): number | "never" | null {
   if (pause.reason === "operator-pause") return null;
+  // A party member paused because another member did: the party comes back
+  // when that member's own pause says, which `planResumes` asks of the whole
+  // party at once, so this member waits on nothing of its own.
+  if (pause.reason === PARTY_PAUSE) return null;
   // The subscription gate stopped a freeplay run (operator, 2026-10-16): it
   // waits for the window's reset, and is on no ladder at all — the lane gate
   // (`subscriptionHold`) is what holds it while the window stays over.

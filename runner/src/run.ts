@@ -53,7 +53,7 @@ import { characterOwners, clearAccountCharacters } from "./hygiene";
 import { leaseRunSecret, releaseSessionSecret } from "./module-auth";
 import { comparabilityOf, fetchServerBuild, sameComparability } from "./comparability";
 import { CampaignLaunchError, RUN_IMAGE_ENV, campaignLaunch } from "./campaign-launch";
-import { holdsOnlyLaunchFiles } from "./campaign-file";
+import { holdsOnlyLaunchFiles, readCampaignFile } from "./campaign-file";
 import { RunArgsError, parseRunArgs } from "./run-flags";
 import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
 import { openWikiBundle, wikiBundleMeta } from "./wiki";
@@ -80,7 +80,7 @@ import {
 } from "./config";
 import { STALL_PAUSE, SUBSCRIPTION_PAUSE } from "./lapse";
 import { runLoop, type StopRequest } from "./loop";
-import { continuedSessionNote, freshCharacterNote, resumeSessionNote } from "./prompt";
+import { continuedSessionNote, freshCharacterNote, resumeSessionNote, stagedCharacterNote } from "./prompt";
 import { CLIENT_CACHE_FILE, ClientCacheStore } from "./sandbox/client-cache";
 import { SandboxHost } from "./sandbox/host";
 import { EpisodicLog } from "./episodic";
@@ -358,6 +358,23 @@ export function assertRunDirFree(runsDir: string, runId: string): void {
   }
 }
 
+/**
+ * The level a staged start was staged at: the campaign definition's
+ * `start.level`, read from the launch's campaign file. Undefined when the
+ * launch names none or it does not read — `campaignLaunch` has already
+ * refused that launch by then, so this is only belt and braces.
+ */
+export function stagedLevelOf(args: Readonly<Record<string, string | boolean>>): number | undefined {
+  const path = args["campaign-file"];
+  if (typeof path !== "string") return undefined;
+  try {
+    const start = readCampaignFile(path).definition.start;
+    return typeof start === "object" ? start.level : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The predecessor's last recorded level/xp, read-only; null when there is none. */
 function lastStateIn(dir: string, runId: string): { level?: number; xp?: number } | null {
   const path = join(dir, "run.sqlite");
@@ -432,6 +449,21 @@ async function main(): Promise<void> {
     );
     process.exit(2);
   }
+  /*
+   * `--character` is a character the operator staged (a party member, a staged
+   * campaign start): its race and class are the staging's, it is never
+   * created, and a resume or a continuation already knows its character.
+   * `campaign-launch.ts` decides which launches may name one at all.
+   */
+  if (args["character"] !== undefined) {
+    const clash = (["race", "class", "resume", "continue-from"] as const).filter((f) => args[f] !== undefined);
+    if (clash.length > 0) {
+      console.error(
+        `--character launches on a staged character, whose race and class are the staging's and which a resume or a continuation already names; it cannot be given with ${clash.map((f) => `--${f}`).join(", ")}`,
+      );
+      process.exit(2);
+    }
+  }
   if (args["episode"] !== undefined && !isEpisodeId(args["episode"])) {
     console.error(`unknown --episode ${String(args["episode"])} (one of: ${EPISODE_IDS.join(", ")})`);
     process.exit(2);
@@ -505,6 +537,14 @@ async function main(): Promise<void> {
       process.exit(2);
     }
   }
+  /**
+   * The character the operator staged for this run (`--character`, through
+   * the campaign file), on a fresh launch only: a resume finds its character
+   * in its own config, like any other.
+   */
+  const staged = !resumed && args["character"] !== undefined ? config.character : undefined;
+  /** The level its staging put it at: the campaign definition's `start`, read from the campaign file. */
+  const stagedLevel = staged === undefined ? undefined : stagedLevelOf(args);
   /** The freeplay run this launch continues, once its predecessor checks out. */
   let continuation: Continuation | undefined;
   /** A predecessor named on the command line that is on disk nowhere. */
@@ -996,7 +1036,11 @@ async function main(): Promise<void> {
       // everything else on the account is the usual leftover — unless a run
       // that has not ended still owns it, or it is levelled and unaccounted
       // for (hygiene's own guard, from the run directories).
-      keep: [...(continuation !== undefined ? [continuation.character] : []), ...keepCharacters],
+      keep: [
+        ...(continuation !== undefined ? [continuation.character] : []),
+        ...(staged !== undefined ? [staged] : []),
+        ...keepCharacters,
+      ],
       owners: characterOwners(config.runsDir, config.account, config.runId),
       allowCharacterDelete,
     });
@@ -1020,7 +1064,8 @@ async function main(): Promise<void> {
     // A kept character is as taken as a slot-eater: `createSession` on its
     // name would reuse it, and the tripwire below would end the run. So is
     // one the guard refused to delete.
-    const keptOthers = hygiene.kept.filter((k) => continuation === undefined || k.name.toLowerCase() !== continuation.character.toLowerCase());
+    const ownName = continuation?.character ?? staged;
+    const keptOthers = hygiene.kept.filter((k) => ownName === undefined || k.name.toLowerCase() !== ownName.toLowerCase());
     takenNames = [...hygiene.leftover, ...keptOthers.map((k) => k.name), ...hygiene.protected.map((p) => p.name)];
     if (keptOthers.length > 0) {
       console.error(`[wrathbench] hygiene: kept ${keptOthers.map((k) => k.name).join(", ")} (another ref's freeplay character on this account)`);
@@ -1034,8 +1079,32 @@ async function main(): Promise<void> {
         `[wrathbench] hygiene: ${hygiene.leftover.length} leftover character(s) not cleared (${hygiene.leftover.join(", ")}) — proceeding, the model is told not to pick them`,
       );
     }
-    const own = continuation === undefined ? undefined : hygiene.kept.find((k) => k.name.toLowerCase() === continuation!.character.toLowerCase());
-    if (continuation !== undefined && own !== undefined) {
+    const own = ownName === undefined ? undefined : hygiene.kept.find((k) => k.name.toLowerCase() === ownName.toLowerCase());
+    if (staged !== undefined) {
+      // A staged character that is not on the account is a staging that did
+      // not land: nothing here can make one, and creating a fresh character
+      // in its place would run the attempt on the wrong start. Ended like a
+      // hygiene refusal — no response, archived — so the roster reads the
+      // verdict and the party's other members are ended with it.
+      if (own === undefined) {
+        const detail = `the staged character ${staged} is not on ${config.account} — the staging did not land`;
+        console.error(`[wrathbench] ${detail}`);
+        trajectory.setTermination(config.runId, "stale-character", detail);
+        trajectory.close();
+        try {
+          const moved = archiveIfNoResponses(config.runsDir, config.runId);
+          if (moved !== null) console.error(`[wrathbench] no model response — archived to ${moved}`);
+        } catch (err) {
+          console.error(`[wrathbench] could not archive ${config.runId}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        wiki?.close();
+        process.exit(1);
+      }
+      // The staging gave it its history on purpose: the freshness belt stays
+      // off, as on a continuation.
+      console.error(`[wrathbench] staged character ${own.name} (guid ${own.guid}) is on ${config.account}`);
+      trajectory.append({ t: "harness", kind: "staged-character", character: own.name, guid: own.guid });
+    } else if (continuation !== undefined && own !== undefined) {
       // The character is there: the chain goes on, and the freshness belt
       // stays off, as on a resume — this character is meant to have history.
       console.error(`[wrathbench] continuing ${continuation.from}: ${own.name} (guid ${own.guid}) is on ${config.account}`);
@@ -1119,7 +1188,20 @@ async function main(): Promise<void> {
               text: continueNote(continuation),
             } as const,
           ]
-        : [
+        : staged !== undefined
+          ? [
+              {
+                ts: Date.now(),
+                kind: "session_note",
+                text: stagedCharacterNote({
+                  character: staged,
+                  level: stagedLevel,
+                  raceName: raceName(config.race) ?? `race ${config.race}`,
+                  className: className(config.class) ?? `class ${config.class}`,
+                }),
+              } as const,
+            ]
+          : [
           {
             ts: Date.now(),
             kind: "session_note",

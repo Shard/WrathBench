@@ -18,8 +18,10 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { EPISODES, episodeIdSchema, matchesTier, watchdogsFor, type EpisodeId } from "./episodes";
-import { STALL_PAUSE, SUBSCRIPTION_PAUSE } from "./lapse";
+import { PARTY_PAUSE, STALL_PAUSE, SUBSCRIPTION_PAUSE } from "./lapse";
 import { routingSchema } from "./routing";
+import { CHARACTER_NAME_RULE, isValidCharacterName } from "./character-name";
+import { partyConfigSchema } from "./party";
 
 // ---------------------------------------------------------------- watchdogs
 
@@ -110,6 +112,14 @@ export const TERMINATION_REASONS = [
   // record that the square was tried, without which the scheduler re-picked
   // it every tick. Never the model's: no turn was played.
   "launch-failed",
+  // A member of a party (docs/proposals/GROUP-PLAY.md) whose run was ended
+  // because another member's ended first: the party is one attempt, so the
+  // first member to leave the world ends it for the rest. The detail names
+  // that member and its own verdict (`<member>: <reason>`); the roster writes
+  // it through this runner's own termination writer once the member has
+  // stopped (infra/party-fate.ts). Never written on a run that is not a party
+  // member.
+  "party-ended",
 ] as const;
 export type TerminationReason = (typeof TERMINATION_REASONS)[number];
 
@@ -134,6 +144,8 @@ export type TerminationReason = (typeof TERMINATION_REASONS)[number];
  * `subscription-budget` is a freeplay run stopped at its turn boundary because
  * its subscription lane's usage window reached the freeplay threshold
  * (`SUBSCRIPTION_PAUSE`, lapse.ts; `subscription-usage.ts`).
+ * `party-paused` is a party member paused because another member paused
+ * first (`PARTY_PAUSE`, lapse.ts): a party resumes whole or not at all.
  */
 export const PAUSE_REASONS = [
   "quota-exhausted",
@@ -143,26 +155,13 @@ export const PAUSE_REASONS = [
   "infrastructure-failed",
   STALL_PAUSE,
   SUBSCRIPTION_PAUSE,
+  PARTY_PAUSE,
 ] as const;
 export type PauseReason = (typeof PAUSE_REASONS)[number];
 
 // --------------------------------------------------------------- run config
 
-/**
- * The game's own character-name rules, checked before the server gets to:
- * 2-12 letters, and no three identical consecutive letters — the core refuses
- * that as CHAR_NAME_THREE_CONSECUTIVE (create result 98). One predicate for
- * every boundary that accepts or invents a name (this config, the fleet
- * roster, a campaign cell, the smokes' probeName), so a bad name is a named
- * error where it is WRITTEN, not a create-failure loop where it is played.
- * Both failure shapes happened on 2026-08-24: a 13-char roster name
- * respawn-looped the policy for two hours, and a generated triple
- * (`Bqeee…`) rolled back a worldserver deploy.
- */
-export const CHARACTER_NAME_RULE = "character must be 2-12 letters with no three identical in a row (the game's own naming rules)";
-export function isValidCharacterName(name: string): boolean {
-  return /^[A-Za-z]{2,12}$/.test(name) && !/(.)\1\1/i.test(name);
-}
+export { CHARACTER_NAME_RULE, isValidCharacterName } from "./character-name";
 
 /** Every driver a run can be started with. `stub` never scores. */
 export const DRIVERS = ["openai", "claude-code", "codex", "stub"] as const;
@@ -373,9 +372,12 @@ export const runConfigSchema = z.object({
   /**
    * The character the run is PLAYING — the name the model chose, written here
    * by `trajectory.setCharacter` once `createSession` lands and read back on
-   * `--resume`. It is never a launch input: nothing suggests a name and no
-   * flag sets one. Absent means the model has not named one yet, which is
-   * every run's first minute.
+   * `--resume`. A launch input in exactly one case: a run on a character the
+   * operator staged before it (`--character`, a party member), which keeps
+   * that character through hygiene the way a continuation keeps its
+   * predecessor's. Otherwise nothing suggests a name and no flag sets one,
+   * and absent means the model has not named one yet, which is every run's
+   * first minute.
    */
   character: z
     .string()
@@ -533,6 +535,15 @@ export const runConfigSchema = z.object({
    * (`level-target`). Set only from a campaign file's `stopAtLevel`.
    */
   stopAtLevel: z.number().int().min(2).max(80).optional(),
+  /**
+   * The party this run is a member of (docs/proposals/GROUP-PLAY.md): its id
+   * (the run-id stem), this member, its role, the size, and every member's
+   * run id, account and character, so the trajectories name each other.
+   * Stamped at launch from the run's `campaign.json`; absent on every run that
+   * is not a party member. Not in the comparability tuple: a party probe is
+   * unscored, and what a party key would mean is the promotion's to decide.
+   */
+  party: partyConfigSchema.optional(),
 
   /**
    * The episode tier this run was launched under (`runner/src/episodes.ts`).

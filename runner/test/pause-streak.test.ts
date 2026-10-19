@@ -131,7 +131,7 @@ describe("the pause streak", () => {
   });
 
   test("every pause but the exempt ones is on the ladder", () => {
-    expect([...LADDER_EXEMPT_PAUSES].sort()).toEqual(["offline", "operator-pause", "subscription-budget"]);
+    expect([...LADDER_EXEMPT_PAUSES].sort()).toEqual(["offline", "operator-pause", "party-paused", "subscription-budget"]);
     expect(onPauseLadder("operator-pause")).toBe(false);
     expect(onPauseLadder("offline")).toBe(false);
     // The subscription gate's own pause is the harness's: no rung, no streak.

@@ -15,12 +15,19 @@
  *   a launch flag. An arm's own args were checked against the same list when
  *   the definition was published.
  *
+ * A definition whose start is staged runs on a character the operator's
+ * stager made before the launch: the launch names it (`--character`), and a
+ * party member's must be the one its definition names for it. `--character`
+ * means nothing anywhere else — a fresh start's name is the model's — so it is
+ * refused on every other launch.
+ *
  * Fresh launches only. A `--resume` reloads the run's own stored config and
  * never comes through here.
  */
 
 import { readCampaignFile, CampaignFileError, type CampaignFile } from "./campaign-file";
-import { cellDimensions } from "./campaign-def";
+import { campaignRef, cellDimensions } from "./campaign-def";
+import { partyConfigOf, type PartyMember } from "./party";
 import { PROBE_SHAPE_FLAGS } from "./run-flags";
 
 export { PROBE_SHAPE_FLAGS } from "./run-flags";
@@ -55,6 +62,11 @@ export function campaignLaunch(
       );
     }
     if (args["ref"] !== undefined) throw new CampaignLaunchError("--ref records the roster entry a campaign launch was made as; pass it with --campaign-file");
+    if (args["character"] !== undefined) {
+      throw new CampaignLaunchError(
+        "--character launches on a character the operator staged, which only a campaign whose start is staged has; a fresh start's name is the model's to choose",
+      );
+    }
     return null;
   }
   if (typeof path !== "string") throw new CampaignLaunchError("--campaign-file takes the path of a campaign.json");
@@ -89,7 +101,28 @@ export function campaignLaunch(
       `arm ${file.arm.id} of ${ref} pins image ${file.arm.image}, and this process was not launched in it ($${RUN_IMAGE_ENV} is unset) — a pinned arm runs in a run pod`,
     );
   }
-  const dims = cellDimensions(file.definition, file.cell);
+  const def = file.definition;
+  const staged = def.start !== undefined && def.start !== "fresh";
+  const character = args["character"];
+  if (!staged && character !== undefined) {
+    throw new CampaignLaunchError(`${campaignRef(def)} starts fresh, on a character the model names and creates; --character is for a staged start`);
+  }
+  if (staged && (typeof character !== "string" || character.length === 0)) {
+    throw new CampaignLaunchError(`${campaignRef(def)} starts on a staged character: name it with --character <name>`);
+  }
+  let member: PartyMember | undefined;
+  if (def.party !== undefined) {
+    const launch = file.party;
+    if (launch === undefined) {
+      throw new CampaignLaunchError(`${campaignRef(def)} is a party of ${def.party.size}, and this campaign file names no member — a party launches through the fleet's roster`);
+    }
+    member = def.party.members.find((m) => m.id === launch.member);
+    if (member === undefined) throw new CampaignLaunchError(`--campaign-file: ${launch.member} is not a member of ${campaignRef(def)}'s party`);
+    if (character !== member.character) {
+      throw new CampaignLaunchError(`--character ${String(character)}: member ${member.id} of ${campaignRef(def)} is staged as ${member.character}`);
+    }
+  }
+  const dims = cellDimensions(def, file.cell, member);
   return {
     episode: "probing",
     campaign: file.campaign,
@@ -106,5 +139,8 @@ export function campaignLaunch(
     wiki: dims.wiki,
     ...(dims.objective !== undefined ? { objective: dims.objective } : {}),
     ...(dims.stopAtLevel !== undefined ? { stopAtLevel: dims.stopAtLevel } : {}),
+    // Only on a staged start, so every fresh probe's config is what it was.
+    ...(staged ? { character } : {}),
+    ...(def.party !== undefined && file.party !== undefined ? { party: partyConfigOf(def.party, file.party) } : {}),
   };
 }
