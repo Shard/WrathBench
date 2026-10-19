@@ -452,8 +452,11 @@ reconnect ladder gave up on, or after something called \`close()\` — so the ev
 missed in between arrive as one \`stream_gap\` and \`state\` is current again from
 the next packets on. A session the module no longer has is a refusal, not a
 reopen. (The library form \`connect(options): Promise<WrathClient>\` is for host
-code that builds its own client — not for snippets, where \`sdk\` already
-exists.) Then, on the client:
+code that builds its own client. A snippet cannot: \`sdk\` is the only client,
+it holds the session credential — which is not readable off it — and a client a
+snippet constructs for itself has no credential and no way to reach the module,
+so build nothing; if you lost \`sdk\` by overwriting it, just read it again, it
+is still there, and \`connect()\` reopens the stream.) Then, on the client:
 
 ${table(CLIENT_ENDPOINTS)}
 
