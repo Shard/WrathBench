@@ -1597,10 +1597,15 @@ bun wb run episode --driver reference --episode e90 --account PROBE
 
 It needs no key, no lane and no `--model`: the route is the model
 (`reference/<route>@<version>`). Nothing schedules it. The fleet config refuses
-`driver: reference`, and the scheduler counts it toward nothing, so it can run
-beside the fleet. The only thing it shares is the account, and `PROBE` is
-nobody's pool. It plays the full 90 minutes and ends `episode-limit`. A pause
-is not resumed. Check it with `bun wb inspect run <run-id>` and `bun wb
+`driver: reference`, and the scheduler counts it toward nothing. What it shares
+with everything else is the account. `PROBE` is in no pool, but other things
+log in on it by hand (`bun wb smoke preflight`, hand smokes), so run none of
+them on `PROBE` while a reference run holds it. The program never ends a run
+itself, so the verdict should be `episode-limit`. Until a first run has shown
+the route through, though, the Northshire arc is the confident part: its
+positions were observed in models' runs. Goldshire and the Elwynn grounds are
+not yet seen, and a hunt that finds nothing in view there is ended by `no-xp`.
+A pause is not resumed. Check it with `bun wb inspect run <run-id>` and `bun wb
 inspect trajectory <run-id> --grep 'REF'`. Every turn's result ends in one
 `[log] REF {…}` line: the step, `advance`, what the tick did, and the level, xp
 and health. A step stuck on `move …` or `npc … not in view` is a route

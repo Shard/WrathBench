@@ -327,12 +327,24 @@ export async function referenceTick(env: ReferenceEnv, route: Route, args: TickA
     return report(false);
   }
   mem["resting"] = false;
+  // Full bags divert to a vendor only when there is junk to sell, and not
+  // again for a while after a visit: bags full of what no vendor visit frees
+  // (white gear, quest items) must not park the character at the vendor.
   const bag = state.bag();
-  if ((bag.totalSlots > 0 && bag.freeSlots <= 1) || mem["bagsFull"] === true) {
+  const junk = bag.items.some((i) => i.quality === 0);
+  const vendorCooling = Date.now() < Number(mem["vendorAgainAt"] ?? 0);
+  if (junk && !vendorCooling && ((bag.totalSlots > 0 && bag.freeSlots <= 1) || mem["bagsFull"] === true)) {
     const me = here();
     const v = me === undefined ? undefined : [...route.vendors].sort((a, b) => dist(me, a.at) - dist(me, b.at))[0];
     if (v !== undefined && me !== undefined && dist(me, v.at) < 400) {
-      if (await sellJunk(v.npc, v.at)) mem["bagsFull"] = false;
+      if (await sellJunk(v.npc, v.at)) {
+        mem["bagsFull"] = false;
+        mem["vendorAgainAt"] = Date.now() + 10 * 60_000;
+      } else if (Number(mem["moveFailures"] ?? 0) >= 6) {
+        // A vendor that cannot be reached is not tried again for a while either.
+        mem["vendorAgainAt"] = Date.now() + 10 * 60_000;
+        mem["moveFailures"] = 0;
+      }
       return report(false);
     }
   }
