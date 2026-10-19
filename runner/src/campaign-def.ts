@@ -22,6 +22,7 @@
 import { z } from "zod";
 import { parseCompactWindow } from "./config";
 import { ARM_RESERVED_FLAGS, RUN_FLAGS, flagsOf } from "./run-flags";
+import { partyDefinitionSchema, type PartyMember } from "./party";
 
 /** Names a campaign id, a cell id and an arm id must all survive: safe in a run id and a path. */
 export const CAMPAIGN_NAME = /^[A-Za-z0-9._-]+$/;
@@ -88,6 +89,28 @@ const armSchema = z
   })
   .strict();
 
+/**
+ * Where a run of the definition starts. `fresh` (the default, and what a
+ * definition that says nothing means) is a level-1 character the model names
+ * and creates. `staged` is a character the operator's stager put in place
+ * before the launch — a fixture scenario applied to it, level and loadout
+ * included (the operator's loadout decision for the Deadmines party,
+ * 2026-10-19) — which the run is launched on by name (`--character`) and
+ * keeps through hygiene. `level` is the level the scenario stages, stated so
+ * the launch note can say it rather than assume it.
+ */
+const startSchema = z.union([
+  z.literal("fresh"),
+  z
+    .object({
+      /** The fixture scenario the stager applies (infra/fixtures/scenarios.ts). */
+      staged: nameSchema,
+      level: z.number().int().min(1).max(80),
+    })
+    .strict(),
+]);
+export type CampaignStart = z.infer<typeof startSchema>;
+
 /** A campaign definition, as `runner/campaigns/<id>@<version>.json` holds it. */
 export const campaignDefinitionSchema = z
   .object({
@@ -121,6 +144,18 @@ export const campaignDefinitionSchema = z
     resume: z.boolean(),
     /** Abandon an (assignment, arm, cell) square after this many launches, counted or not; null never. */
     maxAttemptsPerCell: z.number().int().positive().nullable(),
+    /**
+     * Where a run starts. Absent is `fresh`. Optional with no default, so a
+     * definition written before it hashes as it always did.
+     */
+    start: startSchema.optional(),
+    /**
+     * A party (docs/proposals/GROUP-PLAY.md): each square's launch is this
+     * many runs of the assignment's model at once, one staged character each,
+     * started, stopped and counted together. Absent on every definition that
+     * is not one; optional for the hash's sake like `start`.
+     */
+    party: partyDefinitionSchema.optional(),
   })
   .strict()
   .superRefine((d, ctx) => {
@@ -128,6 +163,34 @@ export const campaignDefinitionSchema = z
     for (const id of dupes(d.cells.map((c) => c.id))) ctx.addIssue({ code: "custom", path: ["cells"], message: `cell ${id} is declared twice` });
     for (const id of dupes(d.arms.map((a) => a.id))) ctx.addIssue({ code: "custom", path: ["arms"], message: `arm ${id} is declared twice` });
     if (d.wikiCoords && !d.wiki) ctx.addIssue({ code: "custom", path: ["wikiCoords"], message: "wikiCoords needs the reference wiki, and wiki is false" });
+    // The fleet launches a staged run on a character the definition names,
+    // and only a party names its characters; a single staged start would be
+    // a launch with nothing to launch on.
+    if (d.party === undefined && d.start !== undefined && d.start !== "fresh") {
+      ctx.addIssue({ code: "custom", path: ["start"], message: "a staged start names its characters in a party block; give party, or start fresh" });
+    }
+    if (d.party !== undefined) {
+      // Characters the model did not create: they are the stager's.
+      if (d.start === undefined || d.start === "fresh") {
+        ctx.addIssue({ code: "custom", path: ["start"], message: "a party starts on staged characters: give start { staged, level }" });
+      }
+      // Each member carries its own objective, rendered in its own block.
+      if (d.objective !== null) {
+        ctx.addIssue({ code: "custom", path: ["objective"], message: "a party's objective is per member (party.members[].objective); the top-level objective is null" });
+      }
+      // The cell is the party; its start reads as the leader's, so a reader
+      // of the cell is never told a start no member had.
+      const leader = d.party.members[0];
+      d.cells.forEach((c, i) => {
+        if (leader !== undefined && (c.race !== leader.race || c.class !== leader.class)) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["cells", i],
+            message: `a party's cell carries its leader's start (race ${leader.race}, class ${leader.class}), not race ${c.race}, class ${c.class}`,
+          });
+        }
+      });
+    }
     // Harness drift between builds is as large as a model difference, so the
     // arms of a comparison are always named builds: a floating arm would be
     // whatever master was on the day each of its runs launched.
@@ -288,6 +351,8 @@ export function startMismatch(
 export function cellDimensions(
   def: CampaignDefinition,
   cell: CampaignCell,
+  /** A party member: its own start and objective stand in for the cell's and the definition's. */
+  member?: PartyMember,
 ): {
   race: number;
   class: number;
@@ -298,14 +363,15 @@ export function cellDimensions(
   objective?: string;
   stopAtLevel?: number;
 } {
+  const objective = member !== undefined ? member.objective : def.objective;
   return {
-    race: cell.race,
-    class: cell.class,
+    race: member?.race ?? cell.race,
+    class: member?.class ?? cell.class,
     watchdogs: { idleMs: def.budget.idleMs, noXpMs: def.budget.noXpMs, episodeMs: def.budget.episodeMs },
     maxToolCalls: def.budget.maxToolCalls,
     wikiCoords: def.wikiCoords,
     wiki: def.wiki,
-    ...(def.objective !== null ? { objective: def.objective } : {}),
+    ...(objective !== null ? { objective } : {}),
     ...(def.stopAtLevel !== null ? { stopAtLevel: def.stopAtLevel } : {}),
   };
 }

@@ -9,12 +9,13 @@
 import { join } from "node:path";
 import type { RosterSpec } from "./run-roster";
 import { harnessSeries } from "../runner/src/comparability";
-import { compactWindowDriverRefusal, driverHasCompactWindow, harnessClash, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
+import { compactWindowDriverRefusal, driverHasCompactWindow, harnessClash, isCodexHomeEnvName, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
 import type { Billing } from "../runner/src/model-cost";
 import { isOpenRouterBase, parseRouting } from "../runner/src/routing";
 import { QUEUE_JOB_KEYS, rosterEntryRefusal, strictKeyWhy, unknownKeysOf } from "../runner/src/roster-refusal";
 import {
   applyPairRefusals,
+  campaignSquares,
   campaignWork,
   parseCampaignBlocks,
   pinnedCampaignJobName,
@@ -74,6 +75,12 @@ export interface JobSpawn {
   name: string;
   enabled: boolean;
   account: string;
+  /**
+   * A party's accounts, one per member in member order (`account` is the
+   * leader's, the first): the job holds all of them. Absent on every spawn
+   * that is not a party's, so a single run's spawn is what it was.
+   */
+  accounts?: string[];
   loop: boolean;
   /** Roster entries — the exact per-entry schema run-roster accepts. */
   entries: RosterSpec[];
@@ -211,6 +218,19 @@ export interface FleetJob {
   enabled: boolean;
   /** Set: the job is pinned to this account. Absent: the pool assigns one. */
   account?: string;
+  /**
+   * A party campaign's job (docs/proposals/GROUP-PLAY.md §1): one job, one
+   * roster process, every member's account in member order, `account` being
+   * the leader's. The spawn materialises one entry per member, launched,
+   * stopped and counted together. Never from the file.
+   */
+  accounts?: string[];
+  /**
+   * Set by `planResumes` on a paused party's job: the party id the members'
+   * run ids hang off, so the spawn names the paused runs rather than a fresh
+   * attempt's. Never from the file.
+   */
+  partyId?: string;
   source: JobSource;
   /**
    * Set on a job the scheduling policy made up, never on one from the file:
@@ -381,6 +401,8 @@ interface Pin {
   /** `accounts.pinned`'s value: a job's name, or `campaign <name>`. */
   readonly label: string;
   readonly account: string | undefined;
+  /** Every account the pin holds: `account`, or a party campaign's members' (`Campaign.accounts`). */
+  readonly accounts: readonly string[];
   /** Mutable: a refused pin is DISABLED in place, which is the enforcement. */
   enabled: boolean;
   /**
@@ -398,6 +420,7 @@ function pinsOf(jobs: readonly FleetJob[], campaigns: readonly Campaign[]): Pin[
     ...jobs.map((j) => ({
       get label() { return j.name; },
       get account() { return j.account; },
+      get accounts() { return j.account === undefined ? [] : [j.account]; },
       get enabled() { return j.enabled; },
       set enabled(v: boolean) { j.enabled = v; },
       jobNames: [j.name],
@@ -405,6 +428,7 @@ function pinsOf(jobs: readonly FleetJob[], campaigns: readonly Campaign[]): Pin[
     ...campaigns.map((c) => ({
       get label() { return `campaign ${c.name}`; },
       get account() { return c.account; },
+      get accounts() { return c.accounts ?? (c.account === undefined ? [] : [c.account]); },
       get enabled() { return c.enabled; },
       set enabled(v: boolean) { c.enabled = v; },
       jobNames: c.cells.flatMap((cell) => c.arms.map((arm) => pinnedCampaignJobName(c.name, cell.id, arm.id))),
@@ -447,17 +471,28 @@ function refuse(pin: Pin, refusals: ConfigRefusal[], why: string): void {
 export function applyPinAccountRules(pins: readonly Pin[], accounts: FleetAccounts, refusals: ConfigRefusal[]): void {
   const byAccount = new Map<string, string>();
   for (const pin of pins) {
-    if (pin.account === undefined || !pin.enabled) continue;
-    const key = pin.account.toUpperCase();
+    if (pin.accounts.length === 0 || !pin.enabled) continue;
+    // A party's pin holds every member's account, and loses all of them if any
+    // one clashes: half a party cannot run.
+    const why = pinClash(pin, accounts, byAccount);
+    if (why !== undefined) {
+      refuse(pin, refusals, why);
+      continue;
+    }
+    for (const a of pin.accounts) byAccount.set(a.toUpperCase(), pin.label);
+  }
+}
+
+/** Why one of a pin's accounts is not its to hold, or undefined. */
+function pinClash(pin: Pin, accounts: FleetAccounts, byAccount: ReadonlyMap<string, string>): string | undefined {
+  for (const account of pin.accounts) {
+    const key = account.toUpperCase();
     // One live session per account: two enabled pins on one account means one
     // of them spends the whole window waiting behind the other. The FIRST in
     // file order keeps the account, so which pin loses does not move when an
     // unrelated entry is added above it.
     const other = byAccount.get(key);
-    if (other !== undefined) {
-      refuse(pin, refusals, `account ${pin.account} is already ${other}'s — one enabled job per account`);
-      continue;
-    }
+    if (other !== undefined) return `account ${account} is already ${other}'s — one enabled job per account`;
     // Listing an account says who may SCHEDULE it; `enabled` says who HOLDS it,
     // and only an enabled pin holds. So a DISABLED pin may park on a listed
     // account (the burn switch on the paid account); an enabled one may not, or
@@ -465,17 +500,41 @@ export function applyPinAccountRules(pins: readonly Pin[], accounts: FleetAccoun
     const listed = ACCOUNT_CLASSES.find((c) =>
       classAccountsOf({ accounts }, c).some((a) => a.toUpperCase() === key),
     );
-    if (listed !== undefined) {
-      refuse(pin, refusals, `account ${pin.account} is in accounts.${listed} — only a disabled job may park on a listed account`);
-      continue;
-    }
-    byAccount.set(key, pin.label);
+    if (listed !== undefined) return `account ${account} is in accounts.${listed} — only a disabled job may park on a listed account`;
   }
+  return undefined;
 }
 
 /** Every account the scheduler may hand out, whatever its class. */
 export function scheduledAccounts(config: Pick<FleetConfig, "accounts">): string[] {
   return ACCOUNT_CLASSES.flatMap((c) => classAccountsOf(config, c));
+}
+
+/**
+ * Why a campaign's `subscription` (its lane pin) cannot be honoured, or
+ * undefined. The pin is checked as a roster entry's is: an env var NAME the
+ * policy lists. It is a pinned campaign's (a lane chosen for launches the
+ * policy does not place), and every assignment must be on a driver that bills
+ * a lane of its kind: a Claude lane for claude-code, a Codex home for codex.
+ */
+export function campaignLaneProblem(
+  c: Pick<Campaign, "name" | "subscription" | "account" | "assignments">,
+  roster: Readonly<Record<string, Pick<FleetRosterEntry, "driver">>>,
+  subscriptions: readonly string[],
+): string | undefined {
+  const lane = c.subscription;
+  if (lane === undefined) return undefined;
+  if (!isTokenEnvName(lane)) return `campaign ${c.name}: subscription must be the NAME of the env var holding the lane's credential, never the credential`;
+  if (!subscriptions.includes(lane)) return `campaign ${c.name}: subscription ${lane} is not in policy.subscriptions (${subscriptions.join(", ")})`;
+  if (c.account === undefined) return `campaign ${c.name}: a lane pin is a pinned campaign's (give account or accounts); the policy places an unpinned campaign's lanes`;
+  for (const a of c.assignments) {
+    const driver = roster[a.model]?.driver ?? "openai";
+    const codex = isCodexHomeEnvName(lane);
+    if (driver === "claude-code" && codex) return `campaign ${c.name}: ${a.model} runs on claude-code, and ${lane} is a Codex home`;
+    if (driver === "codex" && !codex) return `campaign ${c.name}: ${a.model} runs on codex, and ${lane} is not a Codex home`;
+    if (driver !== "claude-code" && driver !== "codex") return `campaign ${c.name}: ${a.model} runs on the ${driver} driver, which bills no subscription lane`;
+  }
+  return undefined;
 }
 
 /** The jobs pinned to an account, in file order. */
@@ -511,6 +570,10 @@ export function pinnedCampaignJobs(
   const out: FleetJob[] = [];
   for (const c of config.campaigns) {
     if (c.account === undefined || !c.enabled) continue;
+    // A party's accounts carry its members' characters: while any attempt of
+    // it is live or paused, a fresh one would restage over them. The paused
+    // party comes back through `planResumes`, whole, or waits listed.
+    if (c.accounts !== undefined && campaignSquares(c, catalog, probeRuns).some((s) => s.live > 0)) continue;
     const next = campaignWork([c], catalog, probeRuns, healthy)[0];
     if (next === undefined) continue;
     out.push({
@@ -523,6 +586,12 @@ export function pinnedCampaignJobs(
       enabled: true,
       source: "pinned",
       probe: { campaign: c.name, version: c.version, cell: next.cell.id, arm: next.arm.id },
+      // A party is every member's account at once, and each attempt its own
+      // run-id stem (`-a<n>` from the second), so a restaged party never lands
+      // on the ids of the one before it.
+      ...(c.accounts !== undefined ? { accounts: [...c.accounts], attempt: next.attempts + 1 } : {}),
+      // The campaign's own lane, for its launches only (`campaigns.<id>.subscription`).
+      ...(c.subscription !== undefined ? { subscription: c.subscription } : {}),
     });
   }
   return out;
@@ -575,6 +644,9 @@ export function probeRunsOf(runs: readonly RunFact[]): ProbeRun[] {
       arm: f.arm ?? null,
       counted: isCounted(f),
       live: f.live || f.pause !== null,
+      // A party member is tallied with its party (`campaignSquares`); every
+      // other run's shape is what it was.
+      ...(f.party != null ? { party: { id: f.party.id, size: f.party.size }, terminationReason: f.terminationReason } : {}),
     }));
 }
 
@@ -893,14 +965,24 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
     const pin = pinsOf(jobs, campaigns).find((p) => p.label === jobName);
     if (pin !== undefined) refuse(pin, refusals, strictKeyWhy("queue job", keys, QUEUE_JOB_KEYS));
   }
+  // A campaign's lane pin is checked as a roster entry's is, against the
+  // policy's subscriptions; a pin it cannot honour refuses the campaign, never
+  // runs it on another lane.
+  for (const c of campaigns) {
+    const why = campaignLaneProblem(c, roster, policy.subscriptions);
+    if (why === undefined) continue;
+    const pin = pinsOf(jobs, campaigns).find((p) => p.label === `campaign ${c.name}`);
+    if (pin !== undefined && pin.enabled) refuse(pin, refusals, why);
+  }
   applyPinAccountRules(pinsOf(jobs, campaigns), accounts, refusals);
   for (const pin of pinsOf(jobs, campaigns)) {
-    if (pin.account === undefined) continue;
-    // Derived, enabled first so a disabled stand-in on a running pin's account
-    // (the burn switch) never hides the live one. Every pin is listed here,
-    // refused ones included: `accounts.pinned` says who is parked, not who holds.
-    const key = Object.keys(accounts.pinned).find((a) => a.toUpperCase() === pin.account!.toUpperCase()) ?? pin.account;
-    if (accounts.pinned[key] === undefined || pin.enabled) accounts.pinned[key] = pin.label;
+    for (const account of pin.accounts) {
+      // Derived, enabled first so a disabled stand-in on a running pin's account
+      // (the burn switch) never hides the live one. Every pin is listed here,
+      // refused ones included: `accounts.pinned` says who is parked, not who holds.
+      const key = Object.keys(accounts.pinned).find((a) => a.toUpperCase() === account.toUpperCase()) ?? account;
+      if (accounts.pinned[key] === undefined || pin.enabled) accounts.pinned[key] = pin.label;
+    }
   }
   const preflight = parsePreflight(o.preflight);
   // The smokes hold a live session for their whole arc. Sharing an account with
@@ -914,7 +996,7 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
       // gate runs before anything else does). The two rules below have no pin to
       // refuse — the loser would be an account list — so they still fail.
       const clash = pinsOf(jobs, campaigns).find(
-        (pin) => pin.enabled && pin.account?.toUpperCase() === account.toUpperCase(),
+        (pin) => pin.enabled && pin.accounts.some((a) => a.toUpperCase() === account.toUpperCase()),
       );
       if (clash !== undefined) {
         refuse(clash, refusals, `account ${account} is the preflight gate's — the gate needs its own account`);

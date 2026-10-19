@@ -33,6 +33,7 @@ import { describeWindows, subscriptionThresholds, type SubscriptionUsage, type U
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { ContextEvents, DeathSignal, FlightSignal } from "./sandbox/ipc";
+import { groupKeyOf, type PartySignal } from "./sandbox/party-watch";
 import type { Scratchpad } from "./scratchpad";
 import type { ItemSample, Trajectory } from "./trajectory";
 import { NearbyWriter } from "./nearby";
@@ -226,6 +227,12 @@ export class ContextBuilder {
   private talentsSeeded = false;
   /** The `ts` of the last completed trade written; the dedup key. */
   private lastTradeTs: number | undefined;
+  /**
+   * `groupKeyOf` of the last `group` record written. A restarted child reads
+   * the login group list afresh and calls it `joined`; the same party is
+   * not joined twice, so a signal whose key this already holds writes nothing.
+   */
+  private lastGroupKey: string | undefined;
   /**
    * The dead window and the ghost flag as the last sample read them. Both are
    * seeded silently by the first observation, for the reason `lastTaxiFlight`
@@ -471,6 +478,53 @@ export class ContextBuilder {
       }
     }
     return signals.length > 0;
+  }
+
+  /**
+   * Write the party records the child latched since the last sample
+   * (`sandbox/party-watch.ts`): `group`, `instance` and `kill`, in the order
+   * their packets arrived, each with the packet's own timestamp. A sandbox
+   * without the drain (an older child, a test's fake) writes none.
+   */
+  private async applyPartySignals(trajectory: Trajectory, turn: { turn?: number }): Promise<void> {
+    const sandbox = this.o.sandbox as SandboxHost & { partySignals?: () => Promise<PartySignal[]> };
+    if (typeof sandbox.partySignals !== "function") return;
+    let signals: PartySignal[];
+    try {
+      signals = await sandbox.partySignals();
+    } catch {
+      return;
+    }
+    for (const s of signals) {
+      if (s.kind === "group") {
+        const key = groupKeyOf(s);
+        if (key === this.lastGroupKey) continue;
+        this.lastGroupKey = key;
+        trajectory.recordMilestone({
+          kind: "group",
+          event: s.event,
+          ...(s.groupGuid !== undefined ? { groupGuid: s.groupGuid } : {}),
+          ...(s.leaderGuid !== undefined ? { leaderGuid: s.leaderGuid } : {}),
+          members: s.members,
+          count: s.count,
+          observedTs: s.ts,
+          ...turn,
+        });
+      } else if (s.kind === "instance") {
+        trajectory.recordMilestone({ kind: "instance", event: s.event, map: s.map, instanceType: s.instanceType, from: s.from, observedTs: s.ts, ...turn });
+      } else {
+        trajectory.recordMilestone({
+          kind: "kill",
+          killerGuid: s.killerGuid,
+          victimGuid: s.victimGuid,
+          ...(s.entry !== undefined ? { entry: s.entry } : {}),
+          ...(s.rank !== undefined ? { rank: s.rank } : {}),
+          self: s.self,
+          observedTs: s.ts,
+          ...turn,
+        });
+      }
+    }
   }
 
   /**
@@ -821,6 +875,7 @@ export class ContextBuilder {
     // Applied in order and updating the same latches the window read uses, so
     // two complete cycles inside one gap are two deaths, and so the window read
     // that follows sees the state these signals left and repeats nothing.
+    await this.applyPartySignals(trajectory, turn);
     const drained = await this.applyDeathSignals(trajectory, turn, zone?.id, area?.id);
     // The signals own this sample's window if one is still open, and they own
     // it for the rest of *this* sample even when they closed it: `snap` was

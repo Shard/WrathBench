@@ -23,6 +23,7 @@ import type { NearbyDrain } from "../nearby-row";
 import type { TraceDrain } from "../trace-row";
 import type { ClientCacheStore } from "./client-cache";
 import type { ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, EvalResultMsg, FlightSignal, HostToChild, HostcallResult, LogEntry } from "./ipc";
+import type { PartySignal } from "./party-watch";
 
 export interface SnippetResult {
   ok: boolean;
@@ -734,6 +735,22 @@ export class SandboxHost {
     );
     if (!res.ok) throw new Error(res.error ?? "flight_signals rpc failed");
     return (res.value ?? []) as FlightSignal[];
+  }
+
+  /**
+   * The party transitions — group, instance, kill — the child latched since
+   * the last drain (`party-watch.ts`). Destructive like `deathSignals`; the
+   * loop's state sample owns the drain.
+   */
+  async partySignals(): Promise<PartySignal[]> {
+    await this.start();
+    const id = this.nextId++;
+    const res = await this.request<{ t: "rpc_result"; id: number; ok: boolean; value?: unknown; error?: string }>(
+      { t: "rpc", id, method: "party_signals", params: {} },
+      5_000,
+    );
+    if (!res.ok) throw new Error(res.error ?? "party_signals rpc failed");
+    return (res.value ?? []) as PartySignal[];
   }
 
   /**

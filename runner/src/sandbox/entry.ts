@@ -79,6 +79,7 @@ import { compileSnippet } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
 import { CONTEXT_POLICY, foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../context";
 import { NearbyRecorder } from "./nearby-recorder";
+import { PartyWatcher } from "./party-watch";
 import { TraceRecorder } from "./trace-recorder";
 import type { ActionBatch, ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, FlightSignal, HostToChild, HostcallResult, LogEntry, MoveIntentNote } from "./ipc";
 
@@ -1371,6 +1372,25 @@ client.events.onAny((event) => {
   });
 });
 
+// ------------------------------------------------------------ party watcher
+
+/**
+ * The party records — `group`, `instance`, `kill` — latched as their packets
+ * arrive (`party-watch.ts`), drained by the host's state sample like the death
+ * and flight signals above. Registered after the client's own state fold, so
+ * `state.group()` and the unit cache already hold the event it reads.
+ */
+const partyWatcher = new PartyWatcher({
+  group: () => client.state.group(),
+  selfGuid: () => client.state.self.guid,
+  objectOf: (guid) => {
+    const o = client.state.nearby.get(guid);
+    return o === undefined ? undefined : { entry: o.entry?.value, type: o.objectType?.value };
+  },
+  rankOf: (entry) => client.state.creatures.get(entry)?.value.rank,
+});
+client.events.onAny((event) => partyWatcher.observe(event));
+
 // ----------------------------------------------------------- trace recorder
 
 /**
@@ -1585,6 +1605,8 @@ function handle(msg: HostToChild | HostcallResult): void {
                 ? drainDeathSignals()
                 : msg.method === "flight_signals"
                   ? drainFlightSignals()
+                : msg.method === "party_signals"
+                  ? partyWatcher.drain()
                 : msg.method === "action_hints"
                   ? drainHints()
                   : msg.method === "trace_drain"

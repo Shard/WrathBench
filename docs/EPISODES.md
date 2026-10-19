@@ -201,7 +201,31 @@ fleet can launch in a run pod.
 
 - **Duration.** The definition's. The ninety minutes in the episode table is a
   fallback no launch reaches, because every definition states its own clock.
-- **Start state.** A fresh level-1 character of the cell's race and class.
+- **Start state.** A fresh level-1 character of the cell's race and class,
+  unless the definition's `start` says `staged` (operator, 2026-10-19: the
+  Deadmines party's predefined loadouts). A staged start is a character the
+  operator's stager put in place before the launch — the definition's fixture
+  scenario applied, at the `level` it names — which the run is launched on by
+  name (`--character`, refused on any other start) and keeps through hygiene;
+  the launch note says it already exists and must not be recreated. A
+  definition that says nothing starts fresh, so every definition published
+  before `start` existed means what it meant.
+- **Parties.** A definition with a `party` block launches each square as that
+  many runs of the assignment's model at once, one staged character each:
+  started, stopped and given one verdict together, and tallied as one attempt
+  (docs/proposals/GROUP-PLAY.md; `infra/party-fate.ts`). Each member carries
+  its own role, start, character and objective, and its cell carries the
+  leader's start. The first member to leave the world ends the others as
+  `party-ended` or pauses them as `party-paused`, naming itself; a member that
+  dies in the game is not one that left. A party is counted when every member
+  is on disk, none is `launch-failed` or still in flight, and every member
+  that ended on its own verdict counts; a paused party resumes whole or not at
+  all. Unscored like every probe.
+- **A campaign's lane.** A pinned campaign's store row may name the
+  subscription lane its launches bill (`subscription`; operator, 2026-10-19:
+  the Deadmines party on the second Claude lane). It overrides the assignment's
+  roster lane for that campaign's runs only and never reaches a scored run of
+  the same entry, so pinning a probe to a lane does not move an eval.
 - **Objective.** Allowed, and set only by the definition. The to-level-10
   campaigns carry none: the standing goal already drives levelling, and naming
   a level is the statistic the goal wording avoids.

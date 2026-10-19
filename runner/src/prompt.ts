@@ -283,6 +283,22 @@ export function freshCharacterNote(o: { race: number; class: number; taken?: rea
 }
 
 /**
+ * The staged-character launch note: a run launched on a character the
+ * operator's stager made before it (`--character`, a party member). The
+ * sibling of `freshCharacterNote` for that one start, in the words the
+ * operator approved (docs/proposals/GROUP-PLAY.md §8, 2026-10-19). The level
+ * is the staging's own (`start.level` of the campaign definition), said only
+ * when known; race and class are the client's names for the ids.
+ */
+export function stagedCharacterNote(o: { character: string; level: number | undefined; raceName: string; className: string }): string {
+  const level = o.level !== undefined ? `level ${o.level} ` : "";
+  return (
+    `Your character already exists: ${o.character}, a ${level}${o.raceName} ${o.className}. ` +
+    `Log in with \`await sdk.createSession({ character: "${o.character}" })\`. Do not create another character.`
+  );
+}
+
+/**
  * The resumed run's session note: what a model with no conversation history is
  * told about the character it already has.
  *

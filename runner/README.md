@@ -70,6 +70,17 @@ bun runner/src/classify.ts <run-id> <reason> [note]
 Runs live under `data/runs/<run-id>/`. The rest of what `run.ts` reads off
 argv (`configFromArgs`) overrides the defaults in `src/config.ts` for that run.
 
+A party member (docs/proposals/GROUP-PLAY.md) is a probe whose campaign
+file names its party: the fleet's roster launches it with `--character
+<name>`, the character the stager made for it, which is accepted only on a
+campaign launch whose definition starts `staged` and must be the member's
+own. Hygiene keeps that character, the freshness tripwire stays off, the
+launch note says it already exists, and `meta.config.party` names every
+member's run, account and character. Its trajectory carries three more
+milestone kinds, `group`, `instance` and `kill`, latched in the sandbox
+child off `SMSG_GROUP_LIST`, the `instanceType` on the `WB_AREA` after a
+transfer and `SMSG_PARTYKILLLOG` (`src/sandbox/party-watch.ts`).
+
 ## Drivers
 
 `--driver` picks how the runner reaches the model; the **harness** — what owns

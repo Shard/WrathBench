@@ -43,9 +43,10 @@ import {
 } from "../runner/src/campaigns";
 import { cellDimensions } from "../runner/src/campaign-def";
 import { campaignFileOf, type CampaignFile } from "../runner/src/campaign-file";
+import { memberRunId } from "../runner/src/party";
 import { DEFAULT_CLAUDE_TOKEN_ENV, type TerminationReason } from "../runner/src/config";
 import { isScoredEpisode } from "../runner/src/episodes";
-import { classifyLapse, OFFLINE_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
+import { classifyLapse, OFFLINE_PAUSE, PARTY_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
 import { jobHoldOf, laneOfEntry, laneOfRun, type FleetSubscriptionGate } from "./run-fleet-gate";
 import {
   ACCOUNT_CLASSES,
@@ -759,6 +760,7 @@ export function jobSpawn(
   }
   if (entries.length === 0 && owesNothing(job.owed?.copies)) fail(`job ${job.name}: its repeat is already met by counted runs — nothing to spawn`);
   if (entries.length === 0) fail(`job ${job.name}: no ref of ${job.ref} is eligible for ${job.episode}`);
+  if (job.accounts !== undefined) return partySpawn(job, entries, probeFile, stamp);
   const spawn: JobSpawn = {
     name: job.name,
     enabled: job.enabled,
@@ -767,6 +769,49 @@ export function jobSpawn(
     entries,
   };
   return job.resume === undefined ? spawn : withResume(spawn, job.resume);
+}
+
+/**
+ * A party job's spawn (docs/proposals/GROUP-PLAY.md §1): the one entry the
+ * job's ref yields, made into one entry per member — the member's run id
+ * (`<stem>-<member>`), account, start, objective and party stamp, and a
+ * campaign file that names the member and every other one — for one roster
+ * process to launch together. The stem is the id the job's single entry
+ * would have had (`-a<n>` from the second attempt), or, on a resume, the
+ * paused party's own id. Every member shares the entry's credentials and
+ * the job's subscription lane, so a party is never spread across lanes.
+ */
+function partySpawn(job: FleetJob, entries: RosterSpec[], probeFile: CampaignFile | undefined, stamp: string): JobSpawn {
+  const party = probeFile?.definition.party;
+  const accounts = job.accounts!;
+  if (probeFile === undefined || party === undefined) fail(`job ${job.name}: a party job needs a party campaign's square`);
+  if (accounts.length !== party.size) fail(`job ${job.name}: a party of ${party.size} needs ${party.size} accounts, the job holds ${accounts.length}`);
+  if (entries.length !== 1) fail(`job ${job.name}: a party is one model's — ${entries.length} entries to place`);
+  const base = entries[0]!;
+  const stem = job.partyId ?? base.runId ?? bareRunId(job.name, base, stamp);
+  const members = party.members.map((m, i) => ({ member: m.id, role: m.role, runId: memberRunId(stem, m.id), account: accounts[i]!, character: m.character }));
+  const memberEntries: RosterSpec[] = party.members.map((m, i) => {
+    const dims = cellDimensions(probeFile.definition, probeFile.cell, m);
+    return {
+      ...base,
+      race: dims.race,
+      class: dims.class,
+      ...(dims.objective !== undefined ? { objective: dims.objective } : {}),
+      runId: members[i]!.runId,
+      account: accounts[i]!,
+      campaignFile: { ...probeFile, party: { id: stem, member: m.id, members } },
+      party: { id: stem, member: m.id, role: m.role, size: party.size },
+    };
+  });
+  return {
+    name: job.name,
+    enabled: job.enabled,
+    account: accounts[0]!,
+    accounts: [...accounts],
+    loop: false,
+    entries: memberEntries,
+    ...(job.resume !== undefined ? { resumeRunId: members[0]!.runId } : {}),
+  };
 }
 
 /**
@@ -937,6 +982,10 @@ export function providerResetOf(pause: NonNullable<RunFact["pause"]>): number | 
  */
 export function resumeNotBefore(pause: NonNullable<RunFact["pause"]>): number | "never" | null {
   if (pause.reason === "operator-pause") return null;
+  // A party member paused because another member did: the party comes back
+  // when that member's own pause says, which `planResumes` asks of the whole
+  // party at once, so this member waits on nothing of its own.
+  if (pause.reason === PARTY_PAUSE) return null;
   // The subscription gate stopped a freeplay run (operator, 2026-10-16): it
   // waits for the window's reset, and is on no ladder at all — the lane gate
   // (`subscriptionHold`) is what holds it while the window stays over.
@@ -1249,6 +1298,8 @@ export function planResumes(opts: {
   // one the rest of the supervisor already treats as the character's head.
   const paused = opts.runs.filter((f) => f.pause !== null && f.archived !== true).sort(byNewestStart);
   const seenModel = new Set<string>();
+  /** Paused party members whose lane resumes them, by party id: they come back whole, below. */
+  const partyPaused = new Map<string, RunFact[]>();
   for (const f of paused) {
     const pause = f.pause!;
     // A wait on a subscription usage window: its figures are the operator's.
@@ -1349,6 +1400,12 @@ export function planResumes(opts: {
         counts: lapse.counts,
         account: f.account,
       });
+      continue;
+    }
+    // A party member is never resumed alone, and its siblings are the same
+    // model on purpose: the party is grouped and planned whole below.
+    if (f.party != null && f.episode === "probing") {
+      partyPaused.set(f.party.id, [...(partyPaused.get(f.party.id) ?? []), f]);
       continue;
     }
     if (seenModel.has(modelKey)) {
@@ -1540,7 +1597,152 @@ export function planResumes(opts: {
       ...(probeFile !== null && "rebuilt" in probeFile && probeFile.rebuilt ? { writeCampaignFile: probeFile.file } : {}),
     });
   }
+  for (const [id, members] of partyPaused) {
+    const plan = planPartyResume(id, members, {
+      runs: opts.runs,
+      config,
+      now,
+      ownCampaignFile,
+      takenAccounts,
+      takenJobs,
+      held: opts.held,
+      running: opts.running,
+      ...(opts.subscriptionHold !== undefined ? { subscriptionHold: opts.subscriptionHold } : {}),
+    });
+    if ("listed" in plan) {
+      listed.push(...plan.listed);
+      continue;
+    }
+    if (plan.skip) continue;
+    for (const a of plan.resume.job.accounts ?? [plan.resume.account]) takenAccounts.add(a.toUpperCase());
+    takenJobs.add(plan.resume.job.name);
+    resume.push(plan.resume);
+  }
   return { resume, listed, end };
+}
+
+/**
+ * A paused party, planned whole (docs/proposals/GROUP-PLAY.md §1, "Shared
+ * fate"): one resume of every member at once, or a listing of each member
+ * with why not. It comes back when every one of its members is on disk and
+ * paused, its campaign still names the same accounts, every member's own
+ * pause has run its course (the latest `resumeNotBefore` of them, which is
+ * the first member's — a `party-paused` member waits on nothing of its own),
+ * no member's lane is held by the usage gate, and every member's account is
+ * free. A party whose members cannot all come back — one ended, one missing,
+ * one in another series — is listed, never half-resumed.
+ */
+function planPartyResume(
+  id: string,
+  members: readonly RunFact[],
+  o: {
+    runs: readonly RunFact[];
+    config: Pick<FleetConfig, "roster" | "policy"> & Partial<Pick<FleetConfig, "campaigns">>;
+    now: number;
+    ownCampaignFile: (runId: string) => CampaignFile | null;
+    takenAccounts: ReadonlySet<string>;
+    takenJobs: ReadonlySet<string>;
+    held: (account: string) => string | undefined;
+    running: ReadonlyMap<string, string>;
+    subscriptionHold?: (f: RunFact) => string | undefined;
+  },
+): { resume: ResumePlan; skip?: false } | { skip: true } | { listed: PausedListing[] } {
+  const listAll = (why: string, resumeAfter: number | null = null, subscriptionWait = false): { listed: PausedListing[] } => ({
+    listed: members.map((f) => ({
+      runId: f.runId,
+      model: f.model,
+      account: f.account,
+      reason: f.pause!.reason,
+      since: f.pause!.at,
+      pauseCount: f.pause!.count,
+      resumeAfter,
+      elapsedMs: f.pause!.episodeElapsedMs,
+      budgetMs: f.episodeMs,
+      why: `party ${id}: ${why}`,
+      ...(subscriptionWait ? { subscriptionWait: true as const } : {}),
+    })),
+  });
+  const size = members[0]!.party!.size;
+  const all = o.runs.filter((r) => r.party?.id === id);
+  const whole = all.length === size && members.length === size && all.every((r) => r.pause !== null && r.terminationReason === null && r.archived !== true);
+  if (!whole) {
+    const states = all.map((r) => `${r.party!.member} ${r.terminationReason ?? (r.pause !== null ? `paused ${r.pause.reason}` : "live")}`).join(", ");
+    return listAll(`not every member can come back (${states || "none on disk"}; ${all.length} of ${size}) — a party resumes whole; resume or end it by hand`);
+  }
+  const leaderFile = members.map((f) => o.ownCampaignFile(f.runId)).find((x) => x !== null) ?? null;
+  const launch = leaderFile?.party;
+  if (leaderFile === null || launch === undefined) return listAll("no member's campaign.json names the party — resume by hand or archive");
+  const byRun = new Map(members.map((f) => [f.runId, f]));
+  if (launch.members.some((m) => !byRun.has(m.runId))) return listAll("its campaign file names runs that are not its paused members — resume by hand");
+  const ordered = launch.members.map((m) => byRun.get(m.runId)!);
+  const leader = ordered[0]!;
+  const c = o.config.campaigns?.find((x) => x.name === leaderFile.campaign);
+  const ref = leader.ref ?? undefined;
+  if (c === undefined || ref === undefined || o.config.roster[ref] === undefined) {
+    return listAll("its campaign row or roster entry is no longer in the config — resume by hand or archive");
+  }
+  if (!c.enabled) return listAll(`campaign ${c.name} is disabled — enable it to resume, or resume by hand`);
+  const accounts = launch.members.map((m) => m.account);
+  const pinned = c.accounts ?? [];
+  if (pinned.length !== accounts.length || pinned.some((a, i) => a.toUpperCase() !== accounts[i]!.toUpperCase())) {
+    return listAll(`campaign ${c.name} is pinned to ${pinned.join(", ") || "no accounts"}, the party ran on ${accounts.join(", ")} — resume by hand`);
+  }
+  if ((leaderFile.arm.image !== undefined || leaderFile.arm.command !== undefined) && o.config.policy.runPods !== "probes") {
+    return listAll(`arm ${leaderFile.arm.id} runs only in a run pod; policy.runPods is ${JSON.stringify(o.config.policy.runPods)} — it resumes once that is "probes"`);
+  }
+  const name = pinnedCampaignJobName(leaderFile.campaign, leaderFile.cell.id, leaderFile.arm.id);
+  if (o.takenJobs.has(name)) return { skip: true };
+  // The party waits on its slowest member's own pause.
+  let notBefore: number | null = null;
+  for (const f of ordered) {
+    const nb = resumeNotBefore(f.pause!);
+    if (nb === "never") return listAll(`${f.party!.member}: ${f.pause!.reason}, ${f.pause!.count} ladder pauses since it last made a turn — past the defer ladder; resume by hand`);
+    if (nb !== null && (notBefore === null || nb > notBefore)) notBefore = nb;
+  }
+  const cause = ordered.find((f) => f.pause!.reason !== PARTY_PAUSE) ?? leader;
+  if (notBefore !== null && o.now < notBefore) {
+    return listAll(`${cause.party!.member} ${cause.pause!.reason}: resuming after ${new Date(notBefore).toLocaleTimeString()}`, notBefore);
+  }
+  for (const f of ordered) {
+    const gated = o.subscriptionHold?.(f);
+    if (gated !== undefined) return listAll(gated, null, true);
+  }
+  for (const [i, a] of accounts.entries()) {
+    if (o.takenAccounts.has(a.toUpperCase())) {
+      return listAll(`waiting: account ${a} is busy (${[...o.running].find(([, x]) => x.toUpperCase() === a.toUpperCase())?.[0] ?? "another job"})`);
+    }
+    const holder = o.held(a);
+    if (holder !== undefined && holder !== ordered[i]!.runId) return listAll(`waiting: account ${a} is held by run ${holder}`);
+  }
+  const m = /-a(\d+)$/.exec(id);
+  return {
+    resume: {
+      job: {
+        refs: [ref],
+        ref,
+        episode: "probing",
+        repeat: 1,
+        name,
+        account: accounts[0]!,
+        accounts,
+        enabled: true,
+        source: "pinned",
+        probe: { campaign: leaderFile.campaign, version: leaderFile.version, cell: leaderFile.cell.id, arm: leaderFile.arm.id },
+        campaignFile: leaderFile,
+        partyId: id,
+        attempt: m !== null ? Number(m[1]) : 1,
+        resume: {
+          runId: leader.runId,
+          model: leader.model,
+          ...(leader.effort !== null ? { effort: leader.effort } : {}),
+        },
+      },
+      account: accounts[0]!,
+      runId: leader.runId,
+      pauseCount: Math.max(...ordered.map((f) => f.pause!.count)),
+      why: `party ${id} of ${size}: ${cause.party!.member} ${cause.pause!.reason}, ${fmtPaused(cause.pause!.episodeElapsedMs, cause.episodeMs)}`,
+    },
+  };
 }
 
 /**
@@ -1990,7 +2192,9 @@ export function nextConfigRejection(
 export function fillEntries(spawn: JobSpawn, stamp: string): RosterSpec[] {
   return spawn.entries.map((e) => ({
     ...e,
-    account: spawn.account,
+    // A party member keeps its own account (`partySpawn`); every other entry
+    // takes the job's, as it always has.
+    account: e.party !== undefined && e.account !== undefined ? e.account : spawn.account,
     runId: e.runId ?? bareRunId(spawn.name, e, stamp),
   }));
 }
@@ -2283,6 +2487,40 @@ export const fmtElapsed = (ms: number): string => {
 };
 
 /**
+ * Whether a party fits, all of it, under every cap it counts against
+ * (GROUP-PLAY.md §1, "Capacity"): its members count `size` each on every
+ * concurrency key the job's ref counts on (`keysOfIn`: for a claude-code
+ * entry, its lane's key and the total), and `size` against
+ * `policy.paid.maxConcurrent` when its model is paid. `running` is what is
+ * in flight on those keys without the party; a cap with no room for every
+ * member holds the whole party — never a part of it, which could not play.
+ * Undefined when it fits; the reason otherwise. A key with no cap is never
+ * full. Pure.
+ */
+export function partyAdmission(o: {
+  size: number;
+  keys: readonly string[];
+  running: ReadonlyMap<string, number>;
+  max: Readonly<Record<string, number>>;
+  paid?: { running: number; cap: number } | undefined;
+}): string | undefined {
+  for (const k of o.keys) {
+    const cap = o.max[k];
+    const n = o.running.get(k) ?? 0;
+    if (cap !== undefined && n + o.size > cap) return `a party of ${o.size} needs ${o.size} sessions on ${k}, and ${n} of its cap ${cap} are in flight — it starts whole or not at all`;
+  }
+  if (o.paid !== undefined && o.paid.running + o.size > o.paid.cap) {
+    return `a party of ${o.size} needs ${o.size} paid slots, and ${o.paid.running} of policy.paid.maxConcurrent ${o.paid.cap} are in flight — it starts whole or not at all`;
+  }
+  return undefined;
+}
+
+/** How many sessions a job holds: a party's members, else one per ref. */
+export function sessionsOf(job: Pick<FleetJob, "accounts">): number {
+  return job.accounts?.length ?? 1;
+}
+
+/**
  * A job already running when a plan is made: the supervisor has a live
  * process for it. It holds its account and its refs — one character per
  * model — exactly as the live tick's own processes do.
@@ -2386,8 +2624,28 @@ export function planTick(
   const keyCount = new Map<string, number>();
   // Same rule the live tick uses: a claude ref counts against the subscription
   // its own run says it is on, so --status and --dry-run agree with the fleet.
+  // A party counts every member (`sessionsOf`).
+  const sessionsOfRef = new Map<string, number>();
+  for (const p of pinned) for (const r of p.job.refs) sessionsOfRef.set(r, Math.max(sessionsOfRef.get(r) ?? 1, sessionsOf(p.job)));
+  for (const r of resumes) for (const ref of r.job.refs) sessionsOfRef.set(ref, Math.max(sessionsOfRef.get(ref) ?? 1, sessionsOf(r.job)));
   for (const r of runningRefs) {
-    for (const k of keysOfIn(keyOf, r, lanes.get(r))) keyCount.set(k, (keyCount.get(k) ?? 0) + 1);
+    for (const k of keysOfIn(keyOf, r, lanes.get(r))) keyCount.set(k, (keyCount.get(k) ?? 0) + (sessionsOfRef.get(r) ?? 1));
+  }
+  // A pinned party that does not fit whole is held, with the reason, as the
+  // live tick holds it (`partyAdmission`).
+  for (let i = pinned.length - 1; i >= 0; i--) {
+    const p = pinned[i]!;
+    if (p.job.accounts === undefined) continue;
+    const size = sessionsOf(p.job);
+    const keys = p.job.refs.flatMap((r) => keysOfIn(keyOf, r, p.job.subscription ?? config.roster[r]?.subscription ?? lanes.get(r)));
+    const without = new Map(keyCount);
+    for (const k of keys) without.set(k, (without.get(k) ?? size) - size);
+    const paid = billingOfName.get(p.job.ref) === "paid" && config.policy.paid !== null ? { running: inFlight.filter((j) => j.source !== "pinned").flatMap((j) => j.refs).filter((r) => billingOfName.get(r) === "paid").length, cap: config.policy.paid.maxConcurrent } : undefined;
+    const why = partyAdmission({ size, keys, running: without, max: config.maxConcurrent, paid });
+    if (why === undefined) continue;
+    gatedPinned.push({ name: p.job.name, episode: p.job.episode, why });
+    pinned.splice(i, 1);
+    for (const k of keys) keyCount.set(k, (keyCount.get(k) ?? size) - size);
   }
   // The paid cap counts what the live tick counts: every paid model in flight
   // but a pinned job's.

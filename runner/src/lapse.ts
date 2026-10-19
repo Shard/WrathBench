@@ -72,6 +72,17 @@ export const STALL_PAUSE = "observation-stalled";
 export const SUBSCRIPTION_PAUSE = "subscription-budget";
 
 /**
+ * The pause a party member takes when another member paused first
+ * (docs/proposals/GROUP-PLAY.md, "Shared fate"): the party is one attempt and
+ * resumes whole or not at all, so the roster pauses the rest under this
+ * reason with the first member's own as the detail. The harness's doing, not
+ * the provider's or the model's: no strike, no rung on the defer ladder of
+ * its own. When the party comes back is the first member's pause's question
+ * (`planResumes` groups the party and waits on every member).
+ */
+export const PARTY_PAUSE = "party-paused";
+
+/**
  * The pause a run never got to write. A fleet run with no termination, no
  * pause row and no live process behind it is a run whose runner died before
  * its verdict — a SIGKILL inside the stop grace, a host that lost power. The
