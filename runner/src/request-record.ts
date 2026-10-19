@@ -9,11 +9,11 @@
  * `snippet_result` record. So the record keeps what nothing else does and
  * points at the rest:
  *
- *   { t: "request", turn, adapter, slim: 1,
+ *   { t: "request", turn, adapter, slim: 2,
  *     systemHash,                 // promptHash() of the system prompt text
  *     systemText?,                // the text itself, on a segment's first request
  *                                 //   and again whenever its hash changes
- *     window: { from, to, fromTurn, cap },
+ *     window: { from, to, fromTurn, cap, fold },
  *     user,                       // the fresh user message, verbatim
  *     requestHash,                // sha256 of JSON.stringify(messages) as sent
  *     messageCount, systemChars, promptChars }
@@ -26,7 +26,11 @@
  * turn appends exactly one assistant message, and the cut always lands on
  * one), which lets a reader walking backwards stop at a known record. `cap` is
  * the per-message cap the window was cut with, so a later build with another
- * cap still rebuilds this one.
+ * cap still rebuilds this one. `fold` is how many of the window's messages,
+ * from its start, lie in its folded part (`messageWindowFold`): counted from
+ * `from` rather than from the history's start, because a reader that walks the
+ * window back from the request (the viewer) has the window and nothing below
+ * it. The replay takes it as recorded and never recomputes it.
  *
  * Why the system text is recorded rather than regenerated: `prompt.ts` moves
  * on, and a trajectory has to replay into what *its* build sent, years later
@@ -43,18 +47,21 @@
  * written when it is known to replay.
  *
  * A build that changes how a request is put together from these parts (the
- * cap's suffix, the message shapes, their order) writes a new `slim` version
- * and keeps this one's rebuild, or every trajectory before it stops replaying.
+ * cap's suffix, the fold's line or its constants, the message shapes, their
+ * order) writes a new `slim` version and keeps this one's rebuild, or every
+ * trajectory before it stops replaying. Version 1 is version 2 with nothing
+ * folded — the shape written before the fold (operator, 2026-10-19) — and
+ * still rebuilds.
  *
  * The claude-code and codex drivers do not write this shape: their context is
  * the CLI's own and is not ours to rebuild, so their records keep `messages`.
  */
 
 import { promptHash } from "./comparability";
-import { CONTEXT_POLICY, capWindowMessage, type ChatMessage } from "./context";
+import { CONTEXT_POLICY, renderWindow, type ChatMessage, type HistoryMessage } from "./context";
 
-/** The shape version this build writes and knows how to rebuild. */
-export const SLIM_REQUEST_VERSION = 1;
+/** The shape version this build writes. It rebuilds this one and version 1 (no fold). */
+export const SLIM_REQUEST_VERSION = 2;
 
 export interface RequestWindow {
   /** Index into the segment's history of the first message the window kept. */
@@ -65,6 +72,11 @@ export interface RequestWindow {
   fromTurn: number | null;
   /** The per-message cap the window was cut with (`WINDOW_MESSAGE_CHARS`). */
   cap: number;
+  /**
+   * How many messages from the window's start lie in its folded part; absent
+   * on version 1, which folded nothing.
+   */
+  fold?: number;
 }
 
 export interface SlimRequestRecord {
@@ -157,9 +169,10 @@ export function isSlimRequest(rec: Record<string, unknown>): boolean {
   return rec["t"] === "request" && rec["slim"] !== undefined && !Array.isArray(rec["messages"]);
 }
 
-/** A slim request this build can rebuild, or a reason it cannot. */
-export function slimRequestV1(rec: Record<string, unknown>): SlimRequestRecord | string {
-  if (rec["slim"] !== SLIM_REQUEST_VERSION) return `slim request version ${JSON.stringify(rec["slim"])} is not one this build rebuilds`;
+/** A slim request this build can rebuild (version 1 or 2), or a reason it cannot. */
+export function slimRequest(rec: Record<string, unknown>): SlimRequestRecord | string {
+  const version = rec["slim"];
+  if (version !== 1 && version !== SLIM_REQUEST_VERSION) return `slim request version ${JSON.stringify(version)} is not one this build rebuilds`;
   const w = rec["window"] as Record<string, unknown> | undefined;
   const int = (v: unknown): boolean => typeof v === "number" && Number.isInteger(v) && v >= 0;
   if (
@@ -173,7 +186,8 @@ export function slimRequestV1(rec: Record<string, unknown>): SlimRequestRecord |
     !int(w["from"]) ||
     !int(w["to"]) ||
     !int(w["cap"]) ||
-    (w["from"] as number) > (w["to"] as number)
+    (w["from"] as number) > (w["to"] as number) ||
+    (version === 1 ? w["fold"] !== undefined : !int(w["fold"]) || (w["fold"] as number) > (w["to"] as number) - (w["from"] as number))
   ) {
     return "malformed slim request record";
   }
@@ -181,21 +195,20 @@ export function slimRequestV1(rec: Record<string, unknown>): SlimRequestRecord |
 }
 
 /**
- * The request as the loop assembles it: the system prompt, the window with
- * each message capped, the fresh user message. The single definition the
- * writer's self-check, the replay and the viewer all go through.
+ * The request as the loop assembles it: the system prompt, the window as
+ * `renderWindow` sends it — the tool results of its first `fold` messages
+ * folded, every message capped — and the fresh user message. The single
+ * definition the writer's self-check, the replay and the viewer all go
+ * through; `fold` 0 is a version 1 record's request.
  */
 export function assembleRequest(
   systemText: string,
-  window: readonly ChatMessage[],
+  window: readonly HistoryMessage[],
   user: string,
   cap: number,
+  fold = 0,
 ): ChatMessage[] {
-  return [
-    { role: "system", content: systemText },
-    ...window.map((m) => capWindowMessage(m, cap)),
-    { role: "user", content: user },
-  ];
+  return [{ role: "system", content: systemText }, ...renderWindow(window, fold, cap), { role: "user", content: user }];
 }
 
 /** The loop turn whose assistant message sits at `from`: one assistant per turn, turns from 1. */
@@ -211,10 +224,12 @@ export interface FixedLoopRequest {
   adapter: string;
   /** Exactly what is handed to the adapter. Never mutated. */
   messages: readonly ChatMessage[];
-  /** The loop's whole stored history for this segment, uncapped. */
-  history: readonly ChatMessage[];
+  /** The loop's whole stored history for this segment, uncapped and unfolded. */
+  history: readonly HistoryMessage[];
   /** `messageWindowCut(history)`: where the window starts. */
   from: number;
+  /** `messageWindowFold(history)`: where its folded part ends, as an index into `history`. */
+  foldTo: number;
   /** Whether this record carries the system prompt text (first of a segment, or changed). */
   withSystemText: boolean;
 }
@@ -235,12 +250,13 @@ export function fixedLoopRequestRecord(o: FixedLoopRequest): {
   const sent = JSON.stringify(o.messages);
   const hash = `sha256:${new Bun.CryptoHasher("sha256").update(sent).digest("hex")}`;
   const cap = CONTEXT_POLICY.WINDOW_MESSAGE_CHARS;
-  const window: RequestWindow = { from: o.from, to: o.history.length, fromTurn: turnAt(o.history, o.from), cap };
+  const fold = o.foldTo - o.from;
+  const window: RequestWindow = { from: o.from, to: o.history.length, fromTurn: turnAt(o.history, o.from), cap, fold };
   const stats = requestStats(o.messages);
   let mismatch: string | null = null;
   if (first?.role !== "system" || typeof first.content !== "string" || last?.role !== "user" || typeof last.content !== "string" || o.messages.length < 2) {
     mismatch = "the request is not [system, ...window, user]";
-  } else if (JSON.stringify(assembleRequest(first.content, o.history.slice(o.from), last.content, cap)) !== sent) {
+  } else if (JSON.stringify(assembleRequest(first.content, o.history.slice(o.from), last.content, cap, fold)) !== sent) {
     mismatch = "the rebuild from the stored history does not reproduce the request";
   }
   if (mismatch !== null) {
@@ -286,7 +302,7 @@ export function fixedLoopRequestRecord(o: FixedLoopRequest): {
  */
 export class HistoryRebuilder {
   base = 0;
-  readonly messages: ChatMessage[] = [];
+  readonly messages: HistoryMessage[] = [];
   /** Results that did not line up with a call, by absolute index. */
   private readonly problems = new Map<number, string>();
   private calls: { id?: unknown; function?: { name?: unknown } }[] = [];
@@ -331,7 +347,14 @@ export class HistoryRebuilder {
     } else if (rec["turn"] !== this.callTurn) {
       problem = `a ${t} of turn ${String(rec["turn"])} follows the response of turn ${String(this.callTurn)}`;
     }
-    const msg = { role: "tool", content: rec["text"], tool_call_id: call?.id } as ChatMessage;
+    // `isError` rides the stored message as the loop's history holds it (the
+    // fold's line states it); the window drops it before anything is sent.
+    const msg = {
+      role: "tool",
+      content: rec["text"],
+      tool_call_id: call?.id,
+      ...(typeof rec["isError"] === "boolean" ? { isError: rec["isError"] } : {}),
+    } as HistoryMessage;
     this.messages.push(msg);
     if (problem !== null) this.problems.set(this.length - 1, problem);
   }
@@ -346,7 +369,7 @@ export class HistoryRebuilder {
   }
 
   /** The window `[from, to)` in absolute indices, or why it cannot be had. */
-  window(from: number, to: number): ChatMessage[] | string {
+  window(from: number, to: number): HistoryMessage[] | string {
     if (to !== this.length) {
       return `the record says the history held ${to} messages; the trajectory rebuilds ${this.length}`;
     }
@@ -376,7 +399,7 @@ export type Rebuilt =
 export function rebuildSlimRequest(
   rec: SlimRequestRecord,
   systemText: string | undefined,
-  window: readonly ChatMessage[] | string,
+  window: readonly HistoryMessage[] | string,
 ): Rebuilt {
   if (systemText === undefined) return { ok: false, error: `no system prompt text recorded for ${rec.systemHash}` };
   if (!systemTextMatches(systemText, rec.systemHash)) {
@@ -389,7 +412,7 @@ export function rebuildSlimRequest(
       error: `the window rebuilds ${window.length} messages; the record says ${rec.window.to - rec.window.from}`,
     };
   }
-  const messages = assembleRequest(systemText, window, rec.user, rec.window.cap);
+  const messages = assembleRequest(systemText, window, rec.user, rec.window.cap, rec.window.fold ?? 0);
   if (requestHash(messages) !== rec.requestHash) {
     return { ok: false, error: "request hash mismatch: the rebuilt request is not the one that was sent", messages };
   }
