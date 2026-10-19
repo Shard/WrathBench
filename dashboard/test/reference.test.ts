@@ -201,6 +201,12 @@ describe("the scripted reference line", () => {
     expect(scriptedReference(runs, "e360")?.runId).toBe("other-tier");
   });
 
+  test("is found by its driver or by its stamp, either one alone", () => {
+    expect(scriptedReference([ref({ driver: null })], "e90")?.runId).toBe("ref-1");
+    expect(scriptedReference([ref({ unscored: null })], "e90")?.runId).toBe("ref-1");
+    expect(scriptedReference([ref({ driver: "openai", unscored: "unscored (operator objective)" })], "e90")).toBeNull();
+  });
+
   test("a live run, or one with no level reading, is no line yet", () => {
     expect(scriptedReference([ref({ terminationReason: null })], "e90")).toBeNull();
     expect(scriptedReference([ref({ maxLevel: null })], "e90")).toBeNull();

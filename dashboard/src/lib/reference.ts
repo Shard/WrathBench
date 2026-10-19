@@ -241,12 +241,20 @@ export interface ScriptedReference {
  * would make its own label false. Only a finished run with a level reading is
  * a line. A live one is still climbing, and a missing reading is not
  * recorded, never level 1. Among several, the newest started wins, since a
- * series re-runs it after a fix to its route.
+ * series re-runs it after a fix to its route. A run is the reference by its
+ * driver or by the stamp that driver leaves, either one alone, so a row from
+ * a viewer that does not carry `driver` still draws.
  */
+export const REFERENCE_STAMP = "unscored (scripted reference)";
+
+export function isScriptedReference(r: Pick<ResultRun, "driver" | "unscored">): boolean {
+  return r.driver === "reference" || (r.unscored ?? "").startsWith(REFERENCE_STAMP);
+}
+
 export function scriptedReference(runs: readonly ResultRun[], episode: string): ScriptedReference | null {
   let best: ResultRun | null = null;
   for (const r of runs) {
-    if (r.driver !== "reference" || r.episode !== episode) continue;
+    if (!isScriptedReference(r) || r.episode !== episode) continue;
     if (r.terminationReason === null || r.maxLevel === null) continue;
     if (best === null || (r.startedAt ?? 0) > (best.startedAt ?? 0)) best = r;
   }
