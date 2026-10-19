@@ -9,7 +9,7 @@
  *
  * What it stands up, all on loopback and ephemeral ports, all under DIR/.rig:
  *
- *  - the runs: the synthetic fixture (`infra/shots/fixture.ts`: one live run
+ *  - the runs: the synthetic fixture (`infra/shots/fixture.ts`: three live runs
  *    kept live while the rig runs, one ended run to replay), or copies of the
  *    run directories `--run` names, which are never served or written in place;
  *  - the private viewer: the viewer's own `createApi` over those runs, with an
@@ -26,10 +26,11 @@
  * else the map draws its grid.
  *
  * The named states, each shot on each site as `<site>-<state>.png`: `home`,
- * `run-live` (the live run's page), `map-live`, `map-live-selected` (its
- * character clicked, so the sidebar shows its sheet), `map-live-nearby` (zoomed
- * in on it, where the units around it draw), and `map-replay` (the ended run,
- * paused halfway). `--path P` adds a shot of any path, named after it.
+ * `run-live` (the live run's page), `map-live` (nothing selected, so the
+ * sidebar lists the live characters), `map-live-selected` (the live
+ * character's row clicked, so the map frames it and the sidebar shows its
+ * sheet), `map-live-nearby` (then zoomed in on it, where the units around it
+ * draw), and `map-replay` (the ended run, paused halfway). `--path P` adds a shot of any path, named after it.
  * `facts.json` beside the shots holds each page's uncaught errors, console
  * errors and third-party requests. For states that need clicks, import
  * `startRig` and drive `rig.page(...)` from a script of your own.
@@ -42,7 +43,7 @@ import { localRunStore } from "../runner/viewer/clickhouse";
 import { createApi } from "../runner/viewer/api";
 import { createRenderer } from "../runner/viewer/snapshot";
 import { findChromium, launch, type Browser, type Page, type PageOptions } from "./shots/cdp";
-import { writeFixture, type Fixture } from "./shots/fixture";
+import { LIVE_RUN, writeFixture, type Fixture } from "./shots/fixture";
 import { describeReport, emptyState, publishPass, type ObjectStore } from "./publish-core";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
@@ -84,7 +85,11 @@ export interface RigPage {
   open(path: string, selector?: string, settleMs?: number): Promise<boolean>;
   /** A replay's playhead to a fraction of its span (the map's scrubber). */
   seek(fraction: number): Promise<boolean>;
-  /** Click the map outward from its centre until the sidebar names `character`; false when no click did. */
+  /**
+   * Select `character` on the map: its row in the sidebar's live list, which
+   * also frames it, else clicks outward from the map's centre until the
+   * sidebar names it; false when nothing did.
+   */
   select(character: string): Promise<boolean>;
   /** Wheel the map in on its centre by `steps` notches (each about ×1.57); false when there is no map. */
   zoom(steps: number): Promise<boolean>;
@@ -138,7 +143,8 @@ async function pick(handle: (req: Request) => Promise<Response>): Promise<{ live
     terminationReason?: string | null;
     character?: string | null;
   }[];
-  const live = rows.find((r) => r.live === true);
+  // The fixture's own live run where it is there: the one with a nearby ring.
+  const live = rows.find((r) => r.live === true && r.runId === LIVE_RUN) ?? rows.find((r) => r.live === true);
   return {
     live: live?.runId ?? null,
     ended: rows.find((r) => r.terminationReason != null)?.runId ?? null,
@@ -166,7 +172,7 @@ export async function startRig(opts: RigOptions): Promise<Rig> {
   if (opts.runs === undefined || opts.runs.length === 0) {
     fixture = writeFixture(runsDir);
     await fixture.ready;
-    log(`fixture runs: ${fixture.live} (live), ${fixture.ended} (ended)`);
+    log(`fixture runs: ${fixture.lives.join(", ")} (live), ${fixture.ended} (ended)`);
   } else {
     for (const src of opts.runs) {
       const from = resolve(src);
@@ -285,6 +291,11 @@ export async function startRig(opts: RigOptions): Promise<Rig> {
           for (let y = box.y + 12; y < box.y + box.h - 80; y += 12) for (let x = box.x + 12; x < box.x + box.w - 12; x += 12) points.push([x, y]);
           points.sort((a, b) => Math.hypot(a[0] - cx, a[1] - cy) - Math.hypot(b[0] - cx, b[1] - cy));
           const named = `(() => { const h = document.querySelector(".side h3"); return h ? h.textContent : ""; })()`;
+          const row = `(() => { const b = [...document.querySelectorAll(".live-row")].find((x) => (x.textContent ?? "").includes(${JSON.stringify(character)})); if (!b) return false; b.click(); return true; })()`;
+          if (await page.eval<boolean>(row)) {
+            await sleep(300);
+            if ((await page.eval<string>(named)).includes(character)) return true;
+          }
           for (const [x, y] of points.slice(0, 600)) {
             await page.clickAt(x, y);
             if ((await page.eval<string>(named)).includes(character)) return true;
@@ -348,7 +359,7 @@ export function defaultStates(live: string | null, ended: string | null, liveCha
   states.push({ name: "map-live", path: "/map", wait: "canvas" });
   if (liveCharacter !== null) {
     states.push({ name: "map-live-selected", path: "/map", wait: "canvas", select: liveCharacter });
-    // The map opens fitted on the live character; six notches is past the nearby layer's gate and its names'.
+    // Selected first, which frames the character; six notches on it is past the nearby layer's gate and its names'.
     states.push({ name: "map-live-nearby", path: "/map", wait: "canvas", zoom: 6, select: liveCharacter });
   }
   if (ended !== null) states.push({ name: "map-replay", path: `/map?run=${encodeURIComponent(ended)}`, wait: "input.scrubber", seek: 0.5 });
@@ -454,8 +465,9 @@ async function main(argv: readonly string[]): Promise<number> {
         const p = await rig.page(site, { ...c.viewport, scheme: c.scheme });
         const found = await p.open(st.path, st.wait, c.settle);
         const seeked = st.seek === undefined ? undefined : await p.seek(st.seek);
-        const zoomed = st.zoom === undefined ? undefined : await p.zoom(st.zoom);
+        // Select before zooming: a pick from the live list frames the character, and the zoom is then on it.
         const selected = st.select === undefined ? undefined : await p.select(st.select);
+        const zoomed = st.zoom === undefined ? undefined : await p.zoom(st.zoom);
         if (seeked === true || zoomed === true || selected === true) await sleep(c.settle);
         const file = await p.shot(name);
         facts[name] = { path: st.path, found, ...(seeked !== undefined ? { seeked } : {}), ...(selected !== undefined ? { selected } : {}), ...p.page.facts };

@@ -10,13 +10,13 @@ import { join } from "node:path";
 import { createApi } from "../runner/viewer/api";
 import { localRunStore } from "../runner/viewer/clickhouse";
 import { defaultStates, parseCli, pathName } from "./dashboard-shots";
-import { ENDED_RUN, LIVE_RUN, writeFixture } from "./shots/fixture";
+import { ENDED_RUN, LIVE_RUN, LIVE_RUN_2, LIVE_RUN_3, writeFixture } from "./shots/fixture";
 import { tempDirs } from "./temp-dirs";
 
 const tmp = tempDirs();
 
 describe("the fixture", () => {
-  test("the viewer reads one live run with a trace to now and one ended run, and the sheet travels with the trace", async () => {
+  test("the viewer reads three live runs, one with a trace to now, and one ended run, and the sheet travels with the trace", async () => {
     const root = tmp("shots-fixture-");
     const runsDir = join(root, "runs");
     const now = Date.now();
@@ -30,6 +30,16 @@ describe("the fixture", () => {
       const ended = rows.find((r) => r.runId === ENDED_RUN)!;
       expect(live).toMatchObject({ live: true, terminationReason: null, character: "Fixturewick" });
       expect(ended).toMatchObject({ live: false, terminationReason: "episode-limit" });
+      expect(rows.find((r) => r.runId === LIVE_RUN_2)).toMatchObject({ live: true, character: "Quillara" });
+      expect(rows.find((r) => r.runId === LIVE_RUN_3)).toMatchObject({ live: true, character: "Thornelle" });
+      // The live list's levels and the continent the third stands on, as the map's feed reads them.
+      const feed = (await (await api(new Request("http://127.0.0.1/api/positions"))).json()) as { positions: { runId: string; level: number | null; map: number }[] };
+      const byRun = new Map(feed.positions.map((p) => [p.runId, p]));
+      expect([LIVE_RUN, LIVE_RUN_2, LIVE_RUN_3].map((id) => [byRun.get(id)?.level, byRun.get(id)?.map])).toEqual([
+        [7, 0],
+        [12, 0],
+        [3, 1],
+      ]);
       const index = (await (await api(new Request(`http://127.0.0.1/api/run/${LIVE_RUN}/trace`))).json()) as { segs: [number, number][]; tail: unknown };
       // Twenty minutes written close three five-minute windows at least, and leave an open tail.
       expect(index.segs.reduce((n, r) => n + r[1], 0)).toBeGreaterThanOrEqual(3);
