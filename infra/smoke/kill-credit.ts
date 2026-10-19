@@ -1,9 +1,9 @@
 /**
- * Fast-gate smoke B (added to the gate 2026-08-23): combat, kill credit and
- * loot, with exactly ONE kill. Runs on its own account in parallel with
- * quest-accept-status.ts; together they are the per-tick preflight gate. The
- * deploy-time full arc (eight kills to objective completion and the kill
- * quest's own turn-in) stays module-quest.ts.
+ * A deploy smoke: combat, kill credit and loot, with exactly ONE kill. It is
+ * one of the release's `preflight.deploySmokes` (on SMOKE2), run in the deploy
+ * window beside quest-accept-status.ts and module-quest.ts (the full arc:
+ * eight kills to objective completion and the kill quest's own turn-in). The
+ * per-tick gate runs only infra/smoke/preflight.ts.
  *
  * Starts from a fixture. A persistent character (default
  * `Smokekc` on MODULE_ACCOUNT, never deleted) is placed by
@@ -27,8 +27,10 @@
  *      best effort, reported, never asserted;
  *   3. engage the nearest Kobold Vermin: set_target -> face -> attack_start ->
  *      the SMSG_ATTACKERSTATEUPDATE stream -> the kobold's health reaches 0 ->
- *      SMSG_QUESTUPDATE_ADD_KILL { questId 7, entry 6, current 1 } and a
- *      fromKill SMSG_LOG_XPGAIN;
+ *      SMSG_QUESTUPDATE_ADD_KILL { questId 7, entry 6, current 1 }, a
+ *      fromKill SMSG_LOG_XPGAIN, and the SMSG_PARTYKILLLOG kill record naming
+ *      this character as the killer (ungrouped, the core sends it to the
+ *      killer alone);
  *   4. loot_all the corpse -> SMSG_LOOT_RESPONSE -> SMSG_LOOT_RELEASE_RESPONSE;
  *   5. DELETE /session. The character is the fixture: it is never deleted, and
  *      `apply.ts` rewrites its rows (quest log included, `clearQuests`) at the
@@ -41,12 +43,12 @@
  *
  * Fail fast, never "pick another": the one fight has a hard cap of 1.5x the
  * longest fight observed (25.9s, 2026-08-23 logs), a death is a failure, and
- * so is a kobold that never comes into view. The gate re-runs every tick while
- * it fails; a slow failure is the expensive kind. For the same reason the
- * contended-account wait on POST /characters is ten seconds here, not the
- * twenty minutes travel.ts allows itself: that wait, apply.ts's online poll
- * and the arc are sequential, and their sum must close under the gate's
- * `preflight.timeoutMs`.
+ * so is a kobold that never comes into view. A deploy window waits on every
+ * deploy smoke in turn, so a slow failure is the expensive kind. For the same
+ * reason the contended-account wait on POST /characters is ten seconds here,
+ * not the twenty minutes travel.ts allows itself: that wait, apply.ts's online
+ * poll and the arc are sequential, and they share the deploy smokes'
+ * `preflight.deployTimeoutMs` with the others.
  *
  * Run. The DB env the fixture tool needs is on the runner itself (the chart's
  * dbEnv, compose.yml's *wb-db anchor), so by hand nothing is added:
@@ -54,7 +56,7 @@
  *   bun wb smoke kill-credit [--character Smokekc]
  *   bun wb --local smoke kill-credit [--character Smokekc]   # the quickstart
  *
- * The preflight gate runs it as SMOKE2 (MODULE_ACCOUNT=SMOKE2); by hand it
+ * The deploy window runs it as SMOKE2 (MODULE_ACCOUNT=SMOKE2); by hand it
  * logs in as PROBE. Another account is MODULE_ACCOUNT in the runner's
  * environment, which `bun wb` does not carry: `kubectl -n wrathbench exec
  * deploy/wrathbench-runner -- env MODULE_ACCOUNT=SMOKE2 bun
@@ -103,8 +105,8 @@ const KEEP_ITEM_IDS = new Set([6948]);
 /**
  * How long the guid -> item create block join is given to settle after login.
  * It lands with the create block the login already waits for — both live runs
- * joined immediately — so this is slack, not a budget, and the gate's total
- * has no room for more (see the arithmetic in the header).
+ * joined immediately — so this is slack, not a budget, and the deploy
+ * smokes' shared budget is no place to spend more (see the header).
  */
 const BAG_JOIN_TIMEOUT_MS = 1500;
 
@@ -317,15 +319,15 @@ async function endSession(): Promise<void> {
 }
 
 /**
- * The fixture boot, shared with travel.ts. Budgets are the gate's, not a long
- * probe's: a contended account is waited out for 10s in 5s steps and then the
- * run fails, because the gate re-runs on the next tick anyway — and because
- * the three waits are sequential and their sum has to close under
- * `preflight.timeoutMs` (130s): 10s here + apply.ts's 90s online poll + a ~23s
- * arc is ~123s. The backpack clear (step 2b) is inside that arc and costs at
- * most ~3s of waiting — a 1.5s join settle and a 1.5s destroy settle, both
- * usually instant — so the margin is thin by design and any new wait added
- * here has to be paid for out of it.
+ * The fixture boot, shared with travel.ts. Budgets are a deploy smoke's, not
+ * a long probe's: a contended account is waited out for 10s in 5s steps and
+ * then the run fails, because nothing else should hold the account in a
+ * deploy window — and because the three waits are sequential: 10s here +
+ * apply.ts's 90s online poll + a ~23s arc is ~123s of the deploy smokes'
+ * shared `preflight.deployTimeoutMs`. The backpack clear (step 2b) is inside
+ * that arc and costs at most ~3s of waiting — a 1.5s join settle and a 1.5s
+ * destroy settle, both usually instant — so any new wait added here has to be
+ * paid for out of the same budget.
  */
 const fixtureCtx: FixtureContext = {
   base: BASE,
@@ -527,6 +529,16 @@ async function main() {
   }
   const xpGain = await waitFor((e) => e.opcode === "SMSG_LOG_XPGAIN" && e.data?.fromKill === true, REPLY_TIMEOUT_MS, "fromKill SMSG_LOG_XPGAIN", fightStart);
   log(`kill credit: ${JSON.stringify(addKill.data)}; XPGAIN=${JSON.stringify(xpGain.data)}`);
+  // The kill record (Unit::Kill): with no group the core sends it to the
+  // killer alone, so the one this character receives names itself.
+  const killLog = await waitFor(
+    (e) => e.opcode === "SMSG_PARTYKILLLOG" && e.data?.victimGuid === target.guid,
+    REPLY_TIMEOUT_MS,
+    "SMSG_PARTYKILLLOG for the kill (module predates the tap?)",
+    fightStart,
+  );
+  if (killLog.data.killerGuid !== self.guid) fail(`SMSG_PARTYKILLLOG names killer ${killLog.data.killerGuid}, expected ${self.guid}`);
+  log(`kill record: ${JSON.stringify(killLog.data)}`);
 
   // 4. Loot the corpse with the one-call client sequence.
   const lootMark = events.length;
@@ -564,7 +576,7 @@ async function main() {
   }
   // What the cleared bag makes readable: N free slots before the kill, and
   // what the loot occupied. Logged, not asserted — a money-only loot is a
-  // legitimate outcome and must not fail the gate.
+  // legitimate outcome and must not fail the smoke.
   await Bun.sleep(300);
   log(`looted: items=${lootEvt.data.items?.length ?? 0} gold=${lootEvt.data.gold ?? 0}; backpack now ${BACKPACK_SIZE - backpack().length} free slots`);
 
@@ -576,7 +588,7 @@ async function main() {
 
   const secs = (Date.now() - startedAt) / 1000;
   log(`stats: ${events.length} events in ${secs.toFixed(1)}s`);
-  log("PASS: vineyard fixture -> one kobold — attack stream -> kill credit -> loot round trip -> logout");
+  log("PASS: vineyard fixture -> one kobold — attack stream -> kill credit and kill record -> loot round trip -> logout");
   process.exit(0);
 }
 

@@ -1,8 +1,8 @@
 /**
- * Fast-gate smoke A (added to the gate 2026-08-23): the quest-accept /
- * questgiver-status / turn-in surface, with no combat. Runs on its own account
- * in parallel with kill-credit.ts; together they are the per-tick preflight
- * gate. The deploy-time full arc stays module-quest.ts.
+ * A deploy smoke: the quest-accept / questgiver-status / turn-in surface,
+ * with no combat. It is one of the release's `preflight.deploySmokes` (on
+ * SMOKE), run in the deploy window beside kill-credit.ts and module-quest.ts
+ * (the full arc). The per-tick gate runs only infra/smoke/preflight.ts.
  *
  * Raw HTTP/WS only (no SDK). Arc — fresh Human Paladin in Northshire, which
  * spawns beside Deputy Willem:
@@ -32,8 +32,9 @@
  *      for why the delete is first, not last.
  *
  * Every wait is sized at ~1.5x the observed maximum for that step (logs in
- * data/logs/wrathbench/probe-quest-*.jsonl), not a catch-all 60s: the gate
- * re-runs every tick while it fails, so a slow failure is an expensive one.
+ * data/logs/wrathbench/probe-quest-*.jsonl), not a catch-all 60s: a deploy
+ * window waits on every deploy smoke in turn, so a slow failure is an
+ * expensive one.
  *
  * Run:
  *   bun wb smoke quest-accept-status
@@ -239,7 +240,7 @@ async function main() {
   // 0. Delete last run's character through the real CMSG_CHAR_DELETE path.
   //    `character_not_found` is the first run on a fresh realm (nothing to
   //    delete yet). A 504 is the previous character still inside the core's
-  //    post-disconnect linger — only possible when the gate is retrying within
+  //    post-disconnect linger — only possible when the smoke is re-run within
   //    a minute of a failure — and is retried past that window.
   await deletePreviousCharacter();
 

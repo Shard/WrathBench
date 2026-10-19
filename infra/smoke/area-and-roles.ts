@@ -1,7 +1,10 @@
 /**
  * Probe for the two field-level observations of the navigation plan:
  * zone/subzone names on self (`WB_AREA`, `state.self.zone` / `state.self.area`)
- * and NPC roles from `UNIT_NPC_FLAGS` (`state.units(...).roles`).
+ * and NPC roles from `UNIT_NPC_FLAGS` (`state.units(...).roles`), plus the
+ * map's Map.dbc row the party taps added beside them (`mapName`,
+ * `instanceType` on `WB_AREA`, `state.self.map`): map 0 is "Eastern Kingdoms",
+ * InstanceType 0, read off the shipped Map.dbc.
  *
  * End to end against a booted worldserver, from inside the container network:
  * a fresh Human in Northshire -> login announces Elwynn Forest / Northshire
@@ -54,6 +57,7 @@ const HOME = { x: -8949.95, y: -132.49, z: 83.53 }; // human spawn
 const ABBEY_HALL = { x: -8902.6, y: -162.6, z: 82.0 }; // Marshal McBride's spot, inside WMO 59
 
 const EXPECT = {
+  map: { id: 0, name: "Eastern Kingdoms", instanceType: 0 },
   zone: { id: 12, name: "Elwynn Forest" },
   outside: { id: 9, name: "Northshire Valley" },
   inside: { id: 24, name: "Northshire Abbey" },
@@ -89,7 +93,15 @@ log(`health ok: build=${health.build ?? "?"}, character=${CHARACTER}`);
 await deletePreviousCharacter();
 
 const client = await connect({ baseUrl: BASE, token: TOKEN, secret: MODULE_SECRET });
-const areas: { mapId: number; zoneId: number; zoneName: string; areaId: number; areaName: string }[] = [];
+const areas: {
+  mapId: number;
+  mapName?: string;
+  instanceType?: number;
+  zoneId: number;
+  zoneName: string;
+  areaId: number;
+  areaName: string;
+}[] = [];
 client.events.on("WB_AREA", (e) => {
   areas.push(e.data as (typeof areas)[number]);
   log(`WB_AREA ${JSON.stringify(e.data)}`);
@@ -111,7 +123,11 @@ const expectArea = (
   area: { id: number; name: string },
   what: string,
 ) => {
-  if (got.mapId !== 0) fail(`${what}: map ${got.mapId}, expected 0`);
+  if (got.mapId !== EXPECT.map.id || got.mapName !== EXPECT.map.name || got.instanceType !== EXPECT.map.instanceType) {
+    fail(
+      `${what}: map ${got.mapId} "${got.mapName}" type ${got.instanceType}, expected ${EXPECT.map.id} "${EXPECT.map.name}" type ${EXPECT.map.instanceType} (module predates the Map.dbc fields?)`,
+    );
+  }
   if (got.zoneId !== zone.id || got.zoneName !== zone.name) {
     fail(`${what}: zone ${got.zoneId} "${got.zoneName}", expected ${zone.id} "${zone.name}"`);
   }
@@ -130,7 +146,9 @@ try {
   const area = client.state.self.area?.value;
   if (zone?.name !== EXPECT.zone.name || zone.id !== EXPECT.zone.id) fail(`state.self.zone is ${JSON.stringify(zone)}`);
   if (area?.name !== EXPECT.outside.name || area.id !== EXPECT.outside.id) fail(`state.self.area is ${JSON.stringify(area)}`);
-  log(`PASS login: ${zone.name} / ${area.name} (${zone.id} / ${area.id}) on self`);
+  const map = client.state.self.map?.value;
+  if (map?.id !== EXPECT.map.id || map.name !== EXPECT.map.name || map.instanceType !== "none") fail(`state.self.map is ${JSON.stringify(map)}`);
+  log(`PASS login: ${map.name} (${map.instanceType}) / ${zone.name} / ${area.name} (${zone.id} / ${area.id}) on self`);
 
   // 2. Roles: the questgiver at the spawn.
   await client.waitForNearby((o) => o.entry?.value === WILLEM && o.fields.get("npcFlags") !== undefined, {

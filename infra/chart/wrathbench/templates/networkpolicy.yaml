@@ -20,9 +20,10 @@ Service and the LAN. Something on the LAN gets its own rule (the Kubernetes
 API, a self-hosted model server), never a hole in that one.
 
 One exception, on purpose: the FLEET may reach MySQL. Its preflight gate runs
-smokes in-process, and a smoke that starts from a fixture (kill-credit.ts on
-the live gate) stages it with infra/fixtures/apply.ts, which writes
-acore_characters over 3306 from this pod. A benchmark episode cannot use that
+smokes in-process, and a gate smoke that starts from a fixture stages it with
+infra/fixtures/apply.ts, which writes acore_characters over 3306 from this
+pod. Today the gate runs only infra/smoke/preflight.ts, which stages nothing;
+kill-credit.ts, which does, is a deploy smoke run in the runner pod. A benchmark episode cannot use that
 path: the snippet child is not given the database env (sandboxChildEnv) and
 Landlock confines its connects to the module port. Run pods have no database
 env and no such rule.
@@ -133,7 +134,7 @@ spec:
         - protocol: TCP
           port: {{ required "networkPolicy.kubeApi: every entry needs a port" .port }}
     {{- end }}
-    # The preflight gate's fixture staging (see the header).
+    # A gate smoke's fixture staging (see the header).
     - to:
         - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "db") | nindent 12 }}
       ports:

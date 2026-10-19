@@ -1,9 +1,10 @@
 # Group play: the Deadmines eval (ladder rung 6)
 
 Status: design, investigated against the code at the commit this file lands
-in. Nothing here is built. The decisions it rests on are the operator's; the
-rest is the smallest shape of each change that the code admits, with the file
-it lands in, and the smoke that proves it.
+in. Phases 1–2 (the module taps and their SDK surface) are built in PR #247;
+nothing else is. The decisions it rests on are the operator's; the rest is the
+smallest shape of each change that the code admits, with the file it lands
+in, and the smoke that proves it.
 
 ## The operator's decisions (2026-10-19)
 
