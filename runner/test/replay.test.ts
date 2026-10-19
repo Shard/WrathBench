@@ -128,6 +128,23 @@ describe("a stub-driven run replays byte for byte", () => {
     });
   });
 
+  test("the bytes handed to the adapter are a stable prefix between trims", () => {
+    // The cache claim as the provider sees it: while the window's start holds,
+    // each request without its fresh user message opens the next one.
+    const requests = readTrajectory(run.dir).filter((r) => r.t === "request");
+    let compared = 0;
+    for (let k = 1; k < requests.length; k++) {
+      const a = requests[k - 1]!["window"] as { from: number; to: number };
+      const b = requests[k]!["window"] as { from: number; to: number };
+      if (b.to === 0 || a.from !== b.from) continue;
+      const prev = JSON.parse(run.sent[k - 1]!) as ChatMessage[];
+      const next = JSON.parse(run.sent[k]!) as ChatMessage[];
+      expect(next.slice(0, prev.length - 1)).toEqual(prev.slice(0, -1));
+      compared++;
+    }
+    expect(compared).toBeGreaterThan(30);
+  });
+
   test("a version 1 record, which folded nothing, still rebuilds", async () => {
     // The shape written before the fold: what the pre-fold builds wrote for
     // the same requests is these records without `fold`, at `slim: 1`.
