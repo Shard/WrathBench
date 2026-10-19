@@ -7,7 +7,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { PUBLIC_NEARBY_SPAN_MS, encodeNearby, type NearbyRingRow, type NearbyRingUnit } from "@viewer/nearby";
-import { cullLabels, classOf, createNearbyStore, nearbyFrameDue, questMark, NEARBY_FRAME_MS, NEARBY_SLACK_MS } from "../src/lib/nearbyplayer";
+import { cullLabels, classOf, createNearbyStore, nearbyFrameDue, placeLabel, questMark, NEARBY_FRAME_MS, NEARBY_SLACK_MS } from "../src/lib/nearbyplayer";
 import { NEARBY_MIN_PX_PER_YD, NEARBY_NAME_PX_PER_YD, nearbyNamesShown, nearbyShown, pxPerYard } from "../src/lib/mapview";
 import { targetReading } from "../src/lib/unitframe";
 import { createLiveClock, horizonOf, liveCadence } from "../src/lib/traceplayer";
@@ -76,6 +76,24 @@ describe("one dot per guid", () => {
     // The unit frame names the target when the layer knows it, and says what the trace says otherwise.
     expect(targetReading({ kind: "creature", entry: 299, hpPct: 50 }, "Invented Wolf")).toMatchObject({ text: "Invented Wolf", pct: 50 });
     expect(targetReading({ kind: "creature", entry: 299, hpPct: 50 })).toMatchObject({ text: "creature 299" });
+  });
+
+  test("the hovered unit's label goes beside its dot on the first side clear of the pips, else where it covers least", () => {
+    const at = (box: { x: number; y: number }) => [box.x, box.y];
+    // Nothing in the way: on the right, as the culled names are.
+    expect(at(placeLabel(100, 100, 3, 60, 14, []))).toEqual([106, 93]);
+    // A character's puck and name to the right: on the left.
+    const pip = { x: 90, y: 83, w: 120, h: 34 };
+    expect(at(placeLabel(100, 100, 3, 60, 14, [pip]))).toEqual([34, 93]);
+    // Both sides taken: below, then above.
+    const left = { x: 0, y: 83, w: 95, h: 34 };
+    expect(at(placeLabel(100, 100, 3, 60, 14, [pip, left]))).toEqual([70, 106]);
+    const below = { x: 0, y: 105, w: 300, h: 40 };
+    expect(at(placeLabel(100, 100, 3, 60, 14, [pip, left, below]))).toEqual([70, 80]);
+    // Covered on every side: the side that covers least of them.
+    const everywhere = [pip, left, below, { x: 0, y: 70, w: 300, h: 12 }];
+    const placed = placeLabel(100, 100, 3, 60, 14, everywhere);
+    expect(at(placed)).toEqual([70, 80]);
   });
 });
 

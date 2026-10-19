@@ -16,7 +16,8 @@
  *   character, another player, a service NPC, anything else. No reaction
  *   colour: that needs `FactionTemplate.dbc`, which nothing here reads.
  * - **Labels** (`cullLabels`): greedy, highest priority first, so a city's
- *   names do not pile up.
+ *   names do not pile up; the hovered one, never culled, is placed on a side
+ *   of its dot clear of the characters' pucks and names (`placeLabel`).
  * - **The throttle** (`nearbyFrameDue`): NPCs nearly always move, and drawing
  *   them every frame would hold the whole map at the display's rate.
  *
@@ -229,6 +230,44 @@ export function cullLabels(boxes: readonly LabelBox[], max = 60, taken: readonly
     out.push(i);
   }
   return out;
+}
+
+/** A screen rectangle: a label, or what is drawn where one must not go. */
+export type ScreenBox = Omit<LabelBox, "rank">;
+
+/** How much of `a` lies under `b`, in square pixels. */
+function overlapArea(a: ScreenBox, b: ScreenBox): number {
+  const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+  const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  return w > 0 && h > 0 ? w * h : 0;
+}
+
+/**
+ * Where a label that must be drawn goes (the hovered unit's, which is never
+ * culled): beside its dot of radius `r` at `(sx, sy)` on the right as the
+ * culled names are, else on the left, below or above — the first of those
+ * that overlaps none of `taken` (the characters' pucks and their names), and
+ * where every side is covered, the one that covers least of them.
+ */
+export function placeLabel(sx: number, sy: number, r: number, w: number, h: number, taken: readonly ScreenBox[]): ScreenBox {
+  const gap = 3;
+  const sides: ScreenBox[] = [
+    { x: sx + r + gap, y: sy - h / 2, w, h },
+    { x: sx - r - gap - w, y: sy - h / 2, w, h },
+    { x: sx - w / 2, y: sy + r + gap, w, h },
+    { x: sx - w / 2, y: sy - r - gap - h, w, h },
+  ];
+  let best = sides[0]!;
+  let least = Infinity;
+  for (const side of sides) {
+    const covered = taken.reduce((sum, t) => sum + overlapArea(side, t), 0);
+    if (covered === 0) return side;
+    if (covered < least) {
+      least = covered;
+      best = side;
+    }
+  }
+  return best;
 }
 
 /* ----------------------------------------------------------- throttle --- */
