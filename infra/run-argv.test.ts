@@ -200,7 +200,7 @@ describe("the roster's argv, every lane, through run.ts's parser", () => {
       ["healer", "PARTY2", "CLAUDE_CODE_OAUTH_TOKEN_2"],
       ["mage", "PARTY3", "CLAUDE_CODE_OAUTH_TOKEN_2"],
       ["rogue", "PARTY4", "CLAUDE_CODE_OAUTH_TOKEN_2"],
-      ["hunter", "PARTY5", "CLAUDE_CODE_OAUTH_TOKEN_2"],
+      ["paladin", "PARTY5", "CLAUDE_CODE_OAUTH_TOKEN_2"],
     ]);
     const healer = specs[1]!;
     const flags = episodeFlags(healer, false);

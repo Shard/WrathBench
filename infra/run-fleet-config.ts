@@ -9,7 +9,7 @@
 import { join } from "node:path";
 import type { RosterSpec } from "./run-roster";
 import { harnessSeries } from "../runner/src/comparability";
-import { compactWindowDriverRefusal, driverHasCompactWindow, harnessClash, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
+import { compactWindowDriverRefusal, driverHasCompactWindow, harnessClash, isCodexHomeEnvName, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
 import type { Billing } from "../runner/src/model-cost";
 import { isOpenRouterBase, parseRouting } from "../runner/src/routing";
 import { QUEUE_JOB_KEYS, rosterEntryRefusal, strictKeyWhy, unknownKeysOf } from "../runner/src/roster-refusal";
@@ -510,6 +510,33 @@ export function scheduledAccounts(config: Pick<FleetConfig, "accounts">): string
   return ACCOUNT_CLASSES.flatMap((c) => classAccountsOf(config, c));
 }
 
+/**
+ * Why a campaign's `subscription` (its lane pin) cannot be honoured, or
+ * undefined. The pin is checked as a roster entry's is: an env var NAME the
+ * policy lists. It is a pinned campaign's (a lane chosen for launches the
+ * policy does not place), and every assignment must be on a driver that bills
+ * a lane of its kind: a Claude lane for claude-code, a Codex home for codex.
+ */
+export function campaignLaneProblem(
+  c: Pick<Campaign, "name" | "subscription" | "account" | "assignments">,
+  roster: Readonly<Record<string, Pick<FleetRosterEntry, "driver">>>,
+  subscriptions: readonly string[],
+): string | undefined {
+  const lane = c.subscription;
+  if (lane === undefined) return undefined;
+  if (!isTokenEnvName(lane)) return `campaign ${c.name}: subscription must be the NAME of the env var holding the lane's credential, never the credential`;
+  if (!subscriptions.includes(lane)) return `campaign ${c.name}: subscription ${lane} is not in policy.subscriptions (${subscriptions.join(", ")})`;
+  if (c.account === undefined) return `campaign ${c.name}: a lane pin is a pinned campaign's (give account or accounts); the policy places an unpinned campaign's lanes`;
+  for (const a of c.assignments) {
+    const driver = roster[a.model]?.driver ?? "openai";
+    const codex = isCodexHomeEnvName(lane);
+    if (driver === "claude-code" && codex) return `campaign ${c.name}: ${a.model} runs on claude-code, and ${lane} is a Codex home`;
+    if (driver === "codex" && !codex) return `campaign ${c.name}: ${a.model} runs on codex, and ${lane} is not a Codex home`;
+    if (driver !== "claude-code" && driver !== "codex") return `campaign ${c.name}: ${a.model} runs on the ${driver} driver, which bills no subscription lane`;
+  }
+  return undefined;
+}
+
 /** The jobs pinned to an account, in file order. */
 export function pinnedJobs(config: Pick<FleetConfig, "jobs">): FleetJob[] {
   return config.jobs.filter((j) => j.account !== undefined);
@@ -563,6 +590,8 @@ export function pinnedCampaignJobs(
       // run-id stem (`-a<n>` from the second), so a restaged party never lands
       // on the ids of the one before it.
       ...(c.accounts !== undefined ? { accounts: [...c.accounts], attempt: next.attempts + 1 } : {}),
+      // The campaign's own lane, for its launches only (`campaigns.<id>.subscription`).
+      ...(c.subscription !== undefined ? { subscription: c.subscription } : {}),
     });
   }
   return out;
@@ -935,6 +964,15 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
   for (const [jobName, keys] of strictJobKeys) {
     const pin = pinsOf(jobs, campaigns).find((p) => p.label === jobName);
     if (pin !== undefined) refuse(pin, refusals, strictKeyWhy("queue job", keys, QUEUE_JOB_KEYS));
+  }
+  // A campaign's lane pin is checked as a roster entry's is, against the
+  // policy's subscriptions; a pin it cannot honour refuses the campaign, never
+  // runs it on another lane.
+  for (const c of campaigns) {
+    const why = campaignLaneProblem(c, roster, policy.subscriptions);
+    if (why === undefined) continue;
+    const pin = pinsOf(jobs, campaigns).find((p) => p.label === `campaign ${c.name}`);
+    if (pin !== undefined && pin.enabled) refuse(pin, refusals, why);
   }
   applyPinAccountRules(pinsOf(jobs, campaigns), accounts, refusals);
   for (const pin of pinsOf(jobs, campaigns)) {

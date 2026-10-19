@@ -78,6 +78,15 @@ export const campaignRowSchema = z
      */
     accounts: z.array(z.string().min(2).max(16)).min(1).optional(),
     /**
+     * The subscription lane this campaign's launches bill, by env var NAME
+     * (`policy.subscriptions`), for a pinned campaign: it overrides the
+     * assignment's roster lane for this campaign's runs and nothing else, so
+     * the same entry's scored evals keep their own placement (operator,
+     * 2026-10-19: the Deadmines party on the second Claude lane). Checked
+     * against the policy and the assignments' drivers (`campaignLaneProblem`).
+     */
+    subscription: z.string().min(1).max(128).optional(),
+    /**
      * Skip a model the projection considers unhealthy (retired, or cooling on
      * the defer ladder). Default true: burning a square against a dead
      * endpoint produces no observation.
@@ -111,6 +120,8 @@ export interface Campaign {
   account?: string;
   /** A party campaign's pinned accounts, one per member in member order. */
   accounts?: string[];
+  /** The lane this campaign's launches bill (`campaigns.<id>.subscription`); absent: the assignment's own. */
+  subscription?: string;
   excludeUnhealthy: boolean;
   /** The definition's cells and arms, here because every planner walks them. */
   cells: readonly CampaignCell[];
@@ -287,7 +298,7 @@ export function campaignRowProblem(name: string, spec: unknown): string | null {
   if (!CAMPAIGN_NAME.test(name)) return `campaign ${name}: the id must match ${CAMPAIGN_NAME}`;
   const parsed = campaignRowSchema.safeParse(spec);
   if (parsed.success) return null;
-  return `campaign ${name}: ${issuesOf(parsed.error)} — a row is { version, enabled, assignments [{ model, runsPerCell }], account?, accounts?, excludeUnhealthy? }`;
+  return `campaign ${name}: ${issuesOf(parsed.error)} — a row is { version, enabled, assignments [{ model, runsPerCell }], account?, accounts?, subscription?, excludeUnhealthy? }`;
 }
 
 /**
@@ -349,6 +360,7 @@ export function parseCampaigns(
       // A party is pinned whole: the leader's account stands for the pin
       // wherever one account is read, and the list carries the rest.
       ...(accounts !== undefined ? { account: accounts[0]!, accounts: [...accounts] } : {}),
+      ...(row.subscription !== undefined ? { subscription: row.subscription } : {}),
       excludeUnhealthy: row.excludeUnhealthy,
       cells: def.cells,
       arms: def.arms,

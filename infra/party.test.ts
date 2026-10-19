@@ -15,7 +15,7 @@ import { DEFAULT_POLICY, modelStates, type RunFact } from "../runner/src/models"
 import { defsBlock, joined, PARTY_MEMBERS, partyDefinition, definition } from "../runner/test/fixtures/campaigns";
 import { runParty, type MemberHandle, type MemberVerdict, type PartyFateDeps, type PartyMemberRun } from "./party-fate";
 import { commandStager, type StageRequest } from "./party-stager";
-import { parseFleet, pinnedCampaignJobs, type FleetConfig, type FleetJob, type FleetRosterEntry } from "./run-fleet-config";
+import { parseFleet, pinnedCampaignJobs, rosterModels, type FleetConfig, type FleetJob, type FleetRosterEntry } from "./run-fleet-config";
 import { fillEntries, jobSpawn, partyAdmission, planResumes, planTick } from "./run-fleet-plan";
 import { partyOfRoster, resolve, stageRequestOf } from "./run-roster";
 import { tempDirs } from "./temp-dirs";
@@ -122,7 +122,7 @@ describe("shared fate", () => {
     expect(out.fate).toBe("ended");
     expect(out.trigger).toEqual({ member: "tank", reason: "episode-limit" });
     // The two that reached their own verdict keep it; the two the stop paused are ended with the party.
-    expect(d.writes).toEqual(["rogue end party-ended (tank: episode-limit)", "hunter end party-ended (tank: episode-limit)"]);
+    expect(d.writes).toEqual(["rogue end party-ended (tank: episode-limit)", "paladin end party-ended (tank: episode-limit)"]);
     expect(members.slice(1).every((f) => f.stops === 1)).toBe(true);
     expect(members[0]!.stops).toBe(0);
   });
@@ -135,7 +135,7 @@ describe("shared fate", () => {
     members[2]!.exit({ kind: "terminated", reason: "idle", detail: "no model output for 20m" });
     const out = await done;
     expect(out.fate).toBe("ended");
-    expect(d.writes).toEqual(["tank", "healer", "rogue", "hunter"].map((m) => `${m} end party-ended (mage: idle)`));
+    expect(d.writes).toEqual(["tank", "healer", "rogue", "paladin"].map((m) => `${m} end party-ended (mage: idle)`));
     expect(d.staged).toBe(1);
   });
 
@@ -159,7 +159,7 @@ describe("shared fate", () => {
     const done = runParty(runs, d);
     await tick();
     members[3]!.exit({ kind: "paused", reason: "rate-limited" });
-    // The hunter hit the same limit on its own before the stop reached it.
+    // The paladin hit the same limit on its own before the stop reached it.
     members[4]!.exit({ kind: "paused", reason: "rate-limited" });
     const out = await done;
     expect(out.fate).toBe("paused");
@@ -176,8 +176,8 @@ describe("shared fate", () => {
     members[4]!.exit({ kind: "terminated", reason: "tool-call-limit", detail: undefined });
     const out = await done;
     expect(out.fate).toBe("ended");
-    expect(out.trigger).toEqual({ member: "hunter", reason: "tool-call-limit" });
-    expect(d.writes).toEqual(["tank", "healer", "mage", "rogue"].map((m) => `${m} end party-ended (hunter: tool-call-limit)`));
+    expect(out.trigger).toEqual({ member: "paladin", reason: "tool-call-limit" });
+    expect(d.writes).toEqual(["tank", "healer", "mage", "rogue"].map((m) => `${m} end party-ended (paladin: tool-call-limit)`));
   });
 
   test("a pause in a lane that does not resume ends the attempt: the member's own pause by the lane's rule, the rest party-ended", async () => {
@@ -212,8 +212,8 @@ describe("shared fate", () => {
     members[4]!.exit({ kind: "launch-failed", detail: "image would not pull" });
     await done;
     expect(d.writes).toEqual([
-      ...["tank", "healer", "mage", "rogue"].map((m) => `${m} end party-ended (hunter: launch-failed)`).slice(0, 4),
-      "hunter launch-failed (image would not pull)",
+      ...["tank", "healer", "mage", "rogue"].map((m) => `${m} end party-ended (paladin: launch-failed)`).slice(0, 4),
+      "paladin launch-failed (image would not pull)",
     ]);
   });
 
@@ -257,7 +257,7 @@ describe("shared fate", () => {
     for (const f of members) void f.handle.stop(90_000);
     const out = await done;
     expect(out.fate).toBe("ended");
-    expect(d.writes).toEqual(["healer", "mage", "rogue", "hunter"].map((m) => `${m} end party-ended (tank: episode-limit)`));
+    expect(d.writes).toEqual(["healer", "mage", "rogue", "paladin"].map((m) => `${m} end party-ended (tank: episode-limit)`));
   });
 
   test("a stop that lands while the stager works launches nobody", async () => {
@@ -295,7 +295,7 @@ describe("shared fate", () => {
 // --------------------------------------------------------- the config
 
 const ROSTER = {
-  son2: { tier: "t1", model: "sonnet", driver: "claude-code", effort: "max", subscription: LANE2 },
+  son2: { tier: "t1", model: "sonnet", driver: "claude-code", effort: "max" },
   glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
 };
 
@@ -306,7 +306,7 @@ function fleet(row: Record<string, unknown> = {}, over: Record<string, unknown> 
     roster: ROSTER,
     policy: { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", LANE2] },
     "campaign-defs": defsBlock(party, definition({ id: "solo" })),
-    campaigns: { deadmines: { version: 1, assignments: [{ model: "son2" }], accounts: ACCOUNTS, ...row } },
+    campaigns: { deadmines: { version: 1, assignments: [{ model: "son2" }], accounts: ACCOUNTS, subscription: LANE2, ...row } },
     queue: [],
     ...over,
   });
@@ -360,7 +360,7 @@ describe("a party's spawn", () => {
   });
 
   test("materialises one entry per member: its run id off one stem, its account, start, lane and campaign file", () => {
-    const spawn = jobSpawn({ ...job!, subscription: LANE2 }, cfg.roster, "PARTY1", STAMP, undefined, cfg.campaigns);
+    const spawn = jobSpawn(job!, cfg.roster, "PARTY1", STAMP, undefined, cfg.campaigns);
     expect(spawn.accounts).toEqual(ACCOUNTS);
     const entries = fillEntries(spawn, STAMP);
     const stem = `fleet-deadmines-party-base-sonnet-max-${STAMP}`;
@@ -405,6 +405,52 @@ describe("a party's spawn", () => {
     expect(e!.account).toBe("PROBE");
     expect(e).not.toHaveProperty("party");
     expect(e!.campaignFile).not.toHaveProperty("party");
+  });
+});
+
+// ------------------------------------------------------------ the lane pin
+
+describe("a campaign's own lane (campaigns.<id>.subscription)", () => {
+  test("every member of the campaign's launches bills it, and the same entry's scored evals keep their own lane", () => {
+    const cfg = fleet({}, { queue: [{ ref: "son2", episode: "e90", account: "SHAKEOUT" }] });
+    expect(cfg.roster["son2"]!.subscription).toBeUndefined();
+    const [job] = pinnedCampaignJobs(cfg, []);
+    expect(job!.subscription).toBe(LANE2);
+    expect(jobSpawn(job!, cfg.roster, "PARTY1", STAMP, undefined, cfg.campaigns).entries.map((e) => e.tokenEnv)).toEqual([LANE2, LANE2, LANE2, LANE2, LANE2]);
+    // The e90 of the same roster entry: a pinned queue job, and the policy's own pick.
+    const e90 = cfg.jobs.find((j) => j.name === "son2-e90")!;
+    expect(e90.subscription).toBeUndefined();
+    expect(jobSpawn(e90, cfg.roster, "SHAKEOUT", STAMP).entries[0]!.tokenEnv).toBeUndefined();
+    // With the party not holding the model (one character per model), the policy places its e90 by its own rules.
+    const open = fleet({ enabled: false });
+    const states = modelStates({ runsDir: "/nonexistent", roster: rosterModels(open.roster), runs: [], sidecar: { version: 1, cleared: {} }, now: 1_800_000_000_000, policy: open.policy });
+    const plan = planTick(open, states, () => undefined, STAMP);
+    const pick = plan.policy.find((p) => p.job.ref === "son2" && p.job.episode === "e90");
+    expect(pick).toBeDefined();
+    expect(pick!.job.subscription).not.toBe(LANE2);
+  });
+
+  test("a lane the policy does not list, an unpinned campaign, or an assignment that bills no lane refuses the campaign", () => {
+    const refused = (row: Record<string, unknown>, policy: Record<string, unknown> = { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", LANE2] }): string => {
+      const cfg = fleet(row, { policy });
+      expect(cfg.campaigns.find((c) => c.name === "deadmines")!.enabled).toBe(false);
+      return cfg.refusals.map((r) => r.why).join("; ");
+    };
+    expect(refused({ subscription: "CLAUDE_CODE_OAUTH_TOKEN_3" })).toContain("not in policy.subscriptions");
+    expect(refused({}, { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN"] })).toContain("not in policy.subscriptions");
+    expect(refused({ subscription: "CODEX_HOME" }, { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", LANE2, "CODEX_HOME"] })).toContain("is a Codex home");
+    expect(refused({ assignments: [{ model: "glm" }] })).toContain("bills no subscription lane");
+    const unpinned = parseFleet({
+      _notes: ["n"],
+      accounts: { pool: ["RUNNER"] },
+      roster: ROSTER,
+      policy: { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", LANE2] },
+      "campaign-defs": defsBlock(definition({ id: "solo" })),
+      campaigns: { solo: { version: 1, assignments: [{ model: "son2" }], subscription: LANE2 } },
+      queue: [],
+    });
+    expect(unpinned.campaigns[0]!.enabled).toBe(false);
+    expect(unpinned.refusals.map((r) => r.why).join(" ")).toContain("a lane pin is a pinned campaign's");
   });
 });
 
@@ -489,7 +535,7 @@ describe("a paused party is planned whole", () => {
   const cfg = fleet();
   const stem = `fleet-deadmines-party-base-sonnet-max-${STAMP}`;
   const fileOf = (runId: string) => {
-    const spawn = jobSpawn({ ...pinnedCampaignJobs(cfg, [])[0]!, subscription: LANE2 }, cfg.roster, "PARTY1", STAMP, undefined, cfg.campaigns);
+    const spawn = jobSpawn(pinnedCampaignJobs(cfg, [])[0]!, cfg.roster, "PARTY1", STAMP, undefined, cfg.campaigns);
     return fillEntries(spawn, STAMP).find((e) => e.runId === runId)?.campaignFile ?? null;
   };
   const fact = (member: string, i: number, over: Partial<RunFact> = {}): RunFact => ({
@@ -547,7 +593,7 @@ describe("a paused party is planned whole", () => {
   });
 
   test("a party with a member that ended is listed, never half-resumed", () => {
-    const p = plan(facts((m) => (m === "hunter" ? { pause: null, terminationReason: "episode-limit", endedAt: NOW - 1000 } : {})));
+    const p = plan(facts((m) => (m === "paladin" ? { pause: null, terminationReason: "episode-limit", endedAt: NOW - 1000 } : {})));
     expect(p.resume).toEqual([]);
     expect(p.listed).toHaveLength(4);
     expect(p.listed[0]!.why).toContain("a party resumes whole");
@@ -650,7 +696,7 @@ describe("the defer ladder", () => {
       subscription: LANE2,
       ...over,
     });
-    // The hunter's pod never pulled; the other four were ended with it before a response.
+    // The paladin's pod never pulled; the other four were ended with it before a response.
     const runs = MEMBERS.map((_, i) => base(i, i === 4 ? { terminationReason: "launch-failed" } : {}));
     const [state] = modelStates({ runsDir: "/nonexistent", roster: [{ name: "son2", model: "sonnet", effort: "max", driver: "claude-code", tier: "t1" } as never], runs, sidecar: { version: 1, cleared: {} }, now: NOW });
     expect(state!.ladder).toBe(0);

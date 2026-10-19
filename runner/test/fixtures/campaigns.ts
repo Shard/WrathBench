@@ -87,7 +87,7 @@ export const PARTY_MEMBERS = [
   { id: "healer", role: "healer", race: 1, class: 5, character: "Brenna", objective: "You are Brenna, the party's healer." },
   { id: "mage", role: "damage", race: 7, class: 8, character: "Corvin", objective: "You are Corvin, the party's damage." },
   { id: "rogue", role: "damage", race: 1, class: 4, character: "Dagny", objective: "You are Dagny, the party's damage." },
-  { id: "hunter", role: "damage", race: 3, class: 3, character: "Edrin", objective: "You are Edrin, the party's damage." },
+  { id: "paladin", role: "damage", race: 3, class: 2, character: "Edrin", objective: "You are Edrin, the party's damage." },
 ] as const;
 
 /** A party definition: one cell (the party, carrying the leader's start), staged at level 20. */

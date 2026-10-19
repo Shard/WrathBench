@@ -362,7 +362,11 @@ campaign-defs  published campaign definitions, `<id>@<version>` → { definition
             fresh store gets its definitions by publishing them, then seeding the rest.
 campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only —
             { <id>: { version, enabled, assignments [{ model: <roster name>, runsPerCell }],
-            account?, accounts?, excludeUnhealthy? } }, strict. A PARTY definition is pinned with
+            account?, accounts?, subscription?, excludeUnhealthy? } }, strict. `subscription` (a
+            lane's env var NAME, one `policy.subscriptions` lists, of the assignments' drivers'
+            kind) is a PINNED campaign's lane: every launch of the campaign bills it, overriding
+            the roster entry's own lane for those runs only — the entry's scored evals keep theirs
+            (operator, 2026-10-19). A lane it cannot honour refuses the campaign. A PARTY definition is pinned with
             `accounts` (one per member, member order, the leader first) and never `account`; any
             other count, a shared account or a clash on any one of them refuses the whole pin. Its
             square launches one roster of all members together, after the stager, counts every
