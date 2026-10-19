@@ -24,6 +24,17 @@
  * health still the ghost's 1). The SDK's `too_far` verdict is this distance
  * plus the radius; the raw probe checks the facts it is built from.
  *
+ * The resurrection leg (the party taps): a second account
+ * (MODULE_ACCOUNT2, default SMOKE2) logs in a level-10 Human Priest placed
+ * by the `vineyard-priest` fixture, which grants Resurrection (2006). The
+ * warrior dies a second time and does not release; the priest walks to the
+ * body and casts Resurrection on it (a dead, unreleased player is a unit
+ * target, Spell::SelectEffectTypeImplicitTargets) -> the warrior receives
+ * SMSG_RESURRECT_REQUEST naming the priest as caster, sickness false (a player
+ * caster) -> answers with the raw CMSG_RESURRECT_RESPONSE (caster guid, 1) ->
+ * the resurrect is observed (SMSG_DEATH_RELEASE_LOC map -1, health above 1).
+ * The priest is a throwaway, deleted at the end like the warrior.
+ *
  * Each step fails with a named FAIL line and a non-zero exit.
  *
  * Run:
@@ -42,11 +53,21 @@ const TOKEN = `probe-death-${crypto.randomUUID()}`;
 // infra/bootstrap/bootstrap.ts with WRATHBENCH_ACCOUNT_USER=PROBE.
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // Fresh character every run: the arc needs a level 1 that kobolds can kill.
+import { connect, type WrathClient } from "../../sdk/src/index";
+import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { probeName } from "./lib/name";
-import { authHeaders } from "./lib/auth";
+import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase, moduleWsBase } from "./lib/module";
 
 const CHARACTER = probeName("Bd");
+// The resurrection leg's priest: a throwaway on the second account, placed by
+// the vineyard-priest fixture (level 10, Resurrection known).
+const PRIEST_ACCOUNT = process.env.MODULE_ACCOUNT2 ?? "SMOKE2";
+const PRIEST = probeName("Bdp");
+const PRIEST_TOKEN = `probe-death-priest-${crypto.randomUUID()}`;
+const PRIEST_SCENARIO = "vineyard-priest";
+const SPELL_RESURRECTION = 2006; // rank 1, 10s cast, 30y
+let priest: WrathClient | undefined;
 
 const ENTRY_VERMIN = 6; // Kobold Vermin, Northshire vineyards
 const VINEYARDS = { x: -8790, y: -160, z: 82.5 };
@@ -56,9 +77,18 @@ function log(msg: string) {
 }
 
 let cleanupStarted = false;
+let priestCleaned = false;
+async function cleanupPriest() {
+  if (priestCleaned) return;
+  priestCleaned = true;
+  await priest?.logout().catch(() => {});
+  priest?.close();
+  await deleteFixtureCharacters({ base: BASE, account: PRIEST_ACCOUNT, token: PRIEST_TOKEN, log }, [PRIEST]);
+}
 async function cleanup() {
   if (cleanupStarted) return;
   cleanupStarted = true;
+  await cleanupPriest().catch(() => {});
   await req("DELETE", "/session", { token: TOKEN }).catch(() => {});
   for (let attempt = 0; attempt < 6; attempt++) {
     await Bun.sleep(2000);
@@ -221,29 +251,9 @@ function aliveVermin(exclude: Set<string>): { guid: string; pos: Vec } | undefin
   return best;
 }
 
-async function main() {
-  const health = await req("GET", "/health");
-  if (health.status !== 200 || !health.json?.ok) fail(`health not ok: ${JSON.stringify(health)}`);
-  log(`health ok, character=${CHARACTER}`);
-
-  const ws = await openEvents();
-  await Bun.sleep(200);
-
-  // 1. Fresh Human Warrior in Northshire.
-  step = "session";
-  const session = await req("POST", "/session", { token: TOKEN, account: ACCOUNT, character: CHARACTER, race: 1, class: 1 });
-  if (session.status !== 200 || !session.json?.inWorld) fail(`session failed: ${session.status} ${JSON.stringify(session.json)}`);
-  log(`in world as ${CHARACTER} guid=${session.json.guid}`);
-  const verify = await waitFor((e) => e.opcode === "SMSG_LOGIN_VERIFY_WORLD", 5000, "login verify");
-  self.pos = { x: verify.data.x, y: verify.data.y, z: verify.data.z };
-  await waitFor((e) => e.opcode === "SMSG_UPDATE_OBJECT" && e.data?.objects?.some((o: any) => o.self), 10000, "self create");
-  if (!(self.maxHealth > 0)) fail(`self create carried no maxHealth: ${JSON.stringify(self)}`);
-  log(`PASS[session]: level ${self.level}, ${self.health}/${self.maxHealth} hp`);
-
-  // 2. Walk to the vineyards and die on purpose: aggro several Kobold Vermin
-  //    (attack to get on their threat list, then stop fighting) and stand.
-  step = "death";
-  if ((await tryMoveTo(VINEYARDS, "the vineyards")) !== "arrived") fail("never reached the vineyards");
+// Die on purpose where we stand: keep 2-3 Kobold Vermin on the threat list
+// (attack to get on it, then stop fighting) until health reaches 0.
+async function dieToVermin() {
   const pulled = new Set<string>();
   const deathDeadline = Date.now() + 6 * 60 * 1000;
   while (self.health !== 0) {
@@ -271,6 +281,62 @@ async function main() {
     for (const g of pulled) if (units.get(g)?.dead ?? true) pulled.delete(g);
     await Bun.sleep(500);
   }
+}
+
+// The priest of the resurrection leg: placed by its fixture before the arc
+// starts (apply.ts waits for the character to be offline, which a fresh one
+// is), logged in only when the leg begins.
+function priestFixture(): FixtureContext {
+  return {
+    base: BASE,
+    account: PRIEST_ACCOUNT,
+    character: PRIEST,
+    token: PRIEST_TOKEN,
+    log,
+    fail,
+    contendedDeadlineMs: 60_000,
+    contendedRetryMs: 10_000,
+    createAndLogout: async () => {
+      const c = await connect({ baseUrl: BASE, token: `${PRIEST_TOKEN}-create`, secret: MODULE_SECRET });
+      try {
+        await c.createSession({ account: PRIEST_ACCOUNT, character: PRIEST, race: 1, class: 5 });
+        await c.logout();
+      } finally {
+        c.close();
+      }
+    },
+  };
+}
+
+async function main() {
+  const health = await req("GET", "/health");
+  if (health.status !== 200 || !health.json?.ok) fail(`health not ok: ${JSON.stringify(health)}`);
+  log(`health ok, character=${CHARACTER}`);
+
+  // 0. The resurrection leg's priest, placed now so the leg starts at once.
+  step = "priest-fixture";
+  await ensureFixtureCharacter(priestFixture());
+  await applyScenario(priestFixture(), PRIEST_SCENARIO);
+
+  const ws = await openEvents();
+  await Bun.sleep(200);
+
+  // 1. Fresh Human Warrior in Northshire.
+  step = "session";
+  const session = await req("POST", "/session", { token: TOKEN, account: ACCOUNT, character: CHARACTER, race: 1, class: 1 });
+  if (session.status !== 200 || !session.json?.inWorld) fail(`session failed: ${session.status} ${JSON.stringify(session.json)}`);
+  log(`in world as ${CHARACTER} guid=${session.json.guid}`);
+  const verify = await waitFor((e) => e.opcode === "SMSG_LOGIN_VERIFY_WORLD", 5000, "login verify");
+  self.pos = { x: verify.data.x, y: verify.data.y, z: verify.data.z };
+  await waitFor((e) => e.opcode === "SMSG_UPDATE_OBJECT" && e.data?.objects?.some((o: any) => o.self), 10000, "self create");
+  if (!(self.maxHealth > 0)) fail(`self create carried no maxHealth: ${JSON.stringify(self)}`);
+  log(`PASS[session]: level ${self.level}, ${self.health}/${self.maxHealth} hp`);
+
+  // 2. Walk to the vineyards and die on purpose: aggro several Kobold Vermin
+  //    (attack to get on their threat list, then stop fighting) and stand.
+  step = "death";
+  if ((await tryMoveTo(VINEYARDS, "the vineyards")) !== "arrived") fail("never reached the vineyards");
+  await dieToVermin();
   const deathAt = Date.now();
   const deathPos = { ...self.pos };
   log(`dead: health 0 at (${deathPos.x.toFixed(1)}, ${deathPos.y.toFixed(1)}, ${deathPos.z.toFixed(1)})`);
@@ -363,6 +429,42 @@ async function main() {
   if (self.health <= 1) fail(`reclaim never resurrected: health ${self.health}/${self.maxHealth} after 60s of attempts`);
   log(`PASS[reclaim]: resurrected at ${self.health}/${self.maxHealth} hp`);
 
+  // 5b. Resurrection by another player: die again, stay unreleased, and let
+  //     the priest cast Resurrection on the body. The offer is
+  //     SMSG_RESURRECT_REQUEST; the answer is the raw CMSG_RESURRECT_RESPONSE.
+  step = "resurrect-death";
+  await dieToVermin();
+  const bodyPos = { ...self.pos };
+  log(`dead again at (${bodyPos.x.toFixed(1)}, ${bodyPos.y.toFixed(1)}); not releasing`);
+
+  step = "resurrect-cast";
+  priest = await connect({ baseUrl: BASE, token: PRIEST_TOKEN, secret: MODULE_SECRET });
+  await priest.createSession({ account: PRIEST_ACCOUNT, character: PRIEST, race: 1, class: 5 });
+  const priestGuid = priest.state.self.guid ?? fail("the priest has no guid after login");
+  if (priest.state.spell(SPELL_RESURRECTION) === undefined) fail(`${PRIEST} does not know Resurrection (${SPELL_RESURRECTION}) — did apply.ts place the vineyard-priest fixture?`);
+  const near = { x: bodyPos.x + 4, y: bodyPos.y, z: bodyPos.z };
+  const walked = await priest.moveTo(near, { timeout: 60_000 });
+  if (!walked.ok) fail(`the priest's walk to the body ended ${JSON.stringify(walked)}`);
+  const offerMark = events.length;
+  const cast = await priest.castSpell(SPELL_RESURRECTION, session.json.guid);
+  log(`priest ${priestGuid} cast Resurrection on ${session.json.guid}: ${JSON.stringify(cast)}`);
+  const offer = await waitFor((e) => e.opcode === "SMSG_RESURRECT_REQUEST", 30000, "SMSG_RESURRECT_REQUEST (module predates the tap, or the cast failed)", offerMark);
+  if (offer.data?.casterGuid !== priestGuid) fail(`the offer names caster ${offer.data?.casterGuid}, expected the priest ${priestGuid}`);
+  if (offer.data?.sickness !== false) fail(`a player's resurrection offer reads sickness ${offer.data?.sickness}, expected false`);
+  if (offer.data?.casterName !== undefined) fail(`a player caster's offer carries a name (${offer.data.casterName}); the core sends it empty`);
+  log(`PASS[resurrect-request]: ${JSON.stringify(offer.data)}`);
+
+  step = "resurrect-accept";
+  const acceptMark = events.length;
+  const guidLe = (g: string) => BigInt(g).toString(16).padStart(16, "0").match(/../g)!.reverse().join("");
+  await action("raw", { opcode: "CMSG_RESURRECT_RESPONSE", payload: guidLe(priestGuid) + "01" });
+  await waitFor((e) => e.opcode === "SMSG_DEATH_RELEASE_LOC" && e.data?.map === -1, 15000, "the resurrect after accepting (SMSG_DEATH_RELEASE_LOC map -1)", acceptMark);
+  const aliveBy = Date.now() + 5000;
+  while (self.health <= 1 && Date.now() < aliveBy) await Bun.sleep(200);
+  if (self.health <= 1) fail(`accepted the resurrection but health is ${self.health}`);
+  log(`PASS[resurrect-accept]: resurrected by ${PRIEST} at ${self.health}/${self.maxHealth} hp`);
+  await cleanupPriest();
+
   // 6. Logout + delete the probe character.
   step = "cleanup";
   const del = await req("DELETE", "/session", { token: TOKEN });
@@ -380,7 +482,7 @@ async function main() {
 
   const secs = (Date.now() - startedAt) / 1000;
   log(`stats: ${events.length} events in ${secs.toFixed(1)}s`);
-  log("PASS: death -> repop teleport applied -> corpse query -> too-far refused -> ghost corpse run -> reclaim resurrected -> cleanup");
+  log("PASS: death -> repop teleport applied -> corpse query -> too-far refused -> ghost corpse run -> reclaim resurrected -> second death -> priest's offer accepted -> cleanup");
   process.exit(0); // open WebSockets would otherwise hold the event loop
 }
 

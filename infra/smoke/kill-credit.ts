@@ -27,8 +27,10 @@
  *      best effort, reported, never asserted;
  *   3. engage the nearest Kobold Vermin: set_target -> face -> attack_start ->
  *      the SMSG_ATTACKERSTATEUPDATE stream -> the kobold's health reaches 0 ->
- *      SMSG_QUESTUPDATE_ADD_KILL { questId 7, entry 6, current 1 } and a
- *      fromKill SMSG_LOG_XPGAIN;
+ *      SMSG_QUESTUPDATE_ADD_KILL { questId 7, entry 6, current 1 }, a
+ *      fromKill SMSG_LOG_XPGAIN, and the SMSG_PARTYKILLLOG kill record naming
+ *      this character as the killer (ungrouped, the core sends it to the
+ *      killer alone);
  *   4. loot_all the corpse -> SMSG_LOOT_RESPONSE -> SMSG_LOOT_RELEASE_RESPONSE;
  *   5. DELETE /session. The character is the fixture: it is never deleted, and
  *      `apply.ts` rewrites its rows (quest log included, `clearQuests`) at the
@@ -527,6 +529,16 @@ async function main() {
   }
   const xpGain = await waitFor((e) => e.opcode === "SMSG_LOG_XPGAIN" && e.data?.fromKill === true, REPLY_TIMEOUT_MS, "fromKill SMSG_LOG_XPGAIN", fightStart);
   log(`kill credit: ${JSON.stringify(addKill.data)}; XPGAIN=${JSON.stringify(xpGain.data)}`);
+  // The kill record (Unit::Kill): with no group the core sends it to the
+  // killer alone, so the one this character receives names itself.
+  const killLog = await waitFor(
+    (e) => e.opcode === "SMSG_PARTYKILLLOG" && e.data?.victimGuid === target.guid,
+    REPLY_TIMEOUT_MS,
+    "SMSG_PARTYKILLLOG for the kill (module predates the tap?)",
+    fightStart,
+  );
+  if (killLog.data.killerGuid !== self.guid) fail(`SMSG_PARTYKILLLOG names killer ${killLog.data.killerGuid}, expected ${self.guid}`);
+  log(`kill record: ${JSON.stringify(killLog.data)}`);
 
   // 4. Loot the corpse with the one-call client sequence.
   const lootMark = events.length;
@@ -576,7 +588,7 @@ async function main() {
 
   const secs = (Date.now() - startedAt) / 1000;
   log(`stats: ${events.length} events in ${secs.toFixed(1)}s`);
-  log("PASS: vineyard fixture -> one kobold — attack stream -> kill credit -> loot round trip -> logout");
+  log("PASS: vineyard fixture -> one kobold — attack stream -> kill credit and kill record -> loot round trip -> logout");
   process.exit(0);
 }
 
