@@ -140,6 +140,7 @@ import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
 import type { Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
+import { sleepUntilWoken, wakeCursor, wakeEnv, type WakeCursor } from "./wake";
 
 /** MCP server name in the generated config; also the tool-name prefix. */
 export const MCP_SERVER_NAME = "wrathbench";
@@ -938,7 +939,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   // The claude-code render: same prompt, except the sentence about older
   // conversation, which on this harness must describe the CLI's regime and not
   // the fixed loop's trim (`contextSentence`).
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("claude-code"), config.wiki);
+  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("claude-code"), config.wiki, config.wake);
   const args = claudeArgs({
     mcpConfigPath,
     systemPrompt,
@@ -947,7 +948,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     ...(config.effort !== undefined ? { effort: config.effort } : {}),
   });
   const thinking = thinkingEnv(config.effort);
-  const extra = { ...thinking, ...compactEnv(config.compactWindow), ...(o.extraEnv ?? {}) };
+  const extra = { ...thinking, ...compactEnv(config.compactWindow), ...wakeEnv(config.wake), ...(o.extraEnv ?? {}) };
   const env = childEnv(o.env ?? process.env, {
     configDir,
     // The run's subscription lane (`RunConfig.subscription`): the CLI only ever
@@ -1281,6 +1282,8 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
         adapter: `claude-code:${config.model ?? "default"}`,
         messages: [{ role: "user", content: contextText }],
       });
+      // The turn-end wake counts from the request (`wake.ts`).
+      const wakeFrom: WakeCursor | null = config.wake?.turnEnd === true ? wakeCursor(o.sandbox) : null;
 
       try {
         stdin.write(
@@ -1561,7 +1564,24 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
         pendingNotices.push(compactionNotice(ask.ask, Date.now()));
         trajectory.append({ t: "harness", kind: "compaction_ask", turn, ...ask });
       }
-      await sleep(config.stepIntervalMs);
+      if (wakeFrom !== null) {
+        // Wake-on-event (`wake.ts`): a CLI turn always ends on a reply with no
+        // tool call, so on this driver every turn boundary waits. The CLI sits
+        // idle on stdin meanwhile; no tool call is held open.
+        await sleepUntilWoken({
+          source: o.sandbox,
+          cursor: wakeFrom,
+          pendingNotices,
+          stopped: () => done() || watchdogs.check() !== null,
+          stepIntervalMs: config.stepIntervalMs,
+          turn: builder.currentTurn,
+          append: (r) => trajectory.append(r),
+          now: o.now ?? Date.now,
+          sleep,
+        });
+      } else {
+        await sleep(config.stepIntervalMs);
+      }
     }
   } catch (err) {
     return terminate("harness-error", err instanceof Error ? `${err.name}: ${err.message}` : String(err));

@@ -14,6 +14,7 @@
 
 import type { Harness } from "./config";
 import type { EpisodeId } from "./episodes";
+import { WAIT_BULLET, turnEndSentence, type WakeOptions } from "./wake";
 
 /**
  * The standing goal. Fixed, identical for every model and every run: it names
@@ -137,15 +138,23 @@ export const TOOLS_NOT_AMBIENT = {
  * The body for one harness: the fixed text with that harness's context
  * sentence in it, and — with `wiki: false` — without the reference tool.
  */
-function bodyFor(harness: Harness, wiki = true): string {
+function bodyFor(harness: Harness, wiki = true, wake?: WakeOptions): string {
   // The wiki-on rendering is `BODY_HEAD` untouched, by construction rather
   // than by test: `wiki: false` is two exact deletions from it and nothing
   // else, so every run that has the reference surface hashes as it always did.
-  const head = wiki
+  let head = wiki
     ? BODY_HEAD
     : BODY_HEAD.replace(WIKI_TOOL_BULLET, "").replace(TOOLS_NOT_AMBIENT.withWiki, TOOLS_NOT_AMBIENT.withoutWiki);
-  return `${head} ${contextSentence(harness)} ${BODY_TAIL}`;
+  // Wake-on-event (`wake.ts`), a probe arm's: an insertion after the sleep
+  // bullet and a sentence after the last line, and nothing else, so a run with
+  // both off renders the bytes it always did.
+  if (wake?.inSnippet === true) head = head.replace(SLEEP_BULLET_END, `${SLEEP_BULLET_END}\n${WAIT_BULLET}`);
+  const tail = wake?.turnEnd === true ? `${BODY_TAIL} ${turnEndSentence()}` : BODY_TAIL;
+  return `${head} ${contextSentence(harness)} ${tail}`;
 }
+
+/** The end of the sleep bullet, which the in-snippet wait's bullet follows. */
+const SLEEP_BULLET_END = "— pass { wake: false } for a plain timer.";
 
 /**
  * The fixed system prompt on the fixed loop, exactly as it has always read:
@@ -234,12 +243,14 @@ export function buildSystemPrompt(
   episode?: EpisodeId | undefined,
   harness: Harness = "wrathbench",
   wiki = true,
+  /** The run's wake-on-event options (`RunConfig.wake`); absent renders the prompt every other run has. */
+  wake?: WakeOptions,
 ): string {
   const parts = [GOAL_SECTION];
   const tier = episodeSection(episode);
   if (tier !== undefined) parts.push(tier);
   if (objective !== undefined && objective.trim().length > 0) parts.push(objectiveSection(objective.trim()));
-  parts.push(bodyFor(harness, wiki));
+  parts.push(bodyFor(harness, wiki, wake));
   return parts.join("\n\n");
 }
 

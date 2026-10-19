@@ -81,6 +81,7 @@ import {
 import { STALL_PAUSE, SUBSCRIPTION_PAUSE } from "./lapse";
 import { runLoop, type StopRequest } from "./loop";
 import { continuedSessionNote, freshCharacterNote, resumeSessionNote } from "./prompt";
+import { wakeOptionsOf, type WakeOptions, type WakeRecord } from "./wake";
 import { CLIENT_CACHE_FILE, ClientCacheStore } from "./sandbox/client-cache";
 import { SandboxHost } from "./sandbox/host";
 import { EpisodicLog } from "./episodic";
@@ -124,6 +125,16 @@ function routingOverride(v: string | boolean | undefined): RoutingSpec | undefin
     throw new Error(`--routing-json is not valid JSON: ${v.slice(0, 200)}`);
   }
   return parseRouting(raw, "--routing-json");
+}
+
+/**
+ * `--wake-turn-end true` / `--wake-in-snippet true`: a probe arm's
+ * wake-on-event options (`wake.ts`), as the config field. Nothing at all when
+ * both are off, so a run that names neither stores the config it always did.
+ */
+function wakeConfig(args: Readonly<Record<string, string | boolean>>): { wake?: WakeOptions } {
+  const w = wakeOptionsOf(args);
+  return w === null ? {} : { wake: w };
 }
 
 function num(v: string | boolean | undefined): number | undefined {
@@ -222,6 +233,9 @@ export function configFromArgs(
     // The Claude Code CLI's auto-compaction window (claude-code only); identity
     // like effort, so --compact-window is not an override on --resume either.
     compactWindow: typeof args["compact-window"] === "string" ? args["compact-window"] : undefined,
+    // A probe arm's wake-on-event options (`wake.ts`); absent unless one is
+    // on. Identity like the rest, so a resume keeps them.
+    ...wakeConfig(args),
     // Which backend may serve this run, as the fleet entry declared it. JSON
     // because it is a small object and argv is not a place to spell one out
     // flag at a time; identity like the rest, so a resume keeps it.
@@ -842,6 +856,9 @@ async function main(): Promise<void> {
     onNotice: (n) => trajectory.append({ t: "harness", ...n }),
     onActions: (flush) => trajectory.recordActions(flush),
     clientCache,
+    // A probe arm's wake-on-event options (`wake.ts`); absent, the child is
+    // started exactly as it always was.
+    ...(config.wake !== undefined ? { wake: config.wake, onWait: (rec: WakeRecord) => trajectory.append(rec) } : {}),
   });
   /*
    * The episode clock continues from where the last segment left it: a
@@ -890,6 +907,10 @@ async function main(): Promise<void> {
   // and a backstop exits the process if the unwind wedges.
   let stopping = false;
   const abort = new AbortController();
+  // A snippet held open by an in-snippet wait (`wake.ts`) could hold a stop
+  // for minutes: every such wait wakes the moment the run is asked to stop.
+  // A no-op on a run without the option.
+  abort.signal.addEventListener("abort", () => sandbox.wakeWaits(), { once: true });
   /** The pause row, its record and its meta.json mark, written now rather than after the unwind. */
   const pauseNow = (req: { reason: PauseMark["reason"]; detail: string }): void => {
     try {

@@ -168,6 +168,7 @@ import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
 import type { Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
+import { codexToolTimeoutSec, sleepUntilWoken, wakeCursor, type WakeCursor } from "./wake";
 
 // ------------------------------------------------------------------ effort
 
@@ -467,6 +468,8 @@ export interface CodexArgsOptions {
   bunBin: string;
   bridgePath: string;
   mcpPort: number;
+  /** The MCP tool timeout; 300 when absent, as always (`codexToolTimeoutSec` raises it for the in-snippet wait). */
+  toolTimeoutSec?: number | undefined;
 }
 
 /**
@@ -492,7 +495,7 @@ export function codexArgs(o: CodexArgsOptions): string[] {
     `mcp_servers.${MCP_SERVER_NAME}.default_tools_approval_mode="approve"`,
     // A snippet may legitimately run to its 30 s limit and a sandbox restart
     // on top; the CLI's own default tool timeout must not cut a call short.
-    `mcp_servers.${MCP_SERVER_NAME}.tool_timeout_sec=300`,
+    `mcp_servers.${MCP_SERVER_NAME}.tool_timeout_sec=${o.toolTimeoutSec ?? 300}`,
     `mcp_servers.${MCP_SERVER_NAME}.startup_timeout_sec=30`,
   ];
   return [
@@ -775,7 +778,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   // ---- files the CLI needs, all inside the run directory (absolute paths:
   // the CLI runs from a scratch temp cwd)
   const instructionsPath = resolve(o.runDir, "codex-instructions.md");
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("codex"), config.wiki);
+  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("codex"), config.wiki, config.wake);
   writeFileSync(instructionsPath, systemPrompt, "utf8");
   // The bridge by its REPOSITORY path: the CLI's sandbox gives MCP servers a
   // private /tmp, so a temp copy would not be found ("Module not found").
@@ -797,6 +800,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       bunBin: process.execPath,
       bridgePath,
       mcpPort: listener.port,
+      ...(config.wake?.inSnippet === true ? { toolTimeoutSec: codexToolTimeoutSec(config.wake) } : {}),
     });
   const firstArgs = argsFor(undefined);
 
@@ -1079,6 +1083,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
         messages: [{ role: "user", content: contextText }],
         ...(threadId !== undefined ? { threadId } : {}),
       });
+      // The turn-end wake counts from the request (`wake.ts`).
+      const wakeFrom: WakeCursor | null = config.wake?.turnEnd === true ? wakeCursor(o.sandbox) : null;
 
       /**
        * `detached`: the CLI leads its own process group so a signal to -pid
@@ -1379,7 +1385,24 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
         pendingNotices.push(compactionNotice(ask.ask, Date.now()));
         trajectory.append({ t: "harness", kind: "compaction_ask", turn, ...ask });
       }
-      await sleep(config.stepIntervalMs);
+      if (wakeFrom !== null) {
+        // Wake-on-event (`wake.ts`): every codex turn ends on a reply with no
+        // tool call, and no process runs between turns, so the wait holds
+        // nothing open.
+        await sleepUntilWoken({
+          source: o.sandbox,
+          cursor: wakeFrom,
+          pendingNotices,
+          stopped: () => done() || watchdogs.check() !== null,
+          stepIntervalMs: config.stepIntervalMs,
+          turn: builder.currentTurn,
+          append: (r) => trajectory.append(r),
+          now: o.now ?? Date.now,
+          sleep,
+        });
+      } else {
+        await sleep(config.stepIntervalMs);
+      }
     }
   } catch (err) {
     return terminate("harness-error", err instanceof Error ? `${err.name}: ${err.message}` : String(err));

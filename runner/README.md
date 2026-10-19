@@ -811,6 +811,41 @@ secret authenticates only its own run's session. A termination revokes it
 (`releaseSessionSecret`); a pause does not, so a paused run's copy stays valid
 until the resume re-leases the token, which rotates it.
 
+## Wake-on-event (a probe arm's options)
+
+Two run options, off by default and set only by a probe campaign arm's args
+(`src/wake.ts`). With both off a run renders master's prompt, stores master's
+config and tuple, starts the child with master's environment and sleeps the
+fixed step after every turn; `test/wake.test.ts` pins that against master's
+prompt hashes. A scored episode refuses them.
+
+- `--wake-turn-end true`: after a reply with no tool call the driver makes no
+  new model call until a wake fires or five minutes (`WAKE_CAP_MS`) pass, the
+  step interval its floor. On the fixed loop that is a turn with no tool
+  calls; on claude-code and codex every turn ends that way, so it is every
+  turn boundary (the CLI idles on stdin, or no codex process runs). The wake
+  is read from counters and from facts the child pushes as they happen
+  (`wake_fact`), never by draining the death signals or the notices the
+  state sample and the context builder own. The next message carries a
+  `woke` notice.
+- `--wake-in-snippet true`: the ambient `wait({ on, maxMs })` holds a snippet
+  open past its limit, up to five minutes of waiting per snippet. The child
+  asks the host to move the pending eval's timeout for the time a wait may
+  take and hands back what it did not use (`wait_hold` / `wait_release`); the
+  host honours that only for an eval still pending and never past the cap.
+  The child reads `sdk/API-wake.md`, API.md with the `wait` entry, and the
+  CLIs' tool timeouts are raised to cover a held call. A stopping run wakes
+  every open wait (`wake_waits`).
+
+Mandatory wakes are a death, the event stream closing, a sandbox restart and
+a harness notice. `attacked` never is: it fires on every pull of a grind. The
+turn-end wait also wakes on a level gained and a quest's objectives done
+(`TURN_END_OPTIONAL_WAKES`), a harness-fixed set; an in-snippet wait wakes on
+what it names. Each wait writes one `wake` record (`via`, `fired`, `sleptMs`,
+`maxMs`), and the options are a key in the comparability tuple (`wake`,
+absent when off), so arms on one image are told apart by more than their
+arm id.
+
 ## Watchdogs
 
 Named termination reasons, thresholds in one place (`src/config.ts`): `idle`

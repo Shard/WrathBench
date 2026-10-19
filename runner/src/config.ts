@@ -572,6 +572,13 @@ export const runConfigSchema = z.object({
    */
   compactWindow: compactWindowSchema.optional(),
   /**
+   * Wake-on-event (`wake.ts`): a probe arm's options, `--wake-turn-end true`
+   * and `--wake-in-snippet true`. ABSENT, never `{false, false}`, on a run
+   * with both off, so every such run's stored config is byte-for-byte what it
+   * was before the field existed. Identity, like effort: a resume keeps it.
+   */
+  wake: z.object({ turnEnd: z.boolean(), inSnippet: z.boolean() }).strict().optional(),
+  /**
    * Which backend the aggregator may route this run to, as the fleet config
    * declared it (`routing.ts`) — the DECLARED block, not the resolved one, so
    * a resumed run re-derives against the same rules rather than freezing a
@@ -762,6 +769,11 @@ export function loadRunConfig(raw: unknown): RunConfig {
   // another driver would record a dimension nothing applied.
   if (config.compactWindow !== undefined && config.driver !== "claude-code") {
     throw new Error(`compactWindow is the Claude Code CLI's auto-compaction window — driver ${config.driver} has none`);
+  }
+  // Refused, never ignored: wake-on-event is a probe arm's harness change, and
+  // a scored episode runs the loop its tier was measured under.
+  if (config.wake !== undefined && config.episode !== undefined && EPISODES[config.episode].scored) {
+    throw new Error(`wake is a probe-campaign arm's option; --episode ${config.episode} is scored and runs without it`);
   }
   return config;
 }

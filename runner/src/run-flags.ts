@@ -62,6 +62,8 @@ export const RUN_FLAGS = [
   "stub",
   "token",
   "token-env",
+  "wake-in-snippet",
+  "wake-turn-end",
   "watchdogs-json",
   "wiki",
   "wiki-bundle",

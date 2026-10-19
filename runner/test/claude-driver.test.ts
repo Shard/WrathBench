@@ -233,6 +233,29 @@ describe("claude-code driver", () => {
     trajectory.close();
   }, 20_000);
 
+  test("the turn-end wake: every turn boundary waits for a wake, and the next message says what fired", async () => {
+    // A CLI turn always ends on a reply with no tool call, so on this driver
+    // the wait replaces the step at every boundary (runner/src/wake.ts).
+    const { recordPath, runDir, trajectory, options } = setupEpisode("tools", { maxTurns: 2, episode: "probing", wake: { turnEnd: true, inSnippet: false } });
+    const facts: { seq: number; key: string; ts: number; detail?: string }[] = [];
+    let t = 1_000_000;
+    Object.assign(options.sandbox, { noticesRaised: 0, wakeFactsAfter: (seq: number) => facts.filter((f) => f.seq > seq) });
+    Object.defineProperty(options.sandbox, "wakeFactSeq", { get: () => facts.length });
+    options.now = () => t;
+    options.sleep = async (ms: number) => {
+      t += ms;
+      if (t >= 1_000_000 + 40_000 && facts.length === 0) facts.push({ seq: 1, key: "questComplete", ts: t, detail: "Kobold Camp Cleanup" });
+    };
+    await runClaudeEpisode(options);
+    const wakes = readTrajectory(runDir).filter((r) => r.t === "wake");
+    expect(wakes).toEqual([expect.objectContaining({ via: "turn-end", turn: 1, fired: "questComplete", sleptMs: 40_000, detail: "Kobold Camp Cleanup" })]);
+    const userMessages = readRecord(recordPath)["userMessages"] as string[];
+    expect(userMessages[1]).toContain("woke: you slept 40s after ending your turn without a tool call; woken by a quest's objectives completed (Kobold Camp Cleanup).");
+    // Without the in-snippet wait the CLI's MCP timeout is left as it was.
+    expect(readRecord(recordPath)["envKeys"] as string[]).not.toContain("MCP_TOOL_TIMEOUT");
+    trajectory.close();
+  }, 20_000);
+
   test("no trim notice is ever raised here: this harness runs no message window", async () => {
     // docs/METHODOLOGY.md, "An episodic log, asked for at each trim or
     // compaction": the CLI owns its own history, so there is no block trim to
