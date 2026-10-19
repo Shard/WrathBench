@@ -16,7 +16,8 @@ bun wb dashboard shots --serve                             # the stack only: URL
 About 20–30 s. Put `--out` in your scratchpad. It writes
 `private-<state>.png` and `public-<state>.png` for `home`, `run-live`,
 `map-live`, `map-live-selected` (the live character clicked: money, bags,
-quests) and `map-replay` (paused halfway), one `path-*.png` per `--path`, and
+quests), `map-live-nearby` (zoomed in on it: the units around it) and
+`map-replay` (paused halfway), one `path-*.png` per `--path`, and
 `facts.json` with each page's uncaught errors, console errors and third-party
 requests. It exits 1 when a page threw or a state was not reached. Look at the
 PNGs with Read.

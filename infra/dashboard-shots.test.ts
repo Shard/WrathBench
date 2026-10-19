@@ -44,7 +44,8 @@ describe("the fixture", () => {
 
 describe("the named states", () => {
   test("follow the runs the rig picked", () => {
-    expect(defaultStates("a", "b", "Cee").map((s) => s.name)).toEqual(["home", "run-live", "map-live", "map-live-selected", "map-replay"]);
+    expect(defaultStates("a", "b", "Cee").map((s) => s.name)).toEqual(["home", "run-live", "map-live", "map-live-selected", "map-live-nearby", "map-replay"]);
+    expect(defaultStates("a", "b", "Cee").find((s) => s.name === "map-live-nearby")).toMatchObject({ path: "/map", zoom: 6, select: "Cee" });
     expect(defaultStates(null, null, null).map((s) => s.name)).toEqual(["home", "map-live"]);
     expect(defaultStates(null, "b", null).find((s) => s.name === "map-replay")).toMatchObject({ path: "/map?run=b", seek: 0.5 });
   });
