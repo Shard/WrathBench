@@ -297,8 +297,8 @@ position's flag kept only where the window is. There is no object of its own.
   holds no player, pet or withheld key.
 - **The cost** is bytes, not writes: `live.json` is PUT every pass anyway.
   A real ring measured 13–25 KB gzipped per character per five-minute private
-  window, so a twelve-minute window is at most about 30–60 KB gzipped per live
-  character per pass, less what the projection drops (other players, their
+  window, so a twelve-minute window is roughly 30–60 KB gzipped per live
+  character per pass (a busy town can be more), less what the projection drops (other players, their
   pets, subnames, guids and the 3D fields; on the render rig's fixture the
   public window is about 70% of the private one). Every reader of
   `live.json` fetches it, the home page's fleet table included.
@@ -596,7 +596,10 @@ because the build reads none of what was left out.
 
 Published and unread, left as they were because each is stated as public above
 or is the operator's to decide: the `campaignVersion` and `arm` stamps on a
-result row and a run's row (for matching a run to its campaign pane).
+result row and a run's row (for matching a run to its campaign pane), and a
+nearby unit's `entry` and `ctype` in `live.json` (entry ids are public, and
+both are in the key set `projectNearby` already gives the viewer's public
+mode; the map's layer reads neither).
 
 **The map's quest count is the run's.** A live position's `questsCompleted` in
 `live.json`, and each point's in a track, is summed across the counter's

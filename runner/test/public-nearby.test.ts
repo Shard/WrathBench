@@ -46,8 +46,13 @@ const NAMES = {
 /** How far back the ring reaches when the pass runs: past the public span, inside the ring's own reach. */
 const RING_BACK_MS = 14 * 60_000;
 
-/** The scene, `back` ms before now to a second ago: the wolf walks, the chaser goes after the other player and then the character. */
-async function writeRing(runDir: string): Promise<{ from: number; chaseSelfAt: number }> {
+/**
+ * The scene, fourteen minutes back to a second ago: the wolf walks, the chaser
+ * goes after the other player and then the character. `aheadMs` stamps the
+ * child's horizon that far past now instead, as a runner pod's clock ahead of
+ * the publisher's would.
+ */
+async function writeRing(runDir: string, aheadMs = -1_000): Promise<{ from: number; chaseSelfAt: number }> {
   const now = Date.now();
   const from = now - RING_BACK_MS;
   const at = (x: number, t: number): NonNullable<NearbyUnit["m"]> => ({ k: "pos", t, p: [-6230 + x, 380, 385, 0] });
@@ -70,7 +75,7 @@ async function writeRing(runDir: string): Promise<{ from: number; chaseSelfAt: n
   rows.sort((a, b) => a.ts - b.ts);
   const writer = new NearbyWriter({
     runDir,
-    sandbox: { nearbyDrain: async () => ({ rows, dropped: 0, through: now - 1_000 }) },
+    sandbox: { nearbyDrain: async () => ({ rows, dropped: 0, through: now + aheadMs }) },
     log: () => {},
   });
   await writer.drain();
@@ -101,9 +106,9 @@ interface Live {
   nearby?: LiveNearby;
 }
 
-async function setup(): Promise<{ runs: string; ring: { from: number; chaseSelfAt: number } }> {
+async function setup(aheadMs?: number): Promise<{ runs: string; ring: { from: number; chaseSelfAt: number } }> {
   const runs = poisonedRunsDir();
-  const ring = await writeRing(join(runs, LIVE_RUN));
+  const ring = await writeRing(join(runs, LIVE_RUN), aheadMs);
   return { runs, ring };
 }
 
@@ -182,6 +187,22 @@ describe("the public nearby layer", () => {
         for (const v of [NAMES.wolf, NAMES.vendor, NAMES.chaser]) expect(`${p.path}: ${p.body}`).not.toContain(v);
       }
       for (const [k, body] of bucket.objects) for (const v of [NAMES.wolf, NAMES.vendor, NAMES.chaser]) expect(`${k}: ${body}`).not.toContain(v);
+    } finally {
+      rmSync(runs, { recursive: true, force: true });
+    }
+  });
+
+  test("a ring stamped ahead of the publisher's clock is cut to the span, and the cut window verifies", async () => {
+    // The window is keyed at the publisher's now minus the span and runs to the child's horizon, a few seconds on.
+    const { runs } = await setup(4_000);
+    try {
+      const bucket = memoryBucket();
+      const render = createRenderer({ runsDir: runs });
+      await publishPass(async (sink, p) => await render(Date.now(), { sink, batch: 1 }, p), bucket.store, emptyState());
+      const w = (JSON.parse(bucket.objects.get(LIVE_PATH)!) as Live).nearby![LIVE_RUN]!;
+      expect(w.t1 - w.t0).toBe(PUBLIC_NEARBY_SPAN_MS);
+      expect(w.ids.length).toBeGreaterThan(0);
+      expect((await verifyPublication(bucket.source, { cache: false })).findings).toEqual([]);
     } finally {
       rmSync(runs, { recursive: true, force: true });
     }
