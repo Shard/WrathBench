@@ -5035,13 +5035,6 @@ export class WrathClient {
    * dead session fails fast instead of retrying into nothing.
    */
   async reclaimCorpse(guid?: GuidArg, options: ReclaimCorpseOptions = {}): Promise<ReclaimCorpseResult> {
-    // `reclaimCorpse({ timeout })`: an object with no guid in the guid's
-    // place, and no options after it, has one reading — it is the options.
-    const first = guid as unknown;
-    if (first !== null && typeof first === "object" && !("guid" in first) && Object.keys(options).length === 0) {
-      options = first as ReclaimCorpseOptions;
-      guid = undefined;
-    }
     const started = Date.now();
     const deadline = started + (options.timeout ?? 25_000);
     const attemptTimeout = Math.max(100, options.attemptTimeout ?? 2_500);

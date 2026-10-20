@@ -73,19 +73,6 @@ describe("reclaimCorpse: a refusal the height causes says so", () => {
 });
 
 describe("reclaimCorpse: the timeout goes in the second argument", () => {
-  test("reclaimCorpse({ timeout }) reads the object as the options rather than throwing", async () => {
-    const stub = startStub({ onConnect: () => world([ghost(20), corpseAt(21, -1234.5, 987.25, 42.125)]) });
-    const client = await inWorld(stub);
-    await folded(client, "MSG_CORPSE_QUERY", 21);
-    const started = Date.now();
-    const r = await client.reclaimCorpse({ timeout: 150, attemptTimeout: 100 } as never);
-    expect(r).toMatchObject({ ok: false, reason: "still_ghost" });
-    expect(Date.now() - started).toBeLessThan(2000);
-    expect(stub.actions.filter((a) => a.action === "reclaim_corpse")[0]).not.toHaveProperty("guid");
-    client.close();
-    await stub.stop();
-  });
-
   test("the abandon note shows the call shape that takes a timeout", async () => {
     const ctl = new AbortController();
     const stub = startStub({ onConnect: () => world([ghost(20), corpseAt(21, -1234.5, 987.25, 42.125)]) });
