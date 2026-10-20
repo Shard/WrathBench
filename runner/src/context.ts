@@ -596,8 +596,8 @@ function ghostLine(
   // the entrance the server substitutes, and no reclaim reaches the corpse.
   if (corpse !== undefined && typeof corpse.instanceMap === "number" && pos?.map !== corpse.instanceMap) {
     return (
-      `${where}; corpse inside instance map ${corpse.instanceMap}, its entrance marker at (${xy(corpse)}), which can be off the portal itself: ` +
-      `walk into the dungeon's portal as a ghost to come back to life inside (no sickness), ${healer}`
+      `${where}; corpse inside the dungeon on map ${corpse.instanceMap}: ` +
+      `walk into its portal as a ghost to come back to life inside, ${healer}`
     );
   }
   let corpsePart: string;

@@ -427,8 +427,8 @@ describe("formatStateSummary", () => {
       { sessionLive: true, now: 1_000_000 },
     );
     expect(text).toContain(
-      "ghost at graveyard (-1102,1599); corpse inside instance map 36, its entrance marker at (-1100,1600), which can be off the portal itself: " +
-        "walk into the dungeon's portal as a ghost to come back to life inside (no sickness), " +
+      "ghost at graveyard (-1102,1599); corpse inside the dungeon on map 36: " +
+        "walk into its portal as a ghost to come back to life inside, " +
         "or Spirit Healer at the graveyard (-25% durability; resurrection sickness from level 11)",
     );
     expect(text).not.toContain("reclaim within 39y");

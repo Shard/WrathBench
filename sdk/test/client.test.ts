@@ -4416,10 +4416,9 @@ describe("client: reclaimCorpse owns the delay and answers with a verdict", () =
     expect(stub.actions.filter((a) => a.action === "reclaim_corpse")).toHaveLength(0);
     expect(result.corpse).toEqual({ map: 0, x: -1100.5, y: 1600.25, z: 50.5, source: "corpse_query", instanceMap: 36 });
     expect(result.hint).toStartWith(
-      "your corpse is inside the instance on map 36, and a reclaim cannot reach it from map 0 — as a ghost, walk into " +
-        "that dungeon's portal and you come back to life inside on arrival (half health, no sickness); " +
-        "state.self.corpse.value (-1100.5, 1600.3) is the server's entrance marker, which can sit above or beside " +
-        "the portal rather than in it, or spiritHealerActivate(guid)",
+      "your corpse is inside the dungeon on map 36, which a reclaim can't reach from map 0 — as a ghost, walk into " +
+        "that dungeon's portal and you come back to life inside (half health, no sickness); " +
+        "state.self.corpse.value is the server's entrance marker, not the portal itself, or spiritHealerActivate(guid)",
     );
     expect(result.hint).not.toContain("39y");
     expect(result.hint).not.toContain("delay");

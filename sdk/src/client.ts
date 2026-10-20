@@ -4441,11 +4441,10 @@ export class WrathClient {
         reason: "corpse_in_instance",
         corpse,
         hint:
-          `your corpse is inside the instance on map ${corpse.instanceMap}, and a reclaim cannot reach it from ` +
+          `your corpse is inside the dungeon on map ${corpse.instanceMap}, which a reclaim can't reach from ` +
           `${pos === undefined ? "outside it" : `map ${pos.map}`} — as a ghost, walk into that dungeon's portal and you ` +
-          "come back to life inside on arrival (half health, no sickness); " +
-          `state.self.corpse.value (${fmtXY(corpse)}) is the server's entrance marker, which can sit above or beside ` +
-          `the portal rather than in it, ${healerOption}`,
+          "come back to life inside (half health, no sickness); " +
+          `state.self.corpse.value is the server's entrance marker, not the portal itself, ${healerOption}`,
       };
     }
     if (corpse !== undefined && pos !== undefined && corpse.map !== pos.map) {
