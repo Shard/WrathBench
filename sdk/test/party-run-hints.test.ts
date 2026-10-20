@@ -405,6 +405,30 @@ describe("resurrect helpers resolve once our own fields say alive (reference run
     await stub.stop();
   });
 
+  test("acceptResurrection waits the same way", async () => {
+    const stub = startStub({ onConnect: () => world([ghostFlags(20), ghostAura(21)]) });
+    const client = await inWorld(stub);
+    await folded(client, "SMSG_AURA_UPDATE_ALL", 21);
+    push(stub, frame(80, "SMSG_RESURRECT_REQUEST", { casterGuid: PLAYER_GUID, sickness: false }));
+    await folded(client, "SMSG_RESURRECT_REQUEST", 80);
+    let settled = false;
+    const pending = client.acceptResurrection({ timeout: 2000 }).then((r) => {
+      settled = true;
+      return r;
+    });
+    await untilAction(stub, "raw");
+    push(stub, ghostAuraGone(90));
+    push(stub, deathReleaseCleared(91));
+    await folded(client, "SMSG_DEATH_RELEASE_LOC", 91);
+    await Bun.sleep(30);
+    expect(settled).toBe(false);
+    push(stub, aliveFields(92));
+    expect(await pending).toMatchObject({ ok: true, status: "resurrected" });
+    expect(client.state.self.health?.value.current).toBe(61);
+    client.close();
+    await stub.stop();
+  });
+
   test("spiritHealerActivate waits the same way, and its result already reads alive", async () => {
     const stub = startStub({ onConnect: () => world([ghostFlags(20), ghostAura(21)]) });
     const client = await inWorld(stub);

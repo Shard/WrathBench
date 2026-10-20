@@ -4849,6 +4849,7 @@ export class WrathClient {
       if ((e.data as DeathReleaseLocData).map < 0) released = true;
     });
     const timeout = options.timeout ?? 15_000;
+    const started = Date.now();
     try {
       await this.raw("CMSG_RESURRECT_RESPONSE", [{ guid: offer.casterGuid }, { u8: 1 }]);
       if (!released) {
@@ -4865,7 +4866,10 @@ export class WrathClient {
     } finally {
       offRelease();
     }
-    if (released) return { ok: true, status: "resurrected", casterGuid: offer.casterGuid };
+    if (released) {
+      await this.awaitAliveFields(started + timeout, "acceptResurrection");
+      return { ok: true, status: "resurrected", casterGuid: offer.casterGuid };
+    }
     const hint =
       `the accept was sent but no resurrection was observed within ${Math.round(timeout / 1000)}s — the server ` +
       "ignores it silently when you are already alive or the offer was replaced by another; re-read " +
