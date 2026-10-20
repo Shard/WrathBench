@@ -641,7 +641,7 @@ model is the operator's to name, as every roster entry is.
 
 Three pieces of harness text, identical for every model. The two texts below
 are the operator's wording, approved as drafted (2026-10-19), with the objective's
-location sentence changed to match the portal-side staging (2026-10-20). Nothing else about the prompt
+location sentence changed to match the portal-side staging and then to name the portal's position (both 2026-10-20). Nothing else about the prompt
 changes: the standing goal, the body and the tools are the same as every
 run's (`runner/src/prompt.ts`).
 
@@ -663,7 +663,7 @@ definition's `members[].objective`):
 > (warrior, the party leader), `<Healer>` (priest), `<Mage>` (mage),
 > `<Rogue>` (rogue) and `<Paladin>` (paladin). You are `<Name>`, the party's
 > `<role>`. The party stands in the mine under Moonbrook, Westfall, a few
-> yards from the portal into the Deadmines. The objective for this run is for the party to clear the
+> yards from the portal into the Deadmines at (-11208, 1685, 26). The objective for this run is for the party to clear the
 > Deadmines and defeat Edwin VanCleef. You share party chat with the others
 > and can whisper any of them.
 
