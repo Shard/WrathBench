@@ -23,6 +23,17 @@ import { routingSchema } from "./routing";
 import { CHARACTER_NAME_RULE, isValidCharacterName } from "./character-name";
 import { partyConfigSchema } from "./party";
 import { REFERENCE_ROUTE, referenceModelId } from "./reference/route";
+import {
+  DEFAULT_DRIVER,
+  DRIVER_LIST,
+  DRIVER_TABLE,
+  DRIVERS,
+  entryOf,
+  harnessOf,
+  isDriver,
+  type Driver,
+  type Harness,
+} from "./drivers";
 
 // ---------------------------------------------------------------- watchdogs
 
@@ -164,46 +175,25 @@ export type PauseReason = (typeof PAUSE_REASONS)[number];
 
 export { CHARACTER_NAME_RULE, isValidCharacterName } from "./character-name";
 
-/**
- * Every driver a run can be started with. `stub` and `reference` never score:
- * neither is a model (`isUnscoredDriver`).
- */
-export const DRIVERS = ["openai", "claude-code", "codex", "stub", "reference"] as const;
-export type Driver = (typeof DRIVERS)[number];
-
-export function isDriver(raw: string): raw is Driver {
-  return (DRIVERS as readonly string[]).includes(raw);
-}
-
-/**
- * The default subscription lane: the env var the Claude Code CLI itself knows,
- * and the only one a run names when nothing says otherwise. A second
- * subscription is a second variable (`CLAUDE_CODE_OAUTH_TOKEN_2`), never a
- * second spelling of this one — see `RunConfig.subscription`.
- */
-export const DEFAULT_CLAUDE_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
-
-/**
- * The `codex` driver's default lane: the env var the Codex CLI itself reads
- * for its home directory, whose `auth.json` is the ChatGPT login. The lane
- * variable names a DIRECTORY, not a token — one directory per subscription,
- * shared by every run on that lane and never copied per run: a copied
- * `auth.json` carries a refresh token that whichever process refreshes first
- * consumes, and the other side then fails with "refresh token was already
- * used" (observed on this host, 2026-09-05). A second subscription is a second
- * variable (`CODEX_HOME_2`) pointing at a second directory.
- */
-export const DEFAULT_CODEX_HOME_ENV = "CODEX_HOME";
-
-/**
- * Whether a lane variable NAME is a Codex home (`CODEX_HOME`, `CODEX_HOME_2`)
- * rather than a Claude token. `policy.subscriptions` lists both kinds, because
- * a roster entry may only pin a lane that list names, so the kind is read off
- * the name, which is the convention the two defaults already set.
- */
-export function isCodexHomeEnvName(name: string): boolean {
-  return new RegExp(`^${DEFAULT_CODEX_HOME_ENV}(_[0-9]+)?$`).test(name);
-}
+// The driver vocabulary, the harness tags and each driver's facts live in the
+// registry (`drivers.ts`), which stays import-free so the viewer and the fleet
+// can read it; they are re-exported here for every caller that already reads
+// them from config.
+export {
+  DEFAULT_CLAUDE_TOKEN_ENV,
+  DEFAULT_CODEX_HOME_ENV,
+  DEFAULT_DRIVER,
+  DRIVERS,
+  HARNESS_OF_DRIVER,
+  HARNESSES,
+  harnessOf,
+  isCodexHomeEnvName,
+  isDriver,
+  REFERENCE_STAMP,
+  STUB_STAMP,
+  type Driver,
+  type Harness,
+} from "./drivers";
 
 /**
  * Whether a string is usable as a subscription lane name. An env var name and
@@ -230,44 +220,6 @@ const driverSchema = z.string().superRefine((v, ctx) => {
 }).transform((v) => v as Driver);
 
 /**
- * The harness: what owns the agent loop and the context management.
- *
- *  - `wrathbench`: our fixed loop, with the fixed context policy
- *    (docs/METHODOLOGY.md "Context policy"). The `openai` and
- *    `stub` drivers run under it.
- *  - `claude-code`: the Claude Code CLI scaffold, with its own history and
- *    compaction. There is no separate driver under it — the CLI is the
- *    transport.
- *  - `codex`: the OpenAI Codex CLI scaffold (operator, 2026-09-05), likewise
- *    its own history and its own compaction. A separate group from
- *    `claude-code` rather than one "CLI" group, because each scaffold is a
- *    different unversioned summarizer sitting inside the harness.
- *
- * A tag on every run, not a partition and not a scoring penalty (operator,
- * 2026-10-16): rows of every harness share the charts, and no row mixes two
- * harnesses because a model id runs under one harness across the roster
- * (`harnessClash`). Distinct from `harnessVersion`, which is the git describe
- * of *this* repo and applies to all three (the SDK and MCP surface each CLI
- * drives is ours).
- */
-export const HARNESSES = ["wrathbench", "claude-code", "codex"] as const;
-export type Harness = (typeof HARNESSES)[number];
-
-export const HARNESS_OF_DRIVER: Readonly<Record<Driver, Harness>> = {
-  openai: "wrathbench",
-  stub: "wrathbench",
-  // The scripted reference plays through the fixed loop, so its snippets reach
-  // the sandbox exactly as a model's do (`reference/adapter.ts`).
-  reference: "wrathbench",
-  "claude-code": "claude-code",
-  codex: "codex",
-};
-
-export function harnessOf(driver: Driver): Harness {
-  return HARNESS_OF_DRIVER[driver];
-}
-
-/**
  * The roster rule that keeps the harness a tag (docs/METHODOLOGY.md, "Harness
  * and driver are separate words"; operator, 2026-10-16): one model id, one
  * harness, across the whole roster. Every entry the policy schedules is in the
@@ -290,7 +242,7 @@ export function harnessClash(
 ): string | null {
   const first = new Map<string, { name: string; harness: Harness }>();
   for (const [name, e] of Object.entries(roster)) {
-    const driver = e.driver ?? "openai";
+    const driver = e.driver ?? DEFAULT_DRIVER;
     if (!isDriver(driver)) continue;
     const harness = harnessOf(driver);
     const seen = first.get(e.model);
@@ -317,13 +269,13 @@ export function harnessClash(
  * applied. One predicate for every boundary that refuses it (this config, the
  * fleet roster, a hand roster, a campaign arm).
  */
-export const COMPACT_WINDOW_DRIVERS: readonly Driver[] = ["claude-code", "codex"];
+export const COMPACT_WINDOW_DRIVERS: readonly Driver[] = DRIVERS.filter((d) => DRIVER_TABLE[d].compactWindow);
 export function driverHasCompactWindow(driver: string): boolean {
   return (COMPACT_WINDOW_DRIVERS as readonly string[]).includes(driver);
 }
 /** The refusal every boundary words the same way. */
 export function compactWindowDriverRefusal(driver: string): string {
-  return `compactWindow is a CLI harness's auto-compaction window (claude-code, codex) — the ${driver} driver has none`;
+  return `compactWindow is a CLI harness's auto-compaction window (${COMPACT_WINDOW_DRIVERS.join(", ")}) — the ${driver} driver has none`;
 }
 
 /**
@@ -424,7 +376,7 @@ export const runConfigSchema = z.object({
    *  - `codex`: the OpenAI Codex CLI, the same shape on a ChatGPT
    *    subscription: transport and harness at once, tagged `codex`.
    */
-  driver: driverSchema.default("openai"),
+  driver: driverSchema.default(DEFAULT_DRIVER),
   /** Model id passed through verbatim to the OpenAI-compatible endpoint. */
   model: z.string().optional(),
   /** e.g. https://openrouter.ai/api/v1 — or OPENAI_BASE_URL from env. */
@@ -671,26 +623,10 @@ export const runConfigSchema = z.object({
   watchdogs: watchdogConfigSchema.prefault({}),
 });
 
-/**
- * The stamp carried by meta.json, run.sqlite and the timeline for a scripted
- * stub run. The storage key is still named `shakeout` (trajectory.ts); the
- * word now only ever means "this run can never score".
- */
-export const STUB_STAMP = "unscored (scripted stub)";
-
-/**
- * The stamp carried by a scripted reference run (`--driver reference`). It is
- * a labelled line on the ladder, never a row: outside every comparability
- * group, never counted toward a target, never in the row order (operator,
- * 2026-10-19; docs/METHODOLOGY.md, "Scoring").
- */
-export const REFERENCE_STAMP = "unscored (scripted reference)";
-
 /** The stamp each driver that is not a model carries; a model's driver has none. */
-export const DRIVER_STAMPS: Readonly<Partial<Record<Driver, string>>> = {
-  stub: STUB_STAMP,
-  reference: REFERENCE_STAMP,
-};
+export const DRIVER_STAMPS: Readonly<Partial<Record<Driver, string>>> = Object.fromEntries(
+  DRIVER_LIST.flatMap((d) => (d.stamp !== undefined ? [[d.id, d.stamp]] : [])),
+);
 
 /**
  * The stamp carried by a run with an operator objective. It is a probe, not a
@@ -828,7 +764,7 @@ export function loadRunConfig(raw: unknown): RunConfig {
   // Refused, never ignored: the reference program reads no prompt, so an
   // objective would be stamped on a run nothing steered, and its route is a
   // fresh character's, so it neither continues one nor fills a campaign cell.
-  if (config.driver === "reference") {
+  if (entryOf(config.driver).route === true) {
     const steered = [
       config.objective !== undefined ? "objective" : null,
       config.continuedFrom !== undefined ? "continuedFrom" : null,

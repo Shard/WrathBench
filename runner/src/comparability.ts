@@ -32,6 +32,7 @@
 import { z } from "zod";
 import { moduleAuthHeaders } from "./module-auth";
 import { HARNESSES, episodeOverrideOf, harnessOf, type Harness, type RunConfig } from "./config";
+import { driverEntry } from "./drivers";
 import { episodeIdSchema } from "./episodes";
 import { buildSystemPrompt } from "./prompt";
 import { routingForRun, routingSchema } from "./routing";
@@ -341,11 +342,7 @@ export function harnessOfRun(meta: {
 }): Harness | null {
   const stamped = meta.comparability?.harness;
   if (stamped !== undefined && (HARNESSES as readonly string[]).includes(stamped)) return stamped as Harness;
-  const d = meta.driver;
-  if (d === "claude-code") return "claude-code";
-  if (d === "codex") return "codex";
-  if (d === "openai" || d === "stub" || d === "reference") return "wrathbench";
-  return null;
+  return driverEntry(meta.driver)?.harness ?? null;
 }
 
 /**

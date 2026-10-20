@@ -58,14 +58,16 @@ function refused(argv: string[]): string {
 }
 
 describe("the definition's start and party blocks", () => {
-  test("every checked-in definition hashes as it was published: the new blocks are optional, with no default", () => {
+  test("every definition checked in before the blocks hashes as it was published: the new blocks are optional, with no default", () => {
     // The published hashes (campaign-defs/<ref> in the store, read 2026-10-19).
     const published: Record<string, string> = { "class-probe@2.json": "sha256:1c285b7bc87e738c", "race-probe@1.json": "sha256:7639fb7bce3d6b6e" };
-    for (const f of checkedInFiles()) {
+    const files = checkedInFiles();
+    for (const [f, hash] of Object.entries(published)) {
+      expect(files).toContain(f);
       const def = checkedIn(f.replace(/\.json$/, ""));
       expect(def.start).toBeUndefined();
       expect(def.party).toBeUndefined();
-      expect(campaignHash(def)).toBe(published[f]!);
+      expect(campaignHash(def)).toBe(hash);
     }
   });
 

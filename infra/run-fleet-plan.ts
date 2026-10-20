@@ -45,6 +45,7 @@ import { cellDimensions } from "../runner/src/campaign-def";
 import { campaignFileOf, type CampaignFile } from "../runner/src/campaign-file";
 import { memberRunId } from "../runner/src/party";
 import { DEFAULT_CLAUDE_TOKEN_ENV, type TerminationReason } from "../runner/src/config";
+import { driverEntry } from "../runner/src/drivers";
 import { isScoredEpisode } from "../runner/src/episodes";
 import { classifyLapse, OFFLINE_PAUSE, PARTY_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
 import { jobHoldOf, laneOfEntry, laneOfRun, type FleetSubscriptionGate } from "./run-fleet-gate";
@@ -740,7 +741,7 @@ export function jobSpawn(
       ...(uncappedLane && job.continueDropped !== undefined ? { continueDropped: { ...job.continueDropped } } : {}),
       // The subscription lane, for the one driver that has one. Omitted on the
       // default lane, so a spawn is byte-identical to a pre-lane one.
-      ...(job.subscription !== undefined && (entry.driver === "claude-code" || entry.driver === "codex") ? { tokenEnv: job.subscription } : {}),
+      ...(job.subscription !== undefined && driverEntry(entry.driver)?.lane !== undefined ? { tokenEnv: job.subscription } : {}),
     };
     const runId =
       `fleet-${job.name}-${slug(base.model)}${base.effort !== undefined ? `-${slug(base.effort)}` : ""}` +

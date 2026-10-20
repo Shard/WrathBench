@@ -14,6 +14,7 @@ import { type FleetRead, readFleetConfig } from "../runner/src/config-store";
 import { existsSync, readdirSync, readFileSync, realpathSync, statfsSync, statSync } from "node:fs";
 import { readCodexThread } from "../runner/src/codex-rollout";
 import { DEFAULT_CODEX_HOME_ENV, isCodexHomeEnvName } from "../runner/src/config";
+import { driverEntry } from "../runner/src/drivers";
 import { HEARTBEAT_DEAD_MS } from "../runner/src/trajectory";
 import { dirname, isAbsolute, join } from "node:path";
 import {
@@ -275,7 +276,7 @@ export function liveCodexThreads(
   const keep = new Set<string>();
   const unrecorded: string[] = [];
   for (const f of runs) {
-    if (f.driver !== "codex" || f.archived === true) continue;
+    if (driverEntry(f.driver)?.rollouts !== true || f.archived === true) continue;
     const beating = f.heartbeatAt != null && o.now - f.heartbeatAt < HEARTBEAT_DEAD_MS;
     if (!f.live && !beating) continue;
     const thread = threadOf(f.runId);

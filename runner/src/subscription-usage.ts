@@ -48,7 +48,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
-import { DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV } from "./config";
+import { DEFAULT_DRIVER, driverEntry } from "./drivers";
 
 /** One usage window, normalised: what the operator decided may be recorded, and nothing more. */
 export interface UsageWindow {
@@ -133,16 +133,16 @@ export function thresholdOf(cls: GateClass, t: Pick<SubscriptionThresholds, "sco
  * `tokenEnv`); absent is the driver's default lane. `goKeyEnv` is set, by
  * `goKeyEnvOf` (models.ts), on an `openai` run that draws on an OpenCode Go
  * allowance: one lane per key (`opencode-go:<KEY ENV>`). A further
- * subscription is one more branch here plus an observation reader.
+ * subscription is one more registry lane (drivers.ts) plus an observation reader.
  */
 export function subscriptionLaneOf(r: {
   driver?: string | null | undefined;
   lane?: string | null | undefined;
   goKeyEnv?: string | null | undefined;
 }): string | null {
-  if (r.driver === "claude-code") return `claude-code:${r.lane ?? DEFAULT_CLAUDE_TOKEN_ENV}`;
-  if (r.driver === "codex") return `codex:${r.lane ?? DEFAULT_CODEX_HOME_ENV}`;
-  if ((r.driver ?? "openai") === "openai" && typeof r.goKeyEnv === "string" && r.goKeyEnv.length > 0) return `opencode-go:${r.goKeyEnv}`;
+  const lane = driverEntry(r.driver)?.lane;
+  if (lane !== undefined) return `${lane.key}:${r.lane ?? lane.defaultEnv}`;
+  if (driverEntry(r.driver ?? DEFAULT_DRIVER)?.endpoint === true && typeof r.goKeyEnv === "string" && r.goKeyEnv.length > 0) return `opencode-go:${r.goKeyEnv}`;
   return null;
 }
 

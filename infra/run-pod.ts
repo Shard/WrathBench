@@ -30,7 +30,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV } from "../runner/src/config";
+import { DRIVER_POD_VOLUMES, entryOf, HOME_LANE_ENVS, type RosterDriver } from "../runner/src/drivers";
 import type { EpisodeExit, EpisodeHandle, EpisodeLaunch, EpisodeLauncher } from "./episode-launcher";
 import { EPISODE_TERM_GRACE_MS, refusedEpisode } from "./episode-launcher";
 import { digestOf, K8sClient, K8sError, type Pod, type PodEnvVar } from "./k8s-client";
@@ -55,8 +55,6 @@ export const RUN_POD_LAUNCHER_ENV = "WRATHBENCH_RUN_POD_LAUNCHER";
 export const DEFAULT_RUN_POD_TEMPLATE = "/etc/wrathbench/run-pod/pod.json";
 export const DEFAULT_RUN_POD_LAUNCHER = "/etc/wrathbench/run-pod/launcher.json";
 export const IMAGE_RECORD_FILE = "image.json";
-/** The name of the codex lane's volume in the template; dropped for every other driver. */
-const CODEX_HOME_VOLUME = "codex-home";
 
 export function runHashLabel(runId: string): string {
   return new Bun.CryptoHasher("sha256").update(runId).digest("hex").slice(0, 16);
@@ -166,7 +164,7 @@ function writeImageRecord(runDir: string, record: ImageRecord): void {
 // ------------------------------------------------------------- env builder
 
 export interface RunPodEnvOptions {
-  driver: "openai" | "claude-code" | "codex";
+  driver: RosterDriver;
   tokenEnv: string | undefined;
   apiKeyEnv: string;
   /** Plain values set last, over the template's. */
@@ -182,11 +180,12 @@ export interface RunPodEnvOptions {
  * refused outright, template or stamp: there is no run that may carry one.
  */
 export function runPodEnv(template: readonly PodEnvVar[], opts: RunPodEnvOptions): PodEnvVar[] {
-  const lane = opts.driver === "claude-code" ? opts.tokenEnv ?? DEFAULT_CLAUDE_TOKEN_ENV : undefined;
-  const codexHome = opts.driver === "codex" ? opts.tokenEnv ?? DEFAULT_CODEX_HOME_ENV : undefined;
+  const driver = entryOf(opts.driver);
+  const lane = driver.lane?.holds === "token" ? opts.tokenEnv ?? driver.lane.defaultEnv : undefined;
+  const homeLane = driver.lane?.holds === "home" ? opts.tokenEnv ?? driver.lane.defaultEnv : undefined;
   const keep = new Set<string>(["WRATHBENCH_MODULE_SECRET"]);
   if (lane !== undefined) keep.add(lane);
-  if (opts.driver === "openai") keep.add(opts.apiKeyEnv);
+  if (driver.endpoint) keep.add(opts.apiKeyEnv);
   // Checked on the inputs, not the output: a template that carries one is
   // wrong for every driver, and must fail before a single pod is built from it.
   for (const name of [...template.map((e) => e.name), ...Object.keys(opts.stamps)]) {
@@ -200,7 +199,7 @@ export function runPodEnv(template: readonly PodEnvVar[], opts: RunPodEnvOptions
     if (e.valueFrom?.secretKeyRef !== undefined && !keep.has(e.name)) continue;
     // The codex lane's directory is a plain value; it is still a credential's
     // address and goes only to the driver that reads it.
-    if (e.name === DEFAULT_CODEX_HOME_ENV && codexHome === undefined) continue;
+    if (HOME_LANE_ENVS.includes(e.name) && homeLane === undefined) continue;
     if (e.name in opts.stamps) continue;
     out.push(structuredClone(e));
   }
@@ -253,9 +252,11 @@ export function buildRunPod(template: Pod, opts: BuildRunPodOptions): Pod {
   container.command = opts.command ?? [...(container.command ?? []), ...DEFAULT_RUN_COMMAND];
   container.args = [...opts.args];
   container.env = runPodEnv(container.env ?? [], opts.env);
-  if (opts.env.driver !== "codex") {
-    container.volumeMounts = (container.volumeMounts ?? []).filter((m) => m.name !== CODEX_HOME_VOLUME);
-    pod.spec.volumes = (pod.spec.volumes ?? []).filter((v) => v.name !== CODEX_HOME_VOLUME);
+  // A lane volume (the Codex home) is mounted only on its own driver's pod.
+  const unused = DRIVER_POD_VOLUMES.filter((v) => !entryOf(opts.env.driver).podVolumes.includes(v));
+  if (unused.length > 0) {
+    container.volumeMounts = (container.volumeMounts ?? []).filter((m) => !unused.includes(m.name));
+    pod.spec.volumes = (pod.spec.volumes ?? []).filter((v) => !unused.includes(v.name));
   }
   if (opts.extraPullSecrets !== undefined && opts.extraPullSecrets.length > 0) {
     const have = ((pod.spec["imagePullSecrets"] as { name: string }[] | undefined) ?? []).map((s) => s.name);

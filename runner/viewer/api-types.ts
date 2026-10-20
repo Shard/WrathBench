@@ -2,14 +2,17 @@
  * The wire shapes of the viewer's read-only `/api` surface.
  *
  * This module is the contract between the Bun viewer and the `dashboard/` SPA,
- * and it is imported by both. It therefore has **no imports of its own** and
+ * and it is imported by both. It therefore has **no runtime imports** and
  * declares types only: the dashboard bundles for a browser and cannot pull in
  * `bun:sqlite` transitively, and a type-only module keeps the two sides from
- * drifting without either owning the other.
+ * drifting without either owning the other. Its one import is a type from the
+ * driver registry (`runner/src/drivers.ts`), which is import-free itself.
  *
  * The server-side modules (`runs.ts`, `tail.ts`) re-export the names they used
  * to declare, so nothing that imported them before has to move.
  */
+
+import type { Harness } from "../src/drivers";
 
 /**
  * The envelope a published public snapshot stamps onto every response body it
@@ -260,10 +263,10 @@ export interface EpisodesResponse extends SnapshotEnvelope {
 /**
  * The harness a run ran under: `wrathbench` is the fixed loop,
  * `claude-code` the Claude Code CLI scaffold, `codex` the OpenAI Codex CLI
- * scaffold. Literal union rather than an import, because this module is
- * import-free by construction.
+ * scaffold. The registry's own union, by a type-only import: the registry is
+ * import-free too, so nothing server-side follows it into the dashboard.
  */
-export type HarnessView = "wrathbench" | "claude-code" | "codex";
+export type HarnessView = Harness;
 
 export interface ComparabilityView {
   /** `git describe` of this repo's build — the same for every harness. */
