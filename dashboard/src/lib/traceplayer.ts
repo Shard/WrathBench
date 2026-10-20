@@ -42,6 +42,7 @@ import {
   GAP_MS,
   SEG_MS,
   type DecodedSegment,
+  type TraceChatLine,
   type TraceFrame,
   type TracePose,
   type TraceSheetAt,
@@ -55,7 +56,7 @@ import {
 import { type Span, advanceCursor } from "./playback";
 import { trackSpan } from "./replay";
 
-export type { TraceItemName, TracePose, TraceQuestReq, TraceSheetAt, TraceState, TraceTarget };
+export type { TraceChatLine, TraceItemName, TracePose, TraceQuestReq, TraceSheetAt, TraceState, TraceTarget };
 
 /* --------------------------------------------------------------- store --- */
 
@@ -175,6 +176,12 @@ export interface TraceStore {
    * are further apart than `GAP_MS`.
    */
   path: (runId: string, from: number, to: number) => TrailRun[];
+  /**
+   * The lines the character said in `(from, to]`, oldest first, from whatever
+   * is loaded: each piece answers only for its own stretch, so a window seen
+   * first in the tail and then closed says its lines once.
+   */
+  chat: (runId: string, from: number, to: number) => TraceChatLine[];
   /** Whether a loaded segment (or the tail) answers for `t`. */
   covers: (runId: string, t: number) => boolean;
   /**
@@ -481,6 +488,17 @@ export function createTraceStore(opts: TraceStoreOptions = {}): TraceStore {
       const run = runs.get(runId);
       if (run === undefined || to <= from) return [];
       return trailOf(assembled(run).frames, from, to);
+    },
+
+    chat(runId, from, to) {
+      const run = runs.get(runId);
+      if (run === undefined || to <= from) return [];
+      const out: TraceChatLine[] = [];
+      for (const p of assembled(run).pieces) {
+        if (p.to <= from || p.from > to) continue;
+        for (const c of p.seg.chat) if (c.t > from && c.t <= to && c.t >= p.from && c.t < p.to) out.push(c);
+      }
+      return out.sort((a, b) => a.t - b.t);
     },
 
     covers(runId, t) {

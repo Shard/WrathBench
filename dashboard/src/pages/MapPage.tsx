@@ -116,6 +116,7 @@ import {
   replayHrefFor,
 } from "../lib/mapstate";
 import { createMapFit } from "../lib/mapfit";
+import { BUBBLE_MS, bubblesAt, layoutStacks, stacksKey, type BubbleStack, type StackBox } from "../lib/chatbubbles";
 import {
   DEFAULT_MAP,
   STALE_MS,
@@ -434,6 +435,19 @@ export default function MapPage() {
   let canvas!: HTMLCanvasElement;
   let stage!: HTMLDivElement;
 
+  /*
+   * The chat bubbles (`lib/chatbubbles.ts`): which are up is a signal, written
+   * by the frame loop only when the set changes, and where each stack sits is
+   * set on its element by the same loop, every frame the map is drawn. Each
+   * stack's size is measured when the set changes or the stage resizes, not
+   * per frame.
+   */
+  const [bubbleStacks, setBubbleStacks] = createSignal<BubbleStack[]>([]);
+  const stackEls = new Map<string, HTMLDivElement>();
+  const stackSizes = new Map<string, { w: number; h: number }>();
+  let bubblesShown = "";
+  let bubblesMeasure = false;
+
   /* Mutable render state — read every frame, never through a signal. */
   const pips = new Map<string, Pip>();
   /* The live feed's reference clock, beside the pips it dates; null in a replay. */
@@ -605,6 +619,7 @@ export default function MapPage() {
      */
     if (mapFit.pending()) view = defaultView({ w: W, h: H }, untrack(activeMap));
     needsDraw = true;
+    bubblesMeasure = true;
   }
 
   /** On the map as drawn: a traced pip's map is its pose's, which can be minutes behind its reading's. */
@@ -674,6 +689,53 @@ export default function MapPage() {
       walking.push(pip);
     }
     return stepPips(walking) || moved;
+  }
+
+  /** The bubbles up at playhead `t` for the pips on the map; whether the set changed. */
+  function updateBubbles(list: readonly Pip[], t: number | null): boolean {
+    const stacks: BubbleStack[] = [];
+    if (t !== null) {
+      for (const pip of list) {
+        const bubbles = bubblesAt(pip.runId, store.chat(pip.runId, t - BUBBLE_MS, t), t);
+        if (bubbles.length > 0) stacks.push({ runId: pip.runId, bubbles });
+      }
+    }
+    const key = stacksKey(stacks);
+    if (key === bubblesShown) return false;
+    bubblesShown = key;
+    setBubbleStacks(stacks);
+    bubblesMeasure = true;
+    return true;
+  }
+
+  /** Each stack over its pip as the view stands, lifted clear of the others and of every puck (`layoutStacks`). */
+  function placeBubbles(): void {
+    if (stackEls.size === 0) return;
+    const boxes: StackBox[] = [];
+    for (const [runId, el] of stackEls) {
+      const pip = pips.get(runId);
+      if (pip === undefined) continue;
+      let size = stackSizes.get(runId);
+      if (size === undefined || bubblesMeasure) {
+        size = { w: el.offsetWidth, h: el.offsetHeight };
+        stackSizes.set(runId, size);
+      }
+      const p = project(view, pip.x, pip.y);
+      boxes.push({ runId, sx: p.sx, sy: p.sy, ...size });
+    }
+    bubblesMeasure = false;
+    const pucks = onMap().map((pip) => {
+      const p = project(view, pip.x, pip.y);
+      return { x: p.sx - PUCK_R_SEL, y: p.sy - PUCK_R_SEL, w: 2 * PUCK_R_SEL, h: 2 * PUCK_R_SEL };
+    });
+    for (const b of layoutStacks(boxes, W, pucks)) {
+      const el = stackEls.get(b.runId);
+      if (el === undefined) continue;
+      el.style.setProperty("--bx", `${Math.round(b.x)}px`);
+      el.style.setProperty("--by", `${Math.round(b.y)}px`);
+      el.style.setProperty("--lx", `${Math.round(b.leadX)}px`);
+      el.style.setProperty("--lead", `${Math.round(b.lead)}px`);
+    }
   }
 
   /**
@@ -1455,6 +1517,10 @@ export default function MapPage() {
         // clock (`nearbyFrameDue`) rather than holding the map at frame rate.
         const nearbyOn = track() === undefined && t !== null && nearbyShown(view.scale) && nearbyStore.size() > 0;
         const nearbyDue = nearbyOn && nearbyFrameDue(lastNearbyDraw, p);
+        // The bubbles follow the pips: placed whenever the map is drawn, and
+        // whenever the set up changes.
+        const said = updateBubbles(list, t);
+        if (said || needsDraw || moving) placeBubbles();
         if (needsDraw || moving || fading || nearbyDue || (resting && !reduceMotion)) {
           needsDraw = false;
           lastDraw = p;
@@ -2107,6 +2173,35 @@ export default function MapPage() {
           }}
           onWheel={onWheel}
         />
+        <div class="map-bubbles">
+          <For each={bubbleStacks()}>
+            {(stack) => {
+              let el!: HTMLDivElement;
+              onCleanup(() => {
+                if (stackEls.get(stack.runId) !== el) return;
+                stackEls.delete(stack.runId);
+                stackSizes.delete(stack.runId);
+              });
+              return (
+                <div
+                  class="map-bubble-stack"
+                  ref={(e) => {
+                    el = e;
+                    stackEls.set(stack.runId, e);
+                  }}
+                >
+                  <For each={stack.bubbles}>
+                    {(b) => (
+                      <div class={`card map-bubble ${b.kind}`} title={b.title}>
+                        {b.text}
+                      </div>
+                    )}
+                  </For>
+                </div>
+              );
+            }}
+          </For>
+        </div>
         <div class="map-chips">
           <Show when={mapChips(maps(), activeMap()).length > 1}>
             <For each={mapChips(maps(), activeMap())}>

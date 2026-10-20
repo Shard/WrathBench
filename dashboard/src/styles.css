@@ -382,7 +382,7 @@ button.on { border-color: var(--accent); font-weight: 700; }
 .entry > .head { display: flex; gap: 10px; align-items: baseline; padding: 5px 10px;
                  border-bottom: 1px solid var(--line); font-size: var(--fs-sm); color: var(--dim); }
 .entry > .head .t { color: var(--fg); font-weight: 700; }
-.entry.bad { border-left: 3px solid var(--err); }
+.entry.bad, .map-bubble.yell { border-left: 3px solid var(--err); }
 /*
  * A turn spent reflecting rather than acting: the same experience purple the
  * map's rest glyph uses, as the left rule an errored card already uses for the
@@ -437,7 +437,7 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .notice-line, .action-line { white-space: pre-wrap; word-break: break-word; }
 .notice-line + .notice-line { margin-top: 3px; }
 .entry .body.notices { padding: 6px 10px 8px; }
-.entry.notice { border-left: 3px solid var(--warn); }
+.entry.notice, .map-bubble.raid, .map-bubble.emote { border-left: 3px solid var(--warn); }
 .entry.notice > .head .notice-kind { color: var(--warn); font-weight: 700; }
 
 /* The action log: what a snippet put on the wire, one short line per dispatch
@@ -456,6 +456,32 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .map-stage canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
 .map-stage canvas.drag { cursor: grabbing; }
 .map-chips { position: absolute; top: 10px; left: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+
+/*
+ * What a character said, over its pip (`lib/chatbubbles.ts`). The frame loop
+ * places each stack through four properties: its box (`--bx`, `--by`) and the
+ * leader down to its pip (`--lx`, `--lead`). The bubble itself is a `.card`.
+ * Only a bubble takes the pointer, for its title; the rest of the layer lets
+ * a drag through to the map. A kind other than say is marked on the left
+ * edge; yell, raid and emote share the feed's error and notice rules.
+ */
+.map-bubbles { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.map-bubble-stack {
+  position: absolute; left: 0; top: 0; max-width: min(240px, 70%);
+  transform: translate(var(--bx, -9999px), var(--by, -9999px));
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+}
+.map-bubble-stack::after {
+  content: ""; position: absolute; top: 100%; left: var(--lx, 50%);
+  width: 1px; height: var(--lead, 0); background: var(--dim);
+}
+.card.map-bubble {
+  pointer-events: auto; padding: 2px 6px; font-size: var(--fs-sm); line-height: 1.35;
+  overflow-wrap: anywhere; box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+}
+.map-bubble:not(:last-child) { opacity: .75; }
+.map-bubble.party { border-left: 3px solid var(--accent); }
+.map-bubble.whisper { border-left: 3px solid var(--pi); }
 
 /*
  * The control strip, bottom centre of the stage, in both modes. One element
@@ -967,6 +993,7 @@ button.update:hover { background: var(--panel); }
   .map-wrap { flex-direction: column; }
   .map-stage { flex: 1; min-height: 0; }
   .side { width: auto; max-height: 45%; border-left: none; border-top: 1px solid var(--line); }
+  .map-bubble-stack { max-width: min(180px, 60%); }
 }
 
 /*
