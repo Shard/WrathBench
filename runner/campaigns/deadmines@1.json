@@ -22,7 +22,7 @@
         "race": 1,
         "class": 1,
         "character": "Tankpartyb",
-        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Tankpartyb, the party's tank. The party stands in Moonbrook, Westfall, at the entrance to the Deadmines. The objective for this run is for the party to clear the Deadmines and defeat Edwin VanCleef. You share party chat with the others and can whisper any of them."
+        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Tankpartyb, the party's tank. The party stands in the mine under Moonbrook, Westfall, a few yards from the portal into the Deadmines. The objective for this run is for the party to clear the Deadmines and defeat Edwin VanCleef. You share party chat with the others and can whisper any of them."
       },
       {
         "id": "healer",
@@ -30,7 +30,7 @@
         "race": 3,
         "class": 5,
         "character": "Healpartyc",
-        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Healpartyc, the party's healer. The party stands in Moonbrook, Westfall, at the entrance to the Deadmines. The objective for this run is for the party to clear the Deadmines and defeat Edwin VanCleef. You share party chat with the others and can whisper any of them."
+        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Healpartyc, the party's healer. The party stands in the mine under Moonbrook, Westfall, a few yards from the portal into the Deadmines. The objective for this run is for the party to clear the Deadmines and defeat Edwin VanCleef. You share party chat with the others and can whisper any of them."
       },
       {
         "id": "mage",
@@ -38,7 +38,7 @@
         "race": 1,
         "class": 8,
         "character": "Magepartyd",
-        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Magepartyd, the party's damage. The party stands in Moonbrook, Westfall, at the entrance to the Deadmines. The objective for this run is for the party to clear the Deadmines and defeat Edwin VanCleef. You share party chat with the others and can whisper any of them."
+        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Magepartyd, the party's damage. The party stands in the mine under Moonbrook, Westfall, a few yards from the portal into the Deadmines. The objective for this run is for the party to clear the Deadmines and defeat Edwin VanCleef. You share party chat with the others and can whisper any of them."
       },
       {
         "id": "rogue",
@@ -46,7 +46,7 @@
         "race": 1,
         "class": 4,
         "character": "Roguepartye",
-        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Roguepartye, the party's damage. The party stands in Moonbrook, Westfall, at the entrance to the Deadmines. The objective for this run is for the party to clear the Deadmines and defeat Edwin VanCleef. You share party chat with the others and can whisper any of them."
+        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Roguepartye, the party's damage. The party stands in the mine under Moonbrook, Westfall, a few yards from the portal into the Deadmines. The objective for this run is for the party to clear the Deadmines and defeat Edwin VanCleef. You share party chat with the others and can whisper any of them."
       },
       {
         "id": "paladin",
@@ -54,7 +54,7 @@
         "race": 3,
         "class": 2,
         "character": "Palapartyf",
-        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Palapartyf, the party's damage. The party stands in Moonbrook, Westfall, at the entrance to the Deadmines. The objective for this run is for the party to clear the Deadmines and defeat Edwin VanCleef. You share party chat with the others and can whisper any of them."
+        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Palapartyf, the party's damage. The party stands in the mine under Moonbrook, Westfall, a few yards from the portal into the Deadmines. The objective for this run is for the party to clear the Deadmines and defeat Edwin VanCleef. You share party chat with the others and can whisper any of them."
       }
     ]
   }
