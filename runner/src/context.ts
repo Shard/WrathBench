@@ -76,9 +76,17 @@ export const CONTEXT_POLICY = {
    * as the model sent it, so the line only has to say which call it answers.
    */
   FOLD_ARGS_CHARS: 80,
-  /** Chat / notification tail lengths inside the state summary. */
+  /**
+   * Chat / notification tail lengths inside the state summary. `CHAT_TAIL`
+   * counts lines from players and the system; creature speech and emotes get
+   * their own `NPC_CHAT_TAIL`, so a dungeon's barks cannot push party chat out
+   * of the window (the 2026-10-20 party runs).
+   */
   CHAT_TAIL: 10,
+  NPC_CHAT_TAIL: 3,
   NOTIFICATION_TAIL: 5,
+  /** Own auras listed on the summary's `auras` line before "+N more". */
+  AURA_TAIL: 10,
   /**
    * Ambient-motion opcodes excluded from the model-visible event window (they
    * still fold into the state cache, whose nearby/motion the summary reflects).
@@ -262,6 +270,8 @@ export interface SnapshotLike {
   /** The open-window fold the sandbox computes from the event stream. */
   ui?: UiOpenWindows;
   chat?: ChatLineLike[];
+  /** Our own visible auras (`state.aurasOf(self.guid)`), named; the sandbox's derived view. */
+  selfAuras?: AuraLike[];
   notifications?: { text?: unknown }[];
   /** `state.names`: name-query answers by guid (`{ value, seq, ts }`), the player senders' names. */
   names?: Record<string, { value?: unknown }>;
@@ -276,6 +286,52 @@ export interface SnapshotLike {
   observation?: { connected?: boolean };
 }
 
+/** One `state.aurasOf()` row as the snapshot carries it (SDK `AuraEntry`). */
+export interface AuraLike {
+  spellId?: unknown;
+  name?: unknown;
+  flags?: unknown;
+  stacks?: unknown;
+  duration?: unknown;
+  ts?: unknown;
+}
+
+/** `AFLAG_NEGATIVE` / `AFLAG_DURATION` on an aura slot (SpellAuraDefines.h). */
+const AFLAG_NEGATIVE = 0x80;
+const AFLAG_DURATION = 0x20;
+
+/** "45s", "9m 12s", "1h 05m": what is left of a timed aura. */
+function fmtLeft(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`;
+}
+
+/**
+ * The buff bar a client draws for itself, as one line: each aura by name,
+ * marked when it is a debuff, with its stacks and, when the aura shows a
+ * timer, what is left of it now (`duration` was what was left at `ts`).
+ * Undefined when no aura is observed: an empty list is not proof of an empty
+ * bar, so nothing is said.
+ */
+export function auraLine(auras: readonly AuraLike[] | undefined, now: number): string | undefined {
+  if (auras === undefined || auras.length === 0) return undefined;
+  const parts = auras.slice(0, CONTEXT_POLICY.AURA_TAIL).map((a) => {
+    const name = typeof a.name === "string" && a.name.length > 0 ? a.name : `spell ${fmt(a.spellId, "?")}`;
+    const flags = typeof a.flags === "number" ? a.flags : 0;
+    const notes: string[] = [];
+    if ((flags & AFLAG_NEGATIVE) !== 0) notes.push("debuff");
+    if (typeof a.stacks === "number" && a.stacks > 1) notes.push(`${a.stacks} stacks`);
+    if ((flags & AFLAG_DURATION) !== 0 && typeof a.duration === "number" && typeof a.ts === "number") {
+      notes.push(`${fmtLeft(a.duration - (now - a.ts))} left`);
+    }
+    return notes.length === 0 ? name : `${name} (${notes.join(", ")})`;
+  });
+  const more = auras.length > parts.length ? ` +${auras.length - parts.length} more` : "";
+  return `auras: ${parts.join(", ")}${more} [state.aurasOf(state.self.guid)]`;
+}
+
 /** One `state.chat` entry as the snapshot carries it (SDK `ChatEntry`). */
 export interface ChatLineLike {
   type?: unknown;
@@ -288,19 +344,70 @@ export interface ChatLineLike {
   achievementId?: unknown;
 }
 
-/** `CHAT_MSG_ACHIEVEMENT` / `CHAT_MSG_GUILD_ACHIEVEMENT` (SharedDefines.h). */
+/** `CHAT_MSG_*` codes the chat lines name (SharedDefines.h). */
+const CHAT_MSG_SYSTEM = 0x00;
+const CHAT_MSG_WHISPER_INFORM = 0x09;
+const CHAT_MSG_CHANNEL = 0x11;
 const CHAT_MSG_ACHIEVEMENT = 0x30;
 const CHAT_MSG_GUILD_ACHIEVEMENT = 0x31;
 
 /**
- * One chat line the way the client's chat frame would show it: the speaker's
- * name where one is known — the packet's own (`senderName`, creature speech)
- * or the name query's answer for a player guid — and the guid otherwise. A
- * channel line carries its channel. The achievement broadcast arrives as the
- * client's raw template (`%s has earned the achievement $a!`), which the
- * client fills from the sender and `achievementId`; filled here the same way,
- * with the id where the client would link the title (Achievement.dbc is not
- * served for other players' achievements).
+ * The chat type as a short label, the distinction a client draws in colour
+ * and in its "[Party]" / "whispers:" / "yells:" wording. Creature speech is
+ * marked `npc` (`MONSTER_*`, `RAID_BOSS_*`): the packet says it, and party
+ * chat must not read as a creature's bark or the other way round.
+ */
+const CHAT_TYPE_LABEL: Readonly<Record<number, string>> = {
+  0x00: "system",
+  0x01: "say",
+  0x02: "party",
+  0x03: "raid",
+  0x04: "guild",
+  0x05: "officer",
+  0x06: "yell",
+  0x07: "whisper",
+  0x08: "whisper",
+  0x09: "whisper",
+  0x0a: "emote",
+  0x0b: "emote",
+  0x0c: "npc say",
+  0x0d: "npc party",
+  0x0e: "npc yell",
+  0x0f: "npc whisper",
+  0x10: "npc emote",
+  0x27: "raid",
+  0x28: "raid warning",
+  0x29: "npc emote",
+  0x2a: "npc whisper",
+  0x30: "achievement",
+  0x31: "achievement",
+  0x33: "party",
+};
+
+/**
+ * The types whose text is a template the client fills with the sender's
+ * name: the emotes (`EMOTE`, `TEXT_EMOTE`, `MONSTER_EMOTE`, `RAID_BOSS_EMOTE`)
+ * and the achievement broadcast. Anything else prints `%s` as typed.
+ */
+const NAME_TEMPLATE_TYPES: ReadonlySet<number> = new Set([0x0a, 0x0b, 0x10, 0x29, CHAT_MSG_ACHIEVEMENT, CHAT_MSG_GUILD_ACHIEVEMENT]);
+
+/** Creature speech and emotes (`MONSTER_SAY`..`MONSTER_EMOTE`, `RAID_BOSS_EMOTE`/`_WHISPER`). */
+export function isCreatureChat(c: ChatLineLike): boolean {
+  return typeof c.type === "number" && ((c.type >= 0x0c && c.type <= 0x10) || c.type === 0x29 || c.type === 0x2a);
+}
+
+/**
+ * One chat line the way the client's chat frame would show it: the type, and
+ * the speaker's name where one is known — the packet's own (`senderName`,
+ * creature speech), the SDK's name-query join, or the snapshot's `names` —
+ * and the guid otherwise. A channel line carries its channel. Our own
+ * whisper's echo (`WHISPER_INFORM`) names the recipient in the sender's
+ * place, as the core builds it, and reads "to <name>:" as a client prints
+ * it. A text carrying `%s` (a creature emote, the achievement broadcast's
+ * `%s has earned the achievement $a!`) has the sender's name put in its
+ * place, as the client does, and then needs no name in front; the
+ * achievement's `$a` becomes the id where the client would link the title
+ * (Achievement.dbc is not served for other players' achievements).
  */
 export function formatChatLine(c: ChatLineLike, names?: Record<string, { value?: unknown }>): string {
   const guid = c.senderGuid === undefined || c.senderGuid === null ? undefined : String(c.senderGuid);
@@ -314,10 +421,44 @@ export function formatChatLine(c: ChatLineLike, names?: Record<string, { value?:
   let message = fmt(c.message, "");
   if (c.type === CHAT_MSG_ACHIEVEMENT || c.type === CHAT_MSG_GUILD_ACHIEVEMENT) {
     const id = typeof c.achievementId === "number" ? `achievement ${c.achievementId}` : "an achievement";
-    message = message.replace("%s", name).replace("$a", id);
+    message = message.replace("$a", id);
   }
-  const channel = typeof c.channelName === "string" && c.channelName.length > 0 ? `[${c.channelName}] ` : "";
-  return `  ${channel}<${name}> ${message}`;
+  const label =
+    c.type === CHAT_MSG_CHANNEL && typeof c.channelName === "string" && c.channelName.length > 0
+      ? c.channelName
+      : typeof c.type === "number"
+        ? (CHAT_TYPE_LABEL[c.type] ?? `type ${c.type}`)
+        : "chat";
+  if (c.type === CHAT_MSG_SYSTEM) return `  [${label}] ${message}`;
+  if (c.type === CHAT_MSG_WHISPER_INFORM) return `  [${label}] to <${name}>: ${message}`;
+  if (typeof c.type === "number" && NAME_TEMPLATE_TYPES.has(c.type) && message.includes("%s")) {
+    return `  [${label}] ${message.replaceAll("%s", name)}`;
+  }
+  return `  [${label}] <${name}> ${message}`;
+}
+
+/**
+ * The chat lines the summary shows, oldest first: the last `CHAT_TAIL` from
+ * players and the system, and the last `NPC_CHAT_TAIL` creature lines among
+ * them, so a run of barks and emotes cannot push party chat out.
+ */
+export function chatTail(chat: readonly ChatLineLike[]): ChatLineLike[] {
+  const out: ChatLineLike[] = [];
+  let players = 0;
+  let creatures = 0;
+  for (let i = chat.length - 1; i >= 0; i--) {
+    const c = chat[i]!;
+    if (isCreatureChat(c)) {
+      if (creatures >= CONTEXT_POLICY.NPC_CHAT_TAIL) continue;
+      creatures++;
+    } else {
+      if (players >= CONTEXT_POLICY.CHAT_TAIL) continue;
+      players++;
+    }
+    out.push(c);
+    if (players >= CONTEXT_POLICY.CHAT_TAIL && creatures >= CONTEXT_POLICY.NPC_CHAT_TAIL) break;
+  }
+  return out.reverse();
 }
 
 function fmt(v: unknown, fallback = "unobserved"): string {
@@ -687,6 +828,9 @@ export function formatStateSummary(
 
   // health / power (self only — the player frame is numbers)
   lines.push(`health: ${fmtGauge(s.health)}  power: ${fmtGauge(s.power)}`);
+  // auras — the buff and debuff bar beside the player frame
+  const auras = auraLine(snapshot.selfAuras, o.now ?? Date.now());
+  if (auras !== undefined) lines.push(auras);
 
   // xp / money
   const money = snapshot.money?.value;
@@ -771,7 +915,7 @@ export function formatStateSummary(
   lines.push(gaps === 0 ? "stream: continuous" : `stream: ${gaps} gap(s) — some events were missed`);
 
   // chat / notification tails (kept as before)
-  const chat = (snapshot.chat ?? []).slice(-CONTEXT_POLICY.CHAT_TAIL);
+  const chat = chatTail(snapshot.chat ?? []);
   if (chat.length > 0) {
     lines.push(`recent chat (${chat.length}):`);
     for (const c of chat) lines.push(formatChatLine(c, snapshot.names));
