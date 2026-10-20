@@ -2,7 +2,7 @@
 #
 # Operator entry point for one episode.
 #
-#   ./infra/run-episode.sh --model <id> [--driver openai|claude-code|codex|stub]
+#   ./infra/run-episode.sh --model <id> [--driver openai|claude-code|codex|pi|stub]
 #   ./infra/run-episode.sh --driver reference --episode e90 --account PROBE   # the scripted reference
 #   ./infra/run-episode.sh --resume <run-id>
 #   ./infra/run-episode.sh --model <id> --local           # outside the container
@@ -334,6 +334,38 @@ EOF
       '[ -f "$(eval echo "\${${WRATHBENCH_TOKEN_ENV}:-}")/auth.json" ]' \
       >/dev/null 2>&1; then
       codex_help
+      exit 2
+    fi
+  fi
+fi
+
+# The pi driver: the pi coding-agent CLI on a metered endpoint, probe-only
+# until the operator promotes it (runner/README.md, "The pi driver"). Its key
+# is an ordinary provider key (--api-key-env, e.g. DEEPSEEK_KEY) that run.ts
+# checks against the provider table and refuses by name when it is missing,
+# as it does for the openai driver; what only this script can check is that
+# the pinned binary is where the run will look for it.
+if [ "${DRIVER}" = "pi" ]; then
+  echo "run-episode.sh: driver pi — the pi CLI is the harness for this run; a labelled harness, probe-only until promoted (see docs/METHODOLOGY.md)." >&2
+  if [ "${LOCAL}" -eq 1 ]; then
+    command -v pi >/dev/null 2>&1 || {
+      echo "run-episode.sh: the pi CLI is not on PATH; install the release pinned as PI_VERSION in infra/docker/runner.Dockerfile, or drop --local" >&2
+      exit 2
+    }
+  elif [ "${K8S}" -eq 1 ]; then
+    if ! kubectl -n "${K8S_NAMESPACE}" exec -i "deployment/${K8S_RELEASE}-runner" -- sh -c 'command -v pi' >/dev/null 2>&1; then
+      echo "run-episode.sh: the runner pod has no \`pi\` CLI — check the image tag" >&2
+      exit 2
+    fi
+  else
+    if ! docker compose -f "${COMPOSE_FILE}" exec -T "${SERVICE}" sh -c 'command -v pi' >/dev/null 2>&1; then
+      cat >&2 <<'EOF'
+run-episode.sh: the runner container has no `pi` CLI.
+  either rebuild the runner image (infra/docker/runner.Dockerfile installs the
+  release pinned as PI_VERSION), or run on the host with --local:
+      WRATHBENCH_MODULE_URL=http://127.0.0.1:8086 ./infra/run-episode.sh --driver pi \
+        --model deepseek-flash --api-base https://api.deepseek.com/v1 --api-key-env DEEPSEEK_KEY --local
+EOF
       exit 2
     fi
   fi

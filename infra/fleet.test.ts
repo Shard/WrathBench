@@ -535,6 +535,19 @@ describe("parseFleet", () => {
     }
   });
 
+  test("a pi entry beside a wrathbench entry of the same model parses, takes a window, and refuses routing", () => {
+    // The #257 campaign's pair: one model and endpoint under two harnesses,
+    // which the roster allows only because pi is probe-only.
+    const ds = { tier: "t1", model: "deepseek-flash", apiBase: "https://api.deepseek.com/v1", apiKeyEnv: "DEEPSEEK_KEY" };
+    const config = parseFleet(fleetJson([], { roster: { ds, "ds-pi": { ...ds, driver: "pi", compactWindow: "300k" } } }));
+    expect(config.roster["ds-pi"]).toMatchObject({ driver: "pi", compactWindow: "300k" });
+    expect(config.roster["ds-pi"]!.refused).toBeUndefined();
+    expect(policyRefs(config).has("ds-pi")).toBe(true);
+    expect(() =>
+      parseFleet(fleetJson([], { roster: { "ds-pi": { ...ds, driver: "pi", routing: { only: ["DeepSeek"] } } } })),
+    ).toThrow(/routing is an OpenRouter setting — this entry runs on the pi CLI/);
+  });
+
   test("policy.routing is the fleet default, and an entry's own routing wins", () => {
     const config = parseFleet(
       fleetJson([], {
@@ -2182,6 +2195,16 @@ describe("scheduling policy: defer ladder and retirement", () => {
     expect(runnableRefs(job({ ref: "glm", episode: "e360" }), roster)).toEqual([]);
     expect(runnableRefs(job({ ref: "glm", episode: "e360" }), roster, eligibleFrom([{ ...states[0]!, name: "glm", eligible: ["e90", "e360"] }]))).toEqual(["glm"]);
     expect(runnableRefs(job({ ref: "glm" }), roster)).toEqual(["glm"]);
+  });
+
+  test("a probe-only driver's entry runs under a campaign's job and no other", () => {
+    const withPi: Record<string, FleetRosterEntry> = { ...roster, "ds-pi": { model: "deepseek-flash", driver: "pi", tier: "t1", idle: "none" } };
+    // A queue job naming it for a scored or freeplay episode is the scored lane it is kept out of.
+    expect(runnableRefs(job({ ref: "ds-pi" }), withPi)).toEqual([]);
+    expect(runnableRefs(job({ ref: "ds-pi", episode: "freeplay" }), withPi)).toEqual([]);
+    // A campaign's square names its probe identity.
+    const probe = job({ ref: "ds-pi", episode: "probing", probe: { campaign: "pi-vs", version: 1, cell: "c", arm: "pi" } });
+    expect(runnableRefs(probe, withPi)).toEqual(["ds-pi"]);
   });
 
   test("the policy fills the accounts the queue leaves free, never while a manual job waits, never a second run", () => {

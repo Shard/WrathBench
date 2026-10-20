@@ -1064,6 +1064,22 @@ describe("probe campaigns in the schedule", () => {
   ).campaigns[0]!;
   const probeRun = (cell: string): ProbeRun => ({ campaign: "class-probe", version: 2, cell, ref: "a", arm: "base", counted: true, live: false });
 
+  test("a probe-only driver's entry owes nothing, wants no idle work, and runs only as a campaign's square", () => {
+    // pi until the operator promotes it (operator, 2026-10-20): a tier and an
+    // idle axis that would schedule anything else buy it nothing.
+    const pi = projectModel({ name: "a", model: "deepseek-flash", driver: "pi", tier: "t2", idle: "unlimited" }, [], DEFAULT_POLICY, { now: NOW2 });
+    expect(pi).toMatchObject({ probeOnly: true, eligible: [], idle: "none", harness: "pi" });
+    expect(pi.perEpisode.e90!.target).toBe(0);
+    expect(pi.perEpisode.e360!.target).toBe(0);
+    const v = schedulability(pi);
+    expect(v.verdict).toBe("free");
+    expect(v.why).toContain("driver pi is probe-only");
+    expect(wantsIdle(v, pi)).toBe(false);
+    expect(planNextJobs([pi], ["R1"], new Set()).jobs).toEqual([]);
+    const plan = planNextJobs([pi], ["R1"], new Set(), { campaigns: [campaign] });
+    expect(plan.jobs.map((j) => ({ episode: j.episode, probe: j.probe?.campaign }))).toEqual([{ episode: "probing", probe: "class-probe" }]);
+  });
+
   test("a model that owes evidence is never given probe work", () => {
     // The whole priority rule, in one assertion: evals outrank probes, and the
     // rule is enforced by the verdict rather than by ordering the loops.
