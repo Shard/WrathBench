@@ -114,6 +114,7 @@ import {
 } from "./events";
 import {
   mailResultText,
+  npcRolesOf,
   partyResultText,
   isQuestGiverMarkerInput,
   pointOf,
@@ -1267,6 +1268,25 @@ export function dropRefusalHint(p: MovePoint, d: MoveResultData, j: DropJudgemen
   );
 }
 
+/**
+ * Said of a climb refused where the character already stood (rogue,
+ * 2026-10-20 14:22-14:24: in a pit, every destination's route began with
+ * the same 46-yard climb at its own feet). One call shows it: the route's
+ * first step is the climb, so no walk leaves the spot.
+ */
+const CLIMB_FROM_STANDSTILL =
+  " The step is where you stand: no walkable route climbs out from here, and the Hearthstone or a spirit healer is a way out.";
+
+/**
+ * Whether a `drop` is a climb whose edge is the position the move started
+ * from (within a yard): refused before a single step was walked.
+ */
+function climbsFromStandstill(d: MoveResultData, from: UnitPosition | undefined): boolean {
+  if (from === undefined || d.dz === undefined || d.dz <= 0 || d.surfaceZ !== undefined) return false;
+  const edge = d.reachedPos ?? d.pos;
+  return Math.hypot(edge.x - from.x, edge.y - from.y, edge.z - from.z) <= 1;
+}
+
 /** `data.status` of a move result without widening its type at the call site. */
 function status_(d: MoveResultData): string {
   return d.status;
@@ -1768,6 +1788,8 @@ function questgiverTooFarHint(distance: number): string {
 
 /** `UNIT_NPC_FLAG_QUESTGIVER`. */
 const NPC_FLAG_QUESTGIVER = 0x2;
+/** `UNIT_NPC_FLAG_REPAIR`. */
+const NPC_FLAG_REPAIR = 0x1000;
 /** `GAMEOBJECT_TYPE_QUESTGIVER`. */
 const GO_TYPE_QUESTGIVER = 2;
 /** How long the client-parity queries wait to coalesce one burst of events. */
@@ -2225,9 +2247,9 @@ const CAST_DEATH_WINDOW_MS = 300;
  * reason not listed is named and nothing more is said.
  */
 const CAST_FAILURE_MEANING: Readonly<Record<string, string>> = {
-  line_of_sight: "something blocks the line of sight to the target",
+  line_of_sight: "something blocks the line of sight to the target; move to where it is in view",
   out_of_range: "the target is out of this spell's range",
-  unit_not_infront: "the target is not in front of you",
+  unit_not_infront: "the target is not in front of you; sdk.face({ x: target.x, y: target.y }) turns you to it",
   not_infront: "you are not facing the target",
   caster_dead: "you are dead",
   interrupted: "the cast was interrupted (moving or acting during it)",
@@ -2916,6 +2938,11 @@ export type EquipItemResult =
       readonly name: string | undefined;
       /** The equipment slot it landed in, when the cache saw it arrive. */
       readonly equippedSlot: number | undefined;
+      /**
+       * What was worn in that slot before, now swapped into the bags; undefined
+       * when the slot was observed empty, or when the landing was not seen.
+       */
+      readonly replaced: { readonly itemId: number | undefined; readonly name: string | undefined } | undefined;
     }
   | {
       readonly ok: false;
@@ -3224,6 +3251,14 @@ export interface SpiritHealerOptions {
   /** How long to wait for the resurrection after the activation, in ms. Default 5000. */
   timeout?: number;
 }
+
+/**
+ * The outcome of `repairAll`: the module's ack when the packet went out, or
+ * `no_repair` when the NPC's observed flags carry no repair role and nothing
+ * was sent. The ack says only that it was sent; `state.money` says what the
+ * repair cost.
+ */
+export type RepairAllResult = ActionResponse | { readonly ok: false; readonly status: "no_repair"; readonly hint: string };
 
 /**
  * The outcome of `spiritHealerActivate`. `resurrected` is the resurrect
@@ -3844,7 +3879,7 @@ export class WrathClient {
     const epoch = this.events.epoch;
     const from = this.state.self.position?.value;
     return this.postMoveTo(resolved.point, resolved.guid, options.force === true).then(({ ack, etaMs }) => {
-      this.watchAsyncMove(ack.moveId, resolved.point, epoch);
+      this.watchAsyncMove(ack.moveId, resolved.point, epoch, from);
       const note =
         from === undefined || ack.pathLength === undefined
           ? undefined
@@ -3867,7 +3902,7 @@ export class WrathClient {
    * land before the ack); unwatched after the verdict or `moveTo`'s own
    * default wait.
    */
-  private watchAsyncMove(moveId: number, point: MovePoint, epoch: number): void {
+  private watchAsyncMove(moveId: number, point: MovePoint, epoch: number, from: UnitPosition | undefined): void {
     this.events
       .waitFor(
         (e) => isEvent(e, "WB_MOVE_RESULT") && !isDecodeError(e.data) && (e.data as MoveResultData).moveId === moveId,
@@ -3877,7 +3912,7 @@ export class WrathClient {
         const data = event.data as MoveResultData;
         const status = status_(data);
         if (ASYNC_MOVE_UNREPORTED.has(status)) return;
-        let recipe = this.moveRecipe(status, point, data);
+        let recipe = this.moveRecipe(status, point, data, undefined, from);
         // Only a fall: a climb (dz > 0) and a step underground (surfaceZ)
         // are refused forced or not, so fall damage says nothing about them.
         const fall = data.dz !== undefined && data.dz < 0 && data.surfaceZ === undefined;
@@ -3895,13 +3930,20 @@ export class WrathClient {
    * character dead (the server's health-0 update precedes the result in the
    * same tick) says so instead of listing the possible causes.
    */
-  private moveRecipe(status: string, point: MovePoint, data: MoveResultData, judged?: DropJudgement): string | undefined {
+  private moveRecipe(
+    status: string,
+    point: MovePoint,
+    data: MoveResultData,
+    judged?: DropJudgement,
+    from?: UnitPosition,
+  ): string | undefined {
     if (status === "interrupted" && this.isCorpse()) return MOVE_DIED_HINT;
-    return (
+    const recipe =
       (status === "target_off_mesh" ? transportDockHint(this.state, point) : undefined) ??
       (status === "drop" && judged !== undefined ? dropRefusalHint(point, data, judged) : undefined) ??
-      MOVE_HINTS[status]?.(point, data)
-    );
+      MOVE_HINTS[status]?.(point, data);
+    if (recipe !== undefined && status === "drop" && climbsFromStandstill(data, from)) return recipe + CLIMB_FROM_STANDSTILL;
+    return recipe;
   }
 
   /**
@@ -4476,9 +4518,30 @@ export class WrathClient {
     return { ok: false, status: "timeout", ...facts, hint: SELL_TIMEOUT_HINT };
   }
 
-  /** `CMSG_REPAIR_ITEM` with item guid 0 — repair everything. */
-  repairAll(target: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
-    return this.byName(target, "repairAll(guid)", (guid) => this.action({ action: "repair_all", guid }));
+  /**
+   * `CMSG_REPAIR_ITEM` with item guid 0 — repair everything.
+   *
+   * The core drops the packet without a word when the NPC has no repair
+   * flag (`GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_REPAIR)`), so the ack
+   * read as a repair that never happened (tank and healer, 2026-10-20: money
+   * unchanged at a vendor with no repair role). When the NPC's flags are
+   * observed and lack the bit, the call is refused as `no_repair` and nothing
+   * is sent; unobserved flags are sent as before, since only the server knows.
+   */
+  repairAll(target: GuidOrUnit): Promise<WithResolved<RepairAllResult>> {
+    return this.byName(target, "repairAll(guid)", async (guid): Promise<RepairAllResult> => {
+      const npc = this.state.nearby.get(guidKey(guid));
+      const flags = npc?.fields.get("npcFlags")?.value;
+      if (typeof flags === "number" && (flags & NPC_FLAG_REPAIR) === 0) {
+        const roles = npcRolesOf(flags);
+        const hint =
+          `${npc?.name?.value ?? "that NPC"} does not repair (its roles: ${roles.length > 0 ? roles.join(", ") : "none"}), ` +
+          `so nothing was sent; state.units({ role: "repair" }) lists the repairers in view`;
+        this.noteActionHint("repairAll", "no_repair", hint);
+        return { ok: false, status: "no_repair", hint };
+      }
+      return this.action({ action: "repair_all", guid });
+    });
   }
 
   /**
@@ -4512,6 +4575,9 @@ export class WrathClient {
     // matched by substring or by a typo says so in all of them.
     const item = { bag, slot, itemId: before?.itemId, name: before?.name, ...(where.resolved === undefined ? {} : { resolved: where.resolved }) };
     const sinceSeq = this.events.recent(1)[0]?.seq;
+    // What is worn now, so an equip says what it displaced (tank, 14:00:41:
+    // Recruit's gear replaced better pieces and the result named only the slot).
+    const wornBefore = this.state.inventory.filter((i) => i.slot < BACKPACK_FIRST_SLOT && i.guid !== guid);
 
     // Where the cache says our item is now: an equipment slot means the server
     // moved it. Without a guid (the slot was never observed) neither this nor
@@ -4567,7 +4633,11 @@ export class WrathClient {
     }
 
     const landed = equippedSlot();
-    if (landed !== undefined) return { ok: true, status: "equipped", ...item, equippedSlot: landed };
+    if (landed !== undefined) {
+      const prior = wornBefore.find((i) => i.slot === landed);
+      const replaced = prior === undefined ? undefined : { itemId: prior.itemId, name: prior.name };
+      return { ok: true, status: "equipped", ...item, equippedSlot: landed, replaced };
+    }
     if (failure !== undefined) {
       const named = inventoryResultText(failure.result);
       const level = failure.requiredLevel;
@@ -4588,7 +4658,7 @@ export class WrathClient {
         hint,
       };
     }
-    if (leftBackpack()) return { ok: true, status: "equipped", ...item, equippedSlot: undefined };
+    if (leftBackpack()) return { ok: true, status: "equipped", ...item, equippedSlot: undefined, replaced: undefined };
     const unconfirmed =
       guid === undefined
         ? `nothing was observed at bag ${bag} slot ${slot} before the equip, so neither outcome could be ` +
@@ -6685,7 +6755,7 @@ export class WrathClient {
       // than the ten dead minutes the leftover flag cost.
       await this.stop().catch(() => {});
     }
-    const recipe = this.moveRecipe(status, point, data, dropJudgement);
+    const recipe = this.moveRecipe(status, point, data, dropJudgement, from);
     // Recorded before the call-specific notes are folded in: the recipe is what
     // the model needs and what dedupes; the notes are per-call (see ActionHint).
     this.noteActionHint("moveTo", status, recipe, point);
