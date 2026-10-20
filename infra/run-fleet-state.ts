@@ -170,6 +170,22 @@ export function jobLogPath(job: string, stamp: string): string {
 }
 
 /**
+ * Whether a spawn's roster starts with `--resume-roster`, given whether the
+ * job's day jsonl is on disk. A resume always does. So does a respawn the same
+ * day (the job toggled off and on), which then resumes its materialized roster
+ * instead of relaunching finished runs from scratch. A fresh party attempt
+ * never does: it is staged fresh onto new ids (`freshAttempt`), and the day's
+ * jsonl is the previous attempt's, whatever that attempt's version. A paused
+ * party comes back as a resume (`resumeRunId`). One rule for the live spawn
+ * and the dry-run's argv. Pure.
+ */
+export function rosterResumes(spawn: Pick<JobSpawn, "resumeRunId" | "accounts">, jsonlExists: boolean): boolean {
+  if (spawn.resumeRunId !== undefined) return true;
+  if (spawn.accounts !== undefined) return false;
+  return jsonlExists;
+}
+
+/**
  * The exact run-roster argv for one spawn. Pure; tested. `until` is the CLI's
  * optional cap; under the fleet service there is none — the supervisor is up
  * while the machine is up and jobs are steered through the config store.

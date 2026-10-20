@@ -120,6 +120,7 @@ import {
   type EndedRun,
   failedAttemptsFor,
   fillEntries,
+  finishesOnExit,
   fleetComplete,
   type FleetPause,
   gateDecision,
@@ -163,6 +164,7 @@ import {
   tripsBreaker,
   unownedLiveRuns,
   unyieldedDrainReason,
+  withTakenRunIds,
 } from "./run-fleet-plan";
 import {
   type CodexHome,
@@ -175,6 +177,7 @@ import {
   runHasImageRecord,
   jobArgv,
   jobDefers,
+  rosterResumes,
   jobJsonlPath,
   jobLogPath,
   jobRosterPath,
@@ -1110,9 +1113,10 @@ async function main(): Promise<void> {
     // campaign's next cell, which is a pinned job in everything but where it
     // was written down.
     const probes = probeRunsOf(runs);
-    campaignJobs = pinnedCampaignJobs(cfg, probes, healthyFrom(states));
-    // Every run id on disk, archive included: a job's remainder never reuses one.
+    // Every run id on disk, archive included: a job's remainder never reuses
+    // one, and a campaign square's fresh attempt numbers past them.
     const takenRunIds = new Set(runs.map((f) => f.runId));
+    campaignJobs = withTakenRunIds(pinnedCampaignJobs(cfg, probes, healthyFrom(states)), takenRunIds);
     pinnedDone = [];
     for (const job of [...pinnedJobs(cfg), ...campaignJobs]) {
       if (job.enabled && runnableRefs(job, cfg.roster, eligible).length === 0) {
@@ -1643,7 +1647,8 @@ async function main(): Promise<void> {
     // materialized roster instead of relaunching finished runs from scratch.
     // A queue job's remainder needs none of that — its ids are fresh ones
     // (`owedCopies`) — but a paused run in the same roster still does.
-    const resumeRoster = spawn.resumeRunId !== undefined || existsSync(jobJsonlPath(spawn.name, stampToday));
+    // A fresh party attempt is staged fresh and never does (`rosterResumes`).
+    const resumeRoster = rosterResumes(spawn, existsSync(jobJsonlPath(spawn.name, stampToday)));
     const argv = jobArgv(spawn, { stamp: stampToday, until: args.until, resumeRoster, runPods: config.policy.runPods });
     const stdoutLog = jobLogPath(spawn.name, stampToday);
     // O_APPEND, not Bun.file(): a BunFile sink starts at offset 0, so a
@@ -1898,16 +1903,16 @@ async function main(): Promise<void> {
         sets.running.delete(name);
         const drained = sets.draining.delete(name);
         markDrain(name, undefined);
+        // A policy or campaign job is not "finished": the projection, or the
+        // campaign's tally, decides whether it runs again (`finishesOnExit`).
+        const job = liveJobs.get(name);
+        liveJobs.delete(name);
         if (!drained) sets.finished.add(name);
+        if (!finishesOnExit(job)) sets.finished.delete(name);
         const acct = assigned.get(name);
         assigned.delete(name);
         session.finished++;
         if (p.exitCode === 0) session.ok++;
-        // A policy job is not "finished": the projection decides whether it
-        // runs again, so nothing here keeps it out of the next plan.
-        const job = liveJobs.get(name);
-        liveJobs.delete(name);
-        if (job?.source === "policy") sets.finished.delete(name);
         say(`job ${name}: roster exited ${p.exitCode}${drained ? " (drained)" : ""}${acct !== undefined ? ` — pool account ${acct} released` : ""}`);
         record({ job: name, event: "exited", detail: `code ${p.exitCode}${drained ? "; drained" : ""}` });
       }

@@ -2101,6 +2101,14 @@ policy, the port and the env go away. The PARTY and STAGER accounts stay in
 auth, where they are harmless.
 
 **Restaging** happens before each fresh party launch, never on a resume.
+A fresh launch never takes a run id already on disk: its stem is numbered
+(`-a<n>`) past every run there, of any version. A new version counts its
+own attempts against `maxAttemptsPerCell` from nothing, but its first
+launch after an older version's attempt on the same date is still `-a2`. A
+fresh launch also never resumes the day's roster file (`--resume-roster`
+is for a paused party only), and once an attempt's roster exits, the
+campaign's tally alone decides whether the square launches again. A solo
+probe square's same-day retry is numbered the same way.
 The roster runs `bun infra/fixtures/stage-party.ts --request -` with one
 request on stdin (`infra/party-stager.ts` holds the contract). The request
 has the party id, campaign, version, scenario and level, and per member the

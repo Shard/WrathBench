@@ -16,7 +16,9 @@ import { defsBlock, joined, PARTY_MEMBERS, partyDefinition, definition } from ".
 import { runParty, type MemberHandle, type MemberVerdict, type PartyFateDeps, type PartyMemberRun } from "./party-fate";
 import { commandStager, type StageRequest } from "./party-stager";
 import { parseFleet, pinnedCampaignJobs, rosterModels, type FleetConfig, type FleetJob, type FleetRosterEntry } from "./run-fleet-config";
-import { fillEntries, jobSpawn, partyAdmission, planResumes, planTick } from "./run-fleet-plan";
+import { diffJobs, fillEntries, finishesOnExit, jobSpawn, partyAdmission, planResumes, planTick, withTakenRunIds } from "./run-fleet-plan";
+import { jobArgv, rosterResumes } from "./run-fleet-state";
+import { formatArgvBlock } from "./run-fleet-status";
 import { partyOfRoster, resolve, stageRequestOf } from "./run-roster";
 import { tempDirs } from "./temp-dirs";
 
@@ -405,6 +407,114 @@ describe("a party's spawn", () => {
     expect(e!.account).toBe("PROBE");
     expect(e).not.toHaveProperty("party");
     expect(e!.campaignFile).not.toHaveProperty("party");
+  });
+});
+
+// --------------------------------------------- a fresh attempt's run ids
+
+describe("a fresh attempt never reuses a run id", () => {
+  const stem = `fleet-deadmines-party-base-sonnet-max-${STAMP}`;
+  const idsOf = (s: string): string[] => MEMBERS.map((m) => `${s}-${m}`);
+  /** The five members of one attempt the operator stopped: ended `manual`, not counted. */
+  const stopped = (version: number, s: string): ProbeRun[] => MEMBERS.map((m) => probe(m, { version, terminationReason: "manual", counted: false }, s));
+  /** The row at `version`, with v1 and v2 of the definition published (v2 does not resume). */
+  const at = (version: number): FleetConfig =>
+    fleet({ version }, { "campaign-defs": defsBlock(party, partyDefinition({ version: 2, resume: false }), definition({ id: "solo" })) });
+  const spawnOf = (cfg: FleetConfig, runs: ProbeRun[], taken: ReadonlySet<string>) => {
+    const [job] = withTakenRunIds(pinnedCampaignJobs(cfg, runs), taken);
+    const spawn = jobSpawn(job!, cfg.roster, "PARTY1", STAMP, undefined, cfg.campaigns);
+    return { job: job!, spawn, entries: fillEntries(spawn, STAMP) };
+  };
+
+  test("an operator-stopped attempt on v1, the row moved to v2: the next launch gets new ids and a fresh roster", () => {
+    const cfg = at(2);
+    const runs = stopped(1, stem);
+    const taken = new Set(idsOf(stem));
+    // v2 counts its own attempts, so its tally starts again at nothing...
+    const sq = campaignSquares(cfg.campaigns.find((c) => c.name === "deadmines")!, Object.keys(cfg.roster), runs)[0]!;
+    expect(sq).toMatchObject({ version: 2, attempts: 0, done: 0 });
+    const { job, spawn, entries } = spawnOf(cfg, runs, taken);
+    expect(job).toMatchObject({ attempt: 1, probe: { version: 2 } });
+    // ...and the stem numbers past v1's ended ids instead of landing on them.
+    expect(entries.map((e) => e.runId)).toEqual(idsOf(`${stem}-a2`));
+    expect(entries.every((e) => e.campaignFile!.party!.id === `${stem}-a2`)).toBe(true);
+    expect(stageRequestOf(resolve(entries, STAMP))).toMatchObject({ party: `${stem}-a2`, version: 2 });
+    // A fresh party never resumes the day's roster, though v1's jsonl is on disk.
+    expect(spawn.resumeRunId).toBeUndefined();
+    expect(rosterResumes(spawn, true)).toBe(false);
+    expect(jobArgv(spawn, { stamp: STAMP, until: undefined, resumeRoster: rosterResumes(spawn, true) })).not.toContain("--resume-roster");
+    // The dry-run plans the same ids and the same argv.
+    const plan = planTick(cfg, [], () => undefined, STAMP, [], runs, undefined, new Map(), taken);
+    expect(fillEntries(plan.pinned[0]!.spawn, STAMP).map((e) => e.runId)).toEqual(idsOf(`${stem}-a2`));
+    const argv = formatArgvBlock(plan.pinned, { stamp: STAMP, until: undefined, jsonlExists: () => true });
+    expect(argv.join("\n")).not.toContain("--resume-roster");
+  });
+
+  test("a same-version retry after an operator stop is -a2, and goes past any id already on disk", () => {
+    const cfg = at(1);
+    const runs = stopped(1, stem);
+    const { job, entries } = spawnOf(cfg, runs, new Set(idsOf(stem)));
+    expect(job.attempt).toBe(2);
+    expect(entries.map((e) => e.runId)).toEqual(idsOf(`${stem}-a2`));
+    // One member of -a2 already on disk (archived, say) takes the whole stem.
+    const past = spawnOf(cfg, runs, new Set([...idsOf(stem), `${stem}-a2-mage`]));
+    expect(past.entries.map((e) => e.runId)).toEqual(idsOf(`${stem}-a3`));
+    // A first attempt with nothing on disk keeps the bare stem.
+    expect(spawnOf(cfg, [], new Set()).entries.map((e) => e.runId)).toEqual(idsOf(stem));
+  });
+
+  test("the attempt cap still counts this version's launches, not the ids", () => {
+    const tried = [...stopped(1, stem), ...stopped(1, `${stem}-a2`), ...stopped(1, `${stem}-a3`)];
+    const taken = new Set([stem, `${stem}-a2`, `${stem}-a3`].flatMap(idsOf));
+    // v1 has had its three launches: nothing more.
+    expect(pinnedCampaignJobs(at(1), tried)).toEqual([]);
+    // v2 has had none, and its first launch is -a4.
+    expect(spawnOf(at(2), tried, taken).entries[0]!.runId).toBe(`${stem}-a4-tank`);
+  });
+
+  test("a paused party's resume keeps its own ids and resumes its roster", () => {
+    const resumed: FleetJob = { ...pinnedCampaignJobs(at(1), [])[0]!, partyId: stem, resume: { runId: `${stem}-tank`, model: "sonnet", effort: "max" } };
+    const [job] = withTakenRunIds([resumed], new Set(idsOf(stem)));
+    const spawn = jobSpawn(job!, at(1).roster, "PARTY1", STAMP, undefined, at(1).campaigns);
+    expect(fillEntries(spawn, STAMP).map((e) => e.runId)).toEqual(idsOf(stem));
+    expect(rosterResumes(spawn, false)).toBe(true);
+  });
+
+  test("a solo square is consistent: its bare id first, and a same-day retry numbered past it", () => {
+    const solo = parseFleet({
+      _notes: ["n"],
+      accounts: { pool: ["RUNNER"] },
+      roster: ROSTER,
+      "campaign-defs": defsBlock(definition({ id: "solo" })),
+      campaigns: { solo: { version: 1, assignments: [{ model: "glm" }], account: "PROBE" } },
+      queue: [],
+    });
+    const bare = `fleet-solo-a-base-glm-5-2-${STAMP}`;
+    const first = (taken: ReadonlySet<string>) => fillEntries(jobSpawn(withTakenRunIds(pinnedCampaignJobs(solo, []), taken)[0]!, solo.roster, "PROBE", STAMP, undefined, solo.campaigns), STAMP)[0]!.runId;
+    expect(first(new Set())).toBe(bare);
+    expect(first(new Set([bare]))).toBe(`${bare}-a2`);
+    expect(first(new Set([bare, `${bare}-a2`]))).toBe(`${bare}-a3`);
+    // A solo roster's same-day respawn still resumes its jsonl, as it always has.
+    const spawn = jobSpawn(pinnedCampaignJobs(solo, [])[0]!, solo.roster, "PROBE", STAMP, undefined, solo.campaigns);
+    expect(rosterResumes(spawn, true)).toBe(true);
+    expect(rosterResumes(spawn, false)).toBe(false);
+  });
+
+  test("a campaign job whose roster exits undrained is started again; an operator's pinned job stays finished", () => {
+    const [job] = pinnedCampaignJobs(at(2), stopped(1, stem));
+    expect(finishesOnExit(job)).toBe(false);
+    expect(finishesOnExit({ source: "policy" })).toBe(false);
+    expect(finishesOnExit({ source: "pinned" })).toBe(true);
+    expect(finishesOnExit(undefined)).toBe(true);
+    // The square is yielded again while v1's roster unwinds, which undrains
+    // it; its exit must not keep the name out of the next start.
+    const spawn = jobSpawn(job!, at(2).roster, "PARTY1", STAMP, undefined, at(2).campaigns);
+    const sets = { running: new Set([job!.name]), draining: new Set([job!.name]), finished: new Set<string>() };
+    expect(diffJobs([spawn], sets).undrain).toEqual([job!.name]);
+    sets.draining.delete(job!.name);
+    sets.running.delete(job!.name);
+    if (finishesOnExit(job)) sets.finished.add(job!.name);
+    expect(diffJobs([spawn], sets).start.map((s) => s.name)).toEqual([job!.name]);
   });
 });
 

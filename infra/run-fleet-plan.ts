@@ -747,19 +747,22 @@ export function jobSpawn(
       // default lane, so a spawn is byte-identical to a pre-lane one.
       ...(job.subscription !== undefined && driverEntry(entry.driver)?.lane !== undefined ? { tokenEnv: job.subscription } : {}),
     };
-    const runId =
+    const idBase =
       `fleet-${job.name}-${slug(base.model)}${base.effort !== undefined ? `-${slug(base.effort)}` : ""}` +
-      `${base.compactWindow !== undefined ? `-${slug(base.compactWindow)}` : ""}-${stamp}` +
-      (job.attempt !== undefined && job.attempt > 1 ? `-a${job.attempt}` : "");
+      `${base.compactWindow !== undefined ? `-${slug(base.compactWindow)}` : ""}-${stamp}`;
+    const attemptStem = (n: number | undefined): string => (n !== undefined && n > 1 ? `${idBase}-a${n}` : bareRunId(job.name, base, stamp));
+    // A fresh campaign square numbers past every id on disk (`freshAttempt`).
+    const attempt = freshAttempt(job, attemptStem, probeFile?.definition.party?.members.map((m) => m.id));
+    const runId = idBase + (attempt !== undefined && attempt > 1 ? `-a${attempt}` : "");
     // Copy k's id: the first is the attempt's, else the bare id `fillEntries`
     // stamps; the rest are `-r<k>`. A remainder skips every id already on disk
     // — under the same stamp a redone copy would otherwise land on the id of
     // the run it replaces, which `--resume-roster` skips as terminated.
-    const firstId = job.attempt !== undefined && job.attempt > 1 ? runId : bareRunId(job.name, base, stamp);
+    const firstId = attemptStem(attempt);
     const idOf = (k: number): string => (k === 1 ? firstId : `${runId}-r${k}`);
     for (let k = 1, made = 0; made < copies; k++) {
       if (job.owed?.taken.has(idOf(k)) === true) continue;
-      entries.push(k === 1 ? (job.attempt !== undefined && job.attempt > 1 ? { ...base, runId } : base) : { ...base, runId: idOf(k) });
+      entries.push(k === 1 ? (attempt !== undefined && attempt > 1 ? { ...base, runId } : base) : { ...base, runId: idOf(k) });
       made++;
     }
   }
@@ -774,6 +777,45 @@ export function jobSpawn(
     entries,
   };
   return job.resume === undefined ? spawn : withResume(spawn, job.resume);
+}
+
+/**
+ * The attempt a spawn's run ids carry. A fresh campaign square
+ * (`takenRunIds` set, nothing resumed) takes the first attempt from its own
+ * (`attempt`, else 1) whose ids are all free on disk: the stem's for a single
+ * run, every member's (`<stem>-<member>`) for a party. Its campaign version's
+ * count is only the floor — that count starts again at a new version, and a
+ * stopped attempt may already hold the next number — so this, and not the
+ * tally, is what keeps a fresh attempt off the ids of one before it. The cap
+ * (`maxAttemptsPerCell`) still counts what the tally counts. Every other job
+ * keeps the attempt it was given. Pure.
+ */
+export function freshAttempt(
+  job: Pick<FleetJob, "attempt" | "probe" | "resume" | "partyId" | "takenRunIds">,
+  stemOf: (attempt: number | undefined) => string,
+  members: readonly string[] | undefined,
+): number | undefined {
+  const taken = job.takenRunIds;
+  if (taken === undefined || job.probe === undefined || job.resume !== undefined || job.partyId !== undefined) return job.attempt;
+  const idsOf = (n: number): string[] => {
+    const stem = stemOf(n);
+    return members === undefined ? [stem] : members.map((m) => memberRunId(stem, m));
+  };
+  const floor = Math.max(1, job.attempt ?? 1);
+  let n = floor;
+  while (idsOf(n).some((id) => taken.has(id))) n++;
+  // A solo square never numbered its first attempt: it keeps the bare id
+  // (`attempt` absent) unless that id is taken.
+  return n === floor && job.attempt === undefined ? undefined : n;
+}
+
+/**
+ * The tick's pinned campaign jobs, each told every run id on disk so its spawn
+ * numbers its attempt past them (`freshAttempt`). One function for the live
+ * tick and `planTick`, so `--dry-run` names the ids the spawn will use.
+ */
+export function withTakenRunIds(jobs: readonly FleetJob[], taken: ReadonlySet<string>): FleetJob[] {
+  return jobs.map((j) => (j.probe !== undefined && j.resume === undefined ? { ...j, takenRunIds: taken } : j));
 }
 
 /**
@@ -2321,6 +2363,23 @@ export function applyPause(spawns: JobSpawn[], paused: boolean): JobSpawn[] {
   return spawns.map((s) => (s.enabled ? { ...s, enabled: false } : s));
 }
 
+/**
+ * Whether a job whose roster exited on its own (not drained) joins
+ * `sets.finished`, which keeps `diffJobs` from starting that name again until
+ * the operator disables and re-enables it. A job the policy or a campaign made
+ * up does not: the projection, or the campaign's tally and its
+ * `maxAttemptsPerCell`, decides whether it runs again, exactly as after a
+ * supervisor restart, which empties the set. A pinned campaign square keeps one
+ * job name across its attempts and versions, so a finished set used to stop it
+ * for good when its runs ended before its roster exited: the square was yielded
+ * again meanwhile, which undrained the roster, and the undrained exit then
+ * marked the name finished. An unknown job is the operator's, and stays
+ * finished. Pure.
+ */
+export function finishesOnExit(job: Pick<FleetJob, "source" | "probe"> | undefined): boolean {
+  return job === undefined || (job.source !== "policy" && job.probe === undefined);
+}
+
 /** What the supervisor should do to make reality match the config. Pure. */
 export function diffJobs(spawns: JobSpawn[], sets: JobSets): JobActions {
   const actions: JobActions = { start: [], drain: [], undrain: [], rearm: [] };
@@ -2591,7 +2650,7 @@ export function planTick(
   // of quiet disagreement between the supervisor and its own report that has
   // cost a night before. A pinned config job whose `repeat` is met is not
   // spawned, by the queue's own rule (`owedCopies`).
-  const pinned = [...pinnedJobs(config), ...pinnedCampaignJobs(config, probeRuns, healthyFrom(states))]
+  const pinned = [...pinnedJobs(config), ...withTakenRunIds(pinnedCampaignJobs(config, probeRuns, healthyFrom(states)), takenRunIds)]
     .filter((j) => j.enabled && !resumed.has(j.name) && !running.has(j.name) && runnableRefs(j, config.roster, eligible).length > 0)
     .flatMap((j) => {
       const owed = owedCopies(j, runnableRefs(j, config.roster, eligible), counted);
