@@ -430,10 +430,23 @@ interiors, which the mmaps include, as the Northshire abbey walk in
 mesh on the data volume at all (a `move_to` inside answering `no_mesh` is
 the tell). Both are one afternoon's smoke, not a design risk.
 
+The mesh answered the first question with a qualification. It is continuous
+from the street to the portal, but the route is 177 polygons through the
+mine building and its tunnels, and the core's path is at most 74 polygons
+from a 1024-node search. So no single `moveTo` covers it, and a straight-line
+leg toward the trigger runs out of search on the hill above the tunnels. The
+trigger's own centre is over a small mesh island with no link to the
+tunnels; the reachable mesh ends 4.4 yards from the centre, inside the
+7-yard radius. The smoke therefore walks six legs read off the mesh,
+ending at that mesh end. A member walks the same mine, so a `moveTo` to the
+portal's centre answers `path_incomplete` for an agent too; the approach
+takes several moves through the tunnels.
+
 **The single-character smoke** (`infra/smoke/deadmines-entry.ts`, on
 `PROBE`): scenario `moonbrook-mine` at level 80 so nothing on the way
-interrupts the walk (the steep-replan fixtures use the same trick); `moveTo`
-the trigger point, expecting `transferred`; assert `SMSG_TRANSFER_PENDING`
+interrupts the walk (the steep-replan fixtures use the same trick); walk
+`DEADMINES_ENTRANCE_ROUTE` (`infra/fixtures/scenarios.ts`) to the trigger,
+expecting `transferred`; assert `SMSG_TRANSFER_PENDING`
 and `SMSG_NEW_WORLD` with map 36 and a `WB_AREA` for it; one `moveTo`
 inside that arrives; the first Defias pack in `units()`; then `moveTo`
 trigger 119 and see map 0 again. It is the gate for enabling the campaign,

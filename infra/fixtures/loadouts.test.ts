@@ -20,7 +20,7 @@ import {
   type Loadout,
   type TalentFrame,
 } from "./loadouts";
-import { DEADMINES_ENTRANCE_TRIGGER, MOONBROOK, SCENARIOS, SENTINEL_HILL_BIND, validateScenario } from "./scenarios";
+import { DEADMINES_ENTRANCE_ROUTE, DEADMINES_ENTRANCE_TRIGGER, MOONBROOK, SCENARIOS, SENTINEL_HILL_BIND, validateScenario } from "./scenarios";
 import { isValidCharacterName } from "../../runner/src/config";
 
 /** The frame a module would answer for a loadout, built from the preset itself. */
@@ -160,6 +160,17 @@ describe("the member scenario", () => {
     const d = Math.hypot(DEADMINES_ENTRANCE_TRIGGER.x - MOONBROOK.x, DEADMINES_ENTRANCE_TRIGGER.y - MOONBROOK.y);
     expect(d).toBeGreaterThan(250);
     expect(d).toBeLessThan(300);
+  });
+
+  test("the route to the trigger is moves of under 250y from Moonbrook, ending inside the trigger but off its centre's island", () => {
+    const points = [MOONBROOK, ...DEADMINES_ENTRANCE_ROUTE];
+    for (let i = 1; i < points.length; i++) expect(Math.hypot(points[i]!.x - points[i - 1]!.x, points[i]!.y - points[i - 1]!.y)).toBeLessThan(250);
+    const t = DEADMINES_ENTRANCE_TRIGGER;
+    const end = DEADMINES_ENTRANCE_ROUTE.at(-1)!;
+    const d3 = Math.hypot(end.x - t.x, end.y - t.y, end.z - t.z);
+    expect(d3).toBeLessThan(t.radius);
+    // The centre's own polygon (z 22.9) is the island; the mesh end is what a walk reaches.
+    expect(d3).toBeGreaterThan(3);
   });
 
   test("its statements write one talent row per talent at specMask 1 after clearing the old ones, cap the level-ranged skills, and insert no item", () => {
