@@ -235,6 +235,52 @@ export function codexWindowCapRefusal(compactWindow: string | undefined, reporte
   );
 }
 
+/**
+ * The pi CLI's auto-compaction threshold. In the pinned 1.3.0 pi compacts once
+ * the last assistant message's usage (`totalTokens`: input, output, cache read
+ * and write) plus an estimate of what followed it exceeds the model's context
+ * window less `compaction.reserveTokens` (`shouldCompact`,
+ * `dist/core/compaction/compaction.js`). Its own reserve is 16,384, so `auto`
+ * on a 1,000,000-token window compacts above 983,616. A run's `compactWindow`
+ * reaches pi as the reserve that puts the threshold at the window itself
+ * (`piReserveTokens`), the model's window being the one pi's own catalogue
+ * gives it and reports at launch (`get_state`).
+ */
+export const PI_DEFAULT_RESERVE_TOKENS = 16_384;
+
+export function piAutoCompactLimit(contextWindow: number, compactWindow?: string | undefined): number | undefined {
+  if (!(contextWindow > 0)) return undefined;
+  const configured = compactWindowTokens(compactWindow);
+  if (configured !== undefined) return configured < contextWindow ? configured : undefined;
+  const limit = contextWindow - PI_DEFAULT_RESERVE_TOKENS;
+  return limit > 0 ? limit : undefined;
+}
+
+/**
+ * The `compaction.reserveTokens` that makes pi compact at exactly the run's
+ * window: the model's context window less it. Undefined for `auto` (pi's own
+ * reserve stands) and for a window pi could never reach (`piWindowCapRefusal`).
+ * The same setting caps the summary pi asks for — `min(0.8 × reserve, the
+ * model's output cap)`, half that for a split turn's prefix — so a window well
+ * below the model's context also lifts that cap (runner/README.md, "The pi
+ * driver").
+ */
+export function piReserveTokens(contextWindow: number, compactWindow: string | undefined): number | undefined {
+  const configured = compactWindowTokens(compactWindow);
+  if (configured === undefined || !(contextWindow > configured)) return undefined;
+  return contextWindow - configured;
+}
+
+/**
+ * The pi form: a window at or above the model's context window is one pi never
+ * reaches — it would compact only on an overflow — so the run would record a
+ * window it never ran under. Known before the first turn: pi reports the
+ * window at launch.
+ */
+export function piWindowCapRefusal(compactWindow: string | undefined, contextWindow: number): string | null {
+  return compactWindowCapRefusal(compactWindow, contextWindow, "the model's context window as the pi CLI's catalogue gives it, which pi compacts below");
+}
+
 /** The claude-code form: the model's context window off `modelUsage`. */
 export function claudeWindowCapRefusal(compactWindow: string | undefined, contextWindow: number): string | null {
   return compactWindowCapRefusal(compactWindow, contextWindow, "the model's context window, which the Claude Code CLI caps the window to");

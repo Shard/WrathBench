@@ -19,7 +19,7 @@
  * Every driver a run can be started with. `stub` and `reference` never score:
  * neither is a model (`stamp`).
  */
-export const DRIVERS = ["openai", "claude-code", "codex", "stub", "reference"] as const;
+export const DRIVERS = ["openai", "claude-code", "codex", "pi", "stub", "reference"] as const;
 export type Driver = (typeof DRIVERS)[number];
 
 /** The driver of a run, roster entry or record that names none. */
@@ -42,6 +42,9 @@ export function isDriver(raw: string): raw is Driver {
  *    its own history and its own compaction. A separate group from
  *    `claude-code` rather than one "CLI" group, because each scaffold is a
  *    different unversioned summarizer sitting inside the harness.
+ *  - `pi`: the pi coding-agent CLI (operator, 2026-10-20), its own history
+ *    and its own compaction, on a metered OpenAI-compatible endpoint.
+ *    Probe-only until the operator promotes it (`DriverEntry.probeOnly`).
  *
  * A tag on every run, not a partition and not a scoring penalty (operator,
  * 2026-10-16): rows of every harness share the charts, and no row mixes two
@@ -52,7 +55,7 @@ export function isDriver(raw: string): raw is Driver {
  * comparability schema (`z.enum`) needs the literal tuple; `drivers.test.ts`
  * holds it to the entries.
  */
-export const HARNESSES = ["wrathbench", "claude-code", "codex"] as const;
+export const HARNESSES = ["wrathbench", "claude-code", "codex", "pi"] as const;
 export type Harness = (typeof HARNESSES)[number];
 
 // ------------------------------------------------------------ lanes, stamps
@@ -181,11 +184,28 @@ export interface DriverEntry {
   /** Whether `policy.maxConcurrent` may cap it under its own id. */
   capKey: boolean;
   /**
-   * Reaches an OpenAI-compatible endpoint by base and key: it alone takes
-   * `apiBase`, `apiKeyEnv`, `routing` and a declared `billing`, and is the
-   * only driver a free-platform cap or an OpenCode Go allowance applies to.
+   * Reaches an OpenAI-compatible endpoint by base and key: it takes `apiBase`,
+   * `apiKeyEnv` and a declared `billing`, the provider table guards the pair,
+   * a run pod keeps that one key, and a free-platform cap or an OpenCode Go
+   * allowance applies to it.
    */
   endpoint: boolean;
+  /**
+   * Sends OpenRouter's provider routing (`routing.ts`) on its own requests.
+   * Only a driver that builds the request body itself can: a CLI that
+   * reaches an endpoint (pi) sends what the CLI sends, so a routing block on
+   * its entry would be config that does nothing, and is refused.
+   */
+  routing: boolean;
+  /**
+   * Runs only as a probe-campaign arm until the operator promotes it
+   * (docs/METHODOLOGY.md, "Harness and driver are separate words"). Its
+   * roster entry exists for a campaign to name in an assignment; the policy
+   * schedules no scored or freeplay run of it, a queue job outside a campaign
+   * may not name it, and it is outside `harnessClash`, since none of its runs
+   * is in a scored lane. Promoting it is turning this off.
+   */
+  probeOnly: boolean;
   /** The subscription it bills, for a driver that bills one. */
   lane?: SubscriptionLane;
   /**
@@ -227,6 +247,8 @@ export const DRIVER_TABLE = {
     roster: true,
     capKey: true,
     endpoint: true,
+    routing: true,
+    probeOnly: false,
     bill: "metered",
     cost: FIXED_LOOP_COST,
     claudeModels: {
@@ -245,6 +267,8 @@ export const DRIVER_TABLE = {
     roster: true,
     capKey: true,
     endpoint: false,
+    routing: false,
+    probeOnly: false,
     lane: {
       key: "claude-code",
       defaultEnv: DEFAULT_CLAUDE_TOKEN_ENV,
@@ -270,6 +294,8 @@ export const DRIVER_TABLE = {
     roster: true,
     capKey: true,
     endpoint: false,
+    routing: false,
+    probeOnly: false,
     lane: {
       key: "codex",
       defaultEnv: DEFAULT_CODEX_HOME_ENV,
@@ -289,6 +315,30 @@ export const DRIVER_TABLE = {
     rollouts: true,
     podVolumes: ["codex-home"],
   },
+  // The pi coding-agent CLI on a metered endpoint (`adapter-pi.ts`): a base and
+  // a key like the fixed loop, priced from its tokens by the hand-held provider
+  // rows, never by the figure pi's own catalogue puts on them. A labelled
+  // harness, probe-only until the operator promotes it (operator, 2026-10-20).
+  pi: {
+    id: "pi",
+    harness: "pi",
+    kind: "scaffold",
+    roster: true,
+    capKey: true,
+    endpoint: true,
+    routing: false,
+    probeOnly: true,
+    bill: "metered",
+    cost: { reported: "none", table: "synced" },
+    claudeModels: {
+      only: false,
+      refusal: "roster policy — claude models run only via the claude-code driver, never through a pi-driver entry",
+    },
+    compactWindow: true,
+    usage: "response",
+    rollouts: false,
+    podVolumes: [],
+  },
   stub: {
     id: "stub",
     harness: "wrathbench",
@@ -297,6 +347,8 @@ export const DRIVER_TABLE = {
     roster: false,
     capKey: true,
     endpoint: false,
+    routing: false,
+    probeOnly: false,
     bill: "metered",
     cost: FIXED_LOOP_COST,
     compactWindow: false,
@@ -318,6 +370,8 @@ export const DRIVER_TABLE = {
     rosterRefusal: "driver reference is the scripted reference run — launched by hand on PROBE, never a roster entry",
     capKey: false,
     endpoint: false,
+    routing: false,
+    probeOnly: false,
     bill: "none",
     cost: FIXED_LOOP_COST,
     compactWindow: false,
@@ -382,6 +436,16 @@ export function isRosterDriver(raw: string): raw is RosterDriver {
  * session counts against, whichever lane bills it.
  */
 export const PLACED_LANE_DRIVER: Driver = DRIVER_LIST.find((d) => d.lane?.placed === true)!.id;
+
+/** Whether a stored or configured driver name — absent is the default — is probe-only (`DriverEntry.probeOnly`). */
+export function isProbeOnlyDriver(name: unknown): boolean {
+  return driverEntry(name ?? DEFAULT_DRIVER)?.probeOnly === true;
+}
+
+/** Why a probe-only driver's entry is outside the scored and freeplay lanes, said by name. */
+export function probeOnlyRefusal(driver: string): string {
+  return `driver ${driver} is probe-only: it runs only as a probe-campaign arm until the operator promotes it (docs/METHODOLOGY.md, "Harness and driver are separate words")`;
+}
 
 /** Every run-pod template volume some driver mounts; a pod keeps only its own driver's. */
 export const DRIVER_POD_VOLUMES: readonly string[] = [...new Set(DRIVER_LIST.flatMap((d) => d.podVolumes))];

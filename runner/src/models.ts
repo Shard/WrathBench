@@ -59,7 +59,7 @@ import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { openRunDb } from "./rundb";
 import { harnessSeries } from "./comparability";
-import { DEFAULT_DRIVER, driverEntry, entryOf, harnessDriver, PLACED_LANE_DRIVER } from "./drivers";
+import { DEFAULT_DRIVER, driverEntry, entryOf, harnessDriver, isProbeOnlyDriver, PLACED_LANE_DRIVER, probeOnlyRefusal } from "./drivers";
 import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isCodexHomeEnvName, isDriver, isTokenEnvName, isUnscoredDriverName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
@@ -737,6 +737,11 @@ export interface ModelState {
   earnedRung1: boolean;
   /** What it does with an account once its tier is spent. */
   idle: IdleMode;
+  /**
+   * The entry's driver is probe-only (`DriverEntry.probeOnly`): no target, no
+   * eligible episode and no idle work, so only a probe campaign runs it.
+   */
+  probeOnly?: true;
   /** Episode tiers the model may be scheduled on, in policy order. */
   eligible: EpisodeId[];
   perEpisode: Partial<Record<EpisodeId, EpisodeStats>>;
@@ -2042,13 +2047,16 @@ export function projectModel(
 
   const earnedRung1 = perEpisode.e90!.reachedL5;
   const tier = effectiveTier(r.tier, earnedRung1);
-  for (const ep of STATS_EPISODES) perEpisode[ep]!.target = targetFor(tier, ep);
+  // A probe-only driver's entry is no scored lane's: its tier buys nothing
+  // until the operator promotes the driver (`DriverEntry.probeOnly`).
+  const probeOnly = isProbeOnlyDriver(r.driver);
+  for (const ep of STATS_EPISODES) perEpisode[ep]!.target = probeOnly ? 0 : targetFor(tier, ep);
 
   // Eligibility falls out of the budget: an episode the tier buys no runs of is
   // not one this model may be scheduled on. One statement, so a target of zero
   // and "not eligible" can no longer disagree the way `promoted, 0/0` did.
-  const eligible: EpisodeId[] = POLICY_EPISODES.filter((ep) => targetFor(tier, ep) > 0);
-  if (!eligible.includes("e90")) eligible.unshift("e90");
+  const eligible: EpisodeId[] = probeOnly ? [] : POLICY_EPISODES.filter((ep) => targetFor(tier, ep) > 0);
+  if (!probeOnly && !eligible.includes("e90")) eligible.unshift("e90");
 
   // The ladder: trailing consecutive no-progress attempts, newest last, after the clear.
   let ladder = 0;
@@ -2087,7 +2095,8 @@ export function projectModel(
     declaredTier: r.tier,
     tier,
     earnedRung1,
-    idle: r.idle ?? "none",
+    idle: probeOnly ? "none" : (r.idle ?? "none"),
+    ...(probeOnly ? { probeOnly: true as const } : {}),
     eligible,
     perEpisode,
     ladder,
@@ -2217,6 +2226,8 @@ export function schedulability(
       : "ended as a failed attempt on the next tick, then reattempted fresh";
     return blocked(`paused run ${s.paused.runId} (${s.paused.reason}, ${spent}${of} elapsed) — ${fate}`);
   }
+  // Free, so a probe campaign may take it, and owing nothing, so nothing else does.
+  if (s.probeOnly === true) return { verdict: "free", why: probeOnlyRefusal(harnessDriver(s.harness)?.id ?? s.harness) };
   // Three failed attempts on an episode stop the spending. The
   // model is blocked rather than "free": idle work is not the reward for
   // burning three evals, and the taint is a stop signal, not a target met.
@@ -2250,7 +2261,7 @@ export function schedulability(
  * work" are two questions, and only the second is a property of the entry.
  */
 export function wantsIdle(v: Verdict, s: ModelState): boolean {
-  return v.verdict === "free" && s.idle !== "none";
+  return v.verdict === "free" && s.idle !== "none" && s.probeOnly !== true;
 }
 
 /**

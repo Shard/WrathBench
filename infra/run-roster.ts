@@ -577,9 +577,9 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       // Refused, not ignored. A routing block on a Cerebras, LM Studio,
       // OpenCode Zen or CLI entry would be config that does nothing, and an
       // operator who wrote one believed the run was pinned.
-      if (!entry.endpoint || !isOpenRouterBase(apiBase)) {
+      if (!entry.routing || !isOpenRouterBase(apiBase)) {
         throw new Error(
-          `roster entry ${s.model}: routing is an OpenRouter setting — this entry runs on ${entry.endpoint ? apiBase : `the ${driver} CLI`}, which is single-backend or (OpenCode Go) routed by its provider`,
+          `roster entry ${s.model}: routing is an OpenRouter setting — this entry runs on ${entry.routing ? apiBase : `the ${driver} CLI`}, which is single-backend or (OpenCode Go) routed by its provider`,
         );
       }
     }
@@ -743,7 +743,8 @@ export function episodeFlags(spec: Resolved, resume: boolean): string[] {
     // Only when the entry stated one: the runner derives the same default from
     // the model slug, so an unstated routing produces the argv it always did
     // and every pinned roster.test expectation stays what it was.
-    if (spec.routing !== undefined) argv.push("--routing-json", JSON.stringify(spec.routing));
+    // A routing block on a CLI that reaches an endpoint was refused at parse.
+    if (spec.routing !== undefined && entryOf(spec.driver).routing) argv.push("--routing-json", JSON.stringify(spec.routing));
     // Only when the entry stated one, so every other argv is unchanged.
     if (spec.billing !== undefined) argv.push("--billing", spec.billing);
   }
@@ -2460,7 +2461,7 @@ async function main(): Promise<void> {
       const endpoint =
         entryOf(s.driver).endpoint
           ? `   apiBase   ${s.apiBase} (key env ${s.apiKeyEnv})\n` +
-            (isOpenRouterBase(s.apiBase)
+            (entryOf(s.driver).routing && isOpenRouterBase(s.apiBase)
               ? `   routing   ${routingLabel(resolveRouting(s.routing, undefined, s.model, { effort: s.effort }))}${s.routing === undefined ? " [default: the model author's own provider]" : ""}\n`
               : "")
           : lane !== undefined

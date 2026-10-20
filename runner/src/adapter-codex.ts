@@ -152,7 +152,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { MCP_SERVER_NAME, toolCallLimitReached } from "./adapter-claude";
-import { cliBaseEnv, signalGroup } from "./adapter-shared";
+import { MessageQueue, cliBaseEnv, readLines, signalGroup } from "./adapter-shared";
 import { DEFAULT_CODEX_HOME_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { McpServer } from "./mcp";
@@ -388,45 +388,6 @@ export function codexCompactionRecord(turn: number, c: CodexCompaction): Compact
 
 /** The envelope type `wakeReader` pushes; not a CLI event, and acted on nowhere. */
 const WAKE_TYPE = "__wrathbench_wake";
-
-/** A tiny async queue: the stdout reader pushes, the turn loop pulls. Ends when the process does. */
-class MessageQueue {
-  private readonly items: Record<string, unknown>[] = [];
-  private readonly waiters: ((v: Record<string, unknown> | null) => void)[] = [];
-  private ended = false;
-
-  push(item: Record<string, unknown>): void {
-    const waiter = this.waiters.shift();
-    if (waiter !== undefined) waiter(item);
-    else this.items.push(item);
-  }
-
-  end(): void {
-    this.ended = true;
-    while (this.waiters.length > 0) this.waiters.shift()!(null);
-  }
-
-  next(): Promise<Record<string, unknown> | null> {
-    const item = this.items.shift();
-    if (item !== undefined) return Promise.resolve(item);
-    if (this.ended) return Promise.resolve(null);
-    return new Promise((resolve) => this.waiters.push(resolve));
-  }
-}
-
-async function* readLines(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
-  const decoder = new TextDecoder();
-  let buf = "";
-  for await (const chunk of stream) {
-    buf += decoder.decode(chunk, { stream: true });
-    let idx: number;
-    while ((idx = buf.indexOf("\n")) >= 0) {
-      yield buf.slice(0, idx);
-      buf = buf.slice(idx + 1);
-    }
-  }
-  if (buf.trim().length > 0) yield buf;
-}
 
 // -------------------------------------------------------------------- flags
 

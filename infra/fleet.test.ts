@@ -300,7 +300,7 @@ describe("parseFleet", () => {
     expect(() => parseFleet([])).toThrow(/must be a JSON object/);
     expect(() => parseFleet(fleetJson([], { lanes: [] }))).toThrow(/`lanes` is not a 0.4 key — a job goes in `queue`/);
     expect(() => parseFleet(fleetJson([], { accounts: { pinned: { S: "x" }, pool: [] } }))).toThrow(/accounts.pinned is not a 0.4 key/);
-    expect(() => parseFleet(fleetJson([], { roster: { old: { tier: "t1", model: "sonnet", driver: "claude-subscription" } } }))).toThrow(/unknown driver claude-subscription \(openai \| claude-code \| codex\)/);
+    expect(() => parseFleet(fleetJson([], { roster: { old: { tier: "t1", model: "sonnet", driver: "claude-subscription" } } }))).toThrow(/unknown driver claude-subscription \(openai \| claude-code \| codex \| pi\)/);
   });
 
   test("the scripted reference is refused as a roster entry by name: the policy can never schedule one", () => {
@@ -524,7 +524,7 @@ describe("parseFleet", () => {
   test("a compaction window off the CLI harnesses, or out of range, takes the file down by name", () => {
     expect(() =>
       parseFleet(fleetJson([], { roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free", compactWindow: "100k" } } })),
-    ).toThrow(/compactWindow is a CLI harness's auto-compaction window \(claude-code, codex\) — the openai driver has none/);
+    ).toThrow(/compactWindow is a CLI harness's auto-compaction window \(claude-code, codex, pi\) — the openai driver has none/);
     // A codex entry takes one since 2026-10-11, canonicalised like claude-code's.
     const cx = parseFleet(fleetJson([], { roster: { cx: { tier: "t1", model: "gpt-6-astra", driver: "codex", compactWindow: "200K" } } }));
     expect(cx.roster["cx"]!.compactWindow).toBe("200k");

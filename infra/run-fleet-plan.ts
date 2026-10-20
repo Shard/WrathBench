@@ -45,7 +45,7 @@ import { cellDimensions } from "../runner/src/campaign-def";
 import { campaignFileOf, type CampaignFile } from "../runner/src/campaign-file";
 import { memberRunId } from "../runner/src/party";
 import { DEFAULT_CLAUDE_TOKEN_ENV, type TerminationReason } from "../runner/src/config";
-import { driverEntry } from "../runner/src/drivers";
+import { driverEntry, isProbeOnlyDriver } from "../runner/src/drivers";
 import { isScoredEpisode } from "../runner/src/episodes";
 import { classifyLapse, OFFLINE_PAUSE, PARTY_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
 import { jobHoldOf, laneOfEntry, laneOfRun, type FleetSubscriptionGate } from "./run-fleet-gate";
@@ -326,6 +326,10 @@ export function runnableRefs(job: FleetJob, roster: Record<string, FleetRosterEn
     // A refused entry (`FleetRosterEntry.refused`) runs under no job at all: it
     // is in the catalog only so a job naming it is gated with a reason.
     if (e.refused !== undefined) return false;
+    // A probe-only driver's entry (`DriverEntry.probeOnly`) runs as a probe
+    // campaign's square and under nothing else: a queue job naming it for a
+    // scored or freeplay episode is the scored lane it is kept out of.
+    if (isProbeOnlyDriver(e.driver) && job.probe === undefined && job.campaignFile === undefined) return false;
     // A policy job was made from the projection that answers eligibility; it is its own witness.
     if (job.attempt !== undefined) return true;
     // An unscored episode needs no promotion: no tier buys one, so there is no

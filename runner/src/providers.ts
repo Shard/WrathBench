@@ -36,6 +36,15 @@ export interface KeyProvider {
   readonly hosts: readonly string[];
   /** The self-hosted row: hosts come from `LOCAL_MODEL_HOSTS_ENV`, and plain http is allowed. */
   readonly local?: true;
+  /**
+   * The pi CLI's own provider id for this endpoint (`adapter-pi.ts`): the pi
+   * driver points that built-in provider at the run's `apiBase` and keeps the
+   * model metadata — context window, output cap, request quirks — from pi's
+   * pinned catalogue, so the repository keeps no per-model table. Absent: the
+   * pi driver does not run on this provider. Earned per provider, by a run
+   * that needs it.
+   */
+  readonly piProvider?: string;
 }
 
 /**
@@ -51,7 +60,8 @@ export const KEY_PROVIDERS: readonly KeyProvider[] = [
   // Every OpenCode gateway is on the one host: Zen and Go, under `/inference/` and the older `/zen/`.
   { keyEnv: "OPENCODE_KEY", provider: "OpenCode", hosts: ["opencode.ai"] },
   { keyEnv: "CEREBRAS_KEY", provider: "Cerebras", hosts: ["api.cerebras.ai"] },
-  { keyEnv: "DEEPSEEK_KEY", provider: "DeepSeek", hosts: ["api.deepseek.com"] },
+  // pi's `deepseek` provider: the #257 campaign's endpoint (operator, 2026-10-20).
+  { keyEnv: "DEEPSEEK_KEY", provider: "DeepSeek", hosts: ["api.deepseek.com"], piProvider: "deepseek" },
   { keyEnv: "LMSTUDIO_KEY", provider: "the self-hosted model server", hosts: [], local: true },
 ];
 
@@ -138,6 +148,22 @@ export function apiKeyRefusal(
     return `${keyEnv} is ${row.provider}'s key and may be sent only to ${row.hosts.join(", ")} — not ${url.hostname}`;
   }
   return null;
+}
+
+/**
+ * The pi provider id for a run's key, or a refusal naming why the pi driver
+ * cannot run on it: the key's row carries no `piProvider`. Asked after
+ * `apiKeyRefusal`, so the pair itself is already one the table allows.
+ */
+export function piProviderOf(keyEnv: string): { provider: string } | { refusal: string } {
+  const row = KEY_PROVIDERS.find((p) => p.keyEnv === keyEnv);
+  if (row?.piProvider !== undefined) return { provider: row.piProvider };
+  const have = KEY_PROVIDERS.filter((p) => p.piProvider !== undefined).map((p) => `${p.keyEnv} (${p.provider})`);
+  return {
+    refusal:
+      `the pi driver has no pi provider for ${keyEnv} — it runs on ${have.join(", ")}; ` +
+      "another endpoint is a piProvider on its row in runner/src/providers.ts",
+  };
 }
 
 /**

@@ -107,6 +107,7 @@ export function contextSentence(harness: Harness): string {
       return "Older conversation is trimmed aggressively, and older tool results are folded to one-line records first — the scratchpad is your memory, not the chat history.";
     case "claude-code":
     case "codex":
+    case "pi":
       return CLI_SCAFFOLD_CONTEXT_SENTENCE;
   }
 }
@@ -169,6 +170,15 @@ export const CLAUDE_CODE_SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${bodyFor("claude-c
  * thing, and the harness tag — not the prompt hash — is what separates them.
  */
 export const CODEX_SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${bodyFor("codex")}`;
+
+/**
+ * The same prompt as the pi harness renders it, byte-identical to the other two
+ * CLI renders by construction: pi keeps one continuous session and compacts it
+ * itself, the regime the CLI sentence states, so it adds no wording of its own
+ * (the operator's to confirm, #257). pi receives exactly these bytes as its
+ * system prompt (`adapter-pi.ts`, `PI_PROMPT_EXTENSION`).
+ */
+export const PI_SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${bodyFor("pi")}`;
 
 /**
  * The delimited block an operator objective is rendered into. One shape, one
