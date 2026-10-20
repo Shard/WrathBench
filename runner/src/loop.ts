@@ -909,13 +909,15 @@ export class ContextBuilder {
     } else {
       if (dead && !this.lastDead && !signalsOwnWindow) {
         const c = corpse?.value as
-          | { map?: number; x?: number; y?: number; z?: number; source?: unknown }
+          | { map?: number; x?: number; y?: number; z?: number; source?: unknown; instanceMap?: unknown }
           | undefined;
         const source: "corpse_query" | "death_spot" | undefined =
           c?.source === "corpse_query" ? "corpse_query" : c?.source === "death_spot" ? "death_spot" : undefined;
+        // A corpse inside a dungeon is reported at its entrance, which is not the death site.
         const site =
           c !== undefined &&
           source !== undefined &&
+          c.instanceMap === undefined &&
           typeof c.map === "number" &&
           typeof c.x === "number" &&
           typeof c.y === "number" &&

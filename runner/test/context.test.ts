@@ -412,6 +412,27 @@ describe("formatStateSummary", () => {
     );
     expect(later).toContain("corpse on map 1 at (5,5), you are on map 0: reclaim within 39y after the reclaim delay");
   });
+
+  test("a ghost whose corpse is inside a dungeon is pointed at the portal, not at a reclaim", () => {
+    const text = formatStateSummary(
+      {
+        self: {
+          fields: { playerFlags: { value: 0x10 } },
+          position: { value: { map: 0, x: -11209.3, y: 1679.32, z: 63.59 } },
+          corpse: { value: { map: 0, x: -11207.8, y: 1681.15, z: 60.14, source: "corpse_query", instanceMap: 36 } },
+          graveyard: { value: { map: 0, x: -11209.3, y: 1679.32, z: 63.59 } },
+          reclaimDelay: { value: { delayMs: 30_000, readyAt: 1_000_000 } },
+        },
+      },
+      { sessionLive: true, now: 1_000_000 },
+    );
+    expect(text).toContain(
+      "ghost at graveyard (-11209,1679); corpse inside instance map 36, entrance marker 2y away at (-11208,1681): " +
+        "walk into the dungeon's portal as a ghost to come back to life inside (no sickness), " +
+        "or Spirit Healer at the graveyard (-25% durability; resurrection sickness from level 11)",
+    );
+    expect(text).not.toContain("reclaim within 39y");
+  });
 });
 
 /**

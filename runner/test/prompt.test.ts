@@ -211,22 +211,22 @@ describe("episode sentence", () => {
 
   test("every rendering hashes as pinned, so a prompt edit has to move its pins on purpose", () => {
     // Pinned by value, not by rebuilding from the same parts, so a change to
-    // any rendering fails here. The last edit to move them is the long-walk
-    // clause, which no longer states a run speed (on foot roughly 200y, less
-    // swimming, more mounted), in the shared body, so it moved all twelve.
+    // any rendering fails here. The last edit to move them is the death
+    // clause's list of reclaimCorpse reasons, which gained corpse_in_instance,
+    // in the shared body, so it moved all twelve.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:5a84b336a5a730d7", off: "sha256:f145f93a4d5ef110" },
-        cli: { on: "sha256:302f209b954a1d06", off: "sha256:c528aeb18e2dc33e" },
+        wrathbench: { on: "sha256:9819536d308929fd", off: "sha256:8a51158f6c3a5842" },
+        cli: { on: "sha256:b4292cc55b2db3cc", off: "sha256:328eaa4353eb2385" },
       },
       e90: {
-        wrathbench: { on: "sha256:7210b072d808178c", off: "sha256:11e2a266dde9d30e" },
-        cli: { on: "sha256:cd899c9cbb71bab8", off: "sha256:150a867c5c0761e7" },
+        wrathbench: { on: "sha256:4807363ab19fc297", off: "sha256:542ca5d024943480" },
+        cli: { on: "sha256:3866948c1f9332ca", off: "sha256:1cb694e059b5e388" },
       },
       e360: {
-        wrathbench: { on: "sha256:6e66cdbad707f9cd", off: "sha256:bea28b93120a7dd0" },
-        cli: { on: "sha256:97d0cdb6cae8af15", off: "sha256:7d8614e98e04368d" },
+        wrathbench: { on: "sha256:f486996f89f218f8", off: "sha256:ba4d30ff4f624680" },
+        cli: { on: "sha256:fa94e73e65b133e3", off: "sha256:55a29d98b6ae6100" },
       },
     };
     const episodes = [

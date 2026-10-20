@@ -375,6 +375,28 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
+  test("a death sampled after release with the corpse inside a dungeon records no site, not the entrance", async () => {
+    const ghost = {
+      self: {
+        fields: { health: { value: 1, seq: 9, ts: 4500 }, playerFlags: { value: 0x10, seq: 9, ts: 4500 } },
+        corpse: {
+          value: { map: 0, x: -11207.8, y: 1681.15, z: 60.14, source: "corpse_query", instanceMap: 36 },
+          seq: 9,
+          ts: 4444,
+        },
+      },
+    };
+    const { dir, options } = walk([
+      { self: { fields: { health: { value: 100, seq: 1, ts: 1 }, playerFlags: { value: 0, seq: 1, ts: 1 } } } },
+      ghost,
+    ]);
+    await runLoop(options);
+    const deaths = readTrajectory(dir).filter((r) => r.t === "milestone" && r["kind"] === "death");
+    expect(deaths).toHaveLength(1);
+    expect(deaths[0]!["position"]).toBeUndefined();
+    options.trajectory.close();
+  });
+
   test("a process that opens on a dead character seeds it and records no death", async () => {
     const dead = {
       self: {

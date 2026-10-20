@@ -1274,8 +1274,9 @@ client.events.onAny((event) => {
   // The death: own health observed at zero, from a reading that was not.
   if (health === 0 && !watchedDead) {
     watchedDead = true;
-    const corpse = self.corpse?.value as { source?: unknown } | undefined;
-    const at = point(corpse);
+    const corpse = self.corpse?.value as { source?: unknown; instanceMap?: unknown } | undefined;
+    // A corpse inside a dungeon is reported at its entrance, which is not the death site.
+    const at = typeof corpse?.instanceMap === "number" ? undefined : point(corpse);
     const source = corpse?.source === "corpse_query" ? "corpse_query" : corpse?.source === "death_spot" ? "death_spot" : undefined;
     const zone = (self.zone?.value as { id?: unknown } | undefined)?.id;
     const area = (self.area?.value as { id?: unknown } | undefined)?.id;
