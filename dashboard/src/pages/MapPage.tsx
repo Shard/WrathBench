@@ -2173,7 +2173,8 @@ export default function MapPage() {
           }}
           onWheel={onWheel}
         />
-        <div class="map-bubbles">
+        {/* A bubble takes the pointer for its title; a drag or a wheel on one is the map's. */}
+        <div class="map-bubbles" onPointerDown={onPointerDown} onWheel={onWheel}>
           <For each={bubbleStacks()}>
             {(stack) => {
               let el!: HTMLDivElement;

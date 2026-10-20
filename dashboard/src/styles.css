@@ -461,8 +461,8 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
  * What a character said, over its pip (`lib/chatbubbles.ts`). The frame loop
  * places each stack through four properties: its box (`--bx`, `--by`) and the
  * leader down to its pip (`--lx`, `--lead`). The bubble itself is a `.card`.
- * Only a bubble takes the pointer, for its title; the rest of the layer lets
- * a drag through to the map. A kind other than say is marked on the left
+ * Only a bubble takes the pointer, for its title, and the layer hands a drag
+ * or a wheel that starts on one to the map's own handlers. A kind other than say is marked on the left
  * edge; yell, raid and emote share the feed's error and notice rules.
  */
 .map-bubbles { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
@@ -476,7 +476,7 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
   width: 1px; height: var(--lead, 0); background: var(--dim);
 }
 .card.map-bubble {
-  pointer-events: auto; padding: 2px 6px; font-size: var(--fs-sm); line-height: 1.35;
+  pointer-events: auto; touch-action: none; padding: 2px 6px; font-size: var(--fs-sm); line-height: 1.35;
   overflow-wrap: anywhere; box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
 }
 .map-bubble:not(:last-child) { opacity: .75; }

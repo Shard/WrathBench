@@ -20,7 +20,7 @@ import {
   stacksKey,
   type StackBox,
 } from "../src/lib/chatbubbles";
-import { createTraceStore } from "../src/lib/traceplayer";
+import { createTraceStore, replayCursorAt } from "../src/lib/traceplayer";
 
 const W = 1_760_000_100_000 - (1_760_000_100_000 % SEG_MS);
 const line = (t: number, text: string, kind: TraceChatLine["kind"] = "say"): TraceChatLine => ({ t, kind, text });
@@ -36,6 +36,16 @@ describe("a bubble's lifetime, on the playhead's clock", () => {
     expect(bubblesAt("a", lines, W + 39_999).map((b) => b.text)).toEqual(["pulling", "on my way"]);
     expect(bubblesAt("a", lines, W + 40_000).map((b) => b.text)).toEqual(["on my way"]);
     expect(bubblesAt("a", lines, W + 55_000)).toEqual([]);
+  });
+
+  test("in a replay the lifetime is the replay clock's: 30 s of wall time at 1x, 3 s at 10x", () => {
+    const said = [line(W, "now")];
+    for (const [speed, wallMs] of [[1, 30_000], [10, 3_000]] as const) {
+      const anchor = { cursor: W, at: 1_000, speed };
+      const at = (p: number): number => replayCursorAt(anchor, p, [], W + 3_600_000);
+      expect(bubblesAt("a", said, at(1_000 + wallMs - 1))).toHaveLength(1);
+      expect(bubblesAt("a", said, at(1_000 + wallMs))).toHaveLength(0);
+    }
   });
 
   test("a replay scrubbed back takes a line down again; scrubbed forward, it is up as if played", () => {
