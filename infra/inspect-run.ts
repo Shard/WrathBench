@@ -767,12 +767,13 @@ export function inspectTrajectory(runId: string, opts: TrajectoryOptions, out: O
       }
       const r = parseLine(buf, s, e);
       if (r === null) return;
+      // --grep filters every kind, meta included: a kept meta line would spend the --last budget.
+      if (!grepOk(strike(buf.toString("utf8", s, e), token))) return;
       if (h.t === "meta") {
         return keep({ ts: h.ts, error: false, text: `${clock(h.ts)}  meta  run ${String(r["runId"] ?? "?")} harness ${String(r["harnessVersion"] ?? "?")}` });
       }
       const line = compact(r, w, token);
       const error = r["isError"] === true;
-      if (!grepOk(strike(buf.toString("utf8", s, e), token))) return;
       return keep({ ts: h.ts, error, text: `${clock(h.ts)}  ${h.t}  ${line}` });
     }
     switch (h.t) {
