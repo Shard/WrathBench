@@ -111,7 +111,9 @@ import {
   moveEtaMs,
   type StreamEvent,
   type WaitForOptions,
+  waitForInTurn,
 } from "./events";
+import { noteRequest, settleOnLaterTurns } from "./turn";
 import {
   mailResultText,
   partyResultText,
@@ -8305,7 +8307,7 @@ export class WrathClient {
   /** `events.waitFor` with the client's default signal threaded in. */
   private waitEvent(predicate: (event: StreamEvent) => boolean, options: WaitForOptions = {}): Promise<StreamEvent> {
     const signal = options.signal ?? this.currentSignal();
-    return this.events.waitFor(predicate, signal === undefined ? options : { ...options, signal });
+    return waitForInTurn.call(this.events, predicate, signal === undefined ? options : { ...options, signal });
   }
 
   /** Throw `EventAbortedError` if the default signal has already fired. */
@@ -8359,6 +8361,7 @@ export class WrathClient {
       const headers: Record<string, string> = {};
       if (body !== undefined) headers["content-type"] = "application/json";
       if (this.#secret !== undefined) headers["authorization"] = `Bearer ${this.#secret}`;
+      noteRequest();
       res = await this.#fetchImpl(url, {
         method,
         headers,
@@ -8405,6 +8408,86 @@ export class WrathClient {
     return parsed.data;
   }
 }
+
+/**
+ * WrathClient prototype members that are internal plumbing: private, or
+ * operator-only. `generate-api-docs.ts` leaves them out of the model's
+ * reference and fails on any member that is neither documented nor named here,
+ * so every other member is the caller's surface.
+ */
+export const CLIENT_PLUMBING: ReadonlySet<string> = new Set([
+  "action",
+  // Operator-only (module/PROTOCOL.md "Authentication"): a snippet's own
+  // credential is refused on these, so the model is not shown them.
+  "lease",
+  "releaseLease",
+  "noteActionHint",
+  "rewordActionHint",
+  "drainActionHints",
+  "request",
+  "postMoveTo",
+  "watchAsyncMove",
+  "moveRecipe",
+  "isCorpse",
+  "trackedCast",
+  "dispatchCast",
+  "castVerdict",
+  "ownMoveSince",
+  "recallMoveRejection",
+  "waitOwnTeleportAck",
+  "reclaimRefusal",
+  "awaitAliveFields",
+  "awaitAreaAfter",
+  "reclaimReadyAt",
+  "resolveGossipOption",
+  "petGuidOrRefuse",
+  "petCommand",
+  "nameMailSenders",
+  "questDetailsFrom",
+  "rewardChoices",
+  "petRefusal",
+  "lootRollRefusal",
+  "targetGuid",
+  "isChest",
+  "openChest",
+  "useItemVerdict",
+  "targetRef",
+  "byName",
+  "resolveRawGuids",
+  "resolveTalent",
+  "bankClosed",
+  "noBankItem",
+  "petAction",
+  "mailboxGuidOrThrow",
+  "mailboxGuid",
+  "noMailbox",
+  "waitMailResult",
+  "bankMove",
+  "sellAndConfirm",
+  "questOffer",
+  "questTakenByItsOwnOffer",
+  "faceQuietly",
+  "waitForState",
+  "waitEvent",
+  "currentSignal",
+  "remainingBudgetMs",
+  "throwIfAborted",
+  "sleepAborting",
+  "clientParityQueries",
+  "fireAndForget",
+  "flushStatusQueries",
+  "forgetStatus",
+  "trackQuestLog",
+]);
+
+// Every call on the caller's surface settles on a later turn of the event loop,
+// as a real client's does, even when it was answered without sending anything
+// (turn.ts). The plumbing keeps its own timing: the SDK's waits and requests
+// run between a call's turns, not across them.
+settleOnLaterTurns(
+  WrathClient.prototype,
+  Object.getOwnPropertyNames(WrathClient.prototype).filter((n) => n !== "constructor" && !CLIENT_PLUMBING.has(n)),
+);
 
 type ChatFields = Omit<ChatEntry, "seq" | "ts">;
 
