@@ -13,7 +13,7 @@
  * its move, (3200, -100, 80), was a z buried under the hill, and the
  * module's buried-z step (PROTOCOL.md, `move_to` z) now walks it to the one
  * walkable level over that x,y and into P1's refused climb, which is the
- * truthful answer, so P4 is that x,y deeper than the step reaches (below).
+ * truthful answer, so P4 is now a column with no walkable level (below).
  *
  * Per start (one fixture scenario each, infra/fixtures/scenarios.ts
  * `steep-*`, level 80 so nothing interrupts a walk):
@@ -52,7 +52,7 @@
  * `kubectl -n wrathbench exec deploy/wrathbench-runner -- env
  * SMOKE_REPROS=P1 bun infra/smoke/steep-replan.ts`.
  *
- * Coordinates are the refused moves' own, P4's z excepted (harness tooling, not an agent run;
+ * Coordinates are the refused moves' own, P4's excepted (harness tooling, not an agent run;
  * the observation contract does not apply to this script). Audit file names
  * are session tokens and are never printed.
  */
@@ -93,7 +93,7 @@ const signed = (v: number): string => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
 interface Repro {
   id: string;
   target: MovePoint;
-  /** The verdict the module served this move before the re-plan, from its own audit rows (P4: what it served on harness-0.5-1477). */
+  /** The verdict the module served this move before the re-plan, from its own audit rows (P4: what the column scan saw on harness-0.5-1477). */
   before: string;
   /** A `target_off_mesh` control: the re-plan never runs on it. */
   control?: true;
@@ -106,20 +106,24 @@ interface Start {
   repros: Repro[];
 }
 
-// P4 is the freeplay move's x,y, (3200, -100), with z lowered from its 80.
-// That column holds one walkable level, the hilltop at z 105-110, and
-// nothing under it: probed from this start on harness-0.5-1477, z 55 and
-// below answer target_off_mesh and z 60 to 80 answer P1's drop (climb +5.0
-// at (3215.0, 71.8, 39.8)). The flip at z 60 is the buried-z step's column
-// search (MeshLevelsAt, ±50y around the request) first reaching the level.
-// At z 30 the level is 75-80y over the request, the request is inside the
-// hill (no ground under it), and nothing walkable lies within 20y of it
-// (`nearest` null): off the mesh by every rung.
+// P4 was the freeplay move (3200, -100, 80). That column holds one walkable
+// level, the hilltop at z 105-110, so the buried-z step now takes it: probed
+// from this start on harness-0.5-1477, z 55 and below answer target_off_mesh
+// and z 60 to 80 answer P1's drop (climb +5.0 at (3215.0, 71.8, 39.8)), the
+// flip being the step's ±50y column search (MeshLevelsAt) reaching the
+// level. A deeper z there would be a control only for as long as that band
+// stays 50y, so P4 is instead a column with no walkable level at all: a
+// scan of a 50y grid round the hill from this start, z 0 to 240 every 40y
+// (so every height from -50 to 290 is inside some request's band, and the
+// ground rung gets its downward look from above the terrain), answered
+// target_off_mesh at every z in two columns. (3200, 50) is the one whose
+// nearest walkable ground stays put, 15y away at z 51 for every z from 40
+// up; the other, (3250, 0), has mesh 5y off and is the more fragile.
 const STARTS: Start[] = [
   {
     scenario: "steep-ashenvale-lowland",
     repros: [
-      { id: "P4", target: { x: 3200, y: -100, z: 30 }, before: "target_off_mesh, nearest none within 20y", control: true },
+      { id: "P4", target: { x: 3200, y: 50, z: 80 }, before: "target_off_mesh at every z scanned, nearest (3213.9, 54.7, 50.6)", control: true },
       { id: "P1", target: { x: 3190.13, y: -106.667, z: 101.774 }, before: "drop, climb +5.0" },
     ],
   },
