@@ -363,27 +363,38 @@ async function portal(leg: string, name: string, target: MovePoint, expectMap: n
 // stays inside; it is the volume nav-probe c4 re-fired in every 1.5s.
 const LINGER_TRIGGER = { id: 710, x: -5601.5, y: -530.7, z: 395.5, r: 35 };
 const LINGER_MS = 5_000;
+// Where the linger walks, inside the volume on the crossroads' west side,
+// read off the mmaps with Detour at the core's limits: from where leg1 ends
+// (41.6y from the centre, outside it) the entry is 36y in a straight line and
+// a 38y walk with no step the drop guard refuses, and the two inner points
+// are 6-10y straight walks from it and between each other, 24y from the
+// centre. The centre itself is on a raised step: the core's route there is
+// 119y round the crossroads and ends climbing it 1.9y short, which the guard
+// refuses as `drop` (live on harness-0.5-1393; offline, the module before
+// #261 refuses it the same way).
+const LINGER_ENTRY = { x: -5617.5, y: -525.7, z: 403.7 };
+const LINGER_INNER = [
+  { x: -5625.5, y: -531.7, z: 405.6 },
+  { x: -5625.5, y: -525.7, z: 404.4 },
+] as const;
 
 /**
  * Linger leg: crossing into a DBC volume sends
  * CMSG_AREATRIGGER exactly once, as a client does; standing and walking
- * inside it for >= 5s must not re-fire. Walks to the centre, then two short
- * hops that stay well inside the radius while the clock passes LINGER_MS, and
+ * inside it for >= 5s must not re-fire. Walks in to LINGER_ENTRY, then two
+ * short hops that stay well inside the radius while the clock passes LINGER_MS, and
  * asserts exactly one WB_AREATRIGGER for this id in that window.
  */
 async function lingerInTrigger(leg: string): Promise<void> {
   const t = LINGER_TRIGGER;
   const before = triggerHits.get(t.id) ?? 0;
   const t0 = Date.now();
-  await hop(leg, { name: `trigger ${t.id} centre`, x: t.x, y: t.y, z: t.z });
+  await hop(leg, { name: `inside ${t.id} (entry)`, ...LINGER_ENTRY });
   const firstHits = (triggerHits.get(t.id) ?? 0) - before;
   if (firstHits !== 1) throw new LegFailure(`${leg}: entering trigger ${t.id} produced ${firstHits} WB_AREATRIGGER, expected exactly 1`);
   // Keep moving inside the volume (the module only tests triggers while a
   // move is in progress) until LINGER_MS has passed since the entry.
-  const inner: Waypoint[] = [
-    { name: `inside ${t.id} (+8y x)`, x: t.x + 8, y: t.y, z: t.z },
-    { name: `inside ${t.id} (+8y y)`, x: t.x, y: t.y + 8, z: t.z },
-  ];
+  const inner: Waypoint[] = LINGER_INNER.map((p, n) => ({ name: `inside ${t.id} (inner ${n + 1})`, ...p }));
   let i = 0;
   while (Date.now() - t0 < LINGER_MS) {
     await hop(leg, inner[i++ % inner.length]!);
