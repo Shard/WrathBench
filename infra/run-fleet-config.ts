@@ -236,7 +236,9 @@ export interface FleetJob {
   /**
    * Set on a job the scheduling policy made up, never on one from the file:
    * the n-th attempt on (model, episode), which suffixes the run id `-a<n>`
-   * from the second attempt on so every attempt has its own id.
+   * from the second attempt on so every attempt has its own id. A party
+   * campaign's square sets it too, from its version's tally, as the floor its
+   * spawn numbers up from (`freshAttempt`).
    */
   attempt?: number;
   /**
@@ -303,6 +305,14 @@ export interface FleetJob {
    * ones. Absent means the full `repeat` for every ref. Never from the file.
    */
   owed?: { copies: Readonly<Record<string, number>>; taken: ReadonlySet<string> };
+  /**
+   * Set by the planner on a pinned campaign's fresh square (`withTakenRunIds`):
+   * every run id on disk, archive included. The spawn numbers its attempt past
+   * them (`-a<n>`), so no stem is ever reused: not across campaign versions,
+   * which count their attempts afresh, and not after a stop on the same date.
+   * Never from the file.
+   */
+  takenRunIds?: ReadonlySet<string>;
 }
 
 export interface FleetAccounts {
@@ -590,8 +600,9 @@ export function pinnedCampaignJobs(
       source: "pinned",
       probe: { campaign: c.name, version: c.version, cell: next.cell.id, arm: next.arm.id },
       // A party is every member's account at once, and each attempt its own
-      // run-id stem (`-a<n>` from the second), so a restaged party never lands
-      // on the ids of the one before it.
+      // run-id stem (`-a<n>` from the second). This version's count is only
+      // the floor: the spawn numbers past every id on disk (`takenRunIds`), so
+      // a restaged party never lands on the ids of one before it.
       ...(c.accounts !== undefined ? { accounts: [...c.accounts], attempt: next.attempts + 1 } : {}),
       // The campaign's own lane, for its launches only (`campaigns.<id>.subscription`).
       ...(c.subscription !== undefined ? { subscription: c.subscription } : {}),

@@ -71,6 +71,7 @@ import {
   type FleetState,
   foreignRosters,
   jobArgv,
+  rosterResumes,
   jobDefers,
   jobJsonlPath,
   jobLogPath,
@@ -1323,7 +1324,7 @@ export function formatArgvBlock(
       // without it the plan showed a fresh launch for a job whose day jsonl was
       // on disk, which read as "the paused probe gets clobbered" when the real
       // spawn would have resumed it.
-      const resumeRoster = spawn.resumeRunId !== undefined || exists(jobJsonlPath(spawn.name, opts.stamp));
+      const resumeRoster = rosterResumes(spawn, exists(jobJsonlPath(spawn.name, opts.stamp)));
       return `  ${job.name}: ${jobArgv(spawn, { stamp: opts.stamp, until: opts.until, resumeRoster }).join(" ")}`;
     }),
   ];
