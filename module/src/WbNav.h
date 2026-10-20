@@ -113,6 +113,21 @@ namespace WbNav
     // counts them.
     bool NearestReachable(dtNavMesh const* navMesh, dtNavMeshQuery const* query, dtPolyRef startRef,
         float const* point, float const* extents, dtPolyRef* refOut, float* pointOut, uint32_t* islands = nullptr);
+
+    // The start level a move plans from when the polygon the core picks for
+    // the start (`startRef`, CorePolyAt) is on a closed island that does not
+    // hold the end's polygon: the walkable level directly over or under the
+    // start point itself, inside the core's own 3y x 5y start box, that is
+    // not on that island, and on which the core's own pick is not the island
+    // again. A two-level spot: the Deadmines pool past the first boss is a
+    // 6-polygon floor under the water surface's polygons, the floor nearer in
+    // z wherever the character stands, and every route from it ended at the
+    // floor's edge. `pointOut` is the level's point over the start (Detour
+    // order), `refOut` the polygon the core picks there, `islandPolys` the
+    // start island's size. False when the start's component holds the end,
+    // or no such level is there.
+    bool ReachableStartLevel(dtNavMesh const* navMesh, dtNavMeshQuery const* query, dtPolyRef startRef, dtPolyRef endRef,
+        float const* start, dtPolyRef* refOut, float* pointOut, uint32_t* islandPolys);
 }
 
 #endif
