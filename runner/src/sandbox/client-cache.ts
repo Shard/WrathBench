@@ -19,8 +19,9 @@
  * the database, and nothing the stream did not carry. The newest answer for
  * each id wins, as it does in the SDK's own maps.
  *
- * Why the character list: it is the one frame the stream carries our own race
- * in besides our own create block, and neither comes back on a reattach. A
+ * Why the character list (a harness fix after that decision, not part of
+ * it): it is the one frame the stream carries our own race in besides our own
+ * create block, and neither comes back on a reattach. A
  * same-token `POST /session` on a session in world succeeds without a login
  * flow, so no char enum follows; `WB_SESSION_STATE` names the character and
  * its level but not its race; and the server never sends a create block for

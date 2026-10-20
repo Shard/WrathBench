@@ -463,8 +463,8 @@ Every episode starts with a freshly created character at level 1 in its starting
   (`runner/src/sandbox/client-cache.ts`) so a restarted child and a resumed run
   start with them, as a client's on-disk cache (WDB) survives a restart —
   operator decision of 2026-10-18, because a restart reattaches to a module
-  session that never asks for an entry twice. The newest `SMSG_CHAR_ENUM` is
-  kept beside them: a reattach carries no login flow and no second create
+  session that never asks for an entry twice. A later harness fix, not part
+  of that decision, keeps the newest `SMSG_CHAR_ENUM` beside them: a reattach carries no login flow and no second create
   block for us, so the login's character list is the only frame left that
   says our own race, which picks the language a party line goes out in. A new run, a continuation
   included, starts without one, and the collector does not read it.
