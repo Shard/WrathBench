@@ -1163,6 +1163,7 @@ describe("mapName", () => {
 
   test("an instance with tiles and traffic of its own is named too", () => {
     expect(mapName(369)).toBe("Deeprun Tram");
+    expect(mapName(36)).toBe("The Deadmines");
   });
 
   test("anything else keeps its number rather than being guessed at", () => {

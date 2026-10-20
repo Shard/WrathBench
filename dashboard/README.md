@@ -86,8 +86,8 @@ build, and drives a headless Chromium over the DevTools protocol to named
 states: `home`, `run-live`, `map-live` (nothing selected: the sidebar's live
 list), `map-live-selected` (the live character's row clicked: framed, with its
 sheet), `map-live-nearby` (then zoomed in on it) and `map-replay`. The fixture
-has three live characters at different levels, one of them on Kalimdor, so the
-list has an order to show and a pick a continent to cross to; `--run` with only
+has four live characters at different levels, one of them on Kalimdor and one in
+the Deadmines, so the list has an order to show and a pick a map to cross to; `--run` with only
 ended runs gives the map with nobody live.
 Wowhead's tooltip script is stubbed and every other third party refused, so a
 page renders as it does where the script is blocked; `--real-wowhead` lets it
