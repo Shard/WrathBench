@@ -832,8 +832,9 @@ export type SelfMoveData = z.infer<typeof selfMoveDataSchema>;
 /**
  * Module-synthesized: where a transport the session has been sent (a tram
  * car, a boat) is right now, at most once a second, while it is within the
- * map's visibility range of the character (100y on a continent, 170y in an
- * instance) or carrying it. A client animates the car itself from
+ * map's visibility range of the character (the core's
+ * `Visibility.Distance.*`: 100y on a continent, 170y in an instance, by
+ * default) or carrying it. A client animates the car itself from
  * `TransportAnimation.dbc` and the clock its create block carried; the module
  * reports the same animation's result. `docked` is whether the keyframe
  * segment the clock is on has no displacement — the car is dwelling at a

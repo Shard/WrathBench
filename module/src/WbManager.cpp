@@ -2391,8 +2391,9 @@ namespace WrathBench
     // z it is given, so a request under the ground (a z read off a lower
     // level, often the character's own) gets no ground height; the mesh's
     // walkable level over x,y is tried after both when it is the only level
-    // in the column (MeshLevelsAt), and a request whose column holds two or
-    // more is not guessed between. A target the mesh rejects at every one of those heights is
+    // in the column (MeshLevelsAt) and the request rests on no ground of its
+    // own, and a request whose column holds two or more levels is not guessed
+    // between. A target the mesh rejects at every one of those heights is
     // still `target_off_mesh`; `meshZ` is always relative to the z the agent
     // asked for.
     Manager::PathResolve Manager::ResolvePath(Player* player, float x, float y, float z, bool unitTarget, bool* usedGroundZ, float* groundZOut, bool force, bool* usedMeshZ)
@@ -2422,19 +2423,21 @@ namespace WrathBench
         };
 
         // The last rung: the walkable level over x,y, when the mesh has
-        // exactly one level in the column there (MeshLevelsAt) and the
-        // request is under it. Under a walkable surface is no place a client's
-        // character can stand, so the z was a stale or wrong one (the
-        // character's own, on a lower stretch of road) and the surface is the
-        // one reading of it. A level below the request is not taken: the
-        // request then floats over it or stands on ground the mesh does not
-        // walk (a hillside over the Deadmines tunnel), which the ground rung
-        // above has already judged, and a tunnel under a hill is not what a
-        // point on the hill asked for. Two or more levels are two readings
-        // and the move stays refused.
+        // exactly one level in the column there (MeshLevelsAt), the request
+        // is under it, and the request rests on no geometry of its own (no
+        // ground height within MESH_LEVEL_MERGE of z, looking down from it).
+        // That is a z buried in the terrain or in the air under a deck: a
+        // stale or wrong one (the character's own, from a lower stretch of
+        // road), and the level above is its one reading. A request resting on
+        // ground the mesh does not walk asked for that ground, not for a
+        // roof or a hilltop over it; a level below the request is not taken
+        // either — the ground rung has judged that, and a tunnel under a
+        // hill is not what a point on the hill asked for. Two or more levels
+        // are two readings and the move stays refused.
+        bool const restsOnGround = groundZ > INVALID_HEIGHT && std::fabs(z - groundZ) <= MESH_LEVEL_MERGE;
         auto meshLevel = [&](PathResolve r) {
-            if (!isTargetOffMesh(r))
-                return r;
+            if (!isTargetOffMesh(r) || restsOnGround)
+                return withNearest(r);
             float level = 0.0f;
             if (MeshLevelsAt(player, x, y, z, &level) != 1 || level <= z + 0.5f
                 || (haveGround && std::fabs(level - groundZ) <= 0.5f))
@@ -4267,8 +4270,9 @@ namespace WrathBench
     // rather than the passenger.
     //
     // The range is Map::GetVisibilityRange(), the distance at which the core
-    // sends this client every other object (Visibility.Distance.Continents,
-    // 100y; .Instances, 170y). Transports are the exception the core makes:
+    // sends this client every other object (Visibility.Distance.*: 100y on
+    // continents and 170y in instances by default). Transports are the
+    // exception the core makes:
     // Map::SendInitTransports sends every one on the map at login, so on map
     // 0 a character in Westfall was told about every ship and zeppelin on the
     // continent, and reporting each one's clock every second was 56k of a

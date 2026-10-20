@@ -499,9 +499,9 @@ what \`state.self.zone\` / \`state.self.area\` / \`state.self.map\` are folded f
 instanceType is the map's code, 0 open world, 1 dungeon, 2 raid, 3 battleground, 4 arena),
 \`WB_RIDE_PROGRESS\` (own position while a transport carries you, ≤1/s) and
 \`WB_TRANSPORT_PROGRESS\` (\`{ guid, entry, pos, docked, progressMs, periodMs }\`
-for each transport within view range of you (100y outdoors, 170y in a dungeon)
-or carrying you, each ≤1/s, with one last \`inRange: false\` report as it
-leaves the range — the same facts as the \`docked\` column of \`state.units()\`).
+for each transport within view range of you or carrying you, each ≤1/s, with
+one last \`inRange: false\` report as it leaves the range — the same facts as
+the \`docked\` column of \`state.units()\`).
 
 ${table(EVENT_ROWS)}
 
