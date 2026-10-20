@@ -16,6 +16,7 @@ import {
   needsPut,
   parseState,
   planPrune,
+  planWithdraw,
   publish,
   publishLoop,
   publishPass,
@@ -31,7 +32,9 @@ import {
   type SnapshotArtifact,
   type SnapshotResult,
   type StateIo,
+  traceSegmentPath,
 } from "./publish-core";
+import { SEG_MS } from "../runner/viewer/trace";
 import { SecretScanner } from "../runner/src/secret-scan";
 
 /**
@@ -1703,5 +1706,104 @@ describe("trace segments", () => {
     // A state written before segments existed reads as none published.
     const { traceSegs: _omit, ...before } = state;
     expect(parseState(JSON.stringify(before)).traceSegs).toEqual({});
+  });
+});
+
+// ------------------------------------------------------------- withdrawn runs
+
+describe("a run that is never published is withdrawn", () => {
+  const REF = "run-ref";
+  const T0 = 1_760_000_000_000 - (1_760_000_000_000 % SEG_MS);
+  const WINDOWS = Array.from({ length: 14 }, (_, i) => T0 + i * SEG_MS);
+  const segment = (t0: number): SnapshotArtifact => json(traceSegmentPath(REF, t0), { t0 }, IMMUTABLE);
+  /** A pass that still published the run: its two objects at a version, and fourteen trace windows. */
+  const before = (): SnapshotResult => {
+    const r = snapshot("g1", [{ id: "run-model", ver: "m1" }, { id: REF, ver: "r1" }]);
+    return { ...r, artifacts: [...r.artifacts, ...WINDOWS.map(segment)] };
+  };
+  /** The pass after: the run gone from everything, and named as withdrawn. */
+  const after = (gen: string, withdrawn: readonly string[] = [REF]): SnapshotResult => ({ ...snapshot(gen, [{ id: "run-model", ver: "m1" }]), withdrawn });
+  const refKeys = [`v1/run/${REF}/r1/detail.json`, `v1/run/${REF}/r1/track.json`, ...WINDOWS.map((t0) => traceSegmentPath(REF, t0))].sort();
+
+  test("the first pass after deletes every object and window it published for the run, after the flip, and forgets them", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    await publish(before(), store, state);
+    expect(state.traceSegs[REF]).toBeDefined();
+    store.reset();
+
+    const report = await publish(after("g2"), store, state);
+    expect(report.flipped).toBe(true);
+    expect([...report.deleted].filter((p) => p.includes(REF))).toEqual(refKeys);
+    const calls = store.calls.map((c) => `${c.op} ${c.path}`);
+    const flip = calls.indexOf(`put ${MANIFEST_PATH}`);
+    for (const k of refKeys) expect(calls.indexOf(`delete ${k}`)).toBeGreaterThan(flip);
+    for (const k of refKeys) expect(store.objects.has(k)).toBe(false);
+    expect(Object.keys(state.uploaded).some((k) => k.includes(REF))).toBe(false);
+    expect(state.traceSegs[REF]).toBeUndefined();
+    expect(state.runVersions[REF]).toBeUndefined();
+    // The model run beside it is untouched.
+    expect(store.objects.has("v1/run/run-model/m1/detail.json")).toBe(true);
+
+    store.reset();
+    const next = await publish(after("g3"), store, state);
+    expect(next.deleted.filter((p) => p.includes(REF))).toEqual([]);
+    expect(store.calls.some((c) => c.path.includes(REF))).toBe(false);
+  });
+
+  test("a delete that fails is retried on the next pass, trace windows included", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    await publish(before(), store, state);
+    const stuck = [traceSegmentPath(REF, WINDOWS[3]!), `v1/run/${REF}/r1/track.json`];
+    for (const k of stuck) store.failDeletes.add(k);
+    const report = await publish(after("g2"), store, state);
+    expect(report.deleteFailures).toEqual([...stuck].sort());
+    expect(state.pendingDeletes).toEqual([...stuck].sort());
+    // Still not a published run meanwhile: the window reads as absent.
+    expect(state.traceSegs[REF]).toBeUndefined();
+
+    store.failDeletes.clear();
+    store.reset();
+    const retry = await publish(after("g3", []), store, state);
+    expect(retry.deleted).toEqual([...stuck].sort());
+    expect(state.pendingDeletes).toEqual([]);
+    for (const k of refKeys) expect(store.objects.has(k)).toBe(false);
+  });
+
+  test("a pass that does not flip withdraws nothing", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    await publish(before(), store, state);
+    store.reset();
+    const noFlip = after("g2");
+    const report = await publish({ ...noFlip, artifacts: noFlip.artifacts.filter((a) => a.path !== MANIFEST_PATH) }, store, state);
+    expect(report.flipped).toBe(false);
+    expect(store.deletes()).toEqual([]);
+    expect(state.traceSegs[REF]).toBeDefined();
+  });
+
+  test("prune: false skips the housekeeping, never the withdrawal", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    await publish(before(), store, state);
+    state.pendingDeletes = ["v1/run/elsewhere/old/detail.json"];
+    store.reset();
+    const report = await publish(after("g2"), store, state, { prune: false });
+    expect(report.deleted).toEqual(refKeys);
+    // Nothing else was touched: the queued delete waits for a pass that prunes.
+    expect(state.pendingDeletes).toEqual(["v1/run/elsewhere/old/detail.json"]);
+  });
+
+  test("planWithdraw names only what the state remembers for the listed runs, and an empty list nothing", () => {
+    const state = emptyState();
+    state.uploaded = { "v1/run/a/1/detail.json": "h", "v1/run/b/1/detail.json": "h", "v1/snap/x/runs.json": "h" };
+    state.runVersions = { a: ["1"], b: ["1"] };
+    state.traceSegs = { a: [[T0, 2]] };
+    expect(planWithdraw(state, [])).toEqual([]);
+    expect(state.runVersions["a"]).toEqual(["1"]);
+    expect(planWithdraw(state, ["a"])).toEqual(["v1/run/a/1/detail.json", traceSegmentPath("a", T0), traceSegmentPath("a", T0 + SEG_MS)].sort());
+    expect(state.runVersions).toEqual({ b: ["1"] });
+    expect(state.traceSegs).toEqual({});
   });
 });

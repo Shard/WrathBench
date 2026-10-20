@@ -9,7 +9,10 @@
  * stamped and never scored. Its result row reads `unscored (scripted
  * reference)`, so `scored()` keeps it out of every row and every order, and the
  * one place it appears is a labelled line on the level rail under the table
- * (`scriptedReference`, `scriptedReferenceScale`).
+ * (`scriptedReference`, `scriptedReferenceScale`). The private viewer only:
+ * the public snapshot never carries a reference run (operator, 2026-10-20;
+ * docs/PUBLIC-DASHBOARD.md, "Runs that are never published"), so there it
+ * finds none and draws nothing.
  *
  * **Withdrawn, kept in the repository: the empirical ceiling and the human
  * speedrun band.** They were the two lines the ladder drew until they were

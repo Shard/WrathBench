@@ -86,6 +86,7 @@ import { LOCAL_PATH_ROOTS } from "../runner/viewer/scrub-paths";
 import { unpackSegs } from "../runner/viewer/trace";
 import { PUBLIC_NEARBY_SPAN_MS } from "../runner/viewer/nearby";
 import { describeFindings, SecretScanner } from "../runner/src/secret-scan";
+import { isNotAModelRun } from "../runner/src/config";
 import { LIVE_PATH, MANIFEST_PATH, classifyPath, traceSegmentPath } from "./publish-core";
 
 /* ------------------------------------------------------------- the source --- */
@@ -184,7 +185,14 @@ export type FindingKind =
   /** The attribution line every artifact must carry is missing or altered. */
   | "attribution"
   /** Units on the public map that are not live: a window reaching back past the live span, or one for a run `live.json` does not flag. */
-  | "live-only";
+  | "live-only"
+  /**
+   * A run whose driver is not a model (`isNotAModelRun`: the scripted stub, the
+   * scripted reference), which is never published (operator, 2026-10-20): a
+   * row or object carrying its driver or stamp, and every published object
+   * that names that run's id.
+   */
+  | "unpublished-run";
 
 export interface Finding {
   kind: FindingKind;
@@ -380,6 +388,38 @@ function walkValues(value: unknown, at: string, visit: (path: string, key: strin
     visit(path, k, v);
     walkValues(v, path, visit);
   }
+}
+
+/**
+ * Every object in a body that is a run that is never published, by its own
+ * `driver` or stamp (`shakeout`, `unscored`), and every run id the body names.
+ * The two halves are joined after the walk, so an object that carries only
+ * the id — a position in `live.json`, a row of `runs.json` — is caught by the
+ * driver another object gave away.
+ */
+export function unpublishedRunFacts(key: string, body: unknown): { findings: Finding[]; flagged: Set<string>; named: Set<string> } {
+  const findings: Finding[] = [];
+  const flagged = new Set<string>();
+  const named = new Set<string>();
+  const visit = (value: unknown, at: string): void => {
+    if (Array.isArray(value)) {
+      value.forEach((v, i) => visit(v, `${at}[${i}]`));
+      return;
+    }
+    if (value === null || typeof value !== "object") return;
+    const o = value as Record<string, unknown>;
+    const runId = typeof o["runId"] === "string" ? o["runId"] : undefined;
+    if (runId !== undefined) named.add(runId);
+    const driver = typeof o["driver"] === "string" ? o["driver"] : null;
+    const stamp = typeof o["unscored"] === "string" ? o["unscored"] : typeof o["shakeout"] === "string" ? o["shakeout"] : null;
+    if ((driver !== null || stamp !== null) && isNotAModelRun({ driver, unscored: stamp })) {
+      if (runId !== undefined) flagged.add(runId);
+      findings.push({ kind: "unpublished-run", key, at: at === "" ? "." : at, detail: `driver ${driver ?? "-"}, stamp ${stamp ?? "-"}${runId === undefined ? "" : `, run ${runId}`}` });
+    }
+    for (const [k, v] of Object.entries(o)) visit(v, at === "" ? k : `${at}.${k}`);
+  };
+  visit(body, "");
+  return { findings, flagged, named };
 }
 
 /** A quoted excerpt: enough to identify the hit, bounded so a report stays readable. */
@@ -728,6 +768,10 @@ export async function verifyPublication(source: AcceptSource, opts: VerifyOption
     cache: [],
   };
 
+  /** Runs a published object showed to be never published, and the run ids each key names. */
+  const unpublished = new Set<string>();
+  const namedBy = new Map<string, Set<string>>();
+
   /** Fetch, count, parse, and run both content checks. Returns the parsed body. */
   const inspect = async (key: string): Promise<Record<string, unknown> | null> => {
     const body = await source.get(key);
@@ -768,6 +812,13 @@ export async function verifyPublication(source: AcceptSource, opts: VerifyOption
     report.residual.push(...scan.residual);
     report.findings.push(...reprojectionFindings(key, obj));
     if (key === LIVE_PATH) report.findings.push(...nearbyFindings(key, obj));
+    const runs = unpublishedRunFacts(key, obj);
+    report.findings.push(...runs.findings);
+    for (const id of runs.flagged) unpublished.add(id);
+    // A run's own objects name it by their key, not always by a field.
+    const own = classifyPath(key);
+    if (own.kind === "run" || own.kind === "trace") runs.named.add(own.runId);
+    if (runs.named.size > 0) namedBy.set(key, runs.named);
     return obj;
   };
 
@@ -847,6 +898,11 @@ export async function verifyPublication(source: AcceptSource, opts: VerifyOption
   };
   await Promise.all(Array.from({ length: Math.min(opts.concurrency ?? 8, Math.max(1, rows.length)) }, worker));
   for (const key of [...segmentKeys].sort()) await inspect(key);
+  for (const [key, ids] of namedBy) {
+    for (const id of ids) {
+      if (unpublished.has(id)) report.findings.push({ kind: "unpublished-run", key, at: "", detail: `names run ${id}, whose driver is not a model` });
+    }
+  }
   report.missing.sort();
   const order = (f: Finding): string => `${f.key} ${f.at} ${f.kind}`;
   report.findings.sort((a, b) => order(a).localeCompare(order(b)));

@@ -56,7 +56,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 // The codec's window arithmetic, pure and import-free: the state below records
 // published trace windows in the same packed runs a track lists them in.
-import { segRunsAdd, segRunsHas, type TraceSegRuns } from "../runner/viewer/trace";
+import { segRunsAdd, segRunsHas, unpackSegs, type TraceSegRuns } from "../runner/viewer/trace";
 import { describeFindings, type ScanFinding } from "../runner/src/secret-scan";
 
 // ------------------------------------------------------------------ contracts
@@ -87,6 +87,12 @@ export interface SnapshotResult {
   /** Aggregate name -> its bucket key this pass. Exactly what the manifest names. */
   snap: Record<string, string>;
   artifacts: SnapshotArtifact[];
+  /**
+   * Runs that are never published (a driver that is not a model; operator,
+   * 2026-10-20): everything the state remembers publishing for them is deleted
+   * once this pass has flipped (`planWithdraw`). Absent is none.
+   */
+  withdrawn?: readonly string[];
 }
 
 /**
@@ -534,6 +540,39 @@ export function planPrune(state: PublishState, limits: PruneLimits = {}): string
   return surplus.sort();
 }
 
+/**
+ * Every object the state remembers publishing for runs that are never
+ * published, and the state's own memory of them forgotten.
+ *
+ * Pruning alone never reaches such a run: its current version stays in its
+ * keep window for good, because no newer one ever arrives, and trace windows
+ * are not prunable at all (a closed window is immutable, and a live run's
+ * track lists every one). So a withdrawn run's keys are named outright — its
+ * versions' objects from `uploaded`, its windows from `traceSegs` — and its
+ * index entries are dropped whether or not the deletes then succeed: a delete
+ * that fails is retried from `pendingDeletes` like any other, and the run must
+ * not read as published meanwhile.
+ *
+ * Only ever an explicit list from the renderer, never "whatever this pass did
+ * not render": a pass over an empty or half-read listing would otherwise
+ * delete the bucket.
+ */
+export function planWithdraw(state: PublishState, runIds: readonly string[]): string[] {
+  const ids = new Set(runIds);
+  if (ids.size === 0) return [];
+  const targets: string[] = [];
+  for (const path of Object.keys(state.uploaded)) {
+    const c = classifyPath(path);
+    if ((c.kind === "run" || c.kind === "trace") && ids.has(c.runId)) targets.push(path);
+  }
+  for (const id of ids) {
+    for (const t0 of unpackSegs(state.traceSegs[id] ?? [])) targets.push(traceSegmentPath(id, t0));
+    delete state.traceSegs[id];
+    delete state.runVersions[id];
+  }
+  return [...new Set(targets)].sort();
+}
+
 /** Drop the history the prune just acted on, so the lists stay bounded too. */
 function trimHistory(state: PublishState, limits: PruneLimits): void {
   const keepSnapVersions = Math.max(1, limits.keepGens ?? DEFAULT_KEEP_GENS);
@@ -908,14 +947,30 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
   }
   for (const [runId, version] of runPairs) settleRun(state, runId, version);
 
-  if (opts.prune !== false) await runPrune(store, state, report, { keepGens: opts.keepGens, keepRunVersions: opts.keepRunVersions }, concurrency, log);
+  // After the flip, like the prune: the manifest now in the bucket names none
+  // of these runs, so nothing a current reader follows is deleted. Not gated on
+  // `prune`, which skips the housekeeping; this is what keeps them unpublished.
+  const withdrawals = planWithdraw(state, result.withdrawn ?? []);
+  if (withdrawals.length > 0) log(`publish: withdrawing ${withdrawals.length} object(s) of ${(result.withdrawn ?? []).length} run(s) that are never published`);
+  await runPrune(
+    store,
+    state,
+    report,
+    { keepGens: opts.keepGens, keepRunVersions: opts.keepRunVersions },
+    concurrency,
+    log,
+    withdrawals,
+    opts.prune !== false,
+  );
   return report;
 }
 
 /**
- * Delete surplus objects, plus whatever failed to delete on an earlier pass.
- * Never throws: the manifest is already flipped, the public site is already
- * correct, and a delete that fails is a retry, not an incident.
+ * Delete surplus objects, plus whatever failed to delete on an earlier pass,
+ * plus `withdrawals` (`planWithdraw`). Never throws: the manifest is already
+ * flipped, the public site is already correct, and a delete that fails is a
+ * retry, not an incident. With `surplus` off (`prune: false`) only the
+ * withdrawals and the retries are deleted.
  */
 async function runPrune(
   store: ObjectStore,
@@ -924,6 +979,8 @@ async function runPrune(
   limits: PruneLimits,
   concurrency: number,
   log: (line: string) => void,
+  withdrawals: readonly string[] = [],
+  surplus = true,
 ): Promise<void> {
   /*
    * A pending delete that names a key this pass re-uploaded is dropped rather
@@ -933,15 +990,18 @@ async function runPrune(
    * to come back under the same key — but the failure mode is a torn
    * generation, so it is worth the one filter.
    */
-  const retries = state.pendingDeletes.filter((p) => state.uploaded[p] === undefined);
-  state.pendingDeletes = retries;
-  const targets = [...new Set([...retries, ...planPrune(state, limits)])].sort();
+  // With `surplus` off the housekeeping is left exactly as it was — no retry,
+  // no trim — and only the withdrawals are deleted.
+  const retries = surplus ? state.pendingDeletes.filter((p) => state.uploaded[p] === undefined) : [];
+  const carried = surplus ? [] : state.pendingDeletes;
+  if (surplus) state.pendingDeletes = retries;
+  const targets = [...new Set([...retries, ...withdrawals, ...(surplus ? planPrune(state, limits) : [])])].sort();
   if (targets.length === 0) {
-    trimHistory(state, limits);
+    if (surplus) trimHistory(state, limits);
     return;
   }
 
-  const stillPending = new Set(retries);
+  const stillPending = new Set([...retries, ...carried]);
   const { ok, failed } = await pooled(targets, concurrency, async (path) => {
     await store.delete(path);
   });
@@ -968,7 +1028,7 @@ async function runPrune(
   state.pendingDeletes = pending;
   report.deleted.sort();
   report.deleteFailures.sort();
-  trimHistory(state, limits);
+  if (surplus) trimHistory(state, limits);
 }
 
 /** The one line a pass is worth in a log. */

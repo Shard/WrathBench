@@ -748,3 +748,39 @@ describe("the HTTP source reads the same bucket through the host", () => {
     expect(report.runs).toBeGreaterThan(0);
   });
 });
+
+// ------------------------------------------------------- unpublished runs
+
+describe("a run whose driver is not a model", () => {
+  test("the clean generation names none", async () => {
+    const report = await verifyPublication(cleanBucket());
+    expect(kinds(report.findings)).not.toContain("unpublished-run");
+  });
+
+  test("its driver in a run detail is a finding, and so is every object that names the run", async () => {
+    const src = poison(cleanBucket(), `${RUN_BASE}/detail.json`, (b) => {
+      (b["run"] as Record<string, unknown>)["driver"] = "reference";
+    });
+    // A live position names it too, with no driver of its own.
+    poison(src, LIVE_PATH, (b) => {
+      (b["positions"] as { positions: unknown[] }).positions.push({ runId: RUN_ID, ts: 1, map: 0, x: 1, y: 2, z: 3 });
+    });
+    const report = await verifyPublication(src);
+    const hits = report.findings.filter((f) => f.kind === "unpublished-run");
+    expect(hits.find((f) => f.key === `${RUN_BASE}/detail.json` && f.at === "run")?.detail).toContain("driver reference");
+    const naming = new Set(hits.filter((f) => f.detail.startsWith("names run")).map((f) => f.key));
+    for (const key of ["v1/snap/bbbbbbbbbbbb/runs.json", LIVE_PATH, `${RUN_BASE}/track.json`, `${RUN_BASE}/entries.json`, `${RUN_BASE}/scratchpad.json`]) {
+      expect(naming.has(key)).toBe(true);
+    }
+  });
+
+  test("its stamp alone is enough, as it is for the scheduler", async () => {
+    const src = poison(cleanBucket(), `${RUN_BASE}/detail.json`, (b) => {
+      const run = b["run"] as Record<string, unknown>;
+      run["driver"] = null;
+      run["shakeout"] = "unscored (scripted stub)";
+    });
+    const report = await verifyPublication(src);
+    expect(report.findings.some((f) => f.kind === "unpublished-run" && f.detail.includes("stamp unscored (scripted stub)"))).toBe(true);
+  });
+});
