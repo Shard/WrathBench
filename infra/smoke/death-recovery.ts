@@ -59,6 +59,7 @@ const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // Fresh character every run: the arc needs a level 1 that kobolds can kill.
 import { connect, type WrathClient } from "../../sdk/src/index";
 import { applyScenario, characterNames, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
+import { failOnce } from "./lib/fail";
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase, moduleWsBase } from "./lib/module";
@@ -108,10 +109,11 @@ async function cleanup() {
 }
 
 let step = "setup";
+// Cleanup is the priest's logout and delete (up to eight tries 3s apart) and
+// the warrior's session and delete (six tries 2s apart): 90s covers it.
+const { fail: failNow, failed } = failOnce({ prefix: () => `[probe] FAIL[${step}]`, cleanup, cleanupMs: 90_000 });
 function fail(msg: string): never {
-  console.error(`[probe] FAIL[${step}]: ${msg}`);
-  cleanup().finally(() => process.exit(1));
-  throw new Error("unreachable");
+  return failNow(msg);
 }
 
 async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
@@ -473,7 +475,11 @@ async function main() {
   priest = await connect({ baseUrl: BASE, token: PRIEST_TOKEN, secret: MODULE_SECRET });
   await priestLogin(priest);
   const priestGuid = priest.state.self.guid ?? fail("the priest has no guid after login");
-  if (priest.state.spell(SPELL_RESURRECTION) === undefined) fail(`${PRIEST} does not know Resurrection (${SPELL_RESURRECTION}) — did apply.ts place the vineyard-priest fixture?`);
+  // SMSG_INITIAL_SPELLS is folded asynchronously after login: poll for the
+  // book rather than read it at once (the pet smoke's wait).
+  const bookBy = Date.now() + 10_000;
+  while (priest.state.spell(SPELL_RESURRECTION) === undefined && Date.now() < bookBy) await Bun.sleep(100);
+  if (priest.state.spell(SPELL_RESURRECTION) === undefined) fail(`${PRIEST} does not know Resurrection (${SPELL_RESURRECTION}) after 10s (spellbook holds ${priest.state.spells().length}) — did apply.ts place the vineyard-priest fixture?`);
   const near = { x: bodyPos.x + 4, y: bodyPos.y, z: bodyPos.z };
   const walked = await priest.moveTo(near, { timeout: 60_000 });
   if (!walked.ok) fail(`the priest's walk to the body ended ${JSON.stringify(walked)}`);
@@ -518,4 +524,4 @@ async function main() {
   process.exit(0); // open WebSockets would otherwise hold the event loop
 }
 
-main().catch((e) => fail(String(e?.stack ?? e)));
+main().catch(failed);

@@ -52,6 +52,7 @@
  */
 
 import { authHeaders } from "./lib/auth";
+import { failOnce } from "./lib/fail";
 import { moduleBase, moduleWsBase } from "./lib/module";
 
 const BASE = moduleBase();
@@ -69,12 +70,15 @@ const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 function log(msg: string) {
   console.log(`[nav] ${msg}`);
 }
+// Best-effort session cleanup so a failed run does not leave the account
+// blocked for the next one (lib/fail.ts: once, awaited, then the exit).
+const { fail: failNow, failed } = failOnce({
+  prefix: () => "[nav] FAIL",
+  cleanup: () => fetch(`${BASE}/session`, { method: "DELETE", headers: authHeaders(), body: JSON.stringify({ token: TOKEN }) }),
+  cleanupMs: 3000,
+});
 function fail(msg: string): never {
-  console.error(`[nav] FAIL: ${msg}`);
-  const bail = () => process.exit(1);
-  setTimeout(bail, 3000);
-  fetch(`${BASE}/session`, { method: "DELETE", headers: authHeaders(), body: JSON.stringify({ token: TOKEN }) }).then(bail, bail);
-  throw new Error("unreachable");
+  return failNow(msg);
 }
 
 async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
@@ -357,4 +361,4 @@ async function main() {
   process.exit(0);
 }
 
-main().catch((e) => fail(String(e?.stack ?? e)));
+main().catch(failed);
