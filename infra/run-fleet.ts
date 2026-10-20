@@ -1903,8 +1903,8 @@ async function main(): Promise<void> {
         sets.running.delete(name);
         const drained = sets.draining.delete(name);
         markDrain(name, undefined);
-        // A policy or campaign job is not "finished": the projection, or the
-        // campaign's tally, decides whether it runs again (`finishesOnExit`).
+        // A policy or party campaign job is not "finished": the projection, or
+        // the campaign's tally, decides whether it runs again (`finishesOnExit`).
         const job = liveJobs.get(name);
         liveJobs.delete(name);
         if (!drained) sets.finished.add(name);

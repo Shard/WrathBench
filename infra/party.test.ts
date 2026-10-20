@@ -500,12 +500,16 @@ describe("a fresh attempt never reuses a run id", () => {
     expect(rosterResumes(spawn, false)).toBe(false);
   });
 
-  test("a campaign job whose roster exits undrained is started again; an operator's pinned job stays finished", () => {
+  test("a party job whose roster exits undrained is started again; a solo square and an operator's pinned job stay finished", () => {
     const [job] = pinnedCampaignJobs(at(2), stopped(1, stem));
     expect(finishesOnExit(job)).toBe(false);
     expect(finishesOnExit({ source: "policy" })).toBe(false);
     expect(finishesOnExit({ source: "pinned" })).toBe(true);
     expect(finishesOnExit(undefined)).toBe(true);
+    // A solo square is still yielded while its run is paused, so its exit stays parked.
+    const solo = { source: "pinned" as const, probe: { campaign: "solo", version: 1, cell: "a", arm: "base" } };
+    expect(finishesOnExit(solo)).toBe(true);
+    // The fate of a reap: this mirrors the loop body in run-fleet.ts, which is not under test itself.
     // The square is yielded again while v1's roster unwinds, which undrains
     // it; its exit must not keep the name out of the next start.
     const spawn = jobSpawn(job!, at(2).roster, "PARTY1", STAMP, undefined, at(2).campaigns);

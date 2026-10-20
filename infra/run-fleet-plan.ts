@@ -2366,18 +2366,22 @@ export function applyPause(spawns: JobSpawn[], paused: boolean): JobSpawn[] {
 /**
  * Whether a job whose roster exited on its own (not drained) joins
  * `sets.finished`, which keeps `diffJobs` from starting that name again until
- * the operator disables and re-enables it. A job the policy or a campaign made
- * up does not: the projection, or the campaign's tally and its
- * `maxAttemptsPerCell`, decides whether it runs again, exactly as after a
- * supervisor restart, which empties the set. A pinned campaign square keeps one
- * job name across its attempts and versions, so a finished set used to stop it
- * for good when its runs ended before its roster exited: the square was yielded
- * again meanwhile, which undrained the roster, and the undrained exit then
- * marked the name finished. An unknown job is the operator's, and stays
- * finished. Pure.
+ * the operator disables and re-enables it. A policy job does not: the
+ * projection decides whether it runs again. Nor does a party campaign's job:
+ * its campaign's tally and `maxAttemptsPerCell` decide, exactly as after a
+ * supervisor restart, which empties the set. A party square keeps one job name
+ * across its attempts and versions, and its runs end before its roster exits,
+ * so the square was yielded again meanwhile, which undrained the roster, and
+ * the undrained exit then parked the name for good. A party may be released
+ * this way because `pinnedCampaignJobs` plans no fresh attempt while one is
+ * live or paused. A solo square has no such guard (its paused run, still
+ * cooling, leaves the square yielded), so it stays parked as it always was.
+ * An unknown job is the operator's, and stays finished. Pure.
  */
-export function finishesOnExit(job: Pick<FleetJob, "source" | "probe"> | undefined): boolean {
-  return job === undefined || (job.source !== "policy" && job.probe === undefined);
+export function finishesOnExit(job: Pick<FleetJob, "source" | "probe" | "accounts"> | undefined): boolean {
+  if (job === undefined) return true;
+  if (job.source === "policy") return false;
+  return !(job.probe !== undefined && job.accounts !== undefined);
 }
 
 /** What the supervisor should do to make reality match the config. Pure. */

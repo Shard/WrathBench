@@ -236,7 +236,9 @@ export interface FleetJob {
   /**
    * Set on a job the scheduling policy made up, never on one from the file:
    * the n-th attempt on (model, episode), which suffixes the run id `-a<n>`
-   * from the second attempt on so every attempt has its own id.
+   * from the second attempt on so every attempt has its own id. A party
+   * campaign's square sets it too, from its version's tally, as the floor its
+   * spawn numbers up from (`freshAttempt`).
    */
   attempt?: number;
   /**

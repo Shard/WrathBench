@@ -2106,9 +2106,10 @@ A fresh launch never takes a run id already on disk: its stem is numbered
 own attempts against `maxAttemptsPerCell` from nothing, but its first
 launch after an older version's attempt on the same date is still `-a2`. A
 fresh launch also never resumes the day's roster file (`--resume-roster`
-is for a paused party only), and once an attempt's roster exits, the
-campaign's tally alone decides whether the square launches again. A solo
-probe square's same-day retry is numbered the same way.
+is for a paused party only). Once an attempt's roster exits, the campaign's
+tally alone decides whether the square launches again. A solo probe
+square's same-day retry is numbered the same way, but its exited roster
+still waits for a disable and re-enable, or a supervisor restart.
 The roster runs `bun infra/fixtures/stage-party.ts --request -` with one
 request on stdin (`infra/party-stager.ts` holds the contract). The request
 has the party id, campaign, version, scenario and level, and per member the
