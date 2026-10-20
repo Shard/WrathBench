@@ -6,11 +6,12 @@
  *
  *   fixture-live   unterminated, a fresh heartbeat, a trace to now, walking a
  *                  loop; `tick` keeps it live while the rig runs
- *   fixture-live-2, fixture-live-3
- *                  two more live characters for the map's live list, at other
- *                  levels and models: one a few hundred yards off on the same
- *                  continent, one on Kalimdor, so a pick from the list has a
- *                  camera move to show and a continent to cross to
+ *   fixture-live-2, fixture-live-3, fixture-live-4
+ *                  three more live characters for the map's live list, at
+ *                  other levels and models: one a few hundred yards off on the
+ *                  same continent, one on Kalimdor and one in the Deadmines'
+ *                  foundry, so a pick from the list has a camera move to show,
+ *                  a continent to cross to and an instance's own tiles
  *   fixture-ended  terminated `episode-limit` half an hour ago, two and a half
  *                  hours of trace to replay
  *   fixture-e90, fixture-reference
@@ -438,6 +439,7 @@ export interface Fixture {
 
 export const LIVE_RUN_2 = "fixture-live-2";
 export const LIVE_RUN_3 = "fixture-live-3";
+export const LIVE_RUN_4 = "fixture-live-4";
 
 /** Write the runs into `runsDir` relative to `now`, and hand back the live runs' ticker. */
 export function writeFixture(runsDir: string, now = Date.now()): Fixture {
@@ -490,6 +492,18 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
       scratchpad: PAD("Thornelle"),
       ground: { map: 1, x: -600, y: -4250, z: 38 },
       level: 3,
+    },
+    {
+      ...liveSpec,
+      runId: LIVE_RUN_4,
+      character: "Delvara",
+      model: "fixture/fourth-model",
+      startedAt: at(now - 40 * 60_000),
+      phase: (LOOP_MS * 3) / 4,
+      scratchpad: PAD("Delvara"),
+      // The round foundry room in the Deadmines (map 36), which a 25-yard loop stays inside.
+      ground: { map: 36, x: -203, y: -579, z: 19 },
+      level: 18,
     },
   ];
   const lives = liveSpecs.map((spec) => {

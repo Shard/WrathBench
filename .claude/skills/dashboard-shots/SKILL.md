@@ -15,7 +15,7 @@ bun wb dashboard shots --serve                             # the stack only: URL
 
 About 20–30 s. Put `--out` in your scratchpad. It writes
 `private-<state>.png` and `public-<state>.png` for `home`, `run-live`,
-`map-live` (nothing selected: the sidebar lists the three live characters),
+`map-live` (nothing selected: the sidebar lists the four live characters),
 `map-live-selected` (the live character's row clicked: the map framed on it,
 its money, bags and quests), `map-live-nearby` (then zoomed in on it: the
 units around it) and

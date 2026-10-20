@@ -56,14 +56,15 @@ export function positionAgeMs(ts: number, now: number, clock: FeedClock | null):
  * name for it would not be.
  *
  * An instance earns a name when it stops being a number a reader has to look
- * up — when it has tiles of its own to draw and agents actually ride it. The
- * Deeprun Tram is the first one to qualify on both counts; the rest of the
- * hundreds of instance ids stay numbers, which is the honest answer for a
- * place nothing has been to.
+ * up — when it has tiles of its own to draw and agents actually go there. The
+ * Deeprun Tram was the first to qualify on both counts and the Deadmines the
+ * second; the rest of the hundreds of instance ids stay numbers, which is the
+ * honest answer for a place nothing has been to.
  */
 const MAP_NAMES: Readonly<Record<number, string>> = {
   0: "Eastern Kingdoms",
   1: "Kalimdor",
+  36: "The Deadmines",
   369: "Deeprun Tram",
   530: "Outland",
   571: "Northrend",

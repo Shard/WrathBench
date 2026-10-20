@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseTrs, parseWmoTrs } from "../src/trs";
-import { mapDirectories, parseWdbc } from "../src/dbc";
+import { mapDirectories, mapInstanceTypes, parseWdbc } from "../src/dbc";
 import { buildWdbc, stringOffset } from "./fixtures";
 
 describe("parseTrs", () => {
@@ -66,9 +66,19 @@ describe("parseWmoTrs", () => {
   test("reads the group and the two tile indices", () => {
     const subway = parseWmoTrs(text).get("wmo\\dungeon\\az_subway")!;
     expect(subway).toEqual([
-      { group: 0, a: 0, b: 0, hash: "aaaa.blp" },
-      { group: 18, a: 1, b: 4, hash: "bbbb.blp" },
+      { model: "subway", group: 0, a: 0, b: 0, hash: "aaaa.blp" },
+      { model: "subway", group: 18, a: 1, b: 4, hash: "bbbb.blp" },
     ]);
+  });
+
+  test("names the model, since one directory can file several", () => {
+    const shared = [
+      "dir: WMO\\Dungeon\\AZ_Deadmines",
+      "WMO\\Dungeon\\AZ_Deadmines\\AZ_Deadmines_A_000_00_00.blp\taaaa.blp",
+      "WMO\\Dungeon\\AZ_Deadmines\\AZ_Deadmines_B_000_00_00.blp\tbbbb.blp",
+    ].join("\n");
+    const tiles = parseWmoTrs(shared).get("wmo\\dungeon\\az_deadmines")!;
+    expect(tiles.map((t) => t.model)).toEqual(["az_deadmines_a", "az_deadmines_b"]);
   });
 
   test("an ADT tile is never read as a group tile", () => {
@@ -83,9 +93,9 @@ describe("Map.dbc", () => {
   const strings = ["Azeroth", "Kalimdor", "Northrend"];
   const dbc = buildWdbc(
     [
-      [0, stringOffset(strings, "Azeroth"), 7],
-      [1, stringOffset(strings, "Kalimdor"), 7],
-      [571, stringOffset(strings, "Northrend"), 7],
+      [0, stringOffset(strings, "Azeroth"), 0],
+      [1, stringOffset(strings, "Kalimdor"), 0],
+      [571, stringOffset(strings, "Northrend"), 1],
     ],
     strings,
     3,
@@ -102,6 +112,16 @@ describe("Map.dbc", () => {
 
   test("rejects a non-WDBC buffer", () => {
     expect(() => parseWdbc(new Uint8Array(32))).toThrow(/not a WDBC/);
+  });
+
+  test("reads each map's instance type", () => {
+    expect(mapInstanceTypes(dbc)).toEqual(
+      new Map([
+        [0, 0],
+        [1, 0],
+        [571, 1],
+      ]),
+    );
   });
 
   test("maps lower-cased directory names to map ids", () => {

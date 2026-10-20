@@ -9,7 +9,7 @@
  *
  * What it stands up, all on loopback and ephemeral ports, all under DIR/.rig:
  *
- *  - the runs: the synthetic fixture (`infra/shots/fixture.ts`: three live runs
+ *  - the runs: the synthetic fixture (`infra/shots/fixture.ts`: four live runs
  *    kept live while the rig runs, one ended run to replay), or copies of the
  *    run directories `--run` names, which are never served or written in place;
  *  - the private viewer: the viewer's own `createApi` over those runs, with an
