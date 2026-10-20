@@ -2250,3 +2250,56 @@ steady state:
 - A run detail page shows its published entries window and nothing more: no
   "load earlier", no live tail, no raw line. If a raw line ever renders, stop
   the publisher — the content boundary has a hole.
+
+### Every Eval Ever export
+
+`bun wb export eee` writes the scored ladders, `e90` and `e360`, as
+[Every Eval Ever](https://github.com/evaleval/every_eval_ever) aggregate
+records (schema 0.3.0, vendored at `infra/eee/eval.schema.json`). It reads the
+same artifacts the public site does — `ladder-e90.json` and `ladder-e360.json`,
+already through the public projection — and derives each record with the
+ladder page's own code (`dashboard/src/lib/ladder.ts`), so the numbers are the
+site's. Freeplay and probes have no scored ladder and are never read.
+
+```
+bun wb export eee --base https://wrathbench-data.shard.page   # the published generation, no credential
+bun wb export eee --runs data/runs                            # rendered from a runs tree, as the publisher does
+bun wb export eee --base … --series 0.5 --out data/eee/0.5 --bundle data/eee/0.5.json
+```
+
+One record per (series, episode, harness, model, effort, compaction window),
+over the runs the ladder ranks: no live, paused, lapsed or steered run, and no
+scripted reference. `--exclude-free` applies the page's default of hiding free
+runs; without it every scored run counts. Each record carries the series as
+`eval_library.version` and every exact harness version in the cell, the harness
+label as `agent_scaffold`, the effort, the run ids, `n`, and three results that
+are the ladder's three keys — `highest_rung`, `best_level` (with the xp within
+it, and the min, median and max level of the cell's runs) and `best_money` —
+plus the order between them, since EEE has no field for a ranking that is not
+one number. No game text: rung numbers, never titles, and no character, zone or
+map. Every record is scanned as the publisher scans a body, and a finding
+writes nothing. A run left out is counted on stdout with its reason: a flat
+model id the lineup (`infra/model-lineup.json`) does not claim has no developer
+EEE could file it under.
+
+Output is the datastore's own layout, `<out>/data/wrathbench/<developer>/<model>/<uuid>.json`,
+under `data/eee/<snapshot time>/` by default, and the file name is fixed by the
+record's identity, so a re-export of a cell lands on the same file. EEE's
+validator reads that tree as it stands; it is a Python package, so run it from
+a throwaway venv outside this checkout, with Hugging Face's client offline:
+
+```
+uv venv /tmp/eee-venv && VIRTUAL_ENV=/tmp/eee-venv uv pip install every-eval-ever==0.3.0
+HF_HUB_OFFLINE=1 /tmp/eee-venv/bin/python -I -m every_eval_ever validate '<out>/data/wrathbench/*/*/*.json'
+```
+
+Exit 0 is clean, 2 is warnings only (which still block a merge there), 1 is an
+error. The export submits nothing. Submitting is the operator's decision, made
+on EEE's side: a pull request to the `evaleval/EEE_datastore` dataset on
+Hugging Face carrying `data/wrathbench/`, titled `[Submission] …`, with the
+coverage line from stdout, after which the datastore bot (`/eee validate
+changed`) and an EvalEval maintainer review it. EEE also asks for the
+converter as an adapter in its own repository and for the benchmark and
+metric ids in `eval-card-registry`; model ids are not resolved against that
+registry here (`model_info.additional_details.registry_resolution`), because
+resolving is a call to a hosted service.

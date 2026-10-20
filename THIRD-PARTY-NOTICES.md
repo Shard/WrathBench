@@ -12,6 +12,10 @@ The model logos committed under `dashboard/src/assets/model-logos/` are extracte
 
 The logos are brand marks of the companies they identify and remain those companies' trademarks. WrathBench uses them only to identify which model a run was driven by; their presence implies no affiliation with or endorsement by their owners.
 
+## Every Eval Ever schema
+
+`infra/eee/eval.schema.json` is the aggregate results schema of Every Eval Ever (github.com/evaleval/every_eval_ever), version 0.3.0, copied unmodified from commit `0791adc3c2488cc8c91d109b3c541da492238e49`. It is Copyright (c) 2026 EvalEval and licensed under the MIT license; that copyright and license are not changed by WrathBench's root MIT license. The export's tests (`infra/eee-export.test.ts`) read it to check every record `bun wb export eee` writes.
+
 ## Bundled runtime dependencies
 
 The public dashboard ships as a built bundle (`dashboard/dist`, deployed by `infra/deploy-dashboard.sh`), so these are redistributed as part of that artefact even though the repository itself carries only the lockfile entry. Both are MIT: `solid-js` (Copyright (c) 2016-2025 Ryan Carniato) and `@solidjs/router` (Copyright (c) 2020-2022 Ryan Carniato). Their copyright and license are not changed by WrathBench's root MIT license.
