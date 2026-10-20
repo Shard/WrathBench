@@ -1720,7 +1720,8 @@ export interface DeathSite {
   /**
    * The corpse, and which packet said where it is: `death_spot` is the position
    * at the moment health reached 0, `corpse_query` the server's own answer.
-   * Null when neither had been observed by the sample that saw the death.
+   * Null when neither had been observed by the sample that saw the death, or
+   * when the corpse was inside a dungeon and only its entrance was known.
    */
   position: { map: number; x: number; y: number; z: number; source: "corpse_query" | "death_spot" } | null;
   /**

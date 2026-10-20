@@ -193,7 +193,7 @@ export interface SnapshotLike {
     targetGuid?: ObservedLike;
     /** Raw per-field record (a Map serialized to an object). Read for the ghost flag. */
     fields?: Record<string, ObservedLike | undefined>;
-    /** Where the corpse is while dead: `{ map, x, y, z, source }` (SDK `state.self.corpse`). */
+    /** Where the corpse is while dead: `{ map, x, y, z, source, instanceMap? }` (SDK `state.self.corpse`). */
     corpse?: ObservedLike;
     /** The graveyard the spirit was released to: `{ map, x, y, z }`. */
     graveyard?: ObservedLike;
@@ -588,9 +588,18 @@ function ghostLine(
       ? `${Math.round(p.x)},${Math.round(p.y)}`
       : "?,?";
   const grave = s.graveyard?.value as { x?: number; y?: number } | undefined;
-  const corpse = s.corpse?.value as { map?: number; x?: number; y?: number } | undefined;
+  const corpse = s.corpse?.value as { map?: number; x?: number; y?: number; instanceMap?: number } | undefined;
   const delay = s.reclaimDelay?.value as { readyAt?: number } | undefined;
   const where = grave !== undefined ? `ghost at graveyard (${xy(grave)})` : "ghost";
+  const healer = "or Spirit Healer at the graveyard (-25% durability; resurrection sickness from level 11)";
+  // A corpse inside a dungeon, asked about from outside it: the position is
+  // the entrance the server substitutes, and no reclaim reaches the corpse.
+  if (corpse !== undefined && typeof corpse.instanceMap === "number" && pos?.map !== corpse.instanceMap) {
+    return (
+      `${where}; corpse inside the dungeon on map ${corpse.instanceMap}: ` +
+      `walk into its portal as a ghost to come back to life inside, ${healer}`
+    );
+  }
   let corpsePart: string;
   if (corpse === undefined) {
     corpsePart = "corpse position not observed yet (state.self.corpse)";
@@ -605,10 +614,7 @@ function ghostLine(
   }
   const secs = typeof delay?.readyAt === "number" ? Math.max(0, Math.ceil((delay.readyAt - now) / 1000)) : undefined;
   const when = secs === undefined ? "after the reclaim delay" : secs === 0 ? "now" : `after ${secs}s`;
-  return (
-    `${where}; ${corpsePart}: reclaim within 39y ${when} (no sickness), ` +
-    "or Spirit Healer at the graveyard (-25% durability; resurrection sickness from level 11)"
-  );
+  return `${where}; ${corpsePart}: reclaim within 39y ${when} (no sickness), ${healer}`;
 }
 
 /**
