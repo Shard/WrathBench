@@ -303,6 +303,19 @@ const STEEP_BAD_LIP_TO = { x: -6140, y: -3370 };
 const STEEP_BAD_BASIN = { x: -6050, y: -3300, z: 258.71 };
 const STEEP_BAD_BASIN_TO = { x: -6121.87, y: -3482.93 };
 
+// The swim smoke's shore: the open sea north of Menethil Harbor (map 0,
+// Wetlands, zone 11), where a freeplay run crossed the bay at about 13 y/s
+// before the module swam. Read off the server data's own terrain and liquid
+// grid (data/client/maps): dry ground at about 9.5 to x -3610, the bed
+// falling to 1.5y under the sea's surface (level 0) at about x -3601 and to
+// 8-35y deep from x -3590 out to x -2960, open ocean the whole way (no dark
+// water, so no fatigue). The swimmer stands on the shore facing the sea, the
+// observer ten yards behind it, inside visibility of the swim start.
+export const SWIM_SHORE = { x: -3622, y: -797.5, z: 9.54 };
+export const SWIM_OBSERVER_SPOT = { x: -3632, y: -788, z: 9.9 };
+export const SWIM_SEA_LEVEL = 0;
+const SWIM_SEA_TOWARD = { x: -3480, y: -800 };
+
 export const SCENARIOS = {
   "mcbride-report": {
     description: "level 5, no money, in front of Marshal McBride with the Northshire chain up to Skirmish at Echo Ridge (21) rewarded (for the read-item smoke: Report to Goldshire hands out a readable letter)",
@@ -586,6 +599,18 @@ export const SCENARIOS = {
     level: 80,
     money: 0,
     position: { map: 0, zone: 3, ...STEEP_BAD_BASIN, o: facing(STEEP_BAD_BASIN, STEEP_BAD_BASIN_TO) },
+  },
+  "swim-menethil-shore": {
+    description: "level 80, no money, on the shore north of Menethil Harbor facing the open sea (swim smoke: the swimmer)",
+    level: 80,
+    money: 0,
+    position: { map: 0, zone: 11, ...SWIM_SHORE, o: facing(SWIM_SHORE, SWIM_SEA_TOWARD) },
+  },
+  "swim-menethil-observer": {
+    description: "level 80, no money, on the shore north of Menethil Harbor beside the swimmer's start (swim smoke: the observer)",
+    level: 80,
+    money: 0,
+    position: { map: 0, zone: 11, ...SWIM_OBSERVER_SPOT, o: facing(SWIM_OBSERVER_SPOT, SWIM_SEA_TOWARD) },
   },
 } as const satisfies Record<string, Scenario>;
 
