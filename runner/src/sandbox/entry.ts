@@ -13,8 +13,10 @@
  *               after something closed it
  *   sleep(ms, options?)  Promise timer that resolves with why it woke:
  *               "elapsed", or early with "attacked" (a unit started attacking
- *               us) or "died" (our health reached zero, transition only).
- *               `{ wake: false }` is a pure timer. Rejects with the abort
+ *               us), "died" (our health reached zero, transition only) or
+ *               "chat" (a party, raid or whisper line from another player).
+ *               `{ wake: false }` sleeps through attacks and deaths; chat
+ *               still wakes it. Rejects with the abort
  *               reason if this snippet is abandoned; an awaited sleep asked
  *               for at least the time the snippet had left is named in the
  *               abandon message, and is never shortened for it
@@ -77,7 +79,7 @@ import { WrathClient, type StreamEvent } from "@wrathbench/sdk";
 import { keepsAnswer, reparseFrame } from "./client-cache";
 import { compileSnippet } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
-import { CONTEXT_POLICY, foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../context";
+import { CONTEXT_POLICY, foldUiOpenWindows, isGroupOrWhisperChat, PLAYER_FLAGS_GHOST } from "../context";
 import { NearbyRecorder } from "./nearby-recorder";
 import { PartyWatcher } from "./party-watch";
 import { TraceRecorder } from "./trace-recorder";
@@ -805,10 +807,10 @@ function releasePadCalls(id: number): void {
 const API_MD_PATH = join(import.meta.dir, "..", "..", "..", "sdk", "API.md");
 
 /**
- * Why `sleep` resolves. `elapsed` is the timer; the other two are the world
+ * Why `sleep` resolves. `elapsed` is the timer; the others are the world
  * interrupting a wait the model would want to react to.
  */
-export type SleepReason = "elapsed" | "attacked" | "died";
+export type SleepReason = "elapsed" | "attacked" | "died" | "chat";
 
 /**
  * The abandon-note sentence for a sleep of `ms` starting now, or undefined when
@@ -856,24 +858,32 @@ function withSleepAbandon(reason: unknown, note: string): Error {
 }
 
 /**
- * `sleep(ms)` — a timer that also wakes for the two things a sleeping snippet
+ * `sleep(ms)` — a timer that also wakes for the things a sleeping snippet
  * most needs to hear about, and says which happened.
  *
  * Sleep is blind: nothing about `await sleep(28000)` notices a mob walking up
  * behind the character, and the trajectories are full of 28-second naps that
  * ended in a corpse. So the timer additionally resolves early when the server
  * says a unit started attacking *us* (`SMSG_ATTACKSTART` with our guid as the
- * victim) or when our own health is observed reaching zero, and the resolved
- * value names the reason. Ignoring the value costs nothing, and an early
- * resolve is harmless inside `Promise.race([routine, sleep(ms)])` — the race's
- * whole point is that the first settle wins.
+ * victim), when our own health is observed reaching zero, or when another
+ * player says something to our group or to us (a party, raid or raid-warning
+ * line, or a whisper received — the party runs' sleeps were mostly polls of
+ * `state.chat`, and one slept through a resurrection offer), and the resolved
+ * value names the reason. Our own lines, our whisper's echo, creature speech
+ * and say/yell/emote/channel/system lines do not wake it. Ignoring the value
+ * costs nothing, and an early resolve is harmless inside
+ * `Promise.race([routine, sleep(ms)])` — the race's whole point is that the
+ * first settle wins.
  *
  * Two deliberate non-wakes:
  *   - `died` fires on the *transition* only. A snippet that sleeps while
  *     already dead (waiting out the corpse reclaim delay is the single most
  *     common long sleep in the runs) is not woken by the death it is already
  *     handling.
- *   - `{ wake: false }` is a pure timer for a caller that wants one.
+ *   - `{ wake: false }` sleeps through attacks and deaths, for a caller that
+ *     wants to. Chat still wakes it: a timer sleep (a reclaim delay,
+ *     resurrection sickness) is exactly when a party member's line or offer
+ *     goes unheard.
  *
  * The ambient snippet signal still aborts it: an abandoned snippet's sleep
  * rejects rather than resolving. When the sleep was asked for at least the
@@ -888,7 +898,7 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
     const shown = ms === undefined ? "undefined" : typeof ms === "number" ? String(ms) : typeof ms;
     throw new TypeError(
       `sleep(ms) needs a non-negative number of milliseconds, got ${shown} — e.g. sleep(2000), ` +
-        `or sleep(2000, { wake: false }) for a timer that ignores being attacked`,
+        `or sleep(2000, { wake: false }) to sleep through attacks`,
     );
   }
   if (options !== undefined && (options === null || typeof options !== "object")) {
@@ -896,7 +906,7 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
   }
   const wakeOpt = options?.wake;
   if (wakeOpt !== undefined && typeof wakeOpt !== "boolean") {
-    throw new TypeError(`sleep(ms, { wake }) needs a boolean, got ${typeof wakeOpt} — { wake: false } is a pure timer`);
+    throw new TypeError(`sleep(ms, { wake }) needs a boolean, got ${typeof wakeOpt} — { wake: false } sleeps through attacks`);
   }
 
   return new Promise<SleepReason>((resolve, reject) => {
@@ -913,6 +923,7 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
     // so only a *later* one wakes it.
     let deadAtLastCheck = selfDead();
     let offAttack: (() => void) | undefined;
+    let offChat: (() => void) | undefined;
     let offAny: (() => void) | undefined;
 
     const settle = (reason: SleepReason): void => {
@@ -923,6 +934,7 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
       offAttack?.();
+      offChat?.();
       offAny?.();
     }
     function onAbort(): void {
@@ -932,10 +944,16 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
     const timer = setTimeout(() => settle("elapsed"), ms);
     signal?.addEventListener("abort", onAbort, { once: true });
 
-    if (wakeOpt === false) return;
     // Registered after the client's own state fold (`onAny` handlers run in
-    // registration order and the cache is the first one), so both of these see
+    // registration order and the cache is the first one), so all of these see
     // a state cache that already has this event in it.
+    offChat = client.events.on("SMSG_MESSAGECHAT", (e) => {
+      const d = e.data as { type?: unknown; senderGuid?: unknown };
+      const me = client.state.self.guid;
+      const fromOther = me !== undefined && typeof d?.senderGuid === "string" && d.senderGuid !== me;
+      if (fromOther && isGroupOrWhisperChat(d)) settle("chat");
+    });
+    if (wakeOpt === false) return;
     offAttack = client.events.on("SMSG_ATTACKSTART", (e) => {
       const d = e.data as { victimGuid?: unknown };
       const me = client.state.self.guid;

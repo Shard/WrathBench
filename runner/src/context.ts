@@ -404,6 +404,19 @@ const CHAT_TYPE_LABEL: Readonly<Record<number, string>> = {
  */
 const NAME_TEMPLATE_TYPES: ReadonlySet<number> = new Set([0x0a, 0x0b, 0x10, 0x29, CHAT_MSG_ACHIEVEMENT, CHAT_MSG_GUILD_ACHIEVEMENT]);
 
+/**
+ * The types a player addresses to our group or to us: `PARTY`/`PARTY_LEADER`,
+ * `RAID`/`RAID_LEADER`/`RAID_WARNING`, and a whisper received (`WHISPER`,
+ * `WHISPER_FOREIGN`). Not our own whisper's echo (`WHISPER_INFORM`), whose
+ * sender is the recipient; whether the line is our own is the caller's check.
+ */
+const GROUP_OR_WHISPER_TYPES: ReadonlySet<number> = new Set([0x02, 0x33, 0x03, 0x27, 0x28, 0x07, 0x08]);
+
+/** A party, raid or whisper line by `type` (`GROUP_OR_WHISPER_TYPES`). */
+export function isGroupOrWhisperChat(c: ChatLineLike): boolean {
+  return typeof c.type === "number" && GROUP_OR_WHISPER_TYPES.has(c.type);
+}
+
 /** Creature speech and emotes (`MONSTER_SAY`..`MONSTER_EMOTE`, `RAID_BOSS_EMOTE`/`_WHISPER`). */
 export function isCreatureChat(c: ChatLineLike): boolean {
   return typeof c.type === "number" && ((c.type >= 0x0c && c.type <= 0x10) || c.type === 0x29 || c.type === 0x2a);
