@@ -83,9 +83,8 @@ general one that covers codex too, with each CLI's own `auto` staying the
 default on every driver and a probe campaign comparing windows (arms `auto`,
 100k, 200k and 300k) (operator, 2026-10-11). `pi`, the pi coding-agent CLI, is
 a labelled harness of the same kind, its own comparability group and
-probe-only until the operator promotes it; `wrathbench` stays the reference
-harness, and pi's campaign compacts at a fixed 300k-token window (operator,
-2026-10-20).
+probe-only until the operator promotes it, and its campaign compacts at a
+fixed 300k-token window (operator, 2026-10-20).
 
 ## Client fidelity
 

@@ -24,8 +24,10 @@ import { COMPACTED_NOTICE, piAutoCompactLimit, piReserveTokens, piWindowCapRefus
 import { comparabilityOf, promptHash } from "../src/comparability";
 import { harnessClash, loadRunConfig } from "../src/config";
 import { CODEX_SYSTEM_PROMPT, CLAUDE_CODE_SYSTEM_PROMPT, PI_SYSTEM_PROMPT, SYSTEM_PROMPT, buildSystemPrompt, contextSentence } from "../src/prompt";
-import { piProviderOf } from "../src/providers";
+import { piProviderOf, rosterKeyRefusal } from "../src/providers";
 import { priceFor, rosterPriceGap, runCost } from "../viewer/pricing";
+import { projectEntry } from "../viewer/public-projection";
+import { summarize } from "../viewer/tail";
 import { EpisodicLog } from "../src/episodic";
 import { Scratchpad } from "../src/scratchpad";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
@@ -36,6 +38,8 @@ import { tempDirs } from "./fixtures/temp-dirs";
 const tempDir = tempDirs();
 const FIXTURE = join(import.meta.dir, "fixtures", "fake-pi.ts");
 const BASE = "https://api.deepseek.com/v1";
+/** A pi run is a campaign's square: the identity a campaign file gives it. */
+const PROBE = { episode: "probing", campaign: "pi-vs-wrathbench", campaignVersion: 1, cell: "dwarf-paladin", arm: "pi", ref: "deepseek-flash-pi" };
 
 function fakeSandbox(): SandboxHost {
   return {
@@ -83,6 +87,7 @@ function setup(mode: string, extraConfig: Record<string, unknown> = {}, fakeEnv:
       model: "deepseek-flash",
       apiBase: BASE,
       apiKeyEnv: "DEEPSEEK_KEY",
+      ...PROBE,
       runsDir: tempDir("wrathbench-pi-runs-"),
       stepIntervalMs: 0,
       stateIntervalMs: 1,
@@ -224,11 +229,29 @@ describe("pi driver", () => {
     const { runDir, options } = setup("tools", { maxTurns: 1 }, { WB_FAKE_TRUNCATE: "1" });
     await runPiEpisode(options);
     const t = entries(runDir);
-    const cut = t.find((e) => e["t"] === "harness" && e["kind"] === "tool_result_truncated")!;
+    const cut = t.find((e) => e["t"] === "pi_tool_result_truncated")!;
     expect(cut).toMatchObject({ turn: 1, name: "run_snippet", toolCallId: "call-1" });
     expect(String(cut["text"])).toStartWith("Warning: truncated output");
     // What our server answered stays on the snippet result, whole.
     expect(String(t.find((e) => e["t"] === "snippet_result")!["text"])).toContain("ran:");
+  });
+
+  test("the public projection carries none of pi's own words, endpoint or key, and none of the text it truncated", async () => {
+    const failed = setup("error500");
+    await runPiEpisode(failed.options);
+    const cut = setup("tools", { maxTurns: 1, compactWindow: "300k" }, { WB_FAKE_TRUNCATE: "1", WB_FAKE_COMPACT_TURN: "1" });
+    await runPiEpisode(cut.options);
+    for (const runDir of [failed.runDir, cut.runDir]) {
+      const projected = JSON.stringify(entries(runDir).map((e, i) => projectEntry(summarize(e, i, 0, 0))));
+      expect(projected).not.toContain("fake error 500");
+      expect(projected).not.toContain("Warning: truncated output");
+      expect(projected).not.toContain("api.deepseek.com");
+      expect(projected).not.toContain("DEEPSEEK_KEY");
+      expect(projected).not.toContain("sk-deepseek");
+      expect(projected).not.toContain("piCostUsd");
+      // Compaction counts cross, the summary does not.
+      expect(projected).not.toContain("level up");
+    }
   });
 
   test.each([
@@ -245,7 +268,27 @@ describe("pi driver", () => {
     const outcome = await runPiEpisode(options);
     expect(outcome).toMatchObject({ kind: "terminated", reason: "adapter-error" });
     expect(entries(runDir).filter((e) => e["t"] === "request").length).toBe(3);
-    expect(entries(runDir).filter((e) => e["t"] === "harness" && e["kind"] === "pi_error").length).toBe(3);
+    expect(entries(runDir).filter((e) => e["t"] === "pi_error").length).toBe(3);
+  });
+
+  test("teardown takes pi and the MCP bridge it launched down with it", async () => {
+    const { recordPath, options } = setup("tools", { maxTurns: 1 });
+    await runPiEpisode(options);
+    const rec = readRecord(recordPath);
+    const alive = (pid: number): boolean => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const gone = async (pid: number): Promise<boolean> => {
+      for (let i = 0; i < 100 && alive(pid); i++) await new Promise((r) => setTimeout(r, 50));
+      return !alive(pid);
+    };
+    expect(await gone(rec["pid"] as number)).toBe(true);
+    expect(await gone(rec["mcpPid"] as number)).toBe(true);
   });
 
   test("pi exiting mid-turn is an adapter error", async () => {
@@ -331,6 +374,10 @@ describe("pi driver pieces", () => {
   test("the endpoint: pi runs on DeepSeek's key, and refuses a key it has no provider for", () => {
     expect(piProviderOf("DEEPSEEK_KEY")).toEqual({ provider: "deepseek" });
     expect(piProviderOf("OPENROUTER_KEY")).toMatchObject({ refusal: expect.stringContaining("no pi provider for OPENROUTER_KEY") });
+    // Refused as the roster entry, so a campaign's squares of it are parked rather than spent on failed launches.
+    expect(rosterKeyRefusal({ driver: "pi", apiBase: BASE, apiKeyEnv: "DEEPSEEK_KEY" })).toBeNull();
+    expect(rosterKeyRefusal({ driver: "pi", apiBase: "https://openrouter.ai/api/v1", apiKeyEnv: "OPENROUTER_KEY" })).toContain("no pi provider for OPENROUTER_KEY");
+    expect(rosterKeyRefusal({ driver: "openai", apiBase: "https://openrouter.ai/api/v1", apiKeyEnv: "OPENROUTER_KEY" })).toBeNull();
   });
 
   test("the prompt: the CLI render, byte for byte, so no existing pin moves", () => {
@@ -343,7 +390,7 @@ describe("pi driver pieces", () => {
   });
 
   test("the tuple stamps the pi harness and the window; the prompt hash is the CLI render's", () => {
-    const config = loadRunConfig({ driver: "pi", model: "deepseek-flash", apiBase: BASE, apiKeyEnv: "DEEPSEEK_KEY", compactWindow: "300k" });
+    const config = loadRunConfig({ driver: "pi", model: "deepseek-flash", apiBase: BASE, apiKeyEnv: "DEEPSEEK_KEY", compactWindow: "300k", ...PROBE });
     const tuple = comparabilityOf(config, "harness-0.5-1-gabc");
     expect(tuple.harness).toBe("pi");
     expect(tuple.compactWindow).toBe("300k");
@@ -360,6 +407,18 @@ describe("pi driver pieces", () => {
     expect(rosterPriceGap({ model: "deepseek-flash", driver: "pi", apiBase: BASE })).toBeNull();
     // No provider charge is ever read for it: only the estimate.
     expect(runCost({ run, tokens: null, reportedUsd: null }).actual.usd).toBeNull();
+  });
+
+  test("a pi run launches only as a campaign's square: a scored, freeplay or unnamed episode is refused", () => {
+    const base = { driver: "pi", model: "deepseek-flash", apiBase: BASE, apiKeyEnv: "DEEPSEEK_KEY" };
+    for (const episode of ["e90", "e360", "freeplay", undefined]) {
+      expect(() => loadRunConfig({ ...base, ...(episode !== undefined ? { episode } : {}) })).toThrow(/driver pi is probe-only/);
+    }
+    // A probing run with no campaign named is no square either.
+    expect(() => loadRunConfig({ ...base, episode: "probing" })).toThrow(/driver pi is probe-only/);
+    expect(loadRunConfig({ ...base, ...PROBE }).campaign).toBe("pi-vs-wrathbench");
+    // Every other driver is unaffected.
+    expect(loadRunConfig({ driver: "openai", model: "deepseek-flash", apiBase: BASE, apiKeyEnv: "DEEPSEEK_KEY", episode: "e90" }).episode).toBe("e90");
   });
 
   test("a pi entry is outside the one-model-one-harness rule, since it never runs in a scored lane", () => {

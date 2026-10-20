@@ -256,7 +256,8 @@ of the three outside the registry and the adapters.
   - `probeOnly`: whether it runs only as a probe-campaign arm until the
     operator promotes it. Its entries are outside `harnessClash`, the policy
     gives them no target and no idle work, and a queue job outside a campaign
-    cannot run them (`runnableRefs`).
+    cannot run them (`runnableRefs`), and `loadRunConfig` refuses a run of it
+    on any episode but a campaign's `probing`.
   - `bill` (metered, subscription or none) and, for a subscription, its
     `lane`: the lane key, the default variable, whether the variable holds a
     token or a home directory, whether the fleet places runs among several
@@ -828,13 +829,18 @@ a logging proxy that refused everything.
   `--no-skills`, `--no-prompt-templates`, `--no-themes`, `--no-context-files`
   and `--no-approve` turn off every other source, and the cwd is an empty temp
   directory. `--offline` and `PI_OFFLINE=1` stop the model-catalogue refresh RPC
-  mode otherwise starts (`dist/main.js`) and the version check
-  (`dist/utils/version-check.js`); `PI_TELEMETRY=0` and
+  mode otherwise starts (`dist/main.js:455-458`, `:766`) and the version check
+  (`dist/utils/version-check.js:37`); `PI_TELEMETRY=0` and
   `enableInstallTelemetry: false` stop install reporting and the provider
-  attribution headers (`dist/core/telemetry.js`); `cacheWarming: "off"` stops
-  idle cache-refresh requests, which would be billed and seen by no record.
-  In the network-namespace check no request reached the proxy and none left
-  for any host but the stub.
+  attribution headers (`dist/core/telemetry.js:6-8`,
+  `dist/core/provider-attribution.js:28`); `cacheWarming: "off"` stops idle
+  cache-refresh requests, which would be billed and seen by no record. The
+  `@earendil-works/pi-telemetry` package pi bundles has no exporter at all
+  (its own README: "no exporter … or dependency on a telemetry backend"). In
+  the network-namespace check no request reached the proxy and none left for
+  any host but the stub; the same check without the switches is the positive
+  control, and there pi opened `CONNECT pi.dev:443` through the proxy within
+  seconds of starting.
 - **The endpoint and its one key.** pi keeps its own model catalogue, with
   each model's context window, output cap and request quirks. The driver keeps
   that metadata and points pi's built-in provider for the run's key at the
@@ -854,8 +860,12 @@ a logging proxy that refused everything.
   reports differently from the one asked ends as `harness-error` before its
   first turn. Absent is pi's own default, recorded on `pi_state` (`high` on
   deepseek-flash, sent as `thinking: {type: "enabled"}` with
-  `reasoning_effort: "high"`); a comparison against a `wrathbench` arm names
-  the same effort on both, or it has a confound.
+  `reasoning_effort: "high"`), so pi cannot send "no level" the way the fixed
+  loop does; a comparison against a `wrathbench` arm names the same effort on
+  both, or it has a confound. The same level can still reach the wire in
+  different bytes: `none` on pi is `thinking: {type: "disabled"}` with no
+  `reasoning_effort`, where the openai driver sends `reasoning_effort: "none"`
+  (captured on the stub).
 - **Usage per request.** Each assistant `message_end` is a `response` record
   with its usage: pi's `input` excludes the cache, so `prompt_tokens` is input
   plus cache read plus cache write, the claude-code arithmetic; reasoning
@@ -873,7 +883,7 @@ a logging proxy that refused everything.
   `rate-limited` (`quota-exhausted` with quota wording), 401 and 403
   `auth-failed`, all pauses; an overflow pi could not compact its way out of is
   `context-limit`. Anything else is a session note to the model ("the previous
-  turn ended with an error from the CLI") with pi's words on a `pi_error`
+  turn ended with an error from the CLI before it finished.", codex's bytes) with pi's words on a private `pi_error`
   record, and three such turns in a row end the run as `adapter-error`. pi
   exiting mid-turn is `adapter-error`.
 
@@ -927,8 +937,8 @@ compacts against its catalogue's 1,000,000.
   "[Full output: <path> (read it with offset/limit)]"), naming a file the model
   has no tool to read. The constant is not configurable. Our tool results
   have no cap of their own (a snippet's value, a long event list), so the
-  driver records what the model was shown as a `harness` record of kind
-  `tool_result_truncated` beside the full `snippet_result`, and pi's temp
+  driver records what the model was shown as a record of type
+  `pi_tool_result_truncated` (private, like `pi_error`) beside the full `snippet_result`, and pi's temp
   directory is inside the episode's own temp cwd, deleted with it.
 - **A reply cut off at its output cap** has its tool calls failed by pi with
   its own words ("the response hit the output token limit… Re-issue the tool
@@ -941,11 +951,16 @@ compacts against its catalogue's 1,000,000.
 
 ### Setup
 
+A pi run is a probe campaign's square and nothing else: `loadRunConfig`
+refuses the `pi` driver on any episode but `probing` with a campaign named,
+so a hand launch names a published campaign and cell, as any probe does
+(docs/RUNBOOK.md, "Probe campaigns"):
+
 ```bash
 # DEEPSEEK_KEY in .env, as for the openai driver on DeepSeek
 WRATHBENCH_MODULE_URL=http://127.0.0.1:8086 ./infra/run-episode.sh --driver pi \
   --model deepseek-flash --api-base https://api.deepseek.com/v1 --api-key-env DEEPSEEK_KEY \
-  --effort high --local
+  --effort high --campaign <id>@<v> --cell <cell> --local
 ```
 
 `--local` needs the pinned `pi` on PATH. The run is metered against the

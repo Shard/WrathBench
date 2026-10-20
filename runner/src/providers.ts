@@ -184,8 +184,19 @@ export function rosterKeyRefusal(
   e: { driver?: unknown; apiBase?: unknown; apiKeyEnv?: unknown },
   env: Record<string, string | undefined> = process.env,
 ): string | null {
-  if (driverEntry(e.driver ?? DEFAULT_DRIVER)?.endpoint !== true) return null;
+  const driver = driverEntry(e.driver ?? DEFAULT_DRIVER);
+  if (driver?.endpoint !== true) return null;
   if (e.apiKeyEnv !== undefined && typeof e.apiKeyEnv !== "string") return "apiKeyEnv must be the NAME of the env var holding the key";
   if (e.apiBase !== undefined && typeof e.apiBase !== "string") return "apiBase must be a URL";
-  return apiKeyRefusal(e.apiKeyEnv ?? DEFAULT_API_KEY_ENV, e.apiBase ?? DEFAULT_API_BASE, env);
+  const keyEnv = e.apiKeyEnv ?? DEFAULT_API_KEY_ENV;
+  const pair = apiKeyRefusal(keyEnv, e.apiBase ?? DEFAULT_API_BASE, env);
+  if (pair !== null) return pair;
+  // An endpoint scaffold (pi) reaches the base through a provider of its own
+  // CLI's, named on the key's row; without one every launch would fail, so the
+  // entry is refused here and its campaign squares are parked, not spent.
+  if (driver.kind === "scaffold") {
+    const provider = piProviderOf(keyEnv);
+    if ("refusal" in provider) return provider.refusal;
+  }
+  return null;
 }

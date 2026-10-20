@@ -31,6 +31,7 @@ import {
   entryOf,
   harnessOf,
   isDriver,
+  probeOnlyRefusal,
   type Driver,
   type Harness,
 } from "./drivers";
@@ -768,6 +769,13 @@ export function loadRunConfig(raw: unknown): RunConfig {
   // another driver would record a dimension nothing applied.
   if (config.compactWindow !== undefined && !driverHasCompactWindow(config.driver)) {
     throw new Error(compactWindowDriverRefusal(config.driver));
+  }
+  // Refused at launch as well as in the scheduler: a probe-only driver's run
+  // is a campaign's square and nothing else, so a hand launch on a scored,
+  // freeplay or unnamed episode — which would carry a scored stamp and could
+  // map onto another harness's row by model id — never starts.
+  if (entryOf(config.driver).probeOnly && (config.episode !== "probing" || config.campaign === undefined)) {
+    throw new Error(`${probeOnlyRefusal(config.driver)} — launch it as a campaign's square (--campaign <id>@<v> --cell <id>), not as episode ${config.episode ?? "(none)"}`);
   }
   // Refused, never ignored: the reference program reads no prompt, so an
   // objective would be stamped on a run nothing steered, and its route is a

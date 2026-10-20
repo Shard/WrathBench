@@ -1474,10 +1474,11 @@ bun wb config set roster/deepseek-flash-pi \
   because none of its runs is in a scored lane. A probe run maps back to the
   entry it names, never by model id, so the two never pool.
 - Its `tier` and `idle` buy nothing. The policy gives the entry no target and
-  no freeplay, and a queue job naming it outside a campaign is skipped.
+  no freeplay, a queue job naming it outside a campaign is skipped, and the
+  runner refuses a hand launch of it on any episode but a campaign's `probing`.
   `--status` says "driver pi is probe-only" against it.
 - A routing block is refused (pi sends what pi sends), and a key the provider
-  table gives no pi provider is refused at launch: today that is every key
+  table gives no pi provider refuses the entry (its squares are parked): today that is every key
   but `DEEPSEEK_KEY`.
 - Give the same `effort` as the `wrathbench` entry it is compared with.
   Absent is each harness's own default, which differ: pi thinks at `high` on

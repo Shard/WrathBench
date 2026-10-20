@@ -1072,8 +1072,7 @@ export async function runPiEpisode(o: PiEpisodeOptions): Promise<LoopOutcome> {
             const seen = piResultText(msg["result"]);
             if (seen !== undefined && seen.startsWith(PI_TRUNCATION_PREFIX)) {
               trajectory.append({
-                t: "harness",
-                kind: "tool_result_truncated",
+                t: "pi_tool_result_truncated",
                 turn,
                 toolCallId: typeof msg["toolCallId"] === "string" ? msg["toolCallId"] : null,
                 name: typeof msg["toolName"] === "string" ? msg["toolName"].replace(`mcp__${MCP_SERVER_NAME}__`, "") : null,
@@ -1108,13 +1107,16 @@ export async function runPiEpisode(o: PiEpisodeOptions): Promise<LoopOutcome> {
       }
       if (lastError !== undefined) {
         const failure = detectPiFailure(lastError);
-        trajectory.append({ t: "harness", kind: "pi_error", turn, text: lastError.slice(0, 600), classified: failure?.reason ?? null });
+        // Verbatim, and private like codex's `codex_result.error`: the provider's words are the operator's.
+        trajectory.append({ t: "pi_error", turn, error: lastError.slice(0, 600), classified: failure?.reason ?? null });
         if (failure?.kind === "pause") return pause(failure.reason, failure.detail);
-        if (failure?.kind === "terminate") return terminate(failure.reason, failure.detail);
+        // A termination's detail is public (the run page shows it), so it names the
+        // record that holds pi's words rather than repeating them.
+        if (failure?.kind === "terminate") return terminate(failure.reason, `pi could not recover from the provider's error (pi_error, turn ${turn})`);
         failedTurns++;
-        if (failedTurns >= PI_MAX_FAILED_TURNS) return terminate("adapter-error", `${failedTurns} failed turns in a row; last: ${lastError.slice(0, 300)}`);
-        // The model is told only that the turn failed; pi's words are the operator's (`pi_error`).
-        pendingNotices.push({ ts: Date.now(), kind: "session_note", text: "the previous turn ended with an error from the CLI" });
+        if (failedTurns >= PI_MAX_FAILED_TURNS) return terminate("adapter-error", `${failedTurns} failed turns in a row (pi_error, turns ${turn - failedTurns + 1}–${turn})`);
+        // The model is told only that the turn failed, in codex's bytes; pi's words are the operator's (`pi_error`).
+        pendingNotices.push({ ts: Date.now(), kind: "session_note", text: "the previous turn ended with an error from the CLI before it finished." });
       } else {
         failedTurns = 0;
       }
