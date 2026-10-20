@@ -22,32 +22,27 @@ targets the quickstart stack instead, where a command has a compose form.
 
 ## Running the fleet as a service
 
-The fleet supervisor (`infra/run-fleet.ts`) is a long-lived service — a
-Deployment on the cluster, and a compose service on the quickstart stack. It
-has no deadline, and it is steered entirely through the config store, which it
-re-reads every 60 seconds ("Where the config lives", below). It lives inside
-the runner image rather than on the host so it survives the operator's shell
-and reboots, and never crosses the container boundary to spawn a runner.
-The chart and compose run it the same way — the same image, the same store
-re-read every 60 seconds, the same drain on SIGTERM — with the Deployment
-scaled 0/1 where compose stops and starts a service. Read every
-`docker compose` line below as the quickstart stack's; on the cluster the
-equivalent is a `kubectl scale` or `kubectl rollout restart` of that
-Deployment, and the update verbs, `bun wb fleet graceful|force|drain|resume|state`
+The fleet supervisor (`infra/run-fleet.ts`) is a long-lived service: the
+`wrathbench-fleet` Deployment on the cluster, the `fleet` service on the
+quickstart stack. It has no deadline and is steered entirely through the
+config store, which it re-reads every 60 seconds ("Where the config lives",
+below). It lives in the runner image so it survives the operator's shell and
+reboots, and never crosses a container boundary to spawn a runner. The chart
+and compose run it the same way — the same image, the same re-read, the same
+drain on SIGTERM. The update verbs, `bun wb fleet graceful|force|drain|resume|state`
 (`infra/fleet-update.sh`), speak only kubectl.
 
 ### Start it
 
 ```
-docker compose -f infra/compose.yml up -d --no-deps fleet
+kubectl -n wrathbench scale deploy/wrathbench-fleet --replicas=1     # the cluster
+docker compose -f infra/compose.yml up -d --no-deps fleet            # the quickstart
 ```
 
-`--no-deps` is not optional. Without it compose may decide a dependency (the
-worldserver, typically, whose committed config can be ahead of the running
-container) is out of date and recreate it — dropping every live episode. The
-service sits behind the `fleet` profile precisely so that a bare
-`docker compose -f infra/compose.yml up -d` cannot start a second supervisor
-against the same config; naming the service is what activates it.
+On the quickstart `--no-deps` is not optional: without it compose may decide
+the worldserver is out of date and recreate it, dropping every live episode.
+The service sits behind the `fleet` profile so that a bare `up -d` cannot start
+a second supervisor against the same config.
 
 ### Watch it
 
@@ -59,13 +54,10 @@ docker compose -f infra/compose.yml logs -f fleet       # supervisor stdout, qui
 ```
 
 `--status` reads `data/runs/fleet-state.json` on the data volume, which is
-why `bun wb fleet status` runs it in the runner pod: run on a workstation,
-`infra/run-fleet.sh --status` reads that machine's own `data/`, which on a
-cluster deployment is empty. Liveness comes from a heartbeat the supervisor
-refreshes each tick, not from a pid probe that would mean nothing across
-pods. A supervisor that has been gone for more than three ticks
-reports `NOT RUNNING`. Finished runs get no rows there: the run directories and
-`fleet-<stamp>.jsonl` are the record.
+why `bun wb fleet status` runs it in the runner pod. Liveness is a heartbeat
+the supervisor refreshes each tick, so a supervisor gone for more than three
+ticks reports `NOT RUNNING`. Finished runs get no rows there: the run
+directories and `fleet-<stamp>.jsonl` are the record.
 
 ### Inspect a run
 
@@ -94,20 +86,18 @@ pod from stdin:
 
 ### Where the config lives
 
-**The sqlite config store is the only fleet config.** The
-active config is operational state, not source, and is
-never committed to git. It is `config.sqlite` on the data volume, beside
+**The sqlite config store is the only fleet config.** It is operational
+state, not source, and is never committed to git. It is `config.sqlite` on the data volume, beside
 `runs/` (`$WRATHBENCH_DATA/config.sqlite`, overridable with
 `WRATHBENCH_CONFIG_DB`; on the cluster the `config` subPath of the
 `wrathbench-data` PVC at `/wrathbench/data/config/config.sqlite`, mounted
 writable on the fleet, the runner, the viewer and the publisher; under compose
 the same `data/` bind mount at `data/config.sqlite` — nothing to provision
-either way). The store's `config_audit` table is the history: actor, note,
-and the before and after documents of every change.
+either way).
 
 The one config document in git is **`infra/fleet.example.json`, the
 bootstrap**: a newcomer seeds the store from it once and gets a working board,
-with no campaign or queue job that would run. Nothing else reads the example. Export (the CLI and the page)
+with no campaign or queue job that would run. Nothing else reads it. Export (the CLI and the page)
 renders the store to a document, for reading or for diffing against an earlier
 export — never for committing.
 
@@ -126,15 +116,13 @@ export — never for committing.
   once, and retries every tick, and `--status` leads with the `config
   REJECTED` banner. The two are kept apart deliberately — a transient read
   failure must never read as "every job vanished".
-- An edit through the app is live **one tick later**. Nothing restarts, and
-  nothing about scheduling changed: the store is read where the file was read,
-  and the same `parseFleet` refuses the same things.
+- An edit is live **one tick later**, with nothing restarted.
 - Every write is validated against the WHOLE config — an edit the supervisor
-  would refuse is refused with the same sentence — and recorded in
-  `config_audit` with the actor, the note, and the before and after documents.
+  would refuse is refused with the same sentence — and recorded in the store's
+  `config_audit` table with the actor, the note, and the before and after
+  documents. That table is the history.
 
-Edit it from the **viewer's `/config` page**. Every write takes a note,
-which lands in `config_audit` beside the actor. The page is operator-only: no
+Edit it from the **viewer's `/config` page**. The page is operator-only: no
 nav link and nothing served on the public build or behind a public viewer,
 which is the same condition `/api/config` is mounted under. The viewer has no
 login; it answers only to its own names, `localhost` and IP addresses (the
@@ -157,11 +145,9 @@ in the runner pod (`kubectl -n wrathbench exec deploy/wrathbench-runner -- bun
 runner/src/config-store.ts …`), the same way `fleet-state.json` is read;
 `infra/k8s-deploy.sh` reads the `preflight` block that way too (`get
 preflight`). A file argument is a path inside the pod, so an export goes to
-stdout and is redirected on your side. The
-endpoints behind the page are the
-same operations over HTTP and are documented in `runner/viewer/README.md`;
-they are operator-only and are not mounted at all when the viewer is in public
-mode.
+stdout and is redirected on your side. The endpoints behind the page are the
+same operations over HTTP (`runner/viewer/README.md`), and are not mounted at
+all when the viewer is in public mode.
 
 ### Steer it
 
@@ -248,16 +234,9 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
             name ("Strict keys", below).
             NO character name: the model names its own at createSession, and the name it chose is
             what the run row, meta.json and the runs page carry. `character` is REFUSED by name
-            here (as it is in a campaign or a cell) — a name in the config is one the harness has
-            to keep valid and unique, and an invalid one takes the whole file down. A fixed name
-            was actively harmful: a character name is realm-wide unique while the hygiene that
-            clears it is per-account, so a fresh attempt scheduled elsewhere met a name it could
-            not use and no way to pick another. The launch note invites a name inside the game's
-            own rule and says it is the model's for the episode; the roster's suggestion survives
-            only for a model that would rather not choose. The freshness belt does not read names:
-            it arms on every character guid hygiene listed for the account, so a model that names a
-            survivor is caught by its guid and its level, never by its spelling. `race` and
-            `class` are not the model's either, but they stay: they are the episode's
+            here (as it is in a campaign or a cell): a character name is realm-wide unique while
+            the hygiene that clears it is per-account, so a fixed name meets a fresh attempt
+            elsewhere it cannot use. `race` and `class` stay: they are the episode's
             comparability dimensions. Never an account. Two scheduling axes (docs/METHODOLOGY.md, "The tier is
             the evidence budget"):
             `tier` — REQUIRED, and the only thing that sets a run count. t0 trial (e90 x1, the
@@ -271,7 +250,7 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
             `idle` — what it does with an account once its tier is spent. `none` (default, and
               what a paid model wants) or `unlimited` (one continuous freeplay session at a time,
               with no episode wall clock — the idle watchdog is what ends it). Never bought by
-              omission. A race/class sweep is a campaign now, not an idle mode. Flipping
+              omission. Flipping
               `unlimited` → `none` pauses the live session at once; flipping it back brings the
               same character back ("Freeplay characters are durable", below).
             `routing` — which backend behind OpenRouter may serve this entry. Three spellings:
@@ -290,18 +269,11 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               OpenRouter (Cerebras, LM Studio, OpenCode Zen or Go), `routing` takes the whole file down
               rather than sitting there doing nothing. The resolved routing is stamped into the
               run's comparability tuple and the provider that actually served it is recorded on
-              the run (docs/METHODOLOGY.md, "Routing is pinned"). The served provider is recorded
-              rather than keyed — a fact observed minutes after launch cannot be part of what a
-              launch stamped — and with fallbacks off the two agree, which is what makes a
-              disagreement worth seeing. An OpenCode Go run cannot be pinned: Go picks the
-              backend behind each model and the request has no way to name one. So it stamps
-              `{ via: "OpenCode Go", allowFallbacks: true }`, unpinned and keyed apart from a
-              pinned run of the same model, and the backend that answered each call is recorded
-              from Go's response headers (`x-opencode-endpoint-id`,
-              `x-opencode-upstream-model-id`). The field is absent, not null, on a run whose
-              request has no routing to state (a CLI harness, Cerebras, LM Studio, OpenCode
-              Zen): there is nothing to record, and those runs stamp exactly as they did before
-              the field existed.
+              the run (docs/METHODOLOGY.md, "Routing is pinned"); with fallbacks off the two
+              agree, which is what makes a disagreement worth seeing. An OpenCode Go run cannot be
+              pinned and stamps `{ via: "OpenCode Go", allowFallbacks: true }` ("Adding a model",
+              below). The field is absent, not null, on a run whose request has no routing to
+              state (a CLI harness, Cerebras, LM Studio, OpenCode Zen).
             `wiki` — whether this entry's runs get the reference wiki at all. Default true; set
               `false` and the run has no `search_reference` tool, the prompt does not name one,
               and no bundle is opened (issue #61). It is a
@@ -344,8 +316,6 @@ policy      Only where runs execute and how many at once. maxConcurrent { <rate-
             says only WHERE a run may execute — the account class and the rate-limit key.
             An openai entry's override is also recorded on each run it launches: the reader's
             verdict (the ladders' "exclude free") follows it, and a recorded free needs no price.
-            `runsPerEpisode`, `paid.runsPerEpisode` and `extras` are not 0.5 keys and are refused
-            by name, as are `roster.<name>.runsPerEpisode` and `roster.<name>.tiers`.
             `routing` — the fleet-wide default for OpenRouter entries, same shape as an entry's.
             An entry that states its own keeps it WHOLE: the two are alternatives, never merged,
             because a merged routing is one nobody wrote down. Absent means the built-in default
@@ -419,9 +389,7 @@ no on/off switch on a catalog entry.
 A roster entry referenced by a pinned job is never policy-scheduled: the account
 is spoken for. Nothing else takes an entry out of the policy — a campaign
 BORROWS a catalog entry rather than removing it from the schedule. Everything
-else in the roster is the policy's (below). This
-is the only shape: a file that still says `lanes` or `accounts.pinned` is
-refused by name, with the message naming the 0.4 keys.
+else in the roster is the policy's (below).
 
 #### Adding a model
 
@@ -476,8 +444,10 @@ and Anthropic-messages models cannot. Go admits agents other than its own client
 on stated conditions, and the adapter meets them as itself: its own user
 agent, and `x-opencode-session` set to the run id, one value for the whole run.
 It never sends the headers that identify OpenCode's own client. Go picks
-the backend behind each model, so a Go run stamps unpinned routing and
-records the backend that answered (`routing`, above). A `-free`
+the backend behind each model and the request has no way to name one, so a
+Go run stamps unpinned routing, keyed apart from a pinned run of the same
+model, and records the backend that answered each call from Go's response
+headers (`x-opencode-endpoint-id`, `x-opencode-upstream-model-id`). A `-free`
 Go slug derives free; any other derives paid, which puts it under the paid
 throttle, and is priced by an `opencode-go` endpoint row on its catalogue
 entry, since Go reports no per-response charge.
@@ -516,7 +486,8 @@ entry.
 ### Stop it
 
 ```
-docker compose -f infra/compose.yml stop fleet
+kubectl -n wrathbench scale deploy/wrathbench-fleet --replicas=0     # the cluster
+docker compose -f infra/compose.yml stop fleet                       # the quickstart
 ```
 
 A stop **pauses** the live runs. SIGTERM
@@ -532,48 +503,39 @@ ends: a stop does not cost a run its *place*, but it does cost it that
 attempt — the run is ended `manual`, the model is not blamed for it,
 and the scheduler gives it a fresh attempt with a full clock. Freeplay, and a
 probe campaign that asked to resume, come back where they left off. The runner's own backstop is 60s, the
-roster's SIGKILL grace 90s, the service's `stop_grace_period` 180s, in that
-order. The next `up -d` resumes the paused runs before it launches anything
-fresh (below). Ctrl-C on a hand-started `infra/run-episode.sh` still ends the
-run as `manual`: SIGINT is the operator's cut, SIGTERM is the supervisor's
-pause.
+roster's SIGKILL grace 90s, the pod's termination grace (compose's
+`stop_grace_period`) 180s, in that order. Starting it again resumes the paused
+runs before it launches anything fresh (below). Ctrl-C on a hand-started
+`infra/run-episode.sh` still ends the run as `manual`: SIGINT is the
+operator's cut, SIGTERM is the supervisor's pause.
 
 To stop launching *without* pausing what is running, use the pause switch —
 "Updating the live fleet", below. The supervisor does not exit when it runs out
-of work: with no deadline it idles (logging so once) and waits for the config to
-give it something, because exiting under `restart: unless-stopped` would just
-restart it a minute later with a new epoch.
-
-`docker compose rm fleet` afterwards if you want the container gone; the state
-in `data/runs/` is what matters and it is on the bind mount.
+of work: with no deadline it idles and waits for the config to give it
+something, because an exit would only be restarted a minute later with a new
+epoch.
 
 ### Updating the live fleet
 
-This is the cluster's procedure. The fleet's update verbs (`bun wb fleet
-graceful|force|drain|resume|state`, `infra/fleet-update.sh`) and the deploy
-window, `bun wb release deploy` (`infra/k8s-deploy.sh`), speak only kubectl; a quickstart compose stack has no
-update path beyond `up -d --build`, which recreates what changed under
-whatever is running. On the cluster the repo is baked into the runner image
-rather than bind-mounted, so every code row of the table below lands with a
-release (a new image tag, `bun wb release run`); the config store and the
-wiki bundle live on the data volume and need none.
+This is the cluster's procedure. A quickstart compose stack has no update path
+beyond `up -d --build`, which recreates what changed under whatever is
+running, and runs each episode from the bind-mounted checkout.
 
-Everything that changes the harness reaches the running fleet one of three
-ways, and the first question is always **which**:
+On the cluster the code is baked into the images, so the first question is
+**what changed**:
 
 | What you changed | How it lands |
 | --- | --- |
-| `runner/src/**`, `sdk/**`, the wiki bundle | the **next episode spawn**. The repo is a bind mount and every episode is a fresh `bun runner/src/run.ts`: nothing to restart, and a run in flight keeps the code it started with. |
-| the config store (`/config` page or `config-store.ts`) | the **next tick** (60s). Hot-reloaded; every write is validated, and a config the running code refuses is complained about and ignored. |
-| `dashboard/**` | `bun run build` in `dashboard/`, then restart the viewer service. No fleet involvement. |
-| `infra/run-fleet*.ts`, `infra/run-roster.ts`, the runner **image**, compose env | only when the **`fleet` container's process restarts**. That is what the two recipes below are for. |
+| the config store (`/config` page or `bun wb config`) | the **next tick** (60s). Hot-reloaded; every write is validated, and a config the running code refuses is complained about and ignored. |
+| the wiki bundle | the next episode spawn: it is on the data volume. |
+| any code: `runner/`, `sdk/`, `infra/`, `module/`, `dashboard/` | a **release** (`bun wb release run`, "Deploy window", below). A run in flight keeps the code it started with. The viewer picks up a new image with `bun wb server restart-viewer`. |
+| anything the supervisor reads only at start: its own code, its env, a lane's token | a fleet pod restart. A release does one; the two recipes below do one without a release. |
 
 The supervisor's date stamp (`fleet-<job>-<model>-<YYYYMMDD>`) is taken once at
 start and fixed for the life of the process — an *epoch*, not a calendar date,
 so `--resume-roster` and the loop's `-cN` numbering keep meaning what they
-meant. A supervisor up for three days still stamps the day it started; a
-restart rolls it, and so does `restart: unless-stopped` after a crash or a
-reboot. Resumes do not care: the run id is read off disk.
+meant. A restart rolls it, crash or reboot included. Resumes do not care: the
+run id is read off disk.
 
 #### Graceful — nobody's run is interrupted
 
@@ -601,9 +563,7 @@ lines name both halves each poll: `waiting on:` for the runs holding the window
 and `counted drained:` for the parked ones. Whether a job parks is the
 supervisor's own answer, published per job row as `resumesInPlace` in
 `fleet-state.json` — the script never re-reads the config for a campaign's
-`resume` flag, because the switch has to work while the config is rejected. A
-supervisor older than that field does not write it, and the script falls back
-to the freeplay pair (`source: policy`, `episode: freeplay`).
+`resume` flag, because the switch has to work while the config is rejected.
 
 The switch is `data/runs/fleet-pause.json` (`{"paused": true, "why": "..."}`),
 read every tick beside the config. While it is set the fleet launches
@@ -620,7 +580,7 @@ supervisor has picked up.
 
 Three costs, all printed by the script:
 
-- the drain race the supervisor has always had: an episode spawned in the
+- the drain race: an episode spawned in the
   instant between the idle check and the SIGTERM gets run-roster's graceful
   30s episode termination. Worst case one just-started episode, never one
   mid-flight.
@@ -652,22 +612,6 @@ the script says, loudly, on the way out. An aborted window that looked like
 nothing happened is how a fleet ends up scheduling nothing until somebody
 notices.
 
-**Draining a supervisor that does not read the switch.** The switch is
-supervisor code, so a supervisor from before it existed ignores it. The
-equivalent drain, needing nothing but the hot-reloaded config, is an edit —
-
-```
-accounts: { "pool": [], "paid": [], "local": [] }   # the policy has nowhere to schedule
-campaigns: every one "enabled": false               # each drains at its episode boundary
-queue: []                                           # nothing manual
-```
-
-— then wait for `--status` to show no live job, `kubectl -n wrathbench rollout
-restart deployment/wrathbench-fleet`, and put the accounts and campaigns back. `infra/fleet.test.ts` pins that this edit parses and
-schedules nothing. It is strictly worse than the switch — it is an edit to the
-config whose every flag goes inert on a typo, and it does not stop a *resume* —
-so it is the fallback and never the recipe.
-
 #### Forceful — now, and it costs the live runs
 
 ```
@@ -687,14 +631,9 @@ logs the character out. Nothing is corrupted. What it costs:
   surface; three of *those* would taint a model, and a supervisor kill is not
   one of them (docs/METHODOLOGY.md, "Episodes, lanes, and evidence").
 - freeplay, and a probe campaign with `resume: true`, come back where they left
-  off on the same account and character. An automatic resume also **restates
-  the current leash** rather than inheriting the stored one: the runner reloads
-  `meta.json` and only replaces a limit a flag names, so a freeplay run created
-  under an older policy would otherwise come back under that policy's clock and
-  ceiling. The roster emits `--watchdogs-json {"episodeMs":null}` and
-  `--max-tool-calls 0` for the `idle: "unlimited"` lane, which rewrites both
-  caps to `null` on the resumed run while its run id, account, character,
-  session token, trajectory and scratchpad are all the stored run's.
+  off on the same run id, account and character. An automatic resume
+  **restates the current leash** rather than inheriting the stored one (for
+  the `idle: "unlimited"` lane, no clock and no tool-call cap).
 - a preflight smoke in flight dies with the container; the gate re-runs it.
 
 If the switch is already **set** when `force` runs — the ordinary way to arrive
@@ -708,26 +647,6 @@ leaves the switch set, exactly as on the graceful path.
 `fleet-update.sh` does not build or pin an image for you: new code reaches the
 fleet pod through a release (`bun wb release run`), whose drain and resume
 phases are this script's.
-
-#### The worldserver
-
-`bun wb release deploy` (`infra/k8s-deploy.sh`) owns its own window and is the **forceful**
-path by design: its `draining` phase scales the fleet to 0, so every live run
-pauses and a scored one spends its attempt, exactly as above. That is the
-documented trade — the script needs nothing from you while it runs, and a
-deploy must never depend on an operator watching a wait loop.
-
-For the graceful version, drain first and hand the script a quiet fleet:
-
-```
-bun wb fleet drain        # pause, wait for quiet, scale the fleet to 0; switch stays set
-bun wb release deploy     # its own drain finds nothing live; it scales the fleet back
-bun wb fleet resume       # clear the switch; the pool fills on the next tick
-```
-
-The deploy still brings the fleet up on every exit path — that invariant is
-untouched — so `resume` is the only step you owe it afterwards. If you forget,
-`--status` says the fleet is paused and nothing schedules until you do.
 
 #### What a restart does to paused runs
 
@@ -749,9 +668,7 @@ has its account does the pool fill. The same planner runs every tick, so a run
 paused by its provider (`rate-limited`, `quota-exhausted`) is resumed once its
 cooling is over — see "Lapsed runs" below. A supervisor that boots with the
 pause switch set does none of this until the switch is cleared, which is what
-keeps an update window from filling the pool behind the operator's back; its
-log names a planned resume or policy pick once the switch is cleared, not while
-it holds.
+keeps an update window from filling the pool behind the operator's back.
 
 ### Lapsed runs: paused, and stale
 
@@ -799,9 +716,7 @@ exit it gets to make, so a fresh one (under two minutes) means a process owns
 the run — on this pod or any other — and a cold one means it was killed. A
 quiet trajectory proves nothing, because a run waiting on a slow provider
 writes nothing. A verdict-less run with a cold heartbeat is resumed on the next
-tick; one with no heartbeat file at all (its runner predates it) is listed as
-offline until it has been silent for its own idle watchdog
-plus two minutes (thirty minutes when it recorded none). `run.ts --resume`
+tick. `run.ts --resume`
 and the roster both refuse a run with a fresh heartbeat — exit 75, nothing
 written, the session not touched — so a resume by hand cannot land on a run
 the fleet is playing, nor the reverse.
@@ -825,9 +740,8 @@ with why:
   resets (OpenRouter's free-tier daily limit names the next 00:00 UTC) waits
   for that instant instead: the roster makes no in-place retry, the
   supervisor resumes the run at the reset, once, and the pause neither spends
-  a rung nor counts toward the streak. Every attempt before a known reset is a
-  refusal already announced, and counting them ran a freeplay stream's whole
-  ladder out hours before its daily allowance came back. Only a reset 10
+  a rung nor counts toward the streak: every attempt before a known reset is a
+  refusal already announced. Only a reset 10
   minutes to 48 hours out is honoured: a per-minute window stays on the
   ladder, which is what stops a saturated key resuming every few minutes
   forever. `--status` lists such a run as `resuming at <time> (provider
@@ -909,9 +823,8 @@ What the supervisor does with it, per tick:
   - another ref's **bounded** run — a scored episode, a probe, a hand-written
     job — ends at its episode boundary, so the pick is **held**, never
     started fresh elsewhere;
-  - another ref's **unlimited session** has no boundary to wait for, and
-    waiting is the deadlock the first day of durable characters produced (two
-    heads on one account: the occupant's `--keep-characters` protects the
+  - another ref's **unlimited session** has no boundary to wait for, so
+    waiting would deadlock (the occupant's `--keep-characters` protects the
     waiter's character, `POST /character-delete` refuses `account_in_use`,
     and the waiter holds forever). The pick starts **fresh on the free
     account it was offered**, lineage dropped: no `--continue-from`, and the
@@ -932,7 +845,7 @@ What the supervisor does with it, per tick:
   character at a time, and the freeplay ladder shows the live field, not
   every dead character a model ever rolled. The
   older ended sessions of a character are parked with
-  `bun runner/src/archive.ts --run-ids` ("Archiving runs"), which is a
+  `archive.ts --run-ids` ("Archiving runs"), which is a
   decision about listings and nothing else: the character is untouched,
   the trajectories survive under `archive/`, and the scheduler still reads
   them.
@@ -961,9 +874,9 @@ What the supervisor does with it, per tick:
   `archive/` too, so an archived run with no termination still owns its
   character (the supervisor, for its part, never resumes or continues an
   archived run). The release is a termination on the run's row: to end a run
-  by hand, `bun runner/src/classify.ts <run id> manual [note]`, which refuses
-  a run with no termination and no pause (it may be live) unless given
-  `--force`.
+  by hand, `kubectl -n wrathbench exec deploy/wrathbench-runner -- bun
+  runner/src/classify.ts <run id> manual [note]`, which refuses a run with no
+  termination and no pause (it may be live) unless `--force` comes first.
 
 The policy line says what happened, and `--status` prints one row per
 `idle: "unlimited"` ref with its head and the verdict above. Roster changes that
@@ -1017,8 +930,8 @@ as files on the data PVC is `logs/Errors.log`, held open and rewritten on
 every boot, and the module's audit log, one JSONL per session token and UTC
 day under `logs/wrathbench` (`<token>.<YYYY-MM-DD>.jsonl`; a live session
 rolls to the next day's file at its first record after midnight UTC). The
-audit log is what grows — about 0.6 GB a day per live freeplay stream, and it
-had reached half the volume — and it is kept for a window, not for good
+audit log is what grows — about 0.6 GB a day per live freeplay stream — and it
+is kept for a window, not for good
 (docs/CONTRACTS.md "Audit"): `worldserver.logRetention.days` in the chart's
 values, default 3, `0` to disable. The `wrathbench-log-retention` CronJob
 prunes it once a day (`schedule`), from the worldserver image, by age. Its own
@@ -1062,26 +975,117 @@ Or raise `days` in the deploying cluster's values for as long as it is needed.
 The compose quickstart has no retention: its `data/logs` is a bind mount you
 prune yourself.
 
-### Deploy window (worldserver changes)
+### Deploy window
 
-A worldserver change reaches the cluster in a release, and `infra/k8s-deploy.sh`
-(`bun wb release deploy`) is the only deploy window. There is none for compose: a quickstart stack takes
-a new worldserver with `docker compose --env-file .env -f infra/compose.yml up
--d --build`, which recreates it under whatever is running and verifies nothing.
-
-#### On the cluster
+Every code change reaches the cluster in a release, and `infra/k8s-deploy.sh`
+(`bun wb release deploy`) is the only deploy window. There is none for
+compose: a quickstart stack takes a new worldserver with `docker compose
+--env-file .env -f infra/compose.yml up -d --build`, which recreates it under
+whatever is running and verifies nothing.
 
 ```
 bun wb release build --push                    # every image, tagged `git describe` (infra/build-images.sh)
-bun wb release run                             # the whole release, start to finish (infra/k8s-release.sh)
-bun wb release run --dry-run
-bun wb release run --pin-hook <your pin hook>
+bun wb release run --dry-run                   # the plan and every resolved value
+bun wb release run --pin-hook <your pin hook>  # the whole release, start to finish (infra/k8s-release.sh)
 bun wb release run --from pin                  # restart at a phase
 bun wb release deploy                          # the deploy window alone (infra/k8s-deploy.sh)
 ```
 
-`infra/README.md`, "Releasing on Kubernetes", has the phases, the pin hook,
-and what `k8s-deploy.sh` — the deploy window on its own — refuses.
+`infra/README.md`, "Releasing on Kubernetes", has the phases (build, drain,
+pin, deploy, resume), the pin hook, and what the window refuses. `release run`
+drains gracefully (`fleet drain`, "Graceful", above), so no scored run is
+signalled. `release deploy` on its own is the forceful path: its draining phase
+scales the fleet to 0, so a live scored run spends its attempt ("Forceful",
+above). Run `bun wb fleet drain` before it to make it graceful; a window that
+succeeds clears the switch itself.
+
+#### The lean path
+
+A window holds the fleet, so it carries nothing that does not have to be
+there: drain, deploy, the configured gate and deploy smokes, then the fleet
+resumes at once. The drain is the one wait that may run long, because it lets
+a scored run reach its own episode boundary. Beyond the drain and the rollout,
+whatever runs while the fleet is held — the gate and deploy smokes, and
+anything run by hand — stays within about a minute in total. Testing is
+welcome; holding the fleet with nothing running is not.
+
+**Module verification runs after the resume**, with the fleet live. A module
+change is checked with `bun wb smoke <name>` (`bun wb smoke` lists them) once
+the window has resumed, on accounts the fleet does not schedule:
+
+- `PROBE`, every smoke's default. It is free while no enabled job or campaign
+  pins it (`accounts.pinned` in `bun wb fleet status`) and no hand run, such
+  as the scripted reference run, holds it.
+- `SMOKE3` and `SMOKE4`, which some smokes use beside PROBE: swim's observer is
+  SMOKE3 and death-recovery's priest SMOKE4, so smokes that share one run one
+  after another.
+- module-navigation runs on SMOKE3. `bun wb smoke` passes no environment into
+  the pod, so it takes the kubectl form:
+  `kubectl -n wrathbench exec deploy/wrathbench-runner -- env MODULE_ACCOUNT=SMOKE3 bun infra/smoke/module-navigation.ts`.
+- Leave `SMOKE` and `SMOKE2` to the gate and the deploy smokes. The supervisor
+  runs its gate on SMOKE as soon as it boots, and again after any worldserver
+  restart.
+
+A smoke that fails after the resume has found a defect in a live build: revert
+the pin, which is another window, or fix forward. The deploy smokes are what
+guard the common path.
+
+**A smoke that needs a campaign's accounts holds that campaign, never the
+fleet.** The party smokes (`party-entry`, `party-staging`) stage and delete
+characters on PARTY1–PARTY5, which only the party campaign uses:
+
+```
+bun wb config patch campaigns/<id> '{"enabled":false}' --actor <you> --note "held for the party smokes"
+bun wb fleet status    # wait until no run on PARTY1–PARTY5 is live or paused
+bun wb smoke party-entry
+bun wb config patch campaigns/<id> '{"enabled":true}' --actor <you> --note "party smokes done"
+```
+
+A disabled campaign spawns nothing, and its live attempt drains at its
+episode boundary rather than being signalled, so the wait is that attempt's
+own leash. Every staging deletes whatever the party accounts hold, a paused
+attempt's characters included. A campaign without `resume` ends a paused
+attempt on the next tick; one with it keeps the paused party, listed and not
+resumed while the campaign is disabled, so run the smokes once that attempt
+has finished, or end it deliberately first. Nothing else schedules those
+accounts, and the rest of the fleet runs throughout.
+
+#### Holding the fleet for a CLI-env or sandbox change
+
+The gate and deploy smokes drive the module with a scripted client. They never
+start the Claude Code or Codex CLI and never run a model's snippet, so a change
+to the environment the CLIs start with, or to the snippet sandbox's
+confinement, passes them untested, and the resume phase would put every paused
+run straight onto that build. Such a release, and only such a release, is held
+with `--keep-paused`:
+
+```
+bun wb release run --pin-hook <your pin hook> --keep-paused
+bun wb run episode --account PROBE --driver claude-code --model <id> --max-tool-calls 20
+bun wb run episode --account PROBE --driver codex --model <id> --max-tool-calls 20
+bun wb run episode --account PROBE --driver openai --model <id> --max-turns 5
+bun wb fleet resume
+```
+
+`--keep-paused` reaches `k8s-deploy.sh`, which sets the pause switch before
+its drain if nothing has, scales the fleet back to 1 on every exit path as
+always, and never clears the switch; the release skips its resume phase and
+says so. The supervisor comes up and spawns nothing, a resume included. The
+hold is one short real run per driver on PROBE (or SHAKEOUT), a couple of
+minutes, then `bun wb fleet resume`. Module smokes and anything longer wait
+until after the resume, as above.
+
+Each run has no `--episode`, so it is unscored; `--token-env` picks a second
+subscription lane. The CLI drivers have no turn limit, so `--max-tool-calls`
+bounds them. Read each trajectory as far as a logged-in CLI and a snippet that
+reached the module. A run that hits its limit costs the model nothing, but one
+that dies before the model answers, or on an adapter error, is a rung on that
+model's cooling ladder, and `bun wb fleet clear-model` forgives it. A
+provider-paused run is not resumed while the switch is set and can go stale,
+which counts ("Graceful", above). If a run fails, nothing scheduled has run on
+that build: revert the pin, and resume once a build passes.
+
+#### Images
 
 The images are built from the commit, never from the working tree.
 `build-images.sh` unpacks a `git archive` of the commit into a temporary
@@ -1093,8 +1097,8 @@ be initialised in the checkout you build from. Uncommitted edits are never in an
 image, which is why a dirty tree is refused. `--allow-dirty` builds the commit
 anyway, but its `-dirty` tag is never pushed. `k8s-release.sh` hands the build
 the exact commit its tag describes. The runner image also takes the scripted
-reference program from the private checkout's HEAD the same way, and the build
-stops when it cannot find it ("The scripted reference run").
+reference program from the private checkout's HEAD, and the build stops when it
+cannot find it ("The scripted reference run").
 
 Each image then goes through `infra/image-guard.sh` before anything is pushed.
 The guard lists the image's filesystem and refuses one that holds a
@@ -1115,38 +1119,6 @@ rollout did not complete". `bun wb server health` prints the counts and
 `dbRestarted`; `kubectl -n wrathbench delete pod -l
 app.kubernetes.io/component=worldserver` restarts it now instead.
 
-#### Deploying a harness change that needs a real smoke first
-
-The gate smokes drive the module with a scripted client. They never start the
-Claude Code or Codex CLI and never run a model's snippet, so a change to what
-those touch, such as the environment the CLIs start with or the snippet
-sandbox's confinement, passes them untested. The default resume phase would
-then put every paused run straight onto that build. Release such a change held:
-
-```
-bun wb release run --pin-hook <your pin hook> --keep-paused
-bun wb run episode --account PROBE --driver claude-code --model <id> --max-tool-calls 20
-bun wb run episode --account PROBE --driver codex --model <id> --max-tool-calls 20
-bun wb run episode --account PROBE --driver openai --model <id> --max-turns 5
-bun wb fleet resume
-```
-
-`--keep-paused` reaches `k8s-deploy.sh`, which sets the pause switch before its
-drain if nothing has, scales the fleet back to 1 on every exit path as always,
-and never clears the switch. The release skips its own resume phase and says
-so. The supervisor comes up and schedules nothing, and that includes resuming a
-paused run, because a resume is a spawn like any other and the switch disables
-every spawn. Then smoke one short real run per driver on PROBE (or SHAKEOUT),
-with no `--episode` so that it is unscored, and `--token-env` for a second
-subscription lane. The CLI drivers have no turn limit, so `--max-tool-calls`
-bounds them. Read each trajectory as far as a logged-in CLI and a snippet that
-reached the module. A run that hits its limit costs the model nothing, but one
-that dies before the model answers, or on an adapter error, is a rung on that
-model's cooling ladder, and `bun wb fleet clear-model` forgives it. Only then run `bun wb fleet resume`. Keep the window short,
-because a provider-paused run is not resumed while the switch is set and can go
-stale, which counts (see "Graceful" above). If a smoke fails, nothing scheduled
-has run on that build: revert the pin, and resume once a build passes.
-
 #### What each phase means
 
 `infra/k8s-deploy.sh` writes `data/runs/server-state.json` at every
@@ -1166,12 +1138,14 @@ transition, and the Fleet page's banner is the phase plus the script's own
 - **verifying** — the gate smokes (`preflight.smokes`) and then the deploy
   smokes (`preflight.deploySmokes`: the game surface and the `module-quest.ts`
   full arc) run through `kubectl exec` into the runner pod, each list against
-  its budget. The fleet is down, so nothing else is on the smoke accounts. The
-  detail names the smoke in flight.
-- **resuming** — every smoke passed; the fleet is scaled back to 1. The
-  supervisor boots, re-gates on the new server identity and resumes every
-  paused run on its own account before the queue or the policy gets one. Under
-  `--keep-paused` the pause switch stays set and it resumes nothing.
+  its timeout. The fleet is down, so nothing else is on the smoke accounts.
+  The detail names the smoke in flight. This phase is the hold the one-minute
+  budget is about ("The preflight gate", below).
+- **resuming** — every smoke passed; the fleet is scaled back to 1 and the
+  pause switch cleared. The supervisor boots, re-gates on the new server
+  identity and resumes every paused run on its own account before the queue or
+  the policy gets one. Under `--keep-paused` the pause switch stays set and it
+  resumes nothing.
 - **running** — the window is over. The script's last line is `DEPLOYED and
   verified by …`, exit 0.
 - **failed** — the window failed closed: the drain never completed, the
@@ -1263,10 +1237,20 @@ top-level `preflight` block of the config, hot-reloaded like the jobs;
   and then these, one after another, with the fleet down and before anything
   resumes; the supervisor never runs them. The game surface lives here:
   `kill-credit.ts` (combat, kill credit, loot), `quest-accept-status.ts`
-  (quest status, accept, turn-in, vendor) and `module-quest.ts` (eight kills to
-  the kill quest's own turn-in, about five minutes). `deployTimeoutMs` is their
-  whole budget. Emptying the list takes them out of releases, not out of the
-  gate.
+  (quest status, accept, turn-in, vendor) and `module-quest.ts` (the kill
+  quest's turn-in, on a kept character, `Mqsmoke` on SMOKE, from a prepared
+  state). `deployTimeoutMs` is their timeout. Emptying the list takes them out
+  of releases, not out of the gate.
+
+**The budget.** The gate and the deploy smokes together stay within about a
+minute: they run while the fleet is held with nothing running ("The lean
+path", above). The gate takes well under a second, kill-credit (which starts
+at seven of its eight kills) about 12 s, quest-accept-status about 20 s and
+module-quest about 5 s: about 35 s in all. The first window on a SMOKE account
+without `Mqsmoke` takes about 95 s once, while it is created. A new smoke is never added to either list to cover a
+gap. It lives on demand, as `bun wb smoke <name>` run with the fleet live, and
+a smoke that truly must gate releases has to fit inside the minute by
+replacing or shrinking another — the operator's call.
 
 The supervisor runs the gate before it reads the run history (counting every
 trajectory on disk takes about half a minute on a full runs directory), so with
@@ -1297,9 +1281,7 @@ bun wb accounts ensure SMOKE2
 
 It is `infra/bootstrap/bootstrap.ts --accounts-only` in the runner pod: the
 password is the account's name, an account that exists is left alone, and no
-realm row is written. wb refuses it while the deployed image's `bootstrap.ts`
-predates the flag, because that file would run the whole bootstrap. On the
-quickstart without Bun, compose's `bootstrap` service makes one account by
+realm row is written. On the quickstart without Bun, compose's `bootstrap` service makes one account by
 running the whole bootstrap with it as the configured account: it re-upserts
 the realm row from compose's own realm settings and resets that account's
 password if it differs: `docker compose -f infra/compose.yml run --rm --no-deps -e
@@ -1321,17 +1303,24 @@ the world before a run, like choosing an account.
 
 ### Changing the config shape
 
-The pattern: export the store (`config-store.ts export /tmp/fleet-before.json`),
-write the new-shape document beside it, drain or `stop fleet` (running
-episodes pause and resume on start), `seed --force` the new document, check
-`--dry-run` from the new code before anything spawns, then
-`up -d --no-deps fleet`. The new shape under the old code is the one thing that
-must not happen, which is why the seed comes after the stop — and the store's
-own validator is the running code's, so a `seed --force` from the new tree
-before the fleet restarts would be refused. A shape the current code does not
-read is refused by name — there is no compatibility read, so roll back with
-`seed --force` of the export you took. Run ids carry the job name, so a renamed
-job starts a fresh id; nothing resumes across the rename.
+The new shape under the old code is the one thing that must not happen, and
+the store's validator is the code in the runner pod, so a new-shape document
+can only be seeded once the new code is deployed. There is no compatibility
+read: a shape the running code does not read is refused by name. So:
+
+1. `bun wb config export > fleet-before.json`, and write the new-shape
+   document beside it.
+2. Release the new code as usual. The new supervisor refuses the old-shape
+   store and runs an empty board (`config REJECTED` at the top of `bun wb
+   fleet status`): nothing spawns and nothing resumes.
+3. Copy the new document into the runner pod (a file argument is a path
+   there), `bun wb config seed --force <path in the pod>`, and check `bun wb
+   fleet dry-run`. The supervisor loads it on its next tick.
+
+Have the document ready, because the fleet runs nothing between the window
+and the seed. Roll back with `seed --force` of the export. Run ids carry the
+job name, so a renamed job starts a fresh id; nothing resumes across the
+rename.
 
 ### The scheduling policy
 
@@ -1340,8 +1329,8 @@ supervisor fills free pool accounts from the roster by policy — each model's
 tier budget (`t0`/`t1`/`t2`, see the config reference), `e90` for everyone,
 `e360` once earned, newest-to-the-roster first, shorter episode first, fewest
 runs first, one character per model, within `policy.maxConcurrent` per
-rate-limit key. Only runs from the running checkout's harness **series**
-(`0.3` of `harness-0.3-114-g…`) count; a minor bump starts every model's
+rate-limit key. Only runs from the running build's harness **series**
+(`0.5` of `harness-0.5-1437-g…`) count; a minor bump starts every model's
 evidence over, a fix commit does not. With `policy.paid` set, at most that
 many paid runs are in flight at once — a throttle, never a budget. A model
 whose entry says `idle: "unlimited"` takes one continuous freeplay session at
@@ -1639,32 +1628,26 @@ never in it, and `infra/image-guard.sh` checks it before the push. The tag is
 with it groups with the series; `--allow-dirty` tags are refused for push, and
 `latest` is refused everywhere.
 
-**First proof.** One short probe on `PROBE`: publish a one-arm definition,
-assign a model, set `runPods` to `probes`, and watch `fleet-update.sh status`
-and the job log for `run pod … created`, `… running on <node>: <image> is
+**Checking the launcher.** One short probe on `PROBE` (the `pod-proof`
+campaign is pinned there): assign a model, set `runPods` to `probes`, and watch
+`bun wb fleet state` and the job log for `run pod … created`, `… running on <node>: <image> is
 sha256:…`, and the roster's verdict. Expect the first pull of a new image to
 take minutes; the account is held through it by `image.json` and the heartbeat.
 
-### Ad-hoc launches still work
+### Ad-hoc launches
 
 One episode, launched in the runner pod (`bun wb --local run episode`: in the
 quickstart's runner container):
 
 ```
-bun wb run episode --model <id> [--driver openai|claude-code|codex]
+bun wb run episode --model <id> [--driver openai|claude-code|codex|pi]
 ```
 
-One roster, or a whole supervisor, by hand:
-
-```
-./infra/run-roster.sh <roster.json> --until 07:30
-./infra/run-fleet.sh --until 18:00
-```
-
-Both read the config store and `data/runs/` of the machine they run on, so
-on a cluster deployment they have nothing to read on a workstation. Do not
-run a second supervisor against the same config store while the fleet is up:
-they would both spawn jobs on the same accounts.
+`./infra/run-roster.sh` and `./infra/run-fleet.sh` still start a roster or a
+whole supervisor by hand, on the quickstart. Both read the config store and
+`data/runs/` of the machine they run on, so on a workstation against the
+cluster they have nothing to read. Never run a second supervisor against the
+same store while the fleet is up: both would spawn jobs on the same accounts.
 
 ### The scripted reference run
 
@@ -1682,10 +1665,14 @@ operator's private checkout and built into the runner image from there
 (docs/METHODOLOGY.md, "Scoring"). This tree holds only the hook: the driver,
 its adapter, the stamp and the counting rules. `infra/build-images.sh` (`bun
 wb release build`) takes the program from `reference/src/` at the private
-checkout's HEAD — `WRATHBENCH_PRIVATE_DIR` or `--private-dir`, default
-`/home/mark/git/wrathbench-private` — and lays it at `runner/src/reference/`
-in the build context. The launch imports it from there by dynamic import. A runner
-build that cannot find it stops before anything is built, so a release never
+checkout's HEAD and lays it at `runner/src/reference/` in the build context;
+the launch imports it from there. The checkout is `WRATHBENCH_PRIVATE_DIR` (or
+`--private-dir`), default `/home/mark/git/wrathbench-private`, so a build from
+anywhere the private checkout is not at that path has to set it. It must name
+the checkout's own top level, not a directory inside it, with
+`reference/src/index.ts` committed at HEAD and no uncommitted tracked change
+under `reference/src` (`--allow-dirty` builds HEAD anyway). A runner build that
+cannot find the program stops before anything is built, so a release never
 ships without it. `--without-reference` builds an image without it for local
 use or for a public registry, and is refused when pushing to the release
 registry. Any build without the program, a public clone or the compose
@@ -1710,17 +1697,11 @@ files into that checkout's gitignored `runner/src/reference/` and
 It needs no key, no lane and no `--model`: the route is the model
 (`reference/<route>@<version>`). Nothing schedules it. The fleet config refuses
 `driver: reference`, and the scheduler counts it toward nothing. What it shares
-with everything else is the account. `PROBE` is in no pool, but other things
-log in on it by hand (`bun wb smoke preflight`, hand smokes), so run none of
-them on `PROBE` while a reference run holds it. The program never ends a run
-itself, so the verdict should be `episode-limit`. Until a run has shown the
-route through to its hunt, though, `no-xp` is still possible: the first live
-run found Goldshire's quest givers and prey on the Elwynn grounds, then stood twenty
-minutes as a ghost whose corpse leg the mesh would not finish. The program now
-walks a partial route as far as it goes, swings a leg that failed, leaves a mob
-it cannot reach alone, and takes the spirit healer when a corpse stays out of
-reach.
-A pause is not resumed. Check it with `bun wb inspect run <run-id>` and `bun wb
+with everything else is the account. `PROBE` is in no pool, but the smokes
+default to it, so run none of them on `PROBE` while a reference run holds it
+(SMOKE3 and SMOKE4 are the others the fleet never schedules, "The lean path").
+The program never ends a run itself, so the verdict should be `episode-limit`;
+`no-xp` means the route stalled somewhere. A pause is not resumed. Check it with `bun wb inspect run <run-id>` and `bun wb
 inspect trajectory <run-id> --grep 'REF'`. Every turn's result ends in one
 `[log] REF {…}` line: the step, `advance`, what the tick did, and the level, xp
 and health. An `npc … not in view` after walks that arrived is a route
@@ -1744,13 +1725,16 @@ of launches that did not happen and because attempt numbers must stay unique on
 disk.
 
 The CLI parks runs for the other two reasons — the comparability floor, and
-the operator's own judgement about what a listing should show:
+the operator's own judgement about what a listing should show. It reads the
+data volume, so it runs in the runner pod (`kubectl -n wrathbench exec
+deploy/wrathbench-runner -- bun runner/src/archive.ts …`; an `@file` is a path
+there):
 
 ```
-bun runner/src/archive.ts --pre-series 0.4 --dry-run            # everything below the harness-0.4 floor
-bun runner/src/archive.ts --pre-series 0.4 --release-paused     # ...including parked runs nobody holds
-bun runner/src/archive.ts --run-ids a,b,c --dry-run             # exactly these runs
-bun runner/src/archive.ts --run-ids @ids.txt --release-paused   # ...one id per line, # comments skipped
+archive.ts --pre-series <X.Y> --dry-run          # everything that is not a clean build of series X.Y
+archive.ts --pre-series <X.Y> --release-paused   # ...including parked runs nobody holds
+archive.ts --run-ids a,b,c --dry-run            # exactly these runs
+archive.ts --run-ids @ids.txt --release-paused  # ...one id per line, # comments skipped
 ```
 
 `--pre-series` parks every run whose recorded harness version is not a clean
@@ -1789,7 +1773,7 @@ A key the file does not name is uncapped. A claude-code run counts against
 **two** concurrency keys and needs a free slot in both:
 
 - `claude-code` — every Claude session in flight, whoever pays. The overall
-  ceiling, and the same key an older file already had.
+  ceiling.
 - `claude-code:<ENV NAME>` — that one subscription's sessions. Every lane has
   one, the default lane included.
 
@@ -1809,19 +1793,21 @@ Two ways to override, both normally absent:
   entry** (named in `--status`, scheduled by nothing) and leaves the rest of
   the file in effect.
 
-Changing `policy.subscriptions` or the lane plumbing needs a fleet **recreate**,
-not just the 60s config re-read: the token-to-lane path is code.
+Listing a lane is config, but its credential reaches a pod only when the pod
+starts: a new Claude lane is a key in the env Secret and a `modelKeys` line in
+the chart ("Secrets", below), so it lands with a release, not with the 60s
+re-read.
 
 **The Codex lane** is the same idea with a directory for a
 credential: `CODEX_HOME` names a logged-in Codex home (`codex login`; the
 login is its `auth.json`), a second subscription is `CODEX_HOME_2` pointing at
 a second directory, and a directory is never copied per run — its refresh
-token is spent by whichever process refreshes first. A codex run counts
-against the `codex` concurrency key (`"codex": 1` is one live session, the
-rule the Claude lanes follow); per-lane `codex:<ENV NAME>` keys and a place in
-`policy.subscriptions` are not built yet, so a codex
-entry rides the default lane unless its `subscription` pins another
-directory's variable by hand.
+token is spent by whichever process refreshes first. A home's variable is
+listed in `policy.subscriptions` like a Claude lane's, which is what lets an
+entry or a pinned campaign name it in `subscription`. The scheduler does not
+place codex lanes the way it places Claude ones: a codex run counts against
+the one `codex` concurrency key (`"codex": 1` is one live session), and an
+entry rides the default home unless its `subscription` pins another.
 
 The CLI never deletes a thread's rollout (`sessions/**/rollout-*.jsonl`), so
 the fleet deletes them, never archiving one (the trajectory holds all the
@@ -1902,13 +1888,18 @@ templates, so it rolls them.
 
 ### Secrets
 
-`.env` at the repo root, never argv. Bun loads `/wrathbench/.env` inside the
-container — in the supervisor and again in every child — so keys reach the
-runner without appearing in `ps` or in the compose file. A claude-code
-job needs the token of the lane it was scheduled on there (`claude setup-token`)
-— `CLAUDE_CODE_OAUTH_TOKEN`, or `CLAUDE_CODE_OAUTH_TOKEN_2` for the second
-subscription; without it the roster refuses the episode with a `launch-failed`
-row naming that variable, rather than burning a session.
+Never argv. On the cluster every key is a key of the env Secret
+(`envSecretName`, `wrathbench-env`), which the cluster repo generates from
+`.env`; the chart hands each pod only the keys it names (`modelKeys` and
+`templates/_helpers.tpl`), never the whole Secret, so a new provider key is a
+`modelKeys` line plus the key in the Secret. On the quickstart Bun loads
+`/wrathbench/.env` inside the container, in the supervisor and again in every
+child. Either way keys reach the runner without appearing in `ps` or in a
+manifest. A claude-code job needs the token of the lane it was scheduled on
+(`claude setup-token`) — `CLAUDE_CODE_OAUTH_TOKEN`, or
+`CLAUDE_CODE_OAUTH_TOKEN_2` for the second subscription; without it the roster
+refuses the episode with a `launch-failed` row naming that variable, rather
+than burning a session.
 
 Database clients follow the same rule. `mysql`, `mysqladmin` and `mysqldump`
 take the password as `MYSQL_PWD` and `clickhouse-client` as
@@ -2043,8 +2034,9 @@ bun wb fleet resume
 
 Every line but the last two should print an HTTP status. Any status means the
 connection was made, the API's included, whatever it answers a request with no
-token. ClickHouse and the viewer should print `TimeoutError`. After the
-resume, watch three things:
+token. ClickHouse and the viewer should print `TimeoutError`. The check takes
+under half a minute, so the hold is the reconcile plus that: resume as soon as
+it passes. After the resume, watch three things with the fleet live:
 
 - the next preflight gate pass, and the next release's deploy smokes
   (kill-credit's fixture staging uses MySQL from the runner pod);
@@ -2077,8 +2069,11 @@ these things, and nothing else:
 
 The compose quickstart keeps SOAP off.
 
-**Turning it on** happens in one deploy window, because SOAP, the allowlist and
-the module are all read when the worldserver is recreated:
+**Turning it on** takes one deploy window, because SOAP, the allowlist and
+the module are all read when the worldserver is recreated. Everything after
+the window runs with the fleet live: PARTY1–PARTY5 are in no account class and
+on no job until a party campaign is enabled, and the deploy smokes never touch
+them.
 
 1. Before the window, with the server up, run
    `bun wb accounts ensure PARTY1 PARTY2 PARTY3 PARTY4 PARTY5`. That works with
@@ -2091,34 +2086,38 @@ the module are all read when the worldserver is recreated:
    starts, and the reference is optional, so a pod started without the key
    carries it empty until it restarts.
 3. The values commit: `staging: { enabled: true }`. Then run the window as
-   usual (`bun wb release run`, or `bun wb release deploy`).
-4. Inside the window, once the new images are up and before the fleet
-   resumes, run these in this order:
+   usual (`bun wb release run`); the fleet resumes when the deploy smokes pass.
+4. After the resume, with no party campaign enabled yet, run these in this
+   order:
    - `read -rs P && printf '%s\n' "$P" | bun wb accounts stager` creates STAGER
-     with gmlevel 3, using the password from step 2. It cannot run before the
-     window, because `infra/stager-account.ts` only exists in the new image.
-   - `bun wb smoke deadmines-entry` checks the mine's mesh and the portal.
+     with gmlevel 3, using the password from step 2. It needs the new image,
+     which carries `infra/stager-account.ts`.
+   - `bun wb smoke deadmines-entry` checks the mine's mesh and the portal, on
+     PROBE.
    - `bun wb smoke party-entry` stages a party, walks it into map 36 together,
      checks that it is one instance, and deletes the characters.
    - `bun wb smoke party-staging --keep`, last of all, stages the party, checks
      every member at login, and leaves the party staged. It has to be last:
      every staging deletes whatever the party accounts hold.
-5. The one-time reaping proof runs at the next ordinary release window (the
-   operator's ruling of 2026-10-19). Staged items carry guids the live server
-   allocated, so the next boot's one-time DELETEs above its watermark must not
-   touch them. That boot cannot be the turn-on window's own recreate, because
-   SOAP exists only after it and nothing can be staged before it. Leave the
-   party accounts alone until then: a staging or a fresh party launch would
-   delete the kept party. In that next window, once the worldserver has been
-   recreated and before the fleet resumes, run
-   `bun wb smoke party-staging --recheck`. It repeats the checks on what
-   survived the boot and then deletes the five characters. From then on, the
-   construction is the proof.
+5. The reaping proof (the operator's ruling of 2026-10-19). Staged items carry
+   guids the live server allocated, so a boot's one-time DELETEs above its
+   watermark must not touch them. That needs a worldserver boot between the
+   `--keep` and a `--recheck`, with nothing touching the party accounts in
+   between: a staging or a fresh party launch would delete the kept party. The
+   next release window's recreate is that boot. Keep the party campaign
+   disabled from the `--keep` until the recheck, run the window as usual, and
+   after its resume run `bun wb smoke party-staging --recheck`. It repeats the
+   checks on what survived the boot and then deletes the five characters. From
+   then on, the construction is the proof. If a party campaign is already
+   enabled, hold just that campaign ("The lean path"): disable it, wait for its
+   attempt to end, `--keep`, the window, `--recheck`, re-enable.
 6. Until the recheck has passed, the first party campaign runs with
    `resume: false`. A paused party is then never resumed onto characters
    whose survival across a boot is still unproven; each attempt is staged
    fresh instead.
-7. `deadmines-entry` joins the deploy smokes while the campaign is enabled.
+7. While a party campaign is enabled, run `deadmines-entry` after any release
+   that touches the module, on PROBE with the fleet live. It is not a deploy
+   smoke ("The preflight gate", the budget).
 
 To turn it off, set `staging.enabled` back to false in another window. The
 policy, the port and the env go away. The PARTY and STAGER accounts stay in
@@ -2159,21 +2158,21 @@ from the account (`Tankpartyb` on PARTY1). The smokes use the same request.
 Every staging deletes every character on the party accounts, so never run one
 while a party run holds those accounts. The five members are staged in
 parallel.
-The duration has not been measured yet; it is a few logins and logout saves
-per member. A failure names the step and the member. If a
+Each party smoke takes about three minutes end to end (party-entry and
+party-staging about 190 s each), which is why they never run in a hold. A
+failure names the step and the member. If a
 member does not wear its loadout at login, the loader refused an item and
 mailed it, and the stager says so.
 
 ### Harness version stamping
 
-Every episode is stamped with `git describe --tags --always --dirty`, computed
-at launch. On the host `run-episode.sh` does it; in the container `run-roster`
-does it, using the `git` in the runner image against the bind-mounted `.git`.
-A dirty tree stamps `-dirty` either way — that is the point, and it is why the
-stamp is not a file written once at `up` time. On the cluster the stamp is the
-image tag the chart passes (`WRATHBENCH_HARNESS_VERSION`), and an episode
-running as its own pod on an arm's image is stamped with *that* image's tag,
-never the fleet's ("Run pods", above).
+Every episode is stamped with a harness version. On the cluster it is the
+image tag the chart passes (`WRATHBENCH_HARNESS_VERSION`, the `git describe`
+the image was built at), and an episode running as its own pod on an arm's
+image is stamped with *that* image's tag, never the fleet's ("Run pods",
+above). On the quickstart `run-roster` computes `git describe --tags --always
+--dirty` at launch against the bind-mounted `.git` (on the host,
+`run-episode.sh` does), so a dirty tree stamps `-dirty`, which is the point.
 
 ## Public dashboard
 
@@ -2207,15 +2206,19 @@ alone. Neither can do the other's job.
 
 ### First publish, by hand
 
-`mkdir -p data/publish` first — it is the publisher's only writable path and
-Docker would otherwise create it as root. Then one pass:
+On the cluster the publisher is the chart's `publisher` Deployment
+(`publisher.enabled`), which runs `--loop` from its first boot; `bun wb inspect
+publisher` shows what it last did. On the quickstart, `mkdir -p data/publish`
+first — it is the publisher's only writable path and Docker would otherwise
+create it as root. Then one pass:
 
 ```
 docker compose -f infra/compose.yml run --rm --no-deps publisher \
   bun infra/publish-dashboard.ts --once
 ```
 
-Its environment is the compose service's, and the two must stay in agreement:
+The chart's Deployment, compose's service and a hand pass take the same
+environment, and they must stay in agreement:
 
 | variable | value | why |
 | --- | --- | --- |
@@ -2269,17 +2272,18 @@ is tuned, so an upload ends by naming the maps whose art it changed. Purge
 
 ### Start the loop, then deploy the SPA
 
+On the cluster the loop is the Deployment, and `kubectl -n wrathbench logs -f
+deploy/wrathbench-publisher` follows it. On the quickstart:
+
 ```
 docker compose -f infra/compose.yml up -d --no-deps publisher
 docker compose -f infra/compose.yml logs -f publisher
 ```
 
-`--no-deps` for the same reason as the fleet: without it compose may decide the
-worldserver is out of date and recreate it under live episodes. The service
-sits behind the `publish` profile so a bare `up -d` cannot start a second
-publisher against the same bucket. `stop publisher` needs no drain — an
-interrupted pass leaves the last manifest pointing at the last complete
-set.
+`--no-deps` for the same reason as the fleet. The service sits behind the
+`publish` profile so a bare `up -d` cannot start a second publisher against
+the same bucket. Stopping the publisher needs no drain either way: an
+interrupted pass leaves the last manifest pointing at the last complete set.
 
 The app is a separate deploy, and only ever a UI change, because data never
 moves through it:
