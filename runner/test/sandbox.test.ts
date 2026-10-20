@@ -626,7 +626,7 @@ describe("cooperative abort on timeout", () => {
     const res = await host.evalSnippet("await sdk.reclaimCorpse(); 'reclaimed'");
     expect(res.timedOut).toBe(true);
     expect(res.error).toContain("reclaimCorpse was waiting out the server's reclaim delay (~");
-    expect(res.error).toContain("Give it a snippet of its own, or pass a { timeout } that fits.");
+    expect(res.error).toContain("Give it a snippet of its own, or pass a timeout that fits the time the snippet has left, as the second argument: sdk.reclaimCorpse(undefined, { timeout: 20000 }).");
     await host.stop();
     await stub.stop();
   });
