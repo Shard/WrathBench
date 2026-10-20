@@ -14,12 +14,21 @@
  * 2026-10-18 under the same exception as the minimap tiles
  * (docs/DATA-AND-LEGAL.md).
  *
- * Reads only tiles out of `data/minimap` (gitignored, like all of `data/`) —
- * the native `<mapId>/<row>_<col>.png` and the baked pyramid levels
- * `<mapId>/<layer>/<z>/<row>_<col>.png` — and writes only to the bucket. Keys
- * mirror the viewer's own path so the SPA asks for the same URL in both
- * shapes: `tiles/<mapId>/<row>_<col>.png`, `tiles/<mapId>/<layer>/<z>/…` for
- * each layer in `LOD_LAYERS` (`minimap`, `art`).
+ * Uploads the served tree, never the masters. A pass first runs the transcode
+ * (`minimap/src/transcode.ts`), which is incremental, so the served tree under
+ * `data/minimap/web/` is current with the bakes before anything is hashed;
+ * then it reads only tiles out of that tree (gitignored, like all of `data/`)
+ * — the native `<mapId>/<row>_<col>.png` as an indexed PNG, the pyramid levels
+ * `<mapId>/<layer>/<z>/<row>_<col>.webp` and each map's `index.json` — and
+ * writes only to the bucket, each object typed by its extension. Keys mirror
+ * the viewer's own path so the SPA asks for the same URL in both shapes:
+ * `tiles/<mapId>/<row>_<col>.png`, `tiles/<mapId>/<layer>/<z>/…` for each
+ * layer in `LOD_LAYERS` (`minimap`, `art`), `tiles/<mapId>/index.json`.
+ *
+ * The pyramid's `.png` keys earlier passes uploaded are no longer local, so
+ * they stay in the bucket as manifest orphans: builds from before the WebP
+ * tree ask for them. When to delete them is in `infra/cloudflare/README.md`,
+ * step 6.
  *
  * No object carries a Cache-Control: Bun's S3 writer has no option for one
  * (its write options stop at type, disposition, encoding, storage class and
@@ -46,7 +55,9 @@
 
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { isRevalidatedTile, parseTilePath, tileRefPath } from "../runner/viewer/tiles";
+import { describeTranscode, transcodeTree } from "../minimap/src/transcode";
+import { TILE_INDEX_NAME } from "../runner/viewer/tileindex";
+import { SERVED_DIR, isRevalidatedTile, parseTileIndexPath, parseTilePath, tileContentType, tileRefPath } from "../runner/viewer/tiles";
 import { LOD_LAYERS } from "../runner/viewer/worldmap";
 
 // ------------------------------------------------------------------ contracts
@@ -89,7 +100,16 @@ export interface TileStore {
 
 const MAP_DIR = /^\d+$/;
 const LEVEL_DIR = /^\d+$/;
-const TILE_FILE = /^\d+_\d+\.png$/;
+const NATIVE_FILE = /^\d+_\d+\.png$/;
+const LEVEL_FILE = /^\d+_\d+\.webp$/;
+
+/** Whether a request path is the one canonical spelling of a served tile or index. */
+function isServedKey(path: string): boolean {
+  const ref = parseTilePath(path);
+  if (ref !== null) return ref.legacy !== true && tileRefPath(ref) === path;
+  const map = parseTileIndexPath(path);
+  return map !== null && path === `/${TILE_PREFIX}${map}/${TILE_INDEX_NAME}`;
+}
 
 function list(dir: string): string[] {
   try {
@@ -100,20 +120,20 @@ function list(dir: string): string[] {
 }
 
 /**
- * Every tile under the minimap root, as bucket keys.
+ * Every tile under the served root (`<tile root>/web`), as bucket keys.
  *
  * Strict on names: a file is a tile only if `runner/viewer/tiles.ts` would
  * parse its path back out of a request *and* spell it the same way — so a
  * README, an extraction log, a half-written temp file, a level outside its
- * range, a layer the viewer does not serve or a second spelling of a tile
- * (`043_31.png`) is not something this script can upload. The walk reads only
- * a map's own files and the directories of the listed layers.
+ * range, a layer the viewer does not serve, a second spelling of a tile
+ * (`043_31.png`) or a pyramid tile under its master's `.png` name is not
+ * something this script can upload. The walk reads only a map's own files
+ * and the directories of the listed layers.
  */
 export function scanTiles(root: string): LocalTile[] {
   const out: LocalTile[] = [];
   const add = (rel: string, file: string): void => {
-    const ref = parseTilePath(`/${TILE_PREFIX}${rel}`);
-    if (ref === null || tileRefPath(ref) !== `/${TILE_PREFIX}${rel}`) return;
+    if (!isServedKey(`/${TILE_PREFIX}${rel}`)) return;
     const stat = statSync(file);
     if (!stat.isFile()) return;
     out.push({ key: `${TILE_PREFIX}${rel}`, file, size: stat.size });
@@ -122,17 +142,18 @@ export function scanTiles(root: string): LocalTile[] {
     if (!MAP_DIR.test(map)) continue;
     const dir = join(root, map);
     for (const name of list(dir)) {
-      if (TILE_FILE.test(name)) add(`${map}/${name}`, join(dir, name));
+      if (NATIVE_FILE.test(name)) add(`${map}/${name}`, join(dir, name));
     }
     for (const layer of LOD_LAYERS) {
       for (const z of list(join(dir, layer))) {
         if (!LEVEL_DIR.test(z)) continue;
         const levelDir = join(dir, layer, z);
         for (const name of list(levelDir)) {
-          if (TILE_FILE.test(name)) add(`${map}/${layer}/${z}/${name}`, join(levelDir, name));
+          if (LEVEL_FILE.test(name)) add(`${map}/${layer}/${z}/${name}`, join(levelDir, name));
         }
       }
     }
+    if (list(dir).includes(TILE_INDEX_NAME)) add(`${map}/${TILE_INDEX_NAME}`, join(dir, TILE_INDEX_NAME));
   }
   return out;
 }
@@ -217,6 +238,13 @@ export interface TilePublishReport {
    * be purged of before readers see the new painting.
    */
   artMaps: number[];
+  /**
+   * Maps whose `index.json` this pass uploads (or would). The index is
+   * rewritten at the same key whenever a map's cells change, so each one is a
+   * `tiles/<map>/index.json` to purge, or the page keeps skipping cells the
+   * bake has since added.
+   */
+  indexMaps: number[];
 }
 
 /** The maps among `tiles` whose keys are art-layer tiles, ascending. */
@@ -225,6 +253,16 @@ export function artMapsOf(tiles: readonly { key: string }[]): number[] {
   for (const t of tiles) {
     const ref = parseTilePath(`/${t.key}`);
     if (ref !== null && isRevalidatedTile(ref)) maps.add(ref.map);
+  }
+  return [...maps].sort((a, b) => a - b);
+}
+
+/** The maps among `tiles` whose keys are tile indexes, ascending. */
+export function indexMapsOf(tiles: readonly { key: string }[]): number[] {
+  const maps = new Set<number>();
+  for (const t of tiles) {
+    const map = parseTileIndexPath(`/${t.key}`);
+    if (map !== null) maps.add(map);
   }
   return [...maps].sort((a, b) => a - b);
 }
@@ -264,12 +302,18 @@ export async function publishTiles(
     orphans: plan.orphans.length,
     manifestEntries: raw === null ? null : Object.keys(manifest).length,
     artMaps: artMapsOf(plan.upload),
+    indexMaps: indexMapsOf(plan.upload),
   };
   if (opts.dryRun === true) return report;
 
-  await pooled(plan.upload, opts.concurrency ?? TILE_CONCURRENCY, async (tile) => {
-    await store.put(tile.key, await Bun.file(tile.file).bytes(), "image/png");
-  });
+  // Indexes after the tiles they list, for the reason the manifest goes last:
+  // an index that lands first would send a page to a cell not yet uploaded.
+  const isIndex = (t: LocalTile): boolean => parseTileIndexPath(`/${t.key}`) !== null;
+  for (const batch of [plan.upload.filter((t) => !isIndex(t)), plan.upload.filter(isIndex)]) {
+    await pooled(batch, opts.concurrency ?? TILE_CONCURRENCY, async (tile) => {
+      await store.put(tile.key, await Bun.file(tile.file).bytes(), tileContentType(tile.key));
+    });
+  }
 
   // Manifest last: a run that dies mid-upload leaves the previous manifest
   // standing, so the next run re-uploads what it did not finish.
@@ -296,7 +340,9 @@ if (import.meta.main) {
   if (!dryRun && !upload) fail("usage: bun infra/publish-tiles.ts --dry-run | --upload");
 
   const root = Bun.env.WRATHBENCH_MINIMAP_DIR ?? "data/minimap";
-  const local = scanTiles(root);
+  // The served tree first, so what is hashed is current with the bakes.
+  for (const line of describeTranscode(await transcodeTree(root))) console.log(line);
+  const local = scanTiles(join(root, SERVED_DIR));
   if (local.length === 0) fail(`no tiles under ${root} (run the extraction in minimap/ first)`);
 
   for (const name of ["S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_BUCKET", "S3_ENDPOINT"] as const) {
@@ -345,6 +391,12 @@ if (import.meta.main) {
     console.log(
       `publish-tiles: art changed on map(s) ${report.artMaps.join(", ")} — purge ` +
         `${report.artMaps.map((m) => `/tiles/${m}/art/`).join(", ")} at the edge (infra/cloudflare/README.md, step 6)`,
+    );
+  }
+  if (report.indexMaps.length > 0) {
+    console.log(
+      `publish-tiles: index changed on map(s) ${report.indexMaps.join(", ")} — purge ` +
+        `${report.indexMaps.map((m) => `/tiles/${m}/${TILE_INDEX_NAME}`).join(", ")} at the edge (infra/cloudflare/README.md, step 6)`,
     );
   }
 }

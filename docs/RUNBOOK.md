@@ -2139,7 +2139,10 @@ bun wb site tiles --upload
 ```
 
 It uses the same `S3_*` credentials as the snapshot publisher
-(`WRATHBENCH_MINIMAP_DIR` overrides the root). `bun wb site ship --tiles` runs the
+(`WRATHBENCH_MINIMAP_DIR` overrides the root). It uploads the served tree, not
+the PNG masters. Each pass first runs the transcode, which only re-encodes
+what changed: natives as indexed PNG, the pyramids as WebP, and a per-map
+`index.json` (`minimap/README.md`, "Served formats"). `bun wb site ship --tiles` runs the
 same upload as part of a deploy, which is the usual way to do it after a
 re-extraction. Two things go with it: `WRATHBENCH_TILES_BASE` in `.env`, without
 which the built site asks for nothing, and — after a re-extraction, since the

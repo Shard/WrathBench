@@ -144,6 +144,16 @@ request is a billed read against the bucket.
    request rather than a fresh download. Rules 3 and 4 do not overlap, so
    their order does not matter.
 
+   Each map's tile index (`/tiles/<map>/index.json`, step 6) belongs with
+   rule 4, not rule 3: it is rewritten at the same key whenever a bake adds
+   or removes cells, and a purge clears the edge but not a browser. Under
+   rule 3's day a reader could keep a stale index for up to a day. That
+   would hide tiles the bake has since added, or hide the minimap where the
+   art no longer covers it. To move it, change rule 4's path test to `URI
+   Path contains "/art/" or URI Path ends with "/index.json"`, and rule 3's
+   to the negation of both. Until then the index is cached like a tile.
+   That is safe for an unchanged tree and wrong for a day after a change.
+
 All four rules set the TTL **explicitly by path** rather than respecting an origin
 header, and that is not a style choice: no published object carries a
 `Cache-Control` at all, because Bun's S3 writer cannot send one (Bun 1.4's
@@ -218,10 +228,18 @@ The public map draws real minimap tiles. They are not
 part of a snapshot pass and never become one — this is the step that puts them
 in the bucket, run from a checkout with `data/minimap` populated by the
 extraction in `minimap/` and the zoomed-out levels and art layer its bakes
-write, with the same `S3_*` credentials as the publisher. Those are keyed under
-the same `/tiles/` prefix (`tiles/<map>/minimap/<z>/<row>_<col>.png`,
-`tiles/<map>/art/<z>/<row>_<col>.png`), so rules 3 and 4 and the CORS policy already
-cover them:
+write, with the same `S3_*` credentials as the publisher. The publisher
+uploads the served tree, not those PNG masters. Each pass first runs the
+incremental transcode (`minimap/README.md`, "Served formats"), then uploads:
+
+- the natives as indexed PNG at their old keys;
+- the pyramids as WebP (`tiles/<map>/minimap/<z>/<row>_<col>.webp`,
+  `tiles/<map>/art/<z>/<row>_<col>.webp`);
+- each map's `tiles/<map>/index.json`, after the tiles it lists.
+
+Each object is typed by its extension (`image/png`, `image/webp`,
+`application/json`). It all sits under the same `/tiles/` prefix, so rules 3
+and 4 and the CORS policy already cover it:
 
 ```
 bun infra/publish-tiles.ts --dry-run    # counts only, uploads nothing
@@ -238,7 +256,27 @@ An art re-bake is the common case of that, since the art's look is tuned in
 place. An upload ends by naming the maps whose art it changed (`art changed
 on map(s) …`). Purge `/tiles/<map>/art/` for each of those. The edge then
 serves the new painting at once, and a browser that already holds the old one
-picks it up within rule 4's five minutes.
+picks it up within rule 4's five minutes. A pass that changed an index says so
+the same way (`index changed on map(s) …`); purge each
+`/tiles/<map>/index.json` it names.
+
+**The pyramid's old `.png` objects.** Builds from before the WebP tree ask
+for `tiles/<map>/<layer>/<z>/<row>_<col>.png`. Those objects stay in the bucket,
+and in `tiles/manifest.json` as orphans that every pass counts, until no
+deployed build can ask for them. That is all three of:
+
+- the site that requests `.webp` is live;
+- rule 3's day has passed since, so no edge or browser copy of an old page
+  remains, and a tab left open from before has had a day to reload;
+- the operator no longer wants a rollback to a build from before the WebP
+  tree.
+
+Then delete every `tiles/<map>/minimap/…/*.png` and `tiles/<map>/art/…/*.png`
+key, both from the bucket and from the manifest. The manifest's orphan list
+is exactly that set, and nothing else becomes an orphan unless a bake drops a
+cell. A week after the WebP site ships is a comfortable margin. Until then
+they cost storage and nothing else: they are about 270 MB at R2's storage
+rate, with no reads.
 
 Then set `WRATHBENCH_TILES_BASE=https://wrathbench-data.shard.page` in `.env`,
 which is what makes the build in step 7 ask for them. It is a separate flag from
