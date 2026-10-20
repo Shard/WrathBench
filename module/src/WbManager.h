@@ -419,9 +419,9 @@ namespace WrathBench
         void ReplanSteep(Player* player, float sx, float sy, float sz, float x, float y, float z, float reqZ,
             bool force, std::vector<size_t> const& refusing, PathResolve& r);
         // The z-ladder around it: ground height at x,y first for a unit
-        // target, as a fallback after target_off_mesh otherwise; then the one
-        // walkable level of the mesh over or under x,y (`usedMeshZ`, with the
-        // level in `groundZOut`).
+        // target, as a fallback after target_off_mesh otherwise; then the
+        // mesh's walkable level over x,y when it is the column's only one
+        // (`usedMeshZ`, with the level in `groundZOut`).
         PathResolve ResolvePath(Player* player, float x, float y, float z, bool unitTarget,
             bool* usedGroundZ = nullptr, float* groundZOut = nullptr, bool force = false, bool* usedMeshZ = nullptr);
 

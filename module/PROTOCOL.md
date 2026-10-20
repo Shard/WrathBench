@@ -356,12 +356,17 @@ model geometry a client has too) before pathing, and falls back to the given z.
 Without `guid` the ground z is tried only after a `target_off_mesh`. The
 ground height looks down from the z given, so a z under the ground (one read
 off a lower level, often the character's own) finds none; after both, the
-module tries the walkable level of the mesh directly over or under `x,y`
-within ±50y, when there is exactly one (levels within 2y of each other are one
-floor; an island the character cannot reach is not a level). The core
-searches that band for the end polygon but refuses an end more than 7y from
-it in 3D (`PATHFIND_FARFROMPOLY_END`), which this rung is for. A column with
-two or more levels is two readings of the request and is not guessed between.
+module tries the walkable level of the mesh directly over `x,y`, when it is
+the only one in the column within ±50y (levels within 2y of each other are
+one floor; an island the character cannot reach is not a level): no
+character stands under a walkable surface, so the surface is the one reading
+of a z beneath it. The core searches that band for the end polygon but
+refuses an end more than 7y from it in 3D (`PATHFIND_FARFROMPOLY_END`), which
+this rung is for. A column with two or more levels is two readings of the
+request and is not guessed between, and a level below the request is not
+taken: the ground rung has judged that already, and a request standing on a
+surface the mesh does not walk (a hillside over a tunnel) did not ask for the
+tunnel.
 A target the mesh rejects at every height tried is still `target_off_mesh`,
 and `meshZ` is reported relative to the z asked for. The audit log records
 the level rung as `op: "move_mesh_z"` (`z`, `meshZ`), beside the ground rung's
@@ -981,10 +986,10 @@ at the top of this document.
   retry from the agent's side.
 - `target_off_mesh` — the destination has no walkable polygon within the
   mesh's search box (3y in 2D, ±50y in z, and within 7y of the request in 3D)
-  at the z asked for, the ground height under it, or the one walkable level
-  over or under it (`move_to` above), or it sits inside geometry. A stale z
-  alone produces this only where the column at `x,y` holds two or more
-  walkable levels. The result
+  at the z asked for, the ground height under it, or the walkable level over
+  it when that is the column's only one (`move_to` above), or it sits inside
+  geometry. A z under the ground alone produces this only where the column at
+  `x,y` holds two or more walkable levels. The result
   carries `nearest`: the walkable mesh point closest to the request within
   20y in 2D that a move from the character's position can reach (Detour's
   nearest-polygon query, at most 128 polygons considered, so in a dense

@@ -2390,9 +2390,9 @@ namespace WrathBench
     // a `target_off_mesh` for any point. Map::GetHeight looks down from the
     // z it is given, so a request under the ground (a z read off a lower
     // level, often the character's own) gets no ground height; the mesh's
-    // one walkable level over or under x,y is tried after both (MeshLevelsAt),
-    // and a request whose column holds two or more levels is not guessed
-    // between. A target the mesh rejects at every one of those heights is
+    // walkable level over x,y is tried after both when it is the only level
+    // in the column (MeshLevelsAt), and a request whose column holds two or
+    // more is not guessed between. A target the mesh rejects at every one of those heights is
     // still `target_off_mesh`; `meshZ` is always relative to the z the agent
     // asked for.
     Manager::PathResolve Manager::ResolvePath(Player* player, float x, float y, float z, bool unitTarget, bool* usedGroundZ, float* groundZOut, bool force, bool* usedMeshZ)
@@ -2421,14 +2421,22 @@ namespace WrathBench
             return r;
         };
 
-        // The last rung: the one walkable level over or under x,y, when the
-        // mesh has exactly one there (MeshLevelsAt). Two or more are two
-        // readings of the request and the move stays refused.
+        // The last rung: the walkable level over x,y, when the mesh has
+        // exactly one level in the column there (MeshLevelsAt) and the
+        // request is under it. Under a walkable surface is no place a client's
+        // character can stand, so the z was a stale or wrong one (the
+        // character's own, on a lower stretch of road) and the surface is the
+        // one reading of it. A level below the request is not taken: the
+        // request then floats over it or stands on ground the mesh does not
+        // walk (a hillside over the Deadmines tunnel), which the ground rung
+        // above has already judged, and a tunnel under a hill is not what a
+        // point on the hill asked for. Two or more levels are two readings
+        // and the move stays refused.
         auto meshLevel = [&](PathResolve r) {
             if (!isTargetOffMesh(r))
                 return r;
             float level = 0.0f;
-            if (MeshLevelsAt(player, x, y, z, &level) != 1 || std::fabs(level - z) <= 0.5f
+            if (MeshLevelsAt(player, x, y, z, &level) != 1 || level <= z + 0.5f
                 || (haveGround && std::fabs(level - groundZ) <= 0.5f))
                 return withNearest(r);
             PathResolve r3 = ResolvePathAt(player, x, y, level, z, force);
