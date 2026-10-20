@@ -900,6 +900,16 @@ at the top of this document.
   — a tunnel roof 45y down, in Dun Algaz), so the module ends the walk at the
   height of the polygon the path ends on instead, and the arrival carries that
   as `meshZ`. The audit log records the lift as `op: "move_end_z"`.
+  A request whose own polygon lies on a closed island of the mesh that the
+  start's polygon is not on (a component of fewer than 1024 polygons; a
+  sliver under a WMO floor, a ledge nothing links to) can be reached by no
+  route, so the walk ends instead at the walkable mesh nearest the request
+  that the start can reach, when that lies within 7y of it (the core's own
+  far-from-polygon distance), and arrives there. The Deadmines entrance
+  trigger's centre is such a point: the tunnel's mesh ends 4.4y from it,
+  inside the trigger. Past 7y the request is `target_off_mesh`. The audit
+  log records it as `op: "move_end_reachable"` (`islandPolys`, `walked`,
+  `from`, `to`).
 - `too_far` — destination beyond the single-move cap (~250yd straight-line);
   issue intermediate `move_to`s.
 - `no_mesh` — no navmesh tile is loaded under the character or under the
@@ -907,11 +917,14 @@ at the top of this document.
   retry from the agent's side.
 - `target_off_mesh` — the destination has no walkable polygon within the
   mesh's search box (4y in 2D; z is searched ±50y, so a stale z alone never
-  produces this), or it sits inside geometry. The result carries `nearest`:
-  the walkable mesh point closest to the request within 20y in 2D (Detour's
+  produces this), or it sits inside geometry, or on an island no route
+  reaches with nothing reachable within 7y (see `arrived`). The result
+  carries `nearest`: the walkable mesh point closest to the request within
+  20y in 2D that a move from the character's position can reach (Detour's
   nearest-polygon query, at most 128 polygons considered, so in a dense
   interior it is a walkable point near the request rather than provably the
-  nearest), or `null` when the box holds none. It is a statement about the
+  nearest; the polygons of up to eight closed islands the start is not on
+  are stepped past), or `null` when the box holds none. It is a statement about the
   agent's own requested point in a failure, not a map query (operator
   decision, 2026-10-05, docs/CONTRACTS.md "Map knowledge"). Pick a point on
   a road, a floor, or where an NPC stands.
@@ -926,8 +939,15 @@ at the top of this document.
   more than a few yards of movement, or a disembark, fixes the start.
 - `path_incomplete` — the mesh has no continuous walkable route to the
   destination. The module already tried once to subdivide (path to where the
-  mesh got, then onward); `reachedPos` is how far the mesh could get, so the
-  agent can route around or approach from another side. Nothing moved.
+  mesh got, then onward), and then planned the whole corridor with its own
+  search: the core's path holds at most 74 polygons from a 1024-node search,
+  and a route the core runs out on (the Deadmines mine's tunnels are 177
+  polygons) is searched again with 16384 nodes, 512 polygons and 256 points
+  of 4y — the same route the core would build with room to finish, audited
+  as `op: "move_long_plan"`. `reachedPos` is how far the core's search got,
+  so the agent can route around or approach from another side; its z can be
+  a level away from the request (a search that ran out on a hillside over a
+  tunnel). Nothing moved.
 - `drop` — the mesh's route steps off a ledge: some segment of the resolved
   polyline falls (or climbs) more than 2.0y and steeper than 1.2x its 2D
   length — a cliff, not a ramp (stairs and ramps pass; a stale z within the

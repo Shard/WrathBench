@@ -365,6 +365,18 @@ namespace WrathBench
             float endLiftFrom{0};       // ... from this z (audit only)
             bool hasSnap{false};        // the start was off the mesh and was snapped to the nearest point
             float snapX{0}, snapY{0}, snapZ{0};
+            // The request's own polygon is on a closed island the start cannot
+            // reach (WbNav::OnIsland), audit only (op: move_end_reachable):
+            // its size, and whether the walk goes to the reachable mesh
+            // nearest the request instead (endFrom -> endTo).
+            uint32 islandPolys{0};
+            bool hasEndReachable{false};
+            float endFromX{0}, endFromY{0}, endFromZ{0};
+            float endToX{0}, endToY{0}, endToZ{0};
+            // The core's path and the subdivision both fell short and the
+            // module's planner built the route (op: move_long_plan).
+            bool longPlan{false};
+            uint32 longPolys{0};
             bool nearestSearched{false}; // target_off_mesh: the bounded search for mesh near the target ran
             bool hasNearest{false};      // ... and found a point (nearestX/Y/Z)
             float nearestX{0}, nearestY{0}, nearestZ{0};
