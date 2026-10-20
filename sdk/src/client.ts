@@ -4163,7 +4163,9 @@ export class WrathClient {
     // caster_dead), and a spell the spellbook does not hold, which the core
     // drops without a word (`HandleCastSpellOpcode`: `!HasActiveSpell`) —
     // unless the target is a game object, whose lock may take a spell the
-    // book lacks. The spellbook is read only once login has served it.
+    // book lacks, or the character drives another unit (a vehicle, a charm),
+    // whose spells the core does not check against it. The spellbook is read
+    // only once login has served it.
     const refusal = this.castRefusal(spellId, targetGuid);
     if (refusal !== undefined) {
       this.noteActionHint("castSpell", refusal.status, refusal.hint);
@@ -4200,7 +4202,11 @@ export class WrathClient {
     }
     const book = this.state.spells();
     const atObject = targetGuid !== undefined && this.state.nearby.get(guidKey(targetGuid))?.objectType?.value === "gameObject";
-    if (book.length > 0 && this.state.spell(spellId) === undefined && !atObject) {
+    // Driving a vehicle or a charmed unit, the core casts as that unit and
+    // never asks our spellbook: the unit's UNIT_FIELD_CHARMEDBY names us.
+    const self = this.state.self.guid;
+    const driving = self !== undefined && [...this.state.nearby.values()].some((o) => o.charmedByGuid?.value === self);
+    if (book.length > 0 && this.state.spell(spellId) === undefined && !atObject && !driving) {
       return {
         status: "not_known",
         hint:

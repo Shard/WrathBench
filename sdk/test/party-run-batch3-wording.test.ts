@@ -235,6 +235,18 @@ describe("castSpell: refused before dispatch when it cannot go off", () => {
     early.close();
     await bare.stop();
   });
+
+  test("driving a vehicle or a charmed unit, a spell the book lacks is the unit's and is sent", async () => {
+    const stub = startStub({
+      onConnect: () => world([...creature(22, "1001", 501, "Siege Engine", -1236, 989, { charmedByGuid: SELF_GUID })]),
+    });
+    const client = await inWorld(stub);
+    await folded(client, "SMSG_CREATURE_QUERY_RESPONSE", 23);
+    await client.castSpell(62345);
+    expect(stub.actions.some((a) => a.action === "cast_spell")).toBe(true);
+    client.close();
+    await stub.stop();
+  });
 });
 
 describe("position moved: a jump with no walk of its own reaches the harness block", () => {
@@ -293,6 +305,18 @@ describe("state.self.graveyard: the zone text where it stands", () => {
     for (const e of toEvents([frame(34, "WB_MOVE_PROGRESS", { moveId: 1, pos: { x: -1446, y: 1197, z: 31, o: 0 } }), area(35, 920, "The Dagger Hills")])) {
       cache.apply(e);
     }
+    expect(cache.self.graveyard?.value.area?.name).toBe("Sentinel Hill");
+  });
+
+  test("the wire's own order: the port's ack, the release loc, then the WB_AREA a tick later", () => {
+    // RepopAtGraveyard teleports first, then sends SMSG_DEATH_RELEASE_LOC;
+    // the module's WB_AREA for the new place follows on its next tick.
+    const cache = new StateCache();
+    const release = frame(32, "SMSG_DEATH_RELEASE_LOC", { map: 0, x: -1546.9, y: 1197.2, z: 31.7 });
+    for (const e of toEvents([...loginSequence, selfCreate, area(30, 920, "The Dagger Hills"), port(31, -1546, 1197, 31.7), release])) cache.apply(e);
+    // Provisional: the zone text still names where the character died.
+    expect(cache.self.graveyard?.value.area?.name).toBe("The Dagger Hills");
+    for (const e of toEvents([area(33, 108, "Sentinel Hill")])) cache.apply(e);
     expect(cache.self.graveyard?.value.area?.name).toBe("Sentinel Hill");
   });
 });
