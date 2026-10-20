@@ -187,6 +187,8 @@ interface Case {
   /** The pause switch file's text before the window starts; absent when undefined. */
   switchBefore?: string;
   switchWriteFails?: boolean;
+  /** Replaces the store's preflight block. */
+  preflight?: Record<string, unknown>;
 }
 
 interface Result {
@@ -209,7 +211,7 @@ function run(c: Case): Result {
   chmodSync(kubectl, 0o755);
 
   const preflightJson = join(dir, "preflight.json");
-  writeFileSync(preflightJson, JSON.stringify(PREFLIGHT, null, 2));
+  writeFileSync(preflightJson, JSON.stringify(c.preflight ?? PREFLIGHT, null, 2));
 
   const runs = join(dir, "runs");
   Bun.spawnSync(["mkdir", "-p", runs]);
@@ -509,5 +511,31 @@ describe("k8s-deploy.sh --keep-paused", () => {
     expect(r.out).toContain("--keep-paused");
     expect(r.out).toContain("--namespace wrathbench --release wrathbench");
     expect(r.out).not.toContain("set -Eeuo");
+  });
+});
+
+describe("k8s-deploy.sh with the launch gate alone", () => {
+  // The deploy window's list emptied (operator, 2026-10-20): the regression
+  // smokes run on demand (`bun wb smoke suite`), and the window verifies with
+  // the gate. Empty and absent must both mean "none", never an error.
+  const { deploySmokes: _drop, deployTimeoutMs: _budget, ...withoutDeploy } = PREFLIGHT;
+  for (const [what, preflight] of [
+    ["an empty deploySmokes", { ...PREFLIGHT, deploySmokes: [] }],
+    ["no deploySmokes key at all", withoutDeploy],
+  ] as const) {
+    test(`${what}: the gate verifies the window and no full arc runs`, () => {
+      const r = run({ preflight });
+      expect(r.exitCode).toBe(0);
+      expect(r.out).not.toContain("unbound variable");
+      expect(r.out).not.toContain("running the deploy-time full arc");
+      expect(r.calls.filter((l) => l.startsWith("smoke "))).toEqual(["smoke SMOKE infra/smoke/quest-accept-status.ts"]);
+      expect(r.out).toContain("DEPLOYED and verified by 1 direct smoke(s).");
+    });
+  }
+
+  test("--dry-run names no deploy smokes", () => {
+    const r = run({ args: ["--dry-run"], preflight: withoutDeploy });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toMatch(/deploy smokes \(0\)\s+none/);
   });
 });

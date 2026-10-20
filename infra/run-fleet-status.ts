@@ -331,7 +331,10 @@ export function formatGate(rec: PreflightRecord | undefined, pf: FleetPreflight)
   const accounts = preflightAccounts(pf);
   const head =
     `preflight ${pf.enabled ? "enabled" : "disabled"} (${pf.smokes.length} smoke(s) on ${accounts.join(",")}, ` +
-    `budget ${Math.round(pf.timeoutMs / 1000)}s; ${pf.deploySmokes.length} deploy-only smoke(s), budget ${Math.round(pf.deployTimeoutMs / 1000)}s)`;
+    `budget ${Math.round(pf.timeoutMs / 1000)}s; ` +
+    (pf.deploySmokes.length === 0
+      ? "no deploy-only smokes)"
+      : `${pf.deploySmokes.length} deploy-only smoke(s), budget ${Math.round(pf.deployTimeoutMs / 1000)}s)`);
   if (rec === undefined) return [head, "  no gate result recorded yet"];
   const when = new Date(rec.at).toLocaleString();
   const verdict = rec.skipped === true ? "SKIPPED (gate open)" : rec.ok ? "PASS" : "FAIL — jobs blocked";

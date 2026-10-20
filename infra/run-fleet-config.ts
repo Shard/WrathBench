@@ -110,10 +110,11 @@ export interface JobSpawn {
  * string entry in the config is the pre-2026-08-23 form and means "on the
  * default `account`".
  *
- * `deploySmokes` are the release's smokes on top of the gate (the game
- * surface: combat, quests, loot, vendors, seconds each): run by the deploy
- * window (infra/k8s-deploy.sh) once per deploy,
- * never by the supervisor. It is config here so the deploy scripts and the
+ * `deploySmokes` are the release's smokes on top of the gate, run by the
+ * deploy window (infra/k8s-deploy.sh) once per deploy, never by the
+ * supervisor. Empty or absent is none, which is how it stands: the window
+ * verifies with the gate alone, and the game-surface regression smokes run on
+ * demand (`bun wb smoke suite`, infra/smoke/lib/suite.ts). It is config here so the deploy scripts and the
  * supervisor read the same store and the same accounts clash-check.
  */
 export interface FleetPreflight {
@@ -125,7 +126,7 @@ export interface FleetPreflight {
   timeoutMs: number;
   /** Deploy-only smokes (infra/k8s-deploy.sh), same entry forms as `smokes`. */
   deploySmokes: PreflightSmoke[];
-  /** Budget for the whole deploySmokes sequence. */
+  /** Budget for the whole deploySmokes list: one deadline every smoke in it shares. */
   deployTimeoutMs: number;
 }
 

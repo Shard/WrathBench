@@ -4837,3 +4837,23 @@ describe("a pinned campaign job the config stops yielding drains with the reason
     expect(unyieldedDrainReason({ ref: "glm" }, campaigns, ["glm"], inFlight)).toBe("no longer in the config");
   });
 });
+
+describe("preflight with no deploy smokes (the launch gate alone)", () => {
+  const base = { enabled: true, account: "SMOKE", smokes: [{ script: "infra/smoke/preflight.ts", account: "SMOKE" }], timeoutMs: 45000 };
+
+  test("an empty list and an absent one both parse to no deploy smokes", () => {
+    for (const raw of [{ ...base, deploySmokes: [], deployTimeoutMs: 600000 }, base]) {
+      const pf = parsePreflight(raw);
+      expect(pf.deploySmokes).toEqual([]);
+      expect(pf.smokes).toEqual(base.smokes);
+    }
+  });
+
+  test("the status line says there are none rather than a budget for nothing", () => {
+    const [head] = formatGate(undefined, parsePreflight({ ...base, deploySmokes: [] }));
+    expect(head).toContain("no deploy-only smokes");
+    expect(head).not.toContain("0 deploy-only smoke(s)");
+    const [withOne] = formatGate(undefined, parsePreflight({ ...base, deploySmokes: [{ script: "x.ts", account: "SMOKE2" }], deployTimeoutMs: 60000 }));
+    expect(withOne).toContain("1 deploy-only smoke(s), budget 60s");
+  });
+});

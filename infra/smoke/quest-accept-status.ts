@@ -1,9 +1,9 @@
 /**
- * A deploy smoke: the quest-accept / questgiver-status / turn-in surface,
- * with no combat. It is one of the release's `preflight.deploySmokes` (on
- * SMOKE), run in the deploy window beside kill-credit.ts (one kill, the kill
- * objective completing) and module-quest.ts (the kill quest's turn-in). The
- * per-tick gate runs only infra/smoke/preflight.ts.
+ * A regression smoke: the quest-accept / questgiver-status / turn-in surface,
+ * with no combat. It is a member of the on-demand regression suite (`bun wb smoke suite`, infra/smoke/lib/suite.ts)
+ * on SMOKE3, beside kill-credit.ts (one kill, the kill objective completing)
+ * and module-quest.ts (the kill quest's turn-in). Neither the deploy window
+ * nor the supervisor runs it: both verify with infra/smoke/preflight.ts alone.
  *
  * Raw HTTP/WS only (no SDK). Arc — fresh Human Paladin in Northshire, which
  * spawns beside Deputy Willem:
@@ -33,9 +33,8 @@
  *      for why the delete is first, not last.
  *
  * Every wait is sized at ~1.5x the observed maximum for that step (logs in
- * data/logs/wrathbench/probe-quest-*.jsonl), not a catch-all 60s: a deploy
- * window waits on every deploy smoke in turn, so a slow failure is an
- * expensive one.
+ * data/logs/wrathbench/probe-quest-*.jsonl), not a catch-all 60s: a slow failure
+ * is an expensive one.
  *
  * Run:
  *   bun wb smoke quest-accept-status
@@ -43,6 +42,7 @@
  */
 
 import { authHeaders } from "./lib/auth";
+import { accountFixtureName } from "./lib/fixture";
 import { failOnce } from "./lib/fail";
 import { moduleBase, moduleWsBase } from "./lib/module";
 
@@ -50,16 +50,19 @@ const BASE = moduleBase();
 const WS = moduleWsBase();
 
 const TOKEN = `probe-qaccept-${crypto.randomUUID()}`;
-// Fixed name, deleted at the START of every run and only logged out at the
+// One persistent name, deleted at the START of every run and only logged out at the
 // end: a character that merely disconnects stays in world for the core's
 // 60s WorldSession::expireTime, during which CMSG_CHAR_DELETE is silently
 // ignored (measured 2026-08-23: 66s from logout to a successful delete), and
 // a real client's clean exit (CMSG_LOGOUT_REQUEST) is not on the raw
 // allowlist. Deleting last run's character first proves the same
 // CMSG_CHAR_DELETE path with no wait, because by the next tick the linger is
-// long over. One name per script, so the leftover is always exactly one.
-const CHARACTER = "Smokeqa";
+// long over. One name per script and account, so the leftover is always
+// exactly one. The name follows the account (`Qa` + its letters: Qasmoked on
+// SMOKE3), because names are realm-global: the old fixed `Smokeqa` stood on
+// SMOKE, so the smoke could not run on any other account (create code 50).
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
+const CHARACTER = accountFixtureName("Qa", ACCOUNT);
 
 const QUEST_INTRO = 783; // A Threat Within (Deputy Willem -> Marshal McBride)
 const QUEST_KILL = 7; // Kobold Camp Cleanup (kill 8 Kobold Vermin, entry 6)
