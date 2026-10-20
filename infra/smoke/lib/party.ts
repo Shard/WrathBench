@@ -120,7 +120,9 @@ export async function assertStagedMember(c: WrathClient, m: PartyMember, party: 
  * most 200y along the straight line, each target that is not ground swapped
  * for the walkable point the module names, until the target is reached or
  * a portal takes the walker. Returns the final result: `arrived` there, or
- * `transferred`.
+ * `transferred`. For open ground: underground, a straight-line leg can end
+ * over the tunnel it is meant to reach, and the nearest walkable point can be
+ * an island no route reaches. Use `walkRoute` there.
  */
 export async function walkTo(c: WrathClient, target: { x: number; y: number; z: number }, log: (s: string) => void, maxLegs = 6): Promise<MoveResult> {
   let last: MoveResult | undefined;
@@ -140,6 +142,29 @@ export async function walkTo(c: WrathClient, target: { x: number; y: number; z: 
     if (r.ok && r.status === "transferred") return r;
     if (!(r.ok && r.status === "arrived")) return r;
     if (step === target) return r;
+  }
+  return last!;
+}
+
+/**
+ * Walk a route of waypoints read off the mesh, one move per leg (each leg one
+ * the core's pathfinder completes; see DEADMINES_ENTRANCE_ROUTE). A waypoint
+ * the module calls off the mesh is the route's own error and fails the walk
+ * rather than being swapped for the nearest walkable point, which can be an
+ * island. Returns the first result that is not `arrived` (a `transferred`
+ * among them), or the last leg's.
+ */
+export async function walkRoute(c: Pick<WrathClient, "moveTo" | "state">, route: readonly { x: number; y: number; z: number }[], log: (s: string) => void): Promise<MoveResult> {
+  if (route.length === 0) throw new Error("an empty route");
+  let last: MoveResult | undefined;
+  for (const [i, step] of route.entries()) {
+    const here = c.state.self.position?.value;
+    if (!here) throw new Error("no position to walk from");
+    const r = await c.moveTo(step, { timeout: 120_000 });
+    const tail = r.ok ? (r.status === "transferred" ? ` to map ${r.to.map}` : "") : r.reachedPos ? `; the mesh ends at ${fmt(r.reachedPos)}` : "";
+    log(`    leg ${i + 1}/${route.length}: ${fmt(here)} -> ${fmt(step)}: ${r.status}${tail}`);
+    last = r;
+    if (!(r.ok && r.status === "arrived")) return r;
   }
   return last!;
 }

@@ -15,11 +15,11 @@
  */
 
 import type { WrathClient } from "../../sdk/src/index";
-import { DEADMINES_ENTRANCE_TRIGGER } from "../fixtures/scenarios";
+import { DEADMINES_ENTRANCE_ROUTE } from "../fixtures/scenarios";
 import { stageParty } from "../fixtures/stage-party";
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
-import { deleteMembers, fmt, loginMember, membersOf, smokeRequest, walkTo } from "./lib/party";
+import { deleteMembers, fmt, loginMember, membersOf, smokeRequest, walkRoute, walkTo } from "./lib/party";
 
 const BASE = moduleBase();
 const argv = Bun.argv.slice(2);
@@ -51,7 +51,7 @@ try {
   // In together: every member walks the mine at once, each its own client.
   const inbound = await Promise.all(
     party.map(async (m, i) => {
-      const r = await walkTo(clients[i]!, DEADMINES_ENTRANCE_TRIGGER, (s) => log(`  ${m.character}:${s}`));
+      const r = await walkRoute(clients[i]!, DEADMINES_ENTRANCE_ROUTE, (s) => log(`  ${m.character}:${s}`));
       if (!(r.ok && r.status === "transferred" && r.to.map === DEADMINES_MAP)) {
         throw new Error(`${m.character}'s walk to the portal ended ${r.status}${r.ok && r.status === "transferred" ? ` onto map ${r.to.map}` : ""}`);
       }
