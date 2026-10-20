@@ -68,7 +68,8 @@ import {
   targetReading,
   unitFlags,
 } from "../lib/unitframe";
-import { NO_TILE_BASE, tileSrc } from "../lib/tiles";
+import { NO_TILE_BASE, tileIndexSrc, tileSrc } from "../lib/tiles";
+import { type TileIndex, parseTileIndex } from "@viewer/tileindex";
 import {
   type NearbyDot,
   type ScreenBox,
@@ -128,11 +129,13 @@ import {
   defaultView,
   emptySideNote,
   fitTo,
+  cellAbsent,
   frameLevels,
   headingOnScreen,
   hitTest,
   isDoubleTap,
   latticeLines,
+  minimapHidden,
   levelCellPx,
   mapChips,
   mapName,
@@ -476,6 +479,37 @@ export default function MapPage() {
   const artCanvas = document.createElement("canvas");
 
   /*
+   * Each map's tile index (`@viewer/tileindex`), fetched once: which cells
+   * exist, and where the art hides the minimap. Until it answers no tile of
+   * that map is requested, so a first frame does not probe every absent cell;
+   * a 404, a failure or a slow answer is null, and every cell is asked for as
+   * it was before indexes existed.
+   */
+  const indexes = new Map<number, TileIndex | null | "loading">();
+  const INDEX_TIMEOUT_MS = 3000;
+  function tileIndex(map: number): TileIndex | null | undefined {
+    const have = indexes.get(map);
+    if (have !== undefined) return have === "loading" ? undefined : have;
+    const src = tileIndexSrc(map);
+    if (src === null) {
+      indexes.set(map, null);
+      return null;
+    }
+    indexes.set(map, "loading");
+    fetch(src, { signal: AbortSignal.timeout(INDEX_TIMEOUT_MS) })
+      .then((r) => (r.ok ? r.json() : null))
+      .then(
+        (raw: unknown) => indexes.set(map, parseTileIndex(raw)),
+        () => indexes.set(map, null),
+      )
+      .finally(() => {
+        needsDraw = true;
+      });
+    return undefined;
+  }
+  const waiting = new Image();
+
+  /*
    * Tiles: an LRU of Image objects with misses remembered in the same map,
    * every layer and pyramid level in the one cache. Before the extraction has
    * run every visible tile is missing, and an unremembered miss would
@@ -490,12 +524,17 @@ export default function MapPage() {
       tiles.set(key, hit);
       return hit;
     }
+    const index = tileIndex(map);
+    // The index is still on its way: pending, and not cached, so the next
+    // frame after it lands decides for real.
+    if (index === undefined) return { img: waiting, state: "pending" };
     const img = new Image();
     const entry: TileEntry = { img, state: "missing" };
     // Null means this build was given no tile host and must not ask for one
-    // (`lib/tiles.ts`). Remembered as a miss like any other, so the grid is
-    // drawn and nothing is requested.
-    const src = tileSrc(map, layer, z, row, col);
+    // (`lib/tiles.ts`); a cell the index does not list does not exist.
+    // Either is remembered as a miss like any other, so the grid is drawn and
+    // nothing is requested.
+    const src = cellAbsent(index, layer, z, row, col) ? null : tileSrc(map, layer, z, row, col);
     if (src !== null) {
       entry.state = "pending";
       img.onload = (): void => {
@@ -724,7 +763,10 @@ export default function MapPage() {
      */
     const f = frameLevels(view.scale, { w: W, h: H });
     if (f.minimap > 0) drawLattice(ctx, f.minimap, false);
-    drawLevel(ctx, map, MINIMAP_LAYER, f.minimap);
+    // Where the art covers it at full strength the minimap is neither fetched
+    // nor drawn (`minimapHidden`); everywhere else it is the ground under it.
+    const index = tileIndex(map) ?? null;
+    drawLevel(ctx, map, MINIMAP_LAYER, f.minimap, (row, col) => minimapHidden(f, index, row, col));
     const art = artCanvas.getContext("2d");
     if (f.art === null || art === null) return;
     art.clearRect(0, 0, W, H);
@@ -776,13 +818,23 @@ export default function MapPage() {
    *
    * Native tiles (level 0) draw as they always have: a loaded tile fills its
    * cell, and anything else gets its outline and file-name label — except a
-   * cell still loading that has something cached drawn under it.
+   * cell still loading that has something cached drawn under it. A cell
+   * `hidden` answers true for is skipped outright: not asked for, not drawn.
    */
-  function drawLevel(ctx: CanvasRenderingContext2D, map: number, layer: LodLayer, z: number): void {
+  function drawLevel(
+    ctx: CanvasRenderingContext2D,
+    map: number,
+    layer: LodLayer,
+    z: number,
+    hidden?: (row: number, col: number) => boolean,
+  ): void {
     const g = visibleGrid(view, { w: W, h: H }, z);
     const cells: { row: number; col: number; t: TileEntry }[] = [];
     for (let row = g.row0; row <= g.row1; row++) {
-      for (let col = g.col0; col <= g.col1; col++) cells.push({ row, col, t: tile(map, layer, z, row, col) });
+      for (let col = g.col0; col <= g.col1; col++) {
+        if (hidden?.(row, col) === true) continue;
+        cells.push({ row, col, t: tile(map, layer, z, row, col) });
+      }
     }
 
     const covered = new Set<TileEntry>();

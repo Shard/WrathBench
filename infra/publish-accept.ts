@@ -276,8 +276,8 @@ const CREDENTIAL = new SecretScanner();
  */
 const WIKI_DUMP_SOURCE = /[A-Za-z0-9._-]+\.xml\.(?:7z|bz2|gz|zst)\b/;
 
-/** A minimap tile: the prefix the tile publisher writes, or a raster file. */
-const TILE_REFERENCE = /(?:^|[\s"'(/])tiles\/[^\s"']*|\.png\b/;
+/** A minimap tile: the prefix the tile publisher writes, or a raster file in either format it serves. */
+const TILE_REFERENCE = /(?:^|[\s"'(/])tiles\/[^\s"']*|\.(?:png|webp)\b/;
 
 /**
  * Keys whose value the projection withholds outright. Presence is not the

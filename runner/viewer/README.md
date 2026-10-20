@@ -397,13 +397,29 @@ Tiles come from the minimap extraction in `minimap/`, which writes
 `data/minimap/<mapId>/<row>_<col>.png`, and its bakes, which write the
 zoomed-out levels as `data/minimap/<mapId>/minimap/<z>/<row>_<col>.png` and the
 painted art layer as `data/minimap/<mapId>/art/<z>/<row>_<col>.png`, both for z
-1..6; `/tiles/` serves every shape straight from there under the same path,
-integers only (and the layer from a fixed list), and cached for a year since
-they never change (public mode with `WRATHBENCH_VIEWER_TILES_PUBLIC=1` sends a
+1..6. The transcode in `minimap/` derives the served tree from those masters
+under `data/minimap/web/`: the natives as indexed PNG at the same names, the
+pyramids as `<z>/<row>_<col>.webp`, and a per-map `index.json`.
+
+`/tiles/` serves every shape from there under the same path, integers only
+(and the layer from a fixed list). Two fallbacks keep it working without a
+current transcode:
+
+- A served file that is missing, or older than its master, is answered from
+  the master and typed as what it is. A machine that never ran the transcode
+  still draws every tile.
+- A pyramid tile asked for under its old `.png` name, by a build from before
+  the WebP tree, gets its master.
+
+The index is withheld (404) when it is older than any of its map's master
+directories, so the page asks for every cell rather than trust a stale list.
+Copying `data/minimap` to another machine wants mtimes kept (`tar`, `rsync -a`).
+
+Tiles are cached for a year since they never change (public mode with `WRATHBENCH_VIEWER_TILES_PUBLIC=1` sends a
 private one-hour cache instead — see "What it will not serve"). The art is the
 exception: it is re-baked in place while its look is tuned, so it is sent
 `no-cache` (`private` in public mode) with an ETag and Last-Modified, and an
-unchanged tile is a 304. Nothing extracted yet is a normal state, not an error: a missing tile
+unchanged tile is a 304; the index is sent the same way. Nothing extracted yet is a normal state, not an error: a missing tile
 draws as a labelled grid square, so the map works on a machine that has never
 run the extraction. The public site's tiles are a separate upload
 (`docs/RUNBOOK.md`, "Public dashboard").
