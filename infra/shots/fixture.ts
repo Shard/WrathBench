@@ -14,8 +14,8 @@
  *                  a continent to cross to and an instance's own tiles
  *   fixture-ended  terminated `episode-limit` half an hour ago, two and a half
  *                  hours of trace to replay
- *   fixture-e90, fixture-reference
- *                  two finished `e90` runs, a model's row and the scripted
+ *   fixture-e90, fixture-e90-closed, fixture-reference
+ *                  three finished `e90` runs, two models' rows and the scripted
  *                  reference's line, for the ladder (`writeLadderRun`)
  *
  * Both carry a character sheet on the trace (money, worn and carried items, a
@@ -280,6 +280,7 @@ function writeRun(runsDir: string, spec: Spec, ended: number | null): Trajectory
  * and non-members of the tier for the same reasons a real run's are.
  */
 export const E90_RUN = "fixture-e90";
+export const E90_CLOSED_RUN = "fixture-e90-closed";
 export const REFERENCE_RUN = "fixture-reference";
 
 function writeLadderRun(runsDir: string, runId: string, raw: Record<string, unknown>, level: number, startedAt: number): void {
@@ -468,6 +469,10 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
   };
   writeRun(runsDir, endedSpec, endedAt).close();
   writeLadderRun(runsDir, E90_RUN, { driver: "openai", model: "fixture/e90-model", character: "Laddera" }, 6, at(now - 5 * 3_600_000));
+  // A second row, under an invented id a family's weights rules still answer
+  // for (Anthropic's catch-all reads `closed`), so the ladder's weights filter
+  // has two buckets to offer; `fixture/e90-model` reads `unknown`.
+  writeLadderRun(runsDir, E90_CLOSED_RUN, { driver: "openai", model: "anthropic/fixture-model", character: "Closewyn" }, 4, at(now - 6 * 3_600_000));
   writeLadderRun(runsDir, REFERENCE_RUN, { driver: "reference", character: "Routeric" }, 9, at(now - 4 * 3_600_000));
   const liveSpecs: Spec[] = [
     liveSpec,

@@ -702,6 +702,16 @@ front are unchanged. What else is above the chart:
   filtering by one would be filtering by company twice. Both option lists are
   derived from the rows on screen, so neither can go stale, and both ride in the
   URL so a reading of a slice can be linked.
+- a **weights** filter, `open`, `closed` or `unknown`, in the same panel and
+  the same URL (`?weights=open`). It is looked up, not derived: the lineup
+  records it model by model (`weights` in `infra/model-lineup.json`), because
+  it is a fact about one checkpoint — Gemma is open where Gemini is closed, and
+  gpt-oss where GPT-6 is not. An id no rule names, including every id no family
+  claims, is `unknown` rather than given its family's majority answer, and
+  `unknown` is a bucket a reader can tick like the other two. Like company it
+  is read in the browser from the bundled lineup, so the published artifacts
+  carry nothing new and a lineup edit reaches the site with the next dashboard
+  build.
 - **exclude free**, the per-viewer preference it has always been — a standing
   opinion about what counts as evidence, not a slice of the field.
 - **representative efforts**, **on by default**. For a model with several effort entries it shows only the efforts on

@@ -4,7 +4,7 @@
  * The page used to wear four dropdowns in a row. Two of them — race and class
  * — asked a question an eval episode cannot answer differently (every scored
  * run is the same baseline character), and the third duplicated the series
- * selector the shell already carries for every page. What is left is two
+ * selector the shell already carries for every page. What is left is the
  * multi-select dimensions behind one button that says how many are on.
  *
  * Native `<select multiple>` rather than checkbox lists: there are
@@ -32,6 +32,8 @@ const PANEL_W = 340;
 export interface FilterGroup {
   /** The dimension's name, as the box is labelled. */
   label: string;
+  /** What the dimension means, on hover over its label: never page prose. */
+  title?: string;
   options: readonly FilterOption[];
   selected: readonly string[];
   onSelect: (keys: string[]) => void;
@@ -99,7 +101,7 @@ export function FilterPopover(props: { groups: readonly FilterGroup[] }) {
         class={active() > 0 ? "popover-button on" : "popover-button"}
         ref={btn}
         aria-expanded={open()}
-        title="Narrow the ladder by company and model family. Values combine within a box and narrow across the two."
+        title="Narrow the ladder by company, model family and weights. Values combine within a box and narrow across the boxes."
         onClick={(ev) => {
           ev.stopPropagation();
           setOpen(!open());
@@ -121,7 +123,7 @@ export function FilterPopover(props: { groups: readonly FilterGroup[] }) {
               {(group) => (
                 <div class="filter-group">
                   <div class="filter-group-head">
-                    <span class="filter-group-label">{group.label}</span>
+                    <span class="filter-group-label" title={group.title}>{group.label}</span>
                     <Show when={group.selected.length > 0}>
                       <button type="button" class="filter-clear" onClick={() => group.onSelect([])}>
                         clear
@@ -137,7 +139,7 @@ export function FilterPopover(props: { groups: readonly FilterGroup[] }) {
                   */}
                   <select
                     multiple
-                    size={6}
+                    size={Math.max(2, Math.min(6, group.options.length))}
                     onChange={(ev) =>
                       group.onSelect(Array.from(ev.currentTarget.selectedOptions, (o) => o.value))
                     }

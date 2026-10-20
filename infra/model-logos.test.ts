@@ -74,9 +74,9 @@ const LINEUP: ModelLineup = {
   version: 1,
   icons: { package: "@lobehub/icons-static-svg", version: "1.94.0" },
   families: [
-    { id: "alpha", name: "Alpha", vendor: "A Co", icon: "alpha-color", match: ["a/*"] },
-    { id: "beta", name: "Beta", vendor: "B Co", icon: "beta", match: ["b/*"] },
-    { id: "plain", name: "Plain", vendor: "P Co", icon: undefined, match: ["p/*"] },
+    { id: "alpha", name: "Alpha", vendor: "A Co", icon: "alpha-color", match: ["a/*"], weights: [] },
+    { id: "beta", name: "Beta", vendor: "B Co", icon: "beta", match: ["b/*"], weights: [] },
+    { id: "plain", name: "Plain", vendor: "P Co", icon: undefined, match: ["p/*"], weights: [] },
   ],
 };
 
@@ -125,7 +125,7 @@ describe("selectIcons", () => {
   });
 
   test("a slug the package does not carry is a hard error naming slug and family", () => {
-    const typo: ModelLineup = { ...LINEUP, families: [{ id: "alpha", name: "Alpha", vendor: "A Co", icon: "alpha-colour", match: ["a/*"] }] };
+    const typo: ModelLineup = { ...LINEUP, families: [{ id: "alpha", name: "Alpha", vendor: "A Co", icon: "alpha-colour", match: ["a/*"], weights: [] }] };
     expect(() => selectIcons(typo, readTar(ARCHIVE))).toThrow(/family alpha.*alpha-colour/);
   });
 
@@ -180,7 +180,17 @@ describe("parseLineup", () => {
   const json = JSON.stringify({
     version: 1,
     icons: { package: "@lobehub/icons-static-svg", version: "1.94.0" },
-    families: [{ id: "claude", name: "Claude", vendor: "Anthropic", icon: "claude-color", match: ["anthropic/*"] }],
+    families: [{ id: "claude", name: "Claude", vendor: "Anthropic", icon: "claude-color", match: ["anthropic/*"], weights: [{ match: ["claude*"], is: "closed" }] }],
+  });
+
+  test("weights are required on every family, and every rule says one of the three", () => {
+    expect(parseLineup(json).families[0]!.weights).toEqual([{ match: ["claude*"], is: "closed" }]);
+    expect(() => parseLineup(json.replace(',"weights":[{"match":["claude*"],"is":"closed"}]', ""))).toThrow(/family claude weights must be an array/);
+    expect(() => parseLineup(json.replace('"is":"closed"', '"is":"maybe"'))).toThrow(/weights\[0\]\.is must be one of open, closed, unknown/);
+    expect(() => parseLineup(json.replace('"is":"closed"', '"is":"closed","source":""'))).toThrow(/weights\[0\]\.source/);
+    expect(() => parseLineup(json.replace('"match":["claude*"]', '"match":[]'))).toThrow(/weights\[0\]\.match/);
+    // Empty is allowed: nothing checked, so every id of the family reads unknown.
+    expect(parseLineup(json.replace('[{"match":["claude*"],"is":"closed"}]', "[]")).families[0]!.weights).toEqual([]);
   });
 
   test("a well-formed lineup round-trips", () => {

@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { FAMILIES, familyOf, iconModels, monogramOf } from "../src/lib/lineup";
+import { FAMILIES, WEIGHTS, familyOf, iconModels, monogramOf, weightsOf } from "../src/lib/lineup";
 
 const idOf = (model: string | null | undefined): string | null => familyOf(model)?.id ?? null;
 
@@ -137,5 +137,50 @@ describe("a job's icons", () => {
       "hy3-free",
     ]);
     expect(iconModels([])).toEqual([]);
+  });
+});
+
+describe("weights", () => {
+  test("a closed model in a family with open siblings is closed, and the open sibling is open", () => {
+    expect(weightsOf("openai/gpt-oss-120b")).toBe("open");
+    expect(weightsOf("openai/gpt-5.6-luna")).toBe("closed");
+    expect(weightsOf("gpt-6-luna")).toBe("closed");
+    expect(weightsOf("google/gemma-4-31b-it:free")).toBe("open");
+    expect(weightsOf("google/gemini-4-argon")).toBe("closed");
+  });
+
+  test("every spelling of one model reads the same: alias, prefix, :free and an OpenCode Zen -free id", () => {
+    for (const id of ["opus", "sonnet", "claude-haiku-4-5-20251001", "anthropic/claude-opus-4-1"]) expect(weightsOf(id)).toBe("closed");
+    expect(weightsOf("poolside/laguna-s-2.1:free")).toBe("open");
+    expect(weightsOf("poolside/laguna-s-2.1")).toBe("open");
+    expect(weightsOf("laguna-s-2.1-free")).toBe("open");
+    expect(weightsOf("qwen-3.8-27b")).toBe(weightsOf("qwen/qwen3.8-27b"));
+    expect(weightsOf("NVIDIA/Nemotron-3-Ultra-550B-A55B:FREE")).toBe("open");
+  });
+
+  test("an id no rule names is unknown, never its family's default", () => {
+    // Uncatalogued: stealth ids and vendors with no family.
+    expect(weightsOf("stealth/ox-alpha")).toBe("unknown");
+    expect(weightsOf("omen-alpha")).toBe("unknown");
+    expect(weightsOf("hy3-free")).toBe("unknown");
+    // A catalogued family, a model nobody checked.
+    expect(weightsOf("openai/gpt-9-unreleased")).toBe("unknown");
+    expect(weightsOf("mistralai/mistral-large")).toBe("unknown");
+    expect(weightsOf(null)).toBe("unknown");
+    expect(weightsOf(undefined)).toBe("unknown");
+    expect(weightsOf("")).toBe("unknown");
+  });
+
+  test("every family carries rules, every rule says one of the three, and every pattern is its own family's", () => {
+    for (const f of FAMILIES) {
+      expect(Array.isArray(f.weights)).toBe(true);
+      for (const rule of f.weights) {
+        expect(WEIGHTS as readonly string[]).toContain(rule.is);
+        expect(rule.match.length).toBeGreaterThan(0);
+        // A rule in the wrong family would never be reached: weightsOf asks
+        // the id's own family.
+        for (const pattern of rule.match) expect(familyOf(pattern.replace(/\*/g, "x"))).toBe(f);
+      }
+    }
   });
 });

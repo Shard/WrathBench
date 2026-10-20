@@ -714,6 +714,8 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
 .filter-group select { width: 100%; box-sizing: border-box; margin-top: 3px; font-size: var(--fs-xs); padding: 0; }
 @media (max-width: 420px) {
   .filter-popover { flex-direction: column; }
+  /* Stacked, the row basis would become a height: each box as tall as its list. */
+  .filter-group { flex: 0 0 auto; }
 }
 
 .runview-cols { display: flex; gap: 16px; flex: 1; min-height: 320px; }

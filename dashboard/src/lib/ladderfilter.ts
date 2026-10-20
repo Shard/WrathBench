@@ -10,6 +10,9 @@
  *  - `lineOf` — the model *line* a slug belongs to, which is the "family" a
  *    reader means when they say sonnet, fable or astra.
  *  - `companyOf` — who serves it, which the lineup catalog does record.
+ *  - `weightsOf` — whether its weights are published, which the catalog
+ *    records model by model (`lib/lineup.ts`); `open`, `closed` or `unknown`,
+ *    the last a bucket like any other so a reader can tick it off.
  *
  * On where the two dimensions come from. `infra/model-lineup.json` is the
  * model registry, and `familyOf` reads it; its `vendor` is exactly the company
@@ -25,7 +28,9 @@
  * base name rather than becoming nothing.
  */
 
-import { familyOf } from "./lineup";
+import { familyOf, weightsOf } from "./lineup";
+
+export { weightsOf };
 import { paretoFront } from "./pareto";
 
 /* ------------------------------------------------------------ the two keys */
@@ -110,11 +115,12 @@ export function filterOptions(
  */
 export function matchesSelection(
   model: string | null | undefined,
-  sel: { lines: readonly string[]; companies: readonly string[] },
+  sel: { lines: readonly string[]; companies: readonly string[]; weights: readonly string[] },
 ): boolean {
   const okLine = sel.lines.length === 0 || sel.lines.includes(lineOf(model));
   const okCompany = sel.companies.length === 0 || sel.companies.includes(companyOf(model));
-  return okLine && okCompany;
+  const okWeights = sel.weights.length === 0 || sel.weights.includes(weightsOf(model));
+  return okLine && okCompany && okWeights;
 }
 
 /* --------------------------------------------------- the representative rule */

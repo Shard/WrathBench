@@ -8,6 +8,12 @@
  * never a branch in a component. An id nothing matches gets `null` here and a
  * neutral monogram in the UI; there is no per-model special case anywhere.
  *
+ * A family also says, model by model, whether the weights are published
+ * (`weightsOf`). That is a fact about one checkpoint, not about a line or a
+ * vendor — Gemini is closed and Gemma under the same family is open — so a
+ * family carries its own first-match rules rather than a single value, and an
+ * id no rule names is `unknown` rather than inheriting a family default.
+ *
  * Everything is total: null, undefined and nonsense all answer, none throw.
  */
 
@@ -23,6 +29,32 @@ export interface LineupFamily {
   icon: string;
   /** The id globs that belong to this family, `*` matching any characters. */
   match: readonly string[];
+  /**
+   * Which of the family's models publish their weights, first match wins. The
+   * value is read through `weightsOf`, which answers `unknown` for anything
+   * that is not one of the three; `parseLineup` (`infra/model-logos.ts`) is
+   * what refuses a family without rules or a rule with a bad value.
+   */
+  weights: readonly WeightsRule[];
+}
+
+/**
+ * Whether a model's weights can be downloaded. `open` means a checkpoint of
+ * that exact model is published; `closed` that it is served only; `unknown`
+ * that nobody checked, or there was nothing to check against (a stealth id,
+ * weights announced but not out).
+ */
+export type Weights = "open" | "closed" | "unknown";
+
+export const WEIGHTS: readonly Weights[] = ["open", "closed", "unknown"];
+
+/** One weights rule: the ids it covers, and the answer for them. */
+export interface WeightsRule {
+  match: readonly string[];
+  /** `Weights`, as the JSON spells it; checked at parse and at read. */
+  is: string;
+  /** Where the answer was checked, when it is not obvious. */
+  source?: string;
 }
 
 /** The catalog, in file order — which is the matching precedence. */
@@ -71,6 +103,23 @@ export function familyOf(model: string | null | undefined): LineupFamily | null 
     }
   }
   return null;
+}
+
+/**
+ * Whether a model's weights are published: the first rule of its family whose
+ * pattern matches, and `unknown` for an id no family claims or no rule of its
+ * family names. Total, like `familyOf`.
+ */
+export function weightsOf(model: string | null | undefined): Weights {
+  const family = familyOf(model);
+  if (family === null) return "unknown";
+  const id = normalize(model!);
+  for (const rule of family.weights) {
+    for (const pattern of rule.match) {
+      if (globMatch(pattern.toLowerCase(), id)) return (WEIGHTS as readonly string[]).includes(rule.is) ? (rule.is as Weights) : "unknown";
+    }
+  }
+  return "unknown";
 }
 
 /** The neutral fallback badge's letter: the first alphanumeric, or "?". */

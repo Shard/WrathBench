@@ -275,7 +275,7 @@ export const ENTRIES: readonly Entry[] = [
   {
     group: "export",
     command: "eee",
-    takes: "(--base URL | --runs DIR) [--series S] [--exclude-free] [--out DIR] [--bundle FILE]",
+    takes: "(--base URL | --runs DIR) [--series S] [--include-free] [--out DIR] [--bundle FILE]",
     summary: "the e90 and e360 ladders as Every Eval Ever records, under data/eee unless --out says",
     ...onHost("bun", "infra/eee-export.ts"),
   },
