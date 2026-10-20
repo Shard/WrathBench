@@ -3370,6 +3370,13 @@ function ownJumpNote(state: StateCache, at: WorldPosition, yards: number | undef
   );
 }
 
+/**
+ * Move verdicts that mean the character never moved: the module refused the
+ * request at planning (PROTOCOL.md's navigation vocabulary). A `drop` or a
+ * `path_incomplete` can come after part of the walk, so neither is here.
+ */
+const NEVER_MOVED: ReadonlySet<string> = new Set(["too_far", "no_mesh", "start_off_mesh", "target_off_mesh"]);
+
 /** `CORPSE_RECLAIM_RADIUS` in the core: a reclaim further than this is dropped silently. */
 export const CORPSE_RECLAIM_RADIUS = 39;
 
@@ -3474,6 +3481,8 @@ export class WrathClient {
    */
   private ownMove: { readonly sentAt: number; moveId: number | undefined; readonly epoch: number } | undefined;
   private lastMoveVerdictId = 0;
+  /** The last few moveIds answered by a refusal that moves nothing (`NEVER_MOVED`), for a verdict that beats its ack. */
+  private readonly unmovedIds = new Set<number>();
 
   /** Own position as `watchOwnJump` last saw it, with the session epoch it was seen in. */
   private lastOwnPosition: { readonly pos: WorldPosition; readonly seq: number; readonly epoch: number } | undefined;
@@ -3532,8 +3541,17 @@ export class WrathClient {
         // A new session counts moveIds from 1 again.
         this.ownMove = undefined;
         this.lastMoveVerdictId = 0;
+        this.unmovedIds.clear();
       }
-      this.lastMoveVerdictId = Math.max(this.lastMoveVerdictId, (e.data as MoveResultData).moveId);
+      const d = e.data as MoveResultData;
+      this.lastMoveVerdictId = Math.max(this.lastMoveVerdictId, d.moveId);
+      // A move refused at planning never moved the character: it is no walk
+      // of ours, whatever it was sent during.
+      if (NEVER_MOVED.has(d.status)) {
+        this.unmovedIds.add(d.moveId);
+        if (this.unmovedIds.size > 16) this.unmovedIds.delete(this.unmovedIds.values().next().value as number);
+        if (this.ownMove?.moveId === d.moveId) this.ownMove = undefined;
+      }
     });
     // A dungeon portal the server refused a ghost: the move that crossed it
     // still arrives, so this bodiless packet is the only word of it, and it
@@ -4042,6 +4060,7 @@ export class WrathClient {
       throw err;
     });
     sent.moveId = ack.moveId;
+    if (this.unmovedIds.has(ack.moveId) && this.ownMove === sent) this.ownMove = undefined;
     const raw = ack as Record<string, unknown>;
     const eta = raw.etaMs;
     delete raw.etaMs;

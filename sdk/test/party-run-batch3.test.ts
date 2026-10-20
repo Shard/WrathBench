@@ -250,3 +250,22 @@ describe("castSpell interrupted: what interrupted it, when the client can tell",
     await stub.stop();
   });
 });
+
+describe("castSpell interrupted: a move refused at planning moved nothing", () => {
+  test("a too_far move sent during the cast is not the interrupt's cause", async () => {
+    const stub = startStub({ onConnect: () => world() });
+    const client = await inWorld(stub);
+    await folded(client, "SMSG_UPDATE_OBJECT", 17);
+    await client.castSpell(2050);
+    await client.moveToAsync({ x: -4234.5, y: 987.25, z: 42 });
+    push(stub, frame(40, "WB_MOVE_RESULT", { moveId: 1, status: "too_far", pos: { x: -1234.5, y: 987.25, z: 42.1, o: 0 } }));
+    await folded(client, "WB_MOVE_RESULT", 40);
+    push(stub, interrupted(41));
+    await folded(client, "SMSG_SPELL_FAILURE", 41);
+    expect(client.drainActionHints().find((h) => h.action === "castSpell")?.hint).toBe(
+      "Lesser Heal (2050): the cast was interrupted (moving or acting during it)",
+    );
+    client.close();
+    await stub.stop();
+  });
+});
