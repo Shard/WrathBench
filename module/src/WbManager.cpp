@@ -1546,10 +1546,14 @@ namespace WrathBench
     // route gives there is meshZ, from the server's own liquid status
     // (Map::GetLiquidData, the same query IsInWater/IsUnderWater make: ADT
     // and WMO liquid, any type) and the character's collision height now.
-    // Over water the navmesh carries the surface (the mmaps generator keeps a
-    // quad's liquid triangles and drops the terrain under them, TerrainBuilder
-    // "pick higher one"), so the depth is the liquid's own (Level minus the
-    // bed, DepthLevel), never Level minus meshZ. Deeper than the threshold:
+    // The route's z says nothing about depth: the navmesh over water is the
+    // surface (the mmaps generator keeps a quad's liquid triangles and drops
+    // the terrain under them, TerrainBuilder "pick higher one"), and the
+    // core's NormalizePath (UpdateAllowedPositionZ) lowers points over deep
+    // water to GetMinHeightInWater, ~0.59 of the height, which its own swim
+    // test reads as not swimming, and leaves points over shallows on the
+    // surface. So the depth is the liquid's own (Level minus the bed,
+    // DepthLevel), never Level minus meshZ. Deeper than the threshold:
     // swimming, the body held under the surface as above (never below the
     // bed). Shallower: wading, the body on the bed, at run speed, as a client
     // walks through shallows. World thread.

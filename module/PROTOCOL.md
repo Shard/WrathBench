@@ -385,11 +385,17 @@ paces the walk at `GetSpeed(MOVE_SWIM)` (base 4.72y/s, swim-speed auras
 included, no mounted bonus, `Unit::UpdateSpeed`), and holds the body just
 past the threshold under the surface, a quarter of its height clear of the
 breath timer; back in shallower water it sends `MSG_MOVE_STOP_SWIM` and runs
-again. Shallower water is waded at run speed with the body on the bed. The z
-matters because the navmesh over water is the surface, not the bed: the mmaps
-generator keeps a quad's liquid triangles and drops the terrain under them
-(`TerrainBuilder`, "pick higher one"), so the route itself says nothing about
-depth, and a body sent at the mesh's z walks on the water. A walkable surface
+again. Shallower water is waded at run speed with the body on the bed. The
+route's own z says neither: the navmesh over water is the surface (the mmaps
+generator keeps a quad's liquid triangles and drops the terrain under them,
+`TerrainBuilder`, "pick higher one"), and the core's path normalization
+(`PathGenerator::NormalizePath`, `WorldObject::UpdateAllowedPositionZ`) then
+lowers points over deep water to its own floating depth for a creature,
+`GetMinHeightInWater`, about 0.59 of the collision height, which its own swim
+test above reads as not swimming, and leaves points over shallows on the
+surface, where a body sent at that z walks on the water. So depth is the
+liquid's (its level less the bed under it), never the level less the route's
+z, and the body's z is the module's. A walkable surface
 more than 1y above the water (a pier, a dock, a bridge) is not water, nor is a
 transport's deck. A forced fall that ends in swimmable water ends with
 `MSG_MOVE_START_SWIM` and no `MSG_MOVE_FALL_LAND`, as a client's does, so the
