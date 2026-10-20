@@ -82,7 +82,28 @@ describe("moveToAsync: the ack carries the route", () => {
         "(about 124s at the character's own pace): the walk goes the long way round.",
     });
     expect("etaMs" in ack).toBe(false);
-    // Not a failure: nothing for the harness block.
+    // The harness block carries the same sentence, once for the dispatch, so
+    // a snippet that drops its ack still tells the model (operator, 2026-10-20).
+    const hints = client.drainActionHints();
+    expect(hints).toHaveLength(1);
+    expect(hints[0]).toMatchObject({ action: "moveToAsync", status: "long_route", count: 1, hint: ack.hint, point: { x: -1204.5, y: 987.25, z: 42 } });
+    client.close();
+    await stub.stop();
+  });
+
+  test("a dropped ack still reaches the harness block, once per dispatch", async () => {
+    const stub = startStub({ onConnect: () => world(), moveToAck: () => ({ pathLength: 870.4, etaMs: 124_339 }) });
+    const client = await inWorld(stub);
+    await folded(client, "SMSG_UPDATE_OBJECT", 17);
+    void client.moveToAsync({ x: -1204.5, y: 987.25, z: 42 });
+    await untilAction(stub, "move_to");
+    await Bun.sleep(20);
+    const hints = client.drainActionHints();
+    expect(hints.map((h) => [h.action, h.status, h.count])).toEqual([["moveToAsync", "long_route", 1]]);
+    // The verdict that follows is an arrival: nothing more.
+    push(stub, result(90, 1, "arrived", { pathLength: 870.4 }));
+    await folded(client, "WB_MOVE_RESULT", 90);
+    await Bun.sleep(5);
     expect(client.drainActionHints()).toEqual([]);
     client.close();
     await stub.stop();
@@ -94,6 +115,7 @@ describe("moveToAsync: the ack carries the route", () => {
     await folded(client, "SMSG_UPDATE_OBJECT", 17);
     expect(await client.moveToAsync({ x: -1204.5, y: 987.25, z: 42 })).toEqual({ ok: true, action: "move_to", moveId: 1, pathLength: 33.2 });
     expect(await client.moveToAsync({ x: -1204.5, y: 987.25, z: 42 })).toEqual({ ok: true, action: "move_to", moveId: 2 });
+    expect(client.drainActionHints()).toEqual([]);
     client.close();
     await stub.stop();
   });
@@ -113,6 +135,10 @@ describe("moveTo: the result carries the route", () => {
       "the walkable route to (-1204.5, 987.3) is ~641y though it is ~30y away in a straight line " +
         "(about 92s at 7yd/s): the walk goes the long way round.",
     );
+    // The harness block carries the same sentence, once for this move.
+    const hints = client.drainActionHints();
+    expect(hints).toHaveLength(1);
+    expect(hints[0]).toMatchObject({ action: "moveTo", status: "long_route", count: 1, hint: r.hint });
     client.close();
     await stub.stop();
   });
@@ -131,6 +157,7 @@ describe("moveTo: the result carries the route", () => {
     const r = await second;
     expect(r).toMatchObject({ ok: true, status: "arrived", pathLength: 31 });
     expect(r.hint).toBeUndefined();
+    expect(client.drainActionHints().map((h) => h.status)).toEqual(["interrupted"]);
     client.close();
     await stub.stop();
   });

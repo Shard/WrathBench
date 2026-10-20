@@ -3758,7 +3758,11 @@ export class WrathClient {
         from === undefined || ack.pathLength === undefined
           ? undefined
           : longRouteNote(resolved.point, distance2d(from, resolved.point), ack.pathLength, etaMs);
-      return note === undefined ? ack : { ...ack, hint: note };
+      if (note === undefined) return ack;
+      // Also to the harness block, so a dropped ack still tells the model
+      // (operator, 2026-10-20): once per dispatch, like a refusal.
+      this.noteActionHint("moveToAsync", "long_route", note, resolved.point);
+      return { ...ack, hint: note };
     });
   }
 
@@ -6276,7 +6280,12 @@ export class WrathClient {
       const straight = distance2d(from, point);
       const eta = moveEtaMs(verdictEvent);
       const budget = budgetMs === undefined ? undefined : walkBudgetNote(straight, verdict.pathLength, budgetMs, eta);
-      const note = budget ?? (verdict.pathLength === undefined ? undefined : longRouteNote(point, straight, verdict.pathLength, eta));
+      const longRoute = verdict.pathLength === undefined ? undefined : longRouteNote(point, straight, verdict.pathLength, eta);
+      // The long route reaches the harness block once per move whether or not
+      // the result is read (operator, 2026-10-20); the result's hint carries
+      // the budget note instead when that one already names the route.
+      if (longRoute !== undefined) this.noteActionHint("moveTo", "long_route", longRoute, point);
+      const note = budget ?? longRoute;
       if (note !== undefined) extras.push(note);
     };
     let event = await issue(options.force === true);
