@@ -2257,6 +2257,9 @@ namespace WrathBench
 
         Json::Writer w;
         w.Add("moveId", m.moveId).Add("status", status);
+        if (m.pathLength > 0.0f)
+            w.Add("pathLength", (double)m.pathLength);
+        m.pathLength = 0.0f;
         // Server-confirmed position, when the session is still live: this is the
         // ground truth that the synthesized movement was actually applied.
         Player* player = (s.ws && sWorldSessionMgr->FindSession(s.accountId) == s.ws) ? s.ws->GetPlayer() : nullptr;
@@ -2495,6 +2498,13 @@ namespace WrathBench
         int64_t now = NowMs();
         m.points.clear();
         m.points = pts;
+        // The route's length as walked, so a caller can judge the walk by the
+        // route rather than the straight line (a mine's tunnels are three
+        // times it): on every progress event and on the verdict.
+        m.pathLength = 0.0f;
+        for (size_t i = 1; i < m.points.size(); ++i)
+            m.pathLength += std::sqrt(std::pow(m.points[i].x - m.points[i - 1].x, 2.0f)
+                + std::pow(m.points[i].y - m.points[i - 1].y, 2.0f) + std::pow(m.points[i].z - m.points[i - 1].z, 2.0f));
         m.seg = 0;
         m.segDone = 0.0f;
         m.lastMs = now;
@@ -3883,6 +3893,7 @@ namespace WrathBench
             Json::Writer w;
             w.Add("moveId", m.moveId);
             w.Raw("pos", PosJson(m.curX, m.curY, m.curZ, m.curO));
+            w.Add("pathLength", (double)m.pathLength);
             EmitEvent(s, "WB_MOVE_PROGRESS", 0xFF02, w.Str());
         }
     }
