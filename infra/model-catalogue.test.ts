@@ -237,8 +237,8 @@ describe("weights", () => {
     expect(weightsOf("mistralai/mistral-large")).toBe("unknown");
     // Anthropic publishes no weights at all: the family says so for every id.
     expect(weightsOf("anthropic/fixture-model")).toBe("closed");
-    // #277's verdicts stand.
-    expect(weightsOf("meta/muse-spark-1.3-contributor")).toBe("unknown");
+    // An operator verdict where the developer's own pages are silent.
+    expect(weightsOf("meta/muse-spark-1.3-contributor")).toBe("closed");
     expect(WEIGHTS).toEqual(["open", "closed", "unknown"]);
   });
 });

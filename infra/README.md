@@ -482,8 +482,9 @@ switch a `drain` left set when it reaches its resume phase, and says so; a
 failed window deliberately leaves it set. `--keep-paused` (on either script)
 leaves it set on every path, setting it before the drain if nothing had, so the
 fleet comes back up resuming nothing until the operator has smoked the build
-with real runs (docs/RUNBOOK.md, "Deploying a harness change that needs a real
-smoke first").
+with one short real run per driver. It is only for a CLI-env or sandbox change;
+module smokes run after the resume, with the fleet live (docs/RUNBOOK.md, "The
+lean path" and "Holding the fleet for a CLI-env or sandbox change").
 
 ## Verifying without a full boot
 
