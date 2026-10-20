@@ -20,10 +20,14 @@
  * frame is read, and a turn inserted there could let that frame fold first.
  */
 
-/** Requests issued so far, process-wide; bumped by `noteRequest` before each one goes out. */
+/**
+ * Requests answered so far, process-wide, bumped by `noteRequest` as each
+ * answer (or failure) arrives. Counted at the answer, not the send: a refusal
+ * that fires a request it never awaits has not crossed a turn by settling.
+ */
 let requests = 0;
 
-/** Count a request going out: a call that sent one has crossed, or is about to cross, the event loop. */
+/** Count a request answered: an I/O callback ran, so whoever awaited it crossed the event loop. */
 export function noteRequest(): void {
   requests++;
 }
@@ -66,14 +70,15 @@ export function settleOnLaterTurns(proto: object, names: Iterable<string>): void
     const desc = Object.getOwnPropertyDescriptor(proto, name);
     if (desc === undefined || typeof desc.value !== "function") continue;
     const fn = desc.value as (...args: unknown[]) => unknown;
-    Object.defineProperty(proto, name, {
-      ...desc,
-      value: {
-        // Computed method syntax keeps the original's name in stack traces.
-        [name](this: unknown, ...args: unknown[]): unknown {
-          return settleOnALaterTurn(fn.apply(this, args));
-        },
-      }[name],
-    });
+    // Computed method syntax keeps the original's name in stack traces.
+    const wrapped = {
+      [name](this: unknown, ...args: unknown[]): unknown {
+        return settleOnALaterTurn(fn.apply(this, args));
+      },
+    }[name] as (...args: unknown[]) => unknown;
+    // Reading the method (`String(sdk.killTarget)`, its arity) shows the method, not this wrapper.
+    Object.defineProperty(wrapped, "length", { value: fn.length });
+    Object.defineProperty(wrapped, "toString", { value: () => Function.prototype.toString.call(fn) });
+    Object.defineProperty(proto, name, { ...desc, value: wrapped });
   }
 }

@@ -8361,7 +8361,6 @@ export class WrathClient {
       const headers: Record<string, string> = {};
       if (body !== undefined) headers["content-type"] = "application/json";
       if (this.#secret !== undefined) headers["authorization"] = `Bearer ${this.#secret}`;
-      noteRequest();
       res = await this.#fetchImpl(url, {
         method,
         headers,
@@ -8374,6 +8373,9 @@ export class WrathClient {
         path,
         cause,
       });
+    } finally {
+      // Answered, either way: the caller crossed the event loop (turn.ts).
+      noteRequest();
     }
 
     const text = await res.text();

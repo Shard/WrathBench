@@ -11,7 +11,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { connect, type WrathClient } from "../src/client";
-import { CREATURE_GUID, creatureCreate, creatureQuery, frames, loginSequence, selfCreate, selfHealth } from "./fixtures";
+import { CREATURE_GUID, creatureCreate, creatureQuery, frames, loginSequence, QUEST_ID, selfCreate, selfHealth } from "./fixtures";
 import { startStub, type StubServer } from "./server";
 
 async function deadInWorld(): Promise<{ stub: StubServer; client: WrathClient }> {
@@ -45,6 +45,20 @@ describe("a call that sends nothing still crosses the event loop", () => {
       "killTarget on a bad guid (rejects)": () => client.killTarget("not a guid"),
       "events.waitFor answered from the buffer": () => client.events.waitFor((e) => e.opcode === "SMSG_UPDATE_OBJECT"),
       "events.waitForOpcode answered from the buffer": () => client.events.waitForOpcode("SMSG_UPDATE_OBJECT"),
+      "waitForNearby answered from the cache": () => client.waitForNearby((o) => o.guid === CREATURE_GUID),
+      "reclaimCorpse before release": () => client.reclaimCorpse(),
+      "acceptResurrection with no offer": () => client.acceptResurrection(),
+      "equipItem with nothing by that name": () => client.equipItem("Nothing By This Name"),
+      "readItem with nothing by that name": () => client.readItem("Nothing By This Name"),
+      "bankDeposit with no bank open": () => client.bankDeposit("Nothing By This Name"),
+      "mailList with no mailbox (rejects)": () => client.mailList(),
+      "petAttack with no pet": () => client.petAttack(CREATURE_GUID),
+      "learnTalent with no tree": () => client.learnTalent("Nothing By This Name"),
+      "lootRoll with nothing up": () => client.lootRoll("Nothing By This Name", "pass"),
+      "questsAvailableFrom a unit with no marker": () => client.questsAvailableFrom(CREATURE_GUID),
+      "acceptQuestFrom a unit with no marker": () => client.acceptQuestFrom(CREATURE_GUID, QUEST_ID),
+      "turnInQuest at a unit with no marker": () => client.turnInQuest(CREATURE_GUID, QUEST_ID),
+      "killTarget on a name not in view (rejects)": () => client.killTarget("Nobody By This Name"),
     };
     const crossed: Record<string, boolean> = {};
     for (const [name, call] of Object.entries(calls)) crossed[name] = await crossesTheLoop(call);
@@ -75,9 +89,12 @@ describe("a call that sends nothing still crosses the event loop", () => {
     await stub.stop();
   });
 
-  test("a synchronous throw stays synchronous", async () => {
+  test("a synchronous throw stays synchronous, and a method reads as itself", async () => {
     const { stub, client } = await deadInWorld();
     expect(() => client.setTarget({} as never)).toThrow();
+    expect(String(client.killTarget)).toStartWith("async killTarget(");
+    expect(client.killTarget.name).toBe("killTarget");
+    expect(client.killTarget.length).toBe(1);
     client.close();
     await stub.stop();
   });
