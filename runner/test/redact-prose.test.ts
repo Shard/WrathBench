@@ -275,6 +275,13 @@ describe("redactProseText", () => {
     check(out, [P.chat], ["level 3", `  <5> ${REDACTED_PROSE}`, "You are now AFK"]);
   });
 
+  test("a state.chat entry printed by a snippet keeps its sender's name and loses its words", () => {
+    // state.chat now joins a player sender's name on read. A character name
+    // is the runner's, not game text ("names and ids stay"); the message goes.
+    const entry = { seq: 3, ts: 1, type: 2, language: 7, senderGuid: "9", senderName: "Ordrick", message: P.chat, chatTag: 0 };
+    check(redactProseText(`ok (2ms)\n=> ${JSON.stringify([entry])}`), [P.chat], ['"senderName":"Ordrick"', '"senderGuid":"9"']);
+  });
+
   test("the chat block's typed lines are cut the same way, whatever their head", () => {
     // formatStateSummary's line shapes: a type label, then a speaker, an
     // outgoing whisper's recipient, or (system, a filled emote) no speaker.
