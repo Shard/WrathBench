@@ -377,6 +377,35 @@ export function buildGlobalWmoWdt(
   return joinBytes([chunk("MVER", floats([0])), chunk("MWMO", nameBytes), chunk("MODF", modf)]);
 }
 
+/** An ADT carrying only what places its WMOs: `MWMO` names, `MWID` offsets and `MODF` entries. */
+export function buildAdtWithWmos(
+  names: string[],
+  placements: { nameId: number; uniqueId: number; position: number[]; rotation?: number[] }[],
+): Uint8Array {
+  const enc = new TextEncoder();
+  const offsets: number[] = [];
+  let at = 0;
+  for (const name of names) {
+    offsets.push(at);
+    at += enc.encode(`${name}\0`).byteLength;
+  }
+  const mwid = new Uint8Array(names.length * 4);
+  offsets.forEach((o, i) => new DataView(mwid.buffer).setUint32(i * 4, o, true));
+  const modf = new Uint8Array(placements.length * 64);
+  const view = new DataView(modf.buffer);
+  placements.forEach((p, i) => {
+    view.setUint32(i * 64, p.nameId, true);
+    view.setUint32(i * 64 + 4, p.uniqueId, true);
+    modf.set(floats([...p.position, ...(p.rotation ?? [0, 0, 0])]), i * 64 + 8);
+  });
+  return joinBytes([
+    chunk("MVER", floats([18])),
+    chunk("MWMO", enc.encode(names.map((n) => `${n}\0`).join(""))),
+    chunk("MWID", mwid),
+    chunk("MODF", modf),
+  ]);
+}
+
 /** A WMO root file carrying nothing but the group bounding boxes. */
 export function buildWmoRoot(boxes: { min: number[]; max: number[] }[]): Uint8Array {
   const mogi = new Uint8Array(boxes.length * 32);

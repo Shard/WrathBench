@@ -24,15 +24,17 @@ Runs on the host, against the one-time client extraction. It does not talk to
 any container and does not need the server running.
 
 ```
-bun run --cwd minimap extract              # maps 0, 1, 369, 530, 571
+bun run --cwd minimap extract              # maps 0, 1, 36, 369, 530, 571
 bun minimap/src/extract.ts --map 0,571     # specific maps
 bun minimap/src/extract.ts --force         # rewrite existing tiles
 bun minimap/src/extract.ts --limit 20      # first N tiles per map (smoke test)
 ```
 
-Flags: `--map <ids>`, `--force`, `--limit <n>`, `--out <dir>` (default
-`data/minimap`), `--client <dir>` (default
-`data/client-source/Data`).
+Flags: `--map <ids>`, `--force`, `--limit <n>`, `--data <dir>` (default
+`data`; the other inputs default under it, which is how a worktree with no
+`data/` of its own points at the main checkout's), `--out <dir>` (default
+`<data>/minimap`), `--client <dir>` (default `<data>/client-source/Data`).
+Map.dbc is read from `<data>/client/dbc`.
 
 Then bake the zoomed-out levels from what it wrote (see "The LOD pyramid"
 below):
@@ -60,7 +62,8 @@ and `--cities` (both below).
 
 Idempotent: a tile that already exists is skipped unless `--force`. A full
 extraction of the four continents takes about 17 s and produces 3636 tiles /
-~104 MiB; map 369 adds 12 tiles / 214 KiB on top.
+~104 MiB; map 369 adds 12 tiles / 214 KiB on top, and map 36 36 tiles /
+0.4 MiB.
 
 Tests: `bun run test minimap/` from the repository root. Typecheck:
 `bun run --cwd minimap typecheck`.
@@ -74,10 +77,12 @@ Tests: `bun run test minimap/` from the repository root. Typecheck:
 - `textures\Minimap\md5translate.trs`, the client's table from readable tile
   names to the hashed files that actually exist in the archives.
 - `data/client/dbc/Map.dbc` for the internal directory name → map id mapping
-  (`Azeroth` → 0, `Kalimdor` → 1, `DeeprunTram` → 369, `Expansion01` → 530,
-  `Northrend` → 571).
+  (`Azeroth` → 0, `Kalimdor` → 1, `DeadminesInstance` → 36, `DeeprunTram` →
+  369, `Expansion01` → 530, `Northrend` → 571), and each map's instance type.
 - For a map with no terrain, `World\Maps\<Dir>\<Dir>.wdt` and the WMO root it
   names. See "Maps that are one building" below.
+- For a dungeon or raid, its ADTs (`World\Maps\<Dir>\<Dir>_<col>_<row>.adt`)
+  and the WMO roots they place. See "Instances: rooms over terrain" below.
 
 The art bake reads more:
 
@@ -167,8 +172,8 @@ The transposed reading fails all three checks.
   path was not instrumented to say whether it hits any. The bzip2 path shells
   out to `bunzip2` and is likewise untested against real data — it has never
   been reached.
-- **Coverage.** Every tile named in the trs for maps 0, 1, 530 and 571 was
-  found in the archives — 0 missing, 0 failed.
+- **Coverage.** Every tile named in the trs for maps 0, 1, 36, 530 and 571
+  was found in the archives — 0 missing, 0 failed.
 
 ## Maps that are one building
 
@@ -206,6 +211,44 @@ What was verified, and how — the same standard the ADT orientation was held to
    `worldX = −x`, and outside the tunnel
    entirely under the other sign. Overlaying all 34 on the finished composite
    puts every one of them on a track or a station platform.
+4. **Short images.** Three groups (009, 015, 016: two entrance stubs and a
+   small fixture) have images shorter than 256, painted flush against their
+   bottom row. Read as 256-row tiles they land 96-112 yards from their own
+   boxes; read at their real height they fit them (016 to the pixel on both
+   axes). The tooling now reads them that way, so a `--force` re-extraction
+   of 369 moves those stubs onto the stations they join and changes two of
+   its twelve tiles; the published tiles predate that.
+
+## Instances: rooms over terrain
+
+Map 36, the Deadmines, has both kinds. Its 36 ADTs (rows and columns 30–35)
+draw the hills over the mine, the walls of Ironclad Cove and the ship, and the
+client's own near-white blanks on the edge columns and rows. The mine itself
+is models the ADTs place: `AZ_Deadmines_B.wmo` (the tunnels and rooms) and
+`AZ_Deadmines_D.wmo` (by the cove), each with a real position and a yaw. Their
+indoor groups carry minimaps of their own, filed under one trs directory
+(`WMO\Dungeon\AZ_Deadmines`) with two other models', so a tile is matched to
+its model by its name, not its directory. The outdoor groups have none: the
+ADT minimap already draws them.
+
+For a dungeon or raid (Map.dbc instance type 1 or 2), the extractor reads
+every model the map's ADTs place, once each by `uniqueId`, and lays the
+minimap of every one that has one over the terrain tile it lands on, opaque.
+A continent does not get this: its thousands of buildings are drawn from
+above by the terrain minimap already, roofs and all, which is the right
+picture there, and the overlay would change maps that are already published.
+
+`src/wmo.ts` holds the placement and the evidence: the corners of each
+model's box land on the world box its `MODF` declares to a tenth of a yard,
+for B at −91° and D at −55.5°. Group images are as small as 32px and sit
+flush at the group's `max.y` (see point 4 above). Against the server's own
+world data, all 213 of map 36's creature spawns fall on painted rooms, the
+cove or the ship, and the instance's arrival point (−16.4, −383.1) sits at
+the mouth of the entrance tunnel.
+
+Not every passage between rooms is painted, so a character walking one can
+show on the hillside between two rooms. The whole mine is about one native
+tile across, so the map draws it at the minimap's own 0.48 px to the yard.
 
 ## The LOD pyramid
 
@@ -252,13 +295,14 @@ changed nothing uploads nothing. After a re-extraction, run `bake --force`,
 then `publish-tiles --upload`, then purge `/tiles/`
 (`infra/cloudflare/README.md`).
 
-The bake over the five extracted maps takes about 10 s and writes 1479 tiles
-(79.6 MiB):
+The bake over the six extracted maps takes about 10 s and writes 1505 tiles
+(79.9 MiB):
 
 | map | z1 | z2 | z3 | z4 | z5 | z6 | MiB |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 0 | 193 | 55 | 18 | 6 | 4 | 1 | 19.0 |
 | 1 | 282 | 78 | 26 | 11 | 4 | 1 | 29.0 |
+| 36 | 9 | 4 | 4 | 4 | 4 | 1 | 0.3 |
 | 369 | 8 | 6 | 4 | 4 | 4 | 1 | 0.1 |
 | 530 | 234 | 69 | 26 | 10 | 4 | 1 | 15.1 |
 | 571 | 300 | 88 | 24 | 12 | 4 | 1 | 16.4 |
