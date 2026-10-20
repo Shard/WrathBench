@@ -453,6 +453,60 @@ feed("WB_MOVE_PROGRESS", 0xff02, { moveId: 1, pos: { x: -6560, y: 405, z: 387, o
 "fed";
 `;
 
+describe("trace recorder: chat", () => {
+  /** `SMSG_MESSAGECHAT` as module/PROTOCOL.md decodes it. */
+  const chat = (r: ReturnType<typeof rig>, type: number, senderGuid: string, message: string, ts: number, extra: object = {}): void =>
+    r.feed("SMSG_MESSAGECHAT", 0x96, { type, language: 7, senderGuid, message, chatTag: 0, ...extra }, ts);
+
+  test("the character's own lines, as the server echoed them, each a state row of its own at the echo's time", () => {
+    const r = rig();
+    r.rec.start();
+    r.rows();
+    chat(r, 0x01, "7", "hello there", 51_000);
+    chat(r, 0x02, "7", "pulling now", 52_000);
+    chat(r, 0x33, "7", "leader says go", 52_500);
+    chat(r, 0x06, "7", "RUN", 53_000);
+    chat(r, 0x0a, "7", "waves at the boar", 53_500);
+    chat(r, 0x27, "7", "raid line", 53_700);
+    // The sender's copy of a whisper names the recipient as its sender.
+    chat(r, 0x09, "921", "psst", 54_000, { receiverGuid: "921" });
+    expect(r.rows()).toEqual([
+      { ts: 51_000, kind: "state", data: { chat: [["say", "hello there"]] } },
+      { ts: 52_000, kind: "state", data: { chat: [["party", "pulling now"]] } },
+      { ts: 52_500, kind: "state", data: { chat: [["party", "leader says go"]] } },
+      { ts: 53_000, kind: "state", data: { chat: [["yell", "RUN"]] } },
+      { ts: 53_500, kind: "state", data: { chat: [["emote", "waves at the boar"]] } },
+      { ts: 53_700, kind: "state", data: { chat: [["raid", "raid line"]] } },
+      { ts: 54_000, kind: "state", data: { chat: [["whisper", "psst"]] } },
+    ]);
+    r.stop();
+  });
+
+  test("what others said is not recorded: a party member's line, an incoming whisper, a creature, a channel, a system line", () => {
+    const r = rig();
+    r.rec.start();
+    r.rows();
+    chat(r, 0x02, "921", "a party member's line", 51_000);
+    chat(r, 0x07, "921", "an incoming whisper", 52_000);
+    chat(r, 0x0c, CREATURE_GUID, "a creature says", 53_000, { senderName: "Invented Boar" });
+    chat(r, 0x11, "7", "my own channel line", 54_000, { channelName: "General" });
+    chat(r, 0x00, "7", "a system line", 55_000);
+    chat(r, 0x01, "7", "", 56_000);
+    expect(r.rows()).toEqual([]);
+    r.stop();
+  });
+
+  test("a line longer than the client's limit is clipped to it", () => {
+    const r = rig();
+    r.rec.start();
+    r.rows();
+    chat(r, 0x01, "7", "x".repeat(400), 51_000);
+    const [row] = r.rows();
+    expect(((row!.data as { chat: [string, string][] }).chat[0]![1]).length).toBe(255);
+    r.stop();
+  });
+});
+
 describe("sandbox child: the trace drained through the host", () => {
   test("no child, no drain: a host that was never started answers null and stays unstarted", async () => {
     const host = makeHost();

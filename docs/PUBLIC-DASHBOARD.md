@@ -198,7 +198,9 @@ Since the character sheet joined it, a segment also says what the character
 had at any moment in the window: money, equipment, worn bags, what it carried,
 durability, the quest log's counters, reputation, skills and turn-ins, whole
 in the keyframe and as patches after it, with the names of the items it
-references.
+references. Since the map's chat bubbles, it also carries the lines the
+character said, kind and text (below, "The trace ships the character's own
+chat").
 A segment is published once, when its window closes, at
 `v1/run/<id>/trace/<t0>.json`, and is immutable like the content-addressed
 objects but addressed by its window: a closed window never changes. Closed
@@ -426,7 +428,8 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   the run page shows it as plain text, never parsed as markup (a page reads
   only the key its listing row names, so a run with no pad requests nothing).
   **Residual, stated plainly**: model-authored text — turn text, snippet
-  code, the scratchpad, the episodic status, the words of console lines,
+  code, the scratchpad, the episodic status, the chat lines a trace carries,
+  the words of console lines,
   objects the model rebuilt under keys of its own, and any tool result the
   model formatted as plain prose — is published as written and is not
   filtered; it may quote game prose. A change to the redaction needs no
@@ -439,8 +442,9 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   the model-authored text above. As a backstop for those, the public
   boundary strikes it by value, after projection (`publicText`,
   `runner/viewer/api.ts`), from every body that carries a run's text: the
-  run's own detail, entries, track and scratchpad, each position's episodic
-  status on the live map (`live.json`), and a character's attempts. The
+  run's own detail, entries, track and scratchpad, its trace windows and the
+  trace index's tail, each position's episodic status and trace tail on the
+  live map (`live.json`), and a character's attempts. The
   aggregates carry no model-written text. A token too short to be a secret
   (a run from before token hardening used its run id) is left alone.
 - **Paths**: a container-internal prefix is made repo-relative — every
@@ -496,6 +500,26 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   projector passes such a window back unchanged, so the bucket's verifier
   still reads it as a fixed point. The `tail` in `live.json` crosses the
   same projector.
+- **The trace ships the character's own chat** (operator, 2026-10-20). The
+  site publishes everything the character says: say, party, raid, yell, emote,
+  and the text of the whispers it sends. Own chat is model-authored text, on
+  the same footing as `say` in the action log (the residual above), and from
+  deploy on the closed trace windows carry it, immutable for a year at the
+  edge and never pruned like every window. A `chat` event is one line as the
+  server echoed it back to the character: its kind and its text, clipped to
+  255 characters. Never the whisper's recipient, which is not recorded, nor a
+  guid or a name, nor a line someone else said, so a party's lines are each
+  published once, under the member who said them. Every line crosses three
+  strikes: the run's registered secrets when it is written (`recordTrace`),
+  any credential's shape masked in the projection (`maskCredentialShapes`, so
+  the publisher's scan cannot refuse an immutable window on every pass), and
+  the session token by value at the route (`publicText`). The text is not run
+  through `redactGameProse`, as the action log's `say` is not. The action log
+  was not the source: it carries only `say`'s text in the clear (party, yell
+  and whisper go out as raw hex), it clips at 200 characters, and publicly
+  only its tail window ships, so a replay could not have read it. A window
+  that closed before this shipped says nothing, which the map reads as no
+  line said.
 - **The units around a live character ship, live only.** Creatures only, by
   `projectNearby`: no other player, no unit another player owns, charms or
   drives, and none while it targets another player or their pet. Each keeps
@@ -678,6 +702,21 @@ newest log line on hover), and the map shows every live character whatever
 its harness series, with no series selector on that page. The list publishes
 nothing new; its order and its click are in `dashboard/README.md`, "The live
 list".
+
+**What a character says shows over its pip** for 30 s of the playhead's
+time: the replay's cursor, and live the delayed playhead the pips are placed
+by, so a line appears when the pip reaches the moment it was said, not when
+the feed brought it in. A replay keeps it up for at least about 4 s of the
+reader's own time at the speed it plays, 4 minutes of the run at 60x
+(operator, 2026-10-20); it is still measured on the cursor, so a scrub shows
+what playing there would. A character's newest three lines stack, newest
+lowest; a line over 80 characters is cut with an ellipsis, and its title
+holds the kind and the whole line. Stacks that would overlap (a party
+standing together) are lifted one above another, and clear of every
+character's pip, each with a leader down to its own. A kind other than say
+is marked by a colour on the bubble's left edge. A replay faster than 60x
+plays the track's 60 s points rather than the trace, so it shows no bubbles.
+The bubbles read the trace's `chat` events (above) and nothing else.
 
 ## What the ladder shows
 

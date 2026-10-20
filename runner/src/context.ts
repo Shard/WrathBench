@@ -92,10 +92,11 @@ export const CONTEXT_POLICY = {
    * still fold into the state cache, whose nearby/motion the summary reflects).
    * Measured on gate2-ox-1: SMSG_MONSTER_MOVE alone was 69% of served events
    * while combat/quest signal was 1.8% — the window exists for signal.
-   * WB_TRANSPORT_PROGRESS is the same kind of motion: every transport on the
-   * map reports once a second wherever the character stands, which came to
-   * about four-fifths of the window's characters and read to models as noise,
-   * while the cache already keeps each car's position and `docked`.
+   * WB_TRANSPORT_PROGRESS is the same kind of motion: each transport in view
+   * range reports once a second (every transport on the map did, wherever
+   * the character stood, which came to about four-fifths of the window's
+   * characters and read to models as noise), while the cache already keeps
+   * each car's position and `docked`.
    *
    * Excluded first, then counted (operator decision, 2026-10-05): the window
    * is the last EVENT_WINDOW events that are NOT ambient, however many ambient

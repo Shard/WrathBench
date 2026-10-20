@@ -39,7 +39,9 @@
  *
  * Needs a module that serves WB_TRANSPORT_PROGRESS and gameobject names
  * (built to :next 2026-08-23): it cannot pass against a worldserver older than
- * that, and says so at startup if the first transport report never arrives.
+ * that, and leg 4's failure says so when no transport report arrived at all.
+ * The module reports a car only within the map's view range of the
+ * character (100y here) or carrying it, so a car is heard as it pulls in.
  *
  * Two starts:
  *
@@ -498,7 +500,8 @@ async function board(leg: string, dir: Direction, firstVariant: "point" | "guid"
       includeBuffered: false,
     }).catch(() => {});
   }
-  throw new LegFailure(`${leg}: not aboard within ${secs(BOARDING_BOUND_MS)} (${attempts} attempts)`);
+  const silent = transportReports === 0 ? "; no WB_TRANSPORT_PROGRESS for any car all along — no car came within view range, or this worldserver does not serve transport state" : "";
+  throw new LegFailure(`${leg}: not aboard within ${secs(BOARDING_BOUND_MS)} (${attempts} attempts)${silent}`);
 }
 
 /**
@@ -609,12 +612,10 @@ async function crossing(rideNo: number, dir: Direction, gated: boolean): Promise
     // From the portal arrival to the lane: an ordinary mesh walk first, so the
     // boarding leg itself is a short straight line onto the car.
     await hop(leg, dir.platformEdge);
-    if (transportReports === 0) {
-      // Give the module's first ≤1/s report a moment; none at all means the
-      // worldserver predates WB_TRANSPORT_PROGRESS and the gate cannot run.
-      await client.events.waitFor((e) => e.opcode === "WB_TRANSPORT_PROGRESS", { timeout: 3_000, includeBuffered: true }).catch(() => {});
-      if (transportReports === 0) throw new LegFailure(`${leg}: no WB_TRANSPORT_PROGRESS on the stream — this worldserver does not serve transport state; deploy :next first`);
-    }
+    // No early "does this worldserver report transports" check: the module
+    // reports a car only within view range of the character, and the tunnel
+    // is ~2470y long, so a platform with no car near it hears nothing until
+    // one pulls in. board() says so when its whole bound passes in silence.
     const cars = carsInView();
     log(`  cars in view: ${cars.map((c) => `${c.name ?? "?"}#${c.entry} ${c.goType ?? "?"} docked=${c.docked} y=${c.y?.toFixed(0)}`).join("; ") || "none"}`);
     boarded = await board(leg, dir, rideNo % 2 === 0 ? "guid" : "point");

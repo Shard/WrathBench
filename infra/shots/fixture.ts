@@ -22,7 +22,8 @@
  * quest log with one quest that completes, one in progress and one of four
  * items to collect, two never found, and a turn-in), the 60 s
  * state line, snippets and tool calls with one failure each, a harness notice
- * and a scratchpad. The state line's quest count starts again at zero halfway
+ * and a scratchpad, and a chat line every 20 s on the trace (`chatAt`), so the
+ * map has bubbles up in every shot. The state line's quest count starts again at zero halfway
  * (`questsAt`), as a resumed process's does, so the map's quest figure shows
  * the run's sum (3) where the newest sample says 1.
  *
@@ -41,7 +42,7 @@ import { loadRunConfig, unscoredStamp } from "../../runner/src/config";
 import { NearbyWriter } from "../../runner/src/nearby";
 import type { NearbyRow, NearbyUnit } from "../../runner/src/nearby-row";
 import { Trajectory } from "../../runner/src/trajectory";
-import type { TraceDict, TraceKeyData, TraceRow } from "../../runner/src/trace-row";
+import type { TraceChat, TraceDict, TraceKeyData, TraceRow } from "../../runner/src/trace-row";
 import { TRACE_WINDOW_MS } from "../../runner/src/trace-row";
 
 export const LIVE_RUN = "fixture-live";
@@ -152,7 +153,26 @@ interface Spec {
   level?: number;
 }
 
-/** The trace of one span: a key row at each window's start, a position every 2 s, a state delta as the counters move. */
+/** How often a character says something: often enough that every shot has a bubble up, and now and then two. */
+const CHAT_EVERY_MS = 20_000;
+/** What the characters say: invented, and one too long for a bubble. */
+const CHAT_LINES = [
+  "Pulling the next boar, hold here.",
+  "Five pelts to go. The north side is clear.",
+  "Resting to 60% before the next pull; the quartermaster wants the pelts first and then the scout's errand by the old mill.",
+  "On my way.",
+  "Need a hand by the fence?",
+] as const;
+const CHAT_KINDS: readonly TraceChat[0][] = ["party", "say", "party", "yell", "whisper"];
+
+/** The line a character says at `t`, if one is due: a kind from the rotation and an invented text. */
+function chatAt(spec: Spec, t: number): TraceChat | null {
+  if ((t + spec.phase) % CHAT_EVERY_MS >= 2_000) return null;
+  const n = Math.floor((t + spec.phase) / CHAT_EVERY_MS) + spec.runId.length;
+  return [CHAT_KINDS[n % CHAT_KINDS.length]!, CHAT_LINES[n % CHAT_LINES.length]!];
+}
+
+/** The trace of one span: a key row at each window's start, a position every 2 s, a state delta as the counters move, and a chat line now and then. */
 function traceRows(spec: Spec, from: number, to: number, keyAtFrom = true): TraceRow[] {
   const rows: TraceRow[] = [];
   const span = spec.traceTo - spec.traceFrom;
@@ -173,6 +193,8 @@ function traceRows(spec: Spec, from: number, to: number, keyAtFrom = true): Trac
       continue;
     }
     rows.push({ ts: t, kind: "pos", map: at.map, x: p.x, y: p.y, z: at.z, o: p.o });
+    const said = chatAt(spec, t);
+    if (said !== null) rows.push({ ts: t, kind: "state", data: { chat: [said] } });
     if (pelts(t) !== lastPelts || complete(t) !== lastComplete) {
       const done = complete(t) && lastComplete === false;
       rows.push({
@@ -209,8 +231,11 @@ function writeRun(runsDir: string, spec: Spec, ended: number | null): Trajectory
   // The run's own clock while it is written; the wall clock after, for the live run's ticker.
   let clock: number | null = spec.startedAt;
   const traj = new Trajectory(dir, { now: () => clock ?? Date.now() });
+  // A model's driver, as every run the public site shows is: a stub-driven
+  // run is never published (`isNotAModelRun`), and the public half of the rig
+  // would have nothing to draw.
   const config = {
-    ...loadRunConfig({ driver: "stub" }),
+    ...loadRunConfig({ driver: "openai" }),
     runId: spec.runId,
     token: `${spec.runId}-fixture-token-0000000000000000`,
     runsDir,
