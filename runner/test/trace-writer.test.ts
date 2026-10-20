@@ -234,6 +234,24 @@ describe("trace writer", () => {
     r.trajectory.close();
   });
 
+  test("chat lines are events: never folded into a key, and their text crosses the run's scrub", async () => {
+    const r = rig();
+    r.trajectory.redact("lease-secret-0123456789abcdef");
+    r.push([
+      key(W0 + 500, 90, [0, 1, 2, 3, 0.5]),
+      { ts: W0 + 1_000, kind: "state", data: { chat: [["party", "the lease is lease-secret-0123456789abcdef"]] } },
+    ]);
+    await r.writer.drain();
+    r.at(W1 + 1_000);
+    r.push([pos(W1 + 500, 9)]);
+    await r.writer.drain();
+    const rows = r.rows();
+    expect(rows[1]!.data).toEqual({ chat: [["party", "the lease is [redacted]"]] });
+    const k = rows.find((x) => x.kind === "key" && x.ts === W1)!;
+    expect(Object.keys(k.data as object)).not.toContain("chat");
+    r.trajectory.close();
+  });
+
   test("a state row observed before a key already written lands at that key, so the key cannot take it back", async () => {
     const r = rig();
     r.push([{ ...key(W0 + 500, 90, null), data: { ...(key(0, 90, null).data as TraceState), ...emptyTraceSheet(), money: 10 } }]);

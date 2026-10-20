@@ -2348,8 +2348,14 @@ export type TraceItemName = [quality: number | null, name: string];
  */
 export type TraceQuestReq = [number, number, number, number, ...[itemId: number, count: number][]];
 
-/** One state change: `[ms from t0, kind, value]`, the kind a `TraceState` or `TraceSheet` key, or `qdone`. */
+/** One state change: `[ms from t0, kind, value]`, the kind a `TraceState` or `TraceSheet` key, `qdone`, or `chat`. */
 export type TraceEventWire = [number, string, unknown];
+
+/** Where a chat line went (`runner/src/trace-row.ts`, `TraceChatKind`). */
+export type TraceChatKind = "say" | "party" | "raid" | "yell" | "whisper" | "emote";
+
+/** A `chat` event's value: one line the character said, its kind and its text. */
+export type TraceChat = [kind: TraceChatKind, text: string];
 
 /**
  * The state at a segment's `t0`, and where the character stood.

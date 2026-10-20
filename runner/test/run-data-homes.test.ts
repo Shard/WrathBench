@@ -28,6 +28,8 @@ import { Collector } from "../../collector/src/collector";
 import { memorySink } from "../../collector/src/sink";
 import { OffsetStore } from "../../collector/src/offsets";
 import { readConfig } from "../../collector/src/config";
+import { emptyTraceState } from "../src/trace-row";
+import { SEG_MS, windowOf } from "../viewer/trace";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -41,6 +43,10 @@ const LIVE_ID = "run-homes-live";
 let runsDir = "";
 let token = "";
 let liveToken = "";
+
+/** What the live character says on its trace, beside its token, and a credential's shape the publisher's scan would refuse. */
+const CHAT_SAID = "my session is";
+const CHAT_KEY = `sk-ant-${"a".repeat(24)}`;
 
 /** What a snippet that logged a `move_to` reply leaves in its result. */
 const echo = (t: string): string => `[log] { ok: true, action: "move_to", token: "${t}", moveId: 23 }`;
@@ -84,6 +90,17 @@ beforeAll(async () => {
   const lt = new Trajectory(live);
   lt.writeMeta({ runId: LIVE_ID, harnessVersion: "0.0.0-test", startedAt: Date.now() - 60_000, config: loadRunConfig({ runId: LIVE_ID, token: liveToken, driver: "openai", model: "test/model" }) });
   lt.recordState(LIVE_ID, { level: 3, xp: 120, map: 0, x: -6240, y: 330, z: 383, turn: 4 });
+  // Its trace, where it said its token and something shaped like a key: in a
+  // window long closed, and in the tail.
+  const closedAt = windowOf(Date.now() - 4 * SEG_MS);
+  const tailAt = Date.now() - 5_000;
+  const said = `${CHAT_SAID} ${liveToken} and ${CHAT_KEY}`;
+  lt.recordTrace(LIVE_ID, [
+    { ts: closedAt + 1_000, kind: "key", map: 0, x: -6240, y: 330, z: 383, o: 0, data: { ...emptyTraceState(), level: 3 } },
+    { ts: closedAt + 2_000, kind: "state", data: { chat: [["party", said]] } },
+    { ts: windowOf(tailAt), kind: "key", map: 0, x: -6240, y: 330, z: 383, o: 0, data: { ...emptyTraceState(), level: 3 } },
+    { ts: tailAt, kind: "state", data: { chat: [["say", said]] } },
+  ]);
   lt.close();
   new EpisodicLog(join(live, "episodic.jsonl")).append({ turn: 4, level: 3, text: `parked, session ${liveToken} still held` });
 }, 30_000);
@@ -166,6 +183,23 @@ describe("the readers get the whole run", () => {
     expect(pub.text).toBe("parked, session [redacted] still held");
     expect(pub.body.includes(liveToken)).toBe(false);
     expect((await statusOf(false)).text).toBe(`parked, session ${liveToken} still held`);
+  });
+
+  test("the trace's chat — a closed window, the index's tail, live.json's tail — has the token struck and a key's shape masked; the operator's keeps both", async () => {
+    const bodiesOf = async (publicMode: boolean): Promise<string[]> => {
+      const api = createApi({ runsDir, tilesDir: join(runsDir, "minimap"), moduleUrl: "http://127.0.0.1:1", publicMode });
+      const index = JSON.parse(await get(api, `/api/run/${LIVE_ID}/trace`)) as { segs: [number, number][] };
+      const t0 = index.segs[0]![0];
+      return [await get(api, `/api/run/${LIVE_ID}/trace/${t0}`), await get(api, `/api/run/${LIVE_ID}/trace`), await get(api, "/api/positions")];
+    };
+    const pub = await bodiesOf(true);
+    expect(pub).toHaveLength(3);
+    for (const body of pub) {
+      expect(body).toContain(`${CHAT_SAID} [redacted] and [redacted]`);
+      expect(body.includes(liveToken)).toBe(false);
+      expect(body.includes(CHAT_KEY)).toBe(false);
+    }
+    for (const body of await bodiesOf(false)) expect(body).toContain(`${CHAT_SAID} ${liveToken} and ${CHAT_KEY}`);
   });
 
   test("the collector stores every line, and no table holds the token", async () => {

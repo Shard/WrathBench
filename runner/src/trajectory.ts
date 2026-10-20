@@ -33,7 +33,7 @@ import { platformOf } from "./platform";
 import { SecretRedactor } from "./redact";
 import type { ActionNote } from "./sandbox/ipc";
 import type { SubscriptionUsage } from "./subscription-usage";
-import type { TraceDict, TraceRow } from "./trace-row";
+import type { TraceChat, TraceDict, TraceRow, TraceStateDelta } from "./trace-row";
 
 export interface StateLine {
   level?: number | undefined;
@@ -134,6 +134,13 @@ export interface MoveLine {
  * `move` records are unchanged: they are the map's intention feed and the
  * `move` table, and stay the verdict's home.
  */
+/** A trace row's data with each chat line's text scrubbed; anything else as it is. */
+function scrubChat(data: NonNullable<TraceRow["data"]>, scrub: (text: string) => string): NonNullable<TraceRow["data"]> {
+  const chat = (data as TraceStateDelta).chat;
+  if (!Array.isArray(chat)) return data;
+  return { ...data, chat: chat.map(([kind, text]): TraceChat => [kind, scrub(text)]) };
+}
+
 export interface ActionsLine {
   ts?: number | undefined;
   turn?: number | undefined;
@@ -689,11 +696,11 @@ export class Trajectory {
    * trajectory line it does not know into the store, and a 1 Hz position feed
    * is tens of thousands of rows per character per day. Not to a file of its
    * own either: a `trace.jsonl` beside the table held the same rows and had no
-   * reader. One transaction per drain. The rows hold numbers and booleans
-   * only; the drain's dictionary (`TraceDict`) holds item names, the one
-   * string the trace keeps, and they cross `scrub` like every other string
-   * this writes. An entry already held is replaced, so a quality learned
-   * late is kept.
+   * reader. One transaction per drain. The rows hold numbers and booleans,
+   * and the character's chat lines; the drain's dictionary (`TraceDict`)
+   * holds item names. Those are the strings the trace keeps, and they cross
+   * `scrub` like every other string this writes. An entry already held is
+   * replaced, so a quality learned late is kept.
    */
   recordTrace(runId: string, rows: readonly TraceRow[], dict?: TraceDict): void {
     const items = dict?.items ?? [];
@@ -705,7 +712,7 @@ export class Trajectory {
     const name = this.db.query(`INSERT OR REPLACE INTO trace_dict (run_id, kind, id, data) VALUES (?, ?, ?, ?)`);
     this.db.transaction(() => {
       for (const r of rows) {
-        const data = r.data === undefined || r.data === null ? null : JSON.stringify(r.data);
+        const data = r.data === undefined || r.data === null ? null : JSON.stringify(scrubChat(r.data, (t) => this.scrub(t)));
         insert.run(runId, r.ts, r.kind, r.map ?? null, r.x ?? null, r.y ?? null, r.z ?? null, r.o ?? null, data);
       }
       for (const [id, quality, text] of items) name.run(runId, "item", id, JSON.stringify([quality, this.scrub(text)]));

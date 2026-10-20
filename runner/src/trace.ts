@@ -48,7 +48,7 @@ import {
   type TracePoint,
   type TraceRow,
   type TraceSheet,
-  type TraceSheetDelta,
+  type TraceStateDelta,
   type TraceState,
 } from "./trace-row";
 
@@ -179,8 +179,9 @@ export class TraceWriter {
       f.state = { ...emptyTraceState(), ...(row.data as TraceState) };
       f.sheet = sheetOf(row.data);
     } else if (row.kind === "state") {
-      const d = (row.data ?? {}) as Partial<TraceState> & TraceSheetDelta;
-      const { money, qdone: _qdone, equip, bags, inv, dur, quests, rep, skills, ...unit } = d;
+      const d = (row.data ?? {}) as TraceStateDelta;
+      // Turn-ins and chat are events, never state: neither reaches a key row.
+      const { money, qdone: _qdone, chat: _chat, equip, bags, inv, dur, quests, rep, skills, ...unit } = d;
       Object.assign(f.state, unit);
       // A new sheet object whenever one key moves, so a key row already out holds the old one.
       const patches = { equip, bags, inv, dur, quests, rep, skills };

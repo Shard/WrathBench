@@ -1585,7 +1585,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
     if (rest === "/trace") {
       // The trace index: the closed windows and the tail so far. Never cached:
       // the tail moves with every drain.
-      return pub(readTraceIndex(runsDir, runId, Date.now()), projectTraceIndex);
+      return pub(readTraceIndex(runsDir, runId, Date.now()), projectTraceIndex, [runId]);
     }
 
     const traceMatch = /^\/trace\/(\d+)$/.exec(rest);
@@ -1597,9 +1597,12 @@ export function createApi(opts: ApiOptions): ApiHandle {
       /*
        * A closed window is settled (`SETTLE_MS` past its end), so its segment
        * can never change and is cached as an immutable asset is; the window
-       * still open or settling is served as it stands, uncached.
+       * still open or settling is served as it stands, uncached. Its chat
+       * lines are the model's own text, so a public body is struck like the
+       * run's other text (`publicText`).
        */
-      return new Response(JSON.stringify(publicMode ? projectTraceSegment(found.segment) : found.segment), {
+      const body = JSON.stringify(publicMode ? projectTraceSegment(found.segment) : found.segment);
+      return new Response(publicMode ? publicText(body, [runId]) : body, {
         headers: {
           "content-type": "application/json; charset=utf-8",
           "cache-control": found.closed ? "public, max-age=31536000, immutable" : "no-store",

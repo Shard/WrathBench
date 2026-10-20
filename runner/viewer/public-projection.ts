@@ -136,8 +136,12 @@ import { EPISODE_IDS } from "../src/episodes";
 import { STALL_PAUSE } from "../src/lapse";
 import { redactGameProse } from "./redact-prose";
 import { scrubPathsValue } from "./scrub-paths";
+import { REDACTED } from "../src/redact";
+import { maskCredentialShapes } from "../src/secret-scan";
 import {
   applySheetPatch,
+  CHAT,
+  chatOf,
   isSheetKind,
   isStateKey,
   itemNameOf,
@@ -1566,8 +1570,9 @@ const tupleList = <T extends number[]>(a: unknown, width: number): T[] =>
  * did not travel there and never why. The state crosses `PUBLIC_TRACE_KEYS`:
  * the private keyframe and events are replayed in order, and an event that
  * would only repeat what the public stream already says (an aura change that
- * only moved its flags) is dropped. A fixed point on its own output, like
- * every projector here.
+ * only moved its flags) is dropped. The character's chat lines pass as kind
+ * and text, with any credential shape in the text masked. A fixed point on
+ * its own output, like every projector here.
  */
 export function projectTraceSegment(seg: TraceSegment): TraceSegment {
   const raw = seg.k?.s;
@@ -1603,6 +1608,15 @@ export function projectTraceSegment(seg: TraceSegment): TraceSegment {
   const ev: TraceEventWire[] = [];
   for (const e of Array.isArray(seg.ev) ? seg.ev : []) {
     if (!Array.isArray(e) || typeof e[0] !== "number" || !Number.isFinite(e[0])) continue;
+    if (e[1] === CHAT) {
+      // Model-authored text, as `say` is in the action log. A credential's
+      // shape is masked here, because a window is immutable once published
+      // and the publisher's scan would refuse it every pass after; the
+      // session token is struck by value at the route (`publicText`).
+      const c = chatOf(e[2]);
+      if (c !== undefined) ev.push([e[0], CHAT, [c[0], maskCredentialShapes(c[1], REDACTED)]]);
+      continue;
+    }
     if (isSheetKind(e[1])) {
       const kind = e[1];
       if (kind === QDONE) {

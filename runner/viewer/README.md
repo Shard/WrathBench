@@ -449,6 +449,11 @@ a segment references into its `items` and `qreq`. A segment from before the
 sheet has none of its keys, which reads as "not recorded", never as empty
 bags.
 
+They also carry what the character said: each line the server echoed back as
+its own (say, party, raid, yell, emote, and the sender's copy of a whisper),
+kind and text, as a `chat` event the map's bubbles read. Like a turn-in it is
+an event and never state, so no keyframe holds it.
+
 - `/api/run/<id>/trace` is the index: `segs`, the closed windows that have
   rows as runs of `[firstT0, count]`, and `tail`, everything after them
   encoded so far. A window closes `SETTLE_MS` (a minute) after it ends, so a
@@ -469,7 +474,9 @@ file's size and mtime, which is what keeps the publisher from opening every
 run's sqlite on every pass. In public mode a segment crosses
 `projectTraceSegment`: no `target`. Deaths are public, so `dead`, `ghost` and
 the gauges at a corpse pass. The sheet passes as numbers with its items'
-template names, and never the bank or the vendor buyback slots.
+template names, and never the bank or the vendor buyback slots. Chat passes
+as kind and text, a credential's shape masked, and a public trace body has the
+run's session token struck like its other text.
 
 ## Nearby units: the live map's ring
 

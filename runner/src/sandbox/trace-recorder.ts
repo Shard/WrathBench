@@ -15,7 +15,8 @@
  * only for what the cache does not keep: a cast in progress (`SMSG_SPELL_START`
  * to `SMSG_SPELL_GO`), the packets that put the character somewhere it did not
  * walk to (a jump), the own spline a flight rides, and the two packets that
- * mean the stream (re)joined the world. Every hook is a broadcast
+ * mean the stream (re)joined the world, and the character's own chat lines
+ * as the server echoes them back. Every hook is a broadcast
  * subscription (`events.on`), never a consuming queue the model's event
  * batches also draw from.
  *
@@ -44,6 +45,8 @@ import {
   SHEET_KEY_LEN,
   SHEET_KEYS,
   sheetPatch,
+  TRACE_CHAT_MAX_CHARS,
+  type TraceChatKind,
   type TraceDict,
   type TraceDrain,
   type TraceFlight,
@@ -87,6 +90,24 @@ export interface TraceRecorderOptions extends TraceSource {
   cap?: number;
   sheetGapMs?: number;
 }
+
+/**
+ * The chat types a line the character itself said comes back as, by kind:
+ * the server echoes say, yell, emote and group lines to their sender with
+ * the sender's guid. A whisper is the exception, handled apart: the sender's
+ * copy is `CHAT_MSG_WHISPER_INFORM`, which names the recipient as its sender.
+ */
+const OWN_CHAT: ReadonlyMap<number, TraceChatKind> = new Map([
+  [0x01, "say"],
+  [0x02, "party"],
+  [0x33, "party"],
+  [0x03, "raid"],
+  [0x27, "raid"],
+  [0x28, "raid"],
+  [0x06, "yell"],
+  [0x0a, "emote"],
+]);
+const CHAT_WHISPER_INFORM = 0x09;
 
 /** Whether an update carries a create block for the character itself. */
 function createsSelf(data: unknown, self: string | undefined): boolean {
@@ -335,6 +356,16 @@ export class TraceRecorder {
         this.repDirty = true;
       });
     }
+    // What the character said, as the server echoed it back: a line it
+    // dropped (party chat outside a party) never echoes, and so is not here.
+    // The kind and the text only; a whisper's recipient is never kept.
+    on("SMSG_MESSAGECHAT", (e) => {
+      const d = e.data as { type?: unknown; senderGuid?: unknown; message?: unknown } | null;
+      if (typeof d?.type !== "number" || typeof d.message !== "string" || d.message.length === 0) return;
+      const kind = d.type === CHAT_WHISPER_INFORM ? "whisper" : isSelf(d.senderGuid) ? OWN_CHAT.get(d.type) : undefined;
+      if (kind === undefined) return;
+      this.push({ ts: e.ts, kind: "state", data: { chat: [[kind, d.message.slice(0, TRACE_CHAT_MAX_CHARS)]] } });
+    });
     on("SMSG_ITEM_QUERY_SINGLE_RESPONSE", () => {
       this.namesDirty = true;
     });
