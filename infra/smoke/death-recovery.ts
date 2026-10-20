@@ -473,7 +473,11 @@ async function main() {
   priest = await connect({ baseUrl: BASE, token: PRIEST_TOKEN, secret: MODULE_SECRET });
   await priestLogin(priest);
   const priestGuid = priest.state.self.guid ?? fail("the priest has no guid after login");
-  if (priest.state.spell(SPELL_RESURRECTION) === undefined) fail(`${PRIEST} does not know Resurrection (${SPELL_RESURRECTION}) — did apply.ts place the vineyard-priest fixture?`);
+  // SMSG_INITIAL_SPELLS is folded asynchronously after login: poll for the
+  // book rather than read it at once (the pet smoke's wait).
+  const bookBy = Date.now() + 10_000;
+  while (priest.state.spell(SPELL_RESURRECTION) === undefined && Date.now() < bookBy) await Bun.sleep(100);
+  if (priest.state.spell(SPELL_RESURRECTION) === undefined) fail(`${PRIEST} does not know Resurrection (${SPELL_RESURRECTION}) after 10s (spellbook holds ${priest.state.spells().length}) — did apply.ts place the vineyard-priest fixture?`);
   const near = { x: bodyPos.x + 4, y: bodyPos.y, z: bodyPos.z };
   const walked = await priest.moveTo(near, { timeout: 60_000 });
   if (!walked.ok) fail(`the priest's walk to the body ended ${JSON.stringify(walked)}`);
