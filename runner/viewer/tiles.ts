@@ -5,10 +5,22 @@
  *
  * - `<row>_<col>.png`, the native tile, one per ADT, written by the extraction
  *   in `minimap/`;
- * - `<layer>/<z>/<row>_<col>.png`, a level of the downsampled pyramid baked
- *   from those by the same tooling (`lodTileName` in `worldmap.ts` owns the
+ * - `<layer>/<z>/<row>_<col>.webp`, a level of the downsampled pyramid baked
+ *   from those by the same tooling (`lodServedName` in `worldmap.ts` owns the
  *   spelling). The native path is the minimap layer's level 0 and never moves:
  *   the bucket and every deployed build already address it.
+ *
+ * The tile root holds two trees. The masters are what the extraction and the
+ * bakes write, lossless PNG at `<map>/<row>_<col>.png` and
+ * `<map>/<layer>/<z>/<row>_<col>.png`; the served tree under `SERVED_DIR` is
+ * what `minimap/src/transcode.ts` derives from them — an indexed PNG per
+ * native, a WebP per pyramid tile, and a per-map `index.json`. A request is
+ * answered from the served tree when its file is there and no older than its
+ * master, and from the master otherwise, so a machine that baked but never
+ * transcoded still draws every tile, and a re-bake shows before the next
+ * transcode. The content type is the served bytes' own. A pyramid tile asked
+ * for as `.png` — the spelling builds before the WebP tree used, still open in
+ * a tab across a release — is the master.
  *
  * Nothing here creates or expects them. A missing tile — or a missing
  * extraction entirely — is a normal state: the client draws a labelled grid
@@ -22,9 +34,13 @@
  * outside the tile root.
  */
 
-import { existsSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { ART_LAYER, GRID, LOD_LAYERS, LOD_MAX, type LodLayer, lodGrid, lodTileName, tileName } from "./worldmap";
+import { TILE_INDEX_NAME } from "./tileindex";
+import { ART_LAYER, GRID, LOD_LAYERS, LOD_MAX, type LodLayer, lodGrid, lodServedName, lodTileName, tileName } from "./worldmap";
+
+/** The served tree's directory under the tile root (`minimap/src/transcode.ts` writes it). */
+export const SERVED_DIR = "web";
 
 /** Tiles are immutable once extracted: cache them for a year. */
 export const TILE_CACHE_CONTROL = "public, max-age=31536000, immutable";
@@ -52,7 +68,8 @@ export const TILE_PUBLIC_CACHE_CONTROL = "private, max-age=3600";
 export const TILE_PUBLIC_ROBOTS = "noindex";
 
 const TILE_PATH = /^\/tiles\/(\d+)\/(\d+)_(\d+)\.png$/;
-const LOD_PATH = /^\/tiles\/(\d+)\/([a-z]+)\/(\d+)\/(\d+)_(\d+)\.png$/;
+const LOD_PATH = /^\/tiles\/(\d+)\/([a-z]+)\/(\d+)\/(\d+)_(\d+)\.(png|webp)$/;
+const INDEX_PATH = /^\/tiles\/(\d+)\/index\.json$/;
 
 export interface TileRef {
   map: number;
@@ -60,6 +77,8 @@ export interface TileRef {
   col: number;
   /** The pyramid level, absent for a native tile. */
   lod?: { layer: LodLayer; z: number };
+  /** A pyramid tile asked for under its master's `.png` name rather than the served `.webp`. */
+  legacy?: true;
 }
 
 /**
@@ -92,12 +111,18 @@ export function parseTilePath(path: string): TileRef | null {
   if (!Number.isSafeInteger(z) || z < 1 || z > LOD_MAX) return null;
   const n = lodGrid(z);
   if (row < 0 || row >= n || col < 0 || col >= n) return null;
-  return { map, row, col, lod: { layer, z } };
+  return { map, row, col, lod: { layer, z }, ...(m[6] === "png" ? { legacy: true as const } : {}) };
 }
 
-/** A reference's file, relative to the tile root — the one spelling the bake writes. */
-function relativePath(ref: TileRef): string {
+/** A reference's master file, relative to the tile root — the one spelling the bake writes. */
+function masterPath(ref: TileRef): string {
   const name = ref.lod === undefined ? tileName(ref.row, ref.col) : lodTileName(ref.lod.layer, ref.lod.z, ref.row, ref.col);
+  return `${ref.map}/${name}`;
+}
+
+/** A reference's served file, relative to `SERVED_DIR`: the one spelling the transcode writes. */
+export function servedPath(ref: TileRef): string {
+  const name = ref.lod === undefined ? tileName(ref.row, ref.col) : lodServedName(ref.lod.layer, ref.lod.z, ref.row, ref.col);
   return `${ref.map}/${name}`;
 }
 
@@ -107,19 +132,97 @@ function relativePath(ref: TileRef): string {
  * which is why the tile publisher keys only canonical ones.
  */
 export function tileRefPath(ref: TileRef): string {
-  return `/tiles/${relativePath(ref)}`;
+  return `/tiles/${ref.legacy === true ? masterPath(ref) : servedPath(ref)}`;
+}
+
+/** The media type of a tile or index file, by its extension. */
+export function tileContentType(file: string): string {
+  if (file.endsWith(".webp")) return "image/webp";
+  if (file.endsWith(".json")) return "application/json";
+  return "image/png";
+}
+
+function mtime(file: string): number | null {
+  try {
+    return statSync(file).mtimeMs;
+  } catch {
+    return null;
+  }
 }
 
 /**
  * The file a tile request names and what it is, or null if the path is
- * invalid or no such tile was extracted. The file path is built from the
- * parsed integers and the layer list, not from the request string.
+ * invalid or no such tile was extracted. The served file when it exists and
+ * is no older than its master, the master otherwise (see the header). The
+ * file path is built from the parsed integers and the layer list, not from
+ * the request string.
  */
-export function resolveTile(root: string, path: string): { file: string; ref: TileRef } | null {
+export function resolveTile(root: string, path: string): { file: string; ref: TileRef; contentType: string } | null {
   const ref = parseTilePath(path);
   if (ref === null) return null;
-  const file = join(root, relativePath(ref));
-  return existsSync(file) ? { file, ref } : null;
+  const master = join(root, masterPath(ref));
+  const masterAt = mtime(master);
+  if (masterAt === null) return null;
+  let file = master;
+  if (ref.legacy !== true) {
+    const served = join(root, SERVED_DIR, servedPath(ref));
+    const servedAt = mtime(served);
+    if (servedAt !== null && servedAt >= masterAt) file = served;
+  }
+  return { file, ref, contentType: tileContentType(file) };
+}
+
+/** The map an index request names, or null if the path is not one. */
+export function parseTileIndexPath(path: string): number | null {
+  const m = INDEX_PATH.exec(path);
+  if (m === null) return null;
+  const map = Number(m[1]!);
+  return Number.isSafeInteger(map) && map >= 0 ? map : null;
+}
+
+/** An index's file, relative to `SERVED_DIR`. */
+export function servedIndexPath(map: number): string {
+  return `${map}/${TILE_INDEX_NAME}`;
+}
+
+/**
+ * The index file a request names, or null when there is none or it is older
+ * than the masters it describes. A bake writes through a temp file and a
+ * rename, so every write moves its directory's mtime; an index older than any
+ * of the map's master directories may be missing a tile the bake has since
+ * added, and serving it would hide that tile. Null sends the page back to
+ * asking for every cell, which is always correct.
+ */
+export function resolveTileIndex(root: string, path: string): string | null {
+  const map = parseTileIndexPath(path);
+  if (map === null) return null;
+  const file = join(root, SERVED_DIR, servedIndexPath(map));
+  const at = mtime(file);
+  const newest = newestMasterDir(root, map);
+  if (at === null || newest === null) return null;
+  return at >= newest ? file : null;
+}
+
+/**
+ * The latest mtime among a map's master directories — the map's own and
+ * each layer's level directories — or null when the map has none. An index
+ * is current when it is at least this new; the transcode keeps it so.
+ */
+export function newestMasterDir(root: string, map: number): number | null {
+  const dir = join(root, String(map));
+  let newest = mtime(dir);
+  if (newest === null) return null;
+  for (const layer of LOD_LAYERS) {
+    let levels: string[] = [];
+    try {
+      levels = readdirSync(join(dir, layer));
+    } catch {
+      continue;
+    }
+    newest = Math.max(newest, mtime(join(dir, layer)) ?? 0);
+    for (const z of levels) newest = Math.max(newest, mtime(join(dir, layer, z)) ?? 0);
+  }
+  return newest;
 }
 
 /** `resolveTile`'s file alone. */

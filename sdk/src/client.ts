@@ -74,6 +74,7 @@ import {
   type ReadItemData,
   type PageTextQueryResponseData,
   type ItemTextQueryResponseData,
+  type MoveProgressData,
   type MoveResultData,
   type MoveUpdateData,
   type MoveStatus,
@@ -963,7 +964,8 @@ export type MoveResult =
       readonly reachedPos?: Point3;
       /**
        * `target_off_mesh` only: the walkable ground nearest the requested
-       * point within 20y, or `null` when none is within that.
+       * point within 20y that a move from where the character stands can
+       * reach, or `null` when none is within that.
        */
       readonly nearest?: Point3 | null;
       /** `drop` only: the signed vertical step the route would have taken at `reachedPos`. */
@@ -1017,7 +1019,7 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
     `SPELL_FAILED_MOVING.`,
   path_incomplete: (p, d) =>
     `the walkable mesh has no continuous route to (${fmtXY(p)})` +
-    (d.reachedPos ? `; it ends at (${fmtXY(d.reachedPos)})` : "") +
+    (d.reachedPos ? `; it ends at (${fmtXY(d.reachedPos)}, z ${d.reachedPos.z.toFixed(1)})${heightGap(d.reachedPos.z - p.z)}` : "") +
     `. The module already tried one subdivision. Route around (a road, a ramp, a door) or approach from ` +
     `another side.`,
   drop: (p, d) => {
@@ -1286,6 +1288,19 @@ function samePointish(a: Point3, b: Point3): boolean {
  * after the mesh walked it 7.6y down a ledge).
  */
 export const MESH_Z_QUOTE_BAND = 3;
+
+/**
+ * How far above or below the requested point a reported mesh point lies,
+ * as a clause, when it is a different level: past MESH_Z_QUOTE_BAND, the
+ * same band that tells a stale z from a level away on an arrival. Within it
+ * the gap is the request's own z slack and says nothing, so it is omitted.
+ * A `path_incomplete` whose 2D end looked 0.4y from its target (by the
+ * Deadmines entrance) had ended on the hillside 23y over it.
+ */
+export function heightGap(dz: number): string {
+  if (Math.abs(dz) <= MESH_Z_QUOTE_BAND) return "";
+  return `, ${Math.round(Math.abs(dz))}y ${dz > 0 ? "above" : "below"} the point asked for`;
+}
 export function meshZHint(point: { x: number; y: number; z: number }, meshZ: number): string {
   const dz = meshZ - point.z;
   const head = `arrived at (${fmtXY(point)}), but the ground there is at z ${meshZ.toFixed(1)}, not ${point.z.toFixed(1)}.`;
@@ -1350,12 +1365,38 @@ function fmtXY(p: { x: number; y: number }): string {
  * or abandoned `moveTo` uses, and the ones `killTarget` keeps for an approach
  * that ran out its clock.
  */
-function walkProgress(from: Point3 | undefined, at: Point3 | undefined, point: { x: number; y: number }): string {
+function walkProgress(from: Point3 | undefined, at: Point3 | undefined, point: { x: number; y: number }, routeYards?: number): string {
   const covered = at !== undefined && from !== undefined ? distance2d(from, at) : undefined;
   const remaining = at !== undefined ? distance2d(at, point) : undefined;
+  const route =
+    routeYards === undefined
+      ? ""
+      : ` in a straight line, on a route of ~${Math.round(routeYards)}y (about ${Math.round(routeYards / RUN_SPEED_YPS)}s at ${RUN_SPEED_YPS}yd/s)`;
   return covered !== undefined && remaining !== undefined
-    ? `~${Math.round(covered)}y covered, ~${Math.round(remaining)}y still to go to (${fmtXY(point)})`
-    : `no position was observed for it (target (${fmtXY(point)}))`;
+    ? `~${Math.round(covered)}y covered, ~${Math.round(remaining)}y still to go to (${fmtXY(point)})${route}`
+    : `no position was observed for it (target (${fmtXY(point)}))${route}`;
+}
+
+/**
+ * The note on a move longer than the caller's remaining budget: judged by
+ * the route the module walked (`pathLength`, yards) when it is known, else by
+ * the straight line; undefined when the walk fits. It never changes or caps
+ * the move, only says that awaiting it does not fit one snippet.
+ */
+export function walkBudgetNote(straightYards: number, routeYards: number | undefined, budgetMs: number): string | undefined {
+  const yards = routeYards ?? straightYards;
+  const walkMs = (yards / RUN_SPEED_YPS) * 1000;
+  if (walkMs <= budgetMs) return undefined;
+  const what =
+    routeYards === undefined
+      ? `this move is ~${Math.round(straightYards)}y in a straight line`
+      : `this move's route is ~${Math.round(routeYards)}y (~${Math.round(straightYards)}y in a straight line)`;
+  return (
+    `${what} — about ${Math.round(walkMs / 1000)}s at a base run speed of ${RUN_SPEED_YPS}yd/s, and the caller ` +
+    `had ~${Math.round(budgetMs / 1000)}s of its budget left when it was issued. Awaiting a move this long does ` +
+    `not fit one snippet: dispatch it with sdk.moveToAsync(target) or from a background routine, then poll ` +
+    `state.self.position.`
+  );
 }
 
 export interface WaitForTransferOptions {
@@ -1651,25 +1692,67 @@ function questgiverMarkerOf(state: StateCache, guid: GuidArg, wanted: "reward" |
 /**
  * The observed questgiver marker of a unit, only when it is newer than every
  * change the cache has seen to what the server computes a marker from: the
- * quest log's slots (a quest entering or leaving it, or its state changing)
- * and our own level. The client re-asks for every marker when the log
- * changes, so an older marker may be about to change — finishing the last
- * objective and turning in at once is the common case, and turning in and
- * asking the same NPC for the next quest of its chain at once is the other.
- * Undefined when no marker was observed or it is older than such a change.
- * The comparison is by `seq`, which restarts with every session; the cache
- * drops every marker at login, so none from an earlier session is compared,
- * and re-dates these fields to the login, so none of theirs is either.
+ * quest log's slots (a quest entering or leaving it, or its state changing),
+ * our own level, and `exchangeSeq`, the latest quest exchange the fields may
+ * not show yet (`Client.questExchangeSeq`). The client re-asks for every
+ * marker when the log changes, so an older marker may be about to change —
+ * finishing the last objective and turning in at once is the common case,
+ * and turning in and asking the same NPC for the next quest of its chain at
+ * once is the other. The second is why the fields alone are not enough: the
+ * turn-in's SMSG_QUESTGIVER_QUEST_COMPLETE resolves `turnInQuest` a world
+ * tick before the slot clears, so a call made straight after it saw the
+ * pre-turn-in `reward` as current (run-20261020-041059 lost quests 15, 3101
+ * and 6 that way). Undefined when no marker was observed or it is older than
+ * such a change. The comparison is by `seq`, which restarts with every
+ * session; the cache drops every marker at login, so none from an earlier
+ * session is compared, and re-dates these fields to the login, so none of
+ * theirs is either.
  */
-function freshQuestgiverMarkerOf(state: StateCache, guid: GuidArg, wanted: "reward" | "available", questId?: number): QuestGiverMarker | undefined {
+function freshQuestgiverMarkerOf(
+  state: StateCache,
+  guid: GuidArg,
+  exchangeSeq: number,
+  wanted: "reward" | "available",
+  questId?: number,
+): QuestGiverMarker | undefined {
   const observed = state.nearby.get(guidKey(guid))?.questGiver;
   if (observed === undefined) return undefined;
-  let changed = -1;
+  let changed = exchangeSeq;
   for (const [key, field] of state.self.fields) {
     if (isQuestGiverMarkerInput(key)) changed = Math.max(changed, field.seq);
   }
   return observed.seq > changed ? { name: questGiverStatusName(observed.value), wanted, questId } : undefined;
 }
+
+/**
+ * Events that say a questgiver marker may have moved before the self fields
+ * do: the turn-in receipt (the slot clears on the next update), a level-up
+ * (the level field likewise), and a quest failing. Each is followed by a
+ * field change, so the dating they add lasts no longer than the fields'
+ * own would, and the log change earns a marker refresh as usual. Kill and
+ * item credit are left out: most of it moves no marker, earns no refresh,
+ * and would switch the pre-checks off until the NPC came back into view;
+ * the credit that completes a quest flips the complete bit, which dates the
+ * marker through the fields.
+ */
+const QUEST_EXCHANGE_EVENTS: ReadonlySet<string> = new Set([
+  "SMSG_QUESTGIVER_QUEST_COMPLETE",
+  "SMSG_LEVELUP_INFO",
+  "SMSG_QUESTGIVER_QUEST_FAILED",
+  "SMSG_QUESTUPDATE_FAILED",
+]);
+
+/**
+ * Actions that change the quest log with no event of their own before the
+ * field update: an accept and an abandon are acked when queued, and the slot
+ * changes a world tick later. Choosing a reward is here as well, although
+ * its receipt dates the marker too.
+ */
+const QUEST_EXCHANGE_ACTIONS: ReadonlySet<ActionBody["action"]> = new Set([
+  "quest_accept",
+  "quest_choose_reward",
+  "quest_abandon",
+]);
 
 /**
  * The markers that say no quest this NPC ends is ready to turn in: `none`
@@ -3166,9 +3249,20 @@ export class WrathClient {
   private multipleTimer: ReturnType<typeof setTimeout> | undefined;
   private questLogKey: string | undefined;
   private readonly questQueried = new Set<number>();
+  /**
+   * The seq of the latest quest exchange (`QUEST_EXCHANGE_EVENTS`, or the
+   * newest event seen when a `QUEST_EXCHANGE_ACTIONS` action was acked): a
+   * questgiver marker no newer than it is no answer for the marker
+   * pre-checks (`freshQuestgiverMarkerOf`). Stamped from the synchronous
+   * event fold, so a call made in the continuation of the event's own waiter
+   * already sees it. Reset at login, where `seq` restarts and every marker
+   * is dropped.
+   */
+  private questExchangeSeq = -1;
 
   private clientParityQueries(event: StreamEvent): void {
     if (isDecodeError(event.data) || ("schemaError" in event && event.schemaError !== undefined)) return;
+    if (QUEST_EXCHANGE_EVENTS.has(event.opcode)) this.questExchangeSeq = Math.max(this.questExchangeSeq, event.seq);
     switch (event.opcode) {
       case "SMSG_UPDATE_OBJECT": {
         const d = event.data as { objects: readonly Record<string, unknown>[] };
@@ -3199,6 +3293,7 @@ export class WrathClient {
         // client asks for every marker after logging in.
         this.statusKnown.clear();
         this.statusPending.clear();
+        this.questExchangeSeq = -1;
         break;
       case "SMSG_NEW_WORLD":
       case "WB_SESSION_STATE":
@@ -5552,14 +5647,6 @@ export class WrathClient {
     if (from !== undefined) {
       const yards = distance2d(from, point);
       const walkMs = (yards / RUN_SPEED_YPS) * 1000;
-      if (budgetMs !== undefined && walkMs > budgetMs) {
-        extras.push(
-          `this move is ~${Math.round(yards)}y in a straight line — about ${Math.round(walkMs / 1000)}s at a ` +
-            `base run speed of ${RUN_SPEED_YPS}yd/s, and the caller had ~${Math.round(budgetMs / 1000)}s of ` +
-            `its budget left when it was issued. Awaiting a move this long does not fit one snippet: dispatch ` +
-            `it with sdk.moveToAsync(target) or from a background routine, then poll state.self.position.`,
-        );
-      }
       // A caller-set timeout below the straight-line walk plus mesh slack will
       // expire on a move that is still going: the path the server walks is
       // typically 1.5–2× the straight line (fleet-nav-probe-freeplay-sonnet
@@ -5618,7 +5705,14 @@ export class WrathClient {
         // How far this walk got, shared by both branches below: an abort and a
         // timeout are both the absence of a verdict, and the caller needs the
         // same two facts either way.
-        const progress = walkProgress(from, this.state.self.position?.value, point);
+        // The route's length, when the module has said it on a progress event
+        // of this move: "still to go" in a straight line understates a tunnel.
+        const progressed = this.events
+          .recent(500)
+          .filter((e) => e.seq > sinceSeq && isEvent(e, "WB_MOVE_PROGRESS") && !isDecodeError(e.data))
+          .map((e) => e.data as MoveProgressData)
+          .findLast((d) => d.moveId === ack.moveId);
+        const progress = walkProgress(from, this.state.self.position?.value, point, progressed?.pathLength);
         if (err instanceof EventTimeoutError) {
           // The timeout is not "the move failed": the character is still walking
           // and the verdict is still coming. Saying so stops the model from
@@ -5651,6 +5745,14 @@ export class WrathClient {
       }
       return event;
     };
+    // The budget note, judged by the route the module walked when the
+    // verdict carries its length (`pathLength`), else by the straight line:
+    // a mine's 165y line was a 660y walk, and the line alone said nothing.
+    const noteBudget = (verdict: MoveResultData) => {
+      if (from === undefined || budgetMs === undefined) return;
+      const note = walkBudgetNote(distance2d(from, point), verdict.pathLength, budgetMs);
+      if (note !== undefined) extras.push(note);
+    };
     let event = await issue(options.force === true);
     let data = event.data as MoveResultData;
     // A ledge the module refused: judge the fall from the facts it gave (the
@@ -5667,6 +5769,7 @@ export class WrathClient {
         data = event.data as MoveResultData;
       }
     }
+    noteBudget(data);
     const status: MoveStatus = data.status;
     const position: UnitPosition = {
       x: data.pos.x,
@@ -6890,11 +6993,12 @@ export class WrathClient {
       // turn-in there cannot succeed, and the core mostly answers it with
       // silence, so waiting the timeout out would only confirm what is
       // already known (three 0.5 probes lost 20–40s a run to it). Only a
-      // marker newer than the last quest-log or level change counts; an
+      // marker newer than the last quest-log or level change, and than the
+      // last quest exchange the fields may not show yet, counts; an
       // unobserved or older one sends, as before. Ahead of the range check, as
       // in `questOffer`: an NPC with nothing to hand in has nothing to walk
       // over for.
-      const marker = freshQuestgiverMarkerOf(this.state, npcId, "reward", questId);
+      const marker = freshQuestgiverMarkerOf(this.state, npcId, this.questExchangeSeq, "reward", questId);
       if (marker !== undefined && TURN_IN_NOT_READY.has(marker.name)) {
         const hint =
           `${questgiverMarkerClause(marker)} Nothing was sent. ` +
@@ -7094,7 +7198,13 @@ export class WrathClient {
 
   /** One `POST /action`, with the session token filled in. */
   private action(body: ActionBody): Promise<ActionResponse> {
-    return this.request("POST", "/action", { token: this.token, ...body }, actionResponseSchema);
+    const sent = this.request("POST", "/action", { token: this.token, ...body }, actionResponseSchema);
+    if (!QUEST_EXCHANGE_ACTIONS.has(body.action)) return sent;
+    return sent.then((ack) => {
+      const latest = this.events.recent(1)[0]?.seq;
+      if (latest !== undefined) this.questExchangeSeq = Math.max(this.questExchangeSeq, latest);
+      return ack;
+    });
   }
 
   /**
@@ -7121,16 +7231,18 @@ export class WrathClient {
   private async questOffer(npcGuid: GuidArg, timeout: number): Promise<QuestOfferOutcome> {
     const sinceSeq = this.events.recent(1)[0]?.seq;
     const distance = distanceToUnit(this.state, npcGuid);
-    const marker = freshQuestgiverMarkerOf(this.state, npcGuid, "available");
+    const marker = freshQuestgiverMarkerOf(this.state, npcGuid, this.questExchangeSeq, "available");
     if (marker !== undefined && OFFERS_NOTHING.has(marker.name)) {
       // The server already said what this NPC has for us (its questgiver
       // marker, received before the call), and it is not a quest on offer — a
       // turn-in-only or empty-handed NPC answers a quest_list with silence, so
       // waiting the timeout out would only confirm what is already known. Only
-      // a marker newer than the last quest-log or level change counts, as in
-      // `turnInQuest`: right after a turn-in the marker still reads `reward`
-      // while the next quest of the chain is already on offer. An unobserved
-      // or older marker sends, as before.
+      // a marker newer than the last quest-log or level change, and than the
+      // last quest exchange, counts, as in `turnInQuest`: right after a
+      // turn-in the marker still reads `reward` while the next quest of the
+      // chain is already on offer, and a call made the moment the turn-in
+      // resolves comes before the slot has cleared. An unobserved or older
+      // marker sends, as before.
       return {
         nothing: marker,
         hint:

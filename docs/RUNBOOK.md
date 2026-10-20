@@ -1652,15 +1652,20 @@ It needs no key, no lane and no `--model`: the route is the model
 with everything else is the account. `PROBE` is in no pool, but other things
 log in on it by hand (`bun wb smoke preflight`, hand smokes), so run none of
 them on `PROBE` while a reference run holds it. The program never ends a run
-itself, so the verdict should be `episode-limit`. Until a first run has shown
-the route through, though, the Northshire arc is the confident part: its
-positions were observed in models' runs. Goldshire and the Elwynn grounds are
-not yet seen, and a hunt that finds nothing in view there is ended by `no-xp`.
+itself, so the verdict should be `episode-limit`. Until a run has shown the
+route through to its hunt, though, `no-xp` is still possible: the first live
+run found Goldshire's quest givers and prey on the Elwynn grounds, then stood twenty
+minutes as a ghost whose corpse leg the mesh would not finish. The program now
+walks a partial route as far as it goes, swings a leg that failed, leaves a mob
+it cannot reach alone, and takes the spirit healer when a corpse stays out of
+reach.
 A pause is not resumed. Check it with `bun wb inspect run <run-id>` and `bun wb
 inspect trajectory <run-id> --grep 'REF'`. Every turn's result ends in one
 `[log] REF {…}` line: the step, `advance`, what the tick did, and the level, xp
-and health. A step stuck on `move …` or `npc … not in view` is a route
-position to correct in `runner/src/reference/route.ts`. Bump the route's
+and health. An `npc … not in view` after walks that arrived is a route
+position to correct in `runner/src/reference/route.ts`; the same `move …`
+failure repeated from one spot (the audit's move results give the position) is
+the program's to fix in `program.ts`. Bump the route's
 `version` with the correction, so the next run is a new line rather than the
 old one moved.
 
@@ -2173,12 +2178,15 @@ extraction has changed — the skip-unchanged check is a content hash kept in
 `tiles/manifest.json` in the bucket, so a re-run with nothing new PUTs nothing.
 
 ```
-bun wb site tiles --dry-run    # counts only, uploads nothing
+bun wb site tiles --dry-run    # transcodes locally, then counts; uploads nothing
 bun wb site tiles --upload
 ```
 
 It uses the same `S3_*` credentials as the snapshot publisher
-(`WRATHBENCH_MINIMAP_DIR` overrides the root). `bun wb site ship --tiles` runs the
+(`WRATHBENCH_MINIMAP_DIR` overrides the root). It uploads the served tree, not
+the PNG masters. Each pass first runs the transcode, which only re-encodes
+what changed: natives as indexed PNG, the pyramids as WebP, and a per-map
+`index.json` (`minimap/README.md`, "Served formats"). `bun wb site ship --tiles` runs the
 same upload as part of a deploy, which is the usual way to do it after a
 re-extraction. Two things go with it: `WRATHBENCH_TILES_BASE` in `.env`, without
 which the built site asks for nothing, and — after a re-extraction, since the

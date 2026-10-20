@@ -1,9 +1,9 @@
 /**
  * Whether a minimap tile can be fetched at all, and if so from where.
  *
- * The private viewer serves `/tiles/<map>/<row>_<col>.png`, and the baked
- * pyramid levels of each layer under `/tiles/<map>/<layer>/<z>/` (`minimap`,
- * `art`), off `data/minimap/`
+ * The private viewer serves `/tiles/<map>/<row>_<col>.png`, the baked
+ * pyramid levels of each layer as WebP under `/tiles/<map>/<layer>/<z>/`
+ * (`minimap`, `art`) and each map's `/tiles/<map>/index.json`, off `data/minimap/`
  * (`runner/viewer/tiles.ts`), same-origin with the SPA. The Gated preview
  * served the SPA and the bucket from one Worker behind one password, so the
  * same relative path resolved there too and the map page could hard-code it.
@@ -37,7 +37,8 @@
  * degrade to the grid.
  */
 
-import { type LodLayer, MINIMAP_LAYER, lodTileName } from "@viewer/worldmap";
+import { TILE_INDEX_NAME } from "@viewer/tileindex";
+import { type LodLayer, MINIMAP_LAYER, lodServedName } from "@viewer/worldmap";
 
 /**
  * The path a native tile lives at, under whatever host serves it. The viewer's
@@ -51,12 +52,18 @@ export function tilePath(map: number, row: number, col: number): string {
 /**
  * The path of a tile at any level of a layer's pyramid. The minimap's level 0
  * is the native tile at its original path; every other level is spelled by
- * `lodTileName`, the one function the bake, the viewer and the publisher also
- * call — which throws for level 0 of any other layer rather than guess.
+ * `lodServedName`, the one function the transcode, the viewer and the
+ * publisher also call — which throws for level 0 of any other layer rather
+ * than guess.
  */
 export function levelTilePath(map: number, layer: LodLayer, z: number, row: number, col: number): string {
   if (z === 0 && layer === MINIMAP_LAYER) return tilePath(map, row, col);
-  return `/tiles/${map}/${lodTileName(layer, z, row, col)}`;
+  return `/tiles/${map}/${lodServedName(layer, z, row, col)}`;
+}
+
+/** The path of a map's tile index (`@viewer/tileindex`), beside its tiles. */
+export function tileIndexPath(map: number): string {
+  return `/tiles/${map}/${TILE_INDEX_NAME}`;
 }
 
 /**
@@ -111,4 +118,9 @@ export const NO_TILE_BASE: boolean = tileUrl(BASES.tiles, BASES.snapshot, 0, 0, 
  */
 export function tileSrc(map: number, layer: LodLayer, z: number, row: number, col: number): string | null {
   return tileUrlFor(BASES.tiles, BASES.snapshot, levelTilePath(map, layer, z, row, col));
+}
+
+/** Where a map's tile index is fetched from, or `null` when this build asks for no tiles at all. */
+export function tileIndexSrc(map: number): string | null {
+  return tileUrlFor(BASES.tiles, BASES.snapshot, tileIndexPath(map));
 }

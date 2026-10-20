@@ -1,11 +1,11 @@
 /**
  * Probe for a staged party entering the Deadmines together
  * (docs/proposals/GROUP-PLAY.md §4 and phase 6): the five members staged on
- * PARTY1..PARTY5 log in grouped in Moonbrook, each walks down the mine to
- * the portal and is transferred onto map 36, and inside each one sees the
- * other four as nearby players — the proof that a grouped party lands in
- * the group's one instance (`InstanceMap::AddPlayerToMap`), not five private
- * copies. Then all five walk out through the exit trigger and are deleted.
+ * PARTY1..PARTY5 log in grouped beside the portal in the mine's last tunnel,
+ * each makes one move of the trigger and is transferred onto map 36, and
+ * inside each one sees the other four as nearby players — the proof that a
+ * grouped party lands in the group's one instance
+ * (`InstanceMap::AddPlayerToMap`), not five private copies. Then all five walk out through the exit trigger and are deleted.
  *
  *   bun wb smoke party-entry            # stage first, then the entry
  *   bun wb smoke party-entry --staged   # use the party a --keep staging left
@@ -15,11 +15,11 @@
  */
 
 import type { WrathClient } from "../../sdk/src/index";
-import { DEADMINES_ENTRANCE_ROUTE } from "../fixtures/scenarios";
+import { DEADMINES_ENTRANCE_TRIGGER } from "../fixtures/scenarios";
 import { stageParty } from "../fixtures/stage-party";
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
-import { deleteMembers, fmt, loginMember, membersOf, smokeRequest, walkRoute, walkTo } from "./lib/party";
+import { deleteMembers, fmt, loginMember, membersOf, smokeRequest, walkTo } from "./lib/party";
 
 const BASE = moduleBase();
 const argv = Bun.argv.slice(2);
@@ -46,12 +46,16 @@ try {
     const g = clients[i]!.state.group();
     if (!g?.inGroup || g.members.length < party.length - 1) throw new Error(`${m.character} logs in outside the party: ${JSON.stringify(g ?? null)}`);
   }
-  log(`all ${party.length} in Moonbrook, grouped`);
+  log(`all ${party.length} beside the portal, grouped`);
 
-  // In together: every member walks the mine at once, each its own client.
+  // In together: every member moves at once, each its own client, with the
+  // one plain move of the trigger's centre an agent would make from its
+  // staging spot (deadmines-entry says what the module does with it).
+  const { x, y, z } = DEADMINES_ENTRANCE_TRIGGER;
   const inbound = await Promise.all(
     party.map(async (m, i) => {
-      const r = await walkRoute(clients[i]!, DEADMINES_ENTRANCE_ROUTE, (s) => log(`  ${m.character}:${s}`));
+      const r = await clients[i]!.moveTo({ x, y, z });
+      log(`  ${m.character}: one move to trigger 78's centre: ${r.status}`);
       if (!(r.ok && r.status === "transferred" && r.to.map === DEADMINES_MAP)) {
         throw new Error(`${m.character}'s walk to the portal ended ${r.status}${r.ok && r.status === "transferred" ? ` onto map ${r.to.map}` : ""}`);
       }

@@ -10,7 +10,7 @@
 import { connect, type MoveResult, type WrathClient } from "../../../sdk/src/index";
 import { LOADOUT_IDS, PARTY_LEVEL, PARTY_MONEY, loadoutFor, type Loadout } from "../../fixtures/loadouts";
 import { DEFAULT_PARTY_ACCOUNTS, defaultStageRequest, type StageRequest } from "../../fixtures/stage-party";
-import { MOONBROOK } from "../../fixtures/scenarios";
+import { DEADMINES_STAGING_SPOTS } from "../../fixtures/scenarios";
 
 export type PartyMember = { member: string; account: string; character: string; loadout: Loadout };
 
@@ -69,7 +69,8 @@ export async function assertStagedMember(c: WrathClient, m: PartyMember, party: 
   if (level !== PARTY_LEVEL) throw new Error(`${who} is level ${level}, expected ${PARTY_LEVEL}`);
 
   const pos = await until(`${who} position`, 15_000, () => c.state.self.position?.value);
-  if (pos.map !== 0 || dist2d(pos, MOONBROOK) > 8) throw new Error(`${who} stands on map ${pos.map} at ${fmt(pos)}, expected Moonbrook ${fmt(MOONBROOK)} within 8y`);
+  const spot = DEADMINES_STAGING_SPOTS[party.indexOf(m)] ?? DEADMINES_STAGING_SPOTS[0]!;
+  if (pos.map !== 0 || dist2d(pos, spot) > 3) throw new Error(`${who} stands on map ${pos.map} at ${fmt(pos)}, expected its staging spot ${fmt(spot)} within 3y`);
 
   const equipped = new Map<number, number>();
   await until(`${who} equipment`, 15_000, () => {
@@ -122,7 +123,8 @@ export async function assertStagedMember(c: WrathClient, m: PartyMember, party: 
  * a portal takes the walker. Returns the final result: `arrived` there, or
  * `transferred`. For open ground: underground, a straight-line leg can end
  * over the tunnel it is meant to reach, and the nearest walkable point can be
- * an island no route reaches. Use `walkRoute` there.
+ * an island no route reaches; a move of the target itself is the module's to
+ * plan (module/PROTOCOL.md, `arrived` and `path_incomplete`).
  */
 export async function walkTo(c: WrathClient, target: { x: number; y: number; z: number }, log: (s: string) => void, maxLegs = 6): Promise<MoveResult> {
   let last: MoveResult | undefined;
@@ -142,29 +144,6 @@ export async function walkTo(c: WrathClient, target: { x: number; y: number; z: 
     if (r.ok && r.status === "transferred") return r;
     if (!(r.ok && r.status === "arrived")) return r;
     if (step === target) return r;
-  }
-  return last!;
-}
-
-/**
- * Walk a route of waypoints read off the mesh, one move per leg (each leg one
- * the core's pathfinder completes; see DEADMINES_ENTRANCE_ROUTE). A waypoint
- * the module calls off the mesh is the route's own error and fails the walk
- * rather than being swapped for the nearest walkable point, which can be an
- * island. Returns the first result that is not `arrived` (a `transferred`
- * among them), or the last leg's.
- */
-export async function walkRoute(c: Pick<WrathClient, "moveTo" | "state">, route: readonly { x: number; y: number; z: number }[], log: (s: string) => void): Promise<MoveResult> {
-  if (route.length === 0) throw new Error("an empty route");
-  let last: MoveResult | undefined;
-  for (const [i, step] of route.entries()) {
-    const here = c.state.self.position?.value;
-    if (!here) throw new Error("no position to walk from");
-    const r = await c.moveTo(step, { timeout: 120_000 });
-    const tail = r.ok ? (r.status === "transferred" ? ` to map ${r.to.map}` : "") : r.reachedPos ? `; the mesh ends at ${fmt(r.reachedPos)}` : "";
-    log(`    leg ${i + 1}/${route.length}: ${fmt(here)} -> ${fmt(step)}: ${r.status}${tail}`);
-    last = r;
-    if (!(r.ok && r.status === "arrived")) return r;
   }
   return last!;
 }

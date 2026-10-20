@@ -341,7 +341,7 @@ export function partyCharacterName(id: LoadoutId, account: string): string {
  * role's talents, and skills at the level's cap. The base scenario's own
  * level, money, spells and talents are not used: the loadout is the member.
  */
-export function partyScenario(loadout: Loadout, trainerSpells: readonly number[], base: Scenario, level = PARTY_LEVEL): Scenario {
+export function partyScenario(loadout: Loadout, trainerSpells: readonly number[], base: Scenario, level = PARTY_LEVEL, member = 0): Scenario {
   const exclude = new Set(loadout.trainerExclude ?? []);
   const taught = trainerSpells.filter((s) => !exclude.has(s)).flatMap((s) => loadout.trainerLearns?.[s] ?? [s]);
   const spells = [...new Set([...taught, ...loadout.questSpells.map((s) => s.spell)])].sort((a, b) => a - b);
@@ -350,7 +350,8 @@ export function partyScenario(loadout: Loadout, trainerSpells: readonly number[]
     level,
     xp: 0,
     money: PARTY_MONEY,
-    position: base.position,
+    // The member's own spot (member order), so five do not stand in one another.
+    position: base.partySpots?.[member] ?? base.position,
     ...(base.homebind ? { homebind: base.homebind } : {}),
     clearQuests: true,
     spells,

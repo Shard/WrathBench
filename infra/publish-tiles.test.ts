@@ -11,7 +11,8 @@ import { join } from "node:path";
 
 import { encodePng } from "../minimap/src/png";
 import { bakeMap } from "../minimap/src/bake";
-import { parseTilePath, resolveTilePath } from "../runner/viewer/tiles";
+import { transcodeTree } from "../minimap/src/transcode";
+import { SERVED_DIR, parseTilePath, resolveTileIndex, resolveTilePath } from "../runner/viewer/tiles";
 import { MINIMAP_LAYER, TILE_PX } from "../runner/viewer/worldmap";
 import { levelTilePath } from "../dashboard/src/lib/tiles";
 import {
@@ -94,40 +95,46 @@ describe("scanTiles", () => {
   test("finds the baked pyramid levels under each listed layer, keyed as the viewer's path", () => {
     const dir = root({
       "0/43_31.png": "a",
-      "0/minimap/1/21_15.png": "b",
-      "0/minimap/6/0_0.png": "c",
-      "0/art/1/21_15.png": "e",
-      "571/minimap/3/2_5.png": "d",
-      "571/art/6/0_0.png": "f",
+      "0/minimap/1/21_15.webp": "b",
+      "0/minimap/6/0_0.webp": "c",
+      "0/art/1/21_15.webp": "e",
+      "571/minimap/3/2_5.webp": "d",
+      "571/art/6/0_0.webp": "f",
     });
     expect(scanTiles(dir).map((t) => t.key)).toEqual([
       `${TILE_PREFIX}0/43_31.png`,
-      `${TILE_PREFIX}0/minimap/1/21_15.png`,
-      `${TILE_PREFIX}0/minimap/6/0_0.png`,
-      `${TILE_PREFIX}0/art/1/21_15.png`,
-      `${TILE_PREFIX}571/minimap/3/2_5.png`,
-      `${TILE_PREFIX}571/art/6/0_0.png`,
+      `${TILE_PREFIX}0/minimap/1/21_15.webp`,
+      `${TILE_PREFIX}0/minimap/6/0_0.webp`,
+      `${TILE_PREFIX}0/art/1/21_15.webp`,
+      `${TILE_PREFIX}571/minimap/3/2_5.webp`,
+      `${TILE_PREFIX}571/art/6/0_0.webp`,
     ]);
   });
 
   test("uploads nothing the viewer would not serve under that exact name", () => {
     const dir = root({
-      "0/minimap/1/21_15.png": "ok",
-      "0/minimap/1/32_0.png": "row outside level 1's 32x32 grid",
-      "0/minimap/6/0_1.png": "level 6 is one tile",
-      "0/minimap/7/0_0.png": "no level 7",
-      "0/minimap/0/43_31.png": "level 0 is the native path only",
-      "0/minimap/1/21_15.png.tmp": "half-written",
-      "0/minimap/1/021_15.png": "a second spelling",
-      "0/minimap/01/21_15.png": "a second spelling",
+      "0/minimap/1/21_15.webp": "ok",
+      "0/minimap/1/32_0.webp": "row outside level 1's 32x32 grid",
+      "0/minimap/6/0_1.webp": "level 6 is one tile",
+      "0/minimap/7/0_0.webp": "no level 7",
+      "0/minimap/0/43_31.webp": "level 0 is the native path only",
+      "0/minimap/1/21_15.webp.tmp": "half-written",
+      "0/minimap/1/021_15.webp": "a second spelling",
+      "0/minimap/1/20_15.png": "a pyramid tile under its master's name",
+      "0/minimap/01/21_15.webp": "a second spelling",
       "0/minimap/notes.txt": "no",
-      "0/terrain/1/0_0.png": "not a layer the viewer serves",
-      "0/art/0/43_31.png": "the art has no level 0",
+      "0/terrain/1/0_0.webp": "not a layer the viewer serves",
+      "0/art/0/43_31.webp": "the art has no level 0",
       "0/64_0.png": "outside the world grid",
       "0/043_31.png": "a second spelling",
       "007/43_31.png": "a second spelling of map 7",
     });
-    expect(scanTiles(dir).map((t) => t.key)).toEqual([`${TILE_PREFIX}0/minimap/1/21_15.png`]);
+    expect(scanTiles(dir).map((t) => t.key)).toEqual([`${TILE_PREFIX}0/minimap/1/21_15.webp`]);
+  });
+
+  test("takes each map's index, and nothing else that is JSON", () => {
+    const dir = root({ "0/43_31.png": "a", "0/index.json": "{}", "0/minimap/index.json": "no", "1/manifest.json": "no", "1/art/1/index.json": "no" });
+    expect(scanTiles(dir).map((t) => t.key)).toEqual([`${TILE_PREFIX}0/43_31.png`, `${TILE_PREFIX}0/index.json`]);
   });
 
   test("a machine that never ran the extraction scans empty rather than throwing", () => {
@@ -142,20 +149,25 @@ describe("scanTiles", () => {
  * each against its own copy of the shape.
  */
 describe("one path from the bake to the browser", () => {
-  test("every tile the bake writes is keyed, served and requested at the same path", () => {
+  test("every tile the bake writes is transcoded, keyed, served and requested at the same path", async () => {
     const dir = tempDir("wb-tiles-bake-");
     const opaque = new Uint8Array(TILE_PX * TILE_PX * 4).fill(255);
     mkdirSync(join(dir, "0"), { recursive: true });
     writeFileSync(join(dir, "0", "43_31.png"), encodePng(opaque, TILE_PX, TILE_PX));
     writeFileSync(join(dir, "0", "48_32.png"), encodePng(opaque, TILE_PX, TILE_PX));
     const written = bakeMap(join(dir, "0"), { force: false }).reduce((n, l) => n + l.written, 0);
+    await transcodeTree(dir);
 
-    const tiles = scanTiles(dir);
+    const tiles = scanTiles(join(dir, SERVED_DIR));
     const levels = tiles.filter((t) => t.key.includes(`/${MINIMAP_LAYER}/`));
     expect(levels.length).toBe(written);
-    expect(tiles.length).toBe(written + 2);
+    expect(tiles.length).toBe(written + 2 + 1);
     for (const t of tiles) {
       const path = `/${t.key}`;
+      if (path.endsWith("/index.json")) {
+        expect(resolveTileIndex(dir, path)).toBe(t.file);
+        continue;
+      }
       expect(resolveTilePath(dir, path)).toBe(t.file);
       const ref = parseTilePath(path)!;
       expect(levelTilePath(ref.map, ref.lod?.layer ?? MINIMAP_LAYER, ref.lod?.z ?? 0, ref.row, ref.col)).toBe(path);
@@ -172,10 +184,10 @@ describe("art changes are reported for the purge", () => {
   test("only the maps whose art a pass uploads, and none when the art is unchanged", async () => {
     const dir = root({
       "0/43_31.png": "native",
-      "0/minimap/1/21_15.png": "level",
-      "0/art/1/21_15.png": "art-0",
-      "1/art/2/9_5.png": "art-1",
-      "571/minimap/2/1_1.png": "level",
+      "0/minimap/1/21_15.webp": "level",
+      "0/art/1/21_15.webp": "art-0",
+      "1/art/2/9_5.webp": "art-1",
+      "571/minimap/2/1_1.webp": "level",
     });
     const store = fakeStore();
     const first = await publishTiles(scanTiles(dir), store, { now: 1, log: () => {} });
@@ -184,7 +196,7 @@ describe("art changes are reported for the purge", () => {
     const again = await publishTiles(scanTiles(dir), store, { now: 2, log: () => {} });
     expect(again.artMaps).toEqual([]);
     // Map 1's art re-baked at the same key: map 1 alone.
-    writeFileSync(join(dir, "1/art/2/9_5.png"), "art-1, tuned");
+    writeFileSync(join(dir, "1/art/2/9_5.webp"), "art-1, tuned");
     const tuned = await publishTiles(scanTiles(dir), store, { dryRun: true, log: () => {} });
     expect(tuned.uploaded).toBe(1);
     expect(tuned.artMaps).toEqual([1]);
@@ -200,12 +212,12 @@ describe("art goes up with the rest", () => {
     const tiles = scanTiles(
       root({
         "0/43_31.png": "native",
-        "0/minimap/1/21_15.png": "level",
-        "0/art/1/21_15.png": "art",
-        "1/art/6/0_0.png": "art",
+        "0/minimap/1/21_15.webp": "level",
+        "0/art/1/21_15.webp": "art",
+        "1/art/6/0_0.webp": "art",
       }),
     );
-    expect(tiles.map((t) => t.key)).toContain(`${TILE_PREFIX}1/art/6/0_0.png`);
+    expect(tiles.map((t) => t.key)).toContain(`${TILE_PREFIX}1/art/6/0_0.webp`);
     const report = await publishTiles(tiles, fakeStore(), { now: 1, log: () => {} });
     expect(report.uploaded).toBe(4);
     expect(report.artMaps).toEqual([0, 1]);
@@ -254,7 +266,7 @@ describe("publishTiles", () => {
     const store = fakeStore();
     const report = await publishTiles(scanTiles(dir), store, { now: 7 });
 
-    expect(report).toEqual({ uploaded: 2, skipped: 0, bytes: 3, orphans: 0, manifestEntries: null, artMaps: [] });
+    expect(report).toEqual({ uploaded: 2, skipped: 0, bytes: 3, orphans: 0, manifestEntries: null, artMaps: [], indexMaps: [] });
     expect(store.puts.at(-1)).toBe(TILE_MANIFEST_KEY);
     expect(store.objects.get(`${TILE_PREFIX}0/43_31.png`)?.contentType).toBe("image/png");
     // Keys are the viewer's path verbatim: no hash in the key, because the SPA
@@ -269,7 +281,7 @@ describe("publishTiles", () => {
     store.puts.length = 0;
 
     const report = await publishTiles(scanTiles(dir), store, { now: 8 });
-    expect(report).toEqual({ uploaded: 0, skipped: 1, bytes: 0, orphans: 0, manifestEntries: 1, artMaps: [] });
+    expect(report).toEqual({ uploaded: 0, skipped: 1, bytes: 0, orphans: 0, manifestEntries: 1, artMaps: [], indexMaps: [] });
     // Not even the manifest is spared a re-read, but nothing is re-PUT except
     // it — the whole point is that a no-op run costs no class-A ops per tile.
     expect(store.puts).toEqual([TILE_MANIFEST_KEY]);
@@ -306,6 +318,27 @@ describe("publishTiles", () => {
     expect(report.uploaded).toBe(1);
     expect(store.puts).toEqual([]);
     expect(store.objects.size).toBe(0);
+  });
+
+  test("each object is typed by what it is, and the indexes land after the tiles and before the manifest", async () => {
+    const dir = root({ "0/43_31.png": "native", "0/minimap/1/21_15.webp": "level", "0/art/1/21_15.webp": "art", "0/index.json": "{}" });
+    const store = fakeStore();
+    const report = await publishTiles(scanTiles(dir), store, { now: 7, concurrency: 1 });
+    expect(store.objects.get(`${TILE_PREFIX}0/43_31.png`)?.contentType).toBe("image/png");
+    expect(store.objects.get(`${TILE_PREFIX}0/minimap/1/21_15.webp`)?.contentType).toBe("image/webp");
+    expect(store.objects.get(`${TILE_PREFIX}0/art/1/21_15.webp`)?.contentType).toBe("image/webp");
+    expect(store.objects.get(`${TILE_PREFIX}0/index.json`)?.contentType).toBe("application/json");
+    expect(store.puts.slice(-2)).toEqual([`${TILE_PREFIX}0/index.json`, TILE_MANIFEST_KEY]);
+    expect(report.indexMaps).toEqual([0]);
+  });
+
+  test("the pyramid's old .png keys stay in the bucket and in the manifest, as orphans", async () => {
+    const old = `${TILE_PREFIX}0/minimap/1/21_15.png`;
+    const store = fakeStore({ [TILE_MANIFEST_KEY]: renderTileManifest({ [old]: "h" }, 1), [old]: "png" });
+    const report = await publishTiles(scanTiles(root({ "0/minimap/1/21_15.webp": "webp" })), store, { now: 7, log: () => {} });
+    expect(report.orphans).toBe(1);
+    expect(store.objects.get(old)?.body).toBe("png");
+    expect(parseTileManifest(store.objects.get(TILE_MANIFEST_KEY)?.body ?? null)[old]).toBe("h");
   });
 
   test("nothing is written outside the tiles prefix", async () => {

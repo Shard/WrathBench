@@ -463,6 +463,13 @@ describe("prohibited content", () => {
     expect(kinds(report.findings)).toContain("projection-drift");
   });
 
+  test("a served pyramid tile's file name is caught on its own, without the prefix", async () => {
+    const src = poison(cleanBucket(), `${RUN_BASE}/track.json`, (body) => {
+      body["tileBase"] = "art/3/5_3.webp";
+    });
+    expect(kinds((await verifyPublication(src)).findings)).toContain("tile-reference");
+  });
+
   test("wiki text in a search_reference result is caught", async () => {
     const src = poison(cleanBucket(), `${RUN_BASE}/entries.json`, (body) => {
       (body["entries"] as Record<string, unknown>[])[1]!["text"] =

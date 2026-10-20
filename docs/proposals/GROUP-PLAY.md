@@ -55,10 +55,11 @@ A party is one fleet job that holds five accounts and runs five episodes at
 once, started together, stopped together, and given one verdict. Each episode
 is an ordinary run of this runner on a pre-staged character: five characters
 created through the module, put into the loadout by the fixture tool and one
-GM command over SOAP, grouped through the module, and logged out standing in
-Moonbrook. Each loop is told its character, its party and its role in the
-operator-objective block. The five walk down the mine to the instance portal,
-which the module already crosses the way a client does, and the records that
+GM command over SOAP, grouped through the module, and logged out standing
+beside the instance portal at the end of the mine under Moonbrook (§4). Each
+loop is told its character, its party and its role in the
+operator-objective block. The five walk into the portal, which the module
+already crosses the way a client does, and the records that
 say what happened — joined a party, entered map 36, killed Edwin VanCleef —
 are three new milestone kinds read off packets the server sends anyway. The
 campaign page tallies parties, not runs.
@@ -334,7 +335,8 @@ before a fresh party launch and by hand for the smoke:
    are the utility sessions the fixture smokes already make
    (`infra/smoke/lib/fixture.ts`).
 2. Wait for the logout save; apply the member's scenario: level 20, xp 0, a
-   few gold for repairs, position in Moonbrook, homebind Sentinel Hill,
+   few gold for repairs, position on the member's own staging spot in
+   Moonbrook (below), homebind Sentinel Hill,
    `clearQuests`, spells, talents, skills. Spells are the class's trainer
    spells with `reqlevel ≤ 20`, read from the world DB's `npc_trainer` at
    staging time rather than hard-coded; talents are preset per role (the
@@ -407,10 +409,32 @@ the data volume, not from the live world DB:
   36, (-14.4, -393.4, 64.6), radius 6) back to map 0 at (-11208.3, 1672.5,
   24.7), and trigger 121 at the far end of the ship cavern (map 36, (-110.8,
   -1009.2, 34.8)) up to the Westfall shore at (-11339.4, 1571.2, 100.6).
-- Moonbrook: `game_tele` 635 at (-10986.7, 1542.75, 44.8), map 0. The portal
-  is about 260 yards away down the mine's outer tunnels — the Westfall
-  subzone "The Deadmines", Defias around level 17–19 — so the approach is
-  part of the attempt.
+- The staging spots, beside the portal: five spots in the last stretch of
+  the mine's tunnel just outside trigger 78, 10–14 yards from its centre and
+  outside its 7-yard radius, 2.8 yards or more apart, each facing the trigger
+  (`DEADMINES_STAGING_SPOTS`, `infra/fixtures/scenarios.ts`). The terrain's
+  area over them is The Dagger Hills (AreaTable 920), the hills the tunnel
+  runs under; the area the server reports inside the mine's model is its own
+  (`WMOAreaTable`), which the first `WB_AREA` at login will show.
+  **Operator's decision (2026-10-20): stage the party beside the portal, not
+  in Moonbrook.** Entry stays on the client's path, a deliberate short move
+  into the volume, the server's own areatrigger handling and the transfer to
+  map 36, without the walk down the mine (about 660 yards, some 94 seconds,
+  through Defias of level 15–17). Staging inside the instance was considered,
+  the start that is closest to the dungeon itself, and rejected: it would need
+  the server to bind the party to an instance and place it there, which no
+  client does. This replaces two earlier spots: `game_tele` 635 at (-10986.7,
+  1542.75, 44.8), 264 yards from the trigger and past the 250-yard
+  single-move cap, so an agent's plain `moveTo` of the portal was refused as
+  `too_far`; then a spot by the mine building 165 yards out, inside the cap,
+  from which that `moveTo` walked the whole mine. From each portal-side spot one plain
+  `moveTo` of the trigger's centre walks 6–13 yards (one to two seconds) and
+  ends inside the trigger at the reachable mesh (below). The spots are clear
+  of the Defias: read from the pinned core's base world SQL, every spawn,
+  wander radius and waypoint patrol near them (a Worker about 27 yards down
+  the tunnel, Watchmen on the ledge above it) is 9.6 yards or more past its
+  aggro radius at level 20 (`Creature::GetAggroRange`), counting floors above
+  and below without the line of sight that would spare them.
 
 **Is walking in client-legal?** Yes, and it is already how the module
 behaves. `Manager::CheckAreaTriggers` (`module/src/WbManager.cpp`) tests the
@@ -440,29 +464,31 @@ the tell). Both are one afternoon's smoke, not a design risk.
 The mesh answered the first question with a qualification. It is continuous
 from the street to the portal, but the route is 177 polygons through the
 mine building and its tunnels, and the core's path is at most 74 polygons
-from a 1024-node search. So no single `moveTo` covers it, and a straight-line
-leg toward the trigger runs out of search on the hill above the tunnels. The
-trigger's own centre is over a small mesh island with no link to the
-tunnels; the reachable mesh ends 4.4 yards from the centre, inside the
-7-yard radius. The smoke therefore walks six legs read off the mesh,
-ending at that mesh end. A member walks the same mine, so a `moveTo` to the
-portal's centre answers `path_incomplete` for an agent too; the approach
-takes several moves through the tunnels.
+from a 1024-node search, so the core's search runs out on the hill above
+the tunnels. The trigger's own centre is over a small mesh island with no
+link to the tunnels; the reachable mesh ends 4.4 yards from the centre,
+inside the 7-yard radius. The module now handles both as path query
+semantics (`module/PROTOCOL.md`, `arrived` and `path_incomplete`): a move to
+the centre ends at that reachable mesh, and a corridor past the core's is
+planned whole by the module's own search. So one `moveTo` to the portal's
+centre from within the 250-yard cap walks the mine and transfers: about 660
+yards and 162 polygons from the mine building, longer than one snippet. From
+the staging spots beside the portal (above) it is a few yards.
 
 **The single-character smoke** (`infra/smoke/deadmines-entry.ts`, on
-`PROBE`): scenario `moonbrook-mine` at level 80 so nothing on the way
-interrupts the walk (the steep-replan fixtures use the same trick); walk
-`DEADMINES_ENTRANCE_ROUTE` (`infra/fixtures/scenarios.ts`) to the trigger,
-expecting `transferred`; assert `SMSG_TRANSFER_PENDING`
+`PROBE`): scenario `moonbrook-mine` at level 80 so nothing interrupts it
+(the steep-replan fixtures use the same trick); one `moveTo` of the
+trigger's centre from the first staging spot, expecting
+`transferred`; assert `SMSG_TRANSFER_PENDING`
 and `SMSG_NEW_WORLD` with map 36 and a `WB_AREA` for it; one `moveTo`
 inside that arrives; the first Defias pack in `units()`; then `moveTo`
 trigger 119 and see map 0 again. It is the gate for enabling the campaign,
 and it belongs on the release's deploy smokes while the campaign runs.
 
 **The Dungeon Finder is unnecessary.** `CMSG_LFG_JOIN` and its replies are
-a dozen opcodes and a proposal dialogue, all to teleport a formed party to
-the same spot a three-minute walk reaches, and the walk is the better eval:
-the approach is the dungeon's first pull. It stays deferred exactly as
+a dozen opcodes and a proposal dialogue, all to teleport a formed party into
+an instance whose portal the party is staged beside (above), a few yards'
+walk on the client's own path. It stays deferred exactly as
 `docs/CONTRACTS.md` lists it; nothing here needs it.
 
 ## 5. The party surface
@@ -614,7 +640,8 @@ model is the operator's to name, as every roster entry is.
 ## 8. The prompt
 
 Three pieces of harness text, identical for every model. The two texts below
-are the operator's wording, approved as drafted (2026-10-19). Nothing else about the prompt
+are the operator's wording, approved as drafted (2026-10-19), with the objective's
+location sentence changed to match the portal-side staging (2026-10-20). Nothing else about the prompt
 changes: the standing goal, the body and the tools are the same as every
 run's (`runner/src/prompt.ts`).
 
@@ -635,8 +662,8 @@ definition's `members[].objective`):
 > You are one of a party of five, each played by another agent: `<Tank>`
 > (warrior, the party leader), `<Healer>` (priest), `<Mage>` (mage),
 > `<Rogue>` (rogue) and `<Paladin>` (paladin). You are `<Name>`, the party's
-> `<role>`. The party stands in Moonbrook, Westfall, at the entrance to the
-> Deadmines. The objective for this run is for the party to clear the
+> `<role>`. The party stands in the mine under Moonbrook, Westfall, a few
+> yards from the portal into the Deadmines. The objective for this run is for the party to clear the
 > Deadmines and defeat Edwin VanCleef. You share party chat with the others
 > and can whisper any of them.
 

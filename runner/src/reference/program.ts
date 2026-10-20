@@ -159,9 +159,13 @@ export async function referenceTick(env: ReferenceEnv, route: Route, args: TickA
   /**
    * One leg toward a point: at most ~110y, so the walk fits the tick. Returns
    * true once within `near` yards. A point off the mesh is retried at the
-   * nearest walkable point the refusal names; a ledge is taken (the program
-   * does not climb down cliffs on purpose, and the fall is the server's to
-   * charge); anything else is reported and counted, and the caller decides.
+   * nearest walkable point the refusal names; a route the mesh only gets part
+   * of the way along is walked as far as it goes, when that is a step forward;
+   * a ledge is taken (the program does not climb down cliffs on purpose, and
+   * the fall is the server's to charge); anything else is reported and
+   * counted, and the caller decides. After a failed leg the next one swings
+   * off the straight line, so a fence, a rock or a stream the straight line
+   * meets is walked around rather than asked about again from the same spot.
    */
   const walk = async (to: Point, near = 4): Promise<boolean> => {
     const me = here();
@@ -169,13 +173,26 @@ export async function referenceTick(env: ReferenceEnv, route: Route, args: TickA
     const d = dist(me, to);
     if (d <= near) return true;
     const LEG = 110;
+    const SWING = [0, 35, -35, 70, -70];
+    const turn = (SWING[Number(mem["moveFailures"] ?? 0) % SWING.length]! * Math.PI) / 180;
     const f = Math.min(1, LEG / d);
-    const leg = f >= 1 ? to : { x: me.x + (to.x - me.x) * f, y: me.y + (to.y - me.y) * f, z: me.z + (to.z - me.z) * f };
-    const timeout = Math.max(1_500, left() - 1_500);
+    const dx = (to.x - me.x) * f;
+    const dy = (to.y - me.y) * f;
+    const leg =
+      turn === 0
+        ? f >= 1
+          ? to
+          : { x: me.x + dx, y: me.y + dy, z: me.z + (to.z - me.z) * f }
+        : { x: me.x + dx * Math.cos(turn) - dy * Math.sin(turn), y: me.y + dx * Math.sin(turn) + dy * Math.cos(turn), z: me.z + (to.z - me.z) * f };
+    const timeout = (): number => Math.max(1_500, left() - 1_500);
     try {
-      let r = await sdk.moveTo(leg, { timeout });
-      if (!r.ok && r.status === "target_off_mesh" && r.nearest != null) r = await sdk.moveTo(r.nearest, { timeout: Math.max(1_500, left() - 1_500) });
-      if (!r.ok && r.status === "drop") r = await sdk.moveTo(leg, { timeout: Math.max(1_500, left() - 1_500), force: true });
+      let r = await sdk.moveTo(leg, { timeout: timeout() });
+      if (!r.ok && r.status === "target_off_mesh" && r.nearest != null) r = await sdk.moveTo(r.nearest, { timeout: timeout() });
+      // The end of the partial route is walkable by construction; it only helps when it is not where we stand.
+      if (!r.ok && r.status === "path_incomplete" && r.reachedPos !== undefined && dist(r.reachedPos, here() ?? me) > 3) {
+        r = await sdk.moveTo(r.reachedPos, { timeout: timeout() });
+      }
+      if (!r.ok && r.status === "drop") r = await sdk.moveTo(leg, { timeout: timeout(), force: true });
       if (!r.ok) {
         mem["moveFailures"] = Number(mem["moveFailures"] ?? 0) + 1;
         say(`move ${r.status}`);
@@ -225,6 +242,16 @@ export async function referenceTick(env: ReferenceEnv, route: Route, args: TickA
       return false;
     }
   };
+  /**
+   * Prey the walk into melee never reached, twice running, is left alone for
+   * a while: a mob on a ledge or past a wall the mesh does not cross is
+   * otherwise the first one in view on every tick, and the hunt stands still.
+   */
+  const SHUN_MS = 5 * 60_000;
+  const unreached = (mem["unreached"] ??= {}) as Record<string, number>;
+  const shun = (mem["shun"] ??= {}) as Record<string, number>;
+  for (const [g, until] of Object.entries(shun)) if (until <= Date.now()) delete shun[g];
+  const shunned = (u: UnitView): boolean => (shun[u.guid] ?? 0) > Date.now();
   /** Fight one unit to its end or the tick's, then loot it. */
   const fight = async (u: UnitView): Promise<"killed" | "open" | "died"> => {
     await buffUp();
@@ -233,7 +260,15 @@ export async function referenceTick(env: ReferenceEnv, route: Route, args: TickA
       timeout: Math.max(2_000, left() - 9_000),
       ...(healable ? { abortBelowHealthPct: 30 } : {}),
     });
-    say(`fight ${u.entry ?? "?"}: ${r.status}`);
+    say(`fight ${u.entry ?? "?"}: ${r.status}${r.status === "killed" ? "" : r.reached ? "" : ` (unreached, ${r.distance ?? "?"}y)`}`);
+    if ((r.status === "timeout" || r.status === "lost") && r.reached === false) {
+      unreached[u.guid] = (unreached[u.guid] ?? 0) + 1;
+      if (unreached[u.guid]! >= 2) {
+        shun[u.guid] = Date.now() + SHUN_MS;
+        delete unreached[u.guid];
+        say(`left ${u.entry ?? "?"} alone: out of reach`);
+      }
+    } else delete unreached[u.guid];
     if (r.status === "player_died") return "died";
     if (r.status === "aborted_low_health") {
       await heal();
@@ -261,7 +296,7 @@ export async function referenceTick(env: ReferenceEnv, route: Route, args: TickA
       ? undefined
       : state
           .units({ entry: [...entries], type: "unit", alive: true, maxDistance: 70 })
-          .find((u) => (u.level === undefined || u.level <= maxLevel) && (u.targetGuid === undefined || u.targetGuid === selfKey));
+          .find((u) => (u.level === undefined || u.level <= maxLevel) && (u.targetGuid === undefined || u.targetGuid === selfKey) && !shunned(u));
     if (prey !== undefined) {
       await fight(prey);
       return;
@@ -291,14 +326,33 @@ export async function referenceTick(env: ReferenceEnv, route: Route, args: TickA
   if (ghost) {
     const corpse = state.self.corpse?.value;
     const me = here();
-    if (corpse === undefined) {
-      const healer = state.closest({ role: "spiritHealer" });
-      if (healer !== undefined) {
-        if ((healer.distance ?? Infinity) > 5) await walk({ x: healer.x!, y: healer.y!, z: healer.z! }, 4);
-        else {
-          await sdk.spiritHealerActivate(healer.guid);
-          say("spirit healer");
-        }
+    const healer = state.closest({ role: "spiritHealer" });
+    if (healer?.x !== undefined && healer.y !== undefined && healer.z !== undefined) mem["healerAt"] = { x: healer.x, y: healer.y, z: healer.z };
+    if (mem["ghostSince"] === undefined) {
+      mem["ghostSince"] = Date.now();
+      mem["moveFailures"] = 0;
+    }
+    // A corpse the mesh will not lead back to is not chased into the no-XP
+    // watchdog: past a few minutes, or a run of legs that all failed, the
+    // spirit healer the ghost was released beside takes it instead.
+    const GHOST_MINUTES = 6;
+    const GHOST_FAILED_LEGS = 10;
+    const ghostMin = (Date.now() - Number(mem["ghostSince"])) / 60_000;
+    if (corpse !== undefined && mem["toHealer"] !== true && (ghostMin > GHOST_MINUTES || Number(mem["moveFailures"] ?? 0) >= GHOST_FAILED_LEGS)) {
+      mem["toHealer"] = true;
+      // Walking back is what counts now; the corpse run's failures are not this walk's.
+      mem["moveFailures"] = 0;
+      say(`corpse out of reach after ${Math.round(ghostMin)}m`);
+    }
+    if (corpse === undefined || mem["toHealer"] === true) {
+      const at = mem["healerAt"] as Point | undefined;
+      if (healer !== undefined && (healer.distance ?? Infinity) <= 5) {
+        await sdk.spiritHealerActivate(healer.guid);
+        say("spirit healer");
+      } else if (healer !== undefined) await walk({ x: healer.x!, y: healer.y!, z: healer.z! }, 4);
+      else if (at !== undefined) {
+        await walk(at, 4);
+        say("back to the spirit healer");
       } else say("ghost with no corpse and no spirit healer in view");
       return report(false);
     }
@@ -311,6 +365,9 @@ export async function referenceTick(env: ReferenceEnv, route: Route, args: TickA
     say(`reclaim: ${r.status}`);
     return report(false);
   }
+
+  delete mem["ghostSince"];
+  delete mem["toHealer"];
 
   // ------------------------------------------------------------ threat, health, bags
   const threat = attackers()[0];
@@ -407,6 +464,7 @@ export async function referenceTick(env: ReferenceEnv, route: Route, args: TickA
       if (Number(mem["moveFailures"] ?? 0) >= 6) return advance(`npc ${step.npc} unreachable`);
       return report(false);
     }
+    let turnedIn = false;
     for (const q of step.turnIn ?? []) {
       if (left() < 3_000) return report(false);
       const e = state.quest(q);
@@ -422,14 +480,23 @@ export async function referenceTick(env: ReferenceEnv, route: Route, args: TickA
         r = await sdk.turnInQuest(npc, q, choice, { timeout: Math.min(10_000, left() - 1_000) });
         if (r.ok && chosen !== undefined) await wear(chosen.itemId, chosen.item);
       }
+      if (r.ok) turnedIn = true;
       say(`turn in ${q}: ${r.status}`);
     }
+    // Right after a turn-in the NPC's questgiver marker can still be the one
+    // from before it, and an accept read against that marker answers
+    // `nothing_on_offer` for the next quest of the chain. Such an answer is
+    // asked again on the next tick, when the marker has caught up; the turn-in
+    // is done by then, so a second refusal is the NPC's word and the step moves on.
+    let askAgain = false;
     for (const q of step.accept ?? []) {
       if (left() < 3_000) return report(false);
       if (state.quest(q) !== undefined) continue;
       const r = await sdk.acceptQuestFrom(npc, q, { timeout: Math.min(10_000, left() - 1_000) });
       say(`accept ${q}: ${r.status}`);
+      if (turnedIn && r.status === "nothing_on_offer") askAgain = true;
     }
+    if (askAgain) return report(false);
     return advance(`visited ${step.npc}`);
   }
 
@@ -462,7 +529,7 @@ export async function referenceTick(env: ReferenceEnv, route: Route, args: TickA
           .find((g) => g.name !== undefined && texts.some((t) => t.includes(g.name!.toLowerCase())));
     const prey = state
       .units({ entry: [...kill], type: "unit", alive: true, maxDistance: 70 })
-      .find((u) => u.targetGuid === undefined || u.targetGuid === selfKey);
+      .find((u) => (u.targetGuid === undefined || u.targetGuid === selfKey) && !shunned(u));
     const me = here()!;
     if (node !== undefined && (prey === undefined || dist(me, node) < dist(me, prey))) {
       if ((node.distance ?? Infinity) > 4) {

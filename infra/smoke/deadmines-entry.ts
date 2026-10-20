@@ -1,18 +1,17 @@
 /**
  * Probe for entering the Deadmines (docs/proposals/GROUP-PLAY.md §4): one
- * character walks from Moonbrook down the mine to the instance portal, is
- * transferred onto map 36 the way a client is (the module's areatrigger
- * crossing, `CMSG_AREATRIGGER`, the core's teleport, `SMSG_NEW_WORLD`),
- * walks a few yards inside, sees the Defias, and walks back out through the
- * exit trigger onto map 0.
+ * character staged beside the portal, in the mine's last tunnel, makes one
+ * plain move of trigger 78's centre and is transferred onto map 36 the way a
+ * client is (the module's areatrigger crossing, `CMSG_AREATRIGGER`, the core's
+ * teleport, `SMSG_NEW_WORLD`), walks a few yards inside, sees the Defias, and
+ * walks back out through the exit trigger onto map 0.
  *
- * What it proves that the design could not assume: the navmesh is
- * continuous from Moonbrook's street through the mine's tunnels to trigger
- * 78, and map 36 has a mesh on the data volume (a move inside answering
- * `no_mesh` is the tell). The walk in follows DEADMINES_ENTRANCE_ROUTE
- * (infra/fixtures/scenarios.ts), six moves through the mine, since no single
- * move reaches the trigger. It is the gate for enabling the campaign and joins
- * the release's deploy smokes while the campaign runs.
+ * What it proves that the design could not assume: the trigger's centre is
+ * over a mesh island, so a move of it is the module's reachable end
+ * (module/PROTOCOL.md, `arrived`) ending inside the trigger, and map 36 has
+ * a mesh on the data volume (a move inside answering `no_mesh` is the tell).
+ * It is the gate for enabling the campaign and joins the release's deploy
+ * smokes while the campaign runs.
  *
  * The character is a persistent fixture on MODULE_ACCOUNT (default PROBE),
  * placed by `infra/fixtures/apply.ts --scenario moonbrook-mine`: level 80, so
@@ -25,11 +24,11 @@
  */
 
 import { connect } from "../../sdk/src/index";
-import { DEADMINES_ENTRANCE_ROUTE, DEADMINES_ENTRANCE_TRIGGER, MOONBROOK } from "../fixtures/scenarios";
+import { DEADMINES_ENTRANCE_TRIGGER, DEADMINES_STAGING } from "../fixtures/scenarios";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { moduleBase } from "./lib/module";
-import { dist2d, fmt, walkRoute, walkTo } from "./lib/party";
+import { dist2d, fmt, walkTo } from "./lib/party";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -76,13 +75,19 @@ try {
   await client.createSession({ account: ACCOUNT, character: CHARACTER });
   await Bun.sleep(1500);
   const start = client.state.self.position?.value ?? fail("no position after login");
-  if (start.map !== 0 || dist2d(start, MOONBROOK) > 8) fail(`start ${fmt(start)} on map ${start.map}, expected Moonbrook ${fmt(MOONBROOK)}`);
-  log(`in Moonbrook at ${fmt(start)}, ${dist2d(start, DEADMINES_ENTRANCE_TRIGGER).toFixed(0)}y from trigger 78`);
+  if (start.map !== 0 || dist2d(start, DEADMINES_STAGING) > 8) fail(`start ${fmt(start)} on map ${start.map}, expected the staging spot ${fmt(DEADMINES_STAGING)}`);
+  log(`beside the portal at ${fmt(start)}, ${dist2d(start, DEADMINES_ENTRANCE_TRIGGER).toFixed(0)}y from trigger 78`);
 
   // 1. Down the mine to the portal: only `transferred` onto map 36 is success.
+  // One plain move of the trigger's own centre from the staging spot beside
+  // the portal, as an agent would ask: 11y. The centre is over a mesh island,
+  // so the module ends the walk at the reachable mesh 4.4y from it, inside the
+  // trigger (move_end_reachable); without that the move is path_incomplete.
   const sinceIn = client.events.recent(1)[0]?.seq ?? 0;
-  const inbound = await walkRoute(client, DEADMINES_ENTRANCE_ROUTE, log);
-  if (!(inbound.ok && inbound.status === "transferred")) fail(`the walk to trigger 78 ended ${inbound.status}${!inbound.ok && inbound.hint ? `: ${inbound.hint}` : ""}`);
+  const { x, y, z } = DEADMINES_ENTRANCE_TRIGGER;
+  const inbound = await client.moveTo({ x, y, z });
+  log(`    one move to trigger 78's centre: ${inbound.status}${inbound.ok && inbound.status === "transferred" ? ` to map ${inbound.to.map}` : ""}`);
+  if (!(inbound.ok && inbound.status === "transferred")) fail(`the move to trigger 78 ended ${inbound.status}${!inbound.ok && inbound.hint ? `: ${inbound.hint}` : ""}`);
   if (inbound.to.map !== DEADMINES_MAP) fail(`transferred to map ${inbound.to.map}, expected ${DEADMINES_MAP}`);
   if (dist2d(inbound.to, INSIDE_ARRIVAL) > 10) fail(`arrived at ${fmt(inbound.to)}, ${dist2d(inbound.to, INSIDE_ARRIVAL).toFixed(0)}y from the teleport target ${fmt(INSIDE_ARRIVAL)}`);
   const seen = (op: string, since: number) => client.events.recent(500).some((e: any) => e.seq > since && e.opcode === op);

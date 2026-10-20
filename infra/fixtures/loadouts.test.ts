@@ -20,7 +20,7 @@ import {
   type Loadout,
   type TalentFrame,
 } from "./loadouts";
-import { DEADMINES_ENTRANCE_ROUTE, DEADMINES_ENTRANCE_TRIGGER, MOONBROOK, SCENARIOS, SENTINEL_HILL_BIND, validateScenario } from "./scenarios";
+import { DEADMINES_ENTRANCE_TRIGGER, DEADMINES_STAGING, DEADMINES_STAGING_SPOTS, SCENARIOS, SENTINEL_HILL_BIND, validateScenario } from "./scenarios";
 import { isValidCharacterName } from "../../runner/src/config";
 
 /** The frame a module would answer for a loadout, built from the preset itself. */
@@ -140,11 +140,11 @@ describe("checkTalentsAgainstFrame", () => {
 });
 
 describe("the member scenario", () => {
-  test("level 20 where the request's scenario stands (Moonbrook, facing the mine, hearth at Sentinel Hill), the trainer's and the quests' spells, talents, skills", () => {
+  test("level 20 where the request's scenario stands (beside the Deadmines portal, facing the trigger, hearth at Sentinel Hill), the trainer's and the quests' spells, talents, skills", () => {
     const s = partyScenario(LOADOUTS.tank, [100, 772, 6343, 772], SCENARIOS["moonbrook-mine"], 20);
     validateScenario(s);
     expect(s.level).toBe(PARTY_LEVEL);
-    expect(s.position).toMatchObject({ map: 0, x: MOONBROOK.x, y: MOONBROOK.y });
+    expect(s.position).toMatchObject({ map: 0, x: DEADMINES_STAGING.x, y: DEADMINES_STAGING.y });
     expect(s.position.o).toBeCloseTo(SCENARIOS["moonbrook-mine"].position.o, 6);
     expect(s.homebind).toEqual(SENTINEL_HILL_BIND);
     expect(s.clearQuests).toBe(true);
@@ -156,21 +156,28 @@ describe("the member scenario", () => {
     expect(s.money).toBe(30_000);
   });
 
-  test("Moonbrook faces the Deadmines entrance trigger, more than one move's 250y away", () => {
-    const d = Math.hypot(DEADMINES_ENTRANCE_TRIGGER.x - MOONBROOK.x, DEADMINES_ENTRANCE_TRIGGER.y - MOONBROOK.y);
-    expect(d).toBeGreaterThan(250);
-    expect(d).toBeLessThan(300);
+  test("the staging spots are a short move from the trigger and outside it, so login crosses nothing", () => {
+    const t = DEADMINES_ENTRANCE_TRIGGER;
+    for (const p of DEADMINES_STAGING_SPOTS) {
+      const d3 = Math.hypot(t.x - p.x, t.y - p.y, t.z - p.z);
+      expect(d3).toBeGreaterThanOrEqual(10);
+      expect(d3).toBeLessThanOrEqual(25);
+      expect(d3).toBeGreaterThan(t.radius + 2);
+    }
   });
 
-  test("the route to the trigger is moves of under 250y from Moonbrook, ending inside the trigger but off its centre's island", () => {
-    const points = [MOONBROOK, ...DEADMINES_ENTRANCE_ROUTE];
-    for (let i = 1; i < points.length; i++) expect(Math.hypot(points[i]!.x - points[i - 1]!.x, points[i]!.y - points[i - 1]!.y)).toBeLessThan(250);
-    const t = DEADMINES_ENTRANCE_TRIGGER;
-    const end = DEADMINES_ENTRANCE_ROUTE.at(-1)!;
-    const d3 = Math.hypot(end.x - t.x, end.y - t.y, end.z - t.z);
-    expect(d3).toBeLessThan(t.radius);
-    // The centre's own polygon (z 22.9) is the island; the mesh end is what a walk reaches.
-    expect(d3).toBeGreaterThan(3);
+  test("each of the five members stands on its own spot, apart from the others and facing the trigger", () => {
+    const base = SCENARIOS["moonbrook-mine"];
+    const placed = [0, 1, 2, 3, 4].map((i) => partyScenario(LOADOUTS.tank, [], base, 20, i).position);
+    expect(placed).toHaveLength(DEADMINES_STAGING_SPOTS.length);
+    for (const [i, p] of placed.entries()) {
+      expect(p).toMatchObject({ map: 0, x: DEADMINES_STAGING_SPOTS[i]!.x, y: DEADMINES_STAGING_SPOTS[i]!.y });
+      expect(Math.hypot(p.x - DEADMINES_STAGING.x, p.y - DEADMINES_STAGING.y)).toBeLessThan(8);
+      for (const q of placed.slice(0, i)) expect(Math.hypot(p.x - q.x, p.y - q.y)).toBeGreaterThanOrEqual(2);
+      const toTrigger = Math.atan2(DEADMINES_ENTRANCE_TRIGGER.y - p.y, DEADMINES_ENTRANCE_TRIGGER.x - p.x);
+      expect(Math.abs(Math.atan2(Math.sin(p.o - toTrigger), Math.cos(p.o - toTrigger)))).toBeLessThan(1e-6);
+    }
+    expect(partyScenario(LOADOUTS.tank, [], base, 20).position).toEqual(base.position); // the first member, the default
   });
 
   test("its statements write one talent row per talent at specMask 1 after clearing the old ones, cap the level-ranged skills, and insert no item", () => {
