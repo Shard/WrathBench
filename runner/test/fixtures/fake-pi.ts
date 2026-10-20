@@ -185,6 +185,15 @@ async function runPrompt(text: string): Promise<void> {
   turn++;
   (record["prompts"] as string[]).push(text);
   saveRecord();
+  // What 1.3.0 streams when the prompt extension finds no prompt to force: its
+  // custom entry, then a run aborted before any request.
+  if (mode === "prompt-missing") {
+    emit({ type: "entry_appended", entry: { type: "custom", customType: "wrathbench_prompt_missing", data: { reason: "no customPrompt" }, id: "e1", parentId: null } });
+    emit({ type: "agent_start" });
+    emit({ type: "agent_end", messages: [], willRetry: false });
+    emit({ type: "agent_settled", aborted: true });
+    return;
+  }
   emit({ type: "agent_start" });
   emit({ type: "turn_start" });
   emit({ type: "message_end", message: { role: "user", content: [{ type: "text", text }], timestamp: Date.now() } });

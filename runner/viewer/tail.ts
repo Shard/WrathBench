@@ -335,6 +335,8 @@ export function summarize(rec: Record<string, unknown>, i: number, start: number
       base["outChars"] = messageChars(msg);
       const usage = reportedUsage(rec);
       if (usage !== null) base["usage"] = usage;
+      // A CLI's summarisation call (pi), which the token totals count apart.
+      if (rec["kind"] === "compaction") base["kind"] = "compaction";
       base["clipped"] = c.clipped;
       return base;
     }
@@ -760,6 +762,11 @@ export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
         pending = est;
         context = est;
       }
+    } else if (e.t === "response" && usage !== undefined && e["kind"] === "compaction") {
+      // A CLI's own summarisation call (pi): billed, so its tokens count, but
+      // it is not the conversation's context and answers no turn's request.
+      reported = true;
+      prompt += usage.prompt;
     } else if (e.t === "response" && usage !== undefined) {
       reported = true;
       if (usage.prompt > 0) {

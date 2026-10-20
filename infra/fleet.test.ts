@@ -3523,6 +3523,23 @@ describe("account affinity and cross-account name hygiene", () => {
     expect(affinityOf(map)("mimo")).toBeUndefined();
   });
 
+  test("a pi entry and a wrathbench entry of one model never inherit each other's account or character", () => {
+    const both: Record<string, FleetRosterEntry> = {
+      ds: { model: "deepseek-flash", effort: "high", tier: "t1", idle: "none" },
+      "ds-pi": { model: "deepseek-flash", effort: "high", driver: "pi", tier: "t1", idle: "none" },
+    };
+    const map = affinityFrom(
+      [
+        fact("deepseek-flash", { effort: "high", driver: "openai", startedAt: NOW - 7_200_000, account: "RUNNER", character: "Wrathy" }),
+        // A hand-launched pi probe that recorded no ref, newer than the wrathbench run.
+        fact("deepseek-flash", { effort: "high", driver: "pi", episode: "probing", campaign: "pi-vs", startedAt: NOW - 600_000, account: "PROBE", character: "Piper" }),
+      ],
+      both,
+    );
+    expect(map.get("ds")).toEqual({ account: "RUNNER", character: "Wrathy" });
+    expect(map.get("ds-pi")).toEqual({ account: "PROBE", character: "Piper" });
+  });
+
   test("takeAccount prefers the affine account and otherwise gives the first, as shift did", () => {
     const free = ["RUNNER", "RUNNER2", "RUNNER3"];
     expect(takeAccount(free, "runner2")).toBe("RUNNER2");

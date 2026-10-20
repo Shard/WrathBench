@@ -252,7 +252,7 @@ export interface FleetJob {
    * named here, on the account it was on, before anything fresh is launched.
    * `model`/`effort`/`compactWindow` pick the entry that carries the run id.
    */
-  resume?: { runId: string; model: string; effort?: string | undefined; compactWindow?: string | undefined };
+  resume?: { runId: string; model: string; effort?: string | undefined; compactWindow?: string | undefined; driver?: string | undefined };
   /**
    * Set by `planContinuations` on the `idle: "unlimited"` lane's next
    * session: the character's previous run, whose character and scratchpad this

@@ -85,6 +85,7 @@ import type { EpisodicLog } from "./episodic";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { McpServer } from "./mcp";
 import { buildSystemPrompt } from "./prompt";
+import { PI_PROMPT_MISSING } from "./pi-extension";
 import { piProviderOf } from "./providers";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
@@ -1060,6 +1061,20 @@ export async function runPiEpisode(o: PiEpisodeOptions): Promise<LoopOutcome> {
                 aborted: msg["aborted"] === true,
                 error: typeof msg["errorMessage"] === "string" ? msg["errorMessage"].slice(0, 600) : null,
               });
+            }
+            break;
+          }
+          case "entry_appended": {
+            // Our extension found no prompt to force (`pi-extension.ts`) and
+            // aborted the run before any request: it never plays on pi's own
+            // default prompt, and it is never evidence.
+            const entry = msg["entry"] as { customType?: unknown } | undefined;
+            if (entry?.customType === PI_PROMPT_MISSING) {
+              turnInFlight = false;
+              return terminate(
+                "harness-error",
+                "pi's system prompt could not be forced to the harness's bytes (the prompt extension found no --system-prompt text), so the run was stopped before a request rather than played on pi's default prompt",
+              );
             }
             break;
           }

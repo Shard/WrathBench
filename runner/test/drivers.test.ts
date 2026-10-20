@@ -118,6 +118,8 @@ describe("the driver registry", () => {
     expect(probeOnlyRefusal("pi")).toContain("probe-only");
     // Routing is the fixed loop's alone: it builds its own request body.
     expect(DRIVER_LIST.filter((d) => d.routing).map((d) => d.id)).toEqual(["openai"]);
+    // Its CLI's own provider, named on the key's row: the roster refuses a key without one.
+    expect(DRIVER_LIST.filter((d) => d.cliProvider === true).map((d) => d.id)).toEqual(["pi"]);
   });
 
   test("the lane wording the fleet prints is unchanged", () => {

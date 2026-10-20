@@ -253,11 +253,16 @@ of the three outside the registry and the adapters.
     `billing` (the provider table guards the pair, and a run pod keeps that
     one key); `routing`: whether it sends OpenRouter's provider routing on
     requests it builds itself, which only the fixed loop does.
+  - `cliProvider`: whether it reaches its endpoint through a provider of its
+    CLI's own catalogue, named on the key's row (`piProvider`), so a key
+    without one refuses the roster entry.
   - `probeOnly`: whether it runs only as a probe-campaign arm until the
     operator promotes it. Its entries are outside `harnessClash`, the policy
     gives them no target and no idle work, and a queue job outside a campaign
     cannot run them (`runnableRefs`), and `loadRunConfig` refuses a run of it
-    on any episode but a campaign's `probing`.
+    on any episode but a campaign's `probing`. A probe-only identity never
+    matches another (`sameRosterIdentity`), so its runs and a same-model
+    entry's never pool, either way.
   - `bill` (metered, subscription or none) and, for a subscription, its
     `lane`: the lane key, the default variable, whether the variable holds a
     token or a home directory, whether the fleet places runs among several
@@ -917,7 +922,7 @@ Each `compaction_end` is a `harness` record of kind `compaction` with
 `trigger`, `preTokens`, `postTokens` (pi's estimate after), `durationMs`, `at`
 and pi's summary. The summarisation call is billed and appears on no
 `message_end`, so its usage is a `response` record of kind `compaction`, which
-the token totals and the cost count. A failed or aborted compaction is a
+the token totals and the cost count, though never as a model reply (`modelResponses`) or as the context. A failed or aborted compaction is a
 `compaction_failed` record. The episodic-log ask follows pi's threshold the
 same way as on the other CLIs.
 

@@ -921,6 +921,8 @@ export interface EndedRun {
   effort: string | null;
   /** Identity too: the CLI compaction window (claude-code or codex); absent or null is `auto`. */
   compactWindow?: string | null;
+  /** The run's driver: a probe-only driver's run is never another entry's (`sameRosterIdentity`). */
+  driver?: string | null;
   /** The job ref it was launched under, when the run id names one. */
   ref: string | null;
   episode: EpisodeId;
@@ -1356,7 +1358,8 @@ export function planResumes(opts: {
     // different model, so it does not make a second paused run of one entry
     // resumable beside the first.
     const windowKey = file !== null && armArg(file.arm, "compact-window") !== undefined ? "" : (f.compactWindow ?? "");
-    const modelKey = `${f.model}@${f.effort ?? ""}@${windowKey}`;
+    // A probe-only driver's run is never another entry's (`sameRosterIdentity`).
+    const modelKey = `${f.model}@${f.effort ?? ""}@${windowKey}${isProbeOnlyDriver(f.driver) ? "@probe-only" : ""}`;
     const launchedUnder = refOfRunId(f.runId, f.episode, Object.keys(config.roster));
     const current = launchedUnder === undefined ? undefined : config.roster[launchedUnder];
     if (launchedUnder !== undefined && current !== undefined && !sameRosterIdentity(current, f)) {
@@ -1365,6 +1368,7 @@ export function planResumes(opts: {
         model: f.model,
         effort: f.effort,
         ...(f.compactWindow != null ? { compactWindow: f.compactWindow } : {}),
+        ...(f.driver != null ? { driver: f.driver } : {}),
         ref: launchedUnder,
         episode: f.episode,
         reason: "manual",
@@ -1398,6 +1402,7 @@ export function planResumes(opts: {
         model: f.model,
         effort: f.effort,
         ...(f.compactWindow != null ? { compactWindow: f.compactWindow } : {}),
+        ...(f.driver != null ? { driver: f.driver } : {}),
         ref: launchedUnder ?? null,
         episode: f.episode,
         reason: lapse.reason!,
@@ -1591,6 +1596,7 @@ export function planResumes(opts: {
           ...(f.effort !== null ? { effort: f.effort } : {}),
           // The entry's identity, which an arm's own window is not part of.
           ...(f.compactWindow != null && windowKey !== "" ? { compactWindow: f.compactWindow } : {}),
+          ...(f.driver != null ? { driver: f.driver } : {}),
         },
       },
       account,
@@ -1740,6 +1746,7 @@ function planPartyResume(
           runId: leader.runId,
           model: leader.model,
           ...(leader.effort !== null ? { effort: leader.effort } : {}),
+          ...(leader.driver != null ? { driver: leader.driver } : {}),
         },
       },
       account: accounts[0]!,
@@ -2139,7 +2146,7 @@ export function planNameSweeps(opts: {
  * belongs to — what "retry 2/3" counts from. The projection is the only place
  * that number is derived, so the log line and the Models page agree.
  */
-export function failedAttemptsFor(states: readonly ModelState[], e: Pick<EndedRun, "model" | "effort" | "compactWindow" | "episode">): number | undefined {
+export function failedAttemptsFor(states: readonly ModelState[], e: Pick<EndedRun, "model" | "effort" | "compactWindow" | "driver" | "episode">): number | undefined {
   const st = states.find((s) => sameRosterIdentity(s, e))?.perEpisode[e.episode];
   return st?.failed;
 }

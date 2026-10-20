@@ -24,10 +24,12 @@ import { COMPACTED_NOTICE, piAutoCompactLimit, piReserveTokens, piWindowCapRefus
 import { comparabilityOf, promptHash } from "../src/comparability";
 import { harnessClash, loadRunConfig } from "../src/config";
 import { CODEX_SYSTEM_PROMPT, CLAUDE_CODE_SYSTEM_PROMPT, PI_SYSTEM_PROMPT, SYSTEM_PROMPT, buildSystemPrompt, contextSentence } from "../src/prompt";
+import wrathbenchPromptExtension, { PI_PROMPT_MISSING } from "../src/pi-extension";
 import { piProviderOf, rosterKeyRefusal } from "../src/providers";
 import { priceFor, rosterPriceGap, runCost } from "../viewer/pricing";
 import { projectEntry } from "../viewer/public-projection";
-import { summarize } from "../viewer/tail";
+import { summarize, tokenTotals } from "../viewer/tail";
+import { countRecords } from "../src/models";
 import { EpisodicLog } from "../src/episodic";
 import { Scratchpad } from "../src/scratchpad";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
@@ -221,6 +223,18 @@ describe("pi driver", () => {
     expect(compaction).toMatchObject({ turn: 1, trigger: "threshold", preTokens: 301_234, postTokens: 21_000, summary: "## Goal\nlevel up\n" });
     const summaryCall = t.find((e) => e["t"] === "response" && e["kind"] === "compaction")!;
     expect((summaryCall["usage"] as { prompt_tokens: number }).prompt_tokens).toBe(300_000);
+    // Counted as tokens, never as a model reply or as the conversation's context.
+    const summaries = t.map((e, i) => summarize(e, i, 0, 0));
+    const totals = tokenTotals(summaries);
+    expect(totals.contextTokens).not.toBe(300_000);
+    // Even when the summarisation call is the newest record, the context is the last reply's.
+    const lastReply = summaries.filter((s) => s.t === "response" && s["kind"] !== "compaction").at(-1)!;
+    const summaryEntry = summaries.find((s) => s["kind"] === "compaction")!;
+    expect(tokenTotals([lastReply, summaryEntry]).contextTokens).toBe((lastReply["usage"] as { prompt: number }).prompt);
+    const replies = t.filter((e) => e["t"] === "response" && e["kind"] !== "compaction");
+    const replyPrompt = replies.reduce((a, e) => a + (e["usage"] as { prompt_tokens: number }).prompt_tokens, 0);
+    expect(totals.promptTokens).toBe(replyPrompt + 300_000);
+    expect(countRecords(join(runDir, "trajectory.jsonl"), ["response"])?.get("response")).toBe(replies.length);
     // The episodic-log ask follows a compaction it did not predict.
     expect((readRecord(recordPath)["prompts"] as string[])[1]).toContain(COMPACTED_NOTICE);
   });
@@ -289,6 +303,36 @@ describe("pi driver", () => {
     };
     expect(await gone(rec["pid"] as number)).toBe(true);
     expect(await gone(rec["mcpPid"] as number)).toBe(true);
+  });
+
+  test("a prompt the extension cannot force ends the run as harness-error, never on pi's default prompt", async () => {
+    const { runDir, options } = setup("prompt-missing");
+    const outcome = await runPiEpisode(options);
+    expect(outcome).toMatchObject({ kind: "terminated", reason: "harness-error" });
+    expect((outcome as { detail?: string }).detail).toContain("could not be forced");
+    // One prompt sent, nothing answered, nothing recorded as a model reply.
+    const t = entries(runDir);
+    expect(t.filter((e) => e["t"] === "request").length).toBe(1);
+    expect(t.some((e) => e["t"] === "response")).toBe(false);
+  });
+
+  test("the extension fails closed: no prompt to force is an entry and an abort, never a fallback", () => {
+    const handlers: Record<string, (event: unknown, ctx: { abort(): void }) => unknown> = {};
+    const entries: string[] = [];
+    let aborts = 0;
+    wrathbenchPromptExtension({
+      on: (event: string, h: (event: never, ctx: { abort(): void }) => unknown) => {
+        handlers[event] = h as (event: unknown, ctx: { abort(): void }) => unknown;
+      },
+      appendEntry: (type: string) => entries.push(type),
+    } as unknown as Parameters<typeof wrathbenchPromptExtension>[0]);
+    const ctx = { abort: () => void aborts++ };
+    expect(handlers["before_agent_start"]!({ systemPromptOptions: { customPrompt: "OURS" } }, ctx)).toEqual({ systemPrompt: "OURS" });
+    expect(aborts).toBe(0);
+    expect(handlers["before_agent_start"]!({ systemPromptOptions: {} }, ctx)).toBeUndefined();
+    expect(entries).toEqual([PI_PROMPT_MISSING]);
+    handlers["before_provider_request"]!({}, ctx);
+    expect(aborts).toBe(2);
   });
 
   test("pi exiting mid-turn is an adapter error", async () => {

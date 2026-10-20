@@ -198,6 +198,14 @@ export interface DriverEntry {
    */
   routing: boolean;
   /**
+   * An endpoint CLI that reaches the run's base through a provider of its own
+   * catalogue, which the key's row in the provider table names (`piProvider`,
+   * providers.ts): a key with no such provider is refused as the roster entry,
+   * so its campaign squares are parked rather than spent on failed launches.
+   * Absent on every driver that sends its own requests.
+   */
+  cliProvider?: true;
+  /**
    * Runs only as a probe-campaign arm until the operator promotes it
    * (docs/METHODOLOGY.md, "Harness and driver are separate words"). Its
    * roster entry exists for a campaign to name in an assignment; the policy
@@ -327,6 +335,7 @@ export const DRIVER_TABLE = {
     capKey: true,
     endpoint: true,
     routing: false,
+    cliProvider: true,
     probeOnly: true,
     bill: "metered",
     cost: { reported: "none", table: "synced" },
