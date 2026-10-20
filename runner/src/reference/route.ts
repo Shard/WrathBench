@@ -19,7 +19,8 @@
  * A route is versioned: its id and version are the run's `model`
  * (`referenceModelId`), so two runs of different routes never read as one line.
  * Extending the arc is adding steps before the final `grind`, and a version
- * bump.
+ * bump; so is a change to how the program plays a step (`program.ts`), since
+ * the line is the route as played, not the data alone.
  */
 
 export interface Point {
@@ -162,7 +163,7 @@ const TO_GOLDSHIRE = [P(-9000, -90, 82), P(-9150, -20, 72), P(-9300, 30, 64), AT
  */
 export const NORTHSHIRE_PALADIN: Route = {
   id: "elwynn-human-paladin",
-  version: 1,
+  version: 2,
   race: 1,
   class: 2,
   buffs: [

@@ -120,13 +120,136 @@ describe("the program", () => {
   });
 });
 
+describe("what the first live run met", () => {
+  const args = (cursor: number) => ({ cursor, budgetMs: 20_000, race: 1, class: 2 });
+  const GRIND = NORTHSHIRE_PALADIN.steps.at(-1)!;
+  // The graveyard the ghost was released at, the corpse by the mine, and the
+  // leg the mesh would not finish (positions as the run's moves reported them).
+  const GRAVE = { x: -9449.45, y: 172.75, z: 56.3 };
+  const CORPSE = { x: -9806.7, y: 177.1, z: 22.9 };
+  const REACHED = { x: -9558.13, y: 172.0, z: 63.2 };
+  const ghostAtGrave = () => {
+    const world = northshireOpening();
+    world.spawn({ entry: 6491, x: GRAVE.x + 3, y: GRAVE.y, z: GRAVE.z, roles: ["spiritHealer"] });
+    const env = { ...world.ambient(), mem: {} } as unknown as ReferenceEnv;
+    return { world, env };
+  };
+  const die = (world: ReturnType<typeof northshireOpening>): void => {
+    Object.assign(world.self, GRAVE, { ghost: true });
+    world.corpse = CORPSE;
+  };
+
+  test("a corpse run the mesh only gets partway along walks as far as it goes", async () => {
+    const { world, env } = ghostAtGrave();
+    await referenceTick(env, NORTHSHIRE_PALADIN, args(27));
+    die(world);
+    // The straight leg ends off the mesh beside an island, and the island's
+    // route stops short of it: the end of that route is where to walk.
+    world.onMove = (to) => {
+      if (Math.hypot(to.x - REACHED.x, to.y - REACHED.y) < 1) return undefined;
+      if (Math.hypot(to.x - -9557.33, to.y - 174.09) < 1) return { ok: false, status: "path_incomplete", reachedPos: REACHED };
+      return { ok: false, status: "target_off_mesh", nearest: { x: -9557.33, y: 174.09, z: 60.47 } };
+    };
+    const r = await referenceTick(env, NORTHSHIRE_PALADIN, args(27));
+    expect(r.did).toContain("corpse run");
+    expect(world.calls.slice(-3)).toEqual(["moveTo -9559,174 target_off_mesh", "moveTo -9557,174 path_incomplete", "moveTo -9558,172"]);
+    expect(world.self).toMatchObject({ x: REACHED.x, y: REACHED.y });
+  });
+
+  test("a corpse the mesh will not lead back to ends at the spirit healer, not in the no-XP watchdog", async () => {
+    const { world, env } = ghostAtGrave();
+    await referenceTick(env, NORTHSHIRE_PALADIN, args(27));
+    die(world);
+    // Every leg, straight or swung, ends where the ghost already stands.
+    world.onMove = () => ({ ok: false, status: "path_incomplete", reachedPos: { ...GRAVE } });
+    let r = await referenceTick(env, NORTHSHIRE_PALADIN, args(27));
+    for (let i = 0; i < 20 && world.self.ghost; i++) r = await referenceTick(env, NORTHSHIRE_PALADIN, args(27));
+    expect(world.self.ghost).toBe(false);
+    expect(world.calls.at(-1)).toBe("spiritHealer");
+    // The swung legs were tried before giving up: not one point asked about again and again.
+    const legs = new Set(world.calls.filter((c) => c.startsWith("moveTo ")));
+    expect(legs.size).toBeGreaterThanOrEqual(5);
+    expect(world.calls.filter((c) => c.startsWith("moveTo ")).length).toBeLessThanOrEqual(10);
+    expect(r.did).toContain("spirit healer");
+  });
+
+  test("a ghost past its minutes walks back to the healer it was released beside", async () => {
+    const { world, env } = ghostAtGrave();
+    await referenceTick(env, NORTHSHIRE_PALADIN, args(27));
+    die(world);
+    await referenceTick(env, NORTHSHIRE_PALADIN, args(27)); // a leg toward the corpse: the healer is now behind
+    expect(world.self.x).toBeLessThan(GRAVE.x - 100);
+    (env.mem as Record<string, unknown>)["ghostSince"] = Date.now() - 7 * 60_000;
+    const r = await referenceTick(env, NORTHSHIRE_PALADIN, args(27));
+    expect(r.did.join(" ")).toMatch(/corpse out of reach after 7m/);
+    // One leg back: the ghost is at the graveyard again, a few yards from the healer.
+    expect(Math.hypot(world.self.x - GRAVE.x, world.self.y - GRAVE.y)).toBeLessThan(5);
+    await referenceTick(env, NORTHSHIRE_PALADIN, args(27));
+    expect(world.calls.at(-1)).toBe("spiritHealer");
+    // Alive again, the next death starts its own clock.
+    await referenceTick(env, NORTHSHIRE_PALADIN, args(27));
+    expect((env.mem as Record<string, unknown>)["ghostSince"]).toBeUndefined();
+  });
+
+  test("prey the walk never reached, twice running, is left alone and the hunt takes the next", async () => {
+    const world = northshireOpening();
+    const env = { ...world.ambient(), mem: {} } as unknown as ReferenceEnv;
+    const route: Route = { ...NORTHSHIRE_PALADIN, steps: [{ kind: "objectives", quests: [7], areas: [{ x: -8790, y: -165, z: 83 }] }, GRIND] };
+    await referenceTick(env, route, args(0));
+    world.log.set(7, { questId: 7, objectives: [{ kind: "kill", entry: 6, text: undefined, required: 3, have: 0, done: false }] });
+    Object.assign(world.self, { x: -8795, y: -165 });
+    // The nearest vermin stands where the mesh does not go.
+    const ledge = world.units.find((u) => u.entry === 6 && u.x === -8790)!;
+    world.onKill = (u) => (u.guid === ledge.guid ? { ok: false, status: "timeout", reached: false } : undefined);
+    const kills = () => world.calls.filter((c) => c.startsWith("kill "));
+    await referenceTick(env, route, args(0));
+    const second = await referenceTick(env, route, args(0));
+    expect(second.did).toContain("left 6 alone: out of reach");
+    await referenceTick(env, route, args(0));
+    expect(kills()).toEqual([`kill 6 ${ledge.guid} timeout`, `kill 6 ${ledge.guid} timeout`, "kill 6"]);
+    // A timeout beside the mob is a fight still going, not a mob out of reach.
+    world.onKill = (u) => (u.guid === ledge.guid ? undefined : { ok: false, status: "timeout", reached: true });
+    for (let i = 0; i < 3; i++) await referenceTick(env, route, args(0));
+    expect(kills().slice(-3).every((c) => c.endsWith("timeout") && !c.includes(ledge.guid))).toBe(true);
+  });
+
+  test("an accept refused against the marker from before a turn-in is asked again on the next tick", async () => {
+    const world = northshireOpening();
+    world.staleMarkersAfterTurnIn = true;
+    const env = { ...world.ambient(), mem: {} } as unknown as ReferenceEnv;
+    await referenceTick(env, NORTHSHIRE_PALADIN, args(0));
+    expect((await referenceTick(env, NORTHSHIRE_PALADIN, args(0))).advance).toBe(true);
+    const refused = await referenceTick(env, NORTHSHIRE_PALADIN, args(1));
+    expect(refused.did).toEqual(["turn in 783: complete", "accept 7: nothing_on_offer"]);
+    expect(refused.advance).toBe(false);
+    world.markersCatchUp();
+    const again = await referenceTick(env, NORTHSHIRE_PALADIN, args(1));
+    expect(again.advance).toBe(true);
+    expect(world.log.has(7)).toBe(true);
+    expect(world.calls.filter((c) => c.startsWith("turnIn "))).toEqual(["turnIn 783"]);
+  });
+
+  test("with no turn-in on the tick, nothing_on_offer is the NPC's word and the step moves on", async () => {
+    const world = northshireOpening();
+    world.staleMarkersAfterTurnIn = true;
+    const env = { ...world.ambient(), mem: {} } as unknown as ReferenceEnv;
+    await referenceTick(env, NORTHSHIRE_PALADIN, args(0));
+    await referenceTick(env, NORTHSHIRE_PALADIN, args(0));
+    await referenceTick(env, NORTHSHIRE_PALADIN, args(1));
+    // The markers never catch up: the second ask is refused too, and the visit is done with.
+    const second = await referenceTick(env, NORTHSHIRE_PALADIN, args(1));
+    expect(second.advance).toBe(true);
+    expect(world.log.has(7)).toBe(false);
+  });
+});
+
 describe("the route", () => {
   test("is written for one start and ends in a hunt that never finishes", () => {
     expect(REFERENCE_ROUTE).toBe(NORTHSHIRE_PALADIN);
     expect([REFERENCE_ROUTE.race, REFERENCE_ROUTE.class]).toEqual([1, 2]);
     expect(REFERENCE_ROUTE.steps.at(-1)?.kind).toBe("grind");
     expect(REFERENCE_ROUTE.steps.filter((s) => s.kind === "grind")).toHaveLength(1);
-    expect(MODEL).toBe("reference/elwynn-human-paladin@1");
+    expect(MODEL).toBe("reference/elwynn-human-paladin@2");
   });
 
   test("starts with the smoke's arc, and every quest it works or turns in it took first", () => {
