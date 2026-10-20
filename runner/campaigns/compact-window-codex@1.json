@@ -1,0 +1,33 @@
+{
+  "id": "compact-window-codex",
+  "version": 1,
+  "question": "On codex with GPT-6 Luna, what does compacting at 100k or 200k instead of the CLI's own limit change in the tokens replayed, the cost and the progress of six hours of play?",
+  "note": "The codex half of the compaction-window comparison (operator, 2026-10-11: auto stays the default on every driver, and one arm each for auto, 100k, 200k and 300k on one release image). All three arms run the release build harness-0.5-1345-gd1816724, pinned by digest, so only the window separates them. The control passes no window: the pinned 0.159.3 compacts at 90% of the model's catalogue window, which the provider's catalogue gives gpt-6-luna as 272,000 (the CLI's model cache, fetched 2026-10-20), so auto compacts at 244,800. Each treatment passes --compact-window, which reaches the CLI as model_auto_compact_token_limit and compacts at exactly that many tokens, with no summary reserve. 300k is not an arm: it is above the 244,800 cap, so the CLI would apply its own limit and the driver ends such a run as harness-error at its first turn (codexWindowCapRefusal), three spent attempts and no observation. 100k is the last arm: codex has kept about 96-109k of context after compacting at its own limit and has nothing that stops it compacting again at once, so 100k may compact on nearly every call, and the other arms should be in before it is tried. The clock is e360's six hours, not e90's ninety minutes, so that context grows past every window many times over (codex compacts every 13-16 turns at auto) and the auto arm is an e360-length run under a probe's stamp, readable against the entry's own e360 history. The leash is e360's (idle 20 minutes, the no-XP watchdog off, the 12000-call guard) and no level ends a run, so every arm plays the whole clock. resume is false, as on the claude-code half: the fleet deletes a rollout no live run has written for two hours, so a long pause would resume on a fresh thread, a compaction to nothing that no window chose; a paused run is a spent attempt and the next starts fresh. One cell, the subscription lanes' calibration start. The claude-code half is compact-window-claude@1, a campaign of its own because its arms differ and a campaign's row bills one lane. Assignments are the store row's: codex-luna-6 (GPT-6 Luna on codex), one run per square (operator, 2026-10-20).",
+  "cells": [{ "id": "dwarf-paladin", "race": 3, "class": 2, "note": "The subscription lanes' scored start: the calibration cell." }],
+  "arms": [
+    {
+      "id": "auto",
+      "note": "The control: no window passed, the CLI's own limit (244,800 on a 272,000-token catalogue window).",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:harness-0.5-1345-gd1816724@sha256:a52bbbc14883b1783f27e9e9a71fa3f73a15a0c2adb9f8f6d506090001b54200"
+    },
+    {
+      "id": "200k",
+      "note": "model_auto_compact_token_limit=200000: compacts at 200,000.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:harness-0.5-1345-gd1816724@sha256:a52bbbc14883b1783f27e9e9a71fa3f73a15a0c2adb9f8f6d506090001b54200",
+      "args": ["--compact-window", "200k"]
+    },
+    {
+      "id": "100k",
+      "note": "model_auto_compact_token_limit=100000: compacts at 100,000, about what codex has kept after a compaction.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:harness-0.5-1345-gd1816724@sha256:a52bbbc14883b1783f27e9e9a71fa3f73a15a0c2adb9f8f6d506090001b54200",
+      "args": ["--compact-window", "100k"]
+    }
+  ],
+  "objective": null,
+  "stopAtLevel": null,
+  "budget": { "episodeMs": 21600000, "idleMs": 1200000, "noXpMs": null, "maxToolCalls": 12000 },
+  "wiki": true,
+  "wikiCoords": false,
+  "resume": false,
+  "maxAttemptsPerCell": 3
+}
