@@ -8,6 +8,8 @@
 #   ./infra/build-images.sh --tag v0.6.0         # override the computed tag
 #   ./infra/build-images.sh --only runner        # one image (repeatable)
 #   ./infra/build-images.sh --commit <sha> --tag <tag>   # a named commit (k8s-release.sh)
+#   ./infra/build-images.sh --private-dir <dir>  # where the reference program comes from
+#   ./infra/build-images.sh --without-reference  # a runner image without it (local, or a public registry)
 #
 # The tag is `git describe --tags --always` of the working tree, and the tree
 # must be clean: on Kubernetes the tag IS the pin (GitHub issue 7 — no `latest`,
@@ -35,6 +37,20 @@
 #     WRATHBENCH_HARNESS_VERSION on every trajectory it produces.
 # One string, so the deployed revision, the server identity and the harness
 # stamp on a run all agree and are reviewable.
+#
+# The runner image also carries the scripted reference program, which is kept
+# out of the public repository (docs/RUNBOOK.md, "The scripted reference
+# run"). It comes from the operator's private checkout — WRATHBENCH_PRIVATE_DIR
+# or --private-dir, default /home/mark/git/wrathbench-private — exported the
+# same way as everything else: a `git archive` of that checkout's HEAD, only
+# reference/src/, laid at runner/src/reference/ in the context (gitignored in
+# this repository, so no commit can carry it). A runner build that cannot find
+# it stops before anything is built: a release never ships without it
+# silently. --without-reference builds an image without it (a reference
+# launch there refuses in one line): a local one, or a branch image for a
+# public registry host, the only place it may be pushed. An image carrying the
+# program is never pushed to a public registry host; it goes only to the
+# operator's own registry.
 
 set -Eeuo pipefail
 
@@ -50,6 +66,8 @@ COMMIT=""
 PUSH=0
 ALLOW_DIRTY=0
 ONLY=()
+PRIVATE_DIR="${WRATHBENCH_PRIVATE_DIR:-/home/mark/git/wrathbench-private}"
+WITHOUT_REFERENCE=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -59,7 +77,9 @@ while [[ $# -gt 0 ]]; do
     --only) ONLY+=("$2"); shift 2 ;;
     --push) PUSH=1; shift ;;
     --allow-dirty) ALLOW_DIRTY=1; shift ;;
-    -h|--help) sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --private-dir) PRIVATE_DIR="$2"; shift 2 ;;
+    --without-reference) WITHOUT_REFERENCE=1; shift ;;
+    -h|--help) sed -n '2,53p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "build-images: unknown flag $1" >&2; exit 2 ;;
   esac
 done
@@ -110,6 +130,51 @@ wants() {
 }
 wants_server() { wants wrathbench-worldserver || wants wrathbench-authserver || wants wrathbench-db-import; }
 
+# ------------------------------------------------- the reference program
+#
+# Checked before anything is exported or built, so a missing program costs
+# nothing. REF_SHA is the private commit the program is taken from; empty when
+# none is (a server-only build, or --without-reference).
+REF_SHA=""
+REF_SRC="reference/src"
+# A public registry host never receives the program: the hosted registries by
+# name, and a first component with no dot, no port and not localhost, which
+# docker reads as a Docker Hub namespace. Everything else is the operator's
+# own registry, where a pushed runner image always carries it.
+registry_host="${REGISTRY%%/*}"
+public_registry=0
+case "${registry_host}" in
+  ghcr.io|docker.io|index.docker.io|registry-1.docker.io|quay.io|public.ecr.aws|gcr.io|*.gcr.io|*.pkg.dev|registry.gitlab.com) public_registry=1 ;;
+  localhost|*.*|*:*) ;;
+  *) public_registry=1 ;;
+esac
+if wants wrathbench-runner; then
+  if [[ "${PUSH}" -eq 1 && "${public_registry}" -eq 1 && "${WITHOUT_REFERENCE}" -eq 0 ]]; then
+    die "refusing to push a runner image carrying the private reference program to ${registry_host}, a public registry host; a branch image there is built with --without-reference"
+  fi
+  if [[ "${WITHOUT_REFERENCE}" -eq 1 ]]; then
+    if [[ "${PUSH}" -eq 1 && "${public_registry}" -eq 0 ]]; then
+      die "refusing --without-reference with --push to ${REGISTRY}: a runner image pushed to the release registry always carries the scripted reference program"
+    fi
+    say "WARNING: --without-reference — this runner image has no scripted reference program; a --driver reference launch in it refuses"
+  else
+    real="$(cd "${PRIVATE_DIR}" 2>/dev/null && pwd -P || true)"
+    top="$(git -C "${PRIVATE_DIR}" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [[ -z "${real}" || "${top}" != "${real}" ]] || ! git -C "${PRIVATE_DIR}" cat-file -e "HEAD:${REF_SRC}/index.ts" 2>/dev/null; then
+      die "the scripted reference program is not at ${PRIVATE_DIR}/${REF_SRC}/index.ts (committed, in the private checkout's HEAD). A release runner image always carries it. Point WRATHBENCH_PRIVATE_DIR (or --private-dir) at the operator's private checkout, or pass --without-reference for a local image that is never pushed."
+    fi
+    # Tracked changes only, as for this tree: an untracked file is not in the commit.
+    if [[ -n "$(git -C "${PRIVATE_DIR}" status --porcelain --untracked-files=no -- "${REF_SRC}")" ]]; then
+      if [[ "${ALLOW_DIRTY}" -eq 0 ]]; then
+        die "${PRIVATE_DIR}/${REF_SRC} has uncommitted changes; commit them (the program is built from the private HEAD) or pass --allow-dirty"
+      fi
+      say "WARNING: --allow-dirty — uncommitted changes under ${PRIVATE_DIR}/${REF_SRC} are NOT in the runner image"
+    fi
+    REF_SHA="$(git -C "${PRIVATE_DIR}" rev-parse HEAD)"
+    say "reference program: ${PRIVATE_DIR}/${REF_SRC} at ${REF_SHA}"
+  fi
+fi
+
 # ------------------------------------------------------------- the context
 #
 # The build context is the commit, exported, never the working tree. Both
@@ -146,6 +211,17 @@ export_azerothcore() {
 }
 if wants_server; then export_azerothcore; fi
 
+# The program's place is gitignored in this repository, so a commit that
+# tracks something there is a mistake, never a second source of the program.
+export_reference() {
+  local dest="${CONTEXT}/runner/src/reference"
+  [[ ! -e "${dest}" ]] || die "${SHA} tracks runner/src/reference/, the private reference program's place; it must stay untracked"
+  mkdir -p "${dest}"
+  say "exporting the reference program (private ${REF_SHA}, ${REF_SRC} only) to runner/src/reference/"
+  git -C "${PRIVATE_DIR}" archive --format=tar "${REF_SHA}:${REF_SRC}" | tar -xf - -C "${dest}"
+}
+if [[ -n "${REF_SHA}" ]]; then export_reference; fi
+
 # Every image is scanned before anything is pushed (infra/image-guard.sh). A
 # refused image loses its tag here, so it cannot be pushed by hand either.
 guard() {
@@ -178,8 +254,11 @@ build_runner() {
   local ref="${REGISTRY}/wrathbench-runner:${TAG}"
   wants "wrathbench-runner" || return 0
   say "building ${ref} (runner.Dockerfile, repo baked in)"
+  local label=()
+  if [[ -n "${REF_SHA}" ]]; then label=(--label "wrathbench.reference=${REF_SHA}"); fi
   docker build \
     --build-arg "WRATHBENCH_BUILD_VERSION=${TAG}" \
+    "${label[@]}" \
     -t "${ref}" -f "${CONTEXT}/infra/docker/runner.Dockerfile" "${CONTEXT}"
   guard "${ref}"
   BUILT+=("${ref}")

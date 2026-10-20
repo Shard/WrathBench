@@ -308,7 +308,10 @@ and snippet timeout. A human speedrun says nothing about what the SDK lets a
 player do; this does, so a model's movement across series can be read against
 the surface's own. It is stamped and never scored — outside every
 comparability group, never in the row order, never counted toward a target —
-and is shown only as a labelled line.
+and is shown only as a labelled line. The program itself is a solution to the
+episode on this SDK, so it stays out of the public tree (operator,
+2026-10-20): the repository keeps the driver hook, the stamp and the counting
+rules, and the operator's runner image carries the program.
 
 **A ladder belongs to a comparability group.** `probing` has none
 (2026-08-29): a campaign varies its cells on purpose, so ranking its runs ranks

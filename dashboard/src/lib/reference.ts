@@ -4,7 +4,8 @@
  * **Drawn: the scripted reference run** (operator, 2026-10-19;
  * docs/METHODOLOGY.md, "Scoring"). One TypeScript program per harness series,
  * played through the SDK under the models' sandbox, session, contracts and
- * snippet timeout (`runner/src/reference/`), and recorded like any run. It is
+ * snippet timeout (`runner/src/reference-adapter.ts`; the program is a private
+ * build input), and recorded like any run. It is
  * stamped and never scored. Its result row reads `unscored (scripted
  * reference)`, so `scored()` keeps it out of every row and every order, and the
  * one place it appears is a labelled line on the level rail under the table

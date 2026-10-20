@@ -100,6 +100,28 @@ function makeRepo(opts: { submodule?: boolean } = {}): { tree: string; ac: strin
   return { tree, ac, acFirst: first, sha: git(tree, "rev-parse", "HEAD") };
 }
 
+/**
+ * The operator's private checkout as the build finds it: the reference
+ * program committed under reference/src/, its tests and notes beside it (never
+ * exported), and an untracked file that must not reach the image either.
+ */
+function makePrivate(): { dir: string; sha: string } {
+  const dir = join(tempDir("wb-build-images-private-"), "private");
+  mkdirSync(dir);
+  git(dir, "init", "-q", "-b", "master");
+  put(dir, {
+    "reference/src/index.ts": "export const program = 1;\n",
+    "reference/src/route.ts": "export const route = 1;\n",
+    "reference/test/reference.test.ts": "// private test\n",
+    "reference/README.md": "private notes\n",
+    "worklogs/2026-01-01.md": "private\n",
+  });
+  git(dir, "add", "-A");
+  git(dir, "commit", "-q", "-m", "reference");
+  put(dir, { "reference/src/scratch.ts": "untracked\n" });
+  return { dir, sha: git(dir, "rev-parse", "HEAD") };
+}
+
 /** argv to the log, never the environment; each build's context tarred beside it. */
 const DOCKER_SHIM = `#!/usr/bin/env bash
 printf 'docker %s\\n' "$*" >> "\${FAKE_LOG}"
@@ -155,6 +177,9 @@ function run(cwdRepo: string, args: string[], opts: { imageFiles?: Record<string
       FAKE_LOG: log,
       FAKE_IMAGE_ROOT: image,
       WRATHBENCH_BUILD_REPO_ROOT: cwdRepo,
+      // Pinned, never the default: the default path exists on the operator's
+      // host and nowhere else, so an unpinned run would differ by machine.
+      WRATHBENCH_PRIVATE_DIR: makePrivate().dir,
       ...opts.env,
     },
     stdout: "pipe",
@@ -200,7 +225,7 @@ describe("build-images.sh builds from git, never the working tree", () => {
     expect(ctx!.entries).toContain("a.txt");
     expect(ctx!.entries).toContain(".env.example");
     expect(ctx!.entries).toContain("infra/docker/runner.Dockerfile");
-    for (const absent of ["scratch.txt", ".env.local", "runner/.env.prod", "runner", ".claude", ".git"]) {
+    for (const absent of ["scratch.txt", ".env.local", "runner/.env.prod", ".claude", ".git"]) {
       expect(ctx!.entries).not.toContain(absent);
     }
     // The runner needs no AzerothCore, so none is exported for it.
@@ -253,6 +278,88 @@ describe("build-images.sh builds from git, never the working tree", () => {
     expect(builds(server)).toEqual([]);
     expect(server.leftovers).toEqual([]);
     expect(run(clone, ["--only", "runner"]).code).toBe(0);
+  });
+});
+
+describe("build-images.sh and the private reference program", () => {
+  test("the runner's context carries the program from the private HEAD at runner/src/reference/, and nothing else of that checkout", () => {
+    const { tree } = makeRepo();
+    const priv = makePrivate();
+    const r = run(tree, ["--only", "runner"], { env: { WRATHBENCH_PRIVATE_DIR: priv.dir } });
+    expect(r.code).toBe(0);
+    const [ctx] = r.contexts;
+    expect(ctx!.read("runner/src/reference/index.ts")).toBe("export const program = 1;\n");
+    expect(ctx!.read("runner/src/reference/route.ts")).toBe("export const route = 1;\n");
+    const fromPrivate = ctx!.entries.filter((e) => e.startsWith("runner/src/reference/"));
+    expect(fromPrivate.sort()).toEqual(["runner/src/reference/index.ts", "runner/src/reference/route.ts"]);
+    for (const absent of ["reference", "worklogs", "runner/src/reference/scratch.ts", "runner/test"]) expect(ctx!.entries).not.toContain(absent);
+    expect(builds(r)[0]).toContain(`--label wrathbench.reference=${priv.sha}`);
+    expect(r.out).toContain(`reference program: ${priv.dir}/reference/src at ${priv.sha}`);
+  });
+
+  test("a runner build that cannot find it stops before anything is exported or built, saying how to proceed", () => {
+    const { tree } = makeRepo();
+    for (const missing of [join(tempDir("wb-build-images-none-"), "nope"), tempDir("wb-build-images-empty-")]) {
+      const r = run(tree, ["--only", "runner"], { env: { WRATHBENCH_PRIVATE_DIR: missing } });
+      expect(r.code).toBe(1);
+      expect(r.out).toContain("the scripted reference program is not at");
+      expect(r.out).toContain("--without-reference");
+      expect(r.calls).toEqual([]);
+      expect(r.leftovers).toEqual([]);
+    }
+    // --private-dir wins over the environment.
+    const priv = makePrivate();
+    const flagged = run(tree, ["--only", "runner", "--private-dir", priv.dir], { env: { WRATHBENCH_PRIVATE_DIR: "/nonexistent" } });
+    expect(flagged.code).toBe(0);
+  });
+
+  test("--without-reference builds a local image without it, and never pushes one to the release registry", () => {
+    const { tree } = makeRepo();
+    const env = { WRATHBENCH_PRIVATE_DIR: "/nonexistent" };
+    const local = run(tree, ["--only", "runner", "--without-reference"], { env });
+    expect(local.code).toBe(0);
+    expect(local.out).toContain("no scripted reference program");
+    expect(local.contexts[0]!.entries.some((e) => e.startsWith("runner/src/reference"))).toBe(false);
+    expect(builds(local)[0]).not.toContain("wrathbench.reference");
+    const pushed = run(tree, ["--only", "runner", "--without-reference", "--push"], { env });
+    expect(pushed.code).toBe(1);
+    expect(pushed.out).toContain("refusing --without-reference with --push");
+    expect(pushed.calls).toEqual([]);
+  });
+
+  test("an image carrying it is never pushed to a public registry host; a branch image there is built without it", () => {
+    const { tree, sha } = makeRepo();
+    for (const registry of ["ghcr.io/shard", "docker.io/shard", "shard"]) {
+      const r = run(tree, ["--only", "runner", "--push", "--registry", registry]);
+      expect(r.code).toBe(1);
+      expect(r.out).toContain("a public registry host");
+      expect(r.calls).toEqual([]);
+    }
+    const branch = run(tree, ["--only", "runner", "--push", "--registry", "ghcr.io/shard", "--without-reference"]);
+    expect(branch.code).toBe(0);
+    expect(branch.contexts[0]!.entries.some((e) => e.startsWith("runner/src/reference"))).toBe(false);
+    expect(pushes(branch)).toEqual([`docker push ghcr.io/shard/wrathbench-runner:${sha.slice(0, 7)}`]);
+    // A server image carries no program, so its registry is not this rule's business.
+    expect(run(tree, ["--only", "worldserver", "--push", "--registry", "ghcr.io/shard"]).code).toBe(0);
+  });
+
+  test("uncommitted changes to the program are refused like a dirty tree", () => {
+    const { tree } = makeRepo();
+    const priv = makePrivate();
+    writeFileSync(join(priv.dir, "reference/src/route.ts"), "export const route = 2;\n");
+    const r = run(tree, ["--only", "runner"], { env: { WRATHBENCH_PRIVATE_DIR: priv.dir } });
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("has uncommitted changes");
+    expect(r.calls).toEqual([]);
+  });
+
+  test("a server-only build needs no private checkout", () => {
+    const { tree } = makeRepo();
+    const sub = join(tree, "deps", "azerothcore");
+    expect(existsSync(sub)).toBe(true);
+    const r = run(tree, ["--only", "worldserver"], { env: { WRATHBENCH_PRIVATE_DIR: "/nonexistent" } });
+    expect(r.code).toBe(0);
+    expect(r.contexts[0]!.entries.some((e) => e.startsWith("runner/src/reference"))).toBe(false);
   });
 });
 

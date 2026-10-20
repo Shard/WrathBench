@@ -19,8 +19,8 @@ import type { EpisodicLog } from "./episodic";
 import type { LoopOutcome, ObservationStallHook } from "./loop";
 import { piEffortRefusal, runPiEpisode } from "./adapter-pi";
 import { apiKeyRefusal, piProviderOf } from "./providers";
-import { ReferenceAdapter } from "./reference/adapter";
-import { REFERENCE_ROUTE } from "./reference/route";
+import { ReferenceAdapter } from "./reference-adapter";
+import type { ReferenceProgram } from "./reference-program";
 import { routingForRun } from "./routing";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
@@ -33,6 +33,12 @@ export interface DriverLaunch<C extends RunConfig> {
   config: C;
   /** The fixed loop's transport; absent on a scaffold, which runs its own turns. */
   adapter?: ChatAdapter;
+}
+
+/** What `run.ts` resolved before the run directory existed, for the driver that needs it. */
+export interface LaunchInputs {
+  /** The scripted reference program, loaded at launch (`resolveReferenceLaunch`). */
+  reference?: ReferenceProgram;
 }
 
 /** What `run.ts` hands a scaffold's episode: the fields every scaffold driver takes. */
@@ -58,7 +64,7 @@ export interface DriverAdapter {
    * lane or key must fail in a second, naming the variable, so a refusal
    * prints and exits 2.
    */
-  prepare<C extends RunConfig>(config: C, trajectory: Trajectory): DriverLaunch<C>;
+  prepare<C extends RunConfig>(config: C, trajectory: Trajectory, inputs?: LaunchInputs): DriverLaunch<C>;
   /** A scaffold's whole episode; absent on a fixed-loop driver, whose turns `runLoop` runs. */
   runEpisode?: (o: ScaffoldEpisodeOptions) => Promise<LoopOutcome>;
 }
@@ -216,12 +222,15 @@ export const DRIVER_ADAPTERS: Readonly<Record<Driver, DriverAdapter>> = {
   },
 
   reference: {
-    prepare(config) {
+    prepare(config, _trajectory, inputs) {
       // The scripted reference: its route through `run_snippet`, in this run's
-      // sandbox and session like any model (`reference/adapter.ts`). No key, no
-      // lane; `loadRunConfig` has already checked the start and named the model.
+      // sandbox and session like any model (`reference-adapter.ts`). No key, no
+      // lane; `resolveReferenceLaunch` has already loaded the program, checked
+      // the start and named the model, and refused the launch without it.
+      const program = inputs?.reference;
+      if (program === undefined) throw new Error("the reference driver was prepared without its program; run.ts loads it first (resolveReferenceLaunch)");
       const adapter = new ReferenceAdapter({
-        route: REFERENCE_ROUTE,
+        program,
         snippetTimeoutMs: config.snippetTimeoutMs,
         race: config.race,
         class: config.class,
