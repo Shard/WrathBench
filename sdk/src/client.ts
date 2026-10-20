@@ -1117,6 +1117,15 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
  */
 const ASYNC_MOVE_UNREPORTED: ReadonlySet<string> = new Set(["arrived", "transferred", "teleported", "superseded", "stopped"]);
 
+/**
+ * How long `moveToAsync` waits after an undispatched ack (no `pathLength`)
+ * for the refusal that goes with it, in ms. The module emits the refusal in
+ * the same call as the ack (the 2026-10-20 party runs: 1 ms apart); this only
+ * bounds the socket race, and an older module's ack, which never carries a
+ * route, costs no more than this.
+ */
+const ASYNC_MOVE_VERDICT_MS = 250;
+
 /** The refusal of a move while dead and not released; nothing is sent. */
 const DEAD_MOVE_HINT =
   "you are dead and a corpse cannot move; nothing was sent. sdk.repop() releases your spirit, and a ghost can walk.";
@@ -1551,8 +1560,17 @@ export function longRouteNote(
   );
 }
 
-/** `moveToAsync`'s answer: the module's ack, and the long-route note when the route earns one. */
-export type MoveToAsyncResponse = MoveToResponse & { readonly hint?: string };
+/**
+ * `moveToAsync`'s answer: the module's ack, and the long-route note when the
+ * route earns one — or, when the move's verdict was already in by the time
+ * the ack resolved and it is a refusal (`too_far`, `drop`, `target_off_mesh`,
+ * …), that verdict: `ok: false` with its `status` and the same hint the
+ * harness block carries. Nothing moved; `moveId` names the `WB_MOVE_RESULT`
+ * it came from.
+ */
+export type MoveToAsyncResponse =
+  | (MoveToResponse & { readonly hint?: string })
+  | { readonly ok: false; readonly action: string; readonly moveId: number; readonly status: string; readonly hint?: string };
 
 export interface WaitForTransferOptions {
   /** How long to wait for `SMSG_NEW_WORLD`, in ms. Default 15000: a far teleport is a few server ticks. */
@@ -3135,6 +3153,13 @@ export type ReclaimCorpseResult =
       readonly delayMs: number | undefined;
       /** How many `CMSG_RECLAIM_CORPSE` this call sent. */
       readonly attempts: number;
+      /**
+       * The living creatures in view within `RECLAIM_CROWD_YARDS` of the
+       * corpse when you came back, by name and count — present only when
+       * there are any. A fact about what stands there; whether any is
+       * hostile is not observed.
+       */
+      readonly note?: string;
     }
   | {
       readonly ok: false;
@@ -3284,6 +3309,14 @@ function spiritHealerSilence(distance: number | undefined, timeout: number): str
 const AREA_AFTER_PORT_MS = 500;
 
 /**
+ * How long `repop` waits for its own release to land, in ms: the port, the
+ * graveyard marker and the ghost flag arrive within a world tick or two of
+ * the dispatch, so this only bounds a release the server never makes (no
+ * graveyard for the corpse's zone).
+ */
+const REPOP_SETTLE_MS = 3000;
+
+/**
  * Whether an event moved our own character by teleport: a same-map port's
  * `MSG_MOVE_TELEPORT_ACK` under our guid, or a far port's `SMSG_NEW_WORLD`.
  */
@@ -3291,6 +3324,58 @@ function isOwnPort(e: StreamEvent, selfGuid: string | undefined): boolean {
   if (isDecodeError(e.data)) return false;
   if (isEvent(e, "SMSG_NEW_WORLD")) return true;
   return isEvent(e, "MSG_MOVE_TELEPORT_ACK") && selfGuid !== undefined && (e.data as MoveUpdateData).guid === selfGuid;
+}
+
+/**
+ * How near the corpse a creature is named on a reclaim's result, in yards.
+ * The harness's own choice, not the creatures' aggro radius (which no packet
+ * carries): the a3 party runs' reclaims that died within seconds had packs
+ * at 1-5y.
+ */
+const RECLAIM_CROWD_YARDS = 20;
+
+/**
+ * "Defias Worker ×5, Defias Watchman": the living creatures in view within
+ * `yards` of a point (and, with `targeting`, only those whose target is that
+ * guid), by name and count, most first; undefined when there are none. A
+ * creature is a unit that is not a player, a pet or summon, or an NPC with
+ * a service role — hostility itself is not observed.
+ */
+function creaturesNear(
+  state: StateCache,
+  at: { x: number; y: number } | undefined,
+  yards: number,
+  targeting?: string,
+): string | undefined {
+  const counts = new Map<string, number>();
+  for (const u of state.units()) {
+    if (u.type !== "unit" || u.dead !== false || u.ownerGuid !== undefined || u.roles.length > 0) continue;
+    if (targeting !== undefined && u.targetGuid !== targeting) continue;
+    if (at !== undefined && (u.x === undefined || u.y === undefined || Math.hypot(u.x - at.x, u.y - at.y) > yards)) continue;
+    const name = u.name ?? `creature ${u.entry ?? u.guid}`;
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  if (counts.size === 0) return undefined;
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([name, n]) => (n === 1 ? name : `${name} ×${n}`))
+    .join(", ");
+}
+
+/** How far own position may change in one observation before it reads as being moved rather than walking. */
+const OWN_JUMP_YARDS = 50;
+
+/** The `position moved` line: how far, where to, and the zone text there. */
+function ownJumpNote(state: StateCache, at: WorldPosition, yards: number | undefined): string {
+  const zone = state.self.zone?.value.name || undefined;
+  const area = state.self.area?.value.name || undefined;
+  const map = state.self.map?.value;
+  const place = zone === undefined ? undefined : area === undefined || area === zone ? zone : `${zone} / ${area}`;
+  const mapName = map !== undefined && map.id === at.map && map.name ? `${map.name}, map ${at.map}` : `map ${at.map}`;
+  return (
+    `${yards === undefined ? "you were moved to another map" : `you were moved ~${Math.round(yards)}y`} with no walk of your own, ` +
+    `and are now at (${at.x.toFixed(1)}, ${at.y.toFixed(1)}, ${at.z.toFixed(1)})${place === undefined ? "" : ` in ${place}`} (${mapName})`
+  );
 }
 
 /**
@@ -3407,6 +3492,9 @@ export class WrathClient {
   /** The last few moveIds answered by a refusal that moves nothing (`NEVER_MOVED`), for a verdict that beats its ack. */
   private readonly unmovedIds = new Set<number>();
 
+  /** Own position as `watchOwnJump` last saw it, with the session epoch it was seen in. */
+  private lastOwnPosition: { readonly pos: WorldPosition; readonly seq: number; readonly epoch: number } | undefined;
+
   /**
    * The last `moveTo` the server refused without moving anything, kept for
    * `MOVE_REJECTION_MEMO_MS` so an identical repeat from the same spot is
@@ -3454,6 +3542,7 @@ export class WrathClient {
     this.events.onAny((event: StreamEvent) => this.state.apply(event));
     this.events.onAny((event: StreamEvent) => this.clientParityQueries(event));
     this.events.onAny((event: StreamEvent) => this.castVerdict(event));
+    this.events.onAny((event: StreamEvent) => this.watchOwnJump(event));
     this.events.on("WB_MOVE_RESULT", (e) => {
       if (isDecodeError(e.data)) return;
       if (this.ownMove !== undefined && this.ownMove.epoch !== this.events.epoch) {
@@ -3835,18 +3924,51 @@ export class WrathClient {
     // arrives as the event it is, and `force` is the caller's own word.
     const epoch = this.events.epoch;
     const from = this.state.self.position?.value;
-    return this.postMoveTo(resolved.point, resolved.guid, options.force === true).then(({ ack, etaMs }) => {
-      this.watchAsyncMove(ack.moveId, resolved.point, epoch);
-      const note =
-        from === undefined || ack.pathLength === undefined
-          ? undefined
-          : longRouteNote(resolved.point, distance2d(from, resolved.point), ack.pathLength, etaMs);
-      if (note === undefined) return ack;
-      // Also to the harness block, so a dropped ack still tells the model
-      // (operator, 2026-10-20): once per dispatch, like a refusal.
-      this.noteActionHint("moveToAsync", "long_route", note, resolved.point);
-      return { ...ack, hint: note };
+    // A refusal at planning (`too_far`, `drop`, …) can land before the ack
+    // resolves, in the same millisecond: latched from before the POST, so the
+    // reply can carry it instead of an ok that the event contradicts.
+    const early = new Map<number, MoveResultData>();
+    const offEarly = this.events.on("WB_MOVE_RESULT", (e) => {
+      if (isDecodeError(e.data) || this.events.epoch !== epoch) return;
+      const d = e.data as MoveResultData;
+      if (!early.has(d.moveId)) early.set(d.moveId, d);
     });
+    return this.postMoveTo(resolved.point, resolved.guid, options.force === true)
+      .then(async ({ ack, etaMs }): Promise<MoveToAsyncResponse> => {
+        this.watchAsyncMove(ack.moveId, resolved.point, epoch);
+        // The ack and the event travel on different sockets, so the refusal
+        // can also land just after the ack. An ack with no route length is
+        // a move the module did not dispatch (PROTOCOL.md: a refusal at
+        // planning, or `too_far`) — or an older module's — so only that ack
+        // waits, briefly, for its verdict.
+        let verdict = early.get(ack.moveId);
+        if (verdict === undefined && ack.pathLength === undefined) {
+          try {
+            const event = await this.waitEvent(
+              (e) => isEvent(e, "WB_MOVE_RESULT") && !isDecodeError(e.data) && (e.data as MoveResultData).moveId === ack.moveId,
+              { timeout: ASYNC_MOVE_VERDICT_MS, epoch, description: `the refusal for moveToAsync moveId ${ack.moveId}` },
+            );
+            verdict = event.data as MoveResultData;
+          } catch (e) {
+            if (!(e instanceof EventTimeoutError)) throw e;
+          }
+        }
+        if (verdict !== undefined && !ASYNC_MOVE_UNREPORTED.has(status_(verdict))) {
+          const status = status_(verdict);
+          const hint = this.asyncMoveRecipe(status, resolved.point, verdict);
+          return { ok: false, action: ack.action, moveId: ack.moveId, status, ...(hint !== undefined ? { hint } : {}) };
+        }
+        const note =
+          from === undefined || ack.pathLength === undefined
+            ? undefined
+            : longRouteNote(resolved.point, distance2d(from, resolved.point), ack.pathLength, etaMs);
+        if (note === undefined) return ack;
+        // Also to the harness block, so a dropped ack still tells the model
+        // (operator, 2026-10-20): once per dispatch, like a refusal.
+        this.noteActionHint("moveToAsync", "long_route", note, resolved.point);
+        return { ...ack, hint: note };
+      })
+      .finally(offEarly);
   }
 
   /**
@@ -3869,16 +3991,21 @@ export class WrathClient {
         const data = event.data as MoveResultData;
         const status = status_(data);
         if (ASYNC_MOVE_UNREPORTED.has(status)) return;
-        let recipe = this.moveRecipe(status, point, data);
-        // Only a fall: a climb (dz > 0) and a step underground (surfaceZ)
-        // are refused forced or not, so fall damage says nothing about them.
-        const fall = data.dz !== undefined && data.dz < 0 && data.surfaceZ === undefined;
-        if (status === "drop" && fall && this.state.self.ghost?.value === true && recipe !== undefined) {
-          recipe += " A ghost takes no fall damage.";
-        }
-        this.noteActionHint("moveToAsync", status, recipe, point);
+        this.noteActionHint("moveToAsync", status, this.asyncMoveRecipe(status, point, data), point);
       })
       .catch(() => {});
+  }
+
+  /** `moveRecipe` for a `moveToAsync` verdict: a ghost's fall also says a ghost takes no fall damage. */
+  private asyncMoveRecipe(status: string, point: MovePoint, data: MoveResultData): string | undefined {
+    const recipe = this.moveRecipe(status, point, data);
+    // Only a fall: a climb (dz > 0) and a step underground (surfaceZ)
+    // are refused forced or not, so fall damage says nothing about them.
+    const fall = data.dz !== undefined && data.dz < 0 && data.surfaceZ === undefined;
+    if (status === "drop" && fall && this.state.self.ghost?.value === true && recipe !== undefined) {
+      return `${recipe} A ghost takes no fall damage.`;
+    }
+    return recipe;
   }
 
   /**
@@ -4039,6 +4166,19 @@ export class WrathClient {
 
   /** The `cast_spell` POST, watched for the server's verdict (`castVerdict`). */
   private async trackedCast(spellId: number, targetGuid: string | undefined): Promise<ActionResponse> {
+    // The two casts the cache can tell will never go off, refused with
+    // nothing sent: a dead caster (a body or a ghost; the core answers
+    // caster_dead), and a spell the spellbook does not hold, which the core
+    // drops without a word (`HandleCastSpellOpcode`: `!HasActiveSpell`) —
+    // unless the target is a game object, whose lock may take a spell the
+    // book lacks, or the character drives another unit (a vehicle, a charm),
+    // whose spells the core does not check against it. The spellbook is read
+    // only once login has served it.
+    const refusal = this.castRefusal(spellId, targetGuid);
+    if (refusal !== undefined) {
+      this.noteActionHint("castSpell", refusal.status, refusal.hint);
+      throw new Error(`castSpell ${refusal.status}: ${refusal.hint}`);
+    }
     // Registered before the dispatch: the handler answers in the same world
     // tick, often before the ack (see `useItemVerdict`).
     const cast: PendingCast = {
@@ -4055,6 +4195,34 @@ export class WrathClient {
       if (this.pendingCasts.get(spellId) === cast) this.pendingCasts.delete(spellId);
       throw err;
     }
+  }
+
+  /** Why a `castSpell` cannot go off, from what the cache holds; undefined when nothing says so. */
+  private castRefusal(spellId: number, targetGuid: string | undefined): { status: string; hint: string } | undefined {
+    const ghost = this.state.self.ghost?.value === true;
+    if (ghost || this.isCorpse()) {
+      return {
+        status: "dead",
+        hint: ghost
+          ? "you are a ghost and cannot cast; nothing was sent. Get back to life first (reclaimCorpse, or a Spirit Healer)."
+          : "you are dead and cannot cast; nothing was sent. sdk.repop() releases your spirit.",
+      };
+    }
+    const book = this.state.spells();
+    const atObject = targetGuid !== undefined && this.state.nearby.get(guidKey(targetGuid))?.objectType?.value === "gameObject";
+    // Driving a vehicle or a charmed unit, the core casts as that unit and
+    // never asks our spellbook: the unit's UNIT_FIELD_CHARMEDBY names us.
+    const self = this.state.self.guid;
+    const driving = self !== undefined && [...this.state.nearby.values()].some((o) => o.charmedByGuid?.value === self);
+    if (book.length > 0 && this.state.spell(spellId) === undefined && !atObject && !driving) {
+      return {
+        status: "not_known",
+        hint:
+          `spell ${spellId} is not in your spellbook (state.spells()), and the server ignores a spell you do not know ` +
+          "without a word; nothing was sent. Cast one of the ids state.spells() lists.",
+      };
+    }
+    return undefined;
   }
 
   /** The bare `cast_spell` POST, for helpers that read the verdict themselves (`openChest`). */
@@ -4132,6 +4300,30 @@ export class WrathClient {
         () => this.rewordActionHint("castSpell", status, castFailedHint(this.state, cast, status, "caster_dead")),
         () => {},
       );
+  }
+
+  /**
+   * The harness line for being moved: own position jumping more than
+   * `OWN_JUMP_YARDS` (or to another map) while no move of this client's is
+   * walking — a spirit healer's port, a hearthstone, the release to a
+   * graveyard, a flight's landing. The line is noted at once and reworded in
+   * place when the `WB_AREA` naming the new place follows, a tick later.
+   */
+  private watchOwnJump(event: StreamEvent): void {
+    const now = this.state.self.position;
+    if (now === undefined) return;
+    const prev = this.lastOwnPosition;
+    if (prev !== undefined && prev.seq === now.seq) return;
+    this.lastOwnPosition = { pos: now.value, seq: now.seq, epoch: this.events.epoch };
+    if (prev === undefined || prev.epoch !== this.events.epoch) return;
+    const walking = this.ownMove !== undefined && (this.ownMove.moveId === undefined || this.ownMove.moveId > this.lastMoveVerdictId);
+    if (walking) return;
+    const sameMap = prev.pos.map === now.value.map;
+    const yards = sameMap ? distance2d(prev.pos, now.value) : undefined;
+    if (yards !== undefined && yards <= OWN_JUMP_YARDS) return;
+    const line = (): string => ownJumpNote(this.state, now.value, yards);
+    this.noteActionHint("position", "moved", line());
+    void this.awaitAreaAfter(event.seq, Date.now() + AREA_AFTER_PORT_MS).then(() => this.rewordActionHint("position", "moved", line()));
   }
 
   /**
@@ -4748,9 +4940,57 @@ export class WrathClient {
     return this.action({ action: "destroy_item", bag: where.bag, slot: where.slot, count }).then((ack) => withResolved(where, ack));
   }
 
-  /** `CMSG_REPOP_REQUEST` — release the spirit while dead. */
-  repop(): Promise<ActionResponse> {
-    return this.action({ action: "repop" });
+  /**
+   * `CMSG_REPOP_REQUEST` — release the spirit while dead.
+   *
+   * The release is the server moving the spirit: `RepopAtGraveyard` teleports
+   * it to the graveyard (`MSG_MOVE_TELEPORT_ACK` on the same map,
+   * `SMSG_NEW_WORLD` across maps), then sends `SMSG_DEATH_RELEASE_LOC` naming
+   * that graveyard, and the ghost flag follows in our own values update a few
+   * ms later (the 2026-10-20 party runs: all of it within 12 ms of the
+   * dispatch). The ack comes back before any of it is folded, so a caller
+   * reading `state.self.position` the moment the call returned read the
+   * corpse's spot (rogue, 13:32:42: a Deadmines position while the ghost
+   * stood at Sentinel Hill), and a `moveTo` right after it met a corpse. So a
+   * release from a corpse waits, bounded by `REPOP_SETTLE_MS`, for its own
+   * port, the graveyard marker and the ghost flag, then for the `WB_AREA`
+   * naming where it landed. The ack is the answer either way. Nothing is
+   * waited for when the cache does not show a corpse: the core ignores a
+   * repop from the living or from a ghost, so no release is coming.
+   */
+  async repop(): Promise<ActionResponse> {
+    if (!this.isCorpse()) return this.action({ action: "repop" });
+    let released = false;
+    const offRelease = this.events.on("SMSG_DEATH_RELEASE_LOC", (e) => {
+      if (isDecodeError(e.data)) return;
+      if ((e.data as DeathReleaseLocData).map >= 0) released = true;
+    });
+    let portSeq: number | undefined;
+    const offPort = this.events.onAny((e) => {
+      if (isOwnPort(e, this.state.self.guid)) portSeq = e.seq;
+    });
+    const until = Date.now() + REPOP_SETTLE_MS;
+    try {
+      const ack = await this.action({ action: "repop" });
+      const settled = (): boolean => released && portSeq !== undefined && this.state.self.ghost?.value === true;
+      const window = until - Date.now();
+      if (!settled() && window > 0) {
+        try {
+          await this.waitEvent(() => settled(), {
+            timeout: window,
+            includeBuffered: false,
+            description: "the release after CMSG_REPOP_REQUEST (the port to the graveyard and the ghost flag)",
+          });
+        } catch (e) {
+          if (!(e instanceof EventTimeoutError)) throw e;
+        }
+      }
+      if (portSeq !== undefined) await this.awaitAreaAfter(portSeq, until);
+      return ack;
+    } finally {
+      offRelease();
+      offPort();
+    }
   }
 
   /**
@@ -4905,7 +5145,8 @@ export class WrathClient {
             : `waiting for the resurrect after ${attempts} reclaim${attempts === 1 ? "" : "s"} sent`;
         const note =
           `reclaimCorpse was ${what} when this was abandoned, ${Math.round((Date.now() - started) / 1000)}s into its ` +
-          `${Math.round((options.timeout ?? 25_000) / 1000)}s wait. Give it a snippet of its own, or pass a { timeout } that fits.`;
+          `${Math.round((options.timeout ?? 25_000) / 1000)}s wait. Give it a snippet of its own, or pass a timeout that fits ` +
+          "the time the snippet has left, as the second argument: sdk.reclaimCorpse(undefined, { timeout: 20000 }).";
         err.message = `${err.message} — ${note}`;
         (err as { waitAbandon?: string }).waitAbandon = note;
       }
@@ -4916,7 +5157,15 @@ export class WrathClient {
 
     if (alive()) {
       await this.awaitAliveFields(deadline, "reclaimCorpse");
-      return { ok: true, status: "reclaimed", ...facts(attempts) };
+      const crowd = corpseAt === undefined ? undefined : creaturesNear(this.state, corpseAt, RECLAIM_CROWD_YARDS);
+      return {
+        ok: true,
+        status: "reclaimed",
+        ...facts(attempts),
+        ...(crowd === undefined
+          ? {}
+          : { note: `you came back with ${crowd} within ${RECLAIM_CROWD_YARDS}y of your corpse` }),
+      };
     }
     const after = health();
     if (attempts > 0 && after === undefined) {
@@ -5001,13 +5250,23 @@ export class WrathClient {
     if (corpse !== undefined && pos !== undefined) {
       const distance = Math.round(distance3d(pos, corpse));
       if (distance > CORPSE_RECLAIM_RADIUS) {
+        const across = Math.round(distance2d(pos, corpse));
+        const dz = Math.round(pos.z - corpse.z);
+        // Close across the ground and far in height: the server counts the
+        // height, which is the part a map view hides.
+        const where =
+          across <= CORPSE_RECLAIM_RADIUS
+            ? `your corpse at (${fmtXY(corpse)}, z ${Math.round(corpse.z)}) is ${across}y away across the ground but ` +
+              `${Math.abs(dz)}y ${dz > 0 ? "below" : "above"} you (you are at z ${Math.round(pos.z)}), ${distance}y in a straight line, ` +
+              `and a reclaim only works within ${CORPSE_RECLAIM_RADIUS}y counting the height — `
+            : `you are ${distance}y from your corpse at (${fmtXY(corpse)}) and a reclaim only works within ${CORPSE_RECLAIM_RADIUS}y — `;
         return {
           reason: "too_far",
           distance,
           radius: CORPSE_RECLAIM_RADIUS,
           corpse,
           hint:
-            `you are ${distance}y from your corpse at (${fmtXY(corpse)}) and a reclaim only works within ${CORPSE_RECLAIM_RADIUS}y — ` +
+            where +
             `await sdk.moveTo(state.self.corpse.value) as a ghost, then reclaim again (no durability loss, no sickness), ${healerOption}`,
         };
       }
@@ -5023,7 +5282,8 @@ export class WrathClient {
         hint:
           attempts === 0
             ? `the server's corpse reclaim delay outlasted this call's ${Math.round((options.timeout ?? 25_000) / 1000)}s budget ` +
-              `(~${secondsLeft}s still to run) — nothing was sent; call it again, or pass a larger { timeout } from a background routine`
+              `(~${secondsLeft}s still to run) — nothing was sent; call it again, or pass a larger timeout from a background routine ` +
+              "(sdk.reclaimCorpse(undefined, { timeout: 60000 }))"
             : `the reclaim delay has ~${secondsLeft}s still to run, so the core dropped the reclaim — call it again after that`,
       };
     }
@@ -5033,7 +5293,7 @@ export class WrathClient {
       hint:
         "you are still a ghost and nothing observed explains the refusal" +
         (corpse === undefined ? " (no corpse position has been observed yet — check state.self.corpse)" : "") +
-        ` — the core drops a reclaim further than ${CORPSE_RECLAIM_RADIUS}y from the corpse, before the delay elapses, ` +
+        ` — the core drops a reclaim further than ${CORPSE_RECLAIM_RADIUS}y from the corpse (height counts), before the delay elapses, ` +
         `or on another map; stand on the corpse and call it again, ${healerOption}`,
     };
   }
@@ -5205,6 +5465,12 @@ export class WrathClient {
       });
       const timeout = options.timeout ?? 5000;
       const started = Date.now();
+      // The distance a silence is explained with is the one at dispatch, when
+      // the server judged the range. Read at the end of the wait, a ghost
+      // walked out of the healer's sight meanwhile had lost it with the
+      // healer's out-of-range block (paladin, 14:17:13: the healer 17y away
+      // three seconds before, "no observed position for that guid" after).
+      const measuredAtSend = distanceToUnit(this.state, guid);
       try {
         await this.action({ action: "spirit_healer_activate", guid });
         if (!released) {
@@ -5238,7 +5504,7 @@ export class WrathClient {
           area: self.area?.value.name || undefined,
         } as const;
       }
-      const measured = distanceToUnit(this.state, guid);
+      const measured = measuredAtSend ?? distanceToUnit(this.state, guid);
       const distance = measured === undefined ? undefined : Math.round(measured);
       const hint = spiritHealerSilence(distance, timeout);
       this.noteActionHint("spiritHealerActivate", "unconfirmed", hint);
@@ -7012,6 +7278,15 @@ export class WrathClient {
               ? `never reached melee range${walking === undefined ? "" : `: ${walking}`}`
               : KILL_DETAIL[status];
         const approach = walking !== undefined && !neverReached ? ` (approach never finished: ${walking})` : "";
+        // At a timeout: who is fighting you, and how you stand.
+        let pressed = "";
+        if (status === "timeout") {
+          const on = this.state.self.guid === undefined ? undefined : creaturesNear(this.state, undefined, 0, this.state.self.guid);
+          const pct = healthPct();
+          pressed =
+            (on === undefined ? "; nothing in view targets you" : `; targeting you: ${on}`) +
+            (pct === undefined ? "" : `; your health ${Math.round(pct)}%`);
+        }
         const facts: KillResultFacts = {
           guid: id,
           swings,
@@ -7020,7 +7295,7 @@ export class WrathClient {
           reached,
           distance: distance === undefined ? undefined : Math.round(distance * 10) / 10,
           detail:
-            `${base}${approach}${note}; ` +
+            `${base}${approach}${note}${pressed}; ` +
             (armed
               ? "still auto-attacking — call attackStop() or pass { disengage: true } to break off"
               : "auto-attack stopped"),

@@ -1857,6 +1857,7 @@ namespace WrathBench
     static_assert(WbNav::SMOOTH_SLOP == SMOOTH_PATH_SLOP, "WbNav restates the core's smooth-path slop");
     static_assert(WbNav::CORE_POINT_PATH == MAX_POINT_PATH_LENGTH, "WbNav restates the core's point-path cap");
     static_assert(WbNav::PLAYER_FLAGS == (NAV_GROUND | NAV_WATER | NAV_MAGMA), "WbNav restates a player's include flags");
+    static_assert(WbNav::WATER_FLAG == NAV_WATER, "WbNav restates the water polygon flag");
     // The core's start/end "far from poly" distance (PathGenerator::BuildPolyPath).
     static constexpr float REPLAN_FAR_FROM_POLY = 7.0f;
 
@@ -2075,6 +2076,34 @@ namespace WrathBench
         {
             float endPt[3] = { y, z, x };
             dtPolyRef endRef = CorePolyAt(query, base, endPt, nullptr);
+            // The start the end can reach. The polygon the core picks for the
+            // start is the nearest in its box, and at a two-level spot that
+            // can be a closed island under the level that links onward: by
+            // the Deadmines pool past the first boss, a 6-polygon floor under
+            // the water surface's polygons, from which every route ended at
+            // the floor's edge (path_incomplete) while a step onto the
+            // surface's footprint walked on. When the start's polygon is on
+            // an island that does not hold the end, the route is planned from
+            // the reachable water surface directly over the start
+            // (WbNav::ReachableStartLevel) and still begins where the start
+            // is (SettleRoute): the same column, so there is no leg to walk
+            // onto it — a swim up, as a client's character in the pool does.
+            // Without such a level the start stays as it is.
+            {
+                dtPolyRef levelRef = 0;
+                float level[3] = { 0.0f, 0.0f, 0.0f };
+                uint32_t islandPolys = 0;
+                if (WbNav::ReachableStartLevel(navMesh, query, startRef, endRef, startPt, &levelRef, level, &islandPolys))
+                {
+                    r.hasStartLevel = true;
+                    r.levelFromX = sx; r.levelFromY = sy; r.levelFromZ = sz;
+                    r.levelZ = level[1];
+                    r.levelIslandPolys = islandPolys;
+                    sz = level[1];
+                    startPt[1] = sz;
+                    startRef = levelRef;
+                }
+            }
             std::vector<dtPolyRef> island;
             if (endRef && WbNav::OnIsland(navMesh, base, startRef, endRef, &island))
             {
@@ -2139,22 +2168,42 @@ namespace WrathBench
             // target, and splice. The z-ladder and midpoint retries models used
             // to hand-roll (travel.ts) live here now — pathing detail, not a
             // decision the agent should have to make.
-            bool nonTrivial = pts.size() >= 2;
+            //
+            // Where the mesh got is the partial path's last point, except when
+            // that point is the request itself: a corridor of the start
+            // polygon alone ends there (FindSmoothPath's same-polygon case
+            // steers to the request and appends it once it reaches the
+            // polygon's edge), and so does a shortcut (BuildShortcut: SHORT,
+            // NOPATH). That point is not on any route; a subdivision from it
+            // is the request to itself, trivially complete, and the splice
+            // walked the straight line between (71y from the Deadmines pool
+            // toward a patrol, through a hollow 15y from any polygon, where
+            // the character was then start_off_mesh). So the
+            // request is left off, and the mesh got no farther than the point
+            // before it.
+            size_t got = pts.size();
+            if (got >= 2)
+            {
+                float const dx = pts[got - 1].x - x, dy = pts[got - 1].y - y;
+                if (dx * dx + dy * dy < 0.01f)
+                    --got;
+            }
+            bool nonTrivial = got >= 2;
             if (nonTrivial)
             {
                 G3D::Vector3 const& a = pts.front();
-                G3D::Vector3 const& b = pts.back();
+                G3D::Vector3 const& b = pts[got - 1];
                 nonTrivial = (a - b).squaredLength() > 1.0f;
             }
             if (nonTrivial)
             {
-                G3D::Vector3 const& mid = pts.back();
+                G3D::Vector3 const& mid = pts[got - 1];
                 PathGenerator leg2(player);
                 bool built2 = leg2.CalculatePath(mid.x, mid.y, mid.z, x, y, z, false);
                 if (built2 && IsCompletePath(leg2.GetPathType(), leg2.GetPath()) && endpointOk(leg2))
                 {
-                    for (auto const& v : pts)
-                        r.points.push_back({v.x, v.y, v.z});
+                    for (size_t i = 0; i < got; ++i)
+                        r.points.push_back({pts[i].x, pts[i].y, pts[i].z});
                     Movement::PointsArray const& pts2 = leg2.GetPath();
                     for (size_t i = 1; i < pts2.size(); ++i) // pts2[0] == mid
                         r.points.push_back({pts2[i].x, pts2[i].y, pts2[i].z});
@@ -2237,6 +2286,12 @@ namespace WrathBench
                 end.z = polyZ;
             }
         }
+        // A route planned from the water surface over the start
+        // begins at the start itself, in the same column: the first segment
+        // is the walk from where the start is to the route's next point, and
+        // the guard below judges it like any other.
+        if (r.hasStartLevel && !r.points.empty())
+            r.points.front() = { r.levelFromX, r.levelFromY, r.levelFromZ };
         if (r.hasSnap)
             r.points.insert(r.points.begin(), { player->GetPositionX(), player->GetPositionY(), player->GetPositionZ() });
         // Per-segment drop guard over the whole polyline (the main path and,
@@ -2357,6 +2412,10 @@ namespace WrathBench
             PathResolve cand;
             cand.hasSnap = r.hasSnap;
             cand.snapX = r.snapX; cand.snapY = r.snapY; cand.snapZ = r.snapZ;
+            cand.hasStartLevel = r.hasStartLevel;
+            cand.levelFromX = r.levelFromX; cand.levelFromY = r.levelFromY; cand.levelFromZ = r.levelFromZ;
+            cand.levelZ = r.levelZ;
+            cand.levelIslandPolys = r.levelIslandPolys;
             char const* why = "";
             if (!PlanAround(player, navMesh, plan, filter, startRef, endRef, start, end, cand.points, &why))
                 return finish("failed", why);
@@ -2690,6 +2749,11 @@ namespace WrathBench
                         .Raw("from", PosJson(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation()))
                         .Raw("to", Json::Writer().Add("x", (double)r.snapX).Add("y", (double)r.snapY).Add("z", (double)r.snapZ).Str())
                         .Add("distance", (double)std::sqrt(std::pow(r.snapX - player->GetPositionX(), 2.0f) + std::pow(r.snapY - player->GetPositionY(), 2.0f) + std::pow(r.snapZ - player->GetPositionZ(), 2.0f)))
+                        .Str());
+                if (r.hasStartLevel)
+                    Audit(*s, "action", Json::Writer().Add("op", "move_start_level").Add("moveId", moveId)
+                        .Raw("from", Json::Writer().Add("x", (double)r.levelFromX).Add("y", (double)r.levelFromY).Add("z", (double)r.levelFromZ).Str())
+                        .Add("levelZ", (double)r.levelZ).Add("islandPolys", r.levelIslandPolys)
                         .Str());
                 // The steep re-plan, whenever the guard refused the mesh's own
                 // route: what it refused (edge, dz, pointCount), how many

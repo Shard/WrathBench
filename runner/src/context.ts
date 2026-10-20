@@ -245,6 +245,7 @@ export interface SnapshotLike {
     achievements?: { entries?: AchievementLike[]; points?: unknown; loginSeen?: unknown };
     /** `value` is a bool: `UNIT_FLAG_TAXI_FLIGHT` on self — the character is being flown. */
     taxiFlight?: ObservedLike;
+    taxiEta?: ObservedLike;
     /** `value` is a bool: `PLAYER_FLAGS_RESTING` on self — the character is in a rest area. */
     resting?: ObservedLike;
     /** `value` is `{ reply, ok }` — the last `SMSG_ACTIVATETAXIREPLY`. */
@@ -791,6 +792,9 @@ export function foldUiOpenWindows(
  * client shows for itself). Every line is a pure function of the snapshot, so
  * `assembleContext` stays byte-deterministic.
  */
+/** The core's `CORPSE_RECLAIM_RADIUS`, which it measures in 3D. */
+const RECLAIM_RADIUS = 39;
+
 /** How near the release point a ghost still reads as standing at the graveyard. */
 const GHOST_AT_GRAVEYARD_YARDS = 20;
 
@@ -803,15 +807,23 @@ const GHOST_AT_GRAVEYARD_YARDS = 20;
  */
 function ghostLine(
   s: NonNullable<SnapshotLike["self"]>,
-  pos: { map?: number; x?: number; y?: number } | undefined,
+  pos: { map?: number; x?: number; y?: number; z?: number } | undefined,
   now: number,
 ): string {
   const xy = (p: { x?: unknown; y?: unknown } | undefined): string =>
     p !== undefined && typeof p.x === "number" && typeof p.y === "number"
       ? `${Math.round(p.x)},${Math.round(p.y)}`
       : "?,?";
-  const grave = s.graveyard?.value as { x?: number; y?: number } | undefined;
-  const corpse = s.corpse?.value as { map?: number; x?: number; y?: number; instanceMap?: number } | undefined;
+  const grave = s.graveyard?.value as { x?: number; y?: number; zone?: { name?: string }; area?: { name?: string } } | undefined;
+  // The graveyard's own place, as the zone text read while the ghost stood
+  // on it: two graveyards a few hundred yards apart read as two places.
+  const graveZone = grave?.zone?.name || undefined;
+  const graveArea = grave?.area?.name || undefined;
+  const gravePlace =
+    graveZone === undefined
+      ? ""
+      : ` in ${graveArea === undefined || graveArea === graveZone ? graveZone : `${graveZone} / ${graveArea}`}`;
+  const corpse = s.corpse?.value as { map?: number; x?: number; y?: number; z?: number; instanceMap?: number } | undefined;
   const delay = s.reclaimDelay?.value as { readyAt?: number } | undefined;
   // Where the ghost stands now. The release point is named as the graveyard
   // while the ghost is still at it, and beside the ghost's own position once
@@ -823,11 +835,11 @@ function ghostLine(
       : here === undefined;
   const where =
     grave !== undefined && atGrave
-      ? `ghost at graveyard (${xy(grave)})`
+      ? `ghost at graveyard (${xy(grave)})${gravePlace}`
       : here === undefined
         ? "ghost"
         : grave !== undefined
-          ? `ghost at (${xy(here)}), released at graveyard (${xy(grave)})`
+          ? `ghost at (${xy(here)}), released at graveyard (${xy(grave)})${gravePlace}`
           : `ghost at (${xy(here)})`;
   const healer = "or Spirit Healer at the graveyard (-25% durability; resurrection sickness from level 11)";
   // A corpse inside a dungeon, asked about from outside it: the position is
@@ -844,15 +856,23 @@ function ghostLine(
   } else if (pos !== undefined && typeof pos.map === "number" && typeof corpse.map === "number" && corpse.map !== pos.map) {
     corpsePart = `corpse on map ${corpse.map} at (${xy(corpse)}), you are on map ${pos.map}`;
   } else {
-    const d =
+    const across =
       pos !== undefined && typeof pos.x === "number" && typeof pos.y === "number" && typeof corpse.x === "number" && typeof corpse.y === "number"
-        ? `${Math.round(Math.hypot(corpse.x - pos.x, corpse.y - pos.y))}y away `
+        ? Math.hypot(corpse.x - pos.x, corpse.y - pos.y)
+        : undefined;
+    // The server measures the reclaim range with the height in it: a ghost on
+    // a cliff over its corpse is told the height when that is what puts it out.
+    const dz = across !== undefined && typeof pos?.z === "number" && typeof corpse.z === "number" ? pos.z - corpse.z : undefined;
+    const height =
+      across !== undefined && dz !== undefined && across <= RECLAIM_RADIUS && Math.hypot(across, dz) > RECLAIM_RADIUS
+        ? `and ${Math.round(Math.abs(dz))}y ${dz > 0 ? "below" : "above"} you `
         : "";
+    const d = across === undefined ? "" : `${Math.round(across)}y away ${height}`;
     corpsePart = `corpse ${d}at (${xy(corpse)})`;
   }
   const secs = typeof delay?.readyAt === "number" ? Math.max(0, Math.ceil((delay.readyAt - now) / 1000)) : undefined;
   const when = secs === undefined ? "after the reclaim delay" : secs === 0 ? "now" : `after ${secs}s`;
-  return `${where}; ${corpsePart}: reclaim within 39y ${when} (no sickness), ${healer}`;
+  return `${where}; ${corpsePart}: reclaim within ${RECLAIM_RADIUS}y ${when} (no sickness), ${healer}`;
 }
 
 /**
@@ -1023,10 +1043,17 @@ export function formatStateSummary(
   lines.push(`== state (seq ${snapshot.lastSeq ?? -1}, ${snapshot.eventCount ?? 0} events seen) ==`);
   lines.push(`session: ${o.sessionLive ? "in world" : "not established"}`);
   lines.push(`character: ${fmt(s.name, "none")} (guid ${fmt(s.guid, "?")}) level ${fmt(s.level?.value)}`);
+  // In flight the position is the take-off point (the SDK marks it): the
+  // zone text follows the flight, the coordinates do not.
+  const landsAt = (s.taxiEta?.value as { landsAt?: number } | undefined)?.landsAt;
+  const landsIn =
+    typeof landsAt === "number" ? `, lands in ~${Math.max(0, Math.round((landsAt - (o.now ?? Date.now())) / 1000))}s` : "";
   lines.push(
     pos === undefined
       ? "position: unobserved"
-      : `position: ${fmtPlace(s, pos.map)}map ${fmt(pos.map)} (${fmt(pos.x)}, ${fmt(pos.y)}, ${fmt(pos.z)}) [seq ${fmt(s.position?.seq, "?")}]`,
+      : (pos as { inFlight?: unknown }).inFlight === true
+        ? `position: in flight${fmtPlace(s, pos.map) === "" ? ", " : ` over ${fmtPlace(s, pos.map)}`}took off from map ${fmt(pos.map)} (${fmt(pos.x)}, ${fmt(pos.y)}, ${fmt(pos.z)})${landsIn} [seq ${fmt(s.position?.seq, "?")}]`
+        : `position: ${fmtPlace(s, pos.map)}map ${fmt(pos.map)} (${fmt(pos.x)}, ${fmt(pos.y)}, ${fmt(pos.z)}) [seq ${fmt(s.position?.seq, "?")}]`,
   );
 
   // home: the hearthstone's destination, as the server last said it. The
