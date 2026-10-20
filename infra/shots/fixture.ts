@@ -14,9 +14,12 @@
  *                  a continent to cross to and an instance's own tiles
  *   fixture-ended  terminated `episode-limit` half an hour ago, two and a half
  *                  hours of trace to replay
- *   fixture-e90, fixture-reference
- *                  two finished `e90` runs, a model's row and the scripted
- *                  reference's line, for the ladder (`writeLadderRun`)
+ *   fixture-e90, fixture-e90-open, fixture-reference
+ *                  three finished `e90` runs, two models' rows and the scripted
+ *                  reference's line, for the ladder (`writeLadderRun`); the
+ *                  second row is under a real open-weights id, the one
+ *                  exception to the invented ids, so the weights filter has
+ *                  more than `unknown` to offer
  *
  * Both carry a character sheet on the trace (money, worn and carried items, a
  * quest log with one quest that completes, one in progress and one of four
@@ -280,6 +283,7 @@ function writeRun(runsDir: string, spec: Spec, ended: number | null): Trajectory
  * and non-members of the tier for the same reasons a real run's are.
  */
 export const E90_RUN = "fixture-e90";
+export const E90_OPEN_RUN = "fixture-e90-open";
 export const REFERENCE_RUN = "fixture-reference";
 
 function writeLadderRun(runsDir: string, runId: string, raw: Record<string, unknown>, level: number, startedAt: number): void {
@@ -468,6 +472,9 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
   };
   writeRun(runsDir, endedSpec, endedAt).close();
   writeLadderRun(runsDir, E90_RUN, { driver: "openai", model: "fixture/e90-model", character: "Laddera" }, 6, at(now - 5 * 3_600_000));
+  // A second row, under an id the lineup's weights rules name, so the ladder's
+  // weights filter has two buckets to offer (the invented id reads `unknown`).
+  writeLadderRun(runsDir, E90_OPEN_RUN, { driver: "openai", model: "openai/gpt-oss-120b", character: "Openwyn" }, 4, at(now - 6 * 3_600_000));
   writeLadderRun(runsDir, REFERENCE_RUN, { driver: "reference", character: "Routeric" }, 9, at(now - 4 * 3_600_000));
   const liveSpecs: Spec[] = [
     liveSpec,

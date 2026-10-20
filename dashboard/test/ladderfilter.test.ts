@@ -5,6 +5,7 @@ import {
   lineOf,
   matchesSelection,
   representativeEfforts,
+  weightsOf,
   type EffortEntry,
 } from "../src/lib/ladderfilter";
 
@@ -87,24 +88,40 @@ describe("filterOptions", () => {
 });
 
 describe("matchesSelection", () => {
-  const none = { lines: [], companies: [] };
+  const none = { lines: [], companies: [], weights: [] };
   test("an empty selection is no opinion, not nothing", () => {
     expect(matchesSelection("sonnet", none)).toBe(true);
     expect(matchesSelection(null, none)).toBe(true);
   });
 
   test("OR within a dimension", () => {
-    const sel = { lines: ["sonnet", "opus"], companies: [] };
+    const sel = { ...none, lines: ["sonnet", "opus"] };
     expect(matchesSelection("sonnet", sel)).toBe(true);
     expect(matchesSelection("opus", sel)).toBe(true);
     expect(matchesSelection("gpt-6-astra", sel)).toBe(false);
   });
 
   test("AND across dimensions", () => {
-    const sel = { lines: ["sonnet"], companies: ["openai"] };
+    const sel = { ...none, lines: ["sonnet"], companies: ["openai"] };
     expect(matchesSelection("sonnet", sel)).toBe(false);
     expect(matchesSelection("gpt-6-astra", sel)).toBe(false);
-    expect(matchesSelection("sonnet", { lines: ["sonnet"], companies: ["anthropic"] })).toBe(true);
+    expect(matchesSelection("sonnet", { ...none, lines: ["sonnet"], companies: ["anthropic"] })).toBe(true);
+  });
+
+  test("the weights dimension narrows like the others", () => {
+    const open = { ...none, weights: ["open"] };
+    expect(matchesSelection("openai/gpt-oss-120b", open)).toBe(true);
+    expect(matchesSelection("gpt-6-luna", open)).toBe(false);
+    expect(matchesSelection("stealth/ox-alpha", { ...none, weights: ["open", "unknown"] })).toBe(true);
+    expect(matchesSelection("openai/gpt-oss-120b", { ...open, companies: ["anthropic"] })).toBe(false);
+  });
+
+  test("its options are the verdicts the rows carry, commonest first", () => {
+    expect(filterOptions(["opus", "sonnet", "openai/gpt-oss-120b", "stealth/ox-alpha"], weightsOf)).toEqual([
+      { key: "closed", n: 2 },
+      { key: "open", n: 1 },
+      { key: "unknown", n: 1 },
+    ]);
   });
 });
 

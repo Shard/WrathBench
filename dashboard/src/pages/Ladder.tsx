@@ -73,6 +73,7 @@ import {
   lineOf,
   matchesSelection,
   representativeEfforts,
+  weightsOf,
 } from "../lib/ladderfilter";
 import { resolvedSummary } from "../lib/models";
 import { type ReferenceMark, type ReferenceScale, scriptedReference, scriptedReferenceScale } from "../lib/reference";
@@ -141,7 +142,7 @@ export default function Ladder() {
   const seriesFilter = useSeriesFilter(served, () => !freeplay());
   const all = seriesFilter.kept;
   /*
-   * Two multi-selects and two toggles narrow the set, and all of them are
+   * Three multi-selects and two toggles narrow the set, and all of them are
    * applied BEFORE the rows are derived — `ladderRows` on a scored tier,
    * `characterRows` on freeplay — so the ranking is computed over exactly the
    * rows on screen; the order itself is untouched (highest rung, XP, gold). On
@@ -153,7 +154,8 @@ export default function Ladder() {
    *
    * "exclude free" keeps only the runs we paid for (`ResultRun.billing`,
    * `runner/src/billing.ts` — a `claude-code` subscription counts as paid
-   * there). The model line and the company are `lib/ladderfilter.ts`.
+   * there). The model line, the company and the weights are
+   * `lib/ladderfilter.ts`.
    *
    * None is a row key. A model's row is its best run whatever it was played
    * on, because the baseline character is the comparison set.
@@ -166,8 +168,9 @@ export default function Ladder() {
   };
   const lines = (): string[] => listParam(params.family);
   const companies = (): string[] => listParam(params.company);
+  const weights = (): string[] => listParam(params.weights);
   /** A selection is dropped from the URL when it is empty: an empty `?family=` is noise. */
-  const setList = (name: "family" | "company", keys: readonly string[]): void => {
+  const setList = (name: "family" | "company" | "weights", keys: readonly string[]): void => {
     setParams({ [name]: keys.length === 0 ? undefined : [...keys].join(",") }, { replace: true });
   };
   /*
@@ -187,10 +190,11 @@ export default function Ladder() {
    */
   const lineOptions = createMemo(() => filterOptions(all().map((r) => r.model), lineOf));
   const companyOptions = createMemo(() => filterOptions(all().map((r) => r.model), companyOf));
+  const weightsOptions = createMemo(() => filterOptions(all().map((r) => r.model), weightsOf));
   /** Everything but the effort rule, which needs these runs to compute its own. */
   const narrowed = createMemo(() =>
     filterRuns(all(), { excludeFree: excludeFree() }).filter((r) =>
-      matchesSelection(r.model, { lines: lines(), companies: companies() }),
+      matchesSelection(r.model, { lines: lines(), companies: companies(), weights: weights() }),
     ),
   );
   /*
@@ -242,6 +246,13 @@ export default function Ladder() {
       options: lineOptions(),
       selected: lines(),
       onSelect: (keys) => setList("family", keys),
+    },
+    {
+      label: "weights",
+      title: "Whether the model's weights can be downloaded, as infra/model-lineup.json records it per model. unknown: not checked, or nothing to check against (a stealth or unreleased model).",
+      options: weightsOptions(),
+      selected: weights(),
+      onSelect: (keys) => setList("weights", keys),
     },
   ]);
   const characters = createMemo(() => characterRows(runs()));
