@@ -277,6 +277,28 @@ describe("inspect trajectory", () => {
     expect(all).not.toContain(REDACTED);
   });
 
+  test("--grep with --all filters meta records too, so they never spend --last", () => {
+    const runsDir = tmp("inspect-run-meta-grep-");
+    const dir = join(runsDir, "run-resumed");
+    mkdirSync(dir, { recursive: true });
+    const t0 = NOW - 3_600_000;
+    const rec = (i: number, r: Record<string, unknown>): string => `${JSON.stringify({ ts: t0 + i * 60_000, ...r })}\n`;
+    let body = "";
+    for (let i = 1; i <= 3; i++) body += rec(i, { t: "snippet_result", turn: i, call: i, name: "run_snippet", isError: true, text: `error (5ms)\nNeedleError: miss ${i}` });
+    // Every resume writes a meta record, newer than the matches.
+    for (let i = 4; i <= 8; i++) body += rec(i, { t: "meta", runId: "run-resumed", harnessVersion: "harness-test" });
+    writeFileSync(join(dir, "trajectory.jsonl"), body);
+    const r = inspect(["trajectory", "run-resumed", "--runs-dir", runsDir, "--all", "--grep", "NeedleError", "--last", "2"]);
+    expect(r.code).toBe(0);
+    const lines = r.out.slice(1);
+    expect(lines.length).toBe(2);
+    expect(lines.some((l) => l.includes(" meta "))).toBe(false);
+    expect(lines[0]).toContain("miss 2");
+    expect(lines[1]).toContain("miss 3");
+    // A grep a meta record matches still shows it.
+    expect(inspect(["trajectory", "run-resumed", "--runs-dir", runsDir, "--all", "--grep", "harness-test", "--last", "2"]).out.slice(1).every((l) => l.includes(" meta "))).toBe(true);
+  });
+
   test("--since stops reading at the first older record", () => {
     const r = inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--since", String(NOW - 3_600_000 + 5.5 * 60_000)]);
     const body = r.out.slice(1);
