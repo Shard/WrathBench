@@ -11,8 +11,9 @@
  *   window, `live.json`'s positions or nearby windows;
  * - the public handle answers every route about them as if they did not exist,
  *   and the private handle still serves them;
- * - the pass hands their ids back as `withdrawn`, for the publisher to delete
- *   what an earlier pass published.
+ * - the pass hands their ids back as `withdrawn`, and the first real pass over
+ *   a state an older publisher left deletes everything it had published for
+ *   them, after the flip.
  */
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -22,6 +23,7 @@ import { createApi } from "../viewer/api";
 import { createRenderer, type SnapshotResult } from "../viewer/snapshot";
 import { REFERENCE_STAMP, STUB_STAMP } from "../src/config";
 import { SEG_MS, windowOf } from "../viewer/trace";
+import { emptyState, publishPass, traceSegmentPath, type ObjectStore } from "../../infra/publish-core";
 import { DEAD_RUN, LIVE_RUN, poisonedRunsDir } from "./fixtures/poisoned-runs";
 
 const SENTINEL = "sentinel-private-program-7c41";
@@ -126,5 +128,50 @@ describe("a pass never publishes a run whose driver is not a model", () => {
     expect((await priv(new Request(`http://x/api/run/${REF_LIVE}/nearby?span=60000`))).status).toBe(200);
     expect(await (await priv(new Request("http://x/api/positions"))).text()).toContain(REF_LIVE);
     expect(await (await priv(new Request(`http://x/api/run/${REF_LIVE}/entries?limit=50`))).text()).toContain(SENTINEL);
+  });
+});
+
+describe("the first pass after release", () => {
+  test("deletes what an older publisher left for such a run, after the flip, and forgets it", async () => {
+    const runs = fixture();
+    // The state an older publisher left: the run's four objects at a version,
+    // fourteen trace windows, and the run's version in its keep window.
+    const state = emptyState();
+    const ver = "0d65f6fd3240";
+    const objects = ["detail", "track", "entries", "scratchpad"].map((n) => `v1/run/${REF_LIVE}/${ver}/${n}.json`);
+    for (const k of objects) state.uploaded[k] = "h";
+    state.runVersions[REF_LIVE] = [ver];
+    const t0 = windowOf(Date.now()) - 20 * SEG_MS;
+    state.traceSegs[REF_LIVE] = [[t0, 14]];
+    const windows = Array.from({ length: 14 }, (_, i) => traceSegmentPath(REF_LIVE, t0 + i * SEG_MS));
+
+    const calls: string[] = [];
+    const bucket = new Set<string>([...objects, ...windows]);
+    const store: ObjectStore = {
+      put: async (path) => {
+        calls.push(`put ${path}`);
+        bucket.add(path);
+      },
+      delete: async (path) => {
+        calls.push(`delete ${path}`);
+        bucket.delete(path);
+      },
+    };
+    const render = createRenderer({ runsDir: runs });
+    const report = await publishPass(async (sink, published) => await render(Date.now(), { sink, batch: 2 }, published), store, state);
+
+    expect(report.flipped).toBe(true);
+    const flip = calls.indexOf("put v1/manifest.json");
+    expect(flip).toBeGreaterThan(-1);
+    for (const k of [...objects, ...windows]) {
+      expect(calls.indexOf(`delete ${k}`)).toBeGreaterThan(flip);
+      expect(bucket.has(k)).toBe(false);
+    }
+    expect(calls.some((c) => c.startsWith("put ") && WITHHELD.some((id) => c.includes(id)))).toBe(false);
+    expect(Object.keys(state.uploaded).some((k) => k.includes(REF_LIVE))).toBe(false);
+    expect(state.runVersions[REF_LIVE]).toBeUndefined();
+    expect(state.traceSegs[REF_LIVE]).toBeUndefined();
+    // The model runs went up as usual.
+    expect(calls.some((c) => c.startsWith(`put v1/run/${LIVE_RUN}/`))).toBe(true);
   });
 });
