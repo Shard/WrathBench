@@ -94,7 +94,8 @@ try {
   const here = client.state.self.position?.value ?? fail("no position at the mine building");
   log(`    one move: ${fmt(here)} -> trigger 78's centre ${fmt(DEADMINES_ENTRANCE_TRIGGER)}, ${dist2d(here, DEADMINES_ENTRANCE_TRIGGER).toFixed(0)}y straight`);
   // ~86s of walking at run speed: past moveTo's 90s default with no room.
-  const inbound = await client.moveTo(DEADMINES_ENTRANCE_TRIGGER, { timeout: 150_000 });
+  const { x, y, z } = DEADMINES_ENTRANCE_TRIGGER;
+  const inbound = await client.moveTo({ x, y, z }, { timeout: 150_000 });
   log(`    ${inbound.status}${inbound.ok && inbound.status === "transferred" ? ` to map ${inbound.to.map}` : ""}`);
   if (!(inbound.ok && inbound.status === "transferred")) fail(`the move to trigger 78 ended ${inbound.status}${!inbound.ok && inbound.hint ? `: ${inbound.hint}` : ""}`);
   if (inbound.to.map !== DEADMINES_MAP) fail(`transferred to map ${inbound.to.map}, expected ${DEADMINES_MAP}`);
