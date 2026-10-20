@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   CONTEXT_POLICY,
+  auraLine,
+  chatTail,
   assembleContext,
   foldUiOpenWindows,
   formatEventLine,
@@ -135,7 +137,9 @@ describe("formatStateSummary: the chat tail", () => {
       },
       { sessionLive: true },
     );
-    expect(text).toContain("recent chat (3):\n  <Grizzled Sentry> Halt, traveller.\n  <Quilby> hello\n  <9> anyone there");
+    expect(text).toContain(
+      "recent chat (3):\n  [npc say] <Grizzled Sentry> Halt, traveller.\n  [say] <Quilby> hello\n  [say] <9> anyone there",
+    );
   });
 
   test("a channel line names its channel, and the achievement broadcast is filled as the client fills it", () => {
@@ -152,8 +156,100 @@ describe("formatStateSummary: the chat tail", () => {
       { sessionLive: true },
     );
     expect(text).toContain("  [General] <Quilby> anyone selling linen");
-    expect(text).toContain("  <Quilby> Quilby has earned the achievement achievement 6!");
-    expect(text).toContain("  <11> 11 has earned the achievement an achievement!");
+    expect(text).toContain("  [achievement] Quilby has earned the achievement achievement 6!");
+    expect(text).toContain("  [achievement] 11 has earned the achievement an achievement!");
+  });
+
+  // The 2026-10-20 Deadmines party runs: party, whisper, say and yell read the
+  // same; our own whisper's echo read as the recipient speaking; a creature
+  // emote kept its raw `%s`; and barks pushed party chat out of the window.
+  test("each line names its chat type, and our own whisper's echo reads as outgoing", () => {
+    const text = formatStateSummary(
+      {
+        self: { name: "Benchy", guid: "1" },
+        names: { "8": { value: "Quilby" } },
+        chat: [
+          { type: 2, senderGuid: "8", message: "pull on three" },
+          { type: 7, senderGuid: "8", message: "are you there?" },
+          // WHISPER_INFORM: the core puts the recipient in the sender's place.
+          { type: 9, senderGuid: "8", receiverGuid: "8", message: "on my way" },
+          { type: 6, senderGuid: "8", message: "run!" },
+          { type: 0, senderGuid: "0", message: "a system line" },
+        ],
+      },
+      { sessionLive: true },
+    );
+    expect(text).toContain(
+      "recent chat (5):\n  [party] <Quilby> pull on three\n  [whisper] <Quilby> are you there?\n" +
+        "  [whisper] to <Quilby>: on my way\n  [yell] <Quilby> run!\n  [system] a system line",
+    );
+  });
+
+  test("a creature emote has its %s filled with the sender's name, as the client does", () => {
+    const text = formatStateSummary(
+      {
+        self: { name: "Benchy", guid: "1" },
+        chat: [
+          { type: 16, senderGuid: "17365880163140632581", senderName: "Mossback Digger", message: "%s turns to flee!" },
+          // A player's own say keeps a typed %s.
+          { type: 1, senderGuid: "1", senderName: "Benchy", message: "100%s sure" },
+        ],
+      },
+      { sessionLive: true },
+    );
+    expect(text).toContain("  [npc emote] Mossback Digger turns to flee!");
+    expect(text).toContain("  [say] <Benchy> 100%s sure");
+  });
+
+  test("creature lines have their own small tail, so barks cannot push party chat out", () => {
+    const party = Array.from({ length: 12 }, (_, i) => ({ type: 2, senderGuid: "8", message: `party ${i}` }));
+    const barks = Array.from({ length: 8 }, (_, i) => ({ type: 16, senderGuid: "99", senderName: "Mossback Digger", message: `%s grunts ${i}` }));
+    // Interleaved the way a fight goes: the barks come last and outnumber the window.
+    const chat = [...party.slice(0, 6), ...barks.slice(0, 4), ...party.slice(6), ...barks.slice(4)];
+    const lines = chatTail(chat);
+    expect(lines.filter((c) => c.type === 2).map((c) => c.message)).toEqual(party.slice(2).map((c) => c.message));
+    expect(lines.filter((c) => c.type === 16).map((c) => c.message)).toEqual(["%s grunts 5", "%s grunts 6", "%s grunts 7"]);
+    // Oldest first, in the order they arrived.
+    expect(lines.map((c) => c.message)).toEqual(chat.filter((c) => lines.includes(c)).map((c) => c.message));
+    const text = formatStateSummary({ self: { name: "Benchy", guid: "1" }, names: { "8": { value: "Quilby" } }, chat }, { sessionLive: true });
+    expect(text).toContain(`recent chat (${CONTEXT_POLICY.CHAT_TAIL + CONTEXT_POLICY.NPC_CHAT_TAIL}):`);
+    expect(text).toContain("  [party] <Quilby> party 2");
+    expect(text).not.toContain("party 1\n");
+  });
+});
+
+describe("formatStateSummary: the auras line", () => {
+  const NOW = 1_700_000_100_000;
+  test("own auras by name, debuffs marked, with stacks and the time left where the aura shows a timer", () => {
+    const text = formatStateSummary(
+      {
+        self: { name: "Benchy", guid: "1" },
+        selfAuras: [
+          // 0x10 positive | 0x20 duration: 30 min, observed 100s ago.
+          { spellId: 9001, name: "Gritstone Ward", flags: 0x30, stacks: 1, duration: 1_800_000, ts: NOW - 100_000 },
+          // 0x80 negative | 0x20 duration: 10 min, observed 48s ago.
+          { spellId: 9002, name: "Spirit Weariness", flags: 0xa0, stacks: 1, duration: 600_000, ts: NOW - 48_000 },
+          // No timer shown, three stacks, no name served.
+          { spellId: 9003, flags: 0x10, stacks: 3, ts: NOW },
+        ],
+      },
+      { sessionLive: true, now: NOW },
+    );
+    expect(text).toContain(
+      "auras: Gritstone Ward (28m 20s left), Spirit Weariness (debuff, 9m 12s left), spell 9003 (3 stacks) [state.aurasOf(state.self.guid)]",
+    );
+  });
+
+  test("no line when no aura is observed: an empty list is not proof of an empty bar", () => {
+    expect(formatStateSummary({ self: { name: "Benchy", guid: "1" }, selfAuras: [] }, { sessionLive: true })).not.toContain("auras:");
+    expect(auraLine(undefined, NOW)).toBeUndefined();
+  });
+
+  test("a timer run out reads 0s left, and past the cap the rest are counted", () => {
+    const many = Array.from({ length: CONTEXT_POLICY.AURA_TAIL + 2 }, (_, i) => ({ spellId: i, name: `Aura ${i}`, flags: 0x20, duration: 1000, ts: NOW - 5000 }));
+    const line = auraLine(many, NOW)!;
+    expect(line).toContain("Aura 0 (0s left)");
+    expect(line).toContain(" +2 more [state.aurasOf(state.self.guid)]");
   });
 });
 

@@ -592,8 +592,9 @@ const currentSignal = (): AbortSignal | undefined => evalContext.getStore()?.sig
 const currentDeadline = (): number | undefined => evalContext.getStore()?.deadline;
 /**
  * What the last abandoned eval learned as it unwound — set from an error that
- * carried a `moveAbandon` sentence (the SDK's, for a walk) or a `sleepAbandon`
- * one (`sleep`'s, below), drained by the liveness pong that follows the abort.
+ * carried a `moveAbandon` sentence (the SDK's, for a walk), a `waitAbandon`
+ * one (the SDK's, for `reclaimCorpse`'s wait) or a `sleepAbandon` one
+ * (`sleep`'s, below), drained by the liveness pong that follows the abort.
  * One slot: the host pings immediately after aborting, and only the abandoned
  * snippet is unwinding at that moment.
  */
@@ -1145,9 +1146,8 @@ async function evaluate(id: number, code: string, deadline?: number, timeoutMs?:
     // here would send no result at all: the host would wait out the ceiling
     // and report a timeout for a snippet that failed at once.
     if (controller.signal.aborted) {
-      const thrown = err as { moveAbandon?: unknown; sleepAbandon?: unknown } | null | undefined;
-      const moveAbandon = thrown?.moveAbandon;
-      const carried = typeof moveAbandon === "string" ? moveAbandon : thrown?.sleepAbandon;
+      const thrown = err as { moveAbandon?: unknown; waitAbandon?: unknown; sleepAbandon?: unknown } | null | undefined;
+      const carried = [thrown?.moveAbandon, thrown?.waitAbandon, thrown?.sleepAbandon].find((n) => typeof n === "string");
       if (typeof carried === "string") abandonNote = carried;
     }
     // Not for an abandoned eval: its result is discarded, so its refusals go
@@ -1523,13 +1523,14 @@ function contextEvents(limit: number): ContextEvents {
 /**
  * The state snapshot the host renders into the HUD (`formatStateSummary`).
  *
- * It is `StateCache.snapshot()` plus three derived views the HUD needs and the
- * raw snapshot does not expose flat: `units()` (nearest-first, items/containers
+ * It is `StateCache.snapshot()` plus the derived views the HUD needs and the
+ * raw snapshot does not expose flat: our own auras by name (`aurasOf`),
+ * `units()` (nearest-first, items/containers
  * dropped — with mob health/maxHealth deliberately stripped, since CONTRACTS.md
  * forbids exact mob health and the HUD only needs name, distance, dead, roles,
  * questgiver marker and target), `bag()`
  * (backpack shape with freeSlots), and the open-window fold over the retained
- * event stream. All three are pure reads over what the cache already holds — no
+ * event stream. All are pure reads over what the cache already holds — no
  * new observation. This JSON is consumed only by the HUD, never returned raw.
  */
 function stateSnapshot(): unknown {
@@ -1550,6 +1551,10 @@ function stateSnapshot(): unknown {
   }));
   snap["units"] = toJsonSafe(units, 4);
   snap["bag"] = toJsonSafe(client.state.bag(), 4);
+  // Our own buff and debuff bar, named (`aurasOf` falls back to the
+  // spellbook when the module served no name), for the HUD's `auras` line.
+  const selfGuid = client.state.self.guid;
+  snap["selfAuras"] = selfGuid === undefined ? [] : toJsonSafe(client.state.aurasOf(selfGuid), 4);
   snap["ui"] = foldUiOpenWindows(client.events.recent());
   // Whether this child's own event stream is still open. Not an observation of
   // the world and never printed by the HUD (`formatStateSummary` reads named

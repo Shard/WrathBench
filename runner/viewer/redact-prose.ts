@@ -609,7 +609,9 @@ export function redactProseText(text: string): string {
       continue;
     }
     if (inChat) {
-      const chat = /^(  <[^>]*> )(.*)$/.exec(line);
+      // `  [party] <name> text`, `  [whisper] to <name>: text`, `  [npc emote] text`
+      // (formatChatLine), and the older `  <name> text`: the head stays, the words go.
+      const chat = /^(  (?:\[[^\]\n]*\] (?:to <[^>\n]*>: |<[^>\n]*> )?|<[^>\n]*> ))(.*)$/.exec(line);
       if (chat !== null) {
         out.push(`${chat[1]}${REDACTED_PROSE}`);
         continue;

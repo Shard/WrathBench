@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { formatStateSummary, type SnapshotLike } from "../src/context";
 import { SANDBOX_FORWARDED_ENV, SandboxHost, sandboxChildEnv } from "../src/sandbox/host";
 import type { ActionHintNote } from "../src/sandbox/ipc";
 import { Scratchpad, SCRATCHPAD_MAX_CHARS } from "../src/scratchpad";
@@ -606,6 +607,45 @@ describe("cooperative abort on timeout", () => {
     const again = await host.evalSnippet("await new Promise(() => {});");
     expect(again.timedOut).toBe(true);
     expect(again.error).not.toContain("still walking when this was abandoned");
+    await host.stop();
+    await stub.stop();
+  });
+
+  test("the abandon message names reclaimCorpse and what it was waiting on (2026-10-20 party runs)", async () => {
+    // sleep(15000) and then a reclaim with its 25s default wait ran members
+    // past the snippet limit, and the message said only that it timed out.
+    const stub = startModuleStub();
+    const host = makeHost({ moduleUrl: stub.url, snippetTimeoutMs: 400 });
+    await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
+    const ghost =
+      `events.ingest(JSON.stringify({ seq: 1, opcode: "SMSG_UPDATE_OBJECT", opcodeId: 0x0a9, ts: Date.now(),` +
+      ` data: { blocks: 1, objects: [{ update: "values", guid: "7", fields: { health: 1, playerFlags: 16 } }] } }));` +
+      ` events.ingest(JSON.stringify({ seq: 2, opcode: "SMSG_CORPSE_RECLAIM_DELAY", opcodeId: 0x269, ts: Date.now(),` +
+      ` data: { delayMs: 20000 } })); 'ghost'`;
+    expect((await host.evalSnippet(ghost)).ok).toBe(true);
+    const res = await host.evalSnippet("await sdk.reclaimCorpse(); 'reclaimed'");
+    expect(res.timedOut).toBe(true);
+    expect(res.error).toContain("reclaimCorpse was waiting out the server's reclaim delay (~");
+    expect(res.error).toContain("Give it a snippet of its own, or pass a { timeout } that fits.");
+    await host.stop();
+    await stub.stop();
+  });
+
+  test("the HUD snapshot carries our own auras by name, and the summary lists them", async () => {
+    const stub = startModuleStub();
+    const host = makeHost({ moduleUrl: stub.url });
+    await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
+    const auras =
+      `events.ingest(JSON.stringify({ seq: 1, opcode: "SMSG_INITIAL_SPELLS", opcodeId: 0x12a, ts: Date.now(),` +
+      ` data: { spells: [{ spellId: 501, rank: 1, name: "Mending Word" }], cooldowns: [] } }));` +
+      ` events.ingest(JSON.stringify({ seq: 2, opcode: "SMSG_AURA_UPDATE_ALL", opcodeId: 0x495, ts: Date.now(),` +
+      ` data: { targetGuid: "7", auras: [{ slot: 0, spellId: 9002, flags: 160, level: 20, stacks: 1, maxDuration: 600000, duration: 600000, name: "Spirit Weariness" },` +
+      ` { slot: 1, spellId: 501, flags: 24, level: 20, stacks: 1 }] } })); 'ok'`;
+    expect((await host.evalSnippet(auras)).ok).toBe(true);
+    const snap = (await host.stateSnapshot()) as SnapshotLike;
+    expect(snap.selfAuras?.map((a) => a.name)).toEqual(["Spirit Weariness", "Mending Word"]);
+    const summary = formatStateSummary(snap, { sessionLive: true });
+    expect(summary).toMatch(/\nauras: Spirit Weariness \(debuff, (9m 5\ds|10m 00s) left\), Mending Word \[state\.aurasOf\(state\.self\.guid\)\]\n/);
     await host.stop();
     await stub.stop();
   });
