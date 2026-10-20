@@ -54,7 +54,8 @@ import { openRunDb } from "../runner/src/rundb";
 // overrides (runner/src/config.ts). Importing it keeps roster, fleet and
 // runner validating the same shape instead of three hand-rolled copies.
 import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
-import { compactWindowDriverRefusal, DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV, driverHasCompactWindow, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema, type TerminationReason, type WatchdogOverride } from "../runner/src/config";
+import { DEFAULT_DRIVER, entryOf, isRosterDriver, ROSTER_DRIVERS, type RosterDriver } from "../runner/src/drivers";
+import { compactWindowDriverRefusal, driverHasCompactWindow, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema, type TerminationReason, type WatchdogOverride } from "../runner/src/config";
 import { moduleAuthHeaders } from "../runner/src/module-auth";
 import { isOpenRouterBase, parseRouting, resolveRouting, routingLabel, type RoutingSpec } from "../runner/src/routing";
 import { DEFAULT_API_BASE, DEFAULT_API_KEY_ENV } from "../runner/src/providers";
@@ -87,8 +88,6 @@ import { commandStager, STAGER_SCRIPT, type PartyStager, type StageRequest } fro
 
 // ------------------------------------------------------------------ types
 
-type Driver = "openai" | "claude-code" | "codex";
-
 export interface RosterSpec {
   model: string;
   /** Operator override of the free/paid verdict (`runner/src/model-cost.ts`); normally absent. */
@@ -98,7 +97,7 @@ export interface RosterSpec {
    * and `codex` runs through the OpenAI Codex CLI, each of which is its own
    * harness — a tag on the run, not a separate benchmark.
    */
-  driver?: Driver;
+  driver?: RosterDriver;
   /** Game account for the entry's session. Omitted -> the runner's default. */
   account?: string;
   /** Reasoning effort. Omitted -> the provider's own default, not a level. */
@@ -234,7 +233,7 @@ export interface RosterSpec {
 
 export interface Resolved {
   model: string;
-  driver: Driver;
+  driver: RosterDriver;
   account: string | undefined;
   effort: string | undefined;
   /** Canonical (`100k`…`1M`); undefined is the CLI's own `auto`. */
@@ -530,10 +529,11 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
     if (typeof s.model !== "string" || s.model.length === 0) {
       throw new Error(`roster entry without a model: ${JSON.stringify(s)}`);
     }
-    const driver = s.driver ?? "openai";
-    if (driver !== "openai" && driver !== "claude-code" && driver !== "codex") {
-      throw new Error(`roster entry ${s.model}: unknown driver ${String(s.driver)} (openai | claude-code | codex)`);
+    const driver: string = s.driver ?? DEFAULT_DRIVER;
+    if (!isRosterDriver(driver)) {
+      throw new Error(`roster entry ${s.model}: unknown driver ${String(s.driver)} (${ROSTER_DRIVERS.join(" | ")})`);
     }
+    const entry = entryOf(driver);
     const parsedWatchdogs = watchdogOverrideSchema.safeParse(s.watchdogs ?? {});
     if (!parsedWatchdogs.success) {
       throw new Error(`roster entry ${s.model}: watchdogs — ${parsedWatchdogs.error.message}`);
@@ -577,9 +577,9 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       // Refused, not ignored. A routing block on a Cerebras, LM Studio,
       // OpenCode Zen or CLI entry would be config that does nothing, and an
       // operator who wrote one believed the run was pinned.
-      if (driver !== "openai" || !isOpenRouterBase(apiBase)) {
+      if (!entry.endpoint || !isOpenRouterBase(apiBase)) {
         throw new Error(
-          `roster entry ${s.model}: routing is an OpenRouter setting — this entry runs on ${driver === "openai" ? apiBase : `the ${driver} CLI`}, which is single-backend or (OpenCode Go) routed by its provider`,
+          `roster entry ${s.model}: routing is an OpenRouter setting — this entry runs on ${entry.endpoint ? apiBase : `the ${driver} CLI`}, which is single-backend or (OpenCode Go) routed by its provider`,
         );
       }
     }
@@ -596,9 +596,9 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       // must mean the same thing on both paths.
       routing: s.routing === undefined ? undefined : parseRouting(s.routing, `roster entry ${s.model}`),
       // A subscription driver's bill is the subscription, so only openai records one.
-      billing: driver === "openai" ? s.billing : undefined,
+      billing: entry.endpoint ? s.billing : undefined,
       // Only the subscription drivers (claude-code, codex) have a lane to bill.
-      tokenEnv: driver === "claude-code" || driver === "codex" ? s.tokenEnv : undefined,
+      tokenEnv: entry.lane !== undefined ? s.tokenEnv : undefined,
       // Effort is part of the run's identity, so it is part of the derived id:
       // opus at low and opus at high are two rows in the matrix, and a shared
       // run id would make them one run appended to twice.
@@ -738,7 +738,7 @@ export function episodeFlags(spec: Resolved, resume: boolean): string[] {
   // nor are an arm's args, which the run stored with the rest of its config.
   if (resume) return ["--resume", spec.runId, ...leashArgv(spec)];
   const argv = ["--driver", spec.driver, "--model", spec.model, "--run-id", spec.runId];
-  if (spec.driver === "openai") {
+  if (entryOf(spec.driver).endpoint) {
     argv.push("--api-base", spec.apiBase, "--api-key-env", spec.apiKeyEnv);
     // Only when the entry stated one: the runner derives the same default from
     // the model slug, so an unstated routing produces the argv it always did
@@ -1887,29 +1887,16 @@ async function attemptSpec(
   // run-episode.sh's driver preflight does not run on the in-container path, and
   // its one load-bearing check is this: without the token every claude episode
   // burns a session setup to fail at the first turn.
-  if (CONTAINER && spec.driver === "codex" && !opts.dryRun) {
-    // Same shape for the Codex lane: the variable names a CODEX_HOME directory,
-    // and without it the CLI has no login to bill.
-    const laneEnv = spec.tokenEnv ?? DEFAULT_CODEX_HOME_ENV;
-    const home = process.env[laneEnv];
-    if (home === undefined || home.trim().length === 0) {
-      const detail =
-        `${laneEnv} is not visible to the fleet container — put it in /wrathbench/.env as the path of a ` +
-        "logged-in Codex home (`codex login`); it is loaded by Bun there and never passed via argv";
-      say(`launch-failed ${spec.runId}: ${detail}`);
-      record({ runId: spec.runId, model: spec.model, outcome: "launch-failed", detail });
-      return "done";
-    }
-  }
-  if (CONTAINER && spec.driver === "claude-code" && !opts.dryRun) {
+  const lane = entryOf(spec.driver).lane;
+  if (CONTAINER && lane !== undefined && !opts.dryRun) {
     // The CHOSEN lane's variable, and the message names it: with two
-    // subscriptions the useful sentence is which one is missing.
-    const tokenEnv = spec.tokenEnv ?? DEFAULT_CLAUDE_TOKEN_ENV;
-    const token = process.env[tokenEnv];
-    if (token === undefined || token.trim().length === 0) {
-      const detail =
-        `${tokenEnv} is not visible to the fleet container — put it in /wrathbench/.env ` +
-        "(`claude setup-token`), it is loaded by Bun there and never passed via argv";
+    // subscriptions the useful sentence is which one is missing. A Claude lane
+    // holds a token, a Codex lane a CODEX_HOME directory; without it the CLI
+    // has no login to bill.
+    const laneEnv = spec.tokenEnv ?? lane.defaultEnv;
+    const value = process.env[laneEnv];
+    if (value === undefined || value.trim().length === 0) {
+      const detail = lane.containerRefusal(laneEnv);
       say(`launch-failed ${spec.runId}: ${detail}`);
       record({ runId: spec.runId, model: spec.model, outcome: "launch-failed", detail });
       return "done";
@@ -2082,7 +2069,7 @@ async function attemptSpec(
     // tool-call limit, and a pause that does happen will not be cleared by
     // running a different model first. So a claude entry never defers: it is
     // recorded and the roster advances.
-    if (spec.driver === "claude-code" || spec.driver === "codex") {
+    if (entryOf(spec.driver).lane !== undefined) {
       say(`paused ${spec.runId}: ${verdict.reason} (${spec.driver} — no defer queue), advancing`);
       record({
         runId: spec.runId,
@@ -2469,15 +2456,16 @@ async function main(): Promise<void> {
       const s = a.spec;
       // A resumed episode reloads identity from meta.json; the derived values
       // here would be a lie, so show what it will actually use.
+      const lane = entryOf(s.driver).lane;
       const endpoint =
-        s.driver === "openai"
+        entryOf(s.driver).endpoint
           ? `   apiBase   ${s.apiBase} (key env ${s.apiKeyEnv})\n` +
             (isOpenRouterBase(s.apiBase)
               ? `   routing   ${routingLabel(resolveRouting(s.routing, undefined, s.model, { effort: s.effort }))}${s.routing === undefined ? " [default: the model author's own provider]" : ""}\n`
               : "")
-          : s.driver === "codex"
-            ? `   endpoint  codex CLI subscription, lane ${s.tokenEnv ?? DEFAULT_CODEX_HOME_ENV} (no api-base/api-key-env)\n`
-            : `   endpoint  claude CLI subscription (no api-base/api-key-env)\n`;
+          : lane !== undefined
+            ? `   endpoint  ${lane.describe(s.tokenEnv)} (no api-base/api-key-env)\n`
+            : "";
       const cycle1 = a.doneCycle1 === true ? " [cycle 1 skipped (already terminated, or its run id is taken) — launches fresh from cycle 2 under --loop]" : "";
       const identity = a.resume
         ? `   identity  from ${join(RUNS_DIR, s.runId, "meta.json")} (character ${metaCharacter(s.runId) ?? "unknown"})`

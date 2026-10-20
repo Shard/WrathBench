@@ -1425,7 +1425,7 @@ once the switch is on. An arm image must be a build that has
 campaign file it is given. An arm's `args` come after the supervisor's own
 and may not restate a shape flag or a supervisor flag; `--compact-window` is
 the exception. Assign an arm that sets the window only roster entries on the
-claude-code driver that set none themselves: any other pair is refused before
+claude-code or codex driver that set none themselves: any other pair is refused before
 it launches, and listed as `<id>@<v>:<ref>:<arm>`. So is every pair of an
 assignment whose roster entry the fleet refuses (an unknown key, a provider
 key towards a host the provider table does not pair it with, a subscription

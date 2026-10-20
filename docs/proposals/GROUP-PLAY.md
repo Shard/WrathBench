@@ -38,6 +38,13 @@ On the open questions of the first draft, the operator decided the same day
   later call the same day): a level-20 Retribution paladin replaces the
   hunter, so no pet ever has to be staged (pet numbers are seeded at boot
   like item guids). The loadouts are in `infra/fixtures/loadouts.ts`.
+- **The §8 texts ship as drafted** (2026-10-19), "the party leader"
+  included.
+- **The chat helper is added**: `say` takes a `type`, and the prompt's line
+  names party chat (2026-10-19).
+- **The first model is Sonnet 5.5 on claude-code, on the second Claude
+  subscription lane** (2026-10-20), for all five loops. It stays the model
+  for the follow-up attempts until one runs clean of harness issues.
 
 Everything below applies those. Where a step still needs a decision, it is
 listed under "Open questions" and not taken here.
@@ -430,10 +437,23 @@ interiors, which the mmaps include, as the Northshire abbey walk in
 mesh on the data volume at all (a `move_to` inside answering `no_mesh` is
 the tell). Both are one afternoon's smoke, not a design risk.
 
+The mesh answered the first question with a qualification. It is continuous
+from the street to the portal, but the route is 177 polygons through the
+mine building and its tunnels, and the core's path is at most 74 polygons
+from a 1024-node search. So no single `moveTo` covers it, and a straight-line
+leg toward the trigger runs out of search on the hill above the tunnels. The
+trigger's own centre is over a small mesh island with no link to the
+tunnels; the reachable mesh ends 4.4 yards from the centre, inside the
+7-yard radius. The smoke therefore walks six legs read off the mesh,
+ending at that mesh end. A member walks the same mine, so a `moveTo` to the
+portal's centre answers `path_incomplete` for an agent too; the approach
+takes several moves through the tunnels.
+
 **The single-character smoke** (`infra/smoke/deadmines-entry.ts`, on
 `PROBE`): scenario `moonbrook-mine` at level 80 so nothing on the way
-interrupts the walk (the steep-replan fixtures use the same trick); `moveTo`
-the trigger point, expecting `transferred`; assert `SMSG_TRANSFER_PENDING`
+interrupts the walk (the steep-replan fixtures use the same trick); walk
+`DEADMINES_ENTRANCE_ROUTE` (`infra/fixtures/scenarios.ts`) to the trigger,
+expecting `transferred`; assert `SMSG_TRANSFER_PENDING`
 and `SMSG_NEW_WORLD` with map 36 and a `WB_AREA` for it; one `moveTo`
 inside that arrives; the first Defias pack in `units()`; then `moveTo`
 trigger 119 and see map 0 again. It is the gate for enabling the campaign,
@@ -593,13 +613,12 @@ model is the operator's to name, as every roster entry is.
 
 ## 8. The prompt
 
-Three pieces of harness text, identical for every model. **Both texts below
-are drafts**: prompt wording is the operator's, and these ship only in the
-words he gives them (open question 2). Nothing else about the prompt
+Three pieces of harness text, identical for every model. The two texts below
+are the operator's wording, approved as drafted (2026-10-19). Nothing else about the prompt
 changes: the standing goal, the body and the tools are the same as every
 run's (`runner/src/prompt.ts`).
 
-**The staged-character launch note** (draft), a sibling of
+**The staged-character launch note**, a sibling of
 `freshCharacterNote` for a run launched with the new `--character <name>`
 flag (hygiene keeps the named character the way `--continue-from` keeps a
 freeplay one, `runner/src/run.ts`; the flag is refused with
@@ -609,7 +628,7 @@ freeplay one, `runner/src/run.ts`; the flag is refused with
 > with `await sdk.createSession({ character: "<Name>" })`. Do not create
 > another character.
 
-**The operator objective** (draft), rendered in the delimited block
+**The operator objective**, rendered in the delimited block
 `objectiveSection` already draws for a probe (per member, from the party
 definition's `members[].objective`):
 
@@ -686,7 +705,8 @@ means the change reaches the fleet only through `bun wb release run`;
    (the party), one arm on the release image, `start: staged`, the five
    members with their objectives in the operator's words, `objective` null
    at the top level, no `stopAtLevel`, the budget of §7, `wiki: true`,
-   `wikiCoords: false`, `resume: true`, `maxAttemptsPerCell: 3`; the store
+   `wikiCoords: false`, `resume: false` until the party-reaping recheck has
+   passed (a pause then costs the attempt), `maxAttemptsPerCell: 3`; the store
    row pinned to `PARTY1`–`PARTY5` with the first assignment. Verify: `bun wb
    campaign publish --dry-run`, then publish; no release. Enabled only after
    phase 6 passes, with the model the operator names (decision).
@@ -710,18 +730,7 @@ else waits on it.
 
 Only what the decisions above do not answer.
 
-1. **The first model**, and whether the shakedown attempts on a cheap API
-   model run under the same campaign version as the Claude attempts or under
-   their own.
-2. **The objective and role wording** — the two drafts in §8, whether "clear
-   the Deadmines" should also name the other bosses, and whether the per-role
-   word is enough or too little. The operator words it; the drafts ship only
-   as he gives them.
-3. **The chat helper.** `say` with a `type` is a surface addition made on
-   this eval's need rather than a citable trajectory. The recommendation is
-   to add it for the first campaign (§5); the alternative is to leave chat
-   raw and read what the first party does.
-4. **Promotion.** When the mechanics settle, the scored form is a new episode
+1. **Promotion.** When the mechanics settle, the scored form is a new episode
    id with its own comparability tuple fields (`party`, the loadout's
    identity, the staging scenario), not a widening of `probing`; the
    derivation that makes it a score is the decision this design defers, as

@@ -245,6 +245,33 @@ const AMMEN_RUNTS = { x: -4412.43, y: -11947.3, z: 21.6033 };
 // graveyard and a hearth both stay in the zone.
 export const MOONBROOK = { x: -10986.7, y: 1542.75, z: 44.79 };
 export const DEADMINES_ENTRANCE_TRIGGER = { id: 78, map: 0, x: -11208.5, y: 1685.3, z: 25.8, radius: 7 };
+/**
+ * The walk from MOONBROOK to trigger 78 as waypoints on the navmesh, one
+ * `moveTo` per leg: into the mine building, down its stair, along the outer
+ * tunnels to the portal. One move cannot cover it. The whole route is 177
+ * polygons, and the core's path is at most 74 from a 1024-node search
+ * (PathGenerator, MMapMgr). A straight-line leg toward the trigger ends on the
+ * hill above the tunnels: the search runs out of nodes on the hillside
+ * directly over its target, 22y up.
+ *
+ * The last point is where the walkable mesh ends inside the trigger, 4.4y
+ * from its centre. The centre itself is over a 31-polygon island at z 22.9
+ * that no polygon of the tunnels links to, so a move to the centre answers
+ * `path_incomplete` even from the tunnel's end. travel.ts targets its tram
+ * portal's mesh end the same way.
+ *
+ * Read from the mmaps on the data volume with Detour's own queries at the
+ * core's limits: each leg completes within 512 nodes and 36 polygons, and
+ * every point is in Moonbrook's connected mesh. A rebuilt mesh can move them.
+ */
+export const DEADMINES_ENTRANCE_ROUTE: readonly { x: number; y: number; z: number }[] = [
+  { x: -11080.5, y: 1520.4, z: 43.5 },
+  { x: -11118.4, y: 1483.2, z: 33.3 },
+  { x: -11135.0, y: 1518.8, z: 24.5 },
+  { x: -11223.9, y: 1563.6, z: 34.2 },
+  { x: -11227.2, y: 1636.3, z: 35.5 },
+  { x: -11208.5, y: 1681.3, z: 23.9 },
+];
 export const SENTINEL_HILL_BIND = { map: 0, zone: 108, x: -10624.5, y: 1096.66, z: 33.76 };
 /** Westfall (AreaTable); the server recomputes the zone from the position at login. */
 export const WESTFALL_ZONE = 40;

@@ -21,6 +21,7 @@
  * that launch is refused with the reason, not downgraded.
  */
 
+import type { RosterDriver } from "../runner/src/drivers";
 import { parseRunPodsMode, RUN_PODS_MODES, type RunPodsMode } from "../runner/src/models";
 
 /** The fleet setting's vocabulary lives with the policy block it is part of; re-exported for the launchers' callers. */
@@ -52,7 +53,7 @@ export interface LaunchSpec {
 /** What a launcher needs to know about the spec; `Resolved` satisfies it. */
 export interface EpisodeSpec {
   runId: string;
-  driver: "openai" | "claude-code" | "codex";
+  driver: RosterDriver;
   /** The subscription lane's env var NAME (claude-code, codex), or the default lane. */
   tokenEnv: string | undefined;
   /** The openai driver's key, by env var NAME. */

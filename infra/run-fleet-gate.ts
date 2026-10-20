@@ -26,7 +26,7 @@
  */
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_CODEX_HOME_ENV, isCodexHomeEnvName } from "../runner/src/config";
+import { DEFAULT_DRIVER, DRIVER_LIST, driverEntry, laneHoldsOf, PLACED_LANE_DRIVER } from "../runner/src/drivers";
 import { claudeLanesOf, goKeyEnvOf, subscriptionLaneOfConfig, type RunFact } from "../runner/src/models";
 import { GoUsagePoller, goUsageUrl, type GoFetch } from "../runner/src/opencode-go";
 import {
@@ -116,7 +116,7 @@ export function laneOfRun(f: Pick<RunFact, "subscription"> & { driver?: string |
 /** A roster spec's lane, as the roster will launch it. */
 export function laneOfSpec(spec: Pick<RosterSpec, "driver" | "tokenEnv" | "model" | "apiBase" | "apiKeyEnv" | "billing">): string | null {
   return subscriptionLaneOfConfig({
-    driver: spec.driver ?? "openai",
+    driver: spec.driver ?? DEFAULT_DRIVER,
     model: spec.model,
     apiBase: spec.apiBase ?? null,
     apiKeyEnv: spec.apiKeyEnv ?? null,
@@ -135,10 +135,11 @@ export function laneOfEntry(
   claudeLane?: string,
 ): string | null {
   if (entry === undefined) return null;
-  if (entry.driver === "claude-code") return subscriptionLaneOf({ driver: "claude-code", lane: claudeLane !== undefined && claudeLane !== "" ? claudeLane : null });
-  if (entry.driver === "codex") return subscriptionLaneOf({ driver: "codex", lane: DEFAULT_CODEX_HOME_ENV });
+  const lane = driverEntry(entry.driver)?.lane;
+  if (lane?.placed === true) return subscriptionLaneOf({ driver: entry.driver, lane: claudeLane !== undefined && claudeLane !== "" ? claudeLane : null });
+  if (lane !== undefined) return subscriptionLaneOf({ driver: entry.driver, lane: lane.defaultEnv });
   // An OpenCode Go allowance entry (a Go base, paid billing), or nothing.
-  return subscriptionLaneOfConfig({ ...entry, driver: entry.driver ?? "openai" });
+  return subscriptionLaneOfConfig({ ...entry, driver: entry.driver ?? DEFAULT_DRIVER });
 }
 
 /**
@@ -154,13 +155,14 @@ export function jobHoldOf(
 ): string | undefined {
   for (const ref of job.refs) {
     const e = roster[ref];
-    if (e?.driver === "claude-code") {
+    const lane = driverEntry(e?.driver)?.lane;
+    if (e !== undefined && lane?.placed === true) {
       const pinned = job.subscription ?? e.subscription;
       const candidates = pinned !== undefined ? [pinned] : claudeLanesOf(lanes);
-      const whys = candidates.map((l) => gate.holdOf(subscriptionLaneOf({ driver: "claude-code", lane: l ?? null }), job.episode, e.model));
+      const whys = candidates.map((l) => gate.holdOf(subscriptionLaneOf({ driver: e.driver, lane: l ?? null }), job.episode, e.model));
       if (whys.every((w) => w !== undefined)) return whys[0];
-    } else if (e?.driver === "codex") {
-      const why = gate.holdOf(subscriptionLaneOf({ driver: "codex", lane: job.subscription ?? null }), job.episode, e.model);
+    } else if (e !== undefined && lane !== undefined) {
+      const why = gate.holdOf(subscriptionLaneOf({ driver: e.driver, lane: job.subscription ?? null }), job.episode, e.model);
       if (why !== undefined) return why;
     } else if (e !== undefined) {
       const why = gate.holdOf(laneOfEntry(e), job.episode, e.model);
@@ -172,7 +174,7 @@ export function jobHoldOf(
 
 /** Whether a claude subscription is open for a launch of `episode`'s class. */
 export function claudeLaneOpen(gate: FleetSubscriptionGate | undefined, lane: string, episode: string | null | undefined, model?: string | null): boolean {
-  return gate === undefined || gate.holdOf(subscriptionLaneOf({ driver: "claude-code", lane }), episode, model ?? null) === undefined;
+  return gate === undefined || gate.holdOf(subscriptionLaneOf({ driver: PLACED_LANE_DRIVER, lane }), episode, model ?? null) === undefined;
 }
 
 /** A spawn the gate changed, and why. */
@@ -221,13 +223,18 @@ export function gateLanes(
   subscriptions: readonly string[],
 ): string[] {
   const out = new Set<string>(gate.usage.keys());
-  const drivers = new Set(Object.values(roster).map((e) => e.driver));
+  const drivers = new Set<string | undefined>(Object.values(roster).map((e) => e.driver));
   // `policy.subscriptions` names Claude tokens and Codex homes alike; each
   // lists under its own driver, never the other's.
-  if (drivers.has("claude-code")) for (const l of claudeLanesOf(subscriptions)) out.add(subscriptionLaneOf({ driver: "claude-code", lane: l })!);
-  if (drivers.has("codex")) {
-    out.add(subscriptionLaneOf({ driver: "codex", lane: DEFAULT_CODEX_HOME_ENV })!);
-    for (const l of subscriptions) if (isCodexHomeEnvName(l)) out.add(subscriptionLaneOf({ driver: "codex", lane: l })!);
+  for (const d of DRIVER_LIST) {
+    const lane = d.lane;
+    if (lane === undefined || !drivers.has(d.id)) continue;
+    if (lane.placed) {
+      for (const l of claudeLanesOf(subscriptions)) out.add(subscriptionLaneOf({ driver: d.id, lane: l })!);
+      continue;
+    }
+    out.add(subscriptionLaneOf({ driver: d.id, lane: lane.defaultEnv })!);
+    for (const l of subscriptions) if (laneHoldsOf(l) === lane.holds) out.add(subscriptionLaneOf({ driver: d.id, lane: l })!);
   }
   for (const go of goLanesOf(roster)) out.add(go.lane);
   return [...out].sort();
@@ -246,7 +253,7 @@ export interface GoLane {
 export function goLanesOf(roster: Readonly<Record<string, Pick<FleetRosterEntry, "driver" | "model" | "apiBase" | "apiKeyEnv" | "billing">>>): GoLane[] {
   const out = new Map<string, GoLane>();
   for (const e of Object.values(roster)) {
-    const keyEnv = goKeyEnvOf({ ...e, driver: e.driver ?? "openai" });
+    const keyEnv = goKeyEnvOf({ ...e, driver: e.driver ?? DEFAULT_DRIVER });
     const url = goUsageUrl(e.apiBase);
     const lane = laneOfEntry(e);
     if (keyEnv === undefined || url === undefined || lane === null || out.has(lane)) continue;

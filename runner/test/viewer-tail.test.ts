@@ -913,6 +913,33 @@ describe("tokensPerSecond", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  test("a claude-code run known only by its claude_system envelope reads as snapshots, in the single pass and the tail alike", async () => {
+    // No `driver` record (a run from before the driver wrote one): the single
+    // pass marks the run claude-code off the envelope, and its unresolved
+    // usage is an opening snapshot, exactly as when the driver line is there.
+    const dir = tempDir("wrathbench-claude-envelope-");
+    const lines = (envelope: boolean): string =>
+      [
+        JSON.stringify({ t: "meta", ts: 1000 }),
+        ...(envelope ? [JSON.stringify({ t: "claude_system", ts: 1050, turn: 1, type: "system", subtype: "init", model: "claude-sonnet-5" })] : []),
+        JSON.stringify({ t: "request", ts: 2000, turn: 1, messages: [{ role: "user", content: "hello" }] }),
+        JSON.stringify({
+          t: "response", ts: 3000, turn: 1, message: { role: "assistant", content: "hi" },
+          usage: { prompt_tokens: 500, completion_tokens: 7 },
+        }),
+        "",
+      ].join("\n");
+    const claude = join(dir, "claude.jsonl");
+    const plain = join(dir, "plain.jsonl");
+    writeFileSync(claude, lines(true));
+    writeFileSync(plain, lines(false));
+    const totals = await scanRunTotals(claude);
+    expect(totals.tokens.source).toBe("snapshot");
+    expect(tokenTotals(await new TrajectoryTail(claude).scan())).toEqual(totals.tokens);
+    expect((await scanRunTotals(plain)).tokens.source).toBe("reported");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   test("a codex run written before per-turn usage: the thread totals become per-turn deltas", async () => {
     // The CLI reports the thread's running total on every turn. Older records
     // carry it as `usage`; summed as written, three turns of 100 prompt tokens

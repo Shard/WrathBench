@@ -59,6 +59,7 @@ import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { openRunDb } from "./rundb";
 import { harnessSeries } from "./comparability";
+import { DEFAULT_DRIVER, driverEntry, entryOf, harnessDriver, PLACED_LANE_DRIVER } from "./drivers";
 import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isCodexHomeEnvName, isDriver, isTokenEnvName, isUnscoredDriverName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
@@ -1599,8 +1600,9 @@ export function goKeyEnvOf(r: {
   apiKeyEnv?: string | null | undefined;
   billing?: Billing | null | undefined;
 }): string | undefined {
-  if ((r.driver ?? "openai") !== "openai" || !isOpenCodeGoBase(r.apiBase)) return undefined;
-  const billing = billingOf({ model: r.model ?? "", apiBase: r.apiBase ?? undefined, driver: "openai", ...(r.billing != null ? { billing: r.billing } : {}) });
+  const driver = r.driver ?? DEFAULT_DRIVER;
+  if (driverEntry(driver)?.endpoint !== true || !isOpenCodeGoBase(r.apiBase)) return undefined;
+  const billing = billingOf({ model: r.model ?? "", apiBase: r.apiBase ?? undefined, driver, ...(r.billing != null ? { billing: r.billing } : {}) });
   return billing === "paid" ? (r.apiKeyEnv ?? GO_DEFAULT_KEY_ENV) : undefined;
 }
 
@@ -1620,7 +1622,7 @@ export function subscriptionLaneOfConfig(r: {
   billing?: Billing | null | undefined;
   subscription?: string | null | undefined;
 }): string | null {
-  return subscriptionLaneOf({ driver: r.driver ?? "openai", lane: r.subscription ?? null, goKeyEnv: goKeyEnvOf(r) ?? null });
+  return subscriptionLaneOf({ driver: r.driver ?? DEFAULT_DRIVER, lane: r.subscription ?? null, goKeyEnv: goKeyEnvOf(r) ?? null });
 }
 
 /**
@@ -1630,9 +1632,9 @@ export function subscriptionLaneOfConfig(r: {
  * surface (`concurrencyKeyOf`). Widening validation from drivers to these keys
  * is purely additive — an old per-driver cap still parses.
  */
-// Not `reference`: the scripted reference is never a roster entry, so the
+// Not the scripted reference (`capKey`): it is never a roster entry, so the
 // policy has nothing of it to cap (run-fleet-config.ts refuses the driver).
-export const CONCURRENCY_KEYS: readonly string[] = [...DRIVERS.filter((d) => d !== "reference"), "openrouter", "opencode", OPENCODE_GO_KEY];
+export const CONCURRENCY_KEYS: readonly string[] = [...DRIVERS.filter((d) => entryOf(d).capKey), "openrouter", "opencode", OPENCODE_GO_KEY];
 
 /**
  * A claude-code run counts against TWO keys, and needs a free slot in both.
@@ -1651,7 +1653,7 @@ export const CONCURRENCY_KEYS: readonly string[] = [...DRIVERS.filter((d) => d !
  * sessions, and nothing said about which account — and a per-account limit is
  * added by naming the lane, never by re-reading the total.
  */
-export const CLAUDE_TOTAL_KEY = "claude-code";
+export const CLAUDE_TOTAL_KEY: string = PLACED_LANE_DRIVER;
 
 export function claudeLaneKey(tokenEnv: string | null | undefined): string {
   return `${CLAUDE_TOTAL_KEY}:${tokenEnv ?? DEFAULT_CLAUDE_TOKEN_ENV}`;
@@ -1729,8 +1731,9 @@ export function capFor(max: Record<string, number>, key: string): number | undef
  */
 export function concurrencyKeyOf(r: Pick<RosterModel, "name" | "driver" | "apiBase">, billing: Billing): string {
   const driver = driverOf(r);
-  if (driver === "openai" && isOpenCodeGoBase(r.apiBase)) return OPENCODE_GO_KEY;
-  if (driver === "openai" && billing === "free") {
+  const endpoint = entryOf(driver).endpoint;
+  if (endpoint && isOpenCodeGoBase(r.apiBase)) return OPENCODE_GO_KEY;
+  if (endpoint && billing === "free") {
     const platform = platformOfBase(r.apiBase) ?? "openrouter";
     if (platform === "openrouter") return "openrouter";
     if (platform === "opencode.ai" || platform === "opencode") return "opencode";
@@ -1740,7 +1743,7 @@ export function concurrencyKeyOf(r: Pick<RosterModel, "name" | "driver" | "apiBa
 
 /** A roster entry's driver; `openai` when it names none. A name outside the vocabulary is a config error. */
 export function driverOf(r: { name: string; driver?: string }): Driver {
-  const d = r.driver ?? "openai";
+  const d = r.driver ?? DEFAULT_DRIVER;
   if (!isDriver(d)) throw new Error(`roster.${r.name}: driver "${d}" is not one of ${DRIVERS.join("|")}`);
   return d;
 }
@@ -2631,7 +2634,7 @@ export interface OutstandingInput {
 
 /** The group a model's runs queue in: its account class, the subscription scaffolds (claude-code, codex) apart. */
 function outstandingGroupOf(s: ModelState): string {
-  return s.harness === "claude-code" || s.harness === "codex" ? s.harness : accountClassOf(s);
+  return harnessDriver(s.harness)?.bill === "subscription" ? s.harness : accountClassOf(s);
 }
 
 /** The whole metric, pure over the same inputs the projection was built from. */
@@ -2640,7 +2643,7 @@ export function outstandingWork(input: OutstandingInput): Outstanding {
   const accounts = input.accounts ?? {};
   const paidCap = input.policy?.paid?.maxConcurrent;
   const concurrencyOf = (group: string): number => {
-    if (group === "claude-code" || group === "codex") {
+    if (harnessDriver(group)?.bill === "subscription") {
       const cap = input.maxConcurrent?.[group];
       const pool = accounts.pool ?? 0;
       return cap === undefined ? pool : Math.min(pool, cap);
