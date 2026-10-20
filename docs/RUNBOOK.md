@@ -2300,10 +2300,16 @@ bun wb export eee --base … --series 0.5 --out data/eee/0.5 --bundle data/eee/0
 
 One record per (series, episode, harness, model, effort, compaction window),
 over the runs the ladder ranks: no live, paused, lapsed or steered run, and no
-scripted reference. `--exclude-free` applies the page's default of hiding free
-runs; without it every scored run counts. Each record carries the series as
+scripted reference. Free runs are left out by default, as the public site's
+default reading leaves them out (the operator's decision, 2026-10-20);
+`--include-free` exports them too, and the coverage line counts what was left
+out either way. Each record carries the series as
 `eval_library.version` and every exact harness version in the cell, the harness
-label as `agent_scaffold`, the effort, the run ids, `n`, and three results that
+label as `agent_scaffold`, the effort, whether the model's weights are
+published as `model_availability` (`open_weights`, `closed_weights` or
+`unknown`, from the lineup's per-model `weights` rules in
+`infra/model-lineup.json`, looked up at export time so no release is needed
+for a lineup edit to reach a record), the run ids, `n`, and three results that
 are the ladder's three keys — `highest_rung`, `best_level` (with the xp within
 it, and the min, median and max level of the cell's runs) and `best_money` —
 plus the order between them, since EEE has no field for a ranking that is not
@@ -2317,11 +2323,13 @@ Output is the datastore's own layout, `<out>/data/wrathbench/<developer>/<model>
 under `data/eee/<snapshot time>/` by default, and the file name is fixed by the
 record's identity, so a re-export of a cell lands on the same file. EEE's
 validator reads that tree as it stands; it is a Python package, so run it from
-a throwaway venv outside this checkout, with Hugging Face's client offline:
+a throwaway venv outside this checkout, with Hugging Face's client offline, and
+from `<out>`: the validator checks each path's depth from `data/`, so a path
+with anything in front of `data/` fails every file.
 
 ```
 uv venv /tmp/eee-venv && VIRTUAL_ENV=/tmp/eee-venv uv pip install every-eval-ever==0.3.0
-HF_HUB_OFFLINE=1 /tmp/eee-venv/bin/python -I -m every_eval_ever validate '<out>/data/wrathbench/*/*/*.json'
+cd <out> && HF_HUB_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 /tmp/eee-venv/bin/python -I -m every_eval_ever validate 'data/wrathbench/*/*/*.json'
 ```
 
 Exit 0 is clean, 2 is warnings only (which still block a merge there), 1 is an

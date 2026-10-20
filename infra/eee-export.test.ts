@@ -18,6 +18,7 @@ import { join } from "node:path";
 import type { ResultRun, ResultsResponse } from "../runner/viewer/api-types";
 import { projectResults } from "../runner/viewer/public-projection";
 import {
+  availabilityOf,
   COLLECTION,
   datastorePath,
   eeeExport,
@@ -25,6 +26,7 @@ import {
   EEE_SCHEMA_VERSION,
   evaluationIdOf,
   laddersFromPublished,
+  MODEL_AVAILABILITY,
   modelIdOf,
   parseArgs,
   scanFiles,
@@ -126,7 +128,9 @@ const byId = (files: readonly EeeFile[], id: string): EeeFile => {
 const resultOf = (f: EeeFile, metric: string) => f.record.evaluation_results.find((r) => r.metric_config.metric_id === `${COLLECTION}.${metric}`);
 
 describe("cells", () => {
-  const { files, skipped } = eeeExport(ladders);
+  // Free runs too, so the free cell's record can be read; the default leaves
+  // them out, which the --include-free test pins.
+  const { files, skipped } = eeeExport(ladders, { includeFree: true });
 
   test("one record per (series, episode, harness, model, effort), e90 first, and only scored runs in any", () => {
     expect(files.map((f) => f.record.evaluation_id)).toEqual([
@@ -181,12 +185,14 @@ describe("cells", () => {
     expect(resultOf(high, "best_money")!.score_details.score).toBe(0);
   });
 
-  test("--series keeps one series and --exclude-free drops free runs, counted", () => {
+  test("--series keeps one series; free runs are left out unless --include-free, and counted", () => {
     const only = eeeExport(ladders, { series: "0.4" }).files.map((f) => f.record.evaluation_id);
     expect(only).toEqual(["wrathbench/0.4/e90/wrathbench/deepseek/deepseek-v4.1-flash/default"]);
-    const paid = eeeExport(ladders, { excludeFree: true });
+    const paid = eeeExport(ladders);
     expect(paid.files.map((f) => f.record.evaluation_id)).not.toContain("wrathbench/0.5/e90/wrathbench/minimax/minimax-m3:free/default");
-    expect(paid.skipped).toContainEqual({ reason: "e90: free (--exclude-free)", runs: 1 });
+    expect(paid.skipped).toContainEqual({ reason: "e90: free (--include-free exports them)", runs: 1 });
+    expect(files.map((f) => f.record.evaluation_id)).toContain("wrathbench/0.5/e90/wrathbench/minimax/minimax-m3:free/default");
+    expect(skipped.map((x) => x.reason)).not.toContain("e90: free (--include-free exports them)");
   });
 
   test("a compaction window is its own cell", () => {
@@ -225,7 +231,7 @@ describe("identity and paths", () => {
 });
 
 describe("what EEE's CLI checks beyond the schema", () => {
-  const { files } = eeeExport(ladders);
+  const { files } = eeeExport(ladders, { includeFree: true });
 
   test("every file sits at data/<collection>/<id prefix>/<model>/<uuid4>.json, named by its own record", () => {
     for (const f of files) {
@@ -256,10 +262,25 @@ describe("what EEE's CLI checks beyond the schema", () => {
     }
     expect(byId(files, "wrathbench/0.5/e90/wrathbench/minimax/minimax-m3:free/default").record.model_info.additional_details.deployment_type).toBe("externally_managed");
   });
+
+  test("model_availability is the lineup's weights verdict in EEE's names", () => {
+    const availability = (id: string): string => byId(files, id).record.model_info.additional_details.model_availability;
+    // DeepSeek V4.1 Flash and MiniMax M3 publish their weights; Claude and GPT-6 do not.
+    expect(availability("wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash/default")).toBe("open_weights");
+    expect(availability("wrathbench/0.5/e90/wrathbench/minimax/minimax-m3:free/default")).toBe("open_weights");
+    // A CLI alias reads through the id the provider resolved.
+    expect(availability("wrathbench/0.5/e90/claude-code/opus/low")).toBe("closed_weights");
+    expect(availability("wrathbench/0.5/e360/codex/gpt-6-luna/default")).toBe("closed_weights");
+    expect(MODEL_AVAILABILITY).toEqual({ open: "open_weights", closed: "closed_weights", unknown: "unknown" });
+    // An id the lineup's rules do not name is unknown, never a family guess.
+    expect(availabilityOf("openai/gpt-9-unreleased", "gpt-9-unreleased")).toBe("unknown");
+    // The recorded slug is the fallback: a `-free` OpenCode Zen id is named as itself.
+    expect(availabilityOf("poolside/laguna-s-2.1-free", "laguna-s-2.1-free")).toBe("open_weights");
+  });
 });
 
 describe("content", () => {
-  const { files } = eeeExport(ladders);
+  const { files } = eeeExport(ladders, { includeFree: true });
   const text = JSON.stringify(files);
 
   test("no game text and no character: no rung title, race, class, name, zone or map", () => {
@@ -298,7 +319,10 @@ describe("the published source", () => {
 describe("arguments", () => {
   test("exactly one source, and checked values", () => {
     expect(parseArgs(["--base", "https://x.example"])).toMatchObject({ base: "https://x.example", runs: null });
-    expect(parseArgs(["--runs", "data/runs", "--series", "0.5", "--exclude-free"])).toMatchObject({ runs: "data/runs", series: "0.5", excludeFree: true });
+    expect(parseArgs(["--runs", "data/runs", "--series", "0.5", "--include-free"])).toMatchObject({ runs: "data/runs", series: "0.5", includeFree: true });
+    expect(parseArgs(["--base", "https://x.example"])).toMatchObject({ includeFree: false });
+    // The old flag is gone, not silently accepted: free runs are already out by default.
+    expect(parseArgs(["--runs", "d", "--exclude-free"])).toHaveProperty("error");
     expect(parseArgs([])).toHaveProperty("error");
     expect(parseArgs(["--base", "https://x.example", "--runs", "d"])).toHaveProperty("error");
     expect(parseArgs(["--base", "ftp://x"])).toHaveProperty("error");
@@ -386,7 +410,7 @@ describe("EEE's aggregate schema", () => {
   });
 
   test("every record validates", () => {
-    const { files } = eeeExport(ladders);
+    const { files } = eeeExport(ladders, { includeFree: true });
     expect(files.length).toBeGreaterThan(0);
     for (const f of files) expect(errorsOf(SCHEMA, f.record), f.record.evaluation_id).toEqual([]);
   });

@@ -3,7 +3,7 @@
  * `bun wb export eee`: the scored ladders as Every Eval Ever records.
  *
  *   bun infra/eee-export.ts --base https://wrathbench-data.shard.page
- *   bun infra/eee-export.ts --runs data/runs [--series 0.5] [--exclude-free]
+ *   bun infra/eee-export.ts --runs data/runs [--series 0.5] [--include-free]
  *                           [--out DIR] [--bundle FILE]
  *
  * Every Eval Ever (github.com/evaleval/every_eval_ever, MIT) is an open results
@@ -29,14 +29,15 @@
  * site prints. A cell is one (series, episode, harness, model, effort,
  * compaction window): the series is the comparability group, and effort and
  * the window are run dimensions, so a cell never mixes what the methodology
- * keeps apart. The page's display rules are not applied — its
- * representative-effort filter and its default of hiding free runs are ways
- * of reading the table, not membership — so every scored cell is exported
- * unless `--exclude-free` asks for the page's default.
+ * keeps apart. Free runs are left out by default, as the public site's own
+ * default reading leaves them out (the operator's decision, 2026-10-20);
+ * `--include-free` exports them too. The page's representative-effort filter
+ * is not applied: it is a way of reading the table, not membership.
  *
  * **What a record carries.** The series and every exact harness version in
- * the cell, the harness label, model and effort, `n`, the levels each counted
- * run reached, and per-rung counts. Never game text: rung numbers, not rung
+ * the cell, the harness label, model and effort, whether the model's weights
+ * are published (`model_availability`, from the lineup's `weightsOf`), `n`,
+ * the levels each counted run reached, and per-rung counts. Never game text: rung numbers, not rung
  * titles; no character, race, class, zone or map. Every record is scanned
  * before anything is written, with the publisher's own scans, and a finding
  * writes nothing.
@@ -50,7 +51,7 @@ import { isContributorSlug, isFreeSlug } from "../runner/src/model-cost";
 import { describeFindings, envSecrets, SecretScanner } from "../runner/src/secret-scan";
 import { ladderRows, RUNGS, scored, type LadderRow } from "../dashboard/src/lib/ladder";
 import { seriesOf } from "../dashboard/src/lib/harness";
-import { familyOf } from "../dashboard/src/lib/lineup";
+import { familyOf, weightsOf, type Weights } from "../dashboard/src/lib/lineup";
 import { httpSource, scanBody, type AcceptSource } from "./publish-accept";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
@@ -125,7 +126,7 @@ export interface EeeRecord {
     developer: string;
     additional_details: Details & {
       deployment_type: "externally_managed" | "unknown";
-      model_availability: "unknown";
+      model_availability: "open_weights" | "closed_weights" | "unknown";
     };
   };
   evaluation_results: EvaluationResult[];
@@ -151,8 +152,8 @@ export interface ExportResult {
 export interface ExportOptions {
   /** Keep only this series; every series present when absent. */
   series?: string;
-  /** Drop runs whose `billing` is `free`, the ladder page's default reading. */
-  excludeFree?: boolean;
+  /** Keep runs whose `billing` is `free`; they are dropped by default, the public site's default reading. */
+  includeFree?: boolean;
 }
 
 /** A cell's identity: the axes a record never mixes. */
@@ -250,6 +251,23 @@ function deploymentOf(runs: readonly ResultRun[]): "externally_managed" | "unkno
   const hosted = (r: ResultRun): boolean =>
     r.billing === "paid" || (r.model !== null && (isFreeSlug(r.model) || isContributorSlug(r.model)));
   return runs.length > 0 && runs.every(hosted) ? "externally_managed" : "unknown";
+}
+
+/** EEE's `model_availability` names for the lineup's three weights verdicts. */
+export const MODEL_AVAILABILITY: Readonly<Record<Weights, "open_weights" | "closed_weights" | "unknown">> = {
+  open: "open_weights",
+  closed: "closed_weights",
+  unknown: "unknown",
+};
+
+/**
+ * The cell's weights verdict: the lineup's answer for the EEE id, else for the
+ * recorded slug, which is the spelling a rule may name instead (`-free` on an
+ * OpenCode Zen id is part of the slug, not a suffix the catalog strips).
+ */
+export function availabilityOf(id: string, recorded: string): (typeof MODEL_AVAILABILITY)[Weights] {
+  const w = weightsOf(id);
+  return MODEL_AVAILABILITY[w !== "unknown" ? w : weightsOf(recorded)];
 }
 
 const json = (v: unknown): string => JSON.stringify(v);
@@ -406,7 +424,7 @@ function cellRecord(k: CellKey, runs: readonly ResultRun[], row: LadderRow, mode
       developer: model.developer,
       additional_details: {
         deployment_type: deploymentOf(runs),
-        model_availability: "unknown",
+        model_availability: availabilityOf(model.id, k.model),
         agent_scaffold: k.harness,
         inference_effort: effort,
         model_id_basis: model.basis,
@@ -443,8 +461,8 @@ export function eeeFromLadder(episode: EpisodeId, body: Pick<ResultsResponse, "r
       continue;
     }
     if (opts.series !== undefined && series !== opts.series) continue;
-    if (opts.excludeFree === true && r.billing === "free") {
-      skip("free (--exclude-free)");
+    if (opts.includeFree !== true && r.billing === "free") {
+      skip("free (--include-free exports them)");
       continue;
     }
     if (r.harness === null) {
@@ -550,11 +568,11 @@ async function laddersFromRuns(runsDir: string): Promise<Map<EpisodeId, ResultsR
 
 /* --------------------------------------------------------------------- CLI --- */
 
-export const USAGE = `usage: bun infra/eee-export.ts (--base URL | --runs DIR) [--series S] [--exclude-free] [--out DIR] [--bundle FILE]
+export const USAGE = `usage: bun infra/eee-export.ts (--base URL | --runs DIR) [--series S] [--include-free] [--out DIR] [--bundle FILE]
   --base URL      read the published ladders, e.g. --base https://wrathbench-data.shard.page
   --runs DIR      render the ladders from a runs tree, as the publisher does
   --series S      only this harness series (e.g. 0.5); every series when absent, each its own records
-  --exclude-free  leave out free runs, the ladder page's default reading
+  --include-free  also export free runs, which are left out by default as the public site leaves them out
   --out DIR       write <DIR>/data/${COLLECTION}/…; default data/eee/<snapshot time>
   --bundle FILE   also write every record, with its path and the skipped counts, as one JSON file`;
 
@@ -562,17 +580,17 @@ export interface Args {
   base: string | null;
   runs: string | null;
   series: string | undefined;
-  excludeFree: boolean;
+  includeFree: boolean;
   out: string | null;
   bundle: string | null;
 }
 
 export function parseArgs(argv: readonly string[]): Args | { error: string } {
-  const a: Args = { base: null, runs: null, series: undefined, excludeFree: false, out: null, bundle: null };
+  const a: Args = { base: null, runs: null, series: undefined, includeFree: false, out: null, bundle: null };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i]!;
-    if (flag === "--exclude-free") {
-      a.excludeFree = true;
+    if (flag === "--include-free") {
+      a.includeFree = true;
       continue;
     }
     if (!["--base", "--runs", "--series", "--out", "--bundle"].includes(flag)) return { error: `unknown argument ${flag}` };
@@ -602,7 +620,7 @@ async function main(argv: readonly string[]): Promise<number> {
     return 2;
   }
   const ladders = args.base !== null ? await laddersFromPublished(httpSource(args.base)) : await laddersFromRuns(args.runs!);
-  const result = eeeExport(ladders, { series: args.series, excludeFree: args.excludeFree });
+  const result = eeeExport(ladders, { series: args.series, includeFree: args.includeFree });
   const findings = scanFiles(result.files);
   if (findings.length > 0) {
     console.error(`eee-export: nothing written; the scan found ${findings.length} finding(s):`);
