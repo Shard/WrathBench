@@ -214,6 +214,30 @@ describe("moveToAsync: a verdict that is not an arrival reaches the harness", ()
   });
 });
 
+describe("moveToAsync: steering verdicts stay out of the harness block (operator, 2026-10-20)", () => {
+  test("a superseded or stopped moveToAsync records no hint; a refusal after them still does", async () => {
+    const stub = startStub({ onConnect: () => world() });
+    const client = await inWorld(stub);
+    await folded(client, "SMSG_UPDATE_OBJECT", 17);
+    const verdict = (seq: number, moveId: number, status: string) =>
+      frame(seq, "WB_MOVE_RESULT", { moveId, status, pos: { x: -1234.5, y: 987.25, z: 42.1, o: 0 } });
+    const first = await client.moveToAsync({ x: -1220, y: 987, z: 42 });
+    const second = await client.moveToAsync({ x: -1210, y: 987, z: 42 });
+    push(stub, verdict(90, first.moveId, "superseded"));
+    push(stub, verdict(91, second.moveId, "stopped"));
+    await folded(client, "WB_MOVE_RESULT", 91);
+    await Bun.sleep(5);
+    expect(client.drainActionHints()).toEqual([]);
+    const third = await client.moveToAsync({ x: -500, y: 987, z: 42 });
+    push(stub, verdict(92, third.moveId, "too_far"));
+    await folded(client, "WB_MOVE_RESULT", 92);
+    await Bun.sleep(5);
+    expect(client.drainActionHints().map((h) => `${h.action} ${h.status}`)).toEqual(["moveToAsync too_far"]);
+    client.close();
+    await stub.stop();
+  });
+});
+
 describe("acting while dead: a corpse cannot move or fight, a ghost can walk", () => {
   test("moveTo and moveToAsync refuse a corpse and send nothing; a ghost's move goes out", async () => {
     const stub = startStub({ onConnect: () => world([selfHealth(0, 20)]) });

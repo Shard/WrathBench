@@ -314,8 +314,10 @@ and walks it on request with the fall packets a client sends, so the server
 charges the fall; what a fall costs is a game rule and lives here.
 
 `moveToAsync` acks with a `moveId` and nothing more, so the client watches that
-move's `WB_MOVE_RESULT` and tallies any verdict but an arrival, a transfer or a
-teleport on the harness hint channel as `moveToAsync <status>`, the same
+move's `WB_MOVE_RESULT` and tallies any verdict but an arrival, a transfer, a
+teleport, `superseded` or `stopped` on the harness hint channel as
+`moveToAsync <status>` (re-sending a move is how a caller steers with it, so
+those two are the steering, not failures; operator, 2026-10-20), the same
 recipe `moveTo` returns: a move refused at planning (`too_far`, `drop`) never
 started, and the ack alone let a snippet sleep on it.
 

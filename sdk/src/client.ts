@@ -1077,6 +1077,15 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
     `or at a snippet's time limit.`,
 };
 
+/**
+ * `moveToAsync` verdicts the harness does not report: the move's own success
+ * (an arrival, a portal, a teleport), and the two ends a caller makes
+ * itself. Re-sending a move is how a caller steers with `moveToAsync`, so a
+ * `superseded` or `stopped` older move is the steering, not a failure
+ * (operator, 2026-10-20).
+ */
+const ASYNC_MOVE_UNREPORTED: ReadonlySet<string> = new Set(["arrived", "transferred", "teleported", "superseded", "stopped"]);
+
 /** The refusal of a move while dead and not released; nothing is sent. */
 const DEAD_MOVE_HINT =
   "you are dead and a corpse cannot move; nothing was sent. sdk.repop() releases your spirit, and a ghost can walk.";
@@ -3638,7 +3647,8 @@ export class WrathClient {
   }
 
   /**
-   * Tally a `moveToAsync` verdict that is not an arrival, so the hint reaches
+   * Tally a `moveToAsync` refusal or other non-arrival (not `superseded` or
+   * `stopped`: see `ASYNC_MOVE_UNREPORTED`), so the hint reaches
    * the model on its next tool result the way a background `moveTo`'s does:
    * the ack said only that the move was queued, and a move refused at
    * planning (`too_far`, `drop`) never starts. Matched on the moveId within
@@ -3655,7 +3665,7 @@ export class WrathClient {
       .then((event) => {
         const data = event.data as MoveResultData;
         const status = status_(data);
-        if (status === "arrived" || status === "transferred" || status === "teleported") return;
+        if (ASYNC_MOVE_UNREPORTED.has(status)) return;
         let recipe = this.moveRecipe(status, point, data);
         if (status === "drop" && this.state.self.ghost?.value === true && recipe !== undefined) {
           recipe += " A ghost takes no fall damage.";
