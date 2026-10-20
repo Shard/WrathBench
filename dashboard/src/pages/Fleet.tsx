@@ -46,7 +46,7 @@ import {
 } from "../lib/fleet";
 import { useFeeds } from "../lib/feeds";
 import { fmtDuration, fmtTokens, fmtUsd, modelDisplay, num, shortRunId, stamp } from "../lib/format";
-import { iconModels } from "../lib/lineup";
+import { iconModels } from "../lib/modelmark";
 import { poll } from "../lib/poll";
 import { displayError } from "../lib/errors";
 

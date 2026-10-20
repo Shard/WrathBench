@@ -36,7 +36,7 @@
  *
  * **What a record carries.** The series and every exact harness version in
  * the cell, the harness label, model and effort, whether the model's weights
- * are published (`model_availability`, from the lineup's `weightsOf`), `n`,
+ * are published (`model_availability`, from the model catalogue's `weightsOf`), `n`,
  * the levels each counted run reached, and per-rung counts. Never game text: rung numbers, not rung
  * titles; no character, race, class, zone or map. Every record is scanned
  * before anything is written, with the publisher's own scans, and a finding
@@ -51,7 +51,7 @@ import { isContributorSlug, isFreeSlug } from "../runner/src/model-cost";
 import { describeFindings, envSecrets, SecretScanner } from "../runner/src/secret-scan";
 import { ladderRows, RUNGS, scored, type LadderRow } from "../dashboard/src/lib/ladder";
 import { seriesOf } from "../dashboard/src/lib/harness";
-import { familyOf, weightsOf, type Weights } from "../dashboard/src/lib/lineup";
+import { familyOf, weightsOf, type Weights } from "./model-catalogue";
 import { httpSource, scanBody, type AcceptSource } from "./publish-accept";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
@@ -196,9 +196,9 @@ const slug = (s: string): string => s.trim().toLowerCase().replace(/[^a-z0-9._-]
  * the id, without OpenRouter's `:free` variant suffix — the endpoint is not the
  * model, and the record says which endpoint it was. A flat id (`opus` under
  * claude-code, `gpt-6-luna` under codex) takes the one id the provider
- * reported serving where the cell's runs agree on one, and its lineup
- * catalog family's provider prefix. A flat id no catalog family claims has no
- * developer, and EEE cannot file it, so the cell is skipped rather than given
+ * reported serving where the cell's runs agree on one, and its model
+ * catalogue family's provider prefix. A flat id the catalogue cannot place has
+ * no developer, and EEE cannot file it, so the cell is skipped rather than given
  * an invented one. The registry's canonical id is not resolved here: that is a
  * call to a hosted service, and so part of submitting, not of exporting.
  */
@@ -218,13 +218,13 @@ export function modelIdOf(model: string, resolvedModels: readonly string[]): { i
   if (family === null) return null;
   // The prefix the family's own provider-prefixed slugs carry (`qwen/*`), so a
   // flat `qwen-3.8-27b` files beside `qwen/qwen3.8-27b` rather than under a
-  // second spelling of the same developer; the vendor's name only when the
+  // second spelling of the same developer; the company's name only when the
   // family lists no such slug.
   const prefixed = family.match.find((m) => /^[^*/]+\/\*$/.test(m));
   return {
-    id: `${prefixed !== undefined ? prefixed.slice(0, -2) : slug(family.vendor)}/${name}`,
-    developer: family.vendor,
-    basis: resolved !== null ? "provider-reported id, lineup family prefix" : "recorded id, lineup family prefix",
+    id: `${prefixed !== undefined ? prefixed.slice(0, -2) : slug(family.company)}/${name}`,
+    developer: family.company,
+    basis: resolved !== null ? "provider-reported id, catalogue family prefix" : "recorded id, catalogue family prefix",
   };
 }
 
@@ -253,7 +253,7 @@ function deploymentOf(runs: readonly ResultRun[]): "externally_managed" | "unkno
   return runs.length > 0 && runs.every(hosted) ? "externally_managed" : "unknown";
 }
 
-/** EEE's `model_availability` names for the lineup's three weights verdicts. */
+/** EEE's `model_availability` names for the catalogue's three weights verdicts. */
 export const MODEL_AVAILABILITY: Readonly<Record<Weights, "open_weights" | "closed_weights" | "unknown">> = {
   open: "open_weights",
   closed: "closed_weights",
@@ -261,9 +261,9 @@ export const MODEL_AVAILABILITY: Readonly<Record<Weights, "open_weights" | "clos
 };
 
 /**
- * The cell's weights verdict: the lineup's answer for the EEE id, else for the
- * recorded slug, which is the spelling a rule may name instead (`-free` on an
- * OpenCode Zen id is part of the slug, not a suffix the catalog strips).
+ * The cell's weights verdict: the catalogue's answer for the EEE id, else for
+ * the recorded slug, which is the spelling an entry may list instead (`-free`
+ * on an OpenCode Zen id is part of the slug, not a suffix the catalogue strips).
  */
 export function availabilityOf(id: string, recorded: string): (typeof MODEL_AVAILABILITY)[Weights] {
   const w = weightsOf(id);

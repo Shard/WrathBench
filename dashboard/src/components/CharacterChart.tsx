@@ -44,8 +44,8 @@ const BOX: ChartBox = { x0: M.left, x1: VB_W - M.right, y0: VB_H - M.bottom, y1:
  * The model's logo at the end of its line: a reader
  * looking at the field wants to know which character is which model, and the
  * character label alone does not say. Exactly `LadderChart`'s mark — the shared
- * `Puck`, with the `lib/lineup` monogram it falls back to for an id no family
- * claims, so a character is never left with a hole where every other one has a
+ * `Puck`, with the `lib/modelmark` monogram it falls back to for an id the
+ * catalogue cannot place, so a character is never left with a hole where every other one has a
  * badge. It sits between the status marker and the character label: the marker
  * still carries status, the badge carries identity, and the label is untouched.
  *

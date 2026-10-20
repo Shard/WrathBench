@@ -19,7 +19,8 @@ the operator's figure in GitHub issue #66.
   `completion_tokens`, `cached_tokens`, `cache_write_tokens`,
   `reasoning_tokens`, and OpenRouter's own `cost` in credits. OpenCode Go
   and DeepSeek's own platform send no `cost`, so a run there carries an
-  expected figure from its `PROVIDER_PRICES` row and no actual one. DeepSeek
+  expected figure from its endpoint price row (`prices.endpoints` on its
+  entry in `infra/model-catalogue.json`) and no actual one. DeepSeek
   bills double in weekday peak hours, which a dated row cannot express, so
   its row holds the off-peak rate and says so. The record also names
   the serving `provider` when the body reports one, or OpenCode's response
@@ -107,8 +108,9 @@ the operator's figure in GitHub issue #66.
   rate.** The roster's `opus` and `sonnet` are aliases that changed meaning
   with CLI pins (Opus 5.5 from 2.1.280, Sonnet 5.5 from 2.1.284); priced by
   family, Opus 5.5 read as Opus 5, about 2× its real cost. The CLI names what
-  it served on its first line, and `CLAUDE_PRICES` in `runner/viewer/pricing.ts`
-  matches that id exactly, with dated windows like the other tables. Every
+  it served on its first line, and the model's `prices.anthropic` in
+  `infra/model-catalogue.json` matches that id exactly, with dated windows like
+  the other rows. Every
   claude-code run writes 1-hour cache, billed at 2× input rather than the
   5-minute 1.25×. Sonnet 5 stays at $2/$10: the announced rise to $3/$15 never
   happened. Haiku 5.5 has no row, because Anthropic prices each call by its
@@ -205,8 +207,8 @@ reports usage per request on each reply (`input` without the cache, `cacheRead`,
 viewer's sum over responses is the run's real prompt and output, with no snapshot caveat. The
 summarisation call of each compaction is billed too and appears on no reply, so it is a `response` of
 kind `compaction` and counted the same way. The cost is the provider row's price over those tokens
-(`PROVIDER_PRICES`, matched on the run's `apiBase` and model, e.g. DeepSeek's off-peak deepseek-flash
-row), the figure an openai-driver run on the same endpoint reads: DeepSeek's responses carry no
+(the catalogue's endpoint rows, matched on the run's `apiBase` and model, e.g. DeepSeek's off-peak
+deepseek-flash row), the figure an openai-driver run on the same endpoint reads: DeepSeek's responses carry no
 charge, so both are list-price estimates of a real bill. pi's own figure, priced from its bundled
 catalogue, rides on each response as `piCostUsd` and is never read as a cost: for deepseek-flash it
 is $0.30/$1.20 per M, twice the off-peak row. Its context grows like claude-code's until pi compacts,

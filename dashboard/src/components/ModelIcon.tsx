@@ -3,8 +3,8 @@
  *
  * The SVGs are committed assets fetched by `infra/fetch-model-logos.ts` and are
  * *inlined* rather than linked: a mono icon paints with `fill="currentColor"`,
- * so inlining is what lets it follow the light/dark switch. A model whose id no
- * family claims gets a neutral monogram badge — the fallback is the answer for
+ * so inlining is what lets it follow the light/dark switch. A model the catalogue
+ * (`infra/model-catalogue.ts`) cannot place gets a neutral monogram badge — the fallback is the answer for
  * every unknown id, and there is no per-model case here or anywhere else.
  *
  * The glob is eager and may legitimately be empty: a checkout that has not run
@@ -12,7 +12,8 @@
  */
 
 import { Show } from "solid-js";
-import { familyOf, monogramOf } from "../lib/lineup";
+import { familyOf } from "../../../infra/model-catalogue";
+import { monogramOf } from "../lib/modelmark";
 
 const LOGOS = import.meta.glob<string>("../assets/model-logos/*.svg", {
   eager: true,
@@ -131,7 +132,7 @@ export function ModelIcon(props: {
   const label = (): string => {
     if (props.title !== undefined) return props.title;
     const family = familyOf(props.model);
-    return family === null ? model() : `${family.name} — ${family.vendor}`;
+    return family === null ? model() : `${family.name} — ${family.company}`;
   };
   return (
     <Show when={model() !== ""}>

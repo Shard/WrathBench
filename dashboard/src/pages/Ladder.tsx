@@ -249,7 +249,7 @@ export default function Ladder() {
     },
     {
       label: "weights",
-      title: "Whether the model's weights can be downloaded, as infra/model-lineup.json records it per model. unknown: not checked, or nothing to check against (a stealth or unreleased model).",
+      title: "Whether the model's weights can be downloaded, as infra/model-catalogue.json records it per model. unknown: not checked, or nothing to check against (a stealth or unreleased model).",
       options: weightsOptions(),
       selected: weights(),
       onSelect: (keys) => setList("weights", keys),

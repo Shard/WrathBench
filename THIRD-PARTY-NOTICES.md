@@ -8,7 +8,7 @@ WrathBench builds the AzerothCore tree pinned in `deps/azerothcore` and copies t
 
 ## Lobe Icons
 
-The model logos committed under `dashboard/src/assets/model-logos/` are extracted from `@lobehub/icons-static-svg`, the npm distribution of the lobehub/lobe-icons project, which is licensed under the MIT license. `infra/fetch-model-logos.ts` fetches the package tarball from the npm registry at the version pinned in `infra/model-lineup.json` and writes out only the icons that file names; the SVGs are committed so the dashboard builds from a bare clone. The package's copyright and license are not changed by WrathBench's root MIT license.
+The model logos committed under `dashboard/src/assets/model-logos/` are extracted from `@lobehub/icons-static-svg`, the npm distribution of the lobehub/lobe-icons project, which is licensed under the MIT license. `infra/fetch-model-logos.ts` fetches the package tarball from the npm registry at the version pinned in `infra/model-catalogue.json` and writes out only the icons that file names; the SVGs are committed so the dashboard builds from a bare clone. The package's copyright and license are not changed by WrathBench's root MIT license.
 
 The logos are brand marks of the companies they identify and remain those companies' trademarks. WrathBench uses them only to identify which model a run was driven by; their presence implies no affiliation with or endorsement by their owners.
 

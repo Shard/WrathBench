@@ -1,23 +1,29 @@
 #!/usr/bin/env bun
 /**
- * Sync OpenRouter list prices into `runner/viewer/prices.openrouter.json`.
+ * Sync OpenRouter list prices into the model catalogue
+ * (`infra/model-catalogue.json`, each model's `prices.openrouter`).
  *
- * Prices are data, not code: hand-typing a rate into `pricing.ts` makes a
- * number nobody can check go stale silently. This pulls the provider's own
- * catalogue and writes the rows the fleet actually needs, dated.
+ * Prices are data, not code: hand-typing a rate makes a number nobody can
+ * check go stale silently. This pulls the provider's own catalogue and writes
+ * the rows the fleet actually needs, dated, onto the entries they belong to.
  *
- *   bun run sync-prices        # or: bun infra/sync-prices.ts
+ *   bun wb data prices        # or: bun infra/sync-prices.ts
  *
  * Scope is deliberately narrow — the catalogue is ~420 models and all but a
- * dozen are noise here. A row is written when its id is one of:
- *   - a model in the config store's roster (`runner/src/config-store.ts`),
- *   - a model any run under `data/runs` was launched on, or
- *   - a `PIN` below: ids we want priced whatever the roster says today.
+ * few dozen are noise here. An OpenRouter id is asked for when it is one of:
+ *   - an id the model catalogue already prices (the standing asks: a model
+ *     dropped from the roster still has runs whose cost must keep resolving,
+ *     and a model about to be added is cheaper to price before the first run),
+ *   - a model in the config store's roster (`runner/src/config-store.ts`), or
+ *   - a model any run under `data/runs` was launched on.
  * An id we ask for that the catalogue does not carry is reported, never
  * invented — an unpriced model stays unpriced (`pricing.ts` says so on the run
  * page). Nor is a suffixless id the catalogue quotes at 0/0 written: it is
  * reported, and a stealth preview that really is free is declared on its
- * roster entry (`isZeroQuote`).
+ * roster entry (`isZeroQuote`). And a rate is written only onto a model the
+ * model catalogue lists: an id it does not is reported as such, because a
+ * price on no entry would be a model with a cost and no company, family or
+ * weights — add the entry, then sync again.
  *
  * One id is not asked for as written: a `codex` entry or run names the model
  * the way the Codex CLI does (`gpt-6-astra`), and the catalogue carries it
@@ -43,57 +49,29 @@
  * next window begins", which is what makes every run already on disk price
  * exactly as it did before windows existed.
  *
- * One hole this does not close: an id the catalogue *drops* is still removed
- * outright, windows and all, so a delisted model's runs go unpriced rather than
- * keeping the rates they really billed at (`DELISTED_MODELS` in `pricing.ts`
- * names why a row is missing). That is the 2026-08-29 delisting decision
- * standing as it was; whether a delisted id should keep its history is a
- * question about what a blank means, and the operator's.
+ * One hole this does not close: an id the catalogue *drops* has its windows
+ * emptied, so a delisted model's runs go unpriced rather than keeping the
+ * rates they really billed at (an entry's `delisted` says why an id has
+ * none). That is the 2026-08-29 delisting decision standing as it was; whether
+ * a delisted id should keep its history is a question about what a blank
+ * means, and the operator's. The emptied id stays on its entry, so it is asked
+ * for again on every sync and a relisting is picked up rather than needing to
+ * be noticed. Nothing else in the file is touched: the sync rewrites only
+ * `prices.openrouter` blocks and the provider's `asOf`, in the file's one
+ * spelling (`formatCatalogue`).
  */
 
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { formatCatalogue, normalizeModelId, parseCatalogue } from "./model-catalogue";
 import { readFleetConfig } from "../runner/src/config-store";
 import { driverEntry } from "../runner/src/drivers";
 import { isFreeSlug } from "../runner/src/model-cost";
 
 /** OpenRouter's model catalogue. Public: read with no key, here and by `runner/viewer/drafts.ts`. */
 export const CATALOGUE = "https://openrouter.ai/api/v1/models";
-const OUT = "runner/viewer/prices.openrouter.json";
+const OUT = "infra/model-catalogue.json";
 const RUNS = "data/runs";
-
-/**
- * Ids priced regardless of whether anything in the fleet or the corpus is on
- * them today. Kept by hand: a model dropped from the roster still has runs in
- * the corpus whose cost must keep resolving, and a model we are about to add
- * is cheaper to price before the first run than after.
- */
-const PIN: readonly string[] = [
-  "deepseek/deepseek-v4-flash-0731",
-  "deepseek/deepseek-v4-flash",
-  // Delisted 2026-08-28: the catalogue no longer carries the stealth id at
-  // all, so this pin will never resolve — it is kept as the standing ask, so a
-  // relisting is picked up rather than needing to be noticed. The 0/0/0/0 row
-  // it used to hold by hand was deliberately dropped on 2026-08-29: a paid
-  // model reading as free is worse than a blank, and the corpus's 22 runs now
-  // read unpriced with the delisting named (`DELISTED_MODELS` in
-  // `runner/viewer/pricing.ts`) rather than $0.00 wearing a synced-price label.
-  "stealth/ox-alpha",
-  "openai/gpt-5.6-luna",
-  "google/gemini-3.7-flash",
-  // Added ahead of its t0 trial (2026-10-14).
-  "google/gemini-4-argon",
-  // Launch discount: $0.075/$0.25 per Mtok runs to roughly 2026-09-09, after
-  // which the catalogue quotes list ($0.15/$0.50). A sync past that date
-  // appends a window dated that day; August's runs keep the discount.
-  "z-ai/glm-5.3-flash",
-  // The codex lane's models, under the vendor prefix the catalogue uses. A
-  // store-less sync (a checkout with no config store and no corpus) prices only
-  // the pins, and these sat unpriced for a week after entering the roster.
-  "openai/gpt-6-sol",
-  "openai/gpt-6-luna",
-  "openai/gpt-6.1-sol",
-];
 
 export interface SyncedPrice {
   /** Dollars per million tokens. */
@@ -105,13 +83,6 @@ export interface SyncedPrice {
 
 /** One rate window: the rates, plus the day they took over (absent on the first). */
 export type SyncedWindow = SyncedPrice & { from?: string };
-
-export interface SyncedPrices {
-  /** The day the catalogue was last read. A *window*'s date is its own `from`. */
-  asOf: string;
-  /** Windows per id, oldest first. The first carries no `from`. */
-  models: Record<string, SyncedWindow[]>;
-}
 
 /**
  * A suffixless id the catalogue quotes at 0/0: a stealth preview, typically,
@@ -143,7 +114,7 @@ export function sameRates(a: SyncedPrice, b: SyncedPrice): boolean {
  * rather than stacks.
  */
 export function mergeWindows(
-  existing: Record<string, SyncedWindow[]> | undefined,
+  existing: Readonly<Record<string, readonly SyncedWindow[]>> | undefined,
   fresh: Record<string, SyncedPrice>,
   today: string,
 ): Record<string, SyncedWindow[]> {
@@ -248,11 +219,71 @@ async function corpusModels(runsDir: string): Promise<string[]> {
   return out;
 }
 
+type Doc = { models: Record<string, { aliases?: string[]; prices?: { openrouter?: Record<string, { windows: SyncedWindow[]; delisted?: string }> } & Record<string, unknown> } & Record<string, unknown>>; providers: Record<string, Record<string, unknown>> } & Record<string, unknown>;
+
+/** Every OpenRouter id the catalogue already carries a block for: the standing asks. */
+export function catalogueOpenRouterIds(doc: Doc): string[] {
+  return Object.values(doc.models).flatMap((e) => Object.keys(e.prices?.openrouter ?? {}));
+}
+
+/** The windows the catalogue holds now, flat, emptied ids included. */
+export function catalogueWindows(doc: Doc): Record<string, SyncedWindow[]> {
+  const out: Record<string, SyncedWindow[]> = {};
+  for (const e of Object.values(doc.models)) for (const [id, row] of Object.entries(e.prices?.openrouter ?? {})) out[id] = row.windows;
+  return out;
+}
+
+/**
+ * Write a sync's windows onto the catalogue's entries. Pure: the document in,
+ * a new document and the ids it could not place out.
+ *
+ * `windows` is `mergeWindows`'s answer: every id the OpenRouter catalogue
+ * priced. An id with windows goes onto the entry it resolves to (its key or an
+ * alias, as every reader compares ids); an id with none that already has a
+ * block is emptied, its `delisted` note kept; an id with none and no block
+ * stays absent. An id with windows no entry lists is returned, never written.
+ * Nothing but `prices.openrouter` blocks and the provider's `asOf` changes.
+ */
+export function applyOpenRouterWindows(doc: Doc, windows: Readonly<Record<string, SyncedWindow[]>>, asOf: string): { doc: Doc; unlisted: string[] } {
+  const next = structuredClone(doc);
+  const index = new Map<string, string>();
+  for (const [key, e] of Object.entries(next.models)) {
+    index.set(normalizeModelId(key), key);
+    for (const a of e.aliases ?? []) index.set(normalizeModelId(a), key);
+  }
+  // Ids the OpenRouter catalogue no longer prices: empty them where they are.
+  for (const e of Object.values(next.models)) {
+    for (const [id, row] of Object.entries(e.prices?.openrouter ?? {})) if (windows[id] === undefined) row.windows = [];
+  }
+  const unlisted: string[] = [];
+  for (const id of Object.keys(windows).sort()) {
+    const key = index.get(normalizeModelId(id));
+    if (key === undefined) {
+      unlisted.push(id);
+      continue;
+    }
+    const entry = next.models[key]!;
+    const prices = (entry.prices ??= {});
+    const openrouter = (prices.openrouter ??= {});
+    const prior = openrouter[id];
+    openrouter[id] = { ...(prior ?? {}), windows: windows[id]!.map((w) => ({ ...w })) };
+    if (prior?.delisted !== undefined && windows[id]!.length > 0) {
+      // Relisted: the note that said it never would be is no longer true.
+      delete openrouter[id]!.delisted;
+    }
+  }
+  next.providers["openrouter"] = { ...next.providers["openrouter"], asOf };
+  return { doc: next, unlisted };
+}
+
 export async function main(): Promise<void> {
-  const wanted = new Set<string>(PIN);
+  const text = await Bun.file(OUT).text();
+  parseCatalogue(text, OUT);
+  const doc = JSON.parse(text) as Doc;
+  const wanted = new Set<string>(catalogueOpenRouterIds(doc));
   const fleet = readFleetConfig();
   if (fleet.status === "ok") for (const m of rosterModels(fleet.text)) wanted.add(m);
-  else console.error(`sync-prices: config store ${fleet.status} — pricing the corpus and the pins only`);
+  else console.error(`sync-prices: config store ${fleet.status} — pricing the corpus and the catalogue's own ids only`);
   for (const m of await corpusModels(RUNS)) wanted.add(m);
 
   const res = await fetch(CATALOGUE);
@@ -275,13 +306,7 @@ export async function main(): Promise<void> {
   }
 
   const today = new Date().toISOString().slice(0, 10);
-  let prior: Record<string, SyncedWindow[]> | undefined;
-  try {
-    prior = ((await Bun.file(OUT).json()) as SyncedPrices).models;
-  } catch {
-    prior = undefined; // no file yet: every id starts on a first, undated window
-  }
-  const windows = mergeWindows(prior, models, today);
+  const windows = mergeWindows(catalogueWindows(doc), models, today);
   const zeroQuoted = Object.entries(models)
     .filter(([id, price]) => isZeroQuote(id, price))
     .map(([id]) => id);
@@ -289,9 +314,11 @@ export async function main(): Promise<void> {
     .filter(([, ws]) => ws[ws.length - 1]?.from === today)
     .map(([id]) => id);
 
-  const out: SyncedPrices = { asOf: today, models: windows };
-  await Bun.write(OUT, `${JSON.stringify(out, null, 2)}\n`);
-  console.log(`${OUT}: ${Object.keys(windows).length} priced of ${wanted.size} wanted, from ${rows.length} catalogue rows`);
+  const { doc: out, unlisted } = applyOpenRouterWindows(doc, windows, today);
+  const written = formatCatalogue(out);
+  parseCatalogue(written, OUT);
+  await Bun.write(OUT, written);
+  console.log(`${OUT}: ${Object.keys(windows).length - unlisted.length} OpenRouter ids priced of ${wanted.size} wanted, from ${rows.length} catalogue rows`);
   if (appended.length > 0) {
     // A rate moved. Earlier runs keep the window they billed at; only runs from
     // today forward read the new one.
@@ -301,6 +328,10 @@ export async function main(): Promise<void> {
     // Not a miss: the catalogue prices these at zero, and the table keeps no
     // zero row for a suffixless id. A run of one is free only by its entry's billing.
     console.log(`quoted at 0/0 without a free suffix (no row written; declare billing "free" on the roster entry): ${zeroQuoted.join(", ")}`);
+  }
+  if (unlisted.length > 0) {
+    // Priced by OpenRouter, but nobody has said who made it: no row is written.
+    console.log(`priced by OpenRouter but not in the model catalogue (no row written; add an entry to ${OUT}, then sync again): ${unlisted.join(", ")}`);
   }
   if (missing.length > 0) {
     // Most of these are OpenCode Zen / local ids, which OpenRouter never

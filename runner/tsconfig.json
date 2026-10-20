@@ -1,6 +1,6 @@
 {
   "extends": "../tsconfig.base.json",
-  // `viewer/prices.openrouter.json` is imported as data (infra/sync-prices.ts writes it).
+  // `infra/model-catalogue.json` is imported as data, through infra/model-catalogue.ts.
   "compilerOptions": { "resolveJsonModule": true },
   "include": ["src", "test", "viewer"]
 }

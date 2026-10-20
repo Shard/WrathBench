@@ -13,7 +13,7 @@
 
 import { For, Show, type JSX } from "solid-js";
 import { type ChartBox, type ChartCue, MARK_R, MARK_RING_R, TICK_FONT } from "../lib/ladder";
-import { monogramOf } from "../lib/lineup";
+import { monogramOf } from "../lib/modelmark";
 import { logoHrefOf } from "./ModelIcon";
 
 /**
@@ -144,7 +144,7 @@ export function Cue(props: { cue: ChartCue }) {
  * character chart's badge (one per line, never stacked) does not.
  *
  * A model no family claims has no logo. The default fallback is the
- * `lib/lineup` monogram on a panel-coloured puck, so a character is never left
+ * `lib/modelmark` monogram on a panel-coloured puck, so a character is never left
  * with a hole where every other one has a badge; a caller with its own
  * convention passes `fallback` — the scatter keeps its coloured dot, the same
  * fallback every other render site takes for it.

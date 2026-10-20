@@ -26,7 +26,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Resvg } from "@resvg/resvg-js";
 import type { ResultRun } from "../runner/viewer/api-types";
-import { familyOf } from "../dashboard/src/lib/lineup";
+import { familyOf } from "./model-catalogue";
 import { OG_H, OG_W, ogSvgOf } from "../dashboard/src/lib/og";
 
 const ROOT = join(import.meta.dirname, "..");

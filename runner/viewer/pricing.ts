@@ -21,28 +21,40 @@
  * cannot be checked. Prices are data, each row dated and sourced, so a stale
  * one is visible rather than buried in an expression.
  *
- * Rates are asked for *as of the run*, never as of today. All three tables
- * answer that question the same way, with rate windows: each id maps to a list
- * of `{ input, output, cacheRead, cacheWrite, from? }` in date order and the
- * first window carries no `from` (see `SYNCED_PRICES` below for the format and
- * `infra/sync-prices.ts` for who appends to the synced one). Re-pricing
- * yesterday's runs at today's catalogue is the failure all three avoid.
+ * The prices live in the model catalogue (`infra/model-catalogue.json`, read
+ * through `infra/model-catalogue.ts`), on each model's own entry; this module
+ * holds no rate and no model id, only the rules for which row a run reads.
  *
- * Three tables, by where the figure can come from:
- * - `CLAUDE_PRICES` — Anthropic list prices, by hand, matched on the model the
- *   Claude Code CLI actually served (`resolvedModel`), not the roster's alias.
- * - `SYNCED_PRICES` — OpenRouter's catalogue, by script, matched on the id; a
- *   codex run matches under `openai/<slug>`, since the Codex CLI's own slug
- *   carries no vendor prefix (`codexPrice`).
- * - `PROVIDER_PRICES` — paid providers that are not OpenRouter, by hand,
- *   matched on the run's `apiBase` *and* id (operator's decision, 2026-09-04,
- *   on its trigger: a second such provider).
+ * Rates are asked for *as of the run*, never as of today. Every row answers
+ * that question the same way, with rate windows: a list of
+ * `{ input, output, cacheRead, cacheWrite, from? }` in date order whose first
+ * window carries no `from` (`windowAt`; `infra/sync-prices.ts` appends to the
+ * synced ones). Re-pricing yesterday's runs at today's catalogue is the
+ * failure all three kinds of row avoid.
+ *
+ * Three kinds of row, by where the figure can come from:
+ * - **Anthropic** (`ANTHROPIC_PRICES`) — list prices, by hand, matched on the
+ *   model the Claude Code CLI actually served (`resolvedModel`), not the
+ *   roster's alias.
+ * - **OpenRouter** (`OPENROUTER_PRICES`) — its catalogue, by script, matched
+ *   on the id; a codex run matches under `openai/<slug>`, since the Codex CLI's
+ *   own slug carries no vendor prefix (`codexPrice`).
+ * - **Endpoints** (`ENDPOINT_PRICES`) — paid providers that are not
+ *   OpenRouter, by hand, matched on the run's `apiBase` *and* id (operator's
+ *   decision, 2026-09-04, on its trigger: a second such provider).
  */
 
+import {
+  ANTHROPIC_PRICES,
+  ANTHROPIC_UNPRICED,
+  ENDPOINT_PRICES,
+  OPENROUTER_DELISTED,
+  OPENROUTER_PRICES,
+  type RateWindow,
+} from "../../infra/model-catalogue";
 import { declaredBillingOf } from "../src/billing";
 import { DEFAULT_DRIVER, driverEntry, eitherHas, entryOf, harnessDriver } from "../src/drivers";
 import { isContributorSlug, isFreeSlug, isLocalBase } from "../src/model-cost";
-import synced from "./prices.openrouter.json";
 import type { CostBreakdown, CostCoverage, CostFigure, CostView, RunRow, TokenTotals, UnreportedUsage } from "./api-types";
 
 /** One priced model: dollars per million tokens, with where the figure is from. */
@@ -73,35 +85,27 @@ export interface PriceRow {
 }
 
 /**
- * One Anthropic model, by the id the Claude Code CLI served it under.
+ * The Anthropic row for a served model id at a date, or null when the
+ * catalogue has none.
  *
  * Matched exactly, never by family: `opus` meant Opus 5 until the CLI pin moved
  * to 2.1.280 (2026-09-23) and Opus 5.5 after, and `sonnet` became Sonnet 5.5 on
  * 2.1.284 (2026-09-29), so a family pattern priced Opus 5.5 at Opus 5's rates
  * and matched no Fable at all. The CLI names the model it served on its first
  * line (`claude_system.model`, promoted to `RunRow.resolvedModel`), and that is
- * the id read here.
- */
-export interface ClaudePriceRow {
-  /** The served ids this row prices, exact — a dated snapshot spelling included. */
-  ids: readonly string[];
-  /** Rate windows in date order; the first carries no `from`. Dollars per million tokens. */
-  windows: readonly SyncedWindow[];
-  /** The day these list prices were read. */
-  asOf: string;
-}
-
-/**
- * Anthropic list prices, by hand.
+ * the id read here; a row lists the spellings it prices (a dated snapshot and
+ * its undated name).
  *
- * Source: platform.claude.com/docs/en/about-claude/pricing and the release
- * notes, read 2026-10-08 (claude.com/pricing as a cross-check). Checked the
- * same day against the CLI's own `total_cost_usd` on one run per model: Sonnet
- * 5.5, Opus 5.5 and Fable 5.1 reproduce to the cent, and seven Fable 5 runs to
- * within $0.003. Re-read 2026-10-16 against the same page and the Claude API
+ * The rows are Anthropic list prices, by hand. Source:
+ * platform.claude.com/docs/en/about-claude/pricing and the release notes, read
+ * 2026-10-08 (claude.com/pricing as a cross-check). Checked the same day
+ * against the CLI's own `total_cost_usd` on one run per model: Sonnet 5.5, Opus
+ * 5.5 and Fable 5.1 reproduce to the cent, and seven Fable 5 runs to within
+ * $0.003. Re-read 2026-10-16 against the same page and the Claude API
  * reference's model table: no row's rate had moved. That table (cached
  * 2026-10-06) still lists Sonnet 5.5's cache read at $0.20; the page lists
- * $0.10, which is the second window below.
+ * $0.10, which is Sonnet 5.5's second window, from 2026-10-07 (a run started
+ * before keeps $0.20).
  *
  * **Cache writes are the 1-hour rate, 2× input.** Every claude-code run so far
  * writes 1-hour cache — `usageRaw.cache_creation.ephemeral_1h_input_tokens`
@@ -115,55 +119,19 @@ export interface ClaudePriceRow {
  * never happened — the 2026-08-10 release notes made $2/$10 the standard
  * price — so there is no second window.
  *
- * Haiku 5.5 is deliberately absent: see `CLAUDE_UNPRICED`.
+ * Haiku 5.5 is a decided blank (`ANTHROPIC_UNPRICED`, its entry's
+ * `unpriced`): it is priced per request on the prompt's size — $0.10/$0.50
+ * (cache read $0.01) for a prompt up to 100K tokens, $0.50/$2.50 ($0.05) above
+ * it — and the CLI tiers each API call on its own. A run's token totals cannot
+ * say which calls were which, and either flat rate is wrong: the ≤100K rate
+ * read the first Haiku 5.5 e90 4.3× low, the >100K rate about 15% high (267 of
+ * its 375 calls were over 100K). So it stays a blank, by the rule at the top of
+ * this file, and its runs read the CLI's own figure, which prices each call at
+ * its own tier. A row could only come back with the tier applied per response
+ * when the totals are read.
  */
-export const CLAUDE_PRICES: readonly ClaudePriceRow[] = [
-  { ids: ["claude-fable-5-1"], windows: [{ input: 10, output: 50, cacheRead: 0.25, cacheWrite: 20 }], asOf: "2026-10-16" },
-  { ids: ["claude-fable-5"], windows: [{ input: 10, output: 50, cacheRead: 1.0, cacheWrite: 20 }], asOf: "2026-10-16" },
-  { ids: ["claude-opus-5-5"], windows: [{ input: 4, output: 20, cacheRead: 0.2, cacheWrite: 8 }], asOf: "2026-10-16" },
-  { ids: ["claude-opus-5"], windows: [{ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 }], asOf: "2026-10-16" },
-  { ids: ["claude-opus-4-8"], windows: [{ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 }], asOf: "2026-10-16" },
-  { ids: ["claude-opus-4-7"], windows: [{ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 }], asOf: "2026-10-16" },
-  { ids: ["claude-opus-4-6"], windows: [{ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 }], asOf: "2026-10-16" },
-  {
-    ids: ["claude-sonnet-5-5"],
-    // Cache reads dropped to $0.10 on 2026-10-07; a run started before keeps $0.20.
-    windows: [
-      { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 4 },
-      { from: "2026-10-07", input: 2, output: 10, cacheRead: 0.1, cacheWrite: 4 },
-    ],
-    asOf: "2026-10-16",
-  },
-  { ids: ["claude-sonnet-5"], windows: [{ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 4 }], asOf: "2026-10-16" },
-  {
-    ids: ["claude-haiku-4-5", "claude-haiku-4-5-20251001"],
-    windows: [{ input: 1, output: 5, cacheRead: 0.1, cacheWrite: 2 }],
-    asOf: "2026-10-16",
-  },
-];
-
-/**
- * Claude models that have no row on purpose, and why — the Claude twin of
- * `DELISTED_MODELS`: a decided blank, not a missing one.
- *
- * Haiku 5.5 is priced per request on the prompt's size: $0.10/$0.50 (cache
- * read $0.01) for a prompt up to 100K tokens, $0.50/$2.50 ($0.05) above it,
- * and the CLI tiers each API call on its own. A run's token totals cannot say
- * which calls were which, and either flat rate is wrong: the ≤100K rate read
- * the first Haiku 5.5 e90 4.3× low, the >100K rate about 15% high (267 of its
- * 375 calls were over 100K). So it stays a blank, by the rule at the top of
- * this file — a guessed price is worse than a blank — and its runs read the
- * CLI's own figure, which prices each call at its own tier. A row could only
- * come back with the tier applied per response when the totals are read.
- */
-export const CLAUDE_UNPRICED: Readonly<Record<string, string>> = {
-  "claude-haiku-5-5":
-    "tiered per request — Anthropic prices each call by its prompt size (≤100K or >100K tokens) and a run's totals cannot say which calls were which, so no single rate prices it; the CLI's own figure is the one to read",
-};
-
-/** The Claude row for a served model id at a date, or null when the table has none. */
 export function claudePrice(model: string, at: number | null = null): PriceRow | null {
-  const row = CLAUDE_PRICES.find((p) => p.ids.includes(model));
+  const row = ANTHROPIC_PRICES.find((p) => p.ids.includes(model));
   if (row === undefined) return null;
   const w = windowAt(row.windows, at);
   if (w === null) return null;
@@ -226,28 +194,28 @@ export const LOCAL_PRICE: PriceRow = {
  */
 export { isFreeSlug, isLocalBase } from "../src/model-cost";
 
-/**
+/*
  * Open-model prices, synced from OpenRouter rather than typed in.
  *
- * `prices.openrouter.json` is written by `infra/sync-prices.ts` (`bun run
- * sync-prices`), which reads the provider's own catalogue and keeps the rows
- * the roster and the corpus actually need. A rate nobody typed is a rate nobody
- * can mistype.
+ * Each catalogue entry's `prices.openrouter` is written by
+ * `infra/sync-prices.ts` (`bun wb data prices`), which reads the provider's own
+ * catalogue for every OpenRouter id the model catalogue, the roster and the
+ * corpus name. A rate nobody typed is a rate nobody can mistype.
  *
  * **Rate windows.** Each id maps to a *list* of windows in date order rather
  * than to one row, because a rate that moves must not re-price the runs that
  * billed at the old one — `z-ai/glm-5.3-flash`'s launch discount lapsing around
- * 2026-09-09 is the case this exists for. A window carries the same four rates
- * as before plus an optional `from` (`YYYY-MM-DD`, the day it took over); the
- * first window omits `from`, meaning "everything before the next window
- * begins", so every run already on disk when windows arrived keeps the reading
- * it had. `syncedPrice` picks the last window whose `from` is at or before the
- * run's start, and the latest window when a caller asks for no particular date.
- * The Claude and provider tables carry the same windows, typed by hand.
+ * 2026-09-09 is the case this exists for. A window carries the four rates plus
+ * an optional `from` (`YYYY-MM-DD`, the day it took over); the first window
+ * omits `from`, meaning "everything before the next window begins", so every
+ * run already on disk when windows arrived keeps the reading it had.
+ * `syncedPrice` picks the last window whose `from` is at or before the run's
+ * start, and the latest window when a caller asks for no particular date. The
+ * Anthropic and endpoint rows carry the same windows, typed by hand.
  *
- * The file-level `asOf` is the day the catalogue was last read, not the day a
- * rate began — a window's own `from` is that, and a window without one is dated
- * by the sync that first wrote the file.
+ * `OPENROUTER_PRICES.asOf` is the day the catalogue was last read, not the day
+ * a rate began — a window's own `from` is that, and a window without one is
+ * dated by the sync that first wrote it.
  *
  * These models are genuinely metered against the operator's OpenRouter
  * balance, so `asIfMetered` is false: the figure is a list-price estimate of a
@@ -257,20 +225,13 @@ export { isFreeSlug, isLocalBase } from "../src/model-cost";
  * falls back to the input rate, per its own quoting.
  *
  * A free slug never reaches here: `priceFor` answers it with `FREE_PRICE`
- * first, whatever the catalogue quotes. So a 0/0 row in this file is only ever
- * reached for a `:free`/`-free` id — a *suffixless* id quoted at 0/0 would be
- * a paid model reading as free, which is the one shape the table must not
- * hold. `viewer-pricing.test.ts` asserts that invariant over every window in
- * the whole file, and the sync never writes one (`mergeWindows`): a stealth id
- * that really is free says so with its roster entry's `billing`, which the run
+ * first, whatever the catalogue quotes. So a 0/0 row is only ever reached for a
+ * `:free`/`-free` id — a *suffixless* id quoted at 0/0 would be a paid model
+ * reading as free, which is the one shape no row may hold. `parseCatalogue`
+ * refuses it, and the sync never writes one (`mergeWindows`): a stealth id that
+ * really is free says so with its roster entry's `billing`, which the run
  * records and `priceFor` reads.
  */
-export type SyncedRow = Pick<PriceRow, "input" | "output" | "cacheRead" | "cacheWrite">;
-
-/** One rate window: the rates, and the day they took over (absent on the first). */
-export type SyncedWindow = SyncedRow & { from?: string };
-
-export const SYNCED_PRICES: { asOf: string; models: Record<string, SyncedWindow[]> } = synced;
 
 /**
  * The window in force at `at`, or the latest when the caller names no date.
@@ -280,10 +241,10 @@ export const SYNCED_PRICES: { asOf: string; models: Record<string, SyncedWindow[
  * falls back to the earliest window, which is the best the table can say about
  * a run that predates what it knows.
  */
-export function windowAt(windows: readonly SyncedWindow[], at: number | null): SyncedWindow | null {
+export function windowAt(windows: readonly RateWindow[], at: number | null): RateWindow | null {
   if (windows.length === 0) return null;
   if (at === null) return windows[windows.length - 1]!;
-  let chosen: SyncedWindow | null = null;
+  let chosen: RateWindow | null = null;
   for (const w of windows) {
     if (w.from !== undefined && Date.parse(w.from) > at) break;
     chosen = w;
@@ -317,22 +278,22 @@ const SYNCED_BILLING: Record<SyncedFlavor, { asIfMetered: boolean; list: string;
 };
 
 function syncedRow(model: string, at: number | null, flavor: SyncedFlavor): PriceRow | null {
-  const windows = SYNCED_PRICES.models[model];
+  const windows = OPENROUTER_PRICES.models[model];
   if (windows === undefined) return null;
   const row = windowAt(windows, at);
   if (row === null) return null;
   const { asIfMetered, list, whose } = SYNCED_BILLING[flavor];
   const when =
     row.from === undefined
-      ? `${list}, synced ${SYNCED_PRICES.asOf} (infra/sync-prices.ts)`
-      : `${list} in force from ${row.from} (catalogue read ${SYNCED_PRICES.asOf}, infra/sync-prices.ts)`;
+      ? `${list}, synced ${OPENROUTER_PRICES.asOf} (infra/sync-prices.ts)`
+      : `${list} in force from ${row.from} (catalogue read ${OPENROUTER_PRICES.asOf}, infra/sync-prices.ts)`;
   return {
     id: model,
     input: row.input,
     output: row.output,
     cacheRead: row.cacheRead,
     cacheWrite: row.cacheWrite,
-    asOf: row.from ?? SYNCED_PRICES.asOf,
+    asOf: row.from ?? OPENROUTER_PRICES.asOf,
     source: "list",
     asIfMetered,
     note: `${when}; ${whose}`,
@@ -383,17 +344,18 @@ function isCliReported(run: Pick<PriceableRun, "driver" | "harness">): boolean {
   return eitherHas(run, (d) => d.cost.reported === "cli");
 }
 
-/**
- * Paid providers that are not OpenRouter, priced by hand.
+/*
+ * Paid providers that are not OpenRouter, priced by hand: each model entry's
+ * `prices.endpoints`, resolved against its provider (`ENDPOINT_PRICES`).
  *
- * The OpenRouter sync cannot help here: `infra/sync-prices.ts` writes only ids
- * its catalogue carries and deletes the rest, so a Cerebras row typed into
- * `prices.openrouter.json` would vanish on the next run of the script — and
+ * The OpenRouter sync cannot help here: `infra/sync-prices.ts` writes only the
+ * windows its catalogue quotes, so a Cerebras rate in an entry's
+ * `prices.openrouter` would be emptied on the next run of the script — and
  * OpenRouter's `qwen/qwen3.8-27b` is neither the same id string nor the same
- * rate as Cerebras's `qwen-3.8-27b`. So these rows live in source, dated and
- * sourced the way `CLAUDE_PRICES` is, and a stale one is visible rather than
- * silent. Operator's decision, 2026-09-04 (on its stated
- * trigger: `omen-alpha` on OpenCode's pay-as-you-go endpoint was the second
+ * rate as Cerebras's `qwen-3.8-27b`. So these rows are typed in, dated and
+ * sourced the way the Anthropic rows are, and a stale one is visible rather
+ * than silent. Operator's decision, 2026-09-04 (on its stated trigger:
+ * `omen-alpha` on OpenCode's pay-as-you-go endpoint was the second
  * non-OpenRouter paid provider to enter the fleet). This is the narrow case
  * "an unknown model gets no cost at all" was not written for — the price is
  * published and known, not guessed — and a row goes in only with a source a
@@ -404,106 +366,36 @@ function isCliReported(run: Pick<PriceableRun, "driver" | "harness">): boolean {
  * bare `omen-alpha` says nothing about which endpoint served it. The base is
  * compared exactly (origin plus path, trailing slash ignored), so a row for
  * `opencode.ai/zen/go/v1` does not reach the free `/zen/v1` slugs and a row
- * for one provider can never fire for a run on another.
+ * for one provider can never fire for a run on another. OpenCode Go's chat
+ * base as its docs give it is `/inference/go/openai/v1`; the older
+ * `/zen/go/v1` still answers, and `omen-alpha`'s row stays on it (its own
+ * provider, `opencode-go-zen`) because its runs recorded that base.
  *
- * Rates are windowed exactly as the synced table's are (`SyncedWindow[]`,
- * first window undated, `windowAt` picks the one in force at the run's start),
- * so a provider that moves its price gets a new window appended by hand with
- * its `from` date and the runs that billed at the old rate keep reading it.
- * The Claude rows use the same shape for the same reason.
- * A promotional rate whose end is *known* gets its successor window appended
- * on day one; one whose end is not known (`omen-alpha`, below) carries the
- * fact in its note and gets the window the day the bill changes.
+ * Rates are windowed exactly as the synced ones are (first window undated,
+ * `windowAt` picks the one in force at the run's start), so a provider that
+ * moves its price gets a new window appended by hand with its `from` date and
+ * the runs that billed at the old rate keep reading it. A promotional rate
+ * whose end is *known* gets its successor window appended on day one; one
+ * whose end is not known (`omen-alpha`) carries the fact in its note and gets
+ * the window the day the bill changes.
+ *
+ * Cache tiers, where the listing is silent. Cerebras caches the prefix and
+ * bills every input token at the input rate whether it was served from cache
+ * or not ("What Cerebras costs"), so its cacheRead and cacheWrite are the
+ * input rate rather than a tier below it. A models.dev listing with no
+ * cache-write tier (omen-alpha, and the Go models but space-bunny, whose
+ * listing states 0) bills a write as ordinary input, the same fallback the
+ * OpenRouter sync uses. DeepSeek's platform prices by time of day, which a date
+ * window cannot say: its row is the off-peak rate, and a cache miss bills at
+ * the input rate. Go's usage limits are dollar amounts and its chat responses
+ * carry no `usage.cost`, so the listing is the only figure those runs get; the
+ * free Go slugs (`-free`) need no row.
  *
  * `asIfMetered` is false throughout: these endpoints meter the operator's own
  * balance, so the figure is a list-price estimate of a real bill, not a
  * comparison. A row here does not touch the scheduler's free/paid verdict —
  * that stays `runner/src/model-cost.ts`'s.
  */
-export interface ProviderPriceRow {
-  /** What the row is called on screen. */
-  id: string;
-  /** The exact `apiBase` the roster entry names, compared by `sameBase`. */
-  apiBase: string;
-  /** The model id as the provider names it — exact, case-sensitive. */
-  model: string;
-  /** Rate windows in date order; the first carries no `from`. */
-  windows: readonly SyncedWindow[];
-  /** When the figures were taken (the first window's date; later ones carry their own `from`). */
-  asOf: string;
-  source: PriceRow["source"];
-  note: string;
-}
-
-/**
- * OpenCode Go's chat base as its docs give it. The older `/zen/go/v1` still
- * answers, and `omen-alpha`'s row stays on it because its runs recorded that
- * base; a row matches the base a run recorded, exactly.
- */
-export const OPENCODE_GO_BASE = "https://opencode.ai/inference/go/openai/v1";
-
-export const PROVIDER_PRICES: readonly ProviderPriceRow[] = [
-  {
-    id: "cerebras/qwen-3.8-27b",
-    apiBase: "https://api.cerebras.ai/v1",
-    model: "qwen-3.8-27b",
-    // No cache discount: Cerebras caches the prefix and bills every input
-    // token at the input rate whether it was served from cache or not
-    // ("What Cerebras costs"), so cacheRead and
-    // cacheWrite are the input rate rather than a tier below it.
-    windows: [{ input: 0.99, output: 1.49, cacheRead: 0.99, cacheWrite: 0.99 }],
-    asOf: "2026-09-04",
-    source: "list",
-    note: "Cerebras published price, verified 2026-09-04; no cache discount, so every prompt token bills at the input rate; metered against the operator's Cerebras balance",
-  },
-  {
-    id: "opencode-go/omen-alpha",
-    apiBase: "https://opencode.ai/zen/go/v1",
-    model: "omen-alpha",
-    // models.dev lists no cache-write tier; a write is billed as ordinary
-    // input, the same fallback the OpenRouter sync uses.
-    windows: [{ input: 0.2, output: 0.66, cacheRead: 0.04, cacheWrite: 0.2 }],
-    asOf: "2026-09-04",
-    source: "catalogue",
-    note: "models.dev registry listing for the opencode-go provider, read 2026-09-04 (model released the same day). The endpoint reported usage.cost 0 on every live response that day, so the published rate and the observed charge disagree: the actual figure beside this one is the provider's own word, and this is what the listing says it would cost if billed — a free alpha preview is the likely reading, but neither a free nor a billed alpha is asserted here. Append a dated window the day the bill changes",
-  },
-  {
-    id: "deepseek/deepseek-flash",
-    apiBase: "https://api.deepseek.com/v1",
-    model: "deepseek-flash",
-    // DeepSeek's own platform. Its responses carry no charge, and its price
-    // moves by time of day, which a date window cannot say: these are the
-    // off-peak rates, and a cache miss bills at the input rate.
-    windows: [{ input: 0.15, output: 0.6, cacheRead: 0.003, cacheWrite: 0.15 }],
-    asOf: "2026-10-17",
-    source: "list",
-    note: "DeepSeek published off-peak price for deepseek-flash, read 2026-10-17 (DeepSeek's floating id, V4.1-Flash-1017 from that day). Peak hours, 01:00–04:00 and 06:00–10:00 UTC Monday to Friday outside Chinese public holidays, bill double, so a run that spans them cost up to twice this figure; weekends are off-peak throughout. Metered against the operator's DeepSeek balance",
-  },
-  // OpenCode Go at its documented chat base. Go's usage limits are dollar
-  // amounts and its chat responses carry no `usage.cost`, so the listing is
-  // the only figure these runs get. The free Go slugs (`-free`) need no row.
-  // A Go model the listing gives no cache-write tier bills a write as input,
-  // the omen-alpha fallback; space-bunny's listing states its tier as 0.
-  ...goRows("2026-10-16", [
-    ["space-bunny", { input: 0.15, output: 0.6, cacheRead: 0.03, cacheWrite: 0 }],
-    ["mimo-v2.6-flash", { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0.14 }],
-    ["mimo-v2.5", { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0.14 }],
-    ["deepseek-v4.1-flash", { input: 0.15, output: 0.6, cacheRead: 0.003, cacheWrite: 0.15 }],
-  ]),
-];
-
-/** Go rows read off one models.dev listing on one day: same base, source and note. */
-function goRows(asOf: string, rates: readonly [string, SyncedWindow][]): ProviderPriceRow[] {
-  return rates.map(([model, window]) => ({
-    id: `opencode-go/${model}`,
-    apiBase: OPENCODE_GO_BASE,
-    model,
-    windows: [window],
-    asOf,
-    source: "catalogue",
-    note: `models.dev registry listing for the opencode-go provider, read ${asOf}. The Go endpoint reports no per-response charge, and its usage limits are denominated in dollars, so this list rate is the expected figure for what a run draws against them, not an invoice. Append a dated window when the listing moves`,
-  }));
-}
 
 /** Two api bases name the same endpoint: same origin, same path, trailing slash ignored. */
 function sameBase(a: string | null | undefined, b: string): boolean {
@@ -520,10 +412,10 @@ function sameBase(a: string | null | undefined, b: string): boolean {
   return x !== null && x === norm(b);
 }
 
-/** The hand-held provider row for a run at a date, or null when no row names its base and id. */
+/** The hand-held endpoint row for a run at a date, or null when no row names its base and id. */
 export function providerPrice(run: Pick<PriceableRun, "model" | "apiBase">, at: number | null = null): PriceRow | null {
   const model = run.model ?? "";
-  for (const p of PROVIDER_PRICES) {
+  for (const p of ENDPOINT_PRICES) {
     if (p.model !== model || !sameBase(run.apiBase, p.apiBase)) continue;
     const w = windowAt(p.windows, at);
     if (w === null) return null;
@@ -542,29 +434,26 @@ export function providerPrice(run: Pick<PriceableRun, "model" | "apiBase">, at: 
   return null;
 }
 
-/** Whether a run's base is one the hand-held provider table knows at all, whatever the model. */
+/** Whether a run's base is one the hand-held endpoint rows know at all, whatever the model. */
 function isProviderBase(apiBase: string | null | undefined): boolean {
-  return PROVIDER_PRICES.some((p) => sameBase(apiBase, p.apiBase));
+  return ENDPOINT_PRICES.some((p) => sameBase(apiBase, p.apiBase));
 }
 
-/**
- * Ids the provider's catalogue no longer carries, and why.
+/*
+ * OpenRouter ids the provider's catalogue no longer carries, and why
+ * (`OPENROUTER_DELISTED`, an entry's `prices.openrouter[id].delisted`).
  *
  * A delisted model is unpriced in a way running the sync cannot fix — the
- * catalogue has no row to copy, so a sync *removes* the id rather than
- * updating it. That is a different problem from "the sync has not seen this
- * yet", and telling the reader to run a script that cannot help is worse than
- * telling them nothing, so `unpricedNote` answers these ids from here instead.
+ * catalogue has no row to copy, so a sync *empties* the id's windows rather
+ * than updating them. That is a different problem from "the sync has not seen
+ * this yet", and telling the reader to run a script that cannot help is worse
+ * than telling them nothing, so `unpricedNote` answers these ids from the
+ * entry instead.
  *
- * This map is also the record of why a row is missing from
- * `prices.openrouter.json`: the alternative was to hold a rate by hand, and a
- * hand-held rate in a file whose whole point is that nobody types rates into
- * it is a number with no source behind it.
+ * The note is also the record of why the id has no windows: the alternative
+ * was to hold a rate by hand, and a hand-held rate where the whole point is
+ * that nobody types rates in is a number with no source behind it.
  */
-export const DELISTED_MODELS: Readonly<Record<string, string>> = {
-  "stealth/ox-alpha":
-    "delisted — the stealth listing was revealed as ZAI GLM-5.3-Flash on 2026-08-28 and left the OpenRouter catalogue, so no list price is on file and a sync cannot restore one; these runs were free while the preview window was open, and the provider's own per-response charge is the figure to read",
-};
 
 /**
  * What a run needs to carry to be priced. A subset of `RunRow`, so tests can be
@@ -670,16 +559,16 @@ function none(note: string): CostFigure {
  * Why a run has no price row, in the words the reader can act on.
  *
  * Several different problems wear the same blank: a Claude model we do not
- * carry, one we decided not to price (`CLAUDE_UNPRICED`), a Claude alias whose
+ * carry, one we decided not to price (`ANTHROPIC_UNPRICED`), a Claude alias whose
  * run never said what it was served, an OpenRouter model the sync has not
  * seen (fixed by running the script), one the catalogue has dropped (which the
- * script cannot fix, and `DELISTED_MODELS` says so in its own words), and a
+ * script cannot fix, and `OPENROUTER_DELISTED` says so in its own words), and a
  * model on a paid provider the hand-held table knows but has no row for (which
- * the script cannot price either — the row is typed into `PROVIDER_PRICES`,
+ * the script cannot price either — the row is typed into the entry's `prices.endpoints`,
  * with a source).
  */
 export function unpricedNote(run: PriceableRun): string {
-  const delisted = DELISTED_MODELS[run.model ?? ""];
+  const delisted = OPENROUTER_DELISTED[run.model ?? ""];
   if (delisted !== undefined) return delisted;
   // Before the Claude branch: a codex slug is a bare model id with no vendor in
   // it, so the harness is the only thing that says which table can answer, and
@@ -689,15 +578,15 @@ export function unpricedNote(run: PriceableRun): string {
   }
   if (isClaudeRun(run)) {
     const served = servedClaudeModel(run);
-    const decided = CLAUDE_UNPRICED[served];
+    const decided = ANTHROPIC_UNPRICED[served];
     if (decided !== undefined) return decided;
     if ((run.resolvedModel ?? null) === null && !served.startsWith("claude-")) {
       return `\`${served}\` is an alias the CLI resolves at launch, and this run recorded no served model, so which model it was — and its price — is not known; tokens only, never a guess`;
     }
-    return `no price on file for ${served} — tokens only, never a guess; a new Claude model needs a dated, sourced row in CLAUDE_PRICES (runner/viewer/pricing.ts)`;
+    return `no price on file for ${served} — tokens only, never a guess; a new Claude model needs a dated, sourced prices.anthropic on its entry in infra/model-catalogue.json`;
   }
   if (isProviderBase(run.apiBase)) {
-    return "no hand-held price for this model on this provider — add a dated, sourced row to PROVIDER_PRICES (runner/viewer/pricing.ts); the OpenRouter sync cannot price it";
+    return "no hand-held price for this model on this provider — add a dated, sourced prices.endpoints row to its entry in infra/model-catalogue.json; the OpenRouter sync cannot price it";
   }
   return "no synced price — run `bun wb data prices` (infra/sync-prices.ts)";
 }
@@ -894,8 +783,8 @@ export interface PriceableEntry {
  * asked of the entry as a run of it would be priced today — the same
  * `priceFor` — so it cannot disagree with the run page.
  *
- * Two kinds of entry are not gaps. A decided blank (`DELISTED_MODELS`,
- * `CLAUDE_UNPRICED`) already says why on every run. A claude-code alias
+ * Two kinds of entry are not gaps. A decided blank (`OPENROUTER_DELISTED`,
+ * `ANTHROPIC_UNPRICED`) already says why on every run. A claude-code alias
  * (`sonnet`, `opus`) resolves only when the CLI starts, so nothing here can
  * say what it will be served; its runs are priced on the served model they
  * record, and an unpriced one reads so on the run page.
@@ -911,6 +800,6 @@ export function rosterPriceGap(entry: PriceableEntry): string | null {
   const prefix = known?.cost.modelPrefix;
   if (prefix !== undefined && !entry.model.startsWith(prefix)) return null;
   if (priceFor(run) !== null) return null;
-  if (DELISTED_MODELS[entry.model] !== undefined || CLAUDE_UNPRICED[entry.model] !== undefined) return null;
+  if (OPENROUTER_DELISTED[entry.model] !== undefined || ANTHROPIC_UNPRICED[entry.model] !== undefined) return null;
   return unpricedNote(run);
 }

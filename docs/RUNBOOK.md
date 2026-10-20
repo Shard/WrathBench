@@ -443,7 +443,7 @@ cannot bury the record of what the fleet ran. An ignore is remembered by model
 id (with who ignored it) and survives a reseed; **un-ignore**, in the collapsed
 *ignored* list, undoes it.
 
-Each draft carries an estimate of one `e90`: the catalogue's list price applied
+Each draft carries an estimate of one `e90`: OpenRouter's list price applied
 to the median counted `e90` of this series on the wrathbench harness, from
 provider-reported tokens only — prompt, completion and cache reads, each its
 own median. It is labelled an estimate on the page because it extrapolates
@@ -462,7 +462,7 @@ refusal — a name or a model the roster already has, a claude id on the openai
 driver — is shown on the row, and the draft stays.
 
 Nothing calls the model first: whether a slug really answers a tool call is
-what its `t0` trial finds out. A model the catalogue does not carry — a
+what its `t0` trial finds out. A model OpenRouter's catalogue does not carry — a
 claude-code or codex lane, the LAN box, Cerebras, OpenCode Go — is still added with **add a
 roster entry**. The endpoints are in `runner/viewer/README.md`.
 
@@ -479,15 +479,39 @@ It never sends the headers that identify OpenCode's own client. Go picks
 the backend behind each model, so a Go run stamps unpinned routing and
 records the backend that answered (`routing`, above). A `-free`
 Go slug derives free; any other derives paid, which puts it under the paid
-throttle, and is priced by a `PROVIDER_PRICES` row on that exact base, since
-Go reports no per-response charge.
+throttle, and is priced by an `opencode-go` endpoint row on its catalogue
+entry, since Go reports no per-response charge.
 
-A new model needs a price too, or its runs read no expected cost. `--status`
-lists every roster entry with none, and says which fix it needs: a paid
-OpenRouter or codex model is priced by `bun wb data prices`, a new Claude
-model by a dated row in `CLAUDE_PRICES`, a non-OpenRouter provider by one in
-`PROVIDER_PRICES` (both in `runner/viewer/pricing.ts`). The price file ships in
-the image, so either way the price reaches the viewer with the next release.
+**A new model also needs a catalogue entry** — `infra/model-catalogue.json`,
+the one place a model's static facts live (docs/ARCHITECTURE.md). The roster
+entry says how a model is scheduled; the catalogue says what it is, and every
+page, the ladder's filters, the cost figures and the Every Eval Ever export
+read it from there. In a checkout:
+
+1. Add the entry under the id the roster names, written lowercase and without
+   `:free`: its `family` (an existing family's id, or a new family with its
+   company, name, logo `icon` and globs — then `bun wb data logos`; `null`
+   only while the developer is unrevealed), its `name`, its `weights`
+   (`open` with the checkpoint's URL, `closed` with where the vendor says it is
+   served only, else `unknown`) and its `source`. Other spellings of the same
+   model go in `aliases`: a codex slug, a dated snapshot, a Zen `-free` id.
+2. Price it. A paid OpenRouter or codex model: `bun wb data prices`, which
+   writes the windows onto the entry (and reports any priced id the catalogue
+   does not list). A new Claude model: a dated, sourced `prices.anthropic`.
+   A non-OpenRouter paid provider: a dated, sourced `prices.endpoints` row
+   under the provider's id in `providers` (add the provider, with its exact
+   `apiBase`, if it is new). Free and local models need no price.
+3. `bun wb data catalogue --format` validates the file and rewrites it in its
+   one spelling (offline, prices untouched), which `bun run test` requires;
+   the tests also refuse a malformed file or an id they cannot place. Commit.
+
+The catalogue ships in the image, so the entry reaches the viewer, the
+scheduler's status line and the publisher with the next release, and the public
+site with the next dashboard build. Until then `--status` lists every roster
+entry the catalogue does not list, and every one with no price, saying which
+fix it needs. `bun wb data catalogue` asks the same of the published
+generation: it reads the public bucket and names every model id there with no
+entry.
 
 ### Stop it
 
@@ -2322,16 +2346,16 @@ out either way. Each record carries the series as
 `eval_library.version` and every exact harness version in the cell, the harness
 label as `agent_scaffold`, the effort, whether the model's weights are
 published as `model_availability` (`open_weights`, `closed_weights` or
-`unknown`, from the lineup's per-model `weights` rules in
-`infra/model-lineup.json`, looked up at export time so no release is needed
-for a lineup edit to reach a record), the run ids, `n`, and three results that
+`unknown`, from each model's `weights` in the model catalogue,
+`infra/model-catalogue.json`, looked up at export time so no release is needed
+for a catalogue edit to reach a record), the run ids, `n`, and three results that
 are the ladder's three keys — `highest_rung`, `best_level` (with the xp within
 it, and the min, median and max level of the cell's runs) and `best_money` —
 plus the order between them, since EEE has no field for a ranking that is not
 one number. No game text: rung numbers, never titles, and no character, zone or
 map. Every record is scanned as the publisher scans a body, and a finding
 writes nothing. A run left out is counted on stdout with its reason: a flat
-model id the lineup (`infra/model-lineup.json`) does not claim has no developer
+model id the model catalogue (`infra/model-catalogue.json`) cannot place has no developer
 EEE could file it under.
 
 Output is the datastore's own layout, `<out>/data/wrathbench/<developer>/<model>/<uuid>.json`,

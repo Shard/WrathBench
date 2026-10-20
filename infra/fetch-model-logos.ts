@@ -1,14 +1,14 @@
 #!/usr/bin/env bun
 /**
- * Fetch the model logos named by `infra/model-lineup.json` into
+ * Fetch the model logos named by `infra/model-catalogue.json` into
  * `dashboard/src/assets/model-logos/<family-id>.svg`.
  *
  *   bun infra/fetch-model-logos.ts            # download, write, prune
  *   bun infra/fetch-model-logos.ts --check    # no network; drift check
  *
  * Recognizing a new model should be a data edit: add or extend a
- * family in the lineup, run this, commit. The artwork comes from
- * `@lobehub/icons-static-svg` at the version the lineup pins, pulled straight
+ * family in the catalogue, run this, commit. The artwork comes from
+ * `@lobehub/icons-static-svg` at the version the catalogue pins, pulled straight
  * from `registry.npmjs.org` — the CDN mirrors that normally serve these files
  * are not reachable from here, and a registry tarball is the pinnable thing
  * anyway: its metadata quotes an sha512 integrity we verify before unpacking.
@@ -19,15 +19,16 @@
  *
  * Writes are byte-compared first, so a re-run that changed nothing produces no
  * diff, and `.svg` files no family references are pruned — a family renamed in
- * the lineup does not leave its old logo behind.
+ * the catalogue does not leave its old logo behind.
  */
 
 import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { parseLineup, planAssets, readTar, selectIcons, assetFile, type ModelLineup } from "./model-logos.ts";
+import { parseCatalogue } from "./model-catalogue.ts";
+import { planAssets, readTar, selectIcons, assetFile, type LogoCatalogue } from "./model-logos.ts";
 
 const REPO_ROOT = dirname(import.meta.dir);
-const LINEUP = join(REPO_ROOT, "infra", "model-lineup.json");
+const CATALOGUE_FILE = join(REPO_ROOT, "infra", "model-catalogue.json");
 const ASSETS = join(REPO_ROOT, "dashboard", "src", "assets", "model-logos");
 /** Shown in output relative to the repo root; absolute paths are noise here. */
 const ASSETS_LABEL = "dashboard/src/assets/model-logos";
@@ -52,7 +53,7 @@ function presentFiles(dir: string): string[] {
  * wrong-version guard — but it is free, and a silently truncated download
  * would otherwise surface as an unreadable tar much further along.
  */
-async function fetchTarball(icons: ModelLineup["icons"]): Promise<Uint8Array<ArrayBuffer>> {
+async function fetchTarball(icons: LogoCatalogue["icons"]): Promise<Uint8Array<ArrayBuffer>> {
   const metaUrl = `${REGISTRY}/${icons.package}/${icons.version}`;
   const metaRes = await fetch(metaUrl);
   if (!metaRes.ok) throw new Error(`${metaUrl}: HTTP ${metaRes.status}`);
@@ -78,9 +79,9 @@ async function fetchTarball(icons: ModelLineup["icons"]): Promise<Uint8Array<Arr
   return bytes;
 }
 
-async function check(lineup: ModelLineup): Promise<number> {
+async function check(catalogue: LogoCatalogue): Promise<number> {
   const wanted = new Map<string, Uint8Array | null>();
-  for (const f of lineup.families) if (f.icon !== undefined) wanted.set(f.id, null);
+  for (const f of catalogue.families) if (f.icon !== undefined) wanted.set(f.id, null);
   const present = new Map<string, Uint8Array | null>(presentFiles(ASSETS).map((f) => [f, null]));
   // Bytes are deliberately not read: without the tarball there is nothing to
   // compare them against, so --check finds missing and orphaned files only.
@@ -88,7 +89,7 @@ async function check(lineup: ModelLineup): Promise<number> {
   const plan = planAssets(wanted, present);
 
   for (const id of plan.missing) {
-    const family = lineup.families.find((f) => f.id === id);
+    const family = catalogue.families.find((f) => f.id === id);
     console.error(`missing   ${ASSETS_LABEL}/${assetFile(id)} (family ${id}, icon ${family?.icon ?? "?"})`);
   }
   for (const file of plan.orphaned) console.error(`orphaned  ${ASSETS_LABEL}/${file} (no family references it)`);
@@ -103,10 +104,10 @@ async function check(lineup: ModelLineup): Promise<number> {
   return 0;
 }
 
-async function sync(lineup: ModelLineup): Promise<number> {
-  const gz = await fetchTarball(lineup.icons);
+async function sync(catalogue: LogoCatalogue): Promise<number> {
+  const gz = await fetchTarball(catalogue.icons);
   const entries = readTar(new Uint8Array(Bun.gunzipSync(gz)));
-  const icons = selectIcons(lineup, entries);
+  const icons = selectIcons(catalogue, entries);
 
   const wanted = new Map<string, Uint8Array | null>(icons.map((i) => [i.familyId, i.svg]));
   const byFamily = new Map(icons.map((i) => [i.familyId, i]));
@@ -137,8 +138,8 @@ async function sync(lineup: ModelLineup): Promise<number> {
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   const unknown = argv.filter((a) => a !== "--check");
   if (unknown.length > 0) throw new Error(`unknown argument ${unknown[0]} (only --check)`);
-  const lineup = parseLineup(await Bun.file(LINEUP).text(), "infra/model-lineup.json");
-  return argv.includes("--check") ? check(lineup) : sync(lineup);
+  const catalogue = parseCatalogue(await Bun.file(CATALOGUE_FILE).text(), "infra/model-catalogue.json");
+  return argv.includes("--check") ? check(catalogue) : sync(catalogue);
 }
 
 if (import.meta.main) process.exit(await main());
