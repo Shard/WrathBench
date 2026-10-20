@@ -48,7 +48,8 @@ import {
   xpEarnedOf,
 } from "../src/lib/ladder";
 import { OPAQUE_PAUSE_REASON, STALL_PAUSE_REASON } from "../src/lib/runs";
-import { familyOf, monogramOf } from "../src/lib/lineup";
+import { familyOf } from "../../infra/model-catalogue";
+import { monogramOf } from "../src/lib/modelmark";
 import { resolvedSummary } from "../src/lib/models";
 import { EPISODE_CHOICES, episodeParam } from "../src/lib/episodes";
 
@@ -1528,13 +1529,14 @@ describe("characterSeries", () => {
     const runs = [
       fp({ runId: "s1", model: "anthropic/claude-sonnet-4-5", character: "Anvi", levels: [mark(9, null, 0)], playtimeMs: 100_000 }),
       fp({ runId: "s2", model: "z-ai/glm-5.2:free", character: "Bree", levels: [mark(7, null, 0)], playtimeMs: 100_000 }),
-      fp({ runId: "s3", model: "stealth/ox-alpha", character: "Cass", levels: [mark(5, null, 0)], playtimeMs: 100_000 }),
+      // Invented: an unrevealed stealth id no catalogue entry or family claims.
+      fp({ runId: "s3", model: "stealth/nameless-alpha", character: "Cass", levels: [mark(5, null, 0)], playtimeMs: 100_000 }),
     ];
     const { series } = seriesOf(runs);
     expect(series.map((x) => [x.label, x.model])).toEqual([
       ["claude-sonnet-4-5", "anthropic/claude-sonnet-4-5"],
       ["glm-5.2 (free)", "z-ai/glm-5.2:free"],
-      ["ox-alpha", "stealth/ox-alpha"],
+      ["nameless-alpha", "stealth/nameless-alpha"],
     ]);
     // The logo each one resolves to — the `:free` suffix is stripped, not matched on.
     expect(series.map((x) => familyOf(x.model)?.id ?? null)).toEqual(["claude", "glm", null]);

@@ -49,17 +49,20 @@ describe("lineOf", () => {
 });
 
 describe("companyOf", () => {
-  test("the lineup catalog's vendor, lowercased", () => {
+  test("the catalogue family's company, lowercased", () => {
     expect(companyOf("sonnet")).toBe("anthropic");
     expect(companyOf("claude-fable-5")).toBe("anthropic");
     expect(companyOf("gpt-6-astra")).toBe("openai");
     expect(companyOf("google/gemini-3.8-flash")).toBe("google");
     expect(companyOf("nvidia/nemotron-3-super-120b-a12b:free")).toBe("nvidia");
+    // A vendor the catalogue added names its company, not its OpenRouter prefix.
+    expect(companyOf("dots-studio/dots-3-note-preview:free")).toBe("rednote");
+    expect(companyOf("inclusionai/ling-3.0-flash-fin:free")).toBe("inclusionai");
   });
 
-  test("an id the catalog does not claim falls back to its provider prefix", () => {
-    expect(companyOf("dots-studio/dots-3-note-preview:free")).toBe("dots-studio");
-    expect(companyOf("inclusionai/ling-3.0-flash-fin:free")).toBe("inclusionai");
+  test("an id the catalogue cannot place falls back to its provider prefix", () => {
+    // Invented: a namespace no entry or family claims.
+    expect(companyOf("acme-labs/acme-1:free")).toBe("acme-labs");
   });
 
   test("and to `unknown` when the slug names no provider at all", () => {
@@ -112,12 +115,12 @@ describe("matchesSelection", () => {
     const open = { ...none, weights: ["open"] };
     expect(matchesSelection("openai/gpt-oss-120b", open)).toBe(true);
     expect(matchesSelection("gpt-6-luna", open)).toBe(false);
-    expect(matchesSelection("stealth/ox-alpha", { ...none, weights: ["open", "unknown"] })).toBe(true);
+    expect(matchesSelection("omen-alpha", { ...none, weights: ["open", "unknown"] })).toBe(true);
     expect(matchesSelection("openai/gpt-oss-120b", { ...open, companies: ["anthropic"] })).toBe(false);
   });
 
   test("its options are the verdicts the rows carry, commonest first", () => {
-    expect(filterOptions(["opus", "sonnet", "openai/gpt-oss-120b", "stealth/ox-alpha"], weightsOf)).toEqual([
+    expect(filterOptions(["opus", "sonnet", "openai/gpt-oss-120b", "omen-alpha"], weightsOf)).toEqual([
       { key: "closed", n: 2 },
       { key: "open", n: 1 },
       { key: "unknown", n: 1 },

@@ -102,6 +102,7 @@ import { resumesOnPause, TAINT_AFTER } from "../runner/src/lapse";
 import { subscriptionThresholds } from "../runner/src/subscription-usage";
 import { formatSubscriptionGate, gateLanes, laneOfRun, readLaneUsage, subscriptionGate, type FleetSubscriptionGate } from "./run-fleet-gate";
 import { rosterPriceGap } from "../runner/viewer/pricing";
+import { catalogueKeyOf } from "./model-catalogue";
 import {
   ACCOUNT_CLASSES,
   type AccountClass,
@@ -302,6 +303,26 @@ export function formatPriceGaps(roster: Readonly<Record<string, FleetRosterEntry
   }
   if (out.length === 0) return [];
   return [`! ${out.length} roster model(s) with no price — their runs will read no expected cost:`, ...out];
+}
+
+/**
+ * Roster entries whose model the model catalogue (`infra/model-catalogue.json`)
+ * does not list. Pure.
+ *
+ * A warning line, never a refusal, like the price gaps above: the entry still
+ * runs. Printed because an unlisted id falls back to its family's glob, or to
+ * nothing — no name, its company guessed from a prefix and its weights read
+ * `unknown` — and a roster entry added through the store or the /config
+ * page's promote is the one place no test can see. The fix is an entry in the
+ * catalogue and a release, since the catalogue ships in the image.
+ */
+export function formatCatalogueGaps(roster: Readonly<Record<string, FleetRosterEntry>>): string[] {
+  const out: string[] = [];
+  for (const [name, e] of Object.entries(roster)) {
+    if (catalogueKeyOf(e.model) === null) out.push(`   ${name} (${e.model})`);
+  }
+  if (out.length === 0) return [];
+  return [`! ${out.length} roster model(s) not in the model catalogue (infra/model-catalogue.json) — their company, name and weights read as unknown:`, ...out];
 }
 
 /** --status / --dry-run rendering of a gate record. Pure. */
@@ -763,6 +784,7 @@ export function printStatus(): void {
   for (const line of formatRefusals(config?.refusals ?? [], rejected === undefined)) console.log(line);
   for (const line of formatCampaignRefusals(config?.campaignRefusals ?? [])) console.log(line);
   for (const line of formatPriceGaps(config?.roster ?? {})) console.log(line);
+  for (const line of formatCatalogueGaps(config?.roster ?? {})) console.log(line);
   // Liveness, honestly, from either side of a container boundary (`stateLiveness`).
   const { fleetUp, hbAgeMs, isAlive } = stateLiveness(state, Date.now());
   const where = state?.containerized === true ? "the fleet container" : "host process";

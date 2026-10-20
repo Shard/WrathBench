@@ -15,7 +15,11 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import type { PriceableRun } from "../viewer/pricing";
-import { CLAUDE_PRICES, CLAUDE_UNPRICED, DELISTED_MODELS, OPENCODE_GO_BASE, PROVIDER_PRICES, SYNCED_PRICES, breakdownTotal, claudePrice, codexPrice, costOf, priceFor, providerPrice, rosterPriceGap, runCost, syncedPrice, windowAt } from "../viewer/pricing";
+import { ANTHROPIC_PRICES, ANTHROPIC_UNPRICED, CATALOGUE, ENDPOINT_PRICES, OPENROUTER_DELISTED, OPENROUTER_PRICES } from "../../infra/model-catalogue";
+import { breakdownTotal, claudePrice, codexPrice, costOf, priceFor, providerPrice, rosterPriceGap, runCost, syncedPrice, windowAt } from "../viewer/pricing";
+
+/** OpenCode Go's chat base, as the catalogue's provider names it. */
+const OPENCODE_GO_BASE = CATALOGUE.providers["opencode-go"]!.apiBase!;
 import { isFreeSlug } from "../src/model-cost";
 import { catalogueIds, isZeroQuote, mergeWindows, rosterModels, sameRates } from "../../infra/sync-prices";
 import { reportedCostUsd, responseCostCoverage, scanRunTotals, summarize, tokenTotals, TrajectoryTail } from "../viewer/tail";
@@ -58,10 +62,10 @@ describe("priceFor", () => {
     expect(p?.input).toBeGreaterThan(0);
     // The date is the window's own `from` where it has one, and the file's
     // `asOf` for a first, undated window — deriving it here rather than
-    // hard-coding `SYNCED_PRICES.asOf` keeps this green through a rate move,
+    // hard-coding `OPENROUTER_PRICES.asOf` keeps this green through a rate move,
     // which is the whole point of windows.
-    const latest = SYNCED_PRICES.models[run.model!]!.at(-1)!;
-    expect(p?.asOf).toBe(latest.from ?? SYNCED_PRICES.asOf);
+    const latest = OPENROUTER_PRICES.models[run.model!]!.at(-1)!;
+    expect(p?.asOf).toBe(latest.from ?? OPENROUTER_PRICES.asOf);
     expect(priceFor({ ...run, model: "deepseek/deepseek-v4-pro" })).toBeNull();
   });
   test("names a claude model through the claude-code harness, by the model the CLI served", () => {
@@ -89,7 +93,7 @@ describe("priceFor", () => {
   test("Haiku 5.5 is a decided blank: tiered per request, so the CLI's own figure is the one to read", () => {
     const run = { ...sonnetRun, model: "claude-haiku-5-5", resolvedModel: "claude-haiku-5-5" };
     expect(claudePrice("claude-haiku-5-5")).toBeNull();
-    expect(CLAUDE_UNPRICED["claude-haiku-5-5"]).toContain("tiered per request");
+    expect(ANTHROPIC_UNPRICED["claude-haiku-5-5"]).toContain("tiered per request");
     const c = runCost({ run, tokens: tokens({ promptTokens: 53_060_733, completionTokens: 153_184, cacheReadTokens: 52_819_071, cacheWriteTokens: 240_912 }), reportedUsd: 2.83 });
     expect(c.expected.usd).toBeNull();
     expect(c.expected.note).toContain("tiered per request");
@@ -158,7 +162,7 @@ describe("priceFor", () => {
   });
 
   test("the synced table is windowed: every id's first window carries no date, so it prices runs older than the sync", () => {
-    for (const [id, windows] of Object.entries(SYNCED_PRICES.models)) {
+    for (const [id, windows] of Object.entries(OPENROUTER_PRICES.models)) {
       expect(windows.length).toBeGreaterThan(0);
       expect(windows[0]!.from).toBeUndefined();
       // Windows are in date order, and only the first is undated.
@@ -252,7 +256,7 @@ describe("priceFor", () => {
   }
 
   test("every Claude row is exact, dated and windowed like the other tables", () => {
-    for (const p of CLAUDE_PRICES) {
+    for (const p of ANTHROPIC_PRICES) {
       expect(p.asOf).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       expect(p.windows.length).toBeGreaterThan(0);
       expect(p.windows[0]!.from).toBeUndefined();
@@ -262,7 +266,7 @@ describe("priceFor", () => {
         expect(claudePrice(id)?.source).toBe("list");
         // A Claude cache write is the 1-hour rate: twice the input rate.
         for (const w of p.windows) expect(w.cacheWrite).toBe(w.input * 2);
-        expect(CLAUDE_UNPRICED[id]).toBeUndefined();
+        expect(ANTHROPIC_UNPRICED[id]).toBeUndefined();
       }
     }
   });
@@ -295,7 +299,7 @@ describe("priceFor", () => {
     // (`priceFor` answers the suffix first). Anything else at 0/0 is a paid
     // model whose price went missing — `stealth/ox-alpha` sat here from
     // 2026-08-20 to 2026-08-29 and made 22 runs read as costing nothing.
-    for (const [id, windows] of Object.entries(SYNCED_PRICES.models)) {
+    for (const [id, windows] of Object.entries(OPENROUTER_PRICES.models)) {
       // Every window, not just the one in force: a historical zero prices the
       // runs of its own window and is the same failure a day later.
       for (const w of windows) {
@@ -307,7 +311,7 @@ describe("priceFor", () => {
 
   test("a delisted model has no price and is not told to run the sync that dropped it", () => {
     const run: PriceableRun = { model: "stealth/ox-alpha", apiBase: "https://openrouter.ai/api/v1", platform: "openrouter", driver: "openai", harness: "wrathbench" };
-    expect(SYNCED_PRICES.models["stealth/ox-alpha"]).toBeUndefined();
+    expect(OPENROUTER_PRICES.models["stealth/ox-alpha"]).toBeUndefined();
     expect(priceFor(run)).toBeNull();
     const c = runCost({ run, tokens: tokens({ promptTokens: 1_000_000, completionTokens: 10_000 }), reportedUsd: 0 });
     // The blank is explicit and says *delisted*, not "run the sync".
@@ -321,8 +325,8 @@ describe("priceFor", () => {
   });
 
   test("every delisted id is absent from the synced table — the note and the row cannot both be right", () => {
-    for (const [id, why] of Object.entries(DELISTED_MODELS)) {
-      expect(SYNCED_PRICES.models[id]).toBeUndefined();
+    for (const [id, why] of Object.entries(OPENROUTER_DELISTED)) {
+      expect(OPENROUTER_PRICES.models[id]).toBeUndefined();
       expect(why).toContain("delisted");
     }
   });
@@ -435,7 +439,7 @@ describe("the hand-held provider table", () => {
       expect(rosterPriceGap({ model: m, apiBase: OPENCODE_GO_BASE, billing: "paid" })).toBeNull();
     }
     // A Go model with no row yet is told where its row goes, never to run the sync.
-    expect(rosterPriceGap({ model: "glm-5.3", apiBase: OPENCODE_GO_BASE, billing: "paid" })).toContain("PROVIDER_PRICES");
+    expect(rosterPriceGap({ model: "glm-5.3", apiBase: OPENCODE_GO_BASE, billing: "paid" })).toContain("prices.endpoints");
     // And a provider-reported charge on this base is never called OpenRouter's.
     const c = runCost({ run: { ...go, model: "mimo-v2.5" }, tokens: tokens({ promptTokens: 1_000_000, completionTokens: 1_000_000 }), reportedUsd: 0.5, coverage: { costed: 1, uncosted: 0 } });
     expect(c.actual.note).not.toContain("OpenRouter");
@@ -451,7 +455,7 @@ describe("the hand-held provider table", () => {
     expect(priceFor({ ...cerebras, model: "llama-4.2-8b" })).toBeNull();
     const c = runCost({ run: { ...cerebras, model: "llama-4.2-8b" }, tokens: tokens({ promptTokens: 1_000 }), reportedUsd: null });
     expect(c.expected.basis).toBe("none");
-    expect(c.expected.note).toContain("PROVIDER_PRICES");
+    expect(c.expected.note).toContain("prices.endpoints");
     expect(c.expected.note).not.toContain("sync-prices");
     // A trailing slash or upper-case host is the same endpoint.
     expect(providerPrice({ model: "qwen-3.8-27b", apiBase: "https://API.cerebras.ai/v1/" })?.id).toBe("cerebras/qwen-3.8-27b");
@@ -470,11 +474,11 @@ describe("the hand-held provider table", () => {
     // And the Claude rows still answer through the harness.
     expect(priceFor(sonnetRun)?.id).toBe("claude-sonnet-5");
     // No provider row names an OpenRouter base, so none can ever meet a synced id.
-    for (const p of PROVIDER_PRICES) expect(new URL(p.apiBase).hostname).not.toBe("openrouter.ai");
+    for (const p of ENDPOINT_PRICES) expect(new URL(p.apiBase).hostname).not.toBe("openrouter.ai");
   });
 
   test("every provider row is dated, sourced, windowed like the synced table, and never 0/0", () => {
-    for (const p of PROVIDER_PRICES) {
+    for (const p of ENDPOINT_PRICES) {
       expect(p.asOf).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       expect(["list", "catalogue"]).toContain(p.source);
       expect(p.note.length).toBeGreaterThan(0);
@@ -492,7 +496,7 @@ describe("the hand-held provider table", () => {
   });
 
   test("a hand-held row moves by window: the runs that billed at the old rate keep it", () => {
-    const row = { ...PROVIDER_PRICES[0]!, windows: [{ input: 1, output: 2, cacheRead: 1, cacheWrite: 1 }, { from: "2026-10-01", input: 2, output: 4, cacheRead: 2, cacheWrite: 2 }] };
+    const row = { ...ENDPOINT_PRICES[0]!, windows: [{ input: 1, output: 2, cacheRead: 1, cacheWrite: 1 }, { from: "2026-10-01", input: 2, output: 4, cacheRead: 2, cacheWrite: 2 }] };
     // Exercised through the same picker the synced table uses.
     expect(windowAt(row.windows, Date.parse("2026-09-04"))!.input).toBe(1);
     expect(windowAt(row.windows, Date.parse("2026-10-01"))!.input).toBe(2);
@@ -502,16 +506,16 @@ describe("the hand-held provider table", () => {
     expect(asOfDated.note).not.toContain("in force from");
   });
 
-  test("the rows live outside prices.openrouter.json, where a sync would delete them", () => {
-    for (const p of PROVIDER_PRICES) {
-      expect(SYNCED_PRICES.models[p.model]).toBeUndefined();
-      expect(SYNCED_PRICES.models[p.id]).toBeUndefined();
+  test("the rows live outside an entry's prices.openrouter, where a sync would empty them", () => {
+    for (const p of ENDPOINT_PRICES) {
+      expect(OPENROUTER_PRICES.models[p.model]).toBeUndefined();
+      expect(OPENROUTER_PRICES.models[p.id]).toBeUndefined();
     }
     // The failure the table exists to avoid, on the sync's own merge step: a
     // hand-typed Cerebras row in the synced file does not survive a catalogue
     // that does not carry the id.
-    const catalogue = Object.fromEntries(Object.entries(SYNCED_PRICES.models).map(([id, ws]) => { const { from: _f, ...r } = ws[ws.length - 1]!; return [id, r]; }));
-    const smuggled = { ...SYNCED_PRICES.models, "qwen-3.8-27b": [{ input: 0.99, output: 1.49, cacheRead: 0.99, cacheWrite: 0.99 }] };
+    const catalogue = Object.fromEntries(Object.entries(OPENROUTER_PRICES.models).map(([id, ws]) => { const { from: _f, ...r } = ws[ws.length - 1]!; return [id, r]; }));
+    const smuggled = { ...OPENROUTER_PRICES.models, "qwen-3.8-27b": [{ input: 0.99, output: 1.49, cacheRead: 0.99, cacheWrite: 0.99 }] };
     expect(mergeWindows(smuggled, catalogue, "2026-09-09")["qwen-3.8-27b"]).toBeUndefined();
     // While the hand table still answers the same run after that sync.
     expect(priceFor(cerebras)?.input).toBe(0.99);
@@ -563,7 +567,7 @@ describe("a codex run, priced under the vendor prefix", () => {
   });
 
   test("the bare id wins where the catalogue has one, so nothing already priced moves", () => {
-    const id = Object.keys(SYNCED_PRICES.models).find((k) => !k.includes("/"));
+    const id = Object.keys(OPENROUTER_PRICES.models).find((k) => !k.includes("/"));
     // No suffixless id in the file today; the precedence is asserted on the
     // function that decides it rather than on a row that may never exist.
     expect(id).toBeUndefined();
@@ -598,7 +602,7 @@ describe("a codex run, priced under the vendor prefix", () => {
 
   test("a :free id the catalogue dropped still reads free — the suffix answers before any table", () => {
     const run: PriceableRun = { model: "nex-agi/nex-n2.5-mini:free", apiBase: null, platform: "openrouter", driver: "openai", harness: "wrathbench" };
-    expect(SYNCED_PRICES.models[run.model!]).toBeUndefined();
+    expect(OPENROUTER_PRICES.models[run.model!]).toBeUndefined();
     expect(priceFor(run)?.id).toBe("free-tier");
   });
 
@@ -628,9 +632,9 @@ describe("a sync that re-reads the catalogue", () => {
    * `mergeWindows` is the sync's own merge step, so this is the real path with
    * the fetch taken out.
    */
-  const today = SYNCED_PRICES.asOf;
+  const today = OPENROUTER_PRICES.asOf;
   /** Today's file, as the sync would read it back. */
-  const current = SYNCED_PRICES.models;
+  const current = OPENROUTER_PRICES.models;
   /** What the catalogue quotes on the day of the sync: the latest window of each id. */
   const catalogue = Object.fromEntries(
     Object.entries(current).map(([id, ws]) => {
@@ -652,7 +656,7 @@ describe("a sync that re-reads the catalogue", () => {
   const fixture = tokens({ promptTokens: 3_000_000, completionTokens: 250_000, cacheReadTokens: 1_800_000, cacheWriteTokens: 400_000 });
 
   test("a sync that changed nothing writes the same windows back", () => {
-    expect(mergeWindows(current, catalogue, "2026-12-01")).toEqual(current);
+    expect(mergeWindows(current, catalogue, "2026-12-01") as unknown).toEqual(current);
     expect(sameRates({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4 }, { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 })).toBe(true);
     expect(sameRates({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4 }, { input: 1, output: 2, cacheRead: 3, cacheWrite: 5 })).toBe(false);
   });
@@ -731,7 +735,7 @@ describe("the roster price check", () => {
   test("an entry with no row is flagged, with the fix it needs", () => {
     expect(rosterPriceGap({ model: "vendor/big-paid" })).toContain("sync-prices");
     expect(rosterPriceGap({ model: "gpt-7-unreleased", driver: "codex" })).toContain("openai/");
-    expect(rosterPriceGap({ model: "claude-opus-9", driver: "claude-code" })).toContain("CLAUDE_PRICES");
+    expect(rosterPriceGap({ model: "claude-opus-9", driver: "claude-code" })).toContain("prices.anthropic");
   });
 
   test("priced, free, local and decided-blank entries are not flagged, nor a claude alias the CLI resolves at launch", () => {

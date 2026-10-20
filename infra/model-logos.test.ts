@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { assetFile, iconPath, parseLineup, planAssets, readTar, selectIcons, type ModelLineup } from "./model-logos";
+import { FAMILIES } from "./model-catalogue";
+import { assetFile, iconPath, planAssets, readTar, selectIcons, type LogoCatalogue } from "./model-logos";
 
 /**
  * The logo fetch is one network call away from being untestable, so everything
@@ -70,14 +70,10 @@ const ARCHIVE = tar(
   tarEntry(iconPath("beta"), SVG_B),
 );
 
-const LINEUP: ModelLineup = {
-  version: 1,
+const CATALOGUE: LogoCatalogue = {
   icons: { package: "@lobehub/icons-static-svg", version: "1.94.0" },
-  families: [
-    { id: "alpha", name: "Alpha", vendor: "A Co", icon: "alpha-color", match: ["a/*"], weights: [] },
-    { id: "beta", name: "Beta", vendor: "B Co", icon: "beta", match: ["b/*"], weights: [] },
-    { id: "plain", name: "Plain", vendor: "P Co", icon: undefined, match: ["p/*"], weights: [] },
-  ],
+  // An icon-less family is allowed: it falls back to a monogram in the UI.
+  families: [{ id: "alpha", icon: "alpha-color" }, { id: "beta", icon: "beta" }, { id: "plain" }],
 };
 
 const text = (b: Uint8Array) => new TextDecoder().decode(b);
@@ -115,8 +111,8 @@ describe("readTar", () => {
 });
 
 describe("selectIcons", () => {
-  test("one entry per family that names an icon, in lineup order", () => {
-    const icons = selectIcons(LINEUP, readTar(ARCHIVE));
+  test("one entry per family that names an icon, in catalogue order", () => {
+    const icons = selectIcons(CATALOGUE, readTar(ARCHIVE));
     expect(icons.map((i) => [i.familyId, i.slug])).toEqual([
       ["alpha", "alpha-color"],
       ["beta", "beta"],
@@ -125,14 +121,14 @@ describe("selectIcons", () => {
   });
 
   test("a slug the package does not carry is a hard error naming slug and family", () => {
-    const typo: ModelLineup = { ...LINEUP, families: [{ id: "alpha", name: "Alpha", vendor: "A Co", icon: "alpha-colour", match: ["a/*"], weights: [] }] };
+    const typo: LogoCatalogue = { ...CATALOGUE, families: [{ id: "alpha", icon: "alpha-colour" }] };
     expect(() => selectIcons(typo, readTar(ARCHIVE))).toThrow(/family alpha.*alpha-colour/);
   });
 
   test("the packaged <title> is stripped so the badge's own tooltip wins", () => {
     const titled = '<svg viewBox="0 0 24 24"><title>Alpha</title><path d="M0 0h1v1H0z"/></svg>';
     const archive = tar(tarEntry(iconPath("alpha-color"), titled), tarEntry(iconPath("beta"), SVG_B));
-    const [alpha] = selectIcons(LINEUP, readTar(archive));
+    const [alpha] = selectIcons(CATALOGUE, readTar(archive));
     expect(text(alpha!.svg)).toBe('<svg viewBox="0 0 24 24"><path d="M0 0h1v1H0z"/></svg>');
   });
 });
@@ -176,53 +172,9 @@ describe("planAssets", () => {
   });
 });
 
-describe("parseLineup", () => {
-  const json = JSON.stringify({
-    version: 1,
-    icons: { package: "@lobehub/icons-static-svg", version: "1.94.0" },
-    families: [{ id: "claude", name: "Claude", vendor: "Anthropic", icon: "claude-color", match: ["anthropic/*"], weights: [{ match: ["claude*"], is: "closed" }] }],
-  });
-
-  test("weights are required on every family, and every rule says one of the three", () => {
-    expect(parseLineup(json).families[0]!.weights).toEqual([{ match: ["claude*"], is: "closed" }]);
-    expect(() => parseLineup(json.replace(',"weights":[{"match":["claude*"],"is":"closed"}]', ""))).toThrow(/family claude weights must be an array/);
-    expect(() => parseLineup(json.replace('"is":"closed"', '"is":"maybe"'))).toThrow(/weights\[0\]\.is must be one of open, closed, unknown/);
-    expect(() => parseLineup(json.replace('"is":"closed"', '"is":"closed","source":""'))).toThrow(/weights\[0\]\.source/);
-    expect(() => parseLineup(json.replace('"match":["claude*"]', '"match":[]'))).toThrow(/weights\[0\]\.match/);
-    // Empty is allowed: nothing checked, so every id of the family reads unknown.
-    expect(parseLineup(json.replace('[{"match":["claude*"],"is":"closed"}]', "[]")).families[0]!.weights).toEqual([]);
-  });
-
-  test("a well-formed lineup round-trips", () => {
-    const lineup = parseLineup(json);
-    expect(lineup.icons).toEqual({ package: "@lobehub/icons-static-svg", version: "1.94.0" });
-    expect(lineup.families[0]).toMatchObject({ id: "claude", vendor: "Anthropic", icon: "claude-color" });
-  });
-
-  test("the committed lineup parses, and every icon it names is a legal tarball path", () => {
-    const lineup = parseLineup(readFileSync(`${import.meta.dir}/model-lineup.json`, "utf8"), "infra/model-lineup.json");
-    expect(lineup.families.length).toBeGreaterThan(0);
-    for (const f of lineup.families) if (f.icon !== undefined) expect(iconPath(f.icon)).toMatch(/^package\/icons\/[a-z0-9._-]+\.svg$/);
-  });
-
-  test("an icon-less family is allowed — it falls back to a monogram in the UI", () => {
-    const lineup = parseLineup(json.replace('"icon":"claude-color",', ""));
-    expect(lineup.families[0]!.icon).toBeUndefined();
-  });
-
-  test("bad shapes are refused by name, not coerced", () => {
-    expect(() => parseLineup("{oops")).toThrow(/not valid JSON/);
-    expect(() => parseLineup(json.replace('"version":1', '"version":"1"'))).toThrow(/version must be a number/);
-    expect(() => parseLineup(json.replace('"1.94.0"', '""'))).toThrow(/icons\.version/);
-    expect(() => parseLineup(json.replace('"families":[', '"families":[],"unused":['))).toThrow(/families must be a non-empty array/);
-    expect(() => parseLineup(json.replace('"vendor":"Anthropic",', ""))).toThrow(/family claude vendor/);
-    expect(() => parseLineup(json.replace('"match":["anthropic/*"]', '"match":[]'))).toThrow(/family claude match/);
-    expect(() => parseLineup(json.replace('"id":"claude"', '"id":"../escape"'))).toThrow(/must match/);
-  });
-
-  test("two families cannot share an id — they would write the same file", () => {
-    const dup = JSON.parse(json) as { families: unknown[] };
-    dup.families.push(JSON.parse(json).families[0]);
-    expect(() => parseLineup(JSON.stringify(dup))).toThrow(/duplicate family id "claude"/);
+describe("the committed catalogue", () => {
+  test("every icon it names is a legal tarball path", () => {
+    expect(FAMILIES.length).toBeGreaterThan(0);
+    for (const f of FAMILIES) if (f.icon !== undefined) expect(iconPath(f.icon)).toMatch(/^package\/icons\/[a-z0-9._-]+\.svg$/);
   });
 });

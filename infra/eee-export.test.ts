@@ -109,7 +109,7 @@ const E90 = [
   run({ runId: "paused", unscored: "unscored (paused)", maxLevel: 80 }),
   run({ runId: "steered", unscored: "unscored (operator objective)", maxLevel: 80 }),
   run({ runId: "reference", model: "reference", driver: "reference", unscored: "unscored (scripted reference)", maxLevel: 80 }),
-  // A flat id nothing in the lineup claims, and a run that names no series.
+  // A flat id the catalogue cannot place (its developer is unrevealed), and a run that names no series.
   run({ runId: "stealth", model: "omen-alpha", resolvedModel: "omen-alpha" }),
   run({ runId: "unstamped", harnessVersion: null, harnessSeries: null }),
 ];
@@ -263,7 +263,7 @@ describe("what EEE's CLI checks beyond the schema", () => {
     expect(byId(files, "wrathbench/0.5/e90/wrathbench/minimax/minimax-m3:free/default").record.model_info.additional_details.deployment_type).toBe("externally_managed");
   });
 
-  test("model_availability is the lineup's weights verdict in EEE's names", () => {
+  test("model_availability is the catalogue's weights verdict in EEE's names", () => {
     const availability = (id: string): string => byId(files, id).record.model_info.additional_details.model_availability;
     // DeepSeek V4.1 Flash and MiniMax M3 publish their weights; Claude and GPT-6 do not.
     expect(availability("wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash/default")).toBe("open_weights");
@@ -272,7 +272,7 @@ describe("what EEE's CLI checks beyond the schema", () => {
     expect(availability("wrathbench/0.5/e90/claude-code/opus/low")).toBe("closed_weights");
     expect(availability("wrathbench/0.5/e360/codex/gpt-6-luna/default")).toBe("closed_weights");
     expect(MODEL_AVAILABILITY).toEqual({ open: "open_weights", closed: "closed_weights", unknown: "unknown" });
-    // An id the lineup's rules do not name is unknown, never a family guess.
+    // An id the catalogue does not list is unknown, never a family guess.
     expect(availabilityOf("openai/gpt-9-unreleased", "gpt-9-unreleased")).toBe("unknown");
     // The recorded slug is the fallback: a `-free` OpenCode Zen id is named as itself.
     expect(availabilityOf("poolside/laguna-s-2.1-free", "laguna-s-2.1-free")).toBe("open_weights");

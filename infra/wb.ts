@@ -235,8 +235,9 @@ export const ENTRIES: readonly Entry[] = [
   { group: "site", command: "tiles", summary: "upload changed minimap and art tiles (--dry-run | --upload)", ...onHost("bun", "infra/publish-tiles.ts") },
   { group: "site", command: "verify", summary: "read the public bucket back and check it", ...onHost("bun", "infra/publish-accept.ts") },
 
-  { group: "data", command: "prices", summary: "sync OpenRouter list prices into the price file", ...onHost("bun", "infra/sync-prices.ts") },
-  { group: "data", command: "logos", summary: "fetch the model logos the lineup names (--check: drift only)", ...onHost("bun", "infra/fetch-model-logos.ts") },
+  { group: "data", command: "prices", summary: "sync OpenRouter list prices into the model catalogue", ...onHost("bun", "infra/sync-prices.ts") },
+  { group: "data", command: "logos", summary: "fetch the model logos the model catalogue names (--check: drift only)", ...onHost("bun", "infra/fetch-model-logos.ts") },
+  { group: "data", command: "catalogue", summary: "model ids a published generation names that the model catalogue does not list (--base URL; read-only)", ...onHost("bun", "infra/model-catalogue-check.ts") },
 
   { group: "chart", command: "check", summary: "the database pods do not roll when only the release moves", ...onHost("infra/chart/stable-pod-templates.sh") },
 

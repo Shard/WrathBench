@@ -9,26 +9,28 @@
  *    variants a model's own better efforts already dominate.
  *  - `lineOf` — the model *line* a slug belongs to, which is the "family" a
  *    reader means when they say sonnet, fable or astra.
- *  - `companyOf` — who serves it, which the lineup catalog does record.
- *  - `weightsOf` — whether its weights are published, which the catalog
- *    records model by model (`lib/lineup.ts`); `open`, `closed` or `unknown`,
- *    the last a bucket like any other so a reader can tick it off.
+ *  - `companyOf` — who makes it, which the model catalogue records.
+ *  - `weightsOf` — whether its weights are published, which the catalogue
+ *    records model by model (`infra/model-catalogue.ts`); `open`, `closed` or
+ *    `unknown`, the last a bucket like any other so a reader can tick it off.
  *
- * On where the two dimensions come from. `infra/model-lineup.json` is the
- * model registry, and `familyOf` reads it; its `vendor` is exactly the company
- * dimension and is used verbatim. Its `name` is *not* the family dimension —
- * the catalog's families are vendor-wide ("Claude" covers sonnet, opus, haiku
- * and fable), so filtering by one would be filtering by company twice. The
- * catalog records nothing finer, so the line is **derived from the slug**, by
- * the dumbest rule that works: drop the provider prefix, drop the free marker,
- * drop every dash-separated token carrying a digit, keep the rest. That turns
+ * On where the dimensions come from. `infra/model-catalogue.json` is the model
+ * registry, and `familyOf` reads it; its family's `company` is exactly the
+ * company dimension and is used verbatim. The family's `name` is *not* the
+ * family dimension — the catalogue's families are vendor-wide ("Claude" covers
+ * sonnet, opus, haiku and fable), so filtering by one would be filtering by
+ * company twice. The line is instead **derived from the slug**, by the dumbest
+ * rule that works: drop the provider prefix, drop the free marker, drop every
+ * dash-separated token carrying a digit, keep the rest. That turns
  * `claude-fable-5` into `claude-fable`, `gpt-6-astra` into `gpt-astra` and
- * `deepseek/deepseek-v4-flash-0731` into `deepseek-flash`. It is a derivation
- * and the UI says so; a slug that is all version (`qwen3.8-27b`) keeps its
- * base name rather than becoming nothing.
+ * `deepseek/deepseek-v4-flash-0731` into `deepseek-flash`. It is a rule rather
+ * than a catalogue field because it must answer the same way for an id nobody
+ * has catalogued yet as for one somebody has, and the UI says it is derived; a
+ * slug that is all version (`qwen3.8-27b`) keeps its base name rather than
+ * becoming nothing.
  */
 
-import { familyOf, weightsOf } from "./lineup";
+import { familyOf, weightsOf } from "../../../infra/model-catalogue";
 
 export { weightsOf };
 import { paretoFront } from "./pareto";
@@ -64,16 +66,16 @@ export function lineOf(model: string | null | undefined): string {
 }
 
 /**
- * Who serves the model: the lineup catalog's vendor, lowercased.
+ * Who makes the model: the catalogue family's company, lowercased.
  *
- * An id the catalog does not claim falls back to its provider prefix — the
+ * An id the catalogue cannot place falls back to its provider prefix — the
  * part before the slash, which is how OpenRouter spells the same fact — and to
  * `unknown` when the slug carries neither. A bucket named after nothing is
  * still a bucket a reader can tick off.
  */
 export function companyOf(model: string | null | undefined): string {
-  const vendor = familyOf(model)?.vendor;
-  if (vendor !== undefined) return vendor.toLowerCase();
+  const company = familyOf(model)?.company;
+  if (company !== undefined) return company.toLowerCase();
   const id = (model ?? "").trim().toLowerCase();
   const slash = id.indexOf("/");
   return slash > 0 ? id.slice(0, slash) : "unknown";
@@ -88,7 +90,7 @@ export interface FilterOption {
 /**
  * The options a set of rows offers on one dimension, commonest first.
  *
- * Derived from the rows present rather than from the catalog, so a filter can
+ * Derived from the rows present rather than from the catalogue, so a filter can
  * never offer a box that empties the page, and a model added to the fleet
  * appears without a code edit.
  */

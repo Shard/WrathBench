@@ -1,135 +1,16 @@
 /**
- * Pure helpers behind `infra/fetch-model-logos.ts`: the lineup file's shape,
- * a small tar reader, which icon each family wants, and what a run would
- * change on disk.
+ * Pure helpers behind `infra/fetch-model-logos.ts`: a small tar reader, which
+ * icon each model-catalogue family wants, and what a run would change on disk.
+ * The catalogue's own shape and validation are `infra/model-catalogue.ts`'s.
  *
  * Nothing here touches the network or the filesystem, so the CLI's decisions
  * are testable from fixtures.
  */
 
-// ------------------------------------------------------------------ lineup
+import type { CatalogueFamily, ModelCatalogue } from "./model-catalogue";
 
-export interface LineupFamily {
-  id: string;
-  name: string;
-  vendor: string;
-  /** Icon slug in the pinned package; absent means the family has no logo. */
-  icon: string | undefined;
-  match: string[];
-  weights: WeightsRule[];
-}
-
-/** Whether a model's weights are published; `unknown` is a verdict, not a gap. */
-export type Weights = "open" | "closed" | "unknown";
-const WEIGHTS: readonly string[] = ["open", "closed", "unknown"];
-
-/** One weights rule of a family: first match wins, as with `match`. */
-export interface WeightsRule {
-  match: string[];
-  is: Weights;
-  /** Where the answer was checked, for one that is not obvious. */
-  source?: string;
-}
-
-export interface LineupIcons {
-  package: string;
-  version: string;
-}
-
-export interface ModelLineup {
-  version: number;
-  icons: LineupIcons;
-  families: LineupFamily[];
-}
-
-/** A family id becomes a filename, and an icon slug becomes a path inside the tarball. */
-const SAFE_SLUG = /^[a-z0-9][a-z0-9._-]*$/;
-
-function str(value: unknown, where: string): string {
-  if (typeof value !== "string" || value.trim() === "") throw new Error(`${where} must be a non-empty string`);
-  return value;
-}
-
-/**
- * Parse and validate `infra/model-lineup.json`. Hand-rolled rather than zod,
- * like the rest of infra's config reading: the shape is small and the errors
- * are worth naming the offending entry.
- */
-export function parseLineup(json: string, where = "model-lineup.json"): ModelLineup {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(json);
-  } catch (err) {
-    throw new Error(`${where}: not valid JSON — ${(err as Error).message}`);
-  }
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error(`${where}: expected an object`);
-  const top = raw as Record<string, unknown>;
-
-  if (typeof top["version"] !== "number") throw new Error(`${where}: version must be a number`);
-
-  const icons = top["icons"];
-  if (typeof icons !== "object" || icons === null || Array.isArray(icons)) {
-    throw new Error(`${where}: icons must be an object with package and version`);
-  }
-  const iconsObj = icons as Record<string, unknown>;
-  const pinned: LineupIcons = {
-    package: str(iconsObj["package"], `${where}: icons.package`),
-    version: str(iconsObj["version"], `${where}: icons.version`),
-  };
-
-  const families = top["families"];
-  if (!Array.isArray(families) || families.length === 0) {
-    throw new Error(`${where}: families must be a non-empty array`);
-  }
-
-  const seen = new Set<string>();
-  const parsed: LineupFamily[] = families.map((entry, i) => {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-      throw new Error(`${where}: families[${i}] must be an object`);
-    }
-    const f = entry as Record<string, unknown>;
-    const id = str(f["id"], `${where}: families[${i}].id`);
-    // The id is written as `<id>.svg`; keep it to something that cannot escape
-    // the assets directory or surprise a bundler.
-    if (!SAFE_SLUG.test(id)) throw new Error(`${where}: families[${i}].id "${id}" must match ${SAFE_SLUG}`);
-    if (seen.has(id)) throw new Error(`${where}: duplicate family id "${id}"`);
-    seen.add(id);
-
-    let icon: string | undefined;
-    if (f["icon"] !== undefined) {
-      icon = str(f["icon"], `${where}: family ${id} icon`);
-      if (!SAFE_SLUG.test(icon)) throw new Error(`${where}: family ${id} icon "${icon}" must match ${SAFE_SLUG}`);
-    }
-
-    const match = f["match"];
-    if (!Array.isArray(match) || match.length === 0) {
-      throw new Error(`${where}: family ${id} match must be a non-empty array of patterns`);
-    }
-    const patterns = match.map((p, j) => str(p, `${where}: family ${id} match[${j}]`));
-
-    // Required, so a family cannot be added without saying what is known
-    // about its models' weights. An empty list is allowed and means nothing
-    // has been checked: every id of the family then reads `unknown`.
-    const weights = f["weights"];
-    if (!Array.isArray(weights)) throw new Error(`${where}: family ${id} weights must be an array of rules`);
-    const rules: WeightsRule[] = weights.map((rule, j) => {
-      const at = `${where}: family ${id} weights[${j}]`;
-      if (typeof rule !== "object" || rule === null || Array.isArray(rule)) throw new Error(`${at} must be an object`);
-      const r = rule as Record<string, unknown>;
-      const is = r["is"];
-      if (typeof is !== "string" || !WEIGHTS.includes(is)) throw new Error(`${at}.is must be one of ${WEIGHTS.join(", ")}`);
-      const ruleMatch = r["match"];
-      if (!Array.isArray(ruleMatch) || ruleMatch.length === 0) throw new Error(`${at}.match must be a non-empty array of patterns`);
-      const out: WeightsRule = { match: ruleMatch.map((p, k) => str(p, `${at}.match[${k}]`)), is: is as Weights };
-      if (r["source"] !== undefined) out.source = str(r["source"], `${at}.source`);
-      return out;
-    });
-
-    return { id, name: str(f["name"], `${where}: family ${id} name`), vendor: str(f["vendor"], `${where}: family ${id} vendor`), icon, match: patterns, weights: rules };
-  });
-
-  return { version: top["version"], icons: pinned, families: parsed };
-}
+/** What the logo fetch reads of the model catalogue: the pinned package and each family's icon. */
+export type LogoCatalogue = Pick<ModelCatalogue, "icons"> & { families: readonly Pick<CatalogueFamily, "id" | "icon">[] };
 
 // --------------------------------------------------------------------- tar
 
@@ -205,22 +86,22 @@ export function prepareSvg(svg: Uint8Array): Uint8Array {
 }
 
 /**
- * The icon each family asks for, in lineup order. A slug the package does not
- * carry is a hard error: silently shipping a lineup that names a typo would
+ * The icon each family asks for, in catalogue order. A slug the package does not
+ * carry is a hard error: silently shipping a catalogue that names a typo would
  * leave the dashboard with a missing logo and no way to notice.
  */
-export function selectIcons(lineup: ModelLineup, entries: readonly TarEntry[]): IconEntry[] {
+export function selectIcons(catalogue: LogoCatalogue, entries: readonly TarEntry[]): IconEntry[] {
   const byPath = new Map<string, Uint8Array>();
   for (const e of entries) byPath.set(e.name, e.data);
 
   const out: IconEntry[] = [];
-  for (const family of lineup.families) {
+  for (const family of catalogue.families) {
     if (family.icon === undefined) continue;
     const path = iconPath(family.icon);
     const svg = byPath.get(path);
     if (svg === undefined) {
       throw new Error(
-        `family ${family.id}: icon "${family.icon}" is not in ${lineup.icons.package}@${lineup.icons.version} (no ${path} in the tarball)`,
+        `family ${family.id}: icon "${family.icon}" is not in ${catalogue.icons.package}@${catalogue.icons.version} (no ${path} in the tarball)`,
       );
     }
     out.push({ familyId: family.id, slug: family.icon, path, svg: prepareSvg(svg) });
