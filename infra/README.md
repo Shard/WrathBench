@@ -122,8 +122,8 @@ before the servers on the quickstart. It does two things, idempotently:
    configured password, computing the SRP6 salt and verifier the same way
    `AccountMgr::CreateAccount` does.
 
-The smoke probes that hold a session for minutes (`infra/smoke/module-quest.ts`)
-use a second account `PROBE` so they never contend with `RUNNER` for the
+The smoke probes run by hand (`bun wb smoke <name>`; `travel.ts` holds a
+session for minutes) use a second account `PROBE` so they never contend with `RUNNER` for the
 one-live-session-per-account limit. Create it, and every extra account
 (`SHAKEOUT`, `RUNNER2`, `SMOKE2`), by name:
 

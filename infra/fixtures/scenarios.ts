@@ -71,6 +71,15 @@ export type Scenario = {
     inProgress?: number[];
     /** Quest ids to mark as already turned in. */
     rewarded?: number[];
+    /**
+     * Quests in the log with their creature objectives already counted:
+     * `mobcount` is mobcount1..4 in order (missing ones are 0), and `complete`
+     * writes QUEST_STATUS_COMPLETE instead of INCOMPLETE, the state of a player
+     * who finished the objectives and logged out. `Player::_LoadQuestStatus`
+     * serves the counts as the slot's counters and sets a complete slot's
+     * State bit. Written whole (REPLACE), so last run's progress never leaks.
+     */
+    counted?: QuestProgress[];
   };
   /** Wipe the quest log and the rewarded list first. Makes the scenario a reset. */
   clearQuests?: boolean;
@@ -105,6 +114,16 @@ export type Scenario = {
    */
   maxSkills?: boolean;
 };
+
+/** One quest-log row with its kill counts standing (`Scenario.quests.counted`). */
+export type QuestProgress = {
+  quest: number;
+  mobcount: number[];
+  complete?: boolean;
+};
+
+/** QUEST_OBJECTIVES_COUNT: character_queststatus carries mobcount1..4. */
+export const QUEST_MOBCOUNT_COLUMNS = 4;
 
 /** 2010-01-01 00:00 UTC: a fixed, obviously-fixture date, so builds stay pure. */
 export const ACHIEVEMENT_FIXTURE_DATE = 1262304000;
@@ -504,6 +523,49 @@ export const SCENARIOS = {
       inProgress: [7],
     },
   },
+  "vineyard-last-kill": {
+    description:
+      "level 1, no money, at the Northshire vineyard edge with A Threat Within (783) rewarded and Kobold Camp Cleanup (7) in the log at 7 of 8 Kobold Vermin (for the kill-credit deploy smoke: its one kill completes the objective)",
+    level: 1,
+    xp: 0,
+    money: 0,
+    position: {
+      map: 0,
+      zone: 12,
+      ...VINEYARD_EDGE,
+      o: facing(VINEYARD_EDGE, VINEYARD_NEAREST_VERMIN),
+    },
+    homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
+    // Rebuilt every run, as vineyard-kill-credit is: the smoke's kill takes
+    // 7 to 8/8 and complete, and the next run must start at 7 again.
+    clearQuests: true,
+    quests: {
+      rewarded: [783],
+      counted: [{ quest: 7, mobcount: [7] }],
+    },
+  },
+  "mcbride-kill-quest-done": {
+    description:
+      "level 1 at 300 of 400 xp, no money, in front of Marshal McBride with A Threat Within (783) rewarded and Kobold Camp Cleanup (7) complete at 8 of 8 (for the module-quest deploy smoke: the kill quest's turn-in, which levels the character to 2)",
+    level: 1,
+    // 300 + the turn-in's 170 crosses level 2's 400, so the reward's level-up
+    // is on the stream too.
+    xp: 300,
+    money: 0,
+    position: {
+      map: 0,
+      zone: 12,
+      ...MCBRIDE_FRONT,
+      o: facing(MCBRIDE_FRONT, MCBRIDE),
+    },
+    homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
+    // The turn-in rewards 7, and a rewarded quest is not offered again.
+    clearQuests: true,
+    quests: {
+      rewarded: [783],
+      counted: [{ quest: 7, mobcount: [8], complete: true }],
+    },
+  },
   "ammen-vale-runts": {
     description:
       "level 20, no money, empty quest log, among a cluster of Infected Nightstalker Runts (17202) in Ammen Vale (for the quest-item-start smoke: every runt drops the Faintly Glowing Crystal (23678), which starts Strange Findings (9455) and has no on-use spell)",
@@ -669,6 +731,24 @@ export function validateScenario(scenario: Scenario): void {
   assert(
     scenario.quests?.rewarded === undefined || isIdList(scenario.quests.rewarded),
     "quests.rewarded must be positive integer ids",
+  );
+  for (const c of scenario.quests?.counted ?? []) {
+    assert(Number.isInteger(c.quest) && c.quest > 0, "quests.counted[].quest must be a positive integer id");
+    assert(
+      Array.isArray(c.mobcount) &&
+        c.mobcount.length >= 1 &&
+        c.mobcount.length <= QUEST_MOBCOUNT_COLUMNS &&
+        c.mobcount.every((n) => Number.isInteger(n) && n >= 0 && n <= 0xffff),
+      `quests.counted[].mobcount must be 1..${QUEST_MOBCOUNT_COLUMNS} counts in 0..65535`,
+    );
+    assert(
+      !(scenario.quests?.inProgress ?? []).includes(c.quest) && !(scenario.quests?.rewarded ?? []).includes(c.quest),
+      `quest ${c.quest} is in quests.counted and also in inProgress or rewarded`,
+    );
+  }
+  assert(
+    new Set((scenario.quests?.counted ?? []).map((c) => c.quest)).size === (scenario.quests?.counted ?? []).length,
+    "quests.counted must not repeat a quest",
   );
   assert(
     scenario.taxiNodes === undefined || (isIdList(scenario.taxiNodes) && scenario.taxiNodes.every((n) => n <= TAXI_MASK_WORDS * 32)),
