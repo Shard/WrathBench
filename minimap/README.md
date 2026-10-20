@@ -4,8 +4,9 @@ The tooling that makes the map tiles the dashboard's map draws. The operator
 runs it once, on the host, against a local client extraction: `extract` reads
 the 3.3.5a minimap textures out of the client's MPQ archives and writes them as
 PNG tiles under `data/minimap/`, `bake` builds the zoomed-out levels from those,
-and `bake-art` paints the zone maps over the same grid. The viewer serves the
-result under `/tiles/`, and the public site gets it by a separate upload
+`bake-art` paints the zone maps over the same grid, and `transcode` derives the
+smaller served tree from all of them. The viewer serves the result under
+`/tiles/`, and the public site gets it by a separate upload
 (`infra/publish-tiles.ts`). Tooling lives in git, output does not, the same
 shape as `wiki/`. The map view this feeds is described in docs/ARCHITECTURE.md
 (dashboard section).
@@ -59,6 +60,14 @@ inputs default under it), `--client <dir>` (default `<data>/client-source/Data`)
 `--locale <code>` (default `enUS`), `--out <dir>` (the tile root, default
 `<data>/minimap`, which must already hold the native tiles), `--gap paper|minimap`
 and `--cities` (both below).
+
+And the served tree the viewer and the tile publisher read (see "Served
+formats" below), which the publisher also runs on its own before every pass:
+
+```
+bun run --cwd minimap transcode            # incremental: only what changed
+bun minimap/src/transcode.ts --root data/minimap --force
+```
 
 Idempotent: a tile that already exists is skipped unless `--force`. A full
 extraction of the four continents takes about 17 s and produces 3636 tiles /
@@ -292,7 +301,7 @@ Every level is computed from the one below in memory on every run, and
 z + 1 from a skipped file instead would build it on bytes the current natives
 may no longer agree with. The output is byte-deterministic, so a re-bake that
 changed nothing uploads nothing. After a re-extraction, run `bake --force`,
-then `publish-tiles --upload`, then purge `/tiles/`
+then `publish-tiles --upload` (which transcodes first), then purge `/tiles/`
 (`infra/cloudflare/README.md`).
 
 The bake over the six extracted maps takes about 10 s and writes 1505 tiles
@@ -517,10 +526,87 @@ The bake over maps 0, 1, 530 and 571 takes about 140 s and writes 2248 tiles
 | 530 | 446 | 124 | 34 | 11 | 4 | 1 | 48.2 |
 | 571 | 413 | 119 | 36 | 12 | 4 | 1 | 38.8 |
 
+## Served formats
+
+The PNG tree is the lossless master: the bakes read it, and a lossy copy
+re-encoded from a lossy copy would compound. What is served is derived from it
+by `src/transcode.ts` into `data/minimap/web/`, the same relative paths with
+the pyramid's extension changed:
+
+```
+web/<mapId>/<row>_<col>.png                 native, an indexed PNG (256 colours)
+web/<mapId>/<layer>/<z>/<row>_<col>.webp    the minimap and art pyramids
+web/<mapId>/index.json                      which cells exist; where the art hides the minimap
+web/transcode.json                          the transcode's own cache, never served
+```
+
+- **The pyramids are WebP at q90.** These tiles are only ever seen
+  downscaled, or blended under or over the other layer. Lossless WebP is
+  kept wherever it is at most twice the lossy size. That covers every solid,
+  near-solid and mostly transparent tile, which a lossy codec shifts by whole
+  levels against an exact neighbour. Each lossy tile is decoded again, and
+  if its alpha is not exact it is served lossless instead.
+- **The natives stay `.png`, as an indexed PNG.** That means no client change:
+  every deployed build asks for the same path and type. There is no dither,
+  which scored better than dithering on both size and error. A tile is
+  served as its master if the palette would change its alpha or not save
+  bytes.
+- **The encoders are Bun's own** (`Bun.Image`, libwebp and libspng linked into
+  the pinned Bun), so there is no new dependency. The cache key is the Bun
+  build plus every setting, so a Bun upgrade re-encodes everything. The
+  output is byte-deterministic, so the publisher's content hashes upload only
+  what changed.
+
+Measured on the full tree (maps 0, 1, 36, 369, 530 and 571):
+
+| layer | files | master | served |
+| --- | --- | --- | --- |
+| native | 3684 | 109.2 MB | 59.6 MB |
+| minimap pyramid | 1505 | 83.8 MB | 13.0 MB |
+| art pyramid | 2248 | 185.6 MB | 13.9 MB |
+| total | 7437 (+6 indexes) | 378.6 MB | 86.5 MB |
+
+Why q90, from the same tree:
+
+| quality | art | minimap pyramid | art SSIM, mean / worst 5% | minimap SSIM, mean / worst 5% |
+| --- | --- | --- | --- | --- |
+| 85 | 10.6 MB | 10.2 MB | 0.981 / 0.963 | 0.991 / 0.976 |
+| 90 | 13.9 MB | 13.0 MB | 0.984 / 0.964 | 0.995 / 0.986 |
+| 92 | 16.2 MB | 14.5 MB | 0.985 / 0.966 | 0.996 / 0.989 |
+
+At three times magnification the three settings could not be told apart on
+art, on snow or on forest. The numbers decided it:
+
+- The minimap pyramid's worst tiles gain most from 85 to 90 and little more
+  from 90 to 92.
+- At 85, the mean colour along an art tile's edge drifts by up to 3 levels,
+  and that is what shows as a seam. At 90 the drift stays near 1.
+
+Some natives score as low as 34–36 dB under the palette: dense city tiles,
+Silvermoon and Stormwind among them. Side by side with their masters at three
+times magnification they show no visible difference.
+
+The index is a bitmap per layer and level, one hex row per grid row
+(`runner/viewer/tileindex.ts`), about 3 KB per continent before compression.
+
+- **`cells`** lets the map page skip absent cells: it asks for none of them,
+  so a pan no longer turns into a burst of 404s.
+- **`covers`** marks the cells where an art tile is opaque over every pixel
+  its minimap tile paints. Wherever the minimap's blend weight is 0, the page
+  neither fetches nor draws the minimap there, which roughly halves the
+  requests at continent zoom.
+
+On the four continents every minimap cell is covered at every level, because
+the art bake is opaque over every native ADT (see "Seams"). Maps without art,
+such as the tram and the instances, have no covers, so their minimap is
+always drawn.
+
 ## Relationship to the viewer
 
-`runner/viewer/worldmap.ts` owns the transform and the pyramid's spelling, and
-`runner/viewer/tiles.ts` serves both shapes above under `/tiles/<mapId>/`.
+`runner/viewer/worldmap.ts` owns the transform and the pyramid's spelling
+(`lodTileName` for the masters, `lodServedName` for the served WebP), and
+`runner/viewer/tiles.ts` serves both shapes above under `/tiles/<mapId>/`, from
+the served tree while it is current and from the masters otherwise.
 Both agree with what this tool writes. The orientation in `worldToPixel` could not be verified until an
 extraction rendered a known zone — the Northshire Abbey check above is that
 verification, and it confirms the existing code rather than changing it.

@@ -13,7 +13,8 @@
  */
 
 import type { AgentPosition } from "@viewer/api-types";
-import { GRID, LOD_MAX, TILE_PX, TILE_SIZE, lodGrid, tileToWorld, worldToPixel } from "@viewer/worldmap";
+import { type TileIndex, indexCovers, indexHas } from "@viewer/tileindex";
+import { GRID, LOD_MAX, type LodLayer, TILE_PX, TILE_SIZE, lodGrid, tileToWorld, worldToPixel } from "@viewer/worldmap";
 import { effortLabel, modelDisplay } from "./format";
 
 export const MIN_SCALE = 0.01;
@@ -365,6 +366,28 @@ export function frameLevels(scale: number, screen: Screen): FrameLevels {
   const withArt = alpha < 1;
   const z = tileLevel(scale, screen, withArt);
   return { minimap: z, art: withArt ? artLevel(z) : null, minimapAlpha: alpha };
+}
+
+/*
+ * What the map's tile index (`@viewer/tileindex`) spares a frame. Null is a
+ * map with no index — not published yet, a 404, a fetch that failed — and
+ * spares nothing: every cell is asked for, as before indexes existed.
+ */
+
+/** Whether a cell is known not to exist, so asking for it would only be a 404. */
+export function cellAbsent(index: TileIndex | null, layer: LodLayer, z: number, row: number, col: number): boolean {
+  return index !== null && !indexHas(index, layer, z, row, col);
+}
+
+/**
+ * Whether a frame can leave a minimap cell unfetched: the minimap has no
+ * weight in the blend, the art is drawn at the same level, and the index says
+ * the art there is opaque over everything the minimap tile paints. On a map
+ * with no art (an instance, the tram) no cell is covered and the minimap is
+ * drawn as always.
+ */
+export function minimapHidden(f: FrameLevels, index: TileIndex | null, row: number, col: number): boolean {
+  return index !== null && f.minimapAlpha === 0 && f.art === f.minimap && indexCovers(index, f.minimap, row, col);
 }
 
 /**

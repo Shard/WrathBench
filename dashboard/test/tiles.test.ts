@@ -19,8 +19,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { lodTileName } from "../../runner/viewer/worldmap";
-import { levelTilePath, tileBasesFromEnv, tilePath, tileUrl, tileUrlFor } from "../src/lib/tiles";
+import { lodServedName } from "../../runner/viewer/worldmap";
+import { levelTilePath, tileBasesFromEnv, tileIndexPath, tilePath, tileUrl, tileUrlFor } from "../src/lib/tiles";
 
 const SRC = join(import.meta.dir, "..", "src");
 const DATA = "https://wrathbench-data.shard.page";
@@ -73,16 +73,16 @@ describe("the pyramid's levels", () => {
     expect(levelTilePath(0, "minimap", 0, 43, 31)).toBe(tilePath(0, 43, 31));
   });
 
-  test("levels 1..6 are spelled by the viewer's own lodTileName", () => {
-    expect(levelTilePath(0, "minimap", 1, 21, 15)).toBe(`/tiles/0/${lodTileName("minimap", 1, 21, 15)}`);
-    expect(levelTilePath(571, "minimap", 6, 0, 0)).toBe("/tiles/571/minimap/6/0_0.png");
+  test("levels 1..6 are spelled by the viewer's own lodServedName, as WebP", () => {
+    expect(levelTilePath(0, "minimap", 1, 21, 15)).toBe(`/tiles/0/${lodServedName("minimap", 1, 21, 15)}`);
+    expect(levelTilePath(571, "minimap", 6, 0, 0)).toBe("/tiles/571/minimap/6/0_0.webp");
     expect(() => levelTilePath(0, "minimap", 7, 0, 0)).toThrow();
     expect(() => levelTilePath(0, "minimap", 1, 32, 0)).toThrow();
   });
 
   test("the art layer has levels 1..6 under its own directory and no level 0", () => {
-    expect(levelTilePath(0, "art", 1, 21, 15)).toBe("/tiles/0/art/1/21_15.png");
-    expect(levelTilePath(1, "art", 6, 0, 0)).toBe(`/tiles/1/${lodTileName("art", 6, 0, 0)}`);
+    expect(levelTilePath(0, "art", 1, 21, 15)).toBe("/tiles/0/art/1/21_15.webp");
+    expect(levelTilePath(1, "art", 6, 0, 0)).toBe(`/tiles/1/${lodServedName("art", 6, 0, 0)}`);
     // Level 0 is the minimap's native tile and nothing else: the art never
     // silently falls back to it.
     expect(() => levelTilePath(0, "art", 0, 43, 31)).toThrow();
@@ -90,9 +90,15 @@ describe("the pyramid's levels", () => {
 
   test("a level goes to the same host as a native tile, and a withheld build asks for neither", () => {
     const path = levelTilePath(1, "minimap", 3, 2, 5);
-    expect(tileUrlFor(DATA, DATA, path)).toBe(`${DATA}/tiles/1/minimap/3/2_5.png`);
-    expect(tileUrlFor("", "", path)).toBe("/tiles/1/minimap/3/2_5.png");
+    expect(tileUrlFor(DATA, DATA, path)).toBe(`${DATA}/tiles/1/minimap/3/2_5.webp`);
+    expect(tileUrlFor("", "", path)).toBe("/tiles/1/minimap/3/2_5.webp");
     expect(tileUrlFor("", DATA, path)).toBeNull();
+  });
+
+  test("a map's index sits beside its tiles, on the same host, and a withheld build asks for none", () => {
+    expect(tileIndexPath(36)).toBe("/tiles/36/index.json");
+    expect(tileUrlFor(DATA, DATA, tileIndexPath(36))).toBe(`${DATA}/tiles/36/index.json`);
+    expect(tileUrlFor("", DATA, tileIndexPath(36))).toBeNull();
   });
 });
 
@@ -127,8 +133,9 @@ describe("one place builds it", () => {
     const src = readFileSync(join(SRC, "pages", "MapPage.tsx"), "utf8");
     // Both layers sit behind the one guard: the art is never asked for either.
     expect(src).toMatch(
-      /if \(NO_TILE_BASE\) \{\s*drawLattice\(ctx, 0, true\);\s*return;\s*\}[\s\S]*drawLevel\(ctx, map, MINIMAP_LAYER, f\.minimap\);[\s\S]*drawLevel\(art, map, ART_LAYER, f\.art\);/,
+      /if \(NO_TILE_BASE\) \{\s*drawLattice\(ctx, 0, true\);\s*return;\s*\}[\s\S]*drawLevel\(ctx, map, MINIMAP_LAYER, f\.minimap, [^;]*\);[\s\S]*drawLevel\(art, map, ART_LAYER, f\.art\);/,
     );
-    expect(src).toMatch(/const src = tileSrc\(map, layer, z, row, col\);\s*\n\s*if \(src !== null\) \{/);
+    // And a cell the index does not list is not asked for either.
+    expect(src).toMatch(/const src = cellAbsent\(index, layer, z, row, col\) \? null : tileSrc\(map, layer, z, row, col\);\s*\n\s*if \(src !== null\) \{/);
   });
 });

@@ -134,6 +134,18 @@ export function lodTileName(layer: LodLayer, z: number, row: number, col: number
 }
 
 /**
+ * The name a pyramid tile is *served* under: `lodTileName` with `.webp` for
+ * `.png`. The bakes write lossless PNG masters at `lodTileName`; the
+ * transcode in `minimap/src/transcode.ts` derives a WebP from each, and that
+ * is what the viewer's route, the tile publisher's keys and the dashboard's
+ * requests spell. Native tiles keep `tileName` (`.png`) both ways: their
+ * served form is an indexed PNG, so no deployed client has to change.
+ */
+export function lodServedName(layer: LodLayer, z: number, row: number, col: number): string {
+  return `${lodTileName(layer, z, row, col).slice(0, -".png".length)}.webp`;
+}
+
+/**
  * The inclusive tile range covering a pixel rectangle, clamped to the grid.
  *
  * The renderer asks this what to fetch so a zoomed-out view never requests the

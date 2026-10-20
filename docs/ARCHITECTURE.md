@@ -122,7 +122,8 @@ the SPA owns everything that is UI.
 - `runner/viewer/` serves a read-only JSON API under `/api`, an SSE tail per
   run, minimap tiles from `data/minimap/` (the native tiles, the
   downsampled levels baked from them, and the painted world-map art baked
-  onto the same grid), and the built SPA as static files. Every database is
+  onto the same grid, each served from a smaller transcoded copy of the
+  lossless masters), and the built SPA as static files. Every database is
   opened readonly, so a run being written inside the container is never
   disturbed. Bearer tokens are stripped from anything that forwards a raw
   record. `WRATHBENCH_VIEWER_PUBLIC=1` withholds raw entries and tiles — the

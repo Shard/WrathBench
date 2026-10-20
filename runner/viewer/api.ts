@@ -112,6 +112,7 @@ import {
   TILE_PUBLIC_ROBOTS,
   isRevalidatedTile,
   resolveTile,
+  resolveTileIndex,
   tileNotModified,
   tileValidators,
 } from "./tiles";
@@ -1736,6 +1737,21 @@ export function createApi(opts: ApiOptions): ApiHandle {
       // deployment in.
       const asPublic = publicMode && tilesPublic;
       if (publicMode && !asPublic) return withheld();
+      // A map's tile index revalidates like the art: a transcode rewrites it
+      // in place. Missing or stale, it is a 404 and the page asks for every
+      // cell instead (`tiles.ts`).
+      const index = resolveTileIndex(tilesDir, path);
+      if (index !== null) {
+        const v = tileValidators(statSync(index));
+        const headers = {
+          "cache-control": asPublic ? ART_TILE_PUBLIC_CACHE_CONTROL : ART_TILE_CACHE_CONTROL,
+          etag: v.etag,
+          "last-modified": v.lastModified,
+          ...(asPublic ? { "x-robots-tag": TILE_PUBLIC_ROBOTS } : {}),
+        };
+        if (tileNotModified(req.headers, v)) return new Response(null, { status: 304, headers });
+        return new Response(Bun.file(index), { headers: { "content-type": "application/json", ...headers } });
+      }
       const hit = resolveTile(tilesDir, path);
       // A tile that was never extracted is a 404 the client expects and draws
       // around; it is not an error worth a body. A miss is never cached: the
@@ -1758,11 +1774,11 @@ export function createApi(opts: ApiOptions): ApiHandle {
           ...robots,
         };
         if (tileNotModified(req.headers, v)) return new Response(null, { status: 304, headers });
-        return new Response(Bun.file(hit.file), { headers: { "content-type": "image/png", ...headers } });
+        return new Response(Bun.file(hit.file), { headers: { "content-type": hit.contentType, ...headers } });
       }
       return new Response(Bun.file(hit.file), {
         headers: {
-          "content-type": "image/png",
+          "content-type": hit.contentType,
           "cache-control": asPublic ? TILE_PUBLIC_CACHE_CONTROL : TILE_CACHE_CONTROL,
           ...robots,
         },

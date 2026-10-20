@@ -16,6 +16,7 @@ import {
   TILE_PX,
   coordToTile,
   lodGrid,
+  lodServedName,
   lodTileName,
   pixelToWorld,
   tileToCoord,
@@ -184,13 +185,13 @@ describe("pyramid tile paths", () => {
     expect(() => lodTileName("minimap", 2, -1, 0)).toThrow();
   });
 
-  test("a well-formed pyramid path parses, and its canonical path is the one lodTileName spells", () => {
-    const ref = parseTilePath("/tiles/0/minimap/3/5_3.png");
+  test("a well-formed pyramid path parses, and its canonical path is the one lodServedName spells", () => {
+    const ref = parseTilePath("/tiles/0/minimap/3/5_3.webp");
     expect(ref).toEqual({ map: 0, row: 5, col: 3, lod: { layer: "minimap", z: 3 } });
-    expect(tileRefPath(ref!)).toBe(`/tiles/0/${lodTileName("minimap", 3, 5, 3)}`);
-    expect(parseTilePath("/tiles/1/art/2/9_5.png")).toEqual({ map: 1, row: 9, col: 5, lod: { layer: "art", z: 2 } });
-    expect(tileRefPath(parseTilePath("/tiles/1/art/2/9_5.png")!)).toBe(`/tiles/1/${lodTileName("art", 2, 9, 5)}`);
-    expect(parseTilePath("/tiles/571/minimap/6/0_0.png")).toEqual({
+    expect(tileRefPath(ref!)).toBe(`/tiles/0/${lodServedName("minimap", 3, 5, 3)}`);
+    expect(parseTilePath("/tiles/1/art/2/9_5.webp")).toEqual({ map: 1, row: 9, col: 5, lod: { layer: "art", z: 2 } });
+    expect(tileRefPath(parseTilePath("/tiles/1/art/2/9_5.webp")!)).toBe(`/tiles/1/${lodServedName("art", 2, 9, 5)}`);
+    expect(parseTilePath("/tiles/571/minimap/6/0_0.webp")).toEqual({
       map: 571,
       row: 0,
       col: 0,
@@ -198,6 +199,13 @@ describe("pyramid tile paths", () => {
     });
     // The native path is untouched and its canonical form is itself.
     expect(tileRefPath(parseTilePath("/tiles/0/43_31.png")!)).toBe("/tiles/0/43_31.png");
+  });
+
+  test("a pyramid tile under its master's .png name still parses, as the master, for builds from before the WebP tree", () => {
+    const ref = parseTilePath("/tiles/0/minimap/3/5_3.png");
+    expect(ref).toEqual({ map: 0, row: 5, col: 3, lod: { layer: "minimap", z: 3 }, legacy: true });
+    expect(tileRefPath(ref!)).toBe(`/tiles/0/${lodTileName("minimap", 3, 5, 3)}`);
+    expect(parseTilePath("/tiles/0/43_31.webp")).toBeNull();
   });
 
   test("a level outside 1..LOD_MAX, a layer not on the list, or a cell outside the level's grid is rejected", () => {
