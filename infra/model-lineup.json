@@ -11,6 +11,11 @@
     "fetched from the npm registry by infra/fetch-model-logos.ts, which writes",
     "dashboard/src/assets/model-logos/<family-id>.svg. Prefer '<slug>-color' icons;",
     "mono icons use fill=currentColor and follow the theme when inlined.",
+    "weights says, model by model, whether the weights of that exact checkpoint can be",
+    "downloaded: 'open', 'closed' or 'unknown'. The first matching rule of the id's family wins,",
+    "with the same glob and ':free' rules as match; an id no rule names reads 'unknown',",
+    "never a family default. Every family must carry the list (an empty one means nothing",
+    "checked yet). 'source' names where a non-obvious answer was checked.",
     "After editing families or bumping icons.version: bun infra/fetch-model-logos.ts"
   ],
   "version": 1,
@@ -24,98 +29,198 @@
       "name": "Claude",
       "vendor": "Anthropic",
       "icon": "claude-color",
-      "match": ["anthropic/*", "claude*", "opus*", "sonnet*", "haiku*"]
+      "match": ["anthropic/*", "claude*", "opus*", "sonnet*", "haiku*"],
+      "weights": [
+        {
+          "match": ["anthropic/*", "claude*", "opus*", "sonnet*", "haiku*"],
+          "is": "closed"
+        }
+      ]
     },
     {
       "id": "openai",
       "name": "GPT",
       "vendor": "OpenAI",
       "icon": "openai",
-      "match": ["openai/*", "gpt*"]
+      "match": ["openai/*", "gpt*"],
+      "weights": [
+        {
+          "match": ["openai/gpt-oss-120b", "gpt-oss-120b"],
+          "is": "open",
+          "source": "https://huggingface.co/openai/gpt-oss-120b"
+        },
+        {
+          "match": ["openai/gpt-5.6-luna", "gpt-5.6-luna", "openai/gpt-5.6-sol", "gpt-5.6-sol", "openai/gpt-6-luna", "gpt-6-luna", "openai/gpt-6-astra", "gpt-6-astra", "openai/gpt-6.1-sol", "gpt-6.1-sol"],
+          "is": "closed",
+          "source": "https://developers.openai.com/api/docs/models (API only; the openai Hugging Face org holds gpt-oss alone)"
+        }
+      ]
     },
     {
       "id": "gemini",
       "name": "Gemini",
       "vendor": "Google",
       "icon": "gemini-color",
-      "match": ["google/*", "gemini*", "gemma*"]
+      "match": ["google/*", "gemini*", "gemma*"],
+      "weights": [
+        {
+          "match": ["google/gemma-4-26b-a4b-it", "gemma-4-26b-a4b-it", "google/gemma-4-31b-it", "gemma-4-31b-it"],
+          "is": "open",
+          "source": "https://huggingface.co/google/gemma-4-31B-it"
+        },
+        {
+          "match": ["google/gemini-3.7-flash", "gemini-3.7-flash", "google/gemini-3.8-flash", "gemini-3.8-flash", "google/gemini-4-argon", "gemini-4-argon"],
+          "is": "closed",
+          "source": "https://ai.google.dev/gemini-api/docs/models (API only; no Gemini checkpoint in the google Hugging Face org)"
+        }
+      ]
     },
     {
       "id": "deepseek",
       "name": "DeepSeek",
       "vendor": "DeepSeek",
       "icon": "deepseek-color",
-      "match": ["deepseek/*", "deepseek*"]
+      "match": ["deepseek/*", "deepseek*"],
+      "weights": [
+        {
+          "match": ["deepseek/deepseek-v4-flash", "deepseek-v4-flash", "deepseek/deepseek-v4-flash-0731", "deepseek-v4-flash-0731", "deepseek/deepseek-v4.1-flash", "deepseek-v4.1-flash", "deepseek/deepseek-v4-pro-0813", "deepseek-v4-pro-0813"],
+          "is": "open",
+          "source": "https://huggingface.co/deepseek-ai (DeepSeek-V4-Flash, -V4-Flash-0731, -V4.1-Flash, -V4-Pro-0813; MIT)"
+        },
+        {
+          "match": ["deepseek-flash"],
+          "is": "open",
+          "source": "https://api-docs.deepseek.com/quick_start/pricing (the platform alias; every V4 Flash snapshot it has served is on Hugging Face)"
+        }
+      ]
     },
     {
       "id": "qwen",
       "name": "Qwen",
       "vendor": "Alibaba",
       "icon": "qwen-color",
-      "match": ["qwen/*", "qwen*", "qwq*"]
+      "match": ["qwen/*", "qwen*", "qwq*"],
+      "weights": [
+        {
+          "match": ["qwen/qwen3.8-27b", "qwen3.8-27b", "qwen-3.8-27b"],
+          "is": "open",
+          "source": "https://huggingface.co/Qwen/Qwen3.8-27B"
+        }
+      ]
     },
     {
       "id": "mistral",
       "name": "Mistral",
       "vendor": "Mistral AI",
       "icon": "mistral-color",
-      "match": ["mistralai/*", "mistral/*", "mistral*", "mixtral*", "ministral*", "magistral*", "codestral*", "devstral*"]
+      "match": ["mistralai/*", "mistral/*", "mistral*", "mixtral*", "ministral*", "magistral*", "codestral*", "devstral*"],
+      "weights": []
     },
     {
       "id": "llama",
       "name": "Llama",
       "vendor": "Meta",
       "icon": "meta-color",
-      "match": ["meta-llama/*", "meta/*", "llama*"]
+      "match": ["meta-llama/*", "meta/*", "llama*"],
+      "weights": [
+        {
+          "match": ["meta/muse-spark-1.3-contributor"],
+          "is": "closed",
+          "source": "https://dev.meta.ai/models/muse-spark-open/ (Muse Spark Open is separate, derived weights; no Muse Spark 1.x download)"
+        }
+      ]
     },
     {
       "id": "grok",
       "name": "Grok",
       "vendor": "xAI",
       "icon": "xai",
-      "match": ["x-ai/*", "xai/*", "grok*"]
+      "match": ["x-ai/*", "xai/*", "grok*"],
+      "weights": [
+        {
+          "match": ["x-ai/grok-4.6", "grok-4.6", "x-ai/grok-4.7", "grok-4.7"],
+          "is": "closed",
+          "source": "https://docs.x.ai/docs/models (API only; the xai-org Hugging Face org holds grok-1 and grok-2)"
+        }
+      ]
     },
     {
       "id": "kimi",
       "name": "Kimi",
       "vendor": "Moonshot AI",
       "icon": "kimi-color",
-      "match": ["moonshotai/*", "moonshot/*", "kimi*"]
+      "match": ["moonshotai/*", "moonshot/*", "kimi*"],
+      "weights": []
     },
     {
       "id": "glm",
       "name": "GLM",
       "vendor": "Z.ai",
       "icon": "zhipu-color",
-      "match": ["z-ai/*", "zhipuai/*", "zhipu/*", "glm*"]
+      "match": ["z-ai/*", "zhipuai/*", "zhipu/*", "glm*"],
+      "weights": [
+        {
+          "match": ["z-ai/glm-4.7-flash", "glm-4.7-flash", "z-ai/glm-5.3", "glm-5.3", "z-ai/glm-5.3-flash", "glm-5.3-flash"],
+          "is": "open",
+          "source": "https://huggingface.co/zai-org (GLM-4.7-Flash, GLM-5.3, GLM-5.3-Flash)"
+        }
+      ]
     },
     {
       "id": "minimax",
       "name": "MiniMax",
       "vendor": "MiniMax",
       "icon": "minimax-color",
-      "match": ["minimax/*", "minimax*"]
+      "match": ["minimax/*", "minimax*"],
+      "weights": [
+        {
+          "match": ["minimax/minimax-m3", "minimax-m3"],
+          "is": "open",
+          "source": "https://huggingface.co/MiniMaxAI/MiniMax-M3"
+        }
+      ]
     },
     {
       "id": "nvidia",
       "name": "Nemotron",
       "vendor": "NVIDIA",
       "icon": "nvidia-color",
-      "match": ["nvidia/*", "nemotron*"]
+      "match": ["nvidia/*", "nemotron*"],
+      "weights": [
+        {
+          "match": ["nvidia/nemotron-nano-9b-v2", "nemotron-nano-9b-v2", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "nemotron-3-nano-omni-30b-a3b-reasoning", "nvidia/nemotron-3-super-120b-a12b", "nemotron-3-super-120b-a12b", "nvidia/nemotron-3-ultra-550b-a55b", "nemotron-3-ultra-550b-a55b", "nvidia/nemotron-3.5-lightning", "nemotron-3.5-lightning", "nvidia/nemotron-3.5-super-vl", "nemotron-3.5-super-vl", "nemotron-3.5-lightning-free"],
+          "is": "open",
+          "source": "https://huggingface.co/nvidia (each id's own checkpoint, ungated)"
+        }
+      ]
     },
     {
       "id": "cohere",
       "name": "Cohere",
       "vendor": "Cohere",
       "icon": "cohere-color",
-      "match": ["cohere/*", "command*"]
+      "match": ["cohere/*", "command*"],
+      "weights": [
+        {
+          "match": ["cohere/north-mini-code"],
+          "is": "open",
+          "source": "https://huggingface.co/CohereLabs/North-Mini-Code-1.0"
+        }
+      ]
     },
     {
       "id": "poolside",
       "name": "Laguna",
       "vendor": "poolside",
       "icon": "poolside-color",
-      "match": ["poolside/*", "laguna*"]
+      "match": ["poolside/*", "laguna*"],
+      "weights": [
+        {
+          "match": ["poolside/laguna-s-2.1", "laguna-s-2.1", "laguna-s-2.1-free"],
+          "is": "open",
+          "source": "https://huggingface.co/poolside/Laguna-S-2.1"
+        }
+      ]
     }
   ]
 }

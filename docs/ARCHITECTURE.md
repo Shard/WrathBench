@@ -217,7 +217,14 @@ the SPA owns everything that is UI.
   and an id no family matches
   gets a neutral monogram rather than a special case in code, which is the
   per-model override the harness forbids. Recognizing a new model is a data
-  edit, never a code change. The mark appears wherever a model is the row. Logos are fetched rather than drawn:
+  edit, never a code change. The mark appears wherever a model is the row.
+  Each family also carries `weights`, first-match rules over the same globs
+  saying which of its models publish their weights (`open`, `closed`, or
+  `unknown`). The rules are per model because a family spans both kinds
+  (Gemini and Gemma, GPT and gpt-oss). The list is required, so a new family
+  cannot be added without one, and an id no rule names reads `unknown` rather
+  than a family default. The ladder's weights filter and the Every Eval Ever
+  export's `model_availability` both read it through `weightsOf`. Logos are fetched rather than drawn:
   `infra/fetch-model-logos.ts` pulls the npm tarball of the Lobe Icons package
   at the version pinned in the lineup's own `icons` block and extracts exactly
   the icons the lineup names; the SVGs are committed, because they are a few

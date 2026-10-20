@@ -16,6 +16,19 @@ export interface LineupFamily {
   /** Icon slug in the pinned package; absent means the family has no logo. */
   icon: string | undefined;
   match: string[];
+  weights: WeightsRule[];
+}
+
+/** Whether a model's weights are published; `unknown` is a verdict, not a gap. */
+export type Weights = "open" | "closed" | "unknown";
+const WEIGHTS: readonly string[] = ["open", "closed", "unknown"];
+
+/** One weights rule of a family: first match wins, as with `match`. */
+export interface WeightsRule {
+  match: string[];
+  is: Weights;
+  /** Where the answer was checked, for one that is not obvious. */
+  source?: string;
 }
 
 export interface LineupIcons {
@@ -94,7 +107,25 @@ export function parseLineup(json: string, where = "model-lineup.json"): ModelLin
     }
     const patterns = match.map((p, j) => str(p, `${where}: family ${id} match[${j}]`));
 
-    return { id, name: str(f["name"], `${where}: family ${id} name`), vendor: str(f["vendor"], `${where}: family ${id} vendor`), icon, match: patterns };
+    // Required, so a family cannot be added without saying what is known
+    // about its models' weights. An empty list is allowed and means nothing
+    // has been checked: every id of the family then reads `unknown`.
+    const weights = f["weights"];
+    if (!Array.isArray(weights)) throw new Error(`${where}: family ${id} weights must be an array of rules`);
+    const rules: WeightsRule[] = weights.map((rule, j) => {
+      const at = `${where}: family ${id} weights[${j}]`;
+      if (typeof rule !== "object" || rule === null || Array.isArray(rule)) throw new Error(`${at} must be an object`);
+      const r = rule as Record<string, unknown>;
+      const is = r["is"];
+      if (typeof is !== "string" || !WEIGHTS.includes(is)) throw new Error(`${at}.is must be one of ${WEIGHTS.join(", ")}`);
+      const ruleMatch = r["match"];
+      if (!Array.isArray(ruleMatch) || ruleMatch.length === 0) throw new Error(`${at}.match must be a non-empty array of patterns`);
+      const out: WeightsRule = { match: ruleMatch.map((p, k) => str(p, `${at}.match[${k}]`)), is: is as Weights };
+      if (r["source"] !== undefined) out.source = str(r["source"], `${at}.source`);
+      return out;
+    });
+
+    return { id, name: str(f["name"], `${where}: family ${id} name`), vendor: str(f["vendor"], `${where}: family ${id} vendor`), icon, match: patterns, weights: rules };
   });
 
   return { version: top["version"], icons: pinned, families: parsed };
