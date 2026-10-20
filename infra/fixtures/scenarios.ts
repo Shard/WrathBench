@@ -241,44 +241,44 @@ const LAKESHIRE_CHEST_FRONT = { x: -9407.6, y: -2788.4, z: 37.8 };
 // a timed-out fight.
 const AMMEN_RUNTS = { x: -4412.43, y: -11947.3, z: 21.6033 };
 
-// Moonbrook, Westfall, at the Deadmines: the party's staging spot, and the
-// entrance trigger it faces, AreaTrigger.dbc 78 on map 0 at (-11208.5,
-// 1685.3, 25.8), radius 7, which `areatrigger_teleport` 78 sends to map 36
-// (docs/proposals/GROUP-PLAY.md §4). The approach down the mine's tunnels is
-// part of an attempt.
+// The Deadmines entrance: AreaTrigger.dbc 78 on map 0 at (-11208.5, 1685.3,
+// 25.8), radius 7, at the end of the mine's tunnels under Moonbrook, which
+// `areatrigger_teleport` 78 sends to map 36 (docs/proposals/GROUP-PLAY.md §4),
+// and the party's staging spots beside it.
 //
-// The spot is the operator's (2026-10-20): inside the 250y single-move cap
-// (165y from the trigger, the way the cap measures, 2D), so one plain moveTo
-// of the trigger is planned rather than refused as too_far; it was Moonbrook's
-// `game_tele` 635 (-10986.7, 1542.75, 44.79), 264y out. It is in the Moonbrook
-// area (AreaTable 20), 44y north-west of the mine building's door at z 50,
-// and in the mesh the tunnels are; the plain move from it walks about 660y
-// through the mine (162 polygons, the module's planner) and ends 4.4y from the
-// trigger's centre, inside it. Nothing hostile is in aggro range at level 20:
-// read from the pinned core's base world SQL (creature, creature_addon
-// waypoint paths, creature_template detection_range and levels), the nearest
-// Defias spawn, wander or patrol point is 20y or more past its aggro radius
-// (Creature::GetAggroRange: detection_range less the 4-6 levels the party
-// stands above them), counting the Diggers a floor below without the line of
-// sight that would spare them. The homebind is Sentinel Hill, `game_tele`
-// 824, area 108; a corpse run from a Westfall graveyard and a hearth both stay
-// in the zone.
+// The spots are the operator's (2026-10-20): in the last stretch of the
+// tunnel just outside the trigger, so entry is one short deliberate move
+// through the client's own path (the walk into the volume, the server's
+// areatrigger handling, the transfer) without the 660y walk down the mine;
+// staging inside the instance would need a server-side instance bind. They
+// were Moonbrook's `game_tele` 635, 264y out and past the single-move cap,
+// then a spot by the mine building 165y out. Each is on the mesh the tunnels
+// are, 10-14y from the trigger's centre (outside its 7y radius, so login
+// crosses nothing), and one plain moveTo of the centre walks 6-13y and ends at
+// the reachable mesh 4.4y from it, inside the trigger. Nothing hostile is in
+// aggro range at level 20: read from the pinned core's base world SQL
+// (creature, creature_addon waypoint paths, creature_template detection_range
+// and levels), the nearest Defias spawn, wander or patrol point (a Worker 27y
+// down the tunnel, Watchmen on the ledge above it) is 9.6y or more past its
+// aggro radius (Creature::GetAggroRange: detection_range less the 3-5 levels
+// the party stands above them), counting floors above and below without the
+// line of sight that would spare them. The homebind is Sentinel Hill,
+// `game_tele` 824, area 108; a corpse run from a Westfall graveyard and a
+// hearth both stay in the zone.
 export const DEADMINES_ENTRANCE_TRIGGER = { id: 78, map: 0, x: -11208.5, y: 1685.3, z: 25.8, radius: 7 };
-export const DEADMINES_STAGING = { x: -11104.0, y: 1558.0, z: 50.2 };
 /**
- * Where each of the party's five members stands, in member order: the
- * staging spot first, then 2.5y steps either side across the line to the
- * trigger, so no two stand in one another. Each is on the connected mesh,
- * as clear of the Defias as the spot itself (20y or more past every aggro
- * radius), and 165y from the trigger.
+ * Where each of the party's five members stands, in member order, 2.8y or
+ * more apart so no two stand in one another, each facing the trigger.
  */
 export const DEADMINES_STAGING_SPOTS: readonly { x: number; y: number; z: number }[] = [
-  DEADMINES_STAGING,
-  { x: -11102.1, y: 1559.6, z: 50.6 },
-  { x: -11105.9, y: 1556.4, z: 49.5 },
-  { x: -11100.1, y: 1561.2, z: 51.0 },
-  { x: -11107.9, y: 1554.8, z: 48.9 },
+  { x: -11201.9, y: 1676.0, z: 25.8 },
+  { x: -11205.5, y: 1675.3, z: 25.0 },
+  { x: -11209.5, y: 1675.3, z: 25.2 },
+  { x: -11207.5, y: 1673.3, z: 25.0 },
+  { x: -11202.5, y: 1672.3, z: 26.3 },
 ];
+/** The first member's spot, and the single character's of the deadmines-entry smoke. */
+export const DEADMINES_STAGING = DEADMINES_STAGING_SPOTS[0]!;
 export const SENTINEL_HILL_BIND = { map: 0, zone: 108, x: -10624.5, y: 1096.66, z: 33.76 };
 /** Westfall (AreaTable); the server recomputes the zone from the position at login. */
 export const WESTFALL_ZONE = 40;
@@ -527,7 +527,7 @@ export const SCENARIOS = {
   },
   "moonbrook-mine": {
     description:
-      "level 80, 1g, in Moonbrook by the mine building facing the Deadmines entrance trigger, 165y away, homebind Sentinel Hill, empty quest log (for the deadmines-entry smoke: level 80 so nothing on the walk interrupts it; the party's five members stand on the five spots there at level 20, infra/fixtures/loadouts.ts)",
+      "level 80, 1g, in the mine's last tunnel under Moonbrook facing the Deadmines entrance trigger, 11y away, homebind Sentinel Hill, empty quest log (for the deadmines-entry smoke: level 80 so nothing interrupts it; the party's five members stand on the five spots there at level 20, infra/fixtures/loadouts.ts)",
     level: 80,
     xp: 0,
     money: 10000,

@@ -55,10 +55,11 @@ A party is one fleet job that holds five accounts and runs five episodes at
 once, started together, stopped together, and given one verdict. Each episode
 is an ordinary run of this runner on a pre-staged character: five characters
 created through the module, put into the loadout by the fixture tool and one
-GM command over SOAP, grouped through the module, and logged out standing in
-Moonbrook. Each loop is told its character, its party and its role in the
-operator-objective block. The five walk down the mine to the instance portal,
-which the module already crosses the way a client does, and the records that
+GM command over SOAP, grouped through the module, and logged out standing
+beside the instance portal at the end of the mine under Moonbrook (§4). Each
+loop is told its character, its party and its role in the
+operator-objective block. The five walk into the portal, which the module
+already crosses the way a client does, and the records that
 say what happened — joined a party, entered map 36, killed Edwin VanCleef —
 are three new milestone kinds read off packets the server sends anyway. The
 campaign page tallies parties, not runs.
@@ -408,25 +409,32 @@ the data volume, not from the live world DB:
   36, (-14.4, -393.4, 64.6), radius 6) back to map 0 at (-11208.3, 1672.5,
   24.7), and trigger 121 at the far end of the ship cavern (map 36, (-110.8,
   -1009.2, 34.8)) up to the Westfall shore at (-11339.4, 1571.2, 100.6).
-- The staging spot, in Moonbrook by the mine building: (-11104.0, 1558.0,
-  50.2), map 0, Moonbrook's area (AreaTable 20), 165 yards from the trigger
-  in a straight line and about 660 yards of walking down the mine's outer
-  tunnels — the Westfall subzone "The Deadmines", Defias of level 15–17
-  — so the approach is part of the attempt. The five members stand on five
-  spots 2.5 yards apart across the line to the trigger
-  (`DEADMINES_STAGING_SPOTS`, `infra/fixtures/scenarios.ts`).
-  **Operator's decision (2026-10-20): stage inside the single-move cap.** The
-  spot was `game_tele` 635 at (-10986.7, 1542.75, 44.8), 264 yards from the
-  trigger, past the 250-yard cap, so an agent's plain `moveTo` of the portal
-  was refused as `too_far`. From the new spot it is planned: the module ends
-  the walk at the reachable mesh inside the trigger and plans the whole
-  corridor (below). The spot keeps margin under the cap (at most 230 yards was
-  the bar) and is clear of the Defias: read from the pinned core's base world
-  SQL, every spawn, wander radius and waypoint patrol near it is 20 yards or
-  more past its aggro radius at level 20 (`Creature::GetAggroRange`), counting
-  the Diggers a floor below without the line of sight that would spare them.
-  The campaign's wording ("The party stands in Moonbrook, Westfall, at the
-  entrance to the Deadmines") still describes it.
+- The staging spots, beside the portal: five spots in the last stretch of
+  the mine's tunnel just outside trigger 78, 10–14 yards from its centre and
+  outside its 7-yard radius, 2.8 yards or more apart, each facing the trigger
+  (`DEADMINES_STAGING_SPOTS`, `infra/fixtures/scenarios.ts`). The terrain's
+  area over them is The Dagger Hills (AreaTable 920), the hills the tunnel
+  runs under; the area the server reports inside the mine's model is its own
+  (`WMOAreaTable`), which the first `WB_AREA` at login will show.
+  **Operator's decision (2026-10-20): stage the party beside the portal, not
+  in Moonbrook.** Entry stays on the client's path, a deliberate short move
+  into the volume, the server's own areatrigger handling and the transfer to
+  map 36, without the walk down the mine (about 660 yards, some 94 seconds,
+  through Defias of level 15–17). Staging inside the instance was considered,
+  the start that is closest to the dungeon itself, and rejected: it would need
+  the server to bind the party to an instance and place it there, which no
+  client does. This replaces two earlier spots: `game_tele` 635 at (-10986.7,
+  1542.75, 44.8), 264 yards from the trigger and past the 250-yard
+  single-move cap, so an agent's plain `moveTo` of the portal was refused as
+  `too_far`; then a spot by the mine building 165 yards out, inside the cap,
+  from which that `moveTo` walked the whole mine. From each portal-side spot one plain
+  `moveTo` of the trigger's centre walks 6–13 yards (one to two seconds) and
+  ends inside the trigger at the reachable mesh (below). The spots are clear
+  of the Defias: read from the pinned core's base world SQL, every spawn,
+  wander radius and waypoint patrol near them (a Worker about 27 yards down
+  the tunnel, Watchmen on the ledge above it) is 9.6 yards or more past its
+  aggro radius at level 20 (`Creature::GetAggroRange`), counting floors above
+  and below without the line of sight that would spare them.
 
 **Is walking in client-legal?** Yes, and it is already how the module
 behaves. `Manager::CheckAreaTriggers` (`module/src/WbManager.cpp`) tests the
@@ -463,16 +471,14 @@ inside the 7-yard radius. The module now handles both as path query
 semantics (`module/PROTOCOL.md`, `arrived` and `path_incomplete`): a move to
 the centre ends at that reachable mesh, and a corridor past the core's is
 planned whole by the module's own search. So one `moveTo` to the portal's
-centre from within the 250-yard cap walks the mine and transfers; from the
-staging spot, staged inside the cap for this (the operator's decision of
-2026-10-20, above), that is about 660 yards and 162 polygons, some 94
-seconds at run speed, longer than one snippet, so an agent issues it with
-`moveToAsync` or from a routine.
+centre from within the 250-yard cap walks the mine and transfers: about 660
+yards and 162 polygons from the mine building, longer than one snippet. From
+the staging spots beside the portal (above) it is a few yards.
 
 **The single-character smoke** (`infra/smoke/deadmines-entry.ts`, on
-`PROBE`): scenario `moonbrook-mine` at level 80 so nothing on the way
-interrupts the walk (the steep-replan fixtures use the same trick); one
-`moveTo` of the trigger's centre from the staging spot, expecting
+`PROBE`): scenario `moonbrook-mine` at level 80 so nothing interrupts it
+(the steep-replan fixtures use the same trick); one `moveTo` of the
+trigger's centre from the first staging spot, expecting
 `transferred`; assert `SMSG_TRANSFER_PENDING`
 and `SMSG_NEW_WORLD` with map 36 and a `WB_AREA` for it; one `moveTo`
 inside that arrives; the first Defias pack in `units()`; then `moveTo`
@@ -480,9 +486,9 @@ trigger 119 and see map 0 again. It is the gate for enabling the campaign,
 and it belongs on the release's deploy smokes while the campaign runs.
 
 **The Dungeon Finder is unnecessary.** `CMSG_LFG_JOIN` and its replies are
-a dozen opcodes and a proposal dialogue, all to teleport a formed party to
-the same spot a three-minute walk reaches, and the walk is the better eval:
-the approach is the dungeon's first pull. It stays deferred exactly as
+a dozen opcodes and a proposal dialogue, all to teleport a formed party into
+an instance whose portal the party is staged beside (above), a few yards'
+walk on the client's own path. It stays deferred exactly as
 `docs/CONTRACTS.md` lists it; nothing here needs it.
 
 ## 5. The party surface

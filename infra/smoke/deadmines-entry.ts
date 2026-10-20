@@ -1,19 +1,17 @@
 /**
  * Probe for entering the Deadmines (docs/proposals/GROUP-PLAY.md §4): one
- * character walks from Moonbrook down the mine to the instance portal, is
- * transferred onto map 36 the way a client is (the module's areatrigger
- * crossing, `CMSG_AREATRIGGER`, the core's teleport, `SMSG_NEW_WORLD`),
- * walks a few yards inside, sees the Defias, and walks back out through the
- * exit trigger onto map 0.
+ * character staged beside the portal, in the mine's last tunnel, makes one
+ * plain move of trigger 78's centre and is transferred onto map 36 the way a
+ * client is (the module's areatrigger crossing, `CMSG_AREATRIGGER`, the core's
+ * teleport, `SMSG_NEW_WORLD`), walks a few yards inside, sees the Defias, and
+ * walks back out through the exit trigger onto map 0.
  *
- * What it proves that the design could not assume: the navmesh is
- * continuous from Moonbrook's street through the mine's tunnels to trigger
- * 78, and map 36 has a mesh on the data volume (a move inside answering
- * `no_mesh` is the tell). The walk in is one plain move to the trigger's
- * centre from the staging spot (DEADMINES_STAGING, inside the 250y cap): the
- * module's reachable end and its planner for a corridor past the core's
- * (module/PROTOCOL.md, `arrived` and `path_incomplete`). It is the gate for enabling the campaign and joins
- * the release's deploy smokes while the campaign runs.
+ * What it proves that the design could not assume: the trigger's centre is
+ * over a mesh island, so a move of it is the module's reachable end
+ * (module/PROTOCOL.md, `arrived`) ending inside the trigger, and map 36 has
+ * a mesh on the data volume (a move inside answering `no_mesh` is the tell).
+ * It is the gate for enabling the campaign and joins the release's deploy
+ * smokes while the campaign runs.
  *
  * The character is a persistent fixture on MODULE_ACCOUNT (default PROBE),
  * placed by `infra/fixtures/apply.ts --scenario moonbrook-mine`: level 80, so
@@ -78,19 +76,16 @@ try {
   await Bun.sleep(1500);
   const start = client.state.self.position?.value ?? fail("no position after login");
   if (start.map !== 0 || dist2d(start, DEADMINES_STAGING) > 8) fail(`start ${fmt(start)} on map ${start.map}, expected the staging spot ${fmt(DEADMINES_STAGING)}`);
-  log(`in Moonbrook at ${fmt(start)}, ${dist2d(start, DEADMINES_ENTRANCE_TRIGGER).toFixed(0)}y from trigger 78`);
+  log(`beside the portal at ${fmt(start)}, ${dist2d(start, DEADMINES_ENTRANCE_TRIGGER).toFixed(0)}y from trigger 78`);
 
   // 1. Down the mine to the portal: only `transferred` onto map 36 is success.
-  // One plain move of the trigger's own centre from the staging spot, as an
-  // agent would ask: 165y in a straight line, inside the 250y cap. The centre
-  // is over a mesh island, so the module ends the walk at the reachable mesh
-  // 4.4y from it, inside the trigger (move_end_reachable), and the route
-  // through the tunnels, about 660y and 162 polygons, is past the core's 74,
-  // so the module's planner builds it (move_long_plan).
+  // One plain move of the trigger's own centre from the staging spot beside
+  // the portal, as an agent would ask: 11y. The centre is over a mesh island,
+  // so the module ends the walk at the reachable mesh 4.4y from it, inside the
+  // trigger (move_end_reachable); without that the move is path_incomplete.
   const sinceIn = client.events.recent(1)[0]?.seq ?? 0;
   const { x, y, z } = DEADMINES_ENTRANCE_TRIGGER;
-  // ~94s of walking at run speed: past moveTo's 90s default.
-  const inbound = await client.moveTo({ x, y, z }, { timeout: 150_000 });
+  const inbound = await client.moveTo({ x, y, z });
   log(`    one move to trigger 78's centre: ${inbound.status}${inbound.ok && inbound.status === "transferred" ? ` to map ${inbound.to.map}` : ""}`);
   if (!(inbound.ok && inbound.status === "transferred")) fail(`the move to trigger 78 ended ${inbound.status}${!inbound.ok && inbound.hint ? `: ${inbound.hint}` : ""}`);
   if (inbound.to.map !== DEADMINES_MAP) fail(`transferred to map ${inbound.to.map}, expected ${DEADMINES_MAP}`);

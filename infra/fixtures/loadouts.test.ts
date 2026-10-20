@@ -140,7 +140,7 @@ describe("checkTalentsAgainstFrame", () => {
 });
 
 describe("the member scenario", () => {
-  test("level 20 where the request's scenario stands (Moonbrook by the mine, facing the trigger, hearth at Sentinel Hill), the trainer's and the quests' spells, talents, skills", () => {
+  test("level 20 where the request's scenario stands (beside the Deadmines portal, facing the trigger, hearth at Sentinel Hill), the trainer's and the quests' spells, talents, skills", () => {
     const s = partyScenario(LOADOUTS.tank, [100, 772, 6343, 772], SCENARIOS["moonbrook-mine"], 20);
     validateScenario(s);
     expect(s.level).toBe(PARTY_LEVEL);
@@ -156,10 +156,14 @@ describe("the member scenario", () => {
     expect(s.money).toBe(30_000);
   });
 
-  test("the staging spot is inside one move's 250y of the trigger, with margin, the way the cap measures (2D)", () => {
-    const d = Math.hypot(DEADMINES_ENTRANCE_TRIGGER.x - DEADMINES_STAGING.x, DEADMINES_ENTRANCE_TRIGGER.y - DEADMINES_STAGING.y);
-    expect(d).toBeLessThanOrEqual(230);
-    expect(d).toBeGreaterThan(150);
+  test("the staging spots are a short move from the trigger and outside it, so login crosses nothing", () => {
+    const t = DEADMINES_ENTRANCE_TRIGGER;
+    for (const p of DEADMINES_STAGING_SPOTS) {
+      const d3 = Math.hypot(t.x - p.x, t.y - p.y, t.z - p.z);
+      expect(d3).toBeGreaterThanOrEqual(10);
+      expect(d3).toBeLessThanOrEqual(25);
+      expect(d3).toBeGreaterThan(t.radius + 2);
+    }
   });
 
   test("each of the five members stands on its own spot, apart from the others and facing the trigger", () => {
@@ -168,8 +172,7 @@ describe("the member scenario", () => {
     expect(placed).toHaveLength(DEADMINES_STAGING_SPOTS.length);
     for (const [i, p] of placed.entries()) {
       expect(p).toMatchObject({ map: 0, x: DEADMINES_STAGING_SPOTS[i]!.x, y: DEADMINES_STAGING_SPOTS[i]!.y });
-      expect(Math.hypot(p.x - DEADMINES_STAGING.x, p.y - DEADMINES_STAGING.y)).toBeLessThan(8); // the smokes' staged-member check
-      expect(Math.hypot(DEADMINES_ENTRANCE_TRIGGER.x - p.x, DEADMINES_ENTRANCE_TRIGGER.y - p.y)).toBeLessThanOrEqual(230);
+      expect(Math.hypot(p.x - DEADMINES_STAGING.x, p.y - DEADMINES_STAGING.y)).toBeLessThan(8);
       for (const q of placed.slice(0, i)) expect(Math.hypot(p.x - q.x, p.y - q.y)).toBeGreaterThanOrEqual(2);
       const toTrigger = Math.atan2(DEADMINES_ENTRANCE_TRIGGER.y - p.y, DEADMINES_ENTRANCE_TRIGGER.x - p.x);
       expect(Math.abs(Math.atan2(Math.sin(p.o - toTrigger), Math.cos(p.o - toTrigger)))).toBeLessThan(1e-6);

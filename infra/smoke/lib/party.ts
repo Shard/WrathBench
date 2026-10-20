@@ -10,7 +10,7 @@
 import { connect, type MoveResult, type WrathClient } from "../../../sdk/src/index";
 import { LOADOUT_IDS, PARTY_LEVEL, PARTY_MONEY, loadoutFor, type Loadout } from "../../fixtures/loadouts";
 import { DEFAULT_PARTY_ACCOUNTS, defaultStageRequest, type StageRequest } from "../../fixtures/stage-party";
-import { DEADMINES_STAGING } from "../../fixtures/scenarios";
+import { DEADMINES_STAGING_SPOTS } from "../../fixtures/scenarios";
 
 export type PartyMember = { member: string; account: string; character: string; loadout: Loadout };
 
@@ -69,7 +69,8 @@ export async function assertStagedMember(c: WrathClient, m: PartyMember, party: 
   if (level !== PARTY_LEVEL) throw new Error(`${who} is level ${level}, expected ${PARTY_LEVEL}`);
 
   const pos = await until(`${who} position`, 15_000, () => c.state.self.position?.value);
-  if (pos.map !== 0 || dist2d(pos, DEADMINES_STAGING) > 8) throw new Error(`${who} stands on map ${pos.map} at ${fmt(pos)}, expected the staging spot ${fmt(DEADMINES_STAGING)} within 8y`);
+  const spot = DEADMINES_STAGING_SPOTS[party.indexOf(m)] ?? DEADMINES_STAGING_SPOTS[0]!;
+  if (pos.map !== 0 || dist2d(pos, spot) > 3) throw new Error(`${who} stands on map ${pos.map} at ${fmt(pos)}, expected its staging spot ${fmt(spot)} within 3y`);
 
   const equipped = new Map<number, number>();
   await until(`${who} equipment`, 15_000, () => {
