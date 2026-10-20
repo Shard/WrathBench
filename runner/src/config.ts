@@ -22,7 +22,6 @@ import { PARTY_PAUSE, STALL_PAUSE, SUBSCRIPTION_PAUSE } from "./lapse";
 import { routingSchema } from "./routing";
 import { CHARACTER_NAME_RULE, isValidCharacterName } from "./character-name";
 import { partyConfigSchema } from "./party";
-import { REFERENCE_ROUTE, referenceModelId } from "./reference/route";
 import {
   DEFAULT_DRIVER,
   DRIVER_LIST,
@@ -375,7 +374,8 @@ export const runConfigSchema = z.object({
    *  - `stub`: the fixed loop over a scripted response file. Harness testing
    *    without a model; never scores.
    *  - `reference`: the fixed loop over the scripted reference program
-   *    (`reference/adapter.ts`), a TypeScript route played through
+   *    (`reference-adapter.ts`; the program itself is a private build input,
+   *    `reference-program.ts`), a TypeScript route played through
    *    `run_snippet` against the SDK: the per-series ceiling on what the
    *    surface allows (docs/METHODOLOGY.md, "Scoring"). Stamped
    *    `REFERENCE_STAMP`; never scores and is never scheduled.
@@ -789,19 +789,10 @@ export function loadRunConfig(raw: unknown): RunConfig {
     if (steered.length > 0) {
       throw new Error(`the reference driver plays its own fixed route from a fresh character; ${steered.join(", ")} cannot apply to it`);
     }
-    // The route is written for one start, and its id and version are the
-    // run's model: what a reader groups its line by.
-    const route = REFERENCE_ROUTE;
-    if (config.race !== route.race || config.class !== route.class) {
-      throw new Error(
-        `the reference route ${route.id}@${route.version} is written for race ${route.race}, class ${route.class}; this run asked for race ${config.race}, class ${config.class}`,
-      );
-    }
-    const model = referenceModelId(route);
-    if (config.model !== undefined && config.model !== model) {
-      throw new Error(`the reference driver's model is its route, ${model}; --model ${config.model} cannot apply to it`);
-    }
-    return { ...config, model };
+    // The start and the model are the route's, and the route is the program's,
+    // which is loaded at launch (`resolveReferenceLaunch`, reference-program.ts):
+    // the program is a private build input, so this synchronous parse cannot
+    // see it.
   }
   return config;
 }

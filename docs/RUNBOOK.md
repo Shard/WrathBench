@@ -1068,7 +1068,9 @@ take only the paths `server.Dockerfile` copies. The submodule therefore has to
 be initialised in the checkout you build from. Uncommitted edits are never in an
 image, which is why a dirty tree is refused. `--allow-dirty` builds the commit
 anyway, but its `-dirty` tag is never pushed. `k8s-release.sh` hands the build
-the exact commit its tag describes.
+the exact commit its tag describes. The runner image also takes the scripted
+reference program from the private checkout's HEAD the same way, and the build
+stops when it cannot find it ("The scripted reference run").
 
 Each image then goes through `infra/image-guard.sh` before anything is pushed.
 The guard lists the image's filesystem and refuses one that holds a
@@ -1597,10 +1599,14 @@ usually pins the digest. By hand, from a clean checkout of the branch, or
 naming the branch's head from any clean checkout:
 
 ```
-./infra/build-images.sh --only runner --push --registry ghcr.io/shard
-./infra/build-images.sh --only runner --push --registry ghcr.io/shard \
+./infra/build-images.sh --only runner --push --registry ghcr.io/shard --without-reference
+./infra/build-images.sh --only runner --push --registry ghcr.io/shard --without-reference \
   --commit <sha> --tag "$(git describe --tags --always <sha>)"
 ```
+
+`--without-reference` is required there: an image carrying the scripted
+reference program is never pushed to a public registry host ("The scripted
+reference run"), and a campaign arm never plays it.
 
 Like a release ("Deploy window", above), the image is built from a `git
 archive` of that commit, never from the working tree, so an uncommitted edit is
@@ -1646,6 +1652,31 @@ release that carries the series:
 bun wb run episode --driver reference --episode e90 --account PROBE
 ```
 
+The program is not in the public repository: a working route script for this
+SDK is an answer key a future model could be trained on, so it is kept in the
+operator's private checkout and built into the runner image from there
+(docs/METHODOLOGY.md, "Scoring"). This tree holds only the hook: the driver,
+its adapter, the stamp and the counting rules. `infra/build-images.sh` (`bun
+wb release build`) takes the program from `reference/src/` at the private
+checkout's HEAD — `WRATHBENCH_PRIVATE_DIR` or `--private-dir`, default
+`/home/mark/git/wrathbench-private` — and lays it at `runner/src/reference/`
+in the build context. The launch imports it from there by dynamic import. A runner
+build that cannot find it stops before anything is built, so a release never
+ships without it. `--without-reference` builds an image without it for local
+use or for a public registry, and is refused when pushing to the release
+registry. Any build without the program, a public clone or the compose
+quickstart included, refuses a `--driver reference` launch in one line and
+writes nothing. To check the program in an image:
+
+```
+docker run --rm <runner image> bun -e 'const r = await (await import("/wrathbench/runner/src/reference-program.ts")).loadReferenceProgram(); console.log(r.ok ? "present " + r.program.route.id + "@" + r.program.route.version : r.reason)'
+```
+
+The program's own tests live beside it in the private checkout and run
+against a public checkout (`reference/test.sh <checkout>`, which lays the
+files into that checkout's gitignored `runner/src/reference/` and
+`runner/test/reference/`, runs them and removes them).
+
 It needs no key, no lane and no `--model`: the route is the model
 (`reference/<route>@<version>`). Nothing schedules it. The fleet config refuses
 `driver: reference`, and the scheduler counts it toward nothing. What it shares
@@ -1663,11 +1694,11 @@ A pause is not resumed. Check it with `bun wb inspect run <run-id>` and `bun wb
 inspect trajectory <run-id> --grep 'REF'`. Every turn's result ends in one
 `[log] REF {…}` line: the step, `advance`, what the tick did, and the level, xp
 and health. An `npc … not in view` after walks that arrived is a route
-position to correct in `runner/src/reference/route.ts`; the same `move …`
+position to correct in the private route; the same `move …`
 failure repeated from one spot (the audit's move results give the position) is
-the program's to fix in `program.ts`. Bump the route's
+the program's to fix. Bump the route's
 `version` with the correction, so the next run is a new line rather than the
-old one moved.
+old one moved, and release, since the image carries the program.
 
 ### Archiving runs
 

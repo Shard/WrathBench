@@ -171,10 +171,10 @@ export interface DriverEntry {
   /** The unscored stamp of a driver that is not a model; a model's driver has none. */
   stamp?: string;
   /**
-   * Plays the scripted reference route (`reference/route.ts`) instead of a
-   * model: the route's id is its model, the route's start its race and class,
-   * and nothing — objective, continuation, campaign — can steer it
-   * (`loadRunConfig`).
+   * Plays the scripted reference program's route (`reference-program.ts`)
+   * instead of a model: the route's id is its model, the route's start its
+   * race and class (`resolveReferenceLaunch`), and nothing — objective,
+   * continuation, campaign — can steer it (`loadRunConfig`).
    */
   route?: boolean;
   /** Whether a roster entry may name it. */
@@ -366,7 +366,7 @@ export const DRIVER_TABLE = {
     podVolumes: [],
   },
   // The scripted reference plays through the fixed loop, so its snippets reach
-  // the sandbox exactly as a model's do (`reference/adapter.ts`). Launched by
+  // the sandbox exactly as a model's do (`reference-adapter.ts`). Launched by
   // hand once per harness series; the policy never schedules or caps one
   // (docs/EPISODES.md, "The scripted reference run").
   reference: {

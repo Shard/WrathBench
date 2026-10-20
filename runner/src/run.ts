@@ -59,8 +59,9 @@ import { RunArgsError, parseRunArgs } from "./run-flags";
 import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
 import { openWikiBundle, wikiBundleMeta } from "./wiki";
 import type { ChatAdapter } from "./adapter";
-import { DRIVER_ADAPTERS } from "./driver-adapters";
-import { DRIVER_TABLE } from "./drivers";
+import { DRIVER_ADAPTERS, type LaunchInputs } from "./driver-adapters";
+import { DRIVER_TABLE, entryOf } from "./drivers";
+import { referenceProgramPath, resolveReferenceLaunch } from "./reference-program";
 import { parseRouting, type RoutingSpec } from "./routing";
 import {
   DRIVERS,
@@ -534,6 +535,20 @@ async function main(): Promise<void> {
       process.exit(2);
     }
   }
+  // The scripted reference program is a private build input, at a fixed path
+  // in the operator's image (`reference-program.ts`). Loaded here, on a fresh
+  // launch and a resume alike, before anything is written: a build without it
+  // refuses the launch in one plain line, and leaves no run behind.
+  let launchInputs: LaunchInputs = {};
+  if (entryOf(config.driver).route === true) {
+    const ref = await resolveReferenceLaunch(config, referenceProgramPath());
+    if (!ref.ok) {
+      console.error(`[wrathbench] --driver ${config.driver} refused: ${ref.reason}`);
+      process.exit(2);
+    }
+    config = ref.config;
+    launchInputs = { reference: ref.program };
+  }
   /**
    * The character the operator staged for this run (`--character`, through
    * the campaign file), on a fresh launch only: a resume finds its character
@@ -641,7 +656,7 @@ async function main(): Promise<void> {
   // lane, redacts the credential, names a CLI lane in the config the run
   // records, and builds the fixed loop's adapter.
   const driver = DRIVER_ADAPTERS[config.driver];
-  const launch = driver.prepare(config, trajectory);
+  const launch = driver.prepare(config, trajectory, launchInputs);
   config = launch.config;
   const adapter: ChatAdapter | undefined = launch.adapter;
 

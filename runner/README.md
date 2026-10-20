@@ -38,8 +38,8 @@ bun runner/src/run.ts --driver openai --model <id> --api-base <url> [--api-key-e
 # the same loop driven by a scripted stub — harness testing without a model
 bun runner/src/run.ts --driver stub --stub runner/test/fixtures/stub-live-check.json
 
-# the scripted reference run: the route in src/reference/ played through
-# run_snippet, stamped and never scored (docs/EPISODES.md)
+# the scripted reference run: the private program played through run_snippet,
+# stamped and never scored (docs/EPISODES.md); a build without it refuses
 bun runner/src/run.ts --driver reference --episode e90 --account PROBE
 
 # bound a run: --max-turns caps driver turns, --max-tool-calls caps tool calls
@@ -92,16 +92,20 @@ rather than silently translated.
 | --- | --- | --- | --- |
 | `openai` (default) | `wrathbench` | the fixed loop in `src/loop.ts` over an OpenAI-compatible endpoint | yes |
 | `stub` | `wrathbench` | the fixed loop over a scripted response file | no |
-| `reference` | `wrathbench` | the fixed loop over the scripted reference program, `src/reference/`: one `run_snippet` per turn, branching on the world | no, a labelled line |
+| `reference` | `wrathbench` | the fixed loop over the scripted reference program, `src/reference-adapter.ts`: one `run_snippet` per turn, branching on the world | no, a labelled line |
 | `claude-code` | `claude-code` | the `claude` CLI, driven per turn by `src/adapter-claude.ts` | yes, tagged |
 | `codex` | `codex` | the `codex` CLI (OpenAI, ChatGPT subscription), one `codex exec` / `exec resume` process per turn, `src/adapter-codex.ts` | yes, tagged |
 | `pi` | `pi` | the `pi` CLI (earendil-works, MIT) on a metered endpoint, one long-lived `pi --mode rpc` process, `src/adapter-pi.ts` | probe-only until promoted |
 
 The `reference` driver is a transport like the others, with a program in
-place of a model. `src/reference/adapter.ts` answers each turn with one
+place of a model. The program is not in this repository: it is a private build
+input the operator's runner image carries at `src/reference/` (gitignored
+here), and `src/reference-program.ts` imports it at launch, before anything is
+written. Without it the launch refuses in one line (docs/RUNBOOK.md, "The
+scripted reference run"). `src/reference-adapter.ts` answers each turn with one
 `run_snippet` call and reads back only that call's result. The first snippet
-binds the program (`src/reference/program.ts`, sent as its own source text)
-and the route (`src/reference/route.ts`) on the sandbox's global. Every later
+binds the program's tick (sent as its own source text) and its route (as
+JSON) on the sandbox's global. Every later
 snippet runs one tick of it inside the snippet timeout, and the tick reports
 on a `[log] REF {…}` console line. A sandbox restart drops the binding, the
 next tick says `unloaded`, and the program is sent again. The program keeps

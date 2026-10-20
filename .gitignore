@@ -29,3 +29,10 @@ infra/fleet.json
 
 # Operator-local agent commands (cite private paths)
 .claude/commands/orchestrate.md
+
+# The scripted reference program is a private build input (docs/RUNBOOK.md,
+# "The scripted reference run"): the operator's build lays it here, inside the
+# image's build context, and its tests lay it into a checkout to run. Never
+# committed.
+/runner/src/reference/
+/runner/test/reference/

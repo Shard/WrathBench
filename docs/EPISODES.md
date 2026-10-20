@@ -379,14 +379,17 @@ one per harness series (docs/METHODOLOGY.md, "Scoring"; operator, 2026-10-19).
 It is launched under a scored id's shape and is never a member of that id's
 group.
 
-- **Driver.** `--driver reference` (`runner/src/reference/`). The fixed loop
+- **Driver.** `--driver reference` (`runner/src/reference-adapter.ts`; the
+  program is a private build input, loaded at launch by
+  `runner/src/reference-program.ts`, and a build without it refuses the
+  launch — `docs/RUNBOOK.md`, "The scripted reference run"). The fixed loop
   runs it the way it runs a model: each turn is one `run_snippet` call, played
   in the run's one sandbox and session, under the run's `snippetTimeoutMs`, and
   recorded as a model's turns are. What the driver reads is the tool result a
   model would read, and nothing else. The program in the snippet makes every
   decision from the state cache and acts only through SDK calls a model could
   make, so the run gets no observation and no action a client could not.
-- **Route.** `runner/src/reference/route.ts`: a Human Paladin from Northshire
+- **Route.** Part of the private program: a Human Paladin from Northshire
   Valley to Goldshire, quest by quest, then hunting Elwynn until the clock
   runs out. It is a speedrunner's route knowledge written as data: creature
   entries, quest ids and approximate positions, with no game text. The
@@ -396,9 +399,10 @@ group.
   a new line, never the old one moved.
 - **Shape.** `--episode e90`: the 90-minute clock, `e90`'s watchdogs and its
   tool-call ceiling, `objective: none`, the reference wiki present and unused.
-  The start is the route's (race 1, class 2). `loadRunConfig` refuses any
-  other start, an objective, a continuation, a campaign and any `--model`
-  other than the route's.
+  The start is the route's (race 1, class 2). `loadRunConfig` refuses an
+  objective, a continuation and a campaign; the launch
+  (`resolveReferenceLaunch`) refuses any other start and any `--model` other
+  than the route's.
 - **Stamped, never scored.** Every record carries `unscored (scripted
   reference)` (`REFERENCE_STAMP`), and the driver alone says the same for a
   record whose stamp went missing. The scheduler's `isCounted` refuses it
