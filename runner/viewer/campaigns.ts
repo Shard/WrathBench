@@ -30,6 +30,7 @@ import {
   type PublishedCampaign,
 } from "../src/campaigns";
 import { harnessOfRun } from "../src/comparability";
+import { DEFAULT_DRIVER } from "../src/drivers";
 import type { ArmSummary, CampaignView, ResultRun, Square } from "./api-types";
 
 /** The roster and the campaign blocks, as this builder needs them (`RosterRead`). */
@@ -168,7 +169,7 @@ export function campaignsView(
           model: e?.model ?? mine.find((r) => r.ref === ref)?.model ?? ref,
           effort: e?.effort ?? null,
           compactWindow: armWindow !== undefined ? (armWindow.toLowerCase() === "auto" ? null : armWindow) : (e?.compactWindow ?? null),
-          harness: e === undefined ? null : harnessOfRun({ driver: e.driver ?? "openai" }),
+          harness: e === undefined ? null : harnessOfRun({ driver: e.driver ?? DEFAULT_DRIVER }),
         };
       }),
     );
@@ -284,7 +285,7 @@ export function campaignsView(
                   model: e?.model ?? a.model,
                   effort: e?.effort ?? null,
                   compactWindow: e?.compactWindow ?? null,
-                  harness: e === undefined ? null : harnessOfRun({ driver: e.driver ?? "openai" }),
+                  harness: e === undefined ? null : harnessOfRun({ driver: e.driver ?? DEFAULT_DRIVER }),
                   runsPerCell: a.runsPerCell,
                 };
               }),

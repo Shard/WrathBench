@@ -24,6 +24,8 @@
  * the table does not hold).
  */
 
+import { DEFAULT_DRIVER, driverEntry } from "./drivers";
+
 /** One provider: the env var holding its key, and where that key may go. */
 export interface KeyProvider {
   /** The env var holding the key. A name, never a value. */
@@ -156,7 +158,7 @@ export function rosterKeyRefusal(
   e: { driver?: unknown; apiBase?: unknown; apiKeyEnv?: unknown },
   env: Record<string, string | undefined> = process.env,
 ): string | null {
-  if ((e.driver ?? "openai") !== "openai") return null;
+  if (driverEntry(e.driver ?? DEFAULT_DRIVER)?.endpoint !== true) return null;
   if (e.apiKeyEnv !== undefined && typeof e.apiKeyEnv !== "string") return "apiKeyEnv must be the NAME of the env var holding the key";
   if (e.apiBase !== undefined && typeof e.apiBase !== "string") return "apiBase must be a URL";
   return apiKeyRefusal(e.apiKeyEnv ?? DEFAULT_API_KEY_ENV, e.apiBase ?? DEFAULT_API_BASE, env);

@@ -13,8 +13,9 @@ import { ogTags, ogTagsFromEnv } from "./src/lib/og-tags.ts";
  * shared rather than duplicated: the API wire types, the world→tile transform,
  * the freeplay lineage walk, the character aggregation over it, a run's
  * sessions, the public projection's allowlist, the race and class names, the
- * trace codec and the nearby codec. All nine are import-free by construction,
- * so nothing server-side follows them in.
+ * trace codec and the nearby codec. All nine are import-free by construction
+ * (the wire types take one type from the import-free driver registry), so
+ * nothing server-side follows them in.
  */
 const viewerOrigin = process.env["WRATHBENCH_VIEWER_ORIGIN"] ?? "http://127.0.0.1:8090";
 

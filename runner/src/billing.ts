@@ -28,6 +28,7 @@
  * side that does not quietly shrink a spend.
  */
 
+import { driverEntry, eitherHas } from "./drivers";
 import {
   isContributorSlug,
   isFreeSlug,
@@ -50,9 +51,9 @@ export interface BillableRun {
   declaredBilling?: Billing | null;
 }
 
-/** The harnesses (and the drivers of the same name) that bill a flat subscription: Claude Code, Codex. */
+/** The harnesses (and the drivers of the same name) that bill a flat subscription: Claude Code, Codex (`bill`, drivers.ts). */
 export function isSubscriptionHarness(name: string | null | undefined): boolean {
-  return name === "claude-code" || name === "codex";
+  return eitherHas({ driver: name, harness: name }, (d) => d.bill === "subscription");
 }
 
 /**
@@ -61,14 +62,14 @@ export function isSubscriptionHarness(name: string | null | undefined): boolean 
  * recorded free, so the verdict and the price cannot drift apart.
  */
 export function declaredBillingOf(run: Pick<BillableRun, "driver" | "declaredBilling">): Billing | undefined {
-  if (run.driver !== "openai") return undefined;
+  if (driverEntry(run.driver)?.endpoint !== true) return undefined;
   return run.declaredBilling ?? undefined;
 }
 
 /** Did this run cost money? See the module comment for why it is not `billingOf`. */
 export function runBilling(run: BillableRun): Billing {
   // The scripted reference reaches no model and no provider: nothing bills.
-  if (run.driver === "reference") return "free";
+  if (driverEntry(run.driver)?.bill === "none") return "free";
   if (isSubscriptionHarness(run.harness) || isSubscriptionHarness(run.driver)) return "paid";
   const declared = declaredBillingOf(run);
   if (declared !== undefined) return declared;

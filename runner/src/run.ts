@@ -58,19 +58,13 @@ import { holdsOnlyLaunchFiles, readCampaignFile } from "./campaign-file";
 import { RunArgsError, parseRunArgs } from "./run-flags";
 import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
 import { openWikiBundle, wikiBundleMeta } from "./wiki";
-import { OpenAiChatAdapter, StubAdapter, type ChatAdapter } from "./adapter";
-import { ReferenceAdapter } from "./reference/adapter";
-import { REFERENCE_ROUTE } from "./reference/route";
-import { parseRouting, routingForRun, type RoutingSpec } from "./routing";
-import { apiKeyRefusal } from "./providers";
-import { runClaudeEpisode } from "./adapter-claude";
-import { codexEffortRefusal, laneLooksLoggedIn, runCodexEpisode } from "./adapter-codex";
+import type { ChatAdapter } from "./adapter";
+import { DRIVER_ADAPTERS } from "./driver-adapters";
+import { DRIVER_TABLE } from "./drivers";
+import { parseRouting, type RoutingSpec } from "./routing";
 import {
-  DEFAULT_CLAUDE_TOKEN_ENV,
-  DEFAULT_CODEX_HOME_ENV,
   DRIVERS,
   episodeOverrideOf,
-  isTokenEnvName,
   loadRunConfig,
   MIN_TOKEN_LENGTH,
   newRunId,
@@ -643,117 +637,13 @@ async function main(): Promise<void> {
     copyFileSync(join(continuation.dir, "scratchpad.md"), scratchpad.path);
   }
 
-  // driver
-  let adapter: ChatAdapter | undefined;
-  if (config.driver === "stub") {
-    if (config.stubScript === undefined) {
-      console.error("--driver stub requires --stub <script.json>");
-      process.exit(2);
-    }
-    adapter = StubAdapter.fromScriptFile(config.stubScript);
-  } else if (config.driver === "reference") {
-    // The scripted reference: its route through `run_snippet`, in this run's
-    // sandbox and session like any model (`reference/adapter.ts`). No key, no
-    // lane; `loadRunConfig` has already checked the start and named the model.
-    adapter = new ReferenceAdapter({
-      route: REFERENCE_ROUTE,
-      snippetTimeoutMs: config.snippetTimeoutMs,
-      race: config.race,
-      class: config.class,
-    });
-  } else if (config.driver === "claude-code") {
-    // The subscription lane: a var NAME, defaulting to the one the CLI itself
-    // knows. Everything below says the CHOSEN name, so an operator reading a
-    // refusal is told which of two subscriptions is missing.
-    const tokenEnv = config.subscription ?? DEFAULT_CLAUDE_TOKEN_ENV;
-    if (!isTokenEnvName(tokenEnv)) {
-      console.error(`--token-env ${tokenEnv} is not an environment variable name (it must not be the token itself)`);
-      process.exit(2);
-    }
-    const token = process.env[tokenEnv];
-    if (token === undefined || token.trim().length === 0) {
-      console.error(
-        `--driver claude-code needs $${tokenEnv}.\n` +
-          "  generate one with:  claude setup-token\n" +
-          `  then put it in .env as ${tokenEnv}=... (.env is gitignored)\n` +
-          "  and start the run through infra/run-episode.sh, which exports it for you.",
-      );
-      process.exit(2);
-    }
-    trajectory.redact(token);
-    // Recorded, so the run names its lane rather than leaving a reader (or the
-    // fleet's per-lane count) to infer the default. The NAME, never the value.
-    config = { ...config, subscription: tokenEnv };
-  } else if (config.driver === "codex") {
-    // The subscription lane, by var NAME: its VALUE is a CODEX_HOME directory
-    // whose auth.json holds the ChatGPT login (config.ts, DEFAULT_CODEX_HOME_ENV).
-    // Checked here for the same reason the claude token is: a missing lane
-    // must fail in a second, naming the variable, not after the sandbox and the
-    // game session are up. The directory is never copied and auth.json never read.
-    const laneEnv = config.subscription ?? DEFAULT_CODEX_HOME_ENV;
-    if (!isTokenEnvName(laneEnv)) {
-      console.error(`--token-env ${laneEnv} is not an environment variable name (for codex it names the var holding a CODEX_HOME path)`);
-      process.exit(2);
-    }
-    const home = process.env[laneEnv];
-    if (!laneLooksLoggedIn(home)) {
-      console.error(
-        `--driver codex needs $${laneEnv} to name a Codex home directory containing auth.json` +
-          (home === undefined || home.trim().length === 0 ? " (it is unset)." : ` (${home} has none).`) +
-          "\n  log in once with:  codex login   (a ChatGPT subscription; the login lands in ~/.codex/auth.json)\n" +
-          `  then put the directory in .env as ${laneEnv}=/home/<you>/.codex (.env is gitignored)\n` +
-          "  and start the run through infra/run-episode.sh, which exports it for you.\n" +
-          "  One directory per lane, shared by that lane's runs — never a per-run copy: a copied\n" +
-          "  refresh token is spent by whichever process refreshes first.",
-      );
-      process.exit(2);
-    }
-    // `none`/`minimal` are not Codex levels; refused by name, never mapped.
-    const refusal = codexEffortRefusal(config.effort);
-    if (refusal !== null) {
-      console.error(refusal);
-      process.exit(2);
-    }
-    if (config.model === undefined) {
-      console.error("--driver codex needs --model (e.g. gpt-6-astra, gpt-5.5 — the ChatGPT catalogue's ids)");
-      process.exit(2);
-    }
-    config = { ...config, subscription: laneEnv };
-  } else {
-    const apiBase = config.apiBase ?? process.env["OPENAI_BASE_URL"];
-    // Before the variable is even read: a key name and a base are config, and
-    // the pair may only be one the provider table holds (runner/src/providers.ts).
-    // The fleet refuses such an entry at parse and the store refuses the write;
-    // this is the last place a run could still send one, so it refuses to start.
-    const keyRefusal = apiBase === undefined ? null : apiKeyRefusal(config.apiKeyEnv, apiBase);
-    if (keyRefusal !== null) {
-      console.error(`openai driver refuses to start: ${keyRefusal}`);
-      process.exit(2);
-    }
-    const apiKey = process.env[config.apiKeyEnv];
-    if (config.model === undefined || apiKey === undefined || apiBase === undefined) {
-      console.error(
-        `openai driver needs --model, --api-base (or OPENAI_BASE_URL), and $${config.apiKeyEnv} set`,
-      );
-      process.exit(2);
-    }
-    trajectory.redact(apiKey);
-    // Resolved once, here, and handed to both the adapter and the tuple
-    // (`comparabilityOf` calls the same function): what the wire carries is
-    // what the run records.
-    const routing = routingForRun({ ...config, apiBase });
-    adapter = new OpenAiChatAdapter({
-      baseUrl: apiBase,
-      apiKey,
-      apiKeyEnv: config.apiKeyEnv,
-      model: config.model,
-      ...(config.effort !== undefined ? { effort: config.effort } : {}),
-      ...(routing !== null ? { routing } : {}),
-      // The run is the conversation: one id for its whole life, resumes
-      // included. Sent to OpenCode only (`openCodeSessionHeaders`).
-      sessionId: config.runId,
-    });
-  }
+  // driver: its launch preflight (`driver-adapters.ts`) checks the key or the
+  // lane, redacts the credential, names a CLI lane in the config the run
+  // records, and builds the fixed loop's adapter.
+  const driver = DRIVER_ADAPTERS[config.driver];
+  const launch = driver.prepare(config, trajectory);
+  config = launch.config;
+  const adapter: ChatAdapter | undefined = launch.adapter;
 
   const shakeout = unscoredStamp(config.driver, config.objective);
   const version = harnessVersion();
@@ -813,7 +703,7 @@ async function main(): Promise<void> {
         // Codex could resume its own thread, but the runner starts a fresh one
         // on purpose: the thread id is not run identity and a resumed run's
         // conversation should be exactly what the scratchpad note says it is.
-        ...(config.driver === "claude-code" || config.driver === "codex" ? { resumedFresh: true } : {}),
+        ...(DRIVER_TABLE[config.driver].kind === "scaffold" ? { resumedFresh: true } : {}),
       };
       trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, config, comparability });
     }
@@ -1227,8 +1117,8 @@ async function main(): Promise<void> {
         ];
 
   const outcome =
-    config.driver === "claude-code"
-      ? await runClaudeEpisode({
+    driver.runEpisode !== undefined
+      ? await driver.runEpisode({
           config,
           runDir,
           sandbox,
@@ -1242,22 +1132,7 @@ async function main(): Promise<void> {
           signal: abort.signal,
           onObservationStalled,
         })
-      : config.driver === "codex"
-        ? await runCodexEpisode({
-            config,
-            runDir,
-            sandbox,
-            scratchpad,
-            episodic,
-            wiki,
-            trajectory,
-            watchdogs,
-            initialNotices,
-            turnOffset,
-            signal: abort.signal,
-            onObservationStalled,
-          })
-        : await runLoop({
+      : await runLoop({
           config,
           adapter: adapter!,
           sandbox,

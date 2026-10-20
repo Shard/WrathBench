@@ -29,7 +29,7 @@
  */
 
 import { z } from "zod";
-import { driverHasCompactWindow } from "./config";
+import { DEFAULT_DRIVER, driverHasCompactWindow } from "./config";
 import type { RunPodsMode } from "./models";
 import {
   CAMPAIGN_NAME,
@@ -234,7 +234,7 @@ export function campaignPairRefusals(
       }
       const window = armArg(arm, "compact-window");
       if (window !== undefined) {
-        const driver = entry.driver ?? "openai";
+        const driver = entry.driver ?? DEFAULT_DRIVER;
         if (!driverHasCompactWindow(driver)) {
           reasons.push(`arm ${arm.id} sets --compact-window ${window}, and ${a.model} runs on the ${driver} driver, which has no compaction window`);
         } else if (entry.compactWindow !== undefined) {

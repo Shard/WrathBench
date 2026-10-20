@@ -54,6 +54,7 @@
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { readFleetConfig } from "../runner/src/config-store";
+import { driverEntry } from "../runner/src/drivers";
 import { isFreeSlug } from "../runner/src/model-cost";
 
 /** OpenRouter's model catalogue. Public: read with no key, here and by `runner/viewer/drafts.ts`. */
@@ -209,8 +210,9 @@ export function priceOf(entry: CatalogueRow): SyncedPrice | null {
  * miss on every sync for a model that is in fact priced.
  */
 export function catalogueIds(model: string, driver: unknown): string[] {
-  if (driver !== "codex" || model.includes("/")) return [model];
-  return [`openai/${model}`];
+  const vendor = driverEntry(driver)?.cost.vendor;
+  if (vendor === undefined || model.includes("/")) return [model];
+  return [`${vendor}/${model}`];
 }
 
 /** Model ids named by the fleet roster, as the catalogue spells them. */

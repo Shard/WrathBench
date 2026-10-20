@@ -40,6 +40,7 @@
  */
 
 import { declaredBillingOf } from "../src/billing";
+import { DEFAULT_DRIVER, driverEntry, eitherHas, entryOf, harnessDriver } from "../src/drivers";
 import { isContributorSlug, isFreeSlug, isLocalBase } from "../src/model-cost";
 import synced from "./prices.openrouter.json";
 import type { CostBreakdown, CostCoverage, CostFigure, CostView, RunRow, TokenTotals, UnreportedUsage } from "./api-types";
@@ -300,7 +301,7 @@ export function windowAt(windows: readonly SyncedWindow[], at: number | null): S
  * billing sentence and `asIfMetered` differ, so they are decided here and the
  * window provenance (undated first window against a dated one) is written once.
  */
-type SyncedFlavor = "openrouter" | "codex";
+type SyncedFlavor = "openrouter" | "vendor";
 
 const SYNCED_BILLING: Record<SyncedFlavor, { asIfMetered: boolean; list: string; whose: string }> = {
   openrouter: {
@@ -308,7 +309,7 @@ const SYNCED_BILLING: Record<SyncedFlavor, { asIfMetered: boolean; list: string;
     list: "OpenRouter list price",
     whose: "metered against the operator's OpenRouter balance",
   },
-  codex: {
+  vendor: {
     asIfMetered: true,
     list: "OpenAI API list price via the OpenRouter catalogue",
     whose: "the codex harness bills a ChatGPT subscription, so this is as-if-metered",
@@ -360,13 +361,26 @@ export function syncedPrice(model: string, at: number | null = null): PriceRow |
  * prices today changes.
  */
 export function codexPrice(model: string, at: number | null = null): PriceRow | null {
-  if (model.includes("/")) return null;
-  return syncedRow(`openai/${model}`, at, "codex");
+  return vendorPrice(model, "openai", at);
 }
 
-/** A run driven by the Codex CLI, whichever field of the pair carries it. */
-function isCodex(run: Pick<PriceableRun, "driver" | "harness">): boolean {
-  return run.harness === "codex" || run.driver === "codex";
+/** The synced row for a bare slug under a catalogue vendor's prefix (`DriverCost.vendor`). */
+function vendorPrice(model: string, vendor: string, at: number | null): PriceRow | null {
+  if (model.includes("/")) return null;
+  return syncedRow(`${vendor}/${model}`, at, "vendor");
+}
+
+/**
+ * The catalogue vendor a run's bare slug is priced under — a codex run, whose
+ * CLI reports no cost — whichever field of the pair carries it.
+ */
+function vendorOf(run: Pick<PriceableRun, "driver" | "harness">): string | undefined {
+  return driverEntry(run.driver)?.cost.vendor ?? harnessDriver(run.harness)?.cost.vendor;
+}
+
+/** A run whose CLI reports its own as-if-metered figure (claude-code), whichever field of the pair carries it. */
+function isCliReported(run: Pick<PriceableRun, "driver" | "harness">): boolean {
+  return eitherHas(run, (d) => d.cost.reported === "cli");
 }
 
 /**
@@ -572,7 +586,7 @@ export type PriceableRun = Pick<RunRow, "model" | "apiBase" | "platform" | "driv
  * beside the CLI's own figure. They stay unpriced, as they always were.
  */
 function isClaudeRun(run: Pick<PriceableRun, "model" | "driver" | "harness">): boolean {
-  return run.harness === "claude-code" || run.driver === "claude-code" || /claude/i.test(run.model ?? "");
+  return eitherHas(run, (d) => d.cost.table === "claude") || /claude/i.test(run.model ?? "");
 }
 
 /** The Claude model a run was served: the CLI's own answer when it recorded one, else the launch string. */
@@ -615,9 +629,10 @@ export function priceFor(run: PriceableRun, at: number | null = null): PriceRow 
   if (provider !== null) return provider;
   const open = syncedPrice(model, at);
   if (open !== null) return open;
-  if (isCodex(run)) {
-    const codex = codexPrice(model, at);
-    if (codex !== null) return codex;
+  const vendor = vendorOf(run);
+  if (vendor !== undefined) {
+    const row = vendorPrice(model, vendor, at);
+    if (row !== null) return row;
   }
   if (!isClaudeRun(run)) return null;
   return claudePrice(servedClaudeModel(run), at);
@@ -669,7 +684,7 @@ export function unpricedNote(run: PriceableRun): string {
   // Before the Claude branch: a codex slug is a bare model id with no vendor in
   // it, so the harness is the only thing that says which table can answer, and
   // the answer is the sync's — under `openai/<slug>` rather than the bare id.
-  if (isCodex(run)) {
+  if (vendorOf(run) !== undefined) {
     return "no synced price — run `bun wb data prices` (infra/sync-prices.ts; a codex model is priced from the catalogue's `openai/` id)";
   }
   if (isClaudeRun(run)) {
@@ -706,7 +721,7 @@ function actualCost(
   coverage: CostCoverage | null,
 ): CostFigure {
   if (reportedUsd === null) return none("provider reports no cost for this run");
-  const claudeCode = run.harness === "claude-code" || run.driver === "claude-code";
+  const claudeCode = isCliReported(run);
   const unreported = coverage?.unreported;
   if (claudeCode && unreported !== undefined && unreported.turns > 0) return backfilled(run, reportedUsd, unreported);
   /*
@@ -800,10 +815,10 @@ function expectedCost(args: {
   tokens: TokenTotals | null;
 }): CostFigure {
   const { run, tokens } = args;
-  const claudeCode = run.harness === "claude-code" || run.driver === "claude-code";
+  const claudeCode = isCliReported(run);
   // A codex run bills a ChatGPT subscription and reports no cost at all, so a
   // list-price figure over its tokens is as-if-metered whatever the row says.
-  const codex = isCodex(run);
+  const codex = vendorOf(run) !== undefined;
   const price = priceFor(run, run.startedAt ?? null);
   if (price === null) return none(unpricedNote(run));
   if (tokens === null) return none("no token totals for this run");
@@ -888,11 +903,13 @@ export interface PriceableEntry {
  * A warning, never a refusal: a model with no price yet is still runnable.
  */
 export function rosterPriceGap(entry: PriceableEntry): string | null {
-  const driver = entry.driver ?? "openai";
-  const harness = driver === "claude-code" ? "claude-code" : driver === "codex" ? "codex" : "wrathbench";
+  const driver = entry.driver ?? DEFAULT_DRIVER;
+  const known = driverEntry(driver);
+  const harness = (known ?? entryOf(DEFAULT_DRIVER)).harness;
   const run: PriceableRun = { model: entry.model, apiBase: entry.apiBase ?? null, platform: null, driver, harness };
   if (entry.billing !== undefined) run.declaredBilling = entry.billing;
-  if (driver === "claude-code" && !entry.model.startsWith("claude-")) return null;
+  const prefix = known?.cost.modelPrefix;
+  if (prefix !== undefined && !entry.model.startsWith(prefix)) return null;
   if (priceFor(run) !== null) return null;
   if (DELISTED_MODELS[entry.model] !== undefined || CLAUDE_UNPRICED[entry.model] !== undefined) return null;
   return unpricedNote(run);
