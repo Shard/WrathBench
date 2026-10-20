@@ -1853,6 +1853,7 @@ namespace WrathBench
     static_assert(WbNav::SMOOTH_SLOP == SMOOTH_PATH_SLOP, "WbNav restates the core's smooth-path slop");
     static_assert(WbNav::CORE_POINT_PATH == MAX_POINT_PATH_LENGTH, "WbNav restates the core's point-path cap");
     static_assert(WbNav::PLAYER_FLAGS == (NAV_GROUND | NAV_WATER | NAV_MAGMA), "WbNav restates a player's include flags");
+    static_assert(WbNav::WATER_FLAG == NAV_WATER, "WbNav restates the water polygon flag");
     // The core's start/end "far from poly" distance (PathGenerator::BuildPolyPath).
     static constexpr float REPLAN_FAR_FROM_POLY = 7.0f;
 
@@ -2079,10 +2080,11 @@ namespace WrathBench
             // the floor's edge (path_incomplete) while a step onto the
             // surface's footprint walked on. When the start's polygon is on
             // an island that does not hold the end, the route is planned from
-            // the reachable level directly over or under the start
+            // the reachable water surface directly over the start
             // (WbNav::ReachableStartLevel) and still begins where the start
             // is (SettleRoute): the same column, so there is no leg to walk
-            // onto it. Without such a level the start stays as it is.
+            // onto it — a swim up, as a client's character in the pool does.
+            // Without such a level the start stays as it is.
             {
                 dtPolyRef levelRef = 0;
                 float level[3] = { 0.0f, 0.0f, 0.0f };
@@ -2280,7 +2282,7 @@ namespace WrathBench
                 end.z = polyZ;
             }
         }
-        // A route planned from the reachable level over or under the start
+        // A route planned from the water surface over the start
         // begins at the start itself, in the same column: the first segment
         // is the walk from where the start is to the route's next point, and
         // the guard below judges it like any other.

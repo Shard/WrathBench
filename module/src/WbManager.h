@@ -378,8 +378,8 @@ namespace WrathBench
             bool hasSnap{false};        // the start was off the mesh and was snapped to the nearest point
             float snapX{0}, snapY{0}, snapZ{0};
             // The start's own polygon is on a closed island that does not hold
-            // the end, and the route is planned from the reachable level over
-            // or under the start instead (WbNav::ReachableStartLevel), audit
+            // the end, and the route is planned from the reachable water
+            // surface over the start instead (WbNav::ReachableStartLevel), audit
             // only (op: move_start_level): the start itself, the level's z,
             // and the island's size. The route still begins at levelFrom.
             bool hasStartLevel{false};

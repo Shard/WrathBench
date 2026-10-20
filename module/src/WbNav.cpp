@@ -400,9 +400,15 @@ namespace WbNav
         bool posOverPoly = false;
         if (dtStatusFailed(query->closestPointOnPoly(ref, start, over, &posOverPoly)) || !posOverPoly)
             return false; // beside the start, not over or under it
+        if (over[1] <= start[1])
+            return false; // a level under the start: a floor no client falls through
         dtPolyRef const core = CorePolyAt(query, base, over, nullptr);
         if (!core || std::find(island.begin(), island.end(), core) != island.end())
             return false;
+        dtMeshTile const* tile = nullptr;
+        dtPoly const* poly = nullptr;
+        if (dtStatusFailed(navMesh->getTileAndPolyByRef(core, &tile, &poly)) || !(poly->flags & WATER_FLAG))
+            return false; // a dry level over the start: a ledge no client climbs
         *refOut = core;
         dtVcopy(pointOut, over);
         if (islandPolys)

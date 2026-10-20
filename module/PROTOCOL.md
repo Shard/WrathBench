@@ -1035,11 +1035,13 @@ at the top of this document.
   point before it. Before any of this, a start whose own polygon is on a
   closed island that does not hold the destination's (fewer than 1024
   polygons; the Deadmines pool's floor is 6 under the water surface's
-  polygons) is planned from the walkable level directly over or under the
-  start that is not on that island, within the core's own start box (3y in
-  2D, 5y in z), when there is one: the route still begins at the start, in
-  the same column, and the drop guard judges its first segment like any
-  other (audited as `op: "move_start_level"`). `reachedPos` is how far the
+  polygons) is planned from the water surface directly over the start, off
+  that island and within the core's own start box (5y in z), when there is
+  one: the route still begins at the start, in the same column — the swim up
+  a client's character makes — and the drop guard judges its first segment
+  like any other (audited as `op: "move_start_level"`). A dry level over the
+  start, or any level under it, is not taken: that would be climbing a ledge
+  or falling through a floor. `reachedPos` is how far the
   core's search got, so the agent can route around or approach from another
   side; its z can be a level away from the request (a search that ran out on
   a hillside over a tunnel). Nothing moved.
@@ -1672,8 +1674,8 @@ the `collisionHeight` the threshold came from), so the packet
 sequence the "client" sent is fully reconstructable from the audit log.
 A move whose start the mesh does not cover logs `op: "move_start_snap"` with
 `from` (the true position), `to` (the nearest mesh point) and `distance`.
-A move planned from the reachable level over or under its start (the
-start's own polygon on a closed island; `path_incomplete` below) logs
+A move planned from the water surface over its start (the start's own
+polygon on a closed island; `path_incomplete` below) logs
 `op: "move_start_level"` with `from` (the start), `levelZ` (the level's
 height there) and `islandPolys` (the start island's size).
 A move whose endpoint the core's normalization left under the ground logs
