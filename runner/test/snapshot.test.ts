@@ -1029,7 +1029,7 @@ describe("trace segments in a pass", () => {
         await sink(batch);
       };
       await publishPass(async (sink, published) => await render(Date.now(), { sink: (b) => keep(b, sink), batch: 1 }, published), store, state);
-      return { gen: "", snap: {}, artifacts: streamed };
+      return { gen: "", snap: {}, artifacts: streamed, withdrawn: [] };
     };
     const first = await pass();
     const segs = puts.filter((p) => p.includes("/trace/"));

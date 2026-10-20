@@ -223,7 +223,8 @@ at the edge.
   segments are neither re-read nor re-encoded. Throwing the state file away
   costs one re-upload of every segment, the same repair as for every other key.
 - **Never pruned.** No version supersedes a window, so none is surplus. They
-  accumulate. A level-43 character with full bags, measured on its real
+  accumulate. The one exception is a run that is never published: its windows
+  are withdrawn ("Runs that are never published"). A level-43 character with full bags, measured on its real
   windows: about 13 KB a public segment raw (3 KB gzip) before the sheet and
   about 19 KB (6 KB gzip) with it, so roughly 160 MB per character-month of
   continuous play against R2's 10 GB free storage. A level-7 character's are
@@ -529,6 +530,43 @@ with poisoned fields (including keys smuggled through open signatures),
 asserted against the exact allowlisted key set, fixture-based and green from
 a bare clone like everything else.
 
+### Runs that are never published
+
+A run whose driver is not a model — the scripted stub, the scripted reference —
+is never published (operator, 2026-10-20). The reference plays a private
+program (docs/RUNBOOK.md, "The scripted reference run"), and every snippet it
+sends carries that program's text, so its entries and trace windows would
+publish the program itself. The rule is the scheduler's (`isNotAModelRun`, by
+driver or by stamp), not a list of names.
+
+- **At the source.** A public handle (`createApi` with `publicMode`) leaves
+  such a run out of every listing (`runRows`, `resultRuns`), keeps a position
+  only for a run its listing holds, drops it from the fleet's rows, and
+  answers every `/api/run/<id>/…` route for it, trace windows and nearby ring
+  included, with a 404. So `runs.json`, `results.json`, the ladders, the
+  character pages, `live.json` and the social card never name one. The private
+  viewer is unchanged.
+- **Except the reference line, as numbers.** Each ladder carries
+  `scriptedReference`: tier, series, route, level and xp, with no run id
+  ("The scripted reference line").
+- **Withdrawn, not just left out.** The renderer gets the withheld ids
+  in-process (`ApiHandle.unpublishedRuns`; there is no route) and hands them
+  to the engine as `withdrawn`. After the flip that no longer names them, the
+  engine deletes every object and trace window its state remembers for those
+  runs and forgets their versions and windows (`planWithdraw`). A delete that
+  fails is retried from `pendingDeletes`, like a prune's. Pruning alone would
+  never reach them, because a run's current version stays in its keep window
+  until a newer one arrives and trace windows are never pruned. Only an
+  explicit list is withdrawn. "Whatever this pass did not render" is never
+  deleted, because one empty listing would otherwise clear the bucket.
+- **The edge still holds what it served.** `/v1/run/` is cached for a year at
+  the edge, so a withdrawn object that was ever fetched outlives its deletion
+  there until it is purged by URL.
+- **Checked.** `infra/publish-accept.ts` raises `unpublished-run` for any
+  published row or object whose driver or stamp is not a model's, and for
+  every object that names such a run's id. The reference line has neither, so
+  it passes.
+
 ### What is published
 
 The bucket holds what the public dashboard reads and nothing else (operator,
@@ -717,6 +755,13 @@ itself came back for the scripted reference line, below.
 
 ### The scripted reference line (operator, 2026-10-19)
 
+**Public as numbers only** (operator, 2026-10-20). The run itself is never
+published ("Runs that are never published"). Each `ladder-<tier>.json`
+carries `scriptedReference` instead: one line per series, newest first, each
+holding the tier, series, route, level and xp of the newest finished reference
+run. The public build draws from that, without a link. The private viewer
+reads the run and links it.
+
 Under the rung table, on the rail the withdrawn references used, the ladder
 draws one labelled line: the level the **scripted reference run** of the tier
 and series in view reached at the clock's end. That run is a TypeScript
@@ -735,9 +780,10 @@ and not the band is the one drawn.
   filters: "exclude free" would otherwise hide it, since the reference bills
   nothing, and a line that moved when a box was ticked would make its own
   label false. A live run is still climbing and draws nothing.
-- **What the page shows.** The legend item is the level, linked to the run,
-  and the label `scripted reference, <tier>, harness <series>`. The hover
-  carries the route, the xp and the run id. Nothing else is printed: the rest
+- **What the page shows.** The legend item is the level, and the label
+  `scripted reference, <tier>, harness <series>`. The hover carries the route
+  and the xp. On the private viewer only, the level links to the run and the
+  hover names it. Nothing else is printed: the rest
   is here, per "No explanatory prose on the page" above.
 - **No line** before a series' reference run has finished, on a tier it was
   not run on, and on freeplay.

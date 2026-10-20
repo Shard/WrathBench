@@ -740,6 +740,18 @@ export function projectResults(r: ResultsResponse): ResultsResponse {
     filteredOut: r.filteredOut,
     overridesExcluded: r.overridesExcluded,
     now: r.now,
+    // The reference line, field by field: numbers and the route, never a run id.
+    ...(r.scriptedReference === undefined
+      ? {}
+      : {
+          scriptedReference: r.scriptedReference.map((l) => ({
+            episode: l.episode,
+            series: l.series,
+            route: l.route,
+            level: l.level,
+            xp: l.xp,
+          })),
+        }),
   });
 }
 

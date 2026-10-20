@@ -10,6 +10,11 @@
  * records it in its result, as the model saw it. So the fixture appends such a
  * result, the way a real run carries one, and the test pins that the record
  * keeps it while neither the derived store nor a public body does.
+ *
+ * A public handle withholds every run whose driver is not a model (operator,
+ * 2026-10-20), the stub's included, so once the stub has written the run its
+ * run row is relabelled as a model's: what a public body would carry is the
+ * question here, not which driver wrote the bytes.
  */
 import { beforeAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -65,10 +70,11 @@ beforeAll(async () => {
   token = readMeta(dir)!.config.token!;
   appendFileSync(join(dir, "trajectory.jsonl"), `${JSON.stringify({ ts: Date.now(), t: "snippet_result", turn: 3, name: "eval_snippet", isError: false, text: echo(token) })}\n`);
   writeFileSync(join(dir, "scratchpad.md"), `notes\nsession ${token}\n`);
+  asModelRun(dir);
 
   const old = join(runsDir, OLD_ID);
   const traj = new Trajectory(old);
-  traj.writeMeta({ runId: OLD_ID, harnessVersion: "0.0.0-test", startedAt: 1, config: loadRunConfig({ runId: OLD_ID, token: OLD_ID, driver: "stub" }) });
+  traj.writeMeta({ runId: OLD_ID, harnessVersion: "0.0.0-test", startedAt: 1, config: loadRunConfig({ runId: OLD_ID, token: OLD_ID, driver: "openai", model: "test/model" }) });
   traj.append({ t: "snippet_result", turn: 1, name: "eval_snippet", isError: false, text: echo(OLD_ID) });
   traj.close();
 
@@ -76,11 +82,25 @@ beforeAll(async () => {
   const live = join(runsDir, LIVE_ID);
   liveToken = newSessionToken();
   const lt = new Trajectory(live);
-  lt.writeMeta({ runId: LIVE_ID, harnessVersion: "0.0.0-test", startedAt: Date.now() - 60_000, config: loadRunConfig({ runId: LIVE_ID, token: liveToken, driver: "stub" }) });
+  lt.writeMeta({ runId: LIVE_ID, harnessVersion: "0.0.0-test", startedAt: Date.now() - 60_000, config: loadRunConfig({ runId: LIVE_ID, token: liveToken, driver: "openai", model: "test/model" }) });
   lt.recordState(LIVE_ID, { level: 3, xp: 120, map: 0, x: -6240, y: 330, z: 383, turn: 4 });
   lt.close();
   new EpisodicLog(join(live, "episodic.jsonl")).append({ turn: 4, level: 3, text: `parked, session ${liveToken} still held` });
 }, 30_000);
+
+/**
+ * The stub's run, relabelled as a model's: its run row, and the stamp in its
+ * meta.json, which is what the readers judge a run by. The config and the
+ * trajectory keep what the stub wrote, which the first test below reads.
+ */
+function asModelRun(dir: string): void {
+  const db = new Database(join(dir, "run.sqlite"));
+  db.run(`UPDATE run SET driver = 'openai', shakeout = NULL, model = 'test/model'`);
+  db.close();
+  // And the stamp, which meta.json carries beside the config and a reader takes either way.
+  const { shakeout: _stamp, ...meta } = readMeta(dir)!;
+  writeFileSync(join(dir, "meta.json"), JSON.stringify(meta));
+}
 
 describe("where a run's facts live", () => {
   test("the harness writes the session token to meta.json, which --resume reads, and to no other copy", () => {

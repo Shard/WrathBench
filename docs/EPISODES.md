@@ -410,7 +410,9 @@ group.
   promotion witness and no best level of any roster entry. The episodes table
   does not count it as a member, and the ladder's rows and their order never
   hold it. The fleet config and a hand-written roster refuse `driver:
-  reference`, so the policy can never launch one.
+  reference`, so the policy can never launch one. It is never published to
+  the public site (docs/PUBLIC-DASHBOARD.md, "Runs that are never
+  published").
 - **Ends.** It never ends itself: the route's last step hunts, so the verdict
   is the episode's, normally `episode-limit`. A run that pauses is not
   resumed, under `e90`'s lane rule: the attempt is spent and a fresh one is

@@ -58,6 +58,7 @@ import type {
   TrackResponse,
 } from "./api-types";
 import { episodeOf, questsAcrossRestarts, resultRunOf, trackFrom } from "./results";
+import { scriptedReferenceLines } from "./scripted-reference";
 import { campaignsView } from "./campaigns";
 import { modelsResponse, readFleetRoster } from "./models";
 import { modelStates, outstandingWork, type RunFact } from "../src/models";
@@ -622,6 +623,14 @@ export type ApiHandle = ((req: Request) => Promise<Response>) & {
    * publisher ever grows again.
    */
   cachedRuns(): { entries: number };
+  /**
+   * The runs a public handle withholds, sorted: every run whose driver is not a
+   * model (`isNotAModelRun`, by driver or by stamp). The publisher hands them
+   * to its engine to delete what an earlier pass published for them
+   * (`runner/viewer/snapshot.ts`, `withdrawn`). Not a route: it is answered
+   * in-process only, so no public reader learns the ids.
+   */
+  unpublishedRuns(): Promise<string[]>;
 };
 
 export function createApi(opts: ApiOptions): ApiHandle {
@@ -729,13 +738,38 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * ingestion — the scheduler needs them, a listing must not show them, and
    * that is a question for the reader.
    */
-  async function runRows(now = Date.now()): Promise<RunRow[]> {
+  async function allRunRows(now = Date.now()): Promise<RunRow[]> {
     const [rows, latest] = await Promise.all([store.runRows(), store.latestStates()]);
     const out = rows
       .filter((r) => r.archived === 0)
       .map((r) => runRowOf(r, latest.get(r.run_id), now));
     out.sort((a, b) => (b.startedAt ?? b.mtime ?? 0) - (a.startedAt ?? a.mtime ?? 0));
     return out;
+  }
+
+  /**
+   * The listing's rows. A public handle leaves out every run whose driver is
+   * not a model (operator, 2026-10-20): the scripted reference plays a private
+   * program its snippets carry, so no public body may name one. The rule is
+   * the scheduler's (`isNotAModelRun`), and it is applied here, at the source
+   * every listing reads, and again per run (`withheldRun`).
+   */
+  async function runRows(now = Date.now()): Promise<RunRow[]> {
+    const rows = await allRunRows(now);
+    return publicMode ? rows.filter((r) => !isWithheldRow(r)) : rows;
+  }
+
+  /** The ids a public handle withholds (`ApiHandle.unpublishedRuns`). */
+  async function unpublishedRuns(): Promise<string[]> {
+    return (await allRunRows())
+      .filter(isWithheldRow)
+      .map((r) => r.runId)
+      .sort();
+  }
+
+  /** Whether a public handle answers this run as if it did not exist. Always false on a private one. */
+  async function withheldRun(runId: string): Promise<boolean> {
+    return publicMode && isWithheldRow(await runRowOne(runId));
   }
 
   /**
@@ -891,7 +925,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
     // One clock for the pass: a live run's playtime is charged up to *now*, and
     // two rows of one response must not be measured against different nows.
     const now = Date.now();
-    const [rows, totalsByRun] = await Promise.all([runRows(now), allTotals()]);
+    // Every row, withheld or not: `resultRuns` withholds for a public handle,
+    // and the reference line (`allResultRuns`) is read off the rows it withholds.
+    const [rows, totalsByRun] = await Promise.all([allRunRows(now), allTotals()]);
     // One query for every run's state series, not one per run: a pass over
     // ~700 runs used to issue ~700 sequential `states` reads, which is what
     // ran ClickHouse out of memory on 2026-09-17.
@@ -962,7 +998,17 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * expired.
    */
   let listingCache: { at: number; value: Promise<ResultRun[]> } | undefined;
-  function resultRuns(): Promise<ResultRun[]> {
+  /**
+   * The listing a handle serves. A public handle's results, ladders, episodes,
+   * campaigns and character chains are all built off this, so a run withheld
+   * here is withheld there.
+   */
+  async function resultRuns(): Promise<ResultRun[]> {
+    const rows = await allResultRuns();
+    return publicMode ? rows.filter((r) => !isNotAModelRun(r)) : rows;
+  }
+  /** Every run, withheld or not: what the scripted reference line is read from. */
+  function allResultRuns(): Promise<ResultRun[]> {
     const now = Date.now();
     if (listingCache === undefined || now - listingCache.at >= RESULT_RUNS_CACHE_MS) {
       const build = buildResultRuns();
@@ -1075,6 +1121,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
               (r) => r.episode === episode && r.episodeSource === "stamped" && r.episodeOverride,
             ).length,
       now: Date.now(),
+      // The ladder's reference line, as numbers, off every run: the reference
+      // run is withheld from a public handle's rows, and this is all of it
+      // that is published (`scripted-reference.ts`).
+      ...(ladder ? { scriptedReference: scriptedReferenceLines(await allResultRuns(), episode) } : {}),
     };
     return pub(body, projectResults);
   }
@@ -1190,7 +1240,11 @@ export function createApi(opts: ApiOptions): ApiHandle {
       return pub(body, projectRuns);
     }
     if (path === "/api/positions") {
-      const positions = await positionsFromStore(store, runsDir);
+      const listed = publicMode ? new Set((await runRows()).map((r) => r.runId)) : null;
+      // A public handle keeps a position only for a run its own listing holds:
+      // a position carries no driver to judge it by, so one the listing does
+      // not vouch for is left out rather than guessed at.
+      const positions = (await positionsFromStore(store, runsDir)).filter((p) => listed === null || listed.has(p.runId));
       // A position's status is the character's last `log_status` line, as written.
       return pub({ positions }, projectPositions, positions.map((p) => p.runId));
     }
@@ -1220,7 +1274,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * models table about who owes what.
        */
       const now = Date.now();
-      const body = readFleet(runsDir, now);
+      const body = withoutRuns(readFleet(runsDir, now), publicMode ? new Set(await unpublishedRuns()) : new Set());
       const roster = readFleetRoster(opts.configDbPath);
       if (roster.shape === "roster") {
         const runs = await runFacts(now);
@@ -1349,6 +1403,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
     const rest = m[2] ?? "";
     const dir = runDir(runsDir, runId);
     if (dir === null) return notFound(`no such run: ${runId}`);
+    // Every per-run route, the trace windows and the nearby ring included: a
+    // withheld run is not there, to a public handle.
+    if (await withheldRun(runId)) return notFound(`no such run: ${runId}`);
     const tail = tailFor(runId, dir);
 
     if (rest === "" || rest === "/") {
@@ -1796,5 +1853,25 @@ export function createApi(opts: ApiOptions): ApiHandle {
     // is the only UI, so every non-API path gets the notice telling the
     // operator how to build it.
     return unbuilt();
-  }, { release, cachedRuns });
+  }, { release, cachedRuns, unpublishedRuns });
+}
+
+/** Whether a run row is one a public handle withholds: its driver, or its stamp, says it is not a model's. */
+function isWithheldRow(r: Pick<RunRow, "driver" | "shakeout">): boolean {
+  return isNotAModelRun({ driver: r.driver, unscored: r.shakeout });
+}
+
+/**
+ * The supervisor's state without the rows that name a withheld run. The
+ * supervisor never schedules one, but a hand launch can still be paused or
+ * ended on its watch, and a job row names its run.
+ */
+export function withoutRuns(f: FleetResponse, withheld: ReadonlySet<string>): FleetResponse {
+  if (withheld.size === 0) return f;
+  return {
+    ...f,
+    jobs: f.jobs.map((j) => (j.runId !== null && withheld.has(j.runId) ? { ...j, runId: null, model: null } : j)),
+    paused: f.paused.filter((p) => !withheld.has(p.runId)),
+    ended: f.ended.filter((e) => !withheld.has(e.runId)),
+  };
 }

@@ -1672,6 +1672,12 @@ writes nothing. To check the program in an image:
 docker run --rm <runner image> bun -e 'const r = await (await import("/wrathbench/runner/src/reference-program.ts")).loadReferenceProgram(); console.log(r.ok ? "present " + r.program.route.id + "@" + r.program.route.version : r.reason)'
 ```
 
+Nothing of a reference run reaches the public site: the publisher withholds
+every run whose driver is not a model, and deletes what an earlier pass
+published for one (docs/PUBLIC-DASHBOARD.md, "Runs that are never published").
+The ladder's scripted reference line is public as numbers only: level, xp,
+route, series and tier.
+
 The program's own tests live beside it in the private checkout and run
 against a public checkout (`reference/test.sh <checkout>`, which lays the
 files into that checkout's gitignored `runner/src/reference/` and

@@ -49,11 +49,24 @@
  * Every `<ver>` is hashed over the PROJECTED payloads before the envelope goes
  * on: the envelope carries `generatedAt`, and a timestamp in the hashed content
  * would make every render a new version even when nothing changed.
+ *
+ * A run whose driver is not a model — the scripted stub, the scripted
+ * reference — is never published (operator, 2026-10-20): the reference plays a
+ * private program, and its snippets carry that program's text. The rule is the
+ * scheduler's own (`isNotAModelRun`, by driver or by stamp), and the public
+ * handle applies it at its source (`createApi`, `runRows`, `resultRuns`,
+ * `withheldRun`): no row of `runs.json`, `results.json` or a ladder, no
+ * per-run object, no trace window, no position, no nearby window and no fleet
+ * row names one. The renderer holds every body to the same set again, as it
+ * projects every body again. The ids come back from the handle in-process
+ * (`unpublishedRuns`) and go out as `withdrawn`, so the publisher deletes
+ * whatever an earlier pass published for them (`infra/publish-core.ts`,
+ * `planWithdraw`).
  */
 
 import { statSync } from "node:fs";
 import { join } from "node:path";
-import { createApi, type ApiHandle } from "./api";
+import { createApi, withoutRuns, type ApiHandle } from "./api";
 import { lineageIndex } from "./lineage";
 import { EPISODE_IDS } from "../src/episodes";
 import type {
@@ -95,6 +108,7 @@ import {
   projectTraceSegment,
 } from "./public-projection";
 import { scrubPathsText } from "./scrub-paths";
+import { isNotAModelRun } from "../src/config";
 
 /** The two mutable keys are polled; everything else is content-addressed. */
 export const MUTABLE_CACHE = "public, max-age=30";
@@ -125,7 +139,14 @@ export interface SnapshotResult {
    */
   snap: Record<string, string>;
   artifacts: SnapshotArtifact[];
+  /**
+   * Runs the listing holds that are never published, because their driver is
+   * not a model (`isNotAModelRun`). The publisher deletes what it remembers
+   * publishing for them; sorted, so a pass's result is deterministic.
+   */
+  withdrawn: string[];
 }
+
 
 /**
  * First 12 hex of SHA-256: enough to address content, short enough for keys.
@@ -373,6 +394,8 @@ export function createRenderer(
     typeof (handle as Partial<ApiHandle>).release === "function"
       ? (runId): void => (handle as ApiHandle).release(runId)
       : undefined;
+  const unpublishedRuns: (() => Promise<string[]>) | undefined =
+    typeof (handle as Partial<ApiHandle>).unpublishedRuns === "function" ? () => (handle as ApiHandle).unpublishedRuns() : undefined;
 
   /**
    * What each cold run rendered to, by run: the fingerprint of its inputs, the
@@ -456,25 +479,41 @@ export function createRenderer(
     // Everything below is projected the moment it is parsed, so no unprojected
     // body exists past this block for a later step to serialize by mistake.
     const info = projectInfo(await get<ApiInfoResponse>("/api/info"));
-    const listing = await get<RunsResponse>("/api/runs");
+    // The runs that are never published. A handle that cannot say (a bare
+    // function a test injects) withholds none beyond what it serves.
+    const withdrawn = unpublishedRuns === undefined ? [] : await unpublishedRuns();
+    const withheld = new Set(withdrawn);
+    const fullListing = await get<RunsResponse>("/api/runs");
+    const listing: RunsResponse = { ...fullListing, runs: fullListing.runs.filter((r) => !withheld.has(r.runId)) };
+    /**
+     * The runs that may be published: listed, and not withheld. Positions
+     * keep only these, so a run the listing does not vouch for is left out
+     * rather than guessed at.
+     */
+    const publishable = new Set(listing.runs.map((r) => r.runId));
+    const keepResults = (r: ResultsResponse): ResultsResponse => ({
+      ...r,
+      runs: r.runs.filter((row) => !withheld.has(row.runId) && !isNotAModelRun(row)),
+    });
     const runs = projectRuns(listing);
     // The listing as the viewer served it, by run, for the cold fingerprint: the
     // published row is only what the fleet table reads, and a store row moving
     // a field it no longer carries (a termination, a pause) must still move it.
     const served = new Map(listing.runs.map((r) => [r.runId, r]));
-    const results = projectResults(await get<ResultsResponse>("/api/results?episode=all&includeOverrides=1"));
+    const results = projectResults(keepResults(await get<ResultsResponse>("/api/results?episode=all&includeOverrides=1")));
     const ladders: [string, ResultsResponse][] = [];
     // `probing` has no ladder (operator, 2026-08-29; the reason is at
     // `LADDER_EPISODES` in api.ts), so no `ladder-probing.json` is published.
     for (const ep of EPISODE_IDS.filter((id) => id !== "probing")) {
-      ladders.push([ep, projectResults(await get<ResultsResponse>(`/api/ladder?episode=${ep}`))]);
+      ladders.push([ep, projectResults(keepResults(await get<ResultsResponse>(`/api/ladder?episode=${ep}`)))]);
     }
     const episodes = projectEpisodes(await get<EpisodesResponse>("/api/episodes"));
     const models = projectModels(await get<ModelsResponse>("/api/models"));
     const campaigns = projectCampaigns(await get<CampaignsResponse>("/api/campaigns"));
     const tools = projectTools(await get<ToolsResponse>("/api/tools"));
-    const fleet = projectFleet(await get<FleetResponse>("/api/fleet"));
-    const positions = projectPositions(await get<PositionsResponse>("/api/positions"));
+    const fleet = projectFleet(withoutRuns(await get<FleetResponse>("/api/fleet"), withheld));
+    const allPositions = await get<PositionsResponse>("/api/positions");
+    const positions = projectPositions({ ...allPositions, positions: allPositions.positions.filter((p) => publishable.has(p.runId)) });
     /*
      * The units around each live run, read straight after the feed that
      * flagged it: the window reaches back from now, and read after the run
@@ -727,7 +766,7 @@ export function createRenderer(
       ...artifacts,
     ];
 
-    return { gen, snap: paths, artifacts: out };
+    return { gen, snap: paths, artifacts: out, withdrawn };
   };
 }
 
