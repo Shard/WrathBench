@@ -79,7 +79,9 @@ describe("system prompt: the shapes and seams runs proved models get wrong", () 
     // A navigation fan-out: 6 of 7 runs hit the 30s abandon with a moveTo in
     // flight, and one re-issued the identical blocking call to one coordinate
     // five times.
-    expect(SYSTEM_PROMPT).toContain("a move of more than roughly 200y cannot finish inside one snippet");
+    expect(SYSTEM_PROMPT).toContain("how long a move takes depends on its route and on whether the character runs, swims or rides");
+    // No pace is stated: the module's walk time, not 7yd/s, judges the note.
+    expect(SYSTEM_PROMPT).not.toContain("7yd/s");
     expect(SYSTEM_PROMPT).toContain("await sdk.moveToAsync(target)");
   });
 
@@ -205,23 +207,23 @@ describe("episode sentence", () => {
 
   test("every rendering hashes as pinned, so a prompt edit has to move its pins on purpose", () => {
     // Pinned by value, not by rebuilding from the same parts, so a change to
-    // any rendering fails here. The last edit to move them is the useItem,
-    // cooldowns and spiritHealerActivate clauses (a refused item use and a
-    // silent spirit healer now come back as values), which are in the shared
-    // body, so it moved all twelve.
+    // any rendering fails here. The last edit to move them is the long-walk
+    // clause, which no longer states a run speed or a yard figure (moveTo
+    // judges a walk by the module's own walk time), in the shared body, so it
+    // moved all twelve.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:16cb69f381096aeb", off: "sha256:32f9a6ac7bc4a883" },
-        cli: { on: "sha256:03b5ae621579e494", off: "sha256:090f73975746b10d" },
+        wrathbench: { on: "sha256:069980b9a5ba7fc9", off: "sha256:d7cc8d01029415fb" },
+        cli: { on: "sha256:072531069fc3aa27", off: "sha256:597a4580c3b4af6f" },
       },
       e90: {
-        wrathbench: { on: "sha256:0922162fbbc4864f", off: "sha256:e384dc01728bcde4" },
-        cli: { on: "sha256:b559c07909dbf63d", off: "sha256:902117dde3234c27" },
+        wrathbench: { on: "sha256:7d3b23c861326c3c", off: "sha256:a1171d6a9d3ecaec" },
+        cli: { on: "sha256:4e69f6ec63afd268", off: "sha256:6183bf5897b2d913" },
       },
       e360: {
-        wrathbench: { on: "sha256:1f464e155f5780b9", off: "sha256:72100a4202796a04" },
-        cli: { on: "sha256:a70bc61daa817664", off: "sha256:2ad0d21470a2e32c" },
+        wrathbench: { on: "sha256:e1023c5c7768c983", off: "sha256:74fef1b5aa0bd601" },
+        cli: { on: "sha256:24b2bdf6be4d13bc", off: "sha256:cfedb5ad7d12fcab" },
       },
     };
     const episodes = [
