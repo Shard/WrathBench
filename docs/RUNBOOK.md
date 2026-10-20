@@ -1014,8 +1014,9 @@ change is checked with `bun wb smoke <name>` (`bun wb smoke` lists them) once
 the window has resumed, on accounts the fleet does not schedule:
 
 - `PROBE`, every smoke's default. It is free while no enabled job or campaign
-  pins it (`accounts.pinned` in `bun wb fleet status`) and no hand run, such
-  as the scripted reference run, holds it.
+  pins it and no run, such as the scripted reference run, holds it. `bun wb
+  fleet status` lists each account with what is on it; a disabled pin is
+  listed there too and holds nothing.
 - `SMOKE3` and `SMOKE4`, which some smokes use beside PROBE: swim's observer is
   SMOKE3 and death-recovery's priest SMOKE4, so smokes that share one run one
   after another.
