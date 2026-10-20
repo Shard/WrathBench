@@ -1,0 +1,80 @@
+{
+  "id": "deadmines",
+  "version": 2,
+  "question": "Can five agent loops of one model, one staged level-20 character each and coordinating only through what a client sees, walk from Moonbrook into the Deadmines and defeat Edwin VanCleef?",
+  "note": "The first party campaign (docs/proposals/GROUP-PLAY.md): one model plays all five members, five runs launched, stopped and counted together as one attempt. The party is the operator's (2026-10-19): Alliance at level 20, a Human Warrior tank, a Dwarf Priest healer, and as damage a Human Mage, a Human Rogue and a Dwarf Retribution paladin in the hunter's place, each in its quest-green loadout with talents preset per role (infra/fixtures/loadouts.ts), staged on moonbrook-mine and pre-formed with the warrior leading. The characters carry the stager's account-derived names for PARTY1 to PARTY5 in member order, so a row pinned to those accounts in that order stages each name on the account the staging smokes use for it. The cell is the party and carries its leader's start. Each member's objective is the operator's wording of GROUP-PLAY.md §8 with the names filled in; the top-level objective is null and no level ends a run. The leash is §7's: four hours of play (a human party clears in one to one and a half; five loops add turn latency, corpse runs and coordination), idle 20 minutes per member, the no-XP watchdog off, and the 8000-call guard (1000 per 30 minutes over four hours). resume is false until the post-boot reaping recheck of the staged items has passed (docs/RUNBOOK.md, \"Party staging\"): a paused party ends as a spent attempt and the next is staged fresh. One arm, on the release image. Assignments are the store row's: the first is the roster entry sub-sonnet-55 (Claude Sonnet 5.5 on claude-code) on the second Claude lane (operator, 2026-10-20). Version 2 (operator, 2026-10-20) names the portal's position in the location sentence: on version 1 the party was staged a few yards from the trigger, but nothing it observes shows the portal and the mine's subzone is also named The Deadmines, so the leader took the mine for the dungeon, pulled its Defias and wiped without ever turning to the door.",
+  "cells": [
+    {
+      "id": "party",
+      "race": 1,
+      "class": 1,
+      "note": "The party; its start is the leader's, the Human Warrior tank."
+    }
+  ],
+  "arms": [
+    {
+      "id": "base"
+    }
+  ],
+  "objective": null,
+  "stopAtLevel": null,
+  "budget": {
+    "episodeMs": 14400000,
+    "idleMs": 1200000,
+    "noXpMs": null,
+    "maxToolCalls": 8000
+  },
+  "wiki": true,
+  "wikiCoords": false,
+  "resume": false,
+  "maxAttemptsPerCell": 3,
+  "start": {
+    "staged": "moonbrook-mine",
+    "level": 20
+  },
+  "party": {
+    "size": 5,
+    "members": [
+      {
+        "id": "tank",
+        "role": "tank",
+        "race": 1,
+        "class": 1,
+        "character": "Tankpartyb",
+        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Tankpartyb, the party's tank. The party stands in the mine under Moonbrook, Westfall, a few yards from the portal into the Deadmines at (-11208, 1685, 26). The objective for this run is for the party to clear the Deadmines and defeat Edwin VanCleef. You share party chat with the others and can whisper any of them."
+      },
+      {
+        "id": "healer",
+        "role": "healer",
+        "race": 3,
+        "class": 5,
+        "character": "Healpartyc",
+        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Healpartyc, the party's healer. The party stands in the mine under Moonbrook, Westfall, a few yards from the portal into the Deadmines at (-11208, 1685, 26). The objective for this run is for the party to clear the Deadmines and defeat Edwin VanCleef. You share party chat with the others and can whisper any of them."
+      },
+      {
+        "id": "mage",
+        "role": "damage",
+        "race": 1,
+        "class": 8,
+        "character": "Magepartyd",
+        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Magepartyd, the party's damage. The party stands in the mine under Moonbrook, Westfall, a few yards from the portal into the Deadmines at (-11208, 1685, 26). The objective for this run is for the party to clear the Deadmines and defeat Edwin VanCleef. You share party chat with the others and can whisper any of them."
+      },
+      {
+        "id": "rogue",
+        "role": "damage",
+        "race": 1,
+        "class": 4,
+        "character": "Roguepartye",
+        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Roguepartye, the party's damage. The party stands in the mine under Moonbrook, Westfall, a few yards from the portal into the Deadmines at (-11208, 1685, 26). The objective for this run is for the party to clear the Deadmines and defeat Edwin VanCleef. You share party chat with the others and can whisper any of them."
+      },
+      {
+        "id": "paladin",
+        "role": "damage",
+        "race": 3,
+        "class": 2,
+        "character": "Palapartyf",
+        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Palapartyf, the party's damage. The party stands in the mine under Moonbrook, Westfall, a few yards from the portal into the Deadmines at (-11208, 1685, 26). The objective for this run is for the party to clear the Deadmines and defeat Edwin VanCleef. You share party chat with the others and can whisper any of them."
+      }
+    ]
+  }
+}
