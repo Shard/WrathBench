@@ -55,8 +55,6 @@ export const RUN_POD_LAUNCHER_ENV = "WRATHBENCH_RUN_POD_LAUNCHER";
 export const DEFAULT_RUN_POD_TEMPLATE = "/etc/wrathbench/run-pod/pod.json";
 export const DEFAULT_RUN_POD_LAUNCHER = "/etc/wrathbench/run-pod/launcher.json";
 export const IMAGE_RECORD_FILE = "image.json";
-/** The name of the codex lane's volume in the template; dropped for every other driver. */
-const CODEX_HOME_VOLUME = "codex-home";
 
 export function runHashLabel(runId: string): string {
   return new Bun.CryptoHasher("sha256").update(runId).digest("hex").slice(0, 16);

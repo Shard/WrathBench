@@ -232,11 +232,11 @@ does the same thing to whichever model is given it, and the tuple says so.
   zero. An estimate is the viewer's, marked as-if-metered (`docs/COSTS.md`).
 
 **What a new driver provides.** One adapter, one registry entry and its
-fixtures. Nothing else in the runner, the viewer or the fleet names a driver:
-they read the entry, so a driver's facts are stated once and the next harness
-does not have to find every branch the last one added.
-`test/driver-scatter.test.ts` fails on a driver id written as a literal
-anywhere else.
+fixtures. The runner, the viewer and the fleet read the entry rather than
+compare names, so a driver's facts are stated once and the next harness does
+not have to find every branch the last one added.
+`test/driver-scatter.test.ts` fails on a driver id written as a literal in any
+of the three outside the registry and the adapters.
 
 - **The registry entry** (`src/drivers.ts`, `DriverEntry`; import-free so the
   viewer, `infra/` and the dashboard's wire types can read it). It says:
@@ -285,6 +285,21 @@ anywhere else.
   it cannot remove, billing and setup. `docs/RUNBOOK.md` gets its lane, its
   setup and anything an operator runs. `docs/COSTS.md` gets how its cost is
   read when the CLI reports one, and how it is estimated when it does not.
+
+What the entry does not cover, because it carries no driver name for the
+guard to see:
+
+- A lane's kind is read off its variable's name (`laneHoldsOf`, by
+  `isCodexHomeEnvName`), so a third kind of lane — neither a token nor a Codex
+  home — changes that function, and with it the rollout sweep's list of homes
+  (`infra/run-fleet-state.ts`).
+- The fleet's lane placement (`claudeLanesOf`, `claudeKeysFor`,
+  `CLAUDE_TOTAL_KEY` in `src/models.ts`) is written for the one `placed`
+  driver, and takes any lane that is not a Codex home as its candidate. A
+  second placed driver needs that code generalised first.
+- The dashboard is outside the scan: it reads the wire, and its harness
+  colours (`LadderChart.tsx`) and its reference test (`isScriptedReference`)
+  name harnesses and drivers directly. A new harness gets a colour there.
 
 The checklist, in order:
 

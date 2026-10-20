@@ -3,7 +3,8 @@
  * runner, the viewer and the fleet act on. Adding a harness is one adapter
  * (`driver-adapters.ts`), one entry here and its fixtures (runner/README.md,
  * "The driver contract"); everything else reads the entry, and
- * `driver-scatter.test.ts` fails on a driver's name written anywhere else.
+ * `driver-scatter.test.ts` fails on a driver's name written as a literal in
+ * the runner, the viewer or the fleet outside the registry and the adapters.
  *
  * Import-free on purpose: the viewer, `infra/` and the dashboard's wire types
  * read it, and none of them may pull an adapter in behind it. Facts only —
