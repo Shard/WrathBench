@@ -58,6 +58,11 @@ export type Scenario = {
   /** Copper. 1 gold = 10000. Defaults to 0. */
   money?: number;
   position: Position;
+  /**
+   * A party scenario's member spots, in member order (`partyScenario`): a
+   * member past the list stands at `position`.
+   */
+  partySpots?: Position[];
   homebind?: Homebind;
   /** Spell ids to add (INSERT IGNORE; never removes what is already known). */
   spells?: number[];
@@ -236,42 +241,44 @@ const LAKESHIRE_CHEST_FRONT = { x: -9407.6, y: -2788.4, z: 37.8 };
 // a timed-out fight.
 const AMMEN_RUNTS = { x: -4412.43, y: -11947.3, z: 21.6033 };
 
-// Moonbrook, Westfall: `game_tele` 635 (-10986.7, 1542.75, 44.79), and the
-// Deadmines entrance trigger it faces, AreaTrigger.dbc 78 on map 0 at
-// (-11208.5, 1685.3, 25.8), radius 7, which `areatrigger_teleport` 78 sends to
-// map 36 (docs/proposals/GROUP-PLAY.md §4). The trigger is ~264y away down
-// the mine's tunnels, so the approach is part of an attempt. The homebind is
-// Sentinel Hill, `game_tele` 824, area 108; a corpse run from a Westfall
-// graveyard and a hearth both stay in the zone.
-export const MOONBROOK = { x: -10986.7, y: 1542.75, z: 44.79 };
+// The Deadmines entrance: AreaTrigger.dbc 78 on map 0 at (-11208.5, 1685.3,
+// 25.8), radius 7, at the end of the mine's tunnels under Moonbrook, which
+// `areatrigger_teleport` 78 sends to map 36 (docs/proposals/GROUP-PLAY.md §4),
+// and the party's staging spots beside it.
+//
+// The spots are the operator's (2026-10-20): in the last stretch of the
+// tunnel just outside the trigger, so entry is one short deliberate move
+// through the client's own path (the walk into the volume, the server's
+// areatrigger handling, the transfer) without the 660y walk down the mine;
+// staging inside the instance would need a server-side instance bind. They
+// were Moonbrook's `game_tele` 635, 264y out and past the single-move cap,
+// then a spot by the mine building 165y out. Each is on the mesh the tunnels
+// are, 10-14y from the trigger's centre (outside its 7y radius, so login
+// crosses nothing), and one plain moveTo of the centre walks 6-13y and ends at
+// the reachable mesh 4.4y from it, inside the trigger. Nothing hostile is in
+// aggro range at level 20: read from the pinned core's base world SQL
+// (creature, creature_addon waypoint paths, creature_template detection_range
+// and levels), the nearest Defias spawn, wander or patrol point (a Worker 27y
+// down the tunnel, Watchmen on the ledge above it) is 9.6y or more past its
+// aggro radius (Creature::GetAggroRange: detection_range less the 3-5 levels
+// the party stands above them), counting floors above and below without the
+// line of sight that would spare them. The homebind is Sentinel Hill,
+// `game_tele` 824, area 108; a corpse run from a Westfall graveyard and a
+// hearth both stay in the zone.
 export const DEADMINES_ENTRANCE_TRIGGER = { id: 78, map: 0, x: -11208.5, y: 1685.3, z: 25.8, radius: 7 };
 /**
- * The walk from MOONBROOK to trigger 78 as waypoints on the navmesh, one
- * `moveTo` per leg: into the mine building, down its stair, along the outer
- * tunnels to the portal. One move cannot cover it. The whole route is 177
- * polygons, and the core's path is at most 74 from a 1024-node search
- * (PathGenerator, MMapMgr). A straight-line leg toward the trigger ends on the
- * hill above the tunnels: the search runs out of nodes on the hillside
- * directly over its target, 22y up.
- *
- * The last point is where the walkable mesh ends inside the trigger, 4.4y
- * from its centre. The centre itself is over a 31-polygon island at z 22.9
- * that no polygon of the tunnels links to, so a move to the centre answers
- * `path_incomplete` even from the tunnel's end. travel.ts targets its tram
- * portal's mesh end the same way.
- *
- * Read from the mmaps on the data volume with Detour's own queries at the
- * core's limits: each leg completes within 512 nodes and 36 polygons, and
- * every point is in Moonbrook's connected mesh. A rebuilt mesh can move them.
+ * Where each of the party's five members stands, in member order, 2.8y or
+ * more apart so no two stand in one another, each facing the trigger.
  */
-export const DEADMINES_ENTRANCE_ROUTE: readonly { x: number; y: number; z: number }[] = [
-  { x: -11080.5, y: 1520.4, z: 43.5 },
-  { x: -11118.4, y: 1483.2, z: 33.3 },
-  { x: -11135.0, y: 1518.8, z: 24.5 },
-  { x: -11223.9, y: 1563.6, z: 34.2 },
-  { x: -11227.2, y: 1636.3, z: 35.5 },
-  { x: -11208.5, y: 1681.3, z: 23.9 },
+export const DEADMINES_STAGING_SPOTS: readonly { x: number; y: number; z: number }[] = [
+  { x: -11201.9, y: 1676.0, z: 25.8 },
+  { x: -11205.5, y: 1675.3, z: 25.0 },
+  { x: -11209.5, y: 1675.3, z: 25.2 },
+  { x: -11207.5, y: 1673.3, z: 25.0 },
+  { x: -11202.5, y: 1672.3, z: 26.3 },
 ];
+/** The first member's spot, and the single character's of the deadmines-entry smoke. */
+export const DEADMINES_STAGING = DEADMINES_STAGING_SPOTS[0]!;
 export const SENTINEL_HILL_BIND = { map: 0, zone: 108, x: -10624.5, y: 1096.66, z: 33.76 };
 /** Westfall (AreaTable); the server recomputes the zone from the position at login. */
 export const WESTFALL_ZONE = 40;
@@ -520,11 +527,12 @@ export const SCENARIOS = {
   },
   "moonbrook-mine": {
     description:
-      "level 80, 1g, in Moonbrook facing the Deadmines entrance trigger, homebind Sentinel Hill, empty quest log (for the deadmines-entry smoke: level 80 so nothing on the walk interrupts it; the party's members stand on the same spot at level 20, infra/fixtures/loadouts.ts)",
+      "level 80, 1g, in the mine's last tunnel under Moonbrook facing the Deadmines entrance trigger, 11y away, homebind Sentinel Hill, empty quest log (for the deadmines-entry smoke: level 80 so nothing interrupts it; the party's five members stand on the five spots there at level 20, infra/fixtures/loadouts.ts)",
     level: 80,
     xp: 0,
     money: 10000,
-    position: { map: 0, zone: WESTFALL_ZONE, ...MOONBROOK, o: facing(MOONBROOK, DEADMINES_ENTRANCE_TRIGGER) },
+    position: { map: 0, zone: WESTFALL_ZONE, ...DEADMINES_STAGING, o: facing(DEADMINES_STAGING, DEADMINES_ENTRANCE_TRIGGER) },
+    partySpots: DEADMINES_STAGING_SPOTS.map((p) => ({ map: 0, zone: WESTFALL_ZONE, ...p, o: facing(p, DEADMINES_ENTRANCE_TRIGGER) })),
     homebind: SENTINEL_HILL_BIND,
     clearQuests: true,
   },
@@ -610,13 +618,14 @@ export function validateScenario(scenario: Scenario): void {
     "money must be a non-negative integer (copper)",
   );
 
-  const p = scenario.position;
-  assert(p && Number.isInteger(p.map) && p.map >= 0, "position.map must be a non-negative integer");
-  assert(Number.isInteger(p.zone) && p.zone >= 0, "position.zone must be a non-negative integer");
-  for (const k of ["x", "y", "z", "o"] as const) {
-    assert(isFiniteNumber(p[k]), `position.${k} must be a finite number`);
+  for (const [what, p] of [["position", scenario.position] as const, ...(scenario.partySpots ?? []).map((q, i) => [`partySpots[${i}]`, q] as const)]) {
+    assert(p && Number.isInteger(p.map) && p.map >= 0, `${what}.map must be a non-negative integer`);
+    assert(Number.isInteger(p.zone) && p.zone >= 0, `${what}.zone must be a non-negative integer`);
+    for (const k of ["x", "y", "z", "o"] as const) {
+      assert(isFiniteNumber(p[k]), `${what}.${k} must be a finite number`);
+    }
+    assert(p.o >= 0 && p.o < 2 * Math.PI, `${what}.o must be in [0, 2*PI)`);
   }
-  assert(p.o >= 0 && p.o < 2 * Math.PI, "position.o must be in [0, 2*PI)");
 
   if (scenario.homebind) {
     const h = scenario.homebind;

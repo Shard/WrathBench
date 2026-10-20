@@ -421,7 +421,7 @@ export async function stageParty(req: StageRequest, opts: StageOptions = {}): Pr
       if (!row) throw new StageFailure("create", `${m.character} is not in the characters table after its create`, m.character);
       await waitUntilOffline(sql!, row, saveWaitMs);
       m.guid = row.guid;
-      const placed = partyScenario(m.loadout, m.spells!, scenario, req.level);
+      const placed = partyScenario(m.loadout, m.spells!, scenario, req.level, m.index);
       await applyStatements(sql!, buildStatements(row.guid, placed));
       log(`  ${m.character}: created (guid ${row.guid}) and placed: ${placed.description}`);
     });
