@@ -198,6 +198,20 @@ subscription, so the figure there is a comparison and not a bill. It is the oper
 without it a codex run would have no cost reading at all and would be absent from
 every ladder chart, whose x-axis is cost.
 
+**pi harness (the pi CLI on a metered endpoint; probe-only):** the claude-code regime — one
+continuous session the CLI owns and compacts — on a key that meters the operator's balance. pi
+reports usage per request on each reply (`input` without the cache, `cacheRead`, `cacheWrite`,
+`output`), and the driver records it per `response` with the whole prompt as `prompt_tokens`, so the
+viewer's sum over responses is the run's real prompt and output, with no snapshot caveat. The
+summarisation call of each compaction is billed too and appears on no reply, so it is a `response` of
+kind `compaction` and counted the same way. The cost is the provider row's price over those tokens
+(`PROVIDER_PRICES`, matched on the run's `apiBase` and model, e.g. DeepSeek's off-peak deepseek-flash
+row), the figure an openai-driver run on the same endpoint reads: DeepSeek's responses carry no
+charge, so both are list-price estimates of a real bill. pi's own figure, priced from its bundled
+catalogue, rides on each response as `piCostUsd` and is never read as a cost: for deepseek-flash it
+is $0.30/$1.20 per M, twice the off-peak row. Its context grows like claude-code's until pi compacts,
+at the run's `compactWindow` when the entry sets one (runner/README.md, "The pi driver").
+
 **Why Sonnet-on-subscription is the cost outlier, in numbers:** it is not that the tokens are
 cheap per-unit — a fresh 200k-token context at list price would be expensive — it's that almost
 all of that 200k is a cache **read**, not a cache write. In the same `roster-sonnet-20260822`

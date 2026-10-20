@@ -6,7 +6,7 @@
  * the registry entry, read by lookup (runner/README.md, "The driver
  * contract").
  *
- * Two ids are unambiguous anywhere (`claude-code`, `codex`). The other four
+ * Three ids are unambiguous anywhere (`claude-code`, `codex`, `pi`). The other four
  * are also ordinary words in this repository — `openai` is a platform label,
  * `stub` a wowhead mode in the shots rig, `wrathbench` a namespace and a
  * database name, `reference` the wiki — so they count only on a line that
@@ -36,6 +36,8 @@ const OWNERS = [
   "runner/src/adapter-shared.ts",
   "runner/src/adapter-claude.ts",
   "runner/src/adapter-codex.ts",
+  "runner/src/adapter-pi.ts",
+  "runner/src/pi-extension.ts",
   "runner/src/codex-usage.ts",
   "runner/src/codex-rollout.ts",
   "runner/src/reference/",
@@ -44,12 +46,12 @@ const OWNERS = [
 /** File → how many driver literals it keeps on purpose, and why. */
 const ALLOWED: Record<string, { count: number; why: string }> = {
   "runner/src/prompt.ts": {
-    count: 5,
+    count: 7,
     why: "model-facing: the context sentence is an exhaustive switch over Harness, so a new harness fails typecheck until its sentence is decided, and the prompt bytes are pinned",
   },
 };
 
-const UNAMBIGUOUS = new Set(["claude-code", "codex"]);
+const UNAMBIGUOUS = new Set(["claude-code", "codex", "pi"]);
 const CONTEXTUAL = new Set(["openai", "stub", "reference", "wrathbench"]);
 
 /** A string literal's value and its line, comments and template substitutions excluded. */

@@ -134,6 +134,9 @@ export function thresholdOf(cls: GateClass, t: Pick<SubscriptionThresholds, "sco
  * `goKeyEnvOf` (models.ts), on an `openai` run that draws on an OpenCode Go
  * allowance: one lane per key (`opencode-go:<KEY ENV>`). A further
  * subscription is one more registry lane (drivers.ts) plus an observation reader.
+ * The pi driver has no lane and needs no reader: it bills a metered key, priced
+ * per token (drivers.ts, `bill: "metered"`), and runs on no OpenCode Go base,
+ * since the provider table gives that key no pi provider (`piProviderOf`).
  */
 export function subscriptionLaneOf(r: {
   driver?: string | null | undefined;

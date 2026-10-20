@@ -17,7 +17,8 @@ import { codexEffortRefusal, laneLooksLoggedIn, runCodexEpisode } from "./adapte
 import { DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV, isTokenEnvName, type Driver, type RunConfig } from "./config";
 import type { EpisodicLog } from "./episodic";
 import type { LoopOutcome, ObservationStallHook } from "./loop";
-import { apiKeyRefusal } from "./providers";
+import { piEffortRefusal, runPiEpisode } from "./adapter-pi";
+import { apiKeyRefusal, piProviderOf } from "./providers";
 import { ReferenceAdapter } from "./reference/adapter";
 import { REFERENCE_ROUTE } from "./reference/route";
 import { routingForRun } from "./routing";
@@ -168,6 +169,40 @@ export const DRIVER_ADAPTERS: Readonly<Record<Driver, DriverAdapter>> = {
       return { config: { ...config, subscription: laneEnv } };
     },
     runEpisode: runCodexEpisode,
+  },
+
+  pi: {
+    prepare(config, trajectory) {
+      // The openai driver's key rule, before the variable is read: the pair is
+      // config, and only one the provider table holds may be sent.
+      const apiBase = config.apiBase;
+      const keyRefusal = apiBase === undefined ? null : apiKeyRefusal(config.apiKeyEnv, apiBase);
+      if (keyRefusal !== null) {
+        console.error(`pi driver refuses to start: ${keyRefusal}`);
+        process.exit(2);
+      }
+      const apiKey = process.env[config.apiKeyEnv];
+      if (config.model === undefined || apiKey === undefined || apiKey.length === 0 || apiBase === undefined) {
+        console.error(`--driver pi needs --model, --api-base and $${config.apiKeyEnv} set`);
+        process.exit(2);
+      }
+      // A key whose provider pi has no built-in for, refused by name.
+      const provider = piProviderOf(config.apiKeyEnv);
+      if ("refusal" in provider) {
+        console.error(`pi driver refuses to start: ${provider.refusal}`);
+        process.exit(2);
+      }
+      // `ultra` is not a pi level; refused, never mapped.
+      const effort = piEffortRefusal(config.effort);
+      if (effort !== null) {
+        console.error(effort);
+        process.exit(2);
+      }
+      trajectory.redact(apiKey);
+      // Recorded as the run will use it: the base the launch resolved.
+      return { config: { ...config, apiBase } };
+    },
+    runEpisode: runPiEpisode,
   },
 
   stub: {

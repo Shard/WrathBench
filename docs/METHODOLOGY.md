@@ -81,7 +81,10 @@ recorded run dimension like effort rather than per-model tuning (operator,
 2026-10-16); the compaction window is one (claude-code, 2026-10-09), and a
 general one that covers codex too, with each CLI's own `auto` staying the
 default on every driver and a probe campaign comparing windows (arms `auto`,
-100k, 200k and 300k) (operator, 2026-10-11).
+100k, 200k and 300k) (operator, 2026-10-11). `pi`, the pi coding-agent CLI, is
+a labelled harness of the same kind, its own comparability group and
+probe-only until the operator promotes it, and its campaign compacts at a
+fixed 300k-token window (operator, 2026-10-20).
 
 ## Client fidelity
 

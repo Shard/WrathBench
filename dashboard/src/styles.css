@@ -29,6 +29,8 @@
   --claude: #da7756;
   /* The codex harness tag: OpenAI's green, for the same reason. */
   --codex: #10a37f;
+  /* The pi harness tag: a violet no other tag or run line uses (pi has no house colour). */
+  --pi: #a78bfa;
 
   /*
    * The type scale. Seven steps, in rem against the browser's own root size,
@@ -88,6 +90,7 @@
     /* Darkened for a light background: #da7756 is too pale for an 11px badge. */
     --claude: #b4522f;
     --codex: #0b7a5f;
+    --pi: #6d28d9;
   }
 }
 
@@ -308,6 +311,7 @@ tbody tr.hovered { outline: 1px solid var(--accent); outline-offset: -1px; }
 .badge.harness-wrathbench { color: var(--dim); }
 .badge.harness-claude-code { color: var(--claude); border-color: var(--claude); }
 .badge.harness-codex { color: var(--codex); border-color: var(--codex); }
+.badge.harness-pi { color: var(--pi); border-color: var(--pi); }
 .badge.harness-unknown { opacity: .6; }
 /* Episode progress, beside the state badge: a figure the badge leads, never competes with. */
 .progress { font-size: var(--fs-xs); margin-left: 6px; }

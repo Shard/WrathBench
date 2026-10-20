@@ -1055,7 +1055,7 @@ describe("driver selection and stamping", () => {
     // applied.
     expect(loadRunConfig({ driver: "codex", compactWindow: "200K" }).compactWindow).toBe("200k");
     for (const driver of ["openai", "stub"]) {
-      expect(() => loadRunConfig({ driver, compactWindow: "100k" })).toThrow(new RegExp(`auto-compaction window \\(claude-code, codex\\) — the ${driver} driver has none`));
+      expect(() => loadRunConfig({ driver, compactWindow: "100k" })).toThrow(new RegExp(`auto-compaction window \\(claude-code, codex, pi\\) — the ${driver} driver has none`));
       // `auto` is nothing to refuse.
       expect(loadRunConfig({ driver, compactWindow: "auto" }).compactWindow).toBeUndefined();
     }

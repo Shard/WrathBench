@@ -287,6 +287,17 @@ describe("runPodEnv", () => {
     expect(names(codex)).toContain("CODEX_HOME");
   });
 
+  test("pi gets its apiKeyEnv only: no lane token, no other provider's key, no Codex home", () => {
+    const withDeepSeek = [...tpl, secretRef("DEEPSEEK_KEY")];
+    const pi = runPodEnv(withDeepSeek, { driver: "pi", tokenEnv: undefined, apiKeyEnv: "DEEPSEEK_KEY", stamps: {} });
+    expect(secrets(pi).sort()).toEqual(["DEEPSEEK_KEY", "WRATHBENCH_MODULE_SECRET"]);
+    expect(names(pi)).not.toContain("CODEX_HOME");
+    expect(names(pi).some((n) => n.startsWith("CLAUDE_CODE_") || n.startsWith("ANTHROPIC_"))).toBe(false);
+    // A run pod for pi mounts no home either.
+    const pod = buildRunPod(template(), { runId: "fleet-pi-1", image: RELEASE, requestedRef: RELEASE, command: null, args: [], env: { driver: "pi", tokenEnv: undefined, apiKeyEnv: "DEEPSEEK_KEY", stamps: {} }, owner: { name: "f", uid: "u" }, rosterPid: 1, graceMs: EPISODE_TERM_GRACE_MS });
+    expect(pod.spec.volumes!.map((v) => v.name)).toEqual(["data", "tmp"]);
+  });
+
   test("the plain values survive and the stamps win", () => {
     const env = runPodEnv(tpl, { driver: "openai", tokenEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: { WRATHBENCH_HARNESS_VERSION: "harness-0.5-940-gabc1234-pr12", WRATHBENCH_RUN_IMAGE: "x:y" } });
     const by = Object.fromEntries(env.map((e) => [e.name, e.value]));
@@ -305,7 +316,7 @@ describe("runPodEnv", () => {
   });
 
   test("no SOAP or STAGER variable can reach a run pod, from the template or a stamp, whatever the driver", () => {
-    for (const driver of ["claude-code", "openai", "codex"] as const) {
+    for (const driver of ["claude-code", "openai", "codex", "pi"] as const) {
       const opts = { driver, tokenEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} };
       expect(() => runPodEnv([...tpl, secretRef("WRATHBENCH_STAGER_PASSWORD")], opts)).toThrow(/WRATHBENCH_STAGER_PASSWORD may never reach a run pod/);
       expect(() => runPodEnv([...tpl, { name: "WRATHBENCH_SOAP_URL", value: "http://worldserver:7878/" }], opts)).toThrow(/WRATHBENCH_SOAP_URL/);
@@ -830,7 +841,7 @@ describe("the chart's run-pod template", () => {
     const tpl = JSON.parse(cm!.data!["pod.json"]!) as Pod;
     expect(tpl.spec.containers[0]!.env!.some((e) => /SOAP|STAGER/.test(e.name))).toBe(false);
     expect(JSON.stringify(tpl)).not.toMatch(/STAGER|7878/);
-    for (const driver of ["claude-code", "openai", "codex"] as const) {
+    for (const driver of ["claude-code", "openai", "codex", "pi"] as const) {
       const pod = buildRunPod(tpl, { runId: "r", image: RELEASE, requestedRef: RELEASE, command: null, args: [], env: { driver, tokenEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} }, owner: undefined, rosterPid: 1, graceMs: EPISODE_TERM_GRACE_MS });
       expect([driver, Object.keys(envOf(pod)).filter((n) => /SOAP|STAGER/.test(n))]).toEqual([driver, []]);
     }

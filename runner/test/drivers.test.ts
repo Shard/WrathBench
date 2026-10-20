@@ -24,13 +24,15 @@ import {
   PLACED_LANE_DRIVER,
   ROSTER_DRIVERS,
   harnessDriver,
+  isProbeOnlyDriver,
+  probeOnlyRefusal,
   type RosterDriver,
 } from "../src/drivers";
 import { CLAUDE_TOTAL_KEY, CONCURRENCY_KEYS } from "../src/models";
 
-/** Compile-time: the roster's driver union is exactly these three. */
+/** Compile-time: the roster's driver union is exactly these four. */
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
-const rosterUnion: Equal<RosterDriver, "openai" | "claude-code" | "codex"> = true;
+const rosterUnion: Equal<RosterDriver, "openai" | "claude-code" | "codex" | "pi"> = true;
 
 describe("the driver registry", () => {
   test("one entry per driver, keyed by its own id, in DRIVERS order", () => {
@@ -45,21 +47,23 @@ describe("the driver registry", () => {
       openai: "wrathbench",
       "claude-code": "claude-code",
       codex: "codex",
+      pi: "pi",
       stub: "wrathbench",
       reference: "wrathbench",
     });
+    expect(harnessDriver("pi")?.id).toBe("pi");
     expect(harnessDriver("wrathbench")?.id).toBe("openai");
     expect(harnessDriver("openai")).toBeUndefined();
   });
 
   test("the derived vocabularies read as the literals they replaced", () => {
     expect(DEFAULT_DRIVER).toBe("openai");
-    expect(ROSTER_DRIVERS).toEqual(["openai", "claude-code", "codex"]);
-    expect(COMPACT_WINDOW_DRIVERS).toEqual(["claude-code", "codex"]);
+    expect(ROSTER_DRIVERS).toEqual(["openai", "claude-code", "codex", "pi"]);
+    expect(COMPACT_WINDOW_DRIVERS).toEqual(["claude-code", "codex", "pi"]);
     expect(compactWindowDriverRefusal("openai")).toBe(
-      "compactWindow is a CLI harness's auto-compaction window (claude-code, codex) — the openai driver has none",
+      "compactWindow is a CLI harness's auto-compaction window (claude-code, codex, pi) — the openai driver has none",
     );
-    expect(CONCURRENCY_KEYS.slice(0, 4)).toEqual(["openai", "claude-code", "codex", "stub"]);
+    expect(CONCURRENCY_KEYS.slice(0, 5)).toEqual(["openai", "claude-code", "codex", "pi", "stub"]);
     expect(CLAUDE_TOTAL_KEY).toBe("claude-code");
     expect(PLACED_LANE_DRIVER).toBe("claude-code");
     expect(DRIVER_STAMPS).toEqual({ stub: STUB_STAMP, reference: REFERENCE_STAMP });
@@ -87,6 +91,35 @@ describe("the driver registry", () => {
       // A home lane's directory is mounted, so its driver names the volume.
       if (d.lane?.holds === "home") expect(d.podVolumes.length).toBeGreaterThan(0);
     }
+  });
+
+  test("pi: a metered scaffold on an endpoint, without OpenRouter routing, and probe-only", () => {
+    const pi = entryOf("pi");
+    expect({ harness: pi.harness, kind: pi.kind, endpoint: pi.endpoint, routing: pi.routing, bill: pi.bill, lane: pi.lane }).toEqual({
+      harness: "pi",
+      kind: "scaffold",
+      endpoint: true,
+      routing: false,
+      bill: "metered",
+      lane: undefined,
+    });
+    // Token-priced from the hand-held provider rows; pi's own figure is a cross-check only.
+    expect(pi.cost).toEqual({ reported: "none", table: "synced" });
+    expect({ compactWindow: pi.compactWindow, usage: pi.usage, rollouts: pi.rollouts, podVolumes: pi.podVolumes }).toEqual({
+      compactWindow: true,
+      usage: "response",
+      rollouts: false,
+      podVolumes: [],
+    });
+    // The operator's decision (2026-10-20): probe-only until promoted, and nothing else is.
+    expect(DRIVER_LIST.filter((d) => d.probeOnly).map((d) => d.id)).toEqual(["pi"]);
+    expect(isProbeOnlyDriver("pi")).toBe(true);
+    expect(isProbeOnlyDriver(undefined)).toBe(false);
+    expect(probeOnlyRefusal("pi")).toContain("probe-only");
+    // Routing is the fixed loop's alone: it builds its own request body.
+    expect(DRIVER_LIST.filter((d) => d.routing).map((d) => d.id)).toEqual(["openai"]);
+    // Its CLI's own provider, named on the key's row: the roster refuses a key without one.
+    expect(DRIVER_LIST.filter((d) => d.cliProvider === true).map((d) => d.id)).toEqual(["pi"]);
   });
 
   test("the lane wording the fleet prints is unchanged", () => {

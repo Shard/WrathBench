@@ -59,7 +59,7 @@ import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { openRunDb } from "./rundb";
 import { harnessSeries } from "./comparability";
-import { DEFAULT_DRIVER, driverEntry, entryOf, harnessDriver, PLACED_LANE_DRIVER } from "./drivers";
+import { DEFAULT_DRIVER, driverEntry, eitherHas, entryOf, harnessDriver, isProbeOnlyDriver, PLACED_LANE_DRIVER, probeOnlyRefusal } from "./drivers";
 import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isCodexHomeEnvName, isDriver, isTokenEnvName, isUnscoredDriverName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
@@ -737,6 +737,11 @@ export interface ModelState {
   earnedRung1: boolean;
   /** What it does with an account once its tier is spent. */
   idle: IdleMode;
+  /**
+   * The entry's driver is probe-only (`DriverEntry.probeOnly`): no target, no
+   * eligible episode and no idle work, so only a probe campaign runs it.
+   */
+  probeOnly?: true;
   /** Episode tiers the model may be scheduled on, in policy order. */
   eligible: EpisodeId[];
   perEpisode: Partial<Record<EpisodeId, EpisodeStats>>;
@@ -835,7 +840,7 @@ function streakOf(s: StreakFold): number {
 }
 
 /** A record a scanner watches, as far as the counts and the streak read it. */
-type WatchedRecord = { t: string; reason?: unknown; notBefore?: unknown };
+type WatchedRecord = { t: string; reason?: unknown; notBefore?: unknown; kind?: unknown };
 
 function foldStreak(s: StreakFold, rec: WatchedRecord): void {
   if (rec.t === MODEL_RESPONSE_RECORD) s.turn = true;
@@ -967,14 +972,14 @@ export class RecordCountScanner {
 
   /** The parse alone, for a line already known to carry a needle. */
   private parsed(line: Buffer): WatchedRecord | null {
-    let rec: { t?: unknown; reason?: unknown; notBefore?: unknown } | null;
+    let rec: { t?: unknown; reason?: unknown; notBefore?: unknown; kind?: unknown } | null;
     try {
-      rec = JSON.parse(line.toString("utf8")) as { t?: unknown; reason?: unknown; notBefore?: unknown } | null;
+      rec = JSON.parse(line.toString("utf8")) as { t?: unknown; reason?: unknown; notBefore?: unknown; kind?: unknown } | null;
     } catch {
       return null; // a torn line is not a record
     }
     const t = rec?.t;
-    return typeof t === "string" && this.watched.has(t) ? { t, reason: rec!.reason, notBefore: rec!.notBefore } : null;
+    return typeof t === "string" && this.watched.has(t) ? { t, reason: rec!.reason, notBefore: rec!.notBefore, kind: rec!.kind } : null;
   }
 
   /** One line into a set of counts and a streak: the scanner's own, or a copy of them. */
@@ -984,6 +989,10 @@ export class RecordCountScanner {
 
   private applyRecord(rec: WatchedRecord | null, counts: Map<string, number>, streak: StreakFold): void {
     if (rec === null) return;
+    // A CLI's own summarisation call (pi's compaction, a `response` of kind
+    // `compaction`) is billed usage, not a reply of the model's: it neither
+    // counts as one nor ends a pause streak.
+    if (rec.t === MODEL_RESPONSE_RECORD && rec.kind === "compaction") return;
     // Pre-seeded with exactly the kinds asked for, so a line counts toward at most one.
     const n = counts.get(rec.t);
     if (n !== undefined) counts.set(rec.t, n + 1);
@@ -1884,6 +1893,20 @@ export interface RosterIdentity {
   model: string | null;
   effort?: string | null | undefined;
   compactWindow?: string | null | undefined;
+  /** The driver a run or entry names (absent: the default driver); read only for `probeOnly`. */
+  driver?: string | null | undefined;
+  /** The harness tag, where a projection keeps that and not the driver; read only for `probeOnly`. */
+  harness?: string | null | undefined;
+}
+
+/**
+ * Whether an identity is a probe-only driver's (`DriverEntry.probeOnly`, pi
+ * until promoted), by its driver or its harness tag. With neither it is the
+ * default driver's, which is not.
+ */
+function probeOnlyIdentity(x: RosterIdentity): boolean {
+  if (x.driver == null && x.harness == null) return isProbeOnlyDriver(DEFAULT_DRIVER);
+  return eitherHas({ driver: x.driver, harness: x.harness }, (d) => d.probeOnly);
 }
 
 /**
@@ -1893,9 +1916,21 @@ export interface RosterIdentity {
  * existed still matches the entry that never set it. Every place that maps a
  * run back to an entry asks this, so an entry that differs from another only
  * in its window — a 100k copy of an `auto` entry — owns its own runs.
+ *
+ * A probe-only driver's identity (pi) is never another driver's: the
+ * one-model-one-harness rule (`harnessClash`) exempts such an entry, so a pi
+ * entry and a wrathbench entry may name one model at one effort, and their
+ * runs must not pool either way. Only that bit of the harness is compared,
+ * never the whole label: older runs of one model under two other harnesses
+ * keep matching exactly as they did.
  */
 export function sameRosterIdentity(a: RosterIdentity, b: RosterIdentity): boolean {
-  return a.model === b.model && (a.effort ?? null) === (b.effort ?? null) && (a.compactWindow ?? null) === (b.compactWindow ?? null);
+  return (
+    a.model === b.model &&
+    (a.effort ?? null) === (b.effort ?? null) &&
+    (a.compactWindow ?? null) === (b.compactWindow ?? null) &&
+    probeOnlyIdentity(a) === probeOnlyIdentity(b)
+  );
 }
 
 /**
@@ -1911,11 +1946,11 @@ export function sameRosterIdentity(a: RosterIdentity, b: RosterIdentity): boolea
  * Arms that differ only by window still never pool: the square is keyed on
  * the arm, and the results on the tuple.
  */
-function matchesRoster(f: RunFact, r: Pick<RosterModel, "name" | "model" | "effort" | "compactWindow">): boolean {
+function matchesRoster(f: RunFact, r: Pick<RosterModel, "name" | "model" | "effort" | "compactWindow" | "driver">): boolean {
   if (f.campaign !== null && f.arm != null && f.ref != null) {
     return (
       f.ref === r.name &&
-      sameRosterIdentity({ model: f.model, effort: f.effort }, { model: r.model, effort: r.effort }) &&
+      sameRosterIdentity({ model: f.model, effort: f.effort, driver: f.driver }, { model: r.model, effort: r.effort, driver: r.driver }) &&
       (r.compactWindow === undefined || r.compactWindow === f.compactWindow)
     );
   }
@@ -2042,13 +2077,16 @@ export function projectModel(
 
   const earnedRung1 = perEpisode.e90!.reachedL5;
   const tier = effectiveTier(r.tier, earnedRung1);
-  for (const ep of STATS_EPISODES) perEpisode[ep]!.target = targetFor(tier, ep);
+  // A probe-only driver's entry is no scored lane's: its tier buys nothing
+  // until the operator promotes the driver (`DriverEntry.probeOnly`).
+  const probeOnly = isProbeOnlyDriver(r.driver);
+  for (const ep of STATS_EPISODES) perEpisode[ep]!.target = probeOnly ? 0 : targetFor(tier, ep);
 
   // Eligibility falls out of the budget: an episode the tier buys no runs of is
   // not one this model may be scheduled on. One statement, so a target of zero
   // and "not eligible" can no longer disagree the way `promoted, 0/0` did.
-  const eligible: EpisodeId[] = POLICY_EPISODES.filter((ep) => targetFor(tier, ep) > 0);
-  if (!eligible.includes("e90")) eligible.unshift("e90");
+  const eligible: EpisodeId[] = probeOnly ? [] : POLICY_EPISODES.filter((ep) => targetFor(tier, ep) > 0);
+  if (!probeOnly && !eligible.includes("e90")) eligible.unshift("e90");
 
   // The ladder: trailing consecutive no-progress attempts, newest last, after the clear.
   let ladder = 0;
@@ -2087,7 +2125,8 @@ export function projectModel(
     declaredTier: r.tier,
     tier,
     earnedRung1,
-    idle: r.idle ?? "none",
+    idle: probeOnly ? "none" : (r.idle ?? "none"),
+    ...(probeOnly ? { probeOnly: true as const } : {}),
     eligible,
     perEpisode,
     ladder,
@@ -2217,6 +2256,8 @@ export function schedulability(
       : "ended as a failed attempt on the next tick, then reattempted fresh";
     return blocked(`paused run ${s.paused.runId} (${s.paused.reason}, ${spent}${of} elapsed) — ${fate}`);
   }
+  // Free, so a probe campaign may take it, and owing nothing, so nothing else does.
+  if (s.probeOnly === true) return { verdict: "free", why: probeOnlyRefusal(harnessDriver(s.harness)?.id ?? s.harness) };
   // Three failed attempts on an episode stop the spending. The
   // model is blocked rather than "free": idle work is not the reward for
   // burning three evals, and the taint is a stop signal, not a target met.
@@ -2250,7 +2291,7 @@ export function schedulability(
  * work" are two questions, and only the second is a property of the entry.
  */
 export function wantsIdle(v: Verdict, s: ModelState): boolean {
-  return v.verdict === "free" && s.idle !== "none";
+  return v.verdict === "free" && s.idle !== "none" && s.probeOnly !== true;
 }
 
 /**

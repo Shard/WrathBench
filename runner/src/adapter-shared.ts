@@ -1,7 +1,7 @@
 /**
- * What the two CLI drivers do identically.
+ * What the CLI drivers do identically.
  *
- * `adapter-claude.ts` and `adapter-codex.ts` mirror each other invariant for
+ * `adapter-claude.ts`, `adapter-codex.ts` and `adapter-pi.ts` mirror each other invariant for
  * invariant and differ only where the CLIs do (runner/README.md, "The codex
  * driver"). Where the code is the same code, it lives here once, so a fix to
  * process teardown cannot land on one driver and miss the other.
@@ -74,6 +74,52 @@ export const CLI_BASE_ENV: readonly string[] = [
   "SSL_CERT_DIR",
   "NODE_EXTRA_CA_CERTS",
 ];
+
+/** A tiny async queue: the stdout reader pushes, the turn loop pulls. Ends when the process does. */
+export class MessageQueue {
+  private readonly items: Record<string, unknown>[] = [];
+  private readonly waiters: ((v: Record<string, unknown> | null) => void)[] = [];
+  private ended = false;
+
+  push(item: Record<string, unknown>): void {
+    const waiter = this.waiters.shift();
+    if (waiter !== undefined) waiter(item);
+    else this.items.push(item);
+  }
+
+  end(): void {
+    this.ended = true;
+    while (this.waiters.length > 0) this.waiters.shift()!(null);
+  }
+
+  next(): Promise<Record<string, unknown> | null> {
+    const item = this.items.shift();
+    if (item !== undefined) return Promise.resolve(item);
+    if (this.ended) return Promise.resolve(null);
+    return new Promise((resolve) => this.waiters.push(resolve));
+  }
+}
+
+/**
+ * A child's stdout or stderr, one line at a time, split on LF only. Strict
+ * JSONL needs exactly that: a JSON string may hold U+2028 and U+2029, which a
+ * generic line reader (Node's `readline`) would also split on — pi's stream
+ * documentation warns against it, and both other CLIs' streams are the same
+ * framing.
+ */
+export async function* readLines(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+  const decoder = new TextDecoder();
+  let buf = "";
+  for await (const chunk of stream) {
+    buf += decoder.decode(chunk, { stream: true });
+    let idx: number;
+    while ((idx = buf.indexOf("\n")) >= 0) {
+      yield buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+    }
+  }
+  if (buf.trim().length > 0) yield buf;
+}
 
 /** `CLI_BASE_ENV` and every `LC_*` locale variable, copied from `parent` where set. */
 export function cliBaseEnv(parent: Record<string, string | undefined>): Record<string, string> {

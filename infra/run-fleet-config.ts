@@ -252,7 +252,7 @@ export interface FleetJob {
    * named here, on the account it was on, before anything fresh is launched.
    * `model`/`effort`/`compactWindow` pick the entry that carries the run id.
    */
-  resume?: { runId: string; model: string; effort?: string | undefined; compactWindow?: string | undefined };
+  resume?: { runId: string; model: string; effort?: string | undefined; compactWindow?: string | undefined; driver?: string | undefined };
   /**
    * Set by `planContinuations` on the `idle: "unlimited"` lane's next
    * session: the character's previous run, whose character and scratchpad this
@@ -791,10 +791,10 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
     // Cerebras or CLI entry believed the run was pinned, and config that does
     // nothing is what every strict-key rule in this file exists to prevent.
     if (e.routing !== undefined) {
-      if (!entry.endpoint || !(e.apiBase === undefined || isOpenRouterBase(e.apiBase))) {
+      if (!entry.routing || !(e.apiBase === undefined || isOpenRouterBase(e.apiBase))) {
         fail(
           `${where}: entry ${e.model}: routing is an OpenRouter setting — this entry runs on ` +
-            `${entry.endpoint ? String(e.apiBase) : `the ${driver} CLI`}, which is single-backend or (OpenCode Go) routed by its provider`,
+            `${entry.routing ? String(e.apiBase) : `the ${driver} CLI`}, which is single-backend or (OpenCode Go) routed by its provider`,
         );
       }
       // NORMALISED, not merely checked: the shorthands (`"Z.AI"`, `["Z.AI"]`)
@@ -1015,7 +1015,7 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
   if (policy.routing !== undefined) {
     for (const [name, e] of Object.entries(roster)) {
       if (e.routing !== undefined) continue;
-      if (driverEntry(e.driver ?? DEFAULT_DRIVER)?.endpoint !== true) continue;
+      if (driverEntry(e.driver ?? DEFAULT_DRIVER)?.routing !== true) continue;
       if (!(e.apiBase === undefined || isOpenRouterBase(e.apiBase))) continue;
       roster[name] = { ...e, routing: policy.routing };
     }

@@ -300,7 +300,7 @@ describe("parseFleet", () => {
     expect(() => parseFleet([])).toThrow(/must be a JSON object/);
     expect(() => parseFleet(fleetJson([], { lanes: [] }))).toThrow(/`lanes` is not a 0.4 key — a job goes in `queue`/);
     expect(() => parseFleet(fleetJson([], { accounts: { pinned: { S: "x" }, pool: [] } }))).toThrow(/accounts.pinned is not a 0.4 key/);
-    expect(() => parseFleet(fleetJson([], { roster: { old: { tier: "t1", model: "sonnet", driver: "claude-subscription" } } }))).toThrow(/unknown driver claude-subscription \(openai \| claude-code \| codex\)/);
+    expect(() => parseFleet(fleetJson([], { roster: { old: { tier: "t1", model: "sonnet", driver: "claude-subscription" } } }))).toThrow(/unknown driver claude-subscription \(openai \| claude-code \| codex \| pi\)/);
   });
 
   test("the scripted reference is refused as a roster entry by name: the policy can never schedule one", () => {
@@ -524,7 +524,7 @@ describe("parseFleet", () => {
   test("a compaction window off the CLI harnesses, or out of range, takes the file down by name", () => {
     expect(() =>
       parseFleet(fleetJson([], { roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free", compactWindow: "100k" } } })),
-    ).toThrow(/compactWindow is a CLI harness's auto-compaction window \(claude-code, codex\) — the openai driver has none/);
+    ).toThrow(/compactWindow is a CLI harness's auto-compaction window \(claude-code, codex, pi\) — the openai driver has none/);
     // A codex entry takes one since 2026-10-11, canonicalised like claude-code's.
     const cx = parseFleet(fleetJson([], { roster: { cx: { tier: "t1", model: "gpt-6-astra", driver: "codex", compactWindow: "200K" } } }));
     expect(cx.roster["cx"]!.compactWindow).toBe("200k");
@@ -533,6 +533,19 @@ describe("parseFleet", () => {
         parseFleet(fleetJson([], { roster: { son: { tier: "t1", model: "sonnet", driver: "claude-code", compactWindow: bad } } })),
       ).toThrow(/compactWindow must be "auto" or 100k–1M tokens/);
     }
+  });
+
+  test("a pi entry beside a wrathbench entry of the same model parses, takes a window, and refuses routing", () => {
+    // The #257 campaign's pair: one model and endpoint under two harnesses,
+    // which the roster allows only because pi is probe-only.
+    const ds = { tier: "t1", model: "deepseek-flash", apiBase: "https://api.deepseek.com/v1", apiKeyEnv: "DEEPSEEK_KEY" };
+    const config = parseFleet(fleetJson([], { roster: { ds, "ds-pi": { ...ds, driver: "pi", compactWindow: "300k" } } }));
+    expect(config.roster["ds-pi"]).toMatchObject({ driver: "pi", compactWindow: "300k" });
+    expect(config.roster["ds-pi"]!.refused).toBeUndefined();
+    expect(policyRefs(config).has("ds-pi")).toBe(true);
+    expect(() =>
+      parseFleet(fleetJson([], { roster: { "ds-pi": { ...ds, driver: "pi", routing: { only: ["DeepSeek"] } } } })),
+    ).toThrow(/routing is an OpenRouter setting — this entry runs on the pi CLI/);
   });
 
   test("policy.routing is the fleet default, and an entry's own routing wins", () => {
@@ -2184,6 +2197,16 @@ describe("scheduling policy: defer ladder and retirement", () => {
     expect(runnableRefs(job({ ref: "glm" }), roster)).toEqual(["glm"]);
   });
 
+  test("a probe-only driver's entry runs under a campaign's job and no other", () => {
+    const withPi: Record<string, FleetRosterEntry> = { ...roster, "ds-pi": { model: "deepseek-flash", driver: "pi", tier: "t1", idle: "none" } };
+    // A queue job naming it for a scored or freeplay episode is the scored lane it is kept out of.
+    expect(runnableRefs(job({ ref: "ds-pi" }), withPi)).toEqual([]);
+    expect(runnableRefs(job({ ref: "ds-pi", episode: "freeplay" }), withPi)).toEqual([]);
+    // A campaign's square names its probe identity.
+    const probe = job({ ref: "ds-pi", episode: "probing", probe: { campaign: "pi-vs", version: 1, cell: "c", arm: "pi" } });
+    expect(runnableRefs(probe, withPi)).toEqual(["ds-pi"]);
+  });
+
   test("the policy fills the accounts the queue leaves free, never while a manual job waits, never a second run", () => {
     const states = modelStatesOf(rosterModels(roster));
     // Two accounts, one taken by a manual job: the policy gets the other.
@@ -3498,6 +3521,23 @@ describe("account affinity and cross-account name hygiene", () => {
     expect(map.get("mimo")).toBeUndefined();
     expect(affinityOf(map)("glm")).toBe("RUNNER5");
     expect(affinityOf(map)("mimo")).toBeUndefined();
+  });
+
+  test("a pi entry and a wrathbench entry of one model never inherit each other's account or character", () => {
+    const both: Record<string, FleetRosterEntry> = {
+      ds: { model: "deepseek-flash", effort: "high", tier: "t1", idle: "none" },
+      "ds-pi": { model: "deepseek-flash", effort: "high", driver: "pi", tier: "t1", idle: "none" },
+    };
+    const map = affinityFrom(
+      [
+        fact("deepseek-flash", { effort: "high", driver: "openai", startedAt: NOW - 7_200_000, account: "RUNNER", character: "Wrathy" }),
+        // A hand-launched pi probe that recorded no ref, newer than the wrathbench run.
+        fact("deepseek-flash", { effort: "high", driver: "pi", episode: "probing", campaign: "pi-vs", startedAt: NOW - 600_000, account: "PROBE", character: "Piper" }),
+      ],
+      both,
+    );
+    expect(map.get("ds")).toEqual({ account: "RUNNER", character: "Wrathy" });
+    expect(map.get("ds-pi")).toEqual({ account: "PROBE", character: "Piper" });
   });
 
   test("takeAccount prefers the affine account and otherwise gives the first, as shift did", () => {

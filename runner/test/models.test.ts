@@ -45,6 +45,7 @@ import {
   sameRosterIdentity,
 } from "../src/models";
 import { billingOf } from "../src/model-cost";
+import { rowOf } from "../viewer/models";
 import type { EpisodeId } from "../src/episodes";
 import type { Campaign } from "../src/campaigns";
 import type { ProbeRun } from "../src/campaigns";
@@ -917,9 +918,9 @@ describe("concurrency lanes (cap keys on the rate-limit key)", () => {
     expect(isConcurrencyKey("claude-code")).toBe(true);
     expect(isConcurrencyKey("warp")).toBe(false);
     expect(isConcurrencyKey("opencode-go")).toBe(true);
-    expect(CONCURRENCY_KEYS).toEqual(["openai", "claude-code", "codex", "stub", "openrouter", "opencode", "opencode-go"]);
+    expect(CONCURRENCY_KEYS).toEqual(["openai", "claude-code", "codex", "pi", "stub", "openrouter", "opencode", "opencode-go"]);
     expect(parsePolicyBlock({ maxConcurrent: { "claude-code": 2, openrouter: 1, opencode: 1, "opencode-go": 1 } }).maxConcurrent).toEqual({ "claude-code": 2, openrouter: 1, opencode: 1, "opencode-go": 1 });
-    expect(() => parsePolicyBlock({ maxConcurrent: { warp: 1 } })).toThrow(/unknown concurrency key warp — allowed: openai, claude-code, codex, stub, openrouter, opencode, opencode-go/);
+    expect(() => parsePolicyBlock({ maxConcurrent: { warp: 1 } })).toThrow(/unknown concurrency key warp — allowed: openai, claude-code, codex, pi, stub, openrouter, opencode, opencode-go/);
     expect(() => parsePolicyBlock({ maxConcurrent: { openrouter: 0 } })).toThrow(/positive integer/);
   });
 });
@@ -1063,6 +1064,50 @@ describe("probe campaigns in the schedule", () => {
     { "class-probe": { version: 2, assignments: [{ model: "a" }, { model: "b" }] } },
   ).campaigns[0]!;
   const probeRun = (cell: string): ProbeRun => ({ campaign: "class-probe", version: 2, cell, ref: "a", arm: "base", counted: true, live: false });
+
+  test("a probe-only driver's entry owes nothing, wants no idle work, and runs only as a campaign's square", () => {
+    // pi until the operator promotes it (operator, 2026-10-20): a tier and an
+    // idle axis that would schedule anything else buy it nothing.
+    const pi = projectModel({ name: "a", model: "deepseek-flash", driver: "pi", tier: "t2", idle: "unlimited" }, [], DEFAULT_POLICY, { now: NOW2 });
+    expect(pi).toMatchObject({ probeOnly: true, eligible: [], idle: "none", harness: "pi" });
+    expect(pi.perEpisode.e90!.target).toBe(0);
+    expect(pi.perEpisode.e360!.target).toBe(0);
+    const v = schedulability(pi);
+    expect(v.verdict).toBe("free");
+    expect(v.why).toContain("driver pi is probe-only");
+    expect(wantsIdle(v, pi)).toBe(false);
+    expect(planNextJobs([pi], ["R1"], new Set()).jobs).toEqual([]);
+    const plan = planNextJobs([pi], ["R1"], new Set(), { campaigns: [campaign] });
+    expect(plan.jobs.map((j) => ({ episode: j.episode, probe: j.probe?.campaign }))).toEqual([{ episode: "probing", probe: "class-probe" }]);
+  });
+
+  test("a pi entry and a wrathbench entry of one model and effort, no window on either, never take each other's runs", () => {
+    const ds = { name: "ds", model: "deepseek-flash", effort: "high", tier: "t1" as const };
+    const pi = { name: "ds-pi", model: "deepseek-flash", effort: "high", driver: "pi", tier: "t1" as const };
+    const scored = done("deepseek-flash", "e90", 1, { effort: "high", driver: "openai", bestLevel: 5 });
+    const paused = done("deepseek-flash", "e90", 2, { effort: "high", driver: "openai", endedAt: null, terminationReason: null, pause: { reason: "rate-limited", at: NOW2 - 1000, count: 1, episodeElapsedMs: 1000 } });
+    // A hand-launched pi probe that recorded no ref: matched by identity.
+    const probe = done("deepseek-flash", "probing", 3, { effort: "high", driver: "pi", campaign: "pi-vs", cell: "c", endedAt: null, terminationReason: null, pause: { reason: "rate-limited", at: NOW2 - 500, count: 1, episodeElapsedMs: 1000 } });
+    const runs = [scored, paused, probe];
+    const piState = projectModel(pi, runs, DEFAULT_POLICY, { now: NOW2 });
+    const dsState = projectModel(ds, runs, DEFAULT_POLICY, { now: NOW2 });
+    // The scored wrathbench e90 is wrathbench's; the pi entry counts nothing of it.
+    expect(dsState.perEpisode.e90!.counted).toBe(1);
+    expect(piState.perEpisode.e90!.attempts).toBe(0);
+    // A paused wrathbench run holds wrathbench only, and the pi probe holds pi only.
+    expect(dsState.paused?.runId).toBe(paused.runId);
+    expect(piState.paused?.runId).toBe(probe.runId);
+    expect(dsState.perEpisode.probing!.attempts).toBe(0);
+    // The viewer's row is the same match.
+    expect(rowOf(piState, runs, "/nowhere").runs.map((r) => r.runId)).toEqual([probe.runId]);
+    expect(rowOf(dsState, runs, "/nowhere").runs.map((r) => r.runId).sort()).toEqual([scored.runId, paused.runId].sort());
+    // And the identity itself, both ways; an old run with no driver is the default driver's.
+    expect(sameRosterIdentity({ model: "m", driver: "pi" }, { model: "m" })).toBe(false);
+    expect(sameRosterIdentity({ model: "m", harness: "pi" }, { model: "m", driver: "pi" })).toBe(true);
+    expect(sameRosterIdentity({ model: "m", driver: null }, { model: "m", harness: "wrathbench" })).toBe(true);
+    // Only the probe-only bit: another two harnesses still match as they always did.
+    expect(sameRosterIdentity({ model: "m", driver: "codex" }, { model: "m", driver: "openai" })).toBe(true);
+  });
 
   test("a model that owes evidence is never given probe work", () => {
     // The whole priority rule, in one assertion: evals outrank probes, and the

@@ -95,6 +95,7 @@ rather than silently translated.
 | `reference` | `wrathbench` | the fixed loop over the scripted reference program, `src/reference/`: one `run_snippet` per turn, branching on the world | no, a labelled line |
 | `claude-code` | `claude-code` | the `claude` CLI, driven per turn by `src/adapter-claude.ts` | yes, tagged |
 | `codex` | `codex` | the `codex` CLI (OpenAI, ChatGPT subscription), one `codex exec` / `exec resume` process per turn, `src/adapter-codex.ts` | yes, tagged |
+| `pi` | `pi` | the `pi` CLI (earendil-works, MIT) on a metered endpoint, one long-lived `pi --mode rpc` process, `src/adapter-pi.ts` | probe-only until promoted |
 
 The `reference` driver is a transport like the others, with a program in
 place of a model. `src/reference/adapter.ts` answers each turn with one
@@ -198,8 +199,8 @@ and `codex` already do, and what another driver would have to.
 
 **Harness settings.** A harness setting is a knob of one harness's machinery:
 it has the harness's default, a roster entry may override it, and it is
-recorded like effort. The compaction window (`compactWindow`), on claude-code
-and codex, is the one that exists, and its shape is the pattern. Absent, or
+recorded like effort. The compaction window (`compactWindow`), on claude-code,
+codex and pi, is the one that exists, and its shape is the pattern. Absent, or
 `auto`, is the scaffold's own default and stamps nothing, so every run that says nothing
 shares one tuple. A named value is a roster-entry field normalised to one
 spelling. It keys the tuple, and it is part of `RosterIdentity`, so an entry
@@ -248,8 +249,20 @@ of the three outside the registry and the adapters.
   - Whether a roster may name it (`roster`, `rosterRefusal`), whether
     `policy.maxConcurrent` caps it by id (`capKey`), and the claude-family
     rule it carries (`claudeModels`).
-  - `endpoint`: whether it takes `apiBase`, `apiKeyEnv`, `routing` and a
-    declared `billing`.
+  - `endpoint`: whether it takes `apiBase`, `apiKeyEnv` and a declared
+    `billing` (the provider table guards the pair, and a run pod keeps that
+    one key); `routing`: whether it sends OpenRouter's provider routing on
+    requests it builds itself, which only the fixed loop does.
+  - `cliProvider`: whether it reaches its endpoint through a provider of its
+    CLI's own catalogue, named on the key's row (`piProvider`), so a key
+    without one refuses the roster entry.
+  - `probeOnly`: whether it runs only as a probe-campaign arm until the
+    operator promotes it. Its entries are outside `harnessClash`, the policy
+    gives them no target and no idle work, and a queue job outside a campaign
+    cannot run them (`runnableRefs`), and `loadRunConfig` refuses a run of it
+    on any episode but a campaign's `probing`. A probe-only identity never
+    matches another (`sameRosterIdentity`), so its runs and a same-model
+    entry's never pool, either way.
   - `bill` (metered, subscription or none) and, for a subscription, its
     `lane`: the lane key, the default variable, whether the variable holds a
     token or a home directory, whether the fleet places runs among several
@@ -268,10 +281,13 @@ of the three outside the registry and the adapters.
   scaffold, `runEpisode`, which owns everything listed under "A scaffold
   driver must also". The map is `Record<Driver, …>`, so a registry entry
   without an adapter fails typecheck.
-- **The context sentence.** `contextSentence` (`src/prompt.ts`) is exhaustive
-  over `Harness`, so a new harness fails typecheck until the operator decides
-  what the model is told about its history. It changes the prompt hash, so it
-  is the operator's call, never a default.
+- **The context sentence and the harness's prompt.** `contextSentence`
+  (`src/prompt.ts`) is exhaustive over `Harness`, so a new harness fails
+  typecheck until the operator decides what the model is told about its
+  history. It changes the prompt hash, so it is the operator's call, never a
+  default. The harness's rendered default prompt is a named constant beside
+  the others (`CLAUDE_CODE_SYSTEM_PROMPT`, `CODEX_SYSTEM_PROMPT`,
+  `PI_SYSTEM_PROMPT`), and a test pins it against them.
 - **Tests and fixtures.** A scaffold gets a fake CLI under `test/fixtures/`
   (`fake-claude.ts`, `fake-codex.ts` are the pattern): a script that speaks
   the CLI's stream format and calls the MCP tools, so the driver test runs a
@@ -298,19 +314,40 @@ guard to see:
   driver, and takes any lane that is not a Codex home as its candidate. A
   second placed driver needs that code generalised first.
 - The dashboard is outside the scan: it reads the wire, and its harness
-  colours (`LadderChart.tsx`) and its reference test (`isScriptedReference`)
-  name harnesses and drivers directly. A new harness gets a colour there.
+  colours (`LadderChart.tsx`, a `--<harness>` token and a `.badge.harness-<id>`
+  rule in `styles.css`), the harness tag's tooltip (`HarnessTag.tsx`) and its
+  reference test (`isScriptedReference`) name harnesses and drivers directly.
+  A new harness gets a colour there.
+- `infra/run-episode.sh` is shell, outside the scan: it checks a CLI's binary
+  (and a subscription lane's credential) per driver by name before launch.
+- The chart (`run-pods.yaml`, `fleet.yaml`, `pvc.yaml`) and `compose.yml`
+  carry a home lane's volume and env by hand; `podVolumes` only removes what
+  the template already has. A driver that needs a home directory or a config
+  directory outside the run needs both. (pi needs neither: its config is
+  written into the run's own directory.)
+- A subscription lane's usage reaches the 80% gate only through an observation
+  reader in `src/subscription-usage.ts`; a metered driver (openai, pi) has no
+  lane and needs none.
+- An endpoint CLI that keeps its own model catalogue (pi) is pointed at the
+  run's base through a provider of its own; which one is a field on the key's
+  row in the provider table (`piProvider`, `src/providers.ts`).
 
 The checklist, in order:
 
 1. The entry in `DRIVERS` and `DRIVER_TABLE`, and `HARNESSES` if the harness is
    new.
 2. The adapter in `DRIVER_ADAPTERS`, and the image pin for a CLI.
-3. The context sentence, if the harness is new (the operator's call).
-4. The fake CLI, the driver test and the registry test.
-5. This README's section, RUNBOOK and COSTS.
-6. Probe-campaign arms until the operator promotes it (docs/METHODOLOGY.md,
-   "Harness and driver are separate words").
+3. The context sentence and the harness's default prompt constant, if the
+   harness is new (the operator's call).
+4. The fake CLI, the driver test and the registry test, and the scatter
+   guard's owner list (`test/driver-scatter.test.ts`) for the new adapter.
+5. The launch check in `infra/run-episode.sh`, the dashboard colour, and the
+   chart and compose wiring if the CLI needs a home.
+6. This README's section, RUNBOOK and COSTS.
+7. Probe-campaign arms until the operator promotes it (docs/METHODOLOGY.md,
+   "Harness and driver are separate words"); a probe-only driver says so in
+   its entry (`probeOnly`), which is the rule the roster and the scheduler
+   read.
 
 **Two asymmetries are deliberate.**
 
@@ -419,9 +456,9 @@ scratchpad, not the chat history, is the durable memory.
 
 ### The compaction window
 
-A harness setting of both CLI scaffolds since the operator's decision of
+A harness setting of the CLI scaffolds since the operator's decision of
 2026-10-11; this section is claude-code's mechanics, and "The codex driver"
-below has codex's. The CLI summarises its own history once the prompt nears
+below has codex's, and "The pi driver" pi's. The CLI summarises its own history once the prompt nears
 its auto-compaction window, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: `auto` or
 100k–1M tokens in 2.1.293.
 `auto` sits near the model's whole context — with `--debug` the CLI logs
@@ -432,7 +469,7 @@ pays for it above a model's long-prompt price tier. `100k` logs
 
 A roster entry (`compactWindow`, docs/RUNBOOK.md), a campaign arm's
 `--compact-window` (docs/EPISODES.md) or `--compact-window` by hand sets it
-for a run (`RunConfig.compactWindow`); claude-code and codex take it, and
+for a run (`RunConfig.compactWindow`); claude-code, codex and pi take it, and
 every other driver refuses it. It is a run dimension like effort:
 canonicalised to `<n>k` or `1M`, recorded in `meta.json` and the
 comparability tuple, matched on beside model and effort
@@ -746,6 +783,193 @@ A second subscription is a second directory under a second variable
 The runner refuses to start without the chosen lane's `auth.json`, naming the
 variable. The compose `runner` image installs the CLI; `--local` with a
 reachable module URL is the alternative.
+
+## The pi driver
+
+The pi coding-agent CLI (earendil-works/pi, MIT), the version pinned as
+`PI_VERSION` in `infra/docker/runner.Dockerfile`: 1.3.0, the release binary,
+verified by its sha256. A labelled harness, `pi`, probe-only until the
+operator promotes it (operator, 2026-10-20; the registry's `probeOnly`).
+`src/adapter-pi.ts` keeps the invariants the other CLI drivers keep — one
+`SandboxHost`, tools over the loopback MCP bridge, the tool-call ceiling and
+the watchdogs at every dispatch, a wind-down instead of a kill mid-turn, a
+process-group kill on stop, a constructed child environment — and differs
+where pi does. Everything below was read off the 1.3.0 source and checked
+against the real binary driving a stub OpenAI-compatible endpoint, inside a
+network namespace that had only loopback, with every proxy variable pointed at
+a logging proxy that refused everything.
+
+- **One long-lived process in RPC mode.** `pi --mode rpc --no-session`
+  reads JSONL commands on stdin and writes responses and session events on
+  stdout. Each driver turn sends one `prompt` command carrying the context
+  message and reads events until `agent_settled`, pi's word for "nothing left
+  to do on its own" (retries, compaction and queued work included). The
+  session lives only in memory, so a resume starts a fresh conversation
+  (`resumedFresh`), as on the other CLIs. Before the first turn the driver
+  asks `get_state` and `get_available_thinking_levels` and records what pi
+  resolved (`pi_state`: model, provider, base, context window, output cap,
+  thinking level).
+- **Only our tools.** `--no-builtin-tools` and the allowlist
+  `--tools mcp__wrathbench__*` remove read, bash, edit and write;
+  `--no-extensions` removes the built-in extensions (codemode, tool search,
+  llama.cpp) and `-e builtin:mcp` loads the MCP client back alone. The server
+  is declared `exposure: "direct"` with `autoEnableCodemode: false`, so our
+  nine tools are declared to the model as ordinary tools, under
+  `mcp__wrathbench__<tool>`, and nothing else is: the captured requests carried
+  those nine and no other. pi's per-request MCP timeout is raised from 60 s to
+  `PI_MCP_TIMEOUT_S` (30 minutes), because a snippet can run its whole
+  timeout behind another call; the watchdogs bound a stuck call instead.
+- **Our prompt bytes, exactly.** `--system-prompt <file>` replaces pi's own
+  prompt, but pi 1.3.0 still appends a `<cwd>` section naming the working
+  directory. `src/pi-extension.ts`, loaded with `-e`, answers pi's
+  `before_agent_start` with that same text as the whole prompt (pi's documented
+  override), so the request's system message is byte-for-byte
+  `PI_SYSTEM_PROMPT`, which is what the tuple's prompt hash covers. The
+  captured requests confirm it. The bytes are the CLI render (`contextSentence`
+  is the CLI sentence for pi too), so the hash equals codex's and claude-code's;
+  the harness tag tells them apart.
+- **Nothing user-level, nothing phoned home.** `HOME` and
+  `PI_CODING_AGENT_DIR` are `<run-dir>/pi`, holding only the `settings.json`,
+  `models.json` and `mcp.json` the driver writes and the system prompt file;
+  `--no-skills`, `--no-prompt-templates`, `--no-themes`, `--no-context-files`
+  and `--no-approve` turn off every other source, and the cwd is an empty temp
+  directory. `--offline` and `PI_OFFLINE=1` stop the model-catalogue refresh RPC
+  mode otherwise starts (`dist/main.js:455-458`, `:766`) and the version check
+  (`dist/utils/version-check.js:37`); `PI_TELEMETRY=0` and
+  `enableInstallTelemetry: false` stop install reporting and the provider
+  attribution headers (`dist/core/telemetry.js:6-8`,
+  `dist/core/provider-attribution.js:28`); `cacheWarming: "off"` stops idle
+  cache-refresh requests, which would be billed and seen by no record. The
+  `@earendil-works/pi-telemetry` package pi bundles has no exporter at all
+  (its own README: "no exporter … or dependency on a telemetry backend"). In
+  the network-namespace check no request reached the proxy and none left for
+  any host but the stub; the same check without the switches is the positive
+  control, and there pi opened `CONNECT pi.dev:443` through the proxy within
+  seconds of starting.
+- **The endpoint and its one key.** pi keeps its own model catalogue, with
+  each model's context window, output cap and request quirks. The driver keeps
+  that metadata and points pi's built-in provider for the run's key at the
+  run's base: `models.json` sets `providers.<provider>.baseUrl` to `apiBase`
+  and `apiKey` to `$<apiKeyEnv>`, pi's env interpolation, so the key never
+  lands in a file. Which pi provider a key is, is the key's row in the provider
+  table (`piProvider`, `src/providers.ts`); only DeepSeek has one, and the
+  driver refuses any other key by name. The child environment is
+  `CLI_BASE_ENV`, the run's directories, the phone-home switches and that one
+  key under its own name; pi's own provider variables (`DEEPSEEK_API_KEY`) are
+  never set. pi reports the base it resolved, and a run whose base is not its
+  own ends before the first turn.
+- **Effort is `--thinking`.** pi's levels are off, minimal, low, medium,
+  high, xhigh and max; `none` is `off` and `ultra` is refused by name. pi
+  silently clamps a level the model lacks to one it has (deepseek-flash has
+  off, low, high and max, so `medium` runs as `high`), so a run whose level pi
+  reports differently from the one asked ends as `harness-error` before its
+  first turn. Absent is pi's own default, recorded on `pi_state` (`high` on
+  deepseek-flash, sent as `thinking: {type: "enabled"}` with
+  `reasoning_effort: "high"`), so pi cannot send "no level" the way the fixed
+  loop does; a comparison against a `wrathbench` arm names the same effort on
+  both, or it has a confound. The same level can still reach the wire in
+  different bytes: `none` on pi is `thinking: {type: "disabled"}` with no
+  `reasoning_effort`, where the openai driver sends `reasoning_effort: "none"`
+  (captured on the stub).
+- **Usage per request.** Each assistant `message_end` is a `response` record
+  with its usage: pi's `input` excludes the cache, so `prompt_tokens` is input
+  plus cache read plus cache write, the claude-code arithmetic; reasoning
+  tokens ride along when pi has them. pi's own catalogue-priced figure is kept
+  beside it as `piCostUsd`, a cross-check only, never as a cost the viewer
+  reads: the run is priced from its tokens by the provider row in
+  `runner/viewer/pricing.ts`, and pi's catalogue figure for deepseek-flash
+  ($0.30/$1.20 per M) is twice the off-peak row. The model the endpoint
+  answered is pi's `responseModel` when it differs from the one asked for,
+  else that one, promoted onto the run on first sight.
+- **Failures.** A provider error ends the assistant message with
+  `stopReason: "error"` and `errorMessage` `<status>: {…}`, after pi's own
+  retries (`auto_retry_*`, recorded as `pi_retry`). The final one is
+  classified by status (`detectPiFailure`): 402 is `quota-exhausted`, 429
+  `rate-limited` (`quota-exhausted` with quota wording), 401 and 403
+  `auth-failed`, all pauses; an overflow pi could not compact its way out of is
+  `context-limit`. Anything else is a session note to the model ("the previous
+  turn ended with an error from the CLI before it finished.", codex's bytes) with pi's words on a private `pi_error`
+  record, and three such turns in a row end the run as `adapter-error`. pi
+  exiting mid-turn is `adapter-error`.
+
+### The compaction window on pi
+
+pi compacts once the last reply's usage (input, output, cache read and write)
+plus an estimate of what followed it exceeds the model's context window less
+`compaction.reserveTokens` (`shouldCompact`,
+`dist/core/compaction/compaction.js`). The window is the one pi's catalogue
+gives the model, which pi reports at launch. With its own reserve, 16,384,
+`auto` compacts above 983,616 tokens on deepseek-flash's 1,000,000.
+
+A run's `compactWindow` reaches pi as the reserve that puts the threshold at
+the window itself (`piReserveTokens`): `300k` on a 1,000,000-token model is
+`reserveTokens: 700000`, and pi then compacts above 300,000 tokens, like
+codex, with no summary reserve below it. The reserve is read at startup, so a
+run with a window first starts pi once to read the model's window, then
+writes the reserve and starts it for the episode. A window at or above the
+model's window is one pi never reaches (it would compact only on an overflow),
+so it is refused before the first turn (`piWindowCapRefusal`). The window
+rides on the `driver` record with the reserve it became.
+
+Two things come with the mechanism. The same reserve caps the summary pi asks
+for (`min(0.8 × reserve, the model's output cap)`, half that for a split
+turn's prefix), so `300k` lifts that cap from about 13k tokens to the model's
+384k; it is a ceiling, not a length. And pi keeps the newest 20,000 tokens
+verbatim (`keepRecentTokens`, its default, left alone), so a compaction needs
+more history than that to have anything to summarise.
+
+Each `compaction_end` is a `harness` record of kind `compaction` with
+`trigger`, `preTokens`, `postTokens` (pi's estimate after), `durationMs`, `at`
+and pi's summary. The summarisation call is billed and appears on no
+`message_end`, so its usage is a `response` record of kind `compaction`, which
+the token totals and the cost count, though never as a model reply (`modelResponses`) or as the context. A failed or aborted compaction is a
+`compaction_failed` record. The episodic-log ask follows pi's threshold the
+same way as on the other CLIs.
+
+**The context window of deepseek-flash** (operator, 2026-10-20: the window
+must exceed 300k for `300k` to bind). pi 1.3.0's catalogue gives it 1,000,000
+tokens (`pi-ai/dist/providers/data/deepseek.json`, `--offline` keeps pi from
+overlaying a newer one), and OpenRouter's public model list gives
+`deepseek/deepseek-v4.1-flash-1017` 1,048,576 (read 2026-10-20). DeepSeek's
+own docs pages state none. Both are well above 300k, so `300k` binds; pi
+compacts against its catalogue's 1,000,000.
+
+### What pi does that is part of its label
+
+- **MCP results over 20 KB are cut in the middle** before the model reads
+  them (`MCP_OUTPUT_MAX_BYTES`, `dist/extensions/mcp/tools.js`), with pi's own
+  text around them ("Warning: truncated output (original token count: N)" and
+  "[Full output: <path> (read it with offset/limit)]"), naming a file the model
+  has no tool to read. The constant is not configurable. Our tool results
+  have no cap of their own (a snippet's value, a long event list), so the
+  driver records what the model was shown as a record of type
+  `pi_tool_result_truncated` (private, like `pi_error`) beside the full `snippet_result`, and pi's temp
+  directory is inside the episode's own temp cwd, deleted with it.
+- **A reply cut off at its output cap** has its tool calls failed by pi with
+  its own words ("the response hit the output token limit… Re-issue the tool
+  call"), and pi sends `max_tokens` at the model's whole output cap (384,000 on
+  deepseek-flash), where the fixed loop sends none and the provider's default applies.
+- **pi retries a failed request itself** with its default policy (three
+  attempts, backoff from 2 s), and may compact and retry on an overflow.
+- **pi may run the tool calls of one reply in parallel**; the MCP listener
+  serialises them, one sandbox, one snippet at a time.
+
+### Setup
+
+A pi run is a probe campaign's square and nothing else: `loadRunConfig`
+refuses the `pi` driver on any episode but `probing` with a campaign named,
+so a hand launch names a published campaign and cell, as any probe does
+(docs/RUNBOOK.md, "Probe campaigns"):
+
+```bash
+# DEEPSEEK_KEY in .env, as for the openai driver on DeepSeek
+WRATHBENCH_MODULE_URL=http://127.0.0.1:8086 ./infra/run-episode.sh --driver pi \
+  --model deepseek-flash --api-base https://api.deepseek.com/v1 --api-key-env DEEPSEEK_KEY \
+  --effort high --campaign <id>@<v> --cell <cell> --local
+```
+
+`--local` needs the pinned `pi` on PATH. The run is metered against the
+key's balance; there is no lane and no subscription usage gate.
 
 ## The context, the prompt and the scratchpad tools
 

@@ -31,6 +31,7 @@ import {
   entryOf,
   harnessOf,
   isDriver,
+  probeOnlyRefusal,
   type Driver,
   type Harness,
 } from "./drivers";
@@ -232,6 +233,13 @@ const driverSchema = z.string().superRefine((v, ctx) => {
  * freeplay character. A variant of a harness runs as a probe-campaign arm,
  * which is not a roster entry.
  *
+ * An entry on a probe-only driver (`DriverEntry.probeOnly`, pi until the
+ * operator promotes it) is outside the rule: the policy schedules no scored
+ * or freeplay run of it, so none of its runs is in a scored lane, and a probe
+ * run maps back to the entry it names (`ref`), never by model id. That is
+ * what lets one model run under `wrathbench` in the scored lanes and under
+ * `pi` in a probe campaign at once.
+ *
  * The id is compared exactly, as `RosterIdentity` compares it: two spellings
  * of one model (a vendor-prefixed aggregator slug and a CLI catalogue id) are
  * two ids and two rows. Returns the refusal for the first clash in roster
@@ -243,7 +251,7 @@ export function harnessClash(
   const first = new Map<string, { name: string; harness: Harness }>();
   for (const [name, e] of Object.entries(roster)) {
     const driver = e.driver ?? DEFAULT_DRIVER;
-    if (!isDriver(driver)) continue;
+    if (!isDriver(driver) || DRIVER_TABLE[driver].probeOnly) continue;
     const harness = harnessOf(driver);
     const seen = first.get(e.model);
     if (seen === undefined) {
@@ -262,8 +270,9 @@ export function harnessClash(
 
 /**
  * The drivers whose CLI has an auto-compaction window a run can set: Claude
- * Code (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`) and Codex
- * (`model_auto_compact_token_limit`). A general harness setting since the
+ * Code (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`), Codex
+ * (`model_auto_compact_token_limit`) and pi (`compaction.reserveTokens`,
+ * `piReserveTokens`). A general harness setting since the
  * operator's decision of 2026-10-11; the fixed loop and the stub have no such
  * window, so a run on either that named one would record a dimension nothing
  * applied. One predicate for every boundary that refuses it (this config, the
@@ -760,6 +769,13 @@ export function loadRunConfig(raw: unknown): RunConfig {
   // another driver would record a dimension nothing applied.
   if (config.compactWindow !== undefined && !driverHasCompactWindow(config.driver)) {
     throw new Error(compactWindowDriverRefusal(config.driver));
+  }
+  // Refused at launch as well as in the scheduler: a probe-only driver's run
+  // is a campaign's square and nothing else, so a hand launch on a scored,
+  // freeplay or unnamed episode — which would carry a scored stamp and could
+  // map onto another harness's row by model id — never starts.
+  if (entryOf(config.driver).probeOnly && (config.episode !== "probing" || config.campaign === undefined)) {
+    throw new Error(`${probeOnlyRefusal(config.driver)} — launch it as a campaign's square (--campaign <id>@<v> --cell <id>), not as episode ${config.episode ?? "(none)"}`);
   }
   // Refused, never ignored: the reference program reads no prompt, so an
   // objective would be stamped on a run nothing steered, and its route is a

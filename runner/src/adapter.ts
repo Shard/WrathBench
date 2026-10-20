@@ -482,7 +482,8 @@ function requestIdOf(res: Response): string | undefined {
 // `GoUsageLimitError` is OpenCode Go's spent allowance (a 429): an exhausted
 // subscription window, not a passing rate limit, so it is `quota-exhausted`
 // and waits for the window's reset (`opencode-go.ts`; operator, 2026-10-16).
-const EXHAUSTION_HINTS = /quota|credit|billing|insufficient|exceeded.*limit|payment|GoUsageLimitError/i;
+// The pi driver reads a 429's words with the same test (`detectPiFailure`).
+export const EXHAUSTION_HINTS = /quota|credit|billing|insufficient|exceeded.*limit|payment|GoUsageLimitError/i;
 // Rate-limit wording that a provider may send with a 2xx body and a string code
 // ("rate_limit_exceeded", "Rate limit exceeded") instead of a numeric 429. Kept
 // separate from EXHAUSTION_HINTS so it reads as rate-limited, not quota-spent,
