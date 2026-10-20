@@ -34,21 +34,27 @@
  *   bun wb smoke swim
  *   bun wb --local smoke swim   # the quickstart
  *
- * MODULE_ACCOUNT (default PROBE) swims and MODULE_ACCOUNT2 (default SMOKE2)
- * watches; SMOKE_CHARACTER / SMOKE_CHARACTER2 name the fixture characters.
+ * MODULE_ACCOUNT (default PROBE) swims, as in every module smoke. The
+ * observer is MODULE_ACCOUNT_OBSERVER, default SMOKE3: on the module's
+ * allowlist and on neither the preflight gate's accounts (SMOKE, SMOKE2) nor
+ * the deploy smokes', and not death-recovery's priest (SMOKE4), so a
+ * six-minute watch never collides with the gate. A busy observer account is
+ * a FAIL line within seconds naming the account and the variable to set,
+ * never a long wait and never a takeover of the other session.
+ * SMOKE_CHARACTER / SMOKE_CHARACTER2 name the fixture characters.
  * Coordinates are harness tooling's, not an agent run's (the observation
  * contract does not apply to this script).
  */
 
 import { connect, type MovePoint, type MoveResultData, type StreamEvent, type WrathClient } from "../../sdk/src/index";
 import { SCENARIOS, SWIM_SEA_LEVEL, SWIM_SHORE, type ScenarioName } from "../fixtures/scenarios";
-import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
+import { accountFixtureName, applyScenario, characterNames, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
 
 const BASE = moduleBase();
 const SWIMMER_ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
-const OBSERVER_ACCOUNT = process.env.MODULE_ACCOUNT2 ?? "SMOKE2";
+const OBSERVER_ACCOUNT = process.env.MODULE_ACCOUNT_OBSERVER ?? "SMOKE3";
 const SWIMMER = process.env.SMOKE_CHARACTER ?? accountFixtureName("Sw", SWIMMER_ACCOUNT);
 const OBSERVER = process.env.SMOKE_CHARACTER2 ?? accountFixtureName("Sx", OBSERVER_ACCOUNT);
 const RUN = crypto.randomUUID();
@@ -104,24 +110,55 @@ async function createSessionWithBackoff(client: WrathClient, account: string, ch
   }
 }
 
+const observerBusyHint =
+  " — the observer needs an account nothing else is logged into; set MODULE_ACCOUNT_OBSERVER to a free SMOKE account on the module's allowlist";
+
+// The observer's login, as death-recovery's priest's. POST /session never
+// answers account_in_use — it takes the account over from whatever holds it —
+// so a busy account is caught first by POST /characters, the read-only call
+// that does answer account_in_use (characterNames: one short retry, then a
+// FAIL), and only a free one is logged into.
+async function observerLogin(client: WrathClient, ctx: FixtureContext): Promise<void> {
+  await characterNames(ctx);
+  try {
+    await client.createSession({ account: OBSERVER_ACCOUNT, character: OBSERVER, race: 1, class: 1 });
+  } catch (e) {
+    const code = (e as { code?: string }).code;
+    if (code === "token_in_use" || code === "timeout") {
+      fail(`observer account ${OBSERVER_ACCOUNT} did not come free for the login (${code})${observerBusyHint}`);
+    }
+    if (code === "unknown_account" || code === "account_not_permitted") {
+      fail(`observer account ${OBSERVER_ACCOUNT} is not usable (${code}): it must exist (bun wb accounts ensure ${OBSERVER_ACCOUNT}) and be on worldserver.accounts`);
+    }
+    throw e;
+  }
+}
+
 function fixtureCtx(account: string, character: string, tag: string): FixtureContext {
-  return {
+  const observer = tag === "obs";
+  const ctx: FixtureContext = {
     base: BASE,
     account,
     character,
     token: `smoke-swim-${tag}-${RUN}`,
     log,
-    fail,
+    fail: observer ? (msg: string) => fail(`observer account ${OBSERVER_ACCOUNT}: ${msg}${observerBusyHint}`) : fail,
+    // The observer's account is meant to be free: one short retry, then a
+    // FAIL, since a busy one is a misconfiguration to report, not something
+    // to wait out.
+    ...(observer ? { contendedDeadlineMs: 5_000, contendedRetryMs: 5_000 } : {}),
     createAndLogout: async () => {
       const client = await connect({ baseUrl: BASE, token: `smoke-swim-${tag}-${RUN}-create`, secret: MODULE_SECRET });
       try {
-        await createSessionWithBackoff(client, account, character);
+        if (observer) await observerLogin(client, ctx);
+        else await createSessionWithBackoff(client, account, character);
         await client.logout();
       } finally {
         client.close();
       }
     },
   };
+  return ctx;
 }
 
 async function placeAndLogin(account: string, character: string, tag: string, scenario: ScenarioName): Promise<WrathClient> {
@@ -129,7 +166,8 @@ async function placeAndLogin(account: string, character: string, tag: string, sc
   await ensureFixtureCharacter(ctx);
   await applyScenario(ctx, scenario);
   const client = await connect({ baseUrl: BASE, token: `smoke-swim-${tag}-${RUN}-play`, secret: MODULE_SECRET });
-  await createSessionWithBackoff(client, account, character);
+  if (tag === "obs") await observerLogin(client, ctx);
+  else await createSessionWithBackoff(client, account, character);
   const want = SCENARIOS[scenario].position;
   const deadline = Date.now() + 10_000;
   for (;;) {
