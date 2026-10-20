@@ -7,7 +7,9 @@
  *
  * Deliberately dumb: moves arrive at once, fights are won, loot drops, sleep
  * resolves now. What it pins is the program's decisions and the adapter's
- * bookkeeping, not combat.
+ * bookkeeping, not combat. A test that needs the world to say no hands it
+ * `onMove` or `onKill`, which answer instead of the default when they return
+ * something.
  */
 
 import type { SandboxHost, SnippetResult } from "../../src/sandbox/host";
@@ -54,6 +56,19 @@ export class FakeWorld {
   selfKey: string | undefined;
   pad = "";
   calls: string[] = [];
+  /** Where the corpse lies, while the character is a ghost that has one. */
+  corpse: { x: number; y: number; z: number } | undefined = undefined;
+  /** Answers a move instead of arriving at once, when it returns a result (and moves `self` itself if it should). */
+  onMove: ((to: { x: number; y: number; z: number }) => Record<string, unknown> | undefined) | undefined = undefined;
+  /** Answers a fight instead of winning it, when it returns a result. */
+  onKill: ((u: { guid: string; entry: number }) => Record<string, unknown> | undefined) | undefined = undefined;
+  /**
+   * A turn-in leaves every questgiver's marker reading as before it, so an
+   * accept answers `nothing_on_offer` until `markersCatchUp()`: the SDK's
+   * marker pre-check right after a turn-in, as live runs met it.
+   */
+  staleMarkersAfterTurnIn = false;
+  private markersStale = false;
   /** The carried items and the free slots `state.bag()` answers. */
   bag: { items: { bag: number; slot: number; guid: string; itemId: number; name: string; count: number; quality: number }[]; freeSlots: number } = { items: [], freeSlots: 16 };
   private next = 1000;
@@ -63,6 +78,11 @@ export class FakeWorld {
     units: FakeUnitDef[],
   ) {
     for (const u of units) this.spawn(u);
+  }
+
+  /** The markers the server sent after the turn-in have landed. */
+  markersCatchUp(): void {
+    this.markersStale = false;
   }
 
   spawn(u: FakeUnitDef): Unit {
@@ -159,7 +179,7 @@ export class FakeWorld {
           power: observed({ current: 100, max: 100 }),
           position: w.selfKey === undefined ? undefined : observed({ map: 0, x: w.self.x, y: w.self.y, z: w.self.z }),
           ghost: observed(w.self.ghost),
-          corpse: undefined,
+          corpse: w.self.ghost && w.corpse !== undefined ? observed(w.corpse) : undefined,
         };
       },
       get xp() {
@@ -187,6 +207,11 @@ export class FakeWorld {
       moveTo: async (t: { x?: number; y?: number; z?: number; guid?: string }) => {
         const u = w.byGuid(t);
         const p = u ?? t;
+        const said = w.onMove?.({ x: p.x!, y: p.y!, z: p.z! });
+        if (said !== undefined) {
+          w.calls.push(`moveTo ${Math.round(p.x!)},${Math.round(p.y!)} ${String(said["status"])}`);
+          return { position: { ...w.self }, ...said };
+        }
         w.self.x = p.x!;
         w.self.y = p.y!;
         w.self.z = p.z!;
@@ -195,11 +220,16 @@ export class FakeWorld {
       },
       killTarget: async (t: unknown) => {
         const u = w.byGuid(t)!;
+        const said = w.onKill?.(u);
+        if (said !== undefined) {
+          w.calls.push(`kill ${u.entry} ${u.guid} ${String(said["status"])}`);
+          return { guid: u.guid, swings: 0, healthPct: 100, attacking: false, distance: undefined, detail: "", ...said };
+        }
         u.dead = true;
         w.credit("kill", u.entry, u.entry);
         w.calls.push(`kill ${u.entry}`);
         w.self.xp += 10;
-        return { ok: true, status: "killed" };
+        return { ok: true, status: "killed", guid: u.guid, swings: 3, healthPct: 100, attacking: false, reached: true, distance: 1, detail: "" };
       },
       lootCorpse: async (g: string) => {
         const u = w.byGuid(g)!;
@@ -212,6 +242,10 @@ export class FakeWorld {
       acceptQuestFrom: async (npc: unknown, q: number) => {
         const u = w.byGuid(npc)!;
         const def = w.quests.find((d) => d.id === q);
+        if (w.markersStale) {
+          w.calls.push(`accept ${q} stale`);
+          return { ok: false, status: "nothing_on_offer", questId: q, offered: [], hint: "" };
+        }
         const offered = def !== undefined && def.from.includes(u.entry) && (def.after ?? []).every((a) => w.done.has(a)) && !w.done.has(q);
         w.calls.push(`accept ${q} ${offered ? "ok" : "no"}`);
         if (!offered) return { ok: false, status: "not_offered", questId: q, offered: [] };
@@ -232,6 +266,7 @@ export class FakeWorld {
         w.self.xp += def.xp;
         while (w.self.xp >= w.self.level * 400) w.self.level++;
         w.calls.push(`turnIn ${q}`);
+        if (w.staleMarkersAfterTurnIn) w.markersStale = true;
         return { ok: true, status: "complete", questId: q, xp: def.xp, money: 0 };
       },
       trainerList: async () => ({ ok: true, trainerType: 0, spells: [] }),
@@ -246,7 +281,11 @@ export class FakeWorld {
       castSpell: async () => ({ ok: true }),
       repop: async () => ({ ok: true }),
       reclaimCorpse: async () => ({ ok: true, status: "reclaimed" }),
-      spiritHealerActivate: async () => ({ ok: true }),
+      spiritHealerActivate: async () => {
+        w.self.ghost = false;
+        w.calls.push("spiritHealer");
+        return { ok: true };
+      },
     };
     return {
       sdk,

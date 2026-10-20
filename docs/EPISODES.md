@@ -392,7 +392,7 @@ group.
   entries, quest ids and approximate positions, with no game text. The
   program still finds every NPC and every mob by looking at what is in view,
   and it skips a quest the NPC does not offer. The route's id and version are
-  the run's `model` (`reference/elwynn-human-paladin@1`), so a changed route is
+  the run's `model` (`reference/elwynn-human-paladin@<version>`), so a changed route is
   a new line, never the old one moved.
 - **Shape.** `--episode e90`: the 90-minute clock, `e90`'s watchdogs and its
   tool-call ceiling, `objective: none`, the reference wiki present and unused.
