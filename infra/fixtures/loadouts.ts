@@ -153,7 +153,7 @@ export const LOADOUTS: Readonly<Record<LoadoutId, Loadout>> = {
       { spell: 355, name: "Taunt" },
       { spell: 7386, name: "Sunder Armor" },
     ],
-    keySpells: [71, 355, 7386, 2565, 6572, 6343],
+    keySpells: [71, 355, 7386, 2565, 6572, 8198],
     // Protection 11: Shield Specialization 5, Anticipation 5, Last Stand 1.
     talents: [
       { talentId: 1601, tab: 163, row: 0, col: 1, rank: 5, maxRank: 5, spell: 12727, name: "Shield Specialization" },
