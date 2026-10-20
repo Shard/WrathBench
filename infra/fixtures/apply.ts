@@ -36,6 +36,7 @@ import {
   isScenarioName,
   taxiMask,
   ACHIEVEMENT_FIXTURE_DATE,
+  QUEST_MOBCOUNT_COLUMNS,
   validateScenario,
   type Scenario,
   type ScenarioName,
@@ -61,6 +62,8 @@ export const ACCOUNT_PATTERN = /^(SMOKE\d*|PROBE|PARTY\d)$/;
  * to 3, so a wrong value here is a silent behaviour change, not an error.
  */
 const QUEST_STATUS_INCOMPLETE = 3;
+/** QUEST_STATUS_COMPLETE (QuestDef.h): the objectives are met, the quest is not yet turned in. */
+const QUEST_STATUS_COMPLETE = 1;
 
 /**
  * specMask for an added spell. DESCRIBE character_spell says the column
@@ -250,6 +253,14 @@ export function buildStatements(guid: number, scenario: Scenario): Statement[] {
     statements.push({
       sql: `INSERT IGNORE INTO character_queststatus (guid, quest, status) VALUES (?, ?, ?)`,
       params: [guid, quest, QUEST_STATUS_INCOMPLETE],
+    });
+  }
+
+  for (const c of scenario.quests?.counted ?? []) {
+    const mobcount = Array.from({ length: QUEST_MOBCOUNT_COLUMNS }, (_, i) => c.mobcount[i] ?? 0);
+    statements.push({
+      sql: `REPLACE INTO character_queststatus (guid, quest, status, mobcount1, mobcount2, mobcount3, mobcount4) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      params: [guid, c.quest, c.complete ? QUEST_STATUS_COMPLETE : QUEST_STATUS_INCOMPLETE, ...mobcount],
     });
   }
 

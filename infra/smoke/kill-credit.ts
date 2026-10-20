@@ -1,36 +1,44 @@
 /**
- * A deploy smoke: combat, kill credit and loot, with exactly ONE kill. It is
- * one of the release's `preflight.deploySmokes` (on SMOKE2), run in the deploy
- * window beside quest-accept-status.ts and module-quest.ts (the full arc:
- * eight kills to objective completion and the kill quest's own turn-in). The
- * per-tick gate runs only infra/smoke/preflight.ts.
+ * A deploy smoke: combat, kill credit, kill-objective completion and loot,
+ * with exactly ONE kill. It is one of the release's `preflight.deploySmokes`
+ * (on SMOKE2), run in the deploy window beside quest-accept-status.ts and
+ * module-quest.ts (the kill quest's turn-in). The per-tick gate runs only
+ * infra/smoke/preflight.ts.
  *
  * Starts from a fixture. A persistent character (default
  * `Smokekc` on MODULE_ACCOUNT, never deleted) is placed by
- * `infra/fixtures/apply.ts --scenario vineyard-kill-credit`: level 1, no
+ * `infra/fixtures/apply.ts --scenario vineyard-last-kill`: level 1, no
  * money, logged out at the near edge of the Northshire vineyard, with
  * "A Threat Within" (783) already rewarded and "Kobold Camp Cleanup" (7) in
- * the log. That is what this smoke used to *play* — accept 783 at the spawn,
+ * the log at 7 of its 8 Kobold Vermin. The one kill is therefore the last
+ * one: it carries the credit from the persisted count to 8/8 and the core
+ * marks the objective complete, which module-quest.ts used to prove by
+ * playing all eight fights (four to five minutes of a deploy window).
+ *
+ * The fixture replaced a played prologue too: accept 783 at the spawn,
  * walk to Marshal McBride, turn it in, take 7 — and it was ~35s of a ~50s
  * run, since 7 is gated on 783. Those claims did not disappear with it: the
  * whole accept / questgiver-status / turn-in / chain-offer surface is proven
- * every tick by quest-accept-status.ts on a parallel account, so the gate
- * loses nothing while this script gets to the fight in seconds.
+ * in the same deploy window by quest-accept-status.ts on another account, so
+ * the window loses nothing while this script gets to the fight in seconds.
  *
  * Raw HTTP/WS only (no SDK). Arc:
  *   0. enumerate the account (POST /characters); if `Smokekc` is missing,
  *      create it through the module (Human Paladin) and log straight out;
- *   1. apply the `vineyard-kill-credit` scenario to the logged-out character;
- *   2. login; assert the fixture landed — within 15y of the vineyard edge and
- *      quest 7 in the served quest log; then empty the backpack of what
+ *   1. apply the `vineyard-last-kill` scenario to the logged-out character;
+ *   2. login; assert the fixture landed — within 15y of the vineyard edge,
+ *      quest 7 in the served quest log with its first counter at 7 and its
+ *      State not yet complete; then empty the backpack of what
  *      previous runs looted into it, through CMSG_DESTROYITEM —
  *      best effort, reported, never asserted;
  *   3. engage the nearest Kobold Vermin: set_target -> face -> attack_start ->
  *      the SMSG_ATTACKERSTATEUPDATE stream -> the kobold's health reaches 0 ->
- *      SMSG_QUESTUPDATE_ADD_KILL { questId 7, entry 6, current 1 }, a
- *      fromKill SMSG_LOG_XPGAIN, and the SMSG_PARTYKILLLOG kill record naming
- *      this character as the killer (ungrouped, the core sends it to the
- *      killer alone);
+ *      SMSG_QUESTUPDATE_ADD_KILL { questId 7, entry 6, current 8, required 8 },
+ *      the quest-log slot's State reading complete (bit 1: the core sends no
+ *      SMSG_QUESTUPDATE_COMPLETE for a kill objective, so this field is how a
+ *      client learns it), a fromKill SMSG_LOG_XPGAIN, and the
+ *      SMSG_PARTYKILLLOG kill record naming this character as the killer
+ *      (ungrouped, the core sends it to the killer alone);
  *   4. loot_all the corpse -> SMSG_LOOT_RESPONSE -> SMSG_LOOT_RELEASE_RESPONSE;
  *   5. DELETE /session. The character is the fixture: it is never deleted, and
  *      `apply.ts` rewrites its rows (quest log included, `clearQuests`) at the
@@ -79,13 +87,16 @@ const CHARACTER = (() => {
   const i = process.argv.indexOf("--character");
   return i >= 0 ? (process.argv[i + 1] ?? "Smokekc") : "Smokekc";
 })();
-const SCENARIO = "vineyard-kill-credit";
+const SCENARIO = "vineyard-last-kill";
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 
 const QUEST_KILL = 7; // Kobold Camp Cleanup (kill 8 Kobold Vermin, entry 6)
 const ENTRY_VERMIN = 6;
+const KILLS_REQUIRED = 8;
+/** What the fixture stands the count at: the one kill here is the last. */
+const KILLS_PLACED = 7;
 
-// The vineyard's near edge, module-quest.ts's proven target and now the
+// The vineyard's near edge, the target the old full arc walked to and now the
 // fixture's spawn point (infra/fixtures/scenarios.ts): the closest Kobold
 // Vermin spawns to the abbey (creature rows at x -8783..-8795, y -134..-171)
 // are within view from here.
@@ -156,6 +167,8 @@ type Vec = { x: number; y: number; z: number };
 const units = new Map<string, { entry?: number; pos?: Vec; health?: number; dead?: boolean }>();
 const self = { guid: "", health: 0, maxHealth: 0, pos: { x: 0, y: 0, z: 0 } as Vec };
 const questLog = new Map<number, number>(); // slot -> questId
+const questState = new Map<number, number>(); // slot -> state (bit 1 = objectives complete)
+const questCountsLo = new Map<number, number>(); // slot -> counters 0 and 1, 16 bits each
 // `invSlot<n>Lo/Hi` off our own update blocks: the two u32 halves of the item
 // guid carried in inventory slot n (equipment 0-18, worn bags 19-22, backpack
 // 23-38). A zero pair is an empty slot, and a slot cleared while we watch
@@ -196,6 +209,10 @@ function trackEvent(e: any) {
         for (const [k, v] of Object.entries(o.fields)) {
           const m = /^quest(\d+)Id$/.exec(k);
           if (m) questLog.set(+m[1]!, v as number);
+          const ms = /^quest(\d+)State$/.exec(k);
+          if (ms) questState.set(+ms[1]!, v as number);
+          const mc = /^quest(\d+)CountsLo$/.exec(k);
+          if (mc) questCountsLo.set(+mc[1]!, v as number);
           const inv = /^invSlot(\d+)(Lo|Hi)$/.exec(k);
           if (inv) {
             const slot = +inv[1]!;
@@ -248,13 +265,18 @@ async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: strin
 
 const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
 
-async function waitForQuestInLog(questId: number, what: string): Promise<void> {
+async function waitForQuestInLog(questId: number, what: string): Promise<number> {
   const deadline = Date.now() + REPLY_TIMEOUT_MS;
-  while (![...questLog.values()].includes(questId)) {
+  for (;;) {
+    for (const [slot, id] of questLog) if (id === questId) return slot;
     if (Date.now() > deadline) fail(`quest log never showed ${what} (${questId}); log=${JSON.stringify([...questLog])}`);
     await Bun.sleep(100);
   }
 }
+
+/** A quest-log slot's first objective counter: the low 16 bits of its CountsLo field. */
+const killCounter = (slot: number) => (questCountsLo.get(slot) ?? 0) & 0xffff;
+const slotComplete = (slot: number) => ((questState.get(slot) ?? 0) & 1) === 1;
 
 function findUnitByEntry(entry: number): { guid: string; pos?: Vec } | undefined {
   for (const [guid, u] of units) if (u.entry === entry && !u.dead) return { guid, pos: u.pos };
@@ -350,16 +372,26 @@ const fixtureCtx: FixtureContext = {
 
 /**
  * The fixture's postcondition, checked in world rather than trusted: the
- * character stands at the vineyard edge and the served quest log holds 7.
- * Both arrive with the login handshake, so give them a moment. A stale row or
- * a scenario that silently did nothing must read as "the fixture did not
- * land", not as the ambiguous "never saw a Kobold Vermin" 10s later.
+ * character stands at the vineyard edge and the served quest log holds 7 at
+ * 7 kills, not complete. All of it arrives with the login handshake, so give
+ * it a moment. A stale row or a scenario that silently did nothing must read
+ * as "the fixture did not land", not as the ambiguous "never saw a Kobold
+ * Vermin" 10s later or a kill credit that lands at the wrong count.
  */
-async function assertFixtureStart(): Promise<void> {
+async function assertFixtureStart(): Promise<number> {
   const d = dist2d(self.pos, VINEYARD_EDGE);
   if (d > 15) fail(`fixture start: at (${self.pos.x.toFixed(0)}, ${self.pos.y.toFixed(0)}), ${d.toFixed(0)}y from the vineyard edge — did apply.ts write ${CHARACTER}?`);
-  await waitForQuestInLog(QUEST_KILL, "the kill quest the fixture placed");
-  log(`fixture start ok: ${d.toFixed(1)}y from the vineyard edge, quest ${QUEST_KILL} in the log`);
+  const slot = await waitForQuestInLog(QUEST_KILL, "the kill quest the fixture placed");
+  const deadline = Date.now() + REPLY_TIMEOUT_MS;
+  while (killCounter(slot) !== KILLS_PLACED && Date.now() < deadline) await Bun.sleep(100);
+  if (killCounter(slot) !== KILLS_PLACED || slotComplete(slot)) {
+    fail(
+      `fixture start: quest ${QUEST_KILL} in slot ${slot} reads ${killCounter(slot)} kills, state ${questState.get(slot) ?? 0}; ` +
+        `the fixture writes ${KILLS_PLACED} and incomplete — did apply.ts write ${CHARACTER}'s mobcount1?`,
+    );
+  }
+  log(`fixture start ok: ${d.toFixed(1)}y from the vineyard edge, quest ${QUEST_KILL} in slot ${slot} at ${KILLS_PLACED}/${KILLS_REQUIRED}`);
+  return slot;
 }
 
 /**
@@ -469,7 +501,7 @@ async function main() {
   const verify = await waitFor((e) => e.opcode === "SMSG_LOGIN_VERIFY_WORLD", 5000, "login verify");
   self.pos = { x: verify.data.x, y: verify.data.y, z: verify.data.z };
   await waitFor((e) => e.opcode === "SMSG_UPDATE_OBJECT" && e.data?.objects?.some((o: any) => o.self), 10000, "self create");
-  await assertFixtureStart();
+  const questSlot = await assertFixtureStart();
 
   // 2b. Empty the backpack of what previous runs looted into it, before the
   //     run adds to it. Best effort: reported, never
@@ -528,9 +560,18 @@ async function main() {
     "SMSG_QUESTUPDATE_ADD_KILL for the kill",
     fightStart,
   );
-  if (addKill.data.entry !== ENTRY_VERMIN || addKill.data.current !== 1 || addKill.data.required !== 8) {
-    fail(`kill credit malformed: ${JSON.stringify(addKill.data)}`);
+  if (addKill.data.entry !== ENTRY_VERMIN || addKill.data.current !== KILLS_REQUIRED || addKill.data.required !== KILLS_REQUIRED) {
+    fail(`kill credit malformed: ${JSON.stringify(addKill.data)} (expected entry ${ENTRY_VERMIN}, ${KILLS_PLACED} + 1 = ${KILLS_REQUIRED} of ${KILLS_REQUIRED})`);
   }
+  // The last kill completes the objective: the core sets the slot's State bit
+  // (Player::CompleteQuest), and the counter on the field agrees with the packet.
+  {
+    const deadline = Date.now() + REPLY_TIMEOUT_MS;
+    while (!(slotComplete(questSlot) && killCounter(questSlot) === KILLS_REQUIRED) && Date.now() < deadline) await Bun.sleep(100);
+    if (!slotComplete(questSlot)) fail(`quest ${QUEST_KILL} in slot ${questSlot} never read complete after the last kill; state=${questState.get(questSlot) ?? 0}`);
+    if (killCounter(questSlot) !== KILLS_REQUIRED) fail(`quest ${QUEST_KILL}'s served counter reads ${killCounter(questSlot)} after the last kill, expected ${KILLS_REQUIRED}`);
+  }
+  log(`objective complete: quest ${QUEST_KILL} slot ${questSlot} state=${questState.get(questSlot)} counter=${killCounter(questSlot)}/${KILLS_REQUIRED}`);
   const xpGain = await waitFor((e) => e.opcode === "SMSG_LOG_XPGAIN" && e.data?.fromKill === true, REPLY_TIMEOUT_MS, "fromKill SMSG_LOG_XPGAIN", fightStart);
   log(`kill credit: ${JSON.stringify(addKill.data)}; XPGAIN=${JSON.stringify(xpGain.data)}`);
   // The kill record (Unit::Kill): with no group the core sends it to the
@@ -592,7 +633,7 @@ async function main() {
 
   const secs = (Date.now() - startedAt) / 1000;
   log(`stats: ${events.length} events in ${secs.toFixed(1)}s`);
-  log("PASS: vineyard fixture -> one kobold — attack stream -> kill credit and kill record -> loot round trip -> logout");
+  log("PASS: vineyard fixture at 7/8 -> one kobold — attack stream -> kill credit 8/8 and objective complete -> kill record -> loot round trip -> logout");
   process.exit(0);
 }
 

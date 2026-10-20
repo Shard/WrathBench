@@ -111,7 +111,7 @@ export interface JobSpawn {
  * default `account`".
  *
  * `deploySmokes` are the release's smokes on top of the gate (the game
- * surface and the module-quest.ts full arc, minutes long): run by the deploy
+ * surface: combat, quests, loot, vendors, seconds each): run by the deploy
  * window (infra/k8s-deploy.sh) once per deploy,
  * never by the supervisor. It is config here so the deploy scripts and the
  * supervisor read the same store and the same accounts clash-check.

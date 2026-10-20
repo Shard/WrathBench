@@ -108,6 +108,12 @@ describe("scenarios", () => {
     expect(() => validateScenario({ ...ok, position: { ...ok.position, o: 7 } })).toThrow(/position.o/);
     expect(() => validateScenario({ ...ok, spells: [0] })).toThrow(/spells/);
     expect(() => validateScenario({ ...ok, quests: { rewarded: [-3] } })).toThrow(/rewarded/);
+    expect(() => validateScenario({ ...ok, quests: { counted: [{ quest: 7, mobcount: [] }] } })).toThrow(/mobcount/);
+    expect(() => validateScenario({ ...ok, quests: { counted: [{ quest: 7, mobcount: [1, 2, 3, 4, 5] }] } })).toThrow(/mobcount/);
+    expect(() => validateScenario({ ...ok, quests: { counted: [{ quest: 7, mobcount: [-1] }] } })).toThrow(/mobcount/);
+    expect(() => validateScenario({ ...ok, quests: { counted: [{ quest: 0, mobcount: [1] }] } })).toThrow(/counted/);
+    expect(() => validateScenario({ ...ok, quests: { inProgress: [7], counted: [{ quest: 7, mobcount: [1] }] } })).toThrow(/also in/);
+    expect(() => validateScenario({ ...ok, quests: { counted: [{ quest: 7, mobcount: [1] }, { quest: 7, mobcount: [2] }] } })).toThrow(/repeat/);
   });
 });
 
@@ -177,6 +183,37 @@ describe("buildStatements", () => {
     expect(del).toBeGreaterThanOrEqual(0);
     expect(rendered).toContain("DELETE FROM character_queststatus_rewarded WHERE guid = 217");
     expect(del).toBeLessThan(ins);
+  });
+
+  test("a counted quest is written whole: status, then all four mobcounts", () => {
+    const rendered = buildStatements(217, {
+      ...scenario,
+      clearQuests: true,
+      quests: { rewarded: [783], counted: [{ quest: 7, mobcount: [7] }, { quest: 8, mobcount: [8, 2], complete: true }] },
+    }).map(renderStatement);
+    // 3 is QUEST_STATUS_INCOMPLETE, 1 is COMPLETE (QuestDef.h); the missing counts are 0.
+    expect(rendered).toContain(
+      "REPLACE INTO character_queststatus (guid, quest, status, mobcount1, mobcount2, mobcount3, mobcount4) VALUES (217, 7, 3, 7, 0, 0, 0)",
+    );
+    expect(rendered).toContain(
+      "REPLACE INTO character_queststatus (guid, quest, status, mobcount1, mobcount2, mobcount3, mobcount4) VALUES (217, 8, 1, 8, 2, 0, 0)",
+    );
+    // After the wipe, or the wipe would take the counts with it.
+    const del = rendered.findIndex((s) => s.startsWith("DELETE FROM character_queststatus WHERE"));
+    const rep = rendered.findIndex((s) => s.startsWith("REPLACE INTO character_queststatus "));
+    expect(del).toBeLessThan(rep);
+  });
+
+  test("the deploy smokes' scenarios stand quest 7 at 7/8 and at 8/8 complete", () => {
+    const lastKill = buildStatements(217, SCENARIOS["vineyard-last-kill"]).map(renderStatement);
+    expect(lastKill).toContain(
+      "REPLACE INTO character_queststatus (guid, quest, status, mobcount1, mobcount2, mobcount3, mobcount4) VALUES (217, 7, 3, 7, 0, 0, 0)",
+    );
+    const done = buildStatements(217, SCENARIOS["mcbride-kill-quest-done"]).map(renderStatement);
+    expect(done).toContain(
+      "REPLACE INTO character_queststatus (guid, quest, status, mobcount1, mobcount2, mobcount3, mobcount4) VALUES (217, 7, 1, 8, 0, 0, 0)",
+    );
+    for (const r of [lastKill, done]) expect(r).toContain("INSERT IGNORE INTO character_queststatus_rewarded (guid, quest, active) VALUES (217, 783, 1)");
   });
 
   test("rejects an invalid scenario before building anything", () => {

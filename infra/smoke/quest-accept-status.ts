@@ -1,8 +1,9 @@
 /**
  * A deploy smoke: the quest-accept / questgiver-status / turn-in surface,
  * with no combat. It is one of the release's `preflight.deploySmokes` (on
- * SMOKE), run in the deploy window beside kill-credit.ts and module-quest.ts
- * (the full arc). The per-tick gate runs only infra/smoke/preflight.ts.
+ * SMOKE), run in the deploy window beside kill-credit.ts (one kill, the kill
+ * objective completing) and module-quest.ts (the kill quest's turn-in). The
+ * per-tick gate runs only infra/smoke/preflight.ts.
  *
  * Raw HTTP/WS only (no SDK). Arc — fresh Human Paladin in Northshire, which
  * spawns beside Deputy Willem:
@@ -322,7 +323,7 @@ async function main() {
   // A talk quest has no objectives, so the core marks it complete on accept:
   // the served State field for its slot carries bit 1. This is the same
   // completion signal the kill arc reads (the core does not send
-  // SMSG_QUESTUPDATE_COMPLETE for kill or talk objectives; see module-quest.ts).
+  // SMSG_QUESTUPDATE_COMPLETE for kill or talk objectives; see kill-credit.ts).
   {
     const deadline = Date.now() + REPLY_TIMEOUT_MS;
     while (((questState.get(introSlot) ?? 0) & 1) === 0) {

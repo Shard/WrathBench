@@ -8,7 +8,7 @@
  * back 400 unsupported_action). Run it only after the image is deployed.
  *
  * Arc: fresh Human Paladin in Northshire -> walk into Northshire Abbey (the
- * waypoint module-quest.ts already proves) -> find a class trainer purely from
+ * waypoint quest-accept-status.ts already proves) -> find a class trainer purely from
  * served events (creature-query name/subname) -> walk to it (the handler needs
  * INTERACTION_DISTANCE, not update range) -> `trainer_list` -> assert the
  * decoded spell list parses -> buy the cheapest spell and assert an outcome
@@ -52,7 +52,7 @@ const CHARACTER = probeName("Bt");
 // RUNNER account (one live session per account).
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 
-// Inside Northshire Abbey, the waypoint module-quest.ts walks to for Marshal
+// Inside Northshire Abbey, the waypoint quest-accept-status.ts walks to for Marshal
 // McBride. The abbey trainers come into update range from here; the probe then
 // walks the last few yards to whichever one it picks.
 const ABBEY = { x: -8902.6, y: -162.6, z: 82.0 };
