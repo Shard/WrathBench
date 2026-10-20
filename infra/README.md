@@ -194,12 +194,13 @@ from the Northshire spawn.
 scenarios live in `infra/fixtures/scenarios.ts`, and adding one is a data edit
 in that file.
 
-The deploy smokes use fixtures too: `kill-credit.ts` starts from
-`vineyard-kill-credit` instead of playing the 783 turn-in that gates the kill
-quest. The `fleet` service carries the same `WRATHBENCH_DB_*` env as
-`fixtures`, for a gate smoke that would start from one (the gate runs only
-`preflight.ts` today, which stages nothing) — and so does `runner`, where the
-deploy window and the operator exec the smokes, so
+The regression suite's smokes (`bun wb smoke suite`) use fixtures too:
+`kill-credit.ts` starts from `vineyard-last-kill` instead of playing the 783
+turn-in that gates the kill quest and seven of its eight kills, and
+`module-quest.ts` from `mcbride-kill-quest-done`. The `fleet` service carries
+the same `WRATHBENCH_DB_*` env as `fixtures`, for a gate smoke that would start
+from one (the gate runs only `preflight.ts` today, which stages nothing) — and
+so does `runner`, where the operator execs the smokes, so
 
     docker compose -f infra/compose.yml exec runner bun infra/smoke/kill-credit.ts
 

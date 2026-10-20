@@ -1,8 +1,8 @@
 /**
- * A deploy smoke: the kill quest's own turn-in. It is one of the release's
- * `preflight.deploySmokes` (on SMOKE), run in the deploy window after
- * kill-credit.ts and quest-accept-status.ts. The per-tick gate runs only
- * infra/smoke/preflight.ts.
+ * A regression smoke: the kill quest's own turn-in. It is a member of
+ * the on-demand regression suite (`bun wb smoke suite`, infra/smoke/lib/suite.ts) on SMOKE4,
+ * beside kill-credit.ts and quest-accept-status.ts. Neither the deploy window
+ * nor the supervisor runs it: both verify with infra/smoke/preflight.ts alone.
  *
  * This used to be the full arc on a fresh character: accept 783 from Deputy
  * Willem, turn it in to Marshal McBride, take Kobold Camp Cleanup (7), fight
@@ -12,7 +12,7 @@
  * logged-out character for 60s and ignores a delete in that window, and the
  * module answers each ignored delete after its 20s wait), and the rest eight
  * sequential level-1 fights and four walks. Every claim it made is still
- * proven in the same window, each by the cheapest smoke that can:
+ * proven in the same suite, each by the cheapest smoke that can:
  *   - the 783 accept / gossip / turn-in, quest 7 landing in the log, the
  *     vendor list, a fresh character's create and the CMSG_CHAR_DELETE path:
  *     quest-accept-status.ts;
@@ -20,11 +20,11 @@
  *     objective completing (8/8 and the slot's State bit): kill-credit.ts,
  *     whose fixture stands the count at 7 so its one kill is the last;
  *   - the kill quest's turn-in, with its reward, XP and level-up: here.
- * What no deploy smoke plays any more is eight fights in a row. The old arc
+ * What no smoke in the suite plays any more is eight fights in a row. The old arc
  * is in git history (this file before the change) for a by-hand run.
  *
  * Starts from a fixture. A persistent character (`Mq` + the account's
- * letters, `Mqsmoke` on SMOKE, never deleted) is placed by
+ * letters, `Mqsmokee` on SMOKE4, never deleted) is placed by
  * `infra/fixtures/apply.ts --scenario mcbride-kill-quest-done`: level 1 at
  * 300 of 400 xp, logged out in front of Marshal McBride, with 783 rewarded and
  * quest 7 complete at 8/8. Raw HTTP/WS only (no SDK). Arc:
@@ -42,9 +42,8 @@
  *   5. DELETE /session. The character is the fixture: the next run's
  *      apply.ts rewrites its level, xp, position and quest log.
  *
- * Every wait is a reply wait, bounded at 3s; nothing walks. In the window it
- * follows quest-accept-status.ts on the same account by about a second, so
- * POST /characters waits out a contended account in 1s steps for at most 10s.
+ * Every wait is a reply wait, bounded at 3s; nothing walks. POST /characters
+ * waits out a contended account in 1s steps for at most 10s.
  *
  * Run:
  *   bun wb smoke module-quest [--character Mqprobe]
@@ -224,10 +223,10 @@ async function endSession(): Promise<void> {
 }
 
 /**
- * The fixture boot, shared with kill-credit.ts and travel.ts. A deploy
- * smoke's budgets: nothing else should hold the account in a deploy window,
- * but quest-accept-status.ts logged out of it a second ago, so a contended
- * account is retried every second for ten.
+ * The fixture boot, shared with kill-credit.ts and travel.ts. Nothing else
+ * should hold the suite's account, but a by-hand run can follow another smoke
+ * on it within a second, so a contended account is retried every second for
+ * ten.
  */
 const fixtureCtx: FixtureContext = {
   base: BASE,

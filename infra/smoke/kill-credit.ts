@@ -1,9 +1,9 @@
 /**
- * A deploy smoke: combat, kill credit, kill-objective completion and loot,
- * with exactly ONE kill. It is one of the release's `preflight.deploySmokes`
- * (on SMOKE2), run in the deploy window beside quest-accept-status.ts and
- * module-quest.ts (the kill quest's turn-in). The per-tick gate runs only
- * infra/smoke/preflight.ts.
+ * A regression smoke: combat, kill credit, kill-objective completion and loot,
+ * with exactly ONE kill. It is a member of the on-demand regression suite (`bun wb smoke suite`, infra/smoke/lib/suite.ts)
+ * on SMOKE2, beside quest-accept-status.ts and module-quest.ts (the kill
+ * quest's turn-in). Neither the deploy window nor the supervisor runs it:
+ * both verify with infra/smoke/preflight.ts alone.
  *
  * Starts from a fixture. A persistent character (default
  * `Smokekc` on MODULE_ACCOUNT, never deleted) is placed by
@@ -13,14 +13,14 @@
  * the log at 7 of its 8 Kobold Vermin. The one kill is therefore the last
  * one: it carries the credit from the persisted count to 8/8 and the core
  * marks the objective complete, which module-quest.ts used to prove by
- * playing all eight fights (four to five minutes of a deploy window).
+ * playing all eight fights (four to five minutes).
  *
  * The fixture replaced a played prologue too: accept 783 at the spawn,
  * walk to Marshal McBride, turn it in, take 7 — and it was ~35s of a ~50s
  * run, since 7 is gated on 783. Those claims did not disappear with it: the
  * whole accept / questgiver-status / turn-in / chain-offer surface is proven
- * in the same deploy window by quest-accept-status.ts on another account, so
- * the window loses nothing while this script gets to the fight in seconds.
+ * in the same suite by quest-accept-status.ts on another account, so the
+ * suite loses nothing while this script gets to the fight in seconds.
  *
  * Raw HTTP/WS only (no SDK). Arc:
  *   0. enumerate the account (POST /characters); if `Smokekc` is missing,
@@ -51,12 +51,11 @@
  *
  * Fail fast, never "pick another": the one fight has a hard cap of 1.5x the
  * longest fight observed (25.9s, 2026-08-23 logs), a death is a failure, and
- * so is a kobold that never comes into view. A deploy window waits on every
- * deploy smoke in turn, so a slow failure is the expensive kind. For the same
+ * so is a kobold that never comes into view. A slow failure is the expensive
+ * kind: the suite waits on its slowest member. For the same
  * reason the contended-account wait on POST /characters is ten seconds here,
  * not the twenty minutes travel.ts allows itself: that wait, apply.ts's online
- * poll and the arc are sequential, and they share the deploy smokes'
- * `preflight.deployTimeoutMs` with the others.
+ * poll and the arc are sequential.
  *
  * Run. The DB env the fixture tool needs is on the runner itself (the chart's
  * dbEnv, compose.yml's *wb-db anchor), so by hand nothing is added:
@@ -64,7 +63,7 @@
  *   bun wb smoke kill-credit [--character Smokekc]
  *   bun wb --local smoke kill-credit [--character Smokekc]   # the quickstart
  *
- * The deploy window runs it as SMOKE2 (MODULE_ACCOUNT=SMOKE2); by hand it
+ * The suite runs it as SMOKE2 (MODULE_ACCOUNT=SMOKE2), where `Smokekc` lives; by hand it
  * logs in as PROBE. Another account is MODULE_ACCOUNT in the runner's
  * environment, which `bun wb` does not carry: `kubectl -n wrathbench exec
  * deploy/wrathbench-runner -- env MODULE_ACCOUNT=SMOKE2 bun
@@ -345,12 +344,11 @@ async function endSession(): Promise<void> {
 }
 
 /**
- * The fixture boot, shared with travel.ts. Budgets are a deploy smoke's, not
+ * The fixture boot, shared with travel.ts. Budgets are a suite member's, not
  * a long probe's: a contended account is waited out for 10s in 5s steps and
  * then the run fails, because nothing else should hold the account in a
  * deploy window — and because the three waits are sequential: 10s here +
- * apply.ts's 90s online poll + a ~23s arc is ~123s of the deploy smokes'
- * shared `preflight.deployTimeoutMs`. The backpack clear (step 2b) is inside
+ * apply.ts's 90s online poll + a ~23s arc is ~123s at worst. The backpack clear (step 2b) is inside
  * that arc and costs at most ~3s of waiting — a 1.5s join settle and a 1.5s
  * destroy settle, both usually instant — so any new wait added here has to be
  * paid for out of the same budget.
