@@ -137,10 +137,35 @@ export type TraceSheetDelta = {
   qdone?: number[];
 } & { [K in TraceSheetListKey]?: number[][] | null };
 
+/**
+ * Where a chat line went, by the server's own chat type: `say` (1), `party`
+ * (2, and 51 from the leader), `raid` (3, 39, 40), `yell` (6), `whisper`
+ * (9, the sender's copy of a whisper it sent) and `emote` (10, `/e`).
+ */
+export type TraceChatKind = "say" | "party" | "raid" | "yell" | "whisper" | "emote";
+export const TRACE_CHAT_KINDS: readonly TraceChatKind[] = ["say", "party", "raid", "yell", "whisper", "emote"];
+
+/** The longest chat line the trace keeps, in characters: the client's own input limit. */
+export const TRACE_CHAT_MAX_CHARS = 255;
+
+/** One line the character said: its kind and its text. Never a recipient, a guid or a name. */
+export type TraceChat = [kind: TraceChatKind, text: string];
+
+/**
+ * What a 'state' row carries of the character's own chat: the lines the
+ * server echoed back as said by it (`SMSG_MESSAGECHAT` from its own guid, or
+ * the sender's copy of a whisper), so a line the server dropped is not here.
+ * An event like `qdone`: in no 'key' row and no fold, and two identical lines
+ * are two lines. The text is the model's own, as written.
+ */
+export interface TraceChatDelta {
+  chat?: TraceChat[];
+}
+
 /** A 'key' row's data: the whole unit state and the whole sheet. */
 export type TraceKeyData = TraceState & TraceSheet;
-/** A 'state' row's data: the unit keys that changed, and the sheet's patches. */
-export type TraceStateDelta = Partial<TraceState> & TraceSheetDelta;
+/** A 'state' row's data: the unit keys that changed, the sheet's patches, and the lines said. */
+export type TraceStateDelta = Partial<TraceState> & TraceSheetDelta & TraceChatDelta;
 
 /**
  * A quest's required counts, as its template states them: the four
@@ -188,8 +213,9 @@ export interface TracePoint {
  * `{ jump: 1 }` when the character did not travel there continuously
  * (teleport, new world, login, reattach, hearth, graveyard, dungeon port) and
  * otherwise absent — a reader never interpolates into a jump; 'state' a
- * partial `TraceState` holding only the keys that changed, and the sheet's
- * patches (`TraceSheetDelta`); 'flight' a `TraceFlight`.
+ * partial `TraceState` holding only the keys that changed, the sheet's
+ * patches (`TraceSheetDelta`) and the lines said (`TraceChatDelta`); 'flight'
+ * a `TraceFlight`.
  */
 export interface TraceRow {
   ts: number;

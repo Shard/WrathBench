@@ -47,6 +47,14 @@
  * counts each quest needs. The unit-state readers (`stateAt`) never see the
  * sheet; `sheetAt` folds it.
  *
+ * **Chat** rides the event list too: `[ms, "chat", [kind, text]]`, one per
+ * line the character said (`TraceChat`: say, party, raid, yell, whisper or
+ * emote, and the model's own text, at most `CHAT_MAX_CHARS`). Like `qdone`
+ * it is an event and never state: in no keyframe, never compared, every line
+ * kept. It was added after the first segments were published, under the rule
+ * below, so a window that closed before it says nothing, which reads as no
+ * line said.
+ *
  * **Versioning.** A decoder ignores keys it does not know and skips events of
  * kinds it does not know, so a field or an event kind is added without a bump;
  * `v` moves only when a meaning changes, and a v1 decoder refuses anything else.
@@ -65,6 +73,8 @@
 import type {
   TraceAura,
   TraceCast,
+  TraceChat,
+  TraceChatKind,
   TraceEventWire,
   TraceItemName,
   TraceKeyframe,
@@ -79,6 +89,8 @@ import type {
 export type {
   TraceAura,
   TraceCast,
+  TraceChat,
+  TraceChatKind,
   TraceEventWire,
   TraceItemName,
   TraceKeyframe,
@@ -437,6 +449,28 @@ export function sheetPatch(a: readonly (readonly number[])[] | null, b: readonly
   return out.length === 0 ? undefined : sortRows(out);
 }
 
+/* ---------------------------------------------------------------- chat --- */
+
+/** The event kind that carries a line the character said, and is never state. */
+export const CHAT = "chat";
+/** The longest line a segment carries, in characters: the client's own input limit. */
+export const CHAT_MAX_CHARS = 255;
+export const CHAT_KINDS: readonly TraceChatKind[] = ["say", "party", "raid", "yell", "whisper", "emote"];
+
+/** One chat line rebuilt fresh, or `undefined` when `v` is not one: a known kind and a non-empty string. */
+export function chatOf(v: unknown): TraceChat | undefined {
+  if (!Array.isArray(v) || typeof v[1] !== "string" || v[1].length === 0) return undefined;
+  const kind = v[0] as TraceChatKind;
+  return CHAT_KINDS.includes(kind) ? [kind, v[1].slice(0, CHAT_MAX_CHARS)] : undefined;
+}
+
+/** A 'state' row's chat lines, sanitized; empty when it carries none. */
+function chatLines(data: Record<string, unknown> | null): TraceChat[] {
+  const v = data?.[CHAT];
+  if (!Array.isArray(v)) return [];
+  return (v as unknown[]).map(chatOf).filter((c): c is TraceChat => c !== undefined);
+}
+
 /** A turn-in event's ids, or `undefined` when `v` is not a list of them. */
 function qdoneOf(v: unknown): number[] | undefined {
   if (!Array.isArray(v)) return undefined;
@@ -737,11 +771,17 @@ export function encodeSegment(rows: readonly TraceRow[], window: TraceWindow, di
     [prevT, prevMap, prevX, prevY, prevZ, prevO] = [r.ts, p.map, qx, qy, qz, qO];
   }
 
-  // The state changes after the keyframe, and the sheet's.
+  // The state changes after the keyframe, and the sheet's. The lines said
+  // before a keyframe taken from inside the window are not in it, as no
+  // event is, so they lead the list.
   const ev: TraceEventWire[] = [];
   const itemIds = new Set<number>();
   const questIds = new Set<number>();
   refsOf(SHEET_KEYS.map((key) => [key, sheet[key]]), itemIds, questIds);
+  for (const r of inWindow.slice(0, eventsFrom)) {
+    if (r.kind !== "state") continue;
+    for (const c of chatLines(parseData(r.data))) ev.push([int(r.ts - t0), CHAT, c]);
+  }
   for (const r of inWindow.slice(eventsFrom)) {
     if (r.kind !== "state" && r.kind !== "key") continue;
     const data = parseData(r.data);
@@ -765,6 +805,7 @@ export function encodeSegment(rows: readonly TraceRow[], window: TraceWindow, di
     }
     for (const [key, v] of changes) ev.push([ms, key, v]);
     refsOf(changes, itemIds, questIds);
+    if (r.kind === "state") for (const c of chatLines(data)) ev.push([ms, CHAT, c]);
   }
 
   const seg: TraceSegment = { v: TRACE_VERSION, run, t0, t1, q: { p: Q_POS, o: Q_O }, k, dt, x: xs, y: ys, z: zs, o: os, cuts, flights, ev };
@@ -861,6 +902,15 @@ export interface DecodedSegment {
   /** The names and qualities of the items it references, and the counts its quests need, by id. */
   items: ReadonlyMap<number, TraceItemName>;
   qreq: ReadonlyMap<number, TraceQuestReq>;
+  /** The lines the character said, by time. */
+  chat: TraceChatLine[];
+}
+
+/** One line the character said, at epoch ms `t`. */
+export interface TraceChatLine {
+  t: number;
+  kind: TraceChatKind;
+  text: string;
 }
 
 /** One sheet change: a new `money`, a list's patch, or the quest ids turned in. */
@@ -941,8 +991,14 @@ export function decodeSegment(seg: TraceSegment): DecodedSegment {
 
   const events: TraceEvent[] = [];
   const sheetEvents: TraceSheetEvent[] = [];
+  const chat: TraceChatLine[] = [];
   for (const e of Array.isArray(seg.ev) ? seg.ev : []) {
     if (!Array.isArray(e) || !finite(e[0])) continue;
+    if (e[1] === CHAT) {
+      const c = chatOf(e[2]);
+      if (c !== undefined) chat.push({ t: seg.t0 + e[0], kind: c[0], text: c[1] });
+      continue;
+    }
     if (isStateKey(e[1])) {
       const value = SANITIZE[e[1]](e[2]);
       if (value !== undefined) events.push({ t: seg.t0 + e[0], kind: e[1], value } as TraceEvent);
@@ -953,6 +1009,7 @@ export function decodeSegment(seg: TraceSegment): DecodedSegment {
   }
   events.sort((a, b) => a.t - b.t);
   sheetEvents.sort((a, b) => a.t - b.t);
+  chat.sort((a, b) => a.t - b.t);
 
   const items = new Map<number, TraceItemName>();
   for (const [id, v] of Object.entries(isRecord(seg.items) ? seg.items : {})) {
@@ -965,7 +1022,7 @@ export function decodeSegment(seg: TraceSegment): DecodedSegment {
     if (req !== undefined && finite(Number(id))) qreq.set(Number(id), req);
   }
 
-  return { run: seg.run, t0: seg.t0, t1: seg.t1, frames, flights, key: stateOf(seg.k?.s), events, sheet: sheetOf(seg.k?.s), sheetEvents, items, qreq };
+  return { run: seg.run, t0: seg.t0, t1: seg.t1, frames, flights, key: stateOf(seg.k?.s), events, sheet: sheetOf(seg.k?.s), sheetEvents, items, qreq, chat };
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);

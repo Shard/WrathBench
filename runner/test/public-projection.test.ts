@@ -1224,6 +1224,25 @@ describe("projectTraceSegment", () => {
     expect(projectTraceSegment(old)).toEqual(old);
   });
 
+  test("chat passes as kind and text, the model's own words, with a credential's shape masked; a malformed line is dropped", () => {
+    const seg = traceSegmentFixture();
+    const key = `sk-ant-${"b".repeat(30)}`;
+    seg.ev = [
+      [700, "chat", ["party", "pulling the boar"]],
+      [800, "chat", ["whisper", `my key is ${key}, keep it`, POISON.smuggled]],
+      [900, "chat", ["guild", "an unknown kind"]],
+      [950, "chat", { kind: "say", text: "not a tuple" }],
+    ];
+    const out = projectTraceSegment(seg);
+    expect(out.ev).toEqual([
+      [700, "chat", ["party", "pulling the boar"]],
+      [800, "chat", ["whisper", "my key is [redacted], keep it"]],
+    ]);
+    assertClean(JSON.stringify(out));
+    expect(JSON.stringify(out)).not.toContain(key);
+    expect(projectTraceSegment(out)).toEqual(out);
+  });
+
   test("is a fixed point on its own output, as publish-accept's re-projection requires", () => {
     const once = projectTraceSegment(traceSegmentFixture());
     expect(projectTraceSegment(once)).toEqual(once);

@@ -429,7 +429,8 @@ Every episode starts with a freshly created character at level 1 in its starting
 - The trace: the character's own position at observation cadence (about 1 Hz
   while moving), its state on change and its character sheet (money, what is
   worn and carried, the quest log's counters, reputation, skills, turn-ins)
-  as increments, for playback, in the same sqlite (`trace`, with the item
+  as increments, and the lines it said in chat as the server echoed them, for
+  playback, in the same sqlite (`trace`, with the item
   names and quest requirements it references in `trace_dict`) and nowhere
   else. The sandbox child records it off the
   SDK's own cache and event stream (`runner/src/sandbox/trace-recorder.ts`)

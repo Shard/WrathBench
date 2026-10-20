@@ -500,6 +500,57 @@ describe("versioning", () => {
   });
 });
 
+/* ---------------------------------------------------------------- chat --- */
+
+describe("chat", () => {
+  const said = (ts: number, ...lines: [string, string][]): TraceRow => ({ ...state(ts, {}), data: JSON.stringify({ chat: lines }) });
+
+  test("each line the character said is one event, in order, decoded with its kind and text; never in a keyframe", () => {
+    const rows = [
+      key(T0 - 10_000, { hp: 5 }),
+      said(T0 - 5_000, ["say", "before the window: context, not an event"]),
+      said(T0 + 1_000, ["party", "pulling"]),
+      state(T0 + 1_500, { hp: 6 }),
+      said(T0 + 2_000, ["yell", "run"], ["say", "twice"]),
+      said(T0 + 2_000, ["say", "twice"]),
+      said(T0 + 3_000, ["guild", "an unknown kind"], ["say", ""], ["whisper", "x".repeat(300)]),
+    ];
+    const seg = encodeSegment(rows, W);
+    expect(JSON.stringify(seg.k)).not.toContain("chat");
+    expect(seg.ev.filter((e) => e[1] === "chat")).toEqual([
+      [1000, "chat", ["party", "pulling"]],
+      [2000, "chat", ["yell", "run"]],
+      [2000, "chat", ["say", "twice"]],
+      [2000, "chat", ["say", "twice"]],
+      [3000, "chat", ["whisper", "x".repeat(255)]],
+    ]);
+    const back = decodeSegment(seg);
+    expect(back.chat).toEqual([
+      { t: T0 + 1000, kind: "party", text: "pulling" },
+      { t: T0 + 2000, kind: "yell", text: "run" },
+      { t: T0 + 2000, kind: "say", text: "twice" },
+      { t: T0 + 2000, kind: "say", text: "twice" },
+      { t: T0 + 3000, kind: "whisper", text: "x".repeat(255) },
+    ]);
+    // Chat is no state: the unit events and the sheet do not see it.
+    expect(back.events).toEqual([{ t: T0 + 1500, kind: "hp", value: 6 }]);
+    expect(stateAt(back, T0 + 3000).hp).toBe(6);
+  });
+
+  test("a line said before a keyframe taken from inside the window is still an event", () => {
+    const seg = encodeSegment([said(T0 + 500, ["say", "first"]), key(T0 + 1_000, { hp: 5 }), said(T0 + 2_000, ["say", "second"])], W);
+    expect(decodeSegment(seg).chat.map((c) => c.text)).toEqual(["first", "second"]);
+  });
+
+  test("a decoder from before chat skips it, and one with chat reads a segment from before it as silence", () => {
+    const seg = encodeSegment([key(T0, { hp: 5 }), said(T0 + 1_000, ["say", "hi"])], W);
+    expect(decodeSegment({ ...seg, ev: seg.ev.filter((e) => e[1] !== "chat") }).chat).toEqual([]);
+    // Malformed chat values are dropped, never misread.
+    const odd = { ...seg, ev: [[100, "chat", "hi"], [200, "chat", ["say"]], [300, "chat", [7, "x"]], ...seg.ev] } as unknown as TraceSegment;
+    expect(decodeSegment(odd).chat).toEqual([{ t: T0 + 1000, kind: "say", text: "hi" }]);
+  });
+});
+
 /* ---------------------------------------------------------------- size --- */
 
 describe("size", () => {

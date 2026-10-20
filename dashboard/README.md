@@ -172,6 +172,20 @@ reads dead at a corpse), a cast bar, combat, mounted, flying, resting and
 ghost badges, the target's health where it is published, and the buffs row: spell
 icons as Wowhead links (`src/lib/wowhead.ts`), stacks, and the time left.
 
+**Chat bubbles** (`src/lib/chatbubbles.ts`) put what a character said over
+its pip, from the trace's `chat` events at the same playhead
+(`TraceStore.chat`, where each loaded piece answers only for its own stretch,
+so a window seen in the tail and then closed says its lines once). A line is
+up for 30 s of the playhead's time (in a replay, at least 4 s of wall time at
+the speed it plays: `bubbleLifeMs`), the newest three of a character stack,
+and a long one is cut to 80 characters with the whole line in its title. The
+bubbles are DOM over the canvas so the title works: which are up is a signal
+the frame loop writes only when the set changes, and each stack's place is set
+on its element as CSS properties (`--bx`, `--by`, `--lx`, `--lead`) every frame
+the map draws, by `layoutStacks`, which lifts a stack clear of those below it
+and of every character's puck, and keeps a leader down to its pip. What the public site publishes for them is
+`docs/PUBLIC-DASHBOARD.md`, "The trace ships the character's own chat".
+
 **Money and the inventory** in the sidebar come from the trace's character
 sheet at the same playhead as the pip and the unit frame, wherever the trace
 answers for it: live, paused, and in a replay at 60× or slower
