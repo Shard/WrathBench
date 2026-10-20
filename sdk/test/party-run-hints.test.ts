@@ -79,7 +79,7 @@ describe("castSpell: a refusal reaches the harness, named", () => {
     expect(hints).toHaveLength(1);
     expect(hints[0]).toMatchObject({ action: "castSpell", status: "line_of_sight", count: 1 });
     expect(hints[0]!.hint).toBe(
-      `Mending Word (501) on ${creatureName()} failed: line_of_sight (something blocks the line of sight to the target)`,
+      `Mending Word (501) on ${creatureName()}: something blocks the line of sight to the target`,
     );
     client.close();
     await stub.stop();
@@ -105,7 +105,7 @@ describe("castSpell: a refusal reaches the harness, named", () => {
       ["unit_not_infront", 3],
     ]);
     expect(hints[1]!.hint).toContain("Frost Lance (502)");
-    expect(hints[1]!.hint).toContain("unit_not_infront (the target is not in front of you)");
+    expect(hints[1]!.hint).toBe(`Frost Lance (502) on ${creatureName()}: the target is not in front of you`);
     client.close();
     await stub.stop();
   });
@@ -185,7 +185,7 @@ describe("moveToAsync: a verdict that is not an arrival reaches the harness", ()
     const hints = client.drainActionHints();
     expect(hints).toHaveLength(1);
     expect(hints[0]).toMatchObject({ action: "moveToAsync", status: "too_far", point: { x: -500, y: 987, z: 42 } });
-    expect(hints[0]!.hint).toContain("one move (moveTo or moveToAsync alike) covers ~250y from your current position");
+    expect(hints[0]!.hint).toContain("one move (moveTo or moveToAsync alike) covers ~250y. Walk to an intermediate point first.");
     client.close();
     await stub.stop();
   });

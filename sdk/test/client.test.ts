@@ -596,7 +596,7 @@ describe("client: movement", () => {
     expect(tooFar?.count).toBe(3);
     // The last occurrence's hint and point: nearest to where the character is.
     expect(tooFar?.point).toEqual({ x: 12, y: 20, z: 30 });
-    expect(tooFar?.hint).toContain("one move (moveTo or moveToAsync alike) covers ~250y from your current position");
+    expect(tooFar?.hint).toContain("one move (moveTo or moveToAsync alike) covers ~250y");
     expect(drained.find((h) => h.status === "target_off_mesh")?.count).toBe(1);
     // Drained exactly once.
     expect(client.drainActionHints()).toEqual([]);

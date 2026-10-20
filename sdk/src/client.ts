@@ -1007,7 +1007,7 @@ export type MoveResult =
 export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveResultData) => string>> = {
   too_far: (p, d) =>
     `(${fmtXY(p)}) is ${Math.round(Math.hypot(p.x - d.pos.x, p.y - d.pos.y))}y from where you stand, in a straight line; ` +
-    `one move (moveTo or moveToAsync alike) covers ~250y from your current position. Walk to an intermediate point first.`,
+    `one move (moveTo or moveToAsync alike) covers ~250y. Walk to an intermediate point first.`,
   no_mesh: (p) =>
     `no navmesh is loaded under you or under (${fmtXY(p)}); this is a harness data limitation, not a route ` +
     `problem. Nothing to retry here — choose a destination in a mapped area.`,
@@ -1067,12 +1067,6 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
     `stop() ended this move, called from within this run: by your own code, after another moveTo was refused, ` +
     `or at a snippet's time limit.`,
 };
-
-/**
- * The least a resurrect helper waits, past its own budget if need be, for the
- * values update that follows the resurrect marker (`awaitAliveFields`).
- */
-const ALIVE_FIELDS_GRACE_MS = 500;
 
 /** The refusal of a move while dead and not released; nothing is sent. */
 const DEAD_MOVE_HINT =
@@ -2153,7 +2147,9 @@ function castFailedHint(state: StateCache, cast: PendingCast, reason: string): s
     on = ` on ${name ?? cast.targetGuid}`;
   }
   const meaning = CAST_FAILURE_MEANING[reason];
-  return `${label}${on} failed: ${reason}${meaning === undefined ? "" : ` (${meaning})`}`;
+  // The reason itself is the tally line's status (`castSpell <reason>: …`), so
+  // the hint says what it means and names nothing twice.
+  return `${label}${on}: ${meaning ?? "the server refused it"}`;
 }
 
 /** The quest an item's tooltip says it starts, when the tooltip has been observed and says so. */
@@ -4630,7 +4626,7 @@ export class WrathClient {
     }
 
     if (alive()) {
-      await this.awaitAliveFields(Math.max(deadline, Date.now() + ALIVE_FIELDS_GRACE_MS), "reclaimCorpse");
+      await this.awaitAliveFields(deadline, "reclaimCorpse");
       return { ok: true, status: "reclaimed", ...facts(attempts) };
     }
     const after = health();
@@ -4759,7 +4755,8 @@ export class WrathClient {
    * flag clear and health above a ghost's 1 — so a caller reading
    * `state.self` the moment the helper returns does not see the ghost. The
    * server sends it a few ms after the marker (reference run 2026-10-20:
-   * 2–15 ms, 10 of 10 reclaims). Bounded by `until`; health never observed
+   * 2–15 ms, 10 of 10 reclaims). Bounded by `until`, the helper's own
+   * deadline, which it never runs past; health never observed
    * at all is nothing to wait for. The verdict stands either way: the
    * marker clearing is the server saying the resurrect happened.
    */
@@ -4898,7 +4895,7 @@ export class WrathClient {
         offRelease();
       }
       if (released) {
-        await this.awaitAliveFields(Math.max(started + timeout, Date.now() + ALIVE_FIELDS_GRACE_MS), "spiritHealerActivate");
+        await this.awaitAliveFields(started + timeout, "spiritHealerActivate");
         const self = this.state.self;
         return {
           ok: true,
