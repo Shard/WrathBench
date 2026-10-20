@@ -403,8 +403,8 @@
     "meta/muse-spark-1.3-contributor": {
       "family": "llama",
       "name": "Muse Spark 1.3 (contributor)",
-      "weights": "unknown",
-      "source": "no download today, but Meta has said Muse Spark open weights are coming without naming a version, and its 1.3 page (dev.meta.ai/models/muse-spark-1-3/) did not load to check; Muse Spark Open (dev.meta.ai/models/muse-spark-open/) is separate, derived weights",
+      "weights": "closed",
+      "source": "operator, 2026-10-20: closed for now; no download exists, and Meta's promised Muse Spark open weights name no version (Muse Spark Open, dev.meta.ai/models/muse-spark-open/, is separate, derived weights)",
       "prices": {
         "openrouter": {
           "meta/muse-spark-1.3-contributor": { "windows": [{ "input": 0.1, "output": 0.2, "cacheRead": 0.002, "cacheWrite": 0.1 }] }
