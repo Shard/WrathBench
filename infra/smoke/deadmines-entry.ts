@@ -9,9 +9,10 @@
  * What it proves that the design could not assume: the navmesh is
  * continuous from Moonbrook's street through the mine's tunnels to trigger
  * 78, and map 36 has a mesh on the data volume (a move inside answering
- * `no_mesh` is the tell). The walk in follows DEADMINES_ENTRANCE_ROUTE
- * (infra/fixtures/scenarios.ts), six moves through the mine, since no single
- * move reaches the trigger. It is the gate for enabling the campaign and joins
+ * `no_mesh` is the tell). The walk in is one plain move to the trigger's
+ * centre from the mine building's door: the module's reachable end and its
+ * planner for a corridor past the core's (module/PROTOCOL.md, `arrived` and
+ * `path_incomplete`). It is the gate for enabling the campaign and joins
  * the release's deploy smokes while the campaign runs.
  *
  * The character is a persistent fixture on MODULE_ACCOUNT (default PROBE),
@@ -80,9 +81,22 @@ try {
   log(`in Moonbrook at ${fmt(start)}, ${dist2d(start, DEADMINES_ENTRANCE_TRIGGER).toFixed(0)}y from trigger 78`);
 
   // 1. Down the mine to the portal: only `transferred` onto map 36 is success.
+  // To the mine building's door first (the route's first waypoint, in the
+  // open), then one plain move to the trigger's own centre, as an agent
+  // would ask: 209y in a straight line, inside the 250y cap. The centre is
+  // over a mesh island, so the module ends the walk at the reachable mesh
+  // 4.4y from it, inside the trigger (move_end_reachable), and the route
+  // through the tunnels, about 600y and 148 polygons, is past the core's 74,
+  // so the module's planner builds it (move_long_plan).
   const sinceIn = client.events.recent(1)[0]?.seq ?? 0;
-  const inbound = await walkRoute(client, DEADMINES_ENTRANCE_ROUTE, log);
-  if (!(inbound.ok && inbound.status === "transferred")) fail(`the walk to trigger 78 ended ${inbound.status}${!inbound.ok && inbound.hint ? `: ${inbound.hint}` : ""}`);
+  const door = await walkRoute(client, DEADMINES_ENTRANCE_ROUTE.slice(0, 1), log);
+  if (!(door.ok && door.status === "arrived")) fail(`the walk to the mine building ended ${door.status}${!door.ok && door.hint ? `: ${door.hint}` : ""}`);
+  const here = client.state.self.position?.value ?? fail("no position at the mine building");
+  log(`    one move: ${fmt(here)} -> trigger 78's centre ${fmt(DEADMINES_ENTRANCE_TRIGGER)}, ${dist2d(here, DEADMINES_ENTRANCE_TRIGGER).toFixed(0)}y straight`);
+  // ~86s of walking at run speed: past moveTo's 90s default with no room.
+  const inbound = await client.moveTo(DEADMINES_ENTRANCE_TRIGGER, { timeout: 150_000 });
+  log(`    ${inbound.status}${inbound.ok && inbound.status === "transferred" ? ` to map ${inbound.to.map}` : ""}`);
+  if (!(inbound.ok && inbound.status === "transferred")) fail(`the move to trigger 78 ended ${inbound.status}${!inbound.ok && inbound.hint ? `: ${inbound.hint}` : ""}`);
   if (inbound.to.map !== DEADMINES_MAP) fail(`transferred to map ${inbound.to.map}, expected ${DEADMINES_MAP}`);
   if (dist2d(inbound.to, INSIDE_ARRIVAL) > 10) fail(`arrived at ${fmt(inbound.to)}, ${dist2d(inbound.to, INSIDE_ARRIVAL).toFixed(0)}y from the teleport target ${fmt(INSIDE_ARRIVAL)}`);
   const seen = (op: string, since: number) => client.events.recent(500).some((e: any) => e.seq > since && e.opcode === op);
