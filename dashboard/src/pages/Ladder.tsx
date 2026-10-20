@@ -263,7 +263,7 @@ export default function Ladder() {
       : scriptedReferenceScale({
           episode: episode(),
           series: seriesFilter.series(),
-          reference: scriptedReference(all(), episode()),
+          reference: scriptedReference(all(), episode(), { lines: body()?.scriptedReference, series: seriesFilter.series() }),
           reached: rows().reduce<number | null>((m, r) => (r.bestLevel === null ? m : Math.max(m ?? 0, r.bestLevel)), null),
         }),
   );

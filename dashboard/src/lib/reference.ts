@@ -9,10 +9,9 @@
  * stamped and never scored. Its result row reads `unscored (scripted
  * reference)`, so `scored()` keeps it out of every row and every order, and the
  * one place it appears is a labelled line on the level rail under the table
- * (`scriptedReference`, `scriptedReferenceScale`). The private viewer only:
- * the public snapshot never carries a reference run (operator, 2026-10-20;
- * docs/PUBLIC-DASHBOARD.md, "Runs that are never published"), so there it
- * finds none and draws nothing.
+ * (`scriptedReference`, `scriptedReferenceScale`). Public as numbers only
+ * (operator, 2026-10-20): the public build has no reference run, so it draws
+ * the line from the ladder's `scriptedReference` lines, unlinked.
  *
  * **Withdrawn, kept in the repository: the empirical ceiling and the human
  * speedrun band.** They were the two lines the ladder drew until they were
@@ -41,7 +40,7 @@
  * character across attempts and is a different claim than a scored episode.
  */
 
-import type { ResultRun } from "@viewer/api-types";
+import type { ResultRun, ScriptedReferenceLine } from "@viewer/api-types";
 
 /* ------------------------------------------------------- empirical ceiling */
 
@@ -229,7 +228,8 @@ export const HUMAN_SPEEDRUN_BAND: SpeedrunBand = HUMAN_SPEEDRUN_BANDS.e90!;
 
 /** The scripted reference run a rail draws: the newest that finished, on the tier and series in view. */
 export interface ScriptedReference {
-  runId: string;
+  /** The run, when this build has it (the private viewer); null when the line came as numbers only. */
+  runId: string | null;
   /** The route, `reference/<id>@<version>`: its line is the route's, not a model's. */
   route: string | null;
   level: number;
@@ -255,15 +255,23 @@ export function isScriptedReference(r: Pick<ResultRun, "driver" | "unscored">): 
   return r.driver === "reference" || (r.unscored ?? "").startsWith(REFERENCE_STAMP);
 }
 
-export function scriptedReference(runs: readonly ResultRun[], episode: string): ScriptedReference | null {
+export function scriptedReference(
+  runs: readonly ResultRun[],
+  episode: string,
+  /** The ladder's own lines (`ResultsResponse.scriptedReference`), and the series in view, null for all. */
+  published?: { lines: readonly ScriptedReferenceLine[] | undefined; series: string | null },
+): ScriptedReference | null {
   let best: ResultRun | null = null;
   for (const r of runs) {
     if (!isScriptedReference(r) || r.episode !== episode) continue;
     if (r.terminationReason === null || r.maxLevel === null) continue;
     if (best === null || (r.startedAt ?? 0) > (best.startedAt ?? 0)) best = r;
   }
-  if (best === null) return null;
-  return { runId: best.runId, route: best.model, level: best.maxLevel!, xp: best.xp };
+  if (best !== null) return { runId: best.runId, route: best.model, level: best.maxLevel!, xp: best.xp };
+  // No run to read it off: the public build, which carries the line as
+  // numbers only. Newest first, so "all series" takes the first of the tier.
+  const line = published?.lines?.find((l) => l.episode === episode && (published.series === null || l.series === published.series));
+  return line === undefined ? null : { runId: null, route: line.route, level: line.level, xp: line.xp };
 }
 
 /** The line's label: what it is, the tier and the series, so it cannot be read as a target. */
@@ -288,9 +296,9 @@ export function scriptedReferenceScale(opts: {
     label: scriptedReferenceLabel(opts.episode, opts.series),
     provenance:
       `L${ref.level}${ref.xp !== null ? ` · ${ref.xp} xp` : ""} at the clock's end: ${ref.route ?? "the reference route"}, ` +
-      `a scripted program played through the SDK under the models' rules (run ${ref.runId}). ` +
+      `a scripted program played through the SDK under the models' rules${ref.runId === null ? "" : ` (run ${ref.runId})`}. ` +
       `A ceiling on what this series' surface allows, stamped and never scored; no row is ranked against it.`,
-    runId: ref.runId,
+    ...(ref.runId === null ? {} : { runId: ref.runId }),
   };
   const highest = Math.max(ref.level, opts.reached ?? 1);
   return { marks: [mark], min: 1, max: Math.max(highest + 1, 2) };

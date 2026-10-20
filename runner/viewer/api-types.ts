@@ -2051,6 +2051,26 @@ export interface ResultsResponse extends SnapshotEnvelope {
    * the ones `?includeOverrides=1` would bring back. */
   overridesExcluded: number;
   now: number;
+  /**
+   * `/api/ladder` only: the scripted reference line per series, as numbers
+   * (`scripted-reference.ts`). Public as numbers only (operator, 2026-10-20):
+   * the run itself is never published, so the line carries no run id.
+   */
+  scriptedReference?: ScriptedReferenceLine[];
+}
+
+/**
+ * The level one tier's scripted reference reached in one harness series: the
+ * newest finished reference run of that tier and series, reduced to what the
+ * ladder's rail draws. Nothing in it names the run.
+ */
+export interface ScriptedReferenceLine {
+  episode: EpisodeIdView;
+  series: string | null;
+  /** The route, `reference/<id>@<version>`: the line's model. */
+  route: string | null;
+  level: number;
+  xp: number | null;
 }
 
 /**

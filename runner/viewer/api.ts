@@ -58,6 +58,7 @@ import type {
   TrackResponse,
 } from "./api-types";
 import { episodeOf, questsAcrossRestarts, resultRunOf, trackFrom } from "./results";
+import { scriptedReferenceLines } from "./scripted-reference";
 import { campaignsView } from "./campaigns";
 import { modelsResponse, readFleetRoster } from "./models";
 import { modelStates, outstandingWork, type RunFact } from "../src/models";
@@ -924,7 +925,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
     // One clock for the pass: a live run's playtime is charged up to *now*, and
     // two rows of one response must not be measured against different nows.
     const now = Date.now();
-    const [rows, totalsByRun] = await Promise.all([runRows(now), allTotals()]);
+    // Every row, withheld or not: `resultRuns` withholds for a public handle,
+    // and the reference line (`allResultRuns`) is read off the rows it withholds.
+    const [rows, totalsByRun] = await Promise.all([allRunRows(now), allTotals()]);
     // One query for every run's state series, not one per run: a pass over
     // ~700 runs used to issue ~700 sequential `states` reads, which is what
     // ran ClickHouse out of memory on 2026-09-17.
@@ -995,12 +998,20 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * expired.
    */
   let listingCache: { at: number; value: Promise<ResultRun[]> } | undefined;
-  function resultRuns(): Promise<ResultRun[]> {
+  /**
+   * The listing a handle serves. A public handle's results, ladders, episodes,
+   * campaigns and character chains are all built off this, so a run withheld
+   * here is withheld there.
+   */
+  async function resultRuns(): Promise<ResultRun[]> {
+    const rows = await allResultRuns();
+    return publicMode ? rows.filter((r) => !isNotAModelRun(r)) : rows;
+  }
+  /** Every run, withheld or not: what the scripted reference line is read from. */
+  function allResultRuns(): Promise<ResultRun[]> {
     const now = Date.now();
     if (listingCache === undefined || now - listingCache.at >= RESULT_RUNS_CACHE_MS) {
-      // A public handle's results, ladders, episodes, campaigns and character
-      // chains are all built off this, so a run withheld here is withheld there.
-      const build = buildResultRuns().then((rows) => (publicMode ? rows.filter((r) => !isNotAModelRun(r)) : rows));
+      const build = buildResultRuns();
       listingCache = { at: now, value: build };
       build.then(
         () => {
@@ -1110,6 +1121,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
               (r) => r.episode === episode && r.episodeSource === "stamped" && r.episodeOverride,
             ).length,
       now: Date.now(),
+      // The ladder's reference line, as numbers, off every run: the reference
+      // run is withheld from a public handle's rows, and this is all of it
+      // that is published (`scripted-reference.ts`).
+      ...(ladder ? { scriptedReference: scriptedReferenceLines(await allResultRuns(), episode) } : {}),
     };
     return pub(body, projectResults);
   }

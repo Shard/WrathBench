@@ -546,6 +546,9 @@ driver or by stamp), not a list of names.
   included, with a 404. So `runs.json`, `results.json`, the ladders, the
   character pages, `live.json` and the social card never name one. The private
   viewer is unchanged.
+- **Except the reference line, as numbers.** Each ladder carries
+  `scriptedReference`: tier, series, route, level and xp, with no run id
+  ("The scripted reference line").
 - **Withdrawn, not just left out.** The renderer gets the withheld ids
   in-process (`ApiHandle.unpublishedRuns`; there is no route) and hands them
   to the engine as `withdrawn`. After the flip that no longer names them, the
@@ -561,7 +564,8 @@ driver or by stamp), not a list of names.
   there until it is purged by URL.
 - **Checked.** `infra/publish-accept.ts` raises `unpublished-run` for any
   published row or object whose driver or stamp is not a model's, and for
-  every object that names such a run's id.
+  every object that names such a run's id. The reference line has neither, so
+  it passes.
 
 ### What is published
 
@@ -751,10 +755,12 @@ itself came back for the scripted reference line, below.
 
 ### The scripted reference line (operator, 2026-10-19)
 
-**Not on the public site** (operator, 2026-10-20): a reference run is never
-published ("Runs that are never published"), so the public build has no run to
-draw the line from and shows none. The private viewer still draws it, as
-described below.
+**Public as numbers only** (operator, 2026-10-20). The run itself is never
+published ("Runs that are never published"). Each `ladder-<tier>.json`
+carries `scriptedReference` instead: one line per series, newest first, each
+holding the tier, series, route, level and xp of the newest finished reference
+run. The public build draws from that, without a link. The private viewer
+reads the run and links it.
 
 Under the rung table, on the rail the withdrawn references used, the ladder
 draws one labelled line: the level the **scripted reference run** of the tier
@@ -774,9 +780,10 @@ and not the band is the one drawn.
   filters: "exclude free" would otherwise hide it, since the reference bills
   nothing, and a line that moved when a box was ticked would make its own
   label false. A live run is still climbing and draws nothing.
-- **What the page shows.** The legend item is the level, linked to the run,
-  and the label `scripted reference, <tier>, harness <series>`. The hover
-  carries the route, the xp and the run id. Nothing else is printed: the rest
+- **What the page shows.** The legend item is the level, and the label
+  `scripted reference, <tier>, harness <series>`. The hover carries the route
+  and the xp. On the private viewer only, the level links to the run and the
+  hover names it. Nothing else is printed: the rest
   is here, per "No explanatory prose on the page" above.
 - **No line** before a series' reference run has finished, on a tier it was
   not run on, and on freeplay.

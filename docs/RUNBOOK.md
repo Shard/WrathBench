@@ -1675,7 +1675,8 @@ docker run --rm <runner image> bun -e 'const r = await (await import("/wrathbenc
 Nothing of a reference run reaches the public site: the publisher withholds
 every run whose driver is not a model, and deletes what an earlier pass
 published for one (docs/PUBLIC-DASHBOARD.md, "Runs that are never published").
-The scripted reference line is drawn on the private viewer only.
+The ladder's scripted reference line is public as numbers only: level, xp,
+route, series and tier.
 
 The program's own tests live beside it in the private checkout and run
 against a public checkout (`reference/test.sh <checkout>`, which lays the

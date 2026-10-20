@@ -11,6 +11,9 @@
  *   window, `live.json`'s positions or nearby windows;
  * - the public handle answers every route about them as if they did not exist,
  *   and the private handle still serves them;
+ * - the scripted reference line is published as numbers only (operator,
+ *   2026-10-20): the ladder carries its level, xp, route, series and tier,
+ *   and the verifier passes it while still flagging a reference run's row;
  * - the pass hands their ids back as `withdrawn`, and the first real pass over
  *   a state an older publisher left deletes everything it had published for
  *   them, after the flip.
@@ -24,6 +27,7 @@ import { createRenderer, type SnapshotResult } from "../viewer/snapshot";
 import { REFERENCE_STAMP, STUB_STAMP } from "../src/config";
 import { SEG_MS, windowOf } from "../viewer/trace";
 import { emptyState, publishPass, traceSegmentPath, type ObjectStore } from "../../infra/publish-core";
+import { verifyPublication } from "../../infra/publish-accept";
 import { DEAD_RUN, LIVE_RUN, poisonedRunsDir } from "./fixtures/poisoned-runs";
 
 const SENTINEL = "sentinel-private-program-7c41";
@@ -31,6 +35,8 @@ const REF_LIVE = "run-ref-live";
 const REF_DEAD = "run-ref-dead";
 const STUB_RUN = "run-stub-dead";
 const WITHHELD = [REF_DEAD, REF_LIVE, STUB_RUN].sort();
+/** The reference copies' model: a route id and version, which the published line carries. */
+const ROUTE = "reference/stub-route@1";
 
 /** A copy of a fixture run under another id and driver, its program text planted where a reference run's is. */
 function copyRun(runs: string, from: string, to: string, driver: string, stamp: string): void {
@@ -49,6 +55,7 @@ function copyRun(runs: string, from: string, to: string, driver: string, stamp: 
   writeFileSync(join(dir, "scratchpad.md"), `reference-cursor: 3 ${SENTINEL}\n`);
   const db = new Database(join(dir, "run.sqlite"));
   db.run("UPDATE run SET run_id = ?, driver = ?, shakeout = ?", [to, driver, stamp]);
+  if (driver === "reference") db.run("UPDATE run SET model = ?", [ROUTE]);
   db.run("UPDATE state SET run_id = ?", [to]);
   db.close();
 }
@@ -173,5 +180,34 @@ describe("the first pass after release", () => {
     expect(state.traceSegs[REF_LIVE]).toBeUndefined();
     // The model runs went up as usual.
     expect(calls.some((c) => c.startsWith(`put v1/run/${LIVE_RUN}/`))).toBe(true);
+  });
+});
+
+describe("the scripted reference line is public as numbers only", () => {
+  test("the ladder carries the line, nothing names the run, and the verifier passes it but not a run row", async () => {
+    const runs = fixture();
+    const out = await createRenderer({ runsDir: runs })(Date.now());
+    const manifest = JSON.parse(out.artifacts.find((a) => a.path === "v1/manifest.json")!.body) as { artifacts: Record<string, string> };
+    const ladder = JSON.parse(out.artifacts.find((a) => a.path === manifest.artifacts["ladder-e90.json"])!.body) as {
+      scriptedReference?: unknown[];
+      runs: { runId: string }[];
+    };
+    // The finished reference run's numbers; the live one is still climbing, and a stub is no reference.
+    expect(ladder.scriptedReference).toEqual([{ episode: "e90", series: "0.5", route: ROUTE, level: 3, xp: 400 }]);
+    for (const a of out.artifacts) {
+      for (const id of WITHHELD) expect(a.body).not.toContain(id);
+      expect(a.body).not.toContain(SENTINEL);
+    }
+
+    const bucket = new Map(out.artifacts.map((a) => [a.path, a.body]));
+    const clean = await verifyPublication({ get: async (k) => bucket.get(k) ?? null });
+    expect(clean.findings.filter((f) => f.kind === "unpublished-run")).toEqual([]);
+    // A reference run's own row on the same ladder is still a finding.
+    const key = manifest.artifacts["ladder-e90.json"]!;
+    const doctored = JSON.parse(bucket.get(key)!) as { runs: Record<string, unknown>[] };
+    doctored.runs.push({ ...doctored.runs[0], runId: REF_DEAD, driver: "reference", unscored: REFERENCE_STAMP });
+    bucket.set(key, JSON.stringify(doctored));
+    const dirty = await verifyPublication({ get: async (k) => bucket.get(k) ?? null });
+    expect(dirty.findings.some((f) => f.kind === "unpublished-run" && f.key === key)).toBe(true);
   });
 });

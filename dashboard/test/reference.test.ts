@@ -225,4 +225,23 @@ describe("the scripted reference line", () => {
     expect(scale.max).toBeGreaterThan(11);
     expect(scriptedReferenceScale({ episode: "e90", series: "0.9", reference: null, reached: 11 })).toBeNull();
   });
+
+  test("with no run to read it off, the public build draws the published line, unlinked", () => {
+    const lines = [
+      { episode: "e90" as const, series: "0.6", route: "reference/stub-route@2", level: 10, xp: 2000 },
+      { episode: "e90" as const, series: "0.5", route: "reference/stub-route@1", level: 8, xp: 900 },
+      { episode: "e360" as const, series: "0.6", route: "reference/stub-route@2", level: 14, xp: null },
+    ];
+    expect(scriptedReference([], "e90", { lines, series: "0.5" })).toEqual({ runId: null, route: "reference/stub-route@1", level: 8, xp: 900 });
+    // All series: the newest line of the tier, which the ladder lists first.
+    expect(scriptedReference([], "e90", { lines, series: null })?.level).toBe(10);
+    expect(scriptedReference([], "e360", { lines, series: "0.5" })).toBeNull();
+    expect(scriptedReference([], "e90", { lines: undefined, series: null })).toBeNull();
+    // A run in hand still wins, as on the private viewer.
+    expect(scriptedReference([ref({})], "e90", { lines, series: null })?.runId).toBe("ref-1");
+    const scale = scriptedReferenceScale({ episode: "e90", series: "0.5", reference: scriptedReference([], "e90", { lines, series: "0.5" }), reached: 4 })!;
+    expect(scale.marks[0]!.low).toBe(8);
+    expect(scale.marks[0]!.runId).toBeUndefined();
+    expect(scale.marks[0]!.provenance).not.toContain("(run ");
+  });
 });
