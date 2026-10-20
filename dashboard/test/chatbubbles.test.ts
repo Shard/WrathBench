@@ -12,8 +12,10 @@ import {
   BUBBLE_CHARS,
   BUBBLE_GAP_PX,
   BUBBLE_LIFT_PX,
+  BUBBLE_MIN_WALL_MS,
   BUBBLE_MS,
   BUBBLE_STACK,
+  bubbleLifeMs,
   bubblesAt,
   clipBubble,
   layoutStacks,
@@ -38,13 +40,19 @@ describe("a bubble's lifetime, on the playhead's clock", () => {
     expect(bubblesAt("a", lines, W + 55_000)).toEqual([]);
   });
 
-  test("in a replay the lifetime is the replay clock's: 30 s of wall time at 1x, 3 s at 10x", () => {
+  test("in a fast replay a bubble stays at least BUBBLE_MIN_WALL_MS of the reader's time; live, and at 1x, 30 s of the run", () => {
+    expect(BUBBLE_MIN_WALL_MS).toBe(4_000);
+    expect(bubbleLifeMs(null)).toBe(BUBBLE_MS);
+    expect(bubbleLifeMs(1)).toBe(BUBBLE_MS);
+    expect(bubbleLifeMs(60)).toBe(240_000);
     const said = [line(W, "now")];
-    for (const [speed, wallMs] of [[1, 30_000], [10, 3_000]] as const) {
+    // Wall ms the bubble is up for, at each speed, played from the moment it was said.
+    for (const [speed, wallMs] of [[1, 30_000], [10, 4_000], [60, 4_000], [600, 4_000]] as const) {
       const anchor = { cursor: W, at: 1_000, speed };
-      const at = (p: number): number => replayCursorAt(anchor, p, [], W + 3_600_000);
-      expect(bubblesAt("a", said, at(1_000 + wallMs - 1))).toHaveLength(1);
-      expect(bubblesAt("a", said, at(1_000 + wallMs))).toHaveLength(0);
+      const at = (p: number): number => replayCursorAt(anchor, p, [], W + 36_000_000);
+      const life = bubbleLifeMs(speed);
+      expect(bubblesAt("a", said, at(1_000 + wallMs - 1), life)).toHaveLength(1);
+      expect(bubblesAt("a", said, at(1_000 + wallMs), life)).toHaveLength(0);
     }
   });
 

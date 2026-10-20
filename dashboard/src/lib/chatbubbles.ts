@@ -10,9 +10,12 @@
  *
  * Time is the map's playhead, never the wall clock: the replay's cursor, and
  * live the delayed playhead the pips are placed by, which runs at 1× — so a
- * bubble stays for `BUBBLE_MS` of the run's own time either way, and appears
- * when the pip reaches the moment it was said rather than when the feed
- * brought it in.
+ * bubble appears when the pip reaches the moment it was said rather than when
+ * the feed brought it in, and stays `BUBBLE_MS` of the run's own time. A
+ * replay played fast would flash it, so there a bubble stays at least
+ * `BUBBLE_MIN_WALL_MS` of the reader's time at the chosen speed
+ * (`bubbleLifeMs`, operator, 2026-10-20); still measured on the cursor, so a
+ * scrub shows exactly what playing to that point would.
  *
  * Pure, so it is pinned by tests; `MapPage.tsx` only draws what this returns.
  */
@@ -22,6 +25,19 @@ import type { ScreenBox } from "./nearbyplayer";
 
 /** How long a line stays up, on the playhead's clock. */
 export const BUBBLE_MS = 30_000;
+/** In a replay, the least a bubble is on screen in the reader's own time, at the speed it plays. */
+export const BUBBLE_MIN_WALL_MS = 4_000;
+
+/**
+ * How long a line stays up, in playhead ms: `BUBBLE_MS` live, and in a replay
+ * playing at `speed`× the longer of that and `BUBBLE_MIN_WALL_MS` of wall time
+ * (4 min of the run at 60×). Idle stretches the replay compresses go by
+ * faster, so there it is approximate; nothing is said during those anyway.
+ */
+export function bubbleLifeMs(replaySpeed: number | null): number {
+  return replaySpeed === null ? BUBBLE_MS : Math.max(BUBBLE_MS, BUBBLE_MIN_WALL_MS * replaySpeed);
+}
+
 /** At most this many of one character's lines at once, newest kept; an older one gives way to a new one. */
 export const BUBBLE_STACK = 3;
 /** A bubble shows at most this many characters; the rest is the hover's. */
@@ -59,12 +75,12 @@ export function clipBubble(text: string, max = BUBBLE_CHARS): string {
 
 /**
  * The bubbles up at playhead `t`, from one character's lines (any order): the
- * lines said in `(t − BUBBLE_MS, t]`, the newest `BUBBLE_STACK` of them,
- * oldest first. A line said after `t` is not up yet; in a replay scrubbed
- * back it disappears again.
+ * lines said in `(t − lifeMs, t]`, the newest `BUBBLE_STACK` of them, oldest
+ * first. A line said after `t` is not up yet; in a replay scrubbed back it
+ * disappears again.
  */
-export function bubblesAt(runId: string, lines: readonly TraceChatLine[], t: number): Bubble[] {
-  const up = lines.filter((l) => l.t > t - BUBBLE_MS && l.t <= t).sort((a, b) => a.t - b.t);
+export function bubblesAt(runId: string, lines: readonly TraceChatLine[], t: number, lifeMs = BUBBLE_MS): Bubble[] {
+  const up = lines.filter((l) => l.t > t - lifeMs && l.t <= t).sort((a, b) => a.t - b.t);
   return up.slice(-BUBBLE_STACK).map((l) => ({
     key: `${runId}\n${l.t}\n${l.kind}\n${l.text}`,
     kind: l.kind,

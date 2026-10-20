@@ -176,7 +176,8 @@ icons as Wowhead links (`src/lib/wowhead.ts`), stacks, and the time left.
 its pip, from the trace's `chat` events at the same playhead
 (`TraceStore.chat`, where each loaded piece answers only for its own stretch,
 so a window seen in the tail and then closed says its lines once). A line is
-up for 30 s of the playhead's time, the newest three of a character stack,
+up for 30 s of the playhead's time (in a replay, at least 4 s of wall time at
+the speed it plays: `bubbleLifeMs`), the newest three of a character stack,
 and a long one is cut to 80 characters with the whole line in its title. The
 bubbles are DOM over the canvas so the title works: which are up is a signal
 the frame loop writes only when the set changes, and each stack's place is set

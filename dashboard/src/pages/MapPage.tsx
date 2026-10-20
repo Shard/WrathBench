@@ -116,7 +116,7 @@ import {
   replayHrefFor,
 } from "../lib/mapstate";
 import { createMapFit } from "../lib/mapfit";
-import { BUBBLE_MS, bubblesAt, layoutStacks, stacksKey, type BubbleStack, type StackBox } from "../lib/chatbubbles";
+import { bubbleLifeMs, bubblesAt, layoutStacks, stacksKey, type BubbleStack, type StackBox } from "../lib/chatbubbles";
 import {
   DEFAULT_MAP,
   STALE_MS,
@@ -695,8 +695,9 @@ export default function MapPage() {
   function updateBubbles(list: readonly Pip[], t: number | null): boolean {
     const stacks: BubbleStack[] = [];
     if (t !== null) {
+      const life = bubbleLifeMs(track() === undefined ? null : speed());
       for (const pip of list) {
-        const bubbles = bubblesAt(pip.runId, store.chat(pip.runId, t - BUBBLE_MS, t), t);
+        const bubbles = bubblesAt(pip.runId, store.chat(pip.runId, t - life, t), t, life);
         if (bubbles.length > 0) stacks.push({ runId: pip.runId, bubbles });
       }
     }
