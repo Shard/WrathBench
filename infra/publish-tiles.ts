@@ -7,7 +7,7 @@
  * bytes along with it. Tiles change only when the extraction in `minimap/` is
  * re-run, so uploading them is an occasional, explicit act by the operator.
  *
- *   bun infra/publish-tiles.ts --dry-run   # print the plan, upload nothing
+ *   bun infra/publish-tiles.ts --dry-run   # transcode locally, print the plan, upload nothing
  *   bun infra/publish-tiles.ts --upload    # upload what changed
  *
  * The painted art layer goes up with the rest: the operator published it on

@@ -287,3 +287,37 @@ describe("the served tree", () => {
     expect((await get(handleFor({ publicMode: false }, dirs), "/tiles/7/index.json")).status).toBe(404);
   });
 });
+
+/*
+ * The transcode and the route together: a re-bake that rewrites masters with
+ * the same bytes moves only their mtimes, and the served tree must still be
+ * what the route answers with afterwards.
+ */
+describe("a no-op re-bake", () => {
+  test("leaves the WebP and the index served", async () => {
+    const { transcodeTree } = await import("../../minimap/src/transcode");
+    const { encodePng } = await import("../../minimap/src/png");
+    const dirs = fixture();
+    const opaque = encodePng(new Uint8Array(256 * 256 * 4).fill(200), 256, 256);
+    for (const rel of ["0/43_31.png", "0/minimap/3/5_3.png", "0/art/3/5_3.png"]) writeFileSync(join(dirs.tilesDir, rel), opaque);
+    await transcodeTree(dirs.tilesDir);
+    // The re-bake: same bytes, written later, through the directories.
+    const later = new Date(Date.now() + 60_000);
+    for (const rel of ["0/43_31.png", "0/minimap/3/5_3.png", "0/art/3/5_3.png", "0/art/3", "0/minimap/3", "0"]) {
+      utimesSync(join(dirs.tilesDir, rel), later, later);
+    }
+    const handle = handleFor({ publicMode: false }, dirs);
+    // Before the next transcode the masters answer, as they must.
+    expect((await get(handle, "/tiles/0/minimap/3/5_3.webp")).headers.get("content-type")).toBe("image/png");
+    expect((await get(handle, "/tiles/0/index.json")).status).toBe(404);
+    const again = await transcodeTree(dirs.tilesDir);
+    expect(Object.values(again.layers).reduce((s, l) => s + l.encoded, 0)).toBe(0);
+    expect((await get(handle, "/tiles/0/minimap/3/5_3.webp")).headers.get("content-type")).toBe("image/webp");
+    expect((await get(handle, "/tiles/0/art/3/5_3.webp")).headers.get("content-type")).toBe("image/webp");
+    expect((await get(handle, "/tiles/0/index.json")).status).toBe(200);
+    // And a pass with nothing re-baked moves no validator.
+    const etag = (await get(handle, "/tiles/0/art/3/5_3.webp")).headers.get("etag");
+    await transcodeTree(dirs.tilesDir);
+    expect((await get(handle, "/tiles/0/art/3/5_3.webp")).headers.get("etag")).toBe(etag);
+  });
+});

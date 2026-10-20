@@ -242,7 +242,7 @@ Each object is typed by its extension (`image/png`, `image/webp`,
 and 4 and the CORS policy already cover it:
 
 ```
-bun infra/publish-tiles.ts --dry-run    # counts only, uploads nothing
+bun infra/publish-tiles.ts --dry-run    # transcodes locally, then counts; uploads nothing
 bun infra/publish-tiles.ts --upload
 ```
 

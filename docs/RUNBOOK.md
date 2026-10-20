@@ -2134,7 +2134,7 @@ extraction has changed — the skip-unchanged check is a content hash kept in
 `tiles/manifest.json` in the bucket, so a re-run with nothing new PUTs nothing.
 
 ```
-bun wb site tiles --dry-run    # counts only, uploads nothing
+bun wb site tiles --dry-run    # transcodes locally, then counts; uploads nothing
 bun wb site tiles --upload
 ```
 

@@ -36,10 +36,10 @@
  * before it scans, so a publish never ships a stale served tree.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type IndexCell, TILE_INDEX_NAME, buildTileIndex, renderTileIndex } from "../../runner/viewer/tileindex";
-import { SERVED_DIR } from "../../runner/viewer/tiles";
+import { SERVED_DIR, newestMasterDir } from "../../runner/viewer/tiles";
 import { ART_LAYER, LOD_LAYERS, LOD_MAX, type LodLayer, MINIMAP_LAYER, lodServedName, lodTileName, tileName } from "../../runner/viewer/worldmap";
 import { decodePng } from "./png";
 
@@ -119,6 +119,20 @@ function readState(file: string): State {
     // Absent or unreadable: everything is re-encoded.
   }
   return { encoder: "", tiles: {} };
+}
+
+/**
+ * The viewer serves a served file only while it is at least as new as what it
+ * was derived from (`runner/viewer/tiles.ts`). A re-bake that rewrites a
+ * master with the same bytes moves its mtime and nothing else, so the output
+ * it maps to is current but looks stale: move its mtime up too. Only then,
+ * so an unchanged pass leaves every validator the viewer sends alone.
+ */
+function keepFresh(file: string, since: number): void {
+  if (statSync(file).mtimeMs < since) {
+    const now = new Date(Math.max(Date.now(), Math.ceil(since)));
+    utimesSync(file, now, now);
+  }
 }
 
 /** Through a temp name and a rename, so a reader never sees half a file; skipped when the bytes are already there. */
@@ -243,6 +257,7 @@ export async function transcodeTree(root: string, opts: { force?: boolean } = {}
       writeIfChanged(out, served);
       stats.encoded++;
     }
+    keepFresh(out, statSync(job.master).mtimeMs);
     next[job.out] = hash;
     stats.files++;
     stats.masterBytes += master.length;
@@ -268,7 +283,9 @@ export async function transcodeTree(root: string, opts: { force?: boolean } = {}
       },
     );
     const body = new TextEncoder().encode(renderTileIndex(buildTileIndex(cells, covers)));
-    writeIfChanged(join(dir, `${map}/${TILE_INDEX_NAME}`), body);
+    const indexFile = join(dir, `${map}/${TILE_INDEX_NAME}`);
+    writeIfChanged(indexFile, body);
+    keepFresh(indexFile, newestMasterDir(root, map) ?? 0);
     next[`${map}/${TILE_INDEX_NAME}`] = "";
     report.indexes++;
   }

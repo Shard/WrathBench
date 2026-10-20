@@ -198,10 +198,20 @@ export function resolveTileIndex(root: string, path: string): string | null {
   if (map === null) return null;
   const file = join(root, SERVED_DIR, servedIndexPath(map));
   const at = mtime(file);
+  const newest = newestMasterDir(root, map);
+  if (at === null || newest === null) return null;
+  return at >= newest ? file : null;
+}
+
+/**
+ * The latest mtime among a map's master directories — the map's own and
+ * each layer's level directories — or null when the map has none. An index
+ * is current when it is at least this new; the transcode keeps it so.
+ */
+export function newestMasterDir(root: string, map: number): number | null {
   const dir = join(root, String(map));
-  const dirAt = mtime(dir);
-  if (at === null || dirAt === null) return null;
-  let newest = dirAt;
+  let newest = mtime(dir);
+  if (newest === null) return null;
   for (const layer of LOD_LAYERS) {
     let levels: string[] = [];
     try {
@@ -212,7 +222,7 @@ export function resolveTileIndex(root: string, path: string): string | null {
     newest = Math.max(newest, mtime(join(dir, layer)) ?? 0);
     for (const z of levels) newest = Math.max(newest, mtime(join(dir, layer, z)) ?? 0);
   }
-  return at >= newest ? file : null;
+  return newest;
 }
 
 /** `resolveTile`'s file alone. */
