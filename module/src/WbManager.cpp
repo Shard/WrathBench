@@ -1866,8 +1866,10 @@ namespace WrathBench
         // path ends wherever its heuristic last got: by the Deadmines
         // entrance, the hillside 22y over the tunnel the trigger sits in. The
         // walk ends at the reachable mesh nearest the request instead when
-        // that lies within END_REACHABLE_RADIUS; past it the request is off
-        // the mesh this mover can walk (WbNav::OnIsland, NearestReachable).
+        // that lies within END_REACHABLE_RADIUS (WbNav::OnIsland,
+        // NearestReachable). Past it the request stays as asked and ends
+        // path_incomplete like any route the mesh does not have: an island is
+        // walkable ground, only not from here.
         dtNavMeshQuery const* query = player->GetMap()->GetMapCollisionData().GetMMapData().GetNavMeshQuery();
         ExcludePolysFilter const base;
         float startPt[3] = { sy, sz, sx };
@@ -1883,16 +1885,14 @@ namespace WrathBench
                 float extents[3] = { END_REACHABLE_RADIUS, END_REACHABLE_RADIUS, END_REACHABLE_RADIUS };
                 float closest[3] = { 0.0f, 0.0f, 0.0f };
                 dtPolyRef ref = 0;
-                if (!WbNav::NearestReachable(navMesh, query, startRef, endPt, extents, &ref, closest)
-                    || dtVdist(closest, endPt) > END_REACHABLE_RADIUS)
+                if (WbNav::NearestReachable(navMesh, query, startRef, endPt, extents, &ref, closest)
+                    && dtVdist(closest, endPt) <= END_REACHABLE_RADIUS)
                 {
-                    r.status = "target_off_mesh";
-                    return r;
+                    r.hasEndReachable = true;
+                    r.endFromX = x; r.endFromY = y; r.endFromZ = z;
+                    x = closest[2]; y = closest[0]; z = closest[1];
+                    r.endToX = x; r.endToY = y; r.endToZ = z;
                 }
-                r.hasEndReachable = true;
-                r.endFromX = x; r.endFromY = y; r.endFromZ = z;
-                x = closest[2]; y = closest[0]; z = closest[1];
-                r.endToX = x; r.endToY = y; r.endToZ = z;
             }
         }
 
@@ -1977,7 +1977,13 @@ namespace WrathBench
             // the module's planner (WbNav::PlannerQuery) searches the whole
             // corridor the core's 74 polygons and 1024 nodes cannot hold — the
             // Deadmines mine is 177 polygons — exactly as the core would with
-            // room to finish. Only what it cannot route is path_incomplete.
+            // room to finish. Only what it cannot route is path_incomplete; an
+            // end known to be on an island is not searched for at all.
+            if (r.hasReached && r.islandPolys && !r.hasEndReachable)
+            {
+                r.status = "path_incomplete";
+                return r;
+            }
             if (r.hasReached)
             {
                 float endPt[3] = { y, z, x };

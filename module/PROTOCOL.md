@@ -907,7 +907,8 @@ at the top of this document.
   that the start can reach, when that lies within 7y of it (the core's own
   far-from-polygon distance), and arrives there. The Deadmines entrance
   trigger's centre is such a point: the tunnel's mesh ends 4.4y from it,
-  inside the trigger. Past 7y the request is `target_off_mesh`. The audit
+  inside the trigger. With nothing reachable within 7y the move answers
+  `path_incomplete`, as for any route the mesh does not have. The audit
   log records it as `op: "move_end_reachable"` (`islandPolys`, `walked`,
   `from`, `to`).
 - `too_far` — destination beyond the single-move cap (~250yd straight-line);
@@ -917,8 +918,7 @@ at the top of this document.
   retry from the agent's side.
 - `target_off_mesh` — the destination has no walkable polygon within the
   mesh's search box (4y in 2D; z is searched ±50y, so a stale z alone never
-  produces this), or it sits inside geometry, or on an island no route
-  reaches with nothing reachable within 7y (see `arrived`). The result
+  produces this), or it sits inside geometry. The result
   carries `nearest`: the walkable mesh point closest to the request within
   20y in 2D that a move from the character's position can reach (Detour's
   nearest-polygon query, at most 128 polygons considered, so in a dense
