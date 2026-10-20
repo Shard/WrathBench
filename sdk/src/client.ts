@@ -1017,7 +1017,7 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
     `SPELL_FAILED_MOVING.`,
   path_incomplete: (p, d) =>
     `the walkable mesh has no continuous route to (${fmtXY(p)})` +
-    (d.reachedPos ? `; it ends at (${fmtXY(d.reachedPos)})` : "") +
+    (d.reachedPos ? `; it ends at (${fmtXY(d.reachedPos)}, z ${d.reachedPos.z.toFixed(1)})${heightGap(d.reachedPos.z - p.z)}` : "") +
     `. The module already tried one subdivision. Route around (a road, a ramp, a door) or approach from ` +
     `another side.`,
   drop: (p, d) => {
@@ -1286,6 +1286,19 @@ function samePointish(a: Point3, b: Point3): boolean {
  * after the mesh walked it 7.6y down a ledge).
  */
 export const MESH_Z_QUOTE_BAND = 3;
+
+/**
+ * How far above or below the requested point a reported mesh point lies,
+ * as a clause, when it is a different level: past MESH_Z_QUOTE_BAND, the
+ * same band that tells a stale z from a level away on an arrival. Within it
+ * the gap is the request's own z slack and says nothing, so it is omitted.
+ * A `path_incomplete` whose 2D end looked 0.4y from its target (by the
+ * Deadmines entrance) had ended on the hillside 23y over it.
+ */
+export function heightGap(dz: number): string {
+  if (Math.abs(dz) <= MESH_Z_QUOTE_BAND) return "";
+  return `, ${Math.round(Math.abs(dz))}y ${dz > 0 ? "above" : "below"} the point asked for`;
+}
 export function meshZHint(point: { x: number; y: number; z: number }, meshZ: number): string {
   const dz = meshZ - point.z;
   const head = `arrived at (${fmtXY(point)}), but the ground there is at z ${meshZ.toFixed(1)}, not ${point.z.toFixed(1)}.`;
