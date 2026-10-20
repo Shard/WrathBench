@@ -483,7 +483,7 @@ trigger's centre from the first staging spot, expecting
 and `SMSG_NEW_WORLD` with map 36 and a `WB_AREA` for it; one `moveTo`
 inside that arrives; the first Defias pack in `units()`; then `moveTo`
 trigger 119 and see map 0 again. It is the gate for enabling the campaign,
-and it belongs on the release's deploy smokes while the campaign runs.
+run on demand after a release resumes, never in the deploy window.
 
 **The Dungeon Finder is unnecessary.** `CMSG_LFG_JOIN` and its replies are
 a dozen opcodes and a proposal dialogue, all to teleport a formed party into
@@ -727,7 +727,8 @@ means the change reaches the fleet only through `bun wb release run`;
    members cross the trigger and see each other inside: the same-instance
    proof). Verify: `bun wb smoke <name>` in the release window of phase 5,
    with the post-recreate re-check of §3 run once there; the entry smoke
-   joins `deploySmokes` while the campaign is enabled.
+   runs on demand after a release, with the campaign held, never in the
+   deploy window.
 7. **Campaign definition** (`runner/campaigns/deadmines@1.json`): one cell
    (the party), one arm on the release image, `start: staged`, the five
    members with their objectives in the operator's words, `objective` null
