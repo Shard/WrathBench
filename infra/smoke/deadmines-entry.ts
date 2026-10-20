@@ -9,7 +9,9 @@
  * What it proves that the design could not assume: the navmesh is
  * continuous from Moonbrook's street through the mine's tunnels to trigger
  * 78, and map 36 has a mesh on the data volume (a move inside answering
- * `no_mesh` is the tell). It is the gate for enabling the campaign and joins
+ * `no_mesh` is the tell). The walk in follows DEADMINES_ENTRANCE_ROUTE
+ * (infra/fixtures/scenarios.ts), six moves through the mine, since no single
+ * move reaches the trigger. It is the gate for enabling the campaign and joins
  * the release's deploy smokes while the campaign runs.
  *
  * The character is a persistent fixture on MODULE_ACCOUNT (default PROBE),
@@ -23,11 +25,11 @@
  */
 
 import { connect } from "../../sdk/src/index";
-import { DEADMINES_ENTRANCE_TRIGGER, MOONBROOK } from "../fixtures/scenarios";
+import { DEADMINES_ENTRANCE_ROUTE, DEADMINES_ENTRANCE_TRIGGER, MOONBROOK } from "../fixtures/scenarios";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { moduleBase } from "./lib/module";
-import { dist2d, fmt, walkTo } from "./lib/party";
+import { dist2d, fmt, walkRoute, walkTo } from "./lib/party";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -79,7 +81,7 @@ try {
 
   // 1. Down the mine to the portal: only `transferred` onto map 36 is success.
   const sinceIn = client.events.recent(1)[0]?.seq ?? 0;
-  const inbound = await walkTo(client, DEADMINES_ENTRANCE_TRIGGER, log);
+  const inbound = await walkRoute(client, DEADMINES_ENTRANCE_ROUTE, log);
   if (!(inbound.ok && inbound.status === "transferred")) fail(`the walk to trigger 78 ended ${inbound.status}${!inbound.ok && inbound.hint ? `: ${inbound.hint}` : ""}`);
   if (inbound.to.map !== DEADMINES_MAP) fail(`transferred to map ${inbound.to.map}, expected ${DEADMINES_MAP}`);
   if (dist2d(inbound.to, INSIDE_ARRIVAL) > 10) fail(`arrived at ${fmt(inbound.to)}, ${dist2d(inbound.to, INSIDE_ARRIVAL).toFixed(0)}y from the teleport target ${fmt(INSIDE_ARRIVAL)}`);
