@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { inflateSync } from "node:zlib";
 import { MpqArchive, MpqChain, bufferSource } from "../src/mpq";
 import { parseTrs, parseWmoTrs } from "../src/trs";
-import { compositeWmoMap, extractMap } from "../src/extract";
+import { type PlacedWmo, type WmoPaint, compositeWmoMap, extractMap, paintWmos } from "../src/extract";
+import { ADT_FRAME_ORIGIN, type WmoGroupBox, type WmoPlacement, placementToWorld } from "../src/wmo";
 import { buildDxtBlp, buildMpq, dxt1Block, rgb565of } from "./fixtures";
 
 const scratch = mkdtempSync(join(tmpdir(), "wrathbench-minimap-"));
@@ -76,6 +77,17 @@ function firstPixel(pngPath: string): number[] {
   throw new Error("no IDAT");
 }
 
+function placement(position: number[], yaw: number): WmoPlacement {
+  return {
+    name: "World\\wmo\\Dungeon\\Fixture\\Fixture.wmo",
+    uniqueId: 1,
+    position: position as [number, number, number],
+    rotation: [0, yaw, 0],
+    extentMin: [0, 0, 0],
+    extentMax: [0, 0, 0],
+  };
+}
+
 describe("extractMap", () => {
   const c = chain();
   const tiles = parseTrs(new TextDecoder().decode(c.read("textures\\Minimap\\md5translate.trs")!)).get(
@@ -119,10 +131,11 @@ describe("extractMap", () => {
 
 describe("compositeWmoMap", () => {
   /*
-   * Two one-tile groups, placed so each lands in a different world tile: the
-   * origin of a group tile is (-min.x, -max.y + 128), so a group at min.x = 0
-   * sits on row 32 and one at min.x = -533.33325 (a whole ADT north) on row 31.
-   * Both are at max.y = 128, which puts their east edge on the col 32 boundary.
+   * Two one-tile groups, placed so each lands in a different world tile: a
+   * global model at the origin puts a group tile's pixel (0, 0) at world
+   * (-min.x, -max.y + 128), so a group at min.x = 0 sits on row 32 and one at
+   * min.x = -533.33325 (a whole ADT north) on row 31. Both are at max.y = 128,
+   * which puts their east edge on the col 32 boundary.
    */
   const trsText = [
     "dir: WMO\\Dungeon\\Fixture",
@@ -135,19 +148,21 @@ describe("compositeWmoMap", () => {
     { name: "textures\\Minimap\\red.blp", data: solidTile(255, 0, 0) },
     { name: "textures\\Minimap\\blue.blp", data: solidTile(0, 0, 255) },
   ]);
-  const boxes = [
+  const boxes: WmoGroupBox[] = [
     { min: [0, 0, 0], max: [0, 128, 0] },
     { min: [-533.33325, 0, 0], max: [0, 128, 0] },
-  ] as const;
+  ];
 
   const c = new MpqChain([MpqArchive.fromSource("fixture", bufferSource(wmoArchive))]);
   const tiles = parseWmoTrs(new TextDecoder().decode(c.read("textures\\Minimap\\md5translate.trs")!)).get(
     "wmo\\dungeon\\fixture",
   )!;
   const outDir = join(scratch, "369");
+  const toWorld = placementToWorld(placement([0, 0, 0], 0), "wdt");
+  const placed = (b: WmoGroupBox[] = boxes): PlacedWmo[] => [{ tiles, boxes: b, toWorld }];
 
   test("writes one world tile per group, named the way the viewer asks", () => {
-    const stats = compositeWmoMap(c, tiles, [...boxes], outDir, { force: false, limit: Infinity });
+    const stats = compositeWmoMap(c, placed(), outDir, { force: false, limit: Infinity });
     expect(stats).toMatchObject({ written: 2, skipped: 0, missing: 0, failed: 0 });
     expect(statSync(join(outDir, "32_32.png")).size).toBeGreaterThan(0);
     expect(statSync(join(outDir, "31_32.png")).size).toBeGreaterThan(0);
@@ -168,22 +183,112 @@ describe("compositeWmoMap", () => {
   });
 
   test("is idempotent, and --force rewrites", () => {
-    expect(compositeWmoMap(c, tiles, [...boxes], outDir, { force: false, limit: Infinity })).toMatchObject({
+    expect(compositeWmoMap(c, placed(), outDir, { force: false, limit: Infinity })).toMatchObject({
       written: 0,
       skipped: 2,
     });
-    expect(compositeWmoMap(c, tiles, [...boxes], outDir, { force: true, limit: Infinity })).toMatchObject({
+    expect(compositeWmoMap(c, placed(), outDir, { force: true, limit: Infinity })).toMatchObject({
       written: 2,
       skipped: 0,
     });
   });
 
   test("counts a group the model does not have rather than throwing", () => {
-    const stats = compositeWmoMap(c, tiles, [boxes[0]], join(scratch, "369-partial"), {
+    const stats = compositeWmoMap(c, placed([boxes[0] as WmoGroupBox]), join(scratch, "369-partial"), {
       force: false,
       limit: Infinity,
     });
     expect(stats.failed).toBe(1);
     expect(stats.written).toBe(1);
+  });
+});
+
+describe("an instance's placed models over its terrain", () => {
+  /*
+   * A model placed by an ADT, turned 90 degrees, its one 64x64 group tile
+   * green: 32 yards square. The ADT tile it lands on is red. The paint goes
+   * over the terrain where the group is and nowhere else.
+   */
+  const trsText = [
+    "dir: Azeroth",
+    "Azeroth\\map32_32.blp\tred.blp",
+    "dir: WMO\\Dungeon\\Fixture",
+    "WMO\\Dungeon\\Fixture\\Fixture_000_00_00.blp\tgreen.blp",
+    "WMO\\Dungeon\\Fixture\\Other_000_00_00.blp\tblue.blp",
+    "",
+  ].join("\n");
+  const green = (() => {
+    const blocks = new Uint8Array(16 * 16 * 8);
+    const block = dxt1Block(rgb565of(0, 255, 0), 0);
+    for (let i = 0; i < 16 * 16; i++) blocks.set(block, i * 8);
+    return buildDxtBlp(64, 64, 1, blocks);
+  })();
+  const archive = buildMpq([
+    { name: "textures\\Minimap\\md5translate.trs", data: new TextEncoder().encode(trsText) },
+    { name: "textures\\Minimap\\red.blp", data: solidTile(255, 0, 0) },
+    { name: "textures\\Minimap\\green.blp", data: green },
+    { name: "textures\\Minimap\\blue.blp", data: solidTile(0, 0, 255) },
+  ]);
+  const c = new MpqChain([MpqArchive.fromSource("fixture", bufferSource(archive))]);
+  const text = new TextDecoder().decode(c.read("textures\\Minimap\\md5translate.trs")!);
+  const adtTiles = parseTrs(text).get("azeroth")!;
+  const wmoTiles = parseWmoTrs(text).get("wmo\\dungeon\\fixture")!.filter((t) => t.model === "fixture");
+  // Model box x [0, 32], y [-32, 0]; placed 100 yards south and 100 east of
+  // the world origin (inside tile 32_32), turned +90 degrees.
+  const box: WmoGroupBox = { min: [0, -32, 0], max: [32, 0, 0] };
+  const at = placement([ADT_FRAME_ORIGIN + 100, 0, ADT_FRAME_ORIGIN + 100], 90);
+  const toWorld = placementToWorld(at, "adt");
+  const outDir = join(scratch, "36");
+
+  test("the stem filter keeps another model's tiles out", () => {
+    expect(wmoTiles).toHaveLength(1);
+    expect(wmoTiles[0]?.hash).toBe("green.blp");
+  });
+
+  test("a turned model lands where its placement says", () => {
+    const stats = { written: 0, skipped: 0, missing: 0, failed: 0, bytes: 0 };
+    const paint: WmoPaint = paintWmos(c, [{ tiles: wmoTiles, boxes: [box], toWorld }], { limit: Infinity }, stats);
+    expect([...paint.keys()]).toEqual(["32_32"]);
+    // Turned +90 then negated: model (x, y) -> world (-100 + y, -100 - x), so
+    // the box covers world x [-132, -100] and y [-132, -100]. That is south
+    // and east of the origin; the last sample in is half a yard short of 132.
+    const hits = paint.get("32_32")!.hits;
+    const lit: number[] = [];
+    for (let i = 0; i < hits.length; i++) if ((hits[i] as number) > 0) lit.push(i);
+    const rows = lit.map((i) => Math.floor(i / 256));
+    const cols = lit.map((i) => i % 256);
+    const px = (yards: number): number => Math.floor((yards / 533.33325) * 256);
+    expect(Math.min(...rows)).toBe(px(100));
+    expect(Math.max(...rows)).toBe(px(131.5));
+    expect(Math.min(...cols)).toBe(px(100));
+    expect(Math.max(...cols)).toBe(px(131.5));
+  });
+
+  test("the paint goes over the terrain tile, which keeps its own pixels elsewhere", () => {
+    const stats = { written: 0, skipped: 0, missing: 0, failed: 0, bytes: 0 };
+    const paint = paintWmos(c, [{ tiles: wmoTiles, boxes: [box], toWorld }], { limit: Infinity }, stats);
+    expect(extractMap(c, adtTiles, outDir, { force: false, limit: Infinity }, paint)).toMatchObject({ written: 1 });
+    const inside = pixelAt(join(outDir, "32_32.png"), 55, 55);
+    expect(inside[1]).toBeGreaterThan(240);
+    expect(inside[0]).toBeLessThan(16);
+    expect(inside[3]).toBe(255);
+    const outside = pixelAt(join(outDir, "32_32.png"), 10, 10);
+    expect(outside[0]).toBeGreaterThan(240);
+    expect(outside[1]).toBeLessThan(16);
+  });
+
+  test("is idempotent: the composite is written once and then skipped", () => {
+    const paint = paintWmos(c, [{ tiles: wmoTiles, boxes: [box], toWorld }], { limit: Infinity }, {
+      written: 0,
+      skipped: 0,
+      missing: 0,
+      failed: 0,
+      bytes: 0,
+    });
+    expect(extractMap(c, adtTiles, outDir, { force: false, limit: Infinity }, paint)).toMatchObject({
+      written: 0,
+      skipped: 1,
+    });
+    expect(pixelAt(join(outDir, "32_32.png"), 55, 55)[1]).toBeGreaterThan(240);
   });
 });

@@ -49,3 +49,15 @@ export function mapDirectories(mapDbc: Uint8Array): Map<string, number> {
   }
   return out;
 }
+
+/**
+ * Map id -> Map.dbc's instance type (field 2): 0 for a continent or anything
+ * else outside an instance, 1 a dungeon, 2 a raid, 3 a battleground, 4 an
+ * arena.
+ */
+export function mapInstanceTypes(mapDbc: Uint8Array): Map<number, number> {
+  const dbc = parseWdbc(mapDbc);
+  const out = new Map<number, number>();
+  for (let r = 0; r < dbc.recordCount; r++) out.set(dbc.u32(r, 0), dbc.u32(r, 2));
+  return out;
+}

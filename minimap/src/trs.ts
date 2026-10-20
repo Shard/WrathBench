@@ -27,6 +27,8 @@ export interface TrsTile {
 
 /** One tile of one group of a WMO's minimap. */
 export interface TrsWmoTile {
+  /** The model the tile belongs to, lower-cased: `subway` for `Subway_000_00_00.blp`. */
+  model: string;
   /** Index into the model's group list, i.e. into `parseWmoGroupBoxes`. */
   group: number;
   /** Tile index along the group image's first axis. */
@@ -92,8 +94,11 @@ export function parseTrs(text: string): TrsIndex {
 export function parseWmoTrs(text: string): TrsWmoIndex {
   const index: TrsWmoIndex = new Map();
   eachTile(text, (dir, base, hash) => {
-    const m = /^.+_(\d+)_(\d+)_(\d+)\.blp$/i.exec(base);
-    if (m) push(index, dir, { group: Number(m[1]), a: Number(m[2]), b: Number(m[3]), hash });
+    const m = /^(.+)_(\d+)_(\d+)_(\d+)\.blp$/i.exec(base);
+    if (m) {
+      const model = (m[1] as string).toLowerCase();
+      push(index, dir, { model, group: Number(m[2]), a: Number(m[3]), b: Number(m[4]), hash });
+    }
   });
   return index;
 }
