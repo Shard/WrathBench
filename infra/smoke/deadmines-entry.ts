@@ -66,7 +66,9 @@ const fixture: FixtureContext = {
 };
 const areas: { map: number; seq: number }[] = [];
 client.events.onAny((e: any) => {
-  if (e?.opcode === "WB_AREA" && typeof e.data?.map === "number") areas.push({ map: e.data.map, seq: e.seq });
+  // `mapId` (PROTOCOL.md, WB_AREA): a transfer announces it even when the
+  // zone and area stay 1581 on both sides of the portal.
+  if (e?.opcode === "WB_AREA" && typeof e.data?.mapId === "number") areas.push({ map: e.data.mapId, seq: e.seq });
 });
 
 try {
@@ -94,6 +96,9 @@ try {
   for (const op of ["SMSG_TRANSFER_PENDING", "SMSG_NEW_WORLD"]) if (!seen(op, sinceIn)) fail(`no ${op} on the stream for the transfer`);
   await Bun.sleep(1500);
   if (!areas.some((a) => a.seq > sinceIn && a.map === DEADMINES_MAP)) fail(`no WB_AREA for map ${DEADMINES_MAP} after the transfer`);
+  // What an agent reads: the map, named, and that it is a party dungeon.
+  const inMap = client.state.self.map?.value;
+  if (inMap?.id !== DEADMINES_MAP || inMap.instanceType !== "party") fail(`state.self.map after the transfer is ${JSON.stringify(inMap ?? null)}, expected map ${DEADMINES_MAP}, a party dungeon`);
   log(`PASS entry: transferred onto map ${DEADMINES_MAP} at ${fmt(inbound.to)}; SMSG_TRANSFER_PENDING, SMSG_NEW_WORLD and WB_AREA seen`);
 
   // 2. One move inside arrives: map 36 has a mesh. Twelve yards along the
@@ -122,6 +127,8 @@ try {
   if (out.to.map !== 0 || dist2d(out.to, OUTSIDE_ARRIVAL) > 10) fail(`left to map ${out.to.map} at ${fmt(out.to)}, expected map 0 near ${fmt(OUTSIDE_ARRIVAL)}`);
   await Bun.sleep(1500);
   if (!areas.some((a) => a.seq > sinceOut && a.map === 0)) fail("no WB_AREA for map 0 after leaving");
+  const outMap = client.state.self.map?.value;
+  if (outMap?.id !== 0 || outMap.instanceType !== "none") fail(`state.self.map after leaving is ${JSON.stringify(outMap ?? null)}, expected map 0, the open world`);
   log(`PASS exit: back on map 0 at ${fmt(out.to)}`);
   console.log(`PASS: deadmines-entry (${((Date.now() - started) / 1000).toFixed(1)}s)`);
 } catch (e) {

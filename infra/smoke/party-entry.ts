@@ -63,6 +63,13 @@ try {
     }),
   );
   log(`PASS entry: all ${party.length} transferred onto map ${DEADMINES_MAP} (${inbound.map((p) => fmt(p)).join(", ")})`);
+  // What each agent reads: its map, named, a party dungeon (the transfer's
+  // WB_AREA, sent though zone and area stay 1581 across the portal).
+  await Bun.sleep(1500);
+  for (const [i, m] of party.entries()) {
+    const map = clients[i]!.state.self.map?.value;
+    if (map?.id !== DEADMINES_MAP || map.instanceType !== "party") throw new Error(`${m.character}'s state.self.map inside is ${JSON.stringify(map ?? null)}, expected map ${DEADMINES_MAP}, a party dungeon`);
+  }
 
   // The same instance: each sees the other four.
   const deadline = Date.now() + 20_000;
