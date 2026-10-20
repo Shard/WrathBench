@@ -225,7 +225,8 @@ job). "Changing the config shape" below is how a shape change ships.
 
 ```
 preflight   the gate (below): enabled, account, smokes [{script, account}], timeoutMs,
-            deploySmokes, deployTimeoutMs. Its accounts may not be in the pool or on a job.
+            deploySmokes (empty: see below), deployTimeoutMs. Its accounts may not be in the
+            pool or on a job.
 accounts    { pool: [...], paid: [...], local: [...] } — the account classes, each in
             preference order. Never PROBE, never SMOKE*. `pinned` is derived from the jobs and
             refused if authored.
@@ -1002,16 +1003,29 @@ succeeds clears the switch itself.
 #### The lean path
 
 A window holds the fleet, so it carries nothing that does not have to be
-there: drain, deploy, the configured gate and deploy smokes, then the fleet
-resumes at once. The drain is the one wait that may run long, because it lets
+there: drain, deploy, the launch gate (`preflight.smokes`; `deploySmokes` is
+empty), then the fleet resumes at once. The drain is the one wait that may run long, because it lets
 a scored run reach its own episode boundary. Beyond the drain and the rollout,
-whatever runs while the fleet is held — the gate and deploy smokes, and
-anything run by hand — stays within about a minute in total. Testing is
+whatever runs while the fleet is held — the gate, and anything run by hand —
+stays within about a minute in total. Testing is
 welcome; holding the fleet with nothing running is not.
 
 **Module verification runs after the resume**, with the fleet live. A module
 change is checked with `bun wb smoke <name>` (`bun wb smoke` lists them) once
-the window has resumed, on accounts the fleet does not schedule:
+the window has resumed, on accounts the fleet does not schedule. The
+regression suite is one command:
+
+```
+bun wb smoke suite [member …] | --list
+```
+
+It runs the game-surface smokes in `infra/smoke/lib/suite.ts` (kill-credit,
+quest-accept-status, module-quest, module-navigation, achievements-taxi,
+deadmines-entry, chest-loot) on SMOKE2–SMOKE4. Smokes that share an account
+run one after another, and the accounts run in parallel. It prints one
+PASS/FAIL line per smoke with its duration and exits 1 on any failure. It
+refuses any member that would log in on the pool, PROBE, PARTY* or SMOKE, so
+it never holds the fleet. The accounts for hand runs:
 
 - `PROBE`, every smoke's default. It is free while no enabled job or campaign
   pins it and no run, such as the scripted reference run, holds it. `bun wb
@@ -1019,17 +1033,17 @@ the window has resumed, on accounts the fleet does not schedule:
   listed there too and holds nothing.
 - `SMOKE3` and `SMOKE4`, which some smokes use beside PROBE: swim's observer is
   SMOKE3 and death-recovery's priest SMOKE4, so smokes that share one run one
-  after another.
+  after another. The suite uses them too, with SMOKE2, so a hand smoke on one
+  of the three waits for a suite run to finish.
 - module-navigation runs on SMOKE3. `bun wb smoke` passes no environment into
   the pod, so it takes the kubectl form:
   `kubectl -n wrathbench exec deploy/wrathbench-runner -- env MODULE_ACCOUNT=SMOKE3 bun infra/smoke/module-navigation.ts`.
-- Leave `SMOKE` and `SMOKE2` to the gate and the deploy smokes. The supervisor
-  runs its gate on SMOKE as soon as it boots, and again after any worldserver
-  restart.
+- Leave `SMOKE` to the gate. The supervisor runs its gate on SMOKE as soon as
+  it boots, and again after any worldserver restart.
 
 A smoke that fails after the resume has found a defect in a live build: revert
-the pin, which is another window, or fix forward. The deploy smokes are what
-guard the common path.
+the pin, which is another window, or fix forward. The suite is what guards
+the common path, so run it after any release that touches the game surface.
 
 **A smoke that needs a campaign's accounts holds that campaign, never the
 fleet.** The party smokes (`party-entry`, `party-staging`) stage and delete
@@ -1053,7 +1067,7 @@ accounts, and the rest of the fleet runs throughout.
 
 #### Holding the fleet for a CLI-env or sandbox change
 
-The gate and deploy smokes drive the module with a scripted client. They never
+The gate and the suite's smokes drive the module with a scripted client. They never
 start the Claude Code or Codex CLI and never run a model's snippet, so a change
 to the environment the CLIs start with, or to the snippet sandbox's
 confinement, passes them untested, and the resume phase would put every paused
@@ -1136,11 +1150,11 @@ transition, and the Fleet page's banner is the phase plus the script's own
   window closed with the pod named.
 - **waiting** — the worldserver rollout Flux performs, then `/health` answering
   ready with the bearer, for at most 900s.
-- **verifying** — the gate smokes (`preflight.smokes`) and then the deploy
-  smokes (`preflight.deploySmokes`: the game surface and the `module-quest.ts`
-  full arc) run through `kubectl exec` into the runner pod, each list against
-  its timeout. The fleet is down, so nothing else is on the smoke accounts.
-  The detail names the smoke in flight. This phase is the hold the one-minute
+- **verifying** — the gate smokes (`preflight.smokes`) run through `kubectl
+  exec` into the runner pod within their timeout. Any `preflight.deploySmokes`
+  run after them, but that list is empty: the game-surface regression smokes
+  run on demand (`bun wb smoke suite`). The fleet is down, so nothing else is
+  on the smoke accounts. The detail names the smoke in flight. This phase is the hold the one-minute
   budget is about ("The preflight gate", below).
 - **resuming** — every smoke passed; the fleet is scaled back to 1 and the
   pause switch cleared. The supervisor boots, re-gates on the new server
@@ -1206,9 +1220,10 @@ that: it fails and exits 1, because nobody asked for an unverified deploy.
 is read-only and safe while the fleet is up.
 
 Verification is **fail-closed**: the closing line names what verified the
-deploy (`DEPLOYED and verified by N direct smoke(s) + M full-arc smoke(s)`),
-and it can only be reached by a step that actually ran and exited zero. Each
-smoke logs its start, its duration and its exit code.
+deploy (`DEPLOYED and verified by N direct smoke(s).`, with `+ M full-arc
+smoke(s)` only when `deploySmokes` names any), and it can only be reached by
+a step that actually ran and exited zero. Each smoke logs its start, its
+duration and its exit code.
 
 `infra/k8s-deploy.test.ts` covers the drain without a cluster: it runs the
 real script with `kubectl` replaced by a PATH shim and asserts that no smoke
@@ -1233,23 +1248,22 @@ top-level `preflight` block of the config, hot-reloaded like the jobs;
   window, while a login inside it just reattaches. Entries with
   **distinct accounts run in parallel**; entries sharing an account run in
   order. A bare string entry means "on `account`".
-- **`deploySmokes` is what a release proves on top.** The deploy window
-  (`infra/k8s-deploy.sh`) runs the gate smokes
-  and then these, one after another, with the fleet down and before anything
-  resumes; the supervisor never runs them. The game surface lives here:
-  `kill-credit.ts` (combat, kill credit, loot), `quest-accept-status.ts`
-  (quest status, accept, turn-in, vendor) and `module-quest.ts` (the kill
-  quest's turn-in, on a kept character, `Mqsmoke` on SMOKE, from a prepared
-  state). `deployTimeoutMs` is their timeout. Emptying the list takes them out
-  of releases, not out of the gate.
+- **`deploySmokes` is what a release proves on top, and it is empty.** The
+  deploy window (`infra/k8s-deploy.sh`) would run these after the gate
+  smokes, one after another, with the fleet down; the supervisor never runs
+  them. `deployTimeoutMs` would be their one shared deadline, and an empty or
+  absent list is none. The game-surface smokes that used to sit here
+  (kill-credit, quest-accept-status, module-quest) are regression tests, not
+  liveness checks, so they run on demand in the suite (`bun wb smoke suite`,
+  "The lean path" above).
 
-**The budget.** The gate and the deploy smokes together stay within about a
-minute: they run while the fleet is held with nothing running ("The lean
-path", above). The gate takes well under a second, kill-credit (which starts
-at seven of its eight kills) about 12 s, quest-accept-status about 20 s and
-module-quest about 5 s: about 35 s in all. The first window on a SMOKE account
-without `Mqsmoke` takes about 95 s once, while it is created. A new smoke is never added to either list to cover a
-gap. It lives on demand, as `bun wb smoke <name>` run with the fleet live, and
+**The budget.** Whatever the window smokes stays within about a minute, since
+it runs while the fleet is held with nothing running ("The lean path",
+above). Today that is the gate alone, which takes well under a second. The
+suite runs on demand with the fleet live, so it holds nothing and has no
+budget: it takes about 80 s once its characters exist, and longer the first
+time, while each new one waits out its first logout save. A new smoke is never
+added to either list to cover a gap. It lives on demand, as `bun wb smoke <name>` run with the fleet live, and
 a smoke that truly must gate releases has to fit inside the minute by
 replacing or shrinking another — the operator's call.
 
@@ -1999,8 +2013,8 @@ reach:
 Only the fleet may reach the Kubernetes API, for the run-pod launcher. It may
 also reach MySQL, for a gate smoke that stages a fixture in that pod (the gate
 runs only `infra/smoke/preflight.ts` today, which stages nothing; the
-fixture-staging smokes, kill-credit among them, are deploy smokes and run in
-the runner pod). Neither may reach ClickHouse, the viewer or any other address on the LAN.
+fixture-staging smokes, kill-credit among them, are on-demand suite smokes and
+run in the runner pod). Neither may reach ClickHouse, the viewer or any other address on the LAN.
 
 **Turning it on is a release step of its own.** Ship the chart first, with the
 switch off, which changes nothing. Then set the values in a separate GitOps
@@ -2039,8 +2053,8 @@ token. ClickHouse and the viewer should print `TimeoutError`. The check takes
 under half a minute, so the hold is the reconcile plus that: resume as soon as
 it passes. After the resume, watch three things with the fleet live:
 
-- the next preflight gate pass, and the next release's deploy smokes
-  (kill-credit's fixture staging uses MySQL from the runner pod);
+- the next preflight gate pass, and the next `bun wb smoke suite` (kill-credit's
+  fixture staging uses MySQL from the runner pod);
 - each driver's first episode, through its first model call and first module
   call;
 - the first run pod.
@@ -2073,8 +2087,8 @@ The compose quickstart keeps SOAP off.
 **Turning it on** takes one deploy window, because SOAP, the allowlist and
 the module are all read when the worldserver is recreated. Everything after
 the window runs with the fleet live: PARTY1–PARTY5 are in no account class and
-on no job until a party campaign is enabled, and the deploy smokes never touch
-them.
+on no job until a party campaign is enabled, and neither the gate nor the
+suite touches them.
 
 1. Before the window, with the server up, run
    `bun wb accounts ensure PARTY1 PARTY2 PARTY3 PARTY4 PARTY5`. That works with
@@ -2087,7 +2101,7 @@ them.
    starts, and the reference is optional, so a pod started without the key
    carries it empty until it restarts.
 3. The values commit: `staging: { enabled: true }`. Then run the window as
-   usual (`bun wb release run`); the fleet resumes when the deploy smokes pass.
+   usual (`bun wb release run`); the fleet resumes when the gate passes.
 4. After the resume, with no party campaign enabled yet, run these in this
    order:
    - `read -rs P && printf '%s\n' "$P" | bun wb accounts stager` creates STAGER
