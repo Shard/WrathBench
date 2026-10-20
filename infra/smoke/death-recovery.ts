@@ -59,6 +59,7 @@ const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // Fresh character every run: the arc needs a level 1 that kobolds can kill.
 import { connect, type WrathClient } from "../../sdk/src/index";
 import { applyScenario, characterNames, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
+import { failOnce } from "./lib/fail";
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase, moduleWsBase } from "./lib/module";
@@ -108,10 +109,11 @@ async function cleanup() {
 }
 
 let step = "setup";
+// Cleanup is the priest's logout and delete (up to eight tries 3s apart) and
+// the warrior's session and delete (six tries 2s apart): 90s covers it.
+const { fail: failNow, failed } = failOnce({ prefix: () => `[probe] FAIL[${step}]`, cleanup, cleanupMs: 90_000 });
 function fail(msg: string): never {
-  console.error(`[probe] FAIL[${step}]: ${msg}`);
-  cleanup().finally(() => process.exit(1));
-  throw new Error("unreachable");
+  return failNow(msg);
 }
 
 async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
@@ -522,4 +524,4 @@ async function main() {
   process.exit(0); // open WebSockets would otherwise hold the event loop
 }
 
-main().catch((e) => fail(String(e?.stack ?? e)));
+main().catch(failed);

@@ -43,6 +43,7 @@
 
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders } from "./lib/auth";
+import { failOnce } from "./lib/fail";
 import { moduleBase, moduleWsBase } from "./lib/module";
 
 const BASE = moduleBase();
@@ -61,12 +62,15 @@ const ACHIEVEMENT_LEVEL_10 = 6; // Achievement.dbc: "Level 10", 10 points, plant
 function log(msg: string) {
   console.log(`[probe] ${msg}`);
 }
+// Best-effort session cleanup so a failed run does not leave the account
+// blocked for the next one (lib/fail.ts: once, awaited, then the exit).
+const { fail: failNow, failed } = failOnce({
+  prefix: () => "[probe] FAIL",
+  cleanup: () => fetch(`${BASE}/session`, { method: "DELETE", headers: authHeaders(), body: JSON.stringify({ token: TOKEN }) }),
+  cleanupMs: 3000,
+});
 function fail(msg: string): never {
-  console.error(`[probe] FAIL: ${msg}`);
-  const bail = () => process.exit(1);
-  setTimeout(bail, 3000);
-  fetch(`${BASE}/session`, { method: "DELETE", headers: authHeaders(), body: JSON.stringify({ token: TOKEN }) }).then(bail, bail);
-  throw new Error("unreachable");
+  return failNow(msg);
 }
 
 async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
@@ -225,4 +229,4 @@ async function main() {
   process.exit(0);
 }
 
-main().catch((e) => fail(String(e?.stack ?? e)));
+main().catch(failed);
