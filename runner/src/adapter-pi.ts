@@ -354,17 +354,20 @@ export function piArgs(o: PiArgsOptions): string[] {
 /**
  * The child environment: an allowlist, never the runner's own. `cliBaseEnv`
  * is the plumbing; `HOME` and `PI_CODING_AGENT_DIR` are replaced by the run's
- * own directory; the phone-home switches are set; and the one credential is
+ * own directory, and `TMPDIR` by a directory inside the episode's temp cwd,
+ * so what pi saves there (the whole text of a result it truncated) goes when
+ * the episode does; the phone-home switches are set; and the one credential is
  * the run's key under its own name, which `models.json` reads. In tests
  * `extra` carries the fake CLI's own variables.
  */
 export function piChildEnv(
   parent: Record<string, string | undefined>,
-  o: { agentDir: string; apiKeyEnv: string; extra?: Record<string, string> },
+  o: { agentDir: string; apiKeyEnv: string; tmpDir?: string; extra?: Record<string, string> },
 ): Record<string, string> {
   const out = cliBaseEnv(parent);
   out["HOME"] = o.agentDir;
   out["PI_CODING_AGENT_DIR"] = o.agentDir;
+  if (o.tmpDir !== undefined) out["TMPDIR"] = o.tmpDir;
   out["PI_OFFLINE"] = "1";
   out["PI_TELEMETRY"] = "0";
   out["PI_SKIP_VERSION_CHECK"] = "1";
@@ -389,6 +392,19 @@ function assistantParts(message: Record<string, unknown>): { text: string; think
     .filter((b) => b["type"] === "toolCall")
     .map((b) => ({ id: typeof b["id"] === "string" ? b["id"] : "", name: typeof b["name"] === "string" ? b["name"] : "", input: b["arguments"] }));
   return { text, thinkingChars, toolUses };
+}
+
+/** How pi 1.3.0 opens an MCP text result it middle-truncated (`dist/extensions/mcp/tools.js`). */
+export const PI_TRUNCATION_PREFIX = "Warning: truncated output";
+
+/** The text blocks of a `tool_execution_end` result, joined; undefined when it has none. */
+export function piResultText(result: unknown): string | undefined {
+  const content = (result as { content?: unknown } | null | undefined)?.content;
+  if (!Array.isArray(content)) return undefined;
+  const parts = content
+    .filter((b): b is { type: string; text: string } => b !== null && typeof b === "object" && (b as { type?: unknown }).type === "text" && typeof (b as { text?: unknown }).text === "string")
+    .map((b) => b.text);
+  return parts.length > 0 ? parts.join("\n") : undefined;
 }
 
 /** pi's `compaction_end`, as the harness's compaction record. Null when it carries no result (aborted, failed). */
@@ -818,7 +834,9 @@ export async function runPiEpisode(o: PiEpisodeOptions): Promise<LoopOutcome> {
       writePiConfig({ runDir: o.runDir, piProvider: provider.provider, apiBase, apiKeyEnv: config.apiKeyEnv, bridgePath, mcpPort: listener.port, systemPrompt, reserveTokens });
     let files = writeConfig();
     const args = piArgs({ piProvider: provider.provider, model: config.model, systemPromptPath: files.systemPromptPath, thinking });
-    const env = piChildEnv(o.env ?? process.env, { agentDir: files.agentDir, apiKeyEnv: config.apiKeyEnv, ...(o.extraEnv !== undefined ? { extra: o.extraEnv } : {}) });
+    const tmpDir = join(cwd, "tmp");
+    mkdirSync(tmpDir, { recursive: true });
+    const env = piChildEnv(o.env ?? process.env, { agentDir: files.agentDir, apiKeyEnv: config.apiKeyEnv, tmpDir, ...(o.extraEnv !== undefined ? { extra: o.extraEnv } : {}) });
     const startupTimeout = o.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
 
     let reserveTokens: number | undefined;
@@ -1041,6 +1059,25 @@ export async function runPiEpisode(o: PiEpisodeOptions): Promise<LoopOutcome> {
                 trigger: typeof msg["reason"] === "string" ? msg["reason"] : null,
                 aborted: msg["aborted"] === true,
                 error: typeof msg["errorMessage"] === "string" ? msg["errorMessage"].slice(0, 600) : null,
+              });
+            }
+            break;
+          }
+          case "tool_execution_end": {
+            // pi cuts the middle out of an MCP text result over 20 KB before
+            // the model reads it (`MCP_OUTPUT_MAX_BYTES`, pi 1.3.0), and saves
+            // the whole text to a temp file the model has no tool to open. The
+            // `snippet_result`/`tool_result` above holds what our server
+            // answered; this holds what the model was shown instead.
+            const seen = piResultText(msg["result"]);
+            if (seen !== undefined && seen.startsWith(PI_TRUNCATION_PREFIX)) {
+              trajectory.append({
+                t: "harness",
+                kind: "tool_result_truncated",
+                turn,
+                toolCallId: typeof msg["toolCallId"] === "string" ? msg["toolCallId"] : null,
+                name: typeof msg["toolName"] === "string" ? msg["toolName"].replace(`mcp__${MCP_SERVER_NAME}__`, "") : null,
+                text: seen,
               });
             }
             break;

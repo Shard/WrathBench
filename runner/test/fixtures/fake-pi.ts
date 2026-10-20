@@ -235,7 +235,12 @@ async function runPrompt(text: string): Promise<void> {
   emit({ type: "message_end", message: call });
   emit({ type: "tool_execution_start", toolCallId: `call-${turn}`, toolName: "mcp__wrathbench__run_snippet", args: {} });
   const res = await callSnippet(`await sdk.say("turn ${turn}")`);
-  emit({ type: "tool_execution_end", toolCallId: `call-${turn}`, toolName: "mcp__wrathbench__run_snippet", result: { content: res?.content ?? [] }, isError: res?.isError === true });
+  // $WB_FAKE_TRUNCATE: what pi shows the model of a result over its 20 KB cap.
+  const shown =
+    Bun.env["WB_FAKE_TRUNCATE"] === "1"
+      ? [{ type: "text", text: "Warning: truncated output (original token count: 6761)\nTotal output lines: 2\n\nok …5000 chars truncated…\n\n[Full output: /tmp/pi-mcp-x.txt (read it with offset/limit)]" }]
+      : (res?.content ?? []);
+  emit({ type: "tool_execution_end", toolCallId: `call-${turn}`, toolName: "mcp__wrathbench__run_snippet", result: { content: shown }, isError: res?.isError === true });
   emit({ type: "turn_end", message: call, toolResults: [] });
   emit({ type: "turn_start" });
   const done = assistant([{ type: "text", text: `turn ${turn}: acting` }], usage(100, 5, 1000 * turn), "stop");

@@ -219,6 +219,17 @@ describe("pi driver", () => {
     expect((readRecord(recordPath)["prompts"] as string[])[1]).toContain(COMPACTED_NOTICE);
   });
 
+  test("a result pi truncated before the model read it is recorded as the model saw it", async () => {
+    const { runDir, options } = setup("tools", { maxTurns: 1 }, { WB_FAKE_TRUNCATE: "1" });
+    await runPiEpisode(options);
+    const t = entries(runDir);
+    const cut = t.find((e) => e["t"] === "harness" && e["kind"] === "tool_result_truncated")!;
+    expect(cut).toMatchObject({ turn: 1, name: "run_snippet", toolCallId: "call-1" });
+    expect(String(cut["text"])).toStartWith("Warning: truncated output");
+    // What our server answered stays on the snippet result, whole.
+    expect(String(t.find((e) => e["t"] === "snippet_result")!["text"])).toContain("ran:");
+  });
+
   test.each([
     ["error402", { kind: "paused", reason: "quota-exhausted" }],
     ["error429", { kind: "paused", reason: "rate-limited" }],
