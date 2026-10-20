@@ -11,6 +11,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { AgentPosition, TrackResponse } from "../../runner/viewer/api-types";
+import { buildTileIndex } from "../../runner/viewer/tileindex";
 import { LOD_MAX, TILE_PX, TILE_SIZE, lodGrid, worldToPixel } from "../../runner/viewer/worldmap";
 import { positionsAt } from "../src/lib/replay";
 import {
@@ -36,7 +37,9 @@ import {
   ART_FADE_START_PX,
   TILE_CACHE_MAX,
   artLevel,
+  cellAbsent,
   frameLevels,
+  minimapHidden,
   minimapAlpha,
   pxPerAdt,
   TILE_MIN_PX,
@@ -466,6 +469,51 @@ describe("the art/minimap crossfade", () => {
       expect(native.minimap).toBe(0);
       expect(native.art).toBe(1);
     }
+  });
+});
+
+/*
+ * What the tile index spares a frame: no request for a cell that does not
+ * exist, and none for a minimap cell the art hides at full strength.
+ */
+describe("the tile index's skips", () => {
+  const screen = { w: 1280, h: 800 };
+  const continent = frameLevels(ART_FADE_START_PX / 2 / TILE_PX, screen);
+  const z = continent.minimap;
+  const index = buildTileIndex(
+    [
+      { layer: "minimap", z: 0, row: 43, col: 31 },
+      { layer: "minimap", z, row: 1, col: 1 },
+      { layer: "minimap", z, row: 1, col: 2 },
+      { layer: "art", z, row: 1, col: 1 },
+      { layer: "art", z, row: 1, col: 2 },
+    ],
+    [{ z, row: 1, col: 1 }],
+  );
+
+  test("a cell the index does not list is absent, and with no index nothing is", () => {
+    expect(cellAbsent(index, "minimap", 0, 43, 31)).toBe(false);
+    expect(cellAbsent(index, "minimap", 0, 43, 32)).toBe(true);
+    expect(cellAbsent(index, "art", z, 0, 0)).toBe(true);
+    expect(cellAbsent(null, "minimap", 0, 43, 32)).toBe(false);
+  });
+
+  test("zoomed out, the minimap is skipped where the art covers it and only there", () => {
+    expect(continent.minimapAlpha).toBe(0);
+    expect(minimapHidden(continent, index, 1, 1)).toBe(true);
+    // Art there, but not opaque over all of the minimap's paint: fetched.
+    expect(minimapHidden(continent, index, 1, 2)).toBe(false);
+    // No index (an instance with none published, a 404): fetched.
+    expect(minimapHidden(continent, null, 1, 1)).toBe(false);
+  });
+
+  test("never while the minimap has any weight", () => {
+    const mid = frameLevels(Math.sqrt(ART_FADE_START_PX * ART_FADE_END_PX) / TILE_PX, screen);
+    expect(mid.minimapAlpha).toBeGreaterThan(0);
+    const covered = buildTileIndex([], [{ z: Math.max(1, mid.minimap), row: 1, col: 1 }]);
+    expect(minimapHidden(mid, covered, 1, 1)).toBe(false);
+    const zoomedIn = frameLevels(ART_FADE_END_PX / TILE_PX, screen);
+    expect(minimapHidden(zoomedIn, covered, 1, 1)).toBe(false);
   });
 });
 
