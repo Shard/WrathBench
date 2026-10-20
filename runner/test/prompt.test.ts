@@ -79,8 +79,12 @@ describe("system prompt: the shapes and seams runs proved models get wrong", () 
     // A navigation fan-out: 6 of 7 runs hit the 30s abandon with a moveTo in
     // flight, and one re-issued the identical blocking call to one coordinate
     // five times.
-    expect(SYSTEM_PROMPT).toContain("how long a move takes depends on its route and on whether the character runs, swims or rides");
-    // No pace is stated: the module's walk time, not 7yd/s, judges the note.
+    // The operator's wording (2026-10-20): a rough on-foot figure, with the
+    // direction a swim or a mount moves it; moveTo's note judges by the
+    // module's walk time, so the prompt states no speed.
+    expect(SYSTEM_PROMPT).toContain(
+      "A long walk is the usual way to hit that limit (on foot roughly 200y; less swimming, more mounted), so dispatch those with await sdk.moveToAsync(target)",
+    );
     expect(SYSTEM_PROMPT).not.toContain("7yd/s");
     expect(SYSTEM_PROMPT).toContain("await sdk.moveToAsync(target)");
   });
@@ -208,22 +212,21 @@ describe("episode sentence", () => {
   test("every rendering hashes as pinned, so a prompt edit has to move its pins on purpose", () => {
     // Pinned by value, not by rebuilding from the same parts, so a change to
     // any rendering fails here. The last edit to move them is the long-walk
-    // clause, which no longer states a run speed or a yard figure (moveTo
-    // judges a walk by the module's own walk time), in the shared body, so it
-    // moved all twelve.
+    // clause, which no longer states a run speed (on foot roughly 200y, less
+    // swimming, more mounted), in the shared body, so it moved all twelve.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:069980b9a5ba7fc9", off: "sha256:d7cc8d01029415fb" },
-        cli: { on: "sha256:072531069fc3aa27", off: "sha256:597a4580c3b4af6f" },
+        wrathbench: { on: "sha256:5a84b336a5a730d7", off: "sha256:f145f93a4d5ef110" },
+        cli: { on: "sha256:302f209b954a1d06", off: "sha256:c528aeb18e2dc33e" },
       },
       e90: {
-        wrathbench: { on: "sha256:7d3b23c861326c3c", off: "sha256:a1171d6a9d3ecaec" },
-        cli: { on: "sha256:4e69f6ec63afd268", off: "sha256:6183bf5897b2d913" },
+        wrathbench: { on: "sha256:7210b072d808178c", off: "sha256:11e2a266dde9d30e" },
+        cli: { on: "sha256:cd899c9cbb71bab8", off: "sha256:150a867c5c0761e7" },
       },
       e360: {
-        wrathbench: { on: "sha256:e1023c5c7768c983", off: "sha256:74fef1b5aa0bd601" },
-        cli: { on: "sha256:24b2bdf6be4d13bc", off: "sha256:cfedb5ad7d12fcab" },
+        wrathbench: { on: "sha256:6e66cdbad707f9cd", off: "sha256:bea28b93120a7dd0" },
+        cli: { on: "sha256:97d0cdb6cae8af15", off: "sha256:7d8614e98e04368d" },
       },
     };
     const episodes = [
