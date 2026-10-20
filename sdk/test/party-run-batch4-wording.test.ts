@@ -1,9 +1,9 @@
 /**
  * The fourth batch from the 2026-10-20 Deadmines party runs, the half that
  * changes what the model reads: a repair at an NPC that cannot repair, what
- * an equip displaced, a climb refused at the character's own feet, and when
- * an aura runs out. Every frame is hand-written from module/PROTOCOL.md's
- * tables with invented names and positions.
+ * an equip displaced, and when an aura runs out. Every frame is
+ * hand-written from module/PROTOCOL.md's tables with invented names and
+ * positions.
  */
 import { describe, expect, test } from "bun:test";
 
@@ -113,11 +113,8 @@ describe("equipItem: an equip names what it displaced", () => {
 
 const moveResult = (seq: number, moveId: number, extra: Record<string, unknown>) =>
   frame(seq, "WB_MOVE_RESULT", { moveId, status: "drop", pos: { x: -1234.5, y: 987.25, z: 42.125, o: 0 }, ...extra });
-const STANDSTILL =
-  " The step is where you stand: no walkable route climbs out from here, and the Hearthstone or a spirit healer is a way out.";
-
-describe("moveTo: a climb refused at the character's own feet says no walk leaves the spot", () => {
-  test("moveTo: the edge is where the move started", async () => {
+describe("moveTo: a climb refused at the character's own feet reads as any drop refusal", () => {
+  test("moveTo and moveToAsync: the edge is where the move started, and the recipe stays the plain one", async () => {
     const stub = startStub({ onConnect: () => world() });
     const client = await inWorld(stub);
     await client.events.waitFor((e) => e.seq === 17, { timeout: 2000 });
@@ -126,41 +123,15 @@ describe("moveTo: a climb refused at the character's own feet says no walk leave
     push(stub, moveResult(90, 1, { dz: 46.08, reachedPos: { x: -1234.5, y: 987.25, z: 42.125 }, target: { x: -1200, y: 950, z: 40 } }));
     const r = await pending;
     expect(r).toMatchObject({ ok: false, status: "drop" });
-    expect(r.hint).toEndWith(`find the ramp/stairs.${STANDSTILL}`);
-    client.close();
-    await stub.stop();
-  });
-
-  test("moveToAsync: the harness hint carries it too", async () => {
-    const stub = startStub({ onConnect: () => world() });
-    const client = await inWorld(stub);
-    await client.events.waitFor((e) => e.seq === 17, { timeout: 2000 });
+    expect(r.hint).toEndWith("find the ramp/stairs.");
+    client.drainActionHints();
     const ack = await client.moveToAsync({ x: -1200, y: 950, z: 40 });
-    push(stub, moveResult(90, ack.moveId, { dz: 46.08, reachedPos: { x: -1234.5, y: 987.25, z: 42.125 } }));
-    await client.events.waitFor((e) => e.seq === 90, { timeout: 2000 });
+    push(stub, moveResult(91, ack.moveId, { dz: 46.08, reachedPos: { x: -1234.5, y: 987.25, z: 42.125 } }));
+    await client.events.waitFor((e) => e.seq === 91, { timeout: 2000 });
     await Bun.sleep(5);
     const [drop] = client.drainActionHints();
     expect(drop).toMatchObject({ action: "moveToAsync", status: "drop" });
-    expect(drop!.hint).toEndWith(STANDSTILL);
-    client.close();
-    await stub.stop();
-  });
-
-  test("a climb reached after walking, and a fall at the feet, keep their recipes alone", async () => {
-    const stub = startStub({ onConnect: () => world() });
-    const client = await inWorld(stub);
-    await client.events.waitFor((e) => e.seq === 17, { timeout: 2000 });
-    const walked = client.moveTo({ x: -1200, y: 950, z: 40 });
-    await untilAction(stub, "move_to");
-    push(stub, moveResult(90, 1, { dz: 5.5, reachedPos: { x: -1210, y: 970, z: 42 }, pos: { x: -1210, y: 970, z: 42, o: 0 } }));
-    expect((await walked).hint).not.toContain("where you stand");
-    const ack = await client.moveToAsync({ x: -1200, y: 950, z: 10 });
-    push(stub, moveResult(91, ack.moveId, { dz: -30, reachedPos: { x: -1210, y: 970, z: 42 } }));
-    await client.events.waitFor((e) => e.seq === 91, { timeout: 2000 });
-    await Bun.sleep(5);
-    const hints = client.drainActionHints();
-    expect(hints.length).toBeGreaterThan(0);
-    for (const h of hints) expect(h.hint).not.toContain("where you stand");
+    expect(drop!.hint).toEndWith("find the ramp/stairs.");
     client.close();
     await stub.stop();
   });

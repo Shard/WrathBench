@@ -1277,25 +1277,6 @@ export function dropRefusalHint(p: MovePoint, d: MoveResultData, j: DropJudgemen
   );
 }
 
-/**
- * Said of a climb refused where the character already stood (rogue,
- * 2026-10-20 14:22-14:24: in a pit, every destination's route began with
- * the same 46-yard climb at its own feet). One call shows it: the route's
- * first step is the climb, so no walk leaves the spot.
- */
-const CLIMB_FROM_STANDSTILL =
-  " The step is where you stand: no walkable route climbs out from here, and the Hearthstone or a spirit healer is a way out.";
-
-/**
- * Whether a `drop` is a climb whose edge is the position the move started
- * from (within a yard): refused before a single step was walked.
- */
-function climbsFromStandstill(d: MoveResultData, from: UnitPosition | undefined): boolean {
-  if (from === undefined || d.dz === undefined || d.dz <= 0 || d.surfaceZ !== undefined) return false;
-  const edge = d.reachedPos ?? d.pos;
-  return Math.hypot(edge.x - from.x, edge.y - from.y, edge.z - from.z) <= 1;
-}
-
 /** `data.status` of a move result without widening its type at the call site. */
 function status_(d: MoveResultData): string {
   return d.status;
@@ -3970,7 +3951,7 @@ export class WrathClient {
     });
     return this.postMoveTo(resolved.point, resolved.guid, options.force === true)
       .then(async ({ ack, etaMs }): Promise<MoveToAsyncResponse> => {
-        this.watchAsyncMove(ack.moveId, resolved.point, epoch, from);
+        this.watchAsyncMove(ack.moveId, resolved.point, epoch);
         // The ack and the event travel on different sockets, so the refusal
         // can also land just after the ack. An ack with no route length is
         // a move the module did not dispatch (PROTOCOL.md: a refusal at
@@ -3990,7 +3971,7 @@ export class WrathClient {
         }
         if (verdict !== undefined && !ASYNC_MOVE_UNREPORTED.has(status_(verdict))) {
           const status = status_(verdict);
-          const hint = this.asyncMoveRecipe(status, resolved.point, verdict, from);
+          const hint = this.asyncMoveRecipe(status, resolved.point, verdict);
           return { ok: false, action: ack.action, moveId: ack.moveId, status, ...(hint !== undefined ? { hint } : {}) };
         }
         const note =
@@ -4016,7 +3997,7 @@ export class WrathClient {
    * land before the ack); unwatched after the verdict or `moveTo`'s own
    * default wait.
    */
-  private watchAsyncMove(moveId: number, point: MovePoint, epoch: number, from: UnitPosition | undefined): void {
+  private watchAsyncMove(moveId: number, point: MovePoint, epoch: number): void {
     this.events
       .waitFor(
         (e) => isEvent(e, "WB_MOVE_RESULT") && !isDecodeError(e.data) && (e.data as MoveResultData).moveId === moveId,
@@ -4026,19 +4007,14 @@ export class WrathClient {
         const data = event.data as MoveResultData;
         const status = status_(data);
         if (ASYNC_MOVE_UNREPORTED.has(status)) return;
-        this.noteActionHint("moveToAsync", status, this.asyncMoveRecipe(status, point, data, from), point);
+        this.noteActionHint("moveToAsync", status, this.asyncMoveRecipe(status, point, data), point);
       })
       .catch(() => {});
   }
 
   /** `moveRecipe` for a `moveToAsync` verdict: a ghost's fall also says a ghost takes no fall damage. */
-  private asyncMoveRecipe(
-    status: string,
-    point: MovePoint,
-    data: MoveResultData,
-    from: UnitPosition | undefined,
-  ): string | undefined {
-    const recipe = this.moveRecipe(status, point, data, undefined, from);
+  private asyncMoveRecipe(status: string, point: MovePoint, data: MoveResultData): string | undefined {
+    const recipe = this.moveRecipe(status, point, data);
     // Only a fall: a climb (dz > 0) and a step underground (surfaceZ)
     // are refused forced or not, so fall damage says nothing about them.
     const fall = data.dz !== undefined && data.dz < 0 && data.surfaceZ === undefined;
@@ -4054,20 +4030,13 @@ export class WrathClient {
    * character dead (the server's health-0 update precedes the result in the
    * same tick) says so instead of listing the possible causes.
    */
-  private moveRecipe(
-    status: string,
-    point: MovePoint,
-    data: MoveResultData,
-    judged?: DropJudgement,
-    from?: UnitPosition,
-  ): string | undefined {
+  private moveRecipe(status: string, point: MovePoint, data: MoveResultData, judged?: DropJudgement): string | undefined {
     if (status === "interrupted" && this.isCorpse()) return MOVE_DIED_HINT;
-    const recipe =
+    return (
       (status === "target_off_mesh" ? transportDockHint(this.state, point) : undefined) ??
       (status === "drop" && judged !== undefined ? dropRefusalHint(point, data, judged) : undefined) ??
-      MOVE_HINTS[status]?.(point, data);
-    if (recipe !== undefined && status === "drop" && climbsFromStandstill(data, from)) return recipe + CLIMB_FROM_STANDSTILL;
-    return recipe;
+      MOVE_HINTS[status]?.(point, data)
+    );
   }
 
   /**
@@ -6964,7 +6933,7 @@ export class WrathClient {
       // than the ten dead minutes the leftover flag cost.
       await this.stop().catch(() => {});
     }
-    const recipe = this.moveRecipe(status, point, data, dropJudgement, from);
+    const recipe = this.moveRecipe(status, point, data, dropJudgement);
     // Recorded before the call-specific notes are folded in: the recipe is what
     // the model needs and what dedupes; the notes are per-call (see ActionHint).
     this.noteActionHint("moveTo", status, recipe, point);
