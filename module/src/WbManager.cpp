@@ -5360,6 +5360,11 @@ namespace WrathBench
                 uint32 maxDur, dur; p >> maxDur >> dur;
                 a.Add("maxDuration", maxDur).Add("duration", dur);
             }
+            // The name a client's buff frame shows for the id: client-cache
+            // (Spell.dbc) knowledge, as on the spellbook rows (AddSpellFields).
+            if (SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId))
+                if (info->SpellName[0])
+                    a.Add("name", info->SpellName[0]);
         }
         else
             a.Add("removed", true);
