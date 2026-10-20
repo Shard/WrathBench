@@ -25,6 +25,7 @@ import { comparabilityOf, promptHash } from "../src/comparability";
 import { harnessClash, loadRunConfig } from "../src/config";
 import { CODEX_SYSTEM_PROMPT, CLAUDE_CODE_SYSTEM_PROMPT, PI_SYSTEM_PROMPT, SYSTEM_PROMPT, buildSystemPrompt, contextSentence } from "../src/prompt";
 import { piProviderOf } from "../src/providers";
+import { priceFor, rosterPriceGap, runCost } from "../viewer/pricing";
 import { EpisodicLog } from "../src/episodic";
 import { Scratchpad } from "../src/scratchpad";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
@@ -349,6 +350,16 @@ describe("pi driver pieces", () => {
     expect(tuple.promptHash).toBe(promptHash(CODEX_SYSTEM_PROMPT));
     // DeepSeek is no OpenRouter base, so no routing is stamped.
     expect(tuple.routing).toBeUndefined();
+  });
+
+  test("a pi run is priced from its tokens by the provider row its base and model name, as an openai run there is", () => {
+    const run = { model: "deepseek-flash", apiBase: BASE, platform: null, driver: "pi", harness: "pi" as const };
+    const price = priceFor(run);
+    expect(price?.id).toBe("deepseek/deepseek-flash");
+    expect(price).toEqual(priceFor({ ...run, driver: "openai", harness: "wrathbench" as const }));
+    expect(rosterPriceGap({ model: "deepseek-flash", driver: "pi", apiBase: BASE })).toBeNull();
+    // No provider charge is ever read for it: only the estimate.
+    expect(runCost({ run, tokens: null, reportedUsd: null }).actual.usd).toBeNull();
   });
 
   test("a pi entry is outside the one-model-one-harness rule, since it never runs in a scored lane", () => {

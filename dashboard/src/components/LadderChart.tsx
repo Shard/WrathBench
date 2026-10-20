@@ -34,6 +34,7 @@ const HIT_R = 12;
 function harnessColour(harnesses: readonly string[]): string {
   if (harnesses.length === 1 && harnesses[0] === "claude-code") return "var(--claude)";
   if (harnesses.length === 1 && harnesses[0] === "codex") return "var(--codex)";
+  if (harnesses.length === 1 && harnesses[0] === "pi") return "var(--pi)";
   if (harnesses.length === 1 && harnesses[0] === "wrathbench") return "var(--accent)";
   return "var(--dim)";
 }

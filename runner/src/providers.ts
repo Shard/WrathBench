@@ -171,7 +171,7 @@ export function piProviderOf(keyEnv: string): { provider: string } | { refusal: 
  * (the table above), or null when the pairing holds. The defaults
  * are the runner's: no base is OpenRouter and no key name is `OPENROUTER_KEY`,
  * so an entry stating only a non-OpenRouter base is refused — it would send
- * the OpenRouter key there. Only the openai driver sends a key; the CLI
+ * the OpenRouter key there. Only an endpoint driver (openai, pi) sends a key; the subscription CLI
  * drivers are given no `--api-key-env` at all (`episodeArgv` in
  * `infra/run-roster.ts`). Every reader of a roster entry asks this: the store's
  * write path, and the fleet parser and the viewer's campaign squares through

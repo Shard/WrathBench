@@ -92,13 +92,14 @@ const BODY_TAIL = `Act through tools every turn; text without a tool call does n
  * there only because it is still true and has a reason it is worth saying: a
  * pause and resume replays no conversation but does restore the scratchpad
  * (`resumeSessionNote`), so the notes are the only thing that crosses that gap.
- * It names "the CLI", never which one: claude-code and codex are the same
+ * It names "the CLI", never which one: claude-code, codex and pi are the same
  * regime (one continuous session the scaffold owns and compacts), so they get
  * the same bytes, and the prompt hash in the comparability tuple stays equal
- * across the two CLI groups — the harness tag is what tells them apart.
+ * across the CLI groups — the harness tag is what tells them apart. pi's case
+ * was added by choice, not inherited (#257; the operator's to confirm).
  *
  * Exhaustive over `Harness` on purpose, exactly as `episodeSection` is over
- * `EpisodeId`: a fourth harness must not silently inherit a sentence that
+ * `EpisodeId`: a new harness must not silently inherit a sentence that
  * describes machinery it does not run.
  */
 export function contextSentence(harness: Harness): string {

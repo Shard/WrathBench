@@ -1,7 +1,7 @@
 /**
- * What the two CLI drivers do identically.
+ * What the CLI drivers do identically.
  *
- * `adapter-claude.ts` and `adapter-codex.ts` mirror each other invariant for
+ * `adapter-claude.ts`, `adapter-codex.ts` and `adapter-pi.ts` mirror each other invariant for
  * invariant and differ only where the CLIs do (runner/README.md, "The codex
  * driver"). Where the code is the same code, it lives here once, so a fix to
  * process teardown cannot land on one driver and miss the other.

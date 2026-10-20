@@ -1425,7 +1425,7 @@ once the switch is on. An arm image must be a build that has
 campaign file it is given. An arm's `args` come after the supervisor's own
 and may not restate a shape flag or a supervisor flag; `--compact-window` is
 the exception. Assign an arm that sets the window only roster entries on the
-claude-code or codex driver that set none themselves: any other pair is refused before
+claude-code, codex or pi driver that set none themselves: any other pair is refused before
 it launches, and listed as `<id>@<v>:<ref>:<arm>`. So is every pair of an
 assignment whose roster entry the fleet refuses (an unknown key, a provider
 key towards a host the provider table does not pair it with, a subscription
@@ -1456,6 +1456,44 @@ a command cannot be hand-launched.
 ```
 bun wb run episode --model <id> --campaign class-probe@2 --cell dwarf-paladin
 ```
+
+**The pi harness: a probe-only roster entry.** The `pi` driver
+(runner/README.md, "The pi driver") runs only as a campaign's assignment until
+the operator promotes it. Its entry is an ordinary roster entry with
+`driver: "pi"` and an endpoint, like the openai driver's, and the window when
+the campaign compares at a fixed one:
+
+```
+bun wb config set roster/deepseek-flash-pi \
+  '{"model":"deepseek-flash","driver":"pi","tier":"t1","apiBase":"https://api.deepseek.com/v1","apiKeyEnv":"DEEPSEEK_KEY","effort":"high","compactWindow":"300k"}' \
+  --actor <you> --note "pi on deepseek-flash, probe-only (#257)"
+```
+
+- It may sit beside the `wrathbench` entry for the same model and endpoint:
+  the one-model-one-harness rule does not apply to a probe-only driver,
+  because none of its runs is in a scored lane. A probe run maps back to the
+  entry it names, never by model id, so the two never pool.
+- Its `tier` and `idle` buy nothing. The policy gives the entry no target and
+  no freeplay, and a queue job naming it outside a campaign is skipped.
+  `--status` says "driver pi is probe-only" against it.
+- A routing block is refused (pi sends what pi sends), and a key the provider
+  table gives no pi provider is refused at launch: today that is every key
+  but `DEEPSEEK_KEY`.
+- Give the same `effort` as the `wrathbench` entry it is compared with.
+  Absent is each harness's own default, which differ: pi thinks at `high` on
+  deepseek-flash, and the openai driver sends no level at all. A level pi
+  would clamp (`medium` on deepseek-flash) ends the run before its first turn.
+- `compactWindow` on a pi entry, or `--compact-window` on an arm, is pi's
+  reserve below the model's window (`300k` compacts above 300,000 tokens on
+  deepseek-flash's 1,000,000); one at or above the window ends the run before
+  its first turn. Absent is pi's own threshold, 983,616 tokens there.
+
+A wrathbench-against-pi campaign assigns both entries, and the arm leaves the
+driver alone: the assignment, not the arm, chooses the harness. The run pod
+gets the entry's one key and nothing else (`runPodEnv`); `DEEPSEEK_KEY` is
+already in the chart's `modelKeys`. The image carries the pinned `pi`
+(`PI_VERSION`), so a branch arm needs an image built from a commit that has
+the driver.
 
 ### Run pods
 
