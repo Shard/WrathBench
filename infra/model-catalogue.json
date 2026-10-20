@@ -16,7 +16,7 @@
     "providers: who a price row is from; an endpoint provider's apiBase, on-screen label, source and default note.",
     "families: file order is the precedence for an id no entry lists, matched by glob ('*' any characters).",
     "icons pins the logo source (@lobehub/icons-static-svg, MIT); after editing a family's icon: bun wb data logos.",
-    "This file is written in formatCatalogue's spelling; the tests refuse any other."
+    "This file is written in formatCatalogue's spelling, which the tests require: after a hand edit, bun wb data catalogue --format."
   ],
   "version": 2,
   "icons": { "package": "@lobehub/icons-static-svg", "version": "1.94.0" },

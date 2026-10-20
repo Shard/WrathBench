@@ -501,7 +501,9 @@ read it from there. In a checkout:
    A non-OpenRouter paid provider: a dated, sourced `prices.endpoints` row
    under the provider's id in `providers` (add the provider, with its exact
    `apiBase`, if it is new). Free and local models need no price.
-3. `bun run test` refuses a malformed file or an id it cannot place; commit.
+3. `bun wb data catalogue --format` validates the file and rewrites it in its
+   one spelling (offline, prices untouched), which `bun run test` requires;
+   the tests also refuse a malformed file or an id they cannot place. Commit.
 
 The catalogue ships in the image, so the entry reaches the viewer, the
 scheduler's status line and the publisher with the next release, and the public

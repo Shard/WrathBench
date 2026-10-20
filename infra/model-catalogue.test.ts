@@ -28,7 +28,7 @@ import {
   type ModelCatalogue,
 } from "./model-catalogue";
 import { applyOpenRouterWindows, catalogueOpenRouterIds, catalogueWindows } from "./sync-prices";
-import { modelIdsOf, uncatalogued } from "./model-catalogue-check";
+import { modelIdsOf, reformat, uncatalogued } from "./model-catalogue-check";
 
 const ROOT = join(import.meta.dir, "..");
 const FILE = join(import.meta.dir, "model-catalogue.json");
@@ -381,6 +381,12 @@ describe("parseCatalogue", () => {
 });
 
 describe("formatCatalogue", () => {
+  test("--format turns a hand edit's spelling into the file's, and refuses an invalid one", () => {
+    expect(reformat(JSON.stringify(doc(), null, 4))).toBe(formatCatalogue(doc()));
+    expect(reformat(TEXT)).toBe(TEXT);
+    expect(() => reformat(mutate((d) => (d.models["acme-labs/acme-1"].weights = "maybe")))).toThrow(/weights must be one of/);
+  });
+
   test("short objects and arrays stay on one line, long ones break, and the result is valid JSON", () => {
     const text = formatCatalogue(doc());
     expect(text).toContain('"aliases": ["acme-1"]');

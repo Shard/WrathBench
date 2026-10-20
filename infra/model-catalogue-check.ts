@@ -1,11 +1,18 @@
 #!/usr/bin/env bun
 /**
  * `bun wb data catalogue`: the model ids a published generation names that the
- * model catalogue (`infra/model-catalogue.json`) does not list.
+ * model catalogue (`infra/model-catalogue.json`) does not list — or, with
+ * `--format`, the catalogue file rewritten in its one spelling.
  *
  *   bun infra/model-catalogue-check.ts [--base https://wrathbench-data.shard.page]
+ *   bun infra/model-catalogue-check.ts --format
  *
- * Read-only: plain GETs of the manifest and the aggregates it names, the
+ * `--format` is for a hand edit: it validates the file and writes it back in
+ * `formatCatalogue`'s spelling, which the tests require, touching nothing
+ * else — no network, no price. A file that does not validate is refused by
+ * name and left as it is.
+ *
+ * The check is read-only: plain GETs of the manifest and the aggregates it names, the
  * reader `bun wb site verify --base` uses, and nothing written anywhere. The
  * tests hold every id in the repository's fixtures, roster examples and price
  * rows to the catalogue; this is the same question asked of what actually ran,
@@ -15,7 +22,8 @@
  * any id is unlisted, with each id and where it appeared.
  */
 
-import { catalogueKeyOf } from "./model-catalogue";
+import { join } from "node:path";
+import { catalogueKeyOf, formatCatalogue, parseCatalogue } from "./model-catalogue";
 import { httpSource } from "./publish-accept";
 import { driverEntry } from "../runner/src/drivers";
 
@@ -55,11 +63,30 @@ export function uncatalogued(ids: ReadonlyMap<string, ReadonlySet<string>>): { i
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
+/** The catalogue text in its one spelling, validated first. Pure. */
+export function reformat(text: string): string {
+  parseCatalogue(text);
+  const out = formatCatalogue(JSON.parse(text));
+  parseCatalogue(out);
+  return out;
+}
+
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
+  if (argv.length === 1 && argv[0] === "--format") {
+    const file = join(import.meta.dir, "model-catalogue.json");
+    const text = await Bun.file(file).text();
+    const out = reformat(text);
+    if (out === text) console.log("infra/model-catalogue.json: already in its spelling");
+    else {
+      await Bun.write(file, out);
+      console.log("infra/model-catalogue.json: rewritten in its spelling");
+    }
+    return 0;
+  }
   let base = DEFAULT_BASE;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--base" && argv[i + 1] !== undefined) base = argv[++i]!;
-    else throw new Error(`unknown argument ${argv[i]} (only --base URL)`);
+    else throw new Error(`unknown argument ${argv[i]} (--base URL, or --format alone)`);
   }
   const source = httpSource(base);
   const manifestText = await source.get("v1/manifest.json");
