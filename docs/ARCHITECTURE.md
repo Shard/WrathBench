@@ -205,35 +205,62 @@ the SPA owns everything that is UI.
   one is spelled `series` everywhere. The ladder offers no harness control at
   all: there the harness is a tag on each row and a colour on each point, not a
   partition.
-- **`infra/model-lineup.json` is the model identity catalog; the fleet config
-  stays a scheduling catalog.** Every roster field in the fleet config is a scheduling
-  fact and presentation has always been absent from its schema, so a cosmetic
-  field there would be the first — and it would have to survive the four
-  parsers kept deliberately in sync. The lineup file instead defines *families*
-  (`{ id, name, vendor, icon, match }`) keyed by model-id glob patterns rather
-  than roster names, so it recognizes an id wherever it turns up: the roster,
-  run history, a map position. Matching is data-driven and dumb on purpose —
-  the first family whose pattern matches wins, file order being precedence —
-  and an id no family matches
-  gets a neutral monogram rather than a special case in code, which is the
-  per-model override the harness forbids. Recognizing a new model is a data
-  edit, never a code change. The mark appears wherever a model is the row.
-  Each family also carries `weights`, first-match rules over the same globs
-  saying which of its models publish their weights (`open`, `closed`, or
-  `unknown`). The rules are per model because a family spans both kinds
-  (Gemini and Gemma, GPT and gpt-oss). The list is required, so a new family
-  cannot be added without one, and an id no rule names reads `unknown` rather
-  than a family default. The ladder's weights filter and the Every Eval Ever
-  export's `model_availability` both read it through `weightsOf`. Logos are fetched rather than drawn:
+- **`infra/model-catalogue.json` is the one place a model's static facts
+  live; the fleet config stays a scheduling catalog** (operator, 2026-10-20).
+  Every model id the fleet has used has an entry, keyed by the id it ran as:
+  its family (which carries the logo, the brand name and the company), its
+  display name, whether its weights are published (`open`, `closed` or
+  `unknown`, with where that was checked), the other spellings it goes by (a
+  codex slug, a dated snapshot, a Zen `-free` id, the id a provider reported
+  serving), and every price a provider charges for it. `infra/model-catalogue.ts`
+  is the whole of the code that reads it — lookup, types, the validator and the
+  file's one spelling — and the runner (bundled into its image whole), the
+  dashboard build and the infra scripts all import it, so nothing else keeps a
+  per-model table. JSON rather than a TypeScript module because a script writes
+  part of it: `bun wb data prices` rewrites each model's OpenRouter windows in
+  place, and a data file is what a script can rewrite without touching the
+  hand-kept facts beside them; the module adds the types and the comments a
+  JSON file cannot carry.
+  Every roster field in the fleet config is a scheduling fact and presentation
+  has always been absent from its schema, so a roster entry names a catalogue
+  model by its id and nothing more. Lookup is data-driven and dumb on purpose:
+  an id is compared lowercased and without OpenRouter's `:free` suffix, against
+  the entry keys and their aliases; an id no entry lists falls back to the
+  first family whose glob claims it (file order is precedence), so a model
+  nobody has catalogued yet still gets its vendor's mark, and one nothing
+  claims gets a neutral monogram rather than a special case in code, which is
+  the per-model override the harness forbids. That fallback is where a new
+  model must not live: the tests refuse any id in the repository's fixtures,
+  roster example or price rows that only reaches it, `--status` names roster
+  entries that do, and `bun wb data catalogue` asks the same of a published
+  generation. Recognizing a new model is a data edit, never a code change, and
+  the mark appears wherever a model is the row.
+  Weights are per model because a family spans both kinds (Gemini and Gemma,
+  GPT and gpt-oss), so an entry states its own; a family may state one for all
+  its models only where the company publishes no weights at all (Anthropic).
+  The ladder's weights filter and the Every Eval Ever export's
+  `model_availability` both read it through `weightsOf`, and the ladder's
+  company filter is the family's company. The ladder's *family* filter is the
+  model line, a rule over the slug (`lineOf`), not a catalogue field: it must
+  answer the same for an id nobody has catalogued as for one somebody has.
+  Prices are matched on the id the provider bills under, exactly, never
+  through an alias, because the same model is different money on different
+  hosts: OpenRouter's synced windows by OpenRouter id, Anthropic's list prices
+  by the served ids, a metered endpoint's by its base and id
+  (`runner/viewer/pricing.ts` holds the rules for which row a run reads, and no
+  rate). Two things stay rules rather than catalogue rows, because they judge
+  the shape of an id nobody has seen: the scheduler's Claude-family test
+  (`isClaudeFamily`) and the free, contributor and local billing predicates;
+  so does `LAB_PROVIDERS` (`runner/src/routing.ts`), which is routing policy
+  keyed by an OpenRouter namespace and is stamped into the comparability tuple.
+  The repository keeps no context-window table: the CLI drivers take the
+  window from their own catalogues. Logos are fetched rather than drawn:
   `infra/fetch-model-logos.ts` pulls the npm tarball of the Lobe Icons package
-  at the version pinned in the lineup's own `icons` block and extracts exactly
-  the icons the lineup names; the SVGs are committed, because they are a few
-  hundred bytes each and the dashboard has to build from a bare clone with no
-  network. The artwork is MIT-licensed and the brands
-  remain their owners' trademarks; provenance is in `THIRD-PARTY-NOTICES.md`.
-  The pricing table's display ids and the scheduler's family test stay where
-  they are — billing and scheduling facts, not presentation, and folding them
-  in would couple scheduling to a cosmetic file.
+  at the version pinned in the catalogue's own `icons` block and extracts
+  exactly the icons its families name; the SVGs are committed, because they are
+  a few hundred bytes each and the dashboard has to build from a bare clone
+  with no network. The artwork is MIT-licensed and the brands remain their
+  owners' trademarks; provenance is in `THIRD-PARTY-NOTICES.md`.
 - Loopback by default. Trajectories carry game-derived text, so a non-loopback
   bind fails at startup unless `WRATHBENCH_VIEWER_LAN=1` opts a trusted private
   network in (docs/DATA-AND-LEGAL.md). What a public deployment may carry is

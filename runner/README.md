@@ -880,8 +880,8 @@ a logging proxy that refused everything.
   plus cache read plus cache write, the claude-code arithmetic; reasoning
   tokens ride along when pi has them. pi's own catalogue-priced figure is kept
   beside it as `piCostUsd`, a cross-check only, never as a cost the viewer
-  reads: the run is priced from its tokens by the provider row in
-  `runner/viewer/pricing.ts`, and pi's catalogue figure for deepseek-flash
+  reads: the run is priced from its tokens by the endpoint row in
+  `infra/model-catalogue.json`, and pi's catalogue figure for deepseek-flash
   ($0.30/$1.20 per M) is twice the off-peak row. The model the endpoint
   answered is pi's `responseModel` when it differs from the one asked for,
   else that one, promoted onto the run on first sight.

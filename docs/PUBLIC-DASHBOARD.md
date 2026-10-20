@@ -97,8 +97,8 @@ Some inputs the fingerprint cannot see:
 
 - code: the projection, the redaction and scrub lists, the codec and
   `model-cost`;
-- the OpenRouter price table, read once at start and rewritten by
-  `sync-prices`;
+- the model catalogue's prices (`infra/model-catalogue.json`), read once at
+  start and rewritten in part by `sync-prices`;
 - a store row the listing row does not reflect;
 - lineage as the viewer's own listing sees it.
 
@@ -695,23 +695,24 @@ is the same baseline character — and the harness select was the shell's
 series selector spelled a second time. The tier and axes chips and the pareto
 front are unchanged. What else is above the chart:
 
-- **company** and **family** filters. Company is the model
-  registry's own vendor (`infra/model-lineup.json`); family is the model *line*
-  and is **derived from the slug** rather than looked up, because the registry's
-  families are vendor-wide ("Claude" covers sonnet, opus, haiku and fable) and
+- **company** and **family** filters. Company is the model catalogue's own
+  company for the model's family (`infra/model-catalogue.json`); family is the
+  model *line* and is **derived from the slug** rather than looked up, because
+  the catalogue's families are vendor-wide ("Claude" covers sonnet, opus, haiku and fable) and
   filtering by one would be filtering by company twice. Both option lists are
   derived from the rows on screen, so neither can go stale, and both ride in the
   URL so a reading of a slice can be linked.
 - a **weights** filter, `open`, `closed` or `unknown`, in the same panel and
-  the same URL (`?weights=open`). It is looked up, not derived: the lineup
-  records it model by model (`weights` in `infra/model-lineup.json`), because
-  it is a fact about one checkpoint — Gemma is open where Gemini is closed, and
-  gpt-oss where GPT-6 is not. An id no rule names, including every id no family
-  claims, is `unknown` rather than given its family's majority answer, and
-  `unknown` is a bucket a reader can tick like the other two. Like company it
-  is read in the browser from the bundled lineup, so the published artifacts
-  carry nothing new and a lineup edit reaches the site with the next dashboard
-  build.
+  the same URL (`?weights=open`). It is looked up, not derived: the catalogue
+  records it model by model (`weights` in `infra/model-catalogue.json`),
+  because it is a fact about one checkpoint — Gemma is open where Gemini is
+  closed, and gpt-oss where GPT-6 is not. An id the catalogue does not list is
+  `unknown` rather than given its family's majority answer (Anthropic, which
+  publishes no weights at all, is the one family that answers for every id),
+  and `unknown` is a bucket a reader can tick like the other two. Like company
+  it is read in the browser from the bundled catalogue, so the published
+  artifacts carry nothing new and a catalogue edit reaches the site with the
+  next dashboard build.
 - **exclude free**, the per-viewer preference it has always been — a standing
   opinion about what counts as evidence, not a slice of the field.
 - **representative efforts**, **on by default**. For a model with several effort entries it shows only the efforts on
