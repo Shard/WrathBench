@@ -1,14 +1,19 @@
 /**
- * The steep re-plan, reproduced: eight `move_to`s a freeplay character made
- * in Ashenvale and the Badlands, each from the point it stood on, with the
+ * The steep re-plan, reproduced: eight `move_to`s in Ashenvale and the
+ * Badlands, each from the point a freeplay character stood on, with the
  * verdict the module served it then beside the verdict served now.
  *
- * Six of the eight were `drop` refusals at a single 4y step of 51-58 degrees
- * (the guard refuses a segment over 2.0y and steeper than 1.2x its 2D
- * length, about 50 degrees; the mesh is built to walk 60). The module now
- * re-plans around such a band before refusing (module/PROTOCOL.md, `drop`),
- * so some of those should arrive. The other two are `target_off_mesh`
- * controls: the re-plan never runs on them, and they must stay as they were.
+ * Six of the eight are moves that character made, `drop` refusals at a
+ * single 4y step of 51-58 degrees (the guard refuses a segment over 2.0y and
+ * steeper than 1.2x its 2D length, about 50 degrees; the mesh is built to
+ * walk 60). The module now re-plans around such a band before refusing
+ * (module/PROTOCOL.md, `drop`), so some of those should arrive. The other
+ * two are `target_off_mesh` controls: the re-plan never runs on them, and
+ * they must stay as they were. P8 is the character's own move. P4 is not:
+ * its move, (3200, -100, 80), was a z buried under the hill, and the
+ * module's buried-z step (PROTOCOL.md, `move_to` z) now walks it to the one
+ * walkable level over that x,y and into P1's refused climb, which is the
+ * truthful answer, so P4 is that x,y deeper than the step reaches (below).
  *
  * Per start (one fixture scenario each, infra/fixtures/scenarios.ts
  * `steep-*`, level 80 so nothing interrupts a walk):
@@ -47,7 +52,7 @@
  * `kubectl -n wrathbench exec deploy/wrathbench-runner -- env
  * SMOKE_REPROS=P1 bun infra/smoke/steep-replan.ts`.
  *
- * Coordinates are the refused moves' own (harness tooling, not an agent run;
+ * Coordinates are the refused moves' own, P4's z excepted (harness tooling, not an agent run;
  * the observation contract does not apply to this script). Audit file names
  * are session tokens and are never printed.
  */
@@ -88,7 +93,7 @@ const signed = (v: number): string => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
 interface Repro {
   id: string;
   target: MovePoint;
-  /** The verdict the module served this move before the re-plan, from its own audit rows. */
+  /** The verdict the module served this move before the re-plan, from its own audit rows (P4: what it served on harness-0.5-1477). */
   before: string;
   /** A `target_off_mesh` control: the re-plan never runs on it. */
   control?: true;
@@ -101,11 +106,20 @@ interface Start {
   repros: Repro[];
 }
 
+// P4 is the freeplay move's x,y, (3200, -100), with z lowered from its 80.
+// That column holds one walkable level, the hilltop at z 105-110, and
+// nothing under it: probed from this start on harness-0.5-1477, z 55 and
+// below answer target_off_mesh and z 60 to 80 answer P1's drop (climb +5.0
+// at (3215.0, 71.8, 39.8)). The flip at z 60 is the buried-z step's column
+// search (MeshLevelsAt, ±50y around the request) first reaching the level.
+// At z 30 the level is 75-80y over the request, the request is inside the
+// hill (no ground under it), and nothing walkable lies within 20y of it
+// (`nearest` null): off the mesh by every rung.
 const STARTS: Start[] = [
   {
     scenario: "steep-ashenvale-lowland",
     repros: [
-      { id: "P4", target: { x: 3200, y: -100, z: 80 }, before: "target_off_mesh, nearest (3190.1, -106.7, 101.8)", control: true },
+      { id: "P4", target: { x: 3200, y: -100, z: 30 }, before: "target_off_mesh, nearest none within 20y", control: true },
       { id: "P1", target: { x: 3190.13, y: -106.667, z: 101.774 }, before: "drop, climb +5.0" },
     ],
   },
