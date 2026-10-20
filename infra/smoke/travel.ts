@@ -20,8 +20,12 @@
  *          one WB_AREATRIGGER on the stream;
  *   leg 4  a car in view flips to `docked` (WB_TRANSPORT_PROGRESS) *before*
  *          boarding succeeds; `arrived` with onTransport.entry in 176080..176085
- *          within 75s of the leg start; the module's audit for this session
- *          holds a `move_transport_leg` with boarding:true; only cars docked
+ *          within BOARDING_BOUND_MS (one tram period and a little, below) of
+ *          the walk to the platform edge; the module's audit for this session
+ *          holds a `move_transport_leg` with boarding:true, when the audit
+ *          directory is readable here (the quickstart's runner mounts data/;
+ *          the cluster's runner pod does not mount the worldserver's logs, and
+ *          the check is skipped there with a line saying so); only cars docked
  *          on the boarding lane are tried (the other track is 60y away across
  *          the pit). Attempts alternate moveTo(point) and moveTo(car.guid).
  *   leg 5  WB_RIDE_PROGRESS y rises monotonically to > 2400 and the ride
@@ -50,8 +54,9 @@
  *     placed by `infra/fixtures/apply.ts` — level 10, 1g, logged out, standing
  *     on map 0 at the Tinker Town tram portal mouth — and the run starts at
  *     the leg-3 portal step. Legs 1, 1b and 2 are skipped entirely. One ride
- *     is then ~60s wall clock, which is the budget this gate is held to — the
- *     fixture wait is on top of that, and lands hardest on back-to-back runs:
+ *     is then the wait for the boarding lane's car (anything up to one tram
+ *     period, 143s) plus the ~59s crossing. The fixture wait is on top of
+ *     that, and lands hardest on back-to-back runs:
  *     apply.ts waits for `characters.online=0`, and the core holds a
  *     logged-out session for up to ~60s (measured 66s, see kill-credit.ts).
  *   --from coldridge, or no --from  the legacy full walk: a fresh throwaway
@@ -96,7 +101,8 @@ const TOKEN = `smoke-travel-${crypto.randomUUID()}`;
 // The module's per-session audit (WrathBench.AuditDir, one
 // `<token>.<YYYY-MM-DD>.jsonl` per UTC day; module/PROTOCOL.md "Audit log"),
 // as the runner container sees the repo mount. Leg 4 reads it for the
-// `move_transport_leg` boarding record.
+// `move_transport_leg` boarding record when it is there (not in the cluster's
+// runner pod).
 const AUDIT_DIR = process.env.WRATHBENCH_AUDIT_DIR ?? "/wrathbench/data/logs/wrathbench";
 
 const flag = (name: string): string | undefined => {
@@ -174,8 +180,13 @@ const LEGS: { name: string; waypoints: Waypoint[] }[] = [
       { name: "road (Mountaineer)", x: -5449.4, y: -509.0, z: 397.4 },
       { name: "gates approach (Mountaineer)", x: -5267.9, y: -513.3, z: 388.7 },
       { name: "gate mouth (interpolated)", x: -5185.0, y: -585.0, z: 398.0 },
-      { name: "entrance hall mid 1 (interpolated)", x: -5120.0, y: -680.0, z: 435.0 },
-      { name: "entrance hall mid 2 (interpolated)", x: -5030.0, y: -810.0, z: 470.0 },
+      // Was (-5120, -680, 435), a straight-line interpolation 16y in the air:
+      // the module's route there ended path_incomplete at this point on the
+      // road, z 419.0, which is the waypoint now.
+      { name: "entrance road (mesh end under the old interpolation)", x: -5121.1, y: -682.7, z: 419.0 },
+      // Was (-5030, -810, 470), 25y under the floor the spawn rows there
+      // stand on (z 495): an Ironforge Reveler's spawn, 3y from it.
+      { name: "entrance hall (Ironforge Reveler)", x: -5029.1, y: -813.1, z: 495.3 },
       { name: "the Commons (Lieutenant Rotimer)", x: -4903.0, y: -968.2, z: 501.5 },
       { name: "Tinker Town (Emissary Jademoon)", x: -4818.9, y: -1176.4, z: 502.3 },
       { name: "tram portal mouth (areatrigger 2166 arrival)", x: -4839.0, y: -1318.5, z: 501.9 },
@@ -201,14 +212,28 @@ const IF_EXIT = { x: 76.0, y: 10.5, z: -4.3 };
 const IF_ARRIVAL = { map: 0, x: -4838.95, y: -1318.46, z: 501.9 };
 
 // Deeprun Tram cars (gameobject_template type 11 "Subway", displayId 3831,
-// map 369): two trains of three cars, one per lane. Lane A (entries
-// 176080/176081/176085) parks at x≈4.5, y≈28/8/-11 at the IF end; lane B
-// (176082/176083/176084) at x≈-45.4, y≈2473–2512 at the SW end. Each train
-// runs the full round trip (TransportAnimation.dbc period 143.3s: ~58.6s per
-// direction with 11–14s dwells). The platform floor is z≈-4.3; the car floor
-// matches. The cars are observable now: `units()` names them, goType
-// "transport", and `docked` flips with the DBC clock.
+// map 369): two trains of three cars, one per lane, each shuttling on its
+// own lane. Lane A (entries 176080/176081/176085) spawns at x≈4.5, y≈28/8/-11
+// at the IF end; lane B (176082/176083/176084) at x≈-45.4, y≈2473–2512 at
+// the SW end. The platform floor is z≈-4.3; the car floor matches. The cars
+// are observable: `units()` names them, goType "transport", and `docked`
+// flips with the DBC clock.
+//
+// The timing, from TransportAnimation.dbc (rows for these six entries) and
+// the core: every car's period is 143333 ms, and every car's clock starts at
+// 0 when the map creates it and always advances (StaticTransport::Update; a
+// transport is always on the map's update list), so the six share one
+// clock. Lane A dwells at the IF end from 129.3–130.3s of it to 0.0–0.9s
+// past the wrap (13.0–14.9s), crosses in ~58.6s, and dwells at the SW end
+// from 58.6–59.5s to 70.7–71.7s (11.2–13.0s). Lane B runs the same frames
+// mirrored, so it is at the IF end while lane A is at the SW end: a car
+// docks at each end every ~72s, alternating lanes. This smoke boards only
+// its own lane (waitForDockedCar), so its car docks at this end once per
+// period, and the leg can start just after it left: up to ~130s of waiting,
+// then a boarding walk of a few seconds inside a 13s dwell. The bound is
+// one period and 10s.
 const TRAM_CARS = new Set([176080, 176081, 176082, 176083, 176084, 176085]);
+const TRAM_PERIOD_MS = 143_333;
 const IF_BOARDING_POINTS: MovePoint[] = [
   { x: 4.5, y: 8.4, z: -4.3 }, // lane A, middle car's home slot
   { x: -45.4, y: 10.0, z: -4.3 }, // lane B, where its middle car parks at the IF end
@@ -219,7 +244,7 @@ const SW_BOARDING_POINTS: MovePoint[] = [
 ];
 const SW_END_Y = 2400; // the ride has reached the Stormwind end once y is past this
 const IF_END_Y = 100; // and the Ironforge end once y is below this
-const BOARDING_BOUND_MS = 75_000; // two trains half a period apart: a car docks at each end every ~72s
+const BOARDING_BOUND_MS = TRAM_PERIOD_MS + 10_000; // the boarding lane's car docks at this end once a period
 const RIDE_MIN_MS = 50_000;
 const RIDE_MAX_MS = 70_000;
 
@@ -286,6 +311,11 @@ client.events.onAny((e: any) => {
   opcodesSeen.set(op, (opcodesSeen.get(op) ?? 0) + 1);
   if (op === "WB_AREATRIGGER" && typeof e?.data?.triggerId === "number") {
     triggerHits.set(e.data.triggerId, (triggerHits.get(e.data.triggerId) ?? 0) + 1);
+  }
+  if (op === "WB_TRANSPORT_PROGRESS" && e.data?.inRange === false) {
+    // The car's last report as it leaves view range: no `docked` after it.
+    dockedAt.delete(e.data.guid);
+    log(`  transport ${e.data.guid} entry ${e.data.entry} left view range at ${fmt(e.data.pos)}`);
   }
   if (op === "WB_TRANSPORT_PROGRESS" && e.data && typeof e.data.docked === "boolean") {
     transportReports++;
@@ -508,15 +538,15 @@ async function board(leg: string, dir: Direction, firstVariant: "point" | "guid"
  * The module's audit rows for this session with the given op, read across the
  * session's files in order: a legacy undated `<token>.jsonl` first, should one
  * remain, then the day files ascending (a session that crosses midnight UTC
- * has two).
+ * has two). Undefined when the directory is not readable from here.
  */
-async function auditRows(op: string): Promise<Record<string, unknown>[]> {
+async function auditRows(op: string): Promise<Record<string, unknown>[] | undefined> {
   const stem = TOKEN.replace(/[^A-Za-z0-9_-]/g, "_");
   let names: string[];
   try {
     names = await readdir(AUDIT_DIR);
   } catch {
-    throw new LegFailure(`audit dir ${AUDIT_DIR} is not readable from here (set WRATHBENCH_AUDIT_DIR)`);
+    return undefined;
   }
   const files = names.filter((n) => n.startsWith(stem) && /^(\.\d{4}-\d{2}-\d{2})?\.jsonl$/.test(n.slice(stem.length))).sort();
   if (files.length === 0) throw new LegFailure(`no audit file for this session under ${AUDIT_DIR} (set WRATHBENCH_AUDIT_DIR)`);
@@ -616,8 +646,14 @@ async function crossing(rideNo: number, dir: Direction, gated: boolean): Promise
     // reports a car only within view range of the character, and the tunnel
     // is ~2470y long, so a platform with no car near it hears nothing until
     // one pulls in. board() says so when its whole bound passes in silence.
+    // A car with no report yet (docked undefined) is out of view range and
+    // its position is the one the login's create block gave, not where it is.
     const cars = carsInView();
-    log(`  cars in view: ${cars.map((c) => `${c.name ?? "?"}#${c.entry} ${c.goType ?? "?"} docked=${c.docked} y=${c.y?.toFixed(0)}`).join("; ") || "none"}`);
+    const reported = cars.filter((c) => c.docked !== undefined);
+    log(
+      `  cars in view range: ${reported.map((c) => `${c.name ?? "?"}#${c.entry} ${c.goType ?? "?"} docked=${c.docked} at ${fmt({ x: c.x ?? NaN, y: c.y ?? NaN, z: c.z ?? NaN })}`).join("; ") || "none"}` +
+        `; ${cars.length - reported.length} more known, out of range`,
+    );
     boarded = await board(leg, dir, rideNo % 2 === 0 ? "guid" : "point");
     report.boarding = boarded;
     log(`  aboard ${boarded.entry} (guid ${boarded.guid}) at ${fmt(boarded.at)} via ${boarded.variant}: ${boarded.attempts} attempts, waited ${secs(boarded.waitedMs)}, docked observed before boarding: ${boarded.dockedBeforeBoarding}`);
@@ -628,8 +664,12 @@ async function crossing(rideNo: number, dir: Direction, gated: boolean): Promise
       if (named?.goType !== "transport") throw new LegFailure(`${leg}: the boarded car's goType is ${named?.goType}, expected "transport"`);
       if (named?.name === undefined) throw new LegFailure(`${leg}: the boarded car has no name in units() (SMSG_GAMEOBJECT_QUERY_RESPONSE missing)`);
       const legs = await auditRows("move_transport_leg");
-      if (!legs.some((p) => p.boarding === true)) throw new LegFailure(`${leg}: no move_transport_leg audit with boarding:true for this session (${legs.length} transport legs audited)`);
-      log(`  audit: ${legs.length} move_transport_leg rows, boarding:true present`);
+      if (legs === undefined) {
+        log(`  audit: ${AUDIT_DIR} not readable here, the move_transport_leg check is skipped (set WRATHBENCH_AUDIT_DIR where it is mounted)`);
+      } else {
+        if (!legs.some((p) => p.boarding === true)) throw new LegFailure(`${leg}: no move_transport_leg audit with boarding:true for this session (${legs.length} transport legs audited)`);
+        log(`  audit: ${legs.length} move_transport_leg rows, boarding:true present`);
+      }
     }
   });
 
