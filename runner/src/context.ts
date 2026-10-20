@@ -592,15 +592,11 @@ function ghostLine(
   const delay = s.reclaimDelay?.value as { readyAt?: number } | undefined;
   const where = grave !== undefined ? `ghost at graveyard (${xy(grave)})` : "ghost";
   const healer = "or Spirit Healer at the graveyard (-25% durability; resurrection sickness from level 11)";
-  const away = (): string =>
-    pos !== undefined && typeof pos.x === "number" && typeof pos.y === "number" && typeof corpse?.x === "number" && typeof corpse.y === "number"
-      ? `${Math.round(Math.hypot(corpse.x - pos.x, corpse.y - pos.y))}y away `
-      : "";
   // A corpse inside a dungeon, asked about from outside it: the position is
   // the entrance the server substitutes, and no reclaim reaches the corpse.
   if (corpse !== undefined && typeof corpse.instanceMap === "number" && pos?.map !== corpse.instanceMap) {
     return (
-      `${where}; corpse inside instance map ${corpse.instanceMap}, entrance marker ${away()}at (${xy(corpse)}): ` +
+      `${where}; corpse inside instance map ${corpse.instanceMap}, its entrance marker at (${xy(corpse)}), which can be off the portal itself: ` +
       `walk into the dungeon's portal as a ghost to come back to life inside (no sickness), ${healer}`
     );
   }
@@ -610,7 +606,11 @@ function ghostLine(
   } else if (pos !== undefined && typeof pos.map === "number" && typeof corpse.map === "number" && corpse.map !== pos.map) {
     corpsePart = `corpse on map ${corpse.map} at (${xy(corpse)}), you are on map ${pos.map}`;
   } else {
-    corpsePart = `corpse ${away()}at (${xy(corpse)})`;
+    const d =
+      pos !== undefined && typeof pos.x === "number" && typeof pos.y === "number" && typeof corpse.x === "number" && typeof corpse.y === "number"
+        ? `${Math.round(Math.hypot(corpse.x - pos.x, corpse.y - pos.y))}y away `
+        : "";
+    corpsePart = `corpse ${d}at (${xy(corpse)})`;
   }
   const secs = typeof delay?.readyAt === "number" ? Math.max(0, Math.ceil((delay.readyAt - now) / 1000)) : undefined;
   const when = secs === undefined ? "after the reclaim delay" : secs === 0 ? "now" : `after ${secs}s`;

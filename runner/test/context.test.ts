@@ -418,16 +418,16 @@ describe("formatStateSummary", () => {
       {
         self: {
           fields: { playerFlags: { value: 0x10 } },
-          position: { value: { map: 0, x: -11209.3, y: 1679.32, z: 63.59 } },
-          corpse: { value: { map: 0, x: -11207.8, y: 1681.15, z: 60.14, source: "corpse_query", instanceMap: 36 } },
-          graveyard: { value: { map: 0, x: -11209.3, y: 1679.32, z: 63.59 } },
+          position: { value: { map: 0, x: -1102, y: 1598.5, z: 52 } },
+          corpse: { value: { map: 0, x: -1100.5, y: 1600.25, z: 50.5, source: "corpse_query", instanceMap: 36 } },
+          graveyard: { value: { map: 0, x: -1102, y: 1598.5, z: 52 } },
           reclaimDelay: { value: { delayMs: 30_000, readyAt: 1_000_000 } },
         },
       },
       { sessionLive: true, now: 1_000_000 },
     );
     expect(text).toContain(
-      "ghost at graveyard (-11209,1679); corpse inside instance map 36, entrance marker 2y away at (-11208,1681): " +
+      "ghost at graveyard (-1102,1599); corpse inside instance map 36, its entrance marker at (-1100,1600), which can be off the portal itself: " +
         "walk into the dungeon's portal as a ghost to come back to life inside (no sickness), " +
         "or Spirit Healer at the graveyard (-25% durability; resurrection sickness from level 11)",
     );

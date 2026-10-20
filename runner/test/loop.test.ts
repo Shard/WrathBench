@@ -380,7 +380,7 @@ describe("runLoop", () => {
       self: {
         fields: { health: { value: 1, seq: 9, ts: 4500 }, playerFlags: { value: 0x10, seq: 9, ts: 4500 } },
         corpse: {
-          value: { map: 0, x: -11207.8, y: 1681.15, z: 60.14, source: "corpse_query", instanceMap: 36 },
+          value: { map: 0, x: -1100.5, y: 1600.25, z: 50.5, source: "corpse_query", instanceMap: 36 },
           seq: 9,
           ts: 4444,
         },

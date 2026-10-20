@@ -4402,8 +4402,8 @@ describe("client: reclaimCorpse owns the delay and answers with a verdict", () =
     const stub = startStub({
       onConnect: () =>
         deadWorld(1, [
-          corpseQuery(91, { map: 0, x: -11207.8, y: 1681.15, z: 60.14, corpseMap: 36 }),
-          selfArrived(92, { x: -11209.3, y: 1679.32, z: 63.59 }),
+          corpseQuery(91, { map: 0, x: -1100.5, y: 1600.25, z: 50.5, corpseMap: 36 }),
+          selfArrived(92, { x: -1102, y: 1598.5, z: 52 }),
         ]),
     });
     const client = await inWorld(stub);
@@ -4414,11 +4414,11 @@ describe("client: reclaimCorpse owns the delay and answers with a verdict", () =
     expect(result.reason).toBe("corpse_in_instance");
     expect(result.attempts).toBe(0);
     expect(stub.actions.filter((a) => a.action === "reclaim_corpse")).toHaveLength(0);
-    expect(result.corpse).toEqual({ map: 0, x: -11207.8, y: 1681.15, z: 60.14, source: "corpse_query", instanceMap: 36 });
+    expect(result.corpse).toEqual({ map: 0, x: -1100.5, y: 1600.25, z: 50.5, source: "corpse_query", instanceMap: 36 });
     expect(result.hint).toStartWith(
       "your corpse is inside the instance on map 36, and a reclaim cannot reach it from map 0 — as a ghost, walk into " +
         "that dungeon's portal and you come back to life inside on arrival (half health, no sickness); " +
-        "state.self.corpse.value (-11207.8, 1681.2) is the server's entrance marker, which can sit above or beside " +
+        "state.self.corpse.value (-1100.5, 1600.3) is the server's entrance marker, which can sit above or beside " +
         "the portal rather than in it, or spiritHealerActivate(guid)",
     );
     expect(result.hint).not.toContain("39y");

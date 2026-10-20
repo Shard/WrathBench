@@ -304,7 +304,7 @@ export type MilestoneLine =
       kind: "death";
       /** The death event's own timestamp (the sampled fallback uses the cache's). */
       observedTs?: number | undefined;
-      /** Where the corpse is, and which packet said so; absent when unobserved. */
+      /** Where the corpse is, and which packet said so; absent when unobserved, or known only by its dungeon's entrance. */
       position?:
         | { map: number; x: number; y: number; z: number; source: "corpse_query" | "death_spot" }
         | undefined;
