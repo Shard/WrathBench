@@ -112,8 +112,16 @@ export const CONTEXT_POLICY = {
    * the window's reach is the last EVENT_WINDOW signal events since the
    * child started — independent of the ambient rate, and emptied by a
    * sandbox restart like everything else the child holds.
+   *
+   * SMSG_PARTY_MEMBER_STATS and its _FULL answer (the prefix matches both) are
+   * ambient too (operator decision, Mark, 2026-10-21). They are the party
+   * frames of a member out of sight, and the server sends one per update of
+   * that member: about two a second while it walks, plus one for each regen
+   * tick and each hit. Four far members would turn the 64-event window over
+   * in about seven seconds. The state cache keeps each member's latest values
+   * (`group().members[i].stats`), and the HUD's party line reads them there.
    */
-  EVENT_WINDOW_EXCLUDE: /^(SMSG_MONSTER_MOVE|MSG_MOVE|WB_TRANSPORT_PROGRESS)/,
+  EVENT_WINDOW_EXCLUDE: /^(SMSG_MONSTER_MOVE|MSG_MOVE|WB_TRANSPORT_PROGRESS|SMSG_PARTY_MEMBER_STATS)/,
 } as const;
 
 // ------------------------------------------------------------ state summary
@@ -149,6 +157,10 @@ interface UnitLike {
   maxHealth?: unknown;
   /** Party members only: `PLAYER_FLAGS_GHOST` on its `playerFlags`. */
   ghost?: unknown;
+  /** Party members only: the unit's power bar, and the raw `powerType` that picks it (0 mana, 1 rage, 2 focus, 3 energy, 6 runic power). */
+  power?: unknown;
+  maxPower?: unknown;
+  powerType?: unknown;
 }
 
 /** One `state.group().members` row as the sandbox serialises it. */
@@ -165,6 +177,10 @@ interface GroupMemberLike {
     ghost?: unknown;
     health?: unknown;
     maxHealth?: unknown;
+    /** The SDK's name for it ("mana", "rage", ...). */
+    powerType?: unknown;
+    power?: unknown;
+    maxPower?: unknown;
     zone?: { id?: unknown; name?: unknown };
     position?: { x?: unknown; y?: unknown };
   };
@@ -972,14 +988,26 @@ function pct(health: unknown, max: unknown): string | undefined {
   return typeof health === "number" && typeof max === "number" && max > 0 ? `${Math.round((100 * health) / max)}%` : undefined;
 }
 
+/** A unit's raw `powerType` as the party frame's bar names it (the SDK's `PartyPowerType` words). */
+const POWER_NAMES: Readonly<Record<number, string>> = { 0: "mana", 1: "rage", 2: "focus", 3: "energy", 6: "runic power" };
+
+/** "40% mana": power over max, named by its type ("power" when the type is unknown); undefined without both numbers. */
+function powerPct(power: unknown, max: unknown, type: unknown): string | undefined {
+  const p = pct(power, max);
+  if (p === undefined) return undefined;
+  const named = typeof type === "string" ? type : typeof type === "number" ? POWER_NAMES[type] : undefined;
+  return `${p} ${named ?? "power"}`;
+}
+
 /**
  * "party: Brannoc ghost, Westfall (-10546, 1197), out of view; Ysolde alive
- * 87% 14y; Corwin offline" — the party frames: each other member's state, its
- * health while alive, and where it is. A member in view is read off its unit,
- * as the frame reads it, with its distance; one out of view off the party
- * frame the server sends for it (`stats`): its zone and the x, y the packet
- * carries, which names no map, so no distance is worked out from it.
- * Undefined outside a group.
+ * 87% 40% mana 14y; Corwin offline" — the party frames: each other member's
+ * state, its health and power while alive (health bare, power named), and
+ * where it is. No auras: those stay in `group().members[i].stats`. A member
+ * in view is read off its unit, as the frame reads it, with its distance; one
+ * out of view off the party frame the server sends for it (`stats`): its zone
+ * and the x, y the packet carries, which names no map, so no distance is
+ * worked out from it. Undefined outside a group.
  */
 function partyLine(snapshot: SnapshotLike): string | undefined {
   const g = snapshot.group;
@@ -993,14 +1021,16 @@ function partyLine(snapshot: SnapshotLike): string | undefined {
     if (u !== undefined) {
       const state = u.ghost === true ? "ghost" : u.dead === true ? "dead" : "alive";
       const hp = state === "alive" ? pct(u.health, u.maxHealth) : undefined;
+      const mp = state === "alive" ? powerPct(u.power, u.maxPower, u.powerType) : undefined;
       const d = typeof u.distance === "number" ? `${Math.round(u.distance)}y` : undefined;
-      return [name, state, hp, d].filter((p) => p !== undefined).join(" ");
+      return [name, state, hp, mp, d].filter((p) => p !== undefined).join(" ");
     }
     if (st === undefined) return `${name} out of view`;
     const known = st.ghost !== undefined || st.dead !== undefined || st.health !== undefined;
     const state = st.ghost === true ? "ghost" : st.dead === true ? "dead" : known ? "alive" : undefined;
     const hp = state === "alive" ? pct(st.health, st.maxHealth) : undefined;
-    const head = [name, state, hp].filter((p) => p !== undefined).join(" ");
+    const mp = state === "alive" ? powerPct(st.power, st.maxPower, st.powerType) : undefined;
+    const head = [name, state, hp, mp].filter((p) => p !== undefined).join(" ");
     const zone = typeof st.zone?.name === "string" && st.zone.name !== "" ? st.zone.name : st.zone?.id !== undefined ? `zone ${fmt(st.zone.id)}` : undefined;
     const xy = typeof st.position?.x === "number" && typeof st.position?.y === "number" ? `(${st.position.x}, ${st.position.y})` : undefined;
     const where = [zone, xy].filter((p) => p !== undefined).join(" ");

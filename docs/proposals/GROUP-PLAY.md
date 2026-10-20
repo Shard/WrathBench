@@ -517,7 +517,7 @@ one dungeon cannot do without; everything else waits for a trajectory.
 | The kill record | §7 | module: whitelist `SMSG_PARTYKILLLOG` (`u64 killer, u64 victim`; `Unit::Kill` broadcasts it to the killer's group, or sends it to the killer alone) |
 | The instance record | §7 | module: load `Map.dbc` beside `AreaTable.dbc` and serve `mapName` and `instanceType` on `WB_AREA` and `WB_SESSION_STATE` — client-cache knowledge over a packet already served, the pattern the zone names follow |
 
-**Party frames, since earned (pending operator review).** The trigger the
+**Party frames, since earned (operator decision, Mark, 2026-10-21).** The trigger the
 deferral below wrote down was met: in a Deadmines party attempt the tank
 died or left the instance and went silent, and the
 other four stood at the entrance for seven to ten minutes asking whether it
@@ -534,13 +534,20 @@ group join, a zone change, a teleport or map transfer and a resurrection
 member's own fields through its auras, naming the zone from `AreaTable.dbc`
 (`module/PROTOCOL.md`); the request is on the raw allowlist. The SDK folds
 them onto `state.group().members[i].stats` with `inView` beside it, and the
-HUD's `party:` line names each member's state, health and whereabouts
-(`sdk/API.md`, `runner/src/context.ts`). Open for the operator: whether the
-SDK sends the request itself when a member goes out of view, as a client
-sends it without the player asking (when a stock client sends it is not
-pinned down here). Without it, a member that walks out of view is sent only
-the fields that change from then on; the rest stay what the last packet
-before it came into view said, or absent.
+HUD's `party:` line names each member's state, health %, power % and
+whereabouts: its zone and position out of view, its distance in view. Auras
+stay in `stats` only, off the line (`sdk/API.md`, `runner/src/context.ts`).
+Mark's calls on 2026-10-21:
+- The two packets are ambient, like movement. A far member sends about two a
+  second while walking, plus one for each regen tick and hit, so four far
+  members would turn the 64-event window over in about seven seconds. They
+  are in `CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE`, and the SDK's event buffer
+  does not retain them, so they cannot crowd chat out of `waitForChat`'s
+  lookback. The cache keeps the latest values.
+- The SDK does not send the request itself when a member goes out of view.
+  The request stays on the raw allowlist. A member that walks out of view is
+  therefore sent only the fields that change from then on. The rest stay what
+  the last packet before it came into view said, or are absent.
 
 **Deferred, with the change written down so it is not re-derived.**
 

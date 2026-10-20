@@ -255,7 +255,7 @@ the `docked` column of `state.units()`).
 | `once` | `events.once(opcode, fn): Unsubscribe` | Subscribe to the next single event of an opcode. |
 | `waitFor` | `events.waitFor(predicate, options?): Promise<StreamEvent>` | Wait for the next event satisfying a predicate; throws EventTimeoutError on timeout, EventAbortedError if options.signal (or the client default) fires. |
 | `waitForOpcode` | `events.waitForOpcode(opcode, { timeout: ms }): Promise<StreamEvent>` | Wait for the next event of a given opcode. |
-| `recent` | `events.recent(n?): StreamEvent[]` | The most recent buffered events, newest last. |
+| `recent` | `events.recent(n?): StreamEvent[]` | The most recent buffered events, newest last. The party frame packets (SMSG_PARTY_MEMBER_STATS, _FULL) are not buffered: state.group() keeps their values, and on() and waitFor() see them as they arrive. |
 | `connected` | `get events.connected: boolean` | Whether the event socket is open. |
 
 ## Errors & exported values

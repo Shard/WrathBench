@@ -8,9 +8,11 @@
  */
 import { describe, expect, test } from "bun:test";
 
+import { connect } from "../src/client";
 import { isEvent, parseEventFrame, type GameEvent } from "../src/protocol";
 import { StateCache } from "../src/state";
-import { loginSequence } from "./fixtures";
+import { frames, loginSequence, selfCreate } from "./fixtures";
+import { startStub } from "./server";
 
 const TS = 1_700_000_000_000;
 const frame = (seq: number, opcode: string, data: unknown, ts = TS + seq * 1000) => ({ seq, opcode, opcodeId: 0x07e, ts, data });
@@ -286,5 +288,41 @@ describe("party frames fold onto group().members", () => {
     expect(cache.group()!.members).toEqual([]);
     fold(groupList(33));
     expect(tank(cache).stats).toBeUndefined();
+  });
+});
+
+describe("party frames are not retained in the event buffer", () => {
+  // A far member walking sends about two a second: retained, four of them
+  // would push the chat lines waitForChat looks back over out of the buffer.
+  test("listeners and the fold see every one; recent() and waitForChat's lookback never hold them", async () => {
+    const stub = startStub({ onConnect: () => frames([...loginSequence, selfCreate]) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+    await client.events.waitForOpcode("SMSG_LOGIN_VERIFY_WORLD", { timeout: 2000 });
+    const push = (f: unknown) => stub.push(JSON.stringify(f));
+    push(groupList(30));
+    push(frame(31, "SMSG_MESSAGECHAT", { type: 2, language: 7, senderGuid: TANK, message: "pulling", chatTag: 0 }));
+    await client.events.waitFor((e) => e.opcode === "SMSG_MESSAGECHAT" && e.seq === 31, { timeout: 2000 });
+    let heard = 0;
+    client.events.on("SMSG_PARTY_MEMBER_STATS", () => heard++);
+    const before = client.events.recent().length;
+    const N = 600; // more than the 500 the buffer retains
+    const lastSeq = 32 + N - 1;
+    const arrived = client.events.waitFor((e) => e.opcode === "SMSG_PARTY_MEMBER_STATS" && e.seq === lastSeq, {
+      timeout: 5000,
+      includeBuffered: false,
+    });
+    for (let i = 0; i < N; i++)
+      push(frame(32 + i, "SMSG_PARTY_MEMBER_STATS", { guid: TANK, full: false, mask: 0x102, health: 400 - (i % 50), x: -16 - i, y: -383 }));
+    expect((await arrived).seq).toBe(lastSeq);
+    expect(heard).toBe(N);
+    expect(client.events.recent().length).toBe(before);
+    expect(client.events.recent().some((e) => e.opcode.startsWith("SMSG_PARTY_MEMBER_STATS"))).toBe(false);
+    // The fold kept the latest values.
+    expect(tank(client.state).stats).toMatchObject({ position: { x: -16 - (N - 1), y: -383 } });
+    // The chat line from before the flood is still found by the lookback.
+    expect(await client.waitForChat("pulling", { timeout: 200 })).toMatchObject({ seq: 31, message: "pulling" });
+    client.close();
+    await stub.stop();
   });
 });

@@ -1540,6 +1540,19 @@ function memberGhost(playerFlags: number | undefined): boolean | undefined {
   return playerFlags === undefined ? undefined : (playerFlags & 0x10) !== 0;
 }
 
+/** A party member's unit as its party frame reads it: health, the power bar with the raw `powerType` that picks it, and ghost. */
+function memberFrame(guid: string, health: number | undefined, maxHealth: number | undefined): Record<string, unknown> {
+  const unit = client.state.nearby.get(guid);
+  return {
+    health,
+    maxHealth,
+    power: unit?.power?.value.current,
+    maxPower: unit?.power?.value.max,
+    powerType: unit?.fields.get("powerType")?.value,
+    ghost: memberGhost(unit?.fields.get("playerFlags")?.value),
+  };
+}
+
 function stateSnapshot(): unknown {
   const snap = toJsonSafe(client.state.snapshot(), 6) as Record<string, unknown>;
   // The party with each member's party frame (`group().members[i].stats`),
@@ -1560,13 +1573,12 @@ function stateSnapshot(): unknown {
     // over the NPC and a unit's own selection.
     questGiver: u.questGiver,
     targetGuid: u.targetGuid,
-    // A party member in view: its health and whether it is a ghost, for the
-    // HUD's party line, as a client's party frame reads them off the unit
-    // (the frame's bar is the player's own health; it is mob health the
-    // contract keeps exact numbers off). Never carried for anything else.
-    ...(members.has(u.guid)
-      ? { health: u.health, maxHealth: u.maxHealth, ghost: memberGhost(client.state.nearby.get(u.guid)?.fields.get("playerFlags")?.value) }
-      : {}),
+    // A party member in view: its health, its power and whether it is a
+    // ghost, for the HUD's party line, as a client's party frame reads them
+    // off the unit (the frame's bars are the player's own health and power;
+    // it is mob health the contract keeps exact numbers off). Never carried
+    // for anything else.
+    ...(members.has(u.guid) ? memberFrame(u.guid, u.health, u.maxHealth) : {}),
   }));
   snap["units"] = toJsonSafe(units, 4);
   snap["bag"] = toJsonSafe(client.state.bag(), 4);

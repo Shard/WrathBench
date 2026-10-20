@@ -346,7 +346,7 @@ const EVENT_ROWS: readonly Row[] = [
   { name: "once", sig: "events.once(opcode, fn): Unsubscribe", purpose: "Subscribe to the next single event of an opcode." },
   { name: "waitFor", sig: "events.waitFor(predicate, options?): Promise<StreamEvent>", purpose: "Wait for the next event satisfying a predicate; throws EventTimeoutError on timeout, EventAbortedError if options.signal (or the client default) fires." },
   { name: "waitForOpcode", sig: "events.waitForOpcode(opcode, { timeout: ms }): Promise<StreamEvent>", purpose: "Wait for the next event of a given opcode." },
-  { name: "recent", sig: "events.recent(n?): StreamEvent[]", purpose: "The most recent buffered events, newest last." },
+  { name: "recent", sig: "events.recent(n?): StreamEvent[]", purpose: "The most recent buffered events, newest last. The party frame packets (SMSG_PARTY_MEMBER_STATS, _FULL) are not buffered: state.group() keeps their values, and on() and waitFor() see them as they arrive." },
   { name: "connected", sig: "get events.connected: boolean", purpose: "Whether the event socket is open." },
 ];
 
