@@ -38,6 +38,7 @@ import type {
 import { statSync } from "node:fs";
 import { CodexUsageCorrector } from "../src/codex-usage";
 import { CONTEXT_POLICY } from "../src/context";
+import { driverEntry } from "../src/drivers";
 import {
   HistoryRebuilder,
   isSlimRequest,
@@ -450,7 +451,7 @@ export function claudeTurnUsage(rec: Record<string, unknown>): ClaudeTurnUsage |
 function isClaudeCode(entries: readonly EntrySummary[]): boolean {
   for (const e of entries) {
     if (e.t === "claude_system" || e.t === "claude_result") return true;
-    if (e.t === "driver" && e["driver"] === "claude-code") return true;
+    if (e.t === "driver" && driverEntry(e["driver"])?.usage === "turn-snapshot") return true;
   }
   return false;
 }
@@ -725,7 +726,7 @@ export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
   // Codex: a turn is a whole `codex exec`, so the figures above are tallies of
   // many calls and "context" is the last call's prompt, when the driver logged
   // it. Held apart so nothing else about the totals moves.
-  const codex = entries.some((e) => e.t === "driver" && e["driver"] === "codex");
+  const codex = entries.some((e) => e.t === "driver" && driverEntry(e["driver"])?.usage === "exec-tally");
   let codexContext: number | null = null;
   let codexWindow: number | undefined;
   let turns = 0;
@@ -1927,14 +1928,17 @@ export class RunTotalsScanner {
       // One marker per run is all the derivation needs to know which driver wrote
       // these responses — see `isClaudeCode`. Pushing every `claude_system` would
       // put thousands of this.entries in a list kept small on purpose.
-      if (!this.sawClaudeMark && (t === "claude_system" || (t === "driver" && rec["driver"] === "claude-code"))) {
+      // The mark is the record kind that was seen, which `isClaudeCode` reads
+      // either way: the `driver` line, or the `claude_system` envelope.
+      const reports = t === "driver" ? driverEntry(rec["driver"])?.usage : undefined;
+      if (!this.sawClaudeMark && (t === "claude_system" || reports === "turn-snapshot")) {
         this.sawClaudeMark = true;
-        this.spanMarks.push({ i: 0, t: "driver", ts, start: 0, end: 0, driver: "claude-code" });
+        this.spanMarks.push(t === "driver" ? { i: 0, t, ts, start: 0, end: 0, driver: rec["driver"] } : { i: 0, t, ts, start: 0, end: 0 });
       }
       // The codex driver's line, for `tokenTotals`' reading of "context".
-      if (!this.sawCodexMark && t === "driver" && rec["driver"] === "codex") {
+      if (!this.sawCodexMark && reports === "exec-tally") {
         this.sawCodexMark = true;
-        this.spanMarks.push({ i: 0, t: "driver", ts, start: 0, end: 0, driver: "codex" });
+        this.spanMarks.push({ i: 0, t: "driver", ts, start: 0, end: 0, driver: rec["driver"] });
       }
       // Same reason, one record kind further: a `milestone` is neither a request
       // nor a response, so it has to be read before the early return below. Only

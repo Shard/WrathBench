@@ -34,6 +34,7 @@
 import { z } from "zod";
 import { CATALOGUE, priceOf } from "../../infra/sync-prices";
 import { PROPOSED_PREFIX, type ConfigRow } from "../src/config-store";
+import { harnessDriver } from "../src/drivers";
 import { billingOf } from "../src/model-cost";
 import { inSeries, isCounted, type RunFact, type SchedulingPolicy } from "../src/models";
 import { resolveRouting, routingLabel, type RoutingSpec } from "../src/routing";
@@ -374,7 +375,7 @@ export function e90TokenProfile(runs: readonly ProfileRun[], policy: SchedulingP
       r.fact.episode === "e90" &&
       isCounted(r.fact) &&
       inSeries(r.fact, policy) &&
-      r.harness === "wrathbench" &&
+      harnessDriver(r.harness)?.kind === "loop" &&
       r.tokens !== null &&
       r.tokens.source === "reported",
   );
