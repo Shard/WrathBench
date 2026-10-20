@@ -1623,8 +1623,10 @@ reach.
 A pause is not resumed. Check it with `bun wb inspect run <run-id>` and `bun wb
 inspect trajectory <run-id> --grep 'REF'`. Every turn's result ends in one
 `[log] REF {…}` line: the step, `advance`, what the tick did, and the level, xp
-and health. A step stuck on `move …` or `npc … not in view` is a route
-position to correct in `runner/src/reference/route.ts`. Bump the route's
+and health. An `npc … not in view` after walks that arrived is a route
+position to correct in `runner/src/reference/route.ts`; the same `move …`
+failure repeated from one spot (the audit's move results give the position) is
+the program's to fix in `program.ts`. Bump the route's
 `version` with the correction, so the next run is a new line rather than the
 old one moved.
 

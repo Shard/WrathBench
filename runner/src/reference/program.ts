@@ -260,7 +260,7 @@ export async function referenceTick(env: ReferenceEnv, route: Route, args: TickA
       timeout: Math.max(2_000, left() - 9_000),
       ...(healable ? { abortBelowHealthPct: 30 } : {}),
     });
-    say(`fight ${u.entry ?? "?"}: ${r.status}`);
+    say(`fight ${u.entry ?? "?"}: ${r.status}${r.status === "killed" ? "" : r.reached ? "" : ` (unreached, ${r.distance ?? "?"}y)`}`);
     if ((r.status === "timeout" || r.status === "lost") && r.reached === false) {
       unreached[u.guid] = (unreached[u.guid] ?? 0) + 1;
       if (unreached[u.guid]! >= 2) {
