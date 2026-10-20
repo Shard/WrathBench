@@ -86,6 +86,7 @@ export const GROUPS: Readonly<Record<string, string>> = {
   data: "prices and logos this checkout carries",
   chart: "checks on the Helm chart",
   inspect: "read-only views of runs, the audit log and the publisher; bounded, never a token",
+  export: "the scored ladders in outside reporting formats, written here and submitted nowhere",
   dashboard: "the dashboard rendered here over fixture runs: both builds, headless screenshots",
 };
 
@@ -269,6 +270,14 @@ export const ENTRIES: readonly Entry[] = [
     summary: "the publisher's state: last flip, versions per run, the secret scan, the last passes",
     cluster: { place: "host", argv: ["bun", "infra/inspect-publisher.ts", "--k8s"] },
     local: { place: "host", argv: ["bun", "infra/inspect-publisher.ts"] },
+  },
+
+  {
+    group: "export",
+    command: "eee",
+    takes: "(--base URL | --runs DIR) [--series S] [--exclude-free] [--out DIR] [--bundle FILE]",
+    summary: "the e90 and e360 ladders as Every Eval Ever records, under data/eee unless --out says",
+    ...onHost("bun", "infra/eee-export.ts"),
   },
 
   {
