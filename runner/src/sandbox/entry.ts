@@ -1419,8 +1419,9 @@ nearbyRecorder.start();
 // ------------------------------------------------------------ client cache
 
 /**
- * The client's query-answer cache, kept across a restart the way a client
- * keeps its on-disk cache (`client-cache.ts`). Each answer the SDK folds is
+ * The client's query-answer cache, and the login's character list beside it,
+ * kept across a restart the way a client keeps its on-disk cache
+ * (`client-cache.ts`). Each answer the SDK folds is
  * forwarded to the host as it arrives — this process cannot write the run
  * directory — and a starting child is handed what the host holds before it
  * is ready (`seedClientCache`).

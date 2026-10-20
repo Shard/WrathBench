@@ -4311,7 +4311,12 @@ export class StateCache {
 
   /**
    * Copy the char-enum row for our own character onto `self`. Only runs when a
-   * seed identified us; matching by name alone would be a guess.
+   * seed identified us; matching by name alone would be a guess. The row's
+   * level is the one at the character screen, so it only fills a level nothing
+   * else has stated: a restarted sandbox child is seeded with the login's char
+   * enum (runner `client-cache.ts`), and every `createSession` after the
+   * reattach would otherwise put the login's level back over the one
+   * `WB_SESSION_STATE` and the update blocks have said since.
    */
   private adoptOwnCharacter(): void {
     const enumerated = this.characters;
@@ -4323,7 +4328,7 @@ export class StateCache {
     if (!row) return;
     if (this.self.guid === undefined) this.self.guid = row.guid;
     if (this.self.name === undefined) this.self.name = row.name;
-    this.self.level = { value: row.level, seq: enumerated.seq, ts: enumerated.ts };
+    if (this.self.level === undefined) this.self.level = { value: row.level, seq: enumerated.seq, ts: enumerated.ts };
   }
 
   /**

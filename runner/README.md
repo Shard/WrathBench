@@ -1159,8 +1159,9 @@ in the entry file's header, and told to the model in the system prompt.
 Timeouts, precisely: a snippet that exceeds the per-snippet timeout is
 abandoned but the runtime survives; a snippet that blocks the event loop gets
 the process killed and respawned, and the state loss is surfaced to the model
-as a harness notice. The client's query answers are not part of that loss:
-the host keeps them and seeds each new child before it is ready
+as a harness notice. The client's query answers and the login's character
+list (our own race) are not part of that loss: the host keeps them and seeds
+each new child before it is ready
 (`src/sandbox/client-cache.ts`, `docs/ARCHITECTURE.md` "Persistence").
 Repeats trip the `snippet-runaway` watchdog. The abandon
 message also says what the snippet was awaiting when the abandoning wait can

@@ -272,7 +272,7 @@ describe("ClientCacheStore", () => {
     data: { guid, found, ...(n !== undefined ? { name: n } : {}) },
   });
 
-  test("keeps the newest answer per id, never a not-found, and nothing outside the eight answers", () => {
+  test("keeps the newest answer per id, never a not-found, and nothing outside the kept frames", () => {
     const dir = tempDir("wrathbench-client-cache-");
     const store = new ClientCacheStore(join(dir, CLIENT_CACHE_FILE), { debounceMs: 60_000 });
     store.add([
@@ -322,6 +322,23 @@ describe("ClientCacheStore", () => {
       }),
     );
     expect(new ClientCacheStore(path).size).toBe(1);
+  });
+
+  test("keeps the newest character list, one for the account", () => {
+    const dir = tempDir("wrathbench-client-cache-");
+    const store = new ClientCacheStore(join(dir, CLIENT_CACHE_FILE), { debounceMs: 60_000 });
+    const charEnum = (seq: number, level: number): unknown => ({
+      seq,
+      opcode: "SMSG_CHAR_ENUM",
+      opcodeId: 0x03b,
+      ts: 1000 + seq,
+      data: { count: 1, characters: [{ guid: "7", name: "Fenwick", race: 1, class: 1, gender: 0, level }] },
+    });
+    store.add([charEnum(1, 3), name("42", true, "Brannoc"), charEnum(9, 4)]);
+    expect(store.size).toBe(2);
+    const kept = store.snapshot().find((f) => f.opcode === "SMSG_CHAR_ENUM");
+    expect(kept?.seq).toBe(9);
+    expect((kept?.data as { characters: { level: number }[] }).characters[0]?.level).toBe(4);
   });
 
   test("a seed frame folds into a StateCache exactly as the live frame did", () => {

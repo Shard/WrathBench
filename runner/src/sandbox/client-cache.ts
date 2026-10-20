@@ -14,9 +14,22 @@
  * What goes in: the answer frames themselves, exactly as this run's event
  * stream delivered them, for the eight query responses the SDK folds into a
  * cache (`CLIENT_CACHE_OPCODES`) — and only answers that told the cache
- * something (`keepsAnswer`). Nothing from the reference bundle or the
- * database, and nothing the stream did not carry. The newest answer for each
- * id wins, as it does in the SDK's own maps.
+ * something (`keepsAnswer`) — and the newest `SMSG_CHAR_ENUM`, the account's
+ * character list the login flow showed. Nothing from the reference bundle or
+ * the database, and nothing the stream did not carry. The newest answer for
+ * each id wins, as it does in the SDK's own maps.
+ *
+ * Why the character list: it is the one frame the stream carries our own race
+ * in besides our own create block, and neither comes back on a reattach. A
+ * same-token `POST /session` on a session in world succeeds without a login
+ * flow, so no char enum follows; `WB_SESSION_STATE` names the character and
+ * its level but not its race; and the server never sends a create block for
+ * a player it already sent one. A restarted child without it cannot pick the
+ * language a party, yell or whisper line goes out in (`chatLanguage` in the
+ * SDK) until a far teleport re-creates the character, which left a party
+ * leader mute after a restart. A client never loses its own race, so neither
+ * does the child. The row's level is the login's; the SDK only takes it when
+ * nothing newer has said what our level is.
  *
  * Who holds it: the child is confined (`confine.ts`) and can neither read nor
  * write the run directory, so it forwards each answer to the host as it
@@ -42,8 +55,12 @@ import { parseEventFrame } from "@wrathbench/sdk";
 
 export const CLIENT_CACHE_FILE = "client-cache.json";
 
-/** The query answers the SDK keeps in a cache, and the id each is keyed by there. */
-const KEY_FIELD: Readonly<Record<string, string>> = {
+/**
+ * The frames kept, and the id each is keyed by: the query answers by the id the
+ * SDK keys them by in its own maps; the character list by nothing, because the
+ * SDK holds only the newest one (`state.characters`).
+ */
+const KEY_FIELD: Readonly<Record<string, string | null>> = {
   SMSG_NAME_QUERY_RESPONSE: "guid",
   SMSG_CREATURE_QUERY_RESPONSE: "entry",
   SMSG_GAMEOBJECT_QUERY_RESPONSE: "entry",
@@ -52,6 +69,7 @@ const KEY_FIELD: Readonly<Record<string, string>> = {
   SMSG_PET_NAME_QUERY_RESPONSE: "petNumber",
   SMSG_PAGE_TEXT_QUERY_RESPONSE: "pageId",
   SMSG_ITEM_TEXT_QUERY_RESPONSE: "guid",
+  SMSG_CHAR_ENUM: null,
 };
 
 export const CLIENT_CACHE_OPCODES: ReadonlySet<string> = new Set(Object.keys(KEY_FIELD));
@@ -66,7 +84,7 @@ export interface ClientCacheFrame {
 }
 
 /**
- * Whether this frame is an answer the SDK's cache would keep: one of the eight
+ * Whether this frame is one the SDK's cache would keep: one of the kept
  * opcodes, decoded cleanly, and not a "not found" (which the SDK ignores, and
  * which must not replace an earlier answer for the same id here either).
  */
@@ -85,6 +103,7 @@ export function keepsAnswer(frame: { opcode: string; data: unknown; schemaError?
 export function clientCacheKey(frame: { opcode: string; data: unknown }): string | undefined {
   const field = KEY_FIELD[frame.opcode];
   if (field === undefined || typeof frame.data !== "object" || frame.data === null) return undefined;
+  if (field === null) return frame.opcode;
   const id = (frame.data as Record<string, unknown>)[field];
   return typeof id === "string" || typeof id === "number" ? `${frame.opcode}:${id}` : undefined;
 }
