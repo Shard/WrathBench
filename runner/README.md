@@ -153,8 +153,8 @@ and `codex` already do, and what another driver would have to.
   thresholds, the scratchpad, the episodic log, `reflect`, and the trim or
   compaction ask.
 - Run identity: `meta.json`, and the comparability tuple stamped once at
-  launch by `comparabilityOf`, with the harness taken from
-  `HARNESS_OF_DRIVER`; the unscored stamps; the resume rules.
+  launch by `comparabilityOf`, with the harness taken from the driver's
+  registry entry (`src/drivers.ts`); the unscored stamps; the resume rules.
 - The child environment: the `CLI_BASE_ENV` allowlist, one lane credential and
   the run-controlled knobs, and nothing else.
 
@@ -230,6 +230,72 @@ does the same thing to whichever model is given it, and the tuple says so.
   scaffold's stderr and unparseable lines, bounded.
 - Cost as the provider or the CLI reported it, and absent otherwise, never a
   zero. An estimate is the viewer's, marked as-if-metered (`docs/COSTS.md`).
+
+**What a new driver provides.** One adapter, one registry entry and its
+fixtures. Nothing else in the runner, the viewer or the fleet names a driver:
+they read the entry, so a driver's facts are stated once and the next harness
+does not have to find every branch the last one added.
+`test/driver-scatter.test.ts` fails on a driver id written as a literal
+anywhere else.
+
+- **The registry entry** (`src/drivers.ts`, `DriverEntry`; import-free so the
+  viewer, `infra/` and the dashboard's wire types can read it). It says:
+  - `harness`, the tag the tuple stamps, and `kind`: `loop` (our fixed loop
+    and a `ChatAdapter`) or `scaffold` (a CLI with its own turn loop, which a
+    resume starts fresh).
+  - `stamp` for a driver that is not a model, and `route` for the scripted
+    reference.
+  - Whether a roster may name it (`roster`, `rosterRefusal`), whether
+    `policy.maxConcurrent` caps it by id (`capKey`), and the claude-family
+    rule it carries (`claudeModels`).
+  - `endpoint`: whether it takes `apiBase`, `apiKeyEnv`, `routing` and a
+    declared `billing`.
+  - `bill` (metered, subscription or none) and, for a subscription, its
+    `lane`: the lane key, the default variable, whether the variable holds a
+    token or a home directory, whether the fleet places runs among several
+    lanes, and the dry-run and container-preflight wording.
+  - `cost`: where the actual figure comes from, which price table, the
+    catalogue vendor for a bare slug, and the prefix that tells a model id
+    from a CLI alias.
+  - `compactWindow`, `usage` (how the trajectory carries usage), `rollouts`
+    (session files the fleet sweeps), and `podVolumes`.
+  A new field is earned the way an SDK helper is: by a branch the driver
+  would otherwise need, not in advance.
+- **The adapter** (`src/driver-adapters.ts`, `DriverAdapter`): `prepare`,
+  the launch preflight that checks the key or lane, redacts the credential,
+  names a CLI lane in the recorded config and builds a fixed-loop driver's
+  `ChatAdapter`, refusing with exit 2 before the sandbox is up; and, for a
+  scaffold, `runEpisode`, which owns everything listed under "A scaffold
+  driver must also". The map is `Record<Driver, …>`, so a registry entry
+  without an adapter fails typecheck.
+- **The context sentence.** `contextSentence` (`src/prompt.ts`) is exhaustive
+  over `Harness`, so a new harness fails typecheck until the operator decides
+  what the model is told about its history. It changes the prompt hash, so it
+  is the operator's call, never a default.
+- **Tests and fixtures.** A scaffold gets a fake CLI under `test/fixtures/`
+  (`fake-claude.ts`, `fake-codex.ts` are the pattern): a script that speaks
+  the CLI's stream format and calls the MCP tools, so the driver test runs a
+  whole episode with no model and no network. Add the entry's facts to
+  `test/drivers.test.ts`.
+- **The image pin.** A CLI is installed at a pinned version in
+  `infra/docker/runner.Dockerfile` (`CLAUDE_CODE_VERSION`, `CODEX_VERSION`),
+  and its section in this README names the version its behaviour was verified
+  against. A pin bump is a deliberate change.
+- **The docs.** This README gets the driver's own section: how it drives, what
+  it cannot remove, billing and setup. `docs/RUNBOOK.md` gets its lane, its
+  setup and anything an operator runs. `docs/COSTS.md` gets how its cost is
+  read when the CLI reports one, and how it is estimated when it does not.
+
+The checklist, in order:
+
+1. The entry in `DRIVERS` and `DRIVER_TABLE`, and `HARNESSES` if the harness is
+   new.
+2. The adapter in `DRIVER_ADAPTERS`, and the image pin for a CLI.
+3. The context sentence, if the harness is new (the operator's call).
+4. The fake CLI, the driver test and the registry test.
+5. This README's section, RUNBOOK and COSTS.
+6. Probe-campaign arms until the operator promotes it (docs/METHODOLOGY.md,
+   "Harness and driver are separate words").
 
 **Two asymmetries are deliberate.**
 
