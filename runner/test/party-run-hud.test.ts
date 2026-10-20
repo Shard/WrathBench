@@ -38,6 +38,21 @@ describe("position: the map's name and kind beside the zone", () => {
     expect(inside).toContain("position: The Fixture Mine, Fixture Depths (dungeon instance) — map 36 (-16.4, -383.1, 61.8)");
   });
 
+  test("a zone and its subzone come before the map", () => {
+    const text = formatStateSummary(
+      {
+        self: {
+          position: at(0, 1, 2, 3),
+          zone: { value: { id: 12, name: "Fixture Forest" } },
+          area: { value: { id: 9, name: "Fixture Vale" } },
+          map: { value: { id: 0, name: "Fixture Continent", instanceType: "none" } },
+        },
+      },
+      { sessionLive: true },
+    );
+    expect(text).toContain("position: Fixture Forest / Fixture Vale, Fixture Continent (open world) — map 0 (1, 2, 3)");
+  });
+
   test("a map name from before a transfer is not printed against the new map's position", () => {
     const text = formatStateSummary(
       { self: { position: at(36, 1, 2, 3), map: { value: { id: 0, name: "Fixture Continent", instanceType: "none" } } } },
