@@ -4,11 +4,14 @@
  * line `{"ok":true,…}`, else the reason on stderr's last line) and its pure
  * parts: what a request must be, where worn bags go, how landed items are
  * counted, and that a malformed request, a non-admin STAGER or a missing
- * secret ends the staging before any account, character or row is touched.
+ * secret ends the staging before any account, character or row is touched;
+ * and that every checked-in party definition is a party the stager takes.
  * The live staging is proven by infra/smoke/party-staging.ts in a release window.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { checkedIn, checkedInFiles } from "../../runner/test/fixtures/campaigns";
+import { loadoutFor, partyCharacterName, type Loadout } from "./loadouts";
 import { SoapClient } from "./soap";
 import {
   DEFAULT_PARTY_ACCOUNTS,
@@ -99,6 +102,39 @@ describe("checkStageRequest", () => {
     expect(with_((r) => (r.level = 25))).toMatch(/built for level 20/);
     expect(with_((r) => (r.members = []))).toMatch(/1\.\.5 members/);
   });
+});
+
+describe("the checked-in party definitions", () => {
+  const parties = checkedInFiles()
+    .map((f) => checkedIn(f.replace(/\.json$/, "")))
+    .filter((d) => d.party !== undefined);
+
+  test("deadmines@1 is among them", () => {
+    expect(parties.map((d) => `${d.id}@${d.version}`)).toContain("deadmines@1");
+  });
+
+  for (const def of parties) {
+    const members = def.party!.members;
+    test(`${def.id}@${def.version}: the stager takes it on PARTY1..PARTY5 in member order, each member under the name derived from its account`, () => {
+      const start = def.start as { staged: string; level: number };
+      const req: StageRequest = {
+        party: "p",
+        campaign: def.id,
+        version: def.version,
+        scenario: start.staged,
+        level: start.level,
+        members: members.map((m, i) => ({ member: m.id, role: m.role, race: m.race, class: m.class, character: m.character, account: DEFAULT_PARTY_ACCOUNTS[i]!, runId: `p-${m.id}` })),
+      };
+      expect(checkStageRequest(req)).toEqual([]);
+      // The names the staging smokes leave on those accounts: no create on one account races a delete on another.
+      expect(members.map((m) => m.character)).toEqual(members.map((m, i) => partyCharacterName((loadoutFor(m) as Loadout).id, DEFAULT_PARTY_ACCOUNTS[i]!)));
+    });
+
+    test(`${def.id}@${def.version}: the warrior tank leads, and every member's objective names every member`, () => {
+      expect([members[0]!.role, members[0]!.class]).toEqual(["tank", 1]);
+      for (const m of members) for (const other of members) expect(m.objective).toContain(other.character);
+    });
+  }
 });
 
 describe("bagTargets", () => {
