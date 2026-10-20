@@ -9,7 +9,7 @@
 import { join } from "node:path";
 import type { RosterSpec } from "./run-roster";
 import { harnessSeries } from "../runner/src/comparability";
-import { compactWindowDriverRefusal, driverHasCompactWindow, harnessClash, isCodexHomeEnvName, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
+import { compactWindowDriverRefusal, driverHasCompactWindow, harnessClash, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
 import type { Billing } from "../runner/src/model-cost";
 import { isOpenRouterBase, parseRouting } from "../runner/src/routing";
 import { QUEUE_JOB_KEYS, rosterEntryRefusal, strictKeyWhy, unknownKeysOf } from "../runner/src/roster-refusal";
@@ -52,6 +52,7 @@ import {
 } from "../runner/src/models";
 import { isScoredEpisode } from "../runner/src/episodes";
 import { harnessVersion } from "../runner/src/version";
+import { DEFAULT_DRIVER, driverEntry, laneHoldsOf, ROSTER_DRIVERS } from "../runner/src/drivers";
 
 /**
  * The harness series this supervisor runs from: the projection
@@ -528,11 +529,13 @@ export function campaignLaneProblem(
   if (!subscriptions.includes(lane)) return `campaign ${c.name}: subscription ${lane} is not in policy.subscriptions (${subscriptions.join(", ")})`;
   if (c.account === undefined) return `campaign ${c.name}: a lane pin is a pinned campaign's (give account or accounts); the policy places an unpinned campaign's lanes`;
   for (const a of c.assignments) {
-    const driver = roster[a.model]?.driver ?? "openai";
-    const codex = isCodexHomeEnvName(lane);
-    if (driver === "claude-code" && codex) return `campaign ${c.name}: ${a.model} runs on claude-code, and ${lane} is a Codex home`;
-    if (driver === "codex" && !codex) return `campaign ${c.name}: ${a.model} runs on codex, and ${lane} is not a Codex home`;
-    if (driver !== "claude-code" && driver !== "codex") return `campaign ${c.name}: ${a.model} runs on the ${driver} driver, which bills no subscription lane`;
+    const driver = roster[a.model]?.driver ?? DEFAULT_DRIVER;
+    const bills = driverEntry(driver)?.lane;
+    if (bills === undefined) return `campaign ${c.name}: ${a.model} runs on the ${driver} driver, which bills no subscription lane`;
+    const holds = laneHoldsOf(lane);
+    if (bills.holds !== holds) {
+      return `campaign ${c.name}: ${a.model} runs on ${driver}, and ${lane} ${holds === "home" ? "is a Codex home" : "is not a Codex home"}`;
+    }
   }
   return undefined;
 }
@@ -723,32 +726,22 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
     if (typeof e !== "object" || e === null || typeof e.model !== "string" || e.model.length === 0) {
       fail(`${where}: entry without a model: ${JSON.stringify(e)}`);
     }
-    const driver: string = e.driver ?? "openai";
+    const driver: string = e.driver ?? DEFAULT_DRIVER;
+    const entry = driverEntry(driver);
     // The scripted reference is not a model: it is launched by hand, once per
     // harness series, and the policy may never schedule one (docs/EPISODES.md,
     // "The scripted reference run").
-    if (driver === "reference") {
-      fail(`${where}: entry ${e.model}: driver reference is the scripted reference run — launched by hand on PROBE, never a roster entry`);
+    if (entry?.rosterRefusal !== undefined) {
+      fail(`${where}: entry ${e.model}: ${entry.rosterRefusal}`);
     }
-    if (driver !== "openai" && driver !== "claude-code" && driver !== "codex") {
-      fail(`${where}: entry ${e.model}: unknown driver ${String(e.driver)} (openai | claude-code | codex)`);
+    if (entry === undefined || !entry.roster) {
+      fail(`${where}: entry ${e.model}: unknown driver ${String(e.driver)} (${ROSTER_DRIVERS.join(" | ")})`);
     }
-    if (driver === "openai" && isClaudeFamily(e.model)) {
-      fail(
-        `${where}: entry ${e.model}: roster policy — claude models run only via the ` +
-          `claude-code driver, never through an openai-driver entry`,
-      );
-    }
-    if (driver === "claude-code" && !isClaudeFamily(e.model)) {
-      fail(
-        `${where}: entry ${e.model}: roster policy — the claude-code driver ` +
-          `carries claude models only`,
-      );
-    }
-    // The Codex CLI is a ChatGPT-subscription lane: OpenAI's catalogue only,
-    // and never a claude id (which the claude bar above already refuses).
-    if (driver === "codex" && isClaudeFamily(e.model)) {
-      fail(`${where}: entry ${e.model}: roster policy — the codex driver carries no claude models`);
+    // Which model family the driver may carry: claude models only via
+    // claude-code, and never through the openai or codex entries.
+    const family = entry.claudeModels;
+    if (family !== undefined && family.only !== isClaudeFamily(e.model)) {
+      fail(`${where}: entry ${e.model}: ${family.refusal}`);
     }
     if (e.watchdogs !== undefined) {
       const parsed = watchdogOverrideSchema.safeParse(e.watchdogs);
@@ -798,10 +791,10 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
     // Cerebras or CLI entry believed the run was pinned, and config that does
     // nothing is what every strict-key rule in this file exists to prevent.
     if (e.routing !== undefined) {
-      if (driver !== "openai" || !(e.apiBase === undefined || isOpenRouterBase(e.apiBase))) {
+      if (!entry.endpoint || !(e.apiBase === undefined || isOpenRouterBase(e.apiBase))) {
         fail(
           `${where}: entry ${e.model}: routing is an OpenRouter setting — this entry runs on ` +
-            `${driver === "openai" ? String(e.apiBase) : `the ${driver} CLI`}, which is single-backend or (OpenCode Go) routed by its provider`,
+            `${entry.endpoint ? String(e.apiBase) : `the ${driver} CLI`}, which is single-backend or (OpenCode Go) routed by its provider`,
         );
       }
       // NORMALISED, not merely checked: the shorthands (`"Z.AI"`, `["Z.AI"]`)
@@ -1022,7 +1015,7 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
   if (policy.routing !== undefined) {
     for (const [name, e] of Object.entries(roster)) {
       if (e.routing !== undefined) continue;
-      if ((e.driver ?? "openai") !== "openai") continue;
+      if (driverEntry(e.driver ?? DEFAULT_DRIVER)?.endpoint !== true) continue;
       if (!(e.apiBase === undefined || isOpenRouterBase(e.apiBase))) continue;
       roster[name] = { ...e, routing: policy.routing };
     }
@@ -1123,7 +1116,7 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
     if (rawSub !== undefined && (typeof rawSub !== "string" || !isTokenEnvName(rawSub))) {
       fail(`roster ${name}: subscription must be the NAME of the env var holding the token (e.g. CLAUDE_CODE_OAUTH_TOKEN_2), never the token`);
     }
-    if (rawSub !== undefined && (e as { driver?: unknown }).driver !== "claude-code" && (e as { driver?: unknown }).driver !== "codex") {
+    if (rawSub !== undefined && driverEntry((e as { driver?: unknown }).driver)?.lane === undefined) {
       fail(`roster ${name}: subscription is a claude-code or codex lane — only an entry on those drivers bills a subscription`);
     }
     if (rawBilling !== undefined && rawBilling !== "free" && rawBilling !== "paid") fail(`roster ${name}: billing must be "free" or "paid" (normally absent: it is derived)`);
@@ -1239,7 +1232,7 @@ export function policyExclusion(config: Pick<FleetConfig, "jobs" | "roster">, na
 
 /** The driver a roster name runs on. */
 export function driverOf(roster: Record<string, FleetRosterEntry>, name: string): string {
-  return roster[name]?.driver ?? "openai";
+  return roster[name]?.driver ?? DEFAULT_DRIVER;
 }
 
 /**
