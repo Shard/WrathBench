@@ -144,6 +144,30 @@ interface UnitLike {
   questGiver?: unknown;
   /** What it has selected (`UNIT_FIELD_TARGET`), when observed. */
   targetGuid?: unknown;
+  /** Party members only: the unit's own health, as the party frame reads it. Never carried for a mob. */
+  health?: unknown;
+  maxHealth?: unknown;
+  /** Party members only: `PLAYER_FLAGS_GHOST` on its `playerFlags`. */
+  ghost?: unknown;
+}
+
+/** One `state.group().members` row as the sandbox serialises it. */
+interface GroupMemberLike {
+  guid?: unknown;
+  name?: unknown;
+  /** From `SMSG_GROUP_LIST`. */
+  online?: unknown;
+  inView?: unknown;
+  /** The party frame while out of sight (SDK `PartyMemberStats`). */
+  stats?: {
+    online?: unknown;
+    dead?: unknown;
+    ghost?: unknown;
+    health?: unknown;
+    maxHealth?: unknown;
+    zone?: { id?: unknown; name?: unknown };
+    position?: { x?: unknown; y?: unknown };
+  };
 }
 
 /** The carried inventory as `state.bag()` shapes it, flattened into the rpc JSON. */
@@ -250,6 +274,8 @@ export interface SnapshotLike {
    * never printed — CONTRACTS.md forbids exact mob health.
    */
   units?: UnitLike[];
+  /** `state.group()`: the party, each member with `inView` and its party frame (`stats`). */
+  group?: { inGroup?: unknown; members?: GroupMemberLike[] };
   /** `state.bag()` shape: carried items across all bags, free and total slot counts. */
   bag?: BagLike;
   /** `state.inventory` as the sandbox serialises it; equipment is `slot < 19`. */
@@ -921,6 +947,48 @@ function portalLine(
   return `portals: ${shown}${more}`;
 }
 
+/** "62%": health over max, rounded; undefined unless both are numbers and max is not 0. */
+function pct(health: unknown, max: unknown): string | undefined {
+  return typeof health === "number" && typeof max === "number" && max > 0 ? `${Math.round((100 * health) / max)}%` : undefined;
+}
+
+/**
+ * "party: Brannoc ghost, Westfall (-10546, 1197), out of view; Ysolde alive
+ * 87% 14y; Corwin offline" — the party frames: each other member's state, its
+ * health while alive, and where it is. A member in view is read off its unit,
+ * as the frame reads it, with its distance; one out of view off the party
+ * frame the server sends for it (`stats`): its zone and the x, y the packet
+ * carries, which names no map, so no distance is worked out from it.
+ * Undefined outside a group.
+ */
+function partyLine(snapshot: SnapshotLike): string | undefined {
+  const g = snapshot.group;
+  if (g?.inGroup !== true || !Array.isArray(g.members) || g.members.length === 0) return undefined;
+  const units = snapshot.units ?? [];
+  const one = (m: GroupMemberLike): string => {
+    const name = fmt(m.name, "?");
+    const st = m.stats;
+    if (m.online === false || st?.online === false) return `${name} offline`;
+    const u = units.find((x) => x.guid === m.guid);
+    if (u !== undefined) {
+      const state = u.ghost === true ? "ghost" : u.dead === true ? "dead" : "alive";
+      const hp = state === "alive" ? pct(u.health, u.maxHealth) : undefined;
+      const d = typeof u.distance === "number" ? `${Math.round(u.distance)}y` : undefined;
+      return [name, state, hp, d].filter((p) => p !== undefined).join(" ");
+    }
+    if (st === undefined) return `${name} out of view`;
+    const known = st.ghost !== undefined || st.dead !== undefined || st.health !== undefined;
+    const state = st.ghost === true ? "ghost" : st.dead === true ? "dead" : known ? "alive" : undefined;
+    const hp = state === "alive" ? pct(st.health, st.maxHealth) : undefined;
+    const head = [name, state, hp].filter((p) => p !== undefined).join(" ");
+    const zone = typeof st.zone?.name === "string" && st.zone.name !== "" ? st.zone.name : st.zone?.id !== undefined ? `zone ${fmt(st.zone.id)}` : undefined;
+    const xy = typeof st.position?.x === "number" && typeof st.position?.y === "number" ? `(${st.position.x}, ${st.position.y})` : undefined;
+    const where = [zone, xy].filter((p) => p !== undefined).join(" ");
+    return `${head}, ${where === "" ? "" : `${where}, `}out of view`;
+  };
+  return `party: ${g.members.map(one).join("; ")}`;
+}
+
 /**
  * Roles as the nearby line shows them: the SDK's role words spaced out
  * ("questGiver" → "quest giver"), `gossip` dropped (nearly every NPC has it and
@@ -983,6 +1051,9 @@ export function formatStateSummary(
   // auras — the buff and debuff bar beside the player frame
   const auras = auraLine(snapshot.selfAuras, o.now ?? Date.now());
   if (auras !== undefined) lines.push(auras);
+  // party — the party frames under the player frame; absent outside a group
+  const party = partyLine(snapshot);
+  if (party !== undefined) lines.push(party);
 
   // xp / money
   const money = snapshot.money?.value;
