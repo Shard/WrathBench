@@ -195,6 +195,10 @@ export interface SnapshotLike {
     zone?: ObservedLike;
     /** `{ id, name }` — the subzone (SDK `state.self.area`). */
     area?: ObservedLike;
+    /** `{ id, name, instanceType }` — the map and its `Map.dbc` kind (SDK `state.self.map`, from `WB_AREA`). */
+    map?: ObservedLike;
+    /** `value` is `[{ triggerId, map, x, y, z, to: { id, name, instanceType } }]` — portals in view (SDK `state.self.portals`). */
+    portals?: ObservedLike;
     /** `value` is a `{ current, max }` gauge. Self only (the player frame is numbers). */
     health?: ObservedLike;
     power?: ObservedLike;
@@ -249,7 +253,15 @@ export interface SnapshotLike {
   /** `state.bag()` shape: carried items across all bags, free and total slot counts. */
   bag?: BagLike;
   /** `state.inventory` as the sandbox serialises it; equipment is `slot < 19`. */
-  inventory?: { slot?: unknown; itemId?: unknown; name?: unknown; stackCount?: unknown; quality?: unknown }[];
+  inventory?: {
+    slot?: unknown;
+    itemId?: unknown;
+    name?: unknown;
+    stackCount?: unknown;
+    quality?: unknown;
+    /** `{ current, max }` from the item's own durability fields; absent on an item with no maximum. */
+    durability?: { current?: unknown; max?: unknown };
+  }[];
   /**
    * `state.spells`: the spellbook as `SMSG_INITIAL_SPELLS` /
    * `SMSG_LEARNED_SPELL` left it. The HUD never prints it — it is tens of rows
@@ -551,6 +563,46 @@ function bagLine(bag: BagLike): string {
   return parts.join("; ");
 }
 
+/** Equipment slots 0-18 by the names a character sheet gives them. */
+const EQUIP_SLOT_NAME: readonly string[] = [
+  "head", "neck", "shoulders", "shirt", "chest", "waist", "legs", "feet", "wrists", "hands",
+  "finger", "finger", "trinket", "trinket", "back", "main hand", "off hand", "ranged", "tabard",
+];
+
+/**
+ * The share of its maximum at or under which a worn item reads as low: a
+ * quarter, which is what one Spirit Healer resurrection takes off every
+ * equipped item, so a low item is one such resurrection from broken. The
+ * harness's own line, not a client threshold.
+ */
+const DURABILITY_LOW_FRACTION = 0.25;
+
+/**
+ * "durability: broken main hand Rusted Cleaver (0/40); low chest Patched
+ * Vest (9/60) — a broken item gives no stats", or undefined when every worn
+ * item is above `DURABILITY_LOW_FRACTION` (the ordinary case costs nothing).
+ * Broken first, then low, each in slot order.
+ */
+function durabilityLine(inventory: SnapshotLike["inventory"]): string | undefined {
+  const broken: string[] = [];
+  const low: string[] = [];
+  for (const it of inventory ?? []) {
+    const slot = it.slot;
+    if (typeof slot !== "number" || slot >= EQUIP_SLOT_NAME.length) continue;
+    const cur = it.durability?.current;
+    const max = it.durability?.max;
+    if (typeof cur !== "number" || typeof max !== "number" || max <= 0) continue;
+    if (cur > max * DURABILITY_LOW_FRACTION) continue;
+    const name = it.name != null ? String(it.name) : it.itemId != null ? `item ${String(it.itemId)}` : "an item";
+    (cur <= 0 ? broken : low).push(`${EQUIP_SLOT_NAME[slot]} ${name} (${cur}/${max})`);
+  }
+  if (broken.length === 0 && low.length === 0) return undefined;
+  const parts: string[] = [];
+  if (broken.length > 0) parts.push(`broken ${broken.join(", ")}`);
+  if (low.length > 0) parts.push(`low ${low.join(", ")}`);
+  return `durability: ${parts.join("; ")}${broken.length > 0 ? " — a broken item gives no stats" : ""}`;
+}
+
 /** One quest as the quest line names it: id, then the title, cut if long. */
 function questLabel(q: { questId?: unknown; title?: unknown }): string {
   const id = fmt(q.questId, "?");
@@ -713,6 +765,9 @@ export function foldUiOpenWindows(
  * client shows for itself). Every line is a pure function of the snapshot, so
  * `assembleContext` stays byte-deterministic.
  */
+/** How near the release point a ghost still reads as standing at the graveyard. */
+const GHOST_AT_GRAVEYARD_YARDS = 20;
+
 /**
  * One sentence for a released ghost: where it stands, where its corpse is, and
  * the two ways back with their prices — the facts a client shows on its map
@@ -732,7 +787,22 @@ function ghostLine(
   const grave = s.graveyard?.value as { x?: number; y?: number } | undefined;
   const corpse = s.corpse?.value as { map?: number; x?: number; y?: number; instanceMap?: number } | undefined;
   const delay = s.reclaimDelay?.value as { readyAt?: number } | undefined;
-  const where = grave !== undefined ? `ghost at graveyard (${xy(grave)})` : "ghost";
+  // Where the ghost stands now. The release point is named as the graveyard
+  // while the ghost is still at it, and beside the ghost's own position once
+  // it has walked off: it is where that Spirit Healer stands.
+  const here = pos !== undefined && typeof pos.x === "number" && typeof pos.y === "number" ? { x: pos.x, y: pos.y } : undefined;
+  const atGrave =
+    here !== undefined && grave !== undefined && typeof grave.x === "number" && typeof grave.y === "number"
+      ? Math.hypot(grave.x - here.x, grave.y - here.y) <= GHOST_AT_GRAVEYARD_YARDS
+      : here === undefined;
+  const where =
+    grave !== undefined && atGrave
+      ? `ghost at graveyard (${xy(grave)})`
+      : here === undefined
+        ? "ghost"
+        : grave !== undefined
+          ? `ghost at (${xy(here)}), released at graveyard (${xy(grave)})`
+          : `ghost at (${xy(here)})`;
   const healer = "or Spirit Healer at the graveyard (-25% durability; resurrection sickness from level 11)";
   // A corpse inside a dungeon, asked about from outside it: the position is
   // the entrance the server substitutes, and no reclaim reaches the corpse.
@@ -760,19 +830,95 @@ function ghostLine(
 }
 
 /**
- * "Elwynn Forest / Northshire Valley — " from `self.zone` / `self.area`, the
- * names the game's own zone text shows; the zone alone when the subzone is the
- * zone; empty when neither has been observed (the ids ride in the SDK state).
+ * "Elwynn Forest / Northshire Valley, Eastern Kingdoms (open world) — " from
+ * `self.zone` / `self.area`, the names the game's own zone text shows (the
+ * zone alone when the subzone is the zone), then the map's `Map.dbc` name and
+ * kind (`fmtMap`); empty when none has been observed (the ids ride in the SDK
+ * state).
  */
-function fmtPlace(s: NonNullable<SnapshotLike["self"]>): string {
+function fmtPlace(s: NonNullable<SnapshotLike["self"]>, posMap: number | undefined): string {
   const zone = s.zone?.value as { id?: number; name?: string } | undefined;
   const area = s.area?.value as { id?: number; name?: string } | undefined;
   const zoneName = zone?.name ? String(zone.name) : undefined;
   const areaName = area?.name ? String(area.name) : undefined;
-  if (zoneName === undefined && areaName === undefined) return "";
-  if (zoneName === undefined) return `${areaName} — `;
-  if (areaName === undefined || areaName === zoneName) return `${zoneName} — `;
-  return `${zoneName} / ${areaName} — `;
+  const place =
+    zoneName === undefined
+      ? areaName
+      : areaName === undefined || areaName === zoneName
+        ? zoneName
+        : `${zoneName} / ${areaName}`;
+  const parts = [place, fmtMap(s, posMap)].filter((p): p is string => p !== undefined);
+  return parts.length === 0 ? "" : `${parts.join(", ")} — `;
+}
+
+/** `Map.dbc`'s `InstanceType` in the words the HUD uses for it. */
+const MAP_KIND: Readonly<Record<string, string>> = {
+  none: "open world",
+  party: "dungeon instance",
+  raid: "raid instance",
+  pvp: "battleground",
+  arena: "arena",
+};
+
+/** "Deadmines (dungeon instance)": a map's `Map.dbc` name and its kind, the kind left out when unknown. */
+function mapLabel(name: string, instanceType: unknown): string {
+  const kind = typeof instanceType === "string" ? MAP_KIND[instanceType] : undefined;
+  return kind === undefined ? name : `${name} (${kind})`;
+}
+
+/**
+ * "Eastern Kingdoms (open world)": the client's `Map.dbc` name and kind for
+ * the map the character is on, so a zone that spans both sides of a portal
+ * (The Deadmines is area 1581 in the quarry outside on map 0 and inside on
+ * map 36) never reads as inside. Undefined while `self.map` is unobserved or
+ * names another map than the position's (the window between a transfer and
+ * the new map's `WB_AREA`).
+ */
+function fmtMap(s: NonNullable<SnapshotLike["self"]>, posMap: number | undefined): string | undefined {
+  const map = s.map?.value as { id?: number; name?: string; instanceType?: string } | undefined;
+  if (map === undefined || typeof map.name !== "string" || map.id !== posMap) return undefined;
+  return mapLabel(map.name, map.instanceType);
+}
+
+/** How many portals the portals line names, nearest first. */
+const PORTAL_LINE_MAX = 3;
+
+/**
+ * "portals: into Deadmines (dungeon instance, map 36) at (-11208, 1685, 26),
+ * 11y away" — the map-transition portals in view (`self.portals`, the
+ * module's `WB_PORTALS`), nearest first: where each stands and the map it
+ * leads to. Undefined when none is in view or none was reported.
+ */
+function portalLine(
+  s: NonNullable<SnapshotLike["self"]>,
+  pos: { map?: number; x?: number; y?: number; z?: number } | undefined,
+): string | undefined {
+  const list = s.portals?.value;
+  if (!Array.isArray(list) || list.length === 0) return undefined;
+  type PortalLike = { map?: number; x?: number; y?: number; z?: number; to?: { id?: number; name?: string; instanceType?: string } };
+  const rows = (list as PortalLike[])
+    .filter((p) => typeof p.x === "number" && typeof p.y === "number" && (pos?.map === undefined || p.map === pos.map))
+    .map((p) => {
+      const d =
+        pos !== undefined && typeof pos.x === "number" && typeof pos.y === "number"
+          ? Math.hypot(p.x! - pos.x, p.y! - pos.y)
+          : undefined;
+      return { p, d };
+    })
+    .sort((a, b) => (a.d ?? 0) - (b.d ?? 0));
+  if (rows.length === 0) return undefined;
+  const one = ({ p, d }: { p: PortalLike; d: number | undefined }): string => {
+    const to = p.to ?? {};
+    const kind = typeof to.instanceType === "string" ? MAP_KIND[to.instanceType] : undefined;
+    const into = to.instanceType !== undefined && to.instanceType !== "none" ? "into" : "to";
+    const named = typeof to.name === "string" ? `${to.name} (${kind === undefined ? "" : `${kind}, `}map ${fmt(to.id)})` : `map ${fmt(to.id)}`;
+    const z = typeof p.z === "number" ? `, ${Math.round(p.z)}` : "";
+    const away = d === undefined ? "" : `, ${Math.round(d)}y away`;
+    return `${into} ${named} at (${Math.round(p.x!)}, ${Math.round(p.y!)}${z})${away}`;
+  };
+  const shown = rows.slice(0, PORTAL_LINE_MAX).map(one).join("; ");
+  const more = rows.length > PORTAL_LINE_MAX ? ` +${rows.length - PORTAL_LINE_MAX} more` : "";
+  return `portals: ${shown}${more}`;
 }
 
 /**
@@ -812,7 +958,7 @@ export function formatStateSummary(
   lines.push(
     pos === undefined
       ? "position: unobserved"
-      : `position: ${fmtPlace(s)}map ${fmt(pos.map)} (${fmt(pos.x)}, ${fmt(pos.y)}, ${fmt(pos.z)}) [seq ${fmt(s.position?.seq, "?")}]`,
+      : `position: ${fmtPlace(s, pos.map)}map ${fmt(pos.map)} (${fmt(pos.x)}, ${fmt(pos.y)}, ${fmt(pos.z)}) [seq ${fmt(s.position?.seq, "?")}]`,
   );
 
   // home: the hearthstone's destination, as the server last said it. The
@@ -827,6 +973,11 @@ export function formatStateSummary(
     );
   }
 
+  // portals — the dungeon entrances and exits in view, which no unit or
+  // game object names; the line is absent when none is
+  const portals = portalLine(s, pos);
+  if (portals !== undefined) lines.push(portals);
+
   // health / power (self only — the player frame is numbers)
   lines.push(`health: ${fmtGauge(s.health)}  power: ${fmtGauge(s.power)}`);
   // auras — the buff and debuff bar beside the player frame
@@ -840,6 +991,10 @@ export function formatStateSummary(
 
   // bag
   lines.push(snapshot.bag === undefined ? "bag: unobserved" : bagLine(snapshot.bag));
+  // durability — only when something worn is broken or low; the ordinary
+  // case costs no line
+  const worn = durabilityLine(snapshot.inventory);
+  if (worn !== undefined) lines.push(worn);
 
   // quests — the log's ids, completion bits and titles, as the client's quest
   // log shows them; never a wiki lookup
