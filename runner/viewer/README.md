@@ -328,6 +328,30 @@ reads the same store-then-sqlite path `/api/run/<id>` reads its own states
 through. Public mode serves it, projected by the run detail's own projectors
 applied across the chain.
 
+## A party member's records
+
+A Deadmines party attempt is five runs, one per member, launched, stopped and
+counted together (docs/proposals/GROUP-PLAY.md). Membership is the run's own
+stamp, `meta.config.party`, read as recorded (`campaignFieldsOf`): every row
+of a member carries `party: { id, member, size, role, index }`, where the id is
+the attempt's run-id stem, the role is the member's and the index is its place
+in the stamp's member order, the leader at 0. Nothing groups by parsing a run
+id. A run from before `role` and `index` has neither.
+
+`/api/run/<id>` of a member also carries `party` (`party-marks.ts`): the member
+list off the stamp with each member's account left off, the `instance`, `kill`
+and `group` milestones off the same incremental tail as the deaths, each
+death's time (which the run page's public death sites leave off), the
+member's own party chat off its trace (`readTraceChat`, the server's echo of
+its lines, so five members' lists never repeat each other), and where it last
+was, off the newest state sample. A kill is named by the run's own client
+cache (`client-cache.json`, the creature query the client was answered), and a
+zone or area by the `WB_AREA` event the run was served for that id
+(`areaNamesOf`); a run that was never told a name carries the id alone. There
+is no party route: the dashboard builds the attempt from the listing and the
+five details (`dashboard/src/lib/party.ts`), on the private viewer and the
+public bucket alike.
+
 ## Token accounting
 
 The runner records a provider `usage` block on `response` entries whenever the

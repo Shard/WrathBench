@@ -21,6 +21,9 @@ import type {
   EntrySummary,
   LevelUpFacts,
   LevelUpMark,
+  PartyGroupMark,
+  PartyInstanceMark,
+  PartyKillMark,
   ReflectionWindowView,
   ReportedUsage,
   SpellFacts,
@@ -1544,6 +1547,82 @@ export function deathFactsFrom(marks: readonly DeathMark[], sawLevelUpMark: bool
   };
 }
 
+/* ------------------------------------------------- the party milestones */
+
+/** The stamp a party milestone was observed at: the cache's own, else the record's. */
+function observedTsOf(rec: Record<string, unknown>): number {
+  const observed = rec["observedTs"];
+  if (typeof observed === "number") return observed;
+  const ts = rec["ts"];
+  return typeof ts === "number" ? ts : 0;
+}
+
+/**
+ * Read one trajectory record as a map transfer into or out of an instance
+ * (`instance`, docs/proposals/GROUP-PLAY.md §6), or null when it is not one.
+ * Ids only, as written.
+ */
+export function instanceMarkOf(rec: Record<string, unknown>): PartyInstanceMark | null {
+  if (rec["kind"] !== "instance") return null;
+  const event = rec["event"];
+  const map = rec["map"];
+  const from = (rec["from"] as { map?: unknown } | undefined)?.map;
+  if ((event !== "entered" && event !== "left") || typeof map !== "number" || typeof from !== "number") return null;
+  return { ts: observedTsOf(rec), event, map, from };
+}
+
+/**
+ * Read one trajectory record as a kill the server reported (`kill`), or null.
+ * The name is not on the record: the reader attaches it from the run's own
+ * client cache (`party-marks.ts`).
+ */
+export function killMarkOf(rec: Record<string, unknown>): PartyKillMark | null {
+  if (rec["kind"] !== "kill") return null;
+  const victim = rec["victimGuid"];
+  if (typeof victim !== "string" || victim === "") return null;
+  const entry = rec["entry"];
+  return {
+    ts: observedTsOf(rec),
+    victimGuid: victim,
+    entry: typeof entry === "number" ? entry : null,
+    name: null,
+    self: rec["self"] === true,
+  };
+}
+
+/** Read one trajectory record as a `group` milestone, or null. Counts only: the guids stay on the record. */
+export function groupMarkOf(rec: Record<string, unknown>): PartyGroupMark | null {
+  if (rec["kind"] !== "group") return null;
+  const event = rec["event"];
+  const count = rec["count"];
+  if ((event !== "joined" && event !== "changed" && event !== "left") || typeof count !== "number") return null;
+  return { ts: observedTsOf(rec), event, count };
+}
+
+/**
+ * The zone and area names a line's served `WB_AREA` events carry, by id: the
+ * names the client was told for the ids its state samples record. Found by a
+ * substring test before any parse, because almost no line carries one and
+ * every line here is already parsed once; an event whose name is empty names
+ * nothing.
+ */
+export function areaNamesOf(text: string): { zones: [number, string][]; areas: [number, string][] } {
+  const zones: [number, string][] = [];
+  const areas: [number, string][] = [];
+  if (!text.includes('"WB_AREA"')) return { zones, areas };
+  for (const m of text.matchAll(/"opcode":"WB_AREA","data":(\{[^{}]*\})/g)) {
+    let d: Record<string, unknown>;
+    try {
+      d = JSON.parse(m[1]!) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (typeof d["zoneId"] === "number" && typeof d["zoneName"] === "string" && d["zoneName"] !== "") zones.push([d["zoneId"], d["zoneName"]]);
+    if (typeof d["areaId"] === "number" && typeof d["areaName"] === "string" && d["areaName"] !== "") areas.push([d["areaId"], d["areaName"]]);
+  }
+  return { zones, areas };
+}
+
 /* ------------------------------ spell, talent and trade milestones */
 
 /**
@@ -2160,6 +2239,13 @@ export class TrajectoryTail {
   private readonly tradeMarks: TradeMarkView[] = [];
   /** The replay's flight, hearth and graveyard marks; see `travelMarksOf`. */
   private readonly travelMarks: TrackTravelMark[] = [];
+  /** A party member's map transfers, kills and group changes (`instanceMarkOf`, `killMarkOf`, `groupMarkOf`). */
+  private readonly instanceMarks: PartyInstanceMark[] = [];
+  private readonly killMarks: PartyKillMark[] = [];
+  private readonly groupMarks: PartyGroupMark[] = [];
+  /** Zone and area names by id, off the served `WB_AREA` events (`areaNamesOf`); the newest wins. */
+  private readonly zoneNameOf = new Map<number, string>();
+  private readonly areaNameOf = new Map<number, string>();
   /** `reflect_window` transitions, for the run page's per-turn accent. */
   private readonly reflectMarks: ReflectMark[] = [];
   /**
@@ -2222,6 +2308,11 @@ export class TrajectoryTail {
       this.talentMarks.length = 0;
       this.tradeMarks.length = 0;
       this.travelMarks.length = 0;
+      this.instanceMarks.length = 0;
+      this.killMarks.length = 0;
+      this.groupMarks.length = 0;
+      this.zoneNameOf.clear();
+      this.areaNameOf.clear();
       this.reflectMarks.length = 0;
       this.systemTextAt.clear();
       this.codexUsage.reset();
@@ -2267,7 +2358,16 @@ export class TrajectoryTail {
             if (talent !== null) this.talentMarks.push(talent);
             const trade = tradeMarkOf(rec);
             if (trade !== null) this.tradeMarks.push(trade);
+            const instance = instanceMarkOf(rec);
+            if (instance !== null) this.instanceMarks.push(instance);
+            const kill = killMarkOf(rec);
+            if (kill !== null) this.killMarks.push(kill);
+            const group = groupMarkOf(rec);
+            if (group !== null) this.groupMarks.push(group);
           }
+          const names = areaNamesOf(text);
+          for (const [id, name] of names.zones) this.zoneNameOf.set(id, name);
+          for (const [id, name] of names.areas) this.areaNameOf.set(id, name);
           // Milestones and the action log both: the hearthstone is a dispatch.
           for (const mark of travelMarksOf(rec)) this.travelMarks.push(mark);
           // Not a milestone: its own record kind, written by the loop's builder.
@@ -2342,6 +2442,31 @@ export class TrajectoryTail {
    */
   get travel(): TrackTravelMark[] {
     return [...this.travelMarks].sort((a, b) => a.ts - b.ts);
+  }
+
+  /** Map transfers into and out of an instance, oldest first. */
+  get instances(): PartyInstanceMark[] {
+    return [...this.instanceMarks].sort((a, b) => a.ts - b.ts);
+  }
+
+  /** Kills the server reported to this run, oldest first; names unattached. */
+  get kills(): PartyKillMark[] {
+    return [...this.killMarks].sort((a, b) => a.ts - b.ts);
+  }
+
+  /** `group` milestones, oldest first. */
+  get groups(): PartyGroupMark[] {
+    return [...this.groupMarks].sort((a, b) => a.ts - b.ts);
+  }
+
+  /** The zone name the client was served for an id, or null when this run saw none. */
+  zoneName(id: number): string | null {
+    return this.zoneNameOf.get(id) ?? null;
+  }
+
+  /** The area name the client was served for an id, or null when this run saw none. */
+  areaName(id: number): string | null {
+    return this.areaNameOf.get(id) ?? null;
   }
 
   /**

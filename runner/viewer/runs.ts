@@ -123,10 +123,10 @@ export function campaignFieldsOf(
   const s = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
   const campaign = s(config?.["campaign"]);
   const version = config?.["campaignVersion"];
-  const p = config?.["party"] as { id?: unknown; member?: unknown; size?: unknown } | null | undefined;
+  const p = config?.["party"] as { id?: unknown; member?: unknown; size?: unknown; role?: unknown; members?: unknown } | null | undefined;
   const party =
     campaign !== null && p !== null && typeof p === "object" && s(p.id) !== null && s(p.member) !== null && typeof p.size === "number"
-      ? { id: s(p.id)!, member: s(p.member)!, size: p.size }
+      ? { id: s(p.id)!, member: s(p.member)!, size: p.size, ...partyPlaceOf(p.role, p.members, s(p.member)!) }
       : null;
   return {
     campaign,
@@ -137,6 +137,20 @@ export function campaignFieldsOf(
     image: s(config?.["image"]),
     // Only on a party member, so every other row keeps its shape.
     ...(party !== null ? { party } : {}),
+  };
+}
+
+/**
+ * A member's role and its place in the stamp's member order (the leader at 0),
+ * each only where the stamp states it, so a row from before them keeps its shape.
+ */
+function partyPlaceOf(role: unknown, members: unknown, member: string): { role?: string; index?: number } {
+  const index = Array.isArray(members)
+    ? members.findIndex((m) => m !== null && typeof m === "object" && (m as { member?: unknown }).member === member)
+    : -1;
+  return {
+    ...(typeof role === "string" && role.length > 0 ? { role } : {}),
+    ...(index >= 0 ? { index } : {}),
   };
 }
 

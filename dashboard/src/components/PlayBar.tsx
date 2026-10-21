@@ -42,6 +42,7 @@ import { colorOf, pipName } from "../lib/mapview";
 import { type Span, type Speed, playbackClock, prevSampleBefore, progressOf } from "../lib/playback";
 import { nextSampleAfter, trackSpan } from "../lib/replay";
 import { InfoHint } from "./InfoHint";
+import { partyHref } from "../lib/party";
 
 /** What the replayed route's colours and gaps mean (`classifySegments`), the same on both builds. */
 export function routeNote(): string {
@@ -54,8 +55,10 @@ export function routeNote(): string {
 export interface PlayBarProps {
   /** The route's run id; undefined is the live map. */
   replayId: string | undefined;
-  /** The loaded track, once it has landed. */
+  /** The loaded track, once it has landed; a party's, its members' points merged (`groupTrack`). */
   track: TrackResponse | undefined;
+  /** A party's replay: the party's id and how many members' tracks it plays. */
+  party?: { id: string; members: number } | undefined;
   /** Why the track did not land, already rendered for display. */
   replayError: string | undefined;
   /** The live poll's failure, already rendered for display. */
@@ -141,11 +144,28 @@ export function PlayBar(props: PlayBarProps) {
           >
             {(t) => (
               <>
-                <span class="swatch" style={{ background: colorOf(t().runId) }} />
-                <span class="playbar-title" title={t().runId}>
-                  {t().characterName ?? shortRunId(t().runId)}
-                </span>
-                <span class="dim mono">{shortRunId(t().runId)}</span>
+                <Show
+                  when={props.party}
+                  fallback={
+                    <>
+                      <span class="swatch" style={{ background: colorOf(t().runId) }} />
+                      <span class="playbar-title" title={t().runId}>
+                        {t().characterName ?? shortRunId(t().runId)}
+                      </span>
+                      <span class="dim mono">{shortRunId(t().runId)}</span>
+                    </>
+                  }
+                >
+                  {(pt) => (
+                    <>
+                      <A class="playbar-title" href={partyHref(pt().id)} title={pt().id}>
+                        party
+                      </A>
+                      <span class="dim mono">{shortRunId(pt().id)}</span>
+                      <span class="dim">· {pt().members} members</span>
+                    </>
+                  )}
+                </Show>
                 <span class="dim">
                   · {t().points.length} {t().points.length === 1 ? "position" : "positions"}
                 </span>

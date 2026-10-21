@@ -87,6 +87,7 @@ import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { atBottom, contextHint, runChartInput, sourceHint, sourceLabel } from "../lib/runview";
 import { displayError, logError } from "../lib/errors";
 import { statusOf, statusText, statusTitle } from "../lib/runs";
+import { partyHref, partyReplayHref } from "../lib/party";
 
 const WINDOW = 200;
 
@@ -541,6 +542,17 @@ export default function RunDetail() {
                 >
                   character
                 </A>
+                {/* A party member's attempt is five runs; the party page is all of them. */}
+                <Show when={run().party}>
+                  {(p) => (
+                    <>
+                      {" · "}
+                      <A href={partyHref(p().id)} title={`${p().id} · ${p().role ?? p().member}`}>
+                        party
+                      </A>
+                    </>
+                  )}
+                </Show>
               </h1>
 
               {/*
@@ -734,6 +746,13 @@ export default function RunDetail() {
                     <A class="btn" href={`/map?run=${encodeURIComponent(run().runId)}`}>
                       replay on map
                     </A>
+                    <Show when={run().party}>
+                      {(p) => (
+                        <A class="btn" href={partyReplayHref(p().id)} title="every member of the party on one clock">
+                          party replay
+                        </A>
+                      )}
+                    </Show>
                     <Show when={live()}>
                       {/* Manual toggle; it reflects and overrides the scroll-driven auto state. */}
                       <button class={follow() ? "on" : ""} onClick={toggleFollow}>

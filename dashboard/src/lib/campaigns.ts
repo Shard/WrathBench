@@ -18,6 +18,7 @@
 import { characterLabel } from "@viewer/characters";
 import type { ArmSummary, CampaignsResponse, CampaignView, Square } from "@viewer/api-types";
 import { effortLabel, fmtDuration, fmtTokens, fmtUsd, modelDisplay, shortHarness } from "./format";
+import { partyHref } from "./party";
 
 export type CampaignState = CampaignView["state"];
 export type CampaignArm = CampaignView["arms"][number];
@@ -309,10 +310,12 @@ export function squareClass(sq: Square | null, stop: number | null): string {
  * Where a square leads. One run is that run's page. Several are a list on the
  * campaign's own page (`?cell=&column=`), because no runs-page filter narrows
  * to one cell of one arm and the order of `runIds` promises no "newest" to
- * pick. None is nowhere.
+ * pick. None is nowhere. A party square counts parties, so one party is that
+ * party's page.
  */
 export function squareHref(c: Pick<CampaignView, "id" | "version">, cell: string, sq: Square | null): string | null {
   if (sq === null || sq.runIds.length === 0) return null;
+  if (sq.parties?.length === 1) return partyHref(sq.parties[0]!);
   if (sq.runIds.length === 1) return `/run/${encodeURIComponent(sq.runIds[0]!)}`;
   return `${campaignHref(c)}?${new URLSearchParams({ cell, column: sq.column }).toString()}`;
 }
