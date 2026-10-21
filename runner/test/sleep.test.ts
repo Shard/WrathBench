@@ -51,6 +51,8 @@ globalThis.selfFields = (fields) =>
   feed("SMSG_UPDATE_OBJECT", 0xa9, { blocks: 1, objects: [{ update: "values", guid: "7", fields }] });
 globalThis.attackStart = (victimGuid) =>
   feed("SMSG_ATTACKSTART", 0x143, { attackerGuid: "99", victimGuid });
+globalThis.chat = (type, senderGuid, message) =>
+  feed("SMSG_MESSAGECHAT", 0x96, { type, language: 0, senderGuid, message, chatTag: 0 });
 selfFields({ health: 40, maxHealth: 40 });
 `;
 
@@ -127,14 +129,68 @@ describe("sandbox sleep(): the timer that says why it woke", () => {
     expect(res.value).toBe(JSON.stringify("died"));
   });
 
-  test("{ wake: false } is a pure timer", async () => {
+  test("{ wake: false } sleeps through being attacked and dying", async () => {
     const host = makeHost();
     await host.evalSnippet(PRELUDE);
     const res = await host.evalSnippet(`
       setTimeout(() => attackStart("7"), 40);
+      setTimeout(() => selfFields({ health: 0 }), 60);
       return await sleep(250, { wake: false });
     `);
     expect(res.value).toBe(JSON.stringify("elapsed"));
+  });
+
+  test("{ wake: false } is still woken by a party line from another player", async () => {
+    // The reclaim-delay sleep is the one a resurrection offer arrives during.
+    const host = makeHost();
+    await host.evalSnippet(PRELUDE);
+    await host.evalSnippet('selfFields({ health: 0 }); "dead"');
+    const res = await host.evalSnippet(`
+      const t = Date.now();
+      setTimeout(() => chat(0x02, "12", "rezzing you"), 60);
+      const why = await sleep(4_000, { wake: false });
+      return { why, early: Date.now() - t < 2_000 };
+    `);
+    expect(res.value).toContain('"chat"');
+    expect(res.value).toContain("early: true");
+  });
+
+  // `CHAT_MSG_*` codes (SharedDefines.h): 0x01 SAY, 0x02 PARTY, 0x07 WHISPER,
+  // 0x09 WHISPER_INFORM, 0x0c MONSTER_SAY, 0x10 MONSTER_EMOTE, 0x33 PARTY_LEADER.
+  test.each([
+    ["a party line", 0x02],
+    ["the party leader's line", 0x33],
+    ["a whisper", 0x07],
+  ])("%s from another player wakes it early with 'chat'", async (_, type) => {
+    const host = makeHost();
+    await host.evalSnippet(PRELUDE);
+    const res = await host.evalSnippet(`
+      const t = Date.now();
+      setTimeout(() => chat(${type}, "12", "rez incoming"), 60);
+      const why = await sleep(4_000);
+      return { why, early: Date.now() - t < 2_000 };
+    `);
+    expect(res.value).toContain('"chat"');
+    expect(res.value).toContain("early: true");
+  });
+
+  test.each([
+    ["our own party line", 0x02, "7"],
+    ["our whisper's echo, which names the recipient as sender", 0x09, "12"],
+    ["a creature's say", 0x0c, "99"],
+    ["a creature's emote", 0x10, "99"],
+    ["another player's say", 0x01, "12"],
+  ])("%s does not wake it", async (_, type, sender) => {
+    const host = makeHost();
+    await host.evalSnippet(PRELUDE);
+    // The line is folded into state.chat, so the non-wake is not a dropped frame.
+    const res = await host.evalSnippet(`
+      setTimeout(() => chat(${type}, "${sender}", "heard"), 40);
+      const why = await sleep(250);
+      return { why, folded: state.chat.at(-1)?.message };
+    `);
+    expect(res.value).toContain('"elapsed"');
+    expect(res.value).toContain('"heard"');
   });
 
   test("Promise.race with a background routine is unchanged: the routine still wins", async () => {
