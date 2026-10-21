@@ -914,7 +914,8 @@ The module also keeps the rooted state a client keeps: set by
 `SMSG_FORCE_MOVE_ROOT` and `SMSG_SPLINE_MOVE_ROOT` for the character's own
 guid (the multiple-moves sub-packet included), cleared by their unroot twins.
 While it is set the mover stops (`rooted`, above) and `move_to` is refused
-`rooted`. `face` still turns.
+`rooted`. `face` still turns, which is right for a root; a stunned client
+cannot turn, and the module does not yet tell the two apart.
 
 `SMSG_COMPRESSED_UPDATE_OBJECT` never appears on this stream: the core
 compresses large update packets at socket-write time, below the module's tap,
@@ -1147,8 +1148,11 @@ at the top of this document.
   refusal: the `move_to` arrived while the character was rooted and nothing
   was sent; it carries no `pathLength`. A walk the root stopped: the root ack
   was its stop, at the point the walk had reached, and the verdict carries
-  the walk's `pathLength` like any other dispatched move. Death roots too,
-  but a walk the character dies on ends `interrupted`.
+  the walk's `pathLength` like any other dispatched move. Its `pos` is read
+  back as always, and the server applies the ack on the session's next
+  update, after the verdict, so `pos` can trail the point the walk stopped
+  at by up to one heartbeat's walk (about 3.5y at run speed). Death roots
+  too, but a walk the character dies on ends `interrupted`.
 
 `WB_MOVE_PROGRESS.pos` is the engine's interpolated position (what a client
 would render); `WB_MOVE_RESULT.pos` is read back from the live character, so an

@@ -385,6 +385,10 @@ async function main() {
   //     the ghost run below proves by walking.
   step = "rooted";
   {
+    // KillPlayer runs from Player::Update once the death state is JustDied
+    // (PlayerUpdates.cpp), which can be the update after the one whose
+    // health-0 update object the probe saw: settle a second so the root is in.
+    await Bun.sleep(1000);
     const r = await action("move_to", { x: deathPos.x + 8, y: deathPos.y, z: deathPos.z });
     const res = await waitFor(
       (e) => e.opcode === "WB_MOVE_RESULT" && e.data?.moveId === r.moveId,
