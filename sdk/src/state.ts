@@ -324,6 +324,9 @@ export function chatMessageAsShown(type: number, message: string, senderName: st
   return message.replaceAll("%s", senderName);
 }
 
+/** The achievement broadcast, `CHAT_MSG_ACHIEVEMENT` (48) and `CHAT_MSG_GUILD_ACHIEVEMENT` (49). */
+export const ACHIEVEMENT_CHAT_TYPES: ReadonlySet<number> = new Set([48, 49]);
+
 export interface NotificationEntry {
   readonly seq: number;
   readonly ts: number;
@@ -1866,6 +1869,14 @@ export class StateCache {
   /** Whether `SMSG_ALL_ACHIEVEMENT_DATA` has been observed at all. */
   private achievementsLoginSeen = false;
 
+  /**
+   * achievementId -> its name, from every achievement packet that named one:
+   * our own login backlog and earns, and the earns of players in say range
+   * (`SMSG_ACHIEVEMENT_EARNED` is broadcast, and the module names it from
+   * `Achievement.dbc` whoever earned it). Only the chat line's `$a` reads it.
+   */
+  private readonly achievementNames = new Map<number, string>();
+
   /** The one input that did not come from an event. */
   readonly seed: StateSeed;
 
@@ -3377,6 +3388,8 @@ export class StateCache {
        */
       case "SMSG_ACHIEVEMENT_EARNED": {
         const d = event.data as AchievementEarnedData;
+        // Another player's earn still names the achievement its chat line links.
+        this.noteAchievementName(d.achievement);
         if (d.self !== true) return;
         this.addAchievement(d.achievement, "earned", event.seq, event.ts);
         return;
@@ -4437,6 +4450,7 @@ export class StateCache {
     seq: number,
     ts: number,
   ): void {
+    this.noteAchievementName(a);
     if (this.achievementMap.has(a.achievementId)) return;
     this.achievementMap.set(a.achievementId, {
       achievementId: a.achievementId,
@@ -4450,6 +4464,11 @@ export class StateCache {
       ts,
     });
     if (source === "earned") this.rebuildAchievements();
+  }
+
+  /** Remember the name an achievement packet gave an id, for the chat line that links it. */
+  private noteAchievementName(a: { achievementId: number; name?: string }): void {
+    if (typeof a.name === "string" && a.name.length > 0) this.achievementNames.set(a.achievementId, a.name);
   }
 
   /** Replace `self.achievements` wholesale; the snapshot's shallow copy relies on it. */
