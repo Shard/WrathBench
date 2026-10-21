@@ -517,15 +517,40 @@ one dungeon cannot do without; everything else waits for a trajectory.
 | The kill record | §7 | module: whitelist `SMSG_PARTYKILLLOG` (`u64 killer, u64 victim`; `Unit::Kill` broadcasts it to the killer's group, or sends it to the killer alone) |
 | The instance record | §7 | module: load `Map.dbc` beside `AreaTable.dbc` and serve `mapName` and `instanceType` on `WB_AREA` and `WB_SESSION_STATE` — client-cache knowledge over a packet already served, the pattern the zone names follow |
 
+**Party frames, since earned (operator decision, Mark, 2026-10-21).** The trigger the
+deferral below wrote down was met: in a Deadmines party attempt the tank
+died or left the instance and went silent, and the
+other four stood at the entrance for seven to ten minutes asking whether it
+was there, unable to tell a ghost at a graveyard, a member on another map
+or one waiting out resurrection sickness from a silent one, since
+`state.units` shows only players in range. The core sends
+`SMSG_PARTY_MEMBER_STATS` only for a member out of the receiver's sight range
+or on another map (`Group::UpdatePlayerOutOfRange`), carrying the fields that
+changed under a `GROUP_UPDATE_FLAG` mask
+(`WorldSession::BuildPartyMemberStatsChangedPacket`), and every field on a
+group join, a zone change, a teleport or map transfer and a resurrection
+(`Player::UpdateZone`); `_FULL` is its answer to
+`CMSG_REQUEST_PARTY_MEMBER_STATS`. The module taps both and decodes the
+member's own fields through its auras, naming the zone from `AreaTable.dbc`
+(`module/PROTOCOL.md`); the request is on the raw allowlist. The SDK folds
+them onto `state.group().members[i].stats` with `inView` beside it, and the
+HUD's `party:` line names each member's state, health %, power % and
+whereabouts: its zone and position out of view, its distance in view. Auras
+stay in `stats` only, off the line (`sdk/API.md`, `runner/src/context.ts`).
+Mark's calls on 2026-10-21:
+- The two packets are ambient, like movement. A far member sends about two a
+  second while walking, plus one for each regen tick and hit, so four far
+  members would turn the 64-event window over in about seven seconds. They
+  are in `CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE`, and the SDK's event buffer
+  does not retain them, so they cannot crowd chat out of `waitForChat`'s
+  lookback. The cache keeps the latest values.
+- The SDK does not send the request itself when a member goes out of view.
+  The request stays on the raw allowlist. A member that walks out of view is
+  therefore sent only the fields that change from then on. The rest stay what
+  the last packet before it came into view said, or are absent.
+
 **Deferred, with the change written down so it is not re-derived.**
 
-- `SMSG_PARTY_MEMBER_STATS`: the core sends it only for a member out of the
-  receiver's sight range (`Group::UpdatePlayerOutOfRange`); in range the unit
-  fields already carry everything it would. A ghost member at the graveyard
-  is out of range, and chat covers that. If a trajectory shows a loop needing
-  a far member's state: decode the `GROUP_UPDATE_FLAG` mask
-  (`WorldSession::BuildPartyMemberStatsChangedPacket`) and the `_FULL` reply
-  to `CMSG_REQUEST_PARTY_MEMBER_STATS`.
 - Ready check: any party may use it (leader or assistant starts; the check is
   not raid-only), but "ready?" in party chat is the same act. If earned: raw
   `MSG_RAID_READY_CHECK` (empty to start, `u8 state` to answer) and
