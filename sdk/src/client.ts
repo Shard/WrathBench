@@ -2011,6 +2011,29 @@ const CHEST_OPEN_SPELLS: readonly number[] = [6478, 3365, 6247, 6477];
 const SPELL_FAILED_BAD_TARGETS = 12;
 /** Loot slot types the auto-loot sequence stores: ALLOW_LOOT (0) and OWNER (4). */
 const isStorableSlot = (i: { slotType: number }): boolean => i.slotType === 0 || i.slotType === 4;
+/** `LOOT_SLOT_TYPE_ROLL_ONGOING`: the slot is up for a group roll and cannot be looted until it ends. */
+const LOOT_SLOT_ROLL_ONGOING = 1;
+
+/**
+ * The open roll frames in a sentence, with the vote's call shape: a roll the
+ * server opened is otherwise one `slotType: 1` in a loot window and a row in
+ * `state.pendingRolls()`, and four of five party members never found either
+ * (the 2026-10-21 Deadmines party: the mage voted through raw
+ * `CMSG_LOOT_ROLL`). The seconds left are as of `now`; the deadline is the
+ * frame's own.
+ */
+function openRollsHint(rolls: readonly PendingRoll[], now: number): string {
+  const rows = rolls.map(
+    (r) => `${JSON.stringify(r.name ?? `item ${r.itemId}`)} (${r.allowed.join("/")}, ${Math.max(0, Math.round((r.deadline - now) / 1000))}s left)`,
+  );
+  const first = rolls[0]!;
+  const which = first.name === undefined ? String(first.itemId) : JSON.stringify(first.name);
+  return (
+    `${rolls.length === 1 ? "a group loot roll is open on" : `${rolls.length} group loot rolls are open on`} ${rows.join(", ")}: ` +
+    `vote with await sdk.lootRoll(${which}, "${first.allowed[0]}"), the choice one of the buttons listed. ` +
+    `state.pendingRolls() holds each frame and its deadline; a frame left unvoted at its deadline counts as a pass`
+  );
+}
 
 /** `interact(guid)` on a chest: the opcode would be dropped, so it is refused with the way that works. */
 export type InteractResult = ActionResponse | { readonly ok: false; readonly status: "chest"; readonly hint: string };
@@ -2072,6 +2095,8 @@ export type LootResult =
       readonly items: readonly StoredLootItem[];
       /** What the window showed, including anything that was not stored. */
       readonly window: readonly LootItemData[];
+      /** When a window slot is up for a group roll (`slotType` 1): the open roll frames and how to vote on them. */
+      readonly hint?: string;
     }
   | { readonly ok: false; readonly status: "empty"; readonly gold: 0; readonly items: readonly [] }
   | {
@@ -2090,6 +2115,7 @@ export type LootResult =
       readonly gold: number;
       readonly items: readonly [];
       readonly window: readonly LootItemData[];
+      readonly hint?: string;
     }
   | {
       /** The server refused to open a window: `SMSG_LOOT_RESPONSE` in its error form. */
@@ -3628,6 +3654,14 @@ export class WrathClient {
     // reaches the harness block from whichever caller walked there.
     this.events.on("SMSG_CORPSE_NOT_IN_INSTANCE", () => {
       this.tallyActionHint(undefined, "portal", "corpse_not_in_instance", corpseNotInInstanceHint(this.state));
+    });
+    // A roll frame opening is a client's popup: it reaches the harness block
+    // whoever is looking, rebuilt from every open frame, since one tally
+    // line holds one hint.
+    this.events.on("SMSG_LOOT_START_ROLL", (e) => {
+      if (isDecodeError(e.data)) return;
+      const open = this.state.pendingRolls(e.ts);
+      if (open.length > 0) this.tallyActionHint(undefined, "lootRoll", "open", openRollsHint(open, e.ts));
     });
   }
 
@@ -7631,10 +7665,16 @@ export class WrathClient {
             break; // grace expired: report what was confirmed, nothing more
           }
         }
+        // A slot up for a group roll is shown and never stored: the roll is
+        // the way to it, so the answer says one is open and how to vote.
+        const rolling = window.items.filter((i) => i.slotType === LOOT_SLOT_ROLL_ONGOING);
+        const now = this.state.lastTs;
+        const frames = this.state.pendingRolls(now).filter((r) => rolling.some((i) => i.slot === r.slot && i.itemId === r.itemId));
+        const roll = frames.length > 0 ? { hint: openRollsHint(frames, now) } : {};
         if (expected > 0 && stored.length === 0) {
-          return { ok: false, status: "none_stored", gold: window.gold, items: [], window: window.items };
+          return { ok: false, status: "none_stored", gold: window.gold, items: [], window: window.items, ...roll };
         }
-        return { ok: true, status: "looted", gold: window.gold, items: stored, window: window.items };
+        return { ok: true, status: "looted", gold: window.gold, items: stored, window: window.items, ...roll };
       } finally {
         offPush();
       }
