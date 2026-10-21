@@ -17,6 +17,9 @@
  *      the initial book) on self -> SMSG_SPELL_GO naming us as caster and as
  *      the hit target (no SMSG_SPELL_COOLDOWN: a GCD-only spell never sends
  *      one in 3.3.5 — see the comment at the cast);
+ *   2b. cast Holy Light (635, 2.5s) on self and the Seal ~300ms into it ->
+ *      SMSG_CAST_FAILED spell_in_progress (105) for the Seal, and Holy Light's
+ *      SMSG_SPELL_GO with no SMSG_SPELL_FAILURE (the client's cast counter);
  *   3. learn_talent at level 1 -> SMSG_TALENTS_INFO answers (nothing
  *      learned: no points), proving the handler round-trip;
  *   4. raw CMSG_TEXT_EMOTE (wave, 0x16) is acked 200; raw with a movement
@@ -42,6 +45,8 @@ const CHARACTER = probeName("Bp");
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 
 const SEAL_OF_RIGHTEOUSNESS = 21084;
+const HOLY_LIGHT = 635; // rank 1, a 2.5s cast in a level-1 paladin's book
+const SPELL_FAILED_SPELL_IN_PROGRESS = 105;
 
 function log(msg: string) {
   console.log(`[probe] ${msg}`);
@@ -163,6 +168,34 @@ async function main() {
     fail(`self-cast SPELL_GO does not hit us: ${JSON.stringify(go.data)}`);
   log(`SPELL_GO: ${SEAL_OF_RIGHTEOUSNESS} cast by us, hit us`);
 
+  // 2b. A cast during a cast is refused, as a client's is. The module stamps
+  //     each cast with the client's own counter; with the old constant 0 the
+  //     core skipped its in-progress check (Spell::prepare), so the second
+  //     cast reached CheckCast (not_ready on the GCD) or, past the GCD,
+  //     silently cancelled the first. Holy Light is a 2.5s cast; the Seal goes
+  //     out ~300ms into it, well outside the 400ms spell-queue window, so the
+  //     answer is SMSG_CAST_FAILED spell_in_progress (105) for the Seal and
+  //     Holy Light still goes off.
+  if (!spells.some((s) => s.spellId === HOLY_LIGHT)) fail(`spell ${HOLY_LIGHT} (Holy Light) not in the initial book`);
+  await Bun.sleep(2000); // the Seal's GCD
+  mark = events.length;
+  await action("cast_spell", { spellId: HOLY_LIGHT, targetGuid: selfGuid });
+  await waitFor((e) => e.opcode === "SMSG_SPELL_START" && e.data?.spellId === HOLY_LIGHT, 3000, "Holy Light SMSG_SPELL_START", mark);
+  await Bun.sleep(300);
+  await action("cast_spell", { spellId: SEAL_OF_RIGHTEOUSNESS });
+  const refused = await waitFor(
+    (e) => e.opcode === "SMSG_CAST_FAILED" && e.data?.spellId === SEAL_OF_RIGHTEOUSNESS,
+    3000,
+    "SMSG_CAST_FAILED for the Seal sent during Holy Light",
+    mark,
+  );
+  if (refused.data.result !== SPELL_FAILED_SPELL_IN_PROGRESS)
+    fail(`the Seal during Holy Light answered result ${refused.data.result}, not ${SPELL_FAILED_SPELL_IN_PROGRESS} (spell_in_progress)`);
+  await waitFor((e) => e.opcode === "SMSG_SPELL_GO" && e.data?.spellId === HOLY_LIGHT, 5000, "Holy Light SMSG_SPELL_GO", mark);
+  const cut = events.slice(mark).find((e) => e.opcode === "SMSG_SPELL_FAILURE" && e.data?.spellId === HOLY_LIGHT);
+  if (cut) fail(`Holy Light was interrupted by the cast sent during it: ${JSON.stringify(cut.data)}`);
+  log(`cast during a cast: the Seal refused spell_in_progress, Holy Light went off`);
+
   // 3. learn_talent round-trip (no points at level 1: answered, not learned).
   mark = events.length;
   await action("learn_talent", { talentId: 1449, rank: 0 }); // Divine Strength, tier 1 Holy
@@ -192,7 +225,7 @@ async function main() {
   }
   if (!deleted?.json?.deleted) fail(`character-delete never succeeded`);
   ws.close();
-  log("PASS: spellbook/talents decodes, self-cast SPELL_GO, learn_talent round-trip, raw allow/deny");
+  log("PASS: spellbook/talents decodes, self-cast SPELL_GO, cast during a cast refused, learn_talent round-trip, raw allow/deny");
   process.exit(0);
 }
 
