@@ -78,6 +78,7 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { WrathClient, type StreamEvent } from "@wrathbench/sdk";
 import { keepsAnswer, reparseFrame } from "./client-cache";
+import { callSiteLabel, SNIPPET_URL } from "./call-site";
 import { compileSnippet } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
 import {
@@ -589,15 +590,36 @@ function drainLogs(): LogEntry[] {
  *
  * `current` is the eval whose result this is, if any. A hint raised by any
  * other eval's code — a routine an earlier snippet launched, or the late
- * verdict of an earlier snippet's cast — carries `from`, that snippet's
- * opening code, so the line can say whose it is (the 2026-10-20 party: a
+ * verdict of an earlier snippet's cast — carries `from`, the routine that
+ * made the call (`callOrigin`) or else that snippet's opening code, so the
+ * line can say whose it is (the 2026-10-20 party: a
  * routine's `castSpell caster_dead` printed under 51 unrelated snippets, and a
  * healer fought its own walker for six minutes).
  */
 function drainHints(current?: number): ActionHintNote[] {
-  return client.drainActionHints().map(({ origin, ...h }) =>
-    origin === undefined || origin === current ? h : { ...h, from: snippetHeads.get(origin) ?? "" },
-  );
+  const out: ActionHintNote[] = [];
+  // The current snippet's own lines, one per (action, status) as before: its
+  // call sites are told apart only for an earlier snippet's code.
+  const own = new Map<string, ActionHintNote>();
+  for (const { origin, ...h } of client.drainActionHints()) {
+    const site = origin === undefined ? undefined : callSites.get(origin);
+    const evalId = site?.evalId ?? origin;
+    if (evalId !== undefined && evalId !== current) {
+      out.push({ ...h, from: site?.label ?? snippetHeads.get(evalId) ?? "" });
+      continue;
+    }
+    const key = `${h.action}:${h.status}`;
+    const prev = own.get(key);
+    if (prev === undefined) {
+      own.set(key, h);
+      out.push(h);
+      continue;
+    }
+    const merged = h.ts >= prev.ts ? { ...h, count: prev.count + h.count } : { ...prev, count: prev.count + h.count };
+    out[out.indexOf(prev)] = merged;
+    own.set(key, merged);
+  }
+  return out;
 }
 
 /** How much of a snippet's opening code names it on a routine's harness line. */
@@ -611,6 +633,48 @@ function noteSnippetHead(id: number, code: string): void {
   const flat = code.replace(/\s+/g, " ").trim();
   snippetHeads.set(id, flat.length > SNIPPET_HEAD_CHARS ? `${flat.slice(0, SNIPPET_HEAD_CHARS - 1).trimEnd()}…` : flat);
   if (snippetHeads.size > SNIPPET_HEADS_MAX) snippetHeads.delete(snippetHeads.keys().next().value as number);
+}
+
+/** Each eval's compiled body by eval id, for the statement a stack frame in it names (`callSiteLabel`). */
+const snippetBodies = new Map<number, string>();
+
+/**
+ * The SDK's `origin` for a call: the eval whose context it runs in, refined
+ * to the routine that made it (`callSiteLabel`) as a site id of its own, so
+ * two routines one snippet started are tallied, and labelled, apart. Site ids
+ * are negative, out of the host's eval-id range.
+ */
+const callSites = new Map<number, { evalId: number; label: string }>();
+const callSiteIds = new Map<string, number>();
+const CALL_SITES_MAX = 2048;
+let nextCallSite = -1;
+/** Frames enough to reach a routine's entry under the SDK's own (the default is 10). */
+const CALL_SITE_STACK_LIMIT = 64;
+
+function callOrigin(): number | undefined {
+  const evalId = evalContext.getStore()?.evalId;
+  if (evalId === undefined) return undefined;
+  const limit = Error.stackTraceLimit;
+  Error.stackTraceLimit = CALL_SITE_STACK_LIMIT;
+  const stack = new Error().stack ?? "";
+  Error.stackTraceLimit = limit;
+  const label = callSiteLabel(stack, evalId, snippetBodies, import.meta.url);
+  if (label === undefined) return evalId;
+  const key = `${evalId}\n${label}`;
+  let id = callSiteIds.get(key);
+  if (id === undefined) {
+    // The oldest site goes first; its id is never handed out again, so a
+    // tally entry still holding it cannot be read as another's.
+    if (callSiteIds.size >= CALL_SITES_MAX) {
+      const [oldKey, oldId] = callSiteIds.entries().next().value as [string, number];
+      callSiteIds.delete(oldKey);
+      callSites.delete(oldId);
+    }
+    id = nextCallSite--;
+    callSiteIds.set(key, id);
+    callSites.set(id, { evalId, label });
+  }
+  return id;
 }
 
 // -------------------------------------------------------- ambient snippet API
@@ -657,9 +721,10 @@ const client = new WrathClient({
   subscribeEvents: false,
   signal: currentSignal,
   deadline: currentDeadline,
-  // The eval whose code is calling: a routine keeps the id of the snippet
-  // that launched it, so its harness lines can say so (`drainHints`).
-  origin: () => evalContext.getStore()?.evalId,
+  // The eval whose code is calling, and the routine in it that called: a
+  // routine keeps the id of the snippet that launched it, so its harness
+  // lines can say whose they are (`drainHints`, `callOrigin`).
+  origin: callOrigin,
   fetchImpl: watchedFetch,
   // The real WebSocket, captured before `globalThis.WebSocket` was replaced
   // with the refusing guard: this is the ambient client's own event stream,
@@ -1180,16 +1245,22 @@ async function evaluate(id: number, code: string, deadline?: number, timeoutMs?:
   noteSnippetHead(id, code);
   try {
     const compiled = compileSnippet(code);
+    // Tagged so a stack frame in this snippet's code names it (`callSiteLabel`).
+    const tag = `\n//# sourceURL=${SNIPPET_URL}${id}`;
     let fn: ((...args: unknown[]) => Promise<unknown>) | null = null;
+    let body = compiled.statementsBody;
     if (compiled.canTryExpression) {
       try {
         // Single-expression snippets get REPL semantics: their value comes back.
-        fn = new AsyncFunction(compiled.expressionBody);
+        fn = new AsyncFunction(compiled.expressionBody + tag);
+        body = compiled.expressionBody;
       } catch {
         fn = null;
       }
     }
-    fn ??= new AsyncFunction(compiled.statementsBody);
+    fn ??= new AsyncFunction(compiled.statementsBody + tag);
+    snippetBodies.set(id, body);
+    if (snippetBodies.size > SNIPPET_HEADS_MAX) snippetBodies.delete(snippetBodies.keys().next().value as number);
     const run = fn;
     const value: unknown = await evalContext.run({ evalId: id, signal: controller.signal, deadline, timeoutMs }, () =>
       run.call(globalThis),
