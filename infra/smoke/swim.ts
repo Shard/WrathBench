@@ -198,6 +198,7 @@ async function walk(client: WrathClient, leg: Leg): Promise<{ data: MoveResultDa
   });
   try {
     const ack = await client.moveToAsync(leg.to);
+    if (ack.moveId === undefined) fail(`moveToAsync refused before sending: ${ack.status} — ${ack.hint ?? ""}`);
     moveId = ack.moveId;
     const ev = await client.events.waitFor(
       (e) => e.opcode === "WB_MOVE_RESULT" && (e.data as { moveId?: number } | undefined)?.moveId === ack.moveId,

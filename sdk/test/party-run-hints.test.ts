@@ -179,7 +179,7 @@ describe("moveToAsync: a verdict that is not an arrival reaches the harness", ()
     const client = await inWorld(stub);
     await folded(client, "SMSG_UPDATE_OBJECT", 17);
     const ack = await client.moveToAsync({ x: -500, y: 987, z: 42 });
-    push(stub, result(90, ack.moveId, "too_far"));
+    push(stub, result(90, ack.moveId!, "too_far"));
     await folded(client, "WB_MOVE_RESULT", 90);
     await Bun.sleep(5);
     const hints = client.drainActionHints();
@@ -205,7 +205,7 @@ describe("moveToAsync: a verdict that is not an arrival reaches the harness", ()
     expect(drop!.hint).toEndWith(" A ghost takes no fall damage.");
 
     const ack = await client.moveToAsync({ x: -1220, y: 987, z: 42 });
-    push(stub, result(91, ack.moveId, "arrived"));
+    push(stub, result(91, ack.moveId!, "arrived"));
     await folded(client, "WB_MOVE_RESULT", 91);
     await Bun.sleep(5);
     expect(client.drainActionHints()).toEqual([]);
@@ -223,13 +223,13 @@ describe("moveToAsync: steering verdicts stay out of the harness block (operator
       frame(seq, "WB_MOVE_RESULT", { moveId, status, pos: { x: -1234.5, y: 987.25, z: 42.1, o: 0 } });
     const first = await client.moveToAsync({ x: -1220, y: 987, z: 42 });
     const second = await client.moveToAsync({ x: -1210, y: 987, z: 42 });
-    push(stub, verdict(90, first.moveId, "superseded"));
-    push(stub, verdict(91, second.moveId, "stopped"));
+    push(stub, verdict(90, first.moveId!, "superseded"));
+    push(stub, verdict(91, second.moveId!, "stopped"));
     await folded(client, "WB_MOVE_RESULT", 91);
     await Bun.sleep(5);
     expect(client.drainActionHints()).toEqual([]);
     const third = await client.moveToAsync({ x: -500, y: 987, z: 42 });
-    push(stub, verdict(92, third.moveId, "too_far"));
+    push(stub, verdict(92, third.moveId!, "too_far"));
     await folded(client, "WB_MOVE_RESULT", 92);
     await Bun.sleep(5);
     expect(client.drainActionHints().map((h) => `${h.action} ${h.status}`)).toEqual(["moveToAsync too_far"]);

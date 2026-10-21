@@ -1587,7 +1587,7 @@ export function longRouteNote(
 export type MoveToAsyncResponse =
   | (MoveToResponse & { readonly hint?: string })
   | { readonly ok: false; readonly action: string; readonly moveId: number; readonly status: string; readonly hint?: string }
-  | { readonly ok: false; readonly status: "dead" | "unknown_target"; readonly hint: string };
+  | { readonly ok: false; readonly status: "dead" | "unknown_target"; readonly hint: string; readonly action?: undefined; readonly moveId?: undefined };
 
 export interface WaitForTransferOptions {
   /** How long to wait for `SMSG_NEW_WORLD`, in ms. Default 15000: a far teleport is a few server ticks. */
@@ -2011,6 +2011,8 @@ const CHEST_OPEN_SPELLS: readonly number[] = [6478, 3365, 6247, 6477];
 const SPELL_FAILED_BAD_TARGETS = 12;
 /** Loot slot types the auto-loot sequence stores: ALLOW_LOOT (0) and OWNER (4). */
 const isStorableSlot = (i: { slotType: number }): boolean => i.slotType === 0 || i.slotType === 4;
+/** The raw trade opcodes whose effect a client's own window shows and no packet echoes (`StateCache.tradeSent`). */
+const TRADE_OWN_OPCODES: ReadonlySet<string> = new Set(["CMSG_INITIATE_TRADE", "CMSG_SET_TRADE_ITEM", "CMSG_CLEAR_TRADE_ITEM", "CMSG_SET_TRADE_GOLD"]);
 /** `LOOT_SLOT_TYPE_ROLL_ONGOING`: the slot is up for a group roll and cannot be looted until it ends. */
 const LOOT_SLOT_ROLL_ONGOING = 1;
 
@@ -6499,17 +6501,24 @@ export class WrathClient {
       );
     }
     const hexPayload = encodeRawPayload(body.data);
+    // The trade window's own half (`state.tradeSent`): whom an initiate asked,
+    // before the send, as a refusal can beat the ack; what was placed, after.
+    const trade = TRADE_OWN_OPCODES.has(op.data);
+    if (trade && op.data === "CMSG_INITIATE_TRADE") this.state.tradeSent(op.data, hexPayload);
     return this.request(
       "POST",
       "/action",
       { token: this.token, action: "raw", opcode: op.data, payload: hexPayload },
       actionResponseSchema,
-    ).then((ack) => ({
-      ...ack,
-      opcode: op.data,
-      payload: hexPayload,
-      ...(named.resolved.length > 0 ? { resolved: named.resolved } : {}),
-    }));
+    ).then((ack) => {
+      if (trade && op.data !== "CMSG_INITIATE_TRADE") this.state.tradeSent(op.data, hexPayload);
+      return {
+        ...ack,
+        opcode: op.data,
+        payload: hexPayload,
+        ...(named.resolved.length > 0 ? { resolved: named.resolved } : {}),
+      };
+    });
   }
 
   /**

@@ -12,7 +12,20 @@ import { describe, expect, test } from "bun:test";
 import { connect, type WrathClient } from "../src/client";
 import { parseEventFrame, type GameEvent } from "../src/protocol";
 import { StateCache } from "../src/state";
-import { CREATURE_GUID, creatureCreate, creatureQuery, frames, loginSequence, SELF_GUID, selfCreate } from "./fixtures";
+import {
+  BACKPACK_SLOT,
+  CREATURE_GUID,
+  creatureCreate,
+  creatureQuery,
+  frames,
+  inventorySlot,
+  ITEM_ENTRY,
+  itemCreate,
+  itemQuery,
+  loginSequence,
+  SELF_GUID,
+  selfCreate,
+} from "./fixtures";
 import { startStub, type StubServer } from "./server";
 
 const TS = 1_700_000_000_000;
@@ -130,6 +143,92 @@ describe("an open group roll is said where the window and the harness block show
       { seed: SEED },
     );
     expect(won.pendingRolls(TS + 13)).toEqual([]);
+  });
+});
+
+// ------------------------------------------------------------------ trade
+
+const PARTNER = "981";
+const tradeStatus = (seq: number, status: number, extra: Record<string, unknown> = {}) => frame(seq, "SMSG_TRADE_STATUS", { status, ...extra });
+const theirSide = (seq: number, items: { slot: number; itemId: number; count: number }[], money = 0) =>
+  frame(seq, "SMSG_TRADE_STATUS_EXTENDED", { theirs: true, money, spellId: 0, items: items.map((i) => ({ ...i, wrapped: false })) });
+const bagWorld = () => frames([...loginSequence, selfCreate, inventorySlot, itemCreate, itemQuery]);
+
+describe("state.trade() reads the window a client's trade frame shows", () => {
+  // a2 mage, 03:13:17-03:14:32: six initiates answered busy while the healer
+  // traded with the paladin, a seventh answered nothing, the window opened
+  // when the healer began, the water went in, an accept met too far, and the
+  // trade completed. traderGuid, mine and theirs never filled.
+  test("the initiator: busy names who was asked, the window opens with them, and mine is what was placed", async () => {
+    const stub = startStub({ onConnect: bagWorld });
+    const client = await inWorld(stub);
+    await folded(client, "SMSG_ITEM_QUERY_SINGLE_RESPONSE", 38);
+    await client.raw("CMSG_INITIATE_TRADE", [{ guid: PARTNER }]);
+    push(stub, tradeStatus(40, 0));
+    await folded(client, "SMSG_TRADE_STATUS", 40);
+    expect(client.state.trade()).toMatchObject({
+      status: 0, statusText: "busy: that player is already in a trade", open: false, traderGuid: PARTNER, mine: undefined, theirs: undefined,
+    });
+    // The seventh initiate: nothing comes back to the initiator.
+    await client.raw("CMSG_INITIATE_TRADE", [{ guid: PARTNER }]);
+    push(stub, tradeStatus(41, 2));
+    await folded(client, "SMSG_TRADE_STATUS", 41);
+    expect(client.state.trade()).toMatchObject({
+      status: 2, statusText: "window open", open: true, traderGuid: PARTNER, mine: { money: 0, items: [] }, theirs: { money: 0, items: [] },
+    });
+    await client.raw("CMSG_SET_TRADE_ITEM", [{ u8: 0 }, { u8: 255 }, { u8: BACKPACK_SLOT }]);
+    await client.raw("CMSG_SET_TRADE_GOLD", [{ u32: 250 }]);
+    push(stub, tradeStatus(42, 7));
+    await folded(client, "SMSG_TRADE_STATUS", 42);
+    expect(client.state.trade()).toMatchObject({
+      statusText: "back to trade: an accept was cleared",
+      open: true,
+      mine: { money: 250, items: [{ slot: 0, itemId: ITEM_ENTRY, name: "Gritstone Charm", count: 5 }] },
+    });
+    // An accept out of range: too far, then back to trade; the window stays.
+    await client.raw("CMSG_ACCEPT_TRADE", [{ u32: 1 }]);
+    push(stub, tradeStatus(43, 10));
+    push(stub, tradeStatus(44, 7));
+    await folded(client, "SMSG_TRADE_STATUS", 44);
+    expect(client.state.trade()).toMatchObject({ status: 7, open: true, traderGuid: PARTNER, mine: { money: 250 } });
+    await client.raw("CMSG_CLEAR_TRADE_ITEM", [{ u8: 0 }]);
+    expect(client.state.trade()?.mine?.items).toEqual([]);
+    push(stub, tradeStatus(45, 4));
+    await folded(client, "SMSG_TRADE_STATUS", 45);
+    expect(client.state.trade()).toMatchObject({ statusText: "the other side accepted", open: true });
+    push(stub, tradeStatus(46, 8));
+    await folded(client, "SMSG_TRADE_STATUS", 46);
+    expect(client.state.trade()).toMatchObject({ status: 8, statusText: "trade complete", open: false, traderGuid: PARTNER, mine: undefined, theirs: undefined });
+    client.close();
+    await stub.stop();
+  });
+
+  // a2 healer, 03:13:40-03:14:32: the begin named the mage, the window
+  // opened, the water arrived as the other side's EXTENDED, and a too-far
+  // notice in between did not close the window.
+  test("the receiver: the begin names the trader, theirs is the server's view, and a too-far notice keeps the window", () => {
+    const cache = StateCache.replay(
+      toEvents([
+        ...loginSequence,
+        tradeStatus(40, 1, { traderGuid: "978" }),
+        tradeStatus(41, 2),
+        tradeStatus(42, 7),
+        theirSide(43, [{ slot: 0, itemId: ITEM_ENTRY, count: 10 }]),
+        tradeStatus(44, 10),
+        tradeStatus(45, 7),
+        tradeStatus(46, 4),
+      ]),
+      { seed: SEED },
+    );
+    expect(cache.trade()).toMatchObject({
+      status: 4,
+      open: true,
+      traderGuid: "978",
+      mine: { money: 0, items: [] },
+      theirs: { money: 0, items: [{ slot: 0, itemId: ITEM_ENTRY, count: 10 }] },
+    });
+    cache.apply(toEvents([tradeStatus(47, 3)])[0]!);
+    expect(cache.trade()).toMatchObject({ status: 3, statusText: "trade canceled", open: false, traderGuid: "978", theirs: undefined });
   });
 });
 
