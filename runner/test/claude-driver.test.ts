@@ -9,7 +9,11 @@ import { chmodSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { COMPACTED_NOTICE, COMPACTION_PENDING_NOTICE } from "../src/cli-compaction";
 import { comparabilityOf } from "../src/comparability";
-import { childEnv, claudeArgs, claudeRateLimitWindows, compactEnv, compactionRecord, detectLimit, mcpToolNames, runClaudeEpisode, thinkingEnv, toolCallLimitReached } from "../src/adapter-claude";
+import { childEnv, claudeArgs, claudeRateLimitWindows, compactEnv, compactionRecord, DEFAULT_WIND_DOWN_GRACE_MS as CLAUDE_WIND_DOWN_GRACE_MS, detectLimit, mcpToolNames, runClaudeEpisode, thinkingEnv, toolCallLimitReached } from "../src/adapter-claude";
+import { DEFAULT_WIND_DOWN_GRACE_MS as CODEX_WIND_DOWN_GRACE_MS } from "../src/adapter-codex";
+import { DEFAULT_WIND_DOWN_GRACE_MS as PI_WIND_DOWN_GRACE_MS } from "../src/adapter-pi";
+import { END_REQUEST_FILE, END_REQUEST_POLL_MS, PARTY_END_GRACE_MS, readEndRequest, watchEndRequest, writeEndRequest } from "../src/end-request";
+import { DEFAULT_STATE_TICK_MS } from "../src/loop";
 import { STUB_STAMP, isUnscoredDriver, loadRunConfig, parseCompactWindow, unscoredStamp } from "../src/config";
 import { CLAUDE_CODE_SYSTEM_PROMPT, SYSTEM_PROMPT, contextSentence } from "../src/prompt";
 import { EpisodicLog } from "../src/episodic";
@@ -807,6 +811,69 @@ describe("claude-code driver", () => {
     expect(readTrajectory(stop.runDir).filter((r) => r.t === "wind-down")).toHaveLength(0);
     stop.trajectory.close();
   }, 40_000);
+
+  test("a party member asked to end on another member's end winds down like its own end: the closing result is recorded", async () => {
+    // deadmines@4: the mage was SIGTERMed as operator-pause and ended
+    // kill-target by the roster afterwards, so its CLI was killed at once and
+    // the run has no `claude_result`, no cost and no tokens. Now the roster
+    // writes the request (the writer `infra/run-roster.ts` uses) and the
+    // runner's watcher (the one `run.ts` wires) latches it into the watchdogs.
+    const { runDir, trajectory, options } = setupEpisode("wind-down", {});
+    const since = Date.now();
+    const stopWatch = watchEndRequest({ runDir, since, onRequest: (req) => options.watchdogs.noteEndRequest(req), intervalMs: 20 });
+    setTimeout(() => writeEndRequest(runDir, { reason: "kill-target", detail: "rogue: kill-target" }), 300);
+    const outcome = await runClaudeEpisode({ ...options, watchdogTickMs: 25, killGraceMs: 200, windDownGraceMs: 10_000 }).finally(stopWatch);
+    // The party's verdict, with the detail that names the member it followed.
+    expect(outcome).toEqual({ kind: "terminated", reason: "kill-target", detail: "rogue: kill-target" });
+    expect(trajectory.runRow("run-test")).toMatchObject({ termination_reason: "kill-target", termination_detail: "rogue: kill-target", pause_reason: null });
+    const records = readTrajectory(runDir);
+    expect(records.filter((r) => r.t === "termination")).toEqual([expect.objectContaining({ reason: "kill-target", detail: "rogue: kill-target" })]);
+    expect(records.find((r) => r.t === "watchdog")).toMatchObject({ reason: "kill-target", detail: "rogue: kill-target" });
+    // The figures a SIGTERM would have thrown away are on disk...
+    const result = records.find((r) => r.t === "claude_result");
+    expect(result?.["costUsd"]).toBe(1.25);
+    expect((result?.["usageRaw"] as { output_tokens?: number }).output_tokens).toBe(20_000);
+    // ...because it wound down and ended on the result, after the termination.
+    expect(records.filter((r) => r.t === "wind-down")).toEqual([expect.objectContaining({ outcome: "result", reason: "kill-target" })]);
+    const at = (t: string): number => records.findIndex((r) => r.t === t);
+    expect(at("termination")).toBeLessThan(at("claude_result"));
+    trajectory.close();
+  }, 30_000);
+
+  test("an end request is read only for an end reason, and only whole", () => {
+    const runDir = tempDir("wrathbench-end-request-");
+    expect(readEndRequest(runDir)).toBeNull();
+    writeEndRequest(runDir, { reason: "level-target", detail: "tank: level-target", at: 1_000 });
+    expect(readEndRequest(runDir)).toEqual({ reason: "level-target", detail: "tank: level-target", at: 1_000 });
+    // Not an end reason: not a request this runner honours.
+    writeFileSync(join(runDir, END_REQUEST_FILE), JSON.stringify({ reason: "party-ended", detail: "tank: idle", at: 1_000 }));
+    expect(readEndRequest(runDir)).toBeNull();
+    writeFileSync(join(runDir, END_REQUEST_FILE), "{ half a file");
+    expect(readEndRequest(runDir)).toBeNull();
+  });
+
+  test("an end request from before this process segment is not followed, and the first one after it is followed once", async () => {
+    const runDir = tempDir("wrathbench-end-request-");
+    writeEndRequest(runDir, { reason: "kill-target", detail: "rogue: kill-target", at: 1_000 });
+    const seen: string[] = [];
+    const stop = watchEndRequest({ runDir, since: 2_000, onRequest: (r) => void seen.push(r.detail), intervalMs: 5 });
+    const wait = (): Promise<void> => new Promise((r) => setTimeout(r, 40));
+    await wait();
+    expect(seen).toEqual([]);
+    writeEndRequest(runDir, { reason: "kill-target", detail: "healer: kill-target", at: 3_000 });
+    await wait();
+    writeEndRequest(runDir, { reason: "kill-target", detail: "tank: kill-target", at: 4_000 });
+    await wait();
+    stop();
+    expect(seen).toEqual(["healer: kill-target"]);
+  });
+
+  test("the roster's grace for a member asked to end outlasts a whole wind-down on every agentic driver", () => {
+    for (const grace of [CLAUDE_WIND_DOWN_GRACE_MS, CODEX_WIND_DOWN_GRACE_MS, PI_WIND_DOWN_GRACE_MS]) {
+      // The poll, the tick whose check acts on it, the wind-down, and the CLI's SIGTERM→SIGKILL twice over.
+      expect(PARTY_END_GRACE_MS).toBeGreaterThanOrEqual(END_REQUEST_POLL_MS + DEFAULT_STATE_TICK_MS + grace + 2 * 5_000);
+    }
+  });
 
   test("the world is sampled on the clock during a long turn, not once per turn", async () => {
     const { runDir, trajectory, options } = setupEpisode("long-turn", {

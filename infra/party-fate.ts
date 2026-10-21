@@ -19,7 +19,8 @@
  *                                            │ no
  *                                            ▼
  *        the others are stopped with the episode grace (SIGTERM: each runner
- *        pauses as operator-pause), and once all have exited:
+ *        pauses as operator-pause) — unless the first ended on its
+ *        definition's end, below — and once all have exited:
  *
  *   - the first is a TERMINATION (a watchdog, the clock, adapter-error,
  *     tool-call-limit, harness-error, launch-failed, an eviction or a dead pod
@@ -29,7 +30,13 @@
  *     When the first ended on its definition's end (`level-target`,
  *     `kill-target`: the attempt reached what it was launched for), the
  *     others are terminated on that same reason instead, with the same
- *     detail, so all five are the one counted verdict.
+ *     detail, so all five are the one counted verdict. They are not signalled
+ *     for it: each runner is asked to end on that reason itself
+ *     (`requestEnd`, `runner/src/end-request.ts`), so it ends through the
+ *     same watchdog verdict and wind-down its own end would take and its
+ *     driver's closing result (cost, tokens) is recorded. A member still
+ *     running once `endGraceMs` has passed is stopped as above and ended
+ *     by the machine as before.
  *   - the first is a PAUSE in a lane that resumes                 → PAUSED: the
  *     others that the roster's stop paused (`operator-pause`) are re-paused
  *     `party-paused` with the same detail; one that paused for a reason of its
@@ -41,7 +48,7 @@
  * reacts to anything but a member's episode exiting.
  */
 
-import { isEndReason } from "../runner/src/end-conditions";
+import { isEndReason, type EndReason } from "../runner/src/end-conditions";
 import type { StageResult } from "./party-stager";
 
 /** One member as the machine knows it. */
@@ -72,6 +79,14 @@ export interface PartyFateDeps<Exit = unknown> {
   verdict(m: PartyMemberRun, exit: Exit): MemberVerdict;
   /** Write a termination through the runner's own writer. */
   end(m: PartyMemberRun, reason: string, detail: string): void;
+  /**
+   * Ask a running member's runner to end on this end reason and detail
+   * itself, through its own wind-down (`runner/src/end-request.ts`). Absent:
+   * every member is stopped with the grace, as for any other fate.
+   */
+  requestEnd?: (m: PartyMemberRun, reason: EndReason, detail: string) => void;
+  /** How long a member asked to end is given to do so before it is stopped: a whole wind-down and its teardown. */
+  endGraceMs?: number;
   /** Replace a member's pause (the roster's operator-pause) with `party-paused` and this detail. */
   repause(m: PartyMemberRun, detail: string): void;
   /** Record a fresh member that never became a run as a launch-failed attempt. */
@@ -94,8 +109,13 @@ export interface PartyOutcome {
   trigger?: { member: string; reason: string };
   /** Each member's verdict as read once every episode had exited. */
   verdicts: Record<string, MemberVerdict>;
-  /** What the machine wrote, per member, in member order: `party-ended` (or the end reason the trigger reached), `party-paused`, a launch-failed stub, an ended pause. */
-  written: { member: string; wrote: string }[];
+  /**
+   * What the machine wrote, per member, in member order: `party-ended` (or the
+   * end reason the trigger reached), `party-paused`, a launch-failed stub, an
+   * ended pause — or, `followed`, the end reason a member's own runner wrote
+   * because the machine asked it to (`requestEnd`).
+   */
+  written: { member: string; wrote: string; followed?: true }[];
 }
 
 /** The reason a verdict names: its termination or pause reason, else its kind. */
@@ -144,12 +164,42 @@ export async function runParty<Exit>(members: readonly PartyMemberRun[], deps: P
   );
   const firstIdx = await Promise.race(exits.map((p, i) => p.then(() => i)));
   const signalled = deps.stopping();
+  /** The end the others were asked to follow, when the first reached its definition's end. */
+  let asked: { reason: EndReason; detail: string } | null = null;
+  let endGrace: ReturnType<typeof setTimeout> | undefined;
   if (!signalled) {
     const first = members[firstIdx]!;
-    deps.log(`party: ${first.member} (${first.runId}) left the world first — stopping the other ${members.length - 1} with the episode grace`);
-    for (const [i, h] of handles.entries()) if (i !== firstIdx) void h.stop(deps.graceMs);
+    // The first's own verdict is final the moment it exits: an end reason
+    // decides the fate "ended" on that reason whatever the others do, so each
+    // can be asked to end on it now rather than paused and rewritten later.
+    const v = deps.verdict(first, await exits[firstIdx]!);
+    const others = [...handles.entries()].filter(([i]) => i !== firstIdx);
+    if (deps.requestEnd !== undefined && v.kind === "terminated" && isEndReason(v.reason)) {
+      asked = { reason: v.reason, detail: `${first.member}: ${v.reason}` };
+      const graceMs = deps.endGraceMs ?? deps.graceMs;
+      deps.log(`party: ${first.member} (${first.runId}) reached ${v.reason} first — asking the other ${members.length - 1} to end on it (stopped after ${Math.round(graceMs / 1000)}s if still running)`);
+      const exitedYet = new Set<number>();
+      for (const [i] of others) {
+        void exits[i]!.then(() => exitedYet.add(i));
+        deps.requestEnd(members[i]!, asked.reason, asked.detail);
+      }
+      endGrace = setTimeout(() => {
+        // A shared stop that landed meanwhile has already signalled everyone.
+        if (deps.stopping()) return;
+        for (const [i, h] of others) {
+          if (exitedYet.has(i)) continue;
+          deps.log(`party: ${members[i]!.member} (${members[i]!.runId}) has not ended on the request — stopping it with the episode grace`);
+          void h.stop(deps.graceMs);
+        }
+      }, graceMs);
+      endGrace.unref?.();
+    } else {
+      deps.log(`party: ${first.member} (${first.runId}) left the world first — stopping the other ${members.length - 1} with the episode grace`);
+      for (const [, h] of others) void h.stop(deps.graceMs);
+    }
   }
   const exitValues = await Promise.all(exits);
+  if (endGrace !== undefined) clearTimeout(endGrace);
   const verdicts: Record<string, MemberVerdict> = {};
   const vs = members.map((m, i) => deps.verdict(m, exitValues[i]!));
   members.forEach((m, i) => {
@@ -209,7 +259,14 @@ export async function runParty<Exit>(members: readonly PartyMemberRun[], deps: P
       }
       continue;
     }
-    if (v.kind === "terminated") continue; // its own verdict stands
+    if (v.kind === "terminated") {
+      // Its own verdict stands. One that is the end it was asked to follow,
+      // with that detail, was the party's end written by its own runner.
+      if (asked !== null && i !== triggerIdx && v.reason === asked.reason && v.detail === asked.detail) {
+        written.push({ member: m.member, wrote: v.reason, followed: true });
+      }
+      continue;
+    }
     if (i === triggerIdx) {
       // The trigger's own pause, in a lane that does not resume: ended the
       // way the lane ends any lapse.

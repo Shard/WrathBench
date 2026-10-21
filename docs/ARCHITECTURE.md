@@ -402,6 +402,17 @@ together, a missing credential, a run id already on disk); 75 is
 a resume refused because the run has a live owner; 130 is a signalled exit.
 Any other code is read through the run row, never on its own.
 
+**A party's end, asked rather than signalled.** When a party member's run
+ends on its definition's end, the roster writes `end-request.json`
+(`reason`, an end reason; `detail`, `<member>: <reason>`; `at`) into each
+other member's run directory instead of sending SIGTERM, which would pause it
+and kill a CLI before its closing result. The runner polls for the file every
+two seconds, ignores one older than its own process segment, and ends on it
+through its watchdogs, so the driver winds down exactly as on its own end and
+records its result (`runner/src/end-request.ts`). A member still running two
+minutes later is sent SIGTERM and ended by the roster as before, which is also
+all a harness that ignores the file ever sees.
+
 **A harness that is not this runner** is launched the same way: an arm names
 `image` and `command`, the pod runs that command with the flags above as its
 args and the volumes, env and secrets of a run pod, and is judged by the files
