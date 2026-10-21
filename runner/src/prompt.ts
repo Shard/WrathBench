@@ -102,7 +102,7 @@ Snippets run in one long-lived process. Top-level const/let/var/function/class d
   - Every call that takes a guid — helpers, raw actions (setTarget, attackStart, gossipHello, loot, vendorList, ...), and a { guid } field inside a raw(...) payload — also accepts a unit object from state.units(...) directly, or the name of something in view: case, spacing and apostrophes are ignored, then an exact name, else a unique substring, else a unique near-miss. Nothing matching, or two things matching, is refused with what is in view (the SDK never picks between referents); when the match was not exact the answer carries resolved: { input, name, guid }. moveTo and moveToAsync take a unit, a guid or a name as well as a point { x, y, z } — a unit resolves to its position in the state cache, and a guid nothing in view answers to comes back as { ok: false, status: "unknown_target", hint } rather than throwing.
   - gossipSelect(guid, "option text") selects by an option's visible text from the last observed gossip menu (case-insensitive exact or unique substring); the numeric gossipSelect(guid, menuId, optionId) form still works.
 - state, events: aliases for sdk.state and sdk.events.
-- sleep(ms, options?), scratchpad.read()/write(content)/append(text). Sleeping is blind — prefer an SDK wait or events.once/waitForOpcode when you are waiting for something specific — so sleep resolves with why it woke: "elapsed", or early with "attacked" (a unit started attacking you or hit you with a spell), "died" or "chat" (a party or whisper line from another player) — the reason is the resolved value itself, e.g. const why = await sleep(20000); if (why === "attacked") { await sdk.killTarget(state.closest({ alive: true, maxDistance: 10 })); } — pass { wake: false } for a plain timer.
+- sleep(ms, options?), scratchpad.read()/write(content)/append(text). Sleeping is blind — prefer an SDK wait or events.once/waitForOpcode when you are waiting for something specific — so sleep resolves with why it woke: "elapsed", or early with "attacked" (a unit started attacking you, or hit you with a spell while you were out of combat), "died" or "chat" (a party or whisper line from another player) — the reason is the resolved value itself, e.g. const why = await sleep(20000); if (why === "attacked") { await sdk.killTarget(state.closest({ alive: true, maxDistance: 10 })); } — pass { wake: false } for a plain timer.
 - The scratchpad holds at most 32,000 characters, and every turn shows its size. A write, edit or append that would take it past that is refused and saves nothing (in a snippet, the call rejects), so condense it first.
 - signal: this snippet's AbortSignal. Aborted when the snippet is abandoned; check signal.aborted in long loops, or pass it to your own timers.
 
@@ -211,7 +211,7 @@ function bodyFor(harness: Harness, wiki = true): string {
  * what the result carries, nothing about what to do with it.
  */
 export const SNIPPET_DELTA_SENTENCE =
-  "Each snippet result ends with what changed since your previous snippet (party, chat, damage taken), when anything did.";
+  "Each snippet result ends with what changed since your previous snippet (party, chat, damage taken, level and quests), when anything did.";
 
 function snippetDeltaClause(harness: Harness): string {
   return harnessDriver(harness)?.snippetDelta === true ? ` ${SNIPPET_DELTA_SENTENCE}` : "";

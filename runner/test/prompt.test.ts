@@ -219,23 +219,24 @@ describe("episode sentence", () => {
     // wake revert after Deadmines a8), in the shared body, so it moved all
     // of them. The snippet-delta sentence (claude-code only, operator
     // 2026-10-21) then split claude-code off the other CLI renders, moving
-    // its six and no other.
+    // its six and no other. The operator's wording edits to the "attacked"
+    // clause and the snippet-delta sentence (2026-10-21) moved all of them.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:9073eaef04ee9310", off: "sha256:1cc25e8509bfbc21" },
-        "claude-code": { on: "sha256:8fe9b1257f6f3bb0", off: "sha256:46db9abf8827f670" },
-        cli: { on: "sha256:4a3ab5272e40a428", off: "sha256:166b3acbf900ce00" },
+        wrathbench: { on: "sha256:07b69f53be12b40e", off: "sha256:82892888709f7ceb" },
+        "claude-code": { on: "sha256:bb1bfebe5f277b30", off: "sha256:ced77e7afcc01ccf" },
+        cli: { on: "sha256:8c5fea5bb98d45e5", off: "sha256:e939c4a23d796cb4" },
       },
       e90: {
-        wrathbench: { on: "sha256:d4e28dddfa74bab0", off: "sha256:8f44644f86c68051" },
-        "claude-code": { on: "sha256:aa3c6eb4d85d1410", off: "sha256:da266781b5f733e7" },
-        cli: { on: "sha256:d869c49c59dd16db", off: "sha256:4d7fc89864067ff4" },
+        wrathbench: { on: "sha256:4fc067b08bf96ca7", off: "sha256:1a6b1e40bcea0979" },
+        "claude-code": { on: "sha256:a153586d980a0d83", off: "sha256:7845219dc528e767" },
+        cli: { on: "sha256:ec67b3aa70f4d8ba", off: "sha256:f8c26d354acceb40" },
       },
       e360: {
-        wrathbench: { on: "sha256:cf02e1a3c96879dc", off: "sha256:16d66821cd00a7b4" },
-        "claude-code": { on: "sha256:1bc04fb478724c1f", off: "sha256:45b22e3556b0a18e" },
-        cli: { on: "sha256:3ac265613531e8d1", off: "sha256:9c2600e2f3c4cd72" },
+        wrathbench: { on: "sha256:3e52836092848355", off: "sha256:e7c2ea78c876c121" },
+        "claude-code": { on: "sha256:6d2949f6ec03f3df", off: "sha256:a9e6f2173a1f9d18" },
+        cli: { on: "sha256:24dc1c849de19739", off: "sha256:92245cd73a0b7f1b" },
       },
     };
     const episodes = [
@@ -336,10 +337,10 @@ describe("an objective replaces the broad goal (operator, 2026-10-21)", () => {
       freeplay: promptHash(buildSystemPrompt("walk to Ironforge", "freeplay", "wrathbench", true)),
     };
     expect(got).toEqual({
-      probing4h: "sha256:c1ab7a498fe9f21e",
-      probing4hCli: "sha256:7917b0cedcf31860",
-      e90: "sha256:cd8a94f398c55199",
-      freeplay: "sha256:4dc947e2008c4a9a",
+      probing4h: "sha256:cbc44dd816f3c106",
+      probing4hCli: "sha256:507734da98f1f3e3",
+      e90: "sha256:f7aff20fe8ec35e5",
+      freeplay: "sha256:34835f7a137a4fc4",
     });
   });
 });
