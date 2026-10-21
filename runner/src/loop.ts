@@ -1285,7 +1285,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         return terminate(integrity.reason, integrity.detail);
       }
 
-      const systemText = buildSystemPrompt(config.objective, config.episode, harnessOf(config.driver), config.wiki);
+      const systemText = buildSystemPrompt(config.objective, config.episode, harnessOf(config.driver), config.wiki, config.watchdogs.episodeMs);
       const messages: ChatMessage[] = [
         { role: "system", content: systemText },
         ...messageWindow(history),

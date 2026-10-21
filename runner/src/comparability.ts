@@ -287,7 +287,7 @@ export function comparabilityOf(
   const harness = harnessOf(config.driver);
   // Rendered for THIS run's harness: the prompt's context sentence differs
   // between them, so the hash below is per-harness by design.
-  const prompt = buildSystemPrompt(config.objective, config.episode, harness, config.wiki);
+  const prompt = buildSystemPrompt(config.objective, config.episode, harness, config.wiki, config.watchdogs.episodeMs);
   const routing = routingForRun(config);
   return {
     harnessVersion,

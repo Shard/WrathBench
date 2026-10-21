@@ -666,9 +666,14 @@ model is the operator's to name, as every roster entry is.
 
 Three pieces of harness text, identical for every model. The two texts below
 are the operator's wording, approved as drafted (2026-10-19), with the objective's
-location sentence changed to match the portal-side staging and then to name the portal's position (both 2026-10-20). Nothing else about the prompt
-changes: the standing goal, the body and the tools are the same as every
-run's (`runner/src/prompt.ts`).
+location sentence changed to match the portal-side staging and then to name the portal's position (both 2026-10-20). The objective
+replaces the broad goal for the run rather than adding to it, and the run
+states its clock from the definition's budget ("This run lasts four hours.";
+operator, 2026-10-21): with the objective added to the standing goal, the
+first parties left the dungeon after some wipes to level in Westfall, which
+the goal endorsed, and nothing told them the run lasted four hours. The world
+facts, the body and the tools are the same as every run's
+(`runner/src/prompt.ts`).
 
 **The staged-character launch note**, a sibling of
 `freshCharacterNote` for a run launched with the new `--character <name>`

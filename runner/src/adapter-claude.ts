@@ -900,7 +900,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   // The claude-code render: same prompt, except the sentence about older
   // conversation, which on this harness must describe the CLI's regime and not
   // the fixed loop's trim (`contextSentence`).
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("claude-code"), config.wiki);
+  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("claude-code"), config.wiki, config.watchdogs.episodeMs);
   const args = claudeArgs({
     mcpConfigPath,
     systemPrompt,

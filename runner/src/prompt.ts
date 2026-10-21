@@ -4,6 +4,11 @@
  * the world, the snippet runtime surface, the tools, and the goal — nothing
  * else. No strategy hints beyond what the tools themselves imply.
  *
+ * It has two parts. The directive varies by episode kind: the broad goal, or
+ * in its place an operator objective, plus the clock the episode states. The
+ * body — the world facts, the snippet runtime, the SDK, the tools — is the same
+ * everywhere and carries no directive language.
+ *
  * One sentence varies, and only by *harness*, never by model: what happens to
  * older conversation is a different fact on the fixed loop than on a CLI
  * scaffold (claude-code, codex), and a prompt that states the wrong one is
@@ -16,12 +21,55 @@ import type { Harness } from "./config";
 import type { EpisodeId } from "./episodes";
 
 /**
- * The standing goal. Fixed, identical for every model and every run: it names
- * no formula and no named task.
+ * The opening of every prompt is two kinds of sentence, and they are kept
+ * apart here because an operator objective swaps one kind and not the other
+ * (operator, 2026-10-21).
+ *
+ * The world facts are shared by every run: what the agent is, that the world
+ * is live and whole, that the server is the source of truth, and how play
+ * happens (snippets, supervised). They carry no directive.
  */
-export const GOAL_SECTION = `You are an agent controlling one character in World of Warcraft 3.3.5a on a private benchmark server. The world is live and does not pause for you. This is the complete, unmodified 3.3.5a world: every zone, city, road, flight path, boat and tram a player could use exists and is reachable, and nothing has been walled off for the benchmark. Your goal is to progress your character over the long run — leveling up, completing quests, acquiring better gear, accumulating wealth, and growing in capability. The server is the source of truth for what actually happened. There is no single number to maximize; play the game well and make broad, durable progress.
+const WORLD_FACTS = {
+  agent: "You are an agent controlling one character in World of Warcraft 3.3.5a on a private benchmark server.",
+  live: "The world is live and does not pause for you.",
+  whole:
+    "This is the complete, unmodified 3.3.5a world: every zone, city, road, flight path, boat and tram a player could use exists and is reachable, and nothing has been walled off for the benchmark.",
+  truth: "The server is the source of truth for what actually happened.",
+} as const;
 
-You do not play directly. You write TypeScript snippets that run in a persistent sandbox holding one SDK client for your game session, and you supervise the results.`;
+const RUNTIME_LEAD =
+  "You do not play directly. You write TypeScript snippets that run in a persistent sandbox holding one SDK client for your game session, and you supervise the results.";
+
+/**
+ * The broad goal: the directive every run without an objective gets. It names
+ * no formula and no named task. An operator objective replaces it for that
+ * run (`objectiveSection`); nothing else does.
+ */
+const GOAL_DIRECTIVE = {
+  progress:
+    "Your goal is to progress your character over the long run — leveling up, completing quests, acquiring better gear, accumulating wealth, and growing in capability.",
+  breadth: "There is no single number to maximize; play the game well and make broad, durable progress.",
+} as const;
+
+/**
+ * The standing goal with its world facts, exactly as it has always read. The
+ * directive sentences sit between the facts — the goal fourth, the breadth
+ * sentence last — because that is the order every run without an objective
+ * has hashed under, and the join is what keeps those runs byte-identical by
+ * construction.
+ */
+export const GOAL_SECTION = `${WORLD_FACTS.agent} ${WORLD_FACTS.live} ${WORLD_FACTS.whole} ${GOAL_DIRECTIVE.progress} ${WORLD_FACTS.truth} ${GOAL_DIRECTIVE.breadth}
+
+${RUNTIME_LEAD}`;
+
+/**
+ * The same opening with the directive sentences left out, for a run whose
+ * objective replaces them: the world facts in their order, then the runtime
+ * lead. The objective block follows it (`buildSystemPrompt`).
+ */
+export const WORLD_SECTION = `${WORLD_FACTS.agent} ${WORLD_FACTS.live} ${WORLD_FACTS.whole} ${WORLD_FACTS.truth}
+
+${RUNTIME_LEAD}`;
 
 /**
  * Everything from the runtime surface down to the last line of "## Each turn",
@@ -184,24 +232,23 @@ export const PI_SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${bodyFor("pi")}`;
 /**
  * The delimited block an operator objective is rendered into. One shape, one
  * place, verbatim text: the prompt a model sees for a given objective does not
- * depend on which model or which driver it is.
+ * depend on which model or which driver it is. The objective replaces the
+ * broad goal for its run rather than adding to it (operator, 2026-10-21): a
+ * Deadmines party told it was "in addition to the standing goal" left the
+ * dungeon after some wipes to level in Westfall, which the goal endorsed.
  */
 export function objectiveSection(objective: string): string {
-  return (
-    `--- Operator objective for this run ---\n` +
-    `${objective}\n` +
-    `This objective is set by the operator for this run only. It is in addition to the standing goal above, not a replacement for it.\n` +
-    `--- end operator objective ---`
-  );
+  return `--- Operator objective for this run ---\n${objective}\n--- end operator objective ---`;
 }
 
 /**
  * What the episode tier tells the model about itself (docs/EPISODES.md).
- * Facts a player has — the clock and the rule — not an objective: the standing
- * goal and the scoring are unchanged. Identical for every model; it varies only
- * with `episode`, which the comparability tuple already carries. The steered
- * tiers (`freeplay`, `probing`) add nothing — their objective block speaks for
- * them.
+ * Facts a player has — the clock and the rule — not an objective: the goal and
+ * the scoring are unchanged. Identical for every model; it varies only with
+ * `episode`, which the comparability tuple already carries. The steered tiers
+ * (`freeplay`, `probing`) have no fixed clock: a probe states its own budget
+ * when it carries an objective (`probingClockSentence`), and freeplay states
+ * none.
  *
  * The e90 bar is followed by the fact that it is not the end of the episode.
  * Stated without it, all three Sonnet 5.5 e90 runs read the bar as a finish
@@ -222,34 +269,73 @@ export function episodeSection(episode: EpisodeId | undefined): string | undefin
       return "This episode lasts six hours.";
     case "probing":
     case "freeplay":
-      // Both are steered tiers whose clock is set per run: the objective block
-      // is what speaks for them, and a sentence naming a default the run may
-      // not be under would be a false fact rather than a missing one.
+      // Both are steered tiers whose clock is set per run, so the tier itself
+      // names none: a sentence naming a default the run may not be under would
+      // be a false fact rather than a missing one.
       return undefined;
   }
 }
 
+const HOUR_WORDS = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
+
+/**
+ * A budget in the words the eval clock sentences use: whole hours spelled out
+ * ("six hours", "four hours", "one hour") up to twelve, anything else in
+ * minutes as a numeral ("90 minutes").
+ */
+export function clockWords(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes > 0 && minutes % 60 === 0) {
+    const hours = minutes / 60;
+    const n = hours <= HOUR_WORDS.length ? HOUR_WORDS[hours - 1]! : String(hours);
+    return hours === 1 ? `${n} hour` : `${n} hours`;
+  }
+  return minutes === 1 ? "1 minute" : `${minutes} minutes`;
+}
+
+/**
+ * The clock a probe states, from its own budget (`watchdogs.episodeMs`): the
+ * Deadmines party, told nothing, did not know its run lasted four hours. Said
+ * only on a probe that carries an objective, so every probe without one — the
+ * race and class sweeps, the compaction-window campaigns — keeps the prompt it
+ * has always hashed under; a budget with no episode limit states no clock.
+ */
+export function probingClockSentence(episodeMs: number | null | undefined): string | undefined {
+  if (episodeMs === null || episodeMs === undefined || episodeMs <= 0) return undefined;
+  return `This run lasts ${clockWords(episodeMs)}.`;
+}
+
 /**
  * The system prompt for a run. With no objective, no episode and the default
- * harness this returns `SYSTEM_PROMPT` unchanged; the episode sentence, then
- * the delimited objective block, sit between the standing goal and the runtime
- * description. `harness` picks the context sentence and nothing else, so the
- * fixed loop's prompt and a CLI scaffold's differ by exactly the one sentence
- * that describes what each of them actually does with older conversation.
- * `wiki` is the run's reference surface (`config.wiki`, issue #61): false
- * renders the body with `search_reference` deleted, which is the only way the
- * prompt ever differs on that axis.
+ * harness this returns `SYSTEM_PROMPT` unchanged, and with no objective any
+ * episode adds only its tier sentence after the standing goal, so every run
+ * without an objective reads exactly as it always has.
+ *
+ * An objective replaces the broad goal (operator, 2026-10-21): the opening
+ * keeps its world facts and drops the directive sentences (`WORLD_SECTION`),
+ * then come the tier sentence — on a probe, the clock from `episodeMs` — and
+ * the delimited objective block, then the body. The facts still read first.
+ *
+ * `harness` picks the context sentence and nothing else, so the fixed loop's
+ * prompt and a CLI scaffold's differ by exactly the one sentence that
+ * describes what each of them actually does with older conversation. `wiki`
+ * is the run's reference surface (`config.wiki`, issue #61): false renders the
+ * body with `search_reference` deleted, which is the only way the prompt ever
+ * differs on that axis. `episodeMs` is the run's budget
+ * (`config.watchdogs.episodeMs`); only a probe with an objective reads it.
  */
 export function buildSystemPrompt(
   objective?: string | undefined,
   episode?: EpisodeId | undefined,
   harness: Harness = "wrathbench",
   wiki = true,
+  episodeMs: number | null = null,
 ): string {
-  const parts = [GOAL_SECTION];
-  const tier = episodeSection(episode);
+  const steered = objective !== undefined && objective.trim().length > 0;
+  const parts = [steered ? WORLD_SECTION : GOAL_SECTION];
+  const tier = steered && episode === "probing" ? probingClockSentence(episodeMs) : episodeSection(episode);
   if (tier !== undefined) parts.push(tier);
-  if (objective !== undefined && objective.trim().length > 0) parts.push(objectiveSection(objective.trim()));
+  if (steered) parts.push(objectiveSection(objective.trim()));
   parts.push(bodyFor(harness, wiki));
   return parts.join("\n\n");
 }

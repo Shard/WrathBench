@@ -28,7 +28,7 @@ import {
   type Comparability, harnessSeries } from "../src/comparability";
 import { loadRunConfig } from "../src/config";
 import type { EpisodeTier } from "../src/episodes";
-import { CLAUDE_CODE_SYSTEM_PROMPT, SYSTEM_PROMPT } from "../src/prompt";
+import { CLAUDE_CODE_SYSTEM_PROMPT, SYSTEM_PROMPT, buildSystemPrompt } from "../src/prompt";
 import { Trajectory, readMeta } from "../src/trajectory";
 import type { ComparabilityView, EpisodeTierView } from "../viewer/api-types";
 
@@ -174,7 +174,9 @@ describe("comparabilityOf", () => {
     );
     expect(c.objective).toBe(true);
     expect(c.promptHash).not.toBe(promptHash(SYSTEM_PROMPT));
-    expect(c.promptChars).toBeGreaterThan(SYSTEM_PROMPT.length);
+    // The objective replaces the broad goal, so the length moves either way
+    // with the objective's own; it is the length of what is sent.
+    expect(c.promptChars).toBe(buildSystemPrompt("walk to Ironforge").length);
   });
 
   test("the claude-code driver stamps the claude-code harness", () => {

@@ -768,7 +768,7 @@ export async function runPiEpisode(o: PiEpisodeOptions): Promise<LoopOutcome> {
   const apiBase = config.apiBase ?? "";
   const provider = piProviderOf(config.apiKeyEnv);
   const bridgePath = new URL("./mcp-bridge.ts", import.meta.url).pathname;
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("pi"), config.wiki);
+  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("pi"), config.wiki, config.watchdogs.episodeMs);
   const cwd = mkdtempSync(join(tmpdir(), "wrathbench-pi-"));
   const thinking = piThinkingLevel(config.effort);
   let pi: PiProcess | null = null;
