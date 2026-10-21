@@ -49,7 +49,7 @@ import type { EventSummary, MoveIntentNote } from "./sandbox/ipc";
 import type { HarnessNotice } from "./sandbox/host";
 
 export const CONTEXT_POLICY = {
-  /** Last N non-ambient events included in every turn's context (see EVENT_WINDOW_EXCLUDE). */
+  /** Last N non-ambient events included in every turn's context (see EVENT_WINDOW_EXCLUDE; bystanders' spell lines are left out too, `spellLogShown`). */
   EVENT_WINDOW: 64,
   /** Max chars of one event's data rendering. */
   EVENT_DATA_CHARS: 220,
@@ -1265,6 +1265,7 @@ export interface ContextInputs {
  * names what the client would have shown. Nothing else is added — no advice.
  */
 function eventLineNote(e: EventSummary): string {
+  if (e.note !== undefined) return ` — ${e.note}`;
   if (e.opcode !== "SMSG_INVENTORY_CHANGE_FAILURE") return "";
   const result = (e.data as { result?: unknown } | undefined)?.result;
   if (typeof result !== "number") return "";
@@ -1284,13 +1285,124 @@ export function formatEventLine(e: EventSummary): string {
  * The events a turn's context renders and how many ambient events the span
  * they cover held: ambient opcodes excluded, then the last EVENT_WINDOW of what
  * remains. Pure; the loop logs exactly this as the turn's `events_served`.
+ * A spell combat-log line marked `bystander` (`spellLogShown`) is left out
+ * too, and not counted as ambient: it is not movement and the cache does not
+ * fold it.
  */
 export function eventWindow(events: readonly EventSummary[], folded = 0): { window: EventSummary[]; folded: number } {
-  const eligible = events.filter((e) => !CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(e.opcode));
+  const ambient = events.filter((e) => CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(e.opcode)).length;
+  const eligible = events.filter((e) => !CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(e.opcode) && e.bystander !== true);
   return {
     window: eligible.slice(-CONTEXT_POLICY.EVENT_WINDOW),
-    folded: folded + (events.length - eligible.length),
+    folded: folded + ambient,
   };
+}
+
+// ------------------------------------------------------ spell combat log
+
+/** The direct-spell combat-log opcodes (module/PROTOCOL.md, "Spell combat log"). */
+export const SPELL_LOG_OPCODES: ReadonlySet<string> = new Set([
+  "SMSG_SPELLNONMELEEDAMAGELOG",
+  "SMSG_SPELLHEALLOG",
+  "SMSG_SPELLENERGIZELOG",
+]);
+
+interface SpellLogData {
+  targetGuid?: unknown;
+  casterGuid?: unknown;
+  spellId?: unknown;
+  name?: unknown;
+  damage?: unknown;
+  amount?: unknown;
+  overkill?: unknown;
+  overheal?: unknown;
+  schoolMask?: unknown;
+  absorb?: unknown;
+  resist?: unknown;
+  blocked?: unknown;
+  powerType?: unknown;
+  crit?: unknown;
+}
+
+/**
+ * Whether a spell combat-log line belongs in the event window. The core sends
+ * these to every client in range, so in a party fight five members' spells
+ * and heals, and every caster mob's, would otherwise turn the 64-event window
+ * over in seconds. Kept: any line we cast or are the target of, and a damage
+ * line whose target is a party member (a member being hit is what a healer or
+ * a tank reacts to). Left out: other units' heals and power gains, and damage
+ * that lands on anyone outside the party. Every other opcode is shown.
+ */
+export function spellLogShown(
+  opcode: string,
+  data: unknown,
+  selfGuid: string | undefined,
+  partyGuids: ReadonlySet<string>,
+): boolean {
+  if (!SPELL_LOG_OPCODES.has(opcode)) return true;
+  const d = (data ?? {}) as SpellLogData;
+  if (selfGuid !== undefined && (d.casterGuid === selfGuid || d.targetGuid === selfGuid)) return true;
+  return opcode === "SMSG_SPELLNONMELEEDAMAGELOG" && typeof d.targetGuid === "string" && partyGuids.has(d.targetGuid);
+}
+
+/** `SpellSchoolMask` bits, in the client's order. */
+const SCHOOL_NAMES = ["physical", "holy", "fire", "nature", "frost", "shadow", "arcane"] as const;
+
+function schoolName(mask: unknown): string | undefined {
+  if (typeof mask !== "number" || mask <= 0) return undefined;
+  const names = SCHOOL_NAMES.filter((_, i) => (mask & (1 << i)) !== 0);
+  return names.length > 0 ? names.join("+") : `school ${mask}`;
+}
+
+const logNumber = (v: unknown): number => (typeof v === "number" ? v : 0);
+
+/**
+ * The sentence a client's combat log prints for one direct spell hit, heal or
+ * power gain, from the event and the names in view as it arrived: "Defias
+ * Evoker's Fireball hits you for 54 (fire)". `nameOf` answers a unit's name
+ * when one has been observed. Undefined for every other opcode. Wording only:
+ * every number is the wire's, and the raw payload stays on the line.
+ */
+export function spellLogNote(
+  opcode: string,
+  data: unknown,
+  selfGuid: string | undefined,
+  nameOf: (guid: string) => string | undefined,
+): string | undefined {
+  if (!SPELL_LOG_OPCODES.has(opcode)) return undefined;
+  const d = (data ?? {}) as SpellLogData;
+  const isSelf = (g: unknown): boolean => selfGuid !== undefined && g === selfGuid;
+  const named = (g: unknown): string | undefined => (typeof g === "string" ? nameOf(g) : undefined);
+  const spell = typeof d.name === "string" && d.name !== "" ? d.name : `spell ${String(d.spellId)}`;
+  const caster = isSelf(d.casterGuid) ? "Your" : `${named(d.casterGuid) ?? "An unnamed unit"}'s`;
+  const target = isSelf(d.targetGuid) ? "you" : (named(d.targetGuid) ?? "an unnamed unit");
+  const extras = (parts: [number, string][]): string[] =>
+    parts.filter(([n]) => n > 0).map(([n, label]) => `${n} ${label}`);
+  const paren = (tail: string[]): string => (tail.length > 0 ? ` (${tail.join(", ")})` : "");
+  if (opcode === "SMSG_SPELLNONMELEEDAMAGELOG") {
+    const school = schoolName(d.schoolMask);
+    const tail = [
+      ...(school === undefined ? [] : [school]),
+      ...extras([
+        [logNumber(d.absorb), "absorbed"],
+        [logNumber(d.resist), "resisted"],
+        [logNumber(d.blocked), "blocked"],
+        [logNumber(d.overkill), "overkill"],
+      ]),
+    ];
+    const verb = d.crit === true ? "crits" : "hits";
+    return `${caster} ${spell} ${verb} ${target} for ${logNumber(d.damage)}${paren(tail)}`;
+  }
+  if (opcode === "SMSG_SPELLHEALLOG") {
+    const tail = extras([
+      [logNumber(d.overheal), "overheal"],
+      [logNumber(d.absorb), "absorbed"],
+    ]);
+    const verb = d.crit === true ? "critically heals" : "heals";
+    return `${caster} ${spell} ${verb} ${target} for ${logNumber(d.amount)}${paren(tail)}`;
+  }
+  const power = typeof d.powerType === "number" ? (POWER_NAMES[d.powerType] ?? `power ${d.powerType}`) : "power";
+  return `${caster} ${spell} gives ${target} ${logNumber(d.amount)} ${power}`;
 }
 
 /** Pure. Same inputs, byte-identical output — tests enforce it. */

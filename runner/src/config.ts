@@ -415,8 +415,9 @@ export const runConfigSchema = z.object({
   /**
    * An operator-set objective for this one run — a run dimension, not a
    * per-model prompt. The same text is rendered into the same
-   * place in the same fixed prompt for every model and every driver; it never
-   * replaces the standing goal, it is added to it. Because a run steered at a
+   * place in the same fixed prompt for every model and every driver, and it
+   * replaces the broad goal's directive sentences for this run rather than
+   * adding to them (operator, 2026-10-21). Because a run steered at a
    * named task is not comparable with a free-play run, a run that carries one
    * is stamped unscored (`OBJECTIVE_STAMP`) exactly the way a stub run is.
    */

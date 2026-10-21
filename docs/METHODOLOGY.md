@@ -225,7 +225,9 @@ unpinned runs do not share a chart.
 
 **Steering is what makes a run unscored.** An objective is operator-authored
 world knowledge rendered into the prompt at one fixed place, so any run with
-one is stamped unscored and cannot drift into a chart. `wikiCoords` defaults
+one is stamped unscored and cannot drift into a chart. An objective replaces
+the broad goal for that run rather than adding to it, and since such a run is
+already unscored, no eval prompt changes (operator, 2026-10-21). `wikiCoords` defaults
 to false: exact yards from the wiki are an answer key for the "find things"
 rungs, and without them a model must read "in the inn at Goldshire", walk
 there and look. Harder is the point; if the names-only ladder proves

@@ -123,7 +123,7 @@ export const campaignDefinitionSchema = z
     note: z.string().min(1).optional(),
     cells: z.array(cellSchema).min(1),
     arms: z.array(armSchema).min(1),
-    /** Rendered verbatim into the prompt's delimited operator-objective block; null for the standing goal alone. */
+    /** Rendered verbatim into the prompt's delimited operator-objective block, in place of the broad goal; null for the standing goal alone. */
     objective: z.string().min(1).nullable(),
     /** End the run on the first server-observed level at or above this (`level-target`); null for none. */
     stopAtLevel: z.number().int().min(2).max(80).nullable(),

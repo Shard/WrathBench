@@ -110,6 +110,20 @@ describe("a background routine's harness line names the snippet that started it"
 });
 
 describe("the HUD's nearby line: rank and corpses", () => {
+  test("the sandbox names a corpse by its owner's name query answer", async () => {
+    const host = makeHost(startModuleStub());
+    await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
+    await host.evalSnippet(
+      `events.ingest(JSON.stringify({ seq: 1, opcode: "SMSG_UPDATE_OBJECT", opcodeId: 0x0a9, ts: 1000, data: { blocks: 1, objects: [` +
+        `{ update: "create", guid: "17366161638117343239", objectType: "corpse", pos: { x: 1, y: 2, z: 3, o: 0 }, fields: { scale: 1, corpseOwnerGuid: "965" } },` +
+        `{ update: "create", guid: "17366161638117343240", objectType: "corpse", pos: { x: 1, y: 3, z: 3, o: 0 }, fields: { scale: 1 } }] } }));` +
+        `events.ingest(JSON.stringify({ seq: 2, opcode: "SMSG_NAME_QUERY_RESPONSE", opcodeId: 0x051, ts: 1001, data: { guid: "965", found: true, name: "Palafriend" } }))`,
+    );
+    const snap = await host.stateSnapshot();
+    const text = formatStateSummary(snap, { sessionLive: true });
+    expect(text).toMatch(/nearby: .*Palafriend's corpse \(\?y\), a corpse \(\?y\)/);
+  });
+
   test("an elite says so, a normal creature says nothing more, a corpse is named by its owner or as a corpse", () => {
     const text = formatStateSummary(
       {

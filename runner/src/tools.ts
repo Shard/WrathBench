@@ -859,7 +859,10 @@ async function runTool(ctx: ToolContext, name: string, args: unknown, origin: Ca
         const scanned = (await ctx.sandbox.recentEvents(scan)) as EventSummary[];
         const ambient = (e: EventSummary): boolean =>
           CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(e.opcode);
-        const visible = scanned.filter((e) => !ambient(e)).slice(-limit);
+        // A bystander's spell combat-log line is left out as the turn's
+        // window leaves it out (context.ts, `spellLogShown`); it is not
+        // movement, so it is not counted below.
+        const visible = scanned.filter((e) => !ambient(e) && e.bystander !== true).slice(-limit);
         // The span the reply covers. When `limit` truncated the signal events,
         // it starts at the oldest visible one — reporting ambient events from
         // before it would credit the note with a span the reply never showed.

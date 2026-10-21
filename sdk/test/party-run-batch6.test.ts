@@ -47,7 +47,7 @@ async function untilAction(stub: StubServer, action: string, count = 1): Promise
 }
 
 /** A create block a few yards from the login position. */
-const create = (seq: number, guid: string, objectType: string, fields: Record<string, number>, dx = 0) =>
+const create = (seq: number, guid: string, objectType: string, fields: Record<string, number | string>, dx = 0) =>
   frame(seq, "SMSG_UPDATE_OBJECT", {
     blocks: 1,
     objects: [{ update: "create", guid, objectType, pos: { x: -1234.5 + dx, y: 987.25, z: 42.125, o: 0 }, fields }],
@@ -76,7 +76,7 @@ describe("state.units(): corpses, ground effects, the dead on sight and the elit
     // maxHealth and no health.
     create(32, DEAD, "unit", { entry: DEAD_ENTRY, maxHealth: 417, level: 17 }, 3),
     creatureQuery(33, DEAD_ENTRY, "Ridge Digger", 0),
-    create(34, CORPSE, "corpse", { scale: 1 }, 4),
+    create(34, CORPSE, "corpse", { scale: 1, corpseOwnerGuid: "965" }, 4),
     create(35, EFFECT, "dynamicObject", { entry: 90001, scale: 1 }, 5),
   ];
   const cache = (extra: readonly unknown[] = []) => StateCache.replay(toEvents([...stream, ...extra]), { seed: SEED });
@@ -109,7 +109,7 @@ describe("state.units(): corpses, ground effects, the dead on sight and the elit
   });
 
   test("a corpse says it is one and is dead; a ground effect is neither alive nor dead", () => {
-    expect(row(CORPSE)).toMatchObject({ type: "corpse", dead: true, name: undefined });
+    expect(row(CORPSE)).toMatchObject({ type: "corpse", dead: true, name: undefined, ownerGuid: "965" });
     expect(row(EFFECT)).toMatchObject({ type: "dynamicObject", entry: 90001, dead: undefined, name: undefined });
   });
 

@@ -51,6 +51,9 @@ globalThis.selfFields = (fields) =>
   feed("SMSG_UPDATE_OBJECT", 0xa9, { blocks: 1, objects: [{ update: "values", guid: "7", fields }] });
 globalThis.attackStart = (victimGuid) =>
   feed("SMSG_ATTACKSTART", 0x143, { attackerGuid: "99", victimGuid });
+globalThis.spellHit = (casterGuid, targetGuid) =>
+  feed("SMSG_SPELLNONMELEEDAMAGELOG", 0x250, { targetGuid, casterGuid, spellId: 9001, name: "Test Bolt", damage: 54,
+    overkill: 0, schoolMask: 4, absorb: 0, resist: 0, blocked: 0, hitInfo: 0, crit: false });
 globalThis.chat = (type, senderGuid, message) =>
   feed("SMSG_MESSAGECHAT", 0x96, { type, language: 0, senderGuid, message, chatTag: 0 });
 selfFields({ health: 40, maxHealth: 40 });
@@ -88,6 +91,43 @@ describe("sandbox sleep(): the timer that says why it woke", () => {
     const res = await host.evalSnippet(`
       setTimeout(() => attackStart("12345"), 40);
       return await sleep(300);
+    `);
+    expect(res.value).toBe(JSON.stringify("elapsed"));
+  });
+
+  test("a unit's spell hitting us wakes it early with 'attacked': a caster never starts a melee attack", async () => {
+    const host = makeHost();
+    await host.evalSnippet(PRELUDE);
+    const res = await host.evalSnippet(`
+      const t = Date.now();
+      setTimeout(() => spellHit("99", "7"), 60);
+      const why = await sleep(4_000);
+      return { why, early: Date.now() - t < 2_000 };
+    `);
+    expect(res.value).toContain('"attacked"');
+    expect(res.value).toContain("early: true");
+  });
+
+  test.each([
+    ["a spell hitting someone else", "99", "12345"],
+    ["our own spell hitting ourselves", "7", "7"],
+    ["our own spell hitting a mob", "7", "99"],
+  ])("%s does not wake it", async (_, caster, target) => {
+    const host = makeHost();
+    await host.evalSnippet(PRELUDE);
+    const res = await host.evalSnippet(`
+      setTimeout(() => spellHit("${caster}", "${target}"), 40);
+      return await sleep(250);
+    `);
+    expect(res.value).toBe(JSON.stringify("elapsed"));
+  });
+
+  test("{ wake: false } sleeps through a spell hit too", async () => {
+    const host = makeHost();
+    await host.evalSnippet(PRELUDE);
+    const res = await host.evalSnippet(`
+      setTimeout(() => spellHit("99", "7"), 40);
+      return await sleep(250, { wake: false });
     `);
     expect(res.value).toBe(JSON.stringify("elapsed"));
   });

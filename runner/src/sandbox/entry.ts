@@ -13,7 +13,8 @@
  *               after something closed it
  *   sleep(ms, options?)  Promise timer that resolves with why it woke:
  *               "elapsed", or early with "attacked" (a unit started attacking
- *               us), "died" (our health reached zero, transition only) or
+ *               us or hit us with a spell), "died" (our health reached zero,
+ *               transition only) or
  *               "chat" (a party, raid or whisper line from another player).
  *               `{ wake: false }` sleeps through attacks and deaths; chat
  *               still wakes it. Rejects with the abort
@@ -79,7 +80,15 @@ import { WrathClient, type StreamEvent } from "@wrathbench/sdk";
 import { keepsAnswer, reparseFrame } from "./client-cache";
 import { compileSnippet } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
-import { CONTEXT_POLICY, foldUiOpenWindows, isGroupOrWhisperChat, PLAYER_FLAGS_GHOST } from "../context";
+import {
+  CONTEXT_POLICY,
+  foldUiOpenWindows,
+  isGroupOrWhisperChat,
+  PLAYER_FLAGS_GHOST,
+  SPELL_LOG_OPCODES,
+  spellLogNote,
+  spellLogShown,
+} from "../context";
 import { NearbyRecorder } from "./nearby-recorder";
 import { PartyWatcher } from "./party-watch";
 import { TraceRecorder } from "./trace-recorder";
@@ -892,7 +901,12 @@ function withSleepAbandon(reason: unknown, note: string): Error {
  * behind the character, and the trajectories are full of 28-second naps that
  * ended in a corpse. So the timer additionally resolves early when the server
  * says a unit started attacking *us* (`SMSG_ATTACKSTART` with our guid as the
- * victim), when our own health is observed reaching zero, or when another
+ * victim) or a unit's spell hit us (`SMSG_SPELLNONMELEEDAMAGELOG` with our
+ * guid as the target and another unit as the caster — a caster never starts
+ * a melee attack, and one Deadmines rogue slept from 627 to 460 health under
+ * an Evoker's spells; the SDK observes no hostility, so "another unit" is the
+ * test, and only a hostile unit's spell can damage us), when our own health
+ * is observed reaching zero, or when another
  * player says something to our group or to us (a party, raid or raid-warning
  * line, or a whisper received — the party runs' sleeps were mostly polls of
  * `state.chat`, and one slept through a resurrection offer), and the resolved
@@ -907,8 +921,8 @@ function withSleepAbandon(reason: unknown, note: string): Error {
  *     already dead (waiting out the corpse reclaim delay is the single most
  *     common long sleep in the runs) is not woken by the death it is already
  *     handling.
- *   - `{ wake: false }` sleeps through attacks and deaths, for a caller that
- *     wants to. Chat still wakes it: a timer sleep (a reclaim delay,
+ *   - `{ wake: false }` sleeps through attacks (spell hits included) and
+ *     deaths, for a caller that wants to. Chat still wakes it: a timer sleep (a reclaim delay,
  *     resurrection sickness) is exactly when a party member's line or offer
  *     goes unheard.
  *
@@ -950,6 +964,7 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
     // so only a *later* one wakes it.
     let deadAtLastCheck = selfDead();
     let offAttack: (() => void) | undefined;
+    let offSpellHit: (() => void) | undefined;
     let offChat: (() => void) | undefined;
     let offAny: (() => void) | undefined;
 
@@ -961,6 +976,7 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
       offAttack?.();
+      offSpellHit?.();
       offChat?.();
       offAny?.();
     }
@@ -985,6 +1001,13 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
       const d = e.data as { victimGuid?: unknown };
       const me = client.state.self.guid;
       if (me !== undefined && typeof d?.victimGuid === "string" && d.victimGuid === me) settle("attacked");
+    });
+    offSpellHit = client.events.on("SMSG_SPELLNONMELEEDAMAGELOG", (e) => {
+      const d = e.data as { targetGuid?: unknown; casterGuid?: unknown };
+      const me = client.state.self.guid;
+      if (me !== undefined && d?.targetGuid === me && typeof d?.casterGuid === "string" && d.casterGuid !== me) {
+        settle("attacked");
+      }
     });
     offAny = client.events.onAny(() => {
       const dead = selfDead();
@@ -1508,7 +1531,38 @@ function seedClientCache(frames: readonly unknown[]): void {
 
 type StreamEventOf = ReturnType<typeof client.events.recent>[number];
 
+/**
+ * What the child adds to a spell combat-log line as it arrives (context.ts,
+ * `spellLogNote` and `spellLogShown`): the combat-log sentence, named from
+ * what is in view at that moment — a mob killed a second later has left
+ * `nearby` by the time a turn renders the window — and whether the line is a
+ * bystander's, which the event window leaves out. Keyed by the event object
+ * itself, which the SDK's buffer and every listener share.
+ */
+const spellLogMarks = new WeakMap<StreamEventOf, { note: string | undefined; bystander: boolean }>();
+
+/** A unit's name as a client would show it: in view, else a name-query answer, else the party list's. */
+function observedName(guid: string): string | undefined {
+  const state = client.state;
+  return (
+    state.nearby.get(guid)?.name?.value ??
+    state.nameOf(guid) ??
+    state.group()?.members.find((m) => m.guid === guid)?.name
+  );
+}
+
+client.events.onAny((event) => {
+  if (!SPELL_LOG_OPCODES.has(event.opcode)) return;
+  const me = client.state.self.guid;
+  const party = new Set((client.state.group()?.members ?? []).map((m) => m.guid));
+  spellLogMarks.set(event, {
+    note: spellLogNote(event.opcode, event.data, me, observedName),
+    bystander: !spellLogShown(event.opcode, event.data, me, party),
+  });
+});
+
 function eventSummary(e: StreamEventOf): EventSummary {
+  const mark = spellLogMarks.get(e);
   return {
     seq: e.seq,
     ts: e.ts,
@@ -1516,6 +1570,8 @@ function eventSummary(e: StreamEventOf): EventSummary {
     data: toJsonSafe(e.data, 5),
     schemaError:
       "schemaError" in e && e.schemaError !== undefined ? String(e.schemaError) : undefined,
+    ...(mark?.note !== undefined ? { note: mark.note } : {}),
+    ...(mark?.bystander === true ? { bystander: true as const } : {}),
   };
 }
 
@@ -1552,6 +1608,8 @@ client.events.onAny((event) => {
     contextAmbient++;
     return;
   }
+  // A bystander's spell combat-log line: off the window, and not ambient.
+  if (spellLogMarks.get(event)?.bystander === true) return;
   contextSignals++;
   contextRing.push({ event, ambientBefore: contextAmbient });
   if (contextRing.length > CONTEXT_EVENT_CAP) contextRing.shift();

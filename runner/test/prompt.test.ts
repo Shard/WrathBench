@@ -189,7 +189,7 @@ describe("the context sentence is the harness's, and says what that harness does
 });
 
 describe("episode sentence", () => {
-  const { buildSystemPrompt, episodeSection, GOAL_SECTION, objectiveSection } = require("../src/prompt");
+  const { buildSystemPrompt, episodeSection, objectiveSection, WORLD_SECTION } = require("../src/prompt");
   test("no episode and no objective is byte-identical to SYSTEM_PROMPT", () => {
     expect(buildSystemPrompt()).toBe(SYSTEM_PROMPT);
     expect(buildSystemPrompt(undefined, "freeplay")).toBe(SYSTEM_PROMPT);
@@ -218,16 +218,16 @@ describe("episode sentence", () => {
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:9845779a63faa701", off: "sha256:0e5e63c1314c29be" },
-        cli: { on: "sha256:734a9d55acef0dfc", off: "sha256:39c1f0230f3b8add" },
+        wrathbench: { on: "sha256:625b8f0ae51d05bc", off: "sha256:02840efe067c0d55" },
+        cli: { on: "sha256:9b670156e48cf951", off: "sha256:f239372eb0dcd62f" },
       },
       e90: {
-        wrathbench: { on: "sha256:a4fe14cfbe189420", off: "sha256:6b7fb0dbed4390ec" },
-        cli: { on: "sha256:e96c61d7e4b5c90a", off: "sha256:a17645db66b52cf7" },
+        wrathbench: { on: "sha256:7a98c744c47e182d", off: "sha256:96509121ea6686ce" },
+        cli: { on: "sha256:bd0af2fb56107ced", off: "sha256:cd1ef5c6c39d1b86" },
       },
       e360: {
-        wrathbench: { on: "sha256:df92edf77aa21232", off: "sha256:6cec8db366b7206c" },
-        cli: { on: "sha256:396f274af951d7b4", off: "sha256:d22d7b14d9e4debf" },
+        wrathbench: { on: "sha256:0b3c74bae433dbf3", off: "sha256:4d3773c1a0af2b30" },
+        cli: { on: "sha256:0832b60575080147", off: "sha256:1cd9827c24063fa8" },
       },
     };
     const episodes = [
@@ -247,14 +247,92 @@ describe("episode sentence", () => {
       }
     }
   });
-  test("the sentence sits after the goal and before the objective block", () => {
+  test("the sentence sits after the world facts and before the objective block", () => {
     const p = buildSystemPrompt("walk to Ironforge", "e90");
-    const goal = p.indexOf(GOAL_SECTION);
+    const facts = p.indexOf(WORLD_SECTION);
     const tier = p.indexOf(episodeSection("e90"));
     const obj = p.indexOf(objectiveSection("walk to Ironforge"));
-    expect(goal).toBe(0);
-    expect(tier).toBeGreaterThan(goal);
+    expect(facts).toBe(0);
+    expect(tier).toBeGreaterThan(facts);
     expect(obj).toBeGreaterThan(tier);
+  });
+});
+
+describe("an objective replaces the broad goal (operator, 2026-10-21)", () => {
+  const { buildSystemPrompt, clockWords, GOAL_SECTION, probingClockSentence, WORLD_SECTION } = require("../src/prompt");
+
+  test("the standing goal is the old bytes, so every run without an objective reads as it did", () => {
+    // Verbatim, the string GOAL_SECTION was before it was split into world
+    // facts and directive sentences; the hash pins above say the same of
+    // every whole rendering.
+    expect(GOAL_SECTION).toBe(
+      "You are an agent controlling one character in World of Warcraft 3.3.5a on a private benchmark server. The world is live and does not pause for you. This is the complete, unmodified 3.3.5a world: every zone, city, road, flight path, boat and tram a player could use exists and is reachable, and nothing has been walled off for the benchmark. Your goal is to progress your character over the long run — leveling up, completing quests, acquiring better gear, accumulating wealth, and growing in capability. The server is the source of truth for what actually happened. There is no single number to maximize; play the game well and make broad, durable progress.\n\n" +
+        "You do not play directly. You write TypeScript snippets that run in a persistent sandbox holding one SDK client for your game session, and you supervise the results.",
+    );
+    for (const episode of [undefined, "freeplay", "probing", "e90", "e360"] as const) {
+      for (const objective of [undefined, "", "   "]) {
+        expect(buildSystemPrompt(objective, episode, "wrathbench", true, 14_400_000).startsWith(`${GOAL_SECTION}\n\n`)).toBe(true);
+      }
+    }
+    // A budget changes nothing without an objective, on any tier.
+    expect(buildSystemPrompt(undefined, "probing", "wrathbench", true, 14_400_000)).toBe(SYSTEM_PROMPT);
+  });
+
+  test("with an objective the directive sentences and the additive line are gone, and the world facts read first", () => {
+    for (const episode of [undefined, "freeplay", "probing", "e90", "e360"] as const) {
+      for (const harness of ["wrathbench", "claude-code", "codex", "pi"] as const) {
+        const p = buildSystemPrompt("walk to Ironforge", episode, harness, true, 14_400_000);
+        expect(p.startsWith(`${WORLD_SECTION}\n\n`)).toBe(true);
+        expect(p).not.toContain("Your goal is to progress");
+        expect(p).not.toContain("There is no single number to maximize");
+        expect(p).not.toContain("in addition to the standing goal");
+        expect(p).toContain("--- Operator objective for this run ---\nwalk to Ironforge\n--- end operator objective ---");
+      }
+    }
+    // The world facts are the goal's own sentences minus the two directives.
+    expect(
+      GOAL_SECTION.replace(
+        " Your goal is to progress your character over the long run — leveling up, completing quests, acquiring better gear, accumulating wealth, and growing in capability.",
+        "",
+      ).replace(" There is no single number to maximize; play the game well and make broad, durable progress.", ""),
+    ).toBe(WORLD_SECTION);
+  });
+
+  test("a probe with an objective states its clock from the budget; freeplay and an unlimited budget state none", () => {
+    expect(buildSystemPrompt("x", "probing", "wrathbench", true, 14_400_000)).toContain(`${WORLD_SECTION}\n\nThis run lasts four hours.\n\n--- Operator objective`);
+    expect(buildSystemPrompt("x", "probing", "wrathbench", true, null)).toContain(`${WORLD_SECTION}\n\n--- Operator objective`);
+    expect(buildSystemPrompt("x", "freeplay", "wrathbench", true, 14_400_000)).toContain(`${WORLD_SECTION}\n\n--- Operator objective`);
+    // An eval tier keeps its own fixed sentence, whatever the budget says.
+    expect(buildSystemPrompt("x", "e360", "wrathbench", true, 60_000)).toContain(`${WORLD_SECTION}\n\nThis episode lasts six hours.\n\n--- Operator objective`);
+    expect(probingClockSentence(14_400_000)).toBe("This run lasts four hours.");
+    expect(probingClockSentence(null)).toBeUndefined();
+    expect(probingClockSentence(undefined)).toBeUndefined();
+  });
+
+  test("the clock is humanised as the eval sentences are", () => {
+    expect(clockWords(90 * 60_000)).toBe("90 minutes");
+    expect(clockWords(360 * 60_000)).toBe("six hours");
+    expect(clockWords(240 * 60_000)).toBe("four hours");
+    expect(clockWords(60 * 60_000)).toBe("one hour");
+    expect(clockWords(720 * 60_000)).toBe("twelve hours");
+    expect(clockWords(1440 * 60_000)).toBe("24 hours");
+    expect(clockWords(45 * 60_000)).toBe("45 minutes");
+  });
+
+  test("objective-bearing renderings hash as pinned", () => {
+    const { promptHash } = require("../src/comparability");
+    const got = {
+      probing4h: promptHash(buildSystemPrompt("walk to Ironforge", "probing", "wrathbench", true, 14_400_000)),
+      probing4hCli: promptHash(buildSystemPrompt("walk to Ironforge", "probing", "claude-code", true, 14_400_000)),
+      e90: promptHash(buildSystemPrompt("walk to Ironforge", "e90", "wrathbench", true)),
+      freeplay: promptHash(buildSystemPrompt("walk to Ironforge", "freeplay", "wrathbench", true)),
+    };
+    expect(got).toEqual({
+      probing4h: "sha256:1c603283bf7aa34d",
+      probing4hCli: "sha256:48f6d311d57b0f9b",
+      e90: "sha256:540370082d043296",
+      freeplay: "sha256:54d22095d2f31b1d",
+    });
   });
 });
 
