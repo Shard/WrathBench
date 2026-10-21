@@ -19,7 +19,7 @@ import {
   watchdogOverrideSchema,
 } from "../src/config";
 import { runLoop } from "../src/loop";
-import { SYSTEM_PROMPT, WORLD_SECTION, buildSystemPrompt, contextSentence, objectiveSection } from "../src/prompt";
+import { SYSTEM_PROMPT, WORLD_SECTION, buildSystemPrompt, contextSentence, objectiveSection, SNIPPET_DELTA_SENTENCE } from "../src/prompt";
 import { EpisodicLog } from "../src/episodic";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
@@ -128,13 +128,16 @@ describe("prompt rendering", () => {
     const viaLoop = messages.find((m) => m.role === "system")?.content as string | undefined;
     expect(viaLoop).toBe(viaClaude!);
     expect(viaLoop).toBe(buildSystemPrompt(OBJECTIVE));
-    // The one thing that *is* per driver is the sentence about older
-    // conversation, and it carries the objective block unchanged with it: the
-    // claude-code render differs from this one by that sentence and nothing
-    // else (`prompt.ts`, `contextSentence`).
+    // The things that *are* per harness are the sentence about older
+    // conversation and the snippet-delta one, and they carry the objective
+    // block unchanged with them: the claude-code render differs from this one
+    // by those sentences and nothing else (`prompt.ts`, `contextSentence`,
+    // `snippetDeltaClause`).
     const viaClaudeHarness = buildSystemPrompt(OBJECTIVE, undefined, "claude-code");
     expect(viaClaudeHarness).toContain(objectiveSection(OBJECTIVE));
-    expect(viaClaudeHarness.replace(contextSentence("claude-code"), contextSentence("wrathbench"))).toBe(viaLoop!);
+    expect(
+      viaClaudeHarness.replace(contextSentence("claude-code"), contextSentence("wrathbench")).replace(` ${SNIPPET_DELTA_SENTENCE}`, ""),
+    ).toBe(viaLoop!);
     trajectory.close();
   });
 });

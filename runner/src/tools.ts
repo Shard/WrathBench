@@ -22,6 +22,7 @@ import {
 import { READ_LOG_CLOSED, restingOf, taxiFlightOf, type ReflectGate } from "./reflect";
 import type { ActionHintNote, EventSummary } from "./sandbox/ipc";
 import type { SandboxHost } from "./sandbox/host";
+import { renderSnippetDelta } from "./sandbox/snippet-delta";
 import { overCapText, type Scratchpad } from "./scratchpad";
 
 export interface ToolDef {
@@ -658,6 +659,13 @@ export interface ToolContext {
    * raw text on one driver only.
    */
   secrets: { scrub(text: string): string };
+  /**
+   * Whether a `run_snippet` result ends with what changed since the previous
+   * one (`sandbox/snippet-delta.ts`). Set from the driver's registry entry
+   * (`DriverEntry.snippetDelta`) by the scaffold adapters; absent reads as
+   * false, which is the fixed loop's case: it rebuilds the HUD every turn.
+   */
+  snippetDelta?: boolean | undefined;
 }
 
 export interface ToolResult {
@@ -720,8 +728,10 @@ export function renderActionHints(hints: readonly ActionHintNote[]): string | un
 
 /**
  * Which earlier snippet's code raised a hint, on its line's head so the hint
- * cap never cuts it: the snippet's opening code, which the model wrote and can
- * recognise. Nothing for the current snippet's own hints.
+ * cap never cuts it: the routine that made the call, by its function's name
+ * or the statement that launched it, else the snippet's opening code — what
+ * the model wrote and can recognise (`sandbox/call-site.ts`). Nothing for the
+ * current snippet's own hints.
  */
 function fromLabel(from: string | undefined): string {
   if (from === undefined) return "";
@@ -754,6 +764,21 @@ export async function appendPendingActionHints(ctx: ToolContext, result: ToolRes
   }
   const block = renderActionHints(hints);
   return scrubResult(ctx, block === undefined ? result : { ...result, text: `${result.text}\n${block}` });
+}
+
+/**
+ * The snippet delta block, or undefined when nothing changed. Never throws: a
+ * drain that fails (the sandbox mid-restart, a child not answering in time)
+ * reads as nothing changed, since the delta must never cost the model the
+ * result it asked for.
+ */
+async function drainSnippetDelta(ctx: ToolContext): Promise<string | undefined> {
+  try {
+    const d = await ctx.sandbox.snippetDelta();
+    return d === null ? undefined : renderSnippetDelta(d);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -842,6 +867,13 @@ async function runTool(ctx: ToolContext, name: string, args: unknown, origin: Ca
         // while swallowing 41 hints, so this is the main case, not the edge.
         const hints = renderActionHints(res.actionHints ?? []);
         if (hints !== undefined) lines.push(hints);
+        // After the hint block and carrying no action outcome, so nothing a
+        // background routine did is said twice; inside the case, so the
+        // result is still the one `EVALUATED` marks.
+        if (ctx.snippetDelta === true) {
+          const delta = await drainSnippetDelta(ctx);
+          if (delta !== undefined) lines.push(delta);
+        }
         const result = { text: lines.join("\n"), isError: !res.ok };
         EVALUATED.add(result);
         return result;

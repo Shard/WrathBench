@@ -160,11 +160,12 @@ describe("the context sentence is the harness's, and says what that harness does
     expect(s).toContain("scratchpad");
   });
 
-  test("the two prompts differ by exactly that sentence and nothing else", () => {
+  test("the two prompts differ by exactly that sentence and the snippet-delta one, and nothing else", () => {
+    const { SNIPPET_DELTA_SENTENCE } = require("../src/prompt");
     expect(CLAUDE_CODE_SYSTEM_PROMPT).not.toBe(SYSTEM_PROMPT);
-    expect(CLAUDE_CODE_SYSTEM_PROMPT.replace(contextSentence("claude-code"), contextSentence("wrathbench"))).toBe(
-      SYSTEM_PROMPT,
-    );
+    expect(
+      CLAUDE_CODE_SYSTEM_PROMPT.replace(contextSentence("claude-code"), contextSentence("wrathbench")).replace(` ${SNIPPET_DELTA_SENTENCE}`, ""),
+    ).toBe(SYSTEM_PROMPT);
     // Everything else the prompt promises is still there on both.
     for (const p of [SYSTEM_PROMPT, CLAUDE_CODE_SYSTEM_PROMPT]) {
       expect(p).toContain("This is the complete, unmodified 3.3.5a world");
@@ -179,12 +180,14 @@ describe("the context sentence is the harness's, and says what that harness does
     expect(buildSystemPrompt()).toBe(SYSTEM_PROMPT);
     expect(buildSystemPrompt(undefined, undefined, "wrathbench")).toBe(SYSTEM_PROMPT);
     expect(buildSystemPrompt(undefined, undefined, "claude-code")).toBe(CLAUDE_CODE_SYSTEM_PROMPT);
-    // The objective block is the same text on both; only the context sentence moves.
+    // The objective block is the same text on both; only the context and
+    // snippet-delta sentences move.
+    const { SNIPPET_DELTA_SENTENCE } = require("../src/prompt");
     const a = buildSystemPrompt("walk to Ironforge", "e90", "wrathbench");
     const b = buildSystemPrompt("walk to Ironforge", "e90", "claude-code");
     expect(a).toContain("--- Operator objective for this run ---\nwalk to Ironforge\n");
     expect(b).toContain("--- Operator objective for this run ---\nwalk to Ironforge\n");
-    expect(b.replace(contextSentence("claude-code"), contextSentence("wrathbench"))).toBe(a);
+    expect(b.replace(contextSentence("claude-code"), contextSentence("wrathbench")).replace(` ${SNIPPET_DELTA_SENTENCE}`, "")).toBe(a);
   });
 });
 
@@ -211,23 +214,29 @@ describe("episode sentence", () => {
 
   test("every rendering hashes as pinned, so a prompt edit has to move its pins on purpose", () => {
     // Pinned by value, not by rebuilding from the same parts, so a change to
-    // any rendering fails here. The last edit to move them is the sixth
-    // party-run batch (waitForChat's buffered lines, the units() type list,
-    // the death line's graveyard and dungeon facts), in the shared body, so it
-    // moved all twelve.
+    // any rendering fails here. The last edit to move them is the sleep
+    // sentence going back to "pass { wake: false } for a plain timer" (the
+    // wake revert after Deadmines a8), in the shared body, so it moved all
+    // of them. The snippet-delta sentence (claude-code only, operator
+    // 2026-10-21) then split claude-code off the other CLI renders, moving
+    // its six and no other. The operator's wording edits to the "attacked"
+    // clause and the snippet-delta sentence (2026-10-21) moved all of them.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:625b8f0ae51d05bc", off: "sha256:02840efe067c0d55" },
-        cli: { on: "sha256:9b670156e48cf951", off: "sha256:f239372eb0dcd62f" },
+        wrathbench: { on: "sha256:07b69f53be12b40e", off: "sha256:82892888709f7ceb" },
+        "claude-code": { on: "sha256:bb1bfebe5f277b30", off: "sha256:ced77e7afcc01ccf" },
+        cli: { on: "sha256:8c5fea5bb98d45e5", off: "sha256:e939c4a23d796cb4" },
       },
       e90: {
-        wrathbench: { on: "sha256:7a98c744c47e182d", off: "sha256:96509121ea6686ce" },
-        cli: { on: "sha256:bd0af2fb56107ced", off: "sha256:cd1ef5c6c39d1b86" },
+        wrathbench: { on: "sha256:4fc067b08bf96ca7", off: "sha256:1a6b1e40bcea0979" },
+        "claude-code": { on: "sha256:a153586d980a0d83", off: "sha256:7845219dc528e767" },
+        cli: { on: "sha256:ec67b3aa70f4d8ba", off: "sha256:f8c26d354acceb40" },
       },
       e360: {
-        wrathbench: { on: "sha256:0b3c74bae433dbf3", off: "sha256:4d3773c1a0af2b30" },
-        cli: { on: "sha256:0832b60575080147", off: "sha256:1cd9827c24063fa8" },
+        wrathbench: { on: "sha256:3e52836092848355", off: "sha256:e7c2ea78c876c121" },
+        "claude-code": { on: "sha256:6d2949f6ec03f3df", off: "sha256:a9e6f2173a1f9d18" },
+        cli: { on: "sha256:24dc1c849de19739", off: "sha256:92245cd73a0b7f1b" },
       },
     };
     const episodes = [
@@ -238,10 +247,10 @@ describe("episode sentence", () => {
       ["e360", "e360"],
     ] as const;
     for (const [episode, row] of episodes) {
-      for (const harness of ["wrathbench", "claude-code", "codex"] as const) {
+      for (const harness of ["wrathbench", "claude-code", "codex", "pi"] as const) {
         for (const wiki of [true, false]) {
           const got = promptHash(buildSystemPrompt(undefined, episode, harness, wiki));
-          const want = pinned[row]![harness === "wrathbench" ? "wrathbench" : "cli"]![wiki ? "on" : "off"];
+          const want = pinned[row]![harness === "wrathbench" || harness === "claude-code" ? harness : "cli"]![wiki ? "on" : "off"];
           expect(`${episode}/${harness}/${wiki}: ${got}`).toBe(`${episode}/${harness}/${wiki}: ${want}`);
         }
       }
@@ -328,10 +337,10 @@ describe("an objective replaces the broad goal (operator, 2026-10-21)", () => {
       freeplay: promptHash(buildSystemPrompt("walk to Ironforge", "freeplay", "wrathbench", true)),
     };
     expect(got).toEqual({
-      probing4h: "sha256:1c603283bf7aa34d",
-      probing4hCli: "sha256:48f6d311d57b0f9b",
-      e90: "sha256:540370082d043296",
-      freeplay: "sha256:54d22095d2f31b1d",
+      probing4h: "sha256:cbc44dd816f3c106",
+      probing4hCli: "sha256:507734da98f1f3e3",
+      e90: "sha256:f7aff20fe8ec35e5",
+      freeplay: "sha256:34835f7a137a4fc4",
     });
   });
 });

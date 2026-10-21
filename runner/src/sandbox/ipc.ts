@@ -22,9 +22,10 @@ export interface ActionHintNote {
   ts: number;
   /**
    * Raised by code from an earlier snippet than the one this result is for (a
-   * routine it launched, or a late verdict on its own call): that snippet's
-   * opening code, whitespace folded and cut short; `""` when it is no longer
-   * known. Absent for the current snippet's own hints and for world events.
+   * routine it launched, or a late verdict on its own call): the routine
+   * that made the call (`call-site.ts`), else that snippet's opening code,
+   * whitespace folded and cut short; `""` when neither is known any more.
+   * Absent for the current snippet's own hints and for world events.
    */
   from?: string;
 }
@@ -198,7 +199,9 @@ export type HostToChild =
   /**
    * `action_hints` drains the SDK's hint tally for a tool result that is not a
    * snippet's (`SandboxHost.drainActionHints`); a snippet's own result and
-   * pong drain it themselves. `context_events` is the turn's event window: the
+   * pong drain it themselves. `snippet_delta` drains what changed since the
+   * last drain (`snippet-delta.ts`), once per snippet result on a driver that
+   * renders it (`SandboxHost.snippetDelta`). `context_events` is the turn's event window: the
    * last `limit` non-ambient events and how many ambient ones the span held
    * (`ContextEvents`). `trace_drain` empties the trace recorder's buffer
    * (`trace-recorder.ts`, a `TraceDrain`): record only, drained by the host's
@@ -217,6 +220,7 @@ export type HostToChild =
         | "flight_signals"
         | "party_signals"
         | "action_hints"
+        | "snippet_delta"
         | "trace_drain"
         | "nearby_drain";
       params: { limit?: number };

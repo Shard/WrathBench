@@ -78,7 +78,7 @@ describe("a background routine's harness line names the snippet that started it"
     const later = await host.evalSnippet(`clearInterval(globalThis.loop7); try { await sdk.castSpell(643) } catch {} ; 1`);
     const hints = later.actionHints ?? [];
     const routine = hints.find((h) => h.from !== undefined)!;
-    expect(routine).toMatchObject({ action: "castSpell", status: "not_known", from: "globalThis.loop7 = setInterval(() => { sdk.cast…" });
+    expect(routine).toMatchObject({ action: "castSpell", status: "not_known", from: "globalThis.loop7 = setInterval(() => {…" });
     expect(routine.count).toBeGreaterThanOrEqual(2);
     const own = hints.find((h) => h.from === undefined)!;
     expect(own).toMatchObject({ action: "castSpell", status: "not_known", count: 1 });
@@ -88,7 +88,7 @@ describe("a background routine's harness line names the snippet that started it"
     await host.evalSnippet(`globalThis.once = (async () => { await sleep(100, { wake: false }); await sdk.castSpell(644).catch(() => {}); })(); "ok"`);
     await Bun.sleep(250);
     expect(await host.drainActionHints()).toMatchObject([
-      { action: "castSpell", status: "not_known", from: "globalThis.once = (async () => { await sleep(10…" },
+      { action: "castSpell", status: "not_known", from: "globalThis.once = (async () => {…" },
     ]);
   });
 

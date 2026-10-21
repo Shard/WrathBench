@@ -23,7 +23,7 @@ import {
 import { COMPACTED_NOTICE, piAutoCompactLimit, piReserveTokens, piWindowCapRefusal } from "../src/cli-compaction";
 import { comparabilityOf, promptHash } from "../src/comparability";
 import { harnessClash, loadRunConfig } from "../src/config";
-import { CODEX_SYSTEM_PROMPT, CLAUDE_CODE_SYSTEM_PROMPT, PI_SYSTEM_PROMPT, SYSTEM_PROMPT, buildSystemPrompt, contextSentence } from "../src/prompt";
+import { CODEX_SYSTEM_PROMPT, CLAUDE_CODE_SYSTEM_PROMPT, PI_SYSTEM_PROMPT, SNIPPET_DELTA_SENTENCE, SYSTEM_PROMPT, buildSystemPrompt, contextSentence } from "../src/prompt";
 import wrathbenchPromptExtension, { PI_PROMPT_MISSING } from "../src/pi-extension";
 import { piProviderOf, rosterKeyRefusal } from "../src/providers";
 import { priceFor, rosterPriceGap, runCost } from "../viewer/pricing";
@@ -427,7 +427,9 @@ describe("pi driver pieces", () => {
   test("the prompt: the CLI render, byte for byte, so no existing pin moves", () => {
     expect(contextSentence("pi")).toBe(contextSentence("codex"));
     expect(PI_SYSTEM_PROMPT).toBe(CODEX_SYSTEM_PROMPT);
-    expect(PI_SYSTEM_PROMPT).toBe(CLAUDE_CODE_SYSTEM_PROMPT);
+    // claude-code alone takes the snippet delta (operator, 2026-10-21).
+    expect(PI_SYSTEM_PROMPT).toBe(CLAUDE_CODE_SYSTEM_PROMPT.replace(` ${SNIPPET_DELTA_SENTENCE}`, ""));
+    expect(PI_SYSTEM_PROMPT).not.toContain(SNIPPET_DELTA_SENTENCE);
     expect(PI_SYSTEM_PROMPT).not.toBe(SYSTEM_PROMPT);
     expect(buildSystemPrompt(undefined, undefined, "pi")).toBe(PI_SYSTEM_PROMPT);
     expect(PI_SYSTEM_PROMPT).not.toMatch(/claude|anthropic|openai|codex|\bpi\b/i);
