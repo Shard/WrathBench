@@ -15,7 +15,9 @@
  *   kill-target     a probe campaign's kill end: a kill of the creature the
  *                   definition's `end` names, credited to this character or a
  *                   member of its group (`end-conditions.ts`). Not a failure,
- *                   for the same reason.
+ *                   for the same reason. Also the reason a party member
+ *                   ends on when another member's run met one of these
+ *                   ends first (`noteEndRequest`, `end-request.ts`).
  *   snippet-runaway maxSandboxRestarts consecutive sandbox kills without an
  *                   intervening successful snippet.
  *
@@ -32,7 +34,7 @@
  */
 
 import type { TerminationReason, WatchdogConfig } from "./config";
-import { endConditionsOf, killEndDetail, killEndMet, levelTargetOf, type EndCondition, type KillReading } from "./end-conditions";
+import { endConditionsOf, killEndDetail, killEndMet, levelTargetOf, type EndCondition, type EndReason, type KillReading } from "./end-conditions";
 
 export interface WatchdogVerdict {
   reason: TerminationReason;
@@ -58,6 +60,8 @@ export class Watchdogs {
   private targetReached: number | null = null;
   /** The kill that met a kill end, once one has been told. */
   private killReached: string | null = null;
+  /** Another party member's end, as the roster asked this run to follow it (`end-request.ts`). */
+  private endRequested: { reason: EndReason; detail: string } | null = null;
   private readonly ends: EndCondition[];
   private readonly stopAtLevel: number | null;
 
@@ -124,6 +128,16 @@ export class Watchdogs {
   }
 
   /**
+   * The party's end, reached by another member first: the roster asks the
+   * rest to end on that member's reason (`infra/party-fate.ts`), and this run
+   * ends on it at the next check, through the same wind-down its own end
+   * would take. Its own level or kill end, met first, keeps its own detail.
+   */
+  noteEndRequest(req: { reason: EndReason; detail: string }): void {
+    this.endRequested ??= { reason: req.reason, detail: req.detail };
+  }
+
+  /**
    * Arm the fresh-character precondition. `staleGuids` are the character guids
    * episode hygiene listed on the account before the run (the ones it tried to
    * delete): seeing one of them in the world is proof the run is on a used
@@ -170,6 +184,7 @@ export class Watchdogs {
       return { reason: "level-target", detail: `level ${this.targetReached} observed (target ${this.stopAtLevel})` };
     }
     if (this.killReached !== null) return { reason: "kill-target", detail: this.killReached };
+    if (this.endRequested !== null) return { ...this.endRequested };
     if (this.sandboxRestarts >= this.cfg.maxSandboxRestarts) {
       return {
         reason: "snippet-runaway",
