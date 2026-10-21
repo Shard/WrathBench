@@ -146,11 +146,12 @@ export interface PartyView {
   /** Live while any member is; paused when one is and none is live; ended otherwise. */
   status: RunStatus;
   /**
-   * The member whose own verdict ended or paused the attempt: the first to
-   * terminate on a reason that is not the party's (`party-ended`), else the
-   * first paused on one that is not `party-paused`. Null while the party plays.
+   * How the attempt ended or paused: the first reason that is not the
+   * party's own (`party-ended`, `party-paused`), and the member it was only
+   * when exactly one member's was (else null: they all stopped that way).
+   * Null while the party plays.
    */
-  endedBy: { member: string; reason: string; detail: string | null } | null;
+  endedBy: { member: string | null; reason: string; detail: string | null } | null;
   /** The bosses killed, by entry, in kill order (`BOSS_ENTRIES`). */
   bosses: { entry: number; name: string | null; ts: number }[];
   events: PartyEvent[];
@@ -266,10 +267,9 @@ export function partyViewOf(id: string, rows: readonly ResultRun[], details: Rea
   for (const m of members) {
     const d = details.get(m.runId) ?? null;
     if (d === null) continue;
-    for (const s of d.deaths?.sites ?? []) {
-      // A site's position where the build carries one, else the map the member's transfers put it on then.
-      if (typeof s.ts !== "number") continue;
-      events.push({ kind: "death", ts: s.ts, member: m.member, map: s.position?.map ?? mapAt(d.party?.instances ?? [], s.ts) });
+    // The member's death times off its party block, on the map its own transfers put it on then.
+    for (const ts of d.party?.deaths ?? []) {
+      events.push({ kind: "death", ts, member: m.member, map: mapAt(d.party?.instances ?? [], ts) });
     }
     for (const l of d.leveling?.marks ?? []) {
       if (l.from !== null && l.to > l.from) events.push({ kind: "level", ts: l.ts, member: m.member, level: l.to });
@@ -303,19 +303,24 @@ export function partyViewOf(id: string, rows: readonly ResultRun[], details: Rea
         : "ended";
   const starts = mine.map((r) => r.startedAt).filter((t): t is number => t !== null);
   const ends = mine.map((r) => r.endedAt ?? null);
-  const own = members
-    .filter((m) => m.terminationReason !== null && m.terminationReason !== "party-ended")
-    .sort((a, b) => (a.row?.endedAt ?? Infinity) - (b.row?.endedAt ?? Infinity));
+  /*
+   * A member is named only where the record says one member's own verdict
+   * ended the rest: exactly one terminated (or paused) on a reason that is
+   * not the party's. Five stopped the same way at once (an operator's stop)
+   * is the reason alone, with nobody to blame.
+   */
+  const own = members.filter((m) => m.terminationReason !== null && m.terminationReason !== "party-ended");
   const pausedOwn = members.filter((m) => m.row?.pauseReason != null && m.row.pauseReason !== "party-paused");
-  const first = own[0] ?? null;
+  const verdictOf = (list: PartyMember[], reasonOf: (m: PartyMember) => string, detailOf: (m: PartyMember) => string | null): PartyView["endedBy"] => {
+    if (list.length === 0) return null;
+    const first = [...list].sort((a, b) => (a.row?.endedAt ?? Infinity) - (b.row?.endedAt ?? Infinity))[0]!;
+    return { member: list.length === 1 ? first.member : null, reason: reasonOf(first), detail: detailOf(first) };
+  };
   const endedBy =
     status === "live"
       ? null
-      : first !== null
-        ? { member: first.member, reason: first.terminationReason!, detail: first.terminationDetail }
-        : pausedOwn[0] !== undefined
-          ? { member: pausedOwn[0].member, reason: pausedOwn[0].row!.pauseReason!, detail: null }
-          : null;
+      : (verdictOf(own, (m) => m.terminationReason!, (m) => m.terminationDetail) ??
+        verdictOf(pausedOwn, (m) => m.row!.pauseReason!, () => null));
   return {
     id,
     size: lead.party!.size,

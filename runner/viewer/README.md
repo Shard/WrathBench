@@ -340,7 +340,8 @@ id. A run from before `role` and `index` has neither.
 
 `/api/run/<id>` of a member also carries `party` (`party-marks.ts`): the member
 list off the stamp with each member's account left off, the `instance`, `kill`
-and `group` milestones off the same incremental tail as the deaths, the
+and `group` milestones off the same incremental tail as the deaths, each
+death's time (which the run page's public death sites leave off), the
 member's own party chat off its trace (`readTraceChat`, the server's echo of
 its lines, so five members' lists never repeat each other), and where it last
 was, off the newest state sample. A kill is named by the run's own client

@@ -736,12 +736,10 @@ describe("projectRunDetail", () => {
         ...under("achievements", ["earned", "points", "ids"]),
         "taxi",
         "taxi.flights",
-        // Deaths are public (operator, 2026-10-18): the counts, the turns the
-        // milestones row prints and the times the party timeline places, and
-        // nothing of a site no page reads.
+        // Deaths are public (operator, 2026-10-18): the counts and the turns
+        // the milestones row prints, and nothing of a site no page reads.
         "deaths",
         ...under("deaths", ["deaths", "releases", "resurrects", "sites"]),
-        "deaths.sites[].ts",
         "deaths.sites[].turn",
         "tps",
         ...under("tps", TPS_KEYS),
@@ -756,7 +754,7 @@ describe("projectRunDetail", () => {
       { fromTurn: 5, toTurn: 9 },
       { fromTurn: 12, toTurn: null },
     ]);
-    expect(out.deaths).toEqual({ deaths: 1, releases: 1, resurrects: 1, sites: [{ ts: 1500, turn: 3 }] } as DeathFacts);
+    expect(out.deaths).toEqual({ deaths: 1, releases: 1, resurrects: 1, sites: [{ turn: 3 }] } as DeathFacts);
   });
 
   test("spells, talents and trades project whole: ids, counts and turns, nothing nameable", () => {
@@ -2435,6 +2433,7 @@ describe("a party member's records", () => {
       kills: [smuggle({ ts: 1200, victimGuid: "17379390972827271335", entry: 644, name: SURVIVES.npcName, self: false })],
       chat: [smuggle({ ts: 1300, text: `ready ${SESSION_SHAPED}` })],
       groups: [smuggle({ ts: 1000, event: "joined" as const, count: 5 })],
+      deaths: [1250],
       where: smuggle({ ts: 1400, map: 36, zone: 1581, zoneName: SURVIVES.zoneName, area: 1581, areaName: SURVIVES.zoneName }),
     });
     const out = projectRunDetail(
@@ -2456,6 +2455,7 @@ describe("a party member's records", () => {
         ...under("chat[]", ["ts", "text"]),
         "groups",
         ...under("groups[]", ["ts", "event", "count"]),
+        "deaths",
         "where",
         ...under("where", ["ts", "map", "zone", "zoneName", "area", "areaName"]),
       ]),

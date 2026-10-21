@@ -9,7 +9,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { AgentPosition, ResultRun, RunDetailResponse, TrackPoint, TrackResponse } from "../../runner/viewer/api-types";
+import type { AgentPosition, ResultRun, RunDetailResponse, Square, TrackPoint, TrackResponse } from "../../runner/viewer/api-types";
+import { squareHref } from "../src/lib/campaigns";
 import { createRoot, createSignal } from "solid-js";
 import { createMapState } from "../src/lib/mapstate";
 import {
@@ -70,7 +71,8 @@ function detail(r: ResultRun, party: Partial<NonNullable<RunDetailResponse["part
       resurrects: 0,
       first: null,
       last: null,
-      sites: deaths.map((ts) => ({ ts, turn: 1, position: null, zone: null, area: null, released: null })),
+      // The public build's sites: a turn and nothing else. The times are the party block's.
+      sites: deaths.map(() => ({ turn: 1 })),
     },
     leveling: null,
     party: {
@@ -83,6 +85,7 @@ function detail(r: ResultRun, party: Partial<NonNullable<RunDetailResponse["part
       kills: [],
       chat: [],
       groups: [],
+      deaths,
       where: null,
       ...party,
     },
@@ -125,6 +128,14 @@ describe("the runs table's grouping", () => {
   test("partyRowsOf finds one party's rows in member order", () => {
     const rows = [...partyRows("dm-zz"), ...partyRows(STEM)].reverse();
     expect(partyRowsOf(rows, STEM).map((r) => r.party!.member)).toEqual([...ROLES]);
+  });
+
+  test("a campaign square of one party leads to that party; of two, to the square's list", () => {
+    const sq = (parties: string[] | undefined, runIds: string[]) => ({ column: "sonnet/base", runIds, ...(parties === undefined ? {} : { parties }) }) as unknown as Square;
+    const c = { id: "deadmines", version: 3 };
+    expect(squareHref(c, "party", sq([STEM], ROLES.map((m) => `${STEM}-${m}`)))).toBe(`/party/${STEM}`);
+    expect(squareHref(c, "party", sq([STEM, "dm-zz"], ["a", "b"]))).toBe("/campaigns/deadmines/3?cell=party&column=sonnet%2Fbase");
+    expect(squareHref(c, "cell", sq(undefined, ["solo"]))).toBe("/run/solo");
   });
 
   test("a member's colour class follows its place, the leader first", () => {
@@ -172,6 +183,19 @@ describe("the party view", () => {
     expect(v.endedBy).toEqual({ member: "mage", reason: "idle", detail: null });
     expect(v.startedAt).toBe(1000);
     expect(v.endedAt).toBe(9000);
+  });
+
+  test("five stopped the same way at once name nobody: the reason alone", () => {
+    const v = partyViewOf(STEM, partyRows(STEM, { terminationReason: "manual", endedAt: 9000 }), new Map())!;
+    expect(v.endedBy).toEqual({ member: null, reason: "manual", detail: null });
+  });
+
+  test("a paused party is the pause that was not the party's", () => {
+    const rows = partyRows(STEM, { terminationReason: null, endedAt: null, pauseReason: "party-paused" });
+    rows[1] = member(STEM, "healer", 1, { terminationReason: null, endedAt: null, pauseReason: "rate-limited" });
+    const v = partyViewOf(STEM, rows, new Map())!;
+    expect(v.status).toBe("paused");
+    expect(v.endedBy).toEqual({ member: "healer", reason: "rate-limited", detail: null });
   });
 
   test("live while any member is, with no end and no verdict", () => {

@@ -374,18 +374,16 @@ function projectSpells(f: SpellFacts): SpellFacts {
 
 /**
  * A run's deaths as the run page's milestones row prints them: the three
- * counts and each death's turn, and its time, which the party page's
- * timeline reads. Deaths are public (operator, 2026-10-18); a site's
- * position, zone and the `first`/`last` ends are left out because no page
- * reads them.
+ * counts and each death's turn. Deaths are public (operator, 2026-10-18); a
+ * site's position, zone and the `first`/`last` ends are left out because no
+ * page reads them.
  */
 function projectDeaths(f: DeathFacts): DeathFacts {
   return lean<DeathFacts>({
     deaths: f.deaths,
     releases: f.releases,
     resurrects: f.resurrects,
-    // Each death's turn and time: the party page's timeline places a death on its clock.
-    sites: f.sites.map((s) => lean<DeathSite>({ ts: s.ts, turn: s.turn })),
+    sites: f.sites.map((s) => lean<DeathSite>({ turn: s.turn })),
   });
 }
 
@@ -463,7 +461,7 @@ function projectPartyStamp(p: PartyStampView): PartyStampView {
 /**
  * A party member's own records, which the party page and the group replay
  * merge. The member list never carried an account; the kills are guids,
- * entries and the creature's name, the places ids and names, and the chat the
+ * entries and the creature's name, the deaths their times, the places ids and names, and the chat the
  * member's own lines, which its trace windows already publish as the map's
  * bubbles, with any credential shape masked as there (`projectTraceSegment`).
  * Struck for the session token like the rest of the detail.
@@ -479,6 +477,9 @@ function projectPartyDetail(p: PartyDetailView): PartyDetailView {
     kills: p.kills.map((k) => ({ ts: k.ts, victimGuid: k.victimGuid, entry: k.entry, name: k.name, self: k.self })),
     chat: p.chat.map((c) => ({ ts: c.ts, text: maskCredentialShapes(c.text, REDACTED) })),
     groups: p.groups.map((g) => ({ ts: g.ts, event: g.event, count: g.count })),
+    // When each death happened, for the party's timeline: the time only, a
+    // site's position and zone staying off as on `projectDeaths`.
+    deaths: p.deaths.filter((ts) => typeof ts === "number"),
     where:
       p.where === null
         ? null

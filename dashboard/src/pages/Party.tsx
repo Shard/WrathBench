@@ -146,7 +146,9 @@ export default function Party() {
                       {(e) => (
                         <span title={e().detail ?? ""}>
                           {e().reason}
-                          <span class="dim"> · {memberOf(v(), e().member)?.character || e().member}</span>
+                          <Show when={e().member}>
+                            {(id) => <span class="dim"> · {memberOf(v(), id())?.character || id()}</span>}
+                          </Show>
                         </span>
                       )}
                     </Show>

@@ -94,7 +94,12 @@ function fixture(): string {
       { ts: T0 + 1500, t: "events_served", events: [{ seq: 5, ts: T0 + 1400, opcode: "WB_AREA", data: { mapId: 36, mapName: "Deadmines", instanceType: 1, zoneId: 1581, zoneName: "The Fixture Mine", areaId: 1581, areaName: "The Fixture Mine" } }] },
       { ts: T0 + 4000, t: "milestone", kind: "instance", event: "entered", map: 36, instanceType: 1, from: { map: 0, instanceType: 0 }, observedTs: T0 + 3900, turn: 1 },
       { ts: T0 + 4500, t: "milestone", kind: "kill", killerGuid: "1", victimGuid: "7001", entry: 644, rank: 1, self: tank, observedTs: T0 + 4400, turn: 1 },
-      ...(tank ? [{ ts: T0 + 4600, t: "milestone", kind: "kill", killerGuid: "2", victimGuid: "7002", rank: 1, self: false, turn: 1 }] : []),
+      ...(tank
+        ? [
+            { ts: T0 + 4600, t: "milestone", kind: "kill", killerGuid: "2", victimGuid: "7002", rank: 1, self: false, turn: 1 },
+            { ts: T0 + 4800, t: "milestone", kind: "death", observedTs: T0 + 4700, position: { map: 36, x: -80, y: -390, z: 59, source: "death_spot" }, zone: { id: 1581 }, area: { id: 1581 }, released: false, turn: 1 },
+          ]
+        : []),
     ];
     writeRun(runs, m.runId, config, lines, { trace: tank, cache: tank });
   }
@@ -129,6 +134,8 @@ describe("a party member's run page", () => {
       { ts: T0 + 4600, victimGuid: "7002", entry: null, name: null, self: false },
     ]);
     expect(p.groups).toEqual([{ ts: T0 + 900, event: "joined", count: 2 }]);
+    // The death's own stamp, the one the run page's public sites do not carry.
+    expect(p.deaths).toEqual([T0 + 4700]);
     // The party's lines only, the say left out.
     expect(p.chat).toEqual([
       { ts: T0 + 2000, text: "Tank ready at the portal." },
@@ -153,6 +160,9 @@ describe("a party member's run page", () => {
     const d = await detail(api(fixture(), true), `${STEM}-tank`);
     expect(d.party!.kills[0]!.name).toBe("Fixture Boss");
     expect(d.party!.chat).toHaveLength(2);
+    expect(d.party!.deaths).toEqual([T0 + 4700]);
+    // The run page's own death sites keep the public shape: a turn, no time.
+    expect(d.deaths!.sites as unknown[]).toEqual([{ turn: 1 }]);
     expect(JSON.stringify(d)).not.toContain("PARTYACCT");
   });
 

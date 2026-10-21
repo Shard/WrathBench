@@ -1382,6 +1382,8 @@ export interface PartyDetailView {
   kills: PartyKillMark[];
   chat: PartyChatMark[];
   groups: PartyGroupMark[];
+  /** When this member died, oldest first: `deaths.sites`' stamps, which the run page itself does not publish. */
+  deaths: number[];
   where: PartyWhereView | null;
 }
 

@@ -139,6 +139,7 @@ export function partyDetailOf(runsDir: string, runId: string, dir: string, tail:
     kills,
     chat: readTraceChat(runsDir, runId, "party"),
     groups: tail.groups,
+    deaths: (tail.deaths?.sites ?? []).map((s) => s.ts),
     where,
   };
 }
