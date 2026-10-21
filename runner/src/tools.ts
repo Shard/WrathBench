@@ -711,11 +711,21 @@ export function renderActionHints(hints: readonly ActionHintNote[]): string | un
       h.hint.length > ACTION_HINT_RENDER.MAX_HINT_CHARS
         ? `${h.hint.slice(0, ACTION_HINT_RENDER.MAX_HINT_CHARS - 1).trimEnd()}…`
         : h.hint;
-    lines.push(`${h.action} ${h.status}${h.count > 1 ? ` ×${h.count}` : ""}: ${hint}`);
+    lines.push(`${h.action} ${h.status}${h.count > 1 ? ` ×${h.count}` : ""}${fromLabel(h.from)}: ${hint}`);
   }
   const rest = ordered.length - shown.length;
   if (rest > 0) lines.push(`(+${rest} other failure ${rest === 1 ? "status" : "statuses"} since the last result)`);
   return lines.join("\n");
+}
+
+/**
+ * Which earlier snippet's code raised a hint, on its line's head so the hint
+ * cap never cuts it: the snippet's opening code, which the model wrote and can
+ * recognise. Nothing for the current snippet's own hints.
+ */
+function fromLabel(from: string | undefined): string {
+  if (from === undefined) return "";
+  return from === "" ? " (from an earlier snippet)" : ` (from an earlier snippet: ${from})`;
 }
 
 /**

@@ -211,22 +211,23 @@ describe("episode sentence", () => {
 
   test("every rendering hashes as pinned, so a prompt edit has to move its pins on purpose", () => {
     // Pinned by value, not by rebuilding from the same parts, so a change to
-    // any rendering fails here. The last edit to move them is the sleep
-    // sentence, which gained the "chat" wake and says { wake: false } sleeps
-    // through attacks, in the shared body, so it moved all twelve.
+    // any rendering fails here. The last edit to move them is the sixth
+    // party-run batch (waitForChat's buffered lines, the units() type list,
+    // the death line's graveyard and dungeon facts), in the shared body, so it
+    // moved all twelve.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:7597083254cdd31a", off: "sha256:1d8e77da943816df" },
-        cli: { on: "sha256:d438a92e6a09435d", off: "sha256:0421524769353be5" },
+        wrathbench: { on: "sha256:9845779a63faa701", off: "sha256:0e5e63c1314c29be" },
+        cli: { on: "sha256:734a9d55acef0dfc", off: "sha256:39c1f0230f3b8add" },
       },
       e90: {
-        wrathbench: { on: "sha256:ddace516e43a08d6", off: "sha256:920fc412c96b81a5" },
-        cli: { on: "sha256:b8a1e7298e7639af", off: "sha256:9457af833921f395" },
+        wrathbench: { on: "sha256:a4fe14cfbe189420", off: "sha256:6b7fb0dbed4390ec" },
+        cli: { on: "sha256:e96c61d7e4b5c90a", off: "sha256:a17645db66b52cf7" },
       },
       e360: {
-        wrathbench: { on: "sha256:5a79d2c5cf8685e4", off: "sha256:ea9af532e1bb3d39" },
-        cli: { on: "sha256:48f6dad36ffdad20", off: "sha256:997dda8a8714fe8b" },
+        wrathbench: { on: "sha256:df92edf77aa21232", off: "sha256:6cec8db366b7206c" },
+        cli: { on: "sha256:396f274af951d7b4", off: "sha256:d22d7b14d9e4debf" },
       },
     };
     const episodes = [
