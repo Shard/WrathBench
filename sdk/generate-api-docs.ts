@@ -167,6 +167,7 @@ const CLIENT_INTERNAL = new Set([
   "lease",
   "releaseLease",
   "noteActionHint",
+  "tallyActionHint",
   "rewordActionHint",
   "drainActionHints",
   "request",
