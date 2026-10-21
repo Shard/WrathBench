@@ -11,11 +11,13 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { campaignSquares, partyAttempt, type ProbeRun } from "../runner/src/campaigns";
-import { DEFAULT_POLICY, modelStates, type RunFact } from "../runner/src/models";
+import { loadRunConfig } from "../runner/src/config";
+import { DEFAULT_POLICY, modelStates, readRunFacts, type RunFact } from "../runner/src/models";
+import { Trajectory } from "../runner/src/trajectory";
 import { defsBlock, joined, PARTY_MEMBERS, partyDefinition, definition } from "../runner/test/fixtures/campaigns";
 import { runParty, type MemberHandle, type MemberVerdict, type PartyFateDeps, type PartyMemberRun } from "./party-fate";
 import { commandStager, type StageRequest } from "./party-stager";
-import { parseFleet, pinnedCampaignJobs, rosterModels, type FleetConfig, type FleetJob, type FleetRosterEntry } from "./run-fleet-config";
+import { parseFleet, pinnedCampaignJobs, probeRunsOf, rosterModels, type FleetConfig, type FleetJob, type FleetRosterEntry } from "./run-fleet-config";
 import { diffJobs, fillEntries, finishesOnExit, jobSpawn, partyAdmission, planResumes, planTick, withTakenRunIds } from "./run-fleet-plan";
 import { jobArgv, rosterResumes } from "./run-fleet-state";
 import { formatArgvBlock } from "./run-fleet-status";
@@ -678,6 +680,42 @@ describe("campaign squares tally parties, not runs", () => {
       { campaign: "solo", version: 1, cell: "a", ref: "glm", arm: "base", counted: false, live: true },
     ];
     expect(campaignSquares(solo, ["glm"], runs)[0]).toMatchObject({ attempts: 2, done: 1, live: 1 });
+  });
+
+  test("on disk: four members the stop paused and the party ended on the trigger's kill-target read as counted, and the square as done and reached", () => {
+    const runs = tempDir("wb-party-kill-end-");
+    const stem = `fleet-deadmines-party-base-sonnet-max-${STAMP}`;
+    const records = PARTY_MEMBERS.map((m, i) => ({ member: m.id, role: m.role, runId: `${stem}-${m.id}`, account: ACCOUNTS[i]!, character: m.character }));
+    for (const [i, m] of PARTY_MEMBERS.entries()) {
+      const runId = `${stem}-${m.id}`;
+      const t = new Trajectory(join(runs, runId));
+      const config = {
+        ...loadRunConfig({ runId, driver: "claude-code", model: "claude-sonnet-5-5" }),
+        episode: "probing",
+        campaign: "deadmines",
+        campaignVersion: 1,
+        cell: "party",
+        arm: "base",
+        ref: "son2",
+        party: { id: stem, member: m.id, role: m.role, size: 5, members: records },
+      };
+      const meta = { runId, harnessVersion: "harness-0.5-1-gabc", startedAt: 1000, config: config as never, comparability: { episode: "probing" } as never };
+      t.writeMeta(meta);
+      t.append({ t: "response", turn: 1, message: { role: "assistant", content: "…" } });
+      if (m.id === "rogue") {
+        t.setTermination(runId, "kill-target", "entry 639 killed (killer party member 980)");
+      } else {
+        // The roster's stop: SIGTERM pauses the runner, with its mark in meta.json …
+        t.pauseWithMark(runId, { reason: "operator-pause", detail: "SIGTERM", at: 2000 + i, episodeElapsedMs: 60_000 }, meta);
+        // … and the party's end is written through the runner's own writer (`endMember`).
+        t.setTermination(runId, "kill-target", "rogue: kill-target");
+      }
+      t.close();
+    }
+    const facts = readRunFacts(runs, 10_000_000);
+    expect(facts.map((f) => [f.terminationReason, f.pause])).toEqual(PARTY_MEMBERS.map(() => ["kill-target", null]));
+    const c = fleet().campaigns.find((x) => x.name === "deadmines")!;
+    expect(campaignSquares(c, ["son2"], probeRunsOf(facts))[0]).toMatchObject({ attempts: 1, done: 1, reached: 1, live: 0, settled: "done" });
   });
 
   test("a single run that met its kill end is done and reached", () => {
