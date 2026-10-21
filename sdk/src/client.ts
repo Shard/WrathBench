@@ -687,7 +687,7 @@ const ERROR_CODE_HINTS: Record<string, string> = {
   // Only face sends it: a walk runs forward, and a running character faces
   // the way it runs, so a turn mid-walk would steer it off its path.
   moving:
-    "a move is running, and a running character faces the way it runs (a turn would steer it off its path), so nothing was sent; " +
+    "a move is running, and a running character faces the way it runs: a turn would steer it off its path, so nothing was sent; " +
     "await sdk.stop() and then face, or walk toward what you want to face",
   missing_guid:
     "this action needs a guid argument — get one from state.nearbyUnits() or state.closest(...)",
