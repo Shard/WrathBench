@@ -289,11 +289,15 @@ export interface CharacterSummary {
  * (`WHISPER_INFORM`) is the server's echo of our own whisper, and the core
  * puts the *recipient* in the sender's place: its `senderGuid` and
  * `senderName` name who it went to. `channelName` rides channel lines
- * (`type` 17), `achievementId` the achievement broadcast (`type` 48/49, whose
- * `message` is the client's raw `%s`/`$a` template). Creature speech's
- * `message` is filled in as a client fills it: the wire's `%s attempts to run
- * away in fear!` reads `Defias Miner attempts to run away in fear!`, the
- * sender's own name in place of every `%s` (`chatMessageAsShown`).
+ * (`type` 17), `achievementId` the achievement broadcast (`type` 48/49).
+ * Creature speech's `message` is filled in as a client fills it: the wire's
+ * `%s attempts to run away in fear!` reads `Defias Miner attempts to run away
+ * in fear!`, the sender's own name in place of every `%s`
+ * (`chatMessageAsShown`). The achievement broadcast's is filled on read, the
+ * way its sender's name is joined, because the packet that names the
+ * achievement arrives just after the line: `%s has earned the achievement $a!`
+ * reads `Tankpartyb has earned the achievement [Deadmines]!`
+ * (`achievementChatAsShown`).
  */
 export interface ChatEntry {
   readonly seq: number;
@@ -326,6 +330,30 @@ export function chatMessageAsShown(type: number, message: string, senderName: st
 
 /** The achievement broadcast, `CHAT_MSG_ACHIEVEMENT` (48) and `CHAT_MSG_GUILD_ACHIEVEMENT` (49). */
 export const ACHIEVEMENT_CHAT_TYPES: ReadonlySet<number> = new Set([48, 49]);
+
+/**
+ * The achievement broadcast's text as a client prints it. The wire's
+ * `%s has earned the achievement $a!` is a template: a client puts the
+ * earner's name for `%s` and the achievement's link, its name in brackets,
+ * for `$a`. The name is what an achievement packet named that id with
+ * (`Achievement.dbc`, client-cache knowledge); with none observed the link
+ * reads `[achievement <id>]`. `%s` stays as sent while the sender has no name.
+ */
+export function achievementChatAsShown(
+  message: string,
+  senderName: string | undefined,
+  achievementId: number | undefined,
+  achievementName: string | undefined,
+): string {
+  const link =
+    achievementName !== undefined
+      ? `[${achievementName}]`
+      : achievementId !== undefined
+        ? `[achievement ${achievementId}]`
+        : undefined;
+  const linked = link === undefined ? message : message.replaceAll("$a", link);
+  return senderName === undefined ? linked : linked.replaceAll("%s", senderName);
+}
 
 export interface NotificationEntry {
   readonly seq: number;
@@ -1980,9 +2008,12 @@ export class StateCache {
    * predicate sees the same `senderName` `state.chat` shows.
    */
   namedChatEntry(c: ChatEntry): ChatEntry {
-    if (c.senderName !== undefined) return c;
-    const name = this.nameOf(c.senderGuid) ?? this.groupState?.members.find((m) => m.guid === c.senderGuid)?.name;
-    return name === undefined ? c : { ...c, senderName: name };
+    const name =
+      c.senderName ?? this.nameOf(c.senderGuid) ?? this.groupState?.members.find((m) => m.guid === c.senderGuid)?.name;
+    const named = name === undefined || c.senderName !== undefined ? c : { ...c, senderName: name };
+    if (!ACHIEVEMENT_CHAT_TYPES.has(c.type)) return named;
+    const title = c.achievementId === undefined ? undefined : this.achievementNames.get(c.achievementId);
+    return { ...named, message: achievementChatAsShown(c.message, name, c.achievementId, title) };
   }
 
   /** Client-visible notifications (the game-error channel), oldest first. */
