@@ -19,7 +19,7 @@ import {
   watchdogOverrideSchema,
 } from "../src/config";
 import { runLoop } from "../src/loop";
-import { SYSTEM_PROMPT, buildSystemPrompt, contextSentence, objectiveSection } from "../src/prompt";
+import { SYSTEM_PROMPT, WORLD_SECTION, buildSystemPrompt, contextSentence, objectiveSection } from "../src/prompt";
 import { EpisodicLog } from "../src/episodic";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
@@ -68,19 +68,22 @@ describe("prompt rendering", () => {
     expect(buildSystemPrompt("   ")).toBe(SYSTEM_PROMPT);
   });
 
-  test("the objective is one delimited block, verbatim, added to the standing goal", () => {
+  test("the objective is one delimited block, verbatim, in place of the broad goal", () => {
     const p = buildSystemPrompt(OBJECTIVE);
     expect(p).toContain("--- Operator objective for this run ---");
-    expect(p).toContain(`--- Operator objective for this run ---\n${OBJECTIVE}\n`);
-    expect(p).toContain("--- end operator objective ---");
-    // Added, never replacing: the standing goal and the whole body survive.
-    expect(p).toContain("There is no single number to maximize");
+    expect(p).toContain(`--- Operator objective for this run ---\n${OBJECTIVE}\n--- end operator objective ---`);
+    // Replacing, never added (operator, 2026-10-21): the directive sentences
+    // and the old "in addition" line are gone; the world facts and the whole
+    // body survive.
+    expect(p).not.toContain("Your goal is to progress");
+    expect(p).not.toContain("There is no single number to maximize");
+    expect(p).not.toContain("in addition to the standing goal");
+    expect(p).not.toContain("standing goal");
+    expect(p.startsWith(WORLD_SECTION)).toBe(true);
+    expect(p).toContain("The server is the source of truth for what actually happened.");
     expect(p).toContain("## The snippet runtime");
-    expect(p.length).toBeGreaterThan(SYSTEM_PROMPT.length);
-    // The block sits between the goal and the runtime description.
-    expect(p.indexOf("There is no single number to maximize")).toBeLessThan(
-      p.indexOf("--- Operator objective for this run ---"),
-    );
+    // The block sits after the world facts and before the runtime description.
+    expect(p.indexOf("You do not play directly.")).toBeLessThan(p.indexOf("--- Operator objective for this run ---"));
     expect(p.indexOf("--- end operator objective ---")).toBeLessThan(p.indexOf("## The snippet runtime"));
   });
 

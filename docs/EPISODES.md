@@ -228,7 +228,18 @@ fleet can launch in a run pod.
   the same entry, so pinning a probe to a lane does not move an eval.
 - **Objective.** Allowed, and set only by the definition. The to-level-10
   campaigns carry none: the standing goal already drives levelling, and naming
-  a level is the statistic the goal wording avoids.
+  a level is the statistic the goal wording avoids. An objective replaces the
+  broad goal for that run rather than adding to it (operator, 2026-10-21): a
+  Deadmines party told its objective was "in addition to the standing goal"
+  left the dungeon after some wipes to level in Westfall, which the goal
+  endorsed.
+- **Prompt.** With no objective, the standing goal and nothing else: no
+  clock, whatever the budget, so a definition without one reads exactly as
+  every probe before it. With one, the world facts, then one sentence stating
+  the clock from the definition's `episodeMs` ("This run lasts four hours.";
+  none when the budget sets no episode limit), then the delimited objective
+  block in place of the goal's two directive sentences, then the same body as
+  every run (`runner/src/prompt.ts` holds the wording).
 - **Watchdogs.** The definition's. Every definition so far keeps the no-XP
   watchdog off, for the same reason it is off on `e360` and more so: a probe
   may spend its whole budget walking somewhere in order to find out what
@@ -334,7 +345,8 @@ standing sandbox that never finishes. Duration separates neither pair.
 - **Objective.** Allowed. One of the two steered ids where the operator may tell
   the agent where to go, and where `wikiCoords` may be on (the run-dimension
   rule in `docs/METHODOLOGY.md`; `freeplay` was the only steered id until the
-  probe lane arrived).
+  probe lane arrived). As on a probe, an objective replaces the broad goal for
+  that run; freeplay states no clock either way.
 - **Watchdogs.** Set per experiment; recorded, like everything else.
 - **Ends.** Anything, including `manual`.
 - **Scoring.** **Unscored, always.** The run carries the same `unscored`
