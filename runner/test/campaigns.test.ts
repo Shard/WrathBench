@@ -11,7 +11,9 @@ import {
   campaignPairRefusals,
   campaignProgress,
   campaignSquares,
+  campaignRowProblem,
   campaignWork,
+  isConcluded,
   parseCampaignBlocks,
   parseCampaignDefinitions,
   type Campaign,
@@ -76,6 +78,26 @@ describe("the store row", () => {
     const r = parseCampaignBlocks(defsBlock(one), { one: { version: 1 }, ghost: { version: 4 } });
     expect(r.campaigns.map((c) => c.name)).toEqual(["one"]);
     expect(r.refused).toEqual([{ key: "campaigns/ghost", campaign: "ghost", reason: expect.stringContaining("ghost@4 is not published") }]);
+  });
+
+  test("concluded lists versions of the id: positive integers, each once, any version but the row's included", () => {
+    const v2 = definition({ id: "one", version: 2 });
+    const { campaigns, refused } = parseCampaignBlocks(defsBlock(one, v2), { one: { version: 2, concluded: [1] } });
+    expect(refused).toEqual([]);
+    expect(campaigns[0]!.concluded).toEqual([1]);
+    expect(isConcluded(campaigns[0]!, 1)).toBe(true);
+    expect(isConcluded(campaigns[0]!, 2)).toBe(false);
+    // Absent reads as none; an empty list is the same.
+    expect(campaign().concluded).toEqual([]);
+    expect(campaignRowProblem("one", { version: 1, concluded: [] })).toBeNull();
+    expect(campaignRowProblem("one", { version: 1, concluded: [1, 2, 3] })).toBeNull();
+    for (const bad of [[0], [-1], [1.5], ["1"], [2, 2], 1, null]) {
+      expect(campaignRowProblem("one", { version: 1, concluded: bad })).toContain("campaign one");
+      const r = parseCampaignBlocks(defsBlock(one), { one: { version: 1, concluded: bad } });
+      expect(r.campaigns).toEqual([]);
+      expect(r.refused.map((x) => x.key)).toEqual(["campaigns/one"]);
+    }
+    expect(campaignRowProblem("one", { version: 1, concluded: [2, 2] })).toContain("concluded lists a version twice");
   });
 
   test("a campaign keeps every published version of its id, so a paused run can follow its own", () => {
@@ -245,6 +267,18 @@ describe("the fan-out", () => {
     const c = campaign(definition({ id: "one", maxAttemptsPerCell: null }), { assignments: [{ model: "m1" }] });
     const runs = [1, 2, 3, 4].map(() => run({ counted: false }));
     expect(campaignWork([c], CATALOG, runs).some((w) => w.cell.id === "a")).toBe(true);
+  });
+
+  test("a version the operator concluded owes nothing, enabled or not; another concluded version leaves this one's work", () => {
+    expect(campaignWork([campaign(one, { concluded: [1] })], CATALOG, [])).toEqual([]);
+    const v2 = definition({ id: "one", version: 2, maxAttemptsPerCell: 3 });
+    const { campaigns } = joined([one, v2], { one: { version: 2, concluded: [1], assignments: [{ model: "m1" }] } });
+    expect(campaignWork(campaigns, CATALOG, []).map((w) => `${w.version}/${w.model}`)).toEqual(
+      campaignSquares(campaigns[0]!, CATALOG, []).map(() => "2/m1"),
+    );
+    // The squares are still the tally: a verdict invents no counts.
+    const c = campaign(one, { concluded: [1] });
+    expect(campaignProgress(campaignSquares(c, CATALOG, [run({})]))).toMatchObject({ done: 1, attempted: 1 });
   });
 
   test("healthy is asked only when excludeUnhealthy is on", () => {

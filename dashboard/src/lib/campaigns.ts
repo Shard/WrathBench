@@ -82,6 +82,21 @@ export function stateTitle(state: CampaignState): string {
   }
 }
 
+/** The hover on a version the operator concluded: complete by verdict, not by its squares. */
+export const CONCLUDED_TITLE = "concluded by the operator: finished whatever its squares hold, which show what the runs counted";
+
+/**
+ * The state word as the page shows it: the word, its class and its hover. A
+ * version the operator concluded reads `complete*`, the `*` that marks a
+ * figure resting on something other than the count elsewhere, so a verdict
+ * never passes for a tally. An older API that serves no `concluded` reads as
+ * derived.
+ */
+export function stateBadge(c: Pick<CampaignView, "state"> & { concluded?: boolean }): { text: string; cls: string; title: string } {
+  if (c.concluded === true && c.state === "complete") return { text: "complete*", cls: stateClass("complete"), title: CONCLUDED_TITLE };
+  return { text: c.state, cls: stateClass(c.state), title: stateTitle(c.state) };
+}
+
 /**
  * `12/40`, or the bare count when nothing is wanted (an unassigned campaign).
  * What the attempt cap settled is named beside it: a capped square is settled

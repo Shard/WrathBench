@@ -789,6 +789,15 @@ describe("a paused party is planned whole", () => {
     expect(fillEntries(spawn, "20261021").map((e) => e.runId)).toEqual(MEMBERS.map((m) => `${stem}-${m}`));
   });
 
+  test("a party of a version the operator concluded is listed whole, never resumed, whichever version the row names", () => {
+    const concluded = { ...cfg, campaigns: cfg.campaigns.map((c) => ({ ...c, version: 4, concluded: [1, 2, 3] })) };
+    const p = planResumes({ runs: facts(), config: { ...concluded, policy: { ...DEFAULT_POLICY, ...cfg.policy } }, running: new Map(), held: () => undefined, now: NOW, campaignFileOf: fileOf });
+    expect(p.resume).toEqual([]);
+    expect(p.end).toEqual([]);
+    expect(p.listed).toHaveLength(5);
+    expect(p.listed.every((l) => l.why === `party ${stem}: campaign deadmines@1 is concluded — it owes nothing; resume by hand or archive`)).toBe(true);
+  });
+
   test("a party with a member that ended is listed, never half-resumed", () => {
     const p = plan(facts((m) => (m === "paladin" ? { pause: null, terminationReason: "episode-limit", endedAt: NOW - 1000 } : {})));
     expect(p.resume).toEqual([]);

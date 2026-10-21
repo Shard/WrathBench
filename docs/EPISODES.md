@@ -276,7 +276,10 @@ fleet can launch in a run pod.
   - One tally serves the scheduler and the campaigns page
     (`campaignSquares`), so "complete" is exactly "done plus capped equals
     wanted".
-  - Completion is derived from the runs on disk, never recorded.
+  - Completion is derived from the runs on disk, never recorded. The one
+    exception is the operator's: a version the store row lists in
+    `concluded` is finished whatever its squares hold, launches and resumes
+    nothing, and the page marks it as that verdict, with its counts unchanged.
   - A counted attempt that ended on one of the definition's ends (or, for a
     level, got there) is also **reached**, which the grid shows as reached of
     counted; a party is one attempt either way.

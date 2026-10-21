@@ -80,6 +80,7 @@ const WAKE: CampaignView = {
     ],
   },
   state: "running",
+  concluded: false,
   progress: { want: 12, done: 5, attempted: 7, capped: 1, live: 1 },
   columns: [
     { key: "sonnet-low|control", ref: "sonnet-low", arm: "control", model: "anthropic/claude-sonnet-5.5", effort: "low", compactWindow: null, harness: "claude-code" },
@@ -234,6 +235,7 @@ const SIDE: CampaignView = {
   arms: [{ id: "base", image: null, command: null, args: [] }],
   config: null,
   state: "unassigned",
+  concluded: false,
   progress: { want: 0, done: 0, attempted: 0, capped: 0, live: 0 },
   columns: [],
   grid: [{ cell: "only", squares: [] }],

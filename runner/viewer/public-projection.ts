@@ -973,6 +973,7 @@ export function projectCampaigns(c: CampaignsResponse): PublicCampaignsResponse 
                 })),
               },
         state: v.state,
+        concluded: v.concluded,
         progress: { want: v.progress.want, done: v.progress.done, attempted: v.progress.attempted, capped: v.progress.capped, live: v.progress.live },
         columns: v.columns.map((col) => ({
           key: col.key,

@@ -35,6 +35,7 @@ import { backoffMs, isTainted, type RosterSpec, slug } from "./run-roster";
 import {
   armArg,
   campaignSquares,
+  isConcluded,
   pinnedCampaignJobName,
   policyCampaignJobName,
   type Campaign,
@@ -1518,6 +1519,12 @@ export function planResumes(opts: {
         list(`campaign ${c.name} is disabled — enable it to resume, or resume by hand`);
         continue;
       }
+      // The run's own version, not the row's: a row that moved on still
+      // names the versions the operator concluded.
+      if (isConcluded(c, file.version)) {
+        list(`campaign ${c.name}@${file.version} is concluded — it owes nothing; resume by hand or archive`);
+        continue;
+      }
       // A pinned arm runs only in a run pod. With them off the launcher would
       // refuse the resume before the run moved, the pause would stand, and the
       // next tick would try again: it waits, listed, for the switch.
@@ -1735,6 +1742,7 @@ function planPartyResume(
     return listAll("its campaign row or roster entry is no longer in the config — resume by hand or archive");
   }
   if (!c.enabled) return listAll(`campaign ${c.name} is disabled — enable it to resume, or resume by hand`);
+  if (isConcluded(c, leaderFile.version)) return listAll(`campaign ${c.name}@${leaderFile.version} is concluded — it owes nothing; resume by hand or archive`);
   const accounts = launch.members.map((m) => m.account);
   const pinned = c.accounts ?? [];
   if (pinned.length !== accounts.length || pinned.some((a, i) => a.toUpperCase() !== accounts[i]!.toUpperCase())) {
@@ -2101,6 +2109,7 @@ export function unyieldedDrainReason(
   const c = campaigns.find((x) => x.name === campaign);
   if (c === undefined) return `campaign ${campaign} is no longer in the config`;
   if (!c.enabled) return `campaign ${campaign} disabled`;
+  if (isConcluded(c, version)) return `campaign ${campaign}@${version} is concluded — nothing more to launch`;
   if (c.version !== version) return `campaign ${campaign} moved to version ${c.version}`;
   const square = `square ${cell}/${arm} of ${campaign}@${version}`;
   const sq = campaignSquares(c, catalog, probeRuns).find((s) => s.ref === job.ref && s.cell.id === cell && s.arm.id === arm);

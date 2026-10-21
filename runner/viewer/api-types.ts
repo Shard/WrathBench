@@ -138,9 +138,16 @@ export interface CampaignView {
    * `running`: a run is in flight. `queued`: enabled with work left.
    * `complete`: every square settled and nothing in flight. `disabled`: the row
    * is switched off with work left. `unassigned`: no row, or a row naming no
-   * assignment the roster still holds.
+   * assignment the roster still holds. A version the operator concluded is
+   * `complete` whatever else holds (`concluded`).
    */
   state: "running" | "queued" | "complete" | "disabled" | "unassigned";
+  /**
+   * Whether the id's store row lists this version in `concluded`: complete by
+   * the operator's verdict rather than by its squares, whose counts `progress`
+   * and the grid still state as counted.
+   */
+  concluded: boolean;
   /**
    * In RUNS, all five: `want` is cells × arms × Σ runsPerCell over the
    * assignments the roster still holds; `done` the counted runs, never more per

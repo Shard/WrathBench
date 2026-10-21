@@ -8,7 +8,9 @@
  * version, cell, the roster name it was launched as and the arm — so a run
  * from before arms belongs to none and stays on the runs pages. Progress and
  * state come from `campaignSquares`, the same tally the scheduler derives its
- * work from, so "complete" and the numbers beside it cannot disagree.
+ * work from, so "complete" and the numbers beside it cannot disagree — except
+ * where the operator concluded a version (`concluded` on its id's row): that
+ * verdict is the state, said as one, and the counts stay what the runs made.
  *
  * The grid is a reading, never a ranking (docs/METHODOLOGY.md: `probing` has
  * no comparability group): cells keep the definition's order, columns the
@@ -22,6 +24,7 @@ import {
   armArg,
   campaignProgress,
   campaignSquares,
+  isConcluded,
   partyAttempt,
   type Campaign,
   type CampaignRefusal,
@@ -114,6 +117,9 @@ export function campaignsView(
     /** A run that reached the definition's end: ended on an end reason, or (a level run) got to the stop level. */
     const reachedRun = (r: ResultRun): boolean => isEndReason(r.terminationReason) || (target !== null && (r.maxLevel ?? 0) >= target);
     const row = roster.campaigns.find((c) => c.name === def.id && c.version === def.version);
+    // The operator's verdict, read off the id's row whichever version it now names.
+    const idRow = roster.campaigns.find((c) => c.name === def.id);
+    const concluded = idRow !== undefined && isConcluded(idRow, def.version);
     const mine = probes.filter((r) => r.campaign === def.id && (r.campaignVersion ?? null) === def.version);
     const isLive = (r: ResultRun): boolean => r.terminationReason === null;
     const probeRuns: ProbeRun[] = mine.map((r) => ({
@@ -249,8 +255,12 @@ export function campaignsView(
 
     const assigned = row === undefined ? [] : row.assignments.filter((a) => catalog.includes(a.model));
     const owed = squares.some((s) => s.settled === null);
-    const state: CampaignView["state"] =
-      progress.live > 0 || mine.some(isLive)
+    // A concluded version is complete even with a run still live or paused:
+    // it owes nothing, nothing more of it launches or resumes, and the
+    // progress figure still says live.
+    const state: CampaignView["state"] = concluded
+      ? "complete"
+      : progress.live > 0 || mine.some(isLive)
         ? "running"
         : row === undefined || assigned.length === 0
           ? "unassigned"
@@ -309,6 +319,7 @@ export function campaignsView(
               }),
             },
       state,
+      concluded,
       progress,
       columns,
       grid,
