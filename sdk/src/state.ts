@@ -1531,8 +1531,9 @@ export interface UnitFilter {
   type?: "unit" | "player" | "gameObject" | "corpse";
   /**
    * `true` keeps units and players whose health was observed above 0; `false`
-   * keeps the observed dead, corpses included. Anything whose health is
-   * unobserved, or that has none, passes neither.
+   * those whose health was observed at 0. Anything whose health is
+   * unobserved, or that has none, passes neither; a player's corpse is
+   * `type: "corpse"`.
    */
   alive?: boolean;
   /** Yards. Objects with no known distance are dropped: the criterion cannot be evaluated. */
@@ -4695,12 +4696,14 @@ function passesUnitFilter(view: UnitView, obj: NearbyObject, f: NormalizedUnitFi
     }
   }
   if (f.type !== undefined && view.type !== f.type) return false;
-  // Both are positive claims and need the observation: `alive: true` is a unit
-  // or player whose health was seen above 0, so a corpse, a game object or a
-  // spell's ground effect (none has health) never passes it, and `alive:
-  // false` is the observed dead.
+  // Both are positive claims about a unit or player and need the
+  // observation: `alive: true` is health seen above 0, so a corpse, a game
+  // object or a spell's ground effect (none has health) never passes it, and
+  // `alive: false` is health seen at 0. A player's corpse is dead too, but it
+  // is not what a loot scan over `alive: false` is looking for, so it is
+  // reached with `type: "corpse"` instead.
   if (f.alive === true && view.dead !== false) return false;
-  if (f.alive === false && view.dead !== true) return false;
+  if (f.alive === false && (view.dead !== true || view.type === "corpse")) return false;
   if (f.maxDistance !== undefined && (view.distance === undefined || view.distance > f.maxDistance)) {
     return false;
   }

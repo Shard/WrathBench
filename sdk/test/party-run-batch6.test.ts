@@ -113,10 +113,10 @@ describe("state.units(): corpses, ground effects, the dead on sight and the elit
     expect(row(EFFECT)).toMatchObject({ type: "dynamicObject", entry: 90001, dead: undefined, name: undefined });
   });
 
-  test("alive: true returns only the observed living; alive: false the observed dead; type takes corpse", () => {
+  test("alive: true returns only the observed living; alive: false the observed dead, never a player's corpse; type takes corpse", () => {
     const c = cache();
     expect(c.units({ alive: true }).map((r) => r.guid)).toEqual([ELITE]);
-    expect(c.units({ alive: false }).map((r) => r.guid)).toEqual([DEAD, CORPSE]);
+    expect(c.units({ alive: false }).map((r) => r.guid)).toEqual([DEAD]);
     expect(c.closest({ alive: true })?.guid).toBe(ELITE);
     expect(c.units({ type: "corpse" }).map((r) => r.guid)).toEqual([CORPSE]);
   });
