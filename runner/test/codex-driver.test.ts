@@ -26,7 +26,7 @@ import { COMPACTED_NOTICE, COMPACTION_PENDING_NOTICE } from "../src/cli-compacti
 import { readCodexThread } from "../src/codex-rollout";
 import { comparabilityOf, harnessOfRun } from "../src/comparability";
 import { HARNESSES, harnessOf, isUnscoredDriver, loadRunConfig, unscoredStamp } from "../src/config";
-import { CLAUDE_CODE_SYSTEM_PROMPT, CODEX_SYSTEM_PROMPT, SYSTEM_PROMPT, buildSystemPrompt, contextSentence } from "../src/prompt";
+import { CLAUDE_CODE_SYSTEM_PROMPT, CODEX_SYSTEM_PROMPT, SNIPPET_DELTA_SENTENCE, SYSTEM_PROMPT, buildSystemPrompt, contextSentence } from "../src/prompt";
 import { EpisodicLog } from "../src/episodic";
 import { Scratchpad } from "../src/scratchpad";
 import { TOOLS } from "../src/tools";
@@ -1091,14 +1091,19 @@ describe("driver, harness and prompt vocabulary", () => {
     expect(() => loadRunConfig({ driver: "codex-cli" })).toThrow(/codex/);
   });
 
-  test("ultra parses as an effort; the codex prompt is the CLI-scaffold render, byte-identical to claude-code's", () => {
+  test("ultra parses as an effort; the codex prompt is the CLI-scaffold render, claude-code's less the snippet-delta sentence", () => {
     expect(loadRunConfig({ effort: "ultra" }).effort).toBe("ultra");
     expect(contextSentence("codex")).toBe(contextSentence("claude-code"));
-    expect(CODEX_SYSTEM_PROMPT).toBe(CLAUDE_CODE_SYSTEM_PROMPT);
+    // claude-code alone takes the snippet delta (operator, 2026-10-21), and
+    // its sentence is the only difference between the two renders.
+    expect(CODEX_SYSTEM_PROMPT).not.toContain(SNIPPET_DELTA_SENTENCE);
+    expect(CLAUDE_CODE_SYSTEM_PROMPT.replace(` ${SNIPPET_DELTA_SENTENCE}`, "")).toBe(CODEX_SYSTEM_PROMPT);
     expect(CODEX_SYSTEM_PROMPT).not.toBe(SYSTEM_PROMPT);
     expect(CODEX_SYSTEM_PROMPT).not.toMatch(/claude|anthropic|openai|codex/i);
     expect(buildSystemPrompt(undefined, undefined, "codex")).toBe(CODEX_SYSTEM_PROMPT);
-    expect(buildSystemPrompt("walk to Ironforge", "e90", "codex")).toBe(buildSystemPrompt("walk to Ironforge", "e90", "claude-code"));
+    expect(buildSystemPrompt("walk to Ironforge", "e90", "codex")).toBe(
+      buildSystemPrompt("walk to Ironforge", "e90", "claude-code").replace(` ${SNIPPET_DELTA_SENTENCE}`, ""),
+    );
   });
 
   /** Spawn run.ts against the fake CLI and return what it said. */

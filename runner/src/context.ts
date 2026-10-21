@@ -134,7 +134,7 @@ interface ObservedLike {
 }
 
 /** One nearby object as the sandbox flattens `state.units()` into the rpc JSON. */
-interface UnitLike {
+export interface UnitLike {
   guid?: unknown;
   name?: unknown;
   type?: unknown;
@@ -168,7 +168,7 @@ interface UnitLike {
 }
 
 /** One `state.group().members` row as the sandbox serialises it. */
-interface GroupMemberLike {
+export interface GroupMemberLike {
   guid?: unknown;
   name?: unknown;
   /** From `SMSG_GROUP_LIST`. */
@@ -187,6 +187,8 @@ interface GroupMemberLike {
     maxPower?: unknown;
     zone?: { id?: unknown; name?: unknown };
     position?: { x?: unknown; y?: unknown };
+    /** The stream seq of the last party-frame packet for this member. */
+    seq?: unknown;
   };
 }
 
@@ -664,7 +666,7 @@ function durabilityLine(inventory: SnapshotLike["inventory"]): string | undefine
 }
 
 /** One quest as the quest line names it: id, then the title, cut if long. */
-function questLabel(q: { questId?: unknown; title?: unknown }): string {
+export function questLabel(q: { questId?: unknown; title?: unknown }): string {
   const id = fmt(q.questId, "?");
   if (typeof q.title !== "string" || q.title.length === 0) return id;
   const title = q.title.length > QUEST_TITLE_CHARS ? `${q.title.slice(0, QUEST_TITLE_CHARS - 1)}…` : q.title;
@@ -1036,6 +1038,22 @@ function powerPct(power: unknown, max: unknown, type: unknown): string | undefin
  * and the x, y the packet carries, which names no map, so no distance is
  * worked out from it. Undefined outside a group.
  */
+/**
+ * One party member's state as its frame reads it: offline, or alive, dead or a
+ * ghost, read off its unit while in view and off the party frame the server
+ * sends (`stats`) otherwise. Undefined when neither has said. Shared by the
+ * HUD's party line and the snippet delta (`sandbox/snippet-delta.ts`), so the
+ * two never disagree about a member.
+ */
+export function memberState(m: GroupMemberLike, unit: UnitLike | undefined): "offline" | "alive" | "dead" | "ghost" | undefined {
+  const st = m.stats;
+  if (m.online === false || st?.online === false) return "offline";
+  if (unit !== undefined) return unit.ghost === true ? "ghost" : unit.dead === true ? "dead" : "alive";
+  if (st === undefined) return undefined;
+  const known = st.ghost !== undefined || st.dead !== undefined || st.health !== undefined;
+  return st.ghost === true ? "ghost" : st.dead === true ? "dead" : known ? "alive" : undefined;
+}
+
 function partyLine(snapshot: SnapshotLike): string | undefined {
   const g = snapshot.group;
   if (g?.inGroup !== true || !Array.isArray(g.members) || g.members.length === 0) return undefined;
@@ -1043,18 +1061,16 @@ function partyLine(snapshot: SnapshotLike): string | undefined {
   const one = (m: GroupMemberLike): string => {
     const name = fmt(m.name, "?");
     const st = m.stats;
-    if (m.online === false || st?.online === false) return `${name} offline`;
     const u = units.find((x) => x.guid === m.guid);
+    const state = memberState(m, u);
+    if (state === "offline") return `${name} offline`;
     if (u !== undefined) {
-      const state = u.ghost === true ? "ghost" : u.dead === true ? "dead" : "alive";
       const hp = state === "alive" ? pct(u.health, u.maxHealth) : undefined;
       const mp = state === "alive" ? powerPct(u.power, u.maxPower, u.powerType) : undefined;
       const d = typeof u.distance === "number" ? `${Math.round(u.distance)}y` : undefined;
       return [name, state, hp, mp, d].filter((p) => p !== undefined).join(" ");
     }
     if (st === undefined) return `${name} out of view`;
-    const known = st.ghost !== undefined || st.dead !== undefined || st.health !== undefined;
-    const state = st.ghost === true ? "ghost" : st.dead === true ? "dead" : known ? "alive" : undefined;
     const hp = state === "alive" ? pct(st.health, st.maxHealth) : undefined;
     const mp = state === "alive" ? powerPct(st.power, st.maxPower, st.powerType) : undefined;
     const head = [name, state, hp, mp].filter((p) => p !== undefined).join(" ");

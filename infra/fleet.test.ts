@@ -514,7 +514,7 @@ describe("parseFleet", () => {
     expect(affinity.get("hk100")?.account).toBe("RUNNER2");
     // A probe is matched by its stamps alone: a run that recorded no roster
     // name and no arm is in no campaign square, whatever entry it resembles.
-    expect(probeRunsOf(runs)).toEqual([{ campaign: "race-probe", version: 1, cell: "orc-warrior", ref: null, arm: null, counted: false, live: false }]);
+    expect(probeRunsOf(runs)).toEqual([{ campaign: "race-probe", version: 1, cell: "orc-warrior", ref: null, arm: null, counted: false, live: false, terminationReason: null }]);
     // A resume picks the spawn entry with the paused run's window.
     const spawned: JobSpawn = spawn({ entries: [{ model: "claude-haiku-5-5", effort: "max" }, { model: "claude-haiku-5-5", effort: "max", compactWindow: "100k" }] });
     const resumed = withResume(spawned, { runId: "b", model: "claude-haiku-5-5", effort: "max", compactWindow: "100k" });
@@ -928,10 +928,10 @@ describe("campaigns: probe sweeps as the third lane", () => {
     const pausedRun = fact({ runId: "r5", campaignVersion: 2, ref: "glm", arm: "base", terminationReason: null, pause: { reason: "operator-pause", at: 1, count: 1, episodeElapsedMs: 1 } });
     const notAProbe = fact({ runId: "r6", campaign: null, episode: "e90" });
     expect(probeRunsOf([old, stillborn, stamped, pausedRun, notAProbe])).toEqual([
-      { campaign: "class-probe", version: null, cell: "dwarf-rogue", ref: null, arm: null, counted: true, live: false },
-      { campaign: "class-probe", version: 2, cell: "dwarf-rogue", ref: "glm", arm: "base", counted: false, live: false },
-      { campaign: "class-probe", version: 2, cell: "dwarf-rogue", ref: "glm", arm: "base", counted: true, live: false },
-      { campaign: "class-probe", version: 2, cell: "dwarf-rogue", ref: "glm", arm: "base", counted: false, live: true },
+      { campaign: "class-probe", version: null, cell: "dwarf-rogue", ref: null, arm: null, counted: true, live: false, terminationReason: "episode-limit" },
+      { campaign: "class-probe", version: 2, cell: "dwarf-rogue", ref: "glm", arm: "base", counted: false, live: false, terminationReason: "episode-limit" },
+      { campaign: "class-probe", version: 2, cell: "dwarf-rogue", ref: "glm", arm: "base", counted: true, live: false, terminationReason: "episode-limit" },
+      { campaign: "class-probe", version: 2, cell: "dwarf-rogue", ref: "glm", arm: "base", counted: false, live: true, terminationReason: null },
     ]);
   });
 

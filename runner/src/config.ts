@@ -22,6 +22,7 @@ import { PARTY_PAUSE, STALL_PAUSE, SUBSCRIPTION_PAUSE } from "./lapse";
 import { routingSchema } from "./routing";
 import { CHARACTER_NAME_RULE, isValidCharacterName } from "./character-name";
 import { partyConfigSchema } from "./party";
+import { endConditionSchema } from "./end-conditions";
 import {
   DEFAULT_DRIVER,
   DRIVER_LIST,
@@ -94,6 +95,11 @@ export const TERMINATION_REASONS = [
   // above the definition's `stopAtLevel`. The measurement is taken; the rest of
   // the clock would buy nothing. A verdict, so it counts like `episode-limit`.
   "level-target",
+  // A probe campaign's kill end: a kill of the creature its definition's `end`
+  // names, credited to this character or a member of its group
+  // (`end-conditions.ts`). A verdict like `level-target`, and the reason a
+  // party's other members inherit when one member's run ends on it.
+  "kill-target",
   "snippet-runaway", // watchdog: sandbox kept getting killed for blocking
   "turn-limit", // config maxTurns reached (smoke/dev runs)
   "tool-call-limit", // config maxToolCallsPerEpisode reached (bounds an external scaffold's inner loop)
@@ -509,6 +515,12 @@ export const runConfigSchema = z.object({
    * (`level-target`). Set only from a campaign file's `stopAtLevel`.
    */
   stopAtLevel: z.number().int().min(2).max(80).optional(),
+  /**
+   * The definition's `end` (`end-conditions.ts`): a level end ends the run as
+   * `level-target`, a kill end as `kill-target`. Set only from a campaign
+   * file whose definition gives `end`; one that gives `stopAtLevel` sets that.
+   */
+  end: z.array(endConditionSchema).min(1).optional(),
   /**
    * The party this run is a member of (docs/proposals/GROUP-PLAY.md): its id
    * (the run-id stem), this member, its role, the size, and every member's

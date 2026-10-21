@@ -2450,7 +2450,7 @@ async function main(): Promise<void> {
     if (party !== null) {
       console.log(
         `\nparty ${party.id}: ${party.size} members launched together after the stager (bun ${STAGER_SCRIPT} --request -), on a fresh launch only;` +
-          `\n      the first member to leave the world ends the others (party-ended) or pauses them (party-paused); a shared stop pauses all`,
+          `\n      the first member to leave the world ends the others (party-ended, or the end reason it reached) or pauses them (party-paused); a shared stop pauses all`,
       );
     }
     for (const [i, a] of pending.entries()) {

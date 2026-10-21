@@ -1543,6 +1543,7 @@ describe("projectCampaigns", () => {
           shape: smuggle({
             objective: POISON.objective,
             stopAtLevel: 10,
+            end: [smuggle({ level: 10 }), smuggle({ kill: smuggle({ entry: 639 }) })],
             episodeMs: 43_200_000,
             idleMs: 1_200_000,
             noXpMs: null,
@@ -1605,7 +1606,7 @@ describe("projectCampaigns", () => {
           "question",
           "note",
           "shape",
-          ...under("shape", ["objective", "stopAtLevel", "episodeMs", "idleMs", "noXpMs", "maxToolCalls", "wiki", "wikiCoords", "resume", "maxAttemptsPerCell"]),
+          ...under("shape", ["objective", "stopAtLevel", "end", ...under("end[]", ["level", "kill", "kill.entry"]), "episodeMs", "idleMs", "noXpMs", "maxToolCalls", "wiki", "wikiCoords", "resume", "maxAttemptsPerCell"]),
           "cells",
           ...under("cells[]", ["id", "race", "class", "note"]),
           "arms",

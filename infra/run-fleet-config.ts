@@ -659,9 +659,10 @@ export function probeRunsOf(runs: readonly RunFact[]): ProbeRun[] {
       arm: f.arm ?? null,
       counted: isCounted(f),
       live: f.live || f.pause !== null,
-      // A party member is tallied with its party (`campaignSquares`); every
-      // other run's shape is what it was.
-      ...(f.party != null ? { party: { id: f.party.id, size: f.party.size }, terminationReason: f.terminationReason } : {}),
+      // A party member is tallied with its party (`campaignSquares`); the
+      // reason says whether a run reached its definition's end.
+      terminationReason: f.terminationReason,
+      ...(f.party != null ? { party: { id: f.party.id, size: f.party.size } } : {}),
     }));
 }
 

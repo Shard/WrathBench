@@ -144,7 +144,8 @@ export default function Party() {
                   <dd>
                     <Show when={v().endedBy} fallback={<span class={statusTone(v().status)}>{v().status}</span>}>
                       {(e) => (
-                        <span title={e().detail ?? ""}>
+                        <span class={v().reached ? "ok" : ""} title={e().detail ?? ""}>
+                          <Show when={v().reached}>reached · </Show>
                           {e().reason}
                           <Show when={e().member}>
                             {(id) => <span class="dim"> · {memberOf(v(), id())?.character || id()}</span>}

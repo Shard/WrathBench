@@ -27,6 +27,14 @@ import { statusOf, type RunStatus } from "./runs";
  */
 export const BOSS_ENTRIES: ReadonlySet<number> = new Set([644, 643, 642, 1763, 646, 647, 639, 645]);
 
+/**
+ * The terminations that say a run reached its definition's end —
+ * `END_REASONS` in `runner/src/end-conditions.ts`, spelled out because the
+ * alias does not reach `runner/src` (dashboard/test/party.test.ts pins the
+ * two). A party whose member ends on one ends the rest on the same reason.
+ */
+export const END_REASONS: ReadonlySet<string> = new Set(["level-target", "kill-target"]);
+
 /** The instance the party is launched to clear. */
 export const PARTY_INSTANCE_MAP = 36;
 
@@ -152,6 +160,8 @@ export interface PartyView {
    * Null while the party plays.
    */
   endedBy: { member: string | null; reason: string; detail: string | null } | null;
+  /** The attempt ended on its definition's end (`END_REASONS`): the measurement it was launched for was taken. */
+  reached: boolean;
   /** The bosses killed, by entry, in kill order (`BOSS_ENTRIES`). */
   bosses: { entry: number; name: string | null; ts: number }[];
   events: PartyEvent[];
@@ -309,7 +319,13 @@ export function partyViewOf(id: string, rows: readonly ResultRun[], details: Rea
    * not the party's. Five stopped the same way at once (an operator's stop)
    * is the reason alone, with nobody to blame.
    */
-  const own = members.filter((m) => m.terminationReason !== null && m.terminationReason !== "party-ended");
+  // A member ended on the reason another member's run reached carries that
+  // member's name as its detail (`<member>: <reason>`, infra/party-fate.ts):
+  // the party's end, not its own verdict.
+  const inherited = (m: PartyMember): boolean =>
+    m.terminationReason === "party-ended" ||
+    members.some((o) => o.member !== m.member && m.terminationDetail === `${o.member}: ${m.terminationReason}`);
+  const own = members.filter((m) => m.terminationReason !== null && !inherited(m));
   const pausedOwn = members.filter((m) => m.row?.pauseReason != null && m.row.pauseReason !== "party-paused");
   const verdictOf = (list: PartyMember[], reasonOf: (m: PartyMember) => string, detailOf: (m: PartyMember) => string | null): PartyView["endedBy"] => {
     if (list.length === 0) return null;
@@ -336,6 +352,7 @@ export function partyViewOf(id: string, rows: readonly ResultRun[], details: Rea
     endedAt: status === "live" || ends.some((e) => e === null) ? null : Math.max(...(ends as number[])),
     status,
     endedBy,
+    reached: status === "ended" && endedBy !== null && END_REASONS.has(endedBy.reason),
     bosses: kills
       .filter((k) => k.boss)
       .sort((a, b) => a.ts - b.ts)
