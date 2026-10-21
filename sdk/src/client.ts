@@ -1581,11 +1581,13 @@ export function longRouteNote(
  * the ack resolved and it is a refusal (`too_far`, `drop`, `target_off_mesh`,
  * …), that verdict: `ok: false` with its `status` and the same hint the
  * harness block carries. Nothing moved; `moveId` names the `WB_MOVE_RESULT`
- * it came from.
+ * it came from. A move refused before anything was sent (`dead`,
+ * `unknown_target`) answers as `moveTo` does, with no `moveId`.
  */
 export type MoveToAsyncResponse =
   | (MoveToResponse & { readonly hint?: string })
-  | { readonly ok: false; readonly action: string; readonly moveId: number; readonly status: string; readonly hint?: string };
+  | { readonly ok: false; readonly action: string; readonly moveId: number; readonly status: string; readonly hint?: string }
+  | { readonly ok: false; readonly status: "dead" | "unknown_target"; readonly hint: string };
 
 export interface WaitForTransferOptions {
   /** How long to wait for `SMSG_NEW_WORLD`, in ms. Default 15000: a far teleport is a few server ticks. */
@@ -3978,10 +3980,12 @@ export class WrathClient {
    * but this is the call for a walk longer than the caller's own time budget:
    * dispatch here, then watch `WB_MOVE_RESULT` (or `state.self.position`).
    *
-   * Takes the same targets `moveTo` does: a point, a unit, or a guid. A target
-   * that resolves to no position throws here rather than returning a verdict —
-   * this is the raw tier, and there is no result object to put an answer in;
-   * `moveTo` answers the same case with `status: "unknown_target"`.
+   * Takes the same targets `moveTo` does: a point, a unit, or a guid. The
+   * refusals `moveTo` answers before sending anything are answered here the
+   * same way, as values: a target that resolves to no position is
+   * `{ ok: false, status: "unknown_target", hint }`, and a corpse is
+   * `{ ok: false, status: "dead", hint }` (a rejection here once surfaced in a
+   * background routine as the sandbox's fatal-error line).
    *
    * A walk that was dispatched acks with its route's `pathLength` (yards),
    * and with a `hint` when that route is far longer than the straight line
@@ -3990,14 +3994,12 @@ export class WrathClient {
   moveToAsync(target: MoveTarget, options: { force?: boolean } = {}): Promise<MoveToAsyncResponse> {
     const resolved = resolveMoveTarget(target, this.state, "moveTo");
     if ("unknown" in resolved) {
-      throw new TypeError(
-        `${resolved.unknown} (moveTo(target) answers this case with { ok: false, status: "unknown_target" } ` +
-          `instead of throwing.)`,
-      );
+      this.noteActionHint("moveToAsync", "unknown_target", resolved.unknown);
+      return Promise.resolve({ ok: false, status: "unknown_target", hint: resolved.unknown });
     }
     if (this.isCorpse()) {
       this.noteActionHint("moveToAsync", "dead", DEAD_MOVE_HINT);
-      return Promise.reject(new Error(`moveToAsync: ${DEAD_MOVE_HINT}`));
+      return Promise.resolve({ ok: false, status: "dead", hint: DEAD_MOVE_HINT });
     }
     // The raw tier: no fall estimate stands in for the caller. A `drop`
     // arrives as the event it is, and `force` is the caller's own word.

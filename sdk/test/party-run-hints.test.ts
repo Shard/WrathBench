@@ -246,7 +246,8 @@ describe("acting while dead: a corpse cannot move or fight, a ghost can walk", (
     const moved = await client.moveTo({ x: -1220, y: 987, z: 42 });
     const DEAD = "you are dead and a corpse cannot move; nothing was sent. sdk.repop() releases your spirit, and a ghost can walk.";
     expect(moved).toEqual({ ok: false, status: "dead", hint: DEAD });
-    await expect(client.moveToAsync({ x: -1220, y: 987, z: 42 })).rejects.toThrow(`moveToAsync: ${DEAD}`);
+    // Resolved, not rejected: the refusal moveTo answers, the same way.
+    expect(await client.moveToAsync({ x: -1220, y: 987, z: 42 })).toEqual({ ok: false, status: "dead", hint: DEAD });
     expect(stub.actions.filter((a) => a.action === "move_to")).toEqual([]);
     expect(client.drainActionHints().map((h) => `${h.action} ${h.status}`).sort()).toEqual(["moveTo dead", "moveToAsync dead"]);
 
