@@ -13,9 +13,9 @@ import { describe, expect, test } from "bun:test";
 import { campaignDefinitionSchema, campaignHash, issuesOf } from "../src/campaign-def";
 import { campaignFileOf, parseCampaignFile, writeCampaignFile, type CampaignFile } from "../src/campaign-file";
 import { CampaignLaunchError } from "../src/campaign-launch";
-import { comparabilityOf } from "../src/comparability";
+import { comparabilityOf, promptHash } from "../src/comparability";
 import { memberRunId, type PartyLaunch } from "../src/party";
-import { buildSystemPrompt, objectiveSection, stagedCharacterNote } from "../src/prompt";
+import { SYSTEM_PROMPT, WORLD_SECTION, buildSystemPrompt, objectiveSection, stagedCharacterNote } from "../src/prompt";
 import { configFromArgs, stagedLevelOf } from "../src/run";
 import { parseRunArgs } from "../src/run-flags";
 import { checkedIn, checkedInFiles, definition, joined, PARTY_MEMBERS, partyDefinition } from "./fixtures/campaigns";
@@ -182,6 +182,44 @@ describe("both drivers are told the same", () => {
     // and each builds its system prompt from the same config.objective.
     expect(buildSystemPrompt(c.objective, c.episode, "wrathbench", c.wiki)).toContain(block);
     expect(buildSystemPrompt(c.objective, c.episode, "claude-code", c.wiki)).toContain(block);
+  });
+});
+
+describe("the objective replaces the broad goal, and the probe states its clock (operator, 2026-10-21)", () => {
+  const dm = checkedIn("deadmines@3");
+  const { definitions: dmDefs } = joined([dm], {});
+  const tankFile = (): CampaignFile => ({
+    ...campaignFileOf(dmDefs.find((d) => d.ref === "deadmines@3")!, "party"),
+    party: {
+      id: STEM,
+      member: "tank",
+      members: dm.party!.members.map((m, i) => ({ member: m.id, role: m.role, runId: memberRunId(STEM, m.id), account: ACCOUNTS[i]!, character: m.character! })),
+    },
+  });
+
+  test("the Deadmines tank is told its objective in place of the goal, and that the run lasts four hours", () => {
+    const c = configFromArgs([...MODEL, "--episode", "probing", "--campaign-file", fileOn(tankFile()), "--character", "Tankpartyb"], {});
+    expect(c.watchdogs.episodeMs).toBe(14_400_000);
+    const objective = dm.party!.members.find((m) => m.id === "tank")!.objective!;
+    for (const harness of ["wrathbench", "claude-code"] as const) {
+      const p = buildSystemPrompt(c.objective, c.episode, harness, c.wiki, c.watchdogs.episodeMs);
+      expect(p.startsWith(`${WORLD_SECTION}\n\nThis run lasts four hours.\n\n${objectiveSection(objective)}\n\n## The snippet runtime`)).toBe(true);
+      expect(p).not.toContain("Your goal is to progress");
+      expect(p).not.toContain("in addition to the standing goal");
+      // What the drivers render is what the tuple hashes.
+      if (harness === "claude-code") expect(comparabilityOf(c, "v").promptHash).toBe(promptHash(p));
+    }
+  });
+
+  test("a probe without an objective keeps the prompt it always had, budget or not", () => {
+    // race-probe@1 has a twelve-hour budget and no objective: no clock, no
+    // change, through the same config path a launch takes.
+    const path = fileOn(campaignFileOf(pub("race-probe@1"), "orc-warrior"));
+    const c = configFromArgs(["--driver", "openai", "--model", "m", "--episode", "probing", "--campaign-file", path], {});
+    expect(c.objective).toBeUndefined();
+    expect(c.watchdogs.episodeMs).toBe(43_200_000);
+    expect(buildSystemPrompt(c.objective, c.episode, "wrathbench", c.wiki, c.watchdogs.episodeMs)).toBe(SYSTEM_PROMPT);
+    expect(comparabilityOf(c, "v").promptHash).toBe(promptHash(SYSTEM_PROMPT));
   });
 });
 
