@@ -2022,17 +2022,20 @@ const LOOT_SLOT_ROLL_ONGOING = 1;
  * `state.pendingRolls()`, and four of five party members never found either
  * (the 2026-10-21 Deadmines party: the mage voted through raw
  * `CMSG_LOOT_ROLL`). The seconds left are as of `now`; the deadline is the
- * frame's own.
+ * frame's own. An unvoted frame passes at its deadline: the core counts only
+ * need and greed votes (`Group::CountTheRoll`, "who didn't vote ... he will
+ * pass").
  */
 function openRollsHint(rolls: readonly PendingRoll[], now: number): string {
   const rows = rolls.map(
     (r) => `${JSON.stringify(r.name ?? `item ${r.itemId}`)} (${r.allowed.join("/")}, ${Math.max(0, Math.round((r.deadline - now) / 1000))}s left)`,
   );
+  // The call names no button: which one to press is the model's to choose.
   const first = rolls[0]!;
   const which = first.name === undefined ? String(first.itemId) : JSON.stringify(first.name);
   return (
     `${rolls.length === 1 ? "a group loot roll is open on" : `${rolls.length} group loot rolls are open on`} ${rows.join(", ")}: ` +
-    `vote with await sdk.lootRoll(${which}, "${first.allowed[0]}"), the choice one of the buttons listed. ` +
+    `vote with await sdk.lootRoll(${which}, choice), choice one of the buttons listed. ` +
     `state.pendingRolls() holds each frame and its deadline; a frame left unvoted at its deadline counts as a pass`
   );
 }

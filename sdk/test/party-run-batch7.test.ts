@@ -98,8 +98,8 @@ describe("an open group roll is said where the window and the harness block show
     push(stub, frame(73, "SMSG_LOOT_RELEASE_RESPONSE", { guid: CREATURE_GUID }, TS + 2070));
     const loot = await pending;
     const LINE =
-      'a group loot roll is open on "Brigand\'s Cape" (need/greed/pass, 58s left): vote with await sdk.lootRoll("Brigand\'s Cape", "need"), ' +
-      "the choice one of the buttons listed. state.pendingRolls() holds each frame and its deadline; a frame left unvoted at its deadline counts as a pass";
+      'a group loot roll is open on "Brigand\'s Cape" (need/greed/pass, 58s left): vote with await sdk.lootRoll("Brigand\'s Cape", choice), ' +
+      "choice one of the buttons listed. state.pendingRolls() holds each frame and its deadline; a frame left unvoted at its deadline counts as a pass";
     expect(loot).toMatchObject({ ok: true, status: "looted", items: [{ itemId: 2874, count: 1 }], hint: LINE });
     const hints = client.drainActionHints();
     expect(hints.map((h) => `${h.action} ${h.status}`)).toEqual(["lootRoll open"]);
@@ -114,7 +114,7 @@ describe("an open group roll is said where the window and the harness block show
     push(stub, startRoll(40, 0x02));
     await folded(client, "SMSG_LOOT_START_ROLL", 40);
     expect(client.drainActionHints()[0]?.hint).toStartWith(
-      'a group loot roll is open on "item 5193" (greed/pass, 60s left): vote with await sdk.lootRoll(5193, "greed"),',
+      'a group loot roll is open on "item 5193" (greed/pass, 60s left): vote with await sdk.lootRoll(5193, choice),',
     );
     const pending = client.lootCorpse(CREATURE_GUID, { timeout: 2000 });
     await untilAction(stub, "loot_all");

@@ -14,8 +14,8 @@
  *  1. The outermost named function of the model's code on the stack: `startAI`,
  *     `tick` — what the model called the routine.
  *  2. Else the outermost frame's top-level statement in its snippet: the
- *     `setInterval(…)` or IIFE that launched an anonymous routine, or the
- *     statement itself for a snippet's own top-level call.
+ *     `setInterval(…)` or IIFE that launched an anonymous routine. A
+ *     snippet's own top-level code is no routine and gets no label.
  *  3. Else (code a snippet built with `eval`, which carries no snippet tag, or
  *     a verdict that arrived with no caller on the stack) the routine the
  *     originating snippet built or started: the name it assigned from an
@@ -53,16 +53,17 @@ const UNNAMED: ReadonlySet<string> = new Set(["", "anonymous", "<anonymous>"]);
 
 /**
  * The model's own frames, innermost first: a snippet's body (`SNIPPET_URL`)
- * or code a snippet built with `eval`, which Bun places at the host module's
- * `file://` URL — the SDK's and the sandbox's own frames are plain paths.
+ * or code a snippet built with `eval`, which Bun places at `evalFile`, the
+ * `file://` URL of the module that compiled the snippet — the SDK's and the
+ * sandbox's own frames are plain paths.
  */
-function userFrames(stack: string): Frame[] {
+function userFrames(stack: string, evalFile: string): Frame[] {
   const out: Frame[] = [];
   for (const raw of stack.split("\n")) {
     const m = FRAME_RE.exec(raw);
     if (m === null) continue;
     const file = m[2]!;
-    if (!file.startsWith(SNIPPET_URL) && !file.startsWith("file://")) continue;
+    if (!file.startsWith(SNIPPET_URL) && file !== evalFile) continue;
     out.push({ name: (m[1] ?? "").trim(), file, line: Number(m[3]) });
   }
   return out;
@@ -126,10 +127,15 @@ export function builtRoutine(body: string): string | undefined {
 /**
  * The label for a call made from eval `evalId`'s context with stack `stack`:
  * rules 1–3 above, `undefined` when none applies (the caller keeps the
- * snippet's opening). `bodies` holds each snippet's compiled body by eval id.
+ * snippet's opening) and for a snippet's own top-level code, which is no
+ * routine. `bodies` holds each snippet's compiled body by eval id; `evalFile`
+ * is where Bun places code built with `eval` (`userFrames`).
  */
-export function callSiteLabel(stack: string, evalId: number, bodies: ReadonlyMap<number, string>): string | undefined {
-  const frames = userFrames(stack);
+export function callSiteLabel(stack: string, evalId: number, bodies: ReadonlyMap<number, string>, evalFile: string): string | undefined {
+  const all = userFrames(stack, evalFile);
+  // A snippet's own top level (the AsyncFunction Bun names `anonymous`) is
+  // the caller of a routine's first synchronous stretch, never the routine.
+  const frames = all.filter((f) => !(f.name === "anonymous" && f.file.startsWith(SNIPPET_URL)));
   const named = frames.findLast((f) => !UNNAMED.has(f.name));
   if (named !== undefined) return named.name;
   const outer = frames.at(-1);
@@ -138,6 +144,7 @@ export function callSiteLabel(stack: string, evalId: number, bodies: ReadonlyMap
     const statement = body === undefined ? undefined : topLevelStatement(body, outer.line - BODY_LINE_OFFSET);
     if (statement !== undefined) return shown(statement.text, statement.more);
   }
+  if (frames.length === 0 && all.length > 0) return undefined;
   const own = bodies.get(evalId);
   return own === undefined ? undefined : builtRoutine(own);
 }

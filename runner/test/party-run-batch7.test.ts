@@ -117,29 +117,46 @@ describe("a routine's harness line names the routine, not the snippet's set-up",
     expect(later.actionHints?.map((h) => h.from)).toEqual(["startAI"]);
   });
 
-  test("the current snippet's own calls stay one line per status, whichever lines made them", async () => {
+  test("a named function a snippet built with eval is named by its own name", async () => {
     const host = makeHost(startModuleStub());
     await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
     await host.evalSnippet(SPELLBOOK);
-    const own = await host.evalSnippet(
-      `await sdk.castSpell(652).catch(() => {});\nawait sdk.castSpell(653).catch(() => {});\nawait sdk.castSpell(654).catch(() => {}); 1`,
+    await host.evalSnippet(
+      `globalThis.go = eval("(async function rogueLoop() { await sleep(20, { wake: false }); await sdk.castSpell(655).catch(() => {}); })"); go(); "ok"`,
     );
-    expect(own.actionHints?.map((h) => [h.status, h.count, h.from])).toEqual([["not_known", 3, undefined]]);
-    expect(own.actionHints?.[0]?.hint).toContain("spell 654");
+    const later = await host.evalSnippet(`await sleep(150, { wake: false }); 1`);
+    expect(later.actionHints?.map((h) => h.from)).toEqual(["rogueLoop"]);
+  });
+
+  test("the current snippet's own calls stay one line per status, however many lines made them, and a routine's line survives them", async () => {
+    const host = makeHost(startModuleStub());
+    await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
+    await host.evalSnippet(SPELLBOOK);
+    await host.evalSnippet(`globalThis.iv = setInterval(() => { sdk.castSpell(656).catch(() => {}); }, 30); "ok"`);
+    // Forty statements, each its own line: the SDK keeps 32 tally keys between drains.
+    const calls = Array.from({ length: 40 }, (_, i) => `await sdk.castSpell(${700 + i}).catch(() => {});`).join("\n");
+    const own = await host.evalSnippet(`${calls}\nawait sleep(100, { wake: false }); clearInterval(globalThis.iv); 1`);
+    const lines = (own.actionHints ?? []).map((h) => [h.status, h.from, h.count >= 1]);
+    expect(lines).toContainEqual(["not_known", undefined, true]);
+    expect(lines).toContainEqual(["not_known", "globalThis.iv = setInterval(() => {…", true]);
+    expect(own.actionHints?.find((h) => h.from === undefined)).toMatchObject({ count: 40 });
+    expect(own.actionHints?.find((h) => h.from === undefined)?.hint).toContain("spell 739");
   });
 });
 
 describe("callSiteLabel over a stack and the compiled bodies", () => {
   const body = compileSnippet(`await onRevive();\nglobalThis.trip2 = (async () => {\n  for (const p of [1]) {\n    await sdk.moveTo(p);\n  }\n})();\n"ok"`).statementsBody;
   const bodies = new Map([[12, body]]);
+  const EVAL_FILE = "file:///app/runner/src/sandbox/entry.ts";
   test("the outermost frame's statement, or its name, or the routine the snippet built", () => {
     const line = body.split("\n").findIndex((l) => l.includes("sdk.moveTo")) + 1;
     const stack = `Error\n    at moveTo (/app/sdk/src/client.ts:1:1)\n    at async <anonymous> (${SNIPPET_URL}12:${line + 2}:20)`;
-    expect(callSiteLabel(stack, 12, bodies)).toBe("globalThis.trip2 = (async () => {…");
-    expect(callSiteLabel(`Error\n    at async tick (${SNIPPET_URL}9:3:1)\n    at async loop (${SNIPPET_URL}8:3:1)`, 12, bodies)).toBe("loop");
+    expect(callSiteLabel(stack, 12, bodies, EVAL_FILE)).toBe("globalThis.trip2 = (async () => {…");
+    expect(callSiteLabel(`Error\n    at async tick (${SNIPPET_URL}9:3:1)\n    at async loop (${SNIPPET_URL}8:3:1)`, 12, bodies, EVAL_FILE)).toBe("loop");
     const rebuilt = new Map([[13, compileSnippet(`let s9 = startAI.toString(); globalThis.startAI = eval("(" + s9 + ")"); startAI(); "ok"`).statementsBody]]);
-    expect(callSiteLabel(`Error\n    at async <anonymous> (file:///app/runner/src/sandbox/entry.ts:4:23)`, 13, rebuilt)).toBe("startAI");
-    // Nothing to go on: the caller keeps the snippet's opening.
-    expect(callSiteLabel("Error\n    at moveTo (/app/sdk/src/client.ts:1:1)", 12, bodies)).toBeUndefined();
+    expect(callSiteLabel(`Error\n    at async <anonymous> (${EVAL_FILE}:4:23)`, 13, rebuilt, EVAL_FILE)).toBe("startAI");
+    // A snippet's own top level is no routine; nothing to go on keeps the snippet's opening.
+    expect(callSiteLabel(`Error\n    at castSpell (/app/sdk/src/client.ts:1:1)\n    at anonymous (${SNIPPET_URL}12:3:9)`, 12, bodies, EVAL_FILE)).toBeUndefined();
+    expect(callSiteLabel("Error\n    at moveTo (/app/sdk/src/client.ts:1:1)", 12, bodies, EVAL_FILE)).toBeUndefined();
   });
 });

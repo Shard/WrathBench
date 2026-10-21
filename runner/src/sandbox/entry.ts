@@ -646,21 +646,30 @@ const snippetBodies = new Map<number, string>();
 const callSites = new Map<number, { evalId: number; label: string }>();
 const callSiteIds = new Map<string, number>();
 const CALL_SITES_MAX = 2048;
+let nextCallSite = -1;
+/** Frames enough to reach a routine's entry under the SDK's own (the default is 10). */
+const CALL_SITE_STACK_LIMIT = 64;
 
 function callOrigin(): number | undefined {
   const evalId = evalContext.getStore()?.evalId;
   if (evalId === undefined) return undefined;
-  const label = callSiteLabel(new Error().stack ?? "", evalId, snippetBodies);
+  const limit = Error.stackTraceLimit;
+  Error.stackTraceLimit = CALL_SITE_STACK_LIMIT;
+  const stack = new Error().stack ?? "";
+  Error.stackTraceLimit = limit;
+  const label = callSiteLabel(stack, evalId, snippetBodies, import.meta.url);
   if (label === undefined) return evalId;
   const key = `${evalId}\n${label}`;
   let id = callSiteIds.get(key);
   if (id === undefined) {
-    id = -(callSiteIds.size + 1);
+    // The oldest site goes first; its id is never handed out again, so a
+    // tally entry still holding it cannot be read as another's.
     if (callSiteIds.size >= CALL_SITES_MAX) {
-      callSiteIds.clear();
-      callSites.clear();
-      id = -1;
+      const [oldKey, oldId] = callSiteIds.entries().next().value as [string, number];
+      callSiteIds.delete(oldKey);
+      callSites.delete(oldId);
     }
+    id = nextCallSite--;
     callSiteIds.set(key, id);
     callSites.set(id, { evalId, label });
   }
