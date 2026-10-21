@@ -26,6 +26,12 @@
  *   the one tally, read by the scheduler and the campaigns page alike.
  * - **A finished campaign is not archived.** `enabled: false` stops the
  *   scheduling; the results stay visible while the definition is published.
+ *
+ * One verdict is the operator's rather than the tally's: a version the row
+ * lists in `concluded` is finished whatever its squares hold (operator,
+ * 2026-10-21: deadmines@1–3, cleared under @3, whose runs all ended as
+ * operator pauses). It launches and resumes nothing, and the page shows it
+ * complete with its counts as they were.
  */
 
 import { isEndReason } from "./end-conditions";
@@ -93,6 +99,17 @@ export const campaignRowSchema = z
      * endpoint produces no observation.
      */
     excludeUnhealthy: z.boolean().default(true),
+    /**
+     * Versions of this campaign the operator has declared finished, whichever
+     * version `version` names. Such a version owes nothing: no square of it
+     * launches and no paused run of it resumes, and the campaigns page shows
+     * it complete — marked as the operator's verdict — with the counts the
+     * runs made (operator, 2026-10-21).
+     */
+    concluded: z
+      .array(z.number().int().positive())
+      .refine((vs) => new Set(vs).size === vs.length, { message: "concluded lists a version twice" })
+      .optional(),
   })
   .strict();
 
@@ -124,6 +141,8 @@ export interface Campaign {
   /** The lane this campaign's launches bill (`campaigns.<id>.subscription`); absent: the assignment's own. */
   subscription?: string;
   excludeUnhealthy: boolean;
+  /** The versions of this id the operator declared finished (`campaigns.<id>.concluded`); empty when none. */
+  concluded: number[];
   /** The definition's cells and arms, here because every planner walks them. */
   cells: readonly CampaignCell[];
   arms: readonly CampaignArm[];
@@ -299,7 +318,7 @@ export function campaignRowProblem(name: string, spec: unknown): string | null {
   if (!CAMPAIGN_NAME.test(name)) return `campaign ${name}: the id must match ${CAMPAIGN_NAME}`;
   const parsed = campaignRowSchema.safeParse(spec);
   if (parsed.success) return null;
-  return `campaign ${name}: ${issuesOf(parsed.error)} — a row is { version, enabled, assignments [{ model, runsPerCell }], account?, accounts?, subscription?, excludeUnhealthy? }`;
+  return `campaign ${name}: ${issuesOf(parsed.error)} — a row is { version, enabled, assignments [{ model, runsPerCell }], account?, accounts?, subscription?, excludeUnhealthy?, concluded? }`;
 }
 
 /**
@@ -363,6 +382,7 @@ export function parseCampaigns(
       ...(accounts !== undefined ? { account: accounts[0]!, accounts: [...accounts] } : {}),
       ...(row.subscription !== undefined ? { subscription: row.subscription } : {}),
       excludeUnhealthy: row.excludeUnhealthy,
+      concluded: [...(row.concluded ?? [])],
       cells: def.cells,
       arms: def.arms,
       resume: def.resume,
@@ -422,6 +442,11 @@ export function parseCampaignBlocks(
   const c = parseCampaigns(rawRows, d.definitions);
   const pairs = roster === undefined ? [] : applyPairRefusals(c.campaigns, roster, launch);
   return { definitions: d.definitions, campaigns: c.campaigns, refused: [...d.refused, ...c.refused, ...pairs] };
+}
+
+/** Whether the operator declared this version of the campaign finished (`concluded`): it owes nothing. */
+export function isConcluded(c: Pick<Campaign, "concluded">, version: number): boolean {
+  return c.concluded.includes(version);
 }
 
 /** Look a published definition up by `id@version`. */
@@ -693,7 +718,8 @@ export interface CampaignWork {
  * A square is work while it is short of its counted runs and has not had its
  * `maxAttemptsPerCell` launches — a live launch counts toward the cap, so a
  * square at its cap is never launched again while its last attempt plays —
- * and while its (assignment, arm) pair is not refused.
+ * and while its (assignment, arm) pair is not refused. A version the operator
+ * concluded has no work at all, whatever its squares hold.
  */
 export function campaignWork(
   campaigns: readonly Campaign[],
@@ -703,7 +729,7 @@ export function campaignWork(
 ): CampaignWork[] {
   const out: (CampaignWork & { modelDone: number; armDone: number; aIdx: number; cIdx: number; armIdx: number })[] = [];
   campaigns.forEach((c, order) => {
-    if (!c.enabled) return;
+    if (!c.enabled || isConcluded(c, c.version)) return;
     const healthy = new Set(campaignAssignments(c, catalog, eligible).map((a) => a.model));
     const squares = campaignSquares(c, catalog, probeRuns);
     const modelDone = new Map<string, number>();

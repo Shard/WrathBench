@@ -333,7 +333,7 @@ campaign-defs  published campaign definitions, `<id>@<version>` → { definition
             fresh store gets its definitions by publishing them, then seeding the rest.
 campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only —
             { <id>: { version, enabled, assignments [{ model: <roster name>, runsPerCell }],
-            account?, accounts?, subscription?, excludeUnhealthy? } }, strict. `subscription` (a
+            account?, accounts?, subscription?, excludeUnhealthy?, concluded? } }, strict. `subscription` (a
             lane's env var NAME, one `policy.subscriptions` lists, of the assignments' drivers'
             kind) is a PINNED campaign's lane: every launch of the campaign bills it, overriding
             the roster entry's own lane for those runs only — the entry's scored evals keep theirs
@@ -352,7 +352,10 @@ campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only
             the idle work, on a model that owes no eval and holds no live or paused run. Either
             way `excludeUnhealthy` skips a retired or cooling model. Completion is DERIVED per
             (id, version, assignment, arm, cell) against the counted probe runs on disk — set
-            `enabled: false` when a sweep is done and its results stay visible. Progress is on the
+            `enabled: false` when a sweep is done and its results stay visible. `concluded` (a
+            list of versions of this id, whichever one `version` names) is the operator's verdict
+            that a version is finished: it launches and resumes nothing, and the page shows it
+            complete, marked `complete*`, with its counts as the runs made them. Progress is on the
             /campaigns page ("Probe campaigns", below).
 queue       jobs, in priority order (never `probing`: a probe is a campaign's cell): { ref | [refs], episode e90|e360|freeplay, repeat n|"loop",
             enabled, account? } — plus `subscription` (a lane's env var NAME) and nothing else;
@@ -1430,6 +1433,9 @@ publish is `PUBLISH_RULE` in `campaign-publish.ts`: any origin branch today,
 3. To queue more data later, raise an assignment's `runsPerCell` or append
    another assignment. To move to a new version, point `version` at it; work
    is counted per version, so the new one starts from nothing.
+4. To declare a version finished whatever its squares hold, list it in
+   `concluded` (the whole list: a patch replaces it). It launches and resumes
+   nothing, and the page marks it `complete*`.
 
 The CLI validates every write against the whole config, as the `/config` page
 does:

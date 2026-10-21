@@ -48,8 +48,7 @@ import {
   squareHref,
   squareText,
   squareTitle,
-  stateClass,
-  stateTitle,
+  stateBadge,
   truncate,
   wikiText,
 } from "../lib/campaigns";
@@ -175,9 +174,7 @@ function IndexRow(props: { c: CampaignView }) {
         <A href={campaignHref(c())}>{c().key}</A>
       </td>
       <td>
-        <span class={stateClass(c().state)} title={stateTitle(c().state)}>
-          {c().state}
-        </span>
+        <StateBadge c={c()} />
       </td>
       <td class="dim" title={c().question}>
         {truncate(c().question, QUESTION_CHARS)}
@@ -198,6 +195,16 @@ function IndexRow(props: { c: CampaignView }) {
         <NewestLink c={c()} />
       </td>
     </tr>
+  );
+}
+
+/** The state word, with the operator's verdict marked apart from a derived one. */
+function StateBadge(props: { c: CampaignView }) {
+  const b = () => stateBadge(props.c);
+  return (
+    <span class={b().cls} title={b().title}>
+      {b().text}
+    </span>
   );
 }
 
@@ -258,9 +265,7 @@ function CampaignBody(props: { c: CampaignView; refused: CampaignsResponse["refu
     <>
       <h1>
         {c().key}{" "}
-        <span class={stateClass(c().state)} title={stateTitle(c().state)}>
-          {c().state}
-        </span>
+        <StateBadge c={c()} />
       </h1>
 
       <dl class="tuple">

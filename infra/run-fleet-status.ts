@@ -97,7 +97,7 @@ import { maskCredentialShapes } from "../runner/src/secret-scan";
 import { accountHeldBy } from "./run-roster";
 import { readImageRecord } from "./run-pod";
 import { type CampaignFile, runCampaignFile } from "../runner/src/campaign-file";
-import type { Campaign, CampaignRefusal } from "../runner/src/campaigns";
+import { isConcluded, type Campaign, type CampaignRefusal } from "../runner/src/campaigns";
 import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
 import { resumesOnPause, TAINT_AFTER } from "../runner/src/lapse";
 import { subscriptionThresholds } from "../runner/src/subscription-usage";
@@ -284,6 +284,19 @@ export function formatCampaignRefusals(refusals: readonly CampaignRefusal[]): st
   const own = refusals.filter((r) => r.campaign === undefined);
   if (own.length === 0) return [];
   return [`! ${own.length} campaign square(s) or definition(s) refused — nothing is launched for them:`, ...own.map((r) => `   ${r.key}: ${r.reason}`)];
+}
+
+/**
+ * Enabled campaign rows whose own version the operator concluded
+ * (`concluded`). Pure. The row stays enabled and launches nothing, which
+ * would otherwise read as a sweep stuck in silence.
+ */
+export function formatConcludedCampaigns(campaigns: readonly Pick<Campaign, "name" | "version" | "enabled" | "concluded">[]): string[] {
+  const out = campaigns
+    .filter((c) => c.enabled && isConcluded(c, c.version))
+    .map((c) => `   campaigns/${c.name}: ${c.name}@${c.version} is concluded — point version at a newer one, or set enabled: false`);
+  if (out.length === 0) return [];
+  return [`! ${out.length} enabled campaign(s) on a concluded version — nothing is launched or resumed for them:`, ...out];
 }
 
 /**
@@ -787,6 +800,7 @@ export function printStatus(): void {
   }
   for (const line of formatRefusals(config?.refusals ?? [], rejected === undefined)) console.log(line);
   for (const line of formatCampaignRefusals(config?.campaignRefusals ?? [])) console.log(line);
+  for (const line of formatConcludedCampaigns(config?.campaigns ?? [])) console.log(line);
   for (const line of formatPriceGaps(config?.roster ?? {})) console.log(line);
   for (const line of formatCatalogueGaps(config?.roster ?? {})) console.log(line);
   // Liveness, honestly, from either side of a container boundary (`stateLiveness`).

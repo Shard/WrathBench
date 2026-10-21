@@ -211,6 +211,37 @@ describe("progress and state agree", () => {
 
   test("a disabled row with work left is disabled, not complete", () => {
     expect(view([], { wake: { ...ROW.wake, enabled: false } }).state).toBe("disabled");
+    expect(view([]).concluded).toBe(false);
+  });
+
+  test("a version the operator concluded is complete by that verdict, and says so; its counts are what was counted", () => {
+    const runs = [run({ runId: "1", minutes: toTen(100) }), run({ runId: "2", arm: "wake", modelResponses: 0 })];
+    const derived = view(runs);
+    for (const enabled of [true, false]) {
+      const v = view(runs, { wake: { ...ROW.wake, enabled, concluded: [1] } });
+      expect(v).toMatchObject({ state: "complete", concluded: true });
+      expect(v.progress).toEqual(derived.progress);
+      expect(v.grid).toEqual(derived.grid);
+    }
+    // A run still in flight: the verdict stands, and the progress says live.
+    const live = view([run({ runId: "l", terminationReason: null })], { wake: { ...ROW.wake, concluded: [1] } });
+    expect(live).toMatchObject({ state: "complete", concluded: true, progress: { live: 1 } });
+  });
+
+  test("concluded applies to any version of the id, whichever version the row now names", () => {
+    const v2 = definition({ ...arms, version: 2 });
+    const rows = { wake: { ...ROW.wake, version: 2, concluded: [1] } };
+    // A run of @1 left paused: no termination, which reads as live.
+    const old = [run({ runId: "old", minutes: toTen(100) }), run({ runId: "paused", terminationReason: null, startedAt: 2000 })];
+    const r = campaignsView(old, roster(rows, [arms, v2]), counted).campaigns;
+    expect(r.map((c) => `${c.key}:${c.state}:${c.concluded}`)).toEqual(["wake@2:queued:false", "wake@1:complete:true"]);
+    // No row names @1, so it wants nothing: its runs are counted, never invented.
+    expect(r[1]!.progress).toEqual({ want: 0, done: 0, attempted: 0, capped: 0, live: 0 });
+    expect(r[1]!.config).toBeNull();
+    expect(r[1]!.grid[0]!.squares[0]).toMatchObject({ runs: 1, counted: 1, live: 1 });
+    // Without the verdict the same version reads as before.
+    const plain = campaignsView(old, roster({ wake: { ...ROW.wake, version: 2 } }, [arms, v2]), counted).campaigns;
+    expect(plain.map((c) => `${c.key}:${c.state}:${c.concluded}`)).toEqual(["wake@2:queued:false", "wake@1:running:false"]);
   });
 });
 

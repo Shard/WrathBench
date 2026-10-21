@@ -43,6 +43,8 @@ import {
   squareHref,
   squareText,
   squareTitle,
+  CONCLUDED_TITLE,
+  stateBadge,
   stateClass,
   stateTitle,
   terminationMix,
@@ -77,6 +79,14 @@ describe("state", () => {
     const states: CampaignState[] = ["running", "queued", "complete", "disabled", "unassigned"];
     expect(states.map(stateClass)).toEqual(["ok", "", "ok-muted", "warn", "dim"]);
     for (const s of states) expect(stateTitle(s).length).toBeGreaterThan(0);
+  });
+
+  test("the operator's verdict reads complete with a mark and its own hover; a derived complete reads plain", () => {
+    expect(stateBadge({ state: "complete", concluded: true })).toEqual({ text: "complete*", cls: "ok-muted", title: CONCLUDED_TITLE });
+    expect(stateBadge({ state: "complete", concluded: false })).toEqual({ text: "complete", cls: "ok-muted", title: stateTitle("complete") });
+    // An older API that serves no `concluded` reads as derived.
+    expect(stateBadge({ state: "complete" })).toEqual(stateBadge({ state: "complete", concluded: false }));
+    expect(stateBadge(WAKE)).toEqual({ text: "running", cls: "ok", title: stateTitle("running") });
   });
 });
 
