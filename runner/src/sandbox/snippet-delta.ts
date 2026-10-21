@@ -195,7 +195,10 @@ export class SnippetDeltaRecorder {
       if (this.levelBase !== undefined && level > this.levelBase) out.level = { from: this.levelBase, to: level };
       this.levelBase = level;
     }
-    const log = this.state.questLog();
+    // The quest slots ride the same self block as the level, and the SDK reads
+    // an empty log before that block has arrived: seeding from it would print
+    // the whole log as new on the next drain, after login or a restart.
+    const log = level === undefined ? undefined : this.state.questLog();
     if (log !== undefined) {
       const now = new Map<string, { complete: boolean; label: string }>();
       for (const q of log) now.set(String(q.questId), { complete: q.complete === true, label: questLabel(q) });
@@ -347,6 +350,11 @@ export class SnippetDeltaRecorder {
   }
 }
 
+/** A tie-break by code unit, never by locale, so the bytes do not depend on where the runner runs. */
+function byText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /** `Fireball ×3` — a kind of hit and how often, the count only when more than one. */
 function hitLabel(h: { what: string; count: number }): string {
   return h.count > 1 ? `${h.what} ×${h.count}` : h.what;
@@ -355,9 +363,9 @@ function hitLabel(h: { what: string; count: number }): string {
 function damageLine(d: SnippetDelta): string | undefined {
   const total = d.damage.reduce((n, s) => n + s.total, 0) + d.damageOther.total;
   if (total <= 0) return undefined;
-  const sources = [...d.damage].filter((s) => s.total > 0).sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
+  const sources = [...d.damage].filter((s) => s.total > 0).sort((a, b) => b.total - a.total || byText(a.name, b.name));
   const shown = sources.slice(0, SNIPPET_DELTA.DAMAGE_SOURCES).map((s) => {
-    const hits = [...s.hits].filter((h) => h.total > 0).sort((a, b) => b.total - a.total || a.what.localeCompare(b.what));
+    const hits = [...s.hits].filter((h) => h.total > 0).sort((a, b) => b.total - a.total || byText(a.what, b.what));
     const kinds = hits.slice(0, SNIPPET_DELTA.HITS_PER_SOURCE).map(hitLabel);
     if (hits.length > kinds.length) kinds.push(`+${hits.length - kinds.length}`);
     return `${s.name} ${s.total} (${kinds.join(", ")})`;

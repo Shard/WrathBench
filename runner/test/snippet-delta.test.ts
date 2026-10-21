@@ -247,6 +247,32 @@ describe("the snippet delta recorder and its block", () => {
     expect(renderSnippetDelta(t.rec.drain())).toBe(`${SNIPPET_DELTA_HEADER}\nquests: left the log — 214 Red Silk Bandanas`);
   });
 
+  test("a drain before our own self block seeds nothing, so the log that then arrives is not all new", () => {
+    // Before login (or right after a sandbox restart) the SDK reads an empty
+    // quest log and no level.
+    const t = seededParty();
+    const fresh = new SnippetDeltaRecorder({
+      selfGuid: () => ME,
+      level: () => t.w.level,
+      zoneName: () => undefined,
+      group: () => undefined,
+      memberUnit: () => undefined,
+      questLog: () => t.w.quests,
+      nameOf: () => undefined,
+    });
+    t.w.level = undefined;
+    t.w.quests = [];
+    expect(renderSnippetDelta(fresh.drain())).toBeUndefined();
+    t.w.level = 19;
+    t.w.quests = [
+      { questId: 214, complete: false, title: "Red Silk Bandanas" },
+      { questId: 155, complete: false, title: "The Defias Brotherhood" },
+    ];
+    expect(renderSnippetDelta(fresh.drain())).toBeUndefined();
+    t.w.quests[0] = { ...t.w.quests[0]!, complete: true };
+    expect(renderSnippetDelta(fresh.drain())).toBe(`${SNIPPET_DELTA_HEADER}\nquests: complete — 214 Red Silk Bandanas`);
+  });
+
   test(`the block never passes ${SNIPPET_DELTA.MAX_CHARS} characters: old chat goes first, then lines from the foot`, () => {
     const t = seededParty();
     const many: GroupMemberLike[] = [];
