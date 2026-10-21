@@ -710,9 +710,13 @@ describe("cooperative abort on timeout", () => {
     // deadmines@4 tank 06:55:07: a snippet left a sleep running unawaited and
     // timed out; the sleep's rejection with the abandonment's own reason read
     // as "sandbox reported fatal error: unhandled promise rejection".
-    const host = makeHost({ snippetTimeoutMs: 300 });
+    // The sleeps reject with the reason itself and as a sleep that could never
+    // fit (its `cause`); the SDK wait as an EventAbortedError carrying it.
+    const stub = startModuleStub();
+    const host = makeHost({ moduleUrl: stub.url, snippetTimeoutMs: 400 });
+    await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
     const timed = await host.evalSnippet(
-      "sleep(5_000); sleep(20_000); sdk.events.waitFor(() => false, { timeout: 10_000 }).then(() => 'never');\n" +
+      "sleep(5_000); sleep(20_000); sdk.waitForChat('never said', { timeout: 10_000 }).then(() => 'heard');\n" +
         "await new Promise(() => {});",
     );
     expect(timed.timedOut).toBe(true);
@@ -720,6 +724,8 @@ describe("cooperative abort on timeout", () => {
     expect(next.value).toBe(JSON.stringify("next"));
     expect(next.logs).toEqual([]);
     expect(host.drainNotices().filter((n) => n.kind === "session_note")).toEqual([]);
+    await host.stop();
+    await stub.stop();
   });
 
   test("a wait cancelled by the snippet's own AbortController is still the snippet's fault to hear about", async () => {
