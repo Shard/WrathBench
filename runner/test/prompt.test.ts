@@ -212,21 +212,21 @@ describe("episode sentence", () => {
   test("every rendering hashes as pinned, so a prompt edit has to move its pins on purpose", () => {
     // Pinned by value, not by rebuilding from the same parts, so a change to
     // any rendering fails here. The last edit to move them is the sleep
-    // sentence, which gained the "chat" wake and says { wake: false } sleeps
-    // through attacks, in the shared body, so it moved all twelve.
+    // sentence's "attacked" wake, which now also names a spell hit, in the
+    // shared body, so it moved all twelve.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:7597083254cdd31a", off: "sha256:1d8e77da943816df" },
-        cli: { on: "sha256:d438a92e6a09435d", off: "sha256:0421524769353be5" },
+        wrathbench: { on: "sha256:d5e236e98ac8a630", off: "sha256:b7d2ba9a8608b2f9" },
+        cli: { on: "sha256:b646c7894ac2c2cf", off: "sha256:56083b66d09cacb1" },
       },
       e90: {
-        wrathbench: { on: "sha256:ddace516e43a08d6", off: "sha256:920fc412c96b81a5" },
-        cli: { on: "sha256:b8a1e7298e7639af", off: "sha256:9457af833921f395" },
+        wrathbench: { on: "sha256:776b86a9a50f62be", off: "sha256:594c13a1bc695842" },
+        cli: { on: "sha256:1bcd6b2d0eadc239", off: "sha256:610a935200be709e" },
       },
       e360: {
-        wrathbench: { on: "sha256:5a79d2c5cf8685e4", off: "sha256:ea9af532e1bb3d39" },
-        cli: { on: "sha256:48f6dad36ffdad20", off: "sha256:997dda8a8714fe8b" },
+        wrathbench: { on: "sha256:2d0c936a6f96c0eb", off: "sha256:c8ee9eedfab4725e" },
+        cli: { on: "sha256:f1d71a9bb6135a2a", off: "sha256:5292bb6a89eb26ce" },
       },
     };
     const episodes = [
@@ -327,10 +327,10 @@ describe("an objective replaces the broad goal (operator, 2026-10-21)", () => {
       freeplay: promptHash(buildSystemPrompt("walk to Ironforge", "freeplay", "wrathbench", true)),
     };
     expect(got).toEqual({
-      probing4h: "sha256:ef32a71da364c58f",
-      probing4hCli: "sha256:7f7b87d60276c123",
-      e90: "sha256:41ea10c19760ee3b",
-      freeplay: "sha256:c2ad7c6848f7ad9c",
+      probing4h: "sha256:79de5f231833c00a",
+      probing4hCli: "sha256:3f17bfbd9f7e9c3c",
+      e90: "sha256:5444a36be4bce765",
+      freeplay: "sha256:28868d253fed6225",
     });
   });
 });
