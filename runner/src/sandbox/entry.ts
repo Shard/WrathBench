@@ -91,6 +91,7 @@ import {
 } from "../context";
 import { NearbyRecorder } from "./nearby-recorder";
 import { PartyWatcher } from "./party-watch";
+import { SnippetDeltaRecorder } from "./snippet-delta";
 import { TraceRecorder } from "./trace-recorder";
 import type { ActionBatch, ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, FlightSignal, HostToChild, HostcallResult, LogEntry, MoveIntentNote } from "./ipc";
 
@@ -1587,6 +1588,41 @@ client.events.onAny((event) => {
   });
 });
 
+// ------------------------------------------------------------ snippet delta
+
+/**
+ * What changed since the previous snippet result, latched as events arrive
+ * (`snippet-delta.ts`) for the host to drain once per `run_snippet` result on
+ * a driver that renders it. Every child records it, bounded; a fixed-loop
+ * child is simply never drained. Registered after the client's own state fold
+ * and the spell-log marks, so its readings are of a cache that already holds
+ * the event, and a melee attacker is named while it is still in view.
+ */
+const snippetDelta = new SnippetDeltaRecorder({
+  selfGuid: () => client.state.self.guid,
+  level: () => {
+    const v = client.state.self.level?.value;
+    return typeof v === "number" ? v : undefined;
+  },
+  zoneName: () => (client.state.self.zone?.value as { name?: string } | undefined)?.name,
+  group: () => client.state.group(),
+  memberUnit: (guid) => {
+    const o = client.state.nearby.get(guid);
+    if (o === undefined) return undefined;
+    const health = o.fields.get("health")?.value;
+    return {
+      guid,
+      health,
+      maxHealth: o.fields.get("maxHealth")?.value,
+      dead: health === undefined ? undefined : health === 0,
+      ghost: memberGhost(o.fields.get("playerFlags")?.value),
+    };
+  },
+  questLog: () => client.state.questLog,
+  nameOf: observedName,
+});
+client.events.onAny((event) => snippetDelta.observe(event));
+
 function eventSummary(e: StreamEventOf): EventSummary {
   const mark = spellLogMarks.get(e);
   return {
@@ -1793,6 +1829,8 @@ function handle(msg: HostToChild | HostcallResult): void {
                   ? partyWatcher.drain()
                 : msg.method === "action_hints"
                   ? drainHints()
+                : msg.method === "snippet_delta"
+                  ? snippetDelta.drain()
                   : msg.method === "trace_drain"
                     ? traceRecorder.drain()
                     : msg.method === "nearby_drain"

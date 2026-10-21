@@ -9,15 +9,19 @@
  * body — the world facts, the snippet runtime, the SDK, the tools — is the same
  * everywhere and carries no directive language.
  *
- * One sentence varies, and only by *harness*, never by model: what happens to
+ * Two sentences vary, and only by *harness*, never by model. What happens to
  * older conversation is a different fact on the fixed loop than on a CLI
- * scaffold (claude-code, codex), and a prompt that states the wrong one is
- * simply false (`contextSentence`). Nothing in the prompt names a vendor: the
- * CLI-scaffold sentence is the same bytes for both scaffolds, because the
- * loop is model-agnostic and the regime it describes is the same.
+ * scaffold (claude-code, codex, pi), and a prompt that states the wrong one
+ * is simply false (`contextSentence`). And a harness whose driver ends each
+ * snippet result with what changed since the previous one says so
+ * (`snippetDeltaClause`; claude-code only, operator 2026-10-21). Nothing in
+ * the prompt names a vendor: the CLI-scaffold sentence is the same bytes for
+ * every scaffold, because the loop is model-agnostic and the regime it
+ * describes is the same.
  */
 
 import type { Harness } from "./config";
+import { harnessDriver } from "./drivers";
 import type { EpisodeId } from "./episodes";
 
 /**
@@ -142,9 +146,10 @@ const BODY_TAIL = `Act through tools every turn; text without a tool call does n
  * (`resumeSessionNote`), so the notes are the only thing that crosses that gap.
  * It names "the CLI", never which one: claude-code, codex and pi are the same
  * regime (one continuous session the scaffold owns and compacts), so they get
- * the same bytes, and the prompt hash in the comparability tuple stays equal
- * across the CLI groups — the harness tag is what tells them apart. pi's case
- * was added by choice, not inherited (#257; the operator's to confirm).
+ * the same bytes here. Their prompt hashes are equal but for the snippet-delta
+ * sentence, which claude-code alone carries for now; the harness tag is what
+ * tells them apart. pi's case was added by choice, not inherited (#257; the
+ * operator's to confirm).
  *
  * Exhaustive over `Harness` on purpose, exactly as `episodeSection` is over
  * `EpisodeId`: a new harness must not silently inherit a sentence that
@@ -184,8 +189,9 @@ export const TOOLS_NOT_AMBIENT = {
 } as const;
 
 /**
- * The body for one harness: the fixed text with that harness's context
- * sentence in it, and — with `wiki: false` — without the reference tool.
+ * The body for one harness: the fixed text with that harness's snippet-delta
+ * and context sentences in it, and — with `wiki: false` — without the
+ * reference tool.
  */
 function bodyFor(harness: Harness, wiki = true): string {
   // The wiki-on rendering is `BODY_HEAD` untouched, by construction rather
@@ -194,7 +200,21 @@ function bodyFor(harness: Harness, wiki = true): string {
   const head = wiki
     ? BODY_HEAD
     : BODY_HEAD.replace(WIKI_TOOL_BULLET, "").replace(TOOLS_NOT_AMBIENT.withWiki, TOOLS_NOT_AMBIENT.withoutWiki);
-  return `${head} ${contextSentence(harness)} ${BODY_TAIL}`;
+  return `${head}${snippetDeltaClause(harness)} ${contextSentence(harness)} ${BODY_TAIL}`;
+}
+
+/**
+ * The one sentence a harness whose driver takes the snippet delta adds
+ * (`DriverEntry.snippetDelta`, drivers.ts; claude-code only, operator
+ * 2026-10-21), right after the sentence saying what every turn carries; empty
+ * everywhere else, so every other rendering keeps its bytes. A statement of
+ * what the result carries, nothing about what to do with it.
+ */
+export const SNIPPET_DELTA_SENTENCE =
+  "Each snippet result ends with what changed since your previous snippet (party, chat, damage taken), when anything did.";
+
+function snippetDeltaClause(harness: Harness): string {
+  return harnessDriver(harness)?.snippetDelta === true ? ` ${SNIPPET_DELTA_SENTENCE}` : "";
 }
 
 /**
@@ -206,26 +226,29 @@ export const SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${bodyFor("wrathbench")}`;
 
 /**
  * The same prompt as the claude-code harness renders it. Differs from
- * `SYSTEM_PROMPT` in `contextSentence` and nothing else, so the two hash
- * differently in the comparability tuple — which is the intended, visible
- * record that the two harnesses do not share a prompt.
+ * `SYSTEM_PROMPT` in `contextSentence` and the snippet-delta sentence and
+ * nothing else, so the two hash differently in the comparability tuple —
+ * which is the intended, visible record that the two harnesses do not share a
+ * prompt.
  */
 export const CLAUDE_CODE_SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${bodyFor("claude-code")}`;
 
 /**
- * The same prompt as the codex harness renders it. Byte-identical to
- * `CLAUDE_CODE_SYSTEM_PROMPT` by construction (`contextSentence`): the two CLI
- * scaffolds run the same conversation regime, so the prompt says the same
- * thing, and the harness tag — not the prompt hash — is what separates them.
+ * The same prompt as the codex harness renders it: `CLAUDE_CODE_SYSTEM_PROMPT`
+ * less the snippet-delta sentence, by construction (`contextSentence`,
+ * `snippetDeltaClause`). The CLI scaffolds run the same conversation regime,
+ * so the prompt says the same thing about it; codex takes no snippet delta
+ * yet (operator, 2026-10-21), so it is not told of one.
  */
 export const CODEX_SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${bodyFor("codex")}`;
 
 /**
- * The same prompt as the pi harness renders it, byte-identical to the other two
- * CLI renders by construction: pi keeps one continuous session and compacts it
+ * The same prompt as the pi harness renders it, byte-identical to the codex
+ * render by construction: pi keeps one continuous session and compacts it
  * itself, the regime the CLI sentence states, so it adds no wording of its own
- * (the operator's to confirm, #257). pi receives exactly these bytes as its
- * system prompt (`adapter-pi.ts`, `PI_PROMPT_EXTENSION`).
+ * (the operator's to confirm, #257), and like codex it takes no snippet delta
+ * yet. pi receives exactly these bytes as its system prompt (`adapter-pi.ts`,
+ * `PI_PROMPT_EXTENSION`).
  */
 export const PI_SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${bodyFor("pi")}`;
 
@@ -316,9 +339,10 @@ export function probingClockSentence(episodeMs: number | null | undefined): stri
  * then come the tier sentence — on a probe, the clock from `episodeMs` — and
  * the delimited objective block, then the body. The facts still read first.
  *
- * `harness` picks the context sentence and nothing else, so the fixed loop's
- * prompt and a CLI scaffold's differ by exactly the one sentence that
- * describes what each of them actually does with older conversation. `wiki`
+ * `harness` picks the context sentence and the snippet-delta sentence and
+ * nothing else, so the fixed loop's prompt and a CLI scaffold's differ by
+ * exactly the sentences that describe what each of them actually does with
+ * older conversation and with a snippet's result. `wiki`
  * is the run's reference surface (`config.wiki`, issue #61): false renders the
  * body with `search_reference` deleted, which is the only way the prompt ever
  * differs on that axis. `episodeMs` is the run's budget

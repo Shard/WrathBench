@@ -24,6 +24,7 @@ import type { TraceDrain } from "../trace-row";
 import type { ClientCacheStore } from "./client-cache";
 import type { ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, EvalResultMsg, FlightSignal, HostToChild, HostcallResult, LogEntry } from "./ipc";
 import type { PartySignal } from "./party-watch";
+import type { SnippetDelta } from "./snippet-delta";
 
 export interface SnippetResult {
   ok: boolean;
@@ -775,6 +776,28 @@ export class SandboxHost {
     );
     if (!res.ok) throw new Error(res.error ?? "action_hints rpc failed");
     return (res.value ?? []) as ActionHintNote[];
+  }
+
+  /**
+   * Drain what changed since the last drain (`snippet-delta.ts`): party
+   * members' transitions, chat from others, damage taken, level and quests.
+   * Destructive, and owned by one caller — the `run_snippet` result on a
+   * driver whose registry entry renders it (`tools.ts`).
+   *
+   * Never spawns a child; null when none is running. Bounded by `pingGraceMs`
+   * for the reason `drainActionHints` is.
+   */
+  async snippetDelta(): Promise<SnippetDelta | null> {
+    if (this.proc === null) return null;
+    await this.ready;
+    if (this.proc === null) return null;
+    const id = this.nextId++;
+    const res = await this.request<{ t: "rpc_result"; id: number; ok: boolean; value?: unknown; error?: string }>(
+      { t: "rpc", id, method: "snippet_delta", params: {} },
+      this.opts.pingGraceMs,
+    );
+    if (!res.ok) throw new Error(res.error ?? "snippet_delta rpc failed");
+    return (res.value ?? null) as SnippetDelta | null;
   }
 
   /**

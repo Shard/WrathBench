@@ -228,6 +228,16 @@ export interface DriverEntry {
   /** Whether the scaffold has an auto-compaction window a run can set (`compactWindow`). */
   compactWindow: boolean;
   /**
+   * Whether each `run_snippet` result ends with what changed since the
+   * previous one (`sandbox/snippet-delta.ts`), and the prompt says so. On for
+   * claude-code only (operator, 2026-10-21): a CLI scaffold runs one long
+   * driver turn and sees the HUD at its ends only, while the fixed loop
+   * rebuilds the HUD every turn and so never takes it. Turning it on for
+   * another scaffold is this flag and nothing else; the scaffold adapters
+   * and the prompt both read it.
+   */
+  snippetDelta: boolean;
+  /**
    * How usage reaches the trajectory: one figure per model `response`; a
    * response's opening snapshot whose finished count arrives on the turn's
    * result (`turn-snapshot`); or a turn that is one whole CLI exec, its
@@ -264,6 +274,7 @@ export const DRIVER_TABLE = {
       refusal: "roster policy — claude models run only via the claude-code driver, never through an openai-driver entry",
     },
     compactWindow: false,
+    snippetDelta: false,
     usage: "response",
     rollouts: false,
     podVolumes: [],
@@ -291,6 +302,7 @@ export const DRIVER_TABLE = {
     cost: { reported: "cli", table: "claude", modelPrefix: "claude-" },
     claudeModels: { only: true, refusal: "roster policy — the claude-code driver carries claude models only" },
     compactWindow: true,
+    snippetDelta: true,
     usage: "turn-snapshot",
     rollouts: false,
     podVolumes: [],
@@ -319,6 +331,7 @@ export const DRIVER_TABLE = {
     // The Codex CLI is a ChatGPT-subscription lane: OpenAI's catalogue only.
     claudeModels: { only: false, refusal: "roster policy — the codex driver carries no claude models" },
     compactWindow: true,
+    snippetDelta: false,
     usage: "exec-tally",
     rollouts: true,
     podVolumes: ["codex-home"],
@@ -344,6 +357,7 @@ export const DRIVER_TABLE = {
       refusal: "roster policy — claude models run only via the claude-code driver, never through a pi-driver entry",
     },
     compactWindow: true,
+    snippetDelta: false,
     usage: "response",
     rollouts: false,
     podVolumes: [],
@@ -361,6 +375,7 @@ export const DRIVER_TABLE = {
     bill: "metered",
     cost: FIXED_LOOP_COST,
     compactWindow: false,
+    snippetDelta: false,
     usage: "response",
     rollouts: false,
     podVolumes: [],
@@ -384,6 +399,7 @@ export const DRIVER_TABLE = {
     bill: "none",
     cost: FIXED_LOOP_COST,
     compactWindow: false,
+    snippetDelta: false,
     usage: "response",
     rollouts: false,
     podVolumes: [],

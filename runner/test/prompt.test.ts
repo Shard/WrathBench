@@ -160,11 +160,12 @@ describe("the context sentence is the harness's, and says what that harness does
     expect(s).toContain("scratchpad");
   });
 
-  test("the two prompts differ by exactly that sentence and nothing else", () => {
+  test("the two prompts differ by exactly that sentence and the snippet-delta one, and nothing else", () => {
+    const { SNIPPET_DELTA_SENTENCE } = require("../src/prompt");
     expect(CLAUDE_CODE_SYSTEM_PROMPT).not.toBe(SYSTEM_PROMPT);
-    expect(CLAUDE_CODE_SYSTEM_PROMPT.replace(contextSentence("claude-code"), contextSentence("wrathbench"))).toBe(
-      SYSTEM_PROMPT,
-    );
+    expect(
+      CLAUDE_CODE_SYSTEM_PROMPT.replace(contextSentence("claude-code"), contextSentence("wrathbench")).replace(` ${SNIPPET_DELTA_SENTENCE}`, ""),
+    ).toBe(SYSTEM_PROMPT);
     // Everything else the prompt promises is still there on both.
     for (const p of [SYSTEM_PROMPT, CLAUDE_CODE_SYSTEM_PROMPT]) {
       expect(p).toContain("This is the complete, unmodified 3.3.5a world");
@@ -179,12 +180,14 @@ describe("the context sentence is the harness's, and says what that harness does
     expect(buildSystemPrompt()).toBe(SYSTEM_PROMPT);
     expect(buildSystemPrompt(undefined, undefined, "wrathbench")).toBe(SYSTEM_PROMPT);
     expect(buildSystemPrompt(undefined, undefined, "claude-code")).toBe(CLAUDE_CODE_SYSTEM_PROMPT);
-    // The objective block is the same text on both; only the context sentence moves.
+    // The objective block is the same text on both; only the context and
+    // snippet-delta sentences move.
+    const { SNIPPET_DELTA_SENTENCE } = require("../src/prompt");
     const a = buildSystemPrompt("walk to Ironforge", "e90", "wrathbench");
     const b = buildSystemPrompt("walk to Ironforge", "e90", "claude-code");
     expect(a).toContain("--- Operator objective for this run ---\nwalk to Ironforge\n");
     expect(b).toContain("--- Operator objective for this run ---\nwalk to Ironforge\n");
-    expect(b.replace(contextSentence("claude-code"), contextSentence("wrathbench"))).toBe(a);
+    expect(b.replace(contextSentence("claude-code"), contextSentence("wrathbench")).replace(` ${SNIPPET_DELTA_SENTENCE}`, "")).toBe(a);
   });
 });
 
@@ -214,19 +217,24 @@ describe("episode sentence", () => {
     // any rendering fails here. The last edit to move them is the sleep
     // sentence going back to "pass { wake: false } for a plain timer" (the
     // wake revert after Deadmines a8), in the shared body, so it moved all
-    // twelve.
+    // of them. The snippet-delta sentence (claude-code only, operator
+    // 2026-10-21) then split claude-code off the other CLI renders, moving
+    // its six and no other.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
         wrathbench: { on: "sha256:9073eaef04ee9310", off: "sha256:1cc25e8509bfbc21" },
+        "claude-code": { on: "sha256:8fe9b1257f6f3bb0", off: "sha256:46db9abf8827f670" },
         cli: { on: "sha256:4a3ab5272e40a428", off: "sha256:166b3acbf900ce00" },
       },
       e90: {
         wrathbench: { on: "sha256:d4e28dddfa74bab0", off: "sha256:8f44644f86c68051" },
+        "claude-code": { on: "sha256:aa3c6eb4d85d1410", off: "sha256:da266781b5f733e7" },
         cli: { on: "sha256:d869c49c59dd16db", off: "sha256:4d7fc89864067ff4" },
       },
       e360: {
         wrathbench: { on: "sha256:cf02e1a3c96879dc", off: "sha256:16d66821cd00a7b4" },
+        "claude-code": { on: "sha256:1bc04fb478724c1f", off: "sha256:45b22e3556b0a18e" },
         cli: { on: "sha256:3ac265613531e8d1", off: "sha256:9c2600e2f3c4cd72" },
       },
     };
@@ -238,10 +246,10 @@ describe("episode sentence", () => {
       ["e360", "e360"],
     ] as const;
     for (const [episode, row] of episodes) {
-      for (const harness of ["wrathbench", "claude-code", "codex"] as const) {
+      for (const harness of ["wrathbench", "claude-code", "codex", "pi"] as const) {
         for (const wiki of [true, false]) {
           const got = promptHash(buildSystemPrompt(undefined, episode, harness, wiki));
-          const want = pinned[row]![harness === "wrathbench" ? "wrathbench" : "cli"]![wiki ? "on" : "off"];
+          const want = pinned[row]![harness === "wrathbench" || harness === "claude-code" ? harness : "cli"]![wiki ? "on" : "off"];
           expect(`${episode}/${harness}/${wiki}: ${got}`).toBe(`${episode}/${harness}/${wiki}: ${want}`);
         }
       }
@@ -329,7 +337,7 @@ describe("an objective replaces the broad goal (operator, 2026-10-21)", () => {
     };
     expect(got).toEqual({
       probing4h: "sha256:c1ab7a498fe9f21e",
-      probing4hCli: "sha256:6bc08e798359ca5a",
+      probing4hCli: "sha256:7917b0cedcf31860",
       e90: "sha256:cd8a94f398c55199",
       freeplay: "sha256:4dc947e2008c4a9a",
     });
