@@ -211,23 +211,23 @@ describe("episode sentence", () => {
 
   test("every rendering hashes as pinned, so a prompt edit has to move its pins on purpose", () => {
     // Pinned by value, not by rebuilding from the same parts, so a change to
-    // any rendering fails here. The last edit to move them is the sixth
-    // party-run batch (waitForChat's buffered lines, the units() type list,
-    // the death line's graveyard and dungeon facts), in the shared body, so it
-    // moved all twelve.
+    // any rendering fails here. The last edit to move them is the sleep
+    // sentence going back to "pass { wake: false } for a plain timer" (the
+    // wake revert after Deadmines a8), in the shared body, so it moved all
+    // twelve.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:625b8f0ae51d05bc", off: "sha256:02840efe067c0d55" },
-        cli: { on: "sha256:9b670156e48cf951", off: "sha256:f239372eb0dcd62f" },
+        wrathbench: { on: "sha256:9073eaef04ee9310", off: "sha256:1cc25e8509bfbc21" },
+        cli: { on: "sha256:4a3ab5272e40a428", off: "sha256:166b3acbf900ce00" },
       },
       e90: {
-        wrathbench: { on: "sha256:7a98c744c47e182d", off: "sha256:96509121ea6686ce" },
-        cli: { on: "sha256:bd0af2fb56107ced", off: "sha256:cd1ef5c6c39d1b86" },
+        wrathbench: { on: "sha256:d4e28dddfa74bab0", off: "sha256:8f44644f86c68051" },
+        cli: { on: "sha256:d869c49c59dd16db", off: "sha256:4d7fc89864067ff4" },
       },
       e360: {
-        wrathbench: { on: "sha256:0b3c74bae433dbf3", off: "sha256:4d3773c1a0af2b30" },
-        cli: { on: "sha256:0832b60575080147", off: "sha256:1cd9827c24063fa8" },
+        wrathbench: { on: "sha256:cf02e1a3c96879dc", off: "sha256:16d66821cd00a7b4" },
+        cli: { on: "sha256:3ac265613531e8d1", off: "sha256:9c2600e2f3c4cd72" },
       },
     };
     const episodes = [
@@ -328,10 +328,10 @@ describe("an objective replaces the broad goal (operator, 2026-10-21)", () => {
       freeplay: promptHash(buildSystemPrompt("walk to Ironforge", "freeplay", "wrathbench", true)),
     };
     expect(got).toEqual({
-      probing4h: "sha256:1c603283bf7aa34d",
-      probing4hCli: "sha256:48f6d311d57b0f9b",
-      e90: "sha256:540370082d043296",
-      freeplay: "sha256:54d22095d2f31b1d",
+      probing4h: "sha256:c1ab7a498fe9f21e",
+      probing4hCli: "sha256:6bc08e798359ca5a",
+      e90: "sha256:cd8a94f398c55199",
+      freeplay: "sha256:4dc947e2008c4a9a",
     });
   });
 });

@@ -16,8 +16,8 @@
  *               us or hit us with a spell), "died" (our health reached zero,
  *               transition only) or
  *               "chat" (a party, raid or whisper line from another player).
- *               `{ wake: false }` sleeps through attacks and deaths; chat
- *               still wakes it. Rejects with the abort
+ *               A spell hit wakes it only on the way into combat.
+ *               `{ wake: false }` is a pure timer. Rejects with the abort
  *               reason if this snippet is abandoned; an awaited sleep asked
  *               for at least the time the snippet had left is named in the
  *               abandon message, and is never shortened for it
@@ -916,15 +916,28 @@ function withSleepAbandon(reason: unknown, note: string): Error {
  * `Promise.race([routine, sleep(ms)])` — the race's whole point is that the
  * first settle wins.
  *
- * Two deliberate non-wakes:
+ * Three deliberate non-wakes:
  *   - `died` fires on the *transition* only. A snippet that sleeps while
  *     already dead (waiting out the corpse reclaim delay is the single most
  *     common long sleep in the runs) is not woken by the death it is already
  *     handling.
- *   - `{ wake: false }` sleeps through attacks (spell hits included) and
- *     deaths, for a caller that wants to. Chat still wakes it: a timer sleep (a reclaim delay,
- *     resurrection sickness) is exactly when a party member's line or offer
- *     goes unheard.
+ *   - A spell hit wakes it only on the way *into* combat, as the melee wake
+ *     already does by construction (`SMSG_ATTACKSTART` comes once per new
+ *     attacker, not per swing). Every hit used to wake it, and in Deadmines
+ *     attempt a8 that turned a mage's `sleep(200)` cast loop into a busy loop
+ *     — 837 `not_ready` casts in twenty seconds, then a death. The sleep is
+ *     armed for spell hits when `UNIT_FLAG_IN_COMBAT` is clear on our own
+ *     `unitFlags` as it begins (an unobserved field reads as clear, the old
+ *     behaviour), and re-armed whenever the bit is seen clear during it. The
+ *     bit rising during the sleep never disarms it: aggro sets it before a
+ *     caster's first bolt lands, usually in the same server tick, so reading
+ *     it at the hit would sleep through exactly the caster wake this exists
+ *     for.
+ *   - `{ wake: false }` is a pure timer for a caller that wants one: nothing
+ *     wakes it, chat included. Chat used to wake it too, and in a8 the party
+ *     leader's lines cut 22 of the tank's 55 sleeps short, so every member
+ *     wrapped its timers in `while (Date.now() - t0 < N)` loops and none ever
+ *     read the reason.
  *
  * The ambient snippet signal still aborts it: an abandoned snippet's sleep
  * rejects rather than resolving. When the sleep was asked for at least the
@@ -934,12 +947,21 @@ function withSleepAbandon(reason: unknown, note: string): Error {
  * for it — the sleep runs for exactly what it was asked (docs/METHODOLOGY.md,
  * "A deadline explains, never caps").
  */
+/** `UNIT_FLAG_IN_COMBAT` (AzerothCore `UnitDefines.h`): the bit a client reads for the combat icon on its own frame. */
+const UNIT_FLAG_IN_COMBAT = 0x0008_0000;
+
+/** The combat bit on our own `unitFlags`; false while no block has carried the field. */
+function selfInCombat(): boolean {
+  const flags = client.state.self.fields.get("unitFlags")?.value;
+  return typeof flags === "number" && (flags & UNIT_FLAG_IN_COMBAT) !== 0;
+}
+
 function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
   if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) {
     const shown = ms === undefined ? "undefined" : typeof ms === "number" ? String(ms) : typeof ms;
     throw new TypeError(
       `sleep(ms) needs a non-negative number of milliseconds, got ${shown} — e.g. sleep(2000), ` +
-        `or sleep(2000, { wake: false }) to sleep through attacks`,
+        `or sleep(2000, { wake: false }) for a timer that ignores being attacked`,
     );
   }
   if (options !== undefined && (options === null || typeof options !== "object")) {
@@ -947,7 +969,7 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
   }
   const wakeOpt = options?.wake;
   if (wakeOpt !== undefined && typeof wakeOpt !== "boolean") {
-    throw new TypeError(`sleep(ms, { wake }) needs a boolean, got ${typeof wakeOpt} — { wake: false } sleeps through attacks`);
+    throw new TypeError(`sleep(ms, { wake }) needs a boolean, got ${typeof wakeOpt} — { wake: false } is a pure timer`);
   }
 
   return new Promise<SleepReason>((resolve, reject) => {
@@ -963,6 +985,9 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
     // Already dead when the sleep started: this snippet is handling that death,
     // so only a *later* one wakes it.
     let deadAtLastCheck = selfDead();
+    // Armed for a spell-hit wake only while out of combat (see above): set as
+    // the sleep begins, re-armed by the bit seen clear, never disarmed.
+    let spellWakeArmed = !selfInCombat();
     let offAttack: (() => void) | undefined;
     let offSpellHit: (() => void) | undefined;
     let offChat: (() => void) | undefined;
@@ -990,13 +1015,13 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
     // Registered after the client's own state fold (`onAny` handlers run in
     // registration order and the cache is the first one), so all of these see
     // a state cache that already has this event in it.
+    if (wakeOpt === false) return;
     offChat = client.events.on("SMSG_MESSAGECHAT", (e) => {
       const d = e.data as { type?: unknown; senderGuid?: unknown };
       const me = client.state.self.guid;
       const fromOther = me !== undefined && typeof d?.senderGuid === "string" && d.senderGuid !== me;
       if (fromOther && isGroupOrWhisperChat(d)) settle("chat");
     });
-    if (wakeOpt === false) return;
     offAttack = client.events.on("SMSG_ATTACKSTART", (e) => {
       const d = e.data as { victimGuid?: unknown };
       const me = client.state.self.guid;
@@ -1006,10 +1031,11 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
       const d = e.data as { targetGuid?: unknown; casterGuid?: unknown };
       const me = client.state.self.guid;
       if (me !== undefined && d?.targetGuid === me && typeof d?.casterGuid === "string" && d.casterGuid !== me) {
-        settle("attacked");
+        if (spellWakeArmed) settle("attacked");
       }
     });
     offAny = client.events.onAny(() => {
+      if (!selfInCombat()) spellWakeArmed = true;
       const dead = selfDead();
       if (!dead) {
         // Alive again (a reclaim, a resurrect): a later death is a new one.
