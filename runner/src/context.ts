@@ -49,7 +49,7 @@ import type { EventSummary, MoveIntentNote } from "./sandbox/ipc";
 import type { HarnessNotice } from "./sandbox/host";
 
 export const CONTEXT_POLICY = {
-  /** Last N non-ambient events included in every turn's context (see EVENT_WINDOW_EXCLUDE). */
+  /** Last N non-ambient events included in every turn's context (see EVENT_WINDOW_EXCLUDE; bystanders' spell lines are left out too, `spellLogShown`). */
   EVENT_WINDOW: 64,
   /** Max chars of one event's data rendering. */
   EVENT_DATA_CHARS: 220,

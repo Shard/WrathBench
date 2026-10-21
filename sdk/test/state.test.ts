@@ -3338,6 +3338,13 @@ describe("a corpse's owner", () => {
     expect(cache.nameOf(OWNER_GUID)).toBe("Healpartyc");
   });
 
+  test("our own corpse names us as owner and is no pet: pet() and the unit rows' type keep it apart", () => {
+    const cache = StateCache.replay(toEvents([...loginSequence, corpseCreate(CORPSE_GUID, SELF_GUID, 20)]), { seed: SEED });
+    expect(cache.nearby.get(CORPSE_GUID)?.ownerGuid?.value).toBe(SELF_GUID);
+    expect(cache.pet()).toBeUndefined();
+    expect(cache.units({ type: "unit" }).some((u) => u.guid === CORPSE_GUID)).toBe(false);
+  });
+
   test("an unset owner (\"0\") reads as undefined", () => {
     const cache = StateCache.replay(toEvents([...loginSequence, corpseCreate(CORPSE_GUID, "0", 20)]), { seed: SEED });
     expect(cache.nearby.get(CORPSE_GUID)?.ownerGuid).toBeUndefined();
