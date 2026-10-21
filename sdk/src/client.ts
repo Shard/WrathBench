@@ -4091,6 +4091,9 @@ export class WrathClient {
     // arrives as the event it is, and `force` is the caller's own word.
     const epoch = this.events.epoch;
     const from = this.state.self.position?.value;
+    // Taken on the caller's own path: the verdict and the long-route note are
+    // tallied from promise callbacks, where no caller is on the stack.
+    const origin = this.originOf?.();
     // A refusal at planning (`too_far`, `drop`, …) can land before the ack
     // resolves, in the same millisecond: latched from before the POST, so the
     // reply can carry it instead of an ok that the event contradicts.
@@ -4102,7 +4105,7 @@ export class WrathClient {
     });
     return this.postMoveTo(resolved.point, resolved.guid, options.force === true)
       .then(async ({ ack, etaMs }): Promise<MoveToAsyncResponse> => {
-        this.watchAsyncMove(ack.moveId, resolved.point, epoch);
+        this.watchAsyncMove(ack.moveId, resolved.point, epoch, origin);
         // The ack and the event travel on different sockets, so the refusal
         // can also land just after the ack. An ack with no route length is
         // a move the module did not dispatch (PROTOCOL.md: a refusal at
@@ -4132,7 +4135,7 @@ export class WrathClient {
         if (note === undefined) return ack;
         // Also to the harness block, so a dropped ack still tells the model
         // (operator, 2026-10-20): once per dispatch, like a refusal.
-        this.noteActionHint("moveToAsync", "long_route", note, resolved.point);
+        this.tallyActionHint(origin, "moveToAsync", "long_route", note, resolved.point);
         return { ...ack, hint: note };
       })
       .finally(offEarly);
@@ -4148,7 +4151,7 @@ export class WrathClient {
    * land before the ack); unwatched after the verdict or `moveTo`'s own
    * default wait.
    */
-  private watchAsyncMove(moveId: number, point: MovePoint, epoch: number): void {
+  private watchAsyncMove(moveId: number, point: MovePoint, epoch: number, origin: number | undefined): void {
     this.events
       .waitFor(
         (e) => isEvent(e, "WB_MOVE_RESULT") && !isDecodeError(e.data) && (e.data as MoveResultData).moveId === moveId,
@@ -4158,7 +4161,7 @@ export class WrathClient {
         const data = event.data as MoveResultData;
         const status = status_(data);
         if (ASYNC_MOVE_UNREPORTED.has(status)) return;
-        this.noteActionHint("moveToAsync", status, this.asyncMoveRecipe(status, point, data), point);
+        this.tallyActionHint(origin, "moveToAsync", status, this.asyncMoveRecipe(status, point, data), point);
       })
       .catch(() => {});
   }

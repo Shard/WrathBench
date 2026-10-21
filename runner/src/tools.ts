@@ -720,8 +720,10 @@ export function renderActionHints(hints: readonly ActionHintNote[]): string | un
 
 /**
  * Which earlier snippet's code raised a hint, on its line's head so the hint
- * cap never cuts it: the snippet's opening code, which the model wrote and can
- * recognise. Nothing for the current snippet's own hints.
+ * cap never cuts it: the routine that made the call, by its function's name
+ * or the statement that launched it, else the snippet's opening code — what
+ * the model wrote and can recognise (`sandbox/call-site.ts`). Nothing for the
+ * current snippet's own hints.
  */
 function fromLabel(from: string | undefined): string {
   if (from === undefined) return "";
