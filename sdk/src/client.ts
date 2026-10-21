@@ -2330,6 +2330,35 @@ const CAST_FAILURE_MEANING: Readonly<Record<string, string>> = {
   nothing_to_dispel: "the target has nothing it can dispel",
   equipped_item_class_mainhand: "it needs a fitting weapon in the main hand, and a broken one (durability 0) does not count",
   equipped_item_class_offhand: "it needs a fitting weapon in the off hand, and a broken one (durability 0) does not count",
+  // What the client's own error line says for the rest the runs hit, or
+  // could: the 2026-10-21 party read "the server refused it" for 132
+  // Revenges that wanted a dodge, block or parry first. The stance a spell
+  // needs is its Spell.dbc Stances mask, which nothing serves, so
+  // only_shapeshift says no more than that the form is wrong.
+  caster_aurastate: "needs a state first (e.g. after a dodge, parry or block)",
+  target_aurastate: "the target is not in the state this spell needs (e.g. low enough health)",
+  only_shapeshift: "needs a different stance or form",
+  not_shapeshift: "it cannot be cast in your current stance or form",
+  no_items_while_shapeshifted: "items cannot be used in your current form",
+  equipped_item_class: "it needs a fitting item equipped (a weapon type, or a shield), and a broken one (durability 0) does not count",
+  equipped_item: "it needs a particular item equipped",
+  affecting_combat: "it cannot be cast while you are in combat",
+  not_standing: "you must be standing (you are sitting)",
+  only_stealthed: "it needs you to be stealthed",
+  only_outdoors: "it can only be cast outdoors",
+  only_indoors: "it can only be cast indoors",
+  not_mounted: "you are mounted",
+  only_mounted: "you must be mounted",
+  fleeing: "you are fleeing (feared) and cannot act",
+  confused: "you are confused",
+  charmed: "you are charmed",
+  immune: "the target is immune to it",
+  item_not_ready: "the item's cooldown is still running",
+  too_many_of_item: "you already carry as many of the item it makes as you may",
+  requires_spell_focus: "it needs a particular object nearby (a forge, an anvil, a campfire, …)",
+  target_not_in_party: "the target is not in your party",
+  level_requirement: "your level is too low for it",
+  no_pet: "you have no pet",
 };
 
 /**
@@ -2346,7 +2375,7 @@ const CAST_FAILURE_WEAPON_SLOT: Readonly<Record<string, { slot: number; words: s
  * and its target by name where the cache has them, so a failure raised in a
  * background routine says which cast it was.
  */
-function castFailedHint(state: StateCache, cast: PendingCast, reason: string, cause: string = reason): string {
+function castFailedHint(state: StateCache, cast: PendingCast, reason: string, cause: string = reason, casting?: string): string {
   if (cause === "bad_targets") cause = badTargetsCause(state, cast);
   const spell = state.spell(cast.spellId)?.name;
   const label = spell === undefined ? `spell ${cast.spellId}` : `${spell} (${cast.spellId})`;
@@ -2356,7 +2385,15 @@ function castFailedHint(state: StateCache, cast: PendingCast, reason: string, ca
     const name = state.nearby.get(key)?.name?.value ?? state.nameOf(key);
     on = ` on ${name ?? cast.targetGuid}`;
   }
-  const meaning = CAST_FAILURE_MEANING[cause];
+  // Our own cast still running says more than either refusal's own words:
+  // the 2026-10-21 mage's routine sent a cast 11 ms after the last one and
+  // read not_ready as a cooldown.
+  const meaning =
+    casting !== undefined && cause === "not_ready"
+      ? `you are still casting ${casting}; ${CAST_FAILURE_MEANING.not_ready}`
+      : casting !== undefined && cause === "interrupted"
+        ? `you were still casting ${casting} when your next cast went out, and that cancelled it; cast again once state.self.casting is clear`
+        : CAST_FAILURE_MEANING[cause];
   // A weapon-slot refusal with the slot's own item observed broken says
   // which item: the durability fields are what the client's tooltip reads.
   const weapon = CAST_FAILURE_WEAPON_SLOT[reason];
@@ -2368,6 +2405,17 @@ function castFailedHint(state: StateCache, cast: PendingCast, reason: string, ca
   // The reason itself is the tally line's status (`castSpell <reason>: …`), so
   // the hint says what it means and names nothing twice.
   return `${label}${on}: ${meaning ?? "the server refused it"}${broken}`;
+}
+
+/**
+ * Our own cast in progress at `now` (`state.self.casting`), named with its
+ * time left, e.g. "Frostbolt (7322), 0.6s left"; undefined when none is.
+ */
+function castInProgress(state: StateCache, now: number): string | undefined {
+  const c = state.self.casting?.value;
+  if (c === undefined || c.endsAt <= now) return undefined;
+  const label = c.name === undefined ? `spell ${c.spellId}` : `${c.name} (${c.spellId})`;
+  return `${label}, ${((c.endsAt - now) / 1000).toFixed(1)}s left`;
 }
 
 /**
@@ -3569,6 +3617,8 @@ export class WrathClient {
 
   /** `castSpell` casts awaiting the server's first word, by spell id (`castVerdict`). */
   private readonly pendingCasts = new Map<number, PendingCast>();
+  /** The stream position at our last `cast_spell` dispatch: a cast sent after the one on the bar began (`castVerdict`). */
+  private lastCastSeq = -1;
 
   /**
    * The last `move_to` this client sent: when, and its moveId once acked. With
@@ -4307,6 +4357,7 @@ export class WrathClient {
       origin: this.originOf?.(),
     };
     this.pendingCasts.set(spellId, cast);
+    this.lastCastSeq = cast.sinceSeq ?? -1;
     try {
       return await this.dispatchCast(spellId, targetGuid);
     } catch (err) {
@@ -4396,8 +4447,25 @@ export class WrathClient {
     if (cast === undefined) return;
     this.pendingCasts.delete(failed.spellId);
     const status = failed.reason ?? `code_${failed.result}`;
+    // The cast bar as the failure found it: a refusal leaves a running cast
+    // standing, and the interrupt's own SMSG_SPELL_FAILURE, which clears it,
+    // follows this SMSG_CAST_FAILED.
+    const casting = castInProgress(this.state, event.ts);
+    if (status === "not_ready" && casting !== undefined) {
+      this.tallyActionHint(cast.origin, "castSpell", status, castFailedHint(this.state, cast, status, status, casting));
+      return;
+    }
     if (status !== "interrupted") {
       this.tallyActionHint(cast.origin, "castSpell", status, castFailedHint(this.state, cast, status));
+      return;
+    }
+    // Interrupted by our own next cast: the module sends castCount 0, so the
+    // core's spell_in_progress refusal never fires and a cast sent while
+    // another runs cancels it (Spell::prepare). Told when the interrupted
+    // spell is the one on the bar and a cast of ours went out after it began.
+    const bar = this.state.self.casting;
+    if (casting !== undefined && bar?.value.spellId === failed.spellId && this.lastCastSeq >= bar.seq) {
+      this.tallyActionHint(cast.origin, "castSpell", status, castFailedHint(this.state, cast, status, status, casting));
       return;
     }
     // An interrupt has two causes this client can tell apart from the rest:

@@ -86,6 +86,9 @@ import {
   type MonsterMoveData,
   type RemovedSpellData,
   type SpellCooldownData,
+  type SpellFailureData,
+  type SpellGoData,
+  type SpellStartData,
   type SupersededSpellData,
   type TalentsInfoData,
   type AchievementEarnedData,
@@ -556,6 +559,17 @@ export interface SelfState extends UnitFieldsState {
    * `undefined` until a block has carried `playerFlags` at all.
    */
   resting: Observed<boolean> | undefined;
+  /**
+   * Our own cast in progress, as the client's cast bar shows it: set by an
+   * own `SMSG_SPELL_START` with a cast time, `endsAt` being that packet's
+   * `ts` plus the cast time (wall-clock ms like `taxiEta.landsAt`), and
+   * cleared by the same spell's own `SMSG_SPELL_GO` (it went off) or
+   * `SMSG_SPELL_FAILURE` (it was interrupted). A refusal (`SMSG_CAST_FAILED`)
+   * of a second cast leaves the running one standing, as it does on the
+   * server. An instant cast never sets it, and a channel does not either: the
+   * channel packets (`MSG_CHANNEL_START` / `MSG_CHANNEL_UPDATE`) are not served.
+   */
+  casting: Observed<{ readonly spellId: number; readonly name: string | undefined; readonly endsAt: number }> | undefined;
   /**
    * `PLAYER_FLAGS_GHOST` on our own `playerFlags`: true while the released
    * spirit walks as a ghost, from the release until the resurrect. A ghost's
@@ -1657,6 +1671,7 @@ export class StateCache {
     taxiFlight: undefined,
     taxiEta: undefined,
     resting: undefined,
+    casting: undefined,
     ghost: undefined,
     taxiReply: undefined,
     bindPoint: undefined,
@@ -3117,6 +3132,7 @@ export class StateCache {
           this.questExplored.clear();
           // A fresh login has no dialog open: an old session's offer is gone.
           this.resurrectOffer = undefined;
+          this.self.casting = undefined;
         }
         // The new map's name arrives on its WB_AREA; until then only the id
         // (position.map) is known, so the old map's name is not kept.
@@ -3288,6 +3304,19 @@ export class StateCache {
           this.spellNamesSeen.set(d.spellId, d.name);
           this.spellNamesSeen.set(d.supersededSpellId, d.name);
         }
+        return;
+      }
+      case "SMSG_SPELL_START": {
+        const d = event.data as SpellStartData;
+        if (!this.isSelfGuid(d.casterGuid) || d.castTimeMs <= 0) return;
+        const name = this.spellBook.get(d.spellId)?.name ?? this.spellNamesSeen.get(d.spellId);
+        this.self.casting = { value: { spellId: d.spellId, name, endsAt: event.ts + d.castTimeMs }, seq: event.seq, ts: event.ts };
+        return;
+      }
+      case "SMSG_SPELL_GO":
+      case "SMSG_SPELL_FAILURE": {
+        const d = event.data as SpellGoData | SpellFailureData;
+        if (this.isSelfGuid(d.casterGuid) && this.self.casting?.value.spellId === d.spellId) this.self.casting = undefined;
         return;
       }
       case "SMSG_SPELL_COOLDOWN": {

@@ -232,6 +232,108 @@ describe("state.trade() reads the window a client's trade frame shows", () => {
   });
 });
 
+// --------------------------------------------------- casts and the cast bar
+
+const SPELLS = frame(16, "SMSG_INITIAL_SPELLS", {
+  spells: [
+    { spellId: 6572, rank: 3, name: "Riposte Slam" },
+    { spellId: 1715, rank: 1, name: "Hock" },
+    { spellId: 7322, rank: 4, name: "Frost Lance" },
+  ],
+  cooldowns: [],
+});
+const castFailed = (seq: number, spellId: number, result: number, ts?: number) => frame(seq, "SMSG_CAST_FAILED", { spellId, result }, ts);
+const spellStart = (seq: number, spellId: number, castTimeMs: number, ts?: number) =>
+  frame(seq, "SMSG_SPELL_START", { casterGuid: SELF_GUID, spellId, castTimeMs, targetGuid: CREATURE_GUID }, ts);
+const spellFailure = (seq: number, spellId: number, ts?: number) =>
+  frame(seq, "SMSG_SPELL_FAILURE", { casterGuid: SELF_GUID, spellId, result: 40 }, ts);
+const spellGo = (seq: number, spellId: number, ts?: number) =>
+  frame(seq, "SMSG_SPELL_GO", { casterGuid: SELF_GUID, spellId, hitGuids: [CREATURE_GUID], misses: [] }, ts);
+const castWorld = () => frames([...loginSequence, SPELLS, selfCreate, creatureCreate, creatureQuery]);
+
+describe("cast refusals a client explains say what they need", () => {
+  // a2 tank: 132 Revenge refusals read "the server refused it"; one Hamstring
+  // in Defensive Stance read the same.
+  test("caster_aurastate, only_shapeshift and fleeing name the requirement", async () => {
+    const stub = startStub({ onConnect: castWorld });
+    const client = await inWorld(stub);
+    await folded(client, "SMSG_CREATURE_QUERY_RESPONSE", creatureQuery.seq);
+    let seq = 40;
+    const refuse = async (spellId: number, result: number): Promise<string> => {
+      await client.castSpell(spellId, CREATURE_GUID);
+      push(stub, castFailed(seq, spellId, result));
+      await folded(client, "SMSG_CAST_FAILED", seq++);
+      const [h] = client.drainActionHints();
+      return `${h!.action} ${h!.status}: ${h!.hint}`;
+    };
+    expect(await refuse(6572, 22)).toBe(
+      "castSpell caster_aurastate: Riposte Slam (6572) on Thistlebore: needs a state first (e.g. after a dodge, parry or block)",
+    );
+    expect(await refuse(1715, 94)).toBe("castSpell only_shapeshift: Hock (1715) on Thistlebore: needs a different stance or form");
+    expect(await refuse(7322, 34)).toBe("castSpell fleeing: Frost Lance (7322) on Thistlebore: you are fleeing (feared) and cannot act");
+    client.close();
+    await stub.stop();
+  });
+});
+
+describe("state.self.casting: the cast bar, and the refusals it explains", () => {
+  test("a cast time sets it, its own go or failure clears it, and a refusal of another cast leaves it", () => {
+    const cache = StateCache.replay(toEvents([...loginSequence, SPELLS, selfCreate, spellStart(40, 7322, 2100, TS + 1000)]), { seed: SEED });
+    const fold = (f: unknown) => cache.apply(toEvents([f])[0]!);
+    expect(cache.self.casting).toEqual({ value: { spellId: 7322, name: "Frost Lance", endsAt: TS + 3100 }, seq: 40, ts: TS + 1000 });
+    fold(castFailed(41, 7322, 67));
+    expect(cache.self.casting?.value.spellId).toBe(7322);
+    // An instant cast, or somebody else's failure, is not this bar.
+    fold(spellStart(42, 1715, 0));
+    fold(frame(43, "SMSG_SPELL_FAILURE", { casterGuid: "978", spellId: 7322, result: 40 }));
+    expect(cache.self.casting?.value.spellId).toBe(7322);
+    fold(spellGo(44, 7322));
+    expect(cache.self.casting).toBeUndefined();
+    fold(spellStart(45, 7322, 2100));
+    fold(spellFailure(46, 7322));
+    expect(cache.self.casting).toBeUndefined();
+  });
+
+  // a2 mage, 03:40:37.737-03:40:39.280: Frostbolt casting (2.1s), a second
+  // sent at +0.9s answered not_ready, a third at +1.5s cancelled the first
+  // (CAST_FAILED interrupted, SPELL_FAILURE, then its own SPELL_START).
+  test("not_ready and interrupted say you are still casting, when you are", async () => {
+    const stub = startStub({ onConnect: castWorld });
+    const client = await inWorld(stub);
+    await folded(client, "SMSG_CREATURE_QUERY_RESPONSE", creatureQuery.seq);
+    const T = TS + 10_000;
+    await client.castSpell(7322, CREATURE_GUID);
+    push(stub, spellStart(40, 7322, 2100, T));
+    await folded(client, "SMSG_SPELL_START", 40);
+    await client.castSpell(7322, CREATURE_GUID);
+    push(stub, castFailed(41, 7322, 67, T + 916));
+    await folded(client, "SMSG_CAST_FAILED", 41);
+    expect(client.drainActionHints().map((h) => `${h.action} ${h.status}: ${h.hint}`)).toEqual([
+      "castSpell not_ready: Frost Lance (7322) on Thistlebore: you are still casting Frost Lance (7322), 1.2s left; " +
+        "its cooldown, or the global cooldown, is still running",
+    ]);
+    await client.castSpell(7322, CREATURE_GUID);
+    push(stub, castFailed(42, 7322, 40, T + 1543));
+    push(stub, spellFailure(43, 7322, T + 1543));
+    push(stub, spellStart(44, 7322, 2100, T + 1543));
+    await folded(client, "SMSG_SPELL_START", 44);
+    expect(client.drainActionHints().map((h) => `${h.action} ${h.status}: ${h.hint}`)).toEqual([
+      "castSpell interrupted: Frost Lance (7322) on Thistlebore: you were still casting Frost Lance (7322), 0.6s left when your next cast went out, " +
+        "and that cancelled it; cast again once state.self.casting is clear",
+    ]);
+    expect(client.state.self.casting?.value).toEqual({ spellId: 7322, name: "Frost Lance", endsAt: T + 1543 + 2100 });
+    // With nothing on the bar, not_ready keeps its own words.
+    push(stub, spellGo(45, 7322, T + 3643));
+    await folded(client, "SMSG_SPELL_GO", 45);
+    await client.castSpell(7322, CREATURE_GUID);
+    push(stub, castFailed(46, 7322, 67, T + 3700));
+    await folded(client, "SMSG_CAST_FAILED", 46);
+    expect(client.drainActionHints()[0]?.hint).toBe("Frost Lance (7322) on Thistlebore: its cooldown, or the global cooldown, is still running");
+    client.close();
+    await stub.stop();
+  });
+});
+
 // ------------------------------------------------------------ moveToAsync
 
 describe("moveToAsync answers the refusals moveTo answers, with nothing sent", () => {
