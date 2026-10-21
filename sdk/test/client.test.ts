@@ -1709,14 +1709,14 @@ const chestWorld = () => frames([...loginSequence, selfCreate, chestCreate]);
 
 /**
  * The fixture creature launched just now on a spline toward `self` (a mob
- * chasing us), over a minute: for a whole test it is still at its start, while
+ * chasing us), over an hour: for a whole test it is still at its start, while
  * the spline's destination is our own position.
  */
 const chaseFrom = (start: { x: number; y: number; z: number }, self: { x: number; y: number; z: number }, seq: number) => ({
   ...monsterMove,
   seq,
   ts: Date.now(),
-  data: { ...monsterMove.data, pos: start, destination: { x: self.x, y: self.y, z: self.z }, durationMs: 60_000 },
+  data: { ...monsterMove.data, pos: start, destination: { x: self.x, y: self.y, z: self.z }, durationMs: 3_600_000 },
 });
 
 describe("client: killTarget", () => {
@@ -1951,8 +1951,8 @@ describe("client: killTarget", () => {
   });
 
   test("a mob chasing us is approached and faced where it is, not at its destination (ourselves)", async () => {
-    // The Greenskin read: a chaser's spline ends on us, so aiming at the
-    // destination measured 0y, skipped the approach and faced our own feet.
+    // A chaser's spline ends on us, so aiming at the destination measured
+    // 0y, skipped the approach and faced our own feet.
     const stub = startStub({ onConnect: () => combatWorld() });
     const client = await inWorld(stub);
     const self = client.state.self.position!.value;

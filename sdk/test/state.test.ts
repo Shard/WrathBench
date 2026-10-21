@@ -1055,13 +1055,13 @@ describe("state cache: auras and creature movement", () => {
   test("units() and closest() report a chaser where it is now, not on top of us", () => {
     const self = withWorld([]).self.position!.value;
     const start = { x: self.x + 30, y: self.y, z: self.z };
-    // Launched just now toward us, over a minute: for the whole test it is at
+    // Launched just now toward us, over an hour: for the whole test it is at
     // its start, 30 y off, while its destination is our own position.
     const chase = {
       ...monsterMove,
       seq: 100,
       ts: Date.now(),
-      data: { ...monsterMove.data, pos: start, destination: { x: self.x, y: self.y, z: self.z }, durationMs: 60_000 },
+      data: { ...monsterMove.data, pos: start, destination: { x: self.x, y: self.y, z: self.z }, durationMs: 3_600_000 },
     };
     const cache = withWorld([chase]);
     const row = cache.units().find((u) => u.guid === CREATURE_GUID)!;
