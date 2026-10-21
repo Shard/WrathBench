@@ -122,6 +122,8 @@ export type SegmentKind = "walk" | "flight" | "teleport";
 export interface RouteRun {
   kind: Exclude<SegmentKind, "teleport">;
   points: { x: number; y: number }[];
+  /** Whose route it is, where several are drawn at once (a party's): that run's colour. */
+  color?: string;
 }
 
 /**

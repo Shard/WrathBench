@@ -165,6 +165,19 @@ its newest minutes only in the open tail, which the replay reads from the
 run's index (publicly, its position in `live.json`) on the live map's cadence
 while there is one.
 
+**A party's replay** (`/map?party=<id>`) plays every member's track on one
+clock: the scrubber spans the union of their spans, the step keys walk their
+points merged, and the cursor is remembered under the party rather than a run.
+Five members of one model share one logo, so each member's puck is ringed in
+its own colour (`--member-1` to `--member-5`, the leader first), its route is
+drawn in it, and the sidebar lists the members in that colour with the map each
+stands on at the cursor (and whether it is dead or a ghost, where the trace
+says). The map shown is the followed member's: the leader until a row or a pip
+is picked, and a chip per map the party visited counts the members on it. The
+party page (`/party/<id>`, `src/pages/Party.tsx`) is the same attempt as a
+table and one timeline across the members; both are assembled by
+`src/lib/party.ts` from the results listing and each member's run detail.
+
 **The unit frame** reads the trace state at the playhead: health, power,
 level and experience (a gauge the trace did not observe stays unobserved
 rather than being filled from the 60 s sample beside it, and the health bar

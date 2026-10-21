@@ -182,6 +182,17 @@ the SPA owns everything that is UI.
   the character, scored rows to the run. Nothing is written back: the record is
   per attempt and stays that way, which is also why an attempt predating a column
   contributes nothing rather than a zero.
+- **A party attempt is one thing, and has a page and a replay.** A Deadmines
+  party is five runs launched, stopped and counted together
+  (docs/proposals/GROUP-PLAY.md), and listed as five unrelated rows it read as
+  five attempts. Membership is the stamp each member's run carries
+  (`config.party`), never a parse of a run id. `/party/<id>` is the members and
+  one timeline merged across them, and `/map?party=<id>` replays all five on one
+  clock, each in its own colour, the map following one member while the
+  sidebar says where the others are. Like the character page, both are built in
+  the browser from the listing and each member's run detail, which carries that
+  member's own records (`runner/viewer/party-marks.ts`); there is no party
+  route, so the private viewer and the public bucket run one derivation.
 - **The harness series is one shell-wide filter, not a per-page control.** The
   series — `major.minor` of a version stamp — is already the comparability
   group every page of runs is a view of, so the selector lives once, in the top

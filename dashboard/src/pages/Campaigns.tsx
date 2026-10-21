@@ -54,6 +54,7 @@ import {
 } from "../lib/campaigns";
 import { displayError } from "../lib/errors";
 import { fmtUsd, fmtWhen, shortRunId, stamp } from "../lib/format";
+import { partyHref, partyReplayHref } from "../lib/party";
 import { poll } from "../lib/poll";
 
 /** What a campaign is, and why nothing here reaches a chart. */
@@ -358,16 +359,36 @@ function CampaignBody(props: { c: CampaignView; refused: CampaignsResponse["refu
                 {s().cell} · {columnLabel(s().column)} · {s().column.arm} ·{" "}
                 <A href={campaignHref(c())}>close</A>
               </p>
-              <For each={s().square.runIds}>
-                {(id, i) => (
-                  <>
-                    <Show when={i() > 0}>{", "}</Show>
-                    <A href={`/run/${encodeURIComponent(id)}`} title={id}>
-                      {shortRunId(id)}
-                    </A>
-                  </>
+              {/* A party square's attempts are parties: each one's page, then its replay. */}
+              <Show
+                when={s().square.parties}
+                fallback={
+                  <For each={s().square.runIds}>
+                    {(id, i) => (
+                      <>
+                        <Show when={i() > 0}>{", "}</Show>
+                        <A href={`/run/${encodeURIComponent(id)}`} title={id}>
+                          {shortRunId(id)}
+                        </A>
+                      </>
+                    )}
+                  </For>
+                }
+              >
+                {(parties) => (
+                  <For each={parties()}>
+                    {(id) => (
+                      <p>
+                        <A href={partyHref(id)} title={id}>
+                          party {shortRunId(id)}
+                        </A>
+                        {" · "}
+                        <A href={partyReplayHref(id)}>replay</A>
+                      </p>
+                    )}
+                  </For>
                 )}
-              </For>
+              </Show>
             </div>
           )}
         </Show>

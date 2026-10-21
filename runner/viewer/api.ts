@@ -66,6 +66,7 @@ import { positionsFromStore } from "./positions";
 import { toolsResponse } from "./tools";
 import { runCost } from "./pricing";
 import { characterViewOf } from "./character";
+import { partyDetailOf } from "./party-marks";
 import {
   projectCampaigns,
   projectCharacterResponse,
@@ -1473,6 +1474,12 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const character = whole !== null && whole.attempts > 1 ? whole : null;
       const sessions = segmentsFrom(marks);
       const states = await statesOfRun(runId);
+      /*
+       * A party member's own records (`party-marks.ts`), off the tail just
+       * scanned and the run's own files: gated on the row's stamp, so every
+       * other run's page pays nothing and keeps its shape.
+       */
+      const party = run.party === undefined ? null : partyDetailOf(runsDir, runId, dir, tail);
       const body: RunDetailResponse = {
         /*
          * The row's quest count is the newest sample's, and the counter is the
@@ -1514,6 +1521,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // Absent, not null, on a run with no character: an optional field the page
         // falls back from, the same shape the facts above take.
         ...(character === null ? {} : { character }),
+        ...(party === null ? {} : { party }),
       };
       return pub(body, projectRunDetail, [runId]);
     }
