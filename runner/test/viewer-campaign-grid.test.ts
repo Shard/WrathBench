@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import { parseCampaignBlocks } from "../src/campaigns";
 import type { CostFigure, ResultRun } from "../viewer/api-types";
 import { campaignsView, type CampaignsRoster } from "../viewer/campaigns";
-import { defsBlock, definition } from "./fixtures/campaigns";
+import { defsBlock, definition, partyDefinition } from "./fixtures/campaigns";
 
 const arms = definition({
   id: "wake",
@@ -102,6 +102,37 @@ describe("one entry per published version", () => {
     expect(r.map((c) => `${c.key}:${c.state}`)).toEqual(["wake@1:queued", "zeta@1:unassigned"]);
     expect(r[1]!.config).toBeNull();
     expect(r[1]!.columns).toEqual([]);
+  });
+});
+
+describe("a party's square", () => {
+  test("names its attempts by the stamp's party id, oldest first, beside every member's run id", () => {
+    const def = partyDefinition();
+    const rows = { deadmines: { version: 1, assignments: [{ model: "sonnet" }] } };
+    const member = (party: string, m: string, startedAt: number): ResultRun =>
+      run({
+        runId: `${party}-${m}`,
+        campaign: "deadmines",
+        cell: "party",
+        arm: def.arms[0]!.id,
+        race: 1,
+        class: 1,
+        startedAt,
+        party: { id: party, member: m, size: 5, role: m === "tank" ? "tank" : "damage", index: 0 },
+      });
+    // The second attempt's id sorts before the first's: the order is by start, never by the id.
+    const runs = [
+      ...["tank", "healer"].map((m) => member("dm-zz-a1", m, 1000)),
+      ...["tank", "healer"].map((m) => member("dm-aa-a2", m, 5000)),
+    ];
+    const v = campaignsView(runs, roster(rows, [def]), counted).campaigns[0]!;
+    const sq = v.grid[0]!.squares[0]!;
+    expect(sq.parties).toEqual(["dm-zz-a1", "dm-aa-a2"]);
+    expect(sq.runIds).toHaveLength(4);
+  });
+
+  test("a square of a definition with no party carries no party list", () => {
+    expect(view([run({ runId: "solo" })]).grid[0]!.squares[0]!).not.toHaveProperty("parties");
   });
 });
 

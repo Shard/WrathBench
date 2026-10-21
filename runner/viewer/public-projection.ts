@@ -86,6 +86,8 @@ import type {
   ModelRowView,
   ModelRunView,
   ModelsResponse,
+  PartyDetailView,
+  PartyStampView,
   PositionsResponse,
   ResultRun,
   ResultsResponse,
@@ -372,16 +374,18 @@ function projectSpells(f: SpellFacts): SpellFacts {
 
 /**
  * A run's deaths as the run page's milestones row prints them: the three
- * counts and each death's turn. Deaths are public (operator, 2026-10-18); a
- * site's position, zone and the `first`/`last` ends are left out because no
- * page reads them.
+ * counts and each death's turn, and its time, which the party page's
+ * timeline reads. Deaths are public (operator, 2026-10-18); a site's
+ * position, zone and the `first`/`last` ends are left out because no page
+ * reads them.
  */
 function projectDeaths(f: DeathFacts): DeathFacts {
   return lean<DeathFacts>({
     deaths: f.deaths,
     releases: f.releases,
     resurrects: f.resurrects,
-    sites: f.sites.map((s) => lean<DeathSite>({ turn: s.turn })),
+    // Each death's turn and time: the party page's timeline places a death on its clock.
+    sites: f.sites.map((s) => lean<DeathSite>({ ts: s.ts, turn: s.turn })),
   });
 }
 
@@ -441,6 +445,54 @@ function projectItems(items: ItemSample[] | null): ItemSample[] | null {
       }));
 }
 
+/**
+ * A party member's stamp: the attempt's id (the run-id stem the members'
+ * ids share), which member, its role and place, and the size. Ids and one
+ * word of harness text each, field by field.
+ */
+function projectPartyStamp(p: PartyStampView): PartyStampView {
+  return {
+    id: p.id,
+    member: p.member,
+    size: p.size,
+    ...(p.role !== undefined ? { role: p.role } : {}),
+    ...(p.index !== undefined ? { index: p.index } : {}),
+  };
+}
+
+/**
+ * A party member's own records, which the party page and the group replay
+ * merge. The member list never carried an account; the kills are guids,
+ * entries and the creature's name, the places ids and names, and the chat the
+ * member's own lines, which its trace windows already publish as the map's
+ * bubbles, with any credential shape masked as there (`projectTraceSegment`).
+ * Struck for the session token like the rest of the detail.
+ */
+function projectPartyDetail(p: PartyDetailView): PartyDetailView {
+  return {
+    id: p.id,
+    member: p.member,
+    role: p.role,
+    size: p.size,
+    members: p.members.map((m) => ({ member: m.member, role: m.role, runId: m.runId, character: m.character })),
+    instances: p.instances.map((i) => ({ ts: i.ts, event: i.event, map: i.map, from: i.from })),
+    kills: p.kills.map((k) => ({ ts: k.ts, victimGuid: k.victimGuid, entry: k.entry, name: k.name, self: k.self })),
+    chat: p.chat.map((c) => ({ ts: c.ts, text: maskCredentialShapes(c.text, REDACTED) })),
+    groups: p.groups.map((g) => ({ ts: g.ts, event: g.event, count: g.count })),
+    where:
+      p.where === null
+        ? null
+        : {
+            ts: p.where.ts,
+            map: p.where.map,
+            zone: p.where.zone,
+            zoneName: p.where.zoneName,
+            area: p.where.area,
+            areaName: p.where.areaName,
+          },
+  };
+}
+
 function projectRunRow(r: RunRow): RunRow {
   return lean<RunRow>({
     runId: r.runId,
@@ -460,6 +512,8 @@ function projectRunRow(r: RunRow): RunRow {
     // name and the image a pod asked for stay off a public row.
     ...(r.campaignVersion !== undefined ? { campaignVersion: r.campaignVersion } : {}),
     ...(r.arm !== undefined ? { arm: r.arm } : {}),
+    // The run page's link to its party: absent on every run that is no member.
+    ...(r.party !== undefined ? { party: projectPartyStamp(r.party) } : {}),
     extra: r.extra,
     character: r.character,
     // The ids; `characterLabel` is the name the pair resolves to, and
@@ -594,6 +648,8 @@ function projectResultRun(r: ResultRun): ResultRun {
     cell: r.cell,
     ...(r.campaignVersion !== undefined ? { campaignVersion: r.campaignVersion } : {}),
     ...(r.arm !== undefined ? { arm: r.arm } : {}),
+    // How the runs table groups a party and the party page finds its members.
+    ...(r.party !== undefined ? { party: projectPartyStamp(r.party) } : {}),
     effort: r.effort,
     ...(r.compactWindow != null ? { compactWindow: r.compactWindow } : {}),
     harness: r.harness,
@@ -832,6 +888,8 @@ function projectSquare(sq: Square): Square {
     mismatchedStart: sq.mismatchedStart,
     builds: [...sq.builds],
     runIds: [...sq.runIds],
+    // Run-id stems, as public as the run ids they group.
+    ...(sq.parties !== undefined ? { parties: [...sq.parties] } : {}),
     ...(sq.want !== undefined ? { want: sq.want } : {}),
     ...(sq.settled !== undefined ? { settled: sq.settled } : {}),
     ...(sq.refused !== undefined ? { refused: sq.refused } : {}),
@@ -1309,6 +1367,7 @@ export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
       ? { reflections: d.reflections.map((w) => ({ fromTurn: w.fromTurn, toTurn: w.toTurn })) }
       : {}),
     ...(d.character !== undefined ? { character: projectCharacter(d.character) } : {}),
+    ...(d.party !== undefined ? { party: projectPartyDetail(d.party) } : {}),
   });
 }
 

@@ -182,6 +182,7 @@ export function campaignsView(
       const levels = runs.map((r) => r.maxLevel).filter((l): l is number => l !== null);
       const tally = squares.find((s) => s.cell.id === cellId && s.ref === ref && s.arm.id === arm.id);
       const attempts = attemptsOf(runs);
+      const byStart = [...runs].sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
       return {
         column: columnKey(ref, arm.id),
         runs: attempts.ended,
@@ -193,7 +194,11 @@ export function campaignsView(
         costUsd: sumOrNull(runs.map(billedUsd)),
         mismatchedStart: runs.filter((r) => startMismatch(startOf(r, cellId), { race: r.race, class: r.class })).length,
         builds: buildsOf(runs),
-        runIds: [...runs].sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0)).map((r) => r.runId),
+        runIds: byStart.map((r) => r.runId),
+        // One entry per attempt of a party definition: the stamp's id, never the run id's stem.
+        ...(def.party === undefined
+          ? {}
+          : { parties: [...new Set(byStart.map((r) => r.party?.id).filter((id): id is string => id !== undefined))] }),
         want: tally?.want ?? 0,
         settled: tally?.settled ?? null,
         refused: tally?.refused ?? null,

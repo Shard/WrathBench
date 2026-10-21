@@ -398,6 +398,13 @@ Three consequences worth stating rather than discovering:
 - The page costs one extra object per attempt on first open, all of them
   already cached by the client's own memo and by the CDN.
 
+The party page (`/party/<id>`) and the group replay (`/map?party=<id>`) are
+assembled the same way and for the same reason: the members off the
+unfiltered `results.json` by their party stamp, then each member's
+`detail.json` for its own records and its `track.json` for the replay
+(`dashboard/src/lib/party.ts`). No party object is published and the
+publisher did not change; a member whose detail is missing reads from its row.
+
 ## The content boundary
 
 The projection is the legal boundary in code, and it is an **allowlist by
@@ -471,9 +478,10 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   the `ResultRun` layer is ids, numbers and model identifiers — levels, XP,
   areas and achievements as ids, taxi facts, costs, tokens.
 - **Deaths are public** (operator, 2026-10-18), everywhere a page shows them.
-  A run's death count, its releases and resurrects and each death's turn ship
-  on its `detail.json` (`projectDeaths`; a death site's position and zone stay
-  off, as no page reads them), and a character's total on its card; the
+  A run's death count, its releases and resurrects and each death's turn and
+  time ship on its `detail.json` (`projectDeaths`; the time is the party
+  timeline's, and a death site's position and zone stay off, as no page reads
+  them), and a character's total on its card; the
   death, release and resurrect milestones were already in the entries window.
   Every run is re-keyed once by it, as it was for the travel marks.
 - **A track's travel marks ship.** The replay draws flights in their own
@@ -646,6 +654,21 @@ pass leaves out, and who reads what is left:
   prints the counts and the target, and the run list is its own.
 - **A move's `z`** (on the live feed and in a track): the map marks a
   destination on the plane.
+
+**A party member's stamp and records ship.** The runs table groups a party's
+rows and the party page finds its members by the stamp on a result row and a
+run's row (`party`: the attempt's id, the member, its role, its place and the
+party's size; ids and harness words). A member's `detail.json` carries its
+`party` block: the member list with no account, the map transfers into and out
+of an instance, the kills (victim guid, creature entry, and the name the
+member's client was answered, a name as an NPC's always is), the group
+changes, where it last was (map, zone and area ids and their served names),
+and its own party chat lines, which its trace windows already publish as the
+map's bubbles, masked for credential shapes as there. A campaign square of a
+party definition lists its attempts' ids beside its run ids (`parties`).
+`runner/test/public-projection.test.ts` pins each field. A member run's
+objects re-key once for it, and so does every run with a recorded death, for
+the death times above.
 
 `runner/test/public-projection.test.ts` pins each of these and scans the
 dashboard's source for the unambiguous names, so a page that starts to read one

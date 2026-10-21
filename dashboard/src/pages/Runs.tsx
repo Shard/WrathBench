@@ -54,6 +54,7 @@ import { LevelXp } from "../components/CharacterFacts";
 import { InfoHint } from "../components/InfoHint";
 import { poll } from "../lib/poll";
 import { displayError } from "../lib/errors";
+import { groupParties, memberClass, partyHref } from "../lib/party";
 
 /** A live run's level and duration move; the roster of runs moves when one starts or ends. */
 const POLL_MS = 15_000;
@@ -70,7 +71,8 @@ export default function Runs() {
   const served = (): ResultRun[] => body()?.runs ?? [];
   const series = (): string | null => pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), served());
   const inSeries = (): ResultRun[] => filterBySeries(served(), series());
-  const rows = createMemo(() => sortRuns(filterRuns(inSeries(), filter()), sort()));
+  // A party's members together wherever the sort put the first of them (`groupParties`).
+  const rows = createMemo(() => groupParties(sortRuns(filterRuns(inSeries(), filter()), sort())));
   /*
    * Freeplay lineage (`runner/viewer/lineage.ts`), so a12 does not read as an unrelated
    * row beside a11. Indexed over everything the server served rather than over
@@ -262,6 +264,16 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
                 </div>
               )}
             </Show>
+            {/* A party member: one of the runs its attempt is, and the way to
+                all of them together. */}
+            <Show when={r().party}>
+              {(p) => (
+                <div class="dim" title={p().id}>
+                  <span class={`swatch ${memberClass(p().index ?? 0)}`} />
+                  <A href={partyHref(p().id)}>party {shortRunId(p().id)}</A> · {p().role ?? p().member}
+                </div>
+              )}
+            </Show>
           </td>
         );
       case "model":
@@ -378,5 +390,5 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
   };
   /* The rail is the cheap half of the same fact: where the sort does put a
      character's attempts together, they read as one block. */
-  return <tr class={lin() === undefined ? "" : "character"}>{RUN_COLUMNS.map(cell)}</tr>;
+  return <tr class={lin() !== undefined || r().party !== undefined ? "character" : ""}>{RUN_COLUMNS.map(cell)}</tr>;
 }

@@ -22,10 +22,11 @@ import type { Database } from "bun:sqlite";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { openRunDb } from "../src/rundb";
-import type { PositionTrace, TraceIndexResponse, TraceSegment, TrackTrace } from "./api-types";
+import type { PositionTrace, TraceChatKind, TraceIndexResponse, TraceSegment, TrackTrace } from "./api-types";
 import {
   CONTEXT_MS,
   SEG_MS,
+  chatOfRowData,
   encodeSegment,
   isClosed,
   itemNameOf,
@@ -266,4 +267,28 @@ export function traceSegsMemo(): (runsDir: string, runId: string, now: number) =
     memo.set(path, { size, mtimeMs, start, final: read.final, value: read.value });
     return read.value;
   };
+}
+
+/**
+ * Every line of one chat kind the run's trace recorded, oldest first: the same
+ * sanitized lines its segments carry (`chatOfRowData`), read in one pass over
+ * the `state` rows rather than window by window. The `LIKE` is a prefilter
+ * only — every row it passes is parsed — so a line that merely mentions the
+ * word costs a parse and nothing else.
+ */
+export function readTraceChat(runsDir: string, runId: string, kind: TraceChatKind): { ts: number; text: string }[] {
+  const none: { ts: number; text: string }[] = [];
+  return withTrace(runsDir, runId, none, (db) => {
+    const rows = db
+      .query(`SELECT ts, data FROM trace WHERE run_id = ? AND kind = 'state' AND data LIKE '%"chat"%' ORDER BY ts, rowid`)
+      .all(runId) as { ts?: unknown; data?: unknown }[];
+    const out: { ts: number; text: string }[] = [];
+    for (const r of rows) {
+      if (typeof r.ts !== "number") continue;
+      for (const [k, text] of chatOfRowData(typeof r.data === "string" ? r.data : null)) {
+        if (k === kind) out.push({ ts: r.ts, text });
+      }
+    }
+    return out;
+  });
 }

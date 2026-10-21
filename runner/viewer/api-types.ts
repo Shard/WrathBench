@@ -196,6 +196,11 @@ export interface Square {
   builds: string[];
   /** Every run of the square, live ones included, oldest first. */
   runIds: string[];
+  /**
+   * A party definition's square: its attempts' party ids, oldest first, each
+   * the five runs above that share it. Absent on every other square.
+   */
+  parties?: string[];
   /** The assignment's `runsPerCell`. */
   want?: number;
   /** `done`: it has its counted runs. `capped`: it had its launches without them. Null: still owed. */
@@ -1289,6 +1294,95 @@ export interface RunDetailResponse extends SnapshotEnvelope {
    * page falls back to the run's own figures.
    */
   character?: CharacterView;
+  /**
+   * What this run recorded as one member of a party (`PartyDetailView`).
+   * Present only on a party member's run, so every other run's detail keeps
+   * its shape; optional for the reason `achievements` is.
+   */
+  party?: PartyDetailView;
+}
+
+/**
+ * One member of a party as a member's own stamp names it (`config.party.members`),
+ * in member order, the leader first. The account each member logged in with is
+ * on the stamp too, and is never served.
+ */
+export interface PartyMemberRefView {
+  member: string;
+  role: string;
+  runId: string;
+  character: string;
+}
+
+/** A map transfer that changed the instance type (`instance` milestone): into an instance, or out of one. */
+export interface PartyInstanceMark {
+  ts: number;
+  event: "entered" | "left";
+  map: number;
+  /** The map the character came from. */
+  from: number;
+}
+
+/**
+ * A kill the server reported to this member (`kill` milestone, off
+ * `SMSG_PARTYKILLLOG`): every member in range is told, so the same victim
+ * appears on several members' runs and is one kill. Elites and above only.
+ */
+export interface PartyKillMark {
+  ts: number;
+  victimGuid: string;
+  /** The creature entry, when this member's unit cache knew the victim. */
+  entry: number | null;
+  /** The creature's name as this member's own client cache answered it, when it did. */
+  name: string | null;
+  /** This member landed the killing blow. */
+  self: boolean;
+}
+
+/** One line this member said in party chat, as its trace recorded the server's echo. */
+export interface PartyChatMark {
+  ts: number;
+  text: string;
+}
+
+/** A `group` milestone: the party as the server's group list described it to this member. */
+export interface PartyGroupMark {
+  ts: number;
+  event: "joined" | "changed" | "left";
+  /** The party's size, this member included; 0 on `left`. */
+  count: number;
+}
+
+/**
+ * Where the member last was, off its newest state sample: the map, zone and
+ * area ids, and the zone and area names the client was served for them
+ * (`WB_AREA`), when the run saw one.
+ */
+export interface PartyWhereView {
+  ts: number;
+  map: number | null;
+  zone: number | null;
+  zoneName: string | null;
+  area: number | null;
+  areaName: string | null;
+}
+
+/**
+ * A party member's own records, beside the facts every run's detail carries
+ * (deaths, the level timeline, achievements). Each list is this run's alone;
+ * the party page merges the members' (`dashboard/src/lib/party.ts`).
+ */
+export interface PartyDetailView {
+  id: string;
+  member: string;
+  role: string;
+  size: number;
+  members: PartyMemberRefView[];
+  instances: PartyInstanceMark[];
+  kills: PartyKillMark[];
+  chat: PartyChatMark[];
+  groups: PartyGroupMark[];
+  where: PartyWhereView | null;
 }
 
 /**
@@ -1800,6 +1894,13 @@ export interface PartyStampView {
   id: string;
   member: string;
   size: number;
+  /**
+   * The member's role (`tank`, `healer`, `damage`) and its place in the
+   * party's member order, the leader at 0. Optional: a viewer that predates
+   * them, and a snapshot published before them, carry neither.
+   */
+  role?: string;
+  index?: number;
 }
 
 export interface ResultRun {
