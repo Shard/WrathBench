@@ -2424,15 +2424,13 @@ function castFailedHint(state: StateCache, cast: PendingCast, reason: string, ca
     const name = state.nearby.get(key)?.name?.value ?? state.nameOf(key);
     on = ` on ${name ?? cast.targetGuid}`;
   }
-  // Our own cast still running says more than either refusal's own words:
+  // Our own cast still running says more than the refusal's own words:
   // the 2026-10-21 mage's routine sent a cast 11 ms after the last one and
   // read not_ready as a cooldown.
   const meaning =
     casting !== undefined && cause === "not_ready"
       ? `you are still casting ${casting}; ${CAST_FAILURE_MEANING.not_ready}`
-      : casting !== undefined && cause === "interrupted"
-        ? `you were still casting ${casting} when your next cast went out, and that cancelled it; cast again once state.self.casting is clear`
-        : CAST_FAILURE_MEANING[cause];
+      : CAST_FAILURE_MEANING[cause];
   // A weapon-slot refusal with the slot's own item observed broken says
   // which item: the durability fields are what the client's tooltip reads.
   const weapon = CAST_FAILURE_WEAPON_SLOT[reason];
@@ -3656,8 +3654,6 @@ export class WrathClient {
 
   /** `castSpell` casts awaiting the server's first word, by spell id (`castVerdict`). */
   private readonly pendingCasts = new Map<number, PendingCast>();
-  /** The stream position at our last `cast_spell` dispatch: a cast sent after the one on the bar began (`castVerdict`). */
-  private lastCastSeq = -1;
 
   /**
    * The last `move_to` this client sent: when, and its moveId once acked. With
@@ -4401,7 +4397,6 @@ export class WrathClient {
       origin: this.originOf?.(),
     };
     this.pendingCasts.set(spellId, cast);
-    this.lastCastSeq = cast.sinceSeq ?? -1;
     try {
       return await this.dispatchCast(spellId, targetGuid);
     } catch (err) {
@@ -4501,15 +4496,6 @@ export class WrathClient {
     }
     if (status !== "interrupted") {
       this.tallyActionHint(cast.origin, "castSpell", status, castFailedHint(this.state, cast, status));
-      return;
-    }
-    // Interrupted by our own next cast: the module sends castCount 0, so the
-    // core's spell_in_progress refusal never fires and a cast sent while
-    // another runs cancels it (Spell::prepare). Told when the interrupted
-    // spell is the one on the bar and a cast of ours went out after it began.
-    const bar = this.state.self.casting;
-    if (casting !== undefined && bar?.value.spellId === failed.spellId && this.lastCastSeq >= bar.seq) {
-      this.tallyActionHint(cast.origin, "castSpell", status, castFailedHint(this.state, cast, status, status, casting));
       return;
     }
     // An interrupt has two causes this client can tell apart from the rest:
