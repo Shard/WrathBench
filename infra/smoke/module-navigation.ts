@@ -345,7 +345,7 @@ async function main() {
   // 6. Every status on the record is in the documented vocabulary.
   const VOCAB = new Set([
     "arrived", "too_far", "no_mesh", "target_off_mesh", "start_off_mesh", "path_incomplete",
-    "drop", "transferred", "teleported", "interrupted", "stopped", "superseded",
+    "drop", "transferred", "teleported", "interrupted", "stopped", "superseded", "rooted",
   ]);
   const seen = new Set(events.filter((e) => e.opcode === "WB_MOVE_RESULT").map((e) => e.data?.status));
   for (const s of seen) if (!VOCAB.has(s)) fail(`undocumented move status on the stream: ${s}`);
