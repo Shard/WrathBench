@@ -684,7 +684,11 @@ const ERROR_CODE_HINTS: Record<string, string> = {
     "(ignore its error), then await sdk.createSession({...})",
   unsupported_action:
     "that action is not in the module's whitelist — inspect the sdk surface for what is supported",
-  moving: "a move is in progress — await sdk.stop() first, or supersede it with sdk.moveTo(...)",
+  // Only face sends it: a walk runs forward, and a running character faces
+  // the way it runs, so a turn mid-walk would steer it off its path.
+  moving:
+    "a move is running, and a running character faces the way it runs (a turn would steer it off its path), so nothing was sent; " +
+    "await sdk.stop() and then face, or walk toward what you want to face",
   missing_guid:
     "this action needs a guid argument — get one from state.nearbyUnits() or state.closest(...)",
   missing_position: "move_to needs finite x, y and z numbers",
@@ -4207,8 +4211,10 @@ export class WrathClient {
    * Takes either an absolute orientation in radians (0 = east/+x,
    * counter-clockwise) or a point to turn toward; the module resolves a point
    * into an orientation and echoes the one it used. Rejects with
-   * `WrathRequestError` code `moving` while a move is running — stop first, or
-   * supersede with `moveTo`.
+   * `WrathRequestError` code `moving` while a move is running, nothing sent:
+   * the walk runs forward, a client running forward travels where it faces,
+   * and a facing held off the walk's course is what no client sends — stop
+   * first, or supersede with `moveTo`.
    *
    * Unlike the calls that take a target, it takes no guid or name: facing a
    * unit is facing its position, `face({ x: unit.x, y: unit.y })`. A string
