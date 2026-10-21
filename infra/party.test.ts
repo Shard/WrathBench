@@ -141,6 +141,35 @@ describe("shared fate", () => {
     expect(d.staged).toBe(1);
   });
 
+  test("a member's run meets the kill end: all five end kill-target together, counted and reached", async () => {
+    const { members, runs } = fakeParty();
+    const d = deps(members);
+    const done = runParty(runs, d);
+    await tick();
+    // The rogue's kill credit named VanCleef; its watchdog ended its run, and
+    // the paladin's own watchdog read the same packet before the stop came.
+    members[3]!.exit({ kind: "terminated", reason: "kill-target", detail: "entry 639 killed (killer party member 980)" });
+    members[4]!.exit({ kind: "terminated", reason: "kill-target", detail: "entry 639 killed (killer party member 980)" });
+    const out = await done;
+    expect(out.fate).toBe("ended");
+    expect(out.trigger).toEqual({ member: "rogue", reason: "kill-target" });
+    expect(d.writes).toEqual(["tank", "healer", "mage"].map((m) => `${m} end kill-target (rogue: kill-target)`));
+    expect(out.written.map((w) => w.wrote)).toEqual(["kill-target", "kill-target", "kill-target"]);
+    // On disk, every member's own verdict counts, so the attempt does, and it reached its end.
+    const runsOnDisk: ProbeRun[] = MEMBERS.map((m) => probe(m, { terminationReason: "kill-target", counted: true }));
+    expect(partyAttempt(runsOnDisk)).toEqual({ live: false, counted: true, reached: true });
+  });
+
+  test("a member's level end ends the rest on level-target, the same way", async () => {
+    const { members, runs } = fakeParty();
+    const d = deps(members);
+    const done = runParty(runs, d);
+    await tick();
+    members[0]!.exit({ kind: "terminated", reason: "level-target", detail: "level 21 observed (target 21)" });
+    await done;
+    expect(d.writes).toEqual(["healer", "mage", "rogue", "paladin"].map((m) => `${m} end level-target (tank: level-target)`));
+  });
+
   test("one member's adapter-error ends the party, and the attempt is not counted", async () => {
     const { members, runs } = fakeParty();
     const d = deps(members);
@@ -152,7 +181,7 @@ describe("shared fate", () => {
     expect(d.writes.filter((w) => w.includes("party-ended (healer: adapter-error)"))).toHaveLength(4);
     // The square's tally: the healer's own verdict is the party's, and it does not count.
     const runsOnDisk: ProbeRun[] = MEMBERS.map((m) => probe(m, m === "healer" ? { terminationReason: "adapter-error", counted: false } : { terminationReason: "party-ended", counted: true }));
-    expect(partyAttempt(runsOnDisk)).toEqual({ live: false, counted: false });
+    expect(partyAttempt(runsOnDisk)).toEqual({ live: false, counted: false, reached: false });
   });
 
   test("one member pauses: the others are paused party-paused, and one that paused on its own keeps its reason", async () => {
@@ -617,6 +646,16 @@ describe("campaign squares tally parties, not runs", () => {
     expect(square(one)).toMatchObject({ attempts: 1, done: 1, live: 0, settled: "done" });
   });
 
+  test("a party that reached its kill end is done and reached; one that did not is done, not reached", () => {
+    const reached = MEMBERS.map((m) => probe(m, { terminationReason: "kill-target" }));
+    expect(square(reached)).toMatchObject({ attempts: 1, done: 1, reached: 1, live: 0, settled: "done" });
+    const spent = MEMBERS.map((m, i) => probe(m, i === 0 ? {} : { terminationReason: "party-ended" }));
+    expect(square(spent)).toMatchObject({ attempts: 1, done: 1, reached: 0 });
+    // A kill end met while a member's adapter failed counts nothing: not done, not reached.
+    const broken = MEMBERS.map((m, i) => probe(m, i === 1 ? { terminationReason: "adapter-error", counted: false } : { terminationReason: "kill-target" }));
+    expect(square(broken)).toMatchObject({ attempts: 1, done: 0, reached: 0 });
+  });
+
   test("a live member makes the party live; a missing or launch-failed member keeps it from counting", () => {
     expect(square(MEMBERS.map((m, i) => probe(m, { live: i === 2 })))).toMatchObject({ attempts: 1, live: 1, done: 0 });
     expect(square(MEMBERS.slice(0, 4).map((m) => probe(m)))).toMatchObject({ attempts: 1, done: 0 });
@@ -639,6 +678,12 @@ describe("campaign squares tally parties, not runs", () => {
       { campaign: "solo", version: 1, cell: "a", ref: "glm", arm: "base", counted: false, live: true },
     ];
     expect(campaignSquares(solo, ["glm"], runs)[0]).toMatchObject({ attempts: 2, done: 1, live: 1 });
+  });
+
+  test("a single run that met its kill end is done and reached", () => {
+    const solo = joined([definition({ id: "solo", stopAtLevel: null, end: [{ kill: { entry: 639 } }] })], { solo: { version: 1, assignments: [{ model: "glm" }] } }).campaigns[0]!;
+    const runs: ProbeRun[] = [{ campaign: "solo", version: 1, cell: "a", ref: "glm", arm: "base", counted: true, live: false, terminationReason: "kill-target" }];
+    expect(campaignSquares(solo, ["glm"], runs)[0]).toMatchObject({ attempts: 1, done: 1, reached: 1, settled: "done" });
   });
 });
 

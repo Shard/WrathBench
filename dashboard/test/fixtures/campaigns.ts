@@ -52,6 +52,7 @@ const WAKE: CampaignView = {
   shape: {
     objective: null,
     stopAtLevel: 5,
+    end: [{ level: 5 }],
     episodeMs: 4 * 3_600_000,
     idleMs: 20 * 60_000,
     noXpMs: null,
@@ -219,6 +220,7 @@ const SIDE: CampaignView = {
   shape: {
     objective: "reach the next zone",
     stopAtLevel: null,
+    end: [],
     episodeMs: 3_600_000,
     idleMs: 600_000,
     noXpMs: 900_000,

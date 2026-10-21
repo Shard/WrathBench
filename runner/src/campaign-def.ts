@@ -23,6 +23,7 @@ import { z } from "zod";
 import { parseCompactWindow } from "./config";
 import { ARM_RESERVED_FLAGS, RUN_FLAGS, flagsOf } from "./run-flags";
 import { partyDefinitionSchema, type PartyMember } from "./party";
+import { endConditionSchema, type EndCondition } from "./end-conditions";
 
 /** Names a campaign id, a cell id and an arm id must all survive: safe in a run id and a path. */
 export const CAMPAIGN_NAME = /^[A-Za-z0-9._-]+$/;
@@ -125,8 +126,21 @@ export const campaignDefinitionSchema = z
     arms: z.array(armSchema).min(1),
     /** Rendered verbatim into the prompt's delimited operator-objective block, in place of the broad goal; null for the standing goal alone. */
     objective: z.string().min(1).nullable(),
-    /** End the run on the first server-observed level at or above this (`level-target`); null for none. */
+    /**
+     * End the run on the first server-observed level at or above this
+     * (`level-target`); null for none. The first spelling of a level end,
+     * which every definition published before `end` carries; `end` holds the
+     * rest (`end-conditions.ts`).
+     */
     stopAtLevel: z.number().int().min(2).max(80).nullable(),
+    /**
+     * What else ends a run as reached: `{ level: N }` (`level-target`) or
+     * `{ kill: { entry } }` (`kill-target`), the first met ending it. In a
+     * party, the member whose run meets one ends the rest on the same reason.
+     * Optional with no default, so a definition written before it hashes as
+     * it always did.
+     */
+    end: z.array(endConditionSchema).min(1).optional(),
     budget: z
       .object({
         /** The ceiling, on the play clock (a resumed run continues it). */
@@ -162,6 +176,11 @@ export const campaignDefinitionSchema = z
     const dupes = (ids: readonly string[]): string[] => [...new Set(ids.filter((x, i) => ids.indexOf(x) !== i))];
     for (const id of dupes(d.cells.map((c) => c.id))) ctx.addIssue({ code: "custom", path: ["cells"], message: `cell ${id} is declared twice` });
     for (const id of dupes(d.arms.map((a) => a.id))) ctx.addIssue({ code: "custom", path: ["arms"], message: `arm ${id} is declared twice` });
+    // One level end, in one spelling: `stopAtLevel` and a level in `end`
+    // would be two stopping rules a reader has to reconcile.
+    if (d.stopAtLevel !== null && d.end?.some((e) => "level" in e) === true) {
+      ctx.addIssue({ code: "custom", path: ["end"], message: "a level end is stopAtLevel or a { level } in end, not both" });
+    }
     if (d.wikiCoords && !d.wiki) ctx.addIssue({ code: "custom", path: ["wikiCoords"], message: "wikiCoords needs the reference wiki, and wiki is false" });
     // The fleet launches a staged run on a character the definition names,
     // and only a party names its characters; a single staged start would be
@@ -362,6 +381,7 @@ export function cellDimensions(
   wiki: boolean;
   objective?: string;
   stopAtLevel?: number;
+  end?: EndCondition[];
 } {
   const objective = member !== undefined ? member.objective : def.objective;
   return {
@@ -373,6 +393,7 @@ export function cellDimensions(
     wiki: def.wiki,
     ...(objective !== null ? { objective } : {}),
     ...(def.stopAtLevel !== null ? { stopAtLevel: def.stopAtLevel } : {}),
+    ...(def.end !== undefined ? { end: [...def.end] } : {}),
   };
 }
 

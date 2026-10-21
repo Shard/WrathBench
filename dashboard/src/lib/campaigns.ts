@@ -239,9 +239,19 @@ export function gridRows(c: Pick<CampaignView, "cells" | "columns" | "grid">): G
 }
 
 /**
- * What a square says. With a stop level: the counted runs that reached it out
- * of the counted runs, then the median minutes of play to it. Without one: the
- * best level. `·` is owed and not started; a square whose only run is live
+ * A definition's ends as the page names them: `L10` for a level end, `the
+ * kill of entry 639` for a kill end, joined by "or"; null when it sets none.
+ */
+export function endGoal(shape: Pick<CampaignView["shape"], "stopAtLevel"> & { end?: CampaignView["shape"]["end"] }): string | null {
+  const ends = shape.end ?? (shape.stopAtLevel === null ? [] : [{ level: shape.stopAtLevel }]);
+  const labels = ends.map((e) => ("level" in e ? `L${e.level}` : `the kill of entry ${e.kill.entry}`));
+  return labels.length === 0 ? null : labels.join(" or ");
+}
+
+/**
+ * What a square says. With an end (`endGoal`): the counted attempts that
+ * reached it out of the counted ones, then the median minutes of play to the
+ * stop level when there is one. Without one: the best level. `·` is owed and not started; a square whose only run is live
  * says nothing, because its live marker already does. `*` marks a run whose
  * recorded start is not the cell's.
  *
@@ -253,13 +263,13 @@ export function gridRows(c: Pick<CampaignView, "cells" | "columns" | "grid">): G
  * `runs` is the square's ended runs, counted or not, and `live` the ones in
  * flight.
  */
-export function squareText(sq: Square | null, stop: number | null): string {
+export function squareText(sq: Square | null, goal: string | null): string {
   if (sq === null) return "";
   if (isRefused(sq) && sq.runs === 0 && sq.live === 0) return "refused";
   if (sq.settled === "capped" && sq.counted === 0) return "capped";
   if (sq.runs === 0) return sq.live > 0 ? "" : "·";
   const mark = sq.mismatchedStart > 0 ? "*" : "";
-  if (stop !== null) {
+  if (goal !== null) {
     const head = `${sq.reached}/${sq.counted}`;
     return sq.minutesToStop === null ? `${head}${mark}` : `${head} ${sq.minutesToStop.median}m${mark}`;
   }
@@ -272,7 +282,7 @@ function isRefused(sq: Square): sq is Square & { refused: string } {
 }
 
 /** The square's hover: a refusal first, then every number it rests on, then its builds. */
-export function squareTitle(sq: Square | null, stop: number | null): string {
+export function squareTitle(sq: Square | null, goal: string | null): string {
   if (sq === null) return "no square served for this column";
   const refusal = isRefused(sq) ? `refused: ${sq.refused}` : null;
   const wanted = sq.want === undefined ? null : `${sq.want} counted ${sq.want === 1 ? "run" : "runs"} wanted`;
@@ -281,10 +291,10 @@ export function squareTitle(sq: Square | null, stop: number | null): string {
     return [refusal, owed].filter((x): x is string => x !== null).join("\n");
   }
   const parts: string[] = [];
-  if (stop !== null) parts.push(`${sq.reached} of ${plural(sq.counted, "counted run")} reached L${stop}`);
+  if (goal !== null) parts.push(`${sq.reached} of ${plural(sq.counted, "counted run")} reached ${goal}`);
   if (sq.minutesToStop !== null) {
     const m = sq.minutesToStop;
-    parts.push(`${m.min}/${m.median}/${m.max} min to L${stop} (min/median/max)`);
+    parts.push(`${m.min}/${m.median}/${m.max} min to ${goal ?? "the stop level"} (min/median/max)`);
   }
   if (sq.bestLevel !== null) parts.push(`best L${sq.bestLevel}`);
   if (sq.runs > sq.counted) parts.push(`${sq.runs - sq.counted} not counted`);
@@ -298,11 +308,11 @@ export function squareTitle(sq: Square | null, stop: number | null): string {
   return lines.join("\n");
 }
 
-/** A square's class: green once its stop level was reached, the error colour while refused with nothing run, dim while nothing counts. */
-export function squareClass(sq: Square | null, stop: number | null): string {
+/** A square's class: green once its end was reached, the error colour while refused with nothing run, dim while nothing counts. */
+export function squareClass(sq: Square | null, goal: string | null): string {
   if (sq !== null && isRefused(sq) && sq.runs === 0 && sq.live === 0) return "right mono err";
   if (sq === null || sq.counted === 0) return "right mono dim";
-  if (stop !== null && sq.reached > 0) return "right mono ok";
+  if (goal !== null && sq.reached > 0) return "right mono ok";
   return "right mono";
 }
 

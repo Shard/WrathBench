@@ -13,8 +13,10 @@ import type { AgentPosition, ResultRun, RunDetailResponse, Square, TrackPoint, T
 import { squareHref } from "../src/lib/campaigns";
 import { createRoot, createSignal } from "solid-js";
 import { createMapState } from "../src/lib/mapstate";
+import { END_REASONS as RUNNER_END_REASONS } from "../../runner/src/end-conditions";
 import {
   BOSS_ENTRIES,
+  END_REASONS,
   groupParties,
   groupTrack,
   loadParty,
@@ -183,6 +185,30 @@ describe("the party view", () => {
     expect(v.endedBy).toEqual({ member: "mage", reason: "idle", detail: null });
     expect(v.startedAt).toBe(1000);
     expect(v.endedAt).toBe(9000);
+  });
+
+  test("a party that reached its end says so, naming the member whose run reached it", () => {
+    const rows = partyRows(STEM, { terminationReason: "kill-target", endedAt: 9000 });
+    rows[3] = member(STEM, "rogue", 3, { terminationReason: "kill-target", endedAt: 8000 });
+    const details = new Map(
+      rows.map((r) => {
+        const d = detail(r);
+        d.run.terminationDetail = r.party!.member === "rogue" ? "entry 639 killed (killer party member 980)" : "rogue: kill-target";
+        return [r.runId, d] as const;
+      }),
+    );
+    const v = partyViewOf(STEM, rows, details)!;
+    expect(v.reached).toBe(true);
+    expect(v.endedBy).toEqual({ member: "rogue", reason: "kill-target", detail: "entry 639 killed (killer party member 980)" });
+    // The public build serves no detail: the reason alone, still reached.
+    const bare = partyViewOf(STEM, rows, new Map())!;
+    expect(bare).toMatchObject({ reached: true, endedBy: { member: null, reason: "kill-target" } });
+    // A party the clock ended is not one that reached its end.
+    expect(partyViewOf(STEM, partyRows(STEM, { terminationReason: "episode-limit" }), new Map())!.reached).toBe(false);
+  });
+
+  test("the end reasons are the runner's", () => {
+    expect([...END_REASONS].sort()).toEqual([...RUNNER_END_REASONS].sort());
   });
 
   test("five stopped the same way at once name nobody: the reason alone", () => {

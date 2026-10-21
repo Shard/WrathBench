@@ -940,6 +940,7 @@ export function projectCampaigns(c: CampaignsResponse): PublicCampaignsResponse 
         shape: {
           objective: null,
           stopAtLevel: v.shape.stopAtLevel,
+          end: v.shape.end.map((e) => ("level" in e ? { level: e.level } : { kill: { entry: e.kill.entry } })),
           episodeMs: v.shape.episodeMs,
           idleMs: v.shape.idleMs,
           noXpMs: v.shape.noXpMs,
