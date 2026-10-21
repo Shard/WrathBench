@@ -28,6 +28,7 @@
  *   scheduling; the results stay visible while the definition is published.
  */
 
+import { isEndReason } from "./end-conditions";
 import { z } from "zod";
 import { DEFAULT_DRIVER, driverHasCompactWindow } from "./config";
 import type { RunPodsMode } from "./models";
@@ -497,6 +498,17 @@ export interface ProbeRun {
   party?: { id: string; size: number } | null;
   /** The run's termination reason, which a party's count reads; null while it has none. */
   terminationReason?: string | null;
+  /**
+   * Whether the run reached its definition's end. Absent: it ended on an end
+   * reason (`isEndReason`). The viewer passes its own reading, which also
+   * takes a level run that got to the stop level.
+   */
+  reached?: boolean;
+}
+
+/** Whether one run reached its definition's end. */
+function runReached(r: ProbeRun): boolean {
+  return r.reached ?? isEndReason(r.terminationReason);
 }
 
 /**
@@ -507,8 +519,11 @@ export interface ProbeRun {
  * fate rather than voting: it was ended because another member's verdict
  * ended the attempt, so whether the attempt counts is that verdict's
  * question — an `episode-limit` counts, an `adapter-error` does not.
+ *
+ * Reached when it counts and a member reached the definition's end: the
+ * party-fate machine ends the rest on the same reason, so that is all five.
  */
-export function partyAttempt(members: readonly ProbeRun[]): { live: boolean; counted: boolean } {
+export function partyAttempt(members: readonly ProbeRun[]): { live: boolean; counted: boolean; reached: boolean } {
   const live = members.some((m) => m.live);
   const size = members.find((m) => m.party != null)?.party?.size ?? members.length;
   const own = members.filter((m) => m.terminationReason !== "party-ended");
@@ -518,7 +533,7 @@ export function partyAttempt(members: readonly ProbeRun[]): { live: boolean; cou
     !members.some((m) => m.terminationReason === "launch-failed") &&
     own.length > 0 &&
     own.every((m) => m.counted);
-  return { live, counted };
+  return { live, counted, reached: counted && members.some(runReached) };
 }
 
 /** One (assignment, arm, cell) of a campaign, and what is on disk for it. */
@@ -533,6 +548,8 @@ export interface CampaignSquare {
   want: number;
   /** Counted runs, uncapped. */
   done: number;
+  /** Of those, the ones that reached the definition's end (a party is one). */
+  reached: number;
   /** Launches, counted or not, live included. */
   attempts: number;
   live: number;
@@ -561,12 +578,13 @@ function squareKey(campaign: string, version: number, ref: string, arm: string, 
  * fact about this tick, not about the sweep (`campaignWork` applies it).
  */
 export function campaignSquares(c: Campaign, catalog: readonly string[], probeRuns: readonly ProbeRun[]): CampaignSquare[] {
-  const tally = new Map<string, { done: number; attempts: number; live: number }>();
-  const bump = (k: string, a: { live: boolean; counted: boolean }): void => {
-    const t = tally.get(k) ?? { done: 0, attempts: 0, live: 0 };
+  const tally = new Map<string, { done: number; reached: number; attempts: number; live: number }>();
+  const bump = (k: string, a: { live: boolean; counted: boolean; reached: boolean }): void => {
+    const t = tally.get(k) ?? { done: 0, reached: 0, attempts: 0, live: 0 };
     t.attempts++;
     if (a.live) t.live++;
     if (a.counted) t.done++;
+    if (a.counted && a.reached) t.reached++;
     tally.set(k, t);
   };
   // A party member is a fifth of one attempt: its square tallies the party.
@@ -575,7 +593,7 @@ export function campaignSquares(c: Campaign, catalog: readonly string[], probeRu
     if (r.campaign !== c.name || r.version !== c.version || r.cell === null || r.ref === null || r.arm === null) continue;
     const k = squareKey(r.campaign, r.version, r.ref, r.arm, r.cell);
     if (r.party == null) {
-      bump(k, r);
+      bump(k, { live: r.live, counted: r.counted, reached: runReached(r) });
       continue;
     }
     const p = parties.get(`${k}\u0000${r.party.id}`) ?? { key: k, members: [] };
@@ -587,7 +605,7 @@ export function campaignSquares(c: Campaign, catalog: readonly string[], probeRu
   for (const a of campaignAssignments(c, catalog)) {
     for (const cell of c.cells) {
       for (const arm of c.arms) {
-        const t = tally.get(squareKey(c.name, c.version, a.model, arm.id, cell.id)) ?? { done: 0, attempts: 0, live: 0 };
+        const t = tally.get(squareKey(c.name, c.version, a.model, arm.id, cell.id)) ?? { done: 0, reached: 0, attempts: 0, live: 0 };
         const capped = c.maxAttemptsPerCell !== undefined && t.attempts >= c.maxAttemptsPerCell;
         out.push({
           campaign: c.name,
@@ -597,6 +615,7 @@ export function campaignSquares(c: Campaign, catalog: readonly string[], probeRu
           cell,
           want: a.runsPerCell,
           done: t.done,
+          reached: t.reached,
           attempts: t.attempts,
           live: t.live,
           settled: t.done >= a.runsPerCell ? "done" : capped && t.live === 0 ? "capped" : null,

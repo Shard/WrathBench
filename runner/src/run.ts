@@ -808,7 +808,7 @@ async function main(): Promise<void> {
    * underneath it. A pause written before the mark existed resumes at zero.
    */
   const elapsedBeforeMs = resumedPause?.episodeElapsedMs ?? 0;
-  const watchdogs = new Watchdogs(config.watchdogs, Date.now, elapsedBeforeMs, { stopAtLevel: config.stopAtLevel ?? null });
+  const watchdogs = new Watchdogs(config.watchdogs, Date.now, elapsedBeforeMs, { stopAtLevel: config.stopAtLevel ?? null, end: config.end });
   if (resumed && elapsedBeforeMs > 0) {
     console.error(`[wrathbench] episode clock resumes at ${Math.round(elapsedBeforeMs / 60_000)}m`);
   }

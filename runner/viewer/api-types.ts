@@ -104,6 +104,12 @@ export interface CampaignView {
   shape: {
     objective: string | null;
     stopAtLevel: number | null;
+    /**
+     * Every end the definition sets, `stopAtLevel` included as a level end:
+     * a `{ level }` ends a run as `level-target`, a `{ kill: { entry } }` as
+     * `kill-target`. Empty when none does.
+     */
+    end: ({ level: number } | { kill: { entry: number } })[];
     episodeMs: number;
     idleMs: number;
     noXpMs: number | null;
@@ -181,7 +187,11 @@ export interface Square {
   runs: number;
   /** Ended runs that count toward the square. */
   counted: number;
-  /** Counted runs that reached the definition's stop level; 0 when it sets none. */
+  /**
+   * Counted attempts that reached the definition's end — a run that ended on
+   * one (`level-target`, `kill-target`) or got to its stop level; a party is
+   * one attempt. 0 when it sets none.
+   */
   reached: number;
   live: number;
   /** Minutes of play to the stop level over the counted runs that reached it; null when none did. */
@@ -214,7 +224,7 @@ export interface ArmSummary {
   arm: string;
   /** Ended runs, counted or not. */
   runs: number;
-  /** Counted runs that reached the stop level; the medians are over these. */
+  /** Counted runs that reached the definition's end (each party member is a run); the medians are over these. */
   reached: number;
   medianMinutesToStop: number | null;
   /** Turns at the first observation of the stop level. */

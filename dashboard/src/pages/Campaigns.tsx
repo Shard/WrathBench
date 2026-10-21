@@ -33,6 +33,7 @@ import {
   clockText,
   columnGroups,
   columnLabel,
+  endGoal,
   findCampaign,
   gridRows,
   imageTitle,
@@ -249,6 +250,7 @@ function Campaign(props: { body: CampaignsResponse | undefined; id: string; vers
 function CampaignBody(props: { c: CampaignView; refused: CampaignsResponse["refused"] }) {
   const c = (): CampaignView => props.c;
   const stop = (): number | null => c().shape.stopAtLevel;
+  const goal = (): string | null => endGoal(c().shape);
   const [search] = useSearchParams<{ cell?: string; column?: string }>();
   const selected = () => selectedSquare(c(), search.cell, search.column);
 
@@ -286,8 +288,8 @@ function CampaignBody(props: { c: CampaignView; refused: CampaignsResponse["refu
         </dd>
         <dt>objective</dt>
         <dd>{c().shape.objective ?? "—"}</dd>
-        <dt>stop level</dt>
-        <dd class="mono">{stop() === null ? "—" : `L${stop()}`}</dd>
+        <dt>ends</dt>
+        <dd class="mono">{goal() ?? "—"}</dd>
         <dt>clock</dt>
         <dd class="mono">{clockText(c().shape)}</dd>
         <dt>tool calls</dt>
@@ -403,7 +405,7 @@ function CampaignBody(props: { c: CampaignView; refused: CampaignsResponse["refu
                 <th>assignment</th>
                 <th>arm</th>
                 <th class="right">runs</th>
-                <th class="right" title={stop() === null ? "this campaign sets no stop level" : `runs that reached L${stop()}`}>
+                <th class="right" title={goal() === null ? "this campaign sets no end" : `runs that reached ${goal()}`}>
                   reached
                 </th>
                 <th class="right" title={medianTitle("minutes of play", stop())}>
@@ -472,7 +474,7 @@ function CampaignBody(props: { c: CampaignView; refused: CampaignsResponse["refu
  */
 function Grid(props: { c: CampaignView }) {
   const c = (): CampaignView => props.c;
-  const stop = (): number | null => c().shape.stopAtLevel;
+  const goal = (): string | null => endGoal(c().shape);
   const multiArm = (): boolean => c().arms.length > 1;
   return (
     <div class="scroller">
@@ -513,7 +515,7 @@ function Grid(props: { c: CampaignView }) {
                 </td>
                 <td class="dim">{row.start}</td>
                 <For each={row.squares}>
-                  {(sq) => <SquareCell c={c()} cell={row.cell.id} sq={sq} stop={stop()} />}
+                  {(sq) => <SquareCell c={c()} cell={row.cell.id} sq={sq} goal={goal()} />}
                 </For>
               </tr>
             )}
@@ -528,18 +530,18 @@ function Grid(props: { c: CampaignView }) {
  * One square: its live marker, then its figure, both inside the link to its
  * runs — so a square whose only run is live is still a way into that run.
  */
-function SquareCell(props: { c: CampaignView; cell: string; sq: Square | null; stop: number | null }) {
+function SquareCell(props: { c: CampaignView; cell: string; sq: Square | null; goal: string | null }) {
   const href = (): string | null => squareHref(props.c, props.cell, props.sq);
   const figure = () => (
     <>
       <Show when={(props.sq?.live ?? 0) > 0}>
         <span class="dot live" />
       </Show>
-      {squareText(props.sq, props.stop)}
+      {squareText(props.sq, props.goal)}
     </>
   );
   return (
-    <td class={squareClass(props.sq, props.stop)} title={squareTitle(props.sq, props.stop)}>
+    <td class={squareClass(props.sq, props.goal)} title={squareTitle(props.sq, props.goal)}>
       <Show when={href()} fallback={figure()}>
         {(to) => <A href={to()}>{figure()}</A>}
       </Show>

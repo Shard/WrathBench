@@ -26,6 +26,10 @@
  *     with no row) — or a pause in a lane that does not resume  → ENDED: the
  *     others are terminated `party-ended`, detail `<member>: <reason>`; a
  *     member that reached its own termination in the meantime keeps it.
+ *     When the first ended on its definition's end (`level-target`,
+ *     `kill-target`: the attempt reached what it was launched for), the
+ *     others are terminated on that same reason instead, with the same
+ *     detail, so all five are the one counted verdict.
  *   - the first is a PAUSE in a lane that resumes                 → PAUSED: the
  *     others that the roster's stop paused (`operator-pause`) are re-paused
  *     `party-paused` with the same detail; one that paused for a reason of its
@@ -37,6 +41,7 @@
  * reacts to anything but a member's episode exiting.
  */
 
+import { isEndReason } from "../runner/src/end-conditions";
 import type { StageResult } from "./party-stager";
 
 /** One member as the machine knows it. */
@@ -89,7 +94,7 @@ export interface PartyOutcome {
   trigger?: { member: string; reason: string };
   /** Each member's verdict as read once every episode had exited. */
   verdicts: Record<string, MemberVerdict>;
-  /** What the machine wrote, per member, in member order: `party-ended`, `party-paused`, a launch-failed stub, an ended pause. */
+  /** What the machine wrote, per member, in member order: `party-ended` (or the end reason the trigger reached), `party-paused`, a launch-failed stub, an ended pause. */
   written: { member: string; wrote: string }[];
 }
 
@@ -175,6 +180,9 @@ export async function runParty<Exit>(members: readonly PartyMemberRun[], deps: P
   }
   const trigger = { member: members[triggerIdx]!.member, reason: verdictReason(vs[triggerIdx]!) };
   const detail = `${trigger.member}: ${trigger.reason}`;
+  // A party that reached its end reached it together: the others inherit the
+  // trigger's own reason, which counts, rather than `party-ended`.
+  const inherited = fate === "ended" && isEndReason(trigger.reason) ? trigger.reason : "party-ended";
 
   for (const [i, m] of members.entries()) {
     const v = vs[i]!;
@@ -196,8 +204,8 @@ export async function runParty<Exit>(members: readonly PartyMemberRun[], deps: P
         deps.launchFailed(m, v.detail);
         written.push({ member: m.member, wrote: "launch-failed" });
       } else if (i !== triggerIdx) {
-        deps.end(m, "party-ended", detail);
-        written.push({ member: m.member, wrote: "party-ended" });
+        deps.end(m, inherited, detail);
+        written.push({ member: m.member, wrote: inherited });
       }
       continue;
     }
@@ -216,8 +224,8 @@ export async function runParty<Exit>(members: readonly PartyMemberRun[], deps: P
       }
       continue;
     }
-    deps.end(m, "party-ended", detail);
-    written.push({ member: m.member, wrote: "party-ended" });
+    deps.end(m, inherited, detail);
+    written.push({ member: m.member, wrote: inherited });
   }
   deps.log(`party: ${fate} — ${detail}`);
   return { fate, trigger, verdicts, written };

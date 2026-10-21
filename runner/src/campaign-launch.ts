@@ -139,6 +139,7 @@ export function campaignLaunch(
     wiki: dims.wiki,
     ...(dims.objective !== undefined ? { objective: dims.objective } : {}),
     ...(dims.stopAtLevel !== undefined ? { stopAtLevel: dims.stopAtLevel } : {}),
+    ...(dims.end !== undefined ? { end: dims.end } : {}),
     // Only on a staged start, so every fresh probe's config is what it was.
     ...(staged ? { character } : {}),
     ...(def.party !== undefined && file.party !== undefined ? { party: partyConfigOf(def.party, file.party) } : {}),

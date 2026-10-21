@@ -109,7 +109,10 @@ beyond the account count, and nothing below it has to learn anything at all.
     `<member>: <reason>` (a new `TerminationReason` in
     `runner/src/trajectory.ts`, written through the runner's own writer the
     way the supervisor ends lapsed runs, `endRuns` in `run-fleet.ts`). The
-    attempt is spent; the campaign counts it once (below).
+    attempt is spent; the campaign counts it once (below). A termination on
+    the definition's end (`level-target`, `kill-target`; docs/EPISODES.md,
+    "Ends") ends the other four on that same reason instead, and the attempt
+    counts as reached.
   - a **pause** on one member (a provider refusal, `observation-stalled`,
     `infrastructure-failed`, the usage gate) → the other four are paused
     `party-paused` with the same detail. A paused party is resumable as a
@@ -599,8 +602,10 @@ the server sends, never from a map-id read off a state sample:
   `PermBindAllPlayers` — raids and heroics. A normal five-man binds nobody,
   so neither ever says "you entered the Deadmines"; the transfer does.
 - **`kill`** — from `SMSG_PARTYKILLLOG`: `{ kind: "kill", killerGuid,
-  victimGuid, entry, rank, self }`, with `entry` from the SDK's unit cache
-  and `rank` from the creature query it already holds. Recorded for victims
+  victimGuid, entry, rank, self, member }`, with `entry` from the SDK's unit
+  cache (else the victim's creature guid), `rank` from the creature query it
+  already holds, and `member` whether the killer is this character or one of
+  its group. Recorded for victims
   of rank 1 and above (elites, rares, bosses) so an open-world run does not
   write a line per rabbit; every Deadmines creature is elite, so inside the
   instance it is every kill.

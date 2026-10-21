@@ -520,9 +520,12 @@ export class ContextBuilder {
           ...(s.entry !== undefined ? { entry: s.entry } : {}),
           ...(s.rank !== undefined ? { rank: s.rank } : {}),
           self: s.self,
+          member: s.member,
           observedTs: s.ts,
           ...turn,
         });
+        // A campaign's kill end reads the record the trajectory keeps.
+        if (this.live) this.o.watchdogs.noteKill(s);
       }
     }
   }

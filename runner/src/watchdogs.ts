@@ -12,6 +12,10 @@
  *                   at or above the definition's `stopAtLevel`. Not a failure:
  *                   the measurement the campaign was commissioned for has been
  *                   taken, and the rest of the clock would buy nothing.
+ *   kill-target     a probe campaign's kill end: a kill of the creature the
+ *                   definition's `end` names, credited to this character or a
+ *                   member of its group (`end-conditions.ts`). Not a failure,
+ *                   for the same reason.
  *   snippet-runaway maxSandboxRestarts consecutive sandbox kills without an
  *                   intervening successful snippet.
  *
@@ -28,6 +32,7 @@
  */
 
 import type { TerminationReason, WatchdogConfig } from "./config";
+import { endConditionsOf, killEndDetail, killEndMet, levelTargetOf, type EndCondition, type KillReading } from "./end-conditions";
 
 export interface WatchdogVerdict {
   reason: TerminationReason;
@@ -49,8 +54,11 @@ export class Watchdogs {
    */
   private fresh: { staleGuids: ReadonlySet<string>; checked: boolean } | null = null;
   private stale: string | null = null;
-  /** The level that met `stopAtLevel`, once one has been observed. */
+  /** The level that met the level end, once one has been observed. */
   private targetReached: number | null = null;
+  /** The kill that met a kill end, once one has been told. */
+  private killReached: string | null = null;
+  private readonly ends: EndCondition[];
   private readonly stopAtLevel: number | null;
 
   /**
@@ -63,11 +71,13 @@ export class Watchdogs {
     private readonly cfg: WatchdogConfig,
     private readonly now: () => number = Date.now,
     elapsedBeforeMs = 0,
-    opts: { stopAtLevel?: number | null } = {},
+    /** The run's ends: `stopAtLevel` and `end` as its config carries them, folded to one list. */
+    opts: { stopAtLevel?: number | null; end?: readonly EndCondition[] | undefined } = {},
   ) {
     this.startedAt = this.now() - Math.max(0, elapsedBeforeMs);
     this.lastModelOutputAt = this.now();
-    this.stopAtLevel = opts.stopAtLevel ?? null;
+    this.ends = endConditionsOf({ stopAtLevel: opts.stopAtLevel ?? null, end: opts.end });
+    this.stopAtLevel = levelTargetOf(this.ends);
   }
 
   /** Episode wall clock spent so far, including what earlier segments spent. */
@@ -99,6 +109,18 @@ export class Watchdogs {
     } else if (this.lastProgressAt === null) {
       this.lastProgressAt = this.now();
     }
+  }
+
+  /**
+   * A kill the sandbox child latched (`SMSG_PARTYKILLLOG`, `party-watch.ts`).
+   * The server's word, like the level: only a kill credited to this character
+   * or a member of its group meets a kill end, and the first one that does
+   * ends the run at the next check.
+   */
+  noteKill(k: KillReading): void {
+    if (this.killReached !== null) return;
+    const met = killEndMet(this.ends, k);
+    if (met !== null) this.killReached = killEndDetail({ entry: met.entry, killerGuid: k.killerGuid, self: k.self });
   }
 
   /**
@@ -147,6 +169,7 @@ export class Watchdogs {
     if (this.targetReached !== null) {
       return { reason: "level-target", detail: `level ${this.targetReached} observed (target ${this.stopAtLevel})` };
     }
+    if (this.killReached !== null) return { reason: "kill-target", detail: this.killReached };
     if (this.sandboxRestarts >= this.cfg.maxSandboxRestarts) {
       return {
         reason: "snippet-runaway",

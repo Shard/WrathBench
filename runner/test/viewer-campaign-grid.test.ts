@@ -131,6 +131,31 @@ describe("a party's square", () => {
     expect(sq.runIds).toHaveLength(4);
   });
 
+  test("a party that met its kill end is one counted attempt that reached it, and the campaign is complete", () => {
+    const def = partyDefinition({ id: "deadmines", version: 4, end: [{ kill: { entry: 639 } }] });
+    const rows = { deadmines: { version: 4, accounts: ["P1", "P2", "P3", "P4", "P5"], assignments: [{ model: "sonnet" }] } };
+    const runs = def.party!.members.map((m, i) =>
+      run({
+        runId: `dm-a1-${m.id}`,
+        campaign: "deadmines",
+        campaignVersion: 4,
+        cell: "party",
+        arm: "base",
+        race: m.race,
+        class: m.class,
+        maxLevel: 20,
+        terminationReason: "kill-target",
+        party: { id: "dm-a1", member: m.id, size: 5, role: m.role, index: i },
+      }),
+    );
+    const v = campaignsView(runs, roster(rows, [def]), counted).campaigns[0]!;
+    expect(v.shape.end).toEqual([{ kill: { entry: 639 } }]);
+    expect(v.grid[0]!.squares[0]!).toMatchObject({ runs: 1, counted: 1, reached: 1, settled: "done" });
+    expect(v.progress).toMatchObject({ want: 1, done: 1 });
+    expect(v.state).toBe("complete");
+    expect(v.comparison[0]!.arms[0]!).toMatchObject({ reached: 5, terminations: { "kill-target": 5 } });
+  });
+
   test("a square of a definition with no party carries no party list", () => {
     expect(view([run({ runId: "solo" })]).grid[0]!.squares[0]!).not.toHaveProperty("parties");
   });

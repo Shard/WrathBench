@@ -267,8 +267,11 @@ export interface ItemSample {
  *   other than 0, `left` back to 0, ids only. `kill` is one
  *   `SMSG_PARTYKILLLOG` whose victim is of rank 1 or above (or of a rank the
  *   creature query never answered), with the victim's template `entry` and
- *   `rank`, and `self` when this character struck the blow. `observedTs` is
- *   the packet's own timestamp on all three.
+ *   `rank` (the entry read off the victim's guid when the unit cache never
+ *   held it), `self` when this character struck the blow, and `member` when
+ *   the killer is this character or one of its group's members (absent on a
+ *   record from before the field). `observedTs` is the packet's own
+ *   timestamp on all three.
  */
 export type MilestoneLine =
   | {
@@ -374,6 +377,7 @@ export type MilestoneLine =
       entry?: number | undefined;
       rank?: number | undefined;
       self: boolean;
+      member?: boolean | undefined;
       observedTs?: number | undefined;
       turn?: number | undefined;
     };
