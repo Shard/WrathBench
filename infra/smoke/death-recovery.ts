@@ -9,7 +9,8 @@
  * Full arc against a booted worldserver, raw HTTP/WS only (no SDK):
  * fresh Human Warrior in Northshire -> walk to the vineyards -> pull several
  * Kobold Vermin (attack to aggro, then stop fighting and stand) -> die
- * (self health 0 + SMSG_DEATH_RELEASE_LOC) -> repop -> assert the graveyard
+ * (self health 0 + SMSG_DEATH_RELEASE_LOC) -> a move from the body is refused
+ * `rooted` (death roots) -> repop -> assert the graveyard
  * teleport APPLIED: server-truth position (via a reattach WB_SESSION_STATE)
  * moved off the death spot to the release loc -> ghost-run back to the corpse
  * (move_to must work while dead+ghost) -> wait out the 30s reclaim delay ->
@@ -375,6 +376,26 @@ async function main() {
   const deathPos = { ...self.pos };
   log(`dead: health 0 at (${deathPos.x.toFixed(1)}, ${deathPos.y.toFixed(1)}, ${deathPos.z.toFixed(1)})`);
   log(`PASS[death]: health reached 0`);
+
+  // 2b. Death roots, the one root a probe can earn with no GM command:
+  //     Player::KillPlayer sends SMSG_FORCE_MOVE_ROOT, which the module
+  //     answers with CMSG_FORCE_MOVE_ROOT_ACK and keeps as its rooted state,
+  //     so a move from the body is refused `rooted` with nothing sent and no
+  //     route. The release's SMSG_FORCE_MOVE_UNROOT clears it again, which
+  //     the ghost run below proves by walking.
+  step = "rooted";
+  {
+    const r = await action("move_to", { x: deathPos.x + 8, y: deathPos.y, z: deathPos.z });
+    const res = await waitFor(
+      (e) => e.opcode === "WB_MOVE_RESULT" && e.data?.moveId === r.moveId,
+      10000,
+      "WB_MOVE_RESULT for a move from the body",
+    );
+    if (res.data.status !== "rooted") fail(`a move from the body answered ${res.data.status}, want rooted (death's SMSG_FORCE_MOVE_ROOT untracked; module predates it?)`);
+    if (res.data.pathLength !== undefined) fail(`the rooted refusal carried a route (pathLength ${res.data.pathLength}): something was dispatched`);
+    if (dist2d(res.data.pos, deathPos) > 1) fail(`the rooted refusal's pos is ${dist2d(res.data.pos, deathPos).toFixed(1)}y from the body`);
+    log(`PASS[rooted]: a move from the body is refused rooted, nothing dispatched`);
+  }
 
   // 3. Release spirit. The assertion is the teleport-ack fix: the server-truth
   //    position must actually CHANGE to the graveyard named by
