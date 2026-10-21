@@ -237,6 +237,24 @@ describe("shared fate", () => {
       ]);
     });
 
+    test("a first verdict that cannot be read at its exit stops the rest as before rather than leaving them playing", async () => {
+      const { members, runs } = fakeParty();
+      const { d, requests } = asking(members, new Set(MEMBERS));
+      let reads = 0;
+      const read = d.verdict;
+      d.verdict = (m, exit) => {
+        if (reads++ === 0) throw new Error("run.sqlite busy");
+        return read(m, exit);
+      };
+      const done = runParty(runs, d);
+      await tick();
+      members[3]!.exit({ kind: "terminated", reason: "kill-target", detail: "entry 639 killed (killer this character)" });
+      await done;
+      expect(requests).toEqual([]);
+      expect(members.map((f) => f.stops)).toEqual([1, 1, 1, 0, 1]);
+      expect(d.writes).toEqual(["tank", "healer", "mage", "paladin"].map((m) => `${m} end kill-target (rogue: kill-target)`));
+    });
+
     test("any other first exit is no end to follow: the others are stopped with the grace and ended party-ended, as before", async () => {
       const { members, runs } = fakeParty();
       const { d, requests } = asking(members, new Set(MEMBERS));

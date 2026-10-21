@@ -172,9 +172,16 @@ export async function runParty<Exit>(members: readonly PartyMemberRun[], deps: P
     // The first's own verdict is final the moment it exits: an end reason
     // decides the fate "ended" on that reason whatever the others do, so each
     // can be asked to end on it now rather than paused and rewritten later.
-    const v = deps.verdict(first, await exits[firstIdx]!);
+    // A verdict that cannot be read yet stops the rest as any other fate
+    // would: nobody is ever left playing for want of it.
+    let v: MemberVerdict | null = null;
+    try {
+      v = deps.verdict(first, await exits[firstIdx]!);
+    } catch {
+      v = null;
+    }
     const others = [...handles.entries()].filter(([i]) => i !== firstIdx);
-    if (deps.requestEnd !== undefined && v.kind === "terminated" && isEndReason(v.reason)) {
+    if (deps.requestEnd !== undefined && v?.kind === "terminated" && isEndReason(v.reason)) {
       asked = { reason: v.reason, detail: `${first.member}: ${v.reason}` };
       const graceMs = deps.endGraceMs ?? deps.graceMs;
       deps.log(`party: ${first.member} (${first.runId}) reached ${v.reason} first — asking the other ${members.length - 1} to end on it (stopped after ${Math.round(graceMs / 1000)}s if still running)`);
