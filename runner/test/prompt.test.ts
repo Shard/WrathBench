@@ -327,10 +327,10 @@ describe("an objective replaces the broad goal (operator, 2026-10-21)", () => {
       freeplay: promptHash(buildSystemPrompt("walk to Ironforge", "freeplay", "wrathbench", true)),
     };
     expect(got).toEqual({
-      probing4h: "sha256:1605285ba1cb3adc",
-      probing4hCli: "sha256:03f02af7ea60e950",
-      e90: "sha256:104363ed4c47f331",
-      freeplay: "sha256:8373d6fa85848193",
+      probing4h: "sha256:ef32a71da364c58f",
+      probing4hCli: "sha256:7f7b87d60276c123",
+      e90: "sha256:41ea10c19760ee3b",
+      freeplay: "sha256:c2ad7c6848f7ad9c",
     });
   });
 });
