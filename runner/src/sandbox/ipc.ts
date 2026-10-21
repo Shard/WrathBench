@@ -267,6 +267,19 @@ export interface EventSummary {
   /** JSON-safe, depth-limited data. */
   data: unknown;
   schemaError?: string | undefined;
+  /**
+   * The combat-log sentence for a direct spell hit, heal or power gain
+   * (`spellLogNote` in context.ts), resolved in the child as the event
+   * arrived, while the units it names were still in view. Absent on every
+   * other event.
+   */
+  note?: string | undefined;
+  /**
+   * A spell combat-log line that involves neither us nor a party member's
+   * damage taken (`spellLogShown`): kept off the event window, shown on the
+   * raw stream.
+   */
+  bystander?: true | undefined;
 }
 
 // child -> host
