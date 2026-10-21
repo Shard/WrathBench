@@ -13,6 +13,8 @@
  *      server's delta for B with a position.
  *   3. A sends CMSG_REQUEST_PARTY_MEMBER_STATS for B over the raw allowlist,
  *      as a party frame's own refresh does. The SDK never sends it on its own.
+ *      A waits for the answer before it sends, since the answer can arrive
+ *      before the raw ack and is not kept in the buffer either.
  *      The answer, SMSG_PARTY_MEMBER_STATS_FULL, carries B's health and
  *      position. `group().members[i].stats` must then hold B's health, max
  *      health and position (whole yards, within 2y of where B stands), online
@@ -112,12 +114,17 @@ try {
   log(`PASS delta: ${frames.length} SMSG_PARTY_MEMBER_STATS for ${NAME_B}, one with position (${d.x}, ${d.y}), mask 0x${d.mask.toString(16)}`);
 
   // 3. The frame's own refresh, raw: the full answer with health and position.
+  // The wait is armed before the send: the answer can reach the socket before
+  // the raw ack resolves, and a _FULL is never retained for a later wait to
+  // find.
+  const fullWait = a.events.waitFor(
+    (e) => e.opcode === "SMSG_PARTY_MEMBER_STATS_FULL" && (e.data as { guid?: string }).guid === guidB,
+    { timeout: 10_000, includeBuffered: false, description: `an SMSG_PARTY_MEMBER_STATS_FULL for ${NAME_B}` },
+  );
+  fullWait.catch(() => {}); // a refused send fails below; this rejection is then not the error
   const asked = await a.raw("CMSG_REQUEST_PARTY_MEMBER_STATS", [{ guid: guidB }]);
   if (!asked.ok) fail(`CMSG_REQUEST_PARTY_MEMBER_STATS refused: ${JSON.stringify(asked)}`);
-  const full = await a.events.waitFor(
-    (e) => e.opcode === "SMSG_PARTY_MEMBER_STATS_FULL" && (e.data as { guid?: string }).guid === guidB,
-    { timeout: 10_000, includeBuffered: false },
-  );
+  const full = await fullWait;
   const fd = full.data as { health?: number; maxHealth?: number; x?: number; y?: number; status?: number };
   if (typeof fd.health !== "number" || typeof fd.maxHealth !== "number") fail(`_FULL has no health: ${JSON.stringify(fd)}`);
   if (typeof fd.x !== "number" || typeof fd.y !== "number") fail(`_FULL has no position: ${JSON.stringify(fd)}`);
