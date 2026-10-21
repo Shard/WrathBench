@@ -211,22 +211,23 @@ describe("episode sentence", () => {
 
   test("every rendering hashes as pinned, so a prompt edit has to move its pins on purpose", () => {
     // Pinned by value, not by rebuilding from the same parts, so a change to
-    // any rendering fails here. The last edit to move them is the sleep
-    // sentence's "attacked" wake, which now also names a spell hit, in the
-    // shared body, so it moved all twelve.
+    // any rendering fails here. The last edit to move them is the sixth
+    // party-run batch (waitForChat's buffered lines, the units() type list,
+    // the death line's graveyard and dungeon facts), in the shared body, so it
+    // moved all twelve.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:d5e236e98ac8a630", off: "sha256:b7d2ba9a8608b2f9" },
-        cli: { on: "sha256:b646c7894ac2c2cf", off: "sha256:56083b66d09cacb1" },
+        wrathbench: { on: "sha256:625b8f0ae51d05bc", off: "sha256:02840efe067c0d55" },
+        cli: { on: "sha256:9b670156e48cf951", off: "sha256:f239372eb0dcd62f" },
       },
       e90: {
-        wrathbench: { on: "sha256:776b86a9a50f62be", off: "sha256:594c13a1bc695842" },
-        cli: { on: "sha256:1bcd6b2d0eadc239", off: "sha256:610a935200be709e" },
+        wrathbench: { on: "sha256:7a98c744c47e182d", off: "sha256:96509121ea6686ce" },
+        cli: { on: "sha256:bd0af2fb56107ced", off: "sha256:cd1ef5c6c39d1b86" },
       },
       e360: {
-        wrathbench: { on: "sha256:2d0c936a6f96c0eb", off: "sha256:c8ee9eedfab4725e" },
-        cli: { on: "sha256:f1d71a9bb6135a2a", off: "sha256:5292bb6a89eb26ce" },
+        wrathbench: { on: "sha256:0b3c74bae433dbf3", off: "sha256:4d3773c1a0af2b30" },
+        cli: { on: "sha256:0832b60575080147", off: "sha256:1cd9827c24063fa8" },
       },
     };
     const episodes = [
@@ -327,10 +328,10 @@ describe("an objective replaces the broad goal (operator, 2026-10-21)", () => {
       freeplay: promptHash(buildSystemPrompt("walk to Ironforge", "freeplay", "wrathbench", true)),
     };
     expect(got).toEqual({
-      probing4h: "sha256:79de5f231833c00a",
-      probing4hCli: "sha256:3f17bfbd9f7e9c3c",
-      e90: "sha256:5444a36be4bce765",
-      freeplay: "sha256:28868d253fed6225",
+      probing4h: "sha256:1c603283bf7aa34d",
+      probing4hCli: "sha256:48f6d311d57b0f9b",
+      e90: "sha256:540370082d043296",
+      freeplay: "sha256:54d22095d2f31b1d",
     });
   });
 });

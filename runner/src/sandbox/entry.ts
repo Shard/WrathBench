@@ -585,9 +585,31 @@ function drainLogs(): LogEntry[] {
  * can render them whether or not the snippet kept the result objects, and a
  * hint raised by a background routine rides whichever tool result comes next.
  * Each drain empties the tally, so a hint is delivered once.
+ *
+ * `current` is the eval whose result this is, if any. A hint raised by any
+ * other eval's code — a routine an earlier snippet launched, or the late
+ * verdict of an earlier snippet's cast — carries `from`, that snippet's
+ * opening code, so the line can say whose it is (the 2026-10-20 party: a
+ * routine's `castSpell caster_dead` printed under 51 unrelated snippets, and a
+ * healer fought its own walker for six minutes).
  */
-function drainHints(): ActionHintNote[] {
-  return client.drainActionHints();
+function drainHints(current?: number): ActionHintNote[] {
+  return client.drainActionHints().map(({ origin, ...h }) =>
+    origin === undefined || origin === current ? h : { ...h, from: snippetHeads.get(origin) ?? "" },
+  );
+}
+
+/** How much of a snippet's opening code names it on a routine's harness line. */
+const SNIPPET_HEAD_CHARS = 48;
+/** Snippet heads kept for routines still running; the oldest go first. */
+const SNIPPET_HEADS_MAX = 512;
+/** Each eval's opening code, whitespace folded, by eval id (`drainHints`). */
+const snippetHeads = new Map<number, string>();
+
+function noteSnippetHead(id: number, code: string): void {
+  const flat = code.replace(/\s+/g, " ").trim();
+  snippetHeads.set(id, flat.length > SNIPPET_HEAD_CHARS ? `${flat.slice(0, SNIPPET_HEAD_CHARS - 1).trimEnd()}…` : flat);
+  if (snippetHeads.size > SNIPPET_HEADS_MAX) snippetHeads.delete(snippetHeads.keys().next().value as number);
 }
 
 // -------------------------------------------------------- ambient snippet API
@@ -621,6 +643,8 @@ let abandonNote: string | undefined;
 let abandonUnwind: Promise<void> | undefined;
 const abandonUnwindSettled = new Map<number, () => void>();
 const ABANDON_UNWIND_GRACE_MS = 100;
+/** The eval the last `abort` abandoned: the pong that follows is its result, so its own hints are not a routine's. */
+let abandonedEval: number | undefined;
 /** Live controllers by eval id, for the host's `abort`. */
 const evalControllers = new Map<number, AbortController>();
 
@@ -632,6 +656,9 @@ const client = new WrathClient({
   subscribeEvents: false,
   signal: currentSignal,
   deadline: currentDeadline,
+  // The eval whose code is calling: a routine keeps the id of the snippet
+  // that launched it, so its harness lines can say so (`drainHints`).
+  origin: () => evalContext.getStore()?.evalId,
   fetchImpl: watchedFetch,
   // The real WebSocket, captured before `globalThis.WebSocket` was replaced
   // with the refusing guard: this is the ambient client's own event stream,
@@ -1123,6 +1150,7 @@ async function evaluate(id: number, code: string, deadline?: number, timeoutMs?:
   const started = Date.now();
   const controller = new AbortController();
   evalControllers.set(id, controller);
+  noteSnippetHead(id, code);
   try {
     const compiled = compileSnippet(code);
     let fn: ((...args: unknown[]) => Promise<unknown>) | null = null;
@@ -1154,7 +1182,7 @@ async function evaluate(id: number, code: string, deadline?: number, timeoutMs?:
       id,
       ok: refused.length === 0,
       logs: drainLogs(),
-      hints: drainHints(),
+      hints: drainHints(id),
       durationMs: Date.now() - started,
     };
     if (refused.length > 0) msg.error = refused.map(renderError).join("\n");
@@ -1205,7 +1233,7 @@ async function evaluate(id: number, code: string, deadline?: number, timeoutMs?:
       // As with the logs: an abandoned eval's result is discarded host-side, so
       // its hints must stay in the SDK's tally for the pong that follows.
       logs: controller.signal.aborted ? [] : drainLogs(),
-      hints: controller.signal.aborted ? [] : drainHints(),
+      hints: controller.signal.aborted ? [] : drainHints(id),
       durationMs: Date.now() - started,
     });
   } finally {
@@ -1225,6 +1253,7 @@ function abortEval(id: number): void {
   if (controller === undefined) return;
   evalControllers.delete(id);
   releasePadCalls(id);
+  abandonedEval = id;
   abandonUnwind = new Promise((resolve) => abandonUnwindSettled.set(id, resolve));
   controller.abort(new Error(`snippet abandoned by the harness (timeout); pending waits cancelled`));
 }
@@ -1629,6 +1658,16 @@ function memberFrame(guid: string, health: number | undefined, maxHealth: number
   };
 }
 
+/**
+ * Whose corpse it is, by the owner guid on the corpse (`CORPSE_FIELD_OWNER`):
+ * the name query's answer, else the party roster's name for that member.
+ * Undefined while neither has named it, or when the owner was not served.
+ */
+function corpseOwnerName(owner: string | undefined, group: ReturnType<typeof client.state.group>): string | undefined {
+  if (owner === undefined) return undefined;
+  return client.state.nameOf(owner) ?? group?.members.find((m) => m.guid === owner)?.name;
+}
+
 function stateSnapshot(): unknown {
   const snap = toJsonSafe(client.state.snapshot(), 6) as Record<string, unknown>;
   // The party with each member's party frame (`group().members[i].stats`),
@@ -1643,6 +1682,10 @@ function stateSnapshot(): unknown {
     level: u.level,
     distance: u.distance,
     dead: u.dead,
+    // The elite dragon a client draws round the portrait, for the nearby line.
+    rank: u.rank,
+    // A player's corpse is named by its owner, as a client's tooltip names it.
+    ...(u.type === "corpse" ? { ownerName: corpseOwnerName(u.ownerGuid, group) } : {}),
     roles: u.roles,
     // The marker and the target, for which six the nearby line names
     // (`pickNearby` in context.ts): both are what the client draws, a `!`/`?`
@@ -1694,12 +1737,14 @@ function handle(msg: HostToChild | HostcallResult): void {
         const pong = (): void => {
           const note = abandonNote;
           abandonNote = undefined;
+          const abandoned = abandonedEval;
+          abandonedEval = undefined;
           flushActions();
           send({
             t: "pong",
             id: msg.id,
             logs: drainLogs(),
-            hints: drainHints(),
+            hints: drainHints(abandoned),
             ...(note !== undefined ? { note } : {}),
           });
         };

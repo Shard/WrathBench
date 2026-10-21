@@ -142,6 +142,10 @@ interface UnitLike {
   distance?: unknown;
   /** `true` only when health was observed and is 0. See the HUD caveat below. */
   dead?: unknown;
+  /** A creature's rank as the SDK names it (`normal`, `elite`, `rareelite`, `worldboss`, `rare`); absent until its query answered. */
+  rank?: unknown;
+  /** Corpses only: the owning player's name, once its name query (or the party roster) has given it. */
+  ownerName?: unknown;
   /** `UNIT_NPC_FLAGS` decoded to role words by the SDK (`questGiver`, `vendor`, …). */
   roles?: unknown;
   /**
@@ -728,17 +732,27 @@ function pickNearby(units: readonly UnitLike[], selfGuid: string | undefined): U
   return [...chosen].sort((a, b) => a - b).map((i) => units[i]!);
 }
 
-/** One nearby entry: name, dead-when-known, roles with the quest marker, distance. */
+/** One nearby entry: name, a rank other than normal, dead-when-known, roles with the quest marker, distance. */
 function nearbyLabel(u: UnitLike): string {
-  const name = u.name != null ? String(u.name) : "(unnamed)";
-  const dead = u.dead === true ? " dead" : "";
+  // A player's corpse has no name of its own and is dead by what it is: it is
+  // named by its owner, as a client's tooltip names it.
+  const corpse = u.type === "corpse";
+  const name = corpse
+    ? typeof u.ownerName === "string"
+      ? `${u.ownerName}'s corpse`
+      : "a corpse"
+    : u.name != null
+      ? String(u.name)
+      : "(unnamed)";
+  const rank = typeof u.rank === "string" && u.rank !== "normal" ? ` ${u.rank}` : "";
+  const dead = u.dead === true && !corpse ? " dead" : "";
   const dist = typeof u.distance === "number" ? `${u.distance}y` : "?y";
   const offer = questOffer(u);
   const roles = fmtRoles(u.roles)
     .split(", ")
     .filter((r) => r !== "" && !(offer !== undefined && r === "quest giver"));
   if (offer !== undefined) roles.unshift(`quest giver: ${offer}`);
-  return `${name}${dead} (${roles.length === 0 ? "" : `${roles.join(", ")}, `}${dist})`;
+  return `${name}${rank}${dead} (${roles.length === 0 ? "" : `${roles.join(", ")}, `}${dist})`;
 }
 
 /**
@@ -876,7 +890,7 @@ function ghostLine(
   if (corpse !== undefined && typeof corpse.instanceMap === "number" && pos?.map !== corpse.instanceMap) {
     return (
       `${where}; corpse inside the dungeon on map ${corpse.instanceMap}: ` +
-      `walk into its portal as a ghost to come back to life inside, ${healer}`
+      `walk into its portal as a ghost to come back to life at its entrance, ${healer}`
     );
   }
   let corpsePart: string;
