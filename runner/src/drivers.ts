@@ -128,6 +128,16 @@ export interface SubscriptionLane {
    * policy job runs on the default lane unless a job pins one (Codex homes).
    */
   placed: boolean;
+  /**
+   * Whether the operator may move a paused or ended run of this driver to
+   * another lane of its kind (`move-lane`, runner/src/move-lane.ts). True only
+   * where the lane is a credential and nothing else: the run's own state names
+   * no account, and a resume starts the CLI a fresh conversation, so the next
+   * segment simply bills the other subscription. A home lane is not that — it
+   * holds the CLI's own thread rollouts — so it stays where it started until
+   * resume semantics across homes are checked.
+   */
+  movable: boolean;
   /** The dry run's endpoint line for a run on `env` (the lane as the spec names it, absent for the default). */
   describe(env: string | undefined): string;
   /** Why a launch in the fleet container cannot start when `env` is unset there. */
@@ -293,6 +303,7 @@ export const DRIVER_TABLE = {
       defaultEnv: DEFAULT_CLAUDE_TOKEN_ENV,
       holds: "token",
       placed: true,
+      movable: true,
       describe: () => "claude CLI subscription",
       containerRefusal: (env) =>
         `${env} is not visible to the fleet container — put it in /wrathbench/.env ` +
@@ -321,6 +332,7 @@ export const DRIVER_TABLE = {
       defaultEnv: DEFAULT_CODEX_HOME_ENV,
       holds: "home",
       placed: false,
+      movable: false,
       describe: (env) => `codex CLI subscription, lane ${env ?? DEFAULT_CODEX_HOME_ENV}`,
       containerRefusal: (env) =>
         `${env} is not visible to the fleet container — put it in /wrathbench/.env as the path of a ` +

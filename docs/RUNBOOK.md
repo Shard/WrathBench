@@ -137,6 +137,7 @@ bun wb config seed                     # once, on a fresh deployment: infra/flee
 bun wb config get roster/sonnet
 bun wb config patch roster/sonnet '{"tier":"t2"}' --actor operator --note "promote"
 bun wb config audit 20
+bun wb config move-lane <run-id> CLAUDE_CODE_OAUTH_TOKEN_2 --pin --note "why"  # a paused run to another lane ("Moving a run to another lane")
 bun wb config export > /tmp/fleet.json # to read or diff; never to commit
 ```
 
@@ -1836,6 +1837,54 @@ driver read off it): the driver at a thread change and at its episode's end,
 and an hourly supervisor sweep for any rollout unwritten for two hours that is
 no live run's recorded thread (`<run-dir>/codex-thread.json`). Nothing else in
 the home is touched, so `thread_history_1.sqlite` still grows.
+
+#### Moving a run to another lane
+
+Quotas run out at different rates, so a durable freeplay character sometimes
+has to move to the subscription with room. Patching the roster pin alone does
+not do it: a resume rebuilds the run's config from its `meta.json`, whose
+`config.subscription` is the lane it bills, and `--token-env` is no override on
+a resume. `move-lane` is the supported way:
+
+```
+# 1. pause it, so nothing resumes it mid-move: the runner writes operator-pause
+bun wb config patch roster/sonnet '{"idle":"none"}' --actor operator --note "moving lanes"
+bun wb inspect run <run-id>             # wait for "paused: operator-pause"
+# 2. move it: meta.json first, then the roster pin
+bun wb config move-lane <run-id> CLAUDE_CODE_OAUTH_TOKEN --pin --actor operator --note "lane 2 spent until Friday"
+# 3. let the fleet resume it, on the new lane
+bun wb config patch roster/sonnet '{"idle":"unlimited"}' --actor operator --note "moved lanes"
+```
+
+What it refuses, writing nothing: a run with a live owner (the heartbeat check
+`--resume` makes) or with no verdict at all, which the fleet would resume as
+`offline` on its next tick; a lane `policy.subscriptions` does not list; a lane
+of another kind than the run's driver bills; and any driver but claude-code.
+A Claude lane is a bare credential — resume never reattaches the CLI's
+conversation and nothing in the run directory names the account — but a Codex
+lane is a home holding the CLI's own threads, so codex runs stay where they
+started until resume across homes is checked.
+
+`--pin` exists because the fleet places and counts a pinned entry by its roster
+`subscription` while the runner bills the lane in `meta.json`; one without the
+other has the fleet counting one account while the run bills another. So
+without `--pin`, an entry that pins a different lane refuses the move. The
+order is fixed: `meta.json` is rewritten first and the pin second, because the
+fleet can resume a run within seconds of a roster write, and a resume that read
+the old `meta.json` would bill the old lane and write it back. The pin is
+validated before `meta.json` is touched; if writing it still fails, the command
+says so, and running it again applies only the pin. Idle is not touched: step 3
+is a separate write, and it is the one that lets the run come back.
+
+The rewrite is a temp file and a rename in the run directory, in the file's own
+indentation and with its mode bits kept. Each move is appended to the run's
+`laneHistory` in `meta.json` as `{ from, to, at, actor, note }`; like
+`subscriptionUsage` it is operator-only and no public projection carries it.
+The run's `run.sqlite` row keeps the lane it launched on (its `config_json` is
+written once, at launch); the fleet and a resume read the lane from
+`meta.json`. The command finds the run under `$WRATHBENCH_RUNS_DIR` (the runs volume in
+the runner pod), or `--runs-dir`; an archived run is not moved, since nothing
+resumes it.
 
 ### The subscription usage gate
 

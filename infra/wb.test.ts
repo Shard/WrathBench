@@ -163,6 +163,11 @@ describe("where a command runs", () => {
     expect(planned(entry("config", "get"), CLUSTER, ["preflight"]).argv).toEqual([
       "kubectl", "-n", "wrathbench", "exec", "-i", "deploy/wrathbench-runner", "--", "bun", "runner/src/config-store.ts", "get", "preflight",
     ]);
+    // A lane move rewrites a run's meta.json under the runs volume, so it runs where that is mounted.
+    expect(planned(entry("config", "move-lane"), CLUSTER, ["fleet-x", "CLAUDE_CODE_OAUTH_TOKEN", "--pin", "--note", "two words"]).argv).toEqual([
+      "kubectl", "-n", "wrathbench", "exec", "-i", "deploy/wrathbench-runner", "--",
+      "bun", "runner/src/config-store.ts", "move-lane", "fleet-x", "CLAUDE_CODE_OAUTH_TOKEN", "--pin", "--note", "two words",
+    ]);
   });
 
   test("the namespace and release come from the environment, and a global flag beats it", () => {
