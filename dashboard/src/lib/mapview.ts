@@ -14,7 +14,7 @@
 
 import type { AgentPosition } from "@viewer/api-types";
 import { type TileIndex, indexCovers, indexHas } from "@viewer/tileindex";
-import { GRID, LOD_MAX, type LodLayer, TILE_PX, TILE_SIZE, lodGrid, tileToWorld, worldToPixel } from "@viewer/worldmap";
+import { GRID, LOD_MAX, type LodLayer, TILED_MAPS, TILE_PX, TILE_SIZE, lodGrid, tileToWorld, worldToPixel } from "@viewer/worldmap";
 import { effortLabel, modelDisplay } from "./format";
 
 export const MIN_SCALE = 0.01;
@@ -56,23 +56,13 @@ export function positionAgeMs(ts: number, now: number, clock: FeedClock | null):
  * guessed at: an instance or a battleground id is a real answer and a wrong
  * name for it would not be.
  *
- * An instance earns a name when it stops being a number a reader has to look
- * up — when it has tiles of its own to draw and agents actually go there. The
- * Deeprun Tram was the first to qualify on both counts and the Deadmines the
- * second; the rest of the hundreds of instance ids stay numbers, which is the
- * honest answer for a place nothing has been to.
+ * A map is named exactly when it has tiles to draw (`TILED_MAPS`, the table
+ * the extractor's default list is read from): every continent, the tram and
+ * every dungeon and raid the client has a minimap for. A battleground, an
+ * arena or a map with no minimap keeps its number.
  */
-const MAP_NAMES: Readonly<Record<number, string>> = {
-  0: "Eastern Kingdoms",
-  1: "Kalimdor",
-  36: "The Deadmines",
-  369: "Deeprun Tram",
-  530: "Outland",
-  571: "Northrend",
-};
-
 export function mapName(map: number): string {
-  return MAP_NAMES[map] ?? `map ${map}`;
+  return TILED_MAPS[map] ?? `map ${map}`;
 }
 
 /**

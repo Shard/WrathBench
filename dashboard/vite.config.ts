@@ -10,7 +10,8 @@ import { ogTags, ogTagsFromEnv } from "./src/lib/og-tags.ts";
  * there is no CORS anywhere.
  *
  * `@viewer/*` reaches into `runner/viewer` for the ten modules that are
- * shared rather than duplicated: the API wire types, the world→tile transform,
+ * shared rather than duplicated: the API wire types, the world→tile transform
+ * (with the names of the maps that have tiles),
  * the freeplay lineage walk, the character aggregation over it, a run's
  * sessions, the public projection's allowlist, the race and class names, the
  * trace codec, the nearby codec and the tile index. All ten are import-free
