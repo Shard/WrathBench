@@ -1946,7 +1946,7 @@ export function sameRosterIdentity(a: RosterIdentity, b: RosterIdentity): boolea
  * Arms that differ only by window still never pool: the square is keyed on
  * the arm, and the results on the tuple.
  */
-function matchesRoster(f: RunFact, r: Pick<RosterModel, "name" | "model" | "effort" | "compactWindow" | "driver">): boolean {
+export function matchesRoster(f: RunFact, r: Pick<RosterModel, "name" | "model" | "effort" | "compactWindow" | "driver">): boolean {
   if (f.campaign !== null && f.arm != null && f.ref != null) {
     return (
       f.ref === r.name &&
