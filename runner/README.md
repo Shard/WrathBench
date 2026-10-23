@@ -702,7 +702,8 @@ and differs only where the CLI does:
   compaction window" has what it is as a run dimension) reaches the CLI as
   the integer `-c model_auto_compact_token_limit=<tokens>` (`codexArgs`):
   `200k` is `200000`, a bare TOML integer, which the pinned CLI reads as an
-  `Option<i64>` (`codex-rs/core/src/config/mod.rs` at `rust-v0.159.3`). It
+  `Option<i64>` (`codex-rs/core/src/config/mod.rs` at `rust-v0.163.0`, as at
+  `rust-v0.159.3`). It
   replaces the catalogue's own limit for the model, and the CLI then compacts
   at the smaller of it and 90% of the catalogue window
   (`ModelInfo::auto_compact_token_limit`), measured against the full active

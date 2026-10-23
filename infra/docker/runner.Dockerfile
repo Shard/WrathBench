@@ -78,7 +78,7 @@ RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_CODE_VERSION}
 # onto PATH is the smallest thing that produces a working `codex`, with no node,
 # no npm and no shim in the path. The whole vendor tree is kept: the binary
 # resolves its own path, so the symlink is transparent.
-ARG CODEX_VERSION=0.159.3
+ARG CODEX_VERSION=0.163.0
 RUN mkdir -p /home/bun/codex-cli \
     && cd /home/bun/codex-cli \
     && bun add "@openai/codex@${CODEX_VERSION}-linux-x64" \

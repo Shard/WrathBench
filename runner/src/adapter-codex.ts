@@ -321,7 +321,7 @@ const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "
 
 /**
  * The reset the pinned CLI's own usage-limit message names, as epoch ms, or
- * undefined. 0.159.3 ends that message with "Try again at 4:05 PM." when the
+ * undefined. 0.159.3 and 0.163.0 end that message with "Try again at 4:05 PM." when the
  * reset falls today and "Try again at Oct 21st, 2026 9:05 AM." otherwise (or
  * "…or try again at …"), in the CLI's local time — the same clock this
  * process reads, in the same container. A stated reset is what the CLI knows

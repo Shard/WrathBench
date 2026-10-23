@@ -279,7 +279,7 @@ async function callTool(i: number): Promise<{ isError?: boolean; content?: { tex
   return res.result;
 }
 
-/** A failure as exec prints one (0.159.3): the message alone, any details in parentheses. */
+/** A failure as exec prints one (0.159.3 and 0.163.0): the message alone, any details in parentheses. */
 function fail(kind: "turn.failed" | "error", message: string, details?: string): void {
   const text = details !== undefined && details.length > 0 ? `${message} (${details})` : message;
   emit(kind === "error" ? { type: "error", message: text } : { type: "turn.failed", error: { message: text } });

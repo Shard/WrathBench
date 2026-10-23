@@ -293,7 +293,7 @@ EOF
   }
   if [ "${LOCAL}" -eq 1 ]; then
     command -v codex >/dev/null 2>&1 || {
-      echo "run-episode.sh: the codex CLI is not on PATH; install @openai/codex@0.153.4 or drop --local" >&2
+      echo "run-episode.sh: the codex CLI is not on PATH; install the @openai/codex version pinned as CODEX_VERSION in infra/docker/runner.Dockerfile, or drop --local" >&2
       exit 2
     }
     if [ -z "${!TOKEN_ENV:-}" ] || [ ! -f "${!TOKEN_ENV}/auth.json" ]; then
@@ -321,8 +321,8 @@ EOF
     if ! docker compose -f "${COMPOSE_FILE}" exec -T "${SERVICE}" sh -c 'command -v codex' >/dev/null 2>&1; then
       cat >&2 <<'EOF'
 run-episode.sh: the runner container has no `codex` CLI.
-  either rebuild the runner image (infra/docker/runner.Dockerfile installs
-  @openai/codex@0.153.4 since 2026-09-05; the running container predates it),
+  either rebuild the runner image (infra/docker/runner.Dockerfile installs the
+  @openai/codex version pinned as CODEX_VERSION; the running container predates it),
   or run on the host with --local and point the runner at a reachable module:
       WRATHBENCH_MODULE_URL=http://127.0.0.1:8086 ./infra/run-episode.sh --model gpt-6-astra \
         --driver codex --local

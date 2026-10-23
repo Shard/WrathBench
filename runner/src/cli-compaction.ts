@@ -139,7 +139,7 @@ export class CompactionAsk {
 /**
  * The Codex CLI's auto-compaction threshold, from the window it reports.
  *
- * In the pinned CLI (0.159.3, `codex-rs/protocol/src/openai_models.rs`,
+ * In the pinned CLI (0.163.0 as in 0.159.3, `codex-rs/protocol/src/openai_models.rs`,
  * `ModelInfo::auto_compact_token_limit`) the threshold is 90% of the model's
  * catalogue `context_window`, while the `model_context_window` every
  * `token_count` event reports is `usable_context_window`, that window times
