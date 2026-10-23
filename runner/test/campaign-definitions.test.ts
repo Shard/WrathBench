@@ -71,6 +71,15 @@ describe("the checked-in definitions", () => {
     expect(campaignPairRefusals(c, roster, { runPods: "probes", onCluster: true })).toEqual([]);
   });
 
+  test("pi-vs-wrathbench@2 is @1 on e360's clock: only the version, the question, the note, the episode length and the call guard move", () => {
+    const v1 = checkedIn("pi-vs-wrathbench@1");
+    const v2 = checkedIn("pi-vs-wrathbench@2");
+    expect(v2.budget.episodeMs).toBe(6 * 60 * 60 * 1000);
+    expect(v2.budget.maxToolCalls).toBe(12000);
+    const rest = (d: CampaignDefinition) => ({ ...d, version: 0, question: "", note: "", budget: { ...d.budget, episodeMs: 0, maxToolCalls: 0 } });
+    expect(rest(v2)).toEqual(rest(v1));
+  });
+
   for (const file of files) {
     test(`${file} parses, and is named for the id and version it holds`, () => {
       const parsed = campaignDefinitionSchema.safeParse(JSON.parse(readFileSync(join(CAMPAIGNS_DIR, file), "utf8")));
