@@ -124,6 +124,7 @@ import {
   claudeModelWindow,
   claudeWindowCapRefusal,
   compactionNotice,
+  compactWindowTokens,
   messageText,
   summaryFields,
   type CompactionRecord,
@@ -455,7 +456,14 @@ export function thinkingEnv(effort: string | undefined): Record<string, string> 
  * 980000 for Claude Haiku 5.5, `100k` gave 80000, compacting ~13K below that).
  */
 export function compactEnv(window: string | undefined): Record<string, string> {
-  return window === undefined ? {} : { [COMPACT_WINDOW_ENV]: window };
+  if (window === undefined) return {};
+  // The integer token count, never the canonical `<n>k`: CLIs before 2.1.304
+  // read any `<n>k` as 100k (2.1.293 logged effectiveWindow=80000 for both
+  // `200k` and `300k`, and 180000 for `200000`), and the integer reads as
+  // written on every version. The run's recorded spelling stays `<n>k`.
+  const tokens = compactWindowTokens(window);
+  if (tokens === undefined) throw new Error(`compactWindow ${JSON.stringify(window)} is not canonical (<n>k or <n>M)`);
+  return { [COMPACT_WINDOW_ENV]: String(tokens) };
 }
 
 /**
