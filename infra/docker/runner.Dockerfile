@@ -56,8 +56,8 @@ ENV HOME=/home/bun
 # claude-fable-5 ids report the real 1M context window in `modelUsage`, not the
 # 200k fallback for an unrecognized model. The driver's stream-json flag set was
 # run against a stub MCP server, and a compaction record was checked.
-# `CLAUDE_CODE_AUTO_COMPACT_WINDOW` sets the floor at 2.1.304, per its changelog:
-# 2.1.293 read `200k` and `300k` as 100k (probed), so they compacted as `100k`.
+# 2.1.304 is the first CLI that reads `CLAUDE_CODE_AUTO_COMPACT_WINDOW=<n>k` as
+# written, per its changelog; 2.1.293 read `200k` and `300k` as 100k (probed).
 ARG CLAUDE_CODE_VERSION=2.1.309
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_CODE_VERSION}" \
     && /home/bun/.local/bin/claude --version

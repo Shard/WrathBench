@@ -467,11 +467,10 @@ A harness setting of the CLI scaffolds since the operator's decision of
 2026-10-11; this section is claude-code's mechanics, and "The codex driver"
 below has codex's, and "The pi driver" pi's. The CLI summarises its own history once the prompt nears
 its auto-compaction window, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: `auto` or
-100k–1M tokens in the pinned 2.1.309. The driver sends the canonical `<n>k`,
-which a CLI before 2.1.304 read as 100k whatever `n` was: on 2.1.293 `200k`
-and `300k` both logged `effectiveWindow=80000`, where 2.1.309 logs 180000 and
-280000 (probed). A claude-code run stamped with a window above `100k` on an
-image older than this pin compacted as a `100k` run.
+100k–1M tokens in the pinned 2.1.309. A CLI before 2.1.304 read any `<n>k`
+spelling there as 100k whatever `n` was: on 2.1.293 `200k` and `300k` both
+logged `effectiveWindow=80000`, where 2.1.309 logs 180000 and 280000 (probed).
+An integer token count reads as written on both.
 `auto` sits near the model's whole context — with `--debug` the CLI logs
 `autocompact: … effectiveWindow=980000` for Claude Haiku 5.5 — so a long run
 replays close to a million tokens per call before anything is summarised, and

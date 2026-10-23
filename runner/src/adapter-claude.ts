@@ -454,8 +454,8 @@ export function thinkingEnv(effort: string | undefined): Record<string, string> 
  * absent is the CLI's own `auto` and sends nothing. With `--debug` the CLI logs
  * the window it applies as `autocompact: … effectiveWindow=…` (`auto` gave
  * 980000 for Claude Haiku 5.5, `100k` gave 80000, compacting ~13K below that).
- * The canonical `<n>k` needs 2.1.304 or later: 2.1.293 read `200k` and `300k`
- * as 100k (80000 both), where 2.1.309 gives 180000 and 280000.
+ * A CLI before 2.1.304 read any `<n>k` here as 100k: 2.1.293 gave 80000 for
+ * both `200k` and `300k`, where 2.1.309 gives 180000 and 280000.
  */
 export function compactEnv(window: string | undefined): Record<string, string> {
   return window === undefined ? {} : { [COMPACT_WINDOW_ENV]: window };
