@@ -1865,6 +1865,14 @@ conversation and nothing in the run directory names the account — but a Codex
 lane is a home holding the CLI's own threads, so codex runs stay where they
 started until resume across homes is checked.
 
+Step 1 is not optional even for a run that already reads paused. While its ref
+is `unlimited` the fleet may resume it on any tick (a `subscription-budget`
+pause comes back by itself), and a resume that read `meta.json` before the move
+writes the old lane back over it. The command re-checks the owner and the file
+just before its rename, but a resume that has read the file and not yet started
+its heartbeat is invisible to it; `idle: "none"` is what keeps that resume from
+starting.
+
 `--pin` exists because the fleet places and counts a pinned entry by its roster
 `subscription` while the runner bills the lane in `meta.json`; one without the
 other has the fleet counting one account while the run bills another. So
