@@ -50,12 +50,14 @@ RUN apt-get update \
 # the same uid the compose service and the Kubernetes pods run with.
 USER bun
 ENV HOME=/home/bun
-# 2.1.309 was probed on a subscription lane before it was pinned. Every alias and id
-# the roster uses resolves to the same model as on 2.1.293, and `modelUsage` reports
-# the real 1M context window, not the 200k fallback for an unrecognized model. The
-# driver's stream-json flag set was run against a stub MCP server, and a compaction
-# record was checked. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` sets the floor at 2.1.304:
-# earlier CLIs read any `<n>k` as 100k, so `200k` and `300k` compacted as `100k`.
+# 2.1.309 was probed on a subscription lane before it was pinned. The aliases opus,
+# sonnet, haiku and fable resolve to the same models as on 2.1.293, and they and
+# the claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5, claude-fable-5-1 and
+# claude-fable-5 ids report the real 1M context window in `modelUsage`, not the
+# 200k fallback for an unrecognized model. The driver's stream-json flag set was
+# run against a stub MCP server, and a compaction record was checked.
+# `CLAUDE_CODE_AUTO_COMPACT_WINDOW` sets the floor at 2.1.304, per its changelog:
+# 2.1.293 read `200k` and `300k` as 100k (probed), so they compacted as `100k`.
 ARG CLAUDE_CODE_VERSION=2.1.309
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_CODE_VERSION}" \
     && /home/bun/.local/bin/claude --version
