@@ -452,6 +452,30 @@ export interface RunMeta {
    * `subscriptionUsage`: no public projection carries it.
    */
   laneHistory?: LaneMove[];
+  /**
+   * Every time this run directory was restored from a character archive
+   * (`runner/src/character-archive.ts`), oldest first: which archive, when
+   * it was written and by which build, and the account and guid the
+   * character left and landed on. The run keeps its id across an import,
+   * because it is the same character continuing; this is how its record
+   * says the run moved. Operator-only like `laneHistory`.
+   */
+  imports?: CharacterImport[];
+}
+
+/** One restore of a run from a character archive (`RunMeta.imports`). */
+export interface CharacterImport {
+  /** Epoch ms. */
+  at: number;
+  actor: string;
+  note: string | null;
+  /** The archive's file name. */
+  archive: string;
+  /** When the archive was written (ISO), and by which harness build. */
+  exportedAt: string;
+  exportedWith: string;
+  from: { account: string; guid: number };
+  to: { account: string; guid: number };
 }
 
 /** One operator move of a run's subscription lane (`RunMeta.laneHistory`). */

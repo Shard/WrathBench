@@ -140,6 +140,11 @@ spec:
                   fieldPath: status.podIP
             - name: AC_SOAP_PORT
               value: {{ .Values.staging.soapPort | quote }}
+            # The character archive's `.pdump write|load` (infra/character-archive.ts)
+            # names a file under the `characters` mount below; the core's default
+            # refuses any player-dump file name with a path in it.
+            - name: AC_PLAYER_DUMP_DISALLOW_PATHS
+              value: "0"
             {{- else }}
             - name: AC_SOAP_ENABLED
               value: "0"
@@ -243,6 +248,13 @@ spec:
             - name: data
               mountPath: /azerothcore/env/dist/logs
               subPath: logs
+            {{- if .Values.staging.enabled }}
+            # Where `.pdump write|load` over SOAP meets the runner pod, which
+            # mounts the same subPath at data/characters (infra/character-archive.ts).
+            - name: data
+              mountPath: /azerothcore/env/dist/characters
+              subPath: characters
+            {{- end }}
             - name: temp
               mountPath: /azerothcore/env/dist/temp
       volumes:

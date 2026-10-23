@@ -4,7 +4,8 @@
  * Idempotently ensures STAGER exists with the given password and full GM
  * (gmlevel 3, SEC_ADMINISTRATOR, which `ACSoap.cpp` requires before it runs
  * any command). It is the credential `infra/fixtures/stage-party.ts` presents
- * to SOAP to `.additem` a member's gear, and nothing else uses it:
+ * to SOAP to `.additem` a member's gear, and the one the character archive
+ * (`infra/character-archive.ts`) presents to run `.pdump`; nothing else uses it:
  *
  *   - it is NOT on the module's account allowlist (`worldserver.accounts`),
  *     so no bench session can be opened on it;
