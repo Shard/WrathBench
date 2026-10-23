@@ -168,6 +168,13 @@ describe("where a command runs", () => {
       "kubectl", "-n", "wrathbench", "exec", "-i", "deploy/wrathbench-runner", "--",
       "bun", "runner/src/config-store.ts", "move-lane", "fleet-x", "CLAUDE_CODE_OAUTH_TOKEN", "--pin", "--note", "two words",
     ]);
+    // The character archive reads the runs volume and the databases and drives SOAP: all in the runner.
+    expect(planned(entry("accounts", "export-character"), CLUSTER, ["fleet-x", "--no-trajectory"]).argv).toEqual([
+      "kubectl", "-n", "wrathbench", "exec", "-i", "deploy/wrathbench-runner", "--", "bun", "infra/character-archive.ts", "export", "fleet-x", "--no-trajectory",
+    ]);
+    expect(planned(entry("accounts", "import-character"), CLUSTER, ["x.tar.gz", "--account", "RUNNER3"]).argv).toEqual([
+      "kubectl", "-n", "wrathbench", "exec", "-i", "deploy/wrathbench-runner", "--", "bun", "infra/character-archive.ts", "import", "x.tar.gz", "--account", "RUNNER3",
+    ]);
   });
 
   test("the namespace and release come from the environment, and a global flag beats it", () => {

@@ -162,6 +162,11 @@ networkPolicy:
 #   - `accounts` appended to the module's allowlist (`worldserver.accounts`):
 #     the party's own five. STAGER is never on it, so no bench session can
 #     be opened on the account SOAP trusts;
+#   - the character archive's game half (`bun wb accounts export-character`,
+#     infra/character-archive.ts), which runs `.pdump` over the same SOAP: the
+#     data volume's `characters` subPath mounted in the worldserver too (the
+#     runner always mounts it), and PlayerDump.DisallowPaths off, so the dump
+#     file can be named in it;
 #   - on the fleet and runner pods only, the SOAP URL and STAGER's password
 #     (`stagerPasswordKey` in `envSecretName`, optional so a missing key fails
 #     the staging by name instead of wedging the pods). Run pods never carry

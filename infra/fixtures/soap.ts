@@ -4,8 +4,9 @@
  * POST with Basic authentication, the command queued onto the world thread's
  * CLI queue exactly as a console line would be.
  *
- * Operator tooling for the party stager only (docs/proposals/GROUP-PLAY.md
- * §3, route (c)). Nothing in `runner/` or `sdk/` imports this, the account it
+ * Operator tooling for the party stager (docs/proposals/GROUP-PLAY.md §3,
+ * route (c)) and the character archive's `.pdump` (infra/character-archive.ts),
+ * both run by the operator. Nothing in `runner/` or `sdk/` imports this, the account it
  * authenticates as (`STAGER`) is not on the module's allowlist, and SOAP is
  * kept out of the agent's reach by the sandbox's single-port rule, the run
  * pods' egress policy, the worldserver's ingress rule and a credential no run

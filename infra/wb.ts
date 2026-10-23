@@ -80,7 +80,7 @@ export const GROUPS: Readonly<Record<string, string>> = {
   campaign: "probe campaign definitions",
   release: "build the images, release them, and the deploy window",
   server: "the worldserver's module, and the viewer",
-  accounts: "game accounts: the harness's, the operator's GM spectator, and the party stager's",
+  accounts: "game accounts: the harness's, the operator's GM spectator, the party stager's, and the characters on them",
   smoke: "the smoke scripts under infra/smoke",
   site: "the public site",
   data: "prices and logos this checkout carries",
@@ -131,6 +131,7 @@ const STAGER = "infra/stager-account.ts";
 const RUN_FLEET = "infra/run-fleet.ts";
 const FLEET_UPDATE = "infra/fleet-update.sh";
 const INSPECT_RUN = "infra/inspect-run.ts";
+const CHARACTER_ARCHIVE = "infra/character-archive.ts";
 
 /**
  * The table. Help and dispatch both read it and nothing else, so they cannot
@@ -233,6 +234,22 @@ export const ENTRIES: readonly Entry[] = [
     summary: "ensure the party stager's SOAP account STAGER (GM, never on the module allowlist); read -rs P && printf '%s\\n' \"$P\" | bun wb accounts stager",
     requires: "--password-stdin",
     ...inRunner("bun", STAGER, "--password-stdin"),
+  },
+  // The character archive (docs/RUNBOOK.md, "Backing up and moving a
+  // character"): the runs volume, the databases and SOAP are all in the runner.
+  {
+    group: "accounts",
+    command: "export-character",
+    takes: "<run-id> [file] [--no-trajectory]",
+    summary: "a paused or ended run and its character to one archive under data/characters: run directory, the core's pdump, a manifest",
+    ...inRunner("bun", CHARACTER_ARCHIVE, "export"),
+  },
+  {
+    group: "accounts",
+    command: "import-character",
+    takes: "<file> [--account NAME] [--note TEXT]",
+    summary: "restore an archive: load the character, put its run back under its own id, paused as it left; never resumes it",
+    ...inRunner("bun", CHARACTER_ARCHIVE, "import"),
   },
 
   ...smokeEntries(),
