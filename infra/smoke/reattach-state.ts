@@ -1,25 +1,31 @@
 /**
  * Probe for the reattach replay (module/PROTOCOL.md, "/events"): a WebSocket
- * that subscribes to a token whose character is already in world gets a
- * `WB_SESSION_STATE` saying `replay: true`, then what a connected client
- * holds — the character's own create block with every item, its auras, the
- * login packets, a create block for everything in view — closed by
- * `WB_REPLAY_DONE`. It is the path a sandbox restart and a resumed run
- * recover through, so it is verified live: a second SDK client, with an
- * empty cache, must read the same character the first one did.
+ * that subscribes with `replay=1` to a token whose character is already in
+ * world gets a `WB_SESSION_STATE` saying `replay: true`, then what a
+ * connected client holds — the character's own create block with every item,
+ * its auras, the login packets, a create block for everything in view —
+ * closed by `WB_REPLAY_DONE`, on that socket alone, one burst per session
+ * per interval. It is the path a sandbox restart and a resumed run recover
+ * through, so it is verified live: a second SDK client, with an empty cache,
+ * must read the same character the first one did.
  *
  * Arc, on the PROBE account with a fresh Human Warrior in Northshire:
  *   1. client A logs in, waits for the login's create blocks and a few units
  *      in view, and snapshots own state, inventory, spellbook, skills,
  *      reputations, achievements, bind point, quest log and the view;
  *   2. A's socket is closed without a logout — what a killed sandbox child
- *      leaves behind — and client B, a fresh cache, subscribes to the same
- *      token: the replay must arrive, on the same session (seq continues), with
- *      no destroy in it, and B's snapshot must match A's;
+ *      leaves behind — a plain socket P subscribes (no flag), and client B, a
+ *      fresh cache, subscribes asking for the replay: it must arrive on B, on
+ *      the same session (seq continues), with no destroy in it, and B's
+ *      snapshot must match A's; P must get its plain state frame and none of
+ *      the burst (the burst's seqs read as one gap on P);
  *   3. B sends a party line, which needs its own race from the replayed block;
  *   4. B's same-token createSession answers in world with a state frame and no
  *      second replay;
- *   5. logout.
+ *   5. two more askers, C1 and C2, subscribe together right after: they share
+ *      one burst (the same seqs on both), sent no sooner than the interval
+ *      after B's;
+ *   6. logout.
  *
  * POST-DEPLOY ONLY: fails against a worldserver built before the replay (B
  * never sees WB_REPLAY_DONE). Budget: ~30s.
@@ -29,7 +35,7 @@
  *   bun wb --local smoke reattach-state   # the quickstart
  */
 
-import { connect, type WrathClient } from "../../sdk/src/index";
+import { connect, WrathClient } from "../../sdk/src/index";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
 
@@ -99,6 +105,8 @@ await deletePreviousCharacter();
 
 const a = await connect({ baseUrl: BASE, token: TOKEN, secret: MODULE_SECRET });
 let b: WrathClient | undefined;
+/** Sockets opened beside A and B, closed at the end. */
+const extra: WrathClient[] = [];
 
 try {
   // 1. Client A: the login.
@@ -120,10 +128,17 @@ try {
   const lastSeqBefore = a.state.lastSeq;
   log(`A holds: ${before.inventory.length} items, ${before.spells.length} spells, ${before.skills.length} skills, ${before.reputation.length} factions, ${before.units.size} objects in view, health ${before.self["health"]}/${before.self["maxHealth"]}, ${before.self["money"]} copper, seq ${lastSeqBefore}`);
 
-  // 2. The restart: A's socket goes, nothing is logged out, and B subscribes.
+  // 2. The restart: A's socket goes, nothing is logged out, a plain socket P
+  // subscribes, and B subscribes asking for the replay.
   a.close();
   await Bun.sleep(300);
-  b = await connect({ baseUrl: BASE, token: TOKEN, secret: MODULE_SECRET });
+  const plainSocket = new WrathClient({ baseUrl: BASE, token: TOKEN, secret: MODULE_SECRET, subscribeEvents: false });
+  extra.push(plainSocket);
+  await plainSocket.events.connect();
+  const plainState = await plainSocket.events.waitForOpcode("WB_SESSION_STATE", { timeout: 10_000 });
+  if ((plainState.data as { replay?: unknown }).replay === true) fail("a plain subscribe was answered with a replay");
+  b = new WrathClient({ baseUrl: BASE, token: TOKEN, secret: MODULE_SECRET, subscribeEvents: false });
+  await b.events.connect({ replay: true });
   const stateFrame = await b.events.waitForOpcode("WB_SESSION_STATE", { timeout: 10_000 });
   const stateData = stateFrame.data as { replay?: unknown; character?: unknown; guid?: unknown };
   if (stateData.replay !== true) fail(`the subscribe's WB_SESSION_STATE does not announce a replay: ${JSON.stringify(stateFrame.data)}`);
@@ -138,6 +153,11 @@ try {
     if (!opcodes.includes(must)) fail(`the replay carried no ${must}; it carried ${opcodes.join(", ")}`);
   }
   log(`B got the replay: ${burst.length} frames (${opcodes.join(", ")}), ${(done.data as { objects: number }).objects} objects restated, seq ${stateFrame.seq}..${done.seq}`);
+  // P, which did not ask, got none of it: no frame of P's carries a seq inside the burst.
+  await Bun.sleep(200);
+  const leaked = plainSocket.events.recent(10_000).filter((e) => e.seq >= stateFrame.seq && e.seq <= done.seq);
+  if (leaked.length > 0) fail(`the replay reached a socket that did not ask: ${leaked.length} frame(s), e.g. ${leaked[0]!.opcode} #${leaked[0]!.seq}`);
+  log(`PASS the plain socket saw none of the burst (${plainSocket.events.gaps} gap(s) on it, the burst's seqs)`);
 
   // The replay is one burst, but the creates land as one frame each on the
   // wire; give B's cache a beat before reading it.
@@ -180,6 +200,25 @@ try {
   if (b.state.self.level?.value !== before.self["level"]) fail(`level after the repeated createSession is ${b.state.self.level?.value}, expected ${before.self["level"]}`);
   log("PASS same-token createSession: in world, the state frame alone");
 
+  // 5. Two askers at once share one burst, no sooner than the interval after the last.
+  const c1 = new WrathClient({ baseUrl: BASE, token: TOKEN, secret: MODULE_SECRET, subscribeEvents: false });
+  const c2 = new WrathClient({ baseUrl: BASE, token: TOKEN, secret: MODULE_SECRET, subscribeEvents: false });
+  extra.push(c1, c2);
+  const askedAt = Date.now();
+  await Promise.all([c1.events.connect({ replay: true }), c2.events.connect({ replay: true })]);
+  const [done1, done2] = await Promise.all([
+    c1.events.waitForOpcode("WB_REPLAY_DONE", { timeout: 15_000 }),
+    c2.events.waitForOpcode("WB_REPLAY_DONE", { timeout: 15_000 }),
+  ]);
+  if (done1.seq !== done2.seq) fail(`two askers in one moment got two bursts (DONE at seq ${done1.seq} and ${done2.seq})`);
+  const sinceLast = done1.ts - done.ts;
+  if (sinceLast < 2_500) fail(`the second burst came ${sinceLast}ms after the first; the interval is 3000ms`);
+  const c1State = c1.events.recent(10_000).find((e) => e.opcode === "WB_SESSION_STATE" && (e.data as { replay?: unknown }).replay === true);
+  const c2State = c2.events.recent(10_000).find((e) => e.opcode === "WB_SESSION_STATE" && (e.data as { replay?: unknown }).replay === true);
+  if (c1State === undefined || c2State === undefined || c1State.seq !== c2State.seq) fail("the shared burst's state frame differs between the two askers");
+  if (c1.state.self.fields.get("race")?.value !== 1 || c2.state.self.fields.get("race")?.value !== 1) fail("a shared burst left an asker without its race");
+  log(`PASS two askers shared one burst (seq ${c1State.seq}..${done1.seq}), ${sinceLast}ms after B's, ${Date.now() - askedAt}ms after asking`);
+
   console.log(`PASS: reattach-state (${((Date.now() - started) / 1000).toFixed(1)}s)`);
 } catch (e) {
   console.log(`FAIL: ${String(e instanceof Error ? (e.stack ?? e.message) : e)}`);
@@ -189,4 +228,5 @@ try {
   await live.logout().catch(() => {});
   live.close();
   a.close();
+  for (const c of extra) c.close();
 }

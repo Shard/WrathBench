@@ -1937,6 +1937,16 @@ export class StateCache {
   private selfMap: number | undefined;
 
   /**
+   * A reattach replay is in flight (`WB_SESSION_STATE` with `replay: true`
+   * seen, `WB_REPLAY_DONE` not yet): the replay's own self create block
+   * replaces `self.fields` instead of merging into them, because a create
+   * block carries no zero-valued field and a merge would keep a stale
+   * non-zero value from before the socket went down (money spent to zero,
+   * a quest slot emptied) under the replayed truth.
+   */
+  private replayPending = false;
+
+  /**
    * The last spline the server launched for our own character
    * (`SMSG_MONSTER_MOVE` for our guid), kept until it is landed on or
    * superseded. A client flies itself along it locally; the module serves its
@@ -3121,8 +3131,12 @@ export class StateCache {
         // while it was down, and a replayed set that lacks them is the
         // truth. Self fields stay: the create block that follows restates
         // every non-zero one, as the login's does.
-        if (d.replay === true) this.forgetAllNearby();
-        else this.evictOnMapChange(d.map);
+        if (d.replay === true) {
+          this.forgetAllNearby();
+          this.replayPending = true;
+        } else {
+          this.evictOnMapChange(d.map);
+        }
         this.selfMap = d.map;
         this.self.position = {
           value: { map: d.map, x: d.x, y: d.y, z: d.z, o: d.o },
@@ -3157,6 +3171,9 @@ export class StateCache {
       case "WB_REPLAY_DONE":
         // The mark that closes a reattach replay. Everything it vouches for
         // arrived as ordinary frames before it; the cache has nothing to add.
+        // A replay that stopped short (`incomplete`) never sent its self
+        // create, so the next ordinary one must merge as usual.
+        this.replayPending = false;
         return;
       case "WB_PORTALS": {
         // The portals in view, the whole set on each change (PROTOCOL.md).
@@ -4311,6 +4328,18 @@ export class StateCache {
       }
       if (block.runSpeed !== undefined) {
         this.self.fields.set("runSpeed", { value: block.runSpeed, seq, ts });
+      }
+      if (this.replayPending) {
+        // The replay's own create is the whole field block, as a login's is
+        // to a fresh cache: what it leaves out is zero, not "unchanged".
+        this.replayPending = false;
+        const kept = new Map<string, Observed<number>>();
+        for (const key of ["moveFlags", "runSpeed"]) {
+          const v = this.self.fields.get(key);
+          if (v !== undefined) kept.set(key, v);
+        }
+        this.self.fields.clear();
+        for (const [key, v] of kept) this.self.fields.set(key, v);
       }
       this.mergeFields(this.self, block.fields, seq, ts);
       return;

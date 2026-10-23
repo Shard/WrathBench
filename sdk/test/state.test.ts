@@ -3514,3 +3514,72 @@ describe("the reattach replay", () => {
     expect(cache.self.level?.value).toBe(9);
   });
 });
+
+describe("the reattach replay: self fields and repeated creates", () => {
+  const sessionState = (seq: number, extra: Record<string, unknown> = {}) => ({
+    seq,
+    opcode: "WB_SESSION_STATE",
+    opcodeId: 0xff03,
+    ts: 1_700_000_001_000 + seq,
+    data: { character: "Fenwick", guid: SELF_GUID, inWorld: true, map: 0, x: -1234.5, y: 987.25, z: 42.125, o: 3.5, level: 3, ...extra },
+  });
+  const replayDone = (seq: number, objects: number, extra: Record<string, unknown> = {}) => ({
+    seq,
+    opcode: "WB_REPLAY_DONE",
+    opcodeId: 0xff0b,
+    ts: 1_700_000_001_000 + seq,
+    data: { objects, ...extra },
+  });
+  /** Our own create block with `fields` alone, as a replay restates it. */
+  const selfWith = (seq: number, fields: Record<string, number>) => ({
+    ...selfCreate,
+    seq,
+    data: { blocks: 1, objects: [{ ...(selfCreate.data.objects[0] as object), fields }] },
+  });
+
+  test("the replay's self create replaces the field block: a value that went to zero does not linger", () => {
+    // Before the socket went down: 350 copper and a quest in slot 0. The
+    // replay's create carries neither (zero fields are not on the wire).
+    const before = selfWith(40, { health: 80, maxHealth: 100, level: 3, money: 350, xp: 120 });
+    const replayed = selfWith(61, { health: 64, maxHealth: 100, level: 3 });
+    const cache = StateCache.replay(
+      toEvents([...loginSequence, before, sessionState(60, { replay: true }), replayed, replayDone(62, 0)]),
+      { seed: SEED },
+    );
+    expect(cache.self.fields.get("health")?.value).toBe(64);
+    expect(cache.self.fields.get("money")).toBeUndefined();
+    expect(cache.self.fields.get("xp")).toBeUndefined();
+    // Only the replay's own create replaces; an ordinary one after it merges.
+    const later = StateCache.replay(
+      toEvents([...loginSequence, before, sessionState(60, { replay: true }), replayed, replayDone(62, 0), selfWith(70, { money: 12 })]),
+      { seed: SEED },
+    );
+    expect(later.self.fields.get("health")?.value).toBe(64);
+    expect(later.self.fields.get("money")?.value).toBe(12);
+  });
+
+  test("an ordinary self create outside a replay still merges, and a replay that stopped short does not arm a replace", () => {
+    const before = selfWith(40, { health: 80, money: 350 });
+    const merged = StateCache.replay(toEvents([...loginSequence, before, selfWith(41, { health: 70 })]), { seed: SEED });
+    expect(merged.self.fields.get("money")?.value).toBe(350);
+    expect(merged.self.fields.get("health")?.value).toBe(70);
+    // The module ends a failed replay with DONE and no self create; the next
+    // ordinary create is not the replay's.
+    const short = StateCache.replay(
+      toEvents([...loginSequence, before, sessionState(60, { replay: true }), replayDone(61, 0, { incomplete: true }), selfWith(70, { health: 70 })]),
+      { seed: SEED },
+    );
+    expect(short.self.fields.get("money")?.value).toBe(350);
+    expect(short.self.fields.get("health")?.value).toBe(70);
+  });
+
+  test("a second create for an object already in view merges into it (a transport passenger is built twice)", () => {
+    const again = { ...creatureCreate, seq: 63, data: { ...creatureCreate.data, objects: [{ ...(creatureCreate.data.objects[0] as object), fields: { health: 90 } }] } };
+    const cache = StateCache.replay(toEvents([...loginSequence, selfCreate, creatureCreate, again]), { seed: SEED });
+    expect(cache.nearby.size).toBe(1);
+    const unit = cache.nearby.get(CREATURE_GUID)!;
+    expect(unit.fields.get("health")?.value).toBe(90);
+    expect(unit.fields.get("maxHealth")?.value).toBe(120);
+    expect(unit.objectType?.value).toBe("unit");
+  });
+});

@@ -1172,7 +1172,11 @@ const ambient: Record<string, unknown> = {
    */
   connect: async (): Promise<void> => {
     if (client.events.connected) return;
-    await client.events.connect();
+    // An explicit connect() onto a session already in world is a consumer
+    // that holds nothing (a restarted child, a resumed run, a snippet that
+    // closed the stream), so it asks for the replay; the stream's own
+    // reconnects after a drop never do.
+    await client.events.connect({ replay: true });
     await awaitReattachReplay();
   },
   sleep,

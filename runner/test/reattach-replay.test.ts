@@ -9,10 +9,15 @@
  * (so a party line goes out), health, money, bag, spellbook, the units in
  * view. That is what the restart notice promises the model.
  *
+ * The replay is asked for: the child's explicit `connect()` subscribes with
+ * `replay=1`, and the stream's own reconnect after a drop does not, so a live
+ * child whose socket flaps keeps its view and gets the plain state frame.
+ *
  * Fixture-based, no game stack: the real sandbox child against a stand-in
- * module whose `/events` pushes the login burst to its first subscriber and
- * the replay to every later one, with frames hand-written from
- * module/PROTOCOL.md's tables (names invented, nothing captured from a game).
+ * module whose `/events` pushes the login burst to its first subscriber, the
+ * replay to a later one that asks, and the plain state frame to one that does
+ * not, with frames hand-written from module/PROTOCOL.md's tables (names
+ * invented, nothing captured from a game).
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
@@ -107,28 +112,37 @@ const REPLAY: Frame[] = [
   frame("WB_REPLAY_DONE", 0xff0b, { objects: 1 }),
 ];
 
+/** What a later subscriber that does not ask for the replay gets: the plain state frame. */
+const PLAIN_STATE: Frame[] = [sessionState(9, {})];
+
 interface StubOptions {
-  /** Frames for the first subscriber, then for each later one. */
+  /** Frames for the first subscriber, then for each later one that asks (`replay=1`) or does not. */
   first?: Frame[];
   later?: Frame[];
+  plain?: Frame[];
   /** A delay before the later subscribers' frames, as the world thread's tick is. */
   delayMs?: number;
+  /** Close the first subscriber's socket after its frames, as a dropped connection would. */
+  dropFirst?: boolean;
 }
 
 /** A stand-in module: `/events` pushes frames per subscribe, `/session` answers in-world, `/action` acks and keeps raws. */
-function startModuleStub(opts: StubOptions = {}): { url: string; raws: string[]; subscribes: () => number } {
+function startModuleStub(opts: StubOptions = {}): { url: string; raws: string[]; subscribes: () => number; asked: () => boolean[] } {
   const raws: string[] = [];
   let seq = 0;
   let subscribes = 0;
-  const push = (ws: ServerWebSocket<unknown>, frames: Frame[]) => {
+  const asked: boolean[] = [];
+  const push = (ws: ServerWebSocket<{ replay: boolean }>, frames: Frame[]) => {
     for (const f of frames) ws.send(JSON.stringify({ seq: seq++, ts: 1_000 + seq, ...f }));
   };
-  const server = Bun.serve<unknown, never>({
+  const server = Bun.serve<{ replay: boolean }, never>({
     port: 0,
     fetch(req, srv) {
       const url = new URL(req.url);
       if (url.pathname === "/events") {
-        return srv.upgrade(req, { data: {} }) ? undefined : new Response("upgrade failed", { status: 400 });
+        const replay = url.searchParams.get("replay") === "1";
+        asked.push(replay);
+        return srv.upgrade(req, { data: { replay } }) ? undefined : new Response("upgrade failed", { status: 400 });
       }
       if (url.pathname === "/session" && req.method === "POST") {
         return Response.json({ ok: true, account: "RUNNER", character: "Fenwick", guid: SELF, inWorld: true });
@@ -145,14 +159,18 @@ function startModuleStub(opts: StubOptions = {}): { url: string; raws: string[];
     websocket: {
       open(ws) {
         subscribes++;
-        const frames = subscribes === 1 ? (opts.first ?? LOGIN) : (opts.later ?? REPLAY);
-        setTimeout(() => push(ws, frames), opts.delayMs ?? 30);
+        const frames = subscribes === 1 ? (opts.first ?? LOGIN) : ws.data.replay ? (opts.later ?? REPLAY) : (opts.plain ?? PLAIN_STATE);
+        const first = subscribes === 1;
+        setTimeout(() => {
+          push(ws, frames);
+          if (first && opts.dropFirst === true) ws.close();
+        }, opts.delayMs ?? 30);
       },
       message() {},
     },
   });
   stubs.push({ stop: () => server.stop(true) });
-  return { url: `http://127.0.0.1:${server.port}`, raws, subscribes: () => subscribes };
+  return { url: `http://127.0.0.1:${server.port}`, raws, subscribes: () => subscribes, asked: () => asked };
 }
 
 function makeHost(moduleUrl: string): SandboxHost {
@@ -208,6 +226,8 @@ describe("the reattach replay after a sandbox restart", () => {
     expect(after).toEqual({ race: 1, health: 64, money: 350, level: 9, item: true, spells: 2, units: 1 });
     expect(Date.now() - t0).toBeLessThan(REATTACH_STATE_WAIT_MS + REATTACH_REPLAY_WAIT_MS);
     expect(stub.subscribes()).toBe(2);
+    // Both of the child's own connects asked; a fresh run's first ask is simply unanswered.
+    expect(stub.asked()).toEqual([true, true]);
 
     // And the race the replayed create block carries picks the party line's language.
     const said = await host.evalSnippet('await sdk.say("after", { type: "party" }); "sent"');
@@ -215,6 +235,20 @@ describe("the reattach replay after a sandbox restart", () => {
     expect(stub.raws).toHaveLength(1);
     expect(stub.raws[0]).toMatch(PARTY_IN_COMMON);
   }, 30_000);
+
+  test("the stream's own reconnect after a drop does not ask: the live child keeps its view and gets the plain frame", async () => {
+    const stub = startModuleStub({ dropFirst: true });
+    const host = makeHost(stub.url);
+    const login = await readState(host, 'await connect(); await sdk.createSession({ character: "Fenwick" });');
+    expect(login["units"]).toBe(1);
+    // The ladder reconnects on its own; the module answers with the plain state frame.
+    const deadline = Date.now() + 5_000;
+    while (stub.subscribes() < 2 && Date.now() < deadline) await Bun.sleep(20);
+    expect(stub.asked()).toEqual([true, false]);
+    await Bun.sleep(200);
+    const after = await readState(host, "");
+    expect(after).toEqual({ race: 1, health: 80, money: 50, level: 9, item: true, spells: 2, units: 1 });
+  }, 20_000);
 
   test("a subscribe the module answers with nothing (no session yet) returns after the bounded wait", async () => {
     const stub = startModuleStub({ first: [], later: [] });
