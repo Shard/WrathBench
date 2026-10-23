@@ -153,9 +153,11 @@ channel is in addition to the hint in the result, never instead of it.
 
 One fixed context for every model (`runner/src/context.ts`): the fixed system
 prompt, a window of recent messages trimmed in blocks so the provider cache
-prefix survives, and one fresh deterministic message — goal, harness notices,
-a HUD summary of already-observed fields, recent events and the full
-scratchpad. Within the window only the most recent block is verbatim: in the
+prefix survives, and one fresh deterministic message — the turn number,
+harness notices, a HUD summary of already-observed fields, recent events and
+the full scratchpad. It restates no goal: the directive is the system
+prompt's alone, so nothing per turn competes with an objective (operator,
+2026-10-23). Within the window only the most recent block is verbatim: in the
 older block each tool result is folded to a deterministic one-line record —
 tool, arguments cut short, ok or error, duration where known — while the
 model's own calls stay as sent (operator, 2026-10-19). Kept verbatim, one

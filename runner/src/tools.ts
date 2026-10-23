@@ -908,9 +908,9 @@ async function runTool(ctx: ToolContext, name: string, args: unknown, origin: Ca
         const note =
           folded === 0
             ? undefined
-            : `(+${folded} ambient movement events folded into state — pass {includeMovement: true} for the raw stream)`;
+            : `(+${folded} ambient movement and party-frame events folded into state — pass {includeMovement: true} for the raw stream)`;
         if (visible.length === 0) {
-          return { text: note === undefined ? "no events yet" : `no non-movement events yet\n${note}` };
+          return { text: note === undefined ? "no events yet" : `no non-ambient events yet\n${note}` };
         }
         const lines = visible.map(formatEventLine);
         if (note !== undefined) lines.push(note);

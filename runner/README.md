@@ -1087,7 +1087,7 @@ instead of naming the first eight slots, which never changed.
 The fixed loop's `request` record keeps only what nothing else in the
 trajectory holds, and points at the rest (`src/request-record.ts`). A request
 is `[system prompt, ...message window, fresh user message]`, and of those only
-the user message — goal line, notices, HUD, events, scratchpad — is new each
+the user message — turn number, notices, HUD, events, scratchpad — is new each
 turn. The window is a slice of messages already on the file: each assistant
 message is its `response` record's `message`, each tool message its
 `tool_result` / `snippet_result` record's `text`, with the `tool_call_id`
@@ -1096,7 +1096,7 @@ read positionally off the response it answers. So the record carries:
 ```json
 {"ts":…,"t":"request","turn":30,"adapter":"openai-compatible:…","slim":2,
  "systemHash":"sha256:…16 hex","window":{"from":24,"to":49,"fromTurn":13,"cap":4000,"fold":24},
- "user":"[turn 30] Goal: …","requestHash":"sha256:…64 hex",
+ "user":"[turn 30]\n\n…","requestHash":"sha256:…64 hex",
  "messageCount":27,"systemChars":15012,"promptChars":59321}
 ```
 

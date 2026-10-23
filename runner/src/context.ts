@@ -10,8 +10,8 @@
  *     stay intact; the tool results of its older block folded to one-line
  *     records (`foldToolResult`), its most recent block verbatim ]
  *   [ one fresh user message assembled by `assembleContext`:
- *       goal line, harness notices, state summary, last EVENT_WINDOW events,
- *       scratchpad ]
+ *       the turn number, harness notices, state summary, last EVENT_WINDOW
+ *       events, scratchpad ]
  *
  * The window grows to MESSAGE_WINDOW_MAX and is then cut back by one block of
  * MESSAGE_WINDOW_TRIM messages, rather than sliding one message per turn. The
@@ -1421,10 +1421,24 @@ export function spellLogNote(
   return `${caster} ${spell} gives ${target} ${logNumber(d.amount)} ${power}`;
 }
 
+/**
+ * What the event window's fold count counts: every `EVENT_WINDOW_EXCLUDE`
+ * opcode, which is movement (monster moves, heartbeats, transports) and, since
+ * the party frames were tapped (#286), `SMSG_PARTY_MEMBER_STATS` — so
+ * "movement" alone was false on a party run.
+ */
+export const AMBIENT_FOLDED = "ambient movement and party-frame events folded into state only";
+
 /** Pure. Same inputs, byte-identical output — tests enforce it. */
 export function assembleContext(inputs: ContextInputs): string {
   const parts: string[] = [];
-  parts.push(`[turn ${inputs.turn}] Goal: survive and level as far as you can. Act via tools.`);
+  // The turn number alone. The run's directive — the broad goal, or the
+  // operator objective that replaces it — is the system prompt's, rendered at
+  // one fixed place (docs/METHODOLOGY.md, "Steering is what makes a run
+  // unscored"); a per-turn restatement named a statistic the broad goal
+  // never names and contradicted every objective (issue #285, operator
+  // 2026-10-23). The `[turn N]` prefix is parsed back (`codex-rollout.ts`).
+  parts.push(`[turn ${inputs.turn}]`);
 
   if (inputs.notices.length > 0) {
     parts.push(
@@ -1440,9 +1454,9 @@ export function assembleContext(inputs: ContextInputs): string {
   } else if (window.length === 0) {
     // Everything fetched was ambient: say so, rather than "none yet" over a
     // stream that is plainly running.
-    parts.push(`[events]\nno non-movement events; ${excluded} ambient movement events folded into state only`);
+    parts.push(`[events]\nno non-ambient events; ${excluded} ${AMBIENT_FOLDED}`);
   } else {
-    const note = excluded > 0 ? `; ${excluded} ambient movement events folded into state only` : "";
+    const note = excluded > 0 ? `; ${excluded} ${AMBIENT_FOLDED}` : "";
     parts.push(
       `[events: last ${window.length}, newest last${note}]\n${window.map(formatEventLine).join("\n")}`,
     );

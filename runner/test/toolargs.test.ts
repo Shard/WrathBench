@@ -469,7 +469,7 @@ describe("recent_events movement fold", () => {
     expect(res.text).toContain("#4 SMSG_ATTACKERSTATEUPDATE");
     expect(res.text).not.toContain("SMSG_MONSTER_MOVE");
     expect(res.text).not.toContain("MSG_MOVE_HEARTBEAT");
-    expect(res.text).toContain("(+2 ambient movement events folded into state");
+    expect(res.text).toContain("(+2 ambient movement and party-frame events folded into state");
     expect(res.text).toContain("{includeMovement: true}");
   });
 
@@ -496,7 +496,7 @@ describe("recent_events movement fold", () => {
     expect(lines.slice(0, 3).every((l) => l.includes("SMSG_SPELL_GO"))).toBe(true);
     // The span starts at the oldest visible event (#21), so only the 6 ambient
     // events inside it are reported — not all 20 in the scanned buffer.
-    expect(lines[3]).toContain("(+6 ambient movement events folded into state");
+    expect(lines[3]).toContain("(+6 ambient movement and party-frame events folded into state");
   });
 
   test("transport progress is folded like the rest of the ambient motion", async () => {
@@ -508,14 +508,14 @@ describe("recent_events movement fold", () => {
     const res = await callTool(streamCtx(events), "recent_events", {});
     expect(res.text).toContain("#2 SMSG_MESSAGECHAT");
     expect(res.text).not.toContain("WB_TRANSPORT_PROGRESS");
-    expect(res.text).toContain("(+2 ambient movement events folded into state");
+    expect(res.text).toContain("(+2 ambient movement and party-frame events folded into state");
   });
 
   test("an all-movement stream says so instead of claiming no events", async () => {
     const events = Array.from({ length: 5 }, (_, i) => ev(i, "SMSG_MONSTER_MOVE"));
     const res = await callTool(streamCtx(events), "recent_events", {});
-    expect(res.text).toContain("no non-movement events yet");
-    expect(res.text).toContain("(+5 ambient movement events folded into state");
+    expect(res.text).toContain("no non-ambient events yet");
+    expect(res.text).toContain("(+5 ambient movement and party-frame events folded into state");
   });
 
   test('includeMovement coerces "true"/"false" by value, not JS truthiness', async () => {
@@ -524,7 +524,7 @@ describe("recent_events movement fold", () => {
     expect(on.text).toContain("SMSG_MONSTER_MOVE");
     const off = await callTool(streamCtx(events), "recent_events", { includeMovement: "false" });
     expect(off.text).not.toContain("#1 SMSG_MONSTER_MOVE");
-    expect(off.text).toContain("no non-movement events yet");
+    expect(off.text).toContain("no non-ambient events yet");
     // snake_case is normalized like the other aliases
     const alias = await callTool(streamCtx(events), "recent_events", { include_movement: true });
     expect(alias.text).toContain("SMSG_MONSTER_MOVE");
