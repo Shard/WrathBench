@@ -1,0 +1,39 @@
+{
+  "id": "compact-window-claude",
+  "version": 2,
+  "question": "On claude-code with a 1M-context model, what does compacting at 100k, 200k or 300k instead of the CLI's own auto window change in the tokens replayed, the cost and the progress of six hours of play?",
+  "note": "The claude-code half of the compaction-window comparison (operator, 2026-10-11: auto stays the default on every driver, and one arm each for auto, 100k, 200k and 300k on one release image). All four arms run the release build harness-0.5-1587-g66cd7749, pinned by digest, so only the window separates them. The control passes no window and runs the CLI's auto, which on a 1M-context model compacts near 967k in the pinned 2.1.293; each treatment passes --compact-window, which the CLI compacts about 33k below (its 20k summary reserve and 13k buffer), so near 67k, 167k and 267k. All three are under the model's context window, so none is capped (claudeWindowCapRefusal); 1M would be, and is not an arm. The clock is e360's six hours, not e90's ninety minutes, because a window changes nothing until the context has grown past it and most e90 runs never reach 300k; the auto arm is then an e360-length run under a probe's stamp, readable against the entry's own e360 history. The leash is e360's (idle 20 minutes, the no-XP watchdog off, the 12000-call guard), and the stop is the to-level-10 campaigns' level 10, which six hours seldom reaches (the entry's own e360 ended at level 8): most runs play the whole clock, and one that gets there gives a time to level 10. resume is false: a resumed claude-code run starts a fresh CLI with none of its history, a compaction to nothing that no window chose, so a paused run is a spent attempt and the next starts fresh. One cell, the subscription lanes' calibration start. The codex half is compact-window-codex@2, a campaign of its own because its 300k arm would be refused and a campaign's row bills one lane. Assignments are the store row's: sub-sonnet-55 (Claude Sonnet 5.5 on claude-code), one run per square (operator, 2026-10-20). Version 2 supersedes compact-window-claude@1, which was never started: its arms pinned harness-0.5-1345-gd1816724, a build long behind the deployed release by the time the campaign could run. Version 2 changes only the arms' image, to the release build deployed when it was written, whose claude-code is still the pinned 2.1.293 the window figures above were read from; the question, the arms, the cell, the leash and the stop are version 1's.",
+  "cells": [{ "id": "dwarf-paladin", "race": 3, "class": 2, "note": "The subscription lanes' scored start: the calibration cell." }],
+  "arms": [
+    {
+      "id": "auto",
+      "note": "The control: no window passed, the CLI's own auto.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:harness-0.5-1587-g66cd7749@sha256:5b6712245b3b21f36e176fd9cfe611862e94f1330b3f2775dd3940e84bd1856f"
+    },
+    {
+      "id": "100k",
+      "note": "CLAUDE_CODE_AUTO_COMPACT_WINDOW=100k: compacts near 67k.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:harness-0.5-1587-g66cd7749@sha256:5b6712245b3b21f36e176fd9cfe611862e94f1330b3f2775dd3940e84bd1856f",
+      "args": ["--compact-window", "100k"]
+    },
+    {
+      "id": "200k",
+      "note": "CLAUDE_CODE_AUTO_COMPACT_WINDOW=200k: compacts near 167k.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:harness-0.5-1587-g66cd7749@sha256:5b6712245b3b21f36e176fd9cfe611862e94f1330b3f2775dd3940e84bd1856f",
+      "args": ["--compact-window", "200k"]
+    },
+    {
+      "id": "300k",
+      "note": "CLAUDE_CODE_AUTO_COMPACT_WINDOW=300k: compacts near 267k.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:harness-0.5-1587-g66cd7749@sha256:5b6712245b3b21f36e176fd9cfe611862e94f1330b3f2775dd3940e84bd1856f",
+      "args": ["--compact-window", "300k"]
+    }
+  ],
+  "objective": null,
+  "stopAtLevel": 10,
+  "budget": { "episodeMs": 21600000, "idleMs": 1200000, "noXpMs": null, "maxToolCalls": 12000 },
+  "wiki": true,
+  "wikiCoords": false,
+  "resume": false,
+  "maxAttemptsPerCell": 3
+}
