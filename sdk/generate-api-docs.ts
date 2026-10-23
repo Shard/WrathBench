@@ -325,6 +325,7 @@ const STATE_INTERNAL = new Set([
   "evictOnMapChange",
   "foldMap",
   "forget",
+  "forgetAllNearby",
   "forgetQuestGiverMarkers",
   "redateQuestGiverMarkerInputs",
   "isSelfGuid",

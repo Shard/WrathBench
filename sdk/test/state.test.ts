@@ -3428,3 +3428,89 @@ describe("a corpse's owner", () => {
     expect(cache.nearby.get(CORPSE_GUID)?.ownerGuid).toBeUndefined();
   });
 });
+
+// ------------------------------------------------------- reattach replay
+//
+// A subscribe to a character already in world answers with WB_SESSION_STATE
+// and, when it says `replay: true`, the login-shaped burst a connected client
+// holds (module/PROTOCOL.md, "/events"), closed by WB_REPLAY_DONE.
+
+describe("the reattach replay", () => {
+  const sessionState = (seq: number, extra: Record<string, unknown> = {}) => ({
+    seq,
+    opcode: "WB_SESSION_STATE",
+    opcodeId: 0xff03,
+    ts: 1_700_000_001_000 + seq,
+    data: {
+      character: "Fenwick",
+      guid: SELF_GUID,
+      inWorld: true,
+      map: 0,
+      x: -1234.5,
+      y: 987.25,
+      z: 42.125,
+      o: 3.5,
+      level: 3,
+      ...extra,
+    },
+  });
+  const replayDone = (seq: number, objects: number) => ({
+    seq,
+    opcode: "WB_REPLAY_DONE",
+    opcodeId: 0xff0b,
+    ts: 1_700_000_001_000 + seq,
+    data: { objects },
+  });
+  const ownItem = {
+    seq: 50,
+    opcode: "SMSG_UPDATE_OBJECT",
+    opcodeId: 0x0a9,
+    ts: 1_700_000_000_500,
+    data: {
+      blocks: 1,
+      objects: [{ update: "create", guid: "4096", objectType: "item", fields: { entry: 6948, stackCount: 1 } }],
+    },
+  };
+
+  test("a replaying WB_SESSION_STATE drops the whole view, own items included; the burst restates it", () => {
+    const cache = StateCache.replay(
+      toEvents([...loginSequence, selfCreate, creatureCreate, ownItem, sessionState(60, { replay: true })]),
+      { seed: SEED },
+    );
+    expect(cache.nearby.size).toBe(0);
+    // Self is kept for the create block that follows to restate.
+    expect(cache.self.fields.get("health")?.value).toBe(80);
+    expect(cache.self.position?.value.x).toBeCloseTo(-1234.5);
+
+    const burst = [{ ...selfCreate, seq: 61 }, { ...creatureCreate, seq: 62 }, replayDone(63, 1)];
+    const whole = StateCache.replay(
+      toEvents([...loginSequence, selfCreate, creatureCreate, ownItem, sessionState(60, { replay: true }), ...burst]),
+      { seed: SEED },
+    );
+    expect([...whole.nearby.keys()]).toEqual([CREATURE_GUID]);
+    expect(whole.self.fields.get("health")?.value).toBe(80);
+    expect(whole.anomalies).toHaveLength(0);
+  });
+
+  test("a plain WB_SESSION_STATE (a same-token createSession) keeps the view, as before", () => {
+    const cache = StateCache.replay(toEvents([...loginSequence, selfCreate, creatureCreate, ownItem, sessionState(60)]), {
+      seed: SEED,
+    });
+    expect(cache.nearby.has(CREATURE_GUID)).toBe(true);
+    expect(cache.nearby.has("4096")).toBe(true);
+  });
+
+  test("WB_REPLAY_DONE parses and changes nothing", () => {
+    const cache = StateCache.replay(toEvents([...loginSequence, selfCreate, replayDone(70, 0)]), { seed: SEED });
+    expect(cache.self.fields.get("health")?.value).toBe(80);
+    expect(cache.anomalies).toHaveLength(0);
+  });
+
+  test("a repeated createSession's char-enum row does not put the login's level back over a later one", () => {
+    const cache = StateCache.replay(toEvents([...loginSequence, selfCreate, sessionState(60, { level: 9 })]), { seed: SEED });
+    expect(cache.self.level?.value).toBe(9);
+    // `createSession` seeds self again from its response; the char enum still says level 3.
+    cache.seedSelf({ guid: SELF_GUID, name: "Fenwick" });
+    expect(cache.self.level?.value).toBe(9);
+  });
+});

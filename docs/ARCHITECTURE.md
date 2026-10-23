@@ -64,9 +64,10 @@ asked for `order: "oldest"`, optionally filtered to a level range or a zone
 (`formatPage` in `runner/src/episodic.ts`); the window closes when
 the rest visit or flight it was granted in ends (`left_rest` or `landed`), on
 a circuit breaker, or at the end of the run, and every transition is a
-`reflect_window` record. After a sandbox restart the state cache is rebuilt,
-so both flags are unobserved until the next update block carries
-`playerFlags` and `unitFlags`, and the gate holds the last reading of each
+`reflect_window` record. After a sandbox restart the state cache is rebuilt
+from the module's reattach replay (module/PROTOCOL.md, "/events"), whose own
+create block carries both flags; until it lands they are unobserved, and the
+gate holds the last reading of each
 rather than reading silence as "not resting" or "not flying" — the same latch
 discipline the ghost flag has.
 

@@ -273,7 +273,9 @@ episode (enforced by the fleet's duplicate-account guard and the roster's
 account-busy guard), so any session found holding the account at create time is
 stale, and reclaiming it is correct, not a race:
 - Same token, already in world for the **same** account+character: returns
-  success idempotently (the caller re-syncs state from the event stream); it does
+  success idempotently and emits one `WB_SESSION_STATE` without `replay` (the
+  caller's socket got the reattach replay when it subscribed; "/events"
+  below); it does
   not tear down and rebuild. A same-token session mid-login is `token_in_use`; a
   same-token session in world for a **different** character/account is torn down
   and rebuilt (never a silent wrong-character success).
@@ -787,17 +789,57 @@ Delivery guarantees:
   have its events delivered to that subscriber. Events emitted concurrently
   with the handshake itself may or may not be seen; open the event stream
   before `POST /session` (as the probes do) and this window is irrelevant.
-- Reattach state: when a WebSocket subscribes to a token whose
-  session is already in world, the module emits one synthetic
-  `WB_SESSION_STATE` event (shape below) so a reconnecting consumer regains the
-  self state it would otherwise only have gotten from the long-gone
-  `SMSG_LOGIN_VERIFY_WORLD`. Player state is read on the world thread, so the
-  event is delivered asynchronously shortly after the subscribe — effectively
-  the first frame, though events emitted concurrently with the attach may
-  precede it. It takes the next `seq` and fans out to every subscriber of the
-  token like any event (so `seq` stays gapless for subscribers that never
-  disconnected; they can ignore the extra state event). A subscribe during
-  login emits nothing — the real `SMSG_LOGIN_VERIFY_WORLD` follows anyway.
+- Reattach: when a WebSocket subscribes to a token whose session is already
+  in world, the module emits one synthetic `WB_SESSION_STATE` event (shape
+  below) with `"replay": true`, and then replays what a connected client
+  holds, closed by one `WB_REPLAY_DONE`. Player state is read on the world
+  thread, so all of it is delivered asynchronously shortly after the
+  subscribe — effectively the first frames, though events emitted
+  concurrently with the attach may precede them. Each takes the next `seq`
+  and fans out to every subscriber of the token like any event (so `seq`
+  stays gapless for subscribers that never disconnected; they can ignore the
+  extra frames, or fold them, which changes nothing they hold). A subscribe
+  during login emits nothing — the real login follows anyway.
+
+  The replay is automatic, not asked for, because a subscribe to a character
+  already in world is precisely a client whose connection just came up — a
+  restarted sandbox child, a resumed run, a reopened socket — and holds
+  nothing; before it, such a consumer got the state frame alone and played
+  with an empty bag, no quest log, no health, no spellbook and no race until
+  something changed each of them. A same-token `POST /session` on a session
+  in world still answers with the state frame alone (its socket subscribed
+  first and got the replay then; a second burst would only crowd a consumer's
+  event window).
+
+  What is replayed, in the order the login sends it and built by the same
+  core functions (`Map::SendInitTransports`, `Map::SendInitSelf`, the
+  senders of `Player::SendInitialPacketsBeforeAddToMap`, and the create
+  builder a visibility pass runs for each object entering view): the
+  transports on the map; the character's own create block (`"self": true`,
+  every non-zero update field — race, class, health, power, xp, money, the
+  inventory and bag slots, the quest log, skills, flags) preceded by a create
+  block for every item and bag it carries, then its own `SMSG_AURA_UPDATE_ALL`;
+  `SMSG_BINDPOINTUPDATE`, `SMSG_TALENTS_INFO`, `SMSG_INITIAL_SPELLS` (with its
+  cooldowns), `SMSG_INITIALIZE_FACTIONS`, `SMSG_ALL_ACHIEVEMENT_DATA`, and
+  `SMSG_PET_SPELLS` when a pet is out; then one `SMSG_UPDATE_OBJECT` with a
+  create block for every object in the character's visibility set, followed
+  by each unit's `SMSG_AURA_UPDATE_ALL` and, for a unit swinging at
+  something, its `SMSG_ATTACKSTART`; then `WB_REPLAY_DONE` with the count of
+  objects restated. `WB_AREA` and `WB_PORTALS` follow on their own ticks, as
+  they do after any reattach. Not replayed: the login's side effects (the
+  login visual, the zone update, the group and friend notices, the time
+  sync), so other players see nothing and no server state moves; and the
+  login packets whose opcode is not on the event whitelist (the action bar,
+  equipment sets, forced reactions, the social list, world states), which
+  the tap would drop. The visibility set is read, never cleared and rebuilt,
+  so it is the set the client had at that moment and the server's later
+  destroys and creates apply to it unchanged.
+
+  Observation-contract note (docs/CONTRACTS.md): every packet in the replay
+  is one the core sends a client at login, built by the core's own builders
+  from the state the client would hold for the life of its connection; the
+  module adds no field. A client that dials in again is handed all of it by
+  the login path, and the bench client's connection is its WebSocket.
 
 Every event frame:
 ```json
@@ -1036,7 +1078,8 @@ session's own identity). Their `opcodeId`s are outside the real opcode range.
 | `WB_SELF_MOVE` | 0xFF09 | `{ "opcode": "MSG_MOVE_FALL_LAND", "cause": "taxi_landing", "pos": { "x","y","z","o" }, "fromZ": <f> }` — a movement packet the module sent for the character outside any `move_to`, as a client's own physics would: today only the drop from a taxi flight's last spline point (`fromZ`) to the ground under it (`pos`), see "Taxi landing" below |
 | `WB_AREA` | 0xFF07 | `{ "mapId": <u32>, "mapName"?: <str>, "instanceType"?: <u32>, "zoneId": <u32>, "zoneName": <str>, "areaId": <u32>, "areaName": <str> }` — the zone and subzone the character is in, named as the client names them, and the map it is on with the client's `Map.dbc` name and `InstanceType` for it (0 the open world, 1 a party dungeon, 2 a raid, 3 a battleground, 4 an arena; both absent when the table has no row for the map, never a guessed 0); once when the character enters the world and once per change of either area id, of the map or of the instance, whatever moved it (walking, a teleport, a map transfer). A transfer always sends one, with the new map's `mapId` and `instanceType`, even when both area ids stay the same: the Deadmines portal does, the mine outside on map 0 and map 36 inside being zone and area 1581 alike. See "Zone and area" below. |
 | `WB_TALENT_TREE` | 0xFF08 | the class talent frame, the answer to the `talent_tree` action; shape under "Spellbook, cooldowns, talents" below |
-| `WB_SESSION_STATE` | 0xFF03 | `{ "character": <str>, "guid": <guid-string>, "inWorld": true, "map": <n>, "x": <f>, "y": <f>, "z": <f>, "o": <f>, "level": <n>, "mapName"?, "instanceType"?, "zoneId", "zoneName", "areaId", "areaName" }` — emitted once per WS subscribe to an already-in-world session (reattach semantics in the `/events` section above). Strictly client-visible facts: what `SMSG_LOGIN_VERIFY_WORLD` plus the session's own identity would carry, plus the same map and zone/area fields as `WB_AREA` so a reattached client starts where the stream cannot re-emit. |
+| `WB_SESSION_STATE` | 0xFF03 | `{ "character": <str>, "guid": <guid-string>, "inWorld": true, "map": <n>, "x": <f>, "y": <f>, "z": <f>, "o": <f>, "level": <n>, "mapName"?, "instanceType"?, "zoneId", "zoneName", "areaId", "areaName", "replay"?: true }` — emitted once per WS subscribe to an already-in-world session, with `replay: true` and the reattach replay after it, and once per same-token `POST /session` on such a session, without (reattach semantics in the `/events` section above). Strictly client-visible facts: what `SMSG_LOGIN_VERIFY_WORLD` plus the session's own identity would carry, plus the same map and zone/area fields as `WB_AREA` so a reattached client starts where the stream cannot re-emit. |
+| `WB_REPLAY_DONE` | 0xFF0B | `{ "objects": <u32> }` — closes the reattach replay a `WB_SESSION_STATE` with `replay: true` opened: how many objects in view were restated (the character and its items aside). No game state of its own; the mark a consumer waits on before reading what the replay filled. |
 
 `moveId` is a plain JSON number: it is a per-session counter that cannot exceed
 2^53, so it falls under the counter exemption to the u64-as-string rule stated
@@ -1774,6 +1817,10 @@ next day's, only ever forward, so a session reopened later under the same
 token appends to that day's file and a past day's file gets no further write.
 The retention pass rests on that: a past day's file is deletable once it is
 quiet for the window, whatever the server's start.
+
+The reattach replay ("/events", above) logs one `action` record,
+`op: "reattach_replay"` with the `objects` restated, after the replayed
+events themselves, which are audited like any other.
 
 The root acks (Roots, above) log one `action` record each, `op: "root_ack"`
 with the `opcode` sent, the echoed `counter`, the `pos` the ack carried and
