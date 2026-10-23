@@ -494,6 +494,8 @@ function resolveMoveTarget(target: unknown, state: StateCache, method: string): 
   // outside the mesh's poly-search box while the ground under it is walkable.
   // With `guid` the module resolves z to the ground at x,y first (PROTOCOL.md
   // move_to); the request still walks to x,y, never to wherever the guid is.
+  // Where the unit is now (along its spline, if it is moving), not where the
+  // spline ends: a mob chasing us has us as its destination.
   const obj = state.nearby.get(key);
   const seen = obj === undefined ? undefined : pointOf(obj)?.value;
   if (seen !== undefined) return { point: { x: seen.x, y: seen.y, z: seen.z }, guid: key };
@@ -1841,6 +1843,11 @@ function questgiverOutOfReach(state: StateCache, guid: GuidArg): number | undefi
   if (state.nearby.get(guidKey(guid))?.objectType?.value === "player") return undefined;
   const distance = distanceToUnit(state, guid);
   return distance !== undefined && distance > QUESTGIVER_REACH_CEILING ? Math.round(distance) : undefined;
+}
+
+/** Whether the state cache knows `guid` as a questgiver-type game object. */
+function isQuestGiverObject(state: StateCache, guid: string): boolean {
+  return state.units({ type: "gameObject" }).some((u) => u.guid === guid && u.goType === "questgiver");
 }
 
 /** The `too_far` hint every quest call gives, nothing having been sent. */
@@ -7490,6 +7497,10 @@ export class WrathClient {
         rearmWanted = true;
       });
 
+      // Where the target is now, along its spline when it is moving: never the
+      // spline's destination, which for a mob chasing us is ourselves — that
+      // read melee range as reached and skipped the approach, and faced us at
+      // our own position.
       const aimAt = (): Point3 | undefined => {
         const obj = this.state.nearby.get(key);
         return obj === undefined ? undefined : pointOf(obj)?.value;
@@ -8547,7 +8558,8 @@ export class WrathClient {
   }
 
   /**
-   * Send `quest_list` and return the offer the NPC answered with.
+   * Send `quest_list` (on a questgiver game object, `interact`, as a client
+   * does) and return the offer the questgiver answered with.
    *
    * The one place the answer shapes are reconciled, shared by
    * `questsAvailableFrom` and `acceptQuestFrom` so they can never drift:
@@ -8597,7 +8609,16 @@ export class WrathClient {
     // completion window for a quest already in it is a turn-in, not an offer.
     const inLogBefore = new Set(this.state.questLog.map((q) => q.questId));
     const npcKey = guidKey(npcGuid);
-    await this.questList(npcGuid);
+    // A questgiver game object (a wanted poster, a Candy Bucket) is asked
+    // the way a client asks it: a right-click on it is CMSG_GAMEOBJ_USE, and
+    // the questgiver case of GameObject::Use prepares and sends the same
+    // quest menu a creature's hello does, with the same three answer shapes.
+    // CMSG_QUESTGIVER_HELLO finds creatures only (GetNPCIfCanInteractWith),
+    // so the hello on an object was dropped and every such call timed out.
+    // Only the questgiver type is used: using any other object acts on it (a
+    // door opens, a trap fires), which no question about quests should do.
+    if (isQuestGiverObject(this.state, npcKey)) await this.action({ action: "interact", guid: npcKey });
+    else await this.questList(npcGuid);
     const menu = await this
       .waitEvent(
         (e) =>

@@ -256,6 +256,11 @@ function builder(queue: PartySignal[][], o: { drain?: boolean; watchdogs?: Watch
       clock += 60_000;
       await ctx.sampleState();
     },
+    /** A tick `ms` after the last: inside the `stateIntervalMs` gate when `ms` is under 60 s. */
+    sampleAfter: async (ms: number): Promise<void> => {
+      clock += ms;
+      await ctx.sampleState();
+    },
   };
 }
 
@@ -306,6 +311,27 @@ describe("the loop writes what the child latched", () => {
     await b.sample();
     expect(ours.check()).toEqual({ reason: "kill-target", detail: "entry 639 killed (killer party member 12)" });
     expect(readTrajectory(b.dir).find((r) => r.t === "milestone" && r["kind"] === "kill")).toMatchObject({ member: true, entry: 639 });
+  });
+
+  test("a kill latched mid-row is written and read by the end check at the next tick, not the next state row", async () => {
+    // deadmines@4: the VanCleef packet reached every member at once, but the
+    // kill was written on each member's own 60 s row phase, so the members
+    // ended up to 22 s apart and the last after the roster had stopped it.
+    const config = loadRunConfig({ driver: "stub" });
+    const watchdogs = new Watchdogs(config.watchdogs, Date.now, 0, { end: [{ kill: { entry: 639 } }] });
+    const vancleef: PartySignal = { kind: "kill", killerGuid: "12", victimGuid: "17379390972743385188", entry: 639, rank: 1, self: false, member: true, ts: 5_100, seq: 51 };
+    const { dir, sample, sampleAfter } = builder([[joinedSignal(4000)], [vancleef]], { watchdogs });
+    await sample(); // a state row, and the login group list
+    expect(watchdogs.check()).toBeNull();
+    await sampleAfter(5_000); // one tick later, well inside the row gate
+    expect(watchdogs.check()).toEqual({ reason: "kill-target", detail: "entry 639 killed (killer party member 12)" });
+    const records = readTrajectory(dir);
+    // The record is the one a row-cadence drain wrote: same shape, the packet's own instant.
+    expect(records.filter((r) => r.t === "milestone" && r["kind"] === "kill")).toEqual([
+      expect.objectContaining({ killerGuid: "12", victimGuid: "17379390972743385188", entry: 639, rank: 1, self: false, member: true, observedTs: 5_100 }),
+    ]);
+    // ...and the row cadence itself did not move: still the one state row.
+    expect(records.filter((r) => r.t === "state")).toHaveLength(1);
   });
 
   test("a sandbox without the drain writes no party record", async () => {

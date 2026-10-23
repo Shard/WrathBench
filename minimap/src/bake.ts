@@ -10,7 +10,7 @@
  * 2^z x 2^z ADTs, box-filtered from the level below. Only tiles with content
  * are written, and an existing one is skipped unless `--force`.
  *
- *   bun minimap/src/bake.ts [--map 0,1,36,369,530,571] [--force] [--out <tile root>]
+ *   bun minimap/src/bake.ts [--map 0,1,36,...] [--force] [--out <tile root>]
  *
  * `--out` is the tile root it both reads and writes (default `data/minimap`,
  * the tree `extract.ts --out` names). With no `--map`, every map directory

@@ -1,8 +1,9 @@
 /**
  * The party records' producer (docs/proposals/GROUP-PLAY.md §6): `group`,
  * `instance` and `kill` transitions, latched in the sandbox child as the
- * events that carry them arrive, for the host's state sample to drain and
- * write as milestones — the way deaths and flights are (`ipc.ts`,
+ * events that carry them arrive, for the host's state ticker to drain on
+ * every tick (not at the row cadence: a kill is what a campaign's kill end
+ * reads) and write as milestones — the way deaths and flights are (`ipc.ts`,
  * `DeathSignal`), and for the same reason: a 60s sample misses what happened
  * between two samples, and a reading off a state sample (a map id, say) is
  * not the server telling the client anything.

@@ -1209,15 +1209,25 @@ describe("mapName", () => {
     expect(mapName(571)).toBe("Northrend");
   });
 
-  test("an instance with tiles and traffic of its own is named too", () => {
+  test("an instance with tiles of its own is named too", () => {
     expect(mapName(369)).toBe("Deeprun Tram");
     expect(mapName(36)).toBe("The Deadmines");
+    // Dungeons and raids from every era, multi-part names whole.
+    expect(mapName(33)).toBe("Shadowfang Keep");
+    expect(mapName(230)).toBe("Blackrock Depths");
+    expect(mapName(540)).toBe("Hellfire Citadel: The Shattered Halls");
+    expect(mapName(619)).toBe("Ahn'kahet: The Old Kingdom");
+    expect(mapName(533)).toBe("Naxxramas");
+    expect(mapName(631)).toBe("Icecrown Citadel");
   });
 
   test("anything else keeps its number rather than being guessed at", () => {
-    // An instance, a battleground, a map the tooling has never seen: a wrong
-    // name would be worse than the id, which is at least the server's answer.
-    expect(mapName(33)).toBe("map 33");
+    // A battleground, an instance the client draws no minimap for, a map
+    // Map.dbc marks unused, a map the tooling has never seen: a wrong name
+    // would be worse than the id, which is at least the server's answer.
+    expect(mapName(30)).toBe("map 30");
+    expect(mapName(650)).toBe("map 650");
+    expect(mapName(44)).toBe("map 44");
     expect(mapName(-1)).toBe("map -1");
   });
 });

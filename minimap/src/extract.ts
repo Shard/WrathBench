@@ -7,8 +7,12 @@
  * tiles and writes `data/minimap/<mapId>/<tileRow>_<tileCol>.png` (256x256
  * RGBA). Idempotent: existing tiles are skipped unless `--force`.
  *
- *   bun run minimap/src/extract.ts [--map 0,1,36,369,530,571] [--force] [--limit N]
+ *   bun run minimap/src/extract.ts [--map 0,1,36,...] [--force] [--limit N]
  *                                  [--data <dir>] [--out <tile root>] [--client <client Data dir>]
+ *
+ * Without `--map` it extracts every map in `TILED_MAPS`
+ * (`runner/viewer/worldmap.ts`): the continents, the tram and every dungeon
+ * and raid with a minimap, the same table the dashboard names maps from.
  *
  * `--data` is the data directory the other inputs default under (`data/`):
  * the archives in `<data>/client-source/Data`, Map.dbc in `<data>/client/dbc`
@@ -18,7 +22,7 @@
 
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { TILE_PX as WORLD_TILE_PX, GRID, worldToPixel } from "../../runner/viewer/worldmap";
+import { TILE_PX as WORLD_TILE_PX, GRID, tiledMapIds, worldToPixel } from "../../runner/viewer/worldmap";
 import { MpqChain } from "./mpq";
 import { decodeBlp } from "./blp";
 import { encodePng } from "./png";
@@ -50,7 +54,13 @@ export const ARCHIVE_ORDER = [
 ];
 
 const TILE_PX = 256;
-const DEFAULT_MAPS = [0, 1, 36, 369, 530, 571];
+/**
+ * Every map with tiles. The instances are part of it, not a list baked on
+ * demand: together they are about 1,430 small tiles and half a minute of a fresh
+ * extract, and a default that is the whole shipped set is the only way a
+ * fresh `extract` reproduces what is served.
+ */
+export const DEFAULT_MAPS: readonly number[] = tiledMapIds();
 const TRS_PATH = "textures\\Minimap\\md5translate.trs";
 
 interface Options {
@@ -68,7 +78,7 @@ function parseArgs(argv: string[]): Options {
   let out: string | null = null;
   let client: string | null = null;
   const opts = {
-    maps: DEFAULT_MAPS,
+    maps: [...DEFAULT_MAPS],
     force: false,
     limit: Number.POSITIVE_INFINITY,
   };

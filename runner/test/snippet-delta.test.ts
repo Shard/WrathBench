@@ -45,7 +45,6 @@ const ROGUE = "23";
 function world() {
   const w = {
     level: 19 as number | undefined,
-    zone: "The Deadmines" as string | undefined,
     members: [] as GroupMemberLike[],
     units: new Map<string, UnitLike>(),
     quests: [] as { questId: number; complete: boolean; title?: string }[],
@@ -58,7 +57,6 @@ function world() {
   const state: SnippetDeltaState = {
     selfGuid: () => ME,
     level: () => w.level,
-    zoneName: () => w.zone,
     group: () => ({ inGroup: true, members: w.members }),
     memberUnit: (guid) => w.units.get(guid),
     questLog: () => w.quests,
@@ -172,19 +170,90 @@ describe("the snippet delta recorder and its block", () => {
 
   test("a member leaving view for the instance is told by its fresh party frame, never by a stale one", () => {
     const t = seededParty();
-    // Everyone steps out to Westfall together, in view.
-    t.w.zone = "Westfall";
-    t.feed();
-    expect(renderSnippetDelta(t.rec.drain())).toContain("Roguepartye: now in Westfall");
     // The SDK still holds a party frame from long before the rogue came into view.
     const staleSeq = 0;
     t.w.units.delete(ROGUE);
     t.w.members[2] = { ...t.w.members[2]!, stats: { online: true, dead: true, health: 0, maxHealth: 900, zone: { name: "Elwynn Forest" }, seq: staleSeq } };
     t.feed();
     expect(renderSnippetDelta(t.rec.drain())).toBeUndefined();
+    // Its first fresh frame is where it is, not a change.
+    t.w.members[2] = { ...t.w.members[2]!, stats: { online: true, dead: false, health: 900, maxHealth: 900, zone: { name: "Westfall" }, seq: t.nextSeq() } };
+    t.feed("SMSG_PARTY_MEMBER_STATS", {});
+    expect(renderSnippetDelta(t.rec.drain())).toBeUndefined();
     t.w.members[2] = { ...t.w.members[2]!, stats: { online: true, dead: false, health: 900, maxHealth: 900, zone: { name: "The Deadmines" }, seq: t.nextSeq() } };
     t.feed("SMSG_PARTY_MEMBER_STATS", {});
     expect(renderSnippetDelta(t.rec.drain())).toBe(`${SNIPPET_DELTA_HEADER}\nRoguepartye: now in The Deadmines`);
+  });
+
+  test("a member drifting in and out of view at a portal is not moving: only its death, release and rez are told", () => {
+    // Our ghost runs back across Westfall while the healer, dead and then a
+    // ghost, sits on the far side of the zone line and drifts in and out of
+    // view. Out of view its own party frame names The Deadmines; in view the
+    // SDK keeps that frame, as old as the last packet, and the unit is read.
+    const t = seededParty();
+    const frame = (st: { dead?: boolean; ghost?: boolean; health: number }, zone = "The Deadmines") => {
+      t.w.members[1] = { ...t.w.members[1]!, stats: { online: true, maxHealth: 800, zone: { name: zone }, seq: t.nextSeq(), ...st } };
+      t.feed("SMSG_PARTY_MEMBER_STATS", {});
+    };
+    const inView = (u: UnitLike) => {
+      t.w.units.set(HEAL, u);
+      t.feed();
+    };
+    const outOfView = (st: { dead?: boolean; ghost?: boolean; health: number }, zone?: string) => {
+      t.w.units.delete(HEAL);
+      frame(st, zone);
+    };
+    for (let i = 0; i < 4; i++) {
+      outOfView({ dead: false, ghost: false, health: 800 });
+      inView(unit(800, 800));
+    }
+    inView(unit(0, 800));
+    for (let i = 0; i < 6; i++) {
+      outOfView({ dead: true, ghost: false, health: 0 });
+      inView(unit(0, 800));
+    }
+    inView(unit(1, 800, true));
+    for (let i = 0; i < 6; i++) {
+      outOfView({ dead: false, ghost: true, health: 1 });
+      inView(unit(1, 800, true));
+    }
+    inView(unit(400, 800));
+    for (let i = 0; i < 4; i++) {
+      outOfView({ dead: false, ghost: false, health: 400 });
+      inView(unit(400, 800));
+    }
+    expect(renderSnippetDelta(t.rec.drain())).toBe(`${SNIPPET_DELTA_HEADER}\nHealpartyc: died, released, alive again (now 50%)`);
+  });
+
+  test("a member's genuine zone change in that drift is told once, beside its other news", () => {
+    const t = seededParty();
+    const outOfView = (st: { dead?: boolean; ghost?: boolean; health: number }, zone: string) => {
+      t.w.units.delete(HEAL);
+      t.w.members[1] = { ...t.w.members[1]!, stats: { online: true, maxHealth: 800, zone: { name: zone }, seq: t.nextSeq(), ...st } };
+      t.feed("SMSG_PARTY_MEMBER_STATS", {});
+    };
+    const inView = (u: UnitLike) => {
+      t.w.units.set(HEAL, u);
+      t.feed();
+    };
+    outOfView({ dead: false, ghost: false, health: 800 }, "The Deadmines");
+    inView(unit(0, 800));
+    for (let i = 0; i < 3; i++) {
+      outOfView({ dead: true, health: 0 }, "The Deadmines");
+      inView(unit(0, 800));
+    }
+    inView(unit(1, 800, true));
+    // It walks out through the portal, a ghost, and its frame says so.
+    for (let i = 0; i < 3; i++) {
+      outOfView({ dead: false, ghost: true, health: 1 }, "Westfall");
+      inView(unit(1, 800, true));
+    }
+    inView(unit(400, 800));
+    outOfView({ dead: false, ghost: false, health: 400 }, "Westfall");
+    inView(unit(400, 800));
+    expect(renderSnippetDelta(t.rec.drain())).toBe(
+      `${SNIPPET_DELTA_HEADER}\nHealpartyc: died, released, now in Westfall, alive again (now 50%)`,
+    );
   });
 
   test("offline, and leaving the group, are transitions too", () => {
@@ -254,7 +323,6 @@ describe("the snippet delta recorder and its block", () => {
     const fresh = new SnippetDeltaRecorder({
       selfGuid: () => ME,
       level: () => t.w.level,
-      zoneName: () => undefined,
       group: () => undefined,
       memberUnit: () => undefined,
       questLog: () => t.w.quests,

@@ -172,6 +172,102 @@ describe("shared fate", () => {
     expect(d.writes).toEqual(["healer", "mage", "rogue", "paladin"].map((m) => `${m} end level-target (tank: level-target)`));
   });
 
+  describe("asked to follow the first member's end rather than signalled", () => {
+    /** `requestEnd` wired: each request is logged, and a member in `honours` ends on it the way its runner would. */
+    function asking(members: FakeMember[], honours: ReadonlySet<string>, endGraceMs = 60_000) {
+      const requests: string[] = [];
+      const d = deps(members, {
+        endGraceMs,
+        requestEnd: (m, reason, detail) => {
+          requests.push(`${m.member} ${reason} (${detail})`);
+          const f = members.find((x) => x.m.runId === m.runId)!;
+          if (honours.has(m.member)) queueMicrotask(() => f.exit({ kind: "terminated", reason, detail }));
+        },
+      });
+      return { d, requests };
+    }
+
+    test("a kill end on the first: the other four are asked to end on it, none is stopped, and each ends with the detail naming the first", async () => {
+      // deadmines@4: the mage was SIGTERMed as operator-pause and rewritten
+      // kill-target, so its CLI died without the result that carries cost.
+      const { members, runs } = fakeParty();
+      const { d, requests } = asking(members, new Set(["tank", "healer", "mage", "paladin"]));
+      const done = runParty(runs, d);
+      await tick();
+      members[3]!.exit({ kind: "terminated", reason: "kill-target", detail: "entry 639 killed (killer party member 980)" });
+      const out = await done;
+      expect(requests).toEqual(["tank", "healer", "mage", "paladin"].map((m) => `${m} kill-target (rogue: kill-target)`));
+      expect(members.every((f) => f.stops === 0)).toBe(true);
+      expect(out.fate).toBe("ended");
+      expect(out.trigger).toEqual({ member: "rogue", reason: "kill-target" });
+      // Every member's verdict is the party's, written by its own runner: the machine wrote nothing over it.
+      expect(d.writes).toEqual([]);
+      expect(out.written).toEqual(["tank", "healer", "mage", "paladin"].map((member) => ({ member, wrote: "kill-target", followed: true })));
+      for (const m of ["tank", "healer", "mage", "paladin"]) expect(out.verdicts[m]).toEqual({ kind: "terminated", reason: "kill-target", detail: "rogue: kill-target" });
+    });
+
+    test("a member that read the kill itself keeps its own detail, and is not listed as following", async () => {
+      const { members, runs } = fakeParty();
+      const { d } = asking(members, new Set(["tank", "healer", "mage", "paladin"]));
+      const done = runParty(runs, d);
+      await tick();
+      members[3]!.exit({ kind: "terminated", reason: "kill-target", detail: "entry 639 killed (killer this character)" });
+      members[4]!.exit({ kind: "terminated", reason: "kill-target", detail: "entry 639 killed (killer party member 980)" });
+      const out = await done;
+      expect(out.verdicts["paladin"]).toEqual({ kind: "terminated", reason: "kill-target", detail: "entry 639 killed (killer party member 980)" });
+      expect(out.written.map((w) => w.member)).toEqual(["tank", "healer", "mage"]);
+    });
+
+    test("a member that does not end on the request is stopped once the grace has passed, and ended by the machine as before", async () => {
+      const { members, runs } = fakeParty();
+      const { d } = asking(members, new Set(["tank", "healer", "paladin"]), 30);
+      const done = runParty(runs, d);
+      await tick();
+      members[0]!.exit({ kind: "terminated", reason: "level-target", detail: "level 21 observed (target 21)" });
+      const out = await done;
+      // The mage and the rogue ignored it (a harness that does not read the
+      // file, a fixed-loop turn still in flight): stopped, paused, then ended.
+      expect(members.map((f) => f.stops)).toEqual([0, 0, 1, 1, 0]);
+      expect(d.writes).toEqual(["mage", "rogue"].map((m) => `${m} end level-target (tank: level-target)`));
+      expect(out.written).toEqual([
+        { member: "healer", wrote: "level-target", followed: true },
+        { member: "mage", wrote: "level-target" },
+        { member: "rogue", wrote: "level-target" },
+        { member: "paladin", wrote: "level-target", followed: true },
+      ]);
+    });
+
+    test("a first verdict that cannot be read at its exit stops the rest as before rather than leaving them playing", async () => {
+      const { members, runs } = fakeParty();
+      const { d, requests } = asking(members, new Set(MEMBERS));
+      let reads = 0;
+      const read = d.verdict;
+      d.verdict = (m, exit) => {
+        if (reads++ === 0) throw new Error("run.sqlite busy");
+        return read(m, exit);
+      };
+      const done = runParty(runs, d);
+      await tick();
+      members[3]!.exit({ kind: "terminated", reason: "kill-target", detail: "entry 639 killed (killer this character)" });
+      await done;
+      expect(requests).toEqual([]);
+      expect(members.map((f) => f.stops)).toEqual([1, 1, 1, 0, 1]);
+      expect(d.writes).toEqual(["tank", "healer", "mage", "paladin"].map((m) => `${m} end kill-target (rogue: kill-target)`));
+    });
+
+    test("any other first exit is no end to follow: the others are stopped with the grace and ended party-ended, as before", async () => {
+      const { members, runs } = fakeParty();
+      const { d, requests } = asking(members, new Set(MEMBERS));
+      const done = runParty(runs, d);
+      await tick();
+      members[2]!.exit({ kind: "terminated", reason: "idle", detail: "no model output for 20m" });
+      await done;
+      expect(requests).toEqual([]);
+      expect(members.map((f) => f.stops)).toEqual([1, 1, 0, 1, 1]);
+      expect(d.writes).toEqual(["tank", "healer", "rogue", "paladin"].map((m) => `${m} end party-ended (mage: idle)`));
+    });
+  });
+
   test("one member's adapter-error ends the party, and the attempt is not counted", async () => {
     const { members, runs } = fakeParty();
     const d = deps(members);

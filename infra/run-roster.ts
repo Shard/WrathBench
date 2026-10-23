@@ -83,6 +83,7 @@ import {
 import { K8sClient } from "./k8s-client";
 import { harnessStampOf, IMAGE_RECORD_FILE, loadPodLauncher, parseImageRef } from "./run-pod";
 import { partyConfigOf, type PartyStamp } from "../runner/src/party";
+import { PARTY_END_GRACE_MS, writeEndRequest } from "../runner/src/end-request";
 import { runParty, type MemberVerdict, type PartyMemberRun } from "./party-fate";
 import { commandStager, STAGER_SCRIPT, type PartyStager, type StageRequest } from "./party-stager";
 
@@ -2279,6 +2280,16 @@ async function attemptParty(party: readonly Attempt[], opts: { deadline: number 
     },
     verdict: (m, exit) => classify(specOf(m), exit) as MemberVerdict,
     end: (m, reason, detail) => endMember(m.runId, reason as TerminationReason, detail),
+    // The party's end, written where the member's own runner looks for it
+    // (`runner/src/end-request.ts`): it ends through its own wind-down.
+    requestEnd: (m, reason, detail) => {
+      try {
+        writeEndRequest(runDir(m.runId), { reason, detail });
+      } catch (e) {
+        say(`party ${id}: could not ask ${m.member} (${m.runId}) to end — ${e instanceof Error ? e.message : String(e)}; it is stopped after the grace`);
+      }
+    },
+    endGraceMs: PARTY_END_GRACE_MS,
     repause: (m, detail) => repauseMember(m.runId, detail),
     launchFailed: (m, detail) => {
       const spec = specOf(m);
