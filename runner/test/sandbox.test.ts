@@ -172,6 +172,26 @@ describe("sandbox evaluation", () => {
     expect(after.value).toBe(JSON.stringify("undefined"));
   }, 15_000);
 
+  test("a background loop over an SDK refusal that sends nothing does not starve the sandbox", async () => {
+    // A party run's fight loop awaited `sdk.killTarget` forever; once the
+    // character died every call was refused locally, the loop only ever
+    // yielded to microtasks, the next snippet and the host's ping were never
+    // read, and the sandbox was killed as blocked. An unknown name is the same
+    // locally answered refusal on a client that never connected.
+    const host = makeHost({ snippetTimeoutMs: 1_000, pingGraceMs: 500 });
+    const started = await host.evalSnippet(
+      "globalThis.spins = 0;" +
+        " globalThis.spin = (async () => { for (;;) { const r = await sdk.moveTo('Nobody By This Name'); if (r.status !== 'unknown_target') return r.status; spins++; } })().catch(String);" +
+        " 'started'",
+    );
+    expect(started.ok).toBe(true);
+    const next = await host.evalSnippet("await sleep(20); return [spins > 0, await Promise.race([spin, 'running'])];");
+    expect(next.ok).toBe(true);
+    expect(next.restarted).toBeUndefined();
+    expect(next.value).toBe('[ true, "running" ]');
+    expect(host.totalRestarts).toBe(0);
+  }, 15_000);
+
   test("child dying mid-snippet surfaces state loss and a notice (gate2-ox-3 bug)", async () => {
     const host = makeHost();
     await host.evalSnippet("let precious = 'state';");
