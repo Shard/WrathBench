@@ -442,6 +442,28 @@ export interface RunMeta {
    * projection carries it. Absent on every run that never saw one.
    */
   subscriptionUsage?: SubscriptionUsage;
+  /**
+   * Every subscription lane move the operator made on this run
+   * (`runner/src/move-lane.ts`), oldest first: the lane it left, the lane it
+   * went to, when, who, and why. `config.subscription` says which lane the
+   * run bills now; this says how it got there, because a run's lane is
+   * otherwise read as the lane it started on. Top level and not in `config`,
+   * so a resume never reads it as launch config. Operator-only like
+   * `subscriptionUsage`: no public projection carries it.
+   */
+  laneHistory?: LaneMove[];
+}
+
+/** One operator move of a run's subscription lane (`RunMeta.laneHistory`). */
+export interface LaneMove {
+  /** The lane variable NAME it billed before. */
+  from: string;
+  /** The lane variable NAME it bills from now on. */
+  to: string;
+  /** Epoch ms. */
+  at: number;
+  actor: string;
+  note: string;
 }
 
 /** The provider's own answer to "what ran", promoted onto the run. */

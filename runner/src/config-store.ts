@@ -525,6 +525,24 @@ export class ConfigStore {
    */
   put(key: string, value: unknown, opts: PutOptions = {}): void {
     this.requireWritable();
+    this.refuseKey(key, value);
+    this.write(key, value, opts);
+  }
+
+  /**
+   * Whether `patch(key, partial)` would be accepted, without writing it: the
+   * same key rules and the same whole-config validation, throwing the same
+   * `ConfigRejected`. For a caller that must know a store write will succeed
+   * before it makes another, unrelated write first (`move-lane`, whose
+   * meta.json rewrite has to precede its roster pin).
+   */
+  checkPatch(key: string, partial: unknown): void {
+    const value = this.merged(key, partial);
+    this.refuseKey(key, value);
+    this.candidate(key, value);
+  }
+
+  private refuseKey(key: string, value: unknown): void {
     if (isPublishedKey(key)) {
       throw new ConfigRejected(
         `${key}: published campaign definitions are written once, only by runner/src/campaign-publish.ts, and never edited or deleted — a changed definition is a new version`,
@@ -537,7 +555,6 @@ export class ConfigStore {
       );
     }
     if (value !== undefined) refuseUnreadableCampaignRows(key === "campaigns" ? value : key.startsWith("campaigns/") ? { [key.slice("campaigns/".length)]: value } : undefined);
-    this.write(key, value, opts);
   }
 
   /**
@@ -564,7 +581,8 @@ export class ConfigStore {
     return { key, status: "published" };
   }
 
-  private write(key: string, value: unknown, opts: PutOptions): void {
+  /** Validate the config one row's write would leave, and return what the write needs. Writes nothing. */
+  private candidate(key: string, value: unknown): { rows: ConfigRow[]; before: ConfigRow | undefined; at: number } {
     const rows = this.rows();
     const at = Date.now();
     const before = rows.find((r) => r.key === key);
@@ -574,6 +592,11 @@ export class ConfigStore {
     }
     validateFleet(renderFleet(next), this.env);
     refuseKeyPairing(key, value, this.env);
+    return { rows, before, at };
+  }
+
+  private write(key: string, value: unknown, opts: PutOptions): void {
+    const { rows, before, at } = this.candidate(key, value);
     const tx = this.db.transaction(() => {
       if (value === undefined) {
         this.db.run("DELETE FROM config WHERE key = ?", [key]);
@@ -603,15 +626,19 @@ export class ConfigStore {
    * or a non-object document, is a create — there is nothing to merge into.
    */
   patch(key: string, partial: unknown, opts: PutOptions = {}): void {
+    this.put(key, this.merged(key, partial), opts);
+  }
+
+  /** What `patch` writes: the shallow merge, or `partial` itself when there is nothing to merge into. */
+  private merged(key: string, partial: unknown): unknown {
     const before = this.get(key);
     if (
       typeof before !== "object" || before === null || Array.isArray(before) ||
       typeof partial !== "object" || partial === null || Array.isArray(partial)
     ) {
-      this.put(key, partial, opts);
-      return;
+      return partial;
     }
-    this.put(key, { ...(before as Record<string, unknown>), ...(partial as Record<string, unknown>) }, opts);
+    return { ...(before as Record<string, unknown>), ...(partial as Record<string, unknown>) };
   }
 
   /**
@@ -818,10 +845,16 @@ const USAGE = `usage: bun runner/src/config-store.ts <command>
                             runner/src/campaign-publish.ts --k8s pipes in; campaign-defs/* is refused by
                             set, patch and delete, and seed writes none)
   audit [n]                 the last n changes (default 20)
+  move-lane <run-id> <ENV NAME> --note <why> [--pin]
+                            move a paused or ended run to another subscription lane: rewrite its meta.json's
+                            config.subscription and append to its laneHistory; with --pin, then pin its roster
+                            entry to the same lane. Refuses a live run, a lane policy.subscriptions does not
+                            list, and a driver whose lane is not a bare credential (runner/src/move-lane.ts)
 
-  --db <path>     the store (default $WRATHBENCH_CONFIG_DB, else $WRATHBENCH_DATA/config.sqlite)
-  --actor <name>  who to record the change as (default "cli")
-  --note <text>   why
+  --db <path>        the store (default $WRATHBENCH_CONFIG_DB, else $WRATHBENCH_DATA/config.sqlite)
+  --actor <name>     who to record the change as (default "cli")
+  --note <text>      why
+  --runs-dir <dir>   move-lane: the runs directory (default $WRATHBENCH_RUNS_DIR, else data/runs in the checkout)
 `;
 
 async function main(argv: string[]): Promise<number> {
@@ -843,6 +876,8 @@ async function main(argv: string[]): Promise<number> {
   const actor = flag("--actor") ?? "cli";
   const note = flag("--note");
   const force = has("--force");
+  const pin = has("--pin");
+  const runsDirFlag = flag("--runs-dir");
   const opts: PutOptions = { actor, ...(note !== undefined ? { note } : {}) };
   const cmd = args.shift();
   const dbPath = dbFlag ?? configDbPath();
@@ -923,6 +958,27 @@ async function main(argv: string[]): Promise<number> {
           const what = r.before === null ? "created" : r.after === null ? "deleted" : "changed";
           console.log(`${new Date(r.ts).toISOString()}  ${r.actor.padEnd(8)}  ${what.padEnd(7)}  ${r.key}${r.note === null ? "" : `  (${r.note})`}`);
         }
+        return 0;
+      }
+      case "move-lane": {
+        const [runId, to] = args;
+        if (runId === undefined || to === undefined || args.length > 2 || note === undefined) {
+          console.error(USAGE);
+          return 2;
+        }
+        const { moveLane } = await import("./move-lane");
+        const runsDir = runsDirFlag ?? (process.env["WRATHBENCH_RUNS_DIR"] || join(repoRoot, "data", "runs"));
+        const r = moveLane({ runsDir, runId, to, pin, actor, note, store });
+        console.error(
+          r.moved
+            ? `moved ${runId}: ${r.from} -> ${r.to} in its meta.json (laneHistory: ${r.history} move${r.history === 1 ? "" : "s"})`
+            : `${runId} already bills ${r.to}; only the pin was owed`,
+        );
+        if (r.pinned !== null) console.error(`pinned ${r.pinned} to ${r.to}`);
+        for (const w of r.warnings) console.error(`warning: ${w}`);
+        console.error(
+          `it resumes on ${r.to} the next time it is resumed${r.ref !== null ? `; if roster/${r.ref} was set to idle "none" to pause it, patch it back to "unlimited"` : ""}`,
+        );
         return 0;
       }
       default:

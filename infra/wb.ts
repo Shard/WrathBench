@@ -170,6 +170,13 @@ export const ENTRIES: readonly Entry[] = [
   { group: "config", command: "audit", takes: "[n]", summary: "the last n changes", ...inRunner("bun", CONFIG_STORE, "audit") },
   {
     group: "config",
+    command: "move-lane",
+    takes: "<run-id> <ENV NAME> --note <why> [--pin]",
+    summary: "move a paused or ended run to another subscription lane: its meta.json, then (--pin) its roster entry's pin",
+    ...inRunner("bun", CONFIG_STORE, "move-lane"),
+  },
+  {
+    group: "config",
     command: "export",
     takes: "[file]",
     summary: "the store as one document, to stdout (a file argument is a path in the runner)",

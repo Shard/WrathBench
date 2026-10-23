@@ -112,7 +112,11 @@ beyond the account count, and nothing below it has to learn anything at all.
     attempt is spent; the campaign counts it once (below). A termination on
     the definition's end (`level-target`, `kill-target`; docs/EPISODES.md,
     "Ends") ends the other four on that same reason instead, and the attempt
-    counts as reached.
+    counts as reached. Those four are not signalled: each runner is asked to
+    end on that reason itself (`end-request.json`, docs/ARCHITECTURE.md,
+    "the run contract"), so it winds down as its own end would and its
+    driver's closing result, with cost and tokens, is on the record. One still
+    running once a wind-down's grace has passed is stopped and ended as above.
   - a **pause** on one member (a provider refusal, `observation-stalled`,
     `infrastructure-failed`, the usage gate) → the other four are paused
     `party-paused` with the same detail. A paused party is resumable as a

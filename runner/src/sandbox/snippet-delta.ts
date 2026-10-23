@@ -76,8 +76,6 @@ export interface SnippetDelta {
 export interface SnippetDeltaState {
   selfGuid(): string | undefined;
   level(): number | undefined;
-  /** The zone the character is in, by name (`state.self.zone`). */
-  zoneName(): string | undefined;
   /** `state.group()`; undefined until any group packet. */
   group(): { inGroup: boolean; members: readonly GroupMemberLike[] } | undefined;
   /** A party member's unit while in view, as the party frame reads it. */
@@ -285,7 +283,15 @@ export class SnippetDeltaRecorder {
       const reading = fresh ? m : { ...m, stats: undefined };
       const state = memberState(reading, unit);
       const hp = state === "alive" ? (unit !== undefined ? hpPct(unit.health, unit.maxHealth) : hpPct(m.stats?.health, m.stats?.maxHealth)) : undefined;
-      const zoneRaw = unit !== undefined ? this.state.zoneName() : fresh ? m.stats?.zone?.name : undefined;
+      // The member's zone is the one its own party frame names, read out of
+      // view only, as the HUD's party line reads it. A member in view is not
+      // given ours: in view says nothing of which side of a zone line it
+      // stands on, and labelling it so made it flap between two sources as
+      // it drifted in and out of sight at a portal, though it never moved.
+      // The cached zone changes only when a packet carries a new one, so
+      // every change told is the member's own; one made in our sight waits
+      // for the next frame that carries it.
+      const zoneRaw = unit === undefined && fresh ? m.stats?.zone?.name : undefined;
       const zone = typeof zoneRaw === "string" && zoneRaw !== "" ? zoneRaw : undefined;
       const name = typeof m.name === "string" && m.name !== "" ? m.name : guid;
       if (t === undefined) {

@@ -89,6 +89,7 @@ import { Trajectory, readMeta, startHeartbeat, type PauseMark, type RunMeta } fr
 import { removeNearbyRing } from "./nearby";
 import { harnessVersion } from "./version";
 import { Watchdogs } from "./watchdogs";
+import { watchEndRequest } from "./end-request";
 import { className, raceName } from "../viewer/characters";
 
 /**
@@ -396,6 +397,8 @@ function lastStateIn(dir: string, runId: string): { level?: number; xp?: number 
 }
 
 async function main(): Promise<void> {
+  /** This process segment's start: an end request older than it is not this segment's (`end-request.ts`). */
+  const segmentStartedAt = Date.now();
   const rawArgs = Bun.argv.slice(2);
   let args: Record<string, string | boolean>;
   try {
@@ -1131,9 +1134,20 @@ async function main(): Promise<void> {
           } as const,
         ];
 
-  const outcome =
+  // A party's end, reached by another member first: the roster asks this run
+  // to follow it, and the watchdogs end it the way its own end would — the
+  // driver winds down and its closing result is recorded (`end-request.ts`).
+  const stopEndWatch = watchEndRequest({
+    runDir,
+    since: segmentStartedAt,
+    onRequest: (req) => {
+      console.error(`[wrathbench] party end requested: ${req.reason} (${req.detail}) — ending at the next watchdog check`);
+      watchdogs.noteEndRequest(req);
+    },
+  });
+  const outcome = await (
     driver.runEpisode !== undefined
-      ? await driver.runEpisode({
+      ? driver.runEpisode({
           config,
           runDir,
           sandbox,
@@ -1147,7 +1161,7 @@ async function main(): Promise<void> {
           signal: abort.signal,
           onObservationStalled,
         })
-      : await runLoop({
+      : runLoop({
           config,
           adapter: adapter!,
           sandbox,
@@ -1161,7 +1175,8 @@ async function main(): Promise<void> {
           signal: abort.signal,
           onObservationStalled,
           usage: goUsageGaugeFor(config, trajectory),
-        });
+        })
+  ).finally(stopEndWatch);
 
   if (outcome.kind === "paused") {
     /*

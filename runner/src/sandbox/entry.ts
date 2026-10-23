@@ -1701,7 +1701,6 @@ const snippetDelta = new SnippetDeltaRecorder({
     const v = client.state.self.level?.value;
     return typeof v === "number" ? v : undefined;
   },
-  zoneName: () => (client.state.self.zone?.value as { name?: string } | undefined)?.name,
   group: () => client.state.group(),
   memberUnit: (guid) => {
     const o = client.state.nearby.get(guid);

@@ -44,6 +44,7 @@ import {
   loginSequence,
   lootRelease,
   lootResponse,
+  monsterMove,
   moveProgress,
   moveResult,
   newWorld,
@@ -1706,6 +1707,18 @@ const questWorld = () =>
   frames([...loginSequence, selfCreate, creatureCreate, creatureQuery, selfArrived(20, { x: -1202, y: 980, z: 42 })]);
 const chestWorld = () => frames([...loginSequence, selfCreate, chestCreate]);
 
+/**
+ * The fixture creature launched just now on a spline toward `self` (a mob
+ * chasing us), over an hour: for a whole test it is still at its start, while
+ * the spline's destination is our own position.
+ */
+const chaseFrom = (start: { x: number; y: number; z: number }, self: { x: number; y: number; z: number }, seq: number) => ({
+  ...monsterMove,
+  seq,
+  ts: Date.now(),
+  data: { ...monsterMove.data, pos: start, destination: { x: self.x, y: self.y, z: self.z }, durationMs: 3_600_000 },
+});
+
 describe("client: killTarget", () => {
   test("targets, faces, swings, and settles when the target's health hits zero", async () => {
     const stub = startStub({ onConnect: () => combatWorld() });
@@ -1931,6 +1944,38 @@ describe("client: killTarget", () => {
     stub.push(JSON.stringify(moveResult("arrived", 1, 68)));
     const attackAt = await untilAction(stub, "attack_start", moveAt);
     expect(attackAt).toBeGreaterThan(moveAt);
+    stub.push(JSON.stringify(creatureHealth(0, 69)));
+    expect((await fight).ok).toBe(true);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a mob chasing us is approached and faced where it is, not at its destination (ourselves)", async () => {
+    // A chaser's spline ends on us, so aiming at the destination measured
+    // 0y, skipped the approach and faced our own feet.
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const self = client.state.self.position!.value;
+    const start = { x: -1200, y: 980, z: 42 };
+    stub.push(JSON.stringify(chaseFrom(start, self, 60)));
+    await Bun.sleep(20);
+    const fight = client.killTarget(CREATURE_GUID, {
+      timeout: 5000,
+      pollIntervalMs: 10,
+      reapproachIntervalMs: 60_000,
+      meleeRange: 5,
+    });
+    const moveAt = await untilAction(stub, "move_to");
+    const walk = stub.actions[moveAt] as unknown as { x: number; y: number };
+    expect(Math.hypot(walk.x - start.x, walk.y - start.y)).toBeLessThan(0.5);
+    stub.push(JSON.stringify(moveResult("arrived", 1, 68)));
+    const attackAt = await untilAction(stub, "attack_start", moveAt);
+    const faced = stub.actions.slice(moveAt, attackAt).filter((a) => a.action === "face") as unknown as {
+      x: number;
+      y: number;
+    }[];
+    expect(faced.length).toBeGreaterThan(0);
+    for (const f of faced) expect(Math.hypot(f.x - start.x, f.y - start.y)).toBeLessThan(0.5);
     stub.push(JSON.stringify(creatureHealth(0, 69)));
     expect((await fight).ok).toBe(true);
     client.close();
@@ -3005,6 +3050,118 @@ describe("client: questsAvailableFrom", () => {
     await expect(
       client.questsAvailableFrom(CREATURE_GUID, { timeout: 40 }),
     ).rejects.toBeInstanceOf(EventTimeoutError);
+    client.close();
+    await stub.stop();
+  });
+});
+
+describe("client: a questgiver game object", () => {
+  // CMSG_QUESTGIVER_HELLO resolves creatures only, so the core drops it on a
+  // game object's guid; a client asks a questgiver object (a wanted poster, a
+  // Candy Bucket) by using it, CMSG_GAMEOBJ_USE, whose questgiver case sends
+  // the same quest menu. Live, on 2026-10-18, a Candy Bucket 1.5y away
+  // marked `available` timed out on questsAvailableFrom.
+  const QUEST_OBJECT = "17370386750538516300";
+  const GOOBER = "17370386750538516301";
+  const objectCreate = (guid: string, seq: number, goType: number) => ({
+    seq,
+    opcode: "SMSG_UPDATE_OBJECT",
+    opcodeId: 0x0a9,
+    ts: 1_700_000_000_000 + seq,
+    data: {
+      blocks: 1,
+      objects: [
+        {
+          update: "create",
+          guid,
+          objectType: "gameObject",
+          pos: { x: -1201, y: 981, z: 42, o: 0 },
+          fields: { entry: 180000 + seq, goType },
+        },
+      ],
+    },
+  });
+  const objectWorld = () =>
+    frames([
+      ...loginSequence,
+      selfCreate,
+      objectCreate(QUEST_OBJECT, 18, 2),
+      objectCreate(GOOBER, 19, 10),
+      selfArrived(20, { x: -1202, y: 980, z: 42 }),
+    ]);
+
+  async function objectsInView(stub: StubServer): ReturnType<typeof inWorld> {
+    const client = await inWorld(stub);
+    await client.waitForNearby((o) => o.guid === GOOBER, { timeout: 2000 });
+    await client.events.waitFor((e) => e.seq === 20, { timeout: 2000 });
+    return client;
+  }
+
+  const questActions = (stub: StubServer) =>
+    stub.actions.filter((a) => a.action === "interact" || a.action === "quest_list");
+
+  test("questsAvailableFrom uses the object, as a client does, and reads its quest list", async () => {
+    const stub = startStub({ onConnect: () => objectWorld() });
+    const client = await objectsInView(stub);
+    const pending = client.questsAvailableFrom(QUEST_OBJECT, { timeout: 2000 });
+    await untilAction(stub, "interact");
+    stub.push(JSON.stringify(questGiverList([QUEST_ID, OTHER_QUEST_ID], 91, QUEST_OBJECT)));
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    expect(result.quests.map((q) => q.questId)).toEqual([QUEST_ID, OTHER_QUEST_ID]);
+    expect(questActions(stub)).toEqual([expect.objectContaining({ action: "interact", guid: QUEST_OBJECT })]);
+    client.close();
+    await stub.stop();
+  });
+
+  test("an object with one quest that completes on the spot answers with its window, a one-row offer", async () => {
+    const stub = startStub({ onConnect: () => objectWorld() });
+    const client = await objectsInView(stub);
+    const pending = client.questsAvailableFrom(QUEST_OBJECT, { timeout: 2000 });
+    await untilAction(stub, "interact");
+    stub.push(JSON.stringify(requestItems(QUEST_ID, true, 92, QUEST_OBJECT)));
+    expect(await pending).toEqual({
+      ok: true,
+      quests: [{ questId: QUEST_ID, title: "fixture quest", icon: undefined, level: undefined }],
+    });
+    client.close();
+    await stub.stop();
+  });
+
+  test("an object's gossip menu with no quests is an empty offer", async () => {
+    const stub = startStub({ onConnect: () => objectWorld() });
+    const client = await objectsInView(stub);
+    const pending = client.questsAvailableFrom(QUEST_OBJECT, { timeout: 2000 });
+    await untilAction(stub, "interact");
+    stub.push(JSON.stringify(gossipWithQuests([], 93, QUEST_OBJECT)));
+    expect(await pending).toEqual({ ok: true, quests: [] });
+    client.close();
+    await stub.stop();
+  });
+
+  test("acceptQuestFrom uses the object, then accepts from it", async () => {
+    const stub = startStub({ onConnect: () => objectWorld() });
+    const client = await objectsInView(stub);
+    const pending = client.acceptQuestFrom(QUEST_OBJECT, QUEST_ID, { timeout: 2000 });
+    await untilAction(stub, "interact");
+    stub.push(JSON.stringify(questDetails(QUEST_ID, 94, QUEST_OBJECT)));
+    const at = await untilAction(stub, "quest_accept");
+    expect(stub.actions[at]).toMatchObject({ action: "quest_accept", guid: QUEST_OBJECT, questId: QUEST_ID });
+    stub.push(JSON.stringify({ ...(questAccepted as object), seq: 95 }));
+    expect(await pending).toMatchObject({ ok: true, status: "accepted", questId: QUEST_ID });
+    expect(questActions(stub).map((a) => a.action)).toEqual(["interact"]);
+    client.close();
+    await stub.stop();
+  });
+
+  test("an object of another type is never used by a quest question", async () => {
+    // Using a goober, a door or a trap acts on it; asking it about quests
+    // must not. It gets the hello, as before.
+    const stub = startStub({ onConnect: () => objectWorld() });
+    const client = await objectsInView(stub);
+    const err = await client.questsAvailableFrom(GOOBER, { timeout: 60 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EventTimeoutError);
+    expect(questActions(stub)).toEqual([expect.objectContaining({ action: "quest_list", guid: GOOBER })]);
     client.close();
     await stub.stop();
   });
@@ -4641,6 +4798,25 @@ describe("client: moveTo target resolution", () => {
     stub.push(JSON.stringify(moveResult("arrived", 2, 31)));
     expect((await byGuid).ok).toBe(true);
 
+    client.close();
+    await stub.stop();
+  });
+
+  test("a unit on a spline resolves to where it is along it, not to the spline's end", async () => {
+    // A mob chasing us has us as its destination: walking there is no walk.
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const self = client.state.self.position!.value;
+    const start = { x: -1200, y: 980, z: 42 };
+    stub.push(JSON.stringify(chaseFrom(start, self, 60)));
+    await Bun.sleep(20);
+    const walk = client.moveTo(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "move_to");
+    const to = movePos(stub);
+    expect(Math.hypot(to.x - start.x, to.y - start.y)).toBeLessThan(0.5);
+    expect(Math.hypot(to.x - self.x, to.y - self.y)).toBeGreaterThan(30);
+    stub.push(JSON.stringify(moveResult("arrived", 1, 61)));
+    expect((await walk).ok).toBe(true);
     client.close();
     await stub.stop();
   });

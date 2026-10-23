@@ -481,7 +481,11 @@ wherever a run is mapped back to its roster entry (`sameRosterIdentity`), and
 shown after the effort on the pages (`max · 100k`). Absent is the CLI's
 `auto`: nothing is sent and the tuple carries no field, so every run from
 before the field reads as `auto` and none restamps. It reaches the CLI only
-through the constructed environment (`compactEnv`); a value in the runner's own
+through the constructed environment (`compactEnv`), as the integer token
+count: `200k` is sent as `200000`. A CLI before 2.1.304 reads any `<n>k` as
+100k (on 2.1.293 `200k` and `300k` both log `effectiveWindow=80000`, and
+`200000` logs 180000); the run's recorded spelling stays `<n>k`. A value in
+the runner's own
 environment is dropped like `MAX_THINKING_TOKENS`, so nothing unrecorded can
 move it. The CLI's `autoCompactWindow` setting cannot either: the config dir is
 the run's own.
