@@ -10,7 +10,10 @@
  *   events      alias for sdk.events (the EventStream); a getter, like `sdk`
  *   connect()   open the event stream; call before createSession. A no-op while
  *               the stream is open, and a reopen once it is not — including
- *               after something closed it
+ *               after something closed it. A reopen onto a character already
+ *               in world (a restarted child, a resumed run) returns once the
+ *               module's reattach replay has landed, so the next line reads a
+ *               whole cache (`awaitReattachReplay`)
  *   sleep(ms, options?)  Promise timer that resolves with why it woke:
  *               "elapsed", or early with "attacked" (a unit started attacking
  *               us or hit us with a spell), "died" (our health reached zero,
