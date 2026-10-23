@@ -1,6 +1,6 @@
 /**
  * The pi driver, exercised end to end against a scripted fake `pi` binary
- * (`fixtures/fake-pi.ts`) that speaks pi 1.3.0's RPC protocol and really calls
+ * (`fixtures/fake-pi.ts`) that speaks pi 1.4.0's RPC protocol and really calls
  * our MCP server through the loopback bridge. No live stack, no real CLI, no
  * endpoint. The real binary is checked against a stub endpoint by hand
  * (runner/README.md, "The pi driver").
@@ -141,7 +141,7 @@ describe("pi driver", () => {
     const driver = t.find((e) => e["t"] === "driver")!;
     expect(driver["driver"]).toBe("pi");
     expect(driver["harness"]).toBe("pi");
-    expect(driver["cliVersion"]).toBe("1.3.0");
+    expect(driver["cliVersion"]).toBe("1.4.0");
     expect(driver["apiBase"]).toBe(BASE);
     expect(driver["piProvider"]).toBe("deepseek");
     expect(driver["systemPromptChars"]).toBe(PI_SYSTEM_PROMPT.length);
@@ -161,7 +161,7 @@ describe("pi driver", () => {
 
     const meta = readMeta(runDir) as { resolved?: { model?: string; cliVersion?: string } };
     expect(meta.resolved?.model).toBe("deepseek-flash");
-    expect(meta.resolved?.cliVersion).toBe("1.3.0");
+    expect(meta.resolved?.cliVersion).toBe("1.4.0");
   });
 
   test("the child gets the run's own key under its own name and nothing else of the runner's", async () => {

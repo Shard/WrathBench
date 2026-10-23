@@ -87,23 +87,25 @@ RUN mkdir -p /home/bun/codex-cli \
     && /home/bun/.local/bin/codex --version
 # The pi coding-agent CLI for the `pi` driver (runner/README.md, "The pi
 # driver"; GitHub issue #257), PINNED by version and by the release tarball's
-# sha256 from that release's SHA256SUMS. 1.3.0 (released 2026-10-15) is the
-# newest stable release on the day the driver was written (2026-10-20); pi
-# releases several times a week, and the driver's flags (`--mode rpc`,
-# `--no-builtin-tools`, `--tools`, `--no-extensions -e builtin:mcp`,
-# `--offline`), its RPC event shapes, its settings keys
+# sha256 from that release's SHA256SUMS. The driver was written against 1.3.0,
+# and 1.4.0 replaced it. pi releases several times a week. The driver's flags
+# (`--mode rpc`, `--no-builtin-tools`, `--tools`, `--no-extensions -e
+# builtin:mcp`, `--offline`), its RPC event shapes, its settings keys
 # (`compaction.reserveTokens`, `enableInstallTelemetry`, `cacheWarming`) and
 # the `before_agent_start` prompt override (runner/src/pi-extension.ts) were
-# read off this version's source and checked against this binary over a stub
-# endpoint. Why the release tarball and not npm: the npm package is a node
+# read off the source, re-read across the 1.3.0..1.4.0 diff, and checked
+# against this binary over a stub endpoint in a loopback-only network
+# namespace. The checks: our prompt bytes exactly, only our nine tools, the
+# prompt-missing path sending nothing, and no outbound attempt with the
+# phone-home switches on but three without them. Why the release tarball and not npm: the npm package is a node
 # script (`#!/usr/bin/env node`, node >= 22.19) and this image's only `node`
 # is Bun's fallback shim; the release ships pi as one Bun-compiled glibc
 # binary (checked to run in oven/bun:1.4.0, glibc 2.41) with the
 # assets it reads beside it (themes, the photon wasm, docs), so the whole
 # directory is kept and the binary symlinked onto PATH. Bumping the ARGs
 # busts the cached layer; a bump is a deliberate change, re-verified.
-ARG PI_VERSION=1.3.0
-ARG PI_SHA256=24f5be328b66d4da36876296989501974f43ab8434fbb57c35c523a3ea505ded
+ARG PI_VERSION=1.4.0
+ARG PI_SHA256=f2e4e4329603223d03260cdb8bd5033dbdc1f73ba58ab8939db2e56546e115d2
 RUN mkdir -p /home/bun/pi-cli \
     && cd /home/bun/pi-cli \
     && curl -fsSLo pi.tar.gz "https://github.com/earendil-works/pi/releases/download/v${PI_VERSION}/pi-linux-x64.tar.gz" \

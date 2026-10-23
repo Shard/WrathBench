@@ -4,7 +4,7 @@
  *
  * It makes the system prompt pi sends exactly the bytes `--system-prompt`
  * named — the harness's render (`PI_SYSTEM_PROMPT`) — and nothing else.
- * Without it the pinned pi 1.3.0 appends a `<cwd>` section
+ * Without it the pinned pi 1.4.0, like 1.3.0, appends a `<cwd>` section
  * (`buildSystemPromptSections`, `dist/core/system-prompt.js:110`), so the
  * prompt on the wire would differ from the hashed one and from run to run
  * (the cwd is a fresh temp directory). The mechanism is pi's documented one:
@@ -19,7 +19,7 @@
  * `PI_PROMPT_MISSING` custom entry, which RPC mode streams as
  * `entry_appended` before the prompt's own response and which the driver ends
  * the run on as `harness-error`, and aborts the run before any request is
- * made (checked against the 1.3.0 binary: the stub endpoint saw no request).
+ * made (checked against the 1.3.0 and 1.4.0 binaries: the stub endpoint saw no request).
  * `before_provider_request` aborts again, belt and braces, should a request
  * still be about to go.
  *

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * A scripted stand-in for the `pi` CLI (1.3.0) in RPC mode, used by the pi
+ * A scripted stand-in for the `pi` CLI (1.4.0) in RPC mode, used by the pi
  * driver tests. It speaks pi's RPC protocol on stdin/stdout — commands in,
  * `response` records and session events out, strict JSONL — with the event
  * shapes the pinned binary emits (captured against a stub endpoint: the
@@ -10,7 +10,7 @@
  * `mcp.json`, so the loopback bridge and the runner's tool dispatch run for
  * real. No model, no network.
  *
- * `pi --version` prints $WB_FAKE_CLI_VERSION (default 1.3.0).
+ * `pi --version` prints $WB_FAKE_CLI_VERSION (default 1.4.0).
  *
  * Behaviour is picked with $WB_FAKE_MODE:
  *   tools       (default) per prompt: one assistant message calling
@@ -35,7 +35,7 @@ import { join } from "node:path";
 
 const argv = Bun.argv.slice(2);
 if (argv.includes("--version")) {
-  console.log(Bun.env["WB_FAKE_CLI_VERSION"] ?? "1.3.0");
+  console.log(Bun.env["WB_FAKE_CLI_VERSION"] ?? "1.4.0");
   process.exit(0);
 }
 const mode = Bun.env["WB_FAKE_MODE"] ?? "tools";
@@ -147,7 +147,7 @@ async function startMcp(): Promise<McpChild | null> {
 
 const mcp = await startMcp();
 if (mcp !== null) {
-  await mcp.call("initialize", { protocolVersion: "2025-11-25", capabilities: { roots: {} }, clientInfo: { name: "pi", version: "1.3.0" } });
+  await mcp.call("initialize", { protocolVersion: "2025-11-25", capabilities: { roots: {} }, clientInfo: { name: "pi", version: "1.4.0" } });
   const listed = (await mcp.call("tools/list")) as { result?: { tools?: { name: string }[] } };
   record["mcpTools"] = (listed.result?.tools ?? []).map((t) => t.name);
 }
@@ -185,7 +185,7 @@ async function runPrompt(text: string): Promise<void> {
   turn++;
   (record["prompts"] as string[]).push(text);
   saveRecord();
-  // What 1.3.0 streams when the prompt extension finds no prompt to force: its
+  // What 1.4.0 streams when the prompt extension finds no prompt to force: its
   // custom entry, then a run aborted before any request.
   if (mode === "prompt-missing") {
     emit({ type: "entry_appended", entry: { type: "custom", customType: "wrathbench_prompt_missing", data: { reason: "no customPrompt" }, id: "e1", parentId: null } });

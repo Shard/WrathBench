@@ -236,7 +236,7 @@ export function codexWindowCapRefusal(compactWindow: string | undefined, reporte
 }
 
 /**
- * The pi CLI's auto-compaction threshold. In the pinned 1.3.0 pi compacts once
+ * The pi CLI's auto-compaction threshold. In the pinned 1.4.0, as in 1.3.0, pi compacts once
  * the last assistant message's usage (`totalTokens`: input, output, cache read
  * and write) plus an estimate of what followed it exceeds the model's context
  * window less `compaction.reserveTokens` (`shouldCompact`,
@@ -260,10 +260,9 @@ export function piAutoCompactLimit(contextWindow: number, compactWindow?: string
  * The `compaction.reserveTokens` that makes pi compact at exactly the run's
  * window: the model's context window less it. Undefined for `auto` (pi's own
  * reserve stands) and for a window pi could never reach (`piWindowCapRefusal`).
- * The same setting caps the summary pi asks for — `min(0.8 × reserve, the
- * model's output cap)`, half that for a split turn's prefix — so a window well
- * below the model's context also lifts that cap (runner/README.md, "The pi
- * driver").
+ * In the pinned 1.4.0 the reserve sets only when pi compacts. Every summary
+ * asks for the model's output cap, where 1.3.0 capped it at `min(0.8 ×
+ * reserve, the model's output cap)` (runner/README.md, "The pi driver").
  */
 export function piReserveTokens(contextWindow: number, compactWindow: string | undefined): number | undefined {
   const configured = compactWindowTokens(compactWindow);

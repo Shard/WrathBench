@@ -800,7 +800,7 @@ reachable module URL is the alternative.
 ## The pi driver
 
 The pi coding-agent CLI (earendil-works/pi, MIT), the version pinned as
-`PI_VERSION` in `infra/docker/runner.Dockerfile`: 1.3.0, the release binary,
+`PI_VERSION` in `infra/docker/runner.Dockerfile`: 1.4.0, the release binary,
 verified by its sha256. A labelled harness, `pi`, probe-only until the
 operator promotes it (operator, 2026-10-20; the registry's `probeOnly`).
 `src/adapter-pi.ts` keeps the invariants the other CLI drivers keep — one
@@ -810,7 +810,9 @@ process-group kill on stop, a constructed child environment — and differs
 where pi does. Everything below was read off the 1.3.0 source and checked
 against the real binary driving a stub OpenAI-compatible endpoint, inside a
 network namespace that had only loopback, with every proxy variable pointed at
-a logging proxy that refused everything.
+a logging proxy that refused everything. For 1.4.0 the 1.3.0..1.4.0 diff was
+read and the same check run again. The one change it found is the summary
+cap under "The compaction window on pi".
 
 - **One long-lived process in RPC mode.** `pi --mode rpc --no-session`
   reads JSONL commands on stdin and writes responses and session events on
@@ -833,7 +835,7 @@ a logging proxy that refused everything.
   `PI_MCP_TIMEOUT_S` (30 minutes), because a snippet can run its whole
   timeout behind another call; the watchdogs bound a stuck call instead.
 - **Our prompt bytes, exactly.** `--system-prompt <file>` replaces pi's own
-  prompt, but pi 1.3.0 still appends a `<cwd>` section naming the working
+  prompt, but pi (1.3.0 and 1.4.0) still appends a `<cwd>` section naming the working
   directory. `src/pi-extension.ts`, loaded with `-e`, answers pi's
   `before_agent_start` with that same text as the whole prompt (pi's documented
   override), so the request's system message is byte-for-byte
@@ -924,12 +926,15 @@ model's window is one pi never reaches (it would compact only on an overflow),
 so it is refused before the first turn (`piWindowCapRefusal`). The window
 rides on the `driver` record with the reserve it became.
 
-Two things come with the mechanism. The same reserve caps the summary pi asks
-for (`min(0.8 × reserve, the model's output cap)`, half that for a split
-turn's prefix), so `300k` lifts that cap from about 13k tokens to the model's
-384k; it is a ceiling, not a length. And pi keeps the newest 20,000 tokens
-verbatim (`keepRecentTokens`, its default, left alone), so a compaction needs
-more history than that to have anything to summarise.
+The reserve sets only when pi compacts. In 1.3.0 it also capped the summary pi
+asked for (`min(0.8 × reserve, the model's output cap)`, half that for a split
+turn's prefix), so `auto` capped a summary near 13k tokens. In 1.4.0 every
+summary asks for the model's output cap (384k on deepseek-flash, clamped to
+what fits in the context) whatever the window. That is a ceiling, not a
+length, but it means an `auto` pi run on 1.4.0 is not the same condition as
+one on 1.3.0. pi keeps the newest 20,000 tokens verbatim (`keepRecentTokens`,
+its default, left alone), so a compaction needs more history than that to
+have anything to summarise.
 
 Each `compaction_end` is a `harness` record of kind `compaction` with
 `trigger`, `preTokens`, `postTokens` (pi's estimate after), `durationMs`, `at`
@@ -940,7 +945,7 @@ the token totals and the cost count, though never as a model reply (`modelRespon
 same way as on the other CLIs.
 
 **The context window of deepseek-flash** (operator, 2026-10-20: the window
-must exceed 300k for `300k` to bind). pi 1.3.0's catalogue gives it 1,000,000
+must exceed 300k for `300k` to bind). pi's catalogue (1.3.0 and 1.4.0) gives it 1,000,000
 tokens (`pi-ai/dist/providers/data/deepseek.json`, `--offline` keeps pi from
 overlaying a newer one), and OpenRouter's public model list gives
 `deepseek/deepseek-v4.1-flash-1017` 1,048,576 (read 2026-10-20). DeepSeek's
