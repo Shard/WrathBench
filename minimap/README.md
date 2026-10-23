@@ -25,7 +25,7 @@ Runs on the host, against the one-time client extraction. It does not talk to
 any container and does not need the server running.
 
 ```
-bun run --cwd minimap extract              # maps 0, 1, 36, 369, 530, 571
+bun run --cwd minimap extract              # every map in TILED_MAPS (below)
 bun minimap/src/extract.ts --map 0,571     # specific maps
 bun minimap/src/extract.ts --force         # rewrite existing tiles
 bun minimap/src/extract.ts --limit 20      # first N tiles per map (smoke test)
@@ -71,8 +71,15 @@ bun minimap/src/transcode.ts --root data/minimap --force
 
 Idempotent: a tile that already exists is skipped unless `--force`. A full
 extraction of the four continents takes about 17 s and produces 3636 tiles /
-~104 MiB; map 369 adds 12 tiles / 214 KiB on top, and map 36 36 tiles /
-0.4 MiB.
+~104 MiB; map 369 adds 12 tiles / 214 KiB on top, map 36 36 tiles / 0.4 MiB,
+and the other 70 dungeons and raids 1394 tiles / 40 MiB. A fresh extraction
+of the whole default set takes about 45 s.
+
+The default set is `TILED_MAPS` in `runner/viewer/worldmap.ts`, the same table
+the dashboard names maps from, so a map with tiles is never drawn under a bare
+number and a named map is never a blank lattice. The instances are in it
+rather than in a list baked on demand: they are small, and a default that is
+the whole served set is what lets a fresh `extract` reproduce it.
 
 Tests: `bun run test minimap/` from the repository root. Typecheck:
 `bun run --cwd minimap typecheck`.
@@ -181,8 +188,8 @@ The transposed reading fails all three checks.
   path was not instrumented to say whether it hits any. The bzip2 path shells
   out to `bunzip2` and is likewise untested against real data — it has never
   been reached.
-- **Coverage.** Every tile named in the trs for maps 0, 1, 36, 530 and 571
-  was found in the archives — 0 missing, 0 failed.
+- **Coverage.** Every tile named in the trs for every default map was found
+  in the archives — 0 missing, 0 failed.
 
 ## Maps that are one building
 
@@ -258,6 +265,57 @@ the mouth of the entrance tunnel.
 Not every passage between rooms is painted, so a character walking one can
 show on the hillside between two rooms. The whole mine is about one native
 tile across, so the map draws it at the minimap's own 0.48 px to the yard.
+
+### Every dungeon and raid
+
+The default set holds every dungeon and raid in Map.dbc that the client has a
+minimap for. The two paths above carry all of them: 30 are one model in their
+WDT, like the tram, and 41 are ADTs with placed models, like the Deadmines.
+Six are left out. Map.dbc marks 44 and 598 unused, 169 is the Emerald Dream
+test map, and 624, 649 and 650 have neither a trs section nor a global model
+with a minimap, so they keep their number on the map page.
+
+Together they are 2959 files: 70.6 MB of masters, 25.5 MB served (12.9 MB of
+dungeons, 12.6 of raids). The largest are Icecrown Citadel, Ulduar and the
+Escape from Durnholde at 1.3–2.0 MB served each; most one-model dungeons are
+under 0.1 MB.
+
+What was verified, and how:
+
+- **Placement, against the server's own spawns.** For each map, the share of
+  AzerothCore's creature spawns (its base world data, `creature.sql`) that
+  land within 2 px (about 4 yards) of a placed model's paint. On the one-model
+  maps it is 70–100%: the Botanica 70%, Molten Core 77%, the Underbog 79%,
+  every other one 84% or more. A sign or anchor error moves a whole model off
+  its spawns, and none shows one. Dire Maul is the only one turned (180°) and
+  scores 99%; its exit triggers in AreaTrigger.dbc sit in its wings' doorways.
+- **The terrain maps.** A low share on an ADT map is the map being outdoors,
+  not a misplacement. Zul'Farrak, the Black Morass, the Ramparts, Durnholde,
+  the Oculus, the Pit of Saron, Zul'Gurub, the Ruins of Ahn'Qiraj, Hyjal,
+  Zul'Aman, the Sunwell, Ulduar and the three dragon sanctums are mostly
+  fought in the open, and every spawn on every one of them lands on a terrain
+  tile.
+- **Determinism.** Re-extracting map 36 alongside the rest reproduces its
+  published tiles byte for byte.
+
+What still looks wrong:
+
+- **Floors are averaged.** Where groups at different heights cover the same
+  ground, their pixels are averaged into one. Counted by group bounding boxes
+  whose heights do not overlap, it is worst in the Sunken Temple (22% of
+  painted pixels), the Black Temple and Icecrown Citadel (21%), Azjol-Nerub
+  (17%), Blackrock Spire (14%, Lower and Upper stacked), Shadowfang Keep
+  (10%), and Scholomance, Karazhan and Blackwing Lair (8%). Tall groups
+  overlap in height, so the count misses some: Blackrock Depths measures 1%
+  but its core reads as a jumble, and Maraudon and Dire Maul blend in places.
+  A fix is a layer per floor, chosen by the character's height, which changes
+  every step from the extractor to the map page. It is not attempted.
+- **Tilted models are skipped**, so the terrain under them is what shows: a
+  cave tunnel used in Stratholme, the Culling, Durnholde and Hyjal, Hyjal's
+  buildings, the troll dens in Zul'Gurub and Blackwing Lair, a hive in the
+  Ruins of Ahn'Qiraj, a tunnel in Naxxramas, and huts and towers elsewhere.
+- **Ahn'kahet** has cave-shell groups with minimaps of their own, which paint
+  broad blue sheets around and partly over its rooms.
 
 ## The LOD pyramid
 
@@ -557,16 +615,18 @@ web/transcode.json                          the transcode's own cache, never ser
   output is byte-deterministic, so the publisher's content hashes upload only
   what changed.
 
-Measured on the full tree (maps 0, 1, 36, 369, 530 and 571):
+Measured on the full tree (the continents, the tram and every dungeon and
+raid):
 
 | layer | files | master | served |
 | --- | --- | --- | --- |
-| native | 3684 | 109.2 MB | 59.6 MB |
-| minimap pyramid | 1505 | 83.8 MB | 13.0 MB |
+| native | 5078 | 151.1 MB | 80.2 MB |
+| minimap pyramid | 3070 | 112.5 MB | 17.9 MB |
 | art pyramid | 2248 | 185.6 MB | 13.9 MB |
-| total | 7437 (+6 indexes) | 378.6 MB | 86.5 MB |
+| total | 10396 (+76 indexes) | 449.2 MB | 112.0 MB |
 
-Why q90, from the same tree:
+Why q90, from the tree before the instances joined it (maps 0, 1, 36, 369,
+530 and 571):
 
 | quality | art | minimap pyramid | art SSIM, mean / worst 5% | minimap SSIM, mean / worst 5% |
 | --- | --- | --- | --- | --- |
