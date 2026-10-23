@@ -587,10 +587,20 @@ namespace WrathBench
         void EmitEvent(BenchSession& s, std::string const& opcodeName, uint16_t opcodeId, std::string const& dataJson);
         // Emit one synthetic WB_SESSION_STATE for an in-world session (see
         // module/PROTOCOL.md): the client-visible self state a fresh
-        // SMSG_LOGIN_VERIFY_WORLD carries.
-        // World thread only (reads Player). Reused by the WS-reattach path and by
-        // an idempotent same-token createSession so the caller re-syncs state.
-        void EmitSessionState(std::shared_ptr<BenchSession> const& s);
+        // SMSG_LOGIN_VERIFY_WORLD carries. With `replay`, the frame says so
+        // and the reattach replay follows it (ReplayClientState).
+        // World thread only (reads Player). The WS-reattach path replays; an
+        // idempotent same-token createSession emits the state alone, since
+        // the caller's socket already got the replay when it subscribed.
+        void EmitSessionState(std::shared_ptr<BenchSession> const& s, bool replay);
+        // Re-send what a connected client holds for this character: the
+        // transports, its own create block with every item and bag, its auras,
+        // the login packets that carry state outside update fields, and a
+        // create block for everything in its visibility set, closed by
+        // WB_REPLAY_DONE. Every packet is one the core's own login path sends,
+        // built by the core's own builders; nothing is broadcast and no server
+        // state moves (PROTOCOL.md, "/events"). World thread only.
+        void ReplayClientState(BenchSession& s, Player* player);
         void Audit(BenchSession& s, char const* kind, std::string const& json);
         // Open (or roll to) the session's audit file for a UTC day. auditMutex held.
         void OpenAudit(BenchSession& s, int64_t day);
