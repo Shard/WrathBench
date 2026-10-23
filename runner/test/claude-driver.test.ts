@@ -329,9 +329,11 @@ describe("claude-code driver", () => {
     await runClaudeEpisode(windowed.options);
     const record = readRecord(windowed.recordPath);
     const env = record["env"] as Record<string, unknown>;
-    // The run's canonical value, not the shell's, and no flag on the line.
-    expect(env["compactWindow"]).toBe("100k");
+    // The run's value, not the shell's, sent as the integer token count, and no
+    // flag on the line; the recorded spelling below stays the canonical `100k`.
+    expect(env["compactWindow"]).toBe("100000");
     expect(record["argv"] as string[]).not.toContain("100k");
+    expect(record["argv"] as string[]).not.toContain("100000");
     expect(record["effort"]).toBe("max");
     // Still the scrubbed environment: no API-key credential rides along.
     expect(env["hasAnthropicApiKey"]).toBe(false);
@@ -1013,7 +1015,7 @@ describe("childEnv", () => {
       CLAUDE_CODE_OAUTH_TOKEN: "oauth",
     };
     const set = childEnv(parent, { configDir: "/c", extra: { ...thinkingEnv("max"), ...compactEnv("100k") } });
-    expect(set["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]).toBe("100k");
+    expect(set["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]).toBe("100000");
     expect(Object.keys(set).filter((k) => k.startsWith("ANTHROPIC_"))).toEqual([]);
     expect(set["CLAUDE_CODE_OAUTH_TOKEN"]).toBe("oauth");
     // Absent is the CLI's own `auto`: the variable is not there at all.
@@ -1021,7 +1023,18 @@ describe("childEnv", () => {
     expect(unset["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]).toBeUndefined();
     expect(Object.keys(unset).filter((k) => k.startsWith("ANTHROPIC_"))).toEqual([]);
     expect(compactEnv(undefined)).toEqual({});
-    expect(compactEnv("1M")).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1M" });
+  });
+
+  test("the compaction window is sent as the integer token count, never the <n>k spelling", () => {
+    // 2.1.293 read every `<n>k` as 100k (`200k` and `300k` both logged
+    // effectiveWindow=80000); the integer reads as written on every version.
+    expect(compactEnv("100k")).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000" });
+    expect(compactEnv("200k")).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: "200000" });
+    expect(compactEnv("300k")).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: "300000" });
+    expect(compactEnv("1M")).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1000000" });
+    // Only the canonical spelling reaches here (parseCompactWindow); anything
+    // else is a bug upstream of the driver, refused rather than sent.
+    expect(() => compactEnv("200K")).toThrow(/not canonical/);
   });
 
   test("compactionRecord reads the CLI's marker defensively and ignores every other envelope", () => {
