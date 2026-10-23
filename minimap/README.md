@@ -79,7 +79,8 @@ The default set is `TILED_MAPS` in `runner/viewer/worldmap.ts`, the same table
 the dashboard names maps from, so a map with tiles is never drawn under a bare
 number and a named map is never a blank lattice. The instances are in it
 rather than in a list baked on demand: they are small, and a default that is
-the whole served set is what lets a fresh `extract` reproduce it.
+the whole served set is what lets a fresh `extract` reproduce it (all but the
+two tram tiles described under "Maps that are one building", point 4).
 
 Tests: `bun run test minimap/` from the repository root. Typecheck:
 `bun run --cwd minimap typecheck`.
@@ -292,8 +293,8 @@ What was verified, and how:
 - **The terrain maps.** A low share on an ADT map is the map being outdoors,
   not a misplacement. Zul'Farrak, the Black Morass, the Ramparts, Durnholde,
   the Oculus, the Pit of Saron, Zul'Gurub, the Ruins of Ahn'Qiraj, Hyjal,
-  Zul'Aman, the Sunwell, Ulduar and the three dragon sanctums are mostly
-  fought in the open, and every spawn on every one of them lands on a terrain
+  Zul'Aman, the Sunwell, Ulduar, the Obsidian and Ruby Sanctums and the Eye
+  of Eternity are mostly fought in the open, and every spawn on every one of them lands on a terrain
   tile.
 - **Determinism.** Re-extracting map 36 alongside the rest reproduces its
   published tiles byte for byte.
@@ -373,6 +374,9 @@ The bake over the six extracted maps takes about 10 s and writes 1505 tiles
 | 369 | 8 | 6 | 4 | 4 | 4 | 1 | 0.1 |
 | 530 | 234 | 69 | 26 | 10 | 4 | 1 | 15.1 |
 | 571 | 300 | 88 | 24 | 12 | 4 | 1 | 16.4 |
+
+The other 70 dungeons and raids add 1565 tiles (27.4 MiB) in under a second
+each; a bare `bake` walks every map directory, instances included.
 
 The tram's 12 tiles sit on rows 31–32, either side of the grid's centre line,
 so every level up to z5 keeps two rows of them and z3–z5 hold four tiles each.
