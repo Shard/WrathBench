@@ -725,6 +725,40 @@ describe("cooperative abort on timeout", () => {
     const outcome = await host.evalSnippet("outcome");
     expect(outcome.value).toContain("rejected: snippet abandoned by the harness");
   });
+
+  test("an abandoned snippet's unawaited calls are cancelled quietly, not reported as a sandbox fault", async () => {
+    // deadmines@4 tank 06:55:07: a snippet left a sleep running unawaited and
+    // timed out; the sleep's rejection with the abandonment's own reason read
+    // as "sandbox reported fatal error: unhandled promise rejection".
+    // The sleeps reject with the reason itself and as a sleep that could never
+    // fit (its `cause`); the SDK wait as an EventAbortedError carrying it.
+    const stub = startModuleStub();
+    const host = makeHost({ moduleUrl: stub.url, snippetTimeoutMs: 400 });
+    await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
+    const timed = await host.evalSnippet(
+      "sleep(5_000); sleep(20_000); sdk.waitForChat('never said', { timeout: 10_000 }).then(() => 'heard');\n" +
+        "await new Promise(() => {});",
+    );
+    expect(timed.timedOut).toBe(true);
+    const next = await host.evalSnippet("await sleep(100); return 'next';");
+    expect(next.value).toBe(JSON.stringify("next"));
+    expect(next.logs).toEqual([]);
+    expect(host.drainNotices().filter((n) => n.kind === "session_note")).toEqual([]);
+    await host.stop();
+    await stub.stop();
+  });
+
+  test("a wait cancelled by the snippet's own AbortController is still the snippet's fault to hear about", async () => {
+    const host = makeHost();
+    await host.evalSnippet(
+      "const c = new AbortController(); sdk.events.waitFor(() => false, { timeout: 10_000, signal: c.signal });\n" +
+        "c.abort(new Error('mine')); await sleep(100);",
+    );
+    const notes = host.drainNotices().filter((n) => n.kind === "session_note");
+    expect(notes).toHaveLength(1);
+    expect(notes[0]!.text).toContain("unhandled promise rejection");
+    expect(notes[0]!.text).toContain("mine");
+  });
 });
 
 describe("error rendering (2026-08 audit fixes)", () => {
