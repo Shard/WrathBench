@@ -644,7 +644,7 @@ export interface ToolContext {
   turn: () => number;
   /**
    * Called with every event batch actually served to the model (the visible
-   * ones), plus how many ambient movement events were folded out of that span.
+   * ones), plus how many ambient events (movement, party frames) were folded out of that span.
    */
   onEventsServed?: (events: unknown[], folded?: number) => void;
   /** Called with every episodic entry written, so the driver can log it. */

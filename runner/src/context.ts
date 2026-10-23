@@ -478,11 +478,12 @@ export function isCreatureChat(c: ChatLineLike): boolean {
  * and the guid otherwise. A channel line carries its channel. Our own
  * whisper's echo (`WHISPER_INFORM`) names the recipient in the sender's
  * place, as the core builds it, and reads "to <name>:" as a client prints
- * it. A text carrying `%s` (a creature emote, the achievement broadcast's
- * `%s has earned the achievement $a!`) has the sender's name put in its
- * place, as the client does, and then needs no name in front; the
- * achievement's `$a` becomes the id where the client would link the title
- * (Achievement.dbc is not served for other players' achievements).
+ * it. A text carrying `%s` (a creature emote) has the sender's name put in
+ * its place, as the client does, and then needs no name in front. The
+ * achievement broadcast never takes one: the SDK's `state.chat` has already
+ * filled it (`Tankfriend has earned the achievement [Deadmines]!`), and a raw
+ * line is filled here the same way, its `$a` the bracketed id where no
+ * achievement packet named it.
  */
 export function formatChatLine(c: ChatLineLike, names?: Record<string, { value?: unknown }>): string {
   const guid = c.senderGuid === undefined || c.senderGuid === null ? undefined : String(c.senderGuid);
@@ -494,9 +495,10 @@ export function formatChatLine(c: ChatLineLike, names?: Record<string, { value?:
         ? queried
         : (guid ?? "?");
   let message = fmt(c.message, "");
-  if (c.type === CHAT_MSG_ACHIEVEMENT || c.type === CHAT_MSG_GUILD_ACHIEVEMENT) {
-    const id = typeof c.achievementId === "number" ? `achievement ${c.achievementId}` : "an achievement";
-    message = message.replace("$a", id);
+  const achievement = c.type === CHAT_MSG_ACHIEVEMENT || c.type === CHAT_MSG_GUILD_ACHIEVEMENT;
+  if (achievement) {
+    const id = typeof c.achievementId === "number" ? `[achievement ${c.achievementId}]` : "an achievement";
+    message = message.replaceAll("$a", id);
   }
   const label =
     c.type === CHAT_MSG_CHANNEL && typeof c.channelName === "string" && c.channelName.length > 0
@@ -506,7 +508,7 @@ export function formatChatLine(c: ChatLineLike, names?: Record<string, { value?:
         : "chat";
   if (c.type === CHAT_MSG_SYSTEM) return `  [${label}] ${message}`;
   if (c.type === CHAT_MSG_WHISPER_INFORM) return `  [${label}] to <${name}>: ${message}`;
-  if (typeof c.type === "number" && NAME_TEMPLATE_TYPES.has(c.type) && message.includes("%s")) {
+  if (achievement || (typeof c.type === "number" && NAME_TEMPLATE_TYPES.has(c.type) && message.includes("%s"))) {
     return `  [${label}] ${message.replaceAll("%s", name)}`;
   }
   return `  [${label}] <${name}> ${message}`;
@@ -1421,14 +1423,6 @@ export function spellLogNote(
   return `${caster} ${spell} gives ${target} ${logNumber(d.amount)} ${power}`;
 }
 
-/**
- * What the event window's fold count counts: every `EVENT_WINDOW_EXCLUDE`
- * opcode, which is movement (monster moves, heartbeats, transports) and, since
- * the party frames were tapped (#286), `SMSG_PARTY_MEMBER_STATS` — so
- * "movement" alone was false on a party run.
- */
-export const AMBIENT_FOLDED = "ambient movement and party-frame events folded into state only";
-
 /** Pure. Same inputs, byte-identical output — tests enforce it. */
 export function assembleContext(inputs: ContextInputs): string {
   const parts: string[] = [];
@@ -1454,9 +1448,9 @@ export function assembleContext(inputs: ContextInputs): string {
   } else if (window.length === 0) {
     // Everything fetched was ambient: say so, rather than "none yet" over a
     // stream that is plainly running.
-    parts.push(`[events]\nno non-ambient events; ${excluded} ${AMBIENT_FOLDED}`);
+    parts.push(`[events]\nno non-ambient events; ${excluded} ambient movement and party-frame events folded into state only`);
   } else {
-    const note = excluded > 0 ? `; ${excluded} ${AMBIENT_FOLDED}` : "";
+    const note = excluded > 0 ? `; ${excluded} ambient movement and party-frame events folded into state only` : "";
     parts.push(
       `[events: last ${window.length}, newest last${note}]\n${window.map(formatEventLine).join("\n")}`,
     );

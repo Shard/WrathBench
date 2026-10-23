@@ -183,4 +183,19 @@ describe("eventWindow and assembleContext", () => {
     );
     expect(assembleContext({ ...base, events: [] })).toContain("[events]\nnone yet");
   });
+
+  test("party frames are folded and counted with movement, and the note names both", () => {
+    const events = [
+      ev(1, "SMSG_PARTY_MEMBER_STATS"),
+      ev(2, "SMSG_MONSTER_MOVE"),
+      ev(3, "SMSG_ATTACKSTART"),
+      ev(4, "SMSG_PARTY_MEMBER_STATS_FULL"),
+    ];
+    const { window, folded } = eventWindow(events);
+    expect(window.map((e) => e.opcode)).toEqual(["SMSG_ATTACKSTART"]);
+    expect(folded).toBe(3);
+    expect(assembleContext({ ...base, events })).toContain(
+      "[events: last 1, newest last; 3 ambient movement and party-frame events folded into state only]",
+    );
+  });
 });

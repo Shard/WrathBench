@@ -172,6 +172,26 @@ describe("sandbox evaluation", () => {
     expect(after.value).toBe(JSON.stringify("undefined"));
   }, 15_000);
 
+  test("a background loop over an SDK refusal that sends nothing does not starve the sandbox", async () => {
+    // A party run's fight loop awaited `sdk.killTarget` forever; once the
+    // character died every call was refused locally, the loop only ever
+    // yielded to microtasks, the next snippet and the host's ping were never
+    // read, and the sandbox was killed as blocked. An unknown name is the same
+    // locally answered refusal on a client that never connected.
+    const host = makeHost({ snippetTimeoutMs: 1_000, pingGraceMs: 500 });
+    const started = await host.evalSnippet(
+      "globalThis.spins = 0;" +
+        " globalThis.spin = (async () => { for (;;) { const r = await sdk.moveTo('Nobody By This Name'); if (r.status !== 'unknown_target') return r.status; spins++; } })().catch(String);" +
+        " 'started'",
+    );
+    expect(started.ok).toBe(true);
+    const next = await host.evalSnippet("await sleep(20); return [spins > 0, await Promise.race([spin, 'running'])];");
+    expect(next.ok).toBe(true);
+    expect(next.restarted).toBeUndefined();
+    expect(next.value).toBe('[ true, "running" ]');
+    expect(host.totalRestarts).toBe(0);
+  }, 15_000);
+
   test("child dying mid-snippet surfaces state loss and a notice (gate2-ox-3 bug)", async () => {
     const host = makeHost();
     await host.evalSnippet("let precious = 'state';");
@@ -704,6 +724,40 @@ describe("cooperative abort on timeout", () => {
     expect(timed.timedOut).toBe(true);
     const outcome = await host.evalSnippet("outcome");
     expect(outcome.value).toContain("rejected: snippet abandoned by the harness");
+  });
+
+  test("an abandoned snippet's unawaited calls are cancelled quietly, not reported as a sandbox fault", async () => {
+    // deadmines@4 tank 06:55:07: a snippet left a sleep running unawaited and
+    // timed out; the sleep's rejection with the abandonment's own reason read
+    // as "sandbox reported fatal error: unhandled promise rejection".
+    // The sleeps reject with the reason itself and as a sleep that could never
+    // fit (its `cause`); the SDK wait as an EventAbortedError carrying it.
+    const stub = startModuleStub();
+    const host = makeHost({ moduleUrl: stub.url, snippetTimeoutMs: 400 });
+    await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
+    const timed = await host.evalSnippet(
+      "sleep(5_000); sleep(20_000); sdk.waitForChat('never said', { timeout: 10_000 }).then(() => 'heard');\n" +
+        "await new Promise(() => {});",
+    );
+    expect(timed.timedOut).toBe(true);
+    const next = await host.evalSnippet("await sleep(100); return 'next';");
+    expect(next.value).toBe(JSON.stringify("next"));
+    expect(next.logs).toEqual([]);
+    expect(host.drainNotices().filter((n) => n.kind === "session_note")).toEqual([]);
+    await host.stop();
+    await stub.stop();
+  });
+
+  test("a wait cancelled by the snippet's own AbortController is still the snippet's fault to hear about", async () => {
+    const host = makeHost();
+    await host.evalSnippet(
+      "const c = new AbortController(); sdk.events.waitFor(() => false, { timeout: 10_000, signal: c.signal });\n" +
+        "c.abort(new Error('mine')); await sleep(100);",
+    );
+    const notes = host.drainNotices().filter((n) => n.kind === "session_note");
+    expect(notes).toHaveLength(1);
+    expect(notes[0]!.text).toContain("unhandled promise rejection");
+    expect(notes[0]!.text).toContain("mine");
   });
 });
 

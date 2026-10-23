@@ -457,6 +457,16 @@ describe("recent_events movement fold", () => {
     });
   }
 
+  test("party frames are dropped with movement and counted in the same note", async () => {
+    const events = [ev(1, "SMSG_PARTY_MEMBER_STATS"), ev(2, "SMSG_MESSAGECHAT"), ev(3, "SMSG_PARTY_MEMBER_STATS_FULL")];
+    const res = await callTool(streamCtx(events), "recent_events", {});
+    expect(res.text).toContain("#2 SMSG_MESSAGECHAT");
+    expect(res.text).not.toContain("SMSG_PARTY_MEMBER_STATS");
+    expect(res.text).toContain(
+      "(+2 ambient movement and party-frame events folded into state — pass {includeMovement: true} for the raw stream)",
+    );
+  });
+
   test("ambient movement is dropped and reported in a trailing note", async () => {
     const events = [
       ev(1, "SMSG_MESSAGECHAT"),

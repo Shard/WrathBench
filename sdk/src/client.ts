@@ -77,6 +77,7 @@ import {
   type MoveProgressData,
   type MoveResultData,
   type NameQueryResponseData,
+  type AchievementEarnedData,
   type MoveUpdateData,
   type MoveStatus,
   type MoveToResponse,
@@ -111,13 +112,16 @@ import {
   moveEtaMs,
   type StreamEvent,
   type WaitForOptions,
+  waitForInTurn,
 } from "./events";
+import { noteRequest, settleOnLaterTurns } from "./turn";
 import {
   mailResultText,
   npcRolesOf,
   partyResultText,
   isQuestGiverMarkerInput,
   chatMessageAsShown,
+  ACHIEVEMENT_CHAT_TYPES,
   PLAYER_FLAGS_GHOST,
   pointOf,
   questGiverStatusName,
@@ -1243,13 +1247,24 @@ function climbHint(dz: number, edge: { x: number; y: number }): string {
 
 /**
  * A `drop` whose foot lies under the ground (`surfaceZ`): refused forced or
- * not, since no client falls through terrain. The foot is a z the request
- * guessed below the surface — the module's guard, not the fall estimate,
- * is what stops it, and the recovery is a z on the surface, not force.
+ * not, since no client falls through terrain. The module's guard, not the
+ * fall estimate, is what stops it. When the request's own z is below the
+ * surface (more than the module's 1y), the foot is a z the request guessed
+ * and the recovery is a z on the surface. When it is not, the mesh's route
+ * ends under a structure whatever z is asked for (the foot is the mesh's,
+ * not the request's), so the hint does not send the caller after a z.
  */
+const BURIED_TARGET_MARGIN = 1.0;
 function buriedFootHint(p: MovePoint, d: MoveResultData, surfaceZ: number): string {
   const edge = d.reachedPos ?? d.pos;
   const foot = edge.z + (d.dz ?? 0);
+  if (!(p.z < surfaceZ - BURIED_TARGET_MARGIN)) {
+    return (
+      `stopped at the edge (${fmtXY(edge)}): the route ends under a structure, landing at z ${foot.toFixed(1)} ` +
+      `below the surface at z ${surfaceZ.toFixed(1)}, whatever z you ask for — changing the target z will not ` +
+      `help. Pick a destination at another x,y or approach from another side. force does not apply.`
+    );
+  }
   return (
     `stopped at the edge (${fmtXY(edge)}): the drop ahead lands at z ${foot.toFixed(1)}, underground (the ground ` +
     `here is z ${surfaceZ.toFixed(1)}). Your target z ${p.z.toFixed(1)} is below the ground — retry with a z on ` +
@@ -6786,7 +6801,9 @@ export class WrathClient {
    * it: a player sender named by the name query's answer or the group roster
    * (`StateCache.namedChatEntry`). A line whose sender had no name yet is
    * tested again when that sender's name query answers, so
-   * `m => m.senderName === "Name"` matches a line that arrived first.
+   * `m => m.senderName === "Name"` matches a line that arrived first. An
+   * achievement line is tested again when the `SMSG_ACHIEVEMENT_EARNED` that
+   * names its achievement lands, which the server sends just after the line.
    */
   async waitForChat(
     match: string | ((entry: ChatEntry) => boolean),
@@ -6794,9 +6811,18 @@ export class WrathClient {
   ): Promise<ChatEntry> {
     const predicate = typeof match === "string" ? (e: ChatEntry) => e.message === match : match;
     // Lines this wait has tested with no sender name, by sender guid, to be
-    // tested again once that guid's name query answers.
+    // tested again once that guid's name query answers; and achievement lines
+    // by achievement id, to be tested again once an earn names it. Kept as
+    // they came off the wire, so the retest fills them from scratch.
     const unnamed = new Map<string, ChatEntry[]>();
+    const unlinked = new Map<number, ChatEntry[]>();
     let hit: ChatEntry | undefined;
+    const test = (line: ChatEntry): boolean => {
+      const shown = this.state.namedChatEntry(line);
+      if (!predicate(shown)) return false;
+      hit = shown;
+      return true;
+    };
     await this.waitEvent(
       (e) => {
         if (isDecodeError(e.data)) return false;
@@ -6805,26 +6831,30 @@ export class WrathClient {
         const retest = (guids: Iterable<string>): boolean => {
           for (const guid of [...guids]) {
             for (const line of unnamed.get(guid) ?? []) {
-              const named = this.state.namedChatEntry(line);
-              if (named.senderName === undefined) continue;
+              if (this.state.namedChatEntry(line).senderName === undefined) continue;
               unnamed.delete(guid);
-              if (predicate(named)) {
-                hit = named;
-                return true;
-              }
+              if (test(line)) return true;
             }
           }
           return false;
         };
         if (isEvent(e, "SMSG_NAME_QUERY_RESPONSE")) return retest([(e.data as NameQueryResponseData).guid]);
         if (isEvent(e, "SMSG_GROUP_LIST")) return retest(unnamed.keys());
-        if (!isEvent(e, "SMSG_MESSAGECHAT")) return false;
-        const entry = this.state.namedChatEntry(toChatEntry(e.seq, e.ts, e.data as ChatFields));
-        if (predicate(entry)) {
-          hit = entry;
-          return true;
+        if (isEvent(e, "SMSG_ACHIEVEMENT_EARNED")) {
+          const id = (e.data as AchievementEarnedData).achievement.achievementId;
+          const lines = unlinked.get(id) ?? [];
+          unlinked.delete(id);
+          return lines.some(test);
         }
-        if (entry.senderName === undefined) unnamed.set(entry.senderGuid, [...(unnamed.get(entry.senderGuid) ?? []), entry]);
+        if (!isEvent(e, "SMSG_MESSAGECHAT")) return false;
+        const line = toChatEntry(e.seq, e.ts, e.data as ChatFields);
+        if (test(line)) return true;
+        if (this.state.namedChatEntry(line).senderName === undefined) {
+          unnamed.set(line.senderGuid, [...(unnamed.get(line.senderGuid) ?? []), line]);
+        }
+        if (ACHIEVEMENT_CHAT_TYPES.has(line.type) && line.achievementId !== undefined) {
+          unlinked.set(line.achievementId, [...(unlinked.get(line.achievementId) ?? []), line]);
+        }
         return false;
       },
       {
@@ -8815,7 +8845,7 @@ export class WrathClient {
   /** `events.waitFor` with the client's default signal threaded in. */
   private waitEvent(predicate: (event: StreamEvent) => boolean, options: WaitForOptions = {}): Promise<StreamEvent> {
     const signal = options.signal ?? this.currentSignal();
-    return this.events.waitFor(predicate, signal === undefined ? options : { ...options, signal });
+    return waitForInTurn.call(this.events, predicate, signal === undefined ? options : { ...options, signal });
   }
 
   /** Throw `EventAbortedError` if the default signal has already fired. */
@@ -8881,6 +8911,9 @@ export class WrathClient {
         path,
         cause,
       });
+    } finally {
+      // Answered, either way: the caller crossed the event loop (turn.ts).
+      noteRequest();
     }
 
     const text = await res.text();
@@ -8915,6 +8948,90 @@ export class WrathClient {
     return parsed.data;
   }
 }
+
+/**
+ * WrathClient prototype members that are internal plumbing: private, or
+ * operator-only. `generate-api-docs.ts` leaves them out of the model's
+ * reference and fails on any member that is neither documented nor named here,
+ * so every other member is the caller's surface.
+ */
+export const CLIENT_PLUMBING: ReadonlySet<string> = new Set([
+  "action",
+  // Operator-only (module/PROTOCOL.md "Authentication"): a snippet's own
+  // credential is refused on these, so the model is not shown them.
+  "lease",
+  "releaseLease",
+  "noteActionHint",
+  "tallyActionHint",
+  "rewordActionHint",
+  "drainActionHints",
+  "request",
+  "postMoveTo",
+  "watchAsyncMove",
+  "moveRecipe",
+  "asyncMoveRecipe",
+  "isCorpse",
+  "trackedCast",
+  "dispatchCast",
+  "castVerdict",
+  "watchOwnJump",
+  "castRefusal",
+  "ownMoveSince",
+  "recallMoveRejection",
+  "waitOwnTeleportAck",
+  "reclaimRefusal",
+  "awaitAliveFields",
+  "awaitAreaAfter",
+  "reclaimReadyAt",
+  "resolveGossipOption",
+  "petGuidOrRefuse",
+  "petCommand",
+  "nameMailSenders",
+  "questDetailsFrom",
+  "rewardChoices",
+  "petRefusal",
+  "lootRollRefusal",
+  "targetGuid",
+  "isChest",
+  "openChest",
+  "useItemVerdict",
+  "targetRef",
+  "byName",
+  "resolveRawGuids",
+  "resolveTalent",
+  "bankClosed",
+  "noBankItem",
+  "petAction",
+  "mailboxGuidOrThrow",
+  "mailboxGuid",
+  "noMailbox",
+  "waitMailResult",
+  "bankMove",
+  "sellAndConfirm",
+  "questOffer",
+  "questTakenByItsOwnOffer",
+  "faceQuietly",
+  "waitForState",
+  "waitEvent",
+  "currentSignal",
+  "remainingBudgetMs",
+  "throwIfAborted",
+  "sleepAborting",
+  "clientParityQueries",
+  "fireAndForget",
+  "flushStatusQueries",
+  "forgetStatus",
+  "trackQuestLog",
+]);
+
+// Every call on the caller's surface settles on a later turn of the event loop,
+// as a real client's does, even when it was answered without sending anything
+// (turn.ts). The plumbing keeps its own timing: the SDK's waits and requests
+// run between a call's turns, not across them.
+settleOnLaterTurns(
+  WrathClient.prototype,
+  Object.getOwnPropertyNames(WrathClient.prototype).filter((n) => n !== "constructor" && !CLIENT_PLUMBING.has(n)),
+);
 
 type ChatFields = Omit<ChatEntry, "seq" | "ts">;
 

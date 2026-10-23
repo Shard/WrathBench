@@ -160,13 +160,23 @@ describe("formatStateSummary: the chat tail", () => {
           { type: 17, senderGuid: "8", channelName: "General", message: "anyone selling linen" },
           { type: 48, senderGuid: "8", receiverGuid: "8", message: "%s has earned the achievement $a!", achievementId: 6 },
           { type: 48, senderGuid: "11", receiverGuid: "11", message: "%s has earned the achievement $a!" },
+          // As the SDK's state.chat serves it, already filled: no second name in front.
+          {
+            type: 48,
+            senderGuid: "8",
+            senderName: "Quilby",
+            receiverGuid: "8",
+            message: "Quilby has earned the achievement [Deadmines]!",
+            achievementId: 628,
+          },
         ],
       },
       { sessionLive: true },
     );
     expect(text).toContain("  [General] <Quilby> anyone selling linen");
-    expect(text).toContain("  [achievement] Quilby has earned the achievement achievement 6!");
+    expect(text).toContain("  [achievement] Quilby has earned the achievement [achievement 6]!");
     expect(text).toContain("  [achievement] 11 has earned the achievement an achievement!");
+    expect(text).toMatch(/^  \[achievement\] Quilby has earned the achievement \[Deadmines\]!$/m);
   });
 
   // The 2026-10-20 Deadmines party runs: party, whisper, say and yell read the
