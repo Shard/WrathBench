@@ -228,7 +228,7 @@ function compacted(o: { message?: string; turns?: number[]; encrypted?: string; 
   const history: unknown[] = (o.turns ?? [28, 29]).map((t) => ({
     type: "message",
     role: "user",
-    content: [{ type: "input_text", text: `[turn ${t}] Goal: survive and level as far as you can. Act via tools. — état` }],
+    content: [{ type: "input_text", text: `[turn ${t}]\n\n== state (seq 9, 10 events seen) == — état` }],
   }));
   history.push({ type: "message", role: "developer", content: [{ type: "input_text", text: "instructions" }] });
   if (o.encrypted !== undefined) history.push({ type: "compaction", id: "cmp_1", encrypted_content: o.encrypted });

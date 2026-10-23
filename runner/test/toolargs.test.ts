@@ -524,7 +524,7 @@ describe("recent_events movement fold", () => {
   test("an all-movement stream says so instead of claiming no events", async () => {
     const events = Array.from({ length: 5 }, (_, i) => ev(i, "SMSG_MONSTER_MOVE"));
     const res = await callTool(streamCtx(events), "recent_events", {});
-    expect(res.text).toContain("no non-movement events yet");
+    expect(res.text).toContain("no non-ambient events yet");
     expect(res.text).toContain("(+5 ambient movement and party-frame events folded into state");
   });
 
@@ -534,7 +534,7 @@ describe("recent_events movement fold", () => {
     expect(on.text).toContain("SMSG_MONSTER_MOVE");
     const off = await callTool(streamCtx(events), "recent_events", { includeMovement: "false" });
     expect(off.text).not.toContain("#1 SMSG_MONSTER_MOVE");
-    expect(off.text).toContain("no non-movement events yet");
+    expect(off.text).toContain("no non-ambient events yet");
     // snake_case is normalized like the other aliases
     const alias = await callTool(streamCtx(events), "recent_events", { include_movement: true });
     expect(alias.text).toContain("SMSG_MONSTER_MOVE");

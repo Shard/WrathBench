@@ -179,7 +179,7 @@ describe("eventWindow and assembleContext", () => {
       "[events: last 1, newest last; 12 ambient movement and party-frame events folded into state only]",
     );
     expect(assembleContext({ ...base, events: [], folded: 9 })).toContain(
-      "[events]\nno non-movement events; 9 ambient movement and party-frame events folded into state only",
+      "[events]\nno non-ambient events; 9 ambient movement and party-frame events folded into state only",
     );
     expect(assembleContext({ ...base, events: [] })).toContain("[events]\nnone yet");
   });

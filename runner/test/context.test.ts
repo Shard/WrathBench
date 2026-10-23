@@ -66,6 +66,15 @@ describe("assembleContext", () => {
     expect(text).not.toContain(`#${69 - CONTEXT_POLICY.EVENT_WINDOW} `);
   });
 
+  test("opens with the turn number alone: no goal competes with the system prompt's directive (#285)", () => {
+    const text = assembleContext(makeInputs());
+    expect(text.split("\n")[0]).toBe("[turn 7]");
+    expect(text.startsWith("[turn 7]\n\n[harness notices]\n")).toBe(true);
+    expect(text).not.toContain("Goal");
+    const quiet = assembleContext({ ...makeInputs(), notices: [] });
+    expect(quiet.startsWith("[turn 7]\n\n== state (seq 69, 70 events seen) ==\n")).toBe(true);
+  });
+
   test("carries notices, scratchpad, turn and summary", () => {
     const text = assembleContext(makeInputs());
     expect(text).toContain("[turn 7]");
@@ -114,7 +123,7 @@ describe("assembleContext", () => {
       ...makeInputs(),
       events: [ev(1, "WB_TRANSPORT_PROGRESS"), ev(2, "SMSG_MONSTER_MOVE"), ev(3, "WB_TRANSPORT_PROGRESS")],
     });
-    expect(text).toContain("[events]\nno non-movement events; 3 ambient movement and party-frame events folded into state only");
+    expect(text).toContain("[events]\nno non-ambient events; 3 ambient movement and party-frame events folded into state only");
     expect(text).not.toContain("none yet");
   });
 });
