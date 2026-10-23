@@ -17,7 +17,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import {
@@ -53,11 +53,16 @@ class FakeGame implements GameSide {
   ]);
   chars: GameCharacter[] = [];
   dumps = 0;
-  loads: { dump: string; account: string; name: string; guid: number }[] = [];
+  loads: { dump: Uint8Array; account: string; name: string; guid: number }[] = [];
   /** A fresh database's generator: the guid a load gets when the asked one is at or past it. */
   nextGuid: number | null = null;
-  dumpText: (c: GameCharacter) => string = (c) =>
-    `IMPORTANT NOTE: THIS DUMPFILE IS MADE FOR USE WITH THE 'PDUMP' COMMAND ONLY\n\nINSERT INTO \`characters\` VALUES ('${c.guid}','${c.accountId}','${c.name}','3','2','0','12');\n`;
+  /** The dump's bytes; a 0xff in a column, which no UTF-8 decode could carry through. */
+  dumpBytes: (c: GameCharacter) => Uint8Array = (c) =>
+    Buffer.concat([
+      Buffer.from(`IMPORTANT NOTE: THIS DUMPFILE IS MADE FOR USE WITH THE 'PDUMP' COMMAND ONLY\n\nINSERT INTO \`characters\` VALUES ('${c.guid}','${c.accountId}','${c.name}','3','2','0','12','`),
+      Buffer.from([0xff, 0xfe, 0x00, 0x80]),
+      Buffer.from("');\n"),
+    ]);
 
   constructor(withCharacter = true) {
     if (withCharacter) this.chars.push({ guid: GUID, name: NAME, accountId: 2, account: "RUNNER2", online: false, level: 12 });
@@ -79,13 +84,13 @@ class FakeGame implements GameSide {
   async accountId(account: string): Promise<number | null> {
     return this.accounts.get(account.toUpperCase()) ?? null;
   }
-  async dump(name: string): Promise<string> {
+  async dump(name: string): Promise<Uint8Array> {
     this.dumps++;
     const c = this.chars.find((x) => x.name === name);
     if (c === undefined) throw new Error("Player not found!");
-    return this.dumpText(c);
+    return this.dumpBytes(c);
   }
-  async load(dump: string, account: string, name: string, guid: number): Promise<void> {
+  async load(dump: Uint8Array, account: string, name: string, guid: number): Promise<void> {
     this.loads.push({ dump, account, name, guid });
     const id = this.accounts.get(account)!;
     const got = this.nextGuid ?? guid;
@@ -142,6 +147,9 @@ function fixture(o: { pause?: boolean; character?: boolean } = {}): Run {
   writeFileSync(join(dir, "claude-config", "backups", ".claude.json.backup.1"), "{}\n");
   writeFileSync(join(dir, "claude-config", "projects", "-tmp-wrathbench-claude-AbC123", "s.jsonl"), '{"type":"user"}\n');
   // A cold heartbeat: a runner that died long ago. It reads as no owner, and is never archived.
+  mkdirSync(join(dir, "claude-config", "empty"));
+  chmodSync(join(dir, "claude-config"), 0o2770);
+  chmodSync(dir, 0o2775);
   writeFileSync(join(dir, HEARTBEAT_FILE), "pid 1\n");
   const cold = new Date(Date.now() - 3_600_000);
   utimesSync(join(dir, HEARTBEAT_FILE), cold, cold);
@@ -247,7 +255,7 @@ describe("export", () => {
       "run/scratchpad.md",
       "run/trajectory.jsonl",
     ]);
-    expect(got.get("character.pdump")!.toString("utf8")).toContain("INSERT INTO `characters`");
+    expect(got.get("character.pdump")!.equals(Buffer.from(game.dumpBytes(game.chars[0]!)))).toBe(true);
     expect(game.dumps).toBe(1);
     // Unchanged where nothing needed striking.
     expect(got.get("run/scratchpad.md")!.equals(readFileSync(join(r.dir, "scratchpad.md")))).toBe(true);
@@ -394,13 +402,20 @@ describe("import", () => {
     expect(res).toMatchObject({ runId: RUN_ID, dir: join(runsDir, RUN_ID), account: "RUNNER2", guid: GUID, warnings: [] });
     expect(game.loads).toHaveLength(1);
     expect(game.loads[0]).toMatchObject({ account: "RUNNER2", name: NAME, guid: GUID });
-    expect(game.loads[0]!.dump).toContain("INSERT INTO `characters`");
+    // The dump is loaded byte for byte, the 0xff included.
+    expect(Buffer.from(game.loads[0]!.dump).equals(members(file).get("character.pdump")!)).toBe(true);
+    expect(Buffer.from(game.loads[0]!.dump).includes(Buffer.from([0xff, 0xfe, 0x00, 0x80]))).toBe(true);
     expect(readdirSync(runsDir)).toEqual([RUN_ID]);
 
     const dir = res.dir;
     expect(tree(dir)).toEqual(tree(r.dir).filter((p) => p !== HEARTBEAT_FILE && p !== "claude-mcp.json" && !p.startsWith("claude-config/backups/")));
     const got = members(file);
     for (const p of tree(dir)) expect([p, sha(readFileSync(join(dir, p)))]).toEqual([p, p === "meta.json" ? sha(readFileSync(join(dir, p))) : sha(got.get(`run/${p}`)!)]);
+    // Directories come back in their own modes, empty ones included: a mkdir's mode is the umask's.
+    expect(statSync(dir).mode & 0o7777).toBe(0o2775);
+    expect(statSync(join(dir, "claude-config")).mode & 0o7777).toBe(0o2770);
+    expect(statSync(join(dir, "claude-config", "empty")).isDirectory()).toBe(true);
+    expect(existsSync(join(dir, "claude-config", "backups"))).toBe(false);
     // Modification times come back too: a last-activity read off the trajectory is still the run's own.
     expect(Math.floor(statSync(join(dir, "trajectory.jsonl")).mtimeMs / 1000)).toBe(Math.floor(statSync(join(r.dir, "trajectory.jsonl")).mtimeMs / 1000));
 

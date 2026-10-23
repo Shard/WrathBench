@@ -14,8 +14,10 @@
  *
  * - `manifest.json`: the run id, model, effort, driver and episode; the
  *   character's name, guid, account and level; the harness build the run
- *   recorded and the one that exported it; when it was exported; and the size
- *   and sha256 of every other member;
+ *   recorded and the one that exported it; when it was exported; the size
+ *   and sha256 of every other member; and the mode bits of every directory
+ *   in the run, so that an import restores them (and empty ones) rather than
+ *   whatever the umask gives;
  * - `character.pdump`: the character's rows in AzerothCore's own player-dump
  *   format (`.pdump write`), so the core loads them back with its own code,
  *   which remaps item, mail, pet and equipment-set ids and tells its caches;
@@ -112,7 +114,7 @@ import { REDACTED } from "./redact";
 import { describeFindings, envSecrets, SecretScanner, type KnownSecret } from "./secret-scan";
 import { strikableSessionToken } from "./session-token";
 import { HEARTBEAT_FILE, type CharacterImport } from "./trajectory";
-import { tarEnd, tarHeader, tarPadding, TarReader, type TarEntry, type TarHandler } from "./ustar";
+import { isSafeMemberPath, tarEnd, tarHeader, tarPadding, TarReader, type TarEntry, type TarHandler } from "./ustar";
 
 export const ARCHIVE_FORMAT = "wrathbench-character-archive";
 export const MANIFEST_MEMBER = "manifest.json";
@@ -170,10 +172,13 @@ export interface GameSide {
   characterByGuid(guid: number): Promise<GameCharacter | null>;
   /** The account's id, or null when it does not exist. */
   accountId(account: string): Promise<number | null>;
-  /** The character's rows, as `.pdump write` writes them. */
-  dump(name: string): Promise<string>;
+  /**
+   * The character's rows, as `.pdump write` writes them. Bytes, never text:
+   * a column that is not valid UTF-8 must load back as it was dumped.
+   */
+  dump(name: string): Promise<Uint8Array>;
   /** `.pdump load` onto `account` as `name`, asking for `guid`. */
-  load(dump: string, account: string, name: string, guid: number): Promise<void>;
+  load(dump: Uint8Array, account: string, name: string, guid: number): Promise<void>;
 }
 
 // --------------------------------------------------------------- manifest
@@ -182,6 +187,12 @@ const MemberSchema = z.object({
   path: z.string().min(1),
   size: z.number().int().nonnegative(),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  mode: z.number().int().min(0).max(0o7777),
+});
+
+const DirectorySchema = z.object({
+  /** `run`, or a directory under it. */
+  path: z.string().min(1),
   mode: z.number().int().min(0).max(0o7777),
 });
 
@@ -210,10 +221,13 @@ const ManifestSchema = z.object({
   trajectory: z.boolean(),
   /** Every member but the manifest itself, in archive order. */
   members: z.array(MemberSchema),
+  /** Every directory of the run, the run directory itself first, with its mode bits: a tar of files alone would lose both. */
+  directories: z.array(DirectorySchema),
 });
 
 export type Manifest = z.infer<typeof ManifestSchema>;
 export type ManifestMember = z.infer<typeof MemberSchema>;
+export type ManifestDirectory = z.infer<typeof DirectorySchema>;
 
 // ---------------------------------------------------------------- export
 
@@ -297,7 +311,7 @@ export async function exportCharacter(o: ExportOptions): Promise<ExportResult> {
   const tempBase = join(dirname(o.file), `.${basename(o.file)}.${process.pid}`);
   const partial = `${tempBase}.partial`;
   try {
-    const sources = runSources(dir, metaText, meta, token, o.trajectory, (i) => {
+    const { sources, directories } = runSources(dir, metaText, meta, token, o.trajectory, (i) => {
       const t = `${tempBase}.${i}.sqlite`;
       temps.push(t);
       return t;
@@ -315,7 +329,7 @@ export async function exportCharacter(o: ExportOptions): Promise<ExportResult> {
 
     // The game half, last of the reads: the character may not have come online meanwhile.
     refuseExportCharacter(await o.game.characterByName(name), name, account);
-    const dumpBytes = new TextEncoder().encode(await o.game.dump(character!.name));
+    const dumpBytes = await o.game.dump(character!.name);
     if (!looksLikePdump(dumpBytes)) throw new CharacterArchiveRefused(`the server's dump of ${character!.name} has no characters row — nothing written`);
     const dumpFindings = scanner.scan(Buffer.from(dumpBytes).toString("latin1"));
     if (dumpFindings.length > 0) throw new CharacterArchiveRefused(`the character's dump carries what reads as a credential (${describeFindings(dumpFindings)}) — nothing written`);
@@ -341,6 +355,7 @@ export async function exportCharacter(o: ExportOptions): Promise<ExportResult> {
       character: { name: character!.name, guid: character!.guid, account: character!.account!, level: character!.level },
       trajectory: o.trajectory,
       members,
+      directories,
     };
     const manifestBytes = new TextEncoder().encode(`${JSON.stringify(manifest, null, 2)}\n`);
 
@@ -414,7 +429,7 @@ function excluded(rel: string, trajectory: boolean): boolean {
   return /\.sqlite-(journal|wal|shm)$/.test(base);
 }
 
-/** Every member the run directory gives, sorted, meta.json first. */
+/** Every member the run directory gives, sorted, meta.json first; and its directories with their modes. */
 function runSources(
   dir: string,
   metaText: string,
@@ -422,8 +437,9 @@ function runSources(
   token: string | null,
   trajectory: boolean,
   tempFor: (i: number) => string,
-): Source[] {
+): { sources: Source[]; directories: ManifestDirectory[] } {
   const files: string[] = [];
+  const directories: ManifestDirectory[] = [{ path: "run", mode: statSync(dir).mode & 0o7777 }];
   const walk = (rel: string): void => {
     const abs = rel === "" ? dir : join(dir, rel);
     for (const name of readdirSync(abs).sort()) {
@@ -431,8 +447,10 @@ function runSources(
       if (excluded(r, trajectory)) continue;
       if (CREDENTIAL_FILES.has(name)) throw new CharacterArchiveRefused(`${r} is a credential store — a run directory must never hold one, and an archive never carries one`);
       const st = lstatSync(join(dir, r));
-      if (st.isDirectory()) walk(r);
-      else if (st.isFile()) files.push(r);
+      if (st.isDirectory()) {
+        directories.push({ path: `${RUN_PREFIX}${r}`, mode: st.mode & 0o7777 });
+        walk(r);
+      } else if (st.isFile()) files.push(r);
       else throw new CharacterArchiveRefused(`${r} is neither a file nor a directory (a link?) — refused rather than followed`);
     }
   };
@@ -458,7 +476,7 @@ function runSources(
       out.push({ ...base, chunks: () => struck(fileChunks(abs), token) });
     }
   }
-  return out;
+  return { sources: out, directories };
 }
 
 /**
@@ -717,6 +735,11 @@ function parseManifest(text: string, file: string): Manifest {
       throw new CharacterArchiveRefused(`${file}: the manifest lists ${member.path}, which is neither the dump nor in the run directory`);
     }
   }
+  for (const d of m.directories) {
+    if (d.path !== "run" && !(d.path.startsWith(RUN_PREFIX) && isSafeMemberPath(d.path))) {
+      throw new CharacterArchiveRefused(`${file}: the manifest lists directory ${d.path}, which is not in the run directory`);
+    }
+  }
   if (!paths.has(PDUMP_MEMBER)) throw new CharacterArchiveRefused(`${file}: the manifest lists no ${PDUMP_MEMBER}`);
   if (!paths.has(`${RUN_PREFIX}meta.json`)) throw new CharacterArchiveRefused(`${file}: the manifest lists no ${RUN_PREFIX}meta.json`);
   return m;
@@ -866,7 +889,7 @@ export async function importCharacter(o: ImportOptions): Promise<ImportResult> {
  * manifest does not list, lists twice, or sizes or hashes otherwise, and on
  * any it lists that never came.
  */
-async function extract(file: string, m: Manifest, staging: string): Promise<string> {
+async function extract(file: string, m: Manifest, staging: string): Promise<Buffer> {
   const byPath = new Map(m.members.map((x) => [x.path, x]));
   const seen = new Set<string>();
   let index = 0;
@@ -930,5 +953,12 @@ async function extract(file: string, m: Manifest, staging: string): Promise<stri
   }
   const missing = m.members.filter((x) => !seen.has(x.path)).map((x) => x.path);
   if (missing.length > 0) throw new CharacterArchiveRefused(`${file}: the manifest lists ${missing.join(", ")}, which the archive does not hold`);
-  return Buffer.concat(dump).toString("utf8");
+  // Directories last: every one the run had, empty ones too, in its own mode
+  // (a mkdir's is cut by the umask, which is how a hand copy loses group-write).
+  for (const d of m.directories) {
+    const target = d.path === "run" ? staging : join(staging, d.path.slice(RUN_PREFIX.length));
+    mkdirSync(target, { recursive: true });
+    chmodSync(target, d.mode & 0o7777);
+  }
+  return Buffer.concat(dump);
 }

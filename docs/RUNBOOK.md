@@ -921,7 +921,8 @@ which holds:
 - whether the run is paused or ended, and why;
 - the harness build the run recorded and the one that exported it;
 - when it was exported;
-- the size and sha256 of every other member.
+- the size and sha256 of every other member;
+- the mode bits of every directory in the run, which an import restores.
 
 Then come `character.pdump`, the character's rows in AzerothCore's own
 player-dump format, and `run/…`, the run directory, which leaves out:

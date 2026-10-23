@@ -121,13 +121,13 @@ export class SoapGameSide implements GameSide {
     return { local: join(this.o.localDir, file), server: `${this.o.serverDir}/${file}` };
   }
 
-  async dump(name: string): Promise<string> {
+  async dump(name: string): Promise<Uint8Array> {
     if (!NAME.test(name)) throw new CharacterArchiveRefused(`refusing .pdump write for ${JSON.stringify(name)}: not a character name`);
     const f = this.exchange();
     try {
       await this.soap(`.pdump write ${f.server} ${name}`);
       try {
-        return readFileSync(f.local, "utf8");
+        return readFileSync(f.local);
       } catch (e) {
         throw new CharacterArchiveRefused(
           `the server wrote ${f.server}, but it is not at ${f.local} here (${e instanceof Error ? e.message : String(e)}): ` +
@@ -139,7 +139,7 @@ export class SoapGameSide implements GameSide {
     }
   }
 
-  async load(dump: string, account: string, name: string, guid: number): Promise<void> {
+  async load(dump: Uint8Array, account: string, name: string, guid: number): Promise<void> {
     if (!NAME.test(name)) throw new CharacterArchiveRefused(`refusing .pdump load as ${JSON.stringify(name)}: not a character name`);
     if (!ACCOUNT.test(account)) throw new CharacterArchiveRefused(`refusing .pdump load onto ${JSON.stringify(account)}: not an account name`);
     if (!Number.isSafeInteger(guid) || guid <= 0) throw new CharacterArchiveRefused(`refusing .pdump load with guid ${guid}`);

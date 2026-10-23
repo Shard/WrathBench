@@ -17,18 +17,18 @@ import { SoapError } from "./fixtures/soap.ts";
 
 const tempDir = tempDirs();
 const SERVER = "/srv/characters/pdump";
-const DUMP = "IMPORTANT NOTE: …\n\nINSERT INTO `characters` VALUES ('57','2','Brenna');\n";
+const DUMP = Buffer.concat([Buffer.from("IMPORTANT NOTE: …\n\nINSERT INTO `characters` VALUES ('57','2','Brenna','"), Buffer.from([0xff, 0x80]), Buffer.from("');\n")]);
 
 /** A worldserver that sees `SERVER` where this process sees `local`. */
 function fakeServer(local: string, reply: (command: string, file: string | null) => string = () => "") {
   const commands: string[] = [];
-  const seen: (string | null)[] = [];
+  const seen: (Buffer | null)[] = [];
   const soap = {
     execute: async (command: string): Promise<string> => {
       commands.push(command);
       const path = command.split(" ")[2] ?? "";
       const file = path.startsWith(`${SERVER}/`) ? join(local, path.slice(SERVER.length + 1)) : null;
-      seen.push(file !== null && existsSync(file) ? readFileSync(file, "utf8") : null);
+      seen.push(file !== null && existsSync(file) ? readFileSync(file) : null);
       return reply(command, file);
     },
   };
@@ -45,7 +45,7 @@ describe("SoapGameSide", () => {
       if (command.startsWith(".pdump write") && file !== null) writeFileSync(file, DUMP);
       return "Character dumped successfully.";
     });
-    expect(await game(local, s.soap).dump("Brenna")).toBe(DUMP);
+    expect(Buffer.from(await game(local, s.soap).dump("Brenna")).equals(DUMP)).toBe(true);
     expect(s.commands).toHaveLength(1);
     expect(s.commands[0]).toMatch(new RegExp(`^\\.pdump write ${SERVER}/\\d+-[0-9a-f]{12}\\.pdump Brenna$`));
     expect(readdirSync(local)).toEqual([]);
