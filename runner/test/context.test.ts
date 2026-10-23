@@ -102,7 +102,7 @@ describe("assembleContext", () => {
       ],
     });
     expect(text).toContain(
-      "[events: last 2, newest last; 4 ambient movement events folded into state only]\n" +
+      "[events: last 2, newest last; 4 ambient movement and party-frame events folded into state only]\n" +
         "#3 SMSG_ATTACKERSTATEUPDATE {}\n#6 WB_MOVE_PROGRESS {}",
     );
     expect(text).not.toContain("WB_TRANSPORT_PROGRESS");
@@ -114,7 +114,7 @@ describe("assembleContext", () => {
       ...makeInputs(),
       events: [ev(1, "WB_TRANSPORT_PROGRESS"), ev(2, "SMSG_MONSTER_MOVE"), ev(3, "WB_TRANSPORT_PROGRESS")],
     });
-    expect(text).toContain("[events]\nno non-movement events; 3 ambient movement events folded into state only");
+    expect(text).toContain("[events]\nno non-movement events; 3 ambient movement and party-frame events folded into state only");
     expect(text).not.toContain("none yet");
   });
 });

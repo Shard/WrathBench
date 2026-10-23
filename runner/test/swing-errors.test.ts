@@ -106,7 +106,7 @@ describe("melee swing errors reach the model like any other combat event", () =>
       turn: 1,
     });
     expect(context).toContain(
-      "[events: last 3, newest last; 3 ambient movement events folded into state only]\n" +
+      "[events: last 3, newest last; 3 ambient movement and party-frame events folded into state only]\n" +
         `#0 SMSG_ATTACKSTART {"attackerGuid":"7","victimGuid":"99"}\n` +
         `#1 ${NOT_IN_RANGE} {}\n` +
         `#5 ${BAD_FACING} {}`,
@@ -127,7 +127,7 @@ describe("melee swing errors reach the model like any other combat event", () =>
     expect(tool.text).toContain(`#1 ${NOT_IN_RANGE} {}`);
     expect(tool.text).toContain(`#5 ${BAD_FACING} {}`);
     expect(tool.text).not.toContain("MSG_MOVE_HEARTBEAT");
-    expect(tool.text).toContain("(+3 ambient movement events folded into state");
+    expect(tool.text).toContain("(+3 ambient movement and party-frame events folded into state");
   });
 
   test("the event line is the opcode and the empty payload, with no note appended", () => {

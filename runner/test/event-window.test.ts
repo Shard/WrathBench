@@ -141,7 +141,7 @@ describe("the context builder renders the window and logs exactly that", () => {
       recentEvents: () => Promise.reject(new Error("the window must not read the raw tail")),
     });
     const text = await ctx.build(1, []);
-    expect(text).toContain("[events: last 2, newest last; 4321 ambient movement events folded into state only]");
+    expect(text).toContain("[events: last 2, newest last; 4321 ambient movement and party-frame events folded into state only]");
     const served = readTrajectory(dir).filter((r) => r.t === "events_served");
     expect(served).toHaveLength(1);
     expect(served[0]).toMatchObject({ via: "context", count: 2, folded: 4_321 });
@@ -153,7 +153,7 @@ describe("the context builder renders the window and logs exactly that", () => {
     const raw = [ev(1, "SMSG_MONSTER_MOVE"), ev(2, "SMSG_ATTACKSTART"), ev(3, "WB_TRANSPORT_PROGRESS"), ev(4, "MSG_MOVE_HEARTBEAT")];
     const { dir, ctx, trajectory } = builderOver({ recentEvents: () => Promise.resolve(raw) });
     const text = await ctx.build(1, []);
-    expect(text).toContain("[events: last 1, newest last; 3 ambient movement events folded into state only]");
+    expect(text).toContain("[events: last 1, newest last; 3 ambient movement and party-frame events folded into state only]");
     const served = readTrajectory(dir).filter((r) => r.t === "events_served")[0]!;
     expect(served).toMatchObject({ via: "context", count: 1, folded: 3 });
     expect((served["events"] as EventSummary[]).map((e) => e.opcode)).toEqual(["SMSG_ATTACKSTART"]);
@@ -176,11 +176,26 @@ describe("eventWindow and assembleContext", () => {
 
   test("the folded count the sandbox reports reaches the line, and an all-ambient span still says so", () => {
     expect(assembleContext({ ...base, events: [ev(1, "SMSG_ATTACKSTART")], folded: 12 })).toContain(
-      "[events: last 1, newest last; 12 ambient movement events folded into state only]",
+      "[events: last 1, newest last; 12 ambient movement and party-frame events folded into state only]",
     );
     expect(assembleContext({ ...base, events: [], folded: 9 })).toContain(
-      "[events]\nno non-movement events; 9 ambient movement events folded into state only",
+      "[events]\nno non-movement events; 9 ambient movement and party-frame events folded into state only",
     );
     expect(assembleContext({ ...base, events: [] })).toContain("[events]\nnone yet");
+  });
+
+  test("party frames are folded and counted with movement, and the note names both", () => {
+    const events = [
+      ev(1, "SMSG_PARTY_MEMBER_STATS"),
+      ev(2, "SMSG_MONSTER_MOVE"),
+      ev(3, "SMSG_ATTACKSTART"),
+      ev(4, "SMSG_PARTY_MEMBER_STATS_FULL"),
+    ];
+    const { window, folded } = eventWindow(events);
+    expect(window.map((e) => e.opcode)).toEqual(["SMSG_ATTACKSTART"]);
+    expect(folded).toBe(3);
+    expect(assembleContext({ ...base, events })).toContain(
+      "[events: last 1, newest last; 3 ambient movement and party-frame events folded into state only]",
+    );
   });
 });

@@ -1440,9 +1440,9 @@ export function assembleContext(inputs: ContextInputs): string {
   } else if (window.length === 0) {
     // Everything fetched was ambient: say so, rather than "none yet" over a
     // stream that is plainly running.
-    parts.push(`[events]\nno non-movement events; ${excluded} ambient movement events folded into state only`);
+    parts.push(`[events]\nno non-movement events; ${excluded} ambient movement and party-frame events folded into state only`);
   } else {
-    const note = excluded > 0 ? `; ${excluded} ambient movement events folded into state only` : "";
+    const note = excluded > 0 ? `; ${excluded} ambient movement and party-frame events folded into state only` : "";
     parts.push(
       `[events: last ${window.length}, newest last${note}]\n${window.map(formatEventLine).join("\n")}`,
     );
