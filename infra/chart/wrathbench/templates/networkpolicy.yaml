@@ -37,8 +37,8 @@ The worldserver gets ONE policy, and only with party staging on
 (`staging.enabled`), whether or not the switch above is: an ingress policy
 whose only restriction is the SOAP port. SOAP runs console commands as an
 administrator, so it is admitted from the fleet pod (the roster stages a
-party before a fresh launch) and the runner pod (the staging smokes, by hand)
-and from nothing else — no run pod, viewer, publisher or collector. A policy
+party before a fresh launch) and the runner pod (the staging smokes and the
+character archive's `.pdump`, by hand) and from nothing else — no run pod, viewer, publisher or collector. A policy
 that selects a pod drops every port it does not list, so the same policy
 admits the world port and the module port from every source, exactly as they
 are reached with no policy at all. With the switch above on, the fleet's

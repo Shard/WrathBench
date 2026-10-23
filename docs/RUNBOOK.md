@@ -896,6 +896,144 @@ Scored episodes are untouched: `--continue-from` is refused on `e90`/`e360`,
 their hygiene still clears everything but another ref's freeplay character,
 and a lapsed scored run is still a failed attempt.
 
+### Backing up and moving a character
+
+A freeplay character is two halves: its run directory and its rows in the
+characters database. `export-character` writes both into one archive, and
+`import-character` puts both back. Use it to back a character up before
+risky maintenance, to move it to another host, or to restore it after a
+database loss. Both run in the runner pod, where the runs volume, the
+databases and SOAP are:
+
+```
+bun wb accounts export-character <run-id> [file] [--no-trajectory]
+bun wb accounts import-character <file> [--account NAME] [--note TEXT] [--actor NAME]
+```
+
+The archive goes in `data/characters/`, the runner pod's mount of the data
+volume's `characters` subPath. A file named without a `/` is taken from
+there, and the default name is `<run-id>-<UTC stamp>.tar.gz`. It is a tar,
+gzipped when its name ends in `.gz`. Its first member is `manifest.json`,
+which holds:
+
+- the run id, model, effort, driver and episode;
+- the character's name, guid, account and level;
+- whether the run is paused or ended, and why;
+- the harness build the run recorded and the one that exported it;
+- when it was exported;
+- the size and sha256 of every other member;
+- the mode bits of every directory in the run, which an import restores.
+
+Then come `character.pdump`, the character's rows in AzerothCore's own
+player-dump format, and `run/…`, the run directory, which leaves out:
+
+- the heartbeat;
+- `claude-config/backups/`;
+- `claude-mcp.json`, which the CLI driver rewrites at every launch;
+- temp files and sqlite journals. Each sqlite file is copied consistently
+  with `VACUUM INTO`.
+
+With `--no-trajectory` it also leaves out `trajectory.jsonl`. That makes a
+small archive that can continue the character, though it no longer holds its
+record.
+
+An archive never carries a credential:
+
+- meta.json's module session token is dropped. A resume mints a fresh one.
+- Where older records still carry that token (every run recorded before it
+  stopped reaching the record), it is struck to `[redacted]`, as the
+  collector and the viewer strike it.
+- Anything else that reads as a credential, matched by value against the
+  runner pod's environment or by shape, refuses the export. The refusal
+  names the file and the rule, never the value.
+- A `.credentials.json` or `auth.json` anywhere is refused.
+
+**The game half** is the core's own `.pdump write` and `.pdump load`, sent
+over SOAP as STAGER. The core remaps item, mail and pet ids on load and
+updates its own caches, which SQL of ours would not. So the game half needs
+SOAP, which only the chart's `staging` switch turns on ("Party staging"). The
+same switch mounts the `characters` subPath in the worldserver, at
+`/azerothcore/env/dist/characters`, so the dump file passes between the two
+pods. That file lives in `characters/pdump/` only while one command runs.
+Without SOAP (the compose quickstart, or staging off) both commands refuse by
+name.
+
+Lookups, such as whether an account, a name or a guid exists, or whether
+the character is online, are read-only SELECTs.
+
+**Export refuses**, writing nothing:
+
+- a run with a live owner;
+- a run with no verdict;
+- an archived run;
+- a run that has named no character;
+- a character the database lacks, holds on another account, or has online.
+
+**Import refuses**, loading and writing nothing:
+
+- a run id that exists, under the runs directory or `archive/`;
+- an account that does not exist (`bun wb accounts ensure` it first);
+- a character name or guid that exists. A soft-deleted character's guid
+  counts as existing;
+- any member whose size or sha256 differs from the manifest, and any member
+  that is missing or that the manifest does not list.
+
+The run directory is extracted into a staging directory whose name no run id
+can have. The character is then loaded and read back. Last, the staging
+directory is renamed into place.
+
+The imported run keeps its id, because it is the same character continuing.
+It comes back paused (or ended) exactly as it left, and nothing resumes it
+but the roster's `idle`, as for any paused run. Each import is appended to
+`imports` in its meta.json (archive, export time and build, the account and
+guid it left and landed on, actor, note). Like `laneHistory`, no public
+projection carries it.
+
+With `--account`, the run's `config.account` moves too. A resume plays on
+that account, so it has to be on the module's allowlist and in the fleet's
+pool. The core keeps a dump's guid only when that guid is below the highest
+it has handed out, which a fresh database has not reached. If the guid moves,
+the import says so and records it. Runs find their character by account and
+name, so nothing reads the old guid.
+
+**Before risky maintenance**, back up every character that matters, with
+each one paused:
+
+```
+bun wb config patch roster/sonnet '{"idle":"none"}' --actor operator --note "backup before maintenance"
+bun wb inspect run <run-id>                       # wait for "paused: operator-pause"
+bun wb accounts export-character <run-id>         # prints the archive's path
+bun wb config patch roster/sonnet '{"idle":"unlimited"}' --actor operator --note "backed up"
+```
+
+The archive is on the same volume as the run. To survive the loss of that
+volume, copy it off the cluster:
+
+```
+kubectl -n wrathbench exec deploy/wrathbench-runner -- cat data/characters/<file> > <file>
+```
+
+**Restoring** onto a host, or after a database loss:
+
+1. Set the ref to `idle: "none"` first, so the run is not picked up the
+   moment it lands.
+2. Copy the archive in:
+
+   ```
+   kubectl -n wrathbench exec -i deploy/wrathbench-runner -- sh -c 'cat > data/characters/<file>' < <file>
+   ```
+
+3. Run `bun wb accounts import-character <file>`.
+4. Set the ref back to `unlimited` when you want it played.
+
+An import never replaces anything. If the run directory survived the loss,
+move it aside (or archive it) first. If the character survived, it is
+already restored.
+
+**Moving a character to another account on the same host** is an export,
+then removing the run directory and deleting the character, then an import
+with `--account`. The removal is deliberately not part of either command.
+
 ### Node disk pressure
 
 A node that runs out of root disk evicts pods, and it does not ask nicely: at
@@ -2143,7 +2281,11 @@ these things, and nothing else:
   the chart refuses to render it there);
 - gives the fleet and runner pods the SOAP URL and STAGER's password. Run
   pods get neither, and `infra/run-pod.ts` refuses any SOAP or STAGER
-  variable outright.
+  variable outright;
+- mounts the data volume's `characters` subPath in the worldserver too, and
+  sets `PlayerDump.DisallowPaths` to 0, so the character archive's `.pdump`
+  can name a file the runner pod also sees ("Backing up and moving a
+  character").
 
 The compose quickstart keeps SOAP off.
 

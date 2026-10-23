@@ -22,7 +22,11 @@ type Doc = {
   metadata?: { name?: string };
   spec?: {
     ports?: { name: string; port: number; targetPort: number }[];
-    template?: { spec?: { containers?: { name: string; env?: Env[]; ports?: { name: string; containerPort: number }[] }[] } };
+    template?: {
+      spec?: {
+        containers?: { name: string; env?: Env[]; ports?: { name: string; containerPort: number }[]; volumeMounts?: { name: string; mountPath: string; subPath?: string }[] }[];
+      };
+    };
   };
 } | null;
 
@@ -98,6 +102,22 @@ describe.skipIf(helm === null)("the chart's party-staging switch", () => {
       expect([extra.join(" "), r.code === 0]).toEqual([extra.join(" "), false]);
       expect(r.stderr).toContain("STAGER may never be on the module's account allowlist");
     }
+  }, HELM_TEST_MS);
+
+  test("the character archive's pdump exchange: the worldserver mounts the runner's `characters` subPath and takes paths only with staging on", () => {
+    const characters = (c: { volumeMounts?: { mountPath: string; subPath?: string }[] }) => c.volumeMounts?.find((m) => m.subPath === "characters");
+    const runner = (docs: Doc[]) => find(docs, "Deployment", "wrathbench-runner").spec!.template!.spec!.containers!.find((c) => c.name === "runner")!;
+    const off = render([]);
+    expect(off.code).toBe(0);
+    expect(characters(worldserver(off.docs))).toBeUndefined();
+    expect(envOf(worldserver(off.docs))["AC_PLAYER_DUMP_DISALLOW_PATHS"]).toBeUndefined();
+    // The archives themselves live there whatever the switch says.
+    expect(characters(runner(off.docs))?.mountPath).toBe("/wrathbench/data/characters");
+    const on = render(["--set", "staging.enabled=true"]);
+    expect(on.code).toBe(0);
+    expect(characters(worldserver(on.docs))?.mountPath).toBe("/azerothcore/env/dist/characters");
+    expect(envOf(worldserver(on.docs))["AC_PLAYER_DUMP_DISALLOW_PATHS"]?.value).toBe("0");
+    expect(characters(runner(on.docs))?.mountPath).toBe("/wrathbench/data/characters");
   }, HELM_TEST_MS);
 
   test("a party account already on worldserver.accounts is listed once", () => {

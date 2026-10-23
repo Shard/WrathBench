@@ -76,6 +76,11 @@ spec:
             - name: data
               mountPath: /wrathbench/data/config
               subPath: config
+            # Character archives (`bun wb accounts export-character`), and,
+            # with staging on, the pdump exchange the worldserver mounts too.
+            - name: data
+              mountPath: /wrathbench/data/characters
+              subPath: characters
             {{- if .Values.codex.enabled }}
             # NOT a subPath: the CLI rewrites auth.json in place and expects a
             # real directory it owns (uid 1000, via the pod's fsGroup).
