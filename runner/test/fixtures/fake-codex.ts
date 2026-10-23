@@ -455,7 +455,7 @@ function writeRollout(): void {
         payload: {
           message: entry.compact.message ?? "",
           replacement_history: [
-            { type: "message", role: "user", content: [{ type: "input_text", text: `[turn ${turn}] Goal: survive and level as far as you can.` }] },
+            { type: "message", role: "user", content: [{ type: "input_text", text: `[turn ${turn}]\n\n== state ==` }] },
             { type: "compaction", encrypted_content: "gAAAAfake" },
           ],
           window_number: 1,

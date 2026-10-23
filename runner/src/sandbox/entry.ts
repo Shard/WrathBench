@@ -1389,7 +1389,33 @@ function abortEval(id: number): void {
   releasePadCalls(id);
   abandonedEval = id;
   abandonUnwind = new Promise((resolve) => abandonUnwindSettled.set(id, resolve));
-  controller.abort(new Error(`snippet abandoned by the harness (timeout); pending waits cancelled`));
+  const reason = new Error(`snippet abandoned by the harness (timeout); pending waits cancelled`);
+  abandonReasons.add(reason);
+  controller.abort(reason);
+}
+
+/**
+ * The reasons `abortEval` aborted with. An abandoned snippet's pending calls
+ * reject with one of them: `sleep` with the reason itself, a sleep that could
+ * never have fit with it as `cause` (`withSleepAbandon`), an SDK wait as an
+ * `EventAbortedError` whose `reason` it is. A call the snippet launched and did
+ * not await rejects unhandled with that, after the abandonment's own report
+ * has already told the model its pending waits were cancelled; it is the
+ * harness's doing and no fault of the sandbox. Identity, not the class: a
+ * wait the snippet cancelled with its own AbortController is still the
+ * snippet's fault to hear about.
+ */
+const abandonReasons = new WeakSet<object>();
+
+/** Whether `reason` is the harness abandoning a snippet, directly or as what an aborted wait carries. */
+function isHarnessAbandonment(reason: unknown): boolean {
+  let r = reason;
+  for (let depth = 0; depth < 4 && typeof r === "object" && r !== null; depth++) {
+    if (abandonReasons.has(r)) return true;
+    const carried = r as { reason?: unknown; cause?: unknown };
+    r = carried.reason !== undefined ? carried.reason : carried.cause;
+  }
+  return false;
 }
 
 // --------------------------------------------------------------------- rpc
@@ -2109,6 +2135,7 @@ function reportBackgroundError(kind: string, reason: unknown): void {
 }
 
 process.on("unhandledRejection", (reason) => {
+  if (isHarnessAbandonment(reason)) return;
   reportBackgroundError("unhandled promise rejection", reason);
 });
 

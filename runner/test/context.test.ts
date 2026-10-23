@@ -66,6 +66,15 @@ describe("assembleContext", () => {
     expect(text).not.toContain(`#${69 - CONTEXT_POLICY.EVENT_WINDOW} `);
   });
 
+  test("opens with the turn number alone: no goal competes with the system prompt's directive (#285)", () => {
+    const text = assembleContext(makeInputs());
+    expect(text.split("\n")[0]).toBe("[turn 7]");
+    expect(text.startsWith("[turn 7]\n\n[harness notices]\n")).toBe(true);
+    expect(text).not.toContain("Goal");
+    const quiet = assembleContext({ ...makeInputs(), notices: [] });
+    expect(quiet.startsWith("[turn 7]\n\n== state (seq 69, 70 events seen) ==\n")).toBe(true);
+  });
+
   test("carries notices, scratchpad, turn and summary", () => {
     const text = assembleContext(makeInputs());
     expect(text).toContain("[turn 7]");
@@ -102,7 +111,7 @@ describe("assembleContext", () => {
       ],
     });
     expect(text).toContain(
-      "[events: last 2, newest last; 4 ambient movement events folded into state only]\n" +
+      "[events: last 2, newest last; 4 ambient movement and party-frame events folded into state only]\n" +
         "#3 SMSG_ATTACKERSTATEUPDATE {}\n#6 WB_MOVE_PROGRESS {}",
     );
     expect(text).not.toContain("WB_TRANSPORT_PROGRESS");
@@ -114,7 +123,7 @@ describe("assembleContext", () => {
       ...makeInputs(),
       events: [ev(1, "WB_TRANSPORT_PROGRESS"), ev(2, "SMSG_MONSTER_MOVE"), ev(3, "WB_TRANSPORT_PROGRESS")],
     });
-    expect(text).toContain("[events]\nno non-movement events; 3 ambient movement events folded into state only");
+    expect(text).toContain("[events]\nno non-ambient events; 3 ambient movement and party-frame events folded into state only");
     expect(text).not.toContain("none yet");
   });
 });
@@ -151,13 +160,23 @@ describe("formatStateSummary: the chat tail", () => {
           { type: 17, senderGuid: "8", channelName: "General", message: "anyone selling linen" },
           { type: 48, senderGuid: "8", receiverGuid: "8", message: "%s has earned the achievement $a!", achievementId: 6 },
           { type: 48, senderGuid: "11", receiverGuid: "11", message: "%s has earned the achievement $a!" },
+          // As the SDK's state.chat serves it, already filled: no second name in front.
+          {
+            type: 48,
+            senderGuid: "8",
+            senderName: "Quilby",
+            receiverGuid: "8",
+            message: "Quilby has earned the achievement [Deadmines]!",
+            achievementId: 628,
+          },
         ],
       },
       { sessionLive: true },
     );
     expect(text).toContain("  [General] <Quilby> anyone selling linen");
-    expect(text).toContain("  [achievement] Quilby has earned the achievement achievement 6!");
+    expect(text).toContain("  [achievement] Quilby has earned the achievement [achievement 6]!");
     expect(text).toContain("  [achievement] 11 has earned the achievement an achievement!");
+    expect(text).toMatch(/^  \[achievement\] Quilby has earned the achievement \[Deadmines\]!$/m);
   });
 
   // The 2026-10-20 Deadmines party runs: party, whisper, say and yell read the
