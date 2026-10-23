@@ -408,7 +408,10 @@ The flags are `claudeArgs`, all present in `claude -p --help` for 2.1.238.
 without it. `--allowed-tools` is the whole permission story — verified against
 the real CLI (with a local capture proxy standing in for the model, so nothing
 was billed) that it dispatches an MCP tool call in headless mode without
-`--permission-mode`.
+`--permission-mode`. With no mode named, the `init` frame reports the mode
+the CLI picked: `auto` on 2.1.293, and `default` from 2.1.302 on. On the
+pinned 2.1.309 the call still dispatches on the allowlist alone (probed with
+the driver's flags against a stub MCP server).
 
 ### Bounding the inner loop — the real control
 
@@ -464,7 +467,11 @@ A harness setting of the CLI scaffolds since the operator's decision of
 2026-10-11; this section is claude-code's mechanics, and "The codex driver"
 below has codex's, and "The pi driver" pi's. The CLI summarises its own history once the prompt nears
 its auto-compaction window, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: `auto` or
-100k–1M tokens in 2.1.293.
+100k–1M tokens in the pinned 2.1.309. The driver sends the canonical `<n>k`,
+which a CLI before 2.1.304 read as 100k whatever `n` was: on 2.1.293 `200k`
+and `300k` both logged `effectiveWindow=80000`, where 2.1.309 logs 180000 and
+280000 (probed). A claude-code run stamped with a window above `100k` on an
+image older than this pin compacted as a `100k` run.
 `auto` sits near the model's whole context — with `--debug` the CLI logs
 `autocompact: … effectiveWindow=980000` for Claude Haiku 5.5 — so a long run
 replays close to a million tokens per call before anything is summarised, and
@@ -501,14 +508,15 @@ today's all-1M Claude roster `1M` is therefore always refused.
 Each compaction the CLI streams — a `system` envelope with subtype
 `compact_boundary` and `compact_metadata` (`trigger`, `pre_tokens`, and when
 known `post_tokens` and `duration_ms`: recorded by 2.1.239 runs, and the same
-mapping is in the pinned 2.1.293 binary) — stays on the trajectory
+fields on a 2.1.309 compaction, beside new ones the record does not keep) — stays on the trajectory
 raw as `claude_system` and is also written as a `harness` record of kind
 `compaction` with `trigger`, `preTokens`, `postTokens`, `durationMs`, `at` and
 `summary`, so a reader can count a run's compactions without knowing the CLI's
 vocabulary. The summary is not on the stream: the CLI writes it into its
 session transcript under the run's `claude-config/projects/`, as the first
 `user` line flagged `isCompactSummary` after the boundary line with the
-envelope's `uuid` (2.1.293 writes two attachment lines between them), and the
+envelope's `uuid` (2.1.293 writes two attachment lines between them, and a
+2.1.309 `/compact` none), and the
 driver reads it from there (a bounded tail read, retried on the next few
 envelopes) before appending the record. The codex driver writes the same
 record off its rollout. It is trajectory only, and the public projection
@@ -561,9 +569,9 @@ utilization and reset (`claudeRateLimitWindows`). The driver records them on
 change for the fleet's subscription usage gate, as the codex driver does —
 used percent, length, reset; never the overage or credit fields beside them —
 waits a spent quota's pause for the rejected window's reset, and stops a
-freeplay run at its turn boundary at the freeplay threshold. The shape is read
-off the pinned CLI's own bundle; until a frame arrives the lane has no reading
-and nothing is held.
+freeplay run at its turn boundary at the freeplay threshold. The shape was read
+off 2.1.293's bundle, and a 2.1.309 probe streamed the same frame with the same
+keys. Until a frame arrives the lane has no reading and nothing is held.
 
 ### Setup, once
 

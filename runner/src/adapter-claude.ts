@@ -284,9 +284,10 @@ function claudeWindowOfType(type: unknown): number | undefined {
 }
 
 /**
- * The subscription's usage windows off a stream-json `rate_limit_event` (the
- * pinned CLI, 2.1.293, read off its bundle: the frame is emitted whenever the
- * status changes or any window's rounded percent or reset does):
+ * The subscription's usage windows off a stream-json `rate_limit_event` (read
+ * off 2.1.293's bundle, and the same keys on a 2.1.309 probe: the frame is
+ * emitted whenever the status changes or any window's rounded percent or reset
+ * does):
  *
  *   {"type":"rate_limit_event","rate_limit_info":{"status":"allowed"|"allowed_warning"|"rejected",
  *     "resetsAt":<epoch s>,"rateLimitType":"five_hour"|"seven_day"|…,"utilization":<0..1>,
@@ -453,6 +454,8 @@ export function thinkingEnv(effort: string | undefined): Record<string, string> 
  * absent is the CLI's own `auto` and sends nothing. With `--debug` the CLI logs
  * the window it applies as `autocompact: … effectiveWindow=…` (`auto` gave
  * 980000 for Claude Haiku 5.5, `100k` gave 80000, compacting ~13K below that).
+ * The canonical `<n>k` needs 2.1.304 or later: 2.1.293 read `200k` and `300k`
+ * as 100k (80000 both), where 2.1.309 gives 180000 and 280000.
  */
 export function compactEnv(window: string | undefined): Record<string, string> {
   return window === undefined ? {} : { [COMPACT_WINDOW_ENV]: window };
@@ -464,8 +467,9 @@ export function compactEnv(window: string | undefined): Record<string, string> {
  * stream-json emits a `system` envelope with `subtype: "compact_boundary"` each
  * time the CLI summarises its history, carrying `compact_metadata` —
  * `trigger` (`auto` | `manual`), `pre_tokens`, and when known `post_tokens` and
- * `duration_ms` (recorded by 2.1.239 runs; the same mapping is in the pinned
- * 2.1.293 binary, where the last two are optional). The raw envelope is already on the trajectory as
+ * `duration_ms` (recorded by 2.1.239 runs; the same mapping is in the 2.1.293
+ * binary, where the last two are optional, and a 2.1.309 compaction carries all
+ * four beside new fields this does not keep). The raw envelope is already on the trajectory as
  * `claude_system`; this is the same fact as a `harness` record of kind
  * `compaction` (`cli-compaction.ts`, the shape both CLI drivers write), so a
  * reader can find every compaction of a run without knowing the CLI's

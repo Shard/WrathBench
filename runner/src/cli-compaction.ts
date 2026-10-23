@@ -380,9 +380,11 @@ export function messageText(message: unknown): string | undefined {
  * The summary in a chunk of transcript text: the first `user` line the CLI
  * flags `isCompactSummary` after the `compact_boundary` line whose `uuid` is
  * the boundary envelope's. Found by order, not by parent: in a 2.1.239
- * transcript the summary's `parentUuid` is the boundary itself, while the
- * pinned 2.1.293 writes two attachment lines (`session_context`, `date`)
- * between them and parents the summary on the last of those. `partialHead`
+ * transcript the summary's `parentUuid` is the boundary itself, while
+ * 2.1.293 writes two attachment lines (`session_context`, `date`) between
+ * them and parents the summary on the last of those. A 2.1.309 `/compact`
+ * puts the summary straight after the boundary again, with that version's
+ * `api-request` records elsewhere in the file. `partialHead`
  * drops a first line cut by the tail read.
  */
 export function summaryInTranscript(text: string, boundaryUuid: string, partialHead: boolean): string | undefined {
@@ -409,8 +411,8 @@ export function summaryInTranscript(text: string, boundaryUuid: string, partialH
  * The summary the Claude Code CLI wrote after a compact boundary, read from
  * its own session transcript under the run's `CLAUDE_CONFIG_DIR`
  * (`projects/<cwd slug>/<session id>.jsonl`; checked against a 2.1.293
- * Claude Haiku 5.5 run, whose stream envelope's `uuid` is the transcript
- * boundary's). The stream-json output is not known to carry it; the
+ * Claude Haiku 5.5 run and a 2.1.309 one, whose stream envelope's `uuid` is
+ * the transcript boundary's). The stream-json output is not known to carry it; the
  * transcript does. A bounded tail read, looked up soon after the boundary,
  * so both lines are near the end; undefined when they are not there (yet).
  * Never throws.
