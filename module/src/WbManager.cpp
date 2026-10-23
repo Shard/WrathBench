@@ -378,6 +378,7 @@ namespace WrathBench
         TickCorpseQuery();
         TickAreas();
         TickPortals(nowMs);
+        TickReplays(nowMs);
 
         // Keep parked sockets from being reaped by the idle-connection check in
         // WorldSession::Update (it calls CloseSocket once m_timeOutTime hits 0).
@@ -1228,12 +1229,12 @@ namespace WrathBench
                     // No new module session is created, so the SDK's per-session
                     // event stream never restarts — without this the caller would
                     // get ok:inWorld beside an empty state cache (the trap in a new
-                    // skin). Emit the reattach snapshot alone: the caller's socket
-                    // got the full replay when it subscribed (OnWsOpen), and a
-                    // second burst here would only crowd the event window. The
-                    // SDK advances its event epoch before the POST, so this lands
-                    // in the new epoch, not the discarded one.
-                    EmitSessionState(existing, /*replay*/ false);
+                    // skin). Emit the reattach snapshot alone: a caller that needs
+                    // the full replay asks for it on its subscribe (OnWsOpen), and
+                    // a burst here would only crowd the event window. The SDK
+                    // advances its event epoch before the POST, so this lands in
+                    // the new epoch, not the discarded one.
+                    EmitSessionState(existing, nullptr);
                     return;
                 }
                 if (!existing->tearingDown.load() && ph != BenchSession::P_INWORLD)
@@ -5143,6 +5144,16 @@ namespace WrathBench
 
         Audit(s, "event", json);
 
+        // A reattach replay goes to the connections that asked for it, not to
+        // every subscriber of the token (EmitSessionState sets the targets for
+        // the burst's duration, on the world thread with no map updating, so
+        // every packet sent meanwhile is the replay's own).
+        if (auto const* targets = s.replayTargets.load())
+        {
+            for (auto& c : *targets)
+                c->Send(json);
+            return;
+        }
         std::vector<std::shared_ptr<IWsConn>> conns;
         {
             std::lock_guard<std::mutex> lock(_sessMutex);
@@ -5188,37 +5199,83 @@ namespace WrathBench
         s.audit.flush();
     }
 
+    // The least time between two reattach replays of one session: a request
+    // inside it is deferred to the end of it and shares that burst with every
+    // other request made meanwhile (TickReplays). Long enough that a consumer
+    // flapping its subscribe costs the world thread one burst per interval
+    // and short enough that a restarted sandbox child, whose connect() waits
+    // a second for the state frame and five for the burst, is still served.
+    static constexpr int64_t REPLAY_MIN_INTERVAL_MS = 3000;
+
     // ------------------------------------------------------- ws attach
-    void Manager::OnWsOpen(std::string const& token, std::shared_ptr<IWsConn> conn)
+    void Manager::OnWsOpen(std::string const& token, std::shared_ptr<IWsConn> conn, bool replay)
     {
         {
             std::lock_guard<std::mutex> lock(_sessMutex);
-            _wsByToken[token].push_back(std::move(conn));
+            _wsByToken[token].push_back(conn);
         }
 
         // Reattach (io thread): a subscriber that connects after
-        // SMSG_LOGIN_VERIFY_WORLD fired is a client whose connection just came
-        // up on a character already in world — a restarted sandbox child, a
-        // resumed run, a reopened socket — and holds nothing. Emit one
-        // synthetic WB_SESSION_STATE (client-visible facts only: what
-        // LOGIN_VERIFY_WORLD plus the session's own identity would carry) and
-        // then replay what a connected client holds (ReplayClientState).
-        // Player state must be read on the world thread, so all of it is
-        // delivered asynchronously via the task queue; each frame takes the
-        // next seq and fans out to every subscriber like any event, keeping
-        // seq gapless for subscribers that stayed connected.
+        // SMSG_LOGIN_VERIFY_WORLD fired would otherwise never learn its own
+        // position/map, so every such subscribe gets one synthetic
+        // WB_SESSION_STATE (client-visible facts only: what LOGIN_VERIFY_WORLD
+        // plus the session's own identity would carry). A subscribe that
+        // asked for it (`replay=1`: a restarted sandbox child, a resumed run,
+        // a consumer that holds nothing) gets the reattach replay instead —
+        // the state frame marked `replay: true`, then what a connected client
+        // holds (ReplayClientState) — on its own connection only, no sooner
+        // than REPLAY_MIN_INTERVAL_MS after the session's last one, shared
+        // with every other connection that asked in the meantime
+        // (TickReplays). The replay is the heaviest thing a session's stream
+        // can carry, so it is never sent unasked and never to a socket that
+        // did not ask: a live SDK's automatic reconnect takes the plain frame,
+        // and a consumer looping on subscribes gets one burst per interval.
+        // Player state must be read on the world thread, so both paths are
+        // asynchronous; each frame takes the next seq.
         auto s = FindByToken(token);
         if (!s || s->phase.load() != BenchSession::P_INWORLD || s->tearingDown.load())
             return;
-        PushTask([this, s]() { EmitSessionState(s, /*replay*/ true); });
+        if (!replay)
+        {
+            PushTask([this, s]() { EmitSessionState(s, nullptr); });
+            return;
+        }
+        std::lock_guard<std::mutex> lock(_sessMutex);
+        s->replayWaiters.push_back(std::move(conn));
+        if (s->replayDueMs == 0)
+            s->replayDueMs = std::max(NowMs(), s->lastReplayMs + REPLAY_MIN_INTERVAL_MS);
+    }
+
+    void Manager::TickReplays(int64_t nowMs)
+    {
+        std::vector<std::pair<std::shared_ptr<BenchSession>, std::vector<std::shared_ptr<IWsConn>>>> due;
+        {
+            std::lock_guard<std::mutex> lock(_sessMutex);
+            for (auto& [token, s] : _byToken)
+            {
+                if (s->replayDueMs == 0 || nowMs < s->replayDueMs)
+                    continue;
+                s->replayDueMs = 0;
+                if (s->replayWaiters.empty())
+                    continue;   // every asker hung up before its turn
+                due.emplace_back(s, std::move(s->replayWaiters));
+                s->replayWaiters.clear();
+            }
+        }
+        for (auto& [s, conns] : due)
+        {
+            s->lastReplayMs = nowMs;
+            EmitSessionState(s, &conns);
+        }
     }
 
     // Emit one synthetic WB_SESSION_STATE carrying the session's own
-    // client-visible state, and with `replay` the reattach replay after it.
-    // World thread only: reads the Player. The guards mirror the reattach
-    // path — the session may tear down or lose the core WorldSession between
-    // the caller's check and this run.
-    void Manager::EmitSessionState(std::shared_ptr<BenchSession> const& s, bool replay)
+    // client-visible state, and with `replayTo` the reattach replay after it,
+    // to those connections alone. World thread only: reads the Player. The
+    // guards mirror the reattach path — the session may tear down or lose the
+    // core WorldSession between the caller's check and this run.
+    void Manager::EmitSessionState(std::shared_ptr<BenchSession> const& s,
+        std::vector<std::shared_ptr<IWsConn>> const* replayTo)
     {
         if (!s || s->tearingDown.load() || s->phase.load() != BenchSession::P_INWORLD)
             return;
@@ -5238,29 +5295,35 @@ namespace WrathBench
          .Add("o", (double)player->GetOrientation())
          .Add("level", (uint32)player->GetLevel());
         AddAreaFields(w, player);
-        // `replay: true` tells a consumer the login-shaped burst follows, so
+        // `replay: true` tells the consumer the login-shaped burst follows, so
         // it can drop what it held of the world before folding the burst.
-        if (replay)
+        if (replayTo)
             w.Add("replay", true);
+        // Route the state frame and everything the replay sends to the askers.
+        s->replayTargets.store(replayTo);
         EmitEvent(*s, "WB_SESSION_STATE", 0xFF03, w.Str());
+        if (replayTo)
+            ReplayClientState(*s, player);
+        s->replayTargets.store(nullptr);
         // A reattached client gets the portals in view again on the next
         // TickPortals, as it gets its position here.
         s->portalsKey.clear();
         s->lastPortalCheckMs = 0;
-        if (replay)
-            ReplayClientState(*s, player);
     }
 
     // The reattach replay. A real client keeps everything below for the life
     // of its connection, and a client that dials in again is handed all of it
     // by the login path; the bench client's connection is its WebSocket, so
-    // a fresh subscriber to a character already in world is that client
+    // a subscriber that asks on a character already in world is that client
     // dialling in again, and this is the same hand-over, built by the same
-    // core functions the login uses (Map::SendInitTransports, Map::SendInitSelf
-    // with Player::BuildCreateUpdateBlockForPlayer and GetAurasForTarget, the
-    // senders of Player::SendInitialPacketsBeforeAddToMap, and the create
-    // builder plus Player::GetInitialVisiblePackets that VisibleNotifier::SendToSelf
-    // runs for each object that enters view).
+    // core functions the login uses and in the login's order
+    // (WorldSession::HandlePlayerLoginFromDB): the senders of
+    // Player::SendInitialPacketsBeforeAddToMap; then what Map::AddPlayerToMap
+    // sends — Map::SendInitTransports, Map::SendInitSelf (with
+    // Player::BuildCreateUpdateBlockForPlayer and GetAurasForTarget) and the
+    // create builder plus Player::GetInitialVisiblePackets that
+    // VisibleNotifier::SendToSelf runs for each object entering view; then
+    // the pet bar, which the login sends once the pet is loaded.
     //
     // What is deliberately not re-run: the login path's side effects. No
     // LOGINEFFECT cast, no UpdateZone, no group update, no friend status, no
@@ -5278,75 +5341,92 @@ namespace WrathBench
     // add them when one is whitelisted.
     //
     // Every packet goes through the session's own SendPacket and so through
-    // the tap like any other: whitelisted ones become events, audited, in the
-    // order the login sends them; nothing is written to the parked socket.
+    // the tap like any other: whitelisted ones become events, audited, routed
+    // to the askers; nothing is written to the parked socket. The burst always
+    // ends with WB_REPLAY_DONE, a builder's exception included — a consumer
+    // waits on that frame, and the world thread must not carry the throw.
     void Manager::ReplayClientState(BenchSession& s, Player* player)
     {
-        Map* map = player->GetMap();
-        if (!map)
-            return;
-
-        // The transports on the map: always at a client, never in its
-        // visibility set (ObjectVisibilityContainer::LinkWorldObjectVisibility
-        // skips them). Then the character itself: its own transport, every
-        // item and bag it carries, the self create block (UPDATEFLAG_SELF,
-        // every non-zero update field: race, class, health, power, xp, money,
-        // the inventory and bag slots, the quest log, skills, flags) and its
-        // own auras (SMSG_AURA_UPDATE_ALL).
-        map->SendInitTransports(player);
-        map->SendInitSelf(player);
-
-        // The login packets that carry state no update field holds, in the
-        // login's order (Player::SendInitialPacketsBeforeAddToMap): the bind
-        // point, talents, the spellbook with its cooldowns, reputations,
-        // achievements; and the pet bar if a pet is out (a no-op otherwise).
-        {
-            WorldPacket data(SMSG_BINDPOINTUPDATE, 5 * 4);
-            data << player->m_homebindX << player->m_homebindY << player->m_homebindZ;
-            data << (uint32)player->m_homebindMapId;
-            data << (uint32)player->m_homebindAreaId;
-            player->SendDirectMessage(&data);
-        }
-        player->SendTalentsInfoData(false);
-        player->SendInitialSpells();
-        player->GetReputationMgr().SendInitialReputations();
-        player->GetAchievementMgr()->SendAllAchievementData();
-        player->PetSpellInitialize();
-
-        // Everything in view: one create block per object in the character's
-        // visibility set, in one SMSG_UPDATE_OBJECT as a visibility pass
-        // sends them, then each unit's auras and, if it is swinging at
-        // something, its attack start — what VisibleNotifier::SendToSelf does
-        // for the objects that just came into view, minus the pass itself.
         uint32 objects = 0;
-        if (VisibleWorldObjectsMap const* visible = player->GetObjectVisibilityContainer().GetVisibleWorldObjectsMap())
+        bool failed = false;
+        try
         {
-            UpdateData data;
-            std::vector<Unit*> units;
-            for (auto const& kv : *visible)
+            Map* map = player->GetMap();
+            if (!map)
+                throw std::runtime_error("the player has no map");
+
+            // The login packets that carry state no update field holds, in the
+            // login's order (Player::SendInitialPacketsBeforeAddToMap): the bind
+            // point, talents, the spellbook with its cooldowns, reputations,
+            // achievements.
             {
-                WorldObject* obj = kv.second;
-                if (!obj || !obj->IsInWorld())
-                    continue;
-                obj->BuildCreateUpdateBlockForPlayer(&data, player);
-                ++objects;
-                if (Unit* unit = obj->ToUnit())
-                    units.push_back(unit);
+                WorldPacket data(SMSG_BINDPOINTUPDATE, 5 * 4);
+                data << player->m_homebindX << player->m_homebindY << player->m_homebindZ;
+                data << (uint32)player->m_homebindMapId;
+                data << (uint32)player->m_homebindAreaId;
+                player->SendDirectMessage(&data);
             }
-            if (data.HasData())
+            player->SendTalentsInfoData(false);
+            player->SendInitialSpells();
+            player->GetReputationMgr().SendInitialReputations();
+            player->GetAchievementMgr()->SendAllAchievementData();
+
+            // What Map::AddPlayerToMap sends. The transports on the map: always
+            // at a client, never in its visibility set
+            // (ObjectVisibilityContainer::LinkWorldObjectVisibility skips them).
+            // Then the character itself: its own transport, every item and bag
+            // it carries, the self create block (UPDATEFLAG_SELF, every non-zero
+            // update field: race, class, health, power, xp, money, the inventory
+            // and bag slots, the quest log, skills, flags) and its own auras
+            // (SMSG_AURA_UPDATE_ALL). A passenger of the character's own
+            // transport is built here and again below, as at login.
+            map->SendInitTransports(player);
+            map->SendInitSelf(player);
+
+            // Everything in view: one create block per object in the character's
+            // visibility set, in one SMSG_UPDATE_OBJECT as a visibility pass
+            // sends them, then each unit's auras and, if it is swinging at
+            // something, its attack start — what VisibleNotifier::SendToSelf does
+            // for the objects that just came into view, minus the pass itself.
+            if (VisibleWorldObjectsMap const* visible = player->GetObjectVisibilityContainer().GetVisibleWorldObjectsMap())
             {
-                WorldPacket packet;
-                data.BuildPacket(packet);
-                player->SendDirectMessage(&packet);
+                UpdateData data;
+                std::vector<Unit*> units;
+                for (auto const& kv : *visible)
+                {
+                    WorldObject* obj = kv.second;
+                    if (!obj || !obj->IsInWorld())
+                        continue;
+                    obj->BuildCreateUpdateBlockForPlayer(&data, player);
+                    ++objects;
+                    if (Unit* unit = obj->ToUnit())
+                        units.push_back(unit);
+                }
+                if (data.HasData())
+                {
+                    WorldPacket packet;
+                    data.BuildPacket(packet);
+                    player->SendDirectMessage(&packet);
+                }
+                for (Unit* unit : units)
+                    player->GetInitialVisiblePackets(unit);
             }
-            for (Unit* unit : units)
-                player->GetInitialVisiblePackets(unit);
+
+            // The pet bar, if a pet is out (a no-op otherwise).
+            player->PetSpellInitialize();
+        }
+        catch (std::exception const& e)
+        {
+            failed = true;
+            LOG_ERROR("module", "wrathbench: reattach replay for '{}' stopped after {} objects: {}", s.token, objects, e.what());
         }
 
         Json::Writer w;
         w.Add("objects", objects);
+        if (failed)
+            w.Add("incomplete", true);
         EmitEvent(s, "WB_REPLAY_DONE", 0xFF0B, w.Str());
-        Audit(s, "action", Json::Writer().Add("op", "reattach_replay").Add("objects", objects).Str());
+        Audit(s, "action", Json::Writer().Add("op", "reattach_replay").Add("objects", objects).Add("incomplete", failed).Str());
     }
 
     void Manager::OnWsClose(std::string const& token, IWsConn* conn)
@@ -5360,6 +5440,13 @@ namespace WrathBench
             [conn](std::shared_ptr<IWsConn> const& c) { return c.get() == conn; }), vec.end());
         if (vec.empty())
             _wsByToken.erase(it);
+        // A replay it asked for and hung up before is not owed.
+        if (auto s = _byToken.find(token); s != _byToken.end())
+        {
+            auto& waiters = s->second->replayWaiters;
+            waiters.erase(std::remove_if(waiters.begin(), waiters.end(),
+                [conn](std::shared_ptr<IWsConn> const& c) { return c.get() == conn; }), waiters.end());
+        }
     }
 
     // =================================================================
