@@ -11,11 +11,13 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { campaignSquares, partyAttempt, type ProbeRun } from "../runner/src/campaigns";
-import { DEFAULT_POLICY, modelStates, type RunFact } from "../runner/src/models";
+import { loadRunConfig } from "../runner/src/config";
+import { DEFAULT_POLICY, modelStates, readRunFacts, type RunFact } from "../runner/src/models";
+import { Trajectory } from "../runner/src/trajectory";
 import { defsBlock, joined, PARTY_MEMBERS, partyDefinition, definition } from "../runner/test/fixtures/campaigns";
 import { runParty, type MemberHandle, type MemberVerdict, type PartyFateDeps, type PartyMemberRun } from "./party-fate";
 import { commandStager, type StageRequest } from "./party-stager";
-import { parseFleet, pinnedCampaignJobs, rosterModels, type FleetConfig, type FleetJob, type FleetRosterEntry } from "./run-fleet-config";
+import { parseFleet, pinnedCampaignJobs, probeRunsOf, rosterModels, type FleetConfig, type FleetJob, type FleetRosterEntry } from "./run-fleet-config";
 import { diffJobs, fillEntries, finishesOnExit, jobSpawn, partyAdmission, planResumes, planTick, withTakenRunIds } from "./run-fleet-plan";
 import { jobArgv, rosterResumes } from "./run-fleet-state";
 import { formatArgvBlock } from "./run-fleet-status";
@@ -141,6 +143,131 @@ describe("shared fate", () => {
     expect(d.staged).toBe(1);
   });
 
+  test("a member's run meets the kill end: all five end kill-target together, counted and reached", async () => {
+    const { members, runs } = fakeParty();
+    const d = deps(members);
+    const done = runParty(runs, d);
+    await tick();
+    // The rogue's kill credit named VanCleef; its watchdog ended its run, and
+    // the paladin's own watchdog read the same packet before the stop came.
+    members[3]!.exit({ kind: "terminated", reason: "kill-target", detail: "entry 639 killed (killer party member 980)" });
+    members[4]!.exit({ kind: "terminated", reason: "kill-target", detail: "entry 639 killed (killer party member 980)" });
+    const out = await done;
+    expect(out.fate).toBe("ended");
+    expect(out.trigger).toEqual({ member: "rogue", reason: "kill-target" });
+    expect(d.writes).toEqual(["tank", "healer", "mage"].map((m) => `${m} end kill-target (rogue: kill-target)`));
+    expect(out.written.map((w) => w.wrote)).toEqual(["kill-target", "kill-target", "kill-target"]);
+    // On disk, every member's own verdict counts, so the attempt does, and it reached its end.
+    const runsOnDisk: ProbeRun[] = MEMBERS.map((m) => probe(m, { terminationReason: "kill-target", counted: true }));
+    expect(partyAttempt(runsOnDisk)).toEqual({ live: false, counted: true, reached: true });
+  });
+
+  test("a member's level end ends the rest on level-target, the same way", async () => {
+    const { members, runs } = fakeParty();
+    const d = deps(members);
+    const done = runParty(runs, d);
+    await tick();
+    members[0]!.exit({ kind: "terminated", reason: "level-target", detail: "level 21 observed (target 21)" });
+    await done;
+    expect(d.writes).toEqual(["healer", "mage", "rogue", "paladin"].map((m) => `${m} end level-target (tank: level-target)`));
+  });
+
+  describe("asked to follow the first member's end rather than signalled", () => {
+    /** `requestEnd` wired: each request is logged, and a member in `honours` ends on it the way its runner would. */
+    function asking(members: FakeMember[], honours: ReadonlySet<string>, endGraceMs = 60_000) {
+      const requests: string[] = [];
+      const d = deps(members, {
+        endGraceMs,
+        requestEnd: (m, reason, detail) => {
+          requests.push(`${m.member} ${reason} (${detail})`);
+          const f = members.find((x) => x.m.runId === m.runId)!;
+          if (honours.has(m.member)) queueMicrotask(() => f.exit({ kind: "terminated", reason, detail }));
+        },
+      });
+      return { d, requests };
+    }
+
+    test("a kill end on the first: the other four are asked to end on it, none is stopped, and each ends with the detail naming the first", async () => {
+      // deadmines@4: the mage was SIGTERMed as operator-pause and rewritten
+      // kill-target, so its CLI died without the result that carries cost.
+      const { members, runs } = fakeParty();
+      const { d, requests } = asking(members, new Set(["tank", "healer", "mage", "paladin"]));
+      const done = runParty(runs, d);
+      await tick();
+      members[3]!.exit({ kind: "terminated", reason: "kill-target", detail: "entry 639 killed (killer party member 980)" });
+      const out = await done;
+      expect(requests).toEqual(["tank", "healer", "mage", "paladin"].map((m) => `${m} kill-target (rogue: kill-target)`));
+      expect(members.every((f) => f.stops === 0)).toBe(true);
+      expect(out.fate).toBe("ended");
+      expect(out.trigger).toEqual({ member: "rogue", reason: "kill-target" });
+      // Every member's verdict is the party's, written by its own runner: the machine wrote nothing over it.
+      expect(d.writes).toEqual([]);
+      expect(out.written).toEqual(["tank", "healer", "mage", "paladin"].map((member) => ({ member, wrote: "kill-target", followed: true })));
+      for (const m of ["tank", "healer", "mage", "paladin"]) expect(out.verdicts[m]).toEqual({ kind: "terminated", reason: "kill-target", detail: "rogue: kill-target" });
+    });
+
+    test("a member that read the kill itself keeps its own detail, and is not listed as following", async () => {
+      const { members, runs } = fakeParty();
+      const { d } = asking(members, new Set(["tank", "healer", "mage", "paladin"]));
+      const done = runParty(runs, d);
+      await tick();
+      members[3]!.exit({ kind: "terminated", reason: "kill-target", detail: "entry 639 killed (killer this character)" });
+      members[4]!.exit({ kind: "terminated", reason: "kill-target", detail: "entry 639 killed (killer party member 980)" });
+      const out = await done;
+      expect(out.verdicts["paladin"]).toEqual({ kind: "terminated", reason: "kill-target", detail: "entry 639 killed (killer party member 980)" });
+      expect(out.written.map((w) => w.member)).toEqual(["tank", "healer", "mage"]);
+    });
+
+    test("a member that does not end on the request is stopped once the grace has passed, and ended by the machine as before", async () => {
+      const { members, runs } = fakeParty();
+      const { d } = asking(members, new Set(["tank", "healer", "paladin"]), 30);
+      const done = runParty(runs, d);
+      await tick();
+      members[0]!.exit({ kind: "terminated", reason: "level-target", detail: "level 21 observed (target 21)" });
+      const out = await done;
+      // The mage and the rogue ignored it (a harness that does not read the
+      // file, a fixed-loop turn still in flight): stopped, paused, then ended.
+      expect(members.map((f) => f.stops)).toEqual([0, 0, 1, 1, 0]);
+      expect(d.writes).toEqual(["mage", "rogue"].map((m) => `${m} end level-target (tank: level-target)`));
+      expect(out.written).toEqual([
+        { member: "healer", wrote: "level-target", followed: true },
+        { member: "mage", wrote: "level-target" },
+        { member: "rogue", wrote: "level-target" },
+        { member: "paladin", wrote: "level-target", followed: true },
+      ]);
+    });
+
+    test("a first verdict that cannot be read at its exit stops the rest as before rather than leaving them playing", async () => {
+      const { members, runs } = fakeParty();
+      const { d, requests } = asking(members, new Set(MEMBERS));
+      let reads = 0;
+      const read = d.verdict;
+      d.verdict = (m, exit) => {
+        if (reads++ === 0) throw new Error("run.sqlite busy");
+        return read(m, exit);
+      };
+      const done = runParty(runs, d);
+      await tick();
+      members[3]!.exit({ kind: "terminated", reason: "kill-target", detail: "entry 639 killed (killer this character)" });
+      await done;
+      expect(requests).toEqual([]);
+      expect(members.map((f) => f.stops)).toEqual([1, 1, 1, 0, 1]);
+      expect(d.writes).toEqual(["tank", "healer", "mage", "paladin"].map((m) => `${m} end kill-target (rogue: kill-target)`));
+    });
+
+    test("any other first exit is no end to follow: the others are stopped with the grace and ended party-ended, as before", async () => {
+      const { members, runs } = fakeParty();
+      const { d, requests } = asking(members, new Set(MEMBERS));
+      const done = runParty(runs, d);
+      await tick();
+      members[2]!.exit({ kind: "terminated", reason: "idle", detail: "no model output for 20m" });
+      await done;
+      expect(requests).toEqual([]);
+      expect(members.map((f) => f.stops)).toEqual([1, 1, 0, 1, 1]);
+      expect(d.writes).toEqual(["tank", "healer", "rogue", "paladin"].map((m) => `${m} end party-ended (mage: idle)`));
+    });
+  });
+
   test("one member's adapter-error ends the party, and the attempt is not counted", async () => {
     const { members, runs } = fakeParty();
     const d = deps(members);
@@ -152,7 +279,7 @@ describe("shared fate", () => {
     expect(d.writes.filter((w) => w.includes("party-ended (healer: adapter-error)"))).toHaveLength(4);
     // The square's tally: the healer's own verdict is the party's, and it does not count.
     const runsOnDisk: ProbeRun[] = MEMBERS.map((m) => probe(m, m === "healer" ? { terminationReason: "adapter-error", counted: false } : { terminationReason: "party-ended", counted: true }));
-    expect(partyAttempt(runsOnDisk)).toEqual({ live: false, counted: false });
+    expect(partyAttempt(runsOnDisk)).toEqual({ live: false, counted: false, reached: false });
   });
 
   test("one member pauses: the others are paused party-paused, and one that paused on its own keeps its reason", async () => {
@@ -617,6 +744,16 @@ describe("campaign squares tally parties, not runs", () => {
     expect(square(one)).toMatchObject({ attempts: 1, done: 1, live: 0, settled: "done" });
   });
 
+  test("a party that reached its kill end is done and reached; one that did not is done, not reached", () => {
+    const reached = MEMBERS.map((m) => probe(m, { terminationReason: "kill-target" }));
+    expect(square(reached)).toMatchObject({ attempts: 1, done: 1, reached: 1, live: 0, settled: "done" });
+    const spent = MEMBERS.map((m, i) => probe(m, i === 0 ? {} : { terminationReason: "party-ended" }));
+    expect(square(spent)).toMatchObject({ attempts: 1, done: 1, reached: 0 });
+    // A kill end met while a member's adapter failed counts nothing: not done, not reached.
+    const broken = MEMBERS.map((m, i) => probe(m, i === 1 ? { terminationReason: "adapter-error", counted: false } : { terminationReason: "kill-target" }));
+    expect(square(broken)).toMatchObject({ attempts: 1, done: 0, reached: 0 });
+  });
+
   test("a live member makes the party live; a missing or launch-failed member keeps it from counting", () => {
     expect(square(MEMBERS.map((m, i) => probe(m, { live: i === 2 })))).toMatchObject({ attempts: 1, live: 1, done: 0 });
     expect(square(MEMBERS.slice(0, 4).map((m) => probe(m)))).toMatchObject({ attempts: 1, done: 0 });
@@ -639,6 +776,48 @@ describe("campaign squares tally parties, not runs", () => {
       { campaign: "solo", version: 1, cell: "a", ref: "glm", arm: "base", counted: false, live: true },
     ];
     expect(campaignSquares(solo, ["glm"], runs)[0]).toMatchObject({ attempts: 2, done: 1, live: 1 });
+  });
+
+  test("on disk: four members the stop paused and the party ended on the trigger's kill-target read as counted, and the square as done and reached", () => {
+    const runs = tempDir("wb-party-kill-end-");
+    const stem = `fleet-deadmines-party-base-sonnet-max-${STAMP}`;
+    const records = PARTY_MEMBERS.map((m, i) => ({ member: m.id, role: m.role, runId: `${stem}-${m.id}`, account: ACCOUNTS[i]!, character: m.character }));
+    for (const [i, m] of PARTY_MEMBERS.entries()) {
+      const runId = `${stem}-${m.id}`;
+      const t = new Trajectory(join(runs, runId));
+      const config = {
+        ...loadRunConfig({ runId, driver: "claude-code", model: "claude-sonnet-5-5" }),
+        episode: "probing",
+        campaign: "deadmines",
+        campaignVersion: 1,
+        cell: "party",
+        arm: "base",
+        ref: "son2",
+        party: { id: stem, member: m.id, role: m.role, size: 5, members: records },
+      };
+      const meta = { runId, harnessVersion: "harness-0.5-1-gabc", startedAt: 1000, config: config as never, comparability: { episode: "probing" } as never };
+      t.writeMeta(meta);
+      t.append({ t: "response", turn: 1, message: { role: "assistant", content: "…" } });
+      if (m.id === "rogue") {
+        t.setTermination(runId, "kill-target", "entry 639 killed (killer party member 980)");
+      } else {
+        // The roster's stop: SIGTERM pauses the runner, with its mark in meta.json …
+        t.pauseWithMark(runId, { reason: "operator-pause", detail: "SIGTERM", at: 2000 + i, episodeElapsedMs: 60_000 }, meta);
+        // … and the party's end is written through the runner's own writer (`endMember`).
+        t.setTermination(runId, "kill-target", "rogue: kill-target");
+      }
+      t.close();
+    }
+    const facts = readRunFacts(runs, 10_000_000);
+    expect(facts.map((f) => [f.terminationReason, f.pause])).toEqual(PARTY_MEMBERS.map(() => ["kill-target", null]));
+    const c = fleet().campaigns.find((x) => x.name === "deadmines")!;
+    expect(campaignSquares(c, ["son2"], probeRunsOf(facts))[0]).toMatchObject({ attempts: 1, done: 1, reached: 1, live: 0, settled: "done" });
+  });
+
+  test("a single run that met its kill end is done and reached", () => {
+    const solo = joined([definition({ id: "solo", stopAtLevel: null, end: [{ kill: { entry: 639 } }] })], { solo: { version: 1, assignments: [{ model: "glm" }] } }).campaigns[0]!;
+    const runs: ProbeRun[] = [{ campaign: "solo", version: 1, cell: "a", ref: "glm", arm: "base", counted: true, live: false, terminationReason: "kill-target" }];
+    expect(campaignSquares(solo, ["glm"], runs)[0]).toMatchObject({ attempts: 1, done: 1, reached: 1, settled: "done" });
   });
 });
 
@@ -704,6 +883,15 @@ describe("a paused party is planned whole", () => {
     const spawn = jobSpawn(r.job, cfg.roster, r.account, "20261021", undefined, cfg.campaigns);
     expect(spawn.resumeRunId).toBe(`${stem}-tank`);
     expect(fillEntries(spawn, "20261021").map((e) => e.runId)).toEqual(MEMBERS.map((m) => `${stem}-${m}`));
+  });
+
+  test("a party of a version the operator concluded is listed whole, never resumed, whichever version the row names", () => {
+    const concluded = { ...cfg, campaigns: cfg.campaigns.map((c) => ({ ...c, version: 4, concluded: [1, 2, 3] })) };
+    const p = planResumes({ runs: facts(), config: { ...concluded, policy: { ...DEFAULT_POLICY, ...cfg.policy } }, running: new Map(), held: () => undefined, now: NOW, campaignFileOf: fileOf });
+    expect(p.resume).toEqual([]);
+    expect(p.end).toEqual([]);
+    expect(p.listed).toHaveLength(5);
+    expect(p.listed.every((l) => l.why === `party ${stem}: campaign deadmines@1 is concluded — it owes nothing; resume by hand or archive`)).toBe(true);
   });
 
   test("a party with a member that ended is listed, never half-resumed", () => {

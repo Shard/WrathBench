@@ -49,7 +49,7 @@ import type { EventSummary, MoveIntentNote } from "./sandbox/ipc";
 import type { HarnessNotice } from "./sandbox/host";
 
 export const CONTEXT_POLICY = {
-  /** Last N non-ambient events included in every turn's context (see EVENT_WINDOW_EXCLUDE). */
+  /** Last N non-ambient events included in every turn's context (see EVENT_WINDOW_EXCLUDE; bystanders' spell lines are left out too, `spellLogShown`). */
   EVENT_WINDOW: 64,
   /** Max chars of one event's data rendering. */
   EVENT_DATA_CHARS: 220,
@@ -112,8 +112,16 @@ export const CONTEXT_POLICY = {
    * the window's reach is the last EVENT_WINDOW signal events since the
    * child started — independent of the ambient rate, and emptied by a
    * sandbox restart like everything else the child holds.
+   *
+   * SMSG_PARTY_MEMBER_STATS and its _FULL answer (the prefix matches both) are
+   * ambient too (operator decision, Mark, 2026-10-21). They are the party
+   * frames of a member out of sight, and the server sends one per update of
+   * that member: about two a second while it walks, plus one for each regen
+   * tick and each hit. Four far members would turn the 64-event window over
+   * in about seven seconds. The state cache keeps each member's latest values
+   * (`group().members[i].stats`), and the HUD's party line reads them there.
    */
-  EVENT_WINDOW_EXCLUDE: /^(SMSG_MONSTER_MOVE|MSG_MOVE|WB_TRANSPORT_PROGRESS)/,
+  EVENT_WINDOW_EXCLUDE: /^(SMSG_MONSTER_MOVE|MSG_MOVE|WB_TRANSPORT_PROGRESS|SMSG_PARTY_MEMBER_STATS)/,
 } as const;
 
 // ------------------------------------------------------------ state summary
@@ -126,7 +134,7 @@ interface ObservedLike {
 }
 
 /** One nearby object as the sandbox flattens `state.units()` into the rpc JSON. */
-interface UnitLike {
+export interface UnitLike {
   guid?: unknown;
   name?: unknown;
   type?: unknown;
@@ -134,6 +142,10 @@ interface UnitLike {
   distance?: unknown;
   /** `true` only when health was observed and is 0. See the HUD caveat below. */
   dead?: unknown;
+  /** A creature's rank as the SDK names it (`normal`, `elite`, `rareelite`, `worldboss`, `rare`); absent until its query answered. */
+  rank?: unknown;
+  /** Corpses only: the owning player's name, once its name query (or the party roster) has given it. */
+  ownerName?: unknown;
   /** `UNIT_NPC_FLAGS` decoded to role words by the SDK (`questGiver`, `vendor`, …). */
   roles?: unknown;
   /**
@@ -144,6 +156,40 @@ interface UnitLike {
   questGiver?: unknown;
   /** What it has selected (`UNIT_FIELD_TARGET`), when observed. */
   targetGuid?: unknown;
+  /** Party members only: the unit's own health, as the party frame reads it. Never carried for a mob. */
+  health?: unknown;
+  maxHealth?: unknown;
+  /** Party members only: `PLAYER_FLAGS_GHOST` on its `playerFlags`. */
+  ghost?: unknown;
+  /** Party members only: the unit's power bar, and the raw `powerType` that picks it (0 mana, 1 rage, 2 focus, 3 energy, 6 runic power). */
+  power?: unknown;
+  maxPower?: unknown;
+  powerType?: unknown;
+}
+
+/** One `state.group().members` row as the sandbox serialises it. */
+export interface GroupMemberLike {
+  guid?: unknown;
+  name?: unknown;
+  /** From `SMSG_GROUP_LIST`. */
+  online?: unknown;
+  inView?: unknown;
+  /** The party frame while out of sight (SDK `PartyMemberStats`). */
+  stats?: {
+    online?: unknown;
+    dead?: unknown;
+    ghost?: unknown;
+    health?: unknown;
+    maxHealth?: unknown;
+    /** The SDK's name for it ("mana", "rage", ...). */
+    powerType?: unknown;
+    power?: unknown;
+    maxPower?: unknown;
+    zone?: { id?: unknown; name?: unknown };
+    position?: { x?: unknown; y?: unknown };
+    /** The stream seq of the last party-frame packet for this member. */
+    seq?: unknown;
+  };
 }
 
 /** The carried inventory as `state.bag()` shapes it, flattened into the rpc JSON. */
@@ -221,6 +267,7 @@ export interface SnapshotLike {
     achievements?: { entries?: AchievementLike[]; points?: unknown; loginSeen?: unknown };
     /** `value` is a bool: `UNIT_FLAG_TAXI_FLIGHT` on self — the character is being flown. */
     taxiFlight?: ObservedLike;
+    taxiEta?: ObservedLike;
     /** `value` is a bool: `PLAYER_FLAGS_RESTING` on self — the character is in a rest area. */
     resting?: ObservedLike;
     /** `value` is `{ reply, ok }` — the last `SMSG_ACTIVATETAXIREPLY`. */
@@ -250,6 +297,8 @@ export interface SnapshotLike {
    * never printed — CONTRACTS.md forbids exact mob health.
    */
   units?: UnitLike[];
+  /** `state.group()`: the party, each member with `inView` and its party frame (`stats`). */
+  group?: { inGroup?: unknown; members?: GroupMemberLike[] };
   /** `state.bag()` shape: carried items across all bags, free and total slot counts. */
   bag?: BagLike;
   /** `state.inventory` as the sandbox serialises it; equipment is `slot < 19`. */
@@ -403,6 +452,19 @@ const CHAT_TYPE_LABEL: Readonly<Record<number, string>> = {
  * and the achievement broadcast. Anything else prints `%s` as typed.
  */
 const NAME_TEMPLATE_TYPES: ReadonlySet<number> = new Set([0x0a, 0x0b, 0x10, 0x29, CHAT_MSG_ACHIEVEMENT, CHAT_MSG_GUILD_ACHIEVEMENT]);
+
+/**
+ * The types a player addresses to our group or to us: `PARTY`/`PARTY_LEADER`,
+ * `RAID`/`RAID_LEADER`/`RAID_WARNING`, and a whisper received (`WHISPER`,
+ * `WHISPER_FOREIGN`). Not our own whisper's echo (`WHISPER_INFORM`), whose
+ * sender is the recipient; whether the line is our own is the caller's check.
+ */
+const GROUP_OR_WHISPER_TYPES: ReadonlySet<number> = new Set([0x02, 0x33, 0x03, 0x27, 0x28, 0x07, 0x08]);
+
+/** A party, raid or whisper line by `type` (`GROUP_OR_WHISPER_TYPES`). */
+export function isGroupOrWhisperChat(c: ChatLineLike): boolean {
+  return typeof c.type === "number" && GROUP_OR_WHISPER_TYPES.has(c.type);
+}
 
 /** Creature speech and emotes (`MONSTER_SAY`..`MONSTER_EMOTE`, `RAID_BOSS_EMOTE`/`_WHISPER`). */
 export function isCreatureChat(c: ChatLineLike): boolean {
@@ -604,7 +666,7 @@ function durabilityLine(inventory: SnapshotLike["inventory"]): string | undefine
 }
 
 /** One quest as the quest line names it: id, then the title, cut if long. */
-function questLabel(q: { questId?: unknown; title?: unknown }): string {
+export function questLabel(q: { questId?: unknown; title?: unknown }): string {
   const id = fmt(q.questId, "?");
   if (typeof q.title !== "string" || q.title.length === 0) return id;
   const title = q.title.length > QUEST_TITLE_CHARS ? `${q.title.slice(0, QUEST_TITLE_CHARS - 1)}…` : q.title;
@@ -672,17 +734,27 @@ function pickNearby(units: readonly UnitLike[], selfGuid: string | undefined): U
   return [...chosen].sort((a, b) => a - b).map((i) => units[i]!);
 }
 
-/** One nearby entry: name, dead-when-known, roles with the quest marker, distance. */
+/** One nearby entry: name, a rank other than normal, dead-when-known, roles with the quest marker, distance. */
 function nearbyLabel(u: UnitLike): string {
-  const name = u.name != null ? String(u.name) : "(unnamed)";
-  const dead = u.dead === true ? " dead" : "";
+  // A player's corpse has no name of its own and is dead by what it is: it is
+  // named by its owner, as a client's tooltip names it.
+  const corpse = u.type === "corpse";
+  const name = corpse
+    ? typeof u.ownerName === "string"
+      ? `${u.ownerName}'s corpse`
+      : "a corpse"
+    : u.name != null
+      ? String(u.name)
+      : "(unnamed)";
+  const rank = typeof u.rank === "string" && u.rank !== "normal" ? ` ${u.rank}` : "";
+  const dead = u.dead === true && !corpse ? " dead" : "";
   const dist = typeof u.distance === "number" ? `${u.distance}y` : "?y";
   const offer = questOffer(u);
   const roles = fmtRoles(u.roles)
     .split(", ")
     .filter((r) => r !== "" && !(offer !== undefined && r === "quest giver"));
   if (offer !== undefined) roles.unshift(`quest giver: ${offer}`);
-  return `${name}${dead} (${roles.length === 0 ? "" : `${roles.join(", ")}, `}${dist})`;
+  return `${name}${rank}${dead} (${roles.length === 0 ? "" : `${roles.join(", ")}, `}${dist})`;
 }
 
 /**
@@ -765,6 +837,9 @@ export function foldUiOpenWindows(
  * client shows for itself). Every line is a pure function of the snapshot, so
  * `assembleContext` stays byte-deterministic.
  */
+/** The core's `CORPSE_RECLAIM_RADIUS`, which it measures in 3D. */
+const RECLAIM_RADIUS = 39;
+
 /** How near the release point a ghost still reads as standing at the graveyard. */
 const GHOST_AT_GRAVEYARD_YARDS = 20;
 
@@ -777,15 +852,23 @@ const GHOST_AT_GRAVEYARD_YARDS = 20;
  */
 function ghostLine(
   s: NonNullable<SnapshotLike["self"]>,
-  pos: { map?: number; x?: number; y?: number } | undefined,
+  pos: { map?: number; x?: number; y?: number; z?: number } | undefined,
   now: number,
 ): string {
   const xy = (p: { x?: unknown; y?: unknown } | undefined): string =>
     p !== undefined && typeof p.x === "number" && typeof p.y === "number"
       ? `${Math.round(p.x)},${Math.round(p.y)}`
       : "?,?";
-  const grave = s.graveyard?.value as { x?: number; y?: number } | undefined;
-  const corpse = s.corpse?.value as { map?: number; x?: number; y?: number; instanceMap?: number } | undefined;
+  const grave = s.graveyard?.value as { x?: number; y?: number; zone?: { name?: string }; area?: { name?: string } } | undefined;
+  // The graveyard's own place, as the zone text read while the ghost stood
+  // on it: two graveyards a few hundred yards apart read as two places.
+  const graveZone = grave?.zone?.name || undefined;
+  const graveArea = grave?.area?.name || undefined;
+  const gravePlace =
+    graveZone === undefined
+      ? ""
+      : ` in ${graveArea === undefined || graveArea === graveZone ? graveZone : `${graveZone} / ${graveArea}`}`;
+  const corpse = s.corpse?.value as { map?: number; x?: number; y?: number; z?: number; instanceMap?: number } | undefined;
   const delay = s.reclaimDelay?.value as { readyAt?: number } | undefined;
   // Where the ghost stands now. The release point is named as the graveyard
   // while the ghost is still at it, and beside the ghost's own position once
@@ -797,11 +880,11 @@ function ghostLine(
       : here === undefined;
   const where =
     grave !== undefined && atGrave
-      ? `ghost at graveyard (${xy(grave)})`
+      ? `ghost at graveyard (${xy(grave)})${gravePlace}`
       : here === undefined
         ? "ghost"
         : grave !== undefined
-          ? `ghost at (${xy(here)}), released at graveyard (${xy(grave)})`
+          ? `ghost at (${xy(here)}), released at graveyard (${xy(grave)})${gravePlace}`
           : `ghost at (${xy(here)})`;
   const healer = "or Spirit Healer at the graveyard (-25% durability; resurrection sickness from level 11)";
   // A corpse inside a dungeon, asked about from outside it: the position is
@@ -809,7 +892,7 @@ function ghostLine(
   if (corpse !== undefined && typeof corpse.instanceMap === "number" && pos?.map !== corpse.instanceMap) {
     return (
       `${where}; corpse inside the dungeon on map ${corpse.instanceMap}: ` +
-      `walk into its portal as a ghost to come back to life inside, ${healer}`
+      `walk into its portal as a ghost to come back to life at its entrance, ${healer}`
     );
   }
   let corpsePart: string;
@@ -818,15 +901,23 @@ function ghostLine(
   } else if (pos !== undefined && typeof pos.map === "number" && typeof corpse.map === "number" && corpse.map !== pos.map) {
     corpsePart = `corpse on map ${corpse.map} at (${xy(corpse)}), you are on map ${pos.map}`;
   } else {
-    const d =
+    const across =
       pos !== undefined && typeof pos.x === "number" && typeof pos.y === "number" && typeof corpse.x === "number" && typeof corpse.y === "number"
-        ? `${Math.round(Math.hypot(corpse.x - pos.x, corpse.y - pos.y))}y away `
+        ? Math.hypot(corpse.x - pos.x, corpse.y - pos.y)
+        : undefined;
+    // The server measures the reclaim range with the height in it: a ghost on
+    // a cliff over its corpse is told the height when that is what puts it out.
+    const dz = across !== undefined && typeof pos?.z === "number" && typeof corpse.z === "number" ? pos.z - corpse.z : undefined;
+    const height =
+      across !== undefined && dz !== undefined && across <= RECLAIM_RADIUS && Math.hypot(across, dz) > RECLAIM_RADIUS
+        ? `and ${Math.round(Math.abs(dz))}y ${dz > 0 ? "below" : "above"} you `
         : "";
+    const d = across === undefined ? "" : `${Math.round(across)}y away ${height}`;
     corpsePart = `corpse ${d}at (${xy(corpse)})`;
   }
   const secs = typeof delay?.readyAt === "number" ? Math.max(0, Math.ceil((delay.readyAt - now) / 1000)) : undefined;
   const when = secs === undefined ? "after the reclaim delay" : secs === 0 ? "now" : `after ${secs}s`;
-  return `${where}; ${corpsePart}: reclaim within 39y ${when} (no sickness), ${healer}`;
+  return `${where}; ${corpsePart}: reclaim within ${RECLAIM_RADIUS}y ${when} (no sickness), ${healer}`;
 }
 
 /**
@@ -921,6 +1012,76 @@ function portalLine(
   return `portals: ${shown}${more}`;
 }
 
+/** "62%": health over max, rounded; undefined unless both are numbers and max is not 0. */
+function pct(health: unknown, max: unknown): string | undefined {
+  return typeof health === "number" && typeof max === "number" && max > 0 ? `${Math.round((100 * health) / max)}%` : undefined;
+}
+
+/** A unit's raw `powerType` as the party frame's bar names it (the SDK's `PartyPowerType` words). */
+const POWER_NAMES: Readonly<Record<number, string>> = { 0: "mana", 1: "rage", 2: "focus", 3: "energy", 6: "runic power" };
+
+/** "40% mana": power over max, named by its type ("power" when the type is unknown); undefined without both numbers. */
+function powerPct(power: unknown, max: unknown, type: unknown): string | undefined {
+  const p = pct(power, max);
+  if (p === undefined) return undefined;
+  const named = typeof type === "string" ? type : typeof type === "number" ? POWER_NAMES[type] : undefined;
+  return `${p} ${named ?? "power"}`;
+}
+
+/**
+ * "party: Brannoc ghost, Westfall (-10546, 1197), out of view; Ysolde alive
+ * 87% 40% mana 14y; Corwin offline" — the party frames: each other member's
+ * state, its health and power while alive (health bare, power named), and
+ * where it is. No auras: those stay in `group().members[i].stats`. A member
+ * in view is read off its unit, as the frame reads it, with its distance; one
+ * out of view off the party frame the server sends for it (`stats`): its zone
+ * and the x, y the packet carries, which names no map, so no distance is
+ * worked out from it. Undefined outside a group.
+ */
+/**
+ * One party member's state as its frame reads it: offline, or alive, dead or a
+ * ghost, read off its unit while in view and off the party frame the server
+ * sends (`stats`) otherwise. Undefined when neither has said. Shared by the
+ * HUD's party line and the snippet delta (`sandbox/snippet-delta.ts`), so the
+ * two never disagree about a member.
+ */
+export function memberState(m: GroupMemberLike, unit: UnitLike | undefined): "offline" | "alive" | "dead" | "ghost" | undefined {
+  const st = m.stats;
+  if (m.online === false || st?.online === false) return "offline";
+  if (unit !== undefined) return unit.ghost === true ? "ghost" : unit.dead === true ? "dead" : "alive";
+  if (st === undefined) return undefined;
+  const known = st.ghost !== undefined || st.dead !== undefined || st.health !== undefined;
+  return st.ghost === true ? "ghost" : st.dead === true ? "dead" : known ? "alive" : undefined;
+}
+
+function partyLine(snapshot: SnapshotLike): string | undefined {
+  const g = snapshot.group;
+  if (g?.inGroup !== true || !Array.isArray(g.members) || g.members.length === 0) return undefined;
+  const units = snapshot.units ?? [];
+  const one = (m: GroupMemberLike): string => {
+    const name = fmt(m.name, "?");
+    const st = m.stats;
+    const u = units.find((x) => x.guid === m.guid);
+    const state = memberState(m, u);
+    if (state === "offline") return `${name} offline`;
+    if (u !== undefined) {
+      const hp = state === "alive" ? pct(u.health, u.maxHealth) : undefined;
+      const mp = state === "alive" ? powerPct(u.power, u.maxPower, u.powerType) : undefined;
+      const d = typeof u.distance === "number" ? `${Math.round(u.distance)}y` : undefined;
+      return [name, state, hp, mp, d].filter((p) => p !== undefined).join(" ");
+    }
+    if (st === undefined) return `${name} out of view`;
+    const hp = state === "alive" ? pct(st.health, st.maxHealth) : undefined;
+    const mp = state === "alive" ? powerPct(st.power, st.maxPower, st.powerType) : undefined;
+    const head = [name, state, hp, mp].filter((p) => p !== undefined).join(" ");
+    const zone = typeof st.zone?.name === "string" && st.zone.name !== "" ? st.zone.name : st.zone?.id !== undefined ? `zone ${fmt(st.zone.id)}` : undefined;
+    const xy = typeof st.position?.x === "number" && typeof st.position?.y === "number" ? `(${st.position.x}, ${st.position.y})` : undefined;
+    const where = [zone, xy].filter((p) => p !== undefined).join(" ");
+    return `${head}, ${where === "" ? "" : `${where}, `}out of view`;
+  };
+  return `party: ${g.members.map(one).join("; ")}`;
+}
+
 /**
  * Roles as the nearby line shows them: the SDK's role words spaced out
  * ("questGiver" → "quest giver"), `gossip` dropped (nearly every NPC has it and
@@ -955,10 +1116,17 @@ export function formatStateSummary(
   lines.push(`== state (seq ${snapshot.lastSeq ?? -1}, ${snapshot.eventCount ?? 0} events seen) ==`);
   lines.push(`session: ${o.sessionLive ? "in world" : "not established"}`);
   lines.push(`character: ${fmt(s.name, "none")} (guid ${fmt(s.guid, "?")}) level ${fmt(s.level?.value)}`);
+  // In flight the position is the take-off point (the SDK marks it): the
+  // zone text follows the flight, the coordinates do not.
+  const landsAt = (s.taxiEta?.value as { landsAt?: number } | undefined)?.landsAt;
+  const landsIn =
+    typeof landsAt === "number" ? `, lands in ~${Math.max(0, Math.round((landsAt - (o.now ?? Date.now())) / 1000))}s` : "";
   lines.push(
     pos === undefined
       ? "position: unobserved"
-      : `position: ${fmtPlace(s, pos.map)}map ${fmt(pos.map)} (${fmt(pos.x)}, ${fmt(pos.y)}, ${fmt(pos.z)}) [seq ${fmt(s.position?.seq, "?")}]`,
+      : (pos as { inFlight?: unknown }).inFlight === true
+        ? `position: in flight${fmtPlace(s, pos.map) === "" ? ", " : ` over ${fmtPlace(s, pos.map)}`}took off from map ${fmt(pos.map)} (${fmt(pos.x)}, ${fmt(pos.y)}, ${fmt(pos.z)})${landsIn} [seq ${fmt(s.position?.seq, "?")}]`
+        : `position: ${fmtPlace(s, pos.map)}map ${fmt(pos.map)} (${fmt(pos.x)}, ${fmt(pos.y)}, ${fmt(pos.z)}) [seq ${fmt(s.position?.seq, "?")}]`,
   );
 
   // home: the hearthstone's destination, as the server last said it. The
@@ -983,6 +1151,9 @@ export function formatStateSummary(
   // auras — the buff and debuff bar beside the player frame
   const auras = auraLine(snapshot.selfAuras, o.now ?? Date.now());
   if (auras !== undefined) lines.push(auras);
+  // party — the party frames under the player frame; absent outside a group
+  const party = partyLine(snapshot);
+  if (party !== undefined) lines.push(party);
 
   // xp / money
   const money = snapshot.money?.value;
@@ -1110,6 +1281,7 @@ export interface ContextInputs {
  * names what the client would have shown. Nothing else is added — no advice.
  */
 function eventLineNote(e: EventSummary): string {
+  if (e.note !== undefined) return ` — ${e.note}`;
   if (e.opcode !== "SMSG_INVENTORY_CHANGE_FAILURE") return "";
   const result = (e.data as { result?: unknown } | undefined)?.result;
   if (typeof result !== "number") return "";
@@ -1129,13 +1301,124 @@ export function formatEventLine(e: EventSummary): string {
  * The events a turn's context renders and how many ambient events the span
  * they cover held: ambient opcodes excluded, then the last EVENT_WINDOW of what
  * remains. Pure; the loop logs exactly this as the turn's `events_served`.
+ * A spell combat-log line marked `bystander` (`spellLogShown`) is left out
+ * too, and not counted as ambient: it is not movement and the cache does not
+ * fold it.
  */
 export function eventWindow(events: readonly EventSummary[], folded = 0): { window: EventSummary[]; folded: number } {
-  const eligible = events.filter((e) => !CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(e.opcode));
+  const ambient = events.filter((e) => CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(e.opcode)).length;
+  const eligible = events.filter((e) => !CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(e.opcode) && e.bystander !== true);
   return {
     window: eligible.slice(-CONTEXT_POLICY.EVENT_WINDOW),
-    folded: folded + (events.length - eligible.length),
+    folded: folded + ambient,
   };
+}
+
+// ------------------------------------------------------ spell combat log
+
+/** The direct-spell combat-log opcodes (module/PROTOCOL.md, "Spell combat log"). */
+export const SPELL_LOG_OPCODES: ReadonlySet<string> = new Set([
+  "SMSG_SPELLNONMELEEDAMAGELOG",
+  "SMSG_SPELLHEALLOG",
+  "SMSG_SPELLENERGIZELOG",
+]);
+
+interface SpellLogData {
+  targetGuid?: unknown;
+  casterGuid?: unknown;
+  spellId?: unknown;
+  name?: unknown;
+  damage?: unknown;
+  amount?: unknown;
+  overkill?: unknown;
+  overheal?: unknown;
+  schoolMask?: unknown;
+  absorb?: unknown;
+  resist?: unknown;
+  blocked?: unknown;
+  powerType?: unknown;
+  crit?: unknown;
+}
+
+/**
+ * Whether a spell combat-log line belongs in the event window. The core sends
+ * these to every client in range, so in a party fight five members' spells
+ * and heals, and every caster mob's, would otherwise turn the 64-event window
+ * over in seconds. Kept: any line we cast or are the target of, and a damage
+ * line whose target is a party member (a member being hit is what a healer or
+ * a tank reacts to). Left out: other units' heals and power gains, and damage
+ * that lands on anyone outside the party. Every other opcode is shown.
+ */
+export function spellLogShown(
+  opcode: string,
+  data: unknown,
+  selfGuid: string | undefined,
+  partyGuids: ReadonlySet<string>,
+): boolean {
+  if (!SPELL_LOG_OPCODES.has(opcode)) return true;
+  const d = (data ?? {}) as SpellLogData;
+  if (selfGuid !== undefined && (d.casterGuid === selfGuid || d.targetGuid === selfGuid)) return true;
+  return opcode === "SMSG_SPELLNONMELEEDAMAGELOG" && typeof d.targetGuid === "string" && partyGuids.has(d.targetGuid);
+}
+
+/** `SpellSchoolMask` bits, in the client's order. */
+const SCHOOL_NAMES = ["physical", "holy", "fire", "nature", "frost", "shadow", "arcane"] as const;
+
+function schoolName(mask: unknown): string | undefined {
+  if (typeof mask !== "number" || mask <= 0) return undefined;
+  const names = SCHOOL_NAMES.filter((_, i) => (mask & (1 << i)) !== 0);
+  return names.length > 0 ? names.join("+") : `school ${mask}`;
+}
+
+const logNumber = (v: unknown): number => (typeof v === "number" ? v : 0);
+
+/**
+ * The sentence a client's combat log prints for one direct spell hit, heal or
+ * power gain, from the event and the names in view as it arrived: "Defias
+ * Evoker's Fireball hits you for 54 (fire)". `nameOf` answers a unit's name
+ * when one has been observed. Undefined for every other opcode. Wording only:
+ * every number is the wire's, and the raw payload stays on the line.
+ */
+export function spellLogNote(
+  opcode: string,
+  data: unknown,
+  selfGuid: string | undefined,
+  nameOf: (guid: string) => string | undefined,
+): string | undefined {
+  if (!SPELL_LOG_OPCODES.has(opcode)) return undefined;
+  const d = (data ?? {}) as SpellLogData;
+  const isSelf = (g: unknown): boolean => selfGuid !== undefined && g === selfGuid;
+  const named = (g: unknown): string | undefined => (typeof g === "string" ? nameOf(g) : undefined);
+  const spell = typeof d.name === "string" && d.name !== "" ? d.name : `spell ${String(d.spellId)}`;
+  const caster = isSelf(d.casterGuid) ? "Your" : `${named(d.casterGuid) ?? "An unnamed unit"}'s`;
+  const target = isSelf(d.targetGuid) ? "you" : (named(d.targetGuid) ?? "an unnamed unit");
+  const extras = (parts: [number, string][]): string[] =>
+    parts.filter(([n]) => n > 0).map(([n, label]) => `${n} ${label}`);
+  const paren = (tail: string[]): string => (tail.length > 0 ? ` (${tail.join(", ")})` : "");
+  if (opcode === "SMSG_SPELLNONMELEEDAMAGELOG") {
+    const school = schoolName(d.schoolMask);
+    const tail = [
+      ...(school === undefined ? [] : [school]),
+      ...extras([
+        [logNumber(d.absorb), "absorbed"],
+        [logNumber(d.resist), "resisted"],
+        [logNumber(d.blocked), "blocked"],
+        [logNumber(d.overkill), "overkill"],
+      ]),
+    ];
+    const verb = d.crit === true ? "crits" : "hits";
+    return `${caster} ${spell} ${verb} ${target} for ${logNumber(d.damage)}${paren(tail)}`;
+  }
+  if (opcode === "SMSG_SPELLHEALLOG") {
+    const tail = extras([
+      [logNumber(d.overheal), "overheal"],
+      [logNumber(d.absorb), "absorbed"],
+    ]);
+    const verb = d.crit === true ? "critically heals" : "heals";
+    return `${caster} ${spell} ${verb} ${target} for ${logNumber(d.amount)}${paren(tail)}`;
+  }
+  const power = typeof d.powerType === "number" ? (POWER_NAMES[d.powerType] ?? `power ${d.powerType}`) : "power";
+  return `${caster} ${spell} gives ${target} ${logNumber(d.amount)} ${power}`;
 }
 
 /** Pure. Same inputs, byte-identical output — tests enforce it. */

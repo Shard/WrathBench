@@ -163,7 +163,12 @@ timeout hint rode about twenty requests. The fold moves only at a trim, so it
 breaks no cache prefix of its own, and the last two turns are never folded, so
 a result is read in full on the turn it arrives and the turn after. The CLI
 scaffolds keep and compact their own conversation, so neither the trim nor the
-fold applies to them. Old turns are dropped, so the scratchpad is the only durable
+fold applies to them. One CLI driver turn can run for hours, which leaves the
+HUD seen at its two ends only, so on claude-code each snippet result ends with
+what changed since the previous one: party members' transitions, chat from
+others, damage taken, level and quest changes, at most 600 characters, and
+nothing when nothing changed (operator, 2026-10-21). Codex and pi do not take
+it yet, and the fixed loop never does, since it rebuilds the HUD every turn. Old turns are dropped, so the scratchpad is the only durable
 memory and the prompt says so; models with weak note-taking underperform at
 equal reasoning strength, which is signal, not bias. A write that would take
 the scratchpad past its 32,000-character cap is refused and saves nothing,
@@ -225,7 +230,9 @@ unpinned runs do not share a chart.
 
 **Steering is what makes a run unscored.** An objective is operator-authored
 world knowledge rendered into the prompt at one fixed place, so any run with
-one is stamped unscored and cannot drift into a chart. `wikiCoords` defaults
+one is stamped unscored and cannot drift into a chart. An objective replaces
+the broad goal for that run rather than adding to it, and since such a run is
+already unscored, no eval prompt changes (operator, 2026-10-21). `wikiCoords` defaults
 to false: exact yards from the wiki are an answer key for the "find things"
 rungs, and without them a model must read "in the inn at Goldshire", walk
 there and look. Harder is the point; if the names-only ladder proves

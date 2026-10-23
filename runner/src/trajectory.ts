@@ -267,8 +267,11 @@ export interface ItemSample {
  *   other than 0, `left` back to 0, ids only. `kill` is one
  *   `SMSG_PARTYKILLLOG` whose victim is of rank 1 or above (or of a rank the
  *   creature query never answered), with the victim's template `entry` and
- *   `rank`, and `self` when this character struck the blow. `observedTs` is
- *   the packet's own timestamp on all three.
+ *   `rank` (the entry read off the victim's guid when the unit cache never
+ *   held it), `self` when this character struck the blow, and `member` when
+ *   the killer is this character or one of its group's members (absent on a
+ *   record from before the field). `observedTs` is the packet's own
+ *   timestamp on all three.
  */
 export type MilestoneLine =
   | {
@@ -374,6 +377,7 @@ export type MilestoneLine =
       entry?: number | undefined;
       rank?: number | undefined;
       self: boolean;
+      member?: boolean | undefined;
       observedTs?: number | undefined;
       turn?: number | undefined;
     };
@@ -438,6 +442,28 @@ export interface RunMeta {
    * projection carries it. Absent on every run that never saw one.
    */
   subscriptionUsage?: SubscriptionUsage;
+  /**
+   * Every subscription lane move the operator made on this run
+   * (`runner/src/move-lane.ts`), oldest first: the lane it left, the lane it
+   * went to, when, who, and why. `config.subscription` says which lane the
+   * run bills now; this says how it got there, because a run's lane is
+   * otherwise read as the lane it started on. Top level and not in `config`,
+   * so a resume never reads it as launch config. Operator-only like
+   * `subscriptionUsage`: no public projection carries it.
+   */
+  laneHistory?: LaneMove[];
+}
+
+/** One operator move of a run's subscription lane (`RunMeta.laneHistory`). */
+export interface LaneMove {
+  /** The lane variable NAME it billed before. */
+  from: string;
+  /** The lane variable NAME it bills from now on. */
+  to: string;
+  /** Epoch ms. */
+  at: number;
+  actor: string;
+  note: string;
 }
 
 /** The provider's own answer to "what ran", promoted onto the run. */

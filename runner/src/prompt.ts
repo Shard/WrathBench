@@ -4,24 +4,76 @@
  * the world, the snippet runtime surface, the tools, and the goal — nothing
  * else. No strategy hints beyond what the tools themselves imply.
  *
- * One sentence varies, and only by *harness*, never by model: what happens to
+ * It has two parts. The directive varies by episode kind: the broad goal, or
+ * in its place an operator objective, plus the clock the episode states. The
+ * body — the world facts, the snippet runtime, the SDK, the tools — is the same
+ * everywhere and carries no directive language.
+ *
+ * Two sentences vary, and only by *harness*, never by model. What happens to
  * older conversation is a different fact on the fixed loop than on a CLI
- * scaffold (claude-code, codex), and a prompt that states the wrong one is
- * simply false (`contextSentence`). Nothing in the prompt names a vendor: the
- * CLI-scaffold sentence is the same bytes for both scaffolds, because the
- * loop is model-agnostic and the regime it describes is the same.
+ * scaffold (claude-code, codex, pi), and a prompt that states the wrong one
+ * is simply false (`contextSentence`). And a harness whose driver ends each
+ * snippet result with what changed since the previous one says so
+ * (`snippetDeltaClause`; claude-code only, operator 2026-10-21). Nothing in
+ * the prompt names a vendor: the CLI-scaffold sentence is the same bytes for
+ * every scaffold, because the loop is model-agnostic and the regime it
+ * describes is the same.
  */
 
 import type { Harness } from "./config";
+import { harnessDriver } from "./drivers";
 import type { EpisodeId } from "./episodes";
 
 /**
- * The standing goal. Fixed, identical for every model and every run: it names
- * no formula and no named task.
+ * The opening of every prompt is two kinds of sentence, and they are kept
+ * apart here because an operator objective swaps one kind and not the other
+ * (operator, 2026-10-21).
+ *
+ * The world facts are shared by every run: what the agent is, that the world
+ * is live and whole, that the server is the source of truth, and how play
+ * happens (snippets, supervised). They carry no directive.
  */
-export const GOAL_SECTION = `You are an agent controlling one character in World of Warcraft 3.3.5a on a private benchmark server. The world is live and does not pause for you. This is the complete, unmodified 3.3.5a world: every zone, city, road, flight path, boat and tram a player could use exists and is reachable, and nothing has been walled off for the benchmark. Your goal is to progress your character over the long run — leveling up, completing quests, acquiring better gear, accumulating wealth, and growing in capability. The server is the source of truth for what actually happened. There is no single number to maximize; play the game well and make broad, durable progress.
+const WORLD_FACTS = {
+  agent: "You are an agent controlling one character in World of Warcraft 3.3.5a on a private benchmark server.",
+  live: "The world is live and does not pause for you.",
+  whole:
+    "This is the complete, unmodified 3.3.5a world: every zone, city, road, flight path, boat and tram a player could use exists and is reachable, and nothing has been walled off for the benchmark.",
+  truth: "The server is the source of truth for what actually happened.",
+} as const;
 
-You do not play directly. You write TypeScript snippets that run in a persistent sandbox holding one SDK client for your game session, and you supervise the results.`;
+const RUNTIME_LEAD =
+  "You do not play directly. You write TypeScript snippets that run in a persistent sandbox holding one SDK client for your game session, and you supervise the results.";
+
+/**
+ * The broad goal: the directive every run without an objective gets. It names
+ * no formula and no named task. An operator objective replaces it for that
+ * run (`objectiveSection`); nothing else does.
+ */
+const GOAL_DIRECTIVE = {
+  progress:
+    "Your goal is to progress your character over the long run — leveling up, completing quests, acquiring better gear, accumulating wealth, and growing in capability.",
+  breadth: "There is no single number to maximize; play the game well and make broad, durable progress.",
+} as const;
+
+/**
+ * The standing goal with its world facts, exactly as it has always read. The
+ * directive sentences sit between the facts — the goal fourth, the breadth
+ * sentence last — because that is the order every run without an objective
+ * has hashed under, and the join is what keeps those runs byte-identical by
+ * construction.
+ */
+export const GOAL_SECTION = `${WORLD_FACTS.agent} ${WORLD_FACTS.live} ${WORLD_FACTS.whole} ${GOAL_DIRECTIVE.progress} ${WORLD_FACTS.truth} ${GOAL_DIRECTIVE.breadth}
+
+${RUNTIME_LEAD}`;
+
+/**
+ * The same opening with the directive sentences left out, for a run whose
+ * objective replaces them: the world facts in their order, then the runtime
+ * lead. The objective block follows it (`buildSystemPrompt`).
+ */
+export const WORLD_SECTION = `${WORLD_FACTS.agent} ${WORLD_FACTS.live} ${WORLD_FACTS.whole} ${WORLD_FACTS.truth}
+
+${RUNTIME_LEAD}`;
 
 /**
  * Everything from the runtime surface down to the last line of "## Each turn",
@@ -36,21 +88,21 @@ Snippets run in one long-lived process. Top-level const/let/var/function/class d
   - await connect() — open the event stream. Call once, before creating the session.
   - await sdk.createSession({ character, race, class }) — create/log in the character and enter the world. Reuses an existing character of that name on this token.
   - await sdk.say(text, { type }) — say something in local, party, yell or whisper chat (whisper takes to).
-  - await sdk.waitForChat(textOrPredicate, { timeout: ms }) — wait for a chat line.
+  - await sdk.waitForChat(textOrPredicate, { timeout: ms }) — wait for a chat line; a matching line already received answers at once, so pass includeBuffered: false to wait for a new one.
   - await sdk.killTarget(guid, { timeout: ms, disengage, abortBelowHealthPct }) — walk into melee range and auto-attack until the target dies, you die, it leaves view, or the timeout (default 25000 = 25s, under the snippet limit; the walk counts against it too) elapses. Returns { status, swings, healthPct, attacking, reached, distance, detail } — reached says whether you ever got within melee range; on timeout or a lost target it leaves you swinging (attacking: true) rather than disarming you mid-fight, so call sdk.attackStop() or pass disengage: true to break off.
   - More helpers, one line each: await sdk.lootCorpse(guid) — empty a corpse or a chest (a chest is opened by casting its Opening spell, as a client does; interact() on a chest is refused and says so); its items are what actually entered your bags ({ status: "none_stored" } means the window showed items but none were stored; { status: "refused", error, hint } means the server refused the loot and says why; there is no window to close). await sdk.questsAvailableFrom(npcGuid) — what an NPC is offering right now, as { quests: [{ questId, title, icon, level }] }; an empty list is an answer, not an error, and { ok: false, status: "nothing_on_offer" } is answered at once when the NPC's questgiver marker already says it offers nothing. await sdk.acceptQuestFrom(npcGuid, questId); await sdk.turnInQuest(npcGuid, questId, rewardIndex?) — { status: "inventory_full" } means the reward did not fit: free a bag slot and turn in again; await sdk.waitForQuestObjective(questId, { timeout: ms }) — resolves when the quest log marks the objectives done. await sdk.equipItem(bag, slot) — or sdk.equipItem(itemName), as every item call also takes the item's name in place of its bag — waits for the server's verdict: { status: "equipped", equippedSlot } or { status: "not_equipped", reason, hint } (the reason is the game refusing — no proficiency for that weapon type, level too low, a two-hander blocking a shield — so re-sending it will not help), or { status: "unconfirmed" } when nothing was observed. sdk.useItem(bag, slot, targetGuid?) — an item that starts a quest returns { questOffer: { questId, title, itemGuid } }, accepted with acceptQuestFrom(itemGuid, questId), and a use the server refuses returns { ok: false, status: "cast_failed", reason, hint } (reason "not_ready" is a cooldown still running: the item's, or the global one after another cast) or { ok: false, status: "refused", hint }; sdk.destroyItem(bag, slot, count?) — take bag/slot from state.bag().items, or the item's name in place of the bag (bag 255 is the backpack, slots 23-38; a worn bag is its own slot 19-22). sdk.castSpell(spellId, targetGuid?) returns once the cast is dispatched: the outcome arrives as an event, SMSG_SPELL_GO, or SMSG_CAST_FAILED / SMSG_SPELL_FAILURE with a reason naming the failure, and state.cooldowns() lists only the cooldowns the server announces, which it does for few casts and no item use. await sdk.trainerList(npcGuid) and await sdk.buySpell(npcGuid, spellId) — class trainers teach new spells and new ranks of spells you already have, for money; trainerList returns { trainerType, spells: [{ spellId, cost, reqLevel, learnable, affordable }] } (affordable is undefined until your money has been observed) and buySpell returns { status: "learned" } or { status: "buy_failed", reason, hint }. sdk.gossipHello(guid) and sdk.gossipSelect(guid, menuId, optionId) for NPC menus. The windows an NPC opens stay readable after the event that carried them: state.lastVendorList(guid) is a vendor's stock ({ items: [{ slot, itemId, price, buyCount, leftInStock, extendedCost }], seq, ts } — slot is what buyItem takes), state.lastTrainerList(guid) is a trainer's raw list, and state.lastLoot() is the loot window that is open ({ guid, lootType, gold, items: [{ slot, itemId, count, slotType }] } — slot is what lootItem takes); the vendor and trainer lists are the last seen rather than the currently open, so read their seq/ts. await sdk.spiritHealerActivate(guid) — { status: "resurrected" }, or { status: "unconfirmed", distance, hint } when nothing came back.
   - Helpers cover the common case; the raw actions under them (setTarget, attackStart, attackStop, face) plus events and state are equally supported and safe to compose, including from a background routine.
-  - Death: await sdk.repop() releases your spirit to a graveyard as a ghost; state.self.corpse.value is where your corpse is and state.self.graveyard.value where you were released, so a ghost walks back (await sdk.moveTo(state.self.corpse.value)) and calls await sdk.reclaimCorpse() — it waits out the server's reclaim delay for you and returns { ok, status: "reclaimed" | "not_reclaimed" | "unconfirmed", reason, hint, distance?, secondsLeft? } where reason is exactly one of too_far (within 39y only), delay_not_elapsed, wrong_map, corpse_in_instance, no_corpse, still_ghost; reclaiming costs nothing, while sdk.spiritHealerActivate(guid) at the graveyard's Spirit Healer resurrects you there for 25% durability on every equipped item plus resurrection sickness from level 11 (1 min per level above 10, 10 min from level 20).
+  - Death: await sdk.repop() releases your spirit to a graveyard as a ghost; state.self.corpse.value is where your corpse is and state.self.graveyard.value where you were released, so a ghost walks back (await sdk.moveTo(state.self.corpse.value)) and calls await sdk.reclaimCorpse() — it waits out the server's reclaim delay for you and returns { ok, status: "reclaimed" | "not_reclaimed" | "unconfirmed", reason, hint, distance?, secondsLeft? } where reason is exactly one of too_far (within 39y only), delay_not_elapsed, wrong_map, corpse_in_instance, no_corpse, still_ghost; reclaiming costs nothing, while sdk.spiritHealerActivate(guid) at the graveyard's Spirit Healer resurrects you at the graveyard nearest your corpse for 25% durability on every equipped item plus resurrection sickness from level 11 (1 min per level above 10, 10 min from level 20). A ghost whose corpse is in a dungeon comes back to life at its entrance by walking into its portal.
   - Bank and mail: await sdk.openBank(banker), then sdk.bankDeposit(bag, slot) and sdk.bankWithdraw(bag, slot) (or the item's name), with state.bank() listing the bank; await sdk.openMailbox(mailbox), then sdk.sendMail(to, subject, body, { money, items }), sdk.mailList(), sdk.takeMailItem(mailId, itemGuidLow) and sdk.takeMailMoney(mailId).
   - sdk.state — a cache folded from events: self (guid, name, level, position, zone and area — the game's own zone/subzone names as { id, name }, the same text the client shows on screen), xp and nextLevelXp (your progress bar), money, questLog and state.quest(id) — each entry carries title and objectives: [{ kind: "kill" | "interact" | "collect" | "event" | "explore", entry, text, required, have, done }] (undefined until the quest's template answer has arrived, usually within a second of accepting), inventory (raw slots; equipment is slot < 19), state.bag() — everything you carry, backpack and worn bags as one list: { items: [{ bag, slot, itemId, name, count }], freeSlots, totalSlots, bags }, with bag/slot exactly what equipItem/useItem/destroyItem take — plus characters, chat, notifications, nearby, gaps. Fields are undefined until an event carried them; undefined means unobserved, never zero.
-  - state.units(filter?) is the way to scan what is around you: it returns flat plain objects — { guid, entry, name, type, level, health, maxHealth, dead, distance, x, y, z, targetGuid }, no wrappers and no Maps — sorted nearest first, e.g. state.units({entry: 69, alive: true, maxDistance: 50}). Filter keys are entry (id or ids), name (case-insensitive; a plain string matches as a substring but results are ordered exact-then-whole-word-then-substring, so { name: "tree" } returns "tree" ahead of "tree stump" — a RegExp or a regex-looking string like "/^tree$/i" matches with test()), type ("unit" | "player" | "gameObject"), alive, maxDistance, npc, role (an NPC role word such as "vendor", "repair", "trainer", "flightMaster", "innkeeper" — each row also carries roles, decoded from the NPC's flags), questGiver — the marker a client draws over an NPC, as the server reported it: "available" offers a quest, "reward" takes a turn-in right now, "incomplete" ends a quest in your log that is not done, "none" has nothing for you, and questGiver: true means any marker but "none" (so state.units({ questGiver: "reward" }) is who to turn in to; each row also carries questGiver); a bad one throws and says what it expected. No match is not an error and does not throw: state.units(...) returns an empty array and state.closest(...) returns undefined, so reading a field off the result of a miss (state.closest({name: "boar"}).guid) is the "Cannot read properties of undefined" TypeError you get — check the length, or check for undefined, before you use it.
+  - state.units(filter?) is the way to scan what is around you: it returns flat plain objects — { guid, entry, name, type, level, health, maxHealth, dead, distance, x, y, z, targetGuid }, no wrappers and no Maps — sorted nearest first, e.g. state.units({entry: 69, alive: true, maxDistance: 50}). Filter keys are entry (id or ids), name (case-insensitive; a plain string matches as a substring but results are ordered exact-then-whole-word-then-substring, so { name: "tree" } returns "tree" ahead of "tree stump" — a RegExp or a regex-looking string like "/^tree$/i" matches with test()), type ("unit" | "player" | "gameObject" | "corpse"), alive, maxDistance, npc, role (an NPC role word such as "vendor", "repair", "trainer", "flightMaster", "innkeeper" — each row also carries roles, decoded from the NPC's flags), questGiver — the marker a client draws over an NPC, as the server reported it: "available" offers a quest, "reward" takes a turn-in right now, "incomplete" ends a quest in your log that is not done, "none" has nothing for you, and questGiver: true means any marker but "none" (so state.units({ questGiver: "reward" }) is who to turn in to; each row also carries questGiver); a bad one throws and says what it expected. No match is not an error and does not throw: state.units(...) returns an empty array and state.closest(...) returns undefined, so reading a field off the result of a miss (state.closest({name: "boar"}).guid) is the "Cannot read properties of undefined" TypeError you get — check the length, or check for undefined, before you use it.
   - sdk.state.nearby is a Map keyed by guid string (not an array — use state.units(...) above, or state.nearbyUnits() for the raw objects, state.closest(filter) for the nearest match by distance — it takes the same criteria object state.units() takes, or a predicate — and state.creaturesByEntry(id)); each raw object's .fields is also a Map, not a plain object. Shapes differ between the raw state objects and the flat views, and guessing costs a turn, so exactly: on state.self and on state.nearby's raw objects every observed field is wrapped as { value, seq, ts } and you read x.value — state.self.level.value, state.self.position.value.x, and health/power are one wrapped current/max pair, state.self.health.value.current and state.self.health.value.max (there is no state.self.maxHealth; reading .maxHealth.value there throws). state.xp and state.money are wrapped the same way (state.money.value). The flat views are not wrapped at all: a state.units(...) row is { health, maxHealth, distance, … } read directly (u.maxHealth, not u.maxHealth.value), and so are state.bag() and state.questLog — questLog is a plain array of plain entries { slot, questId, complete, counts, seq, ts }, so state.questLog.length and q.complete, not state.questLog.value. Guids are opaque decimal strings: compare them with ===, use them as Map keys and in template literals, and JSON.stringify them freely. State's accessors live on the state object, not on sdk. state.self, state.target, state.questLog, state.inventory, state.xp and state.money are plain properties (state.self.position, not state.self()); state.units(...), state.nearbyUnits(), state.closest(...), state.quest(id), state.lastGossip(guid), state.lastVendorList(guid), state.lastTrainerList(guid), state.lastLoot() and state.bag() are methods.
   - sdk.events — the raw event stream: on(opcode, fn) (returns an unsubscribe function), off(opcode, fn) to remove that handler again, waitForOpcode(opcode, { timeout: ms }), recent(n). Events are the server's SMSG_* packets as JSON.
   - Exact signatures for every method — helpers, raw actions, and state reads — are in the generated SDK reference at API_MD_PATH. Read it from a snippet: await Bun.file(API_MD_PATH).text(). It is larger than one snippet result, so read it in slices — one "## " section, or filter the lines you want, e.g. (await Bun.file(API_MD_PATH).text()).split("\\n").filter((l) => l.includes("gossip")).join("\\n"). Do not invent skill-specific methods: there is no killNearest, goTo, navigate, trainSkill, or chop/mine/gather helper — gathering and talking go through interact / gossipHello / gossipSelect / useItem / castSpell.
   - Every call that takes a guid — helpers, raw actions (setTarget, attackStart, gossipHello, loot, vendorList, ...), and a { guid } field inside a raw(...) payload — also accepts a unit object from state.units(...) directly, or the name of something in view: case, spacing and apostrophes are ignored, then an exact name, else a unique substring, else a unique near-miss. Nothing matching, or two things matching, is refused with what is in view (the SDK never picks between referents); when the match was not exact the answer carries resolved: { input, name, guid }. moveTo and moveToAsync take a unit, a guid or a name as well as a point { x, y, z } — a unit resolves to its position in the state cache, and a guid nothing in view answers to comes back as { ok: false, status: "unknown_target", hint } rather than throwing.
   - gossipSelect(guid, "option text") selects by an option's visible text from the last observed gossip menu (case-insensitive exact or unique substring); the numeric gossipSelect(guid, menuId, optionId) form still works.
 - state, events: aliases for sdk.state and sdk.events.
-- sleep(ms, options?), scratchpad.read()/write(content)/append(text). Sleeping is blind — prefer an SDK wait or events.once/waitForOpcode when you are waiting for something specific — so sleep resolves with why it woke: "elapsed", or early with "attacked" (a unit started attacking you) or "died" — the reason is the resolved value itself, e.g. const why = await sleep(20000); if (why === "attacked") { await sdk.killTarget(state.closest({ alive: true, maxDistance: 10 })); } — pass { wake: false } for a plain timer.
+- sleep(ms, options?), scratchpad.read()/write(content)/append(text). Sleeping is blind — prefer an SDK wait or events.once/waitForOpcode when you are waiting for something specific — so sleep resolves with why it woke: "elapsed", or early with "attacked" (a unit started attacking you, or hit you with a spell while you were out of combat), "died" or "chat" (a party or whisper line from another player) — the reason is the resolved value itself, e.g. const why = await sleep(20000); if (why === "attacked") { await sdk.killTarget(state.closest({ alive: true, maxDistance: 10 })); } — pass { wake: false } for a plain timer.
 - The scratchpad holds at most 32,000 characters, and every turn shows its size. A write, edit or append that would take it past that is refused and saves nothing (in a snippet, the call rejects), so condense it first.
 - signal: this snippet's AbortSignal. Aborted when the snippet is abandoned; check signal.aborted in long loops, or pass it to your own timers.
 
@@ -94,9 +146,10 @@ const BODY_TAIL = `Act through tools every turn; text without a tool call does n
  * (`resumeSessionNote`), so the notes are the only thing that crosses that gap.
  * It names "the CLI", never which one: claude-code, codex and pi are the same
  * regime (one continuous session the scaffold owns and compacts), so they get
- * the same bytes, and the prompt hash in the comparability tuple stays equal
- * across the CLI groups — the harness tag is what tells them apart. pi's case
- * was added by choice, not inherited (#257; the operator's to confirm).
+ * the same bytes here. Their prompt hashes are equal but for the snippet-delta
+ * sentence, which claude-code alone carries for now; the harness tag is what
+ * tells them apart. pi's case was added by choice, not inherited (#257; the
+ * operator's to confirm).
  *
  * Exhaustive over `Harness` on purpose, exactly as `episodeSection` is over
  * `EpisodeId`: a new harness must not silently inherit a sentence that
@@ -136,8 +189,9 @@ export const TOOLS_NOT_AMBIENT = {
 } as const;
 
 /**
- * The body for one harness: the fixed text with that harness's context
- * sentence in it, and — with `wiki: false` — without the reference tool.
+ * The body for one harness: the fixed text with that harness's snippet-delta
+ * and context sentences in it, and — with `wiki: false` — without the
+ * reference tool.
  */
 function bodyFor(harness: Harness, wiki = true): string {
   // The wiki-on rendering is `BODY_HEAD` untouched, by construction rather
@@ -146,7 +200,21 @@ function bodyFor(harness: Harness, wiki = true): string {
   const head = wiki
     ? BODY_HEAD
     : BODY_HEAD.replace(WIKI_TOOL_BULLET, "").replace(TOOLS_NOT_AMBIENT.withWiki, TOOLS_NOT_AMBIENT.withoutWiki);
-  return `${head} ${contextSentence(harness)} ${BODY_TAIL}`;
+  return `${head}${snippetDeltaClause(harness)} ${contextSentence(harness)} ${BODY_TAIL}`;
+}
+
+/**
+ * The one sentence a harness whose driver takes the snippet delta adds
+ * (`DriverEntry.snippetDelta`, drivers.ts; claude-code only, operator
+ * 2026-10-21), right after the sentence saying what every turn carries; empty
+ * everywhere else, so every other rendering keeps its bytes. A statement of
+ * what the result carries, nothing about what to do with it.
+ */
+export const SNIPPET_DELTA_SENTENCE =
+  "Each snippet result ends with what changed since your previous snippet (party, chat, damage taken, level and quests), when anything did.";
+
+function snippetDeltaClause(harness: Harness): string {
+  return harnessDriver(harness)?.snippetDelta === true ? ` ${SNIPPET_DELTA_SENTENCE}` : "";
 }
 
 /**
@@ -158,50 +226,52 @@ export const SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${bodyFor("wrathbench")}`;
 
 /**
  * The same prompt as the claude-code harness renders it. Differs from
- * `SYSTEM_PROMPT` in `contextSentence` and nothing else, so the two hash
- * differently in the comparability tuple — which is the intended, visible
- * record that the two harnesses do not share a prompt.
+ * `SYSTEM_PROMPT` in `contextSentence` and the snippet-delta sentence and
+ * nothing else, so the two hash differently in the comparability tuple —
+ * which is the intended, visible record that the two harnesses do not share a
+ * prompt.
  */
 export const CLAUDE_CODE_SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${bodyFor("claude-code")}`;
 
 /**
- * The same prompt as the codex harness renders it. Byte-identical to
- * `CLAUDE_CODE_SYSTEM_PROMPT` by construction (`contextSentence`): the two CLI
- * scaffolds run the same conversation regime, so the prompt says the same
- * thing, and the harness tag — not the prompt hash — is what separates them.
+ * The same prompt as the codex harness renders it: `CLAUDE_CODE_SYSTEM_PROMPT`
+ * less the snippet-delta sentence, by construction (`contextSentence`,
+ * `snippetDeltaClause`). The CLI scaffolds run the same conversation regime,
+ * so the prompt says the same thing about it; codex takes no snippet delta
+ * yet (operator, 2026-10-21), so it is not told of one.
  */
 export const CODEX_SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${bodyFor("codex")}`;
 
 /**
- * The same prompt as the pi harness renders it, byte-identical to the other two
- * CLI renders by construction: pi keeps one continuous session and compacts it
+ * The same prompt as the pi harness renders it, byte-identical to the codex
+ * render by construction: pi keeps one continuous session and compacts it
  * itself, the regime the CLI sentence states, so it adds no wording of its own
- * (the operator's to confirm, #257). pi receives exactly these bytes as its
- * system prompt (`adapter-pi.ts`, `PI_PROMPT_EXTENSION`).
+ * (the operator's to confirm, #257), and like codex it takes no snippet delta
+ * yet. pi receives exactly these bytes as its system prompt (`adapter-pi.ts`,
+ * `PI_PROMPT_EXTENSION`).
  */
 export const PI_SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${bodyFor("pi")}`;
 
 /**
  * The delimited block an operator objective is rendered into. One shape, one
  * place, verbatim text: the prompt a model sees for a given objective does not
- * depend on which model or which driver it is.
+ * depend on which model or which driver it is. The objective replaces the
+ * broad goal for its run rather than adding to it (operator, 2026-10-21): a
+ * Deadmines party told it was "in addition to the standing goal" left the
+ * dungeon after some wipes to level in Westfall, which the goal endorsed.
  */
 export function objectiveSection(objective: string): string {
-  return (
-    `--- Operator objective for this run ---\n` +
-    `${objective}\n` +
-    `This objective is set by the operator for this run only. It is in addition to the standing goal above, not a replacement for it.\n` +
-    `--- end operator objective ---`
-  );
+  return `--- Operator objective for this run ---\n${objective}\n--- end operator objective ---`;
 }
 
 /**
  * What the episode tier tells the model about itself (docs/EPISODES.md).
- * Facts a player has — the clock and the rule — not an objective: the standing
- * goal and the scoring are unchanged. Identical for every model; it varies only
- * with `episode`, which the comparability tuple already carries. The steered
- * tiers (`freeplay`, `probing`) add nothing — their objective block speaks for
- * them.
+ * Facts a player has — the clock and the rule — not an objective: the goal and
+ * the scoring are unchanged. Identical for every model; it varies only with
+ * `episode`, which the comparability tuple already carries. The steered tiers
+ * (`freeplay`, `probing`) have no fixed clock: a probe states its own budget
+ * when it carries an objective (`probingClockSentence`), and freeplay states
+ * none.
  *
  * The e90 bar is followed by the fact that it is not the end of the episode.
  * Stated without it, all three Sonnet 5.5 e90 runs read the bar as a finish
@@ -222,34 +292,74 @@ export function episodeSection(episode: EpisodeId | undefined): string | undefin
       return "This episode lasts six hours.";
     case "probing":
     case "freeplay":
-      // Both are steered tiers whose clock is set per run: the objective block
-      // is what speaks for them, and a sentence naming a default the run may
-      // not be under would be a false fact rather than a missing one.
+      // Both are steered tiers whose clock is set per run, so the tier itself
+      // names none: a sentence naming a default the run may not be under would
+      // be a false fact rather than a missing one.
       return undefined;
   }
 }
 
+const HOUR_WORDS = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
+
+/**
+ * A budget in the words the eval clock sentences use: whole hours spelled out
+ * ("six hours", "four hours", "one hour") up to twelve, anything else in
+ * minutes as a numeral ("90 minutes").
+ */
+export function clockWords(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes > 0 && minutes % 60 === 0) {
+    const hours = minutes / 60;
+    const n = hours <= HOUR_WORDS.length ? HOUR_WORDS[hours - 1]! : String(hours);
+    return hours === 1 ? `${n} hour` : `${n} hours`;
+  }
+  return minutes === 1 ? "1 minute" : `${minutes} minutes`;
+}
+
+/**
+ * The clock a probe states, from its own budget (`watchdogs.episodeMs`): the
+ * Deadmines party, told nothing, did not know its run lasted four hours. Said
+ * only on a probe that carries an objective, so every probe without one — the
+ * race and class sweeps, the compaction-window campaigns — keeps the prompt it
+ * has always hashed under; a budget with no episode limit states no clock.
+ */
+export function probingClockSentence(episodeMs: number | null | undefined): string | undefined {
+  if (episodeMs === null || episodeMs === undefined || episodeMs <= 0) return undefined;
+  return `This run lasts ${clockWords(episodeMs)}.`;
+}
+
 /**
  * The system prompt for a run. With no objective, no episode and the default
- * harness this returns `SYSTEM_PROMPT` unchanged; the episode sentence, then
- * the delimited objective block, sit between the standing goal and the runtime
- * description. `harness` picks the context sentence and nothing else, so the
- * fixed loop's prompt and a CLI scaffold's differ by exactly the one sentence
- * that describes what each of them actually does with older conversation.
- * `wiki` is the run's reference surface (`config.wiki`, issue #61): false
- * renders the body with `search_reference` deleted, which is the only way the
- * prompt ever differs on that axis.
+ * harness this returns `SYSTEM_PROMPT` unchanged, and with no objective any
+ * episode adds only its tier sentence after the standing goal, so every run
+ * without an objective reads exactly as it always has.
+ *
+ * An objective replaces the broad goal (operator, 2026-10-21): the opening
+ * keeps its world facts and drops the directive sentences (`WORLD_SECTION`),
+ * then come the tier sentence — on a probe, the clock from `episodeMs` — and
+ * the delimited objective block, then the body. The facts still read first.
+ *
+ * `harness` picks the context sentence and the snippet-delta sentence and
+ * nothing else, so the fixed loop's prompt and a CLI scaffold's differ by
+ * exactly the sentences that describe what each of them actually does with
+ * older conversation and with a snippet's result. `wiki`
+ * is the run's reference surface (`config.wiki`, issue #61): false renders the
+ * body with `search_reference` deleted, which is the only way the prompt ever
+ * differs on that axis. `episodeMs` is the run's budget
+ * (`config.watchdogs.episodeMs`); only a probe with an objective reads it.
  */
 export function buildSystemPrompt(
   objective?: string | undefined,
   episode?: EpisodeId | undefined,
   harness: Harness = "wrathbench",
   wiki = true,
+  episodeMs: number | null = null,
 ): string {
-  const parts = [GOAL_SECTION];
-  const tier = episodeSection(episode);
+  const steered = objective !== undefined && objective.trim().length > 0;
+  const parts = [steered ? WORLD_SECTION : GOAL_SECTION];
+  const tier = steered && episode === "probing" ? probingClockSentence(episodeMs) : episodeSection(episode);
   if (tier !== undefined) parts.push(tier);
-  if (objective !== undefined && objective.trim().length > 0) parts.push(objectiveSection(objective.trim()));
+  if (steered) parts.push(objectiveSection(objective.trim()));
   parts.push(bodyFor(harness, wiki));
   return parts.join("\n\n");
 }

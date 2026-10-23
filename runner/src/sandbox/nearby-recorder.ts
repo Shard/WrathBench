@@ -9,7 +9,8 @@
  * snippet's API: it sends no action and no raw opcode, consumes no event
  * queue, and nothing here is reachable from a snippet. What it reads is the
  * raw `position` and `motion` of each unit with their own timestamps, never
- * `units()` or `pointOf()`, which report a moving creature's destination.
+ * `units()` or `pointOf()`, which read a moving creature off its spline at the
+ * moment of the call: the row keeps the spline itself, for the reader to play.
  *
  * A poll, like the trace recorder's. Every 500 ms each unit in view is compared
  * with what was last emitted for it — its motion by the identity of the

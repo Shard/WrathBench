@@ -73,6 +73,7 @@ import {
   type MailEntryData,
   type MailListResultData,
   type PartyCommandResultData,
+  type PartyMemberStatsData,
   type PetActionBarButton,
   type PetNameQueryResponseData,
   type PetSpell,
@@ -85,6 +86,9 @@ import {
   type MonsterMoveData,
   type RemovedSpellData,
   type SpellCooldownData,
+  type SpellFailureData,
+  type SpellGoData,
+  type SpellStartData,
   type SupersededSpellData,
   type TalentsInfoData,
   type AchievementEarnedData,
@@ -115,6 +119,9 @@ import {
   type BankContents,
   type GroupMember,
   type GroupState,
+  type PartyMemberAura,
+  type PartyMemberStats,
+  type PartyPowerType,
   type ItemText,
   type MailEntry,
   type MailboxState,
@@ -140,6 +147,13 @@ function only<T>(hit: Resolution<T>): T | undefined {
   return hit.kind === "one" ? hit.value : undefined;
 }
 
+/**
+ * `CORPSE_FLAG_BONES` (AzerothCore `Corpse.h`, `CorpseFlags`) in the
+ * `corpseFlags` the module serves raw: what was a corpse is bones, scenery to
+ * a client and no resurrection's target.
+ */
+const CORPSE_FLAG_BONES = 0x01;
+
 /** `UNIT_FLAG_TAXI_FLIGHT` — the bit a client reads to know it is being flown. */
 const UNIT_FLAG_TAXI_FLIGHT = 0x0010_0000;
 
@@ -158,7 +172,33 @@ const PLAYER_FLAGS_RESTING = 0x0000_0020;
  * the same `playerFlags` integer; a ghost's health is 1, so health alone
  * cannot tell one from the living.
  */
-const PLAYER_FLAGS_GHOST = 0x0000_0010;
+export const PLAYER_FLAGS_GHOST = 0x0000_0010;
+
+/**
+ * `MEMBER_STATUS_*` (AzerothCore `Group.h`), the status word of
+ * `SMSG_PARTY_MEMBER_STATS`: the bits a client's party frame reads for
+ * offline, dead, ghost, AFK and DND.
+ */
+const MEMBER_STATUS_ONLINE = 0x01;
+const MEMBER_STATUS_DEAD = 0x04;
+const MEMBER_STATUS_GHOST = 0x08;
+const MEMBER_STATUS_AFK = 0x40;
+const MEMBER_STATUS_DND = 0x80;
+
+/** A member as `SMSG_GROUP_LIST` left it; `group()` joins `inView` and `stats` on at read time. */
+type StoredGroupMember = Omit<GroupMember, "inView" | "stats">;
+type StoredGroupState = Omit<GroupState, "members"> & { readonly members: readonly StoredGroupMember[] };
+
+/** `Powers` by id, as a party frame's power bar names them. */
+const PARTY_POWER_TYPES: Readonly<Record<number, PartyPowerType>> = {
+  0: "mana",
+  1: "rage",
+  2: "focus",
+  3: "energy",
+  4: "happiness",
+  5: "runes",
+  6: "runic power",
+};
 
 // The wire's react/command state byte, as the pet frame names it; the
 // pair the `pet()` fold reads. The names themselves live in `./state-social`.
@@ -166,6 +206,9 @@ const PET_REACTIONS: readonly PetReaction[] = ["passive", "defensive", "aggressi
 const PET_COMMANDS: readonly PetCommand[] = ["stay", "follow", "attack", "abandon"];
 
 /** A value together with the event that carried it. */
+/** How near its point a character stands at the release graveyard (`self.graveyard`'s zone and area). */
+const GRAVEYARD_NEAR_YARDS = 20;
+
 export interface Observed<T> {
   readonly value: T;
   readonly seq: number;
@@ -192,6 +235,13 @@ export interface UnitPosition {
  */
 export interface WorldPosition extends UnitPosition {
   readonly map: number;
+  /**
+   * On `state.self.position` only, while a flight is in progress
+   * (`taxiFlight`): this is the take-off point, not where the character is.
+   * The flight's own position is not observed until it lands
+   * (`taxiEta.landsAt`), which puts position at the end of the flight path.
+   */
+  readonly inFlight?: true;
 }
 
 /** A point with no orientation: what `SMSG_MONSTER_MOVE` carries. */
@@ -204,7 +254,7 @@ export interface Point3 {
 /**
  * A creature's movement as a player perceives it: where the spline
  * started, where it is heading, how long it takes. No path points: the module
- * consumes them.
+ * consumes them. `pointOf` reads where along it the unit is at a given time.
  */
 export interface Motion {
   readonly position: Point3;
@@ -240,8 +290,10 @@ export interface CharacterSummary {
  * puts the *recipient* in the sender's place: its `senderGuid` and
  * `senderName` name who it went to. `channelName` rides channel lines
  * (`type` 17), `achievementId` the achievement broadcast (`type` 48/49, whose
- * `message` is the client's raw `%s`/`$a` template); a creature emote's
- * `message` is the same kind of template, `%s` standing for the sender.
+ * `message` is the client's raw `%s`/`$a` template). Creature speech's
+ * `message` is filled in as a client fills it: the wire's `%s attempts to run
+ * away in fear!` reads `Defias Miner attempts to run away in fear!`, the
+ * sender's own name in place of every `%s` (`chatMessageAsShown`).
  */
 export interface ChatEntry {
   readonly seq: number;
@@ -256,6 +308,20 @@ export interface ChatEntry {
   readonly message: string;
   readonly chatTag: number;
   readonly achievementId?: number;
+}
+
+/** Creature speech: say, party, yell, whisper, emote (12–16) and the raid-boss emote and whisper (41–42). */
+const CREATURE_CHAT_TYPES: ReadonlySet<number> = new Set([12, 13, 14, 15, 16, 41, 42]);
+
+/**
+ * A chat line's text as a client prints it. Creature speech is a template
+ * whose `%s` is the speaker (`%s attempts to run away in fear!`), which a
+ * client fills with the name the packet carries; every other line is the
+ * text as sent.
+ */
+export function chatMessageAsShown(type: number, message: string, senderName: string | undefined): string {
+  if (senderName === undefined || !CREATURE_CHAT_TYPES.has(type)) return message;
+  return message.replaceAll("%s", senderName);
 }
 
 export interface NotificationEntry {
@@ -448,8 +514,11 @@ export interface SelfState extends UnitFieldsState {
    * The graveyard the spirit was released to, from `SMSG_DEATH_RELEASE_LOC`
    * (the packet a client draws the spirit-healer marker from). Cleared by the
    * same packet with `map: -1`, which is what a resurrect sends first.
+   * `zone` and `area` are the names the character's own zone text showed
+   * while it stood there (`WB_AREA` within 20y of the point), undefined
+   * until it has: the release port lands the ghost on it.
    */
-  graveyard: Observed<Point3 & { readonly map: number }> | undefined;
+  graveyard: Observed<Point3 & { readonly map: number; readonly zone?: AreaRef; readonly area?: AreaRef }> | undefined;
   /**
    * The server's reclaim delay for this death (`SMSG_CORPSE_RECLAIM_DELAY`):
    * `readyAt` is the event's wall-clock `ts` plus `delayMs`, when a reclaim
@@ -497,6 +566,17 @@ export interface SelfState extends UnitFieldsState {
    * `undefined` until a block has carried `playerFlags` at all.
    */
   resting: Observed<boolean> | undefined;
+  /**
+   * Our own cast in progress, as the client's cast bar shows it: set by an
+   * own `SMSG_SPELL_START` with a cast time, `endsAt` being that packet's
+   * `ts` plus the cast time (wall-clock ms like `taxiEta.landsAt`), and
+   * cleared by the same spell's own `SMSG_SPELL_GO` (it went off) or
+   * `SMSG_SPELL_FAILURE` (it was interrupted). A refusal (`SMSG_CAST_FAILED`)
+   * of a second cast leaves the running one standing, as it does on the
+   * server. An instant cast never sets it, and a channel does not either: the
+   * channel packets (`MSG_CHANNEL_START` / `MSG_CHANNEL_UPDATE`) are not served.
+   */
+  casting: Observed<{ readonly spellId: number; readonly name: string | undefined; readonly endsAt: number }> | undefined;
   /**
    * `PLAYER_FLAGS_GHOST` on our own `playerFlags`: true while the released
    * spirit walks as a ghost, from the release until the resurrect. A ghost's
@@ -964,6 +1044,13 @@ export interface AuraEntry {
   readonly maxDuration: number | undefined;
   /** What was left of it in ms when the packet was sent, at `ts`. */
   readonly duration: number | undefined;
+  /**
+   * When it runs out, epoch ms: `ts + duration`, the timer a client's buff
+   * frame counts down from the same packet (the server sends no update as
+   * it ticks, so `duration` alone stays what it was at `ts`). Undefined for
+   * an aura that shows no timer.
+   */
+  readonly expiresAt: number | undefined;
   /** The aura's spell name (Spell.dbc, as the buff frame shows it); undefined when the module served none. `aurasOf` falls back to the spellbook's. */
   readonly name: string | undefined;
   readonly seq: number;
@@ -1023,7 +1110,20 @@ export interface CreatureInfo {
   readonly name: string;
   readonly subname: string | undefined;
   readonly type: number | undefined;
+  /** The core's `CreatureEliteType` value; `creatureRankName` names it. */
   readonly rank: number | undefined;
+}
+
+/**
+ * The core's `CreatureEliteType` enum (SharedDefines.h, 3.3.5a), by value: the
+ * classification a client draws as the portrait's dragon. A value outside the
+ * enum reads as `unknown`.
+ */
+export const CREATURE_RANK_NAMES = ["normal", "elite", "rareelite", "worldboss", "rare"] as const;
+export type CreatureRankName = (typeof CREATURE_RANK_NAMES)[number] | "unknown";
+
+export function creatureRankName(rank: number): CreatureRankName {
+  return CREATURE_RANK_NAMES[rank] ?? "unknown";
 }
 
 /** A game object template as `SMSG_GAMEOBJECT_QUERY_RESPONSE` describes it. */
@@ -1206,8 +1306,9 @@ export interface NearbyObject extends UnitFieldsState {
   targetGuid: Observed<GuidKey> | undefined;
   /**
    * The master of a summoned or created unit (`UNIT_FIELD_SUMMONEDBY`, else
-   * `UNIT_FIELD_CREATEDBY`): a pet's owner, a totem's shaman. `"0"` reads as
-   * undefined.
+   * `UNIT_FIELD_CREATEDBY`): a pet's owner, a totem's shaman. On a corpse,
+   * the player it belongs to (`CORPSE_FIELD_OWNER`, bones included). `"0"`
+   * reads as undefined.
    */
   ownerGuid: Observed<GuidKey> | undefined;
   /** Who mind-controls this unit (`UNIT_FIELD_CHARMEDBY`), when observed. */
@@ -1256,7 +1357,12 @@ export interface UnitView {
   readonly level: number | undefined;
   readonly health: number | undefined;
   readonly maxHealth: number | undefined;
-  /** `true` only when health was observed *and* is 0. Unobserved stays undefined. */
+  /**
+   * `true` when health was observed *and* is 0, and on every `corpse` (a
+   * player's body, which is dead by what it is). Unobserved stays
+   * undefined, and so does anything with no health to observe (a game object,
+   * a spell's ground effect).
+   */
   readonly dead: boolean | undefined;
   /** Straight-line yards from our own last observed position. */
   readonly distance: number | undefined;
@@ -1265,8 +1371,15 @@ export interface UnitView {
   readonly z: number | undefined;
   /** What it is targeting, when observed. `"0"` (no target) reads as undefined. */
   readonly targetGuid: GuidKey | undefined;
-  /** Its master, for a pet, totem or other summon (`UNIT_FIELD_SUMMONEDBY` / `CREATEDBY`); undefined otherwise. */
+  /** Its master, for a pet, totem or other summon (`UNIT_FIELD_SUMMONEDBY` / `CREATEDBY`); a corpse's player (`CORPSE_FIELD_OWNER`); undefined otherwise. */
   readonly ownerGuid: GuidKey | undefined;
+  /**
+   * Creatures only: `normal`, `elite`, `rareelite`, `worldboss` or `rare`, from
+   * the creature query's answer (`SMSG_CREATURE_QUERY_RESPONSE`) — what the
+   * client draws as the elite dragon round the portrait. Undefined for players
+   * and game objects, and until the query has answered.
+   */
+  readonly rank: CreatureRankName | undefined;
   /**
    * The questgiver marker the client shows over this object, named:
    * `available` (`!`), `reward` (`?` — a quest it ends is ready to turn in),
@@ -1436,8 +1549,13 @@ export interface UnitFilter {
    * and the results stay in nearest-first order.
    */
   name?: string | RegExp;
-  type?: "unit" | "player" | "gameObject";
-  /** `true` drops the known-dead; `false` keeps only them. Unknown health passes `true`. */
+  type?: "unit" | "player" | "gameObject" | "corpse";
+  /**
+   * `true` keeps units and players whose health was observed above 0; `false`
+   * those whose health was observed at 0. Anything whose health is
+   * unobserved, or that has none, passes neither; a player's corpse is
+   * `type: "corpse"`.
+   */
   alive?: boolean;
   /** Yards. Objects with no known distance are dropped: the criterion cannot be evaluated. */
   maxDistance?: number;
@@ -1560,6 +1678,7 @@ export class StateCache {
     taxiFlight: undefined,
     taxiEta: undefined,
     resting: undefined,
+    casting: undefined,
     ghost: undefined,
     taxiReply: undefined,
     bindPoint: undefined,
@@ -1677,7 +1796,14 @@ export class StateCache {
   /** petNumber -> given name, from `SMSG_PET_NAME_QUERY_RESPONSE`. Never pruned: the module asks once per number. */
   private readonly petNames = new Map<number, string>();
 
-  private groupState: GroupState | undefined;
+  private groupState: StoredGroupState | undefined;
+
+  /**
+   * member guid -> the party frame folded from `SMSG_PARTY_MEMBER_STATS[_FULL]`,
+   * joined onto `group().members` at read time because every `SMSG_GROUP_LIST`
+   * rebuilds the member list. Cleared when this character leaves the group.
+   */
+  private readonly partyStats = new Map<GuidKey, PartyMemberStats>();
 
   /** The open resurrection offer; closed by the resurrect itself and by a new login. */
   private resurrectOffer: (ResurrectRequestData & { readonly seq: number; readonly ts: number }) | undefined;
@@ -1697,6 +1823,13 @@ export class StateCache {
   private bankGuid: { readonly value: GuidKey; readonly seq: number; readonly ts: number } | undefined;
 
   private tradeState: TradeState | undefined;
+  /**
+   * Who our own `CMSG_INITIATE_TRADE` asked, until the window opens or the
+   * server refuses: the server answers the initiator nothing on success (the
+   * begin goes to the other side alone), so this is the only word of who the
+   * window is with, as it is a client's.
+   */
+  private tradeProposal: GuidKey | undefined;
 
   // ----------------------------------------------------------------------- spellbook
 
@@ -1707,6 +1840,14 @@ export class StateCache {
    * served the book: empty means unobserved, not "knows nothing".
    */
   private readonly spellBook = new Map<number, KnownSpell>();
+
+  /**
+   * spellId -> its Spell.dbc name, for every id a spellbook packet has named:
+   * the rows themselves and the old rank `SMSG_SUPERCEDED_SPELL` replaced
+   * (which shares its successor's name). Never pruned: a name stays true of
+   * its id after the rank leaves the book. `heldRanksOf` reads it.
+   */
+  private readonly spellNamesSeen = new Map<number, string>();
 
   /** spellId -> the last cooldown announcement for it. See `cooldowns()`. */
   private readonly cooldownMap = new Map<number, SpellCooldown>();
@@ -2236,6 +2377,17 @@ export class StateCache {
   }
 
   /**
+   * The spellbook rows that are another rank of `spellId`: those sharing the
+   * name a spellbook packet once gave that id. Empty when no packet has named
+   * it — the cache never guesses a rank chain it was not shown.
+   */
+  heldRanksOf(spellId: number): KnownSpell[] {
+    const name = this.spellNamesSeen.get(spellId);
+    if (name === undefined) return [];
+    return this.spells().filter((s) => s.spellId !== spellId && s.name === name);
+  }
+
+  /**
    * Cooldowns still running at `now` (default: the wall clock): every spell
    * whose `readyAt` is in the future, plus those a `SMSG_COOLDOWN_EVENT`
    * started without a duration (`readyAt` undefined). Expired entries are
@@ -2461,9 +2613,20 @@ export class StateCache {
 
   // ---------------------------------------------------------------- group
 
-  /** The party, or `undefined` until any group packet has been observed. */
+  /**
+   * The party, or `undefined` until any group packet has been observed. Each
+   * member carries whether its unit is in view and, once one arrived, the
+   * party frame the server sends while it is out of sight (`stats`).
+   */
   group(): GroupState | undefined {
-    return this.groupState;
+    const g = this.groupState;
+    if (g === undefined) return undefined;
+    const members = g.members.map((m) => ({
+      ...m,
+      inView: this.nearby.has(m.guid),
+      stats: this.partyStats.get(m.guid),
+    }));
+    return { ...g, members };
   }
 
   // ----------------------------------------------------------------- mail
@@ -2523,11 +2686,92 @@ export class StateCache {
     return { ...t, mine: side(t.mine), theirs: side(t.theirs) };
   }
 
+  /**
+   * One `SMSG_TRADE_STATUS`, read as a client's trade window reads it
+   * (TradeHandler, TradeData at the pinned core):
+   *
+   *   - 1 (begin trade) is a proposal to us from `traderGuid`; no window yet.
+   *   - 2 (window open) opens it, with both sides empty, for whoever proposed:
+   *     the begin's trader, or the player our own initiate named.
+   *   - 4 (the other side accepted), 7 (back to trade: an accept was cleared)
+   *     and the notices the core sends without ending the trade (10 too far
+   *     and 12 an inventory error at an accept, 22/23 a slot refused) leave
+   *     an open window open.
+   *   - Anything else with a window open closes it — 3 canceled, 8
+   *     complete, 0 the other side busy — and empties both sides; the
+   *     trader stays named.
+   *   - Anything else with no window open is a refusal of our own initiate
+   *     (0 busy: the target is already in a trade, or is us), named with the
+   *     player it asked.
+   */
+  private foldTradeStatus(status: number, traderGuid: GuidKey | undefined, seq: number, ts: number): void {
+    const prev = this.tradeState;
+    const wasOpen = prev?.open === true;
+    const statusText = tradeStatusText(status);
+    const proposedToUs = prev !== undefined && !wasOpen && prev.status === 1 ? prev.traderGuid : undefined;
+    if (status === 1) {
+      this.tradeState = { status, statusText, open: false, traderGuid, mine: undefined, theirs: undefined, seq, ts };
+      return;
+    }
+    if (status === 2) {
+      const trader = proposedToUs ?? this.tradeProposal ?? prev?.traderGuid;
+      this.tradeProposal = undefined;
+      this.tradeState = { status, statusText, open: true, traderGuid: trader, mine: emptyTradeSide(seq), theirs: emptyTradeSide(seq), seq, ts };
+      return;
+    }
+    if (wasOpen) {
+      const open = TRADE_WINDOW_NOTICES.has(status);
+      this.tradeState = open
+        ? { ...prev, status, statusText, open, seq, ts }
+        : { ...prev, status, statusText, open, mine: undefined, theirs: undefined, seq, ts };
+      return;
+    }
+    const trader = this.tradeProposal ?? proposedToUs;
+    this.tradeProposal = undefined;
+    this.tradeState = { status, statusText, open: false, traderGuid: trader, mine: undefined, theirs: undefined, seq, ts };
+  }
+
+  /**
+   * Fold one of our own trade opcodes, sent through `raw`, the way a client's
+   * window shows what its own player did: the core echoes neither an item or
+   * gold placed on our side (`TradeData::Update` goes to the other trader)
+   * nor whom an initiate asked. `CMSG_INITIATE_TRADE` (u64 guid) is recorded
+   * before the send, since a refusal can land before the ack; the item and
+   * gold opcodes after it, on an open window. An item is the `state.bag()`
+   * row at the wire's own bag/slot.
+   */
+  tradeSent(opcode: string, payloadHex: string): void {
+    const bytes = Uint8Array.from(Buffer.from(payloadHex, "hex"));
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (opcode === "CMSG_INITIATE_TRADE") {
+      if (bytes.length >= 8) this.tradeProposal = formatGuid(view.getBigUint64(0, true));
+      return;
+    }
+    const t = this.tradeState;
+    if (t === undefined || !t.open) return;
+    const mine = t.mine ?? emptyTradeSide(this.lastSeq);
+    let next: TradeSide | undefined;
+    if (opcode === "CMSG_SET_TRADE_ITEM" && bytes.length >= 3) {
+      const [tradeSlot, bag, slot] = [bytes[0]!, bytes[1]!, bytes[2]!];
+      const row = this.bag().items.find((i) => i.bag === bag && i.slot === slot);
+      if (row?.itemId === undefined) return;
+      const items = mine.items.filter((i) => i.slot !== tradeSlot);
+      items.push({ slot: tradeSlot, itemId: row.itemId, name: undefined, count: row.count ?? 1 });
+      items.sort((a, b) => a.slot - b.slot);
+      next = { money: mine.money, items, seq: this.lastSeq };
+    } else if (opcode === "CMSG_CLEAR_TRADE_ITEM" && bytes.length >= 1) {
+      next = { money: mine.money, items: mine.items.filter((i) => i.slot !== bytes[0]), seq: this.lastSeq };
+    } else if (opcode === "CMSG_SET_TRADE_GOLD" && bytes.length >= 4) {
+      next = { money: view.getUint32(0, true), items: mine.items, seq: this.lastSeq };
+    }
+    if (next !== undefined) this.tradeState = { ...t, mine: next };
+  }
+
   // ---------------------- group, mail, pets, loot rolls folders
 
   private foldGroupList(d: GroupListData, seq: number, ts: number): void {
     const prev = this.groupState;
-    const members: GroupMember[] = d.left
+    const members: StoredGroupMember[] = d.left
       ? []
       : d.members.map((m: GroupMemberData) => ({
           guid: m.guid,
@@ -2560,8 +2804,57 @@ export class StateCache {
     };
   }
 
-  private groupPatch(patch: Partial<GroupState>, seq: number, ts: number): void {
-    const prev: GroupState = this.groupState ?? {
+  /**
+   * One party-frame packet into the member's record. A `_FULL` answer
+   * replaces the record — it carries every field, and its aura list is the
+   * whole set — except that its offline form (status alone) keeps the rest.
+   * A delta overwrites only the fields its mask carried, and its aura entries
+   * set or clear single slots. `_FULL` leaves out the power type only for
+   * mana, so there its absence is mana; a delta without it keeps the last.
+   */
+  private foldPartyMemberStats(d: PartyMemberStatsData, seq: number, ts: number): void {
+    const prev = this.partyStats.get(d.guid);
+    const replace = d.full && d.health !== undefined;
+    const base = replace ? undefined : prev;
+    const statusFlags = d.status ?? base?.statusFlags;
+    const health = d.health ?? base?.health;
+    const has = (bit: number): boolean | undefined => (statusFlags === undefined ? undefined : (statusFlags & bit) !== 0);
+    const ghost = has(MEMBER_STATUS_GHOST);
+    const statusDead = has(MEMBER_STATUS_DEAD);
+    const dead = statusDead === true || (health === 0 && ghost !== true) ? true : statusDead;
+    let auras: PartyMemberAura[] | undefined = base?.auras === undefined ? undefined : [...base.auras];
+    if (d.auras !== undefined) {
+      const bySlot = new Map<number, PartyMemberAura>(replace || auras === undefined ? [] : auras.map((a) => [a.slot, a]));
+      for (const a of d.auras) {
+        if (a.spellId === 0) bySlot.delete(a.slot);
+        else bySlot.set(a.slot, { slot: a.slot, spellId: a.spellId, name: a.name, flags: a.flags });
+      }
+      auras = [...bySlot.values()].sort((x, y) => x.slot - y.slot);
+    }
+    const powerTypeId = d.powerType ?? (replace ? 0 : undefined);
+    this.partyStats.set(d.guid, {
+      online: has(MEMBER_STATUS_ONLINE),
+      dead,
+      ghost,
+      afk: has(MEMBER_STATUS_AFK),
+      dnd: has(MEMBER_STATUS_DND),
+      statusFlags,
+      health,
+      maxHealth: d.maxHealth ?? base?.maxHealth,
+      powerType: powerTypeId === undefined ? base?.powerType : PARTY_POWER_TYPES[powerTypeId],
+      power: d.power ?? base?.power,
+      maxPower: d.maxPower ?? base?.maxPower,
+      level: d.level ?? base?.level,
+      zone: d.zoneId === undefined ? base?.zone : { id: d.zoneId, name: d.zoneName },
+      position: d.x !== undefined && d.y !== undefined ? { x: d.x, y: d.y } : base?.position,
+      auras,
+      asOf: ts,
+      seq,
+    });
+  }
+
+  private groupPatch(patch: Partial<StoredGroupState>, seq: number, ts: number): void {
+    const prev: StoredGroupState = this.groupState ?? {
       inGroup: false,
       raid: false,
       groupGuid: undefined,
@@ -2705,7 +2998,7 @@ export class StateCache {
       skills: this.skills(),
       reputation: this.reputation(),
       pet: this.pet(),
-      group: this.groupState,
+      group: this.group(),
       mailbox: this.mailbox(),
       bank: this.bank(),
       trade: this.tradeState,
@@ -2807,6 +3100,7 @@ export class StateCache {
         this.self.zone = { value: { id: d.zoneId, name: d.zoneName }, seq: event.seq, ts: event.ts };
         this.self.area = { value: { id: d.areaId, name: d.areaName }, seq: event.seq, ts: event.ts };
         this.foldMap(d.mapId, d.mapName, d.instanceType, event.seq, event.ts);
+        this.placeGraveyard(false);
         return;
       }
       case "WB_PORTALS": {
@@ -2845,6 +3139,7 @@ export class StateCache {
           this.questExplored.clear();
           // A fresh login has no dialog open: an old session's offer is gone.
           this.resurrectOffer = undefined;
+          this.self.casting = undefined;
         }
         // The new map's name arrives on its WB_AREA; until then only the id
         // (position.map) is known, so the old map's name is not kept.
@@ -2885,6 +3180,7 @@ export class StateCache {
           return;
         }
         this.self.graveyard = { value: { map: d.map, x: d.x, y: d.y, z: d.z }, seq: event.seq, ts: event.ts };
+        this.placeGraveyard(true);
         return;
       }
       case "SMSG_RESURRECT_REQUEST": {
@@ -2981,6 +3277,7 @@ export class StateCache {
         this.spellBook.clear();
         for (const row of d.spells) {
           this.spellBook.set(row.spellId, { spellId: row.spellId, rank: row.rank, name: row.name, seq: event.seq, ts: event.ts });
+          if (row.name !== undefined) this.spellNamesSeen.set(row.spellId, row.name);
         }
         for (const cd of d.cooldowns) {
           const infinite = cd.categoryCooldownMs === 0x80000000;
@@ -2998,6 +3295,7 @@ export class StateCache {
       case "SMSG_LEARNED_SPELL": {
         const d = event.data as LearnedSpellData;
         this.spellBook.set(d.spellId, { spellId: d.spellId, rank: d.rank, name: d.name, seq: event.seq, ts: event.ts });
+        if (d.name !== undefined) this.spellNamesSeen.set(d.spellId, d.name);
         return;
       }
       case "SMSG_REMOVED_SPELL": {
@@ -3009,6 +3307,23 @@ export class StateCache {
         const d = event.data as SupersededSpellData;
         this.spellBook.delete(d.supersededSpellId);
         this.spellBook.set(d.spellId, { spellId: d.spellId, rank: d.rank, name: d.name, seq: event.seq, ts: event.ts });
+        if (d.name !== undefined) {
+          this.spellNamesSeen.set(d.spellId, d.name);
+          this.spellNamesSeen.set(d.supersededSpellId, d.name);
+        }
+        return;
+      }
+      case "SMSG_SPELL_START": {
+        const d = event.data as SpellStartData;
+        if (!this.isSelfGuid(d.casterGuid) || d.castTimeMs <= 0) return;
+        const name = this.spellBook.get(d.spellId)?.name ?? this.spellNamesSeen.get(d.spellId);
+        this.self.casting = { value: { spellId: d.spellId, name, endsAt: event.ts + d.castTimeMs }, seq: event.seq, ts: event.ts };
+        return;
+      }
+      case "SMSG_SPELL_GO":
+      case "SMSG_SPELL_FAILURE": {
+        const d = event.data as SpellGoData | SpellFailureData;
+        if (this.isSelfGuid(d.casterGuid) && this.self.casting?.value.spellId === d.spellId) this.self.casting = undefined;
         return;
       }
       case "SMSG_SPELL_COOLDOWN": {
@@ -3145,11 +3460,19 @@ export class StateCache {
         return;
       }
       case "SMSG_GROUP_LIST": {
-        this.foldGroupList(event.data as GroupListData, event.seq, event.ts);
+        const d = event.data as GroupListData;
+        if (d.left) this.partyStats.clear();
+        this.foldGroupList(d, event.seq, event.ts);
+        return;
+      }
+      case "SMSG_PARTY_MEMBER_STATS":
+      case "SMSG_PARTY_MEMBER_STATS_FULL": {
+        this.foldPartyMemberStats(event.data as PartyMemberStatsData, event.seq, event.ts);
         return;
       }
       case "SMSG_GROUP_DESTROYED":
       case "SMSG_GROUP_UNINVITE": {
+        this.partyStats.clear();
         this.groupPatch({ inGroup: false, raid: false, groupGuid: undefined, leaderGuid: undefined, leaderName: undefined, leader: false, members: [], lootMethod: undefined }, event.seq, event.ts);
         return;
       }
@@ -3240,25 +3563,19 @@ export class StateCache {
       }
       case "SMSG_TRADE_STATUS": {
         const d = event.data as TradeStatusData;
-        const prev = this.tradeState;
-        // 1 begin (the other side proposed), 2 the window opened, 7 back to
-        // trade; everything else ends or refuses it.
-        const open = d.status === 2 || d.status === 7 || d.status === 4 || (d.status === 1 && (prev?.open ?? false));
-        this.tradeState = {
-          status: d.status,
-          statusText: tradeStatusText(d.status),
-          open,
-          traderGuid: d.traderGuid ?? (open ? prev?.traderGuid : undefined),
-          mine: open ? prev?.mine : undefined,
-          theirs: open ? prev?.theirs : undefined,
-          seq: event.seq,
-          ts: event.ts,
-        };
+        this.foldTradeStatus(d.status, d.traderGuid, event.seq, event.ts);
         return;
       }
       case "SMSG_TRADE_STATUS_EXTENDED": {
+        // One side of the window as the server holds it. The core sends it to
+        // the other trader on every change (`TradeData::Update`), so it is
+        // `theirs` in practice; our own side comes back only for an enchant
+        // spell, and is otherwise what we placed (`tradeSent`).
         const d = event.data as TradeStatusExtendedData;
-        const prev = this.tradeState ?? { status: 2, statusText: tradeStatusText(2), open: true, traderGuid: undefined, mine: undefined, theirs: undefined, seq: event.seq, ts: event.ts };
+        const prev = this.tradeState ?? {
+          status: 2, statusText: tradeStatusText(2), open: true, traderGuid: this.tradeProposal,
+          mine: emptyTradeSide(event.seq), theirs: emptyTradeSide(event.seq), seq: event.seq, ts: event.ts,
+        };
         const side: TradeSide = { money: d.money, items: d.items.map((it) => ({ slot: it.slot, itemId: it.itemId, name: undefined, count: it.count })), seq: event.seq };
         this.tradeState = { ...prev, open: true, mine: d.theirs ? prev.mine : side, theirs: d.theirs ? side : prev.theirs, seq: event.seq, ts: event.ts };
         return;
@@ -3474,6 +3791,7 @@ export class StateCache {
             casterGuid: a.casterGuid,
             maxDuration: a.maxDuration,
             duration: a.duration,
+            expiresAt: a.duration !== undefined && a.duration > 0 ? event.ts + a.duration : undefined,
             name: a.name,
             seq: event.seq,
             ts: event.ts,
@@ -3563,7 +3881,7 @@ export class StateCache {
           ...(d.receiverGuid !== undefined ? { receiverGuid: d.receiverGuid } : {}),
           ...(d.receiverName !== undefined ? { receiverName: d.receiverName } : {}),
           ...(d.channelName !== undefined ? { channelName: d.channelName } : {}),
-          message: d.message,
+          message: chatMessageAsShown(d.type, d.message, d.senderName),
           chatTag: d.chatTag,
           ...(d.achievementId !== undefined ? { achievementId: d.achievementId } : {}),
         });
@@ -3691,6 +4009,7 @@ export class StateCache {
             // takes the character off any spline it was on.
             this.endSelfSpline();
             this.applySelfPosition(d.pos, event.seq, event.ts);
+            this.placeGraveyard(true);
             return;
           }
           this.upsertNearby(d.guid, event.seq, (obj) => {
@@ -3732,14 +4051,17 @@ export class StateCache {
    *
    * A query over what the cache already holds: nothing is observed here that
    * `nearby` did not already carry, and nothing is invented. Items and
-   * containers (our own inventory) are left out; everything else in view is
+   * containers (our own inventory) are left out, and so are bones (a corpse
+   * whose owner is alive again or has died again, `CORPSE_FLAG_BONES`) and any
+   * corpse an owner's newer one replaces; everything else in view is
    * included, *untyped objects too* — an object we have seen but whose create
    * block we missed is still in view, and hiding it would make the world look
    * emptier than it is.
    *
    * Positions come from `pointOf`, the same resolution `closest()` uses, so a
-   * creature mid-spline reports where it is heading. `distance` is `undefined`
-   * when either side has no known position.
+   * creature mid-spline reports where it is along that spline now, as a client
+   * draws it (where it is going is `motion.value.destination` on the raw
+   * object). `distance` is `undefined` when either side has no known position.
    *
    * No match returns `[]`, never `undefined` and never an error: nothing in
    * view matching is an answer. (`closest()` answers the same question with
@@ -3748,9 +4070,13 @@ export class StateCache {
   units(filter?: UnitFilter): UnitView[] {
     const f = normalizeUnitFilter(filter);
     const from = this.self.position?.value;
+    // One clock for the whole scan, so every row is read at the same instant.
+    const now = Date.now();
     const out: UnitView[] = [];
+    const superseded = supersededCorpses(this.nearby.values());
     for (const obj of this.nearby.values()) {
-      const view = toUnitView(obj, from);
+      if (superseded.has(obj.guid)) continue;
+      const view = toUnitView(obj, from, this.creatures, now);
       if (view === undefined) continue;
 
       if (!passesUnitFilter(view, obj, f)) continue;
@@ -3834,13 +4160,17 @@ export class StateCache {
 
     let best: UnitView | undefined;
     let bestD2 = Infinity;
+    // One clock for the ordering and the rows, so they cannot disagree.
+    const now = Date.now();
+    const superseded = supersededCorpses(this.nearby.values());
     for (const obj of this.nearby.values()) {
-      const p = pointOf(obj)?.value;
+      if (superseded.has(obj.guid)) continue;
+      const p = pointOf(obj, now)?.value;
       if (!p) continue;
       if (predicate && !predicate(obj)) continue;
       // The answer is a `units()` row, so what `units()` leaves out — items
       // and containers, our own inventory — is never an answer here either.
-      const view = toUnitView(obj, from);
+      const view = toUnitView(obj, from, this.creatures, now);
       if (view === undefined) continue;
       if (criteria && !passesUnitFilter(view, obj, criteria)) continue;
       const d2 = (p.x - from.x) ** 2 + (p.y - from.y) ** 2 + (p.z - from.z) ** 2;
@@ -3942,7 +4272,7 @@ export class StateCache {
           ts,
         };
       }
-      this.mergeFields(obj, block.fields, seq, ts);
+      this.mergeFields(obj, createdFields(block), seq, ts);
       this.joinName(obj);
     });
   }
@@ -4040,6 +4370,24 @@ export class StateCache {
       seq,
       ts,
     };
+  }
+
+  /**
+   * Name the release graveyard from the zone text, when the character stands
+   * within `GRAVEYARD_NEAR_YARDS` of it on its map. A `WB_AREA` there names
+   * it; a port's arrival names it `provisional`ly, only while nothing has —
+   * the module's `WB_AREA` for the new place follows the port by a tick, and
+   * a port within one area sends none, so the zone text then already reads it.
+   */
+  private placeGraveyard(provisional: boolean): void {
+    const g = this.self.graveyard;
+    const pos = this.self.position?.value;
+    const zone = this.self.zone?.value;
+    const area = this.self.area?.value;
+    if (g === undefined || pos === undefined || zone === undefined || area === undefined) return;
+    if (provisional && g.value.area !== undefined) return;
+    if (pos.map !== g.value.map || Math.hypot(pos.x - g.value.x, pos.y - g.value.y) > GRAVEYARD_NEAR_YARDS) return;
+    this.self.graveyard = { ...g, value: { ...g.value, zone, area } };
   }
 
   /**
@@ -4157,10 +4505,15 @@ export class StateCache {
       }
       // Owner guids: joined u64 halves the module serves as guid
       // strings. SUMMONEDBY is the pet's master; CREATEDBY is the fallback
-      // the client draws the same conclusion from.
+      // the client draws the same conclusion from; a corpse's owner is the
+      // player whose name it is labelled with.
       if (typeof raw === "string" && target !== this.self && "ownerGuid" in target) {
         const obj = target as NearbyObject;
-        if (key === "summonedByGuid" || (key === "createdByGuid" && obj.ownerGuid?.value === undefined)) {
+        if (
+          key === "summonedByGuid" ||
+          key === "corpseOwnerGuid" ||
+          (key === "createdByGuid" && obj.ownerGuid?.value === undefined)
+        ) {
           obj.ownerGuid = raw === "0" ? undefined : { value: raw, seq, ts };
         } else if (key === "charmedByGuid") {
           obj.charmedByGuid = raw === "0" ? undefined : { value: raw, seq, ts };
@@ -4198,6 +4551,10 @@ export class StateCache {
         if (flying && !wasFlying) {
           // Take-off: the flight's spline arrived just ahead of this flag.
           this.publishTaxiEta();
+          // Nothing moves position until the landing, so it says it is the
+          // take-off point rather than reading as where the character is.
+          const at = this.self.position;
+          if (at !== undefined) this.self.position = { ...at, value: { ...at.value, inFlight: true } };
         } else if (!flying && wasFlying) {
           // Landing: the client has flown itself to the end of the spline,
           // which is where the server set the character down. No spline
@@ -4206,6 +4563,13 @@ export class StateCache {
           const spline = this.selfSpline;
           this.endSelfSpline();
           if (spline !== undefined) this.applySelfPoint(spline.destination, seq, ts);
+          else {
+            const at = this.self.position;
+            if (at?.value.inFlight === true) {
+              const { inFlight: _, ...rest } = at.value;
+              this.self.position = { ...at, value: rest };
+            }
+          }
         }
       }
       // `resting` is the same shape of reading off `playerFlags`, the players-
@@ -4366,11 +4730,19 @@ export class StateCache {
  * One `NearbyObject` as `units()` reports it, or `undefined` when the object is
  * not in the world view at all (our own items and bags). `from` is our own last
  * observed position; without it `distance`/`x`/`y`/`z` stay unobserved.
+ * `now` is the clock `pointOf` reads a spline by.
  */
-function toUnitView(obj: NearbyObject, from: UnitPosition | undefined): UnitView | undefined {
+function toUnitView(
+  obj: NearbyObject,
+  from: UnitPosition | undefined,
+  creatures: ReadonlyMap<number, Observed<CreatureInfo>>,
+  now: number,
+): UnitView | undefined {
   const type = obj.objectType?.value;
   if (type === "item" || type === "container") return undefined;
-  const point = pointOf(obj)?.value;
+  // Bones are scenery to a client, not a corpse: no row.
+  if (type === "corpse" && isBones(obj)) return undefined;
+  const point = pointOf(obj, now)?.value;
   const distance =
     from && point
       ? Math.round(Math.hypot(point.x - from.x, point.y - from.y, point.z - from.z) * 100) / 100
@@ -4385,19 +4757,80 @@ function toUnitView(obj: NearbyObject, from: UnitPosition | undefined): UnitView
     level: obj.level?.value,
     health,
     maxHealth: obj.fields.get("maxHealth")?.value,
-    dead: health === undefined ? undefined : health === 0,
+    dead: type === "corpse" ? true : health === undefined ? undefined : health === 0,
     distance,
     x: point?.x,
     y: point?.y,
     z: point?.z,
     targetGuid: target === undefined || target === "0" ? undefined : target,
     ownerGuid: obj.ownerGuid?.value,
+    rank: rankOf(obj, creatures),
     questGiver: obj.questGiver === undefined ? undefined : questGiverStatusName(obj.questGiver.value),
     questGiverStatus: obj.questGiver?.value,
     roles: npcRolesOf(obj.fields.get("npcFlags")?.value),
     goType: goTypeOf(obj),
     docked: obj.transport?.value.docked,
   };
+}
+
+function isBones(obj: NearbyObject): boolean {
+  return ((obj.fields.get("corpseFlags")?.value ?? 0) & CORPSE_FLAG_BONES) !== 0;
+}
+
+/**
+ * The corpses in view that an owner's newer corpse replaces. A player has one
+ * corpse at a time — the core turns the old one to bones before it lays the
+ * new one (`Player::CreateCorpse`) — so a second corpse row for one owner is a
+ * destroy the cache missed, and the newer create is the corpse. Over the whole
+ * view, before any filter, so a filter can never leave the stale one standing
+ * in for the real one. Bones and corpses with no observed owner are not
+ * grouped.
+ */
+function supersededCorpses(objects: Iterable<NearbyObject>): Set<GuidKey> {
+  const newest = new Map<GuidKey, NearbyObject>();
+  const superseded = new Set<GuidKey>();
+  const created = (o: NearbyObject) => o.objectType?.seq ?? o.firstSeq;
+  for (const obj of objects) {
+    if (obj.objectType?.value !== "corpse" || isBones(obj)) continue;
+    const owner = obj.ownerGuid?.value;
+    if (owner === undefined) continue;
+    const held = newest.get(owner);
+    if (held === undefined) {
+      newest.set(owner, obj);
+    } else if (created(obj) > created(held)) {
+      superseded.add(held.guid);
+      newest.set(owner, obj);
+    } else {
+      superseded.add(obj.guid);
+    }
+  }
+  return superseded;
+}
+
+/**
+ * A create block's fields as the client reads them. The core's create mask
+ * carries only the non-zero fields (`Object::BuildValuesUpdate`) and a client
+ * starts every field at zero, so a unit's create that states its `maxHealth`
+ * and no `health` is a unit at 0 health: a creature that came into view
+ * already dead. Stated, so an object re-entering view dead does not keep the
+ * health it left with.
+ */
+function createdFields(block: CreateBlock): UpdateFields | undefined {
+  const fields = block.fields;
+  if (block.objectType !== "unit" && block.objectType !== "player") return fields;
+  if (fields === undefined || !("maxHealth" in fields) || "health" in fields) return fields;
+  return { ...fields, health: 0 };
+}
+
+/**
+ * A creature's rank from its template's query answer. Only a unit's: a game
+ * object's entry is a different table's id and may collide with a creature's.
+ */
+function rankOf(obj: NearbyObject, creatures: ReadonlyMap<number, Observed<CreatureInfo>>): CreatureRankName | undefined {
+  const entry = obj.entry?.value;
+  if (obj.objectType?.value !== "unit" || entry === undefined) return undefined;
+  const rank = creatures.get(entry)?.value.rank;
+  return rank === undefined ? undefined : creatureRankName(rank);
 }
 
 /**
@@ -4430,11 +4863,14 @@ function passesUnitFilter(view: UnitView, obj: NearbyObject, f: NormalizedUnitFi
     }
   }
   if (f.type !== undefined && view.type !== f.type) return false;
-  // Asymmetric on purpose: `alive: true` excludes only the *known* dead, so a
-  // unit whose health we have never seen still shows up. `alive: false` is a
-  // positive claim and needs the observation.
-  if (f.alive === true && view.dead === true) return false;
-  if (f.alive === false && view.dead !== true) return false;
+  // Both are positive claims about a unit or player and need the
+  // observation: `alive: true` is health seen above 0, so a corpse, a game
+  // object or a spell's ground effect (none has health) never passes it, and
+  // `alive: false` is health seen at 0. A player's corpse is dead too, but it
+  // is not what a loot scan over `alive: false` is looking for, so it is
+  // reached with `type: "corpse"` instead.
+  if (f.alive === true && view.dead !== false) return false;
+  if (f.alive === false && (view.dead !== true || view.type === "corpse")) return false;
   if (f.maxDistance !== undefined && (view.distance === undefined || view.distance > f.maxDistance)) {
     return false;
   }
@@ -4484,7 +4920,7 @@ const UNIT_FILTER_KEY_HINTS: Readonly<Record<string, string>> = {
   level: "level is not a criterion — each returned row carries .level; filter the array yourself",
   hostile: "hostility is not observed as a filter criterion; read each row's fields instead",
 };
-const UNIT_FILTER_TYPES = ["unit", "player", "gameObject"] as const;
+const UNIT_FILTER_TYPES = ["unit", "player", "gameObject", "corpse"] as const;
 
 /**
  * How a `name` criterion is matched, resolved once at normalization. `text`
@@ -4806,32 +5242,70 @@ const BANK_BAG_FIRST_SLOT = 67;
 const BANK_BAG_LAST_SLOT = 73;
 /** `INVENTORY_SLOT_BAG_0` on the wire: the bag id the item actions take for the backpack. */
 const BACKPACK_BAG = 255;
+
+/**
+ * `SMSG_TRADE_STATUS` codes the core sends inside an open trade without
+ * ending it: 4 the other side accepted, 7 back to trade, and the accept's own
+ * refusals that only clear the accept — 10 too far, 12 an inventory error —
+ * with 22/23, a slot the server would not take.
+ */
+const TRADE_WINDOW_NOTICES: ReadonlySet<number> = new Set([4, 7, 10, 12, 22, 23]);
+
+/** A trade side with nothing on it: what a window shows as it opens. */
+const emptyTradeSide = (seq: number): TradeSide => ({ money: 0, items: [], seq });
 /** Worn-bag equipment slots (`INVENTORY_SLOT_BAG_START..END`): the bag ids the item actions take for them. */
 const BAG_FIRST_SLOT = 19;
 const BAG_LAST_SLOT = 22;
 
 /**
- * Where an object is, from the freshest thing that said so.
+ * Where an object is at `now` (default: the wall clock), from the freshest
+ * thing that said so.
  *
  * Two independent sources with different shapes: `MSG_MOVE_*`/update blocks
  * give an oriented position, `SMSG_MONSTER_MOVE` gives a spline start plus a
- * destination and no orientation. For a creature that is mid-spline the
- * destination is the better answer to "where do I walk to reach it", which is
- * what a player reads off the animation, so it wins within one motion
- * observation. Returns `undefined` rather than guessing when nothing said.
+ * destination and a duration, and no orientation. A client starts the spline
+ * when the packet arrives and draws the unit along it by elapsed time, so a
+ * creature mid-spline is read the same way: `now - ts` into `durationMs`, on
+ * the straight line from start to destination (the module drops the path
+ * points, so a bend in the route is not followed), held at the start before
+ * `ts` and at the destination once the duration has run. `ts` is the module's
+ * stamp of the packet's arrival — the parked client's own receipt time. A
+ * creature re-launched every few milliseconds from the same start, as a stuck
+ * chaser is, reads at that start, the way a client shows it running in place.
+ * Where it is going stays readable as `obj.motion.value.destination`.
+ *
+ * A stop reads where it stopped; a spline with no destination reads at its
+ * start, and one with no duration (or zero) at its destination, since there is
+ * no clock to read it by. The answer carries the source's own `seq`/`ts`.
+ * Returns `undefined` rather than guessing when nothing said.
  */
-export function pointOf(obj: NearbyObject): Observed<Point3> | undefined {
+export function pointOf(obj: NearbyObject, now: number = Date.now()): Observed<Point3> | undefined {
   const pos = obj.position;
   const motion = obj.motion;
   if (motion && (!pos || motion.seq >= pos.seq)) {
-    const m = motion.value;
-    const p = m.stopped ? m.position : (m.destination ?? m.position);
-    return { value: p, seq: motion.seq, ts: motion.ts };
+    return { value: splinePoint(motion.value, now - motion.ts), seq: motion.seq, ts: motion.ts };
   }
   if (!pos) return undefined;
   return { value: { x: pos.value.x, y: pos.value.y, z: pos.value.z }, seq: pos.seq, ts: pos.ts };
 }
 
+
+/** Where a spline puts a unit `elapsedMs` after it was launched: see `pointOf`. */
+function splinePoint(m: Motion, elapsedMs: number): Point3 {
+  const start = m.position;
+  const end = m.destination;
+  if (m.stopped || end === undefined) return start;
+  const duration = m.durationMs;
+  if (duration === undefined || duration <= 0) return end;
+  const t = elapsedMs / duration;
+  if (!(t > 0)) return start;
+  if (t >= 1) return end;
+  return {
+    x: start.x + t * (end.x - start.x),
+    y: start.y + t * (end.y - start.y),
+    z: start.z + t * (end.z - start.z),
+  };
+}
 
 /**
  * Wrong reads of the XP bar, made loud.

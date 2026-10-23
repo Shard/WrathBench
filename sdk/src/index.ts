@@ -64,6 +64,7 @@ export type {
   AcceptResurrectionResult,
   SpiritHealerOptions,
   SpiritHealerResult,
+  RepairAllResult,
   LootRollRefusalStatus,
   LootRollResult,
   ReadItemOptions,
@@ -101,8 +102,10 @@ export type {
 } from "./events";
 
 export {
+  CREATURE_RANK_NAMES,
   GAME_OBJECT_TYPE_NAMES,
   NPC_ROLES,
+  creatureRankName,
   gameObjectTypeName,
   mailResultText,
   npcRolesOf,
@@ -134,6 +137,7 @@ export type {
   ChatEntry,
   CharacterSummary,
   CreatureInfo,
+  CreatureRankName,
   GameObjectInfo,
   GameObjectTypeName,
   TransportState,

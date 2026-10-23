@@ -154,6 +154,7 @@ import { z } from "zod";
 import { MCP_SERVER_NAME, toolCallLimitReached } from "./adapter-claude";
 import { MessageQueue, cliBaseEnv, readLines, signalGroup } from "./adapter-shared";
 import { DEFAULT_CODEX_HOME_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
+import { entryOf } from "./drivers";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { McpServer } from "./mcp";
 import { CodexLastCallReader, CodexRolloutFollower, removeThreadRollouts, writeCodexThread, type CodexCompaction } from "./codex-rollout";
@@ -625,6 +626,9 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     episodic: o.episodic,
     turn: () => builder.currentTurn,
     secrets: trajectory,
+    // The registry's switch (`DriverEntry.snippetDelta`): what changed since
+    // the previous snippet rides each snippet result on a driver that has it.
+    snippetDelta: entryOf(config.driver).snippetDelta,
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
     onEventsServed: (events, folded) =>
       trajectory.append({
@@ -749,7 +753,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   // ---- files the CLI needs, all inside the run directory (absolute paths:
   // the CLI runs from a scratch temp cwd)
   const instructionsPath = resolve(o.runDir, "codex-instructions.md");
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("codex"), config.wiki);
+  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("codex"), config.wiki, config.watchdogs.episodeMs);
   writeFileSync(instructionsPath, systemPrompt, "utf8");
   // The bridge by its REPOSITORY path: the CLI's sandbox gives MCP servers a
   // private /tmp, so a temp copy would not be found ("Module not found").

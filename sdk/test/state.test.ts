@@ -74,6 +74,7 @@ import {
   creatureOutOfRange,
   creatureQuery,
   creatureValues,
+  corpseCreate,
   corpseQuery,
   corpseReclaimDelay,
   deathReleaseCleared,
@@ -978,23 +979,98 @@ describe("state cache: auras and creature movement", () => {
     expect(cache.aurasOf(CREATURE_GUID)).toEqual([]);
   });
 
-  test("monster move is served as destination and duration, and nothing else", () => {
+  test("monster move is served as start, destination and duration, and nothing else", () => {
     const cache = withWorld([monsterMove]);
     const obj = cache.nearby.get(CREATURE_GUID);
+    expect(obj?.motion?.value.position).toEqual({ x: -1210.0, y: 985.0, z: 42.0 });
     expect(obj?.motion?.value.durationMs).toBe(2000);
+    // Where it is going stays readable on the raw object.
     expect(obj?.motion?.value.destination).toEqual({ x: -1190.0, y: 970.0, z: 42.0 });
-    // Where to walk to reach it: the destination while it is in motion.
-    expect(pointOf(obj!)?.value).toEqual({ x: -1190.0, y: 970.0, z: 42.0 });
   });
 
-  test("a stopped creature is where it stopped", () => {
-    const cache = withWorld([monsterMove, monsterStopped]);
-    expect(pointOf(cache.nearby.get(CREATURE_GUID)!)?.value).toEqual({ x: -1195.0, y: 972.0, z: 42.0 });
+  // monsterMove: (-1210, 985, 42) -> (-1190, 970, 42) over 2000 ms, launched at its ts.
+  const launched = monsterMove.ts;
+
+  test("mid-spline, a creature is along the line by the time elapsed", () => {
+    const obj = withWorld([monsterMove]).nearby.get(CREATURE_GUID)!;
+    const p = pointOf(obj, launched + 500);
+    expect(p?.value).toEqual({ x: -1205.0, y: 981.25, z: 42.0 });
+    // Stamped with the packet that said so, not with the clock it was read at.
+    expect(p?.seq).toBe(monsterMove.seq);
+    expect(p?.ts).toBe(launched);
+    expect(pointOf(obj, launched + 1000)?.value).toEqual({ x: -1200.0, y: 977.5, z: 42.0 });
+  });
+
+  test("at launch, or on a clock behind the packet's stamp, it is at the start", () => {
+    const obj = withWorld([monsterMove]).nearby.get(CREATURE_GUID)!;
+    expect(pointOf(obj, launched)?.value).toEqual({ x: -1210.0, y: 985.0, z: 42.0 });
+    expect(pointOf(obj, launched - 250)?.value).toEqual({ x: -1210.0, y: 985.0, z: 42.0 });
+  });
+
+  test("past the duration, it reads at the destination", () => {
+    const obj = withWorld([monsterMove]).nearby.get(CREATURE_GUID)!;
+    expect(pointOf(obj, launched + 2000)?.value).toEqual({ x: -1190.0, y: 970.0, z: 42.0 });
+    expect(pointOf(obj, launched + 60_000)?.value).toEqual({ x: -1190.0, y: 970.0, z: 42.0 });
+  });
+
+  test("a chaser re-launched every 11 ms from the same start reads at that start, not on the player", () => {
+    // A mob stuck server-side: every relaunch starts from the same spot and
+    // heads for the player it chases. A client shows it running in place.
+    const player = { x: -1180.0, y: 960.0, z: 42.0 };
+    const relaunches = Array.from({ length: 20 }, (_, i) => ({
+      ...monsterMove,
+      seq: 100 + i,
+      ts: launched + i * 11,
+      data: { ...monsterMove.data, destination: player, durationMs: 3500 },
+    }));
+    const obj = withWorld(relaunches).nearby.get(CREATURE_GUID)!;
+    const last = launched + 19 * 11;
+    expect(obj.motion?.value.destination).toEqual(player);
+    const p = pointOf(obj, last + 11)!.value;
+    // 11 ms into a 3.5 s spline of ~39 y: about an eighth of a yard off the start.
+    expect(Math.hypot(p.x - -1210.0, p.y - 985.0)).toBeLessThan(0.2);
+    expect(Math.hypot(p.x - player.x, p.y - player.y)).toBeGreaterThan(38.5);
+  });
+
+  test("a stopped creature is where it stopped, whatever the clock", () => {
+    const obj = withWorld([monsterMove, monsterStopped]).nearby.get(CREATURE_GUID)!;
+    for (const now of [monsterStopped.ts, monsterStopped.ts + 500, monsterStopped.ts + 60_000]) {
+      expect(pointOf(obj, now)?.value).toEqual({ x: -1195.0, y: 972.0, z: 42.0 });
+    }
+  });
+
+  test("a spline with no duration reads at its destination, and one with no destination at its start", () => {
+    const zero = { ...monsterMove, data: { ...monsterMove.data, durationMs: 0 } };
+    expect(pointOf(withWorld([zero]).nearby.get(CREATURE_GUID)!, launched)?.value).toEqual({ x: -1190.0, y: 970.0, z: 42.0 });
+    const { destination: _, ...noDestination } = monsterMove.data;
+    const bare = { ...monsterMove, data: noDestination };
+    expect(pointOf(withWorld([bare]).nearby.get(CREATURE_GUID)!, launched + 500)?.value).toEqual({ x: -1210.0, y: 985.0, z: 42.0 });
   });
 
   test("an oriented position newer than the spline still wins", () => {
     const cache = withWorld([monsterMove, { ...creatureMove, seq: 60 }]);
-    expect(pointOf(cache.nearby.get(CREATURE_GUID)!)?.value).toEqual({ x: -1210.0, y: 985.0, z: 42.0 });
+    expect(pointOf(cache.nearby.get(CREATURE_GUID)!, launched + 500)?.value).toEqual({ x: -1210.0, y: 985.0, z: 42.0 });
+  });
+
+  test("units() and closest() report a chaser where it is now, not on top of us", () => {
+    const self = withWorld([]).self.position!.value;
+    const start = { x: self.x + 30, y: self.y, z: self.z };
+    // Launched just now toward us, over an hour: for the whole test it is at
+    // its start, 30 y off, while its destination is our own position.
+    const chase = {
+      ...monsterMove,
+      seq: 100,
+      ts: Date.now(),
+      data: { ...monsterMove.data, pos: start, destination: { x: self.x, y: self.y, z: self.z }, durationMs: 3_600_000 },
+    };
+    const cache = withWorld([chase]);
+    const row = cache.units().find((u) => u.guid === CREATURE_GUID)!;
+    expect(row.distance!).toBeGreaterThan(29.5);
+    expect(row.x!).toBeGreaterThan(self.x + 29.5);
+    const near = cache.closest({ entry: CREATURE_ENTRY })!;
+    expect(near.guid).toBe(CREATURE_GUID);
+    expect(near.distance!).toBeGreaterThan(29.5);
+    expect(cache.units({ maxDistance: 10 }).some((u) => u.guid === CREATURE_GUID)).toBe(false);
   });
 });
 
@@ -1382,12 +1458,15 @@ describe("state.units(): the flat scan helper", () => {
     expect(c.units({ type: "unit" }).map((r) => r.guid)).not.toContain(OBJECT_GUID);
   });
 
-  test("alive: true drops only the known dead; alive: false needs the observation", () => {
+  test("alive: true and alive: false both need the observation", () => {
     const c = cache();
     const alive = c.units({ alive: true }).map((r) => r.guid);
     expect(alive).not.toContain(DEAD_GUID);
-    // Health never observed is not evidence of death — the footgun this exists to kill.
-    expect(alive).toContain(GHOST_GUID);
+    // Neither alive nor dead is known of a unit whose health was never seen,
+    // nor of a game object, which has none.
+    expect(alive).not.toContain(GHOST_GUID);
+    expect(alive).not.toContain(OBJECT_GUID);
+    expect(alive).toContain(FAR_GUID);
     expect(c.units({ alive: false }).map((r) => r.guid)).toEqual([DEAD_GUID]);
   });
 
@@ -2682,8 +2761,8 @@ describe("achievements and flight paths", () => {
   test("our own flight's spline lands position at its last point, with taxiEta for the ride", () => {
     const flying = StateCache.replay(toEvents([verifyWorld(1), ...takeOff(2)]), { seed: SEED });
     // Mid-flight the position is still the take-off point: the module serves
-    // no point between start and end, so none is made up.
-    expect(flying.self.position?.value).toEqual(TAKE_OFF);
+    // no point between start and end, so none is made up — and it says so.
+    expect(flying.self.position?.value).toEqual({ ...TAKE_OFF, inFlight: true });
     expect(flying.self.position?.seq).toBe(1);
     // Stamped with the spline's packet, which carried the duration.
     expect(flying.self.taxiEta).toEqual({ value: { durationMs: FLIGHT_MS, landsAt: 2003 + FLIGHT_MS }, seq: 3, ts: 2003 });
@@ -3189,7 +3268,7 @@ describe("pets, group, mail, bank, trade", () => {
       }),
     );
     expect(cache.group()).toMatchObject({ inGroup: true, leaderGuid: "9", leaderName: "Ordrick", leader: false, pendingInvite: undefined, lootMethod: 0 });
-    expect(cache.group()!.members).toEqual([{ guid: "9", name: "Ordrick", online: true, subGroup: 0, assistant: false, leader: true }]);
+    expect(cache.group()!.members).toEqual([{ guid: "9", name: "Ordrick", online: true, subGroup: 0, assistant: false, leader: true, inView: false, stats: undefined }]);
     fold(frame(22, "SMSG_GROUP_SET_LEADER", { name: "Fenwick" }));
     expect(cache.group()).toMatchObject({ leader: true, leaderName: "Fenwick", leaderGuid: SELF_GUID });
     expect(cache.group()!.members[0]!.leader).toBe(false);
@@ -3312,5 +3391,40 @@ describe("pets, group, mail, bank, trade", () => {
     expect(t.mine).toMatchObject({ money: 0, items: [] });
     fold(frame(74, "SMSG_TRADE_STATUS", { status: 3 }));
     expect(cache.trade()).toMatchObject({ open: false, statusText: "trade canceled", mine: undefined, theirs: undefined });
+  });
+});
+
+describe("a corpse's owner", () => {
+  const CORPSE_GUID = "17365880163140699999";
+  const OWNER_GUID = "42";
+  test("CORPSE_FIELD_OWNER folds into the corpse's ownerGuid, and the owner's name query names the player", () => {
+    const cache = StateCache.replay(
+      toEvents([
+        ...loginSequence,
+        corpseCreate(CORPSE_GUID, OWNER_GUID, 20),
+        { seq: 21, opcode: "SMSG_NAME_QUERY_RESPONSE", opcodeId: 0x051, ts: 1_700_000_000_021, data: { guid: OWNER_GUID, found: true, name: "Healpartyc" } },
+      ]),
+      { seed: SEED },
+    );
+    const corpse = cache.nearby.get(CORPSE_GUID);
+    expect(corpse?.objectType?.value).toBe("corpse");
+    expect(corpse?.ownerGuid?.value).toBe(OWNER_GUID);
+    // The string field is the owner, not a text the cache keeps beside ids.
+    expect(corpse?.texts.size).toBe(0);
+    const row = cache.units().find((u) => u.guid === CORPSE_GUID);
+    expect(row).toMatchObject({ guid: CORPSE_GUID, type: "corpse", ownerGuid: OWNER_GUID });
+    expect(cache.nameOf(OWNER_GUID)).toBe("Healpartyc");
+  });
+
+  test("our own corpse names us as owner and is no pet: pet() and the unit rows' type keep it apart", () => {
+    const cache = StateCache.replay(toEvents([...loginSequence, corpseCreate(CORPSE_GUID, SELF_GUID, 20)]), { seed: SEED });
+    expect(cache.nearby.get(CORPSE_GUID)?.ownerGuid?.value).toBe(SELF_GUID);
+    expect(cache.pet()).toBeUndefined();
+    expect(cache.units({ type: "unit" }).some((u) => u.guid === CORPSE_GUID)).toBe(false);
+  });
+
+  test("an unset owner (\"0\") reads as undefined", () => {
+    const cache = StateCache.replay(toEvents([...loginSequence, corpseCreate(CORPSE_GUID, "0", 20)]), { seed: SEED });
+    expect(cache.nearby.get(CORPSE_GUID)?.ownerGuid).toBeUndefined();
   });
 });

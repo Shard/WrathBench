@@ -51,6 +51,11 @@ globalThis.selfFields = (fields) =>
   feed("SMSG_UPDATE_OBJECT", 0xa9, { blocks: 1, objects: [{ update: "values", guid: "7", fields }] });
 globalThis.attackStart = (victimGuid) =>
   feed("SMSG_ATTACKSTART", 0x143, { attackerGuid: "99", victimGuid });
+globalThis.spellHit = (casterGuid, targetGuid) =>
+  feed("SMSG_SPELLNONMELEEDAMAGELOG", 0x250, { targetGuid, casterGuid, spellId: 9001, name: "Test Bolt", damage: 54,
+    overkill: 0, schoolMask: 4, absorb: 0, resist: 0, blocked: 0, hitInfo: 0, crit: false });
+globalThis.chat = (type, senderGuid, message) =>
+  feed("SMSG_MESSAGECHAT", 0x96, { type, language: 0, senderGuid, message, chatTag: 0 });
 selfFields({ health: 40, maxHealth: 40 });
 `;
 
@@ -86,6 +91,43 @@ describe("sandbox sleep(): the timer that says why it woke", () => {
     const res = await host.evalSnippet(`
       setTimeout(() => attackStart("12345"), 40);
       return await sleep(300);
+    `);
+    expect(res.value).toBe(JSON.stringify("elapsed"));
+  });
+
+  test("a unit's spell hitting us wakes it early with 'attacked': a caster never starts a melee attack", async () => {
+    const host = makeHost();
+    await host.evalSnippet(PRELUDE);
+    const res = await host.evalSnippet(`
+      const t = Date.now();
+      setTimeout(() => spellHit("99", "7"), 60);
+      const why = await sleep(4_000);
+      return { why, early: Date.now() - t < 2_000 };
+    `);
+    expect(res.value).toContain('"attacked"');
+    expect(res.value).toContain("early: true");
+  });
+
+  test.each([
+    ["a spell hitting someone else", "99", "12345"],
+    ["our own spell hitting ourselves", "7", "7"],
+    ["our own spell hitting a mob", "7", "99"],
+  ])("%s does not wake it", async (_, caster, target) => {
+    const host = makeHost();
+    await host.evalSnippet(PRELUDE);
+    const res = await host.evalSnippet(`
+      setTimeout(() => spellHit("${caster}", "${target}"), 40);
+      return await sleep(250);
+    `);
+    expect(res.value).toBe(JSON.stringify("elapsed"));
+  });
+
+  test("{ wake: false } sleeps through a spell hit too", async () => {
+    const host = makeHost();
+    await host.evalSnippet(PRELUDE);
+    const res = await host.evalSnippet(`
+      setTimeout(() => spellHit("99", "7"), 40);
+      return await sleep(250, { wake: false });
     `);
     expect(res.value).toBe(JSON.stringify("elapsed"));
   });
@@ -127,14 +169,131 @@ describe("sandbox sleep(): the timer that says why it woke", () => {
     expect(res.value).toBe(JSON.stringify("died"));
   });
 
-  test("{ wake: false } is a pure timer", async () => {
+  test("{ wake: false } sleeps through being attacked and dying", async () => {
     const host = makeHost();
     await host.evalSnippet(PRELUDE);
     const res = await host.evalSnippet(`
       setTimeout(() => attackStart("7"), 40);
+      setTimeout(() => selfFields({ health: 0 }), 60);
       return await sleep(250, { wake: false });
     `);
     expect(res.value).toBe(JSON.stringify("elapsed"));
+  });
+
+  test("{ wake: false } is a pure timer: a party line, a whisper and a spell hit do not wake it", async () => {
+    // Deadmines a8: the leader's lines cut a third of the tank's timer sleeps
+    // short, and every member wrapped them in Date.now() loops.
+    const host = makeHost();
+    await host.evalSnippet(PRELUDE);
+    await host.evalSnippet('selfFields({ health: 0 }); "dead"');
+    const res = await host.evalSnippet(`
+      setTimeout(() => chat(0x02, "12", "rezzing you"), 30);
+      setTimeout(() => chat(0x07, "12", "psst"), 50);
+      setTimeout(() => spellHit("99", "7"), 70);
+      const why = await sleep(300, { wake: false });
+      return { why, heard: state.chat.at(-1)?.message };
+    `);
+    expect(res.value).toContain('"elapsed"');
+    // Folded into state.chat all the same: the non-wake is not a dropped frame.
+    expect(res.value).toContain('"psst"');
+  });
+
+  // `UNIT_FLAG_IN_COMBAT` on our own unitFlags.
+  const IN_COMBAT = 0x0008_0000;
+
+  test("a spell hit while already in combat does not wake it", async () => {
+    // Deadmines a8: a mage's sleep(200) cast loop woke on every bolt that hit
+    // it and became a busy loop of not_ready casts.
+    const host = makeHost();
+    await host.evalSnippet(PRELUDE);
+    await host.evalSnippet(`selfFields({ unitFlags: ${IN_COMBAT} }); "fighting"`);
+    const res = await host.evalSnippet(`
+      setTimeout(() => spellHit("99", "7"), 30);
+      setTimeout(() => spellHit("98", "7"), 60);
+      return await sleep(250);
+    `);
+    expect(res.value).toBe(JSON.stringify("elapsed"));
+  });
+
+  test("a spell hit out of combat wakes it, even when the combat bit rises just before the hit", async () => {
+    // Aggro sets the bit before a caster's first bolt lands, usually in the
+    // same tick, so the bit at the hit cannot be what decides.
+    const host = makeHost();
+    await host.evalSnippet(PRELUDE);
+    await host.evalSnippet('selfFields({ unitFlags: 0 }); "calm"');
+    const res = await host.evalSnippet(`
+      const t = Date.now();
+      setTimeout(() => { selfFields({ unitFlags: ${IN_COMBAT} }); spellHit("99", "7"); }, 60);
+      const why = await sleep(4_000);
+      return { why, early: Date.now() - t < 2_000 };
+    `);
+    expect(res.value).toContain('"attacked"');
+    expect(res.value).toContain("early: true");
+  });
+
+  test("a sleep begun in combat is re-armed when the combat bit clears, and the next hit wakes it", async () => {
+    const host = makeHost();
+    await host.evalSnippet(PRELUDE);
+    await host.evalSnippet(`selfFields({ unitFlags: ${IN_COMBAT} }); "fighting"`);
+    const res = await host.evalSnippet(`
+      const t = Date.now();
+      setTimeout(() => spellHit("99", "7"), 30);
+      setTimeout(() => selfFields({ unitFlags: 0 }), 60);
+      setTimeout(() => spellHit("98", "7"), 90);
+      const why = await sleep(4_000);
+      return { why, early: Date.now() - t < 2_000 };
+    `);
+    expect(res.value).toContain('"attacked"');
+    expect(res.value).toContain("early: true");
+  });
+
+  test("a melee attacker still wakes a sleep begun in combat: each new attacker is its own ATTACKSTART", async () => {
+    const host = makeHost();
+    await host.evalSnippet(PRELUDE);
+    await host.evalSnippet(`selfFields({ unitFlags: ${IN_COMBAT} }); "fighting"`);
+    const res = await host.evalSnippet(`
+      setTimeout(() => attackStart("7"), 40);
+      return await sleep(4_000);
+    `);
+    expect(res.value).toBe(JSON.stringify("attacked"));
+  });
+
+  // `CHAT_MSG_*` codes (SharedDefines.h): 0x01 SAY, 0x02 PARTY, 0x07 WHISPER,
+  // 0x09 WHISPER_INFORM, 0x0c MONSTER_SAY, 0x10 MONSTER_EMOTE, 0x33 PARTY_LEADER.
+  test.each([
+    ["a party line", 0x02],
+    ["the party leader's line", 0x33],
+    ["a whisper", 0x07],
+  ])("%s from another player wakes it early with 'chat'", async (_, type) => {
+    const host = makeHost();
+    await host.evalSnippet(PRELUDE);
+    const res = await host.evalSnippet(`
+      const t = Date.now();
+      setTimeout(() => chat(${type}, "12", "rez incoming"), 60);
+      const why = await sleep(4_000);
+      return { why, early: Date.now() - t < 2_000 };
+    `);
+    expect(res.value).toContain('"chat"');
+    expect(res.value).toContain("early: true");
+  });
+
+  test.each([
+    ["our own party line", 0x02, "7"],
+    ["our whisper's echo, which names the recipient as sender", 0x09, "12"],
+    ["a creature's say", 0x0c, "99"],
+    ["a creature's emote", 0x10, "99"],
+    ["another player's say", 0x01, "12"],
+  ])("%s does not wake it", async (_, type, sender) => {
+    const host = makeHost();
+    await host.evalSnippet(PRELUDE);
+    // The line is folded into state.chat, so the non-wake is not a dropped frame.
+    const res = await host.evalSnippet(`
+      setTimeout(() => chat(${type}, "${sender}", "heard"), 40);
+      const why = await sleep(250);
+      return { why, folded: state.chat.at(-1)?.message };
+    `);
+    expect(res.value).toContain('"elapsed"');
+    expect(res.value).toContain('"heard"');
   });
 
   test("Promise.race with a background routine is unchanged: the routine still wins", async () => {

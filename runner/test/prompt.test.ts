@@ -160,11 +160,12 @@ describe("the context sentence is the harness's, and says what that harness does
     expect(s).toContain("scratchpad");
   });
 
-  test("the two prompts differ by exactly that sentence and nothing else", () => {
+  test("the two prompts differ by exactly that sentence and the snippet-delta one, and nothing else", () => {
+    const { SNIPPET_DELTA_SENTENCE } = require("../src/prompt");
     expect(CLAUDE_CODE_SYSTEM_PROMPT).not.toBe(SYSTEM_PROMPT);
-    expect(CLAUDE_CODE_SYSTEM_PROMPT.replace(contextSentence("claude-code"), contextSentence("wrathbench"))).toBe(
-      SYSTEM_PROMPT,
-    );
+    expect(
+      CLAUDE_CODE_SYSTEM_PROMPT.replace(contextSentence("claude-code"), contextSentence("wrathbench")).replace(` ${SNIPPET_DELTA_SENTENCE}`, ""),
+    ).toBe(SYSTEM_PROMPT);
     // Everything else the prompt promises is still there on both.
     for (const p of [SYSTEM_PROMPT, CLAUDE_CODE_SYSTEM_PROMPT]) {
       expect(p).toContain("This is the complete, unmodified 3.3.5a world");
@@ -179,17 +180,19 @@ describe("the context sentence is the harness's, and says what that harness does
     expect(buildSystemPrompt()).toBe(SYSTEM_PROMPT);
     expect(buildSystemPrompt(undefined, undefined, "wrathbench")).toBe(SYSTEM_PROMPT);
     expect(buildSystemPrompt(undefined, undefined, "claude-code")).toBe(CLAUDE_CODE_SYSTEM_PROMPT);
-    // The objective block is the same text on both; only the context sentence moves.
+    // The objective block is the same text on both; only the context and
+    // snippet-delta sentences move.
+    const { SNIPPET_DELTA_SENTENCE } = require("../src/prompt");
     const a = buildSystemPrompt("walk to Ironforge", "e90", "wrathbench");
     const b = buildSystemPrompt("walk to Ironforge", "e90", "claude-code");
     expect(a).toContain("--- Operator objective for this run ---\nwalk to Ironforge\n");
     expect(b).toContain("--- Operator objective for this run ---\nwalk to Ironforge\n");
-    expect(b.replace(contextSentence("claude-code"), contextSentence("wrathbench"))).toBe(a);
+    expect(b.replace(contextSentence("claude-code"), contextSentence("wrathbench")).replace(` ${SNIPPET_DELTA_SENTENCE}`, "")).toBe(a);
   });
 });
 
 describe("episode sentence", () => {
-  const { buildSystemPrompt, episodeSection, GOAL_SECTION, objectiveSection } = require("../src/prompt");
+  const { buildSystemPrompt, episodeSection, objectiveSection, WORLD_SECTION } = require("../src/prompt");
   test("no episode and no objective is byte-identical to SYSTEM_PROMPT", () => {
     expect(buildSystemPrompt()).toBe(SYSTEM_PROMPT);
     expect(buildSystemPrompt(undefined, "freeplay")).toBe(SYSTEM_PROMPT);
@@ -211,22 +214,29 @@ describe("episode sentence", () => {
 
   test("every rendering hashes as pinned, so a prompt edit has to move its pins on purpose", () => {
     // Pinned by value, not by rebuilding from the same parts, so a change to
-    // any rendering fails here. The last edit to move them is the death
-    // clause's list of reclaimCorpse reasons, which gained corpse_in_instance,
-    // in the shared body, so it moved all twelve.
+    // any rendering fails here. The last edit to move them is the sleep
+    // sentence going back to "pass { wake: false } for a plain timer" (the
+    // wake revert after Deadmines a8), in the shared body, so it moved all
+    // of them. The snippet-delta sentence (claude-code only, operator
+    // 2026-10-21) then split claude-code off the other CLI renders, moving
+    // its six and no other. The operator's wording edits to the "attacked"
+    // clause and the snippet-delta sentence (2026-10-21) moved all of them.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:9819536d308929fd", off: "sha256:8a51158f6c3a5842" },
-        cli: { on: "sha256:b4292cc55b2db3cc", off: "sha256:328eaa4353eb2385" },
+        wrathbench: { on: "sha256:07b69f53be12b40e", off: "sha256:82892888709f7ceb" },
+        "claude-code": { on: "sha256:bb1bfebe5f277b30", off: "sha256:ced77e7afcc01ccf" },
+        cli: { on: "sha256:8c5fea5bb98d45e5", off: "sha256:e939c4a23d796cb4" },
       },
       e90: {
-        wrathbench: { on: "sha256:4807363ab19fc297", off: "sha256:542ca5d024943480" },
-        cli: { on: "sha256:3866948c1f9332ca", off: "sha256:1cb694e059b5e388" },
+        wrathbench: { on: "sha256:4fc067b08bf96ca7", off: "sha256:1a6b1e40bcea0979" },
+        "claude-code": { on: "sha256:a153586d980a0d83", off: "sha256:7845219dc528e767" },
+        cli: { on: "sha256:ec67b3aa70f4d8ba", off: "sha256:f8c26d354acceb40" },
       },
       e360: {
-        wrathbench: { on: "sha256:f486996f89f218f8", off: "sha256:ba4d30ff4f624680" },
-        cli: { on: "sha256:fa94e73e65b133e3", off: "sha256:55a29d98b6ae6100" },
+        wrathbench: { on: "sha256:3e52836092848355", off: "sha256:e7c2ea78c876c121" },
+        "claude-code": { on: "sha256:6d2949f6ec03f3df", off: "sha256:a9e6f2173a1f9d18" },
+        cli: { on: "sha256:24dc1c849de19739", off: "sha256:92245cd73a0b7f1b" },
       },
     };
     const episodes = [
@@ -237,23 +247,101 @@ describe("episode sentence", () => {
       ["e360", "e360"],
     ] as const;
     for (const [episode, row] of episodes) {
-      for (const harness of ["wrathbench", "claude-code", "codex"] as const) {
+      for (const harness of ["wrathbench", "claude-code", "codex", "pi"] as const) {
         for (const wiki of [true, false]) {
           const got = promptHash(buildSystemPrompt(undefined, episode, harness, wiki));
-          const want = pinned[row]![harness === "wrathbench" ? "wrathbench" : "cli"]![wiki ? "on" : "off"];
+          const want = pinned[row]![harness === "wrathbench" || harness === "claude-code" ? harness : "cli"]![wiki ? "on" : "off"];
           expect(`${episode}/${harness}/${wiki}: ${got}`).toBe(`${episode}/${harness}/${wiki}: ${want}`);
         }
       }
     }
   });
-  test("the sentence sits after the goal and before the objective block", () => {
+  test("the sentence sits after the world facts and before the objective block", () => {
     const p = buildSystemPrompt("walk to Ironforge", "e90");
-    const goal = p.indexOf(GOAL_SECTION);
+    const facts = p.indexOf(WORLD_SECTION);
     const tier = p.indexOf(episodeSection("e90"));
     const obj = p.indexOf(objectiveSection("walk to Ironforge"));
-    expect(goal).toBe(0);
-    expect(tier).toBeGreaterThan(goal);
+    expect(facts).toBe(0);
+    expect(tier).toBeGreaterThan(facts);
     expect(obj).toBeGreaterThan(tier);
+  });
+});
+
+describe("an objective replaces the broad goal (operator, 2026-10-21)", () => {
+  const { buildSystemPrompt, clockWords, GOAL_SECTION, probingClockSentence, WORLD_SECTION } = require("../src/prompt");
+
+  test("the standing goal is the old bytes, so every run without an objective reads as it did", () => {
+    // Verbatim, the string GOAL_SECTION was before it was split into world
+    // facts and directive sentences; the hash pins above say the same of
+    // every whole rendering.
+    expect(GOAL_SECTION).toBe(
+      "You are an agent controlling one character in World of Warcraft 3.3.5a on a private benchmark server. The world is live and does not pause for you. This is the complete, unmodified 3.3.5a world: every zone, city, road, flight path, boat and tram a player could use exists and is reachable, and nothing has been walled off for the benchmark. Your goal is to progress your character over the long run — leveling up, completing quests, acquiring better gear, accumulating wealth, and growing in capability. The server is the source of truth for what actually happened. There is no single number to maximize; play the game well and make broad, durable progress.\n\n" +
+        "You do not play directly. You write TypeScript snippets that run in a persistent sandbox holding one SDK client for your game session, and you supervise the results.",
+    );
+    for (const episode of [undefined, "freeplay", "probing", "e90", "e360"] as const) {
+      for (const objective of [undefined, "", "   "]) {
+        expect(buildSystemPrompt(objective, episode, "wrathbench", true, 14_400_000).startsWith(`${GOAL_SECTION}\n\n`)).toBe(true);
+      }
+    }
+    // A budget changes nothing without an objective, on any tier.
+    expect(buildSystemPrompt(undefined, "probing", "wrathbench", true, 14_400_000)).toBe(SYSTEM_PROMPT);
+  });
+
+  test("with an objective the directive sentences and the additive line are gone, and the world facts read first", () => {
+    for (const episode of [undefined, "freeplay", "probing", "e90", "e360"] as const) {
+      for (const harness of ["wrathbench", "claude-code", "codex", "pi"] as const) {
+        const p = buildSystemPrompt("walk to Ironforge", episode, harness, true, 14_400_000);
+        expect(p.startsWith(`${WORLD_SECTION}\n\n`)).toBe(true);
+        expect(p).not.toContain("Your goal is to progress");
+        expect(p).not.toContain("There is no single number to maximize");
+        expect(p).not.toContain("in addition to the standing goal");
+        expect(p).toContain("--- Operator objective for this run ---\nwalk to Ironforge\n--- end operator objective ---");
+      }
+    }
+    // The world facts are the goal's own sentences minus the two directives.
+    expect(
+      GOAL_SECTION.replace(
+        " Your goal is to progress your character over the long run — leveling up, completing quests, acquiring better gear, accumulating wealth, and growing in capability.",
+        "",
+      ).replace(" There is no single number to maximize; play the game well and make broad, durable progress.", ""),
+    ).toBe(WORLD_SECTION);
+  });
+
+  test("a probe with an objective states its clock from the budget; freeplay and an unlimited budget state none", () => {
+    expect(buildSystemPrompt("x", "probing", "wrathbench", true, 14_400_000)).toContain(`${WORLD_SECTION}\n\nThis run lasts four hours.\n\n--- Operator objective`);
+    expect(buildSystemPrompt("x", "probing", "wrathbench", true, null)).toContain(`${WORLD_SECTION}\n\n--- Operator objective`);
+    expect(buildSystemPrompt("x", "freeplay", "wrathbench", true, 14_400_000)).toContain(`${WORLD_SECTION}\n\n--- Operator objective`);
+    // An eval tier keeps its own fixed sentence, whatever the budget says.
+    expect(buildSystemPrompt("x", "e360", "wrathbench", true, 60_000)).toContain(`${WORLD_SECTION}\n\nThis episode lasts six hours.\n\n--- Operator objective`);
+    expect(probingClockSentence(14_400_000)).toBe("This run lasts four hours.");
+    expect(probingClockSentence(null)).toBeUndefined();
+    expect(probingClockSentence(undefined)).toBeUndefined();
+  });
+
+  test("the clock is humanised as the eval sentences are", () => {
+    expect(clockWords(90 * 60_000)).toBe("90 minutes");
+    expect(clockWords(360 * 60_000)).toBe("six hours");
+    expect(clockWords(240 * 60_000)).toBe("four hours");
+    expect(clockWords(60 * 60_000)).toBe("one hour");
+    expect(clockWords(720 * 60_000)).toBe("twelve hours");
+    expect(clockWords(1440 * 60_000)).toBe("24 hours");
+    expect(clockWords(45 * 60_000)).toBe("45 minutes");
+  });
+
+  test("objective-bearing renderings hash as pinned", () => {
+    const { promptHash } = require("../src/comparability");
+    const got = {
+      probing4h: promptHash(buildSystemPrompt("walk to Ironforge", "probing", "wrathbench", true, 14_400_000)),
+      probing4hCli: promptHash(buildSystemPrompt("walk to Ironforge", "probing", "claude-code", true, 14_400_000)),
+      e90: promptHash(buildSystemPrompt("walk to Ironforge", "e90", "wrathbench", true)),
+      freeplay: promptHash(buildSystemPrompt("walk to Ironforge", "freeplay", "wrathbench", true)),
+    };
+    expect(got).toEqual({
+      probing4h: "sha256:cbc44dd816f3c106",
+      probing4hCli: "sha256:507734da98f1f3e3",
+      e90: "sha256:f7aff20fe8ec35e5",
+      freeplay: "sha256:34835f7a137a4fc4",
+    });
   });
 });
 

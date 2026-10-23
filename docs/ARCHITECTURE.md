@@ -182,6 +182,17 @@ the SPA owns everything that is UI.
   the character, scored rows to the run. Nothing is written back: the record is
   per attempt and stays that way, which is also why an attempt predating a column
   contributes nothing rather than a zero.
+- **A party attempt is one thing, and has a page and a replay.** A Deadmines
+  party is five runs launched, stopped and counted together
+  (docs/proposals/GROUP-PLAY.md), and listed as five unrelated rows it read as
+  five attempts. Membership is the stamp each member's run carries
+  (`config.party`), never a parse of a run id. `/party/<id>` is the members and
+  one timeline merged across them, and `/map?party=<id>` replays all five on one
+  clock, each in its own colour, the map following one member while the
+  sidebar says where the others are. Like the character page, both are built in
+  the browser from the listing and each member's run detail, which carries that
+  member's own records (`runner/viewer/party-marks.ts`); there is no party
+  route, so the private viewer and the public bucket run one derivation.
 - **The harness series is one shell-wide filter, not a per-page control.** The
   series — `major.minor` of a version stamp — is already the comparability
   group every page of runs is a view of, so the selector lives once, in the top
@@ -390,6 +401,17 @@ was written (an unknown or repeated flag, a campaign file that does not hold
 together, a missing credential, a run id already on disk); 75 is
 a resume refused because the run has a live owner; 130 is a signalled exit.
 Any other code is read through the run row, never on its own.
+
+**A party's end, asked rather than signalled.** When a party member's run
+ends on its definition's end, the roster writes `end-request.json`
+(`reason`, an end reason; `detail`, `<member>: <reason>`; `at`) into each
+other member's run directory instead of sending SIGTERM, which would pause it
+and kill a CLI before its closing result. The runner polls for the file every
+two seconds, ignores one older than its own process segment, and ends on it
+through its watchdogs, so the driver winds down exactly as on its own end and
+records its result (`runner/src/end-request.ts`). A member still running two
+minutes later is sent SIGTERM and ended by the roster as before, which is also
+all a harness that ignores the file ever sees.
 
 **A harness that is not this runner** is launched the same way: an arm names
 `image` and `command`, the pod runs that command with the flags above as its

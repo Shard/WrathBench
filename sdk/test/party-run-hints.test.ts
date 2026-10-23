@@ -79,7 +79,7 @@ describe("castSpell: a refusal reaches the harness, named", () => {
     expect(hints).toHaveLength(1);
     expect(hints[0]).toMatchObject({ action: "castSpell", status: "line_of_sight", count: 1 });
     expect(hints[0]!.hint).toBe(
-      `Mending Word (501) on ${creatureName()}: something blocks the line of sight to the target`,
+      `Mending Word (501) on ${creatureName()}: something blocks the line of sight to the target; move to where it is in view`,
     );
     client.close();
     await stub.stop();
@@ -105,7 +105,7 @@ describe("castSpell: a refusal reaches the harness, named", () => {
       ["unit_not_infront", 3],
     ]);
     expect(hints[1]!.hint).toContain("Frost Lance (502)");
-    expect(hints[1]!.hint).toBe(`Frost Lance (502) on ${creatureName()}: the target is not in front of you`);
+    expect(hints[1]!.hint).toBe(`Frost Lance (502) on ${creatureName()}: the target is not in front of you; sdk.face({ x: target.x, y: target.y }) turns you to it`);
     client.close();
     await stub.stop();
   });
@@ -179,7 +179,7 @@ describe("moveToAsync: a verdict that is not an arrival reaches the harness", ()
     const client = await inWorld(stub);
     await folded(client, "SMSG_UPDATE_OBJECT", 17);
     const ack = await client.moveToAsync({ x: -500, y: 987, z: 42 });
-    push(stub, result(90, ack.moveId, "too_far"));
+    push(stub, result(90, ack.moveId!, "too_far"));
     await folded(client, "WB_MOVE_RESULT", 90);
     await Bun.sleep(5);
     const hints = client.drainActionHints();
@@ -205,7 +205,7 @@ describe("moveToAsync: a verdict that is not an arrival reaches the harness", ()
     expect(drop!.hint).toEndWith(" A ghost takes no fall damage.");
 
     const ack = await client.moveToAsync({ x: -1220, y: 987, z: 42 });
-    push(stub, result(91, ack.moveId, "arrived"));
+    push(stub, result(91, ack.moveId!, "arrived"));
     await folded(client, "WB_MOVE_RESULT", 91);
     await Bun.sleep(5);
     expect(client.drainActionHints()).toEqual([]);
@@ -223,13 +223,13 @@ describe("moveToAsync: steering verdicts stay out of the harness block (operator
       frame(seq, "WB_MOVE_RESULT", { moveId, status, pos: { x: -1234.5, y: 987.25, z: 42.1, o: 0 } });
     const first = await client.moveToAsync({ x: -1220, y: 987, z: 42 });
     const second = await client.moveToAsync({ x: -1210, y: 987, z: 42 });
-    push(stub, verdict(90, first.moveId, "superseded"));
-    push(stub, verdict(91, second.moveId, "stopped"));
+    push(stub, verdict(90, first.moveId!, "superseded"));
+    push(stub, verdict(91, second.moveId!, "stopped"));
     await folded(client, "WB_MOVE_RESULT", 91);
     await Bun.sleep(5);
     expect(client.drainActionHints()).toEqual([]);
     const third = await client.moveToAsync({ x: -500, y: 987, z: 42 });
-    push(stub, verdict(92, third.moveId, "too_far"));
+    push(stub, verdict(92, third.moveId!, "too_far"));
     await folded(client, "WB_MOVE_RESULT", 92);
     await Bun.sleep(5);
     expect(client.drainActionHints().map((h) => `${h.action} ${h.status}`)).toEqual(["moveToAsync too_far"]);
@@ -246,7 +246,8 @@ describe("acting while dead: a corpse cannot move or fight, a ghost can walk", (
     const moved = await client.moveTo({ x: -1220, y: 987, z: 42 });
     const DEAD = "you are dead and a corpse cannot move; nothing was sent. sdk.repop() releases your spirit, and a ghost can walk.";
     expect(moved).toEqual({ ok: false, status: "dead", hint: DEAD });
-    await expect(client.moveToAsync({ x: -1220, y: 987, z: 42 })).rejects.toThrow(`moveToAsync: ${DEAD}`);
+    // Resolved, not rejected: the refusal moveTo answers, the same way.
+    expect(await client.moveToAsync({ x: -1220, y: 987, z: 42 })).toEqual({ ok: false, status: "dead", hint: DEAD });
     expect(stub.actions.filter((a) => a.action === "move_to")).toEqual([]);
     expect(client.drainActionHints().map((h) => `${h.action} ${h.status}`).sort()).toEqual(["moveTo dead", "moveToAsync dead"]);
 
@@ -323,7 +324,7 @@ describe("reclaimCorpse: an abandoned wait says what was waiting", () => {
     const err = await pending.catch((e: unknown) => e);
     expect(err).toBeInstanceOf(EventAbortedError);
     const note = (err as { waitAbandon?: string }).waitAbandon;
-    expect(note).toMatch(/^reclaimCorpse was waiting out the server's reclaim delay \(~(19|20)s still to run\) when this was abandoned, 0s into its 25s wait\. Give it a snippet of its own, or pass a \{ timeout \} that fits\.$/);
+    expect(note).toMatch(/^reclaimCorpse was waiting out the server's reclaim delay \(~(19|20)s still to run\) when this was abandoned, 0s into its 25s wait\. Give it a snippet of its own, or pass a timeout that fits the time the snippet has left, as the second argument: sdk\.reclaimCorpse\(undefined, \{ timeout: 20000 \}\)\.$/);
     expect((err as Error).message).toContain(note!);
     client.close();
     await stub.stop();

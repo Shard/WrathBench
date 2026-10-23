@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import { parseCampaignBlocks } from "../src/campaigns";
 import type { CostFigure, ResultRun } from "../viewer/api-types";
 import { campaignsView, type CampaignsRoster } from "../viewer/campaigns";
-import { defsBlock, definition } from "./fixtures/campaigns";
+import { defsBlock, definition, partyDefinition } from "./fixtures/campaigns";
 
 const arms = definition({
   id: "wake",
@@ -105,6 +105,62 @@ describe("one entry per published version", () => {
   });
 });
 
+describe("a party's square", () => {
+  test("names its attempts by the stamp's party id, oldest first, beside every member's run id", () => {
+    const def = partyDefinition();
+    const rows = { deadmines: { version: 1, assignments: [{ model: "sonnet" }] } };
+    const member = (party: string, m: string, startedAt: number): ResultRun =>
+      run({
+        runId: `${party}-${m}`,
+        campaign: "deadmines",
+        cell: "party",
+        arm: def.arms[0]!.id,
+        race: 1,
+        class: 1,
+        startedAt,
+        party: { id: party, member: m, size: 5, role: m === "tank" ? "tank" : "damage", index: 0 },
+      });
+    // The second attempt's id sorts before the first's: the order is by start, never by the id.
+    const runs = [
+      ...["tank", "healer"].map((m) => member("dm-zz-a1", m, 1000)),
+      ...["tank", "healer"].map((m) => member("dm-aa-a2", m, 5000)),
+    ];
+    const v = campaignsView(runs, roster(rows, [def]), counted).campaigns[0]!;
+    const sq = v.grid[0]!.squares[0]!;
+    expect(sq.parties).toEqual(["dm-zz-a1", "dm-aa-a2"]);
+    expect(sq.runIds).toHaveLength(4);
+  });
+
+  test("a party that met its kill end is one counted attempt that reached it, and the campaign is complete", () => {
+    const def = partyDefinition({ id: "deadmines", version: 4, end: [{ kill: { entry: 639 } }] });
+    const rows = { deadmines: { version: 4, accounts: ["P1", "P2", "P3", "P4", "P5"], assignments: [{ model: "sonnet" }] } };
+    const runs = def.party!.members.map((m, i) =>
+      run({
+        runId: `dm-a1-${m.id}`,
+        campaign: "deadmines",
+        campaignVersion: 4,
+        cell: "party",
+        arm: "base",
+        race: m.race,
+        class: m.class,
+        maxLevel: 20,
+        terminationReason: "kill-target",
+        party: { id: "dm-a1", member: m.id, size: 5, role: m.role, index: i },
+      }),
+    );
+    const v = campaignsView(runs, roster(rows, [def]), counted).campaigns[0]!;
+    expect(v.shape.end).toEqual([{ kill: { entry: 639 } }]);
+    expect(v.grid[0]!.squares[0]!).toMatchObject({ runs: 1, counted: 1, reached: 1, settled: "done" });
+    expect(v.progress).toMatchObject({ want: 1, done: 1 });
+    expect(v.state).toBe("complete");
+    expect(v.comparison[0]!.arms[0]!).toMatchObject({ reached: 5, terminations: { "kill-target": 5 } });
+  });
+
+  test("a square of a definition with no party carries no party list", () => {
+    expect(view([run({ runId: "solo" })]).grid[0]!.squares[0]!).not.toHaveProperty("parties");
+  });
+});
+
 describe("the squares", () => {
   test("runs are ended runs; live ones are apart; runIds holds both", () => {
     const v = view([run({ runId: "done", minutes: toTen(300) }), run({ runId: "live", terminationReason: null, startedAt: 2000 })]);
@@ -155,6 +211,37 @@ describe("progress and state agree", () => {
 
   test("a disabled row with work left is disabled, not complete", () => {
     expect(view([], { wake: { ...ROW.wake, enabled: false } }).state).toBe("disabled");
+    expect(view([]).concluded).toBe(false);
+  });
+
+  test("a version the operator concluded is complete by that verdict, and says so; its counts are what was counted", () => {
+    const runs = [run({ runId: "1", minutes: toTen(100) }), run({ runId: "2", arm: "wake", modelResponses: 0 })];
+    const derived = view(runs);
+    for (const enabled of [true, false]) {
+      const v = view(runs, { wake: { ...ROW.wake, enabled, concluded: [1] } });
+      expect(v).toMatchObject({ state: "complete", concluded: true });
+      expect(v.progress).toEqual(derived.progress);
+      expect(v.grid).toEqual(derived.grid);
+    }
+    // A run still in flight: the verdict stands, and the progress says live.
+    const live = view([run({ runId: "l", terminationReason: null })], { wake: { ...ROW.wake, concluded: [1] } });
+    expect(live).toMatchObject({ state: "complete", concluded: true, progress: { live: 1 } });
+  });
+
+  test("concluded applies to any version of the id, whichever version the row now names", () => {
+    const v2 = definition({ ...arms, version: 2 });
+    const rows = { wake: { ...ROW.wake, version: 2, concluded: [1] } };
+    // A run of @1 left paused: no termination, which reads as live.
+    const old = [run({ runId: "old", minutes: toTen(100) }), run({ runId: "paused", terminationReason: null, startedAt: 2000 })];
+    const r = campaignsView(old, roster(rows, [arms, v2]), counted).campaigns;
+    expect(r.map((c) => `${c.key}:${c.state}:${c.concluded}`)).toEqual(["wake@2:queued:false", "wake@1:complete:true"]);
+    // No row names @1, so it wants nothing: its runs are counted, never invented.
+    expect(r[1]!.progress).toEqual({ want: 0, done: 0, attempted: 0, capped: 0, live: 0 });
+    expect(r[1]!.config).toBeNull();
+    expect(r[1]!.grid[0]!.squares[0]).toMatchObject({ runs: 1, counted: 1, live: 1 });
+    // Without the verdict the same version reads as before.
+    const plain = campaignsView(old, roster({ wake: { ...ROW.wake, version: 2 } }, [arms, v2]), counted).campaigns;
+    expect(plain.map((c) => `${c.key}:${c.state}:${c.concluded}`)).toEqual(["wake@2:queued:false", "wake@1:running:false"]);
   });
 });
 

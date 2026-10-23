@@ -710,8 +710,13 @@ export function ingestPositions(store: TraceStore, positions: readonly AgentPosi
 
 /** A replayed track into the store: its run's closed windows, and only that run. */
 export function ingestTrack(store: TraceStore, track: TrackResponse): void {
-  store.retain([track.runId]);
-  if (track.trace !== undefined) store.list(track.runId, track.trace.segMs, unpackSegs(track.trace.segs, track.trace.segMs));
+  ingestTracks(store, [track]);
+}
+
+/** Several replayed runs at once (a party's members): the store keeps exactly these, each with its closed windows. */
+export function ingestTracks(store: TraceStore, tracks: readonly TrackResponse[]): void {
+  store.retain(tracks.map((t) => t.runId));
+  for (const t of tracks) if (t.trace !== undefined) store.list(t.runId, t.trace.segMs, unpackSegs(t.trace.segs, t.trace.segMs));
 }
 
 /**
@@ -725,6 +730,17 @@ export function replaySpan(track: TrackResponse, store: TraceStore): Span | null
   const trace = store.extent(track.runId);
   if (points === null || trace === null) return points ?? trace;
   return { from: Math.min(points.from, trace.from), to: Math.max(points.to, trace.to) };
+}
+
+/** Several runs on one clock (a party's members): the union of their spans, or null when none has one. */
+export function replaySpans(tracks: readonly TrackResponse[], store: TraceStore): Span | null {
+  let out: Span | null = null;
+  for (const t of tracks) {
+    const s = replaySpan(t, store);
+    if (s === null) continue;
+    out = out === null ? s : { from: Math.min(out.from, s.from), to: Math.max(out.to, s.to) };
+  }
+  return out;
 }
 
 /**

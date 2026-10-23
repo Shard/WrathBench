@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { inflateSync } from "node:zlib";
 import { MpqArchive, MpqChain, bufferSource } from "../src/mpq";
 import { parseTrs, parseWmoTrs } from "../src/trs";
-import { type PlacedWmo, type WmoPaint, compositeWmoMap, extractMap, paintWmos } from "../src/extract";
+import { DEFAULT_MAPS, type PlacedWmo, type WmoPaint, compositeWmoMap, extractMap, paintWmos } from "../src/extract";
+import { TILED_MAPS } from "../../runner/viewer/worldmap";
 import { ADT_FRAME_ORIGIN, type WmoGroupBox, type WmoPlacement, placementToWorld } from "../src/wmo";
 import { buildDxtBlp, buildMpq, dxt1Block, rgb565of } from "./fixtures";
 
@@ -290,5 +291,21 @@ describe("an instance's placed models over its terrain", () => {
       skipped: 1,
     });
     expect(pixelAt(join(outDir, "32_32.png"), 55, 55)[1]).toBeGreaterThan(240);
+  });
+});
+
+describe("the default maps", () => {
+  test("are exactly the maps the dashboard names, so none is drawn as a bare number", () => {
+    expect([...DEFAULT_MAPS].sort((a, b) => a - b)).toEqual(Object.keys(TILED_MAPS).map(Number).sort((a, b) => a - b));
+  });
+
+  test("still cover every map already published", () => {
+    for (const id of [0, 1, 36, 369, 530, 571]) expect(DEFAULT_MAPS).toContain(id);
+  });
+
+  test("take in the dungeons and raids, and leave out what has no place to draw", () => {
+    for (const id of [33, 230, 429, 540, 574, 668, 249, 533, 631]) expect(DEFAULT_MAPS).toContain(id);
+    // Unused in Map.dbc (44, 598), a test map (169), no client minimap (624, 649, 650).
+    for (const id of [44, 169, 598, 624, 649, 650]) expect(DEFAULT_MAPS).not.toContain(id);
   });
 });

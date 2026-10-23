@@ -81,6 +81,7 @@ import { EXHAUSTION_HINTS } from "./adapter";
 import { MessageQueue, cliBaseEnv, readLines, signalGroup } from "./adapter-shared";
 import { CompactionAsk, compactionNotice, piAutoCompactLimit, piReserveTokens, piWindowCapRefusal, summaryFields, type CompactionRecord } from "./cli-compaction";
 import { harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
+import { entryOf } from "./drivers";
 import type { EpisodicLog } from "./episodic";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { McpServer } from "./mcp";
@@ -666,6 +667,9 @@ export async function runPiEpisode(o: PiEpisodeOptions): Promise<LoopOutcome> {
     episodic: o.episodic,
     turn: () => builder.currentTurn,
     secrets: trajectory,
+    // The registry's switch (`DriverEntry.snippetDelta`): what changed since
+    // the previous snippet rides each snippet result on a driver that has it.
+    snippetDelta: entryOf(config.driver).snippetDelta,
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
     onEventsServed: (events, folded) =>
       trajectory.append({ t: "events_served", via: "tool", count: events.length, events, ...(folded !== undefined && folded > 0 ? { folded } : {}) }),
@@ -768,7 +772,7 @@ export async function runPiEpisode(o: PiEpisodeOptions): Promise<LoopOutcome> {
   const apiBase = config.apiBase ?? "";
   const provider = piProviderOf(config.apiKeyEnv);
   const bridgePath = new URL("./mcp-bridge.ts", import.meta.url).pathname;
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("pi"), config.wiki);
+  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("pi"), config.wiki, config.watchdogs.episodeMs);
   const cwd = mkdtempSync(join(tmpdir(), "wrathbench-pi-"));
   const thinking = piThinkingLevel(config.effort);
   let pi: PiProcess | null = null;

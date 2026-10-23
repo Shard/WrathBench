@@ -520,9 +520,12 @@ export class ContextBuilder {
           ...(s.entry !== undefined ? { entry: s.entry } : {}),
           ...(s.rank !== undefined ? { rank: s.rank } : {}),
           self: s.self,
+          member: s.member,
           observedTs: s.ts,
           ...turn,
         });
+        // A campaign's kill end reads the record the trajectory keeps.
+        if (this.live) this.o.watchdogs.noteKill(s);
       }
     }
   }
@@ -641,6 +644,14 @@ export class ContextBuilder {
     // visit or a flight beginning, and either can begin and end well inside
     // one state row.
     this.reflect.note(restingOf(snap), taxiFlightOf(snap));
+    // The party records, ungated too: a `kill` is what a campaign's kill end
+    // reads, and drained only at row cadence it reached the end check up to a
+    // whole `stateIntervalMs` late — deadmines@4's members ended 2 to 22
+    // seconds apart on one VanCleef packet, the last after the roster had
+    // already stopped it. Drained on every tick instead, so the check sees the
+    // kill within one; group, instance and kill stay one drain in packet
+    // order, which is what the retro reading folds members by.
+    await this.applyPartySignals(trajectory, this.turn > 0 ? { turn: this.turn } : {});
     if (this.now() - this.lastStateAt < config.stateIntervalMs) return snap;
     this.lastStateAt = this.now();
     const pos = snap.self?.position?.value as
@@ -875,7 +886,6 @@ export class ContextBuilder {
     // Applied in order and updating the same latches the window read uses, so
     // two complete cycles inside one gap are two deaths, and so the window read
     // that follows sees the state these signals left and repeats nothing.
-    await this.applyPartySignals(trajectory, turn);
     const drained = await this.applyDeathSignals(trajectory, turn, zone?.id, area?.id);
     // The signals own this sample's window if one is still open, and they own
     // it for the rest of *this* sample even when they closed it: `snap` was
@@ -1285,7 +1295,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         return terminate(integrity.reason, integrity.detail);
       }
 
-      const systemText = buildSystemPrompt(config.objective, config.episode, harnessOf(config.driver), config.wiki);
+      const systemText = buildSystemPrompt(config.objective, config.episode, harnessOf(config.driver), config.wiki, config.watchdogs.episodeMs);
       const messages: ChatMessage[] = [
         { role: "system", content: systemText },
         ...messageWindow(history),

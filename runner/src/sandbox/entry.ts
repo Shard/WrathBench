@@ -13,7 +13,10 @@
  *               after something closed it
  *   sleep(ms, options?)  Promise timer that resolves with why it woke:
  *               "elapsed", or early with "attacked" (a unit started attacking
- *               us) or "died" (our health reached zero, transition only).
+ *               us or hit us with a spell), "died" (our health reached zero,
+ *               transition only) or
+ *               "chat" (a party, raid or whisper line from another player).
+ *               A spell hit wakes it only on the way into combat.
  *               `{ wake: false }` is a pure timer. Rejects with the abort
  *               reason if this snippet is abandoned; an awaited sleep asked
  *               for at least the time the snippet had left is named in the
@@ -75,11 +78,21 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { WrathClient, type StreamEvent } from "@wrathbench/sdk";
 import { keepsAnswer, reparseFrame } from "./client-cache";
+import { callSiteLabel, SNIPPET_URL } from "./call-site";
 import { compileSnippet } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
-import { CONTEXT_POLICY, foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../context";
+import {
+  CONTEXT_POLICY,
+  foldUiOpenWindows,
+  isGroupOrWhisperChat,
+  PLAYER_FLAGS_GHOST,
+  SPELL_LOG_OPCODES,
+  spellLogNote,
+  spellLogShown,
+} from "../context";
 import { NearbyRecorder } from "./nearby-recorder";
 import { PartyWatcher } from "./party-watch";
+import { SnippetDeltaRecorder } from "./snippet-delta";
 import { TraceRecorder } from "./trace-recorder";
 import type { ActionBatch, ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, FlightSignal, HostToChild, HostcallResult, LogEntry, MoveIntentNote } from "./ipc";
 
@@ -574,9 +587,94 @@ function drainLogs(): LogEntry[] {
  * can render them whether or not the snippet kept the result objects, and a
  * hint raised by a background routine rides whichever tool result comes next.
  * Each drain empties the tally, so a hint is delivered once.
+ *
+ * `current` is the eval whose result this is, if any. A hint raised by any
+ * other eval's code — a routine an earlier snippet launched, or the late
+ * verdict of an earlier snippet's cast — carries `from`, the routine that
+ * made the call (`callOrigin`) or else that snippet's opening code, so the
+ * line can say whose it is (the 2026-10-20 party: a
+ * routine's `castSpell caster_dead` printed under 51 unrelated snippets, and a
+ * healer fought its own walker for six minutes).
  */
-function drainHints(): ActionHintNote[] {
-  return client.drainActionHints();
+function drainHints(current?: number): ActionHintNote[] {
+  const out: ActionHintNote[] = [];
+  // The current snippet's own lines, one per (action, status) as before: its
+  // call sites are told apart only for an earlier snippet's code.
+  const own = new Map<string, ActionHintNote>();
+  for (const { origin, ...h } of client.drainActionHints()) {
+    const site = origin === undefined ? undefined : callSites.get(origin);
+    const evalId = site?.evalId ?? origin;
+    if (evalId !== undefined && evalId !== current) {
+      out.push({ ...h, from: site?.label ?? snippetHeads.get(evalId) ?? "" });
+      continue;
+    }
+    const key = `${h.action}:${h.status}`;
+    const prev = own.get(key);
+    if (prev === undefined) {
+      own.set(key, h);
+      out.push(h);
+      continue;
+    }
+    const merged = h.ts >= prev.ts ? { ...h, count: prev.count + h.count } : { ...prev, count: prev.count + h.count };
+    out[out.indexOf(prev)] = merged;
+    own.set(key, merged);
+  }
+  return out;
+}
+
+/** How much of a snippet's opening code names it on a routine's harness line. */
+const SNIPPET_HEAD_CHARS = 48;
+/** Snippet heads kept for routines still running; the oldest go first. */
+const SNIPPET_HEADS_MAX = 512;
+/** Each eval's opening code, whitespace folded, by eval id (`drainHints`). */
+const snippetHeads = new Map<number, string>();
+
+function noteSnippetHead(id: number, code: string): void {
+  const flat = code.replace(/\s+/g, " ").trim();
+  snippetHeads.set(id, flat.length > SNIPPET_HEAD_CHARS ? `${flat.slice(0, SNIPPET_HEAD_CHARS - 1).trimEnd()}…` : flat);
+  if (snippetHeads.size > SNIPPET_HEADS_MAX) snippetHeads.delete(snippetHeads.keys().next().value as number);
+}
+
+/** Each eval's compiled body by eval id, for the statement a stack frame in it names (`callSiteLabel`). */
+const snippetBodies = new Map<number, string>();
+
+/**
+ * The SDK's `origin` for a call: the eval whose context it runs in, refined
+ * to the routine that made it (`callSiteLabel`) as a site id of its own, so
+ * two routines one snippet started are tallied, and labelled, apart. Site ids
+ * are negative, out of the host's eval-id range.
+ */
+const callSites = new Map<number, { evalId: number; label: string }>();
+const callSiteIds = new Map<string, number>();
+const CALL_SITES_MAX = 2048;
+let nextCallSite = -1;
+/** Frames enough to reach a routine's entry under the SDK's own (the default is 10). */
+const CALL_SITE_STACK_LIMIT = 64;
+
+function callOrigin(): number | undefined {
+  const evalId = evalContext.getStore()?.evalId;
+  if (evalId === undefined) return undefined;
+  const limit = Error.stackTraceLimit;
+  Error.stackTraceLimit = CALL_SITE_STACK_LIMIT;
+  const stack = new Error().stack ?? "";
+  Error.stackTraceLimit = limit;
+  const label = callSiteLabel(stack, evalId, snippetBodies, import.meta.url);
+  if (label === undefined) return evalId;
+  const key = `${evalId}\n${label}`;
+  let id = callSiteIds.get(key);
+  if (id === undefined) {
+    // The oldest site goes first; its id is never handed out again, so a
+    // tally entry still holding it cannot be read as another's.
+    if (callSiteIds.size >= CALL_SITES_MAX) {
+      const [oldKey, oldId] = callSiteIds.entries().next().value as [string, number];
+      callSiteIds.delete(oldKey);
+      callSites.delete(oldId);
+    }
+    id = nextCallSite--;
+    callSiteIds.set(key, id);
+    callSites.set(id, { evalId, label });
+  }
+  return id;
 }
 
 // -------------------------------------------------------- ambient snippet API
@@ -610,6 +708,8 @@ let abandonNote: string | undefined;
 let abandonUnwind: Promise<void> | undefined;
 const abandonUnwindSettled = new Map<number, () => void>();
 const ABANDON_UNWIND_GRACE_MS = 100;
+/** The eval the last `abort` abandoned: the pong that follows is its result, so its own hints are not a routine's. */
+let abandonedEval: number | undefined;
 /** Live controllers by eval id, for the host's `abort`. */
 const evalControllers = new Map<number, AbortController>();
 
@@ -621,6 +721,10 @@ const client = new WrathClient({
   subscribeEvents: false,
   signal: currentSignal,
   deadline: currentDeadline,
+  // The eval whose code is calling, and the routine in it that called: a
+  // routine keeps the id of the snippet that launched it, so its harness
+  // lines can say whose they are (`drainHints`, `callOrigin`).
+  origin: callOrigin,
   fetchImpl: watchedFetch,
   // The real WebSocket, captured before `globalThis.WebSocket` was replaced
   // with the refusing guard: this is the ambient client's own event stream,
@@ -805,10 +909,10 @@ function releasePadCalls(id: number): void {
 const API_MD_PATH = join(import.meta.dir, "..", "..", "..", "sdk", "API.md");
 
 /**
- * Why `sleep` resolves. `elapsed` is the timer; the other two are the world
+ * Why `sleep` resolves. `elapsed` is the timer; the others are the world
  * interrupting a wait the model would want to react to.
  */
-export type SleepReason = "elapsed" | "attacked" | "died";
+export type SleepReason = "elapsed" | "attacked" | "died" | "chat";
 
 /**
  * The abandon-note sentence for a sleep of `ms` starting now, or undefined when
@@ -856,24 +960,50 @@ function withSleepAbandon(reason: unknown, note: string): Error {
 }
 
 /**
- * `sleep(ms)` — a timer that also wakes for the two things a sleeping snippet
+ * `sleep(ms)` — a timer that also wakes for the things a sleeping snippet
  * most needs to hear about, and says which happened.
  *
  * Sleep is blind: nothing about `await sleep(28000)` notices a mob walking up
  * behind the character, and the trajectories are full of 28-second naps that
  * ended in a corpse. So the timer additionally resolves early when the server
  * says a unit started attacking *us* (`SMSG_ATTACKSTART` with our guid as the
- * victim) or when our own health is observed reaching zero, and the resolved
- * value names the reason. Ignoring the value costs nothing, and an early
- * resolve is harmless inside `Promise.race([routine, sleep(ms)])` — the race's
- * whole point is that the first settle wins.
+ * victim) or a unit's spell hit us (`SMSG_SPELLNONMELEEDAMAGELOG` with our
+ * guid as the target and another unit as the caster — a caster never starts
+ * a melee attack, and one Deadmines rogue slept from 627 to 460 health under
+ * an Evoker's spells; the SDK observes no hostility, so "another unit" is the
+ * test, and only a hostile unit's spell can damage us), when our own health
+ * is observed reaching zero, or when another
+ * player says something to our group or to us (a party, raid or raid-warning
+ * line, or a whisper received — the party runs' sleeps were mostly polls of
+ * `state.chat`, and one slept through a resurrection offer), and the resolved
+ * value names the reason. Our own lines, our whisper's echo, creature speech
+ * and say/yell/emote/channel/system lines do not wake it. Ignoring the value
+ * costs nothing, and an early resolve is harmless inside
+ * `Promise.race([routine, sleep(ms)])` — the race's whole point is that the
+ * first settle wins.
  *
- * Two deliberate non-wakes:
+ * Three deliberate non-wakes:
  *   - `died` fires on the *transition* only. A snippet that sleeps while
  *     already dead (waiting out the corpse reclaim delay is the single most
  *     common long sleep in the runs) is not woken by the death it is already
  *     handling.
- *   - `{ wake: false }` is a pure timer for a caller that wants one.
+ *   - A spell hit wakes it only on the way *into* combat, as the melee wake
+ *     already does by construction (`SMSG_ATTACKSTART` comes once per new
+ *     attacker, not per swing). Every hit used to wake it, and in Deadmines
+ *     attempt a8 that turned a mage's `sleep(200)` cast loop into a busy loop
+ *     — 837 `not_ready` casts in twenty seconds, then a death. The sleep is
+ *     armed for spell hits when `UNIT_FLAG_IN_COMBAT` is clear on our own
+ *     `unitFlags` as it begins (an unobserved field reads as clear, the old
+ *     behaviour), and re-armed whenever the bit is seen clear during it. The
+ *     bit rising during the sleep never disarms it: aggro sets it before a
+ *     caster's first bolt lands, usually in the same server tick, so reading
+ *     it at the hit would sleep through exactly the caster wake this exists
+ *     for.
+ *   - `{ wake: false }` is a pure timer for a caller that wants one: nothing
+ *     wakes it, chat included. Chat used to wake it too, and in a8 the party
+ *     leader's lines cut 22 of the tank's 55 sleeps short, so every member
+ *     wrapped its timers in `while (Date.now() - t0 < N)` loops and none ever
+ *     read the reason.
  *
  * The ambient snippet signal still aborts it: an abandoned snippet's sleep
  * rejects rather than resolving. When the sleep was asked for at least the
@@ -883,6 +1013,15 @@ function withSleepAbandon(reason: unknown, note: string): Error {
  * for it — the sleep runs for exactly what it was asked (docs/METHODOLOGY.md,
  * "A deadline explains, never caps").
  */
+/** `UNIT_FLAG_IN_COMBAT` (AzerothCore `UnitDefines.h`): the bit a client reads for the combat icon on its own frame. */
+const UNIT_FLAG_IN_COMBAT = 0x0008_0000;
+
+/** The combat bit on our own `unitFlags`; false while no block has carried the field. */
+function selfInCombat(): boolean {
+  const flags = client.state.self.fields.get("unitFlags")?.value;
+  return typeof flags === "number" && (flags & UNIT_FLAG_IN_COMBAT) !== 0;
+}
+
 function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
   if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) {
     const shown = ms === undefined ? "undefined" : typeof ms === "number" ? String(ms) : typeof ms;
@@ -912,7 +1051,12 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
     // Already dead when the sleep started: this snippet is handling that death,
     // so only a *later* one wakes it.
     let deadAtLastCheck = selfDead();
+    // Armed for a spell-hit wake only while out of combat (see above): set as
+    // the sleep begins, re-armed by the bit seen clear, never disarmed.
+    let spellWakeArmed = !selfInCombat();
     let offAttack: (() => void) | undefined;
+    let offSpellHit: (() => void) | undefined;
+    let offChat: (() => void) | undefined;
     let offAny: (() => void) | undefined;
 
     const settle = (reason: SleepReason): void => {
@@ -923,6 +1067,8 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
       offAttack?.();
+      offSpellHit?.();
+      offChat?.();
       offAny?.();
     }
     function onAbort(): void {
@@ -932,16 +1078,30 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
     const timer = setTimeout(() => settle("elapsed"), ms);
     signal?.addEventListener("abort", onAbort, { once: true });
 
-    if (wakeOpt === false) return;
     // Registered after the client's own state fold (`onAny` handlers run in
-    // registration order and the cache is the first one), so both of these see
+    // registration order and the cache is the first one), so all of these see
     // a state cache that already has this event in it.
+    if (wakeOpt === false) return;
+    offChat = client.events.on("SMSG_MESSAGECHAT", (e) => {
+      const d = e.data as { type?: unknown; senderGuid?: unknown };
+      const me = client.state.self.guid;
+      const fromOther = me !== undefined && typeof d?.senderGuid === "string" && d.senderGuid !== me;
+      if (fromOther && isGroupOrWhisperChat(d)) settle("chat");
+    });
     offAttack = client.events.on("SMSG_ATTACKSTART", (e) => {
       const d = e.data as { victimGuid?: unknown };
       const me = client.state.self.guid;
       if (me !== undefined && typeof d?.victimGuid === "string" && d.victimGuid === me) settle("attacked");
     });
+    offSpellHit = client.events.on("SMSG_SPELLNONMELEEDAMAGELOG", (e) => {
+      const d = e.data as { targetGuid?: unknown; casterGuid?: unknown };
+      const me = client.state.self.guid;
+      if (me !== undefined && d?.targetGuid === me && typeof d?.casterGuid === "string" && d.casterGuid !== me) {
+        if (spellWakeArmed) settle("attacked");
+      }
+    });
     offAny = client.events.onAny(() => {
+      if (!selfInCombat()) spellWakeArmed = true;
       const dead = selfDead();
       if (!dead) {
         // Alive again (a reclaim, a resurrect): a later death is a new one.
@@ -1082,18 +1242,25 @@ async function evaluate(id: number, code: string, deadline?: number, timeoutMs?:
   const started = Date.now();
   const controller = new AbortController();
   evalControllers.set(id, controller);
+  noteSnippetHead(id, code);
   try {
     const compiled = compileSnippet(code);
+    // Tagged so a stack frame in this snippet's code names it (`callSiteLabel`).
+    const tag = `\n//# sourceURL=${SNIPPET_URL}${id}`;
     let fn: ((...args: unknown[]) => Promise<unknown>) | null = null;
+    let body = compiled.statementsBody;
     if (compiled.canTryExpression) {
       try {
         // Single-expression snippets get REPL semantics: their value comes back.
-        fn = new AsyncFunction(compiled.expressionBody);
+        fn = new AsyncFunction(compiled.expressionBody + tag);
+        body = compiled.expressionBody;
       } catch {
         fn = null;
       }
     }
-    fn ??= new AsyncFunction(compiled.statementsBody);
+    fn ??= new AsyncFunction(compiled.statementsBody + tag);
+    snippetBodies.set(id, body);
+    if (snippetBodies.size > SNIPPET_HEADS_MAX) snippetBodies.delete(snippetBodies.keys().next().value as number);
     const run = fn;
     const value: unknown = await evalContext.run({ evalId: id, signal: controller.signal, deadline, timeoutMs }, () =>
       run.call(globalThis),
@@ -1113,7 +1280,7 @@ async function evaluate(id: number, code: string, deadline?: number, timeoutMs?:
       id,
       ok: refused.length === 0,
       logs: drainLogs(),
-      hints: drainHints(),
+      hints: drainHints(id),
       durationMs: Date.now() - started,
     };
     if (refused.length > 0) msg.error = refused.map(renderError).join("\n");
@@ -1164,7 +1331,7 @@ async function evaluate(id: number, code: string, deadline?: number, timeoutMs?:
       // As with the logs: an abandoned eval's result is discarded host-side, so
       // its hints must stay in the SDK's tally for the pong that follows.
       logs: controller.signal.aborted ? [] : drainLogs(),
-      hints: controller.signal.aborted ? [] : drainHints(),
+      hints: controller.signal.aborted ? [] : drainHints(id),
       durationMs: Date.now() - started,
     });
   } finally {
@@ -1184,6 +1351,7 @@ function abortEval(id: number): void {
   if (controller === undefined) return;
   evalControllers.delete(id);
   releasePadCalls(id);
+  abandonedEval = id;
   abandonUnwind = new Promise((resolve) => abandonUnwindSettled.set(id, resolve));
   controller.abort(new Error(`snippet abandoned by the harness (timeout); pending waits cancelled`));
 }
@@ -1461,7 +1629,72 @@ function seedClientCache(frames: readonly unknown[]): void {
 
 type StreamEventOf = ReturnType<typeof client.events.recent>[number];
 
+/**
+ * What the child adds to a spell combat-log line as it arrives (context.ts,
+ * `spellLogNote` and `spellLogShown`): the combat-log sentence, named from
+ * what is in view at that moment — a mob killed a second later has left
+ * `nearby` by the time a turn renders the window — and whether the line is a
+ * bystander's, which the event window leaves out. Keyed by the event object
+ * itself, which the SDK's buffer and every listener share.
+ */
+const spellLogMarks = new WeakMap<StreamEventOf, { note: string | undefined; bystander: boolean }>();
+
+/** A unit's name as a client would show it: in view, else a name-query answer, else the party list's. */
+function observedName(guid: string): string | undefined {
+  const state = client.state;
+  return (
+    state.nearby.get(guid)?.name?.value ??
+    state.nameOf(guid) ??
+    state.group()?.members.find((m) => m.guid === guid)?.name
+  );
+}
+
+client.events.onAny((event) => {
+  if (!SPELL_LOG_OPCODES.has(event.opcode)) return;
+  const me = client.state.self.guid;
+  const party = new Set((client.state.group()?.members ?? []).map((m) => m.guid));
+  spellLogMarks.set(event, {
+    note: spellLogNote(event.opcode, event.data, me, observedName),
+    bystander: !spellLogShown(event.opcode, event.data, me, party),
+  });
+});
+
+// ------------------------------------------------------------ snippet delta
+
+/**
+ * What changed since the previous snippet result, latched as events arrive
+ * (`snippet-delta.ts`) for the host to drain once per `run_snippet` result on
+ * a driver that renders it. Every child records it, bounded; a fixed-loop
+ * child is simply never drained. Registered after the client's own state fold
+ * and the spell-log marks, so its readings are of a cache that already holds
+ * the event, and a melee attacker is named while it is still in view.
+ */
+const snippetDelta = new SnippetDeltaRecorder({
+  selfGuid: () => client.state.self.guid,
+  level: () => {
+    const v = client.state.self.level?.value;
+    return typeof v === "number" ? v : undefined;
+  },
+  group: () => client.state.group(),
+  memberUnit: (guid) => {
+    const o = client.state.nearby.get(guid);
+    if (o === undefined) return undefined;
+    const health = o.fields.get("health")?.value;
+    return {
+      guid,
+      health,
+      maxHealth: o.fields.get("maxHealth")?.value,
+      dead: health === undefined ? undefined : health === 0,
+      ghost: memberGhost(o.fields.get("playerFlags")?.value),
+    };
+  },
+  questLog: () => client.state.questLog,
+  nameOf: observedName,
+});
+client.events.onAny((event) => snippetDelta.observe(event));
+
 function eventSummary(e: StreamEventOf): EventSummary {
+  const mark = spellLogMarks.get(e);
   return {
     seq: e.seq,
     ts: e.ts,
@@ -1469,6 +1702,8 @@ function eventSummary(e: StreamEventOf): EventSummary {
     data: toJsonSafe(e.data, 5),
     schemaError:
       "schemaError" in e && e.schemaError !== undefined ? String(e.schemaError) : undefined,
+    ...(mark?.note !== undefined ? { note: mark.note } : {}),
+    ...(mark?.bystander === true ? { bystander: true as const } : {}),
   };
 }
 
@@ -1505,6 +1740,8 @@ client.events.onAny((event) => {
     contextAmbient++;
     return;
   }
+  // A bystander's spell combat-log line: off the window, and not ambient.
+  if (spellLogMarks.get(event)?.bystander === true) return;
   contextSignals++;
   contextRing.push({ event, ambientBefore: contextAmbient });
   if (contextRing.length > CONTEXT_EVENT_CAP) contextRing.shift();
@@ -1528,13 +1765,48 @@ function contextEvents(limit: number): ContextEvents {
  * `units()` (nearest-first, items/containers
  * dropped — with mob health/maxHealth deliberately stripped, since CONTRACTS.md
  * forbids exact mob health and the HUD only needs name, distance, dead, roles,
- * questgiver marker and target), `bag()`
+ * questgiver marker and target; a party member in view keeps its health and
+ * ghost flag for the party line), the party with its party frames
+ * (`group()`), `bag()`
  * (backpack shape with freeSlots), and the open-window fold over the retained
  * event stream. All are pure reads over what the cache already holds — no
  * new observation. This JSON is consumed only by the HUD, never returned raw.
  */
+/** `PLAYER_FLAGS_GHOST` on another player's `playerFlags`; undefined when no block has carried the field. */
+function memberGhost(playerFlags: number | undefined): boolean | undefined {
+  return playerFlags === undefined ? undefined : (playerFlags & 0x10) !== 0;
+}
+
+/** A party member's unit as its party frame reads it: health, the power bar with the raw `powerType` that picks it, and ghost. */
+function memberFrame(guid: string, health: number | undefined, maxHealth: number | undefined): Record<string, unknown> {
+  const unit = client.state.nearby.get(guid);
+  return {
+    health,
+    maxHealth,
+    power: unit?.power?.value.current,
+    maxPower: unit?.power?.value.max,
+    powerType: unit?.fields.get("powerType")?.value,
+    ghost: memberGhost(unit?.fields.get("playerFlags")?.value),
+  };
+}
+
+/**
+ * Whose corpse it is, by the owner guid on the corpse (`CORPSE_FIELD_OWNER`):
+ * the name query's answer, else the party roster's name for that member.
+ * Undefined while neither has named it, or when the owner was not served.
+ */
+function corpseOwnerName(owner: string | undefined, group: ReturnType<typeof client.state.group>): string | undefined {
+  if (owner === undefined) return undefined;
+  return client.state.nameOf(owner) ?? group?.members.find((m) => m.guid === owner)?.name;
+}
+
 function stateSnapshot(): unknown {
   const snap = toJsonSafe(client.state.snapshot(), 6) as Record<string, unknown>;
+  // The party with each member's party frame (`group().members[i].stats`),
+  // whole: the snapshot's depth cut would reach into its zone and position.
+  const group = client.state.group();
+  snap["group"] = toJsonSafe(group, 8);
+  const members = new Set((group?.members ?? []).map((m) => m.guid));
   const units = client.state.units().map((u) => ({
     guid: u.guid,
     name: u.name,
@@ -1542,12 +1814,22 @@ function stateSnapshot(): unknown {
     level: u.level,
     distance: u.distance,
     dead: u.dead,
+    // The elite dragon a client draws round the portrait, for the nearby line.
+    rank: u.rank,
+    // A player's corpse is named by its owner, as a client's tooltip names it.
+    ...(u.type === "corpse" ? { ownerName: corpseOwnerName(u.ownerGuid, group) } : {}),
     roles: u.roles,
     // The marker and the target, for which six the nearby line names
     // (`pickNearby` in context.ts): both are what the client draws, a `!`/`?`
     // over the NPC and a unit's own selection.
     questGiver: u.questGiver,
     targetGuid: u.targetGuid,
+    // A party member in view: its health, its power and whether it is a
+    // ghost, for the HUD's party line, as a client's party frame reads them
+    // off the unit (the frame's bars are the player's own health and power;
+    // it is mob health the contract keeps exact numbers off). Never carried
+    // for anything else.
+    ...(members.has(u.guid) ? memberFrame(u.guid, u.health, u.maxHealth) : {}),
   }));
   snap["units"] = toJsonSafe(units, 4);
   snap["bag"] = toJsonSafe(client.state.bag(), 4);
@@ -1587,12 +1869,14 @@ function handle(msg: HostToChild | HostcallResult): void {
         const pong = (): void => {
           const note = abandonNote;
           abandonNote = undefined;
+          const abandoned = abandonedEval;
+          abandonedEval = undefined;
           flushActions();
           send({
             t: "pong",
             id: msg.id,
             logs: drainLogs(),
-            hints: drainHints(),
+            hints: drainHints(abandoned),
             ...(note !== undefined ? { note } : {}),
           });
         };
@@ -1615,6 +1899,8 @@ function handle(msg: HostToChild | HostcallResult): void {
                   ? partyWatcher.drain()
                 : msg.method === "action_hints"
                   ? drainHints()
+                : msg.method === "snippet_delta"
+                  ? snippetDelta.drain()
                   : msg.method === "trace_drain"
                     ? traceRecorder.drain()
                     : msg.method === "nearby_drain"

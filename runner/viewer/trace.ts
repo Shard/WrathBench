@@ -471,6 +471,11 @@ function chatLines(data: Record<string, unknown> | null): TraceChat[] {
   return (v as unknown[]).map(chatOf).filter((c): c is TraceChat => c !== undefined);
 }
 
+/** A trace row's chat lines from its stored `data` text, sanitized as a segment's are; empty when it carries none. */
+export function chatOfRowData(text: string | null): TraceChat[] {
+  return chatLines(parseData(text));
+}
+
 /** A turn-in event's ids, or `undefined` when `v` is not a list of them. */
 function qdoneOf(v: unknown): number[] | undefined {
   if (!Array.isArray(v)) return undefined;

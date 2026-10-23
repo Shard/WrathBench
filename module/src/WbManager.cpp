@@ -842,6 +842,10 @@ namespace WrathBench
         { "CMSG_GROUP_DISBAND", CMSG_GROUP_DISBAND },
         { "CMSG_GROUP_SET_LEADER", CMSG_GROUP_SET_LEADER },
         { "CMSG_LOOT_METHOD", CMSG_LOOT_METHOD },
+        // the party frame's own refresh of one member (body u64 guid,
+        // unpacked); answered with SMSG_PARTY_MEMBER_STATS_FULL, or with
+        // the offline form for a guid not in the party
+        { "CMSG_REQUEST_PARTY_MEMBER_STATS", CMSG_REQUEST_PARTY_MEMBER_STATS },
         // group loot roll: the need/greed/pass/disenchant
         // button on the roll frame SMSG_LOOT_START_ROLL opened (body u64 roll
         // guid, u32 slot, u8 vote); the SDK's lootRoll builds it
@@ -1488,32 +1492,43 @@ namespace WrathBench
     // server's record of the last flag the module sent (Player::IsInWater,
     // which ProcessMovementInfo keeps from the packets). Never on a
     // transport: a deck is not water.
-    static void SendMovePacket(BenchSession& s, Player* player, uint16 opcode, uint32 moveFlags,
-        float x, float y, float z, float o, Transport* transport = nullptr)
+    //
+    // AppendMovementInfo is the MovementInfo alone, shared with the forced-root
+    // acks (AnswerForceRoot), whose body is packGUID, the echoed counter, then
+    // this same MovementInfo: one writer, so an ack can never disagree with the
+    // walk about the transport block or the swimming flag.
+    static void AppendMovementInfo(WorldPacket& p, BenchSession& s, Player* player, uint32 moveFlags,
+        float x, float y, float z, float o, Transport* transport)
     {
         if (transport)
             moveFlags |= MOVEMENTFLAG_ONTRANSPORT;
         bool const swimming = !transport && (s.move.active ? s.move.swimming : player->IsInWater());
         if (swimming)
             moveFlags |= MOVEMENTFLAG_SWIMMING;
-        WorldPacket* p = new WorldPacket(opcode, 8 + 4 + 2 + 4 + 16 + 8 + 16 + 4 + 1 + 4 + 4);
-        *p << player->GetPackGUID();
-        *p << uint32(moveFlags);
-        *p << uint16(0);            // flags2
-        *p << uint32(getMSTime());
-        *p << float(x) << float(y) << float(z) << float(o);
+        p << uint32(moveFlags);
+        p << uint16(0);             // flags2
+        p << uint32(getMSTime());
+        p << float(x) << float(y) << float(z) << float(o);
         if (transport)
         {
             float lx = x, ly = y, lz = z, lo = o;
             transport->CalculatePassengerOffset(lx, ly, lz, &lo);
-            *p << transport->GetPackGUID();
-            *p << float(lx) << float(ly) << float(lz) << float(lo);
-            *p << uint32(transport->GetPathProgress());
-            *p << int8(-1);         // seat: none (not a vehicle)
+            p << transport->GetPackGUID();
+            p << float(lx) << float(ly) << float(lz) << float(lo);
+            p << uint32(transport->GetPathProgress());
+            p << int8(-1);          // seat: none (not a vehicle)
         }
         if (swimming)
-            *p << float(0.0f);      // pitch: level, swimming along the surface
-        *p << uint32(0);            // fallTime
+            p << float(0.0f);       // pitch: level, swimming along the surface
+        p << uint32(0);             // fallTime
+    }
+
+    static void SendMovePacket(BenchSession& s, Player* player, uint16 opcode, uint32 moveFlags,
+        float x, float y, float z, float o, Transport* transport = nullptr)
+    {
+        WorldPacket* p = new WorldPacket(opcode, 8 + 4 + 2 + 4 + 16 + 8 + 16 + 4 + 1 + 4 + 4);
+        *p << player->GetPackGUID();
+        AppendMovementInfo(*p, s, player, moveFlags, x, y, z, o, transport);
         s.ws->QueuePacket(p);
     }
 
@@ -2164,22 +2179,42 @@ namespace WrathBench
             // target, and splice. The z-ladder and midpoint retries models used
             // to hand-roll (travel.ts) live here now — pathing detail, not a
             // decision the agent should have to make.
-            bool nonTrivial = pts.size() >= 2;
+            //
+            // Where the mesh got is the partial path's last point, except when
+            // that point is the request itself: a corridor of the start
+            // polygon alone ends there (FindSmoothPath's same-polygon case
+            // steers to the request and appends it once it reaches the
+            // polygon's edge), and so does a shortcut (BuildShortcut: SHORT,
+            // NOPATH). That point is not on any route; a subdivision from it
+            // is the request to itself, trivially complete, and the splice
+            // walked the straight line between (71y from the Deadmines pool
+            // toward a patrol, through a hollow 15y from any polygon, where
+            // the character was then start_off_mesh). So the
+            // request is left off, and the mesh got no farther than the point
+            // before it.
+            size_t got = pts.size();
+            if (got >= 2)
+            {
+                float const dx = pts[got - 1].x - x, dy = pts[got - 1].y - y;
+                if (dx * dx + dy * dy < 0.01f)
+                    --got;
+            }
+            bool nonTrivial = got >= 2;
             if (nonTrivial)
             {
                 G3D::Vector3 const& a = pts.front();
-                G3D::Vector3 const& b = pts.back();
+                G3D::Vector3 const& b = pts[got - 1];
                 nonTrivial = (a - b).squaredLength() > 1.0f;
             }
             if (nonTrivial)
             {
-                G3D::Vector3 const& mid = pts.back();
+                G3D::Vector3 const& mid = pts[got - 1];
                 PathGenerator leg2(player);
                 bool built2 = leg2.CalculatePath(mid.x, mid.y, mid.z, x, y, z, false);
                 if (built2 && IsCompletePath(leg2.GetPathType(), leg2.GetPath()) && endpointOk(leg2))
                 {
-                    for (auto const& v : pts)
-                        r.points.push_back({v.x, v.y, v.z});
+                    for (size_t i = 0; i < got; ++i)
+                        r.points.push_back({pts[i].x, pts[i].y, pts[i].z});
                     Movement::PointsArray const& pts2 = leg2.GetPath();
                     for (size_t i = 1; i < pts2.size(); ++i) // pts2[0] == mid
                         r.points.push_back({pts2[i].x, pts2[i].y, pts2[i].z});
@@ -2584,6 +2619,24 @@ namespace WrathBench
             Audit(*s, "action", a.Str());
         }
 
+        if (s->rooted.load())
+        {
+            // A rooted client cannot move: nothing is sent, not even the stop a
+            // redirect sends (the root ack was the stop). A walk the tick has
+            // not ended yet ends `rooted` here, and the request is refused with
+            // the same status after its ack, as a refusal at planning is.
+            if (s->move.active)
+                FinishMove(*s, "rooted");
+            uint64_t const moveId = ++s->moveIdGen;
+            s->move.moveId = moveId;
+            ack->set_value({200, Json::Writer().Add("ok", true).Add("action", "move_to").Add("moveId", moveId).Str()});
+            Json::Writer w;
+            w.Add("moveId", moveId).Add("status", "rooted");
+            w.Raw("pos", PosJson(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation()));
+            EmitEvent(*s, "WB_MOVE_RESULT", 0xFF01, w.Str());
+            return;
+        }
+
         if (s->move.active)
         {
             // A client whose run is redirected stops first: without this the
@@ -2858,7 +2911,13 @@ namespace WrathBench
 
         Audit(*s, "action", Json::Writer().Add("op", "stop").Str());
 
-        if (s->move.active)
+        if (s->move.active && s->rooted.load())
+        {
+            // Rooted mid-walk and the tick has not ended it yet: the root ack
+            // already stopped the character where the mover stood.
+            FinishMove(*s, "rooted");
+        }
+        else if (s->move.active)
         {
             MoveState& m = s->move;
             // Stop where the "client" is (the interpolated position); the server
@@ -2884,6 +2943,10 @@ namespace WrathBench
         if (!player)
             return;
 
+        // A walk is forward running, and a client running forward travels
+        // where it faces: a facing sent mid-walk would either not match the
+        // travel (no client sends that) or bend the walk off its planned path.
+        // Refused, nothing sent (PROTOCOL.md "face").
         if (s->move.active)
             return ack->set_value({409, Json::Writer().Add("ok", false).Add("error", "moving").Str()});
 
@@ -2947,8 +3010,13 @@ namespace WrathBench
         {
             uint32 spellId = static_cast<uint32>(req.GetInt("spellId"));
             uint64_t target = ParseGuid(req, "targetGuid");
+            // castCount is the client's own counter (BenchSession::castCount):
+            // with 0 the core skips its in-progress check (Spell::prepare) and
+            // a cast sent during another cancels it, where a client's is
+            // refused SPELL_FAILED_SPELL_IN_PROGRESS.
+            uint8 const castCount = s->NextCastCount();
             p = new WorldPacket(CMSG_CAST_SPELL, 1 + 4 + 1 + 4 + 9);
-            *p << uint8(0) << uint32(spellId) << uint8(0);   // castCount, spellId, castFlags
+            *p << uint8(castCount) << uint32(spellId) << uint8(0);   // castCount, spellId, castFlags
             if (target)
             {
                 *p << uint32(0x0002);                        // TARGET_FLAG_UNIT
@@ -2956,7 +3024,7 @@ namespace WrathBench
             }
             else
                 *p << uint32(0);                             // TARGET_FLAG_NONE (self/auto target)
-            auditW.Add("spellId", spellId);
+            auditW.Add("spellId", spellId).Add("castCount", (uint32)castCount);
             if (target)
                 auditW.AddGuid("targetGuid", target);
         }
@@ -3174,8 +3242,11 @@ namespace WrathBench
             uint32 startQuest = proto ? proto->StartQuest : 0;
             if (spellId)
             {
+                // The same client cast counter as cast_spell's: the core hands
+                // it to the item's spell (Player::CastItemUseSpell), whose
+                // in-progress check skips a 0 the same way.
                 p = new WorldPacket(CMSG_USE_ITEM, 1 + 1 + 1 + 4 + 8 + 4 + 1 + 4 + 9);
-                *p << uint8(bag) << uint8(slot) << uint8(0) << uint32(spellId);
+                *p << uint8(bag) << uint8(slot) << uint8(s->NextCastCount()) << uint32(spellId);
                 *p << uint64(item->GetGUID().GetRawValue()) << uint32(0) << uint8(0);
                 if (target)
                 {
@@ -4177,6 +4248,16 @@ namespace WrathBench
             return;
         }
 
+        // Rooted or stunned (OnRootPacket): a client that is told so stops,
+        // and its root ack already carried the stop at the mover's point, so
+        // the move ends here with no further packet. After the death check:
+        // dying roots too (Player::KillPlayer), and a death is `interrupted`.
+        if (s.rooted.load())
+        {
+            FinishMove(s, "rooted");
+            return;
+        }
+
         int64_t dt = nowMs - m.lastMs;
         m.lastMs = nowMs;
         if (dt <= 0)
@@ -4572,6 +4653,117 @@ namespace WrathBench
         }
     }
 
+    // Forced roots. Unit::SendMoveRoot roots a client-controlled unit by
+    // packet alone: SMSG_FORCE_MOVE_ROOT / SMSG_FORCE_MOVE_UNROOT (packGUID,
+    // u32 movement counter) to the controlling client, which stops, answers
+    // CMSG_FORCE_MOVE_ROOT_ACK / CMSG_FORCE_MOVE_UNROOT_ACK and from then on
+    // keeps itself still until the unroot; the server trusts it to. Stuns
+    // arrive the same way (Unit::SetStunned -> SetRooted -> SendMoveRoot), and
+    // so do death (Player::KillPlayer) and its end (BuildPlayerRepop,
+    // ResurrectPlayer). A unit the client does not control (feared, confused)
+    // is rooted server-side instead: MOVEMENTFLAG_ROOT set in place and
+    // SMSG_SPLINE_MOVE_ROOT / UNROOT (packGUID alone) sent to the set, the
+    // character's own client included. Only an unroot ack clears a
+    // server-side ROOT once control is back (WorldSession::HandleMoveRootAck),
+    // and while ROOT stands the core drops every movement packet
+    // (VerifyMovementInfo), so a client that never answers is wedged for good:
+    // the Deadmines fear-then-stun case.
+    //
+    // The ack is queued here, in the tap, the moment the server sends the
+    // packet: in arrival order behind whatever the session already queued, and
+    // before a far teleport later on can bump the map-change counter past it
+    // (HandleMoveRootAck ignores a counter at or below
+    // Player::GetMapChangeOrderCounter). Where the unroot and the far teleport
+    // are one handler call (the repop's graveyard port to another map) no
+    // client's ack can arrive in time; the ack is still sent, as a client
+    // sends it.
+    void Manager::OnRootPacket(BenchSession& s, WorldSession* ws, uint16_t opcode, WorldPacket const& packet)
+    {
+        Player* player = ws->GetPlayer();
+        if (!player)
+            return;
+        uint64_t const self = player->GetGUID().GetRawValue();
+        WorldPacket p(packet);
+        try
+        {
+            if (opcode == SMSG_MULTIPLE_MOVES)
+            {
+                // Player::SendInitialPacketsAfterAddToMap (login, far port):
+                // u32 size, then per sub-packet u8 length (opcode + body), u16
+                // opcode, body. Only the root is read; the rest is skipped.
+                uint32 size = 0; p >> size;
+                while (p.rpos() + 3 <= p.size())
+                {
+                    uint8 len = 0; uint16 sub = 0;
+                    p >> len >> sub;
+                    size_t const end = p.rpos() + (len >= 2 ? len - 2 : 0);
+                    if (sub == SMSG_FORCE_MOVE_ROOT || sub == SMSG_FORCE_MOVE_UNROOT)
+                    {
+                        uint64 guid = 0; p.readPackGUID(guid);
+                        uint32 counter = 0; p >> counter;
+                        if (guid == self)
+                        {
+                            s.rooted.store(sub == SMSG_FORCE_MOVE_ROOT);
+                            AnswerForceRoot(s, ws, sub == SMSG_FORCE_MOVE_ROOT, guid, counter);
+                        }
+                    }
+                    if (end > p.size())
+                        break;
+                    p.rpos(end);
+                }
+                return;
+            }
+            uint64 guid = 0; p.readPackGUID(guid);
+            if (guid != self)
+                return; // a vehicle or a charmed mover: never driven by the module
+            bool const root = opcode == SMSG_FORCE_MOVE_ROOT || opcode == SMSG_SPLINE_MOVE_ROOT;
+            s.rooted.store(root);
+            if (opcode == SMSG_FORCE_MOVE_ROOT || opcode == SMSG_FORCE_MOVE_UNROOT)
+            {
+                uint32 counter = 0; p >> counter;
+                AnswerForceRoot(s, ws, root, guid, counter);
+            }
+        }
+        catch (std::exception const&)
+        {
+            // A short packet (ByteBufferException): nothing to answer.
+        }
+    }
+
+    // The ack's body, as WorldSession::HandleMoveRootAck reads it: packGUID,
+    // the echoed u32 counter, then a MovementInfo where the character is now,
+    // with no moving flag (a rooted client has stopped) and MOVEMENTFLAG_ROOT
+    // on the root ack only (ReadMovementInfo strips it on arrival anyway). The
+    // server applies that MovementInfo (HandleMoverRelocation), so a root ack
+    // during a walk is the walk's stop: it carries the mover's own point, where
+    // this "client" stands, and the tick then ends the move `rooted` with no
+    // further packet. Outside a walk it is the server's position. Reading the
+    // mover here is safe: the tap runs during the core's session and map
+    // updates, which the world script update (the mover's tick) never overlaps.
+    void Manager::AnswerForceRoot(BenchSession& s, WorldSession* ws, bool root, uint64_t guid, uint32_t counter)
+    {
+        Player* player = ws->GetPlayer();
+        if (!player || player->GetGUID().GetRawValue() != guid)
+            return;
+        MoveState const& m = s.move;
+        bool const walking = m.active && !m.inFall;
+        float const x = walking ? m.curX : player->GetPositionX();
+        float const y = walking ? m.curY : player->GetPositionY();
+        float const z = walking ? m.curZ : player->GetPositionZ();
+        float const o = walking ? m.curO : player->GetOrientation();
+        Transport* transport = walking ? FindTransportAt(player->GetMap(), x, y, z) : player->GetTransport();
+        uint16 const opcode = root ? CMSG_FORCE_MOVE_ROOT_ACK : CMSG_FORCE_MOVE_UNROOT_ACK;
+        WorldPacket* p = new WorldPacket(opcode, 8 + 4 + 4 + 2 + 4 + 16 + 8 + 16 + 4 + 1 + 4 + 4);
+        *p << player->GetPackGUID();
+        *p << uint32(counter);
+        AppendMovementInfo(*p, s, player, root ? MOVEMENTFLAG_ROOT : MOVEMENTFLAG_NONE, x, y, z, o, transport);
+        ws->QueuePacket(p);
+        Audit(s, "action", Json::Writer().Add("op", "root_ack")
+            .Add("opcode", root ? "CMSG_FORCE_MOVE_ROOT_ACK" : "CMSG_FORCE_MOVE_UNROOT_ACK")
+            .Add("counter", counter).Add("moveId", walking ? m.moveId : uint64_t(0))
+            .Raw("pos", PosJson(x, y, z, o)).Str());
+    }
+
     // A real client sends MSG_CORPSE_QUERY once it is a ghost (after the repop
     // teleport lands), and draws the answer as the corpse marker on its map.
     // The parked client has no map, so the module issues the same one-shot
@@ -4686,6 +4878,12 @@ namespace WrathBench
             tmp << counter << uint32(getMSTime());
             ws->QueuePacket(new WorldPacket(std::move(tmp), GameTime::Now()));
         }
+
+        // Forced and spline roots: the rooted state, and the client's ack.
+        if (opcode == SMSG_FORCE_MOVE_ROOT || opcode == SMSG_FORCE_MOVE_UNROOT
+            || opcode == SMSG_SPLINE_MOVE_ROOT || opcode == SMSG_SPLINE_MOVE_UNROOT
+            || opcode == SMSG_MULTIPLE_MOVES)
+            OnRootPacket(*s, ws, opcode, packet);
 
         // Keep the client-side object cache in sync with destroys.
         if (opcode == SMSG_DESTROY_OBJECT && packet.size() >= 8)
@@ -5153,7 +5351,7 @@ namespace WrathBench
     };
     struct PendingGuids
     {
-        GuidHalves target, summonedBy, createdBy, charmedBy;
+        GuidHalves target, summonedBy, createdBy, charmedBy, corpseOwner;
     };
 
     // An item's random property (ITEM_FIELD_RANDOM_PROPERTIES_ID, PUBLIC):
@@ -5391,6 +5589,19 @@ namespace WrathBench
                 }
             }
         }
+        else if (typeId == TYPEID_CORPSE)
+        {
+            // Whose corpse this is (CORPSE_FIELD_OWNER, PUBLIC; bones keep
+            // it too, Map::ConvertCorpseToBones): the guid a client
+            // name-queries to label "<name>'s corpse".
+            if (index == CORPSE_FIELD_OWNER)     { g.corpseOwner.lo = v; g.corpseOwner.hasLo = true; return true; }
+            if (index == CORPSE_FIELD_OWNER + 1) { g.corpseOwner.hi = v; g.corpseOwner.hasHi = true; return true; }
+            // CORPSE_FIELD_FLAGS (PUBLIC), raw: CORPSE_FLAG_BONES is what a
+            // client reads to draw bones rather than a body. Bones are a new
+            // object under the corpse's guid, created after the corpse's
+            // destroy with the flag set (Map::ConvertCorpseToBones).
+            if (index == CORPSE_FIELD_FLAGS) { f.Add("corpseFlags", v); return true; }
+        }
         else if (typeId == TYPEID_GAMEOBJECT)
         {
             switch (index)
@@ -5416,7 +5627,8 @@ namespace WrathBench
             f.AddGuid(key, uint64_t(h.lo) | (uint64_t(h.hi) << 32));
     }
 
-    static std::string DecodeValuesBlock(WorldPacket& p, uint8 typeId, uint32* entryOut, uint32* petNumberOut = nullptr)
+    static std::string DecodeValuesBlock(WorldPacket& p, uint8 typeId, uint32* entryOut, uint32* petNumberOut = nullptr,
+        uint64_t* corpseOwnerOut = nullptr)
     {
         uint8 blockCount; p >> blockCount;
         uint32 mask[64]; // m_valuesCount caps far below 64*32 fields
@@ -5440,6 +5652,9 @@ namespace WrathBench
         AddPendingGuid(f, "summonedByGuid", g.summonedBy);
         AddPendingGuid(f, "createdByGuid", g.createdBy);
         AddPendingGuid(f, "charmedByGuid", g.charmedBy);
+        AddPendingGuid(f, "corpseOwnerGuid", g.corpseOwner);
+        if (corpseOwnerOut && (g.corpseOwner.hasLo || g.corpseOwner.hasHi))
+            *corpseOwnerOut = uint64_t(g.corpseOwner.lo) | (uint64_t(g.corpseOwner.hi) << 32);
         return f.Str();
     }
 
@@ -5500,7 +5715,8 @@ namespace WrathBench
                          .Add("objectType", TypeIdName(typeId));
                         DecodeMovementBlockUpd(p, o);
                         uint32 entry = 0, petNumber = 0;
-                        std::string fields = DecodeValuesBlock(p, typeId, &entry, &petNumber);
+                        uint64_t corpseOwner = 0;
+                        std::string fields = DecodeValuesBlock(p, typeId, &entry, &petNumber, &corpseOwner);
                         o.Raw("fields", fields);
                         {
                             std::lock_guard<std::mutex> lock(s.objMutex);
@@ -5513,6 +5729,11 @@ namespace WrathBench
                                 gameObjectQueries.emplace_back(entry, guid);
                             if (typeId == TYPEID_PLAYER && s.queriedNames.insert(guid).second)
                                 nameQueries.push_back(guid);
+                            // A corpse's owner may never have been in view
+                            // (released and gone before we arrived): the
+                            // client asks its name off the corpse, as here.
+                            if (typeId == TYPEID_CORPSE && corpseOwner && s.queriedNames.insert(corpseOwner).second)
+                                nameQueries.push_back(corpseOwner);
                             if ((typeId == TYPEID_ITEM || typeId == TYPEID_CONTAINER)
                                 && entry && s.queriedItems.insert(entry).second)
                                 itemQueries.push_back(entry);
@@ -5692,11 +5913,52 @@ namespace WrathBench
             w.Add("name", info->SpellName[0]);
     }
 
+    // The forms a Spell.dbc shapeshift mask names: bit n-1 is form n
+    // (SpellInfo::CheckShapeshift reads it the same way).
+    static std::string FormListJson(uint32 mask)
+    {
+        std::string out = "[";
+        for (uint32 form = 1; form <= 32; ++form)
+            if (mask & (1u << (form - 1)))
+            {
+                if (out.size() > 1) out += ',';
+                out += std::to_string(form);
+            }
+        return out + "]";
+    }
+
+    // A spellbook row's stance facts, as the client's own Spell.dbc has them:
+    // the forms the spell may be cast in (`stances`) and may not
+    // (`stancesNot`), and the form a form-changing spell puts the caster in
+    // (`form`, its SPELL_AURA_MOD_SHAPESHIFT misc value), so a refusal can
+    // name the stance from the book. Read from the DBC store, not SpellInfo,
+    // which the server corrects for itself (SpellInfoCorrections). Each is
+    // omitted when the DBC says nothing. Spellbook rows only: AddSpellFields
+    // rides on every aura and cast event, which have no use for it.
+    static void AddSpellbookFields(Json::Writer& w, uint32 spellId)
+    {
+        AddSpellFields(w, spellId);
+        SpellEntry const* e = sSpellStore.LookupEntry(spellId);
+        if (!e)
+            return;
+        if (e->Stances)
+            w.Raw("stances", FormListJson(e->Stances));
+        if (e->StancesNot)
+            w.Raw("stancesNot", FormListJson(e->StancesNot));
+        for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+            if (e->Effect[i] == SPELL_EFFECT_APPLY_AURA && e->EffectApplyAuraName[i] == SPELL_AURA_MOD_SHAPESHIFT
+                && e->EffectMiscValue[i] > 0)
+            {
+                w.Add("form", (uint32)e->EffectMiscValue[i]);
+                break;
+            }
+    }
+
     static std::string SpellJson(uint32 spellId)
     {
         Json::Writer w;
         w.Add("spellId", spellId);
-        AddSpellFields(w, spellId);
+        AddSpellbookFields(w, spellId);
         return w.Str();
     }
 
@@ -6122,6 +6384,69 @@ namespace WrathBench
                      .Add("spellId", spellId).Add("auraType", auraType).Add("amount", amount);
                     break;
                 }
+                // The combat log's direct spell lines: what a client prints as
+                // "X's Fireball hits you for 54 Fire damage". All three are
+                // sent to every client in range (SendMessageToSet), the
+                // reflect form of the damage log to the reflector alone.
+                case SMSG_SPELLNONMELEEDAMAGELOG:
+                {
+                    // Unit::SendSpellNonMeleeDamageLog / SendSpellNonMeleeReflectLog:
+                    // target packGUID, caster packGUID, u32 spell, u32 damage,
+                    // u32 overkill, u8 school mask, u32 absorb, u32 resist,
+                    // u8 physicalLog, u8 unused, u32 blocked, u32 hitInfo
+                    // (SpellHitType), u8 debug flag. The debug rolls the flag
+                    // would introduce are commented out in the builder at the
+                    // pinned commit, so the flag is the last byte read.
+                    name = "SMSG_SPELLNONMELEEDAMAGELOG";
+                    uint64 target = 0, caster = 0;
+                    p.readPackGUID(target);
+                    p.readPackGUID(caster);
+                    uint32 spellId, damage, overkill; p >> spellId >> damage >> overkill;
+                    uint8 schoolMask; p >> schoolMask;
+                    uint32 absorb, resist; p >> absorb >> resist;
+                    uint8 physicalLog, unused; p >> physicalLog >> unused;
+                    uint32 blocked, hitInfo; p >> blocked >> hitInfo;
+                    uint8 debug; p >> debug;
+                    w.AddGuid("targetGuid", (uint64_t)target).AddGuid("casterGuid", (uint64_t)caster)
+                     .Add("spellId", spellId);
+                    AddSpellFields(w, spellId);
+                    w.Add("damage", damage).Add("overkill", overkill).Add("schoolMask", (uint32)schoolMask)
+                     .Add("absorb", absorb).Add("resist", resist).Add("blocked", blocked)
+                     .Add("hitInfo", hitInfo).Add("crit", (hitInfo & SPELL_HIT_TYPE_CRIT) != 0);
+                    break;
+                }
+                case SMSG_SPELLHEALLOG:
+                {
+                    // Unit::SendHealSpellLog: target packGUID, healer packGUID,
+                    // u32 spell, u32 heal, u32 overheal, u32 absorb, u8 crit,
+                    // u8 unused.
+                    name = "SMSG_SPELLHEALLOG";
+                    uint64 target = 0, caster = 0;
+                    p.readPackGUID(target);
+                    p.readPackGUID(caster);
+                    uint32 spellId, amount, overheal, absorb; p >> spellId >> amount >> overheal >> absorb;
+                    uint8 crit, unused; p >> crit >> unused;
+                    w.AddGuid("targetGuid", (uint64_t)target).AddGuid("casterGuid", (uint64_t)caster)
+                     .Add("spellId", spellId);
+                    AddSpellFields(w, spellId);
+                    w.Add("amount", amount).Add("overheal", overheal).Add("absorb", absorb).Add("crit", crit != 0);
+                    break;
+                }
+                case SMSG_SPELLENERGIZELOG:
+                {
+                    // Unit::SendEnergizeSpellLog: target packGUID, caster
+                    // packGUID, u32 spell, u32 power type, u32 amount.
+                    name = "SMSG_SPELLENERGIZELOG";
+                    uint64 target = 0, caster = 0;
+                    p.readPackGUID(target);
+                    p.readPackGUID(caster);
+                    uint32 spellId, powerType, amount; p >> spellId >> powerType >> amount;
+                    w.AddGuid("targetGuid", (uint64_t)target).AddGuid("casterGuid", (uint64_t)caster)
+                     .Add("spellId", spellId);
+                    AddSpellFields(w, spellId);
+                    w.Add("powerType", powerType).Add("amount", amount);
+                    break;
+                }
                 case SMSG_AURA_UPDATE:
                 case SMSG_AURA_UPDATE_ALL:
                 {
@@ -6195,7 +6520,7 @@ namespace WrathBench
                     name = "SMSG_LEARNED_SPELL";
                     uint32 spellId; p >> spellId;
                     w.Add("spellId", spellId);
-                    AddSpellFields(w, spellId);
+                    AddSpellbookFields(w, spellId);
                     break;
                 }
                 case SMSG_REMOVED_SPELL:
@@ -6212,7 +6537,7 @@ namespace WrathBench
                     name = "SMSG_SUPERCEDED_SPELL";
                     uint32 oldId, newId; p >> oldId >> newId;
                     w.Add("supersededSpellId", oldId).Add("spellId", newId);
-                    AddSpellFields(w, newId);
+                    AddSpellbookFields(w, newId);
                     break;
                 }
                 case SMSG_SPELL_COOLDOWN:
@@ -6710,6 +7035,85 @@ namespace WrathBench
                         w.Add("lootMethod", (uint32)lootMethod).AddGuid("looterGuid", (uint64_t)looter)
                          .Add("lootThreshold", (uint32)threshold).Add("dungeonDifficulty", (uint32)dungeonDiff)
                          .Add("raidDifficulty", (uint32)raidDiff);
+                    }
+                    break;
+                }
+                case SMSG_PARTY_MEMBER_STATS:
+                case SMSG_PARTY_MEMBER_STATS_FULL:
+                {
+                    // The party frames of a member out of sight: the delta
+                    // Group::UpdatePlayerOutOfRange sends (WorldSession::
+                    // BuildPartyMemberStatsChangedPacket) only to members out
+                    // of the sender's sight range or on another map, once per
+                    // update with the fields that changed, and the _FULL
+                    // reply to CMSG_REQUEST_PARTY_MEMBER_STATS
+                    // (HandleRequestPartyMemberStatsOpcode). _FULL leads with
+                    // a u8 0; then both are packed guid, u32 GROUP_UPDATE_FLAG
+                    // mask, and one field per set bit in bit order: STATUS u16
+                    // MEMBER_STATUS_*, CUR_HP u32, MAX_HP u32, POWER_TYPE u8,
+                    // CUR_POWER u16, MAX_POWER u16, LEVEL u16, ZONE u16,
+                    // POSITION u16 x, u16 y (the float position truncated
+                    // into 16 bits, so read signed: most of the world is at
+                    // negative coordinates), AURAS u64 slot mask then (u32
+                    // spell, u8 flags) per set slot (spell 0 clears the slot
+                    // in a delta). Pet and vehicle fields follow; they are
+                    // left unread, and `mask` still says they were there. A
+                    // member the server cannot find is answered with _FULL,
+                    // mask STATUS and status 0 (offline). zoneName is the
+                    // client's AreaTable.dbc name for the zone id, the text
+                    // a party frame tooltip shows; an aura's name is its
+                    // Spell.dbc name, as on SMSG_AURA_UPDATE.
+                    bool const full = opcode == SMSG_PARTY_MEMBER_STATS_FULL;
+                    name = full ? "SMSG_PARTY_MEMBER_STATS_FULL" : "SMSG_PARTY_MEMBER_STATS";
+                    if (full)
+                        { uint8 unk; p >> unk; }
+                    uint64 guid = 0; p.readPackGUID(guid);
+                    uint32 mask; p >> mask;
+                    w.AddGuid("guid", (uint64_t)guid).Add("full", full).Add("mask", mask);
+                    if (mask & 0x00000001)
+                        { uint16 v; p >> v; w.Add("status", (uint32)v); }
+                    if (mask & 0x00000002)
+                        { uint32 v; p >> v; w.Add("health", v); }
+                    if (mask & 0x00000004)
+                        { uint32 v; p >> v; w.Add("maxHealth", v); }
+                    if (mask & 0x00000008)
+                        { uint8 v; p >> v; w.Add("powerType", (uint32)v); }
+                    if (mask & 0x00000010)
+                        { uint16 v; p >> v; w.Add("power", (uint32)v); }
+                    if (mask & 0x00000020)
+                        { uint16 v; p >> v; w.Add("maxPower", (uint32)v); }
+                    if (mask & 0x00000040)
+                        { uint16 v; p >> v; w.Add("level", (uint32)v); }
+                    if (mask & 0x00000080)
+                    {
+                        uint16 v; p >> v;
+                        w.Add("zoneId", (uint32)v);
+                        auto it = _areaTable.find(v);
+                        if (it != _areaTable.end() && !it->second.name.empty())
+                            w.Add("zoneName", it->second.name);
+                    }
+                    if (mask & 0x00000100)
+                        { int16 x, y; p >> x >> y; w.Add("x", (int32)x).Add("y", (int32)y); }
+                    if (mask & 0x00000200)
+                    {
+                        uint64 auraMask; p >> auraMask;
+                        std::string auras = "[";
+                        for (uint32 slot = 0; slot < 64; ++slot)
+                        {
+                            if (!(auraMask & (uint64(1) << slot)))
+                                continue;
+                            uint32 spellId; uint8 flags; p >> spellId >> flags;
+                            Json::Writer a;
+                            a.Add("slot", slot).Add("spellId", spellId).Add("flags", (uint32)flags);
+                            if (spellId)
+                                if (SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId))
+                                    if (info->SpellName[0])
+                                        a.Add("name", info->SpellName[0]);
+                            if (auras.size() > 1) auras += ',';
+                            auras += a.Str();
+                        }
+                        auras += "]";
+                        w.Raw("auras", auras);
                     }
                     break;
                 }

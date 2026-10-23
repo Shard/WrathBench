@@ -86,6 +86,8 @@ import type {
   ModelRowView,
   ModelRunView,
   ModelsResponse,
+  PartyDetailView,
+  PartyStampView,
   PositionsResponse,
   ResultRun,
   ResultsResponse,
@@ -441,6 +443,57 @@ function projectItems(items: ItemSample[] | null): ItemSample[] | null {
       }));
 }
 
+/**
+ * A party member's stamp: the attempt's id (the run-id stem the members'
+ * ids share), which member, its role and place, and the size. Ids and one
+ * word of harness text each, field by field.
+ */
+function projectPartyStamp(p: PartyStampView): PartyStampView {
+  return {
+    id: p.id,
+    member: p.member,
+    size: p.size,
+    ...(p.role !== undefined ? { role: p.role } : {}),
+    ...(p.index !== undefined ? { index: p.index } : {}),
+  };
+}
+
+/**
+ * A party member's own records, which the party page and the group replay
+ * merge. The member list never carried an account; the kills are guids,
+ * entries and the creature's name, the deaths their times, the places ids and names, and the chat the
+ * member's own lines, which its trace windows already publish as the map's
+ * bubbles, with any credential shape masked as there (`projectTraceSegment`).
+ * Struck for the session token like the rest of the detail.
+ */
+function projectPartyDetail(p: PartyDetailView): PartyDetailView {
+  return {
+    id: p.id,
+    member: p.member,
+    role: p.role,
+    size: p.size,
+    members: p.members.map((m) => ({ member: m.member, role: m.role, runId: m.runId, character: m.character })),
+    instances: p.instances.map((i) => ({ ts: i.ts, event: i.event, map: i.map, from: i.from })),
+    kills: p.kills.map((k) => ({ ts: k.ts, victimGuid: k.victimGuid, entry: k.entry, name: k.name, self: k.self })),
+    chat: p.chat.map((c) => ({ ts: c.ts, text: maskCredentialShapes(c.text, REDACTED) })),
+    groups: p.groups.map((g) => ({ ts: g.ts, event: g.event, count: g.count })),
+    // When each death happened, for the party's timeline: the time only, a
+    // site's position and zone staying off as on `projectDeaths`.
+    deaths: p.deaths.filter((ts) => typeof ts === "number"),
+    where:
+      p.where === null
+        ? null
+        : {
+            ts: p.where.ts,
+            map: p.where.map,
+            zone: p.where.zone,
+            zoneName: p.where.zoneName,
+            area: p.where.area,
+            areaName: p.where.areaName,
+          },
+  };
+}
+
 function projectRunRow(r: RunRow): RunRow {
   return lean<RunRow>({
     runId: r.runId,
@@ -460,6 +513,8 @@ function projectRunRow(r: RunRow): RunRow {
     // name and the image a pod asked for stay off a public row.
     ...(r.campaignVersion !== undefined ? { campaignVersion: r.campaignVersion } : {}),
     ...(r.arm !== undefined ? { arm: r.arm } : {}),
+    // The run page's link to its party: absent on every run that is no member.
+    ...(r.party !== undefined ? { party: projectPartyStamp(r.party) } : {}),
     extra: r.extra,
     character: r.character,
     // The ids; `characterLabel` is the name the pair resolves to, and
@@ -594,6 +649,8 @@ function projectResultRun(r: ResultRun): ResultRun {
     cell: r.cell,
     ...(r.campaignVersion !== undefined ? { campaignVersion: r.campaignVersion } : {}),
     ...(r.arm !== undefined ? { arm: r.arm } : {}),
+    // How the runs table groups a party and the party page finds its members.
+    ...(r.party !== undefined ? { party: projectPartyStamp(r.party) } : {}),
     effort: r.effort,
     ...(r.compactWindow != null ? { compactWindow: r.compactWindow } : {}),
     harness: r.harness,
@@ -832,6 +889,8 @@ function projectSquare(sq: Square): Square {
     mismatchedStart: sq.mismatchedStart,
     builds: [...sq.builds],
     runIds: [...sq.runIds],
+    // Run-id stems, as public as the run ids they group.
+    ...(sq.parties !== undefined ? { parties: [...sq.parties] } : {}),
     ...(sq.want !== undefined ? { want: sq.want } : {}),
     ...(sq.settled !== undefined ? { settled: sq.settled } : {}),
     ...(sq.refused !== undefined ? { refused: sq.refused } : {}),
@@ -881,6 +940,7 @@ export function projectCampaigns(c: CampaignsResponse): PublicCampaignsResponse 
         shape: {
           objective: null,
           stopAtLevel: v.shape.stopAtLevel,
+          end: v.shape.end.map((e) => ("level" in e ? { level: e.level } : { kill: { entry: e.kill.entry } })),
           episodeMs: v.shape.episodeMs,
           idleMs: v.shape.idleMs,
           noXpMs: v.shape.noXpMs,
@@ -913,6 +973,7 @@ export function projectCampaigns(c: CampaignsResponse): PublicCampaignsResponse 
                 })),
               },
         state: v.state,
+        concluded: v.concluded,
         progress: { want: v.progress.want, done: v.progress.done, attempted: v.progress.attempted, capped: v.progress.capped, live: v.progress.live },
         columns: v.columns.map((col) => ({
           key: col.key,
@@ -1309,6 +1370,7 @@ export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
       ? { reflections: d.reflections.map((w) => ({ fromTurn: w.fromTurn, toTurn: w.toTurn })) }
       : {}),
     ...(d.character !== undefined ? { character: projectCharacter(d.character) } : {}),
+    ...(d.party !== undefined ? { party: projectPartyDetail(d.party) } : {}),
   });
 }
 

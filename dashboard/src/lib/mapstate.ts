@@ -26,8 +26,13 @@ import { mapsVisited } from "./replay";
 export interface MapSources {
   /** The feed on screen: the live poll's positions, or the replay cursor's. */
   feed: Accessor<readonly AgentPosition[]>;
-  /** The loaded track, when the page is replaying one. */
+  /** The loaded track, when the page is replaying one; in a party's replay, the member the map follows. */
   track: Accessor<TrackResponse | undefined>;
+  /**
+   * Every member's track, when the page is replaying a party (`/map?party=<id>`).
+   * Absent or undefined is a single run's replay, or live.
+   */
+  group?: Accessor<readonly TrackResponse[] | undefined>;
   /** The map an operator clicked a chip for, or null for "whatever fits". */
   pinned: Accessor<number | null>;
   /** The run whose pip was clicked. An id, not a reading: identity is stable. */
@@ -53,7 +58,22 @@ export function createMapState(src: MapSources): MapState {
    * Keyed on the track alone, so the O(n²) visit scan runs once per load and
    * never on a cursor tick.
    */
+  /*
+   * A party's every visited map, each counted by the members on it at the
+   * cursor, so a chip says where the others are. Visits are scanned once per
+   * load like a run's; the counts follow the feed.
+   */
+  const visited = createMemo<number[]>(() => {
+    const g = src.group?.();
+    if (g === undefined) return [];
+    return [...new Set(g.flatMap((t) => mapsVisited(t.points)))];
+  });
   const maps = createMemo<[number, number][]>(() => {
+    if (src.group?.() !== undefined) {
+      const counts = new Map(mapCounts(src.feed()));
+      const all = [...new Set([...visited(), ...counts.keys()])];
+      return all.map((m) => [m, counts.get(m) ?? 0] as [number, number]);
+    }
     const t = src.track();
     if (t !== undefined) return mapsVisited(t.points).map((m) => [m, 1] as [number, number]);
     return mapCounts(src.feed());
@@ -61,8 +81,27 @@ export function createMapState(src: MapSources): MapState {
 
   const count = createMemo(() => src.feed().length);
 
+  /*
+   * Replay follows the character rather than a click — there is one pip, and a
+   * selection that could go stale against the cursor would read as a bug. A
+   * party's replay follows the member picked, and the leader until one is.
+   */
+  const selected = createMemo<AgentPosition | null>(() => {
+    const list = src.feed();
+    if (src.group?.() !== undefined) {
+      const id = src.selectedId() ?? src.track()?.runId ?? null;
+      return list.find((p) => p.runId === id) ?? list[0] ?? null;
+    }
+    if (src.track() !== undefined) return list[0] ?? null;
+    const id = src.selectedId();
+    if (id === null) return null;
+    return list.find((p) => p.runId === id) ?? null;
+  });
+
+  /** The map the followed character stands on: the one a replay shows. */
   const cursorMap = createMemo<number | null>(() => {
     if (src.track() === undefined) return null;
+    if (src.group?.() !== undefined) return selected()?.map ?? null;
     return src.feed()[0]?.map ?? null;
   });
 
@@ -70,18 +109,6 @@ export function createMapState(src: MapSources): MapState {
     (prev) => chooseMap(maps(), prev, src.pinned(), cursorMap()),
     DEFAULT_MAP,
   );
-
-  /*
-   * Replay follows the character rather than a click — there is one pip, and a
-   * selection that could go stale against the cursor would read as a bug.
-   */
-  const selected = createMemo<AgentPosition | null>(() => {
-    const list = src.feed();
-    if (src.track() !== undefined) return list[0] ?? null;
-    const id = src.selectedId();
-    if (id === null) return null;
-    return list.find((p) => p.runId === id) ?? null;
-  });
 
   return { maps, count, cursorMap, activeMap, selected };
 }
@@ -97,6 +124,8 @@ export function createMapState(src: MapSources): MapState {
  */
 export interface MapWritables {
   setTrack: (track: TrackResponse | undefined) => void;
+  /** A party's tracks and its members, where the page replays parties. */
+  setGroup?: (tracks: undefined) => void;
   setCursor: (ts: number) => void;
   setPlaying: (on: boolean) => void;
   setPinned: (map: number | null) => void;
@@ -108,6 +137,7 @@ export interface MapWritables {
 /** Everything a replay leaves behind, unwound in one place. */
 export function clearReplayState(w: MapWritables): void {
   w.setTrack(undefined);
+  w.setGroup?.(undefined);
   w.setCursor(0);
   w.setPlaying(false);
   w.setPinned(null);

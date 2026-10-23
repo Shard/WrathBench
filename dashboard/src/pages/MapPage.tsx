@@ -81,7 +81,7 @@ import {
   placeLabel,
 } from "../lib/nearbyplayer";
 import { type LodLayer, ART_LAYER, LOD_MAX, MINIMAP_LAYER } from "@viewer/worldmap";
-import { fmtAge, fmtItems, fmtMoney, modelDisplay, num, shortHarness } from "../lib/format";
+import { fmtAge, fmtItems, fmtMoney, modelDisplay, num, shortHarness, shortRunId } from "../lib/format";
 import {
   type Speed,
   DEFAULT_SPEED,
@@ -104,7 +104,9 @@ import {
   ingestPositions,
   ingestIndex,
   ingestTrack,
+  ingestTracks,
   replaySpan,
+  replaySpans,
   liveCadence,
   replayCursorAt,
   replayReach,
@@ -125,7 +127,7 @@ import {
   type Pip,
   type Touch,
   type View,
-  colorOf,
+  colorOf as runColorOf,
   decimateRoute,
   defaultView,
   emptySideNote,
@@ -171,6 +173,7 @@ import {
   trackSpan,
 } from "../lib/replay";
 import { displayError, logError } from "../lib/errors";
+import { MEMBER_SLOTS, groupTrack, loadParty, memberClass, memberToken, partyHref, partyParam, type PartyView } from "../lib/party";
 
 const POLL_MS = 5000;
 
@@ -265,6 +268,13 @@ let REST_TINT = "#7b3fd6";
  * run" and the flight has to read as something else beside it.
  */
 let FLIGHT = "#bfe6ff";
+/**
+ * A party's member colours, the stylesheet's `--member-<n>` (`memberToken`),
+ * read with the rest of the theme. Five members of one model share one logo,
+ * so in a party's replay the colour is each member's identity: the ring round
+ * its puck, its route, its legend row.
+ */
+let MEMBER_COLORS: string[] = ["#e69f00", "#56b4e9", "#cc79a7", "#f0e442", "#009e73"];
 /** Whether the viewer asked for less motion; the glyph is drawn either way. */
 let reduceMotion = false;
 
@@ -294,10 +304,21 @@ export default function MapPage() {
    * them, so on a quiet fleet the link is the only way to any other map.
    */
   const [params, setParams] = useSearchParams();
-  const replayId = (): string | undefined => runParam(params.run);
+  /*
+   * `/map?party=<id>` is a party's replay: every member's track on one clock
+   * (`lib/party.ts`). It is the same feed swap as a run's, with five pips; a
+   * run id wins where a link names both.
+   */
+  const runId = (): string | undefined => runParam(params.run);
+  const partyId = (): string | undefined => (runId() === undefined ? partyParam(params.party) : undefined);
+  /** What the page is replaying, as one key: a run id, or the party's `party:<id>`. Undefined is live. */
+  const replayId = (): string | undefined => runId() ?? (partyId() === undefined ? undefined : `party:${partyId()}`);
 
   /* --- sources: the only writable state on the page --- */
-  const [track, setTrack] = createSignal<TrackResponse | undefined>(undefined);
+  const [single, setSingle] = createSignal<TrackResponse | undefined>(undefined);
+  /** A party's tracks, in member order, and the party they are; undefined outside a party's replay. */
+  const [group, setGroup] = createSignal<readonly TrackResponse[] | undefined>(undefined);
+  const [party, setParty] = createSignal<PartyView | undefined>(undefined);
   const [cursor, setCursor] = createSignal(0);
   const [playing, setPlaying] = createSignal(false);
   // Playback speed is a viewer preference, not replay state: it survives the
@@ -307,6 +328,33 @@ export default function MapPage() {
   const [feedList, setFeedList] = createSignal<readonly AgentPosition[]>([]);
   const [pinnedMap, setPinnedMap] = createSignal<number | null>(null);
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
+  /** Every replayed track: the run's, or each member's. Empty live. */
+  const replayed = createMemo<readonly TrackResponse[]>(() => {
+    const g = group();
+    if (g !== undefined) return g;
+    const s = single();
+    return s === undefined ? [] : [s];
+  });
+  /** The replayed track the map follows: the run's; in a party's, the member picked, the leader until one is. */
+  const track = createMemo<TrackResponse | undefined>(() => {
+    const g = group();
+    if (g === undefined) return single();
+    const id = selectedId();
+    return g.find((t) => t.runId === id) ?? g[0];
+  });
+  /** What the transport steps over and the cursor is remembered under: the run's track, or the party's merged one. */
+  const playTrack = createMemo<TrackResponse | undefined>(() => {
+    const g = group();
+    const id = partyId();
+    return g === undefined || id === undefined ? single() : groupTrack(id, g);
+  });
+  /** A party member's place in the party, by run id; undefined for any other run. */
+  const memberIndex = createMemo(() => new Map((party()?.members ?? []).map((m) => [m.runId, m.index])));
+  /** A run's colour on the canvas: a party member's own, any other run's hue. */
+  const colorOf = (id: string): string => {
+    const i = memberIndex().get(id);
+    return i === undefined ? runColorOf(id) : MEMBER_COLORS[i % MEMBER_SLOTS]!;
+  };
   // The sidebar's "last update" ages between polls, so it needs its own tick.
   const ageTick = useClock();
   /*
@@ -395,19 +443,21 @@ export default function MapPage() {
   const { maps, count, cursorMap, activeMap, selected } = createMapState({
     feed: feedList,
     track,
+    group,
     pinned: pinnedMap,
     selectedId,
   });
 
-  /** What the replay scrubs over: the points and the trace together (`replaySpan`). */
+  /** What the replay scrubs over: the points and the trace together (`replaySpan`), every member's in a party. */
   const span = createMemo(() => {
     traceRev();
-    const t = track();
-    return t === undefined ? null : replaySpan(t, store);
+    const ts = replayed();
+    if (ts.length === 0) return null;
+    return ts.length === 1 ? replaySpan(ts[0]!, store) : replaySpans(ts, store);
   });
-  /** The replay's idle stretches, compressed in playback (`advanceCursor`). Once per track. */
+  /** The replay's idle stretches, compressed in playback (`advanceCursor`): where no member moved. Once per load. */
   const idle = createMemo(() => {
-    const t = track();
+    const t = playTrack();
     return t === undefined ? [] : idleSpans(t.points);
   });
   /** A replay is scrubbable only where its samples span some time. */
@@ -591,6 +641,7 @@ export default function MapPage() {
     INTENT_FAIL = get("--err", "#f7768e");
     REST_TINT = get("--xp", "#7b3fd6");
     FLIGHT = get("--flight", "#bfe6ff");
+    MEMBER_COLORS = Array.from({ length: MEMBER_SLOTS }, (_, i) => get(memberToken(i), MEMBER_COLORS[i]!));
     needsDraw = true;
   }
 
@@ -668,7 +719,6 @@ export default function MapPage() {
    * toward its newest reading otherwise. Whether anything moved.
    */
   function placePips(t: number | null): boolean {
-    const tr = track();
     const fine = traceDrives();
     let moved = false;
     const walking: Pip[] = [];
@@ -678,7 +728,9 @@ export default function MapPage() {
         moved = place(pip, pose.map, pose.x, pose.y, pose.o, pose.flying) || moved;
         continue;
       }
-      const coarse = tr !== undefined && t !== null ? trackPoseAt(tr.points, segmentKinds(), t, IDLE_GAP_MS) : null;
+      // Each replayed pip by its own track: a party's five are five tracks.
+      const tr = trackById().get(pip.runId);
+      const coarse = tr !== undefined && t !== null ? trackPoseAt(tr.points, kindsOf(pip.runId), t, IDLE_GAP_MS) : null;
       if (coarse !== null) {
         moved = place(pip, coarse.map, coarse.x, coarse.y, null, false) || moved;
         continue;
@@ -751,7 +803,12 @@ export default function MapPage() {
     if (t === null) return;
     const tr = track();
     if (tr !== undefined) {
-      if (traceDrives()) store.pump(tr.runId, t, fetchSegment, { ...replayReach(speed()), ends: true });
+      if (!traceDrives()) return;
+      // The followed member first, so the windows it needs are the first asked for.
+      store.pump(tr.runId, t, fetchSegment, { ...replayReach(speed()), ends: true });
+      for (const other of replayed()) {
+        if (other.runId !== tr.runId) store.pump(other.runId, t, fetchSegment, { ...replayReach(speed()), ends: true });
+      }
       return;
     }
     for (const pip of onMap()) store.pump(pip.runId, t, fetchSegment, LIVE_REACH);
@@ -969,7 +1026,7 @@ export default function MapPage() {
     routeSrc = route;
     routeScale = view.scale;
     const minDist = worldPerPixel(view.scale);
-    routeDrawn = route.map((r) => ({ kind: r.kind, points: decimateRoute(r.points, minDist) }));
+    routeDrawn = route.map((r) => ({ ...r, points: decimateRoute(r.points, minDist) }));
     return routeDrawn;
   }
 
@@ -989,7 +1046,7 @@ export default function MapPage() {
         if (i === 0) ctx.moveTo(p.sx, p.sy);
         else ctx.lineTo(p.sx, p.sy);
       }
-      ctx.strokeStyle = run.kind === "flight" ? FLIGHT : routeColor;
+      ctx.strokeStyle = run.kind === "flight" ? FLIGHT : (run.color ?? routeColor);
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
@@ -1006,7 +1063,7 @@ export default function MapPage() {
    */
   function routeToPip(tr: TrackResponse, map: number, t: number, pip: Pip | undefined): RouteRun[] {
     if (pip !== undefined && pip.o !== null) return [];
-    const kinds = segmentKinds();
+    const kinds = kindsOf(tr.runId);
     const runs = routeUpTo(tr.points, kinds, map, t, Math.max(0, indexAt(tr.points, cursor())));
     const i = indexAt(tr.points, t);
     const a = tr.points[i];
@@ -1394,9 +1451,19 @@ export default function MapPage() {
         ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
         ctx.fillStyle = "#ffffff";
         ctx.fill();
-        ctx.lineWidth = on ? 2 : 1;
-        ctx.strokeStyle = on ? theme.fg : theme.line;
+        // A party member's puck is ringed in its own colour: the logo is the
+        // same on all five, so the ring is what says which one this is.
+        const member = memberIndex().has(pip.runId);
+        ctx.lineWidth = member ? (on ? 4 : 3) : on ? 2 : 1;
+        ctx.strokeStyle = member ? colorOf(pip.runId) : on ? theme.fg : theme.line;
         ctx.stroke();
+        if (member && on) {
+          ctx.beginPath();
+          ctx.arc(p.sx, p.sy, r + 3, 0, Math.PI * 2);
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = theme.fg;
+          ctx.stroke();
+        }
         const s = on ? LOGO_SEL : LOGO;
         ctx.drawImage(logo, p.sx - s / 2, p.sy - s / 2, s, s);
       } else {
@@ -1538,8 +1605,13 @@ export default function MapPage() {
           // loop that scales with the length of a run. The stretch from where
           // it ends to the pip is the frame's own, a handful of points.
           drawRoute(ctx, drawnRoute());
-          const tr = track();
-          if (tr !== undefined && t !== null) drawRoute(ctx, routeToPip(tr, map, t, list[0]));
+          if (t !== null) {
+            for (const tr of replayed()) {
+              const pip = pips.get(tr.runId);
+              const color = colorOf(tr.runId);
+              drawRoute(ctx, routeToPip(tr, map, t, pip?.map === map ? pip : undefined).map((r) => ({ ...r, color })));
+            }
+          }
           trailsShown = t !== null && traceDrives() && drawTrails(ctx, list, map, t);
           const intents = drawIntents(ctx, list, map, t);
           if (intents || resting) drawIntentLegend(ctx, intents, resting);
@@ -1620,7 +1692,11 @@ export default function MapPage() {
     const returningToLive = leftReplay(id);
     const mine = ++trackToken;
     clearReplayState({
-      setTrack: (t) => setTrack(() => t),
+      setTrack: (t) => setSingle(() => t),
+      setGroup: () => {
+        setGroup(undefined);
+        setParty(undefined);
+      },
       setCursor,
       setPlaying,
       setPinned: setPinnedMap,
@@ -1671,21 +1747,69 @@ export default function MapPage() {
      * a tail. A window that closes meanwhile is listed by the next read and
      * the tail moves on past it (`setTail` keeps the old one until it lands).
      */
-    let tailTimer: ReturnType<typeof setInterval> | undefined;
-    onCleanup(() => clearInterval(tailTimer));
-    const refreshTail = (): void => {
-      api.traceIndex(id).then(
-        (index) => {
-          if (mine !== trackToken) return;
-          ingestIndex(store, id, index);
-          if (index.tail === null) clearInterval(tailTimer);
-        },
-        (e: unknown) => {
-          logError("map replay trace", e);
-          if ((e as { status?: unknown }).status === 404) clearInterval(tailTimer);
-        },
-      );
+    const timers: ReturnType<typeof setInterval>[] = [];
+    onCleanup(() => timers.forEach((t) => clearInterval(t)));
+    /** Keep one replayed run's open tail current, for as long as it has one. */
+    const followTail = (runId: string): void => {
+      let timer: ReturnType<typeof setInterval> | undefined;
+      const refresh = (): void => {
+        api.traceIndex(runId).then(
+          (index) => {
+            if (mine !== trackToken) return;
+            ingestIndex(store, runId, index);
+            if (index.tail === null) clearInterval(timer);
+          },
+          (e: unknown) => {
+            logError("map replay trace", e);
+            if ((e as { status?: unknown }).status === 404) clearInterval(timer);
+          },
+        );
+      };
+      refresh();
+      timer = setInterval(refresh, POLL_MS);
+      timers.push(timer);
     };
+    /**
+     * Where the loaded replay opens: where it was last left off, if it was —
+     * see cursormemory.ts. The route effect above has just cleared the cursor,
+     * so this is the one place a loaded track's cursor is chosen. At the
+     * start, it follows the start the trace reports (`followStart`).
+     */
+    const open = (play: TrackResponse): void => {
+      const resumed = cursorMemory.resume(play);
+      followStart = resumed === (trackSpan(play.points)?.from ?? 0);
+      setCursor(resumed);
+      mapFit.ask();
+      needsDraw = true;
+    };
+    const failed = (e: unknown): void => {
+      logError("map replay", e);
+      if (mine === trackToken) setReplayError(displayError(e));
+    };
+    const pid = partyId();
+    if (pid !== undefined) {
+      /*
+       * A party: its members off the listing (`loadParty`), then every
+       * member's track at once. A member whose track fails is left out
+       * rather than failing the four that loaded.
+       */
+      void loadParty(api, pid)
+        .then(async (view) => {
+          if (mine !== trackToken) return;
+          if (view === null) throw new Error(`no such party: ${pid}`);
+          const got = await Promise.all(view.members.map((m) => api.track(m.runId).catch(() => null)));
+          if (mine !== trackToken) return;
+          const tracks = got.filter((t): t is TrackResponse => t !== null);
+          if (tracks.length === 0) throw new Error(`no member of ${pid} has a track`);
+          ingestTracks(store, tracks);
+          for (const t of tracks) followTail(t.runId);
+          setParty(view);
+          setGroup(tracks);
+          open(groupTrack(pid, tracks));
+        })
+        .catch(failed);
+      return;
+    }
     void api
       .track(id)
       .then((t) => {
@@ -1693,23 +1817,11 @@ export default function MapPage() {
         // The run's closed windows, the only ones its replay will ask for.
         // A track from before the recorder lists none and plays coarse.
         ingestTrack(store, t);
-        refreshTail();
-        tailTimer = setInterval(refreshTail, POLL_MS);
-        setTrack(t);
-        // Where this run was last left off, if it was — see cursormemory.ts.
-        // The route effect above has just cleared the cursor, so this is the
-        // one place a loaded track's cursor is chosen. At the start, it
-        // follows the start the trace reports (`followStart`).
-        const resumed = cursorMemory.resume(t);
-        followStart = resumed === (trackSpan(t.points)?.from ?? 0);
-        setCursor(resumed);
-        mapFit.ask();
-        needsDraw = true;
+        followTail(id);
+        setSingle(t);
+        open(t);
       })
-      .catch((e: unknown) => {
-        logError("map replay", e);
-        if (mine === trackToken) setReplayError(displayError(e));
-      });
+      .catch(failed);
   });
 
   /**
@@ -1761,9 +1873,11 @@ export default function MapPage() {
    * into a signal it read in the same scope, so every tick re-entered itself.
    */
   createEffect(() => {
-    const t = track();
-    if (t !== undefined) {
-      const list = replayFeedAt(t, cursor());
+    const ts = replayed();
+    if (ts.length > 0) {
+      // Every replayed run at the cursor: one, or a party's members.
+      const at = cursor();
+      const list = ts.flatMap((t) => replayFeedAt(t, at));
       // A replayed sample's age is not a freshness claim; the plain arithmetic applies.
       feedClock = null;
       syncPips(pips, list, true);
@@ -1820,10 +1934,10 @@ export default function MapPage() {
    * How each step of the track was travelled, once per track: the
    * classification walks the whole run, and the cursor and map only slice it.
    */
-  const segmentKinds = createMemo(() => {
-    const t = track();
-    return t === undefined ? [] : classifySegments(t);
-  });
+  const segmentKinds = createMemo(() => new Map(replayed().map((t) => [t.runId, classifySegments(t)])));
+  /** The replayed tracks by run id, for the per-pip lookups in the frame loop. */
+  const trackById = createMemo(() => new Map(replayed().map((t) => [t.runId, t])));
+  const kindsOf = (runId: string): ReturnType<typeof classifySegments> => segmentKinds().get(runId) ?? [];
 
   /*
    * The drawn route, recomputed when its inputs move rather than per frame:
@@ -1834,16 +1948,17 @@ export default function MapPage() {
    */
   createEffect(() => {
     traceRev();
-    const t = track();
+    const tracks = replayed();
     const kinds = segmentKinds();
     const map = activeMap();
     const ts = cursor();
     const sp = span();
-    if (t === undefined) {
-      route = [];
-    } else {
+    // memberIndex() is read through colorOf: a party's routes take the members' colours.
+    const next: RouteRun[] = [];
+    for (const t of tracks) {
       const id = t.runId;
-      const coarse = routeUpTo(t.points, kinds, map, ts, 0, (i) => store.covers(id, t.points[i]!.ts) && store.covers(id, t.points[i + 1]!.ts));
+      const color = colorOf(id);
+      const coarse = routeUpTo(t.points, kinds.get(id) ?? [], map, ts, 0, (i) => store.covers(id, t.points[i]!.ts) && store.covers(id, t.points[i + 1]!.ts));
       const fine: RouteRun[] =
         sp === null
           ? []
@@ -1851,9 +1966,10 @@ export default function MapPage() {
               .path(id, sp.from, ts)
               .filter((r) => r.map === map)
               .map((r) => ({ kind: r.flight ? "flight" : "walk", points: r.points }));
-      route = [...coarse, ...fine];
+      for (const r of [...coarse, ...fine]) next.push({ ...r, color });
     }
-    routeColor = colorOf(t?.runId ?? "");
+    route = next;
+    routeColor = colorOf(track()?.runId ?? "");
     needsDraw = true;
   });
 
@@ -1864,8 +1980,9 @@ export default function MapPage() {
    * deliberate moves, never from an effect, because the route swap zeroes the
    * cursor on the way out and an effect would record that).
    */
+  // A party's transport is the party's: its merged points and its own memory key (`playTrack`).
   const seek = (ts: number): void => {
-    const t = track();
+    const t = playTrack();
     if (t === undefined) return;
     followStart = false;
     setCursor(ts);
@@ -1877,14 +1994,14 @@ export default function MapPage() {
     setPlaying(false);
   };
   const stepBack = (): void => {
-    const t = track();
+    const t = playTrack();
     if (t === undefined) return;
     halt();
     const prev = prevSampleBefore(t.points, cursor());
     if (prev !== undefined) seek(prev.ts);
   };
   const stepForward = (): void => {
-    const t = track();
+    const t = playTrack();
     if (t === undefined) return;
     halt();
     const next = nextSampleAfter(t.points, cursor());
@@ -2143,6 +2260,14 @@ export default function MapPage() {
    * character on another continent pins that continent first, the selection
    * kept, as a chip click would not keep it.
    */
+  /** Where a party member is at the cursor, for its legend row: the map, and dead or a ghost where the trace says so. */
+  const memberPlace = (p: AgentPosition): string => {
+    traceRev();
+    const t = sideAt();
+    const u = t === null || !traceDrives() ? null : store.unitAt(p.runId, t);
+    const state = u?.state.ghost === true ? " · ghost" : u?.state.dead === true ? " · dead" : "";
+    return `${mapName(p.map)}${state}`;
+  };
   const focusOn = (runId: string): void => {
     setSelectedId(runId);
     // The sidebar has just swapped the list for the character's sheet, and on
@@ -2221,7 +2346,8 @@ export default function MapPage() {
         </div>
         <PlayBar
           replayId={replayId()}
-          track={track()}
+          track={playTrack()}
+          party={party() === undefined ? undefined : { id: party()!.id, members: replayed().length }}
           replayError={replayError()}
           feedError={feed.error === undefined ? undefined : displayError(feed.error)}
           cursor={cursor()}
@@ -2254,8 +2380,34 @@ export default function MapPage() {
         >
           {(p) => (
             <>
+              {/*
+                A party's replay: the members as the legend, each where it is at
+                the cursor, and a click follows that member onto its map.
+              */}
+              <Show when={party()}>
+                {(pv) => (
+                  <>
+                    <h3>
+                      <A href={partyHref(pv().id)} title={pv().id}>
+                        party · {shortRunId(pv().id)}
+                      </A>
+                    </h3>
+                    <LiveList
+                      rows={feedList()}
+                      onPick={focusOn}
+                      member={(id) => memberIndex().get(id)}
+                      place={memberPlace}
+                      selectedId={p().runId}
+                    />
+                  </>
+                )}
+              </Show>
               <h3>
-                <span class="swatch" style={{ background: colorOf(p().runId) }} />
+                {memberIndex().has(p().runId) ? (
+                  <span class={`swatch ${memberClass(memberIndex().get(p().runId)!)}`} />
+                ) : (
+                  <span class="swatch" style={{ background: colorOf(p().runId) }} />
+                )}
                 <span title={p().runId}>{pipName(p())}</span>
               </h3>
               <div class="k">model</div>
@@ -2375,7 +2527,8 @@ export default function MapPage() {
                 <A class="btn" href={`/run/${encodeURIComponent(p().runId)}`}>
                   open run →
                 </A>
-                <Show when={replayHrefFor(track(), p())}>
+                {/* In a party's replay the run's own replay is the way to one member alone. */}
+                <Show when={replayHrefFor(group() === undefined ? track() : undefined, p())}>
                   {(href) => (
                     <A class="btn" href={href()}>
                       replay →

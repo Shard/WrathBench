@@ -155,6 +155,42 @@ export const groupListDataSchema = z.looseObject({
 });
 export type GroupListData = z.infer<typeof groupListDataSchema>;
 
+/** One aura slot as `SMSG_PARTY_MEMBER_STATS[_FULL]` carries it; `spellId` 0 clears the slot (a delta only). */
+export const partyMemberAuraSchema = z.looseObject({
+  slot: z.number(),
+  spellId: z.number(),
+  flags: z.number(),
+  name: z.string().optional(),
+});
+export type PartyMemberAuraData = z.infer<typeof partyMemberAuraSchema>;
+
+/**
+ * `SMSG_PARTY_MEMBER_STATS` / `_FULL`: the party frame of a member out of
+ * sight. `mask` is the wire's `GROUP_UPDATE_FLAG_*`; each field is present
+ * only when its bit was set, so a delta carries only what changed. `status`
+ * is `MEMBER_STATUS_*`; `x`/`y` are whole yards with no map; `full` is the
+ * answer to `CMSG_REQUEST_PARTY_MEMBER_STATS`, whose auras are the complete
+ * list and whose `powerType` is absent for mana.
+ */
+export const partyMemberStatsDataSchema = z.looseObject({
+  guid: guidSchema,
+  full: z.boolean(),
+  mask: z.number(),
+  status: z.number().optional(),
+  health: z.number().optional(),
+  maxHealth: z.number().optional(),
+  powerType: z.number().optional(),
+  power: z.number().optional(),
+  maxPower: z.number().optional(),
+  level: z.number().optional(),
+  zoneId: z.number().optional(),
+  zoneName: z.string().optional(),
+  x: z.number().optional(),
+  y: z.number().optional(),
+  auras: z.array(partyMemberAuraSchema).optional(),
+});
+export type PartyMemberStatsData = z.infer<typeof partyMemberStatsDataSchema>;
+
 // ------------------------------------------------------------------ mail
 
 /** `SMSG_SHOW_MAILBOX` / `SMSG_SHOW_BANK`: the frame opened for this guid. */
@@ -335,7 +371,13 @@ export const lootStartRollDataSchema = z.looseObject({
 });
 export type LootStartRollData = z.infer<typeof lootStartRollDataSchema>;
 
-/** `SMSG_LOOT_ROLL`: one counted vote. `roll` 1-100, or 128 for a pass; `rollType` 0 pass, 1 need, 2 greed, 3 disenchant. */
+/**
+ * `SMSG_LOOT_ROLL`: one counted vote. `roll` 1-100, or 128 for a pass; `rollType` 0 pass, 1 need, 2 greed, 3 disenchant.
+ * `rollGuid` is "0" on every counted vote: the core writes `ObjectGuid::Empty`
+ * there (`Group::CountRollVote` / `CountTheRoll`), and only the automatic pass
+ * at the roll's start carries the item's guid. `slot` and `itemId` name the
+ * roll, as they do for the client.
+ */
 export const lootRollDataSchema = z.looseObject({
   rollGuid: guidSchema,
   slot: z.number(),
@@ -347,7 +389,7 @@ export const lootRollDataSchema = z.looseObject({
 });
 export type LootRollData = z.infer<typeof lootRollDataSchema>;
 
-/** `SMSG_LOOT_ROLL_WON`: the roll is decided; the item goes to `winnerGuid`. */
+/** `SMSG_LOOT_ROLL_WON`: the roll is decided; the item goes to `winnerGuid`. `rollGuid` is always "0" (`Group::CountTheRoll`); `slot` and `itemId` name the roll. */
 export const lootRollWonDataSchema = z.looseObject({
   rollGuid: guidSchema,
   slot: z.number(),

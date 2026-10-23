@@ -20,6 +20,14 @@ export interface ActionHintNote {
   hint: string;
   point?: { x: number; y: number; z: number };
   ts: number;
+  /**
+   * Raised by code from an earlier snippet than the one this result is for (a
+   * routine it launched, or a late verdict on its own call): the routine
+   * that made the call (`call-site.ts`), else that snippet's opening code,
+   * whitespace folded and cut short; `""` when neither is known any more.
+   * Absent for the current snippet's own hints and for world events.
+   */
+  from?: string;
 }
 
 /**
@@ -191,7 +199,9 @@ export type HostToChild =
   /**
    * `action_hints` drains the SDK's hint tally for a tool result that is not a
    * snippet's (`SandboxHost.drainActionHints`); a snippet's own result and
-   * pong drain it themselves. `context_events` is the turn's event window: the
+   * pong drain it themselves. `snippet_delta` drains what changed since the
+   * last drain (`snippet-delta.ts`), once per snippet result on a driver that
+   * renders it (`SandboxHost.snippetDelta`). `context_events` is the turn's event window: the
    * last `limit` non-ambient events and how many ambient ones the span held
    * (`ContextEvents`). `trace_drain` empties the trace recorder's buffer
    * (`trace-recorder.ts`, a `TraceDrain`): record only, drained by the host's
@@ -210,6 +220,7 @@ export type HostToChild =
         | "flight_signals"
         | "party_signals"
         | "action_hints"
+        | "snippet_delta"
         | "trace_drain"
         | "nearby_drain";
       params: { limit?: number };
@@ -250,7 +261,8 @@ export interface EvalResultMsg {
 
 /**
  * The events a turn's context is built from: the last N events that are not
- * ambient movement (`CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE`), oldest first, and
+ * ambient movement (`CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE`) nor a bystander's
+ * spell combat-log line (`spellLogShown`, not counted as ambient), oldest first, and
  * how many ambient events arrived in the span they cover — from the oldest
  * one returned to now, or since the child started when every non-ambient
  * event it has seen is in the list.
@@ -267,6 +279,19 @@ export interface EventSummary {
   /** JSON-safe, depth-limited data. */
   data: unknown;
   schemaError?: string | undefined;
+  /**
+   * The combat-log sentence for a direct spell hit, heal or power gain
+   * (`spellLogNote` in context.ts), resolved in the child as the event
+   * arrived, while the units it names were still in view. Absent on every
+   * other event.
+   */
+  note?: string | undefined;
+  /**
+   * A spell combat-log line that involves neither us nor a party member's
+   * damage taken (`spellLogShown`): kept off the event window, shown on the
+   * raw stream.
+   */
+  bystander?: true | undefined;
 }
 
 // child -> host

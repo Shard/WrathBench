@@ -736,14 +736,14 @@ export const addKill = {
 };
 
 /** The quest list as a *gossip*-flagged questgiver answers it. */
-export function gossipWithQuests(questIds: readonly number[], seq = 45): unknown {
+export function gossipWithQuests(questIds: readonly number[], seq = 45, guid = CREATURE_GUID): unknown {
   return {
     seq,
     opcode: "SMSG_GOSSIP_MESSAGE",
     opcodeId: 0x17d,
     ts: 1_700_000_000_450,
     data: {
-      guid: CREATURE_GUID,
+      guid,
       menuId: 3,
       textId: 9,
       options: [{ optionId: 0, icon: 0, text: "fixture option" }],
@@ -753,14 +753,14 @@ export function gossipWithQuests(questIds: readonly number[], seq = 45): unknown
 }
 
 /** The same list as a plain questgiver answers it. */
-export function questGiverList(questIds: readonly number[], seq = 46): unknown {
+export function questGiverList(questIds: readonly number[], seq = 46, guid = CREATURE_GUID): unknown {
   return {
     seq,
     opcode: "SMSG_QUESTGIVER_QUEST_LIST",
     opcodeId: 0x185,
     ts: 1_700_000_000_460,
     data: {
-      guid: CREATURE_GUID,
+      guid,
       greeting: "fixture greeting",
       quests: questIds.map((questId) => ({
         questId,
@@ -820,14 +820,14 @@ export function offerReward(
   };
 }
 
-export function requestItems(questId: number, completable: boolean, seq = 48): unknown {
+export function requestItems(questId: number, completable: boolean, seq = 48, guid = CREATURE_GUID): unknown {
   return {
     seq,
     opcode: "SMSG_QUESTGIVER_REQUEST_ITEMS",
     opcodeId: 0x18b,
     ts: 1_700_000_000_480,
     data: {
-      guid: CREATURE_GUID,
+      guid,
       questId,
       title: "fixture quest",
       text: "fixture request text",
@@ -983,6 +983,101 @@ export function swing(attackerGuid: string, victimGuid: string, seq: number): un
       victimState: 1,
       miss: false,
       crit: false,
+    },
+  };
+}
+
+/**
+ * One direct spell hit as the module forwards `SMSG_SPELLNONMELEEDAMAGELOG`
+ * (PROTOCOL.md, "Spell combat log"): target first, then caster, the spell's
+ * Spell.dbc rank and name beside its id. The name is the fixture's own.
+ */
+export function spellDamage(
+  casterGuid: string,
+  targetGuid: string,
+  seq: number,
+  over: Record<string, unknown> = {},
+): unknown {
+  return {
+    seq,
+    opcode: "SMSG_SPELLNONMELEEDAMAGELOG",
+    opcodeId: 0x250,
+    ts: 1_700_000_000_000 + seq,
+    data: {
+      targetGuid,
+      casterGuid,
+      spellId: 9001,
+      rank: 1,
+      name: "Test Bolt",
+      damage: 54,
+      overkill: 0,
+      schoolMask: 4,
+      absorb: 0,
+      resist: 0,
+      blocked: 0,
+      hitInfo: 0,
+      crit: false,
+      ...over,
+    },
+  };
+}
+
+/** One direct heal as the module forwards `SMSG_SPELLHEALLOG`. */
+export function spellHeal(
+  casterGuid: string,
+  targetGuid: string,
+  seq: number,
+  over: Record<string, unknown> = {},
+): unknown {
+  return {
+    seq,
+    opcode: "SMSG_SPELLHEALLOG",
+    opcodeId: 0x150,
+    ts: 1_700_000_000_000 + seq,
+    data: {
+      targetGuid,
+      casterGuid,
+      spellId: 9002,
+      rank: 1,
+      name: "Test Mend",
+      amount: 120,
+      overheal: 0,
+      absorb: 0,
+      crit: false,
+      ...over,
+    },
+  };
+}
+
+/** One power gain as the module forwards `SMSG_SPELLENERGIZELOG`. */
+export function spellEnergize(casterGuid: string, targetGuid: string, seq: number, over: Record<string, unknown> = {}): unknown {
+  return {
+    seq,
+    opcode: "SMSG_SPELLENERGIZELOG",
+    opcodeId: 0x151,
+    ts: 1_700_000_000_000 + seq,
+    data: { targetGuid, casterGuid, spellId: 9003, rank: 1, name: "Test Surge", powerType: 1, amount: 10, ...over },
+  };
+}
+
+/** A player's corpse entering view, with its owner (`CORPSE_FIELD_OWNER`). */
+export function corpseCreate(corpseGuid: string, ownerGuid: string, seq: number): unknown {
+  return {
+    seq,
+    opcode: "SMSG_UPDATE_OBJECT",
+    opcodeId: 0x0a9,
+    ts: 1_700_000_000_000 + seq,
+    data: {
+      blocks: 1,
+      objects: [
+        {
+          update: "create",
+          guid: corpseGuid,
+          objectType: "corpse",
+          pos: { x: -8940, y: -130, z: 83.5, o: 0 },
+          fields: { scale: 1, corpseOwnerGuid: ownerGuid },
+        },
+      ],
     },
   };
 }

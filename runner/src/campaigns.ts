@@ -26,8 +26,15 @@
  *   the one tally, read by the scheduler and the campaigns page alike.
  * - **A finished campaign is not archived.** `enabled: false` stops the
  *   scheduling; the results stay visible while the definition is published.
+ *
+ * One verdict is the operator's rather than the tally's: a version the row
+ * lists in `concluded` is finished whatever its squares hold (operator,
+ * 2026-10-21: deadmines@1–3, cleared under @3, whose runs all ended as
+ * operator pauses). It launches and resumes nothing, and the page shows it
+ * complete with its counts as they were.
  */
 
+import { isEndReason } from "./end-conditions";
 import { z } from "zod";
 import { DEFAULT_DRIVER, driverHasCompactWindow } from "./config";
 import type { RunPodsMode } from "./models";
@@ -92,6 +99,17 @@ export const campaignRowSchema = z
      * endpoint produces no observation.
      */
     excludeUnhealthy: z.boolean().default(true),
+    /**
+     * Versions of this campaign the operator has declared finished, whichever
+     * version `version` names. Such a version owes nothing: no square of it
+     * launches and no paused run of it resumes, and the campaigns page shows
+     * it complete — marked as the operator's verdict — with the counts the
+     * runs made (operator, 2026-10-21).
+     */
+    concluded: z
+      .array(z.number().int().positive())
+      .refine((vs) => new Set(vs).size === vs.length, { message: "concluded lists a version twice" })
+      .optional(),
   })
   .strict();
 
@@ -123,6 +141,8 @@ export interface Campaign {
   /** The lane this campaign's launches bill (`campaigns.<id>.subscription`); absent: the assignment's own. */
   subscription?: string;
   excludeUnhealthy: boolean;
+  /** The versions of this id the operator declared finished (`campaigns.<id>.concluded`); empty when none. */
+  concluded: number[];
   /** The definition's cells and arms, here because every planner walks them. */
   cells: readonly CampaignCell[];
   arms: readonly CampaignArm[];
@@ -298,7 +318,7 @@ export function campaignRowProblem(name: string, spec: unknown): string | null {
   if (!CAMPAIGN_NAME.test(name)) return `campaign ${name}: the id must match ${CAMPAIGN_NAME}`;
   const parsed = campaignRowSchema.safeParse(spec);
   if (parsed.success) return null;
-  return `campaign ${name}: ${issuesOf(parsed.error)} — a row is { version, enabled, assignments [{ model, runsPerCell }], account?, accounts?, subscription?, excludeUnhealthy? }`;
+  return `campaign ${name}: ${issuesOf(parsed.error)} — a row is { version, enabled, assignments [{ model, runsPerCell }], account?, accounts?, subscription?, excludeUnhealthy?, concluded? }`;
 }
 
 /**
@@ -362,6 +382,7 @@ export function parseCampaigns(
       ...(accounts !== undefined ? { account: accounts[0]!, accounts: [...accounts] } : {}),
       ...(row.subscription !== undefined ? { subscription: row.subscription } : {}),
       excludeUnhealthy: row.excludeUnhealthy,
+      concluded: [...(row.concluded ?? [])],
       cells: def.cells,
       arms: def.arms,
       resume: def.resume,
@@ -421,6 +442,11 @@ export function parseCampaignBlocks(
   const c = parseCampaigns(rawRows, d.definitions);
   const pairs = roster === undefined ? [] : applyPairRefusals(c.campaigns, roster, launch);
   return { definitions: d.definitions, campaigns: c.campaigns, refused: [...d.refused, ...c.refused, ...pairs] };
+}
+
+/** Whether the operator declared this version of the campaign finished (`concluded`): it owes nothing. */
+export function isConcluded(c: Pick<Campaign, "concluded">, version: number): boolean {
+  return c.concluded.includes(version);
 }
 
 /** Look a published definition up by `id@version`. */
@@ -497,6 +523,17 @@ export interface ProbeRun {
   party?: { id: string; size: number } | null;
   /** The run's termination reason, which a party's count reads; null while it has none. */
   terminationReason?: string | null;
+  /**
+   * Whether the run reached its definition's end. Absent: it ended on an end
+   * reason (`isEndReason`). The viewer passes its own reading, which also
+   * takes a level run that got to the stop level.
+   */
+  reached?: boolean;
+}
+
+/** Whether one run reached its definition's end. */
+function runReached(r: ProbeRun): boolean {
+  return r.reached ?? isEndReason(r.terminationReason);
 }
 
 /**
@@ -507,8 +544,11 @@ export interface ProbeRun {
  * fate rather than voting: it was ended because another member's verdict
  * ended the attempt, so whether the attempt counts is that verdict's
  * question — an `episode-limit` counts, an `adapter-error` does not.
+ *
+ * Reached when it counts and a member reached the definition's end: the
+ * party-fate machine ends the rest on the same reason, so that is all five.
  */
-export function partyAttempt(members: readonly ProbeRun[]): { live: boolean; counted: boolean } {
+export function partyAttempt(members: readonly ProbeRun[]): { live: boolean; counted: boolean; reached: boolean } {
   const live = members.some((m) => m.live);
   const size = members.find((m) => m.party != null)?.party?.size ?? members.length;
   const own = members.filter((m) => m.terminationReason !== "party-ended");
@@ -518,7 +558,7 @@ export function partyAttempt(members: readonly ProbeRun[]): { live: boolean; cou
     !members.some((m) => m.terminationReason === "launch-failed") &&
     own.length > 0 &&
     own.every((m) => m.counted);
-  return { live, counted };
+  return { live, counted, reached: counted && members.some(runReached) };
 }
 
 /** One (assignment, arm, cell) of a campaign, and what is on disk for it. */
@@ -533,6 +573,8 @@ export interface CampaignSquare {
   want: number;
   /** Counted runs, uncapped. */
   done: number;
+  /** Of those, the ones that reached the definition's end (a party is one). */
+  reached: number;
   /** Launches, counted or not, live included. */
   attempts: number;
   live: number;
@@ -561,12 +603,13 @@ function squareKey(campaign: string, version: number, ref: string, arm: string, 
  * fact about this tick, not about the sweep (`campaignWork` applies it).
  */
 export function campaignSquares(c: Campaign, catalog: readonly string[], probeRuns: readonly ProbeRun[]): CampaignSquare[] {
-  const tally = new Map<string, { done: number; attempts: number; live: number }>();
-  const bump = (k: string, a: { live: boolean; counted: boolean }): void => {
-    const t = tally.get(k) ?? { done: 0, attempts: 0, live: 0 };
+  const tally = new Map<string, { done: number; reached: number; attempts: number; live: number }>();
+  const bump = (k: string, a: { live: boolean; counted: boolean; reached: boolean }): void => {
+    const t = tally.get(k) ?? { done: 0, reached: 0, attempts: 0, live: 0 };
     t.attempts++;
     if (a.live) t.live++;
     if (a.counted) t.done++;
+    if (a.counted && a.reached) t.reached++;
     tally.set(k, t);
   };
   // A party member is a fifth of one attempt: its square tallies the party.
@@ -575,7 +618,7 @@ export function campaignSquares(c: Campaign, catalog: readonly string[], probeRu
     if (r.campaign !== c.name || r.version !== c.version || r.cell === null || r.ref === null || r.arm === null) continue;
     const k = squareKey(r.campaign, r.version, r.ref, r.arm, r.cell);
     if (r.party == null) {
-      bump(k, r);
+      bump(k, { live: r.live, counted: r.counted, reached: runReached(r) });
       continue;
     }
     const p = parties.get(`${k}\u0000${r.party.id}`) ?? { key: k, members: [] };
@@ -587,7 +630,7 @@ export function campaignSquares(c: Campaign, catalog: readonly string[], probeRu
   for (const a of campaignAssignments(c, catalog)) {
     for (const cell of c.cells) {
       for (const arm of c.arms) {
-        const t = tally.get(squareKey(c.name, c.version, a.model, arm.id, cell.id)) ?? { done: 0, attempts: 0, live: 0 };
+        const t = tally.get(squareKey(c.name, c.version, a.model, arm.id, cell.id)) ?? { done: 0, reached: 0, attempts: 0, live: 0 };
         const capped = c.maxAttemptsPerCell !== undefined && t.attempts >= c.maxAttemptsPerCell;
         out.push({
           campaign: c.name,
@@ -597,6 +640,7 @@ export function campaignSquares(c: Campaign, catalog: readonly string[], probeRu
           cell,
           want: a.runsPerCell,
           done: t.done,
+          reached: t.reached,
           attempts: t.attempts,
           live: t.live,
           settled: t.done >= a.runsPerCell ? "done" : capped && t.live === 0 ? "capped" : null,
@@ -674,7 +718,8 @@ export interface CampaignWork {
  * A square is work while it is short of its counted runs and has not had its
  * `maxAttemptsPerCell` launches — a live launch counts toward the cap, so a
  * square at its cap is never launched again while its last attempt plays —
- * and while its (assignment, arm) pair is not refused.
+ * and while its (assignment, arm) pair is not refused. A version the operator
+ * concluded has no work at all, whatever its squares hold.
  */
 export function campaignWork(
   campaigns: readonly Campaign[],
@@ -684,7 +729,7 @@ export function campaignWork(
 ): CampaignWork[] {
   const out: (CampaignWork & { modelDone: number; armDone: number; aIdx: number; cIdx: number; armIdx: number })[] = [];
   campaigns.forEach((c, order) => {
-    if (!c.enabled) return;
+    if (!c.enabled || isConcluded(c, c.version)) return;
     const healthy = new Set(campaignAssignments(c, catalog, eligible).map((a) => a.model));
     const squares = campaignSquares(c, catalog, probeRuns);
     const modelDone = new Map<string, number>();

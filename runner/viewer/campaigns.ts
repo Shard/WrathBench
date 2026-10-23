@@ -8,7 +8,9 @@
  * version, cell, the roster name it was launched as and the arm — so a run
  * from before arms belongs to none and stays on the runs pages. Progress and
  * state come from `campaignSquares`, the same tally the scheduler derives its
- * work from, so "complete" and the numbers beside it cannot disagree.
+ * work from, so "complete" and the numbers beside it cannot disagree — except
+ * where the operator concluded a version (`concluded` on its id's row): that
+ * verdict is the state, said as one, and the counts stay what the runs made.
  *
  * The grid is a reading, never a ranking (docs/METHODOLOGY.md: `probing` has
  * no comparability group): cells keep the definition's order, columns the
@@ -22,6 +24,7 @@ import {
   armArg,
   campaignProgress,
   campaignSquares,
+  isConcluded,
   partyAttempt,
   type Campaign,
   type CampaignRefusal,
@@ -30,6 +33,7 @@ import {
   type PublishedCampaign,
 } from "../src/campaigns";
 import { harnessOfRun } from "../src/comparability";
+import { endConditionsOf, isEndReason, levelTargetOf } from "../src/end-conditions";
 import { DEFAULT_DRIVER } from "../src/drivers";
 import type { ArmSummary, CampaignView, ResultRun, Square } from "./api-types";
 
@@ -108,8 +112,14 @@ export function campaignsView(
 
   const campaigns = order.map((pub): CampaignView => {
     const def = pub.def;
-    const target = def.stopAtLevel;
+    const ends = endConditionsOf(def);
+    const target = levelTargetOf(ends);
+    /** A run that reached the definition's end: ended on an end reason, or (a level run) got to the stop level. */
+    const reachedRun = (r: ResultRun): boolean => isEndReason(r.terminationReason) || (target !== null && (r.maxLevel ?? 0) >= target);
     const row = roster.campaigns.find((c) => c.name === def.id && c.version === def.version);
+    // The operator's verdict, read off the id's row whichever version it now names.
+    const idRow = roster.campaigns.find((c) => c.name === def.id);
+    const concluded = idRow !== undefined && isConcluded(idRow, def.version);
     const mine = probes.filter((r) => r.campaign === def.id && (r.campaignVersion ?? null) === def.version);
     const isLive = (r: ResultRun): boolean => r.terminationReason === null;
     const probeRuns: ProbeRun[] = mine.map((r) => ({
@@ -120,7 +130,9 @@ export function campaignsView(
       arm: r.arm ?? null,
       counted: !isLive(r) && counted(r),
       live: isLive(r),
-      ...(r.party !== undefined ? { party: { id: r.party.id, size: r.party.size }, terminationReason: r.terminationReason } : {}),
+      terminationReason: r.terminationReason,
+      reached: !isLive(r) && reachedRun(r),
+      ...(r.party !== undefined ? { party: { id: r.party.id, size: r.party.size } } : {}),
     }));
     const probeOf = new Map(mine.map((r, i) => [r.runId, probeRuns[i]!]));
     /**
@@ -129,10 +141,11 @@ export function campaignsView(
      * says (`partyAttempt`), so the grid's numbers and the square's `want`
      * speak of the same thing.
      */
-    const attemptsOf = (runs: readonly ResultRun[]): { ended: number; counted: number; live: number } => {
+    const attemptsOf = (runs: readonly ResultRun[]): { ended: number; counted: number; reached: number; live: number } => {
       if (def.party === undefined) {
         const ended = runs.filter((r) => !isLive(r));
-        return { ended: ended.length, counted: ended.filter(counted).length, live: runs.length - ended.length };
+        const good = ended.filter(counted);
+        return { ended: ended.length, counted: good.length, reached: good.filter(reachedRun).length, live: runs.length - ended.length };
       }
       const byParty = new Map<string, ProbeRun[]>();
       for (const r of runs) {
@@ -140,7 +153,12 @@ export function campaignsView(
         byParty.set(key, [...(byParty.get(key) ?? []), probeOf.get(r.runId)!]);
       }
       const all = [...byParty.values()].map(partyAttempt);
-      return { ended: all.filter((a) => !a.live).length, counted: all.filter((a) => a.counted).length, live: all.filter((a) => a.live).length };
+      return {
+        ended: all.filter((a) => !a.live).length,
+        counted: all.filter((a) => a.counted).length,
+        reached: all.filter((a) => a.counted && a.reached).length,
+        live: all.filter((a) => a.live).length,
+      };
     };
     /** The start a run was launched on: its party member's, else its cell's. */
     const startOf = (r: ResultRun, cellId: string): { race: number; class: number } | undefined => {
@@ -182,18 +200,23 @@ export function campaignsView(
       const levels = runs.map((r) => r.maxLevel).filter((l): l is number => l !== null);
       const tally = squares.find((s) => s.cell.id === cellId && s.ref === ref && s.arm.id === arm.id);
       const attempts = attemptsOf(runs);
+      const byStart = [...runs].sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
       return {
         column: columnKey(ref, arm.id),
         runs: attempts.ended,
         counted: attempts.counted,
-        reached: target === null ? 0 : good.filter((r) => (r.maxLevel ?? 0) >= target).length,
+        reached: attempts.reached,
         live: attempts.live,
         minutesToStop: minutes.length === 0 ? null : { min: Math.min(...minutes), median: median(minutes)!, max: Math.max(...minutes) },
         bestLevel: levels.length > 0 ? Math.max(...levels) : null,
         costUsd: sumOrNull(runs.map(billedUsd)),
         mismatchedStart: runs.filter((r) => startMismatch(startOf(r, cellId), { race: r.race, class: r.class })).length,
         builds: buildsOf(runs),
-        runIds: [...runs].sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0)).map((r) => r.runId),
+        runIds: byStart.map((r) => r.runId),
+        // One entry per attempt of a party definition: the stamp's id, never the run id's stem.
+        ...(def.party === undefined
+          ? {}
+          : { parties: [...new Set(byStart.map((r) => r.party?.id).filter((id): id is string => id !== undefined))] }),
         want: tally?.want ?? 0,
         settled: tally?.settled ?? null,
         refused: tally?.refused ?? null,
@@ -209,7 +232,7 @@ export function campaignsView(
       arms: def.arms.map((arm): ArmSummary => {
         const runs = mine.filter((r) => r.ref === ref && r.arm === arm.id);
         const ended = runs.filter((r) => !isLive(r));
-        const reached = ended.filter((r) => counted(r) && target !== null && (r.maxLevel ?? 0) >= target);
+        const reached = ended.filter((r) => counted(r) && reachedRun(r));
         const costs = reached
           .map((r) => r.actualCost)
           .filter((a): a is NonNullable<ResultRun["actualCost"]> => a !== null && a.basis === "reported" && a.usd !== null);
@@ -232,8 +255,12 @@ export function campaignsView(
 
     const assigned = row === undefined ? [] : row.assignments.filter((a) => catalog.includes(a.model));
     const owed = squares.some((s) => s.settled === null);
-    const state: CampaignView["state"] =
-      progress.live > 0 || mine.some(isLive)
+    // A concluded version is complete even with a run still live or paused:
+    // it owes nothing, nothing more of it launches or resumes, and the
+    // progress figure still says live.
+    const state: CampaignView["state"] = concluded
+      ? "complete"
+      : progress.live > 0 || mine.some(isLive)
         ? "running"
         : row === undefined || assigned.length === 0
           ? "unassigned"
@@ -255,6 +282,7 @@ export function campaignsView(
       shape: {
         objective: def.objective,
         stopAtLevel: def.stopAtLevel,
+        end: ends,
         episodeMs: def.budget.episodeMs,
         idleMs: def.budget.idleMs,
         noXpMs: def.budget.noXpMs,
@@ -291,6 +319,7 @@ export function campaignsView(
               }),
             },
       state,
+      concluded,
       progress,
       columns,
       grid,

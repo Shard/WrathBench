@@ -34,6 +34,7 @@ import type {
   ModelRowView,
   ModelRunView,
   ModelsResponse,
+  PartyDetailView,
   PositionsResponse,
   ResultRun,
   ResultsResponse,
@@ -1522,6 +1523,7 @@ describe("projectCampaigns", () => {
       mismatchedStart: 0,
       builds: ["harness-0.5-931"],
       runIds: ["fixture-run-1"],
+      parties: ["fixture-party-a1"],
       want: 1,
       settled: "done" as const,
       refused: null,
@@ -1541,6 +1543,7 @@ describe("projectCampaigns", () => {
           shape: smuggle({
             objective: POISON.objective,
             stopAtLevel: 10,
+            end: [smuggle({ level: 10 }), smuggle({ kill: smuggle({ entry: 639 }) })],
             episodeMs: 43_200_000,
             idleMs: 1_200_000,
             noXpMs: null,
@@ -1558,6 +1561,7 @@ describe("projectCampaigns", () => {
             assignments: [smuggle({ ref: "codex-sol-61", model: "gpt-6.1-sol", effort: null, compactWindow: null, harness: "codex", runsPerCell: 1 })],
           }),
           state: "running" as const,
+          concluded: false,
           progress: smuggle({ want: 10, done: 4, attempted: 5, capped: 0, live: 1 }),
           columns: [smuggle({ key: "codex-sol-61/base", ref: "codex-sol-61", arm: "base", model: "gpt-6.1-sol", effort: null, compactWindow: "200k", harness: "codex" })],
           grid: [smuggle({ cell: "orc-warrior", squares: [square] })],
@@ -1603,7 +1607,7 @@ describe("projectCampaigns", () => {
           "question",
           "note",
           "shape",
-          ...under("shape", ["objective", "stopAtLevel", "episodeMs", "idleMs", "noXpMs", "maxToolCalls", "wiki", "wikiCoords", "resume", "maxAttemptsPerCell"]),
+          ...under("shape", ["objective", "stopAtLevel", "end", ...under("end[]", ["level", "kill", "kill.entry"]), "episodeMs", "idleMs", "noXpMs", "maxToolCalls", "wiki", "wikiCoords", "resume", "maxAttemptsPerCell"]),
           "cells",
           ...under("cells[]", ["id", "race", "class", "note"]),
           "arms",
@@ -1611,6 +1615,7 @@ describe("projectCampaigns", () => {
           "config",
           ...under("config", ["enabled", "assignments", ...under("assignments[]", ["ref", "model", "effort", "compactWindow", "harness", "runsPerCell"])]),
           "state",
+          "concluded",
           "progress",
           ...under("progress", ["want", "done", "attempted", "capped", "live"]),
           "columns",
@@ -1632,6 +1637,7 @@ describe("projectCampaigns", () => {
               "mismatchedStart",
               "builds",
               "runIds",
+              "parties",
               "want",
               "settled",
               "refused",
@@ -2392,5 +2398,78 @@ describe("no public page reads what the projection leaves out", () => {
       for (const [f, t] of text) if (read.test(t)) reads.push(`${key} in ${f}`);
     }
     expect(reads).toEqual([]);
+  });
+});
+
+/* ---------------------------------------------------------------- party --- */
+
+describe("a party member's records", () => {
+  const SESSION_SHAPED = "sk-ant-api03-poisonpoisonpoisonpoisonpoisonpoisonpoison";
+  const stamp = { id: "fixture-party-a1", member: "healer", size: 5, role: "healer", index: 1 };
+
+  test("the stamp crosses on a run's row and a result row, field by field", () => {
+    const row = projectRunDetail(
+      smuggle<RunDetailResponse>({
+        run: { ...runRowFixture(), party: smuggle(stamp) },
+        states: [],
+        total: 0,
+        tokens: tokensFixture(),
+        cost: costViewFixture(),
+        playtimeMs: 1000,
+      }),
+    ).run;
+    expect(row.party).toEqual(stamp);
+    const results = resultsFixture();
+    results.runs[0]!.party = smuggle(stamp);
+    expect(projectResults(results).runs[0]!.party).toEqual(stamp);
+    assertClean(JSON.stringify(row));
+  });
+
+  test("the detail's party block: the members without their accounts, the marks, the place, chat masked", () => {
+    const party = smuggle<PartyDetailView>({
+      ...stamp,
+      members: [
+        smuggle({ member: "tank", role: "tank", runId: "fixture-party-a1-tank", character: "Tankfix", account: "POISONACCT" }),
+        smuggle({ member: "healer", role: "healer", runId: "fixture-party-a1-healer", character: "Healfix", account: "POISONACCT2" }),
+      ],
+      instances: [smuggle({ ts: 1100, event: "entered" as const, map: 36, from: 0 })],
+      kills: [smuggle({ ts: 1200, victimGuid: "17379390972827271335", entry: 644, name: SURVIVES.npcName, self: false })],
+      chat: [smuggle({ ts: 1300, text: `ready ${SESSION_SHAPED}` })],
+      groups: [smuggle({ ts: 1000, event: "joined" as const, count: 5 })],
+      deaths: [1250],
+      where: smuggle({ ts: 1400, map: 36, zone: 1581, zoneName: SURVIVES.zoneName, area: 1581, areaName: SURVIVES.zoneName }),
+    });
+    const out = projectRunDetail(
+      smuggle<RunDetailResponse>({ run: runRowFixture(), states: [], total: 0, tokens: tokensFixture(), cost: costViewFixture(), playtimeMs: 1000, party }),
+    );
+    expect(keyPaths(out.party)).toEqual(
+      allow([
+        "id",
+        "member",
+        "role",
+        "size",
+        "members",
+        ...under("members[]", ["member", "role", "runId", "character"]),
+        "instances",
+        ...under("instances[]", ["ts", "event", "map", "from"]),
+        "kills",
+        ...under("kills[]", ["ts", "victimGuid", "entry", "name", "self"]),
+        "chat",
+        ...under("chat[]", ["ts", "text"]),
+        "groups",
+        ...under("groups[]", ["ts", "event", "count"]),
+        "deaths",
+        "where",
+        ...under("where", ["ts", "map", "zone", "zoneName", "area", "areaName"]),
+      ]),
+    );
+    const text = JSON.stringify(out);
+    expect(text).not.toContain("POISONACCT");
+    expect(text).not.toContain(SESSION_SHAPED);
+    expect(out.party!.chat[0]!.text.startsWith("ready ")).toBe(true);
+    expect(out.party!.kills[0]!.name).toBe(SURVIVES.npcName);
+    assertClean(text);
+    // A fixed point, like every projector here.
+    expect(projectRunDetail(out)).toEqual(out);
   });
 });

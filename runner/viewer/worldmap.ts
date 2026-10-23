@@ -165,3 +165,108 @@ export function visibleTiles(
     col1: clamp(Math.floor(px1 / TILE_PX)),
   };
 }
+
+/**
+ * Every map that has tiles, by id, with the name the map page shows for it.
+ *
+ * One table for both ends on purpose. The extractor's default list is its
+ * keys (`minimap/src/extract.ts`) and the dashboard's `mapName` reads it, so a
+ * map cannot be drawn under a bare number or named over a blank lattice.
+ * Anything not listed keeps its number: an id is still the server's answer,
+ * and a guessed name would not be.
+ *
+ * The four continents and the Deeprun Tram, then every dungeon and raid in
+ * Map.dbc (instance type 1 or 2) that the client has a minimap for, named as
+ * Map.dbc names it (the Deadmines keeps the "The" it was first given). Left
+ * out: the two maps Map.dbc itself marks unused (44, the old Monastery, and
+ * 598, a Sunwell fix), the Emerald Dream test map (169), and the three the
+ * client has no minimap for at all, neither terrain nor a model's own (624
+ * Vault of Archavon, 649 Trial of the Crusader, 650 Trial of the Champion).
+ */
+export const TILED_MAPS: Readonly<Record<number, string>> = {
+  0: "Eastern Kingdoms",
+  1: "Kalimdor",
+  369: "Deeprun Tram",
+  530: "Outland",
+  571: "Northrend",
+  // Dungeons.
+  33: "Shadowfang Keep",
+  34: "Stormwind Stockade",
+  36: "The Deadmines",
+  43: "Wailing Caverns",
+  47: "Razorfen Kraul",
+  48: "Blackfathom Deeps",
+  70: "Uldaman",
+  90: "Gnomeregan",
+  109: "Sunken Temple",
+  129: "Razorfen Downs",
+  189: "Scarlet Monastery",
+  209: "Zul'Farrak",
+  229: "Blackrock Spire",
+  230: "Blackrock Depths",
+  269: "Opening of the Dark Portal",
+  289: "Scholomance",
+  329: "Stratholme",
+  349: "Maraudon",
+  389: "Ragefire Chasm",
+  429: "Dire Maul",
+  540: "Hellfire Citadel: The Shattered Halls",
+  542: "Hellfire Citadel: The Blood Furnace",
+  543: "Hellfire Citadel: Ramparts",
+  545: "Coilfang: The Steamvault",
+  546: "Coilfang: The Underbog",
+  547: "Coilfang: The Slave Pens",
+  552: "Tempest Keep: The Arcatraz",
+  553: "Tempest Keep: The Botanica",
+  554: "Tempest Keep: The Mechanar",
+  555: "Auchindoun: Shadow Labyrinth",
+  556: "Auchindoun: Sethekk Halls",
+  557: "Auchindoun: Mana-Tombs",
+  558: "Auchindoun: Auchenai Crypts",
+  560: "The Escape From Durnholde",
+  574: "Utgarde Keep",
+  575: "Utgarde Pinnacle",
+  576: "The Nexus",
+  578: "The Oculus",
+  585: "Magister's Terrace",
+  595: "The Culling of Stratholme",
+  599: "Halls of Stone",
+  600: "Drak'Tharon Keep",
+  601: "Azjol-Nerub",
+  602: "Halls of Lightning",
+  604: "Gundrak",
+  608: "Violet Hold",
+  619: "Ahn'kahet: The Old Kingdom",
+  632: "The Forge of Souls",
+  658: "Pit of Saron",
+  668: "Halls of Reflection",
+  // Raids.
+  249: "Onyxia's Lair",
+  309: "Zul'Gurub",
+  409: "Molten Core",
+  469: "Blackwing Lair",
+  509: "Ruins of Ahn'Qiraj",
+  531: "Ahn'Qiraj Temple",
+  532: "Karazhan",
+  533: "Naxxramas",
+  534: "The Battle for Mount Hyjal",
+  544: "Magtheridon's Lair",
+  548: "Coilfang: Serpentshrine Cavern",
+  550: "Tempest Keep",
+  564: "Black Temple",
+  565: "Gruul's Lair",
+  568: "Zul'Aman",
+  580: "The Sunwell",
+  603: "Ulduar",
+  615: "The Obsidian Sanctum",
+  616: "The Eye of Eternity",
+  631: "Icecrown Citadel",
+  724: "The Ruby Sanctum",
+};
+
+/** The maps `TILED_MAPS` lists, in id order. */
+export function tiledMapIds(): number[] {
+  return Object.keys(TILED_MAPS)
+    .map(Number)
+    .sort((a, b) => a - b);
+}

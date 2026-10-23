@@ -1,8 +1,9 @@
 /**
  * The party records' producer (docs/proposals/GROUP-PLAY.md §6): `group`,
  * `instance` and `kill` transitions, latched in the sandbox child as the
- * events that carry them arrive, for the host's state sample to drain and
- * write as milestones — the way deaths and flights are (`ipc.ts`,
+ * events that carry them arrive, for the host's state ticker to drain on
+ * every tick (not at the row cadence: a kill is what a campaign's kill end
+ * reads) and write as milestones — the way deaths and flights are (`ipc.ts`,
  * `DeathSignal`), and for the same reason: a 60s sample misses what happened
  * between two samples, and a reading off a state sample (a map id, say) is
  * not the server telling the client anything.
@@ -25,10 +26,15 @@
  *   altogether until the module serves `instanceType`.
  * - **kill**, from `SMSG_PARTYKILLLOG` (`killerGuid`, `victimGuid`; `killer`
  *   and `victim` are read too), with the victim's `entry` from the unit cache
- *   and its `rank` from the creature query the cache holds. A victim of rank 0
- *   is not recorded (an open-world run would write a line per rabbit), nor is
- *   a player; a victim whose rank was never answered is, without one, so no
- *   elite is lost to a missing query. Silent until the module taps the packet.
+ *   — else from the victim's creature guid, which carries it, so a member out
+ *   of sight of the kill still names it — and its `rank` from the creature
+ *   query the cache holds. A victim of rank 0 is not recorded (an open-world
+ *   run would write a line per rabbit), nor is a player; a victim whose rank
+ *   was never answered is, without one, so no elite is lost to a missing
+ *   query. `member` is whether the killer is this character or one of its
+ *   group's members as the group list stood when the packet arrived: the
+ *   credit a campaign's kill end reads (`end-conditions.ts`). Silent until
+ *   the module taps the packet.
  *
  * Guids and ids only, never names: the record stays what the server said.
  * Pure over a narrow reading of the cache, so it is tested against fixture
@@ -36,6 +42,7 @@
  */
 
 import { guidKey } from "@wrathbench/sdk";
+import { creatureEntryOfGuid } from "../end-conditions";
 
 /** A party transition the child latched, with the event that carried it. */
 export type PartySignal =
@@ -69,6 +76,8 @@ export type PartySignal =
       rank?: number;
       /** The killer is this character. */
       self: boolean;
+      /** The killer is this character or a member of its group. */
+      member: boolean;
       ts: number;
       seq: number;
     };
@@ -189,16 +198,20 @@ export class PartyWatcher {
     if (killer === undefined || victim === undefined) return;
     const obj = this.state.objectOf(victim);
     if (obj?.type === "player") return;
-    const entry = obj?.entry;
+    const entry = obj?.entry ?? creatureEntryOfGuid(victim);
     const rank = entry === undefined ? undefined : this.state.rankOf(entry);
     if (rank === 0) return;
+    const self = killer === this.state.selfGuid();
+    const g = this.state.group();
+    const member = self || (g?.inGroup === true && g.members.some((m) => m.guid === killer));
     this.push({
       kind: "kill",
       killerGuid: killer,
       victimGuid: victim,
       ...(entry !== undefined ? { entry } : {}),
       ...(rank !== undefined ? { rank } : {}),
-      self: killer === this.state.selfGuid(),
+      self,
+      member,
       ts: event.ts,
       seq: event.seq,
     });

@@ -461,11 +461,17 @@ then the new path starts from wherever the character is. A request that fails
 before anything moves (`too_far` and the planning causes below) likewise sends
 a stop if the server still holds the character as moving.
 
+A rooted character cannot move (Roots, below): while the module holds the
+character rooted, a `move_to` is refused before planning with status `rooted`,
+acked with `moveId` alone like any refusal, and nothing is sent, not even the
+redirect's stop; a walk still running then ends `rooted` first.
+
 #### stop
 
 Stop moving (sends `MSG_MOVE_STOP` where the character currently is). Always
 acks `200 { "ok": true, "action": "stop" }`; if a move was in
-progress it additionally ends with a `WB_MOVE_RESULT` status `stopped`.
+progress it additionally ends with a `WB_MOVE_RESULT` status `stopped`, or
+`rooted` with no packet when a root has already stopped it.
 
 Request: `{ "token": "run-abc123", "action": "stop" }`
 
@@ -481,6 +487,18 @@ or `{ "token": "run-abc123", "action": "face", "x": -8900.0, "y": -130.0 }`
 Success `200`: `{ "ok": true, "action": "face", "orientation": 1.57 }`
 Additional errors: `400 {"ok":false,"error":"missing_face_target","action":"face","param":"orientation or x,y"}`,
 `409 {"ok":false,"error":"moving"}` (stop first, or supersede with `move_to`).
+
+The refusal while moving is the client's own limit, not a module shortcut. A
+walk is sent as forward running (`MOVEMENTFLAG_FORWARD`, with the orientation
+of the leg it is on), and a client running forward travels where it faces:
+its turn mid-run (`MSG_MOVE_SET_FACING` or a heartbeat with a new
+orientation) bends the run itself. Sending the facing while the walk keeps
+its course would put a facing on the wire that does not match the travel,
+which no client's packets show. Strafe and backpedal flags reach only the
+eight directions relative to facing, so they cannot hold an arbitrary facing
+along a navmesh path either. A turn that the walk then follows would leave
+the path the module planned. So a `face` mid-walk is refused with nothing
+sent, and the character turns once it stands.
 
 #### Single-opcode actions (quest/combat extension)
 
@@ -498,7 +516,7 @@ them: `{ "ok": true, "action": "<name>" }`.
 | `clear_target` | — | `CMSG_SET_SELECTION` | guid 0 |
 | `attack_start` | `guid` | `CMSG_ATTACKSWING` | melee auto-attack; server swings while in range and facing. A swing it refuses is reported once as `SMSG_ATTACKSWING_NOTINRANGE` / `SMSG_ATTACKSWING_BADFACING` (latched: see "Swing errors" under the combat table) |
 | `attack_stop` | — | `CMSG_ATTACKSTOP` | |
-| `cast_spell` | `spellId`, `targetGuid?` | `CMSG_CAST_SPELL` | no `targetGuid` = self/auto target (mask 0); with it, TARGET_FLAG_UNIT + packed guid. A game object guid works too (the core resolves the packed guid by its type), which is how chests open; a client would set TARGET_FLAG_GAMEOBJECT for it |
+| `cast_spell` | `spellId`, `targetGuid?` | `CMSG_CAST_SPELL` | no `targetGuid` = self/auto target (mask 0); with it, TARGET_FLAG_UNIT + packed guid. A game object guid works too (the core resolves the packed guid by its type), which is how chests open; a client would set TARGET_FLAG_GAMEOBJECT for it. The leading cast count is the client's own: one per-session u8 counter, shared with `use_item`, one more on every cast and running 1..255 (never 0). The core skips its in-progress check for a count of 0 (`Spell::prepare`), so a cast sent while another is still casting would silently cancel it; with a count it is refused `SMSG_CAST_FAILED` `spell_in_progress` (105), as a client's is, and the cast in progress goes on. A cast sent with 400 ms or less of the running one left (and of the global cooldown) is held by the server's spell queue (`SpellQueue.Window`, default 400) and goes off after it, count or not. The audit row carries `castCount` |
 | `cancel_cast` | `spellId` | `CMSG_CANCEL_CAST` | |
 | `interact` | `guid` | `CMSG_GAMEOBJ_USE` | doors, buttons, quest objects, mailboxes. Not chests: the core's `GameObject::Use` has no chest case and returns silently; a client opens a chest with `cast_spell` of the lock's Opening spell at the object's guid (the SDK's `lootCorpse` does this) |
 | `gossip_hello` | `guid` | `CMSG_GOSSIP_HELLO` | opens the NPC gossip menu (`SMSG_GOSSIP_MESSAGE`) |
@@ -523,7 +541,7 @@ them: `{ "ok": true, "action": "<name>" }`.
 | `sell_item` | `guid`, `itemGuid`, `count?` | `CMSG_SELL_ITEM` | `count` 0/omitted = whole stack |
 | `repair_all` | `guid` | `CMSG_REPAIR_ITEM` | item guid 0 = repair everything |
 | `equip_item` | `bag`, `slot` | `CMSG_AUTOEQUIP_ITEM` | `bag` 255 = backpack/equipment container, `slot` 23-38 = backpack slots |
-| `use_item` | `bag`, `slot`, `targetGuid?` | `CMSG_USE_ITEM`, or `CMSG_QUESTGIVER_QUERY_QUEST` | module fills item guid + on-use spell id from the item (client-cache knowledge). An item with no on-use spell but a `startquest` is right-clicked the way a client does it: `CMSG_QUESTGIVER_QUERY_QUEST` with the item guid as the questgiver and the template's quest id (`HandleUseItemOpcode` drops spell id 0 as unknown, so `CMSG_USE_ITEM` is never the packet for it); the server answers `SMSG_QUESTGIVER_QUEST_DETAILS`, and `quest_accept` with the same item guid takes it. `400 no_item_at_slot`; `400 item_not_usable` only when the item has neither an on-use spell nor a quest to start. The audit row carries `spellId`, `itemGuid`, `startQuest` |
+| `use_item` | `bag`, `slot`, `targetGuid?` | `CMSG_USE_ITEM`, or `CMSG_QUESTGIVER_QUERY_QUEST` | module fills item guid + on-use spell id from the item (client-cache knowledge) and the cast count from the counter `cast_spell` uses. An item with no on-use spell but a `startquest` is right-clicked the way a client does it: `CMSG_QUESTGIVER_QUERY_QUEST` with the item guid as the questgiver and the template's quest id (`HandleUseItemOpcode` drops spell id 0 as unknown, so `CMSG_USE_ITEM` is never the packet for it); the server answers `SMSG_QUESTGIVER_QUEST_DETAILS`, and `quest_accept` with the same item guid takes it. `400 no_item_at_slot`; `400 item_not_usable` only when the item has neither an on-use spell nor a quest to start. The audit row carries `spellId`, `itemGuid`, `startQuest` |
 | `destroy_item` | `bag`, `slot`, `count?` | `CMSG_DESTROYITEM` | `count` 0/omitted = whole stack |
 | `trainer_list` | `guid` | `CMSG_TRAINER_LIST` | `SMSG_TRAINER_LIST` follows — or nothing at all when the NPC is out of interaction range, is not a trainer, or trains another class (the handler returns silently) |
 | `trainer_buy_spell` | `guid`, `spellId` | `CMSG_TRAINER_BUY_SPELL` | costs the character's own money server-side; answered by `SMSG_TRAINER_BUY_SUCCEEDED` or `SMSG_TRAINER_BUY_FAILED` |
@@ -621,7 +639,9 @@ whose handler does nothing a non-GM client could not do:
   `CMSG_GROUP_DISBAND` (empty — "leave group"), `CMSG_GROUP_SET_LEADER` (`u64
   guid`), `CMSG_LOOT_METHOD`, `CMSG_LOOT_ROLL` (`u64 roll guid, u32 loot
   slot, u8 vote` — 0 pass, 1 need, 2 greed, 3 disenchant — on a frame
-  `SMSG_LOOT_START_ROLL` opened; the SDK's `lootRoll` builds it)
+  `SMSG_LOOT_START_ROLL` opened; the SDK's `lootRoll` builds it),
+  `CMSG_REQUEST_PARTY_MEMBER_STATS` (`u64 guid`, unpacked — the party frame's
+  own refresh of one member; answered with `SMSG_PARTY_MEMBER_STATS_FULL`)
 
 - trade: `CMSG_INITIATE_TRADE` (`u64 guid`), `CMSG_BEGIN_TRADE`, `CMSG_ACCEPT_TRADE`,
   `CMSG_UNACCEPT_TRADE`, `CMSG_CANCEL_TRADE`, `CMSG_BUSY_TRADE`,
@@ -865,6 +885,50 @@ follows a same-map teleport; this is how own position follows one. On the wire
 the packet carries a `u32` movement-order counter between the packGUID and the
 MovementInfo; it is consumed, not served.
 
+Roots. The core roots a unit its client controls by packet alone
+(`Unit::SendMoveRoot`): `SMSG_FORCE_MOVE_ROOT` (0x0E8) and
+`SMSG_FORCE_MOVE_UNROOT` (0x0EA), each a packGUID and a `u32` movement
+counter, sent to the controlling client, which stops, answers, and keeps
+itself still until the unroot; the server sets nothing and trusts it to.
+Stuns arrive the same way (`Unit::SetStunned` -> `SetRooted` ->
+`SendMoveRoot`; `Unit::IsClientControlled` does not look at the stun flag), as
+do death (`Player::KillPlayer`) and its end (`BuildPlayerRepop`,
+`ResurrectPlayer`). A unit its client does not control (feared, confused) is
+rooted server-side instead: `MOVEMENTFLAG_ROOT` set in place and
+`SMSG_SPLINE_MOVE_ROOT` (0x31A) / `SMSG_SPLINE_MOVE_UNROOT` (0x304), a
+packGUID alone, sent to the set, own client included. At login and after a
+far port an immobilized character's root rides inside `SMSG_MULTIPLE_MOVES`
+(0x51E; `Player::SendInitialPacketsAfterAddToMap`), each sub-packet a `u8`
+length, `u16` opcode and body.
+
+The module answers as a client does (module-internal client behaviour, like
+the teleport acks; none of these packets is served as an event):
+`CMSG_FORCE_MOVE_ROOT_ACK` (0x0E9) and `CMSG_FORCE_MOVE_UNROOT_ACK` (0x0EB),
+both read by `WorldSession::HandleMoveRootAck` as the packGUID, the echoed
+`u32` counter and a MovementInfo (the movement packets' layout) where the
+character stands, with no moving flag and `MOVEMENTFLAG_ROOT` on the root ack
+only (`ReadMovementInfo` strips ROOT from every client packet on arrival).
+Where a walk is running the ack carries the walk's own point, so it is the
+walk's stop; otherwise the server's position. Each is queued from the tap
+the moment the server sends the packet, behind whatever the session already
+queued, own guid only, and audited. The unroot ack is what clears a
+server-side ROOT once control is back: the observed case was a fear, a stun
+landing under it (ROOT set in place), the fear ending (a FORCE root, ignored
+as already rooted) and the stun ending (a FORCE unroot); with no ack the core
+kept ROOT through death, release and the far port, and dropped every movement
+packet after (`VerifyMovementInfo`). An ack whose counter is at or below the
+counter at the last far teleport is ignored as from the old map
+(`Player::GetMapChangeOrderCounter`), so where the unroot and a far port are
+one handler call — a repop whose graveyard is on another map — no client's
+ack lands in time; the ack is still sent, as a client sends it.
+
+The module also keeps the rooted state a client keeps: set by
+`SMSG_FORCE_MOVE_ROOT` and `SMSG_SPLINE_MOVE_ROOT` for the character's own
+guid (the multiple-moves sub-packet included), cleared by their unroot twins.
+While it is set the mover stops (`rooted`, above) and `move_to` is refused
+`rooted`. `face` still turns, which is right for a root; a stunned client
+cannot turn, and the module does not yet tell the two apart.
+
 `SMSG_COMPRESSED_UPDATE_OBJECT` never appears on this stream: the core
 compresses large update packets at socket-write time, below the module's tap,
 so the tap always sees the uncompressed `SMSG_UPDATE_OBJECT`.
@@ -928,6 +992,19 @@ not need it, docs/CONTRACTS.md):
   data, not a new tap)
 - game objects: `goDisplayId`, `goFlags`, `goFaction`, `goLevel`, `goState`,
   `goType`
+- corpses: `corpseOwnerGuid` (CORPSE_FIELD_OWNER, PUBLIC, as a guid string:
+  the player whose corpse or bones this is — a client labels it "<name>'s
+  corpse" from the owner's name). On a corpse's `create` with an owner not yet
+  name-queried this session the module issues the `CMSG_NAME_QUERY` a client
+  does, so an owner who was never in view is named too. `corpseFlags`
+  (CORPSE_FIELD_FLAGS, PUBLIC, the raw integer; the module names no bit):
+  `CORPSE_FLAG_BONES` (0x01) marks bones, which a client draws as scenery and
+  no resurrection reaches. A corpse turns to bones when its owner comes back
+  to life or dies again, or when it expires (`Map::ConvertCorpseToBones`):
+  the corpse is destroyed (`SMSG_DESTROY_OBJECT`) and the bones are a new
+  `create` under the same guid with the owner kept and the flags `0x05`
+  (bones and 0x04, which every corpse carries). CORPSE_FIELD_DYNAMIC_FLAGS is
+  not served: only a battleground's insignia bones set it
 
 Values are the raw client-visible integers from the update stream (health is
 whatever the server sends a client — no extra precision is added). A `values`
@@ -1025,7 +1102,14 @@ at the top of this document.
   and a route the core runs out on (the Deadmines mine's tunnels are 177
   polygons) is searched again with 16384 nodes, 512 polygons and 256 points
   of 4y — the same route the core would build with room to finish, audited
-  as `op: "move_long_plan"`. Before any of this, a start whose own polygon
+  as `op: "move_long_plan"`. Where the mesh got is never the request itself:
+  the core's partial path ends at the request when its corridor is the start
+  polygon alone, or when it gave up and returned the straight line (74
+  points or more, or no polygon path), and a subdivision from there was the
+  request to itself, which spliced that straight line into the walk (71y
+  through the Deadmines from the pool past the first boss, into a hollow 15y
+  from any polygon); that end is left off and the mesh got as far as the
+  point before it. Before any of this, a start whose own polygon
   is on a closed island that does not hold the destination's (fewer than
   1024 polygons; the Deadmines pool's floor is 6 under the water surface's
   polygons) is planned from the water surface directly over the start, off
@@ -1075,11 +1159,20 @@ at the top of this document.
   `SMSG_NEW_WORLD` will follow; `pos` is the pre-teleport position and the
   arrival point is the `MSG_MOVE_TELEPORT_ACK` observed-movement event (own
   guid), which the server sends before this result.
-- `interrupted` — the move stopped early (death, root, rejection, or the
+- `interrupted` — the move stopped early (death, rejection, or the
   character left the map for a non-teleport reason); `pos` is where the
   character actually is.
 - `stopped` — a `stop` action ended the move.
 - `superseded` — a newer `move_to` replaced this move.
+- `rooted` — a root or a stun holds the character (Roots, below). A
+  refusal: the `move_to` arrived while the character was rooted and nothing
+  was sent; it carries no `pathLength`. A walk the root stopped: the root ack
+  was its stop, at the point the walk had reached, and the verdict carries
+  the walk's `pathLength` like any other dispatched move. Its `pos` is read
+  back as always, and the server applies the ack on the session's next
+  update, after the verdict, so `pos` can trail the point the walk stopped
+  at by up to one heartbeat's walk (about 3.5y at run speed). Death roots
+  too, but a walk the character dies on ends `interrupted`.
 
 `WB_MOVE_PROGRESS.pos` is the engine's interpolated position (what a client
 would render); `WB_MOVE_RESULT.pos` is read back from the live character, so an
@@ -1223,6 +1316,9 @@ Combat:
 | `SMSG_CAST_FAILED` | 0x130 | `{ "spellId", "result": <u8> }` (SpellCastResult code) |
 | `SMSG_SPELL_FAILURE` | 0x133 | `{ "casterGuid", "spellId", "result": <u8> }` |
 | `SMSG_PERIODICAURALOG` | 0x24E | compact: `{ "targetGuid", "casterGuid", "spellId", "auraType": <u32>, "amount" }` |
+| `SMSG_SPELLNONMELEEDAMAGELOG` | 0x250 | `{ "targetGuid", "casterGuid", "spellId", "rank"?, "name"?, "damage", "overkill", "schoolMask": <u8>, "absorb", "resist", "blocked", "hitInfo": <u32>, "crit": <bool> }` — one direct spell hit (`Unit::SendSpellNonMeleeDamageLog`, and the reflect form `SendSpellNonMeleeReflectLog`); `schoolMask` is the `SpellSchoolMask` bit set (1 physical, 2 holy, 4 fire, 8 nature, 16 frost, 32 shadow, 64 arcane), `hitInfo` the raw `SpellHitType` and `crit` its `SPELL_HIT_TYPE_CRIT` bit; `physicalLog`, the unused byte and the debug flag are consumed |
+| `SMSG_SPELLHEALLOG` | 0x150 | `{ "targetGuid", "casterGuid", "spellId", "rank"?, "name"?, "amount", "overheal", "absorb", "crit": <bool> }` — one direct heal (`Unit::SendHealSpellLog`); `amount` is the whole heal, `overheal` the part past full health |
+| `SMSG_SPELLENERGIZELOG` | 0x151 | `{ "targetGuid", "casterGuid", "spellId", "rank"?, "name"?, "powerType": <u32>, "amount" }` — one power gain from a spell (`Unit::SendEnergizeSpellLog`); `powerType` 0 mana, 1 rage, 2 focus, 3 energy, 4 happiness, 5 runes, 6 runic power |
 | `SMSG_AURA_UPDATE` | 0x496 | `{ "targetGuid", "auras": [<aura>] }` |
 | `SMSG_AURA_UPDATE_ALL` | 0x495 | same shape, full visible-aura list |
 
@@ -1233,6 +1329,16 @@ Durations are in ms and present only when the aura shows one (`flags & 0x20`);
 `duration` is what was left when the packet was sent. `name` is the client's
 Spell.dbc name for the id, the one its buff frame shows (client-cache
 knowledge, as on the spellbook rows); absent when the core has no name for it.
+
+Spell combat log. `SMSG_SPELLNONMELEEDAMAGELOG`, `SMSG_SPELLHEALLOG` and
+`SMSG_SPELLENERGIZELOG` are the combat-log lines a client prints for a direct
+spell hit, heal or power gain; the core sends each to every client in range
+(`SendMessageToSet`), so a session sees the spell fights around it, not only
+its own. Both guids precede the spell id with the *target first*, unlike the
+melee log. `rank` and `name` are the client's Spell.dbc reading of the id,
+as on the spellbook rows (`AddSpellFields`), absent when the core has no
+entry for it. Field names follow the melee log's (`absorb`, `resist`,
+`blocked`). Periodic ticks stay on `SMSG_PERIODICAURALOG`.
 
 Swing errors. `SMSG_ATTACKSWING_NOTINRANGE` and `SMSG_ATTACKSWING_BADFACING`
 are the two packets a client shows as on-screen errors while auto-attack is
@@ -1323,14 +1429,26 @@ names is the SDK's job.
 Spellbook, cooldowns, talents (additive). `rank` and `name` on a spell
 row are what a client reads from its own Spell.dbc for the id (`rank` 1 when
 unranked; both absent when the id is unknown to the core) — client-cache
-knowledge, like item-template fields:
+knowledge, like item-template fields. A spellbook row (`SMSG_INITIAL_SPELLS`,
+`SMSG_LEARNED_SPELL`, `SMSG_SUPERCEDED_SPELL`, written `…` below) also
+carries the stance facts of the same Spell.dbc row, each absent when the row
+has none: `stances`, the shapeshift form ids the spell may be cast in (its
+`Stances` mask, bit n-1 = form n, as `SpellInfo::CheckShapeshift` reads it);
+`stancesNot`, the forms it may not be cast in (`StancesNot`); and `form`, the
+form a form-changing spell puts the caster in (the misc value of its
+`SPELL_AURA_MOD_SHAPESHIFT` effect: Battle Stance 17, Defensive Stance 18,
+Cat Form 1, Stealth 30, …). They are read from the DBC store a client has, not
+from the server's corrected `SpellInfo`, so a `stances` list joined to the
+book's `form` rows names the stance an `only_shapeshift` refusal wants. Some
+spells may also be cast in no form at all, which the mask does not say (the
+core's `SPELL_ATTR2_ALLOW_WHILE_NOT_SHAPESHIFTED`):
 
 | opcode | id | `data` fields |
 |---|---|---|
-| `SMSG_INITIAL_SPELLS` | 0x12A | `{ "spells": [{ "spellId", "rank"?, "name"? }], "cooldowns": [{ "spellId", "itemId", "category", "cooldownMs", "categoryCooldownMs" }] }` — the whole active-spec spellbook, sent during login before `SMSG_LOGIN_VERIFY_WORLD`; a category cooldown carries its time in `categoryCooldownMs` and 0 in `cooldownMs`; `categoryCooldownMs` 0x80000000 with `cooldownMs` 1 is the core's "infinite" marker |
-| `SMSG_LEARNED_SPELL` | 0x12B | `{ "spellId", "rank"?, "name"? }` |
+| `SMSG_INITIAL_SPELLS` | 0x12A | `{ "spells": [{ "spellId", "rank"?, "name"?, … }], "cooldowns": [{ "spellId", "itemId", "category", "cooldownMs", "categoryCooldownMs" }] }` — the whole active-spec spellbook, sent during login before `SMSG_LOGIN_VERIFY_WORLD`; a category cooldown carries its time in `categoryCooldownMs` and 0 in `cooldownMs`; `categoryCooldownMs` 0x80000000 with `cooldownMs` 1 is the core's "infinite" marker |
+| `SMSG_LEARNED_SPELL` | 0x12B | `{ "spellId", "rank"?, "name"?, … }` |
 | `SMSG_REMOVED_SPELL` | 0x203 | `{ "spellId" }` |
-| `SMSG_SUPERCEDED_SPELL` | 0x12C | `{ "supersededSpellId", "spellId", "rank"?, "name"? }` — the old rank leaves the book, `spellId` replaces it (a `SMSG_LEARNED_SPELL` for the new id follows) |
+| `SMSG_SUPERCEDED_SPELL` | 0x12C | `{ "supersededSpellId", "spellId", "rank"?, "name"?, … }` — the old rank leaves the book, `spellId` replaces it (a `SMSG_LEARNED_SPELL` for the new id follows) |
 | `SMSG_SPELL_COOLDOWN` | 0x134 | `{ "guid", "flags": <u8>, "cooldowns": [{ "spellId", "cooldownMs" }] }` — cooldowns that just started for `guid` (self or pet); `flags & 1` = the GCD was triggered too; a 0 ms entry is a GCD-only marker |
 | `SMSG_COOLDOWN_EVENT` | 0x135 | `{ "spellId", "guid" }` — "start the timer you already know for this spell": the duration is Spell.dbc knowledge the module does not serve |
 | `SMSG_CLEAR_COOLDOWN` | 0x1DE | `{ "spellId", "guid" }` |
@@ -1409,6 +1527,8 @@ served as numbers; the SDK names them.
 | `SMSG_GROUP_DESTROYED` | 0x07C | `{}` — the group was disbanded |
 | `SMSG_PARTY_COMMAND_RESULT` | 0x07F | `{ "operation": <u32>, "name", "result": <u32>, "value": <u32> }` — `WorldSession::SendPartyResult`: `operation` 0 invite, 1 uninvite, 2 leave, 4 swap; `result` `PartyResult` (0 ok, 1 bad player name, 2 not in your group, 4 group full, 5 already in a group, 6 not in a group, 7 not the leader, 8 wrong faction, 9 ignoring you, …) |
 | `SMSG_GROUP_LIST` | 0x07D | `{ "groupType": <u8>, "left": <bool>, "raid": <bool>, "subGroup", "memberFlags", "roles", "groupGuid", "counter", "members": [{ "name", "guid", "online": <bool>, "subGroup", "flags": <u8>, "roles" }], "leaderGuid", "lootMethod"?, "looterGuid"?, "lootThreshold"?, "dungeonDifficulty"?, "raidDifficulty"? }` — `Group::SendUpdateToPlayer`: the *other* members (self is never listed), the leader and, when there are any, the loot settings. `left` is the 0x10 group type the core sends with an empty list and a zero leader when this character leaves or the group is disbanded. `flags` 1 assistant, 2 main tank, 4 main assist; the LFG state/dungeon pair on LFG groups is consumed |
+| `SMSG_PARTY_MEMBER_STATS` | 0x07E | `{ "guid", "full": false, "mask": <u32>, "status"?: <u16>, "health"?, "maxHealth"?, "powerType"?: <u8>, "power"?, "maxPower"?, "level"?, "zoneId"?, "zoneName"?, "x"?: <i16>, "y"?: <i16>, "auras"?: [{ "slot", "spellId", "flags": <u8>, "name"? }] }` — the party frame of a member out of sight: `Group::UpdatePlayerOutOfRange` sends `WorldSession::BuildPartyMemberStatsChangedPacket` once per update of that member to every other member out of its sight range or on another map, carrying only the fields whose bit is set in `mask` (`GROUP_UPDATE_FLAG_*`: 0x1 status, 0x2 health, 0x4 max health, 0x8 power type, 0x10 power, 0x20 max power, 0x40 level, 0x80 zone, 0x100 position, 0x200 auras; 0x400–0x40000 the pet's, 0x80000 a vehicle seat). The core sets each bit when that value changes and sets every bit on a group join, on a zone change and on every teleport, map transfer and resurrection (`Player::UpdateZone`), so status arrives only with those. `status` is `MEMBER_STATUS_*`: 0x1 online, 0x2 PvP, 0x4 dead, 0x8 ghost, 0x10 FFA PvP, 0x40 AFK, 0x80 DND. `x`, `y` are the member's position truncated to whole yards in 16 bits, read signed; the packet names no map. `zoneName` is the client's `AreaTable.dbc` name for `zoneId`. In a delta an aura entry with `spellId` 0 clears that slot; `flags` is the `AFLAG_*` byte (the delta always writes 1 for the member's own auras); `name` is the Spell.dbc name, as on `SMSG_AURA_UPDATE`. The pet and vehicle fields are not decoded (`mask` still shows them). Nothing is sent to a member in sight: its unit update fields carry the same values |
+| `SMSG_PARTY_MEMBER_STATS_FULL` | 0x2F2 | same shape with `"full": true` — `HandleRequestPartyMemberStatsOpcode`'s answer to `CMSG_REQUEST_PARTY_MEMBER_STATS` (raw, above): every field, the auras as the complete list of visible ones with their real flags, and `powerType` only when the power is not mana (0). A guid the server cannot find in the party is answered `{ "mask": 1, "status": 0 }`, offline |
 | `SMSG_SHOW_MAILBOX` | 0x297 | `{ "guid" }` — the mailbox frame opened on that game object (after `CMSG_GAMEOBJ_USE` / the `interact` action on a mailbox) |
 | `SMSG_RECEIVED_MAIL` | 0x285 | `{}` — "you have new mail" |
 | `SMSG_SEND_MAIL_RESULT` | 0x239 | `{ "mailId", "action": <u32>, "result": <u32>, "inventoryResult"?, "itemGuidLow"?, "count"? }` — `Player::SendMailResult`: `action` 0 send, 1 money taken, 2 item taken, 3 returned to sender, 4 deleted, 5 made permanent; `result` `MailResponseResult` (0 ok, 1 equip error — `inventoryResult` is the InventoryResult — 2 cannot send to self, 3 not enough money, 4 recipient not found, 5 not your team, 6 internal error, 15 recipient cap reached, 18 too many attachments, …); `itemGuidLow`/`count` on a taken item |
@@ -1654,6 +1774,10 @@ next day's, only ever forward, so a session reopened later under the same
 token appends to that day's file and a past day's file gets no further write.
 The retention pass rests on that: a past day's file is deletable once it is
 quiet for the window, whatever the server's start.
+
+The root acks (Roots, above) log one `action` record each, `op: "root_ack"`
+with the `opcode` sent, the echoed `counter`, the `pos` the ack carried and
+the `moveId` of the walk it stopped (0 outside a walk).
 
 Synthesized movement logs one `action` record per `move_to`/`stop`/`face`
 request (`force: true` on the record when the request said so) plus one per

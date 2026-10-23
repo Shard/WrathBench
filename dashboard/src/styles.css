@@ -31,6 +31,14 @@
   --codex: #10a37f;
   /* The pi harness tag: a violet no other tag or run line uses (pi has no house colour). */
   --pi: #a78bfa;
+  /* A party's members by their place in it, the leader first (`lib/party.ts`):
+     five members of one model share one logo, so the colour is what tells them
+     apart on the map, in its legend and on the party page. Okabe–Ito hues. */
+  --member-1: #e69f00;
+  --member-2: #56b4e9;
+  --member-3: #cc79a7;
+  --member-4: #f0e442;
+  --member-5: #009e73;
 
   /*
    * The type scale. Seven steps, in rem against the browser's own root size,
@@ -91,6 +99,11 @@
     --claude: #b4522f;
     --codex: #0b7a5f;
     --pi: #6d28d9;
+    --member-1: #a86f00;
+    --member-2: #1f6fa8;
+    --member-3: #a8487f;
+    --member-4: #857800;
+    --member-5: #00795a;
   }
 }
 
@@ -335,14 +348,20 @@ th.sortable { user-select: none; padding: 0; }
 .sortbutton:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
 th.sorted { color: var(--fg); }
 .sortmark { margin-left: 4px; font-size: var(--fs-2xs); }
-/* A run that continues another: a rail on the run cell, so where the sort does
-   put a character's attempts side by side they read as one block. The lineage
-   itself is the text in the cell — under any other sort the attempts are not
-   adjacent and the rail has nothing to join. */
+/* A run that continues another, or one member of a party: a rail on the run
+   cell, so where the sort puts a character's attempts or a party's members
+   side by side they read as one block. The lineage or the party is the text
+   in the cell — under a sort that separates them the rail has nothing to join. */
 tr.character td:nth-child(2) { box-shadow: inset 2px 0 0 var(--accent); padding-left: 8px; }
 
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
           margin-right: 6px; vertical-align: middle; }
+/* A party member's colour, wherever the member is named (`memberClass`). */
+.swatch.member-1 { background: var(--member-1); }
+.swatch.member-2 { background: var(--member-2); }
+.swatch.member-3 { background: var(--member-3); }
+.swatch.member-4 { background: var(--member-4); }
+.swatch.member-5 { background: var(--member-5); }
 
 /* A model's logo beside its name; the fallback is a monogram disc.
    The box is 1em so the mark rides the text it labels at any font size, and the
@@ -665,9 +684,10 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
 /* The ladder's scatter: viewBox-scaled, never wider than the page. */
 .ladderchart { width: 100%; max-width: 100%; height: auto; display: block; margin: 4px 0 6px;
                background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
-.ladderchart-pt { cursor: pointer; }
+/* A point, and the freeplay field's line below: either is a link, its label underlined on hover. */
+.ladderchart-pt, .characterchart-series { cursor: pointer; }
 .ladderchart-pt:hover circle:last-of-type, .ladderchart-pt.hovered circle:last-of-type { stroke: var(--fg); }
-.ladderchart-pt:hover text, .ladderchart-pt.hovered text { text-decoration: underline; }
+.ladderchart-pt:hover text, .ladderchart-pt.hovered text, .characterchart-series:hover text { text-decoration: underline; }
 /* A label every slot failed is drawn anyway (hidden is worse than ugly), dimmed so the clean ones read first. */
 .ladderchart-pt text.crowded { fill: var(--dim); }
 /* A displaced label's leader brightens with the point it belongs to, on both charts. */
@@ -678,12 +698,10 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
 .ladderchart-pt.dominated:hover, .ladderchart-pt.dominated.hovered { opacity: 1; }
 
 /* The freeplay field's graph reuses the scatter's frame and caption; only the
-   hover affordance differs, because the mark is a line and not a puck. */
-.characterchart-series { cursor: pointer; }
-/* The first path of the pair is the transparent hit target; the second is the
+   hover affordance differs, because the mark is a line and not a puck. The
+   first path of the pair is the transparent hit target; the second is the
    line, and it is the one that thickens. */
 .characterchart-series:hover path + path { stroke-width: 3; }
-.characterchart-series:hover text { text-decoration: underline; }
 
 /* The ladder's episode buttons: the axis the page turns on, so they are centred
    and a size larger than a chip row that merely narrows something. */

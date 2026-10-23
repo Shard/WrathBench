@@ -100,8 +100,8 @@ target. A campaign has two halves:
 
 - **The definition, as data** (`runner/campaigns/<id>@<version>.json`,
   validated by `runner/src/campaign-def.ts`). This is the static half: the
-  question, the cells, the arms, the objective if there is one, the stopping
-  rule, the clock and watchdogs, the tool-call guard, `wikiCoords`/`wiki`,
+  question, the cells, the arms, the objective if there is one, the ends, the
+  clock and watchdogs, the tool-call guard, `wikiCoords`/`wiki`,
   whether a paused run resumes, and the attempt cap that says when a square is
   abandoned.
 - **The store row** (`campaigns/<id>`, `docs/RUNBOOK.md`). This is the
@@ -216,7 +216,9 @@ fleet can launch in a run pod.
   (docs/proposals/GROUP-PLAY.md; `infra/party-fate.ts`). Each member carries
   its own role, start, character and objective, and its cell carries the
   leader's start. The first member to leave the world ends the others as
-  `party-ended` or pauses them as `party-paused`, naming itself; a member that
+  `party-ended` or pauses them as `party-paused`, naming itself; when it left
+  because its run met the definition's end, the others are ended on that same
+  reason instead, so all five carry one counted verdict. A member that
   dies in the game is not one that left. A party is counted when every member
   is on disk, none is `launch-failed` or still in flight, and every member
   that ended on its own verdict counts; a paused party resumes whole or not at
@@ -228,20 +230,43 @@ fleet can launch in a run pod.
   the same entry, so pinning a probe to a lane does not move an eval.
 - **Objective.** Allowed, and set only by the definition. The to-level-10
   campaigns carry none: the standing goal already drives levelling, and naming
-  a level is the statistic the goal wording avoids.
+  a level is the statistic the goal wording avoids. An objective replaces the
+  broad goal for that run rather than adding to it (operator, 2026-10-21): a
+  Deadmines party told its objective was "in addition to the standing goal"
+  left the dungeon after some wipes to level in Westfall, which the goal
+  endorsed.
+- **Prompt.** With no objective, the standing goal and nothing else: no
+  clock, whatever the budget, so a definition without one reads exactly as
+  every probe before it. With one, the world facts, then one sentence stating
+  the clock from the definition's `episodeMs` ("This run lasts four hours.";
+  none when the budget sets no episode limit), then the delimited objective
+  block in place of the goal's two directive sentences, then the same body as
+  every run (`runner/src/prompt.ts` holds the wording).
 - **Watchdogs.** The definition's. Every definition so far keeps the no-XP
   watchdog off, for the same reason it is off on `e360` and more so: a probe
   may spend its whole budget walking somewhere in order to find out what
   happens there.
 - **Tool-call ceiling.** The definition's, sized as a runaway guard.
-- **Stopping rule.** A definition may set `stopAtLevel`. The run then ends as
-  `level-target` on the first server-observed level at or above it, which is
-  the server's word and not the model's.
-  - It outranks every watchdog but the stale-character check, so a run that got
-    there in the tick its clock ran out ended because it got there.
-  - It is a verdict and counts like `episode-limit`. The measurement is taken,
-    and the rest of the clock would buy nothing.
-- **Ends.** Anything, including `manual`.
+- **Ends.** A definition may say what ends a run as reached, the first met
+  ending it (`runner/src/end-conditions.ts`). Each is the server's word, not
+  the model's, and the model is told none of them.
+  - A level: `stopAtLevel`, or `{ "level": N }` in `end` (one spelling per
+    definition). The run ends as `level-target` on the first server-observed
+    level at or above it.
+  - A kill: `{ "kill": { "entry": N } }` in `end` (operator, 2026-10-21:
+    deadmines@4 ends on Edwin VanCleef, 639). The run ends as `kill-target`
+    on the first `kill` record of that creature credited to this character or
+    a member of its group. The record is `SMSG_PARTYKILLLOG`, which the server
+    sends every member of the tapping group wherever it stands, the victim's
+    entry read off its guid when this member never saw it; a kill outside the
+    group is never sent, and a killer who is not a member is not credited.
+    Kill records skip rank-0 victims, so a kill end names an elite or a boss.
+  - Both outrank every watchdog but the stale-character check, so a run that
+    got there in the tick its clock ran out ended because it got there.
+  - Both are verdicts and count like `episode-limit`. The measurement is
+    taken, and the rest of the clock would buy nothing. A party member's end
+    ends the party on the same reason (above).
+  - Otherwise a probe ends on anything, including `manual`.
 - **Done.** A square is done when it holds the assignment's `runsPerCell`
   counted runs, or capped once it has had the definition's
   `maxAttemptsPerCell` launches with nothing still in flight.
@@ -251,7 +276,13 @@ fleet can launch in a run pod.
   - One tally serves the scheduler and the campaigns page
     (`campaignSquares`), so "complete" is exactly "done plus capped equals
     wanted".
-  - Completion is derived from the runs on disk, never recorded.
+  - Completion is derived from the runs on disk, never recorded. The one
+    exception is the operator's: a version the store row lists in
+    `concluded` is finished whatever its squares hold, launches and resumes
+    nothing, and the page marks it as that verdict, with its counts unchanged.
+  - A counted attempt that ended on one of the definition's ends (or, for a
+    level, got there) is also **reached**, which the grid shows as reached of
+    counted; a party is one attempt either way.
 - **Resuming.** A paused probe whose definition says resume comes back under
   the job it was spawned as, rebuilt from its own `campaign.json`, arm
   included.
@@ -334,7 +365,8 @@ standing sandbox that never finishes. Duration separates neither pair.
 - **Objective.** Allowed. One of the two steered ids where the operator may tell
   the agent where to go, and where `wikiCoords` may be on (the run-dimension
   rule in `docs/METHODOLOGY.md`; `freeplay` was the only steered id until the
-  probe lane arrived).
+  probe lane arrived). As on a probe, an objective replaces the broad goal for
+  that run; freeplay states no clock either way.
 - **Watchdogs.** Set per experiment; recorded, like everything else.
 - **Ends.** Anything, including `manual`.
 - **Scoring.** **Unscored, always.** The run carries the same `unscored`

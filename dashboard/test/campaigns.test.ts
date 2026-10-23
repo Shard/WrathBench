@@ -31,6 +31,7 @@ import {
   findCampaign,
   gridRows,
   imageTitle,
+  endGoal,
   medianTitle,
   progressText,
   progressTitle,
@@ -42,6 +43,8 @@ import {
   squareHref,
   squareText,
   squareTitle,
+  CONCLUDED_TITLE,
+  stateBadge,
   stateClass,
   stateTitle,
   terminationMix,
@@ -76,6 +79,14 @@ describe("state", () => {
     const states: CampaignState[] = ["running", "queued", "complete", "disabled", "unassigned"];
     expect(states.map(stateClass)).toEqual(["ok", "", "ok-muted", "warn", "dim"]);
     for (const s of states) expect(stateTitle(s).length).toBeGreaterThan(0);
+  });
+
+  test("the operator's verdict reads complete with a mark and its own hover; a derived complete reads plain", () => {
+    expect(stateBadge({ state: "complete", concluded: true })).toEqual({ text: "complete*", cls: "ok-muted", title: CONCLUDED_TITLE });
+    expect(stateBadge({ state: "complete", concluded: false })).toEqual({ text: "complete", cls: "ok-muted", title: stateTitle("complete") });
+    // An older API that serves no `concluded` reads as derived.
+    expect(stateBadge({ state: "complete" })).toEqual(stateBadge({ state: "complete", concluded: false }));
+    expect(stateBadge(WAKE)).toEqual({ text: "running", cls: "ok", title: stateTitle("running") });
   });
 });
 
@@ -193,64 +204,74 @@ describe("a square", () => {
   const [mismatched, capped, owed, refused] = rows[1]!.squares as [Square, Square, Square, Square];
 
   test("with a stop level it reads reached/counted and the median minutes to it", () => {
-    expect(squareText(reached!, 5)).toBe("1/1 41m");
-    expect(squareClass(reached!, 5)).toBe("right mono ok");
-    expect(squareTitle(reached!, 5)).toBe(
+    expect(squareText(reached!, "L5")).toBe("1/1 41m");
+    expect(squareClass(reached!, "L5")).toBe("right mono ok");
+    expect(squareTitle(reached!, "L5")).toBe(
       "1 of 1 counted run reached L5 · 41/41/41 min to L5 (min/median/max) · best L5 · $1.25 billed · 1 counted run wanted\nbuild 0.5-920-gaaaaaaa",
     );
   });
 
   test("runs that did not count are named in the hover", () => {
-    expect(squareText(several!, 5)).toBe("1/1 38m");
-    expect(squareTitle(several!, 5)).toContain("1 not counted");
+    expect(squareText(several!, "L5")).toBe("1/1 38m");
+    expect(squareTitle(several!, "L5")).toContain("1 not counted");
   });
 
   test("a counted run short of the stop level is plain, not green", () => {
-    expect(squareText(short!, 5)).toBe("0/1");
-    expect(squareClass(short!, 5)).toBe("right mono");
-    expect(squareTitle(short!, 5)).toContain("best L3");
+    expect(squareText(short!, "L5")).toBe("0/1");
+    expect(squareClass(short!, "L5")).toBe("right mono");
+    expect(squareTitle(short!, "L5")).toContain("best L3");
   });
 
   test("a square whose only run is live says nothing itself, and its hover says live", () => {
-    expect(squareText(live!, 5)).toBe("");
-    expect(squareClass(live!, 5)).toBe("right mono dim");
-    expect(squareTitle(live!, 5)).toBe("0 of 0 counted runs reached L5 · 1 live");
+    expect(squareText(live!, "L5")).toBe("");
+    expect(squareClass(live!, "L5")).toBe("right mono dim");
+    expect(squareTitle(live!, "L5")).toBe("0 of 0 counted runs reached L5 · 1 live");
   });
 
   test("a run started as another start is starred and named", () => {
-    expect(squareText(mismatched, 5)).toBe("1/1 52m*");
-    expect(squareTitle(mismatched, 5)).toContain("1 ran as another start");
+    expect(squareText(mismatched, "L5")).toBe("1/1 52m*");
+    expect(squareTitle(mismatched, "L5")).toContain("1 ran as another start");
   });
 
   test("a square that spent its attempts without a counted run says capped, and is still a way into its runs", () => {
-    expect(squareText(capped, 5)).toBe("capped");
-    expect(squareClass(capped, 5)).toBe("right mono dim");
-    expect(squareTitle(capped, 5)).toBe(
+    expect(squareText(capped, "L5")).toBe("capped");
+    expect(squareClass(capped, "L5")).toBe("right mono dim");
+    expect(squareTitle(capped, "L5")).toBe(
       "0 of 0 counted runs reached L5 · best L3 · 2 not counted · capped: its attempts are spent without the counted runs it wanted · 1 counted run wanted\nbuild 0.5-921-gbbbbbbb",
     );
     expect(squareHref(WAKE, "south", capped)).toBe("/campaigns/wake-probe/1?cell=south&column=sonnet-low%7Cwake");
     // Capped with a counted run short of its want keeps its figure.
-    expect(squareText({ ...capped, counted: 1 }, 5)).toBe("0/1");
+    expect(squareText({ ...capped, counted: 1 }, "L5")).toBe("0/1");
   });
 
   test("a refused pair's square says refused, with the reason first in its hover", () => {
-    expect(squareText(refused, 5)).toBe("refused");
-    expect(squareClass(refused, 5)).toBe("right mono err");
-    expect(squareTitle(refused, 5)).toBe("refused: compact window 100k clashes with the arm's --compact-window 50k");
+    expect(squareText(refused, "L5")).toBe("refused");
+    expect(squareClass(refused, "L5")).toBe("right mono err");
+    expect(squareTitle(refused, "L5")).toBe("refused: compact window 100k clashes with the arm's --compact-window 50k");
     // One that ran before the refusal keeps its figures, and the hover leads with why.
     const ran = { ...refused, runs: 1, counted: 1, reached: 1, bestLevel: 5 };
-    expect(squareText(ran, 5)).toBe("1/1");
-    expect(squareClass(ran, 5)).toBe("right mono ok");
-    expect(squareTitle(ran, 5).split("\n")[0]).toBe("refused: compact window 100k clashes with the arm's --compact-window 50k");
+    expect(squareText(ran, "L5")).toBe("1/1");
+    expect(squareClass(ran, "L5")).toBe("right mono ok");
+    expect(squareTitle(ran, "L5").split("\n")[0]).toBe("refused: compact window 100k clashes with the arm's --compact-window 50k");
   });
 
   test("owed, gap, and no-stop-level squares", () => {
-    expect(squareText(owed, 5)).toBe("·");
-    expect(squareTitle(owed, 5)).toBe("owed: 1 counted run wanted");
-    expect(squareTitle(square("x"), 5)).toBe("owed, not run yet");
-    expect(squareText(null, 5)).toBe("");
-    expect(squareClass(null, 5)).toBe("right mono dim");
+    expect(squareText(owed, "L5")).toBe("·");
+    expect(squareTitle(owed, "L5")).toBe("owed: 1 counted run wanted");
+    expect(squareTitle(square("x"), "L5")).toBe("owed, not run yet");
+    expect(squareText(null, "L5")).toBe("");
+    expect(squareClass(null, "L5")).toBe("right mono dim");
     expect(squareText(square("x", { runs: 1, counted: 1, bestLevel: 7 }), null)).toBe("L7");
+    // A kill end reads like a level end: reached of counted, green once reached.
+    const kill = endGoal({ stopAtLevel: null, end: [{ kill: { entry: 639 } }] });
+    expect(kill).toBe("the kill of entry 639");
+    const party = square("x", { runs: 1, counted: 1, reached: 1, bestLevel: 20, want: 1, settled: "done" });
+    expect(squareText(party, kill)).toBe("1/1");
+    expect(squareClass(party, kill)).toBe("right mono ok");
+    expect(squareTitle(party, kill)).toContain("1 of 1 counted run reached the kill of entry 639");
+    expect(endGoal({ stopAtLevel: 10, end: [{ level: 10 }, { kill: { entry: 639 } }] })).toBe("L10 or the kill of entry 639");
+    expect(endGoal({ stopAtLevel: 5 })).toBe("L5");
+    expect(endGoal({ stopAtLevel: null, end: [] })).toBeNull();
     expect(squareText(square("x", { runs: 1, counted: 1, mismatchedStart: 1 }), null)).toBe("—*");
     expect(squareTitle(square("x", { runs: 1, counted: 1, bestLevel: 7 }), null)).toBe("best L7");
   });

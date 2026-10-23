@@ -235,6 +235,7 @@ async function selfPosition(client: WrathClient): Promise<{ map: number } & Vec>
 /** A raw `move_to` and its verdict: no fall estimate, `force` only when asked. */
 async function probe(client: WrathClient, target: MovePoint, force: boolean): Promise<Answer> {
   const ack = await client.moveToAsync(target, { force });
+  if (ack.moveId === undefined) fail(`moveToAsync refused before sending: ${ack.status} — ${ack.hint ?? ""}`);
   const ev = await client.events.waitFor(
     (e) => e.opcode === "WB_MOVE_RESULT" && (e.data as { moveId?: number } | undefined)?.moveId === ack.moveId,
     { timeout: MOVE_TIMEOUT_MS, description: `WB_MOVE_RESULT for moveId ${ack.moveId}` },

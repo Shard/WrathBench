@@ -12,8 +12,10 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { campaignDefinitionSchema, campaignHash, campaignRef, imageRefProblem, issuesOf } from "../src/campaign-def";
-import { CAMPAIGNS_DIR, checkedInFiles, definition } from "./fixtures/campaigns";
+import { campaignDefinitionSchema, campaignHash, campaignRef, imageRefProblem, issuesOf, type CampaignDefinition } from "../src/campaign-def";
+import { campaignPairRefusals, type PairRosterEntry } from "../src/campaigns";
+import { rosterEntryRefusal } from "../src/roster-refusal";
+import { CAMPAIGNS_DIR, checkedIn, checkedInFiles, definition } from "./fixtures/campaigns";
 
 /**
  * The race/class pairs 3.3.5a creates, from AzerothCore's `playercreateinfo`
@@ -40,6 +42,42 @@ describe("the checked-in definitions", () => {
   test("there are some, and race-probe@1 and class-probe@2 are among them", () => {
     expect(files).toContain("race-probe@1.json");
     expect(files).toContain("class-probe@2.json");
+    for (const f of ["compact-window-claude@2.json", "compact-window-codex@2.json", "pi-vs-wrathbench@1.json"]) expect(files).toContain(f);
+  });
+
+  test("compact-window @2 is @1 re-pinned: only the version, the note and the one image every arm runs move", () => {
+    for (const half of ["claude", "codex"]) {
+      const v1 = checkedIn(`compact-window-${half}@1`);
+      const v2 = checkedIn(`compact-window-${half}@2`);
+      const images = new Set(v2.arms.map((a) => a.image));
+      expect(images.size).toBe(1);
+      expect([...images][0]).not.toBe(v1.arms[0]!.image);
+      const rest = (d: CampaignDefinition) => ({ ...d, version: 0, note: "", arms: d.arms.map((a) => ({ ...a, image: "" })) });
+      expect(rest(v2)).toEqual(rest(v1));
+    }
+  });
+
+  test("pi-vs-wrathbench@1: one pinned arm with no args, so its wrathbench and pi assignments refuse nothing with run pods on", () => {
+    const def = checkedIn("pi-vs-wrathbench@1");
+    expect(def.arms).toHaveLength(1);
+    expect(def.arms[0]!.image).toBe(checkedIn("compact-window-claude@2").arms[0]!.image);
+    expect(def.arms[0]!.args).toBeUndefined();
+    // The two entries the comparison assigns: one model and endpoint, effort
+    // high on both, and pi's 300k window on the pi entry, not on the arm.
+    const endpoint = { model: "deepseek-flash", apiBase: "https://api.deepseek.com/v1", apiKeyEnv: "DEEPSEEK_KEY", effort: "high", tier: "t1" };
+    const roster: Record<string, PairRosterEntry & typeof endpoint> = { ds: { ...endpoint }, "ds-pi": { ...endpoint, driver: "pi", compactWindow: "300k" } };
+    for (const e of Object.values(roster)) expect(rosterEntryRefusal(e, [], {})).toBeNull();
+    const c = { name: def.id, version: def.version, arms: def.arms, assignments: [{ model: "ds", runsPerCell: 1 }, { model: "ds-pi", runsPerCell: 1 }] };
+    expect(campaignPairRefusals(c, roster, { runPods: "probes", onCluster: true })).toEqual([]);
+  });
+
+  test("pi-vs-wrathbench@2 is @1 on e360's clock: only the version, the question, the note, the episode length and the call guard move", () => {
+    const v1 = checkedIn("pi-vs-wrathbench@1");
+    const v2 = checkedIn("pi-vs-wrathbench@2");
+    expect(v2.budget.episodeMs).toBe(6 * 60 * 60 * 1000);
+    expect(v2.budget.maxToolCalls).toBe(12000);
+    const rest = (d: CampaignDefinition) => ({ ...d, version: 0, question: "", note: "", budget: { ...d.budget, episodeMs: 0, maxToolCalls: 0 } });
+    expect(rest(v2)).toEqual(rest(v1));
   });
 
   for (const file of files) {

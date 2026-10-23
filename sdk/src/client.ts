@@ -116,8 +116,11 @@ import {
 import { noteRequest, settleOnLaterTurns } from "./turn";
 import {
   mailResultText,
+  npcRolesOf,
   partyResultText,
   isQuestGiverMarkerInput,
+  chatMessageAsShown,
+  PLAYER_FLAGS_GHOST,
   pointOf,
   questGiverStatusName,
   StateCache,
@@ -493,6 +496,8 @@ function resolveMoveTarget(target: unknown, state: StateCache, method: string): 
   // outside the mesh's poly-search box while the ground under it is walkable.
   // With `guid` the module resolves z to the ground at x,y first (PROTOCOL.md
   // move_to); the request still walks to x,y, never to wherever the guid is.
+  // Where the unit is now (along its spline, if it is moving), not where the
+  // spline ends: a mob chasing us has us as its destination.
   const obj = state.nearby.get(key);
   const seen = obj === undefined ? undefined : pointOf(obj)?.value;
   if (seen !== undefined) return { point: { x: seen.x, y: seen.y, z: seen.z }, guid: key };
@@ -683,7 +688,11 @@ const ERROR_CODE_HINTS: Record<string, string> = {
     "(ignore its error), then await sdk.createSession({...})",
   unsupported_action:
     "that action is not in the module's whitelist — inspect the sdk surface for what is supported",
-  moving: "a move is in progress — await sdk.stop() first, or supersede it with sdk.moveTo(...)",
+  // Only face sends it: a walk runs forward, and a running character faces
+  // the way it runs, so a turn mid-walk would steer it off its path.
+  moving:
+    "a move is running, and a running character faces the way it runs: a turn would steer it off its path, so nothing was sent; " +
+    "await sdk.stop() and then face, or walk toward what you want to face",
   missing_guid:
     "this action needs a guid argument — get one from state.nearbyUnits() or state.closest(...)",
   missing_position: "move_to needs finite x, y and z numbers",
@@ -816,12 +825,22 @@ export interface ConnectOptions {
    * (explain, do not cap). Undefined means no budget is known.
    */
   deadline?: number | (() => number | undefined);
+  /**
+   * Who is calling, as an id the caller assigns, consulted per call the way
+   * `signal` is and recorded on each `ActionHint` as `origin`. The runner
+   * passes the id of the snippet whose code is running (a routine an earlier
+   * snippet launched keeps that snippet's id), so a hint drained under a later
+   * snippet can say whose code raised it. Undefined means no origin.
+   */
+  origin?: () => number | undefined;
 }
 
 export interface WaitForChatOptions {
   /** How long to wait, in ms. Default 10000. */
   timeout?: number;
+  /** Only consider lines with `seq >= sinceSeq`. */
   sinceSeq?: number;
+  /** Match lines already received first. Default true; `false` waits for a new line only. */
   includeBuffered?: boolean;
 }
 
@@ -1094,6 +1113,9 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
   interrupted: () =>
     `the move stopped early (death, root, stun, or the server rejected the movement). Check state.self, ` +
     `then retry from where you are.`,
+  // A root or a stun (module/PROTOCOL.md, `rooted`): a refusal carries no
+  // route, a walk the root stopped does.
+  rooted: (_p, d) => (d.pathLength === undefined ? ROOTED_MOVE_HINT : ROOTED_WALK_HINT),
   superseded: () =>
     `a newer moveTo replaced this one and is the move walking now. It came from this run's own code: another ` +
     `routine, a snippet, or a helper's walk (killTarget's approach). Retrying on superseded cancels that newer ` +
@@ -1119,9 +1141,30 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
  */
 const ASYNC_MOVE_UNREPORTED: ReadonlySet<string> = new Set(["arrived", "transferred", "teleported", "superseded", "stopped"]);
 
+/**
+ * How long `moveToAsync` waits after an undispatched ack (no `pathLength`)
+ * for the refusal that goes with it, in ms. The module emits the refusal in
+ * the same call as the ack (the 2026-10-20 party runs: 1 ms apart); this only
+ * bounds the socket race, and an older module's ack, which never carries a
+ * route, costs no more than this.
+ */
+const ASYNC_MOVE_VERDICT_MS = 250;
+
 /** The refusal of a move while dead and not released; nothing is sent. */
 const DEAD_MOVE_HINT =
   "you are dead and a corpse cannot move; nothing was sent. sdk.repop() releases your spirit, and a ghost can walk.";
+
+/**
+ * `rooted`, refused: the module was told the character is rooted (a root, a
+ * stun) and sent nothing. Proposed wording, for the operator's approval.
+ */
+const ROOTED_MOVE_HINT = "you are rooted or stunned and cannot move until it wears off; the move was not sent.";
+
+/**
+ * `rooted`, mid-walk: a root or a stun stopped a walk where the character
+ * stood. Proposed wording, for the operator's approval.
+ */
+const ROOTED_WALK_HINT = "a root or stun stopped you mid-walk where you stand; you cannot move until it wears off.";
 
 /** `interrupted` when the verdict found the character dead. */
 const MOVE_DIED_HINT =
@@ -1301,9 +1344,11 @@ export interface ActionHint {
   point?: { x: number; y: number; z: number };
   /** When that most recent failure was recorded (epoch ms). */
   ts: number;
+  /** The `origin` the client was given for the code that made the call, when it was given one. */
+  origin?: number;
 }
 
-/** Distinct (action, status) pairs kept between drains. A guard, never reached in practice. */
+/** Distinct (action, status, origin) triples kept between drains. A guard, never reached in practice. */
 const ACTION_HINT_MAX_KEYS = 32;
 
 /**
@@ -1327,6 +1372,23 @@ const MOVE_LEAVES_NO_STOP: ReadonlySet<string> = new Set([
   "path_incomplete",
   "drop",
 ]);
+
+/**
+ * A `rooted` verdict that refused the move: the module sent nothing, and the
+ * verdict carries no route (`pathLength`), which a walk the root stopped
+ * does. Like the planning refusals it moved nothing and is remembered for a
+ * repeat (`MOVE_REJECTION_MEMO_MS`: a root outlasts the window), but it sends
+ * no stop: the module's root ack already told the server the character
+ * stands still, and a rooted client sends nothing.
+ */
+function rootedRefusal(data: MoveResultData): boolean {
+  return data.status === "rooted" && data.pathLength === undefined;
+}
+
+/** A verdict that moved nothing: a refusal at planning, or a root's. */
+function refusedUnmoved(data: MoveResultData): boolean {
+  return MOVE_LEAVES_NO_STOP.has(data.status) || rootedRefusal(data);
+}
 
 /**
  * How long the server's refusal of a `moveTo` stands for.
@@ -1553,8 +1615,19 @@ export function longRouteNote(
   );
 }
 
-/** `moveToAsync`'s answer: the module's ack, and the long-route note when the route earns one. */
-export type MoveToAsyncResponse = MoveToResponse & { readonly hint?: string };
+/**
+ * `moveToAsync`'s answer: the module's ack, and the long-route note when the
+ * route earns one — or, when the move's verdict was already in by the time
+ * the ack resolved and it is a refusal (`too_far`, `drop`, `target_off_mesh`,
+ * …), that verdict: `ok: false` with its `status` and the same hint the
+ * harness block carries. Nothing moved; `moveId` names the `WB_MOVE_RESULT`
+ * it came from. A move refused before anything was sent (`dead`,
+ * `unknown_target`) answers as `moveTo` does, with no `moveId`.
+ */
+export type MoveToAsyncResponse =
+  | (MoveToResponse & { readonly hint?: string })
+  | { readonly ok: false; readonly action: string; readonly moveId: number; readonly status: string; readonly hint?: string }
+  | { readonly ok: false; readonly status: "dead" | "unknown_target"; readonly hint: string; readonly action?: undefined; readonly moveId?: undefined };
 
 export interface WaitForTransferOptions {
   /** How long to wait for `SMSG_NEW_WORLD`, in ms. Default 15000: a far teleport is a few server ticks. */
@@ -1763,6 +1836,11 @@ function questgiverOutOfReach(state: StateCache, guid: GuidArg): number | undefi
   return distance !== undefined && distance > QUESTGIVER_REACH_CEILING ? Math.round(distance) : undefined;
 }
 
+/** Whether the state cache knows `guid` as a questgiver-type game object. */
+function isQuestGiverObject(state: StateCache, guid: string): boolean {
+  return state.units({ type: "gameObject" }).some((u) => u.guid === guid && u.goType === "questgiver");
+}
+
 /** The `too_far` hint every quest call gives, nothing having been sent. */
 function questgiverTooFarHint(distance: number): string {
   return `the questgiver is ${distance}y away — interact range is ~${INTERACT_RANGE}y; moveTo it first`;
@@ -1770,6 +1848,8 @@ function questgiverTooFarHint(distance: number): string {
 
 /** `UNIT_NPC_FLAG_QUESTGIVER`. */
 const NPC_FLAG_QUESTGIVER = 0x2;
+/** `UNIT_NPC_FLAG_REPAIR`. */
+const NPC_FLAG_REPAIR = 0x1000;
 /** `GAMEOBJECT_TYPE_QUESTGIVER`. */
 const GO_TYPE_QUESTGIVER = 2;
 /** How long the client-parity queries wait to coalesce one burst of events. */
@@ -1976,6 +2056,34 @@ const CHEST_OPEN_SPELLS: readonly number[] = [6478, 3365, 6247, 6477];
 const SPELL_FAILED_BAD_TARGETS = 12;
 /** Loot slot types the auto-loot sequence stores: ALLOW_LOOT (0) and OWNER (4). */
 const isStorableSlot = (i: { slotType: number }): boolean => i.slotType === 0 || i.slotType === 4;
+/** The raw trade opcodes whose effect a client's own window shows and no packet echoes (`StateCache.tradeSent`). */
+const TRADE_OWN_OPCODES: ReadonlySet<string> = new Set(["CMSG_INITIATE_TRADE", "CMSG_SET_TRADE_ITEM", "CMSG_CLEAR_TRADE_ITEM", "CMSG_SET_TRADE_GOLD"]);
+/** `LOOT_SLOT_TYPE_ROLL_ONGOING`: the slot is up for a group roll and cannot be looted until it ends. */
+const LOOT_SLOT_ROLL_ONGOING = 1;
+
+/**
+ * The open roll frames in a sentence, with the vote's call shape: a roll the
+ * server opened is otherwise one `slotType: 1` in a loot window and a row in
+ * `state.pendingRolls()`, and four of five party members never found either
+ * (the 2026-10-21 Deadmines party: the mage voted through raw
+ * `CMSG_LOOT_ROLL`). The seconds left are as of `now`; the deadline is the
+ * frame's own. An unvoted frame passes at its deadline: the core counts only
+ * need and greed votes (`Group::CountTheRoll`, "who didn't vote ... he will
+ * pass").
+ */
+function openRollsHint(rolls: readonly PendingRoll[], now: number): string {
+  const rows = rolls.map(
+    (r) => `${JSON.stringify(r.name ?? `item ${r.itemId}`)} (${r.allowed.join("/")}, ${Math.max(0, Math.round((r.deadline - now) / 1000))}s left)`,
+  );
+  // The call names no button: which one to press is the model's to choose.
+  const first = rolls[0]!;
+  const which = first.name === undefined ? String(first.itemId) : JSON.stringify(first.name);
+  return (
+    `${rolls.length === 1 ? "a group loot roll is open on" : `${rolls.length} group loot rolls are open on`} ${rows.join(", ")}: ` +
+    `vote with await sdk.lootRoll(${which}, choice), choice one of the buttons listed. ` +
+    `state.pendingRolls() holds each frame and its deadline; a frame left unvoted at its deadline counts as a pass`
+  );
+}
 
 /** `interact(guid)` on a chest: the opcode would be dropped, so it is refused with the way that works. */
 export type InteractResult = ActionResponse | { readonly ok: false; readonly status: "chest"; readonly hint: string };
@@ -2037,6 +2145,8 @@ export type LootResult =
       readonly items: readonly StoredLootItem[];
       /** What the window showed, including anything that was not stored. */
       readonly window: readonly LootItemData[];
+      /** When a window slot is up for a group roll (`slotType` 1): the open roll frames and how to vote on them. */
+      readonly hint?: string;
     }
   | { readonly ok: false; readonly status: "empty"; readonly gold: 0; readonly items: readonly [] }
   | {
@@ -2055,6 +2165,7 @@ export type LootResult =
       readonly gold: number;
       readonly items: readonly [];
       readonly window: readonly LootItemData[];
+      readonly hint?: string;
     }
   | {
       /** The server refused to open a window: `SMSG_LOOT_RESPONSE` in its error form. */
@@ -2202,6 +2313,8 @@ interface PendingCast {
   readonly sinceSeq: number | undefined;
   /** When it was dispatched (epoch ms): a move sent after this is one the cast was standing through. */
   readonly sentAt: number;
+  /** The caller's `origin` at the dispatch: the verdict arrives on the event stream, outside the caller's context. */
+  readonly origin: number | undefined;
   /** When the watch lapses (epoch ms); a cast that starts pushes it out by its cast time. */
   expiresAt: number;
 }
@@ -2223,13 +2336,20 @@ const CAST_VERDICT_MS = 3000;
 const CAST_DEATH_WINDOW_MS = 300;
 
 /**
+ * How long a completed transfer waits for the WB_AREA that names the new map,
+ * in ms. The module sends it on its next tick after `SMSG_NEW_WORLD`; this
+ * only bounds a module that does not.
+ */
+const TRANSFER_MAP_NAME_MS = 1_000;
+
+/**
  * What a cast failure means, in a few words, for the reasons runs hit. A
  * reason not listed is named and nothing more is said.
  */
 const CAST_FAILURE_MEANING: Readonly<Record<string, string>> = {
-  line_of_sight: "something blocks the line of sight to the target",
+  line_of_sight: "something blocks the line of sight to the target; move to where it is in view",
   out_of_range: "the target is out of this spell's range",
-  unit_not_infront: "the target is not in front of you",
+  unit_not_infront: "the target is not in front of you; sdk.face({ x: target.x, y: target.y }) turns you to it",
   not_infront: "you are not facing the target",
   caster_dead: "you are dead",
   interrupted: "the cast was interrupted (moving or acting during it)",
@@ -2237,7 +2357,10 @@ const CAST_FAILURE_MEANING: Readonly<Record<string, string>> = {
   moving: "you were moving, and a cast with a cast time needs you standing still",
   not_ready: "its cooldown, or the global cooldown, is still running",
   spell_in_progress: "another cast was still in progress",
-  bad_targets: "the target is not a valid target for this spell",
+  bad_targets:
+    "this spell cannot take that target: commonly it is dead, it is a friend and the spell hits only enemies " +
+    "(or an enemy, and the spell is a friendly one), or there is none and the spell needs one",
+  no_target: "you gave no target and have none selected, and this spell needs one; pass one",
   bad_implicit_targets: "it has no valid target; pass one",
   targets_dead: "the target is dead",
   target_not_dead: "the target is not dead",
@@ -2255,6 +2378,35 @@ const CAST_FAILURE_MEANING: Readonly<Record<string, string>> = {
   nothing_to_dispel: "the target has nothing it can dispel",
   equipped_item_class_mainhand: "it needs a fitting weapon in the main hand, and a broken one (durability 0) does not count",
   equipped_item_class_offhand: "it needs a fitting weapon in the off hand, and a broken one (durability 0) does not count",
+  // What the client's own error line says for the rest the runs hit, or
+  // could: the 2026-10-21 party read "the server refused it" for 132
+  // Revenges that wanted a dodge, block or parry first. The stance a spell
+  // needs is its Spell.dbc Stances mask, which nothing serves, so
+  // only_shapeshift says no more than that the form is wrong.
+  caster_aurastate: "needs a state first (e.g. after a dodge, parry or block)",
+  target_aurastate: "the target is not in the state this spell needs (e.g. low enough health)",
+  only_shapeshift: "needs a different stance or form",
+  not_shapeshift: "it cannot be cast in your current stance or form",
+  no_items_while_shapeshifted: "items cannot be used in your current form",
+  equipped_item_class: "it needs a fitting item equipped (a weapon type, or a shield), and a broken one (durability 0) does not count",
+  equipped_item: "it needs a particular item equipped",
+  affecting_combat: "it cannot be cast while you are in combat",
+  not_standing: "you must be standing (you are sitting)",
+  only_stealthed: "it needs you to be stealthed",
+  only_outdoors: "it can only be cast outdoors",
+  only_indoors: "it can only be cast indoors",
+  not_mounted: "you are mounted",
+  only_mounted: "you must be mounted",
+  fleeing: "you are fleeing (feared) and cannot act",
+  confused: "you are confused",
+  charmed: "you are charmed",
+  immune: "the target is immune to it",
+  item_not_ready: "the item's cooldown is still running",
+  too_many_of_item: "you already carry as many of the item it makes as you may",
+  requires_spell_focus: "it needs a particular object nearby (a forge, an anvil, a campfire, …)",
+  target_not_in_party: "the target is not in your party",
+  level_requirement: "your level is too low for it",
+  no_pet: "you have no pet",
 };
 
 /**
@@ -2271,7 +2423,8 @@ const CAST_FAILURE_WEAPON_SLOT: Readonly<Record<string, { slot: number; words: s
  * and its target by name where the cache has them, so a failure raised in a
  * background routine says which cast it was.
  */
-function castFailedHint(state: StateCache, cast: PendingCast, reason: string, cause: string = reason): string {
+function castFailedHint(state: StateCache, cast: PendingCast, reason: string, cause: string = reason, casting?: string): string {
+  if (cause === "bad_targets") cause = badTargetsCause(state, cast);
   const spell = state.spell(cast.spellId)?.name;
   const label = spell === undefined ? `spell ${cast.spellId}` : `${spell} (${cast.spellId})`;
   let on = "";
@@ -2280,7 +2433,13 @@ function castFailedHint(state: StateCache, cast: PendingCast, reason: string, ca
     const name = state.nearby.get(key)?.name?.value ?? state.nameOf(key);
     on = ` on ${name ?? cast.targetGuid}`;
   }
-  const meaning = CAST_FAILURE_MEANING[cause];
+  // Our own cast still running says more than the refusal's own words:
+  // the 2026-10-21 mage's routine sent a cast 11 ms after the last one and
+  // read not_ready as a cooldown.
+  const meaning =
+    casting !== undefined && cause === "not_ready"
+      ? `you are still casting ${casting}; ${CAST_FAILURE_MEANING.not_ready}`
+      : CAST_FAILURE_MEANING[cause];
   // A weapon-slot refusal with the slot's own item observed broken says
   // which item: the durability fields are what the client's tooltip reads.
   const weapon = CAST_FAILURE_WEAPON_SLOT[reason];
@@ -2292,6 +2451,32 @@ function castFailedHint(state: StateCache, cast: PendingCast, reason: string, ca
   // The reason itself is the tally line's status (`castSpell <reason>: …`), so
   // the hint says what it means and names nothing twice.
   return `${label}${on}: ${meaning ?? "the server refused it"}${broken}`;
+}
+
+/**
+ * Our own cast in progress at `now` (`state.self.casting`), named with its
+ * time left, e.g. "Frostbolt (7322), 0.6s left"; undefined when none is.
+ */
+function castInProgress(state: StateCache, now: number): string | undefined {
+  const c = state.self.casting?.value;
+  if (c === undefined || c.endsAt <= now) return undefined;
+  const label = c.name === undefined ? `spell ${c.spellId}` : `${c.name} (${c.spellId})`;
+  return `${label}, ${((c.endsAt - now) / 1000).toFixed(1)}s left`;
+}
+
+/**
+ * Which `bad_targets` case the cache can tell apart: a target observed dead
+ * (a body, or a player's ghost), or no target at all. The spell's own side
+ * (friendly or hostile only) is Spell.dbc knowledge nothing serves, so any
+ * other case keeps the list of common ones.
+ */
+function badTargetsCause(state: StateCache, cast: PendingCast): string {
+  const guid = cast.targetGuid === undefined ? state.self.targetGuid?.value : guidKey(cast.targetGuid);
+  if (guid === undefined || guid === "0") return "no_target";
+  const unit = state.nearby.get(guid);
+  const health = unit?.fields.get("health")?.value;
+  const ghost = ((unit?.fields.get("playerFlags")?.value ?? 0) & PLAYER_FLAGS_GHOST) !== 0;
+  return health === 0 || ghost ? "targets_dead" : "bad_targets";
 }
 
 /** The quest an item's tooltip says it starts, when the tooltip has been observed and says so. */
@@ -2918,6 +3103,11 @@ export type EquipItemResult =
       readonly name: string | undefined;
       /** The equipment slot it landed in, when the cache saw it arrive. */
       readonly equippedSlot: number | undefined;
+      /**
+       * What was worn in that slot before, now swapped into the bags; undefined
+       * when the slot was observed empty, or when the landing was not seen.
+       */
+      readonly replaced: { readonly itemId: number | undefined; readonly name: string | undefined } | undefined;
     }
   | {
       readonly ok: false;
@@ -3137,6 +3327,13 @@ export type ReclaimCorpseResult =
       readonly delayMs: number | undefined;
       /** How many `CMSG_RECLAIM_CORPSE` this call sent. */
       readonly attempts: number;
+      /**
+       * The living creatures in view within `RECLAIM_CROWD_YARDS` of the
+       * corpse when you came back, by name and count — present only when
+       * there are any. A fact about what stands there; whether any is
+       * hostile is not observed.
+       */
+      readonly note?: string;
     }
   | {
       readonly ok: false;
@@ -3228,6 +3425,14 @@ export interface SpiritHealerOptions {
 }
 
 /**
+ * The outcome of `repairAll`: the module's ack when the packet went out, or
+ * `no_repair` when the NPC's observed flags carry no repair role and nothing
+ * was sent. The ack says only that it was sent; `state.money` says what the
+ * repair cost.
+ */
+export type RepairAllResult = ActionResponse | { readonly ok: false; readonly status: "no_repair"; readonly hint: string };
+
+/**
  * The outcome of `spiritHealerActivate`. `resurrected` is the resurrect
  * observed (`SMSG_DEATH_RELEASE_LOC { map: -1 }`); `unconfirmed` means the
  * activation went out and nothing came back, with the yards to the healer
@@ -3301,6 +3506,58 @@ function isOwnPort(e: StreamEvent, selfGuid: string | undefined): boolean {
   if (isDecodeError(e.data)) return false;
   if (isEvent(e, "SMSG_NEW_WORLD")) return true;
   return isEvent(e, "MSG_MOVE_TELEPORT_ACK") && selfGuid !== undefined && (e.data as MoveUpdateData).guid === selfGuid;
+}
+
+/**
+ * How near the corpse a creature is named on a reclaim's result, in yards.
+ * The harness's own choice, not the creatures' aggro radius (which no packet
+ * carries): the a3 party runs' reclaims that died within seconds had packs
+ * at 1-5y.
+ */
+const RECLAIM_CROWD_YARDS = 20;
+
+/**
+ * "Defias Worker ×5, Defias Watchman": the living creatures in view within
+ * `yards` of a point (and, with `targeting`, only those whose target is that
+ * guid), by name and count, most first; undefined when there are none. A
+ * creature is a unit that is not a player, a pet or summon, or an NPC with
+ * a service role — hostility itself is not observed.
+ */
+function creaturesNear(
+  state: StateCache,
+  at: { x: number; y: number } | undefined,
+  yards: number,
+  targeting?: string,
+): string | undefined {
+  const counts = new Map<string, number>();
+  for (const u of state.units()) {
+    if (u.type !== "unit" || u.dead !== false || u.ownerGuid !== undefined || u.roles.length > 0) continue;
+    if (targeting !== undefined && u.targetGuid !== targeting) continue;
+    if (at !== undefined && (u.x === undefined || u.y === undefined || Math.hypot(u.x - at.x, u.y - at.y) > yards)) continue;
+    const name = u.name ?? `creature ${u.entry ?? u.guid}`;
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  if (counts.size === 0) return undefined;
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([name, n]) => (n === 1 ? name : `${name} ×${n}`))
+    .join(", ");
+}
+
+/** How far own position may change in one observation before it reads as being moved rather than walking. */
+const OWN_JUMP_YARDS = 50;
+
+/** The `position moved` line: how far, where to, and the zone text there. */
+function ownJumpNote(state: StateCache, at: WorldPosition, yards: number | undefined): string {
+  const zone = state.self.zone?.value.name || undefined;
+  const area = state.self.area?.value.name || undefined;
+  const map = state.self.map?.value;
+  const place = zone === undefined ? undefined : area === undefined || area === zone ? zone : `${zone} / ${area}`;
+  const mapName = map !== undefined && map.id === at.map && map.name ? `${map.name}, map ${at.map}` : `map ${at.map}`;
+  return (
+    `${yards === undefined ? "you were moved to another map" : `you were moved ~${Math.round(yards)}y`} with no walk of your own, ` +
+    `and are now at (${at.x.toFixed(1)}, ${at.y.toFixed(1)}, ${at.z.toFixed(1)})${place === undefined ? "" : ` in ${place}`} (${mapName})`
+  );
 }
 
 /**
@@ -3399,8 +3656,9 @@ export class WrathClient {
   private readonly requestTimeoutMs: number;
   private readonly defaultSignal: (() => AbortSignal | undefined) | undefined;
   private readonly deadlineAt: (() => number | undefined) | undefined;
+  private readonly originOf: (() => number | undefined) | undefined;
 
-  /** Hint-bearing failures since the last drain, by `action:status`. See `ActionHint`. */
+  /** Hint-bearing failures since the last drain, by `action:status:origin`. See `ActionHint`. */
   private readonly actionHints = new Map<string, ActionHint>();
 
   /** `castSpell` casts awaiting the server's first word, by spell id (`castVerdict`). */
@@ -3416,6 +3674,9 @@ export class WrathClient {
   private lastMoveVerdictId = 0;
   /** The last few moveIds answered by a refusal that moves nothing (`NEVER_MOVED`), for a verdict that beats its ack. */
   private readonly unmovedIds = new Set<number>();
+
+  /** Own position as `watchOwnJump` last saw it, with the session epoch it was seen in. */
+  private lastOwnPosition: { readonly pos: WorldPosition; readonly seq: number; readonly epoch: number } | undefined;
 
   /**
    * The last `moveTo` the server refused without moving anything, kept for
@@ -3447,6 +3708,7 @@ export class WrathClient {
     this.defaultSignal = sig === undefined ? undefined : typeof sig === "function" ? sig : () => sig;
     const dl = options.deadline;
     this.deadlineAt = dl === undefined ? undefined : typeof dl === "function" ? dl : () => dl;
+    this.originOf = options.origin;
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.#fetchImpl = options.fetchImpl ?? fetch;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
@@ -3464,6 +3726,7 @@ export class WrathClient {
     this.events.onAny((event: StreamEvent) => this.state.apply(event));
     this.events.onAny((event: StreamEvent) => this.clientParityQueries(event));
     this.events.onAny((event: StreamEvent) => this.castVerdict(event));
+    this.events.onAny((event: StreamEvent) => this.watchOwnJump(event));
     this.events.on("WB_MOVE_RESULT", (e) => {
       if (isDecodeError(e.data)) return;
       if (this.ownMove !== undefined && this.ownMove.epoch !== this.events.epoch) {
@@ -3476,7 +3739,7 @@ export class WrathClient {
       this.lastMoveVerdictId = Math.max(this.lastMoveVerdictId, d.moveId);
       // A move refused at planning never moved the character: it is no walk
       // of ours, whatever it was sent during.
-      if (NEVER_MOVED.has(d.status)) {
+      if (NEVER_MOVED.has(d.status) || rootedRefusal(d)) {
         this.unmovedIds.add(d.moveId);
         if (this.unmovedIds.size > 16) this.unmovedIds.delete(this.unmovedIds.values().next().value as number);
         if (this.ownMove?.moveId === d.moveId) this.ownMove = undefined;
@@ -3486,7 +3749,15 @@ export class WrathClient {
     // still arrives, so this bodiless packet is the only word of it, and it
     // reaches the harness block from whichever caller walked there.
     this.events.on("SMSG_CORPSE_NOT_IN_INSTANCE", () => {
-      this.noteActionHint("portal", "corpse_not_in_instance", corpseNotInInstanceHint(this.state));
+      this.tallyActionHint(undefined, "portal", "corpse_not_in_instance", corpseNotInInstanceHint(this.state));
+    });
+    // A roll frame opening is a client's popup: it reaches the harness block
+    // whoever is looking, rebuilt from every open frame, since one tally
+    // line holds one hint.
+    this.events.on("SMSG_LOOT_START_ROLL", (e) => {
+      if (isDecodeError(e.data)) return;
+      const open = this.state.pendingRolls(e.ts);
+      if (open.length > 0) this.tallyActionHint(undefined, "lootRoll", "open", openRollsHint(open, e.ts));
     });
   }
 
@@ -3541,10 +3812,27 @@ export class WrathClient {
    * Record a hint-bearing failure for the harness to deliver. Only the status
    * recipe is kept, not the call-specific notes `withNotes` folds in (a budget
    * or timeout remark is already in the result and would vary per call).
+   * Called on the caller's own path, so the caller's `origin` is current.
    */
   private noteActionHint(action: string, status: string, hint: string | undefined, point?: { x: number; y: number; z: number }): void {
+    this.tallyActionHint(this.originOf?.(), action, status, hint, point);
+  }
+
+  /**
+   * `noteActionHint` with the origin given: for a failure the event stream
+   * reports, whose handler runs in no caller's context. A routine's failures
+   * and the current snippet's are tallied apart, so each line can say whose
+   * code it was.
+   */
+  private tallyActionHint(
+    origin: number | undefined,
+    action: string,
+    status: string,
+    hint: string | undefined,
+    point?: { x: number; y: number; z: number },
+  ): void {
     if (hint === undefined || hint.length === 0) return;
-    const key = `${action}:${status}`;
+    const key = `${action}:${status}:${origin ?? ""}`;
     const prev = this.actionHints.get(key);
     if (prev === undefined && this.actionHints.size >= ACTION_HINT_MAX_KEYS) return;
     this.actionHints.set(key, {
@@ -3554,6 +3842,7 @@ export class WrathClient {
       hint,
       ...(point !== undefined ? { point: { x: point.x, y: point.y, z: point.z } } : {}),
       ts: Date.now(),
+      ...(origin !== undefined ? { origin } : {}),
     });
   }
 
@@ -3562,9 +3851,10 @@ export class WrathClient {
    * count alone: a later observation that says more about the same failure.
    * Nothing is added once it has been drained.
    */
-  private rewordActionHint(action: string, status: string, hint: string): void {
-    const prev = this.actionHints.get(`${action}:${status}`);
-    if (prev !== undefined) this.actionHints.set(`${action}:${status}`, { ...prev, hint });
+  private rewordActionHint(origin: number | undefined, action: string, status: string, hint: string): void {
+    const key = `${action}:${status}:${origin ?? ""}`;
+    const prev = this.actionHints.get(key);
+    if (prev !== undefined) this.actionHints.set(key, { ...prev, hint });
   }
 
   /**
@@ -3820,10 +4110,12 @@ export class WrathClient {
    * but this is the call for a walk longer than the caller's own time budget:
    * dispatch here, then watch `WB_MOVE_RESULT` (or `state.self.position`).
    *
-   * Takes the same targets `moveTo` does: a point, a unit, or a guid. A target
-   * that resolves to no position throws here rather than returning a verdict —
-   * this is the raw tier, and there is no result object to put an answer in;
-   * `moveTo` answers the same case with `status: "unknown_target"`.
+   * Takes the same targets `moveTo` does: a point, a unit, or a guid. The
+   * refusals `moveTo` answers before sending anything are answered here the
+   * same way, as values: a target that resolves to no position is
+   * `{ ok: false, status: "unknown_target", hint }`, and a corpse is
+   * `{ ok: false, status: "dead", hint }` (a rejection here once surfaced in a
+   * background routine as the sandbox's fatal-error line).
    *
    * A walk that was dispatched acks with its route's `pathLength` (yards),
    * and with a `hint` when that route is far longer than the straight line
@@ -3832,31 +4124,65 @@ export class WrathClient {
   moveToAsync(target: MoveTarget, options: { force?: boolean } = {}): Promise<MoveToAsyncResponse> {
     const resolved = resolveMoveTarget(target, this.state, "moveTo");
     if ("unknown" in resolved) {
-      throw new TypeError(
-        `${resolved.unknown} (moveTo(target) answers this case with { ok: false, status: "unknown_target" } ` +
-          `instead of throwing.)`,
-      );
+      this.noteActionHint("moveToAsync", "unknown_target", resolved.unknown);
+      return Promise.resolve({ ok: false, status: "unknown_target", hint: resolved.unknown });
     }
     if (this.isCorpse()) {
       this.noteActionHint("moveToAsync", "dead", DEAD_MOVE_HINT);
-      return Promise.reject(new Error(`moveToAsync: ${DEAD_MOVE_HINT}`));
+      return Promise.resolve({ ok: false, status: "dead", hint: DEAD_MOVE_HINT });
     }
     // The raw tier: no fall estimate stands in for the caller. A `drop`
     // arrives as the event it is, and `force` is the caller's own word.
     const epoch = this.events.epoch;
     const from = this.state.self.position?.value;
-    return this.postMoveTo(resolved.point, resolved.guid, options.force === true).then(({ ack, etaMs }) => {
-      this.watchAsyncMove(ack.moveId, resolved.point, epoch);
-      const note =
-        from === undefined || ack.pathLength === undefined
-          ? undefined
-          : longRouteNote(resolved.point, distance2d(from, resolved.point), ack.pathLength, etaMs);
-      if (note === undefined) return ack;
-      // Also to the harness block, so a dropped ack still tells the model
-      // (operator, 2026-10-20): once per dispatch, like a refusal.
-      this.noteActionHint("moveToAsync", "long_route", note, resolved.point);
-      return { ...ack, hint: note };
+    // Taken on the caller's own path: the verdict and the long-route note are
+    // tallied from promise callbacks, where no caller is on the stack.
+    const origin = this.originOf?.();
+    // A refusal at planning (`too_far`, `drop`, …) can land before the ack
+    // resolves, in the same millisecond: latched from before the POST, so the
+    // reply can carry it instead of an ok that the event contradicts.
+    const early = new Map<number, MoveResultData>();
+    const offEarly = this.events.on("WB_MOVE_RESULT", (e) => {
+      if (isDecodeError(e.data) || this.events.epoch !== epoch) return;
+      const d = e.data as MoveResultData;
+      if (!early.has(d.moveId)) early.set(d.moveId, d);
     });
+    return this.postMoveTo(resolved.point, resolved.guid, options.force === true)
+      .then(async ({ ack, etaMs }): Promise<MoveToAsyncResponse> => {
+        this.watchAsyncMove(ack.moveId, resolved.point, epoch, origin);
+        // The ack and the event travel on different sockets, so the refusal
+        // can also land just after the ack. An ack with no route length is
+        // a move the module did not dispatch (PROTOCOL.md: a refusal at
+        // planning, or `too_far`) — or an older module's — so only that ack
+        // waits, briefly, for its verdict.
+        let verdict = early.get(ack.moveId);
+        if (verdict === undefined && ack.pathLength === undefined) {
+          try {
+            const event = await this.waitEvent(
+              (e) => isEvent(e, "WB_MOVE_RESULT") && !isDecodeError(e.data) && (e.data as MoveResultData).moveId === ack.moveId,
+              { timeout: ASYNC_MOVE_VERDICT_MS, epoch, description: `the refusal for moveToAsync moveId ${ack.moveId}` },
+            );
+            verdict = event.data as MoveResultData;
+          } catch (e) {
+            if (!(e instanceof EventTimeoutError)) throw e;
+          }
+        }
+        if (verdict !== undefined && !ASYNC_MOVE_UNREPORTED.has(status_(verdict))) {
+          const status = status_(verdict);
+          const hint = this.asyncMoveRecipe(status, resolved.point, verdict);
+          return { ok: false, action: ack.action, moveId: ack.moveId, status, ...(hint !== undefined ? { hint } : {}) };
+        }
+        const note =
+          from === undefined || ack.pathLength === undefined
+            ? undefined
+            : longRouteNote(resolved.point, distance2d(from, resolved.point), ack.pathLength, etaMs);
+        if (note === undefined) return ack;
+        // Also to the harness block, so a dropped ack still tells the model
+        // (operator, 2026-10-20): once per dispatch, like a refusal.
+        this.tallyActionHint(origin, "moveToAsync", "long_route", note, resolved.point);
+        return { ...ack, hint: note };
+      })
+      .finally(offEarly);
   }
 
   /**
@@ -3869,7 +4195,7 @@ export class WrathClient {
    * land before the ack); unwatched after the verdict or `moveTo`'s own
    * default wait.
    */
-  private watchAsyncMove(moveId: number, point: MovePoint, epoch: number): void {
+  private watchAsyncMove(moveId: number, point: MovePoint, epoch: number, origin: number | undefined): void {
     this.events
       .waitFor(
         (e) => isEvent(e, "WB_MOVE_RESULT") && !isDecodeError(e.data) && (e.data as MoveResultData).moveId === moveId,
@@ -3879,16 +4205,21 @@ export class WrathClient {
         const data = event.data as MoveResultData;
         const status = status_(data);
         if (ASYNC_MOVE_UNREPORTED.has(status)) return;
-        let recipe = this.moveRecipe(status, point, data);
-        // Only a fall: a climb (dz > 0) and a step underground (surfaceZ)
-        // are refused forced or not, so fall damage says nothing about them.
-        const fall = data.dz !== undefined && data.dz < 0 && data.surfaceZ === undefined;
-        if (status === "drop" && fall && this.state.self.ghost?.value === true && recipe !== undefined) {
-          recipe += " A ghost takes no fall damage.";
-        }
-        this.noteActionHint("moveToAsync", status, recipe, point);
+        this.tallyActionHint(origin, "moveToAsync", status, this.asyncMoveRecipe(status, point, data), point);
       })
       .catch(() => {});
+  }
+
+  /** `moveRecipe` for a `moveToAsync` verdict: a ghost's fall also says a ghost takes no fall damage. */
+  private asyncMoveRecipe(status: string, point: MovePoint, data: MoveResultData): string | undefined {
+    const recipe = this.moveRecipe(status, point, data);
+    // Only a fall: a climb (dz > 0) and a step underground (surfaceZ)
+    // are refused forced or not, so fall damage says nothing about them.
+    const fall = data.dz !== undefined && data.dz < 0 && data.surfaceZ === undefined;
+    if (status === "drop" && fall && this.state.self.ghost?.value === true && recipe !== undefined) {
+      return `${recipe} A ghost takes no fall damage.`;
+    }
+    return recipe;
   }
 
   /**
@@ -3979,8 +4310,10 @@ export class WrathClient {
    * Takes either an absolute orientation in radians (0 = east/+x,
    * counter-clockwise) or a point to turn toward; the module resolves a point
    * into an orientation and echoes the one it used. Rejects with
-   * `WrathRequestError` code `moving` while a move is running — stop first, or
-   * supersede with `moveTo`.
+   * `WrathRequestError` code `moving` while a move is running, nothing sent:
+   * the walk runs forward, a client running forward travels where it faces,
+   * and a facing held off the walk's course is what no client sends — stop
+   * first, or supersede with `moveTo`.
    *
    * Unlike the calls that take a target, it takes no guid or name: facing a
    * unit is facing its position, `face({ x: unit.x, y: unit.y })`. A string
@@ -4049,6 +4382,19 @@ export class WrathClient {
 
   /** The `cast_spell` POST, watched for the server's verdict (`castVerdict`). */
   private async trackedCast(spellId: number, targetGuid: string | undefined): Promise<ActionResponse> {
+    // The two casts the cache can tell will never go off, refused with
+    // nothing sent: a dead caster (a body or a ghost; the core answers
+    // caster_dead), and a spell the spellbook does not hold, which the core
+    // drops without a word (`HandleCastSpellOpcode`: `!HasActiveSpell`) —
+    // unless the target is a game object, whose lock may take a spell the
+    // book lacks, or the character drives another unit (a vehicle, a charm),
+    // whose spells the core does not check against it. The spellbook is read
+    // only once login has served it.
+    const refusal = this.castRefusal(spellId, targetGuid);
+    if (refusal !== undefined) {
+      this.noteActionHint("castSpell", refusal.status, refusal.hint);
+      throw new Error(`castSpell ${refusal.status}: ${refusal.hint}`);
+    }
     // Registered before the dispatch: the handler answers in the same world
     // tick, often before the ack (see `useItemVerdict`).
     const cast: PendingCast = {
@@ -4057,6 +4403,7 @@ export class WrathClient {
       sinceSeq: this.events.recent(1)[0]?.seq,
       sentAt: Date.now(),
       expiresAt: Date.now() + CAST_VERDICT_MS,
+      origin: this.originOf?.(),
     };
     this.pendingCasts.set(spellId, cast);
     try {
@@ -4065,6 +4412,39 @@ export class WrathClient {
       if (this.pendingCasts.get(spellId) === cast) this.pendingCasts.delete(spellId);
       throw err;
     }
+  }
+
+  /** Why a `castSpell` cannot go off, from what the cache holds; undefined when nothing says so. */
+  private castRefusal(spellId: number, targetGuid: string | undefined): { status: string; hint: string } | undefined {
+    const ghost = this.state.self.ghost?.value === true;
+    if (ghost || this.isCorpse()) {
+      return {
+        status: "dead",
+        hint: ghost
+          ? "you are a ghost and cannot cast; nothing was sent. Get back to life first (reclaimCorpse, or a Spirit Healer)."
+          : "you are dead and cannot cast; nothing was sent. sdk.repop() releases your spirit.",
+      };
+    }
+    const book = this.state.spells();
+    const atObject = targetGuid !== undefined && this.state.nearby.get(guidKey(targetGuid))?.objectType?.value === "gameObject";
+    // Driving a vehicle or a charmed unit, the core casts as that unit and
+    // never asks our spellbook: the unit's UNIT_FIELD_CHARMEDBY names us.
+    const self = this.state.self.guid;
+    const driving = self !== undefined && [...this.state.nearby.values()].some((o) => o.charmedByGuid?.value === self);
+    if (book.length > 0 && this.state.spell(spellId) === undefined && !atObject && !driving) {
+      // Another rank of it may be what the book holds: the core keeps only
+      // the highest rank of most spells active (Player::addSpell), and only
+      // active ranks are served. Said, never cast in its place.
+      const held = this.state.heldRanksOf(spellId);
+      const rank = held.length === 0 ? "" : ` ${held[0]!.name} is in your spellbook as ${held.map((s) => s.spellId).join(" or ")}.`;
+      return {
+        status: "not_known",
+        hint:
+          `spell ${spellId} is not in your spellbook (state.spells()), and the server ignores a spell you do not know ` +
+          `without a word; nothing was sent. Cast one of the ids state.spells() lists.${rank}`,
+      };
+    }
+    return undefined;
   }
 
   /** The bare `cast_spell` POST, for helpers that read the verdict themselves (`openChest`). */
@@ -4115,8 +4495,16 @@ export class WrathClient {
     if (cast === undefined) return;
     this.pendingCasts.delete(failed.spellId);
     const status = failed.reason ?? `code_${failed.result}`;
+    // The cast bar as the failure found it: a refusal leaves a running cast
+    // standing, and the interrupt's own SMSG_SPELL_FAILURE, which clears it,
+    // follows this SMSG_CAST_FAILED.
+    const casting = castInProgress(this.state, event.ts);
+    if (status === "not_ready" && casting !== undefined) {
+      this.tallyActionHint(cast.origin, "castSpell", status, castFailedHint(this.state, cast, status, status, casting));
+      return;
+    }
     if (status !== "interrupted") {
-      this.noteActionHint("castSpell", status, castFailedHint(this.state, cast, status));
+      this.tallyActionHint(cast.origin, "castSpell", status, castFailedHint(this.state, cast, status));
       return;
     }
     // An interrupt has two causes this client can tell apart from the rest:
@@ -4125,23 +4513,47 @@ export class WrathClient {
     // inside, so health 0 lands just after the failure. Each is said with
     // the meaning of the refusal it amounts to.
     if (this.ownMoveSince(cast.sentAt)) {
-      this.noteActionHint("castSpell", status, castFailedHint(this.state, cast, status, "moving"));
+      this.tallyActionHint(cast.origin, "castSpell", status, castFailedHint(this.state, cast, status, "moving"));
       return;
     }
     const dead = (): boolean => this.state.self.health?.value.current === 0 || this.state.self.ghost?.value === true;
     if (dead()) {
-      this.noteActionHint("castSpell", status, castFailedHint(this.state, cast, status, "caster_dead"));
+      this.tallyActionHint(cast.origin, "castSpell", status, castFailedHint(this.state, cast, status, "caster_dead"));
       return;
     }
     // Noted now, so a drain in between still carries it, and reworded in
     // place (the count unchanged) if the death follows.
-    this.noteActionHint("castSpell", status, castFailedHint(this.state, cast, status));
+    this.tallyActionHint(cast.origin, "castSpell", status, castFailedHint(this.state, cast, status));
     this.events
       .waitFor(() => dead(), { timeout: CAST_DEATH_WINDOW_MS, includeBuffered: false, description: "own death after an interrupt" })
       .then(
-        () => this.rewordActionHint("castSpell", status, castFailedHint(this.state, cast, status, "caster_dead")),
+        () => this.rewordActionHint(cast.origin, "castSpell", status, castFailedHint(this.state, cast, status, "caster_dead")),
         () => {},
       );
+  }
+
+  /**
+   * The harness line for being moved: own position jumping more than
+   * `OWN_JUMP_YARDS` (or to another map) while no move of this client's is
+   * walking — a spirit healer's port, a hearthstone, the release to a
+   * graveyard, a flight's landing. The line is noted at once and reworded in
+   * place when the `WB_AREA` naming the new place follows, a tick later.
+   */
+  private watchOwnJump(event: StreamEvent): void {
+    const now = this.state.self.position;
+    if (now === undefined) return;
+    const prev = this.lastOwnPosition;
+    if (prev !== undefined && prev.seq === now.seq) return;
+    this.lastOwnPosition = { pos: now.value, seq: now.seq, epoch: this.events.epoch };
+    if (prev === undefined || prev.epoch !== this.events.epoch) return;
+    const walking = this.ownMove !== undefined && (this.ownMove.moveId === undefined || this.ownMove.moveId > this.lastMoveVerdictId);
+    if (walking) return;
+    const sameMap = prev.pos.map === now.value.map;
+    const yards = sameMap ? distance2d(prev.pos, now.value) : undefined;
+    if (yards !== undefined && yards <= OWN_JUMP_YARDS) return;
+    const line = (): string => ownJumpNote(this.state, now.value, yards);
+    this.tallyActionHint(undefined, "position", "moved", line());
+    void this.awaitAreaAfter(event.seq, Date.now() + AREA_AFTER_PORT_MS).then(() => this.rewordActionHint(undefined, "position", "moved", line()));
   }
 
   /**
@@ -4478,9 +4890,30 @@ export class WrathClient {
     return { ok: false, status: "timeout", ...facts, hint: SELL_TIMEOUT_HINT };
   }
 
-  /** `CMSG_REPAIR_ITEM` with item guid 0 — repair everything. */
-  repairAll(target: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
-    return this.byName(target, "repairAll(guid)", (guid) => this.action({ action: "repair_all", guid }));
+  /**
+   * `CMSG_REPAIR_ITEM` with item guid 0 — repair everything.
+   *
+   * The core drops the packet without a word when the NPC has no repair
+   * flag (`GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_REPAIR)`), so the ack
+   * read as a repair that never happened (tank and healer, 2026-10-20: money
+   * unchanged at a vendor with no repair role). When the NPC's flags are
+   * observed and lack the bit, the call is refused as `no_repair` and nothing
+   * is sent; unobserved flags are sent as before, since only the server knows.
+   */
+  repairAll(target: GuidOrUnit): Promise<WithResolved<RepairAllResult>> {
+    return this.byName(target, "repairAll(guid)", async (guid): Promise<RepairAllResult> => {
+      const npc = this.state.nearby.get(guidKey(guid));
+      const flags = npc?.fields.get("npcFlags")?.value;
+      if (typeof flags === "number" && (flags & NPC_FLAG_REPAIR) === 0) {
+        const roles = npcRolesOf(flags);
+        const hint =
+          `${npc?.name?.value ?? "that NPC"} does not repair (its roles: ${roles.length > 0 ? roles.join(", ") : "none"}), ` +
+          `so nothing was sent; state.units({ role: "repair" }) lists the repairers in view`;
+        this.noteActionHint("repairAll", "no_repair", hint);
+        return { ok: false, status: "no_repair", hint };
+      }
+      return this.action({ action: "repair_all", guid });
+    });
   }
 
   /**
@@ -4514,6 +4947,9 @@ export class WrathClient {
     // matched by substring or by a typo says so in all of them.
     const item = { bag, slot, itemId: before?.itemId, name: before?.name, ...(where.resolved === undefined ? {} : { resolved: where.resolved }) };
     const sinceSeq = this.events.recent(1)[0]?.seq;
+    // What is worn now, so an equip says what it displaced (tank, 14:00:41:
+    // Recruit's gear replaced better pieces and the result named only the slot).
+    const wornBefore = this.state.inventory.filter((i) => i.slot < BACKPACK_FIRST_SLOT && i.guid !== guid);
 
     // Where the cache says our item is now: an equipment slot means the server
     // moved it. Without a guid (the slot was never observed) neither this nor
@@ -4569,7 +5005,11 @@ export class WrathClient {
     }
 
     const landed = equippedSlot();
-    if (landed !== undefined) return { ok: true, status: "equipped", ...item, equippedSlot: landed };
+    if (landed !== undefined) {
+      const prior = wornBefore.find((i) => i.slot === landed);
+      const replaced = prior === undefined ? undefined : { itemId: prior.itemId, name: prior.name };
+      return { ok: true, status: "equipped", ...item, equippedSlot: landed, replaced };
+    }
     if (failure !== undefined) {
       const named = inventoryResultText(failure.result);
       const level = failure.requiredLevel;
@@ -4590,7 +5030,7 @@ export class WrathClient {
         hint,
       };
     }
-    if (leftBackpack()) return { ok: true, status: "equipped", ...item, equippedSlot: undefined };
+    if (leftBackpack()) return { ok: true, status: "equipped", ...item, equippedSlot: undefined, replaced: undefined };
     const unconfirmed =
       guid === undefined
         ? `nothing was observed at bag ${bag} slot ${slot} before the equip, so neither outcome could be ` +
@@ -4963,7 +5403,8 @@ export class WrathClient {
             : `waiting for the resurrect after ${attempts} reclaim${attempts === 1 ? "" : "s"} sent`;
         const note =
           `reclaimCorpse was ${what} when this was abandoned, ${Math.round((Date.now() - started) / 1000)}s into its ` +
-          `${Math.round((options.timeout ?? 25_000) / 1000)}s wait. Give it a snippet of its own, or pass a { timeout } that fits.`;
+          `${Math.round((options.timeout ?? 25_000) / 1000)}s wait. Give it a snippet of its own, or pass a timeout that fits ` +
+          "the time the snippet has left, as the second argument: sdk.reclaimCorpse(undefined, { timeout: 20000 }).";
         err.message = `${err.message} — ${note}`;
         (err as { waitAbandon?: string }).waitAbandon = note;
       }
@@ -4974,7 +5415,15 @@ export class WrathClient {
 
     if (alive()) {
       await this.awaitAliveFields(deadline, "reclaimCorpse");
-      return { ok: true, status: "reclaimed", ...facts(attempts) };
+      const crowd = corpseAt === undefined ? undefined : creaturesNear(this.state, corpseAt, RECLAIM_CROWD_YARDS);
+      return {
+        ok: true,
+        status: "reclaimed",
+        ...facts(attempts),
+        ...(crowd === undefined
+          ? {}
+          : { note: `you came back with ${crowd} within ${RECLAIM_CROWD_YARDS}y of your corpse` }),
+      };
     }
     const after = health();
     if (attempts > 0 && after === undefined) {
@@ -5043,7 +5492,7 @@ export class WrathClient {
         hint:
           `your corpse is inside the dungeon on map ${corpse.instanceMap}, which a reclaim can't reach from ` +
           `${pos === undefined ? "outside it" : `map ${pos.map}`} — as a ghost, walk into that dungeon's portal and you ` +
-          "come back to life inside (half health, no sickness); " +
+          "come back to life at its entrance (half health, no sickness); " +
           `state.self.corpse.value is the server's entrance marker, not the portal itself, ${healerOption}`,
       };
     }
@@ -5059,13 +5508,23 @@ export class WrathClient {
     if (corpse !== undefined && pos !== undefined) {
       const distance = Math.round(distance3d(pos, corpse));
       if (distance > CORPSE_RECLAIM_RADIUS) {
+        const across = Math.round(distance2d(pos, corpse));
+        const dz = Math.round(pos.z - corpse.z);
+        // Close across the ground and far in height: the server counts the
+        // height, which is the part a map view hides.
+        const where =
+          across <= CORPSE_RECLAIM_RADIUS
+            ? `your corpse at (${fmtXY(corpse)}, z ${Math.round(corpse.z)}) is ${across}y away across the ground but ` +
+              `${Math.abs(dz)}y ${dz > 0 ? "below" : "above"} you (you are at z ${Math.round(pos.z)}), ${distance}y in a straight line, ` +
+              `and a reclaim only works within ${CORPSE_RECLAIM_RADIUS}y counting the height — `
+            : `you are ${distance}y from your corpse at (${fmtXY(corpse)}) and a reclaim only works within ${CORPSE_RECLAIM_RADIUS}y — `;
         return {
           reason: "too_far",
           distance,
           radius: CORPSE_RECLAIM_RADIUS,
           corpse,
           hint:
-            `you are ${distance}y from your corpse at (${fmtXY(corpse)}) and a reclaim only works within ${CORPSE_RECLAIM_RADIUS}y — ` +
+            where +
             `await sdk.moveTo(state.self.corpse.value) as a ghost, then reclaim again (no durability loss, no sickness), ${healerOption}`,
         };
       }
@@ -5081,7 +5540,8 @@ export class WrathClient {
         hint:
           attempts === 0
             ? `the server's corpse reclaim delay outlasted this call's ${Math.round((options.timeout ?? 25_000) / 1000)}s budget ` +
-              `(~${secondsLeft}s still to run) — nothing was sent; call it again, or pass a larger { timeout } from a background routine`
+              `(~${secondsLeft}s still to run) — nothing was sent; call it again, or pass a larger timeout from a background routine ` +
+              "(sdk.reclaimCorpse(undefined, { timeout: 60000 }))"
             : `the reclaim delay has ~${secondsLeft}s still to run, so the core dropped the reclaim — call it again after that`,
       };
     }
@@ -5091,7 +5551,7 @@ export class WrathClient {
       hint:
         "you are still a ghost and nothing observed explains the refusal" +
         (corpse === undefined ? " (no corpse position has been observed yet — check state.self.corpse)" : "") +
-        ` — the core drops a reclaim further than ${CORPSE_RECLAIM_RADIUS}y from the corpse, before the delay elapses, ` +
+        ` — the core drops a reclaim further than ${CORPSE_RECLAIM_RADIUS}y from the corpse (height counts), before the delay elapses, ` +
         `or on another map; stand on the corpse and call it again, ${healerOption}`,
     };
   }
@@ -6148,17 +6608,24 @@ export class WrathClient {
       );
     }
     const hexPayload = encodeRawPayload(body.data);
+    // The trade window's own half (`state.tradeSent`): whom an initiate asked,
+    // before the send, as a refusal can beat the ack; what was placed, after.
+    const trade = TRADE_OWN_OPCODES.has(op.data);
+    if (trade && op.data === "CMSG_INITIATE_TRADE") this.state.tradeSent(op.data, hexPayload);
     return this.request(
       "POST",
       "/action",
       { token: this.token, action: "raw", opcode: op.data, payload: hexPayload },
       actionResponseSchema,
-    ).then((ack) => ({
-      ...ack,
-      opcode: op.data,
-      payload: hexPayload,
-      ...(named.resolved.length > 0 ? { resolved: named.resolved } : {}),
-    }));
+    ).then((ack) => {
+      if (trade && op.data !== "CMSG_INITIATE_TRADE") this.state.tradeSent(op.data, hexPayload);
+      return {
+        ...ack,
+        opcode: op.data,
+        payload: hexPayload,
+        ...(named.resolved.length > 0 ? { resolved: named.resolved } : {}),
+      };
+    });
   }
 
   /**
@@ -6312,7 +6779,10 @@ export class WrathClient {
   /**
    * Wait for a chat line. `match` is either an exact message string or a
    * predicate over the decoded entry. Searches events already received before
-   * waiting, so it is safe to call after the action has been acked.
+   * waiting, so it is safe to call after the action has been acked — and an
+   * old line that matches answers at once (two members of the 2026-10-20
+   * party got a stale line back in 1ms). `{ includeBuffered: false }` waits
+   * for a new line only.
    *
    * The predicate sees, and the call returns, the entry as `state.chat` shows
    * it: a player sender named by the name query's answer or the group roster
@@ -6575,7 +7045,7 @@ export class WrathClient {
     // Only a move that walked can have outlasted the budget: a refusal at
     // planning moved nothing, and the note's "dispatch it with moveToAsync"
     // would point a too_far at a call with the same cap.
-    if (!MOVE_LEAVES_NO_STOP.has(status)) {
+    if (!refusedUnmoved(data)) {
       if (timeoutNote !== undefined) extras.push(timeoutNote);
       noteBudget(event);
     }
@@ -6705,7 +7175,7 @@ export class WrathClient {
       ...(nearest !== undefined ? { nearest } : {}),
       ...(hint !== undefined ? { hint } : {}),
     };
-    if (MOVE_LEAVES_NO_STOP.has(status)) {
+    if (refusedUnmoved(data)) {
       // Nothing moved, so this verdict is about a position and a destination
       // that both still hold: remember it for the repeat (see
       // `MOVE_REJECTION_MEMO_MS`). The refusal's own `pos` is already folded
@@ -6776,7 +7246,8 @@ export class WrathClient {
    * Wait for a map transfer to complete, with a typed verdict.
    *
    * Resolves on `SMSG_NEW_WORLD` (the server's announcement of the new map
-   * and arrival point, already folded into `state.self.position`), or on
+   * and arrival point, already folded into `state.self.position`) once the
+   * WB_AREA after it has named the map in `state.self.map`, or on
    * `SMSG_TRANSFER_ABORTED`; a deadline with a transfer pending is `waiting`,
    * a deadline with no transfer announced at all is `no_transfer`, and an
    * arrival on a map other than `expectMap` is `wrong_map`. Never sleeps.
@@ -6843,6 +7314,16 @@ export class WrathClient {
         hint: `the transfer landed on map ${d.map}, not the expected ${options.expectMap}; state.self.position reflects map ${d.map}.`,
       };
     }
+    // `SMSG_NEW_WORLD` carries the map's id only, so it leaves `state.self.map`
+    // unset until the module's WB_AREA names the new map a tick later. The
+    // verdict waits for it, so a caller reading the map on return finds it
+    // (the 2026-10-20 party: a TypeError 3ms ahead of the WB_AREA). A module
+    // that never names the map costs the bound, never the verdict.
+    await this.waitForState(() => (this.state.self.map?.value.id === d.map ? true : undefined), TRANSFER_MAP_NAME_MS).catch(
+      (err: unknown) => {
+        if (!(err instanceof EventTimeoutError)) throw err;
+      },
+    );
     return { ok: true, status: "transferred", to, seq: event.seq, ts: event.ts };
   }
 
@@ -7007,6 +7488,10 @@ export class WrathClient {
         rearmWanted = true;
       });
 
+      // Where the target is now, along its spline when it is moving: never the
+      // spline's destination, which for a mob chasing us is ourselves — that
+      // read melee range as reached and skipped the approach, and faced us at
+      // our own position.
       const aimAt = (): Point3 | undefined => {
         const obj = this.state.nearby.get(key);
         return obj === undefined ? undefined : pointOf(obj)?.value;
@@ -7076,6 +7561,15 @@ export class WrathClient {
               ? `never reached melee range${walking === undefined ? "" : `: ${walking}`}`
               : KILL_DETAIL[status];
         const approach = walking !== undefined && !neverReached ? ` (approach never finished: ${walking})` : "";
+        // At a timeout: who is fighting you, and how you stand.
+        let pressed = "";
+        if (status === "timeout") {
+          const on = this.state.self.guid === undefined ? undefined : creaturesNear(this.state, undefined, 0, this.state.self.guid);
+          const pct = healthPct();
+          pressed =
+            (on === undefined ? "; nothing in view targets you" : `; targeting you: ${on}`) +
+            (pct === undefined ? "" : `; your health ${Math.round(pct)}%`);
+        }
         const facts: KillResultFacts = {
           guid: id,
           swings,
@@ -7084,7 +7578,7 @@ export class WrathClient {
           reached,
           distance: distance === undefined ? undefined : Math.round(distance * 10) / 10,
           detail:
-            `${base}${approach}${note}; ` +
+            `${base}${approach}${note}${pressed}; ` +
             (armed
               ? "still auto-attacking — call attackStop() or pass { disengage: true } to break off"
               : "auto-attack stopped"),
@@ -7291,10 +7785,16 @@ export class WrathClient {
             break; // grace expired: report what was confirmed, nothing more
           }
         }
+        // A slot up for a group roll is shown and never stored: the roll is
+        // the way to it, so the answer says one is open and how to vote.
+        const rolling = window.items.filter((i) => i.slotType === LOOT_SLOT_ROLL_ONGOING);
+        const now = this.state.lastTs;
+        const frames = this.state.pendingRolls(now).filter((r) => rolling.some((i) => i.slot === r.slot && i.itemId === r.itemId));
+        const roll = frames.length > 0 ? { hint: openRollsHint(frames, now) } : {};
         if (expected > 0 && stored.length === 0) {
-          return { ok: false, status: "none_stored", gold: window.gold, items: [], window: window.items };
+          return { ok: false, status: "none_stored", gold: window.gold, items: [], window: window.items, ...roll };
         }
-        return { ok: true, status: "looted", gold: window.gold, items: stored, window: window.items };
+        return { ok: true, status: "looted", gold: window.gold, items: stored, window: window.items, ...roll };
       } finally {
         offPush();
       }
@@ -8049,7 +8549,8 @@ export class WrathClient {
   }
 
   /**
-   * Send `quest_list` and return the offer the NPC answered with.
+   * Send `quest_list` (on a questgiver game object, `interact`, as a client
+   * does) and return the offer the questgiver answered with.
    *
    * The one place the answer shapes are reconciled, shared by
    * `questsAvailableFrom` and `acceptQuestFrom` so they can never drift:
@@ -8099,7 +8600,16 @@ export class WrathClient {
     // completion window for a quest already in it is a turn-in, not an offer.
     const inLogBefore = new Set(this.state.questLog.map((q) => q.questId));
     const npcKey = guidKey(npcGuid);
-    await this.questList(npcGuid);
+    // A questgiver game object (a wanted poster, a Candy Bucket) is asked
+    // the way a client asks it: a right-click on it is CMSG_GAMEOBJ_USE, and
+    // the questgiver case of GameObject::Use prepares and sends the same
+    // quest menu a creature's hello does, with the same three answer shapes.
+    // CMSG_QUESTGIVER_HELLO finds creatures only (GetNPCIfCanInteractWith),
+    // so the hello on an object was dropped and every such call timed out.
+    // Only the questgiver type is used: using any other object acts on it (a
+    // door opens, a trap fires), which no question about quests should do.
+    if (isQuestGiverObject(this.state, npcKey)) await this.action({ action: "interact", guid: npcKey });
+    else await this.questList(npcGuid);
     const menu = await this
       .waitEvent(
         (e) =>
@@ -8424,16 +8934,20 @@ export const CLIENT_PLUMBING: ReadonlySet<string> = new Set([
   "lease",
   "releaseLease",
   "noteActionHint",
+  "tallyActionHint",
   "rewordActionHint",
   "drainActionHints",
   "request",
   "postMoveTo",
   "watchAsyncMove",
   "moveRecipe",
+  "asyncMoveRecipe",
   "isCorpse",
   "trackedCast",
   "dispatchCast",
   "castVerdict",
+  "watchOwnJump",
+  "castRefusal",
   "ownMoveSince",
   "recallMoveRejection",
   "waitOwnTeleportAck",
@@ -8504,7 +9018,7 @@ function toChatEntry(seq: number, ts: number, d: ChatFields): ChatEntry {
     ...(d.receiverGuid !== undefined ? { receiverGuid: d.receiverGuid } : {}),
     ...(d.receiverName !== undefined ? { receiverName: d.receiverName } : {}),
     ...(d.channelName !== undefined ? { channelName: d.channelName } : {}),
-    message: d.message,
+    message: chatMessageAsShown(d.type, d.message, d.senderName),
     chatTag: d.chatTag,
     ...(d.achievementId !== undefined ? { achievementId: d.achievementId } : {}),
   };

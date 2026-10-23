@@ -646,7 +646,7 @@ describe("cooperative abort on timeout", () => {
     const res = await host.evalSnippet("await sdk.reclaimCorpse(); 'reclaimed'");
     expect(res.timedOut).toBe(true);
     expect(res.error).toContain("reclaimCorpse was waiting out the server's reclaim delay (~");
-    expect(res.error).toContain("Give it a snippet of its own, or pass a { timeout } that fits.");
+    expect(res.error).toContain("Give it a snippet of its own, or pass a timeout that fits the time the snippet has left, as the second argument: sdk.reclaimCorpse(undefined, { timeout: 20000 }).");
     await host.stop();
     await stub.stop();
   });
@@ -666,6 +666,37 @@ describe("cooperative abort on timeout", () => {
     expect(snap.selfAuras?.map((a) => a.name)).toEqual(["Spirit Weariness", "Mending Word"]);
     const summary = formatStateSummary(snap, { sessionLive: true });
     expect(summary).toMatch(/\nauras: Spirit Weariness \(debuff, (9m 5\ds|10m 00s) left\), Mending Word \[state\.aurasOf\(state\.self\.guid\)\]\n/);
+    await host.stop();
+    await stub.stop();
+  });
+
+  test("the HUD snapshot carries the party frames, and a member's health in view but never a mob's", async () => {
+    const stub = startModuleStub();
+    const host = makeHost({ moduleUrl: stub.url });
+    await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
+    const party =
+      `events.ingest(JSON.stringify({ seq: 1, opcode: "SMSG_GROUP_LIST", opcodeId: 0x07d, ts: Date.now(), data: { groupType: 0, left: false,` +
+      ` raid: false, subGroup: 0, memberFlags: 0, roles: 0, groupGuid: "1", counter: 1, leaderGuid: "940", lootMethod: 0,` +
+      ` members: [{ name: "Brannoc", guid: "940", online: true, subGroup: 0, flags: 0, roles: 0 },` +
+      ` { name: "Ysolde", guid: "941", online: true, subGroup: 0, flags: 0, roles: 0 }] } }));` +
+      ` events.ingest(JSON.stringify({ seq: 2, opcode: "SMSG_UPDATE_OBJECT", opcodeId: 0x0a9, ts: Date.now(), data: { blocks: 2, objects: [` +
+      ` { update: "create", guid: "941", objectType: "player", pos: { x: 3, y: 4, z: 0, o: 0 }, fields: { health: 261, maxHealth: 300, level: 20, playerFlags: 0 } },` +
+      ` { update: "create", guid: "17379391", objectType: "unit", entry: 657, pos: { x: 6, y: 8, z: 0, o: 0 }, fields: { health: 900, maxHealth: 1000, level: 18 } }] } }));` +
+      ` events.ingest(JSON.stringify({ seq: 3, opcode: "SMSG_PARTY_MEMBER_STATS", opcodeId: 0x07e, ts: Date.now(), data: { guid: "940", full: false,` +
+      ` mask: 0x1ff, status: 9, health: 1, maxHealth: 515, powerType: 1, power: 0, maxPower: 100, level: 20, zoneId: 40, zoneName: "Westfall", x: -10546, y: 1197 } })); 'ok'`;
+    expect((await host.evalSnippet(party)).ok).toBe(true);
+    const snap = (await host.stateSnapshot()) as SnapshotLike;
+    const members = snap.group?.members ?? [];
+    expect(members.find((m) => m.guid === "940")?.stats).toMatchObject({ ghost: true, zone: { id: 40, name: "Westfall" }, position: { x: -10546, y: 1197 } });
+    expect(members.find((m) => m.guid === "941")?.inView).toBe(true);
+    const units = snap.units ?? [];
+    expect(units.find((u) => u.guid === "941")).toMatchObject({ health: 261, maxHealth: 300, ghost: false });
+    const mob = units.find((u) => u.guid === "17379391");
+    expect(mob).toBeDefined();
+    expect(mob!.health).toBeUndefined();
+    expect(mob!.maxHealth).toBeUndefined();
+    const summary = formatStateSummary(snap, { sessionLive: true });
+    expect(summary).toMatch(/\nparty: Brannoc ghost, Westfall \(-10546, 1197\), out of view; Ysolde alive 87%( \d+y)?\n/);
     await host.stop();
     await stub.stop();
   });

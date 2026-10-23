@@ -109,7 +109,14 @@ beyond the account count, and nothing below it has to learn anything at all.
     `<member>: <reason>` (a new `TerminationReason` in
     `runner/src/trajectory.ts`, written through the runner's own writer the
     way the supervisor ends lapsed runs, `endRuns` in `run-fleet.ts`). The
-    attempt is spent; the campaign counts it once (below).
+    attempt is spent; the campaign counts it once (below). A termination on
+    the definition's end (`level-target`, `kill-target`; docs/EPISODES.md,
+    "Ends") ends the other four on that same reason instead, and the attempt
+    counts as reached. Those four are not signalled: each runner is asked to
+    end on that reason itself (`end-request.json`, docs/ARCHITECTURE.md,
+    "the run contract"), so it winds down as its own end would and its
+    driver's closing result, with cost and tokens, is on the record. One still
+    running once a wind-down's grace has passed is stopped and ended as above.
   - a **pause** on one member (a provider refusal, `observation-stalled`,
     `infrastructure-failed`, the usage gate) → the other four are paused
     `party-paused` with the same detail. A paused party is resumable as a
@@ -517,15 +524,40 @@ one dungeon cannot do without; everything else waits for a trajectory.
 | The kill record | §7 | module: whitelist `SMSG_PARTYKILLLOG` (`u64 killer, u64 victim`; `Unit::Kill` broadcasts it to the killer's group, or sends it to the killer alone) |
 | The instance record | §7 | module: load `Map.dbc` beside `AreaTable.dbc` and serve `mapName` and `instanceType` on `WB_AREA` and `WB_SESSION_STATE` — client-cache knowledge over a packet already served, the pattern the zone names follow |
 
+**Party frames, since earned (operator decision, Mark, 2026-10-21).** The trigger the
+deferral below wrote down was met: in a Deadmines party attempt the tank
+died or left the instance and went silent, and the
+other four stood at the entrance for seven to ten minutes asking whether it
+was there, unable to tell a ghost at a graveyard, a member on another map
+or one waiting out resurrection sickness from a silent one, since
+`state.units` shows only players in range. The core sends
+`SMSG_PARTY_MEMBER_STATS` only for a member out of the receiver's sight range
+or on another map (`Group::UpdatePlayerOutOfRange`), carrying the fields that
+changed under a `GROUP_UPDATE_FLAG` mask
+(`WorldSession::BuildPartyMemberStatsChangedPacket`), and every field on a
+group join, a zone change, a teleport or map transfer and a resurrection
+(`Player::UpdateZone`); `_FULL` is its answer to
+`CMSG_REQUEST_PARTY_MEMBER_STATS`. The module taps both and decodes the
+member's own fields through its auras, naming the zone from `AreaTable.dbc`
+(`module/PROTOCOL.md`); the request is on the raw allowlist. The SDK folds
+them onto `state.group().members[i].stats` with `inView` beside it, and the
+HUD's `party:` line names each member's state, health %, power % and
+whereabouts: its zone and position out of view, its distance in view. Auras
+stay in `stats` only, off the line (`sdk/API.md`, `runner/src/context.ts`).
+Mark's calls on 2026-10-21:
+- The two packets are ambient, like movement. A far member sends about two a
+  second while walking, plus one for each regen tick and hit, so four far
+  members would turn the 64-event window over in about seven seconds. They
+  are in `CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE`, and the SDK's event buffer
+  does not retain them, so they cannot crowd chat out of `waitForChat`'s
+  lookback. The cache keeps the latest values.
+- The SDK does not send the request itself when a member goes out of view.
+  The request stays on the raw allowlist. A member that walks out of view is
+  therefore sent only the fields that change from then on. The rest stay what
+  the last packet before it came into view said, or are absent.
+
 **Deferred, with the change written down so it is not re-derived.**
 
-- `SMSG_PARTY_MEMBER_STATS`: the core sends it only for a member out of the
-  receiver's sight range (`Group::UpdatePlayerOutOfRange`); in range the unit
-  fields already carry everything it would. A ghost member at the graveyard
-  is out of range, and chat covers that. If a trajectory shows a loop needing
-  a far member's state: decode the `GROUP_UPDATE_FLAG` mask
-  (`WorldSession::BuildPartyMemberStatsChangedPacket`) and the `_FULL` reply
-  to `CMSG_REQUEST_PARTY_MEMBER_STATS`.
 - Ready check: any party may use it (leader or assistant starts; the check is
   not raid-only), but "ready?" in party chat is the same act. If earned: raw
   `MSG_RAID_READY_CHECK` (empty to start, `u8 state` to answer) and
@@ -574,8 +606,10 @@ the server sends, never from a map-id read off a state sample:
   `PermBindAllPlayers` — raids and heroics. A normal five-man binds nobody,
   so neither ever says "you entered the Deadmines"; the transfer does.
 - **`kill`** — from `SMSG_PARTYKILLLOG`: `{ kind: "kill", killerGuid,
-  victimGuid, entry, rank, self }`, with `entry` from the SDK's unit cache
-  and `rank` from the creature query it already holds. Recorded for victims
+  victimGuid, entry, rank, self, member }`, with `entry` from the SDK's unit
+  cache (else the victim's creature guid), `rank` from the creature query it
+  already holds, and `member` whether the killer is this character or one of
+  its group. Recorded for victims
   of rank 1 and above (elites, rares, bosses) so an open-world run does not
   write a line per rabbit; every Deadmines creature is elite, so inside the
   instance it is every kill.
@@ -641,9 +675,14 @@ model is the operator's to name, as every roster entry is.
 
 Three pieces of harness text, identical for every model. The two texts below
 are the operator's wording, approved as drafted (2026-10-19), with the objective's
-location sentence changed to match the portal-side staging and then to name the portal's position (both 2026-10-20). Nothing else about the prompt
-changes: the standing goal, the body and the tools are the same as every
-run's (`runner/src/prompt.ts`).
+location sentence changed to match the portal-side staging and then to name the portal's position (both 2026-10-20). The objective
+replaces the broad goal for the run rather than adding to it, and the run
+states its clock from the definition's budget ("This run lasts four hours.";
+operator, 2026-10-21): with the objective added to the standing goal, the
+first parties left the dungeon after some wipes to level in Westfall, which
+the goal endorsed, and nothing told them the run lasted four hours. The world
+facts, the body and the tools are the same as every run's
+(`runner/src/prompt.ts`).
 
 **The staged-character launch note**, a sibling of
 `freshCharacterNote` for a run launched with the new `--character <name>`

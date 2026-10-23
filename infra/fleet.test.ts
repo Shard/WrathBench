@@ -144,6 +144,7 @@ import { isCounted, readRunFacts, sameRosterIdentity } from "../runner/src/model
 import { listRuns } from "../runner/viewer/runs";
 import { STALL_PAUSE } from "../runner/src/lapse";
 import { tempDirs } from "./temp-dirs";
+import { formatConcludedCampaigns } from "./run-fleet-status";
 
 const tempDir = tempDirs();
 
@@ -514,7 +515,7 @@ describe("parseFleet", () => {
     expect(affinity.get("hk100")?.account).toBe("RUNNER2");
     // A probe is matched by its stamps alone: a run that recorded no roster
     // name and no arm is in no campaign square, whatever entry it resembles.
-    expect(probeRunsOf(runs)).toEqual([{ campaign: "race-probe", version: 1, cell: "orc-warrior", ref: null, arm: null, counted: false, live: false }]);
+    expect(probeRunsOf(runs)).toEqual([{ campaign: "race-probe", version: 1, cell: "orc-warrior", ref: null, arm: null, counted: false, live: false, terminationReason: null }]);
     // A resume picks the spawn entry with the paused run's window.
     const spawned: JobSpawn = spawn({ entries: [{ model: "claude-haiku-5-5", effort: "max" }, { model: "claude-haiku-5-5", effort: "max", compactWindow: "100k" }] });
     const resumed = withResume(spawned, { runId: "b", model: "claude-haiku-5-5", effort: "max", compactWindow: "100k" });
@@ -831,6 +832,25 @@ describe("campaigns: probe sweeps as the third lane", () => {
     expect(pinnedCampaignJobs(config, [done])).toEqual([]);
   });
 
+  test("a version the operator concluded launches nothing, pinned or not, though the row stays enabled; --status says so", () => {
+    const row = (over: Record<string, unknown>) => ({ version: 1, assignments: [{ model: "son" }], ...over });
+    const pinned = parseFleet(fleetJson([], { campaigns: { "solo-probe": row({ account: "SHAKEOUT", concluded: [1] }) } }));
+    expect(pinned.refusals).toEqual([]);
+    expect(pinned.campaigns[0]).toMatchObject({ enabled: true, concluded: [1] });
+    expect(pinnedCampaignJobs(pinned, [])).toEqual([]);
+    const pool = parseFleet(fleetJson([], { campaigns: { "solo-probe": row({ concluded: [1] }) } }));
+    expect(campaignWork(pool.campaigns, Object.keys(pool.roster), [])).toEqual([]);
+    expect(formatConcludedCampaigns(pinned.campaigns)).toEqual([
+      "! 1 enabled campaign(s) on a concluded version — nothing is launched or resumed for them:",
+      "   campaigns/solo-probe: solo-probe@1 is concluded — point version at a newer one, or set enabled: false",
+    ]);
+    // Disabled, or concluding some other version: nothing to say.
+    expect(formatConcludedCampaigns(parseFleet(fleetJson([], { campaigns: { "solo-probe": row({ enabled: false, concluded: [1] }) } })).campaigns)).toEqual([]);
+    const other = parseFleet(fleetJson([], { campaigns: { "solo-probe": row({ account: "SHAKEOUT", concluded: [2] }) } }));
+    expect(formatConcludedCampaigns(other.campaigns)).toEqual([]);
+    expect(pinnedCampaignJobs(other, [])).toHaveLength(1);
+  });
+
   test("an unpinned campaign is never built into a job here", () => {
     const config = parseFleet(fleetJson([], { campaigns: { "race-probe": { version: 1, assignments: [{ model: "glm" }] } } }));
     expect(pinnedCampaignJobs(config, [])).toEqual([]);
@@ -928,10 +948,10 @@ describe("campaigns: probe sweeps as the third lane", () => {
     const pausedRun = fact({ runId: "r5", campaignVersion: 2, ref: "glm", arm: "base", terminationReason: null, pause: { reason: "operator-pause", at: 1, count: 1, episodeElapsedMs: 1 } });
     const notAProbe = fact({ runId: "r6", campaign: null, episode: "e90" });
     expect(probeRunsOf([old, stillborn, stamped, pausedRun, notAProbe])).toEqual([
-      { campaign: "class-probe", version: null, cell: "dwarf-rogue", ref: null, arm: null, counted: true, live: false },
-      { campaign: "class-probe", version: 2, cell: "dwarf-rogue", ref: "glm", arm: "base", counted: false, live: false },
-      { campaign: "class-probe", version: 2, cell: "dwarf-rogue", ref: "glm", arm: "base", counted: true, live: false },
-      { campaign: "class-probe", version: 2, cell: "dwarf-rogue", ref: "glm", arm: "base", counted: false, live: true },
+      { campaign: "class-probe", version: null, cell: "dwarf-rogue", ref: null, arm: null, counted: true, live: false, terminationReason: "episode-limit" },
+      { campaign: "class-probe", version: 2, cell: "dwarf-rogue", ref: "glm", arm: "base", counted: false, live: false, terminationReason: "episode-limit" },
+      { campaign: "class-probe", version: 2, cell: "dwarf-rogue", ref: "glm", arm: "base", counted: true, live: false, terminationReason: "episode-limit" },
+      { campaign: "class-probe", version: 2, cell: "dwarf-rogue", ref: "glm", arm: "base", counted: false, live: true, terminationReason: null },
     ]);
   });
 
@@ -2793,6 +2813,12 @@ describe("pause and resume across a fleet stop", () => {
     // A disabled campaign keeps its paused run, listed with the reason.
     const off = { ...pool, campaigns: pool.campaigns.map((c) => ({ ...c, enabled: false })) };
     expect(planResumes({ runs: [run], config: off, running: new Map(), held, now: NOW, campaignFileOf: fileOf }).listed[0]?.why).toContain("campaign race-probe is disabled");
+    // A concluded version keeps its paused run too, listed: the run's version is asked, whichever the row names.
+    const concluded = { ...pool, campaigns: pool.campaigns.map((c) => ({ ...c, version: 2, concluded: [1] })) };
+    const kept = planResumes({ runs: [run], config: concluded, running: new Map(), held, now: NOW, campaignFileOf: fileOf });
+    expect(kept.resume).toEqual([]);
+    expect(kept.end).toEqual([]);
+    expect(kept.listed[0]?.why).toBe("campaign race-probe@1 is concluded — it owes nothing; resume by hand or archive");
     // A run with its own file comes back on it and nothing is written.
     expect(plan.resume[0]!.writeCampaignFile).toBeUndefined();
   });
@@ -4834,6 +4860,9 @@ describe("a pinned campaign job the config stops yielding drains with the reason
     );
     expect(unyieldedDrainReason(job, joined([POD], row({ enabled: false })).campaigns, ["glm"], inFlight)).toBe("campaign pod-proof disabled");
     expect(unyieldedDrainReason(job, [], ["glm"], inFlight)).toBe("campaign pod-proof is no longer in the config");
+    expect(unyieldedDrainReason(job, joined([POD], row({ concluded: [1] })).campaigns, ["glm"], inFlight)).toBe(
+      "campaign pod-proof@1 is concluded — nothing more to launch",
+    );
     expect(unyieldedDrainReason({ ref: "glm" }, campaigns, ["glm"], inFlight)).toBe("no longer in the config");
   });
 });

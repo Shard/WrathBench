@@ -111,6 +111,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { DEFAULT_CLAUDE_TOKEN_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
+import { entryOf } from "./drivers";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { McpServer } from "./mcp";
 import { CLAUDE_CODE_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
@@ -123,6 +124,7 @@ import {
   claudeModelWindow,
   claudeWindowCapRefusal,
   compactionNotice,
+  compactWindowTokens,
   messageText,
   summaryFields,
   type CompactionRecord,
@@ -454,7 +456,14 @@ export function thinkingEnv(effort: string | undefined): Record<string, string> 
  * 980000 for Claude Haiku 5.5, `100k` gave 80000, compacting ~13K below that).
  */
 export function compactEnv(window: string | undefined): Record<string, string> {
-  return window === undefined ? {} : { [COMPACT_WINDOW_ENV]: window };
+  if (window === undefined) return {};
+  // The integer token count, never the canonical `<n>k`: CLIs before 2.1.304
+  // read any `<n>k` as 100k (2.1.293 logged effectiveWindow=80000 for both
+  // `200k` and `300k`, and 180000 for `200000`), and the integer reads as
+  // written on every version. The run's recorded spelling stays `<n>k`.
+  const tokens = compactWindowTokens(window);
+  if (tokens === undefined) throw new Error(`compactWindow ${JSON.stringify(window)} is not canonical (<n>k or <n>M)`);
+  return { [COMPACT_WINDOW_ENV]: String(tokens) };
 }
 
 /**
@@ -716,6 +725,9 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     episodic: o.episodic,
     turn: () => builder.currentTurn,
     secrets: trajectory,
+    // The registry's switch (`DriverEntry.snippetDelta`): what changed since
+    // the previous snippet rides each snippet result on a driver that has it.
+    snippetDelta: entryOf(config.driver).snippetDelta,
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
     onEventsServed: (events, folded) =>
       trajectory.append({
@@ -900,7 +912,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   // The claude-code render: same prompt, except the sentence about older
   // conversation, which on this harness must describe the CLI's regime and not
   // the fixed loop's trim (`contextSentence`).
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("claude-code"), config.wiki);
+  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("claude-code"), config.wiki, config.watchdogs.episodeMs);
   const args = claudeArgs({
     mcpConfigPath,
     systemPrompt,
