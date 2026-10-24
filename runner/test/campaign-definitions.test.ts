@@ -57,6 +57,16 @@ describe("the checked-in definitions", () => {
     }
   });
 
+  test("compact-window-claude@3 is @2 re-pinned onto a 2.1.309 build: only the version, the notes and the one image move", () => {
+    const v2 = checkedIn("compact-window-claude@2");
+    const v3 = checkedIn("compact-window-claude@3");
+    const images = new Set(v3.arms.map((a) => a.image));
+    expect(images.size).toBe(1);
+    expect([...images][0]).not.toBe(v2.arms[0]!.image);
+    const rest = (d: CampaignDefinition) => ({ ...d, version: 0, note: "", arms: d.arms.map((a) => ({ ...a, image: "", note: "" })) });
+    expect(rest(v3)).toEqual(rest(v2));
+  });
+
   test("pi-vs-wrathbench@1: one pinned arm with no args, so its wrathbench and pi assignments refuse nothing with run pods on", () => {
     const def = checkedIn("pi-vs-wrathbench@1");
     expect(def.arms).toHaveLength(1);
