@@ -8,7 +8,22 @@
 
 import { describe, expect, test } from "bun:test";
 import type { AreaFacts, ResultRun, LevelMark } from "../../runner/viewer/api-types";
-import { DEFAULT_VIEW, LADDER_VIEWS, LEVEL, type Metrics, TOKENS, TURNS, XP, betterCorner, runMetrics, viewParam } from "../src/lib/axes";
+import {
+  COST,
+  DEFAULT_VIEW,
+  LADDER_VIEWS,
+  LEVEL,
+  LEVEL_START_XP,
+  type Metrics,
+  TOKENS,
+  TURNS,
+  XP,
+  betterCorner,
+  levelOfXp,
+  runMetrics,
+  viewParam,
+  xpLevelTicks,
+} from "../src/lib/axes";
 import { paretoSteps } from "../src/lib/pareto";
 import {
   CUE_PAD,
@@ -879,9 +894,13 @@ describe("ladderPoints over another pair of axes", () => {
 describe("ladderChartLayout", () => {
   const box = { x0: 60, x1: 960, y0: 340, y1: 20 };
   // The drawn label is the key alone (`pointLabel`), so the fixture's is too.
-  const pt = (key: string, x: number, y: number): LadderPoint => ({
-    key, label: key, single: true, model: key, effort: null, x, y, metrics: bag({ cost: x, xp: y }), runs: 1, n: 1, basis: "reported", asIfMetered: false, harnesses: ["wrathbench"],
-  });
+  // The fixtures were drawn against an xp axis ending at 2,500; it now ends at
+  // a level boundary, L4 at 2,700, so each y is scaled by 27/25 and every
+  // point sits where it did on the plot.
+  const pt = (key: string, x: number, y0: number): LadderPoint => {
+    const y = (y0 * 27) / 25;
+    return { key, label: key, single: true, model: key, effort: null, x, y, metrics: bag({ cost: x, xp: y }), runs: 1, n: 1, basis: "reported", asIfMetered: false, harnesses: ["wrathbench"] };
+  };
 
   test("a free entry sits in the gutter, the dearest point at the ceiling on the right edge", () => {
     const l = ladderChartLayout([pt("free", 0, 0), pt("paid", 10, 2500)], box);
@@ -890,7 +909,8 @@ describe("ladderChartLayout", () => {
     expect(free.cx).toBe(l.freeX);
     expect(free.cy).toBe(box.y0);
     expect(l.xMax).toBe(10);
-    expect(l.yMax).toBe(2500);
+    expect(l.yMax).toBe(2700);
+    expect(l.yTicks.map(XP.format)).toEqual(["L1", "L2", "L3", "L4"]);
     const paid = l.placed.find((d) => d.point.key === "paid")!;
     expect(paid.cx).toBeCloseTo(box.x1, 9);
     expect(paid.cy).toBe(box.y1);
@@ -1581,5 +1601,88 @@ describe("a withheld pause reason is not printed back as a detail", () => {
     const stalled = characterRows([fp({ runId: "c", terminationReason: null, pauseReason: STALL_PAUSE_REASON })])[0]!;
     expect(stalled.status).toBe("stalled");
     expect(stalled.statusDetail).toBeNull();
+  });
+});
+
+describe("the xp axis ticks at level boundaries", () => {
+  const labels = (max: number): string[] => xpLevelTicks(max).map(XP.format);
+
+  test("the cumulative table: where each level begins for a fresh L1 character", () => {
+    // By hand from AzerothCore's player_xp_for_level: 400, 900, 1400, 2100, …
+    expect(LEVEL_START_XP[1]).toBe(0);
+    expect(LEVEL_START_XP[2]).toBe(400);
+    expect(LEVEL_START_XP[3]).toBe(1300);
+    expect(LEVEL_START_XP[5]).toBe(4800);
+    expect(LEVEL_START_XP[10]).toBe(27_600);
+    expect(LEVEL_START_XP).toHaveLength(81);
+    expect(levelOfXp(0)).toBe(1);
+    expect(levelOfXp(399)).toBe(1);
+    expect(levelOfXp(400)).toBe(2);
+    expect(levelOfXp(27_599)).toBe(9);
+    expect(levelOfXp(27_600)).toBe(10);
+    expect(levelOfXp(1e12)).toBe(80);
+  });
+
+  test("a boundary's tick reads as its level, anything else as a count", () => {
+    expect(XP.format(0)).toBe("L1");
+    expect(XP.format(400)).toBe("L2");
+    expect(XP.format(27_600)).toBe("L10");
+    expect(XP.format(2000)).toBe("2k");
+    expect(XP.format(250)).toBe("250");
+  });
+
+  test("never a one-tick axis: nothing earned, or less than a level, still runs L1 to L2", () => {
+    expect(xpLevelTicks(0)).toEqual([0, 400]);
+    expect(xpLevelTicks(-5)).toEqual([0, 400]);
+    expect(xpLevelTicks(300)).toEqual([0, 400]);
+    expect(xpLevelTicks(400)).toEqual([0, 400]);
+    expect(labels(401)).toEqual(["L1", "L2", "L3"]);
+  });
+
+  test("a small range ticks every level", () => {
+    expect(xpLevelTicks(4800)).toEqual([0, 400, 1300, 2700, 4800]);
+    expect(labels(4000)).toEqual(["L1", "L2", "L3", "L4", "L5"]);
+  });
+
+  test("a wider range steps every 2nd, then every 5th level, thinning the bunched low end", () => {
+    // A 90-minute run's range: L15, every other level above the crowd at the origin.
+    expect(labels(70_000)).toEqual(["L1", "L6", "L8", "L10", "L12", "L14", "L15"]);
+    expect(labels(600_000)).toEqual(["L1", "L15", "L20", "L25", "L30", "L34"]);
+  });
+
+  test("over any range: the axis ends at the first boundary at or above the data, no closer than 8% apart, at most 8 ticks", () => {
+    for (let max = 1; max < 30_000_000; max = Math.ceil(max * 1.17)) {
+      const t = xpLevelTicks(max);
+      const end = t[t.length - 1]!;
+      expect(end).toBeGreaterThanOrEqual(Math.min(max, LEVEL_START_XP[80]!));
+      expect(t[0]).toBe(0);
+      expect(t.length).toBeGreaterThanOrEqual(2);
+      expect(t.length).toBeLessThanOrEqual(8);
+      // The first level not yet passed, not one past it.
+      expect(levelOfXp(end - 1) === levelOfXp(end) - 1).toBe(true);
+      if (max <= LEVEL_START_XP[80]! && end > 400) expect(LEVEL_START_XP[levelOfXp(end) - 1]!).toBeLessThan(max);
+      for (let i = 1; i < t.length; i++) {
+        expect(t[i]! - t[i - 1]!).toBeGreaterThanOrEqual(0.08 * end);
+        expect(XP.format(t[i]!)).toMatch(/^L\d+$/);
+      }
+    }
+  });
+
+  test("the layout takes the spec's ticks on either axis", () => {
+    const box = { x0: 60, x1: 960, y0: 340, y1: 20 };
+    const point = (key: string, x: number, y: number, xp: number): LadderPoint => ({
+      key, label: key, single: false, model: key, effort: null, x, y, metrics: bag({ xp }), runs: 2, n: 2, basis: null, asIfMetered: false, harnesses: ["wrathbench"],
+    });
+    // y: the default view.
+    const onY = ladderChartLayout([point("a", 1, 9000, 9000), point("b", 3, 3000, 3000)], box, COST, XP);
+    expect(onY.yTicks.map(XP.format)).toEqual(["L1", "L3", "L4", "L5", "L6", "L7"]);
+    expect(onY.yMax).toBe(11_200);
+    expect(onY.py(11_200)).toBe(box.y1);
+    // x: xp against level, which no view offers but the layout must still honour.
+    const onX = ladderChartLayout([point("a", 9000, 6, 9000), point("b", 3000, 4, 3000)], box, XP, LEVEL);
+    expect(onX.xScale).toBe("linear");
+    expect(onX.xTicks).toEqual(onY.yTicks);
+    expect(onX.px(11_200)).toBe(box.x1);
+    expect(onX.yTicks).toEqual([0, 2, 4, 6]);
   });
 });

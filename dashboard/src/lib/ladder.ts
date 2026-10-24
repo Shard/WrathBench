@@ -1119,7 +1119,7 @@ export function ladderChartLayout(
   } else {
     // Linear, from zero, like y: a count of turns or tokens has a real origin
     // and no gutter to keep — zero is on the axis.
-    const xTicks = niceTicks(Math.max(0, ...xs));
+    const xTicks = (xSpec.ticks ?? niceTicks)(Math.max(0, ...xs));
     const xMax = xTicks[xTicks.length - 1]!;
     xAxis = {
       xTicks,
@@ -1133,9 +1133,9 @@ export function ladderChartLayout(
     };
   }
   const px = xAxis.px;
-  // y is linear from zero whatever the metric; the spec's part is the format
-  // and the caption, which the component reads from it directly.
-  const yTicks = niceTicks(Math.max(0, ...points.map((p) => p.y)));
+  // y is linear from zero whatever the metric; the spec's part is its ticks
+  // when it has its own (xp's level boundaries), the format and the caption.
+  const yTicks = (ySpec.ticks ?? niceTicks)(Math.max(0, ...points.map((p) => p.y)));
   const yMax = yTicks[yTicks.length - 1]!;
   const py = scaleLinear([0, yMax], [box.y0, box.y1]);
 
