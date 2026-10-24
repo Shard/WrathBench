@@ -62,7 +62,7 @@ describe("routePreloads", () => {
       ["models", nav(), [["models"], ["ladder", "freeplay"]]],
       ["about", nav(), [["episodes"]]],
       ["campaigns", nav(), [["campaigns"]]],
-      ["fleet", nav(), [["runs"]]],
+      ["fleet", nav(), []],
       ["character", nav({}, { id: "run-1" }), [["character", "run-1"]]],
     ];
     for (const [route, args, want] of cases) {
@@ -88,7 +88,7 @@ describe("routePreloads", () => {
     expect(page("Models")).toContain('api.ladder("freeplay")');
     expect(page("About")).toContain("api.episodes()");
     expect(page("Campaigns")).toContain("api.campaigns()");
-    expect(page("Fleet")).toContain("api.runs()");
+    expect(page("Fleet")).not.toContain("api.runs()");
     expect(page("Character")).toContain("api.character(params.id)");
   });
 

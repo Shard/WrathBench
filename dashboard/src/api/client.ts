@@ -340,8 +340,16 @@ export function createClient(opts: ClientOptions = {}) {
       if (!res.ok) throw new ApiError(res.status, `raw ${i}: ${res.status}`);
       return await res.text();
     },
-    /** The SSE URL for a run's live tail. Opening it is the caller's business. */
-    streamUrl: (id: string): string => `${opts.base ?? ""}/api/run/${encodeURIComponent(id)}/stream`,
+    /**
+     * The SSE URL for a run's live tail. Opening it is the caller's business.
+     * `from` is the index of the first entry the caller does not hold yet, so
+     * the stream sends anything written since the caller's `/entries` read
+     * before it goes live; absent, the stream starts at the tail's end. A
+     * reconnect needs nothing from here: the browser resends the last frame's
+     * id as `Last-Event-ID`, which the server prefers.
+     */
+    streamUrl: (id: string, from?: number): string =>
+      `${opts.base ?? ""}/api/run/${encodeURIComponent(id)}/stream${from === undefined ? "" : `?from=${from}`}`,
   };
 }
 

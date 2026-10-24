@@ -60,8 +60,12 @@ import type {
 } from "@viewer/api-types";
 import type { PublicFleetResponse, PublicRunsResponse } from "@viewer/public-projection";
 import { characterViewOf } from "@viewer/character";
-import { SEG_MS, packSegs, traceSegmentKey } from "@viewer/trace";
-import { emptyNearbyWindow } from "@viewer/nearby";
+/*
+ * The trace and nearby codecs are imported where they are used, not here: only
+ * the map reaches those three methods, and held statically they rode in the
+ * chunk every page preloads. Destructured at each site, so the bundler still
+ * drops the exports nothing names.
+ */
 import { ApiError, getJson, sweepExpired, traceWindow, type Client } from "./client";
 import { fmtAge } from "../lib/format";
 
@@ -549,8 +553,10 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
      * `recent` or a published track's `segs` has listed it. An unlisted key is
      * a 404 the edge then caches for a day.
      */
-    traceSegment: async (id: string, t0: number): Promise<TraceSegment> =>
-      await held<TraceSegment>(traceSegmentKey(id, Number(traceWindow(t0)))),
+    traceSegment: async (id: string, t0: number): Promise<TraceSegment> => {
+      const { traceSegmentKey } = await import("@viewer/trace");
+      return await held<TraceSegment>(traceSegmentKey(id, Number(traceWindow(t0))));
+    },
     /*
      * There is no published index: a live run's is its position in the fast
      * lane, whose `recent` windows are in the bucket and whose tail rides
@@ -558,6 +564,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
      * whole of its trace — an index with no windows and no tail adds nothing.
      */
     traceIndex: async (id: string): Promise<TraceIndexResponse> => {
+      const { SEG_MS, packSegs } = await import("@viewer/trace");
       const l = await live();
       const trace = l.positions.positions.find((p) => p.runId === id)?.trace;
       return {
@@ -576,6 +583,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
      * recorded) answers an empty one, which the map draws as no units.
      */
     nearby: async (id: string): Promise<NearbyWindow> => {
+      const { emptyNearbyWindow } = await import("@viewer/nearby");
       const { windows, generatedAt: at } = await nearbyWindows();
       return windows[id] ?? emptyNearbyWindow(id, at);
     },

@@ -166,29 +166,9 @@ export function tierTitle(row: ModelRowView): string {
 }
 
 /**
- * The roster name for a run's `(model, effort, compactWindow)`, or null.
- *
- * This is the key `sameRosterIdentity` in `runner/src/models.ts` uses, and the only
- * way a run page or a runs-table row can link to `/models#<name>`: a run records
- * the model string it was launched with, never the roster name that chose it. Two
- * roster entries can legitimately share the pair, in which case the first is
- * taken — a link has to go somewhere, and both rows show the same runs anyway.
+ * The anchor a cross-link uses. Kept here so every caller spells it the same;
+ * the run page's name comes off its detail (`rosterName`, matched server-side).
  */
-export function rosterNameFor(
-  rows: readonly ModelRowView[],
-  model: string | null,
-  effort: string | null = null,
-  compactWindow: string | null = null,
-): string | null {
-  if (model === null) return null;
-  const hit = rows.find((r) => r.model === model && r.effort === effort && (r.compactWindow ?? null) === compactWindow);
-  if (hit !== undefined) return hit.name;
-  // An effort we do not have a row for still points at the model's own row,
-  // which is more useful than a dead link to nowhere.
-  return rows.find((r) => r.model === model)?.name ?? null;
-}
-
-/** The anchor a cross-link uses. Kept here so both callers spell it the same. */
 export function modelsHref(name: string | null): string {
   return name === null ? "/models" : `/models#${encodeURIComponent(name)}`;
 }

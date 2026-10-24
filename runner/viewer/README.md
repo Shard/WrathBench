@@ -570,7 +570,13 @@ Every reader of a run shares its one tail, so each SSE stream keeps its own
 cursor into the tail's entries and sends whatever lies past it after any
 scan, whoever ran it: a second tab, the run page's own poll or `/entries`
 can no longer consume a batch an open stream then never sends. A truncated or
-rotated file restarts every cursor from the top. The run page's tokens, cost,
+rotated file restarts every cursor from the top. Where a cursor starts is the
+client's: the run page reads `/entries` before it opens the stream, so it
+passes `?from=` (the first entry index it does not hold) and gets whatever was
+written in between before going live. Each frame that moves the cursor carries
+it as the SSE `id`, and the server prefers `Last-Event-ID` to `from`, so the
+browser's own reconnect resumes with no gap and no replay. No start is the
+tail's end; a start past it (a rebuilt file) is 0. The run page's tokens, cost,
 coverage, speed and segments are accumulated by the tail as it indexes (the
 token and speed derivations are held until it grows), so a warm poll and N
 open streams cost one derivation per batch rather than a walk over every
@@ -592,6 +598,15 @@ What the viewer keeps between requests is either short or final:
   gets the one read in flight. A write through the config API drops the
   roster at once. The listing build behind results, ladders and characters
   keeps its own fifteen-second window.
+- **`/api/fleet` reads no corpus-wide table but the liveness listing.** It is
+  polled every five seconds by every open tab (the status badge), so the
+  figures its table rows show (`runFacts`: level, xp, tokens, speed, actual
+  cost, playtime, episode clock, served model) are point reads of just those
+  runs — each job's run and the paused run on each idle account
+  (`fleetRunIds`) — built by the listing's own `listRowOf` and shared over
+  the same three seconds for the same set of runs, and its
+  `runCount` is the liveness listing it already read. Those cells used to cost
+  the page the whole `/api/runs` (2.4 MB) a minute.
 - **A settled run's track** — terminated, its files quiet for five minutes —
   has its store-derived half (points, inventory patches, moves) read once and
   kept for the last six such runs, and is answered with a weak ETag and

@@ -1272,6 +1272,14 @@ export interface RunDetailResponse extends SnapshotEnvelope {
    */
   sessions?: ActiveSegment[];
   /**
+   * The roster row this run's model belongs to (`rosterNameOf`), for the run
+   * page's link to the models table: matched on (model, effort, compaction
+   * window) over the rows `/api/models` lists, falling back to the model's own
+   * row. Null when the roster names no such model. Optional: an older viewer
+   * or snapshot has none, and the page then prints the model unlinked.
+   */
+  rosterName?: string | null;
+  /**
    * Achievements and flights from this run's milestone records,
    * accumulated by the same incremental tail the entry feed rides, so a live
    * run's line grows with it. Null on a run that recorded none — never zero.
@@ -1505,6 +1513,26 @@ export interface FleetPausedView {
   subscriptionWait?: true;
 }
 
+/**
+ * One run's progress as the fleet table shows it: the listing row's own
+ * figures (`RunListRow`, the same derivation the runs table reads), cut to the
+ * cells — level and xp, tokens, speed, the provider's own cost, active time
+ * against the run's recorded episode clock, and the id it was served as. The
+ * public runs index publishes exactly this shape per row.
+ */
+export interface FleetRunFacts {
+  runId: string;
+  resolvedModel: string | null;
+  level: number | null;
+  xp: number | null;
+  playtimeMs: number | null;
+  tokens: Pick<TokenTotals, "totalTokens"> | null;
+  tps?: TpsFacts | null;
+  /** The provider's own figure: the fleet table never shows the estimate. */
+  cost: { actual: Pick<CostFigure, "usd" | "basis" | "note" | "backfill"> } | null;
+  comparability: { budget: Pick<ComparabilityView["budget"], "episodeMs"> } | null;
+}
+
 /** The supervisor's counters since it started (`session` in fleet-state.json). */
 export interface FleetSessionView {
   finished: number;
@@ -1614,6 +1642,14 @@ export interface FleetResponse extends SnapshotEnvelope {
    * was given no fleet config to read a roster and its accounts out of.
    */
   outstanding?: FleetOutstandingView;
+  /**
+   * The progress of each run a job is driving or a paused row names
+   * (`FleetRunFacts`), so the fleet table fills its cells without reading the
+   * whole runs index. Optional: an older viewer or snapshot has none.
+   */
+  runFacts?: FleetRunFacts[];
+  /** How many runs the runs index lists (the fleet page's link to it). Optional as `runFacts` is. */
+  runCount?: number;
   /** Server clock at read time, so a client can age the heartbeat honestly. */
   now: number;
 }

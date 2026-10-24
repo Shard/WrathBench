@@ -13,9 +13,8 @@
  * rows keep their maths in `format.ts`.
  */
 
-import type { FleetJobView, FleetPausedView, FleetResponse, FleetServerView, TpsFacts } from "@viewer/api-types";
+import type { FleetJobView, FleetPausedView, FleetResponse, FleetRunFacts, FleetServerView, TpsFacts } from "@viewer/api-types";
 import { costMark, fmtDuration, fmtTps, modelDisplay } from "./format";
-import type { PublicRunListRow } from "@viewer/public-projection";
 
 /** The supervisor writes a heartbeat every tick (60s); past three ticks it is gone, not quiet. */
 export const HEARTBEAT_STALE_MS = 180_000;
@@ -169,10 +168,10 @@ export interface FleetRow {
   runId: string | null;
   level: number | null;
   xp: number | null;
-  /** The run's token total, from the runs feed; null when there is no run or no trajectory. */
+  /** The run's token total, from its figures on the fleet feed; null when there is no run or no trajectory. */
   tokens: number | null;
   /**
-   * How fast the model is producing, from the runs feed (`TpsFacts`): the cell
+   * How fast the model is producing, from the run's figures (`TpsFacts`): the cell
    * shows the recent figure and the title carries the run's own average, because
    * on a live run the question is how it is going *now*. Null when there is no
    * run, no trajectory, or no measurable reply — never a rate for a row driving
@@ -187,7 +186,7 @@ export interface FleetRow {
   costNote: string;
   /** `costMark` of the same figure: "*" when part of it is a backfill, else "". */
   costMark: string;
-  /** Active time in the episode, from the runs feed; null when there is no run. */
+  /** Active time in the episode, from the run's figures; null when there is no run. */
   elapsedMs: number | null;
   /**
    * The run's own recorded wall-clock watchdog (`comparability.budget.episodeMs`,
@@ -218,7 +217,7 @@ export interface FleetRow {
  *
  * **Which clocks.** The denominator is the run's own recorded `episodeMs`
  * watchdog, never a nominal budget read off the tier name. The numerator is
- * `playtimeMs` from the runs feed — and because only running/draining rows get
+ * `playtimeMs` from the run's figures — and because only running/draining rows get
  * here, that is its single provenance (the paused rows' `elapsedMs` never
  * reaches this). Both clocks exclude paused stretches: the `episode-limit`
  * watchdog carries `elapsedBeforeMs` across a resume (runner/src/run.ts, commit
@@ -414,7 +413,7 @@ function stateOf(job: FleetJobView, windowOpen: boolean): FleetRowState {
  * as the episodes page shows it — never the estimate, and null for any of the
  * ways there is none (no run, unreadable trajectory, a provider that reports no cost).
  */
-function actualUsd(run: PublicRunListRow | undefined): number | null {
+function actualUsd(run: FleetRunFacts | undefined): number | null {
   const c = run?.cost?.actual ?? null;
   return c === null || c.basis === "none" ? null : c.usd;
 }
@@ -423,12 +422,13 @@ function actualUsd(run: PublicRunListRow | undefined): number | null {
  * The whole table: every job the supervisor has a process for, plus every
  * account holding nothing, ordered by state through `byState`.
  *
- * `runs` is the filesystem's view (`/api/runs`) and is joined by run id for
- * level, xp and the episode's active time — the same numbers the runs table
- * shows, so the two cannot disagree. A job whose run is not in that feed still
- * gets its row; it is a launch the trajectory has not caught up with.
+ * `runs` is each shown run's figures (`FleetResponse.runFacts`, the listing
+ * row's own derivation) joined by run id for level, xp and the episode's active
+ * time — the same numbers the runs table shows, so the two cannot disagree. A
+ * job whose run has no figures still gets its row; it is a launch the
+ * trajectory has not caught up with.
  */
-export function fleetRows(fleet: FleetResponse, runs: readonly PublicRunListRow[]): FleetRow[] {
+export function fleetRows(fleet: FleetResponse, runs: readonly FleetRunFacts[]): FleetRow[] {
   const byId = new Map(runs.map((r) => [r.runId, r]));
   const rows: FleetRow[] = [];
   const busy = new Set<string>();

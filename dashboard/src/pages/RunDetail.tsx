@@ -47,7 +47,6 @@ import {
   type ComparabilityView,
   type EventsServedEntry,
   type FeedEntry,
-  type ModelRowView,
   type RunDetailResponse,
   type TokenTotals,
 } from "../api/client";
@@ -68,7 +67,7 @@ import { actionLines, isActionsEntry, keepLines, moveVerdicts, sameLine, sameVer
 import type { ActionsEntry } from "@viewer/api-types";
 import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
 import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
-import { modelsHref, rosterNameFor } from "../lib/models";
+import { modelsHref } from "../lib/models";
 import { poll } from "../lib/poll";
 import {
   EXPAND_LABELS,
@@ -235,16 +234,6 @@ export default function RunDetail() {
     if (next) queueMicrotask(pinToBottom);
   };
   createEffect(on(entries, () => { if (follow()) pinToBottom(); }));
-  /*
-   * The roster, only so this run can link back to the model row that scheduled
-   * it. A run records a model string and an effort, never a roster name, and
-   * `(model, effort)` is the key the projection itself matches on. A failed
-   * fetch simply leaves the name unlinked.
-   */
-  const [roster, setRoster] = createSignal<ModelRowView[]>([]);
-  const rosterName = (run: RunDetailResponse["run"]): string | null =>
-    rosterNameFor(roster(), run.model, run.comparability?.effort ?? null, run.comparability?.compactWindow ?? null);
-
   const live = (): boolean => detail()?.run.terminationReason === null;
 
   /**
@@ -372,6 +361,13 @@ export default function RunDetail() {
          * error. The count still comes off the detail either way.
          */
         setTotal(d.total);
+        /*
+         * Where the feed this page holds ends, once `/entries` has answered:
+         * the live tail starts there, so whatever the run wrote between that
+         * read and the stream opening is not lost. Unset when the read failed,
+         * and the stream then starts at the tail's end as it always did.
+         */
+        let heldThrough: number | undefined;
         const loadWindow = async (pending = api.entries(params.id, undefined, WINDOW)): Promise<void> => {
           const page = await pending;
           setEntries(page.entries);
@@ -394,21 +390,11 @@ export default function RunDetail() {
            */
           try {
             await loadWindow(firstWindow);
+            heldThrough = total();
           } catch (e: unknown) {
             logError("run entries", e);
             setError(displayError(e));
           }
-        }
-        /*
-         * The roster is the whole models aggregate, the largest thing this page
-         * reads, for one name in one link: asked for once the summary and the
-         * feed are on screen, and not at all for a run with no model.
-         */
-        if (d.run.model !== null) {
-          void api
-            .models()
-            .then((m) => setRoster(m.models))
-            .catch(() => undefined);
         }
         if (d.run.terminationReason !== null) return;
         // A live run's summary keeps moving; a finished one is settled.
@@ -440,7 +426,7 @@ export default function RunDetail() {
         // Static JSON serves no SSE stream, and an EventSource against it would be a
         // reconnect loop against a 404.
         if (SNAPSHOT_MODE) return;
-        stop = subscribeTail(api.streamUrl(params.id), {
+        stop = subscribeTail(api.streamUrl(params.id, heldThrough), {
           onEntries: (added, tot) => {
             setEntries((prev) => [...prev, ...added]);
             setTotal((t) => t + added.length);
@@ -812,11 +798,12 @@ export default function RunDetail() {
                       <div class="v">
                         <ModelIcon model={run().model} />
                         {/* The roster row this run's model belongs to, when it is on the roster:
-                            a run records a model string, never the name that scheduled it. */}
+                            a run records a model string, never the name that scheduled it, so
+                            the server matches it (`rosterName` on the detail). */}
                         <Show when={run().model} fallback="—">
                           {(full) => (
                             <span title={full()}>
-                              <Show when={rosterName(run())} fallback={modelDisplay(full())}>
+                              <Show when={detail()?.rosterName} fallback={modelDisplay(full())}>
                                 {(name) => <A href={modelsHref(name())}>{modelDisplay(full())}</A>}
                               </Show>
                             </span>

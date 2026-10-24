@@ -655,11 +655,13 @@ wrapped in a read-recording proxy, and read one more time for anything the
 proxy cannot see (hover content, popovers, branches no fixture reaches). What a
 pass leaves out, and who reads what is left:
 
-- **`runs.json` is the fleet table's join and the pointers.** `fleetRows`
-  reads level, xp, tokens, speed, the provider's cost figure, playtime, the
-  episode budget and the served model; the snapshot client follows `snapshot`.
-  Typed as `PublicRunListRow`, and `fleetRows` is typed against it, so the
-  compiler says it reads nothing else. Every other listing field is on
+- **`runs.json` is the fleet table's figures and the pointers.** Each row is
+  `FleetRunFacts` — level, xp, tokens, speed, the provider's cost figure,
+  playtime, the episode budget and the served model — plus `snapshot`, which
+  the snapshot client follows. The fleet table itself reads the same shape off
+  `live.json` (`fleet.runFacts`, for the runs it rows, and `fleet.runCount`),
+  so it no longer fetches this file; `fleetRows` is typed against
+  `FleetRunFacts`, so the compiler says it reads nothing else. Every other listing field is on
   `results.json` or the run's own `detail.json`, where the page that shows it
   reads it. This was two megabytes that move on every pass with a live run.
 - **A run's `detail.json` states are the chart's three fields** (`ts`,

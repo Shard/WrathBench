@@ -58,7 +58,9 @@ export function routePreloads(api: Api): Record<"home" | "ladder" | "map" | "run
     models: on(() => [api.models(), api.ladder("freeplay")]),
     about: on(() => [api.episodes()]),
     campaigns: on(() => [api.campaigns()]),
-    fleet: on(() => [api.runs()]),
+    // The fleet table reads `/api/fleet`, which the shell's shared feed already
+    // polls on every page; there is nothing route-specific to start.
+    fleet: on(() => []),
     character: on(({ params }) => (params["id"] === undefined ? [] : [api.character(params["id"])])),
   };
 }

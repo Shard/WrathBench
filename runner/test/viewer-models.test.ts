@@ -12,13 +12,13 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import { ConfigStore, splitFleet } from "../src/config-store";
-import { ERROR_MAX_CHARS, currentSeries, lastErrorOf, readFleetRoster } from "../viewer/models";
-import type { ModelsResponse } from "../viewer/api-types";
+import { ERROR_MAX_CHARS, currentSeries, lastErrorOf, readFleetRoster, rosterNameOf } from "../viewer/models";
+import type { ModelsResponse, RunDetailResponse } from "../viewer/api-types";
 
 const SENTINEL = "sentinel-bearer-9d31ff";
 const NOW = 1_800_000_000_000;
@@ -422,5 +422,88 @@ describe("/api/models", () => {
     const body = await models(runsDir, fleetPath);
     expect(body.models[0]!.runs).toEqual([]);
     expect(body.models[0]!.perEpisode.e90!.attempts).toBe(0);
+  });
+});
+
+/*
+ * The run page links its model to the models table by roster name. It used to
+ * fetch the whole `/api/models` aggregate to find that one name; the run's own
+ * detail carries it now, matched over exactly the rows `/api/models` lists.
+ */
+describe("rosterName on /api/run/<id>", () => {
+  /** A whole comparability tuple, which is what a run row reads its effort and window off. */
+  function stamp(runsDir: string, id: string, effort: string | null, compactWindow?: string): void {
+    const path = join(runsDir, id, "meta.json");
+    const meta = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    const comparability = {
+      harnessVersion: "harness-test",
+      promptHash: "sha256:0123456789abcdef",
+      promptChars: 4242,
+      harness: "wrathbench",
+      effort,
+      budget: { maxTurns: null, maxToolCalls: 500, idleMs: 600_000, noXpMs: null, episodeMs: 5_400_000, maxSandboxRestarts: 3 },
+      objective: false,
+      serverBuild: null,
+      ...(compactWindow !== undefined ? { compactWindow } : {}),
+    };
+    writeFileSync(path, JSON.stringify({ ...meta, comparability }));
+  }
+
+  async function rosterNameFor(runsDir: string, fleetPath: string, id: string): Promise<string | null | undefined> {
+    const handle = createApi({ runsDir, tilesDir: join(runsDir, "tiles"), configDbPath: fleetPath });
+    const res = await handle(new Request(`http://x/api/run/${id}`));
+    expect(res.status).toBe(200);
+    return ((await res.json()) as RunDetailResponse).rosterName;
+  }
+
+  test("effort is part of the key; an unknown effort points at the model's own row", async () => {
+    const { runsDir, fleetPath } = fixture(ROSTER);
+    writeRun(runsDir, { id: "r-low", model: "vendor/alpha", effort: "low", responses: 1, startedAt: NOW - HOUR, endedAt: NOW - HOUR + 1 });
+    stamp(runsDir, "r-low", "low");
+    writeRun(runsDir, { id: "r-none", model: "vendor/alpha", responses: 1, startedAt: NOW - HOUR, endedAt: NOW - HOUR + 1 });
+    stamp(runsDir, "r-none", null);
+    writeRun(runsDir, { id: "r-high", model: "vendor/alpha", effort: "high", responses: 1, startedAt: NOW - HOUR, endedAt: NOW - HOUR + 1 });
+    stamp(runsDir, "r-high", "high");
+    writeRun(runsDir, { id: "r-gone", model: "vendor/gamma", responses: 1, startedAt: NOW - HOUR, endedAt: NOW - HOUR + 1 });
+    stamp(runsDir, "r-gone", null);
+    expect(await rosterNameFor(runsDir, fleetPath, "r-low")).toBe("alpha-low");
+    expect(await rosterNameFor(runsDir, fleetPath, "r-none")).toBe("alpha");
+    expect(await rosterNameFor(runsDir, fleetPath, "r-high")).toBe("alpha");
+    expect(await rosterNameFor(runsDir, fleetPath, "r-gone")).toBeNull();
+    // Every name it can give is a row the models table lists.
+    const names = (await models(runsDir, fleetPath)).models.map((m) => m.name);
+    expect(names).toContain("alpha-low");
+    expect(names).toContain("alpha");
+  });
+
+  test("the compaction window is part of the key, as it is in the projection", async () => {
+    const { runsDir, fleetPath } = fixture({
+      ...ROSTER,
+      roster: { ...ROSTER.roster, "alpha-200k": { model: "vendor/alpha", compactWindow: "200k", tier: "t1" } },
+    });
+    writeRun(runsDir, { id: "r-200k", model: "vendor/alpha", compactWindow: "200k", responses: 1, startedAt: NOW - HOUR, endedAt: NOW - HOUR + 1 });
+    stamp(runsDir, "r-200k", null, "200k");
+    expect(await rosterNameFor(runsDir, fleetPath, "r-200k")).toBe("alpha-200k");
+  });
+
+  test("an excluded entry is never the link: the models table has no row for it", () => {
+    const roster = {
+      models: [
+        { name: "probe", model: "vendor/alpha", tier: "t1" as const },
+        { name: "alpha", model: "vendor/alpha", tier: "t1" as const },
+      ],
+      excluded: [{ name: "probe", reason: "pinned" }],
+    };
+    expect(rosterNameOf(roster, "vendor/alpha")).toBe("alpha");
+    expect(rosterNameOf(roster, null)).toBeNull();
+    expect(rosterNameOf({ models: [], excluded: [] }, "vendor/alpha")).toBeNull();
+  });
+
+  test("no roster at all is no link, not an error", async () => {
+    const { runsDir } = fixture(ROSTER);
+    writeRun(runsDir, { id: "r-1", model: "vendor/alpha", responses: 1, startedAt: NOW - HOUR, endedAt: NOW - HOUR + 1 });
+    const handle = createApi({ runsDir, tilesDir: join(runsDir, "tiles") });
+    const body = (await (await handle(new Request("http://x/api/run/r-1"))).json()) as RunDetailResponse;
+    expect(body.rosterName).toBeNull();
   });
 });

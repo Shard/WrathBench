@@ -95,6 +95,9 @@ describe("paths", () => {
 
   test("the stream URL is derived, not fetched", () => {
     expect(createClient().streamUrl("a b")).toBe("/api/run/a%20b/stream");
+    // The first entry the page does not hold; 0 is a real start, not "absent".
+    expect(createClient().streamUrl("a b", 42)).toBe("/api/run/a%20b/stream?from=42");
+    expect(createClient().streamUrl("r", 0)).toBe("/api/run/r/stream?from=0");
   });
 
   test("a trace window is its run's path and its t0, and nothing else is asked for", async () => {

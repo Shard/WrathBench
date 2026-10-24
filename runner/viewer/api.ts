@@ -43,6 +43,7 @@ import type {
   FleetAccountView,
   FleetJobView,
   FleetPausedView,
+  FleetRunFacts,
   FleetResponse,
   FleetServerView,
   FleetSessionView,
@@ -60,7 +61,7 @@ import type {
 import { episodeOf, questsAcrossRestarts, resultRunOf, trackFrom } from "./results";
 import { scriptedReferenceLines } from "./scripted-reference";
 import { campaignsView } from "./campaigns";
-import { modelsResponse, readFleetRoster } from "./models";
+import { modelsResponse, readFleetRoster, rosterNameOf } from "./models";
 import { modelStates, outstandingWork, type RunFact } from "../src/models";
 import { positionsFromStore } from "./positions";
 import { toolsResponse } from "./tools";
@@ -73,6 +74,7 @@ import {
   projectEntries,
   projectEpisodes,
   projectFleet,
+  projectRunFacts,
   projectInfo,
   projectModels,
   projectPositions,
@@ -1390,40 +1392,88 @@ export function createApi(opts: ApiOptions): ApiHandle {
   }
 
   async function listWithTotals(): Promise<RunListRow[]> {
-    const out: RunListRow[] = [];
     const [rows, totalsByRun] = await Promise.all([runRows(), allTotals()]);
-    for (const raw of rows) {
-      const totals = totalsByRun.get(raw.runId) ?? null;
-      const row = withResolved(raw, totals);
-      out.push({
-        ...row,
-        modelResponses: totals?.modelResponses ?? null,
-        tokens: totals?.tokens ?? null,
-        // Off the same memoised whole-file pass as the tokens; the fleet page's
-        // speed column and the run page's read one derivation.
-        tps: totals?.tps ?? null,
-        cost:
-          totals === null
-            ? null
-            : runCost({
-                run: row,
-                tokens: totals.tokens,
-                reportedUsd: totals.reportedCostUsd,
-                coverage: totals.responseCost,
-              }),
-        firstTs: totals?.firstTs ?? null,
-        lastTs: totals?.lastTs ?? null,
-        playtimeMs:
-          totals === null
-            ? null
-            : playtimeMs(totals.segments, {
-                lastTs: totals.lastTs,
-                live: row.live,
-                now: Date.now(),
-              }),
-      });
-    }
-    return out;
+    return rows.map((raw) => listRowOf(raw, totalsByRun.get(raw.runId) ?? null));
+  }
+
+  /**
+   * One listing row: the run's row with its totals' figures. The runs index
+   * builds every row with it and the fleet feed the few it shows
+   * (`fleetRunFacts`), so the two pages cannot quote different numbers.
+   */
+  function listRowOf(raw: RunRow, totals: RunTotals | null): RunListRow {
+    const row = withResolved(raw, totals);
+    return {
+      ...row,
+      modelResponses: totals?.modelResponses ?? null,
+      tokens: totals?.tokens ?? null,
+      // Off the same memoised whole-file pass as the tokens; the fleet page's
+      // speed column and the run page's read one derivation.
+      tps: totals?.tps ?? null,
+      cost:
+        totals === null
+          ? null
+          : runCost({
+              run: row,
+              tokens: totals.tokens,
+              reportedUsd: totals.reportedCostUsd,
+              coverage: totals.responseCost,
+            }),
+      firstTs: totals?.firstTs ?? null,
+      lastTs: totals?.lastTs ?? null,
+      playtimeMs:
+        totals === null
+          ? null
+          : playtimeMs(totals.segments, {
+              lastTs: totals.lastTs,
+              live: row.live,
+              now: Date.now(),
+            }),
+    };
+  }
+
+  /**
+   * The fleet table's figures for the runs it shows: every run a job is
+   * driving, and the paused run each idle account's row names (`fleetRunIds`)
+   * — a handful, where the runs index is every run on disk and the
+   * supervisor's paused list can be long. Point reads per run (`runRowOne`,
+   * `runTotals`), never the corpus-wide ones: on the five-second fleet poll
+   * those would be megabytes a tick that only `/api/runs` and `/api/models`
+   * ever shared. `runRowOne` falls back to the run's own files only for a run
+   * the store has not seen yet, its first seconds, whose files the account
+   * scan (`heldAccounts`) has just opened anyway. A run that cannot be read
+   * is left out, and its row shows dashes, as a run missing from the index did.
+   *
+   * Shared over `STORE_SHARE_MS` for the same set of runs, as the corpus-wide
+   * reads are: every open tab's status badge polls this route, so N tabs cost
+   * one set of reads a window rather than N.
+   */
+  function fleetRunFacts(f: FleetResponse, now: number): Promise<FleetRunFacts[]> {
+    const ids = fleetRunIds(f).filter(isValidRunId);
+    const key = [...ids].sort().join("\n");
+    if (factsHeld !== undefined && factsHeld.key === key && Date.now() - factsHeld.at < STORE_SHARE_MS) return factsHeld.value;
+    const value = readFleetRunFacts(ids, now);
+    const held = { at: Date.now(), key, value };
+    factsHeld = held;
+    value.catch(() => {
+      if (factsHeld === held) factsHeld = undefined;
+    });
+    return value;
+  }
+  let factsHeld: { at: number; key: string; value: Promise<FleetRunFacts[]> } | undefined;
+
+  async function readFleetRunFacts(ids: readonly string[], now: number): Promise<FleetRunFacts[]> {
+    const facts = await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const [raw, totals] = await Promise.all([runRowOne(id, now), runTotals(id)]);
+          return projectRunFacts(listRowOf(raw, totals));
+        } catch {
+          return null;
+        }
+      }),
+    );
+    return facts.filter((x): x is FleetRunFacts => x !== null);
   }
 
   function dashboardIndex(): Response {
@@ -1526,8 +1576,19 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * models table about who owes what.
        */
       const now = Date.now();
-      const cold = coldRuns(await store.runListing(), now);
-      const body = withoutRuns(readFleet(runsDir, now, cold), publicMode ? new Set(await unpublishedRuns()) : new Set());
+      const listing = await store.runListing();
+      const cold = coldRuns(listing, now);
+      const withheld: ReadonlySet<string> = publicMode ? new Set(await unpublishedRuns()) : new Set();
+      const body = withoutRuns(readFleet(runsDir, now, cold), withheld);
+      /*
+       * What the table's rows show, and the count its link to the runs index
+       * names, carried here so the fleet page need not read that whole index
+       * (2.4 MB) to fill five rows. The count is the index's own set — the
+       * store's unarchived runs, less what a public handle withholds — off the
+       * liveness listing this route reads anyway.
+       */
+      body.runFacts = await fleetRunFacts(body, now);
+      body.runCount = listing.filter((r) => r.archived === 0 && !withheld.has(r.run_id)).length;
       const roster = fleetRoster();
       if (roster.shape === "roster") {
         const runs = await runFacts(now);
@@ -1757,6 +1818,20 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // The segments that figure sums, so the page's charts close the same
         // pauses the playtime does (`sessions.ts`).
         sessions,
+        /*
+         * The models-table row this run links to, so the page need not fetch
+         * the whole models aggregate for one name. Off the roster the config
+         * store holds now (`fleetRoster`, shared on its short window), like
+         * `/api/models` itself. Public-safe: `models.json` publishes every row
+         * name. A cold run's published detail is only re-rendered on the full
+         * pass, so a renamed roster entry reaches it that late.
+         */
+        rosterName: rosterNameOf(
+          fleetRoster(),
+          run.model,
+          run.comparability?.effort ?? null,
+          run.comparability?.compactWindow ?? null,
+        ),
         // Same incremental path as tokens and cost: the tail accumulates the
         // milestone marks as it indexes, so a live run's line grows with it.
         achievements: tail.achievements,
@@ -1952,8 +2027,22 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * `entries.slice(cursor)` instead, after any scan by anyone, and starts
        * over from the top when the tail was rebuilt under it (a truncated or
        * rotated file; `generation`).
+       *
+       * Where it starts is the client's to say. The run page loads its window
+       * from `/entries` and only then opens this, so a stream starting at the
+       * tail's end would drop whatever was written between the two; the page
+       * passes `?from=` (the index of the first entry it does not hold — an
+       * entry's `i`, which is its index in `entries`) and the stream sends
+       * from there. Every frame that moves the cursor carries it as the SSE
+       * `id`, so the browser's own reconnect sends it back as `Last-Event-ID`,
+       * which wins over the URL's `from`: a reconnect resumes where the last
+       * connection stopped, neither losing the gap nor replaying what it
+       * already delivered. A start past the tail's end means the file was
+       * rebuilt shorter since the client read it, so that starts over at 0,
+       * as a rebuild under an open stream does. No start at all is the end.
        */
-      let cursor = tail.entries.length;
+      const start = streamStart(req, url);
+      let cursor = start === null ? tail.entries.length : start > tail.entries.length ? 0 : start;
       let gen = tail.generation;
       let timer: ReturnType<typeof setInterval> | undefined;
       let closed = false;
@@ -1969,28 +2058,40 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const stream = new ReadableStream({
         start(controller) {
           const enc = new TextEncoder();
-          const send = (data: unknown): void => {
+          // `id` only on the frames that move the cursor: a browser keeps the
+          // last id it saw across frames that carry none.
+          const send = (data: unknown, id?: number): void => {
             if (closed) return;
             try {
-              controller.enqueue(enc.encode(`data: ${JSON.stringify(data)}\n\n`));
+              const head = id === undefined ? "" : `id: ${id}\n`;
+              controller.enqueue(enc.encode(`${head}data: ${JSON.stringify(data)}\n\n`));
             } catch {
               unpinOnce(); // the client went away between ticks
             }
           };
-          send({ hello: runId, total: cursor });
+          /** Everything past the cursor, as one batch; false when there was nothing. */
+          const flush = (): boolean => {
+            if (tail.generation !== gen) {
+              gen = tail.generation;
+              cursor = 0;
+            }
+            if (cursor >= tail.entries.length) return false;
+            const added = tail.entries.slice(cursor);
+            cursor = tail.entries.length;
+            // The token figure is the tail's memo: one derivation per batch
+            // however many streams are open.
+            send({ entries: added, tokens: tail.tokens }, cursor);
+            return true;
+          };
+          send({ hello: runId, total: tail.entries.length }, cursor);
+          // What was written before the stream opened, at once rather than on
+          // the first tick.
+          flush();
           timer = setInterval(() => {
             void scan(runId, tail)
               .then(() => {
-                if (tail.generation !== gen) {
-                  gen = tail.generation;
-                  cursor = 0;
-                }
-                const added = cursor < tail.entries.length ? tail.entries.slice(cursor) : [];
-                cursor = tail.entries.length;
                 // A heartbeat keeps proxies and fetch timeouts from calling it dead.
-                // The token figure is the tail's memo: one derivation per batch
-                // however many streams are open.
-                send(added.length > 0 ? { entries: added, tokens: tail.tokens } : { tick: Date.now() });
+                if (!flush()) send({ tick: Date.now() });
               })
               .catch(() => undefined);
           }, POLL_MS);
@@ -2188,6 +2289,43 @@ function isWithheldRow(r: Pick<RunRow, "driver" | "shakeout">): boolean {
 }
 
 /**
+ * The runs the fleet table has a row for, by the table's own rule
+ * (`fleetRows` in `dashboard/src/lib/fleet.ts`): each job's run, and on each
+ * account no job is on, the first paused run the supervisor lists against it.
+ * The rest of the paused list is the page's folded list of ids, which shows no
+ * figures.
+ */
+export function fleetRunIds(f: Pick<FleetResponse, "jobs" | "accounts" | "paused">): string[] {
+  const ids = new Set<string>();
+  const busy = new Set<string>();
+  for (const j of f.jobs) {
+    busy.add(j.account.toUpperCase());
+    if (j.runId !== null) ids.add(j.runId);
+  }
+  for (const a of f.accounts) {
+    if (busy.has(a.account.toUpperCase())) continue;
+    const here = f.paused.find((p) => (p.account ?? "").toUpperCase() === a.account.toUpperCase());
+    if (here !== undefined) ids.add(here.runId);
+  }
+  return [...ids];
+}
+
+/**
+ * Where a `/stream` starts, as the client asked: the browser's `Last-Event-ID`
+ * on a reconnect (the cursor the last connection's frames carried), else the
+ * URL's `from`. Null when neither is a non-negative integer, which starts the
+ * stream at the tail's end.
+ */
+export function streamStart(req: Request, url: URL): number | null {
+  for (const raw of [req.headers.get("last-event-id"), url.searchParams.get("from")]) {
+    if (raw === null || !/^\d+$/.test(raw.trim())) continue;
+    const n = Number(raw.trim());
+    if (Number.isSafeInteger(n)) return n;
+  }
+  return null;
+}
+
+/**
  * The supervisor's state without the rows that name a withheld run. The
  * supervisor never schedules one, but a hand launch can still be paused or
  * ended on its watch, and a job row names its run.
@@ -2199,5 +2337,6 @@ export function withoutRuns(f: FleetResponse, withheld: ReadonlySet<string>): Fl
     jobs: f.jobs.map((j) => (j.runId !== null && withheld.has(j.runId) ? { ...j, runId: null, model: null } : j)),
     paused: f.paused.filter((p) => !withheld.has(p.runId)),
     ended: f.ended.filter((e) => !withheld.has(e.runId)),
+    ...(f.runFacts !== undefined ? { runFacts: f.runFacts.filter((r) => !withheld.has(r.runId)) } : {}),
   };
 }
