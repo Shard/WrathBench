@@ -234,6 +234,37 @@ describe("the served tree", () => {
     expect(new Uint8Array(await native.arrayBuffer())).toEqual(PNG8);
   });
 
+  test("a native asked for as .webp is the WebP the transcode wrote, and the master where there is none yet", async () => {
+    const dirs = served();
+    writeFileSync(join(dirs.tilesDir, SERVED_DIR, "0", "43_31.webp"), WEBP);
+    const handle = handleFor({ publicMode: false }, dirs);
+    const webp = await get(handle, "/tiles/0/43_31.webp");
+    expect(webp.status).toBe(200);
+    expect(webp.headers.get("content-type")).toBe("image/webp");
+    expect(webp.headers.get("cache-control")).toBe(TILE_CACHE_CONTROL);
+    expect(new Uint8Array(await webp.arrayBuffer())).toEqual(WEBP);
+    // A served tree from before the WebP natives: the master, typed by what it is.
+    const before = await get(handleFor({ publicMode: false }, served()), "/tiles/0/43_31.webp");
+    expect(before.status).toBe(200);
+    expect(before.headers.get("content-type")).toBe("image/png");
+    expect(new Uint8Array(await before.arrayBuffer())).toEqual(PNG);
+    // No master behind it, no tile, whatever the served tree holds.
+    writeFileSync(join(dirs.tilesDir, SERVED_DIR, "0", "44_31.webp"), WEBP);
+    expect((await get(handle, "/tiles/0/44_31.webp")).status).toBe(404);
+  });
+
+  test("a native asked for as .png still answers once the served tree holds only WebP", async () => {
+    // What a deployed build, or any build whose index says nothing, asks for.
+    const dirs = fixture();
+    const web = join(dirs.tilesDir, SERVED_DIR, "0");
+    mkdirSync(web, { recursive: true });
+    writeFileSync(join(web, "43_31.webp"), WEBP);
+    const res = await get(handleFor({ publicMode: false }, dirs), "/tiles/0/43_31.png");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(PNG);
+  });
+
   test("an older build's .png pyramid path is still the master", async () => {
     const res = await get(handleFor({ publicMode: false }, served()), "/tiles/0/minimap/3/5_3.png");
     expect(res.status).toBe(200);

@@ -3,24 +3,29 @@
  *
  * Two shapes, both under `/tiles/<mapId>/`:
  *
- * - `<row>_<col>.png`, the native tile, one per ADT, written by the extraction
- *   in `minimap/`;
+ * - `<row>_<col>.webp`, the native tile, one per ADT, written by the extraction
+ *   in `minimap/` (`nativeServedName` in `worldmap.ts`);
  * - `<layer>/<z>/<row>_<col>.webp`, a level of the downsampled pyramid baked
  *   from those by the same tooling (`lodServedName` in `worldmap.ts` owns the
- *   spelling). The native path is the minimap layer's level 0 and never moves:
- *   the bucket and every deployed build already address it.
+ *   spelling).
  *
  * The tile root holds two trees. The masters are what the extraction and the
  * bakes write, lossless PNG at `<map>/<row>_<col>.png` and
  * `<map>/<layer>/<z>/<row>_<col>.png`; the served tree under `SERVED_DIR` is
- * what `minimap/src/transcode.ts` derives from them — an indexed PNG per
- * native, a WebP per pyramid tile, and a per-map `index.json`. A request is
- * answered from the served tree when its file is there and no older than its
- * master, and from the master otherwise, so a machine that baked but never
- * transcoded still draws every tile, and a re-bake shows before the next
- * transcode. The content type is the served bytes' own. A pyramid tile asked
- * for as `.png` — the spelling builds before the WebP tree used, still open in
- * a tab across a release — is the master.
+ * what `minimap/src/transcode.ts` derives from them — a WebP per tile and a
+ * per-map `index.json`. A request is answered from the served tree when its
+ * file is there and no older than its master, and from the master otherwise,
+ * so a machine that baked but never transcoded still draws every tile, and a
+ * re-bake shows before the next transcode. The content type is the served
+ * bytes' own.
+ *
+ * Two older spellings still answer, for the builds and served trees from
+ * before them, which a tab open across a release still holds:
+ *
+ * - a native asked for as `<row>_<col>.png`, which every client asks for
+ *   while its map's index does not say `native: "webp"` (`tileindex.ts`), is
+ *   the indexed PNG an older transcode left in the served tree, or the master;
+ * - a pyramid tile asked for as `.png` is the master.
  *
  * Nothing here creates or expects them. A missing tile — or a missing
  * extraction entirely — is a normal state: the client draws a labelled grid
@@ -37,7 +42,7 @@
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { TILE_INDEX_NAME } from "./tileindex";
-import { ART_LAYER, GRID, LOD_LAYERS, LOD_MAX, type LodLayer, lodGrid, lodServedName, lodTileName, tileName } from "./worldmap";
+import { ART_LAYER, GRID, LOD_LAYERS, LOD_MAX, type LodLayer, lodGrid, lodServedName, lodTileName, nativeServedName, tileName } from "./worldmap";
 
 /** The served tree's directory under the tile root (`minimap/src/transcode.ts` writes it). */
 export const SERVED_DIR = "web";
@@ -67,7 +72,7 @@ export const ART_TILE_PUBLIC_CACHE_CONTROL = "private, no-cache";
 export const TILE_PUBLIC_CACHE_CONTROL = "private, max-age=3600";
 export const TILE_PUBLIC_ROBOTS = "noindex";
 
-const TILE_PATH = /^\/tiles\/(\d+)\/(\d+)_(\d+)\.png$/;
+const TILE_PATH = /^\/tiles\/(\d+)\/(\d+)_(\d+)\.(png|webp)$/;
 const LOD_PATH = /^\/tiles\/(\d+)\/([a-z]+)\/(\d+)\/(\d+)_(\d+)\.(png|webp)$/;
 const INDEX_PATH = /^\/tiles\/(\d+)\/index\.json$/;
 
@@ -79,6 +84,8 @@ export interface TileRef {
   lod?: { layer: LodLayer; z: number };
   /** A pyramid tile asked for under its master's `.png` name rather than the served `.webp`. */
   legacy?: true;
+  /** A native tile asked for as `.webp` rather than the `.png` every build before the WebP natives asks for. */
+  webp?: true;
 }
 
 /**
@@ -98,7 +105,7 @@ export function parseTilePath(path: string): TileRef | null {
     const col = Number(native[3]!);
     if (!Number.isSafeInteger(map) || map < 0) return null;
     if (row < 0 || row >= GRID || col < 0 || col >= GRID) return null;
-    return { map, row, col };
+    return { map, row, col, ...(native[4] === "webp" ? { webp: true as const } : {}) };
   }
   const m = LOD_PATH.exec(path);
   if (m === null) return null;
@@ -120,9 +127,18 @@ function masterPath(ref: TileRef): string {
   return `${ref.map}/${name}`;
 }
 
-/** A reference's served file, relative to `SERVED_DIR`: the one spelling the transcode writes. */
+/**
+ * A reference's served file, relative to `SERVED_DIR`: the spelling the
+ * transcode writes, or for a native asked for as `.png`, the one an older
+ * transcode wrote.
+ */
 export function servedPath(ref: TileRef): string {
-  const name = ref.lod === undefined ? tileName(ref.row, ref.col) : lodServedName(ref.lod.layer, ref.lod.z, ref.row, ref.col);
+  const name =
+    ref.lod !== undefined
+      ? lodServedName(ref.lod.layer, ref.lod.z, ref.row, ref.col)
+      : ref.webp === true
+        ? nativeServedName(ref.row, ref.col)
+        : tileName(ref.row, ref.col);
   return `${ref.map}/${name}`;
 }
 

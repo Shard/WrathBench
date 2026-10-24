@@ -138,11 +138,22 @@ export function lodTileName(layer: LodLayer, z: number, row: number, col: number
  * `.png`. The bakes write lossless PNG masters at `lodTileName`; the
  * transcode in `minimap/src/transcode.ts` derives a WebP from each, and that
  * is what the viewer's route, the tile publisher's keys and the dashboard's
- * requests spell. Native tiles keep `tileName` (`.png`) both ways: their
- * served form is an indexed PNG, so no deployed client has to change.
+ * requests spell.
  */
 export function lodServedName(layer: LodLayer, z: number, row: number, col: number): string {
   return `${lodTileName(layer, z, row, col).slice(0, -".png".length)}.webp`;
+}
+
+/**
+ * The name a native tile is served under now: `tileName` with `.webp`. The
+ * master keeps `tileName`, and so does the request a client makes when its
+ * map's tile index does not say `native: "webp"` (`./tileindex.ts`) — a build
+ * from before the WebP natives, or a served tree transcoded before them —
+ * which the viewer answers from the master and the bucket from the `.png`
+ * objects earlier passes left there.
+ */
+export function nativeServedName(row: number, col: number): string {
+  return `${row}_${col}.webp`;
 }
 
 /**

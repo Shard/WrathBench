@@ -25,8 +25,18 @@ import { LOD_LAYERS, LOD_MAX, type LodLayer, lodGrid } from "./worldmap";
 /** The file name, under a map's directory in the served tree and under `/tiles/<map>/`. */
 export const TILE_INDEX_NAME = "index.json";
 
+/**
+ * What a map's native tiles are served as. `png` is every index written
+ * before the natives moved to WebP, which says nothing; `webp` is written as
+ * `"native": "webp"`. The version stays 1 on purpose: a deployed client
+ * parses the new index, ignores the field it does not know and keeps asking
+ * for `.png`, which the viewer and the bucket both still answer.
+ */
+export type NativeFormat = "png" | "webp";
+
 export interface TileIndex {
   version: 1;
+  native: NativeFormat;
   /** `<layer>/<z>` -> one hex row per grid row. The native tiles are `minimap/0`. */
   cells: Record<string, string[]>;
   /** `<z>` -> one hex row per grid row: art opaque over the minimap's paint there. */
@@ -62,7 +72,11 @@ function bit(rows: string[] | undefined, row: number, col: number): boolean {
 }
 
 /** Build an index. Deterministic: the same cells always give the same JSON. */
-export function buildTileIndex(cells: readonly IndexCell[], covers: readonly { z: number; row: number; col: number }[]): TileIndex {
+export function buildTileIndex(
+  cells: readonly IndexCell[],
+  covers: readonly { z: number; row: number; col: number }[],
+  native: NativeFormat = "png",
+): TileIndex {
   const byLevel = new Map<string, { z: number; cells: { row: number; col: number }[] }>();
   for (const c of cells) {
     const key = levelKey(c.layer, c.z);
@@ -70,7 +84,7 @@ export function buildTileIndex(cells: readonly IndexCell[], covers: readonly { z
     at.cells.push(c);
     byLevel.set(key, at);
   }
-  const out: TileIndex = { version: 1, cells: {}, covers: {} };
+  const out: TileIndex = { version: 1, native, cells: {}, covers: {} };
   for (const layer of LOD_LAYERS) {
     for (let z = 0; z <= LOD_MAX; z++) {
       const at = byLevel.get(levelKey(layer, z));
@@ -84,9 +98,14 @@ export function buildTileIndex(cells: readonly IndexCell[], covers: readonly { z
   return out;
 }
 
-/** The index as the file holds it: one line, so a re-run that changed nothing writes the same bytes. */
+/**
+ * The index as the file holds it: one line, so a re-run that changed nothing
+ * writes the same bytes. A `png` index is written without the field, exactly
+ * as indexes were before it existed.
+ */
 export function renderTileIndex(index: TileIndex): string {
-  return `${JSON.stringify(index)}\n`;
+  const { native, ...rest } = index;
+  return `${JSON.stringify(native === "png" ? rest : { version: rest.version, native, cells: rest.cells, covers: rest.covers })}\n`;
 }
 
 /**
@@ -119,7 +138,8 @@ export function parseTileIndex(raw: unknown): TileIndex | null {
   });
   const covers = grids(r["covers"], (k) => ((level(k) ?? 0) >= 1 ? level(k) : null));
   if (cells === null || covers === null) return null;
-  return { version: 1, cells, covers };
+  // Anything but a known "webp" is the format every server still answers.
+  return { version: 1, native: r["native"] === "webp" ? "webp" : "png", cells, covers };
 }
 
 /** Whether a tile exists at that cell. */

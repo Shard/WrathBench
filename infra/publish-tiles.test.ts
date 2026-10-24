@@ -5,7 +5,7 @@
  * with no `data/`.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,7 +14,8 @@ import { bakeMap } from "../minimap/src/bake";
 import { transcodeTree } from "../minimap/src/transcode";
 import { SERVED_DIR, parseTilePath, resolveTileIndex, resolveTilePath } from "../runner/viewer/tiles";
 import { MINIMAP_LAYER, TILE_PX } from "../runner/viewer/worldmap";
-import { levelTilePath } from "../dashboard/src/lib/tiles";
+import { parseTileIndex } from "../runner/viewer/tileindex";
+import { levelTilePath, nativeFormat } from "../dashboard/src/lib/tiles";
 import {
   TILE_MANIFEST_KEY,
   TILE_PREFIX,
@@ -162,6 +163,10 @@ describe("one path from the bake to the browser", () => {
     const levels = tiles.filter((t) => t.key.includes(`/${MINIMAP_LAYER}/`));
     expect(levels.length).toBe(written);
     expect(tiles.length).toBe(written + 2 + 1);
+    // The natives go up as WebP, and the index the page reads first says so.
+    expect(tiles.filter((t) => /^tiles\/0\/\d+_\d+\./.test(t.key)).map((t) => t.key)).toEqual(["tiles/0/43_31.webp", "tiles/0/48_32.webp"]);
+    const native = nativeFormat(parseTileIndex(JSON.parse(readFileSync(join(dir, SERVED_DIR, "0", "index.json"), "utf8"))));
+    expect(native).toBe("webp");
     for (const t of tiles) {
       const path = `/${t.key}`;
       if (path.endsWith("/index.json")) {
@@ -170,7 +175,7 @@ describe("one path from the bake to the browser", () => {
       }
       expect(resolveTilePath(dir, path)).toBe(t.file);
       const ref = parseTilePath(path)!;
-      expect(levelTilePath(ref.map, ref.lod?.layer ?? MINIMAP_LAYER, ref.lod?.z ?? 0, ref.row, ref.col)).toBe(path);
+      expect(levelTilePath(ref.map, ref.lod?.layer ?? MINIMAP_LAYER, ref.lod?.z ?? 0, ref.row, ref.col, native)).toBe(path);
     }
   });
 });
@@ -339,6 +344,15 @@ describe("publishTiles", () => {
     expect(report.orphans).toBe(1);
     expect(store.objects.get(old)?.body).toBe("png");
     expect(parseTileManifest(store.objects.get(TILE_MANIFEST_KEY)?.body ?? null)[old]).toBe("h");
+  });
+
+  test("a native goes up as WebP beside the indexed PNG an earlier pass left, which stays for older builds", async () => {
+    const old = `${TILE_PREFIX}0/43_31.png`;
+    const store = fakeStore({ [TILE_MANIFEST_KEY]: renderTileManifest({ [old]: "h" }, 1), [old]: "png8" });
+    const report = await publishTiles(scanTiles(root({ "0/43_31.webp": "webp" })), store, { now: 7, log: () => {} });
+    expect(store.objects.get(`${TILE_PREFIX}0/43_31.webp`)?.contentType).toBe("image/webp");
+    expect(report.orphans).toBe(1);
+    expect(store.objects.get(old)?.body).toBe("png8");
   });
 
   test("nothing is written outside the tiles prefix", async () => {

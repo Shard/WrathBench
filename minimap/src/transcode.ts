@@ -7,15 +7,13 @@
  * Reads `<root>/<map>/<row>_<col>.png` and `<root>/<map>/<layer>/<z>/<row>_<col>.png`
  * and writes, under `<root>/web/` (`SERVED_DIR`):
  *
- * - `<map>/<row>_<col>.png`, each native as an indexed PNG (256 colours, no
- *   dither): the same path and type every deployed client already asks for;
- * - `<map>/<layer>/<z>/<row>_<col>.webp`, each pyramid tile as WebP: lossy at
- *   `WEBP_QUALITY`, or lossless where that is at most `LOSSLESS_SLACK` times
- *   the lossy size — every solid, near-solid and mostly transparent tile,
- *   which a lossy codec shifts by whole levels and which then seams against
- *   its neighbours;
- * - `<map>/index.json`, which cells exist and where the art hides the minimap
- *   (`runner/viewer/tileindex.ts`).
+ * - `<map>/<row>_<col>.webp` for each native and `<map>/<layer>/<z>/<row>_<col>.webp`
+ *   for each pyramid tile: lossy at `WEBP_QUALITY`, or lossless where that is
+ *   at most `LOSSLESS_SLACK` times the lossy size — every solid, near-solid
+ *   and mostly transparent tile, which a lossy codec shifts by whole levels
+ *   and which then seams against its neighbours;
+ * - `<map>/index.json`, which cells exist, where the art hides the minimap,
+ *   and that the natives are WebP (`runner/viewer/tileindex.ts`).
  *
  * Alpha comes through exact or the tile is not lossy: every encoded tile is
  * decoded again and compared, and a mismatch falls back to the lossless form.
@@ -40,10 +38,10 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { dirname, join } from "node:path";
 import { type IndexCell, TILE_INDEX_NAME, buildTileIndex, renderTileIndex } from "../../runner/viewer/tileindex";
 import { SERVED_DIR, newestMasterDir } from "../../runner/viewer/tiles";
-import { ART_LAYER, LOD_LAYERS, LOD_MAX, type LodLayer, MINIMAP_LAYER, lodServedName, lodTileName, tileName } from "../../runner/viewer/worldmap";
+import { ART_LAYER, LOD_LAYERS, LOD_MAX, type LodLayer, MINIMAP_LAYER, lodServedName, lodTileName, nativeServedName, tileName } from "../../runner/viewer/worldmap";
 import { decodePng } from "./png";
 
-/** libwebp quality for the pyramid tiles; why 90 is in the README. */
+/** libwebp quality for every served tile; why 90 is in the README. */
 export const WEBP_QUALITY = 90;
 /** Lossless wins wherever it costs at most this many times the lossy bytes. */
 export const LOSSLESS_SLACK = 2;
@@ -52,10 +50,12 @@ export const TRANSCODE_STATE = "transcode.json";
 
 /** Names the encoder build and every setting, so changing either re-encodes. */
 export function encoderId(): string {
-  return `bun ${Bun.version}+${Bun.revision}; native png palette 256 nodither z9; lod webp q${WEBP_QUALITY} lossless<=${LOSSLESS_SLACK}x`;
+  return `bun ${Bun.version}+${Bun.revision}; native and lod webp q${WEBP_QUALITY} lossless<=${LOSSLESS_SLACK}x`;
 }
 
 const NATIVE = /^(\d+)_(\d+)\.png$/;
+/** A served native: the WebP this pass writes, or the indexed PNG an older one did, which it removes. */
+const SERVED_NATIVE = /^\d+_\d+\.(png|webp)$/;
 const CONCURRENCY = 16;
 
 async function decodeAny(bytes: Uint8Array): Promise<Uint8Array> {
@@ -69,18 +69,10 @@ function alphaEqual(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 /**
- * A native tile's served bytes: the indexed PNG, unless it would change
- * alpha or not be smaller, in which case the master itself.
+ * A tile's served bytes, native or pyramid: lossy WebP, or lossless where
+ * that is cheap or lossy would touch alpha.
  */
-export async function transcodeNative(master: Uint8Array): Promise<Uint8Array> {
-  const src = decodePng(master).rgba;
-  const indexed = await new Bun.Image(master).png({ palette: true, colors: 256, dither: false, compressionLevel: 9 }).bytes();
-  if (indexed.length >= master.length) return master;
-  return alphaEqual(src, await decodeAny(indexed)) ? indexed : master;
-}
-
-/** A pyramid tile's served bytes: lossy WebP, or lossless where that is cheap or lossy would touch alpha. */
-export async function transcodeLevel(master: Uint8Array): Promise<Uint8Array> {
+export async function transcodeTile(master: Uint8Array): Promise<Uint8Array> {
   const [lossy, lossless] = await Promise.all([
     new Bun.Image(master).webp({ quality: WEBP_QUALITY }).bytes(),
     new Bun.Image(master).webp({ lossless: true }).bytes(),
@@ -178,7 +170,7 @@ function masters(root: string): Job[] {
       const row = Number(n[1]);
       const col = Number(n[2]);
       if (tileName(row, col) !== name || row >= 64 || col >= 64) continue;
-      jobs.push({ kind: "native", map, z: 0, row, col, master: join(root, m, name), out: `${m}/${name}` });
+      jobs.push({ kind: "native", map, z: 0, row, col, master: join(root, m, name), out: `${m}/${nativeServedName(row, col)}` });
     }
     for (const layer of LOD_LAYERS) {
       for (let z = 1; z <= LOD_MAX; z++) {
@@ -216,7 +208,7 @@ function servedFiles(dir: string): string[] {
   const out: string[] = [];
   for (const m of list(dir)) {
     if (!/^\d+$/.test(m)) continue;
-    for (const name of list(join(dir, m))) if (NATIVE.test(name) || name === TILE_INDEX_NAME) out.push(`${m}/${name}`);
+    for (const name of list(join(dir, m))) if (SERVED_NATIVE.test(name) || name === TILE_INDEX_NAME) out.push(`${m}/${name}`);
     for (const layer of LOD_LAYERS) {
       for (const z of list(join(dir, m, layer))) {
         for (const name of list(join(dir, m, layer, z))) if (name.endsWith(".webp")) out.push(`${m}/${layer}/${z}/${name}`);
@@ -253,7 +245,7 @@ export async function transcodeTree(root: string, opts: { force?: boolean } = {}
     if (known[job.out] === hash && existsSync(out)) {
       served = new Uint8Array(readFileSync(out));
     } else {
-      served = job.kind === "native" ? await transcodeNative(master) : await transcodeLevel(master);
+      served = await transcodeTile(master);
       writeIfChanged(out, served);
       stats.encoded++;
     }
@@ -282,7 +274,7 @@ export async function transcodeTree(root: string, opts: { force?: boolean } = {}
         if (artCovers(art, minimap)) covers.push({ z: j.z, row: j.row, col: j.col });
       },
     );
-    const body = new TextEncoder().encode(renderTileIndex(buildTileIndex(cells, covers)));
+    const body = new TextEncoder().encode(renderTileIndex(buildTileIndex(cells, covers, "webp")));
     const indexFile = join(dir, `${map}/${TILE_INDEX_NAME}`);
     writeIfChanged(indexFile, body);
     keepFresh(indexFile, newestMasterDir(root, map) ?? 0);

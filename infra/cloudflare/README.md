@@ -232,10 +232,12 @@ write, with the same `S3_*` credentials as the publisher. The publisher
 uploads the served tree, not those PNG masters. Each pass first runs the
 incremental transcode (`minimap/README.md`, "Served formats"), then uploads:
 
-- the natives as indexed PNG at their old keys;
+- the natives as WebP (`tiles/<map>/<row>_<col>.webp`);
 - the pyramids as WebP (`tiles/<map>/minimap/<z>/<row>_<col>.webp`,
   `tiles/<map>/art/<z>/<row>_<col>.webp`);
-- each map's `tiles/<map>/index.json`, after the tiles it lists.
+- each map's `tiles/<map>/index.json`, after the tiles it lists. It says
+  `"native": "webp"`, which is what moves a build onto the WebP natives; a
+  build reading an index without it asks for `.png`.
 
 Each object is typed by its extension (`image/png`, `image/webp`,
 `application/json`). It all sits under the same `/tiles/` prefix, so rules 3
@@ -260,6 +262,15 @@ picks it up within rule 4's five minutes. A pass that changed an index says so
 the same way (`index changed on map(s) …`); purge each
 `/tiles/<map>/index.json` it names.
 
+**The natives' old `.png` objects** (`tiles/<map>/<row>_<col>.png`, indexed
+PNG, about 80 MB) stay for good, in the bucket and in the manifest as orphans.
+A page asks for them whenever its map's index says nothing about the natives:
+any build from before the WebP natives, a stale index still at the edge, and a
+page whose index fetch failed or timed out. Deleting them would turn every one
+of those into the labelled grid. After the first pass that uploads the WebP
+natives, purge each `/tiles/<map>/index.json` it names, or the edge keeps the
+old index (and the old format) for rule 3's day.
+
 **The pyramid's old `.png` objects.** Builds from before the WebP tree ask
 for `tiles/<map>/<layer>/<z>/<row>_<col>.png`. Those objects stay in the bucket,
 and in `tiles/manifest.json` as orphans that every pass counts, until no
@@ -273,8 +284,8 @@ deployed build can ask for them. That is all three of:
 
 Then delete every `tiles/<map>/minimap/…/*.png` and `tiles/<map>/art/…/*.png`
 key, both from the bucket and from the manifest. The manifest's orphan list
-is exactly that set, and nothing else becomes an orphan unless a bake drops a
-cell. A week after the WebP site ships is a comfortable margin. Until then
+is exactly that set plus the natives' `.png` above, which stay, and nothing
+else becomes an orphan unless a bake drops a cell. A week after the WebP site ships is a comfortable margin. Until then
 they cost storage and nothing else: they are about 270 MB at R2's storage
 rate, with no reads.
 

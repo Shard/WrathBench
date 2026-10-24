@@ -14,7 +14,7 @@ import { indexCovers, indexHas, parseTileIndex } from "../../runner/viewer/tilei
 import { SERVED_DIR } from "../../runner/viewer/tiles";
 import { TILE_PX } from "../../runner/viewer/worldmap";
 import { decodePng, encodePng } from "../src/png";
-import { TRANSCODE_STATE, artCovers, encoderId, transcodeLevel, transcodeNative, transcodeTree } from "../src/transcode";
+import { TRANSCODE_STATE, artCovers, encoderId, transcodeTile, transcodeTree } from "../src/transcode";
 
 const scratch = mkdtempSync(join(tmpdir(), "wrathbench-transcode-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -55,8 +55,6 @@ const png = (rgba: Uint8Array): Uint8Array => encodePng(rgba, TILE_PX, TILE_PX);
 const decode = async (bytes: Uint8Array): Promise<Uint8Array> => decodePng(await new Bun.Image(bytes).png().bytes()).rgba;
 const alphaOf = (rgba: Uint8Array): number[] => Array.from({ length: rgba.length / 4 }, (_, i) => rgba[i * 4 + 3] as number);
 const isWebp = (b: Uint8Array): boolean => new TextDecoder().decode(b.subarray(0, 4)) === "RIFF" && new TextDecoder().decode(b.subarray(8, 12)) === "WEBP";
-/** The PNG's colour type, from IHDR. */
-const colourType = (b: Uint8Array): number => b[25] as number;
 
 function write(root: string, rel: string, bytes: Uint8Array): void {
   mkdirSync(join(root, rel, ".."), { recursive: true });
@@ -69,31 +67,17 @@ function walk(dir: string): string[] {
     .sort();
 }
 
-describe("a native tile", () => {
-  test("is served as an indexed PNG of at most 256 colours", async () => {
-    const out = await transcodeNative(png(busy(1)));
-    expect(colourType(out)).toBe(3);
-    const colours = new Set<number>();
-    const rgba = await decode(out);
-    for (let i = 0; i < rgba.length; i += 4) colours.add(((rgba[i] as number) << 16) | ((rgba[i + 1] as number) << 8) | (rgba[i + 2] as number));
-    expect(colours.size).toBeLessThanOrEqual(256);
-  });
-
+describe("a tile, native or pyramid", () => {
   test("keeps alpha exact, transparent corners and all", async () => {
     const src = busy(2, (x, y) => (x < 40 && y < 40 ? 0 : 255));
-    expect(alphaOf(await decode(await transcodeNative(png(src))))).toEqual(alphaOf(src));
+    const out = await transcodeTile(png(src));
+    expect(isWebp(out)).toBe(true);
+    expect(alphaOf(await decode(out))).toEqual(alphaOf(src));
   });
 
-  test("a solid one comes through exact", async () => {
-    const src = flat([20, 60, 140, 255]);
-    expect(await decode(await transcodeNative(png(src)))).toEqual(src);
-  });
-});
-
-describe("a pyramid tile", () => {
   test("is served as WebP, lossy where it is busy, with alpha exact through every level of it", async () => {
     const src = busy(3, (x) => x % 256);
-    const out = await transcodeLevel(png(src));
+    const out = await transcodeTile(png(src));
     expect(isWebp(out)).toBe(true);
     const back = await decode(out);
     expect(alphaOf(back)).toEqual(alphaOf(src));
@@ -106,7 +90,7 @@ describe("a pyramid tile", () => {
     const sparse = flat([0, 0, 0, 0]);
     for (let i = 0; i < 40; i++) sparse.set([120, 80, 40, 255], (i * 997 % (TILE_PX * TILE_PX)) * 4);
     for (const src of [flat([30, 70, 160, 255]), near, sparse]) {
-      const out = await transcodeLevel(png(src));
+      const out = await transcodeTile(png(src));
       expect(isWebp(out)).toBe(true);
       expect(await decode(out)).toEqual(src);
     }
@@ -151,14 +135,14 @@ describe("transcodeTree", () => {
     expect(added.every((p) => p.startsWith(`${SERVED_DIR}/`))).toBe(true);
     expect(added.map((p) => relative(SERVED_DIR, p))).toEqual(
       [
-        "0/43_31.png",
-        "0/43_32.png",
+        "0/43_31.webp",
+        "0/43_32.webp",
         "0/art/1/21_15.webp",
         "0/art/1/21_16.webp",
         "0/index.json",
         "0/minimap/1/21_15.webp",
         "0/minimap/1/21_16.webp",
-        "36/30_30.png",
+        "36/30_30.webp",
         "36/index.json",
         TRANSCODE_STATE,
       ].sort(),
@@ -169,6 +153,7 @@ describe("transcodeTree", () => {
     const root = tree();
     await transcodeTree(root);
     const index = parseTileIndex(JSON.parse(readFileSync(join(root, SERVED_DIR, "0/index.json"), "utf8")))!;
+    expect(index.native).toBe("webp");
     expect(indexHas(index, "minimap", 0, 43, 31)).toBe(true);
     expect(indexHas(index, "minimap", 0, 44, 31)).toBe(false);
     expect(indexHas(index, "art", 1, 21, 16)).toBe(true);
@@ -205,6 +190,17 @@ describe("transcodeTree", () => {
     const pruned = await transcodeTree(root);
     expect(pruned.removed).toBe(1);
     expect(walk(join(root, SERVED_DIR))).not.toContain("0/art/1/21_16.webp");
+  });
+
+  test("replaces the indexed PNG natives an older transcode wrote", async () => {
+    const root = tree();
+    // What a served tree from before the WebP natives holds, current or not.
+    write(root, `${SERVED_DIR}/0/43_31.png`, png(busy(4)));
+    write(root, `${SERVED_DIR}/36/30_30.png`, png(busy(9)));
+    const report = await transcodeTree(root);
+    expect(report.removed).toBe(2);
+    const served = walk(join(root, SERVED_DIR));
+    expect(served.filter((p) => /^\d+\/\d+_\d+\./.test(p))).toEqual(["0/43_31.webp", "0/43_32.webp", "36/30_30.webp"]);
   });
 
   test("is byte-deterministic", async () => {

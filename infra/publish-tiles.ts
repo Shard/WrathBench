@@ -18,17 +18,18 @@
  * (`minimap/src/transcode.ts`), which is incremental, so the served tree under
  * `data/minimap/web/` is current with the bakes before anything is hashed;
  * then it reads only tiles out of that tree (gitignored, like all of `data/`)
- * — the native `<mapId>/<row>_<col>.png` as an indexed PNG, the pyramid levels
+ * — the natives `<mapId>/<row>_<col>.webp`, the pyramid levels
  * `<mapId>/<layer>/<z>/<row>_<col>.webp` and each map's `index.json` — and
  * writes only to the bucket, each object typed by its extension. Keys mirror
  * the viewer's own path so the SPA asks for the same URL in both shapes:
- * `tiles/<mapId>/<row>_<col>.png`, `tiles/<mapId>/<layer>/<z>/…` for each
+ * `tiles/<mapId>/<row>_<col>.webp`, `tiles/<mapId>/<layer>/<z>/…` for each
  * layer in `LOD_LAYERS` (`minimap`, `art`), `tiles/<mapId>/index.json`.
  *
- * The pyramid's `.png` keys earlier passes uploaded are no longer local, so
- * they stay in the bucket as manifest orphans: builds from before the WebP
- * tree ask for them. When to delete them is in `infra/cloudflare/README.md`,
- * step 6.
+ * The `.png` keys earlier passes uploaded — the pyramid's masters, and the
+ * natives as indexed PNG — are no longer local, so they stay in the bucket as
+ * manifest orphans. Builds from before each WebP tree ask for them, and so
+ * does any build whose map index does not say `native: "webp"`. When to delete
+ * them is in `infra/cloudflare/README.md`, step 6.
  *
  * No object carries a Cache-Control: Bun's S3 writer has no option for one
  * (its write options stop at type, disposition, encoding, storage class and
@@ -71,7 +72,7 @@ export const TILE_CONCURRENCY = 8;
 
 /** One tile on disk. */
 export interface LocalTile {
-  /** Bucket key, e.g. `tiles/0/43_31.png` or `tiles/0/minimap/3/5_3.png`. */
+  /** Bucket key, e.g. `tiles/0/43_31.webp` or `tiles/0/minimap/3/5_3.webp`. */
   key: string;
   /** Absolute or cwd-relative path under the minimap root. */
   file: string;
@@ -100,7 +101,8 @@ export interface TileStore {
 
 const MAP_DIR = /^\d+$/;
 const LEVEL_DIR = /^\d+$/;
-const NATIVE_FILE = /^\d+_\d+\.png$/;
+/** `.webp` now; `.png` in a served tree an older transcode wrote, which the pass before the scan replaces. */
+const NATIVE_FILE = /^\d+_\d+\.(png|webp)$/;
 const LEVEL_FILE = /^\d+_\d+\.webp$/;
 
 /** Whether a request path is the one canonical spelling of a served tile or index. */

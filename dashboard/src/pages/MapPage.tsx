@@ -68,7 +68,7 @@ import {
   targetReading,
   unitFlags,
 } from "../lib/unitframe";
-import { NO_TILE_BASE, tileIndexSrc, tileSrc } from "../lib/tiles";
+import { NO_TILE_BASE, nativeFormat, tileIndexSrc, tileSrc } from "../lib/tiles";
 import { type TileIndex, parseTileIndex } from "@viewer/tileindex";
 import {
   type NearbyDot,
@@ -597,8 +597,8 @@ export default function MapPage() {
     // Null means this build was given no tile host and must not ask for one
     // (`lib/tiles.ts`); a cell the index does not list does not exist.
     // Either is remembered as a miss like any other, so the grid is drawn and
-    // nothing is requested.
-    const src = cellAbsent(index, layer, z, row, col) ? null : tileSrc(map, layer, z, row, col);
+    // nothing is requested. The natives come in the format the index names.
+    const src = cellAbsent(index, layer, z, row, col) ? null : tileSrc(map, layer, z, row, col, nativeFormat(index));
     if (src !== null) {
       entry.state = "pending";
       img.onload = (): void => {
