@@ -170,6 +170,7 @@ import {
 } from "../lib/mapview";
 import { poll } from "../lib/poll";
 import { useClock } from "../lib/clock";
+import { visibleInterval } from "../lib/visibleinterval";
 import {
   type RouteRun,
   classifySegments,
@@ -1695,7 +1696,8 @@ export default function MapPage() {
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
-    const pumpTimer = setInterval(() => {
+    // Not while the tab is hidden: both pumps fetch (`visibleInterval`).
+    const stopPump = visibleInterval(() => {
       pumpTraces();
       pumpNearby(false);
     }, PUMP_MS);
@@ -1733,7 +1735,7 @@ export default function MapPage() {
 
     onCleanup(() => {
       cancelAnimationFrame(raf);
-      clearInterval(pumpTimer);
+      stopPump();
       ro.disconnect();
       mq?.removeEventListener("change", readTheme);
       motionMq?.removeEventListener("change", readMotion);
@@ -1817,27 +1819,28 @@ export default function MapPage() {
      * a tail. A window that closes meanwhile is listed by the next read and
      * the tail moves on past it (`setTail` keeps the old one until it lands).
      */
-    const timers: ReturnType<typeof setInterval>[] = [];
-    onCleanup(() => timers.forEach((t) => clearInterval(t)));
+    const stops: (() => void)[] = [];
+    onCleanup(() => stops.forEach((stop) => stop()));
     /** Keep one replayed run's open tail current, for as long as it has one. */
     const followTail = (runId: string): void => {
-      let timer: ReturnType<typeof setInterval> | undefined;
+      let stop: (() => void) | undefined;
       const refresh = (): void => {
         api.traceIndex(runId).then(
           (index) => {
             if (mine !== trackToken) return;
             ingestIndex(store, runId, index);
-            if (index.tail === null) clearInterval(timer);
+            if (index.tail === null) stop?.();
           },
           (e: unknown) => {
             logError("map replay trace", e);
-            if ((e as { status?: unknown }).status === 404) clearInterval(timer);
+            if ((e as { status?: unknown }).status === 404) stop?.();
           },
         );
       };
       refresh();
-      timer = setInterval(refresh, POLL_MS);
-      timers.push(timer);
+      // Paused while the tab is hidden, like the live feed's poll.
+      stop = visibleInterval(refresh, POLL_MS);
+      stops.push(stop);
     };
     /**
      * Where the loaded replay opens: where it was last left off, if it was —
