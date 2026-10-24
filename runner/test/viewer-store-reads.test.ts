@@ -342,6 +342,34 @@ describe("/api/fleet carries its rows' run figures", () => {
     }
   });
 
+  test("tabs polling together share one set of point reads a window", async () => {
+    const runsDir = tempDir("viewer-reads-fleet-share-");
+    writeRun(runsDir, "run-live", { account: "RUNNER" });
+    writeRun(runsDir, "run-paused", { account: "IDLE" });
+    fleetState(runsDir);
+    const inner = localRunStore(runsDir);
+    const point = { runRow: 0, totalsRow: 0 };
+    const store: RunStore = {
+      ...inner,
+      runRow: (id) => ((point.runRow += 1), inner.runRow(id)),
+      totalsRow: (id) => ((point.totalsRow += 1), inner.totalsRow(id)),
+    };
+    const handle = handleOf(runsDir, store);
+    const realNow = Date.now;
+    let clock = realNow();
+    Date.now = () => clock;
+    try {
+      await Promise.all([1, 2, 3].map(() => json<FleetResponse>(handle, "/api/fleet")));
+      expect(point).toEqual({ runRow: 2, totalsRow: 2 });
+      clock += STORE_SHARE_MS;
+      const next = await json<FleetResponse>(handle, "/api/fleet");
+      expect(point).toEqual({ runRow: 4, totalsRow: 4 });
+      expect(next.runFacts?.length).toBe(2);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
   test("a public handle carries the same figures through its projection", async () => {
     const runsDir = tempDir("viewer-reads-fleet-public-");
     writeRun(runsDir, "run-live", { account: "RUNNER" });

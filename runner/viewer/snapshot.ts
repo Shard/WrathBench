@@ -320,7 +320,7 @@ const RUN_INPUT_FILES = ["meta.json", "trajectory.jsonl", "run.sqlite", "scratch
  * - **Its files**, by size and mtime. Every per-run route reads a run's own
  *   files or the store rows the collector derives from them.
  * - **Its listing row** as the viewer served it, not as it is published (the
- *   published row is the few fields the fleet table reads): the store's view of
+ *   published row is the few fleet-table fields, `FleetRunFacts`): the store's view of
  *   the run, so a collector still catching up moves it, and the cost the detail
  *   repeats.
  * - **Its character's rows**, for a run in a chain of attempts. A freeplay
@@ -501,7 +501,7 @@ export function createRenderer(
     });
     const runs = projectRuns(listing);
     // The listing as the viewer served it, by run, for the cold fingerprint: the
-    // published row is only what the fleet table reads, and a store row moving
+    // published row is only the fleet-table fields (`FleetRunFacts`), and a store row moving
     // a field it no longer carries (a termination, a pause) must still move it.
     const served = new Map(listing.runs.map((r) => [r.runId, r]));
     const results = projectResults(keepResults(await get<ResultsResponse>("/api/results?episode=all&includeOverrides=1")));

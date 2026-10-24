@@ -1443,9 +1443,26 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * the store has not seen yet, its first seconds, whose files the account
    * scan (`heldAccounts`) has just opened anyway. A run that cannot be read
    * is left out, and its row shows dashes, as a run missing from the index did.
+   *
+   * Shared over `STORE_SHARE_MS` for the same set of runs, as the corpus-wide
+   * reads are: every open tab's status badge polls this route, so N tabs cost
+   * one set of reads a window rather than N.
    */
-  async function fleetRunFacts(f: FleetResponse, now: number): Promise<FleetRunFacts[]> {
+  function fleetRunFacts(f: FleetResponse, now: number): Promise<FleetRunFacts[]> {
     const ids = fleetRunIds(f).filter(isValidRunId);
+    const key = [...ids].sort().join("\n");
+    if (factsHeld !== undefined && factsHeld.key === key && Date.now() - factsHeld.at < STORE_SHARE_MS) return factsHeld.value;
+    const value = readFleetRunFacts(ids, now);
+    const held = { at: Date.now(), key, value };
+    factsHeld = held;
+    value.catch(() => {
+      if (factsHeld === held) factsHeld = undefined;
+    });
+    return value;
+  }
+  let factsHeld: { at: number; key: string; value: Promise<FleetRunFacts[]> } | undefined;
+
+  async function readFleetRunFacts(ids: readonly string[], now: number): Promise<FleetRunFacts[]> {
     const facts = await Promise.all(
       ids.map(async (id) => {
         try {

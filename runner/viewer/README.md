@@ -603,7 +603,8 @@ What the viewer keeps between requests is either short or final:
   figures its table rows show (`runFacts`: level, xp, tokens, speed, actual
   cost, playtime, episode clock, served model) are point reads of just those
   runs — each job's run and the paused run on each idle account
-  (`fleetRunIds`) — built by the listing's own `listRowOf`, and its
+  (`fleetRunIds`) — built by the listing's own `listRowOf` and shared over
+  the same three seconds for the same set of runs, and its
   `runCount` is the liveness listing it already read. Those cells used to cost
   the page the whole `/api/runs` (2.4 MB) a minute.
 - **A settled run's track** — terminated, its files quiet for five minutes —
