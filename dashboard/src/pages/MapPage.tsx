@@ -26,7 +26,10 @@
  * Canvas drawing sits outside Solid's reactivity on purpose. Pips move every
  * frame, so the draw loop is a requestAnimationFrame with its own mutable
  * state; Solid owns the sidebar, the chips and the header, which change once
- * per poll or a few times a second.
+ * per poll or a few times a second. The loop runs every frame but draws only
+ * what changed: the ground (tiles, lattice, art) on its own canvas when its
+ * view or its sources move, the marks over it when something on them has
+ * visibly moved (dashboard/README.md, "The map's redraws").
  *
  * Where a run recorded a trace, a pip is *placed* every frame rather than
  * walked toward its newest reading: the trace player (`lib/traceplayer.ts`)
@@ -57,7 +60,7 @@ import { sheetReading } from "../lib/inventory";
 import { questLog } from "../lib/questlog";
 import { cursorMemory } from "../lib/cursormemory";
 import { intentLabel, intentToDraw, intentTone, type IntentTone } from "../lib/mapintent";
-import { restPhase, statusStamp } from "../lib/reflect";
+import { restFrameDue, restPhase, statusStamp } from "../lib/reflect";
 import {
   type UnitFlag,
   auraViews,
@@ -68,7 +71,7 @@ import {
   targetReading,
   unitFlags,
 } from "../lib/unitframe";
-import { NO_TILE_BASE, tileIndexSrc, tileSrc } from "../lib/tiles";
+import { NO_TILE_BASE, nativeFormat, tileIndexSrc, tileSrc } from "../lib/tiles";
 import { type TileIndex, parseTileIndex } from "@viewer/tileindex";
 import {
   type NearbyDot,
@@ -123,13 +126,16 @@ import {
   DEFAULT_MAP,
   STALE_MS,
   TILE_CACHE_MAX,
+  type DrawnPose,
   type FeedClock,
+  type LayerKey,
   type Pip,
   type Touch,
   type View,
   colorOf as runColorOf,
   decimateRoute,
   defaultView,
+  drawnPose,
   emptySideNote,
   fitTo,
   cellAbsent,
@@ -138,6 +144,7 @@ import {
   hitTest,
   isDoubleTap,
   latticeLines,
+  layerDue,
   minimapHidden,
   levelCellPx,
   mapChips,
@@ -150,16 +157,20 @@ import {
   nearbyShown,
   pinchView,
   pipName,
+  posesMoved,
   positionAgeMs,
   project,
+  MOVE_PX,
   stepPips,
   syncPips,
+  trailFadeDue,
   visibleGrid,
   worldPerPixel,
   zoomAt,
 } from "../lib/mapview";
 import { poll } from "../lib/poll";
 import { useClock } from "../lib/clock";
+import { visibleInterval } from "../lib/visibleinterval";
 import {
   type RouteRun,
   classifySegments,
@@ -190,13 +201,16 @@ const PLAYHEAD_TICK_MS = 250;
 const PUMP_MS = 1000;
 /** A fading trail redraws at least this often, so it fades behind a pip standing still. */
 const TRAIL_FRAME_MS = 250;
+/**
+ * The live marks redraw at least this often with nothing moving, for what
+ * changes with time alone: a reading turning stale, an intention ageing out.
+ */
+const OVERLAY_HEARTBEAT_MS = 1000;
 /** The trail's opacity next to the pip; it fades to nothing `TRAIL_MS` back. */
 const TRAIL_ALPHA = 0.7;
 /** The heading mark: how far past the puck its tip reaches, and how wide its base is. */
 const HEADING_LEN = 9;
 const HEADING_HALF = 5;
-/** Below this a pose has not moved, in yards and radians: a pip standing still asks for no redraw. */
-const STILL = 1e-3;
 
 /*
  * The pip's own geometry, half again the size it was first drawn at: a logo
@@ -482,7 +496,9 @@ export default function MapPage() {
     }),
   );
 
+  /* The marks, which take the pointer, over the ground: two canvases (`layerDue`). */
   let canvas!: HTMLCanvasElement;
+  let ground!: HTMLCanvasElement;
   let stage!: HTMLDivElement;
 
   /*
@@ -510,7 +526,9 @@ export default function MapPage() {
   let routeDrawn: RouteRun[] = [];
   let routeSrc: RouteRun[] | null = null;
   let routeScale = 0;
+  /* The overlay's own invalidation; the ground redraws by its key, and `groundRev` is the part of it no view change moves. */
   let needsDraw = true;
+  let groundRev = 0;
   let W = 0;
   let H = 0;
   /*
@@ -567,7 +585,7 @@ export default function MapPage() {
         () => indexes.set(map, null),
       )
       .finally(() => {
-        needsDraw = true;
+        groundRev++;
       });
     return undefined;
   }
@@ -597,20 +615,20 @@ export default function MapPage() {
     // Null means this build was given no tile host and must not ask for one
     // (`lib/tiles.ts`); a cell the index does not list does not exist.
     // Either is remembered as a miss like any other, so the grid is drawn and
-    // nothing is requested.
-    const src = cellAbsent(index, layer, z, row, col) ? null : tileSrc(map, layer, z, row, col);
+    // nothing is requested. The natives come in the format the index names.
+    const src = cellAbsent(index, layer, z, row, col) ? null : tileSrc(map, layer, z, row, col, nativeFormat(index));
     if (src !== null) {
       entry.state = "pending";
       img.onload = (): void => {
         entry.state = "ok";
-        needsDraw = true;
+        groundRev++;
       };
       // One redraw per miss, never a re-request: the entry stays cached as
       // missing. The redraw is what gives a cell that was drawn from a coarser
       // level while it loaded its lattice square, now that it is known empty.
       img.onerror = (): void => {
         entry.state = "missing";
-        needsDraw = true;
+        groundRev++;
       };
       img.src = src;
     }
@@ -642,6 +660,7 @@ export default function MapPage() {
     REST_TINT = get("--xp", "#7b3fd6");
     FLIGHT = get("--flight", "#bfe6ff");
     MEMBER_COLORS = Array.from({ length: MEMBER_SLOTS }, (_, i) => get(memberToken(i), MEMBER_COLORS[i]!));
+    groundRev++;
     needsDraw = true;
   }
 
@@ -650,10 +669,14 @@ export default function MapPage() {
     const r = stage.getBoundingClientRect();
     W = Math.max(1, Math.round(r.width));
     H = Math.max(1, Math.round(r.height));
-    canvas.width = Math.round(W * dpr);
-    canvas.height = Math.round(H * dpr);
-    const ctx = canvas.getContext("2d");
-    ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // Setting a size wipes a canvas even when it does not change, so both
+    // layers redraw after this whatever the view does.
+    for (const c of [ground, canvas]) {
+      c.width = Math.round(W * dpr);
+      c.height = Math.round(H * dpr);
+      c.getContext("2d")?.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    groundRev++;
     artCanvas.width = canvas.width;
     artCanvas.height = canvas.height;
     artCanvas.getContext("2d")?.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -696,43 +719,35 @@ export default function MapPage() {
   /** Whether the trace places the pips and fills the sidebar (`traceDrivesAt`). */
   const traceDrives = (): boolean => traceDrivesAt(track() !== undefined, playing(), speed());
 
-  /** Put a pip at a pose; whether that moved it. */
-  function place(pip: Pip, map: number, x: number, y: number, o: number | null, flying: boolean): boolean {
-    const moved =
-      pip.map !== map ||
-      Math.abs(pip.x - x) > STILL ||
-      Math.abs(pip.y - y) > STILL ||
-      (o === null) !== (pip.o === null) ||
-      (o !== null && pip.o !== null && Math.abs(o - pip.o) > STILL) ||
-      pip.flying !== flying;
+  /** Put a pip at a pose. */
+  function place(pip: Pip, map: number, x: number, y: number, o: number | null, flying: boolean): void {
     pip.map = map;
     pip.x = x;
     pip.y = y;
     pip.o = o;
     pip.flying = flying;
-    return moved;
   }
 
   /**
    * Every pip, placed for the frame at playhead `t`: by the trace where it
    * answers, by the coarse track in a replay where it does not, and walked
-   * toward its newest reading otherwise. Whether anything moved.
+   * toward its newest reading otherwise. Whether that shows is the frame's
+   * question, asked of where each was last drawn (`posesMoved`).
    */
-  function placePips(t: number | null): boolean {
+  function placePips(t: number | null): void {
     const fine = traceDrives();
-    let moved = false;
     const walking: Pip[] = [];
     for (const pip of pips.values()) {
       const pose = t !== null && fine ? store.poseAt(pip.runId, t) : null;
       if (pose !== null) {
-        moved = place(pip, pose.map, pose.x, pose.y, pose.o, pose.flying) || moved;
+        place(pip, pose.map, pose.x, pose.y, pose.o, pose.flying);
         continue;
       }
       // Each replayed pip by its own track: a party's five are five tracks.
       const tr = trackById().get(pip.runId);
       const coarse = tr !== undefined && t !== null ? trackPoseAt(tr.points, kindsOf(pip.runId), t, IDLE_GAP_MS) : null;
       if (coarse !== null) {
-        moved = place(pip, coarse.map, coarse.x, coarse.y, null, false) || moved;
+        place(pip, coarse.map, coarse.x, coarse.y, null, false);
         continue;
       }
       pip.map = pip.data.map;
@@ -740,7 +755,7 @@ export default function MapPage() {
       pip.flying = false;
       walking.push(pip);
     }
-    return stepPips(walking) || moved;
+    stepPips(walking);
   }
 
   /** The bubbles up at playhead `t` for the pips on the map; whether the set changed. */
@@ -1230,6 +1245,9 @@ export default function MapPage() {
    * The trail behind a traced pip: the last `TRAIL_MS` of its path, fading
    * out behind it, in the run's colour and `FLIGHT` where it flew. A cut ends
    * a stretch without a line (`TraceStore.trail`), so a hearth jumps cleanly.
+   * Whether any of it is long enough on screen to show a fade: a character
+   * standing still has a trail of one spot under its own puck, which needs
+   * no frames to fade.
    */
   function drawTrails(ctx: CanvasRenderingContext2D, list: Pip[], map: number, t: number): boolean {
     let drew = false;
@@ -1243,6 +1261,9 @@ export default function MapPage() {
         if (run.map !== map) continue;
         ctx.strokeStyle = run.flight ? FLIGHT : colorOf(pip.runId);
         let a = project(view, run.points[0]!.x, run.points[0]!.y);
+        // A run's length on screen, all of it: zoomed out, a trail is many
+        // sub-pixel segments that show together.
+        let length = 0;
         for (let i = 1; i < run.points.length; i++) {
           const p = run.points[i]!;
           const b = project(view, p.x, p.y);
@@ -1252,9 +1273,10 @@ export default function MapPage() {
           ctx.moveTo(a.sx, a.sy);
           ctx.lineTo(b.sx, b.sy);
           ctx.stroke();
+          length += Math.hypot(b.sx - a.sx, b.sy - a.sy);
           a = b;
-          drew = true;
         }
+        if (length >= MOVE_PX) drew = true;
       }
     }
     ctx.restore();
@@ -1520,6 +1542,21 @@ export default function MapPage() {
     readMotion();
     motionMq?.addEventListener("change", readMotion);
 
+    // A window dragged to a screen of another pixel ratio changes no size the
+    // observer sees, so the ratio is watched on its own: one query for the
+    // current ratio, replaced each time it stops matching.
+    let dprMq: MediaQueryList | undefined;
+    const onDpr = (): void => {
+      resize();
+      watchDpr();
+    };
+    const watchDpr = (): void => {
+      dprMq?.removeEventListener("change", onDpr);
+      dprMq = window.matchMedia?.(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+      dprMq?.addEventListener("change", onDpr);
+    };
+    watchDpr();
+
     // A logo that decodes after the frame that wanted it has no signal to
     // invalidate, so it asks for a redraw the same way a tile does.
     const offLogo = onLogoLoaded(() => {
@@ -1532,6 +1569,11 @@ export default function MapPage() {
     let lastDraw = -Infinity;
     let lastNearbyDraw = -Infinity;
     let trailsShown = false;
+    /* What each layer was last drawn for (`layerDue`), the pips as last drawn, and the playhead the trails were faded to. */
+    let groundDrawn: LayerKey | null = null;
+    let overlayDrawn: LayerKey | null = null;
+    let posesDrawn = new Map<string, DrawnPose>();
+    let trailsAt: number | null = null;
     /*
      * The frame's playhead out to Solid, throttled (`CURSOR_TICK_MS`,
      * `PLAYHEAD_TICK_MS`), and the end of a replay. The only writes the loop
@@ -1572,32 +1614,60 @@ export default function MapPage() {
       const t = playheadAt(p);
       tickSignals(p, t);
       const ctx = canvas.getContext("2d");
-      if (ctx !== null) {
-        const moving = placePips(t);
+      const gctx = ground.getContext("2d");
+      if (ctx !== null && gctx !== null) {
+        placePips(t);
         const list = onMap();
+        // There is always a map to draw: `chooseMap` falls back to the
+        // default continent, so an empty feed gets tiles rather than the flat
+        // rectangle this used to paint when it had no map id.
+        const map = activeMap();
+        // The ground, only when the view, the stage, the map or what it is
+        // drawn from has changed: a pan or a zoom, a tile landing.
+        const key: LayerKey = { scale: view.scale, ox: view.ox, oy: view.oy, w: W, h: H, map, rev: groundRev };
+        if (layerDue(groundDrawn, key)) {
+          groundDrawn = key;
+          drawGrid(gctx, map);
+        }
+        const viewKey: LayerKey = { ...key, rev: 0 };
+        const poses = new Map(list.map((pip) => [pip.runId, drawnPose(view, pip)]));
+        // A pip redraws the marks once it has moved half a pixel from where
+        // it was drawn, however slowly it got there.
+        const moving = posesMoved(posesDrawn, poses);
+        const moved = moving || layerDue(overlayDrawn, viewKey);
         // A drifting rest glyph is the one mark that changes with nothing else
-        // changing, so it has to keep the loop drawing; under reduced motion it
-        // is static and asks for nothing. A trail fades behind a pip standing
-        // still, which wants a frame now and then, not sixty a second.
+        // changing, so it keeps the marks drawing, at its own rate; under
+        // reduced motion it is static and asks for nothing. A trail fades
+        // behind a pip standing still, which wants a frame now and then, and
+        // none at all while the playhead stands still.
         const resting = list.some((pip) => pip.data.reflecting === true);
-        const fading = trailsShown && p - lastDraw >= TRAIL_FRAME_MS;
+        const restDue = resting && restFrameDue(lastDraw, p, reduceMotion);
+        const fading = trailFadeDue(trailsShown, t, trailsAt, p, lastDraw, TRAIL_FRAME_MS);
         // The units nearly always move, so they redraw on their own, slower
         // clock (`nearbyFrameDue`) rather than holding the map at frame rate.
         const nearbyOn = track() === undefined && t !== null && nearbyShown(view.scale) && nearbyStore.size() > 0;
         const nearbyDue = nearbyOn && nearbyFrameDue(lastNearbyDraw, p);
+        // Live only: in a replay every age is the cursor's, which stands still with the marks.
+        const heartbeat = track() === undefined && p - lastDraw >= OVERLAY_HEARTBEAT_MS;
         // The bubbles follow the pips: placed whenever the map is drawn, and
         // whenever the set up changes.
         const said = updateBubbles(list, t);
-        if (said || needsDraw || moving) placeBubbles();
-        if (needsDraw || moving || fading || nearbyDue || (resting && !reduceMotion)) {
+        if (said || needsDraw || moved) placeBubbles();
+        if (needsDraw || moved || fading || nearbyDue || restDue || heartbeat) {
           needsDraw = false;
           lastDraw = p;
+          overlayDrawn = viewKey;
+          posesDrawn = poses;
+          trailsAt = t;
           ctx.clearRect(0, 0, W, H);
-          // There is always a map to draw: `chooseMap` falls back to the
-          // default continent, so an empty feed gets tiles rather than the flat
-          // rectangle this used to paint when it had no map id.
-          const map = activeMap();
-          drawGrid(ctx, map);
+          // The state the marks were drawn under when they shared the
+          // ground's canvas, where they began each frame after the lattice.
+          ctx.lineWidth = 1;
+          ctx.font = "11px ui-monospace, monospace";
+          ctx.textBaseline = "top";
+          ctx.strokeStyle = theme.gridline;
+          ctx.fillStyle = theme.dim;
+          ctx.globalAlpha = 1;
           // The route is cached twice over: the effect that owns it rebuilds
           // the prefix only when the cursor or map moves, and `drawnRoute`
           // decimates that to screen resolution only when the zoom changes.
@@ -1626,7 +1696,8 @@ export default function MapPage() {
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
-    const pumpTimer = setInterval(() => {
+    // Not while the tab is hidden: both pumps fetch (`visibleInterval`).
+    const stopPump = visibleInterval(() => {
       pumpTraces();
       pumpNearby(false);
     }, PUMP_MS);
@@ -1664,10 +1735,11 @@ export default function MapPage() {
 
     onCleanup(() => {
       cancelAnimationFrame(raf);
-      clearInterval(pumpTimer);
+      stopPump();
       ro.disconnect();
       mq?.removeEventListener("change", readTheme);
       motionMq?.removeEventListener("change", readMotion);
+      dprMq?.removeEventListener("change", onDpr);
       offLogo();
       document.removeEventListener("keydown", onKey);
     });
@@ -1747,27 +1819,28 @@ export default function MapPage() {
      * a tail. A window that closes meanwhile is listed by the next read and
      * the tail moves on past it (`setTail` keeps the old one until it lands).
      */
-    const timers: ReturnType<typeof setInterval>[] = [];
-    onCleanup(() => timers.forEach((t) => clearInterval(t)));
+    const stops: (() => void)[] = [];
+    onCleanup(() => stops.forEach((stop) => stop()));
     /** Keep one replayed run's open tail current, for as long as it has one. */
     const followTail = (runId: string): void => {
-      let timer: ReturnType<typeof setInterval> | undefined;
+      let stop: (() => void) | undefined;
       const refresh = (): void => {
         api.traceIndex(runId).then(
           (index) => {
             if (mine !== trackToken) return;
             ingestIndex(store, runId, index);
-            if (index.tail === null) clearInterval(timer);
+            if (index.tail === null) stop?.();
           },
           (e: unknown) => {
             logError("map replay trace", e);
-            if ((e as { status?: unknown }).status === 404) clearInterval(timer);
+            if ((e as { status?: unknown }).status === 404) stop?.();
           },
         );
       };
       refresh();
-      timer = setInterval(refresh, POLL_MS);
-      timers.push(timer);
+      // Paused while the tab is hidden, like the live feed's poll.
+      stop = visibleInterval(refresh, POLL_MS);
+      stops.push(stop);
     };
     /**
      * Where the loaded replay opens: where it was last left off, if it was —
@@ -2286,6 +2359,7 @@ export default function MapPage() {
   return (
     <div class="map-wrap">
       <div class="map-stage" ref={stage}>
+        <canvas class="map-ground" ref={ground} />
         <canvas
           ref={canvas}
           onPointerDown={onPointerDown}

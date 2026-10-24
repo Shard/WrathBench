@@ -1,9 +1,10 @@
 /**
  * Whether a minimap tile can be fetched at all, and if so from where.
  *
- * The private viewer serves `/tiles/<map>/<row>_<col>.png`, the baked
- * pyramid levels of each layer as WebP under `/tiles/<map>/<layer>/<z>/`
- * (`minimap`, `art`) and each map's `/tiles/<map>/index.json`, off `data/minimap/`
+ * The private viewer serves `/tiles/<map>/<row>_<col>.webp` (and `.png`, see
+ * `nativeFormat`), the baked pyramid levels of each layer as WebP under
+ * `/tiles/<map>/<layer>/<z>/` (`minimap`, `art`) and each map's
+ * `/tiles/<map>/index.json`, off `data/minimap/`
  * (`runner/viewer/tiles.ts`), same-origin with the SPA. The Gated preview
  * served the SPA and the bucket from one Worker behind one password, so the
  * same relative path resolved there too and the map page could hard-code it.
@@ -37,27 +38,40 @@
  * degrade to the grid.
  */
 
-import { TILE_INDEX_NAME } from "@viewer/tileindex";
-import { type LodLayer, MINIMAP_LAYER, lodServedName } from "@viewer/worldmap";
+import { type NativeFormat, TILE_INDEX_NAME, type TileIndex } from "@viewer/tileindex";
+import { type LodLayer, MINIMAP_LAYER, lodServedName, nativeServedName, tileName } from "@viewer/worldmap";
+
+/**
+ * What a map's native tiles are asked for as: what its index says, and `.png`
+ * wherever it says nothing — an index from before the WebP natives, or none
+ * at all (a 404, a failure, a slow answer). The viewer answers `.png` from the
+ * master whatever its served tree holds, and the bucket keeps the `.png`
+ * objects earlier passes uploaded, so the fallback always draws; the index is
+ * what moves a map onto the smaller WebP, once the served tree it describes
+ * has them.
+ */
+export function nativeFormat(index: TileIndex | null): NativeFormat {
+  return index?.native ?? "png";
+}
 
 /**
  * The path a native tile lives at, under whatever host serves it. The viewer's
  * route and the bucket's key share this shape by design, so one path works in
  * both.
  */
-export function tilePath(map: number, row: number, col: number): string {
-  return `/tiles/${map}/${row}_${col}.png`;
+export function tilePath(map: number, row: number, col: number, format: NativeFormat = "png"): string {
+  return `/tiles/${map}/${format === "webp" ? nativeServedName(row, col) : tileName(row, col)}`;
 }
 
 /**
  * The path of a tile at any level of a layer's pyramid. The minimap's level 0
- * is the native tile at its original path; every other level is spelled by
- * `lodServedName`, the one function the transcode, the viewer and the
- * publisher also call — which throws for level 0 of any other layer rather
- * than guess.
+ * is the native tile, in the format its map's index names; every other level
+ * is spelled by `lodServedName`, the one function the transcode, the viewer
+ * and the publisher also call — which throws for level 0 of any other layer
+ * rather than guess.
  */
-export function levelTilePath(map: number, layer: LodLayer, z: number, row: number, col: number): string {
-  if (z === 0 && layer === MINIMAP_LAYER) return tilePath(map, row, col);
+export function levelTilePath(map: number, layer: LodLayer, z: number, row: number, col: number, native: NativeFormat = "png"): string {
+  if (z === 0 && layer === MINIMAP_LAYER) return tilePath(map, row, col, native);
   return `/tiles/${map}/${lodServedName(layer, z, row, col)}`;
 }
 
@@ -113,11 +127,12 @@ const BASES = tileBasesFromEnv(import.meta.env as unknown as Record<string, unkn
 export const NO_TILE_BASE: boolean = tileUrl(BASES.tiles, BASES.snapshot, 0, 0, 0) === null;
 
 /**
- * What the map page calls, for a tile at any level of a layer. `null` means
+ * What the map page calls, for a tile at any level of a layer, with the
+ * natives in the format its map's index names (`nativeFormat`). `null` means
  * "draw the grid and make no request".
  */
-export function tileSrc(map: number, layer: LodLayer, z: number, row: number, col: number): string | null {
-  return tileUrlFor(BASES.tiles, BASES.snapshot, levelTilePath(map, layer, z, row, col));
+export function tileSrc(map: number, layer: LodLayer, z: number, row: number, col: number, native: NativeFormat = "png"): string | null {
+  return tileUrlFor(BASES.tiles, BASES.snapshot, levelTilePath(map, layer, z, row, col, native));
 }
 
 /** Where a map's tile index is fetched from, or `null` when this build asks for no tiles at all. */

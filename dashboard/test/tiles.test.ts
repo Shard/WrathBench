@@ -20,7 +20,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { lodServedName } from "../../runner/viewer/worldmap";
-import { levelTilePath, tileBasesFromEnv, tileIndexPath, tilePath, tileUrl, tileUrlFor } from "../src/lib/tiles";
+import { buildTileIndex, parseTileIndex, renderTileIndex } from "../../runner/viewer/tileindex";
+import { levelTilePath, nativeFormat, tileBasesFromEnv, tileIndexPath, tilePath, tileUrl, tileUrlFor } from "../src/lib/tiles";
 
 const SRC = join(import.meta.dir, "..", "src");
 const DATA = "https://wrathbench-data.shard.page";
@@ -102,6 +103,35 @@ describe("the pyramid's levels", () => {
   });
 });
 
+/*
+ * The natives moved from indexed PNG to WebP (operator, 2026-10-24). The map's
+ * index is what says a served tree has them, so a build deployed before the
+ * regenerated tiles, and any map whose index is missing, keeps asking for the
+ * `.png` every server still answers.
+ */
+describe("the natives' format", () => {
+  const cells = [{ layer: "minimap" as const, z: 0, row: 43, col: 31 }];
+  const index = (native?: "webp"): ReturnType<typeof parseTileIndex> =>
+    parseTileIndex(JSON.parse(renderTileIndex(buildTileIndex(cells, [], native))));
+
+  test("is the index's: WebP where it says so", () => {
+    expect(nativeFormat(index("webp"))).toBe("webp");
+    expect(levelTilePath(0, "minimap", 0, 43, 31, nativeFormat(index("webp")))).toBe("/tiles/0/43_31.webp");
+    expect(tileUrlFor(DATA, DATA, tilePath(571, 12, 7, "webp"))).toBe(`${DATA}/tiles/571/12_7.webp`);
+  });
+
+  test("is PNG for an index from before the field, and for no index at all", () => {
+    expect(nativeFormat(index())).toBe("png");
+    expect(nativeFormat(null)).toBe("png");
+    expect(levelTilePath(0, "minimap", 0, 43, 31, nativeFormat(null))).toBe("/tiles/0/43_31.png");
+  });
+
+  test("never moves a pyramid level, which was WebP already", () => {
+    expect(levelTilePath(0, "minimap", 1, 21, 15, "webp")).toBe(levelTilePath(0, "minimap", 1, 21, 15, "png"));
+    expect(levelTilePath(0, "art", 1, 21, 15, "webp")).toBe("/tiles/0/art/1/21_15.webp");
+  });
+});
+
 describe("both bases come from the build's env, and nothing else", () => {
   test("unset, blank and non-string are all empty", () => {
     expect(tileBasesFromEnv({})).toEqual({ tiles: "", snapshot: "" });
@@ -136,6 +166,6 @@ describe("one place builds it", () => {
       /if \(NO_TILE_BASE\) \{\s*drawLattice\(ctx, 0, true\);\s*return;\s*\}[\s\S]*drawLevel\(ctx, map, MINIMAP_LAYER, f\.minimap, [^;]*\);[\s\S]*drawLevel\(art, map, ART_LAYER, f\.art\);/,
     );
     // And a cell the index does not list is not asked for either.
-    expect(src).toMatch(/const src = cellAbsent\(index, layer, z, row, col\) \? null : tileSrc\(map, layer, z, row, col\);\s*\n\s*if \(src !== null\) \{/);
+    expect(src).toMatch(/const src = cellAbsent\(index, layer, z, row, col\) \? null : tileSrc\(map, layer, z, row, col, nativeFormat\(index\)\);\s*\n\s*if \(src !== null\) \{/);
   });
 });

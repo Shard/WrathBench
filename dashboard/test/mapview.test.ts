@@ -64,6 +64,17 @@ import {
   isDoubleTap,
   DOUBLE_TAP_MS,
   DOUBLE_TAP_PX,
+  BLEND_SNAP,
+  HEADING_REACH_PX,
+  MOVE_PX,
+  type DrawnPose,
+  type LayerKey,
+  drawnPose,
+  layerDue,
+  poseMoved,
+  posesMoved,
+  snapBlend,
+  trailFadeDue,
 } from "../src/lib/mapview";
 
 /* The reactive build of solid-js stands behind this name for every dashboard
@@ -432,6 +443,32 @@ describe("the art/minimap crossfade", () => {
     // Flat at both ends, so neither end of the fade shows as a kink.
     expect(minimapAlpha(ART_FADE_START_PX * 1.01)).toBeLessThan(0.001);
     expect(minimapAlpha(ART_FADE_END_PX / 1.01)).toBeGreaterThan(0.999);
+  });
+
+  test("a frame snaps the blend's invisible tails to its ends, and draws no art there", () => {
+    expect(snapBlend(0)).toBe(0);
+    expect(snapBlend(BLEND_SNAP / 2)).toBe(0);
+    expect(snapBlend(0.5)).toBe(0.5);
+    expect(snapBlend(1 - BLEND_SNAP / 2)).toBe(1);
+    expect(snapBlend(1)).toBe(1);
+    // Find the scales where the raw curve is a percent from either end: a
+    // frame there is all one layer, and asks nothing of the other.
+    const screen = { w: 1280, h: 800 };
+    let low = ART_FADE_START_PX;
+    while (minimapAlpha(low) < BLEND_SNAP / 2) low *= 1.001;
+    let high = ART_FADE_END_PX;
+    while (minimapAlpha(high) > 1 - BLEND_SNAP / 2) high /= 1.001;
+    expect(minimapAlpha(low)).toBeGreaterThan(0);
+    expect(minimapAlpha(high)).toBeLessThan(1);
+    const outer = frameLevels(low / TILE_PX, screen);
+    expect(outer.minimapAlpha).toBe(0);
+    expect(outer.art).not.toBeNull();
+    const inner = frameLevels(high / TILE_PX, screen);
+    expect(inner.minimapAlpha).toBe(1);
+    expect(inner.art).toBeNull();
+    // And the snapped end hides a covered minimap cell, as the true end does.
+    const index = buildTileIndex([], [{ z: outer.minimap, row: 0, col: 0 }]);
+    expect(minimapHidden(outer, index, 0, 0)).toBe(outer.art === outer.minimap);
   });
 
   test("pixels per ADT is a native tile's on-screen size", () => {
@@ -1272,5 +1309,116 @@ describe("liveListOrder", () => {
     const rows = [at("a", "A", 1), at("b", "B", 2)];
     liveListOrder(rows);
     expect(rows.map((p) => p.runId)).toEqual(["a", "b"]);
+  });
+});
+
+/*
+ * When the map redraws (`MapPage.tsx`'s frame loop): the ground by what it was
+ * drawn for, the marks when a pip has moved far enough on screen to show.
+ */
+describe("the ground layer", () => {
+  const key: LayerKey = { scale: 0.4, ox: -120, oy: 35, w: 1280, h: 800, map: 0, rev: 3 };
+
+  test("draws once for a key and not again until something in it changes", () => {
+    expect(layerDue(null, key)).toBe(true);
+    expect(layerDue(key, { ...key })).toBe(false);
+  });
+
+  test("a pan, a zoom, a resize, another map or a bumped revision each redraw it", () => {
+    for (const next of [
+      { ...key, ox: key.ox + 1 },
+      { ...key, oy: key.oy - 0.5 },
+      { ...key, scale: key.scale * 1.1 },
+      { ...key, w: 390 },
+      { ...key, h: 844 },
+      { ...key, map: 1 },
+      // A tile or an index landed, the theme flipped, the canvas was resized in place.
+      { ...key, rev: key.rev + 1 },
+    ]) {
+      expect(layerDue(key, next)).toBe(true);
+    }
+  });
+});
+
+describe("a pip's motion on screen", () => {
+  const view = { scale: 1, ox: 0, oy: 0 };
+  const pip = (x: number, y: number, o: number | null = null, extra: Partial<Pip> = {}): Pip => ({
+    runId: "r",
+    data: { runId: "r" } as AgentPosition,
+    x,
+    y,
+    map: 0,
+    o,
+    flying: false,
+    ...extra,
+  });
+  /** World yards per screen pixel at the view's scale, so the steps below are in pixels. */
+  const yd = worldPerPixel(view.scale);
+
+  test("under half a pixel is not a move; half a pixel is", () => {
+    const at = drawnPose(view, pip(100, 100));
+    expect(poseMoved(at, drawnPose(view, pip(100 + yd * 0.4, 100)))).toBe(false);
+    expect(poseMoved(at, drawnPose(view, pip(100 + yd * MOVE_PX * 1.01, 100)))).toBe(true);
+  });
+
+  test("measured from where it was drawn, so a slow creep still redraws", () => {
+    const drawn = drawnPose(view, pip(100, 100));
+    let x = 100;
+    let frames = 0;
+    // A hundredth of a pixel a frame: never a move frame to frame, a move in the end.
+    while (!poseMoved(drawn, drawnPose(view, pip(x, 100)))) {
+      x += yd * 0.01;
+      frames++;
+      if (frames > 1000) break;
+    }
+    expect(frames).toBeGreaterThan(40);
+    expect(frames).toBeLessThan(60);
+  });
+
+  test("a turn counts by how far it moves the heading's tip", () => {
+    const at = drawnPose(view, pip(100, 100, 1));
+    const small = (MOVE_PX / HEADING_REACH_PX) * 0.5;
+    expect(poseMoved(at, drawnPose(view, pip(100, 100, 1 + small)))).toBe(false);
+    expect(poseMoved(at, drawnPose(view, pip(100, 100, 1 + small * 3)))).toBe(true);
+    // Across the wrap from +pi to -pi is a small turn, not a whole circle.
+    const wrap = drawnPose(view, pip(100, 100, Math.PI - small / 2));
+    expect(poseMoved(wrap, drawnPose(view, pip(100, 100, -Math.PI + small / 2)))).toBe(false);
+  });
+
+  test("a change of map, of flying, or of whether it has a heading always shows", () => {
+    const at = drawnPose(view, pip(100, 100, 1));
+    expect(poseMoved(at, drawnPose(view, pip(100, 100, 1, { map: 1 })))).toBe(true);
+    expect(poseMoved(at, drawnPose(view, pip(100, 100, 1, { flying: true })))).toBe(true);
+    expect(poseMoved(at, drawnPose(view, pip(100, 100, null)))).toBe(true);
+  });
+
+  test("the set moves when one pip moves, arrives or leaves, and not otherwise", () => {
+    const a: DrawnPose = drawnPose(view, pip(100, 100));
+    const b: DrawnPose = drawnPose(view, pip(200, 200));
+    const drawn = new Map([
+      ["a", a],
+      ["b", b],
+    ]);
+    expect(posesMoved(drawn, new Map(drawn))).toBe(false);
+    expect(posesMoved(drawn, new Map([["a", a]]))).toBe(true);
+    expect(posesMoved(drawn, new Map([...drawn, ["c", b]]))).toBe(true);
+    expect(posesMoved(drawn, new Map([["a", a], ["c", b]]))).toBe(true);
+    expect(posesMoved(drawn, new Map([["a", a], ["b", { ...b, sx: b.sx + 1 }]]))).toBe(true);
+  });
+});
+
+describe("a fading trail", () => {
+  test("fades as the playhead moves, a few times a second", () => {
+    expect(trailFadeDue(true, 2000, 1000, 500, 200, 250)).toBe(true);
+    expect(trailFadeDue(true, 2000, 1000, 400, 200, 250)).toBe(false);
+  });
+
+  test("is left alone while the playhead stands still: a paused replay", () => {
+    expect(trailFadeDue(true, 1000, 1000, 10_000, 0, 250)).toBe(false);
+  });
+
+  test("asks nothing when no trail shows, or there is no playhead", () => {
+    expect(trailFadeDue(false, 2000, 1000, 10_000, 0, 250)).toBe(false);
+    expect(trailFadeDue(true, null, 1000, 10_000, 0, 250)).toBe(false);
   });
 });

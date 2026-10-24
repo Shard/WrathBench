@@ -593,26 +593,36 @@ The bake over maps 0, 1, 530 and 571 takes about 140 s and writes 2248 tiles
 The PNG tree is the lossless master: the bakes read it, and a lossy copy
 re-encoded from a lossy copy would compound. What is served is derived from it
 by `src/transcode.ts` into `data/minimap/web/`, the same relative paths with
-the pyramid's extension changed:
+the extension changed:
 
 ```
-web/<mapId>/<row>_<col>.png                 native, an indexed PNG (256 colours)
+web/<mapId>/<row>_<col>.webp                native
 web/<mapId>/<layer>/<z>/<row>_<col>.webp    the minimap and art pyramids
-web/<mapId>/index.json                      which cells exist; where the art hides the minimap
+web/<mapId>/index.json                      which cells exist; where the art hides the minimap; "native": "webp"
 web/transcode.json                          the transcode's own cache, never served
 ```
 
-- **The pyramids are WebP at q90.** These tiles are only ever seen
-  downscaled, or blended under or over the other layer. Lossless WebP is
-  kept wherever it is at most twice the lossy size. That covers every solid,
-  near-solid and mostly transparent tile, which a lossy codec shifts by whole
-  levels against an exact neighbour. Each lossy tile is decoded again, and
-  if its alpha is not exact it is served lossless instead.
-- **The natives stay `.png`, as an indexed PNG.** That means no client change:
-  every deployed build asks for the same path and type. There is no dither,
-  which scored better than dithering on both size and error. A tile is
-  served as its master if the palette would change its alpha or not save
-  bytes.
+- **Every tile is WebP at q90.** Lossless WebP is kept wherever it is at
+  most twice the lossy size. That covers every solid, near-solid and mostly
+  transparent tile, which a lossy codec shifts by whole levels against an
+  exact neighbour. Each lossy tile is decoded again, and if its alpha is not
+  exact it is served lossless instead.
+- **The natives moved from indexed PNG to WebP (operator, 2026-10-24).** They
+  were kept as a 256-colour PNG so that no client had to change. The
+  operator chose a modern format that the current major browsers all
+  support, without going further than that: WebP is in every current
+  Chrome, Firefox, Safari and Edge. The natives take the pyramids' rule
+  unchanged.
+- **The index says which.** A map's `index.json` carries `"native": "webp"`,
+  still at version 1, so a deployed build parses it and ignores the field.
+  The page asks for `.webp` natives only where the index says so, and
+  `.png` wherever it does not: an index written before the field, a stale
+  one at the edge, or none at all. Every server still answers `.png`. The
+  viewer serves the indexed PNG an older transcode left, or the master
+  (`runner/viewer/tiles.ts`), and the bucket keeps the old `.png` objects
+  (`infra/cloudflare/README.md`, step 6). So a build and a served tree can
+  ship in either order. A transcode removes the indexed PNG natives an
+  older one wrote.
 - **The encoders are Bun's own** (`Bun.Image`, libwebp and libspng linked into
   the pinned Bun), so there is no new dependency. The cache key is the Bun
   build plus every setting, so a Bun upgrade re-encodes everything. The
@@ -624,10 +634,15 @@ raid):
 
 | layer | files | master | served |
 | --- | --- | --- | --- |
-| native | 5078 | 151.1 MB | 80.2 MB |
+| native | 5078 | 151.1 MB | 42.3 MB (80.2 MB as indexed PNG) |
 | minimap pyramid | 3070 | 112.5 MB | 17.9 MB |
 | art pyramid | 2248 | 185.6 MB | 13.9 MB |
-| total | 10396 (+76 indexes) | 449.2 MB | 112.0 MB |
+| total | 10396 (+76 indexes) | 449.2 MB | 74.1 MB |
+
+A native is 8.1 KB on average where its indexed PNG was 15.4 KB, so a screen
+of them loads in about half the bytes. 2192 of the 5078 are lossless under the
+rule above: Northrend's ice and sea, the instances' transparent margins, and
+other flat ground.
 
 Why q90, from the tree before the instances joined it (maps 0, 1, 36, 369,
 530 and 571):
@@ -646,9 +661,44 @@ art, on snow or on forest. The numbers decided it:
 - At 85, the mean colour along an art tile's edge drifts by up to 3 levels,
   and that is what shows as a seam. At 90 the drift stays near 1.
 
-Some natives score as low as 34–36 dB under the palette: dense city tiles,
-Silvermoon and Stormwind among them. Side by side with their masters at three
-times magnification they show no visible difference.
+The natives are seen magnified as well as downscaled (up to `MAX_SCALE`, 8×,
+times the screen's pixel ratio), so they were checked closer. Against their
+masters, dense city tiles score 32–37 dB as WebP q90 and 35–39 dB as the
+indexed PNG: Stormwind 32.0 against 35.8, Silvermoon 33.3 against 36.1,
+Dalaran 32.6 against 35.0, Northshire 36.8 against 39.0. Raising the quality
+does not close that gap. At q96 the natives are as large as the indexed PNG
+(80.4 MB) and Stormwind gains half a decibel, because the error that is left
+is WebP's halved colour resolution rather than the quantiser. At four times
+magnification, side by side with the master, the WebP softens small saturated
+details slightly, where the indexed PNG posterizes water and gradients. The
+map draws them smoothed in any case. q90 is kept for the natives too.
+
+### Moving a served tree to the WebP natives
+
+The transcode's encoder id names the settings, so the first pass after this
+change re-encodes every tile. The steps, in the order the operator runs them:
+
+1. `bun run --cwd minimap transcode` on the machine with the masters. It
+   writes the `.webp` natives and the indexes that name them, and removes
+   the indexed PNG natives from `web/`.
+2. `bun wb site tiles --dry-run`, then `bun wb site tiles --upload`, or
+   `bun wb site ship --tiles` to upload and deploy together. The pass ends
+   by naming every map whose `index.json` it changed. Purge each one at the
+   edge (`infra/cloudflare/README.md`, step 6), or the edge keeps serving the
+   old index, and with it the `.png` natives, for a day.
+3. Copy `data/minimap/web` into the viewer's volume (the data claim's
+   `minimap` subPath) with modification times kept, from a throwaway pod
+   that mounts the claim, as uid 1000:
+
+   ```
+   tar -C data/minimap -cf - web | kubectl -n wrathbench exec -i <pod> -- tar -C /data/minimap -xf -
+   kubectl -n wrathbench exec <pod> -- find /data/minimap/web -maxdepth 2 -name '*_*.png' -delete
+   ```
+
+   The second command removes the indexed PNG natives the copy leaves behind.
+   It is optional, because a `.png` request still answers from the master
+   either way. The viewer reads the tree on every request, so it needs no
+   restart.
 
 The index is a bitmap per layer and level, one hex row per grid row
 (`runner/viewer/tileindex.ts`), about 3 KB per continent before compression.
@@ -667,8 +717,9 @@ always drawn.
 
 ## Relationship to the viewer
 
-`runner/viewer/worldmap.ts` owns the transform and the pyramid's spelling
-(`lodTileName` for the masters, `lodServedName` for the served WebP), and
+`runner/viewer/worldmap.ts` owns the transform and the served spellings
+(`tileName` and `lodTileName` for the masters, `nativeServedName` and
+`lodServedName` for the served WebP), and
 `runner/viewer/tiles.ts` serves both shapes above under `/tiles/<mapId>/`, from
 the served tree while it is current and from the masters otherwise.
 Both agree with what this tool writes. The orientation in `worldToPixel` could not be verified until an

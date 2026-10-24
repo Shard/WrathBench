@@ -328,6 +328,29 @@ into the track's `travel` list, without storing anything new; the moves' typed
 `teleported` and `transferred` verdicts and map changes are already on the
 track. An implied-speed limit backs them up for jumps nothing explains.
 
+## The map's redraws
+
+A map with anything moving used to cost a third of a core in the renderer and
+the GPU, because it redrew everything at the display's rate. Each redraw is now
+earned, and the map is two stacked canvases (`MapPage.tsx`):
+
+- **The ground** is the lattice, the tiles and the art blended over them. It
+  is redrawn only when what it was drawn for changes (`layerDue`): the view,
+  the stage, the map, or a revision that a tile or index landing, a theme
+  change or a resize bumps. A pan redraws it; a walking character does not.
+- **The marks** are the pips, trails, routes, intentions and nearby units.
+  They redraw when a pip has moved half a pixel on screen from where it was
+  last drawn (`posesMoved`), so sub-pixel creep at a zoomed-out view costs
+  nothing until it shows. A trail fades a few times a second only while the
+  playhead moves, so a paused replay is still. The rest glyph drifts at
+  fifteen frames a second (`restFrameDue`), and nearby units move at ten. Live,
+  the marks also redraw once a second, for staleness and intentions that age
+  with time alone.
+
+The art crossfade snaps its last two percent at either end (`snapBlend`). At
+those weights the art is invisible, but it was being fetched and blended over
+the whole map.
+
 ## Structure
 
 ```

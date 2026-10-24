@@ -7,6 +7,8 @@ import {
   groupTurn,
   isReflectTool,
   reflectingAt,
+  REST_FRAME_MS,
+  restFrameDue,
   restPhase,
   statusStamp,
 } from "../src/lib/reflect";
@@ -131,5 +133,21 @@ describe("groupTurn", () => {
     expect(
       groupTurn({ kind: "call", call: entry("tool_call"), snippet: null, result: null, actions: [], durationMs: null } as FeedGroup),
     ).toBeUndefined();
+  });
+});
+
+describe("restFrameDue", () => {
+  test("the drifting glyph redraws the map at its own rate, not the display's", () => {
+    expect(restFrameDue(1000, 1000 + REST_FRAME_MS, false)).toBe(true);
+    expect(restFrameDue(1000, 1000 + 1000 / 60, false)).toBe(false);
+    // About fifteen a second: well under a frame of drift each.
+    expect(1000 / REST_FRAME_MS).toBeGreaterThan(12);
+    expect(1000 / REST_FRAME_MS).toBeLessThan(25);
+    // The steepest step of the drift between two of those frames.
+    expect((REST_RISE_PX * Math.PI * REST_FRAME_MS) / REST_PERIOD_MS).toBeLessThan(0.5);
+  });
+
+  test("under reduced motion the glyph is still, and asks for nothing", () => {
+    expect(restFrameDue(0, 10_000, true)).toBe(false);
   });
 });

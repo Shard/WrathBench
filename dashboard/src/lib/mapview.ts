@@ -337,6 +337,23 @@ export function artLevel(z: number): number {
   return Math.max(1, z);
 }
 
+/**
+ * How close to either end the blend snaps to it. The smoothstep's tails are
+ * long: a frame fitted to a few characters sits near `ART_FADE_END_PX` with
+ * the art at a percent or two, invisible, and drawing it there meant fetching
+ * its tiles and laying a whole offscreen canvas over the map for nothing. A
+ * step of two percent at the ends is smaller than one wheel notch moves the
+ * blend anywhere near them.
+ */
+export const BLEND_SNAP = 0.02;
+
+/** A blend weight, with the last `BLEND_SNAP` at either end taken to that end. */
+export function snapBlend(alpha: number): number {
+  if (alpha < BLEND_SNAP) return 0;
+  if (alpha > 1 - BLEND_SNAP) return 1;
+  return alpha;
+}
+
 /** What one frame draws: the minimap's level, the art's (null when it is not drawn), and the blend. */
 export interface FrameLevels {
   minimap: number;
@@ -347,12 +364,12 @@ export interface FrameLevels {
 
 /**
  * Both layers' levels for a frame. The minimap is always drawn — it is what
- * shows wherever the art has nothing — and the art whenever it has any weight
- * at all; both are chosen together so their cells and underlays share the one
- * cache (`tileLevel`).
+ * shows wherever the art has nothing — and the art whenever it has a weight
+ * that shows (`snapBlend`); both are chosen together so their cells and
+ * underlays share the one cache (`tileLevel`).
  */
 export function frameLevels(scale: number, screen: Screen): FrameLevels {
-  const alpha = minimapAlpha(pxPerAdt(scale));
+  const alpha = snapBlend(minimapAlpha(pxPerAdt(scale)));
   const withArt = alpha < 1;
   const z = tileLevel(scale, screen, withArt);
   return { minimap: z, art: withArt ? artLevel(z) : null, minimapAlpha: alpha };
@@ -672,6 +689,104 @@ export function stepPips(list: readonly Pip[], rate = 0.18): boolean {
     moving = true;
   }
   return moving;
+}
+
+/*
+ * When the map redraws. The page keeps two canvases: the ground (the lattice,
+ * the tiles and the art over them) and, over it, everything that moves (the
+ * pips, their trails and routes, intentions, the units around them). Each is
+ * redrawn only when what it shows has changed, which is what keeps a still or
+ * slow map from costing a frame's worth of drawing sixty times a second.
+ */
+
+/** What one layer was last drawn for: the view, the stage, the map, and a revision its own events bump. */
+export interface LayerKey {
+  scale: number;
+  ox: number;
+  oy: number;
+  w: number;
+  h: number;
+  map: number;
+  /**
+   * The ground's: bumped by every event that changes what it would draw with
+   * the view unchanged — a tile or a map's index arriving or failing, the
+   * theme, a resize (which wipes the canvas). The overlay keeps 0 and has its
+   * own reasons to redraw.
+   */
+  rev: number;
+}
+
+/** Whether a layer drawn for `last` has to be drawn again for `next`. */
+export function layerDue(last: LayerKey | null, next: LayerKey): boolean {
+  return (
+    last === null ||
+    last.scale !== next.scale ||
+    last.ox !== next.ox ||
+    last.oy !== next.oy ||
+    last.w !== next.w ||
+    last.h !== next.h ||
+    last.map !== next.map ||
+    last.rev !== next.rev
+  );
+}
+
+/**
+ * How far a mark has to move on screen, from where it was last drawn, before
+ * the map redraws for it. Canvas antialiasing renders a half-pixel step as a
+ * shade, not a jump; anything less was a frame drawn to show nothing new.
+ * Measured from the last draw and not from the last frame, so a pip creeping
+ * a hundredth of a pixel a frame is still redrawn every fifty frames.
+ */
+export const MOVE_PX = 0.5;
+
+/**
+ * How far from a pip's centre its heading mark reaches (the selected puck's
+ * radius and the wedge past it): a turn moves the tip by the angle times this,
+ * so it is held to `MOVE_PX` the same way.
+ */
+export const HEADING_REACH_PX = 26;
+
+/** A pip as last drawn: where on screen, facing where, on which map, flying or not. */
+export interface DrawnPose {
+  sx: number;
+  sy: number;
+  o: number | null;
+  map: number;
+  flying: boolean;
+}
+
+export function drawnPose(view: View, pip: Pip): DrawnPose {
+  const p = project(view, pip.x, pip.y);
+  return { sx: p.sx, sy: p.sy, o: pip.o, map: pip.map, flying: pip.flying };
+}
+
+/** Whether one pip has moved, turned, flown or changed map enough to show since `prev`. */
+export function poseMoved(prev: DrawnPose, next: DrawnPose, px = MOVE_PX): boolean {
+  if (prev.map !== next.map || prev.flying !== next.flying || (prev.o === null) !== (next.o === null)) return true;
+  if (Math.hypot(next.sx - prev.sx, next.sy - prev.sy) >= px) return true;
+  if (prev.o === null || next.o === null) return false;
+  const turn = Math.abs(Math.atan2(Math.sin(next.o - prev.o), Math.cos(next.o - prev.o)));
+  return turn * HEADING_REACH_PX >= px;
+}
+
+/** Whether the pips on the map have changed enough since they were last drawn: one moved, came or went. */
+export function posesMoved(prev: ReadonlyMap<string, DrawnPose>, next: ReadonlyMap<string, DrawnPose>, px = MOVE_PX): boolean {
+  if (prev.size !== next.size) return true;
+  for (const [id, pose] of next) {
+    const was = prev.get(id);
+    if (was === undefined || poseMoved(was, pose, px)) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a fading trail is due a redraw: something drawn fades only as the
+ * playhead moves, so a paused replay's trail is left alone however long it
+ * sits, and a moving playhead fades it a few times a second (`frameMs`), not
+ * at the display's rate.
+ */
+export function trailFadeDue(shown: boolean, t: number | null, drawnAt: number | null, now: number, lastDraw: number, frameMs: number): boolean {
+  return shown && t !== null && t !== drawnAt && now - lastDraw >= frameMs;
 }
 
 /** How many of a feed stand on each map, busiest first, ties broken by map id. */

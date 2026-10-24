@@ -873,7 +873,7 @@ describe("the public build's call sites", () => {
     // A build told nothing draws the lattice at every zoom and requests no
     // level of the pyramid either.
     expect(src).toMatch(/if \(NO_TILE_BASE\) \{\s*drawLattice\(ctx, 0, true\);\s*return;/);
-    expect(src).toContain(": tileSrc(map, layer, z, row, col);");
+    expect(src).toContain(": tileSrc(map, layer, z, row, col, nativeFormat(index));");
     expect(src).toContain("const src = tileIndexSrc(map);");
     // Not gated on SNAPSHOT_MODE directly: the question is whether a tile host
     // was named, which is a different one from whether the data is published.

@@ -37,6 +37,18 @@ export const REST_PERIOD_MS = 2600;
 /** How far the glyph rises over one period, in css pixels. */
 export const REST_RISE_PX = 5;
 
+/**
+ * How often the drifting glyph redraws the map on its own. It rises five
+ * pixels over half a period, at most four tenths of a pixel a frame at this rate,
+ * so fifteen frames a second draw the same drift that sixty did.
+ */
+export const REST_FRAME_MS = 66;
+
+/** Whether the glyph alone is due a redraw; never under reduced motion, where it does not move. */
+export function restFrameDue(lastDraw: number, now: number, reduced: boolean): boolean {
+  return !reduced && now - lastDraw >= REST_FRAME_MS;
+}
+
 /** Where the rest glyph sits, and how strongly it shows, on one frame. */
 export interface RestPhase {
   /** Pixels ABOVE the glyph's resting spot (positive is up). */

@@ -44,6 +44,27 @@ describe("the tile index", () => {
     expect(renderTileIndex(buildTileIndex([...cells].reverse(), covers))).toBe(renderTileIndex(buildTileIndex(cells, covers)));
   });
 
+  test("names the natives' format: WebP when it says so, PNG for anything else", () => {
+    const webp = renderTileIndex(buildTileIndex(cells, covers, "webp"));
+    expect(JSON.parse(webp)).toMatchObject({ version: 1, native: "webp" });
+    expect(parseTileIndex(JSON.parse(webp))!.native).toBe("webp");
+    // An index written before the field, and one naming a format nobody serves.
+    const png = renderTileIndex(buildTileIndex(cells, covers));
+    expect(png).not.toContain("native");
+    expect(parseTileIndex(JSON.parse(png))!.native).toBe("png");
+    expect(parseTileIndex({ ...JSON.parse(png), native: "avif" })!.native).toBe("png");
+  });
+
+  test("a WebP index still reads as an index to a client that predates the field", () => {
+    // The parse every deployed build runs: version 1, the two grids, nothing
+    // else asked about. Bumping the version would hand each of them a null
+    // index and a request for every cell.
+    const raw = JSON.parse(renderTileIndex(buildTileIndex(cells, covers, "webp"))) as Record<string, unknown>;
+    expect(raw["version"]).toBe(1);
+    const { native: _native, ...rest } = raw;
+    expect(parseTileIndex(rest)).toEqual({ ...buildTileIndex(cells, covers), native: "png" });
+  });
+
   test("anything malformed reads as no index at all", () => {
     const good = buildTileIndex(cells, covers);
     for (const bad of [
