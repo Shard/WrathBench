@@ -41,6 +41,8 @@ export function EntryCard(props: {
   svg: SVGSVGElement | undefined;
   /** Label and reading, one line each, under the level and money. */
   rows: readonly (readonly [string, string])[];
+  /** The xp to draw, where the chart reads it otherwise than the mean (the lines chart's end, raised to its level marks). */
+  xp?: number;
   /** A footnote the readings need, dim. */
   note?: string | null;
 }) {
@@ -66,7 +68,7 @@ export function EntryCard(props: {
     const anchor = { x: plot.left - origin.left + cx * scale, y: plot.top - origin.top + cy * scale };
     setPos(cardPlacement(anchor, { w: el.offsetWidth, h: el.offsetHeight }, frame, 12));
   });
-  const xp = (): number | null => props.point.metrics.xp;
+  const xp = (): number | null => props.xp ?? props.point.metrics.xp;
   const level = (): number | null => (xp() === null ? null : levelOfXp(xp()!));
   const effort = (): string | null => effortLabel(props.point.effort, props.point.compactWindow);
   const quests = (): number | null => {

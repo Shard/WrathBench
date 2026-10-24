@@ -203,7 +203,7 @@ export function RunLinesChart(props: {
           </g>
         </svg>
         <Show when={carded()}>
-          {(c) => <EntryCard point={c().point} cx={c().p.markCx} cy={c().p.markCy} svg={svg} rows={cardRows(c().point)} />}
+          {(c) => <EntryCard point={c().point} xp={c().p.line.endY} cx={c().p.markCx} cy={c().p.markCy} svg={svg} rows={cardRows(c().point)} />}
         </Show>
       </Show>
       <div class="chart-note">
