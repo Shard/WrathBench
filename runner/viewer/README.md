@@ -386,6 +386,16 @@ wears and carries off the trace's character sheet, and the newest reading on
 the feed ran the public delay ahead of the pip; the run row keeps it
 (`/api/run/<id>`, the run page's "carrying").
 
+The feed is polled every few seconds, so it opens as little as it can. Only
+runs the store lists as unterminated, with a trajectory it last saw inside the
+window (plus five minutes for the collector's lag), are opened at all: every
+state sample is written to the trajectory too, so a run quiet longer than the
+window has no position inside it, and the fleet's hundred-odd paused runs were
+each a database open a poll for nothing. A run that is opened has its
+`run.sqlite` opened once for the position, quest counts, latest move (one row,
+`ORDER BY ts DESC LIMIT 1`) and reflection window, and its `episodic.jsonl`
+read from the end.
+
 `/api/run/<id>/track` is the replay's feed: the positioned samples as points,
 and what the character wore and carried along them as `inv`, a reading
 wherever the stored inventory changed, written as the slots that moved since
@@ -555,6 +565,50 @@ write that lands mid-character is safe) and keeping only a small summary plus
 the byte range of each line. Big fields collapse to counts; the full JSON of any
 single entry is re-read from disk on demand behind a click. The SSE tail
 heartbeats once a second, so a quiet run can be told from a dead connection.
+
+Every reader of a run shares its one tail, so each SSE stream keeps its own
+cursor into the tail's entries and sends whatever lies past it after any
+scan, whoever ran it: a second tab, the run page's own poll or `/entries`
+can no longer consume a batch an open stream then never sends. A truncated or
+rotated file restarts every cursor from the top. The run page's tokens, cost,
+coverage, speed and segments are accumulated by the tail as it indexes (the
+token and speed derivations are held until it grows), so a warm poll and N
+open streams cost one derivation per batch rather than a walk over every
+entry each.
+
+A tail is the heaviest thing the viewer holds — roughly a third of its file's
+size in live objects, ~200 MB for a big freeplay run — so they are evicted:
+after ten idle minutes, or once the tails nobody is streaming index more than
+a GiB of trajectory between them (least recently used first). A tail with an
+open stream is never evicted. An evicted run costs its next visit a re-read.
+
+## Caching and compression
+
+What the viewer keeps between requests is either short or final:
+
+- **Corpus-wide store reads** (`runRows`, `totalsRows`, the latest readings,
+  the liveness listing, the facts) and the fleet roster are shared for three
+  seconds (`sharedStore` in `api.ts`): every route and tab inside the window
+  gets the one read in flight. A write through the config API drops the
+  roster at once. The listing build behind results, ladders and characters
+  keeps its own fifteen-second window.
+- **A settled run's track** — terminated, its files quiet for five minutes —
+  has its store-derived half (points, inventory patches, moves) read once and
+  kept for the last six such runs, and is answered with a weak ETag and
+  `no-cache`, so a revisit is a 304. Not `immutable`: the body also names the
+  character's next attempt, which appears when a continuation starts.
+
+JSON bodies over 8 KB are compressed — brotli at quality 4 where the client
+accepts it, gzip otherwise — with `Vary: Accept-Encoding` on every JSON body.
+Listing bodies shrink 8–17× (`/api/runs` 2.4 MB to ~200 KB). The SSE tail,
+tiles, the SPA's files and plain text are never read or encoded. A caller that
+sends no `Accept-Encoding` — the snapshot publisher, the render rig, a test —
+gets plain bodies.
+
+The listing routes and the map read the store's latest readings without
+`items` (`latestReadings`): the inventory column is nearly all of the states
+table and no listing row shows one, so a private `/api/runs` row carries
+`items: null`. A run's own page reads its inventory off `latestState`.
 
 A request's counts (`messageCount`, `systemChars`, `promptChars`) come off its
 message array on a full record and off the fields the writer stored on a slim
