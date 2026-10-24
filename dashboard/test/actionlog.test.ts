@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ActionNoteView, ActionsEntry, FeedEntry } from "../../runner/viewer/api-types";
-import { actionLine, actionLines, moveVerdicts } from "../src/lib/actionlog";
+import { actionLine, actionLines, keepLines, moveVerdicts, sameVerdicts } from "../src/lib/actionlog";
 import { groupFeed, type CallGroup } from "../src/lib/feedgroup";
 
 const note = (action: string, extra: Partial<ActionNoteView> = {}): ActionNoteView => ({
@@ -144,5 +144,36 @@ describe("the action log in the grouped feed", () => {
     const first = groupFeed(window);
     const again = groupFeed([...window, e("state", 9300)], first);
     expect(again[0]).toBe(first[0]!);
+  });
+});
+
+describe("a live append leaves the action lines alone", () => {
+  const move = (i: number, ts: number, moveId: number, status: string): FeedEntry =>
+    ({ i, t: "move", ts, start: 0, end: 0, moveId, status }) as FeedEntry;
+  const other = (i: number, ts: number): FeedEntry => ({ i, t: "state", ts }) as FeedEntry;
+
+  test("the verdict map is the same until a move record arrives", () => {
+    const before = moveVerdicts([move(1, 900, 4, "too_far"), other(2, 950)]);
+    expect(sameVerdicts(before, moveVerdicts([move(1, 900, 4, "too_far"), other(2, 950), other(3, 999)]))).toBe(true);
+    expect(sameVerdicts(before, moveVerdicts([move(1, 900, 4, "too_far"), move(3, 1000, 4, "arrived")]))).toBe(false);
+    expect(sameVerdicts(before, moveVerdicts([move(1, 900, 5, "too_far")]))).toBe(false);
+    expect(sameVerdicts(before, moveVerdicts([move(1, 900, 4, "arrived")]))).toBe(false);
+  });
+
+  test("lines that read the same stay the objects they were; a line whose verdict moved is new", () => {
+    const entry = {
+      i: 7,
+      t: "actions",
+      ts: 1000,
+      actions: [note("move_to", { args: { x: 1, y: 2, z: 3 }, moveId: 4 }), note("cast", { args: { spellId: 133 } })],
+    } as unknown as ActionsEntry;
+    const first = actionLines(entry);
+    const walking = keepLines(first, actionLines(entry));
+    expect(walking[0]).toBe(first[0]!);
+    expect(walking[1]).toBe(first[1]!);
+    const arrived = keepLines(walking, actionLines(entry, moveVerdicts([move(9, 1500, 4, "arrived")])));
+    expect(arrived[0]).not.toBe(first[0]!);
+    expect(arrived[0]!.text).toContain("arrived");
+    expect(arrived[1]).toBe(first[1]!);
   });
 });

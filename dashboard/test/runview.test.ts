@@ -10,7 +10,8 @@
 
 import { describe, expect, test } from "bun:test";
 import type { StatePoint } from "../../runner/viewer/api-types";
-import { atBottom, runChartInput, xpChartModel } from "../src/lib/runview";
+import { createMemo, createRoot, createSignal } from "solid-js";
+import { atBottom, chartClock, runChartInput, xpChartModel } from "../src/lib/runview";
 
 function s(ts: number, level: number | null, xp: number | null): StatePoint {
   return { ts, level, xp, map: null, x: null, y: null, z: null, eventCount: null, lastSeq: null, turn: null };
@@ -150,5 +151,29 @@ describe("runChartInput", () => {
     expect(c.states).toEqual(states);
     expect([c.startedAt, c.endedAt, c.now]).toEqual([T0, null, RESUME + HOUR]);
     expect(c.seams).toEqual([]);
+  });
+});
+
+describe("chartClock", () => {
+  test("a live run's chart follows the 1 Hz clock; an ended run's is not laid out again by it", () => {
+    createRoot((dispose) => {
+      const [now, setNow] = createSignal(1_000);
+      const [live, setLive] = createSignal(true);
+      let runs = 0;
+      const chart = createMemo(() => {
+        runs++;
+        return chartClock(live(), now);
+      });
+      expect(chart()).toBe(1_000);
+      setNow(2_000);
+      expect([chart(), runs]).toEqual([2_000, 2]);
+      // The run ends: the clock is read once more, then never tracked.
+      setLive(false);
+      expect([chart(), runs]).toEqual([2_000, 3]);
+      setNow(3_000);
+      setNow(4_000);
+      expect([chart(), runs]).toEqual([2_000, 3]);
+      dispose();
+    });
   });
 });

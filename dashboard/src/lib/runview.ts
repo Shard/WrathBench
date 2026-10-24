@@ -15,6 +15,7 @@
  * these reconstructed offsets, so the curve and the bands agree by construction.
  */
 
+import { untrack } from "solid-js";
 import type { ActiveSegment, StatePoint } from "@viewer/api-types";
 import { activeMsUntil, sessionClock } from "@viewer/sessions";
 import { fmtTokens, stamp } from "./format";
@@ -151,6 +152,16 @@ export function runChartInput(
       .slice(1)
       .map((at, i) => ({ at, label: `session ${i + 2} · resumed ${stamp(clock.startedAt[i + 1]!)}` })),
   };
+}
+
+/**
+ * The clock `runChartInput` is given: the 1 Hz signal while the run is live,
+ * its value read untracked once it is not. A run that is not live has a window
+ * that no longer moves (`runChartInput` closes it at the playtime), so the
+ * chart must not be laid out again every second for a curve that cannot change.
+ */
+export function chartClock(live: boolean, now: () => number): number {
+  return live ? now() : untrack(now);
 }
 
 /**
