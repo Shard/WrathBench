@@ -1,0 +1,39 @@
+{
+  "id": "compact-window-claude",
+  "version": 3,
+  "question": "On claude-code with a 1M-context model, what does compacting at 100k, 200k or 300k instead of the CLI's own auto window change in the tokens replayed, the cost and the progress of six hours of play?",
+  "note": "The claude-code half of the compaction-window comparison (operator, 2026-10-11: auto stays the default on every driver, and one arm each for auto, 100k, 200k and 300k on one release image). All four arms run the release build harness-0.5-1643-ge85bd729, pinned by digest, so only the window separates them. The control passes no window and runs the CLI's auto, which on a 1M-context model compacts near 967k in the pinned 2.1.309; each treatment passes --compact-window, which the driver hands the CLI as integer tokens and the CLI compacts about 33k below (its 20k summary reserve and 13k buffer), so near 67k, 167k and 267k. All three are under the model's context window, so none is capped (claudeWindowCapRefusal); 1M would be, and is not an arm. The clock is e360's six hours, not e90's ninety minutes, because a window changes nothing until the context has grown past it and most e90 runs never reach 300k; the auto arm is then an e360-length run under a probe's stamp, readable against the entry's own e360 history. The leash is e360's (idle 20 minutes, the no-XP watchdog off, the 12000-call guard), and the stop is the to-level-10 campaigns' level 10, which six hours seldom reaches (the entry's own e360 ended at level 8): most runs play the whole clock, and one that gets there gives a time to level 10. resume is false: a resumed claude-code run starts a fresh CLI with none of its history, a compaction to nothing that no window chose, so a paused run is a spent attempt and the next starts fresh. One cell, the subscription lanes' calibration start. The codex half is compact-window-codex@2, a campaign of its own because its 300k arm would be refused and a campaign's row bills one lane. Assignments are the store row's: sub-sonnet-55 (Claude Sonnet 5.5 on claude-code), one run per square (operator, 2026-10-20), on the first subscription lane (operator, 2026-10-23). Version 3 supersedes version 2, which was never started: its image's Claude Code 2.1.293 read the 200k and 300k windows, sent as `200k` and `300k`, as 100k (fixed in 2.1.304), so two of its treatments would have run a 100k window under other names. Version 3 changes only the arms' image, to the release build deployed when it was written, which pins Claude Code 2.1.309 and sends the window as integer tokens; the window figures above are 2.1.309's, read with --debug. The question, the arms, the cell, the leash and the stop are version 1's, as version 2's were; version 2 only re-pinned version 1, which was never started either, off a build long behind the release.",
+  "cells": [{ "id": "dwarf-paladin", "race": 3, "class": 2, "note": "The subscription lanes' scored start: the calibration cell." }],
+  "arms": [
+    {
+      "id": "auto",
+      "note": "The control: no window passed, the CLI's own auto.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:harness-0.5-1643-ge85bd729@sha256:9200567f73e768cbecf906ecb0c754232d9272ceb8d8df98fcb1cd3ff7e91208"
+    },
+    {
+      "id": "100k",
+      "note": "CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000: compacts near 67k.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:harness-0.5-1643-ge85bd729@sha256:9200567f73e768cbecf906ecb0c754232d9272ceb8d8df98fcb1cd3ff7e91208",
+      "args": ["--compact-window", "100k"]
+    },
+    {
+      "id": "200k",
+      "note": "CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000: compacts near 167k.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:harness-0.5-1643-ge85bd729@sha256:9200567f73e768cbecf906ecb0c754232d9272ceb8d8df98fcb1cd3ff7e91208",
+      "args": ["--compact-window", "200k"]
+    },
+    {
+      "id": "300k",
+      "note": "CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000: compacts near 267k.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:harness-0.5-1643-ge85bd729@sha256:9200567f73e768cbecf906ecb0c754232d9272ceb8d8df98fcb1cd3ff7e91208",
+      "args": ["--compact-window", "300k"]
+    }
+  ],
+  "objective": null,
+  "stopAtLevel": 10,
+  "budget": { "episodeMs": 21600000, "idleMs": 1200000, "noXpMs": null, "maxToolCalls": 12000 },
+  "wiki": true,
+  "wikiCoords": false,
+  "resume": false,
+  "maxAttemptsPerCell": 3
+}
