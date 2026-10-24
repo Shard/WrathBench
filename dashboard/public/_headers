@@ -1,0 +1,10 @@
+# Workers Static Assets header rules for the public site, read from the
+# assets directory (dashboard/dist) at deploy and never served as an asset.
+#
+# Everything under /assets/ is named by Vite after its own content hash, so a
+# file at a given URL never changes and the browser may keep it for a year
+# without asking again. Everything else, index.html first, keeps the platform
+# default (public, max-age=0, must-revalidate): index.html names the current
+# hashes, so it must be rechecked on every visit for a deploy to land.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

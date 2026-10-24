@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { FAMILIES } from "./model-catalogue";
-import { assetFile, iconPath, planAssets, readTar, selectIcons, type LogoCatalogue } from "./model-logos";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { assetFile, iconPath, paintWhiteAsText, planAssets, prepareSvg, readTar, selectIcons, type LogoCatalogue } from "./model-logos";
 
 /**
  * The logo fetch is one network call away from being untestable, so everything
@@ -176,5 +178,37 @@ describe("the committed catalogue", () => {
   test("every icon it names is a legal tarball path", () => {
     expect(FAMILIES.length).toBeGreaterThan(0);
     for (const f of FAMILIES) if (f.icon !== undefined) expect(iconPath(f.icon)).toMatch(/^package\/icons\/[a-z0-9._-]+\.svg$/);
+  });
+});
+
+describe("paintWhiteAsText", () => {
+  test("a shape painted white takes the text colour, however white is spelled", () => {
+    const svg = '<svg viewBox="0 0 24 24"><path d="M0 0h1v1H0z" fill="#1783FF"></path><path d="M2 2h1v1H2z" fill="#fff"></path><path fill="#FFFFFF"/><path fill="white"/></svg>';
+    expect(paintWhiteAsText(svg)).toBe(
+      '<svg viewBox="0 0 24 24"><path d="M0 0h1v1H0z" fill="#1783FF"></path><path d="M2 2h1v1H2z" fill="currentColor"></path><path fill="currentColor"/><path fill="currentColor"/></svg>',
+    );
+  });
+
+  test("white inside a clip path or a mask is geometry, and is left alone", () => {
+    const svg = '<svg><clipPath id="c"><path d="M0 0h24v24H0z" fill="#fff"></path></clipPath><mask id="m"><rect fill="white"/></mask><path fill="#fff"/></svg>';
+    expect(paintWhiteAsText(svg)).toBe(
+      '<svg><clipPath id="c"><path d="M0 0h24v24H0z" fill="#fff"></path></clipPath><mask id="m"><rect fill="white"/></mask><path fill="currentColor"/></svg>',
+    );
+  });
+
+  test("the fetch applies it, so a re-fetch writes the committed bytes", () => {
+    const archive = tar(tarEntry(iconPath("alpha-color"), '<svg viewBox="0 0 24 24"><path fill="#fff"/></svg>'), tarEntry(iconPath("beta"), SVG_B));
+    const [alpha] = selectIcons(CATALOGUE, readTar(archive));
+    expect(text(alpha!.svg)).toBe('<svg viewBox="0 0 24 24"><path fill="currentColor"/></svg>');
+  });
+
+  test("every committed logo is already prepared: no white paint, no title", () => {
+    const dir = join(import.meta.dir, "../dashboard/src/assets/model-logos");
+    const files = readdirSync(dir).filter((f) => f.endsWith(".svg"));
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      const svg = new Uint8Array(readFileSync(join(dir, file)));
+      expect(text(prepareSvg(svg))).toBe(text(svg));
+    }
   });
 });

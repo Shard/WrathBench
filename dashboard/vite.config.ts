@@ -1,6 +1,10 @@
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { defineConfig, type Plugin } from "vite";
 import solid from "vite-plugin-solid";
+import type { ModelCatalogue } from "../infra/model-catalogue.ts";
+import { clientCatalogue } from "./src/lib/catalogue-subset.ts";
+import { dataHints } from "./src/lib/data-hints.ts";
 import { ogTags, ogTagsFromEnv } from "./src/lib/og-tags.ts";
 
 /*
@@ -35,12 +39,38 @@ const viewerOrigin = process.env["WRATHBENCH_VIEWER_ORIGIN"] ?? "http://127.0.0.
 function ogMeta(): Plugin {
   return {
     name: "wrathbench-og-meta",
-    transformIndexHtml: (html) => html.replace("<!-- wrathbench:og -->", ogTags(ogTagsFromEnv(process.env))),
+    transformIndexHtml: (html) =>
+      html
+        .replace("<!-- wrathbench:og -->", ogTags(ogTagsFromEnv(process.env)))
+        // The data host's preconnect and manifest preload, public build only
+        // (`src/lib/data-hints.ts`).
+        .replace("<!-- wrathbench:data -->", dataHints(process.env["VITE_WRATHBENCH_SNAPSHOT_BASE"])),
+  };
+}
+
+const CATALOGUE_FILE =resolve(import.meta.dirname, "../infra/model-catalogue.json");
+
+/**
+ * The model catalogue as the browser gets it. `infra/model-catalogue.ts`
+ * imports the whole file, prices, notes and sources included, and all of it
+ * used to ship in the chunk every page with a model logo loads. The app reads
+ * only the lookup's fields, so the bundle gets `clientCatalogue`'s subset in
+ * place of the file (`src/lib/catalogue-subset.ts`): derived at each build, so
+ * there is nothing to regenerate and nothing to drift.
+ */
+function catalogueSubset(): Plugin {
+  return {
+    name: "wrathbench-catalogue-subset",
+    enforce: "pre",
+    load(id) {
+      if (id.split("?")[0] !== CATALOGUE_FILE) return null;
+      return JSON.stringify(clientCatalogue(JSON.parse(readFileSync(CATALOGUE_FILE, "utf8")) as ModelCatalogue));
+    },
   };
 }
 
 export default defineConfig({
-  plugins: [solid(), ogMeta()],
+  plugins: [solid(), ogMeta(), catalogueSubset()],
   resolve: {
     alias: { "@viewer": resolve(import.meta.dirname, "../runner/viewer") },
   },
