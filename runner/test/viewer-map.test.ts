@@ -18,6 +18,7 @@ import {
   lodGrid,
   lodServedName,
   lodTileName,
+  nativeServedName,
   pixelToWorld,
   tileToCoord,
   tileToWorld,
@@ -205,7 +206,15 @@ describe("pyramid tile paths", () => {
     const ref = parseTilePath("/tiles/0/minimap/3/5_3.png");
     expect(ref).toEqual({ map: 0, row: 5, col: 3, lod: { layer: "minimap", z: 3 }, legacy: true });
     expect(tileRefPath(ref!)).toBe(`/tiles/0/${lodTileName("minimap", 3, 5, 3)}`);
-    expect(parseTilePath("/tiles/0/43_31.webp")).toBeNull();
+  });
+
+  test("a native parses as .webp, the spelling its index names, and as the .png every older build asks for", () => {
+    const webp = parseTilePath("/tiles/0/43_31.webp");
+    expect(webp).toEqual({ map: 0, row: 43, col: 31, webp: true });
+    expect(tileRefPath(webp!)).toBe(`/tiles/0/${nativeServedName(43, 31)}`);
+    expect(parseTilePath("/tiles/0/43_31.png")).toEqual({ map: 0, row: 43, col: 31 });
+    expect(parseTilePath("/tiles/0/64_0.webp")).toBeNull();
+    expect(parseTilePath("/tiles/0/43_31.jpg")).toBeNull();
   });
 
   test("a level outside 1..LOD_MAX, a layer not on the list, or a cell outside the level's grid is rejected", () => {
