@@ -456,7 +456,9 @@ export interface RunRow {
   questsCompleted: number | null;
   /**
    * What the character wears and carries, from the newest state sample that
-   * recorded it. Null on runs that predate the `items` column.
+   * recorded it. Null on runs that predate the `items` column, and on every
+   * listing row (`/api/runs`, which reads the store's items-free aggregate):
+   * only a run's own detail carries it.
    */
   items: ItemSample[] | null;
   mtime: number | null;

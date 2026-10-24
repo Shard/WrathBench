@@ -23,11 +23,11 @@
 import type { Database } from "bun:sqlite";
 import { openRunDb } from "../src/rundb";
 import { STALL_PAUSE } from "../src/lapse";
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentPosition, CharacterStatus, MoveIntentView, RunRow } from "./api-types";
-import { runRowOf, type RunStore } from "./clickhouse";
-import { listRuns, readMoves, readQuestCounts } from "./runs";
+import { STORE_LAG_MS, runRowOf, type RunStore } from "./clickhouse";
+import { listRuns } from "./runs";
 import { questsAcrossRestarts } from "./results";
 import { readPositionTrace } from "./trace-db";
 import { nearbyFresh } from "./nearby-ring";
@@ -90,50 +90,65 @@ export function readLatestPosition(
   runsDir: string,
   runId: string,
 ): ({ map: number; x: number; y: number; ts: number } & PositionGauges) | null {
+  return withRunDb(runsDir, runId, null, (db) => latestPositionIn(db, runId));
+}
+
+type LatestPosition = { map: number; x: number; y: number; ts: number } & PositionGauges;
+
+/**
+ * Open a run's `run.sqlite` readonly, hand it to `read`, and close it; `none`
+ * when there is no file or it will not open, and when `read` throws. One open
+ * per run per feed: the map asks four questions of the same file.
+ */
+function withRunDb<T>(runsDir: string, runId: string, none: T, read: (db: Database) => T): T {
   const path = join(runsDir, runId, "run.sqlite");
-  if (!existsSync(path)) return null;
+  if (!existsSync(path)) return none;
   let db: Database;
   try {
     db = openRunDb(path, { readonly: true });
   } catch {
-    return null;
+    return none;
   }
   try {
-    const cols = stateColumns(db);
-    for (const c of ["ts", "map", "x", "y"]) if (!cols.has(c)) return null;
-    // Column names are our own literals, never input; a run that predates them
-    // simply selects fewer, and every gauge below reads null.
-    const extra = GAUGE_COLUMNS.filter((c) => cols.has(c));
-    const r = db
-      .query(
-        `SELECT ts, map, x, y${extra.length === 0 ? "" : `, ${extra.join(", ")}`} FROM state
-         WHERE run_id = ? AND map IS NOT NULL AND x IS NOT NULL AND y IS NOT NULL
-         ORDER BY ts DESC LIMIT 1`,
-      )
-      .get(runId) as Record<string, unknown> | null;
-    if (r === null) return null;
-    const ts = num(r["ts"]);
-    const map = num(r["map"]);
-    const x = num(r["x"]);
-    const y = num(r["y"]);
-    if (ts === null || map === null || x === null || y === null) return null;
-    return {
-      map,
-      x,
-      y,
-      ts,
-      health: num(r["health"]),
-      maxHealth: num(r["max_health"]),
-      power: num(r["power"]),
-      maxPower: num(r["max_power"]),
-      powerType: num(r["power_type"]),
-      nextLevelXp: num(r["next_level_xp"]),
-    };
+    return read(db);
   } catch {
-    return null;
+    return none;
   } finally {
     db.close();
   }
+}
+
+function latestPositionIn(db: Database, runId: string): LatestPosition | null {
+  const cols = stateColumns(db);
+  for (const c of ["ts", "map", "x", "y"]) if (!cols.has(c)) return null;
+  // Column names are our own literals, never input; a run that predates them
+  // simply selects fewer, and every gauge below reads null.
+  const extra = GAUGE_COLUMNS.filter((c) => cols.has(c));
+  const r = db
+    .query(
+      `SELECT ts, map, x, y${extra.length === 0 ? "" : `, ${extra.join(", ")}`} FROM state
+       WHERE run_id = ? AND map IS NOT NULL AND x IS NOT NULL AND y IS NOT NULL
+       ORDER BY ts DESC LIMIT 1`,
+    )
+    .get(runId) as Record<string, unknown> | null;
+  if (r === null) return null;
+  const ts = num(r["ts"]);
+  const map = num(r["map"]);
+  const x = num(r["x"]);
+  const y = num(r["y"]);
+  if (ts === null || map === null || x === null || y === null) return null;
+  return {
+    map,
+    x,
+    y,
+    ts,
+    health: num(r["health"]),
+    maxHealth: num(r["max_health"]),
+    power: num(r["power"]),
+    maxPower: num(r["max_power"]),
+    powerType: num(r["power_type"]),
+    nextLevelXp: num(r["next_level_xp"]),
+  };
 }
 
 /**
@@ -150,14 +165,54 @@ export function readLatestPosition(
 export function readLatestStatus(runsDir: string, runId: string): CharacterStatus | null {
   const path = join(runsDir, runId, "episodic.jsonl");
   if (!existsSync(path)) return null;
+  /*
+   * The tail first: the newest good line is all this wants, and the file only
+   * grows with the run. Read whole only when the tail holds no good line —
+   * a file shorter than the window, or one whose last lines are all broken.
+   */
+  const tail = readTail(path, STATUS_TAIL_BYTES);
+  if (tail !== null) {
+    const fromTail = latestStatusIn(tail.text, tail.cut);
+    if (fromTail !== null || !tail.cut) return fromTail;
+  }
   let text: string;
   try {
     text = readFileSync(path, "utf8");
   } catch {
     return null;
   }
+  return latestStatusIn(text, false);
+}
+
+/** How much of the episodic file's end is read for its newest line: a dozen of its ~600-char lines. */
+const STATUS_TAIL_BYTES = 8 * 1024;
+
+/** The last `bytes` of a file, and whether that is less than all of it; null when it will not read. */
+function readTail(path: string, bytes: number): { text: string; cut: boolean } | null {
+  let fd: number;
+  try {
+    fd = openSync(path, "r");
+  } catch {
+    return null;
+  }
+  try {
+    const size = fstatSync(fd).size;
+    const start = Math.max(0, size - bytes);
+    const buf = Buffer.alloc(size - start);
+    const n = readSync(fd, buf, 0, buf.length, start);
+    return { text: buf.subarray(0, n).toString("utf8"), cut: start > 0 };
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** The newest good entry in episodic text; a cut text's first line is a fragment and is skipped. */
+function latestStatusIn(text: string, cut: boolean): CharacterStatus | null {
   let latest: CharacterStatus | null = null;
-  for (const line of text.split("\n")) {
+  const lines = text.split("\n");
+  for (const line of cut ? lines.slice(1) : lines) {
     if (line.trim().length === 0) continue;
     try {
       const e = JSON.parse(line) as Record<string, unknown>;
@@ -185,38 +240,97 @@ export function readLatestStatus(runsDir: string, runId: string): CharacterStatu
  * column it did not record — and a run that predates it was never reflecting.
  */
 export function readReflecting(runsDir: string, runId: string): boolean {
-  const path = join(runsDir, runId, "run.sqlite");
-  if (!existsSync(path)) return false;
-  let db: Database;
-  try {
-    db = openRunDb(path, { readonly: true });
-  } catch {
-    return false;
-  }
-  try {
-    const cols = db.query(`PRAGMA table_info(run)`).all() as { name?: unknown }[];
-    if (!cols.some((c) => String(c.name) === "reflecting_since")) return false;
-    const r = db.query(`SELECT reflecting_since AS since FROM run WHERE run_id = ?`).get(runId) as
-      | { since?: unknown }
-      | null;
-    return typeof r?.since === "number";
-  } catch {
-    return false;
-  } finally {
-    db.close();
-  }
+  return withRunDb(runsDir, runId, false, (db) => reflectingIn(db, runId));
+}
+
+function reflectingIn(db: Database, runId: string): boolean {
+  const cols = db.query(`PRAGMA table_info(run)`).all() as { name?: unknown }[];
+  if (!cols.some((c) => String(c.name) === "reflecting_since")) return false;
+  const r = db.query(`SELECT reflecting_since AS since FROM run WHERE run_id = ?`).get(runId) as
+    | { since?: unknown }
+    | null;
+  return typeof r?.since === "number";
 }
 
 /**
  * The newest movement intention a run recorded, or null.
  *
- * The whole table is read and the last row taken rather than a `LIMIT 1`
- * query, because `readMoves` is the one place that knows the table may not
- * exist at all; a run's intentions are a handful of rows an hour.
+ * The row `readMoves` would list last — the newest by `ts` with a whole
+ * position, the later-written on a tie — asked for as one row. Reading the
+ * table to keep its last row was ~32k rows a poll on a long run, for every
+ * agent on the map. A run whose table does not exist reads null, as an empty
+ * one does.
  */
 export function readLatestMove(runsDir: string, runId: string): MoveIntentView | null {
-  const moves = readMoves(runsDir, runId);
-  return moves.length === 0 ? null : moves[moves.length - 1]!;
+  return withRunDb(runsDir, runId, null, (db) => latestMoveIn(db, runId));
+}
+
+function latestMoveIn(db: Database, runId: string): MoveIntentView | null {
+  const r = db
+    .query(
+      `SELECT ts, map, x, y, z, target, status FROM move
+        WHERE run_id = ? AND x IS NOT NULL AND y IS NOT NULL AND z IS NOT NULL
+        ORDER BY ts DESC, rowid DESC LIMIT 1`,
+    )
+    .get(runId) as Record<string, unknown> | null;
+  if (r === null) return null;
+  const x = num(r["x"]);
+  const y = num(r["y"]);
+  const z = num(r["z"]);
+  if (x === null || y === null || z === null) return null;
+  return {
+    ts: num(r["ts"]) ?? 0,
+    map: num(r["map"]),
+    x,
+    y,
+    z,
+    target: typeof r["target"] === "string" ? r["target"] : null,
+    status: typeof r["status"] === "string" ? r["status"] : null,
+  };
+}
+
+/** `readQuestCounts` (`runs.ts`) over an open database: every sample's quest count, oldest first. */
+function questCountsIn(db: Database, runId: string): { questsCompleted: number | null }[] {
+  if (!stateColumns(db).has("quests_completed")) return [];
+  const rows = db
+    .query(`SELECT quests_completed AS q FROM state WHERE run_id = ? AND quests_completed IS NOT NULL ORDER BY ts`)
+    .all(runId) as { q: unknown }[];
+  return rows.map((r) => ({ questsCompleted: num(r.q) }));
+}
+
+/** What the map asks of one run's `run.sqlite`, off one open of it. */
+interface RunDbReading {
+  pos: LatestPosition | null;
+  quests: { questsCompleted: number | null }[];
+  move: MoveIntentView | null;
+  reflecting: boolean;
+}
+
+/**
+ * Each question in its own guard, as when each opened the file itself: one
+ * that throws (a table an old run never had) answers its own empty value and
+ * costs the others nothing.
+ */
+function readRunDb(runsDir: string, runId: string): RunDbReading {
+  const none: RunDbReading = { pos: null, quests: [], move: null, reflecting: false };
+  return withRunDb(runsDir, runId, none, (db) => {
+    const guard = <T>(empty: T, read: () => T): T => {
+      try {
+        return read();
+      } catch {
+        return empty;
+      }
+    };
+    const pos = guard(null, () => latestPositionIn(db, runId));
+    // Nothing else is asked of a run that is not on the map.
+    if (pos === null) return none;
+    return {
+      pos,
+      quests: guard([], () => questCountsIn(db, runId)),
+      move: guard(null, () => latestMoveIn(db, runId)),
+      reflecting: guard(false, () => reflectingIn(db, runId)),
+    };
+  });
 }
 
 /**
@@ -233,13 +347,15 @@ export function readLatestMove(runsDir: string, runId: string): MoveIntentView |
 function positionOf(runsDir: string, run: RunRow, now: number, windowMs: number): AgentPosition | null {
   if (run.terminationReason !== null) return null;
   if (run.pauseReason === STALL_PAUSE) return null;
-  const pos = readLatestPosition(runsDir, run.runId);
+  // One open of the run's database for every question below it answers.
+  const db = readRunDb(runsDir, run.runId);
+  const pos = db.pos;
   if (pos === null) return null;
   if (now - pos.ts > windowMs) return null;
   // The row's quest count is its newest sample's, which a resume starts again
   // at zero: the feed carries the whole run's instead, as the run page does,
   // so every `run.questsCompleted` below reads the sum.
-  run = { ...run, questsCompleted: questsAcrossRestarts(readQuestCounts(runsDir, run.runId)) ?? run.questsCompleted };
+  run = { ...run, questsCompleted: questsAcrossRestarts(db.quests) ?? run.questsCompleted };
   // One range read over the last few windows (`trace-db.ts`); null on a run
   // that recorded no trace, which leaves the field off.
   const trace = readPositionTrace(runsDir, run.runId, now);
@@ -274,12 +390,12 @@ function positionOf(runsDir: string, run: RunRow, now: number, windowMs: number)
     class: run.class,
     // Where it is trying to get to. Not aged here: the map decides what a
     // stale intention looks like, the same way it decides for a pip.
-    move: readLatestMove(runsDir, run.runId),
+    move: db.move,
     // What the character last said it was doing, and whether it is thinking
     // rather than acting right now. Neither is aged either, for the same
     // reason: staleness is the reader's call, not the feed's.
     status: readLatestStatus(runsDir, run.runId),
-    reflecting: readReflecting(runsDir, run.runId),
+    reflecting: db.reflecting,
     // Where it has been, second by second: the newest closed windows and the
     // tail, so the map can play the last minutes back rather than jump.
     ...(trace === null ? {} : { trace }),
@@ -329,6 +445,15 @@ export function readPositions(
  *
  * Like every listing route, a run the collector has not reached yet is not
  * listed until it has; that is the first seconds of a run's life.
+ *
+ * Only the runs that could be on the map are opened at all: unterminated, and
+ * with a trajectory the store last saw inside the window (plus the store's own
+ * lag behind the files). Every state sample is written to the trajectory as
+ * well as to `run.sqlite`, so a run whose trajectory has been quiet longer
+ * than the window has no position inside it either; the fleet's hundred-odd
+ * paused runs were each a database open a poll for nothing. A row with no
+ * recorded mtime is kept, as unknown. And the latest readings are the
+ * listing's `items`-free aggregate: nothing on the map reads an inventory.
  */
 export async function positionsFromStore(
   store: RunStore,
@@ -336,8 +461,16 @@ export async function positionsFromStore(
   now = Date.now(),
   windowMs = POSITION_WINDOW_MS,
 ): Promise<AgentPosition[]> {
-  const [rows, latest] = await Promise.all([store.runRows(), store.latestStates()]);
-  const runs = rows.filter((r) => r.archived === 0).map((r) => runRowOf(r, latest.get(r.run_id), now));
+  const [rows, latest] = await Promise.all([store.runRows(), store.latestReadings()]);
+  const since = now - windowMs - STORE_LAG_MS;
+  const runs = rows
+    .filter(
+      (r) =>
+        r.archived === 0 &&
+        r.termination_reason.length === 0 &&
+        (r.trajectory_mtime === 0 || r.trajectory_mtime >= since),
+    )
+    .map((r) => runRowOf(r, latest.get(r.run_id), now));
   runs.sort((a, b) => (b.startedAt ?? b.mtime ?? 0) - (a.startedAt ?? a.mtime ?? 0));
   return positionsOf(runsDir, runs, now, windowMs);
 }
