@@ -1152,16 +1152,18 @@ is the documented repair for exactly this.
 The entire write cost is live runs, and the two levers on it are the cadence
 and per-aggregate addressing.
 
-A steady pass now makes 14 PUTs. Passes
-run about every 6.7 minutes, because a pass takes one to two minutes on top of
-the interval. That is about 90k class-A ops a month. Trace segments add one PUT
-per live character per closed window, and that count does not depend on the
-cadence: a window closes every five minutes, whenever the pass that uploads it
-runs. A character live around the clock adds 288 a day, about **8.6k a month**.
-Three such characters take the month to about 116k, roughly 12% of the free
-tier. Nothing else per pass moves but one: the tail rides inside the
-`live.json` PUT already made, and the window list inside a `track.json` a live
-run rewrites every pass anyway. The units around the live characters are one
+A steady pass was estimated at 14 PUTs and about 90k class-A ops a month.
+Measured with five characters live (three probes, two freeplay), it is
+nearer three times that: 35 passes in about 3.2 hours, one every 5.5 minutes
+or so, averaged 39 PUTs, which is about 300k a month, roughly 30% of the free
+tier. Live characters are what move it: each one's aggregates change every
+pass, and trace segments add one PUT per live character per closed window.
+That segment count does not depend on the cadence: a window closes every
+five minutes, whenever the pass that uploads it runs. A character live around
+the clock adds 288 a day, about **8.6k a month**, from its segments alone.
+The tail costs nothing extra: it rides inside the `live.json` PUT already
+made, and the window list inside a `track.json` a live run rewrites every
+pass anyway. The units around the live characters are one
 `nearby.json` PUT per pass while any has units, about 9k a month at most.
 
 Unverified at research time (primary pages blocked from the research
