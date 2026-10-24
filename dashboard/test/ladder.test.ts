@@ -26,6 +26,7 @@ import {
 } from "../src/lib/axes";
 import { paretoSteps } from "../src/lib/pareto";
 import { MARK_PITCH, entryLines, runLines, runLinesLayout, spreadMarks } from "../src/lib/runlines";
+import { modelEntries } from "../src/lib/ladderfilter";
 import { fmtPlaytimeTick } from "../src/lib/format";
 import {
   CUE_PAD,
@@ -1910,6 +1911,19 @@ describe("runLines — a tier's runs as xp against active playtime", () => {
       const permuted = spreadMarks(perm.map((i) => marks[i]!), box);
       expect(permuted).toEqual(perm.map((i) => ys[i]!));
     });
+  });
+
+  test("modelEntries: one row per entry, served as its latest run was, first run at its earliest", () => {
+    const rows = modelEntries([
+      run({ runId: "a", model: "sonnet", startedAt: 100, resolvedModel: "claude-sonnet-5", xpEarned: 100, actualCost: fig(2, "reported") }),
+      run({ runId: "b", model: "sonnet", startedAt: 300, resolvedModel: "claude-sonnet-5-5", xpEarned: 300, actualCost: fig(4, "reported") }),
+      run({ runId: "c", model: "sonnet", effort: "high", startedAt: 200, xpEarned: 50 }),
+      run({ runId: "u", model: "sonnet", startedAt: 1, unscored: "unscored (scripted stub)" }),
+    ]);
+    expect(rows).toEqual([
+      { key: "sonnet", served: "claude-sonnet-5-5", firstRun: 100, cost: 3, xp: 200 },
+      { key: "sonnet (high)", served: "sonnet", firstRun: 200, cost: null, xp: null },
+    ]);
   });
 
   test("a playtime tick reads off a clock", () => {
