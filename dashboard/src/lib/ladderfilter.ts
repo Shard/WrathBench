@@ -7,6 +7,8 @@
  *
  *  - `representativeEfforts` — the default-on rule that hides the effort
  *    variants a model's own better efforts already dominate.
+ *  - `currentModels` — the default-on rule that hides every model of a line
+ *    but its newest, unless the field's front keeps it.
  *  - `lineOf` — the model *line* a slug belongs to, which is the "family" a
  *    reader means when they say sonnet, fable or astra.
  *  - `companyOf` — who makes it, which the model catalogue records.
@@ -30,9 +32,12 @@
  * becoming nothing.
  */
 
-import { familyOf, weightsOf } from "../../../infra/model-catalogue";
+import { catalogueKeyOf, familyOf, weightsOf } from "../../../infra/model-catalogue";
 
 export { weightsOf };
+import type { ResultRun } from "@viewer/api-types";
+import { COST, XP } from "./axes";
+import { ladderPoints, pointKey, scored } from "./ladder";
 import { paretoFront } from "./pareto";
 
 /* ------------------------------------------------------------ the two keys */
@@ -188,4 +193,146 @@ export function representativeEfforts<E extends EffortEntry>(rows: readonly E[])
   }
   // Input order, so a caller's sort survives the filter.
   return rows.filter((row) => keep.has(row));
+}
+
+/* ------------------------------------------------------ the current-models rule */
+
+/**
+ * A model id's version, as the numbers it is spelled with: `claude-opus-4-8`
+ * is [4, 8], `gpt-6.1-sol` [6, 1], `deepseek-v4.1-flash` [4, 1],
+ * `qwen3.8-27b` [3, 8], `claude-haiku-4-5-20251001` [4, 5]. Null for an id
+ * that carries none (`deepseek-flash`, `gpt-oss-120b`, `sonnet`).
+ *
+ * The first dash-separated token that is a number, a dotted number, or one
+ * after a name (`v4.1`, `k3.1`, `m3`, `qwen3.8`), then any one- or two-digit
+ * tokens straight after it — Anthropic's ids spell 4.8 as `4-8`. A size
+ * (`27b`, `a12b`) is not a version, and neither is a date (`0731`,
+ * `20251001`): four digits or more ends a version and never starts one.
+ */
+export function modelVersion(model: string | null | undefined): number[] | null {
+  const tokens = baseSlug(model ?? "").split("-");
+  for (let i = 0; i < tokens.length; i++) {
+    const m = /^[a-z]*(\d+(?:\.\d+)*)$/.exec(tokens[i]!);
+    if (m === null || /^\d{4,}$/.test(m[1]!)) continue;
+    const version = m[1]!.split(".").map(Number);
+    for (let j = i + 1; j < tokens.length && /^\d{1,2}$/.test(tokens[j]!); j++) version.push(Number(tokens[j]));
+    return version;
+  }
+  return null;
+}
+
+/** Newer first: component by component, a missing one reading as zero (5 is 5.0, older than 5.1). */
+export function compareVersions(a: readonly number[], b: readonly number[]): number {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (b[i] ?? 0) - (a[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/** One roster entry as the current-models rule reads it. */
+export interface ModelEntry {
+  /**
+   * The model the entry's runs were served: the provider's `resolvedModel`
+   * where it reported one, the configured id otherwise. It is what puts the
+   * CLI alias `sonnet` in the `claude-sonnet` line, as the model it ran.
+   */
+  served: string;
+  /** When that model's first run in the field started, epoch ms: the last-resort order. */
+  firstRun: number | null;
+  /** Mean cost and XP per run, as the effort rule reads them; null where the entry has no reading. */
+  cost: number | null;
+  xp: number | null;
+}
+
+/**
+ * The entries of each model line's newest model, and of any older model the
+ * field has not left behind.
+ *
+ * The operator's rule (2026-10-24): within a line (`lineOf` the served id —
+ * claude-opus-4-8 and claude-opus-5-5 are both `claude-opus`), keep only the
+ * newest model, so the ladder reads one Haiku, one Sonnet, one Opus and one
+ * Fable rather than every release the fleet has run. The one exception is an
+ * entry on the field's cost-against-XP Pareto front: an older model nothing
+ * beats on both axes is still an answer, and it stays. The front is over every
+ * entry given — across lines and models, unlike `representativeEfforts`,
+ * whose front is one model's — on fixed axes, so the set does not change with
+ * the axes chips. An entry with no cost or no XP reading can only be kept by
+ * being the newest.
+ *
+ * "Newest" is the version the id is spelled with (`modelVersion`): the
+ * catalogue records no release dates, and the ids carry the order already.
+ * Two spellings of one model (`gpt-6-luna` through codex and
+ * `openai/gpt-6-luna` through OpenRouter, one entry in the catalogue) are one
+ * model. A line where some model's id carries no version — a platform alias
+ * such as `deepseek-flash`, a stealth name — cannot be ordered that way, and is
+ * ordered by when each model first ran in the field instead. Ties keep every
+ * model tied.
+ *
+ * Pure; the page applies it beside the effort rule, to the same set, so the
+ * chart and the table agree.
+ */
+export function currentModels<E extends ModelEntry>(rows: readonly E[]): E[] {
+  const keep = new Set<E>(
+    paretoFront(
+      rows.flatMap((row) => (row.cost === null || row.xp === null ? [] : [{ x: row.cost, y: row.xp, row }])),
+      { x: "lower", y: "higher" },
+    ).map((m) => m.row),
+  );
+  const identity = (row: E): string => catalogueKeyOf(row.served) ?? baseSlug(row.served);
+  const byLine = new Map<string, E[]>();
+  for (const row of rows) {
+    const line = lineOf(row.served);
+    const list = byLine.get(line);
+    if (list === undefined) byLine.set(line, [row]);
+    else list.push(row);
+  }
+  for (const list of byLine.values()) {
+    const models = new Map<string, { version: number[] | null; firstRun: number }>();
+    for (const row of list) {
+      const id = identity(row);
+      const first = row.firstRun ?? Infinity;
+      const have = models.get(id);
+      if (have === undefined) models.set(id, { version: modelVersion(row.served), firstRun: first });
+      else have.firstRun = Math.min(have.firstRun, first);
+    }
+    const all = [...models.values()];
+    const byVersion = all.every((m) => m.version !== null);
+    const newer = (a: (typeof all)[number], b: (typeof all)[number]): number =>
+      byVersion ? compareVersions(a.version!, b.version!) : a.firstRun === b.firstRun ? 0 : b.firstRun - a.firstRun;
+    const newest = all.reduce((best, m) => (newer(m, best) < 0 ? m : best));
+    for (const row of list) {
+      if (newer(models.get(identity(row))!, newest) === 0) keep.add(row);
+    }
+  }
+  // Input order, so a caller's sort survives the filter.
+  return rows.filter((row) => keep.has(row));
+}
+
+/**
+ * The rule's rows for a set of runs: one per entry (`pointKey`) of the scored
+ * runs, served as its most recent run was, first run at its earliest, and cost
+ * and XP as the scatter's default view means them (`ladderPoints`) where the
+ * entry has both readings.
+ */
+export function modelEntries(runs: readonly ResultRun[]): (ModelEntry & { key: string })[] {
+  const means = new Map(ladderPoints(runs, COST, XP).points.map((p) => [p.key, p]));
+  const entries = new Map<string, { latest: ResultRun; firstRun: number | null }>();
+  for (const r of scored(runs)) {
+    const key = pointKey(r.model ?? "(unnamed)", r.effort, r.compactWindow);
+    const have = entries.get(key);
+    if (have === undefined) {
+      entries.set(key, { latest: r, firstRun: r.startedAt });
+      continue;
+    }
+    if ((r.startedAt ?? -Infinity) > (have.latest.startedAt ?? -Infinity)) have.latest = r;
+    if (r.startedAt !== null && (have.firstRun === null || r.startedAt < have.firstRun)) have.firstRun = r.startedAt;
+  }
+  return [...entries].map(([key, e]) => ({
+    key,
+    served: e.latest.resolvedModel ?? e.latest.model ?? "(unnamed)",
+    firstRun: e.firstRun,
+    cost: means.get(key)?.x ?? null,
+    xp: means.get(key)?.y ?? null,
+  }));
 }

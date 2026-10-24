@@ -72,9 +72,11 @@ import {
 } from "../lib/ladder";
 import {
   companyOf,
+  currentModels,
   filterOptions,
   lineOf,
   matchesSelection,
+  modelEntries,
   representativeEfforts,
   weightsOf,
 } from "../lib/ladderfilter";
@@ -185,6 +187,9 @@ export default function Ladder() {
    */
   const representative = (): boolean =>
     !freeplay() && (Array.isArray(params.efforts) ? params.efforts[0] : params.efforts) !== "all";
+  /** The model rule, the same way: ON by default, `?models=all` the one form that turns it off. */
+  const current = (): boolean =>
+    !freeplay() && (Array.isArray(params.models) ? params.models[0] : params.models) !== "all";
   /*
    * Which chart a scored tier draws: the scatter of roster entries, the
    * default, or every run as a line of xp against active playtime
@@ -232,10 +237,26 @@ export default function Ladder() {
     );
     return new Set(points.filter((p) => !kept.has(p.key)).map((p) => p.key));
   });
+  /*
+   * The entries the model rule hides (`currentModels`): every model but each
+   * line's newest, unless the field's cost-against-xp front keeps it. Over
+   * the same set as the effort rule and independent of it, so the two
+   * compose in either order; the efforts of a kept model are still the
+   * effort rule's to judge.
+   */
+  const outdated = createMemo((): Set<string> => {
+    if (!current()) return new Set();
+    const entries = modelEntries(narrowed());
+    const kept = new Set(currentModels(entries).map((e) => e.key));
+    return new Set(entries.filter((e) => !kept.has(e.key)).map((e) => e.key));
+  });
   const runs = createMemo(() =>
-    hidden().size === 0
+    hidden().size === 0 && outdated().size === 0
       ? narrowed()
-      : narrowed().filter((r) => !hidden().has(pointKey(r.model ?? "(unnamed)", r.effort, r.compactWindow))),
+      : narrowed().filter((r) => {
+          const key = pointKey(r.model ?? "(unnamed)", r.effort, r.compactWindow);
+          return !hidden().has(key) && !outdated().has(key);
+        }),
   );
   /*
    * What the reader is pointing at, shared by the scatter and the table so
@@ -395,6 +416,17 @@ export default function Ladder() {
               onChange={(e) => setParams({ efforts: e.currentTarget.checked ? undefined : "all" }, { replace: true })}
             />
             <span>representative efforts</span>
+          </label>
+          <label
+            class="filter check"
+            title="Hides every model but the newest of its line (Opus 4.8 behind Opus 5.5), unless nothing in the field beats it on both cost and xp."
+          >
+            <input
+              type="checkbox"
+              checked={current()}
+              onChange={(e) => setParams({ models: e.currentTarget.checked ? undefined : "all" }, { replace: true })}
+            />
+            <span>current models</span>
           </label>
         </Show>
         </div>

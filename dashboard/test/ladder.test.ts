@@ -26,6 +26,7 @@ import {
 } from "../src/lib/axes";
 import { paretoSteps } from "../src/lib/pareto";
 import { MARK_PITCH, entryLines, runLines, runLinesLayout, spreadMarks } from "../src/lib/runlines";
+import { modelEntries } from "../src/lib/ladderfilter";
 import { fmtPlaytimeTick } from "../src/lib/format";
 import {
   CUE_PAD,
@@ -840,7 +841,7 @@ describe("ladderPoints over another pair of axes", () => {
   test("the layout takes the x spec's scale: linear ticks from zero, no gutter, no minor lines", () => {
     const box = { x0: 60, x1: 960, y0: 340, y1: 20 };
     const point = (key: string, turns: number, level: number): LadderPoint => ({
-      key, label: key, single: false, model: key, effort: null, x: turns, y: level, metrics: bag({ turns, level }), runs: 2, n: 2, basis: null, asIfMetered: false, harnesses: ["wrathbench"],
+      key, label: key, single: false, model: key, effort: null, x: turns, y: level, metrics: bag({ turns, level }), runs: 2, n: 2, basis: null, asIfMetered: false, harnesses: ["wrathbench"], gold: null,
     });
     const l = ladderChartLayout([point("a", 120, 4), point("b", 430, 6)], box, TURNS, LEVEL);
     expect(l.xScale).toBe("linear");
@@ -901,7 +902,7 @@ describe("ladderChartLayout", () => {
   // point sits where it did on the plot.
   const pt = (key: string, x: number, y0: number): LadderPoint => {
     const y = (y0 * 27) / 25;
-    return { key, label: key, single: true, model: key, effort: null, x, y, metrics: bag({ cost: x, xp: y }), runs: 1, n: 1, basis: "reported", asIfMetered: false, harnesses: ["wrathbench"] };
+    return { key, label: key, single: true, model: key, effort: null, x, y, metrics: bag({ cost: x, xp: y }), runs: 1, n: 1, basis: "reported", asIfMetered: false, harnesses: ["wrathbench"], gold: null };
   };
 
   test("a free entry sits in the gutter, the dearest point at the ceiling on the right edge", () => {
@@ -964,6 +965,27 @@ describe("ladderChartLayout", () => {
     }
     return [...dense, pt("dear-and-far", 40, 2400), pt("mid-outlier", 6, 1300), pt("cheap-outlier", 0.05, 700), pt("free-corner", 0, 0)];
   };
+
+  test("standing labels only for the set given; a hover-only label is placed against them and moves none", () => {
+    const points = cluster();
+    const standing = new Set(["dear-and-far", "mid-outlier", "model-a (low)"]);
+    const l = ladderChartLayout(points, box, COST, XP, standing);
+    expect(l.placed.filter((d) => d.labelled).map((d) => d.point.key).sort()).toEqual([...standing].sort());
+    // Rename every other label to something much longer: the standing ones do not move, so the others never pushed them.
+    const only = (x: typeof l) => x.placed.filter((d) => d.labelled).map((d) => [d.point.key, d.labelX, d.labelY]);
+    const renamed = points.map((p) => (standing.has(p.key) ? p : { ...p, label: `${p.label} with a much longer name` }));
+    expect(only(ladderChartLayout(renamed, box, COST, XP, standing))).toEqual(only(l));
+    // A hover-only label avoids every standing label and every mark when it can.
+    for (const d of l.placed.filter((d) => !d.labelled && !d.crowded)) {
+      for (const o of l.placed) {
+        expect(rectsOverlap(d.rect, puckRect(o.cx, o.cy))).toBe(false);
+        if (o.labelled) expect(rectsOverlap(d.rect, o.rect)).toBe(false);
+      }
+    }
+    // The order is the importance order either way, and omitting the set labels everything.
+    expect(l.placed.map((d) => d.point.key)).toEqual(ladderChartLayout(points, box).placed.map((d) => d.point.key));
+    expect(ladderChartLayout(points, box).placed.every((d) => d.labelled)).toBe(true);
+  });
 
   test("a dense cluster: no label over a label or a mark, leaders only past ring 1, none crossing, all inside", () => {
     const l = ladderChartLayout(cluster(), box);
@@ -1673,7 +1695,7 @@ describe("the xp axis ticks at level boundaries", () => {
   test("the layout takes the spec's ticks on either axis", () => {
     const box = { x0: 60, x1: 960, y0: 340, y1: 20 };
     const point = (key: string, x: number, y: number, xp: number): LadderPoint => ({
-      key, label: key, single: false, model: key, effort: null, x, y, metrics: bag({ xp }), runs: 2, n: 2, basis: null, asIfMetered: false, harnesses: ["wrathbench"],
+      key, label: key, single: false, model: key, effort: null, x, y, metrics: bag({ xp }), runs: 2, n: 2, basis: null, asIfMetered: false, harnesses: ["wrathbench"], gold: null,
     });
     // y: the default view.
     const onY = ladderChartLayout([point("a", 1, 9000, 9000), point("b", 3, 3000, 3000)], box, COST, XP);
@@ -1910,6 +1932,19 @@ describe("runLines — a tier's runs as xp against active playtime", () => {
       const permuted = spreadMarks(perm.map((i) => marks[i]!), box);
       expect(permuted).toEqual(perm.map((i) => ys[i]!));
     });
+  });
+
+  test("modelEntries: one row per entry, served as its latest run was, first run at its earliest", () => {
+    const rows = modelEntries([
+      run({ runId: "a", model: "sonnet", startedAt: 100, resolvedModel: "claude-sonnet-5", xpEarned: 100, actualCost: fig(2, "reported") }),
+      run({ runId: "b", model: "sonnet", startedAt: 300, resolvedModel: "claude-sonnet-5-5", xpEarned: 300, actualCost: fig(4, "reported") }),
+      run({ runId: "c", model: "sonnet", effort: "high", startedAt: 200, xpEarned: 50 }),
+      run({ runId: "u", model: "sonnet", startedAt: 1, unscored: "unscored (scripted stub)" }),
+    ]);
+    expect(rows).toEqual([
+      { key: "sonnet", served: "claude-sonnet-5-5", firstRun: 100, cost: 3, xp: 200 },
+      { key: "sonnet (high)", served: "sonnet", firstRun: 200, cost: null, xp: null },
+    ]);
   });
 
   test("a playtime tick reads off a clock", () => {

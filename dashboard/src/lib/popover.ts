@@ -81,3 +81,44 @@ export function popoverPlacement(
     maxHeight: room,
   };
 }
+
+/** A box in one coordinate space, edges named: `l < r`, `t < b`. */
+export interface Frame {
+  l: number;
+  t: number;
+  r: number;
+  b: number;
+}
+
+/**
+ * Where a chart's hover card sits: beside the point it describes, inside the
+ * part of the chart the reader can see.
+ *
+ * To the right of the point, centred on it vertically; flipped to the left
+ * when the right would run out of the frame; and when neither side has the
+ * room — a narrow phone frame — centred over the point's x and put below it,
+ * or above when below would run out. Every answer is clamped into the frame,
+ * so a card larger than the frame is pinned to its top-left rather than lost.
+ * The gap keeps the card off the mark, which stays clickable under it.
+ *
+ * Pure, so the edges are testable without a browser; the chart measures the
+ * card and the frame and passes them in.
+ */
+export function cardPlacement(
+  anchor: { x: number; y: number },
+  card: { w: number; h: number },
+  frame: Frame,
+  gap = 10,
+): { left: number; top: number } {
+  const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(v, hi));
+  const side = (left: number): { left: number; top: number } => ({
+    left: clamp(left, frame.l, frame.r - card.w),
+    top: clamp(anchor.y - card.h / 2, frame.t, frame.b - card.h),
+  });
+  if (anchor.x + gap + card.w <= frame.r) return side(anchor.x + gap);
+  if (anchor.x - gap - card.w >= frame.l) return side(anchor.x - gap - card.w);
+  const left = clamp(anchor.x - card.w / 2, frame.l, frame.r - card.w);
+  const below = anchor.y + gap;
+  const top = below + card.h <= frame.b ? below : anchor.y - gap - card.h;
+  return { left: Math.max(frame.l, left), top: clamp(top, frame.t, frame.b - card.h) };
+}
