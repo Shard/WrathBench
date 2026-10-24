@@ -719,20 +719,20 @@ describe("positionsFromStore", () => {
   test("the listing is the store's: a run it does not list is not opened, whatever is on disk", async () => {
     const runsDir = corpus();
     const inner = localRunStore(runsDir);
-    const reads = { runRows: 0, latestStates: 0 };
+    const reads = { runRows: 0, latestReadings: 0 };
     const store: RunStore = {
       ...inner,
       runRows: async () => {
         reads.runRows += 1;
         return (await inner.runRows()).filter((r) => r.run_id === "live-a");
       },
-      latestStates: () => {
-        reads.latestStates += 1;
-        return inner.latestStates();
+      latestReadings: () => {
+        reads.latestReadings += 1;
+        return inner.latestReadings();
       },
     };
     expect((await positionsFromStore(store, runsDir, NOW)).map((p) => p.runId)).toEqual(["live-a"]);
-    expect(reads).toEqual({ runRows: 1, latestStates: 1 });
+    expect(reads).toEqual({ runRows: 1, latestReadings: 1 });
   });
 
   test("a run paused because its observation stalled is off the map in both feeds; another pause is not", async () => {

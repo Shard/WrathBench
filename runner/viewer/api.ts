@@ -99,6 +99,8 @@ import {
   statePointOf,
   storeFor,
   totalsOf,
+  STORE_LAG_MS,
+  type RunListingRow,
   type RunStore,
 } from "./clickhouse";
 import { isArchiveDir } from "./archive-dir";
@@ -466,13 +468,24 @@ function accountOfRun(dir: string): string | undefined {
  * touched inside the window are opened. Where `accountHeldBy` takes the first
  * readdir match, this takes the freshest, which is the honest answer when a
  * crashed run and its successor briefly overlap.
+ *
+ * `cold` goes one step earlier, for a caller with the derived store: the runs
+ * the store already knows cannot hold an account (`coldRuns`), which are not
+ * even stat'ed. Two stats per run directory on the fleet's iSCSI volume were
+ * 55-74 ms a poll over ~1,900 directories, nearly all of them long finished.
+ * A directory the store has no row for is never in it: that is a run in its
+ * first seconds, exactly when its job holds the account.
  */
-export function heldAccounts(runsDir: string, now = Date.now()): Map<string, { runId: string; model: string | null }> {
+export function heldAccounts(
+  runsDir: string,
+  now = Date.now(),
+  cold: ReadonlySet<string> = new Set(),
+): Map<string, { runId: string; model: string | null }> {
   const out = new Map<string, { runId: string; model: string | null; age: number }>();
   let names: string[];
   try {
     names = readdirSync(runsDir, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && isValidRunId(d.name) && !isArchiveDir(d.name))
+      .filter((d) => d.isDirectory() && isValidRunId(d.name) && !isArchiveDir(d.name) && !cold.has(d.name))
       .map((d) => d.name);
   } catch {
     return new Map();
@@ -490,6 +503,79 @@ export function heldAccounts(runsDir: string, now = Date.now()): Map<string, { r
     if (prev === undefined || age < prev.age) out.set(key, { runId: id, model: row.model, age });
   }
   return new Map([...out].map(([k, v]) => [k, { runId: v.runId, model: v.model }]));
+}
+
+/**
+ * The run ids the store already knows hold no account: terminated (final; a
+ * resume clears a pause, never a termination), or with a trajectory the store
+ * last saw older than the hold window plus its own lag. A pause alone is not
+ * enough: a resume clears it in `run.sqlite` seconds before the store sees it.
+ */
+export function coldRuns(rows: readonly RunListingRow[], now: number): Set<string> {
+  const out = new Set<string>();
+  for (const r of rows) {
+    const quiet = r.trajectory_mtime !== 0 && now - r.trajectory_mtime >= ACCOUNT_HELD_MS + STORE_LAG_MS;
+    if (r.termination_reason.length > 0 || quiet) out.add(r.run_id);
+  }
+  return out;
+}
+
+/**
+ * How long one corpus-wide store read stands in for the next.
+ *
+ * Seconds, and few: the fleet page polls `/api/fleet` every five seconds per
+ * tab, the map polls `/api/positions` as often, and `/api/models`, `/api/runs`
+ * and the per-run routes ask for the same handful of whole-table reads
+ * (`runRows`, `totalsRows`, the latest readings), each of them megabytes of
+ * JSON out of ClickHouse. Every caller inside the window gets the one read in
+ * flight (or just finished), so N tabs and M routes cost one query. Nothing is
+ * kept past it: a row can be at most this much older than the store, which is
+ * itself a five-second collector poll behind the files.
+ */
+export const STORE_SHARE_MS = 3_000;
+
+/**
+ * The store, with its corpus-wide reads shared over `windowMs`: the pattern
+ * `allResultRuns` holds a listing build on. The pending promise is what is
+ * kept, so a burst shares one read; the window is stamped when the read
+ * settles; a read that fails is not kept. Per-run reads pass through
+ * untouched. Callers must not mutate what a shared read returns: every reader
+ * in the window holds the same arrays.
+ */
+export function sharedStore(store: RunStore, windowMs = STORE_SHARE_MS): RunStore {
+  const share = <T>(read: () => Promise<T>): (() => Promise<T>) => {
+    let held: { at: number; value: Promise<T> } | undefined;
+    return () => {
+      if (held === undefined || Date.now() - held.at >= windowMs) {
+        const value = read();
+        held = { at: Date.now(), value };
+        value.then(
+          () => {
+            if (held?.value === value) held = { at: Date.now(), value };
+          },
+          () => {
+            if (held?.value === value) held = undefined;
+          },
+        );
+      }
+      return held.value;
+    };
+  };
+  return {
+    runRows: share(() => store.runRows()),
+    runRow: (id) => store.runRow(id),
+    totalsRows: share(() => store.totalsRows()),
+    totalsRow: (id) => store.totalsRow(id),
+    latestStates: share(() => store.latestStates()),
+    latestReadings: share(() => store.latestReadings()),
+    latestState: (id) => store.latestState(id),
+    runListing: share(() => store.runListing()),
+    factRows: share(() => store.factRows()),
+    stateRows: (id) => store.stateRows(id),
+    stateItemRows: (id) => store.stateItemRows(id),
+    stateRowsByRun: (ids) => store.stateRowsByRun(ids),
+    moveRows: (id) => store.moveRows(id),
+  };
 }
 
 /** Keyed by the union, so the compiler holds this set to `FleetServerView["phase"]` both ways. */
@@ -527,7 +613,7 @@ export function readServerState(runsDir: string, now = Date.now()): FleetServerV
 }
 
 /** Read the fleet supervisor's published state. Absent is normal, not an error. */
-export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
+export function readFleet(runsDir: string, now = Date.now(), cold: ReadonlySet<string> = new Set()): FleetResponse {
   const path = join(runsDir, "fleet-state.json");
   const server = readServerState(runsDir, now);
   const absent: FleetResponse = { present: false, server, jobs: [], accounts: [], paused: [], ended: [], now };
@@ -548,7 +634,7 @@ export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
       ended?: FleetResponse["ended"];
       session?: FleetSessionView;
     };
-    const held = heldAccounts(runsDir, now);
+    const held = heldAccounts(runsDir, now, cold);
     const classOf = new Map<string, FleetAccountView["class"]>();
     for (const cls of ["pool", "paid", "local"] as const) {
       for (const a of Object.keys(raw.accounts?.[cls] ?? {})) classOf.set(a.toUpperCase(), cls);
@@ -670,11 +756,26 @@ export function createApi(opts: ApiOptions): ApiHandle {
   /*
    * The derived store. Every route that once opened all 1,148 run directories
    * reads rows from here instead (docs/ARCHITECTURE.md, "The derived store").
-   * Nothing is memoised on this side: a query against the store is one request
-   * where the scan was a thousand file opens, and a cache would only be
-   * another thing that can be wrong about a live run.
+   * Its corpus-wide reads are shared over `STORE_SHARE_MS` and nothing longer
+   * (`sharedStore`): enough that the fleet page's tabs and routes, polling
+   * every few seconds, cost one query rather than one each, and short enough
+   * that nothing here can be meaningfully wrong about a live run.
    */
-  const store = opts.store ?? storeFor(runsDir);
+  const store = sharedStore(opts.store ?? storeFor(runsDir));
+  /*
+   * The fleet config, read as the supervisor reads it, on the same window:
+   * `/api/fleet`, `/api/models` and `/api/campaigns` all ask for it per poll,
+   * and one read of the store is 12-29 ms. A write through the config API
+   * drops it at once (`route`), so an edit is never shown stale on the page
+   * that made it.
+   */
+  let rosterHeld: { at: number; value: ReturnType<typeof readFleetRoster> } | undefined;
+  const fleetRoster = (): ReturnType<typeof readFleetRoster> => {
+    if (rosterHeld === undefined || Date.now() - rosterHeld.at >= STORE_SHARE_MS) {
+      rosterHeld = { at: Date.now(), value: readFleetRoster(opts.configDbPath) };
+    }
+    return rosterHeld.value;
+  };
   const publicMode = opts.publicMode === true;
   const tilesPublic = opts.tilesPublic === true;
   const allowedHosts = opts.allowedHosts === undefined ? null : hostAllowlist(opts.allowedHosts);
@@ -831,7 +932,15 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * that is a question for the reader.
    */
   async function allRunRows(now = Date.now()): Promise<RunRow[]> {
-    const [rows, latest] = await Promise.all([store.runRows(), store.latestStates()]);
+    /*
+     * The latest readings without the inventory (`latestReadings`): `items` is
+     * nearly all of the states table, and no listing reads it — not the
+     * private runs table, not results, ladders, models or the census, and not
+     * a public `/api/runs` either, whose rows (`projectRunListRow`) carry no
+     * inventory. A row here has `items: null`; the one page that shows an
+     * inventory is a run's own, which reads `latestState` for that run.
+     */
+    const [rows, latest] = await Promise.all([store.runRows(), store.latestReadings()]);
     const out = rows
       .filter((r) => r.archived === 0)
       .map((r) => runRowOf(r, latest.get(r.run_id), now));
@@ -937,7 +1046,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * ago.
    */
   async function runFacts(now: number): Promise<RunFact[]> {
-    const [rows, totals] = await Promise.all([store.runRows(), store.totalsRows()]);
+    // The liveness columns and the fact alone: the JSON-heavy columns of both
+    // tables (meta, config, the whole totals) are what made this ~6 MB a call.
+    const [rows, totals] = await Promise.all([store.runListing(), store.factRows()]);
     const mtimes = new Map(
       rows.filter((r) => r.archived === 0).map((r) => [r.run_id, r.trajectory_mtime === 0 ? null : r.trajectory_mtime]),
     );
@@ -1266,7 +1377,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
    */
   async function campaignsResponse(): Promise<Response> {
     const all = await resultRuns();
-    const roster = readFleetRoster(opts.configDbPath);
+    const roster = fleetRoster();
     const view = campaignsView(all, roster, (r) => !r.extra && !r.episodeOverride && taintOf(r) === null);
     const body: CampaignsResponse = { now: Date.now(), campaigns: view.campaigns, refused: view.refused };
     return pub(body, projectCampaigns);
@@ -1409,8 +1520,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * models table about who owes what.
        */
       const now = Date.now();
-      const body = withoutRuns(readFleet(runsDir, now), publicMode ? new Set(await unpublishedRuns()) : new Set());
-      const roster = readFleetRoster(opts.configDbPath);
+      const cold = coldRuns(await store.runListing(), now);
+      const body = withoutRuns(readFleet(runsDir, now, cold), publicMode ? new Set(await unpublishedRuns()) : new Set());
+      const roster = fleetRoster();
       if (roster.shape === "roster") {
         const runs = await runFacts(now);
         const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
@@ -1437,12 +1549,13 @@ export function createApi(opts: ApiOptions): ApiHandle {
         return json({ error: `unknown harness; one of: ${[...HARNESSES, "all"].join(", ")}` }, 400);
       }
       const now = Date.now();
-      const roster = readFleetRoster(opts.configDbPath);
+      const roster = fleetRoster();
       const runs = await runFacts(now);
       const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
       // The refs with a job in flight, off the supervisor's state: the verdict
       // says "running (one character per model)" exactly where --status does.
-      const running = new Set(readFleet(runsDir, now).jobs.flatMap((j) => j.ref.split("+")));
+      const cold = coldRuns(await store.runListing(), now);
+      const running = new Set(readFleet(runsDir, now, cold).jobs.flatMap((j) => j.ref.split("+")));
       const body: ModelsResponse = modelsResponse({ states, runs, runsDir, roster, now, harness, running });
       /*
        * Cost is attached here rather than in the projection: `runner/src/models.ts`
@@ -1927,7 +2040,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
    */
   async function e90Profile(): Promise<E90TokenProfileView | null> {
     const now = Date.now();
-    const roster = readFleetRoster(opts.configDbPath);
+    const roster = fleetRoster();
     const [facts, rows, totals] = await Promise.all([runFacts(now), runRows(now), allTotals()]);
     const harness = new Map(rows.map((r) => [r.runId, r.harness]));
     return e90TokenProfile(
@@ -1974,6 +2087,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
         ...(opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {}),
         e90Profile,
       });
+      // Anything but a read may have changed the roster: the next poll reads it afresh.
+      if (req.method !== "GET" && req.method !== "HEAD") rosterHeld = undefined;
       if (res !== null) return res;
     }
 

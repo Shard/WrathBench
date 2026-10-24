@@ -1568,9 +1568,9 @@ describe("the listing is built once per window", () => {
   function countingStore(
     runsDir: string,
     onRead: () => void = () => {},
-  ): { store: RunStore; counts: { runRows: number; latestStates: number } } {
+  ): { store: RunStore; counts: { runRows: number; latestReadings: number } } {
     const inner = localRunStore(runsDir);
-    const counts = { runRows: 0, latestStates: 0 };
+    const counts = { runRows: 0, latestReadings: 0 };
     const store: RunStore = {
       ...inner,
       runRows: () => {
@@ -1578,9 +1578,9 @@ describe("the listing is built once per window", () => {
         onRead();
         return inner.runRows();
       },
-      latestStates: () => {
-        counts.latestStates += 1;
-        return inner.latestStates();
+      latestReadings: () => {
+        counts.latestReadings += 1;
+        return inner.latestReadings();
       },
     };
     return { store, counts };
@@ -1607,7 +1607,7 @@ describe("the listing is built once per window", () => {
       );
       expect(burst.map((r) => r.status)).toEqual(Array.from({ length: 16 }, () => 200));
       expect(counts.runRows).toBe(1);
-      expect(counts.latestStates).toBe(1);
+      expect(counts.latestReadings).toBe(1);
 
       // Back-to-back inside the window, and the other route that reads it.
       await handle(new Request(`http://x/api/run/${FREE_RUN}`));
@@ -1617,7 +1617,7 @@ describe("the listing is built once per window", () => {
       clock += RESULT_RUNS_CACHE_MS;
       await handle(new Request(`http://x/api/run/${FREE_RUN}`));
       expect(counts.runRows).toBe(2);
-      expect(counts.latestStates).toBe(2);
+      expect(counts.latestReadings).toBe(2);
     } finally {
       Date.now = realNow;
       rmSync(runs, { recursive: true, force: true });

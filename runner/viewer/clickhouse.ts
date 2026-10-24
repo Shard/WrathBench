@@ -183,15 +183,41 @@ export interface LatestState {
   items: string;
 }
 
+/**
+ * The same newest readings without the inventory: what a corpus-wide listing
+ * asks for. `items` is 263 MB of the states table's 289 MB, and the
+ * aggregate that carried it cost 104–118 ms against 28 ms without; the
+ * viewer's polled routes asked for it every few seconds to show none of it.
+ */
+export type LatestReading = Omit<LatestState, "items">;
+
+/** The `runs` columns a liveness question needs, and nothing that is JSON. */
+export type RunListingRow = Pick<RunTableRow, "run_id" | "archived" | "trajectory_mtime" | "termination_reason" | "pause_reason">;
+
+/** `run_totals` without the totals: the scheduler's fact alone. */
+export type FactTableRow = Pick<TotalsTableRow, "run_id" | "fact_json">;
+
 export interface RunStore {
   /** Every run, archived ones included; the caller filters. */
   runRows(): Promise<RunTableRow[]>;
   runRow(runId: string): Promise<RunTableRow | null>;
   totalsRows(): Promise<TotalsTableRow[]>;
   totalsRow(runId: string): Promise<TotalsTableRow | null>;
+  /**
+   * The newest readings of every run, inventory included. No route reads the
+   * inventory across the corpus — every listing asks `latestReadings` — so
+   * this is the full form the per-run `latestState` and the in-memory twin
+   * (`latestStatesOf`) are pinned against.
+   */
   latestStates(): Promise<Map<string, LatestState>>;
+  /** `latestStates` without `items`: the same rule, a tenth of the bytes. */
+  latestReadings(): Promise<Map<string, LatestReading>>;
   /** The latest readings of one run, or undefined when it has no state rows yet. */
   latestState(runId: string): Promise<LatestState | undefined>;
+  /** Every run's liveness columns (`RunListingRow`); archived ones included, as `runRows`. */
+  runListing(): Promise<RunListingRow[]>;
+  /** Every run's stored fact (`FactTableRow`), without the totals beside it. */
+  factRows(): Promise<FactTableRow[]>;
   stateRows(runId: string): Promise<StatePointRow[]>;
   /**
    * One run's `items` column, oldest first, samples that carried none left out.
@@ -214,6 +240,14 @@ export interface RunStore {
 }
 
 // ------------------------------------------------------------- the ClickHouse
+
+/**
+ * How far behind its files the derived store may be and still be trusted to
+ * say a run's files are cold. The collector polls every five seconds; minutes
+ * of margin cover a slow pass or a restart, and cost a reader nothing but a
+ * few more opens of runs that went quiet recently.
+ */
+export const STORE_LAG_MS = 5 * 60_000;
 
 export interface ClickhouseConfig {
   url: string;
@@ -271,17 +305,23 @@ export function clickhouseStore(cfg: ClickhouseConfig): RunStore {
     return Array.isArray(body.data) ? (body.data as T[]) : [];
   }
 
-  const latestSql = (where: string): string => `
+  const latestSql = (where: string, items = true): string => `
     SELECT run_id,
            argMaxIf(level, (ts, seq), level > 0)                                AS v_level,
            argMaxIf(xp, (ts, seq), level > 0)                                   AS v_xp,
            argMaxIf(money, (ts, seq), money IS NOT NULL)                        AS v_money,
-           argMaxIf(quests_completed, (ts, seq), quests_completed IS NOT NULL)  AS v_quests,
-           argMaxIf(items, (ts, seq), items != '')                              AS v_items
+           argMaxIf(quests_completed, (ts, seq), quests_completed IS NOT NULL)  AS v_quests${
+             items ? `,\n           argMaxIf(items, (ts, seq), items != '')                              AS v_items` : ""
+           }
       FROM states FINAL
      ${where}
      GROUP BY run_id`;
   const LATEST = latestSql("");
+  /*
+   * The listing's form, which never names `items`: a column ClickHouse does
+   * not select it does not read, and that column is nearly all of the table.
+   */
+  const LATEST_READINGS = latestSql("", false);
   /*
    * The aliases are prefixed because ClickHouse resolves a bare `AS level`
    * back into the condition beside it and refuses the query as an aggregate
@@ -296,13 +336,13 @@ export function clickhouseStore(cfg: ClickhouseConfig): RunStore {
     v_quests: number | null;
     v_items: string | null;
   };
-  const latestOf = (r: LatestRow): LatestState => ({
+  const readingOf = (r: Omit<LatestRow, "v_items">): LatestReading => ({
     level: r.v_level,
     xp: r.v_xp,
     money: r.v_money,
     questsCompleted: r.v_quests,
-    items: r.v_items ?? "",
   });
+  const latestOf = (r: LatestRow): LatestState => ({ ...readingOf(r), items: r.v_items ?? "" });
 
   return {
     runRows: () => rows<RunTableRow>(`SELECT * FROM runs FINAL`),
@@ -320,6 +360,16 @@ export function clickhouseStore(cfg: ClickhouseConfig): RunStore {
       for (const r of await rows<LatestRow>(LATEST)) out.set(r.run_id, latestOf(r));
       return out;
     },
+    async latestReadings() {
+      const out = new Map<string, LatestReading>();
+      for (const r of await rows<Omit<LatestRow, "v_items">>(LATEST_READINGS)) out.set(r.run_id, readingOf(r));
+      return out;
+    },
+    runListing: () =>
+      rows<RunListingRow>(
+        `SELECT run_id, archived, trajectory_mtime, termination_reason, pause_reason FROM runs FINAL`,
+      ),
+    factRows: () => rows<FactTableRow>(`SELECT run_id, fact_json FROM run_totals FINAL`),
     /*
      * One run's latest readings as the same aggregate, not as every row of the
      * run mapped in memory: the run page wants five values and `items` is the
@@ -431,7 +481,7 @@ const itemsOf = itemSamplesOf;
  * the trajectory mtime the collector recorded, and the newest state readings,
  * from `latest`.
  */
-export function runRowOf(r: RunTableRow, latest: LatestState | undefined, now: number): RunRow {
+export function runRowOf(r: RunTableRow, latest: LatestState | LatestReading | undefined, now: number): RunRow {
   const meta = parse(r.meta_json);
   const config = (meta?.["config"] as Record<string, unknown> | undefined) ?? parse(r.config_json) ?? {};
   const comparability = parseComparability(
@@ -477,7 +527,10 @@ export function runRowOf(r: RunTableRow, latest: LatestState | undefined, now: n
     xp: latest?.xp ?? null,
     money: latest?.money ?? null,
     questsCompleted: latest?.questsCompleted ?? null,
-    items: latest === undefined ? null : itemsOf(latest.items),
+    // Null off `latestReadings`, which never fetched the inventory: a
+    // corpus-wide private listing, which shows none (the run page reads one
+    // run's own `latestState`, inventory included).
+    items: latest === undefined || !("items" in latest) ? null : itemsOf(latest.items),
     mtime,
     bytes: r.trajectory_bytes === 0 ? null : r.trajectory_bytes,
     live: terminationReason === null && mtime !== null && now - mtime < LIVE_WINDOW_MS,
@@ -505,7 +558,7 @@ export function totalsOf(r: TotalsTableRow | undefined | null): RunTotals | null
  * read time rather than replayed, because a stored `true` would be a claim
  * about a process that stopped writing hours ago.
  */
-export function factOf(r: TotalsTableRow | undefined | null, mtime: number | null, now: number): RunFact | null {
+export function factOf(r: FactTableRow | undefined | null, mtime: number | null, now: number): RunFact | null {
   if (r === undefined || r === null || r.fact_json.length === 0) return null;
   let fact: RunFact;
   try {
@@ -668,6 +721,24 @@ export function localRunStore(runsDir: string): RunStore {
       await refresh();
       return latestStatesOf(all<StateTableRow>("states"));
     },
+    async latestReadings() {
+      await refresh();
+      return withoutItems(latestStatesOf(all<StateTableRow>("states")));
+    },
+    async runListing() {
+      await refresh();
+      return all<RunTableRow>("runs").map((r) => ({
+        run_id: r.run_id,
+        archived: r.archived,
+        trajectory_mtime: r.trajectory_mtime,
+        termination_reason: r.termination_reason,
+        pause_reason: r.pause_reason,
+      }));
+    },
+    async factRows() {
+      await refresh();
+      return all<TotalsTableRow>("run_totals").map((r) => ({ run_id: r.run_id, fact_json: r.fact_json }));
+    },
     async latestState(runId) {
       await refresh();
       return latestStatesOf(all<StateTableRow>("states").filter((r) => r.run_id === runId)).get(runId);
@@ -705,6 +776,13 @@ export function localRunStore(runsDir: string): RunStore {
         .sort(byTsSeq);
     },
   };
+}
+
+/** `latestStates`' answer as `latestReadings` gives it: the same readings, no inventory. */
+export function withoutItems(latest: ReadonlyMap<string, LatestState>): Map<string, LatestReading> {
+  const out = new Map<string, LatestReading>();
+  for (const [id, { items: _items, ...reading }] of latest) out.set(id, reading);
+  return out;
 }
 
 /**
