@@ -138,29 +138,24 @@ request is a billed read against the bucket.
    version, and is written once a minute after the window ends, so it is just
    as immutable and needs no rule of its own.
 3. **Tiles** — `Hostname equals wrathbench-data.shard.page` *and* `URI Path
-   starts with "/tiles/"` *and* `URI Path does not contain "/art/"` → eligible
-   for cache, **Edge TTL 1 day**, **Browser TTL 1 day**. Not content-addressed:
-   a re-extraction reuses the same keys, so a day is the window in which a
-   re-upload is not yet visible, and a purge of the prefix closes it sooner.
-4. **Art tiles** — `Hostname equals wrathbench-data.shard.page` *and* `URI
-   Path starts with "/tiles/"` *and* `URI Path contains "/art/"` → eligible for
-   cache, **Edge TTL 1 day**, **Browser TTL 5 minutes**. The painted art layer
-   is re-baked at the same keys while its look is tuned, so rule 3's day in
-   the browser would show a reader the old painting long after the purge in
-   step 6 has cleared the edge. R2 sends an ETag and Last-Modified with each
-   object, so the browser's recheck after five minutes is a conditional
-   request rather than a fresh download. Rules 3 and 4 do not overlap, so
-   their order does not matter.
-
-   Each map's tile index (`/tiles/<map>/index.json`, step 6) belongs with
-   rule 4, not rule 3: it is rewritten at the same key whenever a bake adds
-   or removes cells, and a purge clears the edge but not a browser. Under
-   rule 3's day a reader could keep a stale index for up to a day. That
-   would hide tiles the bake has since added, or hide the minimap where the
-   art no longer covers it. To move it, change rule 4's path test to `URI
-   Path contains "/art/" or URI Path ends with "/index.json"`, and rule 3's
-   to the negation of both. Until then the index is cached like a tile.
-   That is safe for an unchanged tree and wrong for a day after a change.
+   starts with "/tiles/"` *and* `URI Path does not contain "/art/"` *and* `URI
+   Path does not end with "/index.json"` → eligible for cache, **Edge TTL 1
+   day**, **Browser TTL 1 day**. Not content-addressed: a re-extraction reuses
+   the same keys, so a day is the window in which a re-upload is not yet
+   visible, and a purge of the prefix closes it sooner.
+4. **Art tiles and tile indexes** — `Hostname equals
+   wrathbench-data.shard.page` *and* `URI Path starts with "/tiles/"` *and*
+   (`URI Path contains "/art/"` *or* `URI Path ends with "/index.json"`) →
+   eligible for cache, **Edge TTL 1 day**, **Browser TTL 5 minutes**. The
+   painted art layer is re-baked at the same keys while its look is tuned, so
+   rule 3's day in the browser would show a reader the old painting long after
+   the purge in step 6 has cleared the edge. Each map's tile index
+   (`/tiles/<map>/index.json`, step 6) is rewritten at the same key whenever a
+   bake adds or removes cells, and a stale one would hide tiles the bake has
+   since added, or hide the minimap where the art no longer covers it. R2
+   sends an ETag and Last-Modified with each object, so the browser's recheck
+   after five minutes is a conditional request rather than a fresh download.
+   Rules 3 and 4 do not overlap, so their order does not matter.
 
 All four rules set the TTL **explicitly by path** rather than respecting an origin
 header, and that is not a style choice: no published object carries a
