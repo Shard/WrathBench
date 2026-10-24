@@ -474,6 +474,9 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .map-stage { position: relative; flex: 1; min-width: 0; }
 .map-stage canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
 .map-stage canvas.drag { cursor: grabbing; }
+/* The ground (lattice, tiles, art) under the canvas that takes the pointer and draws the marks. */
+.map-stage canvas.map-ground { position: absolute; inset: 0; pointer-events: none; }
+.map-stage canvas.map-ground + canvas { position: relative; }
 .map-chips { position: absolute; top: 10px; left: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
 
 /*
