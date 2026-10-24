@@ -102,7 +102,7 @@ RUN mkdir -p /home/bun/codex-cli \
 # phone-home switches on but three without them. Why the release tarball and not npm: the npm package is a node
 # script (`#!/usr/bin/env node`, node >= 22.19) and this image's only `node`
 # is Bun's fallback shim; the release ships pi as one Bun-compiled glibc
-# binary (checked to run in oven/bun:1.4.0, glibc 2.41) with the
+# binary (checked to run in oven/bun:1.4.4, glibc 2.41) with the
 # assets it reads beside it (themes, the photon wasm, docs), so the whole
 # directory is kept and the binary symlinked onto PATH. Bumping the ARGs
 # busts the cached layer; a bump is a deliberate change, re-verified.
