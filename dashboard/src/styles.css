@@ -319,7 +319,7 @@ tbody tr.hovered { outline: 1px solid var(--accent); outline-offset: -1px; }
 /* Every dot keeps room for the live ring (outline width plus offset) on both
    sides, so a dot that goes live or stale never moves the text beside it. */
 .dot { --dot-ring: 3px; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-       margin: 0 calc(6px + var(--dot-ring)) 0 var(--dot-ring); vertical-align: middle; background: var(--dim); }
+       margin: 0 calc(6px + var(--dot-ring)) 0 var(--dot-ring); vertical-align: middle; background: var(--dim); flex: none; }
 
 
 /* Row state, as a compact badge: the column an operator scans first. */
@@ -365,8 +365,10 @@ th.sorted { color: var(--fg); }
    in the cell — under a sort that separates them the rail has nothing to join. */
 tr.character td:nth-child(2) { box-shadow: inset 2px 0 0 var(--accent); padding-left: 8px; }
 
+/* A dot or swatch in a crowded flex row (the phone replay bar) keeps its size;
+   the text beside it is what gives way. */
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
-          margin-right: 6px; vertical-align: middle; }
+          margin-right: 6px; vertical-align: middle; flex: none; }
 /* A party member's colour, wherever the member is named (`memberClass`). */
 .swatch.member-1 { background: var(--member-1); }
 .swatch.member-2 { background: var(--member-2); }
