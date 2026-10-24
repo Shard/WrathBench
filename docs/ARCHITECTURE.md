@@ -228,7 +228,9 @@ the SPA owns everything that is UI.
   is the whole of the code that reads it — lookup, types, the validator and the
   file's one spelling — and the runner (bundled into its image whole), the
   dashboard build and the infra scripts all import it, so nothing else keeps a
-  per-model table. JSON rather than a TypeScript module because a script writes
+  per-model table. The dashboard bundle gets only the fields the lookup reads
+  (`dashboard/src/lib/catalogue-subset.ts`, swapped in by its Vite config at
+  each build), since the prices and notes were most of a page's bytes. JSON rather than a TypeScript module because a script writes
   part of it: `bun wb data prices` rewrites each model's OpenRouter windows in
   place, and a data file is what a script can rewrite without touching the
   hand-kept facts beside them; the module adds the types and the comments a
@@ -271,7 +273,9 @@ the SPA owns everything that is UI.
   at the version pinned in the catalogue's own `icons` block and extracts
   exactly the icons its families name; the SVGs are committed, because they are
   a few hundred bytes each and the dashboard has to build from a bare clone
-  with no network. The artwork is MIT-licensed and the brands remain their
+  with no network. The dashboard draws them from one sprite the fetch
+  generates from those files (`dashboard/src/lib/logosprite.ts`), fetched once
+  rather than inlined into every badge. The artwork is MIT-licensed and the brands remain their
   owners' trademarks; provenance is in `THIRD-PARTY-NOTICES.md`.
 - Loopback by default. Trajectories carry game-derived text, so a non-loopback
   bind fails at startup unless `WRATHBENCH_VIEWER_LAN=1` opts a trusted private

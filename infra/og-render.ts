@@ -12,8 +12,8 @@
  *
  * Two things this file owns that `dashboard/src/lib/og.ts` cannot:
  *
- * - **Logos.** The dashboard reads them through `import.meta.glob`, which
- *   exists only under Vite. Same assets, same `familyOf`, read off disk.
+ * - **Logos.** The dashboard fetches them as one sprite, a Vite asset this
+ *   script has no URL for. Same logos, same `familyOf`, read off disk.
  * - **Fonts.** resvg resolves a family through the host's font database and
  *   draws *nothing at all* when it matches none — no error, no fallback box.
  *   The card is now mostly text, so a render on a host with no fonts would
