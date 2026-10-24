@@ -11,8 +11,9 @@ Pins are changed deliberately and documented here with a date and reason. See CL
 
 ## Bun
 
-- Version: 1.4.0, pinned in `.bun-version`, `package.json` (`engines.bun`) and the `oven/bun` image tags in `infra/compose.yml`.
+- Version: 1.4.4 (2026-10-24, from 1.4.0; the latest release, operator's call), pinned in `.bun-version`, `package.json` (`engines.bun`, and `@types/bun` at the same version), the `FROM oven/bun` tag in `infra/docker/runner.Dockerfile` and the `oven/bun` image tags in `infra/compose.yml`. Tags only, no digests, as for every base image here. CI and the web-session hook read `.bun-version`.
 - Patch bumps are deliberate; the pin rationale is in CLAUDE.md's toolchain section.
+- Bumping: change every place above in one commit, regenerate `bun.lock` with the new Bun, run `bun run test` and `bun run typecheck` under it, and build the runner image. Two effects reach past the checkout. The minimap transcoder's encoder id names the Bun build (`minimap/src/transcode.ts`), so the next transcode re-encodes every served tile; the tile publish skips by content hash, so only tiles whose bytes the new encoder changed upload again. And the module's `/events` socket is only exercised against the live stack, so run the smokes after a bump that touches WebSocket behaviour (1.4.4 changed the client's close codes and close timing).
 
 ## ClickHouse
 
