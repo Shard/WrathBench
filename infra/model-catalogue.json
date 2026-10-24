@@ -410,6 +410,21 @@
         "openrouter": { "liquid/lfm-2.5-2.6b:free": { "windows": [{ "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }] } }
       }
     },
+    "kimi-k3.1-pro": {
+      "family": "kimi",
+      "name": "Kimi K3.1 Pro",
+      "weights": "unknown",
+      "source": "https://opencode.ai/docs/go/ lists it on OpenCode Go with no licence or checkpoint named, checked 2026-10-24",
+      "prices": {
+        "endpoints": {
+          "opencode-go": {
+            "asOf": "2026-10-24",
+            "windows": [{ "input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2 }],
+            "note": "OpenCode Go's published per-model rates (https://opencode.ai/docs/go/, read 2026-10-24), the same on Go and Go Plus; usage counts against the plan's per-model monthly limit ($15 Go, $60 Go Plus)."
+          }
+        }
+      }
+    },
     "longcat-2.5-preview-free": {
       "family": "longcat",
       "name": "LongCat-2.5-Preview",
