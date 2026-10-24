@@ -23,6 +23,7 @@ import {
   memberClass,
   memberOf,
   loadParty,
+  partyIsLive,
   partyReplayHref,
   whereIds,
   whereLabel,
@@ -31,12 +32,19 @@ import {
   type PartyMember,
   type PartyView,
 } from "../lib/party";
-import { poll } from "../lib/poll";
+import { poll, whileLive } from "../lib/poll";
 import { statusText, statusTitle, statusTone } from "../lib/runs";
 import { campaignHref } from "../lib/campaigns";
 
-/** A live party's members level, die and talk; an ended one's page is static. */
-const POLL_MS = 15_000;
+/** A live party's members level, die and talk. */
+const LIVE_POLL_MS = 15_000;
+
+/**
+ * An ended or paused party's page is static, and each poll is the whole
+ * unfiltered listing plus every member's detail, so it is only re-read now and
+ * then: often enough that a resumed party is picked up without a reload.
+ */
+const IDLE_POLL_MS = 300_000;
 
 /** The timeline's filter, one toggle per group of kinds. */
 const KIND_GROUPS: readonly { label: string; kinds: readonly PartyEventKind[] }[] = [
@@ -50,7 +58,7 @@ const KIND_GROUPS: readonly { label: string; kinds: readonly PartyEventKind[] }[
 
 export default function Party() {
   const params = useParams<{ id: string }>();
-  const feed = poll<PartyView | null>(() => loadParty(api, params.id), POLL_MS);
+  const feed = poll<PartyView | null>(() => loadParty(api, params.id), whileLive(partyIsLive, LIVE_POLL_MS, IDLE_POLL_MS));
   const view = (): PartyView | null | undefined => feed.latest;
   const [hidden, setHidden] = createSignal<ReadonlySet<string>>(new Set());
   const toggle = (label: string): void => {

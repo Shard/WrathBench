@@ -22,10 +22,12 @@ import {
   loadParty,
   mapAt,
   memberClass,
+  partyIsLive,
   partyRowsOf,
   partyViewOf,
   whereLabel,
 } from "../src/lib/party";
+import { whileLive } from "../src/lib/poll";
 
 const STEM = "fixture-party-a1";
 const ROLES = ["tank", "healer", "mage", "rogue", "paladin"] as const;
@@ -231,6 +233,18 @@ describe("the party view", () => {
     expect(v.status).toBe("live");
     expect(v.endedAt).toBeNull();
     expect(v.endedBy).toBeNull();
+  });
+
+  test("the page polls fast only while the party is live: an ended, a paused or an unknown party idles", () => {
+    const period = whileLive(partyIsLive, 15_000, 300_000);
+    const live = partyRows(STEM);
+    live[4] = member(STEM, "paladin", 4, { live: true, terminationReason: null, endedAt: null });
+    const paused = partyRows(STEM, { terminationReason: null, endedAt: null, pauseReason: "party-paused" });
+    expect(period(undefined)).toBe(15_000);
+    expect(period(partyViewOf(STEM, live, new Map()))).toBe(15_000);
+    expect(period(partyViewOf(STEM, partyRows(STEM), new Map()))).toBe(300_000);
+    expect(period(partyViewOf(STEM, paused, new Map()))).toBe(300_000);
+    expect(period(null)).toBe(300_000);
   });
 
   test("a place one member was never served a name for takes the name another member was", () => {

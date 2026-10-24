@@ -29,8 +29,11 @@ import { poll } from "../lib/poll";
 import { runsHref, statusTitle, statusTone } from "../lib/runs";
 import { displayError } from "../lib/errors";
 
-/** The roster moves when a run ends or an operator edits the config. */
-const POLL_MS = 30_000;
+/**
+ * The roster moves when a run ends or an operator edits the config, and the
+ * two bodies together are well over a megabyte, so two minutes.
+ */
+const POLL_MS = 120_000;
 
 export default function Models() {
   const feed = poll(() => api.models(), POLL_MS);

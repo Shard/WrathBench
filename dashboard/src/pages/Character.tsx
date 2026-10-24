@@ -30,13 +30,13 @@ import { CharacterPlot } from "../components/CharacterChart";
 import { ModelIcon } from "../components/ModelIcon";
 import { UnitFrame } from "../components/UnitFrame";
 import { XpChart } from "../components/XpChart";
-import { characterSessionSeries, sessionCount } from "../lib/character";
+import { characterIsLive, characterSessionSeries, sessionCount } from "../lib/character";
 import { displayError } from "../lib/errors";
 import { fmtAge, fmtDuration, modelDisplay, num, shortHarness, shortRunId, stamp } from "../lib/format";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { Coins, LevelXp } from "../components/CharacterFacts";
 import { InfoHint } from "../components/InfoHint";
-import { poll } from "../lib/poll";
+import { poll, whileLive } from "../lib/poll";
 import { statusOf, statusText, statusTitle, statusTone } from "../lib/runs";
 import type { PowerType } from "../lib/unitframe";
 
@@ -45,16 +45,24 @@ import type { PowerType } from "../lib/unitframe";
  *
  * The run page's own cadence (`DETAIL_POLL_MS`), for the reason it gives:
  * matched to the fleet listing so two pages open on one session do not show
- * two different playtimes. A character with nothing live polls anyway and
- * settles on an unchanged body — `poll` compares content and leaves the graph
- * alone — which is what keeps an attempt that STARTS while the page is open
- * from needing a reload.
+ * two different playtimes.
  */
-const POLL_MS = 10_000;
+const LIVE_POLL_MS = 10_000;
+
+/**
+ * How often a character with nothing live is re-fetched. The body is the whole
+ * character, every state sample of every attempt — about 7 MB for a long
+ * freeplay character — and with nothing live it does not change, so this is
+ * only how soon an attempt that STARTS while the page is open shows up.
+ */
+const IDLE_POLL_MS = 300_000;
 
 export default function Character() {
   const params = useParams<{ id: string }>();
-  const feed = poll<CharacterResponse>(() => api.character(params.id), POLL_MS);
+  const feed = poll<CharacterResponse>(
+    () => api.character(params.id),
+    whileLive((body) => characterIsLive(body.character), LIVE_POLL_MS, IDLE_POLL_MS),
+  );
 
   const view = (): CharacterView | undefined => feed.latest?.character;
   /** The attempt a reader would call "now": the last one in the chain. */
