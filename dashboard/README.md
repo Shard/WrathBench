@@ -143,7 +143,8 @@ period (2 s at least). Each client states how its feed is made
   a 30 s edge TTL and a poll: about 9 minutes.
 
 The period is learned from the horizons it sees — the longest of the last four
-gaps, an outage ignored. On each arrival the playhead aims at `D` behind; one
+gaps, an outage ignored, and so is a gap the tab slept through (polling stops
+while it is hidden, so the first arrival back can span several passes). On each arrival the playhead aims at `D` behind; one
 within a deadband carries on at 1×, one further behind catches up at 1.5×,
 and one more than `D` behind (a waking tab, a publisher back from a stop)
 jumps. Between arrivals it never passes the data's end: a pip that catches up
