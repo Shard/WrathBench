@@ -102,7 +102,7 @@ export function PlayBar(props: PlayBarProps) {
         fallback={
           <div class="playbar-row">
             <span class="live-pill">
-              <span class="live-dot" />
+              <span class="dot live" />
               live
             </span>
             <span class="playbar-text">
@@ -213,7 +213,7 @@ export function PlayBar(props: PlayBarProps) {
             )}
           </Show>
           <A class="playbar-btn live-link" href="/map" title="back to the live map">
-            <span class="live-dot" />
+            <span class="dot live" />
             live
           </A>
         </div>
