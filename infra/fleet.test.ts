@@ -115,6 +115,7 @@ import {
   BREAKER_WINDOW_MS,
   BREAKER_TRIPS,
   type FleetState,
+  type ResumePlan,
   formatHolder,
   inFlightRuns,
   jobOfRun,
@@ -2821,6 +2822,85 @@ describe("pause and resume across a fleet stop", () => {
     expect(kept.listed[0]?.why).toBe("campaign race-probe@1 is concluded — it owes nothing; resume by hand or archive");
     // A run with its own file comes back on it and nothing is written.
     expect(plan.resume[0]!.writeCampaignFile).toBeUndefined();
+  });
+
+  test("two pinned campaigns paused on one model both come back in place, beside that model's paused freeplay", () => {
+    // A fleet restart paused race-probe and class-probe, each pinned to its own
+    // account and both driving one model, and the model's freeplay session on a
+    // third account. The planner resumed only the newest-started of the three:
+    // one character per model is the policy's rule, and a pinned campaign is
+    // outside it. The others were listed, and each campaign's square was then
+    // offered fresh, so its spawn numbered past the paused run (-a2) and left
+    // that run paused forever.
+    const files = new Map<string, CampaignFile>();
+    const fileOf = (runId: string): CampaignFile | null => files.get(runId) ?? null;
+    const j = joined([checkedIn("race-probe@1"), checkedIn("class-probe@2")], {
+      "race-probe": { version: 1, account: "RUNNER6", assignments: [{ model: "nav" }] },
+      "class-probe": { version: 2, account: "RUNNER", assignments: [{ model: "nav" }] },
+    });
+    const freeplay: FleetJob = { refs: ["nav"], ref: "nav", episode: "freeplay", repeat: "loop", name: "nav-freeplay", enabled: true, account: "RUNNER2", source: "pinned" };
+    const cfg: FleetConfig = { ...config([freeplay]), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: j.campaigns, campaignDefs: [], campaignRefusals: [], maxConcurrent: {}, refusals: [] };
+    const probe = (campaign: "race-probe" | "class-probe", cell: string, account: string, suffix: string, startedAt: number): RunFact => {
+      const run = paused({
+        runId: `fleet-${campaign}-${cell}-base-sonnet-20261024${suffix}`,
+        model: "sonnet",
+        account,
+        episode: "probing",
+        episodeMs: 12 * H,
+        campaign,
+        campaignVersion: campaign === "race-probe" ? 1 : 2,
+        cell,
+        ref: "nav",
+        arm: "base",
+        startedAt,
+        pause: { reason: "operator-pause", at: NOW - 60_000, count: 1, episodeElapsedMs: startedAt === NOW - 2 * H ? 20 * 60_000 : 110 * 60_000 },
+      });
+      files.set(run.runId, campaignFileOf(j.definitions.find((d) => d.def.id === campaign)!, cell, "base"));
+      return run;
+    };
+    const fp = paused({ runId: "fleet-nav-freeplay-sonnet-20261020", model: "sonnet", account: "RUNNER2", episode: "freeplay", episodeMs: null, startedAt: NOW - 90 * H });
+    const race1 = probe("race-probe", "human-warrior", "RUNNER6", "", NOW - 2 * H);
+    const class1 = probe("class-probe", "dwarf-warrior", "RUNNER", "", NOW - 2 * H);
+    // The run ids the tick then spawns fresh for a campaign square, numbered past every id on disk.
+    const freshOf = (runs: RunFact[], resumes: ResumePlan[]): string[] =>
+      planTick(cfg, modelStatesOf(rosterModels(roster), runs, NOW), held, "20261024", resumes, probeRunsOf(runs), undefined, new Map(), new Set(runs.map((f) => f.runId)))
+        .pinned.filter((p) => p.job.probe !== undefined)
+        .flatMap((p) => p.spawn.entries.map((e) => e.runId ?? p.job.name));
+    const resumed = (runs: RunFact[]) => {
+      const plan = planResumes({ runs, config: cfg, running: new Map(), held, now: NOW, campaignFileOf: fileOf });
+      return {
+        resume: plan.resume.map((r) => [r.job.name, r.account, r.runId]).sort(),
+        listed: plan.listed.map((l) => [l.runId, l.why]),
+        // No square of a campaign whose run came back.
+        fresh: freshOf(runs, plan.resume),
+      };
+    };
+    // What a campaign whose paused run is NOT resumed gets instead: its square
+    // again, as a fresh -a2 beside the paused a1 (the stranding seen live).
+    expect(freshOf([fp, race1, class1], []).sort()).toEqual([`${class1.runId}-a2`, `${race1.runId}-a2`]);
+
+    // The first restart: one paused run on each account, all three of one model.
+    const first = resumed([fp, race1, class1]);
+    expect(first.resume).toEqual([
+      ["class-probe-dwarf-warrior-base", "RUNNER", class1.runId],
+      ["nav-freeplay", "RUNNER2", fp.runId],
+      ["race-probe-human-warrior-base", "RUNNER6", race1.runId],
+    ]);
+    expect(first.listed).toEqual([]);
+    expect(first.fresh).toEqual([]);
+
+    // The second: class-probe's a1 was stranded and its a2 paused too. Of one
+    // campaign's own paused runs only the newest-started comes back, and the
+    // older is listed, never resumed over it.
+    const class2 = probe("class-probe", "dwarf-warrior", "RUNNER", "-a2", NOW - H);
+    const second = resumed([fp, race1, class1, class2]);
+    expect(second.resume).toEqual([
+      ["class-probe-dwarf-warrior-base", "RUNNER", class2.runId],
+      ["nav-freeplay", "RUNNER2", fp.runId],
+      ["race-probe-human-warrior-base", "RUNNER6", race1.runId],
+    ]);
+    expect(second.listed).toEqual([[class1.runId, "a later-started paused run of campaign class-probe is ahead of it — resume by hand or archive"]]);
+    expect(second.fresh).toEqual([]);
   });
 
   test("a paused probe whose window came from its arm resumes under its own job, the window kept from meta, on both CLIs", () => {
