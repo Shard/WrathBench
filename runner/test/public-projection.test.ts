@@ -699,6 +699,7 @@ describe("projectRunDetail", () => {
       cost: costViewFixture(),
       playtimeMs: 1000,
       sessions: [smuggle({ start: 1000, end: 2000 }), smuggle({ start: 9000, end: null })],
+      rosterName: "alpha-low",
       achievements: { earned: 2, points: 20, ids: [6, 12] },
       taxi: { flights: 1 },
       deaths: smuggle({
@@ -732,6 +733,8 @@ describe("projectRunDetail", () => {
         "playtimeMs",
         "sessions",
         ...under("sessions[]", ["start", "end"]),
+        // A roster row's name, which `models.json` already publishes.
+        "rosterName",
         "achievements",
         ...under("achievements", ["earned", "points", "ids"]),
         "taxi",
@@ -755,6 +758,7 @@ describe("projectRunDetail", () => {
       { fromTurn: 12, toTurn: null },
     ]);
     expect(out.deaths).toEqual({ deaths: 1, releases: 1, resurrects: 1, sites: [{ turn: 3 }] } as DeathFacts);
+    expect(out.rosterName).toBe("alpha-low");
   });
 
   test("spells, talents and trades project whole: ids, counts and turns, nothing nameable", () => {

@@ -60,7 +60,7 @@ import type {
 import { episodeOf, questsAcrossRestarts, resultRunOf, trackFrom } from "./results";
 import { scriptedReferenceLines } from "./scripted-reference";
 import { campaignsView } from "./campaigns";
-import { modelsResponse, readFleetRoster } from "./models";
+import { modelsResponse, readFleetRoster, rosterNameOf } from "./models";
 import { modelStates, outstandingWork, type RunFact } from "../src/models";
 import { positionsFromStore } from "./positions";
 import { toolsResponse } from "./tools";
@@ -1757,6 +1757,20 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // The segments that figure sums, so the page's charts close the same
         // pauses the playtime does (`sessions.ts`).
         sessions,
+        /*
+         * The models-table row this run links to, so the page need not fetch
+         * the whole models aggregate for one name. Off the roster the config
+         * store holds now (`fleetRoster`, shared on its short window), like
+         * `/api/models` itself. Public-safe: `models.json` publishes every row
+         * name. A cold run's published detail is only re-rendered on the full
+         * pass, so a renamed roster entry reaches it that late.
+         */
+        rosterName: rosterNameOf(
+          fleetRoster(),
+          run.model,
+          run.comparability?.effort ?? null,
+          run.comparability?.compactWindow ?? null,
+        ),
         // Same incremental path as tokens and cost: the tail accumulates the
         // milestone marks as it indexes, so a live run's line grows with it.
         achievements: tail.achievements,
@@ -1952,8 +1966,22 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * `entries.slice(cursor)` instead, after any scan by anyone, and starts
        * over from the top when the tail was rebuilt under it (a truncated or
        * rotated file; `generation`).
+       *
+       * Where it starts is the client's to say. The run page loads its window
+       * from `/entries` and only then opens this, so a stream starting at the
+       * tail's end would drop whatever was written between the two; the page
+       * passes `?from=` (the index of the first entry it does not hold — an
+       * entry's `i`, which is its index in `entries`) and the stream sends
+       * from there. Every frame that moves the cursor carries it as the SSE
+       * `id`, so the browser's own reconnect sends it back as `Last-Event-ID`,
+       * which wins over the URL's `from`: a reconnect resumes where the last
+       * connection stopped, neither losing the gap nor replaying what it
+       * already delivered. A start past the tail's end means the file was
+       * rebuilt shorter since the client read it, so that starts over at 0,
+       * as a rebuild under an open stream does. No start at all is the end.
        */
-      let cursor = tail.entries.length;
+      const start = streamStart(req, url);
+      let cursor = start === null ? tail.entries.length : start > tail.entries.length ? 0 : start;
       let gen = tail.generation;
       let timer: ReturnType<typeof setInterval> | undefined;
       let closed = false;
@@ -1969,28 +1997,40 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const stream = new ReadableStream({
         start(controller) {
           const enc = new TextEncoder();
-          const send = (data: unknown): void => {
+          // `id` only on the frames that move the cursor: a browser keeps the
+          // last id it saw across frames that carry none.
+          const send = (data: unknown, id?: number): void => {
             if (closed) return;
             try {
-              controller.enqueue(enc.encode(`data: ${JSON.stringify(data)}\n\n`));
+              const head = id === undefined ? "" : `id: ${id}\n`;
+              controller.enqueue(enc.encode(`${head}data: ${JSON.stringify(data)}\n\n`));
             } catch {
               unpinOnce(); // the client went away between ticks
             }
           };
-          send({ hello: runId, total: cursor });
+          /** Everything past the cursor, as one batch; false when there was nothing. */
+          const flush = (): boolean => {
+            if (tail.generation !== gen) {
+              gen = tail.generation;
+              cursor = 0;
+            }
+            if (cursor >= tail.entries.length) return false;
+            const added = tail.entries.slice(cursor);
+            cursor = tail.entries.length;
+            // The token figure is the tail's memo: one derivation per batch
+            // however many streams are open.
+            send({ entries: added, tokens: tail.tokens }, cursor);
+            return true;
+          };
+          send({ hello: runId, total: tail.entries.length }, cursor);
+          // What was written before the stream opened, at once rather than on
+          // the first tick.
+          flush();
           timer = setInterval(() => {
             void scan(runId, tail)
               .then(() => {
-                if (tail.generation !== gen) {
-                  gen = tail.generation;
-                  cursor = 0;
-                }
-                const added = cursor < tail.entries.length ? tail.entries.slice(cursor) : [];
-                cursor = tail.entries.length;
                 // A heartbeat keeps proxies and fetch timeouts from calling it dead.
-                // The token figure is the tail's memo: one derivation per batch
-                // however many streams are open.
-                send(added.length > 0 ? { entries: added, tokens: tail.tokens } : { tick: Date.now() });
+                if (!flush()) send({ tick: Date.now() });
               })
               .catch(() => undefined);
           }, POLL_MS);
@@ -2185,6 +2225,21 @@ export function createApi(opts: ApiOptions): ApiHandle {
 /** Whether a run row is one a public handle withholds: its driver, or its stamp, says it is not a model's. */
 function isWithheldRow(r: Pick<RunRow, "driver" | "shakeout">): boolean {
   return isNotAModelRun({ driver: r.driver, unscored: r.shakeout });
+}
+
+/**
+ * Where a `/stream` starts, as the client asked: the browser's `Last-Event-ID`
+ * on a reconnect (the cursor the last connection's frames carried), else the
+ * URL's `from`. Null when neither is a non-negative integer, which starts the
+ * stream at the tail's end.
+ */
+export function streamStart(req: Request, url: URL): number | null {
+  for (const raw of [req.headers.get("last-event-id"), url.searchParams.get("from")]) {
+    if (raw === null || !/^\d+$/.test(raw.trim())) continue;
+    const n = Number(raw.trim());
+    if (Number.isSafeInteger(n)) return n;
+  }
+  return null;
 }
 
 /**

@@ -94,8 +94,9 @@ describe("compressed JSON", () => {
     const reader = res.body!.getReader();
     const first = new TextDecoder().decode((await reader.read()).value!);
     await reader.cancel();
-    expect(first.startsWith("data: ")).toBe(true);
-    expect(JSON.parse(first.slice(6).trim())).toMatchObject({ hello: RUN, total: 301 });
+    // The hello carries the stream's cursor as its SSE id, then its data.
+    expect(first.startsWith("id: 301\ndata: ")).toBe(true);
+    expect(JSON.parse(first.slice(first.indexOf("data: ") + 6).trim())).toMatchObject({ hello: RUN, total: 301 });
   });
 
   test("plain text is untouched", async () => {

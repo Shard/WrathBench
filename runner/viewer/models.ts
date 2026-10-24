@@ -500,6 +500,31 @@ export function rowOf(state: ModelState, runs: readonly RunFact[], runsDir: stri
   };
 }
 
+/**
+ * The roster row a run belongs to, by name: what the run page links its model
+ * to. A run records a model string, an effort and a compaction window, never
+ * the name that scheduled it, so the match is on that identity over exactly
+ * the rows `/api/models` lists (`modelsResponse`: the roster in order, the
+ * excluded names left out). An effort or window the roster has no row for
+ * still points at the model's own row, which is more useful than no link.
+ * Null for a run with no model, or a model the roster does not name.
+ */
+export function rosterNameOf(
+  roster: Pick<RosterRead, "models" | "excluded">,
+  model: string | null,
+  effort: string | null = null,
+  compactWindow: string | null = null,
+): string | null {
+  if (model === null) return null;
+  const outside = new Set(roster.excluded.map((e) => e.name));
+  const rows = roster.models.filter((m) => !outside.has(m.name));
+  const hit = rows.find(
+    (r) => r.model === model && (r.effort ?? null) === effort && (r.compactWindow ?? null) === compactWindow,
+  );
+  if (hit !== undefined) return hit.name;
+  return rows.find((r) => r.model === model)?.name ?? null;
+}
+
 /** The whole response, given the projection and the facts it was built from. */
 export function modelsResponse(opts: {
   states: readonly ModelState[];

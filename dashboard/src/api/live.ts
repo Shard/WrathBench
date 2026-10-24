@@ -6,7 +6,9 @@
  * hello, then either a batch of entries or a heartbeat tick every second. The
  * heartbeat exists so a proxy or a fetch timeout cannot mistake a quiet run for
  * a dead connection, and it is what drives the "N seconds since anything
- * happened" line on the run page.
+ * happened" line on the run page. Where the stream starts is in the URL
+ * (`streamUrl`'s `from`); the frames carry the server's cursor as their SSE id,
+ * so `EventSource`'s own reconnect resumes from it with nothing done here.
  */
 
 import type { FeedEntry, TokenTotals } from "@viewer/api-types";

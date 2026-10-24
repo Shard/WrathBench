@@ -1272,6 +1272,14 @@ export interface RunDetailResponse extends SnapshotEnvelope {
    */
   sessions?: ActiveSegment[];
   /**
+   * The roster row this run's model belongs to (`rosterNameOf`), for the run
+   * page's link to the models table: matched on (model, effort, compaction
+   * window) over the rows `/api/models` lists, falling back to the model's own
+   * row. Null when the roster names no such model. Optional: an older viewer
+   * or snapshot has none, and the page then prints the model unlinked.
+   */
+  rosterName?: string | null;
+  /**
    * Achievements and flights from this run's milestone records,
    * accumulated by the same incremental tail the entry feed rides, so a live
    * run's line grows with it. Null on a run that recorded none — never zero.

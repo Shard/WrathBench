@@ -400,7 +400,7 @@ describe("the thinking-token envelopes", () => {
     const hello = new TextDecoder().decode((await reader.read()).value!);
     await reader.cancel();
     // The SSE hello carries the served count, which the new envelope did not grow.
-    expect(JSON.parse(hello.replace(/^data: /, "").trim())).toMatchObject({ hello: "claude-run", total: 5 });
+    expect(JSON.parse(hello.slice(hello.indexOf("data: ") + 6).trim())).toMatchObject({ hello: "claude-run", total: 5 });
     rmSync(runs, { recursive: true, force: true });
   });
 });

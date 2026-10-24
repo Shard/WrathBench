@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ModelRowView } from "../../runner/viewer/api-types";
-import { MODEL_COLUMNS, columnClass, compareModelRows, highestTierOf, tierOf, tierTitle, countedOf, extrasOf, isPromoted, modelsHref, freeplayOf, noteOf, rosterNameFor, schedulableOf, statusClass } from "../src/lib/models";
+import { MODEL_COLUMNS, columnClass, compareModelRows, highestTierOf, tierOf, tierTitle, countedOf, extrasOf, isPromoted, modelsHref, freeplayOf, noteOf, schedulableOf, statusClass } from "../src/lib/models";
 
 function row(over: Partial<ModelRowView> = {}): ModelRowView {
   return {
@@ -166,23 +166,7 @@ describe("noteOf", () => {
   });
 });
 
-describe("rosterNameFor", () => {
-  const rows = [
-    row({ name: "alpha", model: "vendor/alpha", effort: null }),
-    row({ name: "alpha-low", model: "vendor/alpha", effort: "low" }),
-  ];
-
-  test("effort is part of the key, as it is in the projection", () => {
-    expect(rosterNameFor(rows, "vendor/alpha", null)).toBe("alpha");
-    expect(rosterNameFor(rows, "vendor/alpha", "low")).toBe("alpha-low");
-  });
-
-  test("an unknown effort still points at the model, an unknown model at nothing", () => {
-    expect(rosterNameFor(rows, "vendor/alpha", "high")).toBe("alpha");
-    expect(rosterNameFor(rows, "vendor/beta")).toBeNull();
-    expect(rosterNameFor(rows, null)).toBeNull();
-  });
-
+describe("modelsHref", () => {
   test("the href is the anchor, and an unnamed model still lands on the page", () => {
     expect(modelsHref("alpha-low")).toBe("/models#alpha-low");
     expect(modelsHref("a b")).toBe("/models#a%20b");

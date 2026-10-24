@@ -1356,6 +1356,8 @@ export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
     cost: projectCostView(d.cost),
     playtimeMs: d.playtimeMs,
     ...(d.sessions !== undefined ? { sessions: projectSessions(d.sessions) } : {}),
+    // A roster row's name, which `models.json` publishes for every row.
+    ...(d.rosterName !== undefined ? { rosterName: typeof d.rosterName === "string" ? d.rosterName : null } : {}),
     ...(d.achievements !== undefined
       ? { achievements: d.achievements === null ? null : projectAchievements(d.achievements) }
       : {}),
