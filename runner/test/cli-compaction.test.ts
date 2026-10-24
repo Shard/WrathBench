@@ -378,7 +378,7 @@ const SESSION = "d79945d9-d777-4a26-9835-8f075947cbac";
 const BOUNDARY = "7e2a3fc8-d5f7-4453-8043-f8e2493dc73a";
 
 /**
- * A transcript around one compaction, in the pinned 2.1.293's shape: two
+ * A transcript around one compaction, in 2.1.293's shape: two
  * attachment lines between the boundary and its summary, the summary parented
  * on the last of them. `adjacent` is the 2.1.239 shape, parented on the
  * boundary itself.

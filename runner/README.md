@@ -408,7 +408,10 @@ The flags are `claudeArgs`, all present in `claude -p --help` for 2.1.238.
 without it. `--allowed-tools` is the whole permission story — verified against
 the real CLI (with a local capture proxy standing in for the model, so nothing
 was billed) that it dispatches an MCP tool call in headless mode without
-`--permission-mode`.
+`--permission-mode`. With no mode named, the `init` frame reports the mode
+the CLI picked: `auto` on 2.1.293, and `default` from 2.1.302 on. On the
+pinned 2.1.309 the call still dispatches on the allowlist alone (probed with
+the driver's flags against a stub MCP server).
 
 ### Bounding the inner loop — the real control
 
@@ -464,7 +467,10 @@ A harness setting of the CLI scaffolds since the operator's decision of
 2026-10-11; this section is claude-code's mechanics, and "The codex driver"
 below has codex's, and "The pi driver" pi's. The CLI summarises its own history once the prompt nears
 its auto-compaction window, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: `auto` or
-100k–1M tokens in 2.1.293.
+100k–1M tokens in the pinned 2.1.309. A CLI before 2.1.304 read any `<n>k`
+spelling there as 100k whatever `n` was: on 2.1.293 `200k` and `300k` both
+logged `effectiveWindow=80000`, where 2.1.309 logs 180000 and 280000 (probed).
+An integer token count reads as written on both.
 `auto` sits near the model's whole context — with `--debug` the CLI logs
 `autocompact: … effectiveWindow=980000` for Claude Haiku 5.5 — so a long run
 replays close to a million tokens per call before anything is summarised, and
@@ -505,14 +511,15 @@ today's all-1M Claude roster `1M` is therefore always refused.
 Each compaction the CLI streams — a `system` envelope with subtype
 `compact_boundary` and `compact_metadata` (`trigger`, `pre_tokens`, and when
 known `post_tokens` and `duration_ms`: recorded by 2.1.239 runs, and the same
-mapping is in the pinned 2.1.293 binary) — stays on the trajectory
+fields on a 2.1.309 compaction, beside new ones the record does not keep) — stays on the trajectory
 raw as `claude_system` and is also written as a `harness` record of kind
 `compaction` with `trigger`, `preTokens`, `postTokens`, `durationMs`, `at` and
 `summary`, so a reader can count a run's compactions without knowing the CLI's
 vocabulary. The summary is not on the stream: the CLI writes it into its
 session transcript under the run's `claude-config/projects/`, as the first
 `user` line flagged `isCompactSummary` after the boundary line with the
-envelope's `uuid` (2.1.293 writes two attachment lines between them), and the
+envelope's `uuid` (2.1.293 writes two attachment lines between them, and a
+2.1.309 `/compact` none), and the
 driver reads it from there (a bounded tail read, retried on the next few
 envelopes) before appending the record. The codex driver writes the same
 record off its rollout. It is trajectory only, and the public projection
@@ -565,9 +572,9 @@ utilization and reset (`claudeRateLimitWindows`). The driver records them on
 change for the fleet's subscription usage gate, as the codex driver does —
 used percent, length, reset; never the overage or credit fields beside them —
 waits a spent quota's pause for the rejected window's reset, and stops a
-freeplay run at its turn boundary at the freeplay threshold. The shape is read
-off the pinned CLI's own bundle; until a frame arrives the lane has no reading
-and nothing is held.
+freeplay run at its turn boundary at the freeplay threshold. The shape was read
+off 2.1.293's bundle, and a 2.1.309 probe streamed the same frame with the same
+keys. Until a frame arrives the lane has no reading and nothing is held.
 
 ### Setup, once
 
@@ -698,7 +705,8 @@ and differs only where the CLI does:
   compaction window" has what it is as a run dimension) reaches the CLI as
   the integer `-c model_auto_compact_token_limit=<tokens>` (`codexArgs`):
   `200k` is `200000`, a bare TOML integer, which the pinned CLI reads as an
-  `Option<i64>` (`codex-rs/core/src/config/mod.rs` at `rust-v0.159.3`). It
+  `Option<i64>` (`codex-rs/core/src/config/mod.rs` at `rust-v0.163.0`, as at
+  `rust-v0.159.3`). It
   replaces the catalogue's own limit for the model, and the CLI then compacts
   at the smaller of it and 90% of the catalogue window
   (`ModelInfo::auto_compact_token_limit`), measured against the full active
@@ -795,7 +803,7 @@ reachable module URL is the alternative.
 ## The pi driver
 
 The pi coding-agent CLI (earendil-works/pi, MIT), the version pinned as
-`PI_VERSION` in `infra/docker/runner.Dockerfile`: 1.3.0, the release binary,
+`PI_VERSION` in `infra/docker/runner.Dockerfile`: 1.4.0, the release binary,
 verified by its sha256. A labelled harness, `pi`, probe-only until the
 operator promotes it (operator, 2026-10-20; the registry's `probeOnly`).
 `src/adapter-pi.ts` keeps the invariants the other CLI drivers keep — one
@@ -805,7 +813,9 @@ process-group kill on stop, a constructed child environment — and differs
 where pi does. Everything below was read off the 1.3.0 source and checked
 against the real binary driving a stub OpenAI-compatible endpoint, inside a
 network namespace that had only loopback, with every proxy variable pointed at
-a logging proxy that refused everything.
+a logging proxy that refused everything. For 1.4.0 the 1.3.0..1.4.0 diff was
+read and the same check run again. The one change it found is the summary
+cap under "The compaction window on pi".
 
 - **One long-lived process in RPC mode.** `pi --mode rpc --no-session`
   reads JSONL commands on stdin and writes responses and session events on
@@ -828,7 +838,7 @@ a logging proxy that refused everything.
   `PI_MCP_TIMEOUT_S` (30 minutes), because a snippet can run its whole
   timeout behind another call; the watchdogs bound a stuck call instead.
 - **Our prompt bytes, exactly.** `--system-prompt <file>` replaces pi's own
-  prompt, but pi 1.3.0 still appends a `<cwd>` section naming the working
+  prompt, but pi (1.3.0 and 1.4.0) still appends a `<cwd>` section naming the working
   directory. `src/pi-extension.ts`, loaded with `-e`, answers pi's
   `before_agent_start` with that same text as the whole prompt (pi's documented
   override), so the request's system message is byte-for-byte
@@ -919,12 +929,15 @@ model's window is one pi never reaches (it would compact only on an overflow),
 so it is refused before the first turn (`piWindowCapRefusal`). The window
 rides on the `driver` record with the reserve it became.
 
-Two things come with the mechanism. The same reserve caps the summary pi asks
-for (`min(0.8 × reserve, the model's output cap)`, half that for a split
-turn's prefix), so `300k` lifts that cap from about 13k tokens to the model's
-384k; it is a ceiling, not a length. And pi keeps the newest 20,000 tokens
-verbatim (`keepRecentTokens`, its default, left alone), so a compaction needs
-more history than that to have anything to summarise.
+The reserve sets only when pi compacts. In 1.3.0 it also capped the summary pi
+asked for (`min(0.8 × reserve, the model's output cap)`, half that for a split
+turn's prefix), so `auto` capped a summary near 13k tokens. In 1.4.0 every
+summary asks for the model's output cap (384k on deepseek-flash, clamped to
+what fits in the context) whatever the window. That is a ceiling, not a
+length, but it means an `auto` pi run on 1.4.0 is not the same condition as
+one on 1.3.0. pi keeps the newest 20,000 tokens verbatim (`keepRecentTokens`,
+its default, left alone), so a compaction needs more history than that to
+have anything to summarise.
 
 Each `compaction_end` is a `harness` record of kind `compaction` with
 `trigger`, `preTokens`, `postTokens` (pi's estimate after), `durationMs`, `at`
@@ -935,7 +948,7 @@ the token totals and the cost count, though never as a model reply (`modelRespon
 same way as on the other CLIs.
 
 **The context window of deepseek-flash** (operator, 2026-10-20: the window
-must exceed 300k for `300k` to bind). pi 1.3.0's catalogue gives it 1,000,000
+must exceed 300k for `300k` to bind). pi's catalogue (1.3.0 and 1.4.0) gives it 1,000,000
 tokens (`pi-ai/dist/providers/data/deepseek.json`, `--offline` keeps pi from
 overlaying a newer one), and OpenRouter's public model list gives
 `deepseek/deepseek-v4.1-flash-1017` 1,048,576 (read 2026-10-20). DeepSeek's

@@ -184,7 +184,8 @@ export class CodexLastCallReader {
 // ------------------------------------------------------------ compactions
 
 /**
- * One compaction as the Codex CLI's rollout records it (0.159.3, read off a
+ * One compaction as the Codex CLI's rollout records it (0.159.3, and the same
+ * items in 0.163.0's source; read off a
  * live GPT-6.1 Sol thread). In file order:
  *
  *   {"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{…"total_tokens":446911},"model_context_window":475000}}}
@@ -225,7 +226,7 @@ export interface CodexContextReading {
 const finite = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
 /**
- * The subscription's usage windows off one rollout line (0.159.3). `codex
+ * The subscription's usage windows off one rollout line (0.159.3, unchanged in 0.163.0). `codex
  * exec --json` never prints them (codex issue #14728, closed), but every
  * `token_count` the CLI persists carries the account's `rate_limits`:
  *

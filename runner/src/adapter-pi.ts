@@ -8,7 +8,7 @@
  * own conversation and compacts it itself, which is what makes it a harness
  * and not a `wrathbench` row.
  *
- * ## How it is wired (pi 1.3.0, the version pinned as `PI_VERSION` in
+ * ## How it is wired (pi 1.4.0, the version pinned as `PI_VERSION` in
  * `infra/docker/runner.Dockerfile`)
  *
  * - **One long-lived process in RPC mode** (`pi --mode rpc`), the claude-code
@@ -208,7 +208,7 @@ const CONTEXT_PATTERNS = [/context[_ ]length/i, /context window/i, /maximum cont
 
 /**
  * The final error of a pi turn, classified. pi prefixes a provider's HTTP
- * error with its status (`429: {"message":…}` in 1.3.0), which is the
+ * error with its status (`429: {"message":…}` in 1.3.0 and 1.4.0), which is the
  * classification; the words decide only between quota and rate on a 429, as
  * the openai driver's `EXHAUSTION_HINTS` do. Only ever asked of pi's
  * `errorMessage`, never of model text.
@@ -320,7 +320,7 @@ export interface PiArgsOptions {
 
 /**
  * The exact flag set, in one place so the README and the tests can assert it.
- * Every flag is in `pi --help` for 1.3.0 (docs/cli.md).
+ * Every flag is in `pi --help` for 1.4.0 (docs/cli.md).
  */
 export function piArgs(o: PiArgsOptions): string[] {
   return [
@@ -396,7 +396,7 @@ function assistantParts(message: Record<string, unknown>): { text: string; think
   return { text, thinkingChars, toolUses };
 }
 
-/** How pi 1.3.0 opens an MCP text result it middle-truncated (`dist/extensions/mcp/tools.js`). */
+/** How pi 1.4.0, as 1.3.0, opens an MCP text result it middle-truncated (`dist/extensions/mcp/tools.js`). */
 export const PI_TRUNCATION_PREFIX = "Warning: truncated output";
 
 /** The text blocks of a `tool_execution_end` result, joined; undefined when it has none. */
@@ -1023,7 +1023,7 @@ export async function runPiEpisode(o: PiEpisodeOptions): Promise<LoopOutcome> {
             });
             // The model that answered: pi keeps the endpoint's own id as
             // `responseModel` only when it differs from the one it asked for
-            // (`dist/api/openai-completions.js` in pi-ai 1.3.0), else `model`.
+            // (`dist/api/openai-completions.js` in pi-ai 1.3.0 and 1.4.0), else `model`.
             if (!promotedResolved && stopReason !== "error") {
               const served = typeof m["responseModel"] === "string" ? m["responseModel"] : typeof m["model"] === "string" ? m["model"] : undefined;
               if (served !== undefined) {
@@ -1084,7 +1084,7 @@ export async function runPiEpisode(o: PiEpisodeOptions): Promise<LoopOutcome> {
           }
           case "tool_execution_end": {
             // pi cuts the middle out of an MCP text result over 20 KB before
-            // the model reads it (`MCP_OUTPUT_MAX_BYTES`, pi 1.3.0), and saves
+            // the model reads it (`MCP_OUTPUT_MAX_BYTES`, pi 1.4.0), and saves
             // the whole text to a temp file the model has no tool to open. The
             // `snippet_result`/`tool_result` above holds what our server
             // answered; this holds what the model was shown instead.

@@ -139,7 +139,7 @@ export class CompactionAsk {
 /**
  * The Codex CLI's auto-compaction threshold, from the window it reports.
  *
- * In the pinned CLI (0.159.3, `codex-rs/protocol/src/openai_models.rs`,
+ * In the pinned CLI (0.163.0 as in 0.159.3, `codex-rs/protocol/src/openai_models.rs`,
  * `ModelInfo::auto_compact_token_limit`) the threshold is 90% of the model's
  * catalogue `context_window`, while the `model_context_window` every
  * `token_count` event reports is `usable_context_window`, that window times
@@ -236,7 +236,7 @@ export function codexWindowCapRefusal(compactWindow: string | undefined, reporte
 }
 
 /**
- * The pi CLI's auto-compaction threshold. In the pinned 1.3.0 pi compacts once
+ * The pi CLI's auto-compaction threshold. In the pinned 1.4.0, as in 1.3.0, pi compacts once
  * the last assistant message's usage (`totalTokens`: input, output, cache read
  * and write) plus an estimate of what followed it exceeds the model's context
  * window less `compaction.reserveTokens` (`shouldCompact`,
@@ -260,10 +260,9 @@ export function piAutoCompactLimit(contextWindow: number, compactWindow?: string
  * The `compaction.reserveTokens` that makes pi compact at exactly the run's
  * window: the model's context window less it. Undefined for `auto` (pi's own
  * reserve stands) and for a window pi could never reach (`piWindowCapRefusal`).
- * The same setting caps the summary pi asks for — `min(0.8 × reserve, the
- * model's output cap)`, half that for a split turn's prefix — so a window well
- * below the model's context also lifts that cap (runner/README.md, "The pi
- * driver").
+ * In the pinned 1.4.0 the reserve sets only when pi compacts. Every summary
+ * asks for the model's output cap, where 1.3.0 capped it at `min(0.8 ×
+ * reserve, the model's output cap)` (runner/README.md, "The pi driver").
  */
 export function piReserveTokens(contextWindow: number, compactWindow: string | undefined): number | undefined {
   const configured = compactWindowTokens(compactWindow);
@@ -380,9 +379,11 @@ export function messageText(message: unknown): string | undefined {
  * The summary in a chunk of transcript text: the first `user` line the CLI
  * flags `isCompactSummary` after the `compact_boundary` line whose `uuid` is
  * the boundary envelope's. Found by order, not by parent: in a 2.1.239
- * transcript the summary's `parentUuid` is the boundary itself, while the
- * pinned 2.1.293 writes two attachment lines (`session_context`, `date`)
- * between them and parents the summary on the last of those. `partialHead`
+ * transcript the summary's `parentUuid` is the boundary itself, while
+ * 2.1.293 writes two attachment lines (`session_context`, `date`) between
+ * them and parents the summary on the last of those. A 2.1.309 `/compact`
+ * puts the summary straight after the boundary again, with that version's
+ * `api-request` records elsewhere in the file. `partialHead`
  * drops a first line cut by the tail read.
  */
 export function summaryInTranscript(text: string, boundaryUuid: string, partialHead: boolean): string | undefined {
@@ -409,8 +410,8 @@ export function summaryInTranscript(text: string, boundaryUuid: string, partialH
  * The summary the Claude Code CLI wrote after a compact boundary, read from
  * its own session transcript under the run's `CLAUDE_CONFIG_DIR`
  * (`projects/<cwd slug>/<session id>.jsonl`; checked against a 2.1.293
- * Claude Haiku 5.5 run, whose stream envelope's `uuid` is the transcript
- * boundary's). The stream-json output is not known to carry it; the
+ * Claude Haiku 5.5 run and a 2.1.309 one, whose stream envelope's `uuid` is
+ * the transcript boundary's). The stream-json output is not known to carry it; the
  * transcript does. A bounded tail read, looked up soon after the boundary,
  * so both lines are near the end; undefined when they are not there (yet).
  * Never throws.

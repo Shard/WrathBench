@@ -296,7 +296,8 @@ export function compactWindowDriverRefusal(driver: string): string {
  * A CLI harness's auto-compaction window, as a run dimension
  * (`RunConfig.compactWindow`): `auto` or 100k–1M tokens, which is the range
  * `CLAUDE_CODE_AUTO_COMPACT_WINDOW` accepts in the pinned Claude Code CLI
- * (2.1.293: "Expected 'auto' or 100k–1M tokens"), and the same range and
+ * ("Expected 'auto' or 100k–1M tokens"; read as written from 2.1.304, where
+ * an older CLI read every `<n>k` as 100k), and the same range and
  * spelling for the Codex CLI, whose integer `model_auto_compact_token_limit`
  * takes any size. One canonical spelling per value — `<n>k`, and
  * `1M` for a million — so a roster's `100K` and `100k` are one condition, and
