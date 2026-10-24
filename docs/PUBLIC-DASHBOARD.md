@@ -903,6 +903,26 @@ and not the band is the one drawn.
 - **No line** before a series' reference run has finished, on a tier it was
   not run on, and on freeplay.
 
+## The runs table
+
+`/runs` is every recorded run, a hundred rows to a page (operator,
+2026-10-24). The page is cut last: the series selector, the URL's filters and
+the sort run over the whole set first, so page 1 of a sort is that sort's true
+top and the counts in the lines above the table are the whole set's. The page
+is a URL param beside the sort and the filters (`?page=`, spelled by
+`runsHref` in `dashboard/src/lib/runs.ts`), so a paged view can be handed on
+and a run page's "runs" crumb comes back to it. A new sort, filter or series
+starts again at page 1. Data never moves the reader: a poll keeps the page
+named in the URL, and a page past the end of a shrunken set shows the last one
+without the URL being rewritten. The pager is labels only, previous, the ends,
+the current page and its neighbours, next.
+
+Why it pages: at about 1,600 rows the whole table was drawn on every first
+render, every sort and every poll that changed one run — one to three seconds
+of main thread each — and the public header's one-second "data as of" clock
+repainted all of it. Paged, each of those is bounded by a hundred rows rather
+than by the record, and a poll redraws only the rows whose run changed.
+
 ## The social card
 
 A link to the site pasted into Discord, Slack or anywhere else reading Open

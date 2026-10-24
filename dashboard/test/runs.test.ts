@@ -19,8 +19,16 @@ import {
   filterLabel,
   filterParams,
   filterRuns,
+  clampPage,
+  keepRowIdentity,
   kindOf,
   nextSort,
+  PAGE_SIZE,
+  pageCount,
+  pageParam,
+  pageQuery,
+  pageSlice,
+  pagerItems,
   runsHref,
   sortParam,
   sortQuery,
@@ -224,6 +232,8 @@ describe("filter", () => {
     );
     expect(runsHref({ sort: { column: "cost", dir: "desc" } })).toBe("/runs?sort=cost&dir=desc");
     expect(runsHref({ sort: DEFAULT_SORT })).toBe("/runs");
+    expect(runsHref({ episode: "e90", sort: { column: "cost", dir: "desc" }, page: 3 })).toBe("/runs?episode=e90&sort=cost&dir=desc&page=3");
+    expect(runsHref({ page: 1 })).toBe("/runs");
   });
 
   test("a compaction window narrows like effort: absent under a model is the entry with none", () => {
@@ -237,5 +247,86 @@ describe("filter", () => {
       "/runs?episode=e360&model=hk&effort=max&compactWindow=100k",
     );
     expect(runsHref({ model: "hk", effort: "max", compactWindow: null })).toBe("/runs?model=hk&effort=max");
+  });
+});
+
+describe("pages of a hundred", () => {
+  /** 250 runs over two models, a third of them with a cost, newest first by index. */
+  const many = Array.from({ length: 250 }, (_, i) =>
+    run({
+      runId: `r${String(i).padStart(3, "0")}`,
+      model: i % 2 === 0 ? "even" : "odd",
+      startedAt: 1_000_000 - i,
+      actualCost: i % 3 === 0 ? { usd: i / 100, basis: "reported", note: null } as never : null,
+    }),
+  );
+
+  test("the page param: a number from 1, anything else page 1, page 1 spelled as nothing", () => {
+    expect(PAGE_SIZE).toBe(100);
+    expect(pageParam(undefined)).toBe(1);
+    expect(pageParam("3")).toBe(3);
+    expect(pageParam(["2", "5"])).toBe(2);
+    for (const bad of ["0", "-1", "2.5", "x", ""]) expect(pageParam(bad)).toBe(1);
+    expect(pageQuery(1)).toEqual({ page: null });
+    expect(pageQuery(4)).toEqual({ page: "4" });
+  });
+
+  test("counts are the whole set's and a page past the end shows the last one", () => {
+    expect(pageCount(0)).toBe(1);
+    expect(pageCount(100)).toBe(1);
+    expect(pageCount(101)).toBe(2);
+    expect(pageCount(1566)).toBe(16);
+    expect(clampPage(9, 250)).toBe(3);
+    expect(clampPage(0, 250)).toBe(1);
+    expect(pageSlice(many, 3).map((r) => r.runId)).toEqual(many.slice(200).map((r) => r.runId));
+    expect(pageSlice(many, 99)).toEqual(pageSlice(many, 3));
+    expect(pageSlice([], 2)).toEqual([]);
+  });
+
+  test("the sort and the filter run over every row before the page is cut", () => {
+    // Page 1 of the cost sort is the 84 costed runs, most expensive first —
+    // including the ones that sat on pages 2 and 3 of the default order.
+    const byCost = sortRuns(many, { column: "cost", dir: "desc" });
+    const first = pageSlice(byCost, 1);
+    expect(first[0]!.runId).toBe("r249");
+    expect(first.slice(0, 84).every((r) => costOf(r) !== null)).toBe(true);
+    expect(first.slice(84).every((r) => costOf(r) === null)).toBe(true);
+    // Narrowed to one model: 125 rows, two pages, every row on them that model.
+    const odd = sortRuns(filterRuns(many, filterParams({ model: "odd" })), DEFAULT_SORT);
+    expect(odd).toHaveLength(125);
+    expect(pageCount(odd.length)).toBe(2);
+    expect(pageSlice(odd, 2)).toHaveLength(25);
+    expect([...pageSlice(odd, 1), ...pageSlice(odd, 2)].every((r) => r.model === "odd")).toBe(true);
+    expect(pageSlice(odd, 1)[0]!.runId).toBe("r001");
+  });
+
+  test("the pager: both ends, the current page and its neighbours, a gap only where it hides pages", () => {
+    expect(pagerItems(1, 1)).toEqual([1]);
+    expect(pagerItems(1, 2)).toEqual([1, 2]);
+    expect(pagerItems(1, 16)).toEqual([1, 2, null, 16]);
+    expect(pagerItems(8, 16)).toEqual([1, null, 7, 8, 9, null, 16]);
+    expect(pagerItems(16, 16)).toEqual([1, null, 15, 16]);
+    // 1 … 3 would hide only 2, so 2 is drawn.
+    expect(pagerItems(4, 16)).toEqual([1, 2, 3, 4, 5, null, 16]);
+    expect(pagerItems(3, 5)).toEqual([1, 2, 3, 4, 5]);
+  });
+});
+
+describe("row identity across polls", () => {
+  test("an unchanged run keeps its object; a changed or new one is the new object", () => {
+    const a = run({ runId: "a" });
+    const b = run({ runId: "b", maxLevel: 3 });
+    const first = keepRowIdentity([], [a, b]);
+    expect(first[0]).toBe(a);
+    // The next poll parses every row afresh.
+    const a2 = run({ runId: "a" });
+    const b2 = run({ runId: "b", maxLevel: 4 });
+    const c2 = run({ runId: "c" });
+    const second = keepRowIdentity(first, [c2, a2, b2]);
+    expect(second[0]).toBe(c2);
+    expect(second[1]).toBe(a);
+    expect(second[2]).toBe(b2);
+    // So the sorted, paged rows the table draws hold the same objects too.
+    expect(pageSlice(sortRuns(second, DEFAULT_SORT), 1)).toContain(a);
   });
 });

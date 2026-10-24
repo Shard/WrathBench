@@ -64,7 +64,7 @@ import { ScratchpadPanel } from "../components/Scratchpad";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
-import { actionLines, isActionsEntry, moveVerdicts, type MoveVerdict } from "../lib/actionlog";
+import { actionLines, isActionsEntry, keepLines, moveVerdicts, sameLine, sameVerdicts, type MoveVerdict } from "../lib/actionlog";
 import type { ActionsEntry } from "@viewer/api-types";
 import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
 import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
@@ -84,7 +84,7 @@ import {
   type ExpandPreset,
 } from "../lib/feedview";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
-import { atBottom, contextHint, runChartInput, sourceHint, sourceLabel } from "../lib/runview";
+import { atBottom, chartClock, contextHint, runChartInput, sourceHint, sourceLabel } from "../lib/runview";
 import { displayError, logError } from "../lib/errors";
 import { statusOf, statusText, statusTitle } from "../lib/runs";
 import { partyHref, partyReplayHref } from "../lib/party";
@@ -317,11 +317,16 @@ export default function RunDetail() {
     const owner = getOwner();
 
     void api.info().then(setInfo).catch(() => undefined);
-    void api
-      .models()
-      .then((m) => setRoster(m.models))
-      .catch(() => undefined);
     loadPad();
+
+    /*
+     * The feed's window is asked for beside the detail rather than after it:
+     * neither needs the other, and waiting cost the first load a round trip.
+     * Its failure is handled where it is awaited below; the empty catch only
+     * keeps a detail that failed first from leaving it unhandled.
+     */
+    const firstWindow = api.entries(params.id, undefined, WINDOW);
+    void firstWindow.catch(() => undefined);
 
     void api
       .run(params.id)
@@ -367,15 +372,15 @@ export default function RunDetail() {
          * error. The count still comes off the detail either way.
          */
         setTotal(d.total);
-        const loadWindow = async (): Promise<void> => {
-          const page = await api.entries(params.id, undefined, WINDOW);
+        const loadWindow = async (pending = api.entries(params.id, undefined, WINDOW)): Promise<void> => {
+          const page = await pending;
           setEntries(page.entries);
           setFrom(page.from);
           setTotal(page.total);
         };
         if (SNAPSHOT_MODE) {
           try {
-            await loadWindow();
+            await loadWindow(firstWindow);
             setFeedPublished(true);
           } catch {
             setFeedPublished(false);
@@ -388,11 +393,22 @@ export default function RunDetail() {
            * the summary, the charts and the live poll down with the log.
            */
           try {
-            await loadWindow();
+            await loadWindow(firstWindow);
           } catch (e: unknown) {
             logError("run entries", e);
             setError(displayError(e));
           }
+        }
+        /*
+         * The roster is the whole models aggregate, the largest thing this page
+         * reads, for one name in one link: asked for once the summary and the
+         * feed are on screen, and not at all for a run with no model.
+         */
+        if (d.run.model !== null) {
+          void api
+            .models()
+            .then((m) => setRoster(m.models))
+            .catch(() => undefined);
         }
         if (d.run.terminationReason !== null) return;
         // A live run's summary keeps moving; a finished one is settled.
@@ -472,7 +488,7 @@ export default function RunDetail() {
    */
   const groups = createMemo<FeedGroup[]>((prev) => groupFeed(entries(), prev), []);
   /** The window's `move` verdicts, for the action lines of the moves they end. */
-  const verdicts = createMemo(() => moveVerdicts(entries()));
+  const verdicts = createMemo(() => moveVerdicts(entries()), undefined, { equals: sameVerdicts });
 
   /**
    * A plain-language guess at what the session is doing, from the newest entry
@@ -515,7 +531,7 @@ export default function RunDetail() {
            * playtime sums, so a run resumed in place days later reads as its
            * sessions with a seam at each resume (`runChartInput`).
            */
-          const chart = createMemo(() => runChartInput(d().states, run(), d().sessions, playtime(), now()));
+          const chart = createMemo(() => runChartInput(d().states, run(), d().sessions, playtime(), chartClock(run().live, now)));
           return (
             <>
               <h1 class="section">
@@ -1551,6 +1567,9 @@ function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; re
   );
 }
 
+/** An action line, and whether the call it came from was a routine's. */
+type RoutineLine = ReturnType<typeof actionLines>[number] & { routine: boolean };
+
 /** How many action lines show before the block folds. */
 const ACTION_FOLD_LINES = 8;
 
@@ -1562,8 +1581,15 @@ const ACTION_FOLD_LINES = 8;
  */
 function ActionLines(props: { records: readonly ActionsEntry[]; preset: ExpandPreset }) {
   const verdicts = useContext(MoveVerdicts);
-  const lines = createMemo(() =>
-    props.records.flatMap((r) => actionLines(r, verdicts()).map((l) => ({ ...l, routine: r.routine === true }))),
+  // The previous lines kept where they read the same, so `<For>` redraws only a line whose verdict moved.
+  const lines = createMemo<RoutineLine[]>(
+    (prev) =>
+      keepLines(
+        prev,
+        props.records.flatMap((r) => actionLines(r, verdicts()).map((l) => ({ ...l, routine: r.routine === true }))),
+        (a, b) => sameLine(a, b) && a.routine === b.routine,
+      ),
+    [],
   );
   const [over, setOver] = createSignal<boolean | null>(null);
   createEffect(on(() => props.preset, () => setOver(null), { defer: true }));

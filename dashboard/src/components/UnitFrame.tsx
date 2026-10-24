@@ -153,8 +153,8 @@ function Auras(props: { auras: readonly AuraView[]; now: number }) {
  * of this component, not a second one.
  */
 export function XpBar(props: Pick<UnitFrameProps, "level" | "xp" | "nextLevelXp">) {
-  const next = () => xpToNext(props.level, props.nextLevelXp);
-  const xp = () => barReading(props.xp, next());
+  // Read once per change, not once per attribute the bar draws from it.
+  const xp = createMemo(() => barReading(props.xp, xpToNext(props.level, props.nextLevelXp)));
   return (
     <span class="xp-row xp-inline">
       <span class="level-badge" title="level">
@@ -166,10 +166,9 @@ export function XpBar(props: Pick<UnitFrameProps, "level" | "xp" | "nextLevelXp"
 }
 
 export function UnitFrame(props: UnitFrameProps) {
-  const hp = () => healthReading(props.health, props.maxHealth, props.dead);
-  const pw = () => barReading(props.power, props.maxPower);
-  const next = () => xpToNext(props.level, props.nextLevelXp);
-  const xp = () => barReading(props.xp, next());
+  const hp = createMemo(() => healthReading(props.health, props.maxHealth, props.dead));
+  const pw = createMemo(() => barReading(props.power, props.maxPower));
+  const xp = createMemo(() => barReading(props.xp, xpToNext(props.level, props.nextLevelXp)));
   // Keyed on the spell, so a new cast is a new square rather than an old
   // icon under a new link.
   const castSpell = createMemo(() => props.cast?.spellId);

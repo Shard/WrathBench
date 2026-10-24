@@ -733,7 +733,7 @@ describe("the public build's call sites", () => {
     const src = read("../src/pages/RunDetail.tsx");
     // The window: caught in the public build, so an older snapshot's 404
     // costs the feed and nothing else.
-    expect(src).toMatch(/if \(SNAPSHOT_MODE\) \{\s*try \{\s*await loadWindow\(\);[\s\S]{0,120}\} catch \{/);
+    expect(src).toMatch(/if \(SNAPSHOT_MODE\) \{\s*try \{\s*await loadWindow\(firstWindow\);[\s\S]{0,120}\} catch \{/);
     // The tail: no EventSource is constructed in the public build.
     expect(src).toMatch(/if \(SNAPSHOT_MODE\) return;[\s\S]{0,400}subscribeTail\(/);
     // "load earlier" has nothing to walk into: one window per run.

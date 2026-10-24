@@ -227,20 +227,25 @@ export function sortKey(r: ResultRun, column: RunColumn): number | string | null
   }
 }
 
+/** One collator for every string the sort compares: `localeCompare`'s own default, built once. */
+const COLLATOR = new Intl.Collator();
+
 /**
  * Sort a copy. Stable: ties fall through to start time (newest first) and then
  * the run id, so two polls of the same data produce the same table and a
  * column with many equal values does not reshuffle under the reader.
+ *
+ * Each row's key is read once rather than once per comparison: `statusText`
+ * and `kindOf` build strings, and a comparator runs n log n times.
  */
 export function sortRuns(runs: readonly ResultRun[], sort: RunSort): ResultRun[] {
   const sign = sort.dir === "asc" ? 1 : -1;
-  return [...runs].sort((a, b) => {
-    const ka = sortKey(a, sort.column);
-    const kb = sortKey(b, sort.column);
+  const keyed = runs.map((r) => ({ r, k: sortKey(r, sort.column) }));
+  keyed.sort(({ r: a, k: ka }, { r: b, k: kb }) => {
     if (ka !== kb) {
       if (ka === null) return 1;
       if (kb === null) return -1;
-      const c = typeof ka === "number" && typeof kb === "number" ? ka - kb : String(ka).localeCompare(String(kb));
+      const c = typeof ka === "number" && typeof kb === "number" ? ka - kb : COLLATOR.compare(String(ka), String(kb));
       if (c !== 0) return c * sign;
     }
     if (a.startedAt !== b.startedAt) {
@@ -248,8 +253,85 @@ export function sortRuns(runs: readonly ResultRun[], sort: RunSort): ResultRun[]
       if (b.startedAt === null) return -1;
       return b.startedAt - a.startedAt;
     }
-    return a.runId.localeCompare(b.runId);
+    return COLLATOR.compare(a.runId, b.runId);
   });
+  return keyed.map((e) => e.r);
+}
+
+/**
+ * The served rows with every unchanged one kept as the object the previous
+ * poll gave it, matched by `runId`.
+ *
+ * A poll that changes one run still parses every row afresh, and `<For>` keys
+ * on the object: without this, one live run's new level rebuilt every row on
+ * the page. A row whose content did not change stays the same object, so only
+ * the rows that moved are drawn again.
+ */
+export function keepRowIdentity<T extends { runId: string }>(prev: readonly T[], next: readonly T[]): T[] {
+  if (prev.length === 0) return [...next];
+  const before = new Map(prev.map((r) => [r.runId, r]));
+  return next.map((r) => {
+    const p = before.get(r.runId);
+    return p !== undefined && JSON.stringify(p) === JSON.stringify(r) ? p : r;
+  });
+}
+
+/* ---------------------------------------------------------------- paging */
+
+/**
+ * Rows per page (operator, 2026-10-24). The filter and the sort run over every
+ * row first, so page 1 of a sort is the true top of it and the counts are the
+ * whole set's; the page only decides which hundred are drawn.
+ */
+export const PAGE_SIZE = 100;
+
+/** The `?page=` param: a page number from 1; anything else is page 1. */
+export function pageParam(v: string | string[] | undefined): number {
+  const s = Array.isArray(v) ? v[0] : v;
+  const n = s === undefined || !/^\d+$/.test(s) ? 1 : Number(s);
+  return n >= 1 ? n : 1;
+}
+
+/** How many pages `rows` rows make; an empty table is still one page. */
+export function pageCount(rows: number, size = PAGE_SIZE): number {
+  return Math.max(1, Math.ceil(rows / size));
+}
+
+/**
+ * The page actually drawn: the URL's, held to the pages there are. A poll
+ * that shrinks the set shows its last page without rewriting the URL, so data
+ * arriving never moves the reader.
+ */
+export function clampPage(page: number, rows: number, size = PAGE_SIZE): number {
+  return Math.min(Math.max(1, page), pageCount(rows, size));
+}
+
+/** The rows of one page. */
+export function pageSlice<T>(rows: readonly T[], page: number, size = PAGE_SIZE): T[] {
+  const p = clampPage(page, rows.length, size);
+  return rows.slice((p - 1) * size, p * size);
+}
+
+/** The page as a URL param; page 1 spells as nothing, like the default sort. */
+export function pageQuery(page: number): Record<string, string | null> {
+  return { page: page > 1 ? String(page) : null };
+}
+
+/**
+ * The pager's page numbers, `null` for a gap: the first and the last, and the
+ * current one with a neighbour either side — `1 2 … 16`, `1 … 7 8 9 … 16`.
+ * A gap of exactly one page is drawn as that page, since `…` would hide nothing.
+ */
+export function pagerItems(page: number, count: number): (number | null)[] {
+  const pages = [...new Set([1, count, page - 1, page, page + 1])].filter((p) => p >= 1 && p <= count).sort((a, b) => a - b);
+  const out: (number | null)[] = [];
+  for (const [i, p] of pages.entries()) {
+    const prev = pages[i - 1];
+    if (prev !== undefined && p - prev === 2) out.push(p - 1);
+    else if (prev !== undefined && p - prev > 2) out.push(null);
+    out.push(p);
+  }
+  return out;
 }
 
 /* --------------------------------------------------------------- filters */
@@ -316,8 +398,8 @@ export function filterRuns(runs: readonly ResultRun[], f: RunFilter): ResultRun[
   );
 }
 
-/** The runs page, filtered and sorted — one spelling for every page that links here. */
-export function runsHref(f: Partial<RunFilter> & { sort?: RunSort } = {}): string {
+/** The runs page, filtered, sorted and paged — one spelling for every page that links here. */
+export function runsHref(f: Partial<RunFilter> & { sort?: RunSort; page?: number } = {}): string {
   const q = new URLSearchParams();
   for (const k of ["episode", "model", "effort", "compactWindow", "harness", "character", "campaign"] as const) {
     const v = f[k];
@@ -325,6 +407,9 @@ export function runsHref(f: Partial<RunFilter> & { sort?: RunSort } = {}): strin
   }
   if (f.sort !== undefined) {
     for (const [k, v] of Object.entries(sortQuery(f.sort))) if (v !== null) q.set(k, v);
+  }
+  if (f.page !== undefined) {
+    for (const [k, v] of Object.entries(pageQuery(f.page))) if (v !== null) q.set(k, v);
   }
   const s = q.toString();
   return s === "" ? "/runs" : `/runs?${s}`;

@@ -17,10 +17,21 @@
  *
  * Filters are not a picker wall: a value in the table is a link that narrows
  * to it, and one line says what the view is narrowed to and how to clear it.
+ *
+ * A hundred rows to a page (operator, 2026-10-24; `PAGE_SIZE`). The filter and
+ * the sort run over every row before the page is cut, so the counts are the
+ * whole set's and page 1 of a sort is its true top; the page is a URL param
+ * like the rest, a new filter or sort starts again at page 1, and a poll never
+ * moves the reader off the page they are on.
+ *
+ * The table's links are plain anchors: the router already client-routes any
+ * same-origin `<a>` click from one listener on the document, leaving modified
+ * and middle clicks to the browser, and its `<A>` cost ~7,000 component setups
+ * per render for an `active` class this table never draws.
  */
 
-import { A, useSearchParams } from "@solidjs/router";
-import { For, Show, createMemo } from "solid-js";
+import { useLocation, useSearchParams } from "@solidjs/router";
+import { For, Show, createEffect, createMemo, on } from "solid-js";
 import { api, type ResultRun, type ResultsResponse } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
@@ -31,14 +42,21 @@ import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
 import {
   COLUMN_TITLES,
   RUN_COLUMNS,
+  clampPage,
   columnClass,
   costOf,
   filterLabel,
   filterParams,
   filterRuns,
   isFiltered,
+  keepRowIdentity,
   kindOf,
   nextSort,
+  pageCount,
+  pageParam,
+  pageQuery,
+  pageSlice,
+  pagerItems,
   sortParam,
   sortQuery,
   sortRuns,
@@ -60,6 +78,7 @@ import { groupParties, memberClass, partyHref } from "../lib/party";
 const POLL_MS = 15_000;
 
 export default function Runs() {
+  const location = useLocation();
   const [params, setParams] = useSearchParams();
   const sort = (): RunSort => sortParam(params.sort, params.dir);
   const filter = createMemo(() => filterParams(params));
@@ -68,11 +87,16 @@ export default function Runs() {
 
   // The shell's harness series: the one filter this page does not own.
   const feeds = useFeeds();
-  const served = (): ResultRun[] => body()?.runs ?? [];
+  /* Each unchanged run stays the object it was, so a poll redraws only the rows that moved (`keepRowIdentity`). */
+  const served = createMemo<ResultRun[]>((prev) => keepRowIdentity(prev, body()?.runs ?? []), []);
   const series = (): string | null => pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), served());
-  const inSeries = (): ResultRun[] => filterBySeries(served(), series());
+  const inSeries = createMemo((): ResultRun[] => filterBySeries(served(), series()));
   // A party's members together wherever the sort put the first of them (`groupParties`).
   const rows = createMemo(() => groupParties(sortRuns(filterRuns(inSeries(), filter()), sort())));
+  /* The page is cut from the whole sorted set, never the other way round. */
+  const pages = (): number => pageCount(rows().length);
+  const page = (): number => clampPage(pageParam(params.page), rows().length);
+  const shown = createMemo(() => pageSlice(rows(), page()));
   /*
    * Freeplay lineage (`runner/viewer/lineage.ts`), so a12 does not read as an unrelated
    * row beside a11. Indexed over everything the server served rather than over
@@ -86,16 +110,41 @@ export default function Runs() {
    */
   const lineage = createMemo(() => lineageIndex(served()));
 
-  const setSort = (column: RunColumn): void => setParams(sortQuery(nextSort(sort(), column)), { replace: true });
+  // A new sort or filter is a new list, so it opens at its top.
+  const setSort = (column: RunColumn): void =>
+    setParams({ ...sortQuery(nextSort(sort(), column)), ...pageQuery(1) }, { replace: true });
   const clear = (): void =>
-    setParams({ model: null, effort: null, compactWindow: null, episode: null, harness: null, character: null, campaign: null }, { replace: true });
+    setParams(
+      { model: null, effort: null, compactWindow: null, episode: null, harness: null, character: null, campaign: null, ...pageQuery(1) },
+      { replace: true },
+    );
+  // The shell's series selector is a filter too; its choice, not what it
+  // resolves to, so a poll that brings a new series moves no one.
+  createEffect(
+    on(
+      () => feeds.seriesChoice(),
+      () => {
+        if (params.page !== undefined) setParams(pageQuery(1), { replace: true });
+      },
+      { defer: true },
+    ),
+  );
+  let tableTop: HTMLDivElement | undefined;
+  const goPage = (n: number): void => {
+    setParams(pageQuery(n), { replace: true });
+    // `main` scrolls, not the window, so the router's own scroll-to-top never
+    // reaches it: a reader paging from the foot of the table is taken to its head.
+    const above = tableTop?.closest("main")?.getBoundingClientRect().top ?? 0;
+    if (tableTop !== undefined && tableTop.getBoundingClientRect().top < above) tableTop.scrollIntoView({ block: "start" });
+  };
   /*
    * The query a row carries to the run page, so its "← runs" comes back to this
    * exact view. The location's own search string, verbatim: the run page reads
    * no params of its own, and rebuilding the query here would be a second
-   * spelling of it.
+   * spelling of it. Read through the router so a sort or a page turn reaches
+   * the rows already on screen.
    */
-  const query = (): string => (typeof window === "undefined" ? "" : window.location.search);
+  const query = (): string => location.search;
   const live = createMemo(() => rows().filter((r) => statusOf(r) === "live").length);
 
   return (
@@ -135,7 +184,8 @@ export default function Runs() {
             {sort().column} {sort().dir}
           </span>
         </p>
-        <div class="scroller">
+        <Pager page={page()} count={pages()} go={goPage} />
+        <div class="scroller runs-scroller" ref={tableTop}>
           <table class="runs">
             <thead>
               <tr>
@@ -173,7 +223,7 @@ export default function Runs() {
               </tr>
             </thead>
             <tbody>
-              <For each={rows()}>
+              <For each={shown()}>
                 {(r) => <RunRowView row={r} query={query()} lineage={lineage().get(r.runId)} />}
               </For>
               {/* "No runs match" is only true when something is doing the
@@ -191,8 +241,44 @@ export default function Runs() {
             </tbody>
           </table>
         </div>
+        <Pager page={page()} count={pages()} go={goPage} />
       </Show>
     </div>
+  );
+}
+
+/**
+ * The page turner: previous, the first and last pages, the current one and its
+ * neighbours, next. Nothing at all when everything fits on one page.
+ */
+function Pager(props: { page: number; count: number; go: (page: number) => void }) {
+  return (
+    <Show when={props.count > 1}>
+      <nav class="chips pager" aria-label="pages">
+        <button type="button" title="previous page" disabled={props.page <= 1} onClick={() => props.go(props.page - 1)}>
+          ‹
+        </button>
+        <For each={pagerItems(props.page, props.count)}>
+          {(p) =>
+            p === null ? (
+              <span class="dim">…</span>
+            ) : (
+              <button
+                type="button"
+                classList={{ on: p === props.page }}
+                aria-current={p === props.page ? "page" : undefined}
+                onClick={() => props.go(p)}
+              >
+                {p}
+              </button>
+            )
+          }
+        </For>
+        <button type="button" title="next page" disabled={props.page >= props.count} onClick={() => props.go(props.page + 1)}>
+          ›
+        </button>
+      </nav>
+    </Show>
   );
 }
 
@@ -210,6 +296,8 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
     const q = new URLSearchParams(props.query);
     q.delete("effort");
     q.delete("compactWindow");
+    // A narrower list opens at its own top.
+    q.delete("page");
     for (const [k, v] of Object.entries(patch)) q.set(k, v);
     return `/runs?${q.toString()}`;
   };
@@ -227,9 +315,9 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
             {/* The id's tail only: model, episode and date have their own
                 columns, so the long prefix is repetition. The full id is the
                 hover and the run page. */}
-            <A href={href()} title={r().runId}>
+            <a href={href()} title={r().runId}>
               {shortRunId(r().runId)}
-            </A>
+            </a>
             {/* A durable freeplay character is one character across attempts, and
                 this line is the whole of the link between them: the table sorts
                 thirteen ways, so a11 is often nowhere near a12 and the text has
@@ -242,24 +330,24 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
                       than on the id because a reader clicking a run id means
                       that session, and only a row that HAS a chain has
                       somewhere else worth going. */}
-                  <A href={`/character/${encodeURIComponent(l().characterId)}`} title={l().characterId}>
+                  <a href={`/character/${encodeURIComponent(l().characterId)}`} title={l().characterId}>
                     attempt {l().attempt} of {l().attempts}
-                  </A>
+                  </a>
                   <Show when={l().previous}>
                     {(p) => (
                       <>
                         {" · continues "}
-                        <A href={runHref(p())} title={p()}>
+                        <a href={runHref(p())} title={p()}>
                           {shortRunId(p())}
-                        </A>
+                        </a>
                       </>
                     )}
                   </Show>
                   <Show when={l().previous !== l().characterId && l().attempt > 2}>
                     {" · from "}
-                    <A href={runHref(l().characterId)} title={l().characterId}>
+                    <a href={runHref(l().characterId)} title={l().characterId}>
                       {shortRunId(l().characterId)}
-                    </A>
+                    </a>
                   </Show>
                 </div>
               )}
@@ -270,7 +358,7 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
               {(p) => (
                 <div class="dim" title={p().id}>
                   <span class={`swatch ${memberClass(p().index ?? 0)}`} />
-                  <A href={partyHref(p().id)}>party {shortRunId(p().id)}</A> · {p().role ?? p().member}
+                  <a href={partyHref(p().id)}>party {shortRunId(p().id)}</a> · {p().role ?? p().member}
                 </div>
               )}
             </Show>
@@ -283,7 +371,7 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
                 family claims gets the neutral monogram, never a special case. */}
             <Show when={r().model !== null} fallback="—">
               <ModelIcon model={r().model} />
-              <A
+              <a
                 href={narrow({
                   model: r().model!,
                   ...(r().effort !== null ? { effort: r().effort! } : {}),
@@ -292,7 +380,7 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
                 title={`${r().model} — narrow to this model`}
               >
                 {modelDisplay(r().model!)}
-              </A>
+              </a>
             </Show>
             {/* What the provider actually served, and only when it differs from
                 what was asked for: a roster alias resolves at launch, so this
@@ -324,9 +412,9 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
         return (
           <td class="dim" title={r().unscored ?? ""}>
             <Show when={r().campaign !== null} fallback={kindOf(r())}>
-              <A href={narrow({ campaign: r().campaign! })} title="narrow to this campaign">
+              <a href={narrow({ campaign: r().campaign! })} title="narrow to this campaign">
                 {kindOf(r())}
-              </A>
+              </a>
             </Show>
           </td>
         );
@@ -334,9 +422,9 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
         return (
           <td class="dim" title={r().episodeSource === "derived" ? "labeled by the reader, never enrolled" : ""}>
             <Show when={r().episode !== null} fallback="—">
-              <A href={narrow({ episode: r().episode! })} title="narrow to this episode">
+              <a href={narrow({ episode: r().episode! })} title="narrow to this episode">
                 {r().episode}
-              </A>
+              </a>
             </Show>
             <Show when={r().episodeSource === "derived"}> (labeled)</Show>
             <Show when={r().episodeOverride}>
@@ -356,9 +444,9 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
               </Show>
               <Show when={r().characterLabel !== null}>
                 <div class="dim">
-                  <A href={narrow({ character: r().characterLabel! })} title="narrow to this race and class">
+                  <a href={narrow({ character: r().characterLabel! })} title="narrow to this race and class">
                     {r().characterLabel}
-                  </A>
+                  </a>
                 </div>
               </Show>
             </Show>

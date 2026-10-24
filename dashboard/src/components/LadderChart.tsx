@@ -60,6 +60,9 @@ export function pricedText(p: Pick<LadderPoint, "basis" | "asIfMetered" | "backf
   return p.basis === "mixed" ? `${basis}, some as-if-metered` : `as-if-metered (${basis})`;
 }
 
+/** `toLocaleString()`'s own grouping, built once rather than per mark per hover. */
+const HOVER_INT = new Intl.NumberFormat();
+
 /**
  * A mean in the hover. The tick format is built for round ticks, so an
  * unrounded mean gets a little more: dollars through `fmtUsd`, a level to one
@@ -69,8 +72,8 @@ export function pricedText(p: Pick<LadderPoint, "basis" | "asIfMetered" | "backf
 function fmtHover(spec: AxisSpec, v: number): string {
   if (spec.key === "cost") return fmtUsd(v);
   if (spec.key === "level") return `L${v.toFixed(1)}`;
-  if (spec.key === "xp") return `${Math.round(v).toLocaleString()} (L${levelOfXp(v)})`;
-  if (spec.key === "turns" || spec.key === "toolCalls") return Math.round(v).toLocaleString();
+  if (spec.key === "xp") return `${HOVER_INT.format(Math.round(v))} (L${levelOfXp(v)})`;
+  if (spec.key === "turns" || spec.key === "toolCalls") return HOVER_INT.format(Math.round(v));
   if (spec.key === "tokens") return fmtTokens(v);
   return spec.format(v);
 }

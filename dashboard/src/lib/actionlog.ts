@@ -54,6 +54,40 @@ export function moveVerdicts(entries: readonly FeedEntry[]): Map<number, MoveVer
   return out;
 }
 
+/**
+ * Whether two verdict maps say the same thing, for the page's memo `equals`:
+ * the map is rebuilt from the whole window on every live append, and only an
+ * append that brought a `move` record should send every action block back to
+ * re-derive its lines.
+ */
+export function sameVerdicts(a: ReadonlyMap<number, readonly MoveVerdict[]>, b: ReadonlyMap<number, readonly MoveVerdict[]>): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const [id, as] of a) {
+    const bs = b.get(id);
+    if (bs === undefined || bs.length !== as.length) return false;
+    for (let i = 0; i < as.length; i++) if (as[i]!.ts !== bs[i]!.ts || as[i]!.status !== bs[i]!.status) return false;
+  }
+  return true;
+}
+
+/**
+ * `next` with every line equal to the one at the same place in `prev` kept as
+ * that object, so a block re-derived for a verdict that changed one line
+ * redraws that line and not all of them.
+ */
+export function keepLines<T extends ActionLineView>(prev: readonly T[], next: readonly T[], same: (a: T, b: T) => boolean = sameLine): T[] {
+  return next.map((l, i) => {
+    const p = prev[i];
+    return p !== undefined && same(p, l) ? p : l;
+  });
+}
+
+/** Two action lines that draw alike. */
+export function sameLine(a: ActionLineView, b: ActionLineView): boolean {
+  return a.text === b.text && a.failed === b.failed && a.auto === b.auto && a.title === b.title;
+}
+
 function verdictFor(note: ActionNoteView, verdicts: Map<number, MoveVerdict[]> | undefined): string | undefined {
   if (note.moveId === undefined || verdicts === undefined) return undefined;
   return verdicts.get(note.moveId)?.find((v) => v.ts >= note.ts)?.status;

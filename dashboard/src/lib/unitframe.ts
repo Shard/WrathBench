@@ -132,8 +132,11 @@ export function xpToNext(level: number | null | undefined, nextLevelXp?: number 
   return XP_FOR_LEVEL[level] ?? null;
 }
 
+/* One formatter for every bar and hover: `toLocaleString` built a new one per call, eight per table row. */
+const INT = new Intl.NumberFormat("en-US");
+
 function fmtInt(n: number): string {
-  return Math.round(n).toLocaleString("en-US");
+  return INT.format(Math.round(n));
 }
 
 /**
