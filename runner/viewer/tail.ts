@@ -2272,10 +2272,47 @@ export class TrajectoryTail {
   private readonly decoder = new TextDecoder();
   /** Read window; only a test narrows it, to exercise a record split across two. */
   private readonly chunkBytes: number;
+  /**
+   * Bumped every time the index is dropped and rebuilt (a truncated or rotated
+   * file). A reader holding a position in `entries` — an SSE stream's cursor —
+   * compares it to know that position no longer means anything.
+   */
+  private gen = 0;
+  /**
+   * The served entries `replySpans` reads, and through it `tokenTotals` and
+   * `tokensPerSecond`: requests, responses, `claude_result`, the span openers,
+   * the segment marks, every `driver` line and the first `claude_system`. Every
+   * other record is skipped by both derivations without effect, so they answer
+   * over this the same as over `entries` — the subset `RunTotalsScanner`
+   * keeps for the same reason — and a live run's figure costs a pass over its
+   * turns rather than over every state sample and event it ever wrote. The
+   * objects are the ones in `entries`, so it costs a pointer each.
+   */
+  private readonly spanEntries: EntrySummary[] = [];
+  private sawClaudeSystem = false;
+  /** `reportedCostUsd` and `responseCostCoverage`, accumulated over the served entries in order. */
+  private claudeCost = new ClaudeCostTally();
+  private responseCostUsd: number | null = null;
+  private costed = 0;
+  private uncosted = 0;
+  /** The run page's segment marks: every `SEGMENT_MARKS` entry, and the first entry with a timestamp. */
+  private readonly segmentMarkList: { t: string; ts: number }[] = [];
+  /**
+   * `tokenTotals` and `tokensPerSecond` over `spanEntries`, held until the
+   * index grows or is rebuilt. Shared by every open stream and the run page's
+   * poll, so N watchers of a live run cost one derivation per batch, not N.
+   * Keyed on (generation, span count): both derivations read nothing else.
+   */
+  private spanMemo: { gen: number; n: number; tokens?: TokenTotals; tps?: TpsFacts } | null = null;
 
   constructor(path: string, chunkBytes: number = SCAN_CHUNK_BYTES) {
     this.path = path;
     this.chunkBytes = Math.max(1, chunkBytes);
+  }
+
+  /** See `gen`: changes exactly when `entries` was emptied and re-read. */
+  get generation(): number {
+    return this.gen;
   }
 
   get size(): number {
@@ -2317,6 +2354,15 @@ export class TrajectoryTail {
       this.systemTextAt.clear();
       this.codexUsage.reset();
       this.lastTsSeen = null;
+      this.spanEntries.length = 0;
+      this.sawClaudeSystem = false;
+      this.claudeCost = new ClaudeCostTally();
+      this.responseCostUsd = null;
+      this.costed = 0;
+      this.uncosted = 0;
+      this.segmentMarkList.length = 0;
+      this.spanMemo = null;
+      this.gen++;
     }
     if (size === this.size) return [];
 
@@ -2387,12 +2433,82 @@ export class TrajectoryTail {
           summary = unparseable(text, i, start, end);
         }
         this.entries.push(summary);
+        this.index(summary);
         added.push(summary);
       }
       this.consumed = offset;
       this.pending = rest.length === 0 ? new Uint8Array(0) : new Uint8Array(rest);
     }
     return added;
+  }
+
+  /**
+   * Fold one served entry into the run page's accumulators, in file order —
+   * the same order the whole-list functions they stand in for walk `entries`.
+   */
+  private index(e: EntrySummary): void {
+    const t = e.t;
+    if (e.ts > 0 && (SEGMENT_MARKS.has(t) || this.segmentMarkList.length === 0)) {
+      this.segmentMarkList.push({ t, ts: e.ts });
+    }
+    this.claudeCost.note(e);
+    if (t === MODEL_RESPONSE_RECORD) {
+      const c = (e["usage"] as ReportedUsage | undefined)?.cost;
+      if (typeof c === "number" && Number.isFinite(c)) {
+        this.costed++;
+        this.responseCostUsd = (this.responseCostUsd ?? 0) + c;
+      } else {
+        this.uncosted++;
+      }
+    }
+    let span = t === "request" || t === "response" || t === "claude_result" || t === "driver";
+    span ||= TPS_SPAN_OPENERS.has(t) || SEGMENT_MARKS.has(t);
+    if (!span && t === "claude_system" && !this.sawClaudeSystem) {
+      this.sawClaudeSystem = true;
+      span = true;
+    }
+    if (span) this.spanEntries.push(e);
+  }
+
+  /** The memo for the current index, fresh when it has grown or been rebuilt since. */
+  private spans(): { gen: number; n: number; tokens?: TokenTotals; tps?: TpsFacts } {
+    const m = this.spanMemo;
+    if (m !== null && m.gen === this.gen && m.n === this.spanEntries.length) return m;
+    this.spanMemo = { gen: this.gen, n: this.spanEntries.length };
+    return this.spanMemo;
+  }
+
+  /** `tokenTotals(entries)`, without walking every entry each time it is asked. */
+  get tokens(): TokenTotals {
+    const m = this.spans();
+    m.tokens ??= tokenTotals(this.spanEntries);
+    return m.tokens;
+  }
+
+  /** `tokensPerSecond(entries)`, off the same memo. */
+  get tps(): TpsFacts {
+    const m = this.spans();
+    m.tps ??= tokensPerSecond(this.spanEntries);
+    return m.tps;
+  }
+
+  /** `reportedCostUsd(entries)`, accumulated as the file is indexed. */
+  get reportedCostUsd(): number | null {
+    const cli = this.claudeCost.total();
+    return cli === null ? this.responseCostUsd : (this.responseCostUsd ?? 0) + cli;
+  }
+
+  /** `responseCostCoverage(entries)`, accumulated as the file is indexed. */
+  get costCoverage(): CostCoverage {
+    const unreported = this.claudeCost.unreported();
+    return unreported === undefined
+      ? { costed: this.costed, uncosted: this.uncosted }
+      : { costed: this.costed, uncosted: this.uncosted, unreported };
+  }
+
+  /** The marks `segmentsFrom` reads for the run page's sessions and playtime. */
+  get segmentMarks(): readonly { t: string; ts: number }[] {
+    return this.segmentMarkList;
   }
 
   /** The last timestamp in the file, from records served and dropped alike. */

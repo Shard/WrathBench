@@ -102,6 +102,7 @@ import {
   type RunStore,
 } from "./clickhouse";
 import { isArchiveDir } from "./archive-dir";
+import { compressResponse } from "./compress";
 import { CONFIG_API_PREFIX, handleConfigRequest } from "./config-api";
 import { hostAllowlist, hostGuard } from "./host-guard";
 import { writeGuard } from "./write-guard";
@@ -118,20 +119,49 @@ import {
   tileNotModified,
   tileValidators,
 } from "./tiles";
-import { SEGMENT_MARKS, playtimeMs, segmentsFrom } from "./sessions";
-import {
-  TrajectoryTail,
-  reportedCostUsd,
-  responseCostCoverage,
-  RunTotalsScanner,
-  tokenTotals,
-  tokensPerSecond,
-  type RunTotals,
-} from "./tail";
+import { playtimeMs, segmentsFrom } from "./sessions";
+import { TrajectoryTail, RunTotalsScanner, type RunTotals } from "./tail";
 
 /** How often the live tail rescans, and the biggest window a client may ask for. */
 export const POLL_MS = 1000;
 export const WINDOW_MAX = 500;
+
+/**
+ * How long a run's entry index (`TrajectoryTail`) outlives its last reader.
+ * Ten minutes covers an operator flipping between a handful of run pages; past
+ * it the next visit re-reads the file, which is what the first visit cost.
+ */
+export const TAIL_IDLE_MS = 10 * 60_000;
+
+/**
+ * How many trajectory bytes the tails nobody is streaming may index between
+ * them. Measured on the fleet's runs, a tail holds roughly a third of its
+ * file's size as live objects (~200 MB for a 500–800 MB freeplay trajectory),
+ * so a GiB of trajectory is a few hundred MB of heap in a 3 GiB pod, beside
+ * whatever the open streams pin.
+ */
+export const TAIL_CACHE_BYTES = 1024 ** 3;
+
+/**
+ * How long a terminated run's files must have been quiet before its track is
+ * treated as final. Far past the collector's five-second poll, so the store
+ * holds the last of its states and moves before anything is kept.
+ */
+export const TRACK_SETTLE_MS = 5 * 60_000;
+
+/** How many settled runs' track cores are kept; each is one replay's points, inventory patches and moves. */
+export const TRACK_MEMO_RUNS = 6;
+
+type TrackCore = Pick<TrackResponse, "points" | "inv" | "moves">;
+
+/** Whether a request's `If-None-Match` names this ETag (weak comparison, as RFC 9110 has for it). */
+function ifNoneMatch(req: Request, etag: string): boolean {
+  const header = req.headers.get("if-none-match");
+  if (header === null) return false;
+  if (header.trim() === "*") return true;
+  const bare = (t: string): string => t.trim().replace(/^W\//, "");
+  return header.split(",").some((t) => bare(t) === bare(etag));
+}
 
 export interface ApiOptions {
   runsDir: string;
@@ -611,7 +641,8 @@ export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
  * lets that caller drop one run's share of it.
  *
  * It is opt-in and nothing in the viewer calls it: a process that keeps serving
- * requests wants exactly the memos it has. The cost is symmetric and worth
+ * requests lets its own eviction decide (`evictTails` — idle runs and a byte
+ * budget, never one a stream is reading). The cost is symmetric and worth
  * stating — a released run is read from disk again the next time it is asked
  * for, which for the publisher means every pass rather than once per process.
  */
@@ -703,17 +734,77 @@ export function createApi(opts: ApiOptions): ApiHandle {
   /** Each run's closed trace windows, for its track (see `release` for why it is never dropped). */
   const traceSegs = traceSegsMemo();
 
-  /** One tail per run, shared by every reader; scans are serialised per run. */
+  /**
+   * One tail per run, shared by every reader; scans are serialised per run.
+   *
+   * Held least-recently-used first (a `Map` keeps insertion order, and an
+   * access re-inserts), and bounded: a tail is the whole entry index of a
+   * trajectory, ~200 MB of live objects for a big freeplay run, so a viewer
+   * that kept every run it was ever asked about would OOM its pod after a
+   * dozen. See `evictTails` for what is dropped and when.
+   */
   const tails = new Map<string, TrajectoryTail>();
   const scans = new Map<string, Promise<EntrySummary[]>>();
+  const tailUsedAt = new Map<string, number>();
+  /** Settled runs' track cores, least-recently-used first (`trackCoreOf`). */
+  const trackCores = new Map<string, TrackCore>();
+  /** Open SSE streams per run: a pinned tail is never evicted. */
+  const tailPins = new Map<string, number>();
 
   function tailFor(runId: string, dir: string): TrajectoryTail {
     let t = tails.get(runId);
-    if (t === undefined) {
-      t = new TrajectoryTail(join(dir, "trajectory.jsonl"));
-      tails.set(runId, t);
-    }
+    if (t === undefined) t = new TrajectoryTail(join(dir, "trajectory.jsonl"));
+    else tails.delete(runId);
+    tails.set(runId, t);
+    tailUsedAt.set(runId, Date.now());
+    evictTails(runId);
     return t;
+  }
+
+  function pin(runId: string, tail: TrajectoryTail): void {
+    // Re-seat the tail this stream reads, in case it was dropped between the
+    // route's `tailFor` and here; a stream must read the tail the map holds.
+    if (tails.get(runId) !== tail) tails.set(runId, tail);
+    tailPins.set(runId, (tailPins.get(runId) ?? 0) + 1);
+  }
+
+  function unpin(runId: string): void {
+    const n = (tailPins.get(runId) ?? 0) - 1;
+    if (n > 0) tailPins.set(runId, n);
+    else tailPins.delete(runId);
+    tailUsedAt.set(runId, Date.now());
+  }
+
+  /** Forget one run's tail and everything keyed to it. */
+  function dropTail(runId: string): void {
+    tails.delete(runId);
+    scans.delete(runId);
+    tailUsedAt.delete(runId);
+    trackCores.delete(runId);
+  }
+
+  /**
+   * Drop the tails nobody is reading. A tail with an open stream is kept
+   * whatever its age or size — that is a live run being watched, and dropping
+   * it would cost the next tick a whole-file re-read. Of the rest, newest use
+   * first, a tail goes when it has sat unasked for `TAIL_IDLE_MS`, or once the
+   * trajectories the kept ones index pass `TAIL_CACHE_BYTES` between them.
+   * The one just asked for (`keep`) always stays, even alone over budget.
+   *
+   * Run on every request rather than on a timer: a viewer with any tab open is
+   * polled every few seconds, and one with none is not paying for anything
+   * but the memory it already holds. What eviction costs is the next visit's
+   * re-read of that file, which is what the first visit paid.
+   */
+  function evictTails(keep: string | null = null): void {
+    const now = Date.now();
+    let bytes = 0;
+    for (const id of [...tails.keys()].reverse()) {
+      if ((tailPins.get(id) ?? 0) > 0) continue;
+      bytes += tails.get(id)!.size;
+      if (id === keep) continue;
+      if (now - (tailUsedAt.get(id) ?? 0) >= TAIL_IDLE_MS || bytes > TAIL_CACHE_BYTES) dropTail(id);
+    }
   }
 
   /** Serialise scans: two concurrent readers must not both consume the same bytes. */
@@ -1223,7 +1314,50 @@ export function createApi(opts: ApiOptions): ApiHandle {
     return staticFile(dashboardDir, "index.html") ?? unbuilt();
   }
 
-  async function api(url: URL, path: string): Promise<Response | null> {
+  /**
+   * Whether a run can no longer change underneath its track: terminated, and
+   * its files quiet for `TRACK_SETTLE_MS`, which is what lets the collector —
+   * a five-second poll — have stored the last of its states and moves.
+   */
+  function isSettled(run: RunRow): boolean {
+    return run.terminationReason !== null && run.mtime !== null && Date.now() - run.mtime >= TRACK_SETTLE_MS;
+  }
+
+  /**
+   * The store-derived half of a run's track: its points with the inventory as
+   * patches, and its moves. For a live run, read fresh every time. For a
+   * settled one, read once and kept (`trackCores`): those rows cannot change
+   * any more, and reading them is the expensive part of the route — a long
+   * run's whole `items` history out of the store, hundreds of milliseconds and
+   * tens of MB a call. Nothing invalidates an entry but eviction: the LRU
+   * bound, `release`, and the run's tail being dropped.
+   */
+  async function trackCoreOf(runId: string, settled: boolean): Promise<TrackCore> {
+    const held = settled ? trackCores.get(runId) : undefined;
+    if (held !== undefined) {
+      trackCores.delete(runId);
+      trackCores.set(runId, held);
+      return held;
+    }
+    const [states, items, moveRows] = await Promise.all([
+      statesOfRun(runId),
+      stateItemsOfRun(runId),
+      store.moveRows(runId),
+    ]);
+    const core: TrackCore = {
+      ...trackFrom(states, items),
+      // Same fallback as the track's own points: a run whose moves the
+      // collector has not reached yet still draws its intentions.
+      moves: moveRows.length > 0 ? moveViewsOf(moveRows) : readMoves(runsDir, runId),
+    };
+    if (settled) {
+      trackCores.set(runId, core);
+      while (trackCores.size > TRACK_MEMO_RUNS) trackCores.delete(trackCores.keys().next().value!);
+    }
+    return core;
+  }
+
+  async function api(req: Request, url: URL, path: string): Promise<Response | null> {
     if (path === "/api" || path === "/api/info") {
       const body: ApiInfoResponse = {
         service: "wrathbench-viewer",
@@ -1431,20 +1565,22 @@ export function createApi(opts: ApiOptions): ApiHandle {
       // and the listing's figure is read off every line too — a run whose last
       // record the feed does not serve must not close its segment early here.
       const lastTs = tail.lastTs;
-      const marks: { t: string; ts: number }[] = [];
-      for (const e of entries) {
-        // `ts > 0` keeps an unparseable first line (which `scanRunTotals` drops
-        // outright) from spending the no-meta bootstrap on a zero timestamp.
-        if (e.ts > 0 && (SEGMENT_MARKS.has(e.t) || marks.length === 0)) {
-          marks.push({ t: e.t, ts: e.ts });
-        }
-      }
       /*
-       * Cost rides the same incremental path as tokens: both are computed off
-       * the tail's entries, so a live run's figure grows with its trajectory
-       * instead of waiting for the (size, mtime) totals cache to miss.
+       * The segment marks, accumulated by the tail as it indexes: every
+       * `SEGMENT_MARKS` entry and the first entry with a timestamp (`ts > 0`
+       * keeps an unparseable first line, which `scanRunTotals` drops outright,
+       * from spending the no-meta bootstrap on a zero timestamp).
        */
-      const tokens = tokenTotals(entries);
+      const marks = tail.segmentMarks;
+      /*
+       * Tokens, cost, coverage and speed ride the same incremental path: the
+       * tail accumulates the cost as it indexes and holds the token and speed
+       * derivations until it grows (`TrajectoryTail.tokens`), so a live run's
+       * figure grows with its trajectory instead of waiting for the (size,
+       * mtime) totals cache to miss, and a warm poll does not re-walk every
+       * entry the run ever wrote.
+       */
+      const tokens = tail.tokens;
       /*
        * The freeplay character this run is one attempt of, aggregated across the
        * whole chain (`character.ts`). Every figure the runner records is per
@@ -1495,8 +1631,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
         cost: runCost({
           run,
           tokens,
-          reportedUsd: reportedCostUsd(entries),
-          coverage: responseCostCoverage(entries),
+          reportedUsd: tail.reportedCostUsd,
+          coverage: tail.costCoverage,
         }),
         playtimeMs: playtimeMs(sessions, { lastTs, live: run.live, now: Date.now() }),
         // The segments that figure sums, so the page's charts close the same
@@ -1513,7 +1649,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
         trades: tail.trades,
         // Same incremental path again: a live run's rate advances with the tail
         // rather than waiting on the (size, mtime) totals cache to miss.
-        tps: tokensPerSecond(entries),
+        tps: tail.tps,
         // The turns spent reflecting, from the same pass: the feed accents them
         // by turn, and the window that opens one can sit far above whatever
         // slice of entries the page happens to have loaded.
@@ -1553,6 +1689,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
       // a replay opened after the page — and every publisher pass, which asks
       // for both — pays nothing for them; a cold replay pays the page's scan.
       await scan(runId, tail);
+      const settled = isSettled(run);
+      const core = await trackCoreOf(runId, settled);
       const body: TrackResponse = {
         runId,
         characterName: run.character,
@@ -1560,14 +1698,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
         harnessVersion: run.harnessVersion,
         // The points, and the inventory along them as patches (`inv`), so the
         // replay pip can show what the live pip shows.
-        ...trackFrom(await statesOfRun(runId), await stateItemsOfRun(runId)),
+        points: core.points,
+        inv: core.inv,
         // The intentions beside the track: same run, different cadence.
-        moves: await (async () => {
-          // Same fallback as the track's own points: a run whose moves the
-          // collector has not reached yet still draws its intentions.
-          const rows = await store.moveRows(runId);
-          return rows.length > 0 ? moveViewsOf(rows) : readMoves(runsDir, runId);
-        })(),
+        moves: core.moves,
         // How the character crossed each gap — flights, hearths, graveyard
         // releases — derived from the trajectory at read time, never stored.
         travel: tail.travel,
@@ -1587,7 +1721,20 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // none, so a track from before the recorder is the bytes it was.
         ...(trace === null ? {} : { trace }),
       };
-      return pub(body, projectTrack, [runId]);
+      if (!settled) return pub(body, projectTrack, [runId]);
+      /*
+       * A settled run's track revalidates rather than re-downloads: a weak
+       * ETag over the body as served (weak because the bytes on the wire
+       * depend on the encoding), answered with a 304 while it holds. Not
+       * `immutable`, although the run cannot change: the body also carries
+       * the character's `next` attempt, which appears when a continuation
+       * starts, and the trace windows, the last of which may still be settling.
+       */
+      const text = JSON.stringify(publicMode ? struckFor(projectTrack(body), [runId]) : body);
+      const etag = `W/"${Bun.hash(text).toString(36)}"`;
+      const headers = { etag, "cache-control": "no-cache" };
+      if (ifNoneMatch(req, etag)) return new Response(null, { status: 304, headers });
+      return new Response(text, { headers: { "content-type": "application/json; charset=utf-8", ...headers } });
     }
 
     if (rest === "/trace") {
@@ -1676,29 +1823,60 @@ export function createApi(opts: ApiOptions): ApiHandle {
        */
       if (publicMode) return withheld();
       await scan(runId, tail);
+      /*
+       * The stream's own position in the shared tail. `scan` hands what it
+       * newly read only to the caller that ran it, and every reader of this
+       * run shares the one tail — a second tab, the run page's own detail
+       * poll, `/entries`, `/track` — so forwarding `scan`'s return value lost
+       * whatever another reader happened to read first. Each stream sends
+       * `entries.slice(cursor)` instead, after any scan by anyone, and starts
+       * over from the top when the tail was rebuilt under it (a truncated or
+       * rotated file; `generation`).
+       */
+      let cursor = tail.entries.length;
+      let gen = tail.generation;
       let timer: ReturnType<typeof setInterval> | undefined;
+      let closed = false;
+      // Pinned while open: eviction must never drop a tail a stream is reading,
+      // or the stream would keep an orphan while `tailFor` built a second one.
+      pin(runId, tail);
+      const unpinOnce = (): void => {
+        if (closed) return;
+        closed = true;
+        if (timer !== undefined) clearInterval(timer);
+        unpin(runId);
+      };
       const stream = new ReadableStream({
         start(controller) {
           const enc = new TextEncoder();
           const send = (data: unknown): void => {
-            controller.enqueue(enc.encode(`data: ${JSON.stringify(data)}\n\n`));
+            if (closed) return;
+            try {
+              controller.enqueue(enc.encode(`data: ${JSON.stringify(data)}\n\n`));
+            } catch {
+              unpinOnce(); // the client went away between ticks
+            }
           };
-          send({ hello: runId, total: tail.entries.length });
+          send({ hello: runId, total: cursor });
           timer = setInterval(() => {
             void scan(runId, tail)
-              .then((added) => {
+              .then(() => {
+                if (tail.generation !== gen) {
+                  gen = tail.generation;
+                  cursor = 0;
+                }
+                const added = cursor < tail.entries.length ? tail.entries.slice(cursor) : [];
+                cursor = tail.entries.length;
                 // A heartbeat keeps proxies and fetch timeouts from calling it dead.
-                send(
-                  added.length > 0
-                    ? { entries: added, tokens: tokenTotals(tail.entries) }
-                    : { tick: Date.now() },
-                );
+                // The token figure is the tail's memo: one derivation per batch
+                // however many streams are open.
+                send(added.length > 0 ? { entries: added, tokens: tail.tokens } : { tick: Date.now() });
               })
               .catch(() => undefined);
           }, POLL_MS);
         },
         cancel() {
-          if (timer !== undefined) clearInterval(timer);
+          unpinOnce();
         },
       });
       return new Response(stream, {
@@ -1714,9 +1892,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
   }
 
   /**
-   * See `ApiHandle.release`. The entry index and its scan lock, and nothing
-   * else — because the entry index is both the heavy memo and the only one a
-   * pass is genuinely finished with when it has published a run.
+   * See `ApiHandle.release`. The entry index, its scan lock and the run's
+   * settled track core, and nothing else — because the entry index is both the
+   * heavy memo and the only one a pass is genuinely finished with when it has
+   * published a run.
    *
    * A `TrajectoryTail` keeps one `EntrySummary` per record for the whole file:
    * on the 1,016-run tree that was ~570 MB of live objects at the end of a
@@ -1724,17 +1903,18 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * also per-run in the strict sense — only `/api/run/<id>` and its feed touch
    * one — so dropping it costs nothing else this pass.
    *
-   * It is now the only heavy per-run memo this handle holds. The run rows,
-   * the state series and the per-run totals used to be memoised here because
-   * each one cost a file open or a whole-file scan; they are rows in the
-   * derived store now, and a cache in front of a query would only be a second
-   * thing that can be wrong about a live run. The one other, the trace window
+   * It is the heaviest per-run memo this handle holds, beside the settled
+   * track cores (`trackCoreOf`), which only a run that can no longer change
+   * gets. The run rows, the state series and the per-run totals used to be
+   * memoised here because each one cost a file open or a whole-file scan; they
+   * are rows in the derived store now, shared only over a few seconds
+   * (`sharedStore`). The one other, the trace window
    * list (`traceSegsMemo`), is a few numbers per run and is kept on purpose:
    * it is what spares a pass a `run.sqlite` open per run.
    */
   const release = (runId: string): void => {
-    tails.delete(runId);
-    scans.delete(runId);
+    tailPins.delete(runId);
+    dropTail(runId);
   };
 
   const cachedRuns = (): { entries: number } => ({ entries: tails.size });
@@ -1756,7 +1936,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
     );
   }
 
-  return Object.assign(async function handle(req: Request): Promise<Response> {
+  async function route(req: Request): Promise<Response> {
     /*
      * Every request, on every path and every method, public handle or not, must
      * be addressed to a name this viewer answers to (`host-guard.ts`): what a
@@ -1797,7 +1977,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       if (res !== null) return res;
     }
 
-    if (path.startsWith("/api")) return (await api(url, path)) ?? notFound("no such path");
+    if (path.startsWith("/api")) return (await api(req, url, path)) ?? notFound("no such path");
 
     if (path.startsWith("/tiles/")) {
       // The only Blizzard-derived bytes the viewer serves, so public mode
@@ -1864,7 +2044,20 @@ export function createApi(opts: ApiOptions): ApiHandle {
     // is the only UI, so every non-API path gets the notice telling the
     // operator how to build it.
     return unbuilt();
-  }, { release, cachedRuns, unpublishedRuns });
+  }
+
+  return Object.assign(
+    async function handle(req: Request): Promise<Response> {
+      evictTails();
+      /*
+       * Every JSON body leaves through the one encoder (`compress.ts`), so no
+       * route has to remember it, and nothing that is not JSON — the SSE tail
+       * above all — is ever read or buffered by it.
+       */
+      return await compressResponse(req, await route(req));
+    },
+    { release, cachedRuns, unpublishedRuns },
+  );
 }
 
 /** Whether a run row is one a public handle withholds: its driver, or its stamp, says it is not a model's. */
