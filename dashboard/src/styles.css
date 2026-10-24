@@ -213,11 +213,11 @@ header.top .spacer { flex: 1; }
 .status-popout { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 280px; max-width: min(480px, 90vw);
                  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px;
                  font-size: var(--fs-sm); box-shadow: 0 6px 20px rgba(0, 0, 0, .25); }
-.status-popout dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 0; }
+.status-popout dl, .entry-card dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 0; }
 /* A key's label, wherever a key/value pair is listed: the status popout, a
    card, the map sidebar, a tuple, a tool's detail, the SDK reference's families. */
-.status-popout dt, .card .k, .side .k, .tuple dt, .tool-detail .k, .sdk-families dt { color: var(--dim); text-transform: uppercase; letter-spacing: .06em; font-size: var(--fs-xs); }
-.status-popout dd { margin: 0; overflow-wrap: anywhere; }
+.status-popout dt, .entry-card dt, .card .k, .side .k, .tuple dt, .tool-detail .k, .sdk-families dt { color: var(--dim); text-transform: uppercase; letter-spacing: .06em; font-size: var(--fs-xs); }
+.status-popout dd, .entry-card dd { margin: 0; overflow-wrap: anywhere; }
 /* The one action in the popout: the ops page the badge is about. */
 .status-popout-link { display: block; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
 
@@ -696,6 +696,14 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
    leader together — and comes forward again under the pointer. */
 .ladderchart-pt.dominated { opacity: 0.35; }
 .ladderchart-pt.dominated:hover, .ladderchart-pt.dominated.hovered { opacity: 1; }
+/* The charts' hover card (`EntryCard`): a `.popover` placed inside the chart
+   beside its point (`cardPlacement`), hidden until it has been measured, and
+   never in the pointer's way — the mark under it is still the link. */
+.ladderchart-wrap { position: relative; }
+.popover.entry-card { top: auto; z-index: 5; width: 260px; font-size: var(--fs-sm);
+                      display: grid; gap: 6px; pointer-events: none; overflow: visible; }
+.popover.entry-card:not(.placed) { visibility: hidden; }
+.entry-card .xp-inline { width: 130px; }
 
 /* The freeplay field's graph reuses the scatter's frame and caption; only the
    hover affordance differs, because the mark is a line and not a puck. The

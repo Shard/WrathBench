@@ -293,6 +293,22 @@ export const LEVEL: AxisSpec = {
   note: "Level is the highest any sample of the run recorded",
 };
 
+/**
+ * Active playtime, the lines chart's x axis — not a view of the scatter's,
+ * so not in `AXES`; the lines chart's hover card groups its entries with it,
+ * so a card's means rest on the runs its line does.
+ */
+export const PLAYTIME: AxisSpec = {
+  key: "playtimeMs",
+  label: "playtime",
+  caption: () => "active playtime",
+  accessor: (m) => m.playtimeMs,
+  format: (v) => String(v),
+  scale: "linear",
+  better: "lower",
+  note: "Active playtime is the time the character was in the world",
+};
+
 /** Every spec, by key — the hover's "also" line walks this. */
 export const AXES: Readonly<Record<MetricKey, AxisSpec | null>> = {
   cost: COST,

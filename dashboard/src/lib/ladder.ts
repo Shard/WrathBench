@@ -505,6 +505,8 @@ export interface LadderPoint {
   backfilled?: true;
   /** The harness tags among the runs, sorted — what colours the point. */
   harnesses: string[];
+  /** The money the same `n` runs ended holding, in copper, averaged — for the hover card; null where none recorded it. */
+  gold: number | null;
 }
 
 /** An entry that could not be plotted, and the reason printed under the chart. */
@@ -626,6 +628,7 @@ export function ladderPoints(
       asIfMetered: costs.some((c) => c.asIfMetered),
       ...(costs.some((c) => c.backfilled === true) ? { backfilled: true as const } : {}),
       harnesses: [...new Set(g.runs.map((r) => r.harness ?? "—"))].sort(),
+      gold: ((vs) => (vs.length === 0 ? null : mean(vs)))(paired.map((p) => p.run.money).filter((v): v is number => v !== null)),
     });
   }
   points.sort((a, b) => a.key.localeCompare(b.key));
@@ -680,6 +683,12 @@ export interface PlacedPoint {
    * least overlap, drawn anyway: a hidden label is worse than an ugly one.
    */
   crowded: boolean;
+  /**
+   * Whether the label is drawn standing, or only while the point is hovered.
+   * A hover-only label was placed after every standing one and against them,
+   * but nothing was placed against it, so showing it moves nothing else.
+   */
+  labelled: boolean;
 }
 
 export interface LadderChartLayout {
@@ -1095,12 +1104,21 @@ function leaderTo(cx: number, cy: number, rect: Rect): Leader {
  * with its leader, rather than the label being dropped or the cluster
  * collapsed: the operator's rule is that a hidden label is worse than an ugly
  * one, and the flag is what lets the chart say so.
+ *
+ * `labelled` narrows which labels stand. The ladder labels only the entries
+ * on the view's Pareto front, and any other label only while its point is
+ * hovered (operator, 2026-10-24: forty labelled points with their leaders were
+ * the noise). Every other label is still placed — after the standing ones,
+ * against them and every mark, with the same slots — but nothing is placed
+ * against it, so a hover shows a label without moving one. Omitted, every
+ * label stands.
  */
 export function ladderChartLayout(
   points: readonly LadderPoint[],
   box: ChartBox,
   xSpec: AxisSpec = COST,
   ySpec: AxisSpec = XP,
+  labelled?: ReadonlySet<string>,
 ): LadderChartLayout {
   const xs = points.map((p) => p.x);
   let xAxis: Pick<LadderChartLayout, "xTicks" | "xMinorTicks" | "xMax" | "axisX0" | "freeX" | "dividerX" | "hasFree" | "px">;
@@ -1156,8 +1174,14 @@ export function ladderChartLayout(
   const inside = (a: Rect): boolean =>
     a.l >= box.x0 - 2 && a.r <= box.x1 + 2 && a.t >= box.y1 - LABEL_H && a.b <= box.y0;
 
-  const placed: PlacedPoint[] = [];
-  for (const [i, { p, cx, cy }] of marks.entries()) {
+  const stands = (p: LadderPoint): boolean => labelled === undefined || labelled.has(p.key);
+  // The standing labels first, then the hover-only ones against them; the
+  // result keeps the importance order either way.
+  const order = [...marks.keys()].sort((a, b) => Number(stands(marks[b]!.p)) - Number(stands(marks[a]!.p)) || a - b);
+  const placedAt: PlacedPoint[] = [];
+  for (const i of order) {
+    const { p, cx, cy } = marks[i]!;
+    const standing = stands(p);
     const own = taken[i]!;
     const slots = slotsAround(cx, cy, p.label.length * CHAR_W);
     const leaderOf = (s: Slot): Leader | null => (s.ring === 1 ? null : leaderTo(cx, cy, s.rect));
@@ -1181,9 +1205,11 @@ export function ladderChartLayout(
     }
     const slot = pick!;
     const leader = crowded ? leaderTo(cx, cy, slot.rect) : leaderOf(slot);
-    taken.push(slot.rect);
-    if (leader !== null) leaders.push(leader);
-    placed.push({
+    if (standing) {
+      taken.push(slot.rect);
+      if (leader !== null) leaders.push(leader);
+    }
+    placedAt[i] = {
       point: p,
       cx,
       cy,
@@ -1194,9 +1220,10 @@ export function ladderChartLayout(
       ring: slot.ring,
       leader,
       crowded,
-    });
+      labelled: standing,
+    };
   }
-  return { xScale: xSpec.scale, ...xAxis, yTicks, yMax, placed, cue, py };
+  return { xScale: xSpec.scale, ...xAxis, yTicks, yMax, placed: placedAt, cue, py };
 }
 
 /* ------------------------------------------------------- freeplay characters */

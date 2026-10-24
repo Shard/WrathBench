@@ -17,11 +17,12 @@ import { useNavigate } from "@solidjs/router";
 import { For, Show, createMemo } from "solid-js";
 import type { ResultRun } from "@viewer/api-types";
 import { AXES, type AxisSpec, DEFAULT_VIEW, type LadderView, METRIC_KEYS, levelOfXp } from "../lib/axes";
-import { LABEL_FONT, TICK_FONT, type LadderPoint, hoverKeyOf, ladderChartLayout, ladderPoints } from "../lib/ladder";
+import { LABEL_FONT, TICK_FONT, type LadderPoint, type PlacedPoint, hoverKeyOf, ladderChartLayout, ladderPoints } from "../lib/ladder";
 import { paretoSteps } from "../lib/pareto";
 import { AxisFrame, Cue, Puck, VB_H, VB_W, XAxis, YAxis } from "./ChartParts";
+import { EntryCard, createCardHover } from "./EntryCard";
 import { InfoHint } from "./InfoHint";
-import { COST_BASIS_NOTE, fmtTokens, fmtUsd } from "../lib/format";
+import { COST_BASIS_NOTE, fmtDuration, fmtTokens, fmtUsd } from "../lib/format";
 import { runsHref } from "../lib/runs";
 
 const M = { top: 16, right: 24, bottom: 40, left: 64 };
@@ -144,10 +145,45 @@ export function LadderChart(props: {
 }) {
   const view = (): LadderView => props.view ?? DEFAULT_VIEW;
   const model = createMemo(() => ladderPoints(props.runs, view().x, view().y));
-  const layout = createMemo(() => ladderChartLayout(model().points, BOX, view().x, view().y));
+  /*
+   * Only the front's labels stand (operator, 2026-10-24): every other point
+   * is its puck alone, and its label shows while it is pointed at — here, in
+   * the table, or by its card. The front is the view's own, whether or not
+   * the step line is drawn.
+   */
+  const standing = createMemo(
+    () => new Set(paretoSteps(model().points, { x: view().x.better, y: view().y.better }).front.map((p) => p.key)),
+  );
+  const layout = createMemo(() => ladderChartLayout(model().points, BOX, view().x, view().y, standing()));
   const front = createMemo(() =>
     props.pareto ? paretoSteps(model().points, { x: view().x.better, y: view().y.better }) : null,
   );
+  const hover = createCardHover(() => props.onHover);
+  const lit = (p: LadderPoint): boolean =>
+    hover.shown() === p.key || (props.hovered != null && props.hovered === hoverKeyOf(p.model));
+  const carded = createMemo(() => layout().placed.find((d) => d.point.key === hover.shown()) ?? null);
+  /** Whether a point's label is drawn: standing, or lit — except under its own card, which names it already. */
+  const named = (d: PlacedPoint): boolean => d.labelled || (lit(d.point) && hover.shown() !== d.point.key);
+  let svg: SVGSVGElement | undefined;
+  /** The card's readings past its level and money: price, playtime, and the view's own axes. */
+  const cardRows = (p: LadderPoint): [string, string][] => {
+    const rows: [string, string][] = [
+      ["mean of", `${p.n === 1 ? "1 run" : `${p.n} runs`}${p.runs > p.n ? ` of ${p.runs}` : ""}`],
+      ["cost", p.metrics.cost === null ? "—" : `${fmtUsd(p.metrics.cost)} (${pricedText(p)})`],
+      ["active play", p.metrics.playtimeMs === null ? "—" : fmtDuration(p.metrics.playtimeMs)],
+    ];
+    for (const spec of [view().x, view().y]) {
+      const v = p.metrics[spec.key];
+      if (v !== null && !["cost", "xp", "level", "playtimeMs"].includes(spec.key)) rows.push([spec.label, fmtHover(spec, v)]);
+    }
+    return rows;
+  };
+  const cardNote = (p: LadderPoint): string | null => {
+    const lines: string[] = [];
+    if (p.runs > p.n) lines.push(`${p.runs - p.n} of the counted runs lack a ${view().x.label} or ${view().y.label} reading and feed no mean.`);
+    if (p.backfilled === true) lines.push("* includes turns that ended before the CLI reported a cost, estimated at list price.");
+    return lines.length === 0 ? null : lines.join(" ");
+  };
   const onFront = (key: string): boolean => front()?.front.some((p) => p.key === key) ?? true;
   /** The staircase, in viewBox units: the same `px`/`py` the points were placed with. */
   const frontPath = (): string =>
@@ -165,7 +201,7 @@ export function LadderChart(props: {
 
   const note = (): string => {
     const lines = [
-      `${xCaption()} against ${yCaption()}, one point per model and effort. A dashed ring means the means rest on a single run.`,
+      `${xCaption()} against ${yCaption()}, one point per model and effort. A dashed ring means the means rest on a single run. Only the entries on the Pareto front are named; pointing at any other names it and opens its card.`,
       `${view().x.note}${view().x.key === "cost" ? `; ${COST_BASIS_NOTE}` : ""}.`,
       `${view().y.note}${view().y.key === "cost" ? `; ${COST_BASIS_NOTE}` : ""}.`,
     ];
@@ -197,16 +233,15 @@ export function LadderChart(props: {
           </div>
         }
       >
+        {/* No `<title>`, on the chart or a point: the hover is the card, and a
+            browser tooltip would open over it. The name is the aria-label. */}
         <svg
+          ref={svg}
           class="ladderchart"
           viewBox={`0 0 ${VB_W} ${VB_H}`}
           role="img"
           aria-label={`${xCaption()} against ${yCaption()}, one point per model and effort, each the mean of that entry's counted runs`}
         >
-          <title>
-            {xCaption()} against {yCaption()}, one point per model and effort, each the mean of that entry's
-            counted runs
-          </title>
 
           {/* Gridlines and ticks: the same px/py the points were placed with. */}
           <YAxis ticks={layout().yTicks} py={layout().py} box={BOX} format={view().y.format} />
@@ -282,27 +317,29 @@ export function LadderChart(props: {
                 class="ladderchart-pt"
                 classList={{
                   dominated: !onFront(d.point.key),
-                  hovered: props.hovered !== undefined && props.hovered === hoverKeyOf(d.point.model),
+                  hovered: lit(d.point),
                 }}
-                onMouseEnter={() => props.onHover?.(hoverKeyOf(d.point.model))}
-                onMouseLeave={() => props.onHover?.(null)}
+                data-entry={d.point.key}
+                onPointerDown={hover.down}
+                onPointerEnter={(e) => hover.enter(e, d.point.key, hoverKeyOf(d.point.model))}
+                onPointerLeave={hover.leave}
               >
               <a
                 href={runsHref({ model: d.point.model, effort: d.point.effort, compactWindow: d.point.compactWindow ?? null, episode: props.episode })}
+                aria-label={hoverText(d.point, props.episode, view())}
                 onClick={(e) => {
                   if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
                   e.preventDefault();
-                  navigate(e.currentTarget.getAttribute("href") ?? "/runs");
+                  if (hover.follow(d.point.key, hoverKeyOf(d.point.model))) navigate(e.currentTarget.getAttribute("href") ?? "/runs");
                 }}
               >
-                <title>{hoverText(d.point, props.episode, view())}</title>
                 {/*
                  * A displaced label's leader: first in the group, so it sits
                  * under the puck and the label and over the gridlines drawn
                  * before the points. Dim and thin — it is a pointer, not data —
                  * and it brightens with the rest of the point on hover.
                  */}
-                <Show when={d.leader}>
+                <Show when={named(d) && d.leader}>
                   {(l) => (
                     <line
                       class="chart-leader"
@@ -349,21 +386,35 @@ export function LadderChart(props: {
                 {/* `crowded` is a label every slot failed, drawn over something
                     anyway (a hidden label is worse than an ugly one); the class
                     is a hook for the eye and for a scripted check, not a hide. */}
-                <text
-                  class={d.crowded ? "crowded" : undefined}
-                  x={d.labelX}
-                  y={d.labelY}
-                  text-anchor={d.anchor}
-                  font-size={String(LABEL_FONT)}
-                  fill="var(--fg)"
-                >
-                  {d.point.label}
-                </text>
+                <Show when={named(d)}>
+                  <text
+                    class={d.crowded ? "crowded" : undefined}
+                    x={d.labelX}
+                    y={d.labelY}
+                    text-anchor={d.anchor}
+                    font-size={String(LABEL_FONT)}
+                    fill="var(--fg)"
+                  >
+                    {d.point.label}
+                  </text>
+                </Show>
               </a>
               </g>
             )}
           </For>
         </svg>
+        <Show when={carded()}>
+          {(d) => (
+            <EntryCard
+              point={d().point}
+              cx={d().cx}
+              cy={d().cy}
+              svg={svg}
+              rows={cardRows(d().point)}
+              note={cardNote(d().point)}
+            />
+          )}
+        </Show>
       </Show>
 
       {/* Axes, sample basis, each axis's caveat — the things a stranger would

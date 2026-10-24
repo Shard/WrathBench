@@ -810,6 +810,27 @@ front are unchanged. What else is above the chart:
   the effort rule. On the data measured, with free models excluded, it hides 24 of 57 entries at
   e90 and 7 of 20 at e360; with the effort rule, 27 and 8.
 
+### Labels and the hover card
+
+On the scatter, only the entries on the Pareto front of the axes in view
+carry a standing label (operator, 2026-10-24); every other point is its logo
+puck alone, and its label appears while it is pointed at, on the chart or in
+the table. Forty labelled points with their leader lines were the noise. A
+hover-only label is placed after the standing ones and against them, so
+showing it moves nothing.
+
+Pointing at a point, or at a line or its puck on the lines chart, opens a small
+card for that entry instead of the browser's plain hover text
+(`components/EntryCard.tsx`): the model and its logo, harness and effort, the
+mean xp as the level badge and xp bar the table uses, mean gold and quests as
+the table draws them, then how many runs the means rest on, the mean cost
+with its basis, the mean active playtime and any axis in view the card does not
+already show. It sits inside the visible part of the chart beside the point,
+flipping away from an edge (`cardPlacement`, `lib/popover.ts`), and never
+takes the pointer, so the mark under it is still the link. On a touch screen
+the first tap opens the card, a second follows the link, and a tap elsewhere
+closes it.
+
 ### No explanatory prose on the page
 
 Every derived view here has a paragraph's worth of "and here is what that
