@@ -33,7 +33,7 @@ import {
   characterSeries,
 } from "../lib/ladder";
 import { AxisFrame, Cue, Puck, VB_H, VB_W, XAxis, YAxis } from "./ChartParts";
-import { fmtDuration } from "../lib/format";
+import { fmtDuration, fmtPlaytimeTick } from "../lib/format";
 import { statusTone } from "../lib/runs";
 import { InfoHint } from "./InfoHint";
 
@@ -62,14 +62,6 @@ const iconCx = characterIconCx;
 /** The colour of a character's line: exactly the class the table's status cell takes. */
 function statusColour(status: CharacterStatus): string {
   return `var(--${statusTone(status)})`;
-}
-
-/** A playtime tick: whole hours past an hour, minutes below it. */
-function fmtPlaytimeTick(ms: number): string {
-  const m = Math.round(ms / 60_000);
-  if (m < 60) return `${m}m`;
-  const h = m / 60;
-  return `${Number.isInteger(h) ? h : h.toFixed(1)}h`;
 }
 
 /**

@@ -31,7 +31,7 @@ const BOX = { x0: M.left, x1: VB_W - M.right, y0: VB_H - M.bottom, y1: M.top };
 const HIT_R = 12;
 
 /** The colour of a point's ring: the harness that owned its runs, or neither when mixed. */
-function harnessColour(harnesses: readonly string[]): string {
+export function harnessColour(harnesses: readonly string[]): string {
   if (harnesses.length === 1 && harnesses[0] === "claude-code") return "var(--claude)";
   if (harnesses.length === 1 && harnesses[0] === "codex") return "var(--codex)";
   if (harnesses.length === 1 && harnesses[0] === "pi") return "var(--pi)";
