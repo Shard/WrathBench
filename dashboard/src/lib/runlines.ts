@@ -48,7 +48,8 @@ export interface RunLine {
   label: string;
   /** What the page's shared highlight is keyed on (`hoverKeyOf`): the model. */
   hoverKey: string;
-  character: string | null;
+  /** When the run started, for the hover: what tells one run of an entry from its siblings. */
+  startedAt: number | null;
   harness: string | null;
   points: RunLinePoint[];
   /** Where the line stops: the run's active playtime and its xp earned. */
@@ -107,7 +108,7 @@ export function runLines(runs: readonly ResultRun[]): RunLinesModel {
       entry: pointKey(model, r.effort, r.compactWindow),
       label: characterSeriesLabel(model, r.effort, r.compactWindow),
       hoverKey: hoverKeyOf(r.model),
-      character: r.characterLabel,
+      startedAt: r.startedAt,
       harness: r.harness,
       points,
       endX,

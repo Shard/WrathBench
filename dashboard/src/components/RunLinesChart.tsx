@@ -18,7 +18,7 @@ import type { ResultRun } from "@viewer/api-types";
 import { XP } from "../lib/axes";
 import { type ChartBox } from "../lib/ladder";
 import { type PlacedRunLine, runLines, runLinesLayout } from "../lib/runlines";
-import { fmtDuration, fmtPlaytimeTick, shortRunId } from "../lib/format";
+import { fmtDuration, fmtPlaytimeTick, fmtWhen, shortRunId } from "../lib/format";
 import { AxisFrame, Cue, VB_H, VB_W, XAxis, YAxis } from "./ChartParts";
 import { harnessColour } from "./LadderChart";
 import { InfoHint } from "./InfoHint";
@@ -32,8 +32,8 @@ const colourOf = (p: PlacedRunLine): string => harnessColour(p.line.harness === 
 function lineTitle(p: PlacedRunLine): string {
   const l = p.line;
   return [
-    `${l.label}${l.character === null ? "" : ` — ${l.character}`}`,
-    `run ${shortRunId(l.runId)}`,
+    l.label,
+    `run ${shortRunId(l.runId)}, started ${fmtWhen(l.startedAt)}`,
     `${Math.round(l.endY).toLocaleString()} xp (L${l.endLevel}) after ${fmtDuration(l.endX)} of active play`,
   ].join("\n");
 }
