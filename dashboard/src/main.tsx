@@ -5,7 +5,8 @@ import { lazy } from "solid-js";
 import { render } from "solid-js/web";
 import { Layout } from "./components/Layout";
 import "./styles.css";
-import { SNAPSHOT_MODE } from "./api/client";
+import { SNAPSHOT_MODE, api } from "./api/client";
+import { routePreloads } from "./lib/routepreload";
 
 /**
  * Cloudflare Web Analytics, public site only. The beacon is cookieless and the
@@ -47,31 +48,34 @@ function EpisodesRedirect() {
   return <Navigate href={`/about${location.search}`} />;
 }
 
+/* Each route starts its page's first requests as soon as it matches (`lib/routepreload.ts`). */
+const preload = routePreloads(api);
+
 const root = document.getElementById("root");
 if (root === null) throw new Error("no #root");
 
 render(
   () => (
     <Router root={Layout}>
-      <Route path="/" component={Home} />
-      <Route path="/fleet" component={Fleet} />
+      <Route path="/" component={Home} preload={preload.home} />
+      <Route path="/fleet" component={Fleet} preload={preload.fleet} />
       <Route path="/run/:id" component={RunDetail} />
       {/* One character across its attempts. The id is any run in the chain. */}
-      <Route path="/character/:id" component={Character} />
+      <Route path="/character/:id" component={Character} preload={preload.character} />
       {/* One party attempt: its member runs together. The id is the stamp's party id. */}
       <Route path="/party/:id" component={Party} />
-      <Route path="/map" component={MapPage} />
-      <Route path="/runs" component={Runs} />
+      <Route path="/map" component={MapPage} preload={preload.map} />
+      <Route path="/runs" component={Runs} preload={preload.runs} />
       {/* The results page became the runs page; old links keep their query. */}
       <Route path="/results" component={ResultsRedirect} />
-      <Route path="/ladder" component={Ladder} />
-      <Route path="/about" component={About} />
+      <Route path="/ladder" component={Ladder} preload={preload.ladder} />
+      <Route path="/about" component={About} preload={preload.about} />
       {/* The episodes page became the about page; old links still land. */}
       <Route path="/episodes" component={EpisodesRedirect} />
-      <Route path="/models" component={Models} />
-      <Route path="/campaigns" component={Campaigns} />
+      <Route path="/models" component={Models} preload={preload.models} />
+      <Route path="/campaigns" component={Campaigns} preload={preload.campaigns} />
       {/* One campaign version: the index row's own page. */}
-      <Route path="/campaigns/:id/:version" component={Campaigns} />
+      <Route path="/campaigns/:id/:version" component={Campaigns} preload={preload.campaigns} />
       <Route path="/config" component={Config} />
       <Route path="*" component={NotFound} />
     </Router>

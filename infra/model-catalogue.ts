@@ -347,18 +347,26 @@ export function priceTables(cat: ModelCatalogue): {
   return { openrouter: { asOf: cat.providers["openrouter"]?.asOf ?? "", models: sorted }, delisted, anthropic, anthropicUnpriced, endpoints };
 }
 
-const TABLES = priceTables(CATALOGUE);
+/*
+ * The module's own tables. Every step is a pure-annotated call rather than a
+ * property read, because a bundler keeps a top-level `TABLES.x` as a possible
+ * getter with side effects: this way a bundle that reads no price (the
+ * dashboard's) drops the walk and the code behind it.
+ */
+type PriceTables = ReturnType<typeof priceTables>;
+const TABLES: PriceTables = /* @__PURE__ */ priceTables(CATALOGUE);
+const table = <K extends keyof PriceTables>(k: K): PriceTables[K] => TABLES[k];
 
 /** OpenRouter's catalogue prices, by OpenRouter id (`infra/sync-prices.ts` writes them). */
-export const OPENROUTER_PRICES: OpenRouterTable = TABLES.openrouter;
+export const OPENROUTER_PRICES: OpenRouterTable = /* @__PURE__ */ table("openrouter");
 /** OpenRouter ids the catalogue has dropped for good, and why. */
-export const OPENROUTER_DELISTED: Readonly<Record<string, string>> = TABLES.delisted;
+export const OPENROUTER_DELISTED: Readonly<Record<string, string>> = /* @__PURE__ */ table("delisted");
 /** Anthropic list prices, by the id the Claude Code CLI served. */
-export const ANTHROPIC_PRICES: readonly AnthropicRow[] = TABLES.anthropic;
+export const ANTHROPIC_PRICES: readonly AnthropicRow[] = /* @__PURE__ */ table("anthropic");
 /** Claude models with no row on purpose, and why — a decided blank, not a missing one. */
-export const ANTHROPIC_UNPRICED: Readonly<Record<string, string>> = TABLES.anthropicUnpriced;
+export const ANTHROPIC_UNPRICED: Readonly<Record<string, string>> = /* @__PURE__ */ table("anthropicUnpriced");
 /** Metered endpoints that are not OpenRouter, matched on the run's base and id. */
-export const ENDPOINT_PRICES: readonly EndpointRow[] = TABLES.endpoints;
+export const ENDPOINT_PRICES: readonly EndpointRow[] = /* @__PURE__ */ table("endpoints");
 
 // -------------------------------------------------------------- validation
 
