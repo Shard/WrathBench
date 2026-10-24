@@ -58,6 +58,18 @@ export function fmtAge(ms: number): string {
   return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m ago`;
 }
 
+/**
+ * A playtime tick (`timeTicks`): minutes below an hour, hours past it, a half
+ * as `1.5h` and any other quarter as `1h15m` — it used to print 75 minutes as
+ * `1.3h`, a time nobody reads off a clock.
+ */
+export function fmtPlaytimeTick(ms: number): string {
+  const m = Math.round(ms / 60_000);
+  if (m < 60) return `${m}m`;
+  if (m % 30 === 0) return `${m / 60}h`;
+  return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
+}
+
 /** A wall clock span, for playtime. */
 export function fmtDuration(ms: number | null): string {
   if (ms === null || !Number.isFinite(ms) || ms < 0) return "—";

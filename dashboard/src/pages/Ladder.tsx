@@ -20,7 +20,9 @@
  * with a row of curated views that swap the axes (`lib/axes.ts`; the view is
  * `?view=` so a reading is linkable, and the default is the cost/xp chart)
  * and a toggle that draws the Pareto front over the field (`lib/pareto.ts`;
- * `?pareto=1`, for the same reason).
+ * `?pareto=1`, for the same reason). `?chart=lines` swaps the scatter for
+ * every run as a line of xp against active playtime
+ * (`components/RunLinesChart`), the freeplay chart's reading for a tier.
  * Freeplay gets its own graph in that place instead — `components/CharacterChart`,
  * one stepped series per character, level against cumulative active playtime; the
  * axis argument is in `lib/ladder.ts`.
@@ -47,6 +49,7 @@ import { api, type ResultsResponse, type ResultRun } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { LadderChart } from "../components/LadderChart";
 import { CharacterChart } from "../components/CharacterChart";
+import { RunLinesChart } from "../components/RunLinesChart";
 import { ModelIcon } from "../components/ModelIcon";
 import { FilterPopover, type FilterGroup } from "../components/FilterPopover";
 import { Coins, LevelXp } from "../components/CharacterFacts";
@@ -183,6 +186,15 @@ export default function Ladder() {
   const representative = (): boolean =>
     !freeplay() && (Array.isArray(params.efforts) ? params.efforts[0] : params.efforts) !== "all";
   /*
+   * Which chart a scored tier draws: the scatter of roster entries, the
+   * default, or every run as a line of xp against active playtime
+   * (`?chart=lines`, `components/RunLinesChart`) — in the URL for the reason
+   * the view is. The axis views and the front are the scatter's own, so they
+   * step aside while the lines are up; the filters narrow both alike.
+   */
+  const runLinesOn = (): boolean =>
+    !freeplay() && (Array.isArray(params.chart) ? params.chart[0] : params.chart) === "lines";
+  /*
    * Options come from the series-filtered set, not from the mutually filtered
    * one: ticking a company must not prune the model lines under the reader's
    * cursor, and an option that vanished when it was used would be a control
@@ -305,6 +317,17 @@ export default function Ladder() {
           room and one above the other when it does not (`.ladder-controls`). */}
       <div class="ladder-controls">
         <Show when={!freeplay()}>
+          <div class="chips views">
+            <span class="dim">chart</span>
+            <button class={runLinesOn() ? "" : "on"} title="one point per model and effort" onClick={() => setParams({ chart: undefined }, { replace: true })}>
+              scatter
+            </button>
+            <button class={runLinesOn() ? "on" : ""} title="xp earned against active playtime, one line per run" onClick={() => setParams({ chart: "lines" }, { replace: true })}>
+              lines
+            </button>
+          </div>
+        </Show>
+        <Show when={!freeplay() && !runLinesOn()}>
           {/* The axes, as a row of the same chips the tier uses, a size down: a
               view is a way of reading the tier, not the address of the page,
               but it is in the URL so a reading can be linked. */}
@@ -348,7 +371,7 @@ export default function Ladder() {
             text="Nothing excluded: these runs predate the billing record, so this filter has nothing to go on. Runs recorded from here on carry it."
           />
         </Show>
-        <Show when={!freeplay()}>
+        <Show when={!freeplay() && !runLinesOn()}>
           <label
             class="filter check"
             title="Draw the Pareto front: the entries no other entry beats on both of the axes in view. Every point stays; the dominated ones are dimmed."
@@ -360,6 +383,8 @@ export default function Ladder() {
             />
             <span>pareto front</span>
           </label>
+        </Show>
+        <Show when={!freeplay()}>
           <label
             class="filter check"
             title="Hides efforts beaten on both cost and xp by another effort of the same model."
@@ -386,14 +411,21 @@ export default function Ladder() {
         {/* Below ~720px the scatter's labels are texture, not text: it keeps a
             floor width and scrolls inside itself rather than being squeezed. */}
         <div class="wide-scroll">
-        <LadderChart
-          runs={runs()}
-          episode={episode()}
-          view={view()}
-          pareto={pareto()}
-          hovered={hovered()}
-          onHover={setHovered}
-        />
+        <Show
+          when={runLinesOn()}
+          fallback={
+            <LadderChart
+              runs={runs()}
+              episode={episode()}
+              view={view()}
+              pareto={pareto()}
+              hovered={hovered()}
+              onHover={setHovered}
+            />
+          }
+        >
+          <RunLinesChart runs={runs()} episode={episode()} hovered={hovered()} onHover={setHovered} />
+        </Show>
         </div>
 
         <div class="scroller">

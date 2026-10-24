@@ -25,6 +25,8 @@ import {
   xpLevelTicks,
 } from "../src/lib/axes";
 import { paretoSteps } from "../src/lib/pareto";
+import { runLines, runLinesLayout } from "../src/lib/runlines";
+import { fmtPlaytimeTick } from "../src/lib/format";
 import {
   CUE_PAD,
   EXPANSION_MAPS,
@@ -1684,5 +1686,106 @@ describe("the xp axis ticks at level boundaries", () => {
     expect(onX.xTicks).toEqual(onY.yTicks);
     expect(onX.px(11_200)).toBe(box.x1);
     expect(onX.yTicks).toEqual([0, 2, 4, 6]);
+  });
+});
+
+describe("runLines — a tier's runs as xp against active playtime", () => {
+  const MIN = 60_000;
+
+  test("origin, the start of each level reached at its mark's playtime, then the run's own end", () => {
+    const { lines, omitted } = runLines([
+      run({
+        runId: "a",
+        model: "fixture/m",
+        effort: "high",
+        xpEarned: 3000,
+        playtimeMs: 90 * MIN,
+        levels: [mark(1, 0, 0), mark(2, 3, 10 * MIN), mark(3, 9, 30 * MIN), mark(4, 20, 70 * MIN)],
+      }),
+    ]);
+    expect(omitted).toEqual([]);
+    expect(lines).toHaveLength(1);
+    const l = lines[0]!;
+    // L2 begins at 400, L3 at 1,300, L4 at 2,700 (AzerothCore's table, summed by hand).
+    expect(l.points).toEqual([
+      { x: 0, y: 0 },
+      { x: 10 * MIN, y: 400 },
+      { x: 30 * MIN, y: 1300 },
+      { x: 70 * MIN, y: 2700 },
+      { x: 90 * MIN, y: 3000 },
+    ]);
+    expect(l.endLevel).toBe(4);
+    expect(l.entry).toBe("fixture/m (high)");
+    expect(l.hoverKey).toBe("fixture/m");
+    expect(l.harness).toBe("wrathbench");
+  });
+
+  test("never runs backwards: a mark with no playtime is skipped, one past the end is held at it, a short xp reading is raised", () => {
+    const l = runLines([
+      run({
+        runId: "b",
+        xpEarned: 100, // a lower bound below the L3 mark's own floor
+        playtimeMs: 20 * MIN,
+        levels: [mark(1, 0, 0), mark(2, 2, null), mark(3, 5, 25 * MIN)],
+      }),
+    ]).lines[0]!;
+    expect(l.points).toEqual([
+      { x: 0, y: 0 },
+      { x: 20 * MIN, y: 1300 },
+      { x: 20 * MIN, y: 1300 },
+    ]);
+    expect(l.endY).toBe(1300);
+    expect(l.endLevel).toBe(3);
+  });
+
+  test("a run that did not start at L1 still starts at zero, offset by where it began", () => {
+    const l = runLines([run({ xpEarned: 1500, playtimeMs: 30 * MIN, levels: [mark(2, 0, 0), mark(3, 4, 10 * MIN)] })]).lines[0]!;
+    expect(l.points[1]).toEqual({ x: 10 * MIN, y: 900 });
+    expect(l.endLevel).toBe(3); // 400 + 1,500 is past L3's 1,300
+  });
+
+  test("a run without both readings, or unscored, is not drawn; the order is a function of the set", () => {
+    const runs = [
+      run({ runId: "z", model: "b", xpEarned: 10, playtimeMs: MIN }),
+      run({ runId: "y", model: "a", xpEarned: 10, playtimeMs: MIN }),
+      run({ runId: "x", model: "a", xpEarned: 10, playtimeMs: MIN }),
+      run({ runId: "noxp", model: "a", xpEarned: null, playtimeMs: MIN }),
+      run({ runId: "notime", model: "a", xpEarned: 10, playtimeMs: null }),
+      run({ runId: "ref", model: "a", xpEarned: 10, playtimeMs: MIN, unscored: "unscored (scripted reference)" }),
+    ];
+    const m = runLines(runs);
+    expect(m.lines.map((l) => l.runId)).toEqual(["x", "y", "z"]);
+    expect(m.omitted).toEqual([
+      { runId: "noxp", why: "no xp reading" },
+      { runId: "notime", why: "no playtime reading" },
+    ]);
+    expect(runLines([...runs].reverse()).lines.map((l) => l.runId)).toEqual(["x", "y", "z"]);
+  });
+
+  test("the layout: time ticks on x, level ticks on y, every line inside the box", () => {
+    const box = { x0: 64, x1: 976, y0: 340, y1: 16 };
+    const { lines } = runLines([
+      run({ runId: "a", xpEarned: 9000, playtimeMs: 90 * MIN, levels: [mark(1, 0, 0), mark(5, 9, 50 * MIN)] }),
+      run({ runId: "b", xpEarned: 500, playtimeMs: 40 * MIN, levels: [mark(1, 0, 0)] }),
+    ]);
+    const l = runLinesLayout(lines, box);
+    expect(l.xTicks.map(fmtPlaytimeTick)).toEqual(["0m", "15m", "30m", "45m", "1h", "1h15m", "1.5h"]);
+    expect(l.yTicks).toEqual([0, 1300, 2700, 4800, 7600, 11_200]);
+    expect(l.py(11_200)).toBe(box.y1);
+    expect(l.placed.find((p) => p.line.runId === "a")!.endCx).toBe(box.x1);
+    for (const p of l.placed) {
+      expect(p.d.startsWith(`M${box.x0.toFixed(1)},${box.y0.toFixed(1)}`)).toBe(true);
+      expect(p.endCy).toBeGreaterThanOrEqual(box.y1);
+      expect(p.endCy).toBeLessThanOrEqual(box.y0);
+    }
+  });
+
+  test("a playtime tick reads off a clock", () => {
+    expect(fmtPlaytimeTick(0)).toBe("0m");
+    expect(fmtPlaytimeTick(45 * MIN)).toBe("45m");
+    expect(fmtPlaytimeTick(60 * MIN)).toBe("1h");
+    expect(fmtPlaytimeTick(75 * MIN)).toBe("1h15m");
+    expect(fmtPlaytimeTick(90 * MIN)).toBe("1.5h");
+    expect(fmtPlaytimeTick(6 * 60 * MIN)).toBe("6h");
   });
 });
