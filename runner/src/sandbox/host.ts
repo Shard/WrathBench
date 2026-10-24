@@ -307,7 +307,7 @@ export class SandboxHost {
     // process.env AT STARTUP, regardless of the spawn env — so a repo-root
     // `.env` (where provider keys live) would re-enter the child right past the
     // allowlist. Pointing the flag at /dev/null disables that load (verified on
-    // Bun 1.4.0), making the child's env exactly `sandboxChildEnv`.
+    // Bun 1.4.0 and 1.4.4), making the child's env exactly `sandboxChildEnv`.
     //
     // The child is exec'd through confine.ts, which applies a Landlock ruleset
     // first: the snippet process can then read the interpreter, runner/, sdk/

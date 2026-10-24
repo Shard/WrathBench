@@ -28,7 +28,7 @@
 # <dockerfile>.dockerignore over the root one). The root .dockerignore excludes
 # runner/, sdk/, wiki/ and docs/ because the SERVER image does not want them;
 # this image is nothing but them.
-FROM oven/bun:1.4.0
+FROM oven/bun:1.4.4
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates git tini fonts-dejavu-core \
