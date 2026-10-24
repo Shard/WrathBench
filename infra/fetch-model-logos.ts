@@ -17,6 +17,10 @@
  * to build from a bare clone with no network, and a committed asset is the only
  * version of "pinned" that survives the package being unpublished.
  *
+ * The dashboard draws its badges from one sprite made of these files,
+ * `dashboard/src/assets/model-logos.svg`; a run rewrites it whenever it no
+ * longer matches them, and `--check` fails while it does not.
+ *
  * Writes are byte-compared first, so a re-run that changed nothing produces no
  * diff, and `.svg` files no family references are pruned — a family renamed in
  * the catalogue does not leave its old logo behind.
@@ -26,10 +30,27 @@ import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseCatalogue } from "./model-catalogue.ts";
 import { planAssets, readTar, selectIcons, assetFile, type LogoCatalogue } from "./model-logos.ts";
+import { spriteOf } from "../dashboard/src/lib/logosprite.ts";
 
 const REPO_ROOT = dirname(import.meta.dir);
 const CATALOGUE_FILE = join(REPO_ROOT, "infra", "model-catalogue.json");
 const ASSETS = join(REPO_ROOT, "dashboard", "src", "assets", "model-logos");
+/** The one sprite the dashboard draws badges from (`dashboard/src/lib/logosprite.ts`), made from the files above. */
+const SPRITE = join(REPO_ROOT, "dashboard", "src", "assets", "model-logos.svg");
+const SPRITE_LABEL = "dashboard/src/assets/model-logos.svg";
+
+/** The sprite the files in the assets directory make. */
+async function spriteFromAssets(): Promise<string> {
+  const logos = new Map<string, string>();
+  for (const file of presentFiles(ASSETS)) logos.set(file.slice(0, -".svg".length), await Bun.file(join(ASSETS, file)).text());
+  return spriteOf(logos);
+}
+
+/** Whether the committed sprite is what the committed files make. */
+async function spriteCurrent(): Promise<boolean> {
+  const file = Bun.file(SPRITE);
+  return (await file.exists()) && (await file.text()) === (await spriteFromAssets());
+}
 /** Shown in output relative to the repo root; absolute paths are noise here. */
 const ASSETS_LABEL = "dashboard/src/assets/model-logos";
 const REGISTRY = "https://registry.npmjs.org";
@@ -100,7 +121,11 @@ async function check(catalogue: LogoCatalogue): Promise<number> {
     );
     return 1;
   }
-  console.log(`${ASSETS_LABEL}: ${plan.unchanged.length} assets present, no orphans`);
+  if (!(await spriteCurrent())) {
+    console.error(`${SPRITE_LABEL}: not what the logo files make — run: bun infra/fetch-model-logos.ts`);
+    return 1;
+  }
+  console.log(`${ASSETS_LABEL}: ${plan.unchanged.length} assets present, no orphans, sprite current`);
   return 0;
 }
 
@@ -126,6 +151,11 @@ async function sync(catalogue: LogoCatalogue): Promise<number> {
   for (const file of plan.orphaned) {
     rmSync(join(ASSETS, file));
     console.log(`pruned    ${file} (no family references it)`);
+  }
+
+  if (!(await spriteCurrent())) {
+    await Bun.write(SPRITE, await spriteFromAssets());
+    console.log(`written   ${SPRITE_LABEL}`);
   }
 
   const written = plan.missing.length + plan.stale.length;
