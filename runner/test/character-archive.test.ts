@@ -146,12 +146,14 @@ function fixture(o: { pause?: boolean; character?: boolean } = {}): Run {
   writeFileSync(join(dir, "claude-config", ".claude.json"), `{"userID":"${"ab".repeat(32)}"}\n`);
   writeFileSync(join(dir, "claude-config", "backups", ".claude.json.backup.1"), "{}\n");
   writeFileSync(join(dir, "claude-config", "projects", "-tmp-wrathbench-claude-AbC123", "s.jsonl"), '{"type":"user"}\n');
-  // A cold heartbeat: a runner that died long ago. It reads as no owner, and is never archived.
   mkdirSync(join(dir, "claude-config", "empty"));
   chmodSync(join(dir, "claude-config"), 0o2770);
   chmodSync(dir, 0o2775);
+  // A cold heartbeat: a runner that died long ago. It reads as no owner, and is never archived.
+  // Fixed, and older than every clock a test here passes as `now`: one taken off the real
+  // clock would sit after a fixed `now` once the real date passed it, and read as live.
   writeFileSync(join(dir, HEARTBEAT_FILE), "pid 1\n");
-  const cold = new Date(Date.now() - 3_600_000);
+  const cold = new Date(Date.UTC(2025, 0, 1));
   utimesSync(join(dir, HEARTBEAT_FILE), cold, cold);
   if (o.pause === false) utimesSync(join(dir, "trajectory.jsonl"), cold, cold);
   return { runsDir, dir, token, out };
