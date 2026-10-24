@@ -16,7 +16,7 @@
 import { useNavigate } from "@solidjs/router";
 import { For, Show, createMemo } from "solid-js";
 import type { ResultRun } from "@viewer/api-types";
-import { AXES, type AxisSpec, DEFAULT_VIEW, type LadderView, METRIC_KEYS } from "../lib/axes";
+import { AXES, type AxisSpec, DEFAULT_VIEW, type LadderView, METRIC_KEYS, levelOfXp } from "../lib/axes";
 import { LABEL_FONT, TICK_FONT, type LadderPoint, hoverKeyOf, ladderChartLayout, ladderPoints } from "../lib/ladder";
 import { paretoSteps } from "../lib/pareto";
 import { AxisFrame, Cue, Puck, VB_H, VB_W, XAxis, YAxis } from "./ChartParts";
@@ -62,12 +62,14 @@ export function pricedText(p: Pick<LadderPoint, "basis" | "asIfMetered" | "backf
 /**
  * A mean in the hover. The tick format is built for round ticks, so an
  * unrounded mean gets a little more: dollars through `fmtUsd`, a level to one
- * decimal, a count rounded and grouped, and the rest as the tick prints them.
+ * decimal, a count rounded and grouped — xp with the level a fresh L1
+ * character stands at after earning it — and the rest as the tick prints them.
  */
 function fmtHover(spec: AxisSpec, v: number): string {
   if (spec.key === "cost") return fmtUsd(v);
   if (spec.key === "level") return `L${v.toFixed(1)}`;
-  if (spec.key === "xp" || spec.key === "turns" || spec.key === "toolCalls") return Math.round(v).toLocaleString();
+  if (spec.key === "xp") return `${Math.round(v).toLocaleString()} (L${levelOfXp(v)})`;
+  if (spec.key === "turns" || spec.key === "toolCalls") return Math.round(v).toLocaleString();
   if (spec.key === "tokens") return fmtTokens(v);
   return spec.format(v);
 }

@@ -20,6 +20,7 @@
  */
 
 import type { ResultRun } from "@viewer/api-types";
+import { XP_FOR_LEVEL } from "./unitframe";
 
 /* ---------------------------------------------------------------- readings */
 
@@ -136,6 +137,12 @@ export interface AxisSpec {
    * magnitude, and nothing else offered here does.
    */
   scale: "linear" | "log-cost";
+  /**
+   * A linear axis's own ticks for the largest reading, in place of
+   * `niceTicks`; the last is the axis's end, so it must be at or above `max`.
+   * XP's are the level boundaries (`xpLevelTicks`).
+   */
+  ticks?: (max: number) => number[];
   /** Which way is better, for the Pareto front: cheaper is lower, further is higher. */
   better: "lower" | "higher";
   /**
@@ -160,15 +167,85 @@ export const COST: AxisSpec = {
   note: "Cost is what the provider charged, otherwise a list-price estimate",
 };
 
+/* ----------------------------------------------------------- level ticks */
+
+/**
+ * The xp a character has earned when it reaches each level, having started at
+ * L1 with 0 xp — index L, index 0 unused — summed from `XP_FOR_LEVEL`, the
+ * dashboard's one copy of AzerothCore's 3.3.5a table. A scored run starts a
+ * fresh L1 character, so xp earned over a run reads straight off this.
+ */
+export const LEVEL_START_XP: readonly number[] = (() => {
+  const out = [0, 0];
+  for (let l = 2; l <= 80; l++) out.push(out[l - 1]! + XP_FOR_LEVEL[l - 1]!);
+  return out;
+})();
+
+/** The level a fresh L1 character stands at after earning `xp`: the last boundary at or below it. */
+export function levelOfXp(xp: number): number {
+  let l = 1;
+  while (l < 80 && LEVEL_START_XP[l + 1]! <= xp) l++;
+  return l;
+}
+
+/** The strides tried, finest first; the first whose ticks fit is taken. */
+const LEVEL_STRIDES = [1, 2, 5, 10, 20];
+/** At most this many labelled ticks on the axis. */
+const MAX_LEVEL_TICKS = 8;
+/** No two ticks closer than this share of the axis: low levels bunch near zero. */
+const MIN_LEVEL_GAP = 0.08;
+
+/**
+ * An xp axis ticked at level boundaries instead of round numbers, which say
+ * nothing about how far a character got. The axis ends at the first level the
+ * largest reading has not passed (at least L2); below it, L1 at the origin
+ * and every `stride`-th level. Each level's xp costs more than the last, so
+ * the low boundaries bunch at the origin whatever the stride: walking up from
+ * L1, a level closer than `MIN_LEVEL_GAP` of the axis to the last one kept is
+ * skipped, and so is the last one kept when it crowds the end. The stride is
+ * the finest that leaves at most `MAX_LEVEL_TICKS`.
+ */
+export function xpLevelTicks(max: number): number[] {
+  const top = Math.min(Math.max(max, 0), LEVEL_START_XP[80]!);
+  let end = 2;
+  while (end < 80 && LEVEL_START_XP[end]! < top) end++;
+  const xp = (l: number): number => LEVEL_START_XP[l]!;
+  const gap = MIN_LEVEL_GAP * xp(end);
+  const ticksAt = (stride: number): number[] => {
+    const kept = [1];
+    for (let l = stride; l < end; l += stride) {
+      if (l > 1 && xp(l) - xp(kept[kept.length - 1]!) >= gap) kept.push(l);
+    }
+    if (kept.length > 1 && xp(end) - xp(kept[kept.length - 1]!) < gap) kept.pop();
+    return [...kept, end];
+  };
+  let levels: number[] = [];
+  for (const stride of LEVEL_STRIDES) {
+    levels = ticksAt(stride);
+    if (levels.length <= MAX_LEVEL_TICKS) break;
+  }
+  return levels.map(xp);
+}
+
+/** A level boundary's tick reads as the level, `L7`; any other xp value as a count, `2k`. */
+function fmtXpTick(v: number): string {
+  const l = LEVEL_START_XP.lastIndexOf(v);
+  if (l >= 1) return `L${l}`;
+  return v >= 1000 ? `${v / 1000}k` : String(v);
+}
+
 export const XP: AxisSpec = {
   key: "xp",
   label: "xp",
   caption: () => "avg xp earned (lower bound)",
   accessor: (m) => m.xp,
-  format: (v) => (v >= 1000 ? `${v / 1000}k` : String(v)),
+  format: fmtXpTick,
   scale: "linear",
+  ticks: xpLevelTicks,
   better: "higher",
-  note: "XP earned is a lower bound, rebuilt from the run's 60-second samples",
+  note:
+    "XP earned is a lower bound, rebuilt from the run's 60-second samples; " +
+    "its ticks mark the xp at which a character starting from L1 reaches each level",
 };
 
 export const TOKENS: AxisSpec = {
