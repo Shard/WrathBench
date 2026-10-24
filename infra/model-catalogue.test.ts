@@ -252,6 +252,7 @@ describe("prices", () => {
       "cerebras/qwen-3.8-27b",
       "deepseek/deepseek-flash",
       "opencode-go/deepseek-v4.1-flash",
+      "opencode-go/kimi-k3.1-pro",
       "opencode-go/mimo-v2.5",
       "opencode-go/mimo-v2.6-flash",
       "opencode-go/omen-alpha",
