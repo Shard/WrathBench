@@ -10,7 +10,10 @@
  *   events      alias for sdk.events (the EventStream); a getter, like `sdk`
  *   connect()   open the event stream; call before createSession. A no-op while
  *               the stream is open, and a reopen once it is not — including
- *               after something closed it
+ *               after something closed it. A reopen onto a character already
+ *               in world (a restarted child, a resumed run) returns once the
+ *               module's reattach replay has landed, so the next line reads a
+ *               whole cache (`awaitReattachReplay`)
  *   sleep(ms, options?)  Promise timer that resolves with why it woke:
  *               "elapsed", or early with "attacked" (a unit started attacking
  *               us or hit us with a spell), "died" (our health reached zero,
@@ -91,6 +94,7 @@ import {
   spellLogShown,
 } from "../context";
 import { NearbyRecorder } from "./nearby-recorder";
+import { REATTACH_REPLAY_WAIT_MS, REATTACH_STATE_WAIT_MS } from "./reattach-waits";
 import { PartyWatcher } from "./party-watch";
 import { SnippetDeltaRecorder } from "./snippet-delta";
 import { TraceRecorder } from "./trace-recorder";
@@ -1113,6 +1117,26 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
   });
 }
 
+/**
+ * After a reopen, wait for the reattach replay to land (module/PROTOCOL.md,
+ * "/events"): the `WB_SESSION_STATE` the subscribe answers with and, when it
+ * says `replay: true`, the `WB_REPLAY_DONE` that closes the burst. Only live
+ * frames count — the buffer may hold an earlier reopen's — and nothing here
+ * throws: a stream with no session behind it, a module from before the
+ * replay, or a burst slower than the wait all end the same way, with
+ * `connect()` returning and the cache filling as frames arrive. The snippet's
+ * own abort ends the wait too.
+ */
+async function awaitReattachReplay(): Promise<void> {
+  const signal = currentSignal();
+  const live = (predicate: (e: StreamEvent) => boolean, timeout: number): Promise<StreamEvent | undefined> =>
+    client.events.waitFor(predicate, { timeout, includeBuffered: false, signal }).catch(() => undefined);
+  const state = await live((e) => e.opcode === "WB_SESSION_STATE", REATTACH_STATE_WAIT_MS);
+  if (state === undefined) return;
+  if ((state.data as { replay?: unknown } | null)?.replay !== true) return;
+  await live((e) => e.opcode === "WB_REPLAY_DONE" && e.seq > state.seq, REATTACH_REPLAY_WAIT_MS);
+}
+
 const ambient: Record<string, unknown> = {
   API_MD_PATH,
   /**
@@ -1126,15 +1150,23 @@ const ambient: Record<string, unknown> = {
    *
    * What comes back after a reopen is the module's business, and it already
    * does the right thing: a subscribe to a session that is in world gets a
-   * `WB_SESSION_STATE` (PROTOCOL.md, "/events"), which folds into the cache, so
-   * `state` is current again from the next packets on, with the events missed
-   * while the socket was down shown as one `stream_gap`. A session that is gone
-   * is not re-created here — the refusal is the honest answer, and it is the
-   * caller's to read.
+   * `WB_SESSION_STATE` and then the reattach replay (PROTOCOL.md, "/events"):
+   * the character's own create block with every item, its auras, the login
+   * packets and a create block for everything in view, all folding into the
+   * cache, with the events missed while the socket was down shown as one
+   * `stream_gap`. This waits for that replay (`awaitReattachReplay`) so the
+   * line after `await connect()` reads a whole cache, which is what the
+   * restart notice promises. A session that is gone is not re-created here —
+   * the refusal is the honest answer, and it is the caller's to read.
    */
   connect: async (): Promise<void> => {
     if (client.events.connected) return;
-    await client.events.connect();
+    // An explicit connect() onto a session already in world is a consumer
+    // that holds nothing (a restarted child, a resumed run, a snippet that
+    // closed the stream), so it asks for the replay; the stream's own
+    // reconnects after a drop never do.
+    await client.events.connect({ replay: true });
+    await awaitReattachReplay();
   },
   sleep,
   scratchpad: {

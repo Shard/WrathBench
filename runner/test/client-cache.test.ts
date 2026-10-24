@@ -151,7 +151,7 @@ describe("the client cache across a sandbox restart", () => {
     expect(host.totalRestarts).toBe(1);
     // The notice the model reads is the one it always read.
     const restart = notices.find((n) => n.kind === "sandbox_restarted");
-    expect(restart?.text).toContain("All top-level bindings and routines were lost.");
+    expect(restart?.text).toContain("All top-level bindings and routines were lost;");
 
     // The first thing the new child is asked, with no event fed to it.
     const after = await readCache(host);

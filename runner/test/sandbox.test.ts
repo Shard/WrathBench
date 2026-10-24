@@ -811,8 +811,12 @@ describe("error rendering (2026-08 audit fixes)", () => {
     const host = makeHost({ snippetTimeoutMs: 300, pingGraceMs: 300 });
     const res = await host.evalSnippet("for (;;) {}");
     expect(res.restarted).toBe(true);
-    expect(res.error).toContain("token_in_use");
+    // The session outlives the process, and a resubscribe replays what a
+    // client holds (module/PROTOCOL.md, "/events"); the guidance says so, and
+    // no longer sends the model to createSession first.
     expect(res.error).toContain("await connect()");
+    expect(res.error).toContain("replays your own state");
+    expect(res.error).not.toContain("token_in_use");
   }, 15_000);
 });
 

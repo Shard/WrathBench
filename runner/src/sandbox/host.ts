@@ -205,12 +205,20 @@ export function sandboxChildEnv(
   return { ...out, ...explicit };
 }
 
-/** Appended to every state-loss notice so the model knows the recovery steps. */
-const STATE_LOSS_RECOVERY =
-  "All top-level bindings and routines were lost. " +
-  "The game session may still exist server-side under the same token: run " +
-  "`await connect()` to resubscribe to events, then `await sdk.createSession({...})` " +
-  "— a `token_in_use` error means the session is still alive and `sdk` works as-is.";
+/**
+ * Appended to every state-loss notice so the model knows the recovery steps.
+ * The game session outlives the sandbox process, and a subscribe to it
+ * replays what a client holds (module/PROTOCOL.md, "/events"); the ambient
+ * `connect()` waits for that replay before it returns, so the state is whole
+ * when the next line runs. `createSession` is only for a session that is
+ * gone, which `connect()` reports rather than answering ok.
+ */
+export const STATE_LOSS_RECOVERY =
+  "All top-level bindings and routines were lost; the game session was not, and your character is " +
+  "where it was. Run `await connect()`: resubscribing replays your own state (health, power, xp, money, " +
+  "bags, quest log, spells, skills, factions, bind point) and everything in view, and `connect()` returns " +
+  "once that replay has landed, so `state` and `sdk` are whole again. Call `await sdk.createSession({...})` " +
+  "only if `connect()` fails because the session is gone.";
 
 /** The runner's own stream of the same name: the job log, or the pod log on the cluster. */
 function defaultLogSink(stream: "stdout" | "stderr", text: string): void {
