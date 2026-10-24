@@ -25,7 +25,7 @@ import {
   xpLevelTicks,
 } from "../src/lib/axes";
 import { paretoSteps } from "../src/lib/pareto";
-import { runLines, runLinesLayout } from "../src/lib/runlines";
+import { MARK_PITCH, entryLines, runLines, runLinesLayout, spreadMarks } from "../src/lib/runlines";
 import { fmtPlaytimeTick } from "../src/lib/format";
 import {
   CUE_PAD,
@@ -1762,22 +1762,154 @@ describe("runLines — a tier's runs as xp against active playtime", () => {
     expect(runLines([...runs].reverse()).lines.map((l) => l.runId)).toEqual(["x", "y", "z"]);
   });
 
-  test("the layout: time ticks on x, level ticks on y, every line inside the box", () => {
+  test("an entry's line is the mean of its runs, each read at the same fraction of its own playtime", () => {
+    const { lines } = runLines([
+      // Straight from the origin to 3,000 xp at 90 minutes.
+      run({ runId: "a", model: "m", effort: "high", xpEarned: 3000, playtimeMs: 90 * MIN, levels: [mark(1, 0, 0)] }),
+      // L2 (400 xp) at 30 of its 60 minutes, then 1,000 xp at the end.
+      run({ runId: "b", model: "m", effort: "high", xpEarned: 1000, playtimeMs: 60 * MIN, levels: [mark(1, 0, 0), mark(2, 3, 30 * MIN)] }),
+      run({ runId: "c", model: "m", effort: "low", xpEarned: 200, playtimeMs: 90 * MIN, harness: "pi", levels: [mark(1, 0, 0)] }),
+    ]);
+    const entries = entryLines(lines);
+    expect(entries.map((e) => [e.entry, e.n])).toEqual([
+      ["m (high)", 2],
+      ["m (low)", 1],
+    ]);
+    const m = entries[0]!;
+    // Halfway through each run's own clock: a at 1,500, b at its L2 mark's 400.
+    expect(m.points).toEqual([
+      { x: 0, y: 0 },
+      { x: 37.5 * MIN, y: 950 },
+      { x: 75 * MIN, y: 2000 },
+    ]);
+    expect([m.endX, m.endY, m.endLevel]).toEqual([75 * MIN, 2000, 3]);
+    expect(m.hoverKey).toBe("m");
+    expect(m.harnesses).toEqual(["wrathbench"]);
+    // One run's mean is that run's line.
+    const single = entries[1]!;
+    expect(single.points).toEqual(lines.find((l) => l.runId === "c")!.points);
+    expect(single.harnesses).toEqual(["pi"]);
+    expect(entryLines([...lines].reverse())).toEqual(entries);
+  });
+
+  test("a mean line never runs backwards, whatever its runs' vertices", () => {
+    const { lines } = runLines([
+      run({ runId: "a", xpEarned: 12_000, playtimeMs: 88 * MIN, levels: [mark(1, 0, 0), mark(3, 2, 5 * MIN), mark(6, 8, 70 * MIN)] }),
+      run({ runId: "b", xpEarned: 9000, playtimeMs: 90 * MIN, levels: [mark(1, 0, 0), mark(4, 2, 40 * MIN), mark(5, 3, 40 * MIN)] }),
+      run({ runId: "c", xpEarned: 0, playtimeMs: 54 * MIN, levels: [mark(1, 0, 0)] }),
+    ]);
+    const [e] = entryLines(lines);
+    for (let i = 1; i < e!.points.length; i++) {
+      expect(e!.points[i]!.x).toBeGreaterThanOrEqual(e!.points[i - 1]!.x);
+      expect(e!.points[i]!.y).toBeGreaterThanOrEqual(e!.points[i - 1]!.y);
+    }
+    expect(e!.points[e!.points.length - 1]).toEqual({ x: (88 + 90 + 54) * (MIN / 3), y: 7000 });
+  });
+
+  test("the layout: time ticks on x, level ticks on y, every line and puck inside the box", () => {
     const box = { x0: 64, x1: 976, y0: 340, y1: 16 };
     const { lines } = runLines([
-      run({ runId: "a", xpEarned: 9000, playtimeMs: 90 * MIN, levels: [mark(1, 0, 0), mark(5, 9, 50 * MIN)] }),
-      run({ runId: "b", xpEarned: 500, playtimeMs: 40 * MIN, levels: [mark(1, 0, 0)] }),
+      run({ runId: "a", model: "a", xpEarned: 9000, playtimeMs: 90 * MIN, levels: [mark(1, 0, 0), mark(5, 9, 50 * MIN)] }),
+      run({ runId: "b", model: "b", xpEarned: 500, playtimeMs: 40 * MIN, levels: [mark(1, 0, 0)] }),
     ]);
-    const l = runLinesLayout(lines, box);
+    const l = runLinesLayout(entryLines(lines), box);
     expect(l.xTicks.map(fmtPlaytimeTick)).toEqual(["0m", "15m", "30m", "45m", "1h", "1h15m", "1.5h"]);
     expect(l.yTicks).toEqual([0, 1300, 2700, 4800, 7600, 11_200]);
     expect(l.py(11_200)).toBe(box.y1);
-    expect(l.placed.find((p) => p.line.runId === "a")!.endCx).toBe(box.x1);
+    expect(l.placed.find((p) => p.line.model === "a")!.endCx).toBe(box.x1);
     for (const p of l.placed) {
       expect(p.d.startsWith(`M${box.x0.toFixed(1)},${box.y0.toFixed(1)}`)).toBe(true);
       expect(p.endCy).toBeGreaterThanOrEqual(box.y1);
       expect(p.endCy).toBeLessThanOrEqual(box.y0);
+      // The puck sits just past its line's end, level with it when nothing is in the way.
+      expect(p.markCx).toBe(characterIconCx(p.endCx));
+      expect(p.markCx + MARK_RING_R).toBeLessThanOrEqual(1000);
+      expect(p.markCy).toBe(p.endCy);
+      expect(p.leader).toBeNull();
     }
+  });
+
+  test("pucks in a column are spread apart in order, inside the box, with a leader back to a moved one", () => {
+    const box = { x0: 64, x1: 976, y0: 340, y1: 16 };
+    const { lines } = runLines(
+      ["a", "b", "c", "d"].map((model, i) => run({ runId: model, model, xpEarned: 5000 + i * 10, playtimeMs: 90 * MIN, levels: [mark(1, 0, 0)] })),
+    );
+    const l = runLinesLayout(entryLines(lines), box);
+    const byEnd = [...l.placed].sort((a, b) => a.endCy - b.endCy);
+    for (let i = 1; i < byEnd.length; i++) expect(byEnd[i]!.markCy - byEnd[i - 1]!.markCy).toBeGreaterThanOrEqual(MARK_PITCH - 1e-9);
+    expect(byEnd.some((p) => p.leader !== null)).toBe(true);
+    for (const p of l.placed.filter((p) => p.leader !== null)) {
+      expect([p.leader!.x1, p.leader!.y1]).toEqual([p.endCx, p.endCy]);
+      expect(p.leader!.y2).toBe(p.markCy);
+    }
+  });
+
+  describe("spreadMarks", () => {
+    const box = { x0: 64, x1: 976, y0: 340, y1: 16 };
+    const top = box.y1 + MARK_RING_R;
+    const floor = box.y0 - MARK_RING_R;
+    const ordered = (marks: { cy: number }[], ys: number[]): boolean => {
+      const idx = marks.map((_, i) => i).sort((a, b) => marks[a]!.cy - marks[b]!.cy || a - b);
+      return idx.every((i, k) => k === 0 || ys[i]! >= ys[idx[k - 1]!]!);
+    };
+
+    test("clear marks stay where they are; marks in different columns never move each other", () => {
+      const marks = [
+        { cx: 990, cy: 100 },
+        { cx: 990, cy: 200 },
+        { cx: 500, cy: 100 },
+        { cx: 505, cy: 300 },
+      ];
+      expect(spreadMarks(marks, box)).toEqual([100, 200, 100, 300]);
+      expect(spreadMarks([{ cx: 990, cy: 100 }, { cx: 990 - MARK_PITCH, cy: 100 }], box)).toEqual([100, 100]);
+    });
+
+    test("a cluster is pushed apart a pitch at a time, order kept, and pulled back up off the floor", () => {
+      const marks = [
+        { cx: 990, cy: 150 },
+        { cx: 990, cy: 152 },
+        { cx: 985, cy: 151 },
+        { cx: 990, cy: 335 },
+        { cx: 990, cy: 334 },
+      ];
+      const ys = spreadMarks(marks, box);
+      expect(ordered(marks, ys)).toBe(true);
+      const sorted = [...ys].sort((a, b) => a - b);
+      for (let i = 1; i < sorted.length; i++) expect(sorted[i]! - sorted[i - 1]!).toBeGreaterThanOrEqual(MARK_PITCH - 1e-9);
+      for (const y of ys) {
+        expect(y).toBeGreaterThanOrEqual(top);
+        expect(y).toBeLessThanOrEqual(floor);
+      }
+      expect(Math.max(...ys)).toBe(floor);
+      expect(ys[0]).toBe(150); // the top of the cluster does not move
+    });
+
+    test("a column with more marks than the box holds stacks them tighter, in order, still inside", () => {
+      const marks = Array.from({ length: 60 }, (_, i) => ({ cx: 990, cy: 200 + (i % 7) }));
+      const ys = spreadMarks(marks, box);
+      expect(ordered(marks, ys)).toBe(true);
+      for (const y of ys) {
+        expect(y).toBeGreaterThanOrEqual(top - 1e-9);
+        expect(y).toBeLessThanOrEqual(floor + 1e-9);
+      }
+      const sorted = [...ys].sort((a, b) => a - b);
+      const pitch = (floor - top) / 59;
+      for (let i = 1; i < sorted.length; i++) expect(sorted[i]! - sorted[i - 1]!).toBeCloseTo(pitch, 6);
+    });
+
+    test("a function of the set: permuting the marks permutes the answer", () => {
+      const marks = [
+        { cx: 990, cy: 150 },
+        { cx: 990, cy: 152 },
+        { cx: 985, cy: 151 },
+        { cx: 600, cy: 40 },
+        { cx: 990, cy: 334 },
+      ];
+      const ys = spreadMarks(marks, box);
+      const perm = [3, 0, 4, 2, 1];
+      const permuted = spreadMarks(perm.map((i) => marks[i]!), box);
+      expect(permuted).toEqual(perm.map((i) => ys[i]!));
+    });
   });
 
   test("a playtime tick reads off a clock", () => {
