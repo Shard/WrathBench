@@ -22,7 +22,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import type { ServerWebSocket } from "bun";
-import { REATTACH_REPLAY_WAIT_MS, REATTACH_STATE_WAIT_MS } from "../src/sandbox/entry";
+import { REATTACH_REPLAY_WAIT_MS, REATTACH_STATE_WAIT_MS } from "../src/sandbox/reattach-waits";
 import { SandboxHost, STATE_LOSS_RECOVERY } from "../src/sandbox/host";
 import { Scratchpad } from "../src/scratchpad";
 import { tempDirs } from "./fixtures/temp-dirs";

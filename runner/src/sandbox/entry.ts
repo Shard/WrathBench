@@ -94,6 +94,7 @@ import {
   spellLogShown,
 } from "../context";
 import { NearbyRecorder } from "./nearby-recorder";
+import { REATTACH_REPLAY_WAIT_MS, REATTACH_STATE_WAIT_MS } from "./reattach-waits";
 import { PartyWatcher } from "./party-watch";
 import { SnippetDeltaRecorder } from "./snippet-delta";
 import { TraceRecorder } from "./trace-recorder";
@@ -1115,18 +1116,6 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
     });
   });
 }
-
-/**
- * How long a freshly opened stream waits for the module's reattach frame, and
- * then for the replay it announces, before `connect()` returns (ms). The
- * module emits the frame one world tick after the subscribe when the session
- * is in world and nothing at all when it is not (a fresh run's first
- * `connect()`, a login in flight), so the first wait is the cost of not
- * knowing which: paid once per run on a fresh login, and the replay itself
- * takes a world tick more.
- */
-export const REATTACH_STATE_WAIT_MS = 1_000;
-export const REATTACH_REPLAY_WAIT_MS = 5_000;
 
 /**
  * After a reopen, wait for the reattach replay to land (module/PROTOCOL.md,
