@@ -291,9 +291,10 @@ always move, so their motion alone redraws the map at most ten times a second
 rather than at frame rate. Past a window's horizon the layer is empty rather
 than frozen, bar a second of slack for the two pods' clocks. A replay has no
 units: the ring is live only and keeps 15 minutes. The public build draws the
-same layer from the windows `live.json` carries (`api/snapshot-client.ts`),
-one per live run, with no request of its own: creatures only, and no target
-ring, since the public window does not say whom the character targets.
+same layer from the windows `nearby.json` carries (`api/snapshot-client.ts`),
+one per live run, in one object that `live.json` names and only this layer
+asks for: creatures only, and no target ring, since the public window does not
+say whom the character targets.
 
 ## The live list
 

@@ -33,8 +33,8 @@
  * Cache-control: the artifact contract carries a per-object header, but Bun's
  * S3 writer cannot send Cache-Control (S3Options has `type` and encodings
  * only, as of 1.4), so objects land without it and the Cloudflare cache rule
- * sets edge and browser TTLs by path instead — 30s on `/v1/manifest.json` and
- * `/v1/live.json`, long on `/v1/snap/*` and `/v1/run/*`. The runbook's rule
+ * sets edge and browser TTLs by path instead — 30s on `/v1/manifest.json`,
+ * `/v1/live.json` and `/v1/nearby.json`, long on `/v1/snap/*` and `/v1/run/*`. The runbook's rule
  * is therefore load-bearing for freshness as well as for cost.
  */
 

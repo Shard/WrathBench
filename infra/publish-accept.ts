@@ -16,8 +16,9 @@
  *    trace segments and each track lists its own, of which the walk takes the
  *    newest. Every one of them must be fetchable. The manifest is written
  *    last precisely so this cannot be half true, so a miss here is a real
- *    defect and is reported as one. The units around each live run ride
- *    inside `live.json` itself and name no key.
+ *    defect and is reported as one. The units around each live run are in
+ *    `nearby.json`, which `live.json` names (`nearbyKey`) and which is written
+ *    before it; a `live.json` from before that split carries them inline.
  * 2. **Does anything in it cross the content boundary?** Two independent
  *    checks, because one of them alone would be a re-statement of the
  *    publisher's own beliefs:
@@ -87,7 +88,7 @@ import { unpackSegs } from "../runner/viewer/trace";
 import { PUBLIC_NEARBY_SPAN_MS } from "../runner/viewer/nearby";
 import { describeFindings, SecretScanner } from "../runner/src/secret-scan";
 import { isNotAModelRun } from "../runner/src/config";
-import { LIVE_PATH, MANIFEST_PATH, classifyPath, traceSegmentPath } from "./publish-core";
+import { LIVE_PATH, MANIFEST_PATH, NEARBY_PATH, classifyPath, traceSegmentPath } from "./publish-core";
 
 /* ------------------------------------------------------------- the source --- */
 
@@ -514,21 +515,28 @@ export const NEARBY_PUBLIC_STATE: ReadonlySet<string> = new Set(["entry", "name"
 const NEARBY_PUBLIC_TYPES: ReadonlySet<unknown> = new Set([0, 2]);
 
 /**
- * The value-level half for `live.json`'s nearby windows, independent of
- * `projectLiveNearby`: each window is for a run the same file flags as live
+ * The value-level half for the nearby windows, independent of
+ * `projectLiveNearby`: each window is for a run `live.json` flags as live
  * and spans no more than `PUBLIC_NEARBY_SPAN_MS`; its unit table holds no
  * player or pet; and no state, in the keyframe or an event, carries a key
  * outside `NEARBY_PUBLIC_STATE`. The self says which map and nothing else:
  * its guid, target and down are blank.
+ *
+ * `body` holds the windows: `nearby.json`, or a `live.json` from before the
+ * split, which is then its own `live`. Two objects are two GETs, which a
+ * publish can land between, so a window is held to the flags of a `live.json`
+ * from the same pass only (the same `generatedAt`); the other checks hold
+ * whatever pass it came from.
  */
-export function nearbyFindings(key: string, body: Record<string, unknown>): Finding[] {
+export function nearbyFindings(key: string, body: Record<string, unknown>, live: Record<string, unknown> = body): Finding[] {
   const nearby = body["nearby"];
   if (nearby === undefined) return [];
   const out: Finding[] = [];
   if (nearby === null || typeof nearby !== "object" || Array.isArray(nearby)) {
     return [{ kind: "malformed", key, at: "nearby", detail: "not an object of windows by run" }];
   }
-  const positions = (body["positions"] as { positions?: unknown } | undefined)?.positions;
+  const samePass = live === body || body["generatedAt"] === live["generatedAt"];
+  const positions = (live["positions"] as { positions?: unknown } | undefined)?.positions;
   const flagged = new Set(
     (Array.isArray(positions) ? positions : [])
       .filter((p): p is { runId: string; nearby: true } => p !== null && typeof p === "object" && (p as { nearby?: unknown }).nearby === true)
@@ -554,7 +562,7 @@ export function nearbyFindings(key: string, body: Record<string, unknown>): Find
       continue;
     }
     const win = w as Record<string, unknown>;
-    if (!flagged.has(run)) out.push({ kind: "live-only", key, at, detail: "a window for a run no live position flags" });
+    if (samePass && !flagged.has(run)) out.push({ kind: "live-only", key, at, detail: "a window for a run no live position flags" });
     const t0 = win["t0"];
     const t1 = win["t1"];
     if (typeof t0 !== "number" || typeof t1 !== "number" || t1 - t0 > PUBLIC_NEARBY_SPAN_MS) {
@@ -614,11 +622,27 @@ function projectorFor(key: string): ((payload: Record<string, unknown>) => unkno
       return {
         fleet: projectFleet(p["fleet"] as unknown as Parameters<typeof projectFleet>[0]),
         positions,
-        // The units around the live runs: only for a position flagged `nearby`,
-        // creatures only, and no further back than the live map plays, so a
-        // player, a guid-bearing key or a window that outlived its run is drift.
+        // The one key `live.json` may name; any other value is drift.
+        ...(p["nearbyKey"] === NEARBY_PATH ? { nearbyKey: NEARBY_PATH } : {}),
+        // Inline units, as a publisher before the split wrote them: only for a
+        // position flagged `nearby`, creatures only, and no further back than
+        // the live map plays, so a player, a guid-bearing key or a window that
+        // outlived its run is drift.
         ...(p["nearby"] === undefined ? {} : { nearby: projectLiveNearby(p["nearby"], positions) }),
       };
+    };
+  }
+  if (key === NEARBY_PATH) {
+    /*
+     * The same projection over the object's own windows, each taken as
+     * flagged: creatures only, filed under its own run, cut to the span. That
+     * the runs are the ones `live.json` flags is `nearbyFindings`' check, made
+     * against the `live.json` the walk read beside it.
+     */
+    return (p) => {
+      const windows = p["nearby"];
+      const runs = windows !== null && typeof windows === "object" && !Array.isArray(windows) ? Object.keys(windows) : [];
+      return { nearby: projectLiveNearby(windows, { positions: runs.map((runId) => ({ runId, nearby: true })) } as unknown as Parameters<typeof projectLiveNearby>[1]) };
     };
   }
   if (classifyPath(key).kind === "trace") return (p) => projectTraceSegment(p as unknown as Parameters<typeof projectTraceSegment>[0]);
@@ -747,8 +771,9 @@ interface Manifest {
  * Walk the generation the manifest points at and check every object in it.
  *
  * The order is the reader's: manifest first (it is the index), then the
- * aggregates it names, then `live.json`, then the four per-run objects each
- * `runs.json` row points at. Nothing is fetched that the generation does not
+ * aggregates it names, then `live.json` and the `nearby.json` it names, then
+ * the four per-run objects each `runs.json` row points at. Nothing is fetched
+ * that the generation does not
  * name — a listing is not consulted at all, because the question is whether
  * what is ADVERTISED resolves, not what else the bucket happens to hold.
  */
@@ -813,6 +838,10 @@ export async function verifyPublication(source: AcceptSource, opts: VerifyOption
     report.findings.push(...reprojectionFindings(key, obj));
     if (key === LIVE_PATH) report.findings.push(...nearbyFindings(key, obj));
     const runs = unpublishedRunFacts(key, obj);
+    // A window names its run by the key it is filed under, not by a field.
+    if (key === NEARBY_PATH && obj["nearby"] !== null && typeof obj["nearby"] === "object") {
+      for (const id of Object.keys(obj["nearby"] as object)) runs.named.add(id);
+    }
     report.findings.push(...runs.findings);
     for (const id of runs.flagged) unpublished.add(id);
     // A run's own objects name it by their key, not always by a field.
@@ -852,6 +881,10 @@ export async function verifyPublication(source: AcceptSource, opts: VerifyOption
     if (name === "runs.json") runsBody = body;
   }
   const liveBody = await inspect(LIVE_PATH);
+  // The units, where `live.json` names them: named and absent is a missing object.
+  const nearbyKey = liveBody?.["nearbyKey"];
+  const nearbyBody = typeof nearbyKey === "string" ? await inspect(nearbyKey) : null;
+  if (nearbyBody !== null && liveBody !== null) report.findings.push(...nearbyFindings(String(nearbyKey), nearbyBody, liveBody));
   /*
    * Trace segments are named, not walked: a character live for a week lists two
    * thousand, so the walk takes the ones a reader is sure to ask for — every
@@ -912,6 +945,7 @@ export async function verifyPublication(source: AcceptSource, opts: VerifyOption
     const sample = [
       { key: MANIFEST_PATH, kind: "mutable" as const },
       { key: LIVE_PATH, kind: "mutable" as const },
+      ...(nearbyBody === null ? [] : [{ key: NEARBY_PATH, kind: "mutable" as const }]),
       ...Object.values(report.artifacts).slice(0, 1).map((key) => ({ key, kind: "immutable" as const })),
     ];
     for (const s of sample) {

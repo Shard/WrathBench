@@ -20,16 +20,20 @@
  * window of every run.
  *
  * Layout (a publisher pushes these to a bucket; a static dashboard reads them):
- * - `v1/manifest.json` and `v1/live.json` are the two mutable keys, cached
- *   briefly — the manifest names the key of every aggregate, live is the
- *   fleet/positions poll.
+ * - `v1/manifest.json`, `v1/live.json` and `v1/nearby.json` are the mutable
+ *   keys, cached briefly — the manifest names the key of every aggregate,
+ *   live is the fleet/positions poll, nearby the units around the live runs.
  * - `v1/snap/<ver>/<name>` and `v1/run/<id>/<ver>/…` are content-addressed and
  *   immutable: a re-render of unchanged input lands on the same keys, so a
  *   client may cache them forever.
- * - `live.json` also carries, for each run whose units are being recorded,
- *   its public nearby window (`projectLiveNearby`): the last
+ * - `nearby.json` (`PUBLIC_NEARBY_KEY`) carries, for each run whose units are
+ *   being recorded, its public nearby window (`projectLiveNearby`): the last
  *   `PUBLIC_NEARBY_SPAN_MS`, rewritten every pass and gone with the run's
- *   position. Units have no other key and no history in the bucket.
+ *   position. `live.json` names it (`nearbyKey`) and flags the positions it
+ *   holds a window for. Units have no other key and no history in the bucket.
+ *   It was inline in `live.json` until the windows were 93% of that file's
+ *   bytes, which every page's shell fetched while only the zoomed-in map
+ *   draws units (operator, 2026-10-24).
  * - `v1/run/<id>/trace/<t0>.json` is one closed trace window
  *   (`runner/viewer/trace.ts`), immutable because a closed window never
  *   changes. The run's track lists them and `live.json` names the newest; both
@@ -89,7 +93,7 @@ import type {
   TrackResponse,
 } from "./api-types";
 import { traceSegmentKey, unpackSegs } from "./trace";
-import { PUBLIC_NEARBY_SPAN_MS } from "./nearby";
+import { PUBLIC_NEARBY_KEY, PUBLIC_NEARBY_SPAN_MS } from "./nearby";
 import {
   PUBLIC_ATTRIBUTION,
   projectCampaigns,
@@ -110,7 +114,7 @@ import {
 import { scrubPathsText } from "./scrub-paths";
 import { isNotAModelRun } from "../src/config";
 
-/** The two mutable keys are polled; everything else is content-addressed. */
+/** The mutable keys are polled; everything else is content-addressed. */
 export const MUTABLE_CACHE = "public, max-age=30";
 export const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
 
@@ -740,6 +744,24 @@ export function createRenderer(
         contentType: "application/json",
         cacheControl: MUTABLE_CACHE,
       },
+      /*
+       * Written every pass, empty or not: the key is world-readable whether or
+       * not anything names it, so a pass with no units overwrites the last
+       * windows rather than leaving them there. Empty, it carries no clock, so
+       * its bytes are the same every idle pass and the publisher's body-hash
+       * diff spends no PUT on it. The engine writes it before `live.json`,
+       * which names it.
+       */
+      {
+        path: PUBLIC_NEARBY_KEY,
+        body: JSON.stringify(
+          Object.keys(nearby).length === 0
+            ? { attribution: PUBLIC_ATTRIBUTION, nearby }
+            : { generatedAt: now, attribution: PUBLIC_ATTRIBUTION, nearby },
+        ),
+        contentType: "application/json",
+        cacheControl: MUTABLE_CACHE,
+      },
       {
         path: "v1/live.json",
         body: JSON.stringify({
@@ -747,8 +769,9 @@ export function createRenderer(
           attribution: PUBLIC_ATTRIBUTION,
           fleet,
           positions: livePositions(positions, traceListed, nearby),
-          // Absent rather than empty when no run has units, so an idle feed's bytes are what they were.
-          ...(Object.keys(nearby).length === 0 ? {} : { nearby }),
+          // Where this pass's units are. Its presence is also what tells a
+          // reader the windows are no longer inline here.
+          nearbyKey: PUBLIC_NEARBY_KEY,
         }),
         contentType: "application/json",
         cacheControl: MUTABLE_CACHE,
@@ -773,7 +796,7 @@ export function createRenderer(
 /**
  * The projected position feed as `live.json` carries it: each position's
  * `recent` trace windows cut to the ones its run's published track lists, and
- * its `nearby` flag kept only where the file carries the run's window.
+ * its `nearby` flag kept only where `nearby.json` carries the run's window.
  *
  * The feed is read at the top of a pass and the tracks after it, and a window
  * only ever closes, so in practice the cut removes nothing; it is what makes

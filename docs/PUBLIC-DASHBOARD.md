@@ -141,13 +141,14 @@ its own, is `dashboard/README.md`'s.
 
 ```
 /v1/manifest.json                    mutable   max-age=30   { gen, artifacts: {name: key}, generatedAt }
-/v1/live.json                        mutable   max-age=30   fleet + positions fast lane, trace tails and nearby units inline
+/v1/live.json                        mutable   max-age=30   fleet + positions fast lane, trace tails, names nearby.json
+/v1/nearby.json                      mutable   max-age=30   the units around each live run, read only by the zoomed-in map
 /v1/snap/<ver>/runs.json …           immutable max-age=1y   one aggregate, at its own content version
 /v1/run/<id>/<ver>/detail.json …     immutable max-age=1y   per-run detail and track
 /v1/run/<id>/trace/<t0>.json         immutable max-age=1y   one closed five-minute trace window
 ```
 
-Everything except the two mutable files is immutable and addressed by its own
+Everything except the three mutable files is immutable and addressed by its own
 content version. The manifest is the index: `artifacts` maps an aggregate name
 to its bucket key, the way a run row's `snapshot` pointers do, so a reader
 follows keys and never reconstructs one. `gen` rides along as the manifest's
@@ -156,8 +157,8 @@ is what tells the publisher whether the flip is worth a PUT.
 
 Upload order is per-run → aggregates → manifest last, so a reader can never
 observe a torn generation: an old manifest points at a complete old set, the
-new one at a complete new set. `live.json` sits deliberately outside the
-generation chain — for the fleet pips, freshness beats consistency. Superseded
+new one at a complete new set. `live.json` and `nearby.json` sit deliberately
+outside the generation chain — for the fleet pips, freshness beats consistency. Superseded
 versions are pruned after a few cycles; deletes are free. An aggregate keeps its
 last five versions. A run keeps two while it is changing, so a reader still on
 the previous manifest finds what that manifest names, and one once the previous
@@ -185,7 +186,7 @@ and derives a key no longer written. So the dashboard deploys first and the
 publisher second; between the two the site is correct on both shapes.
 
 Worst-case staleness is push cadence + edge TTL, about six minutes at the
-five-minute cadence. If that ever matters, a cache-purge API call on the two
+five-minute cadence. If that ever matters, a cache-purge API call on the
 mutable URLs after each push tightens it to the push cadence.
 
 ### Trace segments
@@ -215,7 +216,7 @@ at the edge.
   window one of those lists. The edge caches a 404 for a day, so asking for one
   speculatively would hide it after it lands.
 - **Before what lists it.** Segments go up in the run wave, before the
-  aggregates and both mutable files. A failed one fails the pass, so no
+  aggregates and the mutable files. A failed one fails the pass, so no
   `live.json` and no manifest naming it is written. The renderer also cuts
   `live.json`'s `recent` to the windows a published track lists, so the
   property does not rest on timing.
@@ -276,15 +277,38 @@ player"). That is the price of movement rather than a jump per pass.
 The live map draws the creatures around each live character under its pip,
 and the public site draws them too, live only. Each pass reads every run the
 position feed flags `nearby` (its ring is being written) and carries that
-run's window inline in `live.json`, under `nearby` by run id, with the
-position's flag kept only where the window is. There is no object of its own.
+run's window in `v1/nearby.json`, under `nearby` by run id. `live.json` names
+the object (`nearbyKey`) and keeps a position's flag only where the object
+holds its window.
 
+- **An object of its own, read only by the map** (operator, 2026-10-24). The
+  windows rode inline in `live.json` until they were 93% of it: 946 KB raw
+  and 142–174 KB compressed, against 14 KB without them, in a file every
+  page's shell fetches while only the zoomed-in map draws a unit. Fleet and
+  positions stay together in `live.json`, so the pips and the fleet table
+  still cannot show two moments. The map asks for `nearby.json` only for a
+  position flagged `nearby`, through the same 30 s memo and edge TTL as
+  `live.json`.
+- **Named, never guessed, and deploy-order safe.** A reader asks for the
+  object only once a `live.json` names it, so a site deployed ahead of its
+  publisher never requests a key that is not there yet, which an edge would
+  then hold as a 404. A `live.json` without `nearbyKey`, written by a
+  publisher from before the split, still carries the windows inline, and the
+  reader takes them from there. A publisher deployed ahead of its site leaves
+  the old site's map without units until the site ships, and nothing errors.
+  So the site ships first and the publisher second, as for the manifest.
+- **Before what names it.** The publisher writes `nearby.json` before
+  `live.json` and both before the manifest. The mutable wave halts on a
+  failure, so a pass whose `nearby.json` did not land writes no `live.json`
+  flagging its windows either.
 - **Live only, by construction.** A window is the last `PUBLIC_NEARBY_SPAN_MS`
   (twelve minutes) of the ring, the next pass overwrites it, and a run that
   stops being live leaves the feed and takes its window with it; a ring that
-  goes on a pause or a stop is gone from the next pass. Nothing else in the
-  bucket names a unit: no segment, no track, nothing in a replay. The edge
-  holds `live.json` for 30 s, so nothing outlives the live window there either.
+  goes on a pause or a stop is gone from the next pass. The object is written
+  every pass, empty when no run has units, because it is world-readable
+  whether or not anything names it. Nothing else in the bucket names a unit:
+  no segment, no track, nothing in a replay. The edge holds the object for
+  30 s, so nothing outlives the live window there either.
 - **Twelve minutes, because of the live clock.** The public map plays about
   nine minutes behind the newest `live.json`, and from one pass to the next
   its playhead reaches about nine minutes behind the pass in hand at the
@@ -297,14 +321,22 @@ position's flag kept only where the window is. There is no object of its own.
   window through `projectNearby` (the private viewer's public mode, unchanged)
   and cuts it to the span, so the bucket's verifier re-projects it like any
   other body, and checks independently that it is live (`live-only`) and
-  holds no player, pet or withheld key.
-- **The cost** is bytes, not writes: `live.json` is PUT every pass anyway.
-  A real ring measured 13–25 KB gzipped per character per five-minute private
-  window, so a twelve-minute window is roughly 30–60 KB gzipped per live
-  character per pass (a busy town can be more), less what the projection drops (other players, their
-  pets, subnames, guids and the 3D fields; on the render rig's fixture the
-  public window is about 70% of the private one). Every reader of
-  `live.json` fetches it, the home page's fleet table included.
+  holds no player, pet or withheld key. The verifier holds a window to the
+  flags of a `live.json` from the same pass only, since its two GETs can
+  straddle a publish.
+- **The cost** is one PUT per pass while any run has units. An empty object
+  carries no clock, so its bytes do not move between idle passes and the
+  publisher spends nothing on it. A real ring measured 13–25 KB gzipped per
+  character per five-minute private window, so a twelve-minute window is
+  roughly 30–60 KB gzipped per live character per pass (a busy town can be
+  more), less what the projection drops (other players, their pets, subnames,
+  guids and the 3D fields; on the render rig's fixture the public window is
+  about 70% of the private one). Only a reader zoomed in on a live character
+  fetches it.
+- **The zone needs it in its mutable cache rule.** Bun's S3 writer sends no
+  `Cache-Control`, so an object no rule names is not cached at the edge, and
+  every read of it is a billed read against the bucket
+  (`infra/cloudflare/README.md`, step 4, rule 1).
 
 ### Data plane: R2 behind a custom domain with a cache rule
 
@@ -343,7 +375,12 @@ raised.
 page consumes, with injectable `fetch` and `base`. A `snapshot-client.ts`
 implements the same interface over the bucket. Internal memoisation is what
 leaves `poll.ts` and every page's stated interval untouched — ticks between
-snapshot refreshes resolve from memory. `raw()` rejects with the same 403
+snapshot refreshes resolve from memory. The three mutable objects are held for
+the 30 s the edge holds them. Everything else never changes under its key, so
+it is held by key, a newer version of the same aggregate or run file taking
+the older one's place, under a bound on how many are held: a tick that finds
+the manifest unchanged re-reads nothing else. `poll.ts` itself fetches nothing
+while the tab is hidden. `raw()` rejects with the same 403
 semantics the viewer's public mode already answers, which the pages already
 handle; SSE is guarded off. Selection is a Vite build-time env, so one build
 flag produces the public bundle and the private build keeps its same-origin,
@@ -395,8 +432,11 @@ Three consequences worth stating rather than discovering:
   set would silently shorten its history instead of saying it is short.
 - An attempt the snapshot published no track for contributes nothing to the
   curve and does not fail the page. The attempt list still names it.
-- The page costs one extra object per attempt on first open, all of them
-  already cached by the client's own memo and by the CDN.
+- The page costs one extra object per attempt on first open, fetched six at a
+  time and then held by the client's keyed cache, and cached by the CDN. The
+  zone's rate limit on `/v1/run/` (60 requests per 10 s per IP) counts them,
+  so a character of more than about fifty attempts opened cold would trip it
+  whatever the fetch order; the longest so far has 45.
 
 The party page (`/party/<id>`) and the group replay (`/map?party=<id>`) are
 assembled the same way and for the same reason: the members off the
@@ -534,7 +574,7 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   service roles and quest marker, and whether it targets this character; the
   map colours by those packet fields and never by client data. Withheld: the
   subname, every other guid (a target, an owner, a charmer), the unit flags and
-  the 3D fields, and the character's own guid and target. Only `live.json`
+  the 3D fields, and the character's own guid and target. Only `nearby.json`
   carries them, overwritten every pass ("The units around a live run").
 - **The trace's character sheet ships as numbers and item names**
   (operator, 2026-10-18). Money, equipment with its random property id, worn
@@ -682,7 +722,7 @@ because the build reads none of what was left out.
 Published and unread, left as they were because each is stated as public above
 or is the operator's to decide: the `campaignVersion` and `arm` stamps on a
 result row and a run's row (for matching a run to its campaign pane), and a
-nearby unit's `entry` and `ctype` in `live.json` (entry ids are public, and
+nearby unit's `entry` and `ctype` in `nearby.json` (entry ids are public, and
 both are in the key set `projectNearby` already gives the viewer's public
 mode; the map's layer reads neither).
 
@@ -990,7 +1030,7 @@ re-renders every pass — the live chart cannot be either.
   short edge and browser TTL on `v1/og.png` in the zone's cache rules, and
   Bun's S3 writer cannot send `Cache-Control` (see `infra/publish-dashboard.ts`),
   so that rule is the whole of it. **It is a required step, not a refinement:**
-  `v1/og.png` matches none of the existing rules (30s on the two mutable JSON
+  `v1/og.png` matches none of the existing rules (30s on the mutable JSON
   paths, long on `v1/snap/*` and `v1/run/*`), so it falls to the zone default
   for a PNG with no origin header, which is `max-age=86400` — measured against
   a `tiles/` object on the same hostname. Until a rule names it, the card at
@@ -1072,7 +1112,9 @@ the ones that actually moved — three of seven compared on that pass were
 byte-identical — and zeroing `playtimeMs` when hashing removes the passes where
 a live run's clock alone had advanced; on that ratio a steady pass should land
 around twenty. The floor is the point: an **idle**
-fleet costs one `live.json` PUT per pass at any cadence (~9k/month at 300s).
+fleet costs one `live.json` PUT per pass at any cadence (~9k/month at 300s);
+an empty `nearby.json` carries no clock, so its bytes do not move and it costs
+none.
 
 A publisher rolled back to the single-hash scheme wants the state file deleted.
 It reads `state.gens` as generation stamps, finds hashes that were
@@ -1095,9 +1137,10 @@ per live character per closed window, and that count does not depend on the
 cadence: a window closes every five minutes, whenever the pass that uploads it
 runs. A character live around the clock adds 288 a day, about **8.6k a month**.
 Three such characters take the month to about 116k, roughly 12% of the free
-tier. Nothing else per pass moves: the tail and the units around each live
-character ride inside the `live.json` PUT already made, and the window list
-inside a `track.json` a live run rewrites every pass anyway.
+tier. Nothing else per pass moves but one: the tail rides inside the
+`live.json` PUT already made, and the window list inside a `track.json` a live
+run rewrites every pass anyway. The units around the live characters are one
+`nearby.json` PUT per pass while any has units, about 9k a month at most.
 
 Unverified at research time (primary pages blocked from the research
 environment; confirm before relying on them): the exact Pro-plan feature

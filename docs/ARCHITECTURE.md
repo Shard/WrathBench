@@ -477,9 +477,10 @@ Every episode starts with a freshly created character at level 1 in its starting
   swept at start, never in `run.sqlite`, `trajectory.jsonl` or
   the store. It is a delay line for a reader a few seconds behind, not a record.
   The public site sees it the same way: each publisher pass puts the last
-  twelve minutes of each live run's projected window inside `live.json`,
-  overwritten by the next pass and gone with the run, never under a key of
-  its own (docs/PUBLIC-DASHBOARD.md, "The units around a live run").
+  twelve minutes of each live run's projected window in `nearby.json`, one
+  object overwritten by the next pass and gone with the run, which only the
+  zoomed-in map reads (docs/PUBLIC-DASHBOARD.md, "The units around a live
+  run").
 - The client's query-answer cache, `client-cache.json`: the creature, game
   object, item, quest, player and pet name, and page and letter answers this
   run's event stream carried, kept by the sandbox host

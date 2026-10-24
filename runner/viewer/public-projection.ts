@@ -784,7 +784,7 @@ export function projectPositions(p: PositionsResponse): PositionsResponse {
         // The newest windows and the tail, the tail through the segment
         // projection. Absent stays absent: a run with no trace says nothing.
         ...(a.trace === undefined ? {} : { trace: projectPositionTrace(a.trace) }),
-        // The cue to read the run's units out of `live.json`'s `nearby`
+        // The cue to read the run's units out of `nearby.json`
         // (`projectLiveNearby`); a flag, nothing about the units themselves.
         ...(a.nearby === true ? { nearby: true as const } : {}),
       }),
@@ -1960,8 +1960,8 @@ export function projectNearby(w: NearbyWindow): NearbyWindow {
 }
 
 /**
- * `live.json`'s `nearby`: each live run's window through `projectNearby`, for
- * the runs whose position in the same file is flagged `nearby` and no other,
+ * `nearby.json`'s `nearby`: each live run's window through `projectNearby`, for
+ * the runs whose position in `live.json` is flagged `nearby` and no other,
  * each cut to its last `PUBLIC_NEARBY_SPAN_MS`. That is what keeps the public
  * layer live only: a run that stops being live leaves the feed, and its
  * window goes with it on the next pass, and no window reaches back further

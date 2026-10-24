@@ -68,7 +68,7 @@ export const Q_O = 1024;
 export const NEARBY_SPAN_MS = 60_000;
 export const NEARBY_SPAN_MAX_MS = 15 * 60_000;
 /**
- * What the window `live.json` carries for each live run reaches back: what
+ * What the window `nearby.json` carries for each live run reaches back: what
  * the public live map's playhead needs from one pass to the next, and no more.
  *
  * The public map plays a delay behind the newest `live.json`
@@ -83,6 +83,15 @@ export const NEARBY_SPAN_MAX_MS = 15 * 60_000;
  * test pins the stretch inside it (`dashboard/test/nearbyplayer.test.ts`).
  */
 export const PUBLIC_NEARBY_SPAN_MS = 12 * 60_000;
+/**
+ * The bucket key the public windows are published at, one object rewritten
+ * every pass beside `live.json`, which names it (`nearbyKey`) whenever it is
+ * written. Apart from `live.json` (operator, 2026-10-24) because the windows
+ * were 93% of its bytes and every page's shell reads it, while only the
+ * zoomed-in map draws units. Shared by the renderer, the publisher's engine
+ * and verifier, and the dashboard's snapshot client.
+ */
+export const PUBLIC_NEARBY_KEY = "v1/nearby.json";
 /** A ring whose newest file was touched within this is being written. */
 export const NEARBY_FRESH_MS = 30_000;
 /** Two position samples further apart than this are held, not walked between. */

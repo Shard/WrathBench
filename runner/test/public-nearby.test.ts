@@ -1,6 +1,7 @@
 /**
  * The units around a live run on the public site: the publisher carries each
- * live run's window inside `live.json` and nowhere else, through
+ * live run's window in `nearby.json`, which `live.json` names, and nowhere
+ * else (operator, 2026-10-24: out of `live.json`, which every page reads), through
  * `projectNearby`, no further back than `PUBLIC_NEARBY_SPAN_MS`, and drops it
  * on the pass after the run's ring goes; the bucket's verifier accepts what
  * it wrote and flags a planted token, a planted player and a window that is
@@ -23,7 +24,7 @@ import type { LiveNearby, PositionsResponse } from "../viewer/api-types";
 import { PUBLIC_NEARBY_SPAN_MS, decodeNearby, nearbyAt } from "../viewer/nearby";
 import { PUBLIC_NEARBY_KEYS, projectLiveNearby } from "../viewer/public-projection";
 import { createRenderer, type SnapshotArtifact } from "../viewer/snapshot";
-import { emptyState, publishPass, LIVE_PATH, type ObjectStore } from "../../infra/publish-core";
+import { emptyState, publishPass, LIVE_PATH, NEARBY_PATH, type ObjectStore } from "../../infra/publish-core";
 import { NEARBY_PUBLIC_STATE, verifyPublication, type AcceptSource } from "../../infra/publish-accept";
 import { LIVE_RUN, DEAD_RUN, poisonedRunsDir } from "./fixtures/poisoned-runs";
 
@@ -103,7 +104,15 @@ function memoryBucket(): { store: ObjectStore; objects: Map<string, string>; put
 interface Live {
   generatedAt: number;
   positions: PositionsResponse;
+  nearbyKey?: string;
+  /** Only in a `live.json` from before the split. */
   nearby?: LiveNearby;
+}
+
+interface Nearby {
+  generatedAt?: number;
+  attribution: string;
+  nearby: LiveNearby;
 }
 
 async function setup(aheadMs?: number): Promise<{ runs: string; ring: { from: number; chaseSelfAt: number } }> {
@@ -113,19 +122,26 @@ async function setup(aheadMs?: number): Promise<{ runs: string; ring: { from: nu
 }
 
 describe("the public nearby layer", () => {
-  test("a pass carries the live run's public window inside live.json, and no other object names a unit", async () => {
+  test("a pass carries the live run's public window in nearby.json, which live.json names, and no other object names a unit", async () => {
     const { runs, ring } = await setup();
     try {
       const render = createRenderer({ runsDir: runs });
       const before = Date.now();
       const out = await render(before);
       const liveArt = out.artifacts.find((a) => a.path === LIVE_PATH)!;
+      const nearbyArt = out.artifacts.find((a) => a.path === NEARBY_PATH)!;
       const live = JSON.parse(liveArt.body) as Live;
-      expect(Object.keys(live.nearby ?? {})).toEqual([LIVE_RUN]);
+      const near = JSON.parse(nearbyArt.body) as Nearby;
+      expect(live.nearbyKey).toBe(NEARBY_PATH);
+      expect(live.nearby).toBeUndefined();
+      expect(near.generatedAt).toBe(live.generatedAt);
+      expect(Object.keys(near.nearby)).toEqual([LIVE_RUN]);
       expect(live.positions.positions.find((p) => p.runId === LIVE_RUN)?.nearby).toBe(true);
       expect(live.positions.positions.some((p) => p.runId === DEAD_RUN)).toBe(false);
+      // Mutable, as live.json is.
+      expect(nearbyArt.cacheControl).toBe(liveArt.cacheControl);
 
-      const w = live.nearby![LIVE_RUN]!;
+      const w = near.nearby[LIVE_RUN]!;
       // Live only: no further back than the span, though the ring reaches further.
       expect(w.t1 - w.t0).toBeLessThanOrEqual(PUBLIC_NEARBY_SPAN_MS);
       expect(w.t0).toBeGreaterThan(ring.from);
@@ -135,20 +151,21 @@ describe("the public nearby layer", () => {
       expect(w.ids.sort()).toEqual([CHASER, VENDOR, WOLF].sort());
       for (const s of w.k.s) for (const k of Object.keys(s)) expect(NEARBY_PUBLIC_STATE.has(k)).toBe(true);
       expect(w.k.self).toMatchObject({ guid: null, target: null, map: 0 });
-      for (const v of [NAMES.other, NAMES.otherPet, NAMES.sub, OTHER, OTHER_PET]) expect(liveArt.body).not.toContain(v);
-      for (const v of [NAMES.wolf, NAMES.vendor, NAMES.chaser]) expect(liveArt.body).toContain(v);
+      for (const v of [NAMES.other, NAMES.otherPet, NAMES.sub, OTHER, OTHER_PET]) expect(nearbyArt.body).not.toContain(v);
+      for (const v of [NAMES.wolf, NAMES.vendor, NAMES.chaser]) expect(nearbyArt.body).toContain(v);
       // The chaser is withheld while it targets the other player, and back once it targets the character.
       const d = decodeNearby(w);
       const chaser = (t: number) => nearbyAt(d, t).find((u) => u.id === CHASER);
       expect(chaser(ring.chaseSelfAt - 30_000)).toBeUndefined();
       expect(chaser(ring.chaseSelfAt + 30_000)?.s).toMatchObject({ name: NAMES.chaser, tgs: true });
       // A fixed point of the boundary, as the verifier reads it.
-      expect(projectLiveNearby(JSON.parse(JSON.stringify(live.nearby)), live.positions)).toEqual(live.nearby!);
+      expect(projectLiveNearby(JSON.parse(JSON.stringify(near.nearby)), live.positions)).toEqual(near.nearby);
 
-      // No history: nothing but live.json names a unit, and no key is the ring's.
+      // No history: nothing but nearby.json names a unit — live.json included —
+      // and no other key is the ring's.
       for (const a of out.artifacts) {
+        if (a.path === NEARBY_PATH) continue;
         expect(a.path).not.toContain("nearby");
-        if (a.path === LIVE_PATH) continue;
         for (const v of [NAMES.wolf, NAMES.vendor, NAMES.chaser, WOLF, VENDOR, CHASER]) expect(`${a.path}: ${a.body}`).not.toContain(v);
       }
     } finally {
@@ -166,24 +183,36 @@ describe("the public nearby layer", () => {
         await publishPass(async (sink, published) => await render(Date.now(), { sink: (b: SnapshotArtifact[]) => sink(b), batch: 1 }, published), bucket.store, state);
       };
       await pass();
-      const first = JSON.parse(bucket.objects.get(LIVE_PATH)!) as Live;
-      expect(Object.keys(first.nearby ?? {})).toEqual([LIVE_RUN]);
+      const first = JSON.parse(bucket.objects.get(NEARBY_PATH)!) as Nearby;
+      expect(Object.keys(first.nearby)).toEqual([LIVE_RUN]);
+      // Written before the live.json that names it, and both before the flip.
+      const order = bucket.puts.map((p) => p.path);
+      expect(order.indexOf(NEARBY_PATH)).toBeLessThan(order.indexOf(LIVE_PATH));
+      expect(order.indexOf(LIVE_PATH)).toBeLessThan(order.indexOf("v1/manifest.json"));
       const report = await verifyPublication(bucket.source, { cache: false });
       expect(report.missing).toEqual([]);
       expect(report.findings).toEqual([]);
 
-      // The run's ring goes (a pause, a stop, an exit): the next pass carries no window and no flag.
+      // The run's ring goes (a pause, a stop, an exit): the next pass overwrites
+      // the windows with none, rather than leaving the last ones at a key
+      // anyone can read, and live.json flags nothing.
       rmSync(join(runs, LIVE_RUN, "nearby"), { recursive: true, force: true });
       await pass();
-      const second = JSON.parse(bucket.objects.get(LIVE_PATH)!) as Live;
-      expect(second.nearby).toBeUndefined();
-      expect(second.positions.positions.find((p) => p.runId === LIVE_RUN)?.nearby).toBeUndefined();
+      const second = JSON.parse(bucket.objects.get(NEARBY_PATH)!) as Nearby;
+      expect(second.nearby).toEqual({});
+      const secondLive = JSON.parse(bucket.objects.get(LIVE_PATH)!) as Live;
+      expect(secondLive.positions.positions.find((p) => p.runId === LIVE_RUN)?.nearby).toBeUndefined();
       expect((await verifyPublication(bucket.source, { cache: false })).findings).toEqual([]);
 
-      // Across both passes, no key other than live.json ever held a unit, and none holds one now.
+      // Empty, it carries no clock, so an idle pass spends no PUT on it.
+      const putsBefore = bucket.puts.filter((p) => p.path === NEARBY_PATH).length;
+      await pass();
+      expect(bucket.puts.filter((p) => p.path === NEARBY_PATH).length).toBe(putsBefore);
+
+      // Across every pass, no key other than nearby.json ever held a unit, and none holds one now.
       for (const p of bucket.puts) {
+        if (p.path === NEARBY_PATH) continue;
         expect(p.path).not.toContain("nearby");
-        if (p.path === LIVE_PATH) continue;
         for (const v of [NAMES.wolf, NAMES.vendor, NAMES.chaser]) expect(`${p.path}: ${p.body}`).not.toContain(v);
       }
       for (const [k, body] of bucket.objects) for (const v of [NAMES.wolf, NAMES.vendor, NAMES.chaser]) expect(`${k}: ${body}`).not.toContain(v);
@@ -199,7 +228,7 @@ describe("the public nearby layer", () => {
       const bucket = memoryBucket();
       const render = createRenderer({ runsDir: runs });
       await publishPass(async (sink, p) => await render(Date.now(), { sink, batch: 1 }, p), bucket.store, emptyState());
-      const w = (JSON.parse(bucket.objects.get(LIVE_PATH)!) as Live).nearby![LIVE_RUN]!;
+      const w = (JSON.parse(bucket.objects.get(NEARBY_PATH)!) as Nearby).nearby[LIVE_RUN]!;
       expect(w.t1 - w.t0).toBe(PUBLIC_NEARBY_SPAN_MS);
       expect(w.ids.length).toBeGreaterThan(0);
       expect((await verifyPublication(bucket.source, { cache: false })).findings).toEqual([]);
@@ -221,19 +250,40 @@ describe("the public nearby layer", () => {
   });
 });
 
-describe("the verifier on live.json's units", () => {
-  /** One clean published pass over the fixture, and a way to rewrite its live.json. */
-  async function published(): Promise<{ bucket: ReturnType<typeof memoryBucket>; edit: (fn: (live: Live & Record<string, unknown>) => void) => void; done: () => void }> {
+describe("the verifier on the published units", () => {
+  /**
+   * One clean published pass over the fixture, and ways to rewrite what it
+   * wrote: `edit` the windows in `nearby.json`, `editLive` the `live.json`
+   * beside it, or `legacy` to fold the windows back into `live.json` the way a
+   * publisher before the split wrote them.
+   */
+  async function published(): Promise<{
+    bucket: ReturnType<typeof memoryBucket>;
+    edit: (fn: (live: Nearby & Record<string, unknown>) => void) => void;
+    editLive: (fn: (live: Live & Record<string, unknown>) => void) => void;
+    legacy: () => void;
+    done: () => void;
+  }> {
     const { runs } = await setup();
     const bucket = memoryBucket();
     const render = createRenderer({ runsDir: runs });
     await publishPass(async (sink, p) => await render(Date.now(), { sink, batch: 1 }, p), bucket.store, emptyState());
+    const rewrite = <T>(key: string, fn: (body: T) => void): void => {
+      const body = JSON.parse(bucket.objects.get(key)!) as T;
+      fn(body);
+      bucket.objects.set(key, JSON.stringify(body));
+    };
     return {
       bucket,
-      edit: (fn) => {
-        const live = JSON.parse(bucket.objects.get(LIVE_PATH)!) as Live & Record<string, unknown>;
-        fn(live);
-        bucket.objects.set(LIVE_PATH, JSON.stringify(live));
+      edit: (fn) => rewrite(NEARBY_PATH, fn),
+      editLive: (fn) => rewrite(LIVE_PATH, fn),
+      legacy: () => {
+        const near = JSON.parse(bucket.objects.get(NEARBY_PATH)!) as Nearby;
+        bucket.objects.delete(NEARBY_PATH);
+        rewrite<Live>(LIVE_PATH, (live) => {
+          delete live.nearbyKey;
+          live.nearby = near.nearby;
+        });
       },
       done: () => rmSync(runs, { recursive: true, force: true }),
     };
@@ -275,50 +325,123 @@ describe("the verifier on live.json's units", () => {
     }
   });
 
-  test("a planted player, a guid key or a self that names the character is caught twice: drift and a withheld field", async () => {
-    for (const plant of [
-      (live: Live) => {
-        const w = live.nearby![LIVE_RUN]!;
-        w.ids.push(OTHER);
-        w.ty.push(3);
+  /** The windows, wherever the shape under test keeps them. */
+  type Holder = { nearby?: LiveNearby };
+  /** Plant on the current shape (in nearby.json) and on the one before the split (inline in live.json). */
+  const shapes = [
+    { name: "nearby.json", apply: (p: Awaited<ReturnType<typeof published>>, fn: (h: Holder) => void) => p.edit(fn) },
+    {
+      name: "inline in live.json",
+      apply: (p: Awaited<ReturnType<typeof published>>, fn: (h: Holder) => void) => {
+        p.legacy();
+        p.editLive(fn);
       },
-      (live: Live) => {
-        live.nearby![LIVE_RUN]!.k.s[0]!.tg = OTHER;
-      },
-      (live: Live) => {
-        live.nearby![LIVE_RUN]!.k.self.guid = "7";
-      },
-    ]) {
-      const p = await published();
-      try {
-        p.edit(plant);
-        const report = await verifyPublication(p.bucket.source, { cache: false });
-        expect(kindsAt(report.findings)).toEqual(["projection-drift", "withheld-field"]);
-      } finally {
-        p.done();
+    },
+  ];
+
+  test("a planted player, a guid key or a self that names the character is caught twice: drift and a withheld field, in either shape", async () => {
+    for (const shape of shapes) {
+      for (const plant of [
+        (h: Holder) => {
+          const w = h.nearby![LIVE_RUN]!;
+          w.ids.push(OTHER);
+          w.ty.push(3);
+        },
+        (h: Holder) => {
+          h.nearby![LIVE_RUN]!.k.s[0]!.tg = OTHER;
+        },
+        (h: Holder) => {
+          h.nearby![LIVE_RUN]!.k.self.guid = "7";
+        },
+      ]) {
+        const p = await published();
+        try {
+          shape.apply(p, plant);
+          const report = await verifyPublication(p.bucket.source, { cache: false });
+          expect([shape.name, kindsAt(report.findings)]).toEqual([shape.name, ["projection-drift", "withheld-field"]]);
+        } finally {
+          p.done();
+        }
       }
     }
   });
 
-  test("a window reaching back past the live span, or for a run live.json does not flag, is not live", async () => {
-    for (const plant of [
-      (live: Live) => {
-        const w = live.nearby![LIVE_RUN]!;
-        w.t0 = w.t1 - PUBLIC_NEARBY_SPAN_MS - 60_000;
-      },
-      (live: Live) => {
-        delete live.positions.positions.find((x) => x.runId === LIVE_RUN)!.nearby;
-      },
-    ]) {
+  test("a window reaching back past the live span is not live, and is drift", async () => {
+    for (const shape of shapes) {
       const p = await published();
       try {
-        p.edit(plant);
+        shape.apply(p, (h) => {
+          const w = h.nearby![LIVE_RUN]!;
+          w.t0 = w.t1 - PUBLIC_NEARBY_SPAN_MS - 60_000;
+        });
         const report = await verifyPublication(p.bucket.source, { cache: false });
         expect(kindsAt(report.findings)).toContain("live-only");
         expect(kindsAt(report.findings)).toContain("projection-drift");
       } finally {
         p.done();
       }
+    }
+  });
+
+  test("a window for a run live.json does not flag is not live, when the two are from one pass", async () => {
+    const p = await published();
+    try {
+      p.editLive((live) => {
+        delete live.positions.positions.find((x) => x.runId === LIVE_RUN)!.nearby;
+      });
+      const report = await verifyPublication(p.bucket.source, { cache: false });
+      expect(report.findings.filter((f) => f.key === NEARBY_PATH).map((f) => f.kind)).toEqual(["live-only"]);
+    } finally {
+      p.done();
+    }
+  });
+
+  test("two GETs a pass apart are not a finding: the flag check holds only within one pass", async () => {
+    const p = await published();
+    try {
+      // The live.json a pass later, in which the run has stopped; the nearby.json read before it landed.
+      p.editLive((live) => {
+        live.generatedAt += 420_000;
+        delete live.positions.positions.find((x) => x.runId === LIVE_RUN)!.nearby;
+      });
+      const report = await verifyPublication(p.bucket.source, { cache: false });
+      expect(report.findings).toEqual([]);
+    } finally {
+      p.done();
+    }
+  });
+
+  test("a nearby.json live.json names and the bucket lacks is a missing object; a key it should not name is drift", async () => {
+    const p = await published();
+    try {
+      p.bucket.objects.delete(NEARBY_PATH);
+      const report = await verifyPublication(p.bucket.source, { cache: false });
+      expect(report.missing).toEqual([NEARBY_PATH]);
+    } finally {
+      p.done();
+    }
+    const q = await published();
+    try {
+      q.editLive((live) => {
+        live.nearbyKey = "v1/elsewhere.json";
+      });
+      q.bucket.objects.set("v1/elsewhere.json", q.bucket.objects.get(NEARBY_PATH)!);
+      const report = await verifyPublication(q.bucket.source, { cache: false });
+      expect(report.findings.filter((f) => f.key === LIVE_PATH).map((f) => `${f.kind} ${f.at}`)).toEqual(["projection-drift nearbyKey"]);
+    } finally {
+      q.done();
+    }
+  });
+
+  test("a live.json from before the split, its windows inline, verifies clean", async () => {
+    const p = await published();
+    try {
+      p.legacy();
+      const report = await verifyPublication(p.bucket.source, { cache: false });
+      expect(report.missing).toEqual([]);
+      expect(report.findings).toEqual([]);
+    } finally {
+      p.done();
     }
   });
 });

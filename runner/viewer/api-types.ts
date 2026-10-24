@@ -999,7 +999,7 @@ export interface AgentPosition {
    * True when the run's nearby ring (`/api/run/<id>/nearby`) is being written:
    * its newest file was touched within `NEARBY_FRESH_MS`. Absent otherwise, so
    * the map asks for units only where there are some. In `live.json` it is
-   * set exactly where the file carries the run's window (`LiveNearby`).
+   * set exactly where `nearby.json` carries the run's window (`LiveNearby`).
    */
   nearby?: true;
 }
@@ -2645,7 +2645,7 @@ export interface NearbyWindow {
 }
 
 /**
- * `live.json`'s `nearby`: each live run's public window (`projectLiveNearby`),
+ * `nearby.json`'s `nearby`: each live run's public window (`projectLiveNearby`),
  * by run id, for exactly the positions flagged `nearby`. Overwritten every
  * pass and gone with the run's position, so the public site holds the last
  * `PUBLIC_NEARBY_SPAN_MS` of units and never more.

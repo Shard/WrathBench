@@ -8,8 +8,9 @@
  * - **Addressing.** Every method has to reach the artifact the publisher
  *   actually writes, through a manifest that names the generation.
  * - **The memo.** Page poll intervals are stated at their call sites and stay
- *   there; what keeps a 5s poller off the network is the ~30s window here, so
- *   the window is asserted on an injected clock rather than a real one.
+ *   there; what keeps a 5s poller off the network is the ~30s window on the
+ *   mutable objects and the keyed cache for everything else, so both are
+ *   asserted on an injected clock rather than a real one.
  * - **Parity.** `/api/results`' query moves client-side, so the filter is
  *   re-run here against a transcription of the server's own rules
  *   (`runner/viewer/api.ts`' `resultsResponse`) rather than against my reading
@@ -39,13 +40,16 @@ import type {
   RunDetailResponse,
   TrackResponse,
 } from "../../runner/viewer/api-types";
-import { emptyNearbyWindow } from "../../runner/viewer/nearby";
+import { PUBLIC_NEARBY_KEY, emptyNearbyWindow } from "../../runner/viewer/nearby";
 import { ApiError } from "../src/api/client";
 import {
+  CHARACTER_TRACK_CONCURRENCY,
   SNAPSHOT_EDGE_TTL_MS,
   SNAPSHOT_RENDER_MS,
   SNAPSHOT_STALE_MS,
   createSnapshotClient,
+  keyedSlot,
+  mapLimit,
   projectResults,
   snapshotBanner,
   sweepExpired,
@@ -332,7 +336,7 @@ describe("addressing", () => {
 /* --- the memo --------------------------------------------------------- */
 
 describe("the memo", () => {
-  test("repeats inside the window resolve from memory; past it they go back out", async () => {
+  test("repeats inside the window resolve from memory; past it only the manifest goes back out", async () => {
     const b = fullBucket();
     let clock = 1_000;
     const c = createSnapshotClient(BASE, { fetch: b.fetch, now: () => clock, ttlMs: 30_000 });
@@ -344,10 +348,67 @@ describe("the memo", () => {
       await c.info();
     }
     expect(b.urls).toHaveLength(2);
-    // Past the window both the manifest and the artifact are asked for again.
+    // Past the window the manifest is asked for again; the aggregate it still
+    // names is content-addressed, so it is not.
     clock = 31_001;
     await c.info();
+    expect(b.urls).toEqual([`${BASE}/v1/manifest.json`, snapUrl("info.json"), `${BASE}/v1/manifest.json`]);
+  });
+
+  test("a keyed object is held past the window until a newer version of it takes its place", async () => {
+    const objects: Record<string, unknown> = {
+      [`${BASE}/v1/manifest.json`]: { gen: GEN, artifacts: MANIFEST_ARTIFACTS, generatedAt: GENERATED_AT },
+      [snapUrl("info.json")]: INFO,
+      [snapUrl("runs.json")]: { runs: [{ runId: "r1", snapshot: { detail: "v1/run/r1/7/detail.json", track: "v1/run/r1/7/track.json" } }] },
+      [`${BASE}/v1/run/r1/7/detail.json`]: DETAIL,
+      [`${BASE}/v1/run/r1/7/track.json`]: TRACK,
+      [`${BASE}/v1/run/r1/8/detail.json`]: { ...DETAIL, total: 8 },
+    };
+    const b = bucket(objects);
+    let clock = 0;
+    const c = createSnapshotClient(BASE, { fetch: b.fetch, now: () => clock, ttlMs: 30_000 });
+    await c.run("r1");
+    await c.track("r1");
+    const first = b.urls.length;
+    // An hour of 30s polls with nothing published: the manifest each window, nothing else.
+    for (clock = 30_000; clock <= 3_600_000; clock += 30_000) {
+      await c.run("r1");
+      await c.track("r1");
+    }
+    expect(b.urls.slice(first).every((u) => u === `${BASE}/v1/manifest.json`)).toBe(true);
+    // The run moves on: a new runs.json names a new detail; the track it still shares is held.
+    objects[`${BASE}/v1/snap/v-runs-2/runs.json`] = {
+      runs: [{ runId: "r1", snapshot: { detail: "v1/run/r1/8/detail.json", track: "v1/run/r1/7/track.json" } }],
+    };
+    objects[`${BASE}/v1/manifest.json`] = { gen: "g-43", artifacts: { ...MANIFEST_ARTIFACTS, "runs.json": "v1/snap/v-runs-2/runs.json" }, generatedAt: GENERATED_AT + 1 };
+    clock += 30_000;
+    const mark = b.urls.length;
+    expect((await c.run("r1")).total).toBe(8);
+    await c.track("r1");
+    expect(b.urls.slice(mark)).toEqual([`${BASE}/v1/manifest.json`, `${BASE}/v1/snap/v-runs-2/runs.json`, `${BASE}/v1/run/r1/8/detail.json`]);
+  });
+
+  test("the keyed cache is bounded, least recently used out first", async () => {
+    const t0s = [300_000, 600_000, 900_000];
+    const b = bucket(Object.fromEntries(t0s.map((t0) => [`${BASE}/v1/run/r1/trace/${t0}.json`, { t0 }])));
+    const c = createSnapshotClient(BASE, { fetch: b.fetch, now: () => 0, keyedMax: 2 });
+    await c.traceSegment("r1", 300_000);
+    await c.traceSegment("r1", 600_000);
+    await c.traceSegment("r1", 300_000); // touched: now the most recent
+    await c.traceSegment("r1", 900_000); // evicts 600_000, the least recent
+    await c.traceSegment("r1", 300_000);
+    expect(b.urls).toHaveLength(3);
+    await c.traceSegment("r1", 600_000);
     expect(b.urls).toHaveLength(4);
+  });
+
+  test("a keyed object's slot is its name or its run and file, whatever the version; a trace window is its own", () => {
+    expect(keyedSlot("v1/snap/abc123/runs.json")).toBe(keyedSlot("v1/snap/def456/runs.json"));
+    expect(keyedSlot("v1/snap/abc123/runs.json")).not.toBe(keyedSlot("v1/snap/abc123/results.json"));
+    expect(keyedSlot("v1/run/r1/7/detail.json")).toBe(keyedSlot("v1/run/r1/8/detail.json"));
+    expect(keyedSlot("v1/run/r1/7/detail.json")).not.toBe(keyedSlot("v1/run/r1/7/track.json"));
+    expect(keyedSlot("v1/run/r1/7/detail.json")).not.toBe(keyedSlot("v1/run/r2/7/detail.json"));
+    expect(keyedSlot("v1/run/r1/trace/300000.json")).not.toBe(keyedSlot("v1/run/r1/trace/600000.json"));
   });
 
   test("concurrent callers share one request rather than racing", async () => {
@@ -584,16 +645,43 @@ describe("per-run artifacts", () => {
     expect(b.urls).toEqual([`${BASE}/v1/run/r%201/trace/${t0}.json`]);
   });
 
-  test("a live run's nearby window is read out of the fast lane, and a run it carries none for answers an empty one", async () => {
+  test("a live run's nearby window is read from the object live.json names, and a run it carries none for answers an empty one", async () => {
     const t0 = 1_760_000_100_000;
     const w1 = { ...emptyNearbyWindow("r1", t0, t0 + 600_000), ids: ["17370386017530052609"], ty: [0] };
     const positions = { positions: [{ runId: "r1", nearby: true }, { runId: "r2" }] };
-    const b = bucket({ [`${BASE}/v1/live.json`]: { generatedAt: GENERATED_AT, fleet: { present: false }, positions, nearby: { r1: w1 } } });
-    const c = createSnapshotClient(BASE, { fetch: b.fetch });
+    const b = bucket({
+      [`${BASE}/v1/live.json`]: { generatedAt: GENERATED_AT, fleet: { present: false }, positions, nearbyKey: PUBLIC_NEARBY_KEY },
+      [`${BASE}/${PUBLIC_NEARBY_KEY}`]: { generatedAt: GENERATED_AT, attribution: ATTRIBUTION, nearby: { r1: w1 } },
+    });
+    let clock = 0;
+    const c = createSnapshotClient(BASE, { fetch: b.fetch, now: () => clock, ttlMs: 30_000 });
     // Whatever span is asked for: the published window is the one there is.
     expect(await c.nearby("r1", 60_000)).toEqual(w1);
     expect(await c.nearby("r2", 60_000)).toMatchObject({ v: 1, run: "r2", t0: GENERATED_AT, ids: [], ev: [] });
-    // One read of the fast lane for both; no object of its own is ever asked for.
+    // One read of each for both runs, and the shell's feeds never ask for the units.
+    expect(b.urls).toEqual([`${BASE}/v1/live.json`, `${BASE}/${PUBLIC_NEARBY_KEY}`]);
+    await c.fleet();
+    await c.positions();
+    expect(b.urls).toHaveLength(2);
+    // Mutable, so it is held for the window like live.json and no longer.
+    clock = 29_999;
+    await c.nearby("r1", 60_000);
+    expect(b.urls).toHaveLength(2);
+    clock = 30_000;
+    await c.nearby("r1", 60_000);
+    expect(b.urls.slice(2)).toEqual([`${BASE}/v1/live.json`, `${BASE}/${PUBLIC_NEARBY_KEY}`]);
+  });
+
+  test("a live.json from before the split carries the windows inline, and no units object is asked for", async () => {
+    const t0 = 1_760_000_100_000;
+    const w1 = { ...emptyNearbyWindow("r1", t0, t0 + 600_000), ids: ["17370386017530052609"], ty: [0] };
+    const positions = { positions: [{ runId: "r1", nearby: true }] };
+    const b = bucket({ [`${BASE}/v1/live.json`]: { generatedAt: GENERATED_AT, fleet: { present: false }, positions, nearby: { r1: w1 } } });
+    const c = createSnapshotClient(BASE, { fetch: b.fetch });
+    expect(await c.nearby("r1", 60_000)).toEqual(w1);
+    expect(await c.nearby("r2", 60_000)).toMatchObject({ v: 1, run: "r2", t0: GENERATED_AT, ids: [], ev: [] });
+    // Never guessed: a key no live.json named is never requested, so an edge
+    // cannot come to hold a 404 for it ahead of the publisher.
     expect(b.urls).toEqual([`${BASE}/v1/live.json`]);
   });
 
@@ -601,6 +689,16 @@ describe("per-run artifacts", () => {
     const b = bucket({ [`${BASE}/v1/live.json`]: { generatedAt: GENERATED_AT, fleet: { present: false }, positions: { positions: [] } } });
     const c = createSnapshotClient(BASE, { fetch: b.fetch });
     expect(await c.nearby("r1", 60_000)).toMatchObject({ v: 1, run: "r1", ids: [], ev: [] });
+    expect(b.urls).toEqual([`${BASE}/v1/live.json`]);
+  });
+
+  test("an idle units object, which carries no clock of its own, answers on live.json's", async () => {
+    const b = bucket({
+      [`${BASE}/v1/live.json`]: { generatedAt: GENERATED_AT, fleet: { present: false }, positions: { positions: [] }, nearbyKey: PUBLIC_NEARBY_KEY },
+      [`${BASE}/${PUBLIC_NEARBY_KEY}`]: { attribution: ATTRIBUTION, nearby: {} },
+    });
+    const c = createSnapshotClient(BASE, { fetch: b.fetch });
+    expect(await c.nearby("r1", 60_000)).toMatchObject({ v: 1, run: "r1", t0: GENERATED_AT, ids: [] });
   });
 
   test("the fast lane says how often it lands and how long its caches hold it", () => {
@@ -929,5 +1027,57 @@ describe("character", () => {
   test("an id no run answers to is a 404, the same answer the viewer gives", async () => {
     const c = createSnapshotClient(BASE, { fetch: chainBucket().fetch });
     await expect(c.character("no-such-run")).rejects.toMatchObject({ status: 404 });
+  });
+
+  test("a long chain's tracks are fetched a few at a time, and stitched in attempt order however they answer", async () => {
+    const n = 20;
+    const ids = Array.from({ length: n }, (_, i) => `a${i + 1}`);
+    const runs = ids.map((runId, i) => run({ runId, startedAt: i + 1, continuedFrom: i === 0 ? null : ids[i - 1]!, modelResponses: 1 }));
+    const objects: Record<string, unknown> = {
+      [`${BASE}/v1/manifest.json`]: { gen: GEN, artifacts: MANIFEST_ARTIFACTS, generatedAt: GENERATED_AT },
+      [snapUrl("results.json")]: resultsArtifact(runs),
+      [snapUrl("runs.json")]: { generatedAt: GENERATED_AT, runs: ids.map((runId) => ({ runId, snapshot: { track: `v1/run/${runId}/1/track.json` } })) },
+    };
+    ids.forEach((runId, i) => {
+      objects[`${BASE}/v1/run/${runId}/1/track.json`] = { ...TRACK, runId, points: [trackPoint(1_000 * (i + 1), i + 1, 0)] };
+    });
+    const served = bucket(objects);
+    let inFlight = 0;
+    let peak = 0;
+    // Later attempts answer sooner, so arrival order is the reverse of attempt order.
+    const slow = (async (input: string | URL | Request) => {
+      const url = String(input);
+      const m = /\/v1\/run\/a(\d+)\//.exec(url);
+      if (m === null) return served.fetch(input);
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 2 * (n - Number(m[1]))));
+      inFlight--;
+      return served.fetch(input);
+    }) as unknown as typeof globalThis.fetch;
+    const body = await createSnapshotClient(BASE, { fetch: slow }).character("a1");
+    expect(peak).toBe(CHARACTER_TRACK_CONCURRENCY);
+    expect(body.states.map((p) => p.attempt)).toEqual(ids.map((_, i) => i + 1));
+    expect(body.states.map((p) => p.runId)).toEqual(ids);
+  });
+});
+
+describe("mapLimit", () => {
+  test("never more than the cap in flight, every item once, results in the items' order", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const seen: number[] = [];
+    const out = await mapLimit([5, 1, 4, 2, 3, 0, 6], 3, async (x) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      seen.push(x);
+      await new Promise((r) => setTimeout(r, x));
+      inFlight--;
+      return x * 10;
+    });
+    expect(peak).toBe(3);
+    expect(seen.sort()).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(out).toEqual([50, 10, 40, 20, 30, 0, 60]);
+    expect(await mapLimit([], 6, async () => 1)).toEqual([]);
   });
 });
