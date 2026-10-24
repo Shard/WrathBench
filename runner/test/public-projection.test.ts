@@ -1943,6 +1943,10 @@ describe("projectFleet", () => {
           smuggle({ group: "pool", concurrency: 2, lowerRuns: 1, upperRuns: 4, lowerMinutes: 90, upperMinutes: 360 }),
         ],
       }),
+      // A whole poisoned listing row where the fleet's run figures go: only
+      // what a public runs.json row carries may come out.
+      runFacts: [runListRowFixture()],
+      runCount: 7,
       now: 5000,
     });
     const out = projectFleet(input);
@@ -2006,6 +2010,9 @@ describe("projectFleet", () => {
           "lowerMinutes",
           "upperMinutes",
         ]),
+        "runFacts",
+        ...under("runFacts[]", RUN_LIST_ROW_KEYS),
+        "runCount",
         "now",
       ]),
     );

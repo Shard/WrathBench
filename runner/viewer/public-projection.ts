@@ -78,6 +78,7 @@ import type {
   FleetEndedView,
   FleetJobView,
   FleetPausedView,
+  FleetRunFacts,
   FleetPreflightView,
   FleetResponse,
   FleetServerView,
@@ -554,30 +555,31 @@ function projectRunRow(r: RunRow): RunRow {
 }
 
 /**
- * A `runs.json` row as published. One page reads this index, the fleet table
- * (`fleetRows` in the dashboard joins it to the supervisor's jobs by run id for
- * level, xp, tokens, speed, cost and the episode clock), and the snapshot
- * client follows its `snapshot` pointers to a run's objects. Everything else a
- * listing row carries is on `results.json` and the run's own `detail.json`,
+ * A `runs.json` row as published: a run's fleet-table figures
+ * (`FleetRunFacts`) and the `snapshot` pointers the snapshot client follows to
+ * a run's objects. The fleet table itself now reads the same figures off the
+ * fleet feed (`live.json`), for the handful of runs it shows. Everything else
+ * a listing row carries is on `results.json` and the run's own `detail.json`,
  * where the pages that show it read it; repeated here it was most of a
  * two-megabyte object that moves on every pass with a live run.
- *
- * `Pick` of the shared shape, so the dashboard's consumer is typed against
- * exactly this and the compiler is what says it reads nothing else.
  */
-export type PublicRunListRow = Pick<RunListRow, "runId" | "resolvedModel" | "level" | "xp" | "playtimeMs" | "snapshot"> & {
-  tokens: Pick<TokenTotals, "totalTokens"> | null;
-  tps?: TpsFacts | null;
-  /** The provider's own figure: the fleet table never shows the estimate. */
-  cost: { actual: Pick<CostFigure, "usd" | "basis" | "note" | "backfill"> } | null;
-  comparability: { budget: Pick<ComparabilityView["budget"], "episodeMs"> } | null;
-};
+export type PublicRunListRow = FleetRunFacts & Pick<RunListRow, "snapshot">;
 
 export interface PublicRunsResponse extends Omit<RunsResponse, "runs"> {
   runs: PublicRunListRow[];
 }
 
 function projectRunListRow(r: RunListRow): PublicRunListRow {
+  return projectRunFacts(r);
+}
+
+/**
+ * A run's fleet-table figures, field by field: what a public `runs.json` row
+ * is, and what the fleet feed carries per run (`FleetResponse.runFacts`) in
+ * both builds. A listing row narrows to it, and so does an already-narrowed
+ * one, so it is its own idempotent projection.
+ */
+export function projectRunFacts(r: FleetRunFacts): FleetRunFacts {
   return {
     runId: r.runId,
     resolvedModel: r.resolvedModel,
@@ -1221,6 +1223,9 @@ export function projectFleet(f: FleetResponse): PublicFleetResponse {
     ...(f.session !== undefined
       ? { session: { finished: f.session.finished, ok: f.session.ok, retried: f.session.retried } }
       : {}),
+    // The same figures `runs.json` publishes per row, for the runs the table shows.
+    ...(f.runFacts !== undefined ? { runFacts: f.runFacts.map(projectRunFacts) } : {}),
+    ...(typeof f.runCount === "number" ? { runCount: f.runCount } : {}),
     ...(f.outstanding !== undefined
       ? {
           outstanding: {

@@ -16,7 +16,9 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Trajectory } from "../src/trajectory";
-import { STORE_SHARE_MS, coldRuns, createApi, heldAccounts } from "../viewer/api";
+import { STORE_SHARE_MS, coldRuns, createApi, fleetRunIds, heldAccounts, withoutRuns } from "../viewer/api";
+import { projectRunFacts } from "../viewer/public-projection";
+import type { FleetResponse, RunsResponse } from "../viewer/api-types";
 import {
   clickhouseStore,
   localRunStore,
@@ -275,5 +277,122 @@ describe("which runs /api/positions opens", () => {
     // The whole tail window unreadable: the file is read whole, and the good line before it found.
     writeFileSync(join(dir, "episodic.jsonl"), [line(1), "{".repeat(20_000)].join("\n"));
     expect(readLatestStatus(runsDir, "r")).toMatchObject({ turn: 1 });
+  });
+});
+
+/*
+ * The fleet table's cells. The page read the whole runs index (2.4 MB) a minute
+ * to fill a handful of rows; `/api/fleet` now carries those runs' figures
+ * itself, off point reads per run, and the index's size for the page's link.
+ */
+describe("/api/fleet carries its rows' run figures", () => {
+  function fleetState(runsDir: string): void {
+    writeFileSync(
+      join(runsDir, "fleet-state.json"),
+      JSON.stringify({
+        fleetPid: 7,
+        startedAt: 1,
+        heartbeatAt: 2,
+        accounts: { pool: { RUNNER: "job-a", IDLE: null } },
+        jobs: {
+          "job-a": { ref: "a", episode: "e90", account: "RUNNER", source: "policy", models: ["a-model"], pid: 13, spawnedAt: 1, exitCode: null, draining: false, alive: true },
+        },
+        paused: [
+          { runId: "run-paused", model: "a-model", account: "IDLE", reason: "rate-limited", since: 1, pauseCount: 1, resumeAfter: null, elapsedMs: 1000, budgetMs: 5_400_000, why: "waiting" },
+        ],
+        ended: [],
+      }),
+    );
+  }
+
+  async function json<T>(handle: ReturnType<typeof createApi>, path: string): Promise<T> {
+    const res = await handle(new Request(`http://x${path}`));
+    expect(res.status).toBe(200);
+    return (await res.json()) as T;
+  }
+
+  test("the job's run and the paused run, as the runs index rows them, with no corpus-wide read", async () => {
+    const runsDir = tempDir("viewer-reads-fleet-");
+    writeRun(runsDir, "run-live", { account: "RUNNER" });
+    writeRun(runsDir, "run-paused", { account: "IDLE" });
+    writeRun(runsDir, "run-old", { terminated: true, account: "OLD" });
+    fleetState(runsDir);
+    const { store, reads } = countingStore(runsDir);
+    const handle = handleOf(runsDir, store);
+    const realNow = Date.now;
+    const clock = realNow();
+    Date.now = () => clock;
+    try {
+      const fleet = await json<FleetResponse>(handle, "/api/fleet");
+      // Nothing corpus-wide but the liveness listing and the facts the route always read.
+      expect(reads).toMatchObject({ runRows: 0, totalsRows: 0, latestReadings: 0, latestStates: 0 });
+      expect(fleet.jobs[0]!.runId).toBe("run-live");
+      const facts = new Map((fleet.runFacts ?? []).map((r) => [r.runId, r]));
+      expect([...facts.keys()].sort()).toEqual(["run-live", "run-paused"]);
+      expect(facts.get("run-live")).toMatchObject({ level: 4, xp: 120 });
+      // The same figures the runs index serves for those runs, field for field.
+      const runs = await json<RunsResponse>(handle, "/api/runs");
+      for (const id of ["run-live", "run-paused"]) {
+        expect(facts.get(id)).toEqual(projectRunFacts(runs.runs.find((r) => r.runId === id)!));
+      }
+      expect(fleet.runCount).toBe(runs.runs.length);
+      expect(fleet.runCount).toBe(3);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  test("a public handle carries the same figures through its projection", async () => {
+    const runsDir = tempDir("viewer-reads-fleet-public-");
+    writeRun(runsDir, "run-live", { account: "RUNNER" });
+    writeRun(runsDir, "run-paused", { account: "IDLE" });
+    fleetState(runsDir);
+    const handle = handleOf(runsDir, localRunStore(runsDir), true);
+    const fleet = await json<FleetResponse>(handle, "/api/fleet");
+    expect((fleet.runFacts ?? []).map((r) => r.runId).sort()).toEqual(["run-live", "run-paused"]);
+    for (const r of fleet.runFacts ?? []) {
+      expect(Object.keys(r).sort()).toEqual(["comparability", "cost", "level", "playtimeMs", "resolvedModel", "runId", "tokens", "tps", "xp"]);
+    }
+    expect(fleet.runCount).toBe(2);
+  });
+
+  test("only the runs the table rows: a job's run, and the first paused run on each account no job is on", () => {
+    const job = (account: string, runId: string | null): FleetResponse["jobs"][number] => ({
+      name: `j-${account}`, ref: "a", episode: "e90", account, accountClass: "pool", source: "policy", models: [], runId, model: null,
+      pid: 1, spawnedAt: 1, exitCode: null, draining: false, alive: true,
+    });
+    const paused = (runId: string, account: string | null): FleetResponse["paused"][number] => ({
+      runId, model: "m", account, reason: "rate-limited", since: 1, pauseCount: 1, resumeAfter: null, elapsedMs: null, budgetMs: null, why: "w",
+    });
+    expect(
+      fleetRunIds({
+        jobs: [job("RUNNER", "live-1"), job("SPARE", null)],
+        accounts: [
+          { account: "RUNNER", class: "pool", job: "j-RUNNER" },
+          { account: "SPARE", class: "pool", job: "j-SPARE" },
+          { account: "idle", class: "pool", job: null },
+          { account: "EMPTY", class: "paid", job: null },
+        ],
+        // A long paused list: only the first on an idle account has a row.
+        paused: [paused("p-busy", "RUNNER"), paused("p-idle", "IDLE"), paused("p-idle-2", "IDLE"), paused("p-none", null), paused("p-gone", "NOWHERE")],
+      }).sort(),
+    ).toEqual(["live-1", "p-idle"]);
+  });
+
+  test("a withheld run's figures go with its row", () => {
+    const f: FleetResponse = {
+      present: true,
+      server: { phase: "running", since: 0, build: "", detail: "", updatedAt: 0 },
+      jobs: [],
+      accounts: [],
+      paused: [],
+      ended: [],
+      runFacts: [
+        { runId: "keep", resolvedModel: null, level: 1, xp: 0, playtimeMs: null, tokens: null, cost: null, comparability: null },
+        { runId: "secret", resolvedModel: null, level: 9, xp: 9, playtimeMs: null, tokens: null, cost: null, comparability: null },
+      ],
+      now: 0,
+    };
+    expect(withoutRuns(f, new Set(["secret"])).runFacts!.map((r) => r.runId)).toEqual(["keep"]);
   });
 });

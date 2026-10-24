@@ -43,6 +43,7 @@ import type {
   FleetAccountView,
   FleetJobView,
   FleetPausedView,
+  FleetRunFacts,
   FleetResponse,
   FleetServerView,
   FleetSessionView,
@@ -73,6 +74,7 @@ import {
   projectEntries,
   projectEpisodes,
   projectFleet,
+  projectRunFacts,
   projectInfo,
   projectModels,
   projectPositions,
@@ -1390,40 +1392,71 @@ export function createApi(opts: ApiOptions): ApiHandle {
   }
 
   async function listWithTotals(): Promise<RunListRow[]> {
-    const out: RunListRow[] = [];
     const [rows, totalsByRun] = await Promise.all([runRows(), allTotals()]);
-    for (const raw of rows) {
-      const totals = totalsByRun.get(raw.runId) ?? null;
-      const row = withResolved(raw, totals);
-      out.push({
-        ...row,
-        modelResponses: totals?.modelResponses ?? null,
-        tokens: totals?.tokens ?? null,
-        // Off the same memoised whole-file pass as the tokens; the fleet page's
-        // speed column and the run page's read one derivation.
-        tps: totals?.tps ?? null,
-        cost:
-          totals === null
-            ? null
-            : runCost({
-                run: row,
-                tokens: totals.tokens,
-                reportedUsd: totals.reportedCostUsd,
-                coverage: totals.responseCost,
-              }),
-        firstTs: totals?.firstTs ?? null,
-        lastTs: totals?.lastTs ?? null,
-        playtimeMs:
-          totals === null
-            ? null
-            : playtimeMs(totals.segments, {
-                lastTs: totals.lastTs,
-                live: row.live,
-                now: Date.now(),
-              }),
-      });
-    }
-    return out;
+    return rows.map((raw) => listRowOf(raw, totalsByRun.get(raw.runId) ?? null));
+  }
+
+  /**
+   * One listing row: the run's row with its totals' figures. The runs index
+   * builds every row with it and the fleet feed the few it shows
+   * (`fleetRunFacts`), so the two pages cannot quote different numbers.
+   */
+  function listRowOf(raw: RunRow, totals: RunTotals | null): RunListRow {
+    const row = withResolved(raw, totals);
+    return {
+      ...row,
+      modelResponses: totals?.modelResponses ?? null,
+      tokens: totals?.tokens ?? null,
+      // Off the same memoised whole-file pass as the tokens; the fleet page's
+      // speed column and the run page's read one derivation.
+      tps: totals?.tps ?? null,
+      cost:
+        totals === null
+          ? null
+          : runCost({
+              run: row,
+              tokens: totals.tokens,
+              reportedUsd: totals.reportedCostUsd,
+              coverage: totals.responseCost,
+            }),
+      firstTs: totals?.firstTs ?? null,
+      lastTs: totals?.lastTs ?? null,
+      playtimeMs:
+        totals === null
+          ? null
+          : playtimeMs(totals.segments, {
+              lastTs: totals.lastTs,
+              live: row.live,
+              now: Date.now(),
+            }),
+    };
+  }
+
+  /**
+   * The fleet table's figures for the runs it shows: every run a job is
+   * driving, and the paused run each idle account's row names (`fleetRunIds`)
+   * — a handful, where the runs index is every run on disk and the
+   * supervisor's paused list can be long. Point reads per run (`runRowOne`,
+   * `runTotals`), never the corpus-wide ones: on the five-second fleet poll
+   * those would be megabytes a tick that only `/api/runs` and `/api/models`
+   * ever shared. `runRowOne` falls back to the run's own files only for a run
+   * the store has not seen yet, its first seconds, whose files the account
+   * scan (`heldAccounts`) has just opened anyway. A run that cannot be read
+   * is left out, and its row shows dashes, as a run missing from the index did.
+   */
+  async function fleetRunFacts(f: FleetResponse, now: number): Promise<FleetRunFacts[]> {
+    const ids = fleetRunIds(f).filter(isValidRunId);
+    const facts = await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const [raw, totals] = await Promise.all([runRowOne(id, now), runTotals(id)]);
+          return projectRunFacts(listRowOf(raw, totals));
+        } catch {
+          return null;
+        }
+      }),
+    );
+    return facts.filter((x): x is FleetRunFacts => x !== null);
   }
 
   function dashboardIndex(): Response {
@@ -1526,8 +1559,19 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * models table about who owes what.
        */
       const now = Date.now();
-      const cold = coldRuns(await store.runListing(), now);
-      const body = withoutRuns(readFleet(runsDir, now, cold), publicMode ? new Set(await unpublishedRuns()) : new Set());
+      const listing = await store.runListing();
+      const cold = coldRuns(listing, now);
+      const withheld: ReadonlySet<string> = publicMode ? new Set(await unpublishedRuns()) : new Set();
+      const body = withoutRuns(readFleet(runsDir, now, cold), withheld);
+      /*
+       * What the table's rows show, and the count its link to the runs index
+       * names, carried here so the fleet page need not read that whole index
+       * (2.4 MB) to fill five rows. The count is the index's own set — the
+       * store's unarchived runs, less what a public handle withholds — off the
+       * liveness listing this route reads anyway.
+       */
+      body.runFacts = await fleetRunFacts(body, now);
+      body.runCount = listing.filter((r) => r.archived === 0 && !withheld.has(r.run_id)).length;
       const roster = fleetRoster();
       if (roster.shape === "roster") {
         const runs = await runFacts(now);
@@ -2228,6 +2272,28 @@ function isWithheldRow(r: Pick<RunRow, "driver" | "shakeout">): boolean {
 }
 
 /**
+ * The runs the fleet table has a row for, by the table's own rule
+ * (`fleetRows` in `dashboard/src/lib/fleet.ts`): each job's run, and on each
+ * account no job is on, the first paused run the supervisor lists against it.
+ * The rest of the paused list is the page's folded list of ids, which shows no
+ * figures.
+ */
+export function fleetRunIds(f: Pick<FleetResponse, "jobs" | "accounts" | "paused">): string[] {
+  const ids = new Set<string>();
+  const busy = new Set<string>();
+  for (const j of f.jobs) {
+    busy.add(j.account.toUpperCase());
+    if (j.runId !== null) ids.add(j.runId);
+  }
+  for (const a of f.accounts) {
+    if (busy.has(a.account.toUpperCase())) continue;
+    const here = f.paused.find((p) => (p.account ?? "").toUpperCase() === a.account.toUpperCase());
+    if (here !== undefined) ids.add(here.runId);
+  }
+  return [...ids];
+}
+
+/**
  * Where a `/stream` starts, as the client asked: the browser's `Last-Event-ID`
  * on a reconnect (the cursor the last connection's frames carried), else the
  * URL's `from`. Null when neither is a non-negative integer, which starts the
@@ -2254,5 +2320,6 @@ export function withoutRuns(f: FleetResponse, withheld: ReadonlySet<string>): Fl
     jobs: f.jobs.map((j) => (j.runId !== null && withheld.has(j.runId) ? { ...j, runId: null, model: null } : j)),
     paused: f.paused.filter((p) => !withheld.has(p.runId)),
     ended: f.ended.filter((e) => !withheld.has(e.runId)),
+    ...(f.runFacts !== undefined ? { runFacts: f.runFacts.filter((r) => !withheld.has(r.runId)) } : {}),
   };
 }

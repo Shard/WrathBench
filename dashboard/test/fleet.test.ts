@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { FleetJobView, FleetResponse, FleetServerView, RunListRow } from "../../runner/viewer/api-types";
+import type { FleetJobView, FleetResponse, FleetRunFacts, FleetServerView, RunListRow } from "../../runner/viewer/api-types";
 import type { FleetRow } from "../src/lib/fleet";
 import {
   FLEET_COLUMNS,
@@ -187,6 +187,22 @@ describe("the rows", () => {
     });
     // A run the runs feed has not caught up with still gets its row.
     expect(fleetRows(fleet(), [])[0]).toMatchObject({ level: null, xp: null, tokens: null, costUsd: null, elapsedMs: null, tps: null });
+  });
+
+  test("the fleet feed's own run figures fill the rows, with no runs index read", () => {
+    // What the page passes: the figures `/api/fleet` carries beside its jobs.
+    const facts: FleetRunFacts[] = [
+      run() as unknown as FleetRunFacts,
+      { runId: "paused-1", resolvedModel: null, level: 7, xp: 10, playtimeMs: 5_000, tokens: { totalTokens: 9 }, cost: null, comparability: null },
+    ];
+    const f = fleet({
+      runFacts: facts,
+      runCount: 1234,
+      paused: [{ runId: "paused-1", model: "m", account: "RUNNER2", reason: "rate-limited", since: 1, pauseCount: 1, resumeAfter: null, elapsedMs: null, budgetMs: null, why: "w" }],
+    });
+    const rows = fleetRows(f, f.runFacts ?? []);
+    expect(rows.find((r) => r.job !== null)).toMatchObject({ level: 4, xp: 546, tokens: 103_744, costUsd: 0.42, elapsedMs: 60_000 });
+    expect(rows.find((r) => r.runId === "paused-1")).toMatchObject({ state: "paused", level: 7, xp: 10, tokens: 9, elapsedMs: 5_000 });
   });
 
   test("cost is the actual figure only: an unreported or absent cost is null, never the estimate", () => {

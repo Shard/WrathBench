@@ -13,20 +13,17 @@
  * and not about this page. What remains above the table is only what needs
  * acting on: a deploy window or verdict, a REJECTED fleet.json, a failed gate.
  *
- * Two feeds, deliberately independent. `/api/fleet` is the supervisor's own
- * published view — jobs, accounts, a heartbeat, the gate — shared with the
- * badge through `lib/feeds.ts` so it is polled once. `/api/runs` is the
- * filesystem's view, read because `FleetJobView` carries no progress at all:
- * the level, xp, tokens per second and elapsed time in the job rows come from
- * the run directories and nowhere else. It is read on a slow cadence for that
- * reason — the whole runs index is a large answer to a question that only
- * decorates a row, and the per-run grain an operator actually watches is the
- * run page, which polls its own run.
+ * One feed. `/api/fleet` is the supervisor's own published view — jobs,
+ * accounts, a heartbeat, the gate — shared with the badge through
+ * `lib/feeds.ts` so it is polled once, and beside it the figures of the few
+ * runs its rows name (`runFacts`: level, xp, tokens, speed, cost, active time)
+ * and the size of the runs index. The page used to read the whole runs index
+ * (2.4 MB) a minute for those cells; the viewer now reads just those runs.
  */
 
 import { A, useNavigate } from "@solidjs/router";
 import { For, Show } from "solid-js";
-import { api, type FleetResponse } from "../api/client";
+import { type FleetResponse } from "../api/client";
 import { Collapsible } from "../components/Collapsible";
 import { ModelIcon } from "../components/ModelIcon";
 import {
@@ -47,27 +44,13 @@ import {
 import { useFeeds } from "../lib/feeds";
 import { fmtDuration, fmtTokens, fmtUsd, modelDisplay, num, shortRunId, stamp } from "../lib/format";
 import { iconModels } from "../lib/modelmark";
-import { poll } from "../lib/poll";
 import { displayError } from "../lib/errors";
 
-/**
- * The whole runs index, for the progress cells the fleet feed does not carry.
- * A minute rather than ten seconds: it is the largest response the viewer
- * serves, and nothing it feeds here changes faster than a level does.
- */
-const RUNS_POLL_MS = 60_000;
-
 export default function Fleet() {
-  // Every run on disk — read for the job rows and the link to the episodes page, not to be listed here.
-  const runs = poll(() => api.runs().then((r) => r.runs), RUNS_POLL_MS);
   const { fleet } = useFeeds();
 
   return (
     <div class="page">
-      <Show when={runs.error !== undefined}>
-        <div class="banner bad">{displayError(runs.error)}</div>
-      </Show>
-
       <h1>fleet</h1>
       {/*
         The server's phase first, in one line, in the deploy script's own words
@@ -144,12 +127,12 @@ export default function Fleet() {
                     </tr>
                   </thead>
                   <tbody>
-                    <For each={fleetRows(f(), runs.latest ?? [])}>{(row) => <FleetRowView row={row} />}</For>
+                    <For each={fleetRows(f(), f().runFacts ?? [])}>{(row) => <FleetRowView row={row} />}</For>
                   </tbody>
                 </table>
               </div>
               <p class="dim">
-                <A href="/runs">{runs.latest?.length ?? "—"} runs recorded</A> · the{" "}
+                <A href="/runs">{f().runCount ?? "—"} runs recorded</A> · the{" "}
                 <A href="/models">models table</A> carries the scheduler's verdict per roster entry.
               </p>
 
@@ -226,10 +209,10 @@ function FleetRowView(props: { row: FleetRow }) {
   };
   const dot = (): string => (r().state === "exited" ? "dead" : r().state === "running" ? "live" : "");
   /*
-    Both numbers come off the 10s poll of /api/runs, which charges a live run's
-    playtime up to request time — so the cell refreshes on the page's own
-    cadence, and numerator and denominator come from one snapshot and cannot
-    tear. No second timer: a figure up to ten seconds stale is fine here.
+    Both numbers come off the fleet feed's run figures, which charge a live
+    run's playtime up to request time — so the cell refreshes on the feed's own
+    cadence, and numerator and denominator come from one response and cannot
+    tear. No second timer: a figure a poll stale is fine here.
   */
   const prog = () => rowProgress(r());
   return (
