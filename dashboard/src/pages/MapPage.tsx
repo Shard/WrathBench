@@ -1260,6 +1260,9 @@ export default function MapPage() {
         if (run.map !== map) continue;
         ctx.strokeStyle = run.flight ? FLIGHT : colorOf(pip.runId);
         let a = project(view, run.points[0]!.x, run.points[0]!.y);
+        // A run's length on screen, all of it: zoomed out, a trail is many
+        // sub-pixel segments that show together.
+        let length = 0;
         for (let i = 1; i < run.points.length; i++) {
           const p = run.points[i]!;
           const b = project(view, p.x, p.y);
@@ -1269,9 +1272,10 @@ export default function MapPage() {
           ctx.moveTo(a.sx, a.sy);
           ctx.lineTo(b.sx, b.sy);
           ctx.stroke();
-          if (!drew && Math.hypot(b.sx - a.sx, b.sy - a.sy) >= MOVE_PX) drew = true;
+          length += Math.hypot(b.sx - a.sx, b.sy - a.sy);
           a = b;
         }
+        if (length >= MOVE_PX) drew = true;
       }
     }
     ctx.restore();
