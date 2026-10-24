@@ -166,6 +166,7 @@ describe("the track of a settled run", () => {
     const revalidated = await handle(new Request("http://x/api/run/done/track", { headers: { "if-none-match": etag! } }));
     expect(revalidated.status).toBe(304);
     expect(revalidated.headers.get("etag")).toBe(etag);
+    expect(revalidated.headers.get("vary")).toContain("Accept-Encoding");
     expect(await revalidated.text()).toBe("");
     // A stale tag is a full answer, never a 304.
     const stale = await handle(new Request("http://x/api/run/done/track", { headers: { "if-none-match": 'W/"nope"' } }));

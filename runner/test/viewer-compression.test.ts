@@ -11,7 +11,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { createApi } from "../viewer/api";
-import { COMPRESS_MIN_BYTES, negotiateEncoding } from "../viewer/compress";
+import { COMPRESS_MIN_BYTES, compressResponse, negotiateEncoding } from "../viewer/compress";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -104,5 +104,22 @@ describe("compressed JSON", () => {
     const res = await api(runs)(new Request(`http://x/api/run/${RUN}/scratchpad`, { headers: { "accept-encoding": "br" } }));
     expect(res.headers.get("content-encoding")).toBeNull();
     expect((await res.text()).length).toBe(COMPRESS_MIN_BYTES * 2);
+  });
+});
+
+describe("compressResponse", () => {
+  const big = JSON.stringify({ xs: Array.from({ length: 2000 }, (_, i) => i) });
+  const req = new Request("http://x/", { headers: { "accept-encoding": "br" } });
+
+  test("a body with a strong ETag is left as it is: the tag names those exact bytes", async () => {
+    const res = await compressResponse(req, new Response(big, { headers: { "content-type": "application/json", etag: '"abc"' } }));
+    expect(res.headers.get("content-encoding")).toBeNull();
+    expect(await res.text()).toBe(big);
+  });
+
+  test("a weak ETag is kept on the encoded body", async () => {
+    const res = await compressResponse(req, new Response(big, { headers: { "content-type": "application/json", etag: 'W/"abc"' } }));
+    expect(res.headers.get("content-encoding")).toBe("br");
+    expect(res.headers.get("etag")).toBe('W/"abc"');
   });
 });

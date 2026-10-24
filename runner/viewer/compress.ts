@@ -77,11 +77,18 @@ export async function encode(body: Uint8Array, encoding: Encoding): Promise<Uint
   return await gz(body, { level: 6 });
 }
 
-/** Whether a response is one this layer may encode: JSON, with a body, not already encoded. */
+/**
+ * Whether a response is one this layer may encode: JSON, with a body, not
+ * already encoded, and not carrying a strong ETag — which names exact bytes,
+ * and would name the wrong ones once they were encoded (a map's tile index is
+ * the one such body; it is a file a browser revalidates, not a poll).
+ */
 function encodable(req: Request, res: Response): boolean {
   if (req.method === "HEAD" || res.body === null) return false;
   if (res.status === 204 || res.status === 304) return false;
   if (res.headers.has("content-encoding")) return false;
+  const etag = res.headers.get("etag");
+  if (etag !== null && !etag.startsWith("W/")) return false;
   const type = res.headers.get("content-type") ?? "";
   return type.startsWith("application/json");
 }

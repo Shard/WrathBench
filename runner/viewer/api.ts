@@ -508,8 +508,14 @@ export function heldAccounts(
 /**
  * The run ids the store already knows hold no account: terminated (final; a
  * resume clears a pause, never a termination), or with a trajectory the store
- * last saw older than the hold window plus its own lag. A pause alone is not
- * enough: a resume clears it in `run.sqlite` seconds before the store sees it.
+ * last saw older than the hold window plus its own lag. The pause column is
+ * not read: the files, not the store, answer whether a warm run is paused.
+ *
+ * The one lag this admits: a run paused for longer than that window and then
+ * resumed in place (same run id) is ruled out until the collector's next pass
+ * records its fresh trajectory, so its job shows no run for up to one
+ * collector poll (five seconds, more when the collector is behind). The map's
+ * feed has the same prefilter and the same delay.
  */
 export function coldRuns(rows: readonly RunListingRow[], now: number): Set<string> {
   const out = new Set<string>();
@@ -1845,7 +1851,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
        */
       const text = JSON.stringify(publicMode ? struckFor(projectTrack(body), [runId]) : body);
       const etag = `W/"${Bun.hash(text).toString(36)}"`;
-      const headers = { etag, "cache-control": "no-cache" };
+      // `Vary` on the 304 too: it stands for a body that varied on it.
+      const headers = { etag, "cache-control": "no-cache", vary: "Accept-Encoding" };
       if (ifNoneMatch(req, etag)) return new Response(null, { status: 304, headers });
       return new Response(text, { headers: { "content-type": "application/json; charset=utf-8", ...headers } });
     }
