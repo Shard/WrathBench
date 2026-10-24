@@ -1344,8 +1344,9 @@ export function planResumes(opts: {
   // Archived runs are read for the ladder, never for a resume: there is no
   // directory under the runs dir for `--resume` to open.
   // Newest START first, the order the character head and the model hold read
-  // (`byNewestStart`): of two paused runs of one model, the one resumed is the
-  // one the rest of the supervisor already treats as the character's head.
+  // (`byNewestStart`): of two paused runs of one model (or of one pinned
+  // campaign, below), the one resumed is the one the rest of the supervisor
+  // already treats as the character's head.
   const paused = opts.runs.filter((f) => f.pause !== null && f.archived !== true).sort(byNewestStart);
   const seenModel = new Set<string>();
   /** Paused party members whose lane resumes them, by party id: they come back whole, below. */
@@ -1461,11 +1462,22 @@ export function planResumes(opts: {
       partyPaused.set(f.party.id, [...(partyPaused.get(f.party.id) ?? []), f]);
       continue;
     }
-    if (seenModel.has(modelKey)) {
-      list("a later-started paused run of this model is ahead of it — resume by hand or archive");
+    // One character per model is the policy's rule, and a pinned campaign is
+    // outside it: its square runs on its own account beside whatever else the
+    // model is playing (`pinnedCampaignJobs` asks health, not "running"). So
+    // its paused run is one of the campaign's, not one of the model's: keyed by
+    // the model it claimed the model's single resume, and every other paused
+    // run of that model — another pinned campaign's, its freeplay — was listed
+    // while the campaign's square was offered again and spawned a fresh `-a2`
+    // over the paused run. A campaign's own older attempt still waits behind
+    // its newest-started one.
+    const pinnedCampaign = file === null ? undefined : config.campaigns?.find((c) => c.name === file.campaign && c.account !== undefined);
+    const resumeKey = pinnedCampaign !== undefined ? `campaign:${pinnedCampaign.name}` : modelKey;
+    if (seenModel.has(resumeKey)) {
+      list(`a later-started paused run of ${pinnedCampaign !== undefined ? `campaign ${pinnedCampaign.name}` : "this model"} is ahead of it — resume by hand or archive`);
       continue;
     }
-    seenModel.add(modelKey);
+    seenModel.add(resumeKey);
     const refs = Object.entries(config.roster)
       .filter(([, e]) => sameRosterIdentity(e, f))
       .map(([name]) => name);
