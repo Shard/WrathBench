@@ -731,6 +731,14 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
 .chips.views { gap: 6px; margin: 0; font-size: var(--fs-sm); }
 .chips.views button { font-size: var(--fs-sm); padding: 2px 10px; }
 
+/* The runs table's pager: the view chips' size, an end it cannot go past dimmed. */
+.chips.pager { font-size: var(--fs-sm); }
+.chips.pager button { font-size: var(--fs-sm); padding: 2px 10px; }
+.chips.pager button:disabled { opacity: .4; cursor: default; border-color: var(--line); }
+/* The runs table paints apart from the page around it: the public header's
+   1 Hz "data as of" clock otherwise repainted every row of it each second. */
+.runs-scroller { contain: layout paint; }
+
 /* The row above the chart: two groups — what is on the left (the axis views
    here, the title on the homepage) and the filters on the right — on one line
    while the viewport has room for both, and one above the other when it has
