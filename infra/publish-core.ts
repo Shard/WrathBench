@@ -14,7 +14,7 @@
  * after every object the new manifest can name is already in the bucket, and a
  * failure anywhere earlier aborts before the flip. A reader then sees either
  * the whole old set or the whole new one — never a torn mix. Waves are
- * barriers: per-run objects, then aggregates, then the two mutable files. That
+ * barriers: per-run objects, then aggregates, then the mutable files. That
  * ordering did not change when aggregates gained their own content versions
  * (2026-09-04): a pass now rewrites only the aggregates that moved, but it
  * still writes every one of them before the manifest that names them.
@@ -27,7 +27,7 @@
  * pedantry: every artifact carries a fresh `generatedAt` envelope, so bodies
  * differ on every pass and a hash-only diff would re-upload the entire corpus
  * every minute (hundreds of runs × 1,440 passes a day, straight through R2's
- * free Class A tier). Only the two mutable keys, and anything unrecognized, are
+ * free Class A tier). Only the mutable keys, and anything unrecognized, are
  * diffed by hash. `uploaded` is the memory of all this, and it is the reason
  * pruning must also *forget* a key it deletes — a key still remembered would
  * never be re-uploaded after the object behind it was removed.
@@ -58,6 +58,7 @@ import { dirname } from "node:path";
 // published trace windows in the same packed runs a track lists them in.
 import { segRunsAdd, segRunsHas, unpackSegs, type TraceSegRuns } from "../runner/viewer/trace";
 import { describeFindings, type ScanFinding } from "../runner/src/secret-scan";
+import { PUBLIC_NEARBY_KEY } from "../runner/viewer/nearby";
 
 // ------------------------------------------------------------------ contracts
 
@@ -110,6 +111,8 @@ export interface ObjectStore {
 
 export const MANIFEST_PATH = "v1/manifest.json";
 export const LIVE_PATH = "v1/live.json";
+/** The units around the live runs, which `live.json` names (`runner/viewer/nearby.ts`). */
+export const NEARBY_PATH = PUBLIC_NEARBY_KEY;
 export const RUN_PREFIX = "v1/run/";
 export const SNAP_PREFIX = "v1/snap/";
 
@@ -170,7 +173,7 @@ export function traceSegmentPath(runId: string, t0: number): string {
  * sink would spend a run's keep-window slot on it.
  */
 export function classifyPath(path: string): PathKind {
-  if (path === MANIFEST_PATH || path === LIVE_PATH) return { kind: "mutable" };
+  if (path === MANIFEST_PATH || path === LIVE_PATH || path === NEARBY_PATH) return { kind: "mutable" };
   const trace = TRACE_SEGMENT.exec(path);
   if (trace !== null) {
     const t0 = Number(trace[2]);
@@ -223,14 +226,17 @@ export function waveOf(path: string): WaveName {
 }
 
 /**
- * Order inside the mutable wave: `live.json` first, `manifest.json` strictly
- * last. `live.json` is outside the generation chain (freshness beats
- * consistency for the fleet pips) but still precedes the flip, so a pass that
- * advertises a generation has already written everything a reader on that
- * manifest will ask for.
+ * Order inside the mutable wave: `nearby.json`, then `live.json`, then
+ * `manifest.json` strictly last. `live.json` names `nearby.json` and flags the
+ * runs it holds windows for, so it follows it, the way a track follows the
+ * trace windows it lists; the wave halts on a failure, so a pass whose
+ * `nearby.json` did not land writes no `live.json` either. `live.json` is
+ * outside the generation chain (freshness beats consistency for the fleet
+ * pips) but still precedes the flip, so a pass that advertises a generation
+ * has already written everything a reader on that manifest will ask for.
  */
 function mutableRank(path: string): number {
-  return path === MANIFEST_PATH ? 1 : 0;
+  return path === MANIFEST_PATH ? 2 : path === LIVE_PATH ? 1 : 0;
 }
 
 // ---------------------------------------------------------------------- state
@@ -643,11 +649,13 @@ export interface PublishReport {
  *   that an idle pass also re-addresses every aggregate to the key it already
  *   had. (Guarded on the key actually being in state: if we have no record of
  *   ever writing the manifest, write it.)
- * - **Everything else** — `live.json`, and any key the layout does not
- *   recognize — is diffed by body hash. `live.json` genuinely changes every
- *   pass: it carries the fleet clock the client reads staleness from, and it is
- *   deliberately outside the generation chain. An unrecognized key has no
- *   immutability guarantee to lean on, so it gets the conservative treatment.
+ * - **Everything else** — `live.json`, `nearby.json`, and any key the layout
+ *   does not recognize — is diffed by body hash. `live.json` genuinely changes
+ *   every pass: it carries the fleet clock the client reads staleness from, and
+ *   it is deliberately outside the generation chain. `nearby.json` changes
+ *   while a run has units and carries no clock when none has, so an idle pass
+ *   still costs the one PUT. An unrecognized key has no immutability guarantee
+ *   to lean on, so it gets the conservative treatment.
  *
  * First write wins on an immutable key, which means a bad body written to one
  * is never repaired by a later pass. The repair is to delete the state file: an

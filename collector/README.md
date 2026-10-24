@@ -78,8 +78,8 @@ Not tailed, on purpose:
   around a live character for the live map, about 15 minutes of one-minute
   files that the runner unlinks as they age and deletes when the run stops.
   It is not history, so nothing here may keep it; the scan's fixed file list
-  never names it. (The public site's copy is live only too: a window inside
-  `live.json`, rewritten every pass.)
+  never names it. (The public site's copy is live only too: a window in
+  `nearby.json`, rewritten every pass.)
 
 A run id is not unique on disk: `runs/<id>/` and `runs/archive/<id>/` can both
 exist and hold different runs, where an attempt was archived and a later launch

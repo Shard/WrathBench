@@ -9,8 +9,9 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { CharacterStatePoint } from "@viewer/api-types";
-import { characterSessionSeries, sessionCount } from "../src/lib/character";
+import type { CharacterStatePoint, CharacterView } from "@viewer/api-types";
+import { characterIsLive, characterSessionSeries, sessionCount } from "../src/lib/character";
+import { whileLive } from "../src/lib/poll";
 
 function pt(runId: string, attempt: number, ts: number, level: number, xp: number): CharacterStatePoint {
   return {
@@ -157,5 +158,25 @@ describe("sessionCount", () => {
     expect(sessionCount([])).toBe(0);
     expect(sessionCount([{}, { sessions: [] }])).toBe(2);
     expect(sessionCount([{ sessions: [{ start: 0, end: 1 }, { start: 5, end: null }] }, {}])).toBe(3);
+  });
+});
+
+describe("the character page's poll, gated on the newest attempt", () => {
+  type Attempt = CharacterView["runs"][number];
+  const attempt = (over: Partial<Attempt>): Attempt =>
+    ({ runId: "r", live: false, pauseReason: null, terminationReason: "episode-limit", ...over }) as Attempt;
+  const period = whileLive((b: { character: Pick<CharacterView, "runs"> }) => characterIsLive(b.character), 10_000, 300_000);
+
+  test("fast while the newest attempt is live, and before the first answer", () => {
+    expect(period(undefined)).toBe(10_000);
+    const live = attempt({ live: true, terminationReason: null });
+    expect(period({ character: { runs: [attempt({}), live] } })).toBe(10_000);
+  });
+
+  test("slow once it is not: ended, paused, an older attempt's liveness not counting, or no attempts", () => {
+    expect(period({ character: { runs: [attempt({})] } })).toBe(300_000);
+    expect(period({ character: { runs: [attempt({ terminationReason: null, pauseReason: "rate-limited" })] } })).toBe(300_000);
+    expect(period({ character: { runs: [attempt({ live: true, terminationReason: null }), attempt({})] } })).toBe(300_000);
+    expect(period({ character: { runs: [] } })).toBe(300_000);
   });
 });

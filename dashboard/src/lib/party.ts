@@ -362,6 +362,15 @@ export function partyViewOf(id: string, rows: readonly ResultRun[], details: Rea
 }
 
 /**
+ * Whether the party page has anything still moving: the party is live. A party
+ * the listing does not hold (`null`) has nothing to watch either, until one
+ * appears, which the idle period covers.
+ */
+export function partyIsLive(view: PartyView | null): boolean {
+  return view !== null && view.status === "live";
+}
+
+/**
  * Fetch and assemble one party: the unfiltered listing for its members, then
  * each member's detail. A member's detail that fails leaves that member to its
  * row; a party the listing does not hold is a 404 from the caller's view.

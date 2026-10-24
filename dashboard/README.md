@@ -143,7 +143,8 @@ period (2 s at least). Each client states how its feed is made
   a 30 s edge TTL and a poll: about 9 minutes.
 
 The period is learned from the horizons it sees — the longest of the last four
-gaps, an outage ignored. On each arrival the playhead aims at `D` behind; one
+gaps, an outage ignored, and so is a gap the tab slept through (polling stops
+while it is hidden, so the first arrival back can span several passes). On each arrival the playhead aims at `D` behind; one
 within a deadband carries on at 1×, one further behind catches up at 1.5×,
 and one more than `D` behind (a waking tab, a publisher back from a stop)
 jumps. Between arrivals it never passes the data's end: a pip that catches up
@@ -291,9 +292,10 @@ always move, so their motion alone redraws the map at most ten times a second
 rather than at frame rate. Past a window's horizon the layer is empty rather
 than frozen, bar a second of slack for the two pods' clocks. A replay has no
 units: the ring is live only and keeps 15 minutes. The public build draws the
-same layer from the windows `live.json` carries (`api/snapshot-client.ts`),
-one per live run, with no request of its own: creatures only, and no target
-ring, since the public window does not say whom the character targets.
+same layer from the windows `nearby.json` carries (`api/snapshot-client.ts`),
+one per live run, in one object that `live.json` names and only this layer
+asks for: creatures only, and no target ring, since the public window does not
+say whom the character targets.
 
 ## The live list
 

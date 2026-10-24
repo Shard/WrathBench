@@ -70,7 +70,7 @@ proof.
   script deletes that cache before every deploy for exactly this reason.
 
 A third token, zone **Cache Purge**, is only wanted if the manifest TTL is ever
-tightened by purging the two mutable URLs after each push. That is not the
+tightened by purging the mutable URLs after each push. That is not the
 current design — do not mint it now.
 
 ### 1. Create the bucket
@@ -115,12 +115,15 @@ Cloudflare does **not** cache JSON by default, so without these every public
 request is a billed read against the bucket.
 
 1. **Mutable** — `Hostname equals wrathbench-data.shard.page` *and* `URI Path is
-   in {"/v1/manifest.json", "/v1/live.json"}` → eligible for cache, **Edge TTL
-   30s**, **Browser TTL 30s**. Worst-case staleness is the push cadence plus
-   this, about 90–120s. The units around each live run ride inside
-   `live.json` (docs/PUBLIC-DASHBOARD.md, "The units around a live run"),
-   which is why they need no rule of their own: they are live only, and an
-   object of theirs anywhere else would match rule 2's year or no rule.
+   in {"/v1/manifest.json", "/v1/live.json", "/v1/nearby.json"}` → eligible
+   for cache, **Edge TTL 30s**, **Browser TTL 30s**. Worst-case staleness is
+   the push cadence plus this, about 90–120s. `nearby.json` holds the units
+   around each live run, out of `live.json` since the operator's decision of
+   2026-10-24 (docs/PUBLIC-DASHBOARD.md, "The units around a live run"). It is
+   live only, so it belongs here and nowhere else: rule 2's year would keep
+   units long after their run, and with no rule every read of it is a billed
+   read against the bucket. Add it to this rule before the publisher that
+   writes it is deployed.
 2. **Immutable** — `Hostname equals wrathbench-data.shard.page` *and* `URI Path
    starts with "/v1/snap/" or "/v1/run/"` → eligible for cache, **Edge TTL 1
    year**, **Browser TTL 1 year**. These are content-addressed and never
@@ -324,7 +327,8 @@ curl -sI https://wrathbench-data.shard.page/v1/manifest.json | grep -i 'cf-cache
 
 The second (repeat) request must say `cf-cache-status: HIT` and
 `cache-control: ...max-age=30`. A `MISS`, `DYNAMIC` or `BYPASS` on the repeat
-means rule 1 is not in effect. Repeat against a
+means rule 1 is not in effect. Repeat against `/v1/nearby.json` for the same
+30 seconds, against a
 `/v1/snap/<ver>/runs.json` key for the year, and, once art is published,
 against a `/tiles/<map>/art/…` key for rule 4's five minutes (`max-age=300`).
 

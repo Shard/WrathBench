@@ -23,8 +23,19 @@
  * is how every attempt used to be drawn.
  */
 
-import type { ActiveSegment, CharacterStatePoint } from "@viewer/api-types";
+import type { ActiveSegment, CharacterStatePoint, CharacterView } from "@viewer/api-types";
 import { sessionClock } from "@viewer/sessions";
+import { statusOf } from "./runs";
+
+/**
+ * Whether the character is playing right now: its newest attempt is live.
+ * What the character page's poll is gated on, since nothing else in the body
+ * moves once that attempt has stopped.
+ */
+export function characterIsLive(view: Pick<CharacterView, "runs">): boolean {
+  const newest = view.runs[view.runs.length - 1];
+  return newest !== undefined && statusOf(newest) === "live";
+}
 
 /** Where one session begins, on the session clock. */
 export interface CharacterSeam {

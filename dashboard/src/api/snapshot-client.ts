@@ -16,9 +16,13 @@
  *   published artifact — the `episode=all&includeOverrides=1` projection —
  *   filtered here by `projectResults`, which reproduces the server's rules
  *   including the bookkeeping counts a page shows.
- * - **A ~30s memo.** Every page states its own poll interval (`lib/poll.ts`)
- *   and those stay exactly as they are; ticks between snapshot refreshes
- *   resolve from memory rather than becoming a request per tick.
+ * - **A ~30s memo on the mutable objects, and a keyed cache for the rest.**
+ *   Every page states its own poll interval (`lib/poll.ts`); ticks between
+ *   snapshot refreshes resolve from memory rather than becoming a request per
+ *   tick. The manifest, `live.json` and `nearby.json` are re-read once the
+ *   window passes; a content-addressed object is held until a newer version
+ *   of it, or the bound, displaces it, so a tick that finds the manifest
+ *   unchanged costs one small request and no re-parse.
  *
  * - **One entries window per run.** The publisher renders the feed's tail
  *   (the last 200 entries, projected and prose-redacted — docs/DATA-AND-LEGAL.md,
@@ -62,13 +66,34 @@ import { ApiError, getJson, sweepExpired, traceWindow, type Client } from "./cli
 import { fmtAge } from "../lib/format";
 
 /**
- * How long a fetched artifact is served from memory.
+ * How long a fetched mutable object (`manifest.json`, `live.json`,
+ * `nearby.json`) is served from memory.
  *
- * Matched to the `max-age=30` the publisher sets on the two mutable objects:
- * a shorter window would spend requests on an edge that would answer from
- * cache anyway, and a longer one would add staleness the CDN is not adding.
+ * Matched to the 30 s the edge holds the mutable objects for: a shorter window
+ * would spend requests on an edge that would answer from cache anyway, and a
+ * longer one would add staleness the CDN is not adding. Every other object is
+ * addressed by its content or its closed window and never changes under its
+ * key, so it is held by key instead (`SNAPSHOT_KEYED_MAX`), not on a clock.
  */
 export const SNAPSHOT_TTL_MS = 30_000;
+
+/**
+ * How many keyed objects the client holds at once, least recently used out
+ * first. A newer version of an object already held — the next `runs.json`, a
+ * live run's next `detail.json` — takes the older one's place (`keyedSlot`),
+ * so a tab left open all day holds each aggregate once rather than once per
+ * publish; the bound is for what a reader opens, chiefly trace windows on a
+ * long replay and the tracks of a character with many attempts.
+ */
+export const SNAPSHOT_KEYED_MAX = 256;
+
+/**
+ * Tracks in flight at once when a character page is assembled. One at a time
+ * a 45-attempt character took about 4.8 s against about 0.2 s overlapped; six
+ * keeps one reader's burst small beside the zone's rate limit on `/v1/run/`
+ * (60 requests per 10 s per IP, `infra/cloudflare/README.md`).
+ */
+export const CHARACTER_TRACK_CONCURRENCY = 6;
 
 /**
  * Past this age the banner turns warning-coloured.
@@ -92,7 +117,7 @@ export const SNAPSHOT_STALE_MS = 600_000;
  */
 export const SNAPSHOT_RENDER_MS = 420_000;
 
-/** The edge's `max-age` on the two mutable objects, which the client memo sits behind. */
+/** The edge's TTL on the mutable objects, which the client memo sits behind. */
 export const SNAPSHOT_EDGE_TTL_MS = 30_000;
 
 /** The server's own `?episode=` default, reproduced client-side. */
@@ -106,8 +131,10 @@ export interface SnapshotClientOptions {
   fetch?: typeof globalThis.fetch;
   /** Injected in tests. The memoisation window is measured on this clock. */
   now?: () => number;
-  /** The memoisation window; `SNAPSHOT_TTL_MS` by default. */
+  /** The mutable objects' memoisation window; `SNAPSHOT_TTL_MS` by default. */
   ttlMs?: number;
+  /** How many keyed objects are held; `SNAPSHOT_KEYED_MAX` by default. */
+  keyedMax?: number;
 }
 
 /**
@@ -139,8 +166,26 @@ interface LiveArtifact {
   attribution?: string;
   fleet: PublicFleetResponse;
   positions: PositionsResponse;
-  /** The public window of each run its position flags `nearby`; absent when no run has units. */
+  /**
+   * Where the units around the live runs are this pass: the bucket key of
+   * `nearby.json` (`PUBLIC_NEARBY_KEY`), present whenever the publisher wrote
+   * it. Absent from a `live.json` written before the split (operator,
+   * 2026-10-24), which carries the windows inline instead (`nearby`).
+   */
+  nearbyKey?: string;
+  /**
+   * The windows inline, as a publisher before the split wrote them; read only
+   * when there is no `nearbyKey`, so a site deployed ahead of its publisher
+   * still draws units.
+   */
   nearby?: LiveNearby;
+}
+
+/** `v1/nearby.json`: the units around each live run, apart from `live.json` because only the zoomed-in map draws them. */
+interface NearbyArtifact {
+  generatedAt?: number;
+  attribution?: string;
+  nearby: LiveNearby;
 }
 
 /** How fresh the data is, and whose reconstruction it came off. */
@@ -256,10 +301,41 @@ interface CacheEntry {
  */
 export { sweepExpired };
 
+/**
+ * The slot a keyed object occupies in the cache, from its bucket key: one per
+ * aggregate name and one per run and file, whatever the version, so a newer
+ * version replaces the one before it rather than sitting beside it. A trace
+ * window is its own slot (its window is its identity), and so is anything the
+ * layout does not name.
+ */
+export function keyedSlot(key: string): string {
+  const snap = /^v1\/snap\/[^/]+\/([^/]+)$/.exec(key);
+  if (snap !== null) return `snap:${snap[1]}`;
+  const run = /^v1\/run\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(key);
+  if (run !== null && run[2] !== "trace") return `run:${run[1]}/${run[3]}`;
+  return key;
+}
+
+/**
+ * `fn` over `items` with at most `limit` in flight, results in the items'
+ * order whatever order they settle in. The character page's track walk, so a
+ * curve is stitched in attempt order however the network answers.
+ */
+export async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i]!, i);
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+  return out;
+}
+
 export function createSnapshotClient(base: string, opts: SnapshotClientOptions = {}): SnapshotClient {
   const f = opts.fetch ?? globalThis.fetch;
   const clock = opts.now ?? ((): number => Date.now());
   const ttl = opts.ttlMs ?? SNAPSHOT_TTL_MS;
+  const keyedMax = Math.max(1, opts.keyedMax ?? SNAPSHOT_KEYED_MAX);
   const root = base.replace(/\/+$/, "");
   const cache = new Map<string, CacheEntry>();
 
@@ -299,25 +375,18 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
   }
 
   /**
-   * The memo. Promises rather than values, so the burst of pollers that starts
-   * on a page load shares one request; a rejection is forgotten immediately,
-   * because the next poll is the retry and a remembered failure would make a
-   * blip last the whole window.
+   * The memo for the mutable objects. Promises rather than values, so the
+   * burst of pollers that starts on a page load shares one request; a
+   * rejection is forgotten immediately, because the next poll is the retry and
+   * a remembered failure would make a blip last the whole window. Expired
+   * entries are swept on the way past, though with only the mutable objects
+   * here there are never more than three.
    */
   function memo<T>(url: string): Promise<T> {
     const at = clock();
     sweepExpired(cache, at, ttl);
     const hit = cache.get(url);
     if (hit !== undefined && at - hit.at < ttl) return hit.value as Promise<T>;
-    /*
-     * Sweep the expired on the way past. Every generation mints a fresh set of
-     * URLs — a new one every publish cadence — and each entry holds a whole
-     * parsed payload, so a tab left open all day would otherwise accumulate
-     * every generation's bodies. Only entries past the window go; an in-flight
-     * promise is younger than that and a caller already holding one is
-     * unaffected either way.
-     */
-    for (const [k, e] of cache) if (at - e.at >= ttl) cache.delete(k);
     const value = fetchJson<T>(url);
     cache.set(url, { at, value });
     void value.catch(() => {
@@ -326,8 +395,49 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
     return value;
   }
 
+  /** Keyed objects by slot (`keyedSlot`), in least-recently-used order: a Map iterates in insertion order. */
+  const keyed = new Map<string, { url: string; value: Promise<unknown> }>();
+
+  /**
+   * An object that never changes under its key: held until a newer version
+   * takes its slot or the bound pushes it out, with no clock. A rejection is
+   * forgotten at once, as in `memo`.
+   */
+  function held<T>(key: string): Promise<T> {
+    const url = artifactUrl(key);
+    const slot = keyedSlot(key);
+    const hit = keyed.get(slot);
+    keyed.delete(slot);
+    if (hit !== undefined && hit.url === url) {
+      keyed.set(slot, hit);
+      return hit.value as Promise<T>;
+    }
+    const value = fetchJson<T>(url);
+    keyed.set(slot, { url, value });
+    while (keyed.size > keyedMax) keyed.delete(keyed.keys().next().value!);
+    void value.catch(() => {
+      if (keyed.get(slot)?.value === value) keyed.delete(slot);
+    });
+    return value;
+  }
+
   const manifest = (): Promise<Manifest> => memo<Manifest>(`${root}/v1/manifest.json`);
   const live = (): Promise<LiveArtifact> => memo<LiveArtifact>(`${root}/v1/live.json`);
+
+  /**
+   * The windows of the units around the live runs, wherever this pass's
+   * `live.json` says they are: in `nearby.json` when it names the key, inline
+   * from a publisher before the split when it does not. The object is only
+   * ever asked for once a `live.json` has named it, never guessed, so a site
+   * deployed ahead of its publisher does not request a key that is not there
+   * yet (an edge would hold that 404).
+   */
+  async function nearbyWindows(): Promise<{ windows: LiveNearby; generatedAt: number }> {
+    const l = await live();
+    if (typeof l.nearbyKey !== "string" || l.nearbyKey === "") return { windows: l.nearby ?? {}, generatedAt: l.generatedAt };
+    const body = await memo<NearbyArtifact>(artifactUrl(l.nearbyKey));
+    return { windows: body.nearby ?? {}, generatedAt: body.generatedAt ?? l.generatedAt };
+  }
 
   /** One content-addressed aggregate, at the key the manifest names for it. */
   async function snap<T>(name: string): Promise<T> {
@@ -341,7 +451,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
     }
     // Pre-2026-09-04 manifests name no keys; every aggregate sat under the one
     // generation prefix.
-    return await memo<T>(pointed !== undefined ? artifactUrl(pointed) : `${root}/v1/snap/${encodeURIComponent(m.gen)}/${name}`);
+    return await held<T>(pointed !== undefined ? pointed : `v1/snap/${encodeURIComponent(m.gen)}/${name}`);
   }
 
   /*
@@ -366,7 +476,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
     if (path === undefined || path === "") {
       throw new ApiError(404, `no published ${which} for run: ${id}`);
     }
-    return artifactUrl(path);
+    return path;
   }
 
   /** Carry the envelope onto a body split out of a larger artifact. */
@@ -431,7 +541,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
      */
     ladder: (episode: EpisodeIdView): Promise<ResultsResponse> =>
       snap<ResultsResponse>(`ladder-${encodeURIComponent(episode)}.json`),
-    track: async (id: string): Promise<TrackResponse> => await memo<TrackResponse>(await pointer(id, "track")),
+    track: async (id: string): Promise<TrackResponse> => await held<TrackResponse>(await pointer(id, "track")),
     /*
      * A closed trace window is immutable and keyed by its window rather than
      * by a content version, so its key is built, not looked up — which is
@@ -440,7 +550,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
      * a 404 the edge then caches for a day.
      */
     traceSegment: async (id: string, t0: number): Promise<TraceSegment> =>
-      await memo<TraceSegment>(artifactUrl(traceSegmentKey(id, Number(traceWindow(t0))))),
+      await held<TraceSegment>(traceSegmentKey(id, Number(traceWindow(t0)))),
     /*
      * There is no published index: a live run's is its position in the fast
      * lane, whose `recent` windows are in the bucket and whose tail rides
@@ -458,16 +568,16 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
       };
     },
     /*
-     * The units around a live run ride in the fast lane beside its position:
-     * one window per pass, already projected, reaching back as far as the
-     * public map plays (`PUBLIC_NEARBY_SPAN_MS`), whatever span was asked
-     * for. No request of its own. A run the file carries no window for (not
-     * live, or no units recorded) answers an empty one, which the map draws
-     * as no units.
+     * The units around a live run, in an object of their own beside the fast
+     * lane (`nearbyWindows`): one window per pass, already projected, reaching
+     * back as far as the public map plays (`PUBLIC_NEARBY_SPAN_MS`), whatever
+     * span was asked for. Only the zoomed-in map asks, so only it pays for
+     * them. A run the object carries no window for (not live, or no units
+     * recorded) answers an empty one, which the map draws as no units.
      */
     nearby: async (id: string): Promise<NearbyWindow> => {
-      const l = await live();
-      return l.nearby?.[id] ?? emptyNearbyWindow(id, l.generatedAt);
+      const { windows, generatedAt: at } = await nearbyWindows();
+      return windows[id] ?? emptyNearbyWindow(id, at);
     },
     feedCadence: { renderMs: SNAPSHOT_RENDER_MS, cacheMs: ttl + SNAPSHOT_EDGE_TTL_MS },
     /*
@@ -487,13 +597,17 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
       const source = await snap<ResultsResponse>("results.json");
       const view = characterViewOf(id, source.runs);
       if (view === null) throw new ApiError(404, `no such character: ${id}`);
+      // An attempt the snapshot published no track for contributes nothing
+      // and does not fail the page: a character is legible with a session
+      // missing from the curve, and the attempt list still names it. The
+      // tracks are fetched a few at a time and stitched in attempt order.
+      const tracks = await mapLimit(view.runs, CHARACTER_TRACK_CONCURRENCY, (attempt) =>
+        client.track(attempt.runId).catch(() => null),
+      );
       const states: CharacterStatePoint[] = [];
       for (const [i, attempt] of view.runs.entries()) {
-        // An attempt the snapshot published no track for contributes nothing
-        // and does not fail the page: a character is legible with a session
-        // missing from the curve, and the attempt list still names it.
-        const t = await client.track(attempt.runId).catch(() => null);
-        if (t === null) continue;
+        const t = tracks[i];
+        if (t === null || t === undefined) continue;
         for (const pt of t.points) {
           states.push({
             ts: pt.ts,
@@ -524,7 +638,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
       return withEnvelope({ character: view, states }, source);
     },
     run: async (id: string): Promise<RunDetailResponse> =>
-      await memo<RunDetailResponse>(await pointer(id, "detail")),
+      await held<RunDetailResponse>(await pointer(id, "detail")),
     /*
      * The published tail window, whatever `from`/`limit` asked for: the
      * publisher renders exactly one window per run (see the module comment),
@@ -533,7 +647,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
      * 404 from `pointer`, which the page shows as the feed being unpublished.
      */
     entries: async (id: string): Promise<EntriesResponse> =>
-      await memo<EntriesResponse>(await pointer(id, "entries")),
+      await held<EntriesResponse>(await pointer(id, "entries")),
     /*
      * The scratchpad the listing names for the run's current version, and only
      * that one. A row with no pointer — a run that never wrote a pad, or a
@@ -542,7 +656,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
      * caches for a day.
      */
     scratchpad: async (id: string): Promise<ScratchpadResponse> =>
-      await memo<ScratchpadResponse>(await pointer(id, "scratchpad")),
+      await held<ScratchpadResponse>(await pointer(id, "scratchpad")),
     /*
      * Raw trajectory lines are the unprojected record — the run config, the
      * whole message array, every packet — and stay in the lab.

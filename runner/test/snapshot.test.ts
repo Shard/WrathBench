@@ -327,6 +327,8 @@ describe("renderSnapshot", () => {
 
     expect(paths).toContain("v1/manifest.json");
     expect(paths).toContain("v1/live.json");
+    // The units around the live runs, every pass, whether or not any run has some.
+    expect(paths).toContain("v1/nearby.json");
     // Each aggregate at its own content-addressed key, exactly as the manifest names it.
     expect(Object.keys(out.snap).sort()).toEqual([...SNAP_NAMES].sort());
     for (const name of SNAP_NAMES) {
@@ -344,11 +346,11 @@ describe("renderSnapshot", () => {
         "track.json",
       ]);
     }
-    expect(paths).toHaveLength(2 + SNAP_NAMES.length + 8);
+    expect(paths).toHaveLength(3 + SNAP_NAMES.length + 8);
 
     for (const a of out.artifacts) {
       expect(a.contentType).toBe("application/json");
-      const mutable = a.path === "v1/manifest.json" || a.path === "v1/live.json";
+      const mutable = a.path === "v1/manifest.json" || a.path === "v1/live.json" || a.path === "v1/nearby.json";
       expect(`${a.path}: ${a.cacheControl}`).toBe(`${a.path}: ${mutable ? MUTABLE_CACHE : IMMUTABLE_CACHE}`);
     }
   });
@@ -510,8 +512,10 @@ describe("renderSnapshot", () => {
     const runs = fixture();
     const out = await render(runs, 111);
     for (const a of out.artifacts) {
-      const body = JSON.parse(a.body) as { generatedAt?: unknown; attribution?: unknown };
-      expect(`${a.path}: ${body.generatedAt}`).toBe(`${a.path}: 111`);
+      const body = JSON.parse(a.body) as { generatedAt?: unknown; attribution?: unknown; nearby?: object };
+      // An empty nearby.json carries no clock, so an idle pass does not rewrite it.
+      const idle = a.path === "v1/nearby.json" && Object.keys(body.nearby ?? {}).length === 0;
+      expect(`${a.path}: ${body.generatedAt}`).toBe(`${a.path}: ${idle ? undefined : 111}`);
       expect(body.attribution).toBe(PUBLIC_ATTRIBUTION);
     }
     // The two mutable bodies say what they are for.

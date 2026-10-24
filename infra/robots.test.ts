@@ -12,6 +12,7 @@ describe("the data hostname's robots.txt", () => {
     expect(lines).toContain("Allow: /v1/snap/");
     expect(lines).toContain("Allow: /v1/manifest.json");
     expect(lines).toContain("Allow: /v1/live.json");
+    expect(lines).toContain("Allow: /v1/nearby.json");
     expect(lines).toContain("Allow: /tiles/");
     expect(lines).toContain("Disallow: /v1/run/");
     expect(lines.filter((l) => l.startsWith("Disallow:"))).toEqual(["Disallow: /v1/run/"]);

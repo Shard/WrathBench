@@ -556,6 +556,27 @@ describe("live clock", () => {
     expect(c.delayMs()).toBe(400_000 + 65_000 + 40_000);
   });
 
+  test("a gap the tab slept through is not learned: a hidden map comes back on its old delay", () => {
+    const c = createLiveClock(publicCadence);
+    let h = H;
+    let p = 0;
+    /** One publish period watched: an answer every 5 s, the new horizon at its end. */
+    const watched = (periodMs: number): void => {
+      for (let t = 5_000; t < periodMs; t += 5_000) c.arrive({ horizon: h, ageMs: 0, at: p + t });
+      c.arrive({ horizon: (h += periodMs), ageMs: 0, at: (p += periodMs) });
+    };
+    c.arrive({ horizon: h, ageMs: 0, at: p });
+    for (let i = 0; i < 4; i++) watched(400_000);
+    const learned = c.delayMs();
+    expect(learned).toBe(400_000 + 65_000 + 40_000);
+    // Hidden for three passes: no answers at all, then one spanning all three.
+    c.arrive({ horizon: (h += 3 * 400_000), ageMs: 0, at: (p += 3 * 400_000) });
+    expect(c.delayMs()).toBe(learned);
+    // A slower publisher the tab does watch is still learned.
+    watched(600_000);
+    expect(c.delayMs()).toBe(600_000 + 65_000 + 60_000);
+  });
+
   test("on the public site's first load the playhead lands in what live.json carries", async () => {
     const gen = W + 200_000;
     const start = gen - 30 * 60_000;

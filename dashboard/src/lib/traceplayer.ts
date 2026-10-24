@@ -859,7 +859,9 @@ export interface LiveClock {
  * playhead reaches the data's end no sooner than the next arrival brings
  * more. The period starts as the source states it (`liveCadence`) and is then
  * learned — the longest of the last `GAPS_KEPT` gaps between horizons, an
- * outage aside. On the private viewer that is a poll and a drain, so about
+ * outage aside, and a gap the tab slept through aside (no answer for a whole
+ * declared period before it: `poll()` fetches nothing while the tab is
+ * hidden, so the first arrival back can span several passes). On the private viewer that is a poll and a drain, so about
  * 12 s; on the public site the publisher's ~7-minute pass plus two 30 s caches
  * and a poll, so about 9 minutes.
  *
@@ -878,6 +880,8 @@ export interface LiveClock {
  */
 export function createLiveClock(cadence: LiveCadence): LiveClock {
   let horizon: number | null = null;
+  /** `performance.now()` of the last answer of any kind, a repeat included. */
+  let heardAt: number | null = null;
   const gaps: number[] = [];
   /** From `p0` the playhead is `d0` and runs at `rate` until `p1`, then at 1×. */
   let anchor: { p0: number; d0: number; rate: number; p1: number } | null = null;
@@ -903,11 +907,18 @@ export function createLiveClock(cadence: LiveCadence): LiveClock {
     delayMs,
     horizon: () => horizon,
     arrive(a) {
+      // Every answer counts as listening, a repeat included: what tells a
+      // gap the tab watched from one it slept through.
+      const silentMs = heardAt === null ? 0 : a.at - heardAt;
+      heardAt = a.at;
       if (horizon !== null && a.horizon <= horizon) return;
       const shown = at(a.at);
       if (horizon !== null) {
         const gap = a.horizon - horizon;
-        if (gap <= OUTAGE_PERIODS * cadence.periodMs) {
+        // A gap the tab did not watch — no answer for a whole declared period
+        // before it, as when a hidden tab stops polling — spans however many
+        // passes it slept through and says nothing about the cadence.
+        if (gap <= OUTAGE_PERIODS * cadence.periodMs && silentMs < cadence.periodMs) {
           gaps.push(gap);
           if (gaps.length > GAPS_KEPT) gaps.shift();
         }
