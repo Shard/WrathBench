@@ -322,7 +322,7 @@ export default function Ladder() {
             <button class={runLinesOn() ? "" : "on"} title="one point per model and effort" onClick={() => setParams({ chart: undefined }, { replace: true })}>
               scatter
             </button>
-            <button class={runLinesOn() ? "on" : ""} title="xp earned against active playtime, one line per run" onClick={() => setParams({ chart: "lines" }, { replace: true })}>
+            <button class={runLinesOn() ? "on" : ""} title="xp earned against active playtime, one mean line per model and effort" onClick={() => setParams({ chart: "lines" }, { replace: true })}>
               lines
             </button>
           </div>

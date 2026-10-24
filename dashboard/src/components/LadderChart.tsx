@@ -40,7 +40,7 @@ export function harnessColour(harnesses: readonly string[]): string {
 }
 
 /** The dash pattern that marks a mean resting on one run. Nothing else on the chart is dashed but the gridlines. */
-const SINGLE_DASH = "2 2";
+export const SINGLE_DASH = "2 2";
 
 /**
  * The hover's reading of the price. Basis (who produced the figure) and
