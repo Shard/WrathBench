@@ -81,8 +81,26 @@ export function iconPath(slug: string): string {
  */
 export function prepareSvg(svg: Uint8Array): Uint8Array {
   const text = new TextDecoder().decode(svg);
-  const stripped = text.replace(/<title[^>]*>[\s\S]*?<\/title>/g, "");
-  return stripped === text ? svg : new TextEncoder().encode(stripped);
+  const prepared = paintWhiteAsText(text.replace(/<title[^>]*>[\s\S]*?<\/title>/g, ""));
+  return prepared === text ? svg : new TextEncoder().encode(prepared);
+}
+
+/**
+ * A shape painted pure white becomes `currentColor`.
+ *
+ * Some of the package's colour icons are drawn for a dark tile: Kimi's is a
+ * blue dot beside a white K. On a light page the K vanishes, and in the
+ * charts and on the map, where every logo sits on a white puck, it left a
+ * blank disc. As `currentColor` the shape follows the text colour inline,
+ * light on dark and dark on light, and resolves to black in an image
+ * document, which is what the pucks draw. A white fill inside a `<clipPath>`
+ * or `<mask>` is geometry rather than paint and is left alone.
+ */
+export function paintWhiteAsText(svg: string): string {
+  return svg
+    .split(/(<(clipPath|mask)\b[\s\S]*?<\/\2>)/)
+    .map((part, i) => (i % 3 === 0 ? part.replace(/\bfill="(#fff|#ffffff|white)"/gi, 'fill="currentColor"') : i % 3 === 1 ? part : ""))
+    .join("");
 }
 
 /**
