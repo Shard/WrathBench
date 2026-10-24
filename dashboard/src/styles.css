@@ -201,12 +201,22 @@ header.top .spacer { flex: 1; }
 /* The service status badge (top right) and its popout; derivation in lib/status.ts. */
 .status { position: relative; align-self: center; }
 .status-badge { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); padding: 2px 8px; }
-.status-badge .dot { margin: 0; }
+/* A flex row's own gap spaces its dot; only the ring's room is kept. */
+.status-badge .dot, .live-pill .dot, .playbar-btn .dot { margin: 0 var(--dot-ring); }
 .status-badge.green, .dot.green { color: var(--ok); }
 .status-badge.yellow, .dot.yellow { color: var(--warn); }
 .status-badge.red, .dot.red { color: var(--err); }
 .status-badge.grey, .dot.grey { color: var(--dim); }
-.dot.green, .dot.live { background: var(--ok); animation: pulse 2s ease-in-out infinite; }
+/*
+ * The live mark, and the service's "running": the dot with a ring around it,
+ * drawn once. It used to pulse, and any infinite animation — opacity, a
+ * box-shadow ripple, even a compositor-only transform — keeps Chromium
+ * producing a frame every vsync: on the live map that was 16 % of a core
+ * against 6 % without it. A static ring costs one paint, says "live" by shape
+ * as well as colour, and leaves nothing for reduced motion to switch off.
+ */
+.dot.green, .dot.live { background: var(--ok);
+                        outline: 1px solid color-mix(in srgb, var(--ok) 55%, transparent); outline-offset: 2px; }
 .dot.yellow { background: var(--warn); }
 .dot.red, .dot.dead { background: var(--err); }
 .dot.grey { background: var(--dim); }
@@ -306,9 +316,10 @@ th { color: var(--dim); font-weight: 600; font-size: var(--fs-xs); text-transfor
 tbody tr:hover, tbody tr.hovered { background: var(--panel); }
 tbody tr.hovered { outline: 1px solid var(--accent); outline-offset: -1px; }
 
-.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px;
-       vertical-align: middle; background: var(--dim); }
-@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+/* Every dot keeps room for the live ring (outline width plus offset) on both
+   sides, so a dot that goes live or stale never moves the text beside it. */
+.dot { --dot-ring: 3px; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+       margin: 0 calc(6px + var(--dot-ring)) 0 var(--dot-ring); vertical-align: middle; background: var(--dim); flex: none; }
 
 
 /* Row state, as a compact badge: the column an operator scans first. */
@@ -354,8 +365,10 @@ th.sorted { color: var(--fg); }
    in the cell — under a sort that separates them the rail has nothing to join. */
 tr.character td:nth-child(2) { box-shadow: inset 2px 0 0 var(--accent); padding-left: 8px; }
 
+/* A dot or swatch in a crowded flex row (the phone replay bar) keeps its size;
+   the text beside it is what gives way. */
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
-          margin-right: 6px; vertical-align: middle; }
+          margin-right: 6px; vertical-align: middle; flex: none; }
 /* A party member's colour, wherever the member is named (`memberClass`). */
 .swatch.member-1 { background: var(--member-1); }
 .swatch.member-2 { background: var(--member-2); }
@@ -542,15 +555,6 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .playbar-btn.step { padding: 0 6px; font-size: var(--fs-base); line-height: 1.4; }
 .live-pill { display: inline-flex; align-items: center; gap: 6px; font-weight: 700;
              text-transform: uppercase; letter-spacing: .08em; font-size: var(--fs-xs); }
-.live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok);
-            box-shadow: 0 0 0 0 var(--ok); animation: live-pulse 2s ease-out infinite; }
-.live-link .live-dot { animation: none; }
-@keyframes live-pulse {
-  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 60%, transparent); }
-  70% { box-shadow: 0 0 0 6px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
-}
-@media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
 
 /* The transport row: step, play, step, clock, scrubber, clock, speed. */
 .transport { gap: 6px; }
@@ -645,9 +649,6 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
 
 @media (prefers-reduced-motion: reduce) {
   .collapsible-body, .collapsible-chev { transition: none; }
-  /* The live dot pulses on every page and is the one animation a reader who
-     asked for less motion cannot scroll away from. Colour still carries it. */
-  .dot.live, .dot.green { animation: none; }
   .bar-fill { transition: none; }
 }
 
@@ -823,7 +824,6 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
 
 .side-controls { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
                  margin-bottom: 10px; font-size: var(--fs-sm); }
-.side-controls .dot { margin-right: 4px; }
 
 /*
  * The last thing the character card says: what the model itself last logged

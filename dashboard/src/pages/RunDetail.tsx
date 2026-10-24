@@ -762,7 +762,7 @@ export default function RunDetail() {
                       </button>
                       <Show when={run().terminationReason === null}>
                         <span class={now() - lastWrite() > SILENT_MS ? "warn" : "dim"}>
-                          {/* Stops pulsing once the run has gone quiet: a live dot
+                          {/* Drops the live mark once the run has gone quiet: a live mark
                               over "no activity for a while" contradicts itself. */}
                           <span class={now() - lastWrite() > SILENT_MS ? "dot" : "dot live"} />
                           {now() - lastWrite() > SILENT_MS

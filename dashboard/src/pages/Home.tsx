@@ -32,7 +32,7 @@ export default function Home() {
   /*
    * The envelope's clock rides along with the positions, exactly as the map
    * carries it (`MapPage.tsx`): on the public build a reading is up to a
-   * publish cadence old through nobody's fault, and a pulsing green dot over a
+   * publish cadence old through nobody's fault, and the live mark over a
    * two-minute-old feed claims a liveness the page cannot see. Private builds
    * carry no envelope and a null clock, where the arithmetic is the plain one.
    */
