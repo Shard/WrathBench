@@ -933,8 +933,8 @@ re-renders every pass — the live chart cannot be either.
   rather than drawing them over each other — a card is a picture nobody proofreads before it is unfurled.
 
 - **The render** is `infra/og-render.ts`: the drawing, the logos read off disk
-  (the dashboard resolves them through `import.meta.glob`, which exists only
-  under Vite), and a font probe. `@resvg/resvg-js` (MPL-2.0) rasterises, Bun
+  (the dashboard fetches them as one sprite, a Vite asset a Bun script has no
+  URL for), and a font probe. `@resvg/resvg-js` (MPL-2.0) rasterises, Bun
   having no rasteriser and the host's Chromium not being a pinned build
   dependency. The probe is load-bearing: resvg resolves a family through the
   host's font database and draws **nothing at all** when it matches none, with

@@ -131,8 +131,8 @@ export interface OgOptions {
    * A model's logo as an `<image href>`, or null for one no family claims.
    *
    * Injected rather than imported: the live chart's `logoHrefOf` reads the
-   * assets through `import.meta.glob`, which only exists under Vite, and this
-   * module is built by a Bun script. Same assets, resolved by the caller.
+   * logos out of a sprite the page fetches as a Vite asset, and this module is
+   * built by a Bun script. Same logos, resolved by the caller.
    */
   logoHref?: (model: string) => string | null;
   /** The wordmark, on by default. */

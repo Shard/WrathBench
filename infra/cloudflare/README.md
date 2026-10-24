@@ -38,7 +38,12 @@ with a CORS error in the browser rather than leaking anything.
 
 The SPA's own deployment config is `dashboard/wrangler.jsonc`, kept beside the
 build it uploads rather than here. It has no `main`: the read path is static
-assets and cached bucket objects, and nothing is invoked.
+assets and cached bucket objects, and nothing is invoked. The app's cache
+headers ride in the build as `dashboard/public/_headers`, which Workers Static
+Assets reads at deploy: the content-hashed files under `/assets/` are
+immutable for a year, and `index.html` keeps the platform's
+`max-age=0, must-revalidate` so a deploy lands on the next visit. Check it
+after a ship with `curl -sI https://wrathbench.shard.page/assets/<any chunk>`.
 
 ## Setting it up
 
