@@ -1073,13 +1073,24 @@ function sizeOfResult(text: string): number | null {
   return m === null ? null : Number(m[1] ?? m[2]);
 }
 
+/**
+ * The over-cap refusal in a text, matched only around where its fixed words
+ * stand: the op's `[\w.]+` run against a whole result (pages of one word
+ * character) backtracks quadratically.
+ */
+function padRefusalOf(text: string): { op: string; chars: number } | null {
+  const i = text.indexOf(PAD_REFUSED);
+  if (i < 0) return null;
+  const m = PAD_REFUSAL.exec(text.slice(Math.max(0, i - 48), i + PAD_REFUSED.length + 24));
+  return m === null ? null : { op: m[1]!, chars: Number(m[2]) };
+}
+
 /** The over-cap refusal in a result line, found by its bytes and decoded around them only. */
 function padRefusalIn(buf: Buffer, s: number, e: number): { op: string; chars: number } | null {
   const j = buf.subarray(s, e).indexOf(PAD_REFUSED_BYTES);
   if (j < 0) return null;
   const i = s + j;
-  const m = PAD_REFUSAL.exec(buf.toString("utf8", Math.max(s, i - 48), Math.min(e, i + PAD_REFUSED_BYTES.length + 24)));
-  return m === null ? null : { op: m[1]!, chars: Number(m[2]) };
+  return padRefusalOf(buf.toString("utf8", Math.max(s, i - 48), Math.min(e, i + PAD_REFUSED_BYTES.length + 24)));
 }
 
 /** Which of `scratchpad.write(` and `scratchpad.append(` a snippet record's code calls; null for neither. */
@@ -1155,7 +1166,7 @@ export interface ToolsScan {
 }
 
 function toolErrorClass(name: string, text: string): string {
-  if (PAD_REFUSAL.test(text)) return "over cap";
+  if (padRefusalOf(text) !== null) return "over cap";
   if (name === "run_snippet") return errorClass(text);
   const first = (text.split("\n", 1)[0] ?? "").replace(new RegExp(`^${name}:\\s*`), "");
   return first.split(/\s+/).slice(0, 4).join(" ").slice(0, 40) || "(empty)";
@@ -1231,7 +1242,7 @@ export function scanTools(path: string, w: Window): ToolsScan {
           }
           if (isError) {
             t.errors++;
-            count(t.classes, refusal !== null ? "over cap" : toolErrorClass(name, text));
+            count(t.classes, refusal !== null ? "over cap" : r === null ? "(a result over 256 KB, unread)" : toolErrorClass(name, text));
           }
           return;
         }
@@ -1409,8 +1420,8 @@ export function scanPad(path: string, w: Window): PadScan {
           const how = name === "write_scratchpad" ? "tool write" : "tool edit";
           if (r?.["isError"] === true) {
             // A refused edit for any other reason (no match, ambiguous) changed nothing.
-            const refusal = PAD_REFUSAL.exec(text);
-            if (refusal !== null) write(h.ts, r, how).refused = Number(refusal[2]);
+            const refusal = padRefusalOf(text);
+            if (refusal !== null) write(h.ts, r, how).refused = refusal.chars;
             return;
           }
           const chars = sizeOfResult(text);

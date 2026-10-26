@@ -254,6 +254,18 @@ describe("inspect tools", () => {
     expect(inspect(["tools", "run-loop"]).out.find((l) => l.startsWith("windows"))).toContain("0 zero-length");
   });
 
+  test("a long error result is classed in linear time", () => {
+    // A refusal matcher run over a whole result backtracks quadratically on a page of one word character.
+    const f = new Fixture(join(RUNS, "run-long-error"), "run-long-error", "loop");
+    f.request();
+    f.snippet("return dump()", { text: `error (1ms)\nError: ${"w".repeat(200_000)}`, isError: true });
+    f.tool("search_reference", { query: "x" }, { text: "w".repeat(200_000), isError: true });
+    f.end();
+    const r = inspect(["tools", "run-long-error"]);
+    expect(nums(row(r.out, "run_snippet"))).toEqual([1, 0, 1]);
+    expect(nums(row(r.out, "search_reference"))).toEqual([1, 0, 1]);
+  });
+
   test("--since and --until window the counts", () => {
     const r = inspect(["tools", "run-loop", "--since", String(marks.loop["turn3"]), "--until", String(marks.loop["afterDrop"])]);
     expect(r.out[0]).toContain("since 2030-01-02T11:03:");
