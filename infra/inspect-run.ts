@@ -1337,7 +1337,6 @@ export interface PadScan {
   adapter: string | null;
   requests: number;
   requestsWithPad: number;
-  responses: number;
   toolCalls: number;
   samples: PadSample[];
   writes: PadWrite[];
@@ -1350,7 +1349,7 @@ export function isDrop(w: Pick<PadWrite, "before" | "after">): boolean {
 
 /** One forward pass over the window: the pad's size wherever a record says it, and every write. */
 export function scanPad(path: string, w: Window): PadScan {
-  const p: PadScan = { first: null, last: null, adapter: null, requests: 0, requestsWithPad: 0, responses: 0, toolCalls: 0, samples: [], writes: [] };
+  const p: PadScan = { first: null, last: null, adapter: null, requests: 0, requestsWithPad: 0, toolCalls: 0, samples: [], writes: [] };
   let known: number | null = null;
   // The snippet write the next request's pad sizes, while no other write has come after it.
   let open: PadWrite | null = null;
@@ -1387,9 +1386,6 @@ export function scanPad(path: string, w: Window): PadScan {
           known = pad.length;
           return;
         }
-        case "response":
-          p.responses++;
-          return;
         case "tool_call":
           p.toolCalls++;
           return;
@@ -1452,9 +1448,14 @@ export function inspectPad(runId: string, opts: Options & Window & { last: numbe
   const span = p.first === null ? "no records" : `${clock(p.first)} to ${clock(p.last!)}`;
   say(`${runId}: the scratchpad, ${windowPhrase(opts) || "whole run"} (${span}), UTC`);
   const driver = driverName(p.adapter, run.dir, runId);
-  say(`sizes     driver ${driver} · the pad's text on ${p.requestsWithPad} of ${p.requests} request(s) · ${p.responses} model response(s) · ${p.toolCalls} tool call(s)`);
-  if (p.requestsWithPad === 0 || p.requestsWithPad * 2 < p.responses) {
-    say(`per-turn  none: driver ${driver} wrote the pad on ${p.requestsWithPad} request(s) for ${p.responses} model response(s): it writes one only when it hands the model a new context`);
+  const perRequest = p.requestsWithPad > 0 ? ` (${(p.toolCalls / p.requestsWithPad).toFixed(1)} per request)` : "";
+  say(`sizes     driver ${driver} · the pad's text on ${p.requestsWithPad} of ${p.requests} request(s) · ${p.toolCalls} tool call(s)${perRequest}`);
+  // Only a request sizes a snippet's write, so how many went unsized is the
+  // run's own measure of whether its driver gives a size per turn.
+  const snippetWrites = p.writes.filter((x) => x.how.startsWith("snippet") && x.refused === null);
+  const unsized = snippetWrites.filter((x) => x.after === null).length;
+  if (unsized > 0 || p.requestsWithPad === 0) {
+    say(`per-turn  none for ${unsized} of ${snippetWrites.length} snippet write(s): driver ${driver} writes the pad's text only on a request, when it hands the model a new context`);
     say("          between requests only write_scratchpad/edit_scratchpad results give a size; a snippet's scratchpad.write/append has none");
   }
   try {

@@ -63,7 +63,7 @@ directories and `fleet-<stamp>.jsonl` are the record.
 
 ```
 bun wb inspect live                                  # every run with a heartbeat, one line each
-bun wb inspect run <run-id> [--since 2h]             # verdict, level, quests across restarts, counts, errors by class, sizes, trace
+bun wb inspect run <run-id> [--since 2h] [--until 1h] # verdict, level, quests across restarts, counts, errors by class, sizes, trace
 bun wb inspect trajectory <run-id> --errors --last 10
 bun wb inspect trajectory <run-id> --since <iso> --next 20   # the first 20 after a moment
 bun wb inspect tools <run-id> [--since 2h] [--until 1h]       # calls per tool, ok/error, reflect granted/refused, pad writers

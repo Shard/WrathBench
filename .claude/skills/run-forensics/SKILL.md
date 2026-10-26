@@ -13,7 +13,7 @@ Reference: `docs/RUNBOOK.md`, "Inspect a run".
 
 ```
 bun wb inspect live                                   # every run with a heartbeat: live, or ownerless
-bun wb inspect run <run-id> [--since 2h]              # verdict, model, level/xp, quests across restarts, counts, errors by class, sizes, trace, nearby
+bun wb inspect run <run-id> [--since 2h] [--until 1h] # verdict, model, level/xp, quests across restarts, counts, errors by class, sizes, trace, nearby
 bun wb inspect trajectory <run-id> --last 20          # one line per snippet or tool call with its result
 bun wb inspect trajectory <run-id> --errors --last 10
 bun wb inspect trajectory <run-id> --grep 'moveTo|too_far' --since 30m
@@ -38,16 +38,21 @@ narrow one on a 700 MB trajectory reads only that stretch.
 
 What `tools` and `pad` can say depends on how the driver records:
 
-- **Fixed loop and codex** write a `request` per turn carrying the pad's
-  text, so `pad` has a size every turn, and a snippet's
-  `scratchpad.write/append` is sized by the next request when no other write
-  came between.
+- **Every driver** puts the pad's text on its `request` records, and only a
+  request sizes a snippet's `scratchpad.write/append` (the next one, when no
+  other write came between). `pad` prints tool calls per request on its
+  `sizes` line, and a `per-turn  none for N of M snippet write(s)` line when
+  any went unsized (`→ ?` in the list).
+- **Fixed loop** writes a request per model turn: every turn has a size.
+- **codex and pi** write a request per CLI turn, which can hold several tool
+  calls; a snippet write followed by another write in the same turn goes
+  unsized.
 - **claude-code** writes a request only when it hands the CLI a new context,
-  often once per session. `pad` says so on a `per-turn  none` line; sizes
-  between come only from `write_scratchpad`/`edit_scratchpad` results, and a
-  snippet's write is unsized (`→ ?`). Its `reflect_window` records are drained
-  late and together, so `tools` shows them zero-length; count grants from the
-  `reflection` line, which reads the results.
+  often once per session, so its snippet writes are mostly unsized and the
+  sizes between come from `write_scratchpad`/`edit_scratchpad` results. Its
+  `reflect_window` records are drained late and together, so `tools` shows
+  them zero-length; count grants from the `reflection` line, which reads the
+  results.
 - **Snippet pad writes** are found in the snippet's code, so one behind a branch
   that never ran still counts. `pad --at` replays `edit_scratchpad` calls from
   the newest request or `write_scratchpad`, and prints `uncertain` when a

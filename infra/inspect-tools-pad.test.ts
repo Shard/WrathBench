@@ -96,6 +96,8 @@ class Fixture {
     this.tick();
     this.call++;
     const call = this.shape === "loop" ? {} : { call: this.call };
+    // A CLI driver writes a response per assistant item, each tool use among them; the fixed loop one per turn.
+    if (this.shape !== "loop") this.traj.append({ t: "response", turn: this.turn, message: { role: "assistant", content: null, tool_uses: [{ name }] } });
     const dispatchTs = this.clock;
     this.traj.append({ t: "tool_call", turn: this.turn, ...call, name, args, dispatchTs });
     if (name === "run_snippet") this.traj.append({ t: "snippet", turn: this.turn, ...call, code: args["code"] });
@@ -243,8 +245,8 @@ describe("inspect tools", () => {
 
   test("names the driver and its requests: one per turn, or one per session", () => {
     expect(inspect(["tools", "run-loop"]).out[1]).toContain("driver    openai · 6 request(s) · 6 model response(s)");
-    expect(inspect(["tools", "run-codex"]).out[1]).toContain("driver    codex · 6 request(s)");
-    expect(inspect(["tools", "run-claude"]).out[1]).toContain("driver    claude-code · 1 request(s) · 6 model response(s)");
+    expect(inspect(["tools", "run-codex"]).out[1]).toContain("driver    codex · 6 request(s) · 19 model response(s)");
+    expect(inspect(["tools", "run-claude"]).out[1]).toContain("driver    claude-code · 1 request(s) · 19 model response(s)");
   });
 
   test("a window drained late reads zero-length, and says why", () => {
@@ -308,7 +310,7 @@ describe("inspect pad", () => {
 
   test("claude-code: says plainly there is no per-turn size, and sizes only what a tool result states", () => {
     const r = inspect(["pad", "run-claude"]);
-    expect(r.out.find((l) => l.startsWith("per-turn"))).toContain("none: driver claude-code wrote the pad on 1 request(s) for 6 model response(s)");
+    expect(r.out.find((l) => l.startsWith("per-turn"))).toContain("none for 1 of 1 snippet write(s): driver claude-code writes the pad's text only on a request");
     expect(r.out.some((l) => /snippet append\s+1000 → \?$/.test(l))).toBe(true);
     expect(r.out.some((l) => /tool write\s+1007 → 600\s+-40%\s+DROP/.test(l))).toBe(true);
   });
