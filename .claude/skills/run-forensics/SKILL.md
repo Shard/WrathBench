@@ -1,6 +1,6 @@
 ---
 name: run-forensics
-description: Inspect WrathBench runs read-only with `bun wb inspect` — whether a run is live or paused, its level and xp, its snippets and errors, its trace, the module audit log (move verdicts by op) and what the publisher last did. Use before writing any throwaway script that reads run.sqlite, trajectory.jsonl, audit files or the publisher's state.
+description: Inspect WrathBench runs read-only with `bun wb inspect` — whether a run is live or paused, its level and xp, its snippets and errors, tool calls by name, the scratchpad over time and at a moment, its trace, the module audit log (move verdicts by op) and what the publisher last did. Use before writing any throwaway script that reads run.sqlite, trajectory.jsonl, audit files or the publisher's state.
 ---
 
 # Run forensics
@@ -13,11 +13,16 @@ Reference: `docs/RUNBOOK.md`, "Inspect a run".
 
 ```
 bun wb inspect live                                   # every run with a heartbeat: live, or ownerless
-bun wb inspect run <run-id> [--since 2h]              # verdict, model, level/xp, quests across restarts, counts, errors by class, sizes, trace, nearby
+bun wb inspect run <run-id> [--since 2h] [--until 1h] # verdict, model, level/xp, quests across restarts, counts, errors by class, sizes, trace, nearby
 bun wb inspect trajectory <run-id> --last 20          # one line per snippet or tool call with its result
 bun wb inspect trajectory <run-id> --errors --last 10
 bun wb inspect trajectory <run-id> --grep 'moveTo|too_far' --since 30m
 bun wb inspect trajectory <run-id> --all --last 50    # every record kind; big ones by size only
+bun wb inspect trajectory <run-id> --since 2h --until 1h       # a window: both ends together
+bun wb inspect trajectory <run-id> --since <iso> --next 20     # the first 20 items after a moment
+bun wb inspect tools <run-id> [--since 2h] [--until 1h]        # calls per tool, ok/error, reflect granted/refused, its windows, pad writers
+bun wb inspect pad <run-id> [--since 6h] [--last 30]           # pad size over time, its writes (drops over 30% flagged), cap refusals
+bun wb inspect pad <run-id> --at <iso>                          # the pad's text at a moment, rebuilt from the record
 bun wb inspect audit <run-id>                         # counts per kind, op/opcode and status
 bun wb inspect audit <run-id> --op WB_MOVE_RESULT --status target_off_mesh --last 20
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
@@ -25,7 +30,34 @@ bun wb inspect audit <run-id> --since 1h              # a big audit is bisected,
 bun wb inspect publisher [<run-id>]                   # last flip, versions per run, the secret scan, last passes
 ```
 
-`--since`/`--until` take `90s`, `30m`, `2h`, `1d`, epoch ms or an ISO time.
+`--since`/`--until`/`--at` take `90s`, `30m`, `2h`, `1d`, epoch ms or an ISO time, and
+every command refuses a flag it does not take. `--next N` reads forward from
+`--since` (or the file's start) where `--last N` reads back from `--until`
+(or the end). A window is found by bisecting the file on its clock, so a
+narrow one on a 700 MB trajectory reads only that stretch.
+
+What `tools` and `pad` can say depends on how the driver records:
+
+- **Every driver** puts the pad's text on its `request` records, and only a
+  request sizes a snippet's `scratchpad.write/append` (the next one, when no
+  other write came between). `pad` prints tool calls per request on its
+  `sizes` line, and a `per-turn  none for N of M snippet write(s)` line when
+  any went unsized (`→ ?` in the list).
+- **Fixed loop** writes a request per model turn: every turn has a size.
+- **codex and pi** write a request per CLI turn, which can hold several tool
+  calls; a snippet write followed by another write in the same turn goes
+  unsized.
+- **claude-code** writes a request only when it hands the CLI a new context,
+  often once per session, so its snippet writes are mostly unsized and the
+  sizes between come from `write_scratchpad`/`edit_scratchpad` results. Its
+  `reflect_window` records are drained late and together, so `tools` shows
+  them zero-length; count grants from the `reflection` line, which reads the
+  results.
+- **Snippet pad writes** are found in the snippet's code, so one behind a branch
+  that never ran still counts. `pad --at` replays `edit_scratchpad` calls from
+  the newest request or `write_scratchpad`, and prints `uncertain` when a
+  snippet wrote the pad in between, an edit missed, or the rebuild disagrees
+  with the newest write's reported size.
 
 ## Rules
 
@@ -46,13 +78,20 @@ bun wb inspect publisher [<run-id>]                   # last flip, versions per 
 
 ## When the pod's image predates the file
 
-`live`, `run` and `trajectory` run `infra/inspect-run.ts` in the runner pod. A
-checkout ahead of the deployed image gets "not in the runner pod"; the file
-imports only `bun:sqlite` and `node:*`, so run this checkout's copy from stdin:
+`live`, `run`, `trajectory`, `tools` and `pad` run `infra/inspect-run.ts` in
+the runner pod. A checkout ahead of the deployed image gets "not in the runner
+pod", or "unknown command tools" / "unknown flag --until" from an older copy;
+the file imports only `bun:sqlite` and `node:*`, so run this checkout's copy
+from stdin, the command and its flags after the `-`:
 
 ```
 kubectl -n <ns> exec -i deploy/<release>-runner -- bun run - run <run-id> < infra/inspect-run.ts
+kubectl -n <ns> exec -i deploy/<release>-runner -- bun run - tools <run-id> --since 2h < infra/inspect-run.ts
+kubectl -n <ns> exec -i deploy/<release>-runner -- bun run - pad <run-id> --at <iso> < infra/inspect-run.ts
 ```
+
+`tools`, `pad`, `--until` and `--next` reach the cluster's `bun wb inspect`
+only with the next release; until then the stdin form above runs them.
 
 `audit` and `publisher` run on this machine and need no release.
 

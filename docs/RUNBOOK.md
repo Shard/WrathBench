@@ -63,8 +63,12 @@ directories and `fleet-<stamp>.jsonl` are the record.
 
 ```
 bun wb inspect live                                  # every run with a heartbeat, one line each
-bun wb inspect run <run-id> [--since 2h]             # verdict, level, quests across restarts, counts, errors by class, sizes, trace
+bun wb inspect run <run-id> [--since 2h] [--until 1h] # verdict, level, quests across restarts, counts, errors by class, sizes, trace
 bun wb inspect trajectory <run-id> --errors --last 10
+bun wb inspect trajectory <run-id> --since <iso> --next 20   # the first 20 after a moment
+bun wb inspect tools <run-id> [--since 2h] [--until 1h]       # calls per tool, ok/error, reflect granted/refused, pad writers
+bun wb inspect pad <run-id> [--since 2h]                       # pad size over time, writes, cap refusals, drops flagged
+bun wb inspect pad <run-id> --at <iso>                         # the pad's text at a moment, rebuilt from the record
 bun wb inspect audit <run-id> [--op WB_MOVE_RESULT [--status S]] [--since 1h]
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
 bun wb inspect publisher [<run-id>]                  # last flip, versions per run, the secret scan, last passes
@@ -78,8 +82,8 @@ struck from everything printed, older trajectories included. The audit log's
 files are named after it, so `inspect audit` reads the token from the run's
 `meta.json`, hands it on stdin to `infra/inspect-audit.pl` inside the
 worldserver container, which reduces the files there, and prints counts or
-struck records and never a file name. `live`, `run` and `trajectory` are
-`infra/inspect-run.ts` in the runner pod, which imports nothing outside
+struck records and never a file name. `live`, `run`, `trajectory`, `tools`
+and `pad` are `infra/inspect-run.ts` in the runner pod, which imports nothing outside
 `bun:sqlite` and `node:*`; before a release ships it, the same file runs in the
 pod from stdin:
 `kubectl -n wrathbench exec -i deploy/wrathbench-runner -- bun run - run <run-id> < infra/inspect-run.ts`.

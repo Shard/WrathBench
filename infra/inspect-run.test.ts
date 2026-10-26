@@ -21,8 +21,10 @@ import {
   HEARTBEAT_DEAD_MS,
   main,
   MIN_TOKEN_LENGTH,
+  offsetAfter,
   parseSince,
   questStretches,
+  seekTime,
   REDACTED,
   verdictOf,
 } from "./inspect-run";
@@ -304,6 +306,85 @@ describe("inspect trajectory", () => {
     const body = r.out.slice(1);
     expect(body.some((l) => l.includes("timeout") || l.includes("exceeded"))).toBe(true);
     expect(body.some((l) => l.includes("return 1;"))).toBe(false);
+  });
+});
+
+describe("inspect trajectory: a window, and either end of it", () => {
+  const at = (min: number): string => String(NOW - 3_600_000 + min * 60_000);
+  const body = (argv: string[]): string[] => inspect(["trajectory", "run-live", "--runs-dir", RUNS, ...argv]).out.slice(1);
+
+  test("--until leaves out everything after it", () => {
+    const r = body(["--until", at(5.5)]);
+    expect(r.some((l) => l.includes("return 1;"))).toBe(true);
+    expect(r.some((l) => l.includes("TypeError"))).toBe(true);
+    expect(r.some((l) => l.includes("exceeded") || l.includes("reflect"))).toBe(false);
+    expect(inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--until", at(5.5)]).out[0]).toContain("until 2030-01-02T11:05:30Z");
+  });
+
+  test("--since and --until together are a range", () => {
+    const r = body(["--since", at(2.5), "--until", at(5.5)]);
+    expect(r.map((l) => /return \d;|TypeError/.exec(l)?.[0])).toEqual(["return 3;", "TypeError"]);
+  });
+
+  test("--next is the first N from --since, or from the file's start", () => {
+    const r = body(["--since", at(1.5), "--next", "2"]);
+    expect(r.length).toBe(2);
+    expect(r[0]).toContain("return 2;");
+    expect(r[1]).toContain("return 3;");
+    expect(inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--next", "2"]).out[0]).toContain("the first 2 item(s)");
+    expect(body(["--next", "1"])[0]).toContain("return 1;");
+    // Read forward, a tool call meets its result after it.
+    expect(body(["--since", at(6.9), "--until", at(7), "--next", "5"])[0]).toContain("reflect ✗  {}  ⇒ Reflection needs rest");
+  });
+
+  test("inspect run takes the same window", () => {
+    const r = inspect(["run", "run-live", "--runs-dir", RUNS, "--until", at(5.5)]);
+    const line = (label: string): string => r.out.find((l) => l.startsWith(label)) ?? "";
+    expect(line("activity")).toContain("until 2030-01-02T11:05:30Z: ");
+    expect(line("errors")).toContain("snippets 1/4: TypeError 1");
+  });
+
+  test("a bad window is a usage error, said with the flag that was wrong", () => {
+    const bad = inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--until", "yesterday"]);
+    expect(bad.code).toBe(2);
+    expect(bad.err[0]).toContain("--until yesterday");
+    expect(inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--since", at(5), "--until", at(4)]).code).toBe(2);
+    expect(inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--last", "2", "--next", "2"]).code).toBe(2);
+    expect(inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--next", "0"]).code).toBe(2);
+  });
+
+  test("a big file is bisected to the window, and every view still reads the same lines", () => {
+    const runsDir = tmp("inspect-run-seek-");
+    const dir = join(runsDir, "run-big");
+    mkdirSync(dir, { recursive: true });
+    const t0 = NOW - 86_400_000;
+    const lines: string[] = [];
+    for (let i = 0; i < 6_000; i++) {
+      lines.push(JSON.stringify({ ts: t0 + i * 1_000, t: "snippet", turn: i, call: i, code: `return ${i}; // ${"p".repeat(i % 7 === 0 ? 2_000 : 150)}` }));
+      lines.push(JSON.stringify({ ts: t0 + i * 1_000, t: "snippet_result", turn: i, call: i, name: "run_snippet", isError: false, text: `ok (1ms)\n=> ${i}` }));
+    }
+    const path = join(dir, "trajectory.jsonl");
+    writeFileSync(path, `${lines.join("\n")}\n`);
+    const starts: number[] = [];
+    let off = 0;
+    for (const l of lines) {
+      starts.push(off);
+      off += Buffer.byteLength(l) + 1;
+    }
+    expect(off).toBeGreaterThan(2 << 20);
+    for (const i of [0, 1, 2_500, 4_242, 5_999]) {
+      const t = t0 + i * 1_000;
+      const first = starts[2 * i]!;
+      const s = seekTime(path, t);
+      expect(s).toBeLessThanOrEqual(first);
+      expect(first - s).toBeLessThan(512 << 10);
+      expect(starts.includes(s)).toBe(true);
+      expect(offsetAfter(path, t)).toBe(starts[2 * i + 2] ?? off);
+    }
+    expect(offsetAfter(path, t0 + 10_000_000)).toBe(off);
+    const view = (argv: string[]): string[] => inspect(["trajectory", "run-big", "--runs-dir", runsDir, ...argv]).out.slice(1);
+    expect(view(["--until", String(t0 + 4_242_000), "--last", "2"]).map((l) => /return (\d+);/.exec(l)?.[1])).toEqual(["4241", "4242"]);
+    expect(view(["--since", String(t0 + 2_500_000), "--next", "2"]).map((l) => /return (\d+);/.exec(l)?.[1])).toEqual(["2500", "2501"]);
   });
 });
 
