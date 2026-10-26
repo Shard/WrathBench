@@ -269,16 +269,30 @@ export const ENTRIES: readonly Entry[] = [
   {
     group: "inspect",
     command: "run",
-    takes: "<run-id> [--since D]",
+    takes: "<run-id> [--since D] [--until D]",
     summary: "live, paused, ended or ownerless; level, quests across restarts, counts, errors by class, sizes, trace",
     ...inRunner("bun", INSPECT_RUN, "run"),
   },
   {
     group: "inspect",
     command: "trajectory",
-    takes: "<run-id> [--last N] [--errors] [--grep RE] [--all] [--since D]",
-    summary: "one capped line per snippet or tool call with its result, newest last",
+    takes: "<run-id> [--last N | --next N] [--errors] [--grep RE] [--all] [--since D] [--until D]",
+    summary: "one capped line per snippet or tool call with its result, oldest first",
     ...inRunner("bun", INSPECT_RUN, "trajectory"),
+  },
+  {
+    group: "inspect",
+    command: "tools",
+    takes: "<run-id> [--since D] [--until D]",
+    summary: "calls per tool with ok and error counts, reflect granted and refused, its windows, the pad's writers",
+    ...inRunner("bun", INSPECT_RUN, "tools"),
+  },
+  {
+    group: "inspect",
+    command: "pad",
+    takes: "<run-id> [--since D] [--until D] [--last N] | --at D",
+    summary: "the scratchpad's size over time, its writes and cap refusals, drops flagged; --at: its text at a moment",
+    ...inRunner("bun", INSPECT_RUN, "pad"),
   },
   {
     group: "inspect",
