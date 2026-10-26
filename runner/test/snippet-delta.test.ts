@@ -47,7 +47,7 @@ function world() {
     level: 19 as number | undefined,
     members: [] as GroupMemberLike[],
     units: new Map<string, UnitLike>(),
-    quests: [] as { questId: number; complete: boolean; title?: string }[],
+    quests: [] as { questId: number; complete: boolean; title?: string; level?: number }[],
     names: new Map<string, string>([
       ["99", "Defias Evoker"],
       ["98", "Defias Miner"],
@@ -305,9 +305,10 @@ describe("the snippet delta recorder and its block", () => {
   test("a level-up and the quest log's changes are told, and seeded silently the first time", () => {
     const t = seededParty();
     t.w.level = 20;
+    // The HUD's level bracket stays out of the delta: it names quests by label.
     t.w.quests = [
-      { questId: 214, complete: true, title: "Red Silk Bandanas" },
-      { questId: 155, complete: false, title: "The Defias Brotherhood" },
+      { questId: 214, complete: true, title: "Red Silk Bandanas", level: 17 },
+      { questId: 155, complete: false, title: "The Defias Brotherhood", level: 22 },
     ];
     expect(renderSnippetDelta(t.rec.drain())).toBe(
       `${SNIPPET_DELTA_HEADER}\nlevel 19 → 20\nquests: complete — 214 Red Silk Bandanas; new — 155 The Defias Brotherhood`,

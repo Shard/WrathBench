@@ -1086,8 +1086,16 @@ write. The context header shows the size against the cap every turn.
 
 Three HUD lines were reworked by the same operator decision, under the
 condition that they not grow the context much (`src/context.ts`). The quest
-line names each quest's title (cut at 24 characters), grouped complete then
-in progress so the per-quest state word is gone. The nearby line keeps six
+line names each quest's title (cut at 24 characters), complete quests first.
+Each quest also carries its level, with "done" in the same bracket when it can
+be turned in (`290 Lifting the Curse [30 done], 9743 Natural Armor [62]`),
+which replaced the "complete" and "in progress" group labels (operator,
+2026-10-26): models at level 62 kept level-30 quests in a full log and
+queried quests one at a time to learn their levels. The number is the one the
+client colours its quest log from, printed raw rather than as a colour, since
+the grey cut-off is the client's judgement against the character's level; a
+quest that scales to the player shows the character's level, as the core
+resolves it. The nearby line keeps six
 entries but fills them in order with whatever has the character targeted, the
 two nearest, then NPCs to act on (a quest to take or hand in, a vendor,
 trainer, flight master, innkeeper or banker), then the rest; it was filled by

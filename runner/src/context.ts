@@ -285,10 +285,10 @@ export interface SnapshotLike {
   questCompletions?: { questId?: unknown; ts?: unknown }[];
   /**
    * The quest log's occupied slots: questId, the completion bit, and the title
-   * from the quest's template answer (`SMSG_QUEST_QUERY_RESPONSE`, what the
-   * client's quest log shows) once it has arrived.
+   * and level from the quest's template answer (`SMSG_QUEST_QUERY_RESPONSE`,
+   * what the client's quest log shows) once it has arrived.
    */
-  questLog?: { questId?: unknown; complete?: unknown; title?: unknown }[];
+  questLog?: { questId?: unknown; complete?: unknown; title?: unknown; level?: unknown }[];
   characters?: ObservedLike;
   nearby?: Record<string, unknown>;
   /**
@@ -676,20 +676,34 @@ export function questLabel(q: { questId?: unknown; title?: unknown }): string {
 }
 
 /**
- * The quest line: ids with their titles, completed quests first. The ids alone
- * meant nothing once the notes that named them were gone — a model with three
- * complete quests could not tell which they were. The two states are grouped
- * rather than worded per quest, which pays for part of the titles: on a
- * twenty-quest log the line grew by about 200 characters, against a turn's
- * context of about 40,000. A title not yet answered prints as the bare id.
+ * One quest as the quest line prints it: the label, then a bracket with the
+ * level and "done" when it can be turned in — `[30 done]`, `[62]`, `[done]`
+ * before the level is known, and no bracket for an open quest without one.
+ * The snippet delta keeps the bare label: its own words already say done.
+ */
+function questEntry(q: { questId?: unknown; title?: unknown; complete?: unknown; level?: unknown }): string {
+  const tags: string[] = [];
+  if (typeof q.level === "number") tags.push(String(q.level));
+  if (q.complete === true) tags.push("done");
+  return tags.length === 0 ? questLabel(q) : `${questLabel(q)} [${tags.join(" ")}]`;
+}
+
+/**
+ * The quest line: ids with titles and levels, completed quests first so the
+ * turn-ins read together. The ids alone meant nothing once the notes that
+ * named them were gone — a model with three complete quests could not tell
+ * which they were. The levels followed (operator, 2026-10-26): models at level
+ * 62 kept level-30 quests in a full log and queried quests one by one to learn
+ * their levels. The client colours its log from the same field; the line
+ * prints the number and never a colour, whose grey cut-off is the client's
+ * judgement against the character's level. Completion rides in the bracket,
+ * so the line needs no group labels. A title not yet answered prints as the
+ * bare id.
  */
 function questLine(ql: NonNullable<SnapshotLike["questLog"]>): string {
-  const complete = ql.filter((q) => q.complete === true).map(questLabel);
-  const open = ql.filter((q) => q.complete !== true).map(questLabel);
-  const parts: string[] = [];
-  if (complete.length > 0) parts.push(`complete — ${complete.join(", ")}`);
-  if (open.length > 0) parts.push(`in progress — ${open.join(", ")}`);
-  return `quests: ${parts.join("; ")}`;
+  const complete = ql.filter((q) => q.complete === true);
+  const open = ql.filter((q) => q.complete !== true);
+  return `quests: ${[...complete, ...open].map(questEntry).join(", ")}`;
 }
 
 /** The marker over a questgiver when it has something for you now, else undefined. */

@@ -426,7 +426,7 @@ describe("formatStateSummary", () => {
       { sessionLive: true },
     );
     expect(text).toContain("bag: 12 free / 16; most: Tough Jerky x5, Hearthstone");
-    expect(text).toContain("quests: complete — 54; in progress — 82");
+    expect(text).toContain("quests: 54 [done], 82\n");
     expect(text).toContain("nearby: Kobold Vermin (12.3y), Kobold Worker dead (30y)");
     expect(text).toContain("ui: gossip (3 options)");
   });
@@ -559,28 +559,42 @@ describe("formatStateSummary", () => {
 describe("formatStateSummary: quest titles, nearby priority, bag summary", () => {
   const line = (text: string, prefix: string): string | undefined => text.split("\n").find((l) => l.startsWith(prefix));
 
-  test("quests carry their titles, complete ones grouped first, long titles cut", () => {
+  test("quests carry their titles and levels, complete ones first and marked done, long titles cut", () => {
     const text = formatStateSummary(
       {
         questLog: [
-          { questId: 11, complete: false, title: "Mossy Errands" },
-          { questId: 12, complete: true, title: "The Unreasonably Long Expedition Title" },
+          { questId: 11, complete: false, title: "Mossy Errands", level: 62 },
+          { questId: 12, complete: true, title: "The Unreasonably Long Expedition Title", level: 30 },
           { questId: 13, complete: false },
-          { questId: 14, complete: true, title: "Boar Ribs" },
+          { questId: 14, complete: true, title: "Boar Ribs", level: 35 },
         ],
       },
       { sessionLive: true },
     );
     expect(line(text, "quests: ")).toBe(
-      "quests: complete — 12 The Unreasonably Long E…, 14 Boar Ribs; in progress — 11 Mossy Errands, 13",
+      "quests: 12 The Unreasonably Long E… [30 done], 14 Boar Ribs [35 done], 11 Mossy Errands [62], 13",
     );
   });
 
-  test("a log with one state names only that group", () => {
-    const open = formatStateSummary({ questLog: [{ questId: 5, complete: false, title: "Lost Lantern" }] }, { sessionLive: true });
-    expect(line(open, "quests: ")).toBe("quests: in progress — 5 Lost Lantern");
-    const done = formatStateSummary({ questLog: [{ questId: 5, complete: true, title: "Lost Lantern" }] }, { sessionLive: true });
-    expect(line(done, "quests: ")).toBe("quests: complete — 5 Lost Lantern");
+  test("a quest whose level is not known yet is marked done if complete and bare otherwise", () => {
+    const text = formatStateSummary(
+      {
+        questLog: [
+          { questId: 5, complete: false, title: "Lost Lantern" },
+          { questId: 6, complete: true, title: "Found Lantern" },
+          { questId: 7, complete: true },
+        ],
+      },
+      { sessionLive: true },
+    );
+    expect(line(text, "quests: ")).toBe("quests: 6 Found Lantern [done], 7 [done], 5 Lost Lantern");
+  });
+
+  test("a log with one state prints no group label", () => {
+    const open = formatStateSummary({ questLog: [{ questId: 5, complete: false, title: "Lost Lantern", level: 8 }] }, { sessionLive: true });
+    expect(line(open, "quests: ")).toBe("quests: 5 Lost Lantern [8]");
+    const done = formatStateSummary({ questLog: [{ questId: 5, complete: true, title: "Lost Lantern", level: 8 }] }, { sessionLive: true });
+    expect(line(done, "quests: ")).toBe("quests: 5 Lost Lantern [8 done]");
   });
 
   // Eight guards nearer than anything else, then the NPCs worth walking to.
