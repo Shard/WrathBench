@@ -1386,7 +1386,10 @@ at the top of this document.
   around what stands there), walked onto over the ground under the walk on's
   own rule — no rise past the look, no pair a ledge, nothing at body height
   in the way — by the core's path or the module's planner, ending within 4y
-  of the request. The fall must be the route's only ledge, so `force` given
+  of the request; a landing (or the mesh it walks onto) already within those
+  4y of the request and within 2y of its height is the route's end, with no
+  leg below (two points that close on neighbouring polygons are a path
+  neither the core nor the planner returns). The fall must be the route's only ledge, so `force` given
   for it never walks a second one. When the mesh's own route steps down a
   ledge on its way to its end (a terrace whose mesh is a small island with a
   steep step inside it) and is refused for that second ledge, the walk on is

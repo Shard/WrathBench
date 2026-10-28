@@ -2939,6 +2939,18 @@ namespace WrathBench
             return ex * ex + ey * ey <= 16.0f; // endpointOk: within 4y of the end, 2D
         };
         std::vector<WbVec> below;
+        // Already there: a start within the route's own arrival tolerance of
+        // the request (endpointOk's 4y, 2D) on its floor (MESH_LEVEL_MERGE,
+        // the band two levels are one floor within) needs no leg below. A
+        // path between two points that close is not one the core or the
+        // planner returns: on two adjacent polygons the smooth path is one
+        // point, which the core turns into a NOPATH shortcut and the planner
+        // into no_route — at Skettis the fall came down 0.8y under the
+        // request, on the polygon beside its own, and every such request was
+        // refused no_route_from_landing.
+        if (nearEnd(start) && std::fabs(start.z - z) <= MESH_LEVEL_MERGE)
+            below.push_back(start);
+        if (below.empty())
         {
             PathGenerator gen(player);
             if (gen.CalculatePath(start.x, start.y, start.z, x, y, z, false)
@@ -2962,7 +2974,7 @@ namespace WrathBench
                 && nearEnd(planned.back()))
                 below = std::move(planned);
         }
-        if (below.size() < 2)
+        if (below.empty())
             return refuse("no_route_from_landing");
 
         // The route: the mesh's as far as it got, the walk on, the fall, the
