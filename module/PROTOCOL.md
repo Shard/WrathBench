@@ -1209,27 +1209,35 @@ at the top of this document.
   the look's height from the last sample, which it would cross — with every
   sample, the one past the lip included, within 10y of the route's end (the
   start snap's own leg, the other way) and never past the request, to the
-  first step the guard calls a ledge. That lip is the edge. The fall goes on
-  toward the request, the surface read from the edge's height with those two
-  lines held at that height, until the body comes down on ground a client
-  stands on — the walkable mesh at the surface (within 2y), which is built to
-  the slope, step and clearance a character walks — and is carried on while
-  the surface keeps going down off it, a face too steep to stand on. It stops
-  at the first walkable sample, at a rise, at anything in the way or at the
-  request, and lands at the last sample reached that still lies a ledge below
-  the edge, so a cliff is fallen to its foot rather than to a gentler patch of
-  its face. From the landing the route goes on to the request: from the mesh
-  under the landing when the request can be reached from it, else from the
-  walkable mesh nearest it within 10y that is not on a closed island apart
-  from the request (as an island end is walked to its reachable mesh: the
-  foot of a cliff is where the mesh breaks up around what stands there), with
-  the straight walk onto it clear at body height, by the core's path or the
-  module's planner, ending within 4y of the request. The fall must be the route's only ledge, so `force` given for
-  it never walks a second one. A route refused for a second ledge, when the
-  mesh's own route ran on from where it starts, is tried once more from that
-  start — where the character stands — toward the same request, under the
-  same rules: the second ledge is often that route stepping down to its end
-  (a terrace whose mesh is a small island with a steep step inside it). When
+  first step the guard calls a ledge. That lip is the edge. The body falls
+  from it as a client's does: it leaves the edge at the run speed the walker
+  drives it at (a ghost's faster run included), keeps that speed forward, and
+  drops by the core's own fall curve (`Movement::computeFallElevation`, Feather
+  Fall's slower terminal velocity included). It lands where that arc first
+  meets the surface under it — so it clears a shelf narrower than its flight,
+  as a running client does, and lands on one wider — or, where the arc runs
+  into a model, in the last column it crossed. On the ground it falls on only
+  down a pair of samples steeper than the guard's ramp (a face no client
+  stands on, whatever the mesh says) and stops at the first pair that is not,
+  so a cliff is fallen to its foot rather than caught on a gentler patch of
+  its face. Still in the air over the request, it comes down there, by the
+  slower start that brings the arc onto the surface at the request, if that
+  arc clears the ground before it. A short drop that comes down too far out
+  for the edge-to-landing segment to be a ledge is stepped off instead (the
+  slowest start) and lands at the foot. From the landing the route goes on to
+  the request: from the mesh under the landing when the request can be
+  reached from it, else from the walkable mesh nearest it within 10y that is
+  not on a closed island apart from the request (as an island end is walked
+  to its reachable mesh: the foot of a cliff is where the mesh breaks up
+  around what stands there), walked onto over the ground under the walk on's
+  own rule — no rise past the look, no pair a ledge, nothing at body height
+  in the way — by the core's path or the module's planner, ending within 4y
+  of the request. The fall must be the route's only ledge, so `force` given
+  for it never walks a second one. When the mesh's own route steps down a
+  ledge on its way to its end (a terrace whose mesh is a small island with a
+  steep step inside it) and is refused for that second ledge, the walk on is
+  tried once more from where that route starts — where the character stands
+  — toward the same request, under the same rules. When
   all of that holds the answer is that
   route's, settled by the same guard as any other: `drop` without `force`
   (the edge as `reachedPos`, `dz` to the landing, `safeFall`), and with
@@ -1944,7 +1952,8 @@ A `path_incomplete` whose request lies below the end of the mesh's route logs
 `op: "move_edge_drop"` (the edge drop under `path_incomplete`) with `taken` —
 true when the route is now the walk on, the fall and the leg below, whose
 polyline is the `move_path` — else a `reason` (`no_edge`, `climb`, `blocked`,
-`no_surface`, `landing_off_mesh`, `no_route_from_landing`, `second_ledge`,
+`no_surface`, `landing_off_mesh`, `snap_climb`, `snap_ledge`,
+`no_route_from_landing`, `second_ledge`, `air_to_request`, `no_speed`,
 `no_direction`, `not_a_ledge`), `from` (the route's end), and, once an edge was
 found, `edge`, `landing`, `walkYards` (the walk on from `from` to the edge) and
 `landingSnap` (the leg below starts from the mesh nearest the landing), and
