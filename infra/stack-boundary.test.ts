@@ -76,6 +76,23 @@ describe("the stack boundary", () => {
     ]);
   });
 
+  test("type-only imports count: every form a transpiler erases", () => {
+    const root = tree({
+      "mcp/src/t1.ts": 'import type { ToolContext } from "../../runner/src/tools";\n',
+      "mcp/src/t2.ts": 'import { type Trajectory } from "@wrathbench/runner";\n',
+      "mcp/src/t3.ts": 'export type { RunMeta } from "../../runner/src/trajectory";\n',
+      "mcp/src/t4.ts": 'let x: import("../../runner/src/config").RunConfig | undefined;\nexport { x };\n',
+      "sdk/src/t5.ts": 'import type {\n  McpServer,\n} from "@wrathbench/mcp";\n',
+    });
+    expect(checkStackBoundary(root).sort()).toEqual([
+      "mcp/src/t1.ts: imports ../../runner/src/tools, outside mcp/",
+      "mcp/src/t2.ts: imports @wrathbench/runner, which mcp/package.json does not declare",
+      "mcp/src/t3.ts: imports ../../runner/src/trajectory, outside mcp/",
+      "mcp/src/t4.ts: imports ../../runner/src/config, outside mcp/",
+      "sdk/src/t5.ts: imports @wrathbench/mcp, which sdk/package.json does not declare",
+    ]);
+  });
+
   test("strings and comments that look like imports are not imports", () => {
     const root = tree({ "mcp/src/prose.ts": '// import x from "../../runner/src/tools";\nexport const s = \'from "../../runner"\';\n' });
     expect(checkStackBoundary(root)).toEqual([]);

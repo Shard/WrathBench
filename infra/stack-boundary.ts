@@ -67,13 +67,66 @@ function splitPackage(spec: string): [string, string] {
   return [name, sub.length === 0 ? "." : `./${sub}`];
 }
 
-/** Every module specifier a TypeScript file imports, by Bun's own scanner (strings and comments are not imports). */
+/**
+ * `code` with its comments blanked and its string and template literals kept,
+ * so a specifier still reads as one and a commented-out import does not.
+ */
+export function stripComments(code: string): string {
+  let out = "";
+  let i = 0;
+  while (i < code.length) {
+    const c = code[i]!;
+    const next = code[i + 1];
+    if (c === "/" && next === "/") {
+      while (i < code.length && code[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      const end = code.indexOf("*/", i + 2);
+      i = end < 0 ? code.length : end + 2;
+      out += " ";
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      let j = i + 1;
+      while (j < code.length && code[j] !== c) j += code[j] === "\\" ? 2 : 1;
+      out += code.slice(i, j + 1);
+      i = j + 1;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+/**
+ * The specifiers of the type-only forms Bun's scanner drops, since a
+ * transpiler erases them: `import type …`, `import { type X } …`,
+ * `export type … from`, and `import("…")` in a type position. Read from the
+ * text with comments blanked; a statement's specifier is the first string
+ * after its `from`, so a string elsewhere in the code is not one.
+ */
+export function typeOnlyImports(code: string): string[] {
+  const text = stripComments(code);
+  const out: string[] = [];
+  for (const m of text.matchAll(/(?:^|[;\n}])\s*(?:import|export)\s+(?:type\s+)?[^;'"`]*?\bfrom\s*(["'])([^"'\n]+)\1/g)) out.push(m[2]!);
+  for (const m of text.matchAll(/\bimport\s*\(\s*(["'])([^"'\n]+)\1\s*\)/g)) out.push(m[2]!);
+  return out;
+}
+
+/**
+ * Every module specifier a TypeScript file imports: Bun's own scanner for
+ * what runs (strings and comments are not imports), and `typeOnlyImports` for
+ * what only the compiler sees — a type import across the boundary binds the
+ * two packages as surely as a value import.
+ */
 export function importsOf(file: string): string[] {
   const loader = file.endsWith(".tsx") ? "tsx" : "ts";
   const scanner = new Bun.Transpiler({ loader });
   // The scanner refuses a shebang line; it is a comment to everything else.
   const code = readFileSync(file, "utf8").replace(/^#!.*/, "");
-  return scanner.scanImports(code).map((i) => i.path);
+  return [...new Set([...scanner.scanImports(code).map((i) => i.path), ...typeOnlyImports(code)])];
 }
 
 /** One line per violation; empty when the boundary holds. */
