@@ -343,6 +343,18 @@ sequence a real client would send (`MSG_MOVE_START_FORWARD`, heartbeats every
 in water (Swimming, below). The caller never sees the path — only progress
 and a terminal result event.
 
+Turns. Where the route bends, the walk reports the turn when it passes the
+point, as a client reports its own turn mid-run: `MSG_MOVE_SET_FACING` with
+`MOVEMENTFLAG_FORWARD`, where the body is, with the new leg's heading, and
+the heartbeat interval restarts from it. Observers run a character on along
+the last heading they were sent, so without it they carried it past each
+bend for up to a heartbeat and then snapped it back. One packet per change of
+more than about 3 degrees (0.05 rad) from the heading last sent, so a curve
+of smaller bends is reported once their sum passes that; none between a
+forced ledge's edge and its landing (`force`, below). The packets carry the
+session's own client clock (Speed changes and the clock, under
+"Movement/observation extension").
+
 Request:
 ```json
 { "token": "run-abc123", "action": "move_to", "x": -8913.2, "y": -137.6, "z": 80.9 }
@@ -1000,6 +1012,56 @@ guid (the multiple-moves sub-packet included), cleared by their unroot twins.
 While it is set the mover stops (`rooted`, above) and `move_to` is refused
 `rooted`. `face` still turns, which is right for a root; a stunned client
 cannot turn, and the module does not yet tell the two apart.
+
+Speed changes and the clock. The core changes the speed of a unit its client
+controls by packet too (`Unit::SetSpeed` -> `SendSpeedToController`):
+`SMSG_FORCE_WALK_SPEED_CHANGE` (0x2DA), `SMSG_FORCE_RUN_SPEED_CHANGE` (0x0E2),
+`SMSG_FORCE_RUN_BACK_SPEED_CHANGE` (0x0E4), `SMSG_FORCE_SWIM_SPEED_CHANGE`
+(0x0E6), `SMSG_FORCE_SWIM_BACK_SPEED_CHANGE` (0x2DC),
+`SMSG_FORCE_TURN_RATE_CHANGE` (0x2DE), `SMSG_FORCE_FLIGHT_SPEED_CHANGE`
+(0x381), `SMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE` (0x383) and
+`SMSG_FORCE_PITCH_RATE_CHANGE` (0x45C), each a packGUID, a `u32` movement
+counter, a `u8` on the run-speed packet only, and the new speed, sent to the
+controlling client alone. Observers learn the speed only from that client's
+answer, the matching ack (`CMSG_FORCE_WALK_SPEED_CHANGE_ACK` 0x2DB,
+`..._RUN_...` 0x0E3, `..._RUN_BACK_...` 0x0E5, `..._SWIM_...` 0x0E7,
+`..._SWIM_BACK_...` 0x2DD, `CMSG_FORCE_TURN_RATE_CHANGE_ACK` 0x2DF,
+`..._FLIGHT_...` 0x382, `..._FLIGHT_BACK_...` 0x384,
+`CMSG_FORCE_PITCH_RATE_CHANGE_ACK` 0x45D), which
+`WorldSession::HandleForceSpeedChangeAck` applies and relays to the set as
+`MSG_MOVE_SET_*_SPEED`; unanswered, a mounted, dismounted, slowed or ghostly
+character's observers extrapolated its run at the old speed while its
+heartbeats advanced at the new one. The module answers each for its own guid
+from the tap, the moment the server sends it (module-internal client
+behaviour; neither packet is served as an event): packGUID, the echoed
+counter, a MovementInfo, then the speed the packet named. The handler checks
+the speed of the last change it is waiting for against the server's, which
+corrects a lower one and kicks for a higher one, so the echo is the packet's,
+never a reading of the module's own. The MovementInfo is where the client is
+and what it is doing, since the handler applies it: during a walk the mover's
+point running forward (`MOVEMENTFLAG_FORWARD`, the core reads it as it reads a
+heartbeat); stopping, the stop's point with no moving flag; rooted, the root
+ack's point with `MOVEMENTFLAG_ROOT`; mid-fall the edge heartbeat restated
+(the server's position, running), which leaves the fall's start where the edge
+put it; otherwise the server's position, standing. An ack whose counter is at
+or below the last far teleport's is ignored as from the old map, as a
+client's is.
+
+Every timestamp the module sends as the client's (the movement packets, the
+acks, `CMSG_TIME_SYNC_RESP`) reads one clock of the session's own,
+milliseconds since the session was created, as a client's clock is its own and
+not the server's. The module answers `SMSG_TIME_SYNC_REQ` with the echoed
+counter and that clock, stamped as received the moment it is queued. The
+core takes the offset between the clocks from those answers
+(`HandleTimeSyncResp`, `ComputeNewClockDelta`) and adds it to every movement
+time before relaying it (`SynchronizeMovement`), so observers get the server
+time of each packet. The clock is not the server's because an offset of ~0 is
+never adopted (the core moves it only past 25ms) and reads as "no sync". The
+receive stamp is not the one the socket gives a real client's answer, the
+start of the world tick: this answer is made within the tick that sent the
+request, after the tick started, so that stamp precedes the send, the core's
+u32 round trip wraps to ~2^32 ms and the offset it takes is ~2^31 ms
+(relayed movement times ~24.8 days out).
 
 `SMSG_COMPRESSED_UPDATE_OBJECT` never appears on this stream: the core
 compresses large update packets at socket-write time, below the module's tap,
@@ -1920,7 +1982,10 @@ any other.
 
 The root acks (Roots, above) log one `action` record each, `op: "root_ack"`
 with the `opcode` sent, the echoed `counter`, the `pos` the ack carried and
-the `moveId` of the walk it stopped (0 outside a walk).
+the `moveId` of the walk it stopped (0 outside a walk). The speed-change acks
+(Speed changes and the clock, above) log one each, `op: "speed_ack"`, with the
+`opcode` sent, the echoed `counter`, the `speed` echoed, the `pos` the ack
+carried and the `moveId` of the walk it was sent during (0 outside a walk).
 
 Synthesized movement logs one `action` record per `move_to`/`stop`/`face`
 request (`force: true` on the record when the request said so) plus one per
@@ -1928,6 +1993,7 @@ dispatched movement packet (`op: "move_pkt"` with the opcode and position;
 `cause: "drop"` on the stop at a refused ledge, `cause: "drop_forced"` on the
 edge heartbeat and the `MSG_MOVE_FALL_LAND` of a forced one, or the
 `MSG_MOVE_START_SWIM` it becomes when the foot is deep water; `cause:
+"turn"` on the `MSG_MOVE_SET_FACING` of a turn (Turns, above); `cause:
 "water"` on the `MSG_MOVE_START_SWIM` / `MSG_MOVE_STOP_SWIM` of a swim
 transition, with the mesh's z there, `meshZ`, beside the body's in `pos`, and
 the `collisionHeight` the threshold came from), so the packet

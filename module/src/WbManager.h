@@ -43,6 +43,7 @@ class Player;
 // The parked-socket client end is an Asio tcp socket; forward-declare the type
 // so the header stays free of Asio. Defined in AzerothCore's Socket.h.
 #include "Socket.h" // for IoContextTcpSocket
+#include "Timer.h"  // getMSTime: the "client" clock's epoch (BenchSession)
 #include <boost/asio/io_context.hpp>
 
 namespace WrathBench
@@ -142,6 +143,7 @@ namespace WrathBench
         int64_t fallStartMs{0};     // ... since when (the edge heartbeat), and
         uint64_t fallMs{0};         // ... how long the fall takes (FallMs): the segment is timed by it, not by the run
         bool swimming{false};       // the "client" is swimming: packets carry MOVEMENTFLAG_SWIMMING, pace is swim speed
+        float sentO{0};             // orientation of the last movement packet sent (SendMovePacket): what the server and observers hold
     };
 
     // Per-token headless session. See docs/METHODOLOGY.md ("Client fidelity")
@@ -192,6 +194,13 @@ namespace WrathBench
         std::atomic<uint64_t> dropCount{0};
         std::atomic<uint64_t> eventSeq{0};
         std::atomic<bool> tearingDown{false};
+
+        // The "client" clock: milliseconds since this session was created, as
+        // a client's clock is its own and not the server's. Every timestamp the
+        // module sends as the client's (movement packets, CMSG_TIME_SYNC_RESP)
+        // reads it, so the server's time sync measures one consistent offset
+        // and translates the movement times with it (ClientMSTime, WbManager.cpp).
+        uint32_t const clientClockEpochMs{getMSTime()};
 
         // Movement synthesis (world thread only).
         MoveState move;
@@ -598,6 +607,13 @@ namespace WrathBench
         // from the root packets, SMSG_MULTIPLE_MOVES' sub-packets included.
         void OnRootPacket(BenchSession& s, WorldSession* ws, uint16_t opcode, WorldPacket const& packet);
         void AnswerForceRoot(BenchSession& s, WorldSession* ws, bool root, uint64_t guid, uint32_t counter);
+
+        // Forced speed changes, answered the way a client answers them (tap
+        // threads): each SMSG_FORCE_*_SPEED_CHANGE / *_RATE_CHANGE for the
+        // character's own guid gets the matching CMSG_..._ACK, queued the
+        // moment the server sends it. The ack is what tells observers the new
+        // speed (HandleForceSpeedChangeAck relays MSG_MOVE_SET_*_SPEED).
+        void OnSpeedChangePacket(BenchSession& s, WorldSession* ws, uint16_t opcode, WorldPacket const& packet);
 
         // Ask MSG_CORPSE_QUERY once per death, after the ghost's graveyard
         // teleport has been acked, the way a client does on becoming a ghost
