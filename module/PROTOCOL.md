@@ -1230,7 +1230,8 @@ at the top of this document.
   `reachedPos` is that edge, `dz` the fall to where it lands, and no re-plan
   runs, since the mesh has no route to plan around. Without `force` the
   walk is not dispatched: `reachedPos` is the last point before the step (the
-  edge, on the character's level), `dz` is the signed vertical step the route
+  edge, on the level the route reached it on: the character's own unless the
+  route climbed first), `dz` is the signed vertical step the route
   would have taken there, `target` echoes the requested point, and `safeFall`
   rides when non-zero. The module reports the ledge and leaves the verdict to the
   caller: the server's fall rule (free under 13.48y, then a share of max
