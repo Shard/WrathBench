@@ -368,6 +368,7 @@ namespace WrathBench
 
         // Drive synthesized movement. World thread: maps are not
         // mid-update here, so reading player state and QueuePacket are both safe.
+        TickClientAnswers();
         TickMovers(nowMs);
         TickGrounded(nowMs);
         TickRiders(nowMs);
@@ -1521,6 +1522,15 @@ namespace WrathBench
     // without them would undo the change. One the server has since dropped
     // without a packet is stripped by the core on arrival (ReadMovementInfo
     // removes each without its aura), so it can never be claimed falsely.
+    // Two deliberate gaps, until the walker can live the state: can-fly is
+    // kept but never sent, acks included (the core's Player::CanFly reads the
+    // flag from the packets, and with it set the pathfinder that plans
+    // move_to on the character stops settling route points on the ground
+    // and takes straight-line shortcuts off the mesh, PathGenerator and
+    // UpdateAllowedPositionZ, while the walker only walks); and water walking
+    // is dropped from a packet that swims (the walker swims a water-walking
+    // body under the surface where a client runs on it, and no client sends
+    // the two together).
     //
     // AppendMovementInfo is the MovementInfo alone, shared with the forced-root
     // acks (AnswerForceRoot), the speed-change acks (OnSpeedChangePacket) and
@@ -1531,12 +1541,12 @@ namespace WrathBench
     static void AppendMovementInfo(WorldPacket& p, BenchSession& s, Player* player, uint32 moveFlags,
         float x, float y, float z, float o, Transport* transport)
     {
-        moveFlags |= s.stateMoveFlags.load();
+        moveFlags |= s.stateMoveFlags.load() & ~uint32(MOVEMENTFLAG_CAN_FLY);
         if (transport)
             moveFlags |= MOVEMENTFLAG_ONTRANSPORT;
         bool const swimming = !transport && (s.move.active ? s.move.swimming : player->IsInWater());
         if (swimming)
-            moveFlags |= MOVEMENTFLAG_SWIMMING;
+            moveFlags = (moveFlags | MOVEMENTFLAG_SWIMMING) & ~uint32(MOVEMENTFLAG_WATERWALKING);
         p << uint32(moveFlags);
         p << uint16(0);             // flags2
         p << uint32(ClientMSTime(s));
@@ -5475,7 +5485,7 @@ namespace WrathBench
     {
         MoveState const& m = s.move;
         bool const rooted = s.rooted.load();
-        bool const atMover = m.active && !m.inFall;
+        bool const atMover = m.active && !m.inFall && player->IsInWorld();
         bool const running = m.active && !m.stopping && !rooted;
         AckPose a;
         a.x = atMover ? m.curX : player->GetPositionX();
@@ -5488,21 +5498,30 @@ namespace WrathBench
         return a;
     }
 
-    // The ack's body, as HandleForceSpeedChangeAck reads it: packGUID, the
-    // echoed u32 counter, a MovementInfo (ClientPoseForAck), then the speed
-    // the packet named, echoed as a client echoes it. The handler checks the
-    // speed only on the last of the changes it is waiting for, against the
-    // server's current speed, which is then the speed that last packet
-    // carried (every speed change of a player is a forced one, so none lands
-    // without a packet); it corrects a lower speed and kicks for a higher one,
-    // so the echo is never the module's own reading. An ack whose counter is
-    // at or below the last far teleport's is ignored as from the old map, as
-    // a client's is.
+    // Each change's movement type, as HandleForceSpeedChangeAck maps its ack.
+    static UnitMoveType SpeedChangeMoveType(uint16 opcode)
+    {
+        switch (opcode)
+        {
+            case SMSG_FORCE_WALK_SPEED_CHANGE:        return MOVE_WALK;
+            case SMSG_FORCE_RUN_SPEED_CHANGE:         return MOVE_RUN;
+            case SMSG_FORCE_RUN_BACK_SPEED_CHANGE:    return MOVE_RUN_BACK;
+            case SMSG_FORCE_SWIM_SPEED_CHANGE:        return MOVE_SWIM;
+            case SMSG_FORCE_SWIM_BACK_SPEED_CHANGE:   return MOVE_SWIM_BACK;
+            case SMSG_FORCE_TURN_RATE_CHANGE:         return MOVE_TURN_RATE;
+            case SMSG_FORCE_FLIGHT_SPEED_CHANGE:      return MOVE_FLIGHT;
+            case SMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE: return MOVE_FLIGHT_BACK;
+            default:                                  return MOVE_PITCH_RATE;
+        }
+    }
+
+    // The tap's half: read the change and queue its answer
+    // (BenchSession::pendingAnswers) for the next world tick, which sends it
+    // (SendSpeedChangeAck). Only the character's own guid is answered.
     void Manager::OnSpeedChangePacket(BenchSession& s, WorldSession* ws, uint16_t opcode, WorldPacket const& packet)
     {
-        uint16 const ackOpcode = SpeedChangeAckOpcode(opcode);
         Player* player = ws->GetPlayer();
-        if (!ackOpcode || !player)
+        if (!SpeedChangeAckOpcode(opcode) || !player)
             return;
         uint64 guid = 0;
         uint32 counter = 0;
@@ -5522,8 +5541,52 @@ namespace WrathBench
         }
         if (guid != player->GetGUID().GetRawValue())
             return; // a vehicle or a charmed mover: never driven by the module
+        std::lock_guard<std::mutex> lock(s.answerMutex);
+        s.pendingAnswers.push_back({ opcode, counter, speed });
+    }
 
+    // The ack's body, as HandleForceSpeedChangeAck reads it: packGUID, the
+    // echoed u32 counter, a MovementInfo (ClientPoseForAck), then the speed
+    // the packet named, echoed as a client echoes it, never the module's own
+    // reading. An ack whose counter is at or below the last far teleport's is
+    // ignored as from the old map, as a client's is.
+    //
+    // The handler checks the speed only on the ack that brings the core's
+    // count of unanswered changes of that type (Player::m_forced_speed_changes)
+    // to zero, against the server's speed when it reads the ack: it corrects
+    // a lower one and kicks the player ("Incorrect speed") for a higher one.
+    // Not every speed change bumps that count: while the character is not
+    // under its client's control (feared, confused, charmed, a disabled
+    // mover) Unit::SetSpeed sends the creature opcode to the set instead and
+    // the count stays where it was. So a change that lands between the
+    // forced change and its ack's arrival can leave the last ack echoing a
+    // speed the server no longer has, and the session is kicked for it. The
+    // ack is therefore judged here, on the world tick, where the core reads
+    // it at the start of the next map update: one that would be the last of
+    // its type outstanding (counting those already sent this tick, which the
+    // core has not read yet) and whose speed is no longer the server's is
+    // withheld. The count then stays one high, which only means the core
+    // skips the check on the next change's ack of that type: lenient, never
+    // a kick. Everything else is sent as the client would.
+    void Manager::SendSpeedChangeAck(BenchSession& s, WorldSession* ws, Player* player, uint16_t opcode, uint32_t counter,
+        float speed, uint8_t alreadySent)
+    {
+        uint16 const ackOpcode = SpeedChangeAckOpcode(opcode);
+        UnitMoveType const type = SpeedChangeMoveType(opcode);
+        uint8 const outstanding = player->m_forced_speed_changes[type];
+        bool const last = outstanding <= alreadySent + 1;
+        float const serverSpeed = player->GetSpeed(type);
         AckPose const a = ClientPoseForAck(s, player);
+        if (last && std::fabs(serverSpeed - speed) > 0.01f)
+        {
+            Audit(s, "action", Json::Writer().Add("op", "move_ack").Add("kind", "speed")
+                .Add("opcode", SpeedChangeAckName(ackOpcode))
+                .Add("counter", counter).Add("speed", (double)speed)
+                .Add("withheld", true).Add("serverSpeed", (double)serverSpeed)
+                .Add("moveId", a.moveId)
+                .Raw("pos", PosJson(a.x, a.y, a.z, a.o)).Str());
+            return;
+        }
         WorldPacket* p = new WorldPacket(ackOpcode, 8 + 4 + 4 + 2 + 4 + 16 + 8 + 16 + 4 + 1 + 4 + 4 + 4);
         *p << player->GetPackGUID();
         *p << uint32(counter);
@@ -5535,6 +5598,57 @@ namespace WrathBench
             .Add("counter", counter).Add("speed", (double)speed)
             .Add("moveId", a.moveId)
             .Raw("pos", PosJson(a.x, a.y, a.z, a.o)).Str());
+    }
+
+    // The world tick's half of the deferred answers (BenchSession::
+    // pendingAnswers), in the order the server asked. A time-sync response
+    // carries the counter and the client clock (ClientMSTime) now, stamped
+    // as received now: the request's send stamp (SendTimeSync, set after the
+    // tap returned) always exists by this tick and precedes it, so the core's
+    // round trip (HandleTimeSyncResp, a u32 difference) never wraps, which it
+    // did when the answer was stamped inside the tap a millisecond boundary
+    // before the send. Every live session is served, in a map or not: a far
+    // teleport's requests (ResetTimeSync, SendTimeSync on arrival) and the
+    // session's packet queue keep going while the character is between maps.
+    void Manager::TickClientAnswers()
+    {
+        std::vector<std::shared_ptr<BenchSession>> sessions;
+        {
+            std::lock_guard<std::mutex> lock(_sessMutex);
+            for (auto& [token, s] : _byToken)
+                if (!s->tearingDown.load())
+                    sessions.push_back(s);
+        }
+        for (auto& s : sessions)
+        {
+            std::vector<BenchSession::PendingAnswer> answers;
+            {
+                std::lock_guard<std::mutex> lock(s->answerMutex);
+                answers.swap(s->pendingAnswers);
+            }
+            if (answers.empty())
+                continue;
+            if (!s->ws || sWorldSessionMgr->FindSession(s->accountId) != s->ws)
+                continue;
+            uint8 sent[MAX_MOVE_TYPE] = {};
+            for (auto const& a : answers)
+            {
+                if (a.opcode == SMSG_TIME_SYNC_REQ)
+                {
+                    WorldPacket tmp(CMSG_TIME_SYNC_RESP, 8);
+                    tmp << a.counter << uint32(ClientMSTime(*s));
+                    s->ws->QueuePacket(new WorldPacket(std::move(tmp), std::chrono::steady_clock::now()));
+                    continue;
+                }
+                Player* player = s->ws->GetPlayer();
+                if (!player)
+                    continue;
+                UnitMoveType const type = SpeedChangeMoveType(a.opcode);
+                SendSpeedChangeAck(*s, s->ws, player, a.opcode, a.counter, a.speed, sent[type]);
+                if (sent[type] < 255)
+                    ++sent[type];
+            }
+        }
     }
 
     // Forced movement-state changes. A unit its client controls gains or
@@ -5653,7 +5767,10 @@ namespace WrathBench
     }
 
     // The flag first, then the ack, so the ack (AppendMovementInfo) carries
-    // the new state as a client's does. The ack's MovementInfo is
+    // the new state as a client's does, less AppendMovementInfo's two
+    // deliberate gaps: a can-fly ack is still sent (it tells observers, and
+    // clears the server's pending flight change) but says the character
+    // cannot fly, and a water-walk ack sent mid-swim drops the flag. The ack's MovementInfo is
     // ClientPoseForAck's, as the speed acks'. Only while the character is its
     // own mover: HandleMoveFlagChangeOpcode writes the flags onto whatever
     // unit the session moves without checking the guid, so an ack for the
@@ -5788,26 +5905,33 @@ namespace WrathBench
         else
             whitelisted = DecodeEvent(*s, ws, opcode, packet, name, dataJson);
 
-        // Answer time sync as a client does: the counter and the client's own
-        // clock (ClientMSTime) the moment it handles the request. The core
-        // takes the round trip as the response's receive time less the
-        // request's send time (HandleTimeSyncResp), so the receive time is
-        // stamped now, when this "client"'s answer arrives. Not
-        // GameTime::Now(), the socket's stamp for a client's answer: that is
-        // the steady time at the start of the world tick, and this answer is
-        // made within the very tick that sent the request, after its start, so
-        // the u32 difference wrapped to ~2^32 ms, half of it was taken as lag,
-        // and the session's clock offset became ~2^31 ms: every relayed
-        // movement time ~24.8 days off, or the fallback, as the samples fell.
+        // Time sync, answered as a client answers it: after a round trip, on
+        // the module's next world tick (TickClientAnswers), with the client's
+        // own clock (ClientMSTime) then and stamped as received then. Not
+        // here: the tap runs inside SendPacket, before SendTimeSync stamps the
+        // request's send time, so an answer stamped here could precede it
+        // across a millisecond boundary and the core's u32 round trip
+        // (HandleTimeSyncResp) wrapped to ~2^32 ms, its clock offset to ~2^31
+        // ms (relayed movement times ~24.8 days out). Not GameTime::Now(), the
+        // socket's stamp for a real client's answer, for the same reason: the
+        // start of the tick that sent the request precedes the send.
         if (opcode == SMSG_TIME_SYNC_REQ)
         {
             WorldPacket copy(packet);
             uint32 counter = 0;
             if (copy.size() >= 4) copy >> counter;
-            WorldPacket tmp(CMSG_TIME_SYNC_RESP, 8);
-            tmp << counter << uint32(ClientMSTime(*s));
-            ws->QueuePacket(new WorldPacket(std::move(tmp), std::chrono::steady_clock::now()));
+            std::lock_guard<std::mutex> lock(s->answerMutex);
+            s->pendingAnswers.push_back({ SMSG_TIME_SYNC_REQ, counter, 0.0f });
         }
+
+        // A new world, or the first: the client starts its movement state
+        // afresh and the server restates what still holds (the auras' own
+        // packets, SMSG_MULTIPLE_MOVES) once the character is added to the
+        // map, after this packet. An unset the server suppressed while the
+        // character was out of the world (Unit::SetWaterWalking and the rest
+        // send nothing then) would otherwise leave a stale bit.
+        if (opcode == SMSG_NEW_WORLD || opcode == SMSG_LOGIN_VERIFY_WORLD)
+            s->stateMoveFlags.store(0);
 
         // Forced and spline roots: the rooted state, and the client's ack.
         if (opcode == SMSG_FORCE_MOVE_ROOT || opcode == SMSG_FORCE_MOVE_UNROOT

@@ -275,6 +275,26 @@ namespace WrathBench
         // Written on tap threads, read on the world thread, hence atomic.
         std::atomic<uint32_t> stateMoveFlags{0};
 
+        // Answers this "client" owes and sends on the module's next world
+        // tick rather than inside the packet tap (Manager::TickClientAnswers),
+        // in the order the server's packets arrived: CMSG_TIME_SYNC_RESP and
+        // the forced speed-change acks. The tap runs inside
+        // WorldSession::SendPacket, before the core has finished with the
+        // packet (SendTimeSync stamps its send time only after SendPacket
+        // returns), and an ack must be judged against the server's state when
+        // the core will read it, not when it was asked for. The world tick
+        // runs after the session and map updates, so an answer queued then is
+        // read at the start of the next one: a real round trip. Pushed on tap
+        // threads, drained on the world thread, hence the mutex.
+        struct PendingAnswer
+        {
+            uint16_t opcode{0};   // SMSG_TIME_SYNC_REQ or the SMSG_FORCE_* change being answered
+            uint32_t counter{0};
+            float speed{0.0f};    // the speed change's new speed, echoed
+        };
+        std::mutex answerMutex;
+        std::vector<PendingAnswer> pendingAnswers;
+
         // Teleport-ack pacing (world thread only): when the last ack for a
         // still-pending teleport was queued, 0 when none is pending. See
         // TickTeleportAcks.
@@ -625,6 +645,14 @@ namespace WrathBench
         // moment the server sends it. The ack is what tells observers the new
         // speed (HandleForceSpeedChangeAck relays MSG_MOVE_SET_*_SPEED).
         void OnSpeedChangePacket(BenchSession& s, WorldSession* ws, uint16_t opcode, WorldPacket const& packet);
+
+        // Send the answers the tap queued (BenchSession::pendingAnswers):
+        // time-sync responses and speed-change acks, world thread only, for
+        // every live session whether or not its character is in a map (a far
+        // teleport's time sync included).
+        void TickClientAnswers();
+        void SendSpeedChangeAck(BenchSession& s, WorldSession* ws, Player* player, uint16_t opcode, uint32_t counter,
+            float speed, uint8_t alreadySent);
 
         // Forced movement-state changes, answered the same way (tap threads):
         // water walk, feather fall, hover and can-fly, each set/unset packet

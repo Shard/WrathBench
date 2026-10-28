@@ -1032,12 +1032,21 @@ answer, the matching ack (`CMSG_FORCE_WALK_SPEED_CHANGE_ACK` 0x2DB,
 `MSG_MOVE_SET_*_SPEED`; unanswered, a mounted, dismounted, slowed or ghostly
 character's observers extrapolated its run at the old speed while its
 heartbeats advanced at the new one. The module answers each for its own guid
-from the tap, the moment the server sends it (module-internal client
-behaviour; neither packet is served as an event): packGUID, the echoed
-counter, a MovementInfo, then the speed the packet named. The handler checks
-the speed of the last change it is waiting for against the server's, which
-corrects a lower one and kicks for a higher one, so the echo is the packet's,
-never a reading of the module's own. The MovementInfo is where the client is
+on its next world tick, a round trip after the server sent it, in the order
+asked (module-internal client behaviour; neither packet is served as an
+event): packGUID, the echoed counter, a MovementInfo, then the speed the
+packet named, never a reading of the module's own. The world tick runs after
+the session and map updates, so the core reads the ack at the start of the
+next one. The handler checks the speed only on the ack that brings its count
+of unanswered changes of that type (`Player::m_forced_speed_changes`) to
+zero, against the server's speed then: it corrects a lower one and kicks the
+player for a higher one. A change made while the character is not under its
+client's control (feared, confused, charmed) goes to the set as the creature
+opcode and leaves that count alone, so the last ack can echo a speed the
+server no longer has. The module therefore withholds an ack that would be the
+last of its type outstanding (counting the ones it sent this tick) when its
+speed is no longer the server's: the count stays one high, which only makes
+the core skip the check on the next ack of that type. The MovementInfo is where the client is
 and what it is doing, since the handler applies it: during a walk the mover's
 point running forward (`MOVEMENTFLAG_FORWARD`, the core reads it as it reads a
 heartbeat); stopping, the stop's point with no moving flag; rooted, the root
@@ -1066,31 +1075,42 @@ change on a can-fly ack whose counter matches, and relays `MSG_MOVE_WATER_WALK`,
 `MSG_MOVE_FEATHER_FALL`, `MSG_MOVE_HOVER` or `MSG_MOVE_UPDATE_CAN_FLY` to the
 set; unanswered, every ghost's observers were never told it walks on water.
 The module keeps the four flags as this client's state
-(`MOVEMENTFLAG_WATERWALKING`, `_FALLING_SLOW`, `_HOVER`, `_CAN_FLY`), sets or
-clears the one the packet
-names, then answers for its own guid from the tap (module-internal, as the
+(`MOVEMENTFLAG_WATERWALKING`, `_FALLING_SLOW`, `_HOVER`, `_CAN_FLY`), clears
+them on `SMSG_NEW_WORLD` and `SMSG_LOGIN_VERIFY_WORLD` (the server restates
+what still holds once the character is in the map, and sends nothing for an
+unset made while it was out of one), sets or clears the one the packet names,
+then answers for its own guid from the tap (module-internal, as the
 speed acks; none of these packets is served as an event): packGUID, the echoed
 counter, the MovementInfo as the speed acks build it (the new flag on it), and
 the `u32` the handler reads and never uses (1 set, 0 unset). Every movement
 packet and ack after carries the flags, since the core replaces its record of
 them with each packet's; one the server dropped without a packet is stripped
-on arrival (`ReadMovementInfo` removes each without its aura). The
+on arrival (`ReadMovementInfo` removes each without its aura). Two
+deliberate gaps, until the walker can live the state: `MOVEMENTFLAG_CAN_FLY`
+is kept but never sent, the can-fly ack included (it is still sent: it tells
+observers and clears the pending flight change), because the core's
+pathfinder plans `move_to` on the character and, with the flag held
+(`Player::CanFly`), stops settling route points on the ground
+(`WorldObject::UpdateAllowedPositionZ`) and takes a straight-line shortcut
+where the start or target is more than 7y off the mesh (`PathGenerator`),
+while the walker has no flight; and `MOVEMENTFLAG_WATERWALKING` is dropped
+from every packet that swims, since the walker swims a water-walking body
+under the surface (below) and no client sends the two together. The
 `SMSG_SPLINE_MOVE_` twins of the first three (sent while the client does not
 control the unit, which the server then flags itself) update the state and
 want no ack. No ack is sent while the character moves another unit (a vehicle,
 a charm): the handler writes the flags onto whatever the session moves.
 
-With the server now holding the flags, the core's pathfinder, which plans
-on the character, reads two of them as it would a real client's: over land a
-hovering character's route points are raised by its hover height (1y for a
-player) and so walked there (`WorldObject::UpdateAllowedPositionZ`, from
-`PathGenerator::NormalizePath`), and a character that can fly has its route
-points only raised to the ground, never lowered, and gets a straight-line
-shortcut where the start or target is more than 7y off the mesh, which the
-module refuses as off the mesh, as it refused the path it got before. Water
-walking is kept but not lived: the walker's water test (Swimming, above) does
-not read it, so a water-walking body (every ghost, Water Walking, Levitate) is
-still swum under the surface where a client runs on it. `SMSG_MOVE_KNOCK_BACK` (0x0EF) is not answered: a client's
+With the server now holding hover, the core's pathfinder reads it as it
+would a real client's: over land a hovering character's route points are
+raised by its hover height (1y for a player) and so walked there
+(`WorldObject::UpdateAllowedPositionZ`, from `PathGenerator::NormalizePath`).
+Water walking is kept but not lived, a known gap: the walker's water test
+(Swimming, above) does not read it, so a water-walking body (every ghost,
+Water Walking, Levitate) is still swum under the surface at swim speed where
+a client runs on it at run speed.
+
+`SMSG_MOVE_KNOCK_BACK` (0x0EF) is not answered: a client's
 `CMSG_MOVE_KNOCK_BACK_ACK` is the start of the arc (`MOVEMENTFLAG_FALLING`
 and the launch velocity, which the handler relays to observers as
 `MSG_MOVE_KNOCK_BACK`), and owes the arc's packets and a `MSG_MOVE_FALL_LAND`
@@ -1101,18 +1121,21 @@ observers see no knockback; nothing on the server waits on the ack.
 Every timestamp the module sends as the client's (the movement packets, the
 acks, `CMSG_TIME_SYNC_RESP`) reads one clock of the session's own,
 milliseconds since the session was created, as a client's clock is its own and
-not the server's. The module answers `SMSG_TIME_SYNC_REQ` with the echoed
-counter and that clock, stamped as received the moment it is queued. The
-core takes the offset between the clocks from those answers
+not the server's. The module answers `SMSG_TIME_SYNC_REQ` on its next world
+tick, a round trip later, with the echoed counter and that clock then,
+stamped as received the moment it is queued. The core takes the offset between the clocks from those answers
 (`HandleTimeSyncResp`, `ComputeNewClockDelta`) and adds it to every movement
 time before relaying it (`SynchronizeMovement`), so observers get the server
 time of each packet. The clock is not the server's because an offset of ~0 is
 never adopted (the core moves it only past 25ms) and reads as "no sync". The
-receive stamp is not the one the socket gives a real client's answer, the
-start of the world tick: this answer is made within the tick that sent the
-request, after the tick started, so that stamp precedes the send, the core's
-u32 round trip wraps to ~2^32 ms and the offset it takes is ~2^31 ms
-(relayed movement times ~24.8 days out).
+answer waits for the tick because the tap runs inside `SendPacket`, before
+`SendTimeSync` stamps the request's send time: an answer stamped there could
+precede that stamp across a millisecond boundary, the core's u32 round trip
+then wraps to ~2^32 ms and the offset it takes is ~2^31 ms (relayed movement
+times ~24.8 days out). For the same reason the receive stamp is not the one
+the socket gives a real client's answer, the start of the world tick, which
+precedes a send made within it. Sessions whose character is between maps are
+answered too: a far teleport's arrival resets the sync and asks again.
 
 `SMSG_COMPRESSED_UPDATE_OBJECT` never appears on this stream: the core
 compresses large update packets at socket-write time, below the module's tap,
@@ -2038,7 +2061,9 @@ movement-state acks (Speed changes and the clock, above) log one each, `op:
 "move_ack"`, with the `kind` (`speed`, `water_walk`, `feather_fall`, `hover`,
 `can_fly`), the `opcode` sent, the echoed `counter`, the `speed` echoed
 (`speed`) or whether the flag was set (`apply`, the others), the `pos` the ack
-carried and the `moveId` of the walk it was sent during (0 outside a walk).
+carried and the `moveId` of the walk it was sent during (0 outside a walk). A
+speed ack withheld because the server's speed has moved on is logged with
+`withheld: true` and that `serverSpeed`, and nothing is sent.
 
 Synthesized movement logs one `action` record per `move_to`/`stop`/`face`
 request (`force: true` on the record when the request said so) plus one per
