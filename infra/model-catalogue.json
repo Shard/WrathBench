@@ -92,6 +92,12 @@
     { "id": "beam", "name": "Beam", "company": "Reflection", "match": ["reflection/*", "beam-*"] }
   ],
   "models": {
+    "beam-free": {
+      "family": "beam",
+      "name": "Beam 1.0",
+      "weights": "open",
+      "source": "OpenCode Go lists Beam Free (beam-free, free for a limited time, limited regions) at https://opencode.ai/docs/go/ (read 2026-10-28); Reflection's open checkpoint is huggingface.co/reflection/Beam-1.0-501B-A23B (Apache-2.0)"
+    },
     "cat-jam-free": {
       "family": "beam",
       "name": "Cat Jam (stealth; Beam preview)",
@@ -365,6 +371,12 @@
       "name": "Hy3",
       "weights": "open",
       "source": "https://huggingface.co/tencent/Hy3 (Apache-2.0); that this Zen id serves Hy3 and not its preview is models.dev's listing, the serving provider's registry"
+    },
+    "iceman-contributor-free": {
+      "family": null,
+      "name": "Iceman Contributor (stealth)",
+      "weights": "unknown",
+      "source": "no developer has revealed it; OpenCode Go lists it as Iceman Contributor Free (free for a limited time) at https://opencode.ai/docs/go/, checked 2026-10-28"
     },
     "inception/mercury-2.5": {
       "family": "mercury",
