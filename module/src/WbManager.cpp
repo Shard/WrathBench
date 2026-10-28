@@ -2186,6 +2186,17 @@ namespace WrathBench
             return dx * dx + dy * dy <= 16.0f; // navmesh end within 4y of the request, 2D
         };
 
+        // The route the mesh has toward the request when it has none to it:
+        // the core's partial path as far as it got, else the planned start
+        // alone. A path_incomplete hands it to TryEdgeDrop.
+        std::vector<WbVec> partial;
+        auto incomplete = [&]() {
+            r.status = "path_incomplete";
+            if (!partial.empty())
+                TryEdgeDrop(player, partial, x, y, z, reqZ, force, r);
+            return r;
+        };
+
         if (IsCompletePath(type, pts))
         {
             if (!endpointOk(gen))
@@ -2247,12 +2258,15 @@ namespace WrathBench
                 {
                     r.hasReached = true;
                     r.reachedX = mid.x; r.reachedY = mid.y; r.reachedZ = mid.z;
+                    for (size_t i = 0; i < got; ++i)
+                        partial.push_back({pts[i].x, pts[i].y, pts[i].z});
                 }
             }
             else
             {
                 r.hasReached = true;
                 r.reachedX = player->GetPositionX(); r.reachedY = player->GetPositionY(); r.reachedZ = player->GetPositionZ();
+                partial.push_back({sx, sy, sz});
             }
             // Neither the core's path nor the subdivision reached the end:
             // the module's planner (WbNav::PlannerQuery) searches the whole
@@ -2261,10 +2275,7 @@ namespace WrathBench
             // room to finish. Only what it cannot route is path_incomplete; an
             // end known to be on an island is not searched for at all.
             if (r.hasReached && r.islandPolys && !r.hasEndReachable)
-            {
-                r.status = "path_incomplete";
-                return r;
-            }
+                return incomplete();
             if (r.hasReached)
             {
                 float endPt[3] = { y, z, x };
@@ -2275,17 +2286,11 @@ namespace WrathBench
                 std::vector<WbVec> planned;
                 if (!plan || !startRef || !endRef
                     || !PlanAround(player, navMesh, plan, base, startRef, endRef, startPt, endPt, planned, &why, &polys))
-                {
-                    r.status = "path_incomplete";
-                    return r;
-                }
+                    return incomplete();
                 WbVec const& last = planned.back();
                 float ex = last.x - x, ey = last.y - y;
                 if (ex * ex + ey * ey > 16.0f) // endpointOk: within 4y of the end, 2D
-                {
-                    r.status = "path_incomplete";
-                    return r;
-                }
+                    return incomplete();
                 r.hasReached = false;
                 r.longPlan = true;
                 r.longPolys = uint32(polys);
@@ -2476,6 +2481,260 @@ namespace WrathBench
             segs = std::move(again);
         }
         finish("failed", "drop");
+    }
+
+    // ------------------------------------------------- the edge drop
+    // The mesh is built per connected surface, and a plateau whose sides are
+    // too steep to walk is a component of its own: no mesh route from it
+    // contains a ledge step, so the drop guard never sees one and every move
+    // down is path_incomplete (a ghost released on the Skettis plateau, 143y
+    // over its corpse, was refused every way down for two days). A client's
+    // character walks off any edge. When the request lies below the end of
+    // the mesh's route, the module walks on from that end toward the request
+    // over the ground a client walks, to the edge where the ground falls
+    // away, falls from there to the surface below, and routes on from the
+    // landing to the request (operator decision, 2026-10-28). The fall is a
+    // segment like a mesh ledge, settled by the same guard (SettleRoute) and
+    // walked by the same packets (TickMover): `drop` unforced, walked forced.
+    //
+    // The ground is sampled every EDGE_SAMPLE_STEP yards: the step at which
+    // the guard's two bounds meet (DROP_MIN_DZ over DROP_SLOPE, 1.67y), so a
+    // pair of samples is a ledge exactly when the slope between them is
+    // steeper than the guard's ramp, and no lip the guard would call one
+    // passes between two samples.
+    static constexpr float EDGE_SAMPLE_STEP = DROP_MIN_DZ / DROP_SLOPE;
+
+    // The surface a character over (x, y) stands or lands on, looking down
+    // from `top`: the first solid surface Map::GetHeight finds (terrain, vmap
+    // and game-object floors, the geometry a client has), or the water over
+    // it when there is any (the mesh's water polygons lie on the surface, as
+    // FootUnderSurface reads the liquid). INVALID_HEIGHT when there is no
+    // surface within `search`. `climb` when the terrain itself rises over
+    // `top` there: GetHeight does not see terrain over the point it looks
+    // from, and would answer with what lies under it.
+    static float SurfaceUnder(Player* player, float x, float y, float top, float search, bool* climb)
+    {
+        Map* map = player->GetMap();
+        *climb = map->GetGridHeight(x, y) > top;
+        if (*climb)
+            return INVALID_HEIGHT;
+        float const g = map->GetHeight(player->GetPhaseMask(), x, y, top, true, search);
+        if (g <= INVALID_HEIGHT)
+            return INVALID_HEIGHT;
+        LiquidData const liquid = map->GetLiquidData(player->GetPhaseMask(), x, y, g, player->GetCollisionHeight(), {});
+        if (liquid.Status != LIQUID_MAP_NO_WATER && liquid.Level > INVALID_HEIGHT && liquid.DepthLevel > INVALID_HEIGHT
+            && liquid.Level > g && liquid.Level <= top)
+            return liquid.Level;
+        return g;
+    }
+
+    void Manager::TryEdgeDrop(Player* player, std::vector<WbVec> const& partial, float x, float y, float z, float reqZ,
+        bool force, PathResolve& r)
+    {
+        WbVec const from = partial.back();
+        // Only a descent: a request at or above the route's end (within the
+        // guard's own step) is not below any edge of it.
+        if (!(z < from.z - DROP_MIN_DZ))
+            return;
+        PathResolve::EdgeDrop ed;
+        ed.tried = true;
+        ed.from = from;
+        auto refuse = [&](char const* reason) {
+            ed.reason = reason;
+            r.edgeDrop = ed;
+        };
+
+        float const dx = x - from.x, dy = y - from.y;
+        float const dist = std::sqrt(dx * dx + dy * dy);
+        if (dist < 0.01f)
+            return refuse("no_direction");
+        float const ux = dx / dist, uy = dy / dist;
+        Map* map = player->GetMap();
+        uint32 const phase = player->GetPhaseMask();
+        float const body = player->GetCollisionHeight();
+        // The body's line between two points: a wall, a model or a
+        // game-object in the way (Map::isInLineOfSight; terrain is not in
+        // it, and is the samples' own ground reads).
+        auto clear = [&](WbVec const& a, float az, WbVec const& b, float bz) {
+            return map->isInLineOfSight(a.x, a.y, az + body, b.x, b.y, bz + body, phase,
+                LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
+        };
+
+        // The walk on: sample by sample from the route's end toward the
+        // request, each sample's ground read from just over the last one
+        // (FootUnderSurface's EDGE_LOOK_OFFSET), every pair a walkable slope
+        // (IsDropSegment) with nothing in the body's way, until a pair falls
+        // away: the first of it is the edge. A rise the look does not reach
+        // is a climb and ends the attempt — a step up is never taken. The
+        // walk on is bounded by START_SNAP_RADIUS, the straight leg the
+        // module already walks onto the mesh from an off-mesh start, here in
+        // the other direction, and never passes the request.
+        std::vector<WbVec> walk;
+        WbVec prev = from;
+        float travelled = 0.0f;
+        WbVec foot;
+        for (;;)
+        {
+            if (travelled >= dist || travelled > START_SNAP_RADIUS)
+                return refuse("no_edge");
+            float const t = std::min(travelled + EDGE_SAMPLE_STEP, dist);
+            WbVec next{ from.x + ux * t, from.y + uy * t, 0.0f };
+            float const top = prev.z + EDGE_LOOK_OFFSET;
+            bool climb = false;
+            // The look reaches the request's own height and the default
+            // search past it, so a fall toward the request finds its floor.
+            float const s = SurfaceUnder(player, next.x, next.y, top, std::max(DEFAULT_HEIGHT_SEARCH, top - z + DEFAULT_HEIGHT_SEARCH), &climb);
+            if (climb)
+                return refuse("climb");
+            if (s <= INVALID_HEIGHT)
+                return refuse("no_surface");
+            next.z = s;
+            float dz = 0.0f;
+            if (IsDropSegment(prev, next, &dz))
+            {
+                foot = next;
+                break;
+            }
+            if (!clear(prev, prev.z, next, next.z))
+                return refuse("blocked");
+            walk.push_back(next);
+            prev = next;
+            travelled = t;
+        }
+        WbVec const edge = prev;
+        ed.walkYards = travelled;
+
+        // The fall: past the edge the surface is read from the edge's height
+        // at each sample (FootUnderSurface's look), the body's line held at
+        // that height clear of models (a client falls through the air, not
+        // through an overhang), and the fall lands where the surface stops
+        // falling away — the first sample whose next is no longer a ledge
+        // below it, or the last before the request. A cliff that is not
+        // sheer is fallen down to its foot, not to a ledge of its face.
+        float const fallTop = edge.z + EDGE_LOOK_OFFSET;
+        float const fallSearch = std::max(DEFAULT_HEIGHT_SEARCH, fallTop - z + DEFAULT_HEIGHT_SEARCH);
+        WbVec landing = foot;
+        if (!clear(edge, edge.z, landing, edge.z))
+            return refuse("blocked");
+        for (float t = travelled + EDGE_SAMPLE_STEP; t < dist; )
+        {
+            t = std::min(t + EDGE_SAMPLE_STEP, dist);
+            WbVec next{ from.x + ux * t, from.y + uy * t, 0.0f };
+            bool climb = false;
+            float const s = SurfaceUnder(player, next.x, next.y, fallTop, fallSearch, &climb);
+            if (climb || s <= INVALID_HEIGHT)
+                break; // land before the rise, or before a hole in the world
+            next.z = s;
+            float dz = 0.0f;
+            if (!IsDropSegment(landing, next, &dz) || dz > 0.0f)
+                break;
+            if (!clear(landing, edge.z, next, edge.z))
+                return refuse("blocked");
+            landing = next;
+        }
+        ed.hasEdge = true;
+        ed.edge = edge;
+        ed.landing = landing;
+        // Every sample of the fall lies a ledge below the one before it, so
+        // the edge-to-landing segment is one the guard calls a ledge, and is
+        // walked as one: a heartbeat at the edge, the landing at the foot.
+        float fallDz = 0.0f;
+        if (!IsDropSegment(edge, landing, &fallDz) || fallDz >= 0.0f)
+            return refuse("not_a_ledge");
+
+        // The leg below, from the landing to the request, the way a move from
+        // the landing would start: on the mesh, else from the mesh nearest it
+        // within START_SNAP_RADIUS, with the straight walk onto it — so the
+        // landing is a point the next move can start from, and a landing on a
+        // cliff's face, whose nearest mesh is the plateau, is a climb the
+        // one-ledge rule below refuses. The core's path, else the module's
+        // planner, as ResolvePathAt; it must end within 4y of the request.
+        WbVec start = landing;
+        {
+            PathGenerator probe(player);
+            probe.CalculatePath(landing.x, landing.y, landing.z, landing.x, landing.y, landing.z, false);
+            if (probe.GetPathType() & (PATHFIND_NOT_USING_PATH | PATHFIND_FARFROMPOLY_START))
+            {
+                if (!NearestMeshPoint(player, landing.x, landing.y, landing.z, START_SNAP_RADIUS, start))
+                    return refuse("landing_off_mesh");
+                ed.landingSnap = true;
+            }
+        }
+        auto nearEnd = [&](WbVec const& v) {
+            float const ex = v.x - x, ey = v.y - y;
+            return ex * ex + ey * ey <= 16.0f; // endpointOk: within 4y of the end, 2D
+        };
+        std::vector<WbVec> below;
+        {
+            PathGenerator gen(player);
+            if (gen.CalculatePath(start.x, start.y, start.z, x, y, z, false)
+                && IsCompletePath(gen.GetPathType(), gen.GetPath()))
+            {
+                G3D::Vector3 const& end = gen.GetActualEndPosition();
+                if (nearEnd({ end.x, end.y, end.z }))
+                    for (auto const& v : gen.GetPath())
+                        below.push_back({ v.x, v.y, v.z });
+            }
+        }
+        if (below.empty())
+        {
+            auto& mmap = map->GetMapCollisionData().GetMMapData();
+            dtNavMesh const* navMesh = mmap.GetNavMesh();
+            dtNavMeshQuery const* query = mmap.GetNavMeshQuery();
+            dtNavMeshQuery const* plan = navMesh ? WbNav::PlannerQuery(navMesh) : nullptr;
+            ExcludePolysFilter const base;
+            float startPt[3] = { start.y, start.z, start.x };
+            float endPt[3] = { y, z, x };
+            dtPolyRef const startRef = query ? CorePolyAt(query, base, startPt, nullptr) : 0;
+            dtPolyRef const endRef = query ? CorePolyAt(query, base, endPt, nullptr) : 0;
+            char const* why = "";
+            std::vector<WbVec> planned;
+            if (plan && startRef && endRef
+                && PlanAround(player, navMesh, plan, base, startRef, endRef, startPt, endPt, planned, &why)
+                && nearEnd(planned.back()))
+                below = std::move(planned);
+        }
+        if (below.size() < 2)
+            return refuse("no_route_from_landing");
+
+        // The route: the mesh's as far as it got, the walk on, the fall, the
+        // walk onto the mesh below when the landing is off it, and the leg
+        // below. Settled like any route (SettleRoute: the start's own snap
+        // leg, the endpoint lift, the guard), with the start's record carried
+        // over as ReplanSteep carries it.
+        PathResolve cand;
+        cand.hasSnap = r.hasSnap;
+        cand.snapX = r.snapX; cand.snapY = r.snapY; cand.snapZ = r.snapZ;
+        cand.hasStartLevel = r.hasStartLevel;
+        cand.levelFromX = r.levelFromX; cand.levelFromY = r.levelFromY; cand.levelFromZ = r.levelFromZ;
+        cand.levelZ = r.levelZ;
+        cand.levelIslandPolys = r.levelIslandPolys;
+        cand.islandPolys = r.islandPolys;
+        cand.hasEndReachable = r.hasEndReachable;
+        cand.endFromX = r.endFromX; cand.endFromY = r.endFromY; cand.endFromZ = r.endFromZ;
+        cand.endToX = r.endToX; cand.endToY = r.endToY; cand.endToZ = r.endToZ;
+        cand.points = partial;
+        cand.points.insert(cand.points.end(), walk.begin(), walk.end());
+        cand.points.push_back(landing);
+        if (ed.landingSnap)
+            cand.points.push_back(below.front());
+        cand.points.insert(cand.points.end(), below.begin() + 1, below.end());
+        SettleRoute(player, cand, z, reqZ, force);
+
+        // One fall per move: the edge is the route's only ledge. A ledge of
+        // the mesh's own before it, or one below, would be walked by the same
+        // `force` the caller gives for this fall after judging a different
+        // one (`drop` names the first), so such a route is not taken.
+        size_t ledges = 0;
+        for (size_t i = 0; i + 1 < cand.points.size(); ++i)
+            if (IsDropSegment(cand.points[i], cand.points[i + 1], nullptr))
+                ++ledges;
+        if (ledges != 1)
+            return refuse("second_ledge");
+
+        ed.taken = true;
+        cand.edgeDrop = ed;
+        r = std::move(cand);
     }
 
     // The z-ladder in front of the cause ladder (part 3). A unit
@@ -2825,6 +3084,26 @@ namespace WrathBench
                             .Add("z", (double)r.replan.edge.z).Str())
                         .Add("pointCount", r.replan.firstPoints)
                         .Add("replanPointCount", r.replan.points);
+                    Audit(*s, "action", a.Str());
+                }
+                // The edge drop, whenever a path_incomplete's request lay
+                // below the end of the mesh's route: whether the route is now
+                // the walk on, the fall and the leg below (the move_path
+                // below), and why not when it is not.
+                if (r.edgeDrop.tried)
+                {
+                    PathResolve::EdgeDrop const& ed = r.edgeDrop;
+                    auto vec = [](WbVec const& v) {
+                        return Json::Writer().Add("x", (double)v.x).Add("y", (double)v.y).Add("z", (double)v.z).Str();
+                    };
+                    Json::Writer a;
+                    a.Add("op", "move_edge_drop").Add("moveId", moveId).Add("taken", ed.taken);
+                    if (ed.reason[0] != '\0')
+                        a.Add("reason", ed.reason);
+                    a.Raw("from", vec(ed.from));
+                    if (ed.hasEdge)
+                        a.Raw("edge", vec(ed.edge)).Raw("landing", vec(ed.landing))
+                            .Add("walkYards", (double)ed.walkYards).Add("landingSnap", ed.landingSnap);
                     Audit(*s, "action", a.Str());
                 }
             }

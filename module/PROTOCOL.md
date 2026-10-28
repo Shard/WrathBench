@@ -375,7 +375,9 @@ the level rung as `op: "move_mesh_z"` (`z`, `meshZ`), beside the ground rung's
 `move_ground_z`.
 
 Optional `force` (boolean): walk a route that steps *down* off a ledge instead
-of refusing it as `drop` (statuses below). The step is walked the way a
+of refusing it as `drop` (statuses below) — a ledge of the mesh's own route,
+or the edge past the end of the mesh that a move to a point below the route's
+end walks on to (`path_incomplete`, below). The step is walked the way a
 client's character walks off an edge — a heartbeat at the edge, nothing
 during the fall, `MSG_MOVE_FALL_LAND` at the foot — so the server charges the
 fall through its own `Player::HandleFall`, as it would a client's. `force`
@@ -1187,13 +1189,46 @@ at the top of this document.
   so the agent can route around or approach from another side; its z can be
   a level away from the request (a search that ran out on a hillside over a
   tunnel). Nothing moved.
+  A request more than 2y below where the route ends is not refused there
+  (operator decision, 2026-10-28). The mesh is built per connected surface,
+  so a plateau whose sides are too steep to walk has no route down that
+  contains a ledge for the drop guard to judge, while a client's character
+  walks off any edge. The module walks on from the route's end straight
+  toward the request over the ground a client walks: a sample every 1.67y
+  (the step at which the drop guard's two bounds meet), each one's surface
+  read from 1y over the last (terrain, vmap and game-object floors, or the
+  water over them), each step a walkable slope with nothing at body height in
+  the way and none rising past that 1y, for at most 10y (the start snap's own
+  leg, the other way) and never past the request, to the first step the
+  guard calls a ledge. That lip is the edge. The fall goes on toward the
+  request while the surface under it keeps falling away, read from the
+  edge's height, and lands where it stops, so a cliff that is not sheer is
+  fallen to its foot rather than to a point on its face. From the landing the
+  route goes on to the request as a move from there would: from the mesh
+  under it, else from the mesh nearest it within 10y with the straight walk
+  onto it, by the core's path or the module's planner, ending within 4y of
+  the request. The fall must be the route's only ledge, so `force` given for
+  it never walks a second one. When all of that holds the answer is that
+  route's, settled by the same guard as any other: `drop` without `force`
+  (the edge as `reachedPos`, `dz` to the landing, `safeFall`), and with
+  `force` the walk, the fall — charged by the server as any forced ledge — and
+  the leg below, ending `arrived`. Otherwise it stays `path_incomplete`. The
+  edge, the fall and the leg below all lie on the line to, and the route to,
+  the agent's own request: nothing is reported about ground it did not ask
+  for. A `target_off_mesh` gets no such walk: there is no route end to walk
+  on from and no route below to reach, and `nearest` names ground the agent
+  can ask for instead, which may then end in one. The audit log records the
+  attempt as `op: "move_edge_drop"`.
 - `drop` — the mesh's route steps off a ledge: some segment of the resolved
   polyline falls (or climbs) more than 2.0y and steeper than 1.2x its 2D
   length — a cliff, not a ramp (stairs and ramps pass; a stale z within the
   `meshZ` band passes). Before refusing, the module re-plans around the steep
   band, up to three times, with the mesh polygons under every refused segment
   barred, and walks the first re-planned route this same guard passes; when
-  none does, what follows describes the mesh's own route. Without `force` the
+  none does, what follows describes the mesh's own route. A `drop` can also
+  be the edge past the end of the mesh (`path_incomplete`, above): then
+  `reachedPos` is that edge, `dz` the fall to where it lands, and no re-plan
+  runs, since the mesh has no route to plan around. Without `force` the
   walk is not dispatched: `reachedPos` is the last point before the step (the
   edge, on the character's level), `dz` is the signed vertical step the route
   would have taken there, `target` echoes the requested point, and `safeFall`
@@ -1882,6 +1917,14 @@ the `drop` stands — `rounds` (re-plans run, at most three), `excluded` (mesh
 polygons the last one barred), the refused route's `edge`, `dz` and
 `pointCount`, and `replanPointCount` (the last re-planned route's, 0 when none
 was built).
+A `path_incomplete` whose request lies below the end of the mesh's route logs
+`op: "move_edge_drop"` (the edge drop under `path_incomplete`) with `taken` —
+true when the route is now the walk on, the fall and the leg below, whose
+polyline is the `move_path` — else a `reason` (`no_edge`, `climb`, `blocked`,
+`no_surface`, `landing_off_mesh`, `no_route_from_landing`, `second_ledge`,
+`no_direction`, `not_a_ledge`), `from` (the route's end), and, once an edge was
+found, `edge`, `landing`, `walkYards` (the walk on from `from` to the edge) and
+`landingSnap` (the leg below starts from the mesh nearest the landing).
 Each `move_to` that reaches the mesh also logs one `op: "move_path"` record at
 dispatch — `moveId`, `status` (`"ok"` when the walk was dispatched, else the
 `WB_MOVE_RESULT` status), `pointCount`, and `points` (the resolved polyline,
