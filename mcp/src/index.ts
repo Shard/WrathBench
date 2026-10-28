@@ -121,4 +121,5 @@ export type {
   ToolSpec,
 } from "./tools";
 export { lines, MCP_PROTOCOL_VERSION, McpServer, serveStdio } from "./server";
+export { MCP_PACKAGE_VERSION } from "./version";
 export type { McpServerOptions, OnToolCall, ToolHost } from "./server";

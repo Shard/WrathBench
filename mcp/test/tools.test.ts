@@ -8,6 +8,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { SDK_VERSION } from "@wrathbench/sdk";
 import { PLAIN_RENDER } from "../src/main";
 import { SecretRedactor } from "../src/redact";
 import type { ActionHintNote, EventSummary } from "../src/sandbox/ipc";
@@ -119,7 +120,8 @@ describe("McpServer", () => {
   });
 });
 
-test("the package version constant is package.json's", () => {
+test("the package version constant is package.json's, and the SDK's: the stack releases as one", () => {
   const pkg = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { version: string };
   expect(MCP_PACKAGE_VERSION).toBe(pkg.version);
+  expect(MCP_PACKAGE_VERSION).toBe(SDK_VERSION);
 });

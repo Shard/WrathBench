@@ -51,15 +51,15 @@
       "name": "@wrathbench/runner",
       "version": "0.0.0",
       "dependencies": {
-        "@wrathbench/mcp": "workspace:*",
-        "@wrathbench/sdk": "workspace:*",
+        "@wrathbench/mcp": "workspace:0.1.0",
+        "@wrathbench/sdk": "workspace:0.1.0",
         "@wrathbench/wiki": "workspace:*",
         "zod": "4.4.3",
       },
     },
     "sdk": {
       "name": "@wrathbench/sdk",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "zod": "4.4.3",
       },

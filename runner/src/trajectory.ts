@@ -385,6 +385,15 @@ export type MilestoneLine =
 export interface RunMeta {
   runId: string;
   harnessVersion: string;
+  /**
+   * The `@wrathbench/sdk` version this harness pins (`SDK_VERSION`), which
+   * `@wrathbench/mcp` shares: the stack a run drove, recorded beside the
+   * harness stamp and rewritten with it on a resume. Metadata, not a
+   * comparability key — the harness version already pins it, so it is not in
+   * the tuple and no run restamps for it. Absent on runs written before the
+   * SDK had a version of its own.
+   */
+  sdkVersion?: string;
   startedAt: number;
   config: RunConfig;
   /**
