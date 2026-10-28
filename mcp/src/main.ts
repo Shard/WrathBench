@@ -30,8 +30,8 @@ import { McpServer, serveStdio } from "./server";
 import { coreTools, ToolSet, type CoreToolContext, type CoreToolRender } from "./tools";
 import { MCP_PACKAGE_VERSION } from "./version";
 
-/** Ambient motion: folded out of `recent_events` unless asked for, as its description says. */
-const AMBIENT = /^(SMSG_MONSTER_MOVE|MSG_MOVE_)/;
+/** Ambient motion and out-of-sight party frames: folded out of `recent_events` unless asked for, as its fold note says. */
+const AMBIENT = /^(SMSG_MONSTER_MOVE|MSG_MOVE_|SMSG_PARTY_MEMBER_STATS)/;
 
 /** The bare stack's rendering: one event per line, and the snapshot's own fields as JSON. */
 export const PLAIN_RENDER: CoreToolRender<CoreToolContext> = {
