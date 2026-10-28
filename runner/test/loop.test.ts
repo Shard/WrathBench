@@ -5,11 +5,14 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { StubAdapter, type ChatAdapter, type ChatRequest, type AdapterOutcome } from "../src/adapter";
+import { StubAdapter, type ChatAdapter, type ChatRequest, type AdapterOutcome, type ToolCall } from "../src/adapter";
+import type { ChatMessage } from "../src/context";
+import { requestsOf } from "./fixtures/requests";
+import { SEGMENT_TURNS, slimRun } from "./fixtures/slim-run";
 import { parseEventFrame, StateCache } from "@wrathbench/sdk";
 import { loadRunConfig } from "../src/config";
 import { toJsonSafe } from "@wrathbench/mcp";
-import { ContextBuilder, itemSample, runLoop } from "../src/loop";
+import { ContextBuilder, itemSample, replayedAssistant, runLoop } from "../src/loop";
 import { EpisodicLog } from "../src/episodic";
 import { Scratchpad } from "@wrathbench/mcp";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
@@ -949,6 +952,96 @@ describe("runLoop", () => {
     // Never two snapshots at once: the ticker joins the preamble's sample.
     expect(maxInFlight).toBe(1);
     options.trajectory.close();
+  });
+});
+
+describe("replayedAssistant", () => {
+  /** The construction the loop used before the empty-turn fix, verbatim. */
+  function legacyAssistant(turn: { content: string | null; toolCalls: ToolCall[] }): ChatMessage {
+    return {
+      role: "assistant",
+      content: turn.content,
+      ...(turn.toolCalls.length > 0
+        ? {
+            tool_calls: turn.toolCalls.map((tc) => ({
+              id: tc.id,
+              type: "function" as const,
+              function: { name: tc.name, arguments: tc.arguments },
+            })),
+          }
+        : {}),
+    };
+  }
+
+  function turnOf(message: ChatMessage): { content: string | null; toolCalls: ToolCall[] } {
+    return {
+      content: message.content,
+      toolCalls: (message.tool_calls ?? []).map((tc) => ({ id: tc.id, name: tc.function.name, arguments: tc.function.arguments })),
+    };
+  }
+
+  test("every assistant turn of the slim-run fixture replays byte-identical to the old construction", async () => {
+    // The fixture reaches text with calls, no text with calls, several calls
+    // in a turn, a malformed argument string and an over-cap reply, across two
+    // segments; its requests are proven to replay by `requestsOf`.
+    const { dir } = await slimRun(tempDir("wrathbench-replayed-"));
+    requestsOf(dir);
+    const messages = readTrajectory(dir)
+      .filter((r) => r.t === "response")
+      .map((r) => r["message"] as ChatMessage);
+    expect(messages.length).toBe(SEGMENT_TURNS[0] + SEGMENT_TURNS[1]);
+    expect(messages.some((m) => m.content === null)).toBe(true);
+    for (const m of messages) {
+      const turn = turnOf(m);
+      expect(JSON.stringify(replayedAssistant(turn))).toBe(JSON.stringify(legacyAssistant(turn)));
+      expect(JSON.stringify(replayedAssistant(turn))).toBe(JSON.stringify(m));
+    }
+  });
+
+  test("only a turn with neither text nor tool calls changes: it replays with empty content", () => {
+    const call: ToolCall = { id: "c1", name: "run_snippet", arguments: '{"code":"1"}' };
+    const same: { content: string | null; toolCalls: ToolCall[] }[] = [
+      { content: "text", toolCalls: [] },
+      { content: "", toolCalls: [] },
+      { content: "text", toolCalls: [call] },
+      { content: null, toolCalls: [call] },
+      { content: "", toolCalls: [call] },
+    ];
+    for (const turn of same) expect(JSON.stringify(replayedAssistant(turn))).toBe(JSON.stringify(legacyAssistant(turn)));
+    expect(replayedAssistant({ content: null, toolCalls: [] })).toEqual({ role: "assistant", content: "" });
+    expect(JSON.stringify(replayedAssistant({ content: null, toolCalls: [] }))).toBe('{"role":"assistant","content":""}');
+  });
+
+  test("a reasoning-only turn replays as a valid message, and the trajectory replays to the bytes sent", async () => {
+    const sent: ChatMessage[][] = [];
+    const turns: AdapterOutcome[] = [
+      // Reasoning-only: no text, no calls (the driver does not carry reasoning).
+      { kind: "ok", turn: { content: null, toolCalls: [] } },
+      { kind: "ok", turn: { content: null, toolCalls: [{ id: "c1", name: "run_snippet", arguments: '{"code":"1"}' }] } },
+      { kind: "ok", turn: { content: "after", toolCalls: [] } },
+    ];
+    const adapter: ChatAdapter = {
+      label: "stub",
+      complete: (req: ChatRequest): Promise<AdapterOutcome> => {
+        sent.push(JSON.parse(JSON.stringify(req.messages)) as ChatMessage[]);
+        return Promise.resolve(turns.shift() ?? { kind: "stub-complete" });
+      },
+    };
+    const { dir, options } = setup(adapter);
+    await runLoop(options);
+    options.trajectory.close();
+    const last = sent[sent.length - 1]!;
+    const assistants = last.filter((m) => m.role === "assistant");
+    expect(assistants).toHaveLength(3);
+    expect(JSON.stringify(assistants[0])).toBe('{"role":"assistant","content":""}');
+    // Valid on every message: text, or tool calls.
+    for (const m of assistants) expect(typeof m.content === "string" || (m.tool_calls?.length ?? 0) > 0).toBe(true);
+    // The tool-call turn with no text keeps its null content, as before.
+    expect(assistants[1]!.content).toBeNull();
+    // The record carries what was sent, and every request rebuilds from it.
+    const responses = readTrajectory(dir).filter((r) => r.t === "response");
+    expect(responses[0]!["message"]).toEqual({ role: "assistant", content: "" });
+    expect(requestsOf(dir).map((r) => r.messages)).toEqual(sent);
   });
 });
 

@@ -507,10 +507,19 @@ const PROVIDER_BLIP_HINTS =
 // weather, so the run paused rate-limited and climbed the defer ladder until
 // it ran out of rungs, blaming rate limiting all the way.
 const WITHDRAWN_SLUG_HINTS = /unavailable for free|use this slug instead/i;
+// A refusal that names one of our messages as the bad parameter is about the
+// request we built, whatever wrapper it arrives in: OpenCode Go relays an
+// upstream 400 as type "server_error", "Upstream request failed: [400] Param
+// Incorrect", with `"param":"messages[32] assistant must provide content,
+// reasoning_content or tool_calls"`. The blip hints read that as pool weather,
+// so the run retried the same bytes, paused rate-limited and was spent as a
+// failed attempt on a harness bug. It is the "any other 4xx" of the policy
+// above: fatal at once, as an adapter-error.
+const REQUEST_SHAPE_HINTS = /"param"\s*:\s*"messages\[/i;
 
-/** A transient upstream failure wrapped in a 4xx body, and not a withdrawn slug. */
+/** A transient upstream failure wrapped in a 4xx body, and neither a withdrawn slug nor a refusal of our request's shape. */
 function isProviderBlip(text: string): boolean {
-  return PROVIDER_BLIP_HINTS.test(text) && !WITHDRAWN_SLUG_HINTS.test(text);
+  return PROVIDER_BLIP_HINTS.test(text) && !WITHDRAWN_SLUG_HINTS.test(text) && !REQUEST_SHAPE_HINTS.test(text);
 }
 
 export class OpenAiChatAdapter implements ChatAdapter {
