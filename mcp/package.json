@@ -9,7 +9,9 @@
     ".": "./src/index.ts",
     "./sandbox-child": "./src/sandbox/child.ts",
     "./redact": "./src/redact.ts",
-    "./module-auth": "./src/module-auth.ts"
+    "./module-auth": "./src/module-auth.ts",
+    "./jsonsafe": "./src/jsonsafe.ts",
+    "./scratchpad": "./src/scratchpad.ts"
   },
   "scripts": {
     "start": "bun src/main.ts",

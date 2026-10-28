@@ -16,6 +16,27 @@ import { join } from "node:path";
 export const MCP_BRIDGE_PATH = join(import.meta.dir, "bridge.ts");
 /** The Landlock wrapper every sandbox child is exec'd through (`sandbox/confine.ts`). */
 export const SANDBOX_CONFINE_PATH = join(import.meta.dir, "sandbox", "confine.ts");
+/** The bare sandbox child, with no harness extension (`sandbox/entry.ts`); `SandboxHost`'s default. */
+export const SANDBOX_ENTRY_PATH = join(import.meta.dir, "sandbox", "entry.ts");
+
+export {
+  SANDBOX_FORWARDED_ENV,
+  SandboxHost,
+  sandboxChildEnv,
+  STATE_LOSS_RECOVERY,
+} from "./sandbox/host";
+export type {
+  ActionsFlush,
+  EvalLink,
+  HarnessNotice,
+  SandboxHostOptions,
+  SandboxNoticeKind,
+  SnippetResult,
+} from "./sandbox/host";
+// Types only: importing the child runtime itself is what makes a process a
+// sandbox child (it replaces fetch, WebSocket and console), so its values are
+// reached through `@wrathbench/mcp/sandbox-child` and nowhere else.
+export type { SandboxChildApi, SandboxChildExtension, SandboxChildExtensionFactory } from "./sandbox/child";
 
 export { compactJson, jsonLine, toJsonSafe } from "./jsonsafe";
 export {

@@ -325,3 +325,6 @@ export type {
   UpdateObjectData,
   ValuesBlock,
 } from "./protocol";
+
+export { GROUP_OR_WHISPER_CHAT_TYPES, isGroupOrWhisperChat } from "./chat";
+export { API_MD_PATH } from "./reference";

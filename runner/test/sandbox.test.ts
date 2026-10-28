@@ -470,11 +470,16 @@ describe("sandbox evaluation", () => {
   });
 
   test("the named list is what the child actually reads", () => {
-    // Every env read in the sandbox entry is a name the host forwards or sets,
-    // so a knob added to entry.ts without a line here fails rather than
-    // silently reading its default in production.
-    const entry = readFileSync(join(import.meta.dir, "..", "src", "sandbox", "entry.ts"), "utf8");
-    const read = [...entry.matchAll(/process\.env\["([A-Z0-9_]+)"\]/g)].map((m) => m[1]!);
+    // Every env read in the child — the stack's runtime, the runner's entry
+    // and its extension — is a name the host forwards or sets, so a knob added
+    // to any of them without a line here fails rather than silently reading
+    // its default in production.
+    const files = [
+      Bun.resolveSync("@wrathbench/mcp/sandbox-child", import.meta.dir),
+      join(import.meta.dir, "..", "src", "sandbox", "entry.ts"),
+      join(import.meta.dir, "..", "src", "sandbox", "child-extension.ts"),
+    ];
+    const read = files.flatMap((f) => [...readFileSync(f, "utf8").matchAll(/process\.env\["([A-Z0-9_]+)"\]/g)].map((m) => m[1]!));
     const provided = new Set([...SANDBOX_FORWARDED_ENV, "WRATHBENCH_MODULE_URL", "WRATHBENCH_TOKEN", "WRATHBENCH_SECRET", "WRATHBENCH_ACCOUNT"]);
     expect(read.length).toBeGreaterThan(0);
     expect(read.filter((k) => !provided.has(k))).toEqual([]);
