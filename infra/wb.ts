@@ -298,7 +298,7 @@ export const ENTRIES: readonly Entry[] = [
     group: "inspect",
     command: "audit",
     takes: "<run-id> | --smoke <name> [--op X[,Y] [--status S] [--last N | --summary]] [--since D] [--until D]",
-    summary: "the module audit log of a run or of a smoke's sessions, counts per op and status or the last records, reduced where it lives",
+    summary: "the module audit log of a run or of a smoke's sessions (one session name at a time: group-a, mail-r), counts per op and status or the last records, reduced where it lives",
     cluster: { place: "host", argv: ["bun", "infra/inspect-audit.ts", "--k8s"] },
     local: { place: "host", argv: ["bun", "infra/inspect-audit.ts"] },
   },

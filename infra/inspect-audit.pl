@@ -122,7 +122,9 @@ my ($bytes, $records, $matched) = (0, 0, 0);
 my ($first, $newest);
 my %count;
 my @ring;
-my $qtok = $smoke ? quotemeta($tok) . '[A-Za-z0-9_-]*' : quotemeta $tok;
+# A smoke's records can name another smoke session's token (a party
+# smoke's sibling): every `smoke-…` token is struck, whichever smoke was read.
+my $qtok = $smoke ? 'smoke-[A-Za-z0-9_-]+' : quotemeta $tok;
 # One anchored match takes a record's clock, kind and op or opcode, in the
 # order the module writes them; anything else falls back to looser searches.
 my $shape = qr/\A\{"ts":(\d+),"session":"[^"]*","kind":"([A-Za-z_]+)","payload":\{(?:"seq":\d+,)?"(?:op|opcode)":"([A-Za-z0-9_]+)"/;

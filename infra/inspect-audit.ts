@@ -35,7 +35,8 @@ const DEFAULT_WIDTH = 200;
 export const USAGE = `usage: bun infra/inspect-audit.ts [--k8s] <run-id> | --smoke <name> [--op X[,Y…] [--status S] [--last N | --summary]] [--since D] [--until D] [--top N] [--width N]
        offline: --audit-dir DIR [--runs-dir DIR]
 D is 90s, 30m, 2h, 1d, epoch ms or ISO; with no --op, or with --summary, it prints counts
---smoke <name> reads the sessions a smoke names smoke-<name>-<uuid>, not a run's (no meta.json; --since narrows to one run)`;
+--smoke <name> reads the sessions a smoke names smoke-<name>-<uuid>, not a run's (no meta.json; --since narrows to one run);
+  a smoke with several sessions is read one session name at a time (group-a, group-b, loot-roll-a, mail-r)`;
 
 export interface AuditArgs {
   /** The run, or for --smoke the label `smoke-<name>`, as printed. */
@@ -189,7 +190,8 @@ export function formatReduced(a: AuditArgs, r: Reduced, token: string | RegExp |
     out.push(`  ${"count".padStart(10)}  ${"kind".padEnd(7)} ${"op / opcode".padEnd(32)} status`);
     for (const c of rows.slice(0, a.top)) out.push(cap(`  ${String(c.n).padStart(10)}  ${c.kind.padEnd(7)} ${c.name.padEnd(32)} ${c.status}`, a.width));
     if (rows.length > a.top) out.push(`  (${a.top} of ${rows.length} rows; --top N for more)`);
-    return out.map((l) => scrubAudit(l, token));
+    // The header names only what was asked for (a run id, or a smoke's label, which the smoke strike would hit).
+    return [out[0]!, ...out.slice(1).map((l) => scrubAudit(l, token))];
   }
   out.push(`audit ${a.runId}${window}: ${r.matched ?? 0} record(s) match ${filter}, of ${r.records} in ${r.files} file(s); the last ${r.lines.length}, oldest first, UTC`);
   for (const raw of r.lines) {
@@ -275,7 +277,8 @@ export async function run(argv: readonly string[], io: Io, now = Date.now()): Pr
   }
   // A smoke's sessions: the reducer gets the tokens' fixed prefix, and every
   // token that starts with it is struck from what comes back.
-  if (a.smoke !== null) return reduce(a, io, `smoke-${a.smoke}-*`, new RegExp(`smoke-${a.smoke}-[A-Za-z0-9_-]*`, "g"));
+  // A record can name a sibling session's token, so every smoke token is struck, not only this smoke's.
+  if (a.smoke !== null) return reduce(a, io, `smoke-${a.smoke}-*`, /smoke-[A-Za-z0-9_-]+/g);
   const metaText = await readMetaText(a, io);
   if (metaText === null) {
     io.err(`inspect audit: no meta.json for ${a.runId}${a.target === "k8s" ? " in the runner pod" : ` under ${a.runsDir}`}`);
