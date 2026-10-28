@@ -9,12 +9,18 @@
  * The module now walks on from the end of the mesh's route toward a request
  * that lies below it, falls from the edge, and routes on from the landing.
  *
+ * One move does not reach the lowland from the plateau under the module's
+ * rules: the cliff's foot is a shelf whose only mesh route on down is a 6y
+ * bank of 55-61 degrees, a second ledge to the drop guard, and a move takes
+ * one fall. So the edge drop goes to a point on that shelf, and the bank is
+ * an ordinary move after it (infra/fixtures/scenarios.ts, EDGE_SKETTIS_SHELF).
+ *
  * One fixture character (infra/fixtures/scenarios.ts `edge-drop-skettis`,
  * level 80, full health) at the graveyard's release point:
- *   1. a raw `move_to` to the freeplay ghost's own request on the lowland,
- *      without `force`: `drop` with the edge as `reachedPos`, a fall far past
- *      the guard's 2y (`dz`), and nothing moved. A `path_incomplete` here is
- *      the old module (or an edge it cannot find) and fails the smoke;
+ *   1. a raw `move_to` to the shelf at the cliff's foot, without `force`:
+ *      `drop` with the edge as `reachedPos`, a fall far past the guard's 2y
+ *      (`dz`), and nothing moved. A `path_incomplete` here is the old module
+ *      (or an edge it cannot find) and fails the smoke;
  *   2. the SDK's `moveTo` to the same point: the fall is lethal at any level
  *      (the server charges all of max health past ~70y), so it answers
  *      `drop` with nothing moved. Should its estimate let the fall through,
@@ -22,13 +28,19 @@
  *   3. the same `move_to` with `force`: the character walks off the edge and
  *      the server's own Player::HandleFall kills it on the landing — the
  *      proof the fall was charged as a client's. A survival is reported, and
- *      ends the smoke there;
+ *      skips the ghost legs;
  *   4. release: the ghost lands at a graveyard. When that is above the corpse
  *      (1298 is, for this corpse; the core picks by faction and distance, so
  *      it is not asserted), the ghost's `moveTo` to the corpse must take the
  *      edge — the SDK forces a ghost's drop — and arrive within reclaim
  *      range; then the reclaim. A graveyard that is not above the corpse
- *      skips the ghost's edge with a note and walks to the corpse as it can.
+ *      skips the ghost's edge with a note and walks to the corpse as it can;
+ *   5. alive on the shelf (by any of the paths above), the bank to the
+ *      freeplay ghost's own request on the lowland: a raw `move_to` answers
+ *      `drop` at the bank (a descent, nothing moved), and the SDK's `moveTo`
+ *      takes it on its own (a 6y fall costs nothing) and arrives at the
+ *      reachable mesh by the request (the request itself is a 3-polygon
+ *      island; the module ends at the mesh nearest it, about 6y off).
  *
  * An operator smoke, not a deploy smoke and not in the suite: it runs on
  * PROBE (never a gate account), writes one fixture placement, and a run that
@@ -44,7 +56,7 @@
  */
 
 import { connect, type MovePoint, type MoveResultData, type WrathClient } from "../../sdk/src/index";
-import { EDGE_SKETTIS_TARGET, SCENARIOS } from "../fixtures/scenarios";
+import { EDGE_SKETTIS_SHELF, EDGE_SKETTIS_TARGET, SCENARIOS } from "../fixtures/scenarios";
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
@@ -60,6 +72,10 @@ const MOVE_TIMEOUT_MS = 120_000;
 const DROP_MIN_DZ = 2.0;
 // The core's reclaim radius (CORPSE_RECLAIM_RADIUS), as the SDK uses it.
 const RECLAIM_RADIUS = 39;
+// The bank's arrival: the request is a closed 3-polygon island, so the walk
+// ends at the reachable mesh nearest it (5.8y off, module/PROTOCOL.md
+// `arrived`, the island end), well inside this.
+const BANK_ARRIVAL_YARDS = 8;
 
 const started = Date.now();
 const log = (m: string): void => console.log(`[edge +${((Date.now() - started) / 1000).toFixed(1).padStart(6)}s] ${m}`);
@@ -141,10 +157,30 @@ async function until(pred: () => boolean, ms: number): Promise<boolean> {
   return true;
 }
 
+/** 5. The bank, alive on the shelf: an ordinary mesh ledge, taken by the SDK's own verdict. */
+async function bank(client: WrathClient): Promise<void> {
+  const final: MovePoint = { ...EDGE_SKETTIS_TARGET };
+  const from = await selfPosition(client);
+  const raw = await probe(client, final, false);
+  if (raw.status === "arrived") {
+    log(`NOTE[bank]: the move from ${fmt(from)} to the lowland walked with no ledge (arrived at ${fmt(raw.pos)})`);
+  } else {
+    if (raw.status !== "drop") fail(`the bank from ${fmt(from)} answered ${raw.status}, want drop at the bank (an ordinary mesh ledge)`);
+    if (typeof raw.dz !== "number" || raw.dz >= -DROP_MIN_DZ) fail(`the bank's drop should be a descent past ${DROP_MIN_DZ}y: ${JSON.stringify(raw)}`);
+    if (dist2d(raw.pos, from) > 1) fail(`the unforced bank drop moved the character: ${fmt(raw.pos)} from ${fmt(from)}`);
+    log(`PASS[bank unforced]: drop ${(-raw.dz).toFixed(1)}y at ${raw.reachedPos ? fmt(raw.reachedPos) : "?"}; nothing moved`);
+    const walked = await client.moveTo(final, { timeout: MOVE_TIMEOUT_MS });
+    if (walked.status !== "arrived") fail(`SDK moveTo down the bank answered ${walked.status}, want arrived (a ${(-raw.dz).toFixed(1)}y fall is free): ${walked.hint ?? ""}`);
+  }
+  const there = await selfPosition(client);
+  if (dist2d(there, final) > BANK_ARRIVAL_YARDS) fail(`down the bank, ended ${dist2d(there, final).toFixed(1)}y from the request, want within ${BANK_ARRIVAL_YARDS}y`);
+  log(`PASS[bank]: on the lowland at ${fmt(there)}, ${dist2d(there, final).toFixed(1)}y from the request`);
+}
+
 async function main(): Promise<void> {
   const want = SCENARIOS[SCENARIO].position;
-  const target: MovePoint = { ...EDGE_SKETTIS_TARGET };
-  log(`${CHARACTER} on ${ACCOUNT}: ${SCENARIO} at map ${want.map} ${fmt(want)}, target ${fmt(target)}`);
+  const target: MovePoint = { ...EDGE_SKETTIS_SHELF };
+  log(`${CHARACTER} on ${ACCOUNT}: ${SCENARIO} at map ${want.map} ${fmt(want)}, the shelf ${fmt(target)}, then the lowland ${fmt(EDGE_SKETTIS_TARGET)}`);
   await ensureFixtureCharacter(fixtureCtx);
   await applyScenario(fixtureCtx, SCENARIO);
   const client = await connect({ baseUrl: BASE, token: `smoke-edge-${RUN}`, secret: MODULE_SECRET });
@@ -184,7 +220,9 @@ async function main(): Promise<void> {
       const there = await selfPosition(client);
       log(`NOTE[sdk]: moveTo took the ${(-raw.dz).toFixed(1)}y fall on its own (health ${health?.current}/${health?.max}); arrived at ${fmt(there)}: ${judged.hint ?? ""}`);
       if (dist2d(there, target) > 5) fail(`moveTo arrived ${dist2d(there, target).toFixed(1)}y from the target`);
-      log("PASS: the living took the edge drop and arrived; no death, so the ghost legs are not run");
+      log("PASS[sdk]: the living took the edge drop and arrived; no death, so the ghost legs are not run");
+      await bank(client);
+      log("PASS: edge drop to the shelf by the SDK's own verdict -> the bank");
       return;
     }
     if (judged.status !== "drop") fail(`SDK moveTo answered ${judged.status}, want drop (a lethal fall left at the edge): ${judged.hint ?? ""}`);
@@ -198,7 +236,9 @@ async function main(): Promise<void> {
     if (!dead) {
       if (forced.status !== "arrived") fail(`forced move off the plateau answered ${forced.status} at ${fmt(forced.pos)} and the character is alive`);
       log(`NOTE[forced]: survived the ${(-raw.dz).toFixed(1)}y fall (health ${client.state.self.health?.value.current}); arrived at ${fmt(forced.pos)}`);
-      log("PASS: the forced edge drop was walked; no death, so the ghost legs are not run");
+      log("PASS[forced]: the forced edge drop was walked; no death, so the ghost legs are not run");
+      await bank(client);
+      log("PASS: forced edge drop to the shelf -> the bank");
       return;
     }
     const corpse = await selfPosition(client);
@@ -230,7 +270,8 @@ async function main(): Promise<void> {
     const reclaim = await client.reclaimCorpse();
     if (reclaim.status !== "reclaimed") fail(`reclaim answered ${reclaim.status}; the character is left a ghost`);
     log("PASS[reclaim]: alive at the corpse");
-    log("PASS: unforced drop at the edge past the mesh -> SDK leaves a lethal fall -> forced fall charged by the server -> ghost over the edge -> reclaim");
+    await bank(client);
+    log("PASS: unforced drop at the edge past the mesh -> SDK leaves a lethal fall -> forced fall charged by the server -> ghost over the edge -> reclaim -> the bank");
   } finally {
     await client.logout().catch(() => {});
     client.close();

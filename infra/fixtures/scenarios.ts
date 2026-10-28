@@ -339,9 +339,15 @@ const SWIM_SEA_TOWARD = { x: -3480, y: -800 };
 // 530, zone 3519), at the release point of graveyard 1298 (Lake Jorune GY),
 // where a freeplay ghost stood 143y over its corpse with every move down
 // refused path_incomplete, the plateau's mesh linked to nothing below. The
-// point it asked for, 239y north on the lowland, is the smoke's target; the
-// start faces it. Level 80 so the plateau's arakkoa do not end a walk.
+// point it asked for, 239y north on the lowland, is the smoke's final target;
+// the start faces it. Level 80 so the plateau's arakkoa do not end a walk.
+// Between them the cliff's foot is a shelf (about z 49) whose only mesh route
+// on down is a 6y bank of 55-61 degrees, steeper than the drop guard's ramp:
+// a second ledge, so one move does not reach the lowland from the plateau.
+// The shelf point is on that route (the module's own planner over the
+// server's mesh): the edge drop's target, and the bank's start.
 export const EDGE_SKETTIS_START = { x: -2433.6, y: 4661.0, z: 160.9 };
+export const EDGE_SKETTIS_SHELF = { x: -2427.12, y: 4833.23, z: 49.3 };
 export const EDGE_SKETTIS_TARGET = { x: -2440.0, y: 4900.0, z: 32.3 };
 
 export const SCENARIOS = {
