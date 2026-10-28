@@ -49,8 +49,9 @@ at — the Kubernetes cluster or the local compose stack:
 Underneath it is just the runner:
 
 ```bash
-# a run driven by an OpenAI-compatible model (key read from env, never stored)
-bun runner/src/run.ts --driver openai --model <id> --api-base <url> [--api-key-env OPENROUTER_KEY]
+# a run driven by an OpenAI-compatible model (key read from env, never stored);
+# with no --api-base it goes to OpenRouter, as a fleet entry with none does
+bun runner/src/run.ts --driver openai --model <id> [--api-base <url>] [--api-key-env OPENROUTER_KEY]
 
 # the same loop driven by a scripted stub — harness testing without a model
 bun runner/src/run.ts --driver stub --stub runner/test/fixtures/stub-live-check.json

@@ -18,7 +18,7 @@ import { DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV, isTokenEnvName, type 
 import type { EpisodicLog } from "./episodic";
 import type { LoopOutcome, ObservationStallHook } from "./loop";
 import { piEffortRefusal, runPiEpisode } from "./adapter-pi";
-import { apiKeyRefusal, piProviderOf } from "./providers";
+import { apiKeyRefusal, DEFAULT_API_BASE, piProviderOf } from "./providers";
 import { ReferenceAdapter } from "./reference-adapter";
 import type { ReferenceProgram } from "./reference-program";
 import { routingForRun } from "./routing";
@@ -72,21 +72,23 @@ export interface DriverAdapter {
 export const DRIVER_ADAPTERS: Readonly<Record<Driver, DriverAdapter>> = {
   openai: {
     prepare(config, trajectory) {
-      const apiBase = config.apiBase ?? process.env["OPENAI_BASE_URL"];
+      // No base stated means OpenRouter, the same default the fleet's roster
+      // gives an openai entry with none (`DEFAULT_API_BASE`); the key name
+      // defaults to its pair in the config schema. Recorded in the returned
+      // config, so the run's meta and tuple name the base it actually used.
+      const apiBase = config.apiBase ?? process.env["OPENAI_BASE_URL"] ?? DEFAULT_API_BASE;
       // Before the variable is even read: a key name and a base are config, and
       // the pair may only be one the provider table holds (runner/src/providers.ts).
       // The fleet refuses such an entry at parse and the store refuses the write;
       // this is the last place a run could still send one, so it refuses to start.
-      const keyRefusal = apiBase === undefined ? null : apiKeyRefusal(config.apiKeyEnv, apiBase);
+      const keyRefusal = apiKeyRefusal(config.apiKeyEnv, apiBase);
       if (keyRefusal !== null) {
         console.error(`openai driver refuses to start: ${keyRefusal}`);
         process.exit(2);
       }
       const apiKey = process.env[config.apiKeyEnv];
-      if (config.model === undefined || apiKey === undefined || apiBase === undefined) {
-        console.error(
-          `openai driver needs --model, --api-base (or OPENAI_BASE_URL), and $${config.apiKeyEnv} set`,
-        );
+      if (config.model === undefined || apiKey === undefined) {
+        console.error(`openai driver needs --model and $${config.apiKeyEnv} set`);
         process.exit(2);
       }
       trajectory.redact(apiKey);
@@ -105,7 +107,7 @@ export const DRIVER_ADAPTERS: Readonly<Record<Driver, DriverAdapter>> = {
         // included. Sent to OpenCode only (`openCodeSessionHeaders`).
         sessionId: config.runId,
       });
-      return { config, adapter };
+      return { config: { ...config, apiBase }, adapter };
     },
   },
 
