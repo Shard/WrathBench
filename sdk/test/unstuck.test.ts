@@ -156,6 +156,44 @@ describe("unstuck: the second call within the window casts Stuck as the client d
     await stub.stop();
   });
 
+  test("both calls in one snippet: the confirm line does not outlive the send", async () => {
+    const stub = startStub({ onConnect: () => world() });
+    const client = await inWorld(stub);
+    await folded(client, "SMSG_UPDATE_OBJECT", 17);
+    expect((await client.unstuck()).status).toBe("confirm");
+    const pending = client.unstuck({ timeout: 3000 });
+    await untilAction(stub, "cast_spell");
+    push(stub, spellStart(90));
+    push(stub, spellGo(91));
+    push(stub, teleportAck(92, { x: -1231.5, y: 990.0, z: 42.1, o: 3.5 }));
+    expect((await pending).status).toBe("moved");
+    expect(client.drainActionHints().filter((h) => h.action === "unstuck")).toEqual([]);
+    client.close();
+    await stub.stop();
+  });
+
+  test("an unreleased body: the release's port and its ghost flag both land before the answer", async () => {
+    const corpse = frame(20, "SMSG_UPDATE_OBJECT", { blocks: 1, objects: [{ update: "values", guid: SELF_GUID, fields: { health: 0 } }] });
+    const stub = startStub({ onConnect: () => world([corpse]) });
+    const client = await inWorld(stub);
+    await folded(client, "SMSG_UPDATE_OBJECT", 20);
+    const first = await client.unstuck();
+    expect((first as { hint: string }).hint).toContain(
+      "You are dead and not released: it releases your spirit, as repop() does, to the graveyard nearest you.",
+    );
+    const pending = client.unstuck({ timeout: 3000 });
+    await untilAction(stub, "cast_spell");
+    push(stub, spellGo(90));
+    push(stub, teleportAck(91, { x: -1480.0, y: 4120.5, z: 180.2, o: 0 }));
+    await Bun.sleep(20);
+    push(stub, ghostFlags(92));
+    const r = await pending;
+    expect(r).toMatchObject({ ok: true, status: "moved" });
+    expect(client.state.self.ghost?.value).toBe(true);
+    client.close();
+    await stub.stop();
+  });
+
   test("a refusal is cast_failed with its reason, and the next call asks again", async () => {
     const stub = startStub({ onConnect: () => world() });
     const client = await inWorld(stub);

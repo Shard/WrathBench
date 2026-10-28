@@ -5935,6 +5935,10 @@ export class WrathClient {
       return { ok: false, status: "confirm", hint };
     }
     this.unstuckArmedUntil = undefined;
+    // The confirm line still waiting in the harness block would tell the
+    // model nothing was sent once this sends: drop it.
+    this.actionHints.delete(`unstuck:confirm:${this.originOf?.() ?? ""}`);
+    const wasCorpse = this.isCorpse();
     const timeout = options.timeout ?? 20_000;
     const deadline = now + timeout;
     const own = (caster: string): boolean => this.state.self.guid === undefined || guidKey(caster) === this.state.self.guid;
@@ -6013,6 +6017,20 @@ export class WrathClient {
           `Stuck went off but no move was observed within ${Math.round(timeout / 1000)}s: the server moves no one on a flight, ` +
             "and a ghost only where a graveyard serves the zone; re-read state.self.position",
         );
+      }
+      // A body's release lands its ghost flag a few ms after the port, as
+      // `repop` waits for; a caller reading `state.self` next sees the ghost.
+      const ghostWindow = Math.min(REPOP_SETTLE_MS, deadline - Date.now());
+      if (wasCorpse && this.state.self.ghost?.value !== true && ghostWindow > 0) {
+        try {
+          await this.waitEvent(() => this.state.self.ghost?.value === true, {
+            timeout: ghostWindow,
+            includeBuffered: false,
+            description: "the ghost flag after Stuck released the body",
+          });
+        } catch (e) {
+          if (!(e instanceof EventTimeoutError)) throw e;
+        }
       }
       await this.awaitAreaAfter(portSeq, deadline);
       const self = this.state.self;
