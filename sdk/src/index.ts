@@ -3,11 +3,11 @@
  *
  * This file is the package's whole public surface, deliberately: nothing
  * outside sdk/ imports a path under it (infra/stack-boundary.ts). The SDK is
- * versioned on its own (`SDK_VERSION`, `version.ts`); a harness version pins
- * one SDK version, so a change here that a model can see also moves the
- * harness that pins it (docs/METHODOLOGY.md, "Fixed harness, frozen per
- * version"). Adding to the surface is a minor SDK bump; changing or removing
- * anything exported here is a major one.
+ * versioned on its own (`SDK_VERSION`, `version.ts`; docs/METHODOLOGY.md,
+ * "Fixed harness, frozen per version"); a change here that a model can see is
+ * still a harness change ("Changing this document" there).
+ * TODO: which changes to this surface bump which part of SDK_VERSION is not
+ * settled.
  */
 
 export {

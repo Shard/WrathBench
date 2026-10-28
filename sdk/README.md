@@ -73,13 +73,14 @@ benchmark that drives the stack; nothing in the stack imports it
 ### Versioning
 
 The SDK has its own version, `SDK_VERSION` (`src/version.ts`, the same string
-as `package.json`), and `@wrathbench/mcp` releases with it at the same
-version. A harness pins one: the runner depends on `workspace:0.1.0`, so an
-SDK that moves without the pin fails the install, and every run records the
-version it drove as `sdkVersion` in `meta.json`. Adding to the public surface
-(`src/index.ts`) is a minor SDK bump, changing or removing any of it a major
-one; a change a model can see also moves the harness that pins it
-(`docs/METHODOLOGY.md`, "Fixed harness, frozen per version").
+as `package.json`; `docs/METHODOLOGY.md`, "Fixed harness, frozen per
+version"), and `@wrathbench/mcp` carries the same one. As built, the runner
+depends on the stack at an exact version (`workspace:0.1.0`), so an SDK whose
+version moves fails the install until that dependency moves too, and every
+run records the version it drove as `sdkVersion` in `meta.json`. A change a
+model can see is still a harness change (`docs/METHODOLOGY.md`, "Changing
+this document"). Which changes bump which part of the SDK's version is not
+settled yet.
 
 The module's wire has a version of its own, the integer `protocol` on
 `GET /health` (`module/PROTOCOL.md`, "Versioning"). `connect` checks it before

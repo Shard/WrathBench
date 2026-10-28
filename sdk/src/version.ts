@@ -2,11 +2,10 @@
  * The SDK's own version, and the module protocol it speaks.
  *
  * `SDK_VERSION` is this package's `package.json` version (a test holds the
- * two together). It moves on its own clock, not the harness's: a harness
- * version pins one SDK version and records which (docs/METHODOLOGY.md,
- * "Fixed harness, frozen per version"), so a change a model can see still
- * moves the harness that pins it. `@wrathbench/mcp` releases with the SDK
- * and carries the same version.
+ * two together), separate from the harness's (docs/METHODOLOGY.md, "Fixed
+ * harness, frozen per version"). As built, the runner depends on it at an
+ * exact version and records it per run (`sdkVersion`, docs/ARCHITECTURE.md);
+ * `@wrathbench/mcp` carries the same version.
  *
  * `MODULE_PROTOCOL_VERSIONS` are the module protocol versions this SDK can
  * drive (`module/PROTOCOL.md`, "Versioning"): the integer the module serves

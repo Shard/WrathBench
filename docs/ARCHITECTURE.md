@@ -20,8 +20,8 @@ trajectories or the wiki. The **benchmark** — `runner/` with `infra/`,
 `wiki/`, `dashboard/`, `collector/` and `minimap/` around it — is what turns
 that surface into a measurement: the fixed loop and the CLI drivers, the
 prompt and context policy, its own tools, the records, the watchdogs, the
-scoring. The stack is meant to lift out into a repository of its own
-(operator, 2026-10-28), so the line is enforced rather than hoped for:
+scoring. The stack could move to a separate repository later, so the line is
+enforced rather than hoped for:
 `infra/stack-boundary.ts`, a test and a CI step, fails when anything in the
 stack imports outside itself but a declared dependency, or when anything
 outside it reaches into stack sources by path.
@@ -53,13 +53,16 @@ runner implements:
   it served; the sandbox host takes `onNotice` and `onActions`. Run config,
   ids, the harness stamp, the wiki and the episodic log never enter the stack.
 
-Versions: the SDK has its own version, and `@wrathbench/mcp` releases with it
-at the same one; a harness version pins one (the runner's `workspace:0.1.0`
-dependency, so a moved SDK fails the install until the pin moves) and every
-run records it as `sdkVersion` in `meta.json`, beside `harnessVersion` and
-outside the comparability tuple. The module's wire protocol has an integer
-version of its own on `GET /health`, which the SDK checks on `connect`
-(`module/PROTOCOL.md`, "Versioning").
+Versions, as built: the SDK has its own version (docs/METHODOLOGY.md, "Fixed
+harness, frozen per version"), and `@wrathbench/mcp` carries the same one.
+The runner depends on the stack at an exact version (`workspace:0.1.0` in its
+`package.json`), so an SDK whose version moves fails the install until that
+dependency moves with it, and every run records the version in `meta.json` as
+`sdkVersion`, beside `harnessVersion`. As implemented, `sdkVersion` is run
+metadata and not a field of the comparability tuple. The module's wire
+protocol has an integer version of its own on `GET /health`, which the SDK
+checks on `connect` and the runner checks before a launch or resume
+(`fetchServerBuild`; `module/PROTOCOL.md`, "Versioning").
 
 ### module/ (C++, GPL-2.0-or-later, in-process with worldserver)
 
@@ -85,9 +88,13 @@ Observation decodes the wire's own delta shape. The module serves whitelisted fi
 
 The surface the model programs against. Thin typed wrappers over module actions, a typed event stream, and a small set of composed helpers that emerged from real runs (for example `moveTo`, `killTarget`, `lootCorpse`, `acceptQuestFrom`). Helpers are added because a run needed them, not in anticipation.
 
-The SDK is versioned on its own (`SDK_VERSION`, `sdk/src/version.ts`), and a
-harness version pins one SDK version (docs/METHODOLOGY.md, "Fixed harness,
-frozen per version"). `sdk/src/index.ts` is its whole public surface.
+The SDK is versioned on its own (`SDK_VERSION`, `sdk/src/version.ts`;
+docs/METHODOLOGY.md, "Fixed harness, frozen per version"), and the runner
+depends on it at an exact version (above). `sdk/src/index.ts` is its whole
+public surface. Its per-call hints are SDK surface (docs/METHODOLOGY.md, "The
+model surface"); delivering them on a channel a snippet cannot drop is the
+stack's dispatcher's job (`mcp/src/tools.ts`, "Harness-delivered hints"
+below).
 
 ### mcp/ (Bun/TypeScript, MIT)
 
