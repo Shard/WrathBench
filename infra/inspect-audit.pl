@@ -50,10 +50,13 @@ $tok =~ s/[\r\n]+\z//;
 die "inspect-audit: an empty token\n" if $tok eq '';
 # A smoke's sessions rather than one run's: the line `smoke-<name>-*` names
 # the fixed part of the tokens a smoke gives its sessions (infra/smoke:
-# `smoke-<name>-<uuid>`, which no run's token starts with), and every file of
-# a session it names is read. The prefix is no secret; the rest of each
-# token is, and is struck wherever it appears.
-my $smoke = $tok =~ /\Asmoke-[a-z0-9]+-\*\z/;
+# `smoke-<name>-<uuid>`, which no run's token starts with; the name may hold
+# hyphens), and every file of a session it names is read — the name exactly:
+# what follows it must open with the uuid's first eight hex digits, so
+# `quest` does not read `quest-item-start`'s, nor `group` `group-a`'s. The
+# prefix is no secret; the rest of each token is, and is struck wherever it
+# appears.
+my $smoke = $tok =~ /\Asmoke-[a-z0-9]+(?:-[a-z0-9]+)*-\*\z/;
 $tok =~ s/\*\z// if $smoke;
 # The module names the file after the token with every byte outside
 # [A-Za-z0-9_-] as '_' (module/PROTOCOL.md, "Audit log").
@@ -73,12 +76,12 @@ my $prefix = "$ftok.";
 my @smoked;
 while (defined(my $n = readdir $dh)) {
   if ($smoke) {
-    if ($n =~ /\A\Q$ftok\E[A-Za-z0-9_-]+\.(\d{4}-\d\d-\d\d)\.jsonl\z/) {
+    if ($n =~ /\A\Q$ftok\E[0-9a-f]{8}-[A-Za-z0-9_-]*\.(\d{4}-\d\d-\d\d)\.jsonl\z/) {
       my $day = $1;
       next if $since_day ne '' && $day lt $since_day;
       next if $until_day ne '' && $day gt $until_day;
       push @smoked, [$day, $n];
-    } elsif ($n =~ /\A\Q$ftok\E[A-Za-z0-9_-]+\.jsonl\z/) {
+    } elsif ($n =~ /\A\Q$ftok\E[0-9a-f]{8}-[A-Za-z0-9_-]*\.jsonl\z/) {
       push @smoked, ['', $n];
     }
     next;

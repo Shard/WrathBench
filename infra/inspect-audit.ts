@@ -75,7 +75,7 @@ export function parseArgs(argv: readonly string[], now: number): AuditArgs | { e
   }
   const smoke = v.get("--smoke") ?? null;
   if (smoke !== null) {
-    if (!/^[a-z0-9]+$/.test(smoke)) return { error: "--smoke is the bare name in a smoke's tokens, like edge for smoke-edge-<uuid>" };
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(smoke)) return { error: "--smoke is the name in a smoke's tokens, like edge for smoke-edge-<uuid> or chest-loot for smoke-chest-loot-<uuid>" };
     if (positional.length > 0) return { error: "--smoke reads a smoke's sessions, not a run's: no run id with it" };
   } else if (positional.length !== 1 || !isValidRunId(positional[0]!)) {
     return { error: positional.length === 0 ? "a run id is needed" : `not one run id: ${positional.join(" ")}` };
