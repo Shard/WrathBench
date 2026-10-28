@@ -4989,17 +4989,24 @@ namespace WrathBench
         // Held while a forced ledge is being fallen: the module's packets
         // carry fallTime 0, so a heartbeat mid-fall would move the server's
         // fall start down to the mid-air z (UpdateFallInformationIfNeed) and
-        // the landing would be charged for less than the ledge.
+        // the landing would be charged for less than the ledge. The same check
+        // runs before a turn report (below), which restarts the interval: on a
+        // bending route at a mount's speed turns can come faster than 500ms,
+        // and the check must not wait on a heartbeat that never falls due.
+        auto drifted = [&]() -> bool
+        {
+            if (player->GetExactDist2d(m.curX, m.curY) <= 15.0f)
+                return false;
+            SendMovePacket(s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE,
+                player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation(),
+                player->GetTransport());
+            FinishMove(s, "interrupted");
+            return true;
+        };
         if (nowMs - m.lastPacketMs >= 500 && !m.inFall)
         {
-            if (player->GetExactDist2d(m.curX, m.curY) > 15.0f)
-            {
-                SendMovePacket(s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE,
-                    player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation(),
-                    player->GetTransport());
-                FinishMove(s, "interrupted");
+            if (drifted())
                 return;
-            }
             SendMovePacket(s, player, MSG_MOVE_HEARTBEAT, MOVEMENTFLAG_FORWARD, m.curX, m.curY, m.curZ, m.curO,
                 FindTransportAt(player->GetMap(), m.curX, m.curY, m.curZ));
             m.lastPacketMs = nowMs;
@@ -5019,6 +5026,8 @@ namespace WrathBench
         // does. Not mid-fall: nothing is sent between the edge and the landing.
         if (!m.inFall && AngleBetween(m.curO, m.sentO) > TURN_REPORT_RADIANS)
         {
+            if (drifted())
+                return;
             SendMovePacket(s, player, MSG_MOVE_SET_FACING, MOVEMENTFLAG_FORWARD, m.curX, m.curY, m.curZ, m.curO,
                 FindTransportAt(player->GetMap(), m.curX, m.curY, m.curZ));
             m.lastPacketMs = nowMs;
