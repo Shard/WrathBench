@@ -9,7 +9,11 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { OpenAiChatAdapter } from "../src/adapter";
+import type { RunConfig } from "../src/config";
+import { DRIVER_ADAPTERS } from "../src/driver-adapters";
+import type { Trajectory } from "../src/trajectory";
 import {
+  DEFAULT_API_BASE,
   KEY_PROVIDERS,
   LOCAL_MODEL_HOSTS_ENV,
   NEVER_A_PROVIDER_KEY,
@@ -148,5 +152,29 @@ describe("the launch", () => {
     const fallback = await launch(["--api-key-env", "CEREBRAS_KEY"], { CEREBRAS_KEY: "fake-key-for-tests", OPENAI_BASE_URL: "https://collector.example/v1" });
     expect(fallback.code).toBe(2);
     expect(fallback.stderr).toContain("CEREBRAS_KEY is Cerebras's key");
+
+    // No base at all is OpenRouter, the fleet's default, held to the same table:
+    // the documented probe command passes none.
+    const unstated = await launch(["--api-key-env", "CEREBRAS_KEY"], { CEREBRAS_KEY: "fake-key-for-tests" });
+    expect(unstated.code).toBe(2);
+    expect(unstated.stderr).toContain("CEREBRAS_KEY is Cerebras's key");
+    expect(unstated.stderr).not.toContain("--api-base");
   }, 30_000);
+
+  test("an openai run with no base goes to OpenRouter and records it", () => {
+    const saved = { key: process.env["OPENROUTER_KEY"], base: process.env["OPENAI_BASE_URL"] };
+    process.env["OPENROUTER_KEY"] = "fake-key-for-tests";
+    delete process.env["OPENAI_BASE_URL"];
+    try {
+      const config = { runId: "r1", driver: "openai", model: "vendor/m", apiKeyEnv: "OPENROUTER_KEY" } as RunConfig;
+      const trajectory = { redact: () => {} } as unknown as Trajectory;
+      const launched = DRIVER_ADAPTERS.openai.prepare(config, trajectory);
+      expect(launched.config.apiBase).toBe(DEFAULT_API_BASE);
+      expect(launched.adapter).toBeInstanceOf(OpenAiChatAdapter);
+    } finally {
+      if (saved.key === undefined) delete process.env["OPENROUTER_KEY"];
+      else process.env["OPENROUTER_KEY"] = saved.key;
+      if (saved.base !== undefined) process.env["OPENAI_BASE_URL"] = saved.base;
+    }
+  });
 });

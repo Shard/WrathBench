@@ -395,7 +395,10 @@ export const runConfigSchema = z.object({
   driver: driverSchema.default(DEFAULT_DRIVER),
   /** Model id passed through verbatim to the OpenAI-compatible endpoint. */
   model: z.string().optional(),
-  /** e.g. https://openrouter.ai/api/v1 — or OPENAI_BASE_URL from env. */
+  /**
+   * e.g. https://openrouter.ai/api/v1 — or OPENAI_BASE_URL from env. Unset, the
+   * openai driver uses `DEFAULT_API_BASE` (OpenRouter) and records it here.
+   */
   apiBase: z.string().optional(),
   /** Name of the env var holding the API key. The key itself is never stored. */
   apiKeyEnv: z.string().default("OPENROUTER_KEY"),
