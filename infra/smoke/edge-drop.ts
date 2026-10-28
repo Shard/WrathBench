@@ -208,7 +208,14 @@ async function main(): Promise<void> {
     if (!(await until(() => client.state.self.ghost?.value === true, 10_000))) fail("no ghost flag after repop");
     const ghost = await selfPosition(client);
     log(`released to ${fmt(ghost)}, ${dist2d(ghost, corpse).toFixed(0)}y from the corpse and ${(ghost.z - corpse.z).toFixed(0)}y above it`);
-    const run = await client.moveTo({ x: corpse.x, y: corpse.y, z: corpse.z }, { timeout: MOVE_TIMEOUT_MS });
+    let run = await client.moveTo({ x: corpse.x, y: corpse.y, z: corpse.z }, { timeout: MOVE_TIMEOUT_MS });
+    // The body lies where the fall landed, which may be off the mesh (the leg
+    // below may have started from the mesh up to 10y away): then the move is
+    // to the walkable ground the module names beside it, within reclaim range.
+    if (!run.ok && run.status === "target_off_mesh" && run.nearest) {
+      log(`  the corpse is off the mesh; moving to the nearest walkable ground ${fmt(run.nearest)} instead`);
+      run = await client.moveTo(run.nearest, { timeout: MOVE_TIMEOUT_MS });
+    }
     if (ghost.z - corpse.z <= DROP_MIN_DZ) {
       log(`NOTE[ghost]: the release point is not above the corpse, so the ghost's edge drop is not exercised here (${run.status})`);
     } else if (run.status !== "arrived") {
