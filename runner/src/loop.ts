@@ -7,7 +7,7 @@
 
 import type { Database } from "bun:sqlite";
 import { join } from "node:path";
-import { AdapterError, type ChatAdapter } from "./adapter";
+import { AdapterError, type AssistantTurn, type ChatAdapter } from "./adapter";
 import {
   CONTEXT_POLICY,
   PLAYER_FLAGS_GHOST,
@@ -124,6 +124,42 @@ export interface UsageGauge {
 export type StopRequest =
   | { kind: "pause"; reason: PauseReason; detail: string }
   | { kind: "terminate"; detail: string };
+
+/**
+ * A model turn as the history keeps it and every later request replays it:
+ * the message the `response` record carries.
+ *
+ * A turn with tool calls, or with text, is the provider's own message as it
+ * came back. A turn with neither — a reasoning-only answer, whose reasoning
+ * the openai driver does not carry — is replayed with `content: ""`, not
+ * `null`: an assistant message with null content and no `tool_calls` is not a
+ * valid chat message, and strict providers refuse the whole request for it
+ * (an OpenCode Go upstream answered 400 "messages[32] assistant must provide
+ * content, reasoning_content or tool_calls"). The empty string is the faithful
+ * spelling of "said nothing"; the turn is kept rather than dropped because a
+ * turn appends exactly one assistant message, which the window cut, the
+ * request record's `fromTurn` and the replay's history rebuild all count on.
+ *
+ * The normalisation happens here, at the source, so the `response` record
+ * carries what is sent, and a replay of an older trajectory, whose records
+ * carry `null`, still rebuilds the bytes that trajectory sent.
+ */
+export function replayedAssistant(turn: Pick<AssistantTurn, "content" | "toolCalls">): ChatMessage {
+  const hasCalls = turn.toolCalls.length > 0;
+  return {
+    role: "assistant",
+    content: turn.content === null && !hasCalls ? "" : turn.content,
+    ...(hasCalls
+      ? {
+          tool_calls: turn.toolCalls.map((tc) => ({
+            id: tc.id,
+            type: "function" as const,
+            function: { name: tc.name, arguments: tc.arguments },
+          })),
+        }
+      : {}),
+  };
+}
 
 export function stopRequestOf(signal: AbortSignal | undefined): StopRequest | null {
   if (signal === undefined || !signal.aborted) return null;
@@ -1345,19 +1381,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         };
       }
       watchdogs.noteModelOutput();
-      const assistant: ChatMessage = {
-        role: "assistant",
-        content: outcome.turn.content,
-        ...(outcome.turn.toolCalls.length > 0
-          ? {
-              tool_calls: outcome.turn.toolCalls.map((tc) => ({
-                id: tc.id,
-                type: "function" as const,
-                function: { name: tc.name, arguments: tc.arguments },
-              })),
-            }
-          : {}),
-      };
+      const assistant = replayedAssistant(outcome.turn);
       // The backend that actually served the call, when the response body names
       // one (OpenRouter's top-level `provider`). Logged because cache-miss
       // attribution is impossible without it: an aggregator

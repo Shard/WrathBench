@@ -665,6 +665,38 @@ describe("OpenAiChatAdapter budget pauses", () => {
     expect(out.kind === "pause" && out.reason).toBe("rate-limited");
   });
 
+  test("an upstream 400 that names one of our messages fails fast as an AdapterError, not a rate-limited pause", async () => {
+    // Verbatim from mimo-v26-flash-go a3: the request carried an assistant
+    // message with null content and no tool calls. A harness bug, the same
+    // bytes on every retry — not pool weather.
+    const body =
+      '{"error":{"param":"messages[32] assistant must provide content, reasoning_content or tool_calls","type":"server_error","message":"Upstream request failed: [400] Param Incorrect"}}';
+    let calls = 0;
+    const adapter = new OpenAiChatAdapter({
+      baseUrl: "http://model.invalid/v1",
+      apiKey: "k",
+      model: "m",
+      maxAttempts: 3,
+      fetchImpl: Object.assign(
+        (): Promise<Response> => {
+          calls++;
+          return Promise.resolve(status(400, body));
+        },
+        { preconnect: () => {} },
+      ) as unknown as typeof fetch,
+      sleep: () => Promise.resolve(),
+    });
+    await expect(adapter.complete(req)).rejects.toThrow(/messages\[32\]/);
+    expect(calls).toBe(1);
+  });
+
+  test("the same refusal in a 2xx error body is not read as a provider blip either", async () => {
+    const errBody = JSON.stringify({
+      error: { param: "messages[3] assistant must provide content", type: "server_error", message: "Upstream request failed: [400] Param Incorrect" },
+    });
+    await expect(adapterPlaying([status(200, errBody), status(200, errBody)]).complete(req)).rejects.toThrow(/after 2 attempt\(s\)/);
+  });
+
   test("a 404 for a bad model slug still fails fast as an AdapterError", async () => {
     const body = JSON.stringify({ error: { message: "No endpoints found for zz/not-a-model", code: 404 } });
     await expect(adapterPlaying([status(404, body)]).complete(req)).rejects.toThrow(/No endpoints found/);
