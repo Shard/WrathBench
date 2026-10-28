@@ -2756,13 +2756,23 @@ namespace WrathBench
         if (!touched)
         {
             // In the air over the request: the slower start whose arc comes
-            // down on the surface there, which must clear the ground before it.
+            // down on the surface there, which must clear the ground before it
+            // and, step by step, the same two lines the run's arc is held to.
             Column const& at = air.back();
             float const secs = Movement::computeFallTime(edge.z - at.ground.z, slowFall);
             float const speed = secs > 0.0f ? (at.t - travelled) / secs : run;
+            WbVec prevArc = edge;
             for (Column const& c : air)
-                if (c.t < at.t && bodyAt(c.t, speed) < c.ground.z)
+            {
+                WbVec const here{ c.ground.x, c.ground.y, c.t < at.t ? bodyAt(c.t, speed) : at.ground.z };
+                if (c.t < at.t && here.z < c.ground.z)
                     return refuse("air_to_request");
+                if (!map->isInLineOfSight(prevArc.x, prevArc.y, prevArc.z + EDGE_LOOK_OFFSET, here.x, here.y, here.z + EDGE_LOOK_OFFSET,
+                        phase, LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing)
+                    || !clear(prevArc, prevArc.z, here, here.z))
+                    return refuse("air_to_request");
+                prevArc = here;
+            }
             landing = at.ground;
             landT = at.t;
         }
@@ -2851,6 +2861,8 @@ namespace WrathBench
                 // the air or the rock.
                 float const sx = start.x - landing.x, sy = start.y - landing.y;
                 float const len = std::sqrt(sx * sx + sy * sy);
+                if (len < 0.01f && !clear(landing, landing.z, start, start.z))
+                    return refuse("blocked"); // straight up or down onto it: the body's line alone
                 WbVec p = landing;
                 for (float t = 0.0f; t < len; )
                 {
