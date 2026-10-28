@@ -2116,6 +2116,35 @@ namespace WrathBench
         return levels.size();
     }
 
+    // Two points the mesh's smooth path cannot join although one stands where
+    // the other is: within the path's own slop of each other in 2D
+    // (WbNav::SMOOTH_SLOP, the core's SMOOTH_PATH_SLOP — the steering skips
+    // a corner that close), on one floor (MESH_LEVEL_MERGE), on polygons a
+    // path could join (the same, or neither on a closed island apart from
+    // the other) — but two polygons, not one: the core adds a second point
+    // to a one-point smooth path only for a one-polygon corridor, so it
+    // answers NOPATH and the planner no_route (WbNav::PlanCorridor). Only ever
+    // asked after both have failed; a route that exists is always theirs.
+    static bool WithinSlop(Player* player, WbVec const& a, float x, float y, float z)
+    {
+        float const dx = a.x - x, dy = a.y - y;
+        if (dx * dx + dy * dy > WbNav::SMOOTH_SLOP * WbNav::SMOOTH_SLOP || std::fabs(a.z - z) > MESH_LEVEL_MERGE)
+            return false;
+        auto& mmap = player->GetMap()->GetMapCollisionData().GetMMapData();
+        dtNavMesh const* navMesh = mmap.GetNavMesh();
+        dtNavMeshQuery const* query = mmap.GetNavMeshQuery();
+        if (!navMesh || !query)
+            return false;
+        ExcludePolysFilter const base;
+        float pa[3] = { a.y, a.z, a.x };
+        float pb[3] = { y, z, x };
+        dtPolyRef const ra = CorePolyAt(query, base, pa, nullptr);
+        dtPolyRef const rb = CorePolyAt(query, base, pb, nullptr);
+        if (!ra || !rb)
+            return false;
+        return ra == rb || (!WbNav::OnIsland(navMesh, base, ra, rb) && !WbNav::OnIsland(navMesh, base, rb, ra));
+    }
+
     // How far from a request whose own polygon is on an island the walk may
     // end instead, at the reachable mesh nearest it: the core's own
     // far-from-polygon distance (PathGenerator::BuildPolyPath paths to an end
@@ -2272,6 +2301,19 @@ namespace WrathBench
         std::vector<WbVec> partial;
         auto incomplete = [&]() {
             r.status = "path_incomplete";
+            // Already where the request is (WithinSlop: within the smooth
+            // path's slop on a neighbouring polygon, which neither the core nor
+            // the planner joins): the walk is the step to it, settled like any
+            // route. Audited as move_end_slop.
+            if (WithinSlop(player, { sx, sy, sz }, x, y, z))
+            {
+                r.status = nullptr;
+                r.hasReached = false;
+                r.slopEnd = true;
+                r.points = { { sx, sy, sz }, { x, y, sz } };
+                SettleRoute(player, r, z, reqZ, force);
+                return r;
+            }
             if (!partial.empty())
                 TryEdgeDrop(player, partial, x, y, z, reqZ, force, r);
             bool routeLedge = false; // the route itself steps down a ledge on its way to its end
@@ -2939,18 +2981,6 @@ namespace WrathBench
             return ex * ex + ey * ey <= 16.0f; // endpointOk: within 4y of the end, 2D
         };
         std::vector<WbVec> below;
-        // Already there: a start within the route's own arrival tolerance of
-        // the request (endpointOk's 4y, 2D) on its floor (MESH_LEVEL_MERGE,
-        // the band two levels are one floor within) needs no leg below. A
-        // path between two points that close is not one the core or the
-        // planner returns: on two adjacent polygons the smooth path is one
-        // point, which the core turns into a NOPATH shortcut and the planner
-        // into no_route — at Skettis the fall came down 0.8y under the
-        // request, on the polygon beside its own, and every such request was
-        // refused no_route_from_landing.
-        if (nearEnd(start) && std::fabs(start.z - z) <= MESH_LEVEL_MERGE)
-            below.push_back(start);
-        if (below.empty())
         {
             PathGenerator gen(player);
             if (gen.CalculatePath(start.x, start.y, start.z, x, y, z, false)
@@ -2973,6 +3003,15 @@ namespace WrathBench
                 && PlanAround(player, navMesh, plan, base, startRef, endRef, startPt, endPt, planned, &why)
                 && nearEnd(planned.back()))
                 below = std::move(planned);
+        }
+        // Neither has a path, and the start is where the request is
+        // (WithinSlop): the route ends there, with no leg below. At Skettis
+        // the fall came down 0.8y straight under the request, on the polygon
+        // beside its own, and was refused no_route_from_landing.
+        if (below.empty() && WithinSlop(player, start, x, y, z))
+        {
+            below.push_back(start);
+            ed.endAtLanding = true;
         }
         if (below.empty())
             return refuse("no_route_from_landing");
@@ -3334,6 +3373,9 @@ namespace WrathBench
                             .Raw("to", Json::Writer().Add("x", (double)r.endToX).Add("y", (double)r.endToY).Add("z", (double)r.endToZ).Str());
                     Audit(*s, "action", a.Str());
                 }
+                if (r.slopEnd)
+                    Audit(*s, "action", Json::Writer().Add("op", "move_end_slop").Add("moveId", moveId)
+                        .Raw("to", Json::Writer().Add("x", (double)x).Add("y", (double)y).Add("z", (double)z).Str()).Str());
                 if (r.longPlan)
                     Audit(*s, "action", Json::Writer().Add("op", "move_long_plan").Add("moveId", moveId)
                         .Add("polys", r.longPolys).Add("pointCount", (uint64_t)r.points.size()).Str());
@@ -3387,6 +3429,8 @@ namespace WrathBench
                             .Add("walkYards", (double)ed.walkYards).Add("landingSnap", ed.landingSnap);
                     if (ed.landingSnap)
                         a.Raw("snapTo", vec(ed.snapTo)).Add("snapYards", (double)ed.snapYards);
+                    if (ed.endAtLanding)
+                        a.Add("endAtLanding", true);
                     if (ed.fromStart)
                         a.Add("fromStart", true).Add("firstReason", ed.firstReason);
                     Audit(*s, "action", a.Str());
