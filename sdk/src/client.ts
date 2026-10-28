@@ -8382,8 +8382,9 @@ export class WrathClient {
    * `completable: false` is the questgiver saying no: `not_complete` when the
    * quest log agrees, `wrong_questgiver` when the log says the objectives are
    * done — that refusal means another NPC ends this quest. Nothing is sent when
-   * the NPC's current marker already says no turn-in is ready there
-   * (`not_ready`) or the cached positions put it out of reach (`too_far`).
+   * the NPC's current marker already says no turn-in is ready there and the
+   * quest log does not show the quest complete (`not_ready`), or the cached
+   * positions put it out of reach (`too_far`).
    *
    * A reward window offering two or more choice items, with no `rewardIndex`
    * passed, is not answered: the call returns `choose_reward` with the
@@ -8417,8 +8418,19 @@ export class WrathClient {
       // not show yet, counts; an unobserved or older one sends, as before.
       // Ahead of the range check, as in `questOffer`: an NPC with nothing to
       // hand in has nothing to walk over for.
+      //
+      // A quest the log shows complete always sends, whatever the marker, as
+      // a client does not gate a turn-in on the icon: the core computes the
+      // marker through gates `HandleQuestgiverCompleteQuest` does not apply.
+      // It leaves out an ender whose QUEST_AVAILABLE conditions fail, a
+      // script may override it, and it reads `none` for a creature that was
+      // hostile when asked, which a reputation change can end with no field
+      // on the NPC moving; the turn-in checks only that the NPC ends the
+      // quest and is not hostile now. Balos Jacken's `none` from the fight
+      // refused quest 1286 that way (see `freshQuestgiverMarkerOf`).
       const marker = freshQuestgiverMarkerOf(this.state, npcId, this.questExchangeSeq, "reward", questId);
-      if (marker !== undefined && TURN_IN_NOT_READY.has(marker.name)) {
+      const doneInLog = this.state.quest(questId)?.complete === true;
+      if (marker !== undefined && TURN_IN_NOT_READY.has(marker.name) && !doneInLog) {
         const hint =
           `${questgiverMarkerClause(marker)} Nothing was sent. ` +
           'state.units({ questGiver: "reward" }) lists every NPC in view ready to take a turn-in.';
