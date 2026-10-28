@@ -48,6 +48,13 @@ my $tok = <STDIN>;
 die "inspect-audit: no token on stdin\n" unless defined $tok;
 $tok =~ s/[\r\n]+\z//;
 die "inspect-audit: an empty token\n" if $tok eq '';
+# A smoke's sessions rather than one run's: the line `smoke-<name>-*` names
+# the fixed part of the tokens a smoke gives its sessions (infra/smoke:
+# `smoke-<name>-<uuid>`, which no run's token starts with), and every file of
+# a session it names is read. The prefix is no secret; the rest of each
+# token is, and is struck wherever it appears.
+my $smoke = $tok =~ /\Asmoke-[a-z0-9]+-\*\z/;
+$tok =~ s/\*\z// if $smoke;
 # The module names the file after the token with every byte outside
 # [A-Za-z0-9_-] as '_' (module/PROTOCOL.md, "Audit log").
 (my $ftok = $tok) =~ s/[^A-Za-z0-9_-]/_/g;
@@ -63,7 +70,19 @@ opendir(my $dh, $dir) or die "inspect-audit: cannot read the audit directory\n";
 my $undated;
 my @days;
 my $prefix = "$ftok.";
+my @smoked;
 while (defined(my $n = readdir $dh)) {
+  if ($smoke) {
+    if ($n =~ /\A\Q$ftok\E[A-Za-z0-9_-]+\.(\d{4}-\d\d-\d\d)\.jsonl\z/) {
+      my $day = $1;
+      next if $since_day ne '' && $day lt $since_day;
+      next if $until_day ne '' && $day gt $until_day;
+      push @smoked, [$day, $n];
+    } elsif ($n =~ /\A\Q$ftok\E[A-Za-z0-9_-]+\.jsonl\z/) {
+      push @smoked, ['', $n];
+    }
+    next;
+  }
   if ($n eq "$ftok.jsonl") { $undated = $n; next; }
   next unless length($n) == length($ftok) + 17 && substr($n, 0, length($prefix)) eq $prefix && substr($n, -6) eq '.jsonl';
   my $day = substr($n, length($prefix), 10);
@@ -75,6 +94,7 @@ while (defined(my $n = readdir $dh)) {
 closedir $dh;
 # The order the runbook copies them in: the undated file from before day files, then the days.
 my @files = ((defined $undated ? ($undated) : ()), map { $_->[1] } sort { $a->[0] cmp $b->[0] } @days);
+@files = map { $_->[1] } sort { $a->[0] cmp $b->[0] || $a->[1] cmp $b->[1] } @smoked if $smoke;
 
 # Records are appended in clock order, so a big file that straddles `since`
 # is bisected to about where `since` falls instead of read from the top: a
@@ -99,7 +119,7 @@ my ($bytes, $records, $matched) = (0, 0, 0);
 my ($first, $newest);
 my %count;
 my @ring;
-my $qtok = quotemeta $tok;
+my $qtok = $smoke ? quotemeta($tok) . '[A-Za-z0-9_-]*' : quotemeta $tok;
 # One anchored match takes a record's clock, kind and op or opcode, in the
 # order the module writes them; anything else falls back to looser searches.
 my $shape = qr/\A\{"ts":(\d+),"session":"[^"]*","kind":"([A-Za-z_]+)","payload":\{(?:"seq":\d+,)?"(?:op|opcode)":"([A-Za-z0-9_]+)"/;
@@ -146,9 +166,16 @@ for my $n (@files) {
     $line =~ s/"session":"[^"]*"/"session":"[redacted]"/;
     $line = substr($line, 0, $cap) if length($line) > $cap;
     push @ring, $line;
-    shift @ring if @ring > $last;
+    # Several sessions' files interleave in time: keep every match and take
+    # the newest after (a smoke's window is small); one session's are in order.
+    shift @ring if @ring > $last && !$smoke;
   }
   close $fh;
+}
+if ($smoke) {
+  my $at = sub { my ($t) = $_[0] =~ /\A\{"ts":(\d+)/; defined $t ? $t : 0 };
+  @ring = sort { $at->($a) <=> $at->($b) } @ring;
+  splice(@ring, 0, @ring - $last) if @ring > $last;
 }
 
 print "F\t", scalar(@files), "\t$bytes\n";

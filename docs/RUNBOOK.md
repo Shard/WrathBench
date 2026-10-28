@@ -71,6 +71,7 @@ bun wb inspect pad <run-id> [--since 2h]                       # pad size over t
 bun wb inspect pad <run-id> --at <iso>                         # the pad's text at a moment, rebuilt from the record
 bun wb inspect audit <run-id> [--op WB_MOVE_RESULT [--status S]] [--since 1h]
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
+bun wb inspect audit --smoke edge --op move_edge_drop --since 1h   # a smoke's sessions (tokens smoke-<name>-<uuid>)
 bun wb inspect publisher [<run-id>]                  # last flip, versions per run, the secret scan, last passes
 ```
 
@@ -82,7 +83,9 @@ struck from everything printed, older trajectories included. The audit log's
 files are named after it, so `inspect audit` reads the token from the run's
 `meta.json`, hands it on stdin to `infra/inspect-audit.pl` inside the
 worldserver container, which reduces the files there, and prints counts or
-struck records and never a file name. `live`, `run`, `trajectory`, `tools`
+struck records and never a file name. A smoke has no run and no `meta.json`;
+its sessions' tokens are `smoke-<name>-<uuid>`, so `--smoke <name>` hands the
+reducer the fixed prefix instead and every token after it is struck. `live`, `run`, `trajectory`, `tools`
 and `pad` are `infra/inspect-run.ts` in the runner pod, which imports nothing outside
 `bun:sqlite` and `node:*`; before a release ships it, the same file runs in the
 pod from stdin:
