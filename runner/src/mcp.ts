@@ -1,140 +1,58 @@
 #!/usr/bin/env bun
 /**
- * MCP server over stdio: hand-rolled JSON-RPC, newline-delimited, per the MCP
- * stdio transport. Hand-rolled rather than the MCP SDK because the server side
- * of the protocol we need — initialize, tools/list, tools/call, ping — is a
- * few dozen lines, and the runner's dependency budget is "Bun built-ins first"
- * (CLAUDE.md). Revisit if we ever need resources, sampling, or notifications.
+ * The benchmark's MCP server: `@wrathbench/mcp`'s server over the runner's
+ * nine tools (`tools.ts`), and its standalone stdio mode — an operator's
+ * hand-driven run, as auditable as a loop-driven one.
  *
  * Usage (stdio client, e.g. an MCP-capable agent):
  *   bun runner/src/mcp.ts [--token <session-token>] [--run-id <id>]
  *
- * Tool calls are logged to the run's trajectory so an MCP-driven session is as
- * auditable as a loop-driven one. Everything except the transport lives in
- * tools.ts, shared with the agent loop.
+ * Tool calls are logged to the run's trajectory. Everything except the
+ * trajectory, the wiki and the episodic log is the stack's: the transport
+ * (`mcp/src/server.ts`), the dispatcher and the core tools
+ * (`mcp/src/tools.ts`), the sandbox. The drivers serve the same `McpServer`
+ * over a loopback socket and hand their CLI the stack's bridge.
  */
 
 import { join } from "node:path";
+import {
+  CLIENT_CACHE_FILE,
+  ClientCacheStore,
+  leaseRunSecret,
+  McpServer as StackMcpServer,
+  Scratchpad,
+  serveStdio,
+  type McpServerOptions,
+  type OnToolCall,
+} from "@wrathbench/mcp";
 import { openWikiBundle } from "./wiki";
 import { EpisodicLog } from "./episodic";
 import { ClosedWindowReflectGate } from "./reflect";
 import { appendPendingActionHints, callTool, coerceToolArgs, toolsFor, type ToolContext } from "./tools";
-import { leaseRunSecret } from "@wrathbench/mcp";
-import { CLIENT_CACHE_FILE, ClientCacheStore } from "@wrathbench/mcp";
 import { SandboxHost } from "./sandbox/host";
-import { Scratchpad } from "@wrathbench/mcp";
 import { Trajectory } from "./trajectory";
 import { newRunId, newSessionToken, loadRunConfig } from "./config";
 import { harnessVersion } from "./version";
 
-interface JsonRpcRequest {
-  jsonrpc: "2.0";
-  id?: number | string | null;
-  method: string;
-  params?: Record<string, unknown>;
-}
-
-interface JsonRpcResponse {
-  jsonrpc: "2.0";
-  id: number | string | null;
-  result?: unknown;
-  error?: { code: number; message: string };
-}
-
-export const MCP_PROTOCOL_VERSION = "2024-11-05";
+export { MCP_PROTOCOL_VERSION } from "@wrathbench/mcp";
+export type { OnToolCall } from "@wrathbench/mcp";
 
 /**
- * Told about every `tools/call` once it has an answer. `dispatchTs` is the
- * wall clock taken as the call arrived, before the tool ran: every writer of
- * this callback appends its records after the fact, so their own timestamps
- * are write time, and this is the only honest start of the call it has.
+ * The stack's server over this run's tools: the list as `toolsFor` renders it
+ * for the context's wiki options, and the runner's dispatcher bound to the
+ * context. `serverInfo.name` is the runner's own.
  */
-export type OnToolCall = (
-  name: string,
-  args: unknown,
-  result: { text: string; isError?: boolean },
-  dispatchTs: number,
-) => void;
-
-export class McpServer {
-  private initialized = false;
-  /**
-   * The last `dispatchTs` handed out. Strictly increasing per server, so the
-   * stamp doubles as the call's key: a snippet's `actions` record carries it as
-   * `callTs`, and two calls answered in one millisecond must not share it.
-   */
-  private lastDispatchTs = 0;
-
-  constructor(
-    private readonly ctx: ToolContext,
-    private readonly opts: { serverVersion?: string; onToolCall?: OnToolCall } = {},
-  ) {}
-
-  /** Handle one raw JSON-RPC line. Returns the response line, or null for notifications. */
-  async handleLine(line: string): Promise<string | null> {
-    let msg: JsonRpcRequest;
-    try {
-      msg = JSON.parse(line) as JsonRpcRequest;
-    } catch {
-      return JSON.stringify({
-        jsonrpc: "2.0",
-        id: null,
-        error: { code: -32700, message: "parse error" },
-      } satisfies JsonRpcResponse);
-    }
-    const isNotification = msg.id === undefined;
-    const respond = (result: unknown): string | null =>
-      isNotification ? null : JSON.stringify({ jsonrpc: "2.0", id: msg.id ?? null, result } satisfies JsonRpcResponse);
-    const fail = (code: number, message: string): string | null =>
-      isNotification ? null : JSON.stringify({ jsonrpc: "2.0", id: msg.id ?? null, error: { code, message } } satisfies JsonRpcResponse);
-
-    switch (msg.method) {
-      case "initialize":
-        this.initialized = true;
-        return respond({
-          protocolVersion: MCP_PROTOCOL_VERSION,
-          capabilities: { tools: {} },
-          serverInfo: { name: "wrathbench-runner", version: this.opts.serverVersion ?? "0.0.0" },
-        });
-      case "notifications/initialized":
-        return null;
-      case "ping":
-        return respond({});
-      case "tools/list":
-        return respond({
-          tools: toolsFor(this.ctx).map((t) => ({
-            name: t.name,
-            description: t.description,
-            inputSchema: t.inputSchema,
-          })),
-        });
-      case "tools/call": {
-        if (!this.initialized) return fail(-32002, "server not initialized");
-        const name = String(msg.params?.["name"] ?? "");
-        // Stamped before anything runs, the argument check included, so a
-        // refused call's near-zero duration is measured rather than assumed.
-        const now = Date.now();
-        const dispatchTs = now > this.lastDispatchTs ? now : this.lastDispatchTs + 1;
-        this.lastDispatchTs = dispatchTs;
-        // Leniency at the transport edge: some clients send `arguments` as a
-        // JSON *string* (sometimes fenced); coerceToolArgs handles that.
-        const raw = msg.params?.["arguments"] ?? {};
-        const coerced = coerceToolArgs(name, raw);
-        // An unparseable call is still a tool result the model reads, so the
-        // pending hints ride it as they would any other (`callTool`).
-        const result = coerced.ok
-          ? await callTool(this.ctx, name, coerced.args, { dispatchTs })
-          : await appendPendingActionHints(this.ctx, { text: coerced.error, isError: true });
-        const args = coerced.ok ? coerced.args : raw;
-        this.opts.onToolCall?.(name, args, result, dispatchTs);
-        return respond({
-          content: [{ type: "text", text: result.text }],
-          isError: result.isError ?? false,
-        });
-      }
-      default:
-        return fail(-32601, `method not found: ${msg.method}`);
-    }
+export class McpServer extends StackMcpServer {
+  constructor(ctx: ToolContext, opts: Omit<McpServerOptions, "serverName"> = {}) {
+    super(
+      {
+        list: () => toolsFor(ctx),
+        coerce: coerceToolArgs,
+        call: (name, args, origin) => callTool(ctx, name, args, origin),
+        appendPending: (result) => appendPendingActionHints(ctx, result),
+      },
+      { ...opts, serverName: "wrathbench-runner" },
+    );
   }
 }
 
@@ -155,20 +73,6 @@ export function trajectoryToolCallWriter(trajectory: Trajectory): OnToolCall {
       ...(name === "reflect" ? { reflect: true } : {}),
     });
   };
-}
-
-async function* lines(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
-  const decoder = new TextDecoder();
-  let buf = "";
-  for await (const chunk of stream) {
-    buf += decoder.decode(chunk, { stream: true });
-    let idx: number;
-    while ((idx = buf.indexOf("\n")) >= 0) {
-      yield buf.slice(0, idx);
-      buf = buf.slice(idx + 1);
-    }
-  }
-  if (buf.trim().length > 0) yield buf;
 }
 
 async function main(): Promise<void> {
@@ -243,15 +147,7 @@ async function main(): Promise<void> {
   });
 
   console.error(`[wrathbench-mcp] run ${runId} — trajectory at ${runDir}`);
-  const out = Bun.stdout.writer();
-  for await (const line of lines(Bun.stdin.stream())) {
-    if (line.trim().length === 0) continue;
-    const response = await server.handleLine(line);
-    if (response !== null) {
-      out.write(`${response}\n`);
-      await out.flush();
-    }
-  }
+  await serveStdio(server);
   await sandbox.stop();
   trajectory.close();
 }

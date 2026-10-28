@@ -98,3 +98,27 @@ export type {
   LogEntry,
   MoveIntentNote,
 } from "./sandbox/ipc";
+
+export {
+  ACTION_HINT_RENDER,
+  appendPendingActionHints,
+  booleanish,
+  coreTools,
+  parseToolArgsText,
+  renderActionHints,
+  stripTrailingCommas,
+  toolCallCount,
+  ToolSet,
+} from "./tools";
+export type {
+  CallOrigin,
+  CoreToolContext,
+  CoreToolName,
+  CoreToolRender,
+  ToolDef,
+  ToolResult,
+  ToolSandbox,
+  ToolSpec,
+} from "./tools";
+export { lines, MCP_PROTOCOL_VERSION, McpServer, serveStdio } from "./server";
+export type { McpServerOptions, OnToolCall, ToolHost } from "./server";
