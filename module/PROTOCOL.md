@@ -1047,6 +1047,50 @@ put it; otherwise the server's position, standing. An ack whose counter is at
 or below the last far teleport's is ignored as from the old map, as a
 client's is.
 
+Movement-state changes arrive the same way (`Unit::SetWaterWalking`,
+`SetFeatherFall`, `SetHover`, `SetCanFly`, from the auras that grant them and
+from a ghost's repop and resurrection), packGUID and a `u32` counter to the
+controlling client alone: `SMSG_MOVE_WATER_WALK` (0x0DE) /
+`SMSG_MOVE_LAND_WALK` (0x0DF), `SMSG_MOVE_FEATHER_FALL` (0x0F2) /
+`SMSG_MOVE_NORMAL_FALL` (0x0F3), `SMSG_MOVE_SET_HOVER` (0x0F4) /
+`SMSG_MOVE_UNSET_HOVER` (0x0F5), `SMSG_MOVE_SET_CAN_FLY` (0x343) /
+`SMSG_MOVE_UNSET_CAN_FLY` (0x344), and the first three of them inside
+`SMSG_MULTIPLE_MOVES` at login and after a far teleport. The core does not set
+the flag itself: the client does, carries it on every movement packet after,
+and answers `CMSG_MOVE_WATER_WALK_ACK` (0x2D0), `CMSG_MOVE_FEATHER_FALL_ACK`
+(0x2CF), `CMSG_MOVE_HOVER_ACK` (0x0F6) or `CMSG_MOVE_SET_CAN_FLY_ACK` (0x345).
+All four go to `WorldSession::HandleMoveFlagChangeOpcode`, which copies the
+ack's flags into its record of the unit (before its old-map counter check),
+applies the MovementInfo as a movement packet, clears the pending flight
+change on a can-fly ack whose counter matches, and relays `MSG_MOVE_WATER_WALK`,
+`MSG_MOVE_FEATHER_FALL`, `MSG_MOVE_HOVER` or `MSG_MOVE_UPDATE_CAN_FLY` to the
+set; unanswered, every ghost's observers were never told it walks on water.
+The module keeps the four flags as this client's state (`MOVEMENTFLAG_WATERWALKING`,
+`_FALLING_SLOW`, `_HOVER`, `_CAN_FLY`), sets or clears the one the packet
+names, then answers for its own guid from the tap (module-internal, as the
+speed acks; none of these packets is served as an event): packGUID, the echoed
+counter, the MovementInfo as the speed acks build it (the new flag on it), and
+the `u32` the handler reads and never uses (1 set, 0 unset). Every movement
+packet and ack after carries the flags, since the core replaces its record of
+them with each packet's; one the server dropped without a packet is stripped
+on arrival (`ReadMovementInfo` removes each without its aura). The
+`SMSG_SPLINE_MOVE_` twins of the first three (sent while the client does not
+control the unit, which the server then flags itself) update the state and
+want no ack. No ack is sent while the character moves another unit (a vehicle,
+a charm): the handler writes the flags onto whatever the session moves.
+
+Two of these states are kept but not yet lived: the walker's water test
+(Swimming, above) does not read water walking, so a water-walking body (every
+ghost, Water Walking, Levitate) is still swum under the surface where a client
+runs on it, and a hovering body is sent at the route's z, not hover height
+above it. `SMSG_MOVE_KNOCK_BACK` (0x0EF) is not answered: a client's
+`CMSG_MOVE_KNOCK_BACK_ACK` is the start of the arc (`MOVEMENTFLAG_FALLING`
+and the launch velocity, which the handler relays to observers as
+`MSG_MOVE_KNOCK_BACK`), and owes the arc's packets and a `MSG_MOVE_FALL_LAND`
+where the body comes down, which the module would have to simulate (collision
+included). Unanswered, the server keeps the character where it stood and
+observers see no knockback; nothing on the server waits on the ack.
+
 Every timestamp the module sends as the client's (the movement packets, the
 acks, `CMSG_TIME_SYNC_RESP`) reads one clock of the session's own,
 milliseconds since the session was created, as a client's clock is its own and
@@ -1982,9 +2026,11 @@ any other.
 
 The root acks (Roots, above) log one `action` record each, `op: "root_ack"`
 with the `opcode` sent, the echoed `counter`, the `pos` the ack carried and
-the `moveId` of the walk it stopped (0 outside a walk). The speed-change acks
-(Speed changes and the clock, above) log one each, `op: "speed_ack"`, with the
-`opcode` sent, the echoed `counter`, the `speed` echoed, the `pos` the ack
+the `moveId` of the walk it stopped (0 outside a walk). The speed-change and
+movement-state acks (Speed changes and the clock, above) log one each, `op:
+"move_ack"`, with the `kind` (`speed`, `water_walk`, `feather_fall`, `hover`,
+`can_fly`), the `opcode` sent, the echoed `counter`, the `speed` echoed
+(`speed`) or whether the flag was set (`apply`, the others), the `pos` the ack
 carried and the `moveId` of the walk it was sent during (0 outside a walk).
 
 Synthesized movement logs one `action` record per `move_to`/`stop`/`face`

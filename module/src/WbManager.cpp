@@ -1513,14 +1513,25 @@ namespace WrathBench
     // which ProcessMovementInfo keeps from the packets). Never on a
     // transport: a deck is not water.
     //
+    // The movement-state flags the server has told this client it has (water
+    // walking, feather fall, hover, can-fly: BenchSession::stateMoveFlags,
+    // OnMoveFlagPacket) go on every packet too, as a client's do: the core
+    // replaces its record of the unit's flags with each packet's
+    // (HandleMoverRelocation) and relays them to observers, so a packet
+    // without them would undo the change. One the server has since dropped
+    // without a packet is stripped by the core on arrival (ReadMovementInfo
+    // removes each without its aura), so it can never be claimed falsely.
+    //
     // AppendMovementInfo is the MovementInfo alone, shared with the forced-root
-    // acks (AnswerForceRoot) and the speed-change acks (OnSpeedChangePacket),
-    // whose bodies are packGUID, the echoed counter, then this same
-    // MovementInfo: one writer, so an ack can never disagree with the walk
-    // about the transport block, the swimming flag or the clock.
+    // acks (AnswerForceRoot), the speed-change acks (OnSpeedChangePacket) and
+    // the movement-state acks (AnswerMoveFlag), whose bodies are packGUID, the
+    // echoed counter, then this same MovementInfo: one writer, so an ack can
+    // never disagree with the walk about the transport block, the swimming
+    // flag, the state flags or the clock.
     static void AppendMovementInfo(WorldPacket& p, BenchSession& s, Player* player, uint32 moveFlags,
         float x, float y, float z, float o, Transport* transport)
     {
+        moveFlags |= s.stateMoveFlags.load();
         if (transport)
             moveFlags |= MOVEMENTFLAG_ONTRANSPORT;
         bool const swimming = !transport && (s.move.active ? s.move.swimming : player->IsInWater());
@@ -5307,7 +5318,9 @@ namespace WrathBench
             {
                 // Player::SendInitialPacketsAfterAddToMap (login, far port):
                 // u32 size, then per sub-packet u8 length (opcode + body), u16
-                // opcode, body. Only the root is read; the rest is skipped.
+                // opcode, body. The root and the movement-state changes
+                // (feather fall, water walk, hover) are answered in order, as
+                // a client handles them; anything else is skipped.
                 uint32 size = 0; p >> size;
                 while (p.rpos() + 3 <= p.size())
                 {
@@ -5323,6 +5336,12 @@ namespace WrathBench
                             s.rooted.store(sub == SMSG_FORCE_MOVE_ROOT);
                             AnswerForceRoot(s, ws, sub == SMSG_FORCE_MOVE_ROOT, guid, counter);
                         }
+                    }
+                    else if (sub == SMSG_MOVE_FEATHER_FALL || sub == SMSG_MOVE_WATER_WALK || sub == SMSG_MOVE_SET_HOVER)
+                    {
+                        uint64 guid = 0; p.readPackGUID(guid);
+                        uint32 counter = 0; p >> counter;
+                        AnswerMoveFlag(s, ws, sub, guid, counter);
                     }
                     if (end > p.size())
                         break;
@@ -5428,28 +5447,57 @@ namespace WrathBench
         }
     }
 
+    // Where this "client" is and what it is doing at the moment it answers a
+    // forced change, for the MovementInfo of the ack: the speed-change and
+    // movement-state acks both carry one, and their handlers apply it
+    // (ProcessMovementInfo) and relay it, so it must be the client's own
+    // state. During a walk, the mover's point running forward, so the ack is
+    // one more packet of the run (the core reads it as it reads a heartbeat);
+    // stopping, the stop's point with no moving flag; rooted, the root ack's
+    // point with MOVEMENTFLAG_ROOT (a rooted client is still). Mid-fall the
+    // module sends nothing (a forced ledge's packets are the edge heartbeat
+    // and the landing), so the ack restates the edge heartbeat, the server's
+    // own position running forward: the server's fall start stays where the
+    // edge put it (UpdateFallInformationIfNeed sees the same z) and the
+    // landing is charged the whole ledge. Outside a walk, the server's
+    // position, standing. One function, so the two kinds of ack cannot
+    // disagree. Read from the tap like AnswerForceRoot, and safe for the same
+    // reason.
+    struct AckPose
+    {
+        float x, y, z, o;
+        Transport* transport;
+        uint32 flags;
+        uint64_t moveId;  // the walk it was sent during, 0 outside one
+    };
+
+    static AckPose ClientPoseForAck(BenchSession& s, Player* player)
+    {
+        MoveState const& m = s.move;
+        bool const rooted = s.rooted.load();
+        bool const atMover = m.active && !m.inFall;
+        bool const running = m.active && !m.stopping && !rooted;
+        AckPose a;
+        a.x = atMover ? m.curX : player->GetPositionX();
+        a.y = atMover ? m.curY : player->GetPositionY();
+        a.z = atMover ? m.curZ : player->GetPositionZ();
+        a.o = atMover ? m.curO : player->GetOrientation();
+        a.transport = atMover ? FindTransportAt(player->GetMap(), a.x, a.y, a.z) : player->GetTransport();
+        a.flags = rooted ? MOVEMENTFLAG_ROOT : (running ? MOVEMENTFLAG_FORWARD : MOVEMENTFLAG_NONE);
+        a.moveId = m.active ? m.moveId : uint64_t(0);
+        return a;
+    }
+
     // The ack's body, as HandleForceSpeedChangeAck reads it: packGUID, the
-    // echoed u32 counter, a MovementInfo, then the speed the packet named,
-    // echoed as a client echoes it. The handler checks the speed only on the
-    // last of the changes it is waiting for, against the server's current
-    // speed, which is then the speed that last packet carried (every speed
-    // change of a player is a forced one, so none lands without a packet); it
-    // corrects a lower speed and kicks for a higher one, so the echo is never
-    // the module's own reading. An ack whose counter is at or below the last
-    // far teleport's is ignored as from the old map, as a client's is.
-    //
-    // The MovementInfo is this client's state at that moment, since the
-    // handler applies it (ProcessMovementInfo) and relays it with the speed:
-    // during a walk, the mover's point running forward, so the ack is one more
-    // packet of the run (the core reads it as it reads a heartbeat); stopping,
-    // the stop's point with no moving flag; rooted, the root ack's point with
-    // MOVEMENTFLAG_ROOT (a rooted client is still). Mid-fall the module sends
-    // nothing (a forced ledge's packets are the edge heartbeat and the
-    // landing), so the ack restates the edge heartbeat, the server's own
-    // position running forward: the server's fall start stays where the edge
-    // put it (UpdateFallInformationIfNeed sees the same z) and the landing is
-    // charged the whole ledge. Outside a walk, the server's position, standing.
-    // Read from the tap like AnswerForceRoot, and safe for the same reason.
+    // echoed u32 counter, a MovementInfo (ClientPoseForAck), then the speed
+    // the packet named, echoed as a client echoes it. The handler checks the
+    // speed only on the last of the changes it is waiting for, against the
+    // server's current speed, which is then the speed that last packet
+    // carried (every speed change of a player is a forced one, so none lands
+    // without a packet); it corrects a lower speed and kicks for a higher one,
+    // so the echo is never the module's own reading. An ack whose counter is
+    // at or below the last far teleport's is ignored as from the old map, as
+    // a client's is.
     void Manager::OnSpeedChangePacket(BenchSession& s, WorldSession* ws, uint16_t opcode, WorldPacket const& packet)
     {
         uint16 const ackOpcode = SpeedChangeAckOpcode(opcode);
@@ -5475,28 +5523,167 @@ namespace WrathBench
         if (guid != player->GetGUID().GetRawValue())
             return; // a vehicle or a charmed mover: never driven by the module
 
-        MoveState const& m = s.move;
-        bool const rooted = s.rooted.load();
-        bool const atMover = m.active && !m.inFall;
-        bool const running = m.active && !m.stopping && !rooted;
-        float const x = atMover ? m.curX : player->GetPositionX();
-        float const y = atMover ? m.curY : player->GetPositionY();
-        float const z = atMover ? m.curZ : player->GetPositionZ();
-        float const o = atMover ? m.curO : player->GetOrientation();
-        Transport* transport = atMover ? FindTransportAt(player->GetMap(), x, y, z) : player->GetTransport();
-        uint32 const flags = rooted ? MOVEMENTFLAG_ROOT : (running ? MOVEMENTFLAG_FORWARD : MOVEMENTFLAG_NONE);
-
+        AckPose const a = ClientPoseForAck(s, player);
         WorldPacket* p = new WorldPacket(ackOpcode, 8 + 4 + 4 + 2 + 4 + 16 + 8 + 16 + 4 + 1 + 4 + 4 + 4);
         *p << player->GetPackGUID();
         *p << uint32(counter);
-        AppendMovementInfo(*p, s, player, flags, x, y, z, o, transport);
+        AppendMovementInfo(*p, s, player, a.flags, a.x, a.y, a.z, a.o, a.transport);
         *p << float(speed);
         ws->QueuePacket(p);
-        Audit(s, "action", Json::Writer().Add("op", "speed_ack")
+        Audit(s, "action", Json::Writer().Add("op", "move_ack").Add("kind", "speed")
             .Add("opcode", SpeedChangeAckName(ackOpcode))
             .Add("counter", counter).Add("speed", (double)speed)
-            .Add("moveId", m.active ? m.moveId : uint64_t(0))
-            .Raw("pos", PosJson(x, y, z, o)).Str());
+            .Add("moveId", a.moveId)
+            .Raw("pos", PosJson(a.x, a.y, a.z, a.o)).Str());
+    }
+
+    // Forced movement-state changes. A unit its client controls gains or
+    // loses water walking, feather fall, hover or the ability to fly by packet
+    // alone (Unit::SetWaterWalking, SetFeatherFall, SetHover, SetCanFly, from
+    // the auras that grant them and from the ghost's repop and resurrection):
+    // the set/unset packet below to the controlling client only, packGUID and
+    // a u32 movement counter, and the core does not touch its own record of
+    // the flag. The client sets or clears the flag, carries it on every
+    // movement packet from then on, and answers with the ack:
+    // WorldSession::HandleMoveFlagChangeOpcode, one handler for all four, which
+    // reads packGUID, the counter, a MovementInfo and a u32 it never uses (1
+    // set, 0 unset here), copies the MovementInfo's flags into the unit's
+    // record (before its old-map counter check), applies the MovementInfo
+    // (ProcessMovementInfo, fall start included), clears the pending flight
+    // change on a can-fly ack whose counter matches, and relays MSG_MOVE_*
+    // with the MovementInfo to the set. Unanswered, no observer ever learned a
+    // ghost walks on water, and the next heartbeat (no flag) said otherwise.
+    // Login and far teleports send the first three inside SMSG_MULTIPLE_MOVES
+    // (OnRootPacket); a unit the client does not control (feared, confused)
+    // gets the SMSG_SPLINE_MOVE_ twin of the first three instead, which sets
+    // the flag server-side and wants no ack, but the client keeps it as its
+    // own state all the same.
+    struct MoveFlagChange
+    {
+        uint16 ack;         // the client's answer, 0 for a spline twin (none)
+        uint32 flag;        // the MovementFlags bit it sets or clears
+        bool apply;
+        char const* kind;   // the audit's name for it
+        char const* ackName;
+    };
+
+    static bool LookupMoveFlagChange(uint16 opcode, MoveFlagChange& c)
+    {
+        switch (opcode)
+        {
+            case SMSG_MOVE_WATER_WALK:
+                c = { CMSG_MOVE_WATER_WALK_ACK, MOVEMENTFLAG_WATERWALKING, true, "water_walk", "CMSG_MOVE_WATER_WALK_ACK" };
+                return true;
+            case SMSG_MOVE_LAND_WALK:
+                c = { CMSG_MOVE_WATER_WALK_ACK, MOVEMENTFLAG_WATERWALKING, false, "water_walk", "CMSG_MOVE_WATER_WALK_ACK" };
+                return true;
+            case SMSG_MOVE_FEATHER_FALL:
+                c = { CMSG_MOVE_FEATHER_FALL_ACK, MOVEMENTFLAG_FALLING_SLOW, true, "feather_fall", "CMSG_MOVE_FEATHER_FALL_ACK" };
+                return true;
+            case SMSG_MOVE_NORMAL_FALL:
+                c = { CMSG_MOVE_FEATHER_FALL_ACK, MOVEMENTFLAG_FALLING_SLOW, false, "feather_fall", "CMSG_MOVE_FEATHER_FALL_ACK" };
+                return true;
+            case SMSG_MOVE_SET_HOVER:
+                c = { CMSG_MOVE_HOVER_ACK, MOVEMENTFLAG_HOVER, true, "hover", "CMSG_MOVE_HOVER_ACK" };
+                return true;
+            case SMSG_MOVE_UNSET_HOVER:
+                c = { CMSG_MOVE_HOVER_ACK, MOVEMENTFLAG_HOVER, false, "hover", "CMSG_MOVE_HOVER_ACK" };
+                return true;
+            case SMSG_MOVE_SET_CAN_FLY:
+                c = { CMSG_MOVE_SET_CAN_FLY_ACK, MOVEMENTFLAG_CAN_FLY, true, "can_fly", "CMSG_MOVE_SET_CAN_FLY_ACK" };
+                return true;
+            case SMSG_MOVE_UNSET_CAN_FLY:
+                c = { CMSG_MOVE_SET_CAN_FLY_ACK, MOVEMENTFLAG_CAN_FLY, false, "can_fly", "CMSG_MOVE_SET_CAN_FLY_ACK" };
+                return true;
+            case SMSG_SPLINE_MOVE_WATER_WALK:
+                c = { 0, MOVEMENTFLAG_WATERWALKING, true, "water_walk", nullptr };
+                return true;
+            case SMSG_SPLINE_MOVE_LAND_WALK:
+                c = { 0, MOVEMENTFLAG_WATERWALKING, false, "water_walk", nullptr };
+                return true;
+            case SMSG_SPLINE_MOVE_FEATHER_FALL:
+                c = { 0, MOVEMENTFLAG_FALLING_SLOW, true, "feather_fall", nullptr };
+                return true;
+            case SMSG_SPLINE_MOVE_NORMAL_FALL:
+                c = { 0, MOVEMENTFLAG_FALLING_SLOW, false, "feather_fall", nullptr };
+                return true;
+            case SMSG_SPLINE_MOVE_SET_HOVER:
+                c = { 0, MOVEMENTFLAG_HOVER, true, "hover", nullptr };
+                return true;
+            case SMSG_SPLINE_MOVE_UNSET_HOVER:
+                c = { 0, MOVEMENTFLAG_HOVER, false, "hover", nullptr };
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    void Manager::OnMoveFlagPacket(BenchSession& s, WorldSession* ws, uint16_t opcode, WorldPacket const& packet)
+    {
+        MoveFlagChange c;
+        Player* player = ws->GetPlayer();
+        if (!player || !LookupMoveFlagChange(opcode, c))
+            return;
+        uint64 guid = 0;
+        uint32 counter = 0;
+        try
+        {
+            WorldPacket p(packet);
+            p.readPackGUID(guid);
+            if (c.ack)
+                p >> counter;
+        }
+        catch (std::exception const&)
+        {
+            return; // a short packet (ByteBufferException): nothing to answer
+        }
+        if (guid != player->GetGUID().GetRawValue())
+            return; // another unit's spline change, or a vehicle's: not this client's state
+        if (!c.ack)
+        {
+            // The spline twin: the server has set the flag itself; the client
+            // only takes it as its own state.
+            if (c.apply)
+                s.stateMoveFlags.fetch_or(c.flag);
+            else
+                s.stateMoveFlags.fetch_and(~c.flag);
+            return;
+        }
+        AnswerMoveFlag(s, ws, opcode, guid, counter);
+    }
+
+    // The flag first, then the ack, so the ack (AppendMovementInfo) carries
+    // the new state as a client's does. The ack's MovementInfo is
+    // ClientPoseForAck's, as the speed acks'. Only while the character is its
+    // own mover: HandleMoveFlagChangeOpcode writes the flags onto whatever
+    // unit the session moves without checking the guid, so an ack for the
+    // character while it drives a vehicle or a charmed unit would set them on
+    // that unit; the module never drives one, and the flag is still kept.
+    void Manager::AnswerMoveFlag(BenchSession& s, WorldSession* ws, uint16_t opcode, uint64_t guid, uint32_t counter)
+    {
+        MoveFlagChange c;
+        Player* player = ws->GetPlayer();
+        if (!player || player->GetGUID().GetRawValue() != guid || !LookupMoveFlagChange(opcode, c) || !c.ack)
+            return;
+        if (c.apply)
+            s.stateMoveFlags.fetch_or(c.flag);
+        else
+            s.stateMoveFlags.fetch_and(~c.flag);
+        if (static_cast<Unit*>(player->m_mover) != player)
+            return;
+
+        AckPose const a = ClientPoseForAck(s, player);
+        WorldPacket* p = new WorldPacket(c.ack, 8 + 4 + 4 + 2 + 4 + 16 + 8 + 16 + 4 + 1 + 4 + 4 + 4);
+        *p << player->GetPackGUID();
+        *p << uint32(counter);
+        AppendMovementInfo(*p, s, player, a.flags, a.x, a.y, a.z, a.o, a.transport);
+        *p << uint32(c.apply ? 1 : 0);  // read as a u32 and never used (HandleMoveFlagChangeOpcode)
+        ws->QueuePacket(p);
+        Audit(s, "action", Json::Writer().Add("op", "move_ack").Add("kind", c.kind)
+            .Add("opcode", c.ackName)
+            .Add("counter", counter).Add("apply", c.apply)
+            .Add("moveId", a.moveId)
+            .Raw("pos", PosJson(a.x, a.y, a.z, a.o)).Str());
     }
 
     // A real client sends MSG_CORPSE_QUERY once it is a ghost (after the repop
@@ -5631,6 +5818,11 @@ namespace WrathBench
         // Forced speed changes: the client's ack, which is what tells observers.
         if (SpeedChangeAckOpcode(opcode))
             OnSpeedChangePacket(*s, ws, opcode, packet);
+
+        // Forced movement-state changes (water walk, feather fall, hover,
+        // can-fly) and their spline twins: the client's state, and its ack.
+        if (MoveFlagChange c; LookupMoveFlagChange(opcode, c))
+            OnMoveFlagPacket(*s, ws, opcode, packet);
 
         // Keep the client-side object cache in sync with destroys.
         if (opcode == SMSG_DESTROY_OBJECT && packet.size() >= 8)

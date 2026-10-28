@@ -264,6 +264,17 @@ namespace WrathBench
         // Written on tap threads, read on the world thread, hence atomic.
         std::atomic<bool> rooted{false};
 
+        // The movement-state flags this "client" has been told it has
+        // (MOVEMENTFLAG_WATERWALKING, _FALLING_SLOW, _HOVER, _CAN_FLY): set and
+        // cleared by SMSG_MOVE_WATER_WALK / _LAND_WALK, _FEATHER_FALL /
+        // _NORMAL_FALL, _SET_HOVER / _UNSET_HOVER, _SET_CAN_FLY / _UNSET_CAN_FLY
+        // (OnMoveFlagPacket), SMSG_MULTIPLE_MOVES' sub-packets and the
+        // SMSG_SPLINE_MOVE_ twins of the first three. A client carries them on
+        // every movement packet it sends, so AppendMovementInfo ORs them in:
+        // the core replaces its whole record of the flags with each packet's.
+        // Written on tap threads, read on the world thread, hence atomic.
+        std::atomic<uint32_t> stateMoveFlags{0};
+
         // Teleport-ack pacing (world thread only): when the last ack for a
         // still-pending teleport was queued, 0 when none is pending. See
         // TickTeleportAcks.
@@ -614,6 +625,14 @@ namespace WrathBench
         // moment the server sends it. The ack is what tells observers the new
         // speed (HandleForceSpeedChangeAck relays MSG_MOVE_SET_*_SPEED).
         void OnSpeedChangePacket(BenchSession& s, WorldSession* ws, uint16_t opcode, WorldPacket const& packet);
+
+        // Forced movement-state changes, answered the same way (tap threads):
+        // water walk, feather fall, hover and can-fly, each set/unset packet
+        // for the character's own guid updating stateMoveFlags and getting its
+        // CMSG_MOVE_*_ACK (HandleMoveFlagChangeOpcode relays MSG_MOVE_* to the
+        // set). AnswerMoveFlag is shared with SMSG_MULTIPLE_MOVES (OnRootPacket).
+        void OnMoveFlagPacket(BenchSession& s, WorldSession* ws, uint16_t opcode, WorldPacket const& packet);
+        void AnswerMoveFlag(BenchSession& s, WorldSession* ws, uint16_t opcode, uint64_t guid, uint32_t counter);
 
         // Ask MSG_CORPSE_QUERY once per death, after the ghost's graveyard
         // teleport has been acked, the way a client does on becoming a ghost
