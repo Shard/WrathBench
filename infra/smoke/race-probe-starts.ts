@@ -31,7 +31,7 @@
  * SMOKE_STARTS=orc,undead bun infra/smoke/race-probe-starts.ts`.
  */
 
-import { connect, type WrathClient } from "../../sdk/src/index";
+import { connect, type WrathClient } from "@wrathbench/sdk";
 import { deleteFixtureCharacters } from "./lib/fixture";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";

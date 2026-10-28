@@ -36,7 +36,7 @@ import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
 import { assertStagedMember, deleteMembers, loginMember, membersOf, smokeRequest } from "./lib/party";
 import { stageParty } from "../fixtures/stage-party";
-import type { WrathClient } from "../../sdk/src/index";
+import type { WrathClient } from "@wrathbench/sdk";
 
 const BASE = moduleBase();
 const argv = Bun.argv.slice(2);

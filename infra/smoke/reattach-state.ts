@@ -35,7 +35,7 @@
  *   bun wb --local smoke reattach-state   # the quickstart
  */
 
-import { connect, WrathClient } from "../../sdk/src/index";
+import { connect, WrathClient } from "@wrathbench/sdk";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
 

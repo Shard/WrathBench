@@ -46,7 +46,7 @@
  * contract does not apply to this script).
  */
 
-import { connect, type MovePoint, type MoveResultData, type StreamEvent, type WrathClient } from "../../sdk/src/index";
+import { connect, type MovePoint, type MoveResultData, type StreamEvent, type WrathClient } from "@wrathbench/sdk";
 import { SCENARIOS, SWIM_SEA_LEVEL, SWIM_SHORE, type ScenarioName } from "../fixtures/scenarios";
 import { accountFixtureName, applyScenario, characterNames, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";

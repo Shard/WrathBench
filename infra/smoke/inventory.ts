@@ -31,7 +31,7 @@
  *   bun wb --local smoke inventory   # the quickstart
  */
 
-import { connect } from "../../sdk/src/index";
+import { connect } from "@wrathbench/sdk";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
 

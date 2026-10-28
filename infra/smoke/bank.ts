@@ -17,7 +17,7 @@
  *   bun wb --local smoke bank   # the quickstart
  */
 
-import { connect, type WrathClient } from "../../sdk/src/index";
+import { connect, type WrathClient } from "@wrathbench/sdk";
 import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";

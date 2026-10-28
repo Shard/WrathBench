@@ -4,7 +4,8 @@
   // every test still green and the fixtures silently out of shape.
   // The supervisor is 3.6k lines of scheduling; it gets a compiler.
   "extends": "../tsconfig.base.json",
-  // The smoke scripts import the SDK by path, the way an operator runs them;
+  // The smoke scripts import the SDK and the MCP stack by package name, through
+  // the root links to both workspaces (package.json `dependencies`);
   // `render-og.ts` reaches into the dashboard's pure chart modules, which reach
   // on into the viewer's wire types under the alias the dashboard's own config
   // defines. Same mapping, so the two programs see one set of types.

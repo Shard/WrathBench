@@ -40,7 +40,7 @@
  *   bun wb --local smoke swing-errors   # the quickstart
  */
 
-import { connect, isEvent, type UnitView, type WrathClient } from "../../sdk/src/index";
+import { connect, isEvent, type UnitView, type WrathClient } from "@wrathbench/sdk";
 import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";

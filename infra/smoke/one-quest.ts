@@ -14,7 +14,7 @@
  */
 
 import { probeName } from "./lib/name";
-import { connect, pointOf, type NearbyObject } from "../../sdk/src/index";
+import { connect, pointOf, type NearbyObject } from "@wrathbench/sdk";
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
 

@@ -976,7 +976,7 @@ export const REFLECT_ALREADY_USED_HEAD = "You already reflected";
 export const PAD_EMPTY = "(empty — write your plan and durable facts with write_scratchpad)";
 /** mcp/src/scratchpad.ts: the old cut's marker, stripped wherever a write puts it. */
 const LEGACY_TRUNCATION_MARKER = /\n{0,2}\[scratchpad truncated at \d+ chars\]/g;
-/** The pad tools' alias keys (runner/src/tools.ts, `ARG_ALIASES`): a logged call can carry either spelling. */
+/** The pad tools' alias keys (mcp/src/tools.ts, each core tool's `aliases`): a logged call can carry either spelling. */
 export const PAD_ARG_ALIASES: Record<string, Record<string, string>> = {
   write_scratchpad: { text: "content", markdown: "content" },
   edit_scratchpad: {

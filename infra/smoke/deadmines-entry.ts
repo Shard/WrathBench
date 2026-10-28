@@ -23,7 +23,7 @@
  * areatriggers (every build since the tram smoke) and the live realm.
  */
 
-import { connect } from "../../sdk/src/index";
+import { connect } from "@wrathbench/sdk";
 import { DEADMINES_ENTRANCE_TRIGGER, DEADMINES_STAGING } from "../fixtures/scenarios";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";

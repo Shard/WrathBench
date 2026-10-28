@@ -46,6 +46,12 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      # module/, sdk/ and mcp/ import nothing outside themselves but declared
+      # dependencies, and nothing else reaches into their sources by path
+      # (infra/stack-boundary.ts; also a test in the suite below).
+      - name: Stack boundary
+        run: bun run boundary
+
       # Regenerates sdk/API.md and fails if it differs from what is committed.
       - name: Generated API docs are current
         run: bun run docs:api:check

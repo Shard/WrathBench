@@ -73,7 +73,7 @@
  */
 
 import type { SQL } from "bun";
-import { connect as connectModule, type WrathClient } from "../../sdk/src/index";
+import { connect as connectModule, type WrathClient } from "@wrathbench/sdk";
 import { isValidCharacterName } from "../../runner/src/config";
 import { MODULE_SECRET } from "../smoke/lib/auth";
 import { characterNames, type FixtureContext } from "../smoke/lib/fixture";

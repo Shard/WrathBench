@@ -25,6 +25,7 @@
     "sync-prices": "bun infra/sync-prices.ts",
     "model-logos": "bun infra/fetch-model-logos.ts",
     "docs:api:check": "bun run sdk/generate-api-docs.ts && git diff --exit-code -- sdk/API.md",
+    "boundary": "bun infra/stack-boundary.ts",
     "deploy:worldserver": "./infra/k8s-deploy.sh",
     "publisher:restart": "kubectl -n wrathbench rollout restart deployment/wrathbench-publisher",
     "viewer:restart": "./infra/viewer-restart.sh",

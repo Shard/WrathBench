@@ -58,7 +58,7 @@ const TOKEN = `probe-death-${crypto.randomUUID()}`;
 // infra/bootstrap/bootstrap.ts with WRATHBENCH_ACCOUNT_USER=PROBE.
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // Fresh character every run: the arc needs a level 1 that kobolds can kill.
-import { connect, type WrathClient } from "../../sdk/src/index";
+import { connect, type WrathClient } from "@wrathbench/sdk";
 import { applyScenario, characterNames, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { failOnce } from "./lib/fail";
 import { probeName } from "./lib/name";

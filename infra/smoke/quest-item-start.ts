@@ -35,7 +35,7 @@
  *   bun wb --local smoke quest-item-start   # the quickstart
  */
 
-import { connect, WrathRequestError, type WrathClient } from "../../sdk/src/index";
+import { connect, WrathRequestError, type WrathClient } from "@wrathbench/sdk";
 import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
