@@ -119,6 +119,13 @@ spec:
               value: {{ .Values.worldserver.rateXp.kill | quote }}
             - name: AC_RATE_XP_QUEST
               value: {{ .Values.worldserver.rateXp.quest | quote }}
+            # Warden off (operator decision, 2026-10-28). The fleet never meets
+            # it: the module's sessions are made in-process and the core starts
+            # Warden only on a socket login. The one socket login is the
+            # operator's spectator over a port-forward, and an open client that
+            # implements no Warden is dropped by it.
+            - name: AC_WARDEN_ENABLED
+              value: "0"
             # SOAP is off until the party staging turns it on (`staging` in
             # values.yaml), in-cluster only, for the operator's admin STAGER
             # account; the worldserver's ingress rule, the run pods' egress

@@ -219,6 +219,8 @@ services:
       # stock dist value; do not add tuning here without saying so in the docs.
       AC_RATE_XP_KILL: "1"
       AC_RATE_XP_QUEST: "1"
+      # Warden off, as in the chart (templates/worldserver.yaml says why).
+      AC_WARDEN_ENABLED: "0"
       # SOAP stays off on the quickstart: it has no network policy to contain
       # it, and no party campaign runs here. The agent has no privileged
       # control path into the world (docs/CONTRACTS.md binds what it sees and
