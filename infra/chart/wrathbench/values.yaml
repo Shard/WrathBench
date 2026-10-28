@@ -348,7 +348,7 @@ fleet:
       memory: 6Gi
   # /tmp. Not the model's write path: a snippet arrives over the IPC channel
   # and the sandbox's Landlock ruleset grants it no write access here at all
-  # (runner/src/sandbox/confine.ts). What lands in it is the driver adapters'
+  # (mcp/src/sandbox/confine.ts). What lands in it is the driver adapters'
   # scratch cwd — one empty directory per episode, so that the CLI does not
   # walk up into a checkout — and bun's own temporaries. Kilobytes. The ceiling
   # is a backstop against a runaway child, set far enough above the working set

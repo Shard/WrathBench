@@ -3,15 +3,67 @@
 ## Components
 
 ```
- model  <--MCP-->  runner (Bun)  <--SDK calls-->  sdk (Bun)  <--HTTP/WS-->  module (C++ in worldserver)
-                      |                                                            |
-                      v                                                            v
-              data/runs/<id>/  (trajectory JSONL, sqlite)                 AzerothCore worldserver + DBs
+ model  <--MCP-->  mcp (Bun)  <--SDK calls-->  sdk (Bun)  <--HTTP/WS-->  module (C++ in worldserver)
+                    ^  sandbox, MCP server,                                     |
+                    |  core tools                                               v
+                 runner (Bun): benchmark tools, context,             AzerothCore worldserver + DBs
+                 records, watchdogs  -->  data/runs/<id>/ (trajectory JSONL, sqlite)
 ```
+
+### The stack and the benchmark
+
+Two layers, deliberately separable. The **stack** — `module/`, `sdk/` and
+`mcp/` — is a client-equivalent agent surface over a stock AzerothCore:
+packets, not pixels. It knows what a client knows and does what a client does,
+serves it to any MCP-capable agent, and knows nothing of episodes, scores,
+trajectories or the wiki. The **benchmark** — `runner/` with `infra/`,
+`wiki/`, `dashboard/`, `collector/` and `minimap/` around it — is what turns
+that surface into a measurement: the fixed loop and the CLI drivers, the
+prompt and context policy, its own tools, the records, the watchdogs, the
+scoring. The stack is meant to lift out into a repository of its own
+(operator, 2026-10-28), so the line is enforced rather than hoped for:
+`infra/stack-boundary.ts`, a test and a CI step, fails when anything in the
+stack imports outside itself but a declared dependency, or when anything
+outside it reaches into stack sources by path.
+
+The benchmark plugs into the stack through hooks, each a narrow interface the
+runner implements:
+
+- **Tools** (`mcp/src/tools.ts`): one dispatcher, `ToolSet`, serves every tool
+  — lenient argument parsing, alias keys, strict validation, the unknown-tool
+  answer, the harness-delivered hint block and the secret scrub. The stack
+  defines the five core tools (`run_snippet`, `recent_events`,
+  `state_summary`, `write_scratchpad`, `edit_scratchpad`); the runner adds its
+  four as `ToolSpec`s and lists all nine in the order they are served
+  (`runner/src/tools.ts`).
+- **Rendering** (`CoreToolRender`): the event line, which opcodes are ambient,
+  the state summary and what a snippet result ends with are the harness's
+  context rendering (`runner/src/context.ts`, the snippet delta), handed to
+  the core tools rather than known by them.
+- **The sandbox child** (`SandboxChildExtension`, `mcp/src/sandbox/child.ts`):
+  a harness installs watchers that register rpc drains, decorate event
+  summaries and add snapshot fields; the runner's
+  (`runner/src/sandbox/child-extension.ts`) latches deaths, flights, party
+  records, the trace and nearby rows, spell marks, the snippet delta, the
+  turn's event window and the HUD's fields. Nothing an extension holds is
+  reachable from a snippet. The runner's host (`runner/src/sandbox/host.ts`)
+  subclasses the stack's to drain them.
+- **Records and secrets**: every dispatcher is handed a secret registry
+  (`CoreToolContext.secrets`, the trajectory on a run) and callbacks for what
+  it served; the sandbox host takes `onNotice` and `onActions`. Run config,
+  ids, the harness stamp, the wiki and the episodic log never enter the stack.
+
+Versions: the SDK has its own version, and `@wrathbench/mcp` releases with it
+at the same one; a harness version pins one (the runner's `workspace:0.1.0`
+dependency, so a moved SDK fails the install until the pin moves) and every
+run records it as `sdkVersion` in `meta.json`, beside `harnessVersion` and
+outside the comparability tuple. The module's wire protocol has an integer
+version of its own on `GET /health`, which the SDK checks on `connect`
+(`module/PROTOCOL.md`, "Versioning").
 
 ### module/ (C++, GPL-2.0-or-later, in-process with worldserver)
 
-The licensing boundary follows this layout: `module/` is GPL-2.0-or-later; all other original WrathBench code and documentation, including `sdk/`, `runner/`, `dashboard/`, `wiki/`, `minimap/`, `infra/`, and `docs/`, are MIT. The build copies this module into the pinned AzerothCore tree; that relationship does not relicense AzerothCore itself or any other dependency.
+The licensing boundary follows this layout: `module/` is GPL-2.0-or-later; all other original WrathBench code and documentation, including `sdk/`, `mcp/`, `runner/`, `dashboard/`, `wiki/`, `minimap/`, `infra/`, and `docs/`, are MIT. The build copies this module into the pinned AzerothCore tree; that relationship does not relicense AzerothCore itself or any other dependency.
 
 A thin bridge. It does two things and should never learn to do a third.
 
@@ -33,19 +85,33 @@ Observation decodes the wire's own delta shape. The module serves whitelisted fi
 
 The surface the model programs against. Thin typed wrappers over module actions, a typed event stream, and a small set of composed helpers that emerged from real runs (for example `moveTo`, `killTarget`, `lootCorpse`, `acceptQuestFrom`). Helpers are added because a run needed them, not in anticipation.
 
-The SDK is versioned. Its surface is part of the harness version.
+The SDK is versioned on its own (`SDK_VERSION`, `sdk/src/version.ts`), and a
+harness version pins one SDK version (docs/METHODOLOGY.md, "Fixed harness,
+frozen per version"). `sdk/src/index.ts` is its whole public surface.
+
+### mcp/ (Bun/TypeScript, MIT)
+
+The agent surface over the SDK, and the half of the stack a model actually
+touches: the snippet sandbox (a confined child process per session holding one
+`WrathClient`, `src/sandbox/`), the MCP server (`src/server.ts`, and the
+stdio-to-TCP bridge a CLI is handed, `src/bridge.ts`), the tool dispatcher and
+the core tools (`src/tools.ts`), the scratchpad, the secret redactor and the
+module's auth and lease helpers. `src/main.ts` serves the core tools on their
+own over stdio, with a plain rendering of events and state, for any MCP agent;
+a harness serves its own set through the same pieces (above). It depends on
+`@wrathbench/sdk` through its public entry point and on nothing else here.
 
 ### runner/ (Bun/TypeScript, MIT)
 
-- MCP server exposing the model-facing tools (`runner/src/tools.ts`). The tool list is fixed and identical for every harness group. The scratchpad has a write tool and an edit tool and no read tool: the pad is injected verbatim into every turn's context already, so `read_scratchpad` was removed (2026-08-30).
-- Snippet sandbox: a persistent runtime per session so snippets share state and can leave routines running. Executes in a separate process with an allowlisted environment carrying only the run's own leased session secret (never the module's port secret or a provider key), under a Linux Landlock ruleset applied before exec (`runner/src/sandbox/confine.ts`): it can read the interpreter, `runner/`, `sdk/`, `node_modules/` and its own `/proc` entry and nothing else — not `.env`, not the home directory, not another process's command line, not `/dev/shm` — open TCP connections only to the module URL's port, bind nothing, execute no binary but the interpreter, and signal nothing outside itself. Per-host and non-TCP egress are the deployment's network policy (`docs/CONTRACTS.md`, "Control-surface authentication"). Hard per-snippet timeout.
+- MCP server exposing the model-facing tools: the stack's server and dispatcher over the nine the runner assembles (`runner/src/tools.ts`: the stack's five core tools, rendered the benchmark's way, and its own four). The tool list is fixed and identical for every harness group. The scratchpad has a write tool and an edit tool and no read tool: the pad is injected verbatim into every turn's context already, so `read_scratchpad` was removed (2026-08-30).
+- Snippet sandbox (the stack's, `mcp/src/sandbox/`, run with the benchmark's child extension): a persistent runtime per session so snippets share state and can leave routines running. Executes in a separate process with an allowlisted environment carrying only the run's own leased session secret (never the module's port secret or a provider key), under a Linux Landlock ruleset applied before exec (`mcp/src/sandbox/confine.ts`): it can read the interpreter, `mcp/`, `sdk/`, `node_modules/`, `runner/` (named by the runner's host, for its child extension) and its own `/proc` entry and nothing else — not `.env`, not the home directory, not another process's command line, not `/dev/shm` — open TCP connections only to the module URL's port, bind nothing, execute no binary but the interpreter, and signal nothing outside itself. Per-host and non-TCP egress are the deployment's network policy (`docs/CONTRACTS.md`, "Control-surface authentication"). Hard per-snippet timeout.
 - Agent loop: model-agnostic. Fixed prompt, fixed event window and state summary, fixed retry policy. Persists scratchpad and summary so a session can resume after a process failure.
 - Watchdogs: idle timeout, no-XP timeout, episode time limit, snippet runaway. Each ends the episode with a named termination reason.
 - Trajectory log: JSONL per run containing every snippet, its result, every action the snippet dispatched (below), every event batch the model saw, and a periodic state line (level, zone, XP, position). A fixed-loop `request` record carries the turn's fresh user message whole and points at the rest of the prompt instead of re-logging it: the system prompt text once per process segment, and the message window as bounds over the `response` and result records already on the file, with the count of its folded messages and a hash of the bytes sent. `runner/src/replay.ts` rebuilds every request from the file alone and fails on any that does not hash to what was sent; the CLI scaffolds' requests keep their own shape (`runner/README.md`, "The request record and the replay").
 - Model adapter: one OpenAI-compatible chat layer. Provider and model are run config.
 - Drivers: the fixed loop's adapter is one, and the Claude Code and Codex CLIs are the others. The driver contract (`runner/README.md`, "The driver contract") says what the runner keeps for every driver, what a driver may vary, and what the trajectory records regardless.
 
-**Harness-delivered hints.** The SDK attaches a per-status recovery hint to a failed action result (`moveTo` `too_far`, `target_off_mesh`, `drop`, …), but that hint reaches the model only if the snippet's own code keeps it: one run took 41 `too_far` refusals in four hours while reducing every result to `.status`, and read the hint zero times. So the client also tallies each hint-bearing failure per (action, status) on a channel the snippet cannot strip, and the harness drains it into the next tool result of any kind: a snippet's result carries what its eval drained, and every other tool's result carries whatever was pending when it answered, so a hint raised by a background routine does not wait for the next snippet. `tools.ts` renders it as a short block at the foot of that result — one line per status with a count, the hint text unchanged and nothing added to it, the tool's own text above it untouched. It goes in the tool result rather than the next turn's harness-notice block because a claude-code turn is a whole CLI session: a notice there would arrive a turn late, and delivery must not cost the model a follow-up inspection. Both drivers dispatch through the same `callTool`, so both get it, and the trajectory's `snippet_result` or `tool_result` records it as part of what the model saw.
+**Harness-delivered hints.** The SDK attaches a per-status recovery hint to a failed action result (`moveTo` `too_far`, `target_off_mesh`, `drop`, …), but that hint reaches the model only if the snippet's own code keeps it: one run took 41 `too_far` refusals in four hours while reducing every result to `.status`, and read the hint zero times. So the client also tallies each hint-bearing failure per (action, status) on a channel the snippet cannot strip, and the harness drains it into the next tool result of any kind: a snippet's result carries what its eval drained, and every other tool's result carries whatever was pending when it answered, so a hint raised by a background routine does not wait for the next snippet. The stack's dispatcher (`mcp/src/tools.ts`) renders it as a short block at the foot of that result — one line per status with a count, the hint text unchanged and nothing added to it, the tool's own text above it untouched. It goes in the tool result rather than the next turn's harness-notice block because a claude-code turn is a whole CLI session: a notice there would arrive a turn late, and delivery must not cost the model a follow-up inspection. Both drivers dispatch through the same `callTool`, so both get it, and the trajectory's `snippet_result` or `tool_result` records it as part of what the model saw.
 
 **The action log.** A snippet's code says what the model asked for; it does not say what went on the wire — a helper's inner `set_target`, a routine's fortieth re-cast, the refusal the snippet swallowed. So the sandbox watches its own client's `POST /action` requests (the same fetch the move intention is read from) and records each dispatch with the module's HTTP answer as an `actions` record (`ActionsLine` in `runner/src/trajectory.ts`): action name, the body with the token stripped, status, error code and hint on a refusal, the `move_to` move id, timing, and the client-cache names the session already held for the ids (unit, spell, item, quest). One record per snippet, flushed just before its result, rather than one per action: about ten dispatches per snippet would otherwise push the snippets out of the feed's 200-record window. A background routine's dispatches between snippets flush on a 60-second idle timer and are marked `routine`, so the record count is one per snippet that dispatched anything plus at most one a minute of routine activity between snippets; identical consecutive dispatches fold into a count, and past 120 notes per flush the rest are counted by action name, because a looping routine has dispatched millions. The record's `callTs` is the owning `tool_call`'s `dispatchTs`, which is the join: the CLI drivers append the call after it ran and the fixed loop before, so position cannot be. It records the dispatch and the module's answer and nothing more — a `200` is "queued", and what the game made of it is on the event stream, with a `move_to`'s verdict in the `move` record of the same move id, which is unchanged. Nothing in it reaches the model. The module's audit log is the ground truth for the wire while it is kept, which is a few days (docs/CONTRACTS.md "Audit"); this record is the one that stays with the run, attributed to the snippet that caused it. Size, on a long freeplay run of about 9,600 snippets over 51 hours with a 104 MB trajectory: by its snippet code, about half its snippets call a dispatching helper and one in twelve launches a routine, so the records add at most about 9,600 lines to the 65,000 it has; by the module audit logs of earlier long runs, which dispatched 1,300–2,200 HTTP actions an hour, the notes come to roughly 70k–110k at about 100 bytes each, so 7–15 MB more, about a tenth.
 
@@ -488,7 +554,7 @@ Every episode starts with a freshly created character at level 1 in its starting
 - The client's query-answer cache, `client-cache.json`: the creature, game
   object, item, quest, player and pet name, and page and letter answers this
   run's event stream carried, kept by the sandbox host
-  (`runner/src/sandbox/client-cache.ts`) so a restarted child and a resumed run
+  (`mcp/src/sandbox/client-cache.ts`) so a restarted child and a resumed run
   start with them, as a client's on-disk cache (WDB) survives a restart —
   operator decision of 2026-10-18, because a restart reattaches to a module
   session that never asks for an entry twice. A new run, a continuation

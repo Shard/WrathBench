@@ -60,7 +60,12 @@ movement across versions is itself signal. The grain that groups evidence is
 the **series**, `major.minor` of the harness stamp: a minor bump changes what
 a run measures and restarts evidence; a fix commit does not, nor does a change
 to what gets *scheduled*, because targets are stopping rules, not
-measurements.
+measurements. The SDK is versioned separately from the harness, and a harness
+version pins one SDK version (operator, 2026-10-28): the SDK, with the MCP
+surface released beside it, is a stack other harnesses can use, so it moves on
+its own clock, and the pin is what keeps "harness vX" naming one surface.
+Each run records the SDK version it drove; a change a model can see still
+moves the harness that pins it.
 
 **Harness and driver are separate words.** The *harness* owns the loop and
 context: `wrathbench` (our fixed loop), `claude-code` or `codex` (CLI scaffolds
@@ -148,6 +153,10 @@ strategy and stays out.
 (2026-08-29), on a channel the model's code cannot drop: one run took 41
 refusals carrying the hint that would have unstuck it and read none. The
 channel is in addition to the hint in the result, never instead of it.
+Hints are SDK surface (operator, 2026-10-28): the per-call hint and the channel
+that delivers it belong to the stack that gives an agent its tools, not to the
+benchmark, so any agent driving the game through it gets them; what stays the
+harness's is benchmark policy — its own tools, episodes and scoring.
 
 ## Context policy
 

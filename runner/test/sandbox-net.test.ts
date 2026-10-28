@@ -1,6 +1,6 @@
 /**
  * The snippet child's network, exec and scope confinement, against the real
- * child process: `runner/src/sandbox/confine.ts` applies Landlock TCP rules
+ * child process: `mcp/src/sandbox/confine.ts` applies Landlock TCP rules
  * (connect only to the module URL's port, bind nothing), grants EXECUTE on
  * nothing but bun itself, and on a kernel with Landlock scopes keeps the
  * child's signals inside its own domain.

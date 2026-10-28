@@ -1,6 +1,6 @@
 /**
  * The client cache survives a sandbox restart the way a client's on-disk cache
- * does (operator decision, 2026-10-18; `runner/src/sandbox/client-cache.ts`).
+ * does (operator decision, 2026-10-18; `mcp/src/sandbox/client-cache.ts`).
  *
  * The bug it closes: a restart reattaches to the module session its
  * predecessor left, the module's "already queried" sets survive the reattach,

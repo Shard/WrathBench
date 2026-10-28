@@ -38,7 +38,7 @@ import type { ReferenceProgram } from "./reference-program";
 // ------------------------------------------------------------ the tick protocol
 
 /**
- * The ambient snippet surface a tick is handed (runner/src/sandbox/entry.ts):
+ * The ambient snippet surface a tick is handed (mcp/src/sandbox/child.ts):
  * what any model's snippet sees, and nothing more.
  */
 export interface ReferenceEnv {

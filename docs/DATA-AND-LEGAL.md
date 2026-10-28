@@ -37,5 +37,5 @@ These are the lines the project does not cross. They are rules, not arguments; t
 ## Licences
 
 - `module/`: GPL-2.0-or-later; see the complete license text in `module/LICENSE`.
-- All other original WrathBench code and documentation, including `sdk/`, `runner/`, `dashboard/`, `wiki/`, `minimap/`, `infra/`, and `docs/`: MIT under the root `LICENSE`.
+- All other original WrathBench code and documentation, including `sdk/`, `mcp/`, `runner/`, `dashboard/`, `wiki/`, `minimap/`, `infra/`, and `docs/`: MIT under the root `LICENSE`.
 - AzerothCore remains under its own upstream GPL v2 license. WrathBench builds the pinned submodule and copies `module/` into it; neither that relationship nor the root MIT license relicenses AzerothCore, Blizzard assets, or third-party dependencies. See `THIRD-PARTY-NOTICES.md`.

@@ -308,7 +308,7 @@ services:
     # infra/fixtures/apply.ts, which writes acore_characters directly. Carrying
     # the four vars here is what makes that invocation need no `-e` flags. An
     # episode exec'd into this container cannot pass them on: sandboxChildEnv
-    # (runner/src/sandbox/host.ts) forwards the snippet child a named list of
+    # (mcp/src/sandbox/host.ts) forwards the snippet child a named list of
     # variables and none of these, the same protection the `fleet` service
     # relies on.
     environment:
@@ -362,7 +362,7 @@ services:
       # `vineyard-kill-credit` scenario, and `infra/fixtures/apply.ts` writes the
       # characters DB directly. The supervisor itself never touches the DB.
       # A benchmark episode cannot reach these: the snippet sandbox forwards its
-      # child a named list of variables and none of these (runner/src/sandbox/host.ts
+      # child a named list of variables and none of these (mcp/src/sandbox/host.ts
       # sandboxChildEnv), which is what keeps a model off the database on this
       # service and on `runner` alike.
       <<: *wb-db

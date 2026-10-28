@@ -319,7 +319,7 @@ describe("redactProseText", () => {
   });
 });
 
-/** What the sandbox writes for a snippet's value and a console object (`runner/src/sandbox/entry.ts`). */
+/** What the sandbox writes for a snippet's value and a console object (`mcp/src/sandbox/child.ts`). */
 const inspect = (v: unknown): string => Bun.inspect(v, { depth: 4 });
 
 /** A snippet result carrying `v` as its value and as a console object, between harness lines. */

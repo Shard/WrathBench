@@ -4,7 +4,23 @@ The agent loop. The runner sits between a model and the game: it hands the
 model a fixed set of tools (a TypeScript snippet sandbox with the SDK loaded,
 a scratchpad, the event and state views, the reference search), supervises
 the episode with watchdogs, and records everything that happened as a
-trajectory under `data/runs/<run-id>/`. The operator launches it through
+trajectory under `data/runs/<run-id>/`.
+
+It is the benchmark built on the stack, not the stack itself. The sandbox,
+the MCP server, the tool dispatcher and the five core tools are
+`@wrathbench/mcp` (`mcp/`), over `@wrathbench/sdk` (`sdk/`), over the module
+(`module/`) — the client-equivalent agent stack, which knows nothing of
+episodes, scores or trajectories (`sdk/README.md`, "The stack";
+`docs/ARCHITECTURE.md`, "The stack and the benchmark"). The runner plugs in
+through the stack's hooks: its four tools (`search_reference`, `reflect`,
+`log_status`, `read_log`) and its rendering of the core tools' answers
+(`src/tools.ts`), its child extension (`src/sandbox/child-extension.ts`: the
+death, flight and party watchers, the trace and nearby recorders, the spell
+marks, the snippet delta, the turn's event window and the HUD's snapshot
+fields), the drains for them (`src/sandbox/host.ts`, a `SandboxHost`
+subclass), and the trajectory, secret registry, context and watchdogs it
+supplies every dispatcher. It pins one stack version (`package.json`,
+`workspace:0.1.0`) and records it in `meta.json` as `sdkVersion`. The operator launches it through
 `infra/run-episode.sh` or the fleet supervisor; the viewer (`runner/viewer/`)
 reads what it wrote.
 
@@ -145,7 +161,7 @@ and `codex` already do, and what another driver would have to.
 - One `SandboxHost` per run: the SDK runtime, the module session, the
   confinement and the token. A driver never starts a second sandbox or
   session, which is why the CLI drivers reach the tools through a loopback MCP
-  listener and `src/mcp-bridge.ts` rather than launching `src/mcp.ts`.
+  listener and the stack's bridge (`mcp/src/bridge.ts`) rather than launching `src/mcp.ts`.
 - The tools: `toolsFor` and `callTool` (`src/tools.ts`), the hint drain,
   secret redaction and the exact result text. A driver exposes exactly these
   tools under these names; a transport prefix (`mcp__wrathbench__`) is the
@@ -399,7 +415,7 @@ sends) to its stdin and reads stream-json until the `result` line that closes
 the turn; in between, the CLI runs its own tool loop against our MCP server.
 Per-turn `--continue` is not needed.
 
-Tools reach the runner over a loopback TCP MCP server plus `src/mcp-bridge.ts`,
+Tools reach the runner over a loopback TCP MCP server plus the stack's bridge (`mcp/src/bridge.ts`),
 because `--mcp-config` can only launch a stdio child — running `mcp.ts` as that
 child would create a second sandbox and a second session on the same token.
 
@@ -1070,7 +1086,7 @@ to afford the output tokens; the sample does not show it fleet-wide, so this
 is the profile the evidence covers. There is no read tool: the pad is in
 every turn's context already (docs/ARCHITECTURE.md, runner section).
 
-The cap refuses rather than cuts (operator, 2026-10-14; `src/scratchpad.ts`).
+The cap refuses rather than cuts (operator, 2026-10-14; `mcp/src/scratchpad.ts`).
 It used to keep the head of an over-long write and drop the tail, so a
 freeplay run that prepended a turn log lost its durable notes off the end, and
 its appends at the cap vanished for eighty turns behind a `{ truncated }` it
@@ -1175,18 +1191,21 @@ not reproduce those bytes either.
 
 ## The sandbox
 
-One long-lived Bun child process per session (`src/sandbox/entry.ts`), holding
-one SDK client. Snippets share it: top-level bindings persist
-(`src/sandbox/rewrite.ts` has the exact semantics), and `setInterval`
-routines keep running between snippets. The ambient surface is documented once,
-in the entry file's header, and told to the model in the system prompt.
+One long-lived Bun child process per session, holding one SDK client: the
+stack's child runtime (`mcp/src/sandbox/child.ts`) started by the runner's
+entry (`src/sandbox/entry.ts`) with the benchmark's extension installed
+(`src/sandbox/child-extension.ts`). Snippets share it: top-level bindings
+persist (`mcp/src/sandbox/rewrite.ts` has the exact semantics), and
+`setInterval` routines keep running between snippets. The ambient surface is
+the stack's, documented once in the child runtime's header and told to the
+model in the system prompt; the extension adds nothing a snippet can reach.
 
 Timeouts, precisely: a snippet that exceeds the per-snippet timeout is
 abandoned but the runtime survives; a snippet that blocks the event loop gets
 the process killed and respawned, and the state loss is surfaced to the model
 as a harness notice. The client's query answers are not part of that loss:
 the host keeps them and seeds each new child before it is ready
-(`src/sandbox/client-cache.ts`, `docs/ARCHITECTURE.md` "Persistence").
+(`mcp/src/sandbox/client-cache.ts`, `docs/ARCHITECTURE.md` "Persistence").
 Repeats trip the `snippet-runaway` watchdog. The abandon
 message also says what the snippet was awaiting when the abandoning wait can
 say it: how far an awaited `moveTo` had walked, or that an awaited `sleep` was
@@ -1206,9 +1225,10 @@ marked `auto`. Record-only; why and the size are in `docs/ARCHITECTURE.md`,
 "The action log".
 
 Confinement: the child is exec'd under a Linux Landlock ruleset
-(`src/sandbox/confine.ts`, whose `confinementPlan` is the one place the rules
-live) that the kernel enforces whatever API a snippet uses. Filesystem: reads
-of the interpreter, `runner/`, `sdk/`, `node_modules/` and the manifests, the
+(`mcp/src/sandbox/confine.ts`, whose `confinementPlan` is the one place the
+rules live) that the kernel enforces whatever API a snippet uses. Filesystem:
+reads of the interpreter, `mcp/`, `sdk/`, `node_modules/`, `runner/` (which the
+runner's host names, for its entry and extension) and the manifests, the
 child's own `/proc` entry and a few system-wide `/proc` files, and five `/dev`
 nodes, so `.env`, the repo root, the home directory, `/tmp`, `/dev/shm` and
 every other process's `/proc` entry answer `EACCES`. The last matters because
@@ -1238,7 +1258,7 @@ The session secret in what a snippet prints: the child holds the run's leased
 secret (`WRATHBENCH_SECRET`) and a snippet can print it. The model reads
 `[redacted]` where it was. Every tool result, on every driver, and every
 turn's context message is scrubbed against the secrets registered with the
-trajectory before the model reads it (`callTool` in `src/tools.ts`,
+trajectory before the model reads it (the dispatcher in `mcp/src/tools.ts`,
 `ContextBuilder.build`). That covers a secret a snippet returned, logged or
 threw, the crash notice's stderr tail, a chat line that echoed it and the
 scratchpad. The model loses nothing by it: the SDK holds the secret, and the
@@ -1247,10 +1267,10 @@ Everywhere else the runner writes the secret, it is `[redacted]` too:
 - The trajectory scrubs every record against the same list
   (`leaseRunSecret` registers this one before the child exists).
 - The host pipes the child's stdout and stderr and writes them to its own a
-  line at a time with the secret replaced (`src/redact.ts`), so neither the
+  line at a time with the secret replaced (`mcp/src/redact.ts`), so neither the
   job log nor the pod log carries it. It folds that log copy after the scrub:
   a line repeated back to back is written once and then as a count
-  (`sandbox/log-fold.ts`), because a model's loop printing one line forever is
+  (`mcp/src/sandbox/log-fold.ts`), because a model's loop printing one line forever is
   what filled a job log to gigabytes. The stderr tail a crash notice quotes to
   the model is read before the fold, as the child wrote it.
 - It scrubs the stderr tail the crash notice quotes before cutting it.
