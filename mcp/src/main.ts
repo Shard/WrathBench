@@ -27,7 +27,7 @@ import { CLIENT_CACHE_FILE, ClientCacheStore } from "./sandbox/client-cache";
 import { SandboxHost } from "./sandbox/host";
 import { Scratchpad } from "./scratchpad";
 import { McpServer, serveStdio } from "./server";
-import { coreTools, ToolSet, type CoreToolContext, type CoreToolRender } from "./tools";
+import { coreTools, ToolSet, type CoreToolContext, type CoreToolRender, type ToolResult } from "./tools";
 import { MCP_PACKAGE_VERSION } from "./version";
 
 /** Ambient motion and out-of-sight party frames: folded out of `recent_events` unless asked for, as its fold note says. */
@@ -51,6 +51,23 @@ export const PLAIN_RENDER: CoreToolRender<CoreToolContext> = {
       move: snapshot["move"],
     }),
 };
+
+/**
+ * `result` with the sandbox's pending notices at its foot — a restart and the
+ * state it lost, a background fault — scrubbed like the result. A harness
+ * puts these in its own turn context; the bare stack has no turns, so the
+ * next tool result is where the agent hears of them.
+ */
+export function withNotices(
+  sandbox: Pick<SandboxHost, "drainNotices">,
+  secrets: { scrub(text: string): string },
+  result: ToolResult,
+): ToolResult {
+  const notices = sandbox.drainNotices();
+  if (notices.length === 0) return result;
+  const block = ["--- notices ---", ...notices.map((n) => `${n.kind}: ${n.text}`)].join("\n");
+  return { ...result, text: secrets.scrub(`${result.text}\n${block}`) };
+}
 
 async function main(): Promise<void> {
   const argv = Bun.argv.slice(2);
@@ -82,7 +99,9 @@ async function main(): Promise<void> {
     snippetTimeoutMs: 30_000,
     pingGraceMs: 5_000,
     clientCache,
-    onNotice: (n) => console.error(`[wrathbench-mcp] ${n.kind}: ${n.text}`),
+    // Scrubbed like everything else this process writes: a crash notice
+    // quotes the child's stderr, and the child holds the lease secret.
+    onNotice: (n) => console.error(secrets.scrub(`[wrathbench-mcp] ${n.kind}: ${n.text}`)),
   });
   const ctx: CoreToolContext = {
     sandbox,
@@ -97,8 +116,8 @@ async function main(): Promise<void> {
     {
       list: () => tools.defs,
       coerce: (name, raw) => tools.coerce(name, raw),
-      call: (name, args, origin) => tools.call(ctx, name, args, origin),
-      appendPending: (result) => tools.appendPending(ctx, result),
+      call: async (name, args, origin) => withNotices(sandbox, secrets, await tools.call(ctx, name, args, origin)),
+      appendPending: async (result) => withNotices(sandbox, secrets, await tools.appendPending(ctx, result)),
     },
     { serverVersion: MCP_PACKAGE_VERSION },
   );

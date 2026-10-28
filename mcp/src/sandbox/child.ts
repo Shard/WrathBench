@@ -1415,14 +1415,25 @@ function isHarnessAbandonment(reason: unknown): boolean {
  * forwarded to the host as it arrives — this process cannot write the run
  * directory — and a starting child is handed what the host holds before it
  * is ready (`seedClientCache`).
+ *
+ * Registered once, where an extension asks for it in its own listener order
+ * (`SandboxChildApi.forwardClientCache`), or else after every extension has
+ * installed: `onAny` listeners run in registration order and one that throws
+ * stops the rest, so where this one sits is part of the child's behaviour.
  */
-client.events.onAny((event) => {
-  if (!keepsAnswer(event)) return;
-  send({
-    t: "client_cache",
-    frames: [{ seq: event.seq, opcode: event.opcode, opcodeId: event.opcodeId, ts: event.ts, data: event.data }],
+let clientCacheForwarded = false;
+
+function forwardClientCache(): void {
+  if (clientCacheForwarded) return;
+  clientCacheForwarded = true;
+  client.events.onAny((event) => {
+    if (!keepsAnswer(event)) return;
+    send({
+      t: "client_cache",
+      frames: [{ seq: event.seq, opcode: event.opcode, opcodeId: event.opcodeId, ts: event.ts, data: event.data }],
+    });
   });
-});
+}
 
 /**
  * Fold the host's cached answers into the SDK cache through the SDK's own
@@ -1475,6 +1486,12 @@ export interface SandboxChildExtension {
 export interface SandboxChildApi {
   readonly client: WrathClient;
   summarize(event: StreamEvent): EventSummary;
+  /**
+   * Register the stack's client-cache forward at this point of the listener
+   * order. Optional and idempotent: without a call it registers after every
+   * extension has installed.
+   */
+  forwardClientCache(): void;
 }
 
 export type SandboxChildExtensionFactory = (api: SandboxChildApi) => SandboxChildExtension;
@@ -1758,6 +1775,7 @@ process.on("uncaughtException", (err) => {
  * bare stack (`entry.ts`). The host sends no eval, rpc or seed before ready.
  */
 export function startSandboxChild(factories: readonly SandboxChildExtensionFactory[] = []): void {
-  for (const factory of factories) extensions.push(factory({ client, summarize: eventSummary }));
+  for (const factory of factories) extensions.push(factory({ client, summarize: eventSummary, forwardClientCache }));
+  forwardClientCache();
   send({ t: "ready" });
 }

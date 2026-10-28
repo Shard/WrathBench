@@ -891,7 +891,7 @@ describe("codex driver", () => {
   });
 
   test("codexArgs: the verified flag set, resume threading, TOML-quoted paths", () => {
-    const base = { instructionsPath: "/runs/x/codex-instructions.md", bunBin: "/usr/bin/bun", bridgePath: "/repo/runner/src/mcp-bridge.ts", mcpPort: 40123 };
+    const base = { instructionsPath: "/runs/x/codex-instructions.md", bunBin: "/usr/bin/bun", bridgePath: "/repo/mcp/src/bridge.ts", mcpPort: 40123 };
     const first = codexArgs({ ...base, model: "gpt-6-astra", effort: "high" });
     expect(first.slice(0, 2)).toEqual(["exec", "--json"]);
     expect(first).toContain("--ignore-user-config");
@@ -905,7 +905,7 @@ describe("codex driver", () => {
     expect(cfg).toContain('web_search="disabled"');
     expect(cfg).toContain('model_instructions_file="/runs/x/codex-instructions.md"');
     expect(cfg).toContain('mcp_servers.wrathbench.command="/usr/bin/bun"');
-    expect(cfg).toContain('mcp_servers.wrathbench.args=["/repo/runner/src/mcp-bridge.ts","40123"]');
+    expect(cfg).toContain('mcp_servers.wrathbench.args=["/repo/mcp/src/bridge.ts","40123"]');
     expect(cfg).toContain('mcp_servers.wrathbench.default_tools_approval_mode="approve"');
     // exec-only flags stay off the line so the resume form is identical
     expect(first).not.toContain("-s");

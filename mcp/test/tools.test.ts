@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { SDK_VERSION } from "@wrathbench/sdk";
-import { PLAIN_RENDER } from "../src/main";
+import { PLAIN_RENDER, withNotices } from "../src/main";
 import { SecretRedactor } from "../src/redact";
 import type { ActionHintNote, EventSummary } from "../src/sandbox/ipc";
 import { Scratchpad } from "../src/scratchpad";
@@ -124,4 +124,13 @@ test("the package version constant is package.json's, and the SDK's: the stack r
   const pkg = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { version: string };
   expect(MCP_PACKAGE_VERSION).toBe(pkg.version);
   expect(MCP_PACKAGE_VERSION).toBe(SDK_VERSION);
+});
+
+test("the bare server hands pending sandbox notices to the next result, scrubbed", () => {
+  const secrets = new SecretRedactor();
+  secrets.redact("lease-0123456789abcdef");
+  const pending = [{ ts: 1, kind: "sandbox_restarted" as const, text: "exited; Last stderr: lease-0123456789abcdef" }];
+  const sandbox = { drainNotices: () => pending.splice(0) };
+  expect(withNotices(sandbox, secrets, { text: "ok" }).text).toBe("ok\n--- notices ---\nsandbox_restarted: exited; Last stderr: [redacted]");
+  expect(withNotices(sandbox, secrets, { text: "ok" })).toEqual({ text: "ok" });
 });

@@ -29,7 +29,7 @@ import type { ContextEvents, DeathSignal, FlightSignal } from "./signals";
 import { SnippetDeltaRecorder } from "./snippet-delta";
 import { TraceRecorder } from "./trace-recorder";
 
-export function benchmarkChildExtension({ client, summarize }: SandboxChildApi): SandboxChildExtension {
+export function benchmarkChildExtension({ client, summarize, forwardClientCache }: SandboxChildApi): SandboxChildExtension {
   // ------------------------------------------------------------ death watcher
 
   /**
@@ -255,6 +255,10 @@ export function benchmarkChildExtension({ client, summarize }: SandboxChildApi):
    */
   const nearbyRecorder = new NearbyRecorder({ state: client.state, events: client.events });
   nearbyRecorder.start();
+
+  // The stack's client-cache forward, here in the listener order, between the
+  // recorders and the spell marks, where the child has always registered it.
+  forwardClientCache();
 
   /**
    * What the child adds to a spell combat-log line as it arrives (context.ts,

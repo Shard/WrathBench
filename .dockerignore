@@ -10,6 +10,7 @@ deps/azerothcore/env
 deps/azerothcore/build*
 runner
 sdk
+mcp
 wiki
 docs
 dashboard

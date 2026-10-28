@@ -88,7 +88,7 @@ describe("the runner image's ignore list", () => {
   });
 
   test("keeps the workspace it is made of", () => {
-    for (const p of ["runner/src/env.ts", "sdk/src/index.ts", "infra/docker/runner.Dockerfile", "package.json", "bun.lock", "dashboard/src/App.tsx"]) {
+    for (const p of ["runner/src/env.ts", "sdk/src/index.ts", "mcp/src/index.ts", "infra/docker/runner.Dockerfile", "package.json", "bun.lock", "dashboard/src/App.tsx"]) {
       expect([p, ignored(patterns, p)]).toEqual([p, false]);
     }
   });
@@ -103,6 +103,12 @@ describe("the server image's ignore list", () => {
 
   test("leaves out agent worktrees at any depth", () => {
     for (const p of [".claude/worktrees/agent-x/module/src/a.cpp", "deps/azerothcore/.claude/skills/x.md"]) {
+      expect([p, ignored(patterns, p)]).toEqual([p, true]);
+    }
+  });
+
+  test("leaves out the TypeScript workspaces, which the server image is not made of", () => {
+    for (const p of ["runner/src/run.ts", "sdk/src/index.ts", "mcp/src/index.ts", "wiki/src/bundle.ts"]) {
       expect([p, ignored(patterns, p)]).toEqual([p, true]);
     }
   });
