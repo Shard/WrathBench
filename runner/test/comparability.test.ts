@@ -26,6 +26,7 @@ import {
   promptHash,
   sameComparability,
   type Comparability, harnessSeries } from "../src/comparability";
+import { ModuleProtocolError } from "@wrathbench/sdk";
 import { loadRunConfig } from "../src/config";
 import type { EpisodeTier } from "../src/episodes";
 import { CLAUDE_CODE_SYSTEM_PROMPT, SYSTEM_PROMPT, buildSystemPrompt } from "../src/prompt";
@@ -257,6 +258,13 @@ describe("fetchServerBuild", () => {
       build: "harness-0.2-3-gabc123",
       startedAtMs: 555,
     });
+  });
+
+  test("a module speaking a protocol this SDK cannot drive refuses the launch; a supported or absent one stamps as before", async () => {
+    globalThis.fetch = mockFetch(async () => new Response(JSON.stringify({ build: "b", startedAtMs: 1, protocol: 99 }), { status: 200 }));
+    await expect(fetchServerBuild("http://module:8086")).rejects.toBeInstanceOf(ModuleProtocolError);
+    globalThis.fetch = mockFetch(async () => new Response(JSON.stringify({ build: "b", startedAtMs: 1, protocol: 1 }), { status: 200 }));
+    expect(await fetchServerBuild("http://module:8086")).toEqual({ build: "b", startedAtMs: 1 });
   });
 
   test("an unreachable module never blocks launch — reads null, does not throw", async () => {
