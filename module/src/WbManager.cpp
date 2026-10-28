@@ -41,6 +41,7 @@
 #include "MapCollisionData.h"
 #include "DetourCommon.h"
 #include "PathGenerator.h"
+#include "MovementTypedefs.h"
 #include "Player.h"
 #include "SharedDefines.h"
 #include "SpellInfo.h"
@@ -1610,6 +1611,27 @@ namespace WrathBench
     // off by at most half a stretch either side of a shoreline.
     static constexpr float ETA_SAMPLE_YARDS = 5.0f;
 
+    // How long a client's character takes over a downward ledge segment it
+    // walks off (a forced `drop`, the mesh's or the edge past it): the fall's
+    // own time, not a run down the cliff. The core's fall clock
+    // (Movement::computeFallTime: gravity to terminal velocity, the time
+    // MoveSpline gives a falling spline; the slow-fall terminal velocity under
+    // a Feather Fall or Slow Fall aura, which the client's own buff frame
+    // shows) over the segment's height, or the time the run takes over its
+    // horizontal span when that is longer: a character keeps its forward
+    // speed through a fall and covers ground no faster than that. A 143y fall
+    // is about 4 s rather than the 20 s a run down its length took, during
+    // which the server held the character at the lip.
+    static bool IsDropSegment(WbVec const& a, WbVec const& b, float* dzOut);
+    static uint64_t FallMs(Player* player, WbVec const& a, WbVec const& b)
+    {
+        float const fall = Movement::computeFallTime(a.z - b.z, player->HasFeatherFallAura());
+        float const run = player->GetSpeed(MOVE_RUN);
+        float const across = std::sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y));
+        float const ride = run > 0.01f ? across / run : 0.0f;
+        return uint64_t(std::llround(double(std::max(fall, ride)) * 1000.0));
+    }
+
     struct WalkEta
     {
         uint64_t ms{0};      // 0 when no speed could be read
@@ -1642,6 +1664,14 @@ namespace WrathBench
             float const len = std::sqrt(sx * sx + sy * sy + sz * sz);
             if (len <= 0.0001f)
                 continue;
+            // A ledge in a dispatched route is a forced fall (an unforced one
+            // is refused at planning): timed as TickMover times it.
+            float dz = 0.0f;
+            if (IsDropSegment(a, b, &dz) && dz < 0.0f)
+            {
+                seconds += double(FallMs(player, a, b)) / 1000.0;
+                continue;
+            }
             if (dry)
             {
                 seconds += len / run;
@@ -2559,6 +2589,20 @@ namespace WrathBench
             return map->isInLineOfSight(a.x, a.y, az + body, b.x, b.y, bz + body, phase,
                 LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
         };
+        // The look's own line: level at the height a sample's surface is read
+        // from (`top`), from the last sample to this one. Map::GetHeight looks
+        // down from `top` and sees nothing over it, and SurfaceUnder's grid
+        // test covers only terrain rising over it; a model or game-object
+        // surface that does (a ramp or an arched deck rising more than the
+        // look between two samples) would let the look pass under it to the
+        // floor below — a fall through a deck no client falls through. Any
+        // such surface between the two samples crosses this line, which
+        // Map::isInLineOfSight sees: refused as the climb it is. A surface
+        // rising less than the look lies under the line and is the one read.
+        auto lookClear = [&](WbVec const& a, WbVec const& b, float top) {
+            return map->isInLineOfSight(a.x, a.y, top, b.x, b.y, top, phase,
+                LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
+        };
 
         // The walk on: sample by sample from the route's end toward the
         // request, each sample's ground read from just over the last one
@@ -2568,18 +2612,23 @@ namespace WrathBench
         // is a climb and ends the attempt — a step up is never taken. The
         // walk on is bounded by START_SNAP_RADIUS, the straight leg the
         // module already walks onto the mesh from an off-mesh start, here in
-        // the other direction, and never passes the request.
+        // the other direction: no sample, the one past the lip included, lies
+        // farther than that from the route's end, nor past the request.
+        float const reach = std::min(dist, START_SNAP_RADIUS);
         std::vector<WbVec> walk;
         WbVec prev = from;
         float travelled = 0.0f;
         WbVec foot;
+        float footT = 0.0f;
         for (;;)
         {
-            if (travelled >= dist || travelled > START_SNAP_RADIUS)
+            if (travelled >= reach)
                 return refuse("no_edge");
-            float const t = std::min(travelled + EDGE_SAMPLE_STEP, dist);
+            float const t = std::min(travelled + EDGE_SAMPLE_STEP, reach);
             WbVec next{ from.x + ux * t, from.y + uy * t, 0.0f };
             float const top = prev.z + EDGE_LOOK_OFFSET;
+            if (!lookClear(prev, next, top))
+                return refuse("climb");
             bool climb = false;
             // The look reaches the request's own height and the default
             // search past it, so a fall toward the request finds its floor.
@@ -2593,6 +2642,7 @@ namespace WrathBench
             if (IsDropSegment(prev, next, &dz))
             {
                 foot = next;
+                footT = t;
                 break;
             }
             if (!clear(prev, prev.z, next, next.z))
@@ -2605,21 +2655,27 @@ namespace WrathBench
         ed.walkYards = travelled;
 
         // The fall: past the edge the surface is read from the edge's height
-        // at each sample (FootUnderSurface's look), the body's line held at
-        // that height clear of models (a client falls through the air, not
-        // through an overhang), and the fall lands where the surface stops
-        // falling away — the first sample whose next is no longer a ledge
-        // below it, or the last before the request. A cliff that is not
-        // sheer is fallen down to its foot, not to a ledge of its face.
+        // at each sample (FootUnderSurface's look), the body's line and the
+        // look's own line held at that height clear of models (a client falls
+        // through the air, not through an overhang or a deck), and the fall
+        // lands where the surface stops falling away — the first sample whose
+        // next is no longer a ledge below it, or the last before the request.
+        // A cliff that is not sheer is fallen down to its foot, not to a
+        // ledge of its face.
         float const fallTop = edge.z + EDGE_LOOK_OFFSET;
         float const fallSearch = std::max(DEFAULT_HEIGHT_SEARCH, fallTop - z + DEFAULT_HEIGHT_SEARCH);
         WbVec landing = foot;
         if (!clear(edge, edge.z, landing, edge.z))
             return refuse("blocked");
-        for (float t = travelled + EDGE_SAMPLE_STEP; t < dist; )
+        for (float t = footT; t < dist; )
         {
             t = std::min(t + EDGE_SAMPLE_STEP, dist);
             WbVec next{ from.x + ux * t, from.y + uy * t, 0.0f };
+            // Something in the way ahead: the fall comes down short of it, in
+            // the last column read clear (the edge-to-foot lines were the walk
+            // on's last check, so there is always one).
+            if (!lookClear(landing, next, fallTop) || !clear(landing, edge.z, next, edge.z))
+                break;
             bool climb = false;
             float const s = SurfaceUnder(player, next.x, next.y, fallTop, fallSearch, &climb);
             if (climb || s <= INVALID_HEIGHT)
@@ -2628,8 +2684,6 @@ namespace WrathBench
             float dz = 0.0f;
             if (!IsDropSegment(landing, next, &dz) || dz > 0.0f)
                 break;
-            if (!clear(landing, edge.z, next, edge.z))
-                return refuse("blocked");
             landing = next;
         }
         ed.hasEdge = true;
@@ -3152,6 +3206,8 @@ namespace WrathBench
         m.hasSurfaceZ = false;
         m.force = force;
         m.inFall = false;
+        m.fallStartMs = 0;
+        m.fallMs = 0;
 
         int64_t now = NowMs();
         m.points.clear();
@@ -4637,10 +4693,32 @@ namespace WrathBench
                             .Add("moveId", m.moveId).Add("cause", "drop_forced").Add("dz", (double)dz)
                             .Raw("pos", PosJson(m.curX, m.curY, m.curZ, m.curO)).Str());
                         m.inFall = true;
+                        m.fallStartMs = nowMs;
+                        m.fallMs = FallMs(player, a, b);
                     }
                 }
             }
             float remain = segLen - m.segDone;
+            // A fall is timed by the fall (FallMs), not by the run: the body is
+            // where the fall's clock puts it along the segment, and lands once
+            // the clock runs out. Only the timing changes; the packets are the
+            // edge heartbeat before and the landing after, as above.
+            if (m.inFall)
+            {
+                int64_t const since = nowMs - m.fallStartMs;
+                if (since < int64_t(m.fallMs))
+                {
+                    float const t = float(since) / float(m.fallMs);
+                    m.segDone = segLen * t;
+                    m.curX = a.x + sx * t;
+                    m.curY = a.y + sy * t;
+                    m.curZ = a.z + sz * t;
+                    m.curO = Position::NormalizeOrientation(std::atan2(sy, sx));
+                    advance = 0.0f;
+                    break;
+                }
+                advance = remain; // the landing is this tick; the next segment starts on the next
+            }
             if (advance < remain)
             {
                 m.segDone += advance;
@@ -4729,7 +4807,10 @@ namespace WrathBench
         // position and the DBC, and fires CMSG_AREATRIGGER on entering one
         // without the player choosing to. After the heartbeat, so the server's
         // applied position is as close as possible to the one tested here.
-        CheckAreaTriggers(s, player, m.curX, m.curY, m.curZ, nowMs);
+        // Not mid-fall: the body is in the air on a line the fall's packets
+        // never report, and the landing's column is tested on the next tick.
+        if (!m.inFall)
+            CheckAreaTriggers(s, player, m.curX, m.curY, m.curZ, nowMs);
         if (!m.active)
             return; // (defensive: a synchronous finish is not expected here)
 

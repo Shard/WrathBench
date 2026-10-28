@@ -380,7 +380,13 @@ or the edge past the end of the mesh that a move to a point below the route's
 end walks on to (`path_incomplete`, below). The step is walked the way a
 client's character walks off an edge — a heartbeat at the edge, nothing
 during the fall, `MSG_MOVE_FALL_LAND` at the foot — so the server charges the
-fall through its own `Player::HandleFall`, as it would a client's. `force`
+fall through its own `Player::HandleFall`, as it would a client's. The fall
+takes the time a fall takes, not a run down the cliff: the core's own fall
+clock (`Movement::computeFallTime`, gravity to terminal velocity, the slower
+terminal velocity under Feather Fall or Slow Fall) over the ledge's height, or
+the run's time over its horizontal span when that is longer, since a
+character keeps its forward speed through a fall; areatriggers are not tested
+in mid-air. `force`
 does not apply to a step *up*: a client cannot walk up a ledge the mesh calls
 a climb, and such a route is refused as `drop` (positive `dz`) whatever the
 request says. Nor does it apply to a step whose foot lies under the ground
@@ -435,7 +441,7 @@ ghost faster. Each stretch counts at the speed the walker will drive it at,
 `GetSpeed(MOVE_RUN)` everywhere else, wading and transport legs included;
 both speeds are read once, at dispatch, so whatever the server applies to
 them then (a mount, a ghost's speed, a slow) is in the estimate, and a change
-mid-walk is not. The water test runs once per 5y of route, at the middle of
+mid-walk is not. A forced ledge counts as the fall it is (`force`, above). The water test runs once per 5y of route, at the middle of
 each stretch and at the route's own z, as the walker passes it, so a
 shoreline is placed to within half a stretch. This is the walker reporting its
 own plan, not a game rule; the 3s confirmation after the last step is not in
@@ -1198,12 +1204,16 @@ at the top of this document.
   (the step at which the drop guard's two bounds meet), each one's surface
   read from 1y over the last (terrain, vmap and game-object floors, or the
   water over them), each step a walkable slope with nothing at body height in
-  the way and none rising past that 1y, for at most 10y (the start snap's own
-  leg, the other way) and never past the request, to the first step the
-  guard calls a ledge. That lip is the edge. The fall goes on toward the
-  request while the surface under it keeps falling away, read from the
-  edge's height, and lands where it stops, so a cliff that is not sheer is
-  fallen to its foot rather than to a point on its face. From the landing the
+  the way and nothing rising past that 1y — terrain by its own height, a
+  model or game-object surface (a ramp, an arched deck) by the level line at
+  the look's height from the last sample, which it would cross — with every
+  sample, the one past the lip included, within 10y of the route's end (the
+  start snap's own leg, the other way) and never past the request, to the
+  first step the guard calls a ledge. That lip is the edge. The fall goes on
+  toward the request while the surface under it keeps falling away, read
+  from the edge's height with those two lines held at that height, and lands
+  where it stops or short of anything in the way, so a cliff that is not
+  sheer is fallen to its foot rather than to a point on its face. From the landing the
   route goes on to the request as a move from there would: from the mesh
   under it, else from the mesh nearest it within 10y with the straight walk
   onto it, by the core's path or the module's planner, ending within 4y of

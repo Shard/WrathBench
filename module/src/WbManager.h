@@ -139,6 +139,8 @@ namespace WrathBench
         float surfaceZ{0};
         bool force{false};          // request said force: ledges are walked (and fallen off), not refused
         bool inFall{false};         // walking a forced downward ledge: MSG_MOVE_FALL_LAND is owed at its foot
+        int64_t fallStartMs{0};     // ... since when (the edge heartbeat), and
+        uint64_t fallMs{0};         // ... how long the fall takes (FallMs): the segment is timed by it, not by the run
         bool swimming{false};       // the "client" is swimming: packets carry MOVEMENTFLAG_SWIMMING, pace is swim speed
     };
 
