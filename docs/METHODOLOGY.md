@@ -155,6 +155,15 @@ refusals carrying the hint that would have unstuck it and read none. The
 channel is in addition to the hint in the result, never instead of it.
 Hints are SDK surface (operator, 2026-10-28).
 
+**A character with no way out has the client's own** (operator decision,
+2026-10-28). A ghost dropped into a crevice whose every exit was a climb,
+with no spirit healer near and its corpse far off, had no legitimate move
+left; a player there presses Help → "I'm stuck". `unstuck()` sends what that
+button sends, the Stuck spell through the ordinary cast handler, and the
+server decides the move. It acts only on a second call within a minute, the
+first sending nothing and saying what will happen. It is in the SDK
+reference like any helper, and by the same decision not in the prompt.
+
 ## Context policy
 
 One fixed context for every model (`runner/src/context.ts`): the fixed system
