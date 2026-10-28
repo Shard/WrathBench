@@ -1210,14 +1210,21 @@ at the top of this document.
   sample, the one past the lip included, within 10y of the route's end (the
   start snap's own leg, the other way) and never past the request, to the
   first step the guard calls a ledge. That lip is the edge. The fall goes on
-  toward the request while the surface under it keeps falling away, read
-  from the edge's height with those two lines held at that height, and lands
-  where it stops or short of anything in the way, so a cliff that is not
-  sheer is fallen to its foot rather than to a point on its face. From the landing the
-  route goes on to the request as a move from there would: from the mesh
-  under it, else from the mesh nearest it within 10y with the straight walk
-  onto it, by the core's path or the module's planner, ending within 4y of
-  the request. The fall must be the route's only ledge, so `force` given for
+  toward the request, the surface read from the edge's height with those two
+  lines held at that height, until the body comes down on ground a client
+  stands on — the walkable mesh at the surface (within 2y), which is built to
+  the slope, step and clearance a character walks — and is carried on while
+  the surface keeps going down off it, a face too steep to stand on. It stops
+  at the first walkable sample, at a rise, at anything in the way or at the
+  request, and lands at the last sample reached that still lies a ledge below
+  the edge, so a cliff is fallen to its foot rather than to a gentler patch of
+  its face. From the landing the route goes on to the request: from the mesh
+  under the landing when the request can be reached from it, else from the
+  walkable mesh nearest it within 10y that is not on a closed island apart
+  from the request (as an island end is walked to its reachable mesh: the
+  foot of a cliff is where the mesh breaks up around what stands there), with
+  the straight walk onto it clear at body height, by the core's path or the
+  module's planner, ending within 4y of the request. The fall must be the route's only ledge, so `force` given for
   it never walks a second one. When all of that holds the answer is that
   route's, settled by the same guard as any other: `drop` without `force`
   (the edge as `reachedPos`, `dz` to the landing, `safeFall`), and with

@@ -2657,61 +2657,97 @@ namespace WrathBench
         // The fall: past the edge the surface is read from the edge's height
         // at each sample (FootUnderSurface's look), the body's line and the
         // look's own line held at that height clear of models (a client falls
-        // through the air, not through an overhang or a deck), and the fall
-        // lands where the surface stops falling away — the first sample whose
-        // next is no longer a ledge below it, or the last before the request.
-        // A cliff that is not sheer is fallen down to its foot, not to a
-        // ledge of its face.
+        // through the air, not through an overhang or a deck). The body comes
+        // down on ground a client stands on, which the server's own model of
+        // it is the walkable mesh (a polygon at the surface, within
+        // MESH_LEVEL_MERGE: the mesh is built to the slope, step and
+        // clearance a character walks); off it, on a face too steep to stand
+        // on, it falls on. So the fall is carried on while the surface keeps
+        // going down off the mesh, and stops at the first walkable sample, at
+        // a rise, at anything in the way, or at the request; it lands at the
+        // last sample it reached that still lies a ledge below the edge. A
+        // cliff is fallen to its foot, not to a gentler patch of its face:
+        // the Skettis face, 112y over 30y, has a pair 1.98y apart 6y down it,
+        // under the guard's 2y, where the first version landed and stranded.
         float const fallTop = edge.z + EDGE_LOOK_OFFSET;
         float const fallSearch = std::max(DEFAULT_HEIGHT_SEARCH, fallTop - z + DEFAULT_HEIGHT_SEARCH);
+        auto walkable = [&](WbVec const& p) {
+            float h = 0.0f;
+            return MeshHeightAt(player, p.x, p.y, p.z, &h) && std::fabs(h - p.z) <= MESH_LEVEL_MERGE;
+        };
         WbVec landing = foot;
         if (!clear(edge, edge.z, landing, edge.z))
             return refuse("blocked");
-        for (float t = footT; t < dist; )
+        WbVec reached = foot;
+        for (float t = footT; ; )
         {
+            float rdz = 0.0f;
+            if (IsDropSegment(edge, reached, &rdz) && rdz < 0.0f)
+                landing = reached;
+            if (walkable(reached) || t >= dist)
+                break;
             t = std::min(t + EDGE_SAMPLE_STEP, dist);
             WbVec next{ from.x + ux * t, from.y + uy * t, 0.0f };
             // Something in the way ahead: the fall comes down short of it, in
             // the last column read clear (the edge-to-foot lines were the walk
             // on's last check, so there is always one).
-            if (!lookClear(landing, next, fallTop) || !clear(landing, edge.z, next, edge.z))
+            if (!lookClear(reached, next, fallTop) || !clear(reached, edge.z, next, edge.z))
                 break;
             bool climb = false;
             float const s = SurfaceUnder(player, next.x, next.y, fallTop, fallSearch, &climb);
-            if (climb || s <= INVALID_HEIGHT)
+            if (climb || s <= INVALID_HEIGHT || s > reached.z)
                 break; // land before the rise, or before a hole in the world
             next.z = s;
-            float dz = 0.0f;
-            if (!IsDropSegment(landing, next, &dz) || dz > 0.0f)
-                break;
-            landing = next;
+            reached = next;
         }
         ed.hasEdge = true;
         ed.edge = edge;
         ed.landing = landing;
-        // Every sample of the fall lies a ledge below the one before it, so
-        // the edge-to-landing segment is one the guard calls a ledge, and is
+        // The landing lies a ledge below the edge (the foot does, by the walk
+        // on's own test, and no later sample is taken unless it does), so the
+        // edge-to-landing segment is one the guard calls a ledge, and is
         // walked as one: a heartbeat at the edge, the landing at the foot.
         float fallDz = 0.0f;
         if (!IsDropSegment(edge, landing, &fallDz) || fallDz >= 0.0f)
             return refuse("not_a_ledge");
 
-        // The leg below, from the landing to the request, the way a move from
-        // the landing would start: on the mesh, else from the mesh nearest it
-        // within START_SNAP_RADIUS, with the straight walk onto it — so the
-        // landing is a point the next move can start from, and a landing on a
-        // cliff's face, whose nearest mesh is the plateau, is a climb the
-        // one-ledge rule below refuses. The core's path, else the module's
-        // planner, as ResolvePathAt; it must end within 4y of the request.
+        // The leg below, from the landing to the request: from the mesh under
+        // the landing when the request can be reached from it, else from the
+        // walkable mesh nearest the landing within START_SNAP_RADIUS that is
+        // not on a closed island apart from the request's polygon
+        // (WbNav::NearestReachable, as an island end is walked to its
+        // reachable mesh), with the straight walk onto it clear at body
+        // height. The foot of a cliff is where the mesh is broken up around
+        // whatever stands there: at Skettis the nearest polygon to the
+        // landing is a 2-polygon island 0.1y off, the main mesh 1.4y. A
+        // landing on a cliff's face, whose nearest such mesh is the plateau,
+        // is a climb the one-ledge rule below refuses. The core's path, else
+        // the module's planner, as ResolvePathAt; it must end within 4y of
+        // the request.
+        auto& mmap = map->GetMapCollisionData().GetMMapData();
+        dtNavMesh const* navMesh = mmap.GetNavMesh();
+        dtNavMeshQuery const* query = mmap.GetNavMeshQuery();
+        ExcludePolysFilter const base;
+        float endPt[3] = { y, z, x };
+        dtPolyRef const endRef = query ? CorePolyAt(query, base, endPt, nullptr) : 0;
         WbVec start = landing;
         {
             PathGenerator probe(player);
             probe.CalculatePath(landing.x, landing.y, landing.z, landing.x, landing.y, landing.z, false);
-            if (probe.GetPathType() & (PATHFIND_NOT_USING_PATH | PATHFIND_FARFROMPOLY_START))
+            float landPt[3] = { landing.y, landing.z, landing.x };
+            dtPolyRef const landRef = query ? CorePolyAt(query, base, landPt, nullptr) : 0;
+            if ((probe.GetPathType() & (PATHFIND_NOT_USING_PATH | PATHFIND_FARFROMPOLY_START))
+                || !landRef || (navMesh && WbNav::OnIsland(navMesh, base, endRef, landRef)))
             {
-                if (!NearestMeshPoint(player, landing.x, landing.y, landing.z, START_SNAP_RADIUS, start))
+                float extents[3] = { START_SNAP_RADIUS, 50.0f, START_SNAP_RADIUS };
+                float closest[3] = { 0.0f, 0.0f, 0.0f };
+                dtPolyRef ref = 0;
+                if (!navMesh || !query || !WbNav::NearestReachable(navMesh, query, endRef, landPt, extents, &ref, closest))
                     return refuse("landing_off_mesh");
+                start = { closest[2], closest[0], closest[1] };
                 ed.landingSnap = true;
+                if (!clear(landing, landing.z, start, start.z))
+                    return refuse("blocked");
             }
         }
         auto nearEnd = [&](WbVec const& v) {
@@ -2732,15 +2768,9 @@ namespace WrathBench
         }
         if (below.empty())
         {
-            auto& mmap = map->GetMapCollisionData().GetMMapData();
-            dtNavMesh const* navMesh = mmap.GetNavMesh();
-            dtNavMeshQuery const* query = mmap.GetNavMeshQuery();
             dtNavMeshQuery const* plan = navMesh ? WbNav::PlannerQuery(navMesh) : nullptr;
-            ExcludePolysFilter const base;
             float startPt[3] = { start.y, start.z, start.x };
-            float endPt[3] = { y, z, x };
             dtPolyRef const startRef = query ? CorePolyAt(query, base, startPt, nullptr) : 0;
-            dtPolyRef const endRef = query ? CorePolyAt(query, base, endPt, nullptr) : 0;
             char const* why = "";
             std::vector<WbVec> planned;
             if (plan && startRef && endRef
