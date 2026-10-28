@@ -1065,8 +1065,9 @@ applies the MovementInfo as a movement packet, clears the pending flight
 change on a can-fly ack whose counter matches, and relays `MSG_MOVE_WATER_WALK`,
 `MSG_MOVE_FEATHER_FALL`, `MSG_MOVE_HOVER` or `MSG_MOVE_UPDATE_CAN_FLY` to the
 set; unanswered, every ghost's observers were never told it walks on water.
-The module keeps the four flags as this client's state (`MOVEMENTFLAG_WATERWALKING`,
-`_FALLING_SLOW`, `_HOVER`, `_CAN_FLY`), sets or clears the one the packet
+The module keeps the four flags as this client's state
+(`MOVEMENTFLAG_WATERWALKING`, `_FALLING_SLOW`, `_HOVER`, `_CAN_FLY`), sets or
+clears the one the packet
 names, then answers for its own guid from the tap (module-internal, as the
 speed acks; none of these packets is served as an event): packGUID, the echoed
 counter, the MovementInfo as the speed acks build it (the new flag on it), and
@@ -1079,11 +1080,17 @@ control the unit, which the server then flags itself) update the state and
 want no ack. No ack is sent while the character moves another unit (a vehicle,
 a charm): the handler writes the flags onto whatever the session moves.
 
-Two of these states are kept but not yet lived: the walker's water test
-(Swimming, above) does not read water walking, so a water-walking body (every
-ghost, Water Walking, Levitate) is still swum under the surface where a client
-runs on it, and a hovering body is sent at the route's z, not hover height
-above it. `SMSG_MOVE_KNOCK_BACK` (0x0EF) is not answered: a client's
+With the server now holding the flags, the core's pathfinder, which plans
+on the character, reads two of them as it would a real client's: over land a
+hovering character's route points are raised by its hover height (1y for a
+player) and so walked there (`WorldObject::UpdateAllowedPositionZ`, from
+`PathGenerator::NormalizePath`), and a character that can fly has its route
+points only raised to the ground, never lowered, and gets a straight-line
+shortcut where the start or target is more than 7y off the mesh, which the
+module refuses as off the mesh, as it refused the path it got before. Water
+walking is kept but not lived: the walker's water test (Swimming, above) does
+not read it, so a water-walking body (every ghost, Water Walking, Levitate) is
+still swum under the surface where a client runs on it. `SMSG_MOVE_KNOCK_BACK` (0x0EF) is not answered: a client's
 `CMSG_MOVE_KNOCK_BACK_ACK` is the start of the arc (`MOVEMENTFLAG_FALLING`
 and the launch velocity, which the handler relays to observers as
 `MSG_MOVE_KNOCK_BACK`), and owes the arc's packets and a `MSG_MOVE_FALL_LAND`
