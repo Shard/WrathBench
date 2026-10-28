@@ -21,7 +21,8 @@ It measures how well a model drives a fixed toolkit toward long-horizon goals in
 ```
 module/        C++ AzerothCore module: HTTP/WS bridge into WorldSession (GPL-2.0-or-later)
 sdk/           Bun/TypeScript SDK over the module (MIT)
-runner/        Agent loop, snippet sandbox, MCP server, trajectory logging (MIT)
+mcp/           Snippet sandbox, MCP server and core tools over the SDK (MIT)
+runner/        Agent loop, benchmark tools and hooks into mcp/, trajectory logging (MIT)
 dashboard/     SolidJS SPA over the viewer's read-only /api (MIT)
 wiki/          Tooling to build the wiki bundle from a local dump (MIT); the dump itself is in data/
 minimap/       Local minimap extraction tooling; generated assets stay in data/ (MIT)
