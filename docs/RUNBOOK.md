@@ -540,7 +540,7 @@ On the cluster the code is baked into the images, so the first question is
 | --- | --- |
 | the config store (`/config` page or `bun wb config`) | the **next tick** (60s). Hot-reloaded; every write is validated, and a config the running code refuses is complained about and ignored. |
 | the wiki bundle | the next episode spawn: it is on the data volume. |
-| any code: `runner/`, `sdk/`, `infra/`, `module/`, `dashboard/` | a **release** (`bun wb release run`, "Deploy window", below). A run in flight keeps the code it started with. The viewer picks up a new image with `bun wb server restart-viewer`. |
+| any code: `runner/`, `sdk/`, `mcp/`, `infra/`, `module/`, `dashboard/` | a **release** (`bun wb release run`, "Deploy window", below). A run in flight keeps the code it started with. The viewer picks up a new image with `bun wb server restart-viewer`. |
 | anything the supervisor reads only at start: its own code, its env, a lane's token | a fleet pod restart. A release does one; the two recipes below do one without a release. |
 
 The supervisor's date stamp (`fleet-<job>-<model>-<YYYYMMDD>`) is taken once at

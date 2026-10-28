@@ -2,7 +2,7 @@
  * Whether a checkout's `node_modules` is its own, installed in place.
  *
  * The suite tests the code in the checkout it runs from, and the snippet
- * child can only read that checkout: confine.ts grants `runner/`, `sdk/` and
+ * child can only read that checkout: confine.ts grants `mcp/`, `sdk/`, `runner/` and
  * `node_modules/` beneath the repo root, by inode. A `node_modules` linked
  * from another checkout (a quick way to skip an install in a trial worktree)
  * breaks both at once. The workspace links in it are relative, so

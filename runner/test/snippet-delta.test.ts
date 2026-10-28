@@ -20,7 +20,7 @@ import { DRIVER_LIST, entryOf } from "../src/drivers";
 import { EpisodicLog } from "../src/episodic";
 import { SNIPPET_DELTA_SENTENCE, buildSystemPrompt } from "../src/prompt";
 import { ReflectGate } from "../src/reflect";
-import { SecretRedactor } from "../src/redact";
+import { SecretRedactor } from "@wrathbench/mcp";
 import { SandboxHost, type SnippetResult } from "../src/sandbox/host";
 import {
   SNIPPET_DELTA,
@@ -30,7 +30,7 @@ import {
   type SnippetDelta,
   type SnippetDeltaState,
 } from "../src/sandbox/snippet-delta";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import { callTool, renderActionHints, type ToolContext } from "../src/tools";
 import { tempDirs } from "./fixtures/temp-dirs";
 

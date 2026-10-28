@@ -58,7 +58,7 @@
  */
 
 import { readdir } from "node:fs/promises";
-import { connect, type MovePoint, type MoveResultData, type WrathClient } from "../../sdk/src/index";
+import { connect, type MovePoint, type MoveResultData, type WrathClient } from "@wrathbench/sdk";
 import { SCENARIOS, type ScenarioName } from "../fixtures/scenarios";
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";

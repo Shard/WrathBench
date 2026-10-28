@@ -226,7 +226,7 @@ import {
   serializeModelsSidecar,
   type CountCache,
 } from "../runner/src/models";
-import { moduleAuthHeaders } from "../runner/src/module-auth";
+import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
 import { Trajectory } from "../runner/src/trajectory";
 
 // ------------------------------------------------------------ the modules

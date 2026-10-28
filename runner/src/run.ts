@@ -51,7 +51,7 @@ import { openRunDb } from "./rundb";
 import { archiveIfNoResponses } from "./archive";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { characterOwners, clearAccountCharacters } from "./hygiene";
-import { leaseRunSecret, releaseSessionSecret } from "./module-auth";
+import { leaseRunSecret, releaseSessionSecret } from "@wrathbench/mcp/module-auth";
 import { comparabilityOf, fetchServerBuild, sameComparability } from "./comparability";
 import { CampaignLaunchError, RUN_IMAGE_ENV, campaignLaunch } from "./campaign-launch";
 import { holdsOnlyLaunchFiles, readCampaignFile } from "./campaign-file";
@@ -79,15 +79,16 @@ import {
 import { STALL_PAUSE, SUBSCRIPTION_PAUSE } from "./lapse";
 import { runLoop, type StopRequest } from "./loop";
 import { continuedSessionNote, freshCharacterNote, resumeSessionNote, stagedCharacterNote } from "./prompt";
-import { CLIENT_CACHE_FILE, ClientCacheStore } from "./sandbox/client-cache";
+import { CLIENT_CACHE_FILE, ClientCacheStore } from "@wrathbench/mcp/client-cache";
 import { SandboxHost } from "./sandbox/host";
 import { EpisodicLog } from "./episodic";
-import { Scratchpad } from "./scratchpad";
+import { Scratchpad } from "@wrathbench/mcp/scratchpad";
 import { goKeyEnvOf, liveOwnerOf, RESUME_REFUSED_EXIT, subscriptionLaneOfConfig } from "./models";
 import { GoUsageGauge, goUsageUrl } from "./opencode-go";
 import { Trajectory, readMeta, startHeartbeat, type PauseMark, type RunMeta } from "./trajectory";
 import { removeNearbyRing } from "./nearby";
 import { harnessVersion } from "./version";
+import { SDK_VERSION } from "@wrathbench/sdk";
 import { Watchdogs } from "./watchdogs";
 import { watchEndRequest } from "./end-request";
 import { className, raceName } from "../viewer/characters";
@@ -675,6 +676,7 @@ async function main(): Promise<void> {
     trajectory.writeMeta({
       runId: config.runId,
       harnessVersion: version,
+      sdkVersion: SDK_VERSION,
       startedAt: Date.now(),
       config,
       comparability,
@@ -723,7 +725,7 @@ async function main(): Promise<void> {
         // conversation should be exactly what the scratchpad note says it is.
         ...(DRIVER_TABLE[config.driver].kind === "scaffold" ? { resumedFresh: true } : {}),
       };
-      trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, config, comparability });
+      trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, sdkVersion: SDK_VERSION, config, comparability });
     }
     /*
      * A resume may tighten the leash (`--max-turns`, `--watchdogs-json`), and a
@@ -742,7 +744,7 @@ async function main(): Promise<void> {
        * launch build would have the run row and its own tuple naming two
        * different versions — on charts whose entire claim is comparability.
        */
-      trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, config, comparability });
+      trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, sdkVersion: SDK_VERSION, config, comparability });
       trajectory.append({
         t: "harness",
         kind: "comparability_restamped",
@@ -768,7 +770,7 @@ async function main(): Promise<void> {
           `weak_token). No live session is stranded — the nightly worldserver recreate clears ` +
           `every module session.`,
       );
-      trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, config, comparability });
+      trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, sdkVersion: SDK_VERSION, config, comparability });
       trajectory.append({ t: "harness", kind: "token_regenerated", reason: "weak_stored_token" });
     }
   }
@@ -819,6 +821,7 @@ async function main(): Promise<void> {
   const metaNow = (): RunMeta => ({
     runId: config.runId,
     harnessVersion: version,
+    sdkVersion: SDK_VERSION,
     startedAt: Date.now(),
     config,
     comparability,

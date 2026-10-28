@@ -19,7 +19,7 @@ import { EpisodicLog } from "../src/episodic";
 import { STALL_PAUSE } from "../src/lapse";
 import { ContextBuilder, runLoop, type StopRequest } from "../src/loop";
 import { SandboxHost } from "../src/sandbox/host";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 import { tempDirs } from "./fixtures/temp-dirs";

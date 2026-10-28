@@ -116,7 +116,7 @@ describe("system prompt: the shapes and seams runs proved models get wrong", () 
   test("the scratchpad cap is stated, with the refusal, at the number the pad enforces", () => {
     // A freeplay run filled its pad and lost every note it appended for eighty
     // turns: the cap was in no prompt or tool text (operator, 2026-10-14).
-    const { SCRATCHPAD_MAX_CHARS } = require("../src/scratchpad");
+    const { SCRATCHPAD_MAX_CHARS } = require("@wrathbench/mcp");
     expect(SYSTEM_PROMPT).toContain(`The scratchpad holds at most ${SCRATCHPAD_MAX_CHARS.toLocaleString("en-US")} characters`);
     expect(SYSTEM_PROMPT).toContain("is refused and saves nothing (in a snippet, the call rejects)");
   });

@@ -1,6 +1,6 @@
 /**
  * The snippet child's network, exec and scope confinement, against the real
- * child process: `runner/src/sandbox/confine.ts` applies Landlock TCP rules
+ * child process: `mcp/src/sandbox/confine.ts` applies Landlock TCP rules
  * (connect only to the module URL's port, bind nothing), grants EXECUTE on
  * nothing but bun itself, and on a kernel with Landlock scopes keeps the
  * child's signals inside its own domain.
@@ -17,9 +17,9 @@
  */
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { landlockAbi } from "../src/sandbox/confine";
+import { landlockAbi } from "@wrathbench/mcp";
 import { SandboxHost } from "../src/sandbox/host";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

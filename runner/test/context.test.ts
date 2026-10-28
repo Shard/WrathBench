@@ -18,7 +18,7 @@ import {
   type HistoryMessage,
 } from "../src/context";
 import { parseEventFrame } from "@wrathbench/sdk";
-import type { EventSummary } from "../src/sandbox/ipc";
+import type { EventSummary } from "@wrathbench/mcp";
 
 function makeInputs(): ContextInputs {
   const events: EventSummary[] = Array.from({ length: 70 }, (_, i) => ({

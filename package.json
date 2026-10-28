@@ -4,6 +4,7 @@
   "license": "MIT",
   "workspaces": [
     "sdk",
+    "mcp",
     "runner",
     "wiki",
     "minimap",
@@ -16,7 +17,7 @@
   "scripts": {
     "test": "bun runner/test/preload-checkout.ts && bun test --parallel=8 --no-isolate --timeout=20000",
     "wb": "bun infra/wb.ts",
-    "typecheck": "for p in sdk runner infra dashboard wiki minimap collector; do tsc --noEmit -p $p || exit 1; done",
+    "typecheck": "for p in sdk mcp runner infra dashboard wiki minimap collector; do tsc --noEmit -p $p || exit 1; done",
     "docs:api": "bun run sdk/generate-api-docs.ts",
     "dashboard:dev": "bun run --cwd dashboard dev",
     "dashboard:build": "bun run --cwd dashboard build",
@@ -24,11 +25,16 @@
     "sync-prices": "bun infra/sync-prices.ts",
     "model-logos": "bun infra/fetch-model-logos.ts",
     "docs:api:check": "bun run sdk/generate-api-docs.ts && git diff --exit-code -- sdk/API.md",
+    "boundary": "bun infra/stack-boundary.ts",
     "deploy:worldserver": "./infra/k8s-deploy.sh",
     "publisher:restart": "kubectl -n wrathbench rollout restart deployment/wrathbench-publisher",
     "viewer:restart": "./infra/viewer-restart.sh",
     "tiles:publish": "bun infra/publish-tiles.ts --upload",
     "ship": "./infra/deploy-dashboard.sh"
+  },
+  "dependencies": {
+    "@wrathbench/mcp": "workspace:*",
+    "@wrathbench/sdk": "workspace:*"
   },
   "devDependencies": {
     "@resvg/resvg-js": "2.6.2",

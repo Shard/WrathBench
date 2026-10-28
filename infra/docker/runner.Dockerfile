@@ -125,6 +125,7 @@ WORKDIR /wrathbench
 # Landlock allowlist names it, so a snippet child fails closed without it.
 COPY --chown=1000:1000 package.json bun.lock bunfig.toml tsconfig.base.json ./
 COPY --chown=1000:1000 sdk/package.json       sdk/package.json
+COPY --chown=1000:1000 mcp/package.json       mcp/package.json
 COPY --chown=1000:1000 runner/package.json    runner/package.json
 COPY --chown=1000:1000 wiki/package.json      wiki/package.json
 COPY --chown=1000:1000 minimap/package.json   minimap/package.json

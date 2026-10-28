@@ -86,7 +86,7 @@
 
 import { readdir } from "node:fs/promises";
 import { probeName } from "./lib/name";
-import { connect, type MovePoint, type MoveResult, type UnitView } from "../../sdk/src/index";
+import { connect, type MovePoint, type MoveResult, type UnitView } from "@wrathbench/sdk";
 import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";

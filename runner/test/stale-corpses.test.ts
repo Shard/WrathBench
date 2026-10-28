@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { formatStateSummary } from "../src/context";
 import { SandboxHost } from "../src/sandbox/host";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

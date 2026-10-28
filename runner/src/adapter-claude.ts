@@ -27,7 +27,7 @@
  *   `result` message that closes the turn. (`--continue` per turn was the
  *   fallback; it is not needed and would re-pay session startup every turn.)
  * - Tools reach the runner's *single* SandboxHost over a loopback TCP MCP
- *   server plus `mcp-bridge.ts` (see that file for why the bridge exists).
+ *   server plus `mcp/src/bridge.ts` (see that file for why the bridge exists).
  *   The MCP server is `mcp.ts`'s `McpServer` over `tools.ts` — the same six
  *   tools, the same dispatch, the same trajectory records.
  * - Billing: the child environment is an allowlist (`childEnv`) holding no
@@ -113,6 +113,7 @@ import { z } from "zod";
 import { DEFAULT_CLAUDE_TOKEN_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { entryOf } from "./drivers";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
+import { MCP_BRIDGE_PATH } from "@wrathbench/mcp/paths";
 import { McpServer } from "./mcp";
 import { CLAUDE_CODE_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
 import { toolsFor, type ToolContext } from "./tools";
@@ -140,7 +141,7 @@ import {
   type UsageWindow,
 } from "./subscription-usage";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
-import type { Scratchpad } from "./scratchpad";
+import type { Scratchpad } from "@wrathbench/mcp";
 import type { Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
 
@@ -892,7 +893,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   const configDir = resolve(o.runDir, "claude-config");
   mkdirSync(configDir, { recursive: true });
   const mcpConfigPath = resolve(o.runDir, "claude-mcp.json");
-  const bridgePath = new URL("./mcp-bridge.ts", import.meta.url).pathname;
+  const bridgePath = MCP_BRIDGE_PATH;
   writeFileSync(
     mcpConfigPath,
     `${JSON.stringify(
@@ -974,7 +975,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   /**
    * `detached` puts the CLI in its own process group, so a signal sent to
    * -pid reaches the CLI *and* everything it spawned — notably the MCP bridge
-   * (`bun mcp-bridge.ts`), which the CLI starts itself and which would
+   * (`bun mcp/src/bridge.ts`), which the CLI starts itself and which would
    * otherwise be reparented to init and survive. Observed twice: an orphaned
    * `claude -p` outliving its runner, and one from the day before still
    * burning CPU 23 hours later.

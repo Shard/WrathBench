@@ -42,7 +42,7 @@
  * MODULE_ACCOUNT and MODULE_ACCOUNT2 default to PROBE and SMOKE2.
  */
 
-import { connect, isDecodeError, isEvent, type WrathClient } from "../../sdk/src/index";
+import { connect, isDecodeError, isEvent, type WrathClient } from "@wrathbench/sdk";
 import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";

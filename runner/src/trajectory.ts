@@ -26,12 +26,12 @@ import type { Database } from "bun:sqlite";
 import { openRunDb } from "./rundb";
 import { appendFileSync, mkdirSync, readFileSync, existsSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { jsonLine, toJsonSafe } from "./jsonsafe";
+import { jsonLine, toJsonSafe } from "@wrathbench/mcp/jsonsafe";
 import type { Comparability } from "./comparability";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import { platformOf } from "./platform";
-import { SecretRedactor } from "./redact";
-import type { ActionNote } from "./sandbox/ipc";
+import { SecretRedactor } from "@wrathbench/mcp/redact";
+import type { ActionNote } from "@wrathbench/mcp";
 import type { SubscriptionUsage } from "./subscription-usage";
 import type { TraceChat, TraceDict, TraceRow, TraceStateDelta } from "./trace-row";
 
@@ -385,6 +385,14 @@ export type MilestoneLine =
 export interface RunMeta {
   runId: string;
   harnessVersion: string;
+  /**
+   * The `@wrathbench/sdk` version this build depends on (`SDK_VERSION`), which
+   * `@wrathbench/mcp` shares: the stack a run drove, recorded beside the
+   * harness stamp and rewritten with it on a resume. A label only
+   * (docs/METHODOLOGY.md): not in the comparability tuple, so no run restamps for
+   * it, and no filter reads it. Absent on runs written before the SDK had a version of its own.
+   */
+  sdkVersion?: string;
   startedAt: number;
   config: RunConfig;
   /**

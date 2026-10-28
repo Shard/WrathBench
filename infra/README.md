@@ -205,7 +205,7 @@ so does `runner`, where the operator execs the smokes, so
     docker compose -f infra/compose.yml exec runner bun infra/smoke/kill-credit.ts
 
 needs no `-e` flags at all. A benchmark episode cannot pass those credentials
-on: `sandboxChildEnv` in `runner/src/sandbox/host.ts` forwards the snippet
+on: `sandboxChildEnv` in `mcp/src/sandbox/host.ts` forwards the snippet
 child a named list of variables (PATH, HOME, TMPDIR, the sandbox's fault
 knobs) plus the four the host sets itself, so no `WRATHBENCH_DB_*` var and
 not `WRATHBENCH_MODULE_SECRET`, the module's port secret the smokes present

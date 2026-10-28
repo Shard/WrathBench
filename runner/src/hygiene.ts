@@ -36,7 +36,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
-import { moduleAuthHeaders } from "./module-auth";
+import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
 import { openRunDb } from "./rundb";
 import { readMeta } from "./trajectory";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";

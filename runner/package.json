@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
-    "@wrathbench/sdk": "workspace:*",
+    "@wrathbench/mcp": "workspace:0.1.0",
+    "@wrathbench/sdk": "workspace:0.1.0",
     "@wrathbench/wiki": "workspace:*",
     "zod": "4.4.3"
   }

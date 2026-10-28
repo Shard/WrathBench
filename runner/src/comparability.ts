@@ -30,7 +30,8 @@
  */
 
 import { z } from "zod";
-import { moduleAuthHeaders } from "./module-auth";
+import { checkModuleProtocol } from "@wrathbench/sdk";
+import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
 import { HARNESSES, episodeOverrideOf, harnessOf, type Harness, type RunConfig } from "./config";
 import { driverEntry } from "./drivers";
 import { episodeIdSchema } from "./episodes";
@@ -225,20 +226,30 @@ export type Comparability = z.infer<typeof comparabilitySchema>;
  *
  * Mirrors `runner/viewer/api.ts`'s `worldserverIdentity` read, one layer down:
  * this one is not cached (it runs once per launch or resume, not once per
- * poll) and never throws — an unreachable module, a timeout, or a module that
- * predates the field all read as `null`, and the caller never awaits longer
- * than `timeoutMs`.
+ * poll) — an unreachable module, a timeout, or a module that predates the
+ * field all read as `null`, and the caller never awaits longer than
+ * `timeoutMs`.
+ *
+ * It throws in one case only: a module that answered with a wire protocol
+ * this build's SDK cannot drive (`ModuleProtocolError`, module/PROTOCOL.md,
+ * "Versioning"). The launch and the resume both read this before anything is
+ * written, so a mismatched pair is refused before the run starts rather than
+ * found by the model as a misread event. A module that serves no `protocol`
+ * predates the field and passes, as it does on the SDK's own `connect`.
  */
 export async function fetchServerBuild(moduleUrl: string, timeoutMs = 2_000): Promise<ServerBuild> {
+  let body: { build?: unknown; startedAtMs?: unknown; protocol?: unknown } | undefined;
   try {
     const res = await fetch(`${moduleUrl}/health`, { headers: moduleAuthHeaders(), signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) return null;
-    const o = (await res.json()) as { build?: unknown; startedAtMs?: unknown };
-    if (typeof o.build !== "string" || typeof o.startedAtMs !== "number") return null;
-    return { build: o.build, startedAtMs: o.startedAtMs };
+    body = (await res.json()) as typeof body;
   } catch {
     return null;
   }
+  if (body === null || typeof body !== "object") return null;
+  checkModuleProtocol(body);
+  if (typeof body.build !== "string" || typeof body.startedAtMs !== "number") return null;
+  return { build: body.build, startedAtMs: body.startedAtMs };
 }
 
 /**

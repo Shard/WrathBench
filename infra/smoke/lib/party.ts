@@ -7,7 +7,7 @@
  * agent's reach.
  */
 
-import { connect, type MoveResult, type WrathClient } from "../../../sdk/src/index";
+import { connect, type MoveResult, type WrathClient } from "@wrathbench/sdk";
 import { LOADOUT_IDS, PARTY_LEVEL, PARTY_MONEY, loadoutFor, type Loadout } from "../../fixtures/loadouts";
 import { DEFAULT_PARTY_ACCOUNTS, defaultStageRequest, type StageRequest } from "../../fixtures/stage-party";
 import { DEADMINES_STAGING_SPOTS } from "../../fixtures/scenarios";

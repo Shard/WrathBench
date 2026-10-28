@@ -15,6 +15,7 @@ dashboard/node_modules
 collector/node_modules
 runner/node_modules
 sdk/node_modules
+mcp/node_modules
 wiki/node_modules
 minimap/node_modules
 module

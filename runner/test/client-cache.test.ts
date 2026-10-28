@@ -1,6 +1,6 @@
 /**
  * The client cache survives a sandbox restart the way a client's on-disk cache
- * does (operator decision, 2026-10-18; `runner/src/sandbox/client-cache.ts`).
+ * does (operator decision, 2026-10-18; `mcp/src/sandbox/client-cache.ts`).
  *
  * The bug it closes: a restart reattaches to the module session its
  * predecessor left, the module's "already queried" sets survive the reattach,
@@ -16,9 +16,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StateCache } from "@wrathbench/sdk";
 import { assertRunDirFree } from "../src/run";
-import { CLIENT_CACHE_FILE, ClientCacheStore, keepsAnswer, reparseFrame } from "../src/sandbox/client-cache";
+import { CLIENT_CACHE_FILE, ClientCacheStore, keepsAnswer, reparseFrame } from "@wrathbench/mcp";
 import { SandboxHost, type HarnessNotice } from "../src/sandbox/host";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

@@ -281,7 +281,7 @@ by the stager before a party launches.
 its own:
 
 1. **The sandbox's network guard.** The snippet child runs under a Landlock
-   ruleset (`runner/src/sandbox/confine.ts`; `docs/CONTRACTS.md`,
+   ruleset (`mcp/src/sandbox/confine.ts`; `docs/CONTRACTS.md`,
    "Control-surface authentication") whose TCP rule admits `connect` to one
    port, the one in the run's module URL (8086). Landlock's rule is per port,
    so 7878 is refused by the kernel on every address, however the snippet

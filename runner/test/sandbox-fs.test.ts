@@ -1,6 +1,6 @@
 /**
  * The snippet child's filesystem confinement: the child is exec'd under a
- * Landlock ruleset by `runner/src/sandbox/confine.ts`, so a snippet cannot
+ * Landlock ruleset by `mcp/src/sandbox/confine.ts`, so a snippet cannot
  * read `.env` — or anything else outside the interpreter, `runner/`, `sdk/`
  * and `node_modules/` — by any path or API. Against the real child process, no
  * game stack. The network, exec and scope halves of the same ruleset are in
@@ -16,7 +16,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join, resolve } from "node:path";
 import { SandboxHost, sandboxChildEnv } from "../src/sandbox/host";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

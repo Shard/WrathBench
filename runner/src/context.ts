@@ -41,11 +41,14 @@
  * rebuilt history reproduces the same boundaries as an in-memory one.
  */
 
-import { inventoryResultText } from "@wrathbench/sdk";
+import { inventoryResultText, isGroupOrWhisperChat } from "@wrathbench/sdk";
 
-import { compactJson } from "./jsonsafe";
-import { scratchpadSizeLabel } from "./scratchpad";
-import type { EventSummary, MoveIntentNote } from "./sandbox/ipc";
+// The leaf entry points, not the package root: the sandbox child loads this
+// file through its extension, and the dashboard's type graph reaches it
+// through the viewer; neither needs the host, the MCP server or the tools.
+import { compactJson } from "@wrathbench/mcp/jsonsafe";
+import { scratchpadSizeLabel } from "@wrathbench/mcp/scratchpad";
+import type { EventSummary, MoveIntentNote } from "@wrathbench/mcp";
 import type { HarnessNotice } from "./sandbox/host";
 
 export const CONTEXT_POLICY = {
@@ -454,17 +457,10 @@ const CHAT_TYPE_LABEL: Readonly<Record<number, string>> = {
 const NAME_TEMPLATE_TYPES: ReadonlySet<number> = new Set([0x0a, 0x0b, 0x10, 0x29, CHAT_MSG_ACHIEVEMENT, CHAT_MSG_GUILD_ACHIEVEMENT]);
 
 /**
- * The types a player addresses to our group or to us: `PARTY`/`PARTY_LEADER`,
- * `RAID`/`RAID_LEADER`/`RAID_WARNING`, and a whisper received (`WHISPER`,
- * `WHISPER_FOREIGN`). Not our own whisper's echo (`WHISPER_INFORM`), whose
- * sender is the recipient; whether the line is our own is the caller's check.
+ * A party, raid or whisper line by `type` — the SDK's classification
+ * (`GROUP_OR_WHISPER_CHAT_TYPES`), the same one the sandbox's `sleep` wakes on.
  */
-const GROUP_OR_WHISPER_TYPES: ReadonlySet<number> = new Set([0x02, 0x33, 0x03, 0x27, 0x28, 0x07, 0x08]);
-
-/** A party, raid or whisper line by `type` (`GROUP_OR_WHISPER_TYPES`). */
-export function isGroupOrWhisperChat(c: ChatLineLike): boolean {
-  return typeof c.type === "number" && GROUP_OR_WHISPER_TYPES.has(c.type);
-}
+export { isGroupOrWhisperChat };
 
 /** Creature speech and emotes (`MONSTER_SAY`..`MONSTER_EMOTE`, `RAID_BOSS_EMOTE`/`_WHISPER`). */
 export function isCreatureChat(c: ChatLineLike): boolean {

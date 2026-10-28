@@ -11,10 +11,10 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { callSiteLabel, SNIPPET_URL } from "../src/sandbox/call-site";
+import { callSiteLabel, SNIPPET_URL } from "@wrathbench/mcp";
 import { SandboxHost } from "../src/sandbox/host";
-import { compileSnippet } from "../src/sandbox/rewrite";
-import { Scratchpad } from "../src/scratchpad";
+import { compileSnippet } from "@wrathbench/mcp";
+import { Scratchpad } from "@wrathbench/mcp";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -147,7 +147,7 @@ describe("a routine's harness line names the routine, not the snippet's set-up",
 describe("callSiteLabel over a stack and the compiled bodies", () => {
   const body = compileSnippet(`await onRevive();\nglobalThis.trip2 = (async () => {\n  for (const p of [1]) {\n    await sdk.moveTo(p);\n  }\n})();\n"ok"`).statementsBody;
   const bodies = new Map([[12, body]]);
-  const EVAL_FILE = "file:///app/runner/src/sandbox/entry.ts";
+  const EVAL_FILE = "file:///app/mcp/src/sandbox/child.ts";
   test("the outermost frame's statement, or its name, or the routine the snippet built", () => {
     const line = body.split("\n").findIndex((l) => l.includes("sdk.moveTo")) + 1;
     const stack = `Error\n    at moveTo (/app/sdk/src/client.ts:1:1)\n    at async <anonymous> (${SNIPPET_URL}12:${line + 2}:20)`;

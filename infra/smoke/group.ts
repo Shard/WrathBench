@@ -18,7 +18,7 @@
  *   bun wb --local smoke group   # the quickstart
  */
 
-import { connect } from "../../sdk/src/index";
+import { connect } from "@wrathbench/sdk";
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";

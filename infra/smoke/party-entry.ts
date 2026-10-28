@@ -14,7 +14,7 @@
  * deadmines-entry passes.
  */
 
-import type { WrathClient } from "../../sdk/src/index";
+import type { WrathClient } from "@wrathbench/sdk";
 import { DEADMINES_ENTRANCE_TRIGGER } from "../fixtures/scenarios";
 import { stageParty } from "../fixtures/stage-party";
 import { MODULE_SECRET } from "./lib/auth";

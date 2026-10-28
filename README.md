@@ -19,6 +19,7 @@ Each directory has its own README that says what it is for and how to use it.
 | --- | --- |
 | `module/` | A thin AzerothCore module: an HTTP/WebSocket bridge that exposes what a game client could see and do, and nothing more. |
 | `sdk/` | The TypeScript library a model's snippets call to drive a character. |
+| `mcp/` | The agent surface over the SDK: the confined snippet sandbox, the MCP server and the core tools. |
 | `runner/` | The agent loop: hands a model the SDK in a sandbox, supervises the episode and records everything that happened. |
 | `runner/viewer/` | The read-only API over recorded runs that the dashboard reads. |
 | `dashboard/` | The web UI over that API, which is also the public site at <https://wrathbench.shard.page>. |

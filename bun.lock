@@ -4,6 +4,10 @@
   "workspaces": {
     "": {
       "name": "wrathbench",
+      "dependencies": {
+        "@wrathbench/mcp": "workspace:*",
+        "@wrathbench/sdk": "workspace:*",
+      },
       "devDependencies": {
         "@resvg/resvg-js": "2.6.2",
         "@types/bun": "1.4.4",
@@ -31,6 +35,14 @@
         "vite-plugin-solid": "2.11.14",
       },
     },
+    "mcp": {
+      "name": "@wrathbench/mcp",
+      "version": "0.1.0",
+      "dependencies": {
+        "@wrathbench/sdk": "workspace:*",
+        "zod": "4.4.3",
+      },
+    },
     "minimap": {
       "name": "@wrathbench/minimap",
       "version": "0.0.0",
@@ -39,14 +51,15 @@
       "name": "@wrathbench/runner",
       "version": "0.0.0",
       "dependencies": {
-        "@wrathbench/sdk": "workspace:*",
+        "@wrathbench/mcp": "workspace:0.1.0",
+        "@wrathbench/sdk": "workspace:0.1.0",
         "@wrathbench/wiki": "workspace:*",
         "zod": "4.4.3",
       },
     },
     "sdk": {
       "name": "@wrathbench/sdk",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "zod": "4.4.3",
       },
@@ -358,6 +371,8 @@
     "@wrathbench/collector": ["@wrathbench/collector@workspace:collector"],
 
     "@wrathbench/dashboard": ["@wrathbench/dashboard@workspace:dashboard"],
+
+    "@wrathbench/mcp": ["@wrathbench/mcp@workspace:mcp"],
 
     "@wrathbench/minimap": ["@wrathbench/minimap@workspace:minimap"],
 

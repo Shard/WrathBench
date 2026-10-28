@@ -29,9 +29,9 @@ import { loadRunConfig } from "../../src/config";
 import { EpisodicLog } from "../../src/episodic";
 import { runLoop } from "../../src/loop";
 import { Replayer } from "../../src/replay";
-import { Scratchpad } from "../../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import type { SandboxHost, SnippetResult } from "../../src/sandbox/host";
-import type { EventSummary } from "../../src/sandbox/ipc";
+import type { EventSummary } from "@wrathbench/mcp";
 import { Trajectory } from "../../src/trajectory";
 import { Watchdogs } from "../../src/watchdogs";
 

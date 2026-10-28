@@ -13,7 +13,7 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CLIENT_CACHE_FILE } from "../src/sandbox/client-cache";
+import { CLIENT_CACHE_FILE } from "@wrathbench/mcp";
 import type { ResultsResponse, RunDetailResponse } from "../viewer/api-types";
 import { createApi } from "../viewer/api";
 import { localRunStore } from "../viewer/clickhouse";

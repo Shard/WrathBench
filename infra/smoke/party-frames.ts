@@ -34,8 +34,8 @@
  *   bun wb --local smoke party-frames   # the quickstart
  */
 
-import { connect } from "../../sdk/src/index";
-import type { StreamEvent } from "../../sdk/src/index";
+import { connect } from "@wrathbench/sdk";
+import type { StreamEvent } from "@wrathbench/sdk";
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";

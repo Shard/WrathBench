@@ -13,6 +13,9 @@ description: The fast loop for changing WrathBench code — which check proves w
   `run-forensics`), never an ad-hoc reader of `trajectory.jsonl` or the audit
   directory.
 - **Anything that touches the cluster**: skill `fleet-readonly` first.
+- **A change in the stack (`module/`, `sdk/`, `mcp/`)**: `bun run boundary`
+  says at once whether it imports anything outside the stack (it is also a
+  test in the suite); a change a model can see is a harness change too.
 - **A module change**: the smoke scripts, `bun wb smoke <name>`, and a release
   to ship it; never a worldserver restart while a run is live.
 - `bun wb` lists every operator command; `bun wb <group>` shows what each runs

@@ -13,10 +13,10 @@ import { EpisodicLog } from "../src/episodic";
 import { McpServer, trajectoryToolCallWriter } from "../src/mcp";
 import { ReflectGate } from "../src/reflect";
 import { type ActionsFlush, SandboxHost } from "../src/sandbox/host";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import type { ToolContext } from "../src/tools";
 import { Trajectory, readTrajectory } from "../src/trajectory";
-import { SecretRedactor } from "../src/redact";
+import { SecretRedactor } from "@wrathbench/mcp";
 import { summarize } from "../viewer/tail";
 import { tempDirs } from "./fixtures/temp-dirs";
 

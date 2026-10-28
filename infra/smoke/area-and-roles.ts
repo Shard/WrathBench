@@ -39,7 +39,7 @@
  * and the login account with MODULE_ACCOUNT (default PROBE).
  */
 
-import { connect } from "../../sdk/src/index";
+import { connect } from "@wrathbench/sdk";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
 

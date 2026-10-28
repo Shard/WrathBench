@@ -10,7 +10,7 @@
  *
  * This is the exact analogue of `adapter-claude.ts`, and it deliberately
  * mirrors that file's structure, invariants and record shapes: one
- * `SandboxHost`, tools over a loopback TCP MCP server plus `mcp-bridge.ts`,
+ * `SandboxHost`, tools over a loopback TCP MCP server plus `mcp/src/bridge.ts`,
  * the tool-call ceiling and the watchdogs enforced at the MCP boundary, a
  * wind-down instead of a kill mid-turn, a process-group kill on stop, and the
  * child environment constructed so the CLI can bill exactly one lane. Read
@@ -156,6 +156,7 @@ import { MessageQueue, cliBaseEnv, readLines, signalGroup } from "./adapter-shar
 import { DEFAULT_CODEX_HOME_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { entryOf } from "./drivers";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
+import { MCP_BRIDGE_PATH } from "@wrathbench/mcp/paths";
 import { McpServer } from "./mcp";
 import { CodexLastCallReader, CodexRolloutFollower, removeThreadRollouts, writeCodexThread, type CodexCompaction } from "./codex-rollout";
 import { CompactionAsk, codexAutoCompactLimit, codexWindowCapRefusal, compactionNotice, compactWindowTokens, summaryFields, type CompactionRecord } from "./cli-compaction";
@@ -166,7 +167,7 @@ import { CODEX_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
 import type { ToolContext } from "./tools";
 import type { EpisodicLog } from "./episodic";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
-import type { Scratchpad } from "./scratchpad";
+import type { Scratchpad } from "@wrathbench/mcp";
 import type { Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
 
@@ -757,7 +758,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   writeFileSync(instructionsPath, systemPrompt, "utf8");
   // The bridge by its REPOSITORY path: the CLI's sandbox gives MCP servers a
   // private /tmp, so a temp copy would not be found ("Module not found").
-  const bridgePath = new URL("./mcp-bridge.ts", import.meta.url).pathname;
+  const bridgePath = MCP_BRIDGE_PATH;
   // A cwd outside the repo: the CLI walks parents for AGENTS.md.
   const cwd = mkdtempSync(join(tmpdir(), "wrathbench-codex-"));
 

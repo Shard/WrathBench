@@ -825,7 +825,7 @@ export interface EventsServedEntry extends EntryBase {
 
 /**
  * One dispatched action as the `actions` record carries it
- * (`ActionNote` in `runner/src/sandbox/ipc.ts`, mirrored here because this
+ * (`ActionNote` in `mcp/src/sandbox/ipc.ts`, mirrored here because this
  * file is the type-only contract the dashboard imports). Everything but
  * `action`, `ts` and `status` is optional.
  */

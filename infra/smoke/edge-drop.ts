@@ -51,7 +51,7 @@
  * to this script).
  */
 
-import { connect, type MovePoint, type MoveResultData, type WrathClient } from "../../sdk/src/index";
+import { connect, type MovePoint, type MoveResultData, type WrathClient } from "@wrathbench/sdk";
 import { EDGE_SKETTIS_BELOW, EDGE_SKETTIS_RIM, SCENARIOS } from "../fixtures/scenarios";
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { MODULE_SECRET } from "./lib/auth";

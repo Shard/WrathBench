@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { EventStream, StateCache } from "@wrathbench/sdk";
 import { SandboxHost } from "../src/sandbox/host";
 import { TraceRecorder } from "../src/sandbox/trace-recorder";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import type { TraceRow, TraceState } from "../src/trace-row";
 import { tempDirs } from "./fixtures/temp-dirs";
 

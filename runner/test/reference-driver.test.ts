@@ -32,7 +32,7 @@ import { DRIVER_ADAPTERS } from "../src/driver-adapters";
 import { configFromArgs } from "../src/run";
 import { runLoop } from "../src/loop";
 import { EpisodicLog } from "../src/episodic";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 import { DEFAULT_POLICY, isCounted, projectModel, readRunFacts, type RosterModel, type RunFact } from "../src/models";
@@ -47,7 +47,7 @@ import {
   type ReferenceProgram,
 } from "../src/reference-program";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
-import { compileSnippet } from "../src/sandbox/rewrite";
+import { compileSnippet } from "@wrathbench/mcp";
 import { createApi } from "../viewer/api";
 import { STUB_ROUTE, program as stubProgram } from "./fixtures/reference-stub";
 import { tempDirs } from "./fixtures/temp-dirs";

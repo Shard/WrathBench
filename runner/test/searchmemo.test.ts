@@ -12,9 +12,9 @@ import { mcpToolNames } from "../src/adapter-claude";
 import { loadRunConfig } from "../src/config";
 import { EpisodicLog } from "../src/episodic";
 import { ReflectGate } from "../src/reflect";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import type { SandboxHost } from "../src/sandbox/host";
-import { SecretRedactor } from "../src/redact";
+import { SecretRedactor } from "@wrathbench/mcp";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

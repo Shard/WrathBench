@@ -36,7 +36,7 @@
  *   bun wb --local smoke talent-tree   # the quickstart
  */
 
-import { connect } from "../../sdk/src/index";
+import { connect } from "@wrathbench/sdk";
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";

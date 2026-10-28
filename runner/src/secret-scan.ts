@@ -32,7 +32,7 @@
 
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { MIN_SECRET_CHARS } from "./redact";
+import { MIN_SECRET_CHARS } from "@wrathbench/mcp/redact";
 import { strikableSessionToken } from "./session-token";
 
 /** One rule's matches in one body. */
