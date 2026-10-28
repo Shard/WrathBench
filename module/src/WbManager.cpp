@@ -2119,9 +2119,8 @@ namespace WrathBench
     // Two points the mesh's smooth path cannot join although one stands where
     // the other is: within the path's own slop of each other in 2D
     // (WbNav::SMOOTH_SLOP, the core's SMOOTH_PATH_SLOP — the steering skips
-    // a corner that close), on one floor (MESH_LEVEL_MERGE), on polygons a
-    // path could join (the same, or neither on a closed island apart from
-    // the other) — but two polygons, not one: the core adds a second point
+    // a corner that close), on one floor (MESH_LEVEL_MERGE), on the same
+    // polygon or two linked neighbours — and when two, the core adds a second point
     // to a one-point smooth path only for a one-polygon corridor, so it
     // answers NOPATH and the planner no_route (WbNav::PlanCorridor). Only ever
     // asked after both have failed; a route that exists is always theirs.
@@ -2142,7 +2141,19 @@ namespace WrathBench
         dtPolyRef const rb = CorePolyAt(query, base, pb, nullptr);
         if (!ra || !rb)
             return false;
-        return ra == rb || (!WbNav::OnIsland(navMesh, base, ra, rb) && !WbNav::OnIsland(navMesh, base, rb, ra));
+        if (ra == rb)
+            return true;
+        // A direct neighbour, by the polygon's own links: exact, where an
+        // island test only bounds a component's size (two stacked floors a
+        // couple of yards apart are both large and joined by nothing).
+        dtMeshTile const* tile = nullptr;
+        dtPoly const* poly = nullptr;
+        if (dtStatusFailed(navMesh->getTileAndPolyByRef(ra, &tile, &poly)))
+            return false;
+        for (unsigned int i = poly->firstLink; i != DT_NULL_LINK; i = tile->links[i].next)
+            if (tile->links[i].ref == rb)
+                return true;
+        return false;
     }
 
     // How far from a request whose own polygon is on an island the walk may
@@ -3375,6 +3386,7 @@ namespace WrathBench
                 }
                 if (r.slopEnd)
                     Audit(*s, "action", Json::Writer().Add("op", "move_end_slop").Add("moveId", moveId)
+                        .Add("status", r.status ? r.status : "ok")
                         .Raw("to", Json::Writer().Add("x", (double)x).Add("y", (double)y).Add("z", (double)z).Str()).Str());
                 if (r.longPlan)
                     Audit(*s, "action", Json::Writer().Add("op", "move_long_plan").Add("moveId", moveId)
