@@ -84,7 +84,7 @@ import { harnessOf, type PauseReason, type RunConfig, type TerminationReason } f
 import { entryOf } from "./drivers";
 import type { EpisodicLog } from "./episodic";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
-import { MCP_BRIDGE_PATH } from "@wrathbench/mcp";
+import { MCP_BRIDGE_PATH } from "@wrathbench/mcp/paths";
 import { McpServer } from "./mcp";
 import { buildSystemPrompt } from "./prompt";
 import { PI_PROMPT_MISSING } from "./pi-extension";

@@ -113,7 +113,7 @@ import { z } from "zod";
 import { DEFAULT_CLAUDE_TOKEN_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { entryOf } from "./drivers";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
-import { MCP_BRIDGE_PATH } from "@wrathbench/mcp";
+import { MCP_BRIDGE_PATH } from "@wrathbench/mcp/paths";
 import { McpServer } from "./mcp";
 import { CLAUDE_CODE_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
 import { toolsFor, type ToolContext } from "./tools";

@@ -26,11 +26,11 @@ import type { Database } from "bun:sqlite";
 import { openRunDb } from "./rundb";
 import { appendFileSync, mkdirSync, readFileSync, existsSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { jsonLine, toJsonSafe } from "@wrathbench/mcp";
+import { jsonLine, toJsonSafe } from "@wrathbench/mcp/jsonsafe";
 import type { Comparability } from "./comparability";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import { platformOf } from "./platform";
-import { SecretRedactor } from "@wrathbench/mcp";
+import { SecretRedactor } from "@wrathbench/mcp/redact";
 import type { ActionNote } from "@wrathbench/mcp";
 import type { SubscriptionUsage } from "./subscription-usage";
 import type { TraceChat, TraceDict, TraceRow, TraceStateDelta } from "./trace-row";
@@ -386,12 +386,11 @@ export interface RunMeta {
   runId: string;
   harnessVersion: string;
   /**
-   * The `@wrathbench/sdk` version this harness pins (`SDK_VERSION`), which
+   * The `@wrathbench/sdk` version this build depends on (`SDK_VERSION`), which
    * `@wrathbench/mcp` shares: the stack a run drove, recorded beside the
-   * harness stamp and rewritten with it on a resume. Metadata, not a
-   * comparability key — the harness version already pins it, so it is not in
-   * the tuple and no run restamps for it. Absent on runs written before the
-   * SDK had a version of its own.
+   * harness stamp and rewritten with it on a resume. As implemented it is run
+   * metadata, not a field of the comparability tuple, so no run restamps for
+   * it. Absent on runs written before the SDK had a version of its own.
    */
   sdkVersion?: string;
   startedAt: number;

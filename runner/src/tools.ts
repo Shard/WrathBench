@@ -24,7 +24,7 @@ import {
   type ToolDef,
   type ToolResult,
   type ToolSpec,
-} from "@wrathbench/mcp";
+} from "@wrathbench/mcp/tools";
 import { parseIdQuery, searchReference } from "@wrathbench/wiki/search";
 import { bundleHasIds } from "@wrathbench/wiki/bundle";
 import { CONTEXT_POLICY, formatEventLine, formatStateSummary, type SnapshotLike } from "./context";
@@ -45,8 +45,8 @@ export {
   parseToolArgsText,
   renderActionHints,
   stripTrailingCommas,
-} from "@wrathbench/mcp";
-export type { CallOrigin, ToolDef, ToolResult } from "@wrathbench/mcp";
+} from "@wrathbench/mcp/tools";
+export type { CallOrigin, ToolDef, ToolResult } from "@wrathbench/mcp/tools";
 
 /**
  * The one sentence of the `search_reference` description that depends on the

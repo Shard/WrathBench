@@ -10,7 +10,7 @@ import { Database } from "bun:sqlite";
 import { appendFileSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRunConfig, MIN_TOKEN_LENGTH as RUNNER_MIN_TOKEN_LENGTH } from "../runner/src/config";
-import { REDACTED as RUNNER_REDACTED } from "@wrathbench/mcp";
+import { REDACTED as RUNNER_REDACTED } from "@wrathbench/mcp/redact";
 import { HEARTBEAT_DEAD_MS as RUNNER_HEARTBEAT_DEAD_MS, Trajectory } from "../runner/src/trajectory";
 import { ARCHIVE_DIR as VIEWER_ARCHIVE_DIR } from "../runner/viewer/archive-dir";
 import { questsAcrossRestarts } from "../runner/viewer/results";

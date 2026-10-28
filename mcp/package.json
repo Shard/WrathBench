@@ -11,7 +11,10 @@
     "./redact": "./src/redact.ts",
     "./module-auth": "./src/module-auth.ts",
     "./jsonsafe": "./src/jsonsafe.ts",
-    "./scratchpad": "./src/scratchpad.ts"
+    "./scratchpad": "./src/scratchpad.ts",
+    "./client-cache": "./src/sandbox/client-cache.ts",
+    "./paths": "./src/paths.ts",
+    "./tools": "./src/tools.ts"
   },
   "scripts": {
     "start": "bun src/main.ts",

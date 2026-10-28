@@ -108,17 +108,29 @@ const O_CLOEXEC = 0x80000;
 const O_PATH = 0x200000;
 const PR_SET_NO_NEW_PRIVS = 38;
 
-const libc = dlopen("libc.so.6", {
+const LIBC_SYMBOLS = {
   syscall: { args: [FFIType.i64, FFIType.i64, FFIType.i64, FFIType.i64, FFIType.i64], returns: FFIType.i64 },
   open: { args: [FFIType.ptr, FFIType.i32, FFIType.i32], returns: FFIType.i32 },
   close: { args: [FFIType.i32], returns: FFIType.i32 },
   prctl: { args: [FFIType.i32, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.u64], returns: FFIType.i32 },
   execv: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
   __errno_location: { args: [], returns: FFIType.ptr },
-});
+} as const;
+
+let libcHandle: ReturnType<typeof dlopen<typeof LIBC_SYMBOLS>> | undefined;
+
+/**
+ * libc, opened on first use rather than at import: the plan and its tests
+ * import this file without ever touching the kernel, and a process that only
+ * plans (or only imports the package's root) has no business loading libc.
+ */
+function libc(): ReturnType<typeof dlopen<typeof LIBC_SYMBOLS>> {
+  libcHandle ??= dlopen("libc.so.6", LIBC_SYMBOLS);
+  return libcHandle;
+}
 
 function errno(): number {
-  const p = libc.symbols.__errno_location();
+  const p = libc().symbols.__errno_location();
   return p === null ? 0 : read.i32(p, 0);
 }
 
@@ -128,7 +140,7 @@ function cstr(s: string): Buffer {
 
 /** The running kernel's Landlock ABI; 0 when Landlock is unsupported or disabled. */
 export function landlockAbi(): number {
-  const abi = Number(libc.symbols.syscall(SYS_landlock_create_ruleset, 0, 0, LANDLOCK_CREATE_RULESET_VERSION, 0));
+  const abi = Number(libc().symbols.syscall(SYS_landlock_create_ruleset, 0, 0, LANDLOCK_CREATE_RULESET_VERSION, 0));
   return abi < 1 ? 0 : abi;
 }
 
@@ -336,21 +348,21 @@ export function confinementPlan(input: PlanInput): ConfinementPlan {
 }
 
 function addRule(rulesetFd: number, type: number, attr: Buffer): number {
-  return Number(libc.symbols.syscall(SYS_landlock_add_rule, rulesetFd, type, ptr(attr), 0));
+  return Number(libc().symbols.syscall(SYS_landlock_add_rule, rulesetFd, type, ptr(attr), 0));
 }
 
 /** Build the ruleset, add the rules, and restrict the calling thread. */
 function restrict(plan: ConfinementPlan): void {
   for (const note of plan.notes) console.error(`[sandbox] ${note}`);
   const attr = new BigUint64Array([plan.handledFs, plan.handledNet, plan.scoped]);
-  const rulesetFd = Number(libc.symbols.syscall(SYS_landlock_create_ruleset, ptr(attr), plan.attrSize, 0, 0));
+  const rulesetFd = Number(libc().symbols.syscall(SYS_landlock_create_ruleset, ptr(attr), plan.attrSize, 0, 0));
   if (rulesetFd < 0) fail("landlock_create_ruleset");
 
   // The rights granted may only be ones the ruleset handles.
   const grantMask = plan.handledFs;
   for (const r of plan.fs) {
     const p = cstr(r.path);
-    const fd = libc.symbols.open(ptr(p), O_PATH | O_CLOEXEC, 0);
+    const fd = libc().symbols.open(ptr(p), O_PATH | O_CLOEXEC, 0);
     if (fd < 0) fail("open(O_PATH)", r.path);
     // struct landlock_path_beneath_attr { __u64 allowed_access; __s32 parent_fd; } __attribute__((packed))
     const beneath = Buffer.alloc(12);
@@ -358,17 +370,17 @@ function restrict(plan: ConfinementPlan): void {
     beneath.writeInt32LE(fd, 8);
     const rc = addRule(rulesetFd, LANDLOCK_RULE_PATH_BENEATH, beneath);
     const e = errno();
-    libc.symbols.close(fd);
+    libc().symbols.close(fd);
     if (rc !== 0) {
       // A file rule carrying directory-only rights is EINVAL; retry with the
       // file-applicable subset before giving up.
       const fileOnly = r.access & (ACCESS_FS.READ_FILE | ACCESS_FS.WRITE_FILE | ACCESS_FS.EXECUTE | ACCESS_FS.IOCTL_DEV) & grantMask;
       if (e === 22 && fileOnly !== r.access) {
-        const fd2 = libc.symbols.open(ptr(p), O_PATH | O_CLOEXEC, 0);
+        const fd2 = libc().symbols.open(ptr(p), O_PATH | O_CLOEXEC, 0);
         beneath.writeBigUInt64LE(fileOnly, 0);
         beneath.writeInt32LE(fd2, 8);
         const rc2 = addRule(rulesetFd, LANDLOCK_RULE_PATH_BENEATH, beneath);
-        libc.symbols.close(fd2);
+        libc().symbols.close(fd2);
         if (rc2 === 0) continue;
       }
       fail("landlock_add_rule", r.path);
@@ -383,9 +395,9 @@ function restrict(plan: ConfinementPlan): void {
     if (addRule(rulesetFd, LANDLOCK_RULE_NET_PORT, portAttr) !== 0) fail("landlock_add_rule(net)", `port ${r.port}`);
   }
 
-  if (libc.symbols.prctl(PR_SET_NO_NEW_PRIVS, 1n, 0n, 0n, 0n) !== 0) fail("prctl(PR_SET_NO_NEW_PRIVS)");
-  if (Number(libc.symbols.syscall(SYS_landlock_restrict_self, rulesetFd, 0, 0, 0)) !== 0) fail("landlock_restrict_self");
-  libc.symbols.close(rulesetFd);
+  if (libc().symbols.prctl(PR_SET_NO_NEW_PRIVS, 1n, 0n, 0n, 0n) !== 0) fail("prctl(PR_SET_NO_NEW_PRIVS)");
+  if (Number(libc().symbols.syscall(SYS_landlock_restrict_self, rulesetFd, 0, 0, 0)) !== 0) fail("landlock_restrict_self");
+  libc().symbols.close(rulesetFd);
 }
 
 function execv(argv: readonly string[]): never {
@@ -395,7 +407,7 @@ function execv(argv: readonly string[]): never {
     vec[i] = BigInt(ptr(b));
   });
   vec[bufs.length] = 0n;
-  libc.symbols.execv(ptr(bufs[0]!), ptr(vec));
+  libc().symbols.execv(ptr(bufs[0]!), ptr(vec));
   fail("execv", argv[0]);
 }
 

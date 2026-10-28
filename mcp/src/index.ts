@@ -8,16 +8,14 @@
  * plugs its own tools, its context rendering, its records and its child-side
  * watchers in through the hooks exported here; nothing in this package knows
  * what a harness records or scores.
+ *
+ * This root loads the whole package. A process that needs one helper and runs
+ * no sandbox — a viewer, a supervisor, a trajectory writer — imports the leaf
+ * entry point instead: `@wrathbench/mcp/module-auth`, `/redact`, `/jsonsafe`,
+ * `/scratchpad`, `/client-cache` or `/paths`.
  */
 
-import { join } from "node:path";
-
-/** The stdio <-> TCP bridge a CLI agent is handed as its MCP server command (`bridge.ts`). */
-export const MCP_BRIDGE_PATH = join(import.meta.dir, "bridge.ts");
-/** The Landlock wrapper every sandbox child is exec'd through (`sandbox/confine.ts`). */
-export const SANDBOX_CONFINE_PATH = join(import.meta.dir, "sandbox", "confine.ts");
-/** The bare sandbox child, with no harness extension (`sandbox/entry.ts`); `SandboxHost`'s default. */
-export const SANDBOX_ENTRY_PATH = join(import.meta.dir, "sandbox", "entry.ts");
+export { MCP_BRIDGE_PATH, SANDBOX_CONFINE_PATH, SANDBOX_ENTRY_PATH } from "./paths";
 
 export {
   SANDBOX_FORWARDED_ENV,
