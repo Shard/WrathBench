@@ -5870,6 +5870,52 @@ describe("client: quest-start items and the questgiver marker pre-check (2026-08
     await stub.stop();
   });
 
+  test("a `none` from before the NPC's faction changed still sends the turn-in, and the server's offer completes it", async () => {
+    // fleet-codex-sol-61-freeplay-gpt-6-1-sol-20261018-a3, turn 2117: Balos
+    // Jacken answered the status query `none` while hostile (the core shows
+    // no marker to enemies), then surrendered to faction 35 with quest 1286
+    // complete. Nothing re-asked his marker; turnInQuest refused on the old
+    // `none` while a raw choose-reward took the quest the server offered.
+    const stub = startStub({ onConnect: () => questWorld() });
+    const client = await inWorld(stub);
+    stub.push(JSON.stringify(questAccepted)); // seq 30
+    stub.push(JSON.stringify(questComplete)); // seq 32
+    stub.push(JSON.stringify(questGiverStatus(CREATURE_GUID, 0, 91))); // none, asked while hostile
+    await Bun.sleep(20);
+    expect(client.state.quest(QUEST_ID)?.complete).toBe(true);
+
+    // Before the faction moves the marker is current, and refuses as before.
+    const refused = await client.turnInQuest(CREATURE_GUID, QUEST_ID, 0, { timeout: 10_000 });
+    expect(refused).toMatchObject({ ok: false, status: "not_ready", questId: QUEST_ID, marker: "none" });
+    expect(stub.actions.map((a) => a.action)).not.toContain("quest_complete");
+    client.drainActionHints();
+
+    // The surrender: the NPC's faction changes, and no marker refresh follows.
+    stub.push(frame(92, "SMSG_UPDATE_OBJECT", { blocks: 1, objects: [{ update: "values", guid: CREATURE_GUID, fields: { faction: 35 } }] }));
+    await Bun.sleep(20);
+    expect(client.state.nearby.get(CREATURE_GUID)?.questGiver?.value).toBe(0);
+
+    const pending = client.turnInQuest(CREATURE_GUID, QUEST_ID, 0, { timeout: 2000 });
+    await untilAction(stub, "quest_complete");
+    stub.push(JSON.stringify(offerReward(QUEST_ID, 93)));
+    await untilAction(stub, "quest_choose_reward");
+    stub.push(JSON.stringify(questRewarded(QUEST_ID, 94)));
+    expect(await pending).toMatchObject({ ok: true, status: "complete", questId: QUEST_ID });
+    expect(client.drainActionHints()).toEqual([]);
+
+    // questsAvailableFrom reads the same marker the same way.
+    stub.push(JSON.stringify(questGiverStatus(CREATURE_GUID, 0, 95))); // none
+    stub.push(frame(96, "SMSG_UPDATE_OBJECT", { blocks: 1, objects: [{ update: "values", guid: CREATURE_GUID, fields: { faction: 54 } }] }));
+    await Bun.sleep(20);
+    const after = stub.actions.length;
+    const listed = client.questsAvailableFrom(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "quest_list", after);
+    stub.push(JSON.stringify(questGiverList([OTHER_QUEST_ID], 97)));
+    expect((await listed).quests.map((q) => q.questId)).toEqual([OTHER_QUEST_ID]);
+    client.close();
+    await stub.stop();
+  });
+
   test("a marker older than the last quest-log change still asks for the quest list", async () => {
     // Right after a turn-in the NPC's marker still reads `reward` until the
     // refreshed one lands, and the next quest of its chain is on offer by

@@ -1954,11 +1954,16 @@ function questgiverMarkerOf(state: StateCache, guid: GuidArg, wanted: "reward" |
  * turn-in's SMSG_QUESTGIVER_QUEST_COMPLETE resolves `turnInQuest` a world
  * tick before the slot clears, so a call made straight after it saw the
  * pre-turn-in `reward` as current (run-20261020-041059 lost quests 15, 3101
- * and 6 that way). Undefined when no marker was observed or it is older than
- * such a change. The comparison is by `seq`, which restarts with every
- * session; the cache drops every marker at login, so none from an earlier
- * session is compared, and re-dates these fields to the login, so none of
- * theirs is either.
+ * and 6 that way). The NPC's own faction counts as well: the core answers
+ * `none` for a creature hostile to us whatever it has
+ * (`HandleQuestgiverStatusQueryOpcode`), and nothing re-asks when a
+ * scripted NPC turns friendly — Balos Jacken surrenders to faction 35 with
+ * quest 1286 complete, and his `none` from the fight refused a turn-in the
+ * server took (fleet-codex-sol-61-freeplay-gpt-6-1-sol-20261018-a3).
+ * Undefined when no marker was observed or it is older than such a change.
+ * The comparison is by `seq`, which restarts with every session; the cache
+ * drops every marker at login, so none from an earlier session is compared,
+ * and re-dates these fields to the login, so none of theirs is either.
  */
 function freshQuestgiverMarkerOf(
   state: StateCache,
@@ -1967,9 +1972,10 @@ function freshQuestgiverMarkerOf(
   wanted: "reward" | "available",
   questId?: number,
 ): QuestGiverMarker | undefined {
-  const observed = state.nearby.get(guidKey(guid))?.questGiver;
+  const unit = state.nearby.get(guidKey(guid));
+  const observed = unit?.questGiver;
   if (observed === undefined) return undefined;
-  let changed = exchangeSeq;
+  let changed = Math.max(exchangeSeq, unit?.fields.get("faction")?.seq ?? -1);
   for (const [key, field] of state.self.fields) {
     if (isQuestGiverMarkerInput(key)) changed = Math.max(changed, field.seq);
   }
@@ -8406,11 +8412,11 @@ export class WrathClient {
       // turn-in there cannot succeed, and the core mostly answers it with
       // silence, so waiting the timeout out would only confirm what is
       // already known (three 0.5 probes lost 20–40s a run to it). Only a
-      // marker newer than the last quest-log or level change, and than the
-      // last quest exchange the fields may not show yet, counts; an
-      // unobserved or older one sends, as before. Ahead of the range check, as
-      // in `questOffer`: an NPC with nothing to hand in has nothing to walk
-      // over for.
+      // marker newer than the last quest-log or level change, than the NPC's
+      // last faction change, and than the last quest exchange the fields may
+      // not show yet, counts; an unobserved or older one sends, as before.
+      // Ahead of the range check, as in `questOffer`: an NPC with nothing to
+      // hand in has nothing to walk over for.
       const marker = freshQuestgiverMarkerOf(this.state, npcId, this.questExchangeSeq, "reward", questId);
       if (marker !== undefined && TURN_IN_NOT_READY.has(marker.name)) {
         const hint =
@@ -8651,12 +8657,12 @@ export class WrathClient {
       // marker, received before the call), and it is not a quest on offer — a
       // turn-in-only or empty-handed NPC answers a quest_list with silence, so
       // waiting the timeout out would only confirm what is already known. Only
-      // a marker newer than the last quest-log or level change, and than the
-      // last quest exchange, counts, as in `turnInQuest`: right after a
-      // turn-in the marker still reads `reward` while the next quest of the
-      // chain is already on offer, and a call made the moment the turn-in
-      // resolves comes before the slot has cleared. An unobserved or older
-      // marker sends, as before.
+      // a marker newer than the last quest-log or level change, than the NPC's
+      // last faction change, and than the last quest exchange, counts, as in
+      // `turnInQuest`: right after a turn-in the marker still reads `reward`
+      // while the next quest of the chain is already on offer, and a call
+      // made the moment the turn-in resolves comes before the slot has
+      // cleared. An unobserved or older marker sends, as before.
       return {
         nothing: marker,
         hint:
