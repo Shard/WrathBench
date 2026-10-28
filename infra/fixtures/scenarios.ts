@@ -335,6 +335,15 @@ export const SWIM_OBSERVER_SPOT = { x: -3632, y: -788, z: 9.9 };
 export const SWIM_SEA_LEVEL = 0;
 const SWIM_SEA_TOWARD = { x: -3480, y: -800 };
 
+// The edge-drop smoke's start: the Skettis plateau in Terokkar Forest (map
+// 530, zone 3519), at the release point of graveyard 1298 (Lake Jorune GY),
+// where a freeplay ghost stood 143y over its corpse with every move down
+// refused path_incomplete, the plateau's mesh linked to nothing below. The
+// point it asked for, 239y north on the lowland, is the smoke's target; the
+// start faces it. Level 80 so the plateau's arakkoa do not end a walk.
+export const EDGE_SKETTIS_START = { x: -2433.6, y: 4661.0, z: 160.9 };
+export const EDGE_SKETTIS_TARGET = { x: -2440.0, y: 4900.0, z: 32.3 };
+
 export const SCENARIOS = {
   "mcbride-report": {
     description: "level 5, no money, in front of Marshal McBride with the Northshire chain up to Skirmish at Echo Ridge (21) rewarded (for the read-item smoke: Report to Goldshire hands out a readable letter)",
@@ -673,6 +682,13 @@ export const SCENARIOS = {
     level: 80,
     money: 0,
     position: { map: 0, zone: 11, ...SWIM_OBSERVER_SPOT, o: facing(SWIM_OBSERVER_SPOT, SWIM_SEA_TOWARD) },
+  },
+  "edge-drop-skettis": {
+    description:
+      "level 80, no money, on the Skettis plateau at the Lake Jorune graveyard's release point, facing the lowland 130y below (edge-drop smoke: a move off the end of the plateau's mesh)",
+    level: 80,
+    money: 0,
+    position: { map: 530, zone: 3519, ...EDGE_SKETTIS_START, o: facing(EDGE_SKETTIS_START, EDGE_SKETTIS_TARGET) },
   },
 } as const satisfies Record<string, Scenario>;
 
