@@ -2218,12 +2218,32 @@ namespace WrathBench
 
         // The route the mesh has toward the request when it has none to it:
         // the core's partial path as far as it got, else the planned start
-        // alone. A path_incomplete hands it to TryEdgeDrop.
+        // alone. A path_incomplete hands it to TryEdgeDrop. When that route
+        // itself steps down a ledge on its way to its end, the edge past the
+        // end is a second fall and is refused (`second_ledge`); the walk on is
+        // then tried once more from the route's start, where the character
+        // stands, toward the same request, under the same rules — one fall,
+        // a descent. A ghost released onto a two-polygon terrace below the
+        // Skettis ledge had every move refused so: its route ran down the
+        // terrace's own 3.8y step, and off its edge from there.
         std::vector<WbVec> partial;
         auto incomplete = [&]() {
             r.status = "path_incomplete";
             if (!partial.empty())
                 TryEdgeDrop(player, partial, x, y, z, reqZ, force, r);
+            if (r.status && std::strcmp(r.edgeDrop.reason, "second_ledge") == 0 && partial.size() > 1)
+            {
+                PathResolve::EdgeDrop const first = r.edgeDrop;
+                r.edgeDrop = PathResolve::EdgeDrop{};
+                TryEdgeDrop(player, std::vector<WbVec>{ partial.front() }, x, y, z, reqZ, force, r);
+                if (!r.edgeDrop.tried)
+                    r.edgeDrop = first; // the request is not below the start: the first answer stands
+                else
+                {
+                    r.edgeDrop.fromStart = true;
+                    r.edgeDrop.firstReason = first.reason;
+                }
+            }
             return r;
         };
 
@@ -3188,6 +3208,8 @@ namespace WrathBench
                     if (ed.hasEdge)
                         a.Raw("edge", vec(ed.edge)).Raw("landing", vec(ed.landing))
                             .Add("walkYards", (double)ed.walkYards).Add("landingSnap", ed.landingSnap);
+                    if (ed.fromStart)
+                        a.Add("fromStart", true).Add("firstReason", ed.firstReason);
                     Audit(*s, "action", a.Str());
                 }
             }

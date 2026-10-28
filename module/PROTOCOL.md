@@ -1225,7 +1225,12 @@ at the top of this document.
   foot of a cliff is where the mesh breaks up around what stands there), with
   the straight walk onto it clear at body height, by the core's path or the
   module's planner, ending within 4y of the request. The fall must be the route's only ledge, so `force` given for
-  it never walks a second one. When all of that holds the answer is that
+  it never walks a second one. A route refused for a second ledge, when the
+  mesh's own route ran on from where it starts, is tried once more from that
+  start — where the character stands — toward the same request, under the
+  same rules: the second ledge is often that route stepping down to its end
+  (a terrace whose mesh is a small island with a steep step inside it). When
+  all of that holds the answer is that
   route's, settled by the same guard as any other: `drop` without `force`
   (the edge as `reachedPos`, `dz` to the landing, `safeFall`), and with
   `force` the walk, the fall — charged by the server as any forced ledge — and
@@ -1942,7 +1947,9 @@ polyline is the `move_path` — else a `reason` (`no_edge`, `climb`, `blocked`,
 `no_surface`, `landing_off_mesh`, `no_route_from_landing`, `second_ledge`,
 `no_direction`, `not_a_ledge`), `from` (the route's end), and, once an edge was
 found, `edge`, `landing`, `walkYards` (the walk on from `from` to the edge) and
-`landingSnap` (the leg below starts from the mesh nearest the landing).
+`landingSnap` (the leg below starts from the mesh nearest the landing), and
+`fromStart` with `firstReason` when it was tried again from the route's start
+after the route's own ledge (`second_ledge`).
 Each `move_to` that reaches the mesh also logs one `op: "move_path"` record at
 dispatch — `moveId`, `status` (`"ok"` when the walk was dispatched, else the
 `WB_MOVE_RESULT` status), `pointCount`, and `points` (the resolved polyline,
