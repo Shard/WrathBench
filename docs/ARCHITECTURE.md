@@ -58,8 +58,9 @@ harness, frozen per version"), and `@wrathbench/mcp` carries the same one.
 The runner depends on the stack at an exact version (`workspace:0.1.0` in its
 `package.json`), so an SDK whose version moves fails the install until that
 dependency moves with it, and every run records the version in `meta.json` as
-`sdkVersion`, beside `harnessVersion`. As implemented, `sdkVersion` is run
-metadata and not a field of the comparability tuple. The module's wire
+`sdkVersion`, beside `harnessVersion`. It is a label only, outside the
+comparability tuple and read by no filter (docs/METHODOLOGY.md, "Fixed
+harness, frozen per version"). The module's wire
 protocol has an integer version of its own on `GET /health`, which the SDK
 checks on `connect` and the runner checks before a launch or resume
 (`fetchServerBuild`; `module/PROTOCOL.md`, "Versioning").

@@ -63,7 +63,9 @@ to what gets *scheduled*, because targets are stopping rules, not
 measurements. The SDK is versioned separately from the harness (operator,
 2026-10-28). Its model-facing surface is still part of the surface frozen per
 harness version, so changing it moves the harness version as before
-("Changing this document").
+("Changing this document"). The SDK version a run drove is a label only: it is
+not part of the comparability tuple and filters nothing on the ladder or the
+dashboard (operator, 2026-10-28).
 
 **Harness and driver are separate words.** The *harness* owns the loop and
 context: `wrathbench` (our fixed loop), `claude-code` or `codex` (CLI scaffolds

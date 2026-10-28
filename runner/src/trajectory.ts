@@ -388,9 +388,9 @@ export interface RunMeta {
   /**
    * The `@wrathbench/sdk` version this build depends on (`SDK_VERSION`), which
    * `@wrathbench/mcp` shares: the stack a run drove, recorded beside the
-   * harness stamp and rewritten with it on a resume. As implemented it is run
-   * metadata, not a field of the comparability tuple, so no run restamps for
-   * it. Absent on runs written before the SDK had a version of its own.
+   * harness stamp and rewritten with it on a resume. A label only
+   * (docs/METHODOLOGY.md): not in the comparability tuple, so no run restamps for
+   * it, and no filter reads it. Absent on runs written before the SDK had a version of its own.
    */
   sdkVersion?: string;
   startedAt: number;
