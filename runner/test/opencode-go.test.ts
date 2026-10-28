@@ -11,7 +11,7 @@ import { loadRunConfig } from "../src/config";
 import { EpisodicLog } from "../src/episodic";
 import { runLoop } from "../src/loop";
 import { GO_USAGE_PATH, GoUsageGauge, GoUsagePoller, goUsageUrl, goUsageWindows, readGoUsage, type GoFetch } from "../src/opencode-go";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";

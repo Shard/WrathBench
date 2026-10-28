@@ -8,12 +8,12 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Scratchpad, SCRATCHPAD_MAX_CHARS, scratchpadSizeLabel, stripLegacyMarker } from "../src/scratchpad";
+import { Scratchpad, SCRATCHPAD_MAX_CHARS, scratchpadSizeLabel, stripLegacyMarker } from "@wrathbench/mcp";
 import { callTool, type ToolContext } from "../src/tools";
 import { EpisodicLog } from "../src/episodic";
 import { ReflectGate } from "../src/reflect";
 import type { SandboxHost } from "../src/sandbox/host";
-import { SecretRedactor } from "../src/redact";
+import { SecretRedactor } from "@wrathbench/mcp";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

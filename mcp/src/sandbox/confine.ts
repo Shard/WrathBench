@@ -1,9 +1,9 @@
 /**
  * Confinement for the sandbox child: filesystem, TCP, exec and process scope.
  *
- * The host spawns THIS file, not `entry.ts`:
+ * The host spawns THIS file, not the child's entry:
  *
- *   bun confine.ts <bun argv for the child>
+ *   bun confine.ts [--read=<dir>]... <bun argv for the child>
  *
  * It builds a Linux Landlock ruleset, applies it to itself and then `execv`s
  * the real child in place. Landlock is inherited across exec and cannot be
@@ -12,15 +12,16 @@
  * kernel answers, not a JavaScript shim. The ruleset (`confinementPlan`):
  *
  *  - Filesystem: reads only where the child legitimately needs them (the Bun
- *    binary and system libraries, `runner/`, `sdk/`, `node_modules/`, the
- *    workspace manifests, its own `/proc` entry and a few system-wide `/proc`
+ *    binary and system libraries, `mcp/`, `sdk/`, `node_modules/`, any
+ *    directory the host names with `--read=` (a harness's own child
+ *    extension, e.g. the runner's `runner/`), the workspace manifests, its own `/proc` entry and a few system-wide `/proc`
  *    files, and five `/dev` nodes). `.env`, the repo root, `$HOME`, `/tmp`,
  *    `/dev/shm` and every other process's `/proc` entry are `EACCES` by any
  *    path.
  *  - Exec: `LANDLOCK_ACCESS_FS_EXECUTE` is granted on exactly two files, the
  *    Bun binary and its ELF interpreter, because the kernel checks both when
  *    this wrapper execs the child. Nothing else in the sandbox spawns or needs
- *    to (entry.ts and the SDK fork nothing; Bun's workers are threads), so
+ *    to (the child and the SDK fork nothing; Bun's workers are threads), so
  *    `/bin/sh`, `curl` and every other binary are `EACCES` at `posix_spawn`.
  *    Re-running `bun` itself gains nothing: the new process has a pid whose
  *    `/proc` entry the ruleset does not grant, so it fails to start, and were
@@ -47,7 +48,7 @@
  * the kernel has it and announced on stderr when it does not — the fleet's
  * kernel has it; the kernels without it that run this code are CI's.
  *
- * Why a wrapper and not a call inside entry.ts: `landlock_restrict_self`
+ * Why a wrapper and not a call inside the child: `landlock_restrict_self`
  * restricts the calling *thread*, and Bun starts its GC and I/O threads before
  * any user code runs, so a restriction applied from inside the child would
  * leave the thread pool unconfined. `execve` replaces the whole process with
@@ -245,6 +246,13 @@ export interface PlanInput {
   interpreter?: string | null;
   /** Override for tests; defaults to `existsSync`. */
   exists?: (path: string) => boolean;
+  /**
+   * Directories beyond the stack's own workspaces the child must read: the
+   * code of a child extension a harness loads into it (`--read=` on the
+   * command line, from `SandboxHostOptions.readDirs`). Read-only, like the
+   * workspaces.
+   */
+  readDirs?: readonly string[];
 }
 
 /**
@@ -297,9 +305,11 @@ export function confinementPlan(input: PlanInput): ConfinementPlan {
   fs.push({ path: bunExe, access: fileRead | ACCESS_FS.EXECUTE });
   const interpreter = input.interpreter === undefined ? elfInterpreter(bunExe) : input.interpreter;
   if (interpreter !== null) fs.push({ path: interpreter, access: fileRead | ACCESS_FS.EXECUTE });
-  // The workspaces the child's code and its imports live in. Never the repo
-  // root itself: that is where `.env` is.
-  for (const d of ["runner", "sdk", "node_modules"]) fs.push({ path: join(repoRoot, d), access: dirRead });
+  // The workspaces the child's code and its imports live in, then whatever the
+  // host named for its own child extension. Never the repo root itself: that
+  // is where `.env` is.
+  for (const d of ["mcp", "sdk", "node_modules"]) fs.push({ path: join(repoRoot, d), access: dirRead });
+  for (const d of input.readDirs ?? []) fs.push({ path: d, access: dirRead });
   for (const f of ["package.json", "tsconfig.json", "tsconfig.base.json", "bunfig.toml"]) {
     fs.push({ path: join(repoRoot, f), access: fileRead });
   }
@@ -390,10 +400,14 @@ function execv(argv: readonly string[]): never {
 }
 
 if (import.meta.main) {
-  // Everything after this file is the child's argv (bun swallows a `--`).
-  const childArgv = process.argv.slice(2);
+  // Leading `--read=<dir>` flags are this wrapper's; everything after them is
+  // the child's argv (bun swallows a `--`), which the child sees unchanged.
+  const args = process.argv.slice(2);
+  const readDirs: string[] = [];
+  while (args[0]?.startsWith("--read=") === true) readDirs.push(resolve(args.shift()!.slice("--read=".length)));
+  const childArgv = args;
   if (childArgv.length === 0) {
-    console.error("usage: bun confine.ts <argv of the child to exec>");
+    console.error("usage: bun confine.ts [--read=<dir>]... <argv of the child to exec>");
     process.exit(64);
   }
   // Relative interpreters resolve through PATH the way the shell would; the
@@ -401,14 +415,14 @@ if (import.meta.main) {
   // binary that runs the host runs the child.
   const exe = childArgv[0] === "bun" ? process.execPath : (Bun.which(childArgv[0]!) ?? childArgv[0]!);
   const repoRoot = resolve(dirname(import.meta.path), "..", "..", "..");
-  // The same variable, same default, that entry.ts reads for its client, so
+  // The same variable, same default, that the child reads for its client, so
   // the port the kernel allows is the port the SDK dials. The host sets it
   // explicitly and spawns this wrapper with `--env-file=/dev/null`, so it is
   // the host's value and never an autoloaded `.env`'s.
   const moduleUrl = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086";
   let plan: ConfinementPlan;
   try {
-    plan = confinementPlan({ repoRoot, bunExe: exe, moduleUrl, abi: landlockAbi(), pid: process.pid });
+    plan = confinementPlan({ repoRoot, bunExe: exe, moduleUrl, abi: landlockAbi(), pid: process.pid, readDirs });
   } catch (err) {
     fail("planning the ruleset", err instanceof Error ? err.message : String(err));
   }

@@ -23,7 +23,7 @@ import { ReferenceAdapter } from "./reference-adapter";
 import type { ReferenceProgram } from "./reference-program";
 import { routingForRun } from "./routing";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
-import type { Scratchpad } from "./scratchpad";
+import type { Scratchpad } from "@wrathbench/mcp";
 import type { Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
 

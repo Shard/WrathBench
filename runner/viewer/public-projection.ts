@@ -139,7 +139,7 @@ import { EPISODE_IDS } from "../src/episodes";
 import { STALL_PAUSE } from "../src/lapse";
 import { redactGameProse } from "./redact-prose";
 import { scrubPathsValue } from "./scrub-paths";
-import { REDACTED } from "../src/redact";
+import { REDACTED } from "@wrathbench/mcp/redact";
 import { maskCredentialShapes } from "../src/secret-scan";
 import {
   applySheetPatch,

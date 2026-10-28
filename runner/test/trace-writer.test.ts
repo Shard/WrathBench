@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { SandboxHost } from "../src/sandbox/host";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import { TraceWriter, traceWindowStart } from "../src/trace";
 import {
   emptyTraceSheet,

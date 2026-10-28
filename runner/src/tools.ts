@@ -20,10 +20,10 @@ import {
   type EpisodicQuery,
 } from "./episodic";
 import { READ_LOG_CLOSED, restingOf, taxiFlightOf, type ReflectGate } from "./reflect";
-import type { ActionHintNote, EventSummary } from "./sandbox/ipc";
+import type { ActionHintNote, EventSummary } from "@wrathbench/mcp";
 import type { SandboxHost } from "./sandbox/host";
 import { renderSnippetDelta } from "./sandbox/snippet-delta";
-import { overCapText, type Scratchpad } from "./scratchpad";
+import { overCapText, type Scratchpad } from "@wrathbench/mcp";
 
 export interface ToolDef {
   name: string;

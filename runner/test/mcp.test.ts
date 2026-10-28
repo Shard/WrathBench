@@ -7,12 +7,12 @@ import { join } from "node:path";
 import { McpServer, trajectoryToolCallWriter } from "../src/mcp";
 import { EpisodicLog } from "../src/episodic";
 import { ReflectGate } from "../src/reflect";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
-import type { ActionHintNote } from "../src/sandbox/ipc";
+import type { ActionHintNote } from "@wrathbench/mcp";
 import { renderActionHints, type ToolContext } from "../src/tools";
-import { SecretRedactor } from "../src/redact";
+import { SecretRedactor } from "@wrathbench/mcp";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

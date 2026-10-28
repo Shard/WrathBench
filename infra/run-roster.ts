@@ -56,7 +56,7 @@ import { openRunDb } from "../runner/src/rundb";
 import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
 import { DEFAULT_DRIVER, entryOf, isRosterDriver, ROSTER_DRIVERS, type RosterDriver } from "../runner/src/drivers";
 import { compactWindowDriverRefusal, driverHasCompactWindow, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema, type TerminationReason, type WatchdogOverride } from "../runner/src/config";
-import { moduleAuthHeaders } from "../runner/src/module-auth";
+import { moduleAuthHeaders } from "@wrathbench/mcp";
 import { isOpenRouterBase, parseRouting, resolveRouting, routingLabel, type RoutingSpec } from "../runner/src/routing";
 import { DEFAULT_API_BASE, DEFAULT_API_KEY_ENV } from "../runner/src/providers";
 import { classifyLapse, PARTY_PAUSE, resumesOnPause, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";

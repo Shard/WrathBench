@@ -22,7 +22,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { MIN_TOKEN_LENGTH } from "./config";
-import { REDACTED } from "./redact";
+import { REDACTED } from "@wrathbench/mcp/redact";
 
 /**
  * The token meta.json holds for the run in `dir`, or null when there is none

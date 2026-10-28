@@ -53,7 +53,7 @@ import { listRuns, runDir } from "../viewer/runs";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { countModelResponses } from "./models";
 import { removeNearbyRing } from "./nearby";
-import { CLIENT_CACHE_FILE } from "./sandbox/client-cache";
+import { CLIENT_CACHE_FILE } from "@wrathbench/mcp";
 
 /** How recently a run must have been touched to count as possibly live. */
 export const HELD_MS = 10 * 60_000;

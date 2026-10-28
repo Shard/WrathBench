@@ -16,9 +16,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StateCache } from "@wrathbench/sdk";
 import { assertRunDirFree } from "../src/run";
-import { CLIENT_CACHE_FILE, ClientCacheStore, keepsAnswer, reparseFrame } from "../src/sandbox/client-cache";
+import { CLIENT_CACHE_FILE, ClientCacheStore, keepsAnswer, reparseFrame } from "@wrathbench/mcp";
 import { SandboxHost, type HarnessNotice } from "../src/sandbox/host";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

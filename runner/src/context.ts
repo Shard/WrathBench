@@ -43,9 +43,9 @@
 
 import { inventoryResultText } from "@wrathbench/sdk";
 
-import { compactJson } from "./jsonsafe";
-import { scratchpadSizeLabel } from "./scratchpad";
-import type { EventSummary, MoveIntentNote } from "./sandbox/ipc";
+import { compactJson } from "@wrathbench/mcp";
+import { scratchpadSizeLabel } from "@wrathbench/mcp";
+import type { EventSummary, MoveIntentNote } from "@wrathbench/mcp";
 import type { HarnessNotice } from "./sandbox/host";
 
 export const CONTEXT_POLICY = {

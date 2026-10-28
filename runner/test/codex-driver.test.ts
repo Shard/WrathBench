@@ -28,7 +28,7 @@ import { comparabilityOf, harnessOfRun } from "../src/comparability";
 import { HARNESSES, harnessOf, isUnscoredDriver, loadRunConfig, unscoredStamp } from "../src/config";
 import { CLAUDE_CODE_SYSTEM_PROMPT, CODEX_SYSTEM_PROMPT, SNIPPET_DELTA_SENTENCE, SYSTEM_PROMPT, buildSystemPrompt, contextSentence } from "../src/prompt";
 import { EpisodicLog } from "../src/episodic";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import { TOOLS } from "../src/tools";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";

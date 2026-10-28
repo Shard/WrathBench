@@ -80,10 +80,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { WrathClient, type StreamEvent } from "@wrathbench/sdk";
-import { keepsAnswer, reparseFrame } from "./client-cache";
-import { callSiteLabel, SNIPPET_URL } from "./call-site";
-import { compileSnippet } from "./rewrite";
-import { toJsonSafe } from "../jsonsafe";
+import { keepsAnswer, reparseFrame } from "@wrathbench/mcp";
+import { callSiteLabel, SNIPPET_URL } from "@wrathbench/mcp";
+import { compileSnippet } from "@wrathbench/mcp";
+import { toJsonSafe } from "@wrathbench/mcp";
 import {
   CONTEXT_POLICY,
   foldUiOpenWindows,
@@ -94,11 +94,12 @@ import {
   spellLogShown,
 } from "../context";
 import { NearbyRecorder } from "./nearby-recorder";
-import { REATTACH_REPLAY_WAIT_MS, REATTACH_STATE_WAIT_MS } from "./reattach-waits";
+import { REATTACH_REPLAY_WAIT_MS, REATTACH_STATE_WAIT_MS } from "@wrathbench/mcp";
 import { PartyWatcher } from "./party-watch";
 import { SnippetDeltaRecorder } from "./snippet-delta";
 import { TraceRecorder } from "./trace-recorder";
-import type { ActionBatch, ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, FlightSignal, HostToChild, HostcallResult, LogEntry, MoveIntentNote } from "./ipc";
+import type { ActionBatch, ActionHintNote, ActionNote, ChildToHost, EventSummary, HostToChild, HostcallResult, LogEntry, MoveIntentNote } from "@wrathbench/mcp";
+import type { ContextEvents, DeathSignal, FlightSignal } from "./signals";
 
 const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086";
 // The host always passes WRATHBENCH_TOKEN; the fallback only covers running

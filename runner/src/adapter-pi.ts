@@ -26,7 +26,7 @@
  *   false`, so its tools are declared to the model as ordinary tools
  *   (`mcp__wrathbench__<tool>`) and pi never turns codemode on for them. The
  *   tools reach the runner's one `SandboxHost` over the loopback MCP listener
- *   and `mcp-bridge.ts`, exactly as on the other CLIs.
+ *   and `mcp/src/bridge.ts`, exactly as on the other CLIs.
  * - **Our prompt, exactly.** `--system-prompt <file>` replaces pi's default
  *   prompt, and `pi-extension.ts` forces the request's system message to that
  *   text alone: without it pi appends a `<cwd>` section.
@@ -84,12 +84,13 @@ import { harnessOf, type PauseReason, type RunConfig, type TerminationReason } f
 import { entryOf } from "./drivers";
 import type { EpisodicLog } from "./episodic";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
+import { MCP_BRIDGE_PATH } from "@wrathbench/mcp";
 import { McpServer } from "./mcp";
 import { buildSystemPrompt } from "./prompt";
 import { PI_PROMPT_MISSING } from "./pi-extension";
 import { piProviderOf } from "./providers";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
-import type { Scratchpad } from "./scratchpad";
+import type { Scratchpad } from "@wrathbench/mcp";
 import type { ToolContext } from "./tools";
 import type { Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
@@ -771,7 +772,7 @@ export async function runPiEpisode(o: PiEpisodeOptions): Promise<LoopOutcome> {
   // ---- the endpoint, by the provider table
   const apiBase = config.apiBase ?? "";
   const provider = piProviderOf(config.apiKeyEnv);
-  const bridgePath = new URL("./mcp-bridge.ts", import.meta.url).pathname;
+  const bridgePath = MCP_BRIDGE_PATH;
   const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("pi"), config.wiki, config.watchdogs.episodeMs);
   const cwd = mkdtempSync(join(tmpdir(), "wrathbench-pi-"));
   const thinking = piThinkingLevel(config.effort);

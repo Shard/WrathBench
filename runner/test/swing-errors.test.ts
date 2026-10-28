@@ -22,10 +22,10 @@ import { CONTEXT_POLICY, assembleContext, formatEventLine, formatStateSummary } 
 import { EpisodicLog } from "../src/episodic";
 import { ReflectGate } from "../src/reflect";
 import { SandboxHost } from "../src/sandbox/host";
-import type { EventSummary } from "../src/sandbox/ipc";
-import { Scratchpad } from "../src/scratchpad";
+import type { EventSummary } from "@wrathbench/mcp";
+import { Scratchpad } from "@wrathbench/mcp";
 import { callTool, type ToolContext } from "../src/tools";
-import { SecretRedactor } from "../src/redact";
+import { SecretRedactor } from "@wrathbench/mcp";
 import { PROSE_OPCODES, redactProseText, redactProseValue } from "../viewer/redact-prose";
 import { tempDirs } from "./fixtures/temp-dirs";
 

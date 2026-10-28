@@ -30,7 +30,7 @@
  */
 
 import { z } from "zod";
-import { moduleAuthHeaders } from "./module-auth";
+import { moduleAuthHeaders } from "@wrathbench/mcp";
 import { HARNESSES, episodeOverrideOf, harnessOf, type Harness, type RunConfig } from "./config";
 import { driverEntry } from "./drivers";
 import { episodeIdSchema } from "./episodes";

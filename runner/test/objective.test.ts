@@ -21,7 +21,7 @@ import {
 import { runLoop } from "../src/loop";
 import { SYSTEM_PROMPT, WORLD_SECTION, buildSystemPrompt, contextSentence, objectiveSection, SNIPPET_DELTA_SENTENCE } from "../src/prompt";
 import { EpisodicLog } from "../src/episodic";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { readMeta, readTrajectory, Trajectory } from "../src/trajectory";
 import { configFromArgs } from "../src/run";

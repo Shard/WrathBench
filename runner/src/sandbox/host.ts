@@ -16,13 +16,14 @@
 
 import { join } from "node:path";
 import type { Subprocess } from "bun";
-import { ScrubbedStream, SecretRedactor } from "../redact";
-import { RepeatFolder } from "./log-fold";
-import { overCapText, type Scratchpad } from "../scratchpad";
+import { ScrubbedStream, SecretRedactor } from "@wrathbench/mcp";
+import { RepeatFolder, SANDBOX_CONFINE_PATH } from "@wrathbench/mcp";
+import { overCapText, type Scratchpad } from "@wrathbench/mcp";
 import type { NearbyDrain } from "../nearby-row";
 import type { TraceDrain } from "../trace-row";
-import type { ClientCacheStore } from "./client-cache";
-import type { ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, EvalResultMsg, FlightSignal, HostToChild, HostcallResult, LogEntry } from "./ipc";
+import type { ClientCacheStore } from "@wrathbench/mcp";
+import type { ActionHintNote, ActionNote, ChildToHost, EventSummary, EvalResultMsg, HostToChild, HostcallResult, LogEntry } from "@wrathbench/mcp";
+import type { ContextEvents, DeathSignal, FlightSignal } from "./signals";
 import type { PartySignal } from "./party-watch";
 import type { SnippetDelta } from "./snippet-delta";
 
@@ -271,7 +272,7 @@ export class SandboxHost {
 
   /** The Landlock wrapper the child is exec'd through (see start()). */
   get confinePath(): string {
-    return join(import.meta.dir, "confine.ts");
+    return SANDBOX_CONFINE_PATH;
   }
 
   private notice(kind: HarnessNotice["kind"], text: string): void {
@@ -325,7 +326,7 @@ export class SandboxHost {
     // `console.log` reaches the child's stdout as well as its result, and the
     // child holds its session secret, so both streams pass the redaction
     // before they reach the runner's own and the logs behind them (`pump`).
-    this.proc = Bun.spawn(["bun", "--env-file=/dev/null", this.confinePath, "bun", "--env-file=/dev/null", this.entryPath], {
+    this.proc = Bun.spawn(["bun", "--env-file=/dev/null", this.confinePath, `--read=${join(import.meta.dir, "..", "..")}`, "bun","--env-file=/dev/null", this.entryPath], {
       env: sandboxChildEnv(process.env, {
         WRATHBENCH_MODULE_URL: this.opts.moduleUrl,
         WRATHBENCH_TOKEN: this.opts.token,

@@ -13,8 +13,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { CONTEXT_POLICY, eventWindow, formatEventLine, spellLogNote, spellLogShown } from "../src/context";
 import { SandboxHost } from "../src/sandbox/host";
-import type { EventSummary } from "../src/sandbox/ipc";
-import { Scratchpad } from "../src/scratchpad";
+import type { EventSummary } from "@wrathbench/mcp";
+import { Scratchpad } from "@wrathbench/mcp";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const ME = "7";

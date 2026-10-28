@@ -7,8 +7,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { formatStateSummary, type SnapshotLike } from "../src/context";
 import { SANDBOX_FORWARDED_ENV, SandboxHost, sandboxChildEnv } from "../src/sandbox/host";
-import type { ActionHintNote } from "../src/sandbox/ipc";
-import { Scratchpad, SCRATCHPAD_MAX_CHARS } from "../src/scratchpad";
+import type { ActionHintNote } from "@wrathbench/mcp";
+import { Scratchpad, SCRATCHPAD_MAX_CHARS } from "@wrathbench/mcp";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

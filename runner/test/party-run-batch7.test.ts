@@ -11,10 +11,10 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { callSiteLabel, SNIPPET_URL } from "../src/sandbox/call-site";
+import { callSiteLabel, SNIPPET_URL } from "@wrathbench/mcp";
 import { SandboxHost } from "../src/sandbox/host";
-import { compileSnippet } from "../src/sandbox/rewrite";
-import { Scratchpad } from "../src/scratchpad";
+import { compileSnippet } from "@wrathbench/mcp";
+import { Scratchpad } from "@wrathbench/mcp";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

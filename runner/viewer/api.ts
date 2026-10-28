@@ -24,7 +24,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { harnessSeries } from "../src/comparability";
-import { moduleAuthHeaders } from "../src/module-auth";
+import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
 import { EPISODES, EPISODE_IDS, EPISODE_LIST } from "../src/episodes";
 import { HARNESSES, isNotAModelRun } from "../src/config";
 import { badEvidenceReason } from "../src/lapse";

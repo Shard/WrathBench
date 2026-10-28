@@ -40,7 +40,7 @@ import { join } from "node:path";
 export const HEARTBEAT_DEAD_MS = 120_000;
 /** runner/src/config.ts: below this a token is a pre-hardening run id, never struck. */
 export const MIN_TOKEN_LENGTH = 32;
-/** runner/src/redact.ts. */
+/** mcp/src/redact.ts. */
 export const REDACTED = "[redacted]";
 /** runner/viewer/archive-dir.ts. */
 export const ARCHIVE_DIR = "archive";
@@ -963,9 +963,9 @@ export function inspectTrajectory(runId: string, opts: TrajectoryOptions, out: O
 
 // ------------------------------------------------------------------ what tools and pad read
 
-/** runner/src/scratchpad.ts. */
+/** mcp/src/scratchpad.ts. */
 export const SCRATCHPAD_MAX_CHARS = 32_000;
-/** The words of every over-cap refusal after the op it names (`overCapText`, runner/src/scratchpad.ts). */
+/** The words of every over-cap refusal after the op it names (`overCapText`, mcp/src/scratchpad.ts). */
 export const PAD_REFUSED = "refused: the scratchpad would be ";
 const PAD_REFUSED_BYTES = Buffer.from(PAD_REFUSED);
 const PAD_REFUSAL = /([\w.]+) refused: the scratchpad would be (\d+) chars/;
@@ -974,7 +974,7 @@ export const REFLECT_NOT_RESTING_HEAD = "Reflection needs rest or a flight";
 export const REFLECT_ALREADY_USED_HEAD = "You already reflected";
 /** The context's pad section when the pad is empty (runner/src/context.ts, `assembleContext`). */
 export const PAD_EMPTY = "(empty — write your plan and durable facts with write_scratchpad)";
-/** runner/src/scratchpad.ts: the old cut's marker, stripped wherever a write puts it. */
+/** mcp/src/scratchpad.ts: the old cut's marker, stripped wherever a write puts it. */
 const LEGACY_TRUNCATION_MARKER = /\n{0,2}\[scratchpad truncated at \d+ chars\]/g;
 /** The pad tools' alias keys (runner/src/tools.ts, `ARG_ALIASES`): a logged call can carry either spelling. */
 export const PAD_ARG_ALIASES: Record<string, Record<string, string>> = {
@@ -997,7 +997,7 @@ const PAD_TOOLS = new Set(Object.keys(PAD_ARG_ALIASES));
 const SNIPPET_PAD_WRITE = /\bscratchpad\s*\.\s*(write|append)\s*\(/g;
 const SCRATCHPAD_BYTES = Buffer.from("scratchpad");
 
-/** `scratchpadSizeLabel` (runner/src/scratchpad.ts): the size every turn's context shows, "31.2k/32k". */
+/** `scratchpadSizeLabel` (mcp/src/scratchpad.ts): the size every turn's context shows, "31.2k/32k". */
 export function padSizeLabel(chars: number): string {
   const size = `${(Math.floor(chars / 100) / 10).toFixed(1)}k/${SCRATCHPAD_MAX_CHARS / 1000}k`;
   return chars > SCRATCHPAD_MAX_CHARS ? `${size}, over the cap` : size;

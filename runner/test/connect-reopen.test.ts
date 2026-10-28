@@ -15,7 +15,7 @@ import { loadRunConfig } from "../src/config";
 import { ContextBuilder } from "../src/loop";
 import type { SandboxHost } from "../src/sandbox/host";
 import { SandboxHost as RealSandboxHost } from "../src/sandbox/host";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 import { tempDirs } from "./fixtures/temp-dirs";

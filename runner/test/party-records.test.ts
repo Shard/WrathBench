@@ -18,7 +18,7 @@ import { loadRunConfig } from "../src/config";
 import { ContextBuilder } from "../src/loop";
 import { SandboxHost } from "../src/sandbox/host";
 import { PartyWatcher, type PartySignal, type PartyWatchState } from "../src/sandbox/party-watch";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 import { tempDirs } from "./fixtures/temp-dirs";

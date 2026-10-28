@@ -110,7 +110,7 @@ import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { DEFAULT_DRIVER } from "./drivers";
 import { liveOwnerOf, readRunFact } from "./models";
 import { formatLike } from "./move-lane";
-import { REDACTED } from "./redact";
+import { REDACTED } from "@wrathbench/mcp/redact";
 import { describeFindings, envSecrets, SecretScanner, type KnownSecret } from "./secret-scan";
 import { strikableSessionToken } from "./session-token";
 import { HEARTBEAT_FILE, type CharacterImport } from "./trajectory";

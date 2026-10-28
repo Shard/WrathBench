@@ -13,7 +13,7 @@ import { loadRunConfig, type RunConfig } from "../runner/src/config";
 import { assembleContext, type ChatMessage } from "../runner/src/context";
 import { REFLECT_ALREADY_USED, REFLECT_NOT_RESTING, READ_LOG_CLOSED, REFLECTION_PROMPT } from "../runner/src/reflect";
 import { fixedLoopRequestRecord } from "../runner/src/request-record";
-import { overCapText, Scratchpad, SCRATCHPAD_MAX_CHARS as RUNNER_MAX, scratchpadSizeLabel } from "../runner/src/scratchpad";
+import { overCapText, Scratchpad, SCRATCHPAD_MAX_CHARS as RUNNER_MAX, scratchpadSizeLabel } from "@wrathbench/mcp";
 import { normalizeToolArgs } from "../runner/src/tools";
 import { Trajectory } from "../runner/src/trajectory";
 import {

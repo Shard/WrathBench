@@ -31,7 +31,7 @@ import { projectEntry } from "../viewer/public-projection";
 import { summarize, tokenTotals } from "../viewer/tail";
 import { countRecords } from "../src/models";
 import { EpisodicLog } from "../src/episodic";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";

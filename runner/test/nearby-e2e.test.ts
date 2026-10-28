@@ -28,7 +28,7 @@ import { NEARBY_FILE_MS, NEARBY_RING_MS } from "../src/nearby-row";
 import type { SandboxHost } from "../src/sandbox/host";
 import { NearbyRecorder } from "../src/sandbox/nearby-recorder";
 import { TraceRecorder } from "../src/sandbox/trace-recorder";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import { Trajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 import { SELF_GUID, guardedSource, nearbyRig, playerGuid, unitGuid } from "./fixtures/nearby-frames";

@@ -42,13 +42,13 @@ import {
   restingOf,
   taxiFlightOf,
 } from "../src/reflect";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad } from "@wrathbench/mcp";
 import { callTool, TOOLS, type ToolContext } from "../src/tools";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { requestsOf, userMessagesOf } from "./fixtures/requests";
 import { Watchdogs } from "../src/watchdogs";
-import { SecretRedactor } from "../src/redact";
+import { SecretRedactor } from "@wrathbench/mcp";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
