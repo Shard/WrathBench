@@ -163,7 +163,10 @@ async function main(): Promise<void> {
     const raw = await probe(client, target, false);
     if (raw.status !== "drop") {
       const reached = raw.reachedPos ? `, reachedPos ${fmt(raw.reachedPos)}` : "";
-      fail(`unforced move off the plateau answered ${raw.status}${reached}, want drop at the edge past the mesh (a module before the edge drop answers path_incomplete)`);
+      fail(
+        `unforced move off the plateau answered ${raw.status}${reached}, want drop at the edge past the mesh (a module before the edge drop answers path_incomplete); ` +
+          `why, from the module's own record: bun wb inspect audit --smoke edge --op move_edge_drop --since 1h`,
+      );
     }
     if (!raw.reachedPos) fail(`drop carries no reachedPos: ${JSON.stringify(raw)}`);
     if (typeof raw.dz !== "number" || raw.dz >= -DROP_MIN_DZ) fail(`drop's dz should be a fall past ${DROP_MIN_DZ}y: ${JSON.stringify(raw)}`);

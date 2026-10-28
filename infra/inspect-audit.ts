@@ -10,6 +10,7 @@
  *                                                               the counts of those ops alone: verdicts by op
  *   common: [--since D] [--until D] [--top N] [--width N]
  *   offline: --audit-dir DIR [--runs-dir DIR]                    a copy here, no container
+ *   bun infra/inspect-audit.ts [--k8s] --smoke <name> …          a smoke's sessions instead of a run's
  *
  * The files are named after the run's session token, which lives in the run's
  * meta.json on the runs volume, while the files live in the worldserver's
@@ -31,12 +32,17 @@ const COMPOSE_FILE = join(REPO_ROOT, "infra", "compose.yml");
 const DEFAULT_TOP = 40;
 const DEFAULT_WIDTH = 200;
 
-export const USAGE = `usage: bun infra/inspect-audit.ts [--k8s] <run-id> [--op X[,Y…] [--status S] [--last N | --summary]] [--since D] [--until D] [--top N] [--width N]
+export const USAGE = `usage: bun infra/inspect-audit.ts [--k8s] <run-id> | --smoke <name> [--op X[,Y…] [--status S] [--last N | --summary]] [--since D] [--until D] [--top N] [--width N]
        offline: --audit-dir DIR [--runs-dir DIR]
-D is 90s, 30m, 2h, 1d, epoch ms or ISO; with no --op, or with --summary, it prints counts`;
+D is 90s, 30m, 2h, 1d, epoch ms or ISO; with no --op, or with --summary, it prints counts
+--smoke <name> reads the sessions a smoke names smoke-<name>-<uuid>, not a run's (no meta.json; --since narrows to one run);
+  a smoke with several sessions is read one session name at a time (group-a, group-b, loot-roll-a, mail-r)`;
 
 export interface AuditArgs {
+  /** The run, or for --smoke the label `smoke-<name>`, as printed. */
   runId: string;
+  /** --smoke: the name in the tokens the smoke gives its sessions, `smoke-<name>-<uuid>`. */
+  smoke: string | null;
   target: "k8s" | "compose" | "dir";
   op: string | null;
   status: string | null;
@@ -55,7 +61,7 @@ export function parseArgs(argv: readonly string[], now: number): AuditArgs | { e
   let target: AuditArgs["target"] = "compose";
   const positional: string[] = [];
   const v = new Map<string, string>();
-  const valued = new Set(["--op", "--status", "--since", "--until", "--last", "--top", "--width", "--audit-dir", "--runs-dir"]);
+  const valued = new Set(["--op", "--status", "--since", "--until", "--last", "--top", "--width", "--audit-dir", "--runs-dir", "--smoke"]);
   let summary = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -68,7 +74,11 @@ export function parseArgs(argv: readonly string[], now: number): AuditArgs | { e
     } else if (a.startsWith("-")) return { error: `unknown flag ${a}` };
     else positional.push(a);
   }
-  if (positional.length !== 1 || !isValidRunId(positional[0]!)) {
+  const smoke = v.get("--smoke") ?? null;
+  if (smoke !== null) {
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(smoke)) return { error: "--smoke is the name in a smoke's tokens, like edge for smoke-edge-<uuid> or chest-loot for smoke-chest-loot-<uuid>" };
+    if (positional.length > 0) return { error: "--smoke reads a smoke's sessions, not a run's: no run id with it" };
+  } else if (positional.length !== 1 || !isValidRunId(positional[0]!)) {
     return { error: positional.length === 0 ? "a run id is needed" : `not one run id: ${positional.join(" ")}` };
   }
   const num = (flag: string, dflt: number, min: number, max: number): number | null => {
@@ -97,7 +107,8 @@ export function parseArgs(argv: readonly string[], now: number): AuditArgs | { e
   const auditDir = v.get("--audit-dir") ?? null;
   if (auditDir !== null) target = "dir";
   return {
-    runId: positional[0]!,
+    runId: smoke !== null ? `smoke-${smoke}` : positional[0]!,
+    smoke,
     target,
     op: op ?? null,
     status: st ?? null,
@@ -147,8 +158,8 @@ export function parseReduced(text: string): Reduced {
   return r;
 }
 
-/** Strike the token (when there is one worth striking) and any session field, whatever came back. */
-export function scrubAudit(text: string, token: string | null): string {
+/** Strike the token (when there is one worth striking; for --smoke, every one of the smoke's) and any session field, whatever came back. */
+export function scrubAudit(text: string, token: string | RegExp | null): string {
   const struck = token === null ? text : text.replaceAll(token, REDACTED);
   return struck.replace(/"session":"[^"]*"/g, `"session":"${REDACTED}"`);
 }
@@ -164,7 +175,7 @@ function span(r: Reduced): string {
 
 const RECORD = /^\{"ts":(\d+),"session":"[^"]*","kind":"([^"]*)","payload":(.*)$/;
 
-export function formatReduced(a: AuditArgs, r: Reduced, token: string | null): string[] {
+export function formatReduced(a: AuditArgs, r: Reduced, token: string | RegExp | null): string[] {
   const out: string[] = [];
   const window = `${a.since === null ? "" : ` since ${iso(a.since)}`}${a.until === null ? "" : ` until ${iso(a.until)}`}`;
   const filter = a.op === null ? "" : `op ${a.op}${a.status !== null ? `, status ${a.status}` : ""}`;
@@ -172,14 +183,15 @@ export function formatReduced(a: AuditArgs, r: Reduced, token: string | null): s
     const matches = a.op === null ? "" : ` · ${r.matched ?? 0} match ${filter}`;
     out.push(`audit ${a.runId}${window}: ${r.files} file(s), ${fmtBytes(r.bytes)}, ${span(r)}${matches}`);
     if (r.files === 0) {
-      out.push("  no audit files for this run's token: pruned by the retention window, or never written");
+      out.push(`  no audit files for this ${a.smoke !== null ? "smoke's tokens" : "run's token"}: pruned by the retention window, or never written`);
       return out;
     }
     const rows = [...r.counts].sort((x, y) => y.n - x.n || x.kind.localeCompare(y.kind) || x.name.localeCompare(y.name));
     out.push(`  ${"count".padStart(10)}  ${"kind".padEnd(7)} ${"op / opcode".padEnd(32)} status`);
     for (const c of rows.slice(0, a.top)) out.push(cap(`  ${String(c.n).padStart(10)}  ${c.kind.padEnd(7)} ${c.name.padEnd(32)} ${c.status}`, a.width));
     if (rows.length > a.top) out.push(`  (${a.top} of ${rows.length} rows; --top N for more)`);
-    return out.map((l) => scrubAudit(l, token));
+    // The header names only what was asked for (a run id, or a smoke's label, which the smoke strike would hit).
+    return [out[0]!, ...out.slice(1).map((l) => scrubAudit(l, token))];
   }
   out.push(`audit ${a.runId}${window}: ${r.matched ?? 0} record(s) match ${filter}, of ${r.records} in ${r.files} file(s); the last ${r.lines.length}, oldest first, UTC`);
   for (const raw of r.lines) {
@@ -263,6 +275,10 @@ export async function run(argv: readonly string[], io: Io, now = Date.now()): Pr
     io.err(`inspect audit: ${a.error}\n${USAGE}`);
     return 2;
   }
+  // A smoke's sessions: the reducer gets the tokens' fixed prefix, and every
+  // token that starts with it is struck from what comes back.
+  // A record can name a sibling session's token, so every smoke token is struck, not only this smoke's.
+  if (a.smoke !== null) return reduce(a, io, `smoke-${a.smoke}-*`, /smoke-[A-Za-z0-9_-]+/g);
   const metaText = await readMetaText(a, io);
   if (metaText === null) {
     io.err(`inspect audit: no meta.json for ${a.runId}${a.target === "k8s" ? " in the runner pod" : ` under ${a.runsDir}`}`);
@@ -275,6 +291,11 @@ export async function run(argv: readonly string[], io: Io, now = Date.now()): Pr
   }
   // What to strike from the output: the token, unless it is a pre-hardening run id the output names anyway.
   const strikable = token.length >= MIN_TOKEN_LENGTH && token !== a.runId ? token : null;
+  return reduce(a, io, token, strikable);
+}
+
+/** The reducer, with `token` (a run's, or a smoke's prefix line) on its stdin, and what it found, struck. */
+async function reduce(a: AuditArgs, io: Io, token: string, strikable: string | RegExp | null): Promise<number> {
   const plan = reducerArgv(a, io);
   const p = Bun.spawn(plan.argv, {
     stdin: new TextEncoder().encode(`${token}\n`),

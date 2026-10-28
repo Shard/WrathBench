@@ -27,6 +27,7 @@ bun wb inspect audit <run-id>                         # counts per kind, op/opco
 bun wb inspect audit <run-id> --op WB_MOVE_RESULT --status target_off_mesh --last 20
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
 bun wb inspect audit <run-id> --since 1h              # a big audit is bisected, not read from the top
+bun wb inspect audit --smoke edge --op move_edge_drop --since 1h   # a smoke's own sessions (smoke-<name>-<uuid>), not a run's
 bun wb inspect publisher [<run-id>]                   # last flip, versions per run, the secret scan, last passes
 ```
 
