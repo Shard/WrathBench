@@ -21,7 +21,7 @@
   "version": 2,
   "icons": { "package": "@lobehub/icons-static-svg", "version": "1.94.0" },
   "providers": {
-    "openrouter": { "name": "OpenRouter", "asOf": "2026-10-20" },
+    "openrouter": { "name": "OpenRouter", "asOf": "2026-10-28" },
     "anthropic": { "name": "Anthropic" },
     "cerebras": {
       "name": "Cerebras",
@@ -213,7 +213,8 @@
               { "input": 0.08638, "output": 0.17276, "cacheRead": 0.017276, "cacheWrite": 0.08638, "from": "2026-09-05" },
               { "input": 0.088606, "output": 0.177212, "cacheRead": 0.0177212, "cacheWrite": 0.088606, "from": "2026-09-16" },
               { "input": 0.0128, "output": 1.28, "cacheRead": 0.0128, "cacheWrite": 0.0128, "from": "2026-10-08" },
-              { "input": 0.091, "output": 0.182, "cacheRead": 0.0182, "cacheWrite": 0.091, "from": "2026-10-14" }
+              { "input": 0.091, "output": 0.182, "cacheRead": 0.0182, "cacheWrite": 0.091, "from": "2026-10-14" },
+              { "input": 0.14, "output": 0.28, "cacheRead": 0.028, "cacheWrite": 0.14, "from": "2026-10-28" }
             ]
           }
         }
@@ -234,7 +235,8 @@
               { "input": 0.06, "output": 0.12, "cacheRead": 0.012, "cacheWrite": 0.06, "from": "2026-09-16" },
               { "input": 0.018, "output": 1.28, "cacheRead": 0.018, "cacheWrite": 0.018, "from": "2026-10-08" },
               { "input": 0.016, "output": 0.64, "cacheRead": 0.016, "cacheWrite": 0.016, "from": "2026-10-14" },
-              { "input": 0.44, "output": 1.32, "cacheRead": 0.014, "cacheWrite": 0.44, "from": "2026-10-20" }
+              { "input": 0.44, "output": 1.32, "cacheRead": 0.014, "cacheWrite": 0.44, "from": "2026-10-20" },
+              { "input": 0.119, "output": 0.238, "cacheRead": 0.0238, "cacheWrite": 0.119, "from": "2026-10-28" }
             ]
           }
         }
@@ -255,7 +257,8 @@
               { "input": 1.12068, "output": 3.36204, "cacheRead": 0.037356, "cacheWrite": 1.12068, "from": "2026-09-05" },
               { "input": 0.9834, "output": 2.9502, "cacheRead": 0.03278, "cacheWrite": 0.9834, "from": "2026-09-16" },
               { "input": 1.32, "output": 3.96, "cacheRead": 0.044, "cacheWrite": 1.32, "from": "2026-10-08" },
-              { "input": 0.66, "output": 1.98, "cacheRead": 0.022, "cacheWrite": 0.66, "from": "2026-10-20" }
+              { "input": 0.66, "output": 1.98, "cacheRead": 0.022, "cacheWrite": 0.66, "from": "2026-10-20" },
+              { "input": 1.32, "output": 3.96, "cacheRead": 0.044, "cacheWrite": 1.32, "from": "2026-10-28" }
             ]
           }
         }
@@ -274,7 +277,8 @@
               { "input": 0.15, "output": 0.6, "cacheRead": 0.003, "cacheWrite": 0.15 },
               { "input": 0.3, "output": 1.2, "cacheRead": 0.006, "cacheWrite": 0.3, "from": "2026-10-08" },
               { "input": 0.0396, "output": 0.891, "cacheRead": 0.0054, "cacheWrite": 0.0396, "from": "2026-10-14" },
-              { "input": 0.056, "output": 0.12, "cacheRead": 0.0016, "cacheWrite": 0.056, "from": "2026-10-20" }
+              { "input": 0.056, "output": 0.12, "cacheRead": 0.0016, "cacheWrite": 0.056, "from": "2026-10-20" },
+              { "input": 0.14, "output": 0.42, "cacheRead": 0.0042, "cacheWrite": 0.14, "from": "2026-10-28" }
             ]
           }
         },
@@ -520,11 +524,7 @@
       "weights": "open",
       "source": "https://huggingface.co/nvidia (each id's own checkpoint, ungated)",
       "aliases": ["nemotron-3-super-120b-a12b"],
-      "prices": {
-        "openrouter": {
-          "nvidia/nemotron-3-super-120b-a12b:free": { "windows": [{ "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }] }
-        }
-      }
+      "prices": { "openrouter": { "nvidia/nemotron-3-super-120b-a12b:free": { "windows": [] } } }
     },
     "nvidia/nemotron-3-ultra-550b-a55b": {
       "family": "nvidia",
@@ -639,6 +639,16 @@
         "openrouter": { "openai/gpt-6.1-sol": { "windows": [{ "input": 2, "output": 10, "cacheRead": 0.1, "cacheWrite": 2.5 }] } }
       }
     },
+    "openai/gpt-6.1-terra": {
+      "family": "openai",
+      "name": "GPT-6.1 Terra",
+      "weights": "closed",
+      "source": "https://developers.openai.com/api/docs/models (API only; the openai Hugging Face org holds gpt-oss alone)",
+      "aliases": ["gpt-6.1-terra"],
+      "prices": {
+        "openrouter": { "openai/gpt-6.1-terra": { "windows": [{ "input": 1, "output": 5, "cacheRead": 0.05, "cacheWrite": 1.25 }] } }
+      }
+    },
     "openai/gpt-oss-120b": {
       "family": "openai",
       "name": "gpt-oss-120b",
@@ -687,7 +697,8 @@
               { "input": 0.214, "output": 2.55, "cacheRead": 0.15, "cacheWrite": 0.214, "from": "2026-09-16" },
               { "input": 0.425, "output": 2.55, "cacheRead": 0.085, "cacheWrite": 0.53125, "from": "2026-10-08" },
               { "input": 0.04, "output": 2.3, "cacheRead": 0.0198, "cacheWrite": 0.04, "from": "2026-10-14" },
-              { "input": 0.04, "output": 1.35, "cacheRead": 0.018, "cacheWrite": 0.04, "from": "2026-10-20" }
+              { "input": 0.04, "output": 1.35, "cacheRead": 0.018, "cacheWrite": 0.04, "from": "2026-10-20" },
+              { "input": 0.039, "output": 1.25, "cacheRead": 0.0039, "cacheWrite": 0.039, "from": "2026-10-28" }
             ]
           }
         },
@@ -801,7 +812,8 @@
               { "input": 1.4, "output": 4.4, "cacheRead": 0.26, "cacheWrite": 1.4, "from": "2026-09-16" },
               { "input": 0.049, "output": 3.39, "cacheRead": 0.048, "cacheWrite": 0.049, "from": "2026-10-08" },
               { "input": 0.079, "output": 4.8, "cacheRead": 0.059, "cacheWrite": 0.079, "from": "2026-10-14" },
-              { "input": 0.079, "output": 1.4, "cacheRead": 0.055, "cacheWrite": 0.079, "from": "2026-10-20" }
+              { "input": 0.079, "output": 1.4, "cacheRead": 0.055, "cacheWrite": 0.079, "from": "2026-10-20" },
+              { "input": 0.0699, "output": 1.4, "cacheRead": 0.0689, "cacheWrite": 0.0699, "from": "2026-10-28" }
             ]
           }
         }
@@ -821,7 +833,8 @@
               { "input": 0.1, "output": 0.3333, "cacheRead": 0.02, "cacheWrite": 0.1, "from": "2026-09-16" },
               { "input": 0.15, "output": 0.5, "cacheRead": 0.03, "cacheWrite": 0.15, "from": "2026-10-08" },
               { "input": 0.036, "output": 0.9, "cacheRead": 0.0108, "cacheWrite": 0.036, "from": "2026-10-14" },
-              { "input": 0.047076, "output": 0.16, "cacheRead": 0.006, "cacheWrite": 0.047076, "from": "2026-10-20" }
+              { "input": 0.047076, "output": 0.16, "cacheRead": 0.006, "cacheWrite": 0.047076, "from": "2026-10-20" },
+              { "input": 0.15, "output": 0.5, "cacheRead": 0.03, "cacheWrite": 0.15, "from": "2026-10-28" }
             ]
           }
         }
