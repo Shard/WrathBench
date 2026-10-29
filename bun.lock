@@ -35,14 +35,6 @@
         "vite-plugin-solid": "2.11.14",
       },
     },
-    "mcp": {
-      "name": "@wrathbench/mcp",
-      "version": "0.1.0",
-      "dependencies": {
-        "@wrathbench/sdk": "workspace:*",
-        "zod": "4.4.3",
-      },
-    },
     "minimap": {
       "name": "@wrathbench/minimap",
       "version": "0.0.0",
@@ -57,16 +49,24 @@
         "zod": "4.4.3",
       },
     },
-    "sdk": {
+    "wiki": {
+      "name": "@wrathbench/wiki",
+      "version": "0.0.0",
+    },
+    "wrath-mcp/mcp": {
+      "name": "@wrathbench/mcp",
+      "version": "0.1.0",
+      "dependencies": {
+        "@wrathbench/sdk": "workspace:*",
+        "zod": "4.4.3",
+      },
+    },
+    "wrath-mcp/sdk": {
       "name": "@wrathbench/sdk",
       "version": "0.1.0",
       "dependencies": {
         "zod": "4.4.3",
       },
-    },
-    "wiki": {
-      "name": "@wrathbench/wiki",
-      "version": "0.0.0",
     },
   },
   "packages": {
@@ -372,13 +372,13 @@
 
     "@wrathbench/dashboard": ["@wrathbench/dashboard@workspace:dashboard"],
 
-    "@wrathbench/mcp": ["@wrathbench/mcp@workspace:mcp"],
+    "@wrathbench/mcp": ["@wrathbench/mcp@workspace:wrath-mcp/mcp"],
 
     "@wrathbench/minimap": ["@wrathbench/minimap@workspace:minimap"],
 
     "@wrathbench/runner": ["@wrathbench/runner@workspace:runner"],
 
-    "@wrathbench/sdk": ["@wrathbench/sdk@workspace:sdk"],
+    "@wrathbench/sdk": ["@wrathbench/sdk@workspace:wrath-mcp/sdk"],
 
     "@wrathbench/wiki": ["@wrathbench/wiki@workspace:wiki"],
 
