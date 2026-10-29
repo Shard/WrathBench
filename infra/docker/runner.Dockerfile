@@ -26,8 +26,8 @@
 # The build context is the repository root and the ignore list for THIS file is
 # infra/docker/runner.Dockerfile.dockerignore (BuildKit prefers a
 # <dockerfile>.dockerignore over the root one). The root .dockerignore excludes
-# runner/, sdk/, wiki/ and docs/ because the SERVER image does not want them;
-# this image is nothing but them.
+# runner/, wrath-mcp/sdk/, wiki/ and docs/ because the SERVER image does not
+# want them; this image is nothing but them.
 FROM oven/bun:1.4.4
 
 RUN apt-get update \
@@ -123,9 +123,11 @@ WORKDIR /wrathbench
 # Dependencies first, so a source edit does not re-resolve the workspace.
 # `node_modules/` at the repo root is not an optional nicety: confine.ts's
 # Landlock allowlist names it, so a snippet child fails closed without it.
+# The stack's two workspaces live in the wrath-mcp submodule; build-images.sh
+# exports it into the context at the commit this one pins.
 COPY --chown=1000:1000 package.json bun.lock bunfig.toml tsconfig.base.json ./
-COPY --chown=1000:1000 sdk/package.json       sdk/package.json
-COPY --chown=1000:1000 mcp/package.json       mcp/package.json
+COPY --chown=1000:1000 wrath-mcp/sdk/package.json wrath-mcp/sdk/package.json
+COPY --chown=1000:1000 wrath-mcp/mcp/package.json wrath-mcp/mcp/package.json
 COPY --chown=1000:1000 runner/package.json    runner/package.json
 COPY --chown=1000:1000 wiki/package.json      wiki/package.json
 COPY --chown=1000:1000 minimap/package.json   minimap/package.json
@@ -151,5 +153,13 @@ RUN bun run --cwd dashboard build
 ARG WRATHBENCH_BUILD_VERSION=""
 ENV WRATHBENCH_BUILD_VERSION="${WRATHBENCH_BUILD_VERSION}"
 LABEL wrathbench.build="${WRATHBENCH_BUILD_VERSION}"
+
+# The wrath-mcp commit this image carries (build-images.sh passes the gitlink),
+# stamped on every run's meta.json as `stackCommit`. A fallback, like the build
+# version above: runner/src/version.ts reads the submodule's own git first, so
+# a compose fleet with the live repo mounted stamps what it actually runs.
+ARG WRATHBENCH_STACK_COMMIT=""
+ENV WRATHBENCH_STACK_COMMIT="${WRATHBENCH_STACK_COMMIT}"
+LABEL wrathbench.stack="${WRATHBENCH_STACK_COMMIT}"
 
 CMD ["sleep", "infinity"]

@@ -14,11 +14,13 @@ dashboard/dist-public
 dashboard/node_modules
 collector/node_modules
 runner/node_modules
-sdk/node_modules
-mcp/node_modules
+wrath-mcp/node_modules
+wrath-mcp/sdk/node_modules
+wrath-mcp/mcp/node_modules
 wiki/node_modules
 minimap/node_modules
-module
+wrath-mcp/module
+wrath-mcp/.git
 .env
 
 # Everything .gitignore keeps out of git stays out of the image. build-images.sh

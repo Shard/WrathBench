@@ -65,16 +65,35 @@ function makeAzerothcore(dir: string): { first: string } {
   return { first: git(dir, "rev-parse", "HEAD") };
 }
 
+/** A wrath-mcp stand-in: the stack's root manifests and its three trees, one commit on master. */
+function makeStack(dir: string): { first: string } {
+  mkdirSync(dir, { recursive: true });
+  git(dir, "init", "-q", "-b", "master");
+  put(dir, {
+    "package.json": '{"name":"wrath-mcp"}\n',
+    "tsconfig.base.json": "{}\n",
+    "sdk/package.json": '{"name":"@wrathbench/sdk"}\n',
+    "sdk/API.md": "one\n",
+    "mcp/package.json": '{"name":"@wrathbench/mcp"}\n',
+    "module/src/mod.cpp": "one\n",
+  });
+  git(dir, "add", "-A");
+  git(dir, "commit", "-q", "-m", "stack one");
+  return { first: git(dir, "rev-parse", "HEAD") };
+}
+
 /**
  * The superproject: tracked files plus the clutter a working checkout really
  * has — an untracked scratch file, gitignored env files at two depths, and an
- * agent worktree under .claude/.
+ * agent worktree under .claude/. It pins both submodules, wrath-mcp always.
  */
-function makeRepo(opts: { submodule?: boolean } = {}): { tree: string; ac: string; acFirst: string; sha: string } {
+function makeRepo(opts: { submodule?: boolean } = {}): { tree: string; ac: string; acFirst: string; stack: string; stackFirst: string; sha: string } {
   const dir = tempDir("wb-build-images-repo-");
   const tree = join(dir, "tree");
   const ac = join(dir, "azerothcore");
+  const stack = join(dir, "wrath-mcp");
   const { first } = makeAzerothcore(ac);
+  const { first: stackFirst } = makeStack(stack);
   mkdirSync(tree);
   git(tree, "init", "-q", "-b", "master");
   put(tree, {
@@ -87,6 +106,8 @@ function makeRepo(opts: { submodule?: boolean } = {}): { tree: string; ac: strin
   });
   git(tree, "add", "-A");
   git(tree, "commit", "-q", "-m", "one");
+  git(tree, "submodule", "add", "-q", stack, "wrath-mcp");
+  git(tree, "commit", "-q", "-m", "pin wrath-mcp");
   if (opts.submodule !== false) {
     git(tree, "submodule", "add", "-q", ac, "deps/azerothcore");
     git(tree, "commit", "-q", "-m", "pin azerothcore");
@@ -97,7 +118,7 @@ function makeRepo(opts: { submodule?: boolean } = {}): { tree: string; ac: strin
     "runner/.env.prod": "API_KEY=fixture-not-a-secret\n",
     ".claude/worktrees/agent-x/notes.txt": "agent worktree\n",
   });
-  return { tree, ac, acFirst: first, sha: git(tree, "rev-parse", "HEAD") };
+  return { tree, ac, acFirst: first, stack, stackFirst, sha: git(tree, "rev-parse", "HEAD") };
 }
 
 /**
@@ -268,16 +289,74 @@ describe("build-images.sh builds from git, never the working tree", () => {
     expect(r.leftovers).toEqual([]);
   });
 
-  test("a server image with no initialised submodule stops before anything is built; the runner still builds", () => {
+  test("a server image with no initialised AzerothCore stops before anything is built; the runner still builds", () => {
     const { tree } = makeRepo();
     const clone = join(tempDir("wb-build-images-clone-"), "clone");
     git(dirname(clone), "clone", "-q", tree, clone);
+    git(clone, "-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init", "wrath-mcp");
     const server = run(clone, ["--only", "worldserver"]);
     expect(server.code).toBe(1);
     expect(server.out).toContain("git submodule update --init deps/azerothcore");
     expect(builds(server)).toEqual([]);
     expect(server.leftovers).toEqual([]);
     expect(run(clone, ["--only", "runner"]).code).toBe(0);
+  });
+});
+
+describe("build-images.sh and the wrath-mcp stack", () => {
+  test("every image's context carries the stack whole, from the commit the superproject pins, never the submodule checkout", () => {
+    const { tree, stackFirst } = makeRepo();
+    // The submodule's checkout moves on and gathers clutter; neither may reach the context.
+    const sub = join(tree, "wrath-mcp");
+    put(sub, { "sdk/API.md": "two\n" });
+    git(sub, "commit", "-q", "-am", "stack two");
+    put(sub, { "node_modules/zod/index.js": "//\n", ".env": "API_KEY=fixture-not-a-secret\n" });
+    const r = run(tree, ["--only", "runner", "--only", "worldserver", "--allow-dirty"]);
+    expect(r.code).toBe(0);
+    expect(r.contexts).toHaveLength(2);
+    for (const ctx of r.contexts) {
+      expect(ctx.read("wrath-mcp/sdk/API.md")).toBe("one\n");
+      for (const present of ["package.json", "tsconfig.base.json", "sdk/package.json", "mcp/package.json", "module/src/mod.cpp"]) {
+        expect(ctx.entries).toContain(`wrath-mcp/${present}`);
+      }
+      for (const absent of ["node_modules", ".env", ".git"]) expect(ctx.entries).not.toContain(`wrath-mcp/${absent}`);
+    }
+    expect(r.out).toContain(`exporting wrath-mcp ${stackFirst} to wrath-mcp/`);
+    // The runner is told which stack it carries, for the run's meta.json.
+    expect(builds(r).find((b) => b.includes("runner.Dockerfile"))).toContain(`--build-arg WRATHBENCH_STACK_COMMIT=${stackFirst}`);
+    expect(r.leftovers).toEqual([]);
+  });
+
+  test("an uninitialised stack stops every image before anything is built", () => {
+    const { tree } = makeRepo();
+    const clone = join(tempDir("wb-build-images-clone-"), "clone");
+    git(dirname(clone), "clone", "-q", tree, clone);
+    for (const only of ["runner", "worldserver"]) {
+      const r = run(clone, ["--only", only]);
+      expect(r.code).toBe(1);
+      expect(r.out).toContain("git submodule update --init wrath-mcp");
+      expect(builds(r)).toEqual([]);
+      expect(r.leftovers).toEqual([]);
+    }
+  });
+
+  test("a pin that is not on wrath-mcp's master is refused; --allow-dirty builds it locally and never pushes it", () => {
+    const { tree } = makeRepo();
+    const sub = join(tree, "wrath-mcp");
+    git(sub, "switch", "-q", "-c", "review");
+    put(sub, { "sdk/API.md": "under review\n" });
+    git(sub, "commit", "-q", "-am", "under review");
+    git(tree, "commit", "-q", "-m", "pin a review commit", "--", "wrath-mcp");
+    const refused = run(tree, ["--only", "runner"]);
+    expect(refused.code).toBe(1);
+    expect(refused.out).toContain("is not on wrath-mcp's master");
+    expect(refused.out).toContain("git -C wrath-mcp fetch origin master");
+    expect(refused.calls).toEqual([]);
+    const local = run(tree, ["--only", "runner", "--allow-dirty", "--push", "--registry", "reg.example/wrathbench"]);
+    expect(local.contexts[0]!.read("wrath-mcp/sdk/API.md")).toBe("under review\n");
+    expect(local.code).toBe(1);
+    expect(local.out).toContain("refusing to push images built from wrath-mcp");
+    expect(pushes(local)).toEqual([]);
   });
 });
 
