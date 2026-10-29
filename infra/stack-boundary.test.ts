@@ -5,7 +5,7 @@
  * and its test runs in this suite too.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { azerothcoreGitlink, checkStackBoundary, checkStackPins, checkTestedAgainst } from "./stack-boundary";
@@ -114,6 +114,18 @@ describe("the shared pins", () => {
       "zod is pinned differently: runner/package.json 4.4.3, collector/package.json 4.4.3, wrath-mcp/sdk/package.json 4.5.0, wrath-mcp/mcp/package.json 4.4.3",
       "typescript is pinned differently: package.json 7.0.2, wrath-mcp/package.json 7.0.3",
     ]);
+  });
+});
+
+describe("the wrath-mcp pin record", () => {
+  test("infra/PINS.md names the commit the submodule pins", () => {
+    const root = resolve(import.meta.dir, "..");
+    const p = Bun.spawnSync(["git", "-C", root, "ls-files", "-s", "--", "wrath-mcp"], { stdout: "pipe" });
+    const gitlink = /^160000 ([0-9a-f]{40}) /.exec(p.stdout.toString())?.[1];
+    const pins = readFileSync(join(root, "infra", "PINS.md"), "utf8");
+    const recorded = /^## wrath-mcp[^\n]*\n+- Commit: `([0-9a-f]{40})`/m.exec(pins)?.[1];
+    expect(gitlink).toBeDefined();
+    expect(recorded).toBe(gitlink!);
   });
 });
 

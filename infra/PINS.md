@@ -7,7 +7,14 @@ Pins are changed deliberately and documented here with a date and reason. See CL
 - Commit: `3cafaf4a588fd1f287678fdb37438fdedd1ed85c` (master, 2026-08-20)
 - Where: git submodule at `deps/azerothcore`; the submodule pointer in our history is the authoritative pin, this file is the human-readable record.
 - Why this commit: latest master at project start. Master is the supported branch for 3.3.5a; there is no meaningful stable tag cadence to prefer.
-- Bumping: update the submodule, rebuild the worldserver image, rerun the smoke script, update this file in the same commit.
+- Bumping: update the submodule, rebuild the worldserver image, rerun the smoke script, update this file in the same commit. The pinned wrath-mcp's README states the AzerothCore commit it is tested against, and `bun run boundary` (also a test) fails until the two agree, so a core bump moves with a wrath-mcp change.
+
+## wrath-mcp (the agent stack)
+
+- Commit: `fe9218e57c73432574793d29811591afa3a0db06` (wrath-mcp master, 2026-10-29; tree-identical to the `module/`, `sdk/`, `mcp/` and `docs/CONTRACTS.md` this repository held before the stack moved out).
+- Where: git submodule at `wrath-mcp/` (https://github.com/Shard/wrath-mcp); the submodule pointer in our history is the authoritative pin, this file is the human-readable record. It pins the C++ module, the SDK and the MCP stack together: the server image compiles `wrath-mcp/module`, and `wrath-mcp/sdk` and `wrath-mcp/mcp` are workspaces of this repository. Every run stamps the commit in `meta.json` as `stackCommit`, a label beside `sdkVersion`.
+- Rules: the pin on master is a commit on wrath-mcp's master (`build-images.sh` refuses anything else for an image that can be pushed, and CI checks it on master); a PR may pin a wrath-mcp branch commit while both are in review. Merge order is wrath-mcp first, then the bump here. The Bun, zod, typescript and `@types/bun` pins agree across the two repositories (`bun run boundary`).
+- Bumping: merge the stack change in wrath-mcp, then move the submodule to the new master commit in a commit of its own, `wrath-mcp: <old>..<new> — <one line>`, which updates the commit above. That commit is the record; a module change is verified only by the release that carries it and `bun wb smoke suite` after it.
 
 ## Bun
 
