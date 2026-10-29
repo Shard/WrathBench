@@ -16,7 +16,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FleetConfig, FleetRosterEntry } from "./run-fleet-config";
-import { charactersFrom, planResumes, resumeNotBefore } from "./run-fleet-plan";
+import { charactersFrom, liveCharactersFrom, planResumes, resumeNotBefore } from "./run-fleet-plan";
+import { formatCharacters } from "./run-fleet-status";
 import { backoffMs } from "./run-roster";
 import { loadRunConfig, type PauseReason } from "../runner/src/config";
 import { byNewestStart, DEFAULT_POLICY, newestStarted, projectModel, readRunFact, type RosterModel, type RunFact } from "../runner/src/models";
@@ -87,6 +88,41 @@ describe("the head of a character is its newest-started run, at every site", () 
     expect(plan.listed.map((l) => [l.runId, l.why])).toEqual([
       [older.runId, "a later-started paused run of this model is ahead of it — resume by hand or archive"],
     ]);
+  });
+});
+
+describe("--status names the run a character is playing, not the one it continued from", () => {
+  // a2 ended on an adapter error a week ago; a3 continued Thalvorn from it and is live.
+  const a2: RunFact = {
+    ...paused("fleet-fp-freeplay-vendor-durable-model-free-20261011-a2", NOW - 17 * 24 * H, NOW - 10 * 24 * H),
+    pause: null,
+    terminationReason: "adapter-error",
+    character: "Thalvorn",
+  };
+  const a3: RunFact = {
+    ...paused("fleet-fp-freeplay-vendor-durable-model-free-20261018-a3", NOW - 10 * 24 * H, NOW),
+    pause: null,
+    endedAt: null,
+    live: true,
+    character: "Thalvorn",
+  };
+  const runs = [a2, a3];
+
+  test("the tick still continues from the newest run that is not live", () => {
+    expect(charactersFrom(runs, roster).get("fp")?.runId).toBe(a2.runId);
+    expect(liveCharactersFrom(runs, roster).get("fp")?.runId).toBe(a3.runId);
+  });
+
+  test("the character row's head is the live run while it plays", () => {
+    const occupants = new Map([["RUNNER3", { ref: "fp", unlimited: true }]]);
+    const rows = formatCharacters(roster, charactersFrom(runs, roster), occupants, new Set(["fp"]), liveCharactersFrom(runs, roster));
+    expect(rows).toEqual([`character fp: head ${a3.runId} on RUNNER3 as Thalvorn — in flight`]);
+  });
+
+  test("once it stops, the row is the tick's head again", () => {
+    const stopped = [a2, { ...a3, live: false, terminationReason: "idle" as const, endedAt: NOW }];
+    const rows = formatCharacters(roster, charactersFrom(stopped, roster), new Map(), new Set(), liveCharactersFrom(stopped, roster));
+    expect(rows).toEqual([`character fp: head ${a3.runId} on RUNNER3 as Thalvorn — continuable`]);
   });
 });
 

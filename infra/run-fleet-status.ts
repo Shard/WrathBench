@@ -62,6 +62,7 @@ import {
   retryNumbers,
   type Character,
   charactersFrom,
+  liveCharactersFrom,
   characterStanding,
   TICK_MS,
   unownedLiveRuns,
@@ -128,16 +129,27 @@ import {
   TIERS,
 } from "../runner/src/models";
 
-/** The --status character rows: one per `idle: "unlimited"` ref. Pure. */
+/**
+ * The --status character rows: one per `idle: "unlimited"` ref. Pure.
+ * `live` (`liveCharactersFrom`) names the run a ref is playing now; it is the
+ * row's head while it plays, since `characters` (`charactersFrom`, the tick's
+ * "continue from") leaves a live run out and would name its predecessor.
+ */
 export function formatCharacters(
   roster: Record<string, FleetRosterEntry>,
   characters: ReadonlyMap<string, Character>,
   occupants: ReadonlyMap<string, Occupant>,
   running: ReadonlySet<string>,
+  live: ReadonlyMap<string, Character> = new Map(),
 ): string[] {
   const out: string[] = [];
   for (const [ref, e] of Object.entries(roster)) {
     if (e.idle !== "unlimited") continue;
+    const playing = live.get(ref);
+    if (playing !== undefined) {
+      out.push(`character ${ref}: head ${playing.runId} on ${playing.account} as ${playing.character} — in flight`);
+      continue;
+    }
     const st = characters.get(ref);
     if (st === undefined) {
       out.push(`character ${ref}: no head — ${running.has(ref) ? "first session in flight" : "next pick starts fresh"}`);
@@ -1051,7 +1063,7 @@ export function printStatus(): void {
       occupants.set(r.account.toUpperCase(), { ref: r.job.ref, unlimited: pausesOnDrain(r.job) && config.roster[r.job.ref]?.idle === "unlimited" });
     }
     const characters = charactersFrom(facts, config.roster);
-    for (const line of formatCharacters(config.roster, characters, occupants, running)) console.log(`  ${line}`);
+    for (const line of formatCharacters(config.roster, characters, occupants, running, liveCharactersFrom(facts, config.roster))) console.log(`  ${line}`);
     /*
      * How much of the schedule is left, bounded by whether anything else
      * promotes (`outstandingWork` carries the formula). Computed from the
