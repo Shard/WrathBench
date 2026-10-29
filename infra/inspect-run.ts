@@ -201,14 +201,29 @@ interface StateRow {
   next_level_xp?: number | null;
 }
 
+/**
+ * How long a read waits out a live run's write before SQLITE_BUSY: the
+ * runner's RUN_DB_BUSY_TIMEOUT_MS (runner/src/rundb.ts, which says why),
+ * copied because this file imports nothing outside bun:sqlite and node:*.
+ */
+export const RUN_DB_BUSY_TIMEOUT_MS = 5000;
+
 function openDb(dir: string): Database | null {
   const path = join(dir, "run.sqlite");
   if (!existsSync(path)) return null;
+  let db: Database;
   try {
-    return new Database(path, { readonly: true });
+    db = new Database(path, { readonly: true });
   } catch {
     return null;
   }
+  try {
+    db.exec(`PRAGMA busy_timeout = ${RUN_DB_BUSY_TIMEOUT_MS}`);
+  } catch {
+    db.close();
+    return null;
+  }
+  return db;
 }
 
 function hasTable(db: Database, name: string): boolean {
