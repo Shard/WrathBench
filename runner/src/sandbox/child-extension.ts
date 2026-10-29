@@ -17,6 +17,7 @@ import type { EventSummary, SandboxChildApi, SandboxChildExtension } from "@wrat
 import { toJsonSafe } from "@wrathbench/mcp/jsonsafe";
 import {
   CONTEXT_POLICY,
+  emoteShown,
   foldUiOpenWindows,
   PLAYER_FLAGS_GHOST,
   SPELL_LOG_OPCODES,
@@ -265,8 +266,10 @@ export function benchmarkChildExtension({ client, summarize, forwardClientCache 
    * `spellLogNote` and `spellLogShown`): the combat-log sentence, named from
    * what is in view at that moment — a mob killed a second later has left
    * `nearby` by the time a turn renders the window — and whether the line is a
-   * bystander's, which the event window leaves out. Keyed by the event object
-   * itself, which the SDK's buffer and every listener share.
+   * bystander's, which the event window leaves out. A unit's emote is marked
+   * the same way (`emoteShown`), from whose it is and what it targets as it
+   * arrives. Keyed by the event object itself, which the SDK's buffer and
+   * every listener share.
    */
   const spellLogMarks = new WeakMap<StreamEvent, { note: string | undefined; bystander: boolean }>();
 
@@ -281,6 +284,16 @@ export function benchmarkChildExtension({ client, summarize, forwardClientCache 
   }
 
   client.events.onAny((event) => {
+    if (event.opcode === "SMSG_EMOTE") {
+      const guid = (event.data as { guid?: unknown } | undefined)?.guid;
+      const unit = guid === undefined || guid === null ? undefined : client.state.nearby.get(String(guid));
+      const emoter =
+        unit === undefined
+          ? undefined
+          : { objectType: unit.objectType?.value, ownerGuid: unit.ownerGuid?.value, targetGuid: unit.targetGuid?.value };
+      if (!emoteShown(event.opcode, event.data, client.state.self.guid, emoter)) spellLogMarks.set(event, { note: undefined, bystander: true });
+      return;
+    }
     if (!SPELL_LOG_OPCODES.has(event.opcode)) return;
     const me = client.state.self.guid;
     const party = new Set((client.state.group()?.members ?? []).map((m) => m.guid));
@@ -353,7 +366,7 @@ export function benchmarkChildExtension({ client, summarize, forwardClientCache 
       contextAmbient++;
       return;
     }
-    // A bystander's spell combat-log line: off the window, and not ambient.
+    // A bystander's spell combat-log line or emote: off the window, and not ambient.
     if (spellLogMarks.get(event)?.bystander === true) return;
     contextSignals++;
     contextRing.push({ event, ambientBefore: contextAmbient });

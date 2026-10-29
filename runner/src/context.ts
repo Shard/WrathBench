@@ -52,7 +52,7 @@ import type { EventSummary, MoveIntentNote } from "@wrathbench/mcp";
 import type { HarnessNotice } from "./sandbox/host";
 
 export const CONTEXT_POLICY = {
-  /** Last N non-ambient events included in every turn's context (see EVENT_WINDOW_EXCLUDE; bystanders' spell lines are left out too, `spellLogShown`). */
+  /** Last N non-ambient events included in every turn's context (see EVENT_WINDOW_EXCLUDE; bystanders' spell lines and creature emotes are left out too, `spellLogShown`, `emoteShown`). */
   EVENT_WINDOW: 64,
   /** Max chars of one event's data rendering. */
   EVENT_DATA_CHARS: 220,
@@ -1362,9 +1362,9 @@ export function formatEventLine(e: EventSummary): string {
  * The events a turn's context renders and how many ambient events the span
  * they cover held: ambient opcodes excluded, then the last EVENT_WINDOW of what
  * remains. Pure; the loop logs exactly this as the turn's `events_served`.
- * A spell combat-log line marked `bystander` (`spellLogShown`) is left out
- * too, and not counted as ambient: it is not movement and the cache does not
- * fold it.
+ * A spell combat-log line or a creature's emote marked `bystander`
+ * (`spellLogShown`, `emoteShown`) is left out too, and not counted as
+ * ambient: it is not movement and the cache does not fold it.
  */
 export function eventWindow(events: readonly EventSummary[], folded = 0): { window: EventSummary[]; folded: number } {
   const ambient = events.filter((e) => CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(e.opcode)).length;
@@ -1373,6 +1373,44 @@ export function eventWindow(events: readonly EventSummary[], folded = 0): { wind
     window: eligible.slice(-CONTEXT_POLICY.EVENT_WINDOW),
     folded: folded + ambient,
   };
+}
+
+// ------------------------------------------------------------ unit emotes
+
+/** What `emoteShown` reads about the emoting unit from the state cache, when it is in view. */
+export interface EmoterLike {
+  objectType?: string | undefined;
+  ownerGuid?: string | undefined;
+  targetGuid?: string | undefined;
+}
+
+/**
+ * Whether a unit's one-shot emote (`SMSG_EMOTE`, a guid and an animation id)
+ * belongs in the event window. The core sends one to every client in range,
+ * and a town's NPCs play theirs over and over, so like a bystander's spell
+ * line it is left out of the window, not counted as ambient. Kept: our own,
+ * any player's (a player's guid has a zero high part, or its create block
+ * says `player`), our pet's, and a unit's whose target is us. Left out: every
+ * other creature's. Every other opcode is shown.
+ */
+export function emoteShown(opcode: string, data: unknown, selfGuid: string | undefined, emoter: EmoterLike | undefined): boolean {
+  if (opcode !== "SMSG_EMOTE") return true;
+  const guid = (data as { guid?: unknown } | null | undefined)?.guid;
+  if (guid === undefined || guid === null) return true;
+  const g = String(guid);
+  if (selfGuid !== undefined && g === selfGuid) return true;
+  if (emoter?.objectType === "player" || isPlayerGuid(g)) return true;
+  if (selfGuid === undefined) return false;
+  return emoter?.ownerGuid === selfGuid || emoter?.targetGuid === selfGuid;
+}
+
+/** A 3.3.5a player guid: the high 16 bits are zero. */
+function isPlayerGuid(guid: string): boolean {
+  try {
+    return BigInt(guid) >> 48n === 0n;
+  } catch {
+    return false;
+  }
 }
 
 // ------------------------------------------------------ spell combat log
