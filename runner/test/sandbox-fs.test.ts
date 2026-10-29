@@ -17,6 +17,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { join, resolve } from "node:path";
 import { SandboxHost, sandboxChildEnv } from "../src/sandbox/host";
 import { Scratchpad } from "@wrathbench/mcp";
+import { API_MD_PATH } from "@wrathbench/sdk";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -58,7 +59,7 @@ describe("sandbox filesystem confinement", () => {
     // file reads — the ruleset admits sdk/, so a refusal below is not "all
     // reads fail".
     expect((await host.evalSnippet("typeof sdk.createSession")).value).toBe('"function"');
-    expect((await host.evalSnippet(readCode(join(REPO_ROOT, "sdk", "API.md")))).value).toBe('"READ"');
+    expect((await host.evalSnippet(readCode(API_MD_PATH))).value).toBe('"READ"');
 
     // Repo root: tracked file present on every clone, outside the allowlist.
     expect((await host.evalSnippet(readCode(join(REPO_ROOT, "LICENSE")))).value).toBe('"EACCES"');
