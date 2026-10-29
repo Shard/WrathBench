@@ -175,6 +175,17 @@ COPY --chown=$USER_ID:$GROUP_ID \
      --chmod=755 \
      deps/azerothcore/apps/docker/entrypoint.sh /azerothcore/entrypoint.sh
 
+# The stock entrypoint copies the reference confs with `cp -n` twice, and the
+# coreutils of this base (9.4) prints "cp: warning: behavior of -n is
+# non-portable ..." for each, so every worldserver boot logged the same
+# warning twice. `--update=none` is the spelling that coreutils asks for and
+# means the same here: never overwrite, skip silently. The check fails the
+# build if the pinned entrypoint's two copies ever read differently, rather
+# than quietly shipping it unpatched.
+RUN sed -i -e 's/^cp -rnv /cp -rv --update=none /' -e 's/^\( *\)cp -vn /\1cp -v --update=none /' /azerothcore/entrypoint.sh \
+    && [ "$(grep -c -- '--update=none' /azerothcore/entrypoint.sh)" = 2 ] \
+    && ! grep -qE '(^|[[:space:]])cp -[a-z]*n' /azerothcore/entrypoint.sh
+
 USER $DOCKER_USER
 
 ENTRYPOINT ["/usr/bin/env", "bash", "/azerothcore/entrypoint.sh"]

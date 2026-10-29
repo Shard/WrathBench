@@ -46,6 +46,7 @@ import { accountFixtureName } from "./lib/fixture";
 import { failOnce } from "./lib/fail";
 import { moduleBase, moduleWsBase } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
+import { deleteThroughLinger, moveRetryReason, RETRY_MARK } from "./lib/transient";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -212,33 +213,40 @@ async function waitForUnit(entry: number, timeoutMs: number, what: string): Prom
 }
 
 // One move_to, one verdict. The legs here are short (under 60y) and on the
-// abbey's own mesh, so anything but `arrived` is a fault, not a detour.
+// abbey's own mesh, so anything but `arrived` is a fault, not a detour — with
+// one exception, walked once more and announced: an `interrupted` of a
+// character that is alive and still in its session (lib/transient.ts,
+// `moveRetryReason`). A second one fails like any other verdict.
 async function moveTo(target: Vec, what: string): Promise<void> {
-  const r = await action("move_to", target);
-  const res = await waitFor(
-    (e) => e.opcode === "WB_MOVE_RESULT" && e.data?.moveId === r.moveId,
-    WALK_TIMEOUT_MS,
-    `WB_MOVE_RESULT for ${what}`,
-  );
-  if (res.data.status !== "arrived") fail(`move to ${what} ended ${res.data.status}`);
+  for (let attempt = 0; ; attempt++) {
+    const r = await action("move_to", target);
+    const res = await waitFor(
+      (e) => e.opcode === "WB_MOVE_RESULT" && e.data?.moveId === r.moveId,
+      WALK_TIMEOUT_MS,
+      `WB_MOVE_RESULT for ${what}`,
+    );
+    if (res.data.status === "arrived") return;
+    const pos = res.data.pos ? ` at (${res.data.pos.x.toFixed(1)}, ${res.data.pos.y.toFixed(1)}, ${res.data.pos.z.toFixed(1)})` : "";
+    const why = attempt === 0 ? moveRetryReason(res.data, { alive: units.get(self.guid)?.dead !== true, inSession: true, target }) : undefined;
+    if (why === undefined) fail(`move to ${what} ended ${res.data.status}${pos}${attempt > 0 ? " after one retry" : ""}: ${JSON.stringify(res.data)}`);
+    log(`${RETRY_MARK} move to ${what} ${why}`);
+  }
 }
 
+// Last run's character, through the real CMSG_CHAR_DELETE path. A rerun
+// within about a minute of the last run finds that character still in the
+// core's post-logout linger, which the module answers with 504 timeout; that,
+// and only that, is waited out (lib/transient.ts, `deleteThroughLinger`).
 async function deletePreviousCharacter(): Promise<void> {
-  for (let attempt = 0; attempt < 4; ++attempt) {
-    const r = await req("POST", "/character-delete", { token: smokeSubToken(TOKEN, `del${attempt}`), account: ACCOUNT, character: CHARACTER });
-    if (r.json?.deleted === true) {
-      log(`deleted last run's ${CHARACTER}: ${JSON.stringify(r.json)}`);
-      return;
-    }
-    if (r.json?.error === "character_not_found") {
-      log(`no previous ${CHARACTER} to delete (first run on this realm)`);
-      return;
-    }
-    log(`character-delete attempt ${attempt}: ${r.status} ${JSON.stringify(r.json)}`);
-    if (r.status !== 504) break;
-    await Bun.sleep(2000);
-  }
-  fail(`could not delete last run's ${CHARACTER}`);
+  const r = await deleteThroughLinger({
+    // Every attempt under its own recorded sub-token, so `inspect audit --smoke` finds it.
+    post: (attempt) => req("POST", "/character-delete", { token: smokeSubToken(TOKEN, `del${attempt}`), account: ACCOUNT, character: CHARACTER }),
+    character: CHARACTER,
+    log,
+  });
+  if (!r.ok) fail(`could not delete last run's ${CHARACTER}: ${r.why}`);
+  const waited = r.retries > 0 ? ` after ${r.retries} retr${r.retries === 1 ? "y" : "ies"} over ${Math.round(r.waitedMs / 1000)}s` : "";
+  log(r.deleted ? `deleted last run's ${CHARACTER}${waited}` : `no previous ${CHARACTER} to delete (first run on this realm)`);
 }
 
 async function main() {
@@ -250,7 +258,7 @@ async function main() {
   //    `character_not_found` is the first run on a fresh realm (nothing to
   //    delete yet). A 504 is the previous character still inside the core's
   //    post-disconnect linger — only possible when the smoke is re-run within
-  //    a minute of a failure — and is retried past that window.
+  //    a minute of its last run — and is waited out, announced, past that window.
   await deletePreviousCharacter();
 
   const ws = await openEvents();

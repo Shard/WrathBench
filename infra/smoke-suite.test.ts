@@ -9,6 +9,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "./temp-dirs";
 import { chainsOf, fleetHeld, formatSummary, refusals, runSuite, select, spawnMember, SUITE_MEMBERS, type SuiteMember } from "./smoke/lib/suite";
+import { RETRY_MARK } from "./smoke/lib/transient";
 
 const m = (name: string, account: string, also?: Record<string, string>): SuiteMember => ({ name, account, ...(also ? { also } : {}) });
 
@@ -110,6 +111,19 @@ describe("formatSummary", () => {
     expect(lines[1]).toMatch(/^FAIL {2}quest-accept-status +SMOKE3 +4\.0s {2}exit 1: \[qaccept\] FAIL: timed out$/);
     expect(lines[2]).toBe("suite: 2 smoke(s), 1 passed, 1 failed, 11.4s wall");
   });
+
+  test("a pass that needed a retry never reads as a clean pass", () => {
+    const lines = formatSummary(
+      [
+        { member: m("kill-credit", "SMOKE2"), ok: true, ms: 11_300, tail: "PASS: …", retries: [] },
+        { member: m("quest-accept-status", "SMOKE3"), ok: true, ms: 27_000, tail: "PASS: …", retries: ["move to Janos Hammerknuckle ended interrupted …"] },
+      ],
+      27_100,
+    );
+    expect(lines[0]).toMatch(/^PASS {2}kill-credit +SMOKE2 +11\.3s$/);
+    expect(lines[1]).toMatch(/^PASS {2}quest-accept-status +SMOKE3 +27\.0s {2}1 retry: move to Janos Hammerknuckle ended interrupted …$/);
+    expect(lines[2]).toBe("suite: 2 smoke(s), 2 passed (1 after a retry), 0 failed, 27.1s wall");
+  });
 });
 
 describe("select", () => {
@@ -141,6 +155,14 @@ describe("spawnMember: a real child, its output attributed", () => {
     expect(out).toContain("[bad] [bad] FAIL: it broke\n");
     expect(results[0]).toMatchObject({ ok: true, tail: "PASS: good" });
     expect(results[1]).toMatchObject({ ok: false, tail: "exit 1: [bad] FAIL: it broke" });
+  });
+
+  test("the lines a smoke announced a retry on come back with its verdict", async () => {
+    const dir = smokes({
+      flaky: `console.log("[flaky] ${RETRY_MARK} move to X ended interrupted; walking it once more"); console.log("PASS: flaky");`,
+    });
+    const r = await spawnMember(m("flaky", "SMOKE2"), { dir, cwd: dir, timeoutMs: 10_000, out: { stdout: () => {}, stderr: () => {} } });
+    expect(r).toMatchObject({ ok: true, tail: "PASS: flaky", retries: ["move to X ended interrupted; walking it once more"] });
   });
 
   test("a smoke that outlives its timeout is killed and failed, naming the timeout", async () => {

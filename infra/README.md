@@ -238,7 +238,13 @@ overwritten by that session's save. The tool polls `characters.online` (up to
 *late save has landed*, not merely that the session was asked to end — the
 module's `DELETE /session` acknowledges as soon as the logout is queued, and
 `LogoutPlayer` runs on a later world tick (with the core's own logout timer in
-front of it).
+front of it). A character created a moment ago is the exception: the create
+INSERT already reads `online = 0` with a `logout_time`, and its first
+session's `online = 1` is an async write, so the tool also waits for the
+core's `AT_LOGIN_FIRST` bit in `at_login` to clear. The first login clears it
+in memory only and the logout save writes it out, so the bit is how the tool
+tells the session's save from the create (`savedOut` in `fixtures/apply.ts`).
+It reads `at_login` and never writes it.
 
 **No items.** `item_instance` guids come from an in-memory sequence generator
 seeded once at worldserver boot from `SELECT MAX(guid) FROM item_instance`, so
