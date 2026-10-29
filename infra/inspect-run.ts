@@ -661,7 +661,11 @@ export interface ReadSpec {
   refusals?: boolean;
 }
 
-/** One trajectory line as the store returns it: `r` empty when not fetched, `h`/`p`/`q` the server's cuts. */
+/**
+ * One trajectory line as the store returns it: `r` empty when not fetched,
+ * `h`/`p`/`q` the server's cuts, and `pn` how many pad headers a request's
+ * line holds (`PAD_HEADER_PATTERN`).
+ */
 export interface StoreRow {
   l: number;
   ts: number;
@@ -672,6 +676,7 @@ export interface StoreRow {
   r: string;
   h: string;
   p: string;
+  pn: number;
   q: string;
 }
 
@@ -744,14 +749,23 @@ function windowSql(w: Window, col: string): string[] {
 export const PAD_HEADER_RAW = "\\n\\n[scratchpad";
 
 /**
+ * A pad header `padOfSection` could accept, as it sits in a raw line (RE2 and
+ * JavaScript alike): no label, or a `padSizeLabel` one. Any other line that
+ * starts like a header, such as the old cut's `[scratchpad truncated at N
+ * chars]` marker that every pad of an older run ends with, can never be the
+ * section's, so the server's cut skips it.
+ */
+export const PAD_HEADER_PATTERN = String.raw`\\n\\n\[scratchpad(?: [0-9]+\.[0-9]k/[0-9]+k(?:, over the cap)?)?\]\\n`;
+
+/**
  * One page of a run's lines. Both tables share the file's line numbers, each
  * line in exactly one, so a range of numbers is a range of the file and the
  * primary key (run_id, line_no) prunes it. The server withholds every line a
- * view would not parse, and cuts out the pieces it would: a request's pad
- * section from its last header to the end of the line (`length − p − 13` is
- * the header's first byte, p its position in the reversed line, and the
- * header is ASCII so the cut never splits a character), and the text around a
- * result's refusal.
+ * view would not parse, and cuts out the pieces it would: a request's line
+ * from its last pad header (`PAD_HEADER_PATTERN`) to its end, with how many
+ * such headers it holds, and the text around a result's refusal. The cut's
+ * start is `length − p − m + 2`, p the header's position in the reversed line
+ * and m its length; a header is ASCII, so the cut never splits a character.
  */
 export function rowsSql(runId: string, spec: ReadSpec, w: Window, from: number, to: number): string {
   const branches: string[] = [];
@@ -763,8 +777,11 @@ export function rowsSql(runId: string, spec: ReadSpec, w: Window, from: number, 
     const want = kinds === null ? "1" : `multiIf(${kinds.map(([k, s]) => `kind = ${sqlStr(k)}, ${ruleSql(s.raw, turns)}`).join(", ")}, 0)`;
     const raw = `if(kind IN (${sqlList(SIZE_ONLY)}) OR length(raw) > ${RAW_CAP_BYTES} OR NOT ${want}, '', raw)`;
     const head = spec.heads === true && turns ? "if(kind = 'request', substringUTF8(raw, 1, 400), '')" : "''";
-    const at = `position(reverse(raw), reverse(${sqlStr(PAD_HEADER_RAW)}))`;
-    const pad = spec.pads === true && turns ? `if(kind = 'request' AND ${at} > 0, substring(raw, length(raw) - ${at} - ${PAD_HEADER_RAW.length - 2}), '')` : "''";
+    const headers = `extractAll(raw, ${sqlStr(PAD_HEADER_PATTERN)})`;
+    const last = `arrayElement(${headers}, -1)`;
+    const pads = spec.pads === true && turns;
+    const pad = pads ? `if(kind = 'request' AND length(${headers}) > 0, substring(raw, length(raw) - position(reverse(raw), reverse(${last})) - length(${last}) + 2), '')` : "''";
+    const padCount = pads ? `if(kind = 'request', length(${headers}), 0)` : "0";
     const refusal = `positionUTF8(raw, ${sqlStr(PAD_REFUSED)})`;
     const near =
       spec.refusals === true && turns
@@ -772,7 +789,7 @@ export function rowsSql(runId: string, spec: ReadSpec, w: Window, from: number, 
         : "''";
     branches.push(
       `SELECT line_no AS l, ts, kind AS k, length(raw) AS b, ${turns ? "tool_name" : "''"} AS n, ${turns ? "is_error" : "CAST(NULL AS Nullable(UInt8))"} AS e, ` +
-        `${raw} AS r, ${head} AS h, ${pad} AS p, ${near} AS q FROM ${turns ? "turns" : "events"} WHERE ${where.join(" AND ")}`,
+        `${raw} AS r, ${head} AS h, ${pad} AS p, toUInt32(${padCount}) AS pn, ${near} AS q FROM ${turns ? "turns" : "events"} WHERE ${where.join(" AND ")}`,
     );
   }
   return `SELECT * FROM (${branches.join(" UNION ALL ")}) ORDER BY l`;
@@ -845,12 +862,16 @@ const STATE_COLUMNS = "run_id, ts, level, xp, money, quests_completed, turn, zon
 /** How long one query may take, server-side and here. A query that needs longer is a bug in the query. */
 export const CLICKHOUSE_QUERY_SECONDS = 60;
 
+/** Half the server profile's per-query cap (infra/clickhouse/users.d/wrathbench-profile.xml): inspect is never the biggest query on the server. */
+export const CLICKHOUSE_QUERY_MEMORY = 256 << 20;
+
 /**
  * Every query's settings. `readonly=2` refuses a write whatever the user may
  * do, and still lets these settings be set. `log_comment` names the reader in
  * `system.query_log`, which is where a memory incident is traced first
- * (docs/RUNBOOK.md); the per-query memory and thread bounds are the server
- * profile's (infra/clickhouse/users.d/wrathbench-profile.xml).
+ * (docs/RUNBOOK.md). A page's lines are megabytes apiece where it holds
+ * requests, and every cut of one is a copy, so blocks are kept to a few
+ * hundred rows: at the default a page of pad cuts reached 380 MiB.
  */
 export const CLICKHOUSE_SETTINGS: Readonly<Record<string, string>> = {
   default_format: "JSON",
@@ -858,6 +879,8 @@ export const CLICKHOUSE_SETTINGS: Readonly<Record<string, string>> = {
   output_format_json_quote_64bit_integers: "0",
   readonly: "2",
   max_execution_time: String(CLICKHOUSE_QUERY_SECONDS),
+  max_memory_usage: String(CLICKHOUSE_QUERY_MEMORY),
+  max_block_size: "512",
   log_comment: "wb inspect",
 };
 
@@ -915,8 +938,11 @@ export function clickhouseStore(cfg: ClickhouseConfig, fetchImpl: (url: URL, ini
     async raws(id, lines) {
       const out = new Map<number, string>();
       if (lines.length === 0) return out;
-      const sql = `SELECT line_no AS l, any(raw) AS r FROM turns WHERE run_id = ${sqlStr(id)} AND line_no IN (${lines.map((l) => Math.trunc(l)).join(", ")}) GROUP BY line_no`;
-      for (const r of await rows<{ l: number; r: string }>(sql)) out.set(r.l, r.r);
+      // A few at a time and never aggregated: each is a whole request line.
+      for (let i = 0; i < lines.length; i += RAWS_PER_QUERY) {
+        const some = lines.slice(i, i + RAWS_PER_QUERY).map((l) => Math.trunc(l));
+        for (const r of await rows<{ l: number; r: string }>(`SELECT line_no AS l, raw AS r FROM turns WHERE run_id = ${sqlStr(id)} AND line_no IN (${some.join(", ")})`)) out.set(r.l, r.r);
+      }
       return out;
     },
   };
@@ -941,13 +967,25 @@ function storeRec(row: StoreRow, pad: string | null): Rec {
   };
 }
 
+/** Whole request lines a store read may fetch again before it stops and says so; and how many go in one query. */
+export const PAD_REREADS = 32;
+const RAWS_PER_QUERY = 8;
+
+/** A store read's whole-line re-reads: how many are left, and how many requests went without one. */
+export interface Rereads {
+  left: number;
+  skipped: number;
+}
+
 /**
  * One page as records, oldest first: deduplicated by line, and each request's
- * pad placed. A pad the cut from the last header cannot place (a pad that
- * quotes a header of its own) is read again off the whole line, as the file's
- * reader reads it.
+ * pad placed. When the cut from the last pad header does not parse and the
+ * line holds an earlier header, the section may be that one (a pad that quotes
+ * a header of its own), so the line is read again whole, as the file's reader
+ * reads it; at most `PAD_REREADS` of them, after which a pad is counted as
+ * skipped rather than fetched.
  */
-async function storeRecs(store: InspectStore, runId: string, spec: ReadSpec, rows: readonly StoreRow[]): Promise<Rec[]> {
+async function storeRecs(store: InspectStore, runId: string, spec: ReadSpec, rows: readonly StoreRow[], rereads: Rereads): Promise<Rec[]> {
   const byLine = new Map<number, StoreRow>();
   for (const r of rows) if (!byLine.has(r.l)) byLine.set(r.l, r);
   const sorted = [...byLine.values()].sort((x, y) => x.l - y.l);
@@ -958,9 +996,11 @@ async function storeRecs(store: InspectStore, runId: string, spec: ReadSpec, row
       if (r.k !== "request" || r.p === "") continue;
       const b = Buffer.from(r.p);
       const pad = padOfRequest(b, 0, b.length);
-      if (pad === null) again.push(r.l);
-      else pads.set(r.l, pad);
+      if (pad !== null) pads.set(r.l, pad);
+      else if (r.pn > 1 && rereads.left > again.length) again.push(r.l);
+      else if (r.pn > 1) rereads.skipped++;
     }
+    rereads.left -= again.length;
     const whole = await store.raws(runId, again);
     for (const l of again) {
       const raw = whole.get(l);
@@ -976,14 +1016,23 @@ export const FIRST_PAGE_LINES = 1_000;
 export const MAX_PAGE_LINES = 20_000;
 
 /** The run's records in [bounds.lo, bounds.hi] that the spec wants, page by page in either direction; `fn` returns true to stop. */
-async function storeRead(store: InspectStore, runId: string, spec: ReadSpec, w: Window, bounds: { lo: number; hi: number } | null, forward: boolean, fn: RecFn): Promise<void> {
+async function storeRead(
+  store: InspectStore,
+  runId: string,
+  spec: ReadSpec,
+  w: Window,
+  bounds: { lo: number; hi: number } | null,
+  forward: boolean,
+  fn: RecFn,
+  rereads: Rereads = { left: PAD_REREADS, skipped: 0 },
+): Promise<void> {
   if (bounds === null) return;
   let lo = bounds.lo;
   let hi = bounds.hi + 1;
   for (let size = FIRST_PAGE_LINES; lo < hi; size = Math.min(MAX_PAGE_LINES, size * 2)) {
     const a = forward ? lo : Math.max(lo, hi - size);
     const b = forward ? Math.min(hi, lo + size) : hi;
-    const recs = await storeRecs(store, runId, spec, await store.rows(runId, spec, w, a, b));
+    const recs = await storeRecs(store, runId, spec, await store.rows(runId, spec, w, a, b), rereads);
     if (!forward) recs.reverse();
     for (const r of recs) if (fn(r) === true) return;
     if (forward) lo = b;
@@ -2173,9 +2222,9 @@ const PAD_SPEC: ReadSpec = {
   refusals: true,
 };
 
-async function storePad(store: InspectStore, runId: string, ext: Extent, w: Window): Promise<PadScan> {
+async function storePad(store: InspectStore, runId: string, ext: Extent, w: Window, rereads: Rereads): Promise<PadScan> {
   const r = padReducer(w);
-  await storeRead(store, runId, PAD_SPEC, w, ext.window, true, r.fn);
+  await storeRead(store, runId, PAD_SPEC, w, ext.window, true, r.fn, rereads);
   r.p.toolCalls = ext.kinds.get("tool_call") ?? 0;
   ({ first: r.p.first, last: r.p.last } = spanFrom(ext));
   return r.p;
@@ -2183,11 +2232,17 @@ async function storePad(store: InspectStore, runId: string, ext: Extent, w: Wind
 
 const PAD_BUCKETS = 24;
 
+/** The line a store read prints when it stopped re-reading whole requests. */
+function unplaced(n: number): string {
+  return `uncertain ${n} request(s) hold more than one pad header and were not read again whole past the first ${PAD_REREADS}, so their pad is missing here; --files reads them`;
+}
+
 export async function inspectPad(runId: string, opts: Ctx & Window & { last: number }, out: Out): Promise<number> {
   const run = trajectoryOf(runId, opts, out);
   if (run === null) return 1;
   const via = await viaFor(opts, runId, run.dir, opts);
-  const p = via.store !== null ? await storePad(via.store, runId, via.ext, opts) : scanPad(run.path, opts);
+  const rereads: Rereads = { left: PAD_REREADS, skipped: 0 };
+  const p = via.store !== null ? await storePad(via.store, runId, via.ext, opts, rereads) : scanPad(run.path, opts);
   const say = (text: string): void => out(cap(strike(text, run.token), opts.width));
   const span = p.first === null ? "no records" : `${clock(p.first)} to ${clock(p.last!)}`;
   say(`${runId}: the scratchpad, ${windowPhrase(opts) || "whole run"} (${span}), UTC`);
@@ -2195,6 +2250,7 @@ export async function inspectPad(runId: string, opts: Ctx & Window & { last: num
   const driver = driverName(p.adapter, run.dir, runId, via, opts.now);
   const perRequest = p.requestsWithPad > 0 ? ` (${(p.toolCalls / p.requestsWithPad).toFixed(1)} per request)` : "";
   say(`sizes     driver ${driver} · the pad's text on ${p.requestsWithPad} of ${p.requests} request(s) · ${p.toolCalls} tool call(s)${perRequest}`);
+  if (rereads.skipped > 0) say(unplaced(rereads.skipped));
   // Only a request sizes a snippet's write, so how many went unsized is the
   // run's own measure of whether its driver gives a size per turn.
   const snippetWrites = p.writes.filter((x) => x.how.startsWith("snippet") && x.refused === null);
@@ -2364,14 +2420,16 @@ export async function inspectPadAt(runId: string, opts: Ctx & { at: number }, ou
   const say = (text: string): void => out(cap(strike(text, run.token), opts.width));
   const upTo: Window = { since: null, until: opts.at };
   const via = await viaFor(opts, runId, run.dir, upTo);
+  const rereads: Rereads = { left: PAD_REREADS, skipped: 0 };
   let p: PadAt | null;
   if (via.store !== null) {
     const r = padAtReducer(opts.at);
-    await storeRead(via.store, runId, PAD_AT_SPEC, upTo, via.ext.window, false, r.fn);
+    await storeRead(via.store, runId, PAD_AT_SPEC, upTo, via.ext.window, false, r.fn, rereads);
     p = r.done();
   } else p = padAt(run.path, opts.at);
   if (p === null) {
     say(`${runId}: no request and no write_scratchpad at or before ${iso(opts.at)} records the pad`);
+    if (rereads.skipped > 0) say(unplaced(rereads.skipped));
     say(`source    ${via.line}`);
     return 1;
   }
@@ -2384,6 +2442,7 @@ export async function inspectPadAt(runId: string, opts: Ctx & { at: number }, ou
   }
   if (p.missed > 0) say(`uncertain ${p.missed} edit(s) did not find their text in the rebuild`);
   if (p.recorded !== null && p.recorded !== p.text.length) say(`uncertain the rebuild is ${p.text.length} chars; the newest write's result said ${p.recorded}`);
+  if (rereads.skipped > 0) say(unplaced(rereads.skipped));
   say(`source    ${via.line}`);
   say("---");
   for (const line of p.text.split("\n")) say(line);

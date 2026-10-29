@@ -19,7 +19,7 @@ import {
   type ExtentRow,
   extentOf,
   type InspectStore,
-  PAD_HEADER_RAW,
+  PAD_HEADER_PATTERN,
   PAD_REFUSED,
   RAW_CAP_BYTES,
   type ReadSpec,
@@ -180,7 +180,8 @@ export async function memoryStore(runsDir: string): Promise<MemoryStore> {
         if (!holds(want.row ?? "all", l)) continue;
         const bytes = Buffer.byteLength(l.raw);
         const request = l.turns && l.kind === "request";
-        const at = l.raw.lastIndexOf(PAD_HEADER_RAW);
+        const headers = request ? [...l.raw.matchAll(new RegExp(PAD_HEADER_PATTERN, "g"))] : [];
+        const at = headers.length === 0 ? -1 : headers[headers.length - 1]!.index;
         const refusal = l.raw.indexOf(PAD_REFUSED);
         const refusalAt = Array.from(l.raw.slice(0, Math.max(0, refusal))).length + 1;
         out.push({
@@ -193,6 +194,7 @@ export async function memoryStore(runsDir: string): Promise<MemoryStore> {
           r: SIZE_ONLY.has(l.kind) || bytes > RAW_CAP_BYTES || !holds(want.raw, l) ? "" : l.raw,
           h: spec.heads === true && request ? codePoints(l.raw, 1, 400) : "",
           p: spec.pads === true && request && at >= 0 ? l.raw.slice(at) : "",
+          pn: spec.pads === true ? headers.length : 0,
           q:
             spec.refusals === true && l.turns && (l.kind === "snippet_result" || l.kind === "tool_result") && refusal >= 0
               ? codePoints(l.raw, Math.max(1, refusalAt - 48), 48 + PAD_REFUSED.length + 24)

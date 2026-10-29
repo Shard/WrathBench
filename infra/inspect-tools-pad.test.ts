@@ -422,4 +422,19 @@ describe("ClickHouse and the files give the same tools and pad views", () => {
     const at = ["pad", "run-quote", "--at", String(f.clock)];
     expect(without((await inspect(at, store)).out)).toEqual(without((await inspect(at)).out));
   });
+
+  test("an older run's pad, ended by the old cut's marker, reads as no pad either way, and nothing is read again", async () => {
+    const f = new Fixture(join(RUNS, "run-marker"), "run-marker", "loop");
+    // What an older harness logged: an unlabelled header, then the pad, then the cut's marker.
+    for (let i = 0; i < 3; i++) {
+      f.tick(60_000);
+      f.traj.append({ t: "request", turn: i + 1, adapter: "openai-compatible:test/model", user: `[state]\n\n[scratchpad]\n# plan ${i}\n\n[scratchpad truncated at 32000 chars]` });
+    }
+    f.end();
+    const store = await memoryStore(RUNS);
+    const files = await inspect(["pad", "run-marker"]);
+    expect(files.out.find((l) => l.startsWith("sizes"))).toContain("the pad's text on 0 of 3 request(s)");
+    expect(without((await inspect(["pad", "run-marker"], store)).out)).toEqual(without(files.out));
+    expect(store.wholeLines).toEqual([]);
+  });
 });

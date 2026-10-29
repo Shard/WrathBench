@@ -111,8 +111,10 @@ being behind or down past two minutes, or `the files: <why>` when there is no
 `--files` was given. A fallback reads `trajectory.jsonl`, which a reader
 cannot lock, and opens `run.sqlite` only for a run with no fresh heartbeat; a
 live run's row reads `unread` and its level `not read`. Each query is
-`readonly=2`, capped at 60 s, and tagged `log_comment = 'wb inspect'`, so on a
-Code 241 `system.query_log` shows whether inspect was in flight. The module
+`readonly=2`, capped at 60 s and 256 MiB (half the profile's per-query cap),
+read in blocks of 512 rows, and tagged `log_comment = 'wb inspect'`, so on a
+Code 241 `system.query_log` shows whether inspect was in flight. `pad` reads
+every request's pad section on the server, a few seconds on a 800 MB run. The module
 audit files (`inspect audit`) and the publisher's state (`inspect publisher`)
 are not in ClickHouse and are read where they live, as above.
 
