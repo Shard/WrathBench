@@ -1899,6 +1899,22 @@ export function characterKey(account: string, character: string): string {
  * attempt is the head whatever it managed to write on the way down.
  */
 export function charactersFrom(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>): Map<string, Character> {
+  return newestCharacterRuns(runs, roster, (f) => !f.live);
+}
+
+/**
+ * The character each `idle: "unlimited"` ref is playing RIGHT NOW: its newest
+ * LIVE freeplay run that recorded an account and a character. Pure. The
+ * complement of `charactersFrom`, which leaves a live run out because the tick
+ * asks what the next session continues from; `--status` asks what is in
+ * flight, and naming the predecessor there printed a run that ended a week
+ * before as the head of a character that was playing.
+ */
+export function liveCharactersFrom(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>): Map<string, Character> {
+  return newestCharacterRuns(runs, roster, (f) => f.live);
+}
+
+function newestCharacterRuns(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>, keep: (f: RunFact) => boolean): Map<string, Character> {
   const out = new Map<string, Character>();
   for (const [name, e] of Object.entries(roster)) {
     if (e.idle !== "unlimited") continue;
@@ -1908,7 +1924,7 @@ export function charactersFrom(runs: readonly RunFact[], roster: Record<string, 
           f.episode === "freeplay" &&
           f.account !== null &&
           f.character !== null &&
-          !f.live &&
+          keep(f) &&
           // Put away without a verdict: not a run anything resumes or
           // continues, so not one that may displace the head that is.
           !(f.archived === true && f.terminationReason === null) &&

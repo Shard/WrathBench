@@ -11,6 +11,9 @@ import {
   buildStatements,
   parseArgs,
   renderStatement,
+  savedOut,
+  waitUntilOffline,
+  type CharacterRow,
   type InventoryRow,
 } from "./apply";
 import { SCENARIOS, facing, isScenarioName, taxiMask, validateScenario, type Scenario } from "./scenarios";
@@ -344,5 +347,62 @@ describe("taxiMask", () => {
     expect(buildStatements(217, base).map(renderStatement).join("\n")).not.toContain("character_achievement");
     const withAch = buildStatements(217, { ...base, achievements: [6] }).map(renderStatement).join("\n");
     expect(withAch).toContain("REPLACE INTO character_achievement (guid, achievement, date) VALUES (217, 6, 1262304000)");
+  });
+});
+
+describe("waitUntilOffline: a fresh character's first logout save", () => {
+  const AT_LOGIN_FIRST = 0x20;
+  const row = (over: Partial<CharacterRow>): CharacterRow => ({
+    guid: 1055,
+    level: 1,
+    xp: 0,
+    money: 0,
+    map: 0,
+    zone: 0,
+    position_x: -8949.95,
+    position_y: -132.49,
+    position_z: 83.53,
+    orientation: 0,
+    online: 0,
+    logout_time: 1793246022,
+    at_login: 0,
+    ...over,
+  });
+  /** A stand-in for the characters DB: each snapshot read returns the next row, the last one for good. */
+  const fakeSql = (rows: CharacterRow[]) => {
+    let reads = 0;
+    const sql = { unsafe: async () => [rows[Math.min(reads++, rows.length - 1)]] };
+    return { sql: sql as never, reads: () => reads };
+  };
+
+  test("the create INSERT stamps logout_time, so a fresh character reads offline before its session's save; only AT_LOGIN_FIRST tells them apart", () => {
+    // The row right after POST /session created it and DELETE /session asked it out:
+    // the INSERT's own logout_time, online's async 1 not landed yet.
+    expect(savedOut(row({ at_login: AT_LOGIN_FIRST }))).toBe(false);
+    // The logout save wrote at_login with the first-login bit cleared in memory.
+    expect(savedOut(row({ at_login: 0 }))).toBe(true);
+    // Other at_login flags are the core's business and say nothing about the save.
+    expect(savedOut(row({ at_login: 0x1 }))).toBe(true);
+    expect(savedOut(row({ online: 1 }))).toBe(false);
+    expect(savedOut(row({ logout_time: 0 }))).toBe(false);
+  });
+
+  test("it waits for the logout save of a just-created character instead of fixturing over it", async () => {
+    const fresh = row({ at_login: AT_LOGIN_FIRST });
+    const db = fakeSql([fresh, row({ at_login: AT_LOGIN_FIRST }), row({ logout_time: 1793246055 })]);
+    await waitUntilOffline(db.sql, fresh, 5000);
+    expect(db.reads()).toBe(3);
+  });
+
+  test("a character that never logged in is refused by name once the wait runs out", async () => {
+    const fresh = row({ at_login: AT_LOGIN_FIRST });
+    const db = fakeSql([fresh]);
+    await expect(waitUntilOffline(db.sql, fresh, 600)).rejects.toThrow(/never been saved out of a session/);
+  });
+
+  test("a character already saved out is fixtured at once", async () => {
+    const db = fakeSql([]);
+    await waitUntilOffline(db.sql, row({}), 5000);
+    expect(db.reads()).toBe(0);
   });
 });

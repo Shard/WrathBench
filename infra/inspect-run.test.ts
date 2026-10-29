@@ -28,6 +28,7 @@ import {
   seekTime,
   REDACTED,
   RUN_DB_BUSY_TIMEOUT_MS,
+  scanByRowid,
   verdictOf,
 } from "./inspect-run";
 import { tempDirs } from "./temp-dirs";
@@ -431,5 +432,25 @@ describe("parsing", () => {
     expect(inspect(["trajectory", "run-live", "--last", "0", "--runs-dir", RUNS]).code).toBe(2);
     expect(inspect(["trajectory", "run-live", "--nope"]).code).toBe(2);
     expect(inspect([]).code).toBe(2);
+  });
+});
+
+describe("a whole-table read of a run walks it in rowid windows, one statement each", () => {
+  test("every row comes back, in rowid order, and no statement covers more than a window", () => {
+    const db = new Database(":memory:");
+    db.exec("CREATE TABLE trace (run_id TEXT, ts INTEGER, kind TEXT)");
+    const ins = db.query("INSERT INTO trace (run_id, ts, kind) VALUES ('r', ?, ?)");
+    for (let i = 1; i <= 25; i++) ins.run(i, i % 3 === 0 ? "state" : "pos");
+    const spans: number[] = [];
+    const q = db.query("SELECT ts FROM trace WHERE rowid > ? AND rowid <= ?");
+    const rows = scanByRowid(db, "trace", (lo, hi) => {
+      spans.push(hi - lo);
+      return q.all(lo, hi) as { ts: number }[];
+    }, 10);
+    expect(rows.map((r) => r.ts)).toEqual(Array.from({ length: 25 }, (_, i) => i + 1));
+    expect(spans).toEqual([10, 10, 5]);
+    db.exec("DELETE FROM trace");
+    expect(scanByRowid(db, "trace", () => [1], 10)).toEqual([]);
+    db.close();
   });
 });

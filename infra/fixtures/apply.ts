@@ -470,6 +470,8 @@ export type CharacterRow = {
   orientation: number;
   online: number;
   logout_time: number;
+  /** The core's at-login flags; read for AT_LOGIN_FIRST (`savedOut`), never written. */
+  at_login: number;
 };
 
 const SNAPSHOT_COLUMNS = [
@@ -485,6 +487,7 @@ const SNAPSHOT_COLUMNS = [
   "orientation",
   "online",
   "logout_time",
+  "at_login",
 ] as const;
 
 /** `guid, level, ...` optionally qualified; the join needs it, `online` is ambiguous otherwise. */
@@ -509,46 +512,61 @@ export async function snapshot(sql: SQL, guid: number): Promise<CharacterRow> {
   return row;
 }
 
+/** The core's AT_LOGIN_FIRST: set by the create, cleared by the first login in memory only. */
+const AT_LOGIN_FIRST = 0x20;
+
 /**
- * Wait until the core has finished writing the character out.
+ * Whether the row is the core's logout save, so a fixture written now stands.
  *
- * `characters.online` is set to 0 by Player::SaveToDB on the logout path, so
- * `online = 0` is the signal that the late save has landed, not merely that
- * the session was asked to end. The race this closes: the module's
- * `DELETE /session` acknowledges as soon as it has queued the logout, but
- * LogoutPlayer runs on a later world tick (and the core may hold the player in
- * world for up to 20 seconds of logout timer first). Fixturing in that window
- * writes rows the subsequent save overwrites, and the fixture looks like it
- * silently did nothing.
+ * `online = 0` alone is not that. The create INSERT writes `online = 0` and
+ * stamps `logout_time` with the creation time, and the login's `online = 1` is
+ * an async execute, so right after a smoke created a character and asked it
+ * out the row reads offline and saved while the session's own logout save is
+ * still to come — seconds later, once the core lets go of the player — and
+ * overwrites whatever the fixture wrote (the module-quest smoke's character
+ * back at the start position, on a fresh realm). What tells them apart is
+ * AT_LOGIN_FIRST: the create sets it, the first login clears it in memory
+ * only, and the next save writes it out cleared. Any save made while the
+ * character is in world writes `online = 1`, so an offline row without the
+ * bit is the logout save itself.
+ */
+export function savedOut(r: CharacterRow): boolean {
+  return r.online === 0 && r.logout_time !== 0 && (r.at_login & AT_LOGIN_FIRST) === 0;
+}
+
+/**
+ * Wait until the core has finished writing the character out (`savedOut`).
+ *
+ * The race this closes: the module's `DELETE /session` acknowledges as soon as
+ * it has queued the logout, but LogoutPlayer runs on a later world tick (and
+ * the core may hold the player in world for a while first). Fixturing in that
+ * window writes rows the subsequent save overwrites, and the fixture looks
+ * like it silently did nothing.
  */
 export async function waitUntilOffline(sql: SQL, row: CharacterRow, waitMs: number): Promise<void> {
-  // A character that has never been saved out (`logout_time` 0) is one the
-  // caller just created and logged straight out of. The login's `online = 1`
-  // is an async execute and the logout save an async transaction, so at the
-  // instant the module acknowledged the logout the row can still read
-  // `online = 0` with the save behind it — and a fixture written now is
-  // overwritten by that save (seen live: the mail smoke's character back at
-  // the start position). The save stamps `logout_time`, so wait for it.
-  const settled = (r: CharacterRow) => r.online === 0 && r.logout_time !== 0;
-  if (settled(row)) return;
+  if (savedOut(row)) return;
   const deadline = Date.now() + waitMs;
   log(
     row.online !== 0
       ? `character is online; waiting up to ${Math.round(waitMs / 1000)}s for the logout save to land`
-      : `character has never been saved out; waiting up to ${Math.round(waitMs / 1000)}s for its first logout save`,
+      : `character has never been saved out of a session; waiting up to ${Math.round(waitMs / 1000)}s for its first logout save`,
   );
   for (;;) {
     await Bun.sleep(500);
     const current = await snapshot(sql, row.guid);
-    if (settled(current)) {
+    if (savedOut(current)) {
       log("character is offline");
       return;
     }
     if (Date.now() > deadline) {
       throw new Error(
-        `character ${row.guid} is still online (or unsaved) after ${Math.round(waitMs / 1000)}s. ` +
-          `End the session first (DELETE /session) and retry; fixturing a live character would be ` +
-          `overwritten by that session's logout save.`,
+        current.online !== 0
+          ? `character ${row.guid} is still online after ${Math.round(waitMs / 1000)}s. ` +
+              `End the session first (DELETE /session) and retry; fixturing a live character would be ` +
+              `overwritten by that session's logout save.`
+          : `character ${row.guid} has never been saved out of a session after ${Math.round(waitMs / 1000)}s ` +
+              `(AT_LOGIN_FIRST still set): it was created but never logged in, or its first session has not ` +
+              `logged out. Log it in and out through the module (POST /session, DELETE /session) and retry.`,
       );
     }
   }
