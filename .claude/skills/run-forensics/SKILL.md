@@ -27,7 +27,7 @@ bun wb inspect audit <run-id>                         # counts per kind, op/opco
 bun wb inspect audit <run-id> --op WB_MOVE_RESULT --status target_off_mesh --last 20
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
 bun wb inspect audit <run-id> --since 1h              # a big audit is bisected, not read from the top
-bun wb inspect audit --smoke edge-drop --op move_edge_drop --since 1h   # a smoke's own sessions (smoke-<name>-<uuid>, <name> as bun wb smoke takes it), not a run's
+bun wb inspect audit --smoke edge-drop --op move_edge_drop --since 1h   # a smoke's own sessions (<name> as bun wb smoke takes it, from the smoke-session ledger), not a run's
 bun wb inspect publisher [<run-id>]                   # last flip, versions per run, the secret scan, last passes
 ```
 
@@ -69,11 +69,14 @@ What `tools` and `pad` can say depends on how the driver records:
 - **Never read a whole trajectory line.** `trajectory.jsonl` lines run to
   megabytes (the `request` records, old `messages`). Use `inspect trajectory`,
   which caps every field; if you must script, read the head of each line only.
-- **The audit files are named after the session token.** Never print a file
-  name or a token, never put either in argv, and never `ls` the audit
-  directory. `inspect audit` takes a run id, reads the token from `meta.json`,
-  hands it on stdin to the reducer in the worldserver, and prints only counts
-  or struck records.
+- **The session token is a secret; the audit file names are not, mostly.**
+  The module names a session's files by the token's fingerprint (16 hex of
+  its SHA-256), but files from before stack 0.2.0 are named by the token
+  itself and stay until retention removes them. So never print a token, never
+  put one in argv, and never `ls` the audit directory. `inspect audit` takes a
+  run id, reads the token from `meta.json`, hands it and its fingerprint on
+  stdin to the reducer in the worldserver, and prints only counts or struck
+  records.
 - **Never print `meta.json` whole**: `config.token` is the session token.
 - Do not print env, `.env` or Secrets while investigating.
 
