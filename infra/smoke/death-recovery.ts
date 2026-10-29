@@ -64,7 +64,7 @@ import { failOnce } from "./lib/fail";
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase, moduleWsBase } from "./lib/module";
-import { smokeToken } from "./lib/session";
+import { smokeSubToken, smokeToken } from "./lib/session";
 
 const CHARACTER = probeName("Bd");
 // The resurrection leg's priest: a throwaway on an account no gate or deploy
@@ -101,7 +101,7 @@ async function cleanup() {
   for (let attempt = 0; attempt < 6; attempt++) {
     await Bun.sleep(2000);
     const del = await req("POST", "/character-delete", {
-      token: `${TOKEN}-del${attempt}`,
+      token: smokeSubToken(TOKEN, `del${attempt}`),
       account: ACCOUNT,
       character: CHARACTER,
     }).catch(() => ({ json: undefined }) as any);
@@ -333,7 +333,7 @@ function priestFixture(): FixtureContext {
     contendedDeadlineMs: 5_000,
     contendedRetryMs: 5_000,
     createAndLogout: async () => {
-      const c = await connect({ baseUrl: BASE, token: `${PRIEST_TOKEN}-create`, secret: MODULE_SECRET });
+      const c = await connect({ baseUrl: BASE, token: smokeSubToken(PRIEST_TOKEN, "create"), secret: MODULE_SECRET });
       try {
         await priestLogin(c);
         await c.logout();
@@ -536,7 +536,7 @@ async function main() {
   let deleted: any = null;
   for (let attempt = 0; attempt < 5 && !deleted?.json?.deleted; ++attempt) {
     await Bun.sleep(2000);
-    deleted = await req("POST", "/character-delete", { token: `${TOKEN}-del${attempt}`, account: ACCOUNT, character: CHARACTER });
+    deleted = await req("POST", "/character-delete", { token: smokeSubToken(TOKEN, `del${attempt}`), account: ACCOUNT, character: CHARACTER });
   }
   if (!deleted?.json?.deleted) fail("character-delete never succeeded");
   cleanupStarted = true; // done for real; fail() must not re-run it

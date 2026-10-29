@@ -40,7 +40,7 @@ import { probeName } from "./lib/name";
 import { authHeaders } from "./lib/auth";
 import { failOnce } from "./lib/fail";
 import { moduleBase, moduleWsBase } from "./lib/module";
-import { smokeToken } from "./lib/session";
+import { smokeSubToken, smokeToken } from "./lib/session";
 
 const CHARACTER = probeName("Bp");
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -222,7 +222,7 @@ async function main() {
   let deleted: any = null;
   for (let attempt = 0; attempt < 5 && !deleted?.json?.deleted; ++attempt) {
     await Bun.sleep(2000);
-    deleted = await req("POST", "/character-delete", { token: `${TOKEN}-del${attempt}`, account: ACCOUNT, character: CHARACTER });
+    deleted = await req("POST", "/character-delete", { token: smokeSubToken(TOKEN, `del${attempt}`), account: ACCOUNT, character: CHARACTER });
   }
   if (!deleted?.json?.deleted) fail(`character-delete never succeeded`);
   ws.close();

@@ -13,20 +13,30 @@
  *   bun infra/inspect-audit.ts [--k8s] --smoke <name> …          a smoke's sessions instead of a run's
  *                                                               (every smoke names them smokeToken's way, infra/smoke/lib/session.ts)
  *
- * The files are named after the run's session token, which lives in the run's
+ * The module names a session's files by a fingerprint of its token
+ * (`tokenFingerprint`; wrath-mcp/module/PROTOCOL.md, "Audit log"), and names
+ * them by the token itself before that. The token lives in the run's
  * meta.json on the runs volume, while the files live in the worldserver's
  * logs. So the token is read here from meta.json (the runner pod's on the
- * cluster, `data/runs/` under compose), never printed, and handed on stdin to
- * `infra/inspect-audit.pl` running where the files are: `kubectl exec` into
- * the worldserver with `--k8s` (wb passes it on the cluster), `docker compose
- * exec` into compose's otherwise. The script reduces the log there and prints
- * no name; what comes back is struck again here before it is shown.
+ * cluster, `data/runs/` under compose), never printed, and handed on stdin,
+ * with its fingerprint, to `infra/inspect-audit.pl` running where the files
+ * are: `kubectl exec` into the worldserver with `--k8s` (wb passes it on the
+ * cluster), `docker compose exec` into compose's otherwise. The script reduces
+ * the log there and prints no name; what comes back is struck again here
+ * before it is shown.
+ *
+ * A smoke has no meta.json: `smokeToken` records each session it mints, by
+ * fingerprint, in the smoke-session ledger on the same runs volume
+ * (`infra/smoke/lib/session.ts`), and `--smoke` reads the ledger for the
+ * smoke's fingerprints, plus the smoke's token prefix for files from before
+ * fingerprints.
  */
 
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { tokenFingerprint } from "@wrathbench/mcp/module-auth";
 import { cap, fmtBytes, isValidRunId, iso, MIN_TOKEN_LENGTH, parseSince, REDACTED } from "./inspect-run";
-import { SMOKE_SESSION_NAME } from "./smoke/lib/session";
+import { SMOKE_SESSION_NAME, SMOKE_SESSIONS_NAME, smokeFingerprints } from "./smoke/lib/session";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 const SCRIPT = join(import.meta.dir, "inspect-audit.pl");
@@ -37,7 +47,7 @@ const DEFAULT_WIDTH = 200;
 export const USAGE = `usage: bun infra/inspect-audit.ts [--k8s] <run-id> | --smoke <name> [--op X[,Y…] [--status S] [--last N | --summary]] [--since D] [--until D] [--top N] [--width N]
        offline: --audit-dir DIR [--runs-dir DIR]
 D is 90s, 30m, 2h, 1d, epoch ms or ISO; with no --op, or with --summary, it prints counts
---smoke <name> reads the sessions of bun wb smoke <name> (tokens smoke-<name>-<uuid>), not a run's (no meta.json; --since narrows to one run);
+--smoke <name> reads the sessions of bun wb smoke <name> (from the smoke-session ledger), not a run's (no meta.json; --since narrows to one run);
   a smoke with several sessions is read one session name at a time (group-a, group-b, mail-r, party-entry-party1, death-recovery-priest)`;
 
 export interface AuditArgs {
@@ -185,7 +195,11 @@ export function formatReduced(a: AuditArgs, r: Reduced, token: string | RegExp |
     const matches = a.op === null ? "" : ` · ${r.matched ?? 0} match ${filter}`;
     out.push(`audit ${a.runId}${window}: ${r.files} file(s), ${fmtBytes(r.bytes)}, ${span(r)}${matches}`);
     if (r.files === 0) {
-      out.push(`  no audit files for this ${a.smoke !== null ? "smoke's tokens" : "run's token"}: pruned by the retention window, or never written`);
+      out.push(
+        a.smoke !== null
+          ? "  no audit files for this smoke's sessions: none in the smoke-session ledger, pruned by the retention window, or never written"
+          : "  no audit files for this run's session: pruned by the retention window, or never written",
+      );
       return out;
     }
     const rows = [...r.counts].sort((x, y) => y.n - x.n || x.kind.localeCompare(y.kind) || x.name.localeCompare(y.name));
@@ -256,6 +270,36 @@ async function readMetaText(a: AuditArgs, io: Io): Promise<string | null> {
   return code === 0 && text !== "" ? text : null;
 }
 
+/** The smoke-session ledger's text, from the runs volume wherever it is; empty when there is none. */
+async function readSmokeLedger(a: AuditArgs, io: Io): Promise<string> {
+  if (a.target !== "k8s") {
+    const path = join(a.runsDir, SMOKE_SESSIONS_NAME);
+    return existsSync(path) ? readFileSync(path, "utf8") : "";
+  }
+  const { ns, release } = k8s(io.env);
+  const p = Bun.spawn(
+    ["kubectl", "-n", ns, "exec", `deploy/${release}-runner`, "--", "sh", "-c", `cat "data/runs/${SMOKE_SESSIONS_NAME}" 2>/dev/null || true`],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  const [text] = await Promise.all([new Response(p.stdout).text(), p.exited]);
+  return text;
+}
+
+/**
+ * What the reducer reads on stdin for one run's session: its token, to strike
+ * and for its token-named files from before fingerprints, then its
+ * fingerprint. The token-named stem goes first, so on the day of the upgrade
+ * its older file is read before the newer.
+ */
+export function runStdin(token: string): string[] {
+  return [`T ${token}`, `F ${token.replace(/[^A-Za-z0-9_-]/g, "_")}`, `F ${tokenFingerprint(token)}`];
+}
+
+/** What the reducer reads on stdin for a smoke's sessions: several, its ledger's fingerprints, and its token prefix from before them. */
+export function smokeStdin(smoke: string, ledger: string): string[] {
+  return ["M", `P smoke-${smoke}-`, ...smokeFingerprints(ledger, smoke).map((f) => `F ${f}`)];
+}
+
 function reducerArgv(a: AuditArgs, io: Io): { argv: string[]; env?: Record<string, string> } {
   const script = readFileSync(SCRIPT, "utf8");
   const args = [a.summary ? "summary" : "records", a.op ?? "-", a.status ?? "-", a.since === null ? "-" : String(Math.floor(a.since)), a.until === null ? "-" : String(Math.floor(a.until)), String(a.last), String(Math.max(600, a.width * 4))];
@@ -277,10 +321,10 @@ export async function run(argv: readonly string[], io: Io, now = Date.now()): Pr
     io.err(`inspect audit: ${a.error}\n${USAGE}`);
     return 2;
   }
-  // A smoke's sessions: the reducer gets the tokens' fixed prefix, and every
-  // token that starts with it is struck from what comes back.
-  // A record can name a sibling session's token, so every smoke token is struck, not only this smoke's.
-  if (a.smoke !== null) return reduce(a, io, `smoke-${a.smoke}-*`, /smoke-[A-Za-z0-9_-]+/g);
+  // A smoke's sessions: the reducer gets their fingerprints from the ledger
+  // and the tokens' fixed prefix for older files. A record can name a sibling
+  // session's token, so every smoke token is struck, not only this smoke's.
+  if (a.smoke !== null) return reduce(a, io, smokeStdin(a.smoke, await readSmokeLedger(a, io)), /smoke-[A-Za-z0-9_-]+/g);
   const metaText = await readMetaText(a, io);
   if (metaText === null) {
     io.err(`inspect audit: no meta.json for ${a.runId}${a.target === "k8s" ? " in the runner pod" : ` under ${a.runsDir}`}`);
@@ -293,14 +337,14 @@ export async function run(argv: readonly string[], io: Io, now = Date.now()): Pr
   }
   // What to strike from the output: the token, unless it is a pre-hardening run id the output names anyway.
   const strikable = token.length >= MIN_TOKEN_LENGTH && token !== a.runId ? token : null;
-  return reduce(a, io, token, strikable);
+  return reduce(a, io, runStdin(token), strikable);
 }
 
-/** The reducer, with `token` (a run's, or a smoke's prefix line) on its stdin, and what it found, struck. */
-async function reduce(a: AuditArgs, io: Io, token: string, strikable: string | RegExp | null): Promise<number> {
+/** The reducer, with the sessions to read (and the token to strike) on its stdin, and what it found, struck. */
+async function reduce(a: AuditArgs, io: Io, stdin: readonly string[], strikable: string | RegExp | null): Promise<number> {
   const plan = reducerArgv(a, io);
   const p = Bun.spawn(plan.argv, {
-    stdin: new TextEncoder().encode(`${token}\n`),
+    stdin: new TextEncoder().encode(`${stdin.join("\n")}\n`),
     stdout: "pipe",
     stderr: "pipe",
     env: { ...io.env, ...(plan.env ?? {}) },

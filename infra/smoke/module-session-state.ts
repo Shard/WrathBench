@@ -17,7 +17,7 @@
 
 import { authHeaders } from "./lib/auth";
 import { moduleBase, moduleWsBase } from "./lib/module";
-import { smokeToken } from "./lib/session";
+import { smokeSubToken, smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -89,7 +89,7 @@ async function cleanup() {
   await req("DELETE", "/session", { token: TOKEN });
   for (let attempt = 0; attempt < 10; attempt++) {
     const del = await req("POST", "/character-delete", {
-      token: `${TOKEN}-del${attempt}`,
+      token: smokeSubToken(TOKEN, `del${attempt}`),
       account: ACCOUNT,
       character: CHARACTER,
     });

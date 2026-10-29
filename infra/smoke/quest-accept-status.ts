@@ -45,7 +45,7 @@ import { authHeaders } from "./lib/auth";
 import { accountFixtureName } from "./lib/fixture";
 import { failOnce } from "./lib/fail";
 import { moduleBase, moduleWsBase } from "./lib/module";
-import { smokeToken } from "./lib/session";
+import { smokeSubToken, smokeToken } from "./lib/session";
 import { deleteThroughLinger, moveRetryReason, RETRY_MARK } from "./lib/transient";
 
 const BASE = moduleBase();
@@ -239,7 +239,8 @@ async function moveTo(target: Vec, what: string): Promise<void> {
 // and only that, is waited out (lib/transient.ts, `deleteThroughLinger`).
 async function deletePreviousCharacter(): Promise<void> {
   const r = await deleteThroughLinger({
-    post: (attempt) => req("POST", "/character-delete", { token: `${TOKEN}-del${attempt}`, account: ACCOUNT, character: CHARACTER }),
+    // Every attempt under its own recorded sub-token, so `inspect audit --smoke` finds it.
+    post: (attempt) => req("POST", "/character-delete", { token: smokeSubToken(TOKEN, `del${attempt}`), account: ACCOUNT, character: CHARACTER }),
     character: CHARACTER,
     log,
   });

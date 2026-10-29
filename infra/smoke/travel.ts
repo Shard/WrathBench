@@ -87,6 +87,7 @@
 import { readdir } from "node:fs/promises";
 import { probeName } from "./lib/name";
 import { connect, type MovePoint, type MoveResult, type UnitView } from "@wrathbench/sdk";
+import { tokenFingerprint } from "@wrathbench/mcp/module-auth";
 import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
@@ -100,7 +101,8 @@ const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
 const TOKEN = smokeToken("travel");
 // The module's per-session audit (WrathBench.AuditDir, one
-// `<token>.<YYYY-MM-DD>.jsonl` per UTC day; wrath-mcp/module/PROTOCOL.md "Audit log"),
+// `<fingerprint>.<YYYY-MM-DD>.jsonl` per UTC day, the fingerprint the first 16
+// hex characters of the token's SHA-256; wrath-mcp/module/PROTOCOL.md "Audit log"),
 // as the runner container sees the repo mount. Leg 4 reads it for the
 // `move_transport_leg` boarding record when it is there (not in the cluster's
 // runner pod).
@@ -537,12 +539,13 @@ async function board(leg: string, dir: Direction, firstVariant: "point" | "guid"
 
 /**
  * The module's audit rows for this session with the given op, read across the
- * session's files in order: a legacy undated `<token>.jsonl` first, should one
- * remain, then the day files ascending (a session that crosses midnight UTC
- * has two). Undefined when the directory is not readable from here.
+ * session's day files ascending (a session that crosses midnight UTC has two),
+ * found by the token's fingerprint as the module names them: finding them at
+ * all is the check that the module and the SDK fingerprint a token alike.
+ * Undefined when the directory is not readable from here.
  */
 async function auditRows(op: string): Promise<Record<string, unknown>[] | undefined> {
-  const stem = TOKEN.replace(/[^A-Za-z0-9_-]/g, "_");
+  const stem = tokenFingerprint(TOKEN);
   let names: string[];
   try {
     names = await readdir(AUDIT_DIR);

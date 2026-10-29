@@ -53,12 +53,13 @@
  * SMOKE_REPROS=P1 bun infra/smoke/steep-replan.ts`.
  *
  * Coordinates are the refused moves' own, P4's excepted (harness tooling, not an agent run;
- * the observation contract does not apply to this script). Audit file names
- * are session tokens and are never printed.
+ * the observation contract does not apply to this script). Audit files are
+ * found by the token's fingerprint, as the module names them.
  */
 
 import { readdir } from "node:fs/promises";
 import { connect, type MovePoint, type MoveResultData, type WrathClient } from "@wrathbench/sdk";
+import { tokenFingerprint } from "@wrathbench/mcp/module-auth";
 import { SCENARIOS, type ScenarioName } from "../fixtures/scenarios";
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
@@ -213,7 +214,7 @@ const fixtureCtx: FixtureContext = {
   log,
   fail,
   createAndLogout: async () => {
-    const client = await connect({ baseUrl: BASE, token: `${smokeToken("steep-replan", { id: RUN })}-create`, secret: MODULE_SECRET });
+    const client = await connect({ baseUrl: BASE, token: smokeToken("steep-replan", { id: RUN, suffix: "create" }), secret: MODULE_SECRET });
     try {
       await createSessionWithBackoff(client);
       await client.logout();
@@ -248,7 +249,7 @@ async function runStart(start: Start, n: number, outcomes: Outcome[]): Promise<v
   const want = SCENARIOS[start.scenario].position;
   log(`${start.scenario}: map ${want.map} ${fmt(want)} — ${start.repros.map((r) => r.id).join(", ")}`);
   await applyScenario(fixtureCtx, start.scenario);
-  const token = `${smokeToken("steep-replan", { id: RUN })}-${n}`;
+  const token = smokeToken("steep-replan", { id: RUN, suffix: String(n) });
   const client = await connect({ baseUrl: BASE, token, secret: MODULE_SECRET });
   try {
     await createSessionWithBackoff(client);
@@ -275,7 +276,7 @@ async function runStart(start: Start, n: number, outcomes: Outcome[]): Promise<v
 
 /** This session's audit actions, or undefined when the directory or its files are not readable here. */
 async function auditActions(token: string): Promise<Record<string, unknown>[] | undefined> {
-  const stem = token.replace(/[^A-Za-z0-9_-]/g, "_");
+  const stem = tokenFingerprint(token);
   let names: string[];
   try {
     names = await readdir(AUDIT_DIR);

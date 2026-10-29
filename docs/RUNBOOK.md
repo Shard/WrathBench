@@ -71,7 +71,7 @@ bun wb inspect pad <run-id> [--since 2h]                       # pad size over t
 bun wb inspect pad <run-id> --at <iso>                         # the pad's text at a moment, rebuilt from the record
 bun wb inspect audit <run-id> [--op WB_MOVE_RESULT [--status S]] [--since 1h]
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
-bun wb inspect audit --smoke edge-drop --op move_edge_drop --since 1h   # a smoke's sessions (tokens smoke-<name>-<uuid>)
+bun wb inspect audit --smoke edge-drop --op move_edge_drop --since 1h   # a smoke's sessions (from the smoke-session ledger)
 bun wb inspect publisher [<run-id>]                  # last flip, versions per run, the secret scan, last passes
 ```
 
@@ -80,14 +80,18 @@ whole, only capped fields of it. A run is live when its row has neither a
 termination nor a pause; one with neither whose heartbeat is older than two
 minutes has lost its process and reads `ownerless`. The session token is
 struck from everything printed, older trajectories included. The audit log's
-files are named after it, so `inspect audit` reads the token from the run's
-`meta.json`, hands it on stdin to `infra/inspect-audit.pl` inside the
-worldserver container, which reduces the files there, and prints counts or
-struck records and never a file name. A smoke has no run and no `meta.json`;
-every smoke names its sessions `smoke-<name>[-<role>]-<uuid>` through
-`smokeToken` (`infra/smoke/lib/session.ts`), `<name>` the one `bun wb smoke`
-takes, so `--smoke <name>` (or `<name>-<role>`, like `group-a`) hands the
-reducer the fixed prefix instead and every token after it is struck. `live`, `run`, `trajectory`, `tools`
+files are named by the token's fingerprint, the first 16 hex characters of its
+SHA-256 (files from before stack 0.2.0 by the token itself), so `inspect
+audit` reads the token from the run's `meta.json`, hands it and its
+fingerprint on stdin to `infra/inspect-audit.pl` inside the worldserver
+container, which reduces the files there, and prints counts or struck records
+and never a file name. A smoke has no run and no `meta.json`; every smoke
+names its sessions through `smokeToken` (`infra/smoke/lib/session.ts`), which
+records each one's fingerprint under the smoke's name, `<name>` the one `bun
+wb smoke` takes, in `data/runs/smoke-sessions.jsonl` on the runner's runs
+volume, so `--smoke <name>` (or `<name>-<role>`, like `group-a`) hands the
+reducer that smoke's fingerprints, and its older files' token prefix, and every
+smoke token is struck. `live`, `run`, `trajectory`, `tools`
 and `pad` are `infra/inspect-run.ts` in the runner pod, which imports nothing outside
 `bun:sqlite` and `node:*`; before a release ships it, the same file runs in the
 pod from stdin:
@@ -1082,9 +1086,10 @@ and without colour codes: the chart turns the stock `Console` appender off and
 makes `Server` the one console appender, re-pointing the loggers that wrote to
 `Console` alone (templates/worldserver.yaml has the why). What it keeps
 as files on the data PVC is `logs/Errors.log`, held open and rewritten on
-every boot, and the module's audit log, one JSONL per session token and UTC
-day under `logs/wrathbench` (`<token>.<YYYY-MM-DD>.jsonl`; a live session
-rolls to the next day's file at its first record after midnight UTC). The
+every boot, and the module's audit log, one JSONL per session and UTC day
+under `logs/wrathbench` (`<fingerprint>.<YYYY-MM-DD>.jsonl`, the first 16 hex
+characters of the token's SHA-256; a live session rolls to the next day's file
+at its first record after midnight UTC). The
 audit log is what grows — about 0.6 GB a day per live freeplay stream — and it
 is kept for a window, not for good
 (wrath-mcp/docs/CONTRACTS.md "Audit"): `worldserver.logRetention.days` in the chart's
@@ -1095,15 +1100,16 @@ CronJob so that changing the window never rolls the worldserver.
 What it never does is touch a file the server will still write to. A past
 day's file gets no further write by construction — the module only ever opens
 the current day's file — so it is deleted once quiet for the window, whatever
-the server's start. Today's file, and an undated `<token>.jsonl` left from
-before day files, is deleted only when it is quiet for the window *and* older
+the server's start. Today's file, and an undated file left from before day
+files, is deleted only when it is quiet for the window *and* older
 than the running server process: the module writes a line the moment it opens
 a file, so a file the process holds is newer than its start, which the pass
 reads from `GET /health`. One quiet for the window but younger than the
 process is emptied in place instead — safe for an append-mode writer — and
 deleted after the next restart. With the module unreachable only past days are
 deleted. The pass is one `readdir` and a `stat` per file, reads nothing, and
-logs counts and bytes, never a name: the names are session tokens. A live
+logs counts and bytes, never a name: files from before stack 0.2.0 are named
+by session token. A live
 stream therefore holds at most about `days + 1` days of audit at any time,
 however long it runs.
 
@@ -1117,14 +1123,17 @@ bun wb server log-retention --apply    # a Job from the CronJob, now; waits and 
 
 To read one run's audit while it is kept, `bun wb inspect audit <run-id>`
 ("Inspect a run", above). To keep one past the window, copy it out before the pass: its
-files in order, the undated one first should it have one, then the days
-ascending. The token is `config.token` in the run's `meta.json`; it travels on
-stdin, never argv:
+day files ascending. They are named by the fingerprint of the token, which is
+`config.token` in the run's `meta.json`; the fingerprint is no secret and may
+go in argv, the token never does:
 
 ```
-token=$(kubectl -n wrathbench exec deploy/wrathbench-runner -- bun -p 'JSON.parse(require("fs").readFileSync("data/runs/<run-id>/meta.json","utf8")).config.token')
-printf '%s\n' "$token" | kubectl -n wrathbench exec -i deploy/wrathbench-worldserver -- sh -c 'read -r t && cd /azerothcore/env/dist/logs/wrathbench && for f in "$t.jsonl" "$t".????-??-??.jsonl; do [ -f "$f" ] && cat "$f"; done' > <run-id>.audit.jsonl
+fp=$(kubectl -n wrathbench exec deploy/wrathbench-runner -- bun -p 'require("crypto").createHash("sha256").update(JSON.parse(require("fs").readFileSync("data/runs/<run-id>/meta.json","utf8")).config.token).digest("hex").slice(0,16)')
+kubectl -n wrathbench exec deploy/wrathbench-worldserver -- sh -c 'cd /azerothcore/env/dist/logs/wrathbench && for f in "$1".????-??-??.jsonl; do [ -f "$f" ] && cat "$f"; done' sh "$fp" > <run-id>.audit.jsonl
 ```
+
+A run that spans the upgrade to stack 0.2.0 also has files named by the token
+itself, from before it; `bun wb inspect audit` reads both.
 
 Or raise `days` in the deploying cluster's values for as long as it is needed.
 The compose quickstart has no retention: its `data/logs` is a bind mount you
