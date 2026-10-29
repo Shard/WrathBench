@@ -1183,7 +1183,12 @@ It runs the game-surface smokes in `infra/smoke/lib/suite.ts` (kill-credit,
 quest-accept-status, module-quest, module-navigation, achievements-taxi,
 deadmines-entry, chest-loot) on SMOKE2–SMOKE4. Smokes that share an account
 run one after another, and the accounts run in parallel. It prints one
-PASS/FAIL line per smoke with its duration and exits 1 on any failure. It
+PASS/FAIL line per smoke with its duration and exits 1 on any failure. A
+smoke retries only a named transient condition, once or within a stated
+bound, and prints a `RETRY:` line when it does (`infra/smoke/lib/transient.ts`:
+quest-accept-status walks an `interrupted` move of a live character once more,
+and waits out the core's post-logout linger on its first delete). A PASS that
+needed one shows the retry on its line, and the totals count it. It
 refuses any member that would log in on the pool, PROBE, PARTY* or SMOKE, so
 it never holds the fleet. The accounts for hand runs:
 

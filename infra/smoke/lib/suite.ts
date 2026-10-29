@@ -20,6 +20,8 @@
  * Operator tooling. Nothing in runner/ or sdk/ imports this.
  */
 
+import { RETRY_MARK } from "./transient";
+
 export interface SuiteMember {
   /** The smoke's file under infra/smoke, without `.ts`. */
   name: string;
@@ -111,6 +113,8 @@ export interface SuiteResult {
   ms: number;
   /** The smoke's last line of output, or why it did not run to the end. */
   tail: string;
+  /** The lines it announced a retry on (`RETRY_MARK`, lib/transient.ts), in order; absent or empty for none. */
+  retries?: string[];
 }
 
 export type MemberRunner = (m: SuiteMember) => Promise<Omit<SuiteResult, "member">>;
@@ -138,10 +142,15 @@ export function formatSummary(results: readonly SuiteResult[], wallMs: number): 
   const w = Math.max(...results.map((r) => r.member.name.length), 4);
   const lines = results.map((r) => {
     const head = `${r.ok ? "PASS" : "FAIL"}  ${r.member.name.padEnd(w)}  ${accountsOf(r.member).join("+").padEnd(7)}  ${(r.ms / 1000).toFixed(1).padStart(6)}s`;
-    return r.ok ? head : `${head}  ${r.tail}`;
+    // A pass that needed a retry says so on its own line, with the first one's words.
+    const retried = r.retries !== undefined && r.retries.length > 0 ? `  ${r.retries.length} retr${r.retries.length === 1 ? "y" : "ies"}: ${r.retries[0]}` : "";
+    return r.ok ? `${head}${retried}` : `${head}  ${r.tail}`;
   });
   const failed = results.filter((r) => !r.ok).length;
-  lines.push(`suite: ${results.length} smoke(s), ${results.length - failed} passed, ${failed} failed, ${(wallMs / 1000).toFixed(1)}s wall`);
+  const retried = results.filter((r) => r.ok && (r.retries?.length ?? 0) > 0).length;
+  lines.push(
+    `suite: ${results.length} smoke(s), ${results.length - failed} passed${retried > 0 ? ` (${retried} after a retry)` : ""}, ${failed} failed, ${(wallMs / 1000).toFixed(1)}s wall`,
+  );
   return lines;
 }
 
@@ -198,8 +207,9 @@ export async function spawnMember(m: SuiteMember, o: SpawnOptions): Promise<Omit
   clearTimeout(timer);
   const ms = Date.now() - t0;
   const last = lines.at(-1) ?? "no output";
-  if (timedOut) return { ok: false, ms, tail: `killed after ${Math.round(o.timeoutMs / 1000)}s; last line: ${last}` };
-  return { ok: code === 0, ms, tail: code === 0 ? last : `exit ${code}: ${last}` };
+  const retries = lines.filter((l) => l.includes(RETRY_MARK)).map((l) => l.slice(l.indexOf(RETRY_MARK) + RETRY_MARK.length).trim());
+  if (timedOut) return { ok: false, ms, tail: `killed after ${Math.round(o.timeoutMs / 1000)}s; last line: ${last}`, retries };
+  return { ok: code === 0, ms, tail: code === 0 ? last : `exit ${code}: ${last}`, retries };
 }
 
 /** The members a command line names (all of them for none), or the names it got wrong. */
