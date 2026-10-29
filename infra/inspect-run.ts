@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
- * `bun wb inspect live|run|trajectory|tools|pad`: read-only views of the runs
- * on the data volume, every one bounded by default.
+ * `bun wb inspect live|run|trajectory|tools|pad`: read-only views of the runs,
+ * every one bounded by default.
  *
  *   bun infra/inspect-run.ts live                      runs with a heartbeat, one line each
  *   bun infra/inspect-run.ts run <run-id> [--since D] [--until D]
@@ -13,10 +13,26 @@
  *   bun infra/inspect-run.ts pad <run-id> [--since D] [--until D] [--last N] | --at D
  *                                                      the pad's size over time and its writes, or its text
  *
- * D is `90s`, `30m`, `2h`, `1d`, epoch ms or an ISO time; `--since` and
- * `--until` together are a window, found by bisecting the file on its clock
- * rather than reading it from the top. The runs directory is `--runs-dir`,
- * else WRATHBENCH_RUNS_DIR, else `data/runs`.
+ * D is `90s`, `30m`, `2h`, `1d`, epoch ms or an ISO time. The runs directory is
+ * `--runs-dir`, else WRATHBENCH_RUNS_DIR, else `data/runs`.
+ *
+ * Where each view reads. A run's heavy facts (its row, its state samples and
+ * every trajectory record) come from ClickHouse, the derived store the
+ * collector tails the runs into (collector/README.md), at CLICKHOUSE_URL with
+ * the viewer's coordinates. A live run's run.sqlite is never walked: a whole-
+ * table read of one once held the file against the runner's writer for long
+ * enough to kill the run. What stays on the files is small and file-level: the
+ * heartbeat, a few meta.json fields, file sizes, scratchpad.md, the nearby
+ * ring, and the trace, which the collector does not hold by design. A live
+ * run's trace is two index lookups, never a walk; a run with no live owner is
+ * walked in rowid windows (`scanByRowid`).
+ *
+ * Every view prints a `source` line: how far ClickHouse is behind the file, or
+ * that it read the files instead and why (no CLICKHOUSE_URL, ClickHouse
+ * unreachable, the run not in it yet, or `--files`). Falling back is safe for
+ * the trajectory, which a reader cannot lock; run.sqlite is opened in a
+ * fallback only when the run has no fresh heartbeat, and otherwise the view
+ * says what it did not read.
  *
  * A run is live when its row has neither a termination nor a pause (a paused
  * run is unterminated too, which is why the pause counts), and it has a live
@@ -25,11 +41,12 @@
  * `meta.json`'s config or the row's `config_json`, and every line it prints has
  * the run's session token struck, which older trajectories still carry.
  *
- * Import-free on purpose: `bun:sqlite` and `node:*` only. So the same file runs
- * unchanged wherever the runs are: in the runner pod through `bun wb`, from
- * stdin into a pod whose image predates it (`kubectl exec -i … -- bun run - run
- * <id> < infra/inspect-run.ts`), or against a copy here. It also starts in
- * milliseconds. The constants it shares with the runner are pinned by its test.
+ * Import-free on purpose: `bun:sqlite` and `node:*` only, and `fetch` for
+ * ClickHouse. So the same file runs unchanged wherever the runs are: in the
+ * runner pod through `bun wb`, from stdin into a pod whose image predates it
+ * (`kubectl exec -i … -- bun run - run <id> < infra/inspect-run.ts`), or
+ * against a copy here. The constants and the connection rule it shares with
+ * the runner, the collector and the viewer are pinned by its tests.
  */
 
 import { Database } from "bun:sqlite";
@@ -178,7 +195,12 @@ function heartbeatAt(dir: string): number | null {
   }
 }
 
-interface RunRow {
+/** A heartbeat fresh enough that the run's process may be writing its run.sqlite now. */
+function ownedAt(heartbeat: number | null, now: number): boolean {
+  return heartbeat !== null && now - heartbeat < HEARTBEAT_DEAD_MS;
+}
+
+export interface RunRow {
   termination_reason: string | null;
   termination_detail: string | null;
   pause_reason: string | null;
@@ -190,7 +212,7 @@ interface RunRow {
   harness_version: string | null;
 }
 
-interface StateRow {
+export interface StateRow {
   ts: number;
   level: number | null;
   xp: number | null;
@@ -240,9 +262,13 @@ function readRow(db: Database, runId: string): RunRow | null {
   const pick = (c: string): string => (have.has(c) ? c : `NULL AS ${c}`);
   const cols = ["termination_reason", "termination_detail", "pause_reason", "started_at", "ended_at", "model", "driver", "character", "harness_version"];
   const row = db.query(`SELECT ${cols.map(pick).join(", ")} FROM run WHERE run_id = ?`).get(runId) as Record<string, unknown> | null;
-  if (row === null) return null;
+  return row === null ? null : runRowOf(row);
+}
+
+/** A run row from either store: an empty string or a zero start is no value. */
+export function runRowOf(row: Record<string, unknown>): RunRow {
   const s = (k: string): string | null => str(row[k]);
-  const n = (k: string): number | null => (typeof row[k] === "number" ? (row[k] as number) : null);
+  const n = (k: string): number | null => (typeof row[k] === "number" && row[k] !== 0 ? (row[k] as number) : null);
   return {
     termination_reason: s("termination_reason"),
     termination_detail: s("termination_detail"),
@@ -256,7 +282,7 @@ function readRow(db: Database, runId: string): RunRow | null {
   };
 }
 
-export type VerdictState = "live" | "ownerless" | "paused" | "terminated" | "no-row";
+export type VerdictState = "live" | "ownerless" | "paused" | "terminated" | "no-row" | "unread";
 
 export interface Verdict {
   state: VerdictState;
@@ -269,10 +295,13 @@ export interface Verdict {
 /**
  * The live rule: live when the row has neither a termination nor a pause, and
  * only while the heartbeat is fresh; an unterminated, unpaused run whose
- * heartbeat is cold or gone has lost its owner. Pure.
+ * heartbeat is cold or gone has lost its owner. `row` undefined is a row this
+ * read did not get: ClickHouse was not there, and a live run's run.sqlite is
+ * not opened. Pure.
  */
-export function verdictOf(row: Pick<RunRow, "termination_reason" | "termination_detail" | "pause_reason"> | null, heartbeat: number | null, now: number): Verdict {
+export function verdictOf(row: Pick<RunRow, "termination_reason" | "termination_detail" | "pause_reason"> | null | undefined, heartbeat: number | null, now: number): Verdict {
   const heartbeatAgeMs = heartbeat === null ? null : now - heartbeat;
+  if (row === undefined) return { state: "unread", reason: null, detail: null, heartbeatAgeMs };
   if (row === null) return { state: "no-row", reason: null, detail: null, heartbeatAgeMs };
   if (row.termination_reason !== null) return { state: "terminated", reason: row.termination_reason, detail: row.termination_detail, heartbeatAgeMs };
   if (row.pause_reason !== null) return { state: "paused", reason: row.pause_reason, detail: null, heartbeatAgeMs };
@@ -288,6 +317,8 @@ export function describeVerdict(v: Verdict, meta: Record<string, unknown> | null
   switch (v.state) {
     case "no-row":
       return `no run row in run.sqlite (a failed launch, or a directory holding only launch files); ${heartbeatPhrase(v)}`;
+    case "unread":
+      return `unread: ${heartbeatPhrase(v)}, so its process is up; the row is read from ClickHouse, which is not there, and a live run's run.sqlite is not opened`;
     case "terminated":
       return `terminated: ${v.reason}${v.detail !== null ? ` — ${v.detail}` : ""}`;
     case "paused": {
@@ -458,9 +489,32 @@ function backwardLines(path: string, fn: LineFn, to?: number): void {
   }
 }
 
-function parseLine(buf: Buffer, start: number, end: number): Record<string, unknown> | null {
+/** The clock of the file's newest record that says one, off the last few lines; null when none does. */
+function newestInFile(path: string): number | null {
+  let ts: number | null = null;
+  let seen = 0;
   try {
-    const v = JSON.parse(buf.toString("utf8", start, end)) as unknown;
+    backwardLines(path, (buf, s, e) => {
+      const h = headOf(buf, s, e);
+      if (Number.isFinite(h.ts)) {
+        ts = h.ts;
+        return true;
+      }
+      return ++seen >= 50;
+    });
+  } catch {
+    return null;
+  }
+  return ts;
+}
+
+function parseLine(buf: Buffer, start: number, end: number): Record<string, unknown> | null {
+  return parseJson(buf.toString("utf8", start, end));
+}
+
+function parseJson(text: string): Record<string, unknown> | null {
+  try {
+    const v = JSON.parse(text) as unknown;
     return v !== null && typeof v === "object" ? (v as Record<string, unknown>) : null;
   } catch {
     return null;
@@ -487,6 +541,561 @@ export function errorClass(text: string): string {
   return body.split(/\s+/).slice(0, 3).join(" ").slice(0, 32) || "(empty)";
 }
 
+// ------------------------------------------------------------------ one record, from either store
+
+/**
+ * One trajectory record as a view reads it, from the file or from ClickHouse.
+ * Every view is written once, against this: the file's records decode lazily
+ * off the line's bytes, so a 2 MB request never becomes a string a view did
+ * not ask for, and ClickHouse's carry only what the view's `ReadSpec` asked the
+ * server for. A field the spec did not fetch reads as absent, which is what
+ * each view does with a record too big to parse.
+ */
+export interface Rec {
+  ts: number;
+  t: string;
+  bytes: number;
+  /** The `name` a call or a result carries; null when it has none. */
+  name(): string | null;
+  isError(): boolean;
+  /** A request's adapter label. */
+  adapter(): string | null;
+  /** The whole line, or null when the reader did not fetch it. */
+  text(): string | null;
+  parse(): Record<string, unknown> | null;
+  /** The pad a request's context showed. */
+  pad(): string | null;
+  /** The over-cap refusal a result carries. */
+  refusal(): { op: string; chars: number } | null;
+}
+
+/** A view's step over one record; true stops the read. */
+export type RecFn = (r: Rec) => boolean | void;
+
+const NAME_IN_HEAD = /"name":"([^"\\]{1,64})"/;
+const ADAPTER_IN_HEAD = /"adapter":"([^"\\]{1,200})"/;
+
+function headString(buf: Buffer, s: number, e: number): string {
+  return buf.toString("latin1", s, Math.min(e, s + 400));
+}
+
+/** A file line as a record. Valid only inside the line callback: the buffer is the reader's. */
+function fileRec(buf: Buffer, s: number, e: number): Rec {
+  const h = headOf(buf, s, e);
+  let head: string | null = null;
+  let parsed: Record<string, unknown> | null | undefined;
+  const headStr = (): string => (head ??= headString(buf, s, e));
+  return {
+    ts: h.ts,
+    t: h.t,
+    bytes: e - s,
+    name: () => NAME_IN_HEAD.exec(headStr())?.[1] ?? null,
+    isError: () => headStr().includes('"isError":true'),
+    adapter: () => ADAPTER_IN_HEAD.exec(headStr())?.[1] ?? null,
+    text: () => buf.toString("utf8", s, e),
+    parse: () => (parsed === undefined ? (parsed = parseLine(buf, s, e)) : parsed),
+    pad: () => padOfRequest(buf, s, e),
+    refusal: () => padRefusalIn(buf, s, e),
+  };
+}
+
+function fileForward(path: string, fn: RecFn, from = 0): void {
+  forwardLines(path, (buf, s, e) => fn(fileRec(buf, s, e)), from);
+}
+
+function fileBackward(path: string, fn: RecFn, to?: number): void {
+  backwardLines(path, (buf, s, e) => fn(fileRec(buf, s, e)), to);
+}
+
+// ------------------------------------------------------------------ ClickHouse
+
+/**
+ * The store's coordinates, or null when none are configured: the viewer's
+ * `clickhouseConfigFromEnv` (runner/viewer/clickhouse.ts), copied because this
+ * file imports nothing, and pinned to it by the test. The URL can carry a
+ * password, so nothing here ever prints it.
+ */
+export interface ClickhouseConfig {
+  url: string;
+  user: string;
+  password: string;
+  database: string;
+}
+
+export function clickhouseConfigOf(env: Readonly<Record<string, string | undefined>>): ClickhouseConfig | null {
+  const url = env["CLICKHOUSE_URL"];
+  if (url === undefined || url.length === 0) return null;
+  return {
+    url: url.replace(/\/+$/, ""),
+    user: env["CLICKHOUSE_USER"] ?? "default",
+    password: env["CLICKHOUSE_PASSWORD"] ?? "",
+    database: env["CLICKHOUSE_DATABASE"] ?? "wrathbench",
+  };
+}
+
+/** collector/src/lines.ts `TURN_KINDS`: these kinds land in `turns`, every other kind in `events`. */
+export const TURN_KINDS: readonly string[] = ["request", "response", "snippet", "snippet_result", "tool_call", "tool_result", "events_served"];
+/** The kind the collector gives a line that is not a record (collector/src/lines.ts `unparseableRow`); the file's reader calls it `?`. */
+export const UNPARSEABLE = "unparseable";
+/** Above this a record's line is never fetched: every view reads such a record by its size alone. */
+export const RAW_CAP_BYTES = 4 << 20;
+/** Record kinds too big to be worth parsing for a line of their own, and never fetched whole from the store. */
+export const SIZE_ONLY: ReadonlySet<string> = new Set(["request", "events_served", "claude_system", "driver", "codex_result", "actions"]);
+
+/**
+ * When a row (or its whole line) is wanted: always, never, or when any of the
+ * given holds. `contains` is a literal the raw line holds, so it is the same
+ * test whichever store answers it; `error` and `names` read `is_error` and
+ * `tool_name`, which only `turns` carries.
+ */
+export type Rule = "all" | "none" | { contains?: string; error?: boolean; names?: readonly string[] };
+
+/** What a view asks of the store: which kinds, which of their rows and lines, and what the server cuts out for it. */
+export interface ReadSpec {
+  kinds: Readonly<Record<string, { row?: Rule; raw: Rule }>> | "all";
+  /** A request's first 400 characters, for its adapter. */
+  heads?: boolean;
+  /** A request's line from its last pad header on (`PAD_HEADER_JSON`), for its pad. */
+  pads?: boolean;
+  /** The text around a result's over-cap refusal. */
+  refusals?: boolean;
+}
+
+/**
+ * One trajectory line as the store returns it: `r` empty when not fetched,
+ * `h`/`p`/`q` the server's cuts, and `pn` how many pad headers a request's
+ * line holds (`PAD_HEADER_PATTERN`).
+ */
+export interface StoreRow {
+  l: number;
+  ts: number;
+  k: string;
+  b: number;
+  n: string;
+  e: number | null;
+  r: string;
+  h: string;
+  p: string;
+  pn: number;
+  q: string;
+}
+
+/** A run as `runs` holds it: its run.sqlite row merged with meta.json. */
+export interface StoreRun extends RunRow {
+  archived: boolean;
+}
+
+/** What the store holds of one run's trajectory, over a window and over the whole run. */
+export interface Extent {
+  /** Records per kind in the window, `?` for a line that is not a record. */
+  kinds: Map<string, number>;
+  /** The record with the newest clock in the window, ties to the later line. */
+  last: { ts: number; t: string } | null;
+  /** The window's first and last line, and the clocks of its first and last record that has one; null when it is empty. */
+  window: { lo: number; hi: number; firstTs: number | null; lastTs: number | null } | null;
+  /** The newest clock the store holds for the run, whatever the window; null when it holds none. */
+  newestTs: number | null;
+}
+
+/**
+ * The reads a view makes of the store. ClickHouse answers them in SQL
+ * (`clickhouseStore`); the tests answer them from the collector's own rows in
+ * memory, so a view reads the same records either way. Each is one bounded
+ * query: a key lookup, an aggregate over the run's narrow columns, or a range
+ * of line numbers.
+ */
+export interface InspectStore {
+  runs(ids: readonly string[]): Promise<Map<string, StoreRun>>;
+  /** Each run's newest state sample, by its sqlite rowid. */
+  latestStates(ids: readonly string[]): Promise<Map<string, StateRow>>;
+  /** Every sample that carries a quest count, in (ts, rowid) order. */
+  quests(id: string): Promise<{ ts: number; quests: number | null }[]>;
+  extent(id: string, w: Window): Promise<Extent>;
+  /** The lines numbered [from, to) that the spec wants, in the window. */
+  rows(id: string, spec: ReadSpec, w: Window, from: number, to: number): Promise<StoreRow[]>;
+  /** Whole request lines, for the rare pad a server-side cut could not place. */
+  raws(id: string, lines: readonly number[]): Promise<Map<number, string>>;
+}
+
+export class StoreError extends Error {}
+
+function sqlStr(s: string): string {
+  return `'${s.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
+}
+
+function sqlList(xs: Iterable<string>): string {
+  return [...xs].map(sqlStr).join(", ");
+}
+
+function ruleSql(rule: Rule, turns: boolean): string {
+  if (rule === "all") return "1";
+  if (rule === "none") return "0";
+  const any: string[] = [];
+  if (rule.contains !== undefined) any.push(`position(raw, ${sqlStr(rule.contains)}) > 0`);
+  if (rule.error === true && turns) any.push("is_error = 1");
+  if (rule.names !== undefined && rule.names.length > 0 && turns) any.push(`tool_name IN (${sqlList(rule.names)})`);
+  return any.length === 0 ? "0" : `(${any.join(" OR ")})`;
+}
+
+/** The window on an Int64 clock column: whole milliseconds either side. */
+function windowSql(w: Window, col: string): string[] {
+  const out: string[] = [];
+  if (w.since !== null) out.push(`${col} >= ${Math.ceil(w.since)}`);
+  if (w.until !== null) out.push(`${col} <= ${Math.floor(w.until)}`);
+  return out;
+}
+
+/** The pad section's header as it sits in a raw line, its newlines JSON-escaped. */
+export const PAD_HEADER_RAW = "\\n\\n[scratchpad";
+
+/**
+ * A pad header `padOfSection` could accept, as it sits in a raw line (RE2 and
+ * JavaScript alike): no label, or a `padSizeLabel` one. Any other line that
+ * starts like a header, such as the old cut's `[scratchpad truncated at N
+ * chars]` marker that every pad of an older run ends with, can never be the
+ * section's, so the server's cut skips it.
+ */
+export const PAD_HEADER_PATTERN = String.raw`\\n\\n\[scratchpad(?: [0-9]+\.[0-9]k/[0-9]+k(?:, over the cap)?)?\]\\n`;
+
+/**
+ * One page of a run's lines. Both tables share the file's line numbers, each
+ * line in exactly one, so a range of numbers is a range of the file and the
+ * primary key (run_id, line_no) prunes it. The server withholds every line a
+ * view would not parse, and cuts out the pieces it would: a request's line
+ * from its last pad header (`PAD_HEADER_PATTERN`) to its end, with how many
+ * such headers it holds, and the text around a result's refusal. The cut's
+ * start is `length − p − m + 2`, p the header's position in the reversed line
+ * and m its length; a header is ASCII, so the cut never splits a character.
+ */
+export function rowsSql(runId: string, spec: ReadSpec, w: Window, from: number, to: number): string {
+  const branches: string[] = [];
+  for (const turns of [true, false]) {
+    const kinds = spec.kinds === "all" ? null : Object.entries(spec.kinds).filter(([k]) => TURN_KINDS.includes(k) === turns);
+    if (kinds !== null && kinds.length === 0) continue;
+    const where = [`run_id = ${sqlStr(runId)}`, `line_no >= ${from}`, `line_no < ${to}`, ...windowSql(w, "ts")];
+    if (kinds !== null) where.push(`(${kinds.map(([k, s]) => `(kind = ${sqlStr(k)} AND ${ruleSql(s.row ?? "all", turns)})`).join(" OR ")})`);
+    const want = kinds === null ? "1" : `multiIf(${kinds.map(([k, s]) => `kind = ${sqlStr(k)}, ${ruleSql(s.raw, turns)}`).join(", ")}, 0)`;
+    const raw = `if(kind IN (${sqlList(SIZE_ONLY)}) OR length(raw) > ${RAW_CAP_BYTES} OR NOT ${want}, '', raw)`;
+    const head = spec.heads === true && turns ? "if(kind = 'request', substringUTF8(raw, 1, 400), '')" : "''";
+    const headers = `extractAll(raw, ${sqlStr(PAD_HEADER_PATTERN)})`;
+    const last = `arrayElement(${headers}, -1)`;
+    const pads = spec.pads === true && turns;
+    const pad = pads ? `if(kind = 'request' AND length(${headers}) > 0, substring(raw, length(raw) - position(reverse(raw), reverse(${last})) - length(${last}) + 2), '')` : "''";
+    const padCount = pads ? `if(kind = 'request', length(${headers}), 0)` : "0";
+    const refusal = `positionUTF8(raw, ${sqlStr(PAD_REFUSED)})`;
+    const near =
+      spec.refusals === true && turns
+        ? `if(kind IN ('snippet_result', 'tool_result') AND ${refusal} > 0, substringUTF8(raw, toUInt64(greatest(1, toInt64(${refusal}) - 48)), ${48 + PAD_REFUSED.length + 24}), '')`
+        : "''";
+    branches.push(
+      `SELECT line_no AS l, ts, kind AS k, length(raw) AS b, ${turns ? "tool_name" : "''"} AS n, ${turns ? "is_error" : "CAST(NULL AS Nullable(UInt8))"} AS e, ` +
+        `${raw} AS r, ${head} AS h, ${pad} AS p, toUInt32(${padCount}) AS pn, ${near} AS q FROM ${turns ? "turns" : "events"} WHERE ${where.join(" AND ")}`,
+    );
+  }
+  return `SELECT * FROM (${branches.join(" UNION ALL ")}) ORDER BY l`;
+}
+
+/**
+ * The run's lines by kind over a window, and its newest clock overall. Reads
+ * only (line_no, ts, kind), deduplicated by line, since a replay's rows wait
+ * for a merge to drop them. A line that is not a record (`unparseable`, clock
+ * 0) counts in a window with no `--since`, as the file's reader counts it.
+ */
+export function extentSql(runId: string, w: Window): string {
+  const id = sqlStr(runId);
+  const win = windowSql(w, "any(ts)");
+  const rec = `w AND k != ${sqlStr(UNPARSEABLE)}`;
+  return `SELECT k, countIf(w) AS n, minIf(l, w) AS lo, maxIf(l, w) AS hi, countIf(${rec}) AS np,
+       argMinIf(t, l, ${rec}) AS first_ts, minIf(l, ${rec}) AS first_l, argMaxIf(t, l, ${rec}) AS last_ts, maxIf(l, ${rec}) AS last_l,
+       maxIf(t, ${rec}) AS newest_ts, argMaxIf(l, (t, l), ${rec}) AS newest_l,
+       maxIf(t, k != ${sqlStr(UNPARSEABLE)}) AS all_ts, countIf(k != ${sqlStr(UNPARSEABLE)}) AS all_n
+  FROM (SELECT line_no AS l, any(ts) AS t, any(kind) AS k, ${win.length === 0 ? "1" : `(${win.join(" AND ")})`} AS w
+          FROM (SELECT line_no, ts, kind FROM turns WHERE run_id = ${id} UNION ALL SELECT line_no, ts, kind FROM events WHERE run_id = ${id})
+         GROUP BY line_no)
+ GROUP BY k`;
+}
+
+export interface ExtentRow {
+  k: string;
+  n: number;
+  lo: number;
+  hi: number;
+  np: number;
+  first_ts: number;
+  first_l: number;
+  last_ts: number;
+  last_l: number;
+  newest_ts: number;
+  newest_l: number;
+  all_ts: number;
+  all_n: number;
+}
+
+/** The per-kind rows of `extentSql` as one `Extent`. Exported for the tests' store, which builds the same rows. */
+export function extentOf(rows: readonly ExtentRow[]): Extent {
+  const kinds = new Map<string, number>();
+  let last: { ts: number; t: string; l: number } | null = null;
+  let lo = Infinity;
+  let hi = -Infinity;
+  let first: { ts: number; l: number } | null = null;
+  let end: { ts: number; l: number } | null = null;
+  let newestTs: number | null = null;
+  for (const r of rows) {
+    const t = r.k === UNPARSEABLE ? "?" : r.k;
+    if (r.all_n > 0) newestTs = Math.max(newestTs ?? -Infinity, r.all_ts);
+    if (r.n === 0) continue;
+    kinds.set(t, r.n);
+    lo = Math.min(lo, r.lo);
+    hi = Math.max(hi, r.hi);
+    if (r.np === 0) continue;
+    if (last === null || r.newest_ts > last.ts || (r.newest_ts === last.ts && r.newest_l > last.l)) last = { ts: r.newest_ts, t, l: r.newest_l };
+    if (first === null || r.first_l < first.l) first = { ts: r.first_ts, l: r.first_l };
+    if (end === null || r.last_l > end.l) end = { ts: r.last_ts, l: r.last_l };
+  }
+  const window = kinds.size === 0 ? null : { lo, hi, firstTs: first?.ts ?? null, lastTs: end?.ts ?? null };
+  return { kinds, last: last === null ? null : { ts: last.ts, t: last.t }, window, newestTs };
+}
+
+const RUN_COLUMNS = "run_id, archived, termination_reason, termination_detail, pause_reason, started_at, ended_at, model, driver, character, harness_version";
+const STATE_COLUMNS = "run_id, ts, level, xp, money, quests_completed, turn, zone, next_level_xp";
+
+/** How long one query may take, server-side and here. A query that needs longer is a bug in the query. */
+export const CLICKHOUSE_QUERY_SECONDS = 60;
+
+/** Half the server profile's per-query cap (infra/clickhouse/users.d/wrathbench-profile.xml): inspect is never the biggest query on the server. */
+export const CLICKHOUSE_QUERY_MEMORY = 256 << 20;
+
+/**
+ * Every query's settings. `readonly=2` refuses a write whatever the user may
+ * do, and still lets these settings be set. `log_comment` names the reader in
+ * `system.query_log`, which is where a memory incident is traced first
+ * (docs/RUNBOOK.md). A page's lines are megabytes apiece where it holds
+ * requests, and every cut of one is a copy, so blocks are kept to a few
+ * hundred rows: at the default a page of pad cuts reached 380 MiB.
+ */
+export const CLICKHOUSE_SETTINGS: Readonly<Record<string, string>> = {
+  default_format: "JSON",
+  // Without it ClickHouse quotes every Int64, and every clock here arrives as a string.
+  output_format_json_quote_64bit_integers: "0",
+  readonly: "2",
+  max_execution_time: String(CLICKHOUSE_QUERY_SECONDS),
+  max_memory_usage: String(CLICKHOUSE_QUERY_MEMORY),
+  max_block_size: "512",
+  log_comment: "wb inspect",
+};
+
+/** The name of what went wrong, never its message: a fetch error's message can carry the URL, and the URL a password. */
+function errorName(e: unknown): string {
+  if (e instanceof StoreError) return e.message;
+  const code = (e as { code?: unknown } | null)?.code;
+  return typeof code === "string" ? code : e instanceof Error ? e.name : "error";
+}
+
+/** The store over ClickHouse's HTTP interface, the way the viewer reaches it. */
+export function clickhouseStore(cfg: ClickhouseConfig, fetchImpl: (url: URL, init: RequestInit) => Promise<Response> = fetch): InspectStore {
+  const headers: Record<string, string> = { "content-type": "text/plain; charset=utf-8", "x-clickhouse-user": cfg.user };
+  if (cfg.password.length > 0) headers["x-clickhouse-key"] = cfg.password;
+  async function rows<T>(sql: string): Promise<T[]> {
+    const url = new URL(cfg.url);
+    url.searchParams.set("database", cfg.database);
+    for (const [k, v] of Object.entries(CLICKHOUSE_SETTINGS)) url.searchParams.set(k, v);
+    let res: Response;
+    try {
+      res = await fetchImpl(url, { method: "POST", headers, body: sql, signal: AbortSignal.timeout((CLICKHOUSE_QUERY_SECONDS + 15) * 1000) });
+    } catch (e) {
+      throw new StoreError(errorName(e));
+    }
+    const text = await res.text();
+    if (!res.ok) throw new StoreError(`HTTP ${res.status}: ${(text.split("\n", 1)[0] ?? "").slice(0, 160)}`);
+    const body = JSON.parse(text) as { data?: unknown };
+    return Array.isArray(body.data) ? (body.data as T[]) : [];
+  }
+  return {
+    async runs(ids) {
+      const out = new Map<string, StoreRun>();
+      if (ids.length === 0) return out;
+      for (const r of await rows<Record<string, unknown>>(`SELECT ${RUN_COLUMNS} FROM runs FINAL WHERE run_id IN (${sqlList(ids)})`)) {
+        out.set(String(r["run_id"]), { ...runRowOf(r), archived: r["archived"] === 1 });
+      }
+      return out;
+    },
+    async latestStates(ids) {
+      const out = new Map<string, StateRow>();
+      if (ids.length === 0) return out;
+      const sql = `SELECT ${STATE_COLUMNS} FROM states FINAL WHERE run_id IN (${sqlList(ids)}) ORDER BY run_id, seq DESC LIMIT 1 BY run_id`;
+      for (const r of await rows<StateRow & { run_id: string }>(sql)) out.set(r.run_id, r);
+      return out;
+    },
+    async quests(id) {
+      return rows(`SELECT ts, quests_completed AS quests FROM states FINAL WHERE run_id = ${sqlStr(id)} AND quests_completed IS NOT NULL ORDER BY ts, seq`);
+    },
+    async extent(id, w) {
+      return extentOf(await rows<ExtentRow>(extentSql(id, w)));
+    },
+    async rows(id, spec, w, from, to) {
+      return rows<StoreRow>(rowsSql(id, spec, w, from, to));
+    },
+    async raws(id, lines) {
+      const out = new Map<number, string>();
+      if (lines.length === 0) return out;
+      // A few at a time and never aggregated: each is a whole request line.
+      for (let i = 0; i < lines.length; i += RAWS_PER_QUERY) {
+        const some = lines.slice(i, i + RAWS_PER_QUERY).map((l) => Math.trunc(l));
+        for (const r of await rows<{ l: number; r: string }>(`SELECT line_no AS l, raw AS r FROM turns WHERE run_id = ${sqlStr(id)} AND line_no IN (${some.join(", ")})`)) out.set(r.l, r.r);
+      }
+      return out;
+    },
+  };
+}
+
+/** A store row as a record. `pad` is the request's pad, already placed. */
+function storeRec(row: StoreRow, pad: string | null): Rec {
+  const raw = row.r === "" ? null : row.r;
+  const notRecord = row.k === UNPARSEABLE;
+  let parsed: Record<string, unknown> | null | undefined;
+  return {
+    ts: notRecord ? Number.NaN : row.ts,
+    t: notRecord ? "?" : row.k,
+    bytes: row.b,
+    name: () => (row.n === "" ? null : row.n),
+    isError: () => row.e === 1,
+    adapter: () => ADAPTER_IN_HEAD.exec(row.h)?.[1] ?? null,
+    text: () => raw,
+    parse: () => (parsed === undefined ? (parsed = raw === null ? null : parseJson(raw)) : parsed),
+    pad: () => pad,
+    refusal: () => (row.q !== "" ? padRefusalOf(row.q) : raw === null ? null : padRefusalOf(raw)),
+  };
+}
+
+/** Whole request lines a store read may fetch again before it stops and says so; and how many go in one query. */
+export const PAD_REREADS = 32;
+const RAWS_PER_QUERY = 8;
+
+/** A store read's whole-line re-reads: how many are left, and how many requests went without one. */
+export interface Rereads {
+  left: number;
+  skipped: number;
+}
+
+/**
+ * One page as records, oldest first: deduplicated by line, and each request's
+ * pad placed. When the cut from the last pad header does not parse and the
+ * line holds an earlier header, the section may be that one (a pad that quotes
+ * a header of its own), so the line is read again whole, as the file's reader
+ * reads it; at most `PAD_REREADS` of them, after which a pad is counted as
+ * skipped rather than fetched.
+ */
+async function storeRecs(store: InspectStore, runId: string, spec: ReadSpec, rows: readonly StoreRow[], rereads: Rereads): Promise<Rec[]> {
+  const byLine = new Map<number, StoreRow>();
+  for (const r of rows) if (!byLine.has(r.l)) byLine.set(r.l, r);
+  const sorted = [...byLine.values()].sort((x, y) => x.l - y.l);
+  const pads = new Map<number, string | null>();
+  if (spec.pads === true) {
+    const again: number[] = [];
+    for (const r of sorted) {
+      if (r.k !== "request" || r.p === "") continue;
+      const b = Buffer.from(r.p);
+      const pad = padOfRequest(b, 0, b.length);
+      if (pad !== null) pads.set(r.l, pad);
+      else if (r.pn > 1 && rereads.left > again.length) again.push(r.l);
+      else if (r.pn > 1) rereads.skipped++;
+    }
+    rereads.left -= again.length;
+    const whole = await store.raws(runId, again);
+    for (const l of again) {
+      const raw = whole.get(l);
+      const b = raw === undefined ? null : Buffer.from(raw);
+      pads.set(l, b === null ? null : padOfRequest(b, 0, b.length));
+    }
+  }
+  return sorted.map((r) => storeRec(r, pads.get(r.l) ?? null));
+}
+
+/** Lines per page: the first page small, so `--last 20` reads little, then doubling, so a sparse `--grep` does not crawl. */
+export const FIRST_PAGE_LINES = 1_000;
+export const MAX_PAGE_LINES = 20_000;
+
+/** The run's records in [bounds.lo, bounds.hi] that the spec wants, page by page in either direction; `fn` returns true to stop. */
+async function storeRead(
+  store: InspectStore,
+  runId: string,
+  spec: ReadSpec,
+  w: Window,
+  bounds: { lo: number; hi: number } | null,
+  forward: boolean,
+  fn: RecFn,
+  rereads: Rereads = { left: PAD_REREADS, skipped: 0 },
+): Promise<void> {
+  if (bounds === null) return;
+  let lo = bounds.lo;
+  let hi = bounds.hi + 1;
+  for (let size = FIRST_PAGE_LINES; lo < hi; size = Math.min(MAX_PAGE_LINES, size * 2)) {
+    const a = forward ? lo : Math.max(lo, hi - size);
+    const b = forward ? Math.min(hi, lo + size) : hi;
+    const recs = await storeRecs(store, runId, spec, await store.rows(runId, spec, w, a, b), rereads);
+    if (!forward) recs.reverse();
+    for (const r of recs) if (fn(r) === true) return;
+    if (forward) lo = b;
+    else hi = a;
+  }
+}
+
+// ------------------------------------------------------------------ where a view reads
+
+/** Past this, ClickHouse is not keeping up: the collector polls every few seconds. */
+export const STORE_BEHIND_MS = 120_000;
+
+/** How the store stands against the file: the `source` line of a view that reads it. */
+export function freshness(newestTs: number | null, fileNewest: number | null): string {
+  if (newestTs === null) return "ClickHouse, which holds no trajectory record of this run yet";
+  const through = `through ${iso(newestTs)}`;
+  if (fileNewest === null) return `ClickHouse ${through}`;
+  const lag = Math.floor(fileNewest) - newestTs;
+  if (lag < 1000) return `ClickHouse ${through}, current with the file`;
+  const behind = `ClickHouse ${through}, ${fmtAge(lag)} behind the file`;
+  return lag > STORE_BEHIND_MS ? `${behind}: the collector is behind or down, and the newest records are missing here (--files reads the file)` : behind;
+}
+
+/** How the views of one command reach the runs: the store, or the files and why. */
+interface Ctx extends Options {
+  store: InspectStore | null;
+  /** Why the files are read when there is no store. */
+  noStore: string;
+}
+
+/** Where one run's view reads: the store with what it holds, or the files and the `source` line saying why. */
+type Via = { store: InspectStore; run: StoreRun | null; ext: Extent; line: string } | { store: null; line: string };
+
+/**
+ * Where a view of one run reads. `run` needs the run's row from the store; the
+ * trajectory views need only its lines, which a directory with no run.sqlite
+ * row still has.
+ */
+async function viaFor(ctx: Ctx, runId: string, dir: string, w: Window, needRow = false): Promise<Via> {
+  if (ctx.store === null) return { store: null, line: `the files: ${ctx.noStore}` };
+  const traj = join(dir, "trajectory.jsonl");
+  try {
+    const run = (await ctx.store.runs([runId])).get(runId) ?? null;
+    if (run === null && needRow) return { store: null, line: "the files: the run is not in ClickHouse yet" };
+    const ext = await ctx.store.extent(runId, w);
+    let size = 0;
+    try {
+      size = statSync(traj).size;
+    } catch {
+      /* no trajectory */
+    }
+    if (ext.newestTs === null && size > 0) return { store: null, line: `the files: ${run === null ? "the run" : "its trajectory"} is not in ClickHouse yet` };
+    return { store: ctx.store, run, ext, line: freshness(ext.newestTs, size > 0 ? newestInFile(traj) : null) };
+  } catch (e) {
+    return { store: null, line: `the files: ClickHouse unreachable (${errorName(e)})` };
+  }
+}
+
+/** Why a fallback leaves run.sqlite shut: the one sentence every such line ends with. */
+function notOpened(heartbeat: number | null, now: number): string {
+  return `not read: heartbeat ${fmtAge(now - (heartbeat ?? now))} ago, so the run may be live, and a live run's run.sqlite is not opened (ClickHouse holds it)`;
+}
+
 // ------------------------------------------------------------------ inspect run
 
 export interface Out {
@@ -503,10 +1112,6 @@ interface Options {
 export interface Window {
   since: number | null;
   until: number | null;
-}
-
-function inWindow(ts: number, w: Window): boolean {
-  return (w.since === null || ts >= w.since) && (w.until === null || ts <= w.until);
 }
 
 /** `since … until …`, or "" for the whole run. */
@@ -550,13 +1155,13 @@ function nearbyLine(dir: string, now: number): string {
 }
 
 /**
- * Rows per statement when a read has to walk a whole table of a run that may
- * be live. On the rollback journal a statement's SHARED lock lasts as long as
- * the statement, and the runner's commit waits for every one of them: a single
- * full scan of a live run's trace (hundreds of thousands of rows, most of a
- * 300 MB file, from a cold disk) held the file for longer than the writer
+ * Rows per statement when a read has to walk a whole table of a run with no
+ * live owner. On the rollback journal a statement's SHARED lock lasts as long
+ * as the statement, and the runner's commit waits for every one of them: a
+ * single full scan of a live run's trace (hundreds of thousands of rows, most
+ * of a 300 MB file, from a cold disk) held the file for longer than the writer
  * would wait, and the run died of `database is locked`. Walked in rowid
- * windows instead, each its own statement, the writer gets in between them.
+ * windows instead, each its own statement, a writer gets in between them.
  */
 export const SCAN_WINDOW_ROWS = 20_000;
 
@@ -569,20 +1174,29 @@ export function scanByRowid<T>(db: Database, table: string, windowed: (lo: numbe
   return out;
 }
 
-function traceLine(db: Database, runId: string, now: number): string {
+/**
+ * The trace's line. The collector does not hold the trace (collector/README.md,
+ * "Not tailed, on purpose"), so it is read here, and only ever by rowid: the
+ * newest row and the highest rowid are each one index lookup, which is all a
+ * live run gets. A run with no live owner also gets its rows by kind, walked
+ * in windows.
+ */
+function traceLine(db: Database, now: number, live: boolean): string {
   if (!hasTable(db, "trace")) return "no trace table (a run from before the recorder)";
+  const max = (db.query("SELECT max(rowid) AS m FROM trace").get() as { m: number | null }).m;
+  if (max === null) return "no rows";
+  const newest = (db.query("SELECT ts FROM trace ORDER BY rowid DESC LIMIT 1").get() as { ts: number | null } | null)?.ts ?? null;
+  const at = newest === null ? "?" : `${iso(newest)} (${fmtAge(now - newest)} ago)`;
+  const dictMax = hasTable(db, "trace_dict") ? (db.query("SELECT max(rowid) AS m FROM trace_dict").get() as { m: number | null }).m : null;
+  if (live) return `about ${max} rows (by rowid; by kind only once the run has no live owner), newest ${at}; dict about ${dictMax ?? 0}`;
   const byWindow = db.query("SELECT kind, count(*) AS n FROM trace WHERE rowid > ? AND rowid <= ? GROUP BY kind");
   const counts = new Map<string, number>();
-  for (const k of scanByRowid(db, "trace", (lo, hi) => byWindow.all(lo, hi) as { kind: string; n: number }[])) {
-    counts.set(k.kind, (counts.get(k.kind) ?? 0) + k.n);
-  }
-  const kinds = [...counts].map(([kind, n]) => ({ kind, n }));
-  if (kinds.length === 0) return "no rows";
-  const total = kinds.reduce((a, k) => a + k.n, 0);
-  const newest = (db.query("SELECT max(ts) AS m FROM trace WHERE run_id = ?").get(runId) as { m: number | null }).m;
+  for (const k of scanByRowid(db, "trace", (lo, hi) => byWindow.all(lo, hi) as { kind: string; n: number }[])) count(counts, k.kind, k.n);
+  if (counts.size === 0) return "no rows";
+  const total = [...counts.values()].reduce((a, n) => a + n, 0);
   const dict = hasTable(db, "trace_dict") ? (db.query("SELECT count(*) AS n FROM trace_dict").get() as { n: number }).n : 0;
-  const byKind = kinds.sort((a, b) => b.n - a.n).map((k) => `${k.kind} ${k.n}`).join(", ");
-  return `${total} rows (${byKind}), newest ${newest === null ? "?" : `${iso(newest)} (${fmtAge(now - newest)} ago)`}; dict ${dict}`;
+  const byKind = [...counts].sort((a, b) => b[1] - a[1]).map(([kind, n]) => `${kind} ${n}`).join(", ");
+  return `${total} rows (${byKind}), newest ${at}; dict ${dict}`;
 }
 
 function lastState(db: Database): StateRow | null {
@@ -622,20 +1236,35 @@ export function questStretches(samples: readonly { ts: number; quests: number | 
   return stretches.length === 0 ? null : { total: stretches.reduce((n, s) => n + s.last, 0), stretches };
 }
 
-function questLine(db: Database, runId: string): string | null {
+/** The quest samples of a run with no live owner, walked in rowid windows (`scanByRowid`). */
+function questSamplesOf(db: Database, runId: string): { ts: number; quests: number | null }[] | null {
   if (!hasTable(db, "state") || !columns(db, "state").has("quests_completed")) return null;
-  // Windowed (`scanByRowid`), so the walk of a live run's whole state table
-  // never holds the file against its writer.
   const byWindow = db.query(
     "SELECT ts, quests_completed AS quests FROM state WHERE rowid > ? AND rowid <= ? AND run_id = ? AND quests_completed IS NOT NULL ORDER BY ts",
   );
-  const rows = scanByRowid(db, "state", (lo, hi) => byWindow.all(lo, hi, runId) as { ts: number; quests: number | null }[]);
-  const q = questStretches(rows);
+  return scanByRowid(db, "state", (lo, hi) => byWindow.all(lo, hi, runId) as { ts: number; quests: number | null }[]);
+}
+
+function questLine(samples: readonly { ts: number; quests: number | null }[] | null): string | null {
+  const q = samples === null ? null : questStretches(samples);
   if (q === null) return null;
   const restarts = q.stretches.length - 1;
   const newest = q.stretches[q.stretches.length - 1]!.last;
   const head = `${q.total} over the run${restarts > 0 ? `, summed across ${restarts} restart(s); the newest sample reads ${newest}` : ""}`;
   return restarts > 0 ? `${head} · ${q.stretches.map((s) => `from ${clock(s.from).slice(0, 11)} ${s.last}`).join(" · ")}` : head;
+}
+
+function levelLine(st: StateRow | null, now: number): string {
+  if (st === null) return "no state sample yet";
+  return [
+    `L${st.level ?? "?"} ${st.xp ?? "?"}xp${st.next_level_xp != null ? ` of ${st.next_level_xp}` : ""}`,
+    money(st.money) !== null ? `money ${money(st.money)}` : null,
+    st.zone != null ? `zone ${st.zone}` : null,
+    st.turn != null ? `turn ${st.turn}` : null,
+    `sampled ${fmtAge(now - st.ts)} ago`,
+  ]
+    .filter((b): b is string => b !== null)
+    .join(" · ");
 }
 
 interface Activity {
@@ -647,34 +1276,60 @@ interface Activity {
   harness: Map<string, number>;
 }
 
+function newActivity(): Activity {
+  return { records: 0, kinds: new Map(), last: null, snippetErrors: new Map(), toolErrors: new Map(), harness: new Map() };
+}
+
+/** What one record adds to the errors by class and the harness notices by kind. */
+function noteActivity(a: Activity, r: Rec, token: string | null): void {
+  if (r.t === "snippet_result" || r.t === "tool_result") {
+    if (!r.isError()) return;
+    // A result is small next to a request; past 256 KB, read its head only.
+    const p = r.bytes < 256 << 10 ? r.parse() : null;
+    if (r.t === "snippet_result") count(a.snippetErrors, errorClass(p === null ? "" : strike(textOf(p["text"]), token)));
+    else count(a.toolErrors, typeof p?.["name"] === "string" ? (p["name"] as string) : "?");
+  } else if (r.t === "harness") {
+    const p = r.bytes < 64 << 10 ? r.parse() : null;
+    count(a.harness, typeof p?.["kind"] === "string" ? (p["kind"] as string) : "?");
+  }
+}
+
 /** One forward pass over the trajectory: counts by kind, errors by class, harness notices by kind. */
 function scanActivity(path: string, window: Window, token: string | null): Activity {
   const { since, until } = window;
-  const a: Activity = { records: 0, kinds: new Map(), last: null, snippetErrors: new Map(), toolErrors: new Map(), harness: new Map() };
-  const isError = Buffer.from('"isError":true');
-  forwardLines(path, (buf, s, e) => {
-    const h = headOf(buf, s, e);
-    if (until !== null && h.ts > until) return true;
-    if (since !== null && !(h.ts >= since)) return;
-    a.records++;
-    count(a.kinds, h.t);
-    if (Number.isFinite(h.ts) && (a.last === null || h.ts >= a.last.ts)) a.last = h;
-    if (h.t === "snippet_result" || h.t === "tool_result") {
-      const head = buf.subarray(s, Math.min(e, s + 400));
-      if (head.indexOf(isError) < 0) return;
-      // A result is small next to a request; past 256 KB, read its head only.
-      const r = e - s < 256 << 10 ? parseLine(buf, s, e) : null;
-      if (h.t === "snippet_result") count(a.snippetErrors, errorClass(r === null ? "" : strike(textOf(r["text"]), token)));
-      else count(a.toolErrors, typeof r?.["name"] === "string" ? (r["name"] as string) : "?");
-    } else if (h.t === "harness") {
-      const r = e - s < 64 << 10 ? parseLine(buf, s, e) : null;
-      count(a.harness, typeof r?.["kind"] === "string" ? (r["kind"] as string) : "?");
-    }
-  }, since === null ? 0 : seekTime(path, since));
+  const a = newActivity();
+  fileForward(
+    path,
+    (r) => {
+      if (until !== null && r.ts > until) return true;
+      if (since !== null && !(r.ts >= since)) return;
+      a.records++;
+      count(a.kinds, r.t);
+      if (Number.isFinite(r.ts) && (a.last === null || r.ts >= a.last.ts)) a.last = { ts: r.ts, t: r.t };
+      noteActivity(a, r, token);
+    },
+    since === null ? 0 : seekTime(path, since),
+  );
   return a;
 }
 
-export function inspectRun(runId: string, opts: Options & Window, out: Out): number {
+/** The errors and harness notices only: the counts come from the extent. */
+const ACTIVITY_SPEC: ReadSpec = {
+  kinds: { snippet_result: { row: { error: true }, raw: "all" }, tool_result: { row: { error: true }, raw: "all" }, harness: { raw: "all" } },
+};
+
+async function storeActivity(store: InspectStore, runId: string, ext: Extent, w: Window, token: string | null): Promise<Activity> {
+  const a = newActivity();
+  for (const [k, n] of ext.kinds) {
+    a.kinds.set(k, n);
+    a.records += n;
+  }
+  a.last = ext.last;
+  await storeRead(store, runId, ACTIVITY_SPEC, w, ext.window, true, (r) => noteActivity(a, r, token));
+  return a;
+}
+
+export async function inspectRun(runId: string, opts: Ctx & Window, out: Out): Promise<number> {
   const dir = findRunDir(opts.runsDir, runId);
   if (dir === null) {
     out(`no run ${runId} under ${opts.runsDir} (nor its ${ARCHIVE_DIR}/)`);
@@ -683,12 +1338,17 @@ export function inspectRun(runId: string, opts: Options & Window, out: Out): num
   const meta = readMeta(dir);
   const token = strikableToken(meta, runId);
   const say = (label: string, text: string): void => out(`${label.padEnd(10)} ${cap(strike(text, token), opts.width - 11)}`);
+  const heartbeat = heartbeatAt(dir);
+  const owned = ownedAt(heartbeat, opts.now);
+  const via = await viaFor(opts, runId, dir, opts, true);
+  // Opened only on a fallback for a run with no live owner, and for the trace, which only the file holds.
   const db = openDb(dir);
   try {
-    const row = db === null ? null : readRow(db, runId);
-    const verdict = verdictOf(row, heartbeatAt(dir), opts.now);
+    const row: RunRow | null | undefined = via.store !== null ? via.run : owned ? undefined : db === null ? null : readRow(db, runId);
+    const verdict = verdictOf(row, heartbeat, opts.now);
     say("run", `${runId}${dir.includes(`/${ARCHIVE_DIR}/`) ? " (archived)" : ""}`);
     say("verdict", describeVerdict(verdict, meta, opts.now));
+    say("source", via.line);
 
     const config = obj(meta?.["config"]);
     const comparability = obj(meta?.["comparability"]);
@@ -710,26 +1370,23 @@ export function inspectRun(runId: string, opts: Options & Window, out: Out): num
       `${iso(started)}${started !== null ? ` (${fmtAge(opts.now - started)} ago)` : ""}${row?.ended_at != null ? ` · ended ${iso(row.ended_at)} (${fmtAge(opts.now - row.ended_at)} ago)` : ""}`,
     );
 
-    const st = db === null ? null : lastState(db);
-    if (st === null) say("level", "no state sample yet");
-    else {
-      const parts = [
-        `L${st.level ?? "?"} ${st.xp ?? "?"}xp${st.next_level_xp != null ? ` of ${st.next_level_xp}` : ""}`,
-        money(st.money) !== null ? `money ${money(st.money)}` : null,
-        st.zone != null ? `zone ${st.zone}` : null,
-        st.turn != null ? `turn ${st.turn}` : null,
-        `sampled ${fmtAge(opts.now - st.ts)} ago`,
-      ].filter((b): b is string => b !== null);
-      say("level", parts.join(" · "));
+    if (via.store !== null) {
+      say("level", levelLine((await via.store.latestStates([runId])).get(runId) ?? null, opts.now));
+      // The newest sample's count is its process's, so the run's is its own line.
+      const quests = questLine(await via.store.quests(runId));
+      if (quests !== null) say("quests", quests);
+    } else if (owned) {
+      say("level", notOpened(heartbeat, opts.now));
+    } else {
+      say("level", levelLine(db === null ? null : lastState(db), opts.now));
+      const quests = questLine(db === null ? null : questSamplesOf(db, runId));
+      if (quests !== null) say("quests", quests);
     }
-    // The newest sample's count is its process's, so the run's is its own line.
-    const quests = db === null ? null : questLine(db, runId);
-    if (quests !== null) say("quests", quests);
 
     const traj = join(dir, "trajectory.jsonl");
     if (!existsSync(traj)) say("activity", "no trajectory.jsonl");
     else {
-      const a = scanActivity(traj, opts, token);
+      const a = via.store !== null ? await storeActivity(via.store, runId, via.ext, opts, token) : scanActivity(traj, opts, token);
       const k = (t: string): number => a.kinds.get(t) ?? 0;
       const window = windowPhrase(opts) === "" ? "" : `${windowPhrase(opts)}: `;
       const last = a.last === null ? "none" : `${a.last.t} ${fmtAge(opts.now - a.last.ts)} ago`;
@@ -745,7 +1402,7 @@ export function inspectRun(runId: string, opts: Options & Window, out: Out): num
       if (marks.length > 0) say("marks", marks.join(", "));
     }
     say("files", fileLine(dir));
-    say("trace", db === null ? "no run.sqlite" : traceLine(db, runId, opts.now));
+    say("trace", db === null ? "no run.sqlite" : traceLine(db, opts.now, owned));
     say("nearby", nearbyLine(dir, opts.now));
     return 0;
   } finally {
@@ -757,10 +1414,12 @@ export function inspectRun(runId: string, opts: Options & Window, out: Out): num
 
 /**
  * Every run with a heartbeat file: a stat per run directory and nothing more,
- * then the row of only those few. A run that paused or ended cleanly removed
- * its heartbeat, so it is not here; one killed hard left a cold one, and shows.
+ * then the rows and newest samples of only those few, from ClickHouse. A run
+ * that paused or ended cleanly removed its heartbeat, so it is not here; one
+ * killed hard left a cold one, and shows. Without ClickHouse a cold one's row
+ * is read from its run.sqlite and a fresh one's is not read at all.
  */
-export function inspectLive(opts: Options, out: Out): number {
+export async function inspectLive(opts: Ctx, out: Out): Promise<number> {
   let names: string[];
   try {
     names = readdirSync(opts.runsDir);
@@ -776,28 +1435,52 @@ export function inspectLive(opts: Options, out: Out): number {
     if (hb !== null) found.push({ id, dir, hb });
   }
   found.sort((a, b) => a.id.localeCompare(b.id));
-  const owned = found.filter((f) => opts.now - f.hb < HEARTBEAT_DEAD_MS).length;
+  const owned = found.filter((f) => ownedAt(f.hb, opts.now)).length;
   out(`${owned} run(s) with a live owner, ${found.length - owned} with a cold heartbeat, of ${names.length} entries under ${opts.runsDir}`);
-  for (const f of found) {
-    const db = openDb(f.dir);
+  let rows: Map<string, StoreRun> | null = null;
+  let states = new Map<string, StateRow>();
+  let source = `the files: ${opts.noStore}`;
+  if (opts.store !== null && found.length > 0) {
     try {
-      const row = db === null ? null : readRow(db, f.id);
-      const v = verdictOf(row, f.hb, opts.now);
-      const st = db === null ? null : lastState(db);
-      const level = st === null ? "L?" : `L${st.level ?? "?"} ${st.xp ?? "?"}xp`;
-      const age = row?.started_at != null ? `up ${fmtAge(opts.now - row.started_at)}` : "";
-      const reason = v.reason !== null ? ` ${v.reason}` : "";
-      out(cap(`  ${f.id}  ${v.state}${reason}  hb ${fmtAge(opts.now - f.hb)}  ${level}  ${age}  ${row?.model ?? ""}`, opts.width));
-    } finally {
-      db?.close();
+      const ids = found.map((f) => f.id);
+      rows = await opts.store.runs(ids);
+      states = await opts.store.latestStates(ids);
+      source = "ClickHouse for the rows and the newest samples; the heartbeats from the files";
+    } catch (e) {
+      source = `the files: ClickHouse unreachable (${errorName(e)})`;
     }
+  } else if (opts.store !== null) source = "the heartbeats from the files; none to look up in ClickHouse";
+  for (const f of found) {
+    let row: RunRow | null | undefined;
+    let st: StateRow | null = null;
+    if (rows !== null && rows.has(f.id)) {
+      row = rows.get(f.id)!;
+      st = states.get(f.id) ?? null;
+    } else if (ownedAt(f.hb, opts.now)) {
+      row = undefined;
+    } else {
+      const db = openDb(f.dir);
+      try {
+        row = db === null ? null : readRow(db, f.id);
+        st = db === null ? null : lastState(db);
+      } finally {
+        db?.close();
+      }
+    }
+    const v = verdictOf(row, f.hb, opts.now);
+    const level = st === null ? "L?" : `L${st.level ?? "?"} ${st.xp ?? "?"}xp`;
+    const age = row?.started_at != null ? `up ${fmtAge(opts.now - row.started_at)}` : "";
+    const reason = v.reason !== null ? ` ${v.reason}` : "";
+    const missing = rows !== null && !rows.has(f.id) ? "  (not in ClickHouse yet)" : "";
+    out(cap(`  ${f.id}  ${v.state}${reason}  hb ${fmtAge(opts.now - f.hb)}  ${level}  ${age}  ${row?.model ?? ""}${missing}`, opts.width));
   }
+  out(cap(`source    ${source}`, opts.width));
   return 0;
 }
 
 // ------------------------------------------------------------------ inspect trajectory
 
-export interface TrajectoryOptions extends Options, Window {
+export interface TrajectoryOptions extends Ctx, Window {
   /** How many items: the newest N (`--last`), or with `forward` the oldest N from the window's start (`--next`). */
   last: number;
   forward: boolean;
@@ -815,8 +1498,6 @@ interface Item {
 
 /** Kinds the default view shows as their own line. */
 const NOTICES = new Set(["harness", "pause", "resume", "termination", "continue", "quest_complete", "codex_stderr"]);
-/** Record kinds too big to be worth parsing for a line of their own. */
-const SIZE_ONLY = new Set(["request", "events_served", "claude_system", "driver", "codex_result", "actions"]);
 
 function around(text: string, re: RegExp | null, width: number): string {
   if (re === null) return text;
@@ -875,18 +1556,32 @@ function meet(
   return side === "call" ? { call: r, res: other } : { call: other, res: r };
 }
 
-export function inspectTrajectory(runId: string, opts: TrajectoryOptions, out: Out): number {
+/** The default view's kinds, each line fetched: the calls are read with the results so the two meet. */
+const TRAJECTORY_SPEC: ReadSpec = {
+  kinds: Object.fromEntries(["snippet", "snippet_result", "tool_call", "tool_result", ...NOTICES].map((k) => [k, { raw: "all" as Rule }])),
+};
+const TRAJECTORY_ALL_SPEC: ReadSpec = { kinds: "all" };
+
+/** The run's trajectory, or a line saying why there is none. */
+function trajectoryOf(runId: string, opts: Options, out: Out): { dir: string; path: string; token: string | null } | null {
   const dir = findRunDir(opts.runsDir, runId);
   if (dir === null) {
     out(`no run ${runId} under ${opts.runsDir} (nor its ${ARCHIVE_DIR}/)`);
-    return 1;
+    return null;
   }
   const path = join(dir, "trajectory.jsonl");
   if (!existsSync(path)) {
     out(`${runId} has no trajectory.jsonl`);
-    return 1;
+    return null;
   }
-  const token = strikableToken(readMeta(dir), runId);
+  return { dir, path, token: strikableToken(readMeta(dir), runId) };
+}
+
+export async function inspectTrajectory(runId: string, opts: TrajectoryOptions, out: Out): Promise<number> {
+  const run = trajectoryOf(runId, opts, out);
+  if (run === null) return 1;
+  const { path, token } = run;
+  const via = await viaFor(opts, runId, run.dir, opts);
   const w = opts.width;
   const items: Item[] = [];
   // Newest first for --last, a result met before its call; oldest first for --next, the call first.
@@ -931,61 +1626,61 @@ export function inspectTrajectory(runId: string, opts: TrajectoryOptions, out: O
     return { ts, error, text: `${clock(ts)}  t${turn} #${n}  ${name} ${verdict}  ${cap(around(args, opts.grep, half), half)}  ⇒ ${cap(around(resText, opts.grep, half), half)}` };
   };
 
-  const onLine: LineFn = (buf, s, e) => {
-    const h = headOf(buf, s, e);
-    if (Number.isFinite(h.ts)) {
+  const onRec: RecFn = (rec) => {
+    if (Number.isFinite(rec.ts)) {
       // Past the window's far edge in the direction of reading: stop. On its near side: skip.
-      if (opts.since !== null && h.ts < opts.since) return opts.forward ? undefined : true;
-      if (opts.until !== null && h.ts > opts.until) return opts.forward ? true : undefined;
+      if (opts.since !== null && rec.ts < opts.since) return opts.forward ? undefined : true;
+      if (opts.until !== null && rec.ts > opts.until) return opts.forward ? true : undefined;
     }
     if (opts.all) {
-      if (opts.errors && h.t !== "snippet_result" && h.t !== "tool_result") return;
-      if (SIZE_ONLY.has(h.t) || e - s > 256 << 10) {
+      if (opts.errors && rec.t !== "snippet_result" && rec.t !== "tool_result") return;
+      if (SIZE_ONLY.has(rec.t) || rec.bytes > 256 << 10) {
         if (opts.grep !== null || opts.errors) return;
-        return keep({ ts: h.ts, error: false, text: `${clock(h.ts)}  ${h.t}  (${fmtBytes(e - s)})` });
+        return keep({ ts: rec.ts, error: false, text: `${clock(rec.ts)}  ${rec.t}  (${fmtBytes(rec.bytes)})` });
       }
-      const r = parseLine(buf, s, e);
+      const r = rec.parse();
       if (r === null) return;
       // --grep filters every kind, meta included: a kept meta line would spend the --last budget.
-      if (!grepOk(strike(buf.toString("utf8", s, e), token))) return;
-      if (h.t === "meta") {
-        return keep({ ts: h.ts, error: false, text: `${clock(h.ts)}  meta  run ${String(r["runId"] ?? "?")} harness ${String(r["harnessVersion"] ?? "?")}` });
+      if (!grepOk(strike(rec.text() ?? "", token))) return;
+      if (rec.t === "meta") {
+        return keep({ ts: rec.ts, error: false, text: `${clock(rec.ts)}  meta  run ${String(r["runId"] ?? "?")} harness ${String(r["harnessVersion"] ?? "?")}` });
       }
       const line = compact(r, w, token);
       const error = r["isError"] === true;
-      return keep({ ts: h.ts, error, text: `${clock(h.ts)}  ${h.t}  ${line}` });
+      return keep({ ts: rec.ts, error, text: `${clock(rec.ts)}  ${rec.t}  ${line}` });
     }
-    switch (h.t) {
+    switch (rec.t) {
       case "snippet":
       case "snippet_result": {
-        const r = parseLine(buf, s, e);
+        const r = rec.parse();
         if (r === null) return;
-        const pair = meet(pendingSnippet, firstSide, callKey(r), h.t === "snippet" ? "call" : "result", r);
+        const pair = meet(pendingSnippet, firstSide, callKey(r), rec.t === "snippet" ? "call" : "result", r);
         const it = pair === null ? null : snippetItem(pair.call, pair.res);
         return it === null ? undefined : keep(it);
       }
       case "tool_call":
       case "tool_result": {
-        const r = parseLine(buf, s, e);
+        const r = rec.parse();
         if (r === null) return;
         // A snippet's call is shown by its snippet record, which carries the same code.
-        if (h.t === "tool_call" && r["name"] === "run_snippet") return;
-        const pair = meet(pendingTool, firstSide, callKey(r), h.t === "tool_call" ? "call" : "result", r);
+        if (rec.t === "tool_call" && r["name"] === "run_snippet") return;
+        const pair = meet(pendingTool, firstSide, callKey(r), rec.t === "tool_call" ? "call" : "result", r);
         const it = pair === null ? null : toolItem(pair.call, pair.res);
         return it === null ? undefined : keep(it);
       }
       default: {
-        if (!NOTICES.has(h.t) || opts.errors || e - s > 64 << 10) return;
-        const r = parseLine(buf, s, e);
+        if (!NOTICES.has(rec.t) || opts.errors || rec.bytes > 64 << 10) return;
+        const r = rec.parse();
         if (r === null) return;
         const line = compact(r, w, token);
         if (!grepOk(line)) return;
-        return keep({ ts: h.ts, error: false, text: `${clock(h.ts)}  ${h.t}  ${line}` });
+        return keep({ ts: rec.ts, error: false, text: `${clock(rec.ts)}  ${rec.t}  ${line}` });
       }
     }
   };
-  if (opts.forward) forwardLines(path, onLine, opts.since === null ? 0 : seekTime(path, opts.since));
-  else backwardLines(path, onLine, opts.until === null ? undefined : offsetAfter(path, opts.until));
+  if (via.store !== null) await storeRead(via.store, runId, opts.all ? TRAJECTORY_ALL_SPEC : TRAJECTORY_SPEC, opts, via.ext.window, opts.forward, onRec);
+  else if (opts.forward) fileForward(path, onRec, opts.since === null ? 0 : seekTime(path, opts.since));
+  else fileBackward(path, onRec, opts.until === null ? undefined : offsetAfter(path, opts.until));
   // A first-read half never met: reading back, a result whose call the file or
   // the window cut off; reading forward, a call whose result lies past it.
   if (items.length < opts.last) {
@@ -1003,6 +1698,7 @@ export function inspectTrajectory(runId: string, opts: TrajectoryOptions, out: O
   const filters = [opts.errors ? "errors only" : null, opts.grep !== null ? `matching /${opts.grep.source}/${opts.grep.flags}` : null, windowPhrase(opts) || null, opts.all ? "every record kind" : null].filter(Boolean);
   out(cap(strike(`${runId}: the ${opts.forward ? "first" : "last"} ${shown.length} ${opts.all ? "record(s)" : "item(s)"}${filters.length > 0 ? ` (${filters.join(", ")})` : ""}, oldest first, UTC`, token), w));
   for (const it of shown) out(cap(strike(it.text, token), w));
+  out(cap(`source    ${via.line}`, w));
   return 0;
 }
 
@@ -1037,10 +1733,10 @@ export const PAD_ARG_ALIASES: Record<string, Record<string, string>> = {
     replaceall: "replaceAll",
   },
 };
-const PAD_TOOLS = new Set(Object.keys(PAD_ARG_ALIASES));
+const PAD_TOOL_NAMES = Object.keys(PAD_ARG_ALIASES);
+const PAD_TOOLS = new Set(PAD_TOOL_NAMES);
 /** A snippet that writes the pad: found in its code, so a write behind a branch it never took still counts. */
 const SNIPPET_PAD_WRITE = /\bscratchpad\s*\.\s*(write|append)\s*\(/g;
-const SCRATCHPAD_BYTES = Buffer.from("scratchpad");
 
 /** `scratchpadSizeLabel` (wrath-mcp/mcp/src/scratchpad.ts): the size every turn's context shows, "31.2k/32k". */
 export function padSizeLabel(chars: number): string {
@@ -1050,7 +1746,7 @@ export function padSizeLabel(chars: number): string {
 
 const PAD_HEAD = /^\n\n\[scratchpad(?: ([^\]\n]*))?\]\n/;
 /** The pad section's header as it sits inside a JSON string: its newlines escaped. */
-const PAD_HEADER_JSON = Buffer.from("\\n\\n[scratchpad");
+const PAD_HEADER_JSON = Buffer.from(PAD_HEADER_RAW);
 
 /**
  * The pad, off a context's text from its `\n\n[scratchpad` header to the end.
@@ -1139,30 +1835,29 @@ function padRefusalIn(buf: Buffer, s: number, e: number): { op: string; chars: n
 }
 
 /** Which of `scratchpad.write(` and `scratchpad.append(` a snippet record's code calls; null for neither. */
-function snippetPadWrites(buf: Buffer, s: number, e: number): string | null {
-  if (e - s > 4 << 20 || buf.subarray(s, e).indexOf(SCRATCHPAD_BYTES) < 0) return null;
-  const code = textOf(parseLine(buf, s, e)?.["code"]);
+function snippetPadWrites(r: Rec): string | null {
+  if (r.bytes > RAW_CAP_BYTES) return null;
+  const text = r.text();
+  if (text === null || !text.includes("scratchpad")) return null;
+  const code = textOf(r.parse()?.["code"]);
   const found = new Set([...code.matchAll(SNIPPET_PAD_WRITE)].map((m) => m[1]!));
   if (found.size === 0) return null;
   return ["write", "append"].filter((k) => found.has(k)).join("+");
 }
 
-const NAME_IN_HEAD = /"name":"([^"\\]{1,64})"/;
-const ADAPTER_IN_HEAD = /"adapter":"([^"\\]{1,200})"/;
-
-function headString(buf: Buffer, s: number, e: number): string {
-  return buf.toString("latin1", s, Math.min(e, s + 400));
-}
-
-/** The run's driver: the row's, else meta's, else a request's adapter label up to its colon (a copy without run.sqlite). */
-function driverName(adapter: string | null, dir: string, runId: string): string {
-  const db = openDb(dir);
-  try {
-    const fromRow = db === null ? null : (readRow(db, runId)?.driver ?? null);
-    return fromRow ?? str(obj(readMeta(dir)?.["config"])["driver"]) ?? adapter?.split(":")[0] ?? "?";
-  } finally {
-    db?.close();
+/** The run's driver: the row's, else meta's, else a request's adapter label up to its colon. A live run's row is read only from ClickHouse. */
+function driverName(adapter: string | null, dir: string, runId: string, via: Via, now: number): string {
+  let fromRow: string | null = null;
+  if (via.store !== null && via.run !== null) fromRow = via.run.driver;
+  else if (!ownedAt(heartbeatAt(dir), now)) {
+    const db = openDb(dir);
+    try {
+      fromRow = db === null ? null : (readRow(db, runId)?.driver ?? null);
+    } finally {
+      db?.close();
+    }
   }
+  return fromRow ?? str(obj(readMeta(dir)?.["config"])["driver"]) ?? adapter?.split(":")[0] ?? "?";
 }
 
 /** Characters as a short figure: 950, 12.3k. */
@@ -1171,19 +1866,9 @@ function fmtChars(n: number | null): string {
   return n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`;
 }
 
-/** The run's trajectory, or a line saying why there is none. */
-function trajectoryOf(runId: string, opts: Options, out: Out): { dir: string; path: string; token: string | null } | null {
-  const dir = findRunDir(opts.runsDir, runId);
-  if (dir === null) {
-    out(`no run ${runId} under ${opts.runsDir} (nor its ${ARCHIVE_DIR}/)`);
-    return null;
-  }
-  const path = join(dir, "trajectory.jsonl");
-  if (!existsSync(path)) {
-    out(`${runId} has no trajectory.jsonl`);
-    return null;
-  }
-  return { dir, path, token: strikableToken(readMeta(dir), runId) };
+/** A window's records by clock: the store's own extent, or the reducer's count off the file. */
+function spanFrom(ext: Extent): { first: number | null; last: number | null } {
+  return { first: ext.window?.firstTs ?? null, last: ext.window?.lastTs ?? null };
 }
 
 // ------------------------------------------------------------------ inspect tools
@@ -1217,8 +1902,8 @@ function toolErrorClass(name: string, text: string): string {
   return first.split(/\s+/).slice(0, 4).join(" ").slice(0, 40) || "(empty)";
 }
 
-/** One forward pass over the window: every tool's calls and results, the reflect gate, the pad's writers. */
-export function scanTools(path: string, w: Window): ToolsScan {
+/** The tools view over the window, record by record: every tool's calls and results, the reflect gate, the pad's writers. */
+function toolsReducer(w: Window): { a: ToolsScan; fn: RecFn; done: () => ToolsScan } {
   const a: ToolsScan = {
     first: null,
     last: null,
@@ -1237,88 +1922,122 @@ export function scanTools(path: string, w: Window): ToolsScan {
     return t;
   };
   let openAt: number | null = null;
-  forwardLines(
-    path,
-    (buf, s, e) => {
-      const h = headOf(buf, s, e);
-      if (Number.isFinite(h.ts)) {
-        if (w.until !== null && h.ts > w.until) return true;
-        if (w.since !== null && h.ts < w.since) return;
-        a.first ??= h.ts;
-        a.last = h.ts;
+  const fn: RecFn = (r) => {
+    if (Number.isFinite(r.ts)) {
+      if (w.until !== null && r.ts > w.until) return true;
+      if (w.since !== null && r.ts < w.since) return;
+      a.first ??= r.ts;
+      a.last = r.ts;
+    }
+    switch (r.t) {
+      case "request":
+        a.requests++;
+        a.adapter ??= r.adapter();
+        return;
+      case "response":
+        a.responses++;
+        return;
+      case "tool_call":
+        tally(r.name() ?? "?").calls++;
+        return;
+      case "snippet": {
+        const which = snippetPadWrites(r);
+        if (which !== null) count(a.snippetPad, which);
+        return;
       }
-      switch (h.t) {
-        case "request":
-          a.requests++;
-          a.adapter ??= ADAPTER_IN_HEAD.exec(headString(buf, s, e))?.[1] ?? null;
-          return;
-        case "response":
-          a.responses++;
-          return;
-        case "tool_call": {
-          const name = NAME_IN_HEAD.exec(headString(buf, s, e))?.[1] ?? "?";
-          tally(name).calls++;
-          return;
+      case "snippet_result":
+      case "tool_result": {
+        const name = r.name() ?? (r.t === "snippet_result" ? "run_snippet" : "?");
+        const isError = r.isError();
+        const t = tally(name);
+        t.results++;
+        const refusal = r.refusal();
+        if (refusal !== null) count(a.padRefusals, refusal.op);
+        // Results are small next to a request; past 256 KB, the head says enough.
+        const p = isError || name === "reflect" ? (r.bytes < 256 << 10 ? r.parse() : null) : null;
+        const text = textOf(p?.["text"]);
+        if (name === "reflect") {
+          // The marker came later than the tool: a result without it is the same reflect call, older.
+          if (p?.["reflect"] === true) a.reflect.marked++;
+          if (!isError) a.reflect.granted++;
+          else if (text.startsWith(REFLECT_NOT_RESTING_HEAD)) a.reflect.notResting++;
+          else if (text.startsWith(REFLECT_ALREADY_USED_HEAD)) a.reflect.alreadyUsed++;
+          else a.reflect.otherRefusal++;
         }
-        case "snippet": {
-          const which = snippetPadWrites(buf, s, e);
-          if (which !== null) count(a.snippetPad, which);
-          return;
+        if (isError) {
+          t.errors++;
+          count(t.classes, refusal !== null ? "over cap" : p === null ? "(a result over 256 KB, unread)" : toolErrorClass(name, text));
         }
-        case "snippet_result":
-        case "tool_result": {
-          const head = headString(buf, s, e);
-          const name = NAME_IN_HEAD.exec(head)?.[1] ?? (h.t === "snippet_result" ? "run_snippet" : "?");
-          const isError = head.includes('"isError":true');
-          const t = tally(name);
-          t.results++;
-          const refusal = padRefusalIn(buf, s, e);
-          if (refusal !== null) count(a.padRefusals, refusal.op);
-          // Results are small next to a request; past 256 KB, the head says enough.
-          const r = isError || name === "reflect" ? (e - s < 256 << 10 ? parseLine(buf, s, e) : null) : null;
-          const text = textOf(r?.["text"]);
-          if (name === "reflect") {
-            // The marker came later than the tool: a result without it is the same reflect call, older.
-            if (r?.["reflect"] === true) a.reflect.marked++;
-            if (!isError) a.reflect.granted++;
-            else if (text.startsWith(REFLECT_NOT_RESTING_HEAD)) a.reflect.notResting++;
-            else if (text.startsWith(REFLECT_ALREADY_USED_HEAD)) a.reflect.alreadyUsed++;
-            else a.reflect.otherRefusal++;
-          }
-          if (isError) {
-            t.errors++;
-            count(t.classes, refusal !== null ? "over cap" : r === null ? "(a result over 256 KB, unread)" : toolErrorClass(name, text));
-          }
-          return;
-        }
-        case "reflect_window": {
-          const r = parseLine(buf, s, e);
-          if (r?.["event"] === "open") {
-            a.windows.opens++;
-            openAt = h.ts;
-          } else if (r?.["event"] === "close") {
-            count(a.windows.closes, String(r["reason"] ?? "?"));
-            if (openAt !== null && h.ts - openAt < 1000) a.windows.zeroLength++;
-            openAt = null;
-          }
-          return;
-        }
+        return;
       }
+      case "reflect_window": {
+        const p = r.parse();
+        if (p?.["event"] === "open") {
+          a.windows.opens++;
+          openAt = r.ts;
+        } else if (p?.["event"] === "close") {
+          count(a.windows.closes, String(p["reason"] ?? "?"));
+          if (openAt !== null && r.ts - openAt < 1000) a.windows.zeroLength++;
+          openAt = null;
+        }
+        return;
+      }
+    }
+  };
+  return {
+    a,
+    fn,
+    done: () => {
+      a.windows.openAtEnd = openAt !== null;
+      return a;
     },
-    w.since === null ? 0 : seekTime(path, w.since),
-  );
-  a.windows.openAtEnd = openAt !== null;
+  };
+}
+
+/** One forward pass over the file's window: every tool's calls and results, the reflect gate, the pad's writers. */
+export function scanTools(path: string, w: Window): ToolsScan {
+  const t = toolsReducer(w);
+  fileForward(path, t.fn, w.since === null ? 0 : seekTime(path, w.since));
+  return t.done();
+}
+
+/**
+ * What `tools` asks of the store. A response is only counted, so the extent
+ * counts it; every other row comes, but its line only when the view would
+ * parse it: a result that failed or is reflect's, a snippet that names the
+ * pad, every reflect window.
+ */
+const TOOLS_SPEC: ReadSpec = {
+  kinds: {
+    request: { raw: "none" },
+    tool_call: { raw: "none" },
+    snippet: { row: { contains: "scratchpad" }, raw: "all" },
+    snippet_result: { raw: { error: true, names: ["reflect"] } },
+    tool_result: { raw: { error: true, names: ["reflect"] } },
+    reflect_window: { raw: "all" },
+  },
+  heads: true,
+  refusals: true,
+};
+
+async function storeTools(store: InspectStore, runId: string, ext: Extent, w: Window): Promise<ToolsScan> {
+  const t = toolsReducer(w);
+  await storeRead(store, runId, TOOLS_SPEC, w, ext.window, true, t.fn);
+  const a = t.done();
+  a.responses = ext.kinds.get("response") ?? 0;
+  ({ first: a.first, last: a.last } = spanFrom(ext));
   return a;
 }
 
-export function inspectTools(runId: string, opts: Options & Window, out: Out): number {
+export async function inspectTools(runId: string, opts: Ctx & Window, out: Out): Promise<number> {
   const run = trajectoryOf(runId, opts, out);
   if (run === null) return 1;
-  const a = scanTools(run.path, opts);
+  const via = await viaFor(opts, runId, run.dir, opts);
+  const a = via.store !== null ? await storeTools(via.store, runId, via.ext, opts) : scanTools(run.path, opts);
   const say = (text: string): void => out(cap(strike(text, run.token), opts.width));
   const span = a.first === null ? "no records" : `${clock(a.first)} to ${clock(a.last!)}`;
   say(`${runId}: tool calls by name, ${windowPhrase(opts) || "whole run"} (${span}), UTC`);
-  say(`driver    ${driverName(a.adapter, run.dir, runId)} · ${a.requests} request(s) · ${a.responses} model response(s)`);
+  say(`driver    ${driverName(a.adapter, run.dir, runId, via, opts.now)} · ${a.requests} request(s) · ${a.responses} model response(s)`);
   const rows = [...a.tools].sort((x, y) => Math.max(y[1].results, y[1].calls) - Math.max(x[1].results, x[1].calls) || x[0].localeCompare(y[0]));
   say(`${"tool".padEnd(22)} ${"calls".padStart(6)} ${"ok".padStart(6)} ${"err".padStart(6)}  errors`);
   for (const [name, t] of rows) {
@@ -1343,7 +2062,7 @@ export function inspectTools(runId: string, opts: Options & Window, out: Out): n
       say("          when the model yields writes them late and together; count grants from the reflection line, not from windows");
     }
   }
-  const padTools = ["write_scratchpad", "edit_scratchpad"].map((n) => {
+  const padTools = PAD_TOOL_NAMES.map((n) => {
     const t = a.tools.get(n);
     const over = t?.classes.get("over cap") ?? 0;
     return `${n} ${t?.results ?? 0}${over > 0 ? ` (${over} over cap)` : ""}`;
@@ -1351,6 +2070,7 @@ export function inspectTools(runId: string, opts: Options & Window, out: Out): n
   const snippetOver = [...a.padRefusals].filter(([op]) => op.startsWith("scratchpad.")).reduce((x, [, n]) => x + n, 0);
   const inSnippets = a.snippetPad.size === 0 ? "none" : topCounts(a.snippetPad, 3);
   say(`pad       tools: ${padTools.join(", ")} · snippets calling scratchpad.write/append: ${inSnippets}${snippetOver > 0 ? ` (${snippetOver} refused over cap)` : ""}`);
+  say(`source    ${via.line}`);
   return 0;
 }
 
@@ -1392,8 +2112,8 @@ export function isDrop(w: Pick<PadWrite, "before" | "after">): boolean {
   return w.before !== null && w.after !== null && w.before > 0 && w.after < w.before * 0.7;
 }
 
-/** One forward pass over the window: the pad's size wherever a record says it, and every write. */
-export function scanPad(path: string, w: Window): PadScan {
+/** The pad view over the window, record by record: the pad's size wherever a record says it, and every write. */
+function padReducer(w: Window): { p: PadScan; fn: RecFn } {
   const p: PadScan = { first: null, last: null, adapter: null, requests: 0, requestsWithPad: 0, toolCalls: 0, samples: [], writes: [] };
   let known: number | null = null;
   // The snippet write the next request's pad sizes, while no other write has come after it.
@@ -1405,96 +2125,132 @@ export function scanPad(path: string, w: Window): PadScan {
     p.writes.push(pw);
     return pw;
   };
-  forwardLines(
-    path,
-    (buf, s, e) => {
-      const h = headOf(buf, s, e);
-      if (Number.isFinite(h.ts)) {
-        if (w.until !== null && h.ts > w.until) return true;
-        if (w.since !== null && h.ts < w.since) return;
-        p.first ??= h.ts;
-        p.last = h.ts;
-      }
-      switch (h.t) {
-        case "request": {
-          p.requests++;
-          p.adapter ??= ADAPTER_IN_HEAD.exec(headString(buf, s, e))?.[1] ?? null;
-          const pad = padOfRequest(buf, s, e);
-          if (pad === null) return;
-          p.requestsWithPad++;
-          p.samples.push({ ts: h.ts, chars: pad.length });
-          if (open !== null) {
-            open.after = pad.length;
-            open.afterFrom = "next request";
-            open = null;
-          }
-          known = pad.length;
-          return;
-        }
-        case "tool_call":
-          p.toolCalls++;
-          return;
-        case "snippet": {
-          const which = snippetPadWrites(buf, s, e);
-          if (which === null) return;
-          const r = parseLine(buf, s, e);
-          const pw = write(h.ts, r, `snippet ${which}`);
-          bySnippet.set(key(r), pw);
-          open = pw;
-          return;
-        }
-        case "snippet_result": {
-          const refusal = padRefusalIn(buf, s, e);
-          if (refusal === null) return;
-          const r = e - s < 256 << 10 ? parseLine(buf, s, e) : null;
-          const pw = bySnippet.get(key(r)) ?? write(h.ts, r, `snippet ${refusal.op.replace(/^scratchpad\./, "")}`);
-          bySnippet.delete(key(r));
-          pw.refused = refusal.chars;
-          if (open === pw) open = null;
-          return;
-        }
-        case "tool_result": {
-          const name = NAME_IN_HEAD.exec(headString(buf, s, e))?.[1] ?? "?";
-          if (!PAD_TOOLS.has(name)) return;
-          const r = parseLine(buf, s, e);
-          const text = textOf(r?.["text"]);
-          const how = name === "write_scratchpad" ? "tool write" : "tool edit";
-          if (r?.["isError"] === true) {
-            // A refused edit for any other reason (no match, ambiguous) changed nothing.
-            const refusal = padRefusalOf(text);
-            if (refusal !== null) write(h.ts, r, how).refused = refusal.chars;
-            return;
-          }
-          const chars = sizeOfResult(text);
-          const pw = write(h.ts, r, how);
-          pw.after = chars;
-          pw.afterFrom = chars === null ? null : "result";
-          if (chars !== null) {
-            p.samples.push({ ts: h.ts, chars });
-            known = chars;
-          }
+  const fn: RecFn = (r) => {
+    if (Number.isFinite(r.ts)) {
+      if (w.until !== null && r.ts > w.until) return true;
+      if (w.since !== null && r.ts < w.since) return;
+      p.first ??= r.ts;
+      p.last = r.ts;
+    }
+    switch (r.t) {
+      case "request": {
+        p.requests++;
+        p.adapter ??= r.adapter();
+        const pad = r.pad();
+        if (pad === null) return;
+        p.requestsWithPad++;
+        p.samples.push({ ts: r.ts, chars: pad.length });
+        if (open !== null) {
+          open.after = pad.length;
+          open.afterFrom = "next request";
           open = null;
+        }
+        known = pad.length;
+        return;
+      }
+      case "tool_call":
+        p.toolCalls++;
+        return;
+      case "snippet": {
+        const which = snippetPadWrites(r);
+        if (which === null) return;
+        const rec = r.parse();
+        const pw = write(r.ts, rec, `snippet ${which}`);
+        bySnippet.set(key(rec), pw);
+        open = pw;
+        return;
+      }
+      case "snippet_result": {
+        const refusal = r.refusal();
+        if (refusal === null) return;
+        const rec = r.bytes < 256 << 10 ? r.parse() : null;
+        const pw = bySnippet.get(key(rec)) ?? write(r.ts, rec, `snippet ${refusal.op.replace(/^scratchpad\./, "")}`);
+        bySnippet.delete(key(rec));
+        pw.refused = refusal.chars;
+        if (open === pw) open = null;
+        return;
+      }
+      case "tool_result": {
+        const name = r.name() ?? "?";
+        if (!PAD_TOOLS.has(name)) return;
+        const rec = r.parse();
+        const text = textOf(rec?.["text"]);
+        const how = name === "write_scratchpad" ? "tool write" : "tool edit";
+        if (rec?.["isError"] === true) {
+          // A refused edit for any other reason (no match, ambiguous) changed nothing.
+          const refusal = padRefusalOf(text);
+          if (refusal !== null) write(r.ts, rec, how).refused = refusal.chars;
           return;
         }
+        const chars = sizeOfResult(text);
+        const pw = write(r.ts, rec, how);
+        pw.after = chars;
+        pw.afterFrom = chars === null ? null : "result";
+        if (chars !== null) {
+          p.samples.push({ ts: r.ts, chars });
+          known = chars;
+        }
+        open = null;
+        return;
       }
-    },
-    w.since === null ? 0 : seekTime(path, w.since),
-  );
-  return p;
+    }
+  };
+  return { p, fn };
+}
+
+/** One forward pass over the file's window: the pad's size wherever a record says it, and every write. */
+export function scanPad(path: string, w: Window): PadScan {
+  const r = padReducer(w);
+  fileForward(path, r.fn, w.since === null ? 0 : seekTime(path, w.since));
+  return r.p;
+}
+
+/**
+ * What `pad` asks of the store: every request with its pad cut out on the
+ * server, and only the rows that write the pad or are refused by its cap. A
+ * tool call is only counted, so the extent counts it.
+ */
+const PAD_SPEC: ReadSpec = {
+  kinds: {
+    request: { raw: "none" },
+    snippet: { row: { contains: "scratchpad" }, raw: "all" },
+    snippet_result: { row: { contains: PAD_REFUSED }, raw: "all" },
+    tool_result: { row: { names: PAD_TOOL_NAMES }, raw: "all" },
+  },
+  heads: true,
+  pads: true,
+  refusals: true,
+};
+
+async function storePad(store: InspectStore, runId: string, ext: Extent, w: Window, rereads: Rereads): Promise<PadScan> {
+  const r = padReducer(w);
+  await storeRead(store, runId, PAD_SPEC, w, ext.window, true, r.fn, rereads);
+  r.p.toolCalls = ext.kinds.get("tool_call") ?? 0;
+  ({ first: r.p.first, last: r.p.last } = spanFrom(ext));
+  return r.p;
 }
 
 const PAD_BUCKETS = 24;
 
-export function inspectPad(runId: string, opts: Options & Window & { last: number }, out: Out): number {
+/** The line a store read prints when it stopped re-reading whole requests. */
+function unplaced(n: number): string {
+  return `uncertain ${n} request(s) hold more than one pad header and were not read again whole past the first ${PAD_REREADS}, so their pad is missing here; --files reads them`;
+}
+
+export async function inspectPad(runId: string, opts: Ctx & Window & { last: number }, out: Out): Promise<number> {
   const run = trajectoryOf(runId, opts, out);
   if (run === null) return 1;
-  const p = scanPad(run.path, opts);
+  const via = await viaFor(opts, runId, run.dir, opts);
+  const rereads: Rereads = { left: PAD_REREADS, skipped: 0 };
+  const p = via.store !== null ? await storePad(via.store, runId, via.ext, opts, rereads) : scanPad(run.path, opts);
   const say = (text: string): void => out(cap(strike(text, run.token), opts.width));
   const span = p.first === null ? "no records" : `${clock(p.first)} to ${clock(p.last!)}`;
   say(`${runId}: the scratchpad, ${windowPhrase(opts) || "whole run"} (${span}), UTC`);
-  const driver = driverName(p.adapter, run.dir, runId);
+  say(`source    ${via.line}`);
+  const driver = driverName(p.adapter, run.dir, runId, via, opts.now);
   const perRequest = p.requestsWithPad > 0 ? ` (${(p.toolCalls / p.requestsWithPad).toFixed(1)} per request)` : "";
   say(`sizes     driver ${driver} · the pad's text on ${p.requestsWithPad} of ${p.requests} request(s) · ${p.toolCalls} tool call(s)${perRequest}`);
+  if (rereads.skipped > 0) say(unplaced(rereads.skipped));
   // Only a request sizes a snippet's write, so how many went unsized is the
   // run's own measure of whether its driver gives a size per turn.
   const snippetWrites = p.writes.filter((x) => x.how.startsWith("snippet") && x.refused === null);
@@ -1576,79 +2332,105 @@ export interface PadAt {
  * `edit_scratchpad` after that replayed in order. A snippet's write is code,
  * not text, so one between makes the answer uncertain and says so.
  */
-export function padAt(path: string, at: number): PadAt | null {
+function padAtReducer(at: number): { fn: RecFn; done: () => PadAt | null } {
   const results = new Map<string, Record<string, unknown>>();
   const edits: Record<string, unknown>[] = [];
   const snippetWrites: number[] = [];
   let recorded: number | null = null;
   let from: { ts: number; what: string; text: string } | null = null;
   const key = (r: Record<string, unknown>): string => `${String(r["turn"])}:${String(r["call"])}`;
-  backwardLines(
-    path,
-    (buf, s, e) => {
-      const h = headOf(buf, s, e);
-      if (Number.isFinite(h.ts) && h.ts > at) return;
-      switch (h.t) {
-        case "request": {
-          const pad = padOfRequest(buf, s, e);
-          if (pad === null) return;
-          from = { ts: h.ts, what: "the request", text: pad };
-          return true;
-        }
-        case "snippet":
-          if (snippetPadWrites(buf, s, e) !== null) snippetWrites.push(h.ts);
-          return;
-        case "tool_result": {
-          if (!PAD_TOOLS.has(NAME_IN_HEAD.exec(headString(buf, s, e))?.[1] ?? "")) return;
-          const r = parseLine(buf, s, e);
-          if (r === null || r["isError"] === true) return;
-          results.set(key(r), r);
-          recorded ??= sizeOfResult(textOf(r["text"]));
-          return;
-        }
-        case "tool_call": {
-          const name = NAME_IN_HEAD.exec(headString(buf, s, e))?.[1] ?? "";
-          if (!PAD_TOOLS.has(name)) return;
-          const r = parseLine(buf, s, e);
-          if (r === null || !results.has(key(r))) return;
-          results.delete(key(r));
-          const args = padArgs(name, r["args"]);
-          if (name === "edit_scratchpad") {
-            edits.push(args);
-            return;
-          }
-          if (typeof args["content"] !== "string") return;
-          from = { ts: h.ts, what: "write_scratchpad", text: args["content"].replace(LEGACY_TRUNCATION_MARKER, "") };
-          return true;
-        }
+  const fn: RecFn = (r) => {
+    if (Number.isFinite(r.ts) && r.ts > at) return;
+    switch (r.t) {
+      case "request": {
+        const pad = r.pad();
+        if (pad === null) return;
+        from = { ts: r.ts, what: "the request", text: pad };
+        return true;
       }
-    },
-    offsetAfter(path, at),
-  );
-  const start = from as { ts: number; what: string; text: string } | null;
-  if (start === null) return null;
-  let text = start.text;
-  let missed = 0;
-  for (const ed of edits.reverse()) {
-    const old = typeof ed["old"] === "string" ? ed["old"] : "";
-    const rep = typeof ed["new"] === "string" ? ed["new"] : "";
-    const i = old === "" ? -1 : text.indexOf(old);
-    if (i < 0) {
-      missed++;
-      continue;
+      case "snippet":
+        if (snippetPadWrites(r) !== null) snippetWrites.push(r.ts);
+        return;
+      case "tool_result": {
+        if (!PAD_TOOLS.has(r.name() ?? "")) return;
+        const p = r.parse();
+        if (p === null || p["isError"] === true) return;
+        results.set(key(p), p);
+        recorded ??= sizeOfResult(textOf(p["text"]));
+        return;
+      }
+      case "tool_call": {
+        const name = r.name() ?? "";
+        if (!PAD_TOOLS.has(name)) return;
+        const p = r.parse();
+        if (p === null || !results.has(key(p))) return;
+        results.delete(key(p));
+        const args = padArgs(name, p["args"]);
+        if (name === "edit_scratchpad") {
+          edits.push(args);
+          return;
+        }
+        if (typeof args["content"] !== "string") return;
+        from = { ts: r.ts, what: "write_scratchpad", text: args["content"].replace(LEGACY_TRUNCATION_MARKER, "") };
+        return true;
+      }
     }
-    text = ed["replaceAll"] === true ? text.split(old).join(rep) : text.slice(0, i) + rep + text.slice(i + old.length);
-  }
-  return { text, from: { ts: start.ts, what: start.what }, edits: edits.length, missed, snippetWrites: snippetWrites.reverse(), recorded };
+  };
+  const done = (): PadAt | null => {
+    const start = from as { ts: number; what: string; text: string } | null;
+    if (start === null) return null;
+    let text = start.text;
+    let missed = 0;
+    for (const ed of edits.reverse()) {
+      const old = typeof ed["old"] === "string" ? ed["old"] : "";
+      const rep = typeof ed["new"] === "string" ? ed["new"] : "";
+      const i = old === "" ? -1 : text.indexOf(old);
+      if (i < 0) {
+        missed++;
+        continue;
+      }
+      text = ed["replaceAll"] === true ? text.split(old).join(rep) : text.slice(0, i) + rep + text.slice(i + old.length);
+    }
+    return { text, from: { ts: start.ts, what: start.what }, edits: edits.length, missed, snippetWrites: snippetWrites.reverse(), recorded };
+  };
+  return { fn, done };
 }
 
-export function inspectPadAt(runId: string, opts: Options & { at: number }, out: Out): number {
+/** The pad at `at`, off the file. */
+export function padAt(path: string, at: number): PadAt | null {
+  const r = padAtReducer(at);
+  fileBackward(path, r.fn, offsetAfter(path, at));
+  return r.done();
+}
+
+/** What `pad --at` asks of the store, reading back: requests with their pads, the pad tools' calls and results, the snippets that name the pad. */
+const PAD_AT_SPEC: ReadSpec = {
+  kinds: {
+    request: { raw: "none" },
+    snippet: { row: { contains: "scratchpad" }, raw: "all" },
+    tool_result: { row: { names: PAD_TOOL_NAMES }, raw: "all" },
+    tool_call: { row: { names: PAD_TOOL_NAMES }, raw: "all" },
+  },
+  pads: true,
+};
+
+export async function inspectPadAt(runId: string, opts: Ctx & { at: number }, out: Out): Promise<number> {
   const run = trajectoryOf(runId, opts, out);
   if (run === null) return 1;
   const say = (text: string): void => out(cap(strike(text, run.token), opts.width));
-  const p = padAt(run.path, opts.at);
+  const upTo: Window = { since: null, until: opts.at };
+  const via = await viaFor(opts, runId, run.dir, upTo);
+  const rereads: Rereads = { left: PAD_REREADS, skipped: 0 };
+  let p: PadAt | null;
+  if (via.store !== null) {
+    const r = padAtReducer(opts.at);
+    await storeRead(via.store, runId, PAD_AT_SPEC, upTo, via.ext.window, false, r.fn, rereads);
+    p = r.done();
+  } else p = padAt(run.path, opts.at);
   if (p === null) {
     say(`${runId}: no request and no write_scratchpad at or before ${iso(opts.at)} records the pad`);
+    if (rereads.skipped > 0) say(unplaced(rereads.skipped));
+    say(`source    ${via.line}`);
     return 1;
   }
   say(`${runId}: the scratchpad as of ${iso(opts.at)}, ${p.text.length} chars (${padSizeLabel(p.text.length)})`);
@@ -1660,6 +2442,8 @@ export function inspectPadAt(runId: string, opts: Options & { at: number }, out:
   }
   if (p.missed > 0) say(`uncertain ${p.missed} edit(s) did not find their text in the rebuild`);
   if (p.recorded !== null && p.recorded !== p.text.length) say(`uncertain the rebuild is ${p.text.length} chars; the newest write's result said ${p.recorded}`);
+  if (rereads.skipped > 0) say(unplaced(rereads.skipped));
+  say(`source    ${via.line}`);
   say("---");
   for (const line of p.text.split("\n")) say(line);
   return 0;
@@ -1672,10 +2456,11 @@ const USAGE = `usage: bun infra/inspect-run.ts live
        bun infra/inspect-run.ts trajectory <run-id> [--last N | --next N] [--errors] [--grep RE] [--all] [--since D] [--until D]
        bun infra/inspect-run.ts tools <run-id> [--since D] [--until D]
        bun infra/inspect-run.ts pad <run-id> [--since D] [--until D] [--last N] | --at D
-common: [--runs-dir DIR] (else WRATHBENCH_RUNS_DIR, else data/runs) [--width N]; D is 90s, 30m, 2h, 1d, epoch ms or ISO
---next N: the first N items from --since (or the file's start) instead of the last N`;
+common: [--runs-dir DIR] (else WRATHBENCH_RUNS_DIR, else data/runs) [--width N] [--files]; D is 90s, 30m, 2h, 1d, epoch ms or ISO
+--next N: the first N items from --since (or the file's start) instead of the last N
+--files: read the files, not ClickHouse (CLICKHOUSE_URL); a live run's run.sqlite is still not opened`;
 
-/** The flags each command takes, beyond `--runs-dir` and `--width`; any other is a usage error, never ignored. */
+/** The flags each command takes, beyond the common ones; any other is a usage error, never ignored. */
 const COMMAND_FLAGS: Record<string, readonly string[]> = {
   live: [],
   run: ["--since", "--until"],
@@ -1683,9 +2468,22 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   tools: ["--since", "--until"],
   pad: ["--since", "--until", "--last", "--at"],
 };
+const COMMON_FLAGS = new Set(["--runs-dir", "--width", "--files"]);
 const VALUED = new Set(["--since", "--until", "--at", "--last", "--next", "--grep", "--width", "--runs-dir"]);
 
-export function main(argv: readonly string[], env: Readonly<Record<string, string | undefined>>, out: Out, err: Out, now = Date.now()): number {
+/** What the CLI is handed besides its arguments: a store in place of CLICKHOUSE_URL's, for the tests. */
+export interface Deps {
+  store?: InspectStore | null;
+}
+
+export async function main(
+  argv: readonly string[],
+  env: Readonly<Record<string, string | undefined>>,
+  out: Out,
+  err: Out,
+  now = Date.now(),
+  deps: Deps = {},
+): Promise<number> {
   const [command, ...rest] = argv;
   if (command === undefined || command === "-h" || command === "--help") {
     (command === undefined ? err : out)(USAGE);
@@ -1708,7 +2506,7 @@ export function main(argv: readonly string[], env: Readonly<Record<string, strin
       positional.push(a);
       continue;
     }
-    if (a !== "--runs-dir" && a !== "--width" && !allowed.includes(a)) {
+    if (!COMMON_FLAGS.has(a) && !allowed.includes(a)) {
       err(`${VALUED.has(a) || a === "--errors" || a === "--all" ? `${a} does not apply to ${command}` : `unknown flag ${a}`}\n${USAGE}`);
       return 2;
     }
@@ -1747,52 +2545,64 @@ export function main(argv: readonly string[], env: Readonly<Record<string, strin
     const n = Number(flags.get(f));
     return Number.isInteger(n) && n >= 1 && n <= MAX_LAST ? n : Number.NaN;
   };
-  const base = { runsDir, now, width };
-  if (command === "live") return inspectLive(base, out);
-  const runId = positional[0];
-  if (runId === undefined || positional.length > 1 || !isValidRunId(runId)) {
-    err(runId === undefined ? `${command} needs a run id\n${USAGE}` : `not one run id: ${positional.join(" ")}`);
-    return 2;
-  }
-  const last = count("--last");
-  const next = count("--next");
-  for (const [f, n] of [["--last", last], ["--next", next]] as const) {
-    if (n !== null && Number.isNaN(n)) {
-      err(`${f} is a whole number from 1 to ${MAX_LAST}`);
+  const cfg = clickhouseConfigOf(env);
+  const store = flags.has("--files") ? null : deps.store !== undefined ? deps.store : cfg === null ? null : clickhouseStore(cfg);
+  const noStore = flags.has("--files") ? "--files" : deps.store === null || cfg === null ? "ClickHouse not configured (no CLICKHOUSE_URL)" : "";
+  const base: Ctx = { runsDir, now, width, store, noStore };
+  try {
+    if (command === "live") return await inspectLive(base, out);
+    const runId = positional[0];
+    if (runId === undefined || positional.length > 1 || !isValidRunId(runId)) {
+      err(runId === undefined ? `${command} needs a run id\n${USAGE}` : `not one run id: ${positional.join(" ")}`);
       return 2;
     }
-  }
-  if (command === "run") return inspectRun(runId, { ...base, ...window }, out);
-  if (command === "tools") return inspectTools(runId, { ...base, ...window }, out);
-  if (command === "pad") {
-    const at = times["--at"];
-    if (at === undefined) return inspectPad(runId, { ...base, ...window, last: last ?? DEFAULT_LAST }, out);
-    if (window.since !== null || window.until !== null || last !== null) {
-      err(`--at prints the pad at one moment; it takes no --since, --until or --last\n${USAGE}`);
+    const last = count("--last");
+    const next = count("--next");
+    for (const [f, n] of [["--last", last], ["--next", next]] as const) {
+      if (n !== null && Number.isNaN(n)) {
+        err(`${f} is a whole number from 1 to ${MAX_LAST}`);
+        return 2;
+      }
+    }
+    if (command === "run") return await inspectRun(runId, { ...base, ...window }, out);
+    if (command === "tools") return await inspectTools(runId, { ...base, ...window }, out);
+    if (command === "pad") {
+      const at = times["--at"];
+      if (at === undefined) return await inspectPad(runId, { ...base, ...window, last: last ?? DEFAULT_LAST }, out);
+      if (window.since !== null || window.until !== null || last !== null) {
+        err(`--at prints the pad at one moment; it takes no --since, --until or --last\n${USAGE}`);
+        return 2;
+      }
+      return await inspectPadAt(runId, { ...base, at }, out);
+    }
+    if (last !== null && next !== null) {
+      err(`--last and --next are the two ends of the window: one or the other\n${USAGE}`);
       return 2;
     }
-    return inspectPadAt(runId, { ...base, at }, out);
-  }
-  if (last !== null && next !== null) {
-    err(`--last and --next are the two ends of the window: one or the other\n${USAGE}`);
-    return 2;
-  }
-  let grep: RegExp | null = null;
-  if (flags.has("--grep")) {
-    try {
-      grep = new RegExp(flags.get("--grep") as string, "i");
-    } catch (e) {
-      err(`--grep: ${(e as Error).message}`);
-      return 2;
+    let grep: RegExp | null = null;
+    if (flags.has("--grep")) {
+      try {
+        grep = new RegExp(flags.get("--grep") as string, "i");
+      } catch (e) {
+        err(`--grep: ${(e as Error).message}`);
+        return 2;
+      }
     }
+    return await inspectTrajectory(
+      runId,
+      { ...base, ...window, last: next ?? last ?? DEFAULT_LAST, forward: next !== null, errors: flags.has("--errors"), grep, all: flags.has("--all") },
+      out,
+    );
+  } catch (e) {
+    // A store that answered the first question and failed a later one: say so, never with the URL.
+    if (e instanceof StoreError) {
+      err(`ClickHouse failed mid-read (${e.message}); --files reads the files`);
+      return 1;
+    }
+    throw e;
   }
-  return inspectTrajectory(
-    runId,
-    { ...base, ...window, last: next ?? last ?? DEFAULT_LAST, forward: next !== null, errors: flags.has("--errors"), grep, all: flags.has("--all") },
-    out,
-  );
 }
 
 if (import.meta.main) {
-  process.exit(main(Bun.argv.slice(2), process.env, (l) => console.log(l), (l) => console.error(l)));
+  process.exit(await main(Bun.argv.slice(2), process.env, (l) => console.log(l), (l) => console.error(l)));
 }
