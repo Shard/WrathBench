@@ -96,7 +96,8 @@ fixed 300k-token window (operator, 2026-10-20).
 **The two contracts.** The agent observes exactly what a real 3.3.5a client
 connected to this character could observe, and every action is dispatched as
 the client opcode a real client would send, through the character's own
-`WorldSession` handler — never server internals (`docs/CONTRACTS.md`; enforced
+`WorldSession` handler — never server internals (`wrath-mcp/docs/CONTRACTS.md`
+at the pinned commit, `infra/PINS.md`; enforced
 by the module, logged at the boundary). They are what make a server-side
 control module defensible as a benchmark surface. Ambiguity resolves toward
 the client: if it is unclear whether a client could see something, it is not
@@ -109,8 +110,16 @@ it would measure the wrong thing. The one deliberate exception is routing
 routes with eyes and the module has none. Nothing is inferred that the wire
 did not say.
 
-Changing either contract moves the harness version; the rule is
-`docs/CONTRACTS.md`, "Changing the contracts".
+**The benchmark's own clauses.** The contracts' authoritative text is the
+stack's, and this document keeps the clauses that are the benchmark's
+(operator, 2026-10-29). Wiki-recorded coordinates in the reference bundle are
+withheld in scored runs and served only where the run's `wikiCoords` dimension
+says so. A run may also be configured with no reference bundle at all
+(`wiki: false`, issue #61): the tool is not offered and the prompt does not
+name it, which narrows what the agent may see and never widens it.
+
+**Changing the contracts.** Any widening of either contract is a major harness
+version. Any narrowing is at least a minor version and is noted here.
 
 ## The model surface
 
@@ -120,7 +129,7 @@ run showed models needing this?). The escape hatch — raw actions, the event
 stream, the state cache — is public with the same stability guarantees. There
 is no convenience middle tier: a composition every model writes graduates to
 the primary tier; until then it lives in snippets. The raw tier is an allowlist
-of ordinary client opcodes (`docs/CONTRACTS.md`); widening it is additive,
+of ordinary client opcodes (`wrath-mcp/docs/CONTRACTS.md`); widening it is additive,
 narrowing it is a harness change.
 
 **Softening: repair the deterministic, explain the rest.** Most early
