@@ -67,6 +67,7 @@ import {
   TICK_MS,
   unownedLiveRuns,
 } from "./run-fleet-plan";
+import { fmtAge } from "./inspect-run";
 import {
   CONTAINER,
   type FleetState,
@@ -169,6 +170,48 @@ export function formatCharacters(
     out.push(`character ${ref}: head ${st.runId} on ${st.account} as ${st.character} — ${verdict}`);
   }
   return out;
+}
+
+/**
+ * The accounts table's note for a paused run on a free account. Pure.
+ *
+ * The elapsed figure is the run's episode clock AT its pause, so it stands
+ * still for as long as the run stays paused; the note says how long ago the
+ * pause was, or a run paused for weeks reads like one that stopped a minute
+ * ago. And it says what the resume plan does with the run, from the plan
+ * itself: resumed, ended, listed under "paused runs not resumed", or — a cold
+ * run of another harness series, which `planResumes` neither resumes, ends
+ * nor lists — left out of every plan, with why.
+ */
+export function formatPausedAccountNote(o: {
+  run: Pick<RunFact, "runId" | "pause" | "episodeMs" | "harnessSeries">;
+  progress?: { level: number; xp: number };
+  plan: { resume: readonly Pick<ResumePlan, "runId">[]; listed: readonly Pick<PausedListing, "runId">[]; end: readonly EndedRun[] };
+  fleetUp: boolean;
+  now: number;
+  /** The supervisor's harness series (`policy.series`); undefined when the config did not load. */
+  series?: string | null;
+}): string {
+  const { run, plan, fleetUp } = o;
+  const p = run.pause!;
+  const prog = o.progress !== undefined ? ` L${o.progress.level} ${o.progress.xp}xp` : "";
+  const ending = plan.end.find((e) => e.runId === run.runId);
+  if (ending !== undefined) {
+    return `${formatEndedRun(ending)} — ${run.runId}${prog}, ${fleetUp ? "ended on the next tick" : "ended when the fleet starts"} and reattempted fresh`;
+  }
+  const reset = providerResetOf(p);
+  const head =
+    `paused ${fmtAge(o.now - p.at)} ago (${p.reason}${reset !== undefined ? `, provider reset ${new Date(reset).toLocaleString()}` : ""}, ` +
+    `${fmtPaused(p.episodeElapsedMs, run.episodeMs)}) — ${run.runId}${prog}`;
+  if (plan.resume.some((r) => r.runId === run.runId)) return `${head}, ${fleetUp ? "resumes on the next tick" : "resumes when the fleet starts"}`;
+  if (plan.listed.some((l) => l.runId === run.runId)) return `${head}, not resumed (listed below)`;
+  if (o.series !== undefined && o.series !== null && run.harnessSeries !== o.series) {
+    return (
+      `${head}, not resumed or listed: harness series ${run.harnessSeries ?? "unversioned"}, this supervisor runs ${o.series}, ` +
+      `and the run has been cold too long to list — resume by hand (--resume ${run.runId}) or archive`
+    );
+  }
+  return `${head}, not in the resume plan`;
 }
 
 /** One line per run the supervisor would end rather than resume, for --status and --dry-run. */
@@ -980,31 +1023,15 @@ export function printStatus(): void {
           ...(image !== undefined ? { pod: image.pod } : {}),
         });
       } else if (pausedHere !== undefined) {
-        const p = pausedHere.pause!;
         const prog = runProgress(pausedHere.runId);
-        const ending = resumePlan.end.find((e) => e.runId === pausedHere.runId);
-        const reset = providerResetOf(p);
-        const head =
-          ending !== undefined
-            ? `${formatEndedRun(ending)} — ${pausedHere.runId}`
-            : `paused (${p.reason}${reset !== undefined ? `, provider reset ${new Date(reset).toLocaleString()}` : ""}, ${fmtPaused(
-                p.episodeElapsedMs,
-                pausedHere.episodeMs,
-              )}) — ${pausedHere.runId}`;
-        note =
-          head +
-          `${prog !== undefined ? ` L${prog.level} ${prog.xp}xp` : ""}` +
-          `${
-            ending !== undefined
-              ? fleetUp
-                ? ", ended on the next tick and reattempted fresh"
-                : ", ended when the fleet starts and reattempted fresh"
-              : resumePlan.resume.some((r) => r.runId === pausedHere.runId)
-                ? ", resumes on the next tick"
-                : fleetUp
-                  ? ""
-                  : ", resumes when the fleet starts"
-          }`;
+        note = formatPausedAccountNote({
+          run: pausedHere,
+          ...(prog !== undefined ? { progress: prog } : {}),
+          plan: resumePlan,
+          fleetUp,
+          now: Date.now(),
+          ...(config !== undefined ? { series: config.policy.series } : {}),
+        });
       } else if (kind !== "pool" && config !== undefined) {
         const job = pinnedJobs(config).find((j) => j.account?.toUpperCase() === account.toUpperCase() && j.enabled) ?? pinnedJobs(config).find((j) => j.account?.toUpperCase() === account.toUpperCase());
         if (job !== undefined) {

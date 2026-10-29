@@ -80,6 +80,7 @@ import {
   characterStanding,
   describeStanding,
   formatCharacters,
+  formatPausedAccountNote,
   pausesOnDrain,
   policyJobDropped,
   resumesInPlace,
@@ -3853,6 +3854,33 @@ describe("a paused character head is not orphaned by a supervisor restart (2026-
       [JOB, "policy", 12, "RUNNER", stamped.runId],
     ]);
     expect(jobSpawn(plan.resume[0]!.job, roster, "RUNNER", "20260908").resumeRunId).toBe(stamped.runId);
+  });
+
+  test("--status says what the plan does with a paused run on a free account, and how long ago it paused", () => {
+    // The live shape: an unversioned run paused 48 days ago sits on RUNNER.
+    // planResumes leaves it out of resume, end AND the listing (it is cold), so
+    // the account row was the only place it showed, as "paused (operator-pause,
+    // 1h21m elapsed)": a figure frozen at the pause, with nothing saying the
+    // pause was weeks old or that nothing will ever bring the run back.
+    const coldPause = { ...a12.pause!, at: NOW - (48 * 24 + 3) * H, episodeElapsedMs: 81 * 60_000 };
+    const cold = { ...a12, pause: coldPause, endedAt: coldPause.at };
+    const plan = planResumes({ runs: [a11, cold], config: config(), running: new Map(), held, now: NOW });
+    expect([plan.resume, plan.listed, plan.end]).toEqual([[], [], []]);
+    const note = formatPausedAccountNote({ run: cold, progress: { level: 6, xp: 2321 }, plan, fleetUp: true, now: NOW, series: "0.5" });
+    expect(note).toBe(
+      `paused 48d3h ago (operator-pause, 1h21m elapsed) — ${cold.runId} L6 2321xp, not resumed or listed: harness series unversioned, ` +
+        `this supervisor runs 0.5, and the run has been cold too long to list — resume by hand (--resume ${cold.runId}) or archive`,
+    );
+    // A fresh one is listed, and the row points at the listing rather than reading as a run about to come back.
+    const fresh = planResumes({ runs: [a11, a12], config: config(), running: new Map(), held, now: NOW });
+    expect(formatPausedAccountNote({ run: a12, plan: fresh, fleetUp: true, now: NOW, series: "0.5" })).toBe(
+      `paused 3m ago (operator-pause, 1h33m elapsed) — ${a12.runId}, not resumed (listed below)`,
+    );
+    // In the series it resumes, and says when.
+    const stamped = { ...a12, harnessVersion: "harness-0.5-513-g803bd42", harnessSeries: "0.5" };
+    const resumed = planResumes({ runs: [a11, stamped], config: config(), running: new Map(), held, now: NOW });
+    expect(formatPausedAccountNote({ run: stamped, plan: resumed, fleetUp: true, now: NOW, series: "0.5" })).toEndWith(", resumes on the next tick");
+    expect(formatPausedAccountNote({ run: stamped, plan: resumed, fleetUp: false, now: NOW, series: "0.5" })).toEndWith(", resumes when the fleet starts");
   });
 });
 
