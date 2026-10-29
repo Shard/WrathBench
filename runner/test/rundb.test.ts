@@ -473,6 +473,28 @@ describe("the run's writer retries a real lock without stopping the event loop",
     await t.finish();
   }, 20_000);
 
+  test("a minor write that gave up never spends the verdict's retries; a verdict that gave up latches everything", async () => {
+    const runDir = join(dir, "retry-verdict-round");
+    const waits: number[] = [];
+    const t = new Trajectory(runDir, { wal: true, busyTimeoutMs: 30, retry: { waitsMs: [100, 100, 100], sleep: (ms) => (waits.push(ms), Bun.sleep(ms)) } });
+    await t.writeMeta({ runId: "r", harnessVersion: "v", startedAt: 1, config: { driver: "loop" } as never });
+    const outcomes = await whileWriting(join(runDir, "run.sqlite"), 3000, () =>
+      Promise.allSettled([
+        // The ticker's sample, whose failure nobody sees…
+        t.recordState("r", { level: 1 }),
+        // …then the verdict, queued behind it: a round of its own.
+        t.setTermination("r", "turn-limit"),
+        // After the verdict gave up, everything gets one attempt.
+        t.recordMove("r", { ts: 1, moveId: 1, map: 0, x: 1, y: 2, z: 3 }),
+      ]),
+    );
+    expect(outcomes.map((o) => o.status)).toEqual(["rejected", "rejected", "rejected"]);
+    expect(waits).toEqual([100, 100, 100, 100, 100, 100]);
+    const retried = readTrajectory(runDir).filter((r) => r.t === "harness" && r["kind"] === "rundb_retry").map((r) => r["write"]);
+    expect(retried).toEqual(["state", "state", "state", "termination", "termination", "termination"]);
+    await t.finish();
+  }, 20_000);
+
   test("a non-transient error still throws synchronously, with no retry", () => {
     const runDir = join(dir, "retry-not-transient");
     const t = new Trajectory(runDir, { wal: true, retry: { waitsMs: [50, 50, 50] } });

@@ -677,6 +677,25 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
+  test("a verdict whose row write gives up leaves the loop with the runner's own reason, never re-terminated as harness-error", async () => {
+    const adapter = new StubAdapter(
+      Array.from({ length: 10 }, () => ({ content: "thinking", toolCalls: [] })),
+    );
+    const { options } = setup(adapter, { maxTurns: 2 });
+    const t = options.trajectory;
+    const locked = Object.assign(new Error("database is locked"), { name: "SQLiteError", code: "SQLITE_BUSY", errno: 5 });
+    // What a termination whose row write spent its retries looks like: the
+    // record appended, the write rejected.
+    t.setTermination = (_runId, reason, detail) => {
+      t.append({ t: "termination", reason, detail });
+      return Promise.reject(locked);
+    };
+    await expect(runLoop(options)).rejects.toBe(locked);
+    const ends = readTrajectory(t.dir).filter((r) => r.t === "termination");
+    expect(ends.map((r) => r["reason"])).toEqual(["turn-limit"]);
+    t.close();
+  });
+
   test("a pause outcome suspends the run resumably", async () => {
     const pausing: ChatAdapter = {
       label: "pausing",

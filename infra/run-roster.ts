@@ -63,7 +63,7 @@ import { classifyLapse, PARTY_PAUSE, resumesOnPause, SUBSCRIPTION_PAUSE } from "
 import { readLaneUsage, laneOfSpec, subscriptionGate } from "./run-fleet-gate";
 import { subscriptionThresholds } from "../runner/src/subscription-usage";
 import { Trajectory } from "../runner/src/trajectory";
-import { liveOwnerOf, MODEL_RESPONSE_RECORD, RecordCountScanner, type ScanReads } from "../runner/src/models";
+import { liveOwnerOf, MODEL_RESPONSE_RECORD, RecordCountScanner, verdictOfTrajectory, type ScanReads } from "../runner/src/models";
 import { CAMPAIGN_FILE, holdsOnlyLaunchFiles, parseCampaignFile, writeCampaignFile, type CampaignFile } from "../runner/src/campaign-file";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -1773,6 +1773,12 @@ function classify(spec: Resolved, exit: EpisodeExit): Verdict {
   if (row.pause_reason !== null && row.pause_reason !== "") {
     return { kind: "paused", reason: row.pause_reason };
   }
+  // The runner has exited: a verdict on the trajectory that never reached the
+  // row (a row write that gave up after its retries, or was still queued at a
+  // kill) is the run's verdict, as `readRunFact` reads it.
+  const recorded = verdictOfTrajectory(join(runDir(spec.runId), "trajectory.jsonl"));
+  if (recorded?.kind === "terminated") return { kind: "terminated", reason: recorded.reason, detail: recorded.detail ?? undefined };
+  if (recorded?.kind === "paused") return { kind: "paused", reason: recorded.reason };
   return { kind: "unknown", detail: `${why}exit ${exit.code}, run row has neither termination nor pause` };
 }
 

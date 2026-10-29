@@ -742,8 +742,22 @@ export class Trajectory {
   private readonly retry: RunDbRetryOptions | null;
   /** The last write still retrying, settled either way; null when none is. Every later write waits behind it. */
   private tail: Promise<void> | null = null;
-  /** A write spent its retries on a lock and gave up; until one lands, writes get one attempt and no waits. */
-  private failing = false;
+  /**
+   * A write spent its retries on a lock and gave up: until one lands, the
+   * writes it latches get one attempt and no waits. A verdict write's give-up
+   * latches every write; a minor write's (state, move, trace, the mirrors)
+   * latches only minor writes, so a sample the ticker swallows never leaves
+   * the verdict with a single attempt (`VERDICT_WRITES`).
+   */
+  private failing: "minor" | "verdict" | null = null;
+  /**
+   * The verdict this handle has recorded, kept in memory rather than read
+   * back from the row: a row write can still be queued behind a retrying one
+   * when the next pause asks "already paused?" (the SIGTERM handler's pause,
+   * then the driver's unwind reaching the same call), and reading the row
+   * then would append a second pause record.
+   */
+  private recorded: { kind: "terminated" } | { kind: "paused"; mark: PauseMark } | null = null;
 
   constructor(
     dir: string,
@@ -799,10 +813,13 @@ export class Trajectory {
    * is a `harness` record, `rundb_retry`, in the trajectory; `what` names the
    * write there.
    *
-   * The waits are the run's, not each write's: once a write has spent them
-   * and given up, every write after it gets one attempt and no waits until
-   * one lands (`failing`), so a lock that outlasts the retries ends the run
-   * within one round of them rather than one round per queued write.
+   * The waits are not each write's: once a write has spent them and given
+   * up, the writes after it get one attempt and no waits until one lands
+   * (`failing`), so a lock that outlasts the retries ends the run within one
+   * round of them rather than one round per queued write. The verdict's own
+   * writes (`VERDICT_WRITES`) keep a round of their own after a minor write
+   * gave up: the state ticker swallows its failures, and a swallowed sample
+   * must not spend the termination's retries.
    *
    * Only the statement is retried, never the record a method appends beside
    * it, so a retried pause is still one pause record.
@@ -817,25 +834,28 @@ export class Trajectory {
       this.append({ t: "harness", kind: "rundb_retry", write: what, attempt: r.attempt, waitMs: r.waitMs, error: r.error });
       retry.onRetry?.(r);
     };
-    const attempt = (firstError?: unknown): Promise<void> =>
-      retryRunDbWrite(op, {
+    const verdict = VERDICT_WRITES.has(what);
+    const attempt = (firstError?: unknown): Promise<void> => {
+      const latched = this.failing === "verdict" || (this.failing === "minor" && !verdict);
+      return retryRunDbWrite(op, {
         ...retry,
         onRetry,
-        ...(this.failing ? { waitsMs: [] } : {}),
+        ...(latched ? { waitsMs: [] } : {}),
         ...(firstError !== undefined ? { firstError } : {}),
       }).then(
         () => {
-          this.failing = false;
+          this.failing = null;
         },
         (e: unknown) => {
-          if (isTransientRunDbError(e)) this.failing = true;
+          if (isTransientRunDbError(e)) this.failing = verdict ? "verdict" : (this.failing ?? "minor");
           throw e;
         },
       );
+    };
     if (this.tail === null) {
       try {
         op();
-        this.failing = false;
+        this.failing = null;
         return SETTLED;
       } catch (e) {
         if (!isTransientRunDbError(e)) throw e;
@@ -1257,6 +1277,7 @@ export class Trajectory {
    * (`repairTermination`).
    */
   setTermination(runId: string, reason: TerminationReason, detail?: string): Promise<void> {
+    this.recorded = { kind: "terminated" };
     this.append({ t: "termination", reason, detail });
     const at = this.now();
     return this.write("termination", () => this.updateTermination(runId, reason, detail, at));
@@ -1307,8 +1328,21 @@ export class Trajectory {
 
   /** `setPause`'s synchronous half: null when the row already carries a pause, else the record appended and the row's write. */
   private takePause(runId: string, reason: PauseReason, detail?: string, episodeElapsedMs?: number, notBefore?: number): Promise<void> | null {
+    // What this handle recorded first, then the row (a run paused before this
+    // process opened it). A recorded termination is never followed by a pause.
+    if (this.recorded !== null) return null;
     const row = this.db.query(`SELECT pause_reason FROM run WHERE run_id = ?`).get(runId) as { pause_reason?: unknown } | null;
     if (row !== null && typeof row.pause_reason === "string" && row.pause_reason !== "") return null;
+    this.recorded = {
+      kind: "paused",
+      mark: {
+        reason,
+        ...(detail !== undefined ? { detail } : {}),
+        at: this.now(),
+        episodeElapsedMs: episodeElapsedMs ?? 0,
+        ...(notBefore !== undefined ? { notBefore } : {}),
+      },
+    };
     this.append({
       t: "pause",
       reason,
@@ -1339,7 +1373,17 @@ export class Trajectory {
     return Promise.all([taken, marked]).then(() => true);
   }
 
+  /**
+   * The pause this handle recorded in this segment, as a meta.json mark, or
+   * null. For a caller that must leave the mark when the episode threw before
+   * it could (`run.ts`).
+   */
+  get recordedPause(): PauseMark | null {
+    return this.recorded?.kind === "paused" ? this.recorded.mark : null;
+  }
+
   clearPause(runId: string): Promise<void> {
+    if (this.recorded?.kind === "paused") this.recorded = null;
     return this.write("clear-pause", () => {
       this.db.query(`UPDATE run SET pause_reason = NULL WHERE run_id = ?`).run(runId);
     });
@@ -1438,6 +1482,8 @@ export class Trajectory {
 }
 
 const SETTLED: Promise<void> = Promise.resolve();
+/** The writes that carry the run's verdict or identity, by `write`'s `what`: a minor write's give-up never takes their retries. */
+const VERDICT_WRITES: ReadonlySet<string> = new Set(["termination", "pause", "clear-pause", "meta"]);
 function noop(): void {}
 
 /** Read every record of a trajectory file. Bad lines surface, not vanish. */

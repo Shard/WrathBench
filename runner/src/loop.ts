@@ -1168,6 +1168,13 @@ export function startStateTicker(o: StateTickerOptions): () => Promise<void> {
   };
 }
 
+/** A verdict's row write that gave up after its retries; `runLoop` rethrows `error` instead of re-terminating. */
+class VerdictWriteFailed extends Error {
+  constructor(readonly error: unknown) {
+    super(error instanceof Error ? error.message : String(error));
+  }
+}
+
 export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const { config, trajectory, watchdogs } = o;
@@ -1215,8 +1222,23 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       }),
   };
 
+  /**
+   * A verdict's row write, awaited. The record is already appended when the
+   * write is issued, so a write that gives up after its retries must leave
+   * the episode as it is, carrying the runner's own reason on the record:
+   * caught below as anything else is, it would be re-terminated as
+   * `harness-error`, a second termination with another reason
+   * (`VerdictWriteFailed`).
+   */
+  const recorded = async <T,>(write: Promise<T>): Promise<T> => {
+    try {
+      return await write;
+    } catch (e) {
+      throw new VerdictWriteFailed(e);
+    }
+  };
   const terminate = async (reason: TerminationReason, detail?: string): Promise<LoopOutcome> => {
-    await trajectory.setTermination(runId, reason, detail);
+    await recorded(trajectory.setTermination(runId, reason, detail));
     return { kind: "terminated", reason, detail };
   };
   /** The stop request, honoured: a pause keeps the run resumable, a terminate ends it. */
@@ -1224,7 +1246,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     const s = stopRequestOf(o.signal);
     if (s === null) return null;
     if (s.kind === "pause") {
-      await trajectory.setPause(runId, s.reason, s.detail, watchdogs.elapsedMs());
+      await recorded(trajectory.setPause(runId, s.reason, s.detail, watchdogs.elapsedMs()));
       return { kind: "paused", reason: s.reason, detail: s.detail };
     }
     return await terminate("manual", s.detail);
@@ -1372,7 +1394,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           notBefore = await o.usage.quotaReset(Date.now());
           if (notBefore !== undefined) detail = `${detail} (usage window resets ${new Date(notBefore).toISOString()})`;
         }
-        await trajectory.setPause(runId, outcome.reason, detail, watchdogs.elapsedMs(), notBefore);
+        await recorded(trajectory.setPause(runId, outcome.reason, detail, watchdogs.elapsedMs(), notBefore));
         return {
           kind: "paused",
           reason: outcome.reason,
@@ -1516,7 +1538,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           const hold = o.usage.freeplayHold(usageThresholds.freeplay, now);
           if (hold !== null) {
             const detail = `subscription usage at or over the freeplay threshold (${hold.threshold}%): ${describeWindows(hold.windows, o.usage.current?.observedAt ?? now)}`;
-            await trajectory.setPause(runId, SUBSCRIPTION_PAUSE, detail, watchdogs.elapsedMs(), hold.until);
+            await recorded(trajectory.setPause(runId, SUBSCRIPTION_PAUSE, detail, watchdogs.elapsedMs(), hold.until));
             return { kind: "paused", reason: SUBSCRIPTION_PAUSE, detail, notBefore: hold.until };
           }
         }
@@ -1524,6 +1546,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       await sleep(config.stepIntervalMs);
     }
   } catch (err) {
+    // A verdict on record whose row write gave up: the episode ends with it.
+    if (err instanceof VerdictWriteFailed) throw err.error;
     // An abandoned request throws; the stop request is the real outcome.
     const stop = await stopped();
     if (stop !== null) return stop;

@@ -1381,25 +1381,36 @@ export function readRunFact(
   const beating = fact.heartbeatAt != null && now - fact.heartbeatAt < HEARTBEAT_DEAD_MS;
   // A verdict the row lacks but the trajectory holds: the runner appends the
   // record before it writes the row, and a row write that gave up (after its
-  // retries) leaves the record alone. Without this the run reads as ownerless,
-  // and a resuming lane would bring back a run that recorded its own end.
-  // Only for a run with no verdict, no pause and no live owner, and only the
-  // file's tail: the record is among the last few a run writes.
+  // retries), or one still queued when the process was killed, leaves the
+  // record alone. Without this the run reads as ownerless: a resuming lane
+  // brings back a run that recorded its own end, and a scored run that paused
+  // reads as unknown and is swept stale. Only for a run with no verdict, no
+  // pause and no live owner, and only the file's tail: the record is among the
+  // last few a run writes. A pause the tail does not show is taken from
+  // meta.json's mark, which the pause path writes at once; a `resume` after
+  // either means neither stands.
+  let pauseFromRecord: TrajectoryVerdict | null = null;
   if (fact.terminationReason === null && pauseReason === null && !beating && mtime !== null) {
-    const rec = terminationOfTrajectory(jsonl);
-    if (rec !== null) {
+    const rec = verdictOfTrajectory(jsonl);
+    if (rec?.kind === "terminated") {
       const at = rec.at ?? mtime;
       fact.terminationReason = rec.reason;
       fact.endedAt = at;
       fact.recordedTermination = { reason: rec.reason, detail: rec.detail, at };
+    } else if (rec?.kind === "paused") {
+      pauseReason = rec.reason;
+      pauseFromRecord = rec;
+    } else if (rec === null && typeof meta.pause?.reason === "string" && meta.pause.reason !== "") {
+      pauseReason = meta.pause.reason;
     }
   }
   if (fact.endedAt === null && fact.terminationReason !== null) fact.endedAt = mtime;
   // A termination wins over a stale pause row (the --resume path clears the
   // row, but a run can also be classified by hand after a pause).
   if (pauseReason !== null && fact.terminationReason === null) {
-    const markedAt = num(meta.pause?.at);
-    const statedReset = num(meta.pause?.notBefore);
+    const recorded = pauseFromRecord?.kind === "paused" ? pauseFromRecord : null;
+    const markedAt = num(meta.pause?.at) ?? recorded?.at ?? null;
+    const statedReset = num(meta.pause?.notBefore) ?? recorded?.notBefore ?? null;
     fact.pause = {
       reason: pauseReason,
       at: markedAt ?? mtime ?? fact.startedAt,
@@ -1407,7 +1418,7 @@ export function readRunFact(
       // forever, and nine pauses spread across weeks of good play are not a
       // provider that has refused for six hours (operator, 2026-09-25).
       count: Math.max(1, tally?.pauseStreak ?? 1),
-      episodeElapsedMs: num(meta.pause?.episodeElapsedMs),
+      episodeElapsedMs: num(meta.pause?.episodeElapsedMs) ?? recorded?.episodeElapsedMs ?? null,
       ...(statedReset !== null ? { notBefore: statedReset } : {}),
     };
   }
@@ -1416,17 +1427,23 @@ export function readRunFact(
   return fact;
 }
 
-/** How much of a trajectory's end `terminationOfTrajectory` reads. */
+/** How much of a trajectory's end `verdictOfTrajectory` reads. */
 export const TERMINATION_TAIL_BYTES = 1 << 20;
 
+/** The last verdict a trajectory records: its end, a pause, or a resume that cancels the pause before it. */
+export type TrajectoryVerdict =
+  | { kind: "terminated"; reason: string; detail: string | null; at: number | null }
+  | { kind: "paused"; reason: string; detail: string | null; at: number | null; notBefore: number | null; episodeElapsedMs: number | null }
+  | { kind: "resumed" };
+
 /**
- * The run's last `termination` record, read off the trajectory's tail, or
- * null when the tail holds none or a `resume` came after it. The record is
- * appended a handful of records before a runner exits (`setTermination`, then
- * the episode's close-out), so the last MiB holds it; a run that wrote more
- * than that after its verdict is not one this recovers.
+ * The run's last `termination`, `pause` or `resume` record, read off the
+ * trajectory's tail, or null when the tail holds none. The verdict is
+ * appended a handful of records before a runner exits, so the last MiB holds
+ * it; a run that wrote more than that after its verdict is not one this
+ * recovers.
  */
-export function terminationOfTrajectory(path: string, tailBytes = TERMINATION_TAIL_BYTES): { reason: string; detail: string | null; at: number | null } | null {
+export function verdictOfTrajectory(path: string, tailBytes = TERMINATION_TAIL_BYTES): TrajectoryVerdict | null {
   let fd: number | null = null;
   try {
     fd = openSync(path, "r");
@@ -1443,16 +1460,27 @@ export function terminationOfTrajectory(path: string, tailBytes = TERMINATION_TA
     // The first line of a tail that starts mid-file is a fragment.
     for (let i = lines.length - 1; i >= (start > 0 ? 1 : 0); i--) {
       const line = lines[i]!;
-      if (!line.includes('"termination"') && !line.includes('"resume"')) continue;
-      let rec: { t?: unknown; reason?: unknown; detail?: unknown; ts?: unknown };
+      if (!line.includes('"termination"') && !line.includes(`"${PAUSE_RECORD}"`) && !line.includes(`"${RESUME_RECORD}"`)) continue;
+      let rec: { t?: unknown; reason?: unknown; detail?: unknown; ts?: unknown; notBefore?: unknown; episodeElapsedMs?: unknown };
       try {
         rec = JSON.parse(line) as typeof rec;
       } catch {
         continue;
       }
-      if (rec.t === "resume") return null;
-      if (rec.t === "termination" && typeof rec.reason === "string" && rec.reason !== "") {
-        return { reason: rec.reason, detail: typeof rec.detail === "string" ? rec.detail : null, at: typeof rec.ts === "number" ? rec.ts : null };
+      if (rec.t === RESUME_RECORD) return { kind: "resumed" };
+      if (typeof rec.reason !== "string" || rec.reason === "") continue;
+      const detail = typeof rec.detail === "string" ? rec.detail : null;
+      const at = typeof rec.ts === "number" ? rec.ts : null;
+      if (rec.t === "termination") return { kind: "terminated", reason: rec.reason, detail, at };
+      if (rec.t === PAUSE_RECORD) {
+        return {
+          kind: "paused",
+          reason: rec.reason,
+          detail,
+          at,
+          notBefore: typeof rec.notBefore === "number" ? rec.notBefore : null,
+          episodeElapsedMs: typeof rec.episodeElapsedMs === "number" ? rec.episodeElapsedMs : null,
+        };
       }
     }
     return null;
@@ -1461,6 +1489,12 @@ export function terminationOfTrajectory(path: string, tailBytes = TERMINATION_TA
   } finally {
     if (fd !== null) closeSync(fd);
   }
+}
+
+/** The run's last `termination` record off the trajectory's tail, or null when the tail ends otherwise (`verdictOfTrajectory`). */
+export function terminationOfTrajectory(path: string, tailBytes = TERMINATION_TAIL_BYTES): { reason: string; detail: string | null; at: number | null } | null {
+  const v = verdictOfTrajectory(path, tailBytes);
+  return v?.kind === "terminated" ? { reason: v.reason, detail: v.detail, at: v.at } : null;
 }
 
 /** `run.ts --resume` refused because the run has a live owner (EX_TEMPFAIL): nothing was written. */
@@ -1504,7 +1538,7 @@ export function runFactCacheVersion(): string {
     .update(
       [
         String(RUN_FACT_CACHE_SCHEMA),
-        ...[readRunFact, partyOfConfig, runFactKey, runDbWriteInFlight, terminationOfTrajectory, tallyRecords, RecordCountScanner, harnessSeries, isEpisodeId, heartbeatAt, openRunDb, str, num, parseSubscriptionUsage, subscriptionLaneOfConfig, goKeyEnvOf, isOpenCodeGoBase, billingOf].map(String),
+        ...[readRunFact, partyOfConfig, runFactKey, runDbWriteInFlight, verdictOfTrajectory, tallyRecords, RecordCountScanner, harnessSeries, isEpisodeId, heartbeatAt, openRunDb, str, num, parseSubscriptionUsage, subscriptionLaneOfConfig, goKeyEnvOf, isOpenCodeGoBase, billingOf].map(String),
         JSON.stringify([EPISODE_IDS, MODEL_RESPONSE_RECORD, HEARTBEAT_FILE]),
       ].join("\n"),
     )

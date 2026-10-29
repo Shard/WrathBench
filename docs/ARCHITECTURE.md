@@ -427,7 +427,8 @@ the attempt counts toward its square's cap); the `state`
 table's `level` is the level it reports. A termination is appended to the
 trajectory before the row is written, so when the row has none and the run
 has no pause and no live owner, the trajectory's last `termination` record
-is the verdict, and the supervisor writes it into the row. The file is in WAL
+is the verdict, and the supervisor writes it into the row; a `pause` record
+there, or meta.json's pause mark, is the pause, unless a `resume` follows it. The file is in WAL
 while its runner writes it and back on the rollback journal once the runner
 finishes, so a live run's commits are in `run.sqlite-wal` until a checkpoint;
 anything that stats the database for change takes that file with it, and a

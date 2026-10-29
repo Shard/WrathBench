@@ -1206,18 +1206,31 @@ async function main(): Promise<void> {
      * The episode threw past its own catch: in practice a verdict whose
      * run.sqlite write still met a lock after its retries. The verdict is in
      * trajectory.jsonl already (appended before the row), and the supervisor
-     * reads it from there (`readRunFact`). What must not be skipped is the
-     * cleanup: the session is released and the sandbox stopped as a finished
-     * run's are, and the file closed, before the error leaves the process.
+     * reads it from there (`readRunFact`), or, for a pause, from the meta.json
+     * mark written here as the normal path writes it. What must not be skipped
+     * is the cleanup, by the same rules as below: the session deleted and its
+     * secret released for an end, the session deleted (secret kept for the
+     * resume) for the pauses that free it, the sandbox stopped and the file
+     * closed, before the error leaves the process.
      */
     console.error(`[wrathbench] the episode failed: ${err instanceof Error ? err.message : String(err)}`);
-    try {
-      await sandbox.evalSnippet("if (typeof sdk !== 'undefined' && sdk) { try { await sdk.deleteSession(); } catch {} }");
-    } catch {
-      /* best effort, as below */
+    const paused = trajectory.recordedPause;
+    if (paused !== null && readMeta(runDir)?.pause === undefined) {
+      try {
+        trajectory.writeMeta({ ...(readMeta(runDir) ?? metaNow()), pause: paused }).catch(() => undefined);
+      } catch (e) {
+        console.error(`[wrathbench] could not write the pause mark: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    if (paused === null || paused.reason === "operator-pause" || paused.reason === STALL_PAUSE || paused.reason === SUBSCRIPTION_PAUSE) {
+      try {
+        await sandbox.evalSnippet("if (typeof sdk !== 'undefined' && sdk) { try { await sdk.deleteSession(); } catch {} }");
+      } catch {
+        /* best effort, as below */
+      }
     }
     await sandbox.stop().catch(() => undefined);
-    await releaseSessionSecret({ moduleUrl: config.moduleUrl, token: config.token }).catch(() => undefined);
+    if (paused === null) await releaseSessionSecret({ moduleUrl: config.moduleUrl, token: config.token }).catch(() => undefined);
     await trajectory.finish();
     wiki?.close();
     throw err;

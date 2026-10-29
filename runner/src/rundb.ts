@@ -9,7 +9,8 @@
  * forget at a new call site.
  *
  * **WAL while a run is live, the rollback journal at rest.** The runner's own
- * writer (`Trajectory` with `wal: true`, which `run.ts` and `mcp.ts` ask for)
+ * writer (`Trajectory` with `wal: true`, which `run.ts` asks for; `mcp.ts`, the
+ * operator's stdio mode, stays on the rollback journal with single attempts)
  * puts the file in WAL mode when it opens it, a resumed run's existing file
  * included. Under WAL a reader never blocks the writer and the writer never
  * blocks a reader: each reads the snapshot it started on. On the rollback
@@ -137,9 +138,11 @@ export const RUN_DB_BUSY_TIMEOUT_MS = 5000;
  * `RUN_DB_BUSY_TIMEOUT_MS` plus the thirty seconds of waits, about fifty
  * seconds, inside the two minutes after which a cold heartbeat reads as a dead
  * runner; and the waits are asynchronous, so the heartbeat beats through them.
- * The budget is the run's, not each write's: after a write gives up, the
- * writes behind it (the termination's included) get one attempt each
- * (`Trajectory.write`).
+ * The budget is not each write's: after a write gives up, the writes behind
+ * it get one attempt each, except that a verdict write (termination, pause,
+ * meta) keeps one round of its own after a minor one (state, move, trace)
+ * gave up, so the run ends within about two rounds, ~105 s, with the
+ * heartbeat beating through every wait (`Trajectory.write`).
  */
 export const RUN_DB_RETRY_WAITS_MS: readonly number[] = [5_000, 10_000, 15_000];
 
