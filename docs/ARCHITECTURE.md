@@ -77,7 +77,7 @@ takes from the stack and how.
 
 **Versions, as built.** The SDK has its own version (docs/METHODOLOGY.md,
 "Fixed harness, frozen per version"), and `@wrathbench/mcp` carries the same
-one. The runner depends on the stack at an exact version (`workspace:0.1.0` in
+one. The runner depends on the stack at an exact version (`workspace:0.2.0` in
 its `package.json`), so an SDK whose version moves fails the install until
 that dependency moves with it, and every run records the version in
 `meta.json` as `sdkVersion`, beside `harnessVersion`. It is a label only,
@@ -513,7 +513,8 @@ Every episode starts with a freshly created character at level 1 in its starting
   of it, the scorer reads none of it, and the collector does not tail it —
   copying a 1 Hz feed into the store as unknown trajectory lines is the shape
   that has put ClickHouse out of memory before.
-- The module's audit log: one JSONL per session token and UTC day under
+- The module's audit log: one JSONL per session and UTC day, named by a
+  fingerprint of its token, under
   `logs/wrathbench` on the same volume, written by the worldserver, which
   rolls a live session's file at midnight UTC. An operational record kept for
   a window (the chart's

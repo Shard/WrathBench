@@ -1,6 +1,6 @@
 {{- /*
 Server log retention: a daily CronJob that prunes the module's per-session
-audit log (one `logs/wrathbench/<token>.<YYYY-MM-DD>.jsonl` per UTC day on
+audit log (one `logs/wrathbench/<fingerprint>.<YYYY-MM-DD>.jsonl` per UTC day on
 the data PVC) by age.
 
 The audit log is an operational record kept for a window, not evidence kept

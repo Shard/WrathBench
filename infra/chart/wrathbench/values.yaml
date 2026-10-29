@@ -271,7 +271,7 @@ worldserver:
     periodSeconds: 10
     failureThreshold: 90
   # How long the module's per-session audit log (one
-  # logs/wrathbench/<token>.<YYYY-MM-DD>.jsonl per UTC day on the data PVC) is
+  # logs/wrathbench/<fingerprint>.<YYYY-MM-DD>.jsonl per UTC day on the data PVC) is
   # kept, in days. The log is an operational record for the
   # window — the smokes read it, a stuck session is diagnosed from it — and
   # not the long-lived record of a run, which is the trajectory's own `actions`

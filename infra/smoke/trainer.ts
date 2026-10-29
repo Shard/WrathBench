@@ -45,7 +45,7 @@ import { probeName } from "./lib/name";
 import { authHeaders } from "./lib/auth";
 import { failOnce } from "./lib/fail";
 import { moduleBase, moduleWsBase } from "./lib/module";
-import { smokeToken } from "./lib/session";
+import { smokeSubToken, smokeToken } from "./lib/session";
 
 const CHARACTER = probeName("Bt");
 
@@ -345,7 +345,7 @@ async function main() {
   let deleted: any = null;
   for (let attempt = 0; attempt < 10 && !deleted?.json?.deleted; ++attempt) {
     await Bun.sleep(3000);
-    deleted = await req("POST", "/character-delete", { token: `${TOKEN}-del${attempt}`, account: ACCOUNT, character: CHARACTER });
+    deleted = await req("POST", "/character-delete", { token: smokeSubToken(TOKEN, `del${attempt}`), account: ACCOUNT, character: CHARACTER });
     if (!deleted.json?.deleted) log(`character-delete attempt ${attempt}: ${deleted.status} ${JSON.stringify(deleted.json)}`);
   }
   if (!deleted?.json?.deleted) fail(`character-delete never succeeded; sweep ${CHARACTER} on ${ACCOUNT}`);

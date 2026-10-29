@@ -11,7 +11,7 @@ Pins are changed deliberately and documented here with a date and reason. See CL
 
 ## wrath-mcp (the agent stack)
 
-- Commit: `726d8e0f623bfc9fa393161a2673fb35a6fd6d54` (wrath-mcp master; the worldserver log names sessions by a SHA-256 fingerprint, never the token).
+- Commit: `22013df9cbe6039c6a9ee742cc1716c61e97dc12` (wrath-mcp master, the stack at 0.2.0; audit files and records named by token fingerprint, GM accounts refused, loopback bind by default, no token in stream errors or the MCP server's output).
 - Where: git submodule at `wrath-mcp/` (https://github.com/Shard/wrath-mcp); the submodule pointer in our history is the authoritative pin, this file is the human-readable record. It pins the C++ module, the SDK and the MCP stack together: the server image compiles `wrath-mcp/module`, and `wrath-mcp/sdk` and `wrath-mcp/mcp` are workspaces of this repository. Every run stamps the commit in `meta.json` as `stackCommit`, a label beside `sdkVersion`.
 - Rules: the pin on master is a commit on wrath-mcp's master (`build-images.sh` refuses anything else for an image that can be pushed, and CI checks it on master); a PR may pin a wrath-mcp branch commit while both are in review. Merge order is wrath-mcp first, then the bump here. The Bun, zod, typescript and `@types/bun` pins agree across the two repositories (`bun run boundary`).
 - Bumping: merge the stack change in wrath-mcp, then move the submodule to the new master commit in a commit of its own, `wrath-mcp: <old>..<new> — <one line>`, which updates the commit above. That commit is the record; a module change is verified only by the release that carries it and `bun wb smoke suite` after it.

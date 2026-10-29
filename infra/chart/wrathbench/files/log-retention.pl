@@ -1,9 +1,9 @@
 #!/usr/bin/perl
 # Server log retention: the module's per-session audit log, pruned by age.
 #
-# The worldserver writes one JSONL file per session token and UTC day under
-# WrathBench.AuditDir, `<token>.<YYYY-MM-DD>.jsonl`, rolling to the next day's
-# at the first record after midnight UTC (wrath-mcp/module/PROTOCOL.md "Audit log").
+# The worldserver writes one JSONL file per session and UTC day under
+# WrathBench.AuditDir, `<fingerprint>.<YYYY-MM-DD>.jsonl` (`<token>.…` before
+# stack 0.2.0), rolling to the next day's at the first record after midnight UTC (wrath-mcp/module/PROTOCOL.md "Audit log").
 # The chart's log-retention CronJob (templates/log-retention.yaml) runs this
 # once a day from the worldserver image, which is where perl is, against the
 # same `logs` subPath of the data PVC. `bun wb server log-retention` runs the
@@ -47,8 +47,9 @@
 # undated file, the proof failing. One readdir, one stat per file, no content
 # read; unlink and truncate are metadata operations.
 #
-# File names are session tokens. Nothing here prints one or passes one to
-# another program: counts and bytes only.
+# File names are token fingerprints, and before stack 0.2.0 were session
+# tokens. Nothing here prints one or passes one to another program: counts
+# and bytes only.
 #
 # Environment: WRATHBENCH_AUDIT_DIR, WRATHBENCH_LOG_RETENTION_DAYS (0 or empty
 # disables), WRATHBENCH_MODULE_HOST (host:port), WRATHBENCH_MODULE_SECRET (or

@@ -20,7 +20,7 @@ marks, the snippet delta, the turn's event window and the HUD's snapshot
 fields), the drains for them (`src/sandbox/host.ts`, a `SandboxHost`
 subclass), and the trajectory, secret registry, context and watchdogs it
 supplies every dispatcher. It depends on the stack at an exact version
-(`package.json`, `workspace:0.1.0`) and records it in `meta.json` as
+(`package.json`, `workspace:0.2.0`) and records it in `meta.json` as
 `sdkVersion`. The operator launches it through
 `infra/run-episode.sh` or the fleet supervisor; the viewer (`runner/viewer/`)
 reads what it wrote.

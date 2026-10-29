@@ -14,7 +14,8 @@
 # rolls the file); an undated one would be the rules' proof failing, and the
 # count of those should always read zero. The window defaults to the deployed
 # CronJob's (`worldserver.logRetention.days`), or 3 where none is deployed yet.
-# Nothing here names a file: the directory holds session tokens.
+# Nothing here names a file: the directory holds files named by session token
+# from before stack 0.2.0.
 set -Eeuo pipefail
 
 NAMESPACE="${WRATHBENCH_K8S_NAMESPACE:-wrathbench}"

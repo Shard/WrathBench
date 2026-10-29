@@ -45,7 +45,7 @@ import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type Fi
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
-import { smokeToken } from "./lib/session";
+import { smokeSubToken, smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -92,7 +92,7 @@ const fixtureCtx: FixtureContext = {
   contendedDeadlineMs: 10_000,
   contendedRetryMs: 5_000,
   createAndLogout: async () => {
-    const c = await connect({ baseUrl: BASE, token: `${TOKEN}-create`, secret: MODULE_SECRET });
+    const c = await connect({ baseUrl: BASE, token: smokeSubToken(TOKEN, "create"), secret: MODULE_SECRET });
     try {
       await c.createSession({ account: ACCOUNT, character: CHARACTER, race: 1, class: 1 });
       await c.logout();
