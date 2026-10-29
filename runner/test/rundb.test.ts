@@ -26,7 +26,8 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openRunDb, RUN_DB_BUSY_TIMEOUT_MS } from "../src/rundb";
+import { openRunDb, RUN_DB_BUSY_TIMEOUT_MS, RUN_DB_WRITER_BUSY_TIMEOUT_MS } from "../src/rundb";
+import { Trajectory } from "../src/trajectory";
 
 const dir = mkdtempSync(join(tmpdir(), "wb-rundb-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -110,7 +111,7 @@ test("the busy timeout is set on read-only and writable handles alike", () => {
   for (const readonly of [true, false]) {
     const db = openRunDb(dbPath, { readonly });
     try {
-      expect(db.query("PRAGMA busy_timeout").get()).toEqual({ timeout: RUN_DB_BUSY_TIMEOUT_MS });
+      expect(db.query("PRAGMA busy_timeout").get()).toEqual({ timeout: readonly ? RUN_DB_BUSY_TIMEOUT_MS : RUN_DB_WRITER_BUSY_TIMEOUT_MS });
     } finally {
       db.close();
     }
@@ -128,5 +129,100 @@ test("run stores stay on the rollback journal, which is what a read-only mount c
     expect(mode).not.toBe("wal");
   } finally {
     db.close();
+  }
+});
+
+// ------------------------------------------------- a reader never kills the writer
+//
+// The other direction, and the one that costs a run. On the rollback journal a
+// reader's SHARED lock lasts as long as its statement (or its transaction), and
+// the writer's commit needs every SHARED lock gone. A read longer than the
+// writer's busy timeout made the writer's INSERT throw `SQLiteError: database
+// is locked`, the driver loop caught it as a harness error, and a live
+// freeplay run was terminated by somebody reading it. The writer now waits far
+// longer than any reader does, so the reader is the one that gives up first.
+
+const readHoldScript = join(dir, "read-hold.ts");
+writeFileSync(
+  readHoldScript,
+  `import { Database } from "bun:sqlite";
+import { writeFileSync } from "node:fs";
+const [path, sentinel, ms] = process.argv.slice(2) as [string, string, string];
+const db = new Database(path, { readonly: true });
+db.exec("BEGIN");
+db.query("SELECT COUNT(*) AS n FROM sqlite_master").get();
+writeFileSync(sentinel, "reading");
+Bun.sleepSync(Number(ms));
+db.exec("COMMIT");
+db.close();
+`,
+);
+
+/** Run `fn` while a child process holds a read transaction (SHARED) on `path`. */
+async function whileReading<T>(path: string, holdMs: number, fn: () => T): Promise<T> {
+  const sentinel = join(dir, "reading");
+  rmSync(sentinel, { force: true });
+  const child = Bun.spawn([process.execPath, readHoldScript, path, sentinel, String(holdMs)], { stdout: "pipe", stderr: "pipe" });
+  try {
+    const deadline = Date.now() + 15_000;
+    while (!existsSync(sentinel)) {
+      if (Date.now() > deadline) throw new Error(`reader never started: ${await new Response(child.stderr).text()}`);
+      await Bun.sleep(5);
+    }
+    return fn();
+  } finally {
+    await child.exited;
+  }
+}
+
+test("a writer whose busy timeout is shorter than a reader's hold dies with exactly the error a live run died of", async () => {
+  const thrown = await whileReading(dbPath, 1500, () => {
+    const db = openRunDb(dbPath, { busyTimeoutMs: 300 });
+    try {
+      db.exec("INSERT INTO state (run_id, level) VALUES ('r', 2)");
+      return null;
+    } catch (e) {
+      return e;
+    } finally {
+      db.close();
+    }
+  });
+  expect(String(thrown)).toBe("SQLiteError: database is locked");
+});
+
+test("the run's own writer outwaits a reader that holds the file longer than any reader's timeout", async () => {
+  const runDir = join(dir, "run-writer");
+  // The writer as the runner opens it: through Trajectory, with the defaults.
+  const t = new Trajectory(runDir);
+  try {
+    const hold = RUN_DB_BUSY_TIMEOUT_MS + 700;
+    const started = Date.now();
+    await whileReading(join(runDir, "run.sqlite"), hold, () => {
+      t.recordMove("r", { ts: 1, moveId: 1, map: 0, x: 1, y: 2, z: 3 });
+    });
+    // It waited the reader out instead of failing at a reader's budget.
+    expect(Date.now() - started).toBeGreaterThan(RUN_DB_BUSY_TIMEOUT_MS);
+  } finally {
+    t.close();
+  }
+  const db = openRunDb(join(runDir, "run.sqlite"), { readonly: true });
+  try {
+    expect(db.query("SELECT COUNT(*) AS n FROM move").get()).toEqual({ n: 1 });
+  } finally {
+    db.close();
+  }
+}, 20_000);
+
+test("a writer waits several times longer than a reader, and well inside the heartbeat's two cold minutes", () => {
+  expect(RUN_DB_WRITER_BUSY_TIMEOUT_MS).toBeGreaterThanOrEqual(5 * RUN_DB_BUSY_TIMEOUT_MS);
+  expect(RUN_DB_WRITER_BUSY_TIMEOUT_MS).toBeLessThanOrEqual(60_000);
+  const w = openRunDb(dbPath);
+  const r = openRunDb(dbPath, { readonly: true });
+  try {
+    expect(w.query("PRAGMA busy_timeout").get()).toEqual({ timeout: RUN_DB_WRITER_BUSY_TIMEOUT_MS });
+    expect(r.query("PRAGMA busy_timeout").get()).toEqual({ timeout: RUN_DB_BUSY_TIMEOUT_MS });
+  } finally {
+    w.close();
+    r.close();
   }
 });

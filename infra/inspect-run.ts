@@ -549,9 +549,34 @@ function nearbyLine(dir: string, now: number): string {
   return `${names.length} window file(s), ${fmtBytes(bytes)}, newest written ${fmtAge(now - newest)} ago`;
 }
 
+/**
+ * Rows per statement when a read has to walk a whole table of a run that may
+ * be live. On the rollback journal a statement's SHARED lock lasts as long as
+ * the statement, and the runner's commit waits for every one of them: a single
+ * full scan of a live run's trace (hundreds of thousands of rows, most of a
+ * 300 MB file, from a cold disk) held the file for longer than the writer
+ * would wait, and the run died of `database is locked`. Walked in rowid
+ * windows instead, each its own statement, the writer gets in between them.
+ */
+export const SCAN_WINDOW_ROWS = 20_000;
+
+/** Every row of `table` through `windowed(lo, hi)`, one statement per rowid window (`SCAN_WINDOW_ROWS`), in rowid order. */
+export function scanByRowid<T>(db: Database, table: string, windowed: (lo: number, hi: number) => T[], window = SCAN_WINDOW_ROWS): T[] {
+  const max = (db.query(`SELECT max(rowid) AS m FROM ${table}`).get() as { m: number | null }).m;
+  const out: T[] = [];
+  if (max === null) return out;
+  for (let lo = 0; lo < max; lo += window) out.push(...windowed(lo, Math.min(lo + window, max)));
+  return out;
+}
+
 function traceLine(db: Database, runId: string, now: number): string {
   if (!hasTable(db, "trace")) return "no trace table (a run from before the recorder)";
-  const kinds = db.query("SELECT kind, count(*) AS n FROM trace GROUP BY kind").all() as { kind: string; n: number }[];
+  const byWindow = db.query("SELECT kind, count(*) AS n FROM trace WHERE rowid > ? AND rowid <= ? GROUP BY kind");
+  const counts = new Map<string, number>();
+  for (const k of scanByRowid(db, "trace", (lo, hi) => byWindow.all(lo, hi) as { kind: string; n: number }[])) {
+    counts.set(k.kind, (counts.get(k.kind) ?? 0) + k.n);
+  }
+  const kinds = [...counts].map(([kind, n]) => ({ kind, n }));
   if (kinds.length === 0) return "no rows";
   const total = kinds.reduce((a, k) => a + k.n, 0);
   const newest = (db.query("SELECT max(ts) AS m FROM trace WHERE run_id = ?").get(runId) as { m: number | null }).m;
@@ -565,7 +590,9 @@ function lastState(db: Database): StateRow | null {
   const have = columns(db, "state");
   const pick = (c: string): string => (have.has(c) ? c : `NULL AS ${c}`);
   const cols = ["ts", "level", "xp", "money", "quests_completed", "turn", "zone", "next_level_xp"];
-  return db.query(`SELECT ${cols.map(pick).join(", ")} FROM state ORDER BY ts DESC LIMIT 1`).get() as StateRow | null;
+  // The newest row by rowid, which the state table is appended in, not by ts:
+  // the table has no index on ts, and the sort was a full scan of a live run.
+  return db.query(`SELECT ${cols.map(pick).join(", ")} FROM state ORDER BY rowid DESC LIMIT 1`).get() as StateRow | null;
 }
 
 /** One process's stretch of the quest count: when its first sample was taken, and its last count. */
@@ -597,9 +624,12 @@ export function questStretches(samples: readonly { ts: number; quests: number | 
 
 function questLine(db: Database, runId: string): string | null {
   if (!hasTable(db, "state") || !columns(db, "state").has("quests_completed")) return null;
-  const rows = db
-    .query("SELECT ts, quests_completed AS quests FROM state WHERE run_id = ? AND quests_completed IS NOT NULL ORDER BY ts")
-    .all(runId) as { ts: number; quests: number | null }[];
+  // Windowed (`scanByRowid`), so the walk of a live run's whole state table
+  // never holds the file against its writer.
+  const byWindow = db.query(
+    "SELECT ts, quests_completed AS quests FROM state WHERE rowid > ? AND rowid <= ? AND run_id = ? AND quests_completed IS NOT NULL ORDER BY ts",
+  );
+  const rows = scanByRowid(db, "state", (lo, hi) => byWindow.all(lo, hi, runId) as { ts: number; quests: number | null }[]);
   const q = questStretches(rows);
   if (q === null) return null;
   const restarts = q.stretches.length - 1;

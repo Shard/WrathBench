@@ -38,16 +38,43 @@ import { Database } from "bun:sqlite";
 export const RUN_DB_BUSY_TIMEOUT_MS = 5000;
 
 /**
+ * How long a WRITER waits for readers before giving up: six times a reader's.
+ *
+ * The lock goes both ways. On the rollback journal a reader's SHARED lock
+ * lasts as long as its statement, and the writer's commit needs every one of
+ * them gone. A writer that gives up is not a reader that reads as empty: the
+ * runner's INSERT throws `database is locked`, the driver loop takes that for
+ * a harness error, and the run is terminated by somebody having read it. That
+ * is how a live freeplay run ended, a minute after an operator's
+ * `bun wb inspect` of its 281 MB run.sqlite had started full scans of tables
+ * hundreds of thousands of rows long on a cold disk: the writer needed the
+ * file for at least ten seconds and had five.
+ *
+ * So the writer outwaits every reader. A reader that blocks the writer past
+ * this long is the thing to fix, and it fails first: its own five seconds run
+ * out while the writer holds PENDING, which also stops new readers from
+ * starting. Bounded, not infinite, because the wait blocks the runner's one
+ * thread: thirty seconds stays well inside the two minutes after which a cold
+ * heartbeat reads as a dead runner and the CLI's five-minute tool timeout,
+ * while being three times the longest hold seen.
+ */
+export const RUN_DB_WRITER_BUSY_TIMEOUT_MS = 30_000;
+
+/**
  * Open a `run.sqlite` with a busy timeout set. `readonly` for every consumer
- * that is not the runner writing its own trajectory.
+ * that is not the runner writing its own trajectory; a writable handle waits
+ * `RUN_DB_WRITER_BUSY_TIMEOUT_MS`, a read-only one `RUN_DB_BUSY_TIMEOUT_MS`.
+ * `busyTimeoutMs` overrides either, for tests.
  *
  * `busy_timeout` is connection state rather than a write to the file, so it
  * applies to a read-only handle exactly as it does to a writable one.
  */
-export function openRunDb(path: string, opts: { readonly?: boolean } = {}): Database {
-  const db = opts.readonly === true ? new Database(path, { readonly: true }) : new Database(path);
+export function openRunDb(path: string, opts: { readonly?: boolean; busyTimeoutMs?: number } = {}): Database {
+  const readonly = opts.readonly === true;
+  const db = readonly ? new Database(path, { readonly: true }) : new Database(path);
+  const timeout = opts.busyTimeoutMs ?? (readonly ? RUN_DB_BUSY_TIMEOUT_MS : RUN_DB_WRITER_BUSY_TIMEOUT_MS);
   try {
-    db.exec(`PRAGMA busy_timeout = ${RUN_DB_BUSY_TIMEOUT_MS}`);
+    db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(timeout))}`);
   } catch (e) {
     // An open that cannot take the pragma is an open we do not want to hand
     // back half-configured; close it and let the caller's own catch see this.
