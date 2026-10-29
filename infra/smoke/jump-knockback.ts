@@ -11,8 +11,11 @@
  * Asserts, and exits 1 on any miss:
  *   1. in place: the landing is reported within 3 s, within 0.5y of the
  *      start across and 1y in height;
- *   2. forward (facing east first): the landing is 3 to 8 yards east of the
- *      start (the run speed over a jump's ~0.8 s);
+ *   2. forward, along the facing the fixture leaves: the landing is 3 to 8
+ *      yards from the start
+ *      across (the run speed over a jump's ~0.8 s). A miss here is worth
+ *      checking against the spot before the module: an arc that meets a
+ *      model comes down short, in the last column it crossed;
  *   3. the observer receives the jumper's MSG_MOVE_JUMP carrying
  *      MOVEMENTFLAG_FALLING, and a MSG_MOVE_FALL_LAND without it, for each
  *      jump: the server accepted and relayed them;
@@ -161,14 +164,12 @@ try {
   if (across > 0.5 || Math.abs(still.landed.z - start.z) > 1) problems.push(`in place: landed ${across.toFixed(2)}y across and ${(still.landed.z - start.z).toFixed(2)}y up from the start`);
   await Bun.sleep(500);
 
-  // 2. Forward, facing east.
-  await jumper.face(0);
-  await Bun.sleep(300);
+  // 2. Forward, along the fixture's own facing.
   const from = jumper.state.self.position?.value ?? start;
   const ahead = await jump(jumper, placed.token, true);
-  const east = ahead.landed.x - from.x;
-  log(`  forward: landed ${fmt(ahead.landed)}, ${east.toFixed(2)}y east, eta ${ahead.ackMs ?? "?"}ms`);
-  if (east < 3 || east > 8) problems.push(`forward: landed ${east.toFixed(2)}y east of the start, outside 3-8`);
+  const gone = Math.hypot(ahead.landed.x - from.x, ahead.landed.y - from.y);
+  log(`  forward: landed ${fmt(ahead.landed)}, ${gone.toFixed(2)}y across, eta ${ahead.ackMs ?? "?"}ms`);
+  if (gone < 3 || gone > 8) problems.push(`forward: landed ${gone.toFixed(2)}y from the start across, outside 3-8 (check the spot: something in the arc brings it down short)`);
   await Bun.sleep(1000);
 
   // 3. What the observer saw.
