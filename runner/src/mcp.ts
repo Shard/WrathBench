@@ -32,7 +32,7 @@ import { appendPendingActionHints, callTool, coerceToolArgs, toolsFor, type Tool
 import { SandboxHost } from "./sandbox/host";
 import { Trajectory } from "./trajectory";
 import { newRunId, newSessionToken, loadRunConfig } from "./config";
-import { harnessVersion } from "./version";
+import { harnessVersion, stackCommit } from "./version";
 import { SDK_VERSION } from "@wrathbench/sdk";
 
 export { MCP_PROTOCOL_VERSION } from "@wrathbench/mcp";
@@ -97,7 +97,7 @@ async function main(): Promise<void> {
   // The client cache survives a sandbox restart here as in `run.ts`.
   const clientCache = new ClientCacheStore(join(runDir, CLIENT_CACHE_FILE));
   process.on("exit", () => clientCache.flush());
-  trajectory.writeMeta({ runId, harnessVersion: harnessVersion(), sdkVersion: SDK_VERSION, startedAt: Date.now(), config });
+  trajectory.writeMeta({ runId, harnessVersion: harnessVersion(), sdkVersion: SDK_VERSION, stackCommit: stackCommit(), startedAt: Date.now(), config });
 
   // The session secret for this token (module/PROTOCOL.md, "Authentication");
   // the operator's port secret stays in this process. Registered for

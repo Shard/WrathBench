@@ -393,6 +393,14 @@ export interface RunMeta {
    * it, and no filter reads it. Absent on runs written before the SDK had a version of its own.
    */
   sdkVersion?: string;
+  /**
+   * The wrath-mcp commit the stack came from (`stackCommit()` in version.ts),
+   * `-dirty` when a checkout's submodule had tracked edits. Written and
+   * rewritten beside `sdkVersion`, and like it a label only: outside the
+   * comparability tuple, read by no filter. Absent on runs written before the
+   * stack was a submodule, and when neither the checkout nor the image knew it.
+   */
+  stackCommit?: string | undefined;
   startedAt: number;
   config: RunConfig;
   /**

@@ -87,7 +87,7 @@ import { goKeyEnvOf, liveOwnerOf, RESUME_REFUSED_EXIT, subscriptionLaneOfConfig 
 import { GoUsageGauge, goUsageUrl } from "./opencode-go";
 import { Trajectory, readMeta, startHeartbeat, type PauseMark, type RunMeta } from "./trajectory";
 import { removeNearbyRing } from "./nearby";
-import { harnessVersion } from "./version";
+import { harnessVersion, stackCommit } from "./version";
 import { SDK_VERSION } from "@wrathbench/sdk";
 import { Watchdogs } from "./watchdogs";
 import { watchEndRequest } from "./end-request";
@@ -666,6 +666,7 @@ async function main(): Promise<void> {
 
   const shakeout = unscoredStamp(config.driver, config.objective);
   const version = harnessVersion();
+  const stack = stackCommit();
   // Never blocks launch: an unreachable module (or one that predates the
   // field) reads as `null`, same as "not recorded" everywhere else in the
   // tuple. Fetched fresh on every launch and every resume-restamp, so a
@@ -677,6 +678,7 @@ async function main(): Promise<void> {
       runId: config.runId,
       harnessVersion: version,
       sdkVersion: SDK_VERSION,
+      stackCommit: stack,
       startedAt: Date.now(),
       config,
       comparability,
@@ -725,7 +727,7 @@ async function main(): Promise<void> {
         // conversation should be exactly what the scratchpad note says it is.
         ...(DRIVER_TABLE[config.driver].kind === "scaffold" ? { resumedFresh: true } : {}),
       };
-      trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, sdkVersion: SDK_VERSION, config, comparability });
+      trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, sdkVersion: SDK_VERSION, stackCommit: stack, config, comparability });
     }
     /*
      * A resume may tighten the leash (`--max-turns`, `--watchdogs-json`), and a
@@ -744,7 +746,7 @@ async function main(): Promise<void> {
        * launch build would have the run row and its own tuple naming two
        * different versions — on charts whose entire claim is comparability.
        */
-      trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, sdkVersion: SDK_VERSION, config, comparability });
+      trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, sdkVersion: SDK_VERSION, stackCommit: stack, config, comparability });
       trajectory.append({
         t: "harness",
         kind: "comparability_restamped",
@@ -770,7 +772,7 @@ async function main(): Promise<void> {
           `weak_token). No live session is stranded — the nightly worldserver recreate clears ` +
           `every module session.`,
       );
-      trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, sdkVersion: SDK_VERSION, config, comparability });
+      trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, sdkVersion: SDK_VERSION, stackCommit: stack, config, comparability });
       trajectory.append({ t: "harness", kind: "token_regenerated", reason: "weak_stored_token" });
     }
   }
@@ -822,6 +824,7 @@ async function main(): Promise<void> {
     runId: config.runId,
     harnessVersion: version,
     sdkVersion: SDK_VERSION,
+    stackCommit: stack,
     startedAt: Date.now(),
     config,
     comparability,
