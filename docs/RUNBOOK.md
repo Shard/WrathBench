@@ -1077,7 +1077,10 @@ sharing the node when one fills.
 
 ### Server log retention
 
-The worldserver's own log goes to the console (`kubectl logs`). What it keeps
+The worldserver's own log goes to the console (`kubectl logs`), each line once
+and without colour codes: the chart turns the stock `Console` appender off and
+makes `Server` the one console appender, re-pointing the loggers that wrote to
+`Console` alone (templates/worldserver.yaml has the why). What it keeps
 as files on the data PVC is `logs/Errors.log`, held open and rewritten on
 every boot, and the module's audit log, one JSONL per session token and UTC
 day under `logs/wrathbench` (`<token>.<YYYY-MM-DD>.jsonl`; a live session

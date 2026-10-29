@@ -106,7 +106,6 @@ worldserver:
   accounts:
     - RUNNER
     - SMOKE
-  appenderServer: "1,5,0"
   resources:
     requests:
       cpu: "2"
