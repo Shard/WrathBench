@@ -31,9 +31,12 @@
  * `flight: true` -> petCast(Recall Eye of Acherus) -> control back
  * (state.self.control.mover is our own guid) -> logout and delete both.
  *
- * Run from inside the network:
- *   bun wb smoke eye-of-acherus
- *   bun wb --local smoke eye-of-acherus   # the quickstart
+ * The account needs two free character slots (the sponsor and the knight,
+ * both deleted at the end): PROBE, the default, sits at the realm's cap of
+ * ten, so name one with room — the other smoke accounts have it:
+ *
+ *   kubectl -n wrathbench exec deploy/wrathbench-runner -- env MODULE_ACCOUNT=SMOKE4 bun infra/smoke/eye-of-acherus.ts
+ *   bun wb --local smoke eye-of-acherus   # the quickstart (MODULE_ACCOUNT=PROBE unless set)
  */
 
 import { connect, isEvent, isDecodeError, type WrathClient } from "@wrathbench/sdk";
