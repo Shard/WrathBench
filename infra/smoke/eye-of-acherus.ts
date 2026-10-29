@@ -67,7 +67,7 @@ const RECALL = "Recall Eye of Acherus";
 const EYE_HANDOVER = { x: 1758.01, y: -5876.78, z: 166.867 };
 const FLIGHT_TARGET = { x: EYE_HANDOVER.x + 32, y: EYE_HANDOVER.y, z: EYE_HANDOVER.z + 10 };
 /** The scripted flight is well under this; a handover that never comes is the failure. */
-const HANDOVER_BUDGET_MS = 180_000;
+const HANDOVER_BUDGET_MS = 240_000;
 
 const started = Date.now();
 const log = (m: string) => console.log(`[eye-of-acherus +${((Date.now() - started) / 1000).toFixed(1).padStart(5)}s] ${m}`);
@@ -154,9 +154,13 @@ try {
   if (client.state.petSpell(RECALL) === undefined) fail(`${RECALL} missing from the Eye's bar: ${JSON.stringify(bar.spells.map((s) => s.name))}`);
   log(`PASS handover: control and bar on the Eye, spells ${JSON.stringify(bar.spells.map((s) => s.name))}`);
 
-  // 2. Fly it. The script roots the Eye, flies it down to New Avalon on its
-  // own spline and unroots it there: a move before that is refused `rooted`
-  // or dropped by the server mid-spline (`interrupted`), and is retried.
+  // 2. Fly it. The script roots the Eye at the summon, unroots it and flies
+  // it the 600y down to New Avalon on its own spline, roots it there and
+  // unroots it for good: a move before that is refused `rooted`, `too_far`
+  // (the Eye still over Acherus, more than 250y from the target) or dropped
+  // by the server mid-spline (`interrupted`), and is retried until the
+  // handover. The first live run saw rooted, rooted, then too_far at the
+  // old handover budget's 129 s.
   const handoverBy = Date.now() + HANDOVER_BUDGET_MS;
   let flown: Extract<Awaited<ReturnType<typeof client.moveTo>>, { status: "arrived" }> | undefined;
   for (;;) {
@@ -165,7 +169,7 @@ try {
       flown = r;
       break;
     }
-    if ((r.status === "rooted" || r.status === "interrupted") && Date.now() < handoverBy) {
+    if ((r.status === "rooted" || r.status === "interrupted" || r.status === "too_far") && Date.now() < handoverBy) {
       log(`  ${r.status} (the script still flies the Eye); retrying`);
       await Bun.sleep(3000);
       continue;
