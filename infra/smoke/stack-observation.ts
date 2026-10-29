@@ -31,7 +31,9 @@
  *   6. Cast targets: a `targetPoint` without z throws with nothing sent; a
  *      point with z and a `targetItem` (the worn main hand) each draw a cast
  *      verdict from the server, and the session still answers afterwards.
- *   7. Combat: Sinister Strike on a kobold -> its row `inCombat`, `tapped`,
+ *   7. Stealth -> `self.shapeshiftForm` "stealth"; raw CMSG_CANCEL_AURA ->
+ *      "none". SKIP while the book lacks it, as a new rogue's does.
+ *   8. Combat: Sinister Strike on a kobold -> its row `inCombat`, `tapped`,
  *      `tappedByYou`; `self.inCombat`; `self.comboPoints` on it; after the
  *      kill, `lootable` on the corpse (INFO when it dropped nothing).
  *   SKIPPED, by design: `useItem` on a lootable container (fixtures write no
@@ -61,6 +63,7 @@ const KOBOLD_VERMIN = 6;
 const KOBOLD_CAMP_CLEANUP = 7;
 const A_THREAT_WITHIN = 783; // rewarded by the scenario, so never in the log
 const SINISTER_STRIKE = 1752;
+const STEALTH = 1784;
 const MAIN_HAND = { bag: 255, slot: 15 };
 const REPLY_MS = 5_000;
 
@@ -324,8 +327,19 @@ try {
     return [v !== undefined && alive ? "PASS" : "FAIL", `weapon ${weapon?.guid ?? "?"}; ack ${show(ack)}; verdict ${v === undefined ? "none" : `${v.opcode} ${show(v.data)}`}; session answers: ${alive}`];
   });
 
-  // 7. Combat.
-  const me = self().position?.value ?? fail("own position unobserved");
+  // 7. A form: Stealth is a shapeshift form, and raw CMSG_CANCEL_AURA ends it.
+  await check("self.shapeshiftForm through Stealth", async () => {
+    if (client.state.spell(STEALTH) === undefined) return ["SKIP", "Stealth (1784) not in the book: a new rogue buys it from the trainer, and the scenario grants no spells"];
+    await client.castSpell(STEALTH);
+    const hidden = await until(3000, () => self().shapeshiftForm?.value.name === "stealth");
+    const inForm = show(self().shapeshiftForm?.value);
+    await client.raw("CMSG_CANCEL_AURA", [{ u32: STEALTH }]);
+    const out = await until(3000, () => self().shapeshiftForm?.value.name === "none");
+    return [hidden && out ? "PASS" : "FAIL", `after the cast ${inForm}; after CMSG_CANCEL_AURA ${show(self().shapeshiftForm?.value)}`];
+  });
+
+  // 8. Combat.
+  const me =self().position?.value ?? fail("own position unobserved");
   const target = vermin(client).sort((a, b) => (a.distance ?? 99) - (b.distance ?? 99))[0] ?? fail("no live Kobold Vermin in view");
   log(`combat: kobold ${target.guid} at ${target.distance?.toFixed(1)}y ${flags(target)}`);
   const dx = me.x - target.x!;
@@ -377,6 +391,7 @@ try {
   report("SKIP", "useItem on a lootable container", "fixtures write no items and no smoke path seeds one (the stager's .additem is the party's)");
   report("SKIP", "dismount() while mounted", "a level-1 character has no mount");
   report("SKIP", "runes, totems, channeling, mirror timers, ammo", "other classes, or water; this smoke's character is a level-1 rogue on land");
+  report("SKIP", "immune, environmental damage, spell delayed, exploration xp", "not provoked here: no immune mob, fall or lava, caster pushback or new area");
 } catch (e) {
   report("FAIL", "setup", String(e instanceof Error ? (e.stack ?? e.message) : e));
 } finally {
