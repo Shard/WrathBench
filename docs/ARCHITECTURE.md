@@ -597,7 +597,9 @@ and `readRunFact` as it tails and stores the result as JSON on the run. Same
 code, same bytes, by construction.
 
 **The viewer reads the store; the supervisor still reads the files.** Every
-listing route answers from ClickHouse. The live-progress path — "is this run
+listing route answers from ClickHouse, and so does `bun wb inspect` for a
+run's row, samples and trajectory, which it once read by walking a live run's
+`run.sqlite` (`docs/RUNBOOK.md`, "Inspect a run"). The live-progress path — "is this run
 going right now", the supervisor's own polling of `run.sqlite`, the per-run
 trajectory tail behind `/entries` and the SSE stream — still reads files
 directly, because it asks about a process that

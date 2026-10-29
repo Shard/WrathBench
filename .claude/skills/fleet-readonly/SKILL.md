@@ -19,7 +19,9 @@ pod's image predates the file").
 
 ## Safe while runs are live
 
-- `bun wb inspect live|run|trajectory|audit|publisher` (skill `run-forensics`)
+- `bun wb inspect live|run|trajectory|tools|pad|audit|publisher` (skill
+  `run-forensics`), from the runner image that reads ClickHouse on: an older
+  one walks a live run's `run.sqlite`, so point it only at runs that ended
 - `bun wb fleet status`, `bun wb fleet dry-run`, `bun wb fleet state`
 - `bun wb config get [key]`, `bun wb config audit [n]`, `bun wb config export`
 - `bun wb server health`; `bun wb server log-retention` without `--apply`

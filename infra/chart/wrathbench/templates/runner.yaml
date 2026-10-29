@@ -52,6 +52,13 @@ spec:
             {{- include "wrathbench.harnessEnv" . | nindent 12 }}
             {{- include "wrathbench.dbEnv" . | nindent 12 }}
             {{- include "wrathbench.harnessSecretEnv" . | nindent 12 }}
+            {{- if .Values.clickhouse.enabled }}
+            # The derived store, which `bun wb inspect` reads a run from rather
+            # than a live run's run.sqlite (infra/inspect-run.ts). This pod
+            # only: the fleet and run pods are kept from ClickHouse
+            # (templates/networkpolicy.yaml).
+            {{- include "wrathbench.clickhouseEnv" . | nindent 12 }}
+            {{- end }}
             {{- /* The party stager and its smokes, run here by hand: staging on only. */}}
             {{- with include "wrathbench.stagerEnv" . | trim }}{{ . | nindent 12 }}{{ end }}
             {{- if .Values.codex.enabled }}

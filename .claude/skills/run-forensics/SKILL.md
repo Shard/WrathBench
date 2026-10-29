@@ -23,6 +23,7 @@ bun wb inspect trajectory <run-id> --since <iso> --next 20     # the first 20 it
 bun wb inspect tools <run-id> [--since 2h] [--until 1h]        # calls per tool, ok/error, reflect granted/refused, its windows, pad writers
 bun wb inspect pad <run-id> [--since 6h] [--last 30]           # pad size over time, its writes (drops over 30% flagged), cap refusals
 bun wb inspect pad <run-id> --at <iso>                          # the pad's text at a moment, rebuilt from the record
+bun wb inspect trajectory <run-id> --last 20 --files            # the file, not ClickHouse: when the source line says it is behind
 bun wb inspect audit <run-id>                         # counts per kind, op/opcode and status
 bun wb inspect audit <run-id> --op WB_MOVE_RESULT --status target_off_mesh --last 20
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
@@ -33,9 +34,43 @@ bun wb inspect publisher [<run-id>]                   # last flip, versions per 
 
 `--since`/`--until`/`--at` take `90s`, `30m`, `2h`, `1d`, epoch ms or an ISO time, and
 every command refuses a flag it does not take. `--next N` reads forward from
-`--since` (or the file's start) where `--last N` reads back from `--until`
-(or the end). A window is found by bisecting the file on its clock, so a
-narrow one on a 700 MB trajectory reads only that stretch.
+`--since` (or the start) where `--last N` reads back from `--until` (or the
+end).
+
+## Where it reads
+
+`live`, `run`, `trajectory`, `tools` and `pad` read a run's row, its state
+samples and every trajectory record from ClickHouse, the store the collector
+tails the runs into; they never walk a live run's `run.sqlite`, which is what
+once held the runner's writer off long enough to kill a run. A window is a
+range of line numbers there, read a page at a time from the end for `--last`,
+so a narrow one on a 700 MB run reads only that stretch. What stays on the
+files: the heartbeat, a few `meta.json` fields, file sizes, `scratchpad.md`
+(`pad`'s `now` line), the nearby ring and the trace, which the collector does
+not hold. A live run's trace is two index lookups (`about N rows (by rowid…)`);
+its rows by kind come once the run has no live owner.
+
+Every view says where it read on a `source` line: the last line of
+`trajectory`, `tools` and `live`, the third of `run`, the second of `pad`, and
+the one before `---` in `pad --at`.
+
+- `ClickHouse through <time>, current with the file`, or `…, 8s behind the
+  file`. A live run is normally a few seconds behind: the collector polls
+  every five and leaves a half-written last line for the next pass. Past two
+  minutes the line says the collector is behind or down and the newest
+  records are missing; `--files` reads the file instead.
+- `the files: <why>`: no `CLICKHOUSE_URL`, ClickHouse unreachable, the run not
+  in it yet, or `--files`. That fallback reads `trajectory.jsonl`, which a
+  reader cannot lock, and opens `run.sqlite` only for a run with no fresh
+  heartbeat. For a live one the verdict reads `unread` and the level `not
+  read`: the trajectory views still work.
+- `ClickHouse failed mid-read (…)` on stderr, exit 1: it answered and then
+  stopped. Run it again or with `--files`. On a `Code: 241`, check
+  `system.query_log` by pod first (docs/RUNBOOK.md); inspect's queries carry
+  `log_comment = 'wb inspect'`.
+
+`audit` and `publisher` read the module's audit files and the publisher's
+state where they live; neither is in ClickHouse.
 
 What `tools` and `pad` can say depends on how the driver records:
 
@@ -85,8 +120,12 @@ What `tools` and `pad` can say depends on how the driver records:
 `live`, `run`, `trajectory`, `tools` and `pad` run `infra/inspect-run.ts` in
 the runner pod. A checkout ahead of the deployed image gets "not in the runner
 pod", or "unknown command tools" / "unknown flag --until" from an older copy;
-the file imports only `bun:sqlite` and `node:*`, so run this checkout's copy
-from stdin, the command and its flags after the `-`:
+the file imports only `bun:sqlite` and `node:*` and reaches ClickHouse with
+`fetch`, so run this checkout's copy from stdin, the command and its flags
+after the `-`. A runner pod from before the release that gave it
+`CLICKHOUSE_*` reads the files this way and says `the files: ClickHouse not
+configured`; the older copy in such an image walks the run's `run.sqlite`, so
+never point it at a live run.
 
 ```
 kubectl -n <ns> exec -i deploy/<release>-runner -- bun run - run <run-id> < infra/inspect-run.ts
@@ -106,6 +145,9 @@ bun infra/inspect-run.ts run <run-id> --runs-dir <dir>
 bun infra/inspect-audit.ts <run-id> --audit-dir <dir> --runs-dir <dir>
 bun infra/inspect-publisher.ts --state <file>
 ```
+
+With no `CLICKHOUSE_URL` in the shell these read the copy's files, and the
+`source` line says so.
 
 A missing view is a change to these files with a fixture test beside them
 (`infra/inspect-*.test.ts`), not a scratch script.

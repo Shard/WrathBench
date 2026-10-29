@@ -2,10 +2,13 @@
 
 The service that tails the recorded runs under `data/runs/` into ClickHouse.
 It exists for the viewer (`runner/viewer/`), which can then answer a question
-about a thousand runs with one query instead of a thousand file opens. It runs
-as a container beside the fleet, in both the compose quickstart and the Helm
-chart, and nothing else in the system depends on it: the runner does not know
-it exists, and a viewer with no ClickHouse builds the same rows in memory.
+about a thousand runs with one query instead of a thousand file opens, and for
+`bun wb inspect` (`infra/inspect-run.ts`), which reads a run from it rather
+than walk a live run's `run.sqlite`. It runs as a container beside the fleet,
+in both the compose quickstart and the Helm chart, and nothing else in the
+system depends on it: the runner does not know it exists, a viewer with no
+ClickHouse builds the same rows in memory, and inspect with none reads the
+files and says so.
 
 The store is **derived and disposable**. The files under `data/runs/` are the
 evidence record and the only write path; nothing here ever writes to them.

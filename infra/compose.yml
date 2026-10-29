@@ -315,6 +315,13 @@ services:
       <<: *wb-db
       # The codex lane inside the container (see x-codex-lane above).
       CODEX_HOME: /home/bun/.codex
+      # The derived store, which `bun wb --local inspect` reads a run from
+      # rather than a live run's run.sqlite (infra/inspect-run.ts). Like the
+      # database vars above, sandboxChildEnv passes none of these to a snippet.
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: ${WRATHBENCH_CLICKHOUSE_USER:-wrathbench}
+      CLICKHOUSE_PASSWORD: ${WRATHBENCH_CLICKHOUSE_PASSWORD:-wrathbench}
+      CLICKHOUSE_DATABASE: wrathbench
     volumes:
       - ..:/wrathbench
       # The repo mount above already carries data/wiki and data/runs. These are

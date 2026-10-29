@@ -97,6 +97,25 @@ and `pad` are `infra/inspect-run.ts` in the runner pod, which imports nothing ou
 pod from stdin:
 `kubectl -n wrathbench exec -i deploy/wrathbench-runner -- bun run - run <run-id> < infra/inspect-run.ts`.
 
+Those five read a run's row, its state samples and its trajectory from
+ClickHouse (the runner pod's `CLICKHOUSE_*`, the viewer's coordinates), never
+by walking a live run's `run.sqlite`: a full read of one held it against the
+runner's writer long enough to kill the run. The heartbeat, a few `meta.json`
+fields, file sizes, `scratchpad.md`, the nearby ring and the trace stay on the
+files; the collector does not hold the trace, so a live run's trace is two
+index lookups and is counted by kind only once the run has no live owner.
+Every view ends with, or in `run` and `pad` carries near its top, a `source`
+line: `ClickHouse through <time>, 8s behind the file`, flagged as the collector
+being behind or down past two minutes, or `the files: <why>` when there is no
+`CLICKHOUSE_URL`, ClickHouse does not answer, the run is not in it yet, or
+`--files` was given. A fallback reads `trajectory.jsonl`, which a reader
+cannot lock, and opens `run.sqlite` only for a run with no fresh heartbeat; a
+live run's row reads `unread` and its level `not read`. Each query is
+`readonly=2`, capped at 60 s, and tagged `log_comment = 'wb inspect'`, so on a
+Code 241 `system.query_log` shows whether inspect was in flight. The module
+audit files (`inspect audit`) and the publisher's state (`inspect publisher`)
+are not in ClickHouse and are read where they live, as above.
+
 ### Where the config lives
 
 **The sqlite config store is the only fleet config.** It is operational
