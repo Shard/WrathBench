@@ -1,6 +1,7 @@
 # PR checks: the half of GitHub issue 7's release contract that needs no cluster
 # and no client data. Everything here runs from a bare clone — no `.env`, no
-# `data/`, no submodule — which is the property CLAUDE.md asks the suite to keep.
+# `data/`, no AzerothCore — with the one submodule the code is made of, the
+# wrath-mcp stack: the property CLAUDE.md asks the suite to keep.
 #
 # Deliberately absent: the C++ module build (needs the worldserver image), the
 # tag/digest workflow, chart-as-OCI, and the mutable-image-ref review gate.
@@ -24,9 +25,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      # No submodules on purpose: deps/azerothcore is a reference checkout for
-      # the C++ build, and nothing under test reads it.
       - uses: actions/checkout@v7
+
+      # The agent stack is the wrath-mcp submodule, and every check below runs
+      # against it at the pinned commit. Only that submodule: deps/azerothcore
+      # is a reference checkout for the C++ build, and nothing under test reads
+      # it. Not shallow, because the ancestry check needs history; blobless
+      # keeps that cheap.
+      - name: Check out the stack (wrath-mcp)
+        run: |
+          git submodule update --init --filter=blob:none wrath-mcp
+          git -C wrath-mcp fetch --quiet origin master
+
+      # On master, the pin must be a commit on wrath-mcp's master, so every
+      # deployable build is reproducible from the public stack. A PR may pin a
+      # wrath-mcp branch commit while both are in review.
+      - name: The stack pin is on wrath-mcp's master
+        if: github.event_name == 'push'
+        run: git -C wrath-mcp merge-base --is-ancestor HEAD origin/master
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -46,15 +62,13 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      # module/, sdk/ and mcp/ import nothing outside themselves but declared
-      # dependencies, and nothing else reaches into their sources by path
-      # (infra/stack-boundary.ts; also a test in the suite below).
+      # Nothing here reaches into wrath-mcp/ by path, the shared pins (Bun,
+      # zod, typescript, @types/bun) agree with the pinned stack's, and so does
+      # the AzerothCore it is tested against (infra/stack-boundary.ts; also a
+      # test in the suite below, beside the stack's own inside half). The
+      # stack's generated API.md is checked in wrath-mcp's own CI.
       - name: Stack boundary
         run: bun run boundary
-
-      # Regenerates sdk/API.md and fails if it differs from what is committed.
-      - name: Generated API docs are current
-        run: bun run docs:api:check
 
       - name: Dashboard build
         run: bun run dashboard:build

@@ -3,7 +3,8 @@
 # one (.bun-version), and a mismatched Bun fails `bun install --frozen-lockfile`
 # on the lockfile format before any test can run. Install the pinned Bun from
 # GitHub releases (bun.sh's installer is blocked by some egress proxies), put it
-# on the session PATH, and install workspace deps. Local sessions are untouched.
+# on the session PATH, check out the wrath-mcp submodule and install workspace
+# deps. Local sessions are untouched.
 set -euo pipefail
 
 if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
@@ -46,5 +47,9 @@ if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
   echo "export PATH=\"$BUN_DIR:\$PATH\"" >> "$CLAUDE_ENV_FILE"
 fi
 
+# The agent stack's workspaces live in the wrath-mcp submodule, and the
+# install resolves them there; never deps/azerothcore, which nothing here needs.
+git submodule update --init wrath-mcp
+
 "$BUN" install --frozen-lockfile
-echo "session-start: bun $("$BUN" --version) ready, workspace deps installed"
+echo "session-start: bun $("$BUN" --version) ready, wrath-mcp checked out, workspace deps installed"
