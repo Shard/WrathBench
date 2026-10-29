@@ -1231,10 +1231,13 @@ the kernel enforces whatever API a snippet uses (reads of what it needs to run
 and nothing else, TCP only to the module URL's port, no executable but the
 interpreter), and it fails closed on a kernel without Landlock's TCP rules
 (Linux 6.7+). The rules live in one place, `confinementPlan` in
-`wrath-mcp/mcp/src/sandbox/confine.ts`, and why each is there is wrath-mcp's
+`wrath-mcp/mcp/src/sandbox/confine.ts`, whose header says why each is there;
+wrath-mcp's
 [`docs/ARCHITECTURE.md`](https://github.com/Shard/wrath-mcp/blob/master/docs/ARCHITECTURE.md#the-sandbox),
-"The sandbox". The runner adds one readable directory, `runner/`, which its
-host names for its entry and extension. What the kernel rules leave open, a
+"The sandbox", is the overview. The process scopes (Linux 6.12+) are
+announced on stderr when missing rather than fatal: the fleet's kernel has
+them, CI's may not. The runner adds one readable directory, `runner/`, which
+its host names for its entry and extension. What the kernel rules leave open, a
 port that is not tied to a host and every non-TCP socket, is the deployment's
 network policy to close (`docs/RUNBOOK.md`, "Network policy").
 
