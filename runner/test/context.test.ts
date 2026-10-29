@@ -747,6 +747,59 @@ describe("formatEventLine", () => {
   });
 });
 
+describe("formatEventLine: an update-object line leaves the factionRow keys out", () => {
+  // A unit's create in the module's field order, with the FactionTemplate row
+  // it serves beside `faction`; ids and masks are invented.
+  const row = {
+    factionRow: 14,
+    factionRowFaction: 15,
+    factionRowFlags: 0,
+    factionRowGroup: 8,
+    factionRowFriendGroup: 0,
+    factionRowEnemyGroup: 3,
+    factionRowRepIndex: -1,
+    factionRowEnemy0: 0,
+    factionRowFriend0: 0,
+    factionRowEnemy1: 0,
+    factionRowFriend1: 0,
+    factionRowEnemy2: 0,
+    factionRowFriend2: 0,
+    factionRowEnemy3: 0,
+    factionRowFriend3: 0,
+  };
+  const create = (withRow: boolean): EventSummary =>
+    ({
+      seq: 40,
+      ts: 1,
+      opcode: "SMSG_UPDATE_OBJECT",
+      data: {
+        blocks: 1,
+        objects: [
+          {
+            update: "create",
+            guid: "17365880163140632581",
+            objectType: "unit",
+            pos: { x: -1200, y: 980, z: 42, o: 1.5 },
+            fields: { entry: 90210, health: 120, maxHealth: 120, level: 4, faction: 14, ...(withRow ? row : {}), unitFlags: 0, displayId: 111, npcFlags: 0 },
+          },
+        ],
+      },
+    }) as EventSummary;
+
+  test("a create carrying the row renders exactly as one without it", () => {
+    const out = formatEventLine(create(true));
+    expect(out).toBe(formatEventLine(create(false)));
+    expect(out).not.toContain("factionRow");
+  });
+
+  test("the event itself keeps the row", () => {
+    const e = create(true);
+    formatEventLine(e);
+    const fields = (e.data as { objects: { fields: Record<string, unknown> }[] }).objects[0]!.fields;
+    expect(fields["factionRowGroup"]).toBe(8);
+  });
+});
+
 describe("foldUiOpenWindows", () => {
   test("gossip is open until a later complete, and carries the option count", () => {
     const open = foldUiOpenWindows([

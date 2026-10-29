@@ -1301,12 +1301,40 @@ function eventLineNote(e: EventSummary): string {
   return named === undefined ? "" : ` — ${named}`;
 }
 
+/** The FactionTemplate row the module serves beside a unit's `faction` (`factionRow`, `factionRowFaction`, …). */
+const FACTION_ROW_KEY = /^factionRow/;
+
+/**
+ * An update-object payload as the event line shows it: without the
+ * `factionRow*` keys the module serves beside each unit's `faction`. They are
+ * the SDK's input to `units()`' reaction, and on the line they would only push
+ * `unitFlags`, `displayId` and `npcFlags` past the line's character cut, so a
+ * line reads as it did before the stack served them. Every other key keeps its
+ * place.
+ */
+function eventLineData(e: EventSummary): unknown {
+  if (e.opcode !== "SMSG_UPDATE_OBJECT") return e.data;
+  const objects = (e.data as { objects?: unknown } | undefined)?.objects;
+  if (!Array.isArray(objects)) return e.data;
+  const stripped = (fields: Record<string, unknown>): Record<string, unknown> =>
+    Object.fromEntries(Object.entries(fields).filter(([key]) => !FACTION_ROW_KEY.test(key)));
+  return {
+    ...(e.data as Record<string, unknown>),
+    objects: objects.map((o: unknown) => {
+      const fields = (o as { fields?: unknown } | null)?.fields;
+      if (fields === null || typeof fields !== "object" || Array.isArray(fields)) return o;
+      if (!Object.keys(fields).some((key) => FACTION_ROW_KEY.test(key))) return o;
+      return { ...(o as Record<string, unknown>), fields: stripped(fields as Record<string, unknown>) };
+    }),
+  };
+}
+
 export function formatEventLine(e: EventSummary): string {
   const schema = e.schemaError !== undefined ? " [schema mismatch]" : "";
   // A stream_gap is synthetic and carries the NEXT real event's seq; rendering
   // that number made it look like a duplicate. Mark it as the gap it is.
   const tag = e.opcode === "stream_gap" ? "#gap" : `#${e.seq}`;
-  return `${tag} ${e.opcode}${schema} ${compactJson(e.data, CONTEXT_POLICY.EVENT_DATA_CHARS)}${eventLineNote(e)}`;
+  return `${tag} ${e.opcode}${schema} ${compactJson(eventLineData(e), CONTEXT_POLICY.EVENT_DATA_CHARS)}${eventLineNote(e)}`;
 }
 
 /**
