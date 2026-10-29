@@ -2527,7 +2527,7 @@ export function serverIdentity(body: unknown, bootMarker: () => string): ServerI
  * Whether a /health answer is a server the gate may smoke and spawn against:
  * a 200, `ok`, a world that is not stopping, and one that loaded whole. A
  * module whose world load came up short answers 503 `world_not_loaded` with
- * `worldLoaded: false` (module/PROTOCOL.md, GET /health), so the status alone
+ * `worldLoaded: false` (wrath-mcp/module/PROTOCOL.md, GET /health), so the status alone
  * already refuses it; the field is read too so the body is judged the same
  * whatever the status. A module that predates the field omits it, which
  * reads as loaded.

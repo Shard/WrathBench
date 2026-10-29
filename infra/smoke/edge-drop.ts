@@ -1,6 +1,6 @@
 /**
  * The edge drop, end to end: a move off the end of a plateau's mesh, by the
- * living and by a ghost (module/PROTOCOL.md, `path_incomplete`, operator
+ * living and by a ghost (wrath-mcp/module/PROTOCOL.md, `path_incomplete`, operator
  * decision 2026-10-28).
  *
  * The plateau is Skettis in Terokkar Forest, whose mesh links to nothing

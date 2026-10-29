@@ -1,7 +1,7 @@
 # Runbook
 
 How to run the harness day to day. Architecture is in `docs/ARCHITECTURE.md`;
-what the agent may see and do is `docs/CONTRACTS.md`. Bringing the stack up on
+what the agent may see and do is `wrath-mcp/docs/CONTRACTS.md`. Bringing the stack up on
 a fresh machine is `infra/README.md`.
 
 The fleet runs on Kubernetes from the Helm chart at `infra/chart/wrathbench`,
@@ -540,7 +540,7 @@ On the cluster the code is baked into the images, so the first question is
 | --- | --- |
 | the config store (`/config` page or `bun wb config`) | the **next tick** (60s). Hot-reloaded; every write is validated, and a config the running code refuses is complained about and ignored. |
 | the wiki bundle | the next episode spawn: it is on the data volume. |
-| any code: `runner/`, `sdk/`, `mcp/`, `infra/`, `module/`, `dashboard/` | a **release** (`bun wb release run`, "Deploy window", below). A run in flight keeps the code it started with. The viewer picks up a new image with `bun wb server restart-viewer`. |
+| any code: `runner/`, `wrath-mcp/sdk/`, `wrath-mcp/mcp/`, `infra/`, `wrath-mcp/module/`, `dashboard/` | a **release** (`bun wb release run`, "Deploy window", below). A stack change in `wrath-mcp/` merges in wrath-mcp first and ships as a pointer bump here (`infra/PINS.md`). A run in flight keeps the code it started with. The viewer picks up a new image with `bun wb server restart-viewer`. |
 | anything the supervisor reads only at start: its own code, its env, a lane's token | a fleet pod restart. A release does one; the two recipes below do one without a release. |
 
 The supervisor's date stamp (`fleet-<job>-<model>-<YYYYMMDD>`) is taken once at
@@ -1082,7 +1082,7 @@ day under `logs/wrathbench` (`<token>.<YYYY-MM-DD>.jsonl`; a live session
 rolls to the next day's file at its first record after midnight UTC). The
 audit log is what grows — about 0.6 GB a day per live freeplay stream — and it
 is kept for a window, not for good
-(docs/CONTRACTS.md "Audit"): `worldserver.logRetention.days` in the chart's
+(wrath-mcp/docs/CONTRACTS.md "Audit"): `worldserver.logRetention.days` in the chart's
 values, default 3, `0` to disable. The `wrathbench-log-retention` CronJob
 prunes it once a day (`schedule`), from the worldserver image, by age. Its own
 CronJob so that changing the window never rolls the worldserver.
@@ -1276,7 +1276,7 @@ A worldserver whose world load came up short is never started. Its pod waits
 for MySQL to answer a query before the load begins (the `wait-for-db` init
 container), and its startup probe passes only on a `200` from the module's
 `/health`, which answers `503 world_not_loaded` when a core store came up empty
-or MySQL restarted during the load (module/PROTOCOL.md, `GET /health`). Such a
+or MySQL restarted during the load (wrath-mcp/module/PROTOCOL.md, `GET /health`). Such a
 pod is restarted when the startup budget runs out (`worldserver.startupProbe`,
 15 minutes), so a deploy window waiting on it fails first, at "the worldserver
 rollout did not complete". `bun wb server health` prints the counts and
@@ -2166,7 +2166,7 @@ ClickHouse pods pull upstream public images and carry none. Run pods add
 `runPods.allowedImages` defaults to `<image.registry>/wrathbench-runner`, so
 the move of the registry project moves the allow-list with it.
 
-`WRATHBENCH_MODULE_SECRET` — the module's **port secret** (module/PROTOCOL.md,
+`WRATHBENCH_MODULE_SECRET` — the module's **port secret** (wrath-mcp/module/PROTOCOL.md,
 "Authentication"). Every request to the worldserver's control
 port, `GET /health` included, must carry it (or a session secret leased with
 it) as `Authorization: Bearer`, and a module started without one — or with one

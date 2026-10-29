@@ -22,12 +22,12 @@ exposed to a network anyone else is on (`docs/DATA-AND-LEGAL.md`). So a report
 about AzerothCore or about WoW 3.3.5a itself has nowhere to land here; take
 those upstream. What *is* meaningful is the module's own surface, because that
 is the only door: what it serves, who may call it, and what a caller can reach
-that it should not. `module/PROTOCOL.md` is the authority on what that surface
+that it should not. `wrath-mcp/module/PROTOCOL.md` is the authority on what that surface
 exposes, including its bearer-credential classes.
 
 Two other things are worth a report even though they are not memory-safety
 bugs: anything that lets an agent observe or act beyond the contracts in
-`docs/CONTRACTS.md`, and anything in the published dashboard that leaks what
+`wrath-mcp/docs/CONTRACTS.md`, and anything in the published dashboard that leaks what
 `docs/DATA-AND-LEGAL.md` says must never leave the lab.
 
 ## Secrets and the model

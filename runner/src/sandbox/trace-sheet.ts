@@ -17,7 +17,7 @@
  * the guid packing are the SDK's (`state.ts`, `guid.ts`), copied here
  * because the SDK does not export them. The SDK's views do not read the
  * keyring or the currency slots at all; their fields arrive by name from a
- * module that serves them (`module/PROTOCOL.md`), and an older module's
+ * module that serves them (`wrath-mcp/module/PROTOCOL.md`), and an older module's
  * absent fields read as no rows.
  *
  * Every read returns the newest observation time behind each key, so a

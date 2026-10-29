@@ -787,7 +787,7 @@ async function main(): Promise<void> {
   /*
    * Lease this token on the module before the child exists: binds it to the
    * run's account and yields the session secret the child authenticates with
-   * (module/PROTOCOL.md, "Authentication"). The host keeps the port secret;
+   * (wrath-mcp/module/PROTOCOL.md, "Authentication"). The host keeps the port secret;
    * the child gets only this. A resume re-leases the stored token, which
    * rotates the secret and keeps the character binding. The secret is on the
    * trajectory's redaction list before the child exists (`leaseRunSecret`): a

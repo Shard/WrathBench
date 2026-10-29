@@ -103,7 +103,7 @@ const VINEYARD_EDGE = { x: -8790, y: -160, z: 82.5 };
 
 // Observed maxima (2026-08-23 logs): fights 11.6-25.9s. The only walk left is
 // the few yards to whichever kobold is nearest.
-// The backpack, addressed as the item actions address it (sdk/src/state.ts
+// The backpack, addressed as the item actions address it (wrath-mcp/sdk/src/state.ts
 // `bag()`): `INVENTORY_SLOT_BAG_0` is bag 255 and its sixteen slots are 23-38
 // in the character's own `invSlot<n>` numbering. Equipment is 0-18 and worn
 // bags 19-22 — neither is ever touched here.
@@ -394,7 +394,7 @@ async function assertFixtureStart(): Promise<number> {
 
 /**
  * What the backpack holds right now, addressed the way `destroy_item` wants
- * it: bag 255, slot 23-38 (sdk/src/state.ts `bag()`). A slot whose guid
+ * it: bag 255, slot 23-38 (wrath-mcp/sdk/src/state.ts `bag()`). A slot whose guid
  * halves are both zero — or that has never been mentioned, since the wire
  * compresses zeros out of create blocks — is free.
  */

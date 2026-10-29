@@ -99,7 +99,7 @@ const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
 const TOKEN = `smoke-travel-${crypto.randomUUID()}`;
 // The module's per-session audit (WrathBench.AuditDir, one
-// `<token>.<YYYY-MM-DD>.jsonl` per UTC day; module/PROTOCOL.md "Audit log"),
+// `<token>.<YYYY-MM-DD>.jsonl` per UTC day; wrath-mcp/module/PROTOCOL.md "Audit log"),
 // as the runner container sees the repo mount. Leg 4 reads it for the
 // `move_transport_leg` boarding record when it is there (not in the cluster's
 // runner pod).

@@ -6,7 +6,7 @@
  * the state cache's own guid and hand frames straight to `events.ingest`, which
  * is public exactly so a replay (or a test) can drive a stream without a socket.
  *
- * Every frame is hand-written from module/PROTOCOL.md's tables. Nothing here is
+ * Every frame is hand-written from wrath-mcp/module/PROTOCOL.md's tables. Nothing here is
  * captured from a running game (CLAUDE.md).
  */
 import { afterEach, describe, expect, test } from "bun:test";

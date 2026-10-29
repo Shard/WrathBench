@@ -9,8 +9,8 @@
  *
  * Tool calls are logged to the run's trajectory. Everything except the
  * trajectory, the wiki and the episodic log is the stack's: the transport
- * (`mcp/src/server.ts`), the dispatcher and the core tools
- * (`mcp/src/tools.ts`), the sandbox. The drivers serve the same `McpServer`
+ * (`wrath-mcp/mcp/src/server.ts`), the dispatcher and the core tools
+ * (`wrath-mcp/mcp/src/tools.ts`), the sandbox. The drivers serve the same `McpServer`
  * over a loopback socket and hand their CLI the stack's bridge.
  */
 
@@ -99,7 +99,7 @@ async function main(): Promise<void> {
   process.on("exit", () => clientCache.flush());
   trajectory.writeMeta({ runId, harnessVersion: harnessVersion(), sdkVersion: SDK_VERSION, stackCommit: stackCommit(), startedAt: Date.now(), config });
 
-  // The session secret for this token (module/PROTOCOL.md, "Authentication");
+  // The session secret for this token (wrath-mcp/module/PROTOCOL.md, "Authentication");
   // the operator's port secret stays in this process. Registered for
   // redaction as it is leased: the child holds it, and a snippet can print it.
   const lease = await leaseRunSecret({ moduleUrl: config.moduleUrl, token: config.token ?? token, account: config.account }, trajectory);

@@ -17,7 +17,7 @@ These are from `CLAUDE.md` and they hold for every change:
   logs.
 - The agent observes only what a real game client could observe, and the action
   path goes through the same server opcode handlers a client would hit
-  (`docs/CONTRACTS.md`). If you find yourself reaching for a server-side
+  (`wrath-mcp/docs/CONTRACTS.md`). If you find yourself reaching for a server-side
   shortcut that a client could not do, that is the signal to stop.
 - The C++ module stays thin: packet bridge and event tap only. Game semantics
   live in TypeScript.
@@ -51,8 +51,8 @@ From a bare clone, with no `data/` directory and no game data of any kind:
 `bun test` for every workspace's suite and `bun run typecheck` for every
 project. Run both — Bun strips types without checking them, so a green
 `bun test` says nothing about types. CI additionally runs
-`bun run docs:api:check` and `bun run dashboard:build`, which are cheap locally
-and worth running before you push. Changes under `module/` are verified by the
+`bun run boundary` and `bun run dashboard:build`, which are cheap locally and
+worth running before you push. Changes under `module/` are verified by the
 smoke scripts in `infra/smoke/`, which need the live stack and therefore cannot
 run in CI or on a bare clone.
 

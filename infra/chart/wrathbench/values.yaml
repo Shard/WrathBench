@@ -281,7 +281,7 @@ worldserver:
   # kept, in days. The log is an operational record for the
   # window — the smokes read it, a stuck session is diagnosed from it — and
   # not the long-lived record of a run, which is the trajectory's own `actions`
-  # record (docs/CONTRACTS.md "Audit"). A live freeplay stream writes about
+  # record (wrath-mcp/docs/CONTRACTS.md "Audit"). A live freeplay stream writes about
   # 0.6 GB a day here, so unbounded it was half the volume. Pruned once a day
   # by templates/log-retention.yaml, by age, and never a file the server will
   # still write to (files/log-retention.pl says how). 0 or empty disables it
@@ -348,7 +348,7 @@ fleet:
       memory: 6Gi
   # /tmp. Not the model's write path: a snippet arrives over the IPC channel
   # and the sandbox's Landlock ruleset grants it no write access here at all
-  # (mcp/src/sandbox/confine.ts). What lands in it is the driver adapters'
+  # (wrath-mcp/mcp/src/sandbox/confine.ts). What lands in it is the driver adapters'
   # scratch cwd — one empty directory per episode, so that the CLI does not
   # walk up into a checkout — and bun's own temporaries. Kilobytes. The ceiling
   # is a backstop against a runaway child, set far enough above the working set

@@ -7,7 +7,7 @@ to be `wrathbench`, so the Deployment for the fleet is `wrathbench-fleet` and
 
 TWO SERVICES ARE UN-PREFIXED, DELIBERATELY: `worldserver` and `authserver`.
 Those bare hostnames are compiled into the harness as defaults —
-runner/src/config.ts, mcp/src/sandbox/child.ts, infra/run-fleet.ts,
+runner/src/config.ts, wrath-mcp/mcp/src/sandbox/child.ts, infra/run-fleet.ts,
 infra/run-roster.ts and every smoke's MODULE_HOST all say `worldserver:8086` —
 and inside the namespace they resolve through the pod's DNS search path.
 Renaming them to match the house prefix breaks every one of those defaults at
@@ -115,7 +115,7 @@ seccompProfile:
   # Verified on the reference node (kernel 6.13, containerd 2.2, Landlock ABI
   # 6): containerd's RuntimeDefault profile permits landlock_create_ruleset /
   # landlock_add_rule / landlock_restrict_self, so the snippet sandbox's
-  # confinement (mcp/src/sandbox/confine.ts) still applies. If that ever
+  # confinement (wrath-mcp/mcp/src/sandbox/confine.ts) still applies. If that ever
   # stops being true the wrapper fails closed and no snippet runs at all.
   type: RuntimeDefault
 {{- end -}}
@@ -148,7 +148,7 @@ The database connection env every WrathBench-side tool needs (bootstrap,
 fixtures, the smokes that stage a fixture). The password comes from the
 Secret by reference; it is never templated into a manifest and never reaches
 argv. The snippet sandbox forwards only a named list of variables to its child
-(mcp/src/sandbox/host.ts sandboxChildEnv), and none of these is on it, which
+(wrath-mcp/mcp/src/sandbox/host.ts sandboxChildEnv), and none of these is on it, which
 is what keeps a model off the database on the fleet and runner pods alike.
 */}}
 {{- define "wrathbench.dbEnv" -}}

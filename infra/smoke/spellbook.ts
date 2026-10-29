@@ -1,6 +1,6 @@
 /**
  * Probe for the spellbook/cooldown/talent surface and the raw escape hatch
- * (the raw allowlist is in module/PROTOCOL.md): the `SMSG_INITIAL_SPELLS`, `SMSG_LEARNED_SPELL`,
+ * (the raw allowlist is in wrath-mcp/module/PROTOCOL.md): the `SMSG_INITIAL_SPELLS`, `SMSG_LEARNED_SPELL`,
  * `SMSG_SPELL_COOLDOWN`, `SMSG_TALENTS_INFO` decodes plus the `learn_talent`
  * and `raw` actions.
  *
@@ -140,7 +140,7 @@ async function main() {
   // 2. Cast a known spell -> SMSG_SPELL_GO naming us as caster.
   //    Deliberately NOT SMSG_SPELL_COOLDOWN: for a player's own cast the core
   //    sends it only when a cooldown-modifying aura changed the timer
-  //    (module/PROTOCOL.md, after the spellbook table), so no cast this
+  //    (wrath-mcp/module/PROTOCOL.md, after the spellbook table), so no cast this
   //    character can make produces it, and a higher level alone would not
   //    change that. Measured on a level-1 Human Paladin: 21084 (Seal of
   //    Righteousness, GCD only), 59752 (Every Man for Himself, a 2-minute

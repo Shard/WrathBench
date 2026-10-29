@@ -6,7 +6,7 @@
  *
  * Two halves, both fixture-based, in the shape of `death.test.ts`. The child
  * half runs the real sandbox process against a fake event stream — frames
- * hand-written from module/PROTOCOL.md's tables, positions invented, nothing
+ * hand-written from wrath-mcp/module/PROTOCOL.md's tables, positions invented, nothing
  * captured from a running game (CLAUDE.md). The loop half feeds drained
  * signals through a fake sandbox and reads the trajectory.
  *

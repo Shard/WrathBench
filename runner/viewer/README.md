@@ -773,7 +773,7 @@ names and ids stay, game prose goes. `projectEntry`
 (`public-projection.ts`) is an allowlist per entry type; an unlisted type ships
 as its skeleton. `redactGameProse`
 (`redact-prose.ts`) then replaces the prose fields enumerated from
-`sdk/src/protocol.ts` wherever a
+`wrath-mcp/sdk/src/protocol.ts` wherever a
 decoded payload turns up in a tool result: an event batch, a JSON value, a
 `recent_events` line, a string holding JSON one or two levels down; a cut
 fragment is redacted from its first prose key to the end, and a

@@ -7,7 +7,7 @@
  * helpers that validate it; `apply.ts` is what talks to the database.
  *
  * Operator tooling only. Nothing here is reachable from `runner/` or `sdk/`,
- * so the agent-facing contract in docs/CONTRACTS.md is untouched: the agent
+ * so the agent-facing contract in wrath-mcp/docs/CONTRACTS.md is untouched: the agent
  * still only observes what a client could observe, and still only acts through
  * the module. A fixture is the operator arranging the world before the run,
  * the same way an operator picks which account a smoke logs into.

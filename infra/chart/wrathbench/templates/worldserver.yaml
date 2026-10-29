@@ -131,7 +131,7 @@ spec:
             # account; the worldserver's ingress rule, the run pods' egress
             # policy and the sandbox's port rule keep it out of the agent's
             # reach (docs/proposals/GROUP-PLAY.md §3). The agent itself has no
-            # privileged control path into the world (docs/CONTRACTS.md binds
+            # privileged control path into the world (wrath-mcp/docs/CONTRACTS.md binds
             # what it sees and does); actions go through the module, over the
             # same opcode handlers a client would hit.
             {{- if .Values.staging.enabled }}
@@ -181,7 +181,7 @@ spec:
               value: /azerothcore/env/dist/logs/wrathbench
             - name: AC_WRATH_BENCH_THREADS
               value: {{ .Values.worldserver.threads | quote }}
-            # The port secret (module/PROTOCOL.md "Authentication"). Every
+            # The port secret (wrath-mcp/module/PROTOCOL.md "Authentication"). Every
             # route needs it; without it the module refuses to listen, loudly.
             - name: AC_WRATH_BENCH_SECRET
               valueFrom:
@@ -210,7 +210,7 @@ spec:
               containerPort: {{ .Values.staging.soapPort }}
             {{- end }}
           # Started means the module's /health answers 200, which it does only
-          # once the world has loaded whole (module/PROTOCOL.md, GET /health):
+          # once the world has loaded whole (wrath-mcp/module/PROTOCOL.md, GET /health):
           # a load that lost rows to a database restart answers 503
           # world_not_loaded for good, this probe never passes, and the kubelet
           # restarts the container at the end of the budget, behind the

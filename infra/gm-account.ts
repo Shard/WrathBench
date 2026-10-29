@@ -5,7 +5,7 @@
  * `stager-account.ts` (STAGER, the party stager's SOAP credential).
  *
  * This is operator tooling, outside the agent path: the observation/action
- * contracts in docs/CONTRACTS.md bind the benchmark agent, not the operator.
+ * contracts in wrath-mcp/docs/CONTRACTS.md bind the benchmark agent, not the operator.
  * Neither account is created by bootstrap.ts — the harness accounts never
  * carry GM — and neither is on the module's account allowlist, so no bench
  * session can be opened on either.

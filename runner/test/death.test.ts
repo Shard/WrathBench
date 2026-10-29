@@ -5,7 +5,7 @@
  *
  * Two halves, both fixture-based. The child half runs the real sandbox process
  * against a fake event stream — no game stack, frames hand-written from
- * module/PROTOCOL.md's own tables (positions are invented; nothing here is
+ * wrath-mcp/module/PROTOCOL.md's own tables (positions are invented; nothing here is
  * captured from a running game, CLAUDE.md). The loop half feeds the drained
  * signals to `ContextBuilder` through a fake sandbox and reads the trajectory.
  *

@@ -18,7 +18,7 @@
  * was created without one for the same reason. That branch (container
  * `numSlots` + `bagSlot<n>Lo/Hi` folded into `bag()`, addressed by the bag's
  * equip slot 19-22) is covered by the sdk unit test on a fixture update block
- * (sdk/test/state.test.ts, "bag() spans a worn bag"). Nothing further is
+ * (wrath-mcp/sdk/test/state.test.ts, "bag() spans a worn bag"). Nothing further is
  * opened: the first trajectory that buys a bag is the live check.
  *
  * Preflight-gate ready: reads MODULE_ACCOUNT the way the

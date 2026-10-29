@@ -4,7 +4,7 @@ audit log (one `logs/wrathbench/<token>.<YYYY-MM-DD>.jsonl` per UTC day on
 the data PVC) by age.
 
 The audit log is an operational record kept for a window, not evidence kept
-for good (docs/CONTRACTS.md "Audit"); the per-run record of what went on the
+for good (wrath-mcp/docs/CONTRACTS.md "Audit"); the per-run record of what went on the
 wire is the trajectory's `actions` record. A live freeplay stream writes about
 0.6 GB a day here and nothing else bounded it, so the directory had reached
 half the volume.

@@ -2067,7 +2067,7 @@ const ENTRY_FIELDS: Readonly<Record<string, readonly string[]>> = {
  * ids, coordinates, the module's error codes and hints (harness text, not game
  * text), and the client-cache names `names` carries — "names and ids stay".
  * `args` is the request body the SDK built, copied by key against the union
- * of the body fields `ActionRequest` (`sdk/src/protocol.ts`) declares, scalar
+ * of the body fields `ActionRequest` (`wrath-mcp/sdk/src/protocol.ts`) declares, scalar
  * (or array-of-scalar) values only. An action that grows a field ships without
  * it until it is listed here. Model-authored text in it (`say`'s text, a raw
  * payload) is the residual the content boundary already names for snippet

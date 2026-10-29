@@ -6,7 +6,7 @@
  * event window, the snippet delta, and the trace and nearby recorders.
  *
  * Everything about the child's lifecycle, its timeout, its confinement and
- * its environment is the stack's (`mcp/src/sandbox/host.ts`); this file adds
+ * its environment is the stack's (`wrath-mcp/mcp/src/sandbox/host.ts`); this file adds
  * only the benchmark's drains and names the runner's directory as one the
  * confined child may read, because the extension's code lives here.
  */

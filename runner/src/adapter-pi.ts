@@ -26,7 +26,7 @@
  *   false`, so its tools are declared to the model as ordinary tools
  *   (`mcp__wrathbench__<tool>`) and pi never turns codemode on for them. The
  *   tools reach the runner's one `SandboxHost` over the loopback MCP listener
- *   and `mcp/src/bridge.ts`, exactly as on the other CLIs.
+ *   and `wrath-mcp/mcp/src/bridge.ts`, exactly as on the other CLIs.
  * - **Our prompt, exactly.** `--system-prompt <file>` replaces pi's default
  *   prompt, and `pi-extension.ts` forces the request's system message to that
  *   text alone: without it pi appends a `<cwd>` section.

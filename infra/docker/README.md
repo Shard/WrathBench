@@ -2,7 +2,7 @@
 
 The Dockerfiles behind every WrathBench container, used by both the compose quickstart and the Helm chart. There are two:
 
-- `server.Dockerfile` builds AzerothCore from the pinned submodule (`deps/azerothcore`, see `infra/PINS.md`) with `module/` copied in as `modules/mod-wrathbench`, and produces the worldserver, authserver and database-import images. The rest of this file is about it.
+- `server.Dockerfile` builds AzerothCore from the pinned submodule (`deps/azerothcore`, see `infra/PINS.md`) with `wrath-mcp/module/` copied in as `modules/mod-wrathbench`, and produces the worldserver, authserver and database-import images. The rest of this file is about it.
 - `runner.Dockerfile` builds the runner image: pinned Bun, git, the Claude Code CLI, and the repository itself baked in, since a cluster has no bind mount to supply it. Its header comment says why each of those is there; `infra/docker/runner.Dockerfile.dockerignore` is its ignore list.
 
 Build context for both is the repository root.
@@ -28,7 +28,7 @@ docker build --target db-import   -t wrathbench/db-import   -f infra/docker/serv
 
 These build from the working tree and are for local use. Images that get pushed come from `infra/build-images.sh`, which builds from a `git archive` of the commit and runs `infra/image-guard.sh` on each image before pushing it.
 
-All targets share one `build` stage, so after the first (~30-60 min) build the others are assembly-only. Object files live in a BuildKit ccache cache mount; editing `module/` and rebuilding recompiles only what changed. `docker builder prune` discards that cache and forces a cold build.
+All targets share one `build` stage, so after the first (~30-60 min) build the others are assembly-only. Object files live in a BuildKit ccache cache mount; editing `wrath-mcp/module/` and rebuilding recompiles only what changed. `docker builder prune` discards that cache and forces a cold build.
 
 ## Layout inside the images
 

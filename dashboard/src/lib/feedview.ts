@@ -31,7 +31,7 @@
  *      text at all (`hygiene`, `resolved_model`, `token_regenerated`). Text is
  *      what separates the two: a record with something to say says it.
  *    - Appended to a tool result, under a `--- harness ---` rule
- *      (`mcp/src/tools.ts` `renderActionHints`), deduped per (action,
+ *      (`wrath-mcp/mcp/src/tools.ts` `renderActionHints`), deduped per (action,
  *      status) with counts: `moveTo too_far ×21: a single moveTo covers
  *      ~250y — …`. `splitNotices` lifts that block out of the result body so
  *      it is not buried at the bottom of a console dump.
@@ -161,7 +161,7 @@ export function stateLine(entry: FeedEntry): string {
 
 /* ---------------------------------------------------------------- notices */
 
-/** The marker `mcp/src/tools.ts` puts above the harness's own lines. */
+/** The marker `wrath-mcp/mcp/src/tools.ts` puts above the harness's own lines. */
 export const HARNESS_RULE = "--- harness ---";
 
 /**

@@ -29,7 +29,7 @@
  * egg by construction. It also requires SOAP.Enabled, which the quickstart
  * leaves off. On the cluster SOAP serves one thing: the operator's party
  * staging, in-cluster only, on an admin account no bench session can open
- * (docs/proposals/GROUP-PLAY.md). docs/CONTRACTS.md binds the agent's path,
+ * (docs/proposals/GROUP-PLAY.md). wrath-mcp/docs/CONTRACTS.md binds the agent's path,
  * not the operator's, and the agent can reach neither SOAP nor this tool.
  *
  * The console (attaching to the worldserver and typing `account create ...`,

@@ -263,7 +263,7 @@ onto the same CLI queue. It is off today: `AC_SOAP_ENABLED: "0"` in
 `infra/chart/wrathbench/templates/worldserver.yaml` and `infra/compose.yml`,
 and `SOAP.IP` defaults to loopback.
 
-Is it within the contracts? `docs/CONTRACTS.md` binds what the **agent**
+Is it within the contracts? `wrath-mcp/docs/CONTRACTS.md` binds what the **agent**
 observes and how the **agent** acts; its one sentence on GM commands is that
 the module never uses them "to perform an action on the agent's behalf".
 Staging runs before the run, on the operator's credential, through nothing
@@ -281,7 +281,7 @@ by the stager before a party launches.
 its own:
 
 1. **The sandbox's network guard.** The snippet child runs under a Landlock
-   ruleset (`mcp/src/sandbox/confine.ts`; `docs/CONTRACTS.md`,
+   ruleset (`wrath-mcp/mcp/src/sandbox/confine.ts`; `wrath-mcp/docs/CONTRACTS.md`,
    "Control-surface authentication") whose TCP rule admits `connect` to one
    port, the one in the run's module URL (8086). Landlock's rule is per port,
    so 7878 is refused by the kernel on every address, however the snippet
@@ -444,15 +444,15 @@ the data volume, not from the live world DB:
   and below without the line of sight that would spare them.
 
 **Is walking in client-legal?** Yes, and it is already how the module
-behaves. `Manager::CheckAreaTriggers` (`module/src/WbManager.cpp`) tests the
+behaves. `Manager::CheckAreaTriggers` (`wrath-mcp/module/src/WbManager.cpp`) tests the
 mover's position against the DBC volumes on every heartbeat, and the live
 position once per tick when nothing is driving it, and queues
 `CMSG_AREATRIGGER` once on entering a volume, exactly as a client does
-without the player choosing to (`docs/CONTRACTS.md`, "Pathing"). The core's
+without the player choosing to (`wrath-mcp/docs/CONTRACTS.md`, "Pathing"). The core's
 handler looks the id up in `areatrigger_teleport`, checks the access
 requirement, and teleports: `SMSG_TRANSFER_PENDING { map: 36 }`, the move
 ends `transferred`, `SMSG_NEW_WORLD` carries the arrival, the module answers
-`MSG_MOVE_WORLDPORT_ACK` itself (`module/PROTOCOL.md`, "Map transfers") and
+`MSG_MOVE_WORLDPORT_ACK` itself (`wrath-mcp/module/PROTOCOL.md`, "Map transfers") and
 `WB_AREA` announces the new map. The `tram-ironforge` scenario and the
 travel smoke prove this exact sequence on trigger 2175 into map 369; an
 instance differs only inside the core (`InstanceMap::AddPlayerToMap` puts a
@@ -475,7 +475,7 @@ from a 1024-node search, so the core's search runs out on the hill above
 the tunnels. The trigger's own centre is over a small mesh island with no
 link to the tunnels; the reachable mesh ends 4.4 yards from the centre,
 inside the 7-yard radius. The module now handles both as path query
-semantics (`module/PROTOCOL.md`, `arrived` and `path_incomplete`): a move to
+semantics (`wrath-mcp/module/PROTOCOL.md`, `arrived` and `path_incomplete`): a move to
 the centre ends at that reachable mesh, and a corridor past the core's is
 planned whole by the module's own search. So one `moveTo` to the portal's
 centre from within the 250-yard cap walks the mine and transfers: about 660
@@ -496,7 +496,7 @@ run on demand after a release resumes, never in the deploy window.
 a dozen opcodes and a proposal dialogue, all to teleport a formed party into
 an instance whose portal the party is staged beside (above), a few yards'
 walk on the client's own path. It stays deferred exactly as
-`docs/CONTRACTS.md` lists it; nothing here needs it.
+`wrath-mcp/docs/CONTRACTS.md` lists it; nothing here needs it.
 
 ## 5. The party surface
 
@@ -505,12 +505,12 @@ walk on the client's own path. It stays deferred exactly as
 `CMSG_LOOT_METHOD`, `CMSG_LOOT_ROLL`), the party taps (`SMSG_GROUP_INVITE`,
 `SMSG_GROUP_LIST`, `SMSG_PARTY_COMMAND_RESULT`, `DECLINE`, `UNINVITE`,
 `SET_LEADER`, `DESTROYED`), `state.group()` and the invite/accept/leave
-helpers (`sdk/API.md`), party chat and whispers through raw
+helpers (`wrath-mcp/sdk/API.md`), party chat and whispers through raw
 `CMSG_MESSAGECHAT` with `SMSG_MESSAGECHAT` decoded per type into
 `state.chat`, loot rolls (`state.pendingRolls()`, `lootRoll`), and the
 other members as nearby players: `health`, `maxHealth`, the powers, `level`,
 `targetGuid` and `playerFlags` ride the unit update fields every client in
-range receives (`module/PROTOCOL.md`, the update-field whitelist). In a
+range receives (`wrath-mcp/module/PROTOCOL.md`, the update-field whitelist). In a
 dungeon the party is in range almost always, so who the mob is hitting and
 how the healer is doing are observable today.
 
@@ -539,11 +539,11 @@ group join, a zone change, a teleport or map transfer and a resurrection
 (`Player::UpdateZone`); `_FULL` is its answer to
 `CMSG_REQUEST_PARTY_MEMBER_STATS`. The module taps both and decodes the
 member's own fields through its auras, naming the zone from `AreaTable.dbc`
-(`module/PROTOCOL.md`); the request is on the raw allowlist. The SDK folds
+(`wrath-mcp/module/PROTOCOL.md`); the request is on the raw allowlist. The SDK folds
 them onto `state.group().members[i].stats` with `inView` beside it, and the
 HUD's `party:` line names each member's state, health %, power % and
 whereabouts: its zone and position out of view, its distance in view. Auras
-stay in `stats` only, off the line (`sdk/API.md`, `runner/src/context.ts`).
+stay in `stats` only, off the line (`wrath-mcp/sdk/API.md`, `runner/src/context.ts`).
 Mark's calls on 2026-10-21:
 - The two packets are ambient, like movement. A far member sends about two a
   second while walking, plus one for each regen tick and hit, so four far
@@ -724,7 +724,7 @@ Independently mergeable, in build order; each names its verify step. "Release"
 means the change reaches the fleet only through `bun wb release run`;
 "decision" means it waits on an open question below.
 
-1. **Module** (`module/`, `module/PROTOCOL.md`): load `Map.dbc`; `mapName`
+1. **Module** (`module/`, `wrath-mcp/module/PROTOCOL.md`): load `Map.dbc`; `mapName`
    and `instanceType` on `WB_AREA` and `WB_SESSION_STATE`; whitelist
    `SMSG_PARTYKILLLOG` and `SMSG_RESURRECT_REQUEST`. Verify: `kill-credit.ts`
    asserts the kill log for its kills, `area-and-roles.ts` the map fields,

@@ -223,7 +223,7 @@ services:
       AC_WARDEN_ENABLED: "0"
       # SOAP stays off on the quickstart: it has no network policy to contain
       # it, and no party campaign runs here. The agent has no privileged
-      # control path into the world (docs/CONTRACTS.md binds what it sees and
+      # control path into the world (wrath-mcp/docs/CONTRACTS.md binds what it sees and
       # does); actions go through the module. The cluster enables SOAP for the
       # operator's party staging only (docs/proposals/GROUP-PLAY.md).
       AC_SOAP_ENABLED: "0"
@@ -241,7 +241,7 @@ services:
       # ERROR/WARN history survives restarts and container recreation on the
       # data/logs volume. Default mode "w" truncated every boot.
       AC_APPENDER_SERVER: "2,5,16,Server.log,w"
-      # The port secret (module/PROTOCOL.md "Authentication"). Every route
+      # The port secret (wrath-mcp/module/PROTOCOL.md "Authentication"). Every route
       # needs it, and unset or under 32 characters the module refuses to
       # listen (fail closed, logged). It lives in the repo-root .env as
       # WRATHBENCH_MODULE_SECRET, which the runner and fleet services read
@@ -308,7 +308,7 @@ services:
     # infra/fixtures/apply.ts, which writes acore_characters directly. Carrying
     # the four vars here is what makes that invocation need no `-e` flags. An
     # episode exec'd into this container cannot pass them on: sandboxChildEnv
-    # (mcp/src/sandbox/host.ts) forwards the snippet child a named list of
+    # (wrath-mcp/mcp/src/sandbox/host.ts) forwards the snippet child a named list of
     # variables and none of these, the same protection the `fleet` service
     # relies on.
     environment:
@@ -362,7 +362,7 @@ services:
       # `vineyard-kill-credit` scenario, and `infra/fixtures/apply.ts` writes the
       # characters DB directly. The supervisor itself never touches the DB.
       # A benchmark episode cannot reach these: the snippet sandbox forwards its
-      # child a named list of variables and none of these (mcp/src/sandbox/host.ts
+      # child a named list of variables and none of these (wrath-mcp/mcp/src/sandbox/host.ts
       # sandboxChildEnv), which is what keeps a model off the database on this
       # service and on `runner` alike.
       <<: *wb-db

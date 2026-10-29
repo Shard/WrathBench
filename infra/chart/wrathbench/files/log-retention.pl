@@ -3,7 +3,7 @@
 #
 # The worldserver writes one JSONL file per session token and UTC day under
 # WrathBench.AuditDir, `<token>.<YYYY-MM-DD>.jsonl`, rolling to the next day's
-# at the first record after midnight UTC (module/PROTOCOL.md "Audit log").
+# at the first record after midnight UTC (wrath-mcp/module/PROTOCOL.md "Audit log").
 # The chart's log-retention CronJob (templates/log-retention.yaml) runs this
 # once a day from the worldserver image, which is where perl is, against the
 # same `logs` subPath of the data PVC. `bun wb server log-retention` runs the

@@ -10,7 +10,7 @@
  *
  * This is the exact analogue of `adapter-claude.ts`, and it deliberately
  * mirrors that file's structure, invariants and record shapes: one
- * `SandboxHost`, tools over a loopback TCP MCP server plus `mcp/src/bridge.ts`,
+ * `SandboxHost`, tools over a loopback TCP MCP server plus `wrath-mcp/mcp/src/bridge.ts`,
  * the tool-call ceiling and the watchdogs enforced at the MCP boundary, a
  * wind-down instead of a kill mid-turn, a process-group kill on stop, and the
  * child environment constructed so the CLI can bill exactly one lane. Read

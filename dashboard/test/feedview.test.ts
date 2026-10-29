@@ -4,7 +4,7 @@
  *
  * What is worth pinning here is the tolerance, not the happy path. A state
  * sample's every field is optional and older runs are missing several; the
- * harness block is appended by `mcp/src/tools.ts` to a result whose console
+ * harness block is appended by `wrath-mcp/mcp/src/tools.ts` to a result whose console
  * output the model wrote, so the split has to survive text that looks like the
  * marker; and a `notice` record does not exist in the trajectory yet, so its
  * reader is pinned against the contract this build promises to tolerate rather

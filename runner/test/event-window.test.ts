@@ -5,7 +5,7 @@
  *
  * Three layers, all fixture-based. The sandbox child's own ring of non-ambient
  * events, run for real against a hand-fed event stream (no game stack; frames
- * hand-written from module/PROTOCOL.md's tables, positions invented). The
+ * hand-written from wrath-mcp/module/PROTOCOL.md's tables, positions invented). The
  * context builder, over a fake sandbox, for what it renders and what it logs.
  * And the pure `eventWindow` / `assembleContext` pair.
  */

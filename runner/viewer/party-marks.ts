@@ -25,7 +25,7 @@ import type { PartyDetailView, PartyKillMark, PartyMemberRefView, PartyWhereView
 import type { TrajectoryTail } from "./tail";
 import { readTraceChat } from "./trace-db";
 
-/** The client cache's file name (`CLIENT_CACHE_FILE`, `mcp/src/sandbox/client-cache.ts`; a test holds the two equal). */
+/** The client cache's file name (`CLIENT_CACHE_FILE`, `wrath-mcp/mcp/src/sandbox/client-cache.ts`; a test holds the two equal). */
 export const CLIENT_CACHE_NAME = "client-cache.json";
 
 /** The party stamp off a run's meta.json, or null on a run that is no party member. */

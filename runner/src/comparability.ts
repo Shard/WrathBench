@@ -231,7 +231,7 @@ export type Comparability = z.infer<typeof comparabilitySchema>;
  * `timeoutMs`.
  *
  * It throws in one case only: a module that answered with a wire protocol
- * this build's SDK cannot drive (`ModuleProtocolError`, module/PROTOCOL.md,
+ * this build's SDK cannot drive (`ModuleProtocolError`, wrath-mcp/module/PROTOCOL.md,
  * "Versioning"). The launch and the resume both read this before anything is
  * written, so a mismatched pair is refused before the run starts rather than
  * found by the model as a misread event. A module that serves no `protocol`

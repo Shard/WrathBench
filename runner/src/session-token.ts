@@ -15,7 +15,7 @@
  * (`publicText`, `runner/viewer/api.ts`).
  *
  * On its own the token is not a capability (the module also wants the run's
- * lease secret or the operator's bearer, `module/src/WbManager.cpp`), but it is
+ * lease secret or the operator's bearer, `wrath-mcp/module/src/WbManager.cpp`), but it is
  * the session's name and is treated as a secret everywhere it is written.
  */
 

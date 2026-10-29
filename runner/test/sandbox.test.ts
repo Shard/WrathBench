@@ -54,7 +54,7 @@ describe("sandbox evaluation", () => {
   });
 
   test("hint-bearing failures reach the host whatever the snippet returned", async () => {
-    // The SDK records them (sdk/test/client.test.ts covers that from real move
+    // The SDK records them (wrath-mcp/sdk/test/client.test.ts covers that from real move
     // results); here the point is the channel: the tally leaves the child on
     // the eval result, drained exactly once, regardless of the snippet's value.
     const host = makeHost();
@@ -490,7 +490,7 @@ describe("sandbox evaluation", () => {
     // The path is ambient and absolute.
     const path = await host.evalSnippet("API_MD_PATH");
     expect(path.ok).toBe(true);
-    expect(path.value).toContain("sdk/API.md");
+    expect(path.value).toContain("wrath-mcp/sdk/API.md");
     // A snippet reads a real row out of it, in a slice (the file is larger than
     // one snippet result), proving the doc is present and readable — not merely
     // that a read succeeded.
@@ -555,7 +555,7 @@ describe("cooperative abort on timeout", () => {
 
   /**
    * The SDK's abort-path stop() is deliberately fire-and-forget (the signal
-   * holder has already moved on — sdk/src/client.ts), so under load the stub
+   * holder has already moved on — wrath-mcp/sdk/src/client.ts), so under load the stub
    * can record it a beat after the timed-out eval returns. Wait for it,
    * bounded; the assertions after still pin the exact action sequence.
    */
@@ -817,7 +817,7 @@ describe("error rendering (2026-08 audit fixes)", () => {
     const res = await host.evalSnippet("for (;;) {}");
     expect(res.restarted).toBe(true);
     // The session outlives the process, and a resubscribe replays what a
-    // client holds (module/PROTOCOL.md, "/events"); the guidance says so, and
+    // client holds (wrath-mcp/module/PROTOCOL.md, "/events"); the guidance says so, and
     // no longer sends the model to createSession first.
     expect(res.error).toContain("await connect()");
     expect(res.error).toContain("replays your own state");

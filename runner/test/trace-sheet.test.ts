@@ -3,7 +3,7 @@
  * `sandbox/trace-recorder.ts`): money, equipment, worn bags, what is carried,
  * durability, the quest log, skills, visible reputation and turn-ins, read off
  * a real SDK cache fed hand-written frames. Ids and names are invented; the
- * field names are the module's (PROTOCOL.md, and `sdk/test/fixtures.ts`).
+ * field names are the module's (PROTOCOL.md, and `wrath-mcp/sdk/test/fixtures.ts`).
  */
 import { describe, expect, test } from "bun:test";
 import { EventStream, StateCache } from "@wrathbench/sdk";
