@@ -820,6 +820,92 @@ describe("formatEventLine: an update-object line leaves the factionRow keys out"
   });
 });
 
+describe("formatEventLine: an update-object line leaves the character sheet and the unit-state keys out", () => {
+  // A level-up of our own character, its keys in the module's field order
+  // (update-field index: unit fields, the stats and resistances, the
+  // shapeshift byte, attack power, then the player fields); figures invented.
+  const values = (fields: Record<string, unknown>): EventSummary =>
+    ({
+      seq: 812,
+      ts: 1,
+      opcode: "SMSG_UPDATE_OBJECT",
+      data: { blocks: 1, objects: [{ update: "values", guid: "4021", fields }] },
+    }) as EventSummary;
+  const levelUp = (served: boolean): EventSummary =>
+    values({
+      health: 312,
+      power1: 0,
+      maxHealth: 312,
+      maxPower1: 1000,
+      level: 12,
+      ...(served
+        ? {
+            standState: 0,
+            stat0: 52,
+            stat1: 31,
+            stat2: 48,
+            stat3: 27,
+            stat4: 34,
+            resistance0: 412,
+            shapeshiftForm: 0,
+            attackPower: 118,
+            attackPowerMods: 0,
+            attackPowerMultiplier: 0,
+            rangedAttackPower: 41,
+            rangedAttackPowerMods: 0,
+            rangedAttackPowerMultiplier: 0,
+          }
+        : {}),
+      xp: 140,
+      nextLevelXp: 8100,
+      talentPoints: 3,
+      ...(served
+        ? {
+            blockPct: 5.04615,
+            dodgePct: 6.20134,
+            parryPct: 5.04615,
+            critPct: 5.71233,
+            rangedCritPct: 4.95,
+            spellCritPct0: 0,
+            spellCritPct1: 1.4,
+            spellCritPct2: 1.4,
+            spellCritPct3: 1.4,
+            spellCritPct4: 1.4,
+            spellCritPct5: 1.4,
+            spellCritPct6: 1.4,
+            restedXp: 2240,
+          }
+        : {}),
+      money: 1520,
+      ...(served ? { ammoId: 2512, selfResSpell: 0, channelObjectGuid: "0" } : {}),
+    });
+
+  test("a level-up renders as it did without them, its xp and talent points inside the cut", () => {
+    const out = formatEventLine(levelUp(true));
+    expect(out).toBe(formatEventLine(levelUp(false)));
+    expect(out).toContain('"xp":140,"nextLevelXp":8100,"talentPoints":3');
+    expect(out.endsWith("}")).toBe(true);
+    for (const key of ["stat0", "resistance0", "attackPower", "critPct", "standState", "shapeshiftForm", "restedXp", "ammoId", "channelObjectGuid"]) {
+      expect(out).not.toContain(`"${key}"`);
+    }
+  });
+
+  test("a sheathe, which carries only the shapeshift byte, renders empty as before", () => {
+    expect(formatEventLine(values({ shapeshiftForm: 0 }))).toBe(formatEventLine(values({})));
+    expect(formatEventLine(values({ channelSpell: 0, channelObjectGuid: "0" }))).toContain('"fields":{}');
+  });
+
+  test("the event itself keeps them, and the keys around them keep theirs", () => {
+    const e = levelUp(true);
+    formatEventLine(e);
+    const fields = (e.data as { objects: { fields: Record<string, unknown> }[] }).objects[0]!.fields;
+    expect(fields["stat0"]).toBe(52);
+    expect(fields["restedXp"]).toBe(2240);
+    const kept = formatEventLine(values({ entry: 1, stackCount: 4, goState: 1, quest0State: 2, nextLevelXp: 9 }));
+    expect(kept).toContain('{"entry":1,"stackCount":4,"goState":1,"quest0State":2,"nextLevelXp":9}');
+  });
+});
+
 describe("foldUiOpenWindows", () => {
   test("gossip is open until a later complete, and carries the option count", () => {
     const open = foldUiOpenWindows([

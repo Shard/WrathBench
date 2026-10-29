@@ -116,7 +116,10 @@ stack's, and this document keeps the clauses that are the benchmark's
 withheld in scored runs and served only where the run's `wikiCoords` dimension
 says so. A run may also be configured with no reference bundle at all
 (`wiki: false`, issue #61): the tool is not offered and the prompt does not
-name it, which narrows what the agent may see and never widens it.
+name it, which narrows what the agent may see and never widens it. Quest
+objective areas the server sends in answer to a client's quest POI query
+(`SMSG_QUEST_POI_QUERY_RESPONSE`) are a packet the client receives and are
+served (operator, 2026-10-29); quest locations read from the database stay out.
 
 **Changing the contracts.** Any widening of either contract is a major harness
 version. Any narrowing is at least a minor version and is noted here.
