@@ -40,6 +40,7 @@ import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
 import { dist2d, fmt } from "./lib/party";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const ACCOUNT_A = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -71,8 +72,8 @@ const health = await fetch(`${BASE}/health`, { headers: authHeaders() }).then((r
 if (!health?.ok) fail(`health not ok: ${JSON.stringify(health)}`);
 log(`health ok: build=${health.build ?? "?"}; ${NAME_A} on ${ACCOUNT_A}, ${NAME_B} on ${ACCOUNT_B}`);
 
-const a = await connect({ baseUrl: BASE, token: `smoke-party-frames-a-${RUN}`, secret: MODULE_SECRET });
-const b = await connect({ baseUrl: BASE, token: `smoke-party-frames-b-${RUN}`, secret: MODULE_SECRET });
+const a = await connect({ baseUrl: BASE, token: smokeToken("party-frames", { role: "a", id: RUN }), secret: MODULE_SECRET });
+const b = await connect({ baseUrl: BASE, token: smokeToken("party-frames", { role: "b", id: RUN }), secret: MODULE_SECRET });
 try {
   await a.createSession({ account: ACCOUNT_A, character: NAME_A, race: 1, class: 1 });
   await b.createSession({ account: ACCOUNT_B, character: NAME_B, race: 1, class: 1 });

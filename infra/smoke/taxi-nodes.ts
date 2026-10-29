@@ -37,10 +37,11 @@ import { connect } from "@wrathbench/sdk";
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
-const TOKEN = `smoke-taxi-nodes-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("taxi-nodes");
 const CHARACTER = process.env.SMOKE_CHARACTER ?? accountFixtureName("Tf", ACCOUNT);
 const SCENARIO = "taxi-ironforge";
 

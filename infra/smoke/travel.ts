@@ -90,6 +90,7 @@ import { connect, type MovePoint, type MoveResult, type UnitView } from "@wrathb
 import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 // Long-lived probe sessions use the PROBE account, never RUNNER: the module
@@ -97,7 +98,7 @@ const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
-const TOKEN = `smoke-travel-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("travel");
 // The module's per-session audit (WrathBench.AuditDir, one
 // `<token>.<YYYY-MM-DD>.jsonl` per UTC day; wrath-mcp/module/PROTOCOL.md "Audit log"),
 // as the runner container sees the repo mount. Leg 4 reads it for the

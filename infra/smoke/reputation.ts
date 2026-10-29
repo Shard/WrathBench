@@ -26,10 +26,11 @@ import { connect } from "@wrathbench/sdk";
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
-const TOKEN = `smoke-reputation-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("reputation");
 const CHARACTER = probeName("Br");
 const FACTION_STORMWIND = 72;
 const FACTION_ORGRIMMAR = 76;

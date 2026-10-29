@@ -35,6 +35,7 @@ import { connect, type WrathClient } from "@wrathbench/sdk";
 import { deleteFixtureCharacters } from "./lib/fixture";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -79,8 +80,8 @@ async function nearestQuestgiver(client: WrathClient): Promise<{ guid: string; n
 
 async function runStart(s: Start): Promise<void> {
   log(`${s.key}: ${s.cell} (race ${s.race}, class ${s.class}) as ${s.character} on ${ACCOUNT}`);
-  await deleteFixtureCharacters({ base: BASE, account: ACCOUNT, token: `smoke-starts-${RUN}-${s.key}`, log }, [s.character]);
-  const client = await connect({ baseUrl: BASE, token: `smoke-starts-${RUN}-${s.key}-play`, secret: MODULE_SECRET });
+  await deleteFixtureCharacters({ base: BASE, account: ACCOUNT, token: `${smokeToken("race-probe-starts", { id: RUN })}-${s.key}`, log }, [s.character]);
+  const client = await connect({ baseUrl: BASE, token: `${smokeToken("race-probe-starts", { id: RUN })}-${s.key}-play`, secret: MODULE_SECRET });
   try {
     // 1. A fresh character at its race's own start.
     await client.createSession({ account: ACCOUNT, character: s.character, race: s.race, class: s.class });

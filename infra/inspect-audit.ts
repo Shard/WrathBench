@@ -11,6 +11,7 @@
  *   common: [--since D] [--until D] [--top N] [--width N]
  *   offline: --audit-dir DIR [--runs-dir DIR]                    a copy here, no container
  *   bun infra/inspect-audit.ts [--k8s] --smoke <name> …          a smoke's sessions instead of a run's
+ *                                                               (every smoke names them smokeToken's way, infra/smoke/lib/session.ts)
  *
  * The files are named after the run's session token, which lives in the run's
  * meta.json on the runs volume, while the files live in the worldserver's
@@ -25,6 +26,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { cap, fmtBytes, isValidRunId, iso, MIN_TOKEN_LENGTH, parseSince, REDACTED } from "./inspect-run";
+import { SMOKE_SESSION_NAME } from "./smoke/lib/session";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 const SCRIPT = join(import.meta.dir, "inspect-audit.pl");
@@ -35,13 +37,13 @@ const DEFAULT_WIDTH = 200;
 export const USAGE = `usage: bun infra/inspect-audit.ts [--k8s] <run-id> | --smoke <name> [--op X[,Y…] [--status S] [--last N | --summary]] [--since D] [--until D] [--top N] [--width N]
        offline: --audit-dir DIR [--runs-dir DIR]
 D is 90s, 30m, 2h, 1d, epoch ms or ISO; with no --op, or with --summary, it prints counts
---smoke <name> reads the sessions a smoke names smoke-<name>-<uuid>, not a run's (no meta.json; --since narrows to one run);
-  a smoke with several sessions is read one session name at a time (group-a, group-b, loot-roll-a, mail-r)`;
+--smoke <name> reads the sessions of bun wb smoke <name> (tokens smoke-<name>-<uuid>), not a run's (no meta.json; --since narrows to one run);
+  a smoke with several sessions is read one session name at a time (group-a, group-b, mail-r, party-entry-party1, death-recovery-priest)`;
 
 export interface AuditArgs {
   /** The run, or for --smoke the label `smoke-<name>`, as printed. */
   runId: string;
-  /** --smoke: the name in the tokens the smoke gives its sessions, `smoke-<name>-<uuid>`. */
+  /** --smoke: the smoke's name (and role), as in the tokens `smokeToken` gives its sessions, `smoke-<name>-<uuid>`. */
   smoke: string | null;
   target: "k8s" | "compose" | "dir";
   op: string | null;
@@ -76,7 +78,7 @@ export function parseArgs(argv: readonly string[], now: number): AuditArgs | { e
   }
   const smoke = v.get("--smoke") ?? null;
   if (smoke !== null) {
-    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(smoke)) return { error: "--smoke is the name in a smoke's tokens, like edge for smoke-edge-<uuid> or chest-loot for smoke-chest-loot-<uuid>" };
+    if (!SMOKE_SESSION_NAME.test(smoke)) return { error: "--smoke is a smoke's name, as bun wb smoke takes it (edge-drop, quest-accept-status), or a name and role (group-a)" };
     if (positional.length > 0) return { error: "--smoke reads a smoke's sessions, not a run's: no run id with it" };
   } else if (positional.length !== 1 || !isValidRunId(positional[0]!)) {
     return { error: positional.length === 0 ? "a run id is needed" : `not one run id: ${positional.join(" ")}` };

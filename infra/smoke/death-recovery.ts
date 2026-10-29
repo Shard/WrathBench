@@ -52,7 +52,7 @@ const WS = moduleWsBase();
 
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
-const TOKEN = `probe-death-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("death-recovery");
 // Own account so the probe never fights the runner track for the default
 // RUNNER account (one live session per account). Created by
 // infra/bootstrap/bootstrap.ts with WRATHBENCH_ACCOUNT_USER=PROBE.
@@ -64,6 +64,7 @@ import { failOnce } from "./lib/fail";
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase, moduleWsBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const CHARACTER = probeName("Bd");
 // The resurrection leg's priest: a throwaway on an account no gate or deploy
@@ -71,7 +72,7 @@ const CHARACTER = probeName("Bd");
 // vineyard-priest fixture (level 10, Resurrection known).
 const PRIEST_ACCOUNT = process.env.MODULE_ACCOUNT_PRIEST ?? "SMOKE4";
 const PRIEST = probeName("Bdp");
-const PRIEST_TOKEN = `probe-death-priest-${crypto.randomUUID()}`;
+const PRIEST_TOKEN = smokeToken("death-recovery", { role: "priest" });
 const PRIEST_SCENARIO = "vineyard-priest";
 const SPELL_RESURRECTION = 2006; // rank 1, 10s cast, 30y
 let priest: WrathClient | undefined;

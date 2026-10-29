@@ -33,6 +33,7 @@
 
 import { authHeaders } from "./lib/auth";
 import { moduleBase, moduleWsBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -43,9 +44,9 @@ const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 
 // Session tokens must be at least 32 characters (POST /session rejects shorter
 // ones with weak_token); randomUUID keeps them unguessable and >= 32 chars.
-const TOKEN_A = `probe-reclaim-a-${crypto.randomUUID()}`;
-const TOKEN_B = `probe-reclaim-b-${crypto.randomUUID()}`;
-const TOKEN_C = `probe-reclaim-c-${crypto.randomUUID()}`;
+const TOKEN_A = smokeToken("module-reclaim", { role: "a" });
+const TOKEN_B = smokeToken("module-reclaim", { role: "b" });
+const TOKEN_C = smokeToken("module-reclaim", { role: "c" });
 
 function randomName(): string {
   const letters = "abcdefghijklmnopqrstuvwxyz";
@@ -134,7 +135,7 @@ async function createWithReclaim(
 async function deleteCharacter(character: string, tag: string): Promise<boolean> {
   for (let attempt = 0; attempt < 25; attempt++) {
     const del = await req("POST", "/character-delete", {
-      token: `probe-reclaim-del-${tag}-${crypto.randomUUID()}`,
+      token: smokeToken("module-reclaim", { role: `del-${tag}` }),
       account: ACCOUNT,
       character,
     });

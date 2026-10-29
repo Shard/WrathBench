@@ -100,5 +100,5 @@ try {
     c.close();
   }
   if (KEEP) log("--keep: the party is left staged");
-  else await deleteMembers(BASE, MODULE_SECRET, party, log);
+  else await deleteMembers(BASE, MODULE_SECRET, party, "party-entry", log);
 }

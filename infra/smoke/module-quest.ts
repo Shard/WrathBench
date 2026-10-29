@@ -54,6 +54,7 @@ import { accountFixtureName, applyScenario, ensureFixtureCharacter, type Fixture
 import { authHeaders } from "./lib/auth";
 import { failOnce } from "./lib/fail";
 import { moduleBase, moduleWsBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 import { SCENARIOS } from "../fixtures/scenarios";
 
 const BASE = moduleBase();
@@ -61,7 +62,7 @@ const WS = moduleWsBase();
 
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
-const TOKEN = `probe-quest-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("module-quest");
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // Character names are realm-global, so the fixture's name is the account's.
 const CHARACTER = (() => {

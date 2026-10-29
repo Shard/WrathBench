@@ -20,10 +20,11 @@ import { connect } from "@wrathbench/sdk";
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
-const TOKEN = `smoke-skills-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("skills");
 const CHARACTER = probeName("Bs");
 const SKILL_DEFENSE = 95;
 const SKILL_LANGUAGE_COMMON = 98;

@@ -37,10 +37,11 @@ import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type Fi
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
-const TOKEN = `smoke-pet-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("pet");
 const CHARACTER = probeName("Bp");
 const SCENARIO = "vineyard-warlock";
 const SUMMON_IMP = 688;

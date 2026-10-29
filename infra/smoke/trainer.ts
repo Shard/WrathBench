@@ -38,13 +38,14 @@ const WS = moduleWsBase();
 
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
-const TOKEN = `probe-trainer-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("trainer");
 
 // Fresh character every run, deleted at the end.
 import { probeName } from "./lib/name";
 import { authHeaders } from "./lib/auth";
 import { failOnce } from "./lib/fail";
 import { moduleBase, moduleWsBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const CHARACTER = probeName("Bt");
 

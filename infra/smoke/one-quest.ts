@@ -17,6 +17,7 @@ import { probeName } from "./lib/name";
 import { connect, pointOf, type NearbyObject } from "@wrathbench/sdk";
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 // Long-lived probe sessions use the PROBE account, never RUNNER: the module
@@ -24,7 +25,7 @@ const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
-const TOKEN = `smoke-quest-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("one-quest");
 // Fresh name per run: the arc starts at level 1 with an empty quest log, and
 // the realm caps characters per account at ten.
 const CHARACTER = probeName("Sq");

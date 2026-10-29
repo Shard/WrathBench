@@ -40,10 +40,11 @@ import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type Fi
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
-const TOKEN = `smoke-quest-item-start-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("quest-item-start");
 const CHARACTER = probeName("Qi");
 const SCENARIO = "ammen-vale-runts";
 const RUNT = 17202; // Infected Nightstalker Runt
