@@ -129,7 +129,7 @@ export async function ensureFixtureCharacter(ctx: FixtureContext): Promise<void>
   ctx.log(`  ${ctx.character} created and logged out`);
 }
 
-/** Place the fixture character for `scenario`. apply.ts waits for online=0 itself. */
+/** Place the fixture character for `scenario`. apply.ts waits for the logout save itself (`savedOut`). */
 export async function applyScenario(ctx: FixtureContext, scenario: string): Promise<void> {
   const argv = [...fixturesCmd(), "--account", ctx.account, "--character", ctx.character, "--scenario", scenario];
   ctx.log(`fixture: ${argv.join(" ")}`);

@@ -217,8 +217,8 @@ collision and no reaping on the next worldserver boot.
 
 **What the fixture does today** (`infra/fixtures/scenarios.ts`,
 `infra/fixtures/apply.ts`): on a SMOKE/PROBE account, after the character's
-logout save has landed (`waitUntilOffline` polls `characters.online = 0` and
-`logout_time`), one SQL transaction sets level, xp, money, position, zone,
+logout save has landed (`waitUntilOffline` polls `characters.online = 0`,
+`logout_time` and the `AT_LOGIN_FIRST` bit of `at_login`), one SQL transaction sets level, xp, money, position, zone,
 homebind, health and powers full, `character_spell` rows (INSERT IGNORE,
 specMask 255), the taxi mask, achievements and the quest log. **No items,
 deliberately:** `item_instance` guids come from a generator seeded at boot
