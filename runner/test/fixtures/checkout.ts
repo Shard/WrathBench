@@ -2,8 +2,9 @@
  * Whether a checkout's `node_modules` is its own, installed in place.
  *
  * The suite tests the code in the checkout it runs from, and the snippet
- * child can only read that checkout: confine.ts grants `mcp/`, `sdk/`, `runner/` and
- * `node_modules/` beneath the repo root, by inode. A `node_modules` linked
+ * child can only read that checkout: confine.ts grants the stack's packages
+ * (`wrath-mcp/sdk/`, `wrath-mcp/mcp/`), `runner/` and the `node_modules/` they
+ * resolve into, by inode. A `node_modules` linked
  * from another checkout (a quick way to skip an install in a trial worktree)
  * breaks both at once. The workspace links in it are relative, so
  * `@wrathbench/sdk` resolves to the *other* checkout's `sdk/`: every host-side
@@ -17,6 +18,15 @@
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+
+/**
+ * The stack's submodule (`.gitmodules`), whose `sdk/` and `mcp/` are workspaces
+ * of this checkout. It must be checked out, and it must have no install of its
+ * own: a `wrath-mcp/node_modules` would hand the stack its own copies of the
+ * dependencies it shares with the runner (two zods), resolved ahead of the
+ * root's.
+ */
+export const STACK_SUBMODULE = "wrath-mcp";
 
 interface Manifest {
   name?: string;
@@ -34,6 +44,19 @@ export function checkoutProblem(root: string): string | null {
   const real = realpathSync(root);
   const install = `run \`bun install --frozen-lockfile\` in ${root} (well under a second with a warm cache)`;
   const dirs = ["", ...(manifest(root).workspaces ?? [])];
+  for (const d of dirs) {
+    if (existsSync(join(root, d, "package.json"))) continue;
+    if (d.startsWith(`${STACK_SUBMODULE}/`)) {
+      return `${STACK_SUBMODULE}/ is not checked out (workspace ${d} has no package.json): run \`git submodule update --init ${STACK_SUBMODULE}\` in ${root}, then \`bun install --frozen-lockfile\`.`;
+    }
+    return `workspace ${d} has no package.json; the checkout is incomplete.`;
+  }
+  if (existsSync(join(root, STACK_SUBMODULE, "node_modules"))) {
+    return (
+      `${STACK_SUBMODULE}/node_modules exists: an install inside the submodule gives the stack its own copies of the dependencies it shares ` +
+      `with the runner. Remove it (\`rm -rf ${join(root, STACK_SUBMODULE, "node_modules")}\`); the stack installs from this checkout's root.`
+    );
+  }
   const workspaceDir = new Map<string, string>();
   for (const d of dirs) {
     const name = manifest(join(root, d)).name;

@@ -1,35 +1,48 @@
 #!/usr/bin/env bun
 /**
- * The stack boundary: module/, sdk/ and mcp/ are the client-equivalent agent
- * stack, meant to lift out of this repository whole and bolt onto a stock
- * AzerothCore (docs/ARCHITECTURE.md, "The stack and the benchmark"). This
- * check keeps that true as the code changes:
+ * The stack boundary, outside half. The client-equivalent agent stack
+ * (`module/`, `sdk/`, `mcp/`) is its own repository, wrath-mcp, consumed here
+ * as the `wrath-mcp/` submodule whose `sdk/` and `mcp/` are workspaces of this
+ * checkout (docs/ARCHITECTURE.md, "The stack and the benchmark"). Two checks
+ * keep the consumer side honest:
  *
- *  - Inside the stack, a TypeScript file imports only its own package (by
- *    relative path), Bun and Node built-ins, and the dependencies its
- *    package.json declares, at a subpath that dependency exports. sdk/ declares
- *    no stack dependency, so it can never import mcp/; mcp/ reaches the SDK
- *    through `@wrathbench/sdk` alone. Nothing in the stack imports runner/,
- *    infra/, wiki/, dashboard/, collector/ or minimap/.
- *  - The C++ module's quoted includes name a header by its bare file name —
- *    its own or the core's — never a path out of module/.
- *  - Outside the stack, code reaches sdk/ and mcp/ through their package
- *    names and exported entry points only, never a path into their sources.
+ *  - Outside the stack, code reaches `wrath-mcp/sdk` and `wrath-mcp/mcp`
+ *    through their package names and exported entry points only, never a path
+ *    into the submodule. A path would work in this checkout and nowhere the
+ *    stack is consumed as a package.
+ *  - The pinned stack and this repository agree on the shared pins: the Bun
+ *    version (`.bun-version` and `engines.bun`), `typescript` and `@types/bun`,
+ *    and `zod` wherever a workspace on either side declares it. Two lockfiles
+ *    resolve these, and a disagreement would install two copies or test the
+ *    stack under a toolchain its own CI never ran.
+ *  - The AzerothCore commit the stack's README says it is tested against is
+ *    the `deps/azerothcore` commit this repository builds the worldserver from.
+ *
+ * The inside half (the stack imports only itself and what it declares; module
+ * includes by bare name) is the stack's own: `wrath-mcp/scripts/boundary.ts`,
+ * whose test runs in this repository's suite against the pinned commit.
  *
  * Run: `bun infra/stack-boundary.ts` (exit 1 and one line per violation);
  * `infra/stack-boundary.test.ts` runs it as part of `bun run test`.
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { builtinModules } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
+/** Where the stack is checked out, relative to the repository root (`.gitmodules`). */
+export const STACK_ROOT = "wrath-mcp";
+/** The stack's workspaces, under `STACK_ROOT`. */
 export const STACK_PACKAGES = ["sdk", "mcp"] as const;
 /** The rest of the repository's code, which may use the stack but never be used by it. */
 export const NON_STACK_DIRS = ["runner", "infra", "wiki", "dashboard", "collector", "minimap"] as const;
+/** This repository's workspaces that may declare a shared dependency (`zod`). */
+const CONSUMER_WORKSPACES = ["", ...NON_STACK_DIRS.filter((d) => d !== "infra")] as const;
+/** Pins both sides must agree on, wherever either declares them. */
+const SHARED_DEPS = ["zod", "typescript", "@types/bun"] as const;
 
 interface Manifest {
   name: string;
+  engines?: Record<string, string>;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   exports?: Record<string, string>;
@@ -50,12 +63,6 @@ function walk(dir: string, exts: readonly string[], out: string[] = []): string[
 
 function manifest(dir: string): Manifest {
   return JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as Manifest;
-}
-
-const BUILTINS = new Set(builtinModules);
-
-function isBuiltin(spec: string): boolean {
-  return spec === "bun" || spec.startsWith("bun:") || spec.startsWith("node:") || BUILTINS.has(spec);
 }
 
 /** `@scope/name/sub` → [`@scope/name`, `./sub`]; `name/sub` → [`name`, `./sub`]. */
@@ -129,60 +136,31 @@ export function importsOf(file: string): string[] {
   return [...new Set([...scanner.scanImports(code).map((i) => i.path), ...typeOnlyImports(code)])];
 }
 
-/** One line per violation; empty when the boundary holds. */
+/** One line per violation of the outside half; empty when the boundary holds. */
 export function checkStackBoundary(root: string): string[] {
   const problems: string[] = [];
-  const stackManifests = new Map<string, { dir: string; manifest: Manifest }>();
-  for (const pkg of STACK_PACKAGES) stackManifests.set(manifest(join(root, pkg)).name, { dir: join(root, pkg), manifest: manifest(join(root, pkg)) });
-
+  const stackRoot = join(root, STACK_ROOT);
+  const stackManifests = new Map<string, Manifest>();
+  for (const pkg of STACK_PACKAGES) {
+    const m = manifest(join(stackRoot, pkg));
+    stackManifests.set(m.name, m);
+  }
   const exportedSubpath = (name: string, sub: string): boolean => {
     const stack = stackManifests.get(name);
     if (stack === undefined) return true; // a third-party package: its own exports map is the resolver's business
-    return Object.hasOwn(stack.manifest.exports ?? { ".": "" }, sub);
+    return Object.hasOwn(stack.exports ?? { ".": "" }, sub);
   };
 
-  // Inside the stack.
-  for (const pkg of STACK_PACKAGES) {
-    const dir = join(root, pkg);
-    const m = manifest(dir);
-    const declared = new Set([...Object.keys(m.dependencies ?? {}), ...Object.keys(m.devDependencies ?? {})]);
-    for (const file of walk(dir, [".ts", ".tsx"])) {
-      const rel = relative(root, file);
-      for (const spec of importsOf(file)) {
-        if (spec.startsWith(".")) {
-          const target = resolve(dirname(file), spec);
-          if (target !== dir && !target.startsWith(dir + sep)) problems.push(`${rel}: imports ${spec}, outside ${pkg}/`);
-          continue;
-        }
-        if (isBuiltin(spec)) continue;
-        const [name, sub] = splitPackage(spec);
-        if (!declared.has(name)) {
-          problems.push(`${rel}: imports ${spec}, which ${pkg}/package.json does not declare`);
-          continue;
-        }
-        if (!exportedSubpath(name, sub)) problems.push(`${rel}: imports ${spec}, which ${name} does not export`);
-      }
-    }
-  }
-
-  // The module: quoted includes by bare name only.
-  for (const file of walk(join(root, "module"), [".cpp", ".h", ".hpp"])) {
-    const rel = relative(root, file);
-    for (const m of readFileSync(file, "utf8").matchAll(/^\s*#\s*include\s+"([^"]+)"/gm)) {
-      if (m[1]!.includes("/") || m[1]!.includes("\\")) problems.push(`${rel}: includes "${m[1]}", a path rather than a header name`);
-    }
-  }
-
-  // Outside the stack: package names and exported entry points only.
-  const stackDirs = [...STACK_PACKAGES, "module"].map((p) => join(root, p));
   for (const d of NON_STACK_DIRS) {
     for (const file of walk(join(root, d), [".ts", ".tsx"])) {
       const rel = relative(root, file);
       for (const spec of importsOf(file)) {
         if (spec.startsWith(".")) {
           const target = resolve(dirname(file), spec);
-          const into = stackDirs.find((s) => target === s || target.startsWith(s + sep));
-          if (into !== undefined) problems.push(`${rel}: imports ${spec}, a path into ${relative(root, into)}/; use its package name`);
+          if (target === stackRoot || target.startsWith(stackRoot + sep)) {
+            const into = relative(root, target).split(sep).slice(0, 2).join("/");
+            problems.push(`${rel}: imports ${spec}, a path into ${into}/; use its package name`);
+          }
           continue;
         }
         const [name, sub] = splitPackage(spec);
@@ -193,9 +171,62 @@ export function checkStackBoundary(root: string): string[] {
   return problems;
 }
 
+/** One line per shared pin the pinned stack and this repository disagree on; empty when they agree. */
+export function checkStackPins(root: string): string[] {
+  const problems: string[] = [];
+  const stackRoot = join(root, STACK_ROOT);
+  const bunVersion = (dir: string): string => readFileSync(join(dir, ".bun-version"), "utf8").trim();
+  if (bunVersion(root) !== bunVersion(stackRoot)) {
+    problems.push(`.bun-version is ${bunVersion(root)} here and ${bunVersion(stackRoot)} in ${STACK_ROOT}/`);
+  }
+  const ours = manifest(root);
+  const theirs = manifest(stackRoot);
+  if (ours.engines?.["bun"] !== theirs.engines?.["bun"]) {
+    problems.push(`engines.bun is ${ours.engines?.["bun"]} here and ${theirs.engines?.["bun"]} in ${STACK_ROOT}/package.json`);
+  }
+
+  const declared = (m: Manifest): Record<string, string> => ({ ...m.devDependencies, ...m.dependencies });
+  const sides: { where: string; deps: Record<string, string> }[] = [
+    ...CONSUMER_WORKSPACES.map((d) => ({ where: d === "" ? "package.json" : `${d}/package.json`, deps: declared(manifest(join(root, d))) })),
+    { where: `${STACK_ROOT}/package.json`, deps: declared(theirs) },
+    ...STACK_PACKAGES.map((p) => ({ where: `${STACK_ROOT}/${p}/package.json`, deps: declared(manifest(join(stackRoot, p))) })),
+  ];
+  for (const dep of SHARED_DEPS) {
+    const found = sides.filter((s) => s.deps[dep] !== undefined).map((s) => ({ where: s.where, version: s.deps[dep]! }));
+    if (new Set(found.map((f) => f.version)).size > 1) {
+      problems.push(`${dep} is pinned differently: ${found.map((f) => `${f.where} ${f.version}`).join(", ")}`);
+    }
+  }
+  return problems;
+}
+
+/**
+ * The AzerothCore commit the pinned stack's README says it is tested against,
+ * which must be the one this repository builds the worldserver from (the
+ * `deps/azerothcore` gitlink, read from the index so a staged bump counts).
+ * Null when they agree; otherwise what differs.
+ */
+export function checkTestedAgainst(root: string, gitlink: string): string | null {
+  const readme = readFileSync(join(root, STACK_ROOT, "README.md"), "utf8");
+  const stated = /Tested against AzerothCore\s*\[?`([0-9a-f]{40})`/i.exec(readme)?.[1];
+  if (stated === undefined) return `${STACK_ROOT}/README.md states no "Tested against AzerothCore \`<sha>\`" line`;
+  if (stated !== gitlink) return `${STACK_ROOT}/README.md is tested against AzerothCore ${stated}, but deps/azerothcore pins ${gitlink}`;
+  return null;
+}
+
+/** The `deps/azerothcore` gitlink in `root`'s index. */
+export function azerothcoreGitlink(root: string): string {
+  const p = Bun.spawnSync(["git", "-C", root, "ls-files", "-s", "--", "deps/azerothcore"], { stdout: "pipe", stderr: "pipe" });
+  const m = /^160000 ([0-9a-f]{40}) /.exec(p.stdout.toString());
+  if (p.exitCode !== 0 || m === null) throw new Error(`no deps/azerothcore gitlink in ${root}: ${p.stderr.toString().trim()}`);
+  return m[1]!;
+}
+
 if (import.meta.main) {
-  const problems = checkStackBoundary(resolve(import.meta.dir, ".."));
+  const root = resolve(import.meta.dir, "..");
+  const tested = checkTestedAgainst(root, azerothcoreGitlink(root));
+  const problems = [...checkStackBoundary(root), ...checkStackPins(root), ...(tested === null ? [] : [tested])];
   for (const p of problems) console.error(p);
   if (problems.length > 0) process.exit(1);
-  console.log("stack boundary holds: module/, sdk/ and mcp/ import nothing outside themselves but declared dependencies");
+  console.log(`stack boundary holds: code outside ${STACK_ROOT}/ reaches the stack by package name and export only, and the shared pins and the tested-against AzerothCore agree`);
 }

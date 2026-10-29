@@ -20,6 +20,9 @@ describe("the scrub itself", () => {
   test("a container-absolute path becomes the repo-relative one", () => {
     expect(scrubPathsText("at run (/wrathbench/sdk/src/client.ts:123:9)")).toBe("at run (sdk/src/client.ts:123:9)");
     expect(scrubPathsText("/wrathbench/runner/src/tools.ts")).toBe("runner/src/tools.ts");
+    // The stack, since it is consumed as the wrath-mcp submodule.
+    expect(scrubPathsText("at run (/wrathbench/wrath-mcp/sdk/src/client.ts:123:9)")).toBe("at run (wrath-mcp/sdk/src/client.ts:123:9)");
+    expect(scrubPathsText('"/wrathbench/wrath-mcp/sdk/API.md"')).toBe('"wrath-mcp/sdk/API.md"');
   });
 
   test("a path under the operator's home is left whole, word or no word", () => {
