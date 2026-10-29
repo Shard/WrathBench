@@ -1313,29 +1313,38 @@ function eventLineNote(e: EventSummary): string {
   return named === undefined ? "" : ` — ${named}`;
 }
 
-/** The FactionTemplate row the module serves beside a unit's `faction` (`factionRow`, `factionRowFaction`, …). */
-const FACTION_ROW_KEY = /^factionRow/;
+/**
+ * Update-field keys the event line leaves out: the FactionTemplate row the
+ * module serves beside a unit's `faction` (`factionRow`, `factionRowFaction`,
+ * …); the character sheet (`stat0`-`stat4`, `resistance0`-`resistance6`, the
+ * attack powers, the block/dodge/parry/crit percentages); stand state and
+ * shapeshift form, which ride every sit, stealth and sheathe; a channel's
+ * spell and object; and `restedXp`, `ammoId` and `selfResSpell`.
+ */
+const EVENT_LINE_DROPPED_KEY =
+  /^(factionRow|(stat|resistance|spellCritPct)\d$|(attackPower|rangedAttackPower)(Mods|Multiplier)?$|(block|dodge|parry|crit|rangedCrit)Pct$|standState$|shapeshiftForm$|channel(Spell|ObjectGuid)$|restedXp$|ammoId$|selfResSpell$)/;
 
 /**
- * An update-object payload as the event line shows it: without the
- * `factionRow*` keys the module serves beside each unit's `faction`. They are
- * the SDK's input to `units()`' reaction, and on the line they would only push
- * `unitFlags`, `displayId` and `npcFlags` past the line's character cut, so a
- * line reads as it did before the stack served them. Every other key keeps its
- * place.
+ * An update-object payload as the event line shows it: without the keys
+ * above. They stay in the event and the state cache (`units()`' reaction,
+ * `state.self.stats`, `sitting`, `channeling`, …); on the line the faction row
+ * would push `unitFlags`, `displayId` and `npcFlags` past the line's character
+ * cut, and a level-up's character sheet `xp`, `nextLevelXp` and
+ * `talentPoints`, so a line reads as it did before the stack served them.
+ * Every other key keeps its place.
  */
 function eventLineData(e: EventSummary): unknown {
   if (e.opcode !== "SMSG_UPDATE_OBJECT") return e.data;
   const objects = (e.data as { objects?: unknown } | undefined)?.objects;
   if (!Array.isArray(objects)) return e.data;
   const stripped = (fields: Record<string, unknown>): Record<string, unknown> =>
-    Object.fromEntries(Object.entries(fields).filter(([key]) => !FACTION_ROW_KEY.test(key)));
+    Object.fromEntries(Object.entries(fields).filter(([key]) => !EVENT_LINE_DROPPED_KEY.test(key)));
   return {
     ...(e.data as Record<string, unknown>),
     objects: objects.map((o: unknown) => {
       const fields = (o as { fields?: unknown } | null)?.fields;
       if (fields === null || typeof fields !== "object" || Array.isArray(fields)) return o;
-      if (!Object.keys(fields).some((key) => FACTION_ROW_KEY.test(key))) return o;
+      if (!Object.keys(fields).some((key) => EVENT_LINE_DROPPED_KEY.test(key))) return o;
       return { ...(o as Record<string, unknown>), fields: stripped(fields as Record<string, unknown>) };
     }),
   };
