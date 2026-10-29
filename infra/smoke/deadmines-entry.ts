@@ -29,7 +29,7 @@ import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { moduleBase } from "./lib/module";
 import { dist2d, fmt, walkTo } from "./lib/party";
-import { smokeToken } from "./lib/session";
+import { smokeSubToken, smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -56,7 +56,7 @@ const fixture: FixtureContext = {
   base: BASE,
   account: ACCOUNT,
   character: CHARACTER,
-  token: `${TOKEN}-fixture`,
+  token: smokeSubToken(TOKEN, "fixture"),
   log,
   fail,
   createAndLogout: async () => {

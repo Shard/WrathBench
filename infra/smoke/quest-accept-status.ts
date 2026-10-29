@@ -45,7 +45,7 @@ import { authHeaders } from "./lib/auth";
 import { accountFixtureName } from "./lib/fixture";
 import { failOnce } from "./lib/fail";
 import { moduleBase, moduleWsBase } from "./lib/module";
-import { smokeToken } from "./lib/session";
+import { smokeSubToken, smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -225,7 +225,7 @@ async function moveTo(target: Vec, what: string): Promise<void> {
 
 async function deletePreviousCharacter(): Promise<void> {
   for (let attempt = 0; attempt < 4; ++attempt) {
-    const r = await req("POST", "/character-delete", { token: `${TOKEN}-del${attempt}`, account: ACCOUNT, character: CHARACTER });
+    const r = await req("POST", "/character-delete", { token: smokeSubToken(TOKEN, `del${attempt}`), account: ACCOUNT, character: CHARACTER });
     if (r.json?.deleted === true) {
       log(`deleted last run's ${CHARACTER}: ${JSON.stringify(r.json)}`);
       return;

@@ -26,7 +26,7 @@
 
 import { authHeaders } from "./lib/auth";
 import { moduleBase } from "./lib/module";
-import { smokeToken } from "./lib/session";
+import { smokeSubToken, smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 
@@ -88,7 +88,7 @@ function expectRefusal(
 async function deleteCharacter(tag: string): Promise<boolean> {
   for (let attempt = 0; attempt < 20; attempt++) {
     const del = await req("POST", "/character-delete", {
-      token: `${TOKEN}-${tag}${attempt}`,
+      token: smokeSubToken(TOKEN, `${tag}${attempt}`),
       account: ACCOUNT,
       character: CHARACTER,
     });
@@ -117,19 +117,19 @@ async function main() {
   expectRefusal(
     "/session on non-allowlisted account",
     await req("POST", "/session", {
-      token: `${TOKEN}-bad1`, account: BAD_ACCOUNT, character: CHARACTER, race: 1, class: 1,
+      token: smokeSubToken(TOKEN, "bad1"), account: BAD_ACCOUNT, character: CHARACTER, race: 1, class: 1,
     }),
     403, "account_not_permitted",
   );
   expectRefusal(
     "/characters on non-allowlisted account",
-    await req("POST", "/characters", { token: `${TOKEN}-bad2`, account: BAD_ACCOUNT }),
+    await req("POST", "/characters", { token: smokeSubToken(TOKEN, "bad2"), account: BAD_ACCOUNT }),
     403, "account_not_permitted",
   );
   expectRefusal(
     "/character-delete on non-allowlisted account",
     await req("POST", "/character-delete", {
-      token: `${TOKEN}-bad3`, account: BAD_ACCOUNT, character: CHARACTER,
+      token: smokeSubToken(TOKEN, "bad3"), account: BAD_ACCOUNT, character: CHARACTER,
     }),
     403, "account_not_permitted",
   );
@@ -145,7 +145,7 @@ async function main() {
   }
 
   // --- 2. Allowlisted account works: enum answers.
-  const list = await req("POST", "/characters", { token: `${TOKEN}-list`, account: ACCOUNT });
+  const list = await req("POST", "/characters", { token: smokeSubToken(TOKEN, "list"), account: ACCOUNT });
   if (list.status !== 200 || !list.json?.ok || typeof list.json?.enum?.count !== "number") {
     fail(`/characters on ${ACCOUNT} failed: ${list.status} ${JSON.stringify(list.json)}`);
   }
@@ -163,7 +163,7 @@ async function main() {
   expectRefusal(
     "/character-delete while another token holds the account",
     await req("POST", "/character-delete", {
-      token: `${TOKEN}-steal`, account: ACCOUNT, character: CHARACTER,
+      token: smokeSubToken(TOKEN, "steal"), account: ACCOUNT, character: CHARACTER,
     }),
     409, "account_owned_by_other_token",
   );

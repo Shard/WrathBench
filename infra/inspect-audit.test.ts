@@ -1,15 +1,18 @@
 /**
  * `bun wb inspect audit` end to end but for the container: the host side reads
- * the token from meta.json and hands it on stdin to the committed perl reducer,
- * run here over a fixture audit directory. The token and the file names, which
- * are the token, never reach what is printed.
+ * the token from meta.json (or a smoke's fingerprints from the smoke-session
+ * ledger) and hands it on stdin to the committed perl reducer, run here over a
+ * fixture audit directory that holds files of both namings, by fingerprint and,
+ * from before fingerprints, by token. The token and the file names never reach
+ * what is printed.
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseArgs, parseReduced, run, scrubAudit } from "./inspect-audit";
-import { smokeToken } from "./smoke/lib/session";
+import { tokenFingerprint, tokenTag } from "@wrathbench/mcp/module-auth";
+import { parseArgs, parseReduced, run, runStdin, scrubAudit, smokeStdin } from "./inspect-audit";
+import { SMOKE_SESSIONS_NAME, smokeFingerprints, smokeSessionsFile, smokeSubToken, smokeToken } from "./smoke/lib/session";
 import { tempDirs } from "./temp-dirs";
 
 const tmp = tempDirs();
@@ -18,7 +21,7 @@ const OTHER = "beef".repeat(16);
 const RUN = "run-audited";
 // The smokes' tokens as the smokes spell them (infra/smoke/lib/session.ts).
 const SMOKE_A = smokeToken("edge-drop", { id: "0f1e2d3c-4b5a-4968-8776-655443322110" });
-const SMOKE_B = `${SMOKE_A}-create`;
+const SMOKE_B = smokeSubToken(SMOKE_A, "create");
 const DEATH = smokeToken("death-recovery", { id: "a1b2c3d4-0000-4000-8000-000000000001" });
 const DEATH_PRIEST = smokeToken("death-recovery", { role: "priest", id: "a1b2c3d4-0000-4000-8000-000000000002" });
 const GROUP_A = smokeToken("group", { role: "a", id: "b2c3d4e5-0000-4000-8000-0000000000aa" });
@@ -26,16 +29,28 @@ const GROUP_B = smokeToken("group", { role: "b", id: "b2c3d4e5-0000-4000-8000-00
 // Once probe-qaccept-<uuid>, which --smoke could not find; and a party member's session.
 const QACCEPT = smokeToken("quest-accept-status", { id: "c3d4e5f6-0000-4000-8000-000000000003" });
 const PARTY1 = smokeToken("party-entry", { role: "party1", id: "d4e5f6a7-0000-4000-8000-000000000004" });
+const QACCEPT_DEL = smokeSubToken(QACCEPT, "del0");
 const DAY1 = Date.UTC(2030, 0, 1, 23, 59, 0);
 const DAY2 = Date.UTC(2030, 0, 2, 0, 1, 0);
 const hasPerl = Bun.which("perl") !== null;
 
+// The module's naming: a file by the token's fingerprint, a record's session by its tag.
+const fp = (token: string): string => tokenFingerprint(token);
 function action(ts: number, token: string, payload: object): string {
-  return JSON.stringify({ ts, session: token, kind: "action", payload });
+  return JSON.stringify({ ts, session: tokenTag(token), kind: "action", payload });
 }
 function event(ts: number, token: string, seq: number, opcode: string, data: object): string {
+  return JSON.stringify({ ts, session: tokenTag(token), kind: "event", payload: { seq, opcode, opcodeId: 65281, ts, data } });
+}
+// From before fingerprints: the file and the session field were the token.
+function legacyAction(ts: number, token: string, payload: object): string {
+  return JSON.stringify({ ts, session: token, kind: "action", payload });
+}
+function legacyEvent(ts: number, token: string, seq: number, opcode: string, data: object): string {
   return JSON.stringify({ ts, session: token, kind: "event", payload: { seq, opcode, opcodeId: 65281, ts, data } });
 }
+/** A smoke-session ledger line, as smokeToken writes it. */
+const ledger = (smoke: string, token: string): string => JSON.stringify({ ts: DAY2, smoke, fingerprint: fp(token) });
 
 function fixture(): { runsDir: string; auditDir: string } {
   const root = tmp("inspect-audit-");
@@ -44,12 +59,13 @@ function fixture(): { runsDir: string; auditDir: string } {
   mkdirSync(join(runsDir, RUN), { recursive: true });
   mkdirSync(auditDir, { recursive: true });
   writeFileSync(join(runsDir, RUN, "meta.json"), JSON.stringify({ runId: RUN, config: { token: TOKEN, model: "test/model" } }));
-  // The undated file from before day files, then two days.
-  writeFileSync(join(auditDir, `${TOKEN}.jsonl`), `${action(DAY1 - 60_000, TOKEN, { op: "move_to", x: 1, y: 2, z: 3 })}\n`);
+  // A run across the upgrade: the undated file from before day files and a
+  // day named by the token, then a day named by its fingerprint.
+  writeFileSync(join(auditDir, `${TOKEN}.jsonl`), `${legacyAction(DAY1 - 60_000, TOKEN, { op: "move_to", x: 1, y: 2, z: 3 })}\n`);
   const day1 = [
-    action(DAY1, TOKEN, { op: "move_to", x: 1, y: 2, z: 3 }),
-    action(DAY1 + 1, TOKEN, { op: "move_path", moveId: 7, status: "ok", pointCount: 2 }),
-    event(DAY1 + 500, TOKEN, 1, "WB_MOVE_RESULT", { moveId: 7, status: "target_off_mesh", nearest: null, note: `echo ${TOKEN}` }),
+    legacyAction(DAY1, TOKEN, { op: "move_to", x: 1, y: 2, z: 3 }),
+    legacyAction(DAY1 + 1, TOKEN, { op: "move_path", moveId: 7, status: "ok", pointCount: 2 }),
+    legacyEvent(DAY1 + 500, TOKEN, 1, "WB_MOVE_RESULT", { moveId: 7, status: "target_off_mesh", nearest: null, note: `echo ${TOKEN}` }),
   ];
   writeFileSync(join(auditDir, `${TOKEN}.2030-01-01.jsonl`), `${day1.join("\n")}\n`);
   const day2 = [
@@ -58,28 +74,47 @@ function fixture(): { runsDir: string; auditDir: string } {
     event(DAY2 + 900, TOKEN, 3, "SMSG_UPDATE_OBJECT", { blocks: 1, filler: "u".repeat(50_000) }),
     event(DAY2 + 1000, TOKEN, 4, "WB_MOVE_RESULT", { moveId: 9, status: "arrived", pos: { x: 7, y: 8, z: 9 } }),
   ];
-  writeFileSync(join(auditDir, `${TOKEN}.2030-01-02.jsonl`), `${day2.join("\n")}\n`);
-  // Another session's file: never counted, never read into what is printed.
-  writeFileSync(join(auditDir, `${OTHER}.2030-01-02.jsonl`), `${action(DAY2, OTHER, { op: "move_to", x: 0, y: 0, z: 0 })}\n`);
-  // A smoke's two sessions (its fixture create, then its run), interleaved in time.
+  writeFileSync(join(auditDir, `${fp(TOKEN)}.2030-01-02.jsonl`), `${day2.join("\n")}\n`);
+  // Another session's files: never counted, never read into what is printed.
+  writeFileSync(join(auditDir, `${fp(OTHER)}.2030-01-02.jsonl`), `${action(DAY2, OTHER, { op: "move_to", x: 0, y: 0, z: 0 })}\n`);
+  writeFileSync(join(auditDir, `${OTHER}.2030-01-01.jsonl`), `${legacyAction(DAY1, OTHER, { op: "move_to", x: 0, y: 0, z: 0 })}\n`);
+  // A smoke's two sessions (its fixture create, then its run), interleaved in
+  // time: the run's file named by its token, from before fingerprints, and the
+  // create's by fingerprint.
   writeFileSync(
     join(auditDir, `${SMOKE_A}.2030-01-02.jsonl`),
-    `${action(DAY2 + 10, SMOKE_A, { op: "move_edge_drop", moveId: 1, taken: false, reason: "no_edge" })}\n${action(DAY2 + 30, SMOKE_A, { op: "move_edge_drop", moveId: 3, taken: true, note: SMOKE_A })}\n`,
+    `${legacyAction(DAY2 + 10, SMOKE_A, { op: "move_edge_drop", moveId: 1, taken: false, reason: "no_edge" })}\n${legacyAction(DAY2 + 30, SMOKE_A, { op: "move_edge_drop", moveId: 3, taken: true, note: SMOKE_A })}\n`,
   );
-  writeFileSync(join(auditDir, `${SMOKE_B}.2030-01-02.jsonl`), `${action(DAY2 + 20, SMOKE_B, { op: "move_edge_drop", moveId: 2, taken: false, reason: "climb" })}\n`);
+  writeFileSync(join(auditDir, `${fp(SMOKE_B)}.2030-01-02.jsonl`), `${action(DAY2 + 20, SMOKE_B, { op: "move_edge_drop", moveId: 2, taken: false, reason: "climb" })}\n`);
   // A smoke and its role session, whose names share a prefix: each reads its own alone.
-  writeFileSync(join(auditDir, `${DEATH}.2030-01-02.jsonl`), `${action(DAY2, DEATH, { op: "move_to", x: 1, y: 1, z: 1 })}\n`);
+  writeFileSync(join(auditDir, `${fp(DEATH)}.2030-01-02.jsonl`), `${action(DAY2, DEATH, { op: "move_to", x: 1, y: 1, z: 1 })}\n`);
   // A party smoke's session whose record names its sibling session's token.
-  writeFileSync(join(auditDir, `${GROUP_A}.2030-01-02.jsonl`), `${action(DAY2, GROUP_A, { op: "party_invite", peer: GROUP_B, note: `echo ${GROUP_A}` })}\n`);
-  writeFileSync(join(auditDir, `${GROUP_B}.2030-01-02.jsonl`), `${action(DAY2, GROUP_B, { op: "party_invite", peer: GROUP_A })}\n`);
-  writeFileSync(join(auditDir, `${DEATH_PRIEST}.2030-01-02.jsonl`), `${action(DAY2, DEATH_PRIEST, { op: "move_to", x: 2, y: 2, z: 2 })}\n${action(DAY2 + 1, DEATH_PRIEST, { op: "move_to", x: 3, y: 3, z: 3 })}\n`);
+  writeFileSync(join(auditDir, `${fp(GROUP_A)}.2030-01-02.jsonl`), `${action(DAY2, GROUP_A, { op: "party_invite", peer: GROUP_B, note: `echo ${GROUP_A}` })}\n`);
+  writeFileSync(join(auditDir, `${fp(GROUP_B)}.2030-01-02.jsonl`), `${action(DAY2, GROUP_B, { op: "party_invite", peer: GROUP_A })}\n`);
+  writeFileSync(join(auditDir, `${fp(DEATH_PRIEST)}.2030-01-02.jsonl`), `${action(DAY2, DEATH_PRIEST, { op: "move_to", x: 2, y: 2, z: 2 })}\n${action(DAY2 + 1, DEATH_PRIEST, { op: "move_to", x: 3, y: 3, z: 3 })}\n`);
   // A smoke that failed on a move: its session, then its cleanup's character-delete session.
   writeFileSync(
-    join(auditDir, `${QACCEPT}.2030-01-02.jsonl`),
+    join(auditDir, `${fp(QACCEPT)}.2030-01-02.jsonl`),
     `${action(DAY2, QACCEPT, { op: "move_path", moveId: 5, status: "ok", pointCount: 4 })}\n${event(DAY2 + 300, QACCEPT, 1, "WB_MOVE_RESULT", { moveId: 5, status: "interrupted" })}\n`,
   );
-  writeFileSync(join(auditDir, `${QACCEPT}-del0.2030-01-02.jsonl`), `${action(DAY2 + 400, `${QACCEPT}-del0`, { op: "character_delete" })}\n`);
-  writeFileSync(join(auditDir, `${PARTY1}.2030-01-02.jsonl`), `${action(DAY2, PARTY1, { op: "move_to", x: 5, y: 5, z: 5 })}\n`);
+  writeFileSync(join(auditDir, `${fp(QACCEPT_DEL)}.2030-01-02.jsonl`), `${action(DAY2 + 400, QACCEPT_DEL, { op: "character_delete" })}\n`);
+  writeFileSync(join(auditDir, `${fp(PARTY1)}.2030-01-02.jsonl`), `${action(DAY2, PARTY1, { op: "move_to", x: 5, y: 5, z: 5 })}\n`);
+  // What smokeToken and smokeSubToken recorded, as they record it on the runs
+  // volume (under bun test they record nothing, so it is written here), with a
+  // duplicate line and a torn one.
+  const lines = [
+    ledger("edge-drop", SMOKE_B),
+    ledger("edge-drop", SMOKE_B),
+    ledger("death-recovery", DEATH),
+    ledger("death-recovery-priest", DEATH_PRIEST),
+    ledger("group-a", GROUP_A),
+    ledger("group-b", GROUP_B),
+    ledger("quest-accept-status", QACCEPT),
+    ledger("quest-accept-status", QACCEPT_DEL),
+    ledger("party-entry-party1", PARTY1),
+    '{"ts":1,"smoke":"edge-dr',
+  ];
+  writeFileSync(join(runsDir, SMOKE_SESSIONS_NAME), `${lines.join("\n")}\n`);
   return { runsDir, auditDir };
 }
 
@@ -150,7 +185,7 @@ describe.skipIf(!hasPerl)("the reducer, over a fixture audit directory", () => {
   });
 
   test("--smoke reads every session a smoke named, newest last across them, every token struck", async () => {
-    const r = await inspect(["--smoke", "edge-drop", "--audit-dir", F.auditDir, "--op", "move_edge_drop", "--last", "2", "--width", "400"]);
+    const r = await inspect(["--smoke", "edge-drop", ...offline, "--op", "move_edge_drop", "--last", "2", "--width", "400"]);
     expect(r.code).toBe(0);
     expect(r.out[0]).toContain("audit smoke-edge-drop");
     expect(r.out[0]).toContain("3 record(s) match op move_edge_drop, of 3 in 2 file(s)");
@@ -163,12 +198,12 @@ describe.skipIf(!hasPerl)("the reducer, over a fixture audit directory", () => {
     expect(all).not.toContain(TOKEN);
     expect(all).not.toContain(".jsonl");
     // Another smoke's name reads none of these.
-    const none = await inspect(["--smoke", "steep-replan", "--audit-dir", F.auditDir]);
+    const none = await inspect(["--smoke", "steep-replan", ...offline]);
     expect(none.out[0]).toContain("0 file(s)");
   });
 
   test("--smoke strikes every smoke token in a record, a sibling session's included", async () => {
-    const r = await inspect(["--smoke", "group-a", "--audit-dir", F.auditDir, "--op", "party_invite", "--width", "400"]);
+    const r = await inspect(["--smoke", "group-a", ...offline, "--op", "party_invite", "--width", "400"]);
     expect(r.code).toBe(0);
     expect(r.out[0]).toContain("audit smoke-group-a");
     expect(r.out[0]).toContain("1 record(s) match op party_invite, of 1 in 1 file(s)");
@@ -176,28 +211,28 @@ describe.skipIf(!hasPerl)("the reducer, over a fixture audit directory", () => {
     expect(all).not.toContain("b2c3d4e5");
     expect(all).not.toContain(GROUP_B);
     expect(r.out[1]).toContain('"peer":"[redacted]"');
-    const summary = await inspect(["--smoke", "group-b", "--audit-dir", F.auditDir]);
+    const summary = await inspect(["--smoke", "group-b", ...offline]);
     expect(summary.out[0]).toContain("audit smoke-group-b");
     expect(summary.out.join("\n")).not.toContain("b2c3d4e5");
   });
 
   test("--smoke matches the name exactly, hyphens included: death-recovery is not death-recovery-priest", async () => {
-    const death = await inspect(["--smoke", "death-recovery", "--audit-dir", F.auditDir, "--op", "move_to"]);
+    const death = await inspect(["--smoke", "death-recovery", ...offline, "--op", "move_to"]);
     expect(death.out[0]).toContain("1 record(s) match op move_to, of 1 in 1 file(s)");
-    const priest = await inspect(["--smoke", "death-recovery-priest", "--audit-dir", F.auditDir, "--op", "move_to"]);
+    const priest = await inspect(["--smoke", "death-recovery-priest", ...offline, "--op", "move_to"]);
     expect(priest.out[0]).toContain("2 record(s) match op move_to, of 2 in 1 file(s)");
     const all = [...death.out, ...priest.out].join("\n");
     expect(all).not.toContain("a1b2c3d4");
   });
 
   test("--smoke takes the name bun wb smoke runs: quest-accept-status's move verdicts, a party member's session", async () => {
-    const r = await inspect(["--smoke", "quest-accept-status", "--audit-dir", F.auditDir, "--summary", "--op", "move_path,WB_MOVE_RESULT"]);
+    const r = await inspect(["--smoke", "quest-accept-status", ...offline, "--summary", "--op", "move_path,WB_MOVE_RESULT"]);
     expect(r.code).toBe(0);
     expect(r.out[0]).toContain("audit smoke-quest-accept-status");
     expect(r.out[0]).toContain("3 records");
     expect(r.out[0]).toContain("2 file(s)");
     expect(r.out.some((l) => /^\s+1\s+event\s+WB_MOVE_RESULT\s+interrupted$/.test(l))).toBe(true);
-    const party = await inspect(["--smoke", "party-entry-party1", "--audit-dir", F.auditDir, "--op", "move_to"]);
+    const party = await inspect(["--smoke", "party-entry-party1", ...offline, "--op", "move_to"]);
     expect(party.out[0]).toContain("1 record(s) match op move_to, of 1 in 1 file(s)");
     const all = [...r.out, ...r.err, ...party.out, ...party.err].join("\n");
     expect(all).not.toContain("c3d4e5f6");
@@ -214,15 +249,48 @@ describe.skipIf(!hasPerl)("the reducer, over a fixture audit directory", () => {
   });
 });
 
+describe("the smoke-session ledger", () => {
+  test("under bun test nothing is recorded, and the checkout's ledger never holds this file's tokens", () => {
+    expect(process.env["NODE_ENV"]).toBe("test");
+    expect(smokeSessionsFile()).toBeUndefined();
+    expect(smokeSessionsFile({})).toEndWith(join("data", "runs", SMOKE_SESSIONS_NAME));
+    const checkout = join(import.meta.dir, "..", "data", "runs", SMOKE_SESSIONS_NAME);
+    const text = existsSync(checkout) ? readFileSync(checkout, "utf8") : "";
+    for (const t of [SMOKE_A, SMOKE_B, DEATH, QACCEPT, QACCEPT_DEL]) expect(text).not.toContain(fp(t));
+  });
+
+  test("smokeToken and smokeSubToken record the smoke's name and the fingerprint, never the token", () => {
+    const file = join(tmp("smoke-ledger-"), SMOKE_SESSIONS_NAME);
+    const before = process.env["WRATHBENCH_SMOKE_SESSIONS"];
+    process.env["WRATHBENCH_SMOKE_SESSIONS"] = file;
+    try {
+      const a = smokeToken("swim", { role: "deep", suffix: "create" });
+      const b = smokeSubToken(a, "del0");
+      const elsewhere = smokeSubToken("run-token-not-minted-here-0000000000", "x");
+      const text = readFileSync(file, "utf8");
+      expect(text).not.toContain(a);
+      expect(smokeFingerprints(text, "swim-deep")).toEqual([fp(a), fp(b)]);
+      expect(text).not.toContain(fp(elsewhere));
+      expect(a).toMatch(/^smoke-swim-deep-[0-9a-f]{8}-[0-9a-f-]+-create$/);
+    } finally {
+      if (before === undefined) delete process.env["WRATHBENCH_SMOKE_SESSIONS"];
+      else process.env["WRATHBENCH_SMOKE_SESSIONS"] = before;
+    }
+  });
+});
+
 describe("the host side", () => {
   test("the token reaches the reducer on stdin only: its argv is the mode and filters", () => {
     const src = readFileSync(join(import.meta.dir, "inspect-audit.ts"), "utf8");
-    expect(src).toContain("stdin: new TextEncoder().encode(`${token}\\n`)");
+    expect(src).toContain("stdin: new TextEncoder().encode(`${stdin.join(\"\\n\")}\\n`)");
+    // What goes on stdin: the token to strike and for its older files, then its fingerprint.
+    expect(runStdin(TOKEN)).toEqual([`T ${TOKEN}`, `F ${TOKEN}`, `F ${tokenFingerprint(TOKEN)}`]);
+    expect(smokeStdin("edge-drop", `${ledger("edge-drop", SMOKE_B)}\n${ledger("swim", SMOKE_A)}\n`)).toEqual(["M", "P smoke-edge-drop-", `F ${fp(SMOKE_B)}`]);
     const code = readFileSync(join(import.meta.dir, "inspect-audit.pl"), "utf8")
       .split("\n")
       .filter((l) => !/^\s*#/.test(l))
       .join("\n");
-    expect(code).toContain("my $tok = <STDIN>;");
+    expect(code).toContain("while (my $l = <STDIN>)");
     // No child process, so no command line that could carry a file name.
     expect(/\b(system|exec|qx|fork)\b|`|open\([^)]*\|/.test(code)).toBe(false);
   });

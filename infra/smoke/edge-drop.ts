@@ -109,7 +109,7 @@ const fixtureCtx: FixtureContext = {
   log,
   fail,
   createAndLogout: async () => {
-    const client = await connect({ baseUrl: BASE, token: `${smokeToken("edge-drop", { id: RUN })}-create`, secret: MODULE_SECRET });
+    const client = await connect({ baseUrl: BASE, token: smokeToken("edge-drop", { id: RUN, suffix: "create" }), secret: MODULE_SECRET });
     try {
       await createSessionWithBackoff(client);
       await client.logout();

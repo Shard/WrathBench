@@ -38,7 +38,7 @@
 import { connect, WrathClient } from "@wrathbench/sdk";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
-import { smokeToken } from "./lib/session";
+import { smokeSubToken, smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -57,7 +57,7 @@ async function deletePreviousCharacter(): Promise<void> {
     const res = await fetch(`${BASE}/character-delete`, {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeaders() },
-      body: JSON.stringify({ token: `${TOKEN}-del${attempt}`, account: ACCOUNT, character: CHARACTER }),
+      body: JSON.stringify({ token: smokeSubToken(TOKEN, `del${attempt}`), account: ACCOUNT, character: CHARACTER }),
     });
     const json: any = await res.json().catch(() => undefined);
     if (json?.deleted === true) return log(`deleted last run's ${CHARACTER}`);

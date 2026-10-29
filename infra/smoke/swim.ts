@@ -149,7 +149,7 @@ function fixtureCtx(account: string, character: string, tag: string): FixtureCon
     // to wait out.
     ...(observer ? { contendedDeadlineMs: 5_000, contendedRetryMs: 5_000 } : {}),
     createAndLogout: async () => {
-      const client = await connect({ baseUrl: BASE, token: `${smokeToken("swim", { role: tag, id: RUN })}-create`, secret: MODULE_SECRET });
+      const client = await connect({ baseUrl: BASE, token: smokeToken("swim", { role: tag, id: RUN, suffix: "create" }), secret: MODULE_SECRET });
       try {
         if (observer) await observerLogin(client, ctx);
         else await createSessionWithBackoff(client, account, character);
@@ -166,7 +166,7 @@ async function placeAndLogin(account: string, character: string, tag: string, sc
   const ctx = fixtureCtx(account, character, tag);
   await ensureFixtureCharacter(ctx);
   await applyScenario(ctx, scenario);
-  const client = await connect({ baseUrl: BASE, token: `${smokeToken("swim", { role: tag, id: RUN })}-play`, secret: MODULE_SECRET });
+  const client = await connect({ baseUrl: BASE, token: smokeToken("swim", { role: tag, id: RUN, suffix: "play" }), secret: MODULE_SECRET });
   if (tag === "obs") await observerLogin(client, ctx);
   else await createSessionWithBackoff(client, account, character);
   const want = SCENARIOS[scenario].position;
