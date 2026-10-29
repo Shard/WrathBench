@@ -299,14 +299,12 @@ try {
   await check("castSpell targetPoint without z", async () => {
     if (spell === undefined || here === undefined) return ["SKIP", `Sinister Strike not in the book or no position (book: ${client.state.spells().length})`];
     const from = lastSeq(client);
-    try {
-      await client.castSpell(spell, undefined, { targetPoint: { x: here.x, y: here.y } as unknown as { x: number; y: number; z: number } });
-      return ["FAIL", "castSpell accepted a point without z"];
-    } catch (e) {
-      const msg = String(e instanceof Error ? e.message : e);
-      const sentNothing = (await nextEvent(client, from, castVerdict(spell), 1000)) === undefined;
-      return [/z/.test(msg) && sentNothing ? "PASS" : "FAIL", `threw: ${msg}; no cast verdict after: ${sentNothing}`];
-    }
+    // A value, not a throw: `{ ok: false, status: "unknown_target", hint }`
+    // with nothing sent (the module never guesses the ground height).
+    const r = await client.castSpell(spell, undefined, { targetPoint: { x: here.x, y: here.y } as unknown as { x: number; y: number; z: number } });
+    const sentNothing = (await nextEvent(client, from, castVerdict(spell), 1000)) === undefined;
+    const refused = !r.ok && r.status === "unknown_target" && /z/.test(r.hint);
+    return [refused && sentNothing ? "PASS" : "FAIL", `castSpell answered ${JSON.stringify(r)}; no cast verdict after: ${sentNothing}`];
   });
   await check("castSpell targetPoint {x,y,z}: a verdict, the session alive", async () => {
     if (spell === undefined || here === undefined) return ["SKIP", "no spell or position"];
