@@ -10,7 +10,7 @@ It is the benchmark built on the stack, not the stack itself. The sandbox,
 the MCP server, the tool dispatcher and the five core tools are
 `@wrathbench/mcp` (`wrath-mcp/mcp/`), over `@wrathbench/sdk` (`wrath-mcp/sdk/`), over the module
 (`wrath-mcp/module/`) — the client-equivalent agent stack, which knows nothing of
-episodes, scores or trajectories (`wrath-mcp/sdk/README.md`, "The stack";
+episodes, scores or trajectories and is its own repository (`wrath-mcp/README.md`;
 `docs/ARCHITECTURE.md`, "The stack and the benchmark"). The runner plugs in
 through the stack's hooks: its four tools (`search_reference`, `reflect`,
 `log_status`, `read_log`) and its rendering of the core tools' answers
@@ -1226,35 +1226,20 @@ client-parity queries, fired from the event fold outside every snippet, are
 marked `auto`. Record-only; why and the size are in `docs/ARCHITECTURE.md`,
 "The action log".
 
-Confinement: the child is exec'd under a Linux Landlock ruleset
-(`wrath-mcp/mcp/src/sandbox/confine.ts`, whose `confinementPlan` is the one place the
-rules live) that the kernel enforces whatever API a snippet uses. Filesystem:
-reads of the interpreter, `wrath-mcp/mcp/`, `wrath-mcp/sdk/`, `node_modules/`, `runner/` (which the
-runner's host names, for its entry and extension) and the manifests, the
-child's own `/proc` entry and a few system-wide `/proc` files, and five `/dev`
-nodes, so `.env`, the repo root, the home directory, `/tmp`, `/dev/shm` and
-every other process's `/proc` entry answer `EACCES`. The last matters because
-`/proc/<pid>/environ` is already refused across a Landlock domain but
-`/proc/<pid>/cmdline` is not: without the narrowing a snippet could read the
-argv of every process it can see, which on a desktop is every process on the
-machine. Exec:
-only the bun binary and its ELF loader, so `/bin/sh`, `curl` and every other
-binary are `EACCES` at spawn (nothing in the sandbox needs to spawn). TCP:
-connect only to the port in the run's module URL — the one port the SDK's HTTP
-and `/events` WebSocket share — and bind nothing. Scope, on a kernel with
-Landlock ABI 6 (Linux 6.12+): no signals to processes outside the domain, the
-runner host included, and no abstract unix sockets. It fails closed: without
-Landlock, or on an ABI below 4 (Linux 6.7+, the TCP rules), the wrapper exits
-instead of exec'ing, and there is no opt-out. Missing scopes are announced on
-stderr, not fatal — the fleet's kernel has them; CI's may not.
-
-What that does not cover, plainly: Landlock's TCP rules name a port and no
-host, so the child can dial the module's port on any address; UDP (DNS is its
-legitimate use), raw sockets and other socket families are outside Landlock
-entirely. Both are the deployment's network policy to close. In-process,
-`fetch` and `WebSocket` are also replaced with versions that refuse any host
-but the module's: a readable error ahead of the kernel's, and the one check
-that does look at the host — a second layer, not the boundary.
+Confinement is the stack's: the child is exec'd under a Linux Landlock ruleset
+the kernel enforces whatever API a snippet uses (reads of what it needs to run
+and nothing else, TCP only to the module URL's port, no executable but the
+interpreter), and it fails closed on a kernel without Landlock's TCP rules
+(Linux 6.7+). The rules live in one place, `confinementPlan` in
+`wrath-mcp/mcp/src/sandbox/confine.ts`, whose header says why each is there;
+wrath-mcp's
+[`docs/ARCHITECTURE.md`](https://github.com/Shard/wrath-mcp/blob/master/docs/ARCHITECTURE.md#the-sandbox),
+"The sandbox", is the overview. The process scopes (Linux 6.12+) are
+announced on stderr when missing rather than fatal: the fleet's kernel has
+them, CI's may not. The runner adds one readable directory, `runner/`, which
+its host names for its entry and extension. What the kernel rules leave open, a
+port that is not tied to a host and every non-TCP socket, is the deployment's
+network policy to close (`docs/RUNBOOK.md`, "Network policy").
 
 The session secret in what a snippet prints: the child holds the run's leased
 secret (`WRATHBENCH_SECRET`) and a snippet can print it. The model reads

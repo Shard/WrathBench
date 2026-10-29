@@ -266,8 +266,8 @@ export default function About() {
         and Blizzard Entertainment are trademarks or registered trademarks of Blizzard Entertainment, Inc.
         in the U.S. and/or other countries. The game server is AzerothCore, the community open-source
         reconstruction of the 3.3.5a server, and it remains under its own GPL v2 licence.
-        WrathBench's own code and documentation are MIT-licensed, except the AzerothCore module
-        under <span class="mono">module/</span>, which is GPL-2.0-or-later.
+        WrathBench's own code and documentation are MIT-licensed; the agent stack it plays
+        through, <span class="mono">wrath-mcp</span>, states its own licence in its repository.
       </p>
       <h2 class="section">cite</h2>
       {/* The `url` line only once the repo link is turned on; see lib/repo.ts. */}

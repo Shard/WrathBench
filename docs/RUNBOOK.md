@@ -1133,6 +1133,12 @@ compose: a quickstart stack takes a new worldserver with `docker compose
 --env-file .env -f infra/compose.yml up -d --build`, which recreates it under
 whatever is running and verifies nothing.
 
+A stack change (module, SDK or MCP) ships the same way, as a pointer bump: it
+merges in wrath-mcp, the commit that moves `wrath-mcp/` merges here
+(`infra/PINS.md`), and the release built from that commit carries it. That
+release is the only place a module change is verified, by the smoke suite
+after the resume ("The lean path", below).
+
 ```
 bun wb release build --push                    # every image, tagged `git describe` (infra/build-images.sh)
 bun wb release run --dry-run                   # the plan and every resolved value

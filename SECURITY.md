@@ -10,10 +10,15 @@ a response team.
 
 ## What is in scope
 
-- `module/` — the HTTP/WebSocket bridge the module opens inside the worldserver.
-- `sdk/` and `runner/` — the SDK, the agent loop, and the snippet sandbox.
-- `dashboard/` and its publisher — the public static site and the projection
-  that produces it.
+- `runner/` — the agent loop, the benchmark's tools and sandbox extension, and
+  what the CLI drivers are started with.
+- `runner/viewer/`, `dashboard/` and the publisher — the public static site and
+  the projection that produces it.
+- `infra/` — the images, the chart and the operator tooling.
+
+The agent stack (the module's HTTP/WebSocket bridge, the SDK and the snippet
+sandbox) is [wrath-mcp](https://github.com/Shard/wrath-mcp), checked out here
+as `wrath-mcp/`; report a vulnerability in it there, under its `SECURITY.md`.
 
 ## What is not, and why
 
@@ -22,8 +27,9 @@ exposed to a network anyone else is on (`docs/DATA-AND-LEGAL.md`). So a report
 about AzerothCore or about WoW 3.3.5a itself has nowhere to land here; take
 those upstream. What *is* meaningful is the module's own surface, because that
 is the only door: what it serves, who may call it, and what a caller can reach
-that it should not. `wrath-mcp/module/PROTOCOL.md` is the authority on what that surface
-exposes, including its bearer-credential classes.
+that it should not. That surface is the stack's, so a report about it goes to
+wrath-mcp; `wrath-mcp/module/PROTOCOL.md` is the authority on what it exposes,
+including its bearer-credential classes.
 
 Two other things are worth a report even though they are not memory-safety
 bugs: anything that lets an agent observe or act beyond the contracts in

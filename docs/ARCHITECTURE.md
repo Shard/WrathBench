@@ -12,31 +12,50 @@
 
 ### The stack and the benchmark
 
-Two layers, deliberately separable. The **stack** — `wrath-mcp/module/`, `wrath-mcp/sdk/` and
-`wrath-mcp/mcp/` — is a client-equivalent agent surface over a stock AzerothCore:
-packets, not pixels. It knows what a client knows and does what a client does,
-serves it to any MCP-capable agent, and knows nothing of episodes, scores,
-trajectories or the wiki. The **benchmark** — `runner/` with `infra/`,
-`wiki/`, `dashboard/`, `collector/` and `minimap/` around it — is what turns
-that surface into a measurement: the fixed loop and the CLI drivers, the
-prompt and context policy, its own tools, the records, the watchdogs, the
-scoring. The stack is its own repository,
-[Shard/wrath-mcp](https://github.com/Shard/wrath-mcp), consumed here as the
-`wrath-mcp/` submodule: one gitlink pins the module, the SDK and the MCP stack
-together (`infra/PINS.md`), and `wrath-mcp/sdk` and `wrath-mcp/mcp` are
-workspaces of this repository. The line is enforced on both sides: the
-stack's `scripts/boundary.ts` fails when anything in it imports outside itself
-but a declared dependency, and `infra/stack-boundary.ts` (a test and a CI step
-here) fails when anything outside it reaches into stack sources by path, or
-when the shared pins disagree.
+Two layers, deliberately separable. The **stack** is
+[wrath-mcp](https://github.com/Shard/wrath-mcp): the AzerothCore module, the
+SDK and the MCP surface (snippet sandbox, MCP server, core tools), a
+client-equivalent agent surface over a stock AzerothCore that knows nothing of
+episodes, scores, trajectories or the wiki. The **benchmark** is this
+repository: `runner/` with `infra/`, `wiki/`, `dashboard/`, `collector/` and
+`minimap/` around it, which is what turns that surface into a measurement: the
+fixed loop and the CLI drivers, the prompt and context policy, its own tools,
+the records, the watchdogs, the scoring.
 
-The benchmark plugs into the stack through hooks, each a narrow interface the
-runner implements:
+How the stack works inside (the module's attachment to the core and its mover,
+the SDK, the sandbox and its confinement, hint delivery, one action's path end
+to end) is wrath-mcp's
+[`docs/ARCHITECTURE.md`](https://github.com/Shard/wrath-mcp/blob/master/docs/ARCHITECTURE.md),
+and its specification is `wrath-mcp/docs/CONTRACTS.md` with
+`wrath-mcp/module/PROTOCOL.md`. This document covers only what the benchmark
+takes from the stack and how.
 
-- **Tools** (`wrath-mcp/mcp/src/tools.ts`): one dispatcher, `ToolSet`, serves every tool
-  — lenient argument parsing, alias keys, strict validation, the unknown-tool
-  answer, the harness-delivered hint block and the secret scrub. The stack
-  defines the five core tools (`run_snippet`, `recent_events`,
+**How it is consumed.**
+
+- One submodule, `wrath-mcp/`, pins the module, the SDK and the MCP stack
+  together; `infra/PINS.md` records the pin and the rules for moving it. The
+  worldserver image compiles `wrath-mcp/module/` into the pinned AzerothCore
+  tree ("infra/", below), and `wrath-mcp/sdk` and `wrath-mcp/mcp` are
+  workspaces of this repository that the runner imports by package name
+  (`@wrathbench/sdk`, `@wrathbench/mcp`) and in no other way.
+- The line is enforced on both sides. The stack's `wrath-mcp/scripts/boundary.ts` fails
+  when anything in it imports outside itself but a declared dependency;
+  `infra/stack-boundary.ts` (`bun run boundary`, also a test and a CI step
+  here) fails when anything outside it reaches into stack sources by path,
+  when the shared pins disagree, or when the AzerothCore commit wrath-mcp's
+  README is tested against is not the one `deps/azerothcore` pins.
+- The model's SDK reference is the stack's: `wrath-mcp/sdk/API.md`, generated
+  from the SDK source. The sandbox exposes its path as `API_MD_PATH` and the
+  system prompt tells the model to read it from a snippet, so a pin that
+  changes it changes what the model sees (docs/METHODOLOGY.md, "Fixed harness,
+  frozen per version").
+
+**The hooks the runner implements**, each a narrow interface of the stack's:
+
+- **Tools** (`wrath-mcp/mcp/src/tools.ts`): one dispatcher, `ToolSet`, serves
+  every tool — lenient argument parsing, alias keys, strict validation, the
+  unknown-tool answer, the harness-delivered hint block and the secret scrub.
+  The stack defines the five core tools (`run_snippet`, `recent_events`,
   `state_summary`, `write_scratchpad`, `edit_scratchpad`); the runner adds its
   four as `ToolSpec`s and lists all nine in the order they are served
   (`runner/src/tools.ts`).
@@ -44,9 +63,8 @@ runner implements:
   the state summary and what a snippet result ends with are the harness's
   context rendering (`runner/src/context.ts`, the snippet delta), handed to
   the core tools rather than known by them.
-- **The sandbox child** (`SandboxChildExtension`, `wrath-mcp/mcp/src/sandbox/child.ts`):
-  a harness installs watchers that register rpc drains, decorate event
-  summaries and add snapshot fields; the runner's
+- **The sandbox child** (`SandboxChildExtension`,
+  `wrath-mcp/mcp/src/sandbox/child.ts`): the runner's extension
   (`runner/src/sandbox/child-extension.ts`) latches deaths, flights, party
   records, the trace and nearby rows, spell marks, the snippet delta, the
   turn's event window and the HUD's fields. Nothing an extension holds is
@@ -57,75 +75,31 @@ runner implements:
   it served; the sandbox host takes `onNotice` and `onActions`. Run config,
   ids, the harness stamp, the wiki and the episodic log never enter the stack.
 
-Versions, as built: the SDK has its own version (docs/METHODOLOGY.md, "Fixed
-harness, frozen per version"), and `@wrathbench/mcp` carries the same one.
-The runner depends on the stack at an exact version (`workspace:0.1.0` in its
-`package.json`), so an SDK whose version moves fails the install until that
-dependency moves with it, and every run records the version in `meta.json` as
-`sdkVersion`, beside `harnessVersion`. It is a label only, outside the
-comparability tuple and read by no filter (docs/METHODOLOGY.md, "Fixed
-harness, frozen per version"). Since two stack commits can share an SDK
-version, `meta.json` also records the wrath-mcp commit as `stackCommit`, a
-label of the same kind (`stackCommit()` in `runner/src/version.ts`). The module's wire
-protocol has an integer version of its own on `GET /health`, which the SDK
-checks on `connect` and the runner checks before a launch or resume
-(`fetchServerBuild`; `wrath-mcp/module/PROTOCOL.md`, "Versioning").
-
-### wrath-mcp/module/ (C++, GPL-2.0-or-later, in-process with worldserver)
-
-The licensing boundary follows this layout: `wrath-mcp/module/` is GPL-2.0-or-later; all other original WrathBench code and documentation, including `wrath-mcp/sdk/`, `wrath-mcp/mcp/`, `runner/`, `dashboard/`, `wiki/`, `minimap/`, `infra/`, and `docs/`, are MIT. The build copies this module into the pinned AzerothCore tree; that relationship does not relicense AzerothCore itself or any other dependency.
-
-A thin bridge. It does two things and should never learn to do a third.
-
-- Actions: accepts typed requests over HTTP, constructs the corresponding client opcode (`CMSG_*`), and pushes it through the character's `WorldSession` handler. Every server-side check a real client is subject to (range, facing, GCD, cooldowns, reagents, quest prerequisites, gossip state) applies unchanged.
-- Events: taps the outbound packet stream for the session (`SMSG_*`), filters it to the observation contract, and publishes it over a WebSocket as JSON.
-- Session management: creates or logs in a character for a session token, logs out on release.
-- Audit log: every action dispatched and every observation served, with a timestamp and the session id.
-
-It knows about opcodes and sessions. It does not know what a quest, a rotation, or a route is.
-
-How it attaches to the core: a bench session is a stock `WorldSession` handed a *parked* `WorldSocket` — a real socket around the server end of a loopback TCP pair the module connects to itself, never started, never registered with a network thread, never authenticated; it exists so the session's socket checks pass. Inbound actions go through `WorldSession::QueuePacket`, the same queue the real socket feeds, and are dispatched by the stock opcode table. Outbound packets are captured by a `ServerScript::CanPacketSend` hook that returns false, so nothing is ever queued on the unflushed socket. The idle kick is reset from `WorldScript::OnUpdate`; teardown is `CMSG_LOGOUT_REQUEST` then `CloseSocket()`, which the core reaps as a client disconnect. HTTP/WS are Boost.Beast (header-only, already in the core's Boost); JSON is a small hand-rolled builder because the core's Boost build has no `Boost::json` target. Coupling surface: `WorldSession::SendPacket`, `WorldSession::Update`, the `WorldSocket` constructor.
-
-The mover (why the module owns movement and navigation detail:
-`docs/METHODOLOGY.md`, "Client fidelity"): `move_to` resolves a path once with `PathGenerator` on the world thread and accepts only a fully normal path whose endpoint lands near the request. It then sends `MSG_MOVE_START_FORWARD`, periodic heartbeats, a `MSG_MOVE_SET_FACING` at each turn of the route and `MSG_MOVE_STOP`, each with `MovementInfo` interpolated at the character's live run speed, into the stock movement handlers; in water deeper than the server's swim threshold it swims instead (`MSG_MOVE_START_SWIM`/`MSG_MOVE_STOP_SWIM`, the swim flag and pitch, swim speed, the body under the surface rather than at the route's z), from the server's own liquid status. The module answers `SMSG_TIME_SYNC_REQ` itself, a world tick later, on a clock of the session's own, as a client's is, so the core translates its movement times to server time, and answers each forced speed change and movement-state change (water walk, feather fall, hover, can-fly) with its ack, which is what tells observers the new speed or state, carrying the state flags on every packet after (can-fly excepted while the walker has no flight). Arrival is declared from the server-side position; drift between server and interpolation past a bound ends the move as `interrupted`. Areatrigger volumes (from the client's `AreaTrigger.dbc` on the data volume) and transport bounds are tested against the mover's position on each heartbeat, and the volumes against the character's live position once per world tick when no move is driving it (a taxi landing, a transport carrying it, a teleport's arrival), as a client tests its own position every frame; a taxi landing is dropped to the ground under the spline's last point the way a client's physics drop it (`MSG_MOVE_FALL_LAND`, reported as `WB_SELF_MOVE`). The update-object decoder keeps one guid→type map per session, pruned by destroy and out-of-range; compressed updates never reach the tap because compression happens at socket write. Shapes, statuses and constants: `wrath-mcp/module/PROTOCOL.md`.
-
-Observation decodes the wire's own delta shape. The module serves whitelisted fields from the packets as they arrive plus the guid→type map a client keeps; the SDK owns the world model. The module sends only the cache-miss lookups needed to decode the stream at all; every other auto-query a client sends (questgiver status, quest templates) is sent by the SDK — the module sends what is needed to *read* packets, the SDK what is needed to *show* the client's screen. The same split puts areatriggers, transports, time-sync and the corpse query in the module, fired without an agent action because a client sends them without the player choosing to; there is no "enter portal" action because a client never sends one.
-
-### wrath-mcp/sdk/ (Bun/TypeScript, MIT)
-
-The surface the model programs against. Thin typed wrappers over module actions, a typed event stream, and a small set of composed helpers that emerged from real runs (for example `moveTo`, `killTarget`, `lootCorpse`, `acceptQuestFrom`). Helpers are added because a run needed them, not in anticipation.
-
-The SDK is versioned on its own (`SDK_VERSION`, `wrath-mcp/sdk/src/version.ts`;
-docs/METHODOLOGY.md, "Fixed harness, frozen per version"), and the runner
-depends on it at an exact version (above). `wrath-mcp/sdk/src/index.ts` is its whole
-public surface. Its per-call hints are SDK surface (docs/METHODOLOGY.md, "The
-model surface"); delivering them on a channel a snippet cannot drop is the
-stack's dispatcher's job (`wrath-mcp/mcp/src/tools.ts`, "Harness-delivered hints"
-below).
-
-### wrath-mcp/mcp/ (Bun/TypeScript, MIT)
-
-The agent surface over the SDK, and the half of the stack a model actually
-touches: the snippet sandbox (a confined child process per session holding one
-`WrathClient`, `src/sandbox/`), the MCP server (`src/server.ts`, and the
-stdio-to-TCP bridge a CLI is handed, `src/bridge.ts`), the tool dispatcher and
-the core tools (`src/tools.ts`), the scratchpad, the secret redactor and the
-module's auth and lease helpers. `src/main.ts` serves the core tools on their
-own over stdio, with a plain rendering of events and state, for any MCP agent;
-a harness serves its own set through the same pieces (above). It depends on
-`@wrathbench/sdk` through its public entry point and on nothing else here.
+**Versions, as built.** The SDK has its own version (docs/METHODOLOGY.md,
+"Fixed harness, frozen per version"), and `@wrathbench/mcp` carries the same
+one. The runner depends on the stack at an exact version (`workspace:0.1.0` in
+its `package.json`), so an SDK whose version moves fails the install until
+that dependency moves with it, and every run records the version in
+`meta.json` as `sdkVersion`, beside `harnessVersion`. It is a label only,
+outside the comparability tuple and read by no filter. Since two stack commits
+can share an SDK version, `meta.json` also records the wrath-mcp commit as
+`stackCommit`, a label of the same kind (`stackCommit()` in
+`runner/src/version.ts`). The module's wire protocol has an integer version of
+its own on `GET /health`, which the SDK checks on `connect` and the runner
+checks before a launch or resume (`fetchServerBuild`;
+`wrath-mcp/module/PROTOCOL.md`, "Versioning").
 
 ### runner/ (Bun/TypeScript, MIT)
 
 - MCP server exposing the model-facing tools: the stack's server and dispatcher over the nine the runner assembles (`runner/src/tools.ts`: the stack's five core tools, rendered the benchmark's way, and its own four). The tool list is fixed and identical for every harness group. The scratchpad has a write tool and an edit tool and no read tool: the pad is injected verbatim into every turn's context already, so `read_scratchpad` was removed (2026-08-30).
-- Snippet sandbox (the stack's, `wrath-mcp/mcp/src/sandbox/`, run with the benchmark's child extension): a persistent runtime per session so snippets share state and can leave routines running. Executes in a separate process with an allowlisted environment carrying only the run's own leased session secret (never the module's port secret or a provider key), under a Linux Landlock ruleset applied before exec (`wrath-mcp/mcp/src/sandbox/confine.ts`): it can read the interpreter, `wrath-mcp/mcp/`, `wrath-mcp/sdk/`, `node_modules/`, `runner/` (named by the runner's host, for its child extension) and its own `/proc` entry and nothing else — not `.env`, not the home directory, not another process's command line, not `/dev/shm` — open TCP connections only to the module URL's port, bind nothing, execute no binary but the interpreter, and signal nothing outside itself. Per-host and non-TCP egress are the deployment's network policy (`wrath-mcp/docs/CONTRACTS.md`, "Control-surface authentication"). Hard per-snippet timeout.
+- Snippet sandbox: the stack's (`wrath-mcp/mcp/src/sandbox/`), run with the benchmark's child extension. A persistent confined runtime per session, so snippets share state and can leave routines running, with a hard per-snippet timeout. Its environment carries only the run's own leased session secret, never the module's port secret or a provider key. The runner's host adds one directory to what the confined child may read, `runner/`, for its entry and extension; the confinement itself is the stack's ([wrath-mcp's architecture](https://github.com/Shard/wrath-mcp/blob/master/docs/ARCHITECTURE.md#the-sandbox); `runner/README.md`, "The sandbox"), and per-host and non-TCP egress are the deployment's network policy (`docs/RUNBOOK.md`, "Network policy").
 - Agent loop: model-agnostic. Fixed prompt, fixed event window and state summary, fixed retry policy. Persists scratchpad and summary so a session can resume after a process failure.
 - Watchdogs: idle timeout, no-XP timeout, episode time limit, snippet runaway. Each ends the episode with a named termination reason.
 - Trajectory log: JSONL per run containing every snippet, its result, every action the snippet dispatched (below), every event batch the model saw, and a periodic state line (level, zone, XP, position). A fixed-loop `request` record carries the turn's fresh user message whole and points at the rest of the prompt instead of re-logging it: the system prompt text once per process segment, and the message window as bounds over the `response` and result records already on the file, with the count of its folded messages and a hash of the bytes sent. `runner/src/replay.ts` rebuilds every request from the file alone and fails on any that does not hash to what was sent; the CLI scaffolds' requests keep their own shape (`runner/README.md`, "The request record and the replay").
 - Model adapter: one OpenAI-compatible chat layer. Provider and model are run config.
 - Drivers: the fixed loop's adapter is one, and the Claude Code and Codex CLIs are the others. The driver contract (`runner/README.md`, "The driver contract") says what the runner keeps for every driver, what a driver may vary, and what the trajectory records regardless.
 
-**Harness-delivered hints.** The SDK attaches a per-status recovery hint to a failed action result (`moveTo` `too_far`, `target_off_mesh`, `drop`, …), but that hint reaches the model only if the snippet's own code keeps it: one run took 41 `too_far` refusals in four hours while reducing every result to `.status`, and read the hint zero times. So the client also tallies each hint-bearing failure per (action, status) on a channel the snippet cannot strip, and the harness drains it into the next tool result of any kind: a snippet's result carries what its eval drained, and every other tool's result carries whatever was pending when it answered, so a hint raised by a background routine does not wait for the next snippet. The stack's dispatcher (`wrath-mcp/mcp/src/tools.ts`) renders it as a short block at the foot of that result — one line per status with a count, the hint text unchanged and nothing added to it, the tool's own text above it untouched. It goes in the tool result rather than the next turn's harness-notice block because a claude-code turn is a whole CLI session: a notice there would arrive a turn late, and delivery must not cost the model a follow-up inspection. Both drivers dispatch through the same `callTool`, so both get it, and the trajectory's `snippet_result` or `tool_result` records it as part of what the model saw.
+**Harness-delivered hints.** A failed action's recovery hint reaches the model only if the snippet's own code keeps it: one run took 41 `too_far` refusals in four hours while reducing every result to `.status`, and read the hint zero times. So the stack's dispatcher also delivers each hint-bearing failure at the foot of the next tool result of any kind, on a channel the snippet cannot strip ([wrath-mcp's architecture](https://github.com/Shard/wrath-mcp/blob/master/docs/ARCHITECTURE.md#harness-delivered-hints); docs/METHODOLOGY.md, "The model surface"). It goes in the tool result rather than the next turn's harness-notice block because a claude-code turn is a whole CLI session: a notice there would arrive a turn late, and delivery must not cost the model a follow-up inspection. Every driver dispatches through the same `callTool`, so every driver gets it, and the trajectory's `snippet_result` or `tool_result` records it as part of what the model saw.
 
 **The action log.** A snippet's code says what the model asked for; it does not say what went on the wire — a helper's inner `set_target`, a routine's fortieth re-cast, the refusal the snippet swallowed. So the sandbox watches its own client's `POST /action` requests (the same fetch the move intention is read from) and records each dispatch with the module's HTTP answer as an `actions` record (`ActionsLine` in `runner/src/trajectory.ts`): action name, the body with the token stripped, status, error code and hint on a refusal, the `move_to` move id, timing, and the client-cache names the session already held for the ids (unit, spell, item, quest). One record per snippet, flushed just before its result, rather than one per action: about ten dispatches per snippet would otherwise push the snippets out of the feed's 200-record window. A background routine's dispatches between snippets flush on a 60-second idle timer and are marked `routine`, so the record count is one per snippet that dispatched anything plus at most one a minute of routine activity between snippets; identical consecutive dispatches fold into a count, and past 120 notes per flush the rest are counted by action name, because a looping routine has dispatched millions. The record's `callTs` is the owning `tool_call`'s `dispatchTs`, which is the join: the CLI drivers append the call after it ran and the fixed loop before, so position cannot be. It records the dispatch and the module's answer and nothing more — a `200` is "queued", and what the game made of it is on the event stream, with a `move_to`'s verdict in the `move` record of the same move id, which is unchanged. Nothing in it reaches the model. The module's audit log is the ground truth for the wire while it is kept, which is a few days (wrath-mcp/docs/CONTRACTS.md "Audit"); this record is the one that stays with the run, attributed to the snippet that caused it. Size, on a long freeplay run of about 9,600 snippets over 51 hours with a 104 MB trajectory: by its snippet code, about half its snippets call a dispatching helper and one in twelve launches a routine, so the records add at most about 9,600 lines to the 65,000 it has; by the module audit logs of earlier long runs, which dispatched 1,300–2,200 HTTP actions an hour, the notes come to roughly 70k–110k at about 100 bytes each, so 7–15 MB more, about a tenth.
 
@@ -394,14 +368,7 @@ The worldserver image (`infra/docker/server.Dockerfile`) is a close adaptation o
 
 ## Data flow for one action
 
-1. Model calls `run_snippet` via MCP with TypeScript.
-2. Runner executes it in the session's sandbox; snippet calls `sdk.castSpell(id)`.
-3. SDK posts `{action: "cast", spellId}` to the module.
-4. Module builds `CMSG_CAST_SPELL` and hands it to the session's handler, as if the client had sent it.
-5. Server applies its normal validation and effects.
-6. Outbound `SMSG_SPELL_GO` or `SMSG_CAST_FAILED` is tapped, filtered, and published on the WebSocket.
-7. SDK surfaces it as a typed event; the snippet or the model reacts.
-8. Runner appends the snippet, result, and events to the trajectory.
+One action's path through the stack, from `run_snippet` to the opcode the module dispatches and the packets it taps back, is [wrath-mcp's architecture](https://github.com/Shard/wrath-mcp/blob/master/docs/ARCHITECTURE.md#data-flow-for-one-action). The benchmark is at both ends: the runner serves the call through its tool set, its rendering and its child extension, and appends the snippet, its result, the actions it dispatched and the events the model was shown to the trajectory.
 
 ## Launching a run: the run contract
 
