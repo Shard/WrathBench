@@ -49,13 +49,13 @@ die "inspect-audit: no token on stdin\n" unless defined $tok;
 $tok =~ s/[\r\n]+\z//;
 die "inspect-audit: an empty token\n" if $tok eq '';
 # A smoke's sessions rather than one run's: the line `smoke-<name>-*` names
-# the fixed part of the tokens a smoke gives its sessions (infra/smoke:
-# `smoke-<name>-<uuid>`, which no run's token starts with; the name may hold
-# hyphens), and every file of a session it names is read — the name exactly:
-# what follows it must open with the uuid's first eight hex digits, so
-# `quest` does not read `quest-item-start`'s, nor `group` `group-a`'s. The
-# prefix is no secret; the rest of each token is, and is struck wherever it
-# appears.
+# the fixed part of the tokens a smoke gives its sessions (smokeToken in
+# infra/smoke/lib/session.ts: `smoke-<name>-<uuid>`, which no run's token
+# starts with; the name may hold hyphens), and every file of a session it
+# names is read — the name exactly: what follows it must open with the uuid's
+# first eight hex digits, so `death-recovery` does not read
+# `death-recovery-priest`'s, nor `group` `group-a`'s. The prefix is no secret;
+# the rest of each token is, and is struck wherever it appears.
 my $smoke = $tok =~ /\Asmoke-[a-z0-9]+(?:-[a-z0-9]+)*-\*\z/;
 $tok =~ s/\*\z// if $smoke;
 # The module names the file after the token with every byte outside

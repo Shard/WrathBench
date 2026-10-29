@@ -32,10 +32,11 @@ import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type Fi
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
-const TOKEN = `smoke-read-item-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("read-item");
 const CHARACTER = probeName("Br");
 const SCENARIO = "mcbride-report";
 const MCBRIDE = 197;

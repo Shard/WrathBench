@@ -11,6 +11,7 @@ import { appendFileSync, mkdirSync, readFileSync, utimesSync, writeFileSync } fr
 import { join } from "node:path";
 import { loadRunConfig, MIN_TOKEN_LENGTH as RUNNER_MIN_TOKEN_LENGTH } from "../runner/src/config";
 import { REDACTED as RUNNER_REDACTED } from "@wrathbench/mcp/redact";
+import { RUN_DB_BUSY_TIMEOUT_MS as RUNNER_RUN_DB_BUSY_TIMEOUT_MS } from "../runner/src/rundb";
 import { HEARTBEAT_DEAD_MS as RUNNER_HEARTBEAT_DEAD_MS, Trajectory } from "../runner/src/trajectory";
 import { ARCHIVE_DIR as VIEWER_ARCHIVE_DIR } from "../runner/viewer/archive-dir";
 import { questsAcrossRestarts } from "../runner/viewer/results";
@@ -26,6 +27,7 @@ import {
   questStretches,
   seekTime,
   REDACTED,
+  RUN_DB_BUSY_TIMEOUT_MS,
   verdictOf,
 } from "./inspect-run";
 import { tempDirs } from "./temp-dirs";
@@ -109,6 +111,7 @@ describe("the constants it shares with the runner", () => {
     expect(MIN_TOKEN_LENGTH).toBe(RUNNER_MIN_TOKEN_LENGTH);
     expect(REDACTED).toBe(RUNNER_REDACTED);
     expect(ARCHIVE_DIR).toBe(VIEWER_ARCHIVE_DIR);
+    expect(RUN_DB_BUSY_TIMEOUT_MS).toBe(RUNNER_RUN_DB_BUSY_TIMEOUT_MS);
   });
 
   test("the quest fold is the viewer's: the same total from the same counts", () => {
@@ -168,6 +171,24 @@ describe("the live rule", () => {
 });
 
 describe("inspect run", () => {
+  test("waits out a live run's write lock instead of crashing on SQLITE_BUSY", async () => {
+    const runsDir = tmp("inspect-run-busy-");
+    const dir = makeRun(runsDir, "run-busy", "live");
+    // Another process holds the write lock for a moment, the way the live runner does mid-write.
+    const holder = Bun.spawn(
+      ["bun", "-e", 'const { Database } = require("bun:sqlite"); const db = new Database(process.argv[1]); db.exec("BEGIN EXCLUSIVE"); console.log("locked"); Bun.sleepSync(800); db.exec("COMMIT"); db.close();', join(dir, "run.sqlite")],
+      { stdout: "pipe", stderr: "inherit" },
+    );
+    const reader = holder.stdout.getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toContain("locked");
+    const r = inspect(["run", "run-busy", "--runs-dir", runsDir]);
+    expect(await holder.exited).toBe(0);
+    expect(r.err.join("\n")).not.toContain("SQLITE_BUSY");
+    expect(r.code).toBe(0);
+    expect(r.out.find((l) => l.startsWith("trace"))).toContain("no rows");
+  });
+
   test("reads the level, the counts by kind and the errors by class", () => {
     const r = inspect(["run", "run-live", "--runs-dir", RUNS]);
     expect(r.code).toBe(0);

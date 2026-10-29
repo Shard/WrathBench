@@ -29,11 +29,12 @@ import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { moduleBase } from "./lib/module";
 import { dist2d, fmt, walkTo } from "./lib/party";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 const CHARACTER = accountFixtureName("Dmines", ACCOUNT);
-const TOKEN = `smoke-deadmines-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("deadmines-entry");
 /** `areatrigger_teleport` 78's target on map 36, and trigger 119 just inside, back to map 0 at (-11208.3, 1672.52). */
 const INSIDE_ARRIVAL = { x: -16.4, y: -383.07, z: 61.78 };
 const EXIT_TRIGGER = { x: -14.4, y: -393.4, z: 64.6 };

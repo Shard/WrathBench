@@ -51,6 +51,7 @@ import { SCENARIOS, SWIM_SEA_LEVEL, SWIM_SHORE, type ScenarioName } from "../fix
 import { accountFixtureName, applyScenario, characterNames, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const SWIMMER_ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -140,7 +141,7 @@ function fixtureCtx(account: string, character: string, tag: string): FixtureCon
     base: BASE,
     account,
     character,
-    token: `smoke-swim-${tag}-${RUN}`,
+    token: smokeToken("swim", { role: tag, id: RUN }),
     log,
     fail: observer ? (msg: string) => fail(`observer account ${OBSERVER_ACCOUNT}: ${msg}${observerBusyHint}`) : fail,
     // The observer's account is meant to be free: one short retry, then a
@@ -148,7 +149,7 @@ function fixtureCtx(account: string, character: string, tag: string): FixtureCon
     // to wait out.
     ...(observer ? { contendedDeadlineMs: 5_000, contendedRetryMs: 5_000 } : {}),
     createAndLogout: async () => {
-      const client = await connect({ baseUrl: BASE, token: `smoke-swim-${tag}-${RUN}-create`, secret: MODULE_SECRET });
+      const client = await connect({ baseUrl: BASE, token: `${smokeToken("swim", { role: tag, id: RUN })}-create`, secret: MODULE_SECRET });
       try {
         if (observer) await observerLogin(client, ctx);
         else await createSessionWithBackoff(client, account, character);
@@ -165,7 +166,7 @@ async function placeAndLogin(account: string, character: string, tag: string, sc
   const ctx = fixtureCtx(account, character, tag);
   await ensureFixtureCharacter(ctx);
   await applyScenario(ctx, scenario);
-  const client = await connect({ baseUrl: BASE, token: `smoke-swim-${tag}-${RUN}-play`, secret: MODULE_SECRET });
+  const client = await connect({ baseUrl: BASE, token: `${smokeToken("swim", { role: tag, id: RUN })}-play`, secret: MODULE_SECRET });
   if (tag === "obs") await observerLogin(client, ctx);
   else await createSessionWithBackoff(client, account, character);
   const want = SCENARIOS[scenario].position;

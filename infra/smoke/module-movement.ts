@@ -17,13 +17,14 @@
 
 import { authHeaders } from "./lib/auth";
 import { moduleBase, moduleWsBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
 
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
-const TOKEN = `probe-move-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("module-movement");
 // Fixed name: POST /session reuses an existing character, so repeated probe
 // runs do not eat into the realm's 10-characters-per-account cap.
 const CHARACTER = "Benchmove";

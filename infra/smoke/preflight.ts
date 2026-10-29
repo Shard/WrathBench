@@ -39,12 +39,13 @@
 import { authHeaders } from "./lib/auth";
 import { accountFixtureName } from "./lib/fixture";
 import { moduleBase, moduleWsBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // Session tokens must be at least 32 characters (POST /session: weak_token).
-const TOKEN = `probe-preflight-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("preflight");
 const RACE_HUMAN = 1;
 const CLASS_WARRIOR = 1;
 // Any quest the server knows answers; this is Northshire's first.

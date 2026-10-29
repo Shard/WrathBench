@@ -45,11 +45,12 @@ import { authHeaders } from "./lib/auth";
 import { accountFixtureName } from "./lib/fixture";
 import { failOnce } from "./lib/fail";
 import { moduleBase, moduleWsBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
 
-const TOKEN = `probe-qaccept-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("quest-accept-status");
 // One persistent name, deleted at the START of every run and only logged out at the
 // end: a character that merely disconnects stays in world for the core's
 // 60s WorldSession::expireTime, during which CMSG_CHAR_DELETE is silently

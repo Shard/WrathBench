@@ -23,6 +23,7 @@ import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type Fi
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -79,8 +80,8 @@ async function atMailbox(client: WrathClient, character: string) {
   log(`mailbox ${mailbox.name ?? mailbox.guid} open (frame guid ${box.guid}, ${box.mails.length} mail(s) listed)`);
 }
 
-const tokenS = `smoke-mail-s-${RUN}`;
-const tokenR = `smoke-mail-r-${RUN}`;
+const tokenS = smokeToken("mail", { role: "s", id: RUN });
+const tokenR = smokeToken("mail", { role: "r", id: RUN });
 let sender: WrathClient | undefined;
 let receiver: WrathClient | undefined;
 try {
@@ -138,5 +139,5 @@ try {
   }
   sender?.close();
   receiver?.close();
-  await deleteFixtureCharacters({ base: BASE, account: ACCOUNT, token: `smoke-mail-x-${RUN}`, log }, [SENDER, RECEIVER]);
+  await deleteFixtureCharacters({ base: BASE, account: ACCOUNT, token: smokeToken("mail", { role: "x", id: RUN }), log }, [SENDER, RECEIVER]);
 }

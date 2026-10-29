@@ -15,13 +15,14 @@
 
 import { authHeaders } from "./lib/auth";
 import { moduleBase, moduleWsBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
 
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
-const TOKEN = `probe-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("module-slice");
 // WoW character names are letters only (digits => CHAR_NAME_MIXED_LANGUAGES) and
 // must be unique. A random letter suffix keeps re-runs from colliding.
 function randomName(): string {

@@ -42,12 +42,13 @@
 import { connect } from "@wrathbench/sdk";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
-const TOKEN = `smoke-area-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("area-and-roles");
 // Fixed name, deleted at the START of every run and only logged out at the
 // end. One name per script, so the leftover is always exactly one.
 const CHARACTER = "Smokearea";

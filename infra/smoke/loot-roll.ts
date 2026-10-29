@@ -47,6 +47,7 @@ import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type Fi
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const ACCOUNT_A = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -88,8 +89,8 @@ function fixtureFor(account: string, character: string, token: string): FixtureC
     },
   };
 }
-const TOKEN_A = `smoke-loot-roll-a-${RUN}`;
-const TOKEN_B = `smoke-loot-roll-b-${RUN}`;
+const TOKEN_A = smokeToken("loot-roll", { role: "a", id: RUN });
+const TOKEN_B = smokeToken("loot-roll", { role: "b", id: RUN });
 const fixtureA = fixtureFor(ACCOUNT_A, NAME_A, TOKEN_A);
 const fixtureB = fixtureFor(ACCOUNT_B, NAME_B, TOKEN_B);
 

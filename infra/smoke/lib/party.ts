@@ -11,6 +11,7 @@ import { connect, type MoveResult, type WrathClient } from "@wrathbench/sdk";
 import { LOADOUT_IDS, PARTY_LEVEL, PARTY_MONEY, loadoutFor, type Loadout } from "../../fixtures/loadouts";
 import { DEFAULT_PARTY_ACCOUNTS, defaultStageRequest, type StageRequest } from "../../fixtures/stage-party";
 import { DEADMINES_STAGING_SPOTS } from "../../fixtures/scenarios";
+import { smokeToken } from "./session";
 
 export type PartyMember = { member: string; account: string; character: string; loadout: Loadout };
 
@@ -38,9 +39,12 @@ export function membersOf(req: StageRequest): PartyMember[] {
 export const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
 export const fmt = (p: { x: number; y: number; z?: number }) => `(${p.x.toFixed(1)}, ${p.y.toFixed(1)}${p.z === undefined ? "" : `, ${p.z.toFixed(1)}`})`;
 
-/** Log one member in on its own client; the token is long enough for the module's rule. */
+/** A member's part of a session name: its account, as `inspect audit --smoke <smoke>-<account>` takes it. */
+const accountRole = (m: PartyMember): string => m.account.toLowerCase().replace(/[^a-z0-9]+/g, "");
+
+/** Log one member in on its own client, under the smoke `tag`'s session name for its account. */
 export async function loginMember(base: string, secret: string | undefined, m: PartyMember, tag: string): Promise<WrathClient> {
-  const c = await connect({ baseUrl: base, token: `smoke-${tag}-${m.account}-${crypto.randomUUID()}`, secret, account: m.account });
+  const c = await connect({ baseUrl: base, token: smokeToken(tag, { role: accountRole(m) }), secret, account: m.account });
   await c.createSession({ account: m.account, character: m.character });
   return c;
 }
@@ -149,9 +153,9 @@ export async function walkTo(c: WrathClient, target: { x: number; y: number; z: 
 }
 
 /** Delete the members' characters through the module, failures logged, never thrown (a `finally`). */
-export async function deleteMembers(base: string, secret: string | undefined, party: readonly PartyMember[], log: (s: string) => void): Promise<void> {
+export async function deleteMembers(base: string, secret: string | undefined, party: readonly PartyMember[], tag: string, log: (s: string) => void): Promise<void> {
   for (const m of party) {
-    const c = await connect({ baseUrl: base, token: `smoke-del-${m.account}-${crypto.randomUUID()}`, secret, account: m.account, subscribeEvents: false });
+    const c = await connect({ baseUrl: base, token: smokeToken(tag, { role: `del-${accountRole(m)}` }), secret, account: m.account, subscribeEvents: false });
     try {
       await c.deleteCharacter(m.character, { account: m.account });
       log(`  deleted ${m.character} on ${m.account}`);

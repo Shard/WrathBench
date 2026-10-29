@@ -35,11 +35,12 @@
 const BASE = moduleBase();
 const WS = moduleWsBase();
 
-const TOKEN = `probe-spellbook-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("spellbook");
 import { probeName } from "./lib/name";
 import { authHeaders } from "./lib/auth";
 import { failOnce } from "./lib/fail";
 import { moduleBase, moduleWsBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const CHARACTER = probeName("Bp");
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";

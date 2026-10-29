@@ -26,6 +26,7 @@
 
 import { authHeaders } from "./lib/auth";
 import { moduleBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 
@@ -37,7 +38,7 @@ const BAD_ACCOUNT = process.env.MODULE_BAD_ACCOUNT ?? "WBNOTALLOWED";
 
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
-const TOKEN = `probe-acct-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("module-accounts");
 
 function randomName(): string {
   const letters = "abcdefghijklmnopqrstuvwxyz";

@@ -75,5 +75,5 @@ try {
     c.close();
   }
   if (KEEP && ok) log("--keep: the party stays staged for --recheck after the worldserver recreate");
-  else await deleteMembers(BASE, MODULE_SECRET, party, log);
+  else await deleteMembers(BASE, MODULE_SECRET, party, "party-staging", log);
 }

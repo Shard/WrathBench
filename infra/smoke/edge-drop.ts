@@ -56,6 +56,7 @@ import { EDGE_SKETTIS_BELOW, EDGE_SKETTIS_RIM, SCENARIOS } from "../fixtures/sce
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -104,11 +105,11 @@ const fixtureCtx: FixtureContext = {
   base: BASE,
   account: ACCOUNT,
   character: CHARACTER,
-  token: `smoke-edge-${RUN}`,
+  token: smokeToken("edge-drop", { id: RUN }),
   log,
   fail,
   createAndLogout: async () => {
-    const client = await connect({ baseUrl: BASE, token: `smoke-edge-${RUN}-create`, secret: MODULE_SECRET });
+    const client = await connect({ baseUrl: BASE, token: `${smokeToken("edge-drop", { id: RUN })}-create`, secret: MODULE_SECRET });
     try {
       await createSessionWithBackoff(client);
       await client.logout();
@@ -155,7 +156,7 @@ async function main(): Promise<void> {
   log(`${CHARACTER} on ${ACCOUNT}: ${SCENARIO} on the rim, map ${want.map} ${fmt(want)}, the lowland ${fmt(target)}`);
   await ensureFixtureCharacter(fixtureCtx);
   await applyScenario(fixtureCtx, SCENARIO);
-  const client = await connect({ baseUrl: BASE, token: `smoke-edge-${RUN}`, secret: MODULE_SECRET });
+  const client = await connect({ baseUrl: BASE, token: smokeToken("edge-drop", { id: RUN }), secret: MODULE_SECRET });
   try {
     await createSessionWithBackoff(client);
     const at = await selfPosition(client);
@@ -173,7 +174,7 @@ async function main(): Promise<void> {
       const reached = raw.reachedPos ? `, reachedPos ${fmt(raw.reachedPos)}` : "";
       fail(
         `unforced move off the plateau answered ${raw.status}${reached}, want drop at the edge past the mesh (a module before the edge drop answers path_incomplete); ` +
-          `why, from the module's own record: bun wb inspect audit --smoke edge --op move_edge_drop --since 1h`,
+          `why, from the module's own record: bun wb inspect audit --smoke edge-drop --op move_edge_drop --since 1h`,
       );
     }
     if (!raw.reachedPos) fail(`drop carries no reachedPos: ${JSON.stringify(raw)}`);

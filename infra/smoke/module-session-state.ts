@@ -17,6 +17,7 @@
 
 import { authHeaders } from "./lib/auth";
 import { moduleBase, moduleWsBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -26,7 +27,7 @@ const WS = moduleWsBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
-const TOKEN = `probe-state-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("module-session-state");
 
 function randomName(): string {
   const letters = "abcdefghijklmnopqrstuvwxyz";

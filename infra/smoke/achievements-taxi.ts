@@ -45,11 +45,12 @@ import { accountFixtureName, applyScenario, ensureFixtureCharacter, type Fixture
 import { authHeaders } from "./lib/auth";
 import { failOnce } from "./lib/fail";
 import { moduleBase, moduleWsBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
 
-const TOKEN = `probe-achievements-taxi-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("achievements-taxi");
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 const CHARACTER = process.env.SMOKE_CHARACTER ?? accountFixtureName("Tx", ACCOUNT);
 const SCENARIO = "taxi-ironforge";

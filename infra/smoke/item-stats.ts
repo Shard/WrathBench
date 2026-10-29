@@ -23,10 +23,11 @@ import { connect } from "@wrathbench/sdk";
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
-const TOKEN = `smoke-item-stats-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("item-stats");
 const CHARACTER = probeName("Bi");
 const SLOT_LEGS = 6;
 const CLASS_ARMOR = 4;

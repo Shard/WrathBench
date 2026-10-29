@@ -74,11 +74,12 @@ import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./li
 import { authHeaders } from "./lib/auth";
 import { failOnce } from "./lib/fail";
 import { moduleBase, moduleWsBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
 
-const TOKEN = `probe-killcredit-${crypto.randomUUID()}`;
+const TOKEN = smokeToken("kill-credit");
 // Persistent fixture character. Nothing is deleted: the placed rows are the
 // starting state, and `apply.ts` rewrites them (level, position, quest log)
 // before every run. `--character` overrides the name, as travel.ts allows.

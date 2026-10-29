@@ -63,6 +63,7 @@ import { SCENARIOS, type ScenarioName } from "../fixtures/scenarios";
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
+import { smokeToken } from "./lib/session";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -208,11 +209,11 @@ const fixtureCtx: FixtureContext = {
   base: BASE,
   account: ACCOUNT,
   character: CHARACTER,
-  token: `smoke-steep-${RUN}`,
+  token: smokeToken("steep-replan", { id: RUN }),
   log,
   fail,
   createAndLogout: async () => {
-    const client = await connect({ baseUrl: BASE, token: `smoke-steep-${RUN}-create`, secret: MODULE_SECRET });
+    const client = await connect({ baseUrl: BASE, token: `${smokeToken("steep-replan", { id: RUN })}-create`, secret: MODULE_SECRET });
     try {
       await createSessionWithBackoff(client);
       await client.logout();
@@ -247,7 +248,7 @@ async function runStart(start: Start, n: number, outcomes: Outcome[]): Promise<v
   const want = SCENARIOS[start.scenario].position;
   log(`${start.scenario}: map ${want.map} ${fmt(want)} — ${start.repros.map((r) => r.id).join(", ")}`);
   await applyScenario(fixtureCtx, start.scenario);
-  const token = `smoke-steep-${RUN}-${n}`;
+  const token = `${smokeToken("steep-replan", { id: RUN })}-${n}`;
   const client = await connect({ baseUrl: BASE, token, secret: MODULE_SECRET });
   try {
     await createSessionWithBackoff(client);
