@@ -43,8 +43,8 @@
       "name": "@wrathbench/runner",
       "version": "0.0.0",
       "dependencies": {
-        "@wrathbench/mcp": "workspace:0.1.0",
-        "@wrathbench/sdk": "workspace:0.1.0",
+        "@wrathbench/mcp": "workspace:0.2.0",
+        "@wrathbench/sdk": "workspace:0.2.0",
         "@wrathbench/wiki": "workspace:*",
         "zod": "4.4.3",
       },
@@ -55,7 +55,7 @@
     },
     "wrath-mcp/mcp": {
       "name": "@wrathbench/mcp",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@wrathbench/sdk": "workspace:*",
         "zod": "4.4.3",
@@ -63,7 +63,7 @@
     },
     "wrath-mcp/sdk": {
       "name": "@wrathbench/sdk",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "zod": "4.4.3",
       },
