@@ -706,6 +706,34 @@ describe("cooperative abort on timeout", () => {
     await stub.stop();
   });
 
+  test("the HUD snapshot carries each unit's reaction, and the nearby line marks the hostile one (operator, 2026-10-29)", async () => {
+    // Invented FactionTemplate rows in the module's factionRow* shape: our own
+    // (group 1|2, hostile to 4|8), a monster that fights group 1, a critter
+    // with no relations, and a unit whose rows were never served.
+    const stub = startModuleStub();
+    const host = makeHost({ moduleUrl: stub.url });
+    await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
+    const row = (template: number, faction: number, group: number, friendGroup: number, enemyGroup: number) =>
+      `faction: ${template}, factionRow: ${template}, factionRowFaction: ${faction}, factionRowFlags: 0, ` +
+      `factionRowGroup: ${group}, factionRowFriendGroup: ${friendGroup}, factionRowEnemyGroup: ${enemyGroup}, factionRowRepIndex: -1`;
+    const world =
+      `events.ingest(JSON.stringify({ seq: 1, opcode: "SMSG_UPDATE_OBJECT", opcodeId: 0x0a9, ts: Date.now(), data: { blocks: 4, objects: [` +
+      ` { update: "values", guid: "7", fields: { race: 1, class: 1, ${row(900, 901, 3, 2, 12)} } },` +
+      ` { update: "create", guid: "5001", objectType: "unit", entry: 6, pos: { x: 3, y: 4, z: 0, o: 0 }, fields: { health: 50, maxHealth: 50, level: 2, ${row(1, 11, 8, 0, 7)} } },` +
+      ` { update: "create", guid: "5002", objectType: "unit", entry: 721, pos: { x: 6, y: 8, z: 0, o: 0 }, fields: { health: 5, maxHealth: 5, level: 1, ${row(3, 13, 0, 0, 0)} } },` +
+      ` { update: "create", guid: "5003", objectType: "unit", entry: 38, pos: { x: 9, y: 12, z: 0, o: 0 }, fields: { health: 50, maxHealth: 50, level: 3 } }] } })); 'ok'`;
+    expect((await host.evalSnippet(world)).ok).toBe(true);
+    const snap = (await host.stateSnapshot()) as SnapshotLike;
+    const reactionOf = (guid: string) => (snap.units ?? []).find((u) => u.guid === guid)?.reaction;
+    expect(reactionOf("5001")).toBe("hostile");
+    expect(reactionOf("5002")).toBe("neutral");
+    expect(reactionOf("5003")).toBeUndefined();
+    const nearby = formatStateSummary(snap, { sessionLive: true }).split("\n").find((l) => l.startsWith("nearby: "))!;
+    expect(nearby.match(/ hostile \(/g)).toHaveLength(1);
+    await host.stop();
+    await stub.stop();
+  });
+
   test("a routine launched by a snippet that returned normally is never aborted by a later timeout", async () => {
     // The routine must outlive the second snippet's timeout (sleep > timeout)
     // to prove it was not aborted, and resolve inside the third snippet's

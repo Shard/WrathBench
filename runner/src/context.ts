@@ -159,6 +159,8 @@ export interface UnitLike {
   questGiver?: unknown;
   /** What it has selected (`UNIT_FIELD_TARGET`), when observed. */
   targetGuid?: unknown;
+  /** How it regards us, as the SDK reads it (`hostile`, `neutral`, `friendly`); absent until its faction rows are served. */
+  reaction?: unknown;
   /** Party members only: the unit's own health, as the party frame reads it. Never carried for a mob. */
   health?: unknown;
   maxHealth?: unknown;
@@ -725,7 +727,7 @@ function actionable(u: UnitLike): boolean {
  * Which NEARBY_CAP of the objects in view the nearby line names, nearest first
  * as before. In a town the nearest six were guards — a questgiver made the
  * line in a handful of a run's turns — so the slots go, in order: to anything
- * alive that has you targeted (the only hostility the snapshot shows); to the
+ * alive that has you targeted (the one sign of aggression the snapshot shows); to the
  * NEARBY_NEAREST nearest, whatever they are, so a mob that has not picked you
  * yet is still in sight; to NPCs you can act on (a quest to take or hand in, a
  * vendor, trainer, flight master, innkeeper or banker); then to the rest by
@@ -746,7 +748,16 @@ function pickNearby(units: readonly UnitLike[], selfGuid: string | undefined): U
   return [...chosen].sort((a, b) => a - b).map((i) => units[i]!);
 }
 
-/** One nearby entry: name, a rank other than normal, dead-when-known, roles with the quest marker, distance. */
+/**
+ * One nearby entry: name, a rank other than normal, "hostile" for a living
+ * unit that is, dead-when-known, roles with the quest marker, distance.
+ *
+ * The hostile mark is the client's red name (operator, 2026-10-29): the SDK's
+ * own reading of the unit's faction rows against ours. Only hostile is
+ * marked, so the common cases cost nothing: neutral and friendly print bare,
+ * as does a unit whose rows have not been served (unknown is never guessed),
+ * and a dead one, which no longer fights whatever its faction.
+ */
 function nearbyLabel(u: UnitLike): string {
   // A player's corpse has no name of its own and is dead by what it is: it is
   // named by its owner, as a client's tooltip names it.
@@ -760,13 +771,14 @@ function nearbyLabel(u: UnitLike): string {
       : "(unnamed)";
   const rank = typeof u.rank === "string" && u.rank !== "normal" ? ` ${u.rank}` : "";
   const dead = u.dead === true && !corpse ? " dead" : "";
+  const hostile = u.reaction === "hostile" && dead === "" && !corpse ? " hostile" : "";
   const dist = typeof u.distance === "number" ? `${u.distance}y` : "?y";
   const offer = questOffer(u);
   const roles = fmtRoles(u.roles)
     .split(", ")
     .filter((r) => r !== "" && !(offer !== undefined && r === "quest giver"));
   if (offer !== undefined) roles.unshift(`quest giver: ${offer}`);
-  return `${name}${rank}${dead} (${roles.length === 0 ? "" : `${roles.join(", ")}, `}${dist})`;
+  return `${name}${rank}${hostile}${dead} (${roles.length === 0 ? "" : `${roles.join(", ")}, `}${dist})`;
 }
 
 /**
@@ -1216,7 +1228,7 @@ export function formatStateSummary(
 
   // nearby — from state.units() semantics (nearest first, items/containers
   // dropped by the sandbox), which six by `pickNearby`. Name + roles + distance
-  // + dead-when-known; never mob health.
+  // + hostile + dead-when-known (`nearbyLabel`); never mob health.
   const units = snapshot.units;
   if (units === undefined) {
     lines.push("nearby: unobserved");
