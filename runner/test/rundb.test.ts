@@ -265,11 +265,14 @@ db.close();
 `,
 );
 
-test("finish waits out a reader's statement before leaving WAL", async () => {
+test("finish waits out a reader's statement before leaving WAL, its waits awaited", async () => {
   const runDir = join(dir, "wal-finish-read");
   const t = new Trajectory(runDir, { wal: true });
   await t.recordMove("r", { ts: 1, moveId: 1, map: 0, x: 1, y: 2, z: 3 });
-  const mode = await whileReading(join(runDir, "run.sqlite"), 800, () => t.finish({ sleep: async () => undefined }));
+  let beats = 0;
+  const timer = setInterval(() => beats++, 20);
+  const mode = await whileReading(join(runDir, "run.sqlite"), 800, () => t.finish()).finally(() => clearInterval(timer));
+  expect(beats).toBeGreaterThan(5);
   expect(mode).toBe("delete");
   expect(readdirSync(runDir).filter((f) => f.startsWith("run.sqlite"))).toEqual(["run.sqlite"]);
 }, 20_000);
@@ -448,6 +451,25 @@ describe("the run's writer retries a real lock without stopping the event loop",
     // The record went first, so the verdict survives the row (models.ts reads it).
     expect(recs.filter((r) => r.t === "termination")).toHaveLength(1);
     expect(t.runRow("r")?.["termination_reason"]).toBeNull();
+    await t.finish();
+  }, 20_000);
+
+  test("the waits are the run's: writes queued behind one that gave up get one attempt each, not a round of their own", async () => {
+    const runDir = join(dir, "retry-latch");
+    const waits: number[] = [];
+    const t = new Trajectory(runDir, { wal: true, busyTimeoutMs: 30, retry: { waitsMs: [100, 100, 100], sleep: (ms) => (waits.push(ms), Bun.sleep(ms)) } });
+    const outcomes = await whileWriting(join(runDir, "run.sqlite"), 2500, () =>
+      Promise.allSettled([
+        t.recordMove("r", { ts: 1, moveId: 1, map: 0, x: 1, y: 2, z: 3 }),
+        t.recordMove("r", { ts: 2, moveId: 2, map: 0, x: 1, y: 2, z: 3 }),
+        t.recordMove("r", { ts: 3, moveId: 3, map: 0, x: 1, y: 2, z: 3 }),
+      ]),
+    );
+    expect(outcomes.map((o) => o.status)).toEqual(["rejected", "rejected", "rejected"]);
+    expect(waits).toEqual([100, 100, 100]);
+    expect(readTrajectory(runDir).filter((r) => r.t === "harness" && r["kind"] === "rundb_retry")).toHaveLength(3);
+    // The lock gone, the next write lands at once and the run's budget is whole again.
+    await t.recordMove("r", { ts: 4, moveId: 4, map: 0, x: 1, y: 2, z: 3 });
     await t.finish();
   }, 20_000);
 

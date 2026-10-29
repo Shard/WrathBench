@@ -742,6 +742,8 @@ export class Trajectory {
   private readonly retry: RunDbRetryOptions | null;
   /** The last write still retrying, settled either way; null when none is. Every later write waits behind it. */
   private tail: Promise<void> | null = null;
+  /** A write spent its retries on a lock and gave up; until one lands, writes get one attempt and no waits. */
+  private failing = false;
 
   constructor(
     dir: string,
@@ -793,9 +795,14 @@ export class Trajectory {
    * write that succeeds is on disk before this returns, whoever awaits it.
    *
    * Writes keep their order: while one is retrying, every later write queues
-   * behind it rather than racing it, and runs (with its own retries) once it
-   * has settled. Each retry is a `harness` record, `rundb_retry`, in the
-   * trajectory; `what` names the write there.
+   * behind it rather than racing it, and runs once it has settled. Each retry
+   * is a `harness` record, `rundb_retry`, in the trajectory; `what` names the
+   * write there.
+   *
+   * The waits are the run's, not each write's: once a write has spent them
+   * and given up, every write after it gets one attempt and no waits until
+   * one lands (`failing`), so a lock that outlasts the retries ends the run
+   * within one round of them rather than one round per queued write.
    *
    * Only the statement is retried, never the record a method appends beside
    * it, so a retried pause is still one pause record.
@@ -810,16 +817,32 @@ export class Trajectory {
       this.append({ t: "harness", kind: "rundb_retry", write: what, attempt: r.attempt, waitMs: r.waitMs, error: r.error });
       retry.onRetry?.(r);
     };
+    const attempt = (firstError?: unknown): Promise<void> =>
+      retryRunDbWrite(op, {
+        ...retry,
+        onRetry,
+        ...(this.failing ? { waitsMs: [] } : {}),
+        ...(firstError !== undefined ? { firstError } : {}),
+      }).then(
+        () => {
+          this.failing = false;
+        },
+        (e: unknown) => {
+          if (isTransientRunDbError(e)) this.failing = true;
+          throw e;
+        },
+      );
     if (this.tail === null) {
       try {
         op();
+        this.failing = false;
         return SETTLED;
       } catch (e) {
         if (!isTransientRunDbError(e)) throw e;
-        return this.track(retryRunDbWrite(op, { ...retry, onRetry, firstError: e }));
+        return this.track(attempt(e));
       }
     }
-    return this.track(this.tail.then(() => retryRunDbWrite(op, { ...retry, onRetry })));
+    return this.track(this.tail.then(() => attempt()));
   }
 
   /** Make `p` the write every later one waits behind, until it settles. */

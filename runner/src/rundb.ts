@@ -137,6 +137,9 @@ export const RUN_DB_BUSY_TIMEOUT_MS = 5000;
  * `RUN_DB_BUSY_TIMEOUT_MS` plus the thirty seconds of waits, about fifty
  * seconds, inside the two minutes after which a cold heartbeat reads as a dead
  * runner; and the waits are asynchronous, so the heartbeat beats through them.
+ * The budget is the run's, not each write's: after a write gives up, the
+ * writes behind it (the termination's included) get one attempt each
+ * (`Trajectory.write`).
  */
 export const RUN_DB_RETRY_WAITS_MS: readonly number[] = [5_000, 10_000, 15_000];
 
@@ -235,13 +238,34 @@ export async function leaveWalPatiently(
 ): Promise<string> {
   const attempts = opts.attempts ?? 20;
   const sleep = opts.sleep ?? ((ms: number) => Bun.sleep(ms));
-  let mode = leaveWal(db);
-  for (let i = 1; i < attempts && mode === "wal"; i++) {
-    await sleep(opts.waitMs ?? 250);
-    mode = leaveWal(db);
+  // Each switch waits a reader's statement out under the busy timeout, which
+  // blocks this thread; a short one per attempt keeps a long scan from
+  // holding the runner's exit for attempts × five seconds. The waits between
+  // attempts are awaited. The checkpoint at the end gets the full timeout.
+  const timeout = Number((db.query("PRAGMA busy_timeout").get() as { timeout?: unknown } | null)?.timeout ?? RUN_DB_BUSY_TIMEOUT_MS);
+  db.exec(`PRAGMA busy_timeout = ${LEAVE_WAL_BUSY_TIMEOUT_MS}`);
+  let mode: string;
+  try {
+    mode = leaveWal(db, { checkpoint: false });
+    for (let i = 1; i < attempts && mode === "wal"; i++) {
+      await sleep(opts.waitMs ?? 250);
+      mode = leaveWal(db, { checkpoint: false });
+    }
+  } finally {
+    db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(timeout))}`);
+  }
+  if (mode === "wal") {
+    try {
+      db.query("PRAGMA wal_checkpoint(TRUNCATE)").get();
+    } catch {
+      /* a checkpoint that cannot run leaves the WAL for the next writer */
+    }
   }
   return mode;
 }
+
+/** Each of `leaveWalPatiently`'s attempts waits at most this long for a reader's statement. */
+const LEAVE_WAL_BUSY_TIMEOUT_MS = 250;
 
 /**
  * Whether a thrown error is a lock the next attempt may not meet: SQLITE_BUSY
