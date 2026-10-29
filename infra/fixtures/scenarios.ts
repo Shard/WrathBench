@@ -197,6 +197,12 @@ const VINEYARD_NEAREST_VERMIN = { x: -8783.05, y: -161.565 };
 // is the zone id the core stores for Northshire Valley's parent).
 const HUMAN_START = { map: 0, zone: 12, x: -8949.95, y: -132.493, z: 83.5312, o: 0 };
 
+// The Acherus heights (map 609, Ebon Hold's top platform): one of the two Eye
+// of Acherus Control Mechanisms (gameobject 191609, acore_world.gameobject
+// guid 65961) and a standing spot within interaction range of it.
+const ACHERUS_EYE_MECHANISM = { x: 2344.52, y: -5698.26, z: 426.03 };
+const ACHERUS_EYE_STAND = { x: 2341.5, y: -5694.5, z: 426.03 };
+
 // The Coldridge Valley road below the pass, and the tunnel's south mouth it
 // faces: both are `creature` spawn rows on map 0 (a Coldridge Mountaineer and
 // Wren Darkspring), the same landmarks `infra/smoke/travel.ts` leg 1 walks. A
@@ -600,6 +606,36 @@ export const SCENARIOS = {
     // (LootMgr: a start-quest item is hidden once the quest is in the log or
     // rewarded), so the log is wiped every run.
     clearQuests: true,
+  },
+  // The Death Knight start's first vehicle, for the eye-of-acherus smoke. Two
+  // scenarios because a Death Knight cannot be created on an account without a
+  // level-55 character (CharacterCreating.MinLevelForHeroicCharacter): the
+  // sponsor is that character, placed and never played; the knight stands on
+  // the Acherus heights by an Eye of Acherus Control Mechanism (gameobject
+  // 191609 at 2344.52, -5698.26 on map 609), a goober that takes
+  // CMSG_GAMEOBJ_USE from a character with Death Comes From On High (12641)
+  // in its log and casts its spell (51888), which summons the Eye and
+  // possesses it for the user. The chain before it is turned in so the log
+  // is the one a player has at that point.
+  "acherus-sponsor": {
+    description: "level 55 at the human start with nothing else: the account's qualifying character for a Death Knight create",
+    level: 55,
+    xp: 0,
+    money: 0,
+    position: { ...HUMAN_START },
+    homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
+    clearQuests: true,
+  },
+  "acherus-eye": {
+    description:
+      "level 55 on the Acherus heights (map 609) within reach of an Eye of Acherus Control Mechanism, Death Comes From On High (12641) in the log and its chain turned in",
+    level: 55,
+    xp: 0,
+    money: 0,
+    position: { map: 609, zone: 4298, ...ACHERUS_EYE_STAND, o: facing(ACHERUS_EYE_STAND, ACHERUS_EYE_MECHANISM) },
+    homebind: { map: 609, zone: 4298, ...ACHERUS_EYE_STAND },
+    clearQuests: true,
+    quests: { rewarded: [12593, 12619, 12842, 12848, 12636], inProgress: [12641] },
   },
   "vineyard-warlock": {
     description:
