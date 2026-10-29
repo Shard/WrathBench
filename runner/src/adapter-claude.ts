@@ -652,6 +652,19 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
    * CLI has NOT been signalled, and every tool call is being refused.
    */
   let windDown: WindDown | null = null;
+  /*
+   * The verdict's row write. `endEpisode` and `pauseEpisode` are called from
+   * stream callbacks that cannot wait, and the write's first attempt is
+   * synchronous; one that met a lock retries in the background
+   * (`Trajectory.write`). Kept here, with a handler so it is never an
+   * unhandled rejection, and awaited by `finish`: a verdict whose row write
+   * gave up throws out of the episode exactly as a synchronous failure did.
+   */
+  let rowWrite: Promise<unknown> = Promise.resolve();
+  const noteRowWrite = (p: Promise<unknown>): void => {
+    p.catch(() => undefined);
+    rowWrite = p;
+  };
   const endEpisode = (
     reason: TerminationReason,
     detail?: string,
@@ -661,7 +674,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     if (ended !== null) return;
     ended = { reason, detail };
     if (record !== undefined) trajectory.append(record);
-    trajectory.setTermination(runId, reason, detail);
+    noteRowWrite(trajectory.setTermination(runId, reason, detail));
     // The termination is on record either way. What differs is whether the CLI
     // is killed now or given a bounded chance to close its turn — see the
     // header. Only the harness's own limits wind down, and only mid-turn:
@@ -680,12 +693,13 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   const pauseEpisode = (reason: PauseReason, detail: string): void => {
     if (ended !== null || pausedAs !== null) return;
     pausedAs = { reason, detail };
-    trajectory.setPause(runId, reason, detail, watchdogs.elapsedMs());
+    noteRowWrite(trajectory.setPause(runId, reason, detail, watchdogs.elapsedMs()));
     killClaude();
   };
   /** Whether an end or a pause is already on record. */
   const done = (): boolean => ended !== null || pausedAs !== null;
-  const finish = (): LoopOutcome => {
+  const finish = async (): Promise<LoopOutcome> => {
+    await rowWrite;
     const e = ended as { reason: TerminationReason; detail?: string } | null;
     const p = pausedAs as { reason: PauseReason; detail: string } | null;
     if (e === null && p !== null) return { kind: "paused", reason: p.reason, detail: p.detail };
@@ -695,15 +709,15 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
       : { kind: "terminated", reason: e.reason, detail: e.detail };
   };
 
-  const terminate = (reason: TerminationReason, detail?: string): LoopOutcome => {
+  const terminate = async (reason: TerminationReason, detail?: string): Promise<LoopOutcome> => {
     if (done()) return finish();
     endEpisode(reason, detail);
     return finish();
   };
   /** `notBefore`: a usage window's reset, which the supervisor waits for (`subscription-usage.ts`). */
-  const pause = (reason: PauseReason, detail: string, notBefore?: number): LoopOutcome => {
+  const pause = async (reason: PauseReason, detail: string, notBefore?: number): Promise<LoopOutcome> => {
     if (done()) return finish(); // a recorded termination (or pause) wins over a late pause
-    trajectory.setPause(runId, reason, detail, watchdogs.elapsedMs(), notBefore);
+    await trajectory.setPause(runId, reason, detail, watchdogs.elapsedMs(), notBefore);
     return notBefore !== undefined ? { kind: "paused", reason, detail, notBefore } : { kind: "paused", reason, detail };
   };
 
@@ -949,7 +963,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   // The lane's newest reading from before this run (`SubscriptionUsageTracker.seed`).
   usage.seed(newestLaneUsage(config.runsDir, usage.lane));
   /** A spent quota's pause, waiting for its window's reset when one is known. */
-  const quotaPause = (l: { reason: PauseReason; detail: string; resetAt?: number }): LoopOutcome => {
+  const quotaPause = (l: { reason: PauseReason; detail: string; resetAt?: number }): Promise<LoopOutcome> => {
     const notBefore = l.reason === "quota-exhausted" ? usage.quotaReset(Date.now(), l.resetAt, cliModel ?? config.model) : undefined;
     return notBefore !== undefined
       ? pause(l.reason, `${l.detail} (usage window resets ${new Date(notBefore).toISOString()})`, notBefore)

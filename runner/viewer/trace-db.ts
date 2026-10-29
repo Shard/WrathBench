@@ -19,9 +19,9 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { existsSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { openRunDb } from "../src/rundb";
+import { openRunDb, runDbStat } from "../src/rundb";
 import type { PositionTrace, TraceChatKind, TraceIndexResponse, TraceSegment, TrackTrace } from "./api-types";
 import {
   CONTEXT_MS,
@@ -222,8 +222,9 @@ export function readPositionTrace(runsDir: string, runId: string, now: number): 
 }
 
 /**
- * The closed-window list a track carries, memoised per run on the database
- * file's size and mtime.
+ * The closed-window list a track carries, memoised per run on the database's
+ * size and mtime (`runDbStat`: the file and its `-wal`, where a live run's
+ * commits land until a checkpoint).
  *
  * The publisher asks every run's track on every pass, and almost every run is
  * finished: without this, each pass opens every `run.sqlite` in the tree to
@@ -241,7 +242,8 @@ export function traceSegsMemo(): (runsDir: string, runId: string, now: number) =
     let size: number;
     let mtimeMs: number;
     try {
-      const st = statSync(path);
+      const st = runDbStat(join(runsDir, runId));
+      if (st === null) throw new Error("no run.sqlite");
       size = st.size;
       mtimeMs = st.mtimeMs;
     } catch {

@@ -128,16 +128,18 @@ spec:
             periodSeconds: 10
           resources: {{ toYaml .Values.viewer.resources | nindent 12 }}
           volumeMounts:
-            # Read-only, and the viewer is written to be: "Everything here
-            # reads. The runs directory is never written to, and each
-            # run.sqlite is opened readonly so a live writer is untouched."
+            # The viewer is written to read only: "Everything here reads. The
+            # runs directory is never written to, and each run.sqlite is
+            # opened readonly so a live writer is untouched." The mount is
+            # writable anyway, because a live run's run.sqlite is in WAL
+            # (runner/src/rundb.ts) and a readonly handle on a WAL-mode file
+            # creates and maps its -wal and -shm beside it.
             # Run listings come from the derived store; what is still read
             # here is the live-progress path — the account ledger, the live
             # map, and a run page's own trajectory tail.
             - name: data
               mountPath: /wrathbench/data/runs
               subPath: runs
-              readOnly: true
             - name: data
               mountPath: /wrathbench/data/minimap
               subPath: minimap

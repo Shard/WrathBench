@@ -12,6 +12,13 @@ group-writable, which is what lets uid 1000 write it without a seed step).
 Every pod mounts it as subPaths, at once, which RWO permits only because
 every one of them is nodeSelector'd to the same node.
 
+That is also what makes run.sqlite's WAL correct (runner/src/rundb.ts): its
+-shm is shared memory, mapped by the runner and every reader, and works only
+when all of them run on one kernel over a local filesystem. A block class
+(iSCSI, local disk) with every pod on one node is that; an NFS or other
+shared-filesystem class, or pods on two nodes, is not, and is not supported
+for `data`.
+
 `db` is the MySQL datadir and nothing else.
 
 `codex-home` is the `codex` driver's subscription lane: a logged-in Codex home

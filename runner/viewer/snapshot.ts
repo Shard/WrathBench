@@ -310,8 +310,12 @@ export interface PublishedTrace {
  */
 export const COLD_MS = 15 * 60_000;
 
-/** The files the per-run routes read. A run's derived-store rows are derived from these. */
-const RUN_INPUT_FILES = ["meta.json", "trajectory.jsonl", "run.sqlite", "scratchpad.md"] as const;
+/**
+ * The files the per-run routes read. A run's derived-store rows are derived
+ * from these. `run.sqlite-wal` with them: a live run's commits land there
+ * until a checkpoint (runner/src/rundb.ts), and it is absent at rest.
+ */
+const RUN_INPUT_FILES = ["meta.json", "trajectory.jsonl", "run.sqlite", "run.sqlite-wal", "scratchpad.md"] as const;
 
 /**
  * Everything a cold run's four objects are a function of, hashed, or null when

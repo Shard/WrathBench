@@ -628,9 +628,17 @@ async function main(): Promise<void> {
   }
 
   const runDir = join(config.runsDir, config.runId);
-  const trajectory = new Trajectory(runDir);
+  // The run's own writer: run.sqlite in WAL while this process writes it, so a
+  // reader never holds up a write, and a write that still meets a lock is
+  // retried rather than ending the run (runner/src/rundb.ts).
+  const trajectory = new Trajectory(runDir, { wal: true, retry: true });
   // From here until the process exits, however it exits short of a SIGKILL.
   const stopHeartbeat = startHeartbeat(runDir, `${hostname()} ${process.pid}`);
+  if (trajectory.journal !== null && trajectory.journal.mode !== "wal") {
+    // A resumed run whose file a reader held at the switch: this segment
+    // writes on the rollback journal (busy timeout and retries still apply).
+    trajectory.append({ t: "harness", kind: "rundb_journal", mode: trajectory.journal.mode, detail: trajectory.journal.error ?? "" });
+  }
   process.on("exit", stopHeartbeat);
   // The live map's ring is live only (`nearby.ts`): the ticker's stop removes
   // it on every exit a driver makes, and this catches the ones it does not —
@@ -674,7 +682,7 @@ async function main(): Promise<void> {
   const serverBuild = await fetchServerBuild(config.moduleUrl);
   const comparability = comparabilityOf(config, version, serverBuild, wikiBundle);
   if (!resumed) {
-    trajectory.writeMeta({
+    await trajectory.writeMeta({
       runId: config.runId,
       harnessVersion: version,
       sdkVersion: SDK_VERSION,
@@ -704,7 +712,7 @@ async function main(): Promise<void> {
       });
     }
   } else {
-    trajectory.clearPause(config.runId);
+    await trajectory.clearPause(config.runId);
     trajectory.append({
       t: "resume",
       harnessVersion: version,
@@ -727,7 +735,7 @@ async function main(): Promise<void> {
         // conversation should be exactly what the scratchpad note says it is.
         ...(DRIVER_TABLE[config.driver].kind === "scaffold" ? { resumedFresh: true } : {}),
       };
-      trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, sdkVersion: SDK_VERSION, stackCommit: stack, config, comparability });
+      await trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, sdkVersion: SDK_VERSION, stackCommit: stack, config, comparability });
     }
     /*
      * A resume may tighten the leash (`--max-turns`, `--watchdogs-json`), and a
@@ -746,7 +754,7 @@ async function main(): Promise<void> {
        * launch build would have the run row and its own tuple naming two
        * different versions — on charts whose entire claim is comparability.
        */
-      trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, sdkVersion: SDK_VERSION, stackCommit: stack, config, comparability });
+      await trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, sdkVersion: SDK_VERSION, stackCommit: stack, config, comparability });
       trajectory.append({
         t: "harness",
         kind: "comparability_restamped",
@@ -772,7 +780,7 @@ async function main(): Promise<void> {
           `weak_token). No live session is stranded — the nightly worldserver recreate clears ` +
           `every module session.`,
       );
-      trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, sdkVersion: SDK_VERSION, stackCommit: stack, config, comparability });
+      await trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, sdkVersion: SDK_VERSION, stackCommit: stack, config, comparability });
       trajectory.append({ t: "harness", kind: "token_regenerated", reason: "weak_stored_token" });
     }
   }
@@ -867,7 +875,13 @@ async function main(): Promise<void> {
       // Nor does it move a pause already there: a run that paused on its
       // provider and is then stopped keeps that pause's reason AND its
       // instant, which is what the resume cadence counts from.
-      if (!ended) trajectory.pauseWithMark(config.runId, pauseMark(req), readMeta(runDir) ?? metaNow());
+      // The record, the row's first attempt and the mark land before this
+      // returns; a row that met a lock keeps retrying behind it.
+      if (!ended) {
+        trajectory.pauseWithMark(config.runId, pauseMark(req), readMeta(runDir) ?? metaNow()).catch((err: unknown) => {
+          console.error(`[wrathbench] could not write the pause row: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
     } catch (err) {
       console.error(`[wrathbench] could not write the pause record at once: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -893,10 +907,11 @@ async function main(): Promise<void> {
       const row = trajectory.runRow(config.runId);
       const recorded = row !== null && ((row["termination_reason"] ?? null) !== null || (row["pause_reason"] ?? null) !== null);
       if (!recorded) {
+        // The exit follows at once: a backstop does not wait on a lock.
         if (req.kind === "pause") {
-          trajectory.pauseWithMark(config.runId, pauseMark({ reason: req.reason, detail: `${req.detail} (backstop)` }), readMeta(runDir) ?? metaNow());
+          trajectory.pauseWithMark(config.runId, pauseMark({ reason: req.reason, detail: `${req.detail} (backstop)` }), readMeta(runDir) ?? metaNow()).catch(() => undefined);
         } else {
-          trajectory.setTermination(config.runId, "manual", `${req.detail} (backstop)`);
+          trajectory.setTermination(config.runId, "manual", `${req.detail} (backstop)`).catch(() => undefined);
         }
       }
       process.exit(130);
@@ -973,8 +988,8 @@ async function main(): Promise<void> {
     });
     if (!hygiene.ok) {
       console.error(`[wrathbench] ${hygiene.reason}`);
-      trajectory.setTermination(config.runId, "stale-character", hygiene.reason);
-      trajectory.close();
+      await trajectory.setTermination(config.runId, "stale-character", hygiene.reason);
+      await trajectory.finish();
       try {
         const moved = archiveIfNoResponses(config.runsDir, config.runId);
         if (moved !== null) console.error(`[wrathbench] no model response — archived to ${moved}`);
@@ -1016,8 +1031,8 @@ async function main(): Promise<void> {
       if (own === undefined) {
         const detail = `the staged character ${staged} is not on ${config.account} — the staging did not land`;
         console.error(`[wrathbench] ${detail}`);
-        trajectory.setTermination(config.runId, "stale-character", detail);
-        trajectory.close();
+        await trajectory.setTermination(config.runId, "stale-character", detail);
+        await trajectory.finish();
         try {
           const moved = archiveIfNoResponses(config.runsDir, config.runId);
           if (moved !== null) console.error(`[wrathbench] no model response — archived to ${moved}`);
@@ -1044,7 +1059,7 @@ async function main(): Promise<void> {
         // notes go with it — they describe a character that no longer exists.
         const detail = `${continuation.character} is not on ${config.account} any more — starting a fresh character instead of continuing ${continuation.from}`;
         console.error(`[wrathbench] ${detail}`);
-        trajectory.dropContinuation(config.runId, detail);
+        await trajectory.dropContinuation(config.runId, detail);
         config = { ...config, character: undefined, continuedFrom: undefined };
         if (existsSync(scratchpad.path)) rmSync(scratchpad.path);
         continuation = undefined;
@@ -1151,7 +1166,7 @@ async function main(): Promise<void> {
       watchdogs.noteEndRequest(req);
     },
   });
-  const outcome = await (
+  const episode = (
     driver.runEpisode !== undefined
       ? driver.runEpisode({
           config,
@@ -1183,6 +1198,43 @@ async function main(): Promise<void> {
           usage: goUsageGaugeFor(config, trajectory),
         })
   ).finally(stopEndWatch);
+  let outcome: Awaited<typeof episode>;
+  try {
+    outcome = await episode;
+  } catch (err) {
+    /*
+     * The episode threw past its own catch: in practice a verdict whose
+     * run.sqlite write still met a lock after its retries. The verdict is in
+     * trajectory.jsonl already (appended before the row), and the supervisor
+     * reads it from there (`readRunFact`), or, for a pause, from the meta.json
+     * mark written here as the normal path writes it. What must not be skipped
+     * is the cleanup, by the same rules as below: the session deleted and its
+     * secret released for an end, the session deleted (secret kept for the
+     * resume) for the pauses that free it, the sandbox stopped and the file
+     * closed, before the error leaves the process.
+     */
+    console.error(`[wrathbench] the episode failed: ${err instanceof Error ? err.message : String(err)}`);
+    const paused = trajectory.recordedPause;
+    if (paused !== null && readMeta(runDir)?.pause === undefined) {
+      try {
+        trajectory.writeMeta({ ...(readMeta(runDir) ?? metaNow()), pause: paused }).catch(() => undefined);
+      } catch (e) {
+        console.error(`[wrathbench] could not write the pause mark: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    if (paused === null || paused.reason === "operator-pause" || paused.reason === STALL_PAUSE || paused.reason === SUBSCRIPTION_PAUSE) {
+      try {
+        await sandbox.evalSnippet("if (typeof sdk !== 'undefined' && sdk) { try { await sdk.deleteSession(); } catch {} }");
+      } catch {
+        /* best effort, as below */
+      }
+    }
+    await sandbox.stop().catch(() => undefined);
+    if (paused === null) await releaseSessionSecret({ moduleUrl: config.moduleUrl, token: config.token }).catch(() => undefined);
+    await trajectory.finish();
+    wiki?.close();
+    throw err;
+  }
 
   if (outcome.kind === "paused") {
     /*
@@ -1196,7 +1248,7 @@ async function main(): Promise<void> {
     // its instant by however long the unwind took. (`--resume` consumes the
     // mark, so one that is present is this segment's.)
     const metaThen = readMeta(runDir);
-    if (metaThen?.pause === undefined) trajectory.writeMeta({ ...(metaThen ?? metaNow()), pause: pauseMark(outcome) });
+    if (metaThen?.pause === undefined) await trajectory.writeMeta({ ...(metaThen ?? metaNow()), pause: pauseMark(outcome) });
   }
   if (
     outcome.kind === "terminated" ||
@@ -1233,7 +1285,9 @@ async function main(): Promise<void> {
     await releaseSessionSecret({ moduleUrl: config.moduleUrl, token: config.token });
     console.error(`[wrathbench] terminated: ${outcome.reason}${outcome.detail !== undefined ? ` (${outcome.detail})` : ""}`);
   }
-  trajectory.close();
+  // Every write landed (or threw to its caller), the file checkpointed and
+  // back on the rollback journal: a finished or paused run is run.sqlite alone.
+  await trajectory.finish();
   /*
    * A launch that did not happen does not become a run. A terminated run with
    * zero `response` records — the provider was dead on the first request, the

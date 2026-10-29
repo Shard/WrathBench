@@ -39,6 +39,7 @@
 import { cpSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, normalize, resolve } from "node:path";
+import { copyRunDb, isRunDbSideFile, RUN_DB_FILE } from "../runner/src/rundb";
 import { localRunStore } from "../runner/viewer/clickhouse";
 import { createApi } from "../runner/viewer/api";
 import { createRenderer } from "../runner/viewer/snapshot";
@@ -177,7 +178,15 @@ export async function startRig(opts: RigOptions): Promise<Rig> {
     for (const src of opts.runs) {
       const from = resolve(src);
       if (!existsSync(join(from, "meta.json"))) throw new Error(`${src} is not a run directory (no meta.json)`);
-      cpSync(from, join(runsDir, basename(from)), { recursive: true, filter: (p) => basename(p) !== "heartbeat" });
+      // The database through `copyRunDb`, never its files as they stand: a
+      // live run's commits are in its `-wal` until a checkpoint, and a file
+      // copy of the three can tear between them.
+      const to = join(runsDir, basename(from));
+      cpSync(from, to, {
+        recursive: true,
+        filter: (p) => basename(p) !== "heartbeat" && !(dirname(p) === from && (basename(p) === RUN_DB_FILE || isRunDbSideFile(basename(p)))),
+      });
+      copyRunDb(from, join(to, RUN_DB_FILE));
     }
     log(`copied ${opts.runs.length} run(s) into ${runsDir}`);
   }

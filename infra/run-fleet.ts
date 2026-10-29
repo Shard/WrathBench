@@ -271,6 +271,32 @@ export function endRuns(runsDir: string, ended: readonly EndedRun[]): { runId: s
 }
 
 /**
+ * Write into the row each verdict the runner recorded in the trajectory but
+ * could not write into run.sqlite (`RunFact.recordedTermination`), appending
+ * nothing: the record is already there, and a second one would read as a
+ * second ending. A row that has a verdict by now is left alone. Returns what
+ * it repaired; a run directory that will not open is reported, not fatal.
+ */
+export function repairRecordedTerminations(runsDir: string, runs: readonly RunFact[]): { runId: string; error?: string }[] {
+  const out: { runId: string; error?: string }[] = [];
+  for (const f of runs) {
+    const rec = f.recordedTermination;
+    if (rec === undefined || f.archived === true) continue;
+    try {
+      const t = new Trajectory(join(runsDir, f.runId));
+      try {
+        if (t.repairTermination(f.runId, rec.reason, rec.detail, rec.at)) out.push({ runId: f.runId });
+      } finally {
+        t.close();
+      }
+    } catch (err) {
+      out.push({ runId: f.runId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return out;
+}
+
+/**
  * The game session a lapsed run left behind, released best-effort.
  *
  * Every roster path that walks away from a paused run frees its session first
@@ -1275,6 +1301,11 @@ async function main(): Promise<void> {
       subscriptionHold: (f) => subGate.holdOf(laneOfRun(f), f.episode, f.model),
     });
     lastPaused = resumes.listed;
+    // A verdict the runner recorded but could not write into the row: the
+    // facts already read it from the trajectory, and the row is told now.
+    for (const r of repairRecordedTerminations(RUNS_DIR, runs)) {
+      say(r.error === undefined ? `repaired ${r.runId}: the termination its trajectory records is in the run row now` : `repair ${r.runId}: could not write the recorded termination — ${r.error}`);
+    }
     // Runs nothing came back for are ended on every tick, boot
     // included: the host slept, or the fleet was down past the run's own
     // budget, and neither a live run nor a paused one survives that.

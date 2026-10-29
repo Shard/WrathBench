@@ -32,7 +32,9 @@ export interface RunDirEntry {
 
 function signature(dir: string): string {
   let sig = "";
-  for (const name of ["trajectory.jsonl", "episodic.jsonl", "run.sqlite", "meta.json"]) {
+  // `run.sqlite-wal` beside the database: a live run's commits land there
+  // and reach `run.sqlite` only at a checkpoint (runner/src/rundb.ts).
+  for (const name of ["trajectory.jsonl", "episodic.jsonl", "run.sqlite", "run.sqlite-wal", "meta.json"]) {
     try {
       const st = statSync(join(dir, name));
       sig += `${name}:${st.size}:${st.mtimeMs}|`;

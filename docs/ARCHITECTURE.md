@@ -424,7 +424,15 @@ a termination is done, a pause is resumable or a failed attempt by the lane's
 rule, neither is "unknown", and no row at all is a failed launch (for a
 fleet probe, the roster then writes a stub run terminated `launch-failed`, so
 the attempt counts toward its square's cap); the `state`
-table's `level` is the level it reports. `heartbeat`, one small file rewritten
+table's `level` is the level it reports. A termination is appended to the
+trajectory before the row is written, so when the row has none and the run
+has no pause and no live owner, the trajectory's last `termination` record
+is the verdict, and the supervisor writes it into the row; a `pause` record
+there, or meta.json's pause mark, is the pause, unless a `resume` follows it. The file is in WAL
+while its runner writes it and back on the rollback journal once the runner
+finishes, so a live run's commits are in `run.sqlite-wal` until a checkpoint;
+anything that stats the database for change takes that file with it, and a
+copy goes through `VACUUM INTO` (`runner/src/rundb.ts`). `heartbeat`, one small file rewritten
 every 20 seconds and removed on a clean exit, is the only proof of a live
 owner: a resume onto a run with a fresh one is refused, and an account is held
 by a run whose heartbeat is fresh however quiet its trajectory. The

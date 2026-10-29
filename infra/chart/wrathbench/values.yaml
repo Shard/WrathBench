@@ -42,7 +42,9 @@ priorityClassName: ""
 
 storage:
   # Empty means the cluster's default StorageClass. Set it where the default is
-  # not the class these volumes want.
+  # not the class these volumes want. `data` must be a block or local class
+  # (never NFS or another shared filesystem), with every pod on one node:
+  # run.sqlite's WAL maps shared memory (templates/pvc.yaml).
   className: ""
   data:
     size: 60Gi
