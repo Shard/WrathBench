@@ -61,7 +61,8 @@ export interface FlightSignal {
 /**
  * The events a turn's context is built from: the last N events that are not
  * ambient movement (`CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE`) nor a bystander's
- * spell combat-log line (`spellLogShown`, not counted as ambient), oldest first, and
+ * spell combat-log line or emote (`spellLogShown`, `emoteShown`, not counted
+ * as ambient), oldest first, and
  * how many ambient events arrived in the span they cover — from the oldest
  * one returned to now, or since the child started when every non-ambient
  * event it has seen is in the list.
