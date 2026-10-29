@@ -156,17 +156,36 @@ spec:
             - name: AC_SOAP_ENABLED
               value: "0"
             {{- end }}
-            # Server.log to the CONSOLE. The compose value was a File appender
-            # with per-boot timestamped backups (flag 16) and that tree reached
-            # 22 GB; here `kubectl logs` is the history and the runtime rotates
-            # it. Errors.log and the module's audit dir are still files, on the
+            # The core's log reaches the console once per line: `kubectl logs`
+            # is the history and the runtime rotates it. Compose keeps Server
+            # as a File appender (flag 16, per-boot backups); here that tree
+            # reached 22 GB, so Server is a plain Console appender instead
+            # (type 1, level 5, no colour). The stock conf also has a Console
+            # appender, and most loggers write to both (`Logger.root=2,Console
+            # Server`), so with both on every such line came out twice. The
+            # stock Console is therefore off (level 0: Appender::write drops
+            # everything), and the two loggers that wrote to Console but not
+            # Server are re-pointed at Server; `Logger.mmaps=4,Server` already
+            # is. Server carries no ANSI colour codes, which the core prints
+            # whether or not stdout is a terminal. An AC_LOGGER_* variable can
+            # only re-point a logger the conf on the PVC already has: the core
+            # reads loggers from the parsed conf and env overrides existing
+            # keys, never adds one. All four keys move together, so they are
+            # fixed here, not values.
+            # Errors.log and the module's audit dir are still files, on the
             # data PVC (CLAUDE.md: log at the module boundary); the audit dir
             # is pruned by age by templates/log-retention.yaml, a separate
             # CronJob so that its window never rolls this pod. Errors.log is
             # held open by the core for the life of the process and rewritten
             # on every boot (appender mode `w`), so nothing prunes it.
             - name: AC_APPENDER_SERVER
-              value: {{ .Values.worldserver.appenderServer | quote }}
+              value: "1,5,0"
+            - name: AC_APPENDER_CONSOLE
+              value: "1,0,0"
+            - name: AC_LOGGER_SQL_SQL
+              value: "2,Server Errors"
+            - name: AC_LOGGER_SPELLS_SCRIPTS
+              value: "2,Server Errors"
             # mod-wrathbench (module/). Pinned here rather than in the module
             # .conf: the stock entrypoint only materialises the main component
             # .conf from its .dist, never module confs, so a fresh boot would
