@@ -8,7 +8,7 @@
  *
  * - A refused listing (`account_in_use` while the core still holds the
  *   previous episode's session — the post-logout linger of up to ~a minute,
- *   see module/PROTOCOL.md) has no `enum`; reading it as an empty list is the
+ *   see wrath-mcp/module/PROTOCOL.md) has no `enum`; reading it as an empty list is the
  *   2026-08-24 defect that let `fleet-sonnet-e90-sonnet-20260824-a8` start on
  *   the level-6 character its predecessor had left standing 39s earlier: the
  *   delete timed out (the player was still loaded, so the core silently drops
@@ -218,7 +218,7 @@ export async function clearAccountCharacters(o: HygieneOptions): Promise<Hygiene
       const res = await f(`${o.moduleUrl}/characters`, {
         method: "POST",
         // Operator class: /characters is one of the routes only the port
-        // secret opens (module/PROTOCOL.md, "Authentication").
+        // secret opens (wrath-mcp/module/PROTOCOL.md, "Authentication").
         headers: { "content-type": "application/json", ...moduleAuthHeaders() },
         body: JSON.stringify({ token: `${o.token}-hygiene-${i}`, account: o.account }),
       });

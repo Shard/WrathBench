@@ -610,6 +610,11 @@ describe("the checks themselves", () => {
     expect(kinds(scanBody("k", { a: "at move (/wrathbench/sdk/src/client.ts:123:9)" }).findings)).toEqual([
       "filesystem-path",
     ]);
+    // The same, for the stack as the wrath-mcp submodule carries it.
+    expect(scanBody("k", { a: "at move (wrath-mcp/sdk/src/client.ts:123:9)" }).findings).toEqual([]);
+    expect(kinds(scanBody("k", { a: "at move (/wrathbench/wrath-mcp/sdk/src/client.ts:123:9)" }).findings)).toEqual([
+      "filesystem-path",
+    ]);
   });
 
   test("the value scan does not read a fraction or a zone name as a path", () => {

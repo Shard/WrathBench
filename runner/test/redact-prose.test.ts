@@ -1,6 +1,6 @@
 /**
  * The game-prose redactor, field by field: every prose field enumerated from
- * `sdk/src/protocol.ts` is replaced, every name beside it survives, and the
+ * `wrath-mcp/sdk/src/protocol.ts` is replaced, every name beside it survives, and the
  * three carriers (a batch, a JSON tool result, a `recent_events` line) all
  * reach the same fields.
  */
@@ -319,7 +319,7 @@ describe("redactProseText", () => {
   });
 });
 
-/** What the sandbox writes for a snippet's value and a console object (`mcp/src/sandbox/child.ts`). */
+/** What the sandbox writes for a snippet's value and a console object (`wrath-mcp/mcp/src/sandbox/child.ts`). */
 const inspect = (v: unknown): string => Bun.inspect(v, { depth: 4 });
 
 /** A snippet result carrying `v` as its value and as a console object, between harness lines. */

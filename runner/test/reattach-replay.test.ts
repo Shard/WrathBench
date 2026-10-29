@@ -4,7 +4,7 @@
  * `WB_SESSION_STATE` saying `replay: true`, then what a connected client holds
  * — the character's own create block with its items, the login packets, a
  * create block for everything in view — closed by `WB_REPLAY_DONE`
- * (module/PROTOCOL.md, "/events"). The ambient `connect()` waits for that
+ * (wrath-mcp/module/PROTOCOL.md, "/events"). The ambient `connect()` waits for that
  * close, so the line after `await connect()` reads a whole cache: own race
  * (so a party line goes out), health, money, bag, spellbook, the units in
  * view. That is what the restart notice promises the model.
@@ -16,7 +16,7 @@
  * Fixture-based, no game stack: the real sandbox child against a stand-in
  * module whose `/events` pushes the login burst to its first subscriber, the
  * replay to a later one that asks, and the plain state frame to one that does
- * not, with frames hand-written from module/PROTOCOL.md's tables (names
+ * not, with frames hand-written from wrath-mcp/module/PROTOCOL.md's tables (names
  * invented, nothing captured from a game).
  */
 import { afterEach, describe, expect, test } from "bun:test";

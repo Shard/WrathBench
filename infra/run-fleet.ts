@@ -305,7 +305,7 @@ export async function sweepNames(
     try {
       const r = await f(url, {
         method: "POST",
-        // Operator class (module/PROTOCOL.md "Authentication"): character
+        // Operator class (wrath-mcp/module/PROTOCOL.md "Authentication"): character
         // deletes are the port secret's alone.
         headers: { "content-type": "application/json", ...moduleAuthHeaders() },
         body: JSON.stringify({ token, account: sw.account, character: sw.character }),

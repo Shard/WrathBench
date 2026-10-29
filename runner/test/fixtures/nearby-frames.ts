@@ -1,7 +1,7 @@
 /**
  * Hand-written module frames for the nearby recorder's tests and its cost
  * bench: a real SDK state cache and event stream, fed the shapes
- * module/PROTOCOL.md documents (create, values, movement and out-of-range
+ * wrath-mcp/module/PROTOCOL.md documents (create, values, movement and out-of-range
  * blocks, `SMSG_MONSTER_MOVE`, a relayed `MSG_MOVE_HEARTBEAT`, the query
  * answers). Every name, entry and position is invented; nothing is captured
  * from a game.

@@ -466,7 +466,7 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   the feed's tail, `entries.json` beside `detail.json` — after `projectEntry`
   (an allowlist per entry type) and `redactGameProse`
   (`runner/viewer/redact-prose.ts`), which replaces the prose fields enumerated
-  from `sdk/src/protocol.ts` and the SDK's own types wherever a decoded
+  from `wrath-mcp/sdk/src/protocol.ts` and the SDK's own types wherever a decoded
   payload appears in a tool result — as JSON, or as the sandbox renders a
   snippet's value and its console objects (`Bun.inspect`, read in place) —
   and the gossip option text the SDK quotes in its own hints and errors.

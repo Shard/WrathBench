@@ -6,7 +6,7 @@
  * world. The work is `infra/gm-account.ts`, shared with the stager's account.
  *
  * This is operator tooling, outside the agent path: the observation/action
- * contracts in docs/CONTRACTS.md bind the benchmark agent, not the human at
+ * contracts in wrath-mcp/docs/CONTRACTS.md bind the benchmark agent, not the human at
  * the keyboard. The account is deliberately not created by bootstrap.ts —
  * the harness accounts never carry GM, and this one never runs unattended.
  *

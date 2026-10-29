@@ -17,9 +17,7 @@ Each directory has its own README that says what it is for and how to use it.
 
 | Directory | What it is |
 | --- | --- |
-| `module/` | A thin AzerothCore module: an HTTP/WebSocket bridge that exposes what a game client could see and do, and nothing more. |
-| `sdk/` | The TypeScript library a model's snippets call to drive a character. |
-| `mcp/` | The agent surface over the SDK: the confined snippet sandbox, the MCP server and the core tools. |
+| `wrath-mcp/` | The agent stack, a submodule ([Shard/wrath-mcp](https://github.com/Shard/wrath-mcp)): the thin AzerothCore module that exposes what a game client could see and do and nothing more, the TypeScript SDK a model's snippets call, and the confined snippet sandbox, MCP server and core tools over it. |
 | `runner/` | The agent loop: hands a model the SDK in a sandbox, supervises the episode and records everything that happened. |
 | `runner/viewer/` | The read-only API over recorded runs that the dashboard reads. |
 | `dashboard/` | The web UI over that API, which is also the public site at <https://wrathbench.shard.page>. |
@@ -29,7 +27,7 @@ Each directory has its own README that says what it is for and how to use it.
 | `infra/` | Docker Compose to try WrathBench on one machine, the Helm chart the project's own fleet runs on, and the operator commands. |
 | `docs/` | Architecture, the contracts the agent is held to, the methodology behind the results, and the runbook. |
 
-`docs/ARCHITECTURE.md` is the map of how the pieces fit; `docs/CONTRACTS.md` says what the agent may see and do; `docs/METHODOLOGY.md` holds the decisions that shape what a result means.
+`docs/ARCHITECTURE.md` is the map of how the pieces fit; `wrath-mcp/docs/CONTRACTS.md` says what the agent may see and do; `docs/METHODOLOGY.md` holds the decisions that shape what a result means.
 
 ## Try it on one machine
 

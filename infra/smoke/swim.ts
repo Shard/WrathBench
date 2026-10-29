@@ -1,7 +1,7 @@
 /**
  * Swimming, as a client swims: a character crosses the open sea north of
  * Menethil Harbor and back, and a second character on the shore watches it
- * go in and come out (module/PROTOCOL.md, `move_to`, "Swimming").
+ * go in and come out (wrath-mcp/module/PROTOCOL.md, `move_to`, "Swimming").
  *
  * The route (infra/fixtures/scenarios.ts `SWIM_SHORE`, read off the server
  * data's terrain and liquid grid): from the shore into the sea, three legs out

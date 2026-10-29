@@ -140,7 +140,7 @@ describe("Trajectory", () => {
     const rows = traj.stateRows("run-m");
     expect(rows[0]!["money"]).toBe(12345);
     expect(rows[0]!["quests_completed"]).toBe(2);
-    // Never a guessed zero for something no event carried (docs/CONTRACTS.md).
+    // Never a guessed zero for something no event carried (wrath-mcp/docs/CONTRACTS.md).
     expect(rows[1]!["money"]).toBeNull();
     expect(rows[1]!["quests_completed"]).toBeNull();
     const line = readTrajectory(dir).find((r) => r.t === "state");

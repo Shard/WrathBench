@@ -843,7 +843,7 @@ export function foldUiOpenWindows(
  * tracker, nameplates, the target frame and open windows; this presents those
  * observed fields as a stable, line-oriented summary.
  *
- * Two rules, both from docs/CONTRACTS.md: a field no event has carried reads
+ * Two rules, both from wrath-mcp/docs/CONTRACTS.md: a field no event has carried reads
  * "unobserved" — never a guessed zero; and the nearby line never prints exact
  * mob health (the player frame on the health line is fine — those are numbers a
  * client shows for itself). Every line is a pure function of the snapshot, so
@@ -1328,7 +1328,7 @@ export function eventWindow(events: readonly EventSummary[], folded = 0): { wind
 
 // ------------------------------------------------------ spell combat log
 
-/** The direct-spell combat-log opcodes (module/PROTOCOL.md, "Spell combat log"). */
+/** The direct-spell combat-log opcodes (wrath-mcp/module/PROTOCOL.md, "Spell combat log"). */
 export const SPELL_LOG_OPCODES: ReadonlySet<string> = new Set([
   "SMSG_SPELLNONMELEEDAMAGELOG",
   "SMSG_SPELLHEALLOG",

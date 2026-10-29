@@ -1,5 +1,5 @@
 /**
- * Probe for the reattach replay (module/PROTOCOL.md, "/events"): a WebSocket
+ * Probe for the reattach replay (wrath-mcp/module/PROTOCOL.md, "/events"): a WebSocket
  * that subscribes with `replay=1` to a token whose character is already in
  * world gets a `WB_SESSION_STATE` saying `replay: true`, then what a
  * connected client holds — the character's own create block with every item,

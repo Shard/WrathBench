@@ -8,7 +8,7 @@ labels: question
 
 **What you have already read** — most of this repository's shape is argued
 somewhere: `docs/METHODOLOGY.md` for anything that changes what a result means,
-`docs/CONTRACTS.md` for what the agent may see and do, `docs/ARCHITECTURE.md`
+`wrath-mcp/docs/CONTRACTS.md` for what the agent may see and do, `docs/ARCHITECTURE.md`
 for structure, `docs/VISION.md` for what this is not.
 
 **If it is a proposal** — what would have to be true for it to be right, and

@@ -1,6 +1,6 @@
 /**
  * The spell combat log on the event window: `SMSG_SPELLNONMELEEDAMAGELOG`,
- * `SMSG_SPELLHEALLOG` and `SMSG_SPELLENERGIZELOG` (module/PROTOCOL.md, "Spell
+ * `SMSG_SPELLHEALLOG` and `SMSG_SPELLENERGIZELOG` (wrath-mcp/module/PROTOCOL.md, "Spell
  * combat log"). Three layers: the pure sentence and window predicate
  * (context.ts, `spellLogNote` / `spellLogShown`), `eventWindow` and the line
  * format over marked summaries, and the sandbox child marking events as they

@@ -3,7 +3,7 @@
 # world-load counts behind `worldLoaded`), read
 # over loopback inside the worldserver container, which is the only caller the
 # module gives the census to; any other caller gets liveness with zeroed
-# counters (module/PROTOCOL.md, "Authentication"). The image has no curl or
+# counters (wrath-mcp/module/PROTOCOL.md, "Authentication"). The image has no curl or
 # wget — perl is what it does have.
 #
 # The worldserver is a Deployment in namespace `wrathbench`:

@@ -5,7 +5,7 @@
  *
  * Three halves, all fixture-based, in the shape of `flight.test.ts`. The
  * watcher alone over a hand-built cache; the real sandbox child fed frames
- * written from module/PROTOCOL.md's tables (and, for the two the module has
+ * written from wrath-mcp/module/PROTOCOL.md's tables (and, for the two the module has
  * not tapped yet, the shapes the design gives them: `instanceType` on
  * `WB_AREA`, `killerGuid`/`victimGuid` on `SMSG_PARTYKILLLOG`); and the loop
  * writing what a fake sandbox hands it. Guids, positions and names are

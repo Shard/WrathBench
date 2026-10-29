@@ -14,7 +14,7 @@
  * Why direct SQL
  * --------------
  * Same reasoning as infra/bootstrap/bootstrap.ts: the agent has no
- * privileged control path into the running world (docs/CONTRACTS.md binds
+ * privileged control path into the running world (wrath-mcp/docs/CONTRACTS.md binds
  * the agent's path; the operator's party staging uses SOAP in-cluster, on an
  * admin account, for the one write SQL cannot make guid-safely —
  * docs/proposals/GROUP-PLAY.md) and the worldserver console is interactive

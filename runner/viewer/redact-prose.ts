@@ -6,7 +6,7 @@
  * ids; game PROSE — quest, gossip, item and mail body text — is redacted.
  *
  * Prose is found by SHAPE, never by looking at the words. Every field below
- * is enumerated from `sdk/src/protocol.ts`: the opcode whose decoded payload
+ * is enumerated from `wrath-mcp/sdk/src/protocol.ts`: the opcode whose decoded payload
  * carries it, and the discriminating keys that identify the same payload when
  * it turns up unwrapped — a snippet returning `state.lastGossip(guid)`, or a
  * `sdk.quest.details()` result — inside a tool result. A title is a name and
@@ -55,7 +55,7 @@ export interface ProseShape {
 }
 
 /**
- * Enumerated from `sdk/src/protocol.ts`. Names (`title`, `name`, `subject`)
+ * Enumerated from `wrath-mcp/sdk/src/protocol.ts`. Names (`title`, `name`, `subject`)
  * are deliberately absent from every `redact` list.
  */
 export const PROSE_SHAPES: readonly ProseShape[] = [
@@ -99,7 +99,7 @@ export const PROSE_SHAPES: readonly ProseShape[] = [
   // Chat: an NPC's say/yell is game prose and the packet does not say whose
   // words they are, so every message goes (arguable → withhold).
   { opcode: "SMSG_MESSAGECHAT", keys: ["senderGuid", "message", "chatTag"], redact: ["message"] },
-  // The SDK's quest-log objective row (`QuestObjective` in sdk/src/state.ts):
+  // The SDK's quest-log objective row (`QuestObjective` in wrath-mcp/sdk/src/state.ts):
   // the template's objective sentence, joined to counters.
   { opcode: null, keys: ["kind", "required", "have", "text"], redact: ["text"] },
 ];
@@ -245,7 +245,7 @@ function redactRendered(s: string): string {
 
 /**
  * The SDK's own option lists, which quote gossip option text inside a hint or
- * an error (`sdk/src/client.ts`): `[3] "…"` (`gossipSelect` by text), and
+ * an error (`wrath-mcp/sdk/src/client.ts`): `[3] "…"` (`gossipSelect` by text), and
  * `0:"…"` after `pick one of: ` (`resetTalents`, `bindAtInnkeeper`) or
  * `Options: ` (`showTaxiNodes`, with ` (icon 2)` after each). The id stays.
  * The bare `id:"…"` form is not enough on its own: the SDK's name lists

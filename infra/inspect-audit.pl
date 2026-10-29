@@ -59,7 +59,7 @@ die "inspect-audit: an empty token\n" if $tok eq '';
 my $smoke = $tok =~ /\Asmoke-[a-z0-9]+(?:-[a-z0-9]+)*-\*\z/;
 $tok =~ s/\*\z// if $smoke;
 # The module names the file after the token with every byte outside
-# [A-Za-z0-9_-] as '_' (module/PROTOCOL.md, "Audit log").
+# [A-Za-z0-9_-] as '_' (wrath-mcp/module/PROTOCOL.md, "Audit log").
 (my $ftok = $tok) =~ s/[^A-Za-z0-9_-]/_/g;
 
 sub utc_day {

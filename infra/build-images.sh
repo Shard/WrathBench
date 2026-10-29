@@ -22,10 +22,12 @@
 #
 # Every image is built from a `git archive` of the commit, unpacked into a
 # temporary directory, never from the working tree, so an untracked or ignored
-# file in the checkout cannot reach an image whatever the ignore files say. The
-# server images also need AzerothCore, a submodule and so not in that archive:
-# it is exported the same way from the submodule commit the commit pins, and
-# only the paths server.Dockerfile copies (AC_PATHS below). Each image is then
+# file in the checkout cannot reach an image whatever the ignore files say.
+# Submodules are not in that archive. Every image needs the agent stack, the
+# wrath-mcp submodule, and the server images also need AzerothCore; each is
+# exported the same way from the submodule commit the commit pins (AzerothCore
+# only the paths server.Dockerfile copies, AC_PATHS below; wrath-mcp whole, and
+# only from a commit on wrath-mcp's master). Each image is then
 # scanned by infra/image-guard.sh before anything is pushed; one it refuses is
 # untagged and stops the run.
 #
@@ -79,7 +81,7 @@ while [[ $# -gt 0 ]]; do
     --allow-dirty) ALLOW_DIRTY=1; shift ;;
     --private-dir) PRIVATE_DIR="$2"; shift 2 ;;
     --without-reference) WITHOUT_REFERENCE=1; shift ;;
-    -h|--help) sed -n '2,53p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "build-images: unknown flag $1" >&2; exit 2 ;;
   esac
 done
@@ -209,6 +211,40 @@ export_azerothcore() {
   say "exporting AzerothCore ${ac_sha} (${AC_PATHS[*]}) to deps/azerothcore/"
   git -C "${sub}" archive --format=tar --prefix=deps/azerothcore/ "${ac_sha}" -- "${AC_PATHS[@]}" | tar -xf - -C "${CONTEXT}"
 }
+
+# The agent stack (module/, sdk/, mcp/) is the wrath-mcp submodule, and every
+# image needs it: the runner runs its sdk/ and mcp/ workspaces, the server
+# images compile its module/. Exported like AzerothCore, from the submodule's
+# own repository at the commit ${SHA} pins, but whole: Bun reads the stack's
+# root manifests (package.json, tsconfig.base.json) when it resolves the
+# workspaces, and the per-image ignore files drop what an image does not want.
+#
+# The pin must be on wrath-mcp's master (origin/master as last fetched into
+# wrath-mcp/), so every image that can be deployed is reproducible from the
+# public stack. A pin still under review builds only under --allow-dirty, for a
+# local image: such images are never pushed (below).
+STACK_SHA=""
+STACK_UNMERGED=0
+export_wrath_mcp() {
+  local sub="${REPO_ROOT}/wrath-mcp" mode type rest real top
+  read -r mode type STACK_SHA rest <<< "$(git ls-tree "${SHA}" wrath-mcp)"
+  [[ "${mode:-}" == "160000" && "${type:-}" == "commit" ]] || die "${SHA} pins no wrath-mcp submodule"
+  real="$(cd "${sub}" 2>/dev/null && pwd -P || true)"
+  top="$(git -C "${sub}" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -z "${real}" || "${top}" != "${real}" ]] || ! git -C "${sub}" cat-file -e "${STACK_SHA}^{commit}" 2>/dev/null; then
+    die "wrath-mcp ${STACK_SHA} (the submodule commit ${SHA} pins) is not available in wrath-mcp/; run: git submodule update --init wrath-mcp"
+  fi
+  if ! git -C "${sub}" merge-base --is-ancestor "${STACK_SHA}" origin/master 2>/dev/null; then
+    if [[ "${ALLOW_DIRTY}" -eq 0 ]]; then
+      die "wrath-mcp ${STACK_SHA} is not on wrath-mcp's master (origin/master in wrath-mcp/): a deployable image pins a merged stack commit. Merge the stack change first, then run: git -C wrath-mcp fetch origin master (--allow-dirty builds a local image that is never pushed)"
+    fi
+    STACK_UNMERGED=1
+    say "WARNING: --allow-dirty — wrath-mcp ${STACK_SHA} is not on wrath-mcp's master; these images are never pushed"
+  fi
+  say "exporting wrath-mcp ${STACK_SHA} to wrath-mcp/"
+  git -C "${sub}" archive --format=tar --prefix=wrath-mcp/ "${STACK_SHA}" | tar -xf - -C "${CONTEXT}"
+}
+export_wrath_mcp
 if wants_server; then export_azerothcore; fi
 
 # The program's place is gitignored in this repository, so a commit that
@@ -258,6 +294,7 @@ build_runner() {
   if [[ -n "${REF_SHA}" ]]; then label=(--label "wrathbench.reference=${REF_SHA}"); fi
   docker build \
     --build-arg "WRATHBENCH_BUILD_VERSION=${TAG}" \
+    --build-arg "WRATHBENCH_STACK_COMMIT=${STACK_SHA}" \
     "${label[@]}" \
     -t "${ref}" -f "${CONTEXT}/infra/docker/runner.Dockerfile" "${CONTEXT}"
   guard "${ref}"
@@ -281,6 +318,9 @@ done
 if [[ "${PUSH}" -eq 1 ]]; then
   if tree_dirty && [[ "${ALLOW_DIRTY}" -eq 1 ]]; then
     die "refusing to push a --allow-dirty tag"
+  fi
+  if [[ "${STACK_UNMERGED}" -eq 1 ]]; then
+    die "refusing to push images built from wrath-mcp ${STACK_SHA}, which is not on wrath-mcp's master"
   fi
   for ref in "${BUILT[@]}"; do
     say "pushing ${ref}"

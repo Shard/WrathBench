@@ -81,4 +81,23 @@ describe("the checkout guard", () => {
     rmSync(join(root, "b", "node_modules"), { recursive: true });
     expect(checkoutProblem(root)).toStartWith("b/node_modules is missing");
   });
+
+  test("a stack submodule that is not checked out names the submodule command, before any install check", () => {
+    const root = checkout(tempDir("wb-checkout-"));
+    pkg(root, { name: "root", workspaces: ["wrath-mcp/sdk", "a", "b"], devDependencies: { typescript: "1" } });
+    mkdirSync(join(root, "wrath-mcp"));
+    rmSync(join(root, "node_modules"), { recursive: true });
+    expect(checkoutProblem(root)).toBe(
+      `wrath-mcp/ is not checked out (workspace wrath-mcp/sdk has no package.json): run \`git submodule update --init wrath-mcp\` in ${root}, then \`bun install --frozen-lockfile\`.`,
+    );
+  });
+
+  test("an install inside the stack submodule is refused", () => {
+    const root = checkout(tempDir("wb-checkout-"));
+    pkg(root, { name: "root", workspaces: ["wrath-mcp/sdk", "a", "b"], devDependencies: { typescript: "1" } });
+    pkg(join(root, "wrath-mcp", "sdk"), { name: "@x/sdk" });
+    expect(checkoutProblem(root)).toBeNull();
+    mkdirSync(join(root, "wrath-mcp", "node_modules"));
+    expect(checkoutProblem(root)).toStartWith("wrath-mcp/node_modules exists");
+  });
 });

@@ -402,7 +402,7 @@ describe("the child latches it and the host drains it", () => {
       pingGraceMs: 1_000,
     });
     hosts.push(host);
-    // Hand-written frames from module/PROTOCOL.md's tables, as in sleep.test.ts.
+    // Hand-written frames from wrath-mcp/module/PROTOCOL.md's tables, as in sleep.test.ts.
     const res = await host.evalSnippet(`
       state.seedSelf({ guid: "7", name: "Magepartyd" });
       globalThis.seq = 1;

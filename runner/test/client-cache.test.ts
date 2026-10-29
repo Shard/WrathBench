@@ -1,13 +1,13 @@
 /**
  * The client cache survives a sandbox restart the way a client's on-disk cache
- * does (operator decision, 2026-10-18; `mcp/src/sandbox/client-cache.ts`).
+ * does (operator decision, 2026-10-18; `wrath-mcp/mcp/src/sandbox/client-cache.ts`).
  *
  * The bug it closes: a restart reattaches to the module session its
  * predecessor left, the module's "already queried" sets survive the reattach,
  * and so the module never asks for those entries again — a fresh child had no
  * name for anything the session had already been told about. These tests run
  * the real sandbox child against a fake event stream (frames hand-written from
- * module/PROTOCOL.md's tables, names invented, nothing captured from a running
+ * wrath-mcp/module/PROTOCOL.md's tables, names invented, nothing captured from a running
  * game), kill it the two ways `host.ts` loses a child, and read the restarted
  * child's cache before any new answer reaches it.
  */

@@ -1,5 +1,5 @@
 # WrathBench server image: AzerothCore (pinned via the deps/azerothcore
-# submodule) with modules/mod-wrathbench built in.
+# submodule) with modules/mod-wrathbench, from the wrath-mcp submodule, built in.
 #
 # Build context is the repository root. Adapted from the upstream
 # deps/azerothcore/apps/docker/Dockerfile so stage names, paths, and the
@@ -90,16 +90,17 @@ COPY deps/azerothcore/deps          /azerothcore/deps
 COPY deps/azerothcore/src           /azerothcore/src
 COPY deps/azerothcore/modules       /azerothcore/modules
 
-# Our module, dropped into modules/ where AzerothCore's CMake auto-discovers
-# it. Copied last so a module edit invalidates only this layer and the build
-# step (which ccache then makes fast).
-COPY module /azerothcore/modules/mod-wrathbench
+# Our module (the wrath-mcp submodule's module/, see infra/PINS.md), dropped
+# into modules/ where AzerothCore's CMake auto-discovers it. Copied last so a
+# module edit invalidates only this layer and the build step (which ccache
+# then makes fast).
+COPY wrath-mcp/module /azerothcore/modules/mod-wrathbench
 
 WORKDIR /azerothcore/build
 
 # Build identity served on /health (`build` field): the repo's
 # `git describe --tags --always --dirty`, supplied by the caller because the
-# build context carries no .git. See module/mod-wrathbench.cmake.
+# build context carries no .git. See wrath-mcp/module/mod-wrathbench.cmake.
 #
 # Declared HERE, immediately above the only step that reads it, and not up with
 # the other build ARGs. Its value changes on every release, and BuildKit
@@ -237,7 +238,7 @@ COPY --chown=$DOCKER_USER:$DOCKER_USER \
     deps/azerothcore/modules modules
 
 COPY --chown=$DOCKER_USER:$DOCKER_USER \
-    module modules/mod-wrathbench
+    wrath-mcp/module modules/mod-wrathbench
 
 COPY --chown=$DOCKER_USER:$DOCKER_USER \
      --from=build \

@@ -3,7 +3,7 @@
  * the character, latched for the host to drain.
  *
  * Two halves. The unit half drives a real SDK state cache and event stream
- * with frames hand-written from module/PROTOCOL.md's tables (positions
+ * with frames hand-written from wrath-mcp/module/PROTOCOL.md's tables (positions
  * invented, names empty, nothing captured from a game) and polls the recorder
  * by hand. The child half runs the real sandbox process the way
  * `flight.test.ts` does and drains through the host, so the wiring in
@@ -454,7 +454,7 @@ feed("WB_MOVE_PROGRESS", 0xff02, { moveId: 1, pos: { x: -6560, y: 405, z: 387, o
 `;
 
 describe("trace recorder: chat", () => {
-  /** `SMSG_MESSAGECHAT` as module/PROTOCOL.md decodes it. */
+  /** `SMSG_MESSAGECHAT` as wrath-mcp/module/PROTOCOL.md decodes it. */
   const chat = (r: ReturnType<typeof rig>, type: number, senderGuid: string, message: string, ts: number, extra: object = {}): void =>
     r.feed("SMSG_MESSAGECHAT", 0x96, { type, language: 7, senderGuid, message, chatTag: 0, ...extra }, ts);
 

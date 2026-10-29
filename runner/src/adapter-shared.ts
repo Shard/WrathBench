@@ -47,7 +47,7 @@ export function signalGroup(
  * every credential nobody thought to name, and the CLI is the model's own
  * process (the codex CLI also snapshots its environment into its home).
  *
- * The MCP bridge the CLI launches (`mcp/src/bridge.ts`) inherits this environment
+ * The MCP bridge the CLI launches (`wrath-mcp/mcp/src/bridge.ts`) inherits this environment
  * and reads nothing from it: it is told the runner's port on argv and is run by
  * the interpreter's absolute path, and the MCP server itself — the sandbox, the
  * module URL, the session token and secret — lives in the runner process.

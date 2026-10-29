@@ -27,7 +27,7 @@
  *   `result` message that closes the turn. (`--continue` per turn was the
  *   fallback; it is not needed and would re-pay session startup every turn.)
  * - Tools reach the runner's *single* SandboxHost over a loopback TCP MCP
- *   server plus `mcp/src/bridge.ts` (see that file for why the bridge exists).
+ *   server plus `wrath-mcp/mcp/src/bridge.ts` (see that file for why the bridge exists).
  *   The MCP server is `mcp.ts`'s `McpServer` over `tools.ts` — the same six
  *   tools, the same dispatch, the same trajectory records.
  * - Billing: the child environment is an allowlist (`childEnv`) holding no
@@ -90,7 +90,7 @@
  * - every subsequent MCP `tools/call` is refused with an `isError` result that
  *   tells the model the episode is over and to stop calling tools. Nothing is
  *   dispatched to the sandbox, so no observation or action reaches the game
- *   after the termination (docs/CONTRACTS.md);
+ *   after the termination (wrath-mcp/docs/CONTRACTS.md);
  * - the driver keeps reading the CLI's stream for a bounded grace
  *   (`windDownGraceMs`, 90s) so the closing `result` can land;
  * - it ends on that `result`, on the CLI exiting, or on the grace expiring,
@@ -975,7 +975,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   /**
    * `detached` puts the CLI in its own process group, so a signal sent to
    * -pid reaches the CLI *and* everything it spawned — notably the MCP bridge
-   * (`bun mcp/src/bridge.ts`), which the CLI starts itself and which would
+   * (`bun wrath-mcp/mcp/src/bridge.ts`), which the CLI starts itself and which would
    * otherwise be reparented to init and survive. Observed twice: an orphaned
    * `claude -p` outliving its runner, and one from the day before still
    * burning CPU 23 hours later.

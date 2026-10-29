@@ -8,7 +8,7 @@
  *
  * What it proves that the design could not assume: the trigger's centre is
  * over a mesh island, so a move of it is the module's reachable end
- * (module/PROTOCOL.md, `arrived`) ending inside the trigger, and map 36 has
+ * (wrath-mcp/module/PROTOCOL.md, `arrived`) ending inside the trigger, and map 36 has
  * a mesh on the data volume (a move inside answering `no_mesh` is the tell).
  * It is the gate for enabling the campaign and joins the release's deploy
  * smokes while the campaign runs.

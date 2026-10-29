@@ -1,3 +1,6 @@
 [submodule "deps/azerothcore"]
 	path = deps/azerothcore
 	url = https://github.com/azerothcore/azerothcore-wotlk.git
+[submodule "wrath-mcp"]
+	path = wrath-mcp
+	url = https://github.com/Shard/wrath-mcp.git

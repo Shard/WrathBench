@@ -7,7 +7,7 @@
  * single 4y step of 51-58 degrees (the guard refuses a segment over 2.0y and
  * steeper than 1.2x its 2D length, about 50 degrees; the mesh is built to
  * walk 60). The module now re-plans around such a band before refusing
- * (module/PROTOCOL.md, `drop`), so some of those should arrive. The other
+ * (wrath-mcp/module/PROTOCOL.md, `drop`), so some of those should arrive. The other
  * two are `target_off_mesh` controls: the re-plan never runs on them, and
  * they must stay as they were. P8 is the character's own move. P4 is not:
  * its move, (3200, -100, 80), was a z buried under the hill, and the
@@ -71,7 +71,7 @@ const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 const CHARACTER = process.env.SMOKE_CHARACTER ?? accountFixtureName("Sr", ACCOUNT);
 const RUN = crypto.randomUUID();
 const AUDIT_DIR = process.env.WRATHBENCH_AUDIT_DIR ?? "/wrathbench/data/logs/wrathbench";
-// A re-planned route may run to about 590y (module/src/WbManager.cpp
+// A re-planned route may run to about 590y (wrath-mcp/module/src/WbManager.cpp
 // REPLAN_MAX_POINTS): 85s at the 7y/s a character without a mount runs.
 const MOVE_TIMEOUT_MS = 120_000;
 // The guard, as the module states it (PROTOCOL.md `drop`).

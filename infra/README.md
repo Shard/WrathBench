@@ -78,7 +78,7 @@ db  ──healthy──>  db-import  ──completed──>  bootstrap  ──co
   it is a no-op on subsequent boots.
 - **bootstrap** — one shot. See below.
 - **authserver** / **worldserver** — AzerothCore, built from
-  `infra/docker/server.Dockerfile` with `module/` compiled in.
+  `infra/docker/server.Dockerfile` with `wrath-mcp/module/` compiled in.
 - **runner** — a long-lived `sleep infinity` container that everything else is
   `exec`'d into: the smoke scripts, one-off episodes, the viewer. It carries the
   repo and the `data/` mounts, not a loop of its own.
@@ -152,7 +152,7 @@ compose), which is read when the worldserver is recreated.
 `bootstrap.ts` writes SQL directly rather than using SOAP or the worldserver
 console. SOAP cannot create the *first* account — `ACSoap.cpp` requires the caller to be
 `SEC_ADMINISTRATOR` and the base auth schema seeds no accounts at all — and
-SOAP is nothing the *agent* may ever reach: `docs/CONTRACTS.md` binds the
+SOAP is nothing the *agent* may ever reach: `wrath-mcp/docs/CONTRACTS.md` binds the
 agent's path, and its one use, the operator's party staging, is in-cluster
 and on an admin account no bench session can open
 (`docs/proposals/GROUP-PLAY.md`). The console (attaching to the worldserver, then
@@ -163,7 +163,7 @@ The cost of direct SQL is a small reimplementation of SRP6, pinned to
 derivation, logins fail at the authserver and `bootstrap.ts` is where to look.
 
 The runner account is an ordinary player with no `account_access` row. The
-agent gets no GM privileges by contract (`docs/CONTRACTS.md`). A GM operator
+agent gets no GM privileges by contract (`wrath-mcp/docs/CONTRACTS.md`). A GM operator
 account for inspecting the world is created by `infra/spectator-account.ts`,
 with the password on stdin so it is never on a command line:
 
@@ -205,20 +205,20 @@ so does `runner`, where the operator execs the smokes, so
     docker compose -f infra/compose.yml exec runner bun infra/smoke/kill-credit.ts
 
 needs no `-e` flags at all. A benchmark episode cannot pass those credentials
-on: `sandboxChildEnv` in `mcp/src/sandbox/host.ts` forwards the snippet
+on: `sandboxChildEnv` in `wrath-mcp/mcp/src/sandbox/host.ts` forwards the snippet
 child a named list of variables (PATH, HOME, TMPDIR, the sandbox's fault
 knobs) plus the four the host sets itself, so no `WRATHBENCH_DB_*` var and
 not `WRATHBENCH_MODULE_SECRET`, the module's port secret the smokes present
 (`infra/smoke/lib/auth.ts`), reaches it on either service.
 
-This is **operator tooling**. Nothing in `runner/` or `sdk/` imports it, so the
-agent-facing contract in `docs/CONTRACTS.md` is untouched: the agent still only
+This is **operator tooling**. Nothing in `runner/` or `wrath-mcp/sdk/` imports it, so the
+agent-facing contract in `wrath-mcp/docs/CONTRACTS.md` is untouched: the agent still only
 observes what a client could observe and still only acts through the module. A
 fixture is the operator arranging the world before a run, the same way the
 operator picks which account a smoke logs into.
 
 **Why direct SQL.** The same reason as bootstrap above: the agent has no
-privileged control path into the running world (`docs/CONTRACTS.md` binds the
+privileged control path into the running world (`wrath-mcp/docs/CONTRACTS.md` binds the
 agent's path; the operator's party staging uses SOAP in-cluster, on an admin
 account, for the one write SQL cannot make guid-safely,
 `docs/proposals/GROUP-PLAY.md`) and the worldserver console is interactive and

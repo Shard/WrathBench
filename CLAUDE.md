@@ -9,7 +9,7 @@ It measures how well a model drives a fixed toolkit toward long-horizon goals in
 ## Hard constraints
 
 - Nothing Blizzard-derived ever enters git: no client files, no MPQ/DBC, no extracted maps/vmaps/mmaps, no wiki dumps containing game text, no trajectory logs. These live in volumes under `data/` which is gitignored at the directory level.
-- The agent observes only what a real game client could observe. The action path goes through the same server opcode handlers a client would hit. See `docs/CONTRACTS.md`. If you find yourself reaching for a server-side shortcut that a client could not do, that is the signal to stop.
+- The agent observes only what a real game client could observe. The action path goes through the same server opcode handlers a client would hit. See `wrath-mcp/docs/CONTRACTS.md`. If you find yourself reaching for a server-side shortcut that a client could not do, that is the signal to stop.
 - The C++ module stays thin: packet bridge and event tap only. Game semantics live in TypeScript.
 - The agent loop is model-agnostic. No per-model prompts, retries, or tuning.
 - SDK surface is simple by default, flexible via the raw-action escape hatch: helpers are earned by observed need in trajectories, never speculative, and there is no convenience middle tier (docs/METHODOLOGY.md, "The model surface").
@@ -19,9 +19,7 @@ It measures how well a model drives a fixed toolkit toward long-horizon goals in
 ## Repository layout
 
 ```
-module/        C++ AzerothCore module: HTTP/WS bridge into WorldSession (GPL-2.0-or-later)
-sdk/           Bun/TypeScript SDK over the module (MIT)
-mcp/           Snippet sandbox, MCP server and core tools over the SDK (MIT)
+wrath-mcp/     Submodule (Shard/wrath-mcp), the agent stack: module/ (C++ AzerothCore module, GPL-2.0-or-later), sdk/ and mcp/
 runner/        Agent loop, benchmark tools and hooks into mcp/, trajectory logging (MIT)
 dashboard/     SolidJS SPA over the viewer's read-only /api (MIT)
 wiki/          Tooling to build the wiki bundle from a local dump (MIT); the dump itself is in data/
@@ -39,7 +37,7 @@ data/          Gitignored. Server data directory, wiki dump, runs, sqlite stores
 - Everything runs in containers: the Helm chart at `infra/chart/wrathbench` for the fleet and any real deployment, `infra/compose.yml` for a single-machine quickstart with no deploy tooling around it. Either way the only host-side prerequisite is the AzerothCore server data directory at `data/client`.
 
 ## How to work
-- Read the relevant doc before touching a component. `docs/ARCHITECTURE.md` for structure, `docs/CONTRACTS.md` for what the agent may see and do, `docs/METHODOLOGY.md` for the decisions that shape what results mean — check it before changing anything the model sees, the scorer reads, or the scheduler counts — and `docs/RUNBOOK.md` for running the fleet, the config store and a deploy. The operator commands it names are `bun wb <group> <command>` from the repo root; `bun wb` lists them.
+- Read the relevant doc before touching a component. `docs/ARCHITECTURE.md` for structure, `wrath-mcp/docs/CONTRACTS.md` for what the agent may see and do, `docs/METHODOLOGY.md` for the decisions that shape what results mean — check it before changing anything the model sees, the scorer reads, or the scheduler counts — and `docs/RUNBOOK.md` for running the fleet, the config store and a deploy. The operator commands it names are `bun wb <group> <command>` from the repo root; `bun wb` lists them.
 - Inspect runs, the audit log and the publisher with `bun wb inspect …` and render the dashboard with `bun wb dashboard shots`, not throwaway scripts; `.claude/skills/` says when and how, read-only rules included.
 - Log at the module boundary (every observation served, every action dispatched) and in the runner (every snippet, result, and event batch the model saw). Trajectory logs are JSONL under `data/runs/<run-id>/`.
 - Tests: `bun run test` at the root runs every workspace's suite (sdk, runner, wiki, minimap, dashboard, infra) over eight workers in about a minute (plain `bun test` is the same suite in one process, about four) — all of it fixture-based, green from a bare clone or a fresh worktree with no `data/` once `bun install --frozen-lockfile` has run in it (under a second with a warm cache; a `node_modules` linked from another checkout runs that checkout's code, and the suite refuses it) — and `bun run typecheck` for every project including `infra/`. Bun strips types without checking them, so a green `bun test` says nothing about types — run both. While iterating, run from the root so its preloads apply: `bun test runner/test/sleep.test.ts` for one file, `bun run test runner/` for one workspace (the script takes the same filters, and runs `runner/` in under 20 s against 90 s in one process), and `-t '<part of a test name>'` to narrow either. Module changes are verified by the smoke scripts in `infra/smoke/` (`bun wb smoke <name>` runs one in the runner pod), which do need the live stack.

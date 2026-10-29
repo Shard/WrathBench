@@ -9,11 +9,11 @@
  * needed changing for them to arrive; this file pins that. The one list that
  * could drop them is `CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE` (ambient motion),
  * and a swing error is the opposite of ambient: the core latches them, so each
- * arrives once per change of error state (module/PROTOCOL.md, "Swing errors").
+ * arrives once per change of error state (wrath-mcp/module/PROTOCOL.md, "Swing errors").
  *
  * There is no game stack here. The SDK client is constructed but never
  * connected, and frames are handed straight to `events.ingest`. Every frame is
- * hand-written from module/PROTOCOL.md's tables; nothing is captured from a
+ * hand-written from wrath-mcp/module/PROTOCOL.md's tables; nothing is captured from a
  * running game (CLAUDE.md).
  */
 import { afterEach, describe, expect, test } from "bun:test";

@@ -1,7 +1,7 @@
 /**
  * Probe for the two melee swing errors the module forwards:
  * `SMSG_ATTACKSWING_NOTINRANGE` and `SMSG_ATTACKSWING_BADFACING`
- * (module/PROTOCOL.md, "Swing errors").
+ * (wrath-mcp/module/PROTOCOL.md, "Swing errors").
  *
  * It FAILS against any worldserver built before the tap: both opcodes fall to
  * the drop census and the waits below time out. Run it only after the image

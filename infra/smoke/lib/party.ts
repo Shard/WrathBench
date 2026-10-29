@@ -124,7 +124,7 @@ export async function assertStagedMember(c: WrathClient, m: PartyMember, party: 
  * `transferred`. For open ground: underground, a straight-line leg can end
  * over the tunnel it is meant to reach, and the nearest walkable point can be
  * an island no route reaches; a move of the target itself is the module's to
- * plan (module/PROTOCOL.md, `arrived` and `path_incomplete`).
+ * plan (wrath-mcp/module/PROTOCOL.md, `arrived` and `path_incomplete`).
  */
 export async function walkTo(c: WrathClient, target: { x: number; y: number; z: number }, log: (s: string) => void, maxLegs = 6): Promise<MoveResult> {
   let last: MoveResult | undefined;
