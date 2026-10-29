@@ -406,7 +406,7 @@ export function benchmarkChildExtension({ client, summarize, forwardClientCache 
    * `units()` (nearest-first, items/containers
    * dropped — with mob health/maxHealth deliberately stripped, since CONTRACTS.md
    * forbids exact mob health and the HUD only needs name, distance, dead, roles,
-   * questgiver marker and target; a party member in view keeps its health and
+   * questgiver marker, target and reaction; a party member in view keeps its health and
    * ghost flag for the party line), the party with its party frames
    * (`group()`), `bag()`
    * (backpack shape with freeSlots), and the open-window fold over the retained
@@ -436,6 +436,10 @@ export function benchmarkChildExtension({ client, summarize, forwardClientCache 
       // over the NPC and a unit's own selection.
       questGiver: u.questGiver,
       targetGuid: u.targetGuid,
+      // How the unit regards us, as the client colours its name (red, yellow,
+      // green), for the nearby line's hostile mark; undefined until its
+      // faction rows have been served.
+      reaction: u.reaction,
       // A party member in view: its health, its power and whether it is a
       // ghost, for the HUD's party line, as a client's party frame reads them
       // off the unit (the frame's bars are the player's own health and power;

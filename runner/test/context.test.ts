@@ -653,6 +653,26 @@ describe("formatStateSummary: quest titles, nearby priority, bag summary", () =>
     expect(line(text, "nearby: ")).toBe("nearby: Grubby Boar (3y), Notice Board (quest giver: available, 5y)");
   });
 
+  test("only a living hostile unit is marked; neutral, friendly, unknown and the dead print bare (operator, 2026-10-29)", () => {
+    const text = formatStateSummary(
+      {
+        units: [
+          { guid: "1", name: "Kobold Vermin", type: "unit", distance: 4, reaction: "hostile" },
+          { guid: "2", name: "Young Wolf", type: "unit", distance: 6, reaction: "neutral" },
+          { guid: "3", name: "Marshal McBride", type: "unit", distance: 8, reaction: "friendly", roles: ["questGiver"], questGiver: "reward" },
+          { guid: "4", name: "Defias Thug", type: "unit", distance: 10 },
+          { guid: "5", name: "Hogger", type: "unit", distance: 20, rank: "elite", reaction: "hostile" },
+          { guid: "6", name: "Kobold Worker", type: "unit", distance: 25, dead: true, reaction: "hostile" },
+        ],
+      },
+      { sessionLive: true },
+    );
+    expect(line(text, "nearby: ")).toBe(
+      "nearby: Kobold Vermin hostile (4y), Young Wolf (6y), Marshal McBride (quest giver: reward, 8y), " +
+        "Defias Thug (10y), Hogger elite hostile (20y), Kobold Worker dead (25y)",
+    );
+  });
+
   test("the bag line counts grey junk, merges stacks, and names the best and the biggest", () => {
     const items = [
       { bag: 255, slot: 23, itemId: 1, name: "Homestone", count: 1, quality: 1 },
