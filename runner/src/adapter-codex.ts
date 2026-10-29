@@ -558,6 +558,19 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   let wakeReader: () => void = () => undefined;
   let turnInFlight = false;
   let windDown: WindDown | null = null;
+  /*
+   * The verdict's row write. `endEpisode` and `pauseEpisode` are called from
+   * stream callbacks that cannot wait, and the write's first attempt is
+   * synchronous; one that met a lock retries in the background
+   * (`Trajectory.write`). Kept here, with a handler so it is never an
+   * unhandled rejection, and awaited by `finish`: a verdict whose row write
+   * gave up throws out of the episode exactly as a synchronous failure did.
+   */
+  let rowWrite: Promise<unknown> = Promise.resolve();
+  const noteRowWrite = (p: Promise<unknown>): void => {
+    p.catch(() => undefined);
+    rowWrite = p;
+  };
   const endEpisode = (
     reason: TerminationReason,
     detail?: string,
@@ -567,7 +580,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     if (ended !== null) return;
     ended = { reason, detail };
     if (record !== undefined) trajectory.append(record);
-    trajectory.setTermination(runId, reason, detail);
+    noteRowWrite(trajectory.setTermination(runId, reason, detail));
     if (opts?.windDown === true && turnInFlight && windDownGraceMs > 0) {
       const since = Date.now();
       windDown = { deadline: since + windDownGraceMs, since, reason };
@@ -579,11 +592,12 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   const pauseEpisode = (reason: PauseReason, detail: string): void => {
     if (ended !== null || pausedAs !== null) return;
     pausedAs = { reason, detail };
-    trajectory.setPause(runId, reason, detail, watchdogs.elapsedMs());
+    noteRowWrite(trajectory.setPause(runId, reason, detail, watchdogs.elapsedMs()));
     killCodex();
   };
   const done = (): boolean => ended !== null || pausedAs !== null;
-  const finish = (): LoopOutcome => {
+  const finish = async (): Promise<LoopOutcome> => {
+    await rowWrite;
     const e = ended as { reason: TerminationReason; detail?: string } | null;
     const p = pausedAs as { reason: PauseReason; detail: string } | null;
     if (e === null && p !== null) return { kind: "paused", reason: p.reason, detail: p.detail };
@@ -592,15 +606,15 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       ? { kind: "terminated", reason: e.reason }
       : { kind: "terminated", reason: e.reason, detail: e.detail };
   };
-  const terminate = (reason: TerminationReason, detail?: string): LoopOutcome => {
+  const terminate = async (reason: TerminationReason, detail?: string): Promise<LoopOutcome> => {
     if (done()) return finish();
     endEpisode(reason, detail);
     return finish();
   };
   /** `notBefore`: a usage window's reset, which the supervisor waits for (`subscription-usage.ts`). */
-  const pause = (reason: PauseReason, detail: string, notBefore?: number): LoopOutcome => {
+  const pause = async (reason: PauseReason, detail: string, notBefore?: number): Promise<LoopOutcome> => {
     if (done()) return finish();
-    trajectory.setPause(runId, reason, detail, watchdogs.elapsedMs(), notBefore);
+    await trajectory.setPause(runId, reason, detail, watchdogs.elapsedMs(), notBefore);
     return notBefore !== undefined ? { kind: "paused", reason, detail, notBefore } : { kind: "paused", reason, detail };
   };
 

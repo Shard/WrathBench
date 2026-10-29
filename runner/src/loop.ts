@@ -406,7 +406,7 @@ export class ContextBuilder {
         // character, and every reader of it is corrected here, once.
         const name = typeof snap.self?.name === "string" ? snap.self.name : undefined;
         if (name !== undefined && name.length > 0 && name !== this.o.config.character) {
-          this.o.trajectory.setCharacter(this.o.config.runId, name);
+          await this.o.trajectory.setCharacter(this.o.config.runId, name);
         }
       }
       return snap;
@@ -574,7 +574,7 @@ export class ContextBuilder {
    * A move whose ack has not answered yet has no id, and is keyed by its
    * dispatch time so the id arriving does not re-record it.
    */
-  private noteMove(snap: SnapshotLike): void {
+  private async noteMove(snap: SnapshotLike): Promise<void> {
     const m = snap.move;
     if (m === undefined || m === null) return;
     if (typeof m.x !== "number" || typeof m.y !== "number" || typeof m.z !== "number") return;
@@ -584,7 +584,7 @@ export class ContextBuilder {
     const key = `${m.ts}:${m.status ?? ""}`;
     if (key === this.lastMoveKey) return;
     this.lastMoveKey = key;
-    this.o.trajectory.recordMove(this.o.config.runId, {
+    await this.o.trajectory.recordMove(this.o.config.runId, {
       // The intent's own instants: when it was dispatched, and when the
       // verdict landed. The sample that carried it home is up to a tick later.
       ts: m.endedAt ?? m.ts,
@@ -675,7 +675,7 @@ export class ContextBuilder {
     // Ungated by `stateIntervalMs`: a ~250y walk is over well inside one state
     // row, so an intention only recorded at row cadence would be one nobody
     // could ever see in flight.
-    this.noteMove(snap);
+    await this.noteMove(snap);
     // Ungated for the same reason `noteMove` is: the gate re-arms on a rest
     // visit or a flight beginning, and either can begin and end well inside
     // one state row.
@@ -1005,7 +1005,7 @@ export class ContextBuilder {
       if (ghost !== undefined) this.lastGhost = ghost;
     }
     this.noteObservationStall(snap, turn);
-    trajectory.recordState(config.runId, {
+    await trajectory.recordState(config.runId, {
       level,
       xp,
       map: pos?.map,
@@ -1215,19 +1215,19 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       }),
   };
 
-  const terminate = (reason: TerminationReason, detail?: string): LoopOutcome => {
-    trajectory.setTermination(runId, reason, detail);
+  const terminate = async (reason: TerminationReason, detail?: string): Promise<LoopOutcome> => {
+    await trajectory.setTermination(runId, reason, detail);
     return { kind: "terminated", reason, detail };
   };
   /** The stop request, honoured: a pause keeps the run resumable, a terminate ends it. */
-  const stopped = (): LoopOutcome | null => {
+  const stopped = async (): Promise<LoopOutcome | null> => {
     const s = stopRequestOf(o.signal);
     if (s === null) return null;
     if (s.kind === "pause") {
-      trajectory.setPause(runId, s.reason, s.detail, watchdogs.elapsedMs());
+      await trajectory.setPause(runId, s.reason, s.detail, watchdogs.elapsedMs());
       return { kind: "paused", reason: s.reason, detail: s.detail };
     }
-    return terminate("manual", s.detail);
+    return await terminate("manual", s.detail);
   };
 
   /** Whether the provider's served-model id has already been promoted (first wins). */
@@ -1267,13 +1267,13 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   try {
     for (;;) {
       // 0. a stop request wins over everything, at the turn boundary
-      const stop = stopped();
+      const stop = await stopped();
       if (stop !== null) return stop;
       // 1. watchdogs
       const verdict = watchdogs.check();
       if (verdict !== null) {
         trajectory.append({ t: "watchdog", ...verdict });
-        return terminate(verdict.reason, verdict.detail);
+        return await terminate(verdict.reason, verdict.detail);
       }
 
       // 2. state line + 3. the fixed context (context.ts)
@@ -1321,14 +1321,14 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       const contextText = await builder.build(turn, pendingNotices);
       // The sample above may have been the one that found the observation
       // stalled, and the pause it asked for wins before a request is written.
-      const stopBuilt = stopped();
+      const stopBuilt = await stopped();
       if (stopBuilt !== null) return stopBuilt;
       // The sample above may have been the first sight of the character; a
       // stale one ends the run here, not after a whole turn on it.
       const integrity = watchdogs.check();
       if (integrity !== null && integrity.reason === "stale-character") {
         trajectory.append({ t: "watchdog", ...integrity });
-        return terminate(integrity.reason, integrity.detail);
+        return await terminate(integrity.reason, integrity.detail);
       }
 
       const systemText = buildSystemPrompt(config.objective, config.episode, harnessOf(config.driver), config.wiki, config.watchdogs.episodeMs);
@@ -1361,7 +1361,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         trajectory.append({ t: "harness", kind: "request_replay_mismatch", turn, detail: mismatch });
       }
       const outcome = await o.adapter.complete({ messages, tools: toolsFor({ wikiCoords: config.wikiCoords, wikiSearch: config.wiki }), signal: o.signal });
-      if (outcome.kind === "stub-complete") return terminate("stub-complete");
+      if (outcome.kind === "stub-complete") return await terminate("stub-complete");
       if (outcome.kind === "pause") {
         // A spent subscription allowance waits for its window's reset when the
         // lane's own reading names one (decision 2: no attempt against a quota
@@ -1372,7 +1372,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           notBefore = await o.usage.quotaReset(Date.now());
           if (notBefore !== undefined) detail = `${detail} (usage window resets ${new Date(notBefore).toISOString()})`;
         }
-        trajectory.setPause(runId, outcome.reason, detail, watchdogs.elapsedMs(), notBefore);
+        await trajectory.setPause(runId, outcome.reason, detail, watchdogs.elapsedMs(), notBefore);
         return {
           kind: "paused",
           reason: outcome.reason,
@@ -1453,7 +1453,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         // A stop between tool calls: the calls already made are in the
         // trajectory; the ones not made are simply not made (a resumed run
         // starts a new turn, so nothing dangles).
-        const stopMid = stopped();
+        const stopMid = await stopped();
         if (stopMid !== null) return stopMid;
         let args: unknown = {};
         let argError: string | null = null;
@@ -1503,7 +1503,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
 
       // 6. bookkeeping and pacing
       if (config.maxTurns !== undefined && turn >= config.maxTurns) {
-        return terminate("turn-limit", `${turn} turns`);
+        return await terminate("turn-limit", `${turn} turns`);
       }
       // The subscription gate at the turn boundary (operator, 2026-10-16): a
       // freeplay run on a lane at or over the freeplay threshold stops until
@@ -1516,7 +1516,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           const hold = o.usage.freeplayHold(usageThresholds.freeplay, now);
           if (hold !== null) {
             const detail = `subscription usage at or over the freeplay threshold (${hold.threshold}%): ${describeWindows(hold.windows, o.usage.current?.observedAt ?? now)}`;
-            trajectory.setPause(runId, SUBSCRIPTION_PAUSE, detail, watchdogs.elapsedMs(), hold.until);
+            await trajectory.setPause(runId, SUBSCRIPTION_PAUSE, detail, watchdogs.elapsedMs(), hold.until);
             return { kind: "paused", reason: SUBSCRIPTION_PAUSE, detail, notBefore: hold.until };
           }
         }
@@ -1525,12 +1525,12 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     }
   } catch (err) {
     // An abandoned request throws; the stop request is the real outcome.
-    const stop = stopped();
+    const stop = await stopped();
     if (stop !== null) return stop;
     if (err instanceof AdapterError) {
-      return terminate("adapter-error", `${err.message}${err.status !== undefined ? ` (HTTP ${err.status})` : ""}`);
+      return await terminate("adapter-error", `${err.message}${err.status !== undefined ? ` (HTTP ${err.status})` : ""}`);
     }
-    return terminate("harness-error", err instanceof Error ? `${err.name}: ${err.message}` : String(err));
+    return await terminate("harness-error", err instanceof Error ? `${err.name}: ${err.message}` : String(err));
   } finally {
     finished = true;
     // A window still open when the episode ends is closed on the record rather

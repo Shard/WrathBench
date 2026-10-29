@@ -10,6 +10,8 @@
  *                      (`request-record.ts`; `replay.ts` rebuilds it).
  *   run.sqlite         run metadata row, periodic state rows, movement rows
  *                      and the trace, for querying without parsing JSONL.
+ *                      WAL while the runner writes it, the rollback journal
+ *                      at rest (`rundb.ts` says why).
  *   meta.json          the run config + harness version, for `--resume`.
  *   scratchpad.md      owned by Scratchpad, lives in the same directory.
  *
@@ -23,7 +25,17 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { openRunDb } from "./rundb";
+import {
+  enterWal,
+  isTransientRunDbError,
+  leaveWal,
+  leaveWalPatiently,
+  openRunDb,
+  retryRunDbWrite,
+  RUN_DB_FILE,
+  type RunDbRetry,
+  type RunDbRetryOptions,
+} from "./rundb";
 import { appendFileSync, mkdirSync, readFileSync, existsSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { jsonLine, toJsonSafe } from "@wrathbench/mcp/jsonsafe";
@@ -716,13 +728,44 @@ export class Trajectory {
    * (`classify.ts`, `timeline.ts`), which append none of those kinds.
    */
   private runId: string | null = null;
+  /**
+   * Whether this is the run's own long-lived writer, which keeps the file in
+   * WAL while it writes and puts it back on the rollback journal when it
+   * finishes (`rundb.ts`). Every other opener — the supervisor ending a run,
+   * the roster, `classify.ts` — writes once and closes, and at most heals a
+   * WAL-mode file nobody else holds back to the rollback journal.
+   */
+  private readonly walOwner: boolean;
+  /** The journal the owner's open left the file in, and why when it is not WAL; null for any other opener. */
+  readonly journal: { mode: string; error?: string } | null;
+  /** How a write that met a lock is retried; null writes once and throws, as every short-lived opener does. */
+  private readonly retry: RunDbRetryOptions | null;
+  /** The last write still retrying, settled either way; null when none is. Every later write waits behind it. */
+  private tail: Promise<void> | null = null;
 
-  constructor(dir: string, opts: { now?: () => number } = {}) {
+  constructor(
+    dir: string,
+    opts: {
+      now?: () => number;
+      /** The run's own long-lived writer: WAL while open, the rollback journal after `finish()`. */
+      wal?: boolean;
+      /**
+       * Retry a write that meets a lock (`retryRunDbWrite`) rather than throw
+       * at once: `true` for the default waits, or the options (tests).
+       */
+      retry?: boolean | RunDbRetryOptions;
+      /** Each attempt's lock wait; `RUN_DB_BUSY_TIMEOUT_MS` by default (tests shorten it). */
+      busyTimeoutMs?: number;
+    } = {},
+  ) {
     this.dir = dir;
     this.now = opts.now ?? Date.now;
     mkdirSync(dir, { recursive: true });
     this.jsonlPath = join(dir, "trajectory.jsonl");
-    this.db = openRunDb(join(dir, "run.sqlite"));
+    this.db = openRunDb(join(dir, RUN_DB_FILE), opts.busyTimeoutMs !== undefined ? { busyTimeoutMs: opts.busyTimeoutMs } : {});
+    this.walOwner = opts.wal === true;
+    this.journal = this.walOwner ? enterWal(this.db) : null;
+    this.retry = opts.retry === undefined || opts.retry === false ? null : opts.retry === true ? {} : opts.retry;
     this.db.exec(SCHEMA);
     this.migrateTable("run", RUN_ADDED_COLUMNS);
     this.migrateTable("state", STATE_ADDED_COLUMNS);
@@ -739,6 +782,62 @@ export class Trajectory {
   }
 
   /**
+   * Run one run.sqlite write.
+   *
+   * Without `retry` this is the plain call: it runs now and throws what it
+   * throws, and the promise it returns is already settled. With `retry` (the
+   * live runner), a write that meets a lock (`isTransientRunDbError`) is tried
+   * again after each of the waits, and the promise settles when it lands or
+   * rejects with the last error when they are spent; any other error still
+   * throws here, synchronously. The first attempt is always synchronous, so a
+   * write that succeeds is on disk before this returns, whoever awaits it.
+   *
+   * Writes keep their order: while one is retrying, every later write queues
+   * behind it rather than racing it, and runs (with its own retries) once it
+   * has settled. Each retry is a `harness` record, `rundb_retry`, in the
+   * trajectory; `what` names the write there.
+   *
+   * Only the statement is retried, never the record a method appends beside
+   * it, so a retried pause is still one pause record.
+   */
+  private write(what: string, op: () => void): Promise<void> {
+    const retry = this.retry;
+    if (retry === null) {
+      op();
+      return SETTLED;
+    }
+    const onRetry = (r: RunDbRetry): void => {
+      this.append({ t: "harness", kind: "rundb_retry", write: what, attempt: r.attempt, waitMs: r.waitMs, error: r.error });
+      retry.onRetry?.(r);
+    };
+    if (this.tail === null) {
+      try {
+        op();
+        return SETTLED;
+      } catch (e) {
+        if (!isTransientRunDbError(e)) throw e;
+        return this.track(retryRunDbWrite(op, { ...retry, onRetry, firstError: e }));
+      }
+    }
+    return this.track(this.tail.then(() => retryRunDbWrite(op, { ...retry, onRetry })));
+  }
+
+  /** Make `p` the write every later one waits behind, until it settles. */
+  private track(p: Promise<void>): Promise<void> {
+    const settled = p.then(noop, noop);
+    this.tail = settled;
+    void settled.then(() => {
+      if (this.tail === settled) this.tail = null;
+    });
+    return p;
+  }
+
+  /** Settles when every write issued so far has landed or given up. Never rejects: each write's own promise carries its error. */
+  flush(): Promise<void> {
+    return this.tail ?? SETTLED;
+  }
+
+  /**
    * One movement intention: a `move_to` dispatch, or the verdict that ended it.
    *
    * Written whenever the sandbox's watched intent changes — the state ticker
@@ -746,14 +845,17 @@ export class Trajectory {
    * both of its rows. The caller owns the change detection (`MoveLine` is
    * whatever it saw); this only records.
    */
-  recordMove(runId: string, m: MoveLine): void {
+  recordMove(runId: string, m: MoveLine): Promise<void> {
     this.append({ t: "move", ...m });
-    this.db
-      .query(
-        `INSERT INTO move (run_id, ts, move_id, map, x, y, z, target, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(runId, m.ts ?? this.now(), m.moveId ?? null, m.map ?? null, m.x, m.y, m.z, m.target ?? null, m.status ?? null);
+    const ts = m.ts ?? this.now();
+    return this.write("move", () => {
+      this.db
+        .query(
+          `INSERT INTO move (run_id, ts, move_id, map, x, y, z, target, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(runId, ts, m.moveId ?? null, m.map ?? null, m.x, m.y, m.z, m.target ?? null, m.status ?? null);
+    });
   }
 
   /**
@@ -768,22 +870,27 @@ export class Trajectory {
    * `scrub` like every other string this writes. An entry already held is
    * replaced, so a quality learned late is kept.
    */
-  recordTrace(runId: string, rows: readonly TraceRow[], dict?: TraceDict): void {
+  recordTrace(runId: string, rows: readonly TraceRow[], dict?: TraceDict): Promise<void> {
     const items = dict?.items ?? [];
     const quests = dict?.quests ?? [];
-    if (rows.length === 0 && items.length === 0 && quests.length === 0) return;
-    const insert = this.db.query(
-      `INSERT INTO trace (run_id, ts, kind, map, x, y, z, o, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
-    const name = this.db.query(`INSERT OR REPLACE INTO trace_dict (run_id, kind, id, data) VALUES (?, ?, ?, ?)`);
-    this.db.transaction(() => {
-      for (const r of rows) {
-        const data = r.data === undefined || r.data === null ? null : JSON.stringify(scrubChat(r.data, (t) => this.scrub(t)));
-        insert.run(runId, r.ts, r.kind, r.map ?? null, r.x ?? null, r.y ?? null, r.z ?? null, r.o ?? null, data);
-      }
-      for (const [id, quality, text] of items) name.run(runId, "item", id, JSON.stringify([quality, this.scrub(text)]));
-      for (const [id, req] of quests) name.run(runId, "quest", id, JSON.stringify(req));
-    })();
+    if (rows.length === 0 && items.length === 0 && quests.length === 0) return SETTLED;
+    // Built once, outside the attempt: a retry re-runs the same transaction.
+    const traced = rows.map((r) => ({
+      r,
+      data: r.data === undefined || r.data === null ? null : JSON.stringify(scrubChat(r.data, (t) => this.scrub(t))),
+    }));
+    const named = items.map(([id, quality, text]) => [id, JSON.stringify([quality, this.scrub(text)])] as const);
+    return this.write("trace", () => {
+      const insert = this.db.query(
+        `INSERT INTO trace (run_id, ts, kind, map, x, y, z, o, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      const name = this.db.query(`INSERT OR REPLACE INTO trace_dict (run_id, kind, id, data) VALUES (?, ?, ?, ?)`);
+      this.db.transaction(() => {
+        for (const { r, data } of traced) insert.run(runId, r.ts, r.kind, r.map ?? null, r.x ?? null, r.y ?? null, r.z ?? null, r.o ?? null, data);
+        for (const [id, data] of named) name.run(runId, "item", id, data);
+        for (const [id, req] of quests) name.run(runId, "quest", id, JSON.stringify(req));
+      })();
+    });
   }
 
   /** The run's trace dictionary, `data` parsed. For tests and in-process readers. */
@@ -862,12 +969,18 @@ export class Trajectory {
    */
   private mirrorReflectWindow(ts: number, event: unknown): void {
     if (this.runId === null || (event !== "open" && event !== "close")) return;
-    this.setReflectingSince(event === "open" ? ts : null);
+    // `append` is synchronous and has no caller to hand a retry's failure to;
+    // the column mirrors the record just appended, so a mirror that gave up
+    // after its retries is let go rather than thrown into nobody.
+    this.setReflectingSince(event === "open" ? ts : null).catch(noop);
   }
 
-  private setReflectingSince(since: number | null): void {
-    if (this.runId === null) return;
-    this.db.query(`UPDATE run SET reflecting_since = ? WHERE run_id = ?`).run(since, this.runId);
+  private setReflectingSince(since: number | null): Promise<void> {
+    const runId = this.runId;
+    if (runId === null) return SETTLED;
+    return this.write("reflecting_since", () => {
+      this.db.query(`UPDATE run SET reflecting_since = ? WHERE run_id = ?`).run(since, runId);
+    });
   }
 
   /**
@@ -881,32 +994,35 @@ export class Trajectory {
    * the rest of the config without it (`withoutSessionToken`), so the
    * trajectory, the row and the store that copies both hold no copy of it.
    */
-  writeMeta(meta: RunMeta): void {
+  writeMeta(meta: RunMeta): Promise<void> {
     this.runId = meta.runId;
     const safe = JSON.parse(this.scrub(jsonLine(meta))) as RunMeta;
     writeFileSync(join(this.dir, "meta.json"), `${JSON.stringify(toJsonSafe(safe), null, 2)}\n`, "utf8");
-    this.db
-      .query(
-        `INSERT INTO run (run_id, harness_version, started_at, driver, shakeout, model, objective, character, platform, resolved_model, resolved_cli_version, resolved_provider, continued_from, config_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(run_id) DO UPDATE SET harness_version = excluded.harness_version`,
-      )
-      .run(
-        meta.runId,
-        meta.harnessVersion,
-        meta.startedAt,
-        meta.config.driver,
-        meta.shakeout ?? null,
-        meta.config.model ?? null,
-        meta.config.objective ?? null,
-        meta.config.character ?? null,
-        platformOf(meta.config.apiBase, meta.config.driver),
-        meta.resolved?.model ?? null,
-        meta.resolved?.cliVersion ?? null,
-        meta.resolved?.provider ?? null,
-        meta.config.continuedFrom ?? null,
-        this.scrub(jsonLine(withoutSessionToken(meta.config))),
-      );
+    const configJson = this.scrub(jsonLine(withoutSessionToken(meta.config)));
+    const row = this.write("meta", () => {
+      this.db
+        .query(
+          `INSERT INTO run (run_id, harness_version, started_at, driver, shakeout, model, objective, character, platform, resolved_model, resolved_cli_version, resolved_provider, continued_from, config_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(run_id) DO UPDATE SET harness_version = excluded.harness_version`,
+        )
+        .run(
+          meta.runId,
+          meta.harnessVersion,
+          meta.startedAt,
+          meta.config.driver,
+          meta.shakeout ?? null,
+          meta.config.model ?? null,
+          meta.config.objective ?? null,
+          meta.config.character ?? null,
+          platformOf(meta.config.apiBase, meta.config.driver),
+          meta.resolved?.model ?? null,
+          meta.resolved?.cliVersion ?? null,
+          meta.resolved?.provider ?? null,
+          meta.config.continuedFrom ?? null,
+          configJson,
+        );
+    });
     /*
      * No window is open at a process boundary. `reflect.ts`: "A resumed run
      * starts with a fresh gate — closed window, un-armed until the next
@@ -914,8 +1030,9 @@ export class Trajectory {
      * is that in-memory truth's persistent half: a run killed mid-window would
      * otherwise leave the column standing and read as reflecting forever.
      */
-    this.setReflectingSince(null);
+    const reflecting = this.setReflectingSince(null);
     this.append({ t: "meta", ...meta, config: withoutSessionToken(meta.config) });
+    return Promise.all([row, reflecting]).then(noop);
   }
 
   /**
@@ -924,9 +1041,11 @@ export class Trajectory {
    * — the run row, meta.json and the trajectory — is told so, because a
    * lineage the character does not back is exactly the wrong record.
    */
-  dropContinuation(runId: string, detail: string): void {
+  dropContinuation(runId: string, detail: string): Promise<void> {
     this.append({ t: "harness", kind: "continue-dropped", detail });
-    this.db.query(`UPDATE run SET continued_from = NULL, character = NULL WHERE run_id = ?`).run(runId);
+    const row = this.write("continue-dropped", () => {
+      this.db.query(`UPDATE run SET continued_from = NULL, character = NULL WHERE run_id = ?`).run(runId);
+    });
     const path = join(this.dir, "meta.json");
     try {
       const meta = JSON.parse(readFileSync(path, "utf8")) as RunMeta;
@@ -935,6 +1054,7 @@ export class Trajectory {
     } catch {
       // No meta.json (a test harness): the row and the record carry it.
     }
+    return row;
   }
 
   /**
@@ -977,9 +1097,11 @@ export class Trajectory {
       return false;
     }
     try {
-      this.db
-        .query(`UPDATE run SET resolved_model = ?, resolved_cli_version = ?, resolved_provider = ? WHERE run_id = ?`)
-        .run(next.model, next.cliVersion, next.provider, runId);
+      this.write("resolved", () => {
+        this.db
+          .query(`UPDATE run SET resolved_model = ?, resolved_cli_version = ?, resolved_provider = ? WHERE run_id = ?`)
+          .run(next.model, next.cliVersion, next.provider, runId);
+      }).catch(noop);
     } catch {
       /* a run.sqlite that cannot take the update must not end the episode */
     }
@@ -1034,8 +1156,13 @@ export class Trajectory {
     }
   }
 
-  recordState(runId: string, s: StateLine): void {
+  recordState(runId: string, s: StateLine): Promise<void> {
     this.append({ t: "state", ...s });
+    const ts = this.now();
+    return this.write("state", () => this.insertState(runId, ts, s));
+  }
+
+  private insertState(runId: string, ts: number, s: StateLine): void {
     this.db
       .query(
         `INSERT INTO state (run_id, ts, level, xp, map, x, y, z, event_count, last_seq, money, quests_completed, turn, zone, area, items,
@@ -1044,7 +1171,7 @@ export class Trajectory {
       )
       .run(
         runId,
-        this.now(),
+        ts,
         s.level ?? null,
         s.xp ?? null,
         s.map ?? null,
@@ -1078,29 +1205,60 @@ export class Trajectory {
    * Recorded in all three places because they are read by different processes:
    * a resumed runner reads meta.json before any database is open.
    */
-  setCharacter(runId: string, character: string): void {
+  setCharacter(runId: string, character: string): Promise<void> {
     this.append({ t: "character", character });
-    this.db.query(`UPDATE run SET character = ? WHERE run_id = ?`).run(character, runId);
+    const row = this.write("character", () => {
+      this.db.query(`UPDATE run SET character = ? WHERE run_id = ?`).run(character, runId);
+    });
     const path = join(this.dir, "meta.json");
     try {
       const meta = JSON.parse(readFileSync(path, "utf8")) as RunMeta;
-      if (meta.config?.character === character) return;
+      if (meta.config?.character === character) return row;
       const next = { ...meta, config: { ...meta.config, character } };
       writeFileSync(path, `${JSON.stringify(toJsonSafe(next), null, 2)}\n`, "utf8");
     } catch {
       // No meta.json yet (a test harness, a torn write): the database row and
       // the trajectory record still carry the name.
     }
+    return row;
   }
 
-  setTermination(runId: string, reason: TerminationReason, detail?: string): void {
+  /**
+   * The run's verdict: the trajectory record first, then the row.
+   *
+   * The record is appended before the row is written, so a row write that
+   * fails (after its retries, for the live runner) leaves the verdict in
+   * trajectory.jsonl alone. `readRunFact` reads it from there when the row has
+   * none (`terminationOfTrajectory`), so the supervisor neither resumes nor
+   * re-ends a run whose runner recorded its end, and repairs the row
+   * (`repairTermination`).
+   */
+  setTermination(runId: string, reason: TerminationReason, detail?: string): Promise<void> {
     this.append({ t: "termination", reason, detail });
+    const at = this.now();
+    return this.write("termination", () => this.updateTermination(runId, reason, detail, at));
+  }
+
+  /**
+   * Write a verdict the trajectory already holds into a row that lacks it,
+   * appending nothing: the supervisor's repair of a run whose runner recorded
+   * its end but could not write the row (`setTermination`). A row that already
+   * carries a verdict is left alone. Returns whether it wrote.
+   */
+  repairTermination(runId: string, reason: string, detail: string | null, at: number): boolean {
+    const row = this.db.query(`SELECT termination_reason FROM run WHERE run_id = ?`).get(runId) as { termination_reason?: unknown } | null;
+    if (row === null || (row.termination_reason ?? null) !== null) return false;
+    this.updateTermination(runId, reason, detail ?? undefined, at);
+    return true;
+  }
+
+  private updateTermination(runId: string, reason: string, detail: string | undefined, at: number): void {
     this.db
       .query(
         `UPDATE run SET termination_reason = ?, termination_detail = ?, ended_at = ?, pause_reason = NULL
          WHERE run_id = ?`,
       )
-      .run(reason, detail ?? null, this.now(), runId);
+      .run(reason, detail ?? null, at, runId);
   }
 
   /**
@@ -1119,9 +1277,15 @@ export class Trajectory {
    * segment. `--resume` clears the row (`clearPause`), so the next segment's
    * pause is recorded again.
    */
-  setPause(runId: string, reason: PauseReason, detail?: string, episodeElapsedMs?: number, notBefore?: number): boolean {
+  setPause(runId: string, reason: PauseReason, detail?: string, episodeElapsedMs?: number, notBefore?: number): Promise<boolean> {
+    const taken = this.takePause(runId, reason, detail, episodeElapsedMs, notBefore);
+    return taken === null ? Promise.resolve(false) : taken.then(() => true);
+  }
+
+  /** `setPause`'s synchronous half: null when the row already carries a pause, else the record appended and the row's write. */
+  private takePause(runId: string, reason: PauseReason, detail?: string, episodeElapsedMs?: number, notBefore?: number): Promise<void> | null {
     const row = this.db.query(`SELECT pause_reason FROM run WHERE run_id = ?`).get(runId) as { pause_reason?: unknown } | null;
-    if (row !== null && typeof row.pause_reason === "string" && row.pause_reason !== "") return false;
+    if (row !== null && typeof row.pause_reason === "string" && row.pause_reason !== "") return null;
     this.append({
       t: "pause",
       reason,
@@ -1129,8 +1293,9 @@ export class Trajectory {
       ...(episodeElapsedMs !== undefined ? { episodeElapsedMs } : {}),
       ...(notBefore !== undefined ? { notBefore } : {}),
     });
-    this.db.query(`UPDATE run SET pause_reason = ? WHERE run_id = ?`).run(reason, runId);
-    return true;
+    return this.write("pause", () => {
+      this.db.query(`UPDATE run SET pause_reason = ? WHERE run_id = ?`).run(reason, runId);
+    });
   }
 
   /**
@@ -1140,14 +1305,21 @@ export class Trajectory {
    * stopped keeps that pause's reason and its instant (`at`), which is what
    * the resume cadence counts from. `meta` is the run's meta as it stands.
    */
-  pauseWithMark(runId: string, mark: PauseMark, meta: RunMeta): boolean {
-    if (!this.setPause(runId, mark.reason, mark.detail, mark.episodeElapsedMs, mark.notBefore)) return false;
-    this.writeMeta({ ...meta, pause: mark });
-    return true;
+  pauseWithMark(runId: string, mark: PauseMark, meta: RunMeta): Promise<boolean> {
+    // Both halves start now, synchronously, rather than the mark waiting on
+    // the row: the SIGTERM handler relies on the record, the row and the mark
+    // all being written before it returns. A row write that meets a lock
+    // queues the mark's row write behind it; meta.json is written at once.
+    const taken = this.takePause(runId, mark.reason, mark.detail, mark.episodeElapsedMs, mark.notBefore);
+    if (taken === null) return Promise.resolve(false);
+    const marked = this.writeMeta({ ...meta, pause: mark });
+    return Promise.all([taken, marked]).then(() => true);
   }
 
-  clearPause(runId: string): void {
-    this.db.query(`UPDATE run SET pause_reason = NULL WHERE run_id = ?`).run(runId);
+  clearPause(runId: string): Promise<void> {
+    return this.write("clear-pause", () => {
+      this.db.query(`UPDATE run SET pause_reason = NULL WHERE run_id = ?`).run(runId);
+    });
   }
 
   runRow(runId: string): Record<string, unknown> | null {
@@ -1204,10 +1376,46 @@ export class Trajectory {
       .all(runId) as Record<string, unknown>[];
   }
 
+  /**
+   * Close the handle now. Any opener but the run's own writer also puts a
+   * WAL-mode file that nobody else holds back on the rollback journal (a run
+   * whose writer died, ended by the supervisor), without waiting; the owner
+   * should `finish()` instead, and closing it here makes one attempt at that.
+   * A write still retrying is abandoned: its promise rejects on the closed
+   * handle. Never throws.
+   */
   close(): void {
+    try {
+      leaveWal(this.db, { checkpoint: this.walOwner });
+    } catch {
+      /* best effort; never in the way of the close */
+    }
     this.db.close();
   }
+
+  /**
+   * The owner's close: wait out every write still retrying, then checkpoint
+   * and put the file back on the rollback journal, trying for a few seconds
+   * while a reader holds it (`leaveWalPatiently`), then close. The waits are
+   * awaited, so the heartbeat beats through them. Returns the journal mode the
+   * file was left in. Never throws: a write that gave up has already thrown
+   * to whoever awaited it.
+   */
+  async finish(opts: { sleep?: (ms: number) => Promise<void> } = {}): Promise<string> {
+    await this.flush();
+    let mode = "";
+    try {
+      mode = this.walOwner ? await leaveWalPatiently(this.db, opts) : leaveWal(this.db, { checkpoint: false });
+    } catch {
+      /* best effort */
+    }
+    this.db.close();
+    return mode;
+  }
 }
+
+const SETTLED: Promise<void> = Promise.resolve();
+function noop(): void {}
 
 /** Read every record of a trajectory file. Bad lines surface, not vanish. */
 export function readTrajectory(dir: string): TrajectoryRecord[] {

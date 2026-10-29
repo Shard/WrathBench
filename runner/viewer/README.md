@@ -108,7 +108,10 @@ verify from another machine, or the check proves nothing.
 
 It also only ever reads. Each `run.sqlite` is opened readonly, so a run being
 written by the harness inside the container is never disturbed, and an old run
-directory never gains a schema it did not have.
+directory never gains a schema it did not have. The runs directory is still
+mounted writable: a live run's database is in WAL, and a read-only handle on a
+WAL-mode file creates and maps its `-wal` and `-shm` beside it, never writing
+the database itself (`runner/src/rundb.ts`).
 
 ### Host allowlist
 

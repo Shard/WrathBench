@@ -139,7 +139,7 @@ export class TraceWriter {
     }
     // The window the clock is in now, so an idle child still keys each window.
     this.keyIfNeeded(traceWindowStart(this.now()), out);
-    if (out.length > 0 || drained.dict !== undefined) this.o.trajectory.recordTrace(this.o.runId, out, drained.dict);
+    if (out.length > 0 || drained.dict !== undefined) await this.o.trajectory.recordTrace(this.o.runId, out, drained.dict);
     if (drained.dropped > 0) {
       this.log(`[trace] the sandbox buffer dropped ${drained.dropped} trace row(s) before this drain`);
     }

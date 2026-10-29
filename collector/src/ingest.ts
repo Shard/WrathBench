@@ -384,9 +384,11 @@ export class Ingester {
     const jsonlPath = join(dir, "trajectory.jsonl");
     const metaSig = sigOf(metaPath);
     const dbSig = sigOf(dbPath);
+    // An UPDATE of the run row on a live run lands in the WAL, not the file.
+    const walSig = sigOf(`${dbPath}-wal`);
     const jsonlSig = sigOf(jsonlPath);
     if (metaSig === null && dbSig === null) return false;
-    const sig = `${metaSig?.sig ?? "-"}|${dbSig?.sig ?? "-"}|${jsonlSig?.sig ?? "-"}|${archived ? 1 : 0}`;
+    const sig = `${metaSig?.sig ?? "-"}|${dbSig?.sig ?? "-"}${walSig !== null ? `+${walSig.sig}` : ""}|${jsonlSig?.sig ?? "-"}|${archived ? 1 : 0}`;
     if (this.deps.offsets.signature(runId, "run") === sig) return false;
 
     let meta: Record<string, unknown> = {};

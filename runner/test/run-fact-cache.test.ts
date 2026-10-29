@@ -190,6 +190,18 @@ describe("the run-fact cache is never a different answer", () => {
     expect(keptIds(cachePath)).toContain(RUNS[1]!.runId);
   });
 
+  test("a WAL holding frames is a write in flight; the empty -wal a reader leaves beside a WAL-mode file is not", () => {
+    const dir = runsDirWithRuns();
+    const runDir = join(dir, RUNS[0]!.runId);
+    // What a read-only open of a WAL-mode file with no writer leaves behind.
+    writeFileSync(join(runDir, "run.sqlite-wal"), "");
+    writeFileSync(join(runDir, "run.sqlite-shm"), "");
+    expect(runFactKey(runDir)).not.toBeNull();
+    // Commits `run.sqlite` does not show yet.
+    writeFileSync(join(runDir, "run.sqlite-wal"), "frames");
+    expect(runFactKey(runDir)).toBeNull();
+  });
+
   test("a cache that cannot be written costs nothing but the next cold read", () => {
     const dir = runsDirWithRuns();
     const now = settled();

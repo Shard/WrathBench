@@ -83,11 +83,17 @@ spec:
             {{- include "wrathbench.publisherSecretEnv" . | nindent 12 }}
           resources: {{ toYaml .Values.publisher.resources | nindent 12 }}
           volumeMounts:
+            # Writable, and nothing here writes run data. A live run's
+            # run.sqlite is in WAL (runner/src/rundb.ts), and a reader of a
+            # WAL-mode file must create and map its -wal and -shm beside it,
+            # which a readOnly mount refuses. Every run.sqlite open in this
+            # process is SQLITE_OPEN_READONLY (openRunDb's `readonly`), which
+            # writes no page and no WAL frame; the publisher's own writes are
+            # its state file and the bucket, and it holds no model key.
             - name: data
               mountPath: /wrathbench/data/runs
               subPath: runs
-              readOnly: true
-            # The only writable path this service owns.
+            # The only path this service writes on purpose.
             - name: data
               mountPath: /wrathbench/data/publish
               subPath: publish

@@ -396,10 +396,12 @@ The collector (collector/README.md): tails data/runs into ClickHouse.
 The runner image, not oven/bun as under compose, for the reason the publisher
 gives: compose bind-mounts the repo and there is no repo to mount here.
 
-The runs volume is mounted READ-ONLY and this service is written to be — it
-opens each run.sqlite readonly and never writes into the tree. Its one
-writable path is its own offset database, which is as disposable as the store:
-delete it and the next start is a full replay.
+This service is written to read the runs volume only — it opens each
+run.sqlite readonly and never writes into the tree — but the volume is mounted
+writable: a live run's run.sqlite is in WAL (runner/src/rundb.ts), and a
+readonly handle on a WAL-mode file creates and maps its -wal and -shm beside
+it. Its own writable path is its offset database, which is as disposable as
+the store: delete it and the next start is a full replay.
 
 Recreate, not RollingUpdate: two collectors would not corrupt anything (every
 key is natural and every insert idempotent) but they would both re-read the
@@ -453,11 +455,11 @@ spec:
               value: /wrathbench/data/collector/collector.sqlite
           resources: {{ toYaml .Values.collector.resources | nindent 12 }}
           volumeMounts:
+            # Writable for the WAL side files only (see above).
             - name: data
               mountPath: /wrathbench/data/runs
               subPath: runs
-              readOnly: true
-            # The only writable path, and the only thing the collector owns.
+            # The only thing the collector owns.
             - name: data
               mountPath: /wrathbench/data/collector
               subPath: collector

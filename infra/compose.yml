@@ -463,9 +463,13 @@ services:
   # is: this reads files and makes HTTP requests, so it needs neither git nor
   # the Claude CLI, and a runner-image rebuild should not recreate it.
   #
-  # The runs mount is read-only and this service is written to be. The one
-  # writable path is its own offset database, which is as disposable as the
-  # store: delete it and the next start is a full replay.
+  # This service is written to read the runs tree only, but the mount is
+  # writable: a live run's run.sqlite is in WAL (runner/src/rundb.ts), and a
+  # readonly handle on a WAL-mode file creates and maps its -wal and -shm
+  # beside it. Its own writable path is its offset database, which is as
+  # disposable as the store: delete it and the next start is a full replay.
+  # WAL needs every process on one kernel: run nothing against `data/runs`
+  # from the host while the stack runs on a VM (Docker Desktop).
   #
   # No profile: unlike the fleet and the publisher, two collectors against one
   # ClickHouse would be harmless (the keys are natural and the inserts
@@ -484,7 +488,7 @@ services:
       WRATHBENCH_COLLECTOR_DB: /wrathbench/data/collector/collector.sqlite
     volumes:
       - ..:/wrathbench:ro
-      - ../data/runs:/wrathbench/data/runs:ro
+      - ../data/runs:/wrathbench/data/runs
       - ../data/collector:/wrathbench/data/collector
     networks: [wrathbench]
     restart: unless-stopped
@@ -556,10 +560,13 @@ services:
       # /wrathbench/.env inside the container, which is where the R2 key pair
       # lives (docs/RUNBOOK.md "Secrets" — `.env`, never argv, never compose).
     volumes:
-      # Read-only: the publisher reads the repo and writes nothing but its state
-      # file, and the one credential it holds is scoped to one bucket.
+      # The repo read-only. The publisher writes nothing but its state file, and
+      # the one credential it holds is scoped to one bucket; the runs mount is
+      # writable only because a readonly handle on a live run's WAL-mode
+      # run.sqlite creates its -wal and -shm (runner/src/rundb.ts). Every
+      # run.sqlite open here is SQLITE_OPEN_READONLY.
       - ..:/wrathbench:ro
-      - ../data/runs:/wrathbench/data/runs:ro
+      - ../data/runs:/wrathbench/data/runs
       # The only writable path, and the only thing this service owns on disk.
       - ../data/publish:/wrathbench/data/publish
     networks: [wrathbench]

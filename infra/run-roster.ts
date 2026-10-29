@@ -1336,7 +1336,8 @@ function accountOfRun(runId: string): string | undefined {
  */
 function activityAgeMs(runId: string): number | undefined {
   let newest: number | undefined;
-  for (const name of ["trajectory.jsonl", "run.sqlite", "heartbeat", IMAGE_RECORD_FILE]) {
+  // `run.sqlite-wal`: a live run's database writes land there until a checkpoint.
+  for (const name of ["trajectory.jsonl", "run.sqlite", "run.sqlite-wal", "heartbeat", IMAGE_RECORD_FILE]) {
     try {
       const m = statSync(join(runDir(runId), name)).mtimeMs;
       if (newest === undefined || m > newest) newest = m;

@@ -943,7 +943,7 @@ player-dump format, and `run/…`, the run directory, which leaves out:
 - the heartbeat;
 - `claude-config/backups/`;
 - `claude-mcp.json`, which the CLI driver rewrites at every launch;
-- temp files and sqlite journals. Each sqlite file is copied consistently
+- temp files and sqlite journals and WAL files. Each sqlite file is copied consistently
   with `VACUUM INTO`.
 
 With `--no-trajectory` it also leaves out `trajectory.jsonl`. That makes a
@@ -2474,7 +2474,7 @@ environment, and they must stay in agreement:
 
 | variable | value | why |
 | --- | --- | --- |
-| `WRATHBENCH_RUNS_DIR` | `data/runs` | the evidence record, read-only |
+| `WRATHBENCH_RUNS_DIR` | `data/runs` | the evidence record. The publisher only reads it, and opens every `run.sqlite` read-only, but the mount is writable: a reader of a WAL-mode database creates and maps its `-wal` and `-shm` beside it (`runner/src/rundb.ts`) |
 | `WRATHBENCH_CONFIG_DB` | `data/config.sqlite` (the default; unset under compose) | the config store's roster names the models the pages label |
 | `WRATHBENCH_PUBLISH_STATE` | `data/publish/state.json` | what was uploaded last, so a pass PUTs only what changed. Deleting it is the repair for a bad immutable object, and since the trace it also re-uploads every published trace segment in one pass: 288 a day for each character a trace recorded, which for a long freeplay fleet is tens of thousands of PUTs at once |
 | `WRATHBENCH_PUBLISH_INTERVAL_MS` | `60000` in the script; the chart and compose set `300000` | `--loop` cadence. Five minutes is a cost choice, not a freshness one — a pass writes ~24 objects regardless of cadence, so 60s measured ~1.2M R2 class-A ops/month against a 1M free tier and 300s is ~240k. The harness's own floor is 30–60s, so a faster push would buy little anyway |
