@@ -1,5 +1,5 @@
 - Issue: <!-- the issue this is agreed against; PRs land against one -->
 - Hard constraint touched: <!-- which one (CONTRIBUTING.md), or "none" -->
-- Tests: <!-- bun test / bun run typecheck, and any smoke script if module/ changed -->
+- Tests: <!-- bun run test / bun run typecheck, and the smokes run after the release if this bumps the wrath-mcp pin with a module change -->
 - Docs: <!-- the doc that owns what changed, if this changes how it behaves -->
 - Nothing Blizzard-derived is in this diff: <!-- yes -->

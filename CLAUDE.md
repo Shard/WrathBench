@@ -10,22 +10,24 @@ It measures how well a model drives a fixed toolkit toward long-horizon goals in
 
 - Nothing Blizzard-derived ever enters git: no client files, no MPQ/DBC, no extracted maps/vmaps/mmaps, no wiki dumps containing game text, no trajectory logs. These live in volumes under `data/` which is gitignored at the directory level.
 - The agent observes only what a real game client could observe. The action path goes through the same server opcode handlers a client would hit. See `wrath-mcp/docs/CONTRACTS.md`. If you find yourself reaching for a server-side shortcut that a client could not do, that is the signal to stop.
-- The C++ module stays thin: packet bridge and event tap only. Game semantics live in TypeScript.
+- The agent stack (module, SDK, MCP) is wrath-mcp's, and its rules are in `wrath-mcp/CLAUDE.md`: among them, the C++ module stays thin, a packet bridge and event tap only, with game semantics in TypeScript.
 - The agent loop is model-agnostic. No per-model prompts, retries, or tuning.
 - SDK surface is simple by default, flexible via the raw-action escape hatch: helpers are earned by observed need in trajectories, never speculative, and there is no convenience middle tier (docs/METHODOLOGY.md, "The model surface").
-- Pinned versions are pinned. AzerothCore commit, Bun version, and the module build are changed deliberately and documented.
-- Original WrathBench material outside `module/` is MIT-licensed under the root `LICENSE`. `module/` is GPL-2.0-or-later under `module/LICENSE`. Third-party works retain their own terms; see `THIRD-PARTY-NOTICES.md`.
+- Pinned versions are pinned. AzerothCore commit, Bun version and the wrath-mcp pin (which fixes the module build) are changed deliberately and documented in `infra/PINS.md`.
+- Original WrathBench material is MIT-licensed under the root `LICENSE`. The stack in `wrath-mcp/` states its own licensing in its README ("Licence"); point there rather than restating it. Third-party works retain their own terms; see `THIRD-PARTY-NOTICES.md`.
 
 ## Repository layout
 
 ```
-wrath-mcp/     Submodule (Shard/wrath-mcp), the agent stack: module/ (C++ AzerothCore module, GPL-2.0-or-later), sdk/ and mcp/
-runner/        Agent loop, benchmark tools and hooks into mcp/, trajectory logging (MIT)
+wrath-mcp/     Submodule (Shard/wrath-mcp), the agent stack: module/ (C++ AzerothCore module), sdk/, mcp/; its own repo, licence and docs
+runner/        Agent loop, benchmark tools and the stack's hooks, trajectory logging, the viewer's API (MIT)
 dashboard/     SolidJS SPA over the viewer's read-only /api (MIT)
 wiki/          Tooling to build the wiki bundle from a local dump (MIT); the dump itself is in data/
 minimap/       Local minimap extraction tooling; generated assets stay in data/ (MIT)
+collector/     Tails recorded runs into ClickHouse, the viewer's derived store (MIT)
 infra/         Compose files, Dockerfiles, fleet and smoke scripts (original WrathBench portions MIT)
 docs/          Documentation (MIT)
+deps/          Submodule: the pinned AzerothCore tree
 data/          Gitignored. Server data directory, wiki dump, runs, sqlite stores
 ```
 
@@ -33,14 +35,15 @@ data/          Gitignored. Server data directory, wiki dump, runs, sqlite stores
 
 - Bun 1.4.x pinned in `.bun-version` and `package.json`. Use Bun built-ins before adding dependencies: `bun:sqlite`, `Bun.serve` (HTTP + WebSocket), `Bun.JSONL`, `Bun.markdown`, `bun test`.
 - TypeScript strict. Zod only at external boundaries (module messages, model output, config).
-- C++ follows AzerothCore's module conventions and builds inside the worldserver image.
+- The C++ module is wrath-mcp's and follows AzerothCore's module conventions; here it builds only inside the worldserver image, from the pinned `wrath-mcp/module/`.
 - Everything runs in containers: the Helm chart at `infra/chart/wrathbench` for the fleet and any real deployment, `infra/compose.yml` for a single-machine quickstart with no deploy tooling around it. Either way the only host-side prerequisite is the AzerothCore server data directory at `data/client`.
 
 ## How to work
-- Read the relevant doc before touching a component. `docs/ARCHITECTURE.md` for structure, `wrath-mcp/docs/CONTRACTS.md` for what the agent may see and do, `docs/METHODOLOGY.md` for the decisions that shape what results mean — check it before changing anything the model sees, the scorer reads, or the scheduler counts — and `docs/RUNBOOK.md` for running the fleet, the config store and a deploy. The operator commands it names are `bun wb <group> <command>` from the repo root; `bun wb` lists them.
+- The stack is the `wrath-mcp/` submodule: a fresh clone or worktree needs `git submodule update --init wrath-mcp` before `bun install --frozen-lockfile`. A stack change is edited in `wrath-mcp/` and lands as two PRs: one in wrath-mcp, merged first, then a pointer bump here, because the pin on master must be a commit on wrath-mcp's master (`infra/PINS.md`; skill `dev-loop` has the mechanics).
+- Read the relevant doc before touching a component. `docs/ARCHITECTURE.md` for the benchmark's structure and what it takes from the stack, wrath-mcp's own `docs/` for the stack's, `wrath-mcp/docs/CONTRACTS.md` for what the agent may see and do, `docs/METHODOLOGY.md` for the decisions that shape what results mean — check it before changing anything the model sees, the scorer reads, or the scheduler counts — and `docs/RUNBOOK.md` for running the fleet, the config store and a deploy. The operator commands it names are `bun wb <group> <command>` from the repo root; `bun wb` lists them.
 - Inspect runs, the audit log and the publisher with `bun wb inspect …` and render the dashboard with `bun wb dashboard shots`, not throwaway scripts; `.claude/skills/` says when and how, read-only rules included.
 - Log at the module boundary (every observation served, every action dispatched) and in the runner (every snippet, result, and event batch the model saw). Trajectory logs are JSONL under `data/runs/<run-id>/`.
-- Tests: `bun run test` at the root runs every workspace's suite (sdk, runner, wiki, minimap, dashboard, infra) over eight workers in about a minute (plain `bun test` is the same suite in one process, about four) — all of it fixture-based, green from a bare clone or a fresh worktree with no `data/` once `bun install --frozen-lockfile` has run in it (under a second with a warm cache; a `node_modules` linked from another checkout runs that checkout's code, and the suite refuses it) — and `bun run typecheck` for every project including `infra/`. Bun strips types without checking them, so a green `bun test` says nothing about types — run both. While iterating, run from the root so its preloads apply: `bun test runner/test/sleep.test.ts` for one file, `bun run test runner/` for one workspace (the script takes the same filters, and runs `runner/` in under 20 s against 90 s in one process), and `-t '<part of a test name>'` to narrow either. Module changes are verified by the smoke scripts in `infra/smoke/` (`bun wb smoke <name>` runs one in the runner pod), which do need the live stack.
+- Tests: `bun run test` at the root runs every workspace's suite (the stack's sdk and mcp, runner, wiki, minimap, dashboard, collector, infra) over eight workers in about a minute (plain `bun test` is the same suite in one process, about four) — all of it fixture-based, green from a bare clone or a fresh worktree with no `data/` once `bun install --frozen-lockfile` has run in it (under a second with a warm cache; a `node_modules` linked from another checkout runs that checkout's code, and the suite refuses it) — and `bun run typecheck` for every project including `infra/`. Bun strips types without checking them, so a green `bun test` says nothing about types — run both. While iterating, run from the root so its preloads apply: `bun test runner/test/sleep.test.ts` for one file, `bun run test runner/` for one workspace (the script takes the same filters, and runs `runner/` in under 20 s against 90 s in one process), and `-t '<part of a test name>'` to narrow either. A module change is verified only by the release that carries its pointer bump and the smoke scripts in `infra/smoke/` after it (`bun wb smoke suite`, or `bun wb smoke <name>` for one, in the runner pod), which do need the live stack.
 - Working memory is private and lives in the operator's own repository at `/home/mark/git/wrathbench-private`: completed work goes in the day file `worklogs/YYYY-MM-DD.md` (append to today's, create it if absent; `WORKLOG.md` is only the index), open items go in `FOLLOW-UPS.md` (open items only, stable numbers, and nothing else — no archive). When an item ships, add a `shipped: item N — commit — where it lives` line to the day file and delete the item from the ledger; that line is the only thing that makes an old citation resolve, so it is not optional. An item with no next action and no trigger goes to a GitHub issue instead. Decisions still go in `docs/METHODOLOGY.md` or the owning component doc, in this repository. Nothing in the public tree cites a day file or an item number.
 
 ## Style

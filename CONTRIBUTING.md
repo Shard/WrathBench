@@ -20,7 +20,7 @@ These are from `CLAUDE.md` and they hold for every change:
   (`wrath-mcp/docs/CONTRACTS.md`). If you find yourself reaching for a server-side
   shortcut that a client could not do, that is the signal to stop.
 - The C++ module stays thin: packet bridge and event tap only. Game semantics
-  live in TypeScript.
+  live in TypeScript (a rule of the stack's, kept in wrath-mcp).
 - The agent loop is model-agnostic. No per-model prompts, retries, or tuning.
 - SDK helpers are earned by observed need in trajectories, never speculative;
   the raw-action escape hatch is how a trajectory shows the need first
@@ -28,10 +28,27 @@ These are from `CLAUDE.md` and they hold for every change:
 
 ## Licence
 
-Inbound equals outbound: what you contribute is licensed as the file it lands
-in — MIT under the root `LICENSE` everywhere except `module/`, which is
-GPL-2.0-or-later under `module/LICENSE`. There is no CLA and no DCO sign-off.
-Opening the pull request is the grant.
+Inbound equals outbound: what you contribute here is MIT under the root
+`LICENSE`. There is no CLA and no DCO sign-off. Opening the pull request is the
+grant. A contribution to the stack is made in wrath-mcp, under the terms its
+README states.
+
+## The stack is another repository
+
+The agent stack (the AzerothCore module, the SDK, the MCP server and snippet
+sandbox) is [Shard/wrath-mcp](https://github.com/Shard/wrath-mcp), checked out
+here as the `wrath-mcp/` submodule. A change to it goes to wrath-mcp first, as
+an issue and a pull request there under its own `CONTRIBUTING.md`. Once that
+merges, a pull request here moves the submodule pointer to the new wrath-mcp
+commit, which is what puts the change into WrathBench's builds
+(`infra/PINS.md` has the rules). A change that needs both sides is two pull
+requests, the stack's merged first.
+
+A module change cannot be verified by either repository's CI: the module
+compiles only inside an AzerothCore tree and is exercised only by a live
+worldserver. It is verified by the release that carries the pointer bump,
+which builds the worldserver image with it, and the smoke suite run against
+the live stack after that release.
 
 ## Model results
 
@@ -46,15 +63,16 @@ outside runs without losing it, that will be its own decision.
 
 ## Running the tests
 
-From a bare clone, with no `data/` directory and no game data of any kind:
-`bun install` once at the root (Bun 1.4.x, pinned in `.bun-version`), then
-`bun test` for every workspace's suite and `bun run typecheck` for every
-project. Run both — Bun strips types without checking them, so a green
-`bun test` says nothing about types. CI additionally runs
-`bun run boundary` and `bun run dashboard:build`, which are cheap locally and
-worth running before you push. Changes under `module/` are verified by the
-smoke scripts in `infra/smoke/`, which need the live stack and therefore cannot
-run in CI or on a bare clone.
+From a clone with the stack's submodule checked out (`git clone
+--recurse-submodules`, or `git submodule update --init wrath-mcp` after a plain
+clone), with no `data/` directory and no game data of any kind:
+`bun install --frozen-lockfile` once at the root (Bun 1.4.x, pinned in
+`.bun-version`), then `bun run test` for every workspace's suite and
+`bun run typecheck` for every project. Run both — Bun strips types without
+checking them, so a green test run says nothing about types. CI additionally
+runs `bun run boundary` and `bun run dashboard:build`, which are cheap locally
+and worth running before you push. The smoke scripts in `infra/smoke/` need the
+live stack and therefore cannot run in CI or on a bare clone.
 
 ## Where a change is written down
 

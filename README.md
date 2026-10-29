@@ -17,7 +17,7 @@ Each directory has its own README that says what it is for and how to use it.
 
 | Directory | What it is |
 | --- | --- |
-| `wrath-mcp/` | The agent stack, a submodule ([Shard/wrath-mcp](https://github.com/Shard/wrath-mcp)): the thin AzerothCore module that exposes what a game client could see and do and nothing more, the TypeScript SDK a model's snippets call, and the confined snippet sandbox, MCP server and core tools over it. |
+| `wrath-mcp/` | The agent stack, a submodule ([Shard/wrath-mcp](https://github.com/Shard/wrath-mcp)) with its own README, licence and docs: the thin AzerothCore module that exposes what a game client could see and do and nothing more, the TypeScript SDK a model's snippets call, and the confined snippet sandbox, MCP server and core tools over it. |
 | `runner/` | The agent loop: hands a model the SDK in a sandbox, supervises the episode and records everything that happened. |
 | `runner/viewer/` | The read-only API over recorded runs that the dashboard reads. |
 | `dashboard/` | The web UI over that API, which is also the public site at <https://wrathbench.shard.page>. |
@@ -25,9 +25,9 @@ Each directory has its own README that says what it is for and how to use it.
 | `wiki/` | Builds the searchable reference bundle the runner serves to the model, from a locally held wiki dump. |
 | `minimap/` | Extracts and bakes the map tiles the dashboard's map draws. |
 | `infra/` | Docker Compose to try WrathBench on one machine, the Helm chart the project's own fleet runs on, and the operator commands. |
-| `docs/` | Architecture, the contracts the agent is held to, the methodology behind the results, and the runbook. |
+| `docs/` | Architecture, the methodology behind the results, the episodes, the runbook, and the data and legal lines. |
 
-`docs/ARCHITECTURE.md` is the map of how the pieces fit; `wrath-mcp/docs/CONTRACTS.md` says what the agent may see and do; `docs/METHODOLOGY.md` holds the decisions that shape what a result means.
+`docs/ARCHITECTURE.md` is the map of how the benchmark fits around the stack; `wrath-mcp/docs/CONTRACTS.md` says what the agent may see and do; `docs/METHODOLOGY.md` holds the decisions that shape what a result means.
 
 ## Try it on one machine
 
@@ -58,7 +58,7 @@ The compose stack is a quickstart, not a deployment, and has no tooling for upda
 
 ## Developing without game data
 
-The harness itself needs none of the above. From a bare clone, `bun install --frozen-lockfile` at the root (Bun is pinned in `.bun-version`), then:
+The harness itself needs none of the above. From a bare clone with the stack's submodule checked out (`git submodule update --init wrath-mcp` if you cloned without `--recurse-submodules`), `bun install --frozen-lockfile` at the root (Bun is pinned in `.bun-version`), then:
 
 ```sh
 bun run test                 # every workspace's suite, all fixture-based
@@ -67,8 +67,8 @@ bun run dashboard:build
 bun run viewer               # serves the dashboard with empty states
 ```
 
-Bun strips types without checking them, so a green test run says nothing about types; run both. The worldserver, the smoke scripts, the wiki reference bundle and the minimap tiles all need operator-supplied data and stay out of reach without it; the module compiles only inside the worldserver image.
+Bun strips types without checking them, so a green test run says nothing about types; run both. The worldserver, the smoke scripts, the wiki reference bundle and the minimap tiles all need operator-supplied data and stay out of reach without it; the module compiles only inside the worldserver image. A change to the stack itself is made in wrath-mcp first; `CONTRIBUTING.md` has the flow.
 
 ## Licence
 
-`module/` is GPL-2.0-or-later under `module/LICENSE`. Everything else original to WrathBench is MIT under the root `LICENSE`. Neither relicenses AzerothCore, Blizzard's assets or any dependency; see `THIRD-PARTY-NOTICES.md` and `docs/DATA-AND-LEGAL.md`. Contributions and vulnerability reports: `CONTRIBUTING.md` and `SECURITY.md`.
+Original WrathBench material is MIT under the root `LICENSE`. The agent stack in `wrath-mcp/` is its own repository, and its README ("Licence") states its licensing. Neither relicenses AzerothCore, Blizzard's assets or any dependency; see `THIRD-PARTY-NOTICES.md` and `docs/DATA-AND-LEGAL.md`. Contributions and vulnerability reports: `CONTRIBUTING.md` and `SECURITY.md`.

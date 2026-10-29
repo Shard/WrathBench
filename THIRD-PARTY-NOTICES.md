@@ -2,9 +2,13 @@
 
 ## AzerothCore
 
-WrathBench builds the AzerothCore tree pinned in `deps/azerothcore` and copies the WrathBench module into that tree as `modules/mod-wrathbench`. AzerothCore's root license is GNU GPL version 2, and its source headers permit use under GPL version 2 or, at the recipient's option, a later version. AzerothCore's copyright and licensing are not changed by WrathBench's root MIT license or by the module's GPL-2.0-or-later notice.
+WrathBench builds the AzerothCore tree pinned in `deps/azerothcore` and copies the agent stack's module (`wrath-mcp/module/`, below) into that tree as `modules/mod-wrathbench`. AzerothCore's root license is GNU GPL version 2, and its source headers permit use under GPL version 2 or, at the recipient's option, a later version. The worldserver that build produces is a combined work under AzerothCore's license. AzerothCore's copyright and licensing are not changed by WrathBench's root MIT license or by the module's own terms.
 
 `infra/docker/server.Dockerfile` adapts or copies portions of AzerothCore's upstream Docker build. Those portions retain their upstream copyright and license terms. The pinned source and license are recorded in `infra/PINS.md`.
+
+## wrath-mcp
+
+The agent stack — the AzerothCore module, the SDK and the MCP server — is the separate repository [Shard/wrath-mcp](https://github.com/Shard/wrath-mcp), checked out here as the `wrath-mcp/` submodule at the commit recorded in `infra/PINS.md`. Its licensing is stated in its own `README.md` ("Licence") and its third-party notices in its own `THIRD-PARTY-NOTICES.md`; WrathBench's root MIT license does not change either.
 
 ## Lobe Icons
 

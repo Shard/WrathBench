@@ -332,7 +332,7 @@ its own:
 ### The pick: (c) for gear, the fixture tool for everything else
 
 Per member, per attempt, in `infra/fixtures/stage-party.ts` (operator tooling
-beside `apply.ts`, never imported by `runner/` or `sdk/`), run by the roster
+beside `apply.ts`, never imported by `runner/` or `wrath-mcp/sdk/`), run by the roster
 before a fresh party launch and by hand for the smoke:
 
 1. Delete last attempt's character through the module (`POST
@@ -724,12 +724,12 @@ Independently mergeable, in build order; each names its verify step. "Release"
 means the change reaches the fleet only through `bun wb release run`;
 "decision" means it waits on an open question below.
 
-1. **Module** (`module/`, `wrath-mcp/module/PROTOCOL.md`): load `Map.dbc`; `mapName`
+1. **Module** (`wrath-mcp/module/`, `wrath-mcp/module/PROTOCOL.md`): load `Map.dbc`; `mapName`
    and `instanceType` on `WB_AREA` and `WB_SESSION_STATE`; whitelist
    `SMSG_PARTYKILLLOG` and `SMSG_RESURRECT_REQUEST`. Verify: `kill-credit.ts`
    asserts the kill log for its kills, `area-and-roles.ts` the map fields,
    `death-recovery.ts` gains a two-account resurrection arc. Release.
-2. **SDK** (`sdk/`): event schemas for the two packets, `state.self.map`,
+2. **SDK** (`wrath-mcp/sdk/`): event schemas for the two packets, `state.self.map`,
    `state.pendingResurrect`, `acceptResurrection`, and the chat `type`
    option on `say` (recommended; still the operator's call). Verify: the
    SDK's fixture tests and the smokes of phase 1. Ships with phase 1's
@@ -779,7 +779,7 @@ means the change reaches the fleet only through `bun wb release run`;
    phase 6 passes, with the model the operator names (decision).
 
 **What runs in parallel and what is serialised.** Phases 1, 3, 4 and 5 touch
-disjoint trees (`module/`, `runner/`, `infra/run-*` with `campaigns.ts`,
+disjoint trees (`wrath-mcp/module/`, `runner/`, `infra/run-*` with `campaigns.ts`,
 `infra/fixtures/` with the chart) and can be built and reviewed on separate
 branches at once; phase 2 follows phase 1, whose event names and shapes it
 decodes, and is small enough to ride phase 1's branch. The module work is
