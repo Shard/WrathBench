@@ -38,6 +38,6 @@ Stock AzerothCore layout (kept identical to upstream on purpose):
 - Reference confs: `/azerothcore/env/ref/etc/` — `worldserver.conf.dist`, `authserver.conf.dist`, `dbimport.conf.dist`, and `modules/mod_wrathbench.conf.dist`
 - Live confs: `/azerothcore/env/dist/etc/` (a volume; the entrypoint copies ref confs in on first start and materialises `$ACORE_COMPONENT.conf` from its `.dist`)
 - Server data directory (dbc/maps/vmaps/mmaps): `/azerothcore/env/dist/data/`, mounted at runtime from `data/client`; not part of the image
-- Entrypoint: `/azerothcore/entrypoint.sh` (upstream's), runs as user `acore` (uid 1000)
+- Entrypoint: `/azerothcore/entrypoint.sh` (upstream's, with its two `cp -n` spelled `cp --update=none` at build so coreutils 9.4 stops warning on every boot), runs as user `acore` (uid 1000)
 
 Verifying the module is present: `worldserver --version`-level boot is not needed; the CMake configure output lists `mod-wrathbench` under the worldserver module graph, and on a real boot the world log prints `mod-wrathbench loaded`.
