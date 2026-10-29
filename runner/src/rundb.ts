@@ -44,11 +44,12 @@ export const RUN_DB_BUSY_TIMEOUT_MS = 5000;
  * lasts as long as its statement, and the writer's commit needs every one of
  * them gone. A writer that gives up is not a reader that reads as empty: the
  * runner's INSERT throws `database is locked`, the driver loop takes that for
- * a harness error, and the run is terminated by somebody having read it. That
- * is how a live freeplay run ended, a minute after an operator's
- * `bun wb inspect` of its 281 MB run.sqlite had started full scans of tables
- * hundreds of thousands of rows long on a cold disk: the writer needed the
- * file for at least ten seconds and had five.
+ * a harness error, and the run is terminated by somebody having read it. A
+ * live freeplay run ended that way: its writer lost a write after five
+ * seconds, then lost the termination's own UPDATE five seconds later, so the
+ * file was held for at least ten. A full scan of a 281 MB run.sqlite's
+ * hundreds of thousands of rows, of the kind `bun wb inspect run` made, is a
+ * read that can hold it that long.
  *
  * So the writer outwaits every reader. A reader that blocks the writer past
  * this long is the thing to fix, and it fails first: its own five seconds run
