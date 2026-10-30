@@ -123,8 +123,18 @@ export const CONTEXT_POLICY = {
    * tick and each hit. Four far members would turn the 64-event window over
    * in about seven seconds. The state cache keeps each member's latest values
    * (`group().members[i].stats`), and the HUD's party line reads them there.
+   *
+   * A creature's threat list (SMSG_THREAT_UPDATE, SMSG_HIGHEST_THREAT_UPDATE)
+   * and a world state's change (SMSG_UPDATE_WORLD_STATE) are ambient as well
+   * (operator, 2026-10-30): about one list a second for each creature fighting in range, and three
+   * changes a second while an outdoor PvP capture slider moves. The SDK keeps
+   * them out of its retained buffer but its listeners, this ring's among them,
+   * still receive them. The cache folds both (a unit's `threat`,
+   * `self.worldStates`); the list's removal and clear and the zone's initial
+   * states stay ordinary events.
    */
-  EVENT_WINDOW_EXCLUDE: /^(SMSG_MONSTER_MOVE|MSG_MOVE|WB_TRANSPORT_PROGRESS|SMSG_PARTY_MEMBER_STATS)/,
+  EVENT_WINDOW_EXCLUDE:
+    /^(SMSG_MONSTER_MOVE|MSG_MOVE|WB_TRANSPORT_PROGRESS|SMSG_PARTY_MEMBER_STATS|(SMSG_THREAT_UPDATE|SMSG_HIGHEST_THREAT_UPDATE|SMSG_UPDATE_WORLD_STATE)$)/,
 } as const;
 
 // ------------------------------------------------------------ state summary
@@ -1325,13 +1335,20 @@ const EVENT_LINE_DROPPED_KEY =
   /^(factionRow|(stat|resistance|spellCritPct)\d$|(attackPower|rangedAttackPower)(Mods|Multiplier)?$|(block|dodge|parry|crit|rangedCrit)Pct$|standState$|shapeshiftForm$|channel(Spell|ObjectGuid)$|restedXp$|ammoId$|selfResSpell$)/;
 
 /**
+ * Block-level keys the event line leaves out, beside `fields`: `speeds`, the
+ * nine speeds our own create and movement blocks carry after `runSpeed`.
+ */
+const EVENT_LINE_DROPPED_BLOCK_KEYS: readonly string[] = ["speeds"];
+
+/**
  * An update-object payload as the event line shows it: without the keys
  * above. They stay in the event and the state cache (`units()`' reaction,
- * `state.self.stats`, `sitting`, `channeling`, …); on the line the faction row
- * would push `unitFlags`, `displayId` and `npcFlags` past the line's character
- * cut, and a level-up's character sheet `xp`, `nextLevelXp` and
- * `talentPoints`, so a line reads as it did before the stack served them.
- * Every other key keeps its place.
+ * `state.self.stats`, `sitting`, `channeling`, `state.self.speeds`, …); on
+ * the line the faction row would push `unitFlags`, `displayId` and `npcFlags`
+ * past the line's character cut, a level-up's character sheet `xp`,
+ * `nextLevelXp` and `talentPoints`, and our own block's speeds its target and
+ * fields, so a line reads as it did before the stack served them. Every other
+ * key keeps its place.
  */
 function eventLineData(e: EventSummary): unknown {
   if (e.opcode !== "SMSG_UPDATE_OBJECT") return e.data;
@@ -1342,10 +1359,15 @@ function eventLineData(e: EventSummary): unknown {
   return {
     ...(e.data as Record<string, unknown>),
     objects: objects.map((o: unknown) => {
-      const fields = (o as { fields?: unknown } | null)?.fields;
-      if (fields === null || typeof fields !== "object" || Array.isArray(fields)) return o;
-      if (!Object.keys(fields).some((key) => EVENT_LINE_DROPPED_KEY.test(key))) return o;
-      return { ...(o as Record<string, unknown>), fields: stripped(fields as Record<string, unknown>) };
+      if (o === null || typeof o !== "object" || Array.isArray(o)) return o;
+      let block = o as Record<string, unknown>;
+      if (EVENT_LINE_DROPPED_BLOCK_KEYS.some((key) => key in block)) {
+        block = Object.fromEntries(Object.entries(block).filter(([key]) => !EVENT_LINE_DROPPED_BLOCK_KEYS.includes(key)));
+      }
+      const fields = block.fields;
+      if (fields === null || typeof fields !== "object" || Array.isArray(fields)) return block;
+      if (!Object.keys(fields).some((key) => EVENT_LINE_DROPPED_KEY.test(key))) return block;
+      return { ...block, fields: stripped(fields as Record<string, unknown>) };
     }),
   };
 }
@@ -1422,6 +1444,18 @@ export const SPELL_LOG_OPCODES: ReadonlySet<string> = new Set([
   "SMSG_SPELLENERGIZELOG",
 ]);
 
+/**
+ * The dispel combat-log opcodes (wrath-mcp/module/PROTOCOL.md, "Combat"): a
+ * dispel or Spellsteal that took auras, and the auras that resisted one. Sent
+ * to every client in range like the direct-spell lines, and judged by the
+ * same rule (`spellLogShown`); they carry no sentence (`spellLogNote`).
+ */
+export const DISPEL_LOG_OPCODES: ReadonlySet<string> = new Set([
+  "SMSG_SPELLDISPELLOG",
+  "SMSG_SPELLSTEALLOG",
+  "SMSG_DISPEL_FAILED",
+]);
+
 interface SpellLogData {
   targetGuid?: unknown;
   casterGuid?: unknown;
@@ -1446,7 +1480,10 @@ interface SpellLogData {
  * over in seconds. Kept: any line we cast or are the target of, and a damage
  * line whose target is a party member (a member being hit is what a healer or
  * a tank reacts to). Left out: other units' heals and power gains, and damage
- * that lands on anyone outside the party. Every other opcode is shown.
+ * that lands on anyone outside the party. A dispel line
+ * (`DISPEL_LOG_OPCODES`) is kept only when we cast it or are its target: the
+ * line does not say whether it was a purge or a cleanse, so a party member's
+ * is left out as a heal is. Every other opcode is shown.
  */
 export function spellLogShown(
   opcode: string,
@@ -1454,7 +1491,7 @@ export function spellLogShown(
   selfGuid: string | undefined,
   partyGuids: ReadonlySet<string>,
 ): boolean {
-  if (!SPELL_LOG_OPCODES.has(opcode)) return true;
+  if (!SPELL_LOG_OPCODES.has(opcode) && !DISPEL_LOG_OPCODES.has(opcode)) return true;
   const d = (data ?? {}) as SpellLogData;
   if (selfGuid !== undefined && (d.casterGuid === selfGuid || d.targetGuid === selfGuid)) return true;
   return opcode === "SMSG_SPELLNONMELEEDAMAGELOG" && typeof d.targetGuid === "string" && partyGuids.has(d.targetGuid);

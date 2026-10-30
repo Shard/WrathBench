@@ -186,7 +186,9 @@ prefix survives, and one fresh deterministic message — the turn number,
 harness notices, a HUD summary of already-observed fields, recent events and
 the full scratchpad. Recent events leave out a creature's emote unless it is
 the character's pet or is targeting the character, since a town's NPCs repeat
-theirs endlessly; players' emotes stay (operator, 2026-10-30). It restates no
+theirs endlessly; players' emotes stay (operator, 2026-10-30). Creature
+threat updates and world-state updates are ambient like movement: readable in
+state, kept out of recent events (operator, 2026-10-30). It restates no
 goal: the directive is the system prompt's alone, so nothing per turn competes with an objective (operator,
 2026-10-23). Within the window only the most recent block is verbatim: in the
 older block each tool result is folded to a deterministic one-line record —

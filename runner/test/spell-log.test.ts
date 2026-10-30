@@ -1,7 +1,9 @@
 /**
  * The spell combat log on the event window: `SMSG_SPELLNONMELEEDAMAGELOG`,
  * `SMSG_SPELLHEALLOG` and `SMSG_SPELLENERGIZELOG` (wrath-mcp/module/PROTOCOL.md, "Spell
- * combat log"). Three layers: the pure sentence and window predicate
+ * combat log"), and the dispel lines judged by the same rule
+ * (`SMSG_SPELLDISPELLOG`, `SMSG_SPELLSTEALLOG`, `SMSG_DISPEL_FAILED`, which
+ * carry no sentence). Three layers: the pure sentence and window predicate
  * (context.ts, `spellLogNote` / `spellLogShown`), `eventWindow` and the line
  * format over marked summaries, and the sandbox child marking events as they
  * arrive, run for real against a hand-fed stream.
@@ -11,7 +13,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { CONTEXT_POLICY, eventWindow, formatEventLine, spellLogNote, spellLogShown } from "../src/context";
+import { CONTEXT_POLICY, DISPEL_LOG_OPCODES, eventWindow, formatEventLine, spellLogNote, spellLogShown } from "../src/context";
 import { SandboxHost } from "../src/sandbox/host";
 import type { EventSummary } from "@wrathbench/mcp";
 import { Scratchpad } from "@wrathbench/mcp";
@@ -58,6 +60,16 @@ const energize = (casterGuid: string, targetGuid: string) => ({
   amount: 10,
 });
 
+/** A dispel (or Spellsteal, or the auras that resisted one), in PROTOCOL.md's shape. */
+const dispel = (casterGuid: string, targetGuid: string) => ({
+  targetGuid,
+  casterGuid,
+  spellId: 9004,
+  rank: 1,
+  name: "Test Cleanse",
+  auras: [{ spellId: 9005, rank: 1, name: "Test Hex" }],
+});
+
 const names: Record<string, string> = { [MOB]: "Test Evoker", [MEMBER]: "Ysolde", [STRANGER]: "Wanderer" };
 const nameOf = (g: string): string | undefined => names[g];
 
@@ -94,6 +106,10 @@ describe("spellLogNote: the combat log's sentence", () => {
     expect(spellLogNote("SMSG_ATTACKERSTATEUPDATE", damage(MOB, ME), ME, nameOf)).toBeUndefined();
     expect(spellLogNote("SMSG_PERIODICAURALOG", damage(MOB, ME), ME, nameOf)).toBeUndefined();
   });
+
+  test("a dispel line has none either", () => {
+    for (const opcode of DISPEL_LOG_OPCODES) expect(spellLogNote(opcode, dispel(ME, MOB), ME, nameOf)).toBeUndefined();
+  });
 });
 
 describe("spellLogShown: which spell lines the window keeps", () => {
@@ -109,6 +125,17 @@ describe("spellLogShown: which spell lines the window keeps", () => {
     ["a member's heal on a member", "SMSG_SPELLHEALLOG", heal(MEMBER, MEMBER), false],
     ["our own power gain", "SMSG_SPELLENERGIZELOG", energize(ME, ME), true],
     ["a member's power gain", "SMSG_SPELLENERGIZELOG", energize(MEMBER, MEMBER), false],
+    ["our dispel on a mob", "SMSG_SPELLDISPELLOG", dispel(ME, MOB), true],
+    ["a mob's dispel on us", "SMSG_SPELLDISPELLOG", dispel(MOB, ME), true],
+    ["a member's cleanse on us", "SMSG_SPELLDISPELLOG", dispel(MEMBER, ME), true],
+    ["a mob's purge of a member", "SMSG_SPELLDISPELLOG", dispel(MOB, MEMBER), false],
+    ["a member's cleanse of a member", "SMSG_SPELLDISPELLOG", dispel(MEMBER, MEMBER), false],
+    ["strangers' dispel", "SMSG_SPELLDISPELLOG", dispel(STRANGER, MOB), false],
+    ["our Spellsteal", "SMSG_SPELLSTEALLOG", dispel(ME, MOB), true],
+    ["a stranger's Spellsteal", "SMSG_SPELLSTEALLOG", dispel(STRANGER, MOB), false],
+    ["our dispel resisted", "SMSG_DISPEL_FAILED", dispel(ME, MOB), true],
+    ["a resisted dispel on us", "SMSG_DISPEL_FAILED", dispel(MOB, ME), true],
+    ["a member's dispel resisted", "SMSG_DISPEL_FAILED", dispel(MEMBER, MOB), false],
   ])("%s", (_, opcode, data, want) => {
     expect(spellLogShown(opcode, data, ME, party)).toBe(want);
   });
@@ -216,5 +243,30 @@ describe("the sandbox child marks spell lines as they arrive", () => {
     const raw = await host.recentEvents(50);
     const bystander = raw.find((e) => e.opcode === "SMSG_SPELLHEALLOG");
     expect(bystander).toMatchObject({ bystander: true, note: "Ysolde's Test Mend heals Ysolde for 120" });
+  });
+
+  test("our dispel reaches the window without a sentence; a member's and a mob's purge of a member stay on the raw stream", async () => {
+    const host = makeHost();
+    expect((await host.evalSnippet(PRELUDE)).ok).toBe(true);
+    const fed = await host.evalSnippet(`
+      feed("SMSG_SPELLDISPELLOG", 0x27b, ${JSON.stringify(dispel(ME, MOB))});
+      feed("SMSG_DISPEL_FAILED", 0x262, ${JSON.stringify(dispel(MOB, ME))});
+      feed("SMSG_SPELLSTEALLOG", 0x333, ${JSON.stringify(dispel(MOB, MEMBER))});
+      feed("SMSG_SPELLDISPELLOG", 0x27b, ${JSON.stringify(dispel(MEMBER, MEMBER))});
+      "fed";
+    `);
+    expect(fed.ok).toBe(true);
+    const { events } = await host.contextEvents(CONTEXT_POLICY.EVENT_WINDOW);
+    const shown = events.filter((e) => DISPEL_LOG_OPCODES.has(e.opcode));
+    expect(shown.map((e) => e.opcode)).toEqual(["SMSG_SPELLDISPELLOG", "SMSG_DISPEL_FAILED"]);
+    expect(shown.map((e) => e.note)).toEqual([undefined, undefined]);
+    expect(shown.map((e) => e.schemaError)).toEqual([undefined, undefined]);
+    const raw = (await host.recentEvents(50)).filter((e) => DISPEL_LOG_OPCODES.has(e.opcode));
+    expect(raw.map((e) => [e.opcode, e.bystander === true])).toEqual([
+      ["SMSG_SPELLDISPELLOG", false],
+      ["SMSG_DISPEL_FAILED", false],
+      ["SMSG_SPELLSTEALLOG", true],
+      ["SMSG_SPELLDISPELLOG", true],
+    ]);
   });
 });

@@ -17,6 +17,7 @@ import type { EventSummary, SandboxChildApi, SandboxChildExtension } from "@wrat
 import { toJsonSafe } from "@wrathbench/mcp/jsonsafe";
 import {
   CONTEXT_POLICY,
+  DISPEL_LOG_OPCODES,
   emoteShown,
   foldUiOpenWindows,
   PLAYER_FLAGS_GHOST,
@@ -266,10 +267,11 @@ export function benchmarkChildExtension({ client, summarize, forwardClientCache 
    * `spellLogNote` and `spellLogShown`): the combat-log sentence, named from
    * what is in view at that moment — a mob killed a second later has left
    * `nearby` by the time a turn renders the window — and whether the line is a
-   * bystander's, which the event window leaves out. A unit's emote is marked
-   * the same way (`emoteShown`), from whose it is and what it targets as it
-   * arrives. Keyed by the event object itself, which the SDK's buffer and
-   * every listener share.
+   * bystander's, which the event window leaves out. A dispel line
+   * (`DISPEL_LOG_OPCODES`) is marked by the same rule, with no sentence. A
+   * unit's emote is marked the same way (`emoteShown`), from whose it is and
+   * what it targets as it arrives. Keyed by the event object itself, which the
+   * SDK's buffer and every listener share.
    */
   const spellLogMarks = new WeakMap<StreamEvent, { note: string | undefined; bystander: boolean }>();
 
@@ -294,7 +296,8 @@ export function benchmarkChildExtension({ client, summarize, forwardClientCache 
       if (!emoteShown(event.opcode, event.data, client.state.self.guid, emoter)) spellLogMarks.set(event, { note: undefined, bystander: true });
       return;
     }
-    if (!SPELL_LOG_OPCODES.has(event.opcode)) return;
+    // A dispel line is judged as a spell line and carries no sentence (`spellLogNote` has none for it).
+    if (!SPELL_LOG_OPCODES.has(event.opcode) && !DISPEL_LOG_OPCODES.has(event.opcode)) return;
     const me = client.state.self.guid;
     const party = new Set((client.state.group()?.members ?? []).map((m) => m.guid));
     spellLogMarks.set(event, {
