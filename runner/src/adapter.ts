@@ -613,7 +613,7 @@ export class StreamAssembler {
   private readonly top: Json = {};
   private sawChoice = false;
   private role: string | undefined;
-  private content: string[] | null = null;
+  private readonly content: string[] = [];
   private readonly reasoning = new Map<string, string[]>();
   private readonly toolCalls: ToolCallParts[] = [];
   private finishReason: string | null = null;
@@ -652,7 +652,11 @@ export class StreamAssembler {
       // which the schema refuses, so it is refused the same way here.
       return { body: { ...this.top, choices: [], ...(this.usage !== undefined ? { usage: this.usage } : {}) }, finished };
     }
-    const message: Json = { role: this.role ?? "assistant", content: this.content === null ? null : this.content.join("") };
+    // No text is `null`, as a non-streaming body spells it: OpenRouter opens
+    // every stream with `content: ""`, and an empty string where the whole
+    // body said null would change the replayed message and its record.
+    const text = this.content.join("");
+    const message: Json = { role: this.role ?? "assistant", content: text.length > 0 ? text : null };
     for (const [k, parts] of this.reasoning) message[k] = parts.join("");
     if (this.toolCalls.length > 0) {
       message["tool_calls"] = this.toolCalls.map((tc) => ({
@@ -710,7 +714,7 @@ export class StreamAssembler {
       const delta = c["delta"];
       if (!isObject(delta)) continue;
       if (typeof delta["role"] === "string") this.role = delta["role"];
-      if (typeof delta["content"] === "string") (this.content ??= []).push(delta["content"]);
+      if (typeof delta["content"] === "string") this.content.push(delta["content"]);
       for (const k of ["reasoning", "reasoning_content"]) {
         const piece = delta[k];
         if (typeof piece !== "string") continue;

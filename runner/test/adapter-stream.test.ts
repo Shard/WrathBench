@@ -115,6 +115,14 @@ describe("assembleStream", () => {
     ]);
   });
 
+  test("a stream whose only text is the opening empty string has null content, as the whole body does", () => {
+    const { body } = assembleStream(
+      data(chunk({ role: "assistant", content: "" })) +
+        data(chunk({ tool_calls: [{ index: 0, id: "c1", function: { name: "f", arguments: "{}" } }] }, "tool_calls")),
+    );
+    expect((body as { choices: { message: { content: unknown } }[] }).choices[0]!.message.content).toBeNull();
+  });
+
   test("a name and id repeated whole on every delta are not doubled", () => {
     const { body } = assembleStream(
       data(chunk({ tool_calls: [{ index: 0, id: "c1", function: { name: "run_snippet", arguments: "{\"a\"" } }] })) +
