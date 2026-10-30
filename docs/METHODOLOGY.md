@@ -122,7 +122,9 @@ objective areas the server sends in answer to a client's quest POI query
 served (operator, 2026-10-29); quest locations read from the database stay out.
 
 **Changing the contracts.** Any widening of either contract is a major harness
-version. Any narrowing is at least a minor version and is noted here.
+version. Any narrowing is at least a minor version and is noted here. Before
+v1 the stack's in-game additions (quest areas, dismount, flight, jump and the
+rest of that work) ship within the 0.5 series instead (operator, 2026-10-30).
 
 ## The model surface
 
@@ -182,8 +184,11 @@ One fixed context for every model (`runner/src/context.ts`): the fixed system
 prompt, a window of recent messages trimmed in blocks so the provider cache
 prefix survives, and one fresh deterministic message — the turn number,
 harness notices, a HUD summary of already-observed fields, recent events and
-the full scratchpad. It restates no goal: the directive is the system
-prompt's alone, so nothing per turn competes with an objective (operator,
+the full scratchpad. Recent events leave out what only a bystander would
+see: other units' spell lines, and the emotes of creatures that are neither
+the character's pet nor targeting it, which a town's NPCs repeat endlessly;
+players' emotes stay (operator, 2026-10-30). It restates no goal: the
+directive is the system prompt's alone, so nothing per turn competes with an objective (operator,
 2026-10-23). Within the window only the most recent block is verbatim: in the
 older block each tool result is folded to a deterministic one-line record —
 tool, arguments cut short, ok or error, duration where known — while the
