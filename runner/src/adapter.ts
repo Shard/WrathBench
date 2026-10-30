@@ -31,7 +31,11 @@
  *   streams nothing but comments while it thinks: a think past 120 s dies, as
  *   it did under the whole-request timeout, so this is no worse than before.
  *   Reasoning that streams as deltas (`reasoning`, `reasoning_content`) is
- *   data and keeps the request alive.
+ *   data and keeps the request alive. So is any other `data:` event, an empty
+ *   delta included: the adapter cannot tell a heartbeat from a token by
+ *   shape, and a server that sends its heartbeats as data (the self-hosted
+ *   omlx server sends an empty delta every ~10 s while it queues or prefills)
+ *   is bounded by the ceiling, not by the silence.
  * - Ceiling, `REQUEST_CEILING_MS` (5 minutes): one attempt, however steady,
  *   ends there, so a stream that trickles forever cannot live inside
  *   complete(). It is about twice the slowest turn the harness has had to
@@ -41,7 +45,8 @@
  * flight, so a streaming request that is making progress is not cut by it.
  * The longest one complete() can take is therefore the budget, one backoff and
  * one ceiling: 5 + 0.5 + 5 = 10.5 minutes, about half the 20-minute idle
- * watchdog of every episode tier. Nothing inside complete() is read by a
+ * watchdog of every episode tier (`episodes.ts`); the 10-minute default a
+ * run gets with no tier and no override sits just under it. Nothing inside complete() is read by a
  * watchdog — the fixed loop reads them at the turn boundary, and a success
  * resets `idle` before the next read — so this bound is what keeps that
  * boundary, the place a stop or a watchdog can act, from receding.

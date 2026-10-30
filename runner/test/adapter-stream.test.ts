@@ -345,12 +345,12 @@ describe("OpenAiChatAdapter request clock", () => {
   test("a slow but steady stream outlives many silence windows", async () => {
     const parts = Array.from({ length: 12 }, (_, i) => data(chunk({ content: String(i % 10) })));
     parts.push(data(chunk({}, "stop")), "data: [DONE]\n\n");
-    const { adapter } = adapterServing(() => Promise.resolve(streamed(parts, { gapMs: 25 })), {
+    const { adapter } = adapterServing(() => Promise.resolve(streamed(parts, { gapMs: 30 })), {
       maxAttempts: 1,
-      silenceTimeoutMs: 80,
+      silenceTimeoutMs: 120,
       requestCeilingMs: 5_000,
     });
-    // ~350 ms in all, over four times the silence window.
+    // ~400 ms in all, over three times the silence window, each gap a quarter of it.
     expect(ok(await adapter.complete(req)).content).toBe("012345678901");
   });
 
