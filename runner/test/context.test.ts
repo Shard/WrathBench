@@ -906,6 +906,51 @@ describe("formatEventLine: an update-object line leaves the character sheet and 
   });
 });
 
+describe("formatEventLine: our own block's speeds stay off the line", () => {
+  // Our own create and movement blocks carry `speeds` beside `runSpeed`, in
+  // the module's key order (wrath-mcp/module/PROTOCOL.md, SMSG_UPDATE_OBJECT);
+  // figures as a level-1 character's, guids invented.
+  const SPEEDS = { walk: 2.5, run: 7, runBack: 4.5, swim: 4.72222, swimBack: 2.5, flight: 7, flightBack: 4.5, turnRate: 3.14159, pitchRate: 3.14159 };
+  const update = (object: Record<string, unknown>): EventSummary =>
+    ({ seq: 40, ts: 1, opcode: "SMSG_UPDATE_OBJECT", data: { blocks: 1, objects: [object] } }) as EventSummary;
+  const movement = (served: boolean) =>
+    update({
+      update: "movement",
+      guid: "4021",
+      self: true,
+      moveFlags: 0,
+      pos: { x: -8949.9, y: -132.5, z: 83.5, o: 5.2 },
+      runSpeed: 7,
+      ...(served ? { speeds: SPEEDS } : {}),
+      targetGuid: "0",
+    });
+  const create = (served: boolean) =>
+    update({
+      update: "create",
+      guid: "4021",
+      objectType: "player",
+      self: true,
+      moveFlags: 0,
+      pos: { x: -8949.9, y: -132.5, z: 83.5, o: 5.2 },
+      runSpeed: 7,
+      ...(served ? { speeds: SPEEDS } : {}),
+      fields: { level: 1, health: 60, maxHealth: 60 },
+    });
+
+  test("a self movement block and a self create block render as they did without speeds", () => {
+    expect(formatEventLine(movement(true))).toBe(formatEventLine(movement(false)));
+    expect(formatEventLine(create(true))).toBe(formatEventLine(create(false)));
+    expect(formatEventLine(movement(true))).toContain('"runSpeed":7,"targetGuid":"0"');
+    expect(formatEventLine(create(true))).toContain('"fields":{"level":1,"health":60,"maxHealth":60}');
+  });
+
+  test("the event keeps them", () => {
+    const e = create(true);
+    formatEventLine(e);
+    expect((e.data as { objects: { speeds?: unknown }[] }).objects[0]!.speeds).toEqual(SPEEDS);
+  });
+});
+
 describe("foldUiOpenWindows", () => {
   test("gossip is open until a later complete, and carries the option count", () => {
     const open = foldUiOpenWindows([
