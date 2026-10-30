@@ -123,8 +123,18 @@ export const CONTEXT_POLICY = {
    * tick and each hit. Four far members would turn the 64-event window over
    * in about seven seconds. The state cache keeps each member's latest values
    * (`group().members[i].stats`), and the HUD's party line reads them there.
+   *
+   * A creature's threat list (SMSG_THREAT_UPDATE, SMSG_HIGHEST_THREAT_UPDATE)
+   * and a world state's change (SMSG_UPDATE_WORLD_STATE) are ambient as well
+   * (operator, 2026-10-30): about one list a second for each creature fighting in range, and three
+   * changes a second while an outdoor PvP capture slider moves. The SDK keeps
+   * them out of its retained buffer but its listeners, this ring's among them,
+   * still receive them. The cache folds both (a unit's `threat`,
+   * `self.worldStates`); the list's removal and clear and the zone's initial
+   * states stay ordinary events.
    */
-  EVENT_WINDOW_EXCLUDE: /^(SMSG_MONSTER_MOVE|MSG_MOVE|WB_TRANSPORT_PROGRESS|SMSG_PARTY_MEMBER_STATS)/,
+  EVENT_WINDOW_EXCLUDE:
+    /^(SMSG_MONSTER_MOVE|MSG_MOVE|WB_TRANSPORT_PROGRESS|SMSG_PARTY_MEMBER_STATS|(SMSG_THREAT_UPDATE|SMSG_HIGHEST_THREAT_UPDATE|SMSG_UPDATE_WORLD_STATE)$)/,
 } as const;
 
 // ------------------------------------------------------------ state summary

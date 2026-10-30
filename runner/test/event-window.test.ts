@@ -104,6 +104,27 @@ describe("the sandbox child's window: non-ambient events, ringed apart from the 
     await host.evalSnippet('ambient(20); "fed";');
     expect(await host.contextEvents(CONTEXT_POLICY.EVENT_WINDOW)).toEqual({ events: [], folded: 20 });
   });
+
+  test("threat list updates and world state changes are folded and counted; their removal, clear and the zone's init are kept", async () => {
+    // The SDK keeps the first three out of its retained buffer, but its
+    // listeners, and so this ring, still receive them as they arrive.
+    const host = makeHost();
+    expect((await host.evalSnippet(PRELUDE)).ok).toBe(true);
+    const fed = await host.evalSnippet(`
+      const list = { unitGuid: "17379391048826012345", entries: [{ guid: "7", threat: 4200 }] };
+      feed("SMSG_THREAT_UPDATE", 0x483, list);
+      feed("SMSG_HIGHEST_THREAT_UPDATE", 0x482, { ...list, topGuid: "7" });
+      feed("SMSG_UPDATE_WORLD_STATE", 0x2c3, { id: 2264, value: 0 });
+      feed("SMSG_THREAT_REMOVE", 0x484, { unitGuid: "17379391048826012345", guid: "7" });
+      feed("SMSG_THREAT_CLEAR", 0x485, { unitGuid: "17379391048826012345" });
+      feed("SMSG_INIT_WORLD_STATES", 0x2c2, { map: 0, zone: 12, area: 9, states: [{ id: 2264, value: 0 }] });
+      "fed";
+    `);
+    expect(fed.ok).toBe(true);
+    const window = await host.contextEvents(CONTEXT_POLICY.EVENT_WINDOW);
+    expect(window.events.map((e) => e.opcode)).toEqual(["SMSG_THREAT_REMOVE", "SMSG_THREAT_CLEAR", "SMSG_INIT_WORLD_STATES"]);
+    expect(window.folded).toBe(3);
+  });
 });
 
 function ev(seq: number, opcode: string): EventSummary {
@@ -198,5 +219,23 @@ describe("eventWindow and assembleContext", () => {
     expect(assembleContext({ ...base, events })).toContain(
       "[events: last 1, newest last; 3 ambient movement and party-frame events folded into state only]",
     );
+  });
+
+  test("threat list updates and world state changes are ambient; the threat list's removal and clear and the zone's init are not", () => {
+    for (const op of ["SMSG_THREAT_UPDATE", "SMSG_HIGHEST_THREAT_UPDATE", "SMSG_UPDATE_WORLD_STATE"]) {
+      expect(CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(op)).toBe(true);
+    }
+    for (const op of ["SMSG_THREAT_REMOVE", "SMSG_THREAT_CLEAR", "SMSG_INIT_WORLD_STATES"]) {
+      expect(CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(op)).toBe(false);
+    }
+    const { window, folded } = eventWindow([
+      ev(1, "SMSG_THREAT_UPDATE"),
+      ev(2, "SMSG_ATTACKSTART"),
+      ev(3, "SMSG_HIGHEST_THREAT_UPDATE"),
+      ev(4, "SMSG_UPDATE_WORLD_STATE"),
+      ev(5, "SMSG_THREAT_CLEAR"),
+    ]);
+    expect(window.map((e) => e.opcode)).toEqual(["SMSG_ATTACKSTART", "SMSG_THREAT_CLEAR"]);
+    expect(folded).toBe(3);
   });
 });
