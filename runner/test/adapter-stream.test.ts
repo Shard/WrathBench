@@ -293,7 +293,7 @@ describe("OpenAiChatAdapter streaming", () => {
     expect(ok(await adapter.complete(req)).content).toBe("second");
   });
 
-  test("a stream cut before any finish is retried whole, and pauses when it never finishes", async () => {
+  test("a stream cut before any finish is retried whole, and ends as an adapter error when it never finishes", async () => {
     const cut = () => Promise.resolve(streamed([data(chunk({ content: "half" }))]));
     const { adapter: retried } = adapterServing((n) =>
       n === 0 ? cut() : Promise.resolve(streamed([data(chunk({ content: "whole" }, "stop"))])),
@@ -301,10 +301,9 @@ describe("OpenAiChatAdapter streaming", () => {
     expect(ok(await retried.complete(req)).content).toBe("whole");
 
     const { adapter: never } = adapterServing(cut, { maxAttempts: 2 });
-    const out = await never.complete(req);
-    expect(out.kind).toBe("pause");
-    expect(out.kind === "pause" && out.detail).toContain("persistent network failure after 2 attempt(s)");
-    expect(out.kind === "pause" && out.detail).toContain("stream ended before the model finished");
+    await expect(never.complete(req)).rejects.toThrow(
+      /failed after 2 attempt\(s\): body read failed: the stream ended before the model finished/,
+    );
   });
 
   test("an empty stream with no choice fails as a schema mismatch, as an empty body would", async () => {
@@ -328,17 +327,15 @@ describe("OpenAiChatAdapter request clock", () => {
     expect(REQUEST_CEILING_MS).toBe(300_000);
   });
 
-  test("a stalled stream times out on silence, is cancelled, and pauses when it keeps stalling", async () => {
+  test("a stalled stream times out on silence, is cancelled, and ends as an adapter error when it keeps stalling", async () => {
     let cancelled = 0;
     const { adapter } = adapterServing(
       () => Promise.resolve(streamed([data(chunk({ content: "a" }))], { hang: true, onCancel: () => cancelled++ })),
       { maxAttempts: 2, silenceTimeoutMs: 40, requestCeilingMs: 5_000 },
     );
     const started = Date.now();
-    const out = await adapter.complete(req);
+    await expect(adapter.complete(req)).rejects.toThrow(/failed after 2 attempt\(s\): body read failed: no data from the model API for 0\.04 s/);
     expect(Date.now() - started).toBeLessThan(2_000);
-    expect(out.kind).toBe("pause");
-    expect(out.kind === "pause" && out.detail).toContain("body read failed: no data from the model API for 0.04 s");
     expect(cancelled).toBe(2);
   });
 
@@ -361,8 +358,7 @@ describe("OpenAiChatAdapter request clock", () => {
       silenceTimeoutMs: 100,
       requestCeilingMs: 5_000,
     });
-    const out = await adapter.complete(req);
-    expect(out.kind === "pause" && out.detail).toContain("no data from the model API");
+    await expect(adapter.complete(req)).rejects.toThrow(/body read failed: no data from the model API/);
   });
 
   test("the wait for headers is covered by the silence timer", async () => {
@@ -386,9 +382,8 @@ describe("OpenAiChatAdapter request clock", () => {
       requestCeilingMs: 150,
     });
     const started = Date.now();
-    const out = await adapter.complete(req);
+    await expect(adapter.complete(req)).rejects.toThrow(/body read failed: the request passed its 0\.15 s ceiling/);
     expect(Date.now() - started).toBeLessThan(2_000);
-    expect(out.kind === "pause" && out.detail).toContain("the request passed its 0.15 s ceiling");
     expect(cancelled).toBe(true);
   });
 

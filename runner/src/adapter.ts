@@ -70,13 +70,12 @@
  *   past the budget is the pause/throw decision below, reached sooner.
  *   A `Retry-After` on the response overrides the backoff for the next
  *   attempt, clamped to the same 30s cap and jittered upward only.
- * - Attempts exhausted on failures that never produced a usable response —
- *   network errors, timers, cut streams — PAUSE (`rate-limited`), as do
- *   attempts exhausted on 5xx: the provider or the path to it is down, not the
- *   harness. With every server sending headers before the first token, a stall
- *   now lands after the headers rather than before them, so a failed read is
- *   counted with the network errors; reading it as fatal would have turned
- *   streaming into a quiet change from pause to `adapter-error`.
+ * - Attempts exhausted on network errors that never got a response (no
+ *   status, before the headers; a timer firing there included) PAUSE
+ *   (`rate-limited`), as do attempts exhausted on 5xx. Attempts exhausted on a
+ *   failed read after the headers — a stall mid-stream, either timer firing
+ *   there, a cut or malformed stream — end as `adapter-error`, as a failed
+ *   body read always has.
  * - Any 429 or 402 seen during the attempts makes the outcome a PAUSE, not a
  *   failure: a spent budget says nothing about the model, so the run is
  *   suspended and resumable. The body wording only picks which pause it is —
@@ -1213,9 +1212,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
     // three episodes died on 2026-08-24 to the identical "network error: The
     // operation timed out." across two different platforms. Pause, defer,
     // come back.
-    // A failed or cut read is the same failure one step later: streaming puts
-    // the headers before the first token, so a stall now lands after them.
-    if (lastStatus === undefined && (lastError.startsWith("network error:") || lastError.startsWith("body read failed:"))) {
+    if (lastStatus === undefined && lastError.startsWith("network error:")) {
       return {
         kind: "pause",
         reason: "rate-limited",

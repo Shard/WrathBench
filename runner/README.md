@@ -158,10 +158,11 @@ before. Streaming is there for the clock: an attempt fails after 120 s with no
 data (keep-alive comments do not count) or at a 5-minute ceiling however
 steady it is, rather than after 120 s in total, so a slow model that keeps
 producing is never cut for being slow. A failed attempt, a cut stream
-included, is retried whole; attempts start only inside a 5-minute budget, and
-when they run out on failures that never produced a response the run pauses
-`rate-limited` rather than ending. The policy and its reasons are in the
-header of `src/adapter.ts`.
+included, is retried whole, and attempts start only inside a 5-minute budget.
+When they run out on network errors before any response the run pauses
+`rate-limited`; when they run out on a failed read after the headers (a stall
+or a cut stream) it ends as `adapter-error`. The policy and its reasons are in
+the header of `src/adapter.ts`.
 
 ### The driver contract
 
