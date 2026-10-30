@@ -5,7 +5,14 @@
  * millisecond scale.
  */
 import { describe, expect, test } from "bun:test";
-import { OpenAiChatAdapter, REQUEST_CEILING_MS, SILENCE_TIMEOUT_MS, assembleStream, type AdapterOutcome } from "../src/adapter";
+import {
+  FINISHED_GRACE_MS,
+  OpenAiChatAdapter,
+  REQUEST_CEILING_MS,
+  SILENCE_TIMEOUT_MS,
+  assembleStream,
+  type AdapterOutcome,
+} from "../src/adapter";
 
 const req = { messages: [], tools: [] };
 const enc = new TextEncoder();
@@ -130,6 +137,41 @@ describe("assembleStream", () => {
     );
     const msg = (body as { choices: { message: { tool_calls: unknown[] } }[] }).choices[0]!.message;
     expect(msg.tool_calls).toEqual([{ id: "c1", type: "function", function: { name: "run_snippet", arguments: "{\"a\":1}" } }]);
+  });
+
+  test("two whole calls sent at the same index stay two calls when their ids differ", () => {
+    const { body } = assembleStream(
+      data(chunk({ tool_calls: [{ index: 0, id: "a", function: { name: "move", arguments: "{}" } }] })) +
+        data(chunk({ tool_calls: [{ index: 0, id: "b", function: { name: "look", arguments: "{\"x\":1}" } }] }, "tool_calls")),
+    );
+    const msg = (body as { choices: { message: { tool_calls: unknown[] } }[] }).choices[0]!.message;
+    expect(msg.tool_calls).toEqual([
+      { id: "a", type: "function", function: { name: "move", arguments: "{}" } },
+      { id: "b", type: "function", function: { name: "look", arguments: "{\"x\":1}" } },
+    ]);
+  });
+
+  test("index-less, id-less deltas open a new call on a name and continue the latest otherwise", () => {
+    const { body } = assembleStream(
+      data(chunk({ tool_calls: [{ function: { name: "move", arguments: "{" } }] })) +
+        data(chunk({ tool_calls: [{ function: { arguments: "}" } }] })) +
+        data(chunk({ tool_calls: [{ function: { name: "look", arguments: "{\"x\":1}" } }] }, "tool_calls")),
+    );
+    const msg = (body as { choices: { message: { tool_calls: { function: unknown }[] } }[] }).choices[0]!.message;
+    expect(msg.tool_calls.map((t) => t.function)).toEqual([
+      { name: "move", arguments: "{}" },
+      { name: "look", arguments: "{\"x\":1}" },
+    ]);
+  });
+
+  test("a bare data line is a heartbeat, not a malformed chunk", () => {
+    const { body, finished } = assembleStream("data:\n\n" + data(chunk({ content: "a" }, "stop")) + "data: \n\n");
+    expect(finished).toBe(true);
+    expect((body as { choices: { message: { content: string } }[] }).choices[0]!.message.content).toBe("a");
+  });
+
+  test("an empty finish_reason does not finish a stream", () => {
+    expect(assembleStream(data(chunk({ content: "a" }, ""))).finished).toBe(false);
   });
 
   test("calls sent whole without an index stay separate, told apart by id", () => {
@@ -321,7 +363,84 @@ describe("OpenAiChatAdapter streaming", () => {
   });
 });
 
+/** Counts `abort` listeners added and removed on every AbortSignal while `fn` runs. */
+async function abortListenerBalance(fn: () => Promise<unknown>): Promise<{ added: number; removed: number }> {
+  const proto = AbortSignal.prototype as unknown as EventTarget;
+  const add = proto.addEventListener;
+  const remove = proto.removeEventListener;
+  const counts = { added: 0, removed: 0 };
+  const live = new Set<unknown>();
+  proto.addEventListener = function (this: EventTarget, type: string, cb: unknown, opts?: unknown) {
+    if (type === "abort" && !live.has(cb)) {
+      live.add(cb);
+      counts.added++;
+    }
+    return add.call(this, type, cb as EventListener, opts as AddEventListenerOptions);
+  };
+  proto.removeEventListener = function (this: EventTarget, type: string, cb: unknown, opts?: unknown) {
+    if (type === "abort" && live.delete(cb)) counts.removed++;
+    return remove.call(this, type, cb as EventListener, opts as EventListenerOptions);
+  };
+  try {
+    await fn().catch(() => {});
+  } finally {
+    proto.addEventListener = add;
+    proto.removeEventListener = remove;
+  }
+  return counts;
+}
+
+describe("OpenAiChatAdapter abort listeners", () => {
+  test("every abort listener an attempt adds is removed, on success, on a stall and on a failed fetch", async () => {
+    const stop = new AbortController();
+    const done = (): Promise<Response> => Promise.resolve(streamed([data(chunk({ content: "x" }, "stop")), "data: [DONE]\n\n"]));
+    const stalled = (): Promise<Response> => Promise.resolve(streamed([data(chunk({ content: "a" }))], { hang: true }));
+    const refused = (): Promise<Response> => Promise.reject(new Error("connection refused"));
+    for (const serve of [done, stalled, refused]) {
+      const { adapter } = adapterServing(serve, { maxAttempts: 2, silenceTimeoutMs: 40, requestCeilingMs: 5_000 });
+      const { added, removed } = await abortListenerBalance(() => adapter.complete({ ...req, signal: stop.signal }));
+      expect(added).toBeGreaterThan(0);
+      expect(removed).toBe(added);
+    }
+  });
+});
+
 describe("OpenAiChatAdapter request clock", () => {
+  test("a finished turn whose stream then neither ends nor closes is taken as assembled, usage included", async () => {
+    const usage = { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 };
+    const { adapter } = adapterServing(
+      () => Promise.resolve(streamed([data(chunk({ content: "whole" }, "stop")), data({ id: "gen-1", choices: [], usage })], { hang: true })),
+      { maxAttempts: 1, silenceTimeoutMs: 60, requestCeilingMs: 5_000 },
+    );
+    const turn = ok(await adapter.complete(req));
+    expect(turn.content).toBe("whole");
+    expect(turn.finishReason).toBe("stop");
+    expect(turn.usage).toEqual(usage);
+  });
+
+  test("after the finish the stream waits only the short grace, not the whole silence", async () => {
+    expect(FINISHED_GRACE_MS).toBeLessThan(SILENCE_TIMEOUT_MS);
+    const { adapter } = adapterServing(() => Promise.resolve(streamed([data(chunk({ content: "x" }, "stop"))], { hang: true })), {
+      maxAttempts: 1,
+      silenceTimeoutMs: 60_000,
+      requestCeilingMs: 120_000,
+      finishedGraceMs: 50,
+    });
+    const started = Date.now();
+    expect(ok(await adapter.complete(req)).content).toBe("x");
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  test("bare data lines keep a request alive", async () => {
+    const parts = [...Array.from({ length: 10 }, () => "data:\n\n"), data(chunk({ content: "late" }, "stop"))];
+    const { adapter } = adapterServing(() => Promise.resolve(streamed(parts, { gapMs: 30 })), {
+      maxAttempts: 1,
+      silenceTimeoutMs: 120,
+      requestCeilingMs: 5_000,
+    });
+    expect(ok(await adapter.complete(req)).content).toBe("late");
+  });
+
   test("the defaults are a 120 s silence and a 5-minute ceiling", () => {
     expect(SILENCE_TIMEOUT_MS).toBe(120_000);
     expect(REQUEST_CEILING_MS).toBe(300_000);

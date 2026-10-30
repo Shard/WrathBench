@@ -55,6 +55,10 @@
  * stream that ends with neither `[DONE]` nor a `finish_reason` (a cut
  * connection that would otherwise pass for a short turn) is a failed attempt,
  * retried whole like a network error: nothing of a partial stream is kept.
+ * A turn whose `finish_reason` has arrived is whole, though: if its stream
+ * then neither sends `[DONE]` nor closes, it is taken as assembled after
+ * `FINISHED_GRACE_MS` (5 s, room for the trailing usage chunk), never asked
+ * for again.
  *
  * ### Retry policy (fixed, documented here and only here)
  *
@@ -373,6 +377,8 @@ export interface OpenAiAdapterOptions {
   silenceTimeoutMs?: number;
   /** Longest one attempt may take however steady (`REQUEST_CEILING_MS`). */
   requestCeilingMs?: number;
+  /** How long a finished turn's stream may stay open (`FINISHED_GRACE_MS`). */
+  finishedGraceMs?: number;
   /** Wall-clock ceiling for one complete()'s retries (see the retry policy). */
   retryBudgetMs?: number;
   fetchImpl?: typeof fetch;
@@ -627,6 +633,11 @@ export class StreamAssembler {
   /** `[DONE]` arrived, or an error chunk did: nothing after it is read. */
   done = false;
 
+  /** A non-empty `finish_reason` has arrived: the turn is whole, whatever follows. */
+  get turnFinished(): boolean {
+    return this.finishReason !== null;
+  }
+
   /** Folds one stream line in; true when it carried data rather than a comment or an event boundary. */
   line(text: string): boolean {
     if (text === "") {
@@ -685,6 +696,8 @@ export class StreamAssembler {
     const payload = this.data.join("\n");
     this.data = [];
     if (this.done) return;
+    // A bare `data:` is a heartbeat: activity (counted in `line`), nothing to fold.
+    if (payload.trim() === "") return;
     if (payload.trim() === "[DONE]") {
       this.done = true;
       return;
@@ -714,7 +727,7 @@ export class StreamAssembler {
       if (!isObject(c)) continue;
       if ((typeof c["index"] === "number" ? c["index"] : 0) !== 0) continue;
       this.sawChoice = true;
-      if (typeof c["finish_reason"] === "string") this.finishReason = c["finish_reason"];
+      if (typeof c["finish_reason"] === "string" && c["finish_reason"].length > 0) this.finishReason = c["finish_reason"];
       const delta = c["delta"];
       if (!isObject(delta)) continue;
       if (typeof delta["role"] === "string") this.role = delta["role"];
@@ -733,21 +746,31 @@ export class StreamAssembler {
   /**
    * Tool-call deltas, matched to their call by `index`. `id` and `type` are
    * taken once; `function.name` and `function.arguments` are appended — except
-   * a name repeated whole on every delta, which some servers send. A delta
-   * without an index (servers that send each call complete) is matched by its
-   * id, or opens a new call when the id is new.
+   * a name repeated whole on every delta, which some servers send.
+   *
+   * An index is not always a call's identity: servers that send each call
+   * whole may send every one at `index: 0`, or with no index at all. So a
+   * delta whose id differs from the one stored at its index opens a new call;
+   * a delta without an index is matched by its id, opens a new call when the
+   * id is new or when it carries a name but no id, and otherwise continues
+   * the latest call.
    */
   private toolCallDeltas(deltas: unknown[]): void {
     for (const d of deltas) {
       if (!isObject(d)) continue;
       const index = typeof d["index"] === "number" ? d["index"] : undefined;
       const id = typeof d["id"] === "string" && d["id"].length > 0 ? d["id"] : undefined;
-      let tc =
-        index !== undefined
-          ? this.toolCalls.find((t) => t.index === index)
-          : id !== undefined
-            ? this.toolCalls.find((t) => t.id === id)
-            : this.toolCalls.at(-1);
+      const fnIn = d["function"];
+      const named = isObject(fnIn) && typeof fnIn["name"] === "string" && fnIn["name"].length > 0;
+      let tc: ToolCallParts | undefined;
+      if (index !== undefined) {
+        tc = this.toolCalls.findLast((t) => t.index === index);
+        if (tc !== undefined && id !== undefined && tc.id !== undefined && tc.id !== id) tc = undefined;
+      } else if (id !== undefined) {
+        tc = this.toolCalls.find((t) => t.id === id);
+      } else if (!named) {
+        tc = this.toolCalls.at(-1);
+      }
       if (tc === undefined) {
         tc = { index, id: undefined, type: undefined, name: "", arguments: "" };
         this.toolCalls.push(tc);
@@ -769,22 +792,40 @@ class AttemptTimeout extends Error {
 }
 
 /**
- * One attempt's two timers (see "Streaming and the request clock") over an
- * AbortController, joined with the runner's stop signal. `touch` is called on
- * every sign of data and restarts the silence timer.
+ * How long a stream whose turn is already whole (a `finish_reason` arrived)
+ * may stay open waiting for its trailing usage chunk and `[DONE]` before the
+ * turn is taken as assembled. Never longer than the silence timeout.
+ */
+export const FINISHED_GRACE_MS = 5_000;
+
+/**
+ * One attempt's two timers (see "Streaming and the request clock") over its
+ * own AbortController, which the runner's stop signal also aborts. `touch`
+ * is called on every sign of data and restarts the silence timer.
+ *
+ * Deliberately not `AbortSignal.any([ctl, stop])`: the stop signal lives as
+ * long as the run, and a combined signal with a listener on it is kept alive
+ * by its sources, so one per attempt piled up for the whole run. The one
+ * listener this puts on the stop signal is removed in `stop()`.
  */
 class AttemptClock {
   private readonly ctl = new AbortController();
-  readonly signal: AbortSignal;
+  readonly signal: AbortSignal = this.ctl.signal;
   private silence: ReturnType<typeof setTimeout> | undefined;
   private readonly ceiling: ReturnType<typeof setTimeout>;
+  private readonly onStop: () => void;
 
   constructor(
     private readonly silenceMs: number,
     ceilingMs: number,
-    stop: AbortSignal | undefined,
+    private readonly stopSignal: AbortSignal | undefined,
+    readonly graceMs: number = FINISHED_GRACE_MS,
   ) {
-    this.signal = stop !== undefined ? AbortSignal.any([this.ctl.signal, stop]) : this.ctl.signal;
+    this.onStop = () => this.ctl.abort(stopSignal?.reason);
+    if (stopSignal !== undefined) {
+      if (stopSignal.aborted) this.ctl.abort(stopSignal.reason);
+      else stopSignal.addEventListener("abort", this.onStop, { once: true });
+    }
     this.ceiling = setTimeout(
       () => this.ctl.abort(new AttemptTimeout(`the request passed its ${ceilingMs / 1000} s ceiling`)),
       ceilingMs,
@@ -792,12 +833,18 @@ class AttemptClock {
     this.touch();
   }
 
-  touch(): void {
+  /** Restarts the silence timer, at `ms` when given (never longer than the silence timeout). */
+  touch(ms = this.silenceMs): void {
     clearTimeout(this.silence);
     this.silence = setTimeout(
       () => this.ctl.abort(new AttemptTimeout(`no data from the model API for ${this.silenceMs / 1000} s`)),
-      this.silenceMs,
+      Math.min(ms, this.silenceMs),
     );
+  }
+
+  /** The attempt was ended by one of its own timers, not by the runner or the network. */
+  get timedOut(): boolean {
+    return this.ctl.signal.aborted && this.ctl.signal.reason instanceof AttemptTimeout;
   }
 
   /** What ended the attempt: the timer that fired, or the error itself. */
@@ -809,19 +856,13 @@ class AttemptClock {
   stop(): void {
     clearTimeout(this.silence);
     clearTimeout(this.ceiling);
+    this.stopSignal?.removeEventListener("abort", this.onStop);
   }
 }
 
 /** What a response's body read produced. */
 type BodyRead = { kind: "text"; text: string } | { kind: "stream"; body: unknown; finished: boolean };
 
-/**
- * Reads a response body under the attempt's clock. A 2xx `text/event-stream`
- * is assembled as it arrives, and only lines that carry data reset the
- * silence timer; any other body is read as text, every chunk counting. Each
- * read is raced against the clock and the reader cancelled when it fires,
- * rather than trusting the body to notice the aborted fetch signal.
- */
 /** A whole event stream as text, assembled: the tests' entry, and the fallback for a stream served under another content type. */
 export function assembleStream(text: string): { body: unknown; finished: boolean } {
   const a = new StreamAssembler();
@@ -832,20 +873,32 @@ export function assembleStream(text: string): { body: unknown; finished: boolean
   return a.finish();
 }
 
+/**
+ * Reads a response body under the attempt's clock. A 2xx `text/event-stream`
+ * is assembled as it arrives, and only lines that carry data reset the
+ * silence timer; any other body is read as text, every chunk counting. When
+ * the clock fires the reader is cancelled, which ends the pending read,
+ * rather than trusting the body to notice the aborted fetch signal; the one
+ * listener that does this is removed however the read ends, and nothing is
+ * left waiting on the clock between reads.
+ *
+ * A stream whose turn is already whole (a `finish_reason` arrived) is not
+ * thrown away when it then neither sends `[DONE]` nor closes: the silence
+ * timer drops to `FINISHED_GRACE_MS`, room for the trailing usage chunk, and
+ * a timer that fires after that returns the turn as assembled.
+ */
 async function readBody(res: Response, clock: AttemptClock): Promise<BodyRead> {
   const type = (res.headers.get("content-type") ?? "").toLowerCase();
   const sse = res.ok && type.startsWith("text/event-stream");
   if (res.body === null) return sse ? { kind: "stream", ...new StreamAssembler().finish() } : { kind: "text", text: "" };
   const reader = res.body.getReader();
-  const aborted = new Promise<never>((_, reject) => {
-    if (clock.signal.aborted) reject(clock.signal.reason as Error);
-    clock.signal.addEventListener("abort", () => reject(clock.signal.reason as Error), { once: true });
-  });
-  aborted.catch(() => {});
+  const cancel = (): void => void reader.cancel().catch(() => {});
   const decoder = new TextDecoder();
   const assembler = sse ? new StreamAssembler() : null;
   const text: string[] = [];
   let pending = "";
+  let graced = false;
+  const touch = (): void => clock.touch(assembler?.turnFinished === true ? clock.graceMs : undefined);
   const lines = (chunk: string, last: boolean): void => {
     pending += chunk;
     // A trailing CR may be the first half of a CRLF split across reads.
@@ -853,31 +906,52 @@ async function readBody(res: Response, clock: AttemptClock): Promise<BodyRead> {
     const parts = pending.slice(0, cut).split(/\r\n|\r|\n/);
     pending = (last ? "" : parts.pop() ?? "") + pending.slice(cut);
     for (const l of parts) {
-      if (assembler!.line(l)) clock.touch();
+      if (assembler!.line(l)) touch();
+      // The finish is folded in at the event's blank line, after its data
+      // line already restarted the full silence: shorten it to the grace now.
+      if (assembler!.turnFinished && !graced) {
+        graced = true;
+        touch();
+      }
       if (assembler!.done) return;
     }
   };
+  clock.signal.addEventListener("abort", cancel, { once: true });
   try {
+    if (clock.signal.aborted) cancel();
     for (;;) {
-      const r = await Promise.race([reader.read(), aborted]);
-      if (r.done) break;
+      let r: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        r = await reader.read();
+      } catch (err) {
+        if (clock.signal.aborted) break;
+        throw err;
+      }
+      if (r.done || clock.signal.aborted) break;
       if (r.value.byteLength === 0) continue;
       const chunk = decoder.decode(r.value, { stream: true });
       if (assembler === null) {
-        clock.touch();
+        touch();
         text.push(chunk);
         continue;
       }
       lines(chunk, false);
       if (assembler.done) break;
     }
+    if (clock.signal.aborted) {
+      // A finished turn outlives its own clock; a stop never counts as one.
+      if (assembler !== null && assembler.turnFinished && clock.timedOut) return { kind: "stream", ...assembler.finish() };
+      throw clock.signal.reason;
+    }
   } catch (err) {
-    void reader.cancel().catch(() => {});
+    cancel();
     throw err;
+  } finally {
+    clock.signal.removeEventListener("abort", cancel);
   }
   const tail = decoder.decode();
   if (assembler === null) return { kind: "text", text: text.join("") + tail };
-  if (assembler.done) void reader.cancel().catch(() => {});
+  if (assembler.done) cancel();
   else lines(tail, true);
   return { kind: "stream", ...assembler.finish() };
 }
@@ -887,6 +961,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
   private readonly maxAttempts: number;
   private readonly silenceTimeoutMs: number;
   private readonly requestCeilingMs: number;
+  private readonly finishedGraceMs: number;
   private readonly retryBudgetMs: number;
   private readonly fetchImpl: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -899,6 +974,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
     this.maxAttempts = opts.maxAttempts ?? 10;
     this.silenceTimeoutMs = opts.silenceTimeoutMs ?? SILENCE_TIMEOUT_MS;
     this.requestCeilingMs = opts.requestCeilingMs ?? REQUEST_CEILING_MS;
+    this.finishedGraceMs = opts.finishedGraceMs ?? FINISHED_GRACE_MS;
     this.retryBudgetMs = opts.retryBudgetMs ?? 300_000;
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -1013,7 +1089,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
       }
       // Both timers start before the request is sent: the silence one covers
       // the wait for the response headers too (see the request clock above).
-      const clock = new AttemptClock(this.silenceTimeoutMs, this.requestCeilingMs, req.signal);
+      const clock = new AttemptClock(this.silenceTimeoutMs, this.requestCeilingMs, req.signal, this.finishedGraceMs);
       let res: Response;
       let read: BodyRead;
       try {
