@@ -1276,7 +1276,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   // the gate inside `sampleState` keeps the row cadence fixed either way.
   // Deliberately no watchdog enforcement here, unlike the claude driver's
   // ticker: this loop reads its watchdogs at the turn boundary, the boundary is
-  // never further away than the adapter's own retry budget, and a mid-request
+  // never further away than the adapter's bound on one complete() (its retry
+  // budget plus one request ceiling, `adapter.ts`), and a mid-request
   // kill would have to abandon a request the adapter still accounts for — the
   // ticker's job is the record, not the kill. `finished` shuts it up the instant
   // an outcome is decided, ahead of the `finally` that stops the timer.

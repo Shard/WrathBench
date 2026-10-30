@@ -3,20 +3,83 @@
  * Provider, base URL, model id and key env var are run config; there is no
  * per-model behaviour anywhere in here.
  *
+ * ### Streaming and the request clock (decided by the operator, 2026-10-30)
+ *
+ * Every request is sent with `stream: true` (and `stream_options:
+ * { include_usage: true }`, the OpenAI-compatible way to have the usage block
+ * arrive in the final chunk), and the server-sent events are assembled back
+ * into the body a non-streaming call returns (`StreamAssembler`), so that
+ * everything past the read — the schema, the 2xx-error path, usage, the
+ * request id, `raw` — sees the shapes it always saw. A provider that ignores
+ * `stream` and answers with a plain JSON body is read the old way, chosen by
+ * the response's content type.
+ *
+ * Streaming exists for the clock. A fixed 120 s timeout on the whole request
+ * measured reply length, not provider health: a self-hosted reasoning model at
+ * ~70 tokens/s writing 7–8k-token turns was cut on every attempt while
+ * producing steadily. Two timers now bound an attempt, the same for every
+ * model:
+ *
+ * - Silence, `SILENCE_TIMEOUT_MS` (120 s): from sending the request to the
+ *   response headers, and between any two stream lines that carry data. It
+ *   keeps the old number, because it is the old question — is the provider
+ *   still answering — asked of each gap instead of the sum. SSE comment lines
+ *   (OpenRouter's `: OPENROUTER PROCESSING`) do NOT reset it: a comment proves
+ *   the proxy is alive, not that the model is producing, and an upstream that
+ *   has hung behind a live aggregator would otherwise hold the request until
+ *   the ceiling. The case that costs is a model whose reasoning is hidden and
+ *   streams nothing but comments while it thinks: a think past 120 s dies, as
+ *   it did under the whole-request timeout, so this is no worse than before.
+ *   Reasoning that streams as deltas (`reasoning`, `reasoning_content`) is
+ *   data and keeps the request alive. So is any other `data:` event, an empty
+ *   delta included: the adapter cannot tell a heartbeat from a token by
+ *   shape, and a server that sends its heartbeats as data (the self-hosted
+ *   omlx server sends an empty delta every ~10 s while it queues or prefills)
+ *   is bounded by the ceiling, not by the silence.
+ * - Ceiling, `REQUEST_CEILING_MS` (5 minutes): one attempt, however steady,
+ *   ends there, so a stream that trickles forever cannot live inside
+ *   complete(). It is about twice the slowest turn the harness has had to
+ *   carry (an 8k-token turn at 70 tokens/s is ~2 minutes plus prefill).
+ *
+ * The retry budget below gates only the START of an attempt, never one in
+ * flight, so a streaming request that is making progress is not cut by it.
+ * The longest one complete() can take is therefore the budget, one backoff and
+ * one ceiling: 5 + 0.5 + 5 = 10.5 minutes, about half the 20-minute idle
+ * watchdog of every episode tier (`episodes.ts`); the 10-minute default a
+ * run gets with no tier and no override sits just under it. Nothing inside complete() is read by a
+ * watchdog — the fixed loop reads them at the turn boundary, and a success
+ * resets `idle` before the next read — so this bound is what keeps that
+ * boundary, the place a stop or a watchdog can act, from receding.
+ *
+ * A timer firing, a stream that breaks mid-read, a malformed chunk, or a
+ * stream that ends with neither `[DONE]` nor a `finish_reason` (a cut
+ * connection that would otherwise pass for a short turn) is a failed attempt,
+ * retried whole like a network error: nothing of a partial stream is kept.
+ * A turn whose `finish_reason` has arrived is whole, though: if its stream
+ * then neither sends `[DONE]` nor closes, it is taken as assembled after
+ * `FINISHED_GRACE_MS` (5 s, room for the trailing usage chunk), never asked
+ * for again.
+ *
  * ### Retry policy (fixed, documented here and only here)
  *
- * - Retryable: network errors, HTTP 408/429/5xx. Exponential backoff
+ * - Retryable: network errors (a timer above included), a failed or cut
+ *   stream, HTTP 408/429/5xx. Exponential backoff
  *   1s * 2^attempt with ±25% jitter, capped at 30s, max 10 attempts, all of
  *   it under a 5-minute wall-clock budget for the whole complete() — 2026-08-24:
  *   five attempts (~15s of backoff) was too impatient for provider weather
  *   that a sixth try at 30s would have ridden out, but attempts alone are the
- *   wrong unit, because ten 120s request timeouts would spend 20+ minutes
- *   inside one complete(), where no watchdog can see it, and the idle watchdog
- *   would then kill the run AS THE MODEL'S FAULT mid-retry. Fast failures get
- *   every attempt; slow timeouts get as many as fit the budget; either way the
- *   outcome past the budget is the pause/throw decision below, reached sooner.
+ *   wrong unit, because ten slow attempts would spend 20+ minutes inside one
+ *   complete(), where no watchdog can see it. Fast failures get every attempt;
+ *   slow ones get as many as START inside the budget; either way the outcome
+ *   past the budget is the pause/throw decision below, reached sooner.
  *   A `Retry-After` on the response overrides the backoff for the next
  *   attempt, clamped to the same 30s cap and jittered upward only.
+ * - Attempts exhausted on network errors that never got a response (no
+ *   status, before the headers; a timer firing there included) PAUSE
+ *   (`rate-limited`), as do attempts exhausted on 5xx. Attempts exhausted on a
+ *   failed read after the headers — a stall mid-stream, either timer firing
+ *   there, a cut or malformed stream — end as `adapter-error`, as a failed
+ *   body read always has.
  * - Any 429 or 402 seen during the attempts makes the outcome a PAUSE, not a
  *   failure: a spent budget says nothing about the model, so the run is
  *   suspended and resumable. The body wording only picks which pause it is —
@@ -310,7 +373,12 @@ export interface OpenAiAdapterOptions {
    */
   sessionId?: string;
   maxAttempts?: number;
-  requestTimeoutMs?: number;
+  /** Longest an attempt may go without data (`SILENCE_TIMEOUT_MS`). */
+  silenceTimeoutMs?: number;
+  /** Longest one attempt may take however steady (`REQUEST_CEILING_MS`). */
+  requestCeilingMs?: number;
+  /** How long a finished turn's stream may stay open (`FINISHED_GRACE_MS`). */
+  finishedGraceMs?: number;
   /** Wall-clock ceiling for one complete()'s retries (see the retry policy). */
   retryBudgetMs?: number;
   fetchImpl?: typeof fetch;
@@ -522,10 +590,378 @@ function isProviderBlip(text: string): boolean {
   return PROVIDER_BLIP_HINTS.test(text) && !WITHDRAWN_SLUG_HINTS.test(text) && !REQUEST_SHAPE_HINTS.test(text);
 }
 
+/** See "Streaming and the request clock" above. */
+export const SILENCE_TIMEOUT_MS = 120_000;
+/** See "Streaming and the request clock" above. */
+export const REQUEST_CEILING_MS = 300_000;
+
+type Json = Record<string, unknown>;
+const isObject = (v: unknown): v is Json => v !== null && typeof v === "object" && !Array.isArray(v);
+
+/** One tool call as its deltas have built it so far. */
+interface ToolCallParts {
+  index: number | undefined;
+  id: string | undefined;
+  type: string | undefined;
+  name: string;
+  arguments: string;
+}
+
+/**
+ * A chat-completions event stream folded back into the body the same request
+ * would have returned without `stream`: `choices[0].message` with `content`,
+ * `tool_calls` and any streamed reasoning text, `finish_reason`, `usage`, and
+ * the top-level fields (`id`, `model`, OpenRouter's `provider`, …) the chunks
+ * carry. Only choice 0 is kept, the one the adapter reads.
+ *
+ * Fed one line at a time, without its terminator (`line`), so the reader can
+ * tell data from keep-alive comments as it goes; `finish` closes it. Pure: no
+ * clock, no I/O.
+ */
+export class StreamAssembler {
+  private data: string[] = [];
+  private readonly top: Json = {};
+  private sawChoice = false;
+  private role: string | undefined;
+  private readonly content: string[] = [];
+  private readonly reasoning = new Map<string, string[]>();
+  private readonly toolCalls: ToolCallParts[] = [];
+  private finishReason: string | null = null;
+  private usage: Json | undefined;
+  private error: unknown;
+  private malformed = false;
+  /** `[DONE]` arrived, or an error chunk did: nothing after it is read. */
+  done = false;
+
+  /** A non-empty `finish_reason` has arrived: the turn is whole, whatever follows. */
+  get turnFinished(): boolean {
+    return this.finishReason !== null;
+  }
+
+  /** Folds one stream line in; true when it carried data rather than a comment or an event boundary. */
+  line(text: string): boolean {
+    if (text === "") {
+      this.dispatch();
+      return false;
+    }
+    if (text.startsWith(":")) return false;
+    const colon = text.indexOf(":");
+    const field = colon < 0 ? text : text.slice(0, colon);
+    let value = colon < 0 ? "" : text.slice(colon + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "data") this.data.push(value);
+    return true;
+  }
+
+  /**
+   * The assembled body, and whether the stream finished: `[DONE]`, a
+   * `finish_reason` or an error chunk arrived, and no chunk was malformed. An
+   * unfinished stream is a cut connection, not a short turn.
+   */
+  finish(): { body: unknown; finished: boolean } {
+    this.dispatch();
+    const finished = !this.malformed && (this.done || this.finishReason !== null || this.error !== undefined);
+    if (this.error !== undefined) return { body: { ...this.top, error: this.error }, finished };
+    if (!this.sawChoice) {
+      // No choice at all: the non-streaming equivalent is an empty `choices`,
+      // which the schema refuses, so it is refused the same way here.
+      return { body: { ...this.top, choices: [], ...(this.usage !== undefined ? { usage: this.usage } : {}) }, finished };
+    }
+    // No text is `null`, as a non-streaming body spells it: OpenRouter opens
+    // every stream with `content: ""`, and an empty string where the whole
+    // body said null would change the replayed message and its record.
+    const text = this.content.join("");
+    const message: Json = { role: this.role ?? "assistant", content: text.length > 0 ? text : null };
+    for (const [k, parts] of this.reasoning) message[k] = parts.join("");
+    if (this.toolCalls.length > 0) {
+      message["tool_calls"] = this.toolCalls.map((tc) => ({
+        ...(tc.id !== undefined ? { id: tc.id } : {}),
+        type: tc.type ?? "function",
+        function: { name: tc.name, arguments: tc.arguments },
+      }));
+    }
+    return {
+      body: {
+        ...this.top,
+        object: "chat.completion",
+        choices: [{ index: 0, message, finish_reason: this.finishReason }],
+        ...(this.usage !== undefined ? { usage: this.usage } : {}),
+      },
+      finished,
+    };
+  }
+
+  private dispatch(): void {
+    if (this.data.length === 0) return;
+    const payload = this.data.join("\n");
+    this.data = [];
+    if (this.done) return;
+    // A bare `data:` is a heartbeat: activity (counted in `line`), nothing to fold.
+    if (payload.trim() === "") return;
+    if (payload.trim() === "[DONE]") {
+      this.done = true;
+      return;
+    }
+    const chunk = jsonOrNull(payload);
+    if (!isObject(chunk)) {
+      this.malformed = true;
+      return;
+    }
+    for (const [k, v] of Object.entries(chunk)) {
+      if (k === "choices" || k === "usage" || k === "error" || k === "object") continue;
+      if (!(k in this.top) && v !== null && v !== undefined) this.top[k] = v;
+    }
+    // Mid-stream errors arrive as a chunk after the 200 (OpenRouter does
+    // this): the body becomes the error object, read like a 2xx error body.
+    if (chunk["error"] !== undefined && chunk["error"] !== null) {
+      this.error = chunk["error"];
+      this.done = true;
+      return;
+    }
+    // `include_usage` sends it once, on a final chunk with no choices; a
+    // provider that repeats it cumulatively ends on the total either way.
+    if (isObject(chunk["usage"])) this.usage = chunk["usage"];
+    const choices = chunk["choices"];
+    if (!Array.isArray(choices)) return;
+    for (const c of choices) {
+      if (!isObject(c)) continue;
+      if ((typeof c["index"] === "number" ? c["index"] : 0) !== 0) continue;
+      this.sawChoice = true;
+      if (typeof c["finish_reason"] === "string" && c["finish_reason"].length > 0) this.finishReason = c["finish_reason"];
+      const delta = c["delta"];
+      if (!isObject(delta)) continue;
+      if (typeof delta["role"] === "string") this.role = delta["role"];
+      if (typeof delta["content"] === "string") this.content.push(delta["content"]);
+      for (const k of ["reasoning", "reasoning_content"]) {
+        const piece = delta[k];
+        if (typeof piece !== "string") continue;
+        const parts = this.reasoning.get(k) ?? [];
+        parts.push(piece);
+        this.reasoning.set(k, parts);
+      }
+      if (Array.isArray(delta["tool_calls"])) this.toolCallDeltas(delta["tool_calls"]);
+    }
+  }
+
+  /**
+   * Tool-call deltas, matched to their call by `index`. `id` and `type` are
+   * taken once; `function.name` and `function.arguments` are appended — except
+   * a name repeated whole on every delta, which some servers send.
+   *
+   * An index is not always a call's identity: servers that send each call
+   * whole may send every one at `index: 0`, or with no index at all. So a
+   * delta whose id differs from the one stored at its index opens a new call;
+   * a delta without an index is matched by its id, opens a new call when the
+   * id is new or when it carries a name but no id, and otherwise continues
+   * the latest call.
+   */
+  private toolCallDeltas(deltas: unknown[]): void {
+    for (const d of deltas) {
+      if (!isObject(d)) continue;
+      const index = typeof d["index"] === "number" ? d["index"] : undefined;
+      const id = typeof d["id"] === "string" && d["id"].length > 0 ? d["id"] : undefined;
+      const fnIn = d["function"];
+      const named = isObject(fnIn) && typeof fnIn["name"] === "string" && fnIn["name"].length > 0;
+      let tc: ToolCallParts | undefined;
+      if (index !== undefined) {
+        tc = this.toolCalls.findLast((t) => t.index === index);
+        if (tc !== undefined && id !== undefined && tc.id !== undefined && tc.id !== id) tc = undefined;
+      } else if (id !== undefined) {
+        tc = this.toolCalls.find((t) => t.id === id);
+      } else if (!named) {
+        tc = this.toolCalls.at(-1);
+      }
+      if (tc === undefined) {
+        tc = { index, id: undefined, type: undefined, name: "", arguments: "" };
+        this.toolCalls.push(tc);
+      }
+      if (tc.id === undefined && id !== undefined) tc.id = id;
+      if (tc.type === undefined && typeof d["type"] === "string") tc.type = d["type"];
+      const fn = d["function"];
+      if (!isObject(fn)) continue;
+      const name = fn["name"];
+      if (typeof name === "string" && name.length > 0 && name !== tc.name) tc.name += name;
+      if (typeof fn["arguments"] === "string") tc.arguments += fn["arguments"];
+    }
+  }
+}
+
+/** An attempt ended by its own clock (silence or ceiling), not by the network or the runner. */
+class AttemptTimeout extends Error {
+  override readonly name = "AttemptTimeout";
+}
+
+/**
+ * How long a stream whose turn is already whole (a `finish_reason` arrived)
+ * may stay open waiting for its trailing usage chunk and `[DONE]` before the
+ * turn is taken as assembled. Never longer than the silence timeout.
+ */
+export const FINISHED_GRACE_MS = 5_000;
+
+/**
+ * One attempt's two timers (see "Streaming and the request clock") over its
+ * own AbortController, which the runner's stop signal also aborts. `touch`
+ * is called on every sign of data and restarts the silence timer.
+ *
+ * Deliberately not `AbortSignal.any([ctl, stop])`: the stop signal lives as
+ * long as the run, and a combined signal with a listener on it is kept alive
+ * by its sources, so one per attempt piled up for the whole run. The one
+ * listener this puts on the stop signal is removed in `stop()`.
+ */
+class AttemptClock {
+  private readonly ctl = new AbortController();
+  readonly signal: AbortSignal = this.ctl.signal;
+  private silence: ReturnType<typeof setTimeout> | undefined;
+  private readonly ceiling: ReturnType<typeof setTimeout>;
+  private readonly onStop: () => void;
+
+  constructor(
+    private readonly silenceMs: number,
+    ceilingMs: number,
+    private readonly stopSignal: AbortSignal | undefined,
+    readonly graceMs: number = FINISHED_GRACE_MS,
+  ) {
+    this.onStop = () => this.ctl.abort(stopSignal?.reason);
+    if (stopSignal !== undefined) {
+      if (stopSignal.aborted) this.ctl.abort(stopSignal.reason);
+      else stopSignal.addEventListener("abort", this.onStop, { once: true });
+    }
+    this.ceiling = setTimeout(
+      () => this.ctl.abort(new AttemptTimeout(`the request passed its ${ceilingMs / 1000} s ceiling`)),
+      ceilingMs,
+    );
+    this.touch();
+  }
+
+  /** Restarts the silence timer, at `ms` when given (never longer than the silence timeout). */
+  touch(ms = this.silenceMs): void {
+    clearTimeout(this.silence);
+    this.silence = setTimeout(
+      () => this.ctl.abort(new AttemptTimeout(`no data from the model API for ${this.silenceMs / 1000} s`)),
+      Math.min(ms, this.silenceMs),
+    );
+  }
+
+  /** The attempt was ended by one of its own timers, not by the runner or the network. */
+  get timedOut(): boolean {
+    return this.ctl.signal.aborted && this.ctl.signal.reason instanceof AttemptTimeout;
+  }
+
+  /** What ended the attempt: the timer that fired, or the error itself. */
+  why(err: unknown): string {
+    const reason: unknown = this.ctl.signal.aborted ? this.ctl.signal.reason : err;
+    return reason instanceof Error ? reason.message : String(reason);
+  }
+
+  stop(): void {
+    clearTimeout(this.silence);
+    clearTimeout(this.ceiling);
+    this.stopSignal?.removeEventListener("abort", this.onStop);
+  }
+}
+
+/** What a response's body read produced. */
+type BodyRead = { kind: "text"; text: string } | { kind: "stream"; body: unknown; finished: boolean };
+
+/** A whole event stream as text, assembled: the tests' entry, and the fallback for a stream served under another content type. */
+export function assembleStream(text: string): { body: unknown; finished: boolean } {
+  const a = new StreamAssembler();
+  for (const l of text.split(/\r\n|\r|\n/)) {
+    a.line(l);
+    if (a.done) break;
+  }
+  return a.finish();
+}
+
+/**
+ * Reads a response body under the attempt's clock. A 2xx `text/event-stream`
+ * is assembled as it arrives, and only lines that carry data reset the
+ * silence timer; any other body is read as text, every chunk counting. When
+ * the clock fires the reader is cancelled, which ends the pending read,
+ * rather than trusting the body to notice the aborted fetch signal; the one
+ * listener that does this is removed however the read ends, and nothing is
+ * left waiting on the clock between reads.
+ *
+ * A stream whose turn is already whole (a `finish_reason` arrived) is not
+ * thrown away when it then neither sends `[DONE]` nor closes: the silence
+ * timer drops to `FINISHED_GRACE_MS`, room for the trailing usage chunk, and
+ * a timer that fires after that returns the turn as assembled.
+ */
+async function readBody(res: Response, clock: AttemptClock): Promise<BodyRead> {
+  const type = (res.headers.get("content-type") ?? "").toLowerCase();
+  const sse = res.ok && type.startsWith("text/event-stream");
+  if (res.body === null) return sse ? { kind: "stream", ...new StreamAssembler().finish() } : { kind: "text", text: "" };
+  const reader = res.body.getReader();
+  const cancel = (): void => void reader.cancel().catch(() => {});
+  const decoder = new TextDecoder();
+  const assembler = sse ? new StreamAssembler() : null;
+  const text: string[] = [];
+  let pending = "";
+  let graced = false;
+  const touch = (): void => clock.touch(assembler?.turnFinished === true ? clock.graceMs : undefined);
+  const lines = (chunk: string, last: boolean): void => {
+    pending += chunk;
+    // A trailing CR may be the first half of a CRLF split across reads.
+    const cut = last ? pending.length : pending.endsWith("\r") ? pending.length - 1 : pending.length;
+    const parts = pending.slice(0, cut).split(/\r\n|\r|\n/);
+    pending = (last ? "" : parts.pop() ?? "") + pending.slice(cut);
+    for (const l of parts) {
+      if (assembler!.line(l)) touch();
+      // The finish is folded in at the event's blank line, after its data
+      // line already restarted the full silence: shorten it to the grace now.
+      if (assembler!.turnFinished && !graced) {
+        graced = true;
+        touch();
+      }
+      if (assembler!.done) return;
+    }
+  };
+  clock.signal.addEventListener("abort", cancel, { once: true });
+  try {
+    if (clock.signal.aborted) cancel();
+    for (;;) {
+      let r: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        r = await reader.read();
+      } catch (err) {
+        if (clock.signal.aborted) break;
+        throw err;
+      }
+      if (r.done || clock.signal.aborted) break;
+      if (r.value.byteLength === 0) continue;
+      const chunk = decoder.decode(r.value, { stream: true });
+      if (assembler === null) {
+        touch();
+        text.push(chunk);
+        continue;
+      }
+      lines(chunk, false);
+      if (assembler.done) break;
+    }
+    if (clock.signal.aborted) {
+      // A finished turn outlives its own clock; a stop never counts as one.
+      if (assembler !== null && assembler.turnFinished && clock.timedOut) return { kind: "stream", ...assembler.finish() };
+      throw clock.signal.reason;
+    }
+  } catch (err) {
+    cancel();
+    throw err;
+  } finally {
+    clock.signal.removeEventListener("abort", cancel);
+  }
+  const tail = decoder.decode();
+  if (assembler === null) return { kind: "text", text: text.join("") + tail };
+  if (assembler.done) cancel();
+  else lines(tail, true);
+  return { kind: "stream", ...assembler.finish() };
+}
+
 export class OpenAiChatAdapter implements ChatAdapter {
   readonly label: string;
   private readonly maxAttempts: number;
-  private readonly requestTimeoutMs: number;
+  private readonly silenceTimeoutMs: number;
+  private readonly requestCeilingMs: number;
+  private readonly finishedGraceMs: number;
   private readonly retryBudgetMs: number;
   private readonly fetchImpl: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -536,7 +972,9 @@ export class OpenAiChatAdapter implements ChatAdapter {
   constructor(private readonly opts: OpenAiAdapterOptions) {
     this.label = `openai-compatible:${opts.model}`;
     this.maxAttempts = opts.maxAttempts ?? 10;
-    this.requestTimeoutMs = opts.requestTimeoutMs ?? 120_000;
+    this.silenceTimeoutMs = opts.silenceTimeoutMs ?? SILENCE_TIMEOUT_MS;
+    this.requestCeilingMs = opts.requestCeilingMs ?? REQUEST_CEILING_MS;
+    this.finishedGraceMs = opts.finishedGraceMs ?? FINISHED_GRACE_MS;
     this.retryBudgetMs = opts.retryBudgetMs ?? 300_000;
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -577,6 +1015,11 @@ export class OpenAiChatAdapter implements ChatAdapter {
         type: "function",
         function: { name: t.name, description: t.description, parameters: t.inputSchema },
       })),
+      // Streamed for the request clock (see the header), and assembled back
+      // into the non-streaming body. `include_usage` is the OpenAI-compatible
+      // way to keep `usage`: without it a stream carries none.
+      stream: true,
+      stream_options: { include_usage: true },
       // Only present when the run declares an effort level. Unlike the usage
       // opt-in below this is NOT host-gated: effort is a run dimension the
       // operator asked for by name, and silently dropping it on a non-OpenRouter
@@ -624,7 +1067,8 @@ export class OpenAiChatAdapter implements ChatAdapter {
     for (let attempt = 0; attempt < this.maxAttempts; attempt++) {
       if (req.signal?.aborted === true) throw new AdapterError("request abandoned: the runner is stopping");
       // The wall-clock budget (see the retry policy above): attempts are the
-      // wrong unit when each one can spend requestTimeoutMs on the wire.
+      // wrong unit when each one can spend a ceiling on the wire. It gates the
+      // start of an attempt only: one in flight runs to its own clock.
       if (attempt > 0 && this.now() - retriesStartedAt >= this.retryBudgetMs) break;
       made = attempt + 1;
       if (attempt > 0) {
@@ -643,56 +1087,79 @@ export class OpenAiChatAdapter implements ChatAdapter {
         retryAfterMs = null;
         await this.sleep(wait);
       }
+      // Both timers start before the request is sent: the silence one covers
+      // the wait for the response headers too (see the request clock above).
+      const clock = new AttemptClock(this.silenceTimeoutMs, this.requestCeilingMs, req.signal, this.finishedGraceMs);
       let res: Response;
+      let read: BodyRead;
       try {
-        res = await this.fetchImpl(url, {
-          method: "POST",
-          headers: this.headers,
-          body,
-          // Never followed. A followed redirect re-sends the request — the
-          // bearer included — to wherever the Location says, which is exactly
-          // the host check (runner/src/providers.ts) the key was cleared by
-          // being skipped. A provider that redirects is refused below.
-          redirect: "manual",
-          signal:
-            req.signal !== undefined
-              ? AbortSignal.any([AbortSignal.timeout(this.requestTimeoutMs), req.signal])
-              : AbortSignal.timeout(this.requestTimeoutMs),
-        });
-      } catch (err) {
-        if (req.signal !== undefined && req.signal.aborted) throw new AdapterError("request abandoned: the runner is stopping");
-        lastError = `network error: ${err instanceof Error ? err.message : String(err)}`;
-        lastStatus = undefined;
-        continue;
-      }
-      if ((res.status >= 300 && res.status < 400) || res.type === "opaqueredirect") {
-        // Terminal, not retried: the base is wrong (a scheme or path the
-        // provider moves), and no number of attempts makes it right.
-        throw new AdapterError(
-          `model API answered with a redirect (HTTP ${res.status}) — not followed, so the key is never re-sent to another URL; fix the apiBase`,
-        );
+        try {
+          res = await this.fetchImpl(url, {
+            method: "POST",
+            headers: this.headers,
+            body,
+            // Never followed. A followed redirect re-sends the request — the
+            // bearer included — to wherever the Location says, which is exactly
+            // the host check (runner/src/providers.ts) the key was cleared by
+            // being skipped. A provider that redirects is refused below.
+            redirect: "manual",
+            signal: clock.signal,
+          });
+        } catch (err) {
+          if (req.signal !== undefined && req.signal.aborted) throw new AdapterError("request abandoned: the runner is stopping");
+          lastError = `network error: ${clock.why(err)}`;
+          lastStatus = undefined;
+          continue;
+        }
+        if ((res.status >= 300 && res.status < 400) || res.type === "opaqueredirect") {
+          // Terminal, not retried: the base is wrong (a scheme or path the
+          // provider moves), and no number of attempts makes it right.
+          throw new AdapterError(
+            `model API answered with a redirect (HTTP ${res.status}) — not followed, so the key is never re-sent to another URL; fix the apiBase`,
+          );
+        }
+        const headerId = requestIdOf(res);
+        if (headerId !== undefined) lastRequestId = headerId;
+        try {
+          // Under the same clock: a provider that returns headers and then
+          // stalls times out HERE, and that is as retryable as the fetch
+          // itself failing.
+          read = await readBody(res, clock);
+        } catch (err) {
+          if (req.signal !== undefined && req.signal.aborted) throw new AdapterError("request abandoned: the runner is stopping");
+          lastError = `body read failed: ${clock.why(err)}${headerId !== undefined ? ` [req ${headerId}]` : ""}`;
+          lastStatus = undefined;
+          continue;
+        }
+      } finally {
+        clock.stop();
       }
       const requestId = requestIdOf(res);
-      if (requestId !== undefined) lastRequestId = requestId;
-      let text: string;
-      try {
-        // The body read shares the request's AbortSignal: a provider that
-        // returns headers and then stalls the body times out HERE, and that
-        // is as retryable as the fetch itself failing.
-        text = await res.text();
-      } catch (err) {
-        lastError = `body read failed: ${err instanceof Error ? err.message : String(err)}`;
+      // A body served as text that is an event stream all the same (a server
+      // that streams under the wrong content type) is assembled like one.
+      if (res.ok && read.kind === "text" && /^\s*data:/.test(read.text)) {
+        read = { kind: "stream", ...assembleStream(read.text) };
+      }
+      if (res.ok && read.kind === "stream" && !read.finished) {
+        // A cut connection: retried whole, like any failed read.
+        lastError = `body read failed: the stream ended before the model finished${
+          requestId !== undefined ? ` [req ${requestId}]` : ""
+        }`;
         lastStatus = undefined;
         continue;
       }
+      const text = read.kind === "text" ? read.text : "";
       if (res.ok) {
         let json: unknown;
-        try {
-          json = JSON.parse(text);
-        } catch {
-          throw new AdapterError(
-            `model API returned 2xx with a non-JSON body${requestId !== undefined ? ` [req ${requestId}]` : ""}`,
-          );
+        if (read.kind === "stream") json = read.body;
+        else {
+          try {
+            json = JSON.parse(text);
+          } catch {
+            throw new AdapterError(
+              `model API returned 2xx with a non-JSON body${requestId !== undefined ? ` [req ${requestId}]` : ""}`,
+            );
+          }
         }
         const parsed = completionSchema.safeParse(json);
         if (!parsed.success) {

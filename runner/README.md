@@ -151,6 +151,19 @@ also sends `x-opencode-session: <run id>`, the stable per-conversation id that
 OpenCode Go's docs ask of agents other than its own client. It never sends the
 headers that identify OpenCode's own client.
 
+It streams every request and assembles the events back into the body a
+non-streaming call returns, so the trajectory, usage and cost records are the
+same shapes either way; a provider that answers with plain JSON is read as
+before. Streaming is there for the clock: an attempt fails after 120 s with no
+data (keep-alive comments do not count) or at a 5-minute ceiling however
+steady it is, rather than after 120 s in total, so a slow model that keeps
+producing is never cut for being slow. A failed attempt, a cut stream
+included, is retried whole, and attempts start only inside a 5-minute budget.
+When they run out on network errors before any response the run pauses
+`rate-limited`; when they run out on a failed read after the headers (a stall
+or a cut stream) it ends as `adapter-error`. The policy and its reasons are in
+the header of `src/adapter.ts`.
+
 ### The driver contract
 
 A driver is how the runner reaches a model, and nothing more: everything that
