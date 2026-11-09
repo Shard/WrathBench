@@ -115,6 +115,11 @@
       "name": "Claude Fable 5.1",
       "prices": { "anthropic": { "asOf": "2026-10-16", "windows": [{ "input": 10, "output": 50, "cacheRead": 0.25, "cacheWrite": 20 }] } }
     },
+    "claude-fable-5-2": {
+      "family": "claude",
+      "name": "Claude Fable 5.2",
+      "prices": { "anthropic": { "asOf": "2026-11-10", "windows": [{ "input": 8, "output": 40, "cacheRead": 0.2, "cacheWrite": 16 }] } }
+    },
     "claude-haiku-4-5": {
       "family": "claude",
       "name": "Claude Haiku 4.5",
