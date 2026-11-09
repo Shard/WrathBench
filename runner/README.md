@@ -440,8 +440,8 @@ without it. `--allowed-tools` is the whole permission story — verified against
 the real CLI (with a local capture proxy standing in for the model, so nothing
 was billed) that it dispatches an MCP tool call in headless mode without
 `--permission-mode`. With no mode named, the `init` frame reports the mode
-the CLI picked: `auto` on 2.1.293, and `default` from 2.1.302 on. On the
-pinned 2.1.309 the call still dispatches on the allowlist alone (probed with
+the CLI picked: `auto` on 2.1.293, and `default` from 2.1.302 on. On
+2.1.309 the call still dispatches on the allowlist alone (probed with
 the driver's flags against a stub MCP server).
 
 ### Bounding the inner loop — the real control
@@ -498,7 +498,7 @@ A harness setting of the CLI scaffolds since the operator's decision of
 2026-10-11; this section is claude-code's mechanics, and "The codex driver"
 below has codex's, and "The pi driver" pi's. The CLI summarises its own history once the prompt nears
 its auto-compaction window, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: `auto` or
-100k–1M tokens in the pinned 2.1.309. A CLI before 2.1.304 read any `<n>k`
+100k–1M tokens from 2.1.304 on (2.1.309 probed; the pin is 2.1.321). A CLI before 2.1.304 read any `<n>k`
 spelling there as 100k whatever `n` was: on 2.1.293 `200k` and `300k` both
 logged `effectiveWindow=80000`, where 2.1.309 logs 180000 and 280000 (probed).
 An integer token count reads as written on both.

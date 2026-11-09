@@ -50,6 +50,11 @@ RUN apt-get update \
 # the same uid the compose service and the Kubernetes pods run with.
 USER bun
 ENV HOME=/home/bun
+# 2.1.321 is pinned because 2.1.309 predates claude-fable-5-2: the id is not in
+# its bundle, so it ran the model on fallback metadata — a 200k window (one e90
+# auto-compacted at 167k, where Fable 5.1 and Opus 5.5 never compacted on this
+# harness) and a fallback price (its total_cost_usd ~1/3 of list). 2.1.321's
+# bundle carries the id. It is probed in the --keep-paused release hold.
 # 2.1.309 was probed on a subscription lane before it was pinned. The aliases opus,
 # sonnet, haiku and fable resolve to the same models as on 2.1.293, and they and
 # the claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5, claude-fable-5-1 and
@@ -58,7 +63,7 @@ ENV HOME=/home/bun
 # run against a stub MCP server, and a compaction record was checked.
 # 2.1.304 is the first CLI that reads `CLAUDE_CODE_AUTO_COMPACT_WINDOW=<n>k` as
 # written, per its changelog; 2.1.293 read `200k` and `300k` as 100k (probed).
-ARG CLAUDE_CODE_VERSION=2.1.309
+ARG CLAUDE_CODE_VERSION=2.1.321
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_CODE_VERSION}" \
     && /home/bun/.local/bin/claude --version
 # The OpenAI Codex CLI for the `codex` driver (runner/README.md, Drivers),
