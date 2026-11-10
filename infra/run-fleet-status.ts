@@ -87,6 +87,7 @@ import {
   readReportFacts,
   resolveStatePath,
   runProgress,
+  liveRunStuck,
   RUNS_DIR,
   smokePath,
   STATE_PATH,
@@ -452,6 +453,20 @@ export interface JobRow {
    * not a rendering choice: say both names rather than pick one quietly.
    */
   clash?: string;
+  /**
+   * The stuck detector tripped on the job's live run: no game progress over
+   * its window (`liveRunStuck`). Reported, never acted on; printed after
+   * `!! STUCK:` so a monitor can match it.
+   */
+  stuck?: string;
+}
+
+/** The marker a stuck run's account row carries. */
+export const STUCK_MARK = "!! STUCK:";
+
+/** The tail a stuck run's row ends with, pointing at the view that says why. */
+export function stuckTail(runId: string, flag: string | undefined): string {
+  return flag === undefined ? "" : ` ${STUCK_MARK} ${flag} (bun wb inspect stuck ${runId})`;
 }
 
 /** What an account is doing right now, for the accounts table. */
@@ -498,7 +513,7 @@ export function formatAccounts(rows: readonly AccountRow[]): string[] {
     const run = j.runId !== undefined ? `${j.runId} — ${prog}` : "no run launched yet";
     out.push(
       `${head}${what} — ${run}${j.elapsedMs !== undefined ? `, ${fmtElapsed(j.elapsedMs)}` : ""}${j.cooling !== undefined ? ` — ${j.cooling}` : ""}` +
-        `${j.offClass !== undefined ? ` [${j.offClass}]` : ""}${j.clash !== undefined ? ` !! ${j.clash}` : ""}`,
+        `${j.offClass !== undefined ? ` [${j.offClass}]` : ""}${j.clash !== undefined ? ` !! ${j.clash}` : ""}${j.runId !== undefined ? stuckTail(j.runId, j.stuck) : ""}`,
     );
   }
   return out;
@@ -820,15 +835,18 @@ export function formatHolder(h: {
   progress?: { level: number; xp: number };
   owner?: { name: string; j: StateJob; alive: boolean };
   pod?: string;
+  /** The stuck detector's flag on the holding run (`liveRunStuck`). */
+  stuck?: string;
 }): string {
   const head = `held by run ${h.runId}${h.progress !== undefined ? ` (L${h.progress.level}, ${h.progress.xp} xp)` : ""}`;
   const where = h.pod === undefined ? "" : h.pod === "" ? " in a run pod" : ` in run pod ${h.pod}`;
+  const stuck = stuckTail(h.runId, h.stuck);
   if (h.owner !== undefined) {
     const roster = h.owner.alive ? "" : `, still live though its roster ${h.owner.j.exitCode !== null ? `exited ${h.owner.j.exitCode}` : "is gone"}`;
-    return `${head} — job ${h.owner.name}'s run${where}${roster}`;
+    return `${head} — job ${h.owner.name}'s run${where}${roster}${stuck}`;
   }
-  if (h.runId.startsWith("fleet-")) return `${head} — a fleet run${where} that no job of this supervisor launched`;
-  return `${head}${where} — not fleet-managed`;
+  if (h.runId.startsWith("fleet-")) return `${head} — a fleet run${where} that no job of this supervisor launched${stuck}`;
+  return `${head}${where} — not fleet-managed${stuck}`;
 }
 
 export function printStatus(): void {
@@ -955,6 +973,11 @@ export function printStatus(): void {
       } else {
         row.elapsedMs = Date.now() - j.spawnedAt;
       }
+      // Only a run with a live owner is looked at; one statement on its run.sqlite.
+      if (alive) {
+        const stuck = liveRunStuck(runId);
+        if (stuck !== undefined) row.stuck = stuck;
+      }
     }
     const defers = jobDefers(jsonl);
     const tainted = defers.find((d) => d.entry.tainted === true);
@@ -1016,7 +1039,9 @@ export function printStatus(): void {
         const prog = runProgress(holder);
         const owner = jobOfRun(holder, live, (name, j) => lastLaunchedRunId(resolveStatePath(j.log, jobLogPath(name, state!.stamp))));
         const image = readImageRecord(join(RUNS_DIR, holder));
+        const stuck = liveRunStuck(holder);
         note = formatHolder({
+          ...(stuck !== undefined ? { stuck } : {}),
           runId: holder,
           ...(prog !== undefined ? { progress: prog } : {}),
           ...(owner !== undefined ? { owner: { ...owner, alive: isAlive(owner.j) } } : {}),
