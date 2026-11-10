@@ -53,8 +53,8 @@ A run is live when it has neither a termination nor a pause (skill
 - Printing env, `.env`, Secrets, a session token or an audit file name
 
 When the operator does ask, the procedure is `docs/RUNBOOK.md`: "Stop it" and
-"Updating the live fleet" for what each stop costs which runs, "Deploy window"
-for a release, "Lapsed runs" before touching a run with no verdict. Follow it
+"Updating the live fleet" for what each stop costs which runs, "Lapsed runs"
+before touching a run with no verdict; a release is skill `release`. Follow it
 rather than a remembered recipe.
 
 When in doubt, the read-only path is the answer; put the question to the
