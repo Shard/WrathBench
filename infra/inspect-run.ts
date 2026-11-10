@@ -2593,6 +2593,7 @@ export function progressVerdict(all: readonly ProgressSample[], w: { since: numb
   let quests = 0;
   let money = false;
   let items = false;
+  const maps = new Set<number>();
   let map = false;
   let lx: { level: number; xp: number } | null = null;
   let q: number | null = null;
@@ -2617,6 +2618,7 @@ export function progressVerdict(all: readonly ProgressSample[], w: { since: numb
       it = x.items;
     }
     if (x.map !== null) {
+      maps.add(x.map);
       if (mp !== null && x.map !== mp) map = true;
       mp = x.map;
     }
@@ -2635,7 +2637,7 @@ export function progressVerdict(all: readonly ProgressSample[], w: { since: numb
   if (quests > 0) changes.push(`quests +${quests}`);
   if (money) changes.push(`money ${money2(first("money"))} → ${money2(last("money"))}`);
   if (items) changes.push("items changed");
-  if (map) changes.push(`map ${first("map")} → ${last("map")}`);
+  if (map) changes.push(`maps ${[...maps].join(", ")}`);
   if (stray > t.moveYards) changes.push(`moved ${Math.round(stray)} yd from where the window began`);
   const span = `${n} samples over ${fmtAge(s[n - 1]!.ts - s[0]!.ts)}, largest gap ${fmtAge(gap.ms)}`;
   if (changes.length > 0) return { state: "progressing", evidence: `${changes.join(" · ")} · ${span}`, samples: n };
@@ -2659,6 +2661,8 @@ export const OPERATOR_ASKS: readonly RegExp[] = [
   /\b(?:please|could you|can you|would you|i need you to)\b[^.?!\n]{0,60}\b(?:reset|teleport|unstick|resurrect|revive|move) (?:me|my character|the character)\b/i,
   /\b(?:bug report|report (?:this|a|the) bug|harness (?:bug|issue|problem)|server[- ]side (?:bug|issue|fix))\b/i,
   /\b(?:recovery mechanism|manual intervention|outside (?:help|intervention))\b/i,
+  // What a stranded ghost said for two days: "awaiting resurrection or external unstuck".
+  /\b(?:external|outside|manual)\b[^.?!\n]{0,40}\b(?:help|unstuck|unstick|intervention|rescue|recovery|fix)\b/i,
 ];
 
 /** The harness-delivered hint block at a result's foot (`renderActionHints`, wrath-mcp/mcp/src/tools.ts). */
@@ -2862,7 +2866,7 @@ export async function inspectStuck(runId: string, opts: Ctx & { until: number | 
     `verdict   ${p.state === "stuck" ? "STUCK: no game progress in the window" : p.state === "progressing" ? "not stuck: the character made progress" : "unjudged: the state samples do not cover the window"} (only the progress signal flags a run; the rest are evidence)`,
   );
   say(`source    ${via.line}`);
-  say(`progress  ${p.state === "stuck" ? "TRIPPED" : "ok     "}  ${p.evidence}`);
+  say(`progress  ${p.state === "stuck" ? "TRIPPED" : p.state === "unjudged" ? "unjudged" : "ok     "}  ${p.evidence}`);
   say(`activity  ${a.snippets} snippet(s) · ${a.toolCalls} other tool call(s) · ${a.responses} model response(s) in the window`);
   for (const s of report.signals) say(`${s.name.padEnd(9)} ${s.tripped ? "TRIPPED" : "ok     "}  ${s.text}`);
   for (const ask of a.asks.slice(-2)) say(`          ${clock(ask.ts)}  ${cap(ask.text, opts.width - 40)}`);

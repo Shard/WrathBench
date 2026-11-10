@@ -22,7 +22,7 @@ const NOW = Date.UTC(2030, 0, 2, 12, 0, 0);
 const TOKEN = "ef56".repeat(16);
 const MIN = 60_000;
 
-type Shape = "stuck" | "progressing" | "crafting" | "sleeping" | "young" | "cold";
+type Shape = "stuck" | "stranded" | "progressing" | "crafting" | "sleeping" | "young" | "cold";
 
 const bags = (ore: number): ItemSample[] => [
   { name: "Worn Shortsword", count: 1, equipped: true, itemId: 25 },
@@ -34,7 +34,9 @@ const bags = (ore: number): ItemSample[] => [
  * One run over the three hours before NOW, a state sample a minute, written
  * the way the runner writes it. `stuck`: a ghost at a navmesh gap, the same
  * failing move twice a minute, the harness's hint block on every result, and
- * the model asking for a reset. The others vary only what the detector reads.
+ * the model asking for a reset. `stranded`: the shape of a real one, a ghost
+ * with no way back whose snippets succeed, waiting on a resurrection that
+ * never comes, its model saying so. The others vary only what the detector reads.
  */
 async function makeRun(runsDir: string, runId: string, shape: Shape): Promise<void> {
   const dir = join(runsDir, runId);
@@ -59,7 +61,8 @@ async function makeRun(runsDir: string, runId: string, shape: Shape): Promise<vo
     for (const half of [0, 30_000]) {
       clock = t0 + i * MIN + half + 1_000;
       call++;
-      const code = shape === "stuck" ? "const r = await sdk.moveTo(corpse); return r.status;" : "return await sdk.sleep(25000);";
+      const code =
+        shape === "stuck" ? "const r = await sdk.moveTo(corpse); return r.status;" : shape === "stranded" ? "return await waitForOpcode('SMSG_RESURRECT_REQUEST', 25000);" : "return await sdk.sleep(25000);";
       traj.append({ t: "tool_call", turn: call, call, name: "run_snippet", args: { code } });
       traj.append({ t: "snippet", turn: call, call, code });
       if (shape === "stuck") {
@@ -72,7 +75,13 @@ async function makeRun(runsDir: string, runId: string, shape: Shape): Promise<vo
           text: `error (${400 + (call % 7)}ms)\nError: moveTo target_off_mesh at (${-9000 + (call % 3)}, 400)\n--- harness ---\nmoveTo target_off_mesh ×45: the target is not on the navigation mesh; pick a point on the ground nearby`,
         });
       } else traj.append({ t: "snippet_result", turn: call, call, name: "run_snippet", isError: false, text: "ok (25000ms)\n=> null" });
-      traj.append({ t: "response", turn: call, message: { role: "assistant", content: shape === "stuck" && call % 90 === 0 ? `Still blocked at the gap. Could the operator please reset my character to the graveyard? session ${TOKEN}` : "Continuing." } });
+      const said =
+        shape === "stuck" && call % 90 === 0
+          ? `Still blocked at the gap. Could the operator please reset my character to the graveyard? session ${TOKEN}`
+          : shape === "stranded" && call % 30 === 0
+            ? "No Spirit Healer or resurrection offer. External recovery assistance is needed."
+            : "Continuing.";
+      traj.append({ t: "response", turn: call, message: { role: "assistant", content: said } });
     }
   }
   traj.close();
@@ -83,7 +92,7 @@ async function makeRun(runsDir: string, runId: string, shape: Shape): Promise<vo
 }
 
 const RUNS = tmp("inspect-stuck-");
-const SHAPES: Shape[] = ["stuck", "progressing", "crafting", "sleeping", "young", "cold"];
+const SHAPES: Shape[] = ["stuck", "stranded", "progressing", "crafting", "sleeping", "young", "cold"];
 for (const s of SHAPES) await makeRun(RUNS, `run-${s}`, s);
 const STORE = await memoryStore(RUNS);
 
@@ -120,6 +129,15 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE]] a
       expect(r.out.join("\n")).toContain("Could the operator please reset");
       expect(r.out.join("\n")).not.toContain(TOKEN);
       expect(line(r.out, "limits")).toContain("--window 2h00m --move 50");
+    });
+
+    test("a stranded ghost whose snippets all succeed trips on progress alone, and its words read as asking", async () => {
+      const r = await inspect(["stuck", "run-stranded", "--runs-dir", RUNS], store);
+      expect(line(r.out, "verdict")).toContain("STUCK");
+      expect(line(r.out, "errors")).toMatch(/ok\s+none failed/);
+      expect(line(r.out, "hints")).toMatch(/ok\s+no harness-delivered hint/);
+      expect(line(r.out, "asks")).toMatch(/TRIPPED\s+heuristic: 8 of 24\d/);
+      expect(r.out.join("\n")).toContain("External recovery assistance is needed.");
     });
 
     test("thresholds are flags: a lower restart count trips that signal, a short window holds", async () => {
@@ -162,7 +180,7 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE]] a
 
     test("with no run id: one line per run with a live owner", async () => {
       const r = await inspect(["stuck", "--runs-dir", RUNS], store);
-      expect(r.out[0]).toContain("5 run(s) with a live owner");
+      expect(r.out[0]).toContain("6 run(s) with a live owner");
       expect(r.out.find((l) => l.includes("run-stuck"))).toMatch(/run-stuck  STUCK \(also tripped: errors, hints, asks\)  no progress in 2h00m: L12 1350xp throughout/);
       for (const s of ["progressing", "crafting", "sleeping"]) expect(r.out.find((l) => l.includes(`run-${s}`))).toMatch(/ progressing$/);
       expect(r.out.find((l) => l.includes("run-young"))).toContain("unjudged");
@@ -205,7 +223,7 @@ describe("progressVerdict", () => {
       ["level", (i) => ({ level: i > 60 ? 11 : 10, xp: i > 60 ? 0 : 500 })],
       ["quests", (i) => ({ quests: i > 60 ? 4 : 3 })],
       ["money", (i) => ({ money: i > 60 ? 50 : 100 })],
-      ["map", (i) => ({ map: i > 60 ? 0 : 1 })],
+      ["map", (i) => ({ map: i > 40 && i < 80 ? 0 : 1 })],
       ["a flight", (i) => ({ x: i * 40 })],
     ];
     for (const [what, f] of cases) expect([what, progressVerdict(series(f), w, STUCK_DEFAULTS).state]).toEqual([what, "progressing"]);
@@ -231,6 +249,7 @@ describe("fleet status's flag", () => {
   test("a stuck live run is flagged from one bounded read of its run.sqlite; the rest are not", () => {
     const flag = liveRunStuck("run-stuck", NOW, RUNS);
     expect(flag).toMatch(/^no progress in 2h00m: L12 1350xp throughout/);
+    expect(liveRunStuck("run-stranded", NOW, RUNS)).toMatch(/^no progress in 2h00m/);
     for (const s of ["progressing", "crafting", "sleeping", "young"]) expect([s, liveRunStuck(`run-${s}`, NOW, RUNS)]).toEqual([s, undefined]);
     // A cold heartbeat has no live owner, and is not looked at.
     expect(liveRunStuck("run-cold", NOW, RUNS)).toBeUndefined();
