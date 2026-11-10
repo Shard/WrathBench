@@ -14,6 +14,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { campaignDefinitionSchema, campaignHash, campaignRef, imageRefProblem, issuesOf, type CampaignDefinition } from "../src/campaign-def";
 import { campaignPairRefusals, type PairRosterEntry } from "../src/campaigns";
+import { claudeWindowCapRefusal } from "../src/cli-compaction";
 import { rosterEntryRefusal } from "../src/roster-refusal";
 import { CAMPAIGNS_DIR, checkedIn, checkedInFiles, definition } from "./fixtures/campaigns";
 
@@ -42,7 +43,7 @@ describe("the checked-in definitions", () => {
   test("there are some, and race-probe@1 and class-probe@2 are among them", () => {
     expect(files).toContain("race-probe@1.json");
     expect(files).toContain("class-probe@2.json");
-    for (const f of ["compact-window-claude@2.json", "compact-window-codex@2.json", "pi-vs-wrathbench@1.json"]) expect(files).toContain(f);
+    for (const f of ["compact-window-claude@2.json", "compact-window-claude@4.json", "compact-window-codex@2.json", "pi-vs-wrathbench@1.json"]) expect(files).toContain(f);
   });
 
   test("compact-window @2 is @1 re-pinned: only the version, the note and the one image every arm runs move", () => {
@@ -65,6 +66,29 @@ describe("the checked-in definitions", () => {
     expect([...images][0]).not.toBe(v2.arms[0]!.image);
     const rest = (d: CampaignDefinition) => ({ ...d, version: 0, note: "", arms: d.arms.map((a) => ({ ...a, image: "", note: "" })) });
     expect(rest(v3)).toEqual(rest(v2));
+  });
+
+  test("compact-window-claude@4 is @3 with the operator's arms (auto, 300k, 400k) on one newer build: the cell, leash, stop, resume and cap stay", () => {
+    const v3 = checkedIn("compact-window-claude@3");
+    const v4 = checkedIn("compact-window-claude@4");
+    expect(v4.arms.map((a) => a.id)).toEqual(["auto", "300k", "400k"]);
+    expect(v4.arms.map((a) => a.args)).toEqual([undefined, ["--compact-window", "300k"], ["--compact-window", "400k"]]);
+    const images = new Set(v4.arms.map((a) => a.image));
+    expect(images.size).toBe(1);
+    expect([...images][0]).toContain("harness-0.5-1803-ga4d4633f@sha256:");
+    expect([...images][0]).not.toBe(v3.arms[0]!.image);
+    const rest = (d: CampaignDefinition) => ({ ...d, version: 0, question: "", note: "", arms: [] });
+    expect(rest(v4)).toEqual(rest(v3));
+    // Neither treatment reaches the 1M context Claude Code 2.1.321 gives
+    // claude-sonnet-5-5, so neither is a cap the driver would refuse.
+    for (const w of ["300k", "400k"]) expect(claudeWindowCapRefusal(w, 1_000_000)).toBeNull();
+  });
+
+  test("compact-window-claude@4 refuses no pair for a sub-sonnet-55-shaped entry with run pods on", () => {
+    const def = checkedIn("compact-window-claude@4");
+    const roster: Record<string, PairRosterEntry> = { "sub-sonnet-55": { driver: "claude-code" } };
+    const c = { name: def.id, version: def.version, arms: def.arms, assignments: [{ model: "sub-sonnet-55", runsPerCell: 1 }] };
+    expect(campaignPairRefusals(c, roster, { runPods: "probes", onCluster: true })).toEqual([]);
   });
 
   test("pi-vs-wrathbench@1: one pinned arm with no args, so its wrathbench and pi assignments refuse nothing with run pods on", () => {
@@ -139,6 +163,7 @@ describe("what a definition may say", () => {
 
   test("an arm may set the compaction window, once, to a value the runner takes", () => {
     expect(issues({ arms: [{ id: "a", args: ["--compact-window", "200k"] }] })).toBe("");
+    expect(issues({ arms: [{ id: "a", args: ["--compact-window", "400k"] }] })).toBe("");
     expect(issues({ arms: [{ id: "a", args: ["--compact-window", "50k"] }] })).toContain("compactWindow");
     expect(issues({ arms: [{ id: "a", args: ["--compact-window", "200k", "--compact-window", "300k"] }] })).toContain("given twice");
   });
