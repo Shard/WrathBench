@@ -69,7 +69,7 @@
  * boot's `SELECT MAX(guid)` covers it and the boot's one-time DELETEs above
  * that watermark never reach it. The smoke proves that once, across the
  * first worldserver recreate after SOAP is on (party-staging.ts --keep,
- * then --recheck; docs/RUNBOOK.md, "Party staging").
+ * then --recheck).
  */
 
 import type { SQL } from "bun";
