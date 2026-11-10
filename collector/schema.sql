@@ -103,6 +103,8 @@ CREATE TABLE IF NOT EXISTS wrathbench.states
   power_type      Nullable(Int32),
   next_level_xp   Nullable(Int64),
   -- `ItemSample[]` as written. JSON because it is read whole or not at all.
+  -- Empty on a sample that carried none, which includes one the runner left
+  -- off as unchanged since its last: readers take the newest non-empty one.
   items           String CODEC(ZSTD(3)),
   ingested_at     Int64
 )

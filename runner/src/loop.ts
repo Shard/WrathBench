@@ -310,6 +310,16 @@ export class ContextBuilder {
    */
   private everObserved = false;
   /**
+   * The `items` sample this process last wrote, as its stored JSON, and the
+   * `sandbox.totalRestarts` it was written under. A sample whose text matches
+   * is left off the row: the trace's character sheet is the record of gear, and
+   * every reader of `items` takes the newest reading at or before a point. In
+   * memory only and its own restart count (not `lastRestarts`, which the death
+   * read moves), so the first row of a process, and the first after a sandbox
+   * restart, always carries the whole sample.
+   */
+  private lastItems: { text: string; restarts: number } | null = null;
+  /**
    * The driver turn currently in flight, stamped onto every state sample.
    *
    * Set by the driver rather than counted here: the fixed loop and the
@@ -1005,6 +1015,11 @@ export class ContextBuilder {
       if (ghost !== undefined) this.lastGhost = ghost;
     }
     this.noteObservationStall(snap, turn);
+    const items = itemSample(snap);
+    const itemsText = items === undefined ? undefined : JSON.stringify(items);
+    const restarts = (this.o.sandbox as { totalRestarts?: number }).totalRestarts ?? 0;
+    const itemsUnchanged =
+      itemsText !== undefined && this.lastItems?.text === itemsText && this.lastItems.restarts === restarts;
     await trajectory.recordState(config.runId, {
       level,
       xp,
@@ -1019,7 +1034,7 @@ export class ContextBuilder {
       ...turn,
       zone: zone?.id,
       area: area?.id,
-      items: itemSample(snap),
+      ...(itemsUnchanged ? {} : { items }),
       health: hp?.current,
       maxHealth: hp?.max,
       power: pw?.current,
@@ -1027,6 +1042,10 @@ export class ContextBuilder {
       ...(typeof powerType === "number" ? { powerType } : {}),
       ...(typeof nextLevelXp === "number" ? { nextLevelXp } : {}),
     });
+    // Only once the row has landed: a write that gave up leaves the key where
+    // it was, so the next sample writes the inventory again rather than leave
+    // run.sqlite's newest reading behind what this process saw.
+    if (itemsText !== undefined && !itemsUnchanged) this.lastItems = { text: itemsText, restarts };
     if (this.live) watchdogs.noteProgress(level, xp);
     return snap;
   }
@@ -1575,7 +1594,9 @@ const EQUIPMENT_LAST_SLOT = 18;
  * The `items` column of a state sample: what is worn (inventory slots 0-18)
  * and what is carried (`bag()` across every bag). A row whose name has not been
  * answered yet is kept under its item id so the count stays honest.
- * `undefined` when the snapshot carries no inventory.
+ * `undefined` when the snapshot carries no inventory. The state row carries it
+ * only when it differs from the one this process last wrote
+ * (`ContextBuilder.lastItems`).
  *
  * Each row carries where it sits and what it is — `slot`, `bag` (carried only),
  * `itemId`, `quality` — because a paperdoll and a bag grid are drawn from the
