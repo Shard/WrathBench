@@ -506,7 +506,12 @@ Every episode starts with a freshly created character at level 1 in its starting
 
 ## Persistence
 
-- Run metadata and periodic state in `bun:sqlite` under `data/runs/`.
+- Run metadata and periodic state in `bun:sqlite` under `data/runs/`. A state
+  row carries the inventory (`items`, about 4 KB) only when it differs from the
+  one its process last wrote; a process's first row, and its first after a
+  sandbox restart, carries it whole. The trace's character sheet below is the
+  record of gear, and every reader of `items` takes the newest reading at or
+  before a point, so an unchanged copy on every 60-second row bought nothing.
 - Trajectories as JSONL next to it.
 - The trace: the character's own position at observation cadence (about 1 Hz
   while moving), its state on change and its character sheet (money, what is

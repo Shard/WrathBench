@@ -94,7 +94,10 @@ export interface StateLine {
    * quality from the state cache's item queries, `equipped` for inventory
    * slots 0-18, carried rows from `state.bag()` across every bag with the
    * `bag`/`slot` pair the item actions take. Omitted when the snapshot had no
-   * inventory at all.
+   * inventory at all, and when it is the sample the same process last wrote
+   * (the loop decides; a process's first row, and its first after a sandbox
+   * restart, is always whole). A reader takes the newest sample at or before a
+   * point, never the row's own.
    */
   items?: ItemSample[] | undefined;
 }
