@@ -42,7 +42,10 @@ import {
   CONCURRENCY_KEYS,
   parsePolicyBlock,
   isOpenCodeGoBase,
-  sameRosterIdentity,
+  entryOwnsRun,
+  entryOwnsWindow,
+  ownedWindows,
+  rosterWindowKey,
 } from "../src/models";
 import { billingOf } from "../src/model-cost";
 import { rowOf } from "../viewer/models";
@@ -1102,11 +1105,12 @@ describe("probe campaigns in the schedule", () => {
     expect(rowOf(piState, runs, "/nowhere").runs.map((r) => r.runId)).toEqual([probe.runId]);
     expect(rowOf(dsState, runs, "/nowhere").runs.map((r) => r.runId).sort()).toEqual([scored.runId, paused.runId].sort());
     // And the identity itself, both ways; an old run with no driver is the default driver's.
-    expect(sameRosterIdentity({ model: "m", driver: "pi" }, { model: "m" })).toBe(false);
-    expect(sameRosterIdentity({ model: "m", harness: "pi" }, { model: "m", driver: "pi" })).toBe(true);
-    expect(sameRosterIdentity({ model: "m", driver: null }, { model: "m", harness: "wrathbench" })).toBe(true);
+    expect(entryOwnsRun({ model: "m", driver: "pi" }, { model: "m" })).toBe(false);
+    expect(entryOwnsRun({ model: "m" }, { model: "m", driver: "pi" })).toBe(false);
+    expect(entryOwnsRun({ model: "m", harness: "pi" }, { model: "m", driver: "pi" })).toBe(true);
+    expect(entryOwnsRun({ model: "m", driver: null }, { model: "m", harness: "wrathbench" })).toBe(true);
     // Only the probe-only bit: another two harnesses still match as they always did.
-    expect(sameRosterIdentity({ model: "m", driver: "codex" }, { model: "m", driver: "openai" })).toBe(true);
+    expect(entryOwnsRun({ model: "m", driver: "codex" }, { model: "m", driver: "openai" })).toBe(true);
   });
 
   test("a model that owes evidence is never given probe work", () => {
@@ -1317,10 +1321,112 @@ describe("the claude-code compaction window is part of an entry's identity", () 
     }
   });
 
-  test("sameRosterIdentity reads absent and null alike, and nothing else", () => {
-    expect(sameRosterIdentity({ model: "m", effort: "max" }, { model: "m", effort: "max", compactWindow: null })).toBe(true);
-    expect(sameRosterIdentity({ model: "m", effort: "max" }, { model: "m", effort: "max", compactWindow: "100k" })).toBe(false);
-    expect(sameRosterIdentity({ model: "m", compactWindow: "1M" }, { model: "m", compactWindow: "1M" })).toBe(true);
-    expect(sameRosterIdentity({ model: "m", effort: "low" }, { model: "m", effort: "max" })).toBe(false);
+  test("entryOwnsRun reads absent and null alike, and nothing else", () => {
+    expect(entryOwnsRun({ model: "m", effort: "max" }, { model: "m", effort: "max", compactWindow: null })).toBe(true);
+    expect(entryOwnsRun({ model: "m", effort: "max" }, { model: "m", effort: "max", compactWindow: "100k" })).toBe(false);
+    expect(entryOwnsRun({ model: "m", compactWindow: "1M" }, { model: "m", compactWindow: "1M" })).toBe(true);
+    expect(entryOwnsRun({ model: "m", effort: "low" }, { model: "m", effort: "max" })).toBe(false);
+  });
+});
+
+describe("claude-code defaults its compaction window to 300k (operator, 2026-11-10)", () => {
+  // The entry did not change when its driver's default did, so the runs it
+  // launched on `auto` stay its own beside the 300k runs it launches now. An
+  // entry that owned only its 300k runs would read every met target as unmet
+  // and relaunch it, and the supervisor would end its paused `auto` run as
+  // "no longer under this ref".
+  const NOW4 = 1_800_000_000_000;
+  const H = 3_600_000;
+  const run = (i: number, over: Partial<RunFact> = {}): RunFact => ({
+    runId: `sonnet-e90-${i}`,
+    model: "claude-sonnet-5-5",
+    effort: null,
+    driver: "claude-code",
+    episode: "e90",
+    episodeOverride: false,
+    harnessVersion: null,
+    harnessSeries: null,
+    extra: false,
+    startedAt: NOW4 - (100 - i) * H,
+    endedAt: NOW4 - (99 - i) * H,
+    terminationReason: "episode-limit",
+    modelResponses: 20,
+    bestLevel: 6,
+    live: false,
+    pause: null,
+    account: null,
+    character: null,
+    episodeMs: null,
+    campaign: null,
+    cell: null,
+    subscription: null,
+    ...over,
+  });
+  const plain: RosterModel = { name: "sub-sonnet-55", model: "claude-sonnet-5-5", driver: "claude-code", tier: "t1" };
+  const optOut: RosterModel = { ...plain, name: "sub-sonnet-55-auto", compactWindow: "auto" };
+  const stated: RosterModel = { ...plain, name: "sub-sonnet-55-300k", compactWindow: "300k" };
+
+  test("an entry with no window keeps the runs it made on auto: its met targets stay met", () => {
+    const past = [run(1), run(2), run(3)];
+    const st = projectModel(plain, past, DEFAULT_POLICY, { now: NOW4 });
+    expect(st.perEpisode.e90!.counted).toBe(3);
+    expect(st.perEpisode.e90!.target).toBe(3);
+    expect(schedulability(st).why).not.toContain("e90");
+    // The control: an entry that owned only 300k runs would owe all three again.
+    const owing = projectModel(stated, past, DEFAULT_POLICY, { now: NOW4 });
+    expect(owing.perEpisode.e90!.counted).toBe(0);
+    expect(schedulability(owing)).toMatchObject({ verdict: "eval", why: "schedulable on e90" });
+    // And it owns what it launches now, so a later run is not an orphan it would launch again.
+    const mixed = [run(1), run(2), run(3, { compactWindow: "300k" })];
+    expect(projectModel(plain, mixed, DEFAULT_POLICY, { now: NOW4 }).perEpisode.e90!.counted).toBe(3);
+  });
+
+  test("a stated window owns exactly its runs: `auto` the auto runs, 300k the 300k runs", () => {
+    const runs = [run(1), run(2, { compactWindow: "300k" }), run(3, { compactWindow: "100k" })];
+    expect(projectModel(optOut, runs, DEFAULT_POLICY, { now: NOW4 }).perEpisode.e90!.attempts).toBe(1);
+    expect(projectModel(stated, runs, DEFAULT_POLICY, { now: NOW4 }).perEpisode.e90!.attempts).toBe(1);
+    expect(projectModel(plain, runs, DEFAULT_POLICY, { now: NOW4 }).perEpisode.e90!.attempts).toBe(2);
+    expect(entryOwnsWindow(optOut, "300k")).toBe(false);
+    expect(entryOwnsWindow(stated, null)).toBe(false);
+    expect(entryOwnsWindow(plain, "100k")).toBe(false);
+    expect(ownedWindows(plain)).toEqual(["auto", "300k"]);
+    expect(ownedWindows(optOut)).toEqual(["auto"]);
+    expect(ownedWindows(stated)).toEqual(["300k"]);
+  });
+
+  test("the default is claude-code's alone: a codex entry with no window owns its auto runs only", () => {
+    const codex = { model: "gpt-6-luna", driver: "codex" };
+    expect(entryOwnsRun(codex, { model: "gpt-6-luna", driver: "codex", compactWindow: null })).toBe(true);
+    expect(entryOwnsRun(codex, { model: "gpt-6-luna", driver: "codex", compactWindow: "300k" })).toBe(false);
+    expect(ownedWindows(codex)).toEqual(["auto"]);
+    // A projection that kept the harness tag and not the driver reads the same default.
+    expect(entryOwnsRun({ model: "m", harness: "claude-code" }, { model: "m", driver: "claude-code", compactWindow: "300k" })).toBe(true);
+    expect(entryOwnsRun({ model: "m", harness: "codex" }, { model: "m", driver: "codex", compactWindow: "300k" })).toBe(false);
+  });
+
+  test("a probe is still the entry's it ran as, whatever window its arm set; an opted-out entry's only on auto", () => {
+    const probe = (i: number, window: string | null, ref: string): RunFact =>
+      run(i, { episode: "probing", campaign: "compact-window-claude", campaignVersion: 3, cell: "a", arm: window ?? "auto", ref, compactWindow: window });
+    const runs = [probe(1, null, "sub-sonnet-55"), probe(2, "100k", "sub-sonnet-55"), probe(3, "300k", "sub-sonnet-55")];
+    expect(projectModel(plain, runs, DEFAULT_POLICY, { now: NOW4 }).perEpisode.probing!.attempts).toBe(3);
+    const own = [probe(4, null, "sub-sonnet-55-auto"), probe(5, "300k", "sub-sonnet-55-auto")];
+    expect(projectModel(optOut, own, DEFAULT_POLICY, { now: NOW4 }).perEpisode.probing!.attempts).toBe(1);
+  });
+
+  test("one key per entry for the places that group runs by model: auto and the driver's default are one", () => {
+    expect(rosterWindowKey({ driver: "claude-code" })).toBe("");
+    expect(rosterWindowKey({ driver: "claude-code", compactWindow: "300k" })).toBe("");
+    expect(rosterWindowKey({ driver: "claude-code", compactWindow: "100k" })).toBe("100k");
+    expect(rosterWindowKey({ driver: "codex", compactWindow: "300k" })).toBe("300k");
+  });
+
+  test("the viewer's row lists every run the count counted, and names the windows a link filters by", () => {
+    const runs = [run(1), run(2, { compactWindow: "300k" })];
+    const row = rowOf(projectModel(plain, runs, DEFAULT_POLICY, { now: NOW4 }), runs, "/nowhere");
+    expect(row.runs.map((r) => r.runId).sort()).toEqual(["sonnet-e90-1", "sonnet-e90-2"]);
+    expect(row.perEpisode.e90!.runIds.length).toBe(row.perEpisode.e90!.counted);
+    expect(row.windows).toEqual(["auto", "300k"]);
+    expect("compactWindow" in row).toBe(false);
+    expect(rowOf(projectModel(optOut, runs, DEFAULT_POLICY, { now: NOW4 }), runs, "/nowhere")).toMatchObject({ compactWindow: "auto", windows: ["auto"] });
   });
 });

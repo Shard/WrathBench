@@ -238,6 +238,22 @@ export interface DriverEntry {
   /** Whether the scaffold has an auto-compaction window a run can set (`compactWindow`). */
   compactWindow: boolean;
   /**
+   * The window a fresh launch on this driver gets, on any lane, when
+   * nothing states one (`launchCompactWindow`, config.ts), canonical like any
+   * other. Absent: the CLI's own `auto`. claude-code alone has one (operator,
+   * 2026-11-10); a roster entry opts out with `compactWindow: "auto"`.
+   */
+  defaultCompactWindow?: string;
+  /**
+   * The harness series whose scored episodes still launch without the
+   * default, with every series before it: a scored episode takes
+   * `defaultCompactWindow` only in a LATER series (operator, 2026-11-10), so
+   * every scored row of this series stays on one window and nothing in it is
+   * run again. Freeplay and probes take the default in any series. Stated
+   * once, here; when the series moves, scored launches follow with no edit.
+   */
+  defaultCompactWindowScoredAfter?: string;
+  /**
    * Whether each `run_snippet` result ends with what changed since the
    * previous one (`sandbox/snippet-delta.ts`), and the prompt says so. On for
    * claude-code only (operator, 2026-10-21): a CLI scaffold runs one long
@@ -313,6 +329,8 @@ export const DRIVER_TABLE = {
     cost: { reported: "cli", table: "claude", modelPrefix: "claude-" },
     claudeModels: { only: true, refusal: "roster policy — the claude-code driver carries claude models only" },
     compactWindow: true,
+    defaultCompactWindow: "300k",
+    defaultCompactWindowScoredAfter: "0.5",
     snippetDelta: true,
     usage: "turn-snapshot",
     rollouts: false,
@@ -457,6 +475,16 @@ export function eitherHas(
   const byDriver = driverEntry(run.driver);
   const byHarness = harnessDriver(run.harness);
   return (byDriver !== undefined && fact(byDriver)) || (byHarness !== undefined && fact(byHarness));
+}
+
+/**
+ * The compaction window a driver, or a harness tag where a row kept only
+ * that, defaults a fresh run to (`DriverEntry.defaultCompactWindow`);
+ * undefined where the CLI's own `auto` is the default. A name that is absent
+ * or unknown is the default driver's, which has none.
+ */
+export function defaultCompactWindowOf(x: { driver?: string | null | undefined; harness?: string | null | undefined }): string | undefined {
+  return (driverEntry(x.driver) ?? harnessDriver(x.harness))?.defaultCompactWindow;
 }
 
 /** The drivers a roster entry may name, in `DRIVERS` order. */

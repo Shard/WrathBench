@@ -339,17 +339,36 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               coordinates are a setting of a surface this entry does not have. A probe drops it
               with the other run dimensions — a campaign owns its own task shape.
             `compactWindow` — claude-code and codex entries ONLY: the CLI's auto-compaction
-              window, `"auto"` or 100k–1M tokens (`"100k"`, `"500k"`, `"1M"`). Absent or `"auto"`
-              is the CLI's own default, which sits near the model's whole context (codex: 90% of
-              the catalogue window). A window at or above what the CLI would apply anyway (the
+              window, `"auto"` or 100k–1M tokens (`"100k"`, `"500k"`, `"1M"`). `"auto"` is the
+              CLI's own window, which sits near the model's whole context (codex: 90% of the
+              catalogue window). ABSENT is the driver's default: on claude-code 300k (operator,
+              2026-11-10), on codex the CLI's `auto`. A fresh freeplay session and a campaign's
+              square take the 300k now. A scored episode (e90, e360) takes it only from the
+              series after 0.5 (`defaultCompactWindowScoredAfter`, runner/src/drivers.ts): in
+              0.5 an entry with no window still launches its scored runs on `auto`, so its
+              scored rows stay on one window and nothing is owed again. A claude-code entry that should stay on the CLI's window
+              says `"auto"`. A STATED window at or above what the CLI would apply anyway (the
               model's context on claude-code, that 90% on codex) ends the run as `harness-error`
-              after its first turn. Normalised on load (`"100K"` →
-              `"100k"`, `"1000k"` → `"1M"`, `"auto"` → absent); on any other driver, or out of
-              range, it takes the whole file down. A run dimension like `effort` (operator
-              decisions 2026-10-09, and 2026-10-11 for codex): stamped into the tuple as a KEY,
-              part of the run id, and part of what maps a run back to its entry — so a copy of an
-              entry that differs only in its window owns its own runs and its own tier budget, and
-              pages show it after the effort (`max · 100k`). Mechanics: runner/README.md, "The compaction window".
+              after its first turn. The default never does: on a model whose context is 300k or
+              less the CLI compacts at the model's own limit, the run plays on, is recorded at
+              the 300k it was given, and its trajectory carries a note of the clamp. The default
+              is not a resume's: a paused run keeps the window it recorded, and one
+              that recorded none ran on `auto` and stays there; a freeplay character moves to
+              300k at its next fresh session. Normalised on load (`"100K"` → `"100k"`, `"1000k"`
+              → `"1M"`; `"auto"` → absent on codex, kept on claude-code); on any other driver,
+              or out of range, it takes the whole file down. A run dimension like `effort`
+              (operator decisions 2026-10-09, and 2026-10-11 for codex): stamped into the tuple
+              as a KEY — a defaulted run carries `300k` like a stated one, and a run with no
+              window is an `auto` run whenever it was written — part of the run id when the
+              entry states one, and part of what maps a run back to its entry: a stated window
+              owns exactly its runs, so a copy of an entry that differs only in its window owns
+              its own runs and its own tier budget, and an entry with none owns the runs it
+              launched at its driver's default, the `auto` runs from before 2026-11-10 with the
+              300k runs since. Its targets, its paused run and its character are therefore what
+              they were, while results still group on the tuple: `auto` and `300k` runs of one
+              entry are two rows, which in 0.5 only a freeplay character or a probe can show,
+              since its scored runs all stay on `auto`. Pages show a run's window after the effort
+              (`max · 100k`). Mechanics: runner/README.md, "The compaction window".
             `apiBase` / `apiKeyEnv` — openai entries: the endpoint, and the NAME of the env var
               holding its key (absent: OpenRouter and `OPENROUTER_KEY`). The pair must be one the
               provider table holds (`KEY_PROVIDERS`, runner/src/providers.ts): each key goes only
@@ -1673,8 +1692,15 @@ once the switch is on. An arm image must be a build that has
 campaign file it is given. An arm's `args` come after the supervisor's own
 and may not restate a shape flag or a supervisor flag; `--compact-window` is
 the exception. Assign an arm that sets the window only roster entries on the
-claude-code, codex or pi driver that set none themselves: any other pair is refused before
-it launches, and listed as `<id>@<v>:<ref>:<arm>`. So is every pair of an
+claude-code, codex or pi driver that set none themselves (`"auto"` on a
+claude-code entry is a window set): any other pair is refused before
+it launches, and listed as `<id>@<v>:<ref>:<arm>`. An arm that passes no window
+runs the entry's stated one, else the driver's default, like any fresh launch:
+300k on claude-code (operator, 2026-11-10), including a square of a definition
+published before the default, since a campaign is a spike and is not kept
+comparable across such a change. An arm that measures the CLI's own window says
+`--compact-window auto`. An arm pinned to an image built before the default
+runs that image's runner, which has none. So is every pair of an
 assignment whose roster entry the fleet refuses (an unknown key, a provider
 key towards a host the provider table does not pair it with, a subscription
 the policy does not list): the campaign sweeps its other assignments, and the

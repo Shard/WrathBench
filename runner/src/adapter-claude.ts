@@ -1531,7 +1531,21 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
       if (!windowChecked && modelWindow !== undefined) {
         windowChecked = true;
         const capped = claudeWindowCapRefusal(config.compactWindow, modelWindow.contextWindow);
-        if (capped !== null) return terminate("harness-error", capped);
+        // A STATED window only. The driver's default never fails a run
+        // (operator, 2026-11-10): above a model's context it is that model's
+        // own limit, which is what the CLI applies, and the run plays on with
+        // the clamp on its record. `claudeAutoCompactLimit` already takes the
+        // smaller of the two, so the ask's threshold is the one really met.
+        if (capped !== null && config.compactWindowDefaulted !== true) return terminate("harness-error", capped);
+        if (capped !== null) {
+          trajectory.append({
+            t: "harness",
+            kind: "session_note",
+            text:
+              `the default compaction window ${config.compactWindow} is at or above this model's context window ` +
+              `(${modelWindow.contextWindow} tokens), so the CLI compacts at the model's own limit`,
+          });
+        }
       }
       if (config.maxTurns !== undefined && turn >= config.maxTurns) {
         return terminate("turn-limit", `${turn} turns`);

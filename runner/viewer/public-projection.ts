@@ -1045,6 +1045,7 @@ function projectModelRow(row: ModelRowView): ModelRowView {
     model: row.model,
     effort: row.effort,
     ...(row.compactWindow != null ? { compactWindow: row.compactWindow } : {}),
+    ...(row.windows !== undefined ? { windows: [...row.windows] } : {}),
     platform: row.platform,
     harness: row.harness,
     billing: row.billing,

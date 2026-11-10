@@ -21,7 +21,7 @@ import { SNAPSHOT_MODE, api, type ModelRowView, type ModelsResponse } from "../a
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { effortLabel, fmtCost, fmtDuration, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
-import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, freeplayOf, highestTierOf, isPromoted, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
+import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, freeplayOf, highestTierOf, isPromoted, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle, windowParam } from "../lib/models";
 import { characterRows } from "../lib/ladder";
 import { LevelXp } from "../components/CharacterFacts";
 import { InfoHint } from "../components/InfoHint";
@@ -221,7 +221,7 @@ export default function Models() {
                             <td class="right mono">
                               <Show when={row.eligible.includes(t)} fallback={<span class="dim">—</span>}>
                                 <A
-                                  href={runsHref({ model: row.model, effort: row.effort, compactWindow: row.compactWindow ?? null, episode: t })}
+                                  href={runsHref({ model: row.model, effort: row.effort, compactWindow: windowParam(row), episode: t })}
                                 >
                                   {countedOf(st())}
                                 </A>

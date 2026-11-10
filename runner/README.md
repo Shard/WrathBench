@@ -208,9 +208,9 @@ and `codex` already do, and what another driver would have to.
   otherwise carry a level the run never had. codex refuses `none` and
   `minimal`; a dimension a driver has no setting for at all is refused at
   config time, as `compactWindow` is off claude-code and codex
-  (`loadRunConfig`). A value the scaffold would silently cap to its own limit
-  is refused too, at the first turn that reports the limit ("The compaction
-  window", below).
+  (`loadRunConfig`). A stated value the scaffold would silently cap to its own
+  limit is refused too, at the first turn that reports the limit; a driver's
+  default that is capped is not ("The compaction window", below).
   Reaching the same level by another mechanism is not a neighbour:
   claude-code's `none` is `MAX_THINKING_TOKENS=0`, because its `--effort` has
   no such level.
@@ -235,11 +235,19 @@ and `codex` already do, and what another driver would have to.
 **Harness settings.** A harness setting is a knob of one harness's machinery:
 it has the harness's default, a roster entry may override it, and it is
 recorded like effort. The compaction window (`compactWindow`), on claude-code,
-codex and pi, is the one that exists, and its shape is the pattern. Absent, or
-`auto`, is the scaffold's own default and stamps nothing, so every run that says nothing
-shares one tuple. A named value is a roster-entry field normalised to one
-spelling. It keys the tuple, and it is part of `RosterIdentity`, so an entry
-that differs from another only in it owns its own runs and its own row. A
+codex and pi, is the one that exists, and its shape is the pattern. In a run's
+record, absent is the scaffold's own `auto` and stamps nothing, so every run
+that recorded none shares one tuple, whenever it was written. A harness's
+default may be a value of ours rather than the scaffold's: claude-code's is
+300k (operator, 2026-11-10; `DriverEntry.defaultCompactWindow`), filled in
+when a fresh launch builds its config
+(`launchCompactWindow`) and recorded as the window it is, so a defaulted run
+and a run that stated 300k are one condition. A named value is a roster-entry
+field normalised to one spelling, `auto` among them where the driver defaults
+another. It keys the tuple, and it is part of `RosterIdentity`, so an entry
+that differs from another only in it owns its own runs and its own row; an
+entry that names none owns the runs it launched at its driver's default,
+before and after a change of that default (`entryOwnsWindow`). A
 resume keeps it, and a driver without the setting refuses it. An override set
 this way is a run dimension, not a per-model prompt: the operator sets it, it
 does the same thing to whichever model is given it, and the tuple says so.
@@ -296,7 +304,7 @@ of the three outside the registry and the adapters.
     gives them no target and no idle work, and a queue job outside a campaign
     cannot run them (`runnableRefs`), and `loadRunConfig` refuses a run of it
     on any episode but a campaign's `probing`. A probe-only identity never
-    matches another (`sameRosterIdentity`), so its runs and a same-model
+    matches another (`entryOwnsRun`), so its runs and a same-model
     entry's never pool, either way.
   - `bill` (metered, subscription or none) and, for a subscription, its
     `lane`: the lane key, the default variable, whether the variable holds a
@@ -514,10 +522,39 @@ for a run (`RunConfig.compactWindow`); claude-code, codex and pi take it, and
 every other driver refuses it. It is a run dimension like effort:
 canonicalised to `<n>k` or `1M`, recorded in `meta.json` and the
 comparability tuple, matched on beside model and effort
-wherever a run is mapped back to its roster entry (`sameRosterIdentity`), and
-shown after the effort on the pages (`max · 100k`). Absent is the CLI's
-`auto`: nothing is sent and the tuple carries no field, so every run from
-before the field reads as `auto` and none restamps. It reaches the CLI only
+wherever a run is mapped back to its roster entry (`entryOwnsRun`), and
+shown after the effort on the pages (`max · 100k`). In a run's record absent
+is the CLI's `auto`: nothing is sent and the tuple carries no field, so every
+run from before the field reads as `auto` and none restamps.
+
+**The default is 300k** (operator, 2026-11-10; docs/METHODOLOGY.md, "Harness
+and driver are separate words"). A fresh launch that states
+no window is configured with 300k (`launchCompactWindow`, `src/config.ts`),
+and from there it is a 300k run like any other: in `meta.json`, in the tuple,
+in the environment, on a resume. A campaign's square takes it like any other
+fresh launch, whenever its definition was published: a campaign is a spike,
+and an arm that measures the CLI's own window says `--compact-window auto`.
+Three things do not take it:
+
+- A scored episode in harness series 0.5 or earlier. The driver table names
+  the series once (`defaultCompactWindowScoredAfter`), and `e90` and `e360`
+  take the default only in a later one, read off the launching build's own
+  version stamp, so the scored rows of 0.5 stay on the `auto` they were all
+  made on. A build that names no series holds too.
+- `--compact-window auto`, which a roster entry's `compactWindow: "auto"`
+  becomes: the CLI's own window, recorded as the absent field, so its tuple is
+  the one every earlier `auto` run has.
+- A resume, which reads the stored config and fills nothing in. A run that
+  recorded no window ran on `auto` and resumes on `auto`. A freeplay character
+  moves to 300k when its next session starts fresh (`--continue-from`), which
+  that session's own record says.
+
+The roster entry keeps its identity across the change: one that names no
+window owns its `auto` runs and its 300k runs (`entryOwnsWindow`,
+`src/models.ts`), so its targets stay met and its paused run stays its own,
+while the ladder, which groups on the tuple, keeps `auto` and 300k apart.
+
+It reaches the CLI only
 through the constructed environment (`compactEnv`), as the integer token
 count: `200k` is sent as `200000`. A CLI before 2.1.304 reads any `<n>k` as
 100k (on 2.1.293 `200k` and `300k` both log `effectiveWindow=80000`, and
@@ -527,17 +564,26 @@ environment is dropped like `MAX_THINKING_TOKENS`, so nothing unrecorded can
 move it. The CLI's `autoCompactWindow` setting cannot either: the config dir is
 the run's own.
 
-**A window the CLI would cap is refused.** The CLI applies the smaller of the
-window and the model's context window, so a window at or above the model's
-context is one it replaces by its own, and the run would be stamped with a
-condition it never ran under. The model's context window is known only from
+**A stated window the CLI would cap is refused; the default is not.** The CLI
+applies the smaller of the window and the model's context window, so a window
+at or above the model's context is one it replaces by its own. When an entry
+or an arm stated that window, the run would be stamped with a condition it
+asked for and never ran under, and it ends. When the window is the driver's
+default (`RunConfig.compactWindowDefaulted`, set by `launchCompactWindow`),
+nobody asked for it and the run must simply work (operator, 2026-11-10): it
+plays on at the model's own limit, stays recorded at the 300k it was given,
+and a `session_note` in its trajectory names the clamp and the model's
+window; its compaction records and the episodic-log ask carry the threshold
+really met (`claudeAutoCompactLimit` takes the smaller of the two). In the
+pinned CLI's catalogue that is Claude Haiku 4.5 and Claude Opus 4.6, at
+200k. The model's context window is known only from
 the CLI's own `modelUsage` (the provider's, not the pinned image's; the
 repository keeps no per-model table), and the CLI reports it only on a
 turn's `result`, so the driver checks the window at the first turn boundary
 and, at or past it, ends the run as `harness-error` with both numbers in the
 detail (`claudeWindowCapRefusal`, `src/cli-compaction.ts`). That is never
-evidence, and it spends the first turn, however long that turn ran. On
-today's all-1M Claude roster `1M` is therefore always refused.
+evidence, and it spends the first turn, however long that turn ran. A stated
+`1M` is therefore refused on every Claude model the CLI knows.
 
 Each compaction the CLI streams — a `system` envelope with subtype
 `compact_boundary` and `compact_metadata` (`trigger`, `pre_tokens`, and when

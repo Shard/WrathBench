@@ -55,7 +55,7 @@ import { openRunDb } from "../runner/src/rundb";
 // runner validating the same shape instead of three hand-rolled copies.
 import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
 import { DEFAULT_DRIVER, entryOf, isRosterDriver, ROSTER_DRIVERS, type RosterDriver } from "../runner/src/drivers";
-import { compactWindowDriverRefusal, driverHasCompactWindow, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema, type TerminationReason, type WatchdogOverride } from "../runner/src/config";
+import { compactWindowDriverRefusal, driverHasCompactWindow, isTokenEnvName, parseEntryCompactWindow, stampedCompactWindow, watchdogOverrideSchema, type TerminationReason, type WatchdogOverride } from "../runner/src/config";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
 import { isOpenRouterBase, parseRouting, resolveRouting, routingLabel, type RoutingSpec } from "../runner/src/routing";
 import { DEFAULT_API_BASE, DEFAULT_API_KEY_ENV } from "../runner/src/providers";
@@ -105,9 +105,11 @@ export interface RosterSpec {
   effort?: string;
   /**
    * `claude-code` and `codex` only: the CLI's auto-compaction window, `auto`
-   * or 100k–1M tokens (`parseCompactWindow`). Omitted or `auto` -> the CLI's
-   * own default. Part of the run's identity like effort (operator decisions
-   * 2026-10-09, and 2026-10-11 for codex).
+   * or 100k–1M tokens (`parseEntryCompactWindow`). Omitted -> the driver's
+   * default: claude-code's 300k on every fresh launch (operator,
+   * 2026-11-10), the CLI's own `auto` on codex. `auto` ->
+   * the CLI's own. Part of the run's identity like effort (operator
+   * decisions 2026-10-09, and 2026-10-11 for codex).
    */
   compactWindow?: string;
   apiBase?: string;
@@ -237,7 +239,7 @@ export interface Resolved {
   driver: RosterDriver;
   account: string | undefined;
   effort: string | undefined;
-  /** Canonical (`100k`…`1M`); undefined is the CLI's own `auto`. */
+  /** As declared (`parseEntryCompactWindow`): canonical `100k`…`1M`, `"auto"` on a driver that defaults a window, or undefined for the driver's default. */
   compactWindow: string | undefined;
   apiBase: string;
   apiKeyEnv: string;
@@ -563,7 +565,7 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
         throw new Error(`roster entry ${s.model}: ${compactWindowDriverRefusal(driver)}`);
       }
       try {
-        compactWindow = parseCompactWindow(s.compactWindow);
+        compactWindow = parseEntryCompactWindow(s.compactWindow, driver);
       } catch (err) {
         throw new Error(`roster entry ${s.model}: ${(err as Error).message}`);
       }
@@ -605,7 +607,7 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       // run id would make them one run appended to twice.
       runId:
         s.runId ??
-        `roster-${slug(s.model)}${s.effort !== undefined ? `-${slug(s.effort)}` : ""}${compactWindow !== undefined ? `-${slug(compactWindow)}` : ""}-${stamp}`,
+        `roster-${slug(s.model)}${s.effort !== undefined ? `-${slug(s.effort)}` : ""}${stampedCompactWindow(compactWindow) !== undefined ? `-${slug(stampedCompactWindow(compactWindow)!)}` : ""}-${stamp}`,
       race: s.race ?? 1,
       class: s.class ?? 2,
       // Precedence, fixed and tested: `watchdogs.episodeMs` wins over the
@@ -754,7 +756,9 @@ export function episodeFlags(spec: Resolved, resume: boolean): string[] {
   if (spec.tokenEnv !== undefined) argv.push("--token-env", spec.tokenEnv);
   if (spec.account !== undefined) argv.push("--account", spec.account);
   if (spec.effort !== undefined) argv.push("--effort", spec.effort);
-  // Only when the entry set one, so every argv an `auto` entry produced is unchanged.
+  // Only when the entry stated one, `auto` included where its driver defaults
+  // another; an entry that states none passes nothing and the runner fills in
+  // the driver's default (`launchCompactWindow`).
   if (spec.compactWindow !== undefined) argv.push("--compact-window", spec.compactWindow);
   // A freeplay character's lineage and the other refs' characters on this
   // account: launch inputs, so a fresh launch only (a resume keeps the stored
@@ -1815,7 +1819,8 @@ export function writeLaunchFailure(runDir: string, spec: Resolved, detail: strin
     driver: spec.driver,
     model: spec.model,
     ...(spec.effort !== undefined ? { effort: spec.effort } : {}),
-    ...(spec.compactWindow !== undefined ? { compactWindow: spec.compactWindow } : {}),
+    // As the run would have recorded it: a stated `auto` is the absent field.
+    ...(stampedCompactWindow(spec.compactWindow) !== undefined ? { compactWindow: stampedCompactWindow(spec.compactWindow) } : {}),
     ...(spec.account !== undefined ? { account: spec.account } : {}),
     episode: "probing",
     campaign: file.campaign,
@@ -1852,7 +1857,7 @@ export function writeLaunchFailure(runDir: string, spec: Resolved, detail: strin
       harnessVersion: opts.harnessVersion,
       episode: "probing",
       effort: spec.effort ?? null,
-      ...(spec.compactWindow !== undefined ? { compactWindow: spec.compactWindow } : {}),
+      ...(stampedCompactWindow(spec.compactWindow) !== undefined ? { compactWindow: stampedCompactWindow(spec.compactWindow) } : {}),
     },
   };
   writeFileSync(join(runDir, "meta.json"), `${JSON.stringify(meta, null, 2)}\n`);

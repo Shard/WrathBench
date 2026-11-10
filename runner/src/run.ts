@@ -52,7 +52,7 @@ import { archiveIfNoResponses } from "./archive";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { characterOwners, clearAccountCharacters } from "./hygiene";
 import { leaseRunSecret, releaseSessionSecret } from "@wrathbench/mcp/module-auth";
-import { comparabilityOf, fetchServerBuild, sameComparability } from "./comparability";
+import { comparabilityOf, fetchServerBuild, harnessSeries, sameComparability } from "./comparability";
 import { CampaignLaunchError, RUN_IMAGE_ENV, campaignLaunch } from "./campaign-launch";
 import { holdsOnlyLaunchFiles, readCampaignFile } from "./campaign-file";
 import { RunArgsError, parseRunArgs } from "./run-flags";
@@ -60,12 +60,13 @@ import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
 import { openWikiBundle, wikiBundleMeta } from "./wiki";
 import type { ChatAdapter } from "./adapter";
 import { DRIVER_ADAPTERS, type LaunchInputs } from "./driver-adapters";
-import { DRIVER_TABLE, entryOf } from "./drivers";
+import { DEFAULT_DRIVER, DRIVER_TABLE, entryOf } from "./drivers";
 import { referenceProgramPath, resolveReferenceLaunch } from "./reference-program";
 import { parseRouting, type RoutingSpec } from "./routing";
 import {
   DRIVERS,
   episodeOverrideOf,
+  launchCompactWindow,
   loadRunConfig,
   MIN_TOKEN_LENGTH,
   newRunId,
@@ -221,7 +222,16 @@ export function configFromArgs(
     effort: typeof args["effort"] === "string" ? args["effort"] : undefined,
     // A CLI harness's auto-compaction window (claude-code, codex); identity
     // like effort, so --compact-window is not an override on --resume either.
-    compactWindow: typeof args["compact-window"] === "string" ? args["compact-window"] : undefined,
+    // A fresh launch that states none takes its driver's default (claude-code:
+    // 300k): freeplay and a probe now, a scored episode from the series after
+    // the one the driver names; `auto` states the CLI's own (`launchCompactWindow`).
+    ...launchCompactWindow({
+      stated: typeof args["compact-window"] === "string" ? args["compact-window"] : undefined,
+      driver: typeof args["driver"] === "string" ? args["driver"] : DEFAULT_DRIVER,
+      episode: probe !== null ? "probing" : typeof args["episode"] === "string" ? args["episode"] : undefined,
+      // The series this launch will be stamped with (`main` stamps the same version).
+      series: harnessSeries(harnessVersion(env)),
+    }),
     // Which backend may serve this run, as the fleet entry declared it. JSON
     // because it is a small object and argv is not a place to spell one out
     // flag at a time; identity like the rest, so a resume keeps it.

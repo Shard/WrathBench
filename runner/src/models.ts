@@ -59,8 +59,8 @@ import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { openRunDb, RUN_DB_JOURNAL_FILE, RUN_DB_WAL_FILE } from "./rundb";
 import { harnessSeries } from "./comparability";
-import { DEFAULT_DRIVER, driverEntry, eitherHas, entryOf, harnessDriver, isProbeOnlyDriver, PLACED_LANE_DRIVER, probeOnlyRefusal } from "./drivers";
-import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isCodexHomeEnvName, isDriver, isTokenEnvName, isUnscoredDriverName, type Driver, type Harness } from "./config";
+import { DEFAULT_DRIVER, defaultCompactWindowOf, driverEntry, eitherHas, entryOf, harnessDriver, isProbeOnlyDriver, PLACED_LANE_DRIVER, probeOnlyRefusal } from "./drivers";
+import { AUTO_COMPACT_WINDOW, DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isCodexHomeEnvName, isDriver, isTokenEnvName, isUnscoredDriverName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
 import { badEvidenceReason, neverStale, OFFLINE_PAUSE, PARTY_PAUSE, SUBSCRIPTION_PAUSE, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
@@ -413,9 +413,11 @@ export interface RosterModel {
   model: string;
   effort?: string;
   /**
-   * The CLI harness's compaction window (`RunConfig.compactWindow`,
-   * claude-code or codex); absent is the CLI's own `auto`. Part of the
-   * entry's identity, like effort.
+   * The CLI harness's compaction window as the entry declares it
+   * (`parseEntryCompactWindow`): a canonical window, `"auto"` where the
+   * driver defaults another, or absent for the driver's default — the CLI's
+   * `auto`, or claude-code's 300k. Part of the entry's identity, like effort
+   * (`entryOwnsWindow`).
    */
   compactWindow?: string;
   driver?: string;
@@ -719,7 +721,7 @@ export interface ModelState {
   name: string;
   model: string;
   effort: string | null;
-  /** The entry's CLI compaction window (claude-code or codex); absent is the CLI's `auto`. */
+  /** The entry's declared CLI compaction window (`RosterModel.compactWindow`); absent is its driver's default. */
   compactWindow?: string;
   platform: string | null;
   /** The harness this entry's runs go through, from its driver; a tag, not a partition. */
@@ -2006,9 +2008,9 @@ export interface RosterIdentity {
   model: string | null;
   effort?: string | null | undefined;
   compactWindow?: string | null | undefined;
-  /** The driver a run or entry names (absent: the default driver); read only for `probeOnly`. */
+  /** The driver a run or entry names (absent: the default driver); read for `probeOnly` and the default window. */
   driver?: string | null | undefined;
-  /** The harness tag, where a projection keeps that and not the driver; read only for `probeOnly`. */
+  /** The harness tag, where a projection keeps that and not the driver; read for the same two facts. */
   harness?: string | null | undefined;
 }
 
@@ -2023,12 +2025,60 @@ function probeOnlyIdentity(x: RosterIdentity): boolean {
 }
 
 /**
- * Whether two identities are one roster row: same model, same effort, same
- * CLI compaction window (claude-code or codex). Absent and null read alike
- * (the provider's default effort, the CLI's `auto` window), so a run written before a field
- * existed still matches the entry that never set it. Every place that maps a
- * run back to an entry asks this, so an entry that differs from another only
- * in its window — a 100k copy of an `auto` entry — owns its own runs.
+ * Whether an entry's declared window owns a run stamped with `runWindow`
+ * (null: the CLI's own `auto`, which is every run that recorded none).
+ *
+ * - A stated window owns exactly its runs, so a 100k copy of an entry owns
+ *   its own.
+ * - `"auto"`, stated on a driver that defaults a window, owns the `auto` runs
+ *   and no others.
+ * - No window owns the runs launched at the driver's default, whatever the
+ *   default was when they launched: the `auto` runs, and on claude-code the
+ *   300k runs since that became its default (operator, 2026-11-10). The entry
+ *   did not change, so its earlier runs stay its own: its targets stay met,
+ *   its paused run is still its to resume, its freeplay character continues.
+ *   Nothing pools for that, since results group on the run's tuple, where
+ *   `auto` and 300k stay two rows. A later change of a driver's default must
+ *   keep the earlier one owned here.
+ */
+export function entryOwnsWindow(entry: Pick<RosterIdentity, "compactWindow" | "driver" | "harness">, runWindow: string | null | undefined): boolean {
+  const declared = entry.compactWindow ?? null;
+  const stamped = runWindow ?? null;
+  if (declared === AUTO_COMPACT_WINDOW) return stamped === null;
+  if (declared !== null) return stamped === declared;
+  return stamped === null || stamped === defaultCompactWindowOf(entry);
+}
+
+/**
+ * The windows `entryOwnsWindow` gives an entry, in a reader's spelling
+ * (`"auto"` for the CLI's own): what a page filters an entry's runs by.
+ */
+export function ownedWindows(entry: Pick<RosterIdentity, "compactWindow" | "driver" | "harness">): string[] {
+  const declared = entry.compactWindow ?? null;
+  if (declared !== null) return [declared];
+  const dflt = defaultCompactWindowOf(entry);
+  return dflt === undefined ? [AUTO_COMPACT_WINDOW] : [AUTO_COMPACT_WINDOW, dflt];
+}
+
+/**
+ * A run's window as a key that is one per roster entry: `""` for the CLI's
+ * `auto` and for the default of the run's driver, which an entry with no
+ * window owns alike (`entryOwnsWindow`); any other window as stamped. For the
+ * places that group runs by model without an entry in hand.
+ */
+export function rosterWindowKey(run: Pick<RosterIdentity, "compactWindow" | "driver" | "harness">): string {
+  const stamped = run.compactWindow ?? null;
+  return stamped === null || stamped === defaultCompactWindowOf(run) ? "" : stamped;
+}
+
+/**
+ * Whether a run is a roster entry's: same model, same effort, and a CLI
+ * compaction window the entry owns (`entryOwnsWindow`). ENTRY FIRST: the two
+ * sides are not alike, because an entry's absent window is a default and a
+ * run's is `auto`. Absent and null read alike on both (the provider's default
+ * effort), so a run written before a field existed still matches the entry
+ * that never set it. Every place that maps a run back to an entry asks this,
+ * so an entry that differs from another only in its window owns its own runs.
  *
  * A probe-only driver's identity (pi) is never another driver's: the
  * one-model-one-harness rule (`harnessClash`) exempts such an entry, so a pi
@@ -2037,12 +2087,12 @@ function probeOnlyIdentity(x: RosterIdentity): boolean {
  * never the whole label: older runs of one model under two other harnesses
  * keep matching exactly as they did.
  */
-export function sameRosterIdentity(a: RosterIdentity, b: RosterIdentity): boolean {
+export function entryOwnsRun(entry: RosterIdentity, run: RosterIdentity): boolean {
   return (
-    a.model === b.model &&
-    (a.effort ?? null) === (b.effort ?? null) &&
-    (a.compactWindow ?? null) === (b.compactWindow ?? null) &&
-    probeOnlyIdentity(a) === probeOnlyIdentity(b)
+    entry.model === run.model &&
+    (entry.effort ?? null) === (run.effort ?? null) &&
+    entryOwnsWindow(entry, run.compactWindow) &&
+    probeOnlyIdentity(entry) === probeOnlyIdentity(run)
   );
 }
 
@@ -2055,7 +2105,7 @@ export function sameRosterIdentity(a: RosterIdentity, b: RosterIdentity): boolea
  * operator 2026-10-11), and that window is in the run's tuple without being
  * the entry's identity. Matched by identity alone, such a run belonged to no
  * entry, or to a windowed copy it never ran as, and its lane and its ladder
- * went unseen. Every other run matches by identity (`sameRosterIdentity`).
+ * went unseen. Every other run matches by identity (`entryOwnsRun`).
  * Arms that differ only by window still never pool: the square is keyed on
  * the arm, and the results on the tuple.
  */
@@ -2063,11 +2113,11 @@ export function matchesRoster(f: RunFact, r: Pick<RosterModel, "name" | "model" 
   if (f.campaign !== null && f.arm != null && f.ref != null) {
     return (
       f.ref === r.name &&
-      sameRosterIdentity({ model: f.model, effort: f.effort, driver: f.driver }, { model: r.model, effort: r.effort, driver: r.driver }) &&
-      (r.compactWindow === undefined || r.compactWindow === f.compactWindow)
+      entryOwnsRun({ model: r.model, effort: r.effort, driver: r.driver }, { model: f.model, effort: f.effort, driver: f.driver }) &&
+      (r.compactWindow === undefined || entryOwnsWindow(r, f.compactWindow))
     );
   }
-  return sameRosterIdentity(f, r);
+  return entryOwnsRun(r, f);
 }
 
 /**
@@ -2083,7 +2133,7 @@ export function matchesRoster(f: RunFact, r: Pick<RosterModel, "name" | "model" 
  */
 export function liveSubscriptions(
   runs: readonly RunFact[],
-  roster: readonly Pick<RosterModel, "name" | "model" | "effort" | "compactWindow">[],
+  roster: readonly Pick<RosterModel, "name" | "model" | "effort" | "compactWindow" | "driver">[],
 ): Map<string, string> {
   const out = new Map<string, string>();
   for (const r of roster) {

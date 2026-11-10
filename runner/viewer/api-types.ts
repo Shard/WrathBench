@@ -2828,8 +2828,20 @@ export interface ModelRowView {
   name: string;
   model: string;
   effort: string | null;
-  /** The entry's CLI compaction window (claude-code or codex); absent is the CLI's own `auto`. */
+  /**
+   * The entry's CLI compaction window as it declares it: a window, `"auto"`
+   * for the CLI's own on a driver that defaults another, or absent for the
+   * driver's default (the CLI's `auto`; claude-code's 300k).
+   */
   compactWindow?: string | null;
+  /**
+   * The windows of the runs this entry owns, `"auto"` naming the CLI's own
+   * (`ownedWindows`, runner/src/models.ts): one, except for an entry with no
+   * window on a driver that defaults one, whose runs are its `auto` runs and
+   * the default's. What a link to the entry's runs filters by. Absent on a
+   * snapshot from before the field, which reads as the declared window alone.
+   */
+  windows?: string[];
   platform: string | null;
   /** The harness this roster entry's runs go through, from its driver. */
   harness: HarnessView;

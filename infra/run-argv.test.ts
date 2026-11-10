@@ -28,6 +28,10 @@ import {
   parseRunArgs,
 } from "../runner/src/run-flags";
 import { configFromArgs } from "../runner/src/run";
+import { compactEnv } from "../runner/src/adapter-claude";
+import { comparabilityOf } from "../runner/src/comparability";
+import { loadRunConfig, seriesAfter } from "../runner/src/config";
+import { DRIVER_TABLE } from "../runner/src/drivers";
 import { checkedIn, definition, joined, partyDefinition } from "../runner/test/fixtures/campaigns";
 import type { FleetJob, FleetRosterEntry } from "./run-fleet-config";
 import { jobSpawn } from "./run-fleet-plan";
@@ -71,7 +75,8 @@ function probeConfig(spec: Resolved): ReturnType<typeof configFromArgs> {
   const dir = tempDir("wb-argv-probe-");
   const path = writeCampaignFile(dir, spec.campaignFile!);
   const i = flags.indexOf("--campaign-file");
-  return configFromArgs([...flags.slice(0, i + 1), path, ...flags.slice(i + 2)], { WRATHBENCH_RUN_IMAGE: "registry.example/wb/runner:t1" });
+  // The series is the one scored episodes hold their window in: a probe does not.
+  return configFromArgs([...flags.slice(0, i + 1), path, ...flags.slice(i + 2)], { WRATHBENCH_RUN_IMAGE: "registry.example/wb/runner:t1", WRATHBENCH_HARNESS_VERSION: "harness-0.5-1810-gabc1234" });
 }
 
 const race = checkedIn("race-probe@1");
@@ -230,6 +235,132 @@ describe("the roster's argv, every lane, through run.ts's parser", () => {
     for (const f of ["effort", "model", "driver", "ref", "campaign-file", "run-id", "runs-dir", "token", "module-url", ...PROBE_SHAPE_FLAGS]) {
       expect(ARM_RESERVED_FLAGS).toContain(f);
     }
+  });
+});
+
+describe("claude-code's default compaction window, from the roster entry to the run's record (operator, 2026-11-10)", () => {
+  const WINDOW_ROSTER: Record<string, FleetRosterEntry> = {
+    ...ROSTER,
+    "sonnet-auto": { model: "sonnet", driver: "claude-code", effort: "low", compactWindow: "auto", tier: "t2", idle: "unlimited" },
+  };
+  const launch = (j: FleetJob, cs: Parameters<typeof jobSpawn>[5] = []): Resolved =>
+    resolve(jobSpawn(j, WINDOW_ROSTER, "RUNNER1", STAMP, () => true, cs).entries, STAMP)[0]!;
+  const tupleOf = (c: ReturnType<typeof configFromArgs>): Record<string, unknown> => ({ ...comparabilityOf(c, "harness-0.5-1") });
+  /** What a run launched before the default stored: no window anywhere. */
+  const stored = loadRunConfig({ runId: "fleet-sonnet-e90-sonnet-low-20261001", driver: "claude-code", model: "sonnet", effort: "low", account: "RUNNER1", episode: "e90" });
+
+  /** The series scored episodes still hold in, and a fixture series after it. */
+  const HELD = { WRATHBENCH_HARNESS_VERSION: "harness-0.5-1810-gabc1234" };
+  const LATER = { WRATHBENCH_HARNESS_VERSION: "harness-9.0-1-gabc1234" };
+
+  test("a scored episode in the held series still launches on auto, its record the one every scored row of the series has", () => {
+    for (const episode of ["e90", "e360"] as const) {
+      const flags = episodeFlags(launch(job({ ref: "sonnet", episode, attempt: 1 })), false);
+      expect(flags).not.toContain("--compact-window");
+      const config = configFromArgs(flags, HELD);
+      expect(config.compactWindow).toBeUndefined();
+      expect("compactWindowDefaulted" in config).toBe(false);
+      expect(compactEnv(config.compactWindow)).toEqual({});
+      expect(Object.keys(tupleOf(config))).toEqual(Object.keys(comparabilityOf(stored, "harness-0.5-1")));
+    }
+    // An earlier series holds as well, and so does a build that names none.
+    const flags = episodeFlags(launch(job({ ref: "sonnet", episode: "e90", attempt: 1 })), false);
+    expect(configFromArgs(flags, { WRATHBENCH_HARNESS_VERSION: "harness-0.4-9-gabc1234" }).compactWindow).toBeUndefined();
+    expect(configFromArgs(flags, { WRATHBENCH_HARNESS_VERSION: "0.0.0-phase0-unversioned" }).compactWindow).toBeUndefined();
+    // A window the entry states is the entry's in any series.
+    expect(configFromArgs(episodeFlags(launch(job({ ref: "sonnet-100k", episode: "e360", attempt: 1 })), false), HELD).compactWindow).toBe("100k");
+    // The table states the series once, and the fixture is after it.
+    expect(DRIVER_TABLE["claude-code"].defaultCompactWindowScoredAfter).toBe("0.5");
+    expect([seriesAfter("9.0", "0.5"), seriesAfter("0.6", "0.5"), seriesAfter("1.0", "0.5"), seriesAfter("0.5", "0.5"), seriesAfter("0.4", "0.5"), seriesAfter("0.10", "0.5"), seriesAfter("x", "0.5")]).toEqual([true, true, true, false, false, true, false]);
+  });
+
+  test("in a later series an entry with no window launches a scored run at 300k, recorded as the window it is; its argv and run id are what they were", () => {
+    const spec = launch(job({ ref: "sonnet", episode: "e90", attempt: 1 }));
+    const flags = episodeFlags(spec, false);
+    // The supervisor states nothing: the runner fills the default in.
+    expect(flags).not.toContain("--compact-window");
+    expect(launch(job({ ref: "sonnet", episode: "e90", attempt: 2 })).runId).toBe(`fleet-sonnet-e90-sonnet-low-${STAMP}-a2`);
+    const config = configFromArgs(flags, LATER);
+    expect(config.compactWindow).toBe("300k");
+    expect(config.compactWindowDefaulted).toBe(true);
+    expect(tupleOf(config)["compactWindow"]).toBe("300k");
+    // The mark is the config's, not the tuple's: a defaulted 300k and a stated 300k are one row.
+    expect(JSON.stringify(tupleOf(config))).toBe(JSON.stringify(tupleOf(configFromArgs([...flags, "--compact-window", "300k"], HELD))));
+    expect(compactEnv(config.compactWindow)).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: "300000" });
+    // So it is never the row of a run made on auto: that run's tuple has no window.
+    expect("compactWindow" in tupleOf({ ...stored, runId: "x", token: "t" })).toBe(false);
+    // A hand launch that names no episode is no scored row, and takes the default in any series.
+    expect(configFromArgs(["--driver", "claude-code", "--model", "sonnet"], HELD).compactWindow).toBe("300k");
+  });
+
+  test("a record with no window reads as auto on a resume, whenever it was written", () => {
+    // run.ts resumes through `loadRunConfig(meta.config)`, which fills nothing in.
+    const resumed = loadRunConfig(JSON.parse(JSON.stringify(stored)));
+    expect(resumed.compactWindow).toBeUndefined();
+    expect(compactEnv(resumed.compactWindow)).toEqual({});
+    expect(JSON.stringify(comparabilityOf(resumed, "harness-0.5-1"))).toBe(JSON.stringify(comparabilityOf(stored, "harness-0.5-1")));
+    // And a defaulted run resumes at the 300k it recorded, restated by nothing.
+    const fresh = configFromArgs(episodeFlags(launch(job({ ref: "sonnet", episode: "e90", attempt: 1 })), false), LATER);
+    expect(loadRunConfig(JSON.parse(JSON.stringify(fresh)))).toMatchObject({ compactWindow: "300k", compactWindowDefaulted: true });
+    expect(episodeFlags(launch(job({ ref: "sonnet", episode: "e90", attempt: 1 })), true)).not.toContain("--compact-window");
+  });
+
+  test("an entry opts out with `auto`: stated on the argv, recorded as the absent field, the tuple a pre-default run's", () => {
+    const spec = launch(job({ ref: "sonnet-auto", episode: "e90", attempt: 1 }));
+    expect(spec.compactWindow).toBe("auto");
+    const flags = episodeFlags(spec, false);
+    expect(flags[flags.indexOf("--compact-window") + 1]).toBe("auto");
+    // No `-auto` in the id: an auto run's id is what it always was.
+    expect(spec.runId).toBe(`roster-sonnet-low-${STAMP}`);
+    expect(launch(job({ ref: "sonnet-auto", episode: "e90", attempt: 2 })).runId).toBe(`fleet-sonnet-auto-e90-sonnet-low-${STAMP}-a2`);
+    const config = configFromArgs(flags, LATER);
+    expect(config.compactWindow).toBeUndefined();
+    expect(Object.keys(tupleOf(config))).toEqual(Object.keys(comparabilityOf(stored, "harness-0.5-1")));
+    expect(configFromArgs(["--driver", "claude-code", "--model", "sonnet", "--compact-window", "AUTO"], LATER).compactWindow).toBeUndefined();
+  });
+
+  test("a stated window is still its own, and codex still defaults to its CLI's auto", () => {
+    const small = launch(job({ ref: "sonnet-100k", episode: "e360", attempt: 1 }));
+    expect(configFromArgs(episodeFlags(small, false), LATER).compactWindow).toBe("100k");
+    const codex = configFromArgs(episodeFlags(launch(job({ ref: "astra", episode: "e90", attempt: 1 })), false), LATER);
+    expect(codex.compactWindow).toBeUndefined();
+    expect("compactWindow" in tupleOf(codex)).toBe(false);
+    expect(configFromArgs(["--driver", "stub"], LATER).compactWindow).toBeUndefined();
+  });
+
+  test("a freeplay session takes the default now, in the held series, on a fresh launch and on a continuation", () => {
+    const spec = launch(job({ ref: "sonnet-auto", episode: "freeplay", attempt: 1 }));
+    expect(configFromArgs(episodeFlags(spec, false), HELD).compactWindow).toBeUndefined();
+    const plain = resolve(
+      jobSpawn(job({ ref: "sonnet", episode: "freeplay", attempt: 2, continueFrom: "fleet-sonnet-freeplay-sonnet-low-20261001" }), { ...ROSTER, sonnet: { ...ROSTER["sonnet"]!, idle: "unlimited" } }, "RUNNER1", STAMP, () => true, []).entries,
+      STAMP,
+    )[0]!;
+    const config = configFromArgs(episodeFlags(plain, false), HELD);
+    expect(config).toMatchObject({ episode: "freeplay", compactWindow: "300k", compactWindowDefaulted: true, continuedFrom: "fleet-sonnet-freeplay-sonnet-low-20261001" });
+  });
+
+  test("a probe takes the default like any fresh launch; an arm or an entry that wants the CLI's auto says so", () => {
+    // A campaign is a spike, not a record to keep comparable: an arm that
+    // passes no window launches at the driver's default (operator, 2026-11-10).
+    const plain = launch(job({ ref: "sonnet", episode: "probing", attempt: 1, probe: { campaign: "window-probe", version: 1, cell: "a", arm: "auto" } }), campaigns);
+    expect(episodeFlags(plain, false)).not.toContain("--compact-window");
+    expect(probeConfig(plain)).toMatchObject({ episode: "probing", compactWindow: "300k", compactWindowDefaulted: true });
+    // An arm's own window is stated, so it is never the clamped default.
+    const armed = probeConfig(launch(job({ ref: "sonnet", episode: "probing", attempt: 1, probe: { campaign: "window-probe", version: 1, cell: "a", arm: "w200k" } }), campaigns));
+    expect(armed.compactWindow).toBe("200k");
+    expect("compactWindowDefaulted" in armed).toBe(false);
+    // The CLI's own window, stated by the arm or by the entry.
+    const autoArm = definition({ id: "auto-probe", arms: [{ id: "cli", image: "registry.example/wb/runner:t1", args: ["--compact-window", "auto"] }] });
+    const byArm = launch(
+      job({ ref: "sonnet", episode: "probing", attempt: 1, probe: { campaign: "auto-probe", version: 1, cell: "a", arm: "cli" } }),
+      joined([autoArm], { "auto-probe": { version: 1, assignments: [{ model: "sonnet" }] } }).campaigns,
+    );
+    expect(probeConfig(byArm).compactWindow).toBeUndefined();
+    const byEntry = launch(job({ ref: "sonnet-auto", episode: "probing", attempt: 1, probe: { campaign: "window-probe", version: 1, cell: "a", arm: "auto" } }), joined([windows], { "window-probe": { version: 1, assignments: [{ model: "sonnet-auto" }] } }).campaigns);
+    expect(probeConfig(byEntry).compactWindow).toBeUndefined();
+    // codex defaults none, on a probe as anywhere.
+    const codexProbe = launch(job({ ref: "astra", episode: "probing", attempt: 1, probe: { campaign: "window-probe", version: 1, cell: "a", arm: "auto" } }), joined([windows], { "window-probe": { version: 1, assignments: [{ model: "astra" }] } }).campaigns);
+    expect(probeConfig(codexProbe).compactWindow).toBeUndefined();
   });
 });
 

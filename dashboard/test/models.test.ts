@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ModelRowView } from "../../runner/viewer/api-types";
-import { MODEL_COLUMNS, columnClass, compareModelRows, highestTierOf, tierOf, tierTitle, countedOf, extrasOf, isPromoted, modelsHref, freeplayOf, noteOf, schedulableOf, statusClass } from "../src/lib/models";
+import { MODEL_COLUMNS, columnClass, compareModelRows, highestTierOf, tierOf, tierTitle, countedOf, extrasOf, isPromoted, modelsHref, freeplayOf, noteOf, schedulableOf, statusClass, windowParam } from "../src/lib/models";
 
 function row(over: Partial<ModelRowView> = {}): ModelRowView {
   return {
@@ -181,5 +181,25 @@ describe("freeplay column", () => {
     expect(freeplayOf({ model: "sonnet", effort: "low" }, [character()])).not.toBeNull();
     expect(freeplayOf({ model: "sonnet", effort: null }, [character()])).toBeNull();
     expect(freeplayOf({ model: "opus", effort: "low" }, [character()])).toBeNull();
+  });
+
+  test("a row with no window keeps its character when a session moves to the driver's default window", () => {
+    const row = { model: "sonnet", effort: "low", windows: ["auto", "300k"] };
+    expect(freeplayOf(row, [character()])).not.toBeNull();
+    expect(freeplayOf(row, [character({ compactWindow: "300k" })])).not.toBeNull();
+    expect(freeplayOf(row, [character({ compactWindow: "100k" })])).toBeNull();
+    // An opted-out row, and a snapshot from before the list, match their own window alone.
+    expect(freeplayOf({ ...row, compactWindow: "auto", windows: ["auto"] }, [character({ compactWindow: "300k" })])).toBeNull();
+    expect(freeplayOf({ model: "sonnet", effort: "low" }, [character({ compactWindow: "300k" })])).toBeNull();
+    expect(freeplayOf({ model: "sonnet", effort: "low", compactWindow: "100k" }, [character({ compactWindow: "100k" })])).not.toBeNull();
+  });
+
+  test("a row's link to its runs carries the windows it owns, and nothing when that is auto alone", () => {
+    expect(windowParam({ windows: ["auto", "300k"] })).toBe("auto,300k");
+    expect(windowParam({ windows: ["auto"] })).toBeNull();
+    expect(windowParam({ compactWindow: "auto", windows: ["auto"] })).toBeNull();
+    expect(windowParam({ compactWindow: "100k", windows: ["100k"] })).toBe("100k");
+    expect(windowParam({ compactWindow: "100k" })).toBe("100k");
+    expect(windowParam({})).toBeNull();
   });
 });

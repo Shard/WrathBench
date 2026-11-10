@@ -160,8 +160,8 @@ grows into the six-figure range. This is a genuinely different context policy, n
 difference — it is what makes `claude-code` a harness of its own in the run's tag, and
 it explains these numbers rather than unscoring the rows. Nothing of the harness's compacts the claude-code
 conversation today — the CLI compacts it itself near its auto-compaction window, which `auto` puts close
-to the model's whole context and a roster entry may lower (`compactWindow`, runner/README.md, "The
-compaction window"); the harness's own compaction gate was never tripped by the fixed-context lanes, and
+to the model's whole context, which defaults to 300k for runs launched since 2026-11-10, and which a
+roster entry may set (`compactWindow`, runner/README.md, "The compaction window"); the harness's own compaction gate was never tripped by the fixed-context lanes, and
 the subscription lane arguably trips it already.
 
 **codex harness (OpenAI models via the Codex CLI on a ChatGPT subscription):** the same

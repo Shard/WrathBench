@@ -9,7 +9,7 @@
 import { join } from "node:path";
 import type { RosterSpec } from "./run-roster";
 import { harnessSeries } from "../runner/src/comparability";
-import { compactWindowDriverRefusal, driverHasCompactWindow, harnessClash, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
+import { compactWindowDriverRefusal, driverHasCompactWindow, harnessClash, isTokenEnvName, parseEntryCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
 import type { Billing } from "../runner/src/model-cost";
 import { isOpenRouterBase, parseRouting } from "../runner/src/routing";
 import { QUEUE_JOB_KEYS, rosterEntryRefusal, strictKeyWhy, unknownKeysOf } from "../runner/src/roster-refusal";
@@ -783,15 +783,18 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
     // and 2026-10-11 for codex): a run dimension like effort, settable on any
     // claude-code or codex entry and refused on every other driver, whose API
     // has no such window to set. NORMALISED like routing: one canonical spelling for every
-    // reader, and `auto` — the CLI's own default — is the absent field, so it
-    // can never make a second identity for the same condition.
+    // reader. `auto` is the absent field where the CLI's own window is the
+    // driver's default, so it can never make a second identity for the same
+    // condition; where the driver defaults another (claude-code's 300k,
+    // operator 2026-11-10) it stays `"auto"`, the entry's opt-out
+    // (`parseEntryCompactWindow`).
     if (e.compactWindow !== undefined) {
       if (!driverHasCompactWindow(driver)) {
         fail(`${where}: entry ${e.model}: ${compactWindowDriverRefusal(driver)}`);
       }
       let window: string | undefined;
       try {
-        window = parseCompactWindow(e.compactWindow);
+        window = parseEntryCompactWindow(e.compactWindow, driver);
       } catch (err) {
         fail(`${where}: entry ${e.model}: ${(err as Error).message}`);
       }

@@ -248,6 +248,22 @@ describe("filter", () => {
     );
     expect(runsHref({ model: "hk", effort: "max", compactWindow: null })).toBe("/runs?model=hk&effort=max");
   });
+
+  test("a window filter may list the windows an entry owns, `auto` naming the runs that recorded none", () => {
+    // An entry with no window on claude-code: its auto runs and its 300k runs, never a 100k copy's.
+    const son = [
+      run({ runId: "auto", model: "son" }),
+      run({ runId: "dflt", model: "son", compactWindow: "300k" }),
+      run({ runId: "small", model: "son", compactWindow: "100k" }),
+    ];
+    const ids = (compactWindow: string | undefined): string[] => filterRuns(son, filterParams({ model: "son", compactWindow })).map((r) => r.runId);
+    expect(ids("auto,300k")).toEqual(["auto", "dflt"]);
+    expect(ids("auto")).toEqual(["auto"]);
+    expect(ids("300k")).toEqual(["dflt"]);
+    // A ladder point's link is its own tuple, so it never widens.
+    expect(ids(undefined)).toEqual(["auto"]);
+    expect(filterParams(Object.fromEntries(new URL(runsHref({ model: "son", compactWindow: "auto,300k" }), "http://x").searchParams)).compactWindow).toBe("auto,300k");
+  });
 });
 
 describe("pages of a hundred", () => {

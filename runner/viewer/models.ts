@@ -12,10 +12,11 @@
  * Three rules worth stating, because they are the ones a reader trips on:
  *
  * - **The projection's key is `(model, effort, compactWindow)`, not the roster
- *   name.** `sameRosterIdentity` in `runner/src/models.ts` matches runs that
+ *   name.** `entryOwnsRun` in `runner/src/models.ts` matches runs that
  *   way, so two roster entries sharing all three would legitimately show
- *   the same runs. The rows are not deduped: that is the honest reading, and
- *   hiding it would make one of the two look idle.
+ *   the same runs, as would an entry with no window beside a copy stating its
+ *   driver's default. The rows are not deduped: that is the honest reading,
+ *   and hiding it would make one of the two look idle.
  * - **Counted is spelled once.** The run ids behind a count use `isCounted`
  *   from `runner/src/models.ts` — the same predicate that produced
  *   `EpisodeStats` — so the list and the count cannot differ.
@@ -27,7 +28,8 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { parseCompactWindow } from "../src/config";
+import { parseEntryCompactWindow } from "../src/config";
+import { DEFAULT_DRIVER } from "../src/drivers";
 import { configDbPath, readFleetConfig } from "../src/config-store";
 import {
   DEFAULT_POLICY,
@@ -35,7 +37,9 @@ import {
   isCounted,
   parsePolicyBlock,
   policyExclusion,
-  sameRosterIdentity,
+  entryOwnsRun,
+  entryOwnsWindow,
+  ownedWindows,
   schedulability,
   schedulableView,
   type ModelState,
@@ -192,14 +196,16 @@ export function currentSeries(): string | null {
 }
 
 /**
- * A roster entry's compaction window as runs are stamped with it: canonical
- * (`"100K"` → `"100k"`), `auto` absent. A value the parser refuses reads as
- * absent too — the supervisor refuses that config, so no run carries it.
+ * A roster entry's compaction window as the supervisor reads it
+ * (`parseEntryCompactWindow`): canonical (`"100K"` → `"100k"`), and `auto`
+ * absent except on a driver that defaults a window, where it is the entry's
+ * opt-out. A value the parser refuses reads as absent too — the supervisor
+ * refuses that config, so no run carries it.
  */
-function windowOf(raw: string | undefined): string | undefined {
+function windowOf(raw: string | undefined, driver: string | undefined): string | undefined {
   if (raw === undefined) return undefined;
   try {
-    return parseCompactWindow(raw);
+    return parseEntryCompactWindow(raw, driver ?? DEFAULT_DRIVER);
   } catch {
     return undefined;
   }
@@ -245,7 +251,7 @@ export function readFleetRoster(
   const models: RosterModel[] = [];
   for (const [name, e] of Object.entries(parsed.roster)) {
     if (e.tier === undefined) continue;
-    const compactWindow = windowOf(e.compactWindow);
+    const compactWindow = windowOf(e.compactWindow, e.driver);
     models.push({
       name,
       model: e.model,
@@ -297,7 +303,7 @@ export function readFleetRoster(
     const pairs = Object.fromEntries(
       Object.entries(parsed.roster).map(([n, e]) => {
         const refused = rosterEntryRefusal(e, policy.subscriptions, env)?.why;
-        return [n, { driver: e.driver, compactWindow: e.compactWindow, ...(refused !== undefined ? { refused } : {}) }];
+        return [n, { driver: e.driver, compactWindow: windowOf(e.compactWindow, e.driver), ...(refused !== undefined ? { refused } : {}) }];
       }),
     );
     // Where an arm can launch, as far as this reader knows: the setting, and
@@ -458,7 +464,7 @@ function runView(f: RunFact): ModelRunView {
  */
 export function rowOf(state: ModelState, runs: readonly RunFact[], runsDir: string, running: ReadonlySet<string> = new Set(), policy: SchedulingPolicy = DEFAULT_POLICY): ModelRowView {
   const mine = runs
-    .filter((f) => sameRosterIdentity(f, state))
+    .filter((f) => entryOwnsRun(state, f))
     .slice()
     .sort((a, b) => b.startedAt - a.startedAt);
   const perEpisode: Partial<Record<EpisodeIdView, ModelEpisodeView>> = {};
@@ -480,6 +486,7 @@ export function rowOf(state: ModelState, runs: readonly RunFact[], runsDir: stri
     model: state.model,
     effort: state.effort,
     ...(state.compactWindow !== undefined ? { compactWindow: state.compactWindow } : {}),
+    windows: ownedWindows(state),
     platform: state.platform,
     harness: state.harness,
     billing: state.billing,
@@ -519,7 +526,7 @@ export function rosterNameOf(
   const outside = new Set(roster.excluded.map((e) => e.name));
   const rows = roster.models.filter((m) => !outside.has(m.name));
   const hit = rows.find(
-    (r) => r.model === model && (r.effort ?? null) === effort && (r.compactWindow ?? null) === compactWindow,
+    (r) => r.model === model && (r.effort ?? null) === effort && entryOwnsWindow(r, compactWindow),
   );
   if (hit !== undefined) return hit.name;
   return rows.find((r) => r.model === model)?.name ?? null;
