@@ -296,6 +296,13 @@ export const ENTRIES: readonly Entry[] = [
   },
   {
     group: "inspect",
+    command: "stuck",
+    takes: "[<run-id>] [--window D] [--until D] [--move N] [--max-gap D] [--repeat N] [--hints N] [--schema N] [--restarts N] [--asks N] [--files]",
+    summary: "no game progress over a window (level, xp, quests, money, items, position), and the failure signals in it; no run id: every live run",
+    ...inRunner("bun", INSPECT_RUN, "stuck"),
+  },
+  {
+    group: "inspect",
     command: "audit",
     takes: "<run-id> | --smoke <name> [--op X[,Y] [--status S] [--last N | --summary]] [--since D] [--until D]",
     summary: "the module audit log of a run or of a smoke's sessions (one session name at a time: group-a, mail-r), counts per op and status or the last records, reduced where it lives",

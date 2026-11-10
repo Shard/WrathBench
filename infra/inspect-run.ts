@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * `bun wb inspect live|run|trajectory|tools|pad`: read-only views of the runs,
+ * `bun wb inspect live|run|trajectory|tools|pad|stuck`: read-only views of the runs,
  * every one bounded by default.
  *
  *   bun infra/inspect-run.ts live                      runs with a heartbeat, one line each
@@ -12,6 +12,9 @@
  *                                                      calls per tool, reflect, the pad's writers
  *   bun infra/inspect-run.ts pad <run-id> [--since D] [--until D] [--last N] | --at D
  *                                                      the pad's size over time and its writes, or its text
+ *   bun infra/inspect-run.ts stuck [<run-id>] [--window D] [--until D] [--move N] [--max-gap D]
+ *                                 [--repeat N] [--hints N] [--schema N] [--restarts N] [--asks N]
+ *                                                      no game progress over a window, and the failure signals in it
  *
  * D is `90s`, `30m`, `2h`, `1d`, epoch ms or an ISO time. The runs directory is
  * `--runs-dir`, else WRATHBENCH_RUNS_DIR, else `data/runs`.
@@ -567,6 +570,8 @@ export interface Rec {
   pad(): string | null;
   /** The over-cap refusal a result carries. */
   refusal(): { op: string; chars: number } | null;
+  /** Whether the line holds `literal`; null when the reader did not fetch the line to look. */
+  contains(literal: string): boolean | null;
 }
 
 /** A view's step over one record; true stops the read. */
@@ -596,6 +601,7 @@ function fileRec(buf: Buffer, s: number, e: number): Rec {
     parse: () => (parsed === undefined ? (parsed = parseLine(buf, s, e)) : parsed),
     pad: () => padOfRequest(buf, s, e),
     refusal: () => padRefusalIn(buf, s, e),
+    contains: (literal) => buf.subarray(s, e).indexOf(literal) >= 0,
   };
 }
 
@@ -964,6 +970,7 @@ function storeRec(row: StoreRow, pad: string | null): Rec {
     parse: () => (parsed === undefined ? (parsed = raw === null ? null : parseJson(raw)) : parsed),
     pad: () => pad,
     refusal: () => (row.q !== "" ? padRefusalOf(row.q) : raw === null ? null : padRefusalOf(raw)),
+    contains: (literal) => (raw === null ? null : raw.includes(literal)),
   };
 }
 
@@ -2449,6 +2456,442 @@ export async function inspectPadAt(runId: string, opts: Ctx & { at: number }, ou
   return 0;
 }
 
+// ------------------------------------------------------------------ inspect stuck
+
+/**
+ * The stuck detector's thresholds, in one place: `inspect stuck` takes each as
+ * a flag and `fleet status` uses them as they stand. Chosen to catch an agent
+ * that keeps talking while its character goes nowhere (the case that prompted
+ * it: two days, thousands of near-identical snippets, level, xp and position
+ * unchanged) and to stay quiet through ordinary waiting: a flight moves, a
+ * crafting or fishing session changes the bags, a vendor trip the money, an
+ * xp-making sleep loop the xp. An e90 ends on its own `no-xp` watchdog (20
+ * minutes) long before a two-hour window could trip.
+ */
+export const STUCK_DEFAULTS = {
+  /** The trailing window the run is judged over. */
+  windowMs: 2 * 3_600_000,
+  /** Further than this from the window's first position, in yards, is movement, and movement is progress. */
+  moveYards: 50,
+  /** A gap between state samples (or at either end of the window) longer than this leaves the window unjudged. */
+  maxGapMs: 15 * 60_000,
+  /** One identical error, digits aside, this many times in the window. */
+  repeatErrors: 20,
+  /** One harness-delivered hint's (action, status) tallied this many times in the window. */
+  hintTally: 30,
+  /** `events_served` records carrying a `schemaError`. */
+  schemaErrors: 10,
+  /** `sandbox_restarted` notices. */
+  restarts: 3,
+  /** Responses the heuristic reads as addressed to the operator. */
+  asks: 2,
+} as const;
+
+export type StuckThresholds = { -readonly [K in keyof typeof STUCK_DEFAULTS]: number };
+
+/** One state sample, as either the trajectory's `state` record or run.sqlite's `state` row holds it. */
+export interface ProgressSample {
+  ts: number;
+  level: number | null;
+  xp: number | null;
+  money: number | null;
+  quests: number | null;
+  map: number | null;
+  x: number | null;
+  y: number | null;
+  z: number | null;
+  /** The bags and worn items as a sorted `item:count` list; null when the sample has none. */
+  items: string | null;
+}
+
+function num(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/**
+ * The items of a sample as one comparable string: item id (else name), count
+ * and whether worn, sorted. Crafting, looting, fishing, buying and equipping
+ * all change it; a ghost pacing at a wall does not.
+ */
+export function itemsKey(items: unknown): string | null {
+  if (!Array.isArray(items)) return null;
+  return items
+    .map((i) => {
+      const o = obj(i);
+      return `${String(o["itemId"] ?? o["name"] ?? "?")}:${String(o["count"] ?? 1)}${o["equipped"] === true ? "w" : ""}`;
+    })
+    .sort()
+    .join(",");
+}
+
+/** A sample from a trajectory `state` record (camelCase) or a run.sqlite `state` row (snake_case, items as JSON text). */
+export function progressSampleOf(r: Record<string, unknown>, ts: number): ProgressSample {
+  let items: unknown = r["items"];
+  if (typeof items === "string") {
+    try {
+      items = JSON.parse(items) as unknown;
+    } catch {
+      items = null;
+    }
+  }
+  return {
+    ts,
+    level: num(r["level"]),
+    xp: num(r["xp"]),
+    money: num(r["money"]),
+    quests: num(r["questsCompleted"] ?? r["quests_completed"]),
+    map: num(r["map"]),
+    x: num(r["x"]),
+    y: num(r["y"]),
+    z: num(r["z"]),
+    items: itemsKey(items),
+  };
+}
+
+export interface ProgressVerdict {
+  /** `stuck`: no progress of any kind over a window the samples cover; `unjudged`: they do not cover it. */
+  state: "stuck" | "progressing" | "unjudged";
+  /** What changed, what held, or why the window cannot be judged. */
+  evidence: string;
+  samples: number;
+}
+
+/**
+ * Whether the character made any progress over [since, until], from its state
+ * samples alone. Progress is any of: (level, xp) rising, the quest count
+ * rising (a drop is a restart, the count being the process's own), the money
+ * or the items changing, the map changing, or the position straying more than
+ * `moveYards` from where the window began. A field a sample did not carry is
+ * unknown, never a change. The window must be covered: samples at most
+ * `maxGapMs` apart and from either end, or the answer is `unjudged`, since no
+ * samples is not no progress. Pure.
+ */
+export function progressVerdict(all: readonly ProgressSample[], w: { since: number; until: number }, t: Pick<StuckThresholds, "moveYards" | "maxGapMs">): ProgressVerdict {
+  const s = all.filter((x) => x.ts >= w.since && x.ts <= w.until).sort((a, b) => a.ts - b.ts);
+  const n = s.length;
+  if (n < 2) return { state: "unjudged", evidence: `${n} state sample(s) in the window`, samples: n };
+  let gap = { ms: s[0]!.ts - w.since, at: w.since };
+  for (let i = 1; i < n; i++) if (s[i]!.ts - s[i - 1]!.ts > gap.ms) gap = { ms: s[i]!.ts - s[i - 1]!.ts, at: s[i - 1]!.ts };
+  if (w.until - s[n - 1]!.ts > gap.ms) gap = { ms: w.until - s[n - 1]!.ts, at: s[n - 1]!.ts };
+  if (gap.ms > t.maxGapMs) {
+    return { state: "unjudged", evidence: `${n} state samples, but a ${fmtAge(gap.ms)} gap from ${iso(gap.at)} (over ${fmtAge(t.maxGapMs)}): a run younger than the window, a pause, or samples not being written`, samples: n };
+  }
+  const changes: string[] = [];
+  const last = <K extends keyof ProgressSample>(k: K): ProgressSample[K] | null => {
+    for (let i = n - 1; i >= 0; i--) if (s[i]![k] !== null) return s[i]![k];
+    return null;
+  };
+  const first = <K extends keyof ProgressSample>(k: K): ProgressSample[K] | null => s.find((x) => x[k] !== null)?.[k] ?? null;
+  // Each field compared with the last sample that carried it.
+  let rose = false;
+  let quests = 0;
+  let money = false;
+  let items = false;
+  let map = false;
+  let lx: { level: number; xp: number } | null = null;
+  let q: number | null = null;
+  let m: number | null = null;
+  let it: string | null = null;
+  let mp: number | null = null;
+  for (const x of s) {
+    if (x.level !== null && x.xp !== null) {
+      if (lx !== null && (x.level > lx.level || (x.level === lx.level && x.xp > lx.xp))) rose = true;
+      lx = { level: x.level, xp: x.xp };
+    }
+    if (x.quests !== null) {
+      if (q !== null && x.quests > q) quests += x.quests - q;
+      q = x.quests;
+    }
+    if (x.money !== null) {
+      if (m !== null && x.money !== m) money = true;
+      m = x.money;
+    }
+    if (x.items !== null) {
+      if (it !== null && x.items !== it) items = true;
+      it = x.items;
+    }
+    if (x.map !== null) {
+      if (mp !== null && x.map !== mp) map = true;
+      mp = x.map;
+    }
+  }
+  // How far the character strayed from the window's first position on that map.
+  const origin = s.find((x) => x.map !== null && x.x !== null && x.y !== null && x.z !== null) ?? null;
+  let stray = 0;
+  if (origin !== null) {
+    for (const x of s) {
+      if (x.map !== origin.map || x.x === null || x.y === null || x.z === null) continue;
+      stray = Math.max(stray, Math.hypot(x.x - origin.x!, x.y - origin.y!, x.z - origin.z!));
+    }
+  }
+  const lvl = `L${first("level") ?? "?"} ${first("xp") ?? "?"}xp`;
+  if (rose) changes.push(`${lvl} → L${last("level") ?? "?"} ${last("xp") ?? "?"}xp`);
+  if (quests > 0) changes.push(`quests +${quests}`);
+  if (money) changes.push(`money ${money2(first("money"))} → ${money2(last("money"))}`);
+  if (items) changes.push("items changed");
+  if (map) changes.push(`map ${first("map")} → ${last("map")}`);
+  if (stray > t.moveYards) changes.push(`moved ${Math.round(stray)} yd from where the window began`);
+  const span = `${n} samples over ${fmtAge(s[n - 1]!.ts - s[0]!.ts)}, largest gap ${fmtAge(gap.ms)}`;
+  if (changes.length > 0) return { state: "progressing", evidence: `${changes.join(" · ")} · ${span}`, samples: n };
+  const where = origin === null ? "position unknown" : `map ${origin.map}, within ${stray.toFixed(1)} yd of (${origin.x!.toFixed(0)}, ${origin.y!.toFixed(0)})`;
+  const held = [`${lvl} throughout`, "quests +0", `money ${first("money") === null ? "unknown" : "unchanged"}`, `items ${first("items") === null ? "unknown" : "unchanged"}`, where];
+  return { state: "stuck", evidence: `${held.join(" · ")} · ${span}`, samples: n };
+}
+
+function money2(copper: number | null): string {
+  return money(copper) ?? "?";
+}
+
+/**
+ * Assistant text that reads as addressed to whoever runs the harness: asking
+ * for help, a reset, a teleport, a recovery mechanism, or reporting a bug. A
+ * heuristic, labelled as one wherever it prints: a model narrating its plan can
+ * match, and one asking in other words will not.
+ */
+export const OPERATOR_ASKS: readonly RegExp[] = [
+  /\b(?:operators?|administrators?|admins?|game ?masters?|GMs?|developers?|maintainers?)\b[^.?!\n]{0,80}\b(?:help|reset|unstuck|unstick|teleport|intervene|intervention|assist|fix|recover|rescue|look into)/i,
+  /\b(?:please|could you|can you|would you|i need you to)\b[^.?!\n]{0,60}\b(?:reset|teleport|unstick|resurrect|revive|move) (?:me|my character|the character)\b/i,
+  /\b(?:bug report|report (?:this|a|the) bug|harness (?:bug|issue|problem)|server[- ]side (?:bug|issue|fix))\b/i,
+  /\b(?:recovery mechanism|manual intervention|outside (?:help|intervention))\b/i,
+];
+
+/** The harness-delivered hint block at a result's foot (`renderActionHints`, wrath-mcp/mcp/src/tools.ts). */
+export const HINT_BLOCK_HEAD = "--- harness ---";
+/** One line of that block: `action status ×N (from an earlier snippet…): hint`. */
+const HINT_LINE = /^(\S+) (\S+?)(?: ×(\d+))?(?: \(from an earlier snippet[^)]*\))?: /;
+/** How a served event names a decode failure (EventSummary, runner/src/context.ts). */
+export const SCHEMA_ERROR_KEY = '"schemaError"';
+
+/** An error's signature: its first meaningful line, digits folded, so the same failure at another place or time counts as one. */
+export function errorSignature(name: string, text: string): string {
+  const lines = text.split("\n", 3);
+  const body = (/^error \(\d+ms\)$/.test(lines[0] ?? "") ? lines[1] : lines[0]) ?? "";
+  return `${name}: ${body.replace(/\d+(?:\.\d+)?/g, "#").slice(0, 120) || "(empty)"}`;
+}
+
+export interface StuckScan {
+  samples: ProgressSample[];
+  snippets: number;
+  toolCalls: number;
+  responses: number;
+  errors: Map<string, number>;
+  hints: Map<string, number>;
+  schemaRecords: number;
+  restarts: number[];
+  asks: { ts: number; text: string }[];
+}
+
+/** The detector's reads over a window, record by record: the state samples, the activity, and every failure signal. */
+function stuckReducer(w: Window): { a: StuckScan; fn: RecFn } {
+  const a: StuckScan = { samples: [], snippets: 0, toolCalls: 0, responses: 0, errors: new Map(), hints: new Map(), schemaRecords: 0, restarts: [], asks: [] };
+  const fn: RecFn = (r) => {
+    if (Number.isFinite(r.ts)) {
+      if (w.until !== null && r.ts > w.until) return true;
+      if (w.since !== null && r.ts < w.since) return;
+    }
+    switch (r.t) {
+      case "state": {
+        const p = r.bytes < 1 << 20 ? r.parse() : null;
+        if (p !== null) a.samples.push(progressSampleOf(p, r.ts));
+        return;
+      }
+      case "snippet":
+        a.snippets++;
+        return;
+      case "tool_call":
+        if (r.name() !== "run_snippet") a.toolCalls++;
+        return;
+      case "snippet_result":
+      case "tool_result": {
+        if (r.bytes >= 256 << 10) return;
+        const p = r.parse();
+        if (p === null) return;
+        const text = textOf(p["text"]);
+        if (p["isError"] === true) count(a.errors, errorSignature(typeof p["name"] === "string" ? p["name"] : r.t === "snippet_result" ? "run_snippet" : "?", text));
+        const at = text.lastIndexOf(`\n${HINT_BLOCK_HEAD}\n`);
+        if (at < 0) return;
+        for (const line of text.slice(at + HINT_BLOCK_HEAD.length + 2).split("\n")) {
+          const m = HINT_LINE.exec(line);
+          if (m !== null) count(a.hints, `${m[1]} ${m[2]}`, m[3] === undefined ? 1 : Number(m[3]));
+        }
+        return;
+      }
+      case "events_served":
+        // The store sends only the rows that hold the key; the file's reader looks.
+        if (r.contains(SCHEMA_ERROR_KEY) !== false) a.schemaRecords++;
+        return;
+      case "harness": {
+        const p = r.bytes < 64 << 10 ? r.parse() : null;
+        if (p?.["kind"] === "sandbox_restarted") a.restarts.push(r.ts);
+        return;
+      }
+      case "response": {
+        a.responses++;
+        const p = r.bytes < 1 << 20 ? r.parse() : null;
+        const content = obj(p?.["message"])["content"];
+        if (typeof content !== "string") return;
+        for (const re of OPERATOR_ASKS) {
+          const m = re.exec(content);
+          if (m === null) continue;
+          a.asks.push({ ts: r.ts, text: content.slice(Math.max(0, m.index - 40), m.index + 160) });
+          break;
+        }
+        return;
+      }
+    }
+  };
+  return { a, fn };
+}
+
+/** What the detector asks of the store: the state records whole, the results that failed or carry a hint block, and the rest counted. */
+const STUCK_SPEC: ReadSpec = {
+  kinds: {
+    state: { raw: "all" },
+    snippet: { raw: "none" },
+    tool_call: { raw: "none" },
+    snippet_result: { row: { error: true, contains: HINT_BLOCK_HEAD }, raw: "all" },
+    tool_result: { row: { error: true, contains: HINT_BLOCK_HEAD }, raw: "all" },
+    events_served: { row: { contains: SCHEMA_ERROR_KEY }, raw: "none" },
+    harness: { raw: "all" },
+    response: { raw: "all" },
+  },
+};
+
+/** One signal's line: tripped or not, the count against its threshold, and what it saw. */
+interface Signal {
+  name: string;
+  tripped: boolean;
+  text: string;
+}
+
+export interface StuckReport {
+  window: { since: number; until: number };
+  progress: ProgressVerdict;
+  scan: StuckScan;
+  signals: Signal[];
+}
+
+/** Every signal over a scan, the progress verdict first: the only one that flags a run. Pure. */
+export function stuckReport(a: StuckScan, w: { since: number; until: number }, t: StuckThresholds): StuckReport {
+  const top = (m: Map<string, number>): [string, number] | null => [...m].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))[0] ?? null;
+  const progress = progressVerdict(a.samples, w, t);
+  const err = top(a.errors);
+  const errTotal = [...a.errors.values()].reduce((x, y) => x + y, 0);
+  const hint = top(a.hints);
+  const signals: Signal[] = [
+    {
+      name: "errors",
+      tripped: err !== null && err[1] >= t.repeatErrors,
+      text: err === null ? `none failed (threshold ${t.repeatErrors} identical)` : `${err[1]}× ${JSON.stringify(err[0])} (threshold ${t.repeatErrors} identical) · ${errTotal} error(s) in ${a.errors.size} signature(s)`,
+    },
+    {
+      name: "hints",
+      tripped: hint !== null && hint[1] >= t.hintTally,
+      text: hint === null ? `no harness-delivered hint (threshold ${t.hintTally})` : `${topCounts(a.hints, 4)} tallied in the harness's hint blocks (threshold ${t.hintTally} for one)`,
+    },
+    {
+      name: "schema",
+      tripped: a.schemaRecords >= t.schemaErrors,
+      text: `${a.schemaRecords} events_served record(s) carrying a schemaError (threshold ${t.schemaErrors})`,
+    },
+    {
+      name: "restarts",
+      tripped: a.restarts.length >= t.restarts,
+      text: `${a.restarts.length} sandbox restart(s)${a.restarts.length > 0 ? `, the last at ${clock(a.restarts[a.restarts.length - 1]!)}` : ""} (threshold ${t.restarts})`,
+    },
+    {
+      name: "asks",
+      tripped: a.asks.length >= t.asks,
+      text: `heuristic: ${a.asks.length} of ${a.responses} response(s) read as addressed to the operator (threshold ${t.asks})`,
+    },
+  ];
+  return { window: w, progress, scan: a, signals };
+}
+
+/** The one line `fleet status` and `inspect stuck` without a run id print for a stuck run. */
+export function stuckFlag(p: ProgressVerdict, windowMs: number): string {
+  return `no progress in ${fmtAge(windowMs)}: ${p.evidence}`;
+}
+
+/** The detector over one run: where it reads, the window, the scan. */
+async function stuckOf(ctx: Ctx, runId: string, run: { dir: string; path: string }, until: number | null, t: StuckThresholds): Promise<{ via: Via; report: StuckReport; anchor: string }> {
+  // The window ends at --until, else at the run's newest record (an ended run
+  // is judged on its last stretch), and never in the future.
+  const probe = await viaFor(ctx, runId, run.dir, { since: null, until });
+  const newest = probe.store !== null ? probe.ext.newestTs : newestInFile(run.path);
+  const end = until ?? Math.min(ctx.now, newest ?? ctx.now);
+  const anchor = until !== null ? "--until" : newest !== null && newest < ctx.now - HEARTBEAT_DEAD_MS ? "the run's newest record" : "now";
+  const w = { since: end - t.windowMs, until: end };
+  let via: Via = probe;
+  let scan: StuckScan;
+  if (probe.store !== null) {
+    const ext = await probe.store.extent(runId, w);
+    via = { ...probe, ext };
+    const r = stuckReducer(w);
+    await storeRead(probe.store, runId, STUCK_SPEC, w, ext.window, true, r.fn);
+    scan = r.a;
+  } else {
+    const r = stuckReducer(w);
+    fileForward(run.path, r.fn, seekTime(run.path, w.since));
+    scan = r.a;
+  }
+  return { via, report: stuckReport(scan, w, t), anchor };
+}
+
+export async function inspectStuck(runId: string, opts: Ctx & { until: number | null; thresholds: StuckThresholds }, out: Out): Promise<number> {
+  const run = trajectoryOf(runId, opts, out);
+  if (run === null) return 1;
+  const t = opts.thresholds;
+  const { via, report, anchor } = await stuckOf(opts, runId, run, opts.until, t);
+  const say = (text: string): void => out(cap(strike(text, run.token), opts.width));
+  const p = report.progress;
+  const a = report.scan;
+  say(`${runId}: the stuck detector over ${fmtAge(t.windowMs)} to ${iso(report.window.until)} (${anchor}), UTC`);
+  say(
+    `verdict   ${p.state === "stuck" ? "STUCK: no game progress in the window" : p.state === "progressing" ? "not stuck: the character made progress" : "unjudged: the state samples do not cover the window"} (only the progress signal flags a run; the rest are evidence)`,
+  );
+  say(`source    ${via.line}`);
+  say(`progress  ${p.state === "stuck" ? "TRIPPED" : "ok     "}  ${p.evidence}`);
+  say(`activity  ${a.snippets} snippet(s) · ${a.toolCalls} other tool call(s) · ${a.responses} model response(s) in the window`);
+  for (const s of report.signals) say(`${s.name.padEnd(9)} ${s.tripped ? "TRIPPED" : "ok     "}  ${s.text}`);
+  for (const ask of a.asks.slice(-2)) say(`          ${clock(ask.ts)}  ${cap(ask.text, opts.width - 40)}`);
+  say(
+    `limits    --window ${fmtAge(t.windowMs)} --move ${t.moveYards} --max-gap ${fmtAge(t.maxGapMs)} --repeat ${t.repeatErrors} --hints ${t.hintTally} --schema ${t.schemaErrors} --restarts ${t.restarts} --asks ${t.asks}`,
+  );
+  return 0;
+}
+
+/** `inspect stuck` with no run id: every run with a live owner, one line each. */
+export async function inspectStuckLive(opts: Ctx & { thresholds: StuckThresholds }, out: Out): Promise<number> {
+  let names: string[];
+  try {
+    names = readdirSync(opts.runsDir);
+  } catch {
+    out(`no runs directory at ${opts.runsDir}`);
+    return 1;
+  }
+  const live = names.filter((id) => id !== ARCHIVE_DIR && isValidRunId(id) && ownedAt(heartbeatAt(join(opts.runsDir, id)), opts.now)).sort();
+  out(`${live.length} run(s) with a live owner; the stuck detector over the last ${fmtAge(opts.thresholds.windowMs)} of each`);
+  let source = "";
+  for (const id of live) {
+    const run = trajectoryOf(id, opts, () => {});
+    if (run === null) {
+      out(cap(`  ${id}  no trajectory`, opts.width));
+      continue;
+    }
+    const { via, report } = await stuckOf(opts, id, run, null, opts.thresholds);
+    source = via.line;
+    const p = report.progress;
+    const others = report.signals.filter((s) => s.tripped).map((s) => s.name);
+    // The tripped evidence first: the progress line that follows is long, and the cap cuts its end.
+    const also = others.length > 0 ? ` (also tripped: ${others.join(", ")})` : "";
+    const rest = p.state === "stuck" ? stuckFlag(p, opts.thresholds.windowMs) : p.state === "unjudged" ? p.evidence : "";
+    out(cap(strike(`  ${id}  ${p.state === "stuck" ? "STUCK" : p.state}${also}${rest !== "" ? `  ${rest}` : ""}`, run.token), opts.width));
+  }
+  if (source !== "") out(cap(`source    ${source}`, opts.width));
+  return 0;
+}
+
 // ------------------------------------------------------------------ CLI
 
 const USAGE = `usage: bun infra/inspect-run.ts live
@@ -2456,9 +2899,30 @@ const USAGE = `usage: bun infra/inspect-run.ts live
        bun infra/inspect-run.ts trajectory <run-id> [--last N | --next N] [--errors] [--grep RE] [--all] [--since D] [--until D]
        bun infra/inspect-run.ts tools <run-id> [--since D] [--until D]
        bun infra/inspect-run.ts pad <run-id> [--since D] [--until D] [--last N] | --at D
+       bun infra/inspect-run.ts stuck [<run-id>] [--window D] [--until D] [--move N] [--max-gap D] [--repeat N] [--hints N] [--schema N] [--restarts N] [--asks N]
 common: [--runs-dir DIR] (else WRATHBENCH_RUNS_DIR, else data/runs) [--width N] [--files]; D is 90s, 30m, 2h, 1d, epoch ms or ISO
 --next N: the first N items from --since (or the file's start) instead of the last N
---files: read the files, not ClickHouse (CLICKHOUSE_URL); a live run's run.sqlite is still not opened`;
+--files: read the files, not ClickHouse (CLICKHOUSE_URL); a live run's run.sqlite is still not opened
+stuck: with no run id, every run with a live owner; --window and --max-gap are durations (2h, 15m), the rest whole numbers`;
+
+/** `inspect stuck`'s threshold flags, each with the threshold it sets and whether it is a duration. */
+const STUCK_FLAGS: readonly (readonly [string, keyof StuckThresholds, "duration" | "count"])[] = [
+  ["--window", "windowMs", "duration"],
+  ["--move", "moveYards", "count"],
+  ["--max-gap", "maxGapMs", "duration"],
+  ["--repeat", "repeatErrors", "count"],
+  ["--hints", "hintTally", "count"],
+  ["--schema", "schemaErrors", "count"],
+  ["--restarts", "restarts", "count"],
+  ["--asks", "asks", "count"],
+];
+
+/** A duration: `90s`, `30m`, `2h`, `1d`; NaN when it is not one. */
+export function parseDuration(raw: string): number {
+  const m = /^(\d+(?:\.\d+)?)(s|m|h|d)$/.exec(raw);
+  if (m === null) return Number.NaN;
+  return Number(m[1]) * { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "s" | "m" | "h" | "d"];
+}
 
 /** The flags each command takes, beyond the common ones; any other is a usage error, never ignored. */
 const COMMAND_FLAGS: Record<string, readonly string[]> = {
@@ -2467,9 +2931,10 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   trajectory: ["--last", "--next", "--errors", "--grep", "--all", "--since", "--until"],
   tools: ["--since", "--until"],
   pad: ["--since", "--until", "--last", "--at"],
+  stuck: ["--until", ...STUCK_FLAGS.map(([f]) => f)],
 };
 const COMMON_FLAGS = new Set(["--runs-dir", "--width", "--files"]);
-const VALUED = new Set(["--since", "--until", "--at", "--last", "--next", "--grep", "--width", "--runs-dir"]);
+const VALUED = new Set(["--since", "--until", "--at", "--last", "--next", "--grep", "--width", "--runs-dir", ...STUCK_FLAGS.map(([f]) => f)]);
 
 /** What the CLI is handed besides its arguments: a store in place of CLICKHOUSE_URL's, for the tests. */
 export interface Deps {
@@ -2551,6 +3016,26 @@ export async function main(
   const base: Ctx = { runsDir, now, width, store, noStore };
   try {
     if (command === "live") return await inspectLive(base, out);
+    if (command === "stuck") {
+      const thresholds: StuckThresholds = { ...STUCK_DEFAULTS };
+      for (const [f, key, kind] of STUCK_FLAGS) {
+        if (!flags.has(f)) continue;
+        const raw = flags.get(f) as string;
+        const v = kind === "duration" ? parseDuration(raw) : Number(raw);
+        if (!(Number.isFinite(v) && v > 0) || (kind === "count" && !Number.isInteger(v))) {
+          err(`${f} is ${kind === "duration" ? "a duration: 90s, 30m, 2h or 1d" : "a whole number of at least 1"}`);
+          return 2;
+        }
+        thresholds[key] = v;
+      }
+      if (positional.length === 0) return await inspectStuckLive({ ...base, thresholds }, out);
+      const id = positional[0]!;
+      if (positional.length > 1 || !isValidRunId(id)) {
+        err(`not one run id: ${positional.join(" ")}`);
+        return 2;
+      }
+      return await inspectStuck(id, { ...base, until: window.until, thresholds }, out);
+    }
     const runId = positional[0];
     if (runId === undefined || positional.length > 1 || !isValidRunId(runId)) {
       err(runId === undefined ? `${command} needs a run id\n${USAGE}` : `not one run id: ${positional.join(" ")}`);

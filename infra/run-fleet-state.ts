@@ -16,6 +16,7 @@ import { readCodexThread } from "../runner/src/codex-rollout";
 import { DEFAULT_CODEX_HOME_ENV, isCodexHomeEnvName } from "../runner/src/config";
 import { driverEntry } from "../runner/src/drivers";
 import { HEARTBEAT_DEAD_MS } from "../runner/src/trajectory";
+import { progressSampleOf, progressVerdict, STUCK_DEFAULTS, stuckFlag } from "./inspect-run";
 import { dirname, isAbsolute, join } from "node:path";
 import {
   type EpisodeId,
@@ -582,6 +583,47 @@ export function lastLine(path: string): string | undefined {
   if (!existsSync(path)) return undefined;
   const lines = readFileSync(path, "utf8").split("\n").filter((l) => l.trim().length > 0);
   return lines[lines.length - 1];
+}
+
+/**
+ * The stuck detector's flag for a run with a live owner, or undefined: no
+ * game progress over the last `STUCK_DEFAULTS.windowMs` (`progressVerdict`,
+ * infra/inspect-run.ts). A run whose heartbeat is cold or gone is not looked
+ * at. The cost is bounded per run, because status runs often: one statement
+ * on run.sqlite, the newest state rows by rowid (an index walk from the end,
+ * never a scan, and never `ORDER BY ts`, which has no index), as many as the
+ * window holds at two samples a minute. The failure signals are left to
+ * `bun wb inspect stuck`, which reads the trajectory.
+ */
+export function liveRunStuck(runId: string, now = Date.now(), runsDir = RUNS_DIR): string | undefined {
+  const dir = join(runsDir, runId);
+  let hb: number;
+  try {
+    hb = statSync(join(dir, "heartbeat")).mtimeMs;
+  } catch {
+    return undefined;
+  }
+  if (now - hb >= HEARTBEAT_DEAD_MS) return undefined;
+  const path = join(dir, "run.sqlite");
+  if (!existsSync(path)) return undefined;
+  const windowMs = STUCK_DEFAULTS.windowMs;
+  let rows: Record<string, unknown>[];
+  try {
+    const db = openRunDb(path, { readonly: true });
+    try {
+      const have = new Set((db.query("PRAGMA table_info(state)").all() as { name: string }[]).map((c) => c.name));
+      if (!have.has("ts")) return undefined;
+      const cols = ["ts", "level", "xp", "money", "quests_completed", "map", "x", "y", "z", "items"].map((c) => (have.has(c) ? c : `NULL AS ${c}`));
+      rows = db.query(`SELECT ${cols.join(", ")} FROM state ORDER BY rowid DESC LIMIT ?`).all(Math.ceil(windowMs / 30_000) + 10) as Record<string, unknown>[];
+    } finally {
+      db.close();
+    }
+  } catch {
+    return undefined;
+  }
+  const samples = rows.map((r) => progressSampleOf(r, Number(r["ts"])));
+  const verdict = progressVerdict(samples, { since: now - windowMs, until: now }, STUCK_DEFAULTS);
+  return verdict.state === "stuck" ? stuckFlag(verdict, windowMs) : undefined;
 }
 
 export function runProgress(runId: string): { level: number; xp: number; startedAt?: number } | undefined {

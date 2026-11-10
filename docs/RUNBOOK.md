@@ -69,6 +69,7 @@ bun wb inspect trajectory <run-id> --since <iso> --next 20   # the first 20 afte
 bun wb inspect tools <run-id> [--since 2h] [--until 1h]       # calls per tool, ok/error, reflect granted/refused, pad writers
 bun wb inspect pad <run-id> [--since 2h]                       # pad size over time, writes, cap refusals, drops flagged
 bun wb inspect pad <run-id> --at <iso>                         # the pad's text at a moment, rebuilt from the record
+bun wb inspect stuck [<run-id>] [--window 2h] [--until 1h]     # no game progress over a window, and the failure signals in it
 bun wb inspect audit <run-id> [--op WB_MOVE_RESULT [--status S]] [--since 1h]
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
 bun wb inspect audit --smoke edge-drop --op move_edge_drop --since 1h   # a smoke's sessions (from the smoke-session ledger)
@@ -91,13 +92,13 @@ records each one's fingerprint under the smoke's name, `<name>` the one `bun
 wb smoke` takes, in `data/runs/smoke-sessions.jsonl` on the runner's runs
 volume, so `--smoke <name>` (or `<name>-<role>`, like `group-a`) hands the
 reducer that smoke's fingerprints, and its older files' token prefix, and every
-smoke token is struck. `live`, `run`, `trajectory`, `tools`
-and `pad` are `infra/inspect-run.ts` in the runner pod, which imports nothing outside
+smoke token is struck. `live`, `run`, `trajectory`, `tools`,
+`pad` and `stuck` are `infra/inspect-run.ts` in the runner pod, which imports nothing outside
 `bun:sqlite` and `node:*`; before a release ships it, the same file runs in the
 pod from stdin:
 `kubectl -n wrathbench exec -i deploy/wrathbench-runner -- bun run - run <run-id> < infra/inspect-run.ts`.
 
-Those five read a run's row, its state samples and its trajectory from
+Those six read a run's row, its state samples and its trajectory from
 ClickHouse (the runner pod's `CLICKHOUSE_*`, the viewer's coordinates), never
 by walking a live run's `run.sqlite`: a full read of one held it against the
 runner's writer long enough to kill the run. The heartbeat, a few `meta.json`
@@ -117,6 +118,25 @@ Code 241 `system.query_log` shows whether inspect was in flight. `pad` reads
 every request's pad section on the server, a few seconds on a 800 MB run. The module
 audit files (`inspect audit`) and the publisher's state (`inspect publisher`)
 are not in ClickHouse and are read where they live, as above.
+
+`stuck` is the detector for a run that keeps talking while its character goes
+nowhere. It judges a trailing window (two hours by default, ending now, or at
+an ended run's last record, or at `--until`) from the `state` records: any
+rise in level, xp or quests, any change of money, items or map, or straying
+more than 50 yards from where the window began is progress, and none of it is
+`STUCK`. Samples more than 15 minutes apart, or not reaching either end of the
+window, leave it `unjudged`, so a young or just-resumed run is never flagged.
+Only that verdict flags a run. Beside it, each marked tripped or not with its
+count: the same error repeated (digits folded), the harness-delivered hint
+tallies, `events_served` records carrying a `schemaError`, sandbox restarts,
+and, as a labelled heuristic, responses that read as addressed to the
+operator. With no run id it prints one line per run with a live owner. Every
+threshold is a flag; the defaults are `STUCK_DEFAULTS` in
+`infra/inspect-run.ts`. It reports and nothing more: no record is written and
+nothing acts on the run. `bun wb fleet status` flags a live run with the same
+verdict (`!! STUCK: …` on its account row) from one statement on its
+`run.sqlite`, the newest state rows by rowid, a few milliseconds per live run;
+the failure signals are `inspect stuck`'s alone.
 
 ### Where the config lives
 
