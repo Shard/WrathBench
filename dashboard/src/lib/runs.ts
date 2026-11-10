@@ -341,7 +341,10 @@ export function pagerItems(page: number, count: number): (number | null)[] {
  * the row shows, and every one is optional: the page opens on all runs.
  * `effort` and `compactWindow` are only meaningful with `model`, because
  * `(model, effort, compactWindow)` is what the roster matches runs on
- * (`sameRosterIdentity` in `runner/src/models.ts`).
+ * (`entryOwnsRun` in `runner/src/models.ts`). `compactWindow` may list more
+ * than one window, comma-separated with `auto` naming the CLI's own
+ * (`auto,300k`): an entry with no window on a driver that defaults one owns
+ * the runs of both (`ModelRowView.windows`).
  */
 export interface RunFilter {
   model: string | null;
@@ -382,15 +385,25 @@ export function filterLabel(f: RunFilter): string {
     .join(" ");
 }
 
+/** How a filter, a link and `ModelRowView.windows` spell the CLI's own window, which a run records as none. */
+export const AUTO_WINDOW = "auto";
+
+/** Whether a run's window is one the filter names; an absent filter names the CLI's own alone. */
+function windowMatches(runWindow: string | null, filter: string | null): boolean {
+  if (filter === null) return runWindow === null;
+  return filter.split(",").includes(runWindow ?? AUTO_WINDOW);
+}
+
 /**
  * Apply the filter. An absent `effort` under a present `model` means "the
  * entry with no effort", never "any effort" — the same reading the models page
- * links with, so its `2/3` lands on exactly those runs.
+ * links with, so its `2/3` lands on exactly those runs. An absent window is
+ * the CLI's own `auto` in the same way.
  */
 export function filterRuns(runs: readonly ResultRun[], f: RunFilter): ResultRun[] {
   return runs.filter(
     (r) =>
-      (f.model === null || (r.model === f.model && (r.effort ?? null) === f.effort && (r.compactWindow ?? null) === f.compactWindow)) &&
+      (f.model === null || (r.model === f.model && (r.effort ?? null) === f.effort && windowMatches(r.compactWindow ?? null, f.compactWindow))) &&
       (f.episode === null || r.episode === f.episode) &&
       (f.harness === null || r.harness === f.harness) &&
       (f.character === null || r.characterLabel === f.character) &&

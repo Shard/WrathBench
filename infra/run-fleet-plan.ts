@@ -45,7 +45,7 @@ import {
 import { cellDimensions } from "../runner/src/campaign-def";
 import { campaignFileOf, type CampaignFile } from "../runner/src/campaign-file";
 import { memberRunId } from "../runner/src/party";
-import { DEFAULT_CLAUDE_TOKEN_ENV, type TerminationReason } from "../runner/src/config";
+import { DEFAULT_CLAUDE_TOKEN_ENV, stampedCompactWindow, type TerminationReason } from "../runner/src/config";
 import { driverEntry, isProbeOnlyDriver } from "../runner/src/drivers";
 import { isScoredEpisode } from "../runner/src/episodes";
 import { classifyLapse, OFFLINE_PAUSE, PARTY_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
@@ -61,6 +61,7 @@ import {
   claudeKeysFor,
   claudeLanesOf,
   DEFAULT_POLICY as DEFAULT_POLICY_FOR_FORMAT,
+  entryOwnsRun,
   type HeldPick,
   inSeries,
   lastActivityOf,
@@ -69,7 +70,7 @@ import {
   type NextJob,
   planNextJobs,
   type RunFact,
-  sameRosterIdentity,
+  rosterWindowKey,
   type SchedulingPolicy,
   staleForMs,
   TIER_TABLE,
@@ -101,7 +102,7 @@ export interface Affinity {
 /**
  * The account each roster name last ran on, from the run facts the supervisor
  * already reads. Pure. Latest start wins; a run with no recorded account is no
- * evidence. Matching is the projection's own (`sameRosterIdentity`: model,
+ * evidence. Matching is the projection's own (`entryOwnsRun`: model,
  * effort, compaction window), so a roster entry renamed keeps its history and
  * two entries on one model id do not.
  */
@@ -111,7 +112,7 @@ export function affinityFrom(runs: readonly RunFact[], roster: Record<string, Fl
   for (const [name, e] of Object.entries(roster)) {
     for (const f of runs) {
       if (f.account === null) continue;
-      if (!sameRosterIdentity(f, e)) continue;
+      if (!entryOwnsRun(e, f)) continue;
       if ((at.get(name) ?? -1) >= f.startedAt) continue;
       at.set(name, f.startedAt);
       out.set(name, { account: f.account, character: f.character });
@@ -750,7 +751,7 @@ export function jobSpawn(
     };
     const idBase =
       `fleet-${job.name}-${slug(base.model)}${base.effort !== undefined ? `-${slug(base.effort)}` : ""}` +
-      `${base.compactWindow !== undefined ? `-${slug(base.compactWindow)}` : ""}-${stamp}`;
+      `${stampedCompactWindow(base.compactWindow) !== undefined ? `-${slug(stampedCompactWindow(base.compactWindow)!)}` : ""}-${stamp}`;
     const attemptStem = (n: number | undefined): string => (n !== undefined && n > 1 ? `${idBase}-a${n}` : bareRunId(job.name, base, stamp));
     // A fresh campaign square numbers past every id on disk (`freshAttempt`).
     const attempt = freshAttempt(job, attemptStem, probeFile?.definition.party?.members.map((m) => m.id));
@@ -871,7 +872,7 @@ function partySpawn(job: FleetJob, entries: RosterSpec[], probeFile: CampaignFil
  */
 export function withResume(spawn: JobSpawn, resume: NonNullable<FleetJob["resume"]>): JobSpawn {
   const entries = [...spawn.entries];
-  const i = entries.findIndex((e) => sameRosterIdentity(e, resume));
+  const i = entries.findIndex((e) => entryOwnsRun(e, resume));
   if (i >= 0) {
     const [hit] = entries.splice(i, 1);
     entries.unshift({ ...hit!, runId: resume.runId });
@@ -964,7 +965,7 @@ export interface EndedRun {
   effort: string | null;
   /** Identity too: the CLI compaction window (claude-code or codex); absent or null is `auto`. */
   compactWindow?: string | null;
-  /** The run's driver: a probe-only driver's run is never another entry's (`sameRosterIdentity`). */
+  /** The run's driver: a probe-only driver's run is never another entry's (`entryOwnsRun`). */
   driver?: string | null;
   /** The job ref it was launched under, when the run id names one. */
   ref: string | null;
@@ -1212,7 +1213,7 @@ export function unownedLiveRuns(opts: {
     const ref =
       (f.ref != null && opts.roster[f.ref] !== undefined ? f.ref : undefined) ??
       refOfRunId(f.runId, f.episode, names) ??
-      names.find((n) => sameRosterIdentity(opts.roster[n]!, f));
+      names.find((n) => entryOwnsRun(opts.roster[n]!, f));
     busy.add(f.account.toUpperCase());
     out.push({
       runId: f.runId,
@@ -1401,12 +1402,16 @@ export function planResumes(opts: {
     // One character per model: an arm's own compaction window is not a
     // different model, so it does not make a second paused run of one entry
     // resumable beside the first.
-    const windowKey = file !== null && armArg(file.arm, "compact-window") !== undefined ? "" : (f.compactWindow ?? "");
-    // A probe-only driver's run is never another entry's (`sameRosterIdentity`).
+    // Nor is the driver's default window a different model from its `auto`:
+    // an entry with no window owns both (`entryOwnsWindow`), so a run of each
+    // is still one entry's two paused runs.
+    const armWindow = file !== null && armArg(file.arm, "compact-window") !== undefined;
+    const windowKey = armWindow ? "" : rosterWindowKey(f);
+    // A probe-only driver's run is never another entry's (`entryOwnsRun`).
     const modelKey = `${f.model}@${f.effort ?? ""}@${windowKey}${isProbeOnlyDriver(f.driver) ? "@probe-only" : ""}`;
     const launchedUnder = refOfRunId(f.runId, f.episode, Object.keys(config.roster));
     const current = launchedUnder === undefined ? undefined : config.roster[launchedUnder];
-    if (launchedUnder !== undefined && current !== undefined && !sameRosterIdentity(current, f)) {
+    if (launchedUnder !== undefined && current !== undefined && !entryOwnsRun(current, f)) {
       end.push({
         runId: f.runId,
         model: f.model,
@@ -1479,7 +1484,7 @@ export function planResumes(opts: {
     }
     seenModel.add(resumeKey);
     const refs = Object.entries(config.roster)
-      .filter(([, e]) => sameRosterIdentity(e, f))
+      .filter(([, e]) => entryOwnsRun(e, f))
       .map(([name]) => name);
     // The ref the run id NAMES is the authority, and it is the authority on
     // BOTH paths below. Two roster entries may share a model and an effort
@@ -1656,7 +1661,7 @@ export function planResumes(opts: {
           model: f.model,
           ...(f.effort !== null ? { effort: f.effort } : {}),
           // The entry's identity, which an arm's own window is not part of.
-          ...(f.compactWindow != null && windowKey !== "" ? { compactWindow: f.compactWindow } : {}),
+          ...(f.compactWindow != null && !armWindow ? { compactWindow: f.compactWindow } : {}),
           ...(f.driver != null ? { driver: f.driver } : {}),
         },
       },
@@ -1928,7 +1933,7 @@ function newestCharacterRuns(runs: readonly RunFact[], roster: Record<string, Fl
           // Put away without a verdict: not a run anything resumes or
           // continues, so not one that may displace the head that is.
           !(f.archived === true && f.terminationReason === null) &&
-          sameRosterIdentity(f, e),
+          entryOwnsRun(e, f),
       ),
     );
     if (head !== undefined) out.set(name, { runId: head.runId, account: head.account!, character: head.character! });
@@ -2226,7 +2231,7 @@ export function planNameSweeps(opts: {
  * that number is derived, so the log line and the Models page agree.
  */
 export function failedAttemptsFor(states: readonly ModelState[], e: Pick<EndedRun, "model" | "effort" | "compactWindow" | "driver" | "episode">): number | undefined {
-  const st = states.find((s) => sameRosterIdentity(s, e))?.perEpisode[e.episode];
+  const st = states.find((s) => entryOwnsRun(s, e))?.perEpisode[e.episode];
   return st?.failed;
 }
 
@@ -2242,7 +2247,8 @@ export function failedAttemptsFor(states: readonly ModelState[], e: Pick<EndedRu
 export function retryNumbers(ended: readonly EndedRun[], base: (e: EndedRun) => number): number[] {
   const seen = new Map<string, number>();
   return ended.map((e) => {
-    const key = `${e.model}@${e.effort ?? ""}@${e.compactWindow ?? ""}@${e.episode}`;
+    // One count per entry: its `auto` runs and its driver-default runs are one model's failures.
+    const key = `${e.model}@${e.effort ?? ""}@${rosterWindowKey(e)}@${e.episode}`;
     const n = base(e) + (seen.get(key) ?? 0);
     if (e.counts) seen.set(key, (seen.get(key) ?? 0) + 1);
     return n + 1;

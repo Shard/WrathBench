@@ -14,7 +14,8 @@ import { DEFAULT_WIND_DOWN_GRACE_MS as CODEX_WIND_DOWN_GRACE_MS } from "../src/a
 import { DEFAULT_WIND_DOWN_GRACE_MS as PI_WIND_DOWN_GRACE_MS } from "../src/adapter-pi";
 import { END_REQUEST_FILE, END_REQUEST_POLL_MS, PARTY_END_GRACE_MS, readEndRequest, watchEndRequest, writeEndRequest } from "../src/end-request";
 import { DEFAULT_STATE_TICK_MS } from "../src/loop";
-import { STUB_STAMP, isUnscoredDriver, loadRunConfig, parseCompactWindow, unscoredStamp } from "../src/config";
+import { DRIVERS, STUB_STAMP, isUnscoredDriver, launchCompactWindow, loadRunConfig, parseCompactWindow, parseEntryCompactWindow, stampedCompactWindow, unscoredStamp } from "../src/config";
+import { defaultCompactWindowOf } from "../src/drivers";
 import { CLAUDE_CODE_SYSTEM_PROMPT, SYSTEM_PROMPT, contextSentence } from "../src/prompt";
 import { EpisodicLog } from "../src/episodic";
 import { Scratchpad } from "@wrathbench/mcp";
@@ -1139,6 +1140,31 @@ describe("driver selection and stamping", () => {
       // `auto` is nothing to refuse.
       expect(loadRunConfig({ driver, compactWindow: "auto" }).compactWindow).toBeUndefined();
     }
+  });
+
+  test("claude-code alone defaults a window, to 300k, at a fresh launch and never in a stored config", () => {
+    // Operator, 2026-11-10. One table says which driver defaults what.
+    expect(DRIVERS.filter((d) => defaultCompactWindowOf({ driver: d }) !== undefined)).toEqual(["claude-code"]);
+    expect(defaultCompactWindowOf({ driver: "claude-code" })).toBe("300k");
+    expect(defaultCompactWindowOf({ harness: "claude-code" })).toBe("300k");
+    expect(defaultCompactWindowOf({})).toBeUndefined();
+    expect(parseCompactWindow(defaultCompactWindowOf({ driver: "claude-code" }))).toBe("300k");
+    // The launch: what it states wins, a probe takes no default, the rest take their driver's.
+    expect(launchCompactWindow({ stated: undefined, driver: "claude-code", probe: false })).toBe("300k");
+    expect(launchCompactWindow({ stated: undefined, driver: "claude-code", probe: true })).toBeUndefined();
+    expect(launchCompactWindow({ stated: "auto", driver: "claude-code", probe: false })).toBe("auto");
+    expect(launchCompactWindow({ stated: "100k", driver: "claude-code", probe: true })).toBe("100k");
+    for (const driver of ["codex", "pi", "openai", "stub"]) expect(launchCompactWindow({ stated: undefined, driver, probe: false })).toBeUndefined();
+    // The stored record: no window is auto, and loading it fills nothing in.
+    expect(loadRunConfig({ driver: "claude-code", model: "claude-opus-5-5", episode: "freeplay" }).compactWindow).toBeUndefined();
+    // A roster entry's three states: absent is the caller's, `auto` survives only where it is a choice.
+    expect(parseEntryCompactWindow("AUTO", "claude-code")).toBe("auto");
+    expect(parseEntryCompactWindow("auto", "codex")).toBeUndefined();
+    expect(parseEntryCompactWindow("300K", "claude-code")).toBe("300k");
+    expect(() => parseEntryCompactWindow("64k", "claude-code")).toThrow(/100k–1M tokens/);
+    expect(stampedCompactWindow("auto")).toBeUndefined();
+    expect(stampedCompactWindow("300k")).toBe("300k");
+    expect(stampedCompactWindow(undefined)).toBeUndefined();
   });
 
   test("meta, sqlite and the timeline carry the stub stamp; a claude-code run carries none", () => {

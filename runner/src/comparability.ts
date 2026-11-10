@@ -194,11 +194,14 @@ export const comparabilitySchema = z.object({
    * carries and what each turn costs, so a 100k run and an `auto` run are two
    * conditions and must not share a chart.
    *
-   * ABSENT, never null, for `auto` — the CLI's own default, which is every
-   * run that says nothing and every run stamped before the field existed. Like
-   * `routing` and `wiki`, that keeps those tuples byte-for-byte what they were,
-   * so nothing resumes into a `comparability_restamped` for a fact that did not
-   * change. Readers expose it as `string | null`, null being `auto`.
+   * ABSENT, never null, for `auto` — the CLI's own window, which is every
+   * run whose config carries none and every run stamped before the field
+   * existed. Like `routing` and `wiki`, that keeps those tuples byte-for-byte
+   * what they were, so nothing resumes into a `comparability_restamped` for a
+   * fact that did not change. A driver's default window (claude-code's 300k,
+   * operator 2026-11-10) is in the config by the time this is stamped
+   * (`launchCompactWindow`), so a defaulted run carries it here and is never
+   * an `auto` run's row. Readers expose it as `string | null`, null being `auto`.
    */
   compactWindow: z.string().nullable().optional(),
   /**

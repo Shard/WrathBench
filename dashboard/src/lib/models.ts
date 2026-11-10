@@ -11,6 +11,7 @@
 
 import type { ModelEpisodeView, ModelRowView, ModelStatusView, TierView } from "@viewer/api-types";
 import type { CharacterRow } from "./ladder";
+import { AUTO_WINDOW } from "./runs";
 
 /**
  * The table, left to right, as the header prints it — these are labels, not
@@ -200,15 +201,36 @@ export function resolvedSummary(
  * characters are durable"), so the match is on those two fields and the row is the
  * ladder's own `CharacterRow` — the same status and level the freeplay ladder
  * prints, so the two pages cannot disagree about whether a character is live.
- * Null when the model has never had one.
+ * The character's window is its newest session's, which is any the row owns
+ * (`windowsOf`). Null when the model has never had one.
  */
 export function freeplayOf(
-  row: Pick<ModelRowView, "model" | "effort" | "compactWindow">,
+  row: Pick<ModelRowView, "model" | "effort" | "compactWindow" | "windows">,
   characters: readonly CharacterRow[],
 ): CharacterRow | null {
+  const windows = windowsOf(row);
   return (
     characters.find(
-      (s) => s.model === row.model && s.effort === row.effort && (s.compactWindow ?? null) === (row.compactWindow ?? null),
+      (s) => s.model === row.model && s.effort === row.effort && windows.includes(s.compactWindow ?? AUTO_WINDOW),
     ) ?? null
   );
+}
+
+/**
+ * The windows of the runs a row owns, `auto` naming the CLI's own: the
+ * server's list (`ModelRowView.windows`), or the row's declared window alone
+ * on a snapshot from before it.
+ */
+export function windowsOf(row: Pick<ModelRowView, "compactWindow" | "windows">): string[] {
+  return row.windows ?? [row.compactWindow ?? AUTO_WINDOW];
+}
+
+/**
+ * The `compactWindow` a link to a row's runs carries (`runsHref`): null for a
+ * row whose runs are the CLI's `auto` alone, which is how the filter reads an
+ * absent window, and the list otherwise.
+ */
+export function windowParam(row: Pick<ModelRowView, "compactWindow" | "windows">): string | null {
+  const windows = windowsOf(row);
+  return windows.length === 1 && windows[0] === AUTO_WINDOW ? null : windows.join(",");
 }

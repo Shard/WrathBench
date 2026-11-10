@@ -312,10 +312,38 @@ describe("/api/models", () => {
     writeRun(runsDir, { id: "hk-1", model: "claude-haiku-5-5", effort: "max", responses: 3, reason: "episode-limit", startedAt: NOW - 5 * HOUR, endedAt: NOW - 4 * HOUR });
     writeRun(runsDir, { id: "hk100-1", model: "claude-haiku-5-5", effort: "max", compactWindow: "100k", responses: 3, reason: "episode-limit", startedAt: NOW - 3 * HOUR, endedAt: NOW - 2 * HOUR });
     const [auto, small] = (await models(runsDir, fleetPath)).models;
-    expect("compactWindow" in auto!).toBe(false);
+    // On claude-code `auto` is the entry's stated opt-out from the 300k default, kept as one spelling.
+    expect(auto!.compactWindow).toBe("auto");
+    expect(auto!.windows).toEqual(["auto"]);
     expect(auto!.runs.map((r) => r.runId)).toEqual(["hk-1"]);
     expect(small!.compactWindow).toBe("100k");
     expect(small!.runs.map((r) => r.runId)).toEqual(["hk100-1"]);
+  });
+
+  test("an entry with no window on claude-code lists its auto runs and its 300k runs, and a run links back to it", async () => {
+    const { runsDir, fleetPath } = fixture({
+      roster: {
+        son: { model: "claude-sonnet-5-5", driver: "claude-code", tier: "t1" },
+        "son-auto": { model: "claude-sonnet-5-5", driver: "claude-code", effort: "low", compactWindow: "auto", tier: "t1" },
+        luna: { model: "gpt-6-luna", driver: "codex", compactWindow: "auto", tier: "t1" },
+      },
+    });
+    writeRun(runsDir, { id: "son-1", model: "claude-sonnet-5-5", responses: 3, reason: "episode-limit", startedAt: NOW - 5 * HOUR, endedAt: NOW - 4 * HOUR });
+    writeRun(runsDir, { id: "son-2", model: "claude-sonnet-5-5", compactWindow: "300k", responses: 3, reason: "episode-limit", startedAt: NOW - 3 * HOUR, endedAt: NOW - 2 * HOUR });
+    const [son, , luna] = (await models(runsDir, fleetPath)).models;
+    expect("compactWindow" in son!).toBe(false);
+    expect(son!.windows).toEqual(["auto", "300k"]);
+    expect(son!.runs.map((r) => r.runId).sort()).toEqual(["son-1", "son-2"]);
+    expect(son!.perEpisode.e90).toMatchObject({ counted: 2, runIds: ["son-2", "son-1"] });
+    // codex defaults none: its `auto` is still the absent field.
+    expect("compactWindow" in luna!).toBe(false);
+    expect(luna!.windows).toEqual(["auto"]);
+    const roster = readFleetRoster(fleetPath, null);
+    expect(rosterNameOf(roster, "claude-sonnet-5-5", null, "300k")).toBe("son");
+    expect(rosterNameOf(roster, "claude-sonnet-5-5", null, null)).toBe("son");
+    expect(rosterNameOf(roster, "claude-sonnet-5-5", "low", null)).toBe("son-auto");
+    // An opted-out entry has no 300k run, so one falls back to the model's first row, as any unmatched window does.
+    expect(rosterNameOf(roster, "claude-sonnet-5-5", "low", "300k")).toBe("son");
   });
 
   test("promotion and eligibility come from the projection, not the route", async () => {

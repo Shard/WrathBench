@@ -438,8 +438,8 @@ function RosterRow(props: {
         <td class="dim">
           {String(props.entry["model"] ?? "—")}
           <Show when={typeof props.entry["effort"] === "string"}> · {String(props.entry["effort"])}</Show>
-          {/* `auto` is the CLI's own default, shown as nothing, like everywhere else. */}
-          <Show when={typeof props.entry["compactWindow"] === "string" && String(props.entry["compactWindow"]).toLowerCase() !== "auto"}>
+          {/* As stated, `auto` included: on a driver that defaults a window it is the entry's opt-out. */}
+          <Show when={typeof props.entry["compactWindow"] === "string"}>
             {" "}· {String(props.entry["compactWindow"])}
           </Show>
           <Show when={typeof props.entry["driver"] === "string"}>

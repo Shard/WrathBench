@@ -306,11 +306,22 @@ describe("run dimensions: objective, watchdogs, maxToolCalls", () => {
     expect(argv[argv.indexOf("--compact-window") + 1]).toBe("100k");
     // Never restated on a resume: the stored config is the run's identity.
     expect(episodeArgv(s!, true)).not.toContain("--compact-window");
-    // `auto` is the CLI's own default, so nothing is emitted and the id is unchanged.
-    const [auto] = resolve([{ model: "claude-haiku-5-5", driver: "claude-code", effort: "max", compactWindow: "auto" }], "20261009");
-    expect(auto!.compactWindow).toBeUndefined();
+    // On claude-code, which defaults a window (operator, 2026-11-10), `auto`
+    // is the entry's opt-out: stated to the runner, and the id is unchanged.
+    const [auto] = resolve([{ model: "claude-haiku-5-5", driver: "claude-code", effort: "max", compactWindow: "Auto" }], "20261009");
+    expect(auto!.compactWindow).toBe("auto");
     expect(auto!.runId).toBe("roster-claude-haiku-5-5-max-20261009");
-    expect(episodeArgv(auto!, false)).not.toContain("--compact-window");
+    const autoArgv = episodeArgv(auto!, false);
+    expect(autoArgv[autoArgv.indexOf("--compact-window") + 1]).toBe("auto");
+    // An entry that states none states none to the runner, which fills the default in.
+    const [plain] = resolve([{ model: "claude-haiku-5-5", driver: "claude-code", effort: "max" }], "20261009");
+    expect(plain!.compactWindow).toBeUndefined();
+    expect(plain!.runId).toBe("roster-claude-haiku-5-5-max-20261009");
+    expect(episodeArgv(plain!, false)).not.toContain("--compact-window");
+    // On codex `auto` is the CLI's own default, so nothing is emitted.
+    const [cxAuto] = resolve([{ model: "gpt-6-astra", driver: "codex", effort: "high", compactWindow: "auto" }], "20261009");
+    expect(cxAuto!.compactWindow).toBeUndefined();
+    expect(episodeArgv(cxAuto!, false)).not.toContain("--compact-window");
     expect(() => resolve([{ model: "m", compactWindow: "100k" }], "20261009")).toThrow(/the openai driver has none/);
     // A codex entry's window is its identity exactly as claude-code's is; one without is the id it always was.
     const [cx] = resolve([{ model: "gpt-6-astra", driver: "codex", effort: "high", compactWindow: "200K" }], "20261009");

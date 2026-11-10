@@ -28,6 +28,10 @@ import {
   parseRunArgs,
 } from "../runner/src/run-flags";
 import { configFromArgs } from "../runner/src/run";
+import { compactEnv } from "../runner/src/adapter-claude";
+import { campaignDefinitionSchema } from "../runner/src/campaign-def";
+import { comparabilityOf } from "../runner/src/comparability";
+import { loadRunConfig } from "../runner/src/config";
 import { checkedIn, definition, joined, partyDefinition } from "../runner/test/fixtures/campaigns";
 import type { FleetJob, FleetRosterEntry } from "./run-fleet-config";
 import { jobSpawn } from "./run-fleet-plan";
@@ -230,6 +234,101 @@ describe("the roster's argv, every lane, through run.ts's parser", () => {
     for (const f of ["effort", "model", "driver", "ref", "campaign-file", "run-id", "runs-dir", "token", "module-url", ...PROBE_SHAPE_FLAGS]) {
       expect(ARM_RESERVED_FLAGS).toContain(f);
     }
+  });
+});
+
+describe("claude-code's default compaction window, from the roster entry to the run's record (operator, 2026-11-10)", () => {
+  const WINDOW_ROSTER: Record<string, FleetRosterEntry> = {
+    ...ROSTER,
+    "sonnet-auto": { model: "sonnet", driver: "claude-code", effort: "low", compactWindow: "auto", tier: "t2", idle: "unlimited" },
+  };
+  const launch = (j: FleetJob, cs: Parameters<typeof jobSpawn>[5] = []): Resolved =>
+    resolve(jobSpawn(j, WINDOW_ROSTER, "RUNNER1", STAMP, () => true, cs).entries, STAMP)[0]!;
+  const tupleOf = (c: ReturnType<typeof configFromArgs>): Record<string, unknown> => ({ ...comparabilityOf(c, "harness-0.5-1") });
+  /** What a run launched before the default stored: no window anywhere. */
+  const stored = loadRunConfig({ runId: "fleet-sonnet-e90-sonnet-low-20261001", driver: "claude-code", model: "sonnet", effort: "low", account: "RUNNER1", episode: "e90" });
+
+  test("an entry with no window launches a scored run at 300k, recorded as the window it is; its argv and run id are what they were", () => {
+    const spec = launch(job({ ref: "sonnet", episode: "e90", attempt: 1 }));
+    const flags = episodeFlags(spec, false);
+    // The supervisor states nothing: the runner fills the default in, so a hand launch gets it too.
+    expect(flags).not.toContain("--compact-window");
+    expect(launch(job({ ref: "sonnet", episode: "e90", attempt: 2 })).runId).toBe(`fleet-sonnet-e90-sonnet-low-${STAMP}-a2`);
+    const config = configFromArgs(flags, {});
+    expect(config.compactWindow).toBe("300k");
+    expect(tupleOf(config)["compactWindow"]).toBe("300k");
+    expect(compactEnv(config.compactWindow)).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: "300000" });
+    // So it is never the row of a run made on auto: that run's tuple has no window.
+    expect("compactWindow" in tupleOf({ ...stored, runId: "x", token: "t" })).toBe(false);
+    expect(configFromArgs(["--driver", "claude-code", "--model", "sonnet"], {}).compactWindow).toBe("300k");
+  });
+
+  test("a record with no window reads as auto on a resume, whenever it was written", () => {
+    // run.ts resumes through `loadRunConfig(meta.config)`, which fills nothing in.
+    const resumed = loadRunConfig(JSON.parse(JSON.stringify(stored)));
+    expect(resumed.compactWindow).toBeUndefined();
+    expect(compactEnv(resumed.compactWindow)).toEqual({});
+    expect(JSON.stringify(comparabilityOf(resumed, "harness-0.5-1"))).toBe(JSON.stringify(comparabilityOf(stored, "harness-0.5-1")));
+    // And a defaulted run resumes at the 300k it recorded, restated by nothing.
+    const fresh = configFromArgs(episodeFlags(launch(job({ ref: "sonnet", episode: "e90", attempt: 1 })), false), {});
+    expect(loadRunConfig(JSON.parse(JSON.stringify(fresh))).compactWindow).toBe("300k");
+    expect(episodeFlags(launch(job({ ref: "sonnet", episode: "e90", attempt: 1 })), true)).not.toContain("--compact-window");
+  });
+
+  test("an entry opts out with `auto`: stated on the argv, recorded as the absent field, the tuple a pre-default run's", () => {
+    const spec = launch(job({ ref: "sonnet-auto", episode: "e90", attempt: 1 }));
+    expect(spec.compactWindow).toBe("auto");
+    const flags = episodeFlags(spec, false);
+    expect(flags[flags.indexOf("--compact-window") + 1]).toBe("auto");
+    // No `-auto` in the id: an auto run's id is what it always was.
+    expect(spec.runId).toBe(`roster-sonnet-low-${STAMP}`);
+    expect(launch(job({ ref: "sonnet-auto", episode: "e90", attempt: 2 })).runId).toBe(`fleet-sonnet-auto-e90-sonnet-low-${STAMP}-a2`);
+    const config = configFromArgs(flags, {});
+    expect(config.compactWindow).toBeUndefined();
+    expect(Object.keys(tupleOf(config))).toEqual(Object.keys(comparabilityOf(stored, "harness-0.5-1")));
+    expect(configFromArgs(["--driver", "claude-code", "--model", "sonnet", "--compact-window", "AUTO"], {}).compactWindow).toBeUndefined();
+  });
+
+  test("a stated window is still its own, and codex still defaults to its CLI's auto", () => {
+    const small = launch(job({ ref: "sonnet-100k", episode: "e360", attempt: 1 }));
+    expect(configFromArgs(episodeFlags(small, false), {}).compactWindow).toBe("100k");
+    const codex = configFromArgs(episodeFlags(launch(job({ ref: "astra", episode: "e90", attempt: 1 })), false), {});
+    expect(codex.compactWindow).toBeUndefined();
+    expect("compactWindow" in tupleOf(codex)).toBe(false);
+    expect(configFromArgs(["--driver", "stub"], {}).compactWindow).toBeUndefined();
+  });
+
+  test("a freeplay session takes the default on a fresh launch and on a continuation", () => {
+    const spec = launch(job({ ref: "sonnet-auto", episode: "freeplay", attempt: 1 }));
+    expect(configFromArgs(episodeFlags(spec, false), {}).compactWindow).toBeUndefined();
+    const plain = resolve(
+      jobSpawn(job({ ref: "sonnet", episode: "freeplay", attempt: 2, continueFrom: "fleet-sonnet-freeplay-sonnet-low-20261001" }), { ...ROSTER, sonnet: { ...ROSTER["sonnet"]!, idle: "unlimited" } }, "RUNNER1", STAMP, () => true, []).entries,
+      STAMP,
+    )[0]!;
+    const config = configFromArgs(episodeFlags(plain, false), {});
+    expect(config).toMatchObject({ episode: "freeplay", compactWindow: "300k", continuedFrom: "fleet-sonnet-freeplay-sonnet-low-20261001" });
+  });
+
+  test("a probe's window is its arm's or its entry's and nothing else: a published arm that passes none still runs the CLI's auto", () => {
+    // The fixture's control arm, and the checked-in definition whose control is the absent flag.
+    const auto = launch(job({ ref: "sonnet", episode: "probing", attempt: 1, probe: { campaign: "window-probe", version: 1, cell: "a", arm: "auto" } }), campaigns);
+    expect(episodeFlags(auto, false)).not.toContain("--compact-window");
+    expect(probeConfig(auto).compactWindow).toBeUndefined();
+    const published = checkedIn("compact-window-claude@3");
+    expect(published.arms.find((a) => a.id === "auto")!.args).toBeUndefined();
+    const { campaigns: live } = joined([published], { "compact-window-claude": { version: 3, assignments: [{ model: "sonnet" }] } });
+    const windowOfArm = (arm: string): string | undefined =>
+      probeConfig(launch(job({ ref: "sonnet", episode: "probing", attempt: 1, probe: { campaign: "compact-window-claude", version: 3, cell: "dwarf-paladin", arm } }), live)).compactWindow;
+    expect(published.arms.map((a) => [a.id, windowOfArm(a.id)])).toEqual([
+      ["auto", undefined],
+      ["100k", "100k"],
+      ["200k", "200k"],
+      ["300k", "300k"],
+    ]);
+    // An opted-out entry's probe states auto itself, and an arm may.
+    const optOut = launch(job({ ref: "sonnet-auto", episode: "probing", attempt: 1, probe: { campaign: "window-probe", version: 1, cell: "a", arm: "auto" } }), joined([windows], { "window-probe": { version: 1, assignments: [{ model: "sonnet-auto" }] } }).campaigns);
+    expect(probeConfig(optOut).compactWindow).toBeUndefined();
+    expect(() => campaignDefinitionSchema.parse({ ...windows, arms: [{ id: "auto", args: ["--compact-window", "auto"] }] })).not.toThrow();
   });
 });
 

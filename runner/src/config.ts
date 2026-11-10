@@ -28,6 +28,7 @@ import {
   DRIVER_LIST,
   DRIVER_TABLE,
   DRIVERS,
+  defaultCompactWindowOf,
   entryOf,
   harnessOf,
   isDriver,
@@ -301,9 +302,9 @@ export function compactWindowDriverRefusal(driver: string): string {
  * spelling for the Codex CLI, whose integer `model_auto_compact_token_limit`
  * takes any size. One canonical spelling per value — `<n>k`, and
  * `1M` for a million — so a roster's `100K` and `100k` are one condition, and
- * `auto` (any case) is `undefined`: the CLI's own default is what a run that
- * says nothing gets, so naming it must not make a second tuple for it. Throws
- * with the reason on anything else.
+ * `auto` (any case) is `undefined`: the CLI's own window is what a recorded
+ * run with no window ran under, so naming it must not make a second tuple for
+ * it. Throws with the reason on anything else.
  */
 export function parseCompactWindow(raw: unknown): string | undefined {
   const why = `compactWindow must be "auto" or 100k–1M tokens (e.g. "100k", "500k", "1M"), got ${JSON.stringify(raw)}`;
@@ -315,6 +316,55 @@ export function parseCompactWindow(raw: unknown): string | undefined {
   const k = Number(m[1]) * (m[2]!.toLowerCase() === "m" ? 1000 : 1);
   if (k < 100 || k > 1000) throw new Error(why);
   return k === 1000 ? "1M" : `${k}k`;
+}
+
+/**
+ * How a roster entry spells the CLI's own window where its driver defaults
+ * another (`DriverEntry.defaultCompactWindow`): the entry's opt-out.
+ */
+export const AUTO_COMPACT_WINDOW = "auto";
+
+/**
+ * A roster entry's declared window, which has three states where a run's has
+ * two. A stated window is canonical (`parseCompactWindow`). A stated `auto`
+ * stays `"auto"` on a driver that defaults a window (claude-code: operator,
+ * 2026-11-10), because there it is a choice the absent field no longer makes;
+ * on any other driver it is the absent field, as it always was, so it cannot
+ * make a second identity for one condition. Absent is not this function's:
+ * the caller leaves the field off, and the entry then takes its driver's
+ * default at launch (`launchCompactWindow`).
+ */
+export function parseEntryCompactWindow(raw: unknown, driver: string): string | undefined {
+  const window = parseCompactWindow(raw);
+  return window === undefined && defaultCompactWindowOf({ driver }) !== undefined ? AUTO_COMPACT_WINDOW : window;
+}
+
+/**
+ * The window a run of an entry that DECLARES one is stamped with, for the
+ * places that spell a run before it exists (its id, a launch-failed stub):
+ * the window itself, and nothing for `"auto"`, which a run records as the
+ * absent field. So an `auto` entry's run ids are what they always were.
+ */
+export function stampedCompactWindow(declared: string | undefined): string | undefined {
+  return declared === AUTO_COMPACT_WINDOW ? undefined : declared;
+}
+
+/**
+ * The window a FRESH launch is configured with, as `--compact-window` would
+ * spell it. What the launch states wins, `auto` included (the schema reads it
+ * as the absent field). A launch that states none takes its driver's default
+ * — unless it is a campaign's square: a probe's window is what its arm or its
+ * roster entry states and nothing else, so a published definition whose arm
+ * passes no window keeps meaning the CLI's `auto` (compact-window-claude's
+ * control arm, and every claude-code square published before the default).
+ *
+ * Never asked on a resume. A stored config with no window is a run that ran
+ * on `auto`, whenever it was written, and stays one: the default is resolved
+ * once, here, and recorded as the window it is.
+ */
+export function launchCompactWindow(o: { stated: string | undefined; driver: string; probe: boolean }): string | undefined {
+  if (o.stated !== undefined) return o.stated;
+  return o.probe ? undefined : defaultCompactWindowOf({ driver: o.driver });
 }
 
 /** zod at the boundary for `parseCompactWindow`: canonical string, or undefined for `auto`. */
@@ -588,7 +638,11 @@ export const runConfigSchema = z.object({
    * comparable rows (operator decisions 2026-10-09, and 2026-10-11 for codex).
    * `claude-code` and `codex` only — `loadRunConfig` refuses it on any other
    * driver. Absent is the CLI's own `auto`: nothing is sent, and the tuple
-   * carries no field. The claude driver passes it as
+   * carries no field. That reading is the stored record's and never changes;
+   * a driver's default window (claude-code's 300k, operator 2026-11-10) is
+   * filled in when a fresh launch builds this config (`launchCompactWindow`),
+   * so a defaulted run carries its window here like a stated one. The claude
+   * driver passes it as
    * `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in the CLI's environment (`compactEnv`,
    * adapter-claude.ts), the codex driver as `-c
    * model_auto_compact_token_limit=<tokens>` (`codexArgs`). A window the CLI

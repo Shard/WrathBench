@@ -142,7 +142,7 @@ import { campaignFileOf, runCampaignFile, writeCampaignFile, type CampaignFile }
 import { checkedIn, defsBlock, definition, joined, seedPublished } from "../runner/test/fixtures/campaigns";
 import { backoffMs, drainMarkerPath, drainRequested, episodeArgv, resolve, writeLaunchFailure } from "./run-roster";
 import { holdsOnlyLaunchFiles } from "../runner/src/launch-files";
-import { isCounted, readRunFacts, sameRosterIdentity } from "../runner/src/models";
+import { entryOwnsRun, isCounted, readRunFacts } from "../runner/src/models";
 import { listRuns } from "../runner/viewer/runs";
 import { STALL_PAUSE } from "../runner/src/lapse";
 import { tempDirs } from "./temp-dirs";
@@ -444,7 +444,7 @@ describe("parseFleet", () => {
 
   // The claude-code compaction window (operator decision 2026-10-09): a run
   // dimension like effort, on any claude-code entry (and, below, codex).
-  test("a claude-code entry may name its compaction window, canonicalised, and `auto` is the absent field", () => {
+  test("a claude-code entry may name its compaction window, canonicalised, and `auto` stays its stated opt-out", () => {
     const config = parseFleet(
       fleetJson([{ ref: "hk", episode: "e360" }], {
         roster: {
@@ -456,7 +456,13 @@ describe("parseFleet", () => {
     );
     expect(config.refusals).toEqual([]);
     expect(config.roster["hk"]!.compactWindow).toBe("100k");
-    expect("compactWindow" in config.roster["hkAuto"]!).toBe(false);
+    // claude-code defaults a window (operator, 2026-11-10), so `auto` is a
+    // choice the absent field no longer makes; it names no window in a run id.
+    expect(config.roster["hkAuto"]!.compactWindow).toBe("auto");
+    expect(jobSpawn({ refs: ["hkAuto"], ref: "hkAuto", episode: "e90", repeat: 1, name: "hkAuto-e90", enabled: true, source: "policy", attempt: 2 }, config.roster, "RUNNER", "20261009").entries[0]).toMatchObject({
+      compactWindow: "auto",
+      runId: "fleet-hkAuto-e90-claude-haiku-5-5-max-20261009-a2",
+    });
     expect(config.roster["hkM"]!.compactWindow).toBe("1M");
     expect(rosterModels(config.roster).find((m) => m.name === "hk")).toMatchObject({ compactWindow: "100k", effort: "max" });
     // The spawn carries the window to the roster (whose argv test is in
@@ -492,10 +498,13 @@ describe("parseFleet", () => {
     expect("compactWindow" in plain).toBe(false);
     // Each entry owns only its own runs: the identity separates them, and a run
     // stamped before the field existed is the windowless entry's.
-    expect(sameRosterIdentity(config.roster["astra200"]!, { model: "gpt-6-astra", effort: "high", compactWindow: "200k" })).toBe(true);
-    expect(sameRosterIdentity(config.roster["astra"]!, { model: "gpt-6-astra", effort: "high", compactWindow: "200k" })).toBe(false);
-    expect(sameRosterIdentity(config.roster["astra"]!, { model: "gpt-6-astra", effort: "high" })).toBe(true);
-    expect(sameRosterIdentity(config.roster["astra200"]!, { model: "gpt-6-astra", effort: "high", compactWindow: null })).toBe(false);
+    expect(entryOwnsRun(config.roster["astra200"]!, { model: "gpt-6-astra", effort: "high", compactWindow: "200k" })).toBe(true);
+    expect(entryOwnsRun(config.roster["astra"]!, { model: "gpt-6-astra", effort: "high", compactWindow: "200k" })).toBe(false);
+    expect(entryOwnsRun(config.roster["astra"]!, { model: "gpt-6-astra", effort: "high" })).toBe(true);
+    expect(entryOwnsRun(config.roster["astra200"]!, { model: "gpt-6-astra", effort: "high", compactWindow: null })).toBe(false);
+    // codex has no default window, so its `auto` is still the absent field and one identity.
+    const named = parseFleet(fleetJson([], { roster: { astra: { tier: "t1", model: "gpt-6-astra", driver: "codex", compactWindow: "AUTO" } } }));
+    expect("compactWindow" in named.roster["astra"]!).toBe(false);
   });
 
   test("runs map back to the entry with their own window: affinity and resumes", () => {
@@ -4992,5 +5001,100 @@ describe("preflight with no deploy smokes (the launch gate alone)", () => {
     expect(head).not.toContain("0 deploy-only smoke(s)");
     const [withOne] = formatGate(undefined, parsePreflight({ ...base, deploySmokes: [{ script: "x.ts", account: "SMOKE2" }], deployTimeoutMs: 60000 }));
     expect(withOne).toContain("1 deploy-only smoke(s), budget 60s");
+  });
+});
+
+describe("claude-code's default window leaves an entry's runs its own (operator, 2026-11-10)", () => {
+  // The live shape: an entry with no window, a freeplay character with weeks
+  // on the CLI's `auto`, and from the default on, fresh sessions at 300k.
+  const NOW = 1_800_000_000_000;
+  const H = 3_600_000;
+  const entry = { model: "claude-opus-5-5", driver: "claude-code", tier: "t1", idle: "unlimited" } satisfies FleetRosterEntry;
+  const configOf = (roster: Record<string, FleetRosterEntry>): Pick<FleetConfig, "jobs" | "roster" | "policy" | "accounts"> => ({
+    jobs: [],
+    roster,
+    policy: DEFAULT_POLICY,
+    accounts: { pinned: {}, pool: ["RUNNER2", "RUNNER3"], paid: [], local: [] },
+  });
+  const held = (): string | undefined => undefined;
+  const freeplay = (runId: string, over: Partial<RunFact> = {}): RunFact => ({
+    runId,
+    model: "claude-opus-5-5",
+    effort: null,
+    driver: "claude-code",
+    episode: "freeplay",
+    episodeOverride: false,
+    harnessVersion: "harness-0.5-1-gabc",
+    harnessSeries: "0.5",
+    extra: true,
+    startedAt: NOW - 500 * H,
+    endedAt: NOW - H,
+    terminationReason: null,
+    modelResponses: 4000,
+    bestLevel: 78,
+    live: false,
+    pause: { reason: "operator-pause", at: NOW - H, count: 1, episodeElapsedMs: 500 * H },
+    account: "RUNNER2",
+    character: "Brannagh",
+    episodeMs: null,
+    campaign: null,
+    cell: null,
+    subscription: "CLAUDE_CODE_OAUTH_TOKEN_2",
+    ...over,
+  });
+  const onAuto = freeplay("fleet-opus55-freeplay-claude-opus-5-5-20261020");
+  const at300k = freeplay("fleet-opus55-freeplay-claude-opus-5-5-20261111-a2", { compactWindow: "300k", startedAt: NOW - 10 * H });
+
+  test("a paused run made on auto is still its entry's: resumed, never ended as another model's", () => {
+    const plan = planResumes({ runs: [onAuto], config: configOf({ opus55: entry }), running: new Map(), held, now: NOW });
+    expect(plan.end).toEqual([]);
+    expect(plan.resume.map((r) => r.runId)).toEqual([onAuto.runId]);
+    // The resume names the run and restates no window: the stored config is the run's.
+    expect(plan.resume[0]!.job.resume).toMatchObject({ runId: onAuto.runId, model: "claude-opus-5-5" });
+    expect("compactWindow" in plan.resume[0]!.job.resume!).toBe(false);
+    // So is one the entry launched at the default since.
+    const later = planResumes({ runs: [at300k], config: configOf({ opus55: entry }), running: new Map(), held, now: NOW });
+    expect(later.end).toEqual([]);
+    expect(later.resume.map((r) => r.runId)).toEqual([at300k.runId]);
+  });
+
+  test("an entry that states a window owns that window alone, so a re-pointed entry's other runs end as before", () => {
+    const stated = planResumes({ runs: [onAuto], config: configOf({ opus55: { ...entry, compactWindow: "300k" } }), running: new Map(), held, now: NOW });
+    expect(stated.resume).toEqual([]);
+    expect(stated.end[0]).toMatchObject({ runId: onAuto.runId, reason: "manual", detail: "ended by the supervisor: model claude-opus-5-5 no longer under ref opus55" });
+    const optedOut = configOf({ opus55: { ...entry, compactWindow: "auto" } });
+    expect(planResumes({ runs: [onAuto], config: optedOut, running: new Map(), held, now: NOW }).resume.map((r) => r.runId)).toEqual([onAuto.runId]);
+    expect(planResumes({ runs: [at300k], config: optedOut, running: new Map(), held, now: NOW }).end).toHaveLength(1);
+  });
+
+  test("one character per model across the two windows: one paused run resumes, the other waits behind it", () => {
+    const plan = planResumes({ runs: [onAuto, at300k], config: configOf({ opus55: entry }), running: new Map(), held, now: NOW });
+    expect(plan.end).toEqual([]);
+    expect(plan.resume.map((r) => r.runId)).toEqual([at300k.runId]);
+    expect(plan.listed.map((l) => [l.runId, l.why])).toEqual([[onAuto.runId, "a later-started paused run of this model is ahead of it — resume by hand or archive"]]);
+  });
+
+  test("the character continues across the window: the head is the newest session, whichever window it ran", () => {
+    const roster = { opus55: entry };
+    const ended = { ...onAuto, pause: null, terminationReason: "manual" as const };
+    expect(charactersFrom([ended], roster).get("opus55")).toEqual({ runId: onAuto.runId, account: "RUNNER2", character: "Brannagh" });
+    const next = { ...at300k, pause: null, terminationReason: "idle" as const };
+    expect(charactersFrom([ended, next], roster).get("opus55")?.runId).toBe(at300k.runId);
+    expect(affinityFrom([ended, next], roster).get("opus55")).toEqual({ account: "RUNNER2", character: "Brannagh" });
+    // An opted-out entry's character is its auto sessions'.
+    expect(charactersFrom([ended, next], { opus55: { ...entry, compactWindow: "auto" } }).get("opus55")?.runId).toBe(onAuto.runId);
+  });
+
+  test("a resume finds the spawn entry of a run at either window, and a batch of failures counts as one model's", () => {
+    const spawned = spawn({ entries: [{ model: "z-ai/glm-5.2:free" }, { model: "claude-opus-5-5", driver: "claude-code" }] });
+    for (const window of [undefined, "300k"]) {
+      const resumed = withResume(spawned, { runId: "r", model: "claude-opus-5-5", driver: "claude-code", ...(window !== undefined ? { compactWindow: window } : {}) });
+      expect(resumed.entries).toHaveLength(2);
+      expect(resumed.entries[0]).toEqual({ model: "claude-opus-5-5", driver: "claude-code", runId: "r" });
+    }
+    const failed = { runId: "a", model: "claude-opus-5-5", effort: null, driver: "claude-code", ref: "opus55", episode: "e90" as const, reason: "attempt-failed" as const, detail: "d", counts: true, account: "RUNNER2" };
+    expect(retryNumbers([failed, { ...failed, runId: "b", compactWindow: "300k" }], () => 0)).toEqual([1, 2]);
+    // Another window is another entry's count, as it was.
+    expect(retryNumbers([failed, { ...failed, runId: "c", compactWindow: "100k" }], () => 0)).toEqual([1, 1]);
   });
 });

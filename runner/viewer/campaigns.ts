@@ -35,6 +35,7 @@ import {
 import { harnessOfRun } from "../src/comparability";
 import { endConditionsOf, isEndReason, levelTargetOf } from "../src/end-conditions";
 import { DEFAULT_DRIVER } from "../src/drivers";
+import { stampedCompactWindow } from "../src/config";
 import type { ArmSummary, CampaignView, ResultRun, Square } from "./api-types";
 
 /** The roster and the campaign blocks, as this builder needs them (`RosterRead`). */
@@ -186,7 +187,9 @@ export function campaignsView(
           arm: arm.id,
           model: e?.model ?? mine.find((r) => r.ref === ref)?.model ?? ref,
           effort: e?.effort ?? null,
-          compactWindow: armWindow !== undefined ? (armWindow.toLowerCase() === "auto" ? null : armWindow) : (e?.compactWindow ?? null),
+          // A probe's own: the arm's, else the entry's stated one, else the
+          // CLI's `auto` — a driver's default window is never a probe's.
+          compactWindow: armWindow !== undefined ? (armWindow.toLowerCase() === "auto" ? null : armWindow) : (stampedCompactWindow(e?.compactWindow) ?? null),
           harness: e === undefined ? null : harnessOfRun({ driver: e.driver ?? DEFAULT_DRIVER }),
         };
       }),
@@ -312,7 +315,7 @@ export function campaignsView(
                   ref: a.model,
                   model: e?.model ?? a.model,
                   effort: e?.effort ?? null,
-                  compactWindow: e?.compactWindow ?? null,
+                  compactWindow: stampedCompactWindow(e?.compactWindow) ?? null,
                   harness: e === undefined ? null : harnessOfRun({ driver: e.driver ?? DEFAULT_DRIVER }),
                   runsPerCell: a.runsPerCell,
                 };
