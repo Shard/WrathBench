@@ -11,7 +11,7 @@ import { utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRunConfig } from "../runner/src/config";
 import { type ItemSample, Trajectory } from "../runner/src/trajectory";
-import { type InspectStore, main, type ProgressSample, progressVerdict, STUCK_DEFAULTS } from "./inspect-run";
+import { HINT_LINE, type InspectStore, main, type ProgressSample, progressVerdict, STUCK_DEFAULTS } from "./inspect-run";
 import { memoryStore } from "./inspect-memory-store";
 import { formatAccounts, formatHolder, STUCK_MARK } from "./run-fleet-status";
 import { liveRunStuck } from "./run-fleet-state";
@@ -69,7 +69,7 @@ async function makeRun(runsDir: string, runId: string, shape: Shape): Promise<vo
           call,
           name: "run_snippet",
           isError: true,
-          text: `error (${400 + (call % 7)}ms)\nError: moveTo target_off_mesh at (${-9000 + (call % 3)}, 400)\n--- harness ---\nmoveTo target_off_mesh ×2: the target is not on the navigation mesh; pick a point on the ground nearby`,
+          text: `error (${400 + (call % 7)}ms)\nError: moveTo target_off_mesh at (${-9000 + (call % 3)}, 400)\n--- harness ---\nmoveTo target_off_mesh ×45: the target is not on the navigation mesh; pick a point on the ground nearby`,
         });
       } else traj.append({ t: "snippet_result", turn: call, call, name: "run_snippet", isError: false, text: "ok (25000ms)\n=> null" });
       traj.append({ t: "response", turn: call, message: { role: "assistant", content: shape === "stuck" && call % 90 === 0 ? `Still blocked at the gap. Could the operator please reset my character to the graveyard? session ${TOKEN}` : "Continuing." } });
@@ -112,7 +112,7 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE]] a
       expect(line(r.out, "activity")).toMatch(/^activity\s+24\d snippet/);
       // The same error at three places and seven timings is one signature.
       expect(line(r.out, "errors")).toMatch(/TRIPPED\s+24\d× "run_snippet: Error: moveTo target_off_mesh at \(-#, #\)"/);
-      expect(line(r.out, "hints")).toMatch(/TRIPPED\s+moveTo target_off_mesh 4\d\d/);
+      expect(line(r.out, "hints")).toMatch(/TRIPPED\s+moveTo target_off_mesh 1\d{4}/);
       expect(line(r.out, "schema")).toMatch(/ok\s+1 events_served/);
       expect(line(r.out, "restarts")).toMatch(/ok\s+1 sandbox restart/);
       expect(line(r.out, "asks")).toMatch(/TRIPPED\s+heuristic: [2-3] of 24\d response/);
@@ -171,6 +171,17 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE]] a
     });
   });
 }
+
+describe("the hint block's lines", () => {
+  test("read the action, status and count past a label that is code, parentheses and all", () => {
+    expect(HINT_LINE.exec("castSpell not_ready ×48 (from an earlier snippet: if(hpPct()<85){ await cast(27136,state.self.gui…): Divine Storm (53385): its cooldown")?.slice(1, 4)).toEqual(["castSpell", "not_ready", "48"]);
+    const plain = HINT_LINE.exec("moveTo too_far: walk closer first");
+    expect([plain?.[1], plain?.[2], plain?.[3]]).toEqual(["moveTo", "too_far", undefined]);
+    // A hint's own text on a line of its own, and the block's overflow line, are not tallies.
+    expect(HINT_LINE.exec("Divine Storm (53385): its cooldown, or the global cooldown")).toBeNull();
+    expect(HINT_LINE.exec("(+2 other failure statuses since the last result)")).toBeNull();
+  });
+});
 
 describe("inspect stuck's flags", () => {
   test("refuses a bad threshold and a flag it does not take", async () => {

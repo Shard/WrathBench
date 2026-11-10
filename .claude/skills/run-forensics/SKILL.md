@@ -1,6 +1,6 @@
 ---
 name: run-forensics
-description: Answer any question about a WrathBench run, live or past, with `bun wb inspect` — is it live, paused or ownerless, its level and xp, snippets and errors, tool calls by name, the scratchpad over time or at a moment, the module audit log, what the publisher last did. Use whenever a task needs run data, and always before writing a script that reads run.sqlite, trajectory.jsonl, meta.json, audit files or the publisher's state.
+description: Answer any question about a WrathBench run, live or past, with `bun wb inspect` — is it live, paused or ownerless, its level and xp, snippets and errors, tool calls by name, the scratchpad over time or at a moment, whether it is stuck, the module audit log, what the publisher last did. Use whenever a task needs run data, and always before writing a script that reads run.sqlite, trajectory.jsonl, meta.json, audit files or the publisher's state.
 ---
 
 # Run forensics
@@ -24,6 +24,7 @@ bun wb inspect trajectory <run-id> --since <iso> --next 20   # the first 20 item
 bun wb inspect tools <run-id> [--since 2h] [--until 1h]      # calls per tool, ok/error, reflect granted/refused, pad writers
 bun wb inspect pad <run-id> [--since 6h] [--last 30]         # pad size over time, its writes (drops over 30% flagged), cap refusals
 bun wb inspect pad <run-id> --at <iso>                       # the pad's text at a moment, rebuilt from the record
+bun wb inspect stuck [<run-id>] [--window 2h] [--until 1h]   # no game progress over a window, and the failure signals in it; no id: every live run
 bun wb inspect audit <run-id>                         # module audit log: counts per kind, op/opcode and status
 bun wb inspect audit <run-id> --op WB_MOVE_RESULT --status target_off_mesh --last 20
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
@@ -35,6 +36,10 @@ bun wb inspect publisher [<run-id>]                   # last flip, versions per 
 ISO time. `--last N` reads back from `--until` (or the end), `--next N`
 forward from `--since` (or the start). A command refuses a flag it does not
 take; `bun wb inspect` lists each command's flags.
+
+`stuck`'s verdict is the progress line alone; the other lines are evidence,
+and `asks` is a phrase heuristic. `unjudged` means the state samples do not
+cover the window (a young or resumed run), not that the run is fine.
 
 ## Rules
 
@@ -54,7 +59,7 @@ take; `bun wb inspect` lists each command's flags.
 
 ## Reading the `source` line
 
-`live`, `run`, `trajectory`, `tools` and `pad` read ClickHouse, the store the
+`live`, `run`, `trajectory`, `tools`, `pad` and `stuck` read ClickHouse, the store the
 collector tails runs into, and say so on a `source` line. `audit` and
 `publisher` read the module's audit files and the publisher's state where
 they live.
@@ -96,7 +101,7 @@ prints `per-turn  none for N of M snippet write(s)` when any went unsized.
 
 ## When the checkout is ahead of the deployed image
 
-`live`, `run`, `trajectory`, `tools` and `pad` run the runner pod's copy of
+`live`, `run`, `trajectory`, `tools`, `pad` and `stuck` run the runner pod's copy of
 `infra/inspect-run.ts`; `audit` and `publisher` run this checkout's code. If
 `bun wb` says the file is not in the runner pod, or the pod's copy answers
 `unknown command` or refuses a flag, run this checkout's copy in the pod from

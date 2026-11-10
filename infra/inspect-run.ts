@@ -2477,8 +2477,14 @@ export const STUCK_DEFAULTS = {
   maxGapMs: 15 * 60_000,
   /** One identical error, digits aside, this many times in the window. */
   repeatErrors: 20,
-  /** One harness-delivered hint's (action, status) tallied this many times in the window. */
-  hintTally: 30,
+  /**
+   * One harness-delivered hint's (action, status) tallied this many times in
+   * the window. High because a healthy run's tallies are in the thousands: a
+   * fighting freeplay character's rotation logged castSpell not_ready about
+   * 6,900 times in two hours, and a levelling e360 moveTo target_off_mesh 141.
+   * So it marks only a flood; the tallies print whatever it says.
+   */
+  hintTally: 10_000,
   /** `events_served` records carrying a `schemaError`. */
   schemaErrors: 10,
   /** `sandbox_restarted` notices. */
@@ -2657,8 +2663,13 @@ export const OPERATOR_ASKS: readonly RegExp[] = [
 
 /** The harness-delivered hint block at a result's foot (`renderActionHints`, wrath-mcp/mcp/src/tools.ts). */
 export const HINT_BLOCK_HEAD = "--- harness ---";
-/** One line of that block: `action status ×N (from an earlier snippet…): hint`. */
-const HINT_LINE = /^(\S+) (\S+?)(?: ×(\d+))?(?: \(from an earlier snippet[^)]*\))?: /;
+/**
+ * One line of that block: `action status ×N (from an earlier snippet: label): hint`.
+ * The action is an SDK name and the status a snake_case code, so a hint's own
+ * text on a line of its own never reads as one; the label is the snippet's
+ * code, parentheses and all, so it ends at the first `): `.
+ */
+export const HINT_LINE = /^([A-Za-z_$][\w$.]*) ([a-z][a-z0-9_]*)(?: ×(\d+))?(?: \(from an earlier snippet.*?\))?: /;
 /** How a served event names a decode failure (EventSummary, runner/src/context.ts). */
 export const SCHEMA_ERROR_KEY = '"schemaError"';
 
