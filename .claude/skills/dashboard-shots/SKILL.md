@@ -1,6 +1,6 @@
 ---
 name: dashboard-shots
-description: Render the WrathBench dashboard locally, private viewer and public build side by side, over fixture or copied runs, and take headless screenshots at named states with `bun wb dashboard shots`. Use to check a dashboard or viewer change in a real browser, at phone width or in light mode, before claiming it works; never rebuild a render rig by hand.
+description: Render the WrathBench dashboard locally, private viewer and public build side by side over fixture or copied runs, and screenshot it headlessly with `bun wb dashboard shots`. Use after any change under `dashboard/` or to the viewer's API or the publisher's output, to see it in a real browser (phone width and light mode included) before claiming it works; never start servers or a browser by hand for this.
 ---
 
 # Dashboard shots
@@ -13,27 +13,29 @@ bun wb dashboard shots --out <dir> --run <run-dir> [--run <run-dir>]
 bun wb dashboard shots --serve                             # the stack only: URLs until Ctrl-C
 ```
 
-About 20–30 s. Put `--out` in your scratchpad. It writes
-`private-<state>.png` and `public-<state>.png` for `home`, `run-live`,
-`map-live` (nothing selected: the sidebar lists the four live characters),
-`map-live-selected` (the live character's row clicked: the map framed on it,
-its money, bags and quests), `map-live-nearby` (then zoomed in on it: the
-units around it) and
-`map-replay` (paused halfway), one `path-*.png` per `--path`, and
-`facts.json` with each page's uncaught errors, console errors and third-party
-requests. It exits 1 when a page threw or a state was not reached. Look at the
-PNGs with Read.
+About 20–30 s. Put `--out` in your scratchpad, then look at the PNGs with
+Read. It writes `private-<state>.png` and `public-<state>.png` for each named
+state, one `path-*.png` per `--path`, and `facts.json` with each page's
+uncaught errors, console errors and third-party requests. It exits 1 when a
+page threw or a state was not reached.
 
-What it stands up (`infra/dashboard-shots.ts`; `dashboard/README.md`,
-"Screenshots"): invented fixture runs written by the runner's own
-`Trajectory`, one kept live while the rig runs and one ended, or copies of each
-`--run` directory; the viewer's `createApi` with a private build; one publisher
-pass into a local bucket and a public build reading it; headless Chromium over
-the DevTools protocol, with no dependency to install. Wowhead's tooltip script
-is stubbed and every other third party refused, so names read as they do where
-the script is blocked; `--real-wowhead` lets it through. Nothing reads the
-operator's ClickHouse, config store or `data/runs`. Chromium comes from the
-PATH or `WRATHBENCH_CHROMIUM`.
+| State | What it shows |
+| --- | --- |
+| `home` | the landing page |
+| `run-live` | the live run's page |
+| `map-live` | nothing selected: the sidebar lists the live characters |
+| `map-live-selected` | the live character's row clicked: the map framed on it, with its money, bags and quests |
+| `map-live-nearby` | then zoomed in on it: the units around it |
+| `map-replay` | the ended run, paused halfway |
+
+The rig is self-contained (`infra/dashboard-shots.ts`; `dashboard/README.md`,
+"Screenshots", says what it stands up): invented fixture runs, or copies of
+each `--run` directory, and nothing read from the operator's ClickHouse,
+config store or `data/runs`, so it is safe while runs are live. Wowhead's
+tooltip script is stubbed and every other third party refused, so names read
+as they do where the script is blocked; `--real-wowhead` lets it through.
+Chromium comes from the PATH or `WRATHBENCH_CHROMIUM`, with no dependency to
+install; `--settle MS` sets the wait before each shot (2500 by default).
 
 ## States that need clicks
 
@@ -56,12 +58,14 @@ publisher pass.
 
 ## A real run
 
-Copy an ended run out read-only, leaving its live files behind, then pass the
-directory with `--run`:
+Copy a run that has ended (skill `fleet-readonly`; never a live one) out of
+the runner pod, leaving its live files behind, then pass the directory with
+`--run`:
 
 ```
 kubectl -n <ns> exec deploy/<release>-runner -- tar -C data/runs -cf - --exclude=nearby --exclude=heartbeat <run-id> | tar -C <dir> -xf -
 ```
 
-Shots of a real run show real character names: keep them in your scratchpad,
-and never commit or publish them.
+The copy holds `meta.json`, and so the run's session token, and its shots
+show real character names: keep both in your scratchpad, and never print,
+commit or publish them.
