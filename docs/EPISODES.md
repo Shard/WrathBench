@@ -347,7 +347,7 @@ square, and one arm on the release image.
   holding a level-55 character, and it starts at 55.
 - **The Horde starts** and the two map-530 starts had never been driven
   before race-probe@1. `infra/smoke/race-probe-starts.ts` creates, walks and
-  takes a quest at each one, and race-probe@1 is enabled only after it passes.
+  takes a quest at each one.
 
 `probing` and `freeplay` are both steered and both unscored. What separates them
 is the relationship to the schedule: a probe campaign is **commissioned**, runs

@@ -19,7 +19,7 @@
  * without a boot, so it is shown once. The boot cannot be the recreate of
  * the window that enables SOAP, since nothing can be staged before SOAP
  * exists. It is the next window's recreate, with the party campaign held
- * from --keep to --recheck (docs/RUNBOOK.md, "Party staging"):
+ * from --keep to --recheck:
  *
  *   bun wb smoke party-staging --keep       # campaign held: stage, check, leave staged
  *   ...the next worldserver recreate...

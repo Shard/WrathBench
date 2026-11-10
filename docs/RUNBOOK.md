@@ -1482,15 +1482,6 @@ its other assignments, and the entry's own refusal, with its reason, is under
 `--status`'s refused pins. The campaigns page shows those squares as refused
 without the reason, because the reason can name a key, a lane or a host.
 
-Before you enable race-probe@1, run the start gate once, and enable it only
-when it passes. It creates, walks and takes a quest at each start no run had
-used before: Valley of Trials, Deathknell, Camp Narache, Sunstrider Isle and
-Ammen Vale. It runs on `PROBE`, never a pool account.
-
-```
-bun wb smoke race-probe-starts
-```
-
 **A hand launch** names the square and nothing that sets its shape.
 `run-episode.sh` writes the run's `campaign.json` from the published
 definition and launches `run.ts` with `--campaign-file`; the runner refuses
@@ -2103,23 +2094,9 @@ suite touches them.
      PROBE.
    - `bun wb smoke party-entry` stages a party, walks it into map 36 together,
      checks that it is one instance, and deletes the characters.
-   - `bun wb smoke party-staging --keep`, last of all, stages the party, checks
-     every member at login, and leaves the party staged. It has to be last:
-     every staging deletes whatever the party accounts hold.
-5. The reaping proof. Staged items carry guids the live server allocated, so
-   a boot's one-time DELETEs above its watermark must not touch them. That
-   needs a worldserver boot between the `--keep` and a `--recheck`, with
-   nothing touching the party accounts in between. The next release window's
-   recreate is that boot: keep the party campaign disabled from the `--keep`
-   until the recheck, run the window as usual, and after its resume run `bun
-   wb smoke party-staging --recheck`. It repeats the checks on what survived
-   the boot and then deletes the five characters. If a party campaign is
-   already enabled, hold just that campaign ("The lean path"): disable it,
-   wait for its attempt to end, `--keep`, the window, `--recheck`, re-enable.
-6. Until the recheck has passed, the first party campaign runs with
-   `resume: false`, so a paused party is never resumed onto characters whose
-   survival across a boot is unproven.
-7. While a party campaign is enabled, run `deadmines-entry` after any release
+   - `bun wb smoke party-staging` stages the party, checks every member at
+     login, and deletes the characters.
+5. While a party campaign is enabled, run `deadmines-entry` after any release
    that touches the module, on PROBE with the fleet live.
 
 To turn it off, set `staging.enabled` back to false in another window. The
