@@ -11,10 +11,15 @@
  * A run with neither a termination nor a pause may still be playing, and
  * ending it would write a verdict under a runner that is still writing its
  * own, so that is refused unless `--force` says the operator knows it is not.
+ *
+ * An archived run is found under `<runs>/archive/<id>` and classified there, in
+ * place: archiving parks a run but does not release its character (hygiene's
+ * `characterOwners` reads `archive/` too), so this is how such a run is ended.
  */
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { TERMINATION_REASONS, type TerminationReason } from "./config";
 import { openRunDb } from "./rundb";
 import { Trajectory } from "./trajectory";
@@ -22,11 +27,24 @@ import { Trajectory } from "./trajectory";
 /** Exit code for a run the guard would not classify: nothing was written. */
 export const CLASSIFY_REFUSED_EXIT = 3;
 
+/**
+ * The run's directory: `<runs>/<id>` when it holds a run.sqlite, else
+ * `<runs>/archive/<id>` when that does, else null. Live first, as
+ * `loadContinuation` reads them; a launch never lands on an archived id
+ * (`assertRunDirFree`), so the two do not both hold a run.
+ */
+export function runDirOf(runsDir: string, runId: string): string | null {
+  for (const dir of [join(runsDir, runId), join(runsDir, ARCHIVE_DIR, runId)]) {
+    if (existsSync(join(dir, "run.sqlite"))) return dir;
+  }
+  return null;
+}
+
 /** What the run's own row says, read without writing: null when there is no such run. */
 export function readVerdict(runsDir: string, runId: string): { terminationReason: string | null; pauseReason: string | null } | null {
-  const dbPath = join(runsDir, runId, "run.sqlite");
-  if (!existsSync(dbPath)) return null;
-  const db = openRunDb(dbPath, { readonly: true });
+  const dir = runDirOf(runsDir, runId);
+  if (dir === null) return null;
+  const db = openRunDb(join(dir, "run.sqlite"), { readonly: true });
   try {
     const row = db.query(`SELECT termination_reason, pause_reason FROM run WHERE run_id = ?`).get(runId) as {
       termination_reason?: unknown;
@@ -51,7 +69,7 @@ export function classifyRefusal(
   verdict: { terminationReason: string | null; pauseReason: string | null } | null,
   force: boolean,
 ): string | null {
-  if (verdict === null) return `no run ${runId}: no run.sqlite with its row under the runs directory`;
+  if (verdict === null) return `no run ${runId}: no run.sqlite with its row under the runs directory or its ${ARCHIVE_DIR}/`;
   if (verdict.terminationReason === null && verdict.pauseReason === null && !force) {
     return `${runId} has no termination and no pause, so it may still be live — stop it first, or pass --force if you know it is not`;
   }
@@ -73,9 +91,13 @@ if (import.meta.main) {
     console.error(`refused: ${refusal}`);
     process.exit(CLASSIFY_REFUSED_EXIT);
   }
-  const trajectory = new Trajectory(join(runsDir, runId));
+  // The directory the refusal's read found the row in: an archived run is
+  // written in place, never recreated beside the archive.
+  const dir = runDirOf(runsDir, runId);
+  if (dir === null) process.exit(CLASSIFY_REFUSED_EXIT);
+  const trajectory = new Trajectory(dir);
   const detail = note.length > 0 ? `manually classified: ${note.join(" ")}` : "manually classified";
   trajectory.setTermination(runId, reason as TerminationReason, detail);
   trajectory.close();
-  console.log(`${runId} classified as ${reason}`);
+  console.log(`${runId} classified as ${reason}${dir === join(runsDir, runId) ? "" : ` (under ${ARCHIVE_DIR}/)`}`);
 }

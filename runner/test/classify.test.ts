@@ -5,7 +5,7 @@
  * run behind it is refused outright rather than created.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLASSIFY_REFUSED_EXIT, classifyRefusal, readVerdict } from "../src/classify";
@@ -76,6 +76,45 @@ describe("the classify guard", () => {
   test("a mistyped run id is refused, and no directory is made for it", async () => {
     const r = await classify("--force", "no-such-run", "manual");
     expect(r.code).toBe(CLASSIFY_REFUSED_EXIT);
+    expect(r.stderr).toContain("no run no-such-run");
+    expect(r.stderr).toContain("archive/");
     expect(existsSync(join(runs, "no-such-run"))).toBe(false);
+    expect(existsSync(join(runs, "archive", "no-such-run"))).toBe(false);
+  }, 20_000);
+});
+
+describe("an archived run", () => {
+  /** Park a run the way `archiveRun` does: a rename into `<runs>/archive/`. */
+  function archive(runId: string): string {
+    mkdirSync(join(runs, "archive"), { recursive: true });
+    const dest = join(runs, "archive", runId);
+    renameSync(join(runs, runId), dest);
+    return dest;
+  }
+
+  test("a paused one is ended in place under archive/, and nothing is made beside it", async () => {
+    writeRun("a-paused", "paused");
+    const dir = archive("a-paused");
+    expect(readVerdict(runs, "a-paused")).toEqual({ terminationReason: null, pauseReason: "rate-limited" });
+
+    const r = await classify("a-paused", "manual", "release", "the", "character");
+    expect(r.code).toBe(0);
+    expect(readVerdict(runs, "a-paused")).toEqual({ terminationReason: "manual", pauseReason: null });
+    const records = readFileSync(join(dir, "trajectory.jsonl"), "utf8")
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as { t: string; reason?: string; detail?: string });
+    expect(records.at(-1)).toMatchObject({ t: "termination", reason: "manual", detail: "manually classified: release the character" });
+    expect(existsSync(join(runs, "a-paused"))).toBe(false);
+  }, 20_000);
+
+  test("one with no verdict is still refused without --force", async () => {
+    writeRun("a-live", "live");
+    archive("a-live");
+    const r = await classify("a-live", "manual");
+    expect(r.code).toBe(CLASSIFY_REFUSED_EXIT);
+    expect(r.stderr).toContain("--force");
+    expect(readVerdict(runs, "a-live")).toEqual({ terminationReason: null, pauseReason: null });
+    expect(existsSync(join(runs, "a-live"))).toBe(false);
   }, 20_000);
 });

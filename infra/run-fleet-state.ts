@@ -626,14 +626,22 @@ export function liveRunStuck(runId: string, now = Date.now(), runsDir = RUNS_DIR
   return verdict.state === "stuck" ? stuckFlag(verdict, windowMs) : undefined;
 }
 
-export function runProgress(runId: string): { level: number; xp: number; startedAt?: number } | undefined {
-  const path = join(RUNS_DIR, runId, "run.sqlite");
+/**
+ * A run's level and xp from its newest state sample, and its start. Status
+ * reads it for every held run, so it reads the newest row by rowid, like
+ * `liveRunStuck`: the runner appends state rows in time order (one writer,
+ * `insertState`, through a queue that keeps call order), so the last row is
+ * the newest sample, and a walk from the end stops at it where `ORDER BY ts`
+ * sorted the whole table.
+ */
+export function runProgress(runId: string, runsDir = RUNS_DIR): { level: number; xp: number; startedAt?: number } | undefined {
+  const path = join(runsDir, runId, "run.sqlite");
   if (!existsSync(path)) return undefined;
   try {
     const db = openRunDb(path, { readonly: true });
     try {
       const row = db
-        .query("SELECT level, xp FROM state WHERE run_id = ? ORDER BY ts DESC LIMIT 1")
+        .query("SELECT level, xp FROM state WHERE run_id = ? ORDER BY rowid DESC LIMIT 1")
         .get(runId) as { level: number | null; xp: number | null } | null;
       if (row === null || row.level === null) return undefined;
       let startedAt: number | undefined;

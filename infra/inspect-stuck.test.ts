@@ -14,7 +14,7 @@ import { type ItemSample, Trajectory } from "../runner/src/trajectory";
 import { HINT_LINE, type InspectStore, main, type ProgressSample, progressVerdict, STUCK_DEFAULTS } from "./inspect-run";
 import { memoryStore } from "./inspect-memory-store";
 import { formatAccounts, formatHolder, STUCK_MARK } from "./run-fleet-status";
-import { liveRunStuck } from "./run-fleet-state";
+import { liveRunStuck, runProgress } from "./run-fleet-state";
 import { tempDirs } from "./temp-dirs";
 
 const tmp = tempDirs();
@@ -254,6 +254,31 @@ describe("fleet status's flag", () => {
     // A cold heartbeat has no live owner, and is not looked at.
     expect(liveRunStuck("run-cold", NOW, RUNS)).toBeUndefined();
     expect(liveRunStuck("run-missing", NOW, RUNS)).toBeUndefined();
+  });
+
+  test("a run's level and xp are its newest state sample's, with its start", async () => {
+    const dir = tmp("wb-progress-");
+    let clock = NOW - 10 * MIN;
+    const write = async (runId: string, samples: { level?: number; xp?: number }[]): Promise<void> => {
+      const traj = new Trajectory(join(dir, runId), { now: () => clock });
+      const config = { ...loadRunConfig({ driver: "stub" }), runId, runsDir: dir, model: "test/model", account: "TESTACCT" };
+      traj.writeMeta({ runId, harnessVersion: "harness-test", startedAt: NOW - 10 * MIN, config });
+      for (const s of samples) {
+        clock += 1_000;
+        await traj.recordState(runId, { ...s, map: 0, x: 0, y: 0, z: 0 });
+      }
+      traj.close();
+    };
+    await write("p-levelled", [{ level: 3, xp: 900 }, { level: 4, xp: 10 }, { level: 4, xp: 250 }]);
+    await write("p-no-xp", [{ level: 2, xp: 40 }, { level: 2 }]);
+    await write("p-no-level", [{ level: 5, xp: 70 }, {}]);
+    await write("p-empty", []);
+    expect(runProgress("p-levelled", dir)).toEqual({ level: 4, xp: 250, startedAt: NOW - 10 * MIN });
+    expect(runProgress("p-no-xp", dir)).toEqual({ level: 2, xp: 0, startedAt: NOW - 10 * MIN });
+    // The newest sample decides: one without a level is no progress to report.
+    expect(runProgress("p-no-level", dir)).toBeUndefined();
+    expect(runProgress("p-empty", dir)).toBeUndefined();
+    expect(runProgress("p-missing", dir)).toBeUndefined();
   });
 
   test("the account row and the holder note carry the marker and the command that says why", () => {
