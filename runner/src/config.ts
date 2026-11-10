@@ -17,7 +17,7 @@
 
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { EPISODES, episodeIdSchema, matchesTier, watchdogsFor, type EpisodeId } from "./episodes";
+import { EPISODE_IDS, EPISODES, episodeIdSchema, matchesTier, watchdogsFor, type EpisodeId } from "./episodes";
 import { PARTY_PAUSE, STALL_PAUSE, SUBSCRIPTION_PAUSE } from "./lapse";
 import { routingSchema } from "./routing";
 import { CHARACTER_NAME_RULE, isValidCharacterName } from "./character-name";
@@ -350,21 +350,48 @@ export function stampedCompactWindow(declared: string | undefined): string | und
 }
 
 /**
- * The window a FRESH launch is configured with, as `--compact-window` would
- * spell it. What the launch states wins, `auto` included (the schema reads it
- * as the absent field). A launch that states none takes its driver's default
- * — unless it is a campaign's square: a probe's window is what its arm or its
- * roster entry states and nothing else, so a published definition whose arm
- * passes no window keeps meaning the CLI's `auto` (compact-window-claude's
- * control arm, and every claude-code square published before the default).
+ * The window a FRESH launch is configured with, as the config fields it sets.
+ * What the launch states wins, `auto` included (the schema reads it as the
+ * absent field). A launch that states none takes its driver's default
+ * (operator, 2026-11-10): a freeplay session and a campaign's square in any
+ * series, so an arm that measures the CLI's own window says `auto`; a scored
+ * episode only in a series after the one the driver names
+ * (`DriverEntry.defaultCompactWindowScoredAfter`), so the scored rows of that
+ * series stay on the CLI's `auto` they were all made on. `series` is the
+ * launching build's (`harnessSeries(harnessVersion())`); a build that names
+ * no series has not shown it is a later one, so its scored launches hold too.
+ * `compactWindowDefaulted` marks a window nobody stated, which is the one a
+ * model's smaller context may clamp without ending the run.
  *
  * Never asked on a resume. A stored config with no window is a run that ran
  * on `auto`, whenever it was written, and stays one: the default is resolved
  * once, here, and recorded as the window it is.
  */
-export function launchCompactWindow(o: { stated: string | undefined; driver: string; probe: boolean }): string | undefined {
-  if (o.stated !== undefined) return o.stated;
-  return o.probe ? undefined : defaultCompactWindowOf({ driver: o.driver });
+export function launchCompactWindow(o: {
+  stated: string | undefined;
+  driver: string;
+  episode: string | undefined;
+  series: string | null;
+}): { compactWindow?: string; compactWindowDefaulted?: true } {
+  if (o.stated !== undefined) return { compactWindow: o.stated };
+  const window = defaultCompactWindowOf({ driver: o.driver });
+  if (window === undefined) return {};
+  const held = isDriver(o.driver) ? entryOf(o.driver).defaultCompactWindowScoredAfter : undefined;
+  const scored = o.episode !== undefined && (EPISODE_IDS as readonly string[]).includes(o.episode) && EPISODES[o.episode as EpisodeId].scored;
+  if (scored && held !== undefined && (o.series === null || !seriesAfter(o.series, held))) return {};
+  return { compactWindow: window, compactWindowDefaulted: true };
+}
+
+/** Whether series `a` (`major.minor`) is later than `b`. A series that does not parse is not later than anything. */
+export function seriesAfter(a: string, b: string): boolean {
+  const parse = (s: string): [number, number] | null => {
+    const m = /^(\d+)\.(\d+)$/.exec(s);
+    return m === null ? null : [Number(m[1]), Number(m[2])];
+  };
+  const x = parse(a);
+  const y = parse(b);
+  if (x === null || y === null) return false;
+  return x[0] !== y[0] ? x[0] > y[0] : x[1] > y[1];
 }
 
 /** zod at the boundary for `parseCompactWindow`: canonical string, or undefined for `auto`. */
@@ -651,6 +678,15 @@ export const runConfigSchema = z.object({
    * like effort: a resume keeps it.
    */
   compactWindow: compactWindowSchema.optional(),
+  /**
+   * Set when `compactWindow` is the driver's default and nobody stated it
+   * (`launchCompactWindow`). It changes one thing: a stated window at or
+   * above the model's context ends the run, because it would record a
+   * condition the entry or arm asked for and never got, while a defaulted one
+   * plays on at the model's own limit (operator, 2026-11-10). Not in the
+   * tuple: the window is. A resume keeps it with the window.
+   */
+  compactWindowDefaulted: z.literal(true).optional(),
   /**
    * Which backend the aggregator may route this run to, as the fleet config
    * declared it (`routing.ts`) — the DECLARED block, not the resolved one, so

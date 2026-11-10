@@ -86,7 +86,12 @@ recorded run dimension like effort rather than per-model tuning (operator,
 2026-10-16); the compaction window is one (claude-code, 2026-10-09), and a
 general one that covers codex too (operator, 2026-10-11). On claude-code the
 default window is 300k tokens, and codex stays on its CLI's own `auto`
-(operator, 2026-11-10). The two window campaigns ran one six-hour run per arm.
+(operator, 2026-11-10). Freeplay sessions and campaign squares take it now;
+scored episodes take it from the series after 0.5, so every scored row of 0.5
+stays on the one window it was made on and none is run again for the change.
+A default never fails a run: above a model's context it means that model's
+own limit, where a window an entry or an arm states is refused rather than
+run as a condition it is not (operator, 2026-11-10). The two window campaigns ran one six-hour run per arm.
 On Claude Sonnet 5.5, 100k, 200k and 300k reached levels 9, 8 and 8 with 27, 4
 and 1 compactions, differences within one run's luck; compaction was benign at
 every window, cost did not fall with the window (the 100k run cost 1.7 times

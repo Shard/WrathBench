@@ -150,10 +150,11 @@ has at least one; a sweep that tests nothing harness-side has one arm
   shape flag or any flag the supervisor sets; the compaction window
   (`--compact-window`) is the one exception, because varying it is what such
   an arm is for (operator, 2026-10-11). An arm that passes none runs the
-  entry's stated window, else the CLI's own `auto`: claude-code's 300k default
-  belongs to the scored and freeplay lanes, so a published arm with no window
-  keeps meaning `auto`, and an arm says `300k` or `auto` when that is the
-  condition it measures. An arm that sets the window cannot run
+  entry's stated window, else the driver's default like any fresh launch:
+  300k on claude-code (operator, 2026-11-10), for a definition published
+  before the default as for a new one, because a campaign is a spike and is
+  not kept comparable across such a change. An arm that measures the CLI's own
+  window says `--compact-window auto`. An arm that sets the window cannot run
   an assignment whose roster entry sets one too, nor one off the claude-code
   and codex drivers: the planner refuses that (assignment, arm) pair before
   any launch, under the key `<id>@<v>:<ref>:<arm>`, because a launch that

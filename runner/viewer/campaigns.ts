@@ -187,8 +187,10 @@ export function campaignsView(
           arm: arm.id,
           model: e?.model ?? mine.find((r) => r.ref === ref)?.model ?? ref,
           effort: e?.effort ?? null,
-          // A probe's own: the arm's, else the entry's stated one, else the
-          // CLI's `auto` — a driver's default window is never a probe's.
+          // The STATED window: the arm's, else the entry's. With neither a
+          // square launches at its driver's default, which moved (claude-code,
+          // 2026-11-10), so the column says nothing and each run's own row
+          // carries the window it ran under.
           compactWindow: armWindow !== undefined ? (armWindow.toLowerCase() === "auto" ? null : armWindow) : (stampedCompactWindow(e?.compactWindow) ?? null),
           harness: e === undefined ? null : harnessOfRun({ driver: e.driver ?? DEFAULT_DRIVER }),
         };

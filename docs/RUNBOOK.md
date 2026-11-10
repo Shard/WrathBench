@@ -341,15 +341,18 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
             `compactWindow` — claude-code and codex entries ONLY: the CLI's auto-compaction
               window, `"auto"` or 100k–1M tokens (`"100k"`, `"500k"`, `"1M"`). `"auto"` is the
               CLI's own window, which sits near the model's whole context (codex: 90% of the
-              catalogue window). ABSENT is the driver's default: on claude-code 300k for every
-              fresh scored and freeplay run (operator, 2026-11-10), on codex the CLI's `auto`.
-              So a claude-code entry that should stay on the CLI's window says `"auto"`, and one
-              whose model's context is 300k or less MUST: a window at or above what the CLI would
-              apply anyway (the model's context on claude-code, that 90% on codex) ends the run
-              as `harness-error` after its first turn, the default included. The default is not
-              a probe's: a campaign square runs the window its arm or its entry states, and the
-              CLI's `auto` when neither does, so a published arm that passes none means what it
-              meant. Nor is it a resume's: a paused run keeps the window it recorded, and one
+              catalogue window). ABSENT is the driver's default: on claude-code 300k (operator,
+              2026-11-10), on codex the CLI's `auto`. A fresh freeplay session and a campaign's
+              square take the 300k now. A scored episode (e90, e360) takes it only from the
+              series after 0.5 (`defaultCompactWindowScoredAfter`, runner/src/drivers.ts): in
+              0.5 an entry with no window still launches its scored runs on `auto`, so its
+              scored rows stay on one window and nothing is owed again. A claude-code entry that should stay on the CLI's window
+              says `"auto"`. A STATED window at or above what the CLI would apply anyway (the
+              model's context on claude-code, that 90% on codex) ends the run as `harness-error`
+              after its first turn. The default never does: on a model whose context is 300k or
+              less the CLI compacts at the model's own limit, the run plays on, is recorded at
+              the 300k it was given, and its trajectory carries a note of the clamp. The default
+              is not a resume's: a paused run keeps the window it recorded, and one
               that recorded none ran on `auto` and stays there; a freeplay character moves to
               300k at its next fresh session. Normalised on load (`"100K"` → `"100k"`, `"1000k"`
               → `"1M"`; `"auto"` → absent on codex, kept on claude-code); on any other driver,
@@ -363,7 +366,8 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               launched at its driver's default, the `auto` runs from before 2026-11-10 with the
               300k runs since. Its targets, its paused run and its character are therefore what
               they were, while results still group on the tuple: `auto` and `300k` runs of one
-              entry are two rows on the ladder. Pages show a run's window after the effort
+              entry are two rows, which in 0.5 only a freeplay character or a probe can show,
+              since its scored runs all stay on `auto`. Pages show a run's window after the effort
               (`max · 100k`). Mechanics: runner/README.md, "The compaction window".
             `apiBase` / `apiKeyEnv` — openai entries: the endpoint, and the NAME of the env var
               holding its key (absent: OpenRouter and `OPENROUTER_KEY`). The pair must be one the
@@ -1691,9 +1695,12 @@ the exception. Assign an arm that sets the window only roster entries on the
 claude-code, codex or pi driver that set none themselves (`"auto"` on a
 claude-code entry is a window set): any other pair is refused before
 it launches, and listed as `<id>@<v>:<ref>:<arm>`. An arm that passes no window
-runs the entry's stated one, else the CLI's `auto` on every driver: claude-code's
-300k default is the scored and freeplay lanes' and never a probe's, so an arm
-that wants 300k says `--compact-window 300k`, and one may say `auto`. So is every pair of an
+runs the entry's stated one, else the driver's default, like any fresh launch:
+300k on claude-code (operator, 2026-11-10), including a square of a definition
+published before the default, since a campaign is a spike and is not kept
+comparable across such a change. An arm that measures the CLI's own window says
+`--compact-window auto`. An arm pinned to an image built before the default
+runs that image's runner, which has none. So is every pair of an
 assignment whose roster entry the fleet refuses (an unknown key, a provider
 key towards a host the provider table does not pair it with, a subscription
 the policy does not list): the campaign sweeps its other assignments, and the

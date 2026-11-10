@@ -458,6 +458,21 @@ describe("claude-code driver", () => {
     const real = setupEpisode("tools", { maxTurns: 2, compactWindow: "200k" }, { WB_FAKE_CONTEXT_WINDOW: "300000" });
     expect(await runClaudeEpisode(real.options)).toMatchObject({ kind: "terminated", reason: "turn-limit" });
     real.trajectory.close();
+    // The driver's DEFAULT never fails a run (operator, 2026-11-10): on a model
+    // whose context is 200k, a defaulted 300k is that model's own limit, and
+    // the run plays on with the clamp on its record. The same window STATED,
+    // by an entry or an arm, is still refused.
+    const defaulted = setupEpisode("tools", { maxTurns: 2, compactWindow: "300k", compactWindowDefaulted: true }, { WB_FAKE_CONTEXT_WINDOW: "200000", WB_FAKE_CONTEXT_STEP: "100000" });
+    expect(await runClaudeEpisode(defaulted.options)).toMatchObject({ kind: "terminated", reason: "turn-limit" });
+    expect(readRecord(defaulted.recordPath)["userMessages"] as string[]).toHaveLength(2);
+    defaulted.trajectory.close();
+    const notes = readTrajectory(defaulted.runDir).filter((e) => e["t"] === "harness" && e["kind"] === "session_note");
+    expect(notes.map((n) => n["text"])).toEqual(["the default compaction window 300k is at or above this model's context window (200000 tokens), so the CLI compacts at the model's own limit"]);
+    // The episodic-log ask reads the threshold really met: the model's 200k, less the CLI's reserve and buffer.
+    expect(readTrajectory(defaulted.runDir).filter((e) => e["kind"] === "compaction_ask").every((a) => a["threshold"] === 167_000)).toBe(true);
+    const stated = setupEpisode("tools", { maxTurns: 2, compactWindow: "300k" }, { WB_FAKE_CONTEXT_WINDOW: "200000" });
+    expect(await runClaudeEpisode(stated.options)).toMatchObject({ kind: "terminated", reason: "harness-error" });
+    stated.trajectory.close();
     // No reported window, nothing to check against: the run is not refused on a guess.
     const unknown = setupEpisode("tools", { maxTurns: 2, compactWindow: "1M" });
     expect(await runClaudeEpisode(unknown.options)).toMatchObject({ kind: "terminated", reason: "turn-limit" });
@@ -1149,12 +1164,21 @@ describe("driver selection and stamping", () => {
     expect(defaultCompactWindowOf({ harness: "claude-code" })).toBe("300k");
     expect(defaultCompactWindowOf({})).toBeUndefined();
     expect(parseCompactWindow(defaultCompactWindowOf({ driver: "claude-code" }))).toBe("300k");
-    // The launch: what it states wins, a probe takes no default, the rest take their driver's.
-    expect(launchCompactWindow({ stated: undefined, driver: "claude-code", probe: false })).toBe("300k");
-    expect(launchCompactWindow({ stated: undefined, driver: "claude-code", probe: true })).toBeUndefined();
-    expect(launchCompactWindow({ stated: "auto", driver: "claude-code", probe: false })).toBe("auto");
-    expect(launchCompactWindow({ stated: "100k", driver: "claude-code", probe: true })).toBe("100k");
-    for (const driver of ["codex", "pi", "openai", "stub"]) expect(launchCompactWindow({ stated: undefined, driver, probe: false })).toBeUndefined();
+    // The launch: what it states wins and is marked stated; nothing stated takes the driver's, marked defaulted.
+    const fp = { episode: "freeplay", series: "0.5" };
+    expect(launchCompactWindow({ stated: undefined, driver: "claude-code", ...fp })).toEqual({ compactWindow: "300k", compactWindowDefaulted: true });
+    expect(launchCompactWindow({ stated: "auto", driver: "claude-code", ...fp })).toEqual({ compactWindow: "auto" });
+    expect(launchCompactWindow({ stated: "300k", driver: "claude-code", ...fp })).toEqual({ compactWindow: "300k" });
+    for (const driver of ["codex", "pi", "openai", "stub"]) expect(launchCompactWindow({ stated: undefined, driver, ...fp })).toEqual({});
+    // Scored episodes hold through the series the table names and take it in a later one; the other lanes never hold.
+    const windowOf = (episode: string | undefined, series: string | null): string | undefined => launchCompactWindow({ stated: undefined, driver: "claude-code", episode, series }).compactWindow;
+    expect(["e90", "e360", "freeplay", "probing", undefined].map((ep) => windowOf(ep, "0.5"))).toEqual([undefined, undefined, "300k", "300k", "300k"]);
+    expect(["e90", "e360", "freeplay", "probing"].map((ep) => windowOf(ep, "9.0"))).toEqual(["300k", "300k", "300k", "300k"]);
+    expect([windowOf("e90", null), windowOf("e90", "0.4"), windowOf("freeplay", null)]).toEqual([undefined, undefined, "300k"]);
+    expect(launchCompactWindow({ stated: "300k", driver: "claude-code", episode: "e90", series: "0.5" })).toEqual({ compactWindow: "300k" });
+    // The mark survives the stored config, so a resumed defaulted run is still not one to refuse.
+    expect(loadRunConfig(JSON.parse(JSON.stringify(loadRunConfig({ driver: "claude-code", compactWindow: "300k", compactWindowDefaulted: true }))))).toMatchObject({ compactWindow: "300k", compactWindowDefaulted: true });
+    expect("compactWindowDefaulted" in loadRunConfig({ driver: "claude-code", compactWindow: "300k" })).toBe(false);
     // The stored record: no window is auto, and loading it fills nothing in.
     expect(loadRunConfig({ driver: "claude-code", model: "claude-opus-5-5", episode: "freeplay" }).compactWindow).toBeUndefined();
     // A roster entry's three states: absent is the caller's, `auto` survives only where it is a choice.

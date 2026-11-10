@@ -106,8 +106,8 @@ export interface RosterSpec {
   /**
    * `claude-code` and `codex` only: the CLI's auto-compaction window, `auto`
    * or 100k–1M tokens (`parseEntryCompactWindow`). Omitted -> the driver's
-   * default: claude-code's 300k on a scored or freeplay run (operator,
-   * 2026-11-10), the CLI's own `auto` on codex and on any probe. `auto` ->
+   * default: claude-code's 300k on every fresh launch (operator,
+   * 2026-11-10), the CLI's own `auto` on codex. `auto` ->
    * the CLI's own. Part of the run's identity like effort (operator
    * decisions 2026-10-09, and 2026-10-11 for codex).
    */
