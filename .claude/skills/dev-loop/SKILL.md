@@ -21,7 +21,7 @@ else each kind of change needs.
   decision there, stop and ask the operator.
 - **A module change**: no local check proves it. It is verified by the
   release that carries its pointer bump and `bun wb smoke <name>` after it
-  (`docs/RUNBOOK.md`, "Deploy window"), which the operator starts.
+  (skill `release`), which the operator starts.
 - `bun wb` lists every operator command; `bun wb <group>` shows what each runs
   and where.
 

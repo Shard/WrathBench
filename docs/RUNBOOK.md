@@ -170,7 +170,9 @@ export — never for committing.
   once, and retries every tick, and `--status` leads with the `config
   REJECTED` banner. The two are kept apart deliberately — a transient read
   failure must never read as "every job vanished".
-- An edit is live **one tick later**, with nothing restarted.
+- An edit is live **one tick later**, with nothing restarted. A tick can
+  land between two writes, so write a cap (`policy.maxConcurrent`) before the
+  roster entries it caps.
 - Every write is validated against the WHOLE config — an edit the supervisor
   would refuse is refused with the same sentence — and recorded in the store's
   `config_audit` table with the actor, the note, and the before and after
@@ -1304,9 +1306,11 @@ accounts, and the rest of the fleet runs throughout.
 The gate and the suite's smokes drive the module with a scripted client. They never
 start the Claude Code or Codex CLI and never run a model's snippet, so a change
 to the environment the CLIs start with, or to the snippet sandbox's
-confinement, passes them untested, and the resume phase would put every paused
-run straight onto that build. Such a release, and only such a release, is held
-with `--keep-paused`:
+confinement, passes them untested, and the resume phase puts every paused
+run straight onto that build. For an ordinary change that is fine: watch the
+first real run after the release. Holding the fleet is an option, not the
+default, for a change that could break every run of a driver at launch, such
+as a CLI version bump or a sandbox policy change:
 
 ```
 bun wb release run --pin-hook <your pin hook> --keep-paused
