@@ -34,9 +34,11 @@
  *    has an episode child; once the process is between episodes it is
  *    SIGTERMed (run-roster's own handler stops it cleanly). There is an
  *    unavoidable small race — a child spawned in the instant between the
- *    idle check and the kill gets run-roster's graceful episode termination
- *    (30s grace), not a hard kill — so in the worst case "disable" costs one
- *    just-started episode, never a corrupted one. Because a roster launches its
+ *    idle check and the kill gets run-roster's stop, a SIGTERM under which the
+ *    runner pauses as `operator-pause`, with SIGKILL only after
+ *    `EPISODE_TERM_GRACE_MS` (90s, infra/episode-launcher.ts), not a hard
+ *    kill — so in the worst case "disable" costs one just-started episode,
+ *    never a corrupted one. Because a roster launches its
  *    next episode within milliseconds, the drain is also a marker file the
  *    roster reads before every launch (`drainMarkerPath`), so a multi-episode
  *    job stops at its next boundary instead of running every copy.
