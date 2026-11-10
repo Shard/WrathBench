@@ -13,8 +13,8 @@ dashboard/public/og.png
 # Claude Code session worktrees (never part of the repo)
 .claude/worktrees/
 
-# Claude Code local harness settings (not part of the repo)
-.claude/settings.json
+# Claude Code personal settings; .claude/settings.json is shared and registers the hooks
+.claude/settings.local.json
 
 # The live fleet config is the sqlite store on the data volume (docs/RUNBOOK.md,
 # "Where the config lives"); an export of it is operational state, never source.
