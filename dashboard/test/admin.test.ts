@@ -8,6 +8,7 @@ import {
   credentialDoc,
   credentialFormOf,
   fmtDelay,
+  fixLabel,
   freeplayRows,
   healthTitle,
   healthTone,
@@ -85,6 +86,13 @@ describe("health", () => {
     const fmt = (t: number) => `@${t}`;
     expect(healthTitle({ state: "auth-failed", reason: "x", since: 1, lastCheck: { at: 2, http: 401, code: "api_key_expired" } }, fmt)).toBe("since @1 · last check @2 · HTTP 401 api_key_expired");
     expect(healthTitle({ state: "ok", reason: "", since: null, lastCheck: null }, fmt)).toBe("");
+  });
+});
+
+describe("fixLabel", () => {
+  test("a label, with until when where known; the sentence is the hover's", () => {
+    expect(fixLabel({ kind: "wait-reset", until: 5, text: "wait for the reset" }, (t) => `@${t}`)).toBe("wait · until @5");
+    expect(fixLabel({ kind: "raise-budget", text: "raise its budget, or wait for 00:00 UTC" }, String)).toBe("raise budget");
   });
 });
 

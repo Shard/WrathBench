@@ -7,7 +7,7 @@
  */
 
 import type { Groups } from "@viewer/groups";
-import type { CredentialHealth, HealthState } from "@viewer/api-types";
+import type { CredentialFix, CredentialHealth, HealthState } from "@viewer/api-types";
 
 /** A credential row as the store holds it (`runner/src/credential-slots.ts`). */
 export interface CredentialDoc {
@@ -116,6 +116,12 @@ export function healthTone(s: HealthState | null): "ok" | "warn" | "err" | "dim"
 export function healthTitle(h: CredentialHealth, fmt: (t: number) => string): string {
   const check = h.lastCheck === null ? null : `last check ${fmt(h.lastCheck.at)}${h.lastCheck.http !== null ? ` · HTTP ${h.lastCheck.http}` : ""}${h.lastCheck.code !== undefined ? ` ${h.lastCheck.code}` : ""}`;
   return [h.since !== null ? `since ${fmt(h.since)}` : null, check].filter((x): x is string => x !== null).join(" · ");
+}
+
+/** A fix as a label, its sentence left for the hover: `wait · until <when>`. */
+export function fixLabel(f: CredentialFix, fmt: (t: number) => string): string {
+  const what = { "wait-reset": "wait", "raise-budget": "raise budget", enable: "enable", "set-secret": "set secret", "replace-secret": "replace secret" }[f.kind];
+  return f.until !== undefined ? `${what} · until ${fmt(f.until)}` : what;
 }
 
 // ------------------------------------------------------------------ sections

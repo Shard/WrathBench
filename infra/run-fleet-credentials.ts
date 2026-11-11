@@ -448,15 +448,20 @@ export function credentialStatuses(o: {
   env?: Record<string, string | undefined>;
   /**
    * The providers' last reads, by credential id (`FleetGoUsage.lastReads()`).
-   * A read is of a secret, so a credential with none of its own takes the
-   * read of another of its provider's naming the same variable (Go's free
-   * side shares the paid side's key).
+   * A credential with none of its own takes another's of its provider naming
+   * the same variable only where the read is about the key itself (refused,
+   * or no access): Go's free side shares the paid side's key but bills no
+   * plan, so the paid side's usage says nothing about it.
    */
   reads?: ReadonlyMap<string, CredentialRead>;
 }): CredentialStatus[] {
   const env = o.env ?? process.env;
   const readOf = (c: Credential): CredentialRead | undefined =>
-    o.reads?.get(c.id) ?? o.credentials.filter((x) => x.provider === c.provider && x.secretEnv === c.secretEnv).map((x) => o.reads?.get(x.id)).find((r) => r !== undefined);
+    o.reads?.get(c.id) ??
+    o.credentials
+      .filter((x) => x.provider === c.provider && x.secretEnv === c.secretEnv)
+      .map((x) => o.reads?.get(x.id))
+      .find((r) => r !== undefined && (r.classification === "auth-failed" || r.classification === "no-access"));
   return o.credentials.map((c) => {
     const u = o.gate.usage.get(c.id);
     const used =

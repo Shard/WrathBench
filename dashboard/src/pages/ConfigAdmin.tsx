@@ -23,6 +23,7 @@ import {
   credentialDoc,
   credentialFormOf,
   fmtDelay,
+  fixLabel,
   freeplayRows,
   healthTitle,
   healthTone,
@@ -168,8 +169,8 @@ function HealthCell(props: { c: AdminCredentialView }) {
           </Show>
           <Show when={props.c.fix !== null && (props.c.fix.kind === "wait-reset" || props.c.fix.kind === "raise-budget") ? props.c.fix : undefined}>
             {(f) => (
-              <div class="dim" title={f().until !== undefined ? `until ${stamp(f().until!)}` : undefined}>
-                {f().text}
+              <div class="dim" title={f().text}>
+                {fixLabel(f(), stamp)}
               </div>
             )}
           </Show>

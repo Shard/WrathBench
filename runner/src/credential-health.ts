@@ -16,7 +16,7 @@
  * sentences may not, and none of it reaches a public surface.
  */
 
-import { EXHAUSTED_PCT, windowEndsAt, type SubscriptionUsage } from "./subscription-usage";
+import { EXHAUSTED_PCT, type SubscriptionUsage } from "./subscription-usage";
 
 /** Why the budget holds a launch on a credential, as a code (`CredentialGate.holdReasonOf`). */
 export const HOLD_CODES = ["usage-spent", "usage-threshold", "spend-budget", "runs-budget"] as const;
@@ -165,11 +165,16 @@ export function windowName(minutes: number | null): string {
   return minutes % 1440 === 0 ? `${minutes / 1440}d` : `${Math.round(minutes / 60)}h`;
 }
 
-/** The newest reading's windows still in force, as meters; null with no reading. */
+/**
+ * The newest reading's windows still in force, as meters; null with no
+ * reading. The reset is the window's own (or its length from the reading),
+ * not capped at the seven days a pause waits at most: a month's meter says
+ * when the month resets.
+ */
 export function credentialWindows(u: SubscriptionUsage | undefined, now: number): CredentialWindow[] | null {
   if (u === undefined) return null;
   return u.windows.flatMap((w): CredentialWindow[] => {
-    const resetsAt = windowEndsAt(w, u.observedAt);
+    const resetsAt = w.resetsAt ?? (w.windowMinutes !== null ? u.observedAt + w.windowMinutes * 60_000 : null);
     if (resetsAt !== null && resetsAt <= now) return [];
     return [{ name: windowName(w.windowMinutes), ...(w.family !== undefined ? { family: w.family } : {}), usedPercent: w.usedPercent, resetsAt, limited: w.usedPercent >= EXHAUSTED_PCT }];
   });

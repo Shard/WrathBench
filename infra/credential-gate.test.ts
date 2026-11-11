@@ -498,7 +498,7 @@ describe("--status", () => {
     expect(statuses[0]!.windows).toEqual([{ name: "5h", usedPercent: 85, resetsAt: NOW + 5 * H, limited: false }]);
   });
 
-  test("a reader's last read reaches the health, and a key's read covers every credential of its provider naming it", () => {
+  test("a reader's last read reaches the health, and a refused key covers every credential of its provider naming it", () => {
     const creds = parseCredentials({
       go: { provider: "opencode-go", secretEnv: "OPENCODE_KEY", slots: 2, billing: "paid", enabled: true },
       "go-free": { provider: "opencode-go", secretEnv: "OPENCODE_KEY", slots: 2, billing: "free", enabled: true },
@@ -513,6 +513,10 @@ describe("--status", () => {
       ["zen", "ok", null],
     ]);
     expect(statuses[0]!.fix).toEqual({ kind: "replace-secret", secretEnv: "OPENCODE_KEY", text: "a new key in OPENCODE_KEY" });
+    // A spent plan is the paid side's alone: the free side bills no plan.
+    const spent = new Map([["go", { at: NOW - 60_000, http: 200, classification: "spent" as const }]]);
+    const s2 = credentialStatuses({ credentials: creds, book, gate: credentialGate(creds, [], [], NOW), runs: [], env: { OPENCODE_KEY: "x" }, reads: spent });
+    expect(s2.map((s) => [s.id, s.health?.state])).toEqual([["go", "quota-spent"], ["go-free", "ok"], ["zen", "ok"]]);
   });
 });
 

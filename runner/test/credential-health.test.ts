@@ -118,8 +118,8 @@ describe("credentialWindows", () => {
     expect(credentialWindows(u, NOW)).toEqual([
       { name: "5h", usedPercent: 12, resetsAt: NOW + H, limited: false },
       { name: "week", family: "opus", usedPercent: 100, resetsAt: NOW + 48 * H, limited: true },
-      // A reset past the seven-day ceiling is shown at the ceiling, as the gate reads it.
-      { name: "month", usedPercent: 20, resetsAt: NOW - 60_000 + 7 * 24 * H, limited: false },
+      // The month's own reset, not the seven days a pause waits at most.
+      { name: "month", usedPercent: 20, resetsAt: NOW + 200 * H, limited: false },
     ]);
     expect(credentialWindows(undefined, NOW)).toBeNull();
     expect([windowName(null), windowName(120), windowName(2 * 1440)]).toEqual(["window", "2h", "2d"]);
