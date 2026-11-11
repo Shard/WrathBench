@@ -49,7 +49,7 @@
  *    retried in place *before* being deferred.
  */
 
-import { openRunDb } from "../runner/src/rundb";
+import { bestLevelOf, readRunRow as readRecordedRunRow } from "../runner/src/run-reader";
 // The one zod schema for a watchdog override lives with the run config it
 // overrides (runner/src/config.ts). Importing it keeps roster, fleet and
 // runner validating the same shape instead of three hand-rolled copies.
@@ -1140,22 +1140,12 @@ function runDir(runId: string): string {
   return existsSync(archived) ? archived : live;
 }
 
+/** The run's row (`runner/src/run-reader.ts`): meta.json's on a v1 run, run.sqlite's on a 0.5 one. */
 function readRunRow(runId: string): RunRow | undefined {
-  const path = join(runDir(runId), "run.sqlite");
-  if (!existsSync(path)) return undefined;
-  try {
-    const db = openRunDb(path, { readonly: true });
-    try {
-      const row = db
-        .query("SELECT termination_reason, termination_detail, pause_reason FROM run WHERE run_id = ?")
-        .get(runId) as RunRow | null;
-      return row ?? undefined;
-    } finally {
-      db.close();
-    }
-  } catch {
-    return undefined;
-  }
+  const row = readRecordedRunRow(runDir(runId), runId);
+  if (row === null) return undefined;
+  const s = (v: unknown): string | null => (typeof v === "string" ? v : null);
+  return { termination_reason: s(row["termination_reason"]), termination_detail: s(row["termination_detail"]), pause_reason: s(row["pause_reason"]) };
 }
 
 /** The character a resumed run will actually use, per its stored meta.json. */
@@ -1200,22 +1190,9 @@ function tokenOfRun(runId: string): string {
   }
 }
 
+/** The highest level the run's samples reached (`run-reader.ts`): its trace's on a v1 run, its state rows' on a 0.5 one. */
 function readLevel(runId: string): number | undefined {
-  const path = join(runDir(runId), "run.sqlite");
-  if (!existsSync(path)) return undefined;
-  try {
-    const db = openRunDb(path, { readonly: true });
-    try {
-      const row = db.query("SELECT MAX(level) AS lvl FROM state WHERE run_id = ?").get(runId) as
-        | { lvl: number | null }
-        | null;
-      return row?.lvl ?? undefined;
-    } finally {
-      db.close();
-    }
-  } catch {
-    return undefined;
-  }
+  return bestLevelOf(runDir(runId), runId) ?? undefined;
 }
 
 function trajectoryOf(runId: string): string {
