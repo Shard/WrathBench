@@ -12,6 +12,6 @@
     "@wrathbench/mcp": "workspace:0.2.0",
     "@wrathbench/sdk": "workspace:0.2.0",
     "@wrathbench/wiki": "workspace:*",
-    "zod": "4.4.3"
+    "zod": "4.6.7"
   }
 }

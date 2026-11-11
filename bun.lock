@@ -19,7 +19,7 @@
       "name": "@wrathbench/collector",
       "version": "0.0.0",
       "dependencies": {
-        "zod": "4.4.3",
+        "zod": "4.6.7",
       },
     },
     "dashboard": {
@@ -46,7 +46,7 @@
         "@wrathbench/mcp": "workspace:0.2.0",
         "@wrathbench/sdk": "workspace:0.2.0",
         "@wrathbench/wiki": "workspace:*",
-        "zod": "4.4.3",
+        "zod": "4.6.7",
       },
     },
     "wiki": {
@@ -58,14 +58,14 @@
       "version": "0.2.0",
       "dependencies": {
         "@wrathbench/sdk": "workspace:*",
-        "zod": "4.4.3",
+        "zod": "4.6.7",
       },
     },
     "wrath-mcp/sdk": {
       "name": "@wrathbench/sdk",
       "version": "0.2.0",
       "dependencies": {
-        "zod": "4.4.3",
+        "zod": "4.6.7",
       },
     },
   },
@@ -538,7 +538,7 @@
 
     "youch-core": ["youch-core@0.3.3", "", { "dependencies": { "@poppinss/exception": "^1.2.2", "error-stack-parser-es": "^1.0.5" } }, "sha512-ho7XuGjLaJ2hWHoK8yFnsUGy2Y5uDpqSTq1FkHLK4/oqKtyUU1AFbOOxY4IpC9f0fTLjwYbslUz0Po5BpD1wrA=="],
 
-    "zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
+    "zod": ["zod@4.6.7", "", {}, "sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg=="],
 
     "@babel/generator/@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
