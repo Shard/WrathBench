@@ -28,6 +28,7 @@ import { loadRunConfig, type RunConfig } from "../src/config";
 import { EpisodicLog } from "../src/episodic";
 import { fanoutSessionNote, openFanout, readRoster, ROSTER_FILE } from "../src/fanout-run";
 import { configFromArgs } from "../src/run";
+import { runsSource } from "../viewer/runs-source";
 import { SandboxHost, type HarnessNotice } from "../src/sandbox/host";
 import { characterSessionDir, RecordSignals, SESSION_DIR, SESSIONS_DIR } from "../src/session-record";
 import { toolsFor } from "../src/tools";
@@ -310,6 +311,9 @@ describe.each(DRIVERS)("%s driver at fan-out", (driver) => {
     expect(snippetsOf(alfa)).toEqual(["Alfa"]);
     expect(snippetsOf(bravo)).toEqual(["Bravo"]);
     for (const c of [alfa, bravo]) expect(c.calls.map((x) => x.tool)).toContain("state_summary");
+    // Read back as the readers name them: a session per character, `<run-id>~<Character>`, grouped under the run.
+    const listed = await runsSource(join(r.runDir, "..")).list({ kind: "operator" });
+    expect(listed.map((e) => [e.id, e.group]).sort()).toEqual([[`${r.config.runId}~Alfa`, r.config.runId], [`${r.config.runId}~Bravo`, r.config.runId]]);
 
     // One driver session: one CLI process for the run, or on codex one thread
     // its every turn resumes. One credential: the run's, as on any run.
@@ -325,10 +329,14 @@ describe.each(DRIVERS)("%s driver at fan-out", (driver) => {
     expect(statSync(join(r.runDir, ROSTER_FILE)).mode & 0o777).toBe(0o600);
     const roster = readRoster(r.runDir);
     expect(roster.map((e) => [e.character, e.account, e.in])).toEqual([["Alfa", "POOL01", true], ["Bravo", "POOL02", true]]);
+    // The MCP config is a bridge to the loopback port and names no character
+    // (codex carries it in `-c` overrides, which are in the fake's argv).
+    const mcpConfig = { "claude-code": "claude-mcp.json", codex: null, pi: join("pi", "mcp.json") }[driver];
+    if (mcpConfig !== null) expect(existsSync(join(r.runDir, mcpConfig))).toBe(true);
     const handed = [
       readFileSync(record, "utf8"),
       readFileSync(join(r.runDir, "trajectory.jsonl"), "utf8"),
-      ...["claude-mcp.json", join("pi", "mcp.json")].filter((f) => existsSync(join(r.runDir, f))).map((f) => readFileSync(join(r.runDir, f), "utf8")),
+      ...(mcpConfig !== null ? [readFileSync(join(r.runDir, mcpConfig), "utf8")] : []),
     ].join("\n");
     for (const e of roster) expect(handed).not.toContain(e.token);
     r.trajectory.close();
@@ -452,7 +460,6 @@ describe("claude-code at fan-out, through run.ts", () => {
       { mode: 0o600 },
     );
     const record = join(runsDir, "fake-record.json");
-    const started = Date.now();
     const proc = Bun.spawn({
       cmd: [process.execPath, RUN_TS, "--resume", runId, "--runs-dir", runsDir],
       cwd: runsDir,
@@ -464,11 +471,18 @@ describe("claude-code at fan-out, through run.ts", () => {
       stdout: "pipe",
       stderr: "pipe",
     });
-    const stderr = await new Response(proc.stderr).text();
+    let stderr = "";
+    let endedAt: number | undefined;
+    for await (const chunk of proc.stderr) {
+      stderr += new TextDecoder().decode(chunk);
+      if (endedAt === undefined && stderr.includes("[wrathbench] terminated:")) endedAt = Date.now();
+    }
     expect(await proc.exited, stderr).toBe(0);
-    // The process ends with the run: the give-back's bound (10 s plus 2 s a
-    // character) is a ceiling on the wait, not a timer left to hold it open.
-    expect(Date.now() - started).toBeLessThan(12_000);
+    // The process ends with the run: its last line comes after the give-back,
+    // whose bound (10 s plus 2 s a character) is a ceiling on that wait, not a
+    // timer left to hold the process open (14 s here, before the fix).
+    expect(endedAt).toBeDefined();
+    expect(Date.now() - endedAt!).toBeLessThan(6_000);
 
     const rec = readJson(record);
     expect(rec["allowedTools"]).toEqual(mcpToolNames({ fanout: true }));
