@@ -2629,3 +2629,61 @@ export interface DraftPromoteBody {
   race?: number;
   class?: number;
 }
+
+// ------------------------------------------------------------- the admin API
+// `GET /api/admin` (`admin-api.ts`), mounted only with the admin switch on.
+
+/** One credential as the admin page shows it: the store's row, and the supervisor's status when it is up. */
+export interface AdminCredentialView {
+  id: string;
+  provider: string;
+  billing: "free" | "paid";
+  enabled: boolean;
+  secretEnv: string;
+  slots: number;
+  budget: string;
+  /** Whether the supervisor's environment has the variable set; null while no supervisor is up to say. */
+  secretSet: boolean | null;
+  /** Whether the chart hands the variable to the model pods (`modelKeys`); null when the viewer was not told. */
+  deployed: boolean | null;
+  /** Sessions on its slots now; null without a supervisor. */
+  inUse: number | null;
+  /** What the budget has used, as the supervisor last read it. */
+  used: string | null;
+  held: { scored?: string; freeplay?: string };
+  lastError: { reason: string; at: number } | null;
+}
+
+export interface AdminProviderView {
+  id: string;
+  label: string;
+  bill: "subscription" | "metered";
+  /** The env var name a credential of it names: this, or this with `_<n>`. */
+  envBase: string;
+  budgets: readonly string[];
+}
+
+/** How the deployment publishes, as the viewer was told (`infra/publish-settings.ts`, `publishViewFromEnv`). */
+export interface AdminPublishView {
+  /** Whether the deployment renders a publisher at all; null when the viewer was not told. */
+  enabled: boolean | null;
+  /** `<endpoint>/<bucket>` when the chart sets both as plain values; null when they are the Secret's. */
+  target: string | null;
+  region: string | null;
+  virtualHostedStyle: boolean;
+  delayMs: number;
+  history: boolean;
+  /** The publisher's last pass as its state file says, when the viewer can read it. */
+  last: { flipAt: number | null; gen: string | null; held: number; scanAt: number | null; withheld: number } | null;
+}
+
+export interface AdminResponse {
+  groups: { runner: boolean; evals: boolean; viewer: boolean };
+  fleet: { up: boolean; heartbeatAt: number | null };
+  /** The env var names the chart hands the model pods, or null when the viewer was not told. */
+  modelKeys: string[] | null;
+  credentials: AdminCredentialView[];
+  providers: AdminProviderView[];
+  publishing: AdminPublishView;
+  now: number;
+}

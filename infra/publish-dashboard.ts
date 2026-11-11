@@ -146,6 +146,7 @@ const renderer = createRenderer({
   ...(MODULE_URL !== undefined ? { moduleUrl: MODULE_URL } : {}),
   groups: GROUPS,
   history: SETTINGS.history,
+  delayMs: SETTINGS.delayMs,
 });
 
 // The secret scan's known values: this process's own credentials, read once

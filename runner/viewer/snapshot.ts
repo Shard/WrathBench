@@ -242,6 +242,12 @@ export interface RendererOptions {
    * live runs' pages stay; a finished run's page, trace and ladder row go.
    */
   history?: boolean;
+  /**
+   * The publisher's delay (`infra/publish-settings.ts`), carried on `live.json`
+   * when it is above zero so the public shell reads data that old as on time
+   * rather than stale. Absent or 0, `live.json` is what it always was.
+   */
+  delayMs?: number;
 }
 
 /**
@@ -822,6 +828,7 @@ export function createRenderer(
           // Where this pass's units are. Its presence is also what tells a
           // reader the windows are no longer inline here.
           nearbyKey: PUBLIC_NEARBY_KEY,
+          ...(opts.delayMs !== undefined && opts.delayMs > 0 ? { delayMs: opts.delayMs } : {}),
         }),
         contentType: "application/json",
         cacheControl: MUTABLE_CACHE,

@@ -112,10 +112,10 @@ describe("the admin switch off", () => {
     store.close();
   });
 
-  test("nor does it run the write guard: a write it would refuse is the same 404 as any other", async () => {
+  test("the write guard still stands in front of every route: a cross-site shape is refused before any route runs", async () => {
     const { handle } = fixture({ admin: false });
     const res = await handle(new Request("http://x/api/config/roster/glm", { method: "PUT", body: "x", headers: { "content-type": "text/plain" } }));
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(415);
   });
 
   test("/api/info says admin only when it is on", async () => {

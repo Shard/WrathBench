@@ -87,3 +87,34 @@ export function describePublishSettings(s: PublishSettings): string {
   ];
   return `${where} (${how.join(", ")})`;
 }
+
+/**
+ * What the admin page may say about publishing, from the viewer's environment
+ * (the chart hands the viewer the same non-secret settings, and the target
+ * only where it is a plain value): whether this deployment has a publisher,
+ * and how it is set. Never the key pair, and never a value from the Secret.
+ */
+export interface PublishView {
+  /** Whether the deployment renders a publisher at all (`WRATHBENCH_PUBLISHER`); null when the viewer was not told. */
+  enabled: boolean | null;
+  /** `<endpoint>/<bucket>` when the chart sets both as plain values; null when they are the Secret's. */
+  target: string | null;
+  region: string | null;
+  virtualHostedStyle: boolean;
+  delayMs: number;
+  history: boolean;
+}
+
+export function publishViewFromEnv(env: Record<string, string | undefined>): PublishView {
+  const flag = env["WRATHBENCH_PUBLISHER"];
+  const delay = Number(env["WRATHBENCH_PUBLISH_DELAY_MS"] ?? "0");
+  const target = env["WRATHBENCH_PUBLISH_TARGET"];
+  return {
+    enabled: flag === "1" ? true : flag === "0" ? false : null,
+    target: target === undefined || target === "" ? null : target,
+    region: env["S3_REGION"] === undefined || env["S3_REGION"] === "" ? null : env["S3_REGION"],
+    virtualHostedStyle: env["WRATHBENCH_PUBLISH_VIRTUAL_HOSTED"] === "1",
+    delayMs: Number.isInteger(delay) && delay > 0 ? delay : 0,
+    history: env["WRATHBENCH_PUBLISH_HISTORY"] !== "0",
+  };
+}

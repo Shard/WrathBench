@@ -110,6 +110,27 @@ spec:
             # admin pages. Unset, this viewer has no write route at all.
             - name: WRATHBENCH_ADMIN
               value: "1"
+            # What the admin pages say about the deployment around the store
+            # (runner/viewer/admin-api.ts): the variable NAMES the model pods
+            # carry, never a value, and how the publisher is set, never its
+            # key pair or anything else from the Secret.
+            {{- $keys := .Values.modelKeys | default list }}
+            {{- if include "wrathbench.on.codex" $ }}{{ $keys = append $keys "CODEX_HOME" }}{{ end }}
+            - name: WRATHBENCH_MODEL_KEYS
+              value: {{ join "," $keys | quote }}
+            - name: WRATHBENCH_PUBLISHER
+              value: {{ if include "wrathbench.on.publisher" $ }}"1"{{ else }}"0"{{ end }}
+            {{- if include "wrathbench.on.publisher" $ }}
+            {{- with include "wrathbench.publishSettingsEnv" . | trim }}{{ . | nindent 12 }}{{ end }}
+            {{- $t := .Values.publisher.target | default dict }}
+            {{- if and $t.endpoint $t.bucket }}
+            - name: WRATHBENCH_PUBLISH_TARGET
+              value: {{ printf "%s/%s" (trimSuffix "/" $t.endpoint) $t.bucket | quote }}
+            {{- end }}
+            # The publisher's state file, read-only, for its last pass.
+            - name: WRATHBENCH_PUBLISH_STATE
+              value: /wrathbench/data/publish/state.json
+            {{- end }}
             {{- end }}
             {{- if $ing.enabled }}
             # The names a browser may address the viewer by: the Ingress hosts.
@@ -170,6 +191,14 @@ spec:
             - name: data
               mountPath: /wrathbench/data/config
               subPath: config
+            {{- if and .Values.admin.enabled (include "wrathbench.on.publisher" $) }}
+            # The publisher's state, for the admin page's publishing status.
+            # Read-only: the publisher is its one writer.
+            - name: data
+              mountPath: /wrathbench/data/publish
+              subPath: publish
+              readOnly: true
+            {{- end }}
       volumes:
         - name: data
           persistentVolumeClaim:

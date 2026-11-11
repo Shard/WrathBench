@@ -65,6 +65,8 @@ export interface RigOptions {
   groups?: Groups;
   /** Seed the rig's config store from `infra/fleet.example.json`, so the admin pages have a config to show. */
   seed?: boolean;
+  /** The private viewer's admin switch; on unless set false, which is the chart's default deployment. */
+  admin?: boolean;
   log?: (line: string) => void;
 }
 
@@ -210,7 +212,7 @@ export async function startRig(opts: RigOptions): Promise<Rig> {
     }
   }
   const groups = opts.groups ?? ALL_GROUPS;
-  // The operator's own viewer, admin switch on: the rig shows the pages it has.
+  // The operator's own viewer, admin switch on unless told otherwise: the rig shows the pages it has.
   const privateApi = createApi({
     runsDir,
     tilesDir,
@@ -220,7 +222,7 @@ export async function startRig(opts: RigOptions): Promise<Rig> {
     configDbPath,
     allowedHosts: [],
     groups,
-    admin: true,
+    admin: opts.admin !== false,
   });
   const publicApi = createApi({ runsDir, tilesDir: join(work, "no-tiles"), publicMode: true, moduleUrl: "http://127.0.0.1:1", store: localRunStore(runsDir), configDbPath, groups });
   const renderer = createRenderer({ runsDir, api: publicApi, configDbPath, groups });
@@ -413,11 +415,12 @@ interface Cli {
   serve: boolean;
   groups?: Groups;
   seed: boolean;
+  admin: boolean;
 }
 
 export const USAGE = `usage: bun infra/dashboard-shots.ts [--out DIR] [--run DIR]... [--path P]... [--site private|public|both]
                                    [--viewport WxH] [--scheme dark|light] [--settle MS] [--real-wowhead] [--serve]
-                                   [--groups runner,evals,viewer] [--seed]`;
+                                   [--groups runner,evals,viewer] [--seed] [--no-admin]`;
 
 export function parseCli(argv: readonly string[], now = new Date()): Cli | { error: string } {
   const c: Cli = {
@@ -431,6 +434,7 @@ export function parseCli(argv: readonly string[], now = new Date()): Cli | { err
     wowhead: "stub",
     serve: false,
     seed: false,
+    admin: true,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -438,6 +442,7 @@ export function parseCli(argv: readonly string[], now = new Date()): Cli | { err
     if (a === "--real-wowhead") c.wowhead = "real";
     else if (a === "--serve") c.serve = true;
     else if (a === "--seed") c.seed = true;
+    else if (a === "--no-admin") c.admin = false;
     else if (["--out", "--run", "--path", "--site", "--viewport", "--scheme", "--settle", "--groups"].includes(a)) {
       const v = val();
       if (v === undefined) return { error: `${a} needs a value` };
@@ -490,6 +495,7 @@ async function main(argv: readonly string[]): Promise<number> {
     wowhead: c.wowhead,
     ...(c.groups !== undefined ? { groups: c.groups } : {}),
     seed: c.seed,
+    admin: c.admin,
     log: (l) => console.log(l),
   });
   console.log(`private ${rig.privateUrl} · public ${rig.publicUrl} · bucket ${rig.bucketUrl}`);
