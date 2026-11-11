@@ -17,7 +17,7 @@ import type { TraceItemName, TraceQuestReq, TraceSegment } from "../../runner/vi
 import { projectTraceSegment } from "../../runner/viewer/public-projection";
 import { sheetReading } from "@wrathbench/inspector/views/inventory";
 import { QUEST_STATUS_LABEL, objectiveText, questLog, questsInLog, type QuestRow } from "@wrathbench/inspector/views/questlog";
-import { createTraceStore } from "../src/lib/traceplayer";
+import { createTraceStore } from "@wrathbench/inspector/views/traceplayer";
 
 const RUN = "run-quests";
 const W = 1_760_000_100_000 - (1_760_000_100_000 % SEG_MS);

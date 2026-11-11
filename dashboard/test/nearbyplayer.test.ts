@@ -11,7 +11,7 @@ import { PUBLIC_NEARBY_SPAN_MS } from "@viewer/public-keys";
 import { cullLabels, classOf, createNearbyStore, nearbyFrameDue, placeLabel, questMark, NEARBY_FRAME_MS, NEARBY_SLACK_MS } from "@wrathbench/inspector/views/nearbyplayer";
 import { NEARBY_MIN_PX_PER_YD, NEARBY_NAME_PX_PER_YD, nearbyNamesShown, nearbyShown, pxPerYard } from "../src/lib/mapview";
 import { targetReading } from "@wrathbench/inspector/views/unitframe";
-import { createLiveClock, horizonOf, liveCadence } from "../src/lib/traceplayer";
+import { createLiveClock, horizonOf, liveCadence } from "@wrathbench/inspector/views/traceplayer";
 import { createSnapshotClient } from "../src/api/snapshot-client";
 
 const T0 = 1_760_000_040_000;

@@ -10,7 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import type { RunRow, StatePoint } from "../viewer/api-types";
 import { activeMsUntil } from "../viewer/sessions";
-import { inventoryAt } from "../viewer/track-inv";
+import { inventoryAt } from "@wrathbench/inspector/codec/inventory";
 import {
   resultRunOf,
   levelMarks,

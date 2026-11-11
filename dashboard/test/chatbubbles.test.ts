@@ -22,7 +22,7 @@ import {
   stacksKey,
   type StackBox,
 } from "@wrathbench/inspector/views/chatbubbles";
-import { createTraceStore, replayCursorAt } from "../src/lib/traceplayer";
+import { createTraceStore, replayCursorAt } from "@wrathbench/inspector/views/traceplayer";
 
 const W = 1_760_000_100_000 - (1_760_000_100_000 % SEG_MS);
 const line = (t: number, text: string, kind: TraceChatLine["kind"] = "say"): TraceChatLine => ({ t, kind, text });

@@ -21,7 +21,7 @@
 import type { AgentPosition, TrackResponse } from "@viewer/api-types";
 import { type Accessor, createMemo } from "solid-js";
 import { DEFAULT_MAP, chooseMap, mapCounts } from "./mapview";
-import { mapsVisited } from "./replay";
+import { mapsVisited } from "@wrathbench/inspector/views/replay";
 
 export interface MapSources {
   /** The feed on screen: the live poll's positions, or the replay cursor's. */

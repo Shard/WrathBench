@@ -259,7 +259,7 @@ them. A replay asks for one segment per five minutes of play, so even 60×
 playback is about one request every five seconds. A player should prefetch
 around the cursor, not a whole run.
 
-The reader is `dashboard/src/lib/traceplayer.ts`, and it is written to that
+The reader is the inspector's trace player (`@wrathbench/inspector/views/traceplayer`), and it is written to that
 budget. The live map fetches only for the runs drawn on the continent on
 screen: the window under the playhead, and the next listed one in the last
 minute before the playhead reaches it, with at most four requests in flight
@@ -525,7 +525,7 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   Every run is re-keyed once by it, as it was for the travel marks.
 - **A track's travel marks ship.** The replay draws flights in their own
   colour and leaves a gap at a teleport from the track's `travel` list, read
-  off the trajectory at request time (`dashboard/src/lib/replay.ts`). Its
+  off the trajectory at request time (`classifySegments`, `@wrathbench/inspector/views/replay`). Its
   flight takeoffs and landings, its hearthstone uses and its graveyard
   releases ship as kinds and timestamps, facts the safe core, the action log
   and the deaths already carry. The track is hashed into the run's key with
@@ -739,7 +739,7 @@ bytes, so the release re-keys those runs once, all four objects (the old set is
 pruned as usual), and a run from before the column keeps its key. The shape is
 unchanged, so a site on any build reads the new numbers.
 
-**A track's inventory is patches** (`inv`, `runner/viewer/track-inv.ts`): each
+**A track's inventory is patches** (`inv`, `@wrathbench/inspector/codec/inventory`): each
 change as the slots that moved, where the track used to carry the whole
 inventory on every point it changed on. That took a level-43 character's track
 from 30.3 MB to 5.7 MB, and a live run's track is re-uploaded on every pass.

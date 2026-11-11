@@ -285,7 +285,8 @@ describe("a long title beside several objectives", () => {
 
   test("in a 320 px panel the objectives drop under the title rather than pair their last line with its last line", () => {
     // happy-dom does no layout, so the rule is what the classes carry; `bun wb dashboard shots` shows it drawn.
-    const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+    // The rules are the inspector's views' stylesheet, which the dashboard imports after its own.
+    const css = readFileSync(Bun.resolveSync("@wrathbench/inspector/views/views.css", import.meta.dir), "utf8");
     const body = (selector: string): string => {
       const m = new RegExp(`(?:^|\\n)${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{([^}]*)\\}`).exec(css);
       expect(m).not.toBeNull();

@@ -16,8 +16,8 @@ import { CONTEXT_MS, SEG_MS, encodeSegment, type TraceDictLookup, type TraceRow 
 import type { ItemSample, TraceItemName, TraceQuestReq, TraceSegment } from "../../runner/viewer/api-types";
 import { projectTraceSegment } from "../../runner/viewer/public-projection";
 import { carried, carriedCount, paperdoll, sheetItems, sheetReading, type InvItem } from "@wrathbench/inspector/views/inventory";
-import { TRACE_MAX_SPEED, traceDrives } from "../src/lib/playback";
-import { createTraceStore } from "../src/lib/traceplayer";
+import { TRACE_MAX_SPEED, traceDrives } from "@wrathbench/inspector/views/playback";
+import { createTraceStore } from "@wrathbench/inspector/views/traceplayer";
 import { itemUrl } from "@wrathbench/inspector/views/wowhead";
 
 const RUN = "run-sheet";

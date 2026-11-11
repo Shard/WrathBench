@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { backfilledTitle, costMark, effortLabel, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, COST_BASIS_NOTE, fmtMoney, moneyCoins } from "../src/lib/format";
+import { backfilledTitle, costMark, effortLabel, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, COST_BASIS_NOTE, fmtMoney, moneyCoins, playbackClock } from "../src/lib/format";
 
 describe("fmtItems", () => {
   const items = [
@@ -355,5 +355,17 @@ describe("money as coins, for the line that draws them", () => {
       { kind: "silver", value: 1 },
       { kind: "copper", value: 12 },
     ]);
+  });
+});
+
+describe("playbackClock", () => {
+  const span = { from: 1_000, to: 61_000 };
+
+  test("the clock is on the run's own time, not the wall", () => {
+    expect(playbackClock(span, 1_000)).toEqual({ elapsed: "0:00", total: "1:00" });
+    expect(playbackClock(span, 31_500)).toEqual({ elapsed: "0:30", total: "1:00" });
+    // A cursor past the last sample reads as the end, not as more than the whole.
+    expect(playbackClock(span, 99_000).elapsed).toBe("1:00");
+    expect(playbackClock(null, 5)).toEqual({ elapsed: "—", total: "—" });
   });
 });

@@ -324,3 +324,17 @@ export function modelDisplay(model: string): string {
   }
   return base;
 }
+
+/**
+ * The transport's clock: how far into the recording the cursor is, and how
+ * long the recording is, both on the run's own clock (`fmtElapsed`). A wall
+ * clock answers a question nobody scrubbing a replay has; it stays available
+ * as a hover.
+ */
+export function playbackClock(span: { from: number; to: number } | null, cursor: number): { elapsed: string; total: string } {
+  if (span === null) return { elapsed: "—", total: "—" };
+  return {
+    elapsed: fmtElapsed(Math.min(cursor, span.to) - span.from),
+    total: fmtElapsed(span.to - span.from),
+  };
+}

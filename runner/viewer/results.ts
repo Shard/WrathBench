@@ -48,7 +48,7 @@ import type {
   TradeFacts,
 } from "./api-types";
 import { itemSamplesOf } from "./runs";
-import { encodeInventory } from "./track-inv";
+import { encodeInventory } from "@wrathbench/inspector/codec/inventory";
 import { activeMsUntil, type ActiveSegment } from "./sessions";
 
 /**
@@ -125,7 +125,7 @@ export function trackFrom(
    * The inventory is on its own rows because it is read by its own query, and
    * it is published on change, as a patch onto the reading before, rather than
    * on every point: the whole inventory per sample would be most of the
-   * response and nearly all of it repetition (`track-inv.ts`).
+   * response and nearly all of it repetition (`@wrathbench/inspector/codec/inventory`).
    *
    * The join is "newest reading at or before this point", which also covers the
    * sample that changed the inventory without carrying a position — the change
