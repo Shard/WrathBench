@@ -28,7 +28,7 @@ import {
 import { CharacterTotalsCard } from "../components/CharacterCards";
 import { CharacterPlot } from "../components/CharacterChart";
 import { ModelIcon } from "../components/ModelIcon";
-import { UnitFrame } from "../components/UnitFrame";
+import { UnitFrame } from "@wrathbench/inspector/views";
 import { XpChart } from "../components/XpChart";
 import { characterIsLive, characterSessionSeries, sessionCount } from "../lib/character";
 import { displayError } from "../lib/errors";
@@ -38,7 +38,7 @@ import { Coins, LevelXp } from "../components/CharacterFacts";
 import { InfoHint } from "../components/InfoHint";
 import { poll, whileLive } from "../lib/poll";
 import { statusOf, statusText, statusTitle, statusTone } from "../lib/runs";
-import type { PowerType } from "../lib/unitframe";
+import type { PowerType } from "@wrathbench/inspector/views/unitframe";
 
 /**
  * How often a character with a live attempt is re-fetched.

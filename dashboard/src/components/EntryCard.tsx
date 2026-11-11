@@ -20,7 +20,7 @@ import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid
 import { LEVEL_START_XP, levelOfXp } from "../lib/axes";
 import { type LadderPoint } from "../lib/ladder";
 import { effortLabel, modelDisplay } from "../lib/format";
-import { type Frame, cardPlacement } from "../lib/popover";
+import { type Frame, cardPlacement } from "@wrathbench/inspector/views/popover";
 import { Coins, LevelXp, QuestCount } from "./CharacterFacts";
 import { HarnessTag } from "./HarnessTag";
 import { ModelIcon } from "./ModelIcon";

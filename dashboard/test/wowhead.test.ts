@@ -17,8 +17,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Window } from "happy-dom";
-import { carried, carriedCount, paperdoll, splitLinked, type InvItem } from "../src/lib/inventory";
-import { popoverPlacement } from "../src/lib/popover";
+import { carried, carriedCount, paperdoll, splitLinked, type InvItem } from "@wrathbench/inspector/views/inventory";
+import { popoverPlacement } from "@wrathbench/inspector/views/popover";
 import {
   EQUIPMENT_SLOTS,
   PAPERDOLL_BOTTOM,
@@ -38,7 +38,7 @@ import {
   slotLabel,
   wowheadConfig,
   wowheadStatus,
-} from "../src/lib/wowhead";
+} from "@wrathbench/inspector/views/wowhead";
 
 const SRC = join(import.meta.dir, "..", "src");
 
@@ -282,9 +282,8 @@ describe("what a sample says, and what it does not", () => {
 });
 
 describe("one place spells the external origins", () => {
-  test("no source outside lib/wowhead.ts names zamimg or wowhead.com", () => {
+  test("no dashboard source names zamimg or wowhead.com: the inspector's views/wowhead is the one place", () => {
     const users = sources().filter((p) => {
-      if (p === join(SRC, "lib", "wowhead.ts")) return false;
       // A comment naming the decision is prose, not a second request path; the
       // check is for a literal URL.
       return /https:\/\/(wow\.zamimg\.com|www\.wowhead\.com)/.test(readFileSync(p, "utf8"));

@@ -493,7 +493,7 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .map-chips { position: absolute; top: 10px; left: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
 
 /*
- * What a character said, over its pip (`lib/chatbubbles.ts`). The frame loop
+ * What a character said, over its pip (`@wrathbench/inspector/views/chatbubbles`). The frame loop
  * places each stack through four properties: its box (`--bx`, `--by`) and the
  * leader down to its pip (`--lx`, `--lead`). The bubble itself is a `.card`.
  * Only a bubble takes the pointer, for its title, and the layer hands a drag
@@ -763,7 +763,7 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
 .filter.check input { accent-color: var(--accent); cursor: pointer; }
 
 /* The filters button and its panel. The panel is portalled to the body and
-   placed by `popoverPlacement` (`lib/popover.ts`, shared with the inventory
+   placed by `popoverPlacement` (`@wrathbench/inspector/views/popover`, shared with the inventory
    popovers), so it is never clipped by the controls row and never reflows it;
    its width is told to the maths as well as to the CSS, or the clamp that
    keeps it on screen at 360px would be against the wrong number. */
@@ -866,7 +866,7 @@ button.update {
 }
 button.update:hover { background: var(--panel); }
 
-/* --- the unit frame (components/UnitFrame.tsx) --- */
+/* --- the unit frame (the inspector's `UnitFrame`, `@wrathbench/inspector/views`) --- */
 /*
  * The client's own bar colours — health 0/1/0, mana 0/0/1, rage 1/0/0, energy
  * 1/1/0, focus 1/.5/.25, runic power 0/.82/1 — desaturated a step so they sit
@@ -1221,7 +1221,7 @@ button.update:hover { background: var(--panel); }
 /* The bag button, and the popover it opens. Hover on a desktop, tap anywhere. */
 /* The anchor a popover hangs off, and the button that opens one. Shared by the
    bag, the paperdoll and the ladder's filters (one class,
-   not one per caller) — `lib/popover.ts` is the arithmetic half of the same
+   not one per caller) — `@wrathbench/inspector/views/popover` is the arithmetic half of the same
    consolidation. */
 .popover-anchor { position: relative; display: inline-flex; }
 .popover-button {

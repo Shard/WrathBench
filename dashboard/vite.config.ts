@@ -74,6 +74,10 @@ export default defineConfig({
   plugins: [solid(), ogMeta(), catalogueSubset()],
   resolve: {
     alias: { "@viewer": resolve(import.meta.dirname, "../runner/viewer") },
+    // One Solid: the inspector's views (`@wrathbench/inspector/views`) take it
+    // from wherever their package resolves it, and a second copy would render
+    // and never update.
+    dedupe: ["solid-js"],
   },
   server: {
     port: 5180,

@@ -21,7 +21,7 @@ import {
   layoutStacks,
   stacksKey,
   type StackBox,
-} from "../src/lib/chatbubbles";
+} from "@wrathbench/inspector/views/chatbubbles";
 import { createTraceStore, replayCursorAt } from "../src/lib/traceplayer";
 
 const W = 1_760_000_100_000 - (1_760_000_100_000 % SEG_MS);

@@ -869,7 +869,7 @@ mean xp as the level badge and xp bar the table uses, mean gold and quests as
 the table draws them, then how many runs the means rest on, the mean cost
 with its basis, the mean active playtime and any axis in view the card does not
 already show. It sits inside the visible part of the chart beside the point,
-flipping away from an edge (`cardPlacement`, `lib/popover.ts`), and never
+flipping away from an edge (`cardPlacement`, `@wrathbench/inspector/views/popover`), and never
 takes the pointer, so the mark under it is still the link. On a touch screen
 the first tap opens the card, a second follows the link, and a tap elsewhere
 closes it.
@@ -1223,7 +1223,7 @@ the only third-party origins the application asks for, alongside the
 Cloudflare Web Analytics script (`static.cloudflareinsights.com`) — cookieless,
 and appended at startup by `dashboard/src/main.tsx` on the public build only,
 so the same bundle served by the private viewer reports nothing. The tooltip script is injected at runtime by
-`dashboard/src/lib/wowhead.ts` rather than sitting in `index.html`, so a page
+`@wrathbench/inspector/views/wowhead` rather than sitting in `index.html`, so a page
 with no items asks for nothing. The reason for the
 arrangement is the red line in `docs/DATA-AND-LEGAL.md`: we extract and serve
 no item art — we publish the `item_template.entry` the server already gave us

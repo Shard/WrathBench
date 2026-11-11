@@ -680,6 +680,18 @@ readonly, and the runs directory is only ever listed and read. The routes and
 their response shapes are `api.ts` and `api-types.ts`; anything that is not a
 route is the built SPA, or the not-built notice when there is none.
 
+### The inspector's API
+
+`/api/inspector` is wrath-inspector's own API (`wrath-mcp/inspector/README.md`,
+"The API"), mounted over the runs through `runs-source.ts`: `/sessions` lists
+every run with a v1 session record, under its run id, and
+`/sessions/<run id>/…` reads one, its streams by range, its tail over SSE and
+its packed trace and nearby windows. A 0.5 run is not listed, because it has
+no `session.json`, and still opens through the adapter. It serves the record
+as it is, unprojected, so a public handle withholds every path of it with a
+403, as it does the raw lines and the run's tail. The run page's session
+events read it.
+
 ### The config API (operator-only)
 
 The fleet config is the sqlite store `docs/RUNBOOK.md`, "Where the config

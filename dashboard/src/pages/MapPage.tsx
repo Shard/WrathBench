@@ -53,11 +53,11 @@ import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMou
 import { api, type AgentPosition, type TrackResponse } from "../api/client";
 import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
 import { PlayBar } from "../components/PlayBar";
-import { UnitFrame } from "../components/UnitFrame";
-import { InventoryPanel } from "../components/Inventory";
+import { UnitFrame } from "@wrathbench/inspector/views";
+import { InventoryPanel } from "@wrathbench/inspector/views";
 import { LiveList } from "../components/LiveList";
-import { sheetReading } from "../lib/inventory";
-import { questLog } from "../lib/questlog";
+import { sheetReading } from "@wrathbench/inspector/views/inventory";
+import { questLog } from "@wrathbench/inspector/views/questlog";
 import { cursorMemory } from "../lib/cursormemory";
 import { intentLabel, intentToDraw, intentTone, type IntentTone } from "../lib/mapintent";
 import { restFrameDue, restPhase, statusStamp } from "../lib/reflect";
@@ -70,7 +70,7 @@ import {
   sameAuras,
   targetReading,
   unitFlags,
-} from "../lib/unitframe";
+} from "@wrathbench/inspector/views/unitframe";
 import { NO_TILE_BASE, nativeFormat, tileIndexSrc, tileSrc } from "../lib/tiles";
 import { type TileIndex, parseTileIndex } from "@viewer/tileindex";
 import {
@@ -82,7 +82,7 @@ import {
   cullLabels,
   nearbyFrameDue,
   placeLabel,
-} from "../lib/nearbyplayer";
+} from "@wrathbench/inspector/views/nearbyplayer";
 import { type LodLayer, ART_LAYER, LOD_MAX, MINIMAP_LAYER } from "@viewer/worldmap";
 import { fmtAge, fmtItems, fmtMoney, modelDisplay, num, shortHarness, shortRunId } from "../lib/format";
 import {
@@ -121,7 +121,7 @@ import {
   replayHrefFor,
 } from "../lib/mapstate";
 import { createMapFit } from "../lib/mapfit";
-import { bubbleLifeMs, bubblesAt, layoutStacks, stacksKey, type BubbleStack, type StackBox } from "../lib/chatbubbles";
+import { bubbleLifeMs, bubblesAt, layoutStacks, stacksKey, type BubbleStack, type StackBox } from "@wrathbench/inspector/views/chatbubbles";
 import {
   DEFAULT_MAP,
   STALE_MS,
@@ -396,7 +396,7 @@ export default function MapPage() {
     },
   });
   /*
-   * The units around each live character (`lib/nearbyplayer.ts`): each run's
+   * The units around each live character (`@wrathbench/inspector/views/nearbyplayer`): each run's
    * newest window, sampled at the same playhead the pips are placed at. Live
    * only — a replay has no units; the public build's windows ride in
    * `live.json`.
@@ -502,7 +502,7 @@ export default function MapPage() {
   let stage!: HTMLDivElement;
 
   /*
-   * The chat bubbles (`lib/chatbubbles.ts`): which are up is a signal, written
+   * The chat bubbles (`@wrathbench/inspector/views/chatbubbles`): which are up is a signal, written
    * by the frame loop only when the set changes, and where each stack sits is
    * set on its element by the same loop, every frame the map is drawn. Each
    * stack's size is measured when the set changes or the stage resizes, not

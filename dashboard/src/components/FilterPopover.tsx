@@ -22,7 +22,7 @@
 
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import { Portal } from "solid-js/web";
-import { type Placement, popoverPlacement, popoverStyle } from "../lib/popover";
+import { type Placement, popoverPlacement, popoverStyle } from "@wrathbench/inspector/views/popover";
 import type { FilterOption } from "../lib/ladderfilter";
 
 /** The panel's own width, told to both the CSS and the placement maths. */

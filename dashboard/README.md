@@ -184,9 +184,9 @@ level and experience (a gauge the trace did not observe stays unobserved
 rather than being filled from the 60 s sample beside it, and the health bar
 reads dead at a corpse), a cast bar, combat, mounted, flying, resting and
 ghost badges, the target's health where it is published, and the buffs row: spell
-icons as Wowhead links (`src/lib/wowhead.ts`), stacks, and the time left.
+icons as Wowhead links (`@wrathbench/inspector/views/wowhead`), stacks, and the time left.
 
-**Chat bubbles** (`src/lib/chatbubbles.ts`) put what a character said over
+**Chat bubbles** (`@wrathbench/inspector/views/chatbubbles`) put what a character said over
 its pip, from the trace's `chat` events at the same playhead
 (`TraceStore.chat`, where each loaded piece answers only for its own stretch,
 so a window seen in the tail and then closed says its lines once). A line is
@@ -204,7 +204,7 @@ and of every character's puck, and keeps a leader down to its pip. What the publ
 sheet at the same playhead as the pip and the unit frame, wherever the trace
 answers for it: live, paused, and in a replay at 60× or slower
 (`TraceStore.sheetAt`, folded by the codec's `sheetAt`, turned into the
-panels' rows by `sheetItems` in `src/lib/inventory.ts`). That puts the public
+panels' rows by `sheetItems` in `@wrathbench/inspector/views/inventory`). That puts the public
 sidebar in step with the pip, where the position's newest reading ran the
 publish delay ahead of it. The sheet's rows are the ones the 60 s reading
 carries, worn bags, the keyring and the currency slots left out as there,
@@ -231,7 +231,7 @@ points, and is read as it is.
 
 **The quest log** is a third button beside the bag and the paperdoll, "N
 quests", over the same sheet at the same playhead (`questLog` in
-`src/lib/questlog.ts`). Its panel lists the log in slot order, then any quest
+`@wrathbench/inspector/views/questlog`). Its panel lists the log in slot order, then any quest
 turned in since the playhead's five-minute window began. Each row is a link to
 `quest=<id>` that asks Wowhead's script to rename it, because the trace records
 no quest title and publishes none; where the script is blocked the row reads
@@ -270,7 +270,7 @@ the runs on the continent on screen, the playhead's window and the next one
 in its last minute, at most four in flight.
 
 **The units around a live character** draw under the pips on the private
-live map (`src/lib/nearbyplayer.ts`, over the viewer's nearby codec): each
+live map (`@wrathbench/inspector/views/nearbyplayer`, over the viewer's nearby codec): each
 run's newest window from `/api/run/<id>/nearby`, sampled at the same playhead
 as the pip, so a creature and the character fighting it line up however far
 behind the feed the map runs. A unit two characters both see is one guid and
@@ -360,6 +360,15 @@ src/lib/      pure helpers: view maths, formatting, polling
 src/pages/    one file per route
 src/components/  the shell and the pieces shared between pages
 ```
+
+The session-side views are wrath-inspector's (`@wrathbench/inspector/views`,
+in the stack): the unit frame, the inventory and quest log, the nearby layer's
+store and classes, the chat bubbles' layout, the popover's placement and the
+Wowhead links, and the event feed the run page shows for a v1 run. The map,
+the run page and the character page compose them with what is the
+benchmark's: models, logos, replay, parties and the public snapshot. Their
+classes are styled here, in `src/styles.css`; the inspector's own page carries
+a copy of the same rules.
 
 What both sides need is imported from the viewer rather than copied, under
 the `@viewer/*` alias, and the session-side codecs from the inspector in the
