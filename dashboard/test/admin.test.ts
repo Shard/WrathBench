@@ -1,12 +1,20 @@
 /** The admin page's forms and readings (`lib/admin.ts`): what each writes, and what it reads out of the config document. */
 import { describe, expect, test } from "bun:test";
 import {
+  CONFIG_SECTIONS,
   EMPTY_CREDENTIAL,
   campaignDoc,
   campaignRows,
   credentialDoc,
+  credentialFormOf,
   fmtDelay,
   freeplayRows,
+  healthTitle,
+  healthTone,
+  sectionOf,
+  sectionOfKey,
+  sectionsShown,
+  storedCredentialRows,
   jobDoc,
   nextQueueKey,
   publishedDefs,
@@ -29,6 +37,76 @@ describe("credentialDoc", () => {
     expect(credentialDoc(EMPTY_CREDENTIAL)).toBe("a credential needs an id");
     expect(credentialDoc({ ...EMPTY_CREDENTIAL, id: "x" })).toBe("pick a provider");
     expect(credentialDoc({ ...EMPTY_CREDENTIAL, id: "x", provider: "openrouter", secretEnv: "K", budget: "spend" })).toBe("a spend budget needs its limit");
+    expect(credentialDoc({ ...EMPTY_CREDENTIAL, id: "x", provider: "openrouter", secretEnv: "K", slots: "" })).toBe("slots is a whole number");
+  });
+
+  test("a usage budget's two shares: freeplay its own where given, else the scored one", () => {
+    const base = { ...EMPTY_CREDENTIAL, id: "c", provider: "claude", secretEnv: "CLAUDE_CODE_OAUTH_TOKEN", budget: "usage" as const, limit: "80" };
+    expect(credentialDoc({ ...base, freeplayLimit: "95" })).toMatchObject({ body: { budget: { kind: "usage", scoredMaxPct: 80, freeplayMaxPct: 95 } } });
+    expect(credentialDoc({ ...base, freeplayLimit: "x" })).toBe("the freeplay share is a percentage");
+  });
+
+  test("an edit is the whole row, its switch kept", () => {
+    const row = { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 2, budget: { kind: "spend", usdPerDay: 5 }, billing: "paid", enabled: true };
+    const form = credentialFormOf("or-1", row);
+    expect(form).toEqual({ id: "or-1", provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: "2", billing: "paid", budget: "spend", limit: "5", freeplayLimit: "" });
+    expect(credentialDoc(form, { enabled: true })).toEqual({ key: "credentials/or-1", body: row });
+    // Back to the provider's default: the budget leaves the row, which only a whole-row write can do.
+    expect(credentialDoc({ ...form, budget: "none" }, { enabled: true })).toEqual({ key: "credentials/or-1", body: { ...row, budget: undefined } });
+  });
+});
+
+describe("credentialFormOf", () => {
+  test("seeded from the row as written, not the effective budget: a subscription with none stays at the default", () => {
+    expect(credentialFormOf("c", { provider: "claude", secretEnv: "CLAUDE_CODE_OAUTH_TOKEN", slots: 1, billing: "paid", enabled: false })).toMatchObject({ budget: "none", limit: "" });
+    expect(credentialFormOf("c", { provider: "claude", secretEnv: "X", slots: 1, budget: { kind: "usage", scoredMaxPct: 70, freeplayMaxPct: 90 }, billing: "paid" })).toMatchObject({
+      budget: "usage",
+      limit: "70",
+      freeplayLimit: "90",
+    });
+    // An equal pair reads as one number.
+    expect(credentialFormOf("c", { budget: { kind: "usage", scoredMaxPct: 80, freeplayMaxPct: 80 } }).freeplayLimit).toBe("");
+    expect(credentialFormOf("x", undefined)).toMatchObject({ id: "x", provider: "", slots: "" });
+  });
+
+  test("the rows come out of the config document by id, or none", () => {
+    expect(storedCredentialRows({ credentials: { a: { provider: "openrouter" } } })).toEqual({ a: { provider: "openrouter" } });
+    expect(storedCredentialRows({})).toEqual({});
+  });
+});
+
+describe("health", () => {
+  test("the tone: ok, warn for what clears by itself, err for what wants someone, dim for the switch and the unknown", () => {
+    expect(["ok", "held", "unread", "auth-failed", "secret-missing", "quota-spent", "disabled"].map((s) => healthTone(s as never))).toEqual(["ok", "warn", "warn", "err", "err", "err", "dim"]);
+    expect(healthTone(null)).toBe("dim");
+  });
+
+  test("the hover: since when and the provider's last answer", () => {
+    const fmt = (t: number) => `@${t}`;
+    expect(healthTitle({ state: "auth-failed", reason: "x", since: 1, lastCheck: { at: 2, http: 401, code: "api_key_expired" } }, fmt)).toBe("since @1 · last check @2 · HTTP 401 api_key_expired");
+    expect(healthTitle({ state: "ok", reason: "", since: null, lastCheck: null }, fmt)).toBe("");
+  });
+});
+
+describe("the config page's sections", () => {
+  const ALL = { runner: true, evals: true, viewer: true };
+  test("a route names a section this deployment has, or none", () => {
+    expect(sectionOf("providers", ALL)).toBe("providers");
+    expect(sectionOf(undefined, ALL)).toBeNull();
+    expect(sectionOf("nope", ALL)).toBeNull();
+    expect(sectionOf("campaigns", { ...ALL, evals: false })).toBeNull();
+  });
+
+  test("a group that is off takes its sections with it; the deployment's own stay", () => {
+    expect(sectionsShown(ALL).map((s) => s.id)).toEqual(CONFIG_SECTIONS.map((s) => s.id));
+    expect(sectionsShown({ runner: false, evals: false, viewer: true }).map((s) => s.id)).toEqual(["policy", "deployment", "history"]);
+  });
+
+  test("every store row key's raw editor sits in exactly one section, each collection beside its table", () => {
+    const keys = ["credentials/or-1", "campaigns/deadmines", "campaign-defs/deadmines@4", "queue/0", "policy", "accounts", "preflight", "roster/opus"];
+    expect(keys.map(sectionOfKey)).toEqual(["providers", "campaigns", "campaigns", "queue", "policy", "policy", "policy", "roster"]);
+    const ids = new Set<string>(CONFIG_SECTIONS.map((s) => s.id));
+    for (const k of keys) expect(ids.has(sectionOfKey(k))).toBe(true);
   });
 });
 

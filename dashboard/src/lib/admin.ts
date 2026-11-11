@@ -7,6 +7,7 @@
  */
 
 import type { Groups } from "@viewer/groups";
+import type { CredentialHealth, HealthState } from "@viewer/api-types";
 
 /** A credential row as the store holds it (`runner/src/credential-slots.ts`). */
 export interface CredentialDoc {
@@ -18,6 +19,7 @@ export interface CredentialDoc {
   enabled?: unknown;
 }
 
+/** A budget's kind on the form; `none` writes no budget, which is the provider's default. */
 export type BudgetKind = "none" | "usage" | "spend" | "runs";
 
 export interface NewCredentialForm {
@@ -27,35 +29,133 @@ export interface NewCredentialForm {
   slots: string;
   billing: "paid" | "free";
   budget: BudgetKind;
-  /** The budget's one number: a usage percentage, dollars a day, or runs a day. */
+  /** The budget's number: the scored usage percentage, dollars a day, or runs a day. */
   limit: string;
+  /** A usage budget's freeplay percentage; empty is the same as `limit`. */
+  freeplayLimit: string;
 }
 
-export const EMPTY_CREDENTIAL: NewCredentialForm = { id: "", provider: "", secretEnv: "", slots: "1", billing: "paid", budget: "none", limit: "" };
+export const EMPTY_CREDENTIAL: NewCredentialForm = { id: "", provider: "", secretEnv: "", slots: "1", billing: "paid", budget: "none", limit: "", freeplayLimit: "" };
 
-/** A form as the row it writes, or the sentence that says what is missing. */
-export function credentialDoc(f: NewCredentialForm): { key: string; body: Record<string, unknown> } | string {
+/**
+ * A form as the row it writes, or the sentence that says what is missing. The
+ * whole row, so an edit is a PUT: a PATCH merges shallowly and could not take
+ * a budget away. `enabled` is the row's own on an edit; a new row is written
+ * disabled, so the operator turns it on once it reads right.
+ */
+export function credentialDoc(f: NewCredentialForm, opts: { enabled?: boolean } = {}): { key: string; body: Record<string, unknown> } | string {
   const id = f.id.trim();
   if (id === "") return "a credential needs an id";
   if (f.provider === "") return "pick a provider";
   if (f.secretEnv.trim() === "") return "name the env var its secret is in";
   const slots = Number(f.slots);
-  if (!Number.isInteger(slots) || slots < 0) return "slots is a whole number";
+  if (f.slots.trim() === "" || !Number.isInteger(slots) || slots < 0) return "slots is a whole number";
   const n = Number(f.limit);
   let budget: Record<string, unknown> | undefined;
   if (f.budget !== "none") {
     if (f.limit.trim() === "" || !Number.isFinite(n) || n <= 0) return `a ${f.budget} budget needs its limit`;
+    const fp = f.freeplayLimit.trim() === "" ? n : Number(f.freeplayLimit);
+    if (f.budget === "usage" && (!Number.isFinite(fp) || fp <= 0)) return "the freeplay share is a percentage";
     budget =
       f.budget === "usage"
-        ? { kind: "usage", scoredMaxPct: n, freeplayMaxPct: n }
+        ? { kind: "usage", scoredMaxPct: n, freeplayMaxPct: fp }
         : f.budget === "spend"
           ? { kind: "spend", usdPerDay: n }
           : { kind: "runs", perDay: n };
   }
   return {
     key: `credentials/${id}`,
-    body: { provider: f.provider, secretEnv: f.secretEnv.trim(), slots, ...(budget !== undefined ? { budget } : {}), billing: f.billing, enabled: false },
+    body: { provider: f.provider, secretEnv: f.secretEnv.trim(), slots, ...(budget !== undefined ? { budget } : {}), billing: f.billing, enabled: opts.enabled ?? false },
   };
+}
+
+/**
+ * A stored credential row as the form that edits it. Seeded from the row as
+ * written, not from `/api/admin`'s budget, which is the effective one: a
+ * subscription that names no budget reads there as usage at 80/80, and
+ * saving that back would write a budget the operator never set.
+ */
+export function credentialFormOf(id: string, row: unknown): NewCredentialForm {
+  const r = (typeof row === "object" && row !== null ? row : {}) as Record<string, unknown>;
+  const b = (typeof r["budget"] === "object" && r["budget"] !== null ? r["budget"] : {}) as Record<string, unknown>;
+  const num = (v: unknown): string => (typeof v === "number" ? String(v) : "");
+  const kind: BudgetKind = b["kind"] === "usage" || b["kind"] === "spend" || b["kind"] === "runs" ? b["kind"] : "none";
+  const limit = kind === "usage" ? num(b["scoredMaxPct"]) : kind === "spend" ? num(b["usdPerDay"]) : kind === "runs" ? num(b["perDay"]) : "";
+  const fp = kind === "usage" ? num(b["freeplayMaxPct"]) : "";
+  return {
+    id,
+    provider: typeof r["provider"] === "string" ? r["provider"] : "",
+    secretEnv: typeof r["secretEnv"] === "string" ? r["secretEnv"] : "",
+    slots: num(r["slots"]),
+    billing: r["billing"] === "free" ? "free" : "paid",
+    budget: kind,
+    limit,
+    // Shown only where it differs: an equal pair reads as one number.
+    freeplayLimit: fp === limit ? "" : fp,
+  };
+}
+
+/** The credential rows the store holds, by id, from the config document. */
+export function storedCredentialRows(config: Record<string, unknown>): Record<string, unknown> {
+  const c = config["credentials"];
+  return typeof c === "object" && c !== null && !Array.isArray(c) ? (c as Record<string, unknown>) : {};
+}
+
+/**
+ * A health state's tone, as the shared `ok` / `warn` / `err` / `dim` classes:
+ * held and unread clear by themselves, the rest want someone, and the
+ * operator's own switch is no alarm; null is no supervisor up to say.
+ */
+export function healthTone(s: HealthState | null): "ok" | "warn" | "err" | "dim" {
+  if (s === null || s === "disabled") return "dim";
+  if (s === "ok") return "ok";
+  return s === "held" || s === "unread" ? "warn" : "err";
+}
+
+/** A health's hover: since when, and what the provider last answered, where known. */
+export function healthTitle(h: CredentialHealth, fmt: (t: number) => string): string {
+  const check = h.lastCheck === null ? null : `last check ${fmt(h.lastCheck.at)}${h.lastCheck.http !== null ? ` · HTTP ${h.lastCheck.http}` : ""}${h.lastCheck.code !== undefined ? ` ${h.lastCheck.code}` : ""}`;
+  return [h.since !== null ? `since ${fmt(h.since)}` : null, check].filter((x): x is string => x !== null).join(" · ");
+}
+
+// ------------------------------------------------------------------ sections
+
+/** The config page's sections, in sidebar order, and the group each belongs to (null: every deployment has it). */
+export const CONFIG_SECTIONS = [
+  { id: "providers", label: "providers", group: "runner" },
+  { id: "roster", label: "roster", group: "runner" },
+  { id: "freeplay", label: "freeplay", group: "runner" },
+  { id: "campaigns", label: "campaigns", group: "evals" },
+  { id: "queue", label: "queue", group: "runner" },
+  { id: "policy", label: "policy", group: null },
+  { id: "deployment", label: "deployment", group: null },
+  { id: "history", label: "history", group: null },
+] as const satisfies readonly { id: string; label: string; group: keyof Groups | null }[];
+
+export type ConfigSectionId = (typeof CONFIG_SECTIONS)[number]["id"];
+
+/** The sections a deployment has: a group that is off takes its sections with it. */
+export function sectionsShown(groups: Groups): (typeof CONFIG_SECTIONS)[number][] {
+  return CONFIG_SECTIONS.filter((s) => s.group === null || groups[s.group]);
+}
+
+/** The section a route names, or null when it names none this deployment has. */
+export function sectionOf(param: string | undefined, groups: Groups): ConfigSectionId | null {
+  return sectionsShown(groups).find((s) => s.id === param)?.id ?? null;
+}
+
+/**
+ * The section a store row key's raw editor sits in: each collection beside the
+ * table that edits it, and every other singleton (policy, accounts, preflight)
+ * in `policy`. The roster has its own table and no raw editor.
+ */
+export function sectionOfKey(key: string): ConfigSectionId {
+  const head = key.split("/")[0]!;
+  if (head === "credentials") return "providers";
+  if (head === "campaigns" || head === "campaign-defs") return "campaigns";
+  if (head === "queue") return "queue";
+  if (head === "roster") return "roster";
+  return "policy";
 }
 
 /** A roster entry as the store holds it, for the freeplay section. */

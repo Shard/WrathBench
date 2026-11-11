@@ -134,7 +134,7 @@ export function credentialHealth(i: HealthInput): { health: CredentialHealth; fi
     const t = hs.map((h) => h.until).filter((u): u is number => u !== null);
     return t.length === 0 ? undefined : Math.max(...t);
   };
-  const wait = (until: number | undefined): CredentialFix => ({ kind: "wait-reset", ...(until !== undefined ? { until } : {}), text: "wait for the window to reset" });
+  const wait = (until: number | undefined): CredentialFix => ({ kind: "wait-reset", ...(until !== undefined ? { until } : {}), text: "wait for the reset" });
   const spent = holds.filter((h) => h.code === "usage-spent");
   if (spent.length > 0) return out("quota-spent", "a usage window is spent", null, wait(latest(spent)));
   if (read?.classification === "spent") return out("quota-spent", "usage spent, as the provider reports", read.since ?? null, wait(undefined));
@@ -149,7 +149,7 @@ export function credentialHealth(i: HealthInput): { health: CredentialHealth; fi
     return out("held", `${what}${perDay ? "" : ` (${classes.join(", ")})`}`, null, {
       kind: "raise-budget",
       ...(until !== undefined ? { until } : {}),
-      text: perDay ? "raise its budget, or wait for 00:00 UTC" : "raise its threshold, or wait for the window to reset",
+      text: perDay ? "raise its budget, or wait for 00:00 UTC" : "raise its threshold, or wait for the reset",
     });
   }
   if (read?.classification === "unread") return out("unread", `usage not read${http(read) !== "" ? `: ${http(read)}` : ""}`, read.since ?? null, null);

@@ -1,7 +1,7 @@
 /**
- * The admin page's sections beside the roster (GitHub issue #427):
- * credentials with their status, freeplay agents, campaigns, the queue, and
- * the deployment's groups and publishing. Each is one more client of the
+ * The admin page's sections beside the roster (GitHub issue #427): the
+ * providers (credentials with their health), freeplay agents, campaigns, the
+ * queue, and the deployment's groups and publishing. Each is one more client of the
  * config store: every write goes through the page's `write` (the version
  * check, the actor and the note) to `/api/config`, where `parseFleet` judges
  * the whole candidate config, so a refusal here is the supervisor's own
@@ -12,7 +12,7 @@
  */
 
 import { For, Show, createMemo, createSignal } from "solid-js";
-import type { AdminCredentialView, AdminResponse } from "@viewer/api-types";
+import type { AdminCredentialView, AdminProviderView, AdminResponse } from "@viewer/api-types";
 import { configApi } from "../api/config-client";
 import {
   EMPTY_CREDENTIAL,
@@ -21,17 +21,21 @@ import {
   campaignDoc,
   campaignRows,
   credentialDoc,
+  credentialFormOf,
   fmtDelay,
   freeplayRows,
+  healthTitle,
+  healthTone,
   jobDoc,
   nextQueueKey,
   publishedDefs,
   queueRows,
+  storedCredentialRows,
   type BudgetKind,
   type NewCredentialForm,
   type NewJobForm,
 } from "../lib/admin";
-import { fmtWhen } from "../lib/format";
+import { fmtWhen, stamp } from "../lib/format";
 
 type Write = (fn: (att: { actor: string; note: string }) => Promise<unknown>) => Promise<string | null>;
 
@@ -80,14 +84,18 @@ function SecretState(props: { c: AdminCredentialView }) {
   );
 }
 
-export function CredentialsSection(props: { admin: AdminResponse | undefined; write: Write }) {
+/** Why the secret controls are there but off: where a secret written from the browser goes is not decided. */
+const SECRET_SEAM = "not built yet: the secret's value is set in the deployment's Secret, not here";
+
+export function ProvidersSection(props: { admin: AdminResponse | undefined; config: Record<string, unknown>; write: Write }) {
   const r = useResult();
+  const rows = createMemo(() => storedCredentialRows(props.config));
   const toggle = (c: AdminCredentialView): Promise<void> =>
     r.run(props.write((att) => configApi.patch(`credentials/${c.id}`, { enabled: !c.enabled }, att)), `${c.id} ${c.enabled ? "disabled" : "enabled"}`);
   const remove = (c: AdminCredentialView): Promise<void> => r.run(props.write((att) => configApi.remove(`credentials/${c.id}`, att)), `${c.id} removed`);
   return (
     <>
-      <h3 class="section">credentials</h3>
+      <h3 class="section">providers</h3>
       <Show when={props.admin} fallback={<p class="dim">loading…</p>}>
         {(a) => (
           <>
@@ -95,27 +103,33 @@ export function CredentialsSection(props: { admin: AdminResponse | undefined; wr
               <table class="configtable">
                 <thead>
                   <tr>
-                    <th>id</th>
-                    <th>provider</th>
+                    <th>credential</th>
+                    <th title={a().fleet.up ? "as the supervisor last saw it, with the store's switch and the chart's modelKeys" : "no supervisor is up: only what the store and the chart say"}>health</th>
                     <th title={a().fleet.up ? "as the supervisor last saw its environment" : "no supervisor is up: whether each is set is unknown"}>secret</th>
                     <th title="sessions on its slots now, of its slots">slots</th>
-                    <th>budget</th>
-                    <th>used</th>
-                    <th>held</th>
+                    <th title="its budget, then its usage windows as last read or what the budget has used today">budget</th>
                     <th />
                   </tr>
                 </thead>
                 <tbody>
                   <Show when={a().credentials.length === 0}>
                     <tr>
-                      <td colSpan={8} class="dim">
+                      <td colSpan={6} class="dim">
                         No credentials.
                       </td>
                     </tr>
                   </Show>
                   <For each={a().credentials}>
                     {(c) => (
-                      <CredentialRow c={c} write={props.write} toggle={() => void toggle(c)} remove={() => void remove(c)} onResult={r.run} />
+                      <CredentialRow
+                        c={c}
+                        provider={a().providers.find((p) => p.id === c.provider)}
+                        providers={a().providers}
+                        row={rows()[c.id]}
+                        write={props.write}
+                        toggle={() => void toggle(c)}
+                        remove={() => void remove(c)}
+                      />
                     )}
                   </For>
                 </tbody>
@@ -130,97 +144,144 @@ export function CredentialsSection(props: { admin: AdminResponse | undefined; wr
   );
 }
 
+/** The health cell: the state as a badge, the reason, and a fix that is a wait rather than a control. */
+function HealthCell(props: { c: AdminCredentialView }) {
+  const tone = (): string => healthTone(props.c.health?.state ?? null);
+  return (
+    <Show
+      when={props.c.health}
+      fallback={
+        <span class="badge" title="no supervisor is up to say">
+          unknown
+        </span>
+      }
+    >
+      {(h) => (
+        <>
+          <span class={`badge ${tone()}`} title={healthTitle(h(), stamp)}>
+            {h().state}
+          </span>
+          <Show when={h().reason !== "" && h().state !== "disabled"}>
+            <div class={tone()} title={healthTitle(h(), stamp)}>
+              {h().reason}
+            </div>
+          </Show>
+          <Show when={props.c.fix !== null && (props.c.fix.kind === "wait-reset" || props.c.fix.kind === "raise-budget") ? props.c.fix : undefined}>
+            {(f) => (
+              <div class="dim" title={f().until !== undefined ? `until ${stamp(f().until!)}` : undefined}>
+                {f().text}
+              </div>
+            )}
+          </Show>
+        </>
+      )}
+    </Show>
+  );
+}
+
+/** Used: the windows as meters when there is a reading, else the budget's own count. */
+function UsedCell(props: { c: AdminCredentialView }) {
+  return (
+    <Show when={props.c.windows !== null && props.c.windows.length > 0 ? props.c.windows : undefined} fallback={<Show when={props.c.used}>{(u) => <div class="dim">{u()}</div>}</Show>}>
+      {(ws) => (
+        <For each={ws()}>
+          {(w) => (
+            <div class={w.limited ? "err" : "dim"} title={w.resetsAt !== null ? `resets ${stamp(w.resetsAt)}` : undefined}>
+              {w.name}
+              {w.family !== undefined ? ` ${w.family}` : ""} {Math.round(w.usedPercent)}%
+            </div>
+          )}
+        </For>
+      )}
+    </Show>
+  );
+}
+
 function CredentialRow(props: {
   c: AdminCredentialView;
+  provider: AdminProviderView | undefined;
+  providers: readonly AdminProviderView[];
+  row: unknown;
   write: Write;
   toggle: () => void;
   remove: () => void;
-  onResult: (p: Promise<string | null>, done: string) => Promise<void>;
 }) {
-  const [slots, setSlots] = createSignal(String(props.c.slots));
+  const [editing, setEditing] = createSignal(false);
   const [confirming, setConfirming] = createSignal(false);
-  const saveSlots = (): void => {
-    const n = Number(slots());
-    void props.onResult(props.write((att) => configApi.patch(`credentials/${props.c.id}`, { slots: n }, att)), `${props.c.id}: ${n} slots`);
+  // A secret is replaced by logging in again on a subscription, by a new key on an endpoint.
+  const secretLabel = (): string => (props.provider?.bill === "subscription" ? "re-auth" : "set key");
+  const fixText = (): string => {
+    const f = props.c.fix;
+    return f !== null && (f.kind === "set-secret" || f.kind === "replace-secret") ? `${f.text}; ${SECRET_SEAM}` : SECRET_SEAM;
   };
-  const held = (): string => [props.c.held.scored, props.c.held.freeplay].filter((h): h is string => h !== undefined).join("; ");
   return (
-    <tr>
-      <td class="mono">{props.c.id}</td>
-      <td class="dim">
-        {props.c.provider} · {props.c.billing}
-      </td>
-      <td>
-        <SecretState c={props.c} />
-      </td>
-      <td>
-        <span class="dim">{props.c.inUse === null ? "?" : String(props.c.inUse)} of </span>
-        <input type="text" size={3} value={slots()} onInput={(e) => setSlots(e.currentTarget.value)} />{" "}
-        <Show when={slots() !== String(props.c.slots)}>
-          <button type="button" onClick={saveSlots}>
-            save
+    <>
+      <tr>
+        <td>
+          <div class="mono">{props.c.id}</div>
+          <div class="dim" title={props.provider?.label ?? ""}>
+            {props.c.provider} · {props.c.billing}
+          </div>
+        </td>
+        <td>
+          <HealthCell c={props.c} />
+        </td>
+        <td>
+          <SecretState c={props.c} />{" "}
+          <button type="button" disabled title={fixText()}>
+            {secretLabel()}
           </button>
-        </Show>
-      </td>
-      <td class="dim">{props.c.budget}</td>
-      <td class="dim">{props.c.used ?? "—"}</td>
-      <td>
-        <Show when={held() !== ""}>
-          <span class="warn">{held()}</span>
-        </Show>
-        <Show when={props.c.lastError}>
-          {(e) => (
-            <div class="err" title={`at ${new Date(e().at).toISOString()}`}>
-              {e().reason} {fmtWhen(e().at)}
-            </div>
-          )}
-        </Show>
-      </td>
-      <td>
-        <button type="button" class={props.c.enabled ? "on" : ""} title={props.c.enabled ? "enabled: click to disable (live runs finish)" : "disabled: click to enable"} onClick={props.toggle}>
-          {props.c.enabled ? "enabled" : "disabled"}
-        </button>{" "}
-        <Show
-          when={confirming()}
-          fallback={
-            <button type="button" onClick={() => setConfirming(true)}>
-              remove
-            </button>
-          }
-        >
-          <button type="button" class="on" onClick={props.remove}>
-            really remove {props.c.id}
+        </td>
+        <td class="mono">
+          {props.c.inUse === null ? "?" : String(props.c.inUse)}/{props.c.slots}
+        </td>
+        <td>
+          <div class="dim">{props.c.budget}</div>
+          <UsedCell c={props.c} />
+        </td>
+        <td>
+          <button type="button" class={props.c.enabled ? "on" : ""} title={props.c.enabled ? "enabled: click to disable (live runs finish)" : "disabled: click to enable"} onClick={props.toggle}>
+            {props.c.enabled ? "enabled" : "disabled"}
           </button>{" "}
-          <button type="button" onClick={() => setConfirming(false)}>
-            cancel
-          </button>
-        </Show>
-      </td>
-    </tr>
+          <button type="button" class={editing() ? "on" : ""} onClick={() => setEditing(!editing())}>
+            edit
+          </button>{" "}
+          <Show
+            when={confirming()}
+            fallback={
+              <button type="button" onClick={() => setConfirming(true)}>
+                remove
+              </button>
+            }
+          >
+            <button type="button" class="on" onClick={props.remove}>
+              really remove {props.c.id}
+            </button>{" "}
+            <button type="button" onClick={() => setConfirming(false)}>
+              cancel
+            </button>
+          </Show>
+        </td>
+      </tr>
+      <Show when={editing()}>
+        <tr>
+          <td colSpan={6}>
+            <CredentialForm
+              providers={props.providers}
+              initial={credentialFormOf(props.c.id, props.row)}
+              enabled={props.c.enabled}
+              write={props.write}
+              close={() => setEditing(false)}
+            />
+          </td>
+        </tr>
+      </Show>
+    </>
   );
 }
 
 function AddCredential(props: { admin: AdminResponse; write: Write }) {
   const [open, setOpen] = createSignal(false);
-  const [form, setForm] = createSignal<NewCredentialForm>({ ...EMPTY_CREDENTIAL });
-  const r = useResult();
-  const provider = () => props.admin.providers.find((p) => p.id === form().provider);
-  const set = <K extends keyof NewCredentialForm>(k: K, v: NewCredentialForm[K]): void => {
-    setForm({ ...form(), [k]: v });
-  };
-  const save = (): void => {
-    const doc = credentialDoc(form());
-    if (typeof doc === "string") {
-      void r.run(Promise.resolve(doc), "");
-      return;
-    }
-    void r.run(
-      props.write((att) => configApi.put(doc.key, doc.body, att)),
-      `${form().id} added, disabled`,
-    ).then(() => {
-      if (r.line()?.ok === true) setForm({ ...EMPTY_CREDENTIAL });
-    });
-  };
   return (
     <div class="detail">
       <Show
@@ -231,7 +292,47 @@ function AddCredential(props: { admin: AdminResponse; write: Write }) {
           </button>
         }
       >
-        <div class="configform">
+        <CredentialForm providers={props.admin.providers} initial={{ ...EMPTY_CREDENTIAL }} write={props.write} close={() => setOpen(false)} />
+      </Show>
+    </div>
+  );
+}
+
+/**
+ * A credential's non-secret fields, new or existing. A new one names its id
+ * and provider and is written disabled; an existing one keeps both and its
+ * switch, and is written whole (`credentialDoc`).
+ */
+function CredentialForm(props: {
+  providers: readonly AdminProviderView[];
+  initial: NewCredentialForm;
+  /** Set on an edit: the row's own switch, which the write keeps. */
+  enabled?: boolean;
+  write: Write;
+  close: () => void;
+}) {
+  const editing = props.enabled !== undefined;
+  const [form, setForm] = createSignal<NewCredentialForm>(props.initial);
+  const r = useResult();
+  const provider = () => props.providers.find((p) => p.id === form().provider);
+  const set = <K extends keyof NewCredentialForm>(k: K, v: NewCredentialForm[K]): void => {
+    setForm({ ...form(), [k]: v });
+  };
+  const save = (): void => {
+    const doc = credentialDoc(form(), editing ? { enabled: props.enabled! } : {});
+    if (typeof doc === "string") {
+      void r.run(Promise.resolve(doc), "");
+      return;
+    }
+    void r.run(props.write((att) => configApi.put(doc.key, doc.body, att)), editing ? `${form().id} saved` : `${form().id} added, disabled`).then(() => {
+      if (r.line()?.ok === true && !editing) setForm({ ...EMPTY_CREDENTIAL });
+    });
+  };
+  const limitLabel = (): string => (form().budget === "usage" ? "scored %" : form().budget === "spend" ? "$ / day" : "runs / day");
+  return (
+    <>
+      <div class="configform">
+        <Show when={!editing}>
           <label>
             id
             <input type="text" value={form().id} onInput={(e) => set("id", e.currentTarget.value)} />
@@ -240,60 +341,66 @@ function AddCredential(props: { admin: AdminResponse; write: Write }) {
             provider
             <select
               onChange={(e) => {
-                const p = props.admin.providers.find((x) => x.id === e.currentTarget.value);
+                const p = props.providers.find((x) => x.id === e.currentTarget.value);
                 setForm({ ...form(), provider: e.currentTarget.value, secretEnv: p?.envBase ?? "", budget: "none" });
               }}
             >
               <option value="" selected={form().provider === ""}>
                 —
               </option>
-              <For each={props.admin.providers}>{(p) => <option value={p.id} selected={form().provider === p.id} title={p.label}>{p.id}</option>}</For>
+              <For each={props.providers}>{(p) => <option value={p.id} selected={form().provider === p.id} title={p.label}>{p.id}</option>}</For>
             </select>
           </label>
-          <label title={provider() === undefined ? "" : `${provider()!.envBase}, or ${provider()!.envBase}_<n> for a second one; the value goes in the deployment's Secret, never here`}>
-            secret env var
-            <input type="text" value={form().secretEnv} onInput={(e) => set("secretEnv", e.currentTarget.value)} />
-          </label>
+        </Show>
+        <label title={provider() === undefined ? "" : `${provider()!.envBase}, or ${provider()!.envBase}_<n> for a second one; the value goes in the deployment's Secret, never here`}>
+          secret env var
+          <input type="text" value={form().secretEnv} onInput={(e) => set("secretEnv", e.currentTarget.value)} />
+        </label>
+        <label>
+          slots
+          <input type="text" size={4} value={form().slots} onInput={(e) => set("slots", e.currentTarget.value)} />
+        </label>
+        <label title={provider()?.bill === "subscription" ? "descriptive on a subscription: every model on it bills the plan" : "which models it carries: free ones or paid ones"}>
+          billing
+          <select onChange={(e) => set("billing", e.currentTarget.value as NewCredentialForm["billing"])}>
+            <option value="paid" selected={form().billing === "paid"}>
+              paid
+            </option>
+            <option value="free" selected={form().billing === "free"}>
+              free
+            </option>
+          </select>
+        </label>
+        <label title="default: usage below 80% where it bills a plan with usage windows, else no budget">
+          budget
+          <select onChange={(e) => set("budget", e.currentTarget.value as BudgetKind)}>
+            <option value="none" selected={form().budget === "none"}>
+              default
+            </option>
+            <For each={provider()?.budgets ?? []}>{(b) => <option value={b} selected={form().budget === b}>{b}</option>}</For>
+          </select>
+        </label>
+        <Show when={form().budget !== "none"}>
           <label>
-            slots
-            <input type="text" size={4} value={form().slots} onInput={(e) => set("slots", e.currentTarget.value)} />
+            {limitLabel()}
+            <input type="text" size={5} value={form().limit} onInput={(e) => set("limit", e.currentTarget.value)} />
           </label>
-          <label>
-            billing
-            <select onChange={(e) => set("billing", e.currentTarget.value as NewCredentialForm["billing"])}>
-              <option value="paid" selected={form().billing === "paid"}>
-                paid
-              </option>
-              <option value="free" selected={form().billing === "free"}>
-                free
-              </option>
-            </select>
+        </Show>
+        <Show when={form().budget === "usage"}>
+          <label title="empty: the same as scored">
+            freeplay %
+            <input type="text" size={5} value={form().freeplayLimit} onInput={(e) => set("freeplayLimit", e.currentTarget.value)} />
           </label>
-          <label>
-            budget
-            <select onChange={(e) => set("budget", e.currentTarget.value as BudgetKind)}>
-              <option value="none" selected={form().budget === "none"}>
-                none
-              </option>
-              <For each={provider()?.budgets ?? []}>{(b) => <option value={b} selected={form().budget === b}>{b}</option>}</For>
-            </select>
-          </label>
-          <Show when={form().budget !== "none"}>
-            <label title={form().budget === "usage" ? "the usage percentage it stops at" : form().budget === "spend" ? "dollars a day" : "runs a day"}>
-              {form().budget === "usage" ? "max %" : form().budget === "spend" ? "$ / day" : "runs / day"}
-              <input type="text" size={5} value={form().limit} onInput={(e) => set("limit", e.currentTarget.value)} />
-            </label>
-          </Show>
-          <button type="button" onClick={save}>
-            add
-          </button>
-          <button type="button" onClick={() => setOpen(false)}>
-            close
-          </button>
-        </div>
-        <ResultLine line={r.line()} />
-      </Show>
-    </div>
+        </Show>
+        <button type="button" onClick={save}>
+          {editing ? "save" : "add"}
+        </button>
+        <button type="button" onClick={() => props.close()}>
+          {editing ? "cancel" : "close"}
+        </button>
+      </div>
+      <ResultLine line={r.line()} />
+    </>
   );
 }
 
