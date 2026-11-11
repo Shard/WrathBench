@@ -1,6 +1,6 @@
 ---
 name: run-forensics
-description: Answer any question about a WrathBench run, live or past, with `bun wb inspect` — is it live, paused or ownerless, its level and xp, snippets and errors, tool calls by name, the scratchpad over time or at a moment, whether it is stuck, the module audit log, what the publisher last did. Use whenever a task needs run data, and always before writing a script that reads a run's session record, trajectory.jsonl, meta.json, a 0.5 run.sqlite, audit files or the publisher's state.
+description: Answer any question about a WrathBench run, live or past, with `bun wb inspect` — is it live, paused or ownerless, its level and xp (per character on a fan-out run), what it cost, snippets and errors, tool calls by name, a v1 run's events and calls, the scratchpad over time or at a moment, whether it is stuck, the module audit log, what the publisher last did. Use whenever a task needs run data, and always before writing a script that reads a run's session record, trajectory.jsonl, meta.json, a 0.5 run.sqlite, audit files or the publisher's state.
 ---
 
 # Run forensics
@@ -15,7 +15,7 @@ which question, how to read the answer, and what never to do.
 
 ```
 bun wb inspect live                                   # every run with a heartbeat: live, or ownerless
-bun wb inspect run <run-id> [--since 2h] [--until 1h] # verdict, model, level/xp, quests across restarts, counts, errors by class, sizes, trace, nearby
+bun wb inspect run <run-id> [--since 2h] [--until 1h] # verdict, model, level/xp, quests across restarts, counts, errors by class, marks, cost, sizes, trace, nearby
 bun wb inspect trajectory <run-id> --last 20          # one capped line per snippet or tool call with its result
 bun wb inspect trajectory <run-id> --errors --last 10
 bun wb inspect trajectory <run-id> --grep 'moveTo|too_far' --since 30m
@@ -25,6 +25,9 @@ bun wb inspect tools <run-id> [--since 2h] [--until 1h]      # calls per tool, o
 bun wb inspect pad <run-id> [--since 6h] [--last 30]         # pad size over time, its writes (drops over 30% flagged), cap refusals
 bun wb inspect pad <run-id> --at <iso>                       # the pad's text at a moment, rebuilt from the record
 bun wb inspect stuck [<run-id>] [--window 2h] [--until 1h]   # no game progress over a window, and the failure signals in it; no id: every live run
+bun wb inspect session <run-id> [--kind death,level] [--last 20]       # a v1 run's events stream: deaths, levels, zones, turn-ins
+bun wb inspect session <run-id> --stream calls --grep 'moveTo|too_far' # its calls stream: each call, result, actions, moves, served batches
+bun wb inspect session <run-id> --character Alfa --since 30m           # one fan-out character; without it, all of them, a column each
 bun wb inspect audit <run-id>                         # module audit log: counts per kind, op/opcode and status
 bun wb inspect audit <run-id> --op WB_MOVE_RESULT --status target_off_mesh --last 20
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
@@ -36,6 +39,23 @@ bun wb inspect publisher [<run-id>]                   # last flip, versions per 
 ISO time. `--last N` reads back from `--until` (or the end), `--next N`
 forward from `--since` (or the start). A command refuses a flag it does not
 take; `bun wb inspect` lists each command's flags.
+
+**v1 and fan-out runs.** A v1 run's trajectory is the model side only: its
+deaths, levels, zones and turn-ins are its session record's `events` rows, and
+its tool calls, actions, moves and served batches its `calls` rows. `run`'s
+`marks` line reads the events; `session` is the reader of both streams that
+`trajectory --grep` was on 0.5 (`--kind key` shows the rows that restate a
+stream). A fan-out run (`sessions/<Character>/`, one agent, several
+characters) is read per character: `run` prints a block each, `live` a line
+each under the run's, and `stuck` judges each and calls the run stuck only
+when every one is. A call that named no character is in every character's
+record; `session` shows it once, as `Alfa+1`.
+
+**Cost.** `run`'s `cost` line is the whole run's whatever the window: the
+provider's own charge where it reported one (OpenRouter's `usage.cost` per
+response, the Claude Code CLI's `total_cost_usd` per session) and the tokens
+the responses reported. Nothing is priced here; the list-price figure is the
+viewer's.
 
 `stuck`'s verdict is the progress line alone; the other lines are evidence,
 and `asks` is a phrase heuristic. `unjudged` means what was recorded does not
@@ -65,7 +85,8 @@ files on either source) and starts from the newest reading before it.
 ## Reading the `source` line
 
 `live`, `run`, `trajectory`, `tools`, `pad` and `stuck` read ClickHouse, the store the
-collector tails runs into, and say so on a `source` line. `audit` and
+collector tails runs into, and say so on a `source` line. `session` reads the
+session record's files, which the store does not hold whole. `audit` and
 `publisher` read the module's audit files and the publisher's state where
 they live.
 
@@ -108,7 +129,7 @@ prints `per-turn  none for N of M snippet write(s)` when any went unsized.
 
 ## When the checkout is ahead of the deployed image
 
-`live`, `run`, `trajectory`, `tools`, `pad` and `stuck` run the runner pod's copy of
+`live`, `run`, `trajectory`, `tools`, `pad`, `stuck` and `session` run the runner pod's copy of
 `infra/inspect-run.ts`; `audit` and `publisher` run this checkout's code. If
 `bun wb` says the file is not in the runner pod, or the pod's copy answers
 `unknown command` or refuses a flag, run this checkout's copy in the pod from
@@ -122,6 +143,7 @@ kubectl -n <ns> exec -i deploy/<release>-runner -- bun run - tools <run-id> --si
 
 ```
 bun infra/inspect-run.ts run <run-id> --runs-dir <dir>
+bun infra/inspect-run.ts session <run-id> --stream calls --runs-dir <dir>
 bun infra/inspect-audit.ts <run-id> --audit-dir <dir> --runs-dir <dir>
 bun infra/inspect-publisher.ts --state <file>
 ```

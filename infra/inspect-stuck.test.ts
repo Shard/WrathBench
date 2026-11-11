@@ -267,6 +267,93 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE_IDL
   });
 }
 
+/**
+ * A fan-out run with two characters, each recorded as `makeIdleV1Run`
+ * records one: `idle` stands still while the agent talks, `levelled` levels
+ * once early in the window. One agent drives both, so the trajectory is one.
+ */
+async function makeIdleFanoutRun(runsDir: string, runId: string, shapes: Record<string, "idle" | "levelled">): Promise<void> {
+  const dir = join(runsDir, runId);
+  const t0 = NOW - 180 * MIN;
+  let clock = t0;
+  const traj = new Trajectory(dir, { now: () => clock });
+  const names = Object.keys(shapes);
+  const config = { ...loadRunConfig({ driver: "stub" }), runId, token: TOKEN, runsDir, character: names[0], model: "test/model", account: "FANA", fanout: { characters: names.length, accounts: ["FANA", "FANB"] } };
+  traj.writeMeta({ runId, harnessVersion: "harness-test", startedAt: t0, config });
+  const writers = names.map((name, i) => {
+    const w = new SessionWriter({ dir: join(dir, "sessions", name), id: `fa0f0f0f0f0f0f0${i}`, stack: { version: "test" }, now: () => clock, log: () => {} });
+    w.open();
+    return { name, w, character: { guid: String(900 + i), name, race: 1, class: 1 } };
+  });
+  const drain = (character: { guid: string; name: string; race: number; class: number }, rows: TraceRow[]) => ({
+    trace: { rows, dropped: 0 },
+    events: { rows: [], dropped: 0 },
+    nearby: { rows: [], dropped: 0, through: 0 },
+    moves: [],
+    character,
+    stream: { connected: true, events: 1, seq: 1 },
+  });
+  for (const [i, x] of writers.entries()) x.w.ingest(drain(x.character, [keyOf({ ts: t0, level: 12, xp: 1350, money: 4_210, map: 0, x: -9000 + i * 10, y: 400, z: 52, zone: 12, items: bags(20) })]));
+  const levelAt = NOW - 110 * MIN;
+  let call = 0;
+  for (let at = t0 + 30_000; at <= NOW - 5_000; at += 30_000) {
+    clock = at;
+    call++;
+    traj.append({ t: "tool_call", turn: call, call, name: "state_summary", args: {} });
+    for (const x of writers) {
+      x.w.ingest(drain(x.character, shapes[x.name] === "levelled" && at === levelAt ? [{ ts: at, kind: "state", data: { level: 13, xp: 20 } }] : []));
+      // A call that names no character is written to every character's record.
+      const id = x.w.call("state_summary", {}, at);
+      x.w.result(id, { text: "both standing at the gate." });
+    }
+    traj.append({ t: "tool_result", turn: call, call, name: "state_summary", isError: false, text: "ok" });
+    traj.append({ t: "response", turn: call, message: { role: "assistant", content: "Waiting." } });
+  }
+  clock = NOW - 2_000;
+  for (const x of writers) x.w.ingest(null);
+  traj.close();
+  const hb = join(dir, "heartbeat");
+  writeFileSync(hb, "a-host 1\n");
+  utimesSync(hb, (NOW - 5_000) / 1000, (NOW - 5_000) / 1000);
+}
+
+const RUNS_FANOUT = tmp("inspect-stuck-fanout-");
+await makeIdleFanoutRun(RUNS_FANOUT, "fan-idle", { Alfa: "idle", Bravo: "idle" });
+await makeIdleFanoutRun(RUNS_FANOUT, "fan-one", { Alfa: "idle", Bravo: "levelled" });
+const STORE_FANOUT = await memoryStore(RUNS_FANOUT);
+
+for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE_FANOUT]] as const) {
+  describe(`inspect stuck on a fan-out run, over ${where}`, () => {
+    test("each character is judged off its own record, and the run is stuck only when every one is", async () => {
+      const r = await inspect(["stuck", "fan-idle", "--runs-dir", RUNS_FANOUT], store);
+      expect(line(r.out, "verdict")).toContain("STUCK: no game progress in the window (all 2 characters");
+      expect(line(r.out, "progress")).toContain("TRIPPED  2 character(s), each judged off its own record");
+      expect(r.out.find((l) => l.startsWith("  Alfa"))).toMatch(/TRIPPED\s+L12 1350xp throughout/);
+      expect(r.out.find((l) => l.startsWith("  Bravo"))).toMatch(/TRIPPED\s+L12 1350xp throughout/);
+    });
+
+    test("one character progressing is the run progressing", async () => {
+      const r = await inspect(["stuck", "fan-one", "--runs-dir", RUNS_FANOUT], store);
+      expect(line(r.out, "verdict")).toContain("not stuck: a character made progress");
+      expect(r.out.find((l) => l.startsWith("  Alfa"))).toContain("TRIPPED");
+      expect(r.out.find((l) => l.startsWith("  Bravo"))).toMatch(/ok\s+L12 1350xp → L13 20xp/);
+    });
+
+    test("with no run id: one line each, how many characters held", async () => {
+      const r = await inspect(["stuck", "--runs-dir", RUNS_FANOUT], store);
+      expect(r.out.find((l) => l.includes("fan-idle"))).toMatch(/STUCK\s+fan-out, 2 of 2 character\(s\) held/);
+      expect(r.out.find((l) => l.includes("fan-one"))).toMatch(/progressing\s+fan-out, 1 of 2 character\(s\) held/);
+    });
+  });
+}
+
+describe("fleet status's flag on a fan-out run", () => {
+  test("agrees with inspect stuck: every character held, or none flagged", () => {
+    expect(liveRunStuck("fan-idle", NOW, RUNS_FANOUT)).toMatch(/^no progress in 2h00m/);
+    expect(liveRunStuck("fan-one", NOW, RUNS_FANOUT)).toBeUndefined();
+  });
+});
+
 describe("fleet status's flag on a still v1 character", () => {
   test("reads what inspect stuck reads", () => {
     expect(liveRunStuck("run-idle", NOW, RUNS_IDLE)).toMatch(/^no progress in 2h00m: L12 1350xp throughout/);

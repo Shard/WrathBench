@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * `bun wb inspect live|run|trajectory|tools|pad|stuck`: read-only views of the runs,
+ * `bun wb inspect live|run|trajectory|tools|pad|stuck|session`: read-only views of the runs,
  * every one bounded by default.
  *
  *   bun infra/inspect-run.ts live                      runs with a heartbeat, one line each
@@ -15,6 +15,9 @@
  *   bun infra/inspect-run.ts stuck [<run-id>] [--window D] [--until D] [--move N] [--max-gap D]
  *                                 [--repeat N] [--hints N] [--schema N] [--restarts N] [--asks N]
  *                                                      no game progress over a window, and the failure signals in it
+ *   bun infra/inspect-run.ts session <run-id> [--stream events|calls] [--character NAME] [--kind K[,K]]
+ *                                   [--grep RE] [--last N | --next N] [--since D] [--until D]
+ *                                                      a v1 run's session record, one line per row
  *
  * D is `90s`, `30m`, `2h`, `1d`, epoch ms or an ISO time. The runs directory is
  * `--runs-dir`, else WRATHBENCH_RUNS_DIR, else `data/runs`.
@@ -29,6 +32,12 @@
  * ring, and the trace, which the collector does not hold by design. A live
  * run's trace is two index lookups, never a walk; a run with no live owner is
  * walked in rowid windows (`scanByRowid`).
+ *
+ * A v1 run's session record is read off its files too, a fan-out run's one per
+ * character (`sessions/<Character>/`): the marks its `events` stream holds,
+ * the `session` view and what covers `stuck`'s window. The store holds only
+ * the samples the collector folds from each trace, a fan-out character's
+ * under `<run-id>~<Character>`.
  *
  * Every view prints a `source` line: how far ClickHouse is behind the file, or
  * that it read the files instead and why (no CLICKHOUSE_URL, ClickHouse
@@ -729,6 +738,50 @@ export interface InspectStore {
   rows(id: string, spec: ReadSpec, w: Window, from: number, to: number): Promise<StoreRow[]>;
   /** Whole request lines, for the rare pad a server-side cut could not place. */
   raws(id: string, lines: readonly number[]): Promise<Map<number, string>>;
+  /** The run's `response` records' usage columns summed, over the whole run (`usageSql`). */
+  usage(id: string): Promise<UsageTotals>;
+}
+
+/**
+ * What a run's `response` records report of their usage, summed: the
+ * collector's usage columns (collector/src/lines.ts `usageOf`), or the same
+ * fields read off the file. A figure no response reported is null, never 0.
+ */
+export interface UsageTotals {
+  responses: number;
+  /** Responses that reported an input or an output count. */
+  reported: number;
+  input: number;
+  output: number;
+  cacheRead: number | null;
+  cacheWrite: number | null;
+  /** The provider's own charge, summed over the responses that carried one (`costed`). */
+  usd: number | null;
+  costed: number;
+}
+
+/** The run's response usage in one aggregate, each line once (a replay's rows wait for a merge). */
+export function usageSql(runId: string): string {
+  return `SELECT count() AS n, countIf(i IS NOT NULL OR o IS NOT NULL) AS reported, sum(ifNull(i, 0)) AS input, sum(ifNull(o, 0)) AS output,
+       sum(ifNull(cr, 0)) AS cache_read, countIf(cr IS NOT NULL) AS crn, sum(ifNull(cw, 0)) AS cache_write, countIf(cw IS NOT NULL) AS cwn,
+       sum(ifNull(c, 0)) AS usd, countIf(c IS NOT NULL) AS costed
+  FROM (SELECT line_no, any(input_tokens) AS i, any(output_tokens) AS o, any(cache_read_tokens) AS cr, any(cache_write_tokens) AS cw, any(cost_usd) AS c
+          FROM turns WHERE run_id = ${sqlStr(runId)} AND kind = 'response' GROUP BY line_no)`;
+}
+
+/** `usageSql`'s one row as totals. Exported for the tests' store, which builds the same row. */
+export function usageOf(r: Record<string, unknown> | undefined): UsageTotals {
+  const n = (k: string): number => Number(r?.[k] ?? 0) || 0;
+  return {
+    responses: n("n"),
+    reported: n("reported"),
+    input: n("input"),
+    output: n("output"),
+    cacheRead: n("crn") > 0 ? n("cache_read") : null,
+    cacheWrite: n("cwn") > 0 ? n("cache_write") : null,
+    usd: n("costed") > 0 ? n("usd") : null,
+    costed: n("costed"),
+  };
 }
 
 export class StoreError extends Error {}
@@ -970,6 +1023,9 @@ export function clickhouseStore(cfg: ClickhouseConfig, fetchImpl: (url: URL, ini
       }
       return out;
     },
+    async usage(id) {
+      return usageOf((await rows<Record<string, unknown>>(usageSql(id)))[0]);
+    },
   };
 }
 
@@ -1205,7 +1261,11 @@ export function sessionLine(session: string, now: number): string {
 
 function nearbyLine(dir: string, now: number): string {
   // A v1 run's ring is a stream of its session record; a 0.5 run's was `nearby/` in the run directory.
-  const ring = sessionDir(dir) !== null ? join(dir, "session", "nearby") : join(dir, "nearby");
+  return ringLine(sessionDir(dir) !== null ? join(dir, "session", "nearby") : join(dir, "nearby"), now);
+}
+
+/** The nearby ring's files, by their sizes and times alone. */
+function ringLine(ring: string, now: number): string {
   let names: string[];
   try {
     names = readdirSync(ring);
@@ -1400,9 +1460,13 @@ export function traceLatest(session: string): StateRow | null {
   return null;
 }
 
-/** A v1 run's turn-ins, off its `events` stream's `quest` rows: one stretch, the run's own count. */
-export function eventQuests(session: string): { ts: number; quests: number | null }[] {
-  const out: { ts: number; quests: number | null }[] = [];
+/**
+ * A v1 run's turn-ins, off its `events` stream's `quest` rows: one stretch,
+ * the run's own count. A record with a trace reading and no turn-in reads 0,
+ * as the samples the collector folds from that trace do.
+ */
+export function eventQuests(session: string, latest: StateRow | null = null): { ts: number; quests: number | null }[] {
+  const out: { ts: number; quests: number | null }[] = latest === null ? [] : [{ ts: latest.ts, quests: 0 }];
   let n = 0;
   for (const f of segmentFiles(session, "events")) {
     let text: string;
@@ -1562,6 +1626,169 @@ export function recordWrites(session: string, w: { since: number; until: number 
   return out;
 }
 
+// ------------------------------------------------------------------ a fan-out run's records
+
+/** Where a fan-out run keeps its records, one per character (runner/src/run-reader.ts `SESSIONS_DIR`). */
+export const SESSIONS_DIR = "sessions";
+/** A fan-out character's directory name: the name as the server spells it, letters only (`isFanoutCharacterName`). */
+const CHARACTER_NAME = /^[A-Za-z]+$/;
+/** What joins a fan-out run's id to a character's name in the store's key (runner/src/run-reader.ts `FANOUT_SEP`). */
+export const FANOUT_SEP = "~";
+
+/**
+ * A fan-out run: one agent driving several characters, each with its own
+ * session record in `sessions/<Character>/` and no `session/`. Its meta.json's
+ * `config.fanout` says so from the launch, `sessions/` for a run whose
+ * meta.json cannot be read: runner/src/run-reader.ts `isFanoutRunDir`.
+ */
+export function isFanoutDir(dir: string, meta: Record<string, unknown> | null = readMeta(dir)): boolean {
+  if (isV1Dir(dir)) return false;
+  const fanout = obj(meta?.["config"])["fanout"];
+  if (typeof fanout === "object" && fanout !== null) return true;
+  try {
+    return statSync(join(dir, SESSIONS_DIR)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** A fan-out run's characters with a record, in name order (`fanoutCharacters`); empty for any other run. */
+export function fanoutCharacters(dir: string): string[] {
+  let names: string[];
+  try {
+    names = readdirSync(join(dir, SESSIONS_DIR));
+  } catch {
+    return [];
+  }
+  return names.filter((n) => CHARACTER_NAME.test(n) && existsSync(join(dir, SESSIONS_DIR, n, "session.json"))).sort();
+}
+
+/** One session record of a run: the character it is (null when its session.json names none yet), and its directory. */
+export interface SessionRef {
+  character: string | null;
+  session: string;
+}
+
+/** A run's session records: a v1 run's one, a fan-out run's each, in name order; none on a 0.5 run. */
+export function sessionsOf(dir: string): SessionRef[] {
+  const single = sessionDir(dir);
+  if (single !== null) {
+    let character: string | null = null;
+    try {
+      const s = JSON.parse(readFileSync(join(single, "session.json"), "utf8")) as { character?: { name?: unknown } | null };
+      character = str(s.character?.name);
+    } catch {
+      /* unreadable: no name */
+    }
+    return [{ character, session: single }];
+  }
+  return fanoutCharacters(dir).map((c) => ({ character: c, session: join(dir, SESSIONS_DIR, c) }));
+}
+
+/** How far before its segment's start a row may be (a late row, by the writer's drain interval; SESSION-FORMAT.md, "Segments"). */
+const SEGMENT_SLACK_MS = 60_000;
+
+/** Whether a segment can hold a row of the window: its five minutes, and the late rows before them. */
+function segmentInWindow(path: string, w: Window): boolean {
+  const t0 = Number(/(\d{13})(?:-\d+)?\.jsonl/.exec(path)?.[1]);
+  if (!Number.isFinite(t0)) return true;
+  if (w.since !== null && t0 + SEGMENT_MS < w.since) return false;
+  return !(w.until !== null && t0 - SEGMENT_SLACK_MS > w.until);
+}
+
+/** One row of a session stream: its clock, its kind, the row and the line it was read from. */
+export interface StreamRow {
+  ts: number;
+  kind: string;
+  row: Record<string, unknown>;
+  line: string;
+}
+
+/**
+ * The rows of one stream of a session record in a window, in time order (the
+ * `events` and `calls` streams are in written order, each row at its own
+ * instant, so they are sorted here). Only the segments that can hold the
+ * window are read. With `limit`, the newest N that `keep` keeps (or with
+ * `forward` the oldest N), read from that end a segment at a time, and one
+ * segment past the Nth row for the late rows a segment can hold.
+ */
+export function streamRows(
+  session: string,
+  stream: string,
+  w: Window,
+  keep: (r: StreamRow) => boolean = () => true,
+  limit: { n: number; forward: boolean } | null = null,
+): StreamRow[] {
+  const files = segmentFiles(session, stream).filter((f) => segmentInWindow(f, w));
+  if (limit !== null && !limit.forward) files.reverse();
+  const out: StreamRow[] = [];
+  let past = false;
+  for (const f of files) {
+    let text: string;
+    try {
+      text = segmentText(f);
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n")) {
+      let row: Record<string, unknown>;
+      try {
+        row = JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      const ts = row["ts"];
+      if (typeof ts !== "number" || typeof row["kind"] !== "string") continue;
+      if ((w.since !== null && ts < w.since) || (w.until !== null && ts > w.until)) continue;
+      const r: StreamRow = { ts, kind: row["kind"], row, line };
+      if (keep(r)) out.push(r);
+    }
+    if (limit !== null && out.length >= limit.n) {
+      if (past) break;
+      past = true;
+    }
+  }
+  out.sort((a, b) => a.ts - b.ts);
+  if (limit === null) return out;
+  return limit.forward ? out.slice(0, limit.n) : out.slice(-limit.n);
+}
+
+/**
+ * The `events` kinds that are a stream restating itself, never something that
+ * happened: the whole state, and the baselines a recorder states once
+ * (SESSION-FORMAT.md, `events`). A zone, area or level row with no `from` is
+ * a first reading, and not a mark either.
+ */
+const BASELINE_EVENTS: ReadonlySet<string> = new Set(["key", "achievements_at_login", "spells_at_login"]);
+
+/** Whether an `events` row is something that happened: what the 0.5 trajectory's `milestone` and `quest_complete` records were. */
+export function isEventMark(row: Record<string, unknown>): boolean {
+  const kind = row["kind"];
+  if (typeof kind !== "string" || BASELINE_EVENTS.has(kind)) return false;
+  return !((kind === "zone" || kind === "area" || kind === "level") && row["from"] === undefined);
+}
+
+/**
+ * A session's `events` marks over a window, by kind, the most first: deaths,
+ * levels gained (with the levels they went between), zone and area changes,
+ * turn-ins, achievements and the rest. On a v1 run these are what the 0.5
+ * trajectory carried as `milestone` and `quest_complete` records. Empty when
+ * nothing happened.
+ */
+export function eventMarks(session: string, w: Window): string {
+  const counts = new Map<string, number>();
+  let from: number | null = null;
+  let to: number | null = null;
+  for (const r of streamRows(session, "events", w, (r) => isEventMark(r.row))) {
+    count(counts, r.kind);
+    if (r.kind !== "level") continue;
+    if (from === null && typeof r.row["from"] === "number") from = r.row["from"];
+    if (typeof r.row["to"] === "number") to = r.row["to"];
+  }
+  const sorted = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return sorted.map(([k, n]) => (k === "level" && from !== null && to !== null ? `level ${n} (L${from}→L${to})` : `${k} ${n}`)).join(", ");
+}
+
 /** One process's stretch of the quest count: when its first sample was taken, and its last count. */
 export interface QuestStretch {
   from: number;
@@ -1647,23 +1874,126 @@ function noteActivity(a: Activity, r: Rec, token: string | null): void {
   }
 }
 
-/** One forward pass over the trajectory: counts by kind, errors by class, harness notices by kind. */
-function scanActivity(path: string, window: Window, token: string | null): Activity {
+/**
+ * One forward pass over the trajectory: counts by kind, errors by class,
+ * harness notices by kind; and the run's cost, when `cost` is given, which
+ * only a pass over the whole run may take.
+ */
+function scanActivity(path: string, window: Window, token: string | null, cost?: CostTally): Activity {
   const { since, until } = window;
   const a = newActivity();
   fileForward(
     path,
     (r) => {
-      if (until !== null && r.ts > until) return true;
+      if (cost !== undefined) noteCost(cost, r);
+      if (until !== null && r.ts > until) return cost === undefined;
       if (since !== null && !(r.ts >= since)) return;
       a.records++;
       count(a.kinds, r.t);
       if (Number.isFinite(r.ts) && (a.last === null || r.ts >= a.last.ts)) a.last = { ts: r.ts, t: r.t };
       noteActivity(a, r, token);
     },
-    since === null ? 0 : seekTime(path, since),
+    since === null || cost !== undefined ? 0 : seekTime(path, since),
   );
   return a;
+}
+
+// ------------------------------------------------------------------ what a run cost
+
+/**
+ * What a run's records say it cost: the usage its `response` records report,
+ * summed, and the provider's own charge. That charge is in two shapes, read
+ * as runner/viewer/tail.ts `reportedCostUsd` reads them: OpenRouter's per
+ * response (`usage.cost`, summed), and the Claude Code CLI's per session
+ * (`claude_result.costUsd`, cumulative, so a session's is its largest). No
+ * price table is read here (this file imports nothing): the list-price figure
+ * is the viewer's (runner/viewer/pricing.ts).
+ */
+export interface CostTally {
+  usage: UsageTotals;
+  /** The CLI's figure per session. */
+  cli: Map<string, number>;
+}
+
+export function newCost(): CostTally {
+  return { usage: { responses: 0, reported: 0, input: 0, output: 0, cacheRead: null, cacheWrite: null, usd: null, costed: 0 }, cli: new Map() };
+}
+
+function intOf(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : null;
+}
+
+/** One response's usage, in the collector's field order (collector/src/lines.ts `usageOf`), so the store and the file agree. */
+function noteUsage(t: UsageTotals, rec: Record<string, unknown> | null): void {
+  t.responses++;
+  const u = obj(rec?.["usage"]);
+  const input = intOf(u["input_tokens"]) ?? intOf(u["prompt_tokens"]);
+  const output = intOf(u["output_tokens"]) ?? intOf(u["completion_tokens"]);
+  const read = intOf(u["cache_read_input_tokens"]) ?? intOf(obj(u["prompt_tokens_details"])["cached_tokens"]) ?? intOf(u["cached_tokens"]);
+  const write = intOf(u["cache_write_tokens"]) ?? intOf(u["cache_creation_input_tokens"]);
+  const usd = typeof u["cost"] === "number" && Number.isFinite(u["cost"]) ? u["cost"] : null;
+  if (input !== null || output !== null) t.reported++;
+  t.input += input ?? 0;
+  t.output += output ?? 0;
+  if (read !== null) t.cacheRead = (t.cacheRead ?? 0) + read;
+  if (write !== null) t.cacheWrite = (t.cacheWrite ?? 0) + write;
+  if (usd !== null) {
+    t.usd = (t.usd ?? 0) + usd;
+    t.costed++;
+  }
+}
+
+/** A `claude_result`'s cumulative figure for its session: the largest one seen is the session's. */
+function noteCli(cli: Map<string, number>, rec: Record<string, unknown> | null): void {
+  const v = rec?.["costUsd"];
+  if (typeof v !== "number" || !Number.isFinite(v)) return;
+  const key = str(rec?.["sessionId"]) ?? "";
+  cli.set(key, Math.max(cli.get(key) ?? v, v));
+}
+
+function noteCost(c: CostTally, r: Rec): void {
+  if (r.t === "response") noteUsage(c.usage, r.parse());
+  else if (r.t === "claude_result") noteCli(c.cli, r.parse());
+}
+
+/** A token count, short: 950, 12.3k, 4.56M. */
+export function fmtTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+function fmtUsd(usd: number): string {
+  return `$${usd.toFixed(usd < 1 ? 4 : 2)}`;
+}
+
+/** The `cost` line: the provider's charge where it reported one, and the tokens its responses reported. */
+export function costLine(c: CostTally): string {
+  const u = c.usage;
+  if (u.responses === 0 && c.cli.size === 0) return "no model response recorded";
+  const cli = c.cli.size === 0 ? null : [...c.cli.values()].reduce((a, b) => a + b, 0);
+  const charged: string[] = [];
+  if (u.usd !== null) charged.push(`${fmtUsd(u.usd)} reported by the provider on ${u.costed} of ${u.responses} responses`);
+  if (cli !== null) charged.push(`${fmtUsd(cli)} the CLI's total_cost_usd over ${c.cli.size} session(s)`);
+  const total = u.usd !== null && cli !== null ? `${fmtUsd(u.usd + cli)}: ` : "";
+  const usd = charged.length === 0 ? "no charge reported by the provider (the viewer prices the tokens at list)" : `${total}${charged.join(" + ")}`;
+  const cache = [u.cacheRead !== null ? `cache read ${fmtTokens(u.cacheRead)}` : null, u.cacheWrite !== null ? `write ${fmtTokens(u.cacheWrite)}` : null].filter((b) => b !== null);
+  const tokens =
+    u.reported === 0
+      ? `no tokens reported on ${u.responses} responses`
+      : `tokens in ${fmtTokens(u.input)}${cache.length > 0 ? ` (${cache.join(", ")})` : ""}, out ${fmtTokens(u.output)}, reported on ${u.reported} of ${u.responses} responses`;
+  return `over the run: ${usd} · ${tokens}`;
+}
+
+/** The run's cost off the store: its usage aggregate, and its `claude_result` records when it has any. */
+async function storeCost(store: InspectStore, runId: string): Promise<CostTally> {
+  const c = newCost();
+  c.usage = await store.usage(runId);
+  const all = await store.extent(runId, { since: null, until: null });
+  if ((all.kinds.get("claude_result") ?? 0) > 0) {
+    await storeRead(store, runId, { kinds: { claude_result: { raw: "all" } } }, { since: null, until: null }, all.window, true, (r) => noteCli(c.cli, r.parse()));
+  }
+  return c;
 }
 
 /** The errors and harness notices only: the counts come from the extent. */
@@ -1682,6 +2012,35 @@ async function storeActivity(store: InspectStore, runId: string, ext: Extent, w:
   return a;
 }
 
+/** The figures a fan-out run is summed up by: the character with the highest level, then the higher xp, then the first by name (`fanoutLead`). */
+export function leadOf<T extends { character: string; level: number | null; xp: number | null }>(readings: readonly T[]): T | null {
+  let lead: T | null = null;
+  for (const r of readings) {
+    if (r.level === null || r.level <= 0) continue;
+    if (lead === null || r.level > lead.level! || (r.level === lead.level && (r.xp ?? -1) > (lead.xp ?? -1)) || (r.level === lead.level && r.xp === lead.xp && r.character < lead.character)) lead = r;
+  }
+  return lead;
+}
+
+/** The store's key for a fan-out character's rows (runner/src/run-reader.ts `fanoutSessionId`). */
+function fanoutKey(runId: string, character: string): string {
+  return `${runId}${FANOUT_SEP}${character}`;
+}
+
+/** Each fan-out character's newest reading and its quest samples: the store's under its key, else its record's. */
+async function characterReadings(via: Via, runId: string, refs: readonly SessionRef[]): Promise<{ ref: SessionRef; character: string; st: StateRow | null; quests: { ts: number; quests: number | null }[] }[]> {
+  const keys = refs.map((r) => fanoutKey(runId, r.character ?? "?"));
+  const states = via.store !== null ? await via.store.latestStates(keys) : null;
+  const out = [];
+  for (const [i, ref] of refs.entries()) {
+    const character = ref.character ?? "?";
+    const st = states !== null ? (states.get(keys[i]!) ?? null) : traceLatest(ref.session);
+    const quests = via.store !== null ? await via.store.quests(keys[i]!) : eventQuests(ref.session, st);
+    out.push({ ref, character, st, quests });
+  }
+  return out;
+}
+
 export async function inspectRun(runId: string, opts: Ctx & Window, out: Out): Promise<number> {
   const dir = findRunDir(opts.runsDir, runId);
   if (dir === null) {
@@ -1698,9 +2057,11 @@ export async function inspectRun(runId: string, opts: Ctx & Window, out: Out): P
   const db = openDb(dir);
   try {
     const v1 = isV1Dir(dir);
-    const row: RunRow | null | undefined = via.store !== null ? via.run : v1 ? v1Row(dir, runId, meta, owned) : owned ? undefined : db === null ? null : readRow(db, runId);
+    const fanout = !v1 && isFanoutDir(dir, meta);
+    const row: RunRow | null | undefined =
+      via.store !== null ? via.run : v1 || fanout ? v1Row(dir, runId, meta, owned) : owned ? undefined : db === null ? null : readRow(db, runId);
     const verdict = verdictOf(row, heartbeat, opts.now);
-    say("run", `${runId}${dir.includes(`/${ARCHIVE_DIR}/`) ? " (archived)" : ""}`);
+    say("run", `${runId}${dir.includes(`/${ARCHIVE_DIR}/`) ? " (archived)" : ""}${fanout ? " (fan-out)" : ""}`);
     say("verdict", describeVerdict(verdict, meta, opts.now));
     say("source", via.line);
 
@@ -1715,23 +2076,38 @@ export async function inspectRun(runId: string, opts: Ctx & Window, out: Out): P
       `harness ${row?.harness_version ?? str(meta?.["harnessVersion"]) ?? "?"}`,
     ].filter((b): b is string => b !== null);
     say("model", bits.join(" · "));
-    const character = row?.character ?? str(config["character"]);
-    const account = str(config["account"]);
-    if (character !== null || account !== null) say("character", `${character ?? "?"}${account !== null ? ` on ${account}` : ""}`);
+    // A fan-out run's launch names one character, and no one character is the run.
+    const refs = fanout ? sessionsOf(dir) : [];
+    if (fanout) {
+      const plan = obj(config["fanout"]);
+      const of = typeof plan["characters"] === "number" ? ` of ${plan["characters"]}` : "";
+      const accounts = Array.isArray(plan["accounts"]) ? plan["accounts"].filter((a): a is string => typeof a === "string") : [];
+      const who = refs.length === 0 ? `none logged in yet${of}` : `${refs.length}${of} logged in: ${refs.map((r) => r.character).join(", ")}`;
+      say("characters", `${who}${accounts.length > 0 ? ` · accounts ${accounts.join(", ")}` : ""}`);
+    } else {
+      const character = row?.character ?? str(config["character"]);
+      const account = str(config["account"]);
+      if (character !== null || account !== null) say("character", `${character ?? "?"}${account !== null ? ` on ${account}` : ""}`);
+    }
     const started = row?.started_at ?? (typeof meta?.["startedAt"] === "number" ? (meta["startedAt"] as number) : null);
     say(
       "started",
       `${iso(started)}${started !== null ? ` (${fmtAge(opts.now - started)} ago)` : ""}${row?.ended_at != null ? ` · ended ${iso(row.ended_at)} (${fmtAge(opts.now - row.ended_at)} ago)` : ""}`,
     );
 
-    if (via.store !== null) {
+    const characters = fanout ? await characterReadings(via, runId, refs) : [];
+    if (fanout) {
+      const lead = leadOf(characters.map((c) => ({ character: c.character, level: c.st?.level ?? null, xp: c.st?.xp ?? null })));
+      say("level", `per character below${lead === null ? "; none has a level yet" : `; the lead is ${lead.character}, L${lead.level} ${lead.xp ?? "?"}xp`}`);
+    } else if (via.store !== null) {
       say("level", levelLine((await via.store.latestStates([runId])).get(runId) ?? null, opts.now));
       // The newest sample's count is its process's, so the run's is its own line.
       const quests = questLine(await via.store.quests(runId));
       if (quests !== null) say("quests", quests);
     } else if (v1) {
-      say("level", levelLine(traceLatest(join(dir, "session")), opts.now));
-      const quests = questLine(eventQuests(join(dir, "session")));
+      const latest = traceLatest(join(dir, "session"));
+      say("level", levelLine(latest, opts.now));
+      const quests = questLine(eventQuests(join(dir, "session"), latest));
       if (quests !== null) say("quests", quests);
     } else if (owned) {
       say("level", notOpened(heartbeat, opts.now));
@@ -1744,7 +2120,11 @@ export async function inspectRun(runId: string, opts: Ctx & Window, out: Out): P
     const traj = join(dir, "trajectory.jsonl");
     if (!existsSync(traj)) say("activity", "no trajectory.jsonl");
     else {
-      const a = via.store !== null ? await storeActivity(via.store, runId, via.ext, opts, token) : scanActivity(traj, opts, token);
+      // The cost is the whole run's whatever the window: one pass with the activity when it is the whole run too.
+      const whole = opts.since === null && opts.until === null;
+      const cost = via.store !== null ? null : newCost();
+      const a = via.store !== null ? await storeActivity(via.store, runId, via.ext, opts, token) : scanActivity(traj, opts, token, whole ? cost! : undefined);
+      if (cost !== null && !whole) fileForward(traj, (r) => noteCost(cost, r));
       const k = (t: string): number => a.kinds.get(t) ?? 0;
       const window = windowPhrase(opts) === "" ? "" : `${windowPhrase(opts)}: `;
       const last = a.last === null ? "none" : `${a.last.t} ${fmtAge(opts.now - a.last.ts)} ago`;
@@ -1756,14 +2136,26 @@ export async function inspectRun(runId: string, opts: Ctx & Window, out: Out): P
         `snippets ${se}/${k("snippet_result")}${se > 0 ? `: ${topCounts(a.snippetErrors, 6)}` : ""} · tools ${te}/${k("tool_result")}${te > 0 ? `: ${topCounts(a.toolErrors, 4)}` : ""}`,
       );
       if (a.harness.size > 0) say("harness", topCounts(a.harness, 8));
-      const marks = ["pause", "resume", "termination", "quest_complete", "milestone"].filter((t) => k(t) > 0).map((t) => `${t} ${k(t)}`);
-      if (marks.length > 0) say("marks", marks.join(", "));
+      // A v1 run's milestones and turn-ins are its record's `events` rows, not trajectory records; a fan-out run's are each character's, below.
+      const marks = [["pause", "resume", "termination", "quest_complete", "milestone"].filter((t) => k(t) > 0).map((t) => `${t} ${k(t)}`).join(", "), v1 ? eventMarks(join(dir, "session"), opts) : ""];
+      if (marks.some((m) => m !== "")) say("marks", marks.filter((m) => m !== "").join(" · "));
+      say("cost", costLine(cost ?? (await storeCost(via.store!, runId))));
     }
     say("files", fileLine(dir));
     const session = sessionDir(dir);
     if (session !== null) say("session", sessionLine(session, opts.now));
+    else if (fanout) say("sessions", `${refs.length} character record(s) under ${SESSIONS_DIR}/`);
     else say("trace", db === null ? "no run.sqlite" : traceLine(db, opts.now, owned));
-    say("nearby", nearbyLine(dir, opts.now));
+    if (!fanout) say("nearby", nearbyLine(dir, opts.now));
+    for (const c of characters) {
+      say(c.character, levelLine(c.st, opts.now));
+      const quests = questLine(c.quests);
+      if (quests !== null) say("  quests", quests);
+      const marks = eventMarks(c.ref.session, opts);
+      if (marks !== "") say("  marks", marks);
+      say("  session", sessionLine(c.ref.session, opts.now));
+      say("  nearby", ringLine(join(c.ref.session, "nearby"), opts.now));
+    }
     return 0;
   } finally {
     db?.close();
@@ -1813,6 +2205,33 @@ export async function inspectLive(opts: Ctx, out: Out): Promise<number> {
   for (const f of found) {
     let row: RunRow | null | undefined;
     let st: StateRow | null = null;
+    const meta = isV1Dir(f.dir) ? null : readMeta(f.dir);
+    if (isFanoutDir(f.dir, meta)) {
+      // One line for the run, its lead's level on it, and a line per character under it.
+      row = rows !== null && rows.has(f.id) ? rows.get(f.id)! : v1Row(f.dir, f.id, meta, ownedAt(f.hb, opts.now));
+      const refs = sessionsOf(f.dir);
+      let byKey = new Map<string, StateRow>();
+      if (rows !== null && rows.has(f.id) && opts.store !== null) {
+        try {
+          byKey = await opts.store.latestStates(refs.map((r) => fanoutKey(f.id, r.character ?? "?")));
+        } catch {
+          byKey = new Map();
+        }
+      }
+      const readings = refs.map((r) => {
+        const s = rows !== null && rows.has(f.id) ? (byKey.get(fanoutKey(f.id, r.character ?? "?")) ?? null) : traceLatest(r.session);
+        return { character: r.character ?? "?", level: s?.level ?? null, xp: s?.xp ?? null, ts: s?.ts ?? null };
+      });
+      const lead = leadOf(readings);
+      const v = verdictOf(row, f.hb, opts.now);
+      const level = lead === null ? "L?" : `L${lead.level} ${lead.xp ?? "?"}xp (${lead.character})`;
+      const age = row?.started_at != null ? `up ${fmtAge(opts.now - row.started_at)}` : "";
+      const reason = v.reason !== null ? ` ${v.reason}` : "";
+      const missing = rows !== null && !rows.has(f.id) ? "  (not in ClickHouse yet)" : "";
+      out(cap(`  ${f.id}  ${v.state}${reason}  hb ${fmtAge(opts.now - f.hb)}  ${level}  ${age}  ${row?.model ?? ""}  fan-out, ${refs.length} character(s)${missing}`, opts.width));
+      for (const r of readings) out(cap(`      ${r.character}  L${r.level ?? "?"} ${r.xp ?? "?"}xp${r.ts !== null ? `  sampled ${fmtAge(opts.now - r.ts)} ago` : ""}`, opts.width));
+      continue;
+    }
     if (rows !== null && rows.has(f.id)) {
       row = rows.get(f.id)!;
       st = states.get(f.id) ?? null;
@@ -3215,8 +3634,56 @@ export function stuckFlag(p: ProgressVerdict, windowMs: number): string {
   return `no progress in ${fmtAge(windowMs)}: ${p.evidence}`;
 }
 
-/** The detector over one run: where it reads, the window, the scan. */
-async function stuckOf(ctx: Ctx, runId: string, run: { dir: string; path: string }, until: number | null, t: StuckThresholds): Promise<{ via: Via; report: StuckReport; anchor: string }> {
+/** One fan-out character's progress over the window. */
+export interface CharacterProgress {
+  character: string;
+  progress: ProgressVerdict;
+}
+
+/**
+ * A fan-out run's verdict from its characters': stuck only when every one is
+ * (one agent moving any of its characters is making progress), progressing
+ * when any one is, and otherwise unjudged. infra/run-fleet-state.ts
+ * `liveRunStuck` flags a fan-out run by the same rule. Pure.
+ */
+export function fanoutProgress(characters: readonly CharacterProgress[]): ProgressVerdict {
+  const n = characters.length;
+  const samples = characters.reduce((a, c) => a + c.progress.samples, 0);
+  if (n === 0) return { state: "unjudged", evidence: "no character has a record yet", samples: 0 };
+  const moving = characters.filter((c) => c.progress.state === "progressing");
+  if (moving.length > 0) return { state: "progressing", evidence: `${moving.length} of ${n} character(s) made progress: ${moving.map((c) => `${c.character}: ${c.progress.evidence}`).join("; ")}`, samples };
+  const held = characters.filter((c) => c.progress.state === "stuck");
+  if (held.length === n) return { state: "stuck", evidence: `every character (${n}) held: ${held.map((c) => `${c.character}: ${c.progress.evidence}`).join("; ")}`, samples };
+  const open = characters.filter((c) => c.progress.state === "unjudged");
+  return { state: "unjudged", evidence: `${open.length} of ${n} character(s) unjudged and none progressing: ${open.map((c) => `${c.character}: ${c.progress.evidence}`).join("; ")}`, samples };
+}
+
+/** One session record's samples over a window (the store's under `key`, else the record's) and its other writes. */
+async function sessionProgress(
+  via: Via,
+  key: string,
+  session: string,
+  w: { since: number; until: number },
+  t: StuckThresholds,
+): Promise<{ samples: ProgressSample[]; writes: number[]; schemaBatches: number; progress: ProgressVerdict }> {
+  let rows: Record<string, unknown>[];
+  if (via.store !== null) {
+    const before = await via.store.sampleBefore(key, w.since);
+    rows = [...(before !== null ? [before] : []), ...(await via.store.samples(key, w.since, w.until))];
+  } else rows = traceSamples(session, w);
+  const samples = rows.map((r) => progressSampleOf(r, r["ts"] as number));
+  const rec = recordWrites(session, w);
+  return { samples, writes: rec.writes, schemaBatches: rec.schemaBatches, progress: progressVerdict(samples, w, t, rec.writes) };
+}
+
+/** The detector over one run: where it reads, the window, the scan, and a fan-out run's characters one by one. */
+async function stuckOf(
+  ctx: Ctx,
+  runId: string,
+  run: { dir: string; path: string },
+  until: number | null,
+  t: StuckThresholds,
+): Promise<{ via: Via; report: StuckReport; anchor: string; characters: CharacterProgress[] | null }> {
   // The window ends at --until, else at the run's newest record (an ended run
   // is judged on its last stretch), and never in the future.
   const probe = await viaFor(ctx, runId, run.dir, { since: null, until });
@@ -3243,37 +3710,51 @@ async function stuckOf(ctx: Ctx, runId: string, run: { dir: string; path: string
   // while nothing changes, so what covers the window is the record's other
   // writes, off its files on either path: the store holds neither the
   // `calls` stream whole nor `live.json`.
-  let writes: number[] | undefined;
   if (isV1Dir(run.dir)) {
-    const session = join(run.dir, "session");
-    let rows: Record<string, unknown>[];
-    if (via.store !== null) {
-      const before = await via.store.sampleBefore(runId, w.since);
-      rows = [...(before !== null ? [before] : []), ...(await via.store.samples(runId, w.since, w.until))];
-    } else rows = traceSamples(session, w);
-    scan.samples = rows.map((r) => progressSampleOf(r, r["ts"] as number));
-    const rec = recordWrites(session, w);
-    writes = rec.writes;
+    const s = await sessionProgress(via, runId, join(run.dir, "session"), w, t);
+    scan.samples = s.samples;
     // Its tools' served batches are its record's `calls` rows, not trajectory records.
-    scan.schemaRecords += rec.schemaBatches;
+    scan.schemaRecords += s.schemaBatches;
+    return { via, report: stuckReport(scan, w, t, s.writes), anchor, characters: null };
   }
-  return { via, report: stuckReport(scan, w, t, writes), anchor };
+  // A fan-out run: each character judged off its own record, the store's
+  // rows under its key; the trajectory's signals are the one agent's.
+  if (isFanoutDir(run.dir)) {
+    const characters: CharacterProgress[] = [];
+    for (const ref of sessionsOf(run.dir)) {
+      const character = ref.character ?? "?";
+      const s = await sessionProgress(via, fanoutKey(runId, character), ref.session, w, t);
+      scan.schemaRecords += s.schemaBatches;
+      characters.push({ character, progress: s.progress });
+    }
+    scan.samples = [];
+    const report = stuckReport(scan, w, t, []);
+    return { via, report: { ...report, progress: fanoutProgress(characters) }, anchor, characters };
+  }
+  return { via, report: stuckReport(scan, w, t), anchor, characters: null };
 }
 
 export async function inspectStuck(runId: string, opts: Ctx & { until: number | null; thresholds: StuckThresholds }, out: Out): Promise<number> {
   const run = trajectoryOf(runId, opts, out);
   if (run === null) return 1;
   const t = opts.thresholds;
-  const { via, report, anchor } = await stuckOf(opts, runId, run, opts.until, t);
+  const { via, report, anchor, characters } = await stuckOf(opts, runId, run, opts.until, t);
   const say = (text: string): void => out(cap(strike(text, run.token), opts.width));
   const p = report.progress;
   const a = report.scan;
+  const label = (v: ProgressVerdict): string => (v.state === "stuck" ? "TRIPPED" : v.state === "unjudged" ? "unjudged" : "ok     ");
+  const whose = characters === null ? "" : characters.length === 1 ? " (its one character)" : ` (all ${characters.length} characters: a fan-out run is stuck only when every one is)`;
   say(`${runId}: the stuck detector over ${fmtAge(t.windowMs)} to ${iso(report.window.until)} (${anchor}), UTC`);
   say(
-    `verdict   ${p.state === "stuck" ? "STUCK: no game progress in the window" : p.state === "progressing" ? "not stuck: the character made progress" : "unjudged: what was recorded does not cover the window"} (only the progress signal flags a run; the rest are evidence)`,
+    `verdict   ${p.state === "stuck" ? `STUCK: no game progress in the window${whose}` : p.state === "progressing" ? `not stuck: ${characters === null ? "the" : "a"} character made progress` : "unjudged: what was recorded does not cover the window"} (only the progress signal flags a run; the rest are evidence)`,
   );
   say(`source    ${via.line}`);
-  say(`progress  ${p.state === "stuck" ? "TRIPPED" : p.state === "unjudged" ? "unjudged" : "ok     "}  ${p.evidence}`);
+  if (characters === null) say(`progress  ${label(p)}  ${p.evidence}`);
+  else {
+    say(`progress  ${label(p)}  ${characters.length} character(s)${characters.length === 0 ? `: ${p.evidence}` : ", each judged off its own record:"}`);
+    const pad = Math.max(0, ...characters.map((c) => c.character.length));
+    for (const c of characters) say(`  ${c.character.padEnd(pad)}  ${label(c.progress)}  ${c.progress.evidence}`);
+  }
   say(`activity  ${a.snippets} snippet(s) · ${a.toolCalls} other tool call(s) · ${a.responses} model response(s) in the window`);
   for (const s of report.signals) say(`${s.name.padEnd(9)} ${s.tripped ? "TRIPPED" : "ok     "}  ${s.text}`);
   for (const ask of a.asks.slice(-2)) say(`          ${clock(ask.ts)}  ${cap(ask.text, opts.width - 40)}`);
@@ -3301,16 +3782,179 @@ export async function inspectStuckLive(opts: Ctx & { thresholds: StuckThresholds
       out(cap(`  ${id}  no trajectory`, opts.width));
       continue;
     }
-    const { via, report } = await stuckOf(opts, id, run, null, opts.thresholds);
+    const { via, report, characters } = await stuckOf(opts, id, run, null, opts.thresholds);
     source = via.line;
     const p = report.progress;
     const others = report.signals.filter((s) => s.tripped).map((s) => s.name);
     // The tripped evidence first: the progress line that follows is long, and the cap cuts its end.
     const also = others.length > 0 ? ` (also tripped: ${others.join(", ")})` : "";
     const rest = p.state === "stuck" ? stuckFlag(p, opts.thresholds.windowMs) : p.state === "unjudged" ? p.evidence : "";
-    out(cap(strike(`  ${id}  ${p.state === "stuck" ? "STUCK" : p.state}${also}${rest !== "" ? `  ${rest}` : ""}`, run.token), opts.width));
+    const fan = characters === null ? "" : `  fan-out, ${characters.filter((c) => c.progress.state === "stuck").length} of ${characters.length} character(s) held`;
+    out(cap(strike(`  ${id}  ${p.state === "stuck" ? "STUCK" : p.state}${also}${fan}${rest !== "" ? `  ${rest}` : ""}`, run.token), opts.width));
   }
   if (source !== "") out(cap(`source    ${source}`, opts.width));
+  return 0;
+}
+
+// ------------------------------------------------------------------ inspect session
+
+/** The streams `session` reads: what happened to a character, and what the agent asked for and sent. */
+export const SESSION_STREAMS = ["events", "calls"] as const;
+export type SessionStream = (typeof SESSION_STREAMS)[number];
+
+export interface SessionOptions extends Ctx, Window {
+  stream: SessionStream;
+  /** One fan-out character, or the run's one; null for every character. */
+  character: string | null;
+  /** The kinds to show; null for every kind but the `key` rows, which restate the stream. */
+  kinds: ReadonlySet<string> | null;
+  grep: RegExp | null;
+  last: number;
+  forward: boolean;
+}
+
+/** Who a calls row came from: a tool call by its id, code a call left running, or the SDK's own traffic. */
+function originOf(v: unknown): string {
+  const o = obj(v);
+  const type = str(o["type"]) ?? "?";
+  return typeof o["call"] === "number" ? `${type} #${o["call"]}` : type;
+}
+
+function json(v: unknown): string {
+  try {
+    return JSON.stringify(v) ?? "";
+  } catch {
+    return "?";
+  }
+}
+
+/**
+ * One stream row as a line's body: each `calls` kind by what it means (a call
+ * and its arguments, a result and its text, the actions an origin sent, a
+ * move and its verdict, a served batch by opcode), an `events` row as its
+ * fields.
+ */
+export function sessionRowText(r: StreamRow): string {
+  const row = r.row;
+  const rest = (): string => {
+    const { ts: _ts, kind: _kind, seq: _seq, ...fields } = row;
+    return Object.keys(fields).length === 0 ? "" : json(fields);
+  };
+  switch (r.kind) {
+    case "call":
+      return `#${String(row["id"])} ${str(row["tool"]) ?? "?"} ${json(row["args"])}`;
+    case "result": {
+      const ms = typeof row["durationMs"] === "number" ? ` ${row["durationMs"]}ms` : "";
+      return `#${String(row["id"])} ${row["error"] === true ? "ERROR" : "ok"}${ms} ${textOf(row["text"])}`;
+    }
+    case "actions": {
+      const acts = (Array.isArray(row["actions"]) ? row["actions"] : []).map((a) => {
+        const x = obj(a);
+        const what = [str(x["action"]) ?? "?", String(x["status"] ?? "?"), str(x["error"])].filter((b) => b !== null).join(" ");
+        return typeof x["count"] === "number" && x["count"] > 1 ? `${what} ×${x["count"]}` : what;
+      });
+      const dropped = Object.keys(obj(row["dropped"])).length > 0 ? ` (dropped ${json(row["dropped"])})` : "";
+      return `${originOf(row["origin"])}: ${acts.join(", ")}${dropped}`;
+    }
+    case "move": {
+      const at = [row["x"], row["y"], row["z"]].map((n) => (typeof n === "number" ? n.toFixed(1) : "?")).join(", ");
+      const target = row["target"] !== null && row["target"] !== undefined ? ` target ${String(row["target"])}${str(row["name"]) !== null ? ` (${row["name"] as string})` : ""}` : "";
+      const status = row["status"] === null || row["status"] === undefined ? "dispatched" : String(row["status"]);
+      return `${originOf(row["origin"])}: #${String(row["moveId"] ?? "?")} map ${String(row["map"] ?? "?")} (${at})${target} ${status}`;
+    }
+    case "events": {
+      const ops = new Map<string, number>();
+      let schema = 0;
+      for (const e of Array.isArray(row["events"]) ? row["events"] : []) {
+        count(ops, str(obj(e)["opcode"]) ?? "?");
+        if (obj(e)["schemaError"] !== undefined) schema++;
+      }
+      const folded = typeof row["folded"] === "number" ? `, ${row["folded"]} folded` : "";
+      return `${originOf(row["origin"])}: ${String(row["count"] ?? "?")} event(s)${folded}${schema > 0 ? `, ${schema} with a schemaError` : ""}: ${topCounts(ops, 8)}`;
+    }
+    case "key":
+      return r.row["open"] !== undefined ? `${Array.isArray(row["open"]) ? row["open"].length : "?"} call(s) open` : rest();
+    default:
+      return rest();
+  }
+}
+
+/**
+ * A v1 run's session record, one capped line per row of one stream, the
+ * newest `--last` (or the oldest `--next`) in a window: the `events` stream
+ * (deaths, levels, zones, turn-ins and the rest of what happened) or the
+ * `calls` stream (each tool call and its result, the actions and moves sent on
+ * its behalf, the event batches it served). These were trajectory records on
+ * 0.5, which `trajectory --grep` read. A fan-out run's characters are read
+ * together, each line naming its character, or one with `--character`; a call
+ * written to several characters' records (one that named none) is shown once.
+ * Read off the files wherever the views read: the store does not hold these
+ * streams whole.
+ */
+export async function inspectSession(runId: string, opts: SessionOptions, out: Out): Promise<number> {
+  const dir = findRunDir(opts.runsDir, runId);
+  if (dir === null) {
+    out(`no run ${runId} under ${opts.runsDir} (nor its ${ARCHIVE_DIR}/)`);
+    return 1;
+  }
+  const token = strikableToken(readMeta(dir), runId);
+  let refs = sessionsOf(dir);
+  if (refs.length === 0) {
+    out(
+      isFanoutDir(dir)
+        ? `${runId}: a fan-out run none of whose characters has a session record yet`
+        : `${runId} has no session record: a 0.5 run, whose events and actions are trajectory records (trajectory --all --grep)`,
+    );
+    return 1;
+  }
+  const fanout = sessionDir(dir) === null;
+  if (opts.character !== null) {
+    const want = opts.character.toLowerCase();
+    const picked = refs.filter((r) => r.character?.toLowerCase() === want);
+    if (picked.length === 0) {
+      out(`${runId} has no character ${opts.character}: ${refs.map((r) => r.character ?? "(unnamed)").join(", ")}`);
+      return 1;
+    }
+    refs = picked;
+  }
+  const keep = (r: StreamRow): boolean =>
+    (opts.kinds === null ? r.kind !== "key" : opts.kinds.has(r.kind)) && (opts.grep === null || opts.grep.test(strike(r.line, token)));
+  const limit = { n: opts.last, forward: opts.forward };
+  // A call or its result written to several characters' records is one call: shown once, with whose records hold it.
+  const rows: (StreamRow & { who: string[] })[] = [];
+  const seen = new Map<string, StreamRow & { who: string[] }>();
+  for (const ref of refs) {
+    for (const r of streamRows(ref.session, opts.stream, opts, keep, limit)) {
+      const id = (r.kind === "call" || r.kind === "result") && typeof r.row["id"] === "number" ? `${r.kind}:${r.row["id"]}` : null;
+      const prior = id === null ? undefined : seen.get(id);
+      if (prior !== undefined) {
+        prior.who.push(ref.character ?? "?");
+        continue;
+      }
+      const row = { ...r, who: [ref.character ?? "?"] };
+      if (id !== null) seen.set(id, row);
+      rows.push(row);
+    }
+  }
+  rows.sort((a, b) => a.ts - b.ts);
+  const shown = opts.forward ? rows.slice(0, opts.last) : rows.slice(-opts.last);
+  const whoOf = (who: readonly string[]): string => (who.length === 1 ? who[0]! : `${who[0]}+${who.length - 1}`);
+  const pad = fanout ? Math.max(0, ...shown.map((r) => whoOf(r.who).length)) : 0;
+  const kindPad = Math.max(0, ...shown.map((r) => r.kind.length));
+  const say = (text: string): void => out(cap(strike(text, token), opts.width));
+  const filters = [
+    opts.kinds !== null ? `kind ${[...opts.kinds].join(",")}` : null,
+    opts.grep !== null ? `grep /${opts.grep.source}/` : null,
+    windowPhrase(opts) !== "" ? windowPhrase(opts) : null,
+  ].filter((b) => b !== null);
+  const whose = fanout ? `${refs.length} character(s): ${refs.map((r) => r.character).join(", ")}` : (refs[0]!.character ?? "its character");
+  say(`${runId}: the ${opts.stream} stream of ${whose}${filters.length > 0 ? ` · ${filters.join(" · ")}` : ""} · ${opts.forward ? "the first" : "the last"} ${shown.length}, UTC`);
+  say(`source    the files: the session record${fanout ? "s" : ""} (ClickHouse does not hold these streams whole)`);
+  for (const r of shown) {
+    const who = fanout ? `${whoOf(r.who).padEnd(pad)}  ` : "";
+    say(`${clock(r.ts)}  ${who}${r.kind.padEnd(kindPad)}  ${sessionRowText(r)}`);
+  }
+  if (shown.length === 0) say("          (no row matches)");
   return 0;
 }
 
@@ -3322,10 +3966,12 @@ const USAGE = `usage: bun infra/inspect-run.ts live
        bun infra/inspect-run.ts tools <run-id> [--since D] [--until D]
        bun infra/inspect-run.ts pad <run-id> [--since D] [--until D] [--last N] | --at D
        bun infra/inspect-run.ts stuck [<run-id>] [--window D] [--until D] [--move N] [--max-gap D] [--repeat N] [--hints N] [--schema N] [--restarts N] [--asks N]
+       bun infra/inspect-run.ts session <run-id> [--stream events|calls] [--character NAME] [--kind K[,K]] [--grep RE] [--last N | --next N] [--since D] [--until D]
 common: [--runs-dir DIR] (else WRATHBENCH_RUNS_DIR, else data/runs) [--width N] [--files]; D is 90s, 30m, 2h, 1d, epoch ms or ISO
 --next N: the first N items from --since (or the file's start) instead of the last N
 --files: read the files, not ClickHouse (CLICKHOUSE_URL); a live run's run.sqlite is still not opened
-stuck: with no run id, every run with a live owner; --window and --max-gap are durations (2h, 15m), the rest whole numbers`;
+stuck: with no run id, every run with a live owner; --window and --max-gap are durations (2h, 15m), the rest whole numbers
+session: a v1 run's record, events by default; a fan-out run's characters together unless --character; --kind key shows the restating rows`;
 
 /** `inspect stuck`'s threshold flags, each with the threshold it sets and whether it is a duration. */
 const STUCK_FLAGS: readonly (readonly [string, keyof StuckThresholds, "duration" | "count"])[] = [
@@ -3354,9 +4000,10 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   tools: ["--since", "--until"],
   pad: ["--since", "--until", "--last", "--at"],
   stuck: ["--until", ...STUCK_FLAGS.map(([f]) => f)],
+  session: ["--stream", "--character", "--kind", "--grep", "--last", "--next", "--since", "--until"],
 };
 const COMMON_FLAGS = new Set(["--runs-dir", "--width", "--files"]);
-const VALUED = new Set(["--since", "--until", "--at", "--last", "--next", "--grep", "--width", "--runs-dir", ...STUCK_FLAGS.map(([f]) => f)]);
+const VALUED = new Set(["--since", "--until", "--at", "--last", "--next", "--grep", "--width", "--runs-dir", "--stream", "--character", "--kind", ...STUCK_FLAGS.map(([f]) => f)]);
 
 /** What the CLI is handed besides its arguments: a store in place of CLICKHOUSE_URL's, for the tests. */
 export interface Deps {
@@ -3494,6 +4141,28 @@ export async function main(
         err(`--grep: ${(e as Error).message}`);
         return 2;
       }
+    }
+    if (command === "session") {
+      const stream = (flags.get("--stream") as string | undefined) ?? "events";
+      if (!(SESSION_STREAMS as readonly string[]).includes(stream)) {
+        err(`--stream is ${SESSION_STREAMS.join(" or ")}\n${USAGE}`);
+        return 2;
+      }
+      const character = (flags.get("--character") as string | undefined) ?? null;
+      if (character !== null && !CHARACTER_NAME.test(character)) {
+        err(`--character is a character's name, letters only`);
+        return 2;
+      }
+      const kindList = flags.has("--kind") ? (flags.get("--kind") as string).split(",").map((k) => k.trim()).filter((k) => k !== "") : null;
+      if (kindList !== null && kindList.length === 0) {
+        err(`--kind names one kind or more, comma-separated\n${USAGE}`);
+        return 2;
+      }
+      return await inspectSession(
+        runId,
+        { ...base, ...window, stream: stream as SessionStream, character, kinds: kindList === null ? null : new Set(kindList), grep, last: next ?? last ?? DEFAULT_LAST, forward: next !== null },
+        out,
+      );
     }
     return await inspectTrajectory(
       runId,

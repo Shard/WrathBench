@@ -310,6 +310,13 @@ export const ENTRIES: readonly Entry[] = [
   },
   {
     group: "inspect",
+    command: "session",
+    takes: "<run-id> [--stream events|calls] [--character NAME] [--kind K[,K]] [--grep RE] [--last N | --next N] [--since D] [--until D]",
+    summary: "a v1 run's session record, one capped line per row: events (deaths, levels, turn-ins) or calls (tool calls, actions, moves, served batches); a fan-out run's characters together",
+    ...inRunner("bun", INSPECT_RUN, "session"),
+  },
+  {
+    group: "inspect",
     command: "audit",
     takes: "<run-id> | --smoke <name> [--op X[,Y] [--status S] [--last N | --summary]] [--since D] [--until D]",
     summary: "the module audit log of a run or of a smoke's sessions (one session name at a time: group-a, mail-r), counts per op and status or the last records, reduced where it lives",
