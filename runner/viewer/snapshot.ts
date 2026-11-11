@@ -312,10 +312,12 @@ export const COLD_MS = 15 * 60_000;
 
 /**
  * The files the per-run routes read. A run's derived-store rows are derived
- * from these. `run.sqlite-wal` with them: a live run's commits land there
- * until a checkpoint (runner/src/rundb.ts), and it is absent at rest.
+ * from these. `run.sqlite-wal` with them: a 0.5 run's commits land there
+ * until a checkpoint (runner/src/rundb.ts), and it is absent at rest. A v1
+ * run's session record moves `live.json` on every write and `manifest.json`
+ * when it closes, so those two stand for its segments.
  */
-const RUN_INPUT_FILES = ["meta.json", "trajectory.jsonl", "run.sqlite", "run.sqlite-wal", "scratchpad.md"] as const;
+const RUN_INPUT_FILES = ["meta.json", "trajectory.jsonl", "run.sqlite", "run.sqlite-wal", "scratchpad.md", "session/live.json", "session/manifest.json"] as const;
 
 /**
  * Everything a cold run's four objects are a function of, hashed, or null when
@@ -350,7 +352,8 @@ function coldFingerprint(runsDir: string, row: { runId: string }, character: str
     try {
       st = statSync(join(runsDir, row.runId, name));
     } catch {
-      parts.push(`${name} -`);
+      // A 0.5 run has no session record; its hash stays what it was.
+      if (!name.startsWith("session/")) parts.push(`${name} -`);
       continue;
     }
     if (st.mtimeMs > wall - COLD_MS) return null;

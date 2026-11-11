@@ -6,10 +6,17 @@
  *
  *   trajectory.jsonl  append-only  → tailed from a byte offset
  *   episodic.jsonl    append-only  → tailed from a byte offset
- *   run.sqlite state  append-only  → read from a rowid cursor
- *   run.sqlite move   append-only  → read from a rowid cursor
- *   run.sqlite run    mutated      → re-read whole when (size, mtime) moves
+ *   session/trace     append-only  → folded into state samples (v1)
+ *   session/events    append-only  → tailed from a stream cursor (v1)
+ *   run.sqlite state  append-only  → read from a rowid cursor (0.5)
+ *   run.sqlite move   append-only  → read from a rowid cursor (0.5)
+ *   run.sqlite run    mutated      → re-read whole when (size, mtime) moves (0.5)
  *   meta.json         rewritten    → re-read whole when (size, mtime) moves
+ *
+ * A v1 run (`session/session.json`) is read off its session record: its
+ * `states` are the samples `runner/src/trace-samples.ts` folds from the
+ * trace, its `milestones` the `events` stream's rows, and its run row
+ * meta.json's (`runner/src/run-reader.ts`). Its trajectory is model-side.
  *
  * Nothing here decides anything about a run. It reads what the runner wrote
  * and hands it to the sink; the runner is untouched by design and
@@ -25,7 +32,9 @@
 import { existsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
+import { SessionReader, type EventRow, type StreamCursor } from "@wrathbench/mcp/record";
 import { openRunDb } from "../../runner/src/rundb";
+import { isV1RunDir, milestoneOfEvent, runRowOfMeta, sessionDirOfRun, traceSamplesOf, turnIndexOf } from "../../runner/src/run-reader";
 import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tail";
 import { type CountCache, readRunFact, type RecordCountScanner } from "../../runner/src/models";
 import { strikableSessionToken, strikeSessionToken } from "../../runner/src/session-token";
@@ -108,6 +117,12 @@ function real(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
+/** The events cursor and row count a pass left in the offsets store, `<segment>:<offset>:<n>`. */
+function parseEventsCursor(sig: string | null): { cursor: StreamCursor | undefined; n: number } {
+  const m = sig === null ? null : /^(.+):(\d+):(\d+)$/.exec(sig);
+  return m === null ? { cursor: undefined, n: 0 } : { cursor: { segment: m[1]!, offset: Number(m[2]) }, n: Number(m[3]) };
+}
+
 /** (size, mtime) of a file, and which file it is (inode, device); null when it is not there. */
 function sigOf(path: string): { sig: string; size: number; mtime: number; ino: number; dev: number } | null {
   try {
@@ -123,6 +138,8 @@ export class Ingester {
   private readonly runs = new Map<string, KeptRun>();
   /** `readRunFact`'s record-count scanners, by trajectory path. */
   private readonly counts: CountCache = new Map();
+  /** How many of a v1 run's trace samples this process has added to the store. */
+  private readonly statesAdded = new Map<string, number>();
 
   constructor(private readonly deps: IngestDeps) {}
 
@@ -135,6 +152,7 @@ export class Ingester {
   /** Drop the scanners of runs a pass no longer lists: deleted, or gone from the tree. */
   retainListed(listed: ReadonlySet<string>): void {
     for (const runId of [...this.runs.keys()]) if (!listed.has(runId)) this.drop(runId);
+    for (const runId of [...this.statesAdded.keys()]) if (!listed.has(runId)) this.statesAdded.delete(runId);
   }
 
   /** The count scanner a run's next re-derivation would fold into, if any: for a test or a probe. */
@@ -176,9 +194,14 @@ export class Ingester {
     const token = strikableSessionToken(dir, runId);
     out.trajectoryLines = await this.tailTrajectory(runId, dir, token);
     out.episodicLines = await this.tailEpisodic(runId, dir, token);
-    const sqlite = await this.readSqlite(runId, dir);
-    out.states = sqlite.states;
-    out.moves = sqlite.moves;
+    if (isV1RunDir(dir)) {
+      out.states = await this.readTraceStates(runId, dir);
+      await this.readEventMilestones(runId, dir);
+    } else {
+      const sqlite = await this.readSqlite(runId, dir);
+      out.states = sqlite.states;
+      out.moves = sqlite.moves;
+    }
     out.run = await this.writeRunRow(runId, dir, archived, token);
     out.totals = await this.writeTotals(runId, dir);
     return out;
@@ -199,6 +222,7 @@ export class Ingester {
     const from = st.size < at.offset ? { offset: 0, nextLine: 0 } : at;
     if (st.size === from.offset) return 0;
     const ingestedAt = this.deps.now();
+    const v1 = isV1RunDir(dir);
     let lineNo = from.nextLine;
     let offset = from.offset;
     let count = 0;
@@ -220,7 +244,8 @@ export class Ingester {
         await this.deps.batcher.add("turns", turnRow(ctx, parsed.rec, text));
       } else {
         await this.deps.batcher.add("events", eventRow(ctx, parsed.rec, text));
-        if (parsed.t === "milestone") {
+        // A v1 run's milestones are its session record's (`readEventMilestones`).
+        if (parsed.t === "milestone" && !v1) {
           await this.deps.batcher.add("milestones", milestoneRow(ctx, parsed.rec, text));
         }
       }
@@ -261,6 +286,89 @@ export class Ingester {
     }
     await this.deps.batcher.flushAll();
     this.deps.offsets.setFileOffset(runId, "episodic.jsonl", { offset, nextLine: lineNo });
+    return count;
+  }
+
+  // ---------------------------------------------------------- session record
+
+  /**
+   * A v1 run's state samples, folded from its trace (`traceSamplesOf`, which
+   * keeps the fold per run and reads on from where it was left). Each sample's
+   * `seq` is its ordinal in the derivation, which the same trace always gives
+   * the same way, so a pass after a restart re-adds rows onto the keys they
+   * already hold. Only the samples past the ones this process has added go to
+   * the batcher.
+   */
+  private async readTraceStates(runId: string, dir: string): Promise<number> {
+    const samples = traceSamplesOf(dir);
+    const from = this.statesAdded.get(runId) ?? 0;
+    // Fewer than were added: another trace than the one read (a replaced run). Add it whole.
+    const start = samples.length < from ? 0 : from;
+    if (samples.length === start) return 0;
+    const ingestedAt = this.deps.now();
+    for (const r of samples.slice(start)) {
+      await this.deps.batcher.add("states", {
+        run_id: runId,
+        seq: r.seq,
+        ts: r.ts,
+        level: r.level,
+        xp: r.xp,
+        map: r.map,
+        x: r.x,
+        y: r.y,
+        z: r.z,
+        event_count: r.event_count,
+        last_seq: r.last_seq,
+        money: r.money,
+        quests_completed: r.quests_completed,
+        turn: r.turn,
+        zone: r.zone,
+        area: r.area,
+        health: r.health,
+        max_health: r.max_health,
+        power: r.power,
+        max_power: r.max_power,
+        power_type: r.power_type,
+        next_level_xp: r.next_level_xp,
+        items: r.items ?? "",
+        ingested_at: ingestedAt,
+      });
+    }
+    await this.deps.batcher.flushAll();
+    this.statesAdded.set(runId, samples.length);
+    return samples.length - start;
+  }
+
+  /**
+   * A v1 run's milestones: the `events` stream's rows, read on from a stream
+   * cursor kept in the offsets store, each as the milestone record it stands
+   * for (`milestoneOfEvent`) with the turn in flight. Keyed by a `line_no`
+   * below zero, its ordinal in the stream negated, so a session row can never
+   * land on a trajectory line's key.
+   */
+  private async readEventMilestones(runId: string, dir: string): Promise<number> {
+    const kept = parseEventsCursor(this.deps.offsets.signature(runId, "events"));
+    let batch: { rows: EventRow[]; cursor: StreamCursor | undefined };
+    try {
+      batch = new SessionReader(sessionDirOfRun(dir)).tail("events", kept.cursor);
+    } catch {
+      return 0;
+    }
+    if (batch.rows.length === 0) return 0;
+    const turns = turnIndexOf(dir);
+    const ingestedAt = this.deps.now();
+    let n = kept.n;
+    let count = 0;
+    for (const row of batch.rows) {
+      n++;
+      const rec = milestoneOfEvent(row, turns.at(row.ts));
+      if (rec === null) continue;
+      const text = JSON.stringify(rec);
+      await this.deps.batcher.add("milestones", milestoneRow({ runId, lineNo: -n, ingestedAt }, rec, text));
+      count++;
+    }
+    await this.deps.batcher.flushAll();
+    if (batch.cursor !== undefined) this.deps.offsets.setSignature(runId, "events", `${batch.cursor.segment}:${batch.cursor.offset}:${n}`);
     return count;
   }
 
@@ -404,6 +512,7 @@ export class Ingester {
     }
     const config = (meta["config"] ?? {}) as Record<string, unknown>;
 
+    // run.sqlite's row where the run has one (0.5), else meta.json's (`run-reader.ts`).
     let r: Record<string, unknown> = {};
     if (dbSig !== null) {
       let db: Database | null = null;
@@ -415,6 +524,8 @@ export class Ingester {
       } finally {
         db?.close();
       }
+    } else if (Object.keys(meta).length > 0) {
+      r = runRowOfMeta(runId, meta) as unknown as Record<string, unknown>;
     }
 
     const resolved = (meta["resolved"] ?? {}) as Record<string, unknown>;
@@ -461,7 +572,9 @@ export class Ingester {
     if (st === null) return false;
     // The derivation's revision is part of the signature: a run whose file is
     // unchanged is still re-derived once when what the scanner derives changes.
-    const sig = `d${RUN_TOTALS_DERIVATION}:${st.sig}`;
+    // A v1 run's milestones are its session record's, so its writes move the totals too.
+    const live = sigOf(join(dir, "session", "live.json"));
+    const sig = `d${RUN_TOTALS_DERIVATION}:${st.sig}${live !== null ? `|${live.sig}` : ""}`;
     if (this.deps.offsets.signature(runId, "totals") === sig) return false;
 
     let run = this.runs.get(runId);

@@ -32,6 +32,8 @@ import { questsAcrossRestarts } from "./results";
 import { readPositionTrace } from "./trace-db";
 import { nearbyFresh } from "./nearby-ring";
 import { sessionSource } from "./session-source";
+import { SessionReader } from "@wrathbench/mcp/record";
+import { isV1RunDir, readRunRow, readStateSamples, sessionDirOfRun } from "../src/run-reader";
 
 /**
  * How stale a position may be and still count as an agent on the map. Longer
@@ -91,6 +93,7 @@ export function readLatestPosition(
   runsDir: string,
   runId: string,
 ): ({ map: number; x: number; y: number; ts: number } & PositionGauges) | null {
+  if (isV1RunDir(join(runsDir, runId))) return readRunDb(runsDir, runId).pos;
   return withRunDb(runsDir, runId, null, (db) => latestPositionIn(db, runId));
 }
 
@@ -241,6 +244,8 @@ function latestStatusIn(text: string, cut: boolean): CharacterStatus | null {
  * column it did not record — and a run that predates it was never reflecting.
  */
 export function readReflecting(runsDir: string, runId: string): boolean {
+  const dir = join(runsDir, runId);
+  if (isV1RunDir(dir)) return typeof readRunRow(dir, runId)?.["reflecting_since"] === "number";
   return withRunDb(runsDir, runId, false, (db) => reflectingIn(db, runId));
 }
 
@@ -282,6 +287,8 @@ interface RunDbReading {
  */
 function readRunDb(runsDir: string, runId: string): RunDbReading {
   const none: RunDbReading = { pos: null, quests: [], move: null, reflecting: false };
+  const dir = join(runsDir, runId);
+  if (isV1RunDir(dir)) return readV1Reading(runsDir, runId, none);
   return withRunDb(runsDir, runId, none, (db) => {
     const guard = <T>(empty: T, read: () => T): T => {
       try {
@@ -300,6 +307,46 @@ function readRunDb(runsDir: string, runId: string): RunDbReading {
       reflecting: guard(false, () => reflectingIn(db, runId)),
     };
   });
+}
+
+/**
+ * The same questions of a v1 run, off its session record: where it stands is
+ * `live.json`, the writer's last reading, which exists so that a map of every
+ * session opens one small file each; the gauges it does not carry and the
+ * turn-ins are the trace's newest samples (`run-reader.ts`); the reflection
+ * window is the run row's.
+ */
+function readV1Reading(runsDir: string, runId: string, none: RunDbReading): RunDbReading {
+  const dir = join(runsDir, runId);
+  try {
+    const live = new SessionReader(sessionDirOfRun(dir)).live();
+    if (live === null || live.map === null || live.x === null || live.y === null) return none;
+    const ts = live.observed ?? live.ts;
+    const samples = readStateSamples(dir, runId);
+    const last = samples[samples.length - 1];
+    const gauge = (k: string): number | null => (last !== undefined && typeof last[k] === "number" ? (last[k] as number) : null);
+    const pos: LatestPosition = {
+      map: live.map,
+      x: live.x,
+      y: live.y,
+      ts,
+      health: live.hp ?? gauge("health"),
+      maxHealth: live.hpMax ?? gauge("max_health"),
+      power: gauge("power"),
+      maxPower: gauge("max_power"),
+      powerType: gauge("power_type"),
+      nextLevelXp: gauge("next_level_xp"),
+    };
+    const row = readRunRow(dir, runId);
+    return {
+      pos,
+      quests: samples.map((r) => ({ questsCompleted: num(r["quests_completed"]) })),
+      move: readLatestMove(runsDir, runId),
+      reflecting: typeof row?.["reflecting_since"] === "number",
+    };
+  } catch {
+    return none;
+  }
 }
 
 /**

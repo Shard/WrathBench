@@ -58,6 +58,7 @@ import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, s
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { openRunDb, RUN_DB_JOURNAL_FILE, RUN_DB_WAL_FILE } from "./rundb";
+import { bestLevelOf, readRunRow } from "./run-reader";
 import { harnessSeries } from "./comparability";
 import { DEFAULT_DRIVER, defaultCompactWindowOf, driverEntry, eitherHas, entryOf, harnessDriver, isProbeOnlyDriver, PLACED_LANE_DRIVER, probeOnlyRefusal } from "./drivers";
 import { AUTO_COMPACT_WINDOW, DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isCodexHomeEnvName, isDriver, isTokenEnvName, isUnscoredDriverName, type Driver, type Harness } from "./config";
@@ -1349,37 +1350,15 @@ export function readRunFact(
   fact.modelResponses = tally?.counts.get(MODEL_RESPONSE_RECORD) ?? null;
   let pauseReason: string | null = null;
 
-  const dbPath = join(dir, "run.sqlite");
-  if (existsSync(dbPath)) {
-    let db: Database | null = null;
-    try {
-      db = openRunDb(dbPath, { readonly: true });
-      const r = db.query(`SELECT started_at, ended_at, termination_reason FROM run WHERE run_id = ?`).get(runId) as Record<
-        string,
-        unknown
-      > | null;
-      if (r !== null) {
-        fact.startedAt = num(r["started_at"]) ?? fact.startedAt;
-        fact.endedAt = num(r["ended_at"]);
-        fact.terminationReason = str(r["termination_reason"]);
-      }
-      try {
-        const p = db.query(`SELECT pause_reason FROM run WHERE run_id = ?`).get(runId) as Record<string, unknown> | null;
-        pauseReason = p === null ? null : str(p["pause_reason"]);
-      } catch {
-        /* a store without the column (synthetic or very old) is not paused */
-      }
-      const lv = db.query(`SELECT MAX(level) AS v FROM state WHERE run_id = ? AND level > 0`).get(runId) as Record<
-        string,
-        unknown
-      > | null;
-      fact.bestLevel = lv === null ? null : num(lv["v"]);
-    } catch {
-      /* a busy or foreign database leaves the sqlite fields null */
-    } finally {
-      db?.close();
-    }
+  // The run row and the best level, wherever the run keeps them (`run-reader.ts`).
+  const r = readRunRow(dir, runId);
+  if (r !== null) {
+    fact.startedAt = num(r["started_at"]) ?? fact.startedAt;
+    fact.endedAt = num(r["ended_at"]);
+    fact.terminationReason = str(r["termination_reason"]);
+    pauseReason = str(r["pause_reason"]);
   }
+  fact.bestLevel = bestLevelOf(dir, runId);
   const beating = fact.heartbeatAt != null && now - fact.heartbeatAt < HEARTBEAT_DEAD_MS;
   // A verdict the row lacks but the trajectory holds: the runner appends the
   // record before it writes the row, and a row write that gave up (after its
@@ -1540,7 +1519,7 @@ export function runFactCacheVersion(): string {
     .update(
       [
         String(RUN_FACT_CACHE_SCHEMA),
-        ...[readRunFact, partyOfConfig, runFactKey, runDbWriteInFlight, verdictOfTrajectory, tallyRecords, RecordCountScanner, harnessSeries, isEpisodeId, heartbeatAt, openRunDb, str, num, parseSubscriptionUsage, subscriptionLaneOfConfig, goKeyEnvOf, isOpenCodeGoBase, billingOf].map(String),
+        ...[readRunFact, partyOfConfig, runFactKey, runDbWriteInFlight, verdictOfTrajectory, tallyRecords, RecordCountScanner, harnessSeries, isEpisodeId, heartbeatAt, openRunDb, readRunRow, bestLevelOf, str, num, parseSubscriptionUsage, subscriptionLaneOfConfig, goKeyEnvOf, isOpenCodeGoBase, billingOf].map(String),
         JSON.stringify([EPISODE_IDS, MODEL_RESPONSE_RECORD, HEARTBEAT_FILE]),
       ].join("\n"),
     )
@@ -1559,7 +1538,7 @@ export function runFactCache(path: string, opts: { readOnly?: boolean } = {}): R
 }
 
 /** The files `readRunFact` reads, and the heartbeat it stats: a kept fact is good while none of them has moved. */
-const RUN_FACT_FILES = ["meta.json", "trajectory.jsonl", "run.sqlite", HEARTBEAT_FILE] as const;
+const RUN_FACT_FILES = ["meta.json", "trajectory.jsonl", "run.sqlite", HEARTBEAT_FILE, "session/live.json"] as const;
 /**
  * A write in flight on the run database: no key, so nothing is kept or served
  * for the run. A rollback journal is one; so is a WAL that holds frames, which

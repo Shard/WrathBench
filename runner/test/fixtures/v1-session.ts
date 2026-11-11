@@ -13,6 +13,8 @@ import { utimesSync } from "node:fs";
 import {
   SessionReader,
   SessionWriter,
+  emptyTraceSheet,
+  emptyTraceState,
   type EventRow,
   type NearbyRow,
   type RecordDrain,
@@ -88,4 +90,59 @@ export function touchNewestSegment(reader: SessionReader, stream: "nearby" | "tr
   const segs = reader.segments(stream);
   const newest = segs[segs.length - 1];
   if (newest !== undefined) utimesSync(newest.path, ms / 1000, ms / 1000);
+}
+
+/** What a test wants the character to read at one instant, in the state row's terms. */
+export interface TraceReading {
+  ts: number;
+  level?: number;
+  xp?: number;
+  xpMax?: number;
+  map?: number;
+  x?: number;
+  y?: number;
+  z?: number;
+  money?: number;
+  /** Turn-ins the run has made by then: that many `qdone` receipts on a state row after the key. */
+  quests?: number;
+  health?: number;
+  maxHealth?: number;
+  zone?: number;
+  area?: number;
+  /** Carried in the backpack: `[slot, itemId, count, name, quality]`. */
+  carried?: [number, number, number, string, number][];
+}
+
+/**
+ * Trace rows (a `key`, then a `state` with the turn-ins) that fold to one
+ * reading, as the trace recorder would have written them: what a v1 run's
+ * readers (`runner/src/trace-samples.ts`, `live.json`) take its level, XP,
+ * money, position and bags from. Pass them as `recordDrain({ trace, dict })`.
+ */
+export function traceOfReading(r: TraceReading): { trace: TraceRow[]; dict: NonNullable<RecordDrain["trace"]["dict"]> } {
+  const key: TraceRow = {
+    ts: r.ts,
+    kind: "key",
+    map: r.map ?? null,
+    x: r.x ?? null,
+    y: r.y ?? null,
+    z: r.z ?? null,
+    o: r.map === undefined ? null : 0,
+    data: {
+      ...emptyTraceState(),
+      ...emptyTraceSheet(),
+      level: r.level ?? null,
+      xp: r.xp ?? null,
+      xpMax: r.xpMax ?? null,
+      hp: r.health ?? null,
+      hpMax: r.maxHealth ?? null,
+      zone: r.zone ?? null,
+      area: r.area ?? null,
+      money: r.money ?? null,
+      ...(r.carried !== undefined ? { equip: [], inv: r.carried.map(([slot, itemId, count]) => (count === 1 ? [255, slot, itemId] : [255, slot, itemId, count])) } : {}),
+    },
+  };
+  const rows: TraceRow[] = [key];
+  if ((r.quests ?? 0) > 0) rows.push({ ts: r.ts, kind: "state", data: { qdone: Array.from({ length: r.quests! }, (_, i) => 70_000 + i) } });
+  return { trace: rows, dict: { items: (r.carried ?? []).map(([, itemId, , name, quality]) => [itemId, quality, name] as [number, number, string]) } };
 }

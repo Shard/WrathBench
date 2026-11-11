@@ -26,7 +26,7 @@ import type { NearbyRow, NearbyUnit, NearbyUnitType } from "@wrathbench/mcp/reco
 import { openSessionRecord, removeSessionRing } from "../src/session-record";
 import { sessionSource } from "../viewer/session-source";
 import { LEGACY05_RING, writeLegacy05Ring } from "./fixtures/legacy05-writer";
-import { recordDrain } from "./fixtures/v1-session";
+import { recordDrain, traceOfReading } from "./fixtures/v1-session";
 import type { LiveNearby, PositionsResponse } from "../viewer/api-types";
 import { PUBLIC_NEARBY_SPAN_MS, decodeNearby, nearbyAt } from "../viewer/nearby";
 import { PUBLIC_NEARBY_KEYS, projectLiveNearby } from "../viewer/public-projection";
@@ -91,7 +91,9 @@ async function writeRing(runsDir: string, runDir: string, aheadMs = -1_000, layo
     writeLegacy05Ring(runDir, [...rows, { ts: now + aheadMs, kind: "tick" }], { keyEachFile: true });
   } else {
     const session = openSessionRecord({ runDir, runsDir, token: "public-nearby-token", scrub: (t) => t });
-    session.writer.ingest(recordDrain({ nearby: rows, through: now + aheadMs }));
+    // A v1 run stands where its trace says (`live.json`): the poisoned run's state row, restated.
+    const reading = traceOfReading({ ts: now - 2_000, level: 3, xp: 400, map: 0, x: -6240, y: 380, z: 385, money: 1234, quests: 2 });
+    session.writer.ingest(recordDrain({ nearby: rows, through: now + aheadMs, trace: reading.trace, dict: reading.dict }));
   }
   return { from, chaseSelfAt };
 }
