@@ -231,6 +231,15 @@ export interface RendererOptions {
    * `live.json`. Absent is every group, today's set of objects exactly.
    */
   groups?: Groups;
+  /**
+   * Whether the public site carries the run history (true, the default) or
+   * only the current view: false publishes the runs that have not ended —
+   * live, or paused and coming back — and every aggregate over those alone,
+   * and withdraws whatever an earlier pass published for a run that has
+   * ended (`withdrawn`, which the engine deletes). The map, the fleet and the
+   * live runs' pages stay; a finished run's page, trace and ladder row go.
+   */
+  history?: boolean;
 }
 
 /**
@@ -503,9 +512,25 @@ export function createRenderer(
     const info = projectInfo(await get<ApiInfoResponse>("/api/info"));
     // The runs that are never published. A handle that cannot say (a bare
     // function a test injects) withholds none beyond what it serves.
-    const withdrawn = unpublishedRuns === undefined ? [] : await unpublishedRuns();
+    const withdrawn = unpublishedRuns === undefined ? [] : [...(await unpublishedRuns())];
     const withheld = new Set(withdrawn);
     const fullListing = await get<RunsResponse>("/api/runs");
+    /*
+     * Without the history, a run that has ended is withheld like a run that is
+     * never published, and withdrawn with them, so its objects leave the
+     * bucket as it ends. Ended is the results row's verdict, which the public
+     * handle keeps where its listing row does not; a run with no row there
+     * stays. With the history (the default) none of this runs.
+     */
+    if (opts.history === false) {
+      const verdicts = await get<ResultsResponse>("/api/results?episode=all&includeOverrides=1");
+      for (const r of verdicts.runs) {
+        if (r.terminationReason !== null && !withheld.has(r.runId)) {
+          withheld.add(r.runId);
+          withdrawn.push(r.runId);
+        }
+      }
+    }
     const listing: RunsResponse = { ...fullListing, runs: fullListing.runs.filter((r) => !withheld.has(r.runId)) };
     /**
      * The runs that may be published: listed, and not withheld. Positions

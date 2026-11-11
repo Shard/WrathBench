@@ -237,12 +237,45 @@ other key in the Secret, which nothing on these pods reads.
 {{/* The publisher holds one credential pair, scoped to one bucket, and no
 model key at all. */}}
 {{- define "wrathbench.publisherSecretEnv" -}}
+{{- $t := .Values.publisher.target | default dict -}}
 {{- range (list "S3_ACCESS_KEY_ID" "S3_SECRET_ACCESS_KEY" "S3_BUCKET" "S3_ENDPOINT") }}
+{{- $plain := "" -}}
+{{- if eq . "S3_BUCKET" }}{{ $plain = $t.bucket | default "" }}{{ end -}}
+{{- if eq . "S3_ENDPOINT" }}{{ $plain = $t.endpoint | default "" }}{{ end -}}
+{{- if $plain }}
+- name: {{ . }}
+  value: {{ $plain | quote }}
+{{- else }}
 - name: {{ . }}
   valueFrom:
     secretKeyRef:
       name: {{ $.Values.envSecretName }}
       key: {{ . }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/* How the publisher publishes (infra/publish-settings.ts): each variable only
+when its value is not the default, so a default deployment renders what it
+always did. */}}
+{{- define "wrathbench.publishSettingsEnv" -}}
+{{- $p := .Values.publisher -}}
+{{- $t := $p.target | default dict -}}
+{{- with $t.region }}
+- name: S3_REGION
+  value: {{ . | quote }}
+{{- end }}
+{{- if $t.virtualHostedStyle }}
+- name: WRATHBENCH_PUBLISH_VIRTUAL_HOSTED
+  value: "1"
+{{- end }}
+{{- if $p.delayMs }}
+- name: WRATHBENCH_PUBLISH_DELAY_MS
+  value: {{ $p.delayMs | int64 | quote }}
+{{- end }}
+{{- if eq (toString $p.history) "false" }}
+- name: WRATHBENCH_PUBLISH_HISTORY
+  value: "0"
 {{- end }}
 {{- end -}}
 
