@@ -50,6 +50,7 @@ import {
   STATE_KEYS,
   applySheetPatch,
   decodeSegment,
+  encodeSegment,
   emptyTraceSheet as viewerEmptySheet,
   emptyTraceState as viewerEmptyState,
   sampleAt,
@@ -76,22 +77,17 @@ function pin<T extends true>(): T {
 
 describe("the two spellings of the contract", () => {
   test("the state keys are the same keys, and a state the writer folds is one the codec reads", () => {
-    // Type level: identical key sets but two, and the writer's state assignable
-    // to the codec's (the codec's auras also admit the public three-element form).
-    // v1 difference, not settled: the record's unit state carries `zone` and
-    // `area` (SESSION-FORMAT.md, "Unit state"), and the codec does not, so a
-    // segment's keyframe and `stateAt` drop them (a reader ignores what it
-    // does not know). Pinned here so that adding them to the codec, or
-    // dropping them from the record, is a change this test names.
-    expect(pin<Equal<Exclude<keyof WriterState, "zone" | "area">, keyof ViewerState>>()).toBe(true);
-    expect(pin<"zone" | "area" extends keyof WriterState ? true : false>()).toBe(true);
+    // Type level: identical key sets, and the writer's state assignable to the
+    // codec's (the codec's auras also admit the public three-element form).
+    // The record's `zone` and `area` are the codec's too: a keyframe carries
+    // them once observed, so a 0.5 segment, which never had them, reads as it did.
+    expect(pin<Equal<keyof WriterState, keyof ViewerState>>()).toBe(true);
     expect(pin<WriterState extends ViewerState ? true : false>()).toBe(true);
     expect(pin<Equal<WriterState["target"], ViewerState["target"]>>()).toBe(true);
     expect(pin<Equal<WriterState["cast"], ViewerState["cast"]>>()).toBe(true);
-    // Runtime: the same keys in the codec's order, the same empty state, but those two.
-    const { zone: _zone, area: _area, ...recordState } = writerEmptyState();
-    expect<string[]>([...STATE_KEYS].sort()).toEqual(Object.keys(recordState).sort());
-    expect(viewerEmptyState()).toEqual(recordState);
+    // Runtime: the same keys, and the same empty state.
+    expect<string[]>([...STATE_KEYS].sort()).toEqual(Object.keys(writerEmptyState()).sort());
+    expect(viewerEmptyState()).toEqual(writerEmptyState());
   });
 
   test("a row the writer stores is a row the codec reads: the same columns, the same kinds, one window", () => {
@@ -302,7 +298,7 @@ describe("the trace end to end", () => {
     // does and ask the codec at each row's time.
     // The unit keys only: the sheet rides the same rows and `sheetAt` reads it.
     const unit = (d: object): Partial<WriterState> => Object.fromEntries(Object.entries(d).filter(([k]) => (STATE_KEYS as readonly string[]).includes(k)));
-    // The codec's keys only (the record's `zone` and `area` are not among them).
+    // The codec's keys (the record's unit state, `zone` and `area` included).
     const codecEmpty = (): Partial<WriterState> => unit(writerEmptyState());
     let fold = codecEmpty();
     for (const r of stored) {
@@ -515,5 +511,34 @@ describe("the trace end to end", () => {
     await session.writer.close();
     expect(JSON.stringify(read(W0))).toBe(JSON.stringify(segs[0]));
     expect(validateSession(session.dir).errors).toEqual([]);
+  });
+});
+
+describe("zone and area in the codec", () => {
+  const row = (ts: number, kind: ViewerRow["kind"], data: object | null, pos = false): ViewerRow => ({
+    ts,
+    kind,
+    map: pos ? 0 : null,
+    x: pos ? -8949 : null,
+    y: pos ? -132 : null,
+    z: pos ? 83.5 : null,
+    o: pos ? 1 : null,
+    data: data === null ? null : JSON.stringify(data),
+  });
+
+  test("a v1 key row's zone and area reach the keyframe, and a change of either is an event", () => {
+    const key = { ...writerEmptyState(), ...writerEmptySheet(), level: 5, zone: 12, area: 87 };
+    const seg = decodeSegment(JSON.parse(JSON.stringify(encodeSegment([row(W0 + 1_000, "key", key, true), row(W0 + 2_000, "state", { area: 88 }), row(W0 + 3_000, "state", { zone: 40, area: 120 })], { run: RUN, t0: W0, t1: W0 + SEG_MS }))));
+    expect(stateAt(seg, W0 + 1_500)).toMatchObject({ zone: 12, area: 87 });
+    expect(stateAt(seg, W0 + 2_500)).toMatchObject({ zone: 12, area: 88 });
+    expect(stateAt(seg, W0 + 3_500)).toMatchObject({ zone: 40, area: 120 });
+  });
+
+  test("a trace that never had them (0.5) keeps keyframes without them, and reads them as unobserved", () => {
+    const { zone: _z, area: _a, ...older } = writerEmptyState();
+    const encoded = encodeSegment([row(W0 + 1_000, "key", { ...older, level: 5 }, true)], { run: RUN, t0: W0, t1: W0 + SEG_MS });
+    expect(Object.keys(encoded.k.s)).not.toContain("zone");
+    expect(Object.keys(encoded.k.s)).not.toContain("area");
+    expect(stateAt(decodeSegment(JSON.parse(JSON.stringify(encoded))), W0 + 1_500)).toMatchObject({ zone: null, area: null });
   });
 });

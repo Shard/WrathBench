@@ -117,7 +117,8 @@ function busyWindow(): TraceRow[] {
 describe("the sheet in a segment", () => {
   test("a run that recorded no sheet encodes as before: unit keys only in the keyframe, no dictionaries, and it decodes as not recorded", () => {
     const seg = encodeSegment([row(T0 - 1_000, "key", { ...emptyTraceState(), hp: 5 }), pos(T0 + 1, 1), state(T0 + 2, { hp: 4 })], W, dict());
-    expect(Object.keys(seg.k.s)).toEqual([...STATE_KEYS]);
+    // Zone and area ride a keyframe only once observed, and this run observed neither.
+    expect(Object.keys(seg.k.s)).toEqual(STATE_KEYS.filter((k) => k !== "zone" && k !== "area"));
     expect(seg.items).toBeUndefined();
     expect(seg.qreq).toBeUndefined();
     const d = decodeSegment(JSON.parse(JSON.stringify(seg)));

@@ -29,6 +29,7 @@ import { writeLegacy05Run } from "../../runner/test/fixtures/legacy05-writer";
 import { readRunRow } from "../../runner/src/run-reader";
 import { traceSamplesOf } from "../../runner/src/run-reader";
 import { materialiseV1p1, V1P1_RUN } from "../../runner/test/fixtures/v1p1";
+import { openTestSession, recordDrain, recordedMove } from "../../runner/test/fixtures/v1-session";
 
 const roots: string[] = [];
 function tmpRoot(): string {
@@ -183,6 +184,30 @@ describe("a pass over one run", () => {
     await again.collector.pass();
     expect(rowsOf(again.sink, "states").map((r) => `${r["ts"]}:${r["seq"]}`)).toEqual(states.map((r) => `${r["ts"]}:${r["seq"]}`));
     expect(rowsOf(again.sink, "milestones").map((r) => r["line_no"])).toEqual(milestones.map((r) => r["line_no"]));
+  });
+
+  test("a v1 run's moves are its calls stream's move rows, in the 0.5 table's shape, once across passes", async () => {
+    const runsDir = tmpRoot();
+    const dir = materialiseV1p1(runsDir);
+    const { writer } = openTestSession(dir, 1_762_001_500_000);
+    writer.ingest(
+      recordDrain({
+        moves: [
+          recordedMove({ ts: 1_762_001_500_100, moveId: 3, map: 0, x: 7, y: 8, z: 9, target: "17379390972743385188", name: "Invented Boar" }),
+          recordedMove({ ts: 1_762_001_500_900, at: 1_762_001_500_100, moveId: 3, map: 0, x: 7, y: 8, z: 9, status: "arrived" }),
+        ],
+      }),
+    );
+    await writer.close();
+    const { collector, sink } = collectorOver(runsDir);
+    await collector.pass();
+    const moves = rowsOf(sink, "moves");
+    expect(moves.map((m) => [m["seq"], m["ts"], m["move_id"], m["target"], m["status"]])).toEqual([
+      [1, 1_762_001_500_100, 3, "Invented Boar", ""],
+      [2, 1_762_001_500_900, 3, "", "arrived"],
+    ]);
+    await collector.pass();
+    expect(rowsOf(sink, "moves")).toHaveLength(2);
   });
 
   test("the run row merges run.sqlite with meta.json", () => {
