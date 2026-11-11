@@ -1,5 +1,5 @@
 /**
- * The map's camera fit (`@wrathbench/inspector/views/mapfit`) on the page's real graph: the sources,
+ * The map's camera fit (`@wrathbench/inspector/views/mapfit`) on the dashboard's real graph: the sources,
  * `createMapState`, the fit, and the effect that turns the replay's cursor into
  * its feed, created in the page's order, with the track arriving after the
  * effects first ran, as it does over the network.
@@ -12,6 +12,12 @@
  * behind the fit among the feed's observers). Nothing woke the fit again
  * until the public tail changed, minutes later. That only happens on the real
  * graph, which is why this test drives one rather than a pure function.
+ *
+ * The fit's own contract (an ask waiting for someone, asked now, a pick
+ * dropping a waiting ask, several sessions framed) is the inspector's suite
+ * (`wrath-mcp/inspector/test/views/mapfit.test.ts`), on a graph of its own;
+ * this file keeps what the dashboard adds: `createMapState`, a run's replayed
+ * positions, and the live list's pick by run.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -115,26 +121,6 @@ describe("the map's camera fit", () => {
     expect(p.fits.at(-1)).toEqual([{ map: 1, x: -4025.4 }]);
     p.dispose();
   });
-
-  test("an ask with nobody on the map waits for the feed; asked now with someone there, it fits now", () => {
-    const p = replayPage();
-    // Before the track there is no one: the first fit waits.
-    expect(p.fits).toEqual([]);
-    expect(p.camera.pending()).toBe(true);
-    p.load(TRACK);
-    p.seek(200);
-    const made = p.fits.length;
-    // Asked now with nothing in the graph changing, as a pin that changes no map is.
-    p.camera.askNow();
-    expect(p.fits.length).toBe(made + 1);
-    expect(p.fits.at(-1)).toEqual([{ map: 0, x: -10050 }]);
-    // A plain ask waits for the next change.
-    p.camera.ask();
-    expect(p.fits.length).toBe(made + 1);
-    p.seek(150);
-    expect(p.fits.length).toBe(made + 2);
-    p.dispose();
-  });
 });
 
 /** A live feed reading, as the poll serves one. */
@@ -209,20 +195,6 @@ describe("a pick from the live list", () => {
     const made = p.fits.length;
     p.setFeed(FEED.map((q) => ({ ...q, x: q.x + 1 })));
     expect(p.fits.length).toBe(made);
-    p.dispose();
-  });
-
-  test("a fit still waiting for someone is dropped, so it cannot take the view back", () => {
-    // Pinned to a map nobody is on: the ask waits.
-    const p = livePage(FEED);
-    p.pin(530);
-    p.camera.ask();
-    expect(p.camera.pending()).toBe(true);
-    p.pick("a");
-    expect(p.camera.pending()).toBe(false);
-    expect(p.fits.at(-1)).toEqual([{ map: 0, x: 100 }]);
-    p.setFeed([...FEED, live("d", 0, 500, 1)]);
-    expect(p.fits.at(-1)).toEqual([{ map: 0, x: 100 }]);
     p.dispose();
   });
 });
