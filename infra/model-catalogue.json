@@ -357,6 +357,16 @@
         "openrouter": { "google/gemini-4-argon": { "windows": [{ "input": 2, "output": 10, "cacheRead": 0.1, "cacheWrite": 0.1875 }] } }
       }
     },
+    "google/gemini-4-carbon": {
+      "family": "gemini",
+      "name": "Gemini 4 Carbon",
+      "weights": "closed",
+      "source": "https://ai.google.dev/gemini-api/docs/models (API only; no Gemini checkpoint in the google Hugging Face org)",
+      "aliases": ["gemini-4-carbon"],
+      "prices": {
+        "openrouter": { "google/gemini-4-carbon": { "windows": [{ "input": 2, "output": 10, "cacheRead": 0.1, "cacheWrite": 0.1875 }] } }
+      }
+    },
     "google/gemma-4-26b-a4b-it": {
       "family": "gemini",
       "name": "Gemma 4 26B A4B IT",
