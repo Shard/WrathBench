@@ -430,6 +430,23 @@ function lastStateIn(dir: string, runId: string): { level?: number; xp?: number 
   return { ...(r.level !== null ? { level: r.level } : {}), ...(r.xp !== null ? { xp: r.xp } : {}) };
 }
 
+/**
+ * Wait for `p` at most `ms`, never throwing. The bound's timer is cleared
+ * once `p` settles: left running, it held a finished run's process open for
+ * the whole bound after its last line (10 s for every run, 10 s plus 2 s a
+ * character for a fan-out run's give-back).
+ */
+async function settledWithin(p: Promise<unknown>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([p, new Promise((r) => (timer = setTimeout(r, ms)))]);
+  } catch {
+    // Bounded and best-effort: never the reason an exit fails.
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function main(): Promise<void> {
   /** This process segment's start: an end request older than it is not this segment's (`end-request.ts`). */
   const segmentStartedAt = Date.now();
@@ -871,7 +888,7 @@ async function main(): Promise<void> {
   /** Stop the sandbox, then close the record it was draining into: bounded, and never the reason an exit fails. */
   const stopSandbox = async (): Promise<void> => {
     await sandbox.stop();
-    if (session !== undefined) await Promise.race([session.writer.close(), new Promise((r) => setTimeout(r, 10_000))]).catch(() => undefined);
+    if (session !== undefined) await settledWithin(session.writer.close(), 10_000);
   };
   /**
    * Give a run's game sessions back, as each exit below decides: `logout`
@@ -900,7 +917,7 @@ async function main(): Promise<void> {
     }
     const before = roster.snapshot();
     await stopSandbox();
-    await Promise.race([roster.shutdown({ logout: o.logout }), new Promise((r) => setTimeout(r, 10_000 + 2_000 * before.length))]).catch(() => undefined);
+    await settledWithin(roster.shutdown({ logout: o.logout }), 10_000 + 2_000 * before.length);
     if (!o.ended) writeRoster(runDir, before);
   };
   /*

@@ -452,6 +452,7 @@ describe("claude-code at fan-out, through run.ts", () => {
       { mode: 0o600 },
     );
     const record = join(runsDir, "fake-record.json");
+    const started = Date.now();
     const proc = Bun.spawn({
       cmd: [process.execPath, RUN_TS, "--resume", runId, "--runs-dir", runsDir],
       cwd: runsDir,
@@ -465,6 +466,9 @@ describe("claude-code at fan-out, through run.ts", () => {
     });
     const stderr = await new Response(proc.stderr).text();
     expect(await proc.exited, stderr).toBe(0);
+    // The process ends with the run: the give-back's bound (10 s plus 2 s a
+    // character) is a ceiling on the wait, not a timer left to hold it open.
+    expect(Date.now() - started).toBeLessThan(12_000);
 
     const rec = readJson(record);
     expect(rec["allowedTools"]).toEqual(mcpToolNames({ fanout: true }));
