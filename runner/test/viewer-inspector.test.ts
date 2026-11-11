@@ -8,8 +8,10 @@
  */
 
 import { describe, expect, setSystemTime, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
+import { renderSnapshot } from "../viewer/snapshot";
 import { FANOUT_ROSTER_TOKEN, FANOUT_RUN, writeFanoutRun } from "./fixtures/fanout";
 import { LEGACY05_NOW, LEGACY05_WINDOWS, materialiseLegacy05 } from "./fixtures/legacy05";
 import { V1P1_RUN, materialiseV1p1 } from "./fixtures/v1p1";
@@ -28,9 +30,13 @@ describe("the inspector's API in the viewer", () => {
     const runs = tempDir("viewer-inspector-v1-");
     materialiseV1p1(runs);
     const h = viewer(runs);
-    const list = (await (await get(h, "/api/inspector/sessions")).json()) as { sessions: { id: string; session: { character: { name: string } } }[] };
+    const list = (await (await get(h, "/api/inspector/sessions")).json()) as { sessions: { id: string; session: { id: string; character: { name: string } } }[] };
     expect(list.sessions.map((s) => s.id)).toEqual([V1P1_RUN]);
     expect(list.sessions[0]!.session.character.name).toBe("Testwick");
+    // The record's own `id` is presented as the run id, here and in the detail.
+    expect(list.sessions[0]!.session.id).toBe(V1P1_RUN);
+    const one = (await (await get(h, `/api/inspector/sessions/${V1P1_RUN}`)).json()) as { id: string; session: { id: string } };
+    expect(one).toMatchObject({ id: V1P1_RUN, session: { id: V1P1_RUN } });
     const rows = (await (await get(h, `/api/inspector/sessions/${V1P1_RUN}/rows/events?from=1762000200000&to=1762001500000`)).json()) as { rows: { kind: string }[] };
     expect(rows.rows.length).toBeGreaterThan(0);
     const fromInspector = await (await get(h, `/api/inspector/sessions/${V1P1_RUN}/trace`)).json();
@@ -98,5 +104,131 @@ describe("a fan-out run in the inspector's API", () => {
     for (const id of [FANOUT_RUN, `${FANOUT_RUN}~Charlie`, `${FANOUT_RUN}~alfa1`, `${FANOUT_RUN}~..%2F..%2F${V1P1_RUN}%2Fsession`, `${FANOUT_RUN}~`, `${V1P1_RUN}~Testwick`, `~Alfa`, `${FANOUT_RUN}~Alfa~Bravo`]) {
       expect({ id, status: (await get(h, `/api/inspector/sessions/${id}`)).status }).toEqual({ id, status: 404 });
     }
+  });
+});
+
+/**
+ * A record's `id` is the session token's fingerprint, which is also the stem
+ * of the module's audit files: never served (skill `fleet-readonly`). The
+ * viewer has no login on the LAN, so no response it gives, private or public,
+ * and no object the publisher renders, may carry one: not a single-character
+ * run's, and not any fan-out character's.
+ */
+describe("the session token's fingerprint", () => {
+  /** `v1p1-solo`'s `session.json` id; the fixture is frozen, so this is too. */
+  const V1P1_FINGERPRINT = "f1c7a5e5e5510001";
+  const T0 = 1762000200000;
+  const RANGE = "from=1762000000000&to=1762002000000";
+  const STREAMS = ["trace", "events", "calls", "nearby"] as const;
+  const SESSIONS = [V1P1_RUN, `${FANOUT_RUN}~Alfa`, `${FANOUT_RUN}~Bravo`];
+
+  const inspectorPaths = [
+    "/api/inspector/sessions",
+    ...SESSIONS.flatMap((id) => [
+      `/api/inspector/sessions/${id}`,
+      ...STREAMS.map((s) => `/api/inspector/sessions/${id}/rows/${s}?${RANGE}`),
+      ...STREAMS.map((s) => `/api/inspector/sessions/${id}/tail/${s}?from=start`),
+      `/api/inspector/sessions/${id}/trace`,
+      `/api/inspector/sessions/${id}/trace/${T0}`,
+      `/api/inspector/sessions/${id}/recent`,
+      `/api/inspector/sessions/${id}/nearby`,
+      `/api/inspector/sessions/${id}/moves`,
+    ]),
+  ];
+  const fanoutReplayPaths = SESSIONS.filter((id) => id.startsWith(`${FANOUT_RUN}~`)).flatMap((id) => [
+    `/api/run/${id}/track`,
+    `/api/run/${id}/trace`,
+    `/api/run/${id}/trace/${T0}`,
+  ]);
+  const paths = [
+    ...inspectorPaths,
+    "/api",
+    "/api/info",
+    "/api/runs",
+    "/api/positions",
+    "/api/episodes",
+    "/api/campaigns",
+    "/api/results",
+    "/api/ladder",
+    "/api/fleet",
+    "/api/models",
+    ...[V1P1_RUN, FANOUT_RUN].flatMap((run) => [
+      `/api/character/${run}`,
+      `/api/run/${run}`,
+      `/api/run/${run}/track`,
+      `/api/run/${run}/trace`,
+      `/api/run/${run}/trace/${T0}`,
+      `/api/run/${run}/nearby`,
+      `/api/run/${run}/entries?from=0`,
+      ...[0, 1, 2, 3].map((n) => `/api/run/${run}/raw/${n}`),
+      `/api/run/${run}/scratchpad`,
+      `/api/run/${run}/stream`,
+    ]),
+    // A fan-out character's replay feed opens the same handle (`fanoutSession`).
+    ...fanoutReplayPaths,
+  ];
+
+  /** The v1 run and the fan-out run side by side, and every fingerprint their records hold, read off disk. */
+  async function runsWithFingerprints(prefix: string): Promise<{ runs: string; fingerprints: string[] }> {
+    const runs = tempDir(prefix);
+    materialiseV1p1(runs, { sqlite: true });
+    const fanout = await writeFanoutRun(runs, { closed: true });
+    const ids = [join(runs, V1P1_RUN, "session"), join(fanout, "sessions", "Alfa"), join(fanout, "sessions", "Bravo")].map(
+      (dir) => (JSON.parse(readFileSync(join(dir, "session.json"), "utf8")) as { id: string }).id,
+    );
+    expect(ids[0]).toBe(V1P1_FINGERPRINT);
+    for (const id of ids) expect(id).toMatch(/^[0-9a-f]{16}$/);
+    expect(new Set(ids).size).toBe(3);
+    return { runs, fingerprints: ids };
+  }
+
+  /** A response's body as text; an event stream is read for a few frames and then cancelled. */
+  async function bodyOf(res: Response): Promise<string> {
+    if (!(res.headers.get("content-type") ?? "").startsWith("text/event-stream")) return await res.text();
+    const reader = res.body!.getReader();
+    const dec = new TextDecoder();
+    let out = "";
+    for (let i = 0; i < 8; i++) {
+      const next = await Promise.race([reader.read(), Bun.sleep(250).then(() => null)]);
+      if (next === null || next.done) break;
+      out += dec.decode(next.value);
+    }
+    await reader.cancel();
+    return out;
+  }
+
+  for (const publicMode of [false, true]) {
+    test(`no response of the ${publicMode ? "public" : "private"} viewer carries one`, async () => {
+      const { runs, fingerprints } = await runsWithFingerprints("viewer-inspector-fp-");
+      const h = createApi({ runsDir: runs, tilesDir: join(runs, "no-tiles"), publicMode, moduleUrl: "http://127.0.0.1:1" });
+      const served: string[] = [];
+      for (const path of paths) {
+        const res = await get(h, path);
+        const body = await bodyOf(res);
+        if (res.status === 200) served.push(path);
+        const leaks = fingerprints.filter((fp) => body.includes(fp));
+        expect({ path, leaks }).toEqual({ path, leaks: [] });
+      }
+      // The walk reached the routes that read the records, not only 404s.
+      if (!publicMode) expect(served).toEqual(expect.arrayContaining([...inspectorPaths, ...fanoutReplayPaths]));
+    });
+  }
+
+  test("each session's record reads its own id: the run id, or the fan-out character's composite id", async () => {
+    const { runs } = await runsWithFingerprints("viewer-inspector-fp-ids-");
+    const h = viewer(runs);
+    const list = (await (await get(h, "/api/inspector/sessions")).json()) as { sessions: { id: string; session: { id: string } }[] };
+    expect(list.sessions.map((s) => [s.id, s.session.id]).sort()).toEqual(SESSIONS.map((id) => [id, id]).sort());
+    for (const id of SESSIONS) {
+      const one = (await (await get(h, `/api/inspector/sessions/${id}`)).json()) as { id: string; session: { id: string } };
+      expect(one).toMatchObject({ id, session: { id } });
+    }
+  });
+
+  test("no object the publisher renders carries one", async () => {
+    const { runs, fingerprints } = await runsWithFingerprints("viewer-inspector-fp-pub-");
+    const r = await renderSnapshot({ runsDir: runs, configDbPath: join(runs, "no-config.sqlite"), moduleUrl: "http://127.0.0.1:1" });
+    expect(r.artifacts.length).toBeGreaterThan(0);
+    expect(r.artifacts.filter((a) => fingerprints.some((fp) => a.body.includes(fp))).map((a) => a.path)).toEqual([]);
   });
 });
