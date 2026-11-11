@@ -36,7 +36,7 @@ import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import { SessionReader, type CallRow, type EventRow, type StreamCursor } from "@wrathbench/mcp/record";
 import { openRunDb } from "../../runner/src/rundb";
-import { isV1RunDir, milestoneOfEvent, runRowOfMeta, sessionDirOfRun, traceSamplesOf, turnIndexOf } from "../../runner/src/run-reader";
+import { isV1RunDir, milestoneOfEvent, readRunRow, sessionDirOfRun, traceSamplesOf, turnIndexOf } from "../../runner/src/run-reader";
 import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tail";
 import { type CountCache, readRunFact, type RecordCountScanner } from "../../runner/src/models";
 import { strikableSessionToken, strikeSessionToken } from "../../runner/src/session-token";
@@ -557,21 +557,9 @@ export class Ingester {
     }
     const config = (meta["config"] ?? {}) as Record<string, unknown>;
 
-    // run.sqlite's row where the run has one (0.5), else meta.json's (`run-reader.ts`).
-    let r: Record<string, unknown> = {};
-    if (dbSig !== null) {
-      let db: Database | null = null;
-      try {
-        db = openRunDb(dbPath, { readonly: true });
-        r = (db.query(`SELECT * FROM run WHERE run_id = ?`).get(runId) as Record<string, unknown> | null) ?? {};
-      } catch {
-        return false;
-      } finally {
-        db?.close();
-      }
-    } else if (Object.keys(meta).length > 0) {
-      r = runRowOfMeta(runId, meta) as unknown as Record<string, unknown>;
-    }
+    // The run's row wherever it keeps it (`run-reader.ts`): meta.json's on a
+    // v1 run, run.sqlite's on a 0.5 one.
+    const r: Record<string, unknown> = readRunRow(dir, runId) ?? {};
 
     const resolved = (meta["resolved"] ?? {}) as Record<string, unknown>;
     await this.deps.batcher.add("runs", {

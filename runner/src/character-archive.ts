@@ -109,7 +109,7 @@ import { z } from "zod";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { DEFAULT_DRIVER } from "./drivers";
 import { liveOwnerOf, readRunFact } from "./models";
-import { formatLike } from "./move-lane";
+import { formatLike } from "./move-credential";
 import { REDACTED } from "@wrathbench/mcp/redact";
 import { describeFindings, envSecrets, SecretScanner, type KnownSecret } from "./secret-scan";
 import { strikableSessionToken } from "./session-token";

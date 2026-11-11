@@ -57,7 +57,7 @@ storage:
   # be disposable — see templates/clickhouse.yaml.
   clickhouse:
     size: 20Gi
-  # The `codex` driver's subscription lane: a logged-in Codex HOME directory
+  # The `codex` driver's credential: a logged-in Codex HOME directory
   # (auth.json plus the persisted threads), not a token — which is why it is a
   # volume and not a Secret key. The threads are what grow: the CLI keeps a
   # rollout JSONL per thread, ~11 MB/h on a freeplay stream, and 1Gi filled
@@ -83,16 +83,19 @@ imagePullSecrets: []
 envSecretName: wrathbench-env
 
 # The model-provider keys the fleet and runner pods carry, by NAME. They are
-# read from `envSecretName` and marked optional, so a lane whose key is not in
-# the Secret fails its own preflight with a clear message instead of wedging
-# the pod. Adding a provider is one line here and one key in that Secret.
+# read from `envSecretName` and marked optional, so a credential whose key is
+# not in the Secret fails its own preflight with a clear message instead of
+# wedging the pod. Adding a provider, or a second key of one (a credential's
+# `secretEnv` such as OPENROUTER_KEY_2), is one line here and one key in that
+# Secret: a credential in the config store reaches no pod until its variable
+# is named here (docs/RUNBOOK.md, "Credentials").
 #
 # Enumerated rather than `envFrom` on the whole Secret on purpose — see the
 # note in templates/_helpers.tpl: the pods carry only the keys they use.
 #
-# Which of these a roster entry may name as `apiKeyEnv`, and the hosts each
-# may be sent to, is code: the provider table in runner/src/providers.ts. A
-# new provider is a row there and a line here.
+# Which of these a credential may name as its `secretEnv`, and the hosts each
+# may be sent to, is code: the provider tables in runner/src/credentials.ts and
+# runner/src/providers.ts. A new provider is a row there and a line here.
 modelKeys:
   - CLAUDE_CODE_OAUTH_TOKEN
   - CLAUDE_CODE_OAUTH_TOKEN_2
@@ -380,11 +383,11 @@ runPods:
   # As the fleet's /tmp, for one episode.
   tmpSizeLimit: 2Gi
 
-# The `codex` driver's ChatGPT-subscription lane (runner/README.md, Drivers).
-# The CLI refreshes the token in place, so the lane is MOUNTED, never copied: a
+# The `codex` driver's ChatGPT-subscription credential (runner/README.md, Drivers).
+# The CLI refreshes the token in place, so the home is MOUNTED, never copied: a
 # second live copy invalidates the first ("refresh token was already used").
 # The PVC is seeded once from the operator's logged-in ~/.codex and is the
-# canonical lane thereafter.
+# canonical home thereafter (a `chatgpt` credential on CODEX_HOME).
 # Turning this off drops the PVC, both mounts and CODEX_HOME; the codex roster
 # entries in the config store then fail their own preflight.
 codex:

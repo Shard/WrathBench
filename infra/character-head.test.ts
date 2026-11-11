@@ -31,7 +31,7 @@ const config: Pick<FleetConfig, "jobs" | "roster" | "policy" | "accounts"> = {
   jobs: [],
   roster,
   policy: DEFAULT_POLICY,
-  accounts: { pinned: {}, pool: ["RUNNER3", "RUNNER4"], paid: [], local: [] },
+  accounts: { pinned: {}, pool: ["RUNNER3", "RUNNER4"], max: 2 },
 };
 const held = (): string | undefined => undefined;
 
@@ -57,7 +57,7 @@ function paused(runId: string, startedAt: number, pausedAt: number): RunFact {
     episodeMs: null,
     campaign: null,
     cell: null,
-    subscription: null,
+    credential: null,
   };
 }
 

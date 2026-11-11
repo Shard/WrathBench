@@ -11,7 +11,7 @@
  * Three rules shape everything here.
  *
  * **The store holds the config as WRITTEN, never as parsed.** `parseFleet`
- * fills defaults (`preflight.timeoutMs`, `policy.subscriptions`), normalises
+ * fills defaults (`preflight.timeoutMs`, a credential's usage thresholds), normalises
  * shapes (`smokes: ["x.ts"]` becomes `{script, account}`) and annotates
  * entries it refuses. Rendering a parsed config back out would therefore never
  * equal the document that came in, and an export an operator diffs against an
@@ -52,7 +52,6 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parseFleet } from "../../infra/run-fleet-config";
-import { rosterKeyRefusal } from "./providers";
 import {
   CAMPAIGN_DEFS_PREFIX,
   campaignDefKey,
@@ -63,6 +62,7 @@ import {
   type PublishedCampaignDoc,
 } from "./campaign-def";
 import { campaignRowProblem } from "./campaigns";
+import { describeBudget, parseCredentials, rosterProviderRefusal, type Credential } from "./credentials";
 
 /** How long a reader waits for the single writer. Same posture as `rundb.ts`. */
 export const CONFIG_DB_BUSY_TIMEOUT_MS = 5000;
@@ -76,10 +76,10 @@ export const CONFIG_DB_BUSY_TIMEOUT_MS = 5000;
  * unknown top-level keys, and silently round-tripping something nothing reads
  * would make the store a place to hide config that does nothing.
  */
-export const TOP_LEVEL_KEYS = ["_notes", "preflight", "accounts", "roster", "policy", "campaign-defs", "campaigns", "queue"] as const;
+export const TOP_LEVEL_KEYS = ["_notes", "preflight", "accounts", "credentials", "roster", "policy", "campaign-defs", "campaigns", "queue"] as const;
 
 /** The keys whose entries get a row each. Everything else is a singleton row. */
-export const COLLECTION_KEYS = ["roster", "campaign-defs", "campaigns", "queue"] as const;
+export const COLLECTION_KEYS = ["credentials", "roster", "campaign-defs", "campaigns", "queue"] as const;
 export type CollectionKey = (typeof COLLECTION_KEYS)[number];
 
 function isCollection(k: string): k is CollectionKey {
@@ -347,8 +347,9 @@ export function validateFleet(doc: unknown, env: Record<string, string | undefin
 }
 
 /**
- * The store's own refusal of a roster entry whose provider key would go to a
- * host its provider does not own (`runner/src/providers.ts`).
+ * The store's own refusal of a roster entry whose base no credential provider
+ * serves, or whose provider's key may not go there (`rosterProviderRefusal`,
+ * runner/src/credentials.ts).
  *
  * `parseFleet` only REFUSES such an entry — it stays in the catalog and nothing
  * schedules it, which is right for a document already on disk. A write is
@@ -359,7 +360,10 @@ export function validateFleet(doc: unknown, env: Record<string, string | undefin
  */
 function refuseKeyPairing(key: string, value: unknown, env: Record<string, string | undefined>): void {
   if (!key.startsWith("roster/") || typeof value !== "object" || value === null || Array.isArray(value)) return;
-  const why = rosterKeyRefusal(value as Record<string, unknown>, env);
+  // A key is a credential's (`credentials/<id>.secretEnv`), never an entry's:
+  // naming one here is the field that once sent any variable anywhere.
+  if ("apiKeyEnv" in value) throw new ConfigRejected(`${key}: apiKeyEnv is not an entry's — a key is a credential's (credentials/<id>.secretEnv); pin one with credential`);
+  const why = rosterProviderRefusal(value as Record<string, unknown>, env);
   if (why !== null) throw new ConfigRejected(`${key}: ${why}`);
 }
 
@@ -533,7 +537,7 @@ export class ConfigStore {
    * Whether `patch(key, partial)` would be accepted, without writing it: the
    * same key rules and the same whole-config validation, throwing the same
    * `ConfigRejected`. For a caller that must know a store write will succeed
-   * before it makes another, unrelated write first (`move-lane`, whose
+   * before it makes another, unrelated write first (`move-credential`, whose
    * meta.json rewrite has to precede its roster pin).
    */
   checkPatch(key: string, partial: unknown): void {
@@ -845,16 +849,26 @@ const USAGE = `usage: bun runner/src/config-store.ts <command>
                             runner/src/campaign-publish.ts --k8s pipes in; campaign-defs/* is refused by
                             set, patch and delete, and seed writes none)
   audit [n]                 the last n changes (default 20)
-  move-lane <run-id> <ENV NAME> --note <why> [--pin]
-                            move a paused or ended run to another subscription lane: rewrite its meta.json's
-                            config.subscription and append to its laneHistory; with --pin, then pin its roster
-                            entry to the same lane. Refuses a live run, a lane policy.subscriptions does not
-                            list, and a driver whose lane is not a bare credential (runner/src/move-lane.ts)
+  credentials [list]        the provider credentials, in preference order: provider, secret env NAME, slots,
+                            budget, billing, enabled (runner/src/credentials.ts)
+  credentials add <id> <json>
+                            a new credential, e.g. '{"provider":"claude","secretEnv":"CLAUDE_CODE_OAUTH_TOKEN_2",
+                            "slots":1,"budget":{"kind":"usage"},"billing":"paid","enabled":true}'; validated, never
+                            a secret (secretEnv is the env var's NAME)
+  credentials edit <id> <json>
+                            merge into one credential; validated
+  credentials disable <id>  stop new runs taking it; live runs on it finish
+  move-credential <run-id> <credential id> --note <why> [--pin]
+                            move a paused or ended run to another credential of its provider: rewrite its
+                            meta.json's config.credential and append to its credentialHistory; with --pin, then
+                            pin its roster entry to the same credential. Refuses a live run, a credential that
+                            would not carry it, and a driver whose credential is not a bare secret
+                            (runner/src/move-credential.ts)
 
   --db <path>        the store (default $WRATHBENCH_CONFIG_DB, else $WRATHBENCH_DATA/config.sqlite)
   --actor <name>     who to record the change as (default "cli")
   --note <text>      why
-  --runs-dir <dir>   move-lane: the runs directory (default $WRATHBENCH_RUNS_DIR, else data/runs in the checkout)
+  --runs-dir <dir>   move-credential: the runs directory (default $WRATHBENCH_RUNS_DIR, else data/runs in the checkout)
 `;
 
 async function main(argv: string[]): Promise<number> {
@@ -960,19 +974,21 @@ async function main(argv: string[]): Promise<number> {
         }
         return 0;
       }
-      case "move-lane": {
+      case "credentials":
+        return credentialsCommand(store, args, opts);
+      case "move-credential": {
         const [runId, to] = args;
         if (runId === undefined || to === undefined || args.length > 2 || note === undefined) {
           console.error(USAGE);
           return 2;
         }
-        const { moveLane } = await import("./move-lane");
+        const { moveCredential } = await import("./move-credential");
         const runsDir = runsDirFlag ?? (process.env["WRATHBENCH_RUNS_DIR"] || join(repoRoot, "data", "runs"));
-        const r = moveLane({ runsDir, runId, to, pin, actor, note, store });
+        const r = moveCredential({ runsDir, runId, to, pin, actor, note, store });
         console.error(
           r.moved
-            ? `moved ${runId}: ${r.from} -> ${r.to} in its meta.json (laneHistory: ${r.history} move${r.history === 1 ? "" : "s"})`
-            : `${runId} already bills ${r.to}; only the pin was owed`,
+            ? `moved ${runId}: ${r.from} -> ${r.to} in its meta.json (credentialHistory: ${r.history} move${r.history === 1 ? "" : "s"})`
+            : `${runId} is already on ${r.to}; only the pin was owed`,
         );
         if (r.pinned !== null) console.error(`pinned ${r.pinned} to ${r.to}`);
         for (const w of r.warnings) console.error(`warning: ${w}`);
@@ -990,6 +1006,78 @@ async function main(argv: string[]): Promise<number> {
     return 1;
   } finally {
     store.close();
+  }
+}
+
+/** The credential rows, parsed as the supervisor parses them. */
+export function storedCredentials(store: ConfigStore): Credential[] {
+  return parseCredentials(store.render()["credentials"]);
+}
+
+/** One credential as a list line: everything but the secret, which the store never holds. */
+export function credentialLine(c: Credential): string {
+  return [
+    c.id.padEnd(16),
+    c.provider.padEnd(12),
+    c.secretEnv.padEnd(28),
+    `${c.slots} slot${c.slots === 1 ? "" : "s"}`.padEnd(8),
+    describeBudget(c.budget).padEnd(34),
+    c.billing.padEnd(5),
+    c.enabled ? "enabled" : "disabled",
+  ].join("  ");
+}
+
+/** `credentials list|add|edit|disable`: the credential rows through the same validated writes as `set` and `patch`. */
+async function credentialsCommand(store: ConfigStore, args: string[], opts: PutOptions): Promise<number> {
+  const [sub = "list", id, raw] = args;
+  const key = `credentials/${id ?? ""}`;
+  switch (sub) {
+    case "list": {
+      const creds = storedCredentials(store);
+      if (creds.length === 0) {
+        console.log("no credentials — add one: credentials add <id> <json>");
+        return 0;
+      }
+      for (const c of creds) console.log(credentialLine(c));
+      return 0;
+    }
+    case "add":
+    case "edit": {
+      if (id === undefined || raw === undefined) {
+        console.error(USAGE);
+        return 2;
+      }
+      const doc = JSON.parse(raw === "-" ? await Bun.stdin.text() : raw) as unknown;
+      const exists = store.get(key) !== undefined;
+      if (sub === "add" && exists) {
+        console.error(`credentials/${id} exists — edit it instead`);
+        return 1;
+      }
+      if (sub === "edit" && !exists) {
+        console.error(`no credential ${id} — add it first`);
+        return 1;
+      }
+      if (sub === "add") store.put(key, doc, opts);
+      else store.patch(key, doc, opts);
+      console.error(`${sub === "add" ? "added" : "edited"} credentials/${id}`);
+      return 0;
+    }
+    case "disable": {
+      if (id === undefined) {
+        console.error(USAGE);
+        return 2;
+      }
+      if (store.get(key) === undefined) {
+        console.error(`no credential ${id}`);
+        return 1;
+      }
+      store.patch(key, { enabled: false }, opts);
+      console.error(`disabled credentials/${id}: no new run takes it; live runs on it finish`);
+      return 0;
+    }
+    default:
+      console.error(USAGE);
+      return 2;
   }
 }
 

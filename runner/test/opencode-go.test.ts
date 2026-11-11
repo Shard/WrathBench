@@ -1,5 +1,5 @@
 /**
- * OpenCode Go's allowance as a subscription lane (operator, 2026-10-16): the
+ * OpenCode Go's allowance as a credential's usage windows (operator, 2026-10-16): the
  * usage endpoint's reader, the once-a-minute poller, and the fixed loop's use
  * of it — the freeplay gate at the turn boundary and a spent allowance's
  * reset. A fake fetch and synthetic figures only; no network.
@@ -20,7 +20,7 @@ import { tempDirs } from "./fixtures/temp-dirs";
 const tempDir = tempDirs();
 const H = 3_600_000;
 const KEY = "fake-go-key-never-logged";
-const LANE = "opencode-go:OPENCODE_KEY";
+const CRED = "go-paid";
 
 /** A Go usage body in the endpoint's shape: synthetic percents, resets `inMs` from now as ISO dates. */
 function body(rolling: number, weekly: number, inMs = 2 * H, status = "ok"): Record<string, unknown> {
@@ -89,11 +89,11 @@ describe("the usage endpoint", () => {
 });
 
 describe("GoUsagePoller", () => {
-  test("calls at most once a minute, keeps the newest reading, and says an unreadable lane once", async () => {
+  test("calls at most once a minute, keeps the newest reading, and says an unreadable credential once", async () => {
     let now = 1_000_000;
     const f = fakeFetch([{ odd: true }, { odd: true }, body(30, 10)]);
     const notes: string[] = [];
-    const p = new GoUsagePoller(LANE, "https://opencode.ai/inference/go/v1/usage", KEY, { fetch: f, now: () => now, onNote: (t) => notes.push(t) });
+    const p = new GoUsagePoller(CRED, "https://opencode.ai/inference/go/v1/usage", KEY, { fetch: f, now: () => now, onNote: (t) => notes.push(t) });
     await p.refresh();
     await p.refresh(); // within the minute: no call
     expect(f.calls).toHaveLength(1);
@@ -105,7 +105,7 @@ describe("GoUsagePoller", () => {
     for (const n of notes) expect(n).not.toContain(KEY);
     now += 60_000;
     await p.refresh();
-    expect(p.current).toMatchObject({ lane: LANE, observedAt: now });
+    expect(p.current).toMatchObject({ credential: CRED, observedAt: now });
     expect(p.current!.windows[0]!.usedPercent).toBe(30);
   });
 });
@@ -126,7 +126,8 @@ function fakeSandbox(): SandboxHost {
 
 function setup(adapter: ChatAdapter, episode: string) {
   const dir = tempDir("wrathbench-go-loop-");
-  const config = { ...loadRunConfig({ driver: "stub", stepIntervalMs: 0, stateIntervalMs: 1, episode }), runId: "run-test", token: "run-test" };
+  // The credential's usage budget rides the run's config, as the fleet hands it over.
+  const config = { ...loadRunConfig({ driver: "stub", stepIntervalMs: 0, stateIntervalMs: 1, episode, credential: CRED, usageMaxPct: { scored: 80, freeplay: 80 } }), runId: "run-test", token: "run-test" };
   const trajectory = new Trajectory(dir);
   trajectory.writeMeta({ runId: "run-test", harnessVersion: "t", startedAt: Date.now(), config });
   return {
@@ -151,12 +152,12 @@ const turns = (n: number): ConstructorParameters<typeof StubAdapter>[0] =>
 describe("the fixed loop on an OpenCode Go allowance", () => {
   test("a freeplay run stops at the turn boundary at the freeplay threshold, recorded, resumable at the reset", async () => {
     const { dir, trajectory, options } = setup(new StubAdapter(turns(5)), "freeplay");
-    const gauge = new GoUsageGauge(LANE, "https://opencode.ai/inference/go/v1/usage", KEY, (u) => trajectory.recordSubscriptionUsage(u), { fetch: fakeFetch([body(83, 20)]) });
+    const gauge = new GoUsageGauge(CRED, "https://opencode.ai/inference/go/v1/usage", KEY, (u) => trajectory.recordSubscriptionUsage(u), { fetch: fakeFetch([body(83, 20)]) });
     const outcome = await runLoop({ ...options, usage: gauge });
     expect(outcome).toMatchObject({ kind: "paused", reason: "subscription-budget" });
     expect(Math.abs((outcome.kind === "paused" ? outcome.notBefore! : 0) - (Date.now() + 2 * H))).toBeLessThan(5_000);
     expect(trajectory.runRow("run-test")?.["pause_reason"]).toBe("subscription-budget");
-    expect(readMeta(dir)!.subscriptionUsage).toMatchObject({ lane: LANE });
+    expect(readMeta(dir)!.subscriptionUsage).toMatchObject({ credential: CRED });
     // The key is nowhere on the record.
     expect(JSON.stringify(readTrajectory(dir))).not.toContain(KEY);
     trajectory.close();
@@ -164,7 +165,7 @@ describe("the fixed loop on an OpenCode Go allowance", () => {
 
   test("a scored run on the same reading plays on", async () => {
     const { trajectory, options } = setup(new StubAdapter(turns(2)), "e90");
-    const gauge = new GoUsageGauge(LANE, "u", KEY, () => {}, { fetch: fakeFetch([body(95, 20)]) });
+    const gauge = new GoUsageGauge(CRED, "u", KEY, () => {}, { fetch: fakeFetch([body(95, 20)]) });
     expect(await runLoop({ ...options, usage: gauge })).toEqual({ kind: "terminated", reason: "stub-complete" });
     trajectory.close();
   });
@@ -175,20 +176,20 @@ describe("the fixed loop on an OpenCode Go allowance", () => {
       complete: (): Promise<AdapterOutcome> => Promise.resolve({ kind: "pause", reason: "quota-exhausted", detail: "429 GoUsageLimitError" }),
     };
     const { dir, trajectory, options } = setup(spent, "e90");
-    const gauge = new GoUsageGauge(LANE, "u", KEY, (u) => trajectory.recordSubscriptionUsage(u), { fetch: fakeFetch([body(99, 20, 3 * H)]) });
+    const gauge = new GoUsageGauge(CRED, "u", KEY, (u) => trajectory.recordSubscriptionUsage(u), { fetch: fakeFetch([body(99, 20, 3 * H)]) });
     const outcome = await runLoop({ ...options, usage: gauge });
     expect(outcome).toMatchObject({ kind: "paused", reason: "quota-exhausted" });
     const notBefore = outcome.kind === "paused" ? outcome.notBefore! : 0;
     expect(Math.abs(notBefore - (Date.now() + 3 * H))).toBeLessThan(5_000);
     expect(readTrajectory(dir).find((r) => r.t === "pause")?.["notBefore"]).toBe(notBefore);
-    // Recorded as spent, so the lane gate holds the next attempt until then.
+    // Recorded as spent, so the credential's budget holds the next attempt until then.
     expect(readMeta(dir)!.subscriptionUsage!.windows[0]!.usedPercent).toBe(100);
     trajectory.close();
   });
 
   test("an unreadable endpoint holds nothing: the run plays as before", async () => {
     const { trajectory, options } = setup(new StubAdapter(turns(2)), "freeplay");
-    const gauge = new GoUsageGauge(LANE, "u", KEY, () => {}, { fetch: fakeFetch([{ odd: true }]) });
+    const gauge = new GoUsageGauge(CRED, "u", KEY, () => {}, { fetch: fakeFetch([{ odd: true }]) });
     expect(await runLoop({ ...options, usage: gauge })).toEqual({ kind: "terminated", reason: "stub-complete" });
     trajectory.close();
   });

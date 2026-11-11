@@ -10,7 +10,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  classAccountsOf,
   type ConfigRefusal,
   eligibleFrom,
   type EpisodeId,
@@ -18,7 +17,6 @@ import {
   type FleetJob,
   type FleetPreflight,
   type FleetRosterEntry,
-  formatConcurrency,
   type JobSpawn,
   parseFleet,
   pinnedJobs,
@@ -103,13 +101,21 @@ import { type CampaignFile, runCampaignFile } from "../runner/src/campaign-file"
 import { isConcluded, type Campaign, type CampaignRefusal } from "../runner/src/campaigns";
 import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
 import { resumesOnPause, TAINT_AFTER } from "../runner/src/lapse";
-import { subscriptionThresholds } from "../runner/src/subscription-usage";
-import { formatSubscriptionGate, gateLanes, laneOfRun, readLaneUsage, subscriptionGate, type FleetSubscriptionGate } from "./run-fleet-gate";
+import {
+  credentialGate,
+  credentialStatuses,
+  formatCredentialStatus,
+  readCredentialUsage,
+  resumeHoldOf,
+  SlotBook,
+  type CredentialGate,
+  type CredentialStatus,
+} from "./run-fleet-credentials";
+import { providerById } from "../runner/src/credentials";
+import { credentialIdsOf } from "./run-fleet-state";
 import { rosterPriceGap } from "../runner/viewer/pricing";
 import { catalogueKeyOf } from "./model-catalogue";
 import {
-  ACCOUNT_CLASSES,
-  type AccountClass,
   byNewestStart,
   DEFAULT_POLICY as DEFAULT_POLICY_FOR_FORMAT,
   extrasSoFar,
@@ -117,11 +123,10 @@ import {
   type HeldPick,
   isStandingPause,
   LADDER_MS,
-  liveSubscriptions,
+  liveCredentials,
   type ModelState,
   modelStates,
   outstandingWork,
-  rosterClass,
   type RunFact,
   schedulability,
   type SchedulingPolicy,
@@ -282,11 +287,27 @@ export function pauseDetailOf(runsDir: string = RUNS_DIR): (l: PausedListing) =>
   return (l) => (l.reason === "infrastructure-failed" ? pauseDetailLine(readMeta(join(runsDir, l.runId))?.pause?.detail) : undefined);
 }
 
-/** The volume line for a `codex:<HOME ENV>` lane: how full the directory that variable names here is. */
-export function codexLaneVolume(lane: string, env: Record<string, string | undefined> = process.env): string | undefined {
-  if (!lane.startsWith("codex:")) return undefined;
-  const dir = env[lane.slice("codex:".length)];
+/** The volume line for a Codex home credential: how full the directory its variable names here is. */
+export function codexHomeVolume(c: Pick<CredentialStatus, "provider" | "secretEnv">, env: Record<string, string | undefined> = process.env): string | undefined {
+  if (providerById(c.provider)?.holds !== "home") return undefined;
+  const dir = env[c.secretEnv];
   return dir !== undefined && dir.length > 0 ? volumeUsage(dir) : undefined;
+}
+
+/**
+ * The credentials' state as this reader sees it, for when the supervisor's
+ * own view is not to hand: every live run on its recorded credential's slots
+ * and its driver's host sessions (`liveCredentials` on the tick is the same
+ * read), under the same budgets.
+ */
+export function localCredentialStatuses(
+  config: Pick<FleetConfig, "credentials" | "policy" | "roster">,
+  gate: CredentialGate,
+  runs: readonly RunFact[],
+): CredentialStatus[] {
+  const book = new SlotBook(config.credentials, config.policy.maxSessions);
+  for (const f of runs) if (f.live) book.add(book.keysOf(f.driver ?? undefined, f.credential), f.party != null ? 1 : 1);
+  return credentialStatuses({ credentials: config.credentials, book, gate, runs });
 }
 
 /**
@@ -439,14 +460,8 @@ export interface JobRow {
   attempt?: number;
   /** A scored-tier extra run, with the character it rolls; a freeplay extra rolls none. */
   extra?: StartingCharacter;
-  /** The Claude subscription this job bills, by env var NAME; absent on the default lane. */
-  subscription?: string;
-  /**
-   * The job is running on an account of another class (it was scheduled before
-   * the classes were, or the file moved the account). Noted, never acted on: a
-   * class governs the next pick, not a run already in flight.
-   */
-  offClass?: string;
+  /** The credentials its runs took slots on, by id. */
+  credentials?: string[];
   /**
    * Another job's process is live on this account too. One session per account
    * is the invariant the whole scheduler rests on, so this is a real fault,
@@ -474,19 +489,19 @@ export type AccountRow =
   | { account: string; kind: AccountKind; job: JobRow }
   | { account: string; kind: AccountKind; free: true; note?: string };
 
-/** Which class an account row belongs to: pinned to a job, or one of the scheduled classes. */
-export type AccountKind = "pinned" | AccountClass;
+/** Which an account row is: reserved by a pin, or one of the pool. */
+export type AccountKind = "pinned" | "pool";
 
 /**
  * --status / --dry-run: one row per account — pinned first, then the pool in
- * preference order, then the paid class — with the job on it (model, episode,
- * run id, level/xp, elapsed) or free/cooling. Pure over rows the caller
- * assembled; a paid row has the same shape as a pool one.
+ * preference order — with the job on it (model, episode, run id, level/xp,
+ * elapsed) or free/cooling. Pure over rows the caller assembled. `max` is
+ * the pool's cap when it is below the pool's size.
  */
-export function formatAccounts(rows: readonly AccountRow[]): string[] {
+export function formatAccounts(rows: readonly AccountRow[], max?: number): string[] {
   const n = (k: AccountKind): number => rows.filter((r) => r.kind === k).length;
-  const extra = ACCOUNT_CLASSES.filter((c) => c !== "pool" && n(c) > 0).map((c) => `, ${n(c)} ${c}`).join("");
-  const out: string[] = [`accounts: ${n("pinned")} pinned, ${n("pool")} pool${extra}`];
+  const cap = max !== undefined && max < n("pool") ? ` (at most ${max} live at once)` : "";
+  const out: string[] = [`accounts: ${n("pinned")} pinned, ${n("pool")} pool${cap}`];
   const w = Math.max(9, ...rows.map((r) => r.account.length));
   for (const r of rows) {
     const head = `  ${r.account.padEnd(w)} ${r.kind.padEnd(6)} `;
@@ -498,9 +513,8 @@ export function formatAccounts(rows: readonly AccountRow[]): string[] {
     const what =
       `${j.name}: ${j.models.join("+")} ${j.episode ?? "episode unknown"}${j.attempt !== undefined && j.attempt > 1 ? ` attempt ${j.attempt}` : ""}` +
       `${isExtraJob(j) ? (j.extra !== undefined ? ` extra (race ${j.extra.race} class ${j.extra.class})` : " extra") : ""}` +
-      // Only a second subscription is named: the default lane is what every
-      // claude row meant before there was another one.
-      `${j.subscription !== undefined ? ` [${j.subscription}]` : ""}`;
+      // The credential(s) its runs took slots on.
+      `${j.credentials !== undefined && j.credentials.length > 0 ? ` [${j.credentials.join(", ")}]` : ""}`;
     if (j.planned === true) {
       out.push(`${head}${what} — ${j.resumes !== undefined ? `resumes ${j.resumes} in place` : `would spawn${j.runId !== undefined ? ` as ${j.runId}` : ""}`}`);
       continue;
@@ -513,7 +527,7 @@ export function formatAccounts(rows: readonly AccountRow[]): string[] {
     const run = j.runId !== undefined ? `${j.runId} — ${prog}` : "no run launched yet";
     out.push(
       `${head}${what} — ${run}${j.elapsedMs !== undefined ? `, ${fmtElapsed(j.elapsedMs)}` : ""}${j.cooling !== undefined ? ` — ${j.cooling}` : ""}` +
-        `${j.offClass !== undefined ? ` [${j.offClass}]` : ""}${j.clash !== undefined ? ` !! ${j.clash}` : ""}${j.runId !== undefined ? stuckTail(j.runId, j.stuck) : ""}`,
+        `${j.clash !== undefined ? ` !! ${j.clash}` : ""}${j.runId !== undefined ? stuckTail(j.runId, j.stuck) : ""}`,
     );
   }
   return out;
@@ -536,7 +550,7 @@ export function formatModels(
   const series = policy.series ?? "any";
   const out: string[] = [
     `models: ${states.length} in roster (policy: tier budgets; series ${series}${policy.series === null ? " — unversioned checkout, every series counts" : ""}; ladder ${LADDER_MS.length} rungs to ${Math.round(LADDER_MS[LADDER_MS.length - 1]! / 3_600_000)}h` +
-      `${policy.paid !== null ? `; at most ${policy.paid.maxConcurrent} paid in flight` : "; no paid/free split"}` +
+      `${Object.keys(policy.maxSessions).length > 0 ? `; host sessions ${Object.entries(policy.maxSessions).map(([d, n]) => `${d} <= ${n}`).join(", ")}` : ""}` +
       `; tiers ${TIERS.map((t) => `${t} ${TIER_TABLE[t].runsPerEpisode.e90}/${TIER_TABLE[t].runsPerEpisode.e360}`).join(", ")}` +
       `; idle unlimited (idle watchdog only; no wall clock)`,
     `  ${"model".padEnd(w)} ${"billing".padEnd(7)} ${"tier".padEnd(9)} ${"status".padEnd(8)} ${"e90".padEnd(12)} ${"e360".padEnd(12)} ${"extras".padEnd(6)} schedulable`,
@@ -588,53 +602,6 @@ export function formatModels(
 /** `--dry-run`: the picks the policy held back and why. Pure. */
 export function formatHeld(held: readonly HeldPick[]): string[] {
   return held.map((h) => `  ${h.name}: HELD — ${h.episode} wanted, ${h.why}`);
-}
-
-/**
- * One line per split-out class when there is something to say: a class with
- * work to schedule and no account to run it on is a config gap the operator has
- * to close, so --status names it rather than leaving the picks silently held.
- */
-export function formatAccountClasses(config: Pick<FleetConfig, "accounts" | "policy" | "roster">): string[] {
-  return [...formatPaidClass(config), ...formatLocalClass(config)];
-}
-
-/**
- * The paid class line — the same shape as the local one, now that the split is
- * unconditional. It says what the roster wants, what the file provides, and the
- * cap when there is one, and stays quiet only when there is neither a paid
- * account nor a paid model to put on one.
- */
-export function formatPaidClass(config: Pick<FleetConfig, "accounts" | "policy" | "roster">): string[] {
-  const models = rosterModels(config.roster).filter((r) => rosterClass(r) === "paid");
-  if (config.accounts.paid.length === 0) {
-    if (models.length === 0) return [];
-    return [
-      `paid class: NO PAID ACCOUNT CONFIGURED — ${models.map((m) => m.name).join(", ")} held, never spilled into the pool; add one to accounts.paid`,
-    ];
-  }
-  const cap = config.policy.paid === null ? "no policy.paid block, so no cap" : `at most ${config.policy.paid.maxConcurrent} in flight`;
-  return [
-    `paid class: ${config.accounts.paid.join(", ")} — paid models only (${models.length === 0 ? "none in the roster" : models.map((m) => m.name).join(", ")}); ${cap}; the pool stays free-only`,
-  ];
-}
-
-/**
- * The local class line. Unlike paid there is no `policy.local` to key on, so it
- * speaks when there are local accounts or a local model in the roster, and stays
- * quiet on a file that has neither.
- */
-export function formatLocalClass(config: Pick<FleetConfig, "accounts" | "roster">): string[] {
-  const models = rosterModels(config.roster).filter((r) => rosterClass(r) === "local");
-  if (config.accounts.local.length === 0) {
-    if (models.length === 0) return [];
-    return [
-      `local class: NO LOCAL ACCOUNT CONFIGURED — ${models.map((m) => m.name).join(", ")} held, never spilled into the pool; add one to accounts.local`,
-    ];
-  }
-  return [
-    `local class: ${config.accounts.local.join(", ")} — local models only (${models.length === 0 ? "none in the roster" : models.map((m) => m.name).join(", ")}); the pool stays off the box`,
-  ];
 }
 
 /**
@@ -849,6 +816,21 @@ export function formatHolder(h: {
   return `${head}${where} — not fleet-managed${stuck}`;
 }
 
+/**
+ * Where the supervisor's log is, for the install this status is about: the
+ * namespace and release the CLI targets (`bun wb -n/--release`, which the
+ * chart hands the runner pod as WRATHBENCH_K8S_NAMESPACE and
+ * WRATHBENCH_K8S_RELEASE), so a second install's operator is not sent to the
+ * first one's fleet. The state cannot say which orchestrator runs the
+ * container, so the quickstart's is named too.
+ */
+export function fleetLogsHint(env: Readonly<Record<string, string | undefined>>): string {
+  const pick = (k: string): string => (env[k] !== undefined && env[k] !== "" ? env[k]! : "wrathbench");
+  const ns = pick("WRATHBENCH_K8S_NAMESPACE");
+  const release = pick("WRATHBENCH_K8S_RELEASE");
+  return `  logs: kubectl -n ${ns} logs -f deploy/${release}-fleet on the cluster, docker compose -f infra/compose.yml logs -f fleet on the quickstart`;
+}
+
 export function printStatus(): void {
   const configPath = configDbPath();
   // State first, and the banner before anything else: the store may not parse
@@ -891,7 +873,7 @@ export function printStatus(): void {
   );
   if (state?.containerized === true) {
     // The state cannot say which orchestrator runs the container, so both.
-    console.log("  logs: kubectl -n wrathbench logs -f deploy/wrathbench-fleet on the cluster, docker compose -f infra/compose.yml logs -f fleet on the quickstart");
+    console.log(fleetLogsHint(process.env));
   }
   if (config !== undefined) for (const line of formatGate(state?.preflight, config.preflight)) console.log(`  ${line}`);
 
@@ -925,10 +907,9 @@ export function printStatus(): void {
   // Newest start first, so an account's row names the paused run the resume
   // planner would bring back (`byNewestStart`).
   const pausedRuns = runFacts.filter((f) => isStandingPause(f, Date.now())).sort(byNewestStart);
-  // The subscription usage gate as the supervisor applies it: its own
-  // thresholds when its state file says, this shell's otherwise.
-  const localThresholds = subscriptionThresholds(process.env);
-  const subGate = subscriptionGate(readLaneUsage(RUNS_DIR), state?.subscriptionGate ?? localThresholds, Date.now());
+  // The credentials' budgets as the supervisor applies them, off the same
+  // readings and runs.
+  const credGate = config !== undefined ? credentialGate(config.credentials, readCredentialUsage(RUNS_DIR), facts, Date.now()) : undefined;
   const resumePlan =
     config !== undefined
       ? planResumes({
@@ -941,7 +922,7 @@ export function printStatus(): void {
           now: Date.now(),
           campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
           hasImageRecord: (id) => runHasImageRecord(id),
-          subscriptionHold: (f) => subGate.holdOf(laneOfRun(f), f.episode, f.model),
+          ...(credGate !== undefined ? { credentialHold: (f: RunFact) => resumeHoldOf(f, config, credGate) } : {}),
         })
       : { resume: [], listed: [], end: [] };
   const jobRow = (name: string, j: StateJob): JobRow => {
@@ -951,7 +932,7 @@ export function printStatus(): void {
       episode: j.episode ?? null,
       ...(j.attempt !== undefined ? { attempt: j.attempt } : {}),
       ...(j.extra !== undefined ? { extra: j.extra } : {}),
-      ...(j.subscription !== undefined ? { subscription: j.subscription } : {}),
+      ...(j.credentials !== undefined ? { credentials: j.credentials } : {}),
     };
     // A job record without its process half was written by another build of
     // the supervisor: say so rather than render NaN. The restart rewrites it.
@@ -995,38 +976,24 @@ export function printStatus(): void {
   // Shared with `jobsByAccount`, so the job a row picks and the note that row
   // prints can never contradict each other.
   const byAccount = jobsByAccount(live, isAlive);
-  // With the config in hand the classes come from the file; without it (an
+  // With the config in hand the pool comes from the file; without it (an
   // older or foreign checkout) from whatever the state file published.
-  const classAccounts = (cls: AccountClass): string[] =>
-    config !== undefined ? classAccountsOf(config, cls) : Object.keys(state?.accounts?.[cls] ?? {});
-  // A disabled pinned job may park on a listed account (the coexistence rule),
-  // so an account can be both pinned and listed: it belongs to the class that
-  // schedules it, and its row carries the parked job as the note.
-  const listed = new Set(ACCOUNT_CLASSES.flatMap(classAccounts).map((a) => a.toUpperCase()));
+  const poolAccounts = config !== undefined ? config.accounts.pool : Object.keys(state?.accounts?.pool ?? {});
+  // A disabled pinned job may park on a pool account (the coexistence rule),
+  // so an account can be both pinned and listed: it is the pool's, and its
+  // row carries the parked job as the note.
+  const listed = new Set(poolAccounts.map((a) => a.toUpperCase()));
   const pinnedAccounts = (config !== undefined ? Object.keys(config.accounts.pinned) : Object.keys(state?.accounts?.pinned ?? {})).filter(
     (a) => !listed.has(a.toUpperCase()),
   );
-  /** The class an account belongs to, for the off-class note on a running job. */
-  const classOfAccount = (account: string): AccountKind =>
-    ACCOUNT_CLASSES.find((c) => classAccounts(c).some((a) => a.toUpperCase() === account.toUpperCase())) ?? "pinned";
   const rows: AccountRow[] = [];
-  for (const [kind, accounts] of [["pinned", pinnedAccounts], ...ACCOUNT_CLASSES.map((c) => [c, classAccounts(c)] as const)] as const) {
+  for (const [kind, accounts] of [["pinned", pinnedAccounts], ["pool", poolAccounts]] as const) {
     for (const account of accounts) {
       const on = byAccount.get(account.toUpperCase());
       // An exited job's account is free: the row below says what holds it now.
       if (on !== undefined && showsJob(on.j, isAlive)) {
-        // A class governs the next pick, never a run in flight: a job that
-        // landed before the classes did keeps its account and says so.
-        const entry = config?.roster[on.j.ref];
-        // A steered entry carries no tier and so projects to no model: it is a
-        // probe on a pinned account, and it has no class to be off.
-        const projected = entry === undefined ? [] : rosterModels({ [on.j.ref]: entry });
-        const want = projected[0] === undefined ? undefined : rosterClass(projected[0]);
         const row = jobRow(on.name, on.j);
         if (on.clash !== undefined) row.clash = on.clash;
-        if (want !== undefined && on.j.source === "policy" && want !== classOfAccount(account)) {
-          row.offClass = `${want} model on a ${classOfAccount(account)} account — left alone; the class applies to the next pick`;
-        }
         rows.push({ account, kind, job: row });
         continue;
       }
@@ -1071,8 +1038,13 @@ export function printStatus(): void {
       rows.push({ account, kind, free: true, ...(note !== undefined ? { note } : {}) });
     }
   }
-  for (const line of formatAccounts(rows)) console.log(`  ${line}`);
-  if (config !== undefined) for (const line of formatAccountClasses(config)) console.log(`  ${line}`);
+  for (const line of formatAccounts(rows, config?.accounts.max ?? state?.accounts?.max)) console.log(`  ${line}`);
+  // The credentials: the supervisor's own view while it is up (it counts the
+  // runs it has just spawned), else this reader's, off the live runs.
+  if (config !== undefined && credGate !== undefined) {
+    const statuses = fleetUp && state?.credentials !== undefined ? state.credentials : localCredentialStatuses(config, credGate, runFacts);
+    for (const line of formatCredentialStatus(statuses, config.policy.maxSessions, Date.now(), { volumeOf: (s) => codexHomeVolume(s) })) console.log(`  ${line}`);
+  }
 
   // (c) models: the projection, every roster entry, with why (not) schedulable.
   if (config !== undefined && Object.keys(config.roster).length > 0) {
@@ -1090,17 +1062,7 @@ export function printStatus(): void {
       if (why !== undefined) excluded.set(name, why);
     }
     for (const line of formatModels(states, running, Date.now(), excluded, config.policy)) console.log(`  ${line}`);
-    {
-      const line = formatConcurrency(config.maxConcurrent, config.policy);
-      if (line !== undefined) console.log(`  ${line}`);
-    }
-    for (const line of formatSubscriptionGate(subGate, gateLanes(subGate, config.roster, config.policy.subscriptions), {
-      local: localThresholds,
-      notes: state?.subscriptionGate !== undefined ? (state.subscriptionGate.notes ?? []) : localThresholds.notes,
-      volumeOf: (lane) => codexLaneVolume(lane),
-    })) {
-      console.log(`  ${line}`);
-    }
+
     if (state?.policy?.idle !== undefined) console.log(`  policy: ${state.policy.idle}`);
     // (c') freeplay characters: each unlimited ref's head and what the next pick
     // does with it. Occupancy is the live jobs' (plus the resumes that would
@@ -1126,10 +1088,10 @@ export function printStatus(): void {
       `  ${formatOutstanding(
         outstandingWork({
           states,
-          policy: config.policy,
           excluded: excluded.keys(),
-          accounts: Object.fromEntries(ACCOUNT_CLASSES.map((c) => [c, classAccountsOf(config, c).length])),
-          maxConcurrent: config.maxConcurrent,
+          accounts: config.accounts.max,
+          credentials: config.credentials,
+          maxSessions: config.policy.maxSessions,
         }),
       )}`,
     );
@@ -1187,7 +1149,8 @@ export interface InFlightRun extends InFlight {
   runId?: string;
   attempt?: number;
   extra?: StartingCharacter;
-  subscription?: string;
+  /** The credentials its runs took slots on, by id. */
+  credentials?: string[];
   /** Its run comes back where it left off after a restart — same run id, account and character — instead of spending its attempt. */
   resumesInPlace: boolean;
 }
@@ -1229,7 +1192,7 @@ export function inFlightRuns(opts: {
       ...(runId !== undefined ? { runId } : {}),
       ...(j.attempt !== undefined ? { attempt: j.attempt } : {}),
       ...(j.extra !== undefined ? { extra: j.extra } : {}),
-      ...(j.subscription !== undefined ? { subscription: j.subscription } : {}),
+      ...(j.credentials !== undefined ? { credentials: j.credentials } : {}),
       // The supervisor's own word for a campaign that asked to resume; the lane's rule for the rest.
       resumesInPlace: j.resumesInPlace === true || (j.episode !== null && resumesOnPause(j.episode, false)),
     });
@@ -1278,8 +1241,8 @@ export function planDryRun(opts: {
   now?: number;
   campaignFileOf?: (runId: string) => CampaignFile | null;
   hasImageRecord?: (runId: string) => boolean;
-  /** The subscription usage gate (`run-fleet-gate.ts`), as the tick applies it; absent holds nothing. */
-  gate?: FleetSubscriptionGate;
+  /** The credentials' budgets (`credentialGate`), as the tick applies them; absent holds nothing. */
+  gate?: CredentialGate;
 }): DryRunPlan {
   const { config, runs, states, held, stamp, gate } = opts;
   const inFlight = opts.inFlight ?? [];
@@ -1291,7 +1254,7 @@ export function planDryRun(opts: {
     now: opts.now ?? Date.now(),
     ...(opts.campaignFileOf !== undefined ? { campaignFileOf: opts.campaignFileOf } : {}),
     ...(opts.hasImageRecord !== undefined ? { hasImageRecord: opts.hasImageRecord } : {}),
-    ...(gate !== undefined ? { subscriptionHold: (f: RunFact) => gate.holdOf(laneOfRun(f), f.episode, f.model) } : {}),
+    ...(gate !== undefined ? { credentialHold: (f: RunFact) => resumeHoldOf(f, config, gate) } : {}),
   });
   // Affinity, so the printed plan places accounts the way the live
   // supervisor would: a report that disagrees with the tick is worse than none.
@@ -1305,7 +1268,7 @@ export function planDryRun(opts: {
     resumes.resume,
     probeRunsOf(runs),
     affinityOf(affinityFrom(runs, config.roster)),
-    liveSubscriptions(runs, rosterModels(config.roster)),
+    liveCredentials(runs, rosterModels(config.roster)),
     new Set(runs.map((f) => f.runId)),
     inFlight.filter((r) => r.owned),
     inFlight.filter((r) => !r.owned).flatMap((r) => r.refs),
@@ -1326,7 +1289,7 @@ export function planDryRun(opts: {
       ...(spawn.resumeRunId !== undefined ? { resumes: spawn.resumeRunId } : {}),
       ...(job.attempt !== undefined ? { attempt: job.attempt } : {}),
       ...(job.extra !== undefined ? { extra: job.extra } : {}),
-      ...(job.subscription !== undefined ? { subscription: job.subscription } : {}),
+      ...(credentialIdsOf(job).length > 0 ? { credentials: credentialIdsOf(job) } : {}),
     };
   };
   const resumeRow = (r: ResumePlan, account: string, kind: AccountKind): AccountRow => ({
@@ -1347,7 +1310,7 @@ export function planDryRun(opts: {
             ...(r.runId !== undefined ? { runId: r.runId } : {}),
             ...(r.attempt !== undefined ? { attempt: r.attempt } : {}),
             ...(r.extra !== undefined ? { extra: r.extra } : {}),
-            ...(r.subscription !== undefined ? { subscription: r.subscription } : {}),
+            ...(r.credentials !== undefined ? { credentials: r.credentials } : {}),
             inFlight: r.resumesInPlace ? "a restart pauses it and it resumes in place here" : "a restart spends its attempt (ended manual, not a strike)",
           },
         }
@@ -1388,7 +1351,7 @@ export function planDryRun(opts: {
       });
     }
   }
-  for (const [kind, accounts] of ACCOUNT_CLASSES.map((c) => [c, classAccountsOf(config, c)] as const)) {
+  for (const [kind, accounts] of [["pool", config.accounts.pool]] as const) {
     for (const account of accounts) {
       const fl = inFlightOn(account);
       const rs = resumes.resume.find((r) => r.account.toUpperCase() === account.toUpperCase());
@@ -1460,10 +1423,8 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
     now,
   });
   const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs });
-  // The subscription usage gate as the supervisor applies it: its own
-  // thresholds when its state file says, this shell's otherwise.
-  const local = subscriptionThresholds(process.env);
-  const subGate = subscriptionGate(readLaneUsage(RUNS_DIR), state?.subscriptionGate ?? local, now);
+  // The credentials' budgets as the supervisor applies them.
+  const credGate = credentialGate(config.credentials, readCredentialUsage(RUNS_DIR), runs, now);
   const inFlight = inFlightRuns({
     jobs,
     runs,
@@ -1481,12 +1442,11 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
     now,
     campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
     hasImageRecord: (id) => runHasImageRecord(id),
-    gate: subGate,
+    gate: credGate,
   });
   console.log("");
-  for (const line of formatSubscriptionGate(subGate, gateLanes(subGate, config.roster, config.policy.subscriptions), { local, notes: state?.subscriptionGate !== undefined ? (state.subscriptionGate.notes ?? []) : local.notes, volumeOf: (lane) => codexLaneVolume(lane) })) console.log(line);
-  for (const line of formatAccounts(rows)) console.log(line);
-  for (const line of formatAccountClasses(config)) console.log(line);
+  for (const line of formatCredentialStatus(localCredentialStatuses(config, credGate, runs), config.policy.maxSessions, now)) console.log(line);
+  for (const line of formatAccounts(rows, config.accounts.max)) console.log(line);
   for (const line of formatArgvBlock(spawns, { stamp: stampToday, until: cliUntil })) console.log(line);
   for (const job of plan.queue.waiting) console.log(`  ${job.name}: waiting — ${job.ref} ${job.episode} x${job.repeat} (no free pool account)`);
   for (const sk of plan.queue.skipped) console.log(`  ${sk.job.name}: SKIP — ${sk.reason}`);
@@ -1508,10 +1468,6 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
     (e) => failedAttemptsFor(states, e) ?? 0,
   )) {
     console.log(line);
-  }
-  {
-    const line = formatConcurrency(config.maxConcurrent, config.policy);
-    if (line !== undefined) console.log(line);
   }
   console.log("finished this session: 0 (ok 0, retried 0) — dry run");
   for (const line of formatQueue(poolJobs(config), undefined, countedFrom(states))) console.log(line);

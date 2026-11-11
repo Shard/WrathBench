@@ -17,14 +17,13 @@
  * `.env` — and never from the config store, which is the thing being guarded.
  * The key NAMES are never configurable.
  *
- * One function, three places: where a roster entry is parsed (`parseFleet`
- * refuses the entry by name and schedules nothing under it), where the config
- * store writes (`ConfigStore.put` and `seed` refuse the write), and at launch
- * (`run.ts` refuses to start, and the adapter refuses to be built with a pair
- * the table does not hold).
+ * Asked where a roster entry is read (`rosterProviderRefusal`,
+ * credentials.ts: its base must be a provider's, so a credential of that
+ * provider can carry it), where a credential is written (its `secretEnv` must
+ * be its provider's key name), and at launch (`run.ts` refuses to start, and
+ * the adapter refuses to be built with a pair the table does not hold).
  */
 
-import { DEFAULT_DRIVER, driverEntry } from "./drivers";
 
 /** One provider: the env var holding its key, and where that key may go. */
 export interface KeyProvider {
@@ -65,13 +64,25 @@ export const KEY_PROVIDERS: readonly KeyProvider[] = [
   { keyEnv: "LMSTUDIO_KEY", provider: "the self-hosted model server", hosts: [], local: true },
 ];
 
+/**
+ * The provider row a key NAME belongs to: its row's `keyEnv`, or that name
+ * with a numbered suffix (`OPENROUTER_KEY_2`) for a second key of the same
+ * provider, as a second Claude subscription is `CLAUDE_CODE_OAUTH_TOKEN_2`.
+ * The suffix is the only freedom: a key name is still never configurable
+ * beyond the provider it belongs to, so a numbered key goes only where its
+ * row's key goes.
+ */
+export function keyProviderOf(keyEnv: string): KeyProvider | undefined {
+  return KEY_PROVIDERS.find((p) => keyEnv === p.keyEnv || new RegExp(`^${p.keyEnv}_[0-9]+$`).test(keyEnv));
+}
+
 /** What an openai-driver run uses when it states no base and no key name. */
 export const DEFAULT_API_BASE = "https://openrouter.ai/api/v1";
 export const DEFAULT_API_KEY_ENV = "OPENROUTER_KEY";
 
 /**
  * Names that are never a model provider's key, whatever the table says: the
- * subscription lanes, the harness's own secrets, and the infrastructure
+ * subscription credentials, the harness's own secrets, and the infrastructure
  * credentials (database, derived store, object storage, CDN). Checked first so
  * the refusal says why, and pinned by a test against the table, so a row for
  * one of these can never be added by mistake.
@@ -114,11 +125,11 @@ export function apiKeyRefusal(
   if (NEVER_A_PROVIDER_KEY.some((re) => re.test(keyEnv))) {
     return `apiKeyEnv ${keyEnv} names a harness or infrastructure credential, never a model provider's key`;
   }
-  const row = KEY_PROVIDERS.find((p) => p.keyEnv === keyEnv);
+  const row = keyProviderOf(keyEnv);
   if (row === undefined) {
     return (
       `apiKeyEnv ${keyEnv} is not a provider key this harness sends anywhere ` +
-      `(one of: ${KEY_PROVIDERS.map((p) => p.keyEnv).join(", ")}) — a new provider is a row in runner/src/providers.ts`
+      `(one of: ${KEY_PROVIDERS.map((p) => p.keyEnv).join(", ")}, or one of those with a numbered suffix) — a new provider is a row in runner/src/providers.ts`
     );
   }
   if (apiBase === undefined || apiBase.trim().length === 0) return `${keyEnv} has no apiBase to be sent to`;
@@ -156,7 +167,7 @@ export function apiKeyRefusal(
  * `apiKeyRefusal`, so the pair itself is already one the table allows.
  */
 export function piProviderOf(keyEnv: string): { provider: string } | { refusal: string } {
-  const row = KEY_PROVIDERS.find((p) => p.keyEnv === keyEnv);
+  const row = keyProviderOf(keyEnv);
   if (row?.piProvider !== undefined) return { provider: row.piProvider };
   const have = KEY_PROVIDERS.filter((p) => p.piProvider !== undefined).map((p) => `${p.keyEnv} (${p.provider})`);
   return {
@@ -164,40 +175,4 @@ export function piProviderOf(keyEnv: string): { provider: string } | { refusal: 
       `the pi driver has no pi provider for ${keyEnv} — it runs on ${have.join(", ")}; ` +
       "another endpoint is a piProvider on its row in runner/src/providers.ts",
   };
-}
-
-/**
- * Why a roster entry's `apiKeyEnv` may not be sent to its `apiBase`
- * (the table above), or null when the pairing holds. The defaults
- * are the runner's: no base is OpenRouter and no key name is `OPENROUTER_KEY`,
- * so an entry stating only a non-OpenRouter base is refused — it would send
- * the OpenRouter key there. Only an endpoint driver (openai, pi) sends a key; the subscription CLI
- * drivers are given no `--api-key-env` at all (`episodeArgv` in
- * `infra/run-roster.ts`). Every reader of a roster entry asks this: the store's
- * write path, and the fleet parser and the viewer's campaign squares through
- * `rosterEntryRefusal` (runner/src/roster-refusal.ts).
- *
- * `env` is where the self-hosted hosts are read from (deploy-time config),
- * injected so a test states the deployment it means.
- */
-export function rosterKeyRefusal(
-  e: { driver?: unknown; apiBase?: unknown; apiKeyEnv?: unknown },
-  env: Record<string, string | undefined> = process.env,
-): string | null {
-  const driver = driverEntry(e.driver ?? DEFAULT_DRIVER);
-  if (driver?.endpoint !== true) return null;
-  if (e.apiKeyEnv !== undefined && typeof e.apiKeyEnv !== "string") return "apiKeyEnv must be the NAME of the env var holding the key";
-  if (e.apiBase !== undefined && typeof e.apiBase !== "string") return "apiBase must be a URL";
-  const keyEnv = e.apiKeyEnv ?? DEFAULT_API_KEY_ENV;
-  const pair = apiKeyRefusal(keyEnv, e.apiBase ?? DEFAULT_API_BASE, env);
-  if (pair !== null) return pair;
-  // A driver that reaches the base through its CLI's own provider
-  // (`DriverEntry.cliProvider`) needs one named on the key's row; without it
-  // every launch would fail, so the entry is refused here and its campaign
-  // squares are parked, not spent.
-  if (driver.cliProvider === true) {
-    const provider = piProviderOf(keyEnv);
-    if ("refusal" in provider) return provider.refusal;
-  }
-  return null;
 }

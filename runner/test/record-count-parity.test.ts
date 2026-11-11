@@ -172,11 +172,11 @@ class ByteLoopScanner {
     if (tally === null || this.pending.length === 0) return tally;
     const streak = { ...this.streak };
     this.apply(this.pending, tally.counts, streak);
-    return { counts: tally.counts, pauseStreak: this.pauseStreak ? streakOf(streak) : null };
+    return { counts: tally.counts, pauseStreak: this.pauseStreak ? streakOf(streak) : null, spendByDay: tally.spendByDay };
   }
 
   private snapshot(): RecordTally {
-    return { counts: new Map(this.counts), pauseStreak: this.pauseStreak ? streakOf(this.streak) : null };
+    return { counts: new Map(this.counts), pauseStreak: this.pauseStreak ? streakOf(this.streak) : null, spendByDay: {} };
   }
 }
 

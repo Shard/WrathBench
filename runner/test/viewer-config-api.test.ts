@@ -23,7 +23,7 @@ const CONFIG = {
     glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
     son: { tier: "t1", model: "sonnet", driver: "claude-code" },
   },
-  policy: { maxConcurrent: { openrouter: 1 } },
+  policy: { maxSessions: { "claude-code": 1 } },
   queue: [],
 };
 
@@ -167,7 +167,7 @@ describe("writes", () => {
     store.close();
   });
 
-  test("a roster edit that would send a key anywhere but its own provider is a 400, and nothing is written", async () => {
+  test("a roster edit naming a key, or a base no credential provider serves, is a 400, and nothing is written", async () => {
     const { handle, dbPath } = fixture();
     for (const [method, path, body] of [
       ["PUT", "/api/config/roster/glm", { tier: "t1", model: "z-ai/glm-5.2:free", apiKeyEnv: "WRATHBENCH_MODULE_SECRET" }],
@@ -176,7 +176,7 @@ describe("writes", () => {
     ] as const) {
       const res = await handle(req(path, { method, body: JSON.stringify(body) }));
       expect([method, path, res.status]).toEqual([method, path, 400]);
-      expect(((await res.json()) as { error: string }).error).toMatch(/harness or infrastructure credential|may be sent only to openrouter.ai/);
+      expect(((await res.json()) as { error: string }).error).toMatch(/a key is a credential's|is no credential provider's host/);
     }
     const store = new ConfigStore(dbPath, { readonly: true });
     expect(store.get("roster/glm")).toEqual({ tier: "t1", model: "z-ai/glm-5.2:free" });

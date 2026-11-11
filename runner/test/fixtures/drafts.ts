@@ -23,7 +23,7 @@ export const CONFIG = {
     nemo: { model: ROSTER_MODEL, tier: "t1" },
     son: { model: "sonnet", driver: "claude-code", tier: "t1" },
   },
-  policy: { maxConcurrent: { openrouter: 1 } },
+  policy: { maxSessions: { "claude-code": 1 } },
   queue: [],
 };
 

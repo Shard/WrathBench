@@ -134,7 +134,8 @@ const ROSTER = {
     "alpha-low": { model: "vendor/alpha", effort: "low", tier: "t1" },
     beta: { model: "vendor/beta", apiBase: "https://openrouter.ai/api/v1", tier: "t1" },
   },
-  policy: { maxConcurrent: { openrouter: 1 } },
+  credentials: { "or-paid": { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 1, billing: "paid", enabled: true } },
+  policy: { maxSessions: { openai: 1 } },
 };
 
 async function models(runsDir: string, fleetPath: string | undefined): Promise<ModelsResponse> {
@@ -156,7 +157,8 @@ describe("readFleetRoster", () => {
     expect(read.models.map((m) => m.name)).toEqual(["alpha", "alpha-low", "beta"]);
     expect(read.models[1]!.effort).toBe("low");
     expect(read.models.map((m) => m.tier)).toEqual(["t1", "t1", "t1"]);
-    expect(read.maxConcurrent["openrouter"]).toBe(1);
+    expect(read.policy.maxSessions["openai"]).toBe(1);
+    expect(read.credentials.map((c) => [c.id, c.slots])).toEqual([["or-paid", 1]]);
   });
 
   test("an entry with no tier is not the viewer's to reject — it is skipped, not rowed", () => {
@@ -178,7 +180,7 @@ describe("readFleetRoster", () => {
         { ref: "probe", episode: "freeplay", account: "SHAKEOUT", repeat: "loop", enabled: true },
         { ref: "alpha", episode: "e90" },
       ],
-      policy: { ...ROSTER.policy, maxConcurrent: { "claude-code": 2 } },
+      policy: { ...ROSTER.policy, maxSessions: { "claude-code": 2 } },
     });
     const read = readFleetRoster(fleetPath);
     // Pinned wins the sentence: the account is spoken for either way.
@@ -187,7 +189,7 @@ describe("readFleetRoster", () => {
     ]);
     // A pool job holds its ref without pinning it: still the policy's to schedule.
     expect(read.models.map((m) => m.name)).toContain("alpha");
-    expect(read.maxConcurrent).toEqual({ "claude-code": 2 });
+    expect(read.policy.maxSessions).toEqual({ "claude-code": 2 });
   });
 
   test("an entry is excluded only by a pinned job, never by anything on itself", () => {
@@ -416,7 +418,7 @@ describe("/api/models", () => {
       ...ROSTER,
       roster: { ...ROSTER.roster, probe: { model: "vendor/alpha", objective: "ride the tram" } },
       queue: [{ ref: "probe", episode: "freeplay", account: "SHAKEOUT", repeat: "loop", enabled: true }],
-      policy: { ...ROSTER.policy, maxConcurrent: { "claude-code": 2 } },
+      policy: { ...ROSTER.policy, maxSessions: { "claude-code": 2 } },
     });
     writeRun(runsDir, { id: "a-1", model: "vendor/alpha", responses: 4, level: 3, reason: "episode-limit", startedAt: NOW - 5 * HOUR, endedAt: NOW - 4 * HOUR });
 
@@ -424,7 +426,10 @@ describe("/api/models", () => {
     expect(body.models.map((m) => m.name)).toEqual(["alpha", "alpha-low", "beta"]);
     expect(body.roster.count).toBe(4);
     expect(body.roster.excluded.map((e) => e.name)).toEqual(["probe"]);
-    expect(body.policy.maxConcurrent).toEqual({ "claude-code": 2 });
+    expect(body.policy.maxSessions).toEqual({ "claude-code": 2 });
+    // The credentials, without where their secret lives.
+    expect(body.policy.credentials).toEqual([{ id: "or-paid", provider: "openrouter", billing: "paid", slots: 1, enabled: true }]);
+    expect(JSON.stringify(body)).not.toContain("OPENROUTER_KEY");
   });
 
   test("an empty config store is a normal answer, not a 500", async () => {

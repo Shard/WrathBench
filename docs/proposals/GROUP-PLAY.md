@@ -47,7 +47,7 @@ On the open questions of the first draft, the operator decided the same day
 - **The chat helper is added**: `say` takes a `type`, and the prompt's line
   names party chat (2026-10-19).
 - **The first model is Sonnet 5.5 on claude-code, on the second Claude
-  subscription lane** (2026-10-20), for all five loops. It stays the model
+  subscription** (2026-10-20), for all five loops. It stays the model
   for the follow-up attempts until one runs clean of harness issues.
 
 Everything below applies those. Where a step still needs a decision, it is
@@ -122,7 +122,7 @@ beyond the account count, and nothing below it has to learn anything at all.
     driver's closing result, with cost and tokens, is on the record. One still
     running once a wind-down's grace has passed is stopped and ended as above.
   - a **pause** on one member (a provider refusal, `observation-stalled`,
-    `infrastructure-failed`, the usage gate) → the other four are paused
+    `infrastructure-failed`, a usage budget) → the other four are paused
     `party-paused` with the same detail. A paused party is resumable as a
     unit: the campaign says `resume: true`, `planResumes`
     (`infra/run-fleet-plan.ts`) groups paused runs by `config.party.id`,
@@ -154,10 +154,9 @@ beyond the account count, and nothing below it has to learn anything at all.
   counted and no member is `launch-failed`; `live` while any member is. A
   party cell's `runsPerCell` therefore means parties per cell, and
   `maxAttemptsPerCell` caps party launches.
-- **Capacity.** A party counts five against its concurrency keys
-  (`concurrencyKeyOf`, `policy.maxConcurrent`) and five against
-  `policy.paid.maxConcurrent`; the planner admits it only when there is room
-  for all five, never a partial party. The first campaign is pinned to its
+- **Capacity.** A party takes five slots on one credential and five of its
+  driver's host sessions (`policy.maxSessions`); the planner admits it only
+  when there is room for all five, never a partial party. The first campaign is pinned to its
   accounts (§2), so the pool planner is not involved; a pool-scheduled party
   (five free pool accounts at once) is a later generalisation and is not
   needed to run the eval.
@@ -172,7 +171,7 @@ attempt (§3), never continued.
 
 ## 2. Accounts
 
-**What exists.** Three account classes, `accounts.pool | paid | local`
+**What exists.** One account pool, `accounts.pool` with an optional `max`
 (`infra/run-fleet-config.ts`, `FleetAccounts`); a pinned job or a pinned
 campaign names one `account` and is never the policy's; the preflight gate's
 accounts may not be in the pool or on a job; the module serves only the
@@ -191,19 +190,19 @@ nothing else:
   `runner/src/campaigns.ts`; `pinnedCampaignJobs` in `run-fleet-config.ts`
   hands the list to the spawn). A party campaign with fewer than its party
   size is refused by name like any other bad row. The clash rules extend
-  unchanged: a party account may not be in the pool, the paid or local class,
-  on a queue job, or a gate account; two enabled pins on one account keep the
-  first.
+  unchanged: a party account may not be in the pool, on a queue job, or a
+  gate account; two enabled pins on one account keep the first.
 - They are never `RUNNER*`, so hygiene's "a benchmark run starts from a
   character the agent created" rule for the scored lanes is untouched; the
   fixture tool's `ACCOUNT_PATTERN` (`infra/fixtures/apply.ts`) widens from
   `^(SMOKE\d*|PROBE)$` to admit `PARTY\d`, because staging a loadout is the
   operator's decision for this lane.
-- `policy.maxConcurrent` needs room for five on the model's key: nothing to
-  change for a claude-code lane (the store caps none today; the usage gate is
-  the limit), `codex: 5` for a Codex party (one `CODEX_HOME`, five processes
-  on one `auth.json` — the refresh-token race the Codex notes already warn
-  about), `paid.maxConcurrent ≥ 5` for a paid API model.
+- The party's credential needs five slots, all on one credential (a party
+  starts whole or not at all, `docs/RUNBOOK.md`, "Credentials"), and
+  `policy.maxSessions` room for five of its driver: a Claude subscription with
+  `slots: 5`, a Codex home with `slots: 5` (five processes on one `auth.json` —
+  the refresh-token race the Codex notes already warn about), or a paid key
+  with five slots for a paid API model.
 
 **The chart change, one release window:** `worldserver.accounts` gains
 `PARTY1`–`PARTY5`; the staging account (§3) `STAGER` is created with gmlevel
@@ -654,25 +653,25 @@ staging.
 
 - A paid API model under the fixed loop plateaus at 8–12k prompt tokens a
   turn; DeepSeek V4.1 Flash's e360 cost $2.38 for six hours, so about $8 for
-  five loops over four hours, about $25 for a three-attempt square. No lane
-  constraint beyond `paid.maxConcurrent ≥ 5`.
+  five loops over four hours, about $25 for a three-attempt square. No
+  constraint beyond five slots on its paid credential.
 - A Claude model is subscription-only (`docs/METHODOLOGY.md`, the lane
   rules): $0 marginal, but a Sonnet e360 metered at about $44, so a party
-  attempt draws roughly $150 as-metered from one lane's usage window. The
-  store caps no claude-code lane today; the 80% usage gate holds a launch,
-  and a quota pause on one member pauses the party (§1). Five concurrent
-  sessions on one OAuth token is new ground for the lane, and the gate's
-  reading is per window, not per planned session, so the first party launch
-  should go out with the lane well under its threshold.
-- Codex: `codex` capped at 3 in the store; a GPT party needs 5 on one
-  `CODEX_HOME`, which is five processes refreshing one token.
+  attempt draws roughly $150 as-metered from one subscription's usage window.
+  The credential's usage budget holds a launch, and a quota pause on one
+  member pauses the party (§1). Five concurrent sessions on one OAuth token is
+  new ground for the subscription, and the budget's reading is per window, not
+  per planned session, so the first party launch should go out with the
+  subscription well under its threshold.
+- Codex: a GPT party needs five slots on one `CODEX_HOME` credential, which
+  is five processes refreshing one token.
 
 **Which models first.** The shakedown of the mechanics — staging, entry,
 the records, the party job — on the cheapest paid API model that has climbed
 (DeepSeek V4.1 Flash reached L7 in an e360): an attempt costs less than a
 coffee and nothing in a subscription window. Then the question itself on a
-Claude model on lane 2, where Sonnet 5.5 and Haiku 5.5 at max effort are the
-rows that climbed furthest, when the lane has headroom for five sessions. The
+Claude model on the second subscription, where Sonnet 5.5 and Haiku 5.5 at max
+effort are the rows that climbed furthest, when it has headroom for five sessions. The
 model is the operator's to name, as every roster entry is.
 
 ## 8. The prompt

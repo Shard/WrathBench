@@ -69,7 +69,7 @@ bun runner/src/run.ts --driver reference --episode e90 --account PROBE
 # scaffold that owns its own tool loop). `0` disables the ceiling outright.
 bun runner/src/run.ts --driver claude-code --model opus --max-tool-calls 200
 
-# the same shape on the OpenAI Codex CLI (a ChatGPT subscription; lane $CODEX_HOME)
+# the same shape on the OpenAI Codex CLI (a ChatGPT subscription; home $CODEX_HOME)
 bun runner/src/run.ts --driver codex --model gpt-6-astra --effort high
 
 # resume a killed or paused run (same token, same scratchpad, same trajectory)
@@ -196,7 +196,7 @@ and `codex` already do, and what another driver would have to.
 - Run identity: `meta.json`, and the comparability tuple stamped once at
   launch by `comparabilityOf`, with the harness taken from the driver's
   registry entry (`src/drivers.ts`); the unscored stamps; the resume rules.
-- The child environment: the `CLI_BASE_ENV` allowlist, one lane credential and
+- The child environment: the `CLI_BASE_ENV` allowlist, one credential and
   the run-controlled knobs, and nothing else.
 
 **A driver owns these.**
@@ -260,8 +260,8 @@ does the same thing to whichever model is given it, and the tuple says so.
 **The trajectory records these, whatever the driver.**
 
 - `meta.json` with the config and the tuple. A scaffold driver also writes a
-  `driver` record at the start: driver, harness, binary, argv, cwd, the lane
-  by env-var name, `systemPromptChars`, and any dimension that travels
+  `driver` record at the start: driver, harness, binary, argv, cwd, the
+  credential's variable by name, `systemPromptChars`, and any dimension that travels
   outside argv.
 - A `request` record per turn carrying the fresh context message.
 - A `response` record per model output. Normalised `usage` (`prompt_tokens`
@@ -295,11 +295,11 @@ of the three outside the registry and the adapters.
   - `stamp` for a driver that is not a model, and `route` for the scripted
     reference.
   - Whether a roster may name it (`roster`, `rosterRefusal`), whether
-    `policy.maxConcurrent` caps it by id (`capKey`), and the claude-family
+    `policy.maxSessions` may cap its host sessions (`sessionCap`), and the claude-family
     rule it carries (`claudeModels`).
-  - `endpoint`: whether it takes `apiBase`, `apiKeyEnv` and a declared
-    `billing` (the provider table guards the pair, and a run pod keeps that
-    one key); `routing`: whether it sends OpenRouter's provider routing on
+  - `endpoint`: whether it takes `apiBase` and a declared `billing` (its
+    key is its credential's, the provider table guards where it goes, and a
+    run pod keeps that one key); `routing`: whether it sends OpenRouter's provider routing on
     requests it builds itself, which only the fixed loop does.
   - `cliProvider`: whether it reaches its endpoint through a provider of its
     CLI's own catalogue, named on the key's row (`piProvider`), so a key
@@ -311,10 +311,12 @@ of the three outside the registry and the adapters.
     on any episode but a campaign's `probing`. A probe-only identity never
     matches another (`entryOwnsRun`), so its runs and a same-model
     entry's never pool, either way.
-  - `bill` (metered, subscription or none) and, for a subscription, its
-    `lane`: the lane key, the default variable, whether the variable holds a
-    token or a home directory, whether the fleet places runs among several
-    lanes, and the dry-run and container-preflight wording.
+  - `bill` (metered, subscription or none) and, for a subscription CLI, its
+    `credential`: the default variable, whether it holds a token or a home
+    directory, whether a run may be moved to another credential, and the
+    dry-run and container-preflight wording. The credential provider it bills
+    is the row of `CREDENTIAL_PROVIDERS` (`src/credentials.ts`) whose variable
+    that is.
   - `cost`: where the actual figure comes from, which price table, the
     catalogue vendor for a bare slug, and the prefix that tells a model id
     from a CLI alias.
@@ -323,8 +325,8 @@ of the three outside the registry and the adapters.
   A new field is earned the way an SDK helper is: by a branch the driver
   would otherwise need, not in advance.
 - **The adapter** (`src/driver-adapters.ts`, `DriverAdapter`): `prepare`,
-  the launch preflight that checks the key or lane, redacts the credential,
-  names a CLI lane in the recorded config and builds a fixed-loop driver's
+  the launch preflight that checks the key or credential, redacts it,
+  names a CLI's credential variable in the recorded config and builds a fixed-loop driver's
   `ChatAdapter`, refusing with exit 2 before the sandbox is up; and, for a
   scaffold, `runEpisode`, which owns everything listed under "A scaffold
   driver must also". The map is `Record<Driver, …>`, so a registry entry
@@ -346,36 +348,34 @@ of the three outside the registry and the adapters.
   and its section in this README names the version its behaviour was verified
   against. A pin bump is a deliberate change.
 - **The docs.** This README gets the driver's own section: how it drives, what
-  it cannot remove, billing and setup. `docs/RUNBOOK.md` gets its lane, its
+  it cannot remove, billing and setup. `docs/RUNBOOK.md` gets its credential, its
   setup and anything an operator runs. `docs/COSTS.md` gets how its cost is
   read when the CLI reports one, and how it is estimated when it does not.
 
 What the entry does not cover, because it carries no driver name for the
 guard to see:
 
-- A lane's kind is read off its variable's name (`laneHoldsOf`, by
-  `isCodexHomeEnvName`), so a third kind of lane — neither a token nor a Codex
-  home — changes that function, and with it the rollout sweep's list of homes
-  (`infra/run-fleet-state.ts`).
-- The fleet's lane placement (`claudeLanesOf`, `claudeKeysFor`,
-  `CLAUDE_TOTAL_KEY` in `src/models.ts`) is written for the one `placed`
-  driver, and takes any lane that is not a Codex home as its candidate. A
-  second placed driver needs that code generalised first.
+- A new subscription CLI needs a credential provider: a row in
+  `CREDENTIAL_PROVIDERS` (`src/credentials.ts`) naming its variable, what the
+  variable holds and the budgets it can be measured by. A home provider's
+  directories are what the rollout sweep walks (`codexHomeEnvsOf`).
+- The fleet's placement (`placeRef`, `infra/run-fleet-credentials.ts`) is
+  driver-blind: it asks `credentialCandidates` for the model's provider.
 - The dashboard is outside the scan: it reads the wire, and its harness
   colours (`LadderChart.tsx`, a `--<harness>` token and a `.badge.harness-<id>`
   rule in `styles.css`), the harness tag's tooltip (`HarnessTag.tsx`) and its
   reference test (`isScriptedReference`) name harnesses and drivers directly.
   A new harness gets a colour there.
 - `infra/run-episode.sh` is shell, outside the scan: it checks a CLI's binary
-  (and a subscription lane's credential) per driver by name before launch.
+  (and a subscription's credential) per driver by name before launch.
 - The chart (`run-pods.yaml`, `fleet.yaml`, `pvc.yaml`) and `compose.yml`
-  carry a home lane's volume and env by hand; `podVolumes` only removes what
+  carry a home credential's volume and env by hand; `podVolumes` only removes what
   the template already has. A driver that needs a home directory or a config
   directory outside the run needs both. (pi needs neither: its config is
   written into the run's own directory.)
-- A subscription lane's usage reaches the 80% gate only through an observation
-  reader in `src/subscription-usage.ts`; a metered driver (openai, pi) has no
-  lane and needs none.
+- A subscription credential's usage reaches its `usage` budget only through an
+  observation reader in `src/subscription-usage.ts`; a metered driver (openai,
+  pi) has no usage windows and needs none.
 - An endpoint CLI that keeps its own model catalogue (pi) is pointed at the
   run's base through a provider of its own; which one is a field on the key's
   row in the provider table (`piProvider`, `src/providers.ts`).
@@ -631,7 +631,7 @@ The child environment is an allowlist, not the runner's own (`childEnv`): the
 plumbing a process needs (`CLI_BASE_ENV` in `src/adapter-shared.ts` — PATH,
 HOME, temp, locale, terminal, and proxy/CA variables when the deployment sets
 them), `CLAUDE_CONFIG_DIR`, the run-controlled knobs, and one credential — the
-token the run's own lane names, copied onto `CLAUDE_CODE_OAUTH_TOKEN`, the only
+token the run's own credential names, copied onto `CLAUDE_CODE_OAUTH_TOKEN`, the only
 name the CLI knows. No `ANTHROPIC_*`, Bedrock or Vertex variable, no other
 subscription's token, no other provider's key, no module secret and no
 database or derived-store password reaches it. So the CLI bills the
@@ -651,12 +651,12 @@ The subscription's usage arrives on the stream: the pinned CLI emits a
 `rate_limit_event` frame whenever its rate-limit status changes or a window's
 rounded percent or reset does, carrying the five-hour and weekly windows'
 utilization and reset (`claudeRateLimitWindows`). The driver records them on
-change for the fleet's subscription usage gate, as the codex driver does —
+change for its credential's usage budget, as the codex driver does —
 used percent, length, reset; never the overage or credit fields beside them —
 waits a spent quota's pause for the rejected window's reset, and stops a
 freeplay run at its turn boundary at the freeplay threshold. The shape was read
 off 2.1.293's bundle, and a 2.1.309 probe streamed the same frame with the same
-keys. Until a frame arrives the lane has no reading and nothing is held.
+keys. Until a frame arrives the credential has no reading and nothing is held.
 
 ### Setup, once
 
@@ -667,19 +667,19 @@ echo 'CLAUDE_CODE_OAUTH_TOKEN=...' >> .env    # .env is gitignored
 ```
 
 A second subscription is a second variable, never a second spelling of the
-first, and `--token-env` names it:
+first, and `--credential-env` names it:
 
 ```bash
 echo 'CLAUDE_CODE_OAUTH_TOKEN_2=...' >> .env
-./infra/run-episode.sh --model opus --driver claude-code --token-env CLAUDE_CODE_OAUTH_TOKEN_2
+./infra/run-episode.sh --model opus --driver claude-code --credential-env CLAUDE_CODE_OAUTH_TOKEN_2
 ```
 
-The run records the NAME (`config.subscription` in `meta.json`), never the
-value, so a reader can tell which subscription paid for it and `--resume` goes
-back to the same one. The fleet sets this flag itself — a subscription is a
-lane it schedules, see docs/RUNBOOK.md.
+The run records the NAME (`config.credentialEnv` in `meta.json`), never the
+value, and `--resume` goes back to the same one. The fleet sets it itself,
+with `--credential <id>` for the credential the run took a slot on, which the
+run records as `config.credential` (docs/RUNBOOK.md, "Credentials").
 
-The runner refuses to start this driver without the chosen lane's token, and
+The runner refuses to start this driver without the chosen variable's token, and
 the refusal names that variable. Note that the
 compose `runner` service runs `oven/bun` and has no `claude` binary: install it
 into that service, or use `--local` with a module URL the host can reach
@@ -709,7 +709,7 @@ and differs only where the CLI does:
   end after the last read, then the thread's rows in the CLI's own stores
   through `codex delete --force <thread>` — and names the thread it is on in
   `<run-dir>/codex-thread.json`, which the supervisor's hourly sweep keeps
-  (docs/RUNBOOK.md, "The Codex lane"). Nothing resumes a thread across
+  (docs/RUNBOOK.md, "Credentials", "The Codex home"). Nothing resumes a thread across
   episodes: a resumed run starts a new one. The standalone
   `codex app-server` would add a long-lived process and typed errors
   (`codexErrorInfo`, a retry flag, misalignment steers); it stays parked while
@@ -757,7 +757,7 @@ and differs only where the CLI does:
   `none` and `minimal` are not Codex levels and the driver refuses them by
   name rather than mapping them.
 - **Usage is the thread's, not the turn's.** `turn.completed` carries usage
-  only — no cost (a subscription; cost stays absent as on the Claude lanes)
+  only — no cost (a subscription; cost stays absent as on the Claude subscriptions)
   and no rate-limit window — and that usage is the thread's
   running total: `exec resume` rebuilds the thread, counts included, from its
   rollout. The driver logs each turn's delta against the previous total of the
@@ -812,9 +812,9 @@ and differs only where the CLI does:
   reads the newest one off the rollout and, when it changed, records it as a
   `harness` record of kind `rate_limits` and in meta.json's
   `subscriptionUsage`: per window the used percent, the window's length and
-  its reset — never the plan type, credits or any other field. The fleet's
-  subscription usage gate reads it (docs/RUNBOOK.md, "The subscription usage
-  gate"); a freeplay run stops at its turn boundary once its lane reaches the
+  its reset — never the plan type, credits or any other field. Its
+  credential's usage budget reads it (docs/RUNBOOK.md, "Credentials"); a
+  freeplay run stops at its turn boundary once its credential reaches the
   freeplay threshold (`subscription-budget`), resumable at the reset. None of
   it reaches the model or a public page.
 - **The model that ran is in the rollout too.** Each turn's `turn_context`
@@ -829,7 +829,7 @@ and differs only where the CLI does:
   server's typed `codexErrorInfo` never reaches it), so the classification is
   the text: `detectCodexFailure` maps a usage limit to the `quota-exhausted`
   pause — waiting for the window's reset when the rollout named one, capped at
-  seven days, and recording that window as spent so the lane gate holds the
+  seven days, and recording that window as spent so the credential's budget holds the
   next attempt until then — a rate limit to
   `rate-limited`, a dead login ("Your access token could not be refreshed",
   401) to `auth-failed`, a blown context window to the `context-limit`
@@ -851,35 +851,35 @@ and differs only where the CLI does:
   `codex_retry` and never classified; retries that run out end in a
   `turn.failed`, which is.
 
-### Billing: the lane's CODEX_HOME or nothing
+### Billing: the credential's CODEX_HOME or nothing
 
 The CLI's auth precedence is `CODEX_API_KEY`, then `CODEX_ACCESS_TOKEN`, then
 the ChatGPT login persisted in `$CODEX_HOME/auth.json`; `OPENAI_API_KEY` is
 not read for auth but is the `openai` driver's credential. So the child
 environment is the same kind of allowlist as the claude driver's: the plumbing
 (`CLI_BASE_ENV`) and one credential, `CODEX_HOME`, set to the directory named
-by the run's lane (`config.subscription`, an env var whose VALUE is a Codex
-home; default `CODEX_HOME`). No `OPENAI_*` or other `CODEX_*` variable, no
+by the run's credential (`config.credentialEnv`, an env var whose VALUE is a
+Codex home; default `CODEX_HOME`). No `OPENAI_*` or other `CODEX_*` variable, no
 Claude token and none of the runner's other secrets reach it — which matters
 twice over here, because the CLI writes snapshots of its environment under
-`$CODEX_HOME/shell_snapshots`, on the lane's volume. The directory
+`$CODEX_HOME/shell_snapshots`, on the home's volume. The directory
 is never copied per run and `auth.json` is never read or logged: a copied
 refresh token is spent by whichever process refreshes first and the other side
 then fails with "refresh token was already used" (seen on this host). One
-directory per lane, shared by that lane's runs, one live session per lane —
-the rule the fleet applies to the Claude lanes.
+directory per subscription, shared by its runs; how many at once is its
+credential's slots.
 
 ### Setup, once
 
 ```bash
 codex login                                   # a ChatGPT subscription; lands in ~/.codex/auth.json
-echo 'CODEX_HOME=/home/<you>/.codex' >> .env  # the lane; .env is gitignored
+echo 'CODEX_HOME=/home/<you>/.codex' >> .env  # the credential's home; .env is gitignored
 WRATHBENCH_MODULE_URL=http://127.0.0.1:8086 ./infra/run-episode.sh --driver codex --model gpt-6-astra --effort high --local
 ```
 
 A second subscription is a second directory under a second variable
-(`CODEX_HOME_2=/path/to/other-home`) and `--token-env CODEX_HOME_2` names it.
-The runner refuses to start without the chosen lane's `auth.json`, naming the
+(`CODEX_HOME_2=/path/to/other-home`) and `--credential-env CODEX_HOME_2` names it.
+The runner refuses to start without the chosen home's `auth.json`, naming the
 variable. The compose `runner` image installs the CLI; `--local` with a
 reachable module URL is the alternative.
 
@@ -1073,7 +1073,7 @@ WRATHBENCH_MODULE_URL=http://127.0.0.1:8086 ./infra/run-episode.sh --driver pi \
 ```
 
 `--local` needs the pinned `pi` on PATH. The run is metered against the
-key's balance; there is no lane and no subscription usage gate.
+key's balance; there are no usage windows, and its credential's budget is runs per day if any.
 
 ## The context, the prompt and the scratchpad tools
 
@@ -1358,11 +1358,11 @@ observed), `episode-limit`, `snippet-runaway`, plus the config ceilings
 does. So is any HTTP 429 that survives the retries (`rate-limited`), whatever
 the response body says — except OpenCode Go's `GoUsageLimitError`, its spent
 allowance, which is `quota-exhausted`. A fixed-loop run on a Go allowance (a Go
-base, paid billing; `src/opencode-go.ts`) reads Go's usage endpoint at most
+base, on an `opencode-go` credential with a usage budget; `src/opencode-go.ts`) reads Go's usage endpoint at most
 once a minute, never waiting on it at a turn: a spent allowance's pause waits
 for the spent window's reset, and a freeplay run stops at its turn boundary at
-the freeplay threshold (`subscription-budget`), as on the CLI lanes
-(docs/RUNBOOK.md, "The subscription usage gate").
+the freeplay threshold (`subscription-budget`), as on the CLI subscriptions
+(docs/RUNBOOK.md, "Credentials").
 
 Where they are checked depends on who owns the tool loop. The fixed loop checks
 them once per turn, which is once per tool batch. The claude-code and codex

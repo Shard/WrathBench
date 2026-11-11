@@ -1089,9 +1089,9 @@ export function projectModels(m: ModelsResponse): ModelsResponse {
       label: t.label,
     };
   }
-  const maxConcurrent: Record<string, number> = {};
-  for (const [key, v] of Object.entries(m.policy.maxConcurrent)) {
-    if (typeof v === "number") maxConcurrent[key] = v;
+  const maxSessions: Record<string, number> = {};
+  for (const [key, v] of Object.entries(m.policy.maxSessions)) {
+    if (typeof v === "number") maxSessions[key] = v;
   }
   return scrubPathsValue<ModelsResponse>({
     models: m.models.map(projectModelRow),
@@ -1105,9 +1105,9 @@ export function projectModels(m: ModelsResponse): ModelsResponse {
     policy: {
       promoteAtLevel: m.policy.promoteAtLevel,
       series: m.policy.series,
-      paid: m.policy.paid === null ? null : { maxConcurrent: m.policy.paid.maxConcurrent },
       tiers,
-      maxConcurrent,
+      // The per-driver host cap only: the credentials are the operator's.
+      maxSessions,
     },
     ladderMs: [...m.ladderMs],
     harness: m.harness,

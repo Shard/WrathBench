@@ -1,45 +1,42 @@
 /**
- * Subscription usage windows, and the gate the fleet and the drivers read off
- * them (operator, 2026-10-16).
+ * Subscription usage windows, and the budget the fleet and the drivers read
+ * off them (operator, 2026-10-16; on credentials since #429).
  *
- * A subscription lane — one Claude OAuth token, one Codex home — bills a flat
- * plan whose allowance is metered in rolling windows (five hours, a week). The
- * CLI on that lane reports how much of each window is spent: the codex
- * rollout's `token_count` lines carry `rate_limits` (`codex-rollout.ts`), the
- * Claude Code CLI's stream-json carries `rate_limit_event` frames
- * (`adapter-claude.ts`), and OpenCode Go's allowance answers on its usage
- * endpoint (`opencode-go.ts`). Each reader normalises what it sees into a
- * `SubscriptionUsage` — per window, the used percent, the window's length and
- * its reset, and NOTHING else: never a plan type, a credit balance, a limit
- * name (operator, 2026-10-16) — and records it on change, as a `harness`
- * record of kind `rate_limits` and in the run's meta.json, where the fleet
- * reads the newest observation per lane.
+ * A subscription credential — one Claude OAuth token, one Codex home, one
+ * OpenCode Go key — bills a flat plan whose allowance is metered in rolling
+ * windows (five hours, a week). The CLI on that credential reports how much
+ * of each window is spent: the codex rollout's `token_count` lines carry
+ * `rate_limits` (`codex-rollout.ts`), the Claude Code CLI's stream-json
+ * carries `rate_limit_event` frames (`adapter-claude.ts`), and OpenCode Go's
+ * allowance answers on its usage endpoint (`opencode-go.ts`). Each reader
+ * normalises what it sees into a `SubscriptionUsage` — per window, the used
+ * percent, the window's length and its reset, and NOTHING else: never a plan
+ * type, a credit balance, a limit name (operator, 2026-10-16) — and records it
+ * on change, as a `harness` record of kind `rate_limits` and in the run's
+ * meta.json, keyed by the credential the run took (`usageKeyOf`), where the
+ * fleet reads the newest observation per credential.
  *
- * Two thresholds, two env vars, both read by the fleet and by the drivers:
+ * Two thresholds, both the credential's own `usage` budget
+ * (`runner/src/credentials.ts`), carried to the run in its config:
  *
- * - `WRATHBENCH_SUB_SCORED_MAX_PCT` (default 80): a scored run (`e90`,
- *   `e360`) does not START on a lane while any of its windows is at or over
- *   it. A scored run already live is never paused by the gate: pausing it
- *   would spend its attempt.
- * - `WRATHBENCH_SUB_FREEPLAY_MAX_PCT` (default 80): a freeplay run does not
- *   start or resume on a lane at or over it, and a live one pauses at its next
- *   turn boundary (`subscription-budget`), resumable, with the window's reset
- *   as `notBefore` — no strike, no defer rung, no streak.
+ * - `scoredMaxPct` (default 80): a scored run (`e90`, `e360`) does not START
+ *   on a credential while any of its windows is at or over it. A scored run
+ *   already live is never paused by the budget: pausing it would spend its
+ *   attempt.
+ * - `freeplayMaxPct` (default 80): a freeplay run does not start or resume on
+ *   a credential at or over it, and a live one pauses at its next turn
+ *   boundary (`subscription-budget`), resumable, with the window's reset as
+ *   `notBefore` — no strike, no defer rung, no streak.
  *
- * `100` turns either gate off. What stays on regardless is the quota-reset
- * rule, which is not a knob: a lane whose quota is spent (a window at 100%,
+ * `100` turns either off. What stays on regardless is the quota-reset rule,
+ * which is not a knob: a credential whose quota is spent (a window at 100%,
  * or a `quota-exhausted` pause that marked one so) holds every launch on it —
  * scored, freeplay or probe — until the window resets, capped at seven days,
  * so no attempt is spent against a quota known to be empty.
  *
  * Staleness: a window counts until its reset; one with no reset counts until
- * its own length past the observation; one with neither never gates. A lane
- * with no observation is open.
- *
- * Lanes are generic strings (`subscriptionLaneOf`): `claude-code:<ENV>` (the
- * same string as the fleet's per-lane concurrency key), `codex:<ENV>` and
- * `opencode-go:<KEY ENV>`. A further subscription plugs in as one more branch
- * there plus a reader that hands its windows to a `SubscriptionUsageTracker`.
+ * its own length past the observation; one with neither never gates. A
+ * credential with no observation is open.
  *
  * Nothing here is public: the percentages and reset times stay on the
  * operator's surfaces (`--status`, the run's own records), never on a public
@@ -48,7 +45,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
-import { DEFAULT_DRIVER, driverEntry } from "./drivers";
 
 /** One usage window, normalised: what the operator decided may be recorded, and nothing more. */
 export interface UsageWindow {
@@ -61,23 +57,21 @@ export interface UsageWindow {
   /**
    * The model family a per-model cap binds (`opus`, `sonnet`: a Claude weekly
    * cap that only one family's runs draw on), or absent for a window the whole
-   * lane shares. A scoped window holds only the launches of a model whose id
+   * credential shares. A scoped window holds only the launches of a model whose id
    * names that family (`windowApplies`).
    */
   family?: string;
 }
 
-/** One observation of a lane's windows. */
+/** One observation of a credential's windows. */
 export interface SubscriptionUsage {
-  /** The lane (`subscriptionLaneOf`). */
-  lane: string;
+  /** The credential the reading is of (`usageKeyOf`). */
+  credential: string;
   /** When the driver observed it (epoch ms). */
   observedAt: number;
   windows: UsageWindow[];
 }
 
-export const SUB_SCORED_MAX_ENV = "WRATHBENCH_SUB_SCORED_MAX_PCT";
-export const SUB_FREEPLAY_MAX_ENV = "WRATHBENCH_SUB_FREEPLAY_MAX_PCT";
 /** Both thresholds' default (operator, 2026-10-16). */
 export const DEFAULT_SUB_MAX_PCT = 80;
 /** A window at this is spent: the quota-reset hold, whatever the thresholds say. */
@@ -85,28 +79,19 @@ export const EXHAUSTED_PCT = 100;
 /** The farthest reset a pause waits for (operator, 2026-10-16: capped at seven days). */
 export const SUBSCRIPTION_RESET_CEILING_MS = 7 * 24 * 60 * 60_000;
 
+/** A credential's two usage thresholds, each a percent in (0, 100]; 100 = that one off. */
 export interface SubscriptionThresholds {
   scored: number;
   freeplay: number;
-  /** One line per variable that was set but could not be used (its default applies). */
-  notes: string[];
 }
 
-function parsePct(env: Record<string, string | undefined>, name: string, notes: string[]): number {
-  const raw = env[name];
-  if (raw === undefined || raw.trim() === "") return DEFAULT_SUB_MAX_PCT;
-  const n = Number(raw.trim().replace(/%$/, ""));
-  if (Number.isFinite(n) && n > 0 && n <= EXHAUSTED_PCT) return n;
-  notes.push(`${name}=${JSON.stringify(raw)} is not a percent in (0, 100]; using ${DEFAULT_SUB_MAX_PCT}`);
-  return DEFAULT_SUB_MAX_PCT;
-}
-
-/** The two thresholds from an environment: each a percent in (0, 100], default 80, 100 = that gate off. */
-export function subscriptionThresholds(env: Record<string, string | undefined> = process.env): SubscriptionThresholds {
-  const notes: string[] = [];
-  const scored = parsePct(env, SUB_SCORED_MAX_ENV, notes);
-  const freeplay = parsePct(env, SUB_FREEPLAY_MAX_ENV, notes);
-  return { scored, freeplay, notes };
+/**
+ * The thresholds a run carries (`RunConfig.usageMaxPct`, its credential's
+ * `usage` budget), or the quota-reset rule alone when it carries none: a
+ * credential with no usage budget holds nothing short of a spent window.
+ */
+export function thresholdsOf(usageMaxPct: { scored: number; freeplay: number } | null | undefined): SubscriptionThresholds {
+  return usageMaxPct == null ? { scored: EXHAUSTED_PCT, freeplay: EXHAUSTED_PCT } : { scored: usageMaxPct.scored, freeplay: usageMaxPct.freeplay };
 }
 
 /**
@@ -128,25 +113,15 @@ export function thresholdOf(cls: GateClass, t: Pick<SubscriptionThresholds, "sco
 }
 
 /**
- * The subscription lane a run bills, or null for one that bills none. `lane`
- * is a CLI run's lane variable NAME (`RunConfig.subscription`, a roster spec's
- * `tokenEnv`); absent is the driver's default lane. `goKeyEnv` is set, by
- * `goKeyEnvOf` (models.ts), on an `openai` run that draws on an OpenCode Go
- * allowance: one lane per key (`opencode-go:<KEY ENV>`). A further
- * subscription is one more registry lane (drivers.ts) plus an observation reader.
- * The pi driver has no lane and needs no reader: it bills a metered key, priced
- * per token (drivers.ts, `bill: "metered"`), and runs on no OpenCode Go base,
- * since the provider table gives that key no pi provider (`piProviderOf`).
+ * The key a run's usage readings are recorded under: the credential it took
+ * (`RunConfig.credential`), or, for a run launched by hand with none, its
+ * credential env var under an `env:` prefix — a spelling no credential id can
+ * have, so a hand-launched run's readings never stand for a credential's.
  */
-export function subscriptionLaneOf(r: {
-  driver?: string | null | undefined;
-  lane?: string | null | undefined;
-  goKeyEnv?: string | null | undefined;
-}): string | null {
-  const lane = driverEntry(r.driver)?.lane;
-  if (lane !== undefined) return `${lane.key}:${r.lane ?? lane.defaultEnv}`;
-  if (driverEntry(r.driver ?? DEFAULT_DRIVER)?.endpoint === true && typeof r.goKeyEnv === "string" && r.goKeyEnv.length > 0) return `opencode-go:${r.goKeyEnv}`;
-  return null;
+export function usageKeyOf(r: { credential?: string | null | undefined; credentialEnv?: string | null | undefined }, fallbackEnv?: string): string | null {
+  if (typeof r.credential === "string" && r.credential.length > 0) return r.credential;
+  const env = r.credentialEnv ?? fallbackEnv;
+  return typeof env === "string" && env.length > 0 ? `env:${env}` : null;
 }
 
 /**
@@ -154,7 +129,7 @@ export function subscriptionLaneOf(r: {
  * observation, else never known (null) — and never later than seven days
  * past the observation, whatever the reset says. So every reading expires
  * within the ceiling of being taken: a monthly window, or a reset a source
- * mis-scaled, cannot hold a lane longer, and a held lane, on which nothing
+ * mis-scaled, cannot hold a credential longer, and a held credential, on which nothing
  * launches to take a newer reading, cannot stay held for good.
  */
 export function windowEndsAt(w: UsageWindow, observedAt: number): number | null {
@@ -163,7 +138,7 @@ export function windowEndsAt(w: UsageWindow, observedAt: number): number | null 
 }
 
 /**
- * Whether a window binds a launch of `model`: a lane-wide window binds every
+ * Whether a window binds a launch of `model`: a credential-wide window binds every
  * one; a per-model cap only a model whose id names its family (`claude-opus-…`
  * and `opus` for `opus`). A scoped window binds no launch whose model is unknown.
  */
@@ -196,7 +171,7 @@ export interface UsageHold {
 /**
  * Whether an observation holds a launch of `model` at `threshold` percent at
  * `now`, and until when. A per-model window binds only its family's launches;
- * with no model named, only the lane-wide windows bind.
+ * with no model named, only the credential-wide windows bind.
  */
 export function usageHold(u: SubscriptionUsage | undefined, threshold: number, now: number, model?: string | null): UsageHold | null {
   if (u === undefined) return null;
@@ -264,20 +239,21 @@ function parseWindow(raw: unknown): UsageWindow | undefined {
 export function parseSubscriptionUsage(raw: unknown): SubscriptionUsage | undefined {
   if (raw === null || typeof raw !== "object") return undefined;
   const u = raw as Record<string, unknown>;
-  const lane = u["lane"];
+  // A 0.5 reading names a `lane`, which no credential is: it is no reading here.
+  const credential = u["credential"];
   const at = finite(u["observedAt"]);
-  if (typeof lane !== "string" || lane.length === 0 || at === undefined || !Array.isArray(u["windows"])) return undefined;
+  if (typeof credential !== "string" || credential.length === 0 || at === undefined || !Array.isArray(u["windows"])) return undefined;
   const windows: UsageWindow[] = [];
   for (const w of u["windows"] as unknown[]) {
     const parsed = parseWindow(w);
     if (parsed !== undefined) windows.push(parsed);
   }
-  return { lane, observedAt: at, windows };
+  return { credential, observedAt: at, windows };
 }
 
 /**
  * A per-model cap the CLI reports only on the frame that refused a launch:
- * later readings on the lane, taken by another family's runs, do not carry it.
+ * later readings of the credential, taken by another family's runs, do not carry it.
  * So a spent scoped window an older reading holds is kept beside a newer one
  * until it ends, unless the newer one says something of that window itself.
  */
@@ -294,21 +270,21 @@ function carrySpentScoped(newer: SubscriptionUsage, older: readonly UsageWindow[
   return kept.length === 0 ? newer : { ...newer, windows: [...newer.windows, ...kept] };
 }
 
-/** The newest observation per lane, by `observedAt`, with any spent per-model cap an older one holds (`carrySpentScoped`). */
-export function newestByLane(observations: Iterable<SubscriptionUsage | null | undefined>): Map<string, SubscriptionUsage> {
-  const byLane = new Map<string, SubscriptionUsage[]>();
+/** The newest observation per credential, by `observedAt`, with any spent per-model cap an older one holds (`carrySpentScoped`). */
+export function newestByCredential(observations: Iterable<SubscriptionUsage | null | undefined>): Map<string, SubscriptionUsage> {
+  const byCredential = new Map<string, SubscriptionUsage[]>();
   for (const u of observations) {
     if (u === null || u === undefined) continue;
-    const list = byLane.get(u.lane);
-    if (list === undefined) byLane.set(u.lane, [u]);
+    const list = byCredential.get(u.credential);
+    if (list === undefined) byCredential.set(u.credential, [u]);
     else list.push(u);
   }
   const out = new Map<string, SubscriptionUsage>();
-  for (const [lane, list] of byLane) {
+  for (const [credential, list] of byCredential) {
     list.sort((a, b) => b.observedAt - a.observedAt);
     let newest = list[0]!;
     for (const older of list.slice(1)) newest = carrySpentScoped(newest, older.windows, older.observedAt);
-    out.set(lane, newest);
+    out.set(credential, newest);
   }
   return out;
 }
@@ -339,7 +315,7 @@ export function describeWindows(windows: readonly UsageWindow[], observedAt: num
  * and a driver seeding its tracker. Under the runs directory, operator-only
  * like everything there.
  */
-export const LANE_USAGE_SIDECAR = "fleet-subscription-usage.json";
+export const CREDENTIAL_USAGE_SIDECAR = "fleet-credential-usage.json";
 
 /**
  * Every run's newest usage reading, off meta.json alone (the archive's too),
@@ -347,7 +323,7 @@ export const LANE_USAGE_SIDECAR = "fleet-subscription-usage.json";
  * facts in hand. A directory without one, or an unreadable file, contributes
  * nothing.
  */
-export function readLaneUsage(runsDir: string): SubscriptionUsage[] {
+export function readCredentialUsage(runsDir: string): SubscriptionUsage[] {
   const out: SubscriptionUsage[] = [];
   const scan = (dir: string): void => {
     let names: string[];
@@ -372,8 +348,8 @@ export function readLaneUsage(runsDir: string): SubscriptionUsage[] {
   scan(runsDir);
   scan(join(runsDir, ARCHIVE_DIR));
   try {
-    const raw = JSON.parse(readFileSync(join(runsDir, LANE_USAGE_SIDECAR), "utf8")) as { lanes?: unknown };
-    for (const l of Array.isArray(raw.lanes) ? raw.lanes : []) {
+    const raw = JSON.parse(readFileSync(join(runsDir, CREDENTIAL_USAGE_SIDECAR), "utf8")) as { credentials?: unknown };
+    for (const l of Array.isArray(raw.credentials) ? raw.credentials : []) {
       const u = parseSubscriptionUsage(l);
       if (u !== undefined) out.push(u);
     }
@@ -383,17 +359,17 @@ export function readLaneUsage(runsDir: string): SubscriptionUsage[] {
   return out;
 }
 
-/** The newest reading on one lane in a runs directory, or undefined. Never throws. */
-export function newestLaneUsage(runsDir: string, lane: string): SubscriptionUsage | undefined {
+/** The newest reading of one credential in a runs directory, or undefined. Never throws. */
+export function newestCredentialUsage(runsDir: string, credential: string): SubscriptionUsage | undefined {
   try {
-    return newestByLane(readLaneUsage(runsDir)).get(lane);
+    return newestByCredential(readCredentialUsage(runsDir)).get(credential);
   } catch {
     return undefined;
   }
 }
 
 /**
- * The driver's side: the newest reading on its lane, written when it changes,
+ * The driver's side: the newest reading of its credential, written when it changes,
  * and the two questions a driver asks of it — when does a quota pause wait
  * until, and does the freeplay threshold stop this run at its turn boundary.
  * `write` is the run's recorder (`Trajectory.recordSubscriptionUsage`); it is
@@ -403,7 +379,7 @@ export class SubscriptionUsageTracker {
   private last: SubscriptionUsage | undefined;
 
   constructor(
-    readonly lane: string,
+    readonly credential: string,
     private readonly write: (u: SubscriptionUsage) => void,
   ) {}
 
@@ -413,29 +389,29 @@ export class SubscriptionUsageTracker {
   }
 
   /**
-   * The lane's newest reading from before this run (another run's, off
+   * The credential's newest reading from before this run (another run's, off
    * meta.json), so a run whose first turn meets a spent quota still knows the
    * window it was spent in. Taken only before the run's own first reading,
    * and not written: the run records only what it saw itself.
    */
   seed(u: SubscriptionUsage | undefined): void {
-    if (this.last === undefined && u !== undefined && u.lane === this.lane) this.last = u;
+    if (this.last === undefined && u !== undefined && u.credential === this.credential) this.last = u;
   }
 
-  /** A fresh reading of the lane's windows. Recorded only when it differs from the last one recorded. */
+  /** A fresh reading of the credential's windows. Recorded only when it differs from the last one recorded. */
   observe(windows: readonly UsageWindow[], now: number): void {
     if (windows.length === 0) return;
     const next =
       this.last === undefined
-        ? { lane: this.lane, observedAt: now, windows: windows.map((w) => ({ ...w })) }
-        : carrySpentScoped({ lane: this.lane, observedAt: now, windows: windows.map((w) => ({ ...w })) }, this.last.windows, this.last.observedAt);
+        ? { credential: this.credential, observedAt: now, windows: windows.map((w) => ({ ...w })) }
+        : carrySpentScoped({ credential: this.credential, observedAt: now, windows: windows.map((w) => ({ ...w })) }, this.last.windows, this.last.observedAt);
     if (this.last !== undefined && sameWindows(this.last.windows, next.windows)) return;
     this.record(next);
   }
 
   /**
    * A `quota-exhausted` pause: when the spent window resets (the pause's
-   * `notBefore`, capped), with that window recorded as spent so the lane gate
+   * `notBefore`, capped), with that window recorded as spent so the usage budget
    * holds every launch on it until then — a scored pause ends its attempt at
    * once, and the next attempt is a fresh launch, not a resume. Undefined when
    * no window with a future reset is known: the pause then falls back to the
@@ -452,7 +428,7 @@ export class SubscriptionUsageTracker {
     const stated = statedReset === undefined ? undefined : capReset(statedReset, now);
     if (stated !== undefined) {
       this.record({
-        lane: this.lane,
+        credential: this.credential,
         observedAt: now,
         windows: [...(u?.windows ?? []).map((w) => ({ ...w })), { usedPercent: EXHAUSTED_PCT, windowMinutes: null, resetsAt: statedReset! }],
       });
@@ -465,7 +441,7 @@ export class SubscriptionUsageTracker {
     if (notBefore === undefined) return undefined;
     if (spent.usedPercent < EXHAUSTED_PCT) {
       this.record({
-        lane: u.lane,
+        credential: u.credential,
         observedAt: now,
         windows: u.windows.map((w) => (w === spent ? { ...w, usedPercent: EXHAUSTED_PCT } : { ...w })),
       });

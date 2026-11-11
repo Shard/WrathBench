@@ -639,16 +639,15 @@ export function readFleet(runsDir: string, now = Date.now(), cold: ReadonlySet<s
       configRejected?: { since: number; error: string; mtime: number };
       preflight?: FleetResponse["preflight"];
       jobs?: Record<string, Omit<FleetJobView, "name" | "accountClass" | "runId" | "model">>;
-      accounts?: { pinned?: Record<string, string>; pool?: Record<string, string | null>; paid?: Record<string, string | null>; local?: Record<string, string | null> };
+      accounts?: { pinned?: Record<string, string>; pool?: Record<string, string | null> };
+      credentials?: FleetResponse["credentials"];
       paused?: FleetPausedView[];
       ended?: FleetResponse["ended"];
       session?: FleetSessionView;
     };
     const held = heldAccounts(runsDir, now, cold);
     const classOf = new Map<string, FleetAccountView["class"]>();
-    for (const cls of ["pool", "paid", "local"] as const) {
-      for (const a of Object.keys(raw.accounts?.[cls] ?? {})) classOf.set(a.toUpperCase(), cls);
-    }
+    for (const a of Object.keys(raw.accounts?.pool ?? {})) classOf.set(a.toUpperCase(), "pool");
     /*
      * Jobs as the supervisor wrote them — the job (ref, tier, account, source)
      * and its process — plus what only the runs directory knows: the run
@@ -680,18 +679,16 @@ export function readFleet(runsDir: string, now = Date.now(), cold: ReadonlySet<s
       })
       .sort((a, b) => a.name.localeCompare(b.name));
     /*
-     * Accounts, in class order, with what holds each: the idle rows of the
-     * fleet table. A pinned account that a class also lists (the coexistence
-     * rule) belongs to the class that schedules it, so `pinned` is
-     * filtered against the classes rather than concatenated with them.
+     * Accounts, pinned then the pool, with what holds each: the idle rows of
+     * the fleet table. A pinned account the pool also lists (the coexistence
+     * rule) is the pool's, so `pinned` is filtered against the pool rather
+     * than concatenated with it.
      */
     const accounts: FleetAccountView[] = [
       ...Object.entries(raw.accounts?.pinned ?? {})
         .filter(([a]) => !classOf.has(a.toUpperCase()))
         .map(([account, job]) => ({ account, class: "pinned" as const, job })),
-      ...(["pool", "paid", "local"] as const).flatMap((cls) =>
-        Object.entries(raw.accounts?.[cls] ?? {}).map(([account, job]) => ({ account, class: cls, job })),
-      ),
+      ...Object.entries(raw.accounts?.pool ?? {}).map(([account, job]) => ({ account, class: "pool" as const, job })),
     ];
     // `fleetConfig` is deliberately not forwarded: it is a host path, and the
     // API says what the fleet is doing, not where this machine keeps things.
@@ -712,6 +709,7 @@ export function readFleet(runsDir: string, now = Date.now(), cold: ReadonlySet<s
       paused: Array.isArray(raw.paused) ? raw.paused : [],
       ended: Array.isArray(raw.ended) ? raw.ended : [],
       ...(raw.session !== undefined ? { session: raw.session } : {}),
+      ...(Array.isArray(raw.credentials) ? { credentials: raw.credentials } : {}),
       now,
     };
   } catch {
@@ -1597,10 +1595,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
         const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
         body.outstanding = outstandingWork({
           states,
-          policy: roster.policy,
           excluded: roster.excluded.map((e) => e.name),
           accounts: roster.accounts,
-          maxConcurrent: roster.maxConcurrent,
+          credentials: roster.credentials,
+          maxSessions: roster.policy.maxSessions,
         });
       }
       return pub(body, projectFleet);

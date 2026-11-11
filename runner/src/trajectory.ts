@@ -149,28 +149,30 @@ export interface RunMeta {
    * The newest reading of the run's subscription usage windows, as its driver
    * normalised it (`subscription-usage.ts`: per window the used percent, the
    * window's length and its reset — nothing else). Written on change by
-   * `recordSubscriptionUsage`; the fleet reads the newest per lane off these
-   * to gate launches (operator, 2026-10-16). Operator-only: no public
+   * `recordSubscriptionUsage`; the fleet reads the newest per credential off
+   * these to hold launches (operator, 2026-10-16). Operator-only: no public
    * projection carries it. Absent on every run that never saw one.
    */
   subscriptionUsage?: SubscriptionUsage;
   /**
-   * Every subscription lane move the operator made on this run
-   * (`runner/src/move-lane.ts`), oldest first: the lane it left, the lane it
-   * went to, when, who, and why. `config.subscription` says which lane the
-   * run bills now; this says how it got there, because a run's lane is
-   * otherwise read as the lane it started on. Top level and not in `config`,
-   * so a resume never reads it as launch config. Operator-only like
-   * `subscriptionUsage`: no public projection carries it.
+   * Every credential move the operator made on this run
+   * (`runner/src/move-credential.ts`), oldest first: the credential it left,
+   * the one it went to, when, who, and why. `config.credential` says which
+   * credential the run is on now; this says how it got there, because a
+   * run's credential is otherwise read as the one it started on. Top level
+   * and not in `config`, so a resume never reads it as launch config.
+   * Operator-only like `subscriptionUsage`: no public projection carries it.
+   * A 0.5 run may carry its lane moves as `laneHistory` instead, which
+   * nothing reads.
    */
-  laneHistory?: LaneMove[];
+  credentialHistory?: CredentialMove[];
   /**
    * Every time this run directory was restored from a character archive
    * (`runner/src/character-archive.ts`), oldest first: which archive, when
    * it was written and by which build, and the account and guid the
    * character left and landed on. The run keeps its id across an import,
    * because it is the same character continuing; this is how its record
-   * says the run moved. Operator-only like `laneHistory`.
+   * says the run moved. Operator-only like `credentialHistory`.
    */
   imports?: CharacterImport[];
 }
@@ -190,11 +192,11 @@ export interface CharacterImport {
   to: { account: string; guid: number };
 }
 
-/** One operator move of a run's subscription lane (`RunMeta.laneHistory`). */
-export interface LaneMove {
-  /** The lane variable NAME it billed before. */
+/** One operator move of a run's credential (`RunMeta.credentialHistory`). */
+export interface CredentialMove {
+  /** The credential id it was on before. */
   from: string;
-  /** The lane variable NAME it bills from now on. */
+  /** The credential id it is on from now on. */
   to: string;
   /** Epoch ms. */
   at: number;
@@ -261,8 +263,13 @@ export interface RunVerdictFields {
   reflectingSince?: number;
 }
 
-/** The meta.json fields a launch's `writeMeta` carries over from the file it replaces. */
-const KEPT_ACROSS_WRITE_META = ["termination", "endedAt", "pauseReason"] as const;
+/**
+ * The meta.json fields only the verdict methods write (`setTermination`,
+ * `repairTermination`, `setPause`, `clearPause`): `writeMeta` takes them from
+ * the file it replaces and never from the meta it is handed, which is often
+ * one read before a verdict moved (a resume's, read before `clearPause`).
+ */
+const VERDICT_FIELDS = ["termination", "endedAt", "pauseReason"] as const;
 
 /**
  * Rewrite meta.json whole and atomically: a temporary file beside it, renamed
@@ -377,20 +384,19 @@ export class Trajectory {
    * an error message — all read meta.json. The record carries the rest of the
    * config without it (`withoutSessionToken`).
    *
-   * The verdict fields meta.json already holds (`termination`, `endedAt`,
-   * `pauseReason`) are carried over unless `meta` states its own, as a 0.5
-   * run's `run` row kept them across a relaunch; an open reflection window is
-   * not, because no window is open at a process boundary (`reflect.ts`: "A
-   * resumed run starts with a fresh gate").
+   * The verdict fields (`VERDICT_FIELDS`) are the file's as it stands, never
+   * `meta`'s, as a 0.5 run's `run` row kept them across a relaunch; an open
+   * reflection window is dropped, because no window is open at a process
+   * boundary (`reflect.ts`: "A resumed run starts with a fresh gate").
    */
   writeMeta(meta: RunMeta): Promise<void> {
     this.runId = meta.runId;
     const before = this.readMetaFile();
+    const given = { ...meta } as RunMeta & RunVerdictFields;
+    for (const k of [...VERDICT_FIELDS, "reflectingSince"] as const) delete given[k];
     const kept: RunVerdictFields = {};
-    for (const k of KEPT_ACROSS_WRITE_META) {
-      if (before?.[k] !== undefined && (meta as RunVerdictFields)[k] === undefined) (kept as Record<string, unknown>)[k] = before[k];
-    }
-    const { reflectingSince: _since, ...next } = { ...meta, ...kept } as RunMeta & RunVerdictFields;
+    for (const k of VERDICT_FIELDS) if (before?.[k] !== undefined) (kept as Record<string, unknown>)[k] = before[k];
+    const next = { ...given, ...kept };
     writeMetaFile(this.dir, JSON.parse(this.scrub(jsonLine(next))) as object);
     this.append({ t: "meta", ...meta, config: withoutSessionToken(meta.config) });
     return SETTLED;
@@ -466,14 +472,15 @@ export class Trajectory {
 
   /**
    * The run's newest subscription usage reading (`subscription-usage.ts`), on
-   * the record and in meta.json, where the fleet reads the newest per lane.
+   * the record and in meta.json, where the fleet reads the newest per
+   * credential.
    * The driver calls this only when the reading changed. The record carries
    * the windows and no text: a `harness` record's `text` is published, and a
    * usage percentage or a reset time never is (operator, 2026-10-16).
    * meta.json is rewritten whole, and never throws into a turn.
    */
   recordSubscriptionUsage(u: SubscriptionUsage, turn?: number): void {
-    this.append({ t: "harness", kind: "rate_limits", ...(turn !== undefined ? { turn } : {}), lane: u.lane, windows: u.windows });
+    this.append({ t: "harness", kind: "rate_limits", ...(turn !== undefined ? { turn } : {}), credential: u.credential, windows: u.windows });
     this.updateMeta((meta) => ({ ...meta, subscriptionUsage: u }));
   }
 

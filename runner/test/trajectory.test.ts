@@ -222,6 +222,27 @@ describe("a freeplay continuation's lineage", () => {
 });
 
 describe("one pause per segment", () => {
+  test("a resume's meta write, made from the meta read before the pause was cleared, does not put the pause back", async () => {
+    // run.ts's order: read meta.json (paused), clearPause, then writeMeta({ ...resumedMeta, … }).
+    const dir = tempRunDir();
+    const traj = new Trajectory(dir);
+    const config = loadRunConfig({});
+    traj.writeMeta({ runId: "run-r2", harnessVersion: "v", startedAt: 1, config });
+    expect(await traj.setPause("run-r2", "operator-pause", "SIGTERM", 1000)).toBe(true);
+    traj.close();
+    const resumedMeta = readMeta(dir)!;
+    expect((resumedMeta as { pauseReason?: string }).pauseReason).toBe("operator-pause");
+    const again = new Trajectory(dir);
+    await again.clearPause("run-r2");
+    await again.writeMeta({ ...resumedMeta, harnessVersion: "v2" });
+    expect(again.runRow("run-r2")?.["pause_reason"]).toBeNull();
+    expect((readMeta(dir) as { pauseReason?: string }).pauseReason).toBeUndefined();
+    // And the resumed segment's own stop is recorded.
+    expect(await again.setPause("run-r2", "operator-pause", "SIGTERM", 2000)).toBe(true);
+    expect(readTrajectory(dir).filter((r) => r.t === "pause")).toHaveLength(2);
+    again.close();
+  });
+
   test("a stop that lands on a run already paused moves nothing: the first pause keeps its reason and its instant", async () => {
     const dir = tempRunDir();
     const traj = new Trajectory(dir);
