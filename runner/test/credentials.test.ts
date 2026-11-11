@@ -47,6 +47,25 @@ describe("the record", () => {
     expect(describeBudget(creds[2]!.budget)).toBe("$5/day");
   });
 
+  test("a credential billing a plan with usage windows and no budget gets usage at 80/80; another kind or 100/100 is the way out", () => {
+    const creds = parseCredentials({
+      claude: claude({ budget: undefined }),
+      chatgpt: { provider: "chatgpt", secretEnv: "CODEX_HOME", slots: 1, billing: "paid", enabled: true },
+      go: { provider: "opencode-go", secretEnv: "OPENCODE_KEY", slots: 1, billing: "paid", enabled: true },
+      goFree: { provider: "opencode-go", secretEnv: "OPENCODE_KEY", slots: 1, billing: "free", enabled: true },
+      zen: { provider: "opencode", secretEnv: "OPENCODE_KEY", slots: 1, billing: "free", enabled: true },
+      capped: claude({ secretEnv: "CLAUDE_CODE_OAUTH_TOKEN_2", budget: { kind: "runs", perDay: 3 } }),
+      off: claude({ secretEnv: "CLAUDE_CODE_OAUTH_TOKEN_3", budget: { kind: "usage", scoredMaxPct: 100, freeplayMaxPct: 100 } }),
+    });
+    const budgetOf = (id: string) => creds.find((c) => c.id === id)!.budget;
+    for (const id of ["claude", "chatgpt", "go"]) expect(budgetOf(id)).toEqual({ kind: "usage", scoredMaxPct: 80, freeplayMaxPct: 80 });
+    // Go's free side bills no plan: its $0 models are never held by the plan's usage.
+    expect(budgetOf("goFree")).toBeNull();
+    expect(budgetOf("zen")).toBeNull();
+    expect(budgetOf("capped")).toEqual({ kind: "runs", perDay: 3 });
+    expect(budgetOf("off")).toEqual({ kind: "usage", scoredMaxPct: 100, freeplayMaxPct: 100 });
+  });
+
   test("a secret where a name belongs is refused by shape", () => {
     expect(() => parseCredentials({ c: claude({ secretEnv: "sk-ant-oat01-FAKEFAKEFAKE" }) })).toThrow(/NAME of the env var/);
     // Another provider's name is refused too: a key goes only where its provider's key goes.

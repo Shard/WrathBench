@@ -46,6 +46,7 @@ import {
 } from "../runner/src/models";
 import { isScoredEpisode } from "../runner/src/episodes";
 import { credentialCandidates, isCredentialId, parseCredentials, type Credential } from "../runner/src/credentials";
+import { isPoolAccountName, POOL_SIZE_ENV, poolAccountNames, poolSizeOf } from "../runner/src/account-pool";
 import type { PlacedCredential } from "./run-fleet-credentials";
 import { harnessVersion } from "../runner/src/version";
 import { DEFAULT_DRIVER, driverEntry, ROSTER_DRIVERS } from "../runner/src/drivers";
@@ -319,9 +320,11 @@ export interface FleetAccounts {
   pinned: Record<string, string>;
   /**
    * The pool: every game account a run that names none is drawn from, in
-   * preference order, one live session each. Every account that is not
-   * reserved is in it: the reserved ones — the preflight gate's, `SMOKE*`,
-   * `PROBE` and an enabled pin's — are refused here.
+   * preference order, one live session each. By default the generated pool,
+   * `POOL01`…, sized by the deployment (`WRATHBENCH_POOL_SIZE`, the chart's
+   * `worldserver.pool.size`; runner/src/account-pool.ts); a file that lists
+   * `accounts.pool` names its own instead. Never a reserved account: the
+   * preflight gate's, `SMOKE*`, `PROBE` and an enabled pin's are refused here.
    */
   pool: string[];
   /** At most this many pool accounts live at once; the pool's size when the file says none. */
@@ -466,7 +469,9 @@ function pinClash(pin: Pin, accounts: FleetAccounts, byAccount: ReadonlyMap<stri
     // and only an enabled pin holds. So a DISABLED pin may park on a pool
     // account; an enabled one may not, or the pin and the scheduler would
     // fight over the session.
-    if (accounts.pool.some((a) => a.toUpperCase() === key)) return `account ${account} is in accounts.pool — a pinned account is reserved; only a disabled job may park on a pool account`;
+    if (accounts.pool.some((a) => a.toUpperCase() === key) || isPoolAccountName(account)) {
+      return `account ${account} is ${isPoolAccountName(account) ? "a generated pool account" : "in accounts.pool"} — a pinned account is reserved; only a disabled job may park on a pool account`;
+    }
   }
   return undefined;
 }
@@ -891,7 +896,7 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
     fail("fleet config: `lanes` is not a 0.4 key — a job goes in `queue` ({ ref, episode, repeat, account? }) over a `roster` map (see docs/RUNBOOK.md)");
   }
   const notes = Array.isArray(o._notes) ? o._notes.filter((n): n is string => typeof n === "string") : [];
-  const accounts = parseAccounts(o.accounts);
+  const accounts = parseAccounts(o.accounts, env);
   let credentials: Credential[];
   try {
     credentials = parseCredentials(o.credentials);
@@ -987,13 +992,15 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
       if (clash !== undefined) {
         refuse(clash, refusals, `account ${account} is the preflight gate's — the gate needs its own account`);
       }
-      if (accounts.pool.some((a) => a.toUpperCase() === account.toUpperCase())) {
-        fail(`preflight account ${account} is also in accounts.pool — the gate's account is reserved`);
+      if (accounts.pool.some((a) => a.toUpperCase() === account.toUpperCase()) || isPoolAccountName(account)) {
+        fail(`preflight account ${account} is also ${isPoolAccountName(account) ? "a generated pool account" : "in accounts.pool"} — the gate's account is reserved`);
       }
     }
   }
   if (jobs.some((j) => j.enabled && j.account === undefined) && accounts.pool.length === 0) {
-    fail("queue has enabled pool jobs but accounts.pool is empty — nothing could ever run them");
+    fail(
+      `queue has enabled pool jobs but the account pool is empty — nothing could ever run them (${POOL_SIZE_ENV}, the chart's worldserver.pool.size, is unset or 0 here, and accounts.pool lists none)`,
+    );
   }
   // `policy.routing` is the fleet-wide default, applied HERE rather than at
   // launch so that `--status`, the spawned argv and the run's own config all
@@ -1046,8 +1053,23 @@ export function isReservedAccountName(a: string): boolean {
   return /^SMOKE/i.test(a) || a.toUpperCase() === "PROBE";
 }
 
-function parseAccounts(raw: unknown): FleetAccounts {
-  if (raw === undefined) return { pinned: {}, pool: [], max: 0 };
+/**
+ * The `accounts` block. With no `pool` listed, the pool is the generated one,
+ * as many `POOLnn` accounts as the deployment says (`WRATHBENCH_POOL_SIZE`),
+ * which the chart creates and puts on the module's allowlist from the same
+ * value. A listed pool (the 0.5-era `RUNNER`… accounts) replaces it and may
+ * not use the generated names.
+ */
+function parseAccounts(raw: unknown, env: Record<string, string | undefined>): FleetAccounts {
+  const generated = (): string[] => {
+    const size = poolSizeOf(env);
+    if ("error" in size) fail(`accounts: ${size.error}`);
+    return poolAccountNames(size.size);
+  };
+  if (raw === undefined) {
+    const pool = generated();
+    return { pinned: {}, pool, max: pool.length };
+  }
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail("fleet config: accounts must be a JSON object");
   const o = raw as { pinned?: unknown; pool?: unknown; max?: unknown; paid?: unknown; local?: unknown };
   // `pinned` is derived from the jobs (`account` on a queue entry), never authored.
@@ -1060,15 +1082,18 @@ function parseAccounts(raw: unknown): FleetAccounts {
     if (o[cls] !== undefined) fail(`accounts.${cls} is not a v1 key — every account is in the one pool; a provider's concurrency is its credentials' slots (credentials/<id>)`);
   }
   const extra = Object.keys(o).filter((k) => k !== "pool" && k !== "max");
-  if (extra.length > 0) fail(`accounts: unknown key ${extra.join(", ")} — accounts is { pool: [...], max? }`);
+  if (extra.length > 0) fail(`accounts: unknown key ${extra.join(", ")} — accounts is { pool?: [...], max? }`);
   const pinned: Record<string, string> = {};
-  const pool: string[] = [];
-  if (o.pool !== undefined) {
-    if (!Array.isArray(o.pool)) fail("accounts.pool must be an array of account names");
+  let pool: string[] = [];
+  if (o.pool === undefined) {
+    pool = generated();
+  } else {
+    if (!Array.isArray(o.pool)) fail("accounts.pool must be an array of account names, or left out for the generated pool (POOL01…, sized by the chart's worldserver.pool.size)");
     for (const a of o.pool as unknown[]) {
       if (typeof a !== "string" || a.length === 0) fail("accounts.pool: entries are account names");
       if (pool.some((p) => p.toUpperCase() === a.toUpperCase())) fail(`accounts.pool: ${a} listed twice`);
       if (isReservedAccountName(a)) fail(`accounts.pool: ${a} is reserved (SMOKE* and PROBE are never drawn from the pool)`);
+      if (isPoolAccountName(a)) fail(`accounts.pool: ${a} is a generated pool account's name — leave accounts.pool out to draw from the generated pool`);
       pool.push(a);
     }
   }

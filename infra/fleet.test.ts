@@ -283,6 +283,9 @@ describe("parseFleet", () => {
     expect(() =>
       parseFleet(fleetJson([], { accounts: { pool: ["GATE"] }, preflight: { enabled: true, account: "GATE", smokes: ["x.ts"] } })),
     ).toThrow(/preflight account GATE is also in accounts.pool — the gate's account is reserved/);
+    expect(() => parseFleet(fleetJson([], { preflight: { enabled: true, account: "POOL01", smokes: ["x.ts"] } }))).toThrow(
+      /preflight account POOL01 is also a generated pool account — the gate's account is reserved/,
+    );
   });
 
   test("a refused pin names the jobs it suppresses, so a live run is not drained for it", () => {
@@ -1475,14 +1478,17 @@ describe("the bootstrap example (infra/fleet.example.json)", () => {
     // The strict-key rule's own safety net: a refusal costs a newcomer a
     // roster entry on their first boot, which must never be how the rule is
     // discovered.
-    const config = parseFleet((await Bun.file(EXAMPLE).json()) as unknown);
+    // The deployment sizes the generated pool the example draws from (the chart's worldserver.pool.size).
+    const deployed = { env: { ...LAN_ENV, WRATHBENCH_POOL_SIZE: "4" } };
+    const config = parseFleet((await Bun.file(EXAMPLE).json()) as unknown, deployed);
     expect(config.refusals).toEqual([]);
     rosterPolicy(config);
     // A working board: something to schedule, somewhere to schedule it, a
     // gate that is configured, and nothing that would launch on its own:
     // every credential it carries is disabled (credential-gate.test.ts plans it).
     expect(Object.keys(config.roster).length).toBeGreaterThan(0);
-    expect(config.accounts.pool.length).toBeGreaterThan(0);
+    expect(config.accounts.pool).toEqual(["POOL01", "POOL02", "POOL03", "POOL04"]);
+    expect(config.accounts.max).toBe(4);
     expect(config.preflight.enabled).toBe(true);
     expect(config.preflight.smokes.length).toBeGreaterThan(0);
     expect(config.jobs).toEqual([]);
@@ -1494,7 +1500,7 @@ describe("the bootstrap example (infra/fleet.example.json)", () => {
     const { seeded, keys } = store.seedFromFile(EXAMPLE);
     expect(seeded).toBe(true);
     expect(keys).toBeGreaterThan(5);
-    expect(parseFleet(store.render())).toEqual(config);
+    expect(parseFleet(store.render(), deployed)).toEqual(config);
     store.close();
   });
 
@@ -1571,6 +1577,24 @@ describe("jobs, pinned and pool: one unit of work over the account pool", () => 
     expect(poolJobs(config)[0]).toMatchObject({ refs: ["glm"], ref: "glm", repeat: "loop", enabled: true, source: "queue" });
     expect(poolJobs(config)[2]).toMatchObject({ repeat: 1 });
     expect(poolJobs(config)[3]).toMatchObject({ refs: ["glm", "qwen"], ref: "glm+qwen" });
+  });
+
+  test("no accounts.pool is the generated pool the deployment sizes; a listed pool replaces it and an empty one drains it", () => {
+    const sized = (size: string) => ({ env: { ...LAN_ENV, WRATHBENCH_POOL_SIZE: size } });
+    const roster = { glm: { tier: "t1", model: "z-ai/glm-5.2:free" } };
+    const queue = [{ ref: "glm", episode: "e90" }];
+    expect(parseFleet({ roster, queue }, sized("3")).accounts).toEqual({ pinned: {}, pool: ["POOL01", "POOL02", "POOL03"], max: 3 });
+    expect(parseFleet({ accounts: { max: 2 }, roster, queue }, sized("12")).accounts.pool.at(-1)).toBe("POOL12");
+    expect(parseFleet({ accounts: { max: 2 }, roster, queue }, sized("12")).accounts.max).toBe(2);
+    expect(parseFleet({ accounts: { pool: ["RUNNER", "RUNNER2"] }, roster, queue }, sized("8")).accounts.pool).toEqual(["RUNNER", "RUNNER2"]);
+    expect(parseFleet({ accounts: { pool: [] }, roster }, sized("8")).accounts.pool).toEqual([]);
+    // Unsized, a queue with enabled pool jobs has nowhere to run, and says where the size comes from.
+    expect(() => parseFleet({ roster, queue }, { env: LAN_ENV })).toThrow(/WRATHBENCH_POOL_SIZE, the chart's worldserver.pool.size, is unset or 0/);
+    expect(() => parseFleet({ roster }, sized("100"))).toThrow(/WRATHBENCH_POOL_SIZE="100" is not a pool size/);
+    // The generated names are the pool's alone: never listed, never pinned by an enabled job, never the gate's.
+    expect(() => parseFleet({ accounts: { pool: ["RUNNER", "pool03"] }, roster }, sized("2"))).toThrow(/pool03 is a generated pool account's name/);
+    const pinned = parseFleet({ roster, queue: [{ ref: "glm", episode: "e90", account: "POOL07" }] }, sized("2"));
+    expect(pinned.refusals[0]!.why).toMatch(/account POOL07 is a generated pool account — a pinned account is reserved/);
   });
 
   test("the job shape: a job with an account is pinned, accounts.pinned is derived, a probe is a campaign", () => {

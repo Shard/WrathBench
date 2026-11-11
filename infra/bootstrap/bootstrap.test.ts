@@ -44,13 +44,16 @@ function fakeDb(seed: Record<string, Row> = {}) {
 const REALM_WRITE = /^(INSERT INTO|UPDATE|DELETE FROM|REPLACE INTO) realmlist\b/i;
 const ACCOUNT_WRITE = /^(INSERT INTO|UPDATE|DELETE FROM|REPLACE INTO) account\b/i;
 
-async function run(argv: string[], db: ReturnType<typeof fakeDb>): Promise<number> {
+async function run(argv: string[], db: ReturnType<typeof fakeDb>, env: Record<string, string | undefined> = {}): Promise<number> {
   const log = console.log;
+  const error = console.error;
   console.log = () => {};
+  console.error = () => {};
   try {
-    return await main(argv, async () => db.sql);
+    return await main(argv, async () => db.sql, env);
   } finally {
     console.log = log;
+    console.error = error;
   }
 }
 
@@ -99,6 +102,48 @@ describe("no arguments: the chart's Job, unchanged", () => {
     // The Job's realmcharacters repair covers every account, as AccountMgr's does.
     const rc = db.statements.find((s) => s.text.startsWith("INSERT INTO realmcharacters"))!;
     expect(rc.text).not.toContain("account.id = ?");
+  });
+});
+
+describe("the generated pool", () => {
+  test("the plain run creates POOL01 to the size, each with its name as its password, beside the runner account", async () => {
+    const db = fakeDb();
+    expect(await run([], db, { WRATHBENCH_POOL_SIZE: "3" })).toBe(0);
+    expect([...db.accounts.keys()].sort()).toEqual(["POOL01", "POOL02", "POOL03", "RUNNER"]);
+    const p2 = db.accounts.get("POOL02")!;
+    expect(calculateVerifier("POOL02", "POOL02", Buffer.from(p2.salt, "hex")).toString("hex").toUpperCase()).toBe(p2.verifier);
+  });
+
+  test("a pool account that exists is left as it is, and unset or 0 creates none", async () => {
+    const seeded = fakeDb({ POOL01: { id: 7, salt: "AA", verifier: "BB" } });
+    await run([], seeded, { WRATHBENCH_POOL_SIZE: "2" });
+    expect(seeded.accounts.get("POOL01")).toEqual({ id: 7, salt: "AA", verifier: "BB" });
+    expect(seeded.accounts.has("POOL02")).toBe(true);
+    for (const env of [{}, { WRATHBENCH_POOL_SIZE: "0" }, { WRATHBENCH_POOL_SIZE: "" }]) {
+      const db = fakeDb();
+      await run([], db, env);
+      expect([...db.accounts.keys()]).toEqual(["RUNNER"]);
+    }
+  });
+
+  test("the account-only mode never creates the pool, and a size that does not read exits 2 before anything connects", async () => {
+    const db = fakeDb();
+    await run(["--accounts-only", "SMOKE6"], db, { WRATHBENCH_POOL_SIZE: "4" });
+    expect([...db.accounts.keys()]).toEqual(["SMOKE6"]);
+    for (const size of ["100", "-1", "four"]) {
+      let opened = false;
+      const code = await (async () => {
+        const error = console.error;
+        console.error = () => {};
+        try {
+          return await main([], async () => ((opened = true), fakeDb().sql), { WRATHBENCH_POOL_SIZE: size });
+        } finally {
+          console.error = error;
+        }
+      })();
+      expect(code).toBe(2);
+      expect(opened).toBe(false);
+    }
   });
 });
 
