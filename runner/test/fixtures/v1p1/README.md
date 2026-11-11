@@ -9,12 +9,13 @@ only the record, so this overlap is the one place the scorer's move from the
 state table onto the trace can be checked against what the old readers derived
 (`runner/test/record-equivalence.test.ts`).
 
-It was made once, by `generate.ts` at WrathBench e9f6f26c (wrath-mcp
-149fb163), driving that commit's own `ContextBuilder`, `Trajectory`, recorders
-and `SessionWriter` on a fake clock. **Never regenerate it**: the writers that
+It was made once, by a script at WrathBench e9f6f26c (wrath-mcp 149fb163),
+driving that commit's own `ContextBuilder`, `Trajectory`, recorders and
+`SessionWriter` on a fake clock. **Never regenerate it**: the writers that
 made the `state` rows and milestones are gone, and a fixture rebuilt by later
-code would prove nothing about the overlap. `generate.ts` stays only as the
-record of how it was made, and no longer runs.
+code would prove nothing about the overlap. The script was
+`runner/test/fixtures/v1p1/generate.ts`, committed with the fixture and
+removed with those writers; git history has it.
 
 Twenty minutes of invented play: a login at level 5, a kill every twenty
 seconds, loot, a new item, an equip, turn-ins at 200, 480 and 720 seconds,

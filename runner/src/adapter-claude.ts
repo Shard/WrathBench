@@ -750,14 +750,6 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     // the previous snippet rides each snippet result on a driver that has it.
     snippetDelta: entryOf(config.driver).snippetDelta,
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
-    onEventsServed: (events, folded) =>
-      trajectory.append({
-        t: "events_served",
-        via: "tool",
-        count: events.length,
-        events,
-        ...(folded !== undefined && folded > 0 ? { folded } : {}),
-      }),
   };
   let turn = 0;
   let restartsBefore = 0;

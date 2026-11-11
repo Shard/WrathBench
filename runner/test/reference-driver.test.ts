@@ -50,6 +50,7 @@ import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { compileSnippet } from "@wrathbench/mcp";
 import { createApi } from "../viewer/api";
 import { STUB_ROUTE, program as stubProgram } from "./fixtures/reference-stub";
+import { writeReadings } from "./fixtures/v1-session";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -392,7 +393,7 @@ describe("never counted, never a member, never a row", () => {
         ...(shakeout !== undefined ? { shakeout } : {}),
       });
       t.append({ t: "response", turn: 1, message: { role: "assistant", content: "x" } });
-      t.recordState(runId, { level, xp: 10 });
+      writeReadings(join(runs, runId), [{ ts: Date.now() - 30_000, level, xp: 10 }]);
       t.setTermination(runId, "episode-limit", "90m");
       t.close();
     };

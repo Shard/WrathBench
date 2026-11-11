@@ -25,6 +25,8 @@ import { EpisodicLog } from "../../runner/src/episodic";
 import { retryDelayMs, clickhouseSink, SinkAborted, jsonEachRow } from "../src/sink";
 import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tail";
 import { readRunFact } from "../../runner/src/models";
+import { writeLegacy05Run } from "../../runner/test/fixtures/legacy05-writer";
+import { readRunRow } from "../../runner/src/run-reader";
 import { traceSamplesOf } from "../../runner/src/run-reader";
 import { materialiseV1p1, V1P1_RUN } from "../../runner/test/fixtures/v1p1";
 
@@ -50,13 +52,12 @@ const LEGACY_MOVE_DDL = `CREATE TABLE IF NOT EXISTS move (
 )`;
 
 /**
- * One run directory written the way the runner writes one: meta.json, a
- * run.sqlite with run and state rows, and a trajectory.jsonl carrying turn
- * lines, a milestone and a termination. With `legacyMoves` it is a 0.5 run:
- * its run.sqlite also holds the `move` table, which a v1 run's does not (its
- * movement intentions are in its session record).
+ * One 0.5 run directory, written the way the 0.5 runner left one: meta.json, a
+ * run.sqlite with its run, state and move rows, and a trajectory.jsonl carrying
+ * turn lines, milestones, state samples and a termination. A v1 run is the
+ * frozen phase-1 run (`materialiseV1p1`), read off its session record.
  */
-function writeRun(runsDir: string, runId: string, legacyMoves = true): string {
+function writeRun(runsDir: string, runId: string): string {
   const dir = join(runsDir, runId);
   const traj = new Trajectory(dir);
   traj.writeMeta({
@@ -85,15 +86,21 @@ function writeRun(runsDir: string, runId: string, legacyMoves = true): string {
   traj.append({ t: "snippet", turn: 1, ts: 1_260, code: "await sdk.self()" });
   traj.append({ t: "snippet_result", turn: 1, ts: 1_270, name: "eval_snippet", isError: false, text: "{}" });
   traj.append({ t: "events_served", ts: 1_280, via: "poll", count: 2, events: [{ a: 1 }, { a: 2 }] });
-  traj.recordMilestone({ kind: "level", from: 1, to: 2, xp: 400, turn: 1 });
-  traj.recordMilestone({ kind: "zone", from: { id: 1 }, to: { id: 12 }, turn: 1 });
-  traj.recordState(runId, { level: 2, xp: 400, map: 0, x: 1, y: 2, z: 3, turn: 1, zone: 12 });
-  traj.recordState(runId, { level: 2, xp: 500, map: 0, x: 4, y: 5, z: 6, turn: 2, zone: 12 });
-  traj.recordMove({ map: 0, x: 9, y: 9, z: 9, moveId: 1 });
-  traj.recordMove({ map: 0, x: 9, y: 9, z: 9, moveId: 1, status: "arrived" });
+  // What a 0.5 runner wrote beside the turns: milestones, state samples and move mirrors.
+  traj.append({ t: "milestone", kind: "level", from: 1, to: 2, xp: 400, turn: 1 });
+  traj.append({ t: "milestone", kind: "zone", from: { id: 1 }, to: { id: 12 }, turn: 1 });
+  const states = [
+    { ts: 1_281, level: 2, xp: 400, map: 0, x: 1, y: 2, z: 3, turn: 1, zone: 12 },
+    { ts: 1_282, level: 2, xp: 500, map: 0, x: 4, y: 5, z: 6, turn: 2, zone: 12 },
+  ];
+  for (const st of states) traj.append({ t: "state", ...st });
+  traj.append({ t: "move", map: 0, x: 9, y: 9, z: 9, moveId: 1 });
+  traj.append({ t: "move", map: 0, x: 9, y: 9, z: 9, moveId: 1, status: "arrived" });
   traj.setTermination(runId, "episode-elapsed" as never, "done");
   traj.close();
-  if (legacyMoves) {
+  // Its run.sqlite: the run row and the samples, and the `move` table.
+  writeLegacy05Run(dir, readRunRow(dir, runId)!, states);
+  {
     const db = new Database(join(dir, "run.sqlite"));
     db.exec(LEGACY_MOVE_DDL);
     const put = db.query("INSERT INTO move (run_id, ts, move_id, map, x, y, z, target, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
@@ -147,16 +154,6 @@ describe("a pass over one run", () => {
     expect(rowsOf(sink, "episodic")).toHaveLength(1);
     expect(rowsOf(sink, "runs")).toHaveLength(1);
     expect(rowsOf(sink, "run_totals")).toHaveLength(1);
-  });
-
-  test("a v1 run, whose run.sqlite has no move table, costs the pass nothing: its states land and it has no moves", async () => {
-    const runsDir = tmpRoot();
-    writeRun(runsDir, "run-v1", false);
-    const { collector, sink } = collectorOver(runsDir);
-    await collector.pass();
-    expect(rowsOf(sink, "states")).toHaveLength(2);
-    expect(rowsOf(sink, "moves")).toHaveLength(0);
-    expect(rowsOf(sink, "runs")).toHaveLength(1);
   });
 
   test("a v1 run's states are its trace's samples and its milestones its events, each once across passes", async () => {

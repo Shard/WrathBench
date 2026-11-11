@@ -2,14 +2,15 @@
  * The party records (docs/proposals/GROUP-PLAY.md §6): `group`, `instance`
  * and `kill` milestones. The stack records the transitions off the packets
  * the server sends (`@wrathbench/mcp/record`, the session record's `events`
- * stream, after its write gate), the runner's host hands them to the loop
- * (`SandboxHost.partySignals`, through `RecordSignals`), and the loop writes
- * them on its state sample.
+ * stream, after its write gate), the scorer and the party page read them
+ * there, and the runner's host hands the loop the kills
+ * (`SandboxHost.partySignals`, through `RecordSignals`) for a campaign's kill
+ * end.
  *
  * The watcher over a hand-built cache is the stack's and is tested there
  * (`wrath-mcp/mcp/test/record-party-watch.test.ts`), as is the gate
  * (`record-gate.test.ts`). Here: one real child with the run's session record,
- * end to end, and the loop writing what a fake sandbox hands it. Frames are
+ * end to end, and the loop handing on what a fake sandbox drains to it. Frames are
  * written from wrath-mcp/module/PROTOCOL.md's tables (and, for the two the
  * module has not tapped yet, the shapes the design gives them: `instanceType`
  * on `WB_AREA`, `killerGuid`/`victimGuid` on `SMSG_PARTYKILLLOG`). Guids,
@@ -18,6 +19,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { SessionReader } from "@wrathbench/mcp/record";
 import type { PartySignal } from "@wrathbench/mcp/record";
 import { loadRunConfig } from "../src/config";
 import { ContextBuilder } from "../src/loop";
@@ -43,8 +45,10 @@ afterEach(async () => {
  * where a sibling run's session is the character with guid "12": that member
  * is the deployment's own, the other three are foreign.
  */
+let runDir = "";
 async function makeHost(): Promise<SandboxHost> {
   const runsDir = tempDir("wrathbench-party-");
+  runDir = join(runsDir, "run-party");
   const sibling = openTestSession(join(runsDir, "sibling-run"), Date.now());
   sibling.writer.ingest(recordDrain({ character: { guid: "12", name: "Corvin", race: 1, class: 1 } }));
   await sibling.writer.close();
@@ -54,7 +58,7 @@ async function makeHost(): Promise<SandboxHost> {
     scratchpad: new Scratchpad(join(runsDir, "scratchpad.md")),
     snippetTimeoutMs: 5_000,
     pingGraceMs: 1_000,
-    session: openSessionRecord({ runDir: join(runsDir, "run-party"), runsDir, token: "test-token", scrub: (t) => t }),
+    session: openSessionRecord({ runDir, runsDir, token: "test-token", scrub: (t) => t }),
   });
   hosts.push(host);
   return host;
@@ -85,8 +89,8 @@ feed("WB_SESSION_STATE", 0xff03, {
 });
 `;
 
-describe("the runner's host hands the loop the party records the stack wrote", () => {
-  test("the login group list, the portal and a boss kill come back in order, as written, drained once", async () => {
+describe("the run's session record holds the party records, and the host hands the loop the kills", () => {
+  test("the login group list, the portal and a boss kill are in the record in order, as the gate wrote them", async () => {
     const host = await makeHost();
     expect((await host.evalSnippet(PRELUDE)).ok).toBe(true);
     await host.evalSnippet(`
@@ -100,16 +104,20 @@ describe("the runner's host hands the loop the party records the stack wrote", (
       feed("SMSG_PARTYKILLLOG", 0x1f5, { killerGuid: "13", victimGuid: "4000" });
       "fed";
     `);
-    const got = await host.partySignals();
+    await host.recordDrain();
+    const got = new SessionReader(join(runDir, "session")).rows("events").filter((r) => r.kind === "group" || r.kind === "instance" || r.kind === "kill");
     expect(got.map((s) => s.kind)).toEqual(["group", "instance", "kill", "kill"]);
     // What the gate wrote: the sibling run's character is a member by guid,
-    // the three foreign players are only counted (`foreign`, which the signal
-    // does not carry), and the count still says five.
-    expect(got[0]).toMatchObject({ event: "joined", groupGuid: "9001", leaderGuid: "7", members: ["12"], count: 5 });
+    // the three foreign players are only counted, and the count still says five.
+    expect(got[0]).toMatchObject({ event: "joined", groupGuid: "9001", leaderGuid: "7", members: ["12"], foreign: 3, count: 5 });
     expect(got[1]).toMatchObject({ event: "entered", map: 36, instanceType: 1 });
     expect(got[2]).toMatchObject({ killerGuid: "12", victimGuid: "4000", entry: 639, rank: 1, self: false, member: true });
-    // A foreign member's kill: its guid is never written, and the signal says so with "" while `member` stands.
-    expect(got[3]).toMatchObject({ killerGuid: "", victimGuid: "4000", entry: 639, rank: 1, self: false, member: true });
+    // A foreign member's kill: its guid is never written, while `member` stands.
+    expect(got[3]).toMatchObject({ victimGuid: "4000", entry: 639, rank: 1, self: false, member: true });
+    expect(got[3]).not.toHaveProperty("killerGuid");
+    // The loop is handed the kills, once: a foreign killer as "".
+    const kills = await host.partySignals();
+    expect(kills.map((k) => [k.kind, k.kind === "kill" ? k.killerGuid : null])).toEqual([["kill", "12"], ["kill", ""]]);
     expect(await host.partySignals()).toEqual([]);
   });
 });
@@ -160,29 +168,7 @@ function builder(queue: PartySignal[][], o: { drain?: boolean; watchdogs?: Watch
 
 const joinedSignal = (ts: number): PartySignal => ({ kind: "group", event: "joined", groupGuid: "9001", leaderGuid: "7", members: ["11", "12", "13", "14"], count: 5, ts, seq: ts });
 
-describe("the loop writes what its host hands it", () => {
-  test("each record carries the packet's own timestamp; a restarted child's re-read login list is not a second join", async () => {
-    const { dir, sample } = builder([
-      [joinedSignal(4000), { kind: "instance", event: "entered", map: 36, instanceType: 1, from: { map: 0, instanceType: 0 }, ts: 4100, seq: 41 }],
-      // The child restarted: its first reading of the same party is `joined` again.
-      [joinedSignal(5000), { kind: "kill", killerGuid: "7", victimGuid: "4000", entry: 639, rank: 1, self: true, member: true, ts: 5100, seq: 51 }],
-      [{ kind: "group", event: "left", members: [], count: 0, ts: 6000, seq: 60 }],
-    ]);
-    await sample();
-    await sample();
-    await sample();
-    const ms = readTrajectory(dir).filter((r) => r.t === "milestone");
-    expect(ms.map((r) => [r["kind"], r["event"] ?? null])).toEqual([
-      ["group", "joined"],
-      ["instance", "entered"],
-      ["kill", null],
-      ["group", "left"],
-    ]);
-    expect(ms[0]).toMatchObject({ observedTs: 4000, count: 5, members: ["11", "12", "13", "14"] });
-    expect(ms[1]).toMatchObject({ map: 36, instanceType: 1, from: { map: 0, instanceType: 0 }, observedTs: 4100 });
-    expect(ms[2]).toMatchObject({ victimGuid: "4000", entry: 639, rank: 1, self: true, observedTs: 5100 });
-  });
-
+describe("the loop hands the kills it is drained to the watchdogs", () => {
   test("a kill end is met by a member's kill the child latched, and not by a non-member's", async () => {
     const kill = (killerGuid: string, member: boolean, ts: number): PartySignal => ({
       kind: "kill",
@@ -204,10 +190,11 @@ describe("the loop writes what its host hands it", () => {
     const b = builder([[joinedSignal(4000), kill("12", true, 4100)]], { watchdogs: ours });
     await b.sample();
     expect(ours.check()).toEqual({ reason: "kill-target", detail: "entry 639 killed (killer party member 12)" });
-    expect(readTrajectory(b.dir).find((r) => r.t === "milestone" && r["kind"] === "kill")).toMatchObject({ member: true, entry: 639 });
+    // The record is the stack's: the loop writes none.
+    expect(readTrajectory(b.dir).filter((r) => r.t === "milestone")).toEqual([]);
   });
 
-  test("a kill latched mid-row is written and read by the end check at the next tick, not the next state row", async () => {
+  test("a kill latched mid-row is read by the end check at the next tick, not the next sample", async () => {
     // A five-member run's boss kill: the packet reached every member at once,
     // but the kill was written on each member's own 60 s row phase, so the
     // members ended up to 22 s apart and the last after the roster had stopped it.
@@ -219,28 +206,16 @@ describe("the loop writes what its host hands it", () => {
     expect(watchdogs.check()).toBeNull();
     await sampleAfter(5_000); // one tick later, well inside the row gate
     expect(watchdogs.check()).toEqual({ reason: "kill-target", detail: "entry 639 killed (killer party member 12)" });
-    const records = readTrajectory(dir);
-    // The record is the one a row-cadence drain wrote: same shape, the packet's own instant.
-    expect(records.filter((r) => r.t === "milestone" && r["kind"] === "kill")).toEqual([
-      expect.objectContaining({ killerGuid: "12", victimGuid: "17379390972743385188", entry: 639, rank: 1, self: false, member: true, observedTs: 5_100 }),
-    ]);
-    // ...and the row cadence itself did not move: still the one state row.
-    expect(records.filter((r) => r.t === "state")).toHaveLength(1);
+    expect(readTrajectory(dir).filter((r) => r.t === "milestone" || r.t === "state")).toEqual([]);
   });
 
   test("a kill the stack wrote without a foreign killer's guid still meets a kill end as a member's", async () => {
     const config = loadRunConfig({ driver: "stub" });
     const watchdogs = new Watchdogs(config.watchdogs, Date.now, 0, { end: [{ kill: { entry: 639 } }] });
     const kill: PartySignal = { kind: "kill", killerGuid: "", victimGuid: "17379390972743385188", entry: 639, rank: 1, self: false, member: true, ts: 4100, seq: 41 };
-    const { dir, sample } = builder([[joinedSignal(4000), kill]], { watchdogs });
+    const { sample } = builder([[joinedSignal(4000), kill]], { watchdogs });
     await sample();
     expect(watchdogs.check()).toEqual({ reason: "kill-target", detail: "entry 639 killed (killer a party member)" });
-    expect(readTrajectory(dir).find((r) => r.t === "milestone" && r["kind"] === "kill")).toMatchObject({ member: true, self: false, entry: 639 });
   });
 
-  test("a sandbox without the drain writes no party record", async () => {
-    const { dir, sample } = builder([], { drain: false });
-    await sample();
-    expect(readTrajectory(dir).filter((r) => r.t === "milestone" && ["group", "instance", "kill"].includes(String(r["kind"])))).toEqual([]);
-  });
 });

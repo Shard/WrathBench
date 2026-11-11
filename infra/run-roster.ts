@@ -50,7 +50,7 @@
  *    retried in place *before* being deferred.
  */
 
-import { openRunDb } from "../runner/src/rundb";
+import { bestLevelOf, readRunRow as readRecordedRunRow } from "../runner/src/run-reader";
 // The one zod schema for a watchdog override lives with the run config it
 // overrides (runner/src/config.ts). Importing it keeps roster, fleet and
 // runner validating the same shape instead of three hand-rolled copies.
@@ -63,7 +63,7 @@ import { DEFAULT_API_BASE, DEFAULT_API_KEY_ENV } from "../runner/src/providers";
 import { classifyLapse, PARTY_PAUSE, resumesOnPause, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
 import { readCredentialUsage, type PlacedCredential } from "./run-fleet-credentials";
 import { EXHAUSTED_PCT, gateClassOf, newestByCredential, thresholdOf, thresholdsOf, usageHold } from "../runner/src/subscription-usage";
-import { Trajectory } from "../runner/src/trajectory";
+import { Trajectory, writeMetaFile } from "../runner/src/trajectory";
 import { liveOwnerOf, MODEL_RESPONSE_RECORD, RecordCountScanner, verdictOfTrajectory, type ScanReads } from "../runner/src/models";
 import { CAMPAIGN_FILE, holdsOnlyLaunchFiles, parseCampaignFile, writeCampaignFile, type CampaignFile } from "../runner/src/campaign-file";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
@@ -1145,22 +1145,12 @@ function runDir(runId: string): string {
   return existsSync(archived) ? archived : live;
 }
 
+/** The run's row (`runner/src/run-reader.ts`): meta.json's on a v1 run, run.sqlite's on a 0.5 one. */
 function readRunRow(runId: string): RunRow | undefined {
-  const path = join(runDir(runId), "run.sqlite");
-  if (!existsSync(path)) return undefined;
-  try {
-    const db = openRunDb(path, { readonly: true });
-    try {
-      const row = db
-        .query("SELECT termination_reason, termination_detail, pause_reason FROM run WHERE run_id = ?")
-        .get(runId) as RunRow | null;
-      return row ?? undefined;
-    } finally {
-      db.close();
-    }
-  } catch {
-    return undefined;
-  }
+  const row = readRecordedRunRow(runDir(runId), runId);
+  if (row === null) return undefined;
+  const s = (v: unknown): string | null => (typeof v === "string" ? v : null);
+  return { termination_reason: s(row["termination_reason"]), termination_detail: s(row["termination_detail"]), pause_reason: s(row["pause_reason"]) };
 }
 
 /** The character a resumed run will actually use, per its stored meta.json. */
@@ -1205,22 +1195,9 @@ function tokenOfRun(runId: string): string {
   }
 }
 
+/** The highest level the run's samples reached (`run-reader.ts`): its trace's on a v1 run, its state rows' on a 0.5 one. */
 function readLevel(runId: string): number | undefined {
-  const path = join(runDir(runId), "run.sqlite");
-  if (!existsSync(path)) return undefined;
-  try {
-    const db = openRunDb(path, { readonly: true });
-    try {
-      const row = db.query("SELECT MAX(level) AS lvl FROM state WHERE run_id = ?").get(runId) as
-        | { lvl: number | null }
-        | null;
-      return row?.lvl ?? undefined;
-    } finally {
-      db.close();
-    }
-  } catch {
-    return undefined;
-  }
+  return bestLevelOf(runDir(runId), runId) ?? undefined;
 }
 
 function trajectoryOf(runId: string): string {
@@ -1345,8 +1322,9 @@ function accountOfRun(runId: string): string | undefined {
  */
 function activityAgeMs(runId: string): number | undefined {
   let newest: number | undefined;
-  // `run.sqlite-wal`: a live run's database writes land there until a checkpoint.
-  for (const name of ["trajectory.jsonl", "run.sqlite", "run.sqlite-wal", "heartbeat", IMAGE_RECORD_FILE]) {
+  // `run.sqlite-wal`: a 0.5 run's database writes land there until a
+  // checkpoint; a v1 run's session writer rewrites `live.json` on every tick.
+  for (const name of ["trajectory.jsonl", "run.sqlite", "run.sqlite-wal", "session/live.json", "heartbeat", IMAGE_RECORD_FILE]) {
     try {
       const m = statSync(join(runDir(runId), name)).mtimeMs;
       if (newest === undefined || m > newest) newest = m;
@@ -1808,15 +1786,15 @@ function classify(spec: Resolved, exit: EpisodeExit): Verdict {
  * count (`readRunFact`): a `meta.json` with the stamps the run would have
  * written — the roster entry's identity, so the probing attempt counter moves
  * on to a fresh run id, and the campaign, version, cell, arm and ref, so it
- * lands in its square — and a `run` row terminated `launch-failed` with the
+ * lands in its square — and the run row's verdict, `launch-failed` with the
  * reason. No trajectory: it played no turn, so it is no model's evidence, no
  * rung on the defer ladder, and no play time on any page. It is left where it
  * is rather than archived, because the campaigns page reads only the runs
  * directory and must count the attempt the scheduler counts.
  *
- * The run row first and `meta.json` last, so a write cut short never leaves a
- * stamped run with no verdict for the resume planner to mistake for one that
- * went offline.
+ * The stamp and the verdict are one meta.json, written whole and renamed into
+ * place, so a write cut short never leaves a stamped run with no verdict for
+ * the resume planner to mistake for one that went offline.
  */
 export function writeLaunchFailure(runDir: string, spec: Resolved, detail: string, opts: { harnessVersion: string; now?: number }): void {
   const file = spec.campaignFile;
@@ -1848,17 +1826,8 @@ export function writeLaunchFailure(runDir: string, spec: Resolved, detail: strin
       : {}),
   };
   mkdirSync(runDir, { recursive: true });
-  // The run store's own schema, and nothing appended: no trajectory.
-  new Trajectory(runDir).close();
-  const db = openRunDb(join(runDir, "run.sqlite"));
-  try {
-    db.query(
-      `INSERT INTO run (run_id, harness_version, started_at, ended_at, driver, model, termination_reason, termination_detail, config_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(run_id) DO NOTHING`,
-    ).run(spec.runId, opts.harnessVersion, now, now, spec.driver, spec.model, "launch-failed", detail, JSON.stringify(config));
-  } finally {
-    db.close();
-  }
+  // Nothing appended: no trajectory. The row is meta.json's, verdict and all,
+  // in one atomic write (runner/src/trajectory.ts, `RunVerdictFields`).
   const meta = {
     runId: spec.runId,
     harnessVersion: opts.harnessVersion,
@@ -1870,8 +1839,10 @@ export function writeLaunchFailure(runDir: string, spec: Resolved, detail: strin
       effort: spec.effort ?? null,
       ...(stampedCompactWindow(spec.compactWindow) !== undefined ? { compactWindow: stampedCompactWindow(spec.compactWindow) } : {}),
     },
+    termination: { reason: "launch-failed", detail },
+    endedAt: now,
   };
-  writeFileSync(join(runDir, "meta.json"), `${JSON.stringify(meta, null, 2)}\n`);
+  writeMetaFile(runDir, meta);
 }
 
 /** The build a launch-failed stub names: the arm's pinned image's stamp, or this roster's own. */

@@ -46,8 +46,7 @@
 import { copyFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { hostname } from "node:os";
-import type { Database } from "bun:sqlite";
-import { openRunDb } from "./rundb";
+import { latestReading } from "./run-reader";
 import { archiveIfNoResponses } from "./archive";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { characterOwners, clearAccountCharacters } from "./hygiene";
@@ -88,7 +87,7 @@ import { liveOwnerOf, RESUME_REFUSED_EXIT } from "./models";
 import { isOpenCodeGoBase } from "./platform";
 import { GoUsageGauge, goUsageUrl } from "./opencode-go";
 import { Trajectory, readMeta, startHeartbeat, type PauseMark, type RunMeta } from "./trajectory";
-import { moveLineOf, openSessionRecord, removeSessionRing } from "./session-record";
+import { openSessionRecord, removeSessionRing } from "./session-record";
 import { harnessVersion, stackCommit } from "./version";
 import { SDK_VERSION } from "@wrathbench/sdk";
 import { Watchdogs } from "./watchdogs";
@@ -389,26 +388,11 @@ export function stagedLevelOf(args: Readonly<Record<string, string | boolean>>):
   }
 }
 
-/** The predecessor's last recorded level/xp, read-only; null when there is none. */
+/** The predecessor's last recorded level/xp, read-only (`run-reader.ts`); null when there is none. */
 function lastStateIn(dir: string, runId: string): { level?: number; xp?: number } | null {
-  const path = join(dir, "run.sqlite");
-  if (!existsSync(path)) return null;
-  let db: Database | null = null;
-  try {
-    db = openRunDb(path, { readonly: true });
-    const r = db.query(`SELECT level, xp FROM state WHERE run_id = ? ORDER BY ts DESC LIMIT 1`).get(runId) as
-      | { level?: unknown; xp?: unknown }
-      | null;
-    if (r === null) return null;
-    return {
-      ...(typeof r.level === "number" ? { level: r.level } : {}),
-      ...(typeof r.xp === "number" ? { xp: r.xp } : {}),
-    };
-  } catch {
-    return null;
-  } finally {
-    db?.close();
-  }
+  const r = latestReading(dir, runId);
+  if (r === null || (r.level === null && r.xp === null)) return null;
+  return { ...(r.level !== null ? { level: r.level } : {}), ...(r.xp !== null ? { xp: r.xp } : {}) };
 }
 
 async function main(): Promise<void> {
@@ -642,17 +626,11 @@ async function main(): Promise<void> {
   }
 
   const runDir = join(config.runsDir, config.runId);
-  // The run's own writer: run.sqlite in WAL while this process writes it, so a
-  // reader never holds up a write, and a write that still meets a lock is
-  // retried rather than ending the run (runner/src/rundb.ts).
-  const trajectory = new Trajectory(runDir, { wal: true, retry: true });
+  // The run's own writer: the trajectory (the model side) and meta.json (its
+  // bookkeeping). The game side is the session record, opened below.
+  const trajectory = new Trajectory(runDir);
   // From here until the process exits, however it exits short of a SIGKILL.
   const stopHeartbeat = startHeartbeat(runDir, `${hostname()} ${process.pid}`);
-  if (trajectory.journal !== null && trajectory.journal.mode !== "wal") {
-    // A resumed run whose file a reader held at the switch: this segment
-    // writes on the rollback journal (busy timeout and retries still apply).
-    trajectory.append({ t: "harness", kind: "rundb_journal", mode: trajectory.journal.mode, detail: trajectory.journal.error ?? "" });
-  }
   process.on("exit", stopHeartbeat);
   const scratchpad = new Scratchpad(join(runDir, "scratchpad.md"));
   // The episodic log lives beside the scratchpad and survives a pause the same
@@ -691,6 +669,7 @@ async function main(): Promise<void> {
   // resumed run's tuple names the build it is actually resuming against.
   const serverBuild = await fetchServerBuild(config.moduleUrl);
   const comparability = comparabilityOf(config, version, serverBuild, wikiBundle);
+  let resumeTurnOffset = 0;
   if (!resumed) {
     await trajectory.writeMeta({
       runId: config.runId,
@@ -723,8 +702,13 @@ async function main(): Promise<void> {
     }
   } else {
     await trajectory.clearPause(config.runId);
+    // Read before the record that moves it: the run's turns so far, which this
+    // segment's numbering continues from, stated on the record so the join of
+    // the session record's rows to turns needs nothing else (`TurnIndex`).
+    resumeTurnOffset = trajectory.maxTurn(config.runId);
     trajectory.append({
       t: "resume",
+      turnOffset: resumeTurnOffset,
       harnessVersion: version,
       ...(resumedPause !== undefined ? { after: resumedPause.reason, episodeElapsedMs: resumedPause.episodeElapsedMs } : {}),
     });
@@ -800,7 +784,7 @@ async function main(): Promise<void> {
    * this process's turns; only the recorded index is cumulative, so a resumed
    * run's turns-to-level is the run's cost and not this episode's.
    */
-  const turnOffset = resumed ? trajectory.maxTurn(config.runId) : 0;
+  const turnOffset = resumed ? resumeTurnOffset : 0;
 
   /*
    * Lease this token on the module before the child exists: binds it to the
@@ -817,14 +801,12 @@ async function main(): Promise<void> {
   /*
    * The session record (`session-record.ts`): the stack writes what the
    * character did into `session/` in the run directory, as it happens, and
-   * the run mirrors each movement intention into the trajectory while the
-   * feed still reads it there. Opened after the lease, so the leased secret
+   * the trajectory keeps the model side only. Opened after the lease, so the leased secret
    * is already on the scrub every line passes. The ring of nearby units is
    * live only: the writer removes it when the session closes, and the exit
    * hook catches the exits that never get that far.
    */
   const session = openSessionRecord({ runDir, runsDir: config.runsDir, token: config.token, scrub: (text) => trajectory.scrub(text) });
-  session.signals.onMove = (m) => trajectory.recordMove(moveLineOf(m));
   process.on("exit", () => removeSessionRing(runDir));
   void moduleIdentity(config.moduleUrl, moduleAuthHeaders()).then((m) => session.writer.setModule(m));
 
@@ -837,7 +819,6 @@ async function main(): Promise<void> {
     snippetTimeoutMs: config.snippetTimeoutMs,
     pingGraceMs: config.sandboxPingGraceMs,
     onNotice: (n) => trajectory.append({ t: "harness", ...n }),
-    onActions: (flush) => trajectory.recordActions(flush),
     clientCache,
     session,
   });

@@ -3,17 +3,14 @@
  * trajectory records, message-window mechanics. No live stack, no real model.
  */
 import { describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StubAdapter, type ChatAdapter, type ChatRequest, type AdapterOutcome, type ToolCall } from "../src/adapter";
 import type { ChatMessage } from "../src/context";
 import { requestsOf } from "./fixtures/requests";
 import { SEGMENT_TURNS, slimRun } from "./fixtures/slim-run";
-import { parseEventFrame, StateCache } from "@wrathbench/sdk";
 import { loadRunConfig } from "../src/config";
-import { toJsonSafe } from "@wrathbench/mcp";
-import { ContextBuilder, itemSample, replayedAssistant, runLoop } from "../src/loop";
+import { ContextBuilder, replayedAssistant, runLoop } from "../src/loop";
 import { EpisodicLog } from "../src/episodic";
 import { Scratchpad } from "@wrathbench/mcp";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
@@ -67,6 +64,17 @@ function setup(
       sleep: () => Promise.resolve(),
     },
   };
+}
+
+/** Count the state snapshots a sandbox is asked for, from now on. */
+function countSnapshots(sandbox: SandboxHost): () => number {
+  let n = 0;
+  const real = sandbox.stateSnapshot.bind(sandbox);
+  (sandbox as { stateSnapshot: SandboxHost["stateSnapshot"] }).stateSnapshot = () => {
+    n++;
+    return real();
+  };
+  return () => n;
 }
 
 describe("runLoop", () => {
@@ -153,370 +161,10 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
-  test("money and quest turn-ins reach the state row and the trajectory", async () => {
-    const adapter = new StubAdapter([{ content: "acting", toolCalls: [] }]);
-    const { dir, options } = setup(
-      adapter,
-      {},
-      {
-        money: { value: 12345, seq: 34, ts: 1 },
-        questCompletions: [
-          { questId: 7, xp: 400, money: 250, seq: 49, ts: 2 },
-          { questId: 9, xp: 10, money: 0, seq: 50, ts: 3 },
-        ],
-      },
-    );
-    await runLoop(options);
-    const rows = options.trajectory.stateRows("run-test");
-    expect(rows[0]!["money"]).toBe(12345);
-    expect(rows[0]!["quests_completed"]).toBe(2);
-    // One compact record per completion, logged once even across several samples.
-    const done = readTrajectory(dir).filter((r) => r.t === "quest_complete");
-    expect(done.map((r) => r["questId"])).toEqual([7, 9]);
-    options.trajectory.close();
-  });
-
-  test("zone/area ids reach the state row and a milestone record on change, ids only", async () => {
-    const adapter = new StubAdapter([{ content: "acting", toolCalls: [] }]);
-    const { dir, options } = setup(
-      adapter,
-      {},
-      {
-        self: {
-          zone: { value: { id: 12, name: "Elwynn Forest" }, seq: 3, ts: 1 },
-          area: { value: { id: 9, name: "Northshire Valley" }, seq: 3, ts: 1 },
-        },
-      },
-    );
-    await runLoop(options);
-    const rows = options.trajectory.stateRows("run-test");
-    expect(rows[0]!["zone"]).toBe(12);
-    expect(rows[0]!["area"]).toBe(9);
-    // First observation is a milestone from nowhere; later samples with the
-    // same pair add nothing. Names never appear in the record.
-    const ms = readTrajectory(dir).filter((r) => r.t === "milestone");
-    expect(ms.map((r) => [r["kind"], r["from"], r["to"]])).toEqual([
-      ["zone", undefined, { id: 12 }],
-      ["area", undefined, { id: 9 }],
-    ]);
-    expect(JSON.stringify(ms)).not.toContain("Elwynn");
-    options.trajectory.close();
-  });
-
-  test("achievements: the login backlog is one record and own earns are firsts", async () => {
-    const adapter = new StubAdapter([
-      { content: "t1", toolCalls: [] },
-      { content: "t2", toolCalls: [] },
-    ]);
-    const { dir, options } = setup(
-      adapter,
-      {},
-      {
-        self: {
-          achievements: {
-            loginSeen: true,
-            points: 35,
-            entries: [
-              { achievementId: 6, name: "Level 10", points: 10, categoryId: 92, source: "login" },
-              { achievementId: 7, points: 15, source: "login" },
-              { achievementId: 12, name: "Explore Elwynn Forest", points: 10, source: "earned" },
-            ],
-          },
-        },
-      },
-    );
-    await runLoop(options);
-    const ms = readTrajectory(dir).filter((r) => r.t === "milestone");
-    const backlog = ms.filter((r) => r["kind"] === "achievements_at_login");
-    // Once, however many samples the run took: a resumed run's history is
-    // visible without its past being re-emitted as fresh firsts.
-    expect(backlog).toHaveLength(1);
-    expect(backlog[0]!["ids"]).toEqual([6, 7]);
-    expect(backlog[0]!["points"]).toBe(25);
-    const earns = ms.filter((r) => r["kind"] === "achievement");
-    expect(earns).toHaveLength(1);
-    expect(earns[0]!["id"]).toBe(12);
-    expect(earns[0]!["name"]).toBe("Explore Elwynn Forest");
-    expect(earns[0]!["points"]).toBe(10);
-    options.trajectory.close();
-  });
-
-  test("an empty login backlog is still recorded: it is what says the taps were live", async () => {
-    const adapter = new StubAdapter([{ content: "t1", toolCalls: [] }]);
-    const { dir, options } = setup(
-      adapter,
-      {},
-      { self: { achievements: { loginSeen: true, points: 0, entries: [] } } },
-    );
-    await runLoop(options);
-    const ms = readTrajectory(dir).filter((r) => r.t === "milestone" && r["kind"] === "achievements_at_login");
-    expect(ms).toHaveLength(1);
-    expect(ms[0]!["ids"]).toEqual([]);
-    expect(ms[0]!["points"]).toBe(0);
-    options.trajectory.close();
-  });
-
-  test("a flight is the flag flipping on after an accepted reply; a first sight of it is not a takeoff", async () => {
-    const ok = { value: { reply: 0, ok: true }, seq: 5, ts: 5 };
-    const snapshots: Record<string, unknown>[] = [
-      // Already flying when the process opened (a resume mid-flight): seeded,
-      // never a takeoff — nothing said this flight began here.
-      { self: { taxiFlight: { value: true, seq: 1, ts: 1 }, taxiReply: ok } },
-      // The landing IS an observation, even though the takeoff was not seen.
-      { self: { taxiFlight: { value: false, seq: 2, ts: 2 }, area: { value: { id: 24 } }, taxiReply: ok } },
-      // On without an accepted reply: no packet said a flight was accepted.
-      { self: { taxiFlight: { value: true, seq: 3, ts: 3 } } },
-      { self: { taxiFlight: { value: false, seq: 4, ts: 4 } } },
-      // Accepted, then the flag on: the flight a client would see start.
-      { self: { taxiFlight: { value: true, seq: 5, ts: 5 }, area: { value: { id: 9 } }, taxiReply: ok } },
-    ];
-    let i = 0;
-    const sandbox = {
-      evalSnippet: () => Promise.resolve({ ok: true, value: "", logs: [], durationMs: 1 }),
-      recentEvents: () => Promise.resolve([]),
-      stateSnapshot: () =>
-        Promise.resolve({ lastSeq: -1, eventCount: 0, ...snapshots[Math.min(i++, snapshots.length - 1)]! }),
-      totalRestarts: 0,
-      consecutiveRestarts: 0,
-      drainNotices: () => [],
-      stop: () => Promise.resolve(),
-    } as unknown as SandboxHost;
-    const adapter = new StubAdapter(
-      Array.from({ length: snapshots.length }, (_, n) => ({ content: `t${n}`, toolCalls: [] })),
-    );
-    const { dir, options } = setup(adapter, { stateIntervalMs: 1 });
-    options.sandbox = sandbox;
-    let clock = 0;
-    (options as { now?: () => number }).now = () => (clock += 1000);
-    await runLoop(options);
-    const ms = readTrajectory(dir).filter(
-      (r) => r.t === "milestone" && (r["kind"] === "taxi" || r["kind"] === "taxi_landed"),
-    );
-    expect(ms.map((r) => [r["kind"], r["from"], r["to"]])).toEqual([
-      ["taxi_landed", undefined, { areaId: 24 }],
-      ["taxi_landed", undefined, undefined],
-      ["taxi", { areaId: 9 }, undefined],
-    ]);
-    options.trajectory.close();
-  });
-
-  /** A loop whose samples walk a fixed list of snapshots, one per turn. */
-  function walk(snapshots: Record<string, unknown>[]) {
-    let i = 0;
-    const sandbox = {
-      evalSnippet: () => Promise.resolve({ ok: true, value: "", logs: [], durationMs: 1 }),
-      recentEvents: () => Promise.resolve([]),
-      stateSnapshot: () =>
-        Promise.resolve({ lastSeq: -1, eventCount: 0, ...snapshots[Math.min(i++, snapshots.length - 1)]! }),
-      totalRestarts: 0,
-      consecutiveRestarts: 0,
-      drainNotices: () => [],
-      stop: () => Promise.resolve(),
-    } as unknown as SandboxHost;
-    const adapter = new StubAdapter(
-      Array.from({ length: snapshots.length }, (_, n) => ({ content: `t${n}`, toolCalls: [] })),
-    );
-    const { dir, options } = setup(adapter, { stateIntervalMs: 1 });
-    options.sandbox = sandbox;
-    let clock = 0;
-    (options as { now?: () => number }).now = () => (clock += 1000);
-    return { dir, options };
-  }
-
-  test("level marks: the first observation is a baseline, a change is a gain, with the XP of the moment", async () => {
-    const { dir, options } = walk([
-      { self: { level: { value: 1, seq: 1, ts: 1 } }, xp: { value: 0, seq: 1, ts: 1 } },
-      { self: { level: { value: 1, seq: 2, ts: 2 } }, xp: { value: 50, seq: 2, ts: 2 } },
-      { self: { level: { value: 2, seq: 3, ts: 3 } }, xp: { value: 10, seq: 3, ts: 3 } },
-    ]);
-    await runLoop(options);
-    const ms = readTrajectory(dir).filter((r) => r.t === "milestone" && r["kind"] === "level");
-    // The baseline carries no `from` — it is the level the process opened on,
-    // never a level-up — and a sample that changes nothing writes nothing.
-    expect(ms.map((r) => [r["from"], r["to"], r["xp"]])).toEqual([
-      [undefined, 1, 0],
-      [1, 2, 10],
-    ]);
-    options.trajectory.close();
-  });
-
-  test("a death seen mid-window is one record, stamped with the cache's own time", async () => {
-    const dead = {
-      self: {
-        fields: { health: { value: 50, seq: 9, ts: 4500 }, playerFlags: { value: 0x10, seq: 9, ts: 4500 } },
-        corpse: { value: { map: 0, x: 1, y: 2, z: 3, source: "death_spot" }, seq: 9, ts: 4444 },
-        graveyard: { value: { map: 0, x: 10, y: 20, z: 30 }, seq: 9, ts: 4460 },
-        zone: { value: { id: 12 } },
-        area: { value: { id: 9 } },
-      },
-    };
-    const { dir, options } = walk([
-      { self: { fields: { health: { value: 100, seq: 1, ts: 1 }, playerFlags: { value: 0, seq: 1, ts: 1 } } } },
-      // The sample lands *inside* the dead window, not on the transition: the
-      // cache is still holding the corpse, which is what makes the death
-      // recoverable at all at a 60s sampling interval.
-      dead,
-      // Still the same window: a second sample must not invent a second death.
-      dead,
-      { self: { fields: { health: { value: 100, seq: 20, ts: 5000 }, playerFlags: { value: 0, seq: 20, ts: 5000 } } } },
-    ]);
-    await runLoop(options);
-    const ms = readTrajectory(dir).filter(
-      (r) => r.t === "milestone" && (r["kind"] === "death" || r["kind"] === "release" || r["kind"] === "resurrect"),
-    );
-    expect(ms.map((r) => r["kind"])).toEqual(["death", "release", "resurrect"]);
-    const death = ms[0]!;
-    // The death's own timestamp, not the sample's — the record's own `ts` is
-    // when the sample landed and is deliberately a different fact.
-    expect(death["observedTs"]).toBe(4444);
-    expect(death["position"]).toEqual({ map: 0, x: 1, y: 2, z: 3, source: "death_spot" });
-    // Released already, so the zone/area reading is the graveyard's; the flag
-    // is what tells a reader which one it is holding.
-    expect(death["released"]).toBe(true);
-    expect(death["zone"]).toEqual({ id: 12 });
-    expect(ms[1]!["graveyard"]).toEqual({ map: 0, x: 10, y: 20, z: 30 });
-    options.trajectory.close();
-  });
-
-  test("a death sampled after release with the corpse inside a dungeon records no site, not the entrance", async () => {
-    const ghost = {
-      self: {
-        fields: { health: { value: 1, seq: 9, ts: 4500 }, playerFlags: { value: 0x10, seq: 9, ts: 4500 } },
-        corpse: {
-          value: { map: 0, x: -1100.5, y: 1600.25, z: 50.5, source: "corpse_query", instanceMap: 36 },
-          seq: 9,
-          ts: 4444,
-        },
-      },
-    };
-    const { dir, options } = walk([
-      { self: { fields: { health: { value: 100, seq: 1, ts: 1 }, playerFlags: { value: 0, seq: 1, ts: 1 } } } },
-      ghost,
-    ]);
-    await runLoop(options);
-    const deaths = readTrajectory(dir).filter((r) => r.t === "milestone" && r["kind"] === "death");
-    expect(deaths).toHaveLength(1);
-    expect(deaths[0]!["position"]).toBeUndefined();
-    options.trajectory.close();
-  });
-
-  test("a process that opens on a dead character seeds it and records no death", async () => {
-    const dead = {
-      self: {
-        fields: { health: { value: 0, seq: 1, ts: 1 } },
-        corpse: { value: { map: 0, x: 1, y: 2, z: 3, source: "corpse_query" }, seq: 1, ts: 1 },
-      },
-    };
-    const { dir, options } = walk([dead, dead]);
-    await runLoop(options);
-    // Joining a dead window in progress says nothing about when it opened, so
-    // it says nothing — the rule `lastTaxiFlight` already follows.
-    expect(readTrajectory(dir).filter((r) => r.t === "milestone" && r["kind"] === "death")).toHaveLength(0);
-    options.trajectory.close();
-  });
-
-  test("the spellbook: the first book seen is the baseline, later ids are learns", async () => {
-    const { dir, options } = walk([
-      // An empty book is the cache before `SMSG_INITIAL_SPELLS`, not a baseline:
-      // taking it as one would make the whole book arrive as fresh learns.
-      { self: {}, spells: [] },
-      { self: {}, spells: [{ spellId: 78 }, { spellId: 6603 }] },
-      { self: {}, spells: [{ spellId: 78 }, { spellId: 6603 }] },
-      { self: {}, spells: [{ spellId: 78 }, { spellId: 6603 }, { spellId: 772 }] },
-    ]);
-    await runLoop(options);
-    const ms = readTrajectory(dir).filter(
-      (r) => r.t === "milestone" && (r["kind"] === "spells_at_login" || r["kind"] === "spell"),
-    );
-    expect(ms.map((r) => [r["kind"], r["ids"] ?? r["id"]])).toEqual([
-      ["spells_at_login", [78, 6603]],
-      ["spell", 772],
-    ]);
-    options.trajectory.close();
-  });
-
-  test("talents: the first frame seeds silently, a climbing rank is a spend, a respec is not", async () => {
-    const frame = (rows: { talentId: number; rank: number }[]) => ({
-      self: {},
-      talents: { unspentPoints: 0, activeSpec: 0, talents: rows },
-    });
-    const { dir, options } = walk([
-      // Already holding a point: a resumed character's spend, not this run's.
-      frame([{ talentId: 1683, rank: 0 }]),
-      frame([{ talentId: 1683, rank: 1 }]),
-      // The respec takes it back — silently, so the relearn below reads as a
-      // spend again rather than being swallowed by a remembered rank.
-      frame([]),
-      frame([{ talentId: 1683, rank: 0 }]),
-    ]);
-    await runLoop(options);
-    const ms = readTrajectory(dir).filter((r) => r.t === "milestone" && r["kind"] === "talent");
-    expect(ms.map((r) => [r["id"], r["rank"], r["points"]])).toEqual([
-      [1683, 1, 2],
-      [1683, 0, 1],
-    ]);
-    options.trajectory.close();
-  });
-
-  test("trades: one record per completion, deduped on the cache's own stamp", async () => {
-    const { dir, options } = walk([
-      { self: {}, trade: { status: 2, ts: 100 } },
-      { self: {}, trade: { status: 8, ts: 500 } },
-      // The completion latches: the same stamp seen again is the same trade.
-      { self: {}, trade: { status: 8, ts: 500 } },
-      { self: {}, trade: { status: 8, ts: 900 } },
-    ]);
-    await runLoop(options);
-    const ms = readTrajectory(dir).filter((r) => r.t === "milestone" && r["kind"] === "trade");
-    expect(ms.map((r) => r["observedTs"])).toEqual([500, 900]);
-    options.trajectory.close();
-  });
-
-  test("quest-completion high-water mark resets after a sandbox restart (shorter list)", async () => {
-    // Three samples: the completion list grows [7,9], stays, then SHRINKS to
-    // [11] — the sandbox-restart/cache-rebuild case. Without the reset at
-    // loop.ts:108 the rebuilt completion would never be re-logged.
-    const snapshots: Record<string, unknown>[] = [
-      { self: {}, questCompletions: [{ questId: 7 }, { questId: 9 }] },
-      { self: {}, questCompletions: [{ questId: 7 }, { questId: 9 }] },
-      { self: {}, questCompletions: [{ questId: 11 }] },
-    ];
-    let i = 0;
-    const sandbox = {
-      evalSnippet: () => Promise.resolve({ ok: true, value: "", logs: [], durationMs: 1 }),
-      recentEvents: () => Promise.resolve([]),
-      stateSnapshot: () =>
-        Promise.resolve({ lastSeq: -1, eventCount: 0, ...(snapshots[Math.min(i++, snapshots.length - 1)]!) }),
-      totalRestarts: 0,
-      consecutiveRestarts: 0,
-      drainNotices: () => [],
-      stop: () => Promise.resolve(),
-    } as unknown as SandboxHost;
-
-    const adapter = new StubAdapter([
-      { content: "t1", toolCalls: [] },
-      { content: "t2", toolCalls: [] },
-      { content: "t3", toolCalls: [] },
-    ]);
-    const { dir, options } = setup(adapter, { stateIntervalMs: 1 });
-    options.sandbox = sandbox;
-    // Advancing clock so each turn's sample clears the stateIntervalMs gate.
-    let clock = 0;
-    (options as { now?: () => number }).now = () => (clock += 1000);
-    await runLoop(options);
-    // Guard: all three samples recorded (each turn cleared the interval gate).
-    expect(options.trajectory.stateRows("run-test").length).toBeGreaterThanOrEqual(3);
-    // 7 and 9 logged once each on growth; 11 logged after the shrink-triggered
-    // reset — not swallowed by the high-water mark.
-    const done = readTrajectory(dir).filter((r) => r.t === "quest_complete");
-    expect(done.map((r) => r["questId"])).toEqual([7, 9, 11]);
-    options.trajectory.close();
-  });
-
-  test("the ticker records state while a model request is in flight", async () => {
+  test("the ticker samples while a model request is in flight", async () => {
     // The openai-compatible path used to sample only in the turn preamble, so
-    // one 485s request was an 8-minute observability blackout: no state row,
-    // no XP signal. The ticker samples on the wall clock while complete()
+    // one 485s request was an 8-minute blackout for the watchdogs and the
+    // stall detector. The ticker samples on the wall clock while complete()
     // holds the turn.
     const slow: ChatAdapter = {
       label: "slow",
@@ -526,16 +174,14 @@ describe("runLoop", () => {
       },
     };
     const { options } = setup(slow);
+    const counted = countSnapshots(options.sandbox);
     await runLoop({ ...options, stateTickMs: 10 });
-    const rows = options.trajectory.stateRows("run-test");
-    // One row from the turn preamble, the rest from inside the request.
-    expect(rows.length).toBeGreaterThanOrEqual(3);
-    // Mid-request samples carry the turn in flight, not "before the first".
-    expect(rows.every((r) => r["turn"] === 1)).toBe(true);
+    // One from the turn preamble, the rest from inside the request.
+    expect(counted()).toBeGreaterThanOrEqual(3);
     options.trajectory.close();
   });
 
-  test("the ticker only samples: it drains no record of its own, and run.sqlite gets no trace", async () => {
+  test("the ticker only samples: it drains no record of its own, and the run gets no run.sqlite", async () => {
     // The session record is the stack's: its host drains the child's recorder
     // on a tick of its own (`SandboxHost.recordDrain`). A ticker that still
     // drained a trace or a ring here would be a second reader racing the
@@ -554,32 +200,29 @@ describe("runLoop", () => {
       return Promise.resolve(null);
     };
     Object.assign(options.sandbox, { recordDrain: spy("recordDrain"), traceDrain: spy("traceDrain"), nearbyDrain: spy("nearbyDrain") });
+    const counted = countSnapshots(options.sandbox);
     await runLoop({ ...options, stateTickMs: 10 });
-    expect(options.trajectory.stateRows("run-test").length).toBeGreaterThanOrEqual(3);
+    expect(counted()).toBeGreaterThanOrEqual(3);
     expect(asked).toEqual([]);
     options.trajectory.close();
-    const db = new Database(join(dir, "run.sqlite"), { readonly: true });
-    try {
-      const tables = (db.query(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as { name: string }[]).map((r) => r.name);
-      for (const gone of ["trace", "trace_dict", "move"]) expect(tables).not.toContain(gone);
-    } finally {
-      db.close();
-    }
+    expect(existsSync(join(dir, "run.sqlite"))).toBe(false);
+    // The trajectory is the model side: no state, milestone or turn-in record.
+    expect(readTrajectory(dir).filter((r) => ["state", "milestone", "quest_complete", "move", "actions"].includes(r.t))).toEqual([]);
   });
 
   test("the ticker stops with the loop: nothing samples after runLoop returns", async () => {
     const { options } = setup(new StubAdapter([]));
+    const counted = countSnapshots(options.sandbox);
     await runLoop({ ...options, stateTickMs: 5 });
-    const recorded = options.trajectory.stateRows("run-test").length;
+    const sampled = counted();
     await new Promise((r) => setTimeout(r, 40));
-    expect(options.trajectory.stateRows("run-test")).toHaveLength(recorded);
+    expect(counted()).toBe(sampled);
     options.trajectory.close();
   });
 
-  test("concurrent sampleState calls coalesce: completions and milestones log once", async () => {
-    // The ticker and the turn preamble can sample at the same moment; two
-    // interleaved samples would each read the quest/zone/area high-water marks
-    // before either advanced them and double-log everything in the window.
+  test("concurrent sampleState calls coalesce: one snapshot serves both", async () => {
+    // The ticker and the turn preamble can sample at the same moment; one
+    // snapshot serves both rather than two racing the child.
     const dir = tempDir("wrathbench-loop-");
     const config = {
       ...loadRunConfig({ driver: "stub", stateIntervalMs: 1 }),
@@ -620,51 +263,10 @@ describe("runLoop", () => {
     // One snapshot served both callers — not two interleaved samples.
     expect(snapshots).toBe(1);
     expect(a).toBe(b);
-    expect(readTrajectory(dir).filter((r) => r.t === "quest_complete")).toHaveLength(1);
-    expect(readTrajectory(dir).filter((r) => r.t === "milestone" && r["kind"] === "zone")).toHaveLength(1);
-    expect(trajectory.stateRows("run-test")).toHaveLength(1);
     // The coalescing window closes with the sample: a later call runs its own.
     await builder.sampleState();
     expect(snapshots).toBe(2);
     trajectory.close();
-  });
-
-  test("the new signals survive the real snapshot serializer, not just the stub", async () => {
-    // The sandbox answers the state rpc with toJsonSafe(state.snapshot(), 6).
-    // Stubbing the payload proves loop.ts reads it; this proves the SDK's own
-    // snapshot still carries both signals once it has been through that.
-    const cache = new StateCache({ seed: { guid: "7", name: "Fenwick" } });
-    for (const frame of [
-      {
-        seq: 1,
-        opcode: "SMSG_UPDATE_OBJECT",
-        opcodeId: 0x0a9,
-        ts: 1,
-        data: {
-          blocks: 1,
-          objects: [{ update: "values", guid: "7", fields: { money: 12345 } }],
-        },
-      },
-      {
-        seq: 2,
-        opcode: "SMSG_QUESTGIVER_QUEST_COMPLETE",
-        opcodeId: 0x191,
-        ts: 2,
-        data: { questId: 7, xp: 400, money: 250 },
-      },
-    ]) {
-      const parsed = parseEventFrame(JSON.stringify(frame));
-      if (!parsed.ok) throw new Error(`fixture did not parse: ${parsed.error}`);
-      cache.apply(parsed.event);
-    }
-    const wire = toJsonSafe(cache.snapshot(), 6) as Record<string, unknown>;
-
-    const { options } = setup(new StubAdapter([{ content: "acting", toolCalls: [] }]), {}, wire);
-    await runLoop(options);
-    const row = options.trajectory.stateRows("run-test")[0]!;
-    expect(row["money"]).toBe(12345);
-    expect(row["quests_completed"]).toBe(1);
-    options.trajectory.close();
   });
 
   test("maxTurns terminates as turn-limit", async () => {
@@ -921,58 +523,6 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
-  test("a turn longer than the tick still lands state samples, one at a time", async () => {
-    // The openai-compatible failure this fixes: one 485s provider call left the
-    // run with no state row and no XP signal for eight minutes, because the only
-    // sample was the turn preamble's. The ticker samples through the request.
-    let inFlight = 0;
-    let maxInFlight = 0;
-    const sandbox = {
-      evalSnippet: () => Promise.resolve({ ok: true, value: "", logs: [], durationMs: 1 }),
-      recentEvents: () => Promise.resolve([]),
-      stateSnapshot: async () => {
-        inFlight += 1;
-        maxInFlight = Math.max(maxInFlight, inFlight);
-        await new Promise((r) => setTimeout(r, 5));
-        inFlight -= 1;
-        return { self: { guid: "1", level: { value: 1 } }, lastSeq: -1, eventCount: 0 };
-      },
-      totalRestarts: 0,
-      consecutiveRestarts: 0,
-      drainNotices: () => [],
-      stop: () => Promise.resolve(),
-    } as unknown as SandboxHost;
-
-    let calls = 0;
-    const slow: ChatAdapter = {
-      label: "slow",
-      complete: async (): Promise<AdapterOutcome> => {
-        calls += 1;
-        if (calls > 1) return { kind: "stub-complete" };
-        await new Promise((r) => setTimeout(r, 300));
-        return { kind: "ok", turn: { content: "took a while", toolCalls: [] } };
-      },
-    };
-
-    const { dir, options } = setup(slow, { stateIntervalMs: 1 });
-    options.sandbox = sandbox;
-    (options as { stateTickMs?: number }).stateTickMs = 25;
-    await runLoop(options);
-
-    const records = readTrajectory(dir);
-    const requestAt = records.findIndex((r) => r.t === "request");
-    const responseAt = records.findIndex((r) => r.t === "response");
-    expect(requestAt).toBeGreaterThanOrEqual(0);
-    expect(responseAt).toBeGreaterThan(requestAt);
-    // Samples taken while the provider call was in flight: same shape as any
-    // other `state` record, stamped with the turn that was in flight.
-    const midTurn = records.slice(requestAt + 1, responseAt).filter((r) => r.t === "state");
-    expect(midTurn.length).toBeGreaterThanOrEqual(1);
-    for (const r of midTurn) expect(r["turn"]).toBe(1);
-    // Never two snapshots at once: the ticker joins the preamble's sample.
-    expect(maxInFlight).toBe(1);
-    options.trajectory.close();
-  });
 });
 
 describe("replayedAssistant", () => {
@@ -1065,63 +615,6 @@ describe("replayedAssistant", () => {
   });
 });
 
-describe("itemSample", () => {
-  test("worn from inventory slots 0-18, carried from bag(), names with counts", () => {
-    const sample = itemSample({
-      inventory: [
-        { slot: 16, itemId: 5956, name: "Worn Mace", stackCount: 1, quality: 1 },
-        { slot: 19, name: "Small Brown Pouch" }, // a worn bag: neither equipment nor carried
-        { slot: 23, name: "Hearthstone" }, // backpack rows come from bag(), not here
-        { slot: 4, itemId: 6125 }, // no name answered yet
-      ],
-      bag: {
-        freeSlots: 20,
-        totalSlots: 22,
-        items: [
-          { bag: 255, slot: 23, itemId: 6948, name: "Hearthstone", count: 1, quality: 1 },
-          { bag: 19, slot: 0, itemId: 2589, name: "Linen Cloth", count: 3, quality: 1 },
-        ],
-      },
-    });
-    expect(sample).toEqual([
-      { name: "Worn Mace", count: 1, equipped: true, slot: 16, itemId: 5956, quality: 1 },
-      { name: "item 6125", count: 1, equipped: true, slot: 4, itemId: 6125 },
-      { name: "Hearthstone", count: 1, equipped: false, slot: 23, bag: 255, itemId: 6948, quality: 1 },
-      { name: "Linen Cloth", count: 3, equipped: false, slot: 0, bag: 19, itemId: 2589, quality: 1 },
-    ]);
-  });
-
-  /*
-   * Where a row sits is written; what has not been observed is left off the row
-   * entirely. A reader that sees no `itemId`/`quality` must read "not answered
-   * yet", and a zero there would be a poor-quality item that does not exist.
-   */
-  test("unobserved fields are absent keys, never zeros", () => {
-    const sample = itemSample({
-      inventory: [{ slot: 0 }],
-      bag: { items: [{ bag: 255, slot: 30, count: 2 }] },
-    });
-    expect(sample?.map((i) => Object.keys(i).sort())).toEqual([
-      ["count", "equipped", "name", "slot"],
-      ["bag", "count", "equipped", "name", "slot"],
-    ]);
-    expect(sample?.[0]).toEqual({ name: "slot 0", count: 1, equipped: true, slot: 0 });
-  });
-
-  test("a snapshot with no inventory at all records nothing", () => {
-    expect(itemSample({})).toBeUndefined();
-  });
-});
-
-/**
- * Prompt-cache prefix discipline. Measured on a real paid run
- * (fleet-deepseek-…-20260824-a4): all 150 consecutive request pairs were
- * byte-stable up to the append point; every mid-block cached_tokens=0 was the
- * aggregator routing to a different backend or backend-internal cache
- * weather. These tests pin the half the harness controls: the serialized
- * request prefix, and the provider attribution that makes the other half
- * diagnosable from the trajectory alone.
- */
 describe("prompt-cache prefix discipline", () => {
   test("serialized request N+1 extends request N byte-for-byte up to the append point, across a trim", async () => {
     // One tool call per turn -> history grows 2 messages/turn, so 30 turns

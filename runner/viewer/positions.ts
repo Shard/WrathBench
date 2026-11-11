@@ -23,7 +23,7 @@
 import type { Database } from "bun:sqlite";
 import { openRunDb } from "../src/rundb";
 import { STALL_PAUSE } from "../src/lapse";
-import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentPosition, CharacterStatus, MoveIntentView, RunRow } from "./api-types";
 import { STORE_LAG_MS, runRowOf, type RunStore } from "./clickhouse";
@@ -312,7 +312,7 @@ function readRunDb(runsDir: string, runId: string): RunDbReading {
 /**
  * The same questions of a v1 run, off its session record: where it stands is
  * `live.json`, the writer's last reading, which exists so that a map of every
- * session opens one small file each; the gauges it does not carry and the
+ * session opens one small file each, and how fresh that is is its tick; the gauges it does not carry and the
  * turn-ins are the trace's newest samples (`run-reader.ts`); the reflection
  * window is the run row's.
  */
@@ -321,7 +321,10 @@ function readV1Reading(runsDir: string, runId: string, none: RunDbReading): RunD
   try {
     const live = new SessionReader(sessionDirOfRun(dir)).live();
     if (live === null || live.map === null || live.x === null || live.y === null) return none;
-    const ts = live.observed ?? live.ts;
+    // The writer's tick, not the newest trace row: a character standing still
+    // writes no trace row, and is still where its record says, for as long as
+    // the writer beats.
+    const ts = live.ts;
     const samples = readStateSamples(dir, runId);
     const last = samples[samples.length - 1];
     const gauge = (k: string): number | null => (last !== undefined && typeof last[k] === "number" ? (last[k] as number) : null);
@@ -471,6 +474,20 @@ export function readPositions(
  * recorded mtime is kept, as unknown. And the latest readings are the
  * listing's `items`-free aggregate: nothing on the map reads an inventory.
  */
+/**
+ * Whether a v1 run's session writer has ticked since `since`: its `live.json`
+ * is rewritten on every tick while the run plays, and a v1 trajectory, which
+ * holds the model side only, can stand still through a long turn. One stat,
+ * and only for a run the trajectory test let go.
+ */
+function recordTouchedSince(runsDir: string, runId: string, since: number): boolean {
+  try {
+    return statSync(join(runsDir, runId, "session", "live.json")).mtimeMs >= since;
+  } catch {
+    return false;
+  }
+}
+
 export async function positionsFromStore(
   store: RunStore,
   runsDir: string,
@@ -484,7 +501,7 @@ export async function positionsFromStore(
       (r) =>
         r.archived === 0 &&
         r.termination_reason.length === 0 &&
-        (r.trajectory_mtime === 0 || r.trajectory_mtime >= since),
+        (r.trajectory_mtime === 0 || r.trajectory_mtime >= since || recordTouchedSince(runsDir, r.run_id, since)),
     )
     .map((r) => runRowOf(r, latest.get(r.run_id), now));
   runs.sort((a, b) => (b.startedAt ?? b.mtime ?? 0) - (a.startedAt ?? a.mtime ?? 0));

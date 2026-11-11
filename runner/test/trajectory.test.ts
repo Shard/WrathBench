@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRunConfig } from "../src/config";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
@@ -28,7 +27,7 @@ describe("Trajectory", () => {
     expect(records[1]!.ts).toBe(200);
   });
 
-  test("meta round-trips and lands in sqlite", () => {
+  test("meta round-trips, and the run row is read back off meta.json", () => {
     const dir = tempRunDir();
     const traj = new Trajectory(dir);
     const config = loadRunConfig({ runId: "run-x", driver: "stub", model: "irrelevant" });
@@ -102,144 +101,31 @@ describe("Trajectory", () => {
     traj.close();
   });
 
-  // The one migration left: a 0.4-1..0.4-5 run.sqlite predates these two columns.
-  test("adds character and platform to a run table written without them", () => {
-    const dir = tempRunDir();
-    const db = new Database(join(dir, "run.sqlite"));
-    db.exec(`CREATE TABLE run (
-      run_id TEXT PRIMARY KEY, harness_version TEXT NOT NULL, started_at INTEGER NOT NULL,
-      ended_at INTEGER, driver TEXT, shakeout TEXT, model TEXT, objective TEXT,
-      termination_reason TEXT, termination_detail TEXT, pause_reason TEXT, config_json TEXT NOT NULL)`);
-    db.close();
-    const traj = new Trajectory(dir);
-    const config = loadRunConfig({ runId: "run-old", driver: "stub", model: "irrelevant", character: "Elsie" });
-    traj.writeMeta({ runId: "run-old", harnessVersion: "0.0.0-test", startedAt: 5, config });
-    expect(traj.runRow("run-old")?.["character"]).toBe("Elsie");
-    traj.close();
-  });
-
-  test("periodic state goes to jsonl and sqlite", () => {
-    const dir = tempRunDir();
-    let t = 0;
-    const traj = new Trajectory(dir, { now: () => ++t });
-    traj.recordState("run-y", { level: 2, map: 0, x: 1, y: 2, z: 3, eventCount: 9, lastSeq: 8 });
-    traj.recordState("run-y", { level: 3 });
-    const rows = traj.stateRows("run-y");
-    expect(rows).toHaveLength(2);
-    expect(rows[0]!["level"]).toBe(2);
-    expect(rows[1]!["level"]).toBe(3);
-    expect(readTrajectory(dir).filter((r) => r.t === "state")).toHaveLength(2);
-    traj.close();
-  });
-
-  test("money and quests completed are recorded, and stay null when unobserved", () => {
+  test("a v1 run directory holds no run.sqlite: the trajectory, and meta.json for the row", () => {
     const dir = tempRunDir();
     const traj = new Trajectory(dir);
-    traj.recordState("run-m", { level: 4, money: 12345, questsCompleted: 2 });
-    traj.recordState("run-m", { level: 4 });
-    const rows = traj.stateRows("run-m");
-    expect(rows[0]!["money"]).toBe(12345);
-    expect(rows[0]!["quests_completed"]).toBe(2);
-    // Never a guessed zero for something no event carried (wrath-mcp/docs/CONTRACTS.md).
-    expect(rows[1]!["money"]).toBeNull();
-    expect(rows[1]!["quests_completed"]).toBeNull();
-    const line = readTrajectory(dir).find((r) => r.t === "state");
-    expect(line?.["money"]).toBe(12345);
-    expect(line?.["questsCompleted"]).toBe(2);
+    const config = loadRunConfig({ runId: "run-v1", driver: "stub", model: "irrelevant" });
+    traj.writeMeta({ runId: "run-v1", harnessVersion: "0.0.0-test", startedAt: 5, config });
+    traj.setPause("run-v1", "operator-pause", "x");
+    traj.clearPause("run-v1");
+    traj.setTermination("run-v1", "no-xp", "nothing");
     traj.close();
+    expect(readdirSync(dir).sort()).toEqual(["meta.json", "trajectory.jsonl"]);
   });
 
-  test("items are recorded as JSON, null when the sample carried none, and the column migrates in", () => {
-    const dir = tempRunDir();
-    // A state table from before the `items` column (harness 0.4, earlier).
-    const db = new Database(join(dir, "run.sqlite"));
-    db.exec(`CREATE TABLE state (run_id TEXT NOT NULL, ts INTEGER NOT NULL, level INTEGER, xp INTEGER,
-      map INTEGER, x REAL, y REAL, z REAL, event_count INTEGER, last_seq INTEGER, money INTEGER,
-      quests_completed INTEGER, turn INTEGER, zone INTEGER, area INTEGER)`);
-    db.close();
-    const traj = new Trajectory(dir);
-    // The whole row as the paperdoll needs it: where it sits, what it is.
-    const items = [
-      { name: "Worn Mace", count: 1, equipped: true, slot: 16, itemId: 5956, quality: 1 },
-      { name: "Tough Jerky", count: 5, equipped: false, bag: 255, slot: 23, itemId: 117, quality: 1 },
-      // An old-shape row: the three fields every sample has ever carried.
-      { name: "Tunic", count: 1, equipped: true },
-    ];
-    traj.recordState("run-i", { level: 1, items });
-    traj.recordState("run-i", { level: 1 });
-    const rows = traj.stateRows("run-i");
-    expect(JSON.parse(String(rows[0]!["items"]))).toEqual(items);
-    // The column is JSON text: the new fields need no migration, and a row
-    // that carries none keeps exactly the three keys it was written with.
-    expect(Object.keys((JSON.parse(String(rows[0]!["items"])) as object[])[2]!)).toEqual([
-      "name",
-      "count",
-      "equipped",
-    ]);
-    expect(rows[1]!["items"]).toBeNull();
-    const line = readTrajectory(dir).find((r) => r.t === "state");
-    expect(line?.["items"]).toEqual(items);
-    traj.close();
-  });
-
-  test("the player frame's numbers round-trip, and the columns migrate into an old database", () => {
-    const dir = tempRunDir();
-    // A state table from before that: every column the 0.4 series had, and
-    // none of the frame's. Opening it must add them rather than fail the insert.
-    const db = new Database(join(dir, "run.sqlite"));
-    db.exec(`CREATE TABLE state (run_id TEXT NOT NULL, ts INTEGER NOT NULL, level INTEGER, xp INTEGER,
-      map INTEGER, x REAL, y REAL, z REAL, event_count INTEGER, last_seq INTEGER, money INTEGER,
-      quests_completed INTEGER, turn INTEGER, zone INTEGER, area INTEGER, items TEXT)`);
-    db.close();
-    const traj = new Trajectory(dir);
-    traj.recordState("run-hp", {
-      level: 4,
-      health: 140,
-      maxHealth: 220,
-      power: 30,
-      maxPower: 100,
-      powerType: 0,
-      nextLevelXp: 2100,
-    });
-    // A sample that observed none of it writes NULL, never 0: unobserved is not
-    // a dead character.
-    traj.recordState("run-hp", { level: 4 });
-    const rows = traj.stateRows("run-hp");
-    expect(rows[0]).toMatchObject({
-      health: 140,
-      max_health: 220,
-      power: 30,
-      max_power: 100,
-      power_type: 0,
-      next_level_xp: 2100,
-    });
-    expect(rows[1]!["health"]).toBeNull();
-    expect(rows[1]!["power_type"]).toBeNull();
-    const line = readTrajectory(dir).find((r) => r.t === "state");
-    expect(line?.["health"]).toBe(140);
-    expect(line?.["nextLevelXp"]).toBe(2100);
-    traj.close();
-  });
-
-  test("the turn index is recorded, and absent rather than zero before the first turn", () => {
-    const dir = tempRunDir();
-    const traj = new Trajectory(dir);
-    traj.recordState("run-t", { level: 1 });
-    traj.recordState("run-t", { level: 2, turn: 14 });
-    const rows = traj.stateRows("run-t");
-    expect(rows[0]!["turn"]).toBeNull();
-    expect(rows[1]!["turn"]).toBe(14);
-    expect(readTrajectory(dir).find((r) => r.t === "state" && r["turn"] !== undefined)?.["turn"]).toBe(14);
-    traj.close();
-  });
-
-  test("maxTurn is the high-water mark a resume continues from", () => {
+  test("maxTurn is the run's turns so far, read off its requests, cumulative across a resume", () => {
     const dir = tempRunDir();
     const traj = new Trajectory(dir);
     expect(traj.maxTurn("run-t2")).toBe(0);
-    traj.recordState("run-t2", { level: 1, turn: 4 });
-    traj.recordState("run-t2", { level: 1 });
+    traj.append({ t: "request", turn: 1 });
+    traj.append({ t: "response", turn: 1 });
+    traj.append({ t: "request", turn: 4 });
     expect(traj.maxTurn("run-t2")).toBe(4);
+    // A resume states the offset it continues from, and its driver counts from 1 again.
+    traj.append({ t: "resume", turnOffset: 4 });
+    traj.append({ t: "request", turn: 1 });
+    traj.append({ t: "request", turn: 2 });
+    expect(traj.maxTurn("run-t2")).toBe(6);
     traj.close();
   });
 
@@ -253,11 +139,29 @@ describe("Trajectory", () => {
     traj.setTermination("run-z", "no-xp", "45m of nothing");
     const row = traj.runRow("run-z");
     expect(row?.["termination_reason"]).toBe("no-xp");
+    expect(row?.["termination_detail"]).toBe("45m of nothing");
+    expect(typeof row?.["ended_at"]).toBe("number");
     expect(row?.["pause_reason"]).toBeNull();
+    // A relaunch's meta write keeps the verdict, as the row's conflict path did.
+    traj.writeMeta({ runId: "run-z", harnessVersion: "v2", startedAt: 1, config });
+    expect(traj.runRow("run-z")?.["termination_reason"]).toBe("no-xp");
+    expect(traj.runRow("run-z")?.["harness_version"]).toBe("v2");
+    // A repair writes only where there is no verdict.
+    expect(traj.repairTermination("run-z", "idle", null, 9)).toBe(false);
     traj.close();
   });
 
-  test("a reflection window is mirrored onto the run row, and a process boundary clears it", () => {
+  test("the supervisor's repair writes a verdict the trajectory holds into a meta.json without one", () => {
+    const dir = tempRunDir();
+    const traj = new Trajectory(dir);
+    traj.writeMeta({ runId: "run-y", harnessVersion: "v", startedAt: 1, config: loadRunConfig({}) });
+    expect(traj.repairTermination("run-y", "idle", "cold", 42)).toBe(true);
+    expect(traj.runRow("run-y")).toMatchObject({ termination_reason: "idle", termination_detail: "cold", ended_at: 42 });
+    expect(readTrajectory(dir).filter((r) => r.t === "termination")).toHaveLength(0);
+    traj.close();
+  });
+
+  test("a reflection window is mirrored into meta.json, and a process boundary clears it", () => {
     const dir = tempRunDir();
     let t = 1000;
     const traj = new Trajectory(dir, { now: () => t });
@@ -273,8 +177,8 @@ describe("Trajectory", () => {
     traj.append({ t: "reflect_window", turn: 12, event: "close", reason: "left_rest" });
     expect(traj.runRow("run-r")?.["reflecting_since"]).toBeNull();
 
-    // The transitions themselves stay where they were: the column is a mirror,
-    // never the record.
+    // The transitions themselves stay where they were: meta.json's field is a
+    // mirror, never the record.
     expect(readTrajectory(dir).filter((r) => r.t === "reflect_window")).toHaveLength(2);
 
     // A run killed mid-window must not read as reflecting when it comes back.
@@ -283,23 +187,6 @@ describe("Trajectory", () => {
     expect(traj.runRow("run-r")?.["reflecting_since"]).toBe(4000);
     traj.writeMeta({ runId: "run-r", harnessVersion: "0.0.0-test", startedAt: 5, config });
     expect(traj.runRow("run-r")?.["reflecting_since"]).toBeNull();
-    traj.close();
-  });
-
-  test("the reflecting column migrates into a run table written without it", () => {
-    const dir = tempRunDir();
-    const db = new Database(join(dir, "run.sqlite"));
-    db.exec(`CREATE TABLE run (run_id TEXT PRIMARY KEY, harness_version TEXT, started_at INTEGER,
-      ended_at INTEGER, driver TEXT, shakeout TEXT, model TEXT, objective TEXT,
-      termination_reason TEXT, termination_detail TEXT, pause_reason TEXT, config_json TEXT)`);
-    db.close();
-    let t = 500;
-    const traj = new Trajectory(dir, { now: () => t });
-    const config = loadRunConfig({ runId: "run-old", driver: "stub", model: "irrelevant" });
-    traj.writeMeta({ runId: "run-old", harnessVersion: "0.0.0-test", startedAt: 1, config });
-    t = 600;
-    traj.append({ t: "reflect_window", turn: 1, event: "open" });
-    expect(traj.runRow("run-old")?.["reflecting_since"]).toBe(600);
     traj.close();
   });
 
@@ -335,6 +222,27 @@ describe("a freeplay continuation's lineage", () => {
 });
 
 describe("one pause per segment", () => {
+  test("a resume's meta write, made from the meta read before the pause was cleared, does not put the pause back", async () => {
+    // run.ts's order: read meta.json (paused), clearPause, then writeMeta({ ...resumedMeta, … }).
+    const dir = tempRunDir();
+    const traj = new Trajectory(dir);
+    const config = loadRunConfig({});
+    traj.writeMeta({ runId: "run-r2", harnessVersion: "v", startedAt: 1, config });
+    expect(await traj.setPause("run-r2", "operator-pause", "SIGTERM", 1000)).toBe(true);
+    traj.close();
+    const resumedMeta = readMeta(dir)!;
+    expect((resumedMeta as { pauseReason?: string }).pauseReason).toBe("operator-pause");
+    const again = new Trajectory(dir);
+    await again.clearPause("run-r2");
+    await again.writeMeta({ ...resumedMeta, harnessVersion: "v2" });
+    expect(again.runRow("run-r2")?.["pause_reason"]).toBeNull();
+    expect((readMeta(dir) as { pauseReason?: string }).pauseReason).toBeUndefined();
+    // And the resumed segment's own stop is recorded.
+    expect(await again.setPause("run-r2", "operator-pause", "SIGTERM", 2000)).toBe(true);
+    expect(readTrajectory(dir).filter((r) => r.t === "pause")).toHaveLength(2);
+    again.close();
+  });
+
   test("a stop that lands on a run already paused moves nothing: the first pause keeps its reason and its instant", async () => {
     const dir = tempRunDir();
     const traj = new Trajectory(dir);

@@ -133,12 +133,36 @@ function sqliteRunRow(dir: string, runId: string): Record<string, unknown> | nul
 }
 
 /**
- * The run's row: run.sqlite's `run` table where the directory has one, else
- * meta.json. Null when neither says anything about the run.
+ * The run's row.
+ *
+ * - A v1 run's is meta.json's. A first-build v1 run also has a run.sqlite,
+ *   which only its own builds wrote: a verdict recorded there and never in
+ *   meta.json is taken from it (a termination never reverts), and nothing
+ *   else is, because a later build pauses, resumes and ends it in meta.json.
+ * - A 0.5 run's is run.sqlite's `run` table, else meta.json's.
+ *
+ * Null when neither says anything about the run.
  */
 export function readRunRow(dir: string, runId: string): Record<string, unknown> | null {
-  if (existsSync(join(dir, RUN_DB_FILE))) return sqliteRunRow(dir, runId);
   const meta = readJson(join(dir, "meta.json"));
+  const hasDb = existsSync(join(dir, RUN_DB_FILE));
+  if (isV1RunDir(dir) && meta !== null) {
+    const row = runRowOfMeta(runId, meta);
+    if (row.termination_reason === null && hasDb) {
+      const old = sqliteRunRow(dir, runId);
+      if (typeof old?.["termination_reason"] === "string" && old["termination_reason"] !== "") {
+        row.termination_reason = old["termination_reason"];
+        row.termination_detail = str(old["termination_detail"]);
+        row.ended_at = num(old["ended_at"]);
+        row.pause_reason = null;
+      }
+    }
+    return row as unknown as Record<string, unknown>;
+  }
+  if (hasDb) {
+    const row = sqliteRunRow(dir, runId);
+    if (row !== null) return row;
+  }
   return meta === null ? null : (runRowOfMeta(runId, meta) as unknown as Record<string, unknown>);
 }
 
@@ -209,7 +233,8 @@ interface KeptSampler {
   stat: string;
 }
 const samplerMemo = new Map<string, KeptSampler>();
-const SAMPLER_MEMO_MAX = 64;
+// A long run's samples are a few MB with their inventories: a handful of runs, not the corpus.
+const SAMPLER_MEMO_MAX = 16;
 
 function streamStat(reader: SessionReader): string {
   const segs = reader.segments("trace");
@@ -394,4 +419,20 @@ export function eventMilestonesOf(dir: string): Record<string, unknown>[] {
     if (m !== null) out.push(m);
   }
   return out.sort((a, b) => (a["ts"] as number) - (b["ts"] as number));
+}
+
+/**
+ * How many events a v1 run's tool calls served, off its session record's
+ * `calls` stream (`events` rows); 0 for a 0.5 run, whose served batches are
+ * all trajectory records.
+ */
+export function calledEventCountOf(dir: string): number {
+  if (!isV1RunDir(dir)) return 0;
+  let n = 0;
+  try {
+    for (const row of new SessionReader(sessionDirOfRun(dir)).rows("calls")) if (row.kind === "events") n += row.count;
+  } catch {
+    /* an unreadable segment counts nothing */
+  }
+  return n;
 }

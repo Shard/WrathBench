@@ -15,6 +15,7 @@
  * clock past the settle rule (`RUN_FACT_SETTLE_MS`), because the fixtures
  * were written a moment ago.
  */
+import { writeReadings } from "../runner/test/fixtures/v1-session";
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -63,7 +64,8 @@ function writeRun(dir: string, o: Fixture): void {
   });
   traj.writeMeta({ runId: o.runId, harnessVersion: HARNESS, startedAt: Date.now() - 3_600_000, config, comparability: comparabilityOf(config, HARNESS) });
   for (let i = 0; i < o.responses; i++) traj.append({ t: "response", text: "…" });
-  for (let l = 1; l <= o.level; l++) traj.recordState(o.runId, { level: l, xp: l * 100 });
+  // Its levels are its trace's (a v1 run's session record).
+  if (o.level > 0) writeReadings(runDir, Array.from({ length: o.level }, (_, i) => ({ ts: Date.now() - 3_000_000 + i, level: i + 1, xp: (i + 1) * 100 })));
   if (o.end !== undefined) traj.setTermination(o.runId, o.end);
   if (o.pause === true) traj.setPause(o.runId, "operator-pause");
   traj.close();
