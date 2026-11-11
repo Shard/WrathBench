@@ -20,6 +20,15 @@
  * stream's move rows, and its run row meta.json's (`runner/src/run-reader.ts`).
  * Its trajectory is model-side.
  *
+ * A fan-out run (`sessions/<Character>/`) is read the same way once per
+ * character, and each character's `states`, `milestones` and `moves` rows
+ * carry its session id, `<run-id>~<Character>`, as their `run_id`. Every
+ * table is keyed by `run_id` first and a session's ordinals restart at one,
+ * so two characters under the run's own id would land on each other's keys;
+ * under their own ids they cannot, and no table needs another column or a
+ * new key. The run's own id keeps its run row, totals and trajectory, as for
+ * any run, and no state, milestone or move row.
+ *
  * Nothing here decides anything about a run. It reads what the runner wrote
  * and hands it to the sink; the runner is untouched by design and
  * every judgement — what is live, what counts, what a level means — stays
@@ -36,7 +45,7 @@ import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import { SessionReader, type CallRow, type EventRow, type StreamCursor } from "@wrathbench/mcp/record";
 import { openRunDb } from "../../runner/src/rundb";
-import { isFanoutRunDir, isV1RunDir, milestoneOfEvent, readRunRow, sessionDirOfRun, traceSamplesOf, turnIndexOf } from "../../runner/src/run-reader";
+import { FANOUT_SEP, fanoutCharacters, fanoutSessionDir, fanoutSessionId, isFanoutRunDir, isV1RunDir, milestoneOfEvent, readRunRow, SESSIONS_DIR, sessionDirOfRun, sessionSamplesOf, turnIndexOf } from "../../runner/src/run-reader";
 import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tail";
 import { type CountCache, readRunFact, type RecordCountScanner } from "../../runner/src/models";
 import { strikableSessionToken, strikeSessionToken } from "../../runner/src/session-token";
@@ -142,10 +151,8 @@ export class Ingester {
   private readonly runs = new Map<string, KeptRun>();
   /** `readRunFact`'s record-count scanners, by trajectory path. */
   private readonly counts: CountCache = new Map();
-  /** How many of a v1 run's trace samples this process has added to the store. */
+  /** How many of a v1 run's (or a fan-out character's, by session id) trace samples this process has added to the store. */
   private readonly statesAdded = new Map<string, number>();
-  /** Fan-out runs already reported as having their session records skipped; logged once each. */
-  private readonly reportedFanout = new Set<string>();
 
   constructor(private readonly deps: IngestDeps) {}
 
@@ -158,7 +165,8 @@ export class Ingester {
   /** Drop the scanners of runs a pass no longer lists: deleted, or gone from the tree. */
   retainListed(listed: ReadonlySet<string>): void {
     for (const runId of [...this.runs.keys()]) if (!listed.has(runId)) this.drop(runId);
-    for (const runId of [...this.statesAdded.keys()]) if (!listed.has(runId)) this.statesAdded.delete(runId);
+    // A fan-out character's count is under its session id, kept while its run is listed.
+    for (const key of [...this.statesAdded.keys()]) if (!listed.has(key.split(FANOUT_SEP)[0]!)) this.statesAdded.delete(key);
   }
 
   /** The count scanner a run's next re-derivation would fold into, if any: for a test or a probe. */
@@ -201,20 +209,18 @@ export class Ingester {
     out.trajectoryLines = await this.tailTrajectory(runId, dir, token);
     out.episodicLines = await this.tailEpisodic(runId, dir, token);
     if (isV1RunDir(dir)) {
-      out.states = await this.readTraceStates(runId, dir);
-      await this.readEventMilestones(runId, dir);
-      out.moves = await this.readCallMoves(runId, dir);
+      const session = sessionDirOfRun(dir);
+      out.states = await this.readTraceStates(runId, session, dir);
+      await this.readEventMilestones(runId, session, dir);
+      out.moves = await this.readCallMoves(runId, session);
     } else if (isFanoutRunDir(dir)) {
-      /*
-       * A fan-out run's game side is several characters' records, and every
-       * table here is keyed by the run alone: one character's samples would
-       * stand for the run, or several would interleave under one key. So none
-       * is read until the store can key a row by character; the run row,
-       * totals and trajectory are the run's and ingest as for any run.
-       */
-      if (!this.reportedFanout.has(runId)) {
-        this.reportedFanout.add(runId);
-        this.deps.log?.(`collector: ${runId} is a fan-out run; its characters' session records are not ingested`);
+      // Each character under its session id (the header); the run row, totals and trajectory are the run's.
+      for (const character of fanoutCharacters(dir)) {
+        const key = fanoutSessionId(runId, character);
+        const session = fanoutSessionDir(dir, character)!;
+        out.states += await this.readTraceStates(key, session, dir);
+        await this.readEventMilestones(key, session, dir);
+        out.moves += await this.readCallMoves(key, session);
       }
     } else {
       const sqlite = await this.readSqlite(runId, dir);
@@ -319,8 +325,8 @@ export class Ingester {
    * already hold. Only the samples past the ones this process has added go to
    * the batcher.
    */
-  private async readTraceStates(runId: string, dir: string): Promise<number> {
-    const samples = traceSamplesOf(dir);
+  private async readTraceStates(runId: string, session: string, dir: string): Promise<number> {
+    const samples = sessionSamplesOf(session, dir);
     const from = this.statesAdded.get(runId) ?? 0;
     // Fewer than were added: another trace than the one read (a replaced run). Add it whole.
     const start = samples.length < from ? 0 : from;
@@ -366,11 +372,11 @@ export class Ingester {
    * below zero, its ordinal in the stream negated, so a session row can never
    * land on a trajectory line's key.
    */
-  private async readEventMilestones(runId: string, dir: string): Promise<number> {
+  private async readEventMilestones(runId: string, session: string, dir: string): Promise<number> {
     const kept = parseEventsCursor(this.deps.offsets.signature(runId, "events"));
     let batch: { rows: EventRow[]; cursor: StreamCursor | undefined };
     try {
-      batch = new SessionReader(sessionDirOfRun(dir)).tail("events", kept.cursor);
+      batch = new SessionReader(session).tail("events", kept.cursor);
     } catch {
       return 0;
     }
@@ -399,11 +405,11 @@ export class Ingester {
    * have: the target by its client-cache name. `seq` is the row's ordinal
    * among the stream's move rows, which a replay reproduces.
    */
-  private async readCallMoves(runId: string, dir: string): Promise<number> {
+  private async readCallMoves(runId: string, session: string): Promise<number> {
     const kept = parseEventsCursor(this.deps.offsets.signature(runId, "calls"));
     let batch: { rows: CallRow[]; cursor: StreamCursor | undefined };
     try {
-      batch = new SessionReader(sessionDirOfRun(dir)).tail("calls", kept.cursor);
+      batch = new SessionReader(session).tail("calls", kept.cursor);
     } catch {
       return 0;
     }
@@ -623,9 +629,10 @@ export class Ingester {
     if (st === null) return false;
     // The derivation's revision is part of the signature: a run whose file is
     // unchanged is still re-derived once when what the scanner derives changes.
-    // A v1 run's milestones are its session record's, so its writes move the totals too.
-    const live = sigOf(join(dir, "session", "live.json"));
-    const sig = `d${RUN_TOTALS_DERIVATION}:${st.sig}${live !== null ? `|${live.sig}` : ""}`;
+    // A v1 run's milestones are its session record's, so its writes move the totals too;
+    // a fan-out run's characters' writes move its fact's best level (`bestLevelOf`).
+    const lives = [join(dir, "session", "live.json"), ...fanoutCharacters(dir).map((c) => join(dir, SESSIONS_DIR, c, "live.json"))];
+    const sig = `d${RUN_TOTALS_DERIVATION}:${st.sig}${lives.map((p) => sigOf(p)).map((l) => (l !== null ? `|${l.sig}` : "")).join("")}`;
     if (this.deps.offsets.signature(runId, "totals") === sig) return false;
 
     let run = this.runs.get(runId);

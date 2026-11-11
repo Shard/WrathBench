@@ -120,6 +120,7 @@ import {
   createLeftReplay,
   createMapState,
   replayHrefFor,
+  runPageHref,
 } from "../lib/mapstate";
 import { createMapFit } from "@wrathbench/inspector/views/mapfit";
 import { bubbleLifeMs, bubblesAt, layoutStacks, stacksKey, type BubbleStack, type StackBox } from "@wrathbench/inspector/views/chatbubbles";
@@ -182,7 +183,7 @@ import {
 } from "@wrathbench/inspector/views/replay";
 import { positionsAt, runParam } from "../lib/replay";
 import { displayError, logError } from "../lib/errors";
-import { MEMBER_SLOTS, groupTrack, loadParty, memberClass, memberToken, partyHref, partyParam, type PartyView } from "../lib/party";
+import { MEMBER_SLOTS, fanoutTrack, groupTrack, loadParty, memberClass, memberToken, partyHref, partyParam, type PartyView } from "../lib/party";
 
 const POLL_MS = 5000;
 
@@ -331,6 +332,8 @@ export default function MapPage() {
   /** A party's tracks, in member order, and the party they are; undefined outside a party's replay. */
   const [group, setGroup] = createSignal<readonly TrackResponse[] | undefined>(undefined);
   const [party, setParty] = createSignal<PartyView | undefined>(undefined);
+  /** A fan-out run's replay (one agent, several characters): the run's id, once its characters' tracks are in. */
+  const [fanout, setFanout] = createSignal<string | undefined>(undefined);
   const [cursor, setCursor] = createSignal(0);
   const [playing, setPlaying] = createSignal(false);
   // Playback speed is a viewer preference, not replay state: it survives the
@@ -357,11 +360,18 @@ export default function MapPage() {
   /** What the transport steps over and the cursor is remembered under: the run's track, or the party's merged one. */
   const playTrack = createMemo<TrackResponse | undefined>(() => {
     const g = group();
+    const f = fanout();
+    // A fan-out run's transport is its characters' points on one clock, remembered under the run's own id.
+    if (g !== undefined && f !== undefined) return fanoutTrack(f, g);
     const id = partyId();
     return g === undefined || id === undefined ? single() : groupTrack(id, g);
   });
-  /** A party member's place in the party, by run id; undefined for any other run. */
-  const memberIndex = createMemo(() => new Map((party()?.members ?? []).map((m) => [m.runId, m.index])));
+  /** A party member's place in the party, or a fan-out character's in its run, by id; undefined for any other run. */
+  const memberIndex = createMemo(() =>
+    fanout() !== undefined
+      ? new Map((group() ?? []).map((t, i) => [t.runId, i]))
+      : new Map((party()?.members ?? []).map((m) => [m.runId, m.index])),
+  );
   /** A run's colour on the canvas: a party member's own, any other run's hue. */
   const colorOf = (id: string): string => {
     const i = memberIndex().get(id);
@@ -1766,6 +1776,7 @@ export default function MapPage() {
       setGroup: () => {
         setGroup(undefined);
         setParty(undefined);
+        setFanout(undefined);
       },
       setCursor,
       setPlaying,
@@ -1883,8 +1894,25 @@ export default function MapPage() {
     }
     void api
       .track(id)
-      .then((t) => {
+      .then(async (t) => {
         if (mine !== trackToken) return;
+        /*
+         * A fan-out run's own track has no points: each character's track is
+         * its own, under its session id, all of them on one clock as a
+         * party's members are. A character whose track fails is left out.
+         */
+        if (t.fanout !== undefined && t.fanout.length > 0) {
+          const got = await Promise.all(t.fanout.map((c) => api.track(c.id).catch(() => null)));
+          if (mine !== trackToken) return;
+          const tracks = got.filter((x): x is TrackResponse => x !== null);
+          if (tracks.length === 0) throw new Error(`no character of ${id} has a track`);
+          ingestTracks(store, tracks, (x) => x.runId);
+          for (const x of tracks) followTail(x.runId);
+          setFanout(id);
+          setGroup(tracks);
+          open(fanoutTrack(id, tracks));
+          return;
+        }
         // The run's closed windows, the only ones its replay will ask for.
         // A track from before the recorder lists none and plays coarse.
         ingestTracks(store, [t], (t) => t.runId);
@@ -2420,6 +2448,7 @@ export default function MapPage() {
           replayId={replayId()}
           track={playTrack()}
           party={party() === undefined ? undefined : { id: party()!.id, members: replayed().length }}
+          fanout={fanout() === undefined ? undefined : { id: fanout()!, characters: replayed().length }}
           replayError={replayError()}
           feedError={feed.error === undefined ? undefined : displayError(feed.error)}
           cursor={cursor()}
@@ -2462,6 +2491,25 @@ export default function MapPage() {
                     <h3>
                       <A href={partyHref(pv().id)} title={pv().id}>
                         party · {shortRunId(pv().id)}
+                      </A>
+                    </h3>
+                    <LiveList
+                      rows={feedList()}
+                      onPick={focusOn}
+                      member={(id) => memberIndex().get(id)}
+                      place={memberPlace}
+                      selectedId={p().runId}
+                    />
+                  </>
+                )}
+              </Show>
+              {/* A fan-out run's replay: its characters as the legend, the same way. */}
+              <Show when={fanout()}>
+                {(f) => (
+                  <>
+                    <h3>
+                      <A href={runPageHref(f())} title={f()}>
+                        {shortRunId(f())}
                       </A>
                     </h3>
                     <LiveList
@@ -2596,7 +2644,7 @@ export default function MapPage() {
                 )}
               </Show>
               <div class="side-controls">
-                <A class="btn" href={`/run/${encodeURIComponent(p().runId)}`}>
+                <A class="btn" href={runPageHref(p().runId)}>
                   open run →
                 </A>
                 {/* In a party's replay the run's own replay is the way to one member alone. */}

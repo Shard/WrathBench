@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { ARCHIVE_DIR } from "../../runner/viewer/archive-dir";
 import { isValidRunId } from "../../runner/viewer/runs";
 import { holdsOnlyLaunchFiles } from "../../runner/src/launch-files";
+import { fanoutCharacters, SESSIONS_DIR } from "../../runner/src/run-reader";
 
 export interface RunDirEntry {
   runId: string;
@@ -35,7 +36,8 @@ function signature(dir: string): string {
   // `run.sqlite-wal` beside the database: a 0.5 run's commits land there
   // and reach `run.sqlite` only at a checkpoint (runner/src/rundb.ts). A v1
   // run's session writer rewrites `live.json` on every tick it writes a row.
-  for (const name of ["trajectory.jsonl", "episodic.jsonl", "run.sqlite", "run.sqlite-wal", "meta.json", "session/live.json"]) {
+  // A fan-out run's characters' writers each rewrite their own `live.json`.
+  for (const name of ["trajectory.jsonl", "episodic.jsonl", "run.sqlite", "run.sqlite-wal", "meta.json", "session/live.json", ...fanoutCharacters(dir).map((c) => `${SESSIONS_DIR}/${c}/live.json`)]) {
     try {
       const st = statSync(join(dir, name));
       sig += `${name}:${st.size}:${st.mtimeMs}|`;
