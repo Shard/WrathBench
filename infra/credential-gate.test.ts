@@ -233,15 +233,19 @@ describe("a credential's budget holds new starts", () => {
     expect(at(92).holdOf("c", "freeplay")).toContain("freeplay usage threshold");
     expect(at(92).holdOf("c", "probing")).toBeUndefined();
     expect(at(100).holdOf("c", "probing")).toBe("credential c: a usage window is spent — held until it resets");
-    // No usage budget: only a spent window holds.
-    const none = parseCredentials({ c: claude("CLAUDE_CODE_OAUTH_TOKEN", { budget: undefined }) });
+    // No budget on a subscription is usage at 80/80.
+    const unset = parseCredentials({ c: claude("CLAUDE_CODE_OAUTH_TOKEN", { budget: undefined }) });
+    expect(credentialGate(unset, [reading("c", 85)], [], NOW).holdOf("c", "e90")).toContain("scored usage threshold");
+    expect(credentialGate(unset, [reading("c", 85)], [], NOW).holdOf("c", "freeplay")).toContain("freeplay usage threshold");
+    // Another kind of budget: only a spent window holds on usage.
+    const none = parseCredentials({ c: claude("CLAUDE_CODE_OAUTH_TOKEN", { budget: { kind: "runs", perDay: 9 } }) });
     expect(credentialGate(none, [reading("c", 99)], [], NOW).holdOf("c", "e90")).toBeUndefined();
     expect(credentialGate(none, [reading("c", 100)], [], NOW).holdOf("c", "e90")).toContain("spent");
     // A reading past its reset holds nothing.
     expect(credentialGate(creds, [reading("c", 100, -1)], [], NOW).holdOf("c", "e90")).toBeUndefined();
   });
 
-  test("runs per day count today's fresh launches; spend per day the provider's charge since 00:00 UTC", () => {
+  test("runs per day count today's launches, resumes' segments included; spend per day the provider's charge since 00:00 UTC", () => {
     const creds = parseCredentials({
       r: { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 3, budget: { kind: "runs", perDay: 2 }, billing: "free", enabled: true },
       s: { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 3, budget: { kind: "spend", usdPerDay: 1 }, billing: "paid", enabled: true },
@@ -259,10 +263,17 @@ describe("a credential's budget holds new starts", () => {
     expect(credentialGate(creds, [], [...runs, fact({ runId: "d", credential: "r", startedAt: NOW - 60_000 })], NOW).holdOf("r", "e90")).toBe(
       "credential r: its runs for the day are used — held until 00:00 UTC",
     );
-    // A resume is no new run: a runs budget that is used never holds one.
-    const used = credentialGate(creds, [], [...runs, fact({ runId: "d", credential: "r", startedAt: NOW - 60_000 })], NOW);
-    expect(used.holdOf("r", "freeplay", null, { resume: true })).toBeUndefined();
-    expect(resumeHoldOf(fact({ credential: "r", episode: "freeplay" }), { credentials: creds }, used)).toBeUndefined();
+    // Each segment a resume starts is a run (operator, 2026-11-11): b started
+    // yesterday, and its resume today is today's second run on r.
+    const resumed = [runs[0]!, { ...runs[1]!, resumesByDay: { [yesterday]: 3, [today]: 1 } }, runs[2]!];
+    const used = credentialGate(creds, [], resumed, NOW);
+    expect(used.runsToday("r")).toBe(2);
+    expect(used.holdOf("r", "freeplay")).toBe("credential r: its runs for the day are used — held until 00:00 UTC");
+    expect(resumeHoldOf(fact({ credential: "r", episode: "freeplay" }), { credentials: creds }, used)).toBe(
+      "credential r: its runs for the day are used — held until 00:00 UTC",
+    );
+    // Yesterday's segments count nothing today.
+    expect(credentialGate(creds, [], [runs[0]!, { ...runs[1]!, resumesByDay: { [yesterday]: 3 } }], NOW).holdOf("r", "freeplay")).toBeUndefined();
     expect(g.spendToday("s")).toBeCloseTo(0.6);
     expect(g.holdOf("s", "e90")).toBeUndefined();
     const spent = credentialGate(creds, [], [...runs, fact({ runId: "e", credential: "s", spendByDay: { [today]: 0.5 } })], NOW);
@@ -445,7 +456,8 @@ describe("--status", () => {
 describe("the seeded example", () => {
   test("infra/fleet.example.json parses and schedules nothing: every credential it carries is disabled", () => {
     const doc = JSON.parse(readFileSync(resolve(import.meta.dir, "fleet.example.json"), "utf8")) as unknown;
-    const cfg = parseFleet(doc, { env: {} });
+    const cfg = parseFleet(doc, { env: { WRATHBENCH_POOL_SIZE: "2" } });
+    expect(cfg.accounts.pool).toEqual(["POOL01", "POOL02"]);
     expect(cfg.credentials.length).toBeGreaterThan(0);
     expect(cfg.credentials.every((c) => !c.enabled)).toBe(true);
     const plan = planTick(cfg, statesOf(cfg), () => undefined, STAMP);

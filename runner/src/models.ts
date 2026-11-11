@@ -620,6 +620,12 @@ export interface RunFact {
    * provider reports no charge.
    */
   spendByDay?: Record<string, number>;
+  /**
+   * The segments `run.ts --resume` started, per UTC day of their `resume`
+   * record: with a start on that day, what a `runs` budget counts. Absent on a
+   * fact built by hand.
+   */
+  resumesByDay?: Record<string, number>;
 }
 
 // ----------------------------------------------------------------- outputs
@@ -851,6 +857,18 @@ export interface RecordTally {
    * credential's `spend` budget sums. Empty when no response carried one.
    */
   spendByDay: Record<string, number>;
+  /**
+   * `resume` records per UTC day, when the scanner folds the pause streak
+   * (the only time it reads them): each is a segment a resume started. Empty
+   * otherwise.
+   */
+  resumesByDay: Record<string, number>;
+}
+
+/** The per-day sums a scanner keeps beside its counts: spend and resumes. */
+interface DayTally {
+  spend: Record<string, number>;
+  resumes: Record<string, number>;
 }
 
 /**
@@ -905,7 +923,7 @@ export class RecordCountScanner {
   private readonly needles: Buffer[];
   private readonly counts: Map<string, number>;
   private readonly streak: StreakFold = { closed: 0, turn: false, pause: false };
-  private readonly spend: Record<string, number> = {};
+  private readonly days: DayTally = { spend: {}, resumes: {} };
   /** Bytes folded as complete lines; where the next scan resumes. */
   private consumed = 0;
   /** Bytes after the last newline: a record still being written, never counted. */
@@ -964,16 +982,21 @@ export class RecordCountScanner {
   }
 
   /** One line into a set of counts and a streak: the scanner's own, or a copy of them. */
-  private apply(line: Buffer, counts: Map<string, number>, streak: StreakFold, spend: Record<string, number> = this.spend): void {
-    this.applyRecord(this.recordOf(line), counts, streak, spend);
+  private apply(line: Buffer, counts: Map<string, number>, streak: StreakFold, days: DayTally = this.days): void {
+    this.applyRecord(this.recordOf(line), counts, streak, days);
   }
 
-  private applyRecord(rec: WatchedRecord | null, counts: Map<string, number>, streak: StreakFold, spend: Record<string, number> = this.spend): void {
+  private applyRecord(rec: WatchedRecord | null, counts: Map<string, number>, streak: StreakFold, days: DayTally = this.days): void {
     if (rec === null) return;
     // Billed usage, a CLI's compaction call included: whatever the provider charged.
     if (rec.t === MODEL_RESPONSE_RECORD && counts.has(MODEL_RESPONSE_RECORD) && typeof rec.cost === "number" && Number.isFinite(rec.cost) && rec.cost > 0 && typeof rec.ts === "number") {
       const day = utcDay(rec.ts);
-      spend[day] = (spend[day] ?? 0) + rec.cost;
+      days.spend[day] = (days.spend[day] ?? 0) + rec.cost;
+    }
+    // A segment a resume started: a `runs` budget counts it as a launch.
+    if (rec.t === RESUME_RECORD && typeof rec.ts === "number" && Number.isFinite(rec.ts)) {
+      const day = utcDay(rec.ts);
+      days.resumes[day] = (days.resumes[day] ?? 0) + 1;
     }
     // A CLI's own summarisation call (pi's compaction, a `response` of kind
     // `compaction`) is billed usage, not a reply of the model's: it neither
@@ -1117,14 +1140,19 @@ export class RecordCountScanner {
     const tally = this.scan();
     if (tally === null || this.pending.length === 0) return tally;
     const streak = { ...this.streak };
-    const spend = { ...tally.spendByDay };
-    this.apply(this.pending, tally.counts, streak, spend);
-    return { counts: tally.counts, pauseStreak: this.pauseStreak ? streakOf(streak) : null, spendByDay: spend };
+    const days: DayTally = { spend: { ...tally.spendByDay }, resumes: { ...tally.resumesByDay } };
+    this.apply(this.pending, tally.counts, streak, days);
+    return { counts: tally.counts, pauseStreak: this.pauseStreak ? streakOf(streak) : null, spendByDay: days.spend, resumesByDay: days.resumes };
   }
 
   /** A copy: the caller must never hold a reference to resumable state. */
   private snapshot(): RecordTally {
-    return { counts: new Map(this.counts), pauseStreak: this.pauseStreak ? streakOf(this.streak) : null, spendByDay: { ...this.spend } };
+    return {
+      counts: new Map(this.counts),
+      pauseStreak: this.pauseStreak ? streakOf(this.streak) : null,
+      spendByDay: { ...this.days.spend },
+      resumesByDay: { ...this.days.resumes },
+    };
   }
 }
 
@@ -1315,6 +1343,7 @@ export function readRunFact(
       : tallyRecordsCached(opts.counts, jsonl, kinds, { pauseStreak: true });
   fact.modelResponses = tally?.counts.get(MODEL_RESPONSE_RECORD) ?? null;
   fact.spendByDay = tally?.spendByDay ?? {};
+  fact.resumesByDay = tally?.resumesByDay ?? {};
   let pauseReason: string | null = null;
 
   // The run row and the best level, wherever the run keeps them (`run-reader.ts`).

@@ -178,10 +178,13 @@ const pct = z.number().gt(0).lte(100);
  *   start or resume at or over `freeplayMaxPct`, and a live one pauses at its
  *   next turn boundary. Both default 80; 100 turns that one off. A window at
  *   100% holds every launch, probes included, until it resets, whatever the
- *   two say.
+ *   two say. A credential billing a plan with usage windows (a subscription,
+ *   OpenCode Go's paid side) whose row names no budget gets this one at its
+ *   defaults.
  * - `spend` — the provider's own reported charge on this credential's runs
  *   since 00:00 UTC, in dollars.
- * - `runs` — fresh launches on this credential since 00:00 UTC.
+ * - `runs` — launches on this credential since 00:00 UTC, each segment a
+ *   resume starts included.
  */
 export const budgetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("usage"), scoredMaxPct: pct.optional(), freeplayMaxPct: pct.optional() }).strict(),
@@ -280,9 +283,15 @@ export function parseCredentials(raw: unknown): Credential[] {
         `credentials/${id}: ${r.secretEnv} is already credentials/${same.id}'s${p.bill === "metered" ? ` (${r.billing})` : ""} — one credential per secret; raise its slots instead`,
       );
     }
+    // A credential that bills a plan with usage windows (a subscription, OpenCode
+    // Go's paid side) gets the usage budget at its defaults when the row names
+    // none (operator, 2026-11-11); `usage` at 100/100 or another kind is the
+    // way out of it. Go's free side bills no plan, so it gets none.
     const budget: Budget | null =
       r.budget === undefined
-        ? null
+        ? p.budgets.includes("usage") && (p.bill === "subscription" || r.billing === "paid")
+          ? { kind: "usage", scoredMaxPct: DEFAULT_USAGE_MAX_PCT, freeplayMaxPct: DEFAULT_USAGE_MAX_PCT }
+          : null
         : r.budget.kind === "usage"
           ? { kind: "usage", scoredMaxPct: r.budget.scoredMaxPct ?? DEFAULT_USAGE_MAX_PCT, freeplayMaxPct: r.budget.freeplayMaxPct ?? DEFAULT_USAGE_MAX_PCT }
           : r.budget;
