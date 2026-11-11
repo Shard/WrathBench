@@ -45,7 +45,7 @@ import {
   type Tier,
 } from "../runner/src/models";
 import { isScoredEpisode } from "../runner/src/episodes";
-import { credentialCandidates, isCredentialId, parseCredentials, type Credential } from "../runner/src/credentials";
+import { credentialCandidates, isCredentialId, parseCredentials, type Credential } from "../runner/src/credential-slots";
 import { isPoolAccountName, POOL_SIZE_ENV, poolAccountNames, poolSizeOf } from "../runner/src/account-pool";
 import type { PlacedCredential } from "./run-fleet-credentials";
 import { harnessVersion } from "../runner/src/version";
@@ -336,7 +336,7 @@ export interface FleetConfig {
   preflight: FleetPreflight;
   accounts: FleetAccounts;
   /**
-   * The provider credentials runs take a slot on (`runner/src/credentials.ts`),
+   * The provider credentials runs take a slot on (`runner/src/credential-slots.ts`),
    * in preference order. Empty when the store has none.
    */
   credentials: Credential[];

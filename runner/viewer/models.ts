@@ -56,7 +56,7 @@ import { isEpisodeId } from "../src/episodes";
 import { parseCampaignBlocks, type Campaign, type CampaignRefusal, type PublishedCampaign } from "../src/campaigns";
 import { rosterEntryRefusal } from "../src/roster-refusal";
 import { poolSizeOf } from "../src/account-pool";
-import { parseCredentials, type Credential } from "../src/credentials";
+import { parseCredentials, type Credential } from "../src/credential-slots";
 import { harnessVersion } from "../src/version";
 import type { EpisodeIdView, HarnessView, ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse } from "./api-types";
 import { redactSecrets } from "./tail";
@@ -151,7 +151,7 @@ export interface RosterRead {
   /** The file's `policy` block over the defaults (`parsePolicyBlock`), keyed on this checkout's series. */
   policy: SchedulingPolicy;
   /**
-   * The provider credentials runs take slots on (`runner/src/credentials.ts`),
+   * The provider credentials runs take slots on (`runner/src/credential-slots.ts`),
    * in preference order; empty when the store names none, or names them
    * unreadably (the supervisor's to refuse).
    */

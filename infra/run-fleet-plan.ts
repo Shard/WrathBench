@@ -47,7 +47,7 @@ import { driverEntry, isProbeOnlyDriver } from "../runner/src/drivers";
 import { isScoredEpisode } from "../runner/src/episodes";
 import { classifyLapse, OFFLINE_PAUSE, PARTY_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
 import { driverOfEntry, placeRef, SlotBook, type CredentialGate, type PlacedCredential } from "./run-fleet-credentials";
-import type { Credential } from "../runner/src/credentials";
+import type { Credential } from "../runner/src/credential-slots";
 import {
   byNewestStart,
   entryOwnsRun,

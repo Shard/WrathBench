@@ -6,7 +6,7 @@
  * `billingOf` in `model-cost.ts` answers **"which side of a metered key may
  * carry this model?"** — a `claude-code` job bills a flat subscription, so it
  * spends none of the metered budget and lands on `free` there, which is what a
- * metered credential's `billing` is matched against (runner/src/credentials.ts).
+ * metered credential's `billing` is matched against (runner/src/credential-slots.ts).
  * This one answers
  * **"did we pay for this run?"** — a subscription is money, so `claude-code` is
  * `paid` here. Sharing the two would silently re-scope which credential carries a run, so they

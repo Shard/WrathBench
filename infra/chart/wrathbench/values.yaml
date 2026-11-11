@@ -94,7 +94,7 @@ envSecretName: wrathbench-env
 # note in templates/_helpers.tpl: the pods carry only the keys they use.
 #
 # Which of these a credential may name as its `secretEnv`, and the hosts each
-# may be sent to, is code: the provider tables in runner/src/credentials.ts and
+# may be sent to, is code: the provider tables in runner/src/credential-slots.ts and
 # runner/src/providers.ts. A new provider is a row there and a line here.
 modelKeys:
   - CLAUDE_CODE_OAUTH_TOKEN

@@ -66,7 +66,7 @@ import { campaignWork, type Campaign, type ProbeIdentity, type ProbeRun } from "
 import { badEvidenceReason, neverStale, OFFLINE_PAUSE, PARTY_PAUSE, SUBSCRIPTION_PAUSE, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
 import { parseSubscriptionUsage, type SubscriptionUsage } from "./subscription-usage";
 import { billingOf, type Billing } from "./model-cost";
-import { credentialCarries, providerById, providerOfModel, type Credential } from "./credentials";
+import { credentialCarries, providerById, providerOfModel, type Credential } from "./credential-slots";
 import { hostOfBase, isOpenCodeGoBase, platformOfBase } from "./platform";
 import { parseRouting, type RoutingSpec } from "./routing";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
@@ -111,7 +111,7 @@ export interface StartingCharacter {
  * model's entry at 03:00.
  *
  * Money is deliberately not modelled. A tier is denominated in runs; a spend
- * cap is a credential's `spend` budget (`runner/src/credentials.ts`), its own
+ * cap is a credential's `spend` budget (`runner/src/credential-slots.ts`), its own
  * thing beside the tier. Minting `t0a`/`t0b` to approximate dollars is the accretion this
  * table exists to stop.
  */
@@ -182,7 +182,7 @@ export interface SchedulingPolicy {
    * CLI session is a process with its own memory and sandbox, and a host
    * carries only so many whichever credential pays. Absent: no cap beyond
    * the credentials' slots. Credentials are the config's own block
-   * (`runner/src/credentials.ts`), never this one.
+   * (`runner/src/credential-slots.ts`), never this one.
    */
   maxSessions: Record<string, number>;
   /**
@@ -235,7 +235,7 @@ export const DEFAULT_POLICY: SchedulingPolicy = {
  * What is left here is only ever about **where a run may physically execute**:
  * the per-driver session cap, the routing default and run pods. Which provider
  * credential a run takes, and how many runs one carries, is the `credentials`
- * block's (`runner/src/credentials.ts`); how much evidence a model gets is its
+ * block's (`runner/src/credential-slots.ts`); how much evidence a model gets is its
  * tier and is not expressible here at all.
  *
  * The removed keys are refused BY NAME rather than ignored: a file still
@@ -684,7 +684,7 @@ export interface ModelState {
   platform: string | null;
   /**
    * The credential provider its runs are served through (`providerOfModel`,
-   * credentials.ts), or null for one that needs none. Optional so a state
+   * credential-slots.ts), or null for one that needs none. Optional so a state
    * built by hand need not spell it.
    */
   provider?: string | null;

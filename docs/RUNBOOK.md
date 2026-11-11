@@ -297,7 +297,7 @@ accounts    { pool?: [...], max? }, or absent — the one account pool: every ac
             listed or pinned: those are refused by name. `pinned` is derived from the jobs and
             refused if authored.
 credentials id -> { provider, secretEnv, slots, budget?, billing, enabled }, in preference order
-            ("Credentials"; `runner/src/credentials.ts`). The NAME of the env var holding each
+            ("Credentials"; `runner/src/credential-slots.ts`). The NAME of the env var holding each
             secret, never the secret. A seeded store's examples are all disabled.
 roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
             (runner/src/roster-refusal.ts) and nothing else; anything else REFUSES the entry by
@@ -377,7 +377,7 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               since its scored runs all stay on `auto`. Pages show a run's window after the effort
               (`max · 100k`). Mechanics: runner/README.md, "The compaction window".
             `apiBase` — openai and pi entries: the endpoint (absent: OpenRouter). Its host is the
-              entry's credential provider (`providerOfModel`, runner/src/credentials.ts): a host the
+              entry's credential provider (`providerOfModel`, runner/src/credential-slots.ts): a host the
               provider table owns, over https, or a self-hosted host the deployment lists in
               `WRATHBENCH_LOCAL_MODEL_HOSTS` (chart: `localModelHosts`). Any other base REFUSES the
               entry by name, and run.ts refuses to start one. An entry never names a key: the key is
@@ -1788,7 +1788,7 @@ The scarce things a run spends are a provider credential and a game account,
 so the fleet models those and nothing else. A **credential** is one provider
 secret — an OpenRouter key, a Claude subscription token, a Codex home, an
 OpenCode key — kept as a `credentials/<id>` row in the config store, in
-preference order (`runner/src/credentials.ts`):
+preference order (`runner/src/credential-slots.ts`):
 
 ```
 "credentials": {
@@ -1805,7 +1805,7 @@ preference order (`runner/src/credentials.ts`):
   `chatgpt` (a Codex home, the codex driver), `openrouter`, `opencode` (Zen),
   `opencode-go`, `cerebras`, `deepseek`, `local` (the self-hosted server). A
   model's provider is its CLI driver's, or its `apiBase`'s host. A new one is
-  a row in `runner/src/credentials.ts` and `runner/src/providers.ts`.
+  a row in `runner/src/credential-slots.ts` and `runner/src/providers.ts`.
 - **secretEnv** — the NAME of the env var holding the secret (for `chatgpt`,
   the var naming the logged-in Codex home), never the secret: the provider's
   own name or that with a numbered suffix (`CLAUDE_CODE_OAUTH_TOKEN_2`,

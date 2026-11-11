@@ -217,7 +217,7 @@ import {
   writeCredentialUsageSidecar,
   type CredentialGate,
 } from "./run-fleet-credentials";
-import type { Credential } from "../runner/src/credentials";
+import type { Credential } from "../runner/src/credential-slots";
 import { configDbPath, EMPTY_STORE_HINT, readFleetConfig } from "../runner/src/config-store";
 import {
   liveCredentials,

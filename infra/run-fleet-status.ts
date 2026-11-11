@@ -111,7 +111,7 @@ import {
   type CredentialGate,
   type CredentialStatus,
 } from "./run-fleet-credentials";
-import { providerById } from "../runner/src/credentials";
+import { providerById } from "../runner/src/credential-slots";
 import { credentialIdsOf } from "./run-fleet-state";
 import { rosterPriceGap } from "../runner/viewer/pricing";
 import { catalogueKeyOf } from "./model-catalogue";

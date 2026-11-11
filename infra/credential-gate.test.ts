@@ -11,7 +11,7 @@ import { join, resolve } from "node:path";
 import { isStaleRun, liveCredentials, modelStates, readRunFact, utcDay, type ModelState, type RunFact } from "../runner/src/models";
 import { loadRunConfig } from "../runner/src/config";
 import { Trajectory, type RunMeta } from "../runner/src/trajectory";
-import { parseCredentials } from "../runner/src/credentials";
+import { parseCredentials } from "../runner/src/credential-slots";
 import type { SubscriptionUsage } from "../runner/src/subscription-usage";
 import { projectEntry, projectFleet, SUBSCRIPTION_WAIT_WHY } from "../runner/viewer/public-projection";
 import type { EntrySummary, FleetResponse } from "../runner/viewer/api-types";

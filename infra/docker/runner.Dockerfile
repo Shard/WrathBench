@@ -128,11 +128,14 @@ WORKDIR /wrathbench
 # Dependencies first, so a source edit does not re-resolve the workspace.
 # `node_modules/` at the repo root is not an optional nicety: confine.ts's
 # Landlock allowlist names it, so a snippet child fails closed without it.
-# The stack's two workspaces live in the wrath-mcp submodule; build-images.sh
-# exports it into the context at the commit this one pins.
+# The stack's three workspaces live in the wrath-mcp submodule; build-images.sh
+# exports it into the context at the commit this one pins. Every workspace the
+# root package.json lists needs its manifest here, or the frozen install fails
+# (infra/image-context.test.ts).
 COPY --chown=1000:1000 package.json bun.lock bunfig.toml tsconfig.base.json ./
 COPY --chown=1000:1000 wrath-mcp/sdk/package.json wrath-mcp/sdk/package.json
 COPY --chown=1000:1000 wrath-mcp/mcp/package.json wrath-mcp/mcp/package.json
+COPY --chown=1000:1000 wrath-mcp/inspector/package.json wrath-mcp/inspector/package.json
 COPY --chown=1000:1000 runner/package.json    runner/package.json
 COPY --chown=1000:1000 wiki/package.json      wiki/package.json
 COPY --chown=1000:1000 minimap/package.json   minimap/package.json

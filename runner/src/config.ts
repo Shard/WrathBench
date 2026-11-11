@@ -478,7 +478,7 @@ export const runConfigSchema = z.object({
   /** Name of the env var holding the API key. The key itself is never stored. */
   apiKeyEnv: z.string().default("OPENROUTER_KEY"),
   /**
-   * The credential this run took a slot on (`runner/src/credentials.ts`), by
+   * The credential this run took a slot on (`runner/src/credential-slots.ts`), by
    * id. Recorded because the fleet counts live runs per credential and that
    * count has to survive a supervisor restart, so it is read back off the run;
    * and a resume goes back to the credential it started on. Like the account

@@ -11,6 +11,7 @@ deps/azerothcore/build*
 runner
 wrath-mcp/sdk
 wrath-mcp/mcp
+wrath-mcp/inspector
 wrath-mcp/.git
 wrath-mcp/node_modules
 wiki
