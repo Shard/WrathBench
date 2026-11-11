@@ -1,5 +1,5 @@
 /**
- * The nearby codec (`viewer/nearby.ts`), the ring's reads (`viewer/nearby-ring.ts`)
+ * The nearby codec (`@wrathbench/inspector/codec/nearby`), the ring's reads (the inspector's readout)
  * over both homes a ring has had, the route, and the public boundary
  * (`projectNearby`).
  *
@@ -9,7 +9,7 @@
  * here by the stack's `SessionWriter`; a 0.5 run's is one-minute files in
  * `<run>/nearby/`, written here as 0.5 left them (`fixtures/legacy05-writer.ts`).
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import { appendFileSync, mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -39,10 +39,11 @@ import {
   type NearbyRingUnit,
   type NearbyUnitTypeName,
   type NearbyWindow,
-} from "../viewer/nearby";
-import { nearbyFresh, readNearbyWindow } from "../viewer/nearby-ring";
+} from "@wrathbench/inspector/codec/nearby";
+import { nearbyFresh, readNearbyWindow } from "./fixtures/run-readout";
 import { LEGACY_RING_DIR, LEGACY_RING_FILE_MS, LEGACY_RING_REACH_MS } from "../viewer/legacy05-source";
-import { SESSION_DIR as VIEWER_SESSION_DIR, sessionSource } from "../viewer/session-source";
+import { sessionKind } from "./fixtures/run-readout";
+import { SESSION_DIR as VIEWER_SESSION_DIR } from "../viewer/runs-source";
 import { projectNearby } from "../viewer/public-projection";
 import { LEGACY05_RING, writeLegacy05Ring } from "./fixtures/legacy05-writer";
 import { openTestSession, recordDrain, touchNewestSegment } from "./fixtures/v1-session";
@@ -246,6 +247,9 @@ describe("the window round-trips", () => {
 });
 
 describe("the ring's reads, a 0.5 run (one-minute files)", () => {
+  // The 0.5 adapter ignores files past the ring's reach by the wall clock,
+  // as the writer pruned them, so each test sets the clock it reads at.
+  afterEach(() => setSystemTime());
   function ringWith(files: Record<number, string>, opts: { mtime?: number } = {}) {
     const runs = tempDir("nearby-ring-");
     const dir = join(runs, "run-a", LEGACY05_RING.dir);
@@ -259,8 +263,9 @@ describe("the ring's reads, a 0.5 run (one-minute files)", () => {
   }
   const line = (r: unknown): string => `${JSON.stringify(r)}\n`;
 
-  test("a half-written last line and a foreign one are left out; a file past the reach is ignored", () => {
+  test("a half-written last line and a foreign one are left out; a file past the reach is ignored", async () => {
     const now = T0 + 30_000;
+    setSystemTime(now);
     const runs = ringWith({
       [T0 - 20 * 60_000]: line(key(T0 - 20 * 60_000, [unit(PLAYER, "player", { name: "Stale" }, 0)])),
       [T0]:
@@ -270,8 +275,8 @@ describe("the ring's reads, a 0.5 run (one-minute files)", () => {
         line({ ts: T0 + 2000, kind: "st", id: WOLF, s: { hp: 10 } }) +
         `{"ts":${T0 + 3000},"kind":"st","id":"${WOLF}","s":{"hp":`,
     });
-    expect(sessionSource(runs, "run-a").kind).toBe("legacy-0.5");
-    const w = readNearbyWindow(runs, "run-a", 60_000, now);
+    expect(sessionKind(runs, "run-a")).toBe("legacy-0.5");
+    const w = await readNearbyWindow(runs, "run-a", 60_000, now);
     expect(w.t0).toBe(T0);
     expect(w.ids).toEqual([WOLF]);
     expect(w.ev).toEqual([[2000, 0, "st", { hp: 10 }]]);
@@ -279,8 +284,9 @@ describe("the ring's reads, a 0.5 run (one-minute files)", () => {
     expect(JSON.stringify(w)).not.toContain("Stale");
   });
 
-  test("a window reaches back across the minute files it spans, and a 0.5 ring's players still decode", () => {
+  test("a window reaches back across the minute files it spans, and a 0.5 ring's players still decode", async () => {
     const now = T0 + 2 * 60_000 + 30_000;
+    setSystemTime(now);
     const runs = tempDir("nearby-ring-files-");
     writeLegacy05Ring(join(runs, "run-a"), [
       key(T0, [unit(WOLF, "creature", { entry: 299 }, 0), unit(PLAYER, "player", { name: "Wanderer" }, 3)]),
@@ -288,25 +294,26 @@ describe("the ring's reads, a 0.5 run (one-minute files)", () => {
       { ts: T0 + 130_000, kind: "out", id: PLAYER },
       { ts: T0 + 140_000, kind: "tick" },
     ]);
-    const d = decodeNearby(readNearbyWindow(runs, "run-a", 5 * 60_000, now));
+    const d = decodeNearby(await readNearbyWindow(runs, "run-a", 5 * 60_000, now));
     expect(nearbyAt(d, T0 + 60_000).map((u) => u.s.name ?? u.id).sort()).toEqual([WOLF, "Wanderer"].sort());
     expect(nearbyAt(d, T0 + 80_000).find((u) => u.id === WOLF)!.s.hp).toBe(50);
     expect(nearbyAt(d, T0 + 135_000).map((u) => u.id)).toEqual([WOLF]);
   });
 
-  test("the span is clamped to the reach; a run with no ring answers an empty window", () => {
+  test("the span is clamped to the reach; a run with no ring answers an empty window", async () => {
     const now = T0 + 30_000;
+    setSystemTime(now);
     const runs = ringWith({ [T0]: line(key(T0, [])) });
-    expect(readNearbyWindow(runs, "run-a", 99 * 60 * 60_000, now).t0).toBe(T0);
-    expect(readNearbyWindow(runs, "no-such-run", 60_000, now)).toMatchObject({ t0: now - 60_000, ids: [], ev: [] });
+    expect((await readNearbyWindow(runs, "run-a", 99 * 60 * 60_000, now)).t0).toBe(T0);
+    expect(await readNearbyWindow(runs, "no-such-run", 60_000, now)).toMatchObject({ t0: now - 60_000, ids: [], ev: [] });
   });
 
-  test("fresh means the newest file was written within the last half minute", () => {
+  test("fresh means the newest file was written within the last half minute", async () => {
     const now = Date.now();
     const t0 = Math.floor(now / 60_000) * 60_000;
-    expect(nearbyFresh(ringWith({ [t0]: line(key(t0, [])) }), "run-a", now)).toBe(true);
-    expect(nearbyFresh(ringWith({ [t0]: line(key(t0, [])) }, { mtime: now - 60_000 }), "run-a", now)).toBe(false);
-    expect(nearbyFresh(tempDir("nearby-none-"), "run-a", now)).toBe(false);
+    expect(await nearbyFresh(ringWith({ [t0]: line(key(t0, [])) }), "run-a", now)).toBe(true);
+    expect(await nearbyFresh(ringWith({ [t0]: line(key(t0, [])) }, { mtime: now - 60_000 }), "run-a", now)).toBe(false);
+    expect(await nearbyFresh(tempDir("nearby-none-"), "run-a", now)).toBe(false);
   });
 });
 
@@ -324,7 +331,7 @@ describe("the ring's reads, a v1 run (session/nearby)", () => {
     return { runs, session };
   }
 
-  test("a window reads off the session's segments; a player in view is not in the ring, a creature is", () => {
+  test("a window reads off the session's segments; a player in view is not in the ring, a creature is", async () => {
     const now = T0 + 30_000;
     const { runs } = ringOf(
       [
@@ -336,8 +343,8 @@ describe("the ring's reads, a v1 run (session/nearby)", () => {
       now,
       T0 + 3000,
     );
-    expect(sessionSource(runs, "run-a").kind).toBe("v1");
-    const w = readNearbyWindow(runs, "run-a", 60_000, now);
+    expect(sessionKind(runs, "run-a")).toBe("v1");
+    const w = await readNearbyWindow(runs, "run-a", 60_000, now);
     expect(w.ids).toEqual([WOLF]);
     const d = decodeNearby(w);
     expect(nearbyAt(d, T0 + 2500).map((u) => u.id)).toEqual([WOLF]);
@@ -350,7 +357,7 @@ describe("the ring's reads, a v1 run (session/nearby)", () => {
     expect(text).not.toContain('"89"');
   });
 
-  test("each five-minute segment opens with a key restating the scene, so a window late in one needs nothing before it", () => {
+  test("each five-minute segment opens with a key restating the scene, so a window late in one needs nothing before it", async () => {
     const now = T0 + SEGMENT_MS + 50_000;
     const { runs, session } = ringOf(
       [
@@ -368,42 +375,42 @@ describe("the ring's reads, a v1 run (session/nearby)", () => {
     const second = session.reader.segment("nearby", segs[1]!);
     expect(second[0]).toMatchObject({ kind: "key", units: [{ id: WOLF, s: { entry: 299, hp: 40 } }] });
     // Asked from inside the second segment: the wolf's state comes from its key.
-    const w = readNearbyWindow(runs, "run-a", 20_000, now);
+    const w = await readNearbyWindow(runs, "run-a", 20_000, now);
     const d = decodeNearby(w);
     expect(nearbyAt(d, T0 + SEGMENT_MS + 35_000).map((u) => u.id).sort()).toEqual([WOLF, VENDOR].sort());
     expect(nearbyAt(d, T0 + SEGMENT_MS + 35_000).find((u) => u.id === WOLF)!.s.hp).toBe(40);
   });
 
-  test("a torn last line and a foreign one are left out", () => {
+  test("a torn last line and a foreign one are left out", async () => {
     const now = T0 + 30_000;
     const { runs, session } = ringOf([{ ts: T0, kind: "key", self, units: [creature(WOLF, { entry: 299 }, 0)] }, { ts: T0 + 2000, kind: "st", id: WOLF, s: { hp: 10 } }], now);
     const live = session.reader.segments("nearby").at(-1)!.path;
     appendFileSync(live, `not json\n${JSON.stringify({ ts: T0 + 2500, kind: "weird" })}\n{"ts":${T0 + 3000},"kind":"st","id":"${WOLF}","s":{"hp":`);
-    const w = readNearbyWindow(runs, "run-a", 60_000, now);
+    const w = await readNearbyWindow(runs, "run-a", 60_000, now);
     expect(w.ids).toEqual([WOLF]);
     expect(w.ev).toEqual([[2000, 0, "st", { hp: 10 }]]);
   });
 
-  test("the span is clamped to the reach; a session with no ring answers an empty window", () => {
+  test("the span is clamped to the reach; a session with no ring answers an empty window", async () => {
     const now = T0 + 30_000;
     const { runs } = ringOf([{ ts: T0, kind: "key", self, units: [] }], now);
-    expect(readNearbyWindow(runs, "run-a", 99 * 60 * 60_000, now).t0).toBe(T0);
+    expect((await readNearbyWindow(runs, "run-a", 99 * 60 * 60_000, now)).t0).toBe(T0);
     const bare = tempDir("nearby-v1-bare-");
     openTestSession(join(bare, "run-b"), now);
-    expect(sessionSource(bare, "run-b").kind).toBe("v1");
-    expect(readNearbyWindow(bare, "run-b", 60_000, now)).toMatchObject({ t0: now - 60_000, ids: [], ev: [] });
+    expect(sessionKind(bare, "run-b")).toBe("v1");
+    expect(await readNearbyWindow(bare, "run-b", 60_000, now)).toMatchObject({ t0: now - 60_000, ids: [], ev: [] });
   });
 
   test("fresh means the newest segment was written within the last half minute; a closed session has no ring", async () => {
     const now = Date.now();
     const a = ringOf([{ ts: now - 2_000, kind: "key", self, units: [] }], now);
-    expect(nearbyFresh(a.runs, "run-a", now)).toBe(true);
+    expect(await nearbyFresh(a.runs, "run-a", now)).toBe(true);
     touchNewestSegment(a.session.reader, "nearby", now - 60_000);
-    expect(nearbyFresh(a.runs, "run-a", now)).toBe(false);
+    expect(await nearbyFresh(a.runs, "run-a", now)).toBe(false);
     const b = ringOf([{ ts: now - 2_000, kind: "key", self, units: [] }], now);
     await b.session.writer.close();
-    expect(nearbyFresh(b.runs, "run-a", now)).toBe(false);
-    expect(readNearbyWindow(b.runs, "run-a", 60_000, now).ids).toEqual([]);
+    expect(await nearbyFresh(b.runs, "run-a", now)).toBe(false);
+    expect((await readNearbyWindow(b.runs, "run-a", 60_000, now)).ids).toEqual([]);
   });
 });
 
@@ -539,7 +546,7 @@ describe("the route", () => {
       expect(nearbyAt(decodeNearby(w), w.t1).map((u) => u.s.name)).toEqual(["Invented Wolf"]);
       expect(JSON.stringify(w)).not.toContain(`"${PLAYER}"`);
     }
-    expect(nearbyFresh(runs, "live-v1", Date.now())).toBe(true);
+    expect(await nearbyFresh(runs, "live-v1", Date.now())).toBe(true);
   });
 
   test("a run with no ring is an empty window, a run that does not exist a 404, a junk span the default", async () => {
@@ -556,7 +563,7 @@ describe("the route", () => {
     const runs = runsWithRing();
     // The flag rides a live position, which needs a state row; that is the
     // position suite's business, so the flag's own reader is asked here.
-    expect(nearbyFresh(runs, "live-run", Date.now())).toBe(true);
-    expect(nearbyFresh(runs, "quiet-run", Date.now())).toBe(false);
+    expect(await nearbyFresh(runs, "live-run", Date.now())).toBe(true);
+    expect(await nearbyFresh(runs, "quiet-run", Date.now())).toBe(false);
   });
 });

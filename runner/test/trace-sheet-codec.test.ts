@@ -1,5 +1,5 @@
 /**
- * The character sheet in the trace codec (`runner/viewer/trace.ts`): the
+ * The character sheet in the trace codec (`@wrathbench/inspector/codec/trace`): the
  * keyframe states it whole, the event list carries patches and turn-ins, the
  * segment names exactly the ids it references, and `sheetAt` folds it at any
  * moment. Fixtures are rows in the recorder's shape; ids and names invented.
@@ -22,7 +22,7 @@ import {
   type TraceRow,
   type TraceSheet,
   type TraceState,
-} from "../viewer/trace";
+} from "@wrathbench/inspector/codec/trace";
 
 const T0 = 1_760_000_100_000;
 const W = { run: "sheet-run", t0: T0, t1: T0 + SEG_MS };

@@ -178,7 +178,7 @@ describe("a run row off the store is the run row off the files", () => {
   test("the movement intentions are the movement intentions", async () => {
     const fromStore = moveViewsOf(await store.moveRows("run-1"));
     expect(fromStore).toHaveLength(2);
-    expect(JSON.stringify(fromStore)).toBe(JSON.stringify(readMoves(runsDir, "run-1")));
+    expect(JSON.stringify(fromStore)).toBe(JSON.stringify(await readMoves(runsDir, "run-1")));
   });
 
   test("a v1 run's intentions are its session record's; the store's copy, when it has one, is the same", async () => {
@@ -188,7 +188,7 @@ describe("a run row off the store is the run row off the files", () => {
     const { writer } = openTestSession(runDir, 1_000_500);
     writer.ingest(recordDrain({ moves: [recordedMove({ ts: 1_000_400, moveId: 1, map: 0, x: 7, y: 8, z: 9 }), recordedMove({ ts: 1_000_450, at: 1_000_400, moveId: 1, map: 0, x: 7, y: 8, z: 9, status: "arrived" })] }));
     await writer.close();
-    const files = readMoves(dir, "run-v1");
+    const files = await readMoves(dir, "run-v1");
     expect(files.map((m) => [m.ts, m.status])).toEqual([[1_000_400, null], [1_000_450, "arrived"]]);
     // The track route takes the store's rows when it has any and the files'
     // otherwise (`trackCoreOf`), so either answer must be this one.

@@ -1,33 +1,37 @@
 /**
- * `Legacy05Source`: a 0.5 run's session-side data, read where 0.5 wrote it.
+ * `Legacy05Source`: a 0.5 run's session-side data, read where 0.5 wrote it
+ * and handed to the inspector as the v1 record's rows.
  *
- * Before the session record (`session-source.ts`), a run's trace was the
+ * Before the session record (`runs-source.ts`), a run's trace was the
  * `trace` and `trace_dict` tables of its `run.sqlite`, its movement
  * intentions the `move` table, and its ring of nearby units one-minute files
  * in `<run>/nearby/`. Every run recorded that way stays readable through this
  * adapter and is never converted: the run files are the evidence a result
  * points at. Readable, not comparable; nothing here makes a 0.5 run a v1 one.
  *
- * These are the 0.5 viewer's own reads, moved here unchanged in what they
- * select, and `runner/test/legacy05-golden.test.ts` holds the API's answers
- * over frozen 0.5 runs to what they were. Every database opens read-only
- * through `openRunDb`, and each table is asked for before it is read, because
- * a run recorded before a table existed has none and reads as having recorded
- * nothing, never as an error.
+ * It implements the inspector's `SessionHandle` (`@wrathbench/inspector`):
+ * a `trace` segment per five-minute window that has rows, each led by a
+ * `dict` row holding the run's whole `trace_dict`; the ring's one-minute files
+ * as `nearby` segments; the `move` table as one `calls` segment of `move`
+ * rows. No `session.json`, no `live.json`, no `events`, and nothing to tail:
+ * no 0.5 run is live once v1 is. `runner/test/legacy05-golden.test.ts` holds
+ * the API's answers over frozen 0.5 runs to what the 0.5 viewer gave. Every
+ * database opens read-only through `openRunDb`, and each table is asked for
+ * before it is read, because a run recorded before a table existed has none
+ * and reads as having recorded nothing, never as an error.
  *
  * The 0.5 ring kept player units (`ty` 3 in the codec) and their names; the
- * codec still decodes them for these runs. No 0.5 run is live once v1 is, so
- * in practice the ring half only ever answers "nothing".
+ * codec still decodes them for these runs, and only these runs can hold one:
+ * the stack's write gate keeps them out of every v1 record.
  */
 
 import type { Database } from "bun:sqlite";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import type { SegmentInfo, SessionHandle, StreamStat, TailBatch, TimeRange } from "@wrathbench/inspector";
+import { SEG_MS, windowOf } from "@wrathbench/inspector/codec/trace";
+import type { CallRow, StreamName, StreamRows, TraceRow } from "@wrathbench/mcp/record";
 import { openRunDb, runDbStat } from "../src/rundb";
-import type { MoveIntentView, TraceChatKind } from "./api-types";
-import { NEARBY_FRESH_MS, parseRingRow, type NearbyRingRow } from "./nearby";
-import type { SessionSource } from "./session-source";
-import { SEG_MS, chatOfRowData, itemNameOf, questReqOf, windowOf, type TraceDictLookup, type TraceRow } from "./trace";
 
 /** The 0.5 ring: its directory, its file length and how far back it reached. */
 export const LEGACY_RING_DIR = "nearby";
@@ -46,167 +50,107 @@ function hasTraceTable(db: Database): boolean {
   }
 }
 
-/**
- * The run's trace dictionary (`trace_dict`: item names and quest
- * requirements), answered per id for the encoder, or undefined on a run
- * recorded before it existed. Only the ids a segment references are asked.
- */
-function dictOf(db: Database, runId: string): TraceDictLookup | undefined {
+
+/** Whether this database has a table at all: a run recorded before it existed has none. */
+function hasTable(db: Database, name: string): boolean {
   try {
-    const cols = new Set((db.query(`PRAGMA table_info(trace_dict)`).all() as { name?: unknown }[]).map((r) => String(r.name)));
-    if (!["run_id", "kind", "id", "data"].every((c) => cols.has(c))) return undefined;
+    return db.query(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** A row's `data` column as the record's object, or undefined when it is not one. */
+function dataOf(v: unknown): Record<string, unknown> | undefined {
+  if (typeof v !== "string") return undefined;
+  try {
+    const o = JSON.parse(v) as unknown;
+    return o !== null && typeof o === "object" && !Array.isArray(o) ? (o as Record<string, unknown>) : undefined;
   } catch {
     return undefined;
   }
-  const one = db.query(`SELECT data FROM trace_dict WHERE run_id = ? AND kind = ? AND id = ?`);
-  const read = (kind: string, id: number): unknown => {
-    const r = one.get(runId, kind, id) as { data?: unknown } | null;
-    if (typeof r?.data !== "string") return undefined;
-    try {
-      return JSON.parse(r.data) as unknown;
-    } catch {
-      return undefined;
-    }
-  };
-  return {
-    item: (id) => itemNameOf(read("item", id)),
-    quest: (id) => questReqOf(read("quest", id)),
-  };
 }
 
-/** The run's rows with `ts` in `[from, to)`, in write order: the codec's input. */
-function rowsBetween(db: Database, runId: string, from: number, to: number): TraceRow[] {
-  const rows = db
-    .query(
-      `SELECT ts, kind, map, x, y, z, o, data FROM trace
-       WHERE run_id = ? AND ts >= ? AND ts < ? ORDER BY ts, rowid`,
-    )
-    .all(runId, Number.isFinite(from) ? from : Number.MIN_SAFE_INTEGER, Number.isFinite(to) ? to : Number.MAX_SAFE_INTEGER) as Record<string, unknown>[];
-  const out: TraceRow[] = [];
-  for (const r of rows) {
-    if (typeof r["ts"] !== "number" || typeof r["kind"] !== "string") continue;
-    out.push({
-      ts: r["ts"],
-      kind: r["kind"],
-      map: numOrNull(r["map"]),
-      x: numOrNull(r["x"]),
-      y: numOrNull(r["y"]),
-      z: numOrNull(r["z"]),
-      o: numOrNull(r["o"]),
-      data: typeof r["data"] === "string" ? r["data"] : null,
-    });
+/**
+ * The run's whole trace dictionary (`trace_dict`: item names and quest
+ * requirements) as one `dict` row, or null on a run recorded before it
+ * existed. A segment carries only the entries its rows reference, so handing
+ * every window the whole table changes no segment.
+ */
+function dictRowOf(db: Database, runId: string, ts: number): TraceRow | null {
+  try {
+    const cols = new Set((db.query(`PRAGMA table_info(trace_dict)`).all() as { name?: unknown }[]).map((r) => String(r.name)));
+    if (!["run_id", "kind", "id", "data"].every((c) => cols.has(c))) return null;
+  } catch {
+    return null;
   }
-  return out;
+  const items: [number, number | null, string][] = [];
+  const quests: [number, unknown[]][] = [];
+  for (const r of db.query(`SELECT kind, id, data FROM trace_dict WHERE run_id = ? ORDER BY rowid`).all(runId) as { kind?: unknown; id?: unknown; data?: unknown }[]) {
+    if (typeof r.id !== "number" || typeof r.data !== "string") continue;
+    let v: unknown;
+    try {
+      v = JSON.parse(r.data);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(v)) continue;
+    if (r.kind === "item") items.push([r.id, v[0] as number | null, v[1] as string]);
+    else if (r.kind === "quest") quests.push([r.id, v]);
+  }
+  return { ts, kind: "dict", dict: { items, quests } } as unknown as TraceRow;
 }
 
-function moveOf(r: Record<string, unknown>): MoveIntentView | null {
-  const x = numOrNull(r["x"]);
-  const y = numOrNull(r["y"]);
-  const z = numOrNull(r["z"]);
-  if (x === null || y === null || z === null) return null;
+/** A `move` table row as the record's `move` row: the destination, the target's name and the verdict. */
+function moveRowOf(r: Record<string, unknown>): CallRow {
+  const ts = numOrNull(r["ts"]) ?? 0;
   return {
-    ts: numOrNull(r["ts"]) ?? 0,
+    ts,
+    kind: "move",
+    origin: { type: "tool" },
+    at: ts,
+    moveId: 0,
     map: numOrNull(r["map"]),
-    x,
-    y,
-    z,
-    target: typeof r["target"] === "string" ? r["target"] : null,
+    x: numOrNull(r["x"]),
+    y: numOrNull(r["y"]),
+    z: numOrNull(r["z"]),
+    target: null,
+    ...(typeof r["target"] === "string" ? { name: r["target"] } : {}),
     status: typeof r["status"] === "string" ? r["status"] : null,
-  };
+  } as unknown as CallRow;
 }
 
-class Legacy05Source implements SessionSource {
-  readonly kind = "legacy-0.5" as const;
+class Legacy05Session implements SessionHandle {
   private readonly path: string;
 
   constructor(
     private readonly runsDir: string,
-    private readonly runId: string,
+    readonly id: string,
   ) {
-    this.path = join(runsDir, runId, "run.sqlite");
+    this.path = join(runsDir, id, "run.sqlite");
   }
 
-  /** Run `fn` over the run's database, or answer `none` when it has no `run.sqlite`, `failed` when it cannot be read now. */
-  private withDb<T>(none: T, fn: (db: Database) => T, failed: T = none): T {
+  /** Run `fn` over the run's database; `none` when it has no `run.sqlite`. Throws when it cannot be opened now. */
+  private withDb<T>(none: T, fn: (db: Database) => T): T {
     if (!existsSync(this.path)) return none;
-    let db: Database;
-    try {
-      db = openRunDb(this.path, { readonly: true });
-    } catch {
-      return failed;
-    }
+    const db = openRunDb(this.path, { readonly: true });
     try {
       return fn(db);
-    } catch {
-      return failed;
     } finally {
       db.close();
     }
   }
 
-  withTrace<T>(from: number, to: number, none: T, fn: (rows: TraceRow[], dict: TraceDictLookup | undefined) => T, failed: T = none): T {
-    return this.withDb(none, (db) => (hasTraceTable(db) ? fn(rowsBetween(db, this.runId, from, to), dictOf(db, this.runId)) : none), failed);
+  async session() {
+    return null;
   }
 
-  /** One seek per window that has data, whatever the run's row count. */
-  traceWindowsBefore(before: number): number[] | null {
-    return this.withDb<number[] | null>(
-      [],
-      (db) => {
-        if (!hasTraceTable(db)) return [];
-        const next = db.query(`SELECT ts FROM trace WHERE run_id = ? AND ts >= ? AND ts < ? ORDER BY ts LIMIT 1`);
-        const out: number[] = [];
-        let cursor = Number.MIN_SAFE_INTEGER;
-        for (;;) {
-          const r = next.get(this.runId, cursor, before) as { ts?: unknown } | null;
-          if (r === null || typeof r.ts !== "number") return out;
-          const w = windowOf(r.ts);
-          out.push(w);
-          cursor = w + SEG_MS;
-        }
-      },
-      null,
-    );
-  }
-
-  traceLastTs(): number | null {
-    return this.withDb<number | null>(null, (db) => {
-      if (!hasTraceTable(db)) return null;
-      const r = db.query(`SELECT ts FROM trace WHERE run_id = ? ORDER BY ts DESC LIMIT 1`).get(this.runId) as { ts?: unknown } | null;
-      return typeof r?.ts === "number" ? r.ts : null;
-    });
-  }
-
-  /** The `LIKE` is a prefilter only: every row it passes is parsed. */
-  traceChat(kind: TraceChatKind): { ts: number; text: string }[] {
-    const none: { ts: number; text: string }[] = [];
-    return this.withDb(none, (db) => {
-      if (!hasTraceTable(db)) return none;
-      const rows = db
-        .query(`SELECT ts, data FROM trace WHERE run_id = ? AND kind = 'state' AND data LIKE '%"chat"%' ORDER BY ts, rowid`)
-        .all(this.runId) as { ts?: unknown; data?: unknown }[];
-      const out: { ts: number; text: string }[] = [];
-      for (const r of rows) {
-        if (typeof r.ts !== "number") continue;
-        for (const [k, text] of chatOfRowData(typeof r.data === "string" ? r.data : null)) {
-          if (k === kind) out.push({ ts: r.ts, text });
-        }
-      }
-      return out;
-    });
-  }
-
-  /** The database's size and mtime (`runDbStat`: the file and its `-wal`). */
-  traceStat(): { size: number; mtimeMs: number } | null {
-    try {
-      return runDbStat(join(this.runsDir, this.runId));
-    } catch {
-      return null;
-    }
+  async live() {
+    return null;
   }
 
   private ringFiles(now: number): { t0: number; path: string }[] {
-    const dir = join(this.runsDir, this.runId, LEGACY_RING_DIR);
+    const dir = join(this.runsDir, this.id, LEGACY_RING_DIR);
     let names: string[];
     try {
       names = readdirSync(dir);
@@ -226,75 +170,140 @@ class Legacy05Source implements SessionSource {
     return out.sort((a, b) => a.t0 - b.t0);
   }
 
-  nearbyRows(from: number, now: number): NearbyRingRow[] {
-    // The file holding `from`, and the one before it: a file's key is stamped at
-    // or just after its start, so `from` early in a minute needs the minute before.
-    const first = Math.floor(from / LEGACY_RING_FILE_MS) * LEGACY_RING_FILE_MS - LEGACY_RING_FILE_MS;
-    const out: NearbyRingRow[] = [];
-    for (const f of this.ringFiles(now)) {
-      if (f.t0 < first) continue;
-      let text: string;
-      try {
-        text = readFileSync(f.path, "utf8");
-      } catch {
-        continue;
+  /** Every five-minute window that has a trace row, one seek each, whatever the run's row count. */
+  private traceWindows(): number[] {
+    return this.withDb<number[]>([], (db) => {
+      if (!hasTraceTable(db)) return [];
+      const next = db.query(`SELECT ts FROM trace WHERE run_id = ? AND ts >= ? ORDER BY ts LIMIT 1`);
+      const out: number[] = [];
+      let cursor = Number.MIN_SAFE_INTEGER;
+      for (;;) {
+        const r = next.get(this.id, cursor) as { ts?: unknown } | null;
+        if (r === null || typeof r.ts !== "number") return out;
+        const w = windowOf(r.ts);
+        out.push(w);
+        cursor = w + SEG_MS;
       }
-      const lines = text.split("\n");
-      // The writer appended whole lines; a last one with no newline was still being written.
-      lines.pop();
-      for (const line of lines) {
-        if (line === "") continue;
-        try {
-          const row = parseRingRow(JSON.parse(line) as unknown);
-          if (row !== null) out.push(row);
-        } catch {
-          /* a torn or foreign line: skipped, never fatal */
-        }
+    });
+  }
+
+  async segments(stream: StreamName, range?: TimeRange): Promise<SegmentInfo[]> {
+    let out: SegmentInfo[];
+    if (stream === "trace") {
+      out = this.traceWindows().map((t0) => ({ t0, t1: t0 + SEG_MS, ref: `${this.path}#trace/${t0}`, closed: false }));
+    } else if (stream === "nearby") {
+      out = this.ringFiles(Date.now()).map((f) => ({ t0: f.t0, t1: f.t0 + LEGACY_RING_FILE_MS, ref: f.path, closed: false }));
+    } else if (stream === "calls") {
+      // The `move` table, whole, as one segment over all of time: it was never cut into windows.
+      out = this.withDb<SegmentInfo[]>([], (db) => (hasTable(db, "move") ? [{ t0: 0, t1: Number.MAX_SAFE_INTEGER, ref: `${this.path}#move`, closed: false }] : []));
+    } else {
+      out = [];
+    }
+    return range === undefined ? out : out.filter((s) => s.t1 > range.from && s.t0 < range.to);
+  }
+
+  async read<S extends StreamName>(stream: S, segments: readonly SegmentInfo[], o?: { kinds?: readonly string[] }): Promise<StreamRows[S][][]> {
+    if (segments.length === 0) return [];
+    if (stream === "nearby") return segments.map((seg) => this.ringRows(seg.ref) as StreamRows[S][]);
+    if (stream === "trace") return this.traceRows(segments, o?.kinds) as StreamRows[S][][];
+    if (stream === "calls") {
+      return this.withDb(
+        segments.map(() => []),
+        (db) => {
+          // The 0.5 order, and the `ts` sort stable on top of it.
+          const rows = (db.query(`SELECT * FROM move WHERE run_id = ? ORDER BY ts`).all(this.id) as Record<string, unknown>[]).map(moveRowOf);
+          return segments.map(() => rows as StreamRows[S][]);
+        },
+      );
+    }
+    return segments.map(() => []);
+  }
+
+  private traceRows(segments: readonly SegmentInfo[], kinds: readonly string[] | undefined): TraceRow[][] {
+    return this.withDb(
+      segments.map(() => []),
+      (db) => {
+        if (!hasTraceTable(db)) return segments.map(() => []);
+        const only = kinds === undefined ? "" : ` AND kind IN (${kinds.map(() => "?").join(", ")})`;
+        const q = db.query(`SELECT ts, kind, map, x, y, z, o, data FROM trace WHERE run_id = ? AND ts >= ? AND ts < ?${only} ORDER BY ts, rowid`);
+        return segments.map((seg) => {
+          const out: TraceRow[] = [];
+          const dict = kinds === undefined ? dictRowOf(db, this.id, seg.t0) : null;
+          if (dict !== null) out.push(dict);
+          for (const r of q.all(this.id, seg.t0, seg.t1, ...(kinds ?? [])) as Record<string, unknown>[]) {
+            if (typeof r["ts"] !== "number" || typeof r["kind"] !== "string") continue;
+            const data = dataOf(r["data"]);
+            out.push({
+              ts: r["ts"],
+              kind: r["kind"],
+              map: numOrNull(r["map"]),
+              x: numOrNull(r["x"]),
+              y: numOrNull(r["y"]),
+              z: numOrNull(r["z"]),
+              o: numOrNull(r["o"]),
+              ...(data === undefined ? {} : { data }),
+            } as TraceRow);
+          }
+          return out;
+        });
+      },
+    );
+  }
+
+  /** One ring file's whole lines: a last one with no newline was still being written. */
+  private ringRows(path: string): unknown[] {
+    let text: string;
+    try {
+      text = readFileSync(path, "utf8");
+    } catch {
+      return [];
+    }
+    const lines = text.split("\n");
+    lines.pop();
+    const out: unknown[] = [];
+    for (const line of lines) {
+      if (line === "") continue;
+      try {
+        out.push(JSON.parse(line) as unknown);
+      } catch {
+        /* a torn or foreign line: skipped, never fatal */
       }
     }
     return out;
   }
 
-  nearbyFresh(now: number): boolean {
-    const files = this.ringFiles(now);
-    const newest = files[files.length - 1];
-    if (newest === undefined) return false;
-    try {
-      return now - statSync(newest.path).mtimeMs <= NEARBY_FRESH_MS;
-    } catch {
-      return false;
-    }
+  async tail<S extends StreamName>(_stream: S, cursor?: string | null): Promise<TailBatch<S>> {
+    return { rows: [], cursor: cursor ?? null };
   }
 
-  /** A run.sqlite written before the `move` table existed has none: the throw is "recorded none". */
-  moves(): MoveIntentView[] {
-    return this.withDb<MoveIntentView[]>([], (db) => {
-      const rows = db.query(`SELECT * FROM move WHERE run_id = ? ORDER BY ts`).all(this.runId) as Record<string, unknown>[];
-      const out: MoveIntentView[] = [];
-      for (const r of rows) {
-        const m = moveOf(r);
-        if (m !== null) out.push(m);
+  async end(): Promise<string | null> {
+    return null;
+  }
+
+  async stat(stream: StreamName): Promise<StreamStat | null> {
+    if (stream === "nearby") {
+      const files = this.ringFiles(Date.now());
+      const newest = files[files.length - 1];
+      if (newest === undefined) return null;
+      try {
+        const st = statSync(newest.path);
+        return { stamp: `${files.length}:${newest.t0}:${st.size}:${st.mtimeMs}`, touched: st.mtimeMs };
+      } catch {
+        return null;
       }
-      return out;
-    });
-  }
-
-  /** The row `moves` would list last, asked for as one row. */
-  latestMove(): MoveIntentView | null {
-    return this.withDb<MoveIntentView | null>(null, (db) => {
-      const r = db
-        .query(
-          `SELECT ts, map, x, y, z, target, status FROM move
-            WHERE run_id = ? AND x IS NOT NULL AND y IS NOT NULL AND z IS NOT NULL
-            ORDER BY ts DESC, rowid DESC LIMIT 1`,
-        )
-        .get(this.runId) as Record<string, unknown> | null;
-      return r === null ? null : moveOf(r);
-    });
+    }
+    if (stream !== "trace" && stream !== "calls") return null;
+    // The database's size and mtime (`runDbStat`: the file and its `-wal`).
+    try {
+      const st = runDbStat(join(this.runsDir, this.id));
+      return st === null ? null : { stamp: `${st.size}:${st.mtimeMs}`, touched: st.mtimeMs };
+    } catch {
+      return null;
+    }
   }
 }
 
-/** The 0.5 readers for one run. */
-export function legacy05Source(runsDir: string, runId: string): SessionSource {
-  return new Legacy05Source(runsDir, runId);
+/** The 0.5 readers for one run, as the inspector's session handle. */
+export function legacy05Session(runsDir: string, runId: string): SessionHandle {
+  return new Legacy05Session(runsDir, runId);
 }

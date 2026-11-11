@@ -1,5 +1,5 @@
 /**
- * The trace's private surface: `trace-db.ts` over a 0.5 run's `run.sqlite`
+ * The trace's private surface: the inspector's readout over a 0.5 run's `run.sqlite`
  * built in the 0.5 recorder's own schema and over a v1 run's session record
  * (`session/trace`, written by the stack's `SessionWriter`), and the routes and
  * feed fields the viewer serves from it — `/api/run/<id>/trace`,
@@ -13,9 +13,9 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import type { PositionsResponse, TraceIndexResponse, TraceSegment, TrackResponse } from "../viewer/api-types";
-import { CONTEXT_MS, SEG_MS, SETTLE_MS, decodeSegment, unpackSegs, windowOf } from "../viewer/trace";
-import { readPositionTrace, readTraceChat, readTraceIndex, readTraceSegment, traceSegsMemo } from "../viewer/trace-db";
-import { sessionSource } from "../viewer/session-source";
+import { CONTEXT_MS, SEG_MS, SETTLE_MS, decodeSegment, unpackSegs, windowOf } from "@wrathbench/inspector/codec/trace";
+import { readPositionTrace, readTraceChat, readTraceIndex, readTraceSegment, traceSegsMemo } from "./fixtures/run-readout";
+import { sessionKind } from "./fixtures/run-readout";
 import { emptyTraceState, type TraceRow as RecordRow } from "@wrathbench/mcp/record";
 import { openTestSession, recordDrain, recordedMove, type TestSession } from "./fixtures/v1-session";
 import { tempDirs } from "./fixtures/temp-dirs";
@@ -84,36 +84,36 @@ function walk(from: number, to: number, extra: (ts: number) => Row[] = () => [])
 /** A boundary in the recent past, so windows on either side of a real `now` are easy to name. */
 const W = windowOf(Date.now()) - 10 * SEG_MS;
 
-describe("trace-db: a run with no trace", () => {
-  test("every run before the recorder reads as no trace at all, never as an error", () => {
+describe("the trace readout: a run with no trace", () => {
+  test("every run before the recorder reads as no trace at all, never as an error", async () => {
     const runs = tempDir("trace-none-");
     writeRun(runs, "r-old", null);
     const now = Date.now();
-    expect(readTraceIndex(runs, "r-old", now)).toEqual({ segMs: SEG_MS, segs: [], tail: null, now });
-    expect(readTraceSegment(runs, "r-old", W, now)).toBeNull();
-    expect(readPositionTrace(runs, "r-old", now)).toBeNull();
-    expect(traceSegsMemo()(runs, "r-old", now)).toBeNull();
+    expect(await readTraceIndex(runs, "r-old", now)).toEqual({ segMs: SEG_MS, segs: [], tail: null, now });
+    expect(await readTraceSegment(runs, "r-old", W, now)).toBeNull();
+    expect(await readPositionTrace(runs, "r-old", now)).toBeNull();
+    expect(await traceSegsMemo()(runs, "r-old", now)).toBeNull();
     // Nor does a run with no run.sqlite at all.
-    expect(readTraceIndex(runs, "r-missing", now).segs).toEqual([]);
+    expect((await readTraceIndex(runs, "r-missing", now)).segs).toEqual([]);
   });
 
-  test("a trace table with no rows is the same as none", () => {
+  test("a trace table with no rows is the same as none", async () => {
     const runs = tempDir("trace-empty-");
     writeRun(runs, "r-empty", []);
-    expect(readTraceIndex(runs, "r-empty", Date.now()).segs).toEqual([]);
-    expect(readPositionTrace(runs, "r-empty", Date.now())).toBeNull();
+    expect((await readTraceIndex(runs, "r-empty", Date.now())).segs).toEqual([]);
+    expect(await readPositionTrace(runs, "r-empty", Date.now())).toBeNull();
   });
 });
 
-describe("trace-db: windows", () => {
+describe("the trace readout: windows", () => {
   const runs = tempDir("trace-windows-");
   // Windows 0 and 1 walked, 2 empty, 3 and 4 walked.
   writeRun(runs, "r1", [...walk(W, W + 2 * SEG_MS), ...walk(W + 3 * SEG_MS, W + 5 * SEG_MS)]);
 
-  test("the index lists the closed windows that have rows, packed, and the tail after them", () => {
+  test("the index lists the closed windows that have rows, packed, and the tail after them", async () => {
     // Thirty seconds into window 5: window 4 ended but is still settling.
     const now = W + 5 * SEG_MS + 30_000;
-    const idx = readTraceIndex(runs, "r1", now);
+    const idx = await readTraceIndex(runs, "r1", now);
     expect(idx.segs).toEqual([
       [W, 2],
       [W + 3 * SEG_MS, 1],
@@ -122,67 +122,67 @@ describe("trace-db: windows", () => {
     expect(idx.tail).toMatchObject({ t0: W + 4 * SEG_MS, t1: W + 6 * SEG_MS });
     expect(decodeSegment(idx.tail!).frames.length).toBeGreaterThan(250);
     // Once it settles, it is closed and the tail is empty.
-    const later = readTraceIndex(runs, "r1", W + 5 * SEG_MS + SETTLE_MS);
+    const later = await readTraceIndex(runs, "r1", W + 5 * SEG_MS + SETTLE_MS);
     expect(unpackSegs(later.segs)).toEqual([W, W + SEG_MS, W + 3 * SEG_MS, W + 4 * SEG_MS]);
     expect(later.tail).toBeNull();
   });
 
-  test("a window is a segment once, closed or not, and an empty window is none", () => {
+  test("a window is a segment once, closed or not, and an empty window is none", async () => {
     const now = W + 5 * SEG_MS + 30_000;
-    expect(readTraceSegment(runs, "r1", W + SEG_MS, now)).toMatchObject({ closed: true, segment: { t0: W + SEG_MS, t1: W + 2 * SEG_MS } });
-    expect(readTraceSegment(runs, "r1", W + 4 * SEG_MS, now)?.closed).toBe(false);
-    expect(readTraceSegment(runs, "r1", W + 2 * SEG_MS, now)).toBeNull();
-    expect(readTraceSegment(runs, "r1", W + 9 * SEG_MS, now)).toBeNull();
+    expect(await readTraceSegment(runs, "r1", W + SEG_MS, now)).toMatchObject({ closed: true, segment: { t0: W + SEG_MS, t1: W + 2 * SEG_MS } });
+    expect(await (await readTraceSegment(runs, "r1", W + 4 * SEG_MS, now))?.closed).toBe(false);
+    expect(await readTraceSegment(runs, "r1", W + 2 * SEG_MS, now)).toBeNull();
+    expect(await readTraceSegment(runs, "r1", W + 9 * SEG_MS, now)).toBeNull();
     // The context reaches back across the gap: window 3's keyframe is its own key row.
-    const seg = readTraceSegment(runs, "r1", W + 3 * SEG_MS, now)!.segment;
+    const seg = (await readTraceSegment(runs, "r1", W + 3 * SEG_MS, now))!.segment;
     expect(seg.k.s).toMatchObject({ hp: 100, level: 3 });
   });
 
-  test("the position feed's tail is the index's tail, and recent names the closed windows before it", () => {
+  test("the position feed's tail is the index's tail, and recent names the closed windows before it", async () => {
     const now = W + 5 * SEG_MS + 30_000;
-    const live = readPositionTrace(runs, "r1", now)!;
-    expect(JSON.stringify(live.tail)).toBe(JSON.stringify(readTraceIndex(runs, "r1", now).tail));
+    const live = (await readPositionTrace(runs, "r1", now))!;
+    expect(JSON.stringify(live.tail)).toBe(JSON.stringify((await readTraceIndex(runs, "r1", now)).tail));
     // Windows 1..3 are the three before the tail; 2 has no rows.
     expect(live.recent).toEqual([W + SEG_MS, W + 3 * SEG_MS]);
     expect(CONTEXT_MS).toBe(3 * SEG_MS);
   });
 
-  test("at every moment, every window with rows is reachable from exactly one of the list and the tail", () => {
+  test("at every moment, every window with rows is reachable from exactly one of the list and the tail", async () => {
     const rdir = tempDir("trace-reach-");
     writeRun(rdir, "r2", walk(W, W + 4 * SEG_MS));
     for (let now = W + 1_000; now < W + 5 * SEG_MS; now += 13_000) {
-      const idx = readTraceIndex(rdir, "r2", now);
+      const idx = await readTraceIndex(rdir, "r2", now);
       const listed = new Set(unpackSegs(idx.segs));
       for (let w = W; w <= windowOf(Math.min(now, W + 4 * SEG_MS - 1)); w += SEG_MS) {
         const inTail = idx.tail !== null && w >= idx.tail.t0 && w < idx.tail.t1;
         expect(`${now - W} ${w - W}: ${listed.has(w)} ${inTail}`).toBe(`${now - W} ${w - W}: ${!inTail} ${inTail}`);
       }
       // And the live feed names only listed windows.
-      for (const w of readPositionTrace(rdir, "r2", now)?.recent ?? []) expect(listed.has(w)).toBe(true);
+      for (const w of (await readPositionTrace(rdir, "r2", now))?.recent ?? []) expect(listed.has(w)).toBe(true);
     }
   });
 
-  test("the window list seeks window by window across a long gap", () => {
+  test("the window list seeks window by window across a long gap", async () => {
     const rdir = tempDir("trace-gap-");
     const far = W - 200 * SEG_MS;
     writeRun(rdir, "r3", [[far + 10, "key", null, {}], [far + SEG_MS + 5, "state", null, { hp: 1 }], [W + 7, "key", null, {}]]);
-    expect(readTraceIndex(rdir, "r3", W + 2 * SEG_MS).segs).toEqual([
+    expect((await readTraceIndex(rdir, "r3", W + 2 * SEG_MS)).segs).toEqual([
       [far, 2],
       [W, 1],
     ]);
   });
 
-  test("the track's window list follows the file: a write moves it, and a finished run's stays put", () => {
+  test("the track's window list follows the file: a write moves it, and a finished run's stays put", async () => {
     const rdir = tempDir("trace-memo-");
     const dir = writeRun(rdir, "r4", walk(W, W + SEG_MS));
     const segs = traceSegsMemo();
     const now = W + 2 * SEG_MS;
-    expect(segs(rdir, "r4", now)).toEqual({ segMs: SEG_MS, segs: [[W, 1]] });
-    expect(segs(rdir, "r4", now + 10 * SEG_MS)).toEqual({ segMs: SEG_MS, segs: [[W, 1]] });
+    expect(await segs(rdir, "r4", now)).toEqual({ segMs: SEG_MS, segs: [[W, 1]] });
+    expect(await segs(rdir, "r4", now + 10 * SEG_MS)).toEqual({ segMs: SEG_MS, segs: [[W, 1]] });
     const db = new Database(join(dir, "run.sqlite"));
     appendRows(db, "r4", walk(W + SEG_MS, W + 2 * SEG_MS));
     db.close();
-    expect(segs(rdir, "r4", now + 10 * SEG_MS)).toEqual({ segMs: SEG_MS, segs: [[W, 2]] });
+    expect(await segs(rdir, "r4", now + 10 * SEG_MS)).toEqual({ segMs: SEG_MS, segs: [[W, 2]] });
   });
 });
 
@@ -192,7 +192,7 @@ describe("trace-db: windows", () => {
  * back through `V1Source` (`traceWindowsBefore`, `withTrace`, `traceStat`,
  * `traceChat`), which answers by segment file rather than by SQL.
  */
-describe("trace-db: windows, a v1 run (session/trace)", () => {
+describe("the trace readout: windows, a v1 run (session/trace)", () => {
   /** `walk`'s rows as the recorder hands them: a key at the start, then samples; the writer keys each segment. */
   function v1Rows(rows: Row[]): RecordRow[] {
     const out: RecordRow[] = [];
@@ -209,7 +209,7 @@ describe("trace-db: windows, a v1 run (session/trace)", () => {
     const last = rows.at(-1)?.[0] ?? W;
     const session = openTestSession(dir, last);
     session.writer.ingest(recordDrain({ trace: v1Rows(rows) }));
-    expect(sessionSource(runs, runId).kind).toBe("v1");
+    expect(sessionKind(runs, runId)).toBe("v1");
     return session;
   }
 
@@ -217,75 +217,75 @@ describe("trace-db: windows, a v1 run (session/trace)", () => {
   // Windows 0 and 1 walked, 2 empty, 3 and 4 walked, as above.
   writeV1Run(runs, "r1", [...walk(W, W + 2 * SEG_MS), ...walk(W + 3 * SEG_MS, W + 5 * SEG_MS)]);
 
-  test("the index lists the closed windows that have rows, packed, and the tail after them", () => {
+  test("the index lists the closed windows that have rows, packed, and the tail after them", async () => {
     const now = W + 5 * SEG_MS + 30_000;
-    const idx = readTraceIndex(runs, "r1", now);
+    const idx = await readTraceIndex(runs, "r1", now);
     expect(idx.segs).toEqual([
       [W, 2],
       [W + 3 * SEG_MS, 1],
     ]);
     expect(idx.tail).toMatchObject({ t0: W + 4 * SEG_MS, t1: W + 6 * SEG_MS });
     expect(decodeSegment(idx.tail!).frames.length).toBeGreaterThan(250);
-    const later = readTraceIndex(runs, "r1", W + 5 * SEG_MS + SETTLE_MS);
+    const later = await readTraceIndex(runs, "r1", W + 5 * SEG_MS + SETTLE_MS);
     expect(unpackSegs(later.segs)).toEqual([W, W + SEG_MS, W + 3 * SEG_MS, W + 4 * SEG_MS]);
     expect(later.tail).toBeNull();
   });
 
-  test("a window is a segment once, closed or not, and an empty window is none; a segment's keyframe is the writer's key", () => {
+  test("a window is a segment once, closed or not, and an empty window is none; a segment's keyframe is the writer's key", async () => {
     const now = W + 5 * SEG_MS + 30_000;
-    expect(readTraceSegment(runs, "r1", W + SEG_MS, now)).toMatchObject({ closed: true, segment: { t0: W + SEG_MS, t1: W + 2 * SEG_MS } });
-    expect(readTraceSegment(runs, "r1", W + 4 * SEG_MS, now)?.closed).toBe(false);
-    expect(readTraceSegment(runs, "r1", W + 2 * SEG_MS, now)).toBeNull();
-    expect(readTraceSegment(runs, "r1", W + 9 * SEG_MS, now)).toBeNull();
+    expect(await readTraceSegment(runs, "r1", W + SEG_MS, now)).toMatchObject({ closed: true, segment: { t0: W + SEG_MS, t1: W + 2 * SEG_MS } });
+    expect(await (await readTraceSegment(runs, "r1", W + 4 * SEG_MS, now))?.closed).toBe(false);
+    expect(await readTraceSegment(runs, "r1", W + 2 * SEG_MS, now)).toBeNull();
+    expect(await readTraceSegment(runs, "r1", W + 9 * SEG_MS, now)).toBeNull();
     // Window 3 follows a gap: its keyframe is the key the writer opened it with, from its fold.
-    const seg = readTraceSegment(runs, "r1", W + 3 * SEG_MS, now)!.segment;
+    const seg = (await readTraceSegment(runs, "r1", W + 3 * SEG_MS, now))!.segment;
     expect(seg.k.s).toMatchObject({ hp: 100, level: 3 });
     // And it decodes alone, from its own file.
     expect(decodeSegment(JSON.parse(JSON.stringify(seg))).frames.length).toBeGreaterThan(250);
   });
 
-  test("the position feed's tail is the index's tail, and recent names the closed windows before it", () => {
+  test("the position feed's tail is the index's tail, and recent names the closed windows before it", async () => {
     const now = W + 5 * SEG_MS + 30_000;
-    const live = readPositionTrace(runs, "r1", now)!;
-    expect(JSON.stringify(live.tail)).toBe(JSON.stringify(readTraceIndex(runs, "r1", now).tail));
+    const live = (await readPositionTrace(runs, "r1", now))!;
+    expect(JSON.stringify(live.tail)).toBe(JSON.stringify((await readTraceIndex(runs, "r1", now)).tail));
     expect(live.recent).toEqual([W + SEG_MS, W + 3 * SEG_MS]);
   });
 
-  test("the window list reaches across a long gap", () => {
+  test("the window list reaches across a long gap", async () => {
     const rdir = tempDir("trace-v1-gap-");
     const far = W - 200 * SEG_MS;
     writeV1Run(rdir, "r3", [[far + 10, "key", null, {}], [far + SEG_MS + 5, "state", null, { hp: 1 }], [W + 7, "state", null, { hp: 2 }]]);
-    expect(readTraceIndex(rdir, "r3", W + 2 * SEG_MS).segs).toEqual([
+    expect((await readTraceIndex(rdir, "r3", W + 2 * SEG_MS)).segs).toEqual([
       [far, 2],
       [W, 1],
     ]);
   });
 
-  test("the track's window list follows the record: a write moves it, and a finished run's stays put", () => {
+  test("the track's window list follows the record: a write moves it, and a finished run's stays put", async () => {
     const rdir = tempDir("trace-v1-memo-");
     const session = writeV1Run(rdir, "r4", walk(W, W + SEG_MS));
     const segs = traceSegsMemo();
     const now = W + 2 * SEG_MS;
-    expect(segs(rdir, "r4", now)).toEqual({ segMs: SEG_MS, segs: [[W, 1]] });
-    expect(segs(rdir, "r4", now + 10 * SEG_MS)).toEqual({ segMs: SEG_MS, segs: [[W, 1]] });
+    expect(await segs(rdir, "r4", now)).toEqual({ segMs: SEG_MS, segs: [[W, 1]] });
+    expect(await segs(rdir, "r4", now + 10 * SEG_MS)).toEqual({ segMs: SEG_MS, segs: [[W, 1]] });
     session.clock.now = W + 2 * SEG_MS;
     session.writer.ingest(recordDrain({ trace: v1Rows(walk(W + SEG_MS, W + 2 * SEG_MS)).filter((r) => r.kind !== "key") }));
-    expect(segs(rdir, "r4", now + 10 * SEG_MS)).toEqual({ segMs: SEG_MS, segs: [[W, 2]] });
+    expect(await segs(rdir, "r4", now + 10 * SEG_MS)).toEqual({ segMs: SEG_MS, segs: [[W, 2]] });
   });
 
-  test("the character's own lines are read back by kind, oldest first, across segments", () => {
+  test("the character's own lines are read back by kind, oldest first, across segments", async () => {
     const rdir = tempDir("trace-v1-chat-");
     writeV1Run(rdir, "r5", [
       [W + 10, "key", [0, 0, 0, 0, 0], { level: 3 }],
       [W + 1_000, "state", null, { chat: [["say", "first words"]] }],
       [W + SEG_MS + 1_000, "state", null, { chat: [["party", "to the group"], ["say", "second words"]] }],
     ]);
-    expect(readTraceChat(rdir, "r5", "say")).toEqual([
+    expect(await readTraceChat(rdir, "r5", "say")).toEqual([
       { ts: W + 1_000, text: "first words" },
       { ts: W + SEG_MS + 1_000, text: "second words" },
     ]);
-    expect(readTraceChat(rdir, "r5", "party")).toEqual([{ ts: W + SEG_MS + 1_000, text: "to the group" }]);
-    expect(readTraceChat(rdir, "r5", "yell")).toEqual([]);
+    expect(await readTraceChat(rdir, "r5", "party")).toEqual([{ ts: W + SEG_MS + 1_000, text: "to the group" }]);
+    expect(await readTraceChat(rdir, "r5", "yell")).toEqual([]);
   });
 
   test("the track route carries the windows and the session's movement intentions", async () => {
@@ -311,7 +311,7 @@ describe("trace-db: windows, a v1 run (session/trace)", () => {
 
 /* -------------------------------------------------------------- routes --- */
 
-describe("trace-db: the sheet's dictionary", () => {
+describe("the trace readout: the sheet's dictionary", () => {
   const sheetRows = (): Row[] =>
     walk(W, W + 60_000, (ts) =>
       ts === W
@@ -321,7 +321,7 @@ describe("trace-db: the sheet's dictionary", () => {
           : [],
     );
 
-  test("a segment names exactly the items and quests it references from trace_dict; one the run never named stays an id", () => {
+  test("a segment names exactly the items and quests it references from trace_dict; one the run never named stays an id", async () => {
     const runs = tempDir("trace-dict-");
     const dir = writeRun(runs, "r-dict", sheetRows());
     const db = new Database(join(dir, "run.sqlite"));
@@ -333,7 +333,7 @@ describe("trace-db: the sheet's dictionary", () => {
     put.run("r-dict", "quest", 7001, JSON.stringify([8, 0, 0, 0, [61009, 3]]));
     put.run("other-run", "item", 61002, JSON.stringify([1, "Another Run's Name"]));
     db.close();
-    const seg = readTraceSegment(runs, "r-dict", W, W + 2 * SEG_MS)!.segment;
+    const seg = (await readTraceSegment(runs, "r-dict", W, W + 2 * SEG_MS))!.segment;
     expect(seg.items).toEqual({ 61001: [1, "Test Stone"], 61009: [1, "Test Token"] });
     expect(seg.qreq).toEqual({ 7001: [8, 0, 0, 0, [61009, 3]] });
     expect(JSON.stringify(seg)).not.toContain("Another Run");
@@ -341,13 +341,13 @@ describe("trace-db: the sheet's dictionary", () => {
     expect(d.sheetEvents.map((e) => e.kind)).toEqual(["money", "inv", "quests", "inv"]);
   });
 
-  test("a run recorded before trace_dict existed encodes its ids without names, never failing", () => {
+  test("a run recorded before trace_dict existed encodes its ids without names, never failing", async () => {
     const runs = tempDir("trace-dict-old-");
     writeRun(runs, "r-old-sheet", sheetRows());
-    const seg = readTraceSegment(runs, "r-old-sheet", W, W + 2 * SEG_MS)!.segment;
+    const seg = (await readTraceSegment(runs, "r-old-sheet", W, W + 2 * SEG_MS))!.segment;
     expect(seg.items).toBeUndefined();
     expect(seg.ev.some((e) => e[1] === "inv")).toBe(true);
-    expect(readPositionTrace(runs, "r-old-sheet", W + 30_000)!.tail!.items).toBeUndefined();
+    expect((await readPositionTrace(runs, "r-old-sheet", W + 30_000))!.tail!.items).toBeUndefined();
   });
 });
 

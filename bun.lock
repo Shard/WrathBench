@@ -5,6 +5,7 @@
     "": {
       "name": "wrathbench",
       "dependencies": {
+        "@wrathbench/inspector": "workspace:*",
         "@wrathbench/mcp": "workspace:*",
         "@wrathbench/sdk": "workspace:*",
       },
@@ -27,6 +28,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@solidjs/router": "1.0.3",
+        "@wrathbench/inspector": "workspace:0.2.0",
         "solid-js": "1.9.19",
       },
       "devDependencies": {
@@ -43,6 +45,7 @@
       "name": "@wrathbench/runner",
       "version": "0.0.0",
       "dependencies": {
+        "@wrathbench/inspector": "workspace:0.2.0",
         "@wrathbench/mcp": "workspace:0.2.0",
         "@wrathbench/sdk": "workspace:0.2.0",
         "@wrathbench/wiki": "workspace:*",
@@ -52,6 +55,16 @@
     "wiki": {
       "name": "@wrathbench/wiki",
       "version": "0.0.0",
+    },
+    "wrath-mcp/inspector": {
+      "name": "@wrathbench/inspector",
+      "version": "0.2.0",
+      "bin": {
+        "wrath-inspector": "./src/bin.ts",
+      },
+      "dependencies": {
+        "@wrathbench/mcp": "workspace:*",
+      },
     },
     "wrath-mcp/mcp": {
       "name": "@wrathbench/mcp",
@@ -371,6 +384,8 @@
     "@wrathbench/collector": ["@wrathbench/collector@workspace:collector"],
 
     "@wrathbench/dashboard": ["@wrathbench/dashboard@workspace:dashboard"],
+
+    "@wrathbench/inspector": ["@wrathbench/inspector@workspace:wrath-mcp/inspector"],
 
     "@wrathbench/mcp": ["@wrathbench/mcp@workspace:wrath-mcp/mcp"],
 

@@ -354,7 +354,7 @@ describe("the character's last status", () => {
   const NOW = 1_700_000_000_000;
   const entry = (o: Record<string, unknown>): string => JSON.stringify(o);
 
-  test("the newest entry is served, with unobserved stamps as null", () => {
+  test("the newest entry is served, with unobserved stamps as null", async () => {
     const runsDir = fixture([
       {
         id: "logged",
@@ -374,7 +374,7 @@ describe("the character's last status", () => {
       text: "heading for the inn",
       ts: NOW - 4000,
     });
-    expect(readPositions(runsDir, NOW)[0]?.status?.turn).toBe(11);
+    expect((await readPositions(runsDir, NOW))[0]?.status?.turn).toBe(11);
   });
 
   test("no log, an empty log and a half-written last line all read as what came before", () => {
@@ -407,7 +407,7 @@ describe("the character's last status", () => {
 describe("readReflecting", () => {
   const NOW = 1_700_000_000_000;
 
-  test("a standing reflecting_since is an open window; NULL and no column are not", () => {
+  test("a standing reflecting_since is an open window; NULL and no column are not", async () => {
     const runsDir = fixture([
       { id: "open", states: [[NOW - 1000, 1, 0, 0, 1, 2, 3, 0, 0]], reflectingSince: NOW - 3000 },
       { id: "shut", states: [[NOW - 1000, 1, 0, 0, 1, 2, 3, 0, 0]], reflectingSince: null },
@@ -418,7 +418,7 @@ describe("readReflecting", () => {
     expect(readReflecting(runsDir, "shut")).toBe(false);
     expect(readReflecting(runsDir, "older")).toBe(false);
     expect(readReflecting(runsDir, "no-such-run")).toBe(false);
-    const byId = new Map(readPositions(runsDir, NOW).map((p) => [p.runId, p]));
+    const byId = new Map((await readPositions(runsDir, NOW)).map((p) => [p.runId, p]));
     expect(byId.get("open")?.reflecting).toBe(true);
     expect(byId.get("older")?.reflecting).toBe(false);
   });
@@ -427,7 +427,7 @@ describe("readReflecting", () => {
 describe("readPositions", () => {
   const NOW = 1_700_000_000_000;
 
-  test("returns the map-view shape for a live run", () => {
+  test("returns the map-view shape for a live run", async () => {
     const runsDir = fixture([
       {
         id: "live-1",
@@ -436,7 +436,7 @@ describe("readPositions", () => {
         states: [[NOW - 5000, 4, 900, 0, -6240, 380, 380, 12345, 7]],
       },
     ]);
-    const [p] = readPositions(runsDir, NOW);
+    const [p] = await readPositions(runsDir, NOW);
     expect(p).toEqual({
       runId: "live-1",
       character: "Brächt",
@@ -469,7 +469,7 @@ describe("readPositions", () => {
     });
   });
 
-  test("the feed carries no inventory, however much the state line recorded: the sidebar reads the trace's sheet", () => {
+  test("the feed carries no inventory, however much the state line recorded: the sidebar reads the trace's sheet", async () => {
     const items = JSON.stringify([
       { name: "Invented Mace", count: 1, equipped: true, itemId: 5956, quality: 1, slot: 16 },
       { name: "Invented Jerky", count: 5, equipped: false, itemId: 90117, quality: 1, slot: 23, bag: 255 },
@@ -478,12 +478,12 @@ describe("readPositions", () => {
       { id: "live-items", states: [[NOW - 5000, 4, 900, 0, -6240, 380, 380, 1, 0]], items },
       { id: "live-bare", states: [[NOW - 4000, 4, 900, 0, -6240, 380, 380, 1, 0]] },
     ]);
-    const feed = readPositions(runsDir, NOW);
+    const feed = await readPositions(runsDir, NOW);
     expect(feed.map((p) => p.runId).sort()).toEqual(["live-bare", "live-items"]);
     for (const p of feed) expect(Object.keys(p)).not.toContain("items");
   });
 
-  test("the unit frame's numbers ride the sample the pip is drawn from", () => {
+  test("the unit frame's numbers ride the sample the pip is drawn from", async () => {
     const runsDir = fixture([
       {
         id: "live-hp",
@@ -497,7 +497,7 @@ describe("readPositions", () => {
         gauges: [140, 220, 30, 100, 0, 2100],
       },
     ]);
-    const [p] = readPositions(runsDir, NOW);
+    const [p] = await readPositions(runsDir, NOW);
     expect(p!.ts).toBe(NOW - 9000);
     // The gauges were written on the newest row, which has no position: the
     // positioned row carried none, and none is what the feed says.
@@ -507,7 +507,7 @@ describe("readPositions", () => {
     const positioned = fixture([
       { id: "live-hp2", klass: 4, states: [[NOW - 5000, 4, 900, 0, 1, 2, 3, 1, 1]], gauges: [140, 220, 30, 100, 3, 2100] },
     ]);
-    const [q] = readPositions(positioned, NOW);
+    const [q] = await readPositions(positioned, NOW);
     expect({ ...q, runId: q!.runId }).toMatchObject({
       health: 140,
       maxHealth: 220,
@@ -539,7 +539,7 @@ describe("readPositions", () => {
     expect(trackFrom(readStates(old, "track-old")).points[0]).toMatchObject({ health: null, maxPower: null });
   });
 
-  test("a terminated run is not on the map, however fresh its last position", () => {
+  test("a terminated run is not on the map, however fresh its last position", async () => {
     const runsDir = fixture([
       {
         id: "done-1",
@@ -547,18 +547,18 @@ describe("readPositions", () => {
         states: [[NOW - 1000, 4, 900, 0, 1, 2, 3, 0, 0]],
       },
     ]);
-    expect(readPositions(runsDir, NOW)).toHaveLength(0);
+    expect(await readPositions(runsDir, NOW)).toHaveLength(0);
   });
 
-  test("a position older than the window drops out", () => {
+  test("a position older than the window drops out", async () => {
     const runsDir = fixture([
       { id: "stale-1", states: [[NOW - 11 * 60_000, 4, 900, 0, 1, 2, 3, 0, 0]] },
       { id: "fresh-1", states: [[NOW - 60_000, 4, 900, 0, 1, 2, 3, 0, 0]] },
     ]);
-    expect(readPositions(runsDir, NOW).map((p) => p.runId)).toEqual(["fresh-1"]);
+    expect((await readPositions(runsDir, NOW)).map((p) => p.runId)).toEqual(["fresh-1"]);
   });
 
-  test("the newest sample that carried a position wins, not the newest sample", () => {
+  test("the newest sample that carried a position wins, not the newest sample", async () => {
     // A level-only sample must not blink a live agent off the map.
     const runsDir = fixture([
       {
@@ -569,33 +569,33 @@ describe("readPositions", () => {
         ],
       },
     ]);
-    const [p] = readPositions(runsDir, NOW);
+    const [p] = await readPositions(runsDir, NOW);
     expect(p!.x).toBe(-6240);
     expect(p!.ts).toBe(NOW - 9000);
   });
 
-  test("a schema with no position columns is skipped, not an error", () => {
+  test("a schema with no position columns is skipped, not an error", async () => {
     const runsDir = fixture([{ id: "old-1", noPositionColumns: true, states: [[NOW, 4, 900]] }]);
-    expect(readPositions(runsDir, NOW)).toEqual([]);
-    expect(readLatestPosition(runsDir, "old-1")).toBeNull();
+    expect(await readPositions(runsDir, NOW)).toEqual([]);
+    expect(await readLatestPosition(runsDir, "old-1")).toBeNull();
   });
 
-  test("a run with no database at all is skipped", () => {
+  test("a run with no database at all is skipped", async () => {
     const runsDir = tempDir("wrathbench-map-empty-");
     mkdirSync(join(runsDir, "bare"));
-    expect(readPositions(runsDir, NOW)).toEqual([]);
-    expect(readLatestPosition(runsDir, "bare")).toBeNull();
+    expect(await readPositions(runsDir, NOW)).toEqual([]);
+    expect(await readLatestPosition(runsDir, "bare")).toBeNull();
   });
 
-  test("newest position first", () => {
+  test("newest position first", async () => {
     const runsDir = fixture([
       { id: "a", states: [[NOW - 30_000, 1, 1, 0, 1, 2, 3, 0, 0]] },
       { id: "b", states: [[NOW - 1_000, 1, 1, 1, 1, 2, 3, 0, 0]] },
     ]);
-    expect(readPositions(runsDir, NOW).map((p) => p.runId)).toEqual(["b", "a"]);
+    expect((await readPositions(runsDir, NOW)).map((p) => p.runId)).toEqual(["b", "a"]);
   });
 
-  test("the quest count is the run's, summed across the resumes that start the recorded one again", () => {
+  test("the quest count is the run's, summed across the resumes that start the recorded one again", async () => {
     const runsDir = fixture([
       {
         // A freeplay run resumed in place twice: its processes counted 12 and
@@ -616,7 +616,7 @@ describe("readPositions", () => {
       // No sample carried a count: not recorded, never zero.
       { id: "uncounted", states: [[NOW - 5_000, 4, 900, 0, 1, 2, 3, 1, null]] },
     ]);
-    const byId = new Map(readPositions(runsDir, NOW).map((p) => [p.runId, p]));
+    const byId = new Map((await readPositions(runsDir, NOW)).map((p) => [p.runId, p]));
     expect(byId.get("resumed")?.questsCompleted).toBe(17);
     expect(byId.get("uncounted")?.questsCompleted).toBeNull();
     // `live.json` carries the same figure.
@@ -625,7 +625,7 @@ describe("readPositions", () => {
     expect(trackFrom(readStates(runsDir, "resumed")).points.at(-1)?.questsCompleted).toBe(17);
   });
 
-  test("a run whose nearby ring is being written is flagged, and the public feed keeps the flag", () => {
+  test("a run whose nearby ring is being written is flagged, and the public feed keeps the flag", async () => {
     const now = Date.now();
     const runsDir = fixture([
       { id: "ringed", states: [[now - 5_000, 4, 900, 0, 1, 2, 3, 0, 0]] },
@@ -634,7 +634,7 @@ describe("readPositions", () => {
     const t0 = Math.floor(now / 60_000) * 60_000;
     mkdirSync(join(runsDir, "ringed", "nearby"));
     writeFileSync(join(runsDir, "ringed", "nearby", `${t0}.jsonl`), `{"ts":${now},"kind":"tick"}\n`);
-    const byId = new Map(readPositions(runsDir, now).map((p) => [p.runId, p]));
+    const byId = new Map((await readPositions(runsDir, now)).map((p) => [p.runId, p]));
     expect(byId.get("ringed")?.nearby).toBe(true);
     expect("nearby" in byId.get("plain")!).toBe(false);
     // The flag is the public map's cue too; the renderer keeps it only where `live.json` carries the window.
@@ -722,7 +722,7 @@ describe("positionsFromStore", () => {
     const fromStore = await positionsFromStore(localRunStore(runsDir), runsDir, NOW);
     // Terminated, stale and archived runs are all left off; newest position first.
     expect(fromStore.map((p) => p.runId)).toEqual(["live-b", "live-a"]);
-    expect(JSON.stringify(fromStore)).toBe(JSON.stringify(readPositions(runsDir, NOW)));
+    expect(JSON.stringify(fromStore)).toBe(JSON.stringify(await readPositions(runsDir, NOW)));
     // The readings off the store's aggregate, and the live reads off the files.
     expect(fromStore[1]).toMatchObject({
       character: "C-live-a",
@@ -765,7 +765,7 @@ describe("positionsFromStore", () => {
     const runsDir = tempDir("wrathbench-map-stall-");
     writeRun(runsDir, "stalled", { stateTs: NOW - 1_000, paused: STALL_PAUSE });
     writeRun(runsDir, "cooling", { stateTs: NOW - 2_000, paused: "rate-limited" });
-    expect(readPositions(runsDir, NOW).map((p) => p.runId)).toEqual(["cooling"]);
+    expect((await readPositions(runsDir, NOW)).map((p) => p.runId)).toEqual(["cooling"]);
     expect((await positionsFromStore(localRunStore(runsDir), runsDir, NOW)).map((p) => p.runId)).toEqual(["cooling"]);
   });
 
@@ -793,12 +793,12 @@ describe("positionsFromStore", () => {
     expect((await store.latestStates()).get("resumed")?.questsCompleted).toBe(5);
     const fromStore = await positionsFromStore(store, runsDir, NOW);
     expect(fromStore.map((p) => p.questsCompleted)).toEqual([5]);
-    expect(JSON.stringify(fromStore)).toBe(JSON.stringify(readPositions(runsDir, NOW)));
+    expect(JSON.stringify(fromStore)).toBe(JSON.stringify(await readPositions(runsDir, NOW)));
   });
 });
 
 describe("a v1 run on the live map", () => {
-  test("a character standing still is drawn while its writer beats, though its newest trace row is old", () => {
+  test("a character standing still is drawn while its writer beats, though its newest trace row is old", async () => {
     const runsDir = tempDir("wrathbench-map-still-");
     const now = Date.now();
     const dir = join(runsDir, "still-1");
@@ -809,7 +809,7 @@ describe("a v1 run on the live map", () => {
     const session = writeReadings(dir, [{ ts: now - 30 * 60_000, level: 4, xp: 120, map: 0, x: -6240, y: 380, z: 380 }]);
     session.clock.now = now - 1_000;
     session.writer.ingest(null);
-    const [p] = readPositions(runsDir, now);
+    const [p] = await readPositions(runsDir, now);
     expect(p).toMatchObject({ runId: "still-1", map: 0, x: -6240, y: 380 });
   });
 });

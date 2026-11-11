@@ -11,7 +11,7 @@
  * 0.5 run, read through `viewer/legacy05-source.ts`.
  *
  * The run's readers take everything game-side from here
- * (`run-reader.ts`, `viewer/session-source.ts`); the trajectory keeps the
+ * (`run-reader.ts`, `viewer/runs-source.ts`); the trajectory keeps the
  * model side only. The one thing the runner takes from the record while the
  * run plays is the kills: `RecordSignals` hands the loop each `kill` row the
  * stack wrote (after its write gate, so exactly what is on disk), and the

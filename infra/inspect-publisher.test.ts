@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { SEG_MS } from "../runner/viewer/trace";
+import { SEG_MS } from "@wrathbench/inspector/codec/trace";
 import { report, run } from "./inspect-publisher";
 import { emptyState, serializeState } from "./publish-core";
 import { tempDirs } from "./temp-dirs";

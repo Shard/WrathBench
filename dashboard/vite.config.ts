@@ -13,15 +13,16 @@ import { ogTags, ogTagsFromEnv } from "./src/lib/og-tags.ts";
  * static bundle the Bun viewer hosts itself. Same-origin in production is why
  * there is no CORS anywhere.
  *
- * `@viewer/*` reaches into `runner/viewer` for the ten modules that are
- * shared rather than duplicated: the API wire types, the world→tile transform
- * (with the names of the maps that have tiles),
- * the freeplay lineage walk, the character aggregation over it, a run's
- * sessions, the public projection's allowlist, the race and class names, the
- * trace codec, the nearby codec and the tile index. All ten are import-free
- * by construction (the wire types take one type from the import-free driver
- * registry, and the tile index its grid from the world→tile transform), so
- * nothing server-side follows them in.
+ * `@viewer/*` reaches into `runner/viewer` for the modules that are shared
+ * rather than duplicated: the API wire types, the world→tile transform (with
+ * the names of the maps that have tiles), the freeplay lineage walk, the
+ * character aggregation over it, a run's sessions, the public projection's
+ * allowlist, the public bucket's keys, the race and class names and the tile
+ * index. All are import-free by construction (the wire types take one type
+ * from the import-free driver registry and the session-side ones from the
+ * inspector's, and the tile index its grid from the world→tile transform), so
+ * nothing server-side follows them in. The trace and nearby codecs are the
+ * inspector's, imported by package name (`@wrathbench/inspector/codec/*`).
  */
 const viewerOrigin = process.env["WRATHBENCH_VIEWER_ORIGIN"] ?? "http://127.0.0.1:8090";
 

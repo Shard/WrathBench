@@ -119,7 +119,7 @@ its older attempts would report a long-lived character as attempt 1.
 
 ## The map's player
 
-A run the trace recorder drove (`runner/viewer/trace.ts`) is drawn by one
+A run the trace recorder drove (`@wrathbench/inspector/codec/trace`) is drawn by one
 clock-driven player, `src/lib/traceplayer.ts`, the same in the live map and in
 a replay: every frame each pip is placed where the trace puts the character at
 the playhead, with a heading wedge from its facing and a trail of the last
@@ -362,7 +362,8 @@ src/components/  the shell and the pieces shared between pages
 ```
 
 What both sides need is imported from the viewer rather than copied, under
-the `@viewer/*` alias. The viewer imports the same files, so a drift between
+the `@viewer/*` alias, and the session-side codecs from the inspector in the
+stack (`@wrathbench/inspector/codec/*`). The viewer imports the same files, so a drift between
 what it serves and what this expects is a compile error rather than a runtime
 surprise, and nothing server-side may follow them into the browser bundle.
 

@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { TraceState } from "../../runner/viewer/api-types";
-import { emptyTraceState } from "../../runner/viewer/trace";
+import { emptyTraceState } from "@wrathbench/inspector/codec/trace";
 import {
   XP_FOR_LEVEL,
   auraLeft,

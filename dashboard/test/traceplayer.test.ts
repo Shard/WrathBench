@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { CONTEXT_MS, SEG_MS, encodeSegment, tailStart, type TraceRow } from "@viewer/trace";
+import { CONTEXT_MS, SEG_MS, encodeSegment, tailStart, type TraceRow } from "@wrathbench/inspector/codec/trace";
 import type { AgentPosition, TraceAura, TraceSegment, TrackPoint, TrackResponse } from "../../runner/viewer/api-types";
 import {
   CATCHUP_RATE,

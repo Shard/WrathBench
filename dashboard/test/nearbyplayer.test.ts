@@ -1,12 +1,13 @@
 /**
  * The nearby player (`src/lib/nearbyplayer.ts`) over windows the viewer's own
- * codec encodes (`@viewer/nearby`): spline sampling at the map's playhead,
+ * codec encodes (`@wrathbench/inspector/codec/nearby`): spline sampling at the map's playhead,
  * one dot per guid across characters, the packet-field classes, label
  * culling, the redraw throttle and the zoom gates. Units, names and guids are
  * invented.
  */
 import { describe, expect, test } from "bun:test";
-import { PUBLIC_NEARBY_SPAN_MS, encodeNearby, type NearbyRingRow, type NearbyRingUnit } from "@viewer/nearby";
+import { encodeNearby, type NearbyRingRow, type NearbyRingUnit } from "@wrathbench/inspector/codec/nearby";
+import { PUBLIC_NEARBY_SPAN_MS } from "@viewer/public-keys";
 import { cullLabels, classOf, createNearbyStore, nearbyFrameDue, placeLabel, questMark, NEARBY_FRAME_MS, NEARBY_SLACK_MS } from "../src/lib/nearbyplayer";
 import { NEARBY_MIN_PX_PER_YD, NEARBY_NAME_PX_PER_YD, nearbyNamesShown, nearbyShown, pxPerYard } from "../src/lib/mapview";
 import { targetReading } from "../src/lib/unitframe";

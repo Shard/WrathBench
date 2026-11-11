@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { CONTEXT_MS, SEG_MS, encodeSegment, type TraceChatLine, type TraceRow } from "@viewer/trace";
+import { CONTEXT_MS, SEG_MS, encodeSegment, type TraceChatLine, type TraceRow } from "@wrathbench/inspector/codec/trace";
 import type { TraceSegment } from "../../runner/viewer/api-types";
 import { projectTraceSegment } from "../../runner/viewer/public-projection";
 import {

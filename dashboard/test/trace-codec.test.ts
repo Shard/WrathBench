@@ -8,9 +8,9 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { SEG_MS, decodeSegment, encodeSegment, sampleAt, stateAt } from "@viewer/trace";
+import { SEG_MS, decodeSegment, encodeSegment, sampleAt, stateAt } from "@wrathbench/inspector/codec/trace";
 
-describe("@viewer/trace", () => {
+describe("@wrathbench/inspector/codec/trace", () => {
   test("resolves at runtime and round-trips a segment", () => {
     const t0 = 1_760_000_100_000;
     const seg = encodeSegment(

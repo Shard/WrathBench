@@ -34,7 +34,7 @@ import {
   type StateIo,
   traceSegmentPath,
 } from "./publish-core";
-import { SEG_MS } from "../runner/viewer/trace";
+import { SEG_MS } from "@wrathbench/inspector/codec/trace";
 import { SecretScanner } from "../runner/src/secret-scan";
 
 /**

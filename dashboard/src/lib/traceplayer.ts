@@ -23,8 +23,8 @@
  * sum of frames: a background tab stops drawing, and when it wakes the
  * playhead is wherever the anchor puts it now rather than where it stopped.
  *
- * The codec is `runner/viewer/trace.ts`, reached over `@viewer/trace` at
- * runtime; this file decides what to play and when, never how a segment reads.
+ * The codec is `@wrathbench/inspector/codec/trace`, imported at runtime; this
+ * file decides what to play and when, never how a segment reads.
  */
 
 import type {
@@ -52,7 +52,7 @@ import {
   stateAt,
   unpackSegs,
   windowOf,
-} from "@viewer/trace";
+} from "@wrathbench/inspector/codec/trace";
 import { type Span, advanceCursor } from "./playback";
 import { trackSpan } from "./replay";
 

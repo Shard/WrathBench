@@ -2,7 +2,7 @@
  * The map's chat bubbles: what a character said, above its pip, for a while
  * after it said it.
  *
- * The lines are the trace's (`chat` events, `runner/viewer/trace.ts`): each
+ * The lines are the trace's (`chat` events, `@wrathbench/inspector/codec/trace`): each
  * character's own outgoing say, party, raid, yell, whisper and emote lines as
  * the server echoed them back. A party's lines are therefore each said once,
  * above the one who said them: another member's copy of the same line is
@@ -20,7 +20,7 @@
  * Pure, so it is pinned by tests; `MapPage.tsx` only draws what this returns.
  */
 
-import type { TraceChatKind, TraceChatLine } from "@viewer/trace";
+import type { TraceChatKind, TraceChatLine } from "@wrathbench/inspector/codec/trace";
 import type { ScreenBox } from "./nearbyplayer";
 
 /** How long a line stays up, on the playhead's clock. */
