@@ -48,10 +48,17 @@ import {
   type UsageHold,
 } from "../runner/src/subscription-usage";
 import type { FleetRosterEntry, JobSpawn } from "./run-fleet-config";
+import type { CredentialHoldKind } from "../runner/viewer/api-types";
 
 export { readCredentialUsage, CREDENTIAL_USAGE_SIDECAR };
 
 // ------------------------------------------------------------------ the budgets
+
+/** Why a credential holds a launch or a resume: the sentence for the operator, and its kind for the public build. */
+export interface CredentialHold {
+  why: string;
+  kind: CredentialHoldKind;
+}
 
 /** The run facts a budget reads. */
 export type BudgetRun = Pick<RunFact, "credential" | "startedAt"> & Partial<Pick<RunFact, "spendByDay" | "resumesByDay" | "credentialUsage">>;
@@ -68,6 +75,8 @@ export interface CredentialGate {
    * resume are held alike: each segment is a run to a runs-per-day budget.
    */
   holdOf(id: string, episode: string | null | undefined, model?: string | null): string | undefined;
+  /** `holdOf` with what kind of hold it is. */
+  hold(id: string, episode: string | null | undefined, model?: string | null): CredentialHold | undefined;
   /**
    * Launches on `id` since 00:00 UTC, as the runs on disk record them: fresh
    * starts and the segments resumes started. A tick's own starts count from
@@ -118,24 +127,32 @@ export function credentialGate(
     const t = c.budget?.kind === "usage" ? { scored: c.budget.scoredMaxPct, freeplay: c.budget.freeplayMaxPct } : { scored: EXHAUSTED_PCT, freeplay: EXHAUSTED_PCT };
     return usageHold(usage.get(id), thresholdOf(gateClassOf(episode), t), now, model ?? null);
   };
+  const hold = (id: string, episode: string | null | undefined, model?: string | null): CredentialHold | undefined => {
+    const c = byId.get(id);
+    if (c === undefined) return undefined;
+    const h = usageHoldOf(id, episode, model);
+    if (h !== null) {
+      const cls = gateClassOf(episode);
+      const why =
+        h.threshold >= EXHAUSTED_PCT || cls === "spent-only" || h.windows.some((w) => w.usedPercent >= EXHAUSTED_PCT)
+          ? `credential ${id}: a usage window is spent — held until it resets`
+          : `credential ${id}: at or over its ${cls} usage threshold — held until its usage window resets`;
+      return { why, kind: "usage" };
+    }
+    if (c.budget?.kind === "spend" && (spendToday.get(id) ?? 0) >= c.budget.usdPerDay) {
+      return { why: `credential ${id}: its spend budget for the day is used — held until 00:00 UTC`, kind: "spend" };
+    }
+    if (c.budget?.kind === "runs" && (runsToday.get(id) ?? 0) >= c.budget.perDay) {
+      return { why: `credential ${id}: its runs for the day are used — held until 00:00 UTC`, kind: "runs" };
+    }
+    return undefined;
+  };
   return {
     now,
     usage,
     usageHoldOf,
-    holdOf: (id, episode, model) => {
-      const c = byId.get(id);
-      if (c === undefined) return undefined;
-      const h = usageHoldOf(id, episode, model);
-      if (h !== null) {
-        const cls = gateClassOf(episode);
-        return h.threshold >= EXHAUSTED_PCT || cls === "spent-only" || h.windows.some((w) => w.usedPercent >= EXHAUSTED_PCT)
-          ? `credential ${id}: a usage window is spent — held until it resets`
-          : `credential ${id}: at or over its ${cls} usage threshold — held until its usage window resets`;
-      }
-      if (c.budget?.kind === "spend" && (spendToday.get(id) ?? 0) >= c.budget.usdPerDay) return `credential ${id}: its spend budget for the day is used — held until 00:00 UTC`;
-      if (c.budget?.kind === "runs" && (runsToday.get(id) ?? 0) >= c.budget.perDay) return `credential ${id}: its runs for the day are used — held until 00:00 UTC`;
-      return undefined;
-    },
+    hold,
+    holdOf: (id, episode, model) => hold(id, episode, model)?.why,
     runsToday: (id) => runsToday.get(id) ?? 0,
     spendToday: (id) => spendToday.get(id) ?? 0,
   };
@@ -494,19 +511,19 @@ export function driverOfEntry(e: Pick<FleetRosterEntry, "driver"> | undefined): 
 
 /**
  * Why a paused run's credential holds its resume, or undefined: gone from the
- * config, disabled, or its budget (`CredentialGate.holdOf`). A run that
+ * config, disabled, or its budget (`CredentialGate.hold`), with its kind. A run that
  * recorded none is held by nothing here.
  */
 export function resumeHoldOf(
   f: Pick<RunFact, "credential" | "episode" | "model">,
   cfg: { credentials: readonly Credential[] },
   gate: CredentialGate,
-): string | undefined {
+): CredentialHold | undefined {
   if (f.credential === null) return undefined;
   const c = cfg.credentials.find((x) => x.id === f.credential);
-  if (c === undefined) return `credential ${f.credential} is not configured — the run comes back only on it (or move it: bun wb config move-credential)`;
-  if (!c.enabled) return `credential ${f.credential} is disabled — the run comes back only on it (or move it: bun wb config move-credential)`;
-  return gate.holdOf(c.id, f.episode, f.model);
+  if (c === undefined) return { why: `credential ${f.credential} is not configured — the run comes back only on it (or move it: bun wb config move-credential)`, kind: "credential" };
+  if (!c.enabled) return { why: `credential ${f.credential} is disabled — the run comes back only on it (or move it: bun wb config move-credential)`, kind: "credential" };
+  return gate.hold(c.id, f.episode, f.model);
 }
 
 /** A spawn the budget changed, and why. */

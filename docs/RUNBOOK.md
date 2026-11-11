@@ -2037,7 +2037,9 @@ runs), whether a scored and a freeplay launch are held, whether its variable
 is set, the newest `auth-failed` or `quota-exhausted` on it, and a Codex
 home's volume. The supervisor publishes the same in `fleet-state.json`, and the
 private viewer's `/api/fleet` serves it. None of the figures reach a public
-page.
+page: a paused run a credential holds shows there only as the kind of hold (a
+usage window, the day's runs or spend budget, or the credential itself), with
+no credential named and no reset time.
 
 **The Codex home.** `CODEX_HOME` names a logged-in Codex home (`codex login`;
 the login is its `auth.json`), and a second subscription is `CODEX_HOME_2`

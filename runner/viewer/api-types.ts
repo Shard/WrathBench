@@ -1436,7 +1436,17 @@ export interface FleetPausedView {
    * and `why` on such a row. Absent on every other row.
    */
   subscriptionWait?: true;
+  /**
+   * What holds the resume when its credential does: a usage window, the
+   * day's runs or spend budget, or the credential gone or disabled. The
+   * public build says which in a fixed phrase and withholds the rest (the
+   * credential's id and figures). Absent when the credential holds nothing.
+   */
+  hold?: CredentialHoldKind;
 }
+
+/** What a credential holds a paused run's resume on (`FleetPausedView.hold`). */
+export type CredentialHoldKind = "usage" | "runs" | "spend" | "credential";
 
 /**
  * One run's progress as the fleet table shows it: the listing row's own

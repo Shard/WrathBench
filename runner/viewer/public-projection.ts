@@ -41,8 +41,9 @@
  *   supervisor's pids.
  * - No subscription usage figure leaves (operator, 2026-10-16): the drivers'
  *   `rate_limits` records carry their windows in fields no list here names,
- *   a paused row waiting on a usage window (`subscriptionWait`) ships without
- *   its `resumeAfter` and with a fixed `why`, and an errored `claude_result`
+ *   a paused row waiting on a usage window (`subscriptionWait`), or held by
+ *   its credential in any way (`hold`), ships without its `resumeAfter` and
+ *   with a fixed `why` that names only the kind of hold, and an errored `claude_result`
  *   ships without its text, which is the CLI's limit message.
  * - Minimap tiles are Blizzard bytes and never leave through a snapshot.
  * - From the trace (`projectTraceSegment`): the `target`, which names another
@@ -78,6 +79,7 @@ import type {
   FleetEndedView,
   FleetJobView,
   FleetPausedView,
+  CredentialHoldKind,
   FleetRunFacts,
   FleetPreflightView,
   FleetResponse,
@@ -228,6 +230,23 @@ export interface PublicFleetResponse extends Omit<FleetResponse, "fleetPid" | "j
  */
 /** What the public fleet page says about a paused run waiting on a subscription usage window: no figure, no time. */
 export const SUBSCRIPTION_WAIT_WHY = "waiting for its subscription usage window to reset";
+
+/**
+ * What the public fleet page says about a paused run its credential holds, by
+ * kind: no credential id, no figure, no time.
+ */
+export const CREDENTIAL_HOLD_WHY: Readonly<Record<CredentialHoldKind, string>> = {
+  usage: SUBSCRIPTION_WAIT_WHY,
+  runs: "waiting for its daily run budget to reset",
+  spend: "waiting for its daily spend budget to reset",
+  credential: "waiting for its credential",
+};
+
+/** A paused row's public `why`: the kind of credential hold, the usage-window wait, or the supervisor's own sentence. */
+function publicPausedWhy(p: Pick<FleetPausedView, "why" | "subscriptionWait" | "hold">): string {
+  if (p.hold !== undefined) return CREDENTIAL_HOLD_WHY[p.hold] ?? SUBSCRIPTION_WAIT_WHY;
+  return p.subscriptionWait === true ? SUBSCRIPTION_WAIT_WHY : p.why;
+}
 
 function pausedToken(reason: string | null): string | null {
   if (reason === null || reason === "") return null;
@@ -1212,13 +1231,14 @@ export function projectFleet(f: FleetResponse): PublicFleetResponse {
         pauseCount: p.pauseCount,
         // A subscription usage window's reset is the operator's (operator,
         // 2026-10-16): no reset time and no usage figure leaves the machine.
-        resumeAfter: p.subscriptionWait === true ? null : p.resumeAfter,
+        resumeAfter: p.subscriptionWait === true || p.hold !== undefined ? null : p.resumeAfter,
         elapsedMs: p.elapsedMs,
         budgetMs: p.budgetMs,
         // The supervisor's own sentence about its own scheduling; rendered
         // verbatim by the fleet page and never sourced from the world — but
-        // for a subscription wait, whose sentence names its reset.
-        why: p.subscriptionWait === true ? SUBSCRIPTION_WAIT_WHY : p.why,
+        // for a credential's hold or a subscription wait, whose sentence
+        // names the credential and its reset: a fixed phrase per kind.
+        why: publicPausedWhy(p),
       }),
     ),
     ended: f.ended.map(
