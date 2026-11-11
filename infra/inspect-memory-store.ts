@@ -31,6 +31,7 @@ import {
   type StoreRun,
   TURN_KINDS,
   UNPARSEABLE,
+  usageOf,
   type Window,
 } from "./inspect-run";
 
@@ -212,6 +213,25 @@ export async function memoryStore(runsDir: string): Promise<MemoryStore> {
         });
       }
       return out;
+    },
+    async usage(id) {
+      // `usageSql`'s row: each response line once, its usage columns summed.
+      const rs = merged(table("turns"), (r) => `${String(r["run_id"])}\u0000${String(r["line_no"])}`).filter((r) => r["run_id"] === id && r["kind"] === "response");
+      const n = (r: Row, k: string): number | null => (typeof r[k] === "number" ? (r[k] as number) : null);
+      const sum = (k: string): number => rs.reduce((a, r) => a + (n(r, k) ?? 0), 0);
+      const has = (k: string): number => rs.filter((r) => n(r, k) !== null).length;
+      return usageOf({
+        n: rs.length,
+        reported: rs.filter((r) => n(r, "input_tokens") !== null || n(r, "output_tokens") !== null).length,
+        input: sum("input_tokens"),
+        output: sum("output_tokens"),
+        cache_read: sum("cache_read_tokens"),
+        crn: has("cache_read_tokens"),
+        cache_write: sum("cache_write_tokens"),
+        cwn: has("cache_write_tokens"),
+        usd: sum("cost_usd"),
+        costed: has("cost_usd"),
+      });
     },
     async raws(id, wanted) {
       wholeLines.push(...wanted);

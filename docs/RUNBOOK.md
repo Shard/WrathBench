@@ -76,13 +76,14 @@ run directories and `fleet-<stamp>.jsonl` are the record.
 
 ```
 bun wb inspect live                                  # every run with a heartbeat, one line each
-bun wb inspect run <run-id> [--since 2h] [--until 1h] # verdict, level, quests across restarts, counts, errors by class, sizes, trace
+bun wb inspect run <run-id> [--since 2h] [--until 1h] # verdict, level, quests across restarts, counts, errors by class, marks, cost, sizes, trace
 bun wb inspect trajectory <run-id> --errors --last 10
 bun wb inspect trajectory <run-id> --since <iso> --next 20   # the first 20 after a moment
 bun wb inspect tools <run-id> [--since 2h] [--until 1h]       # calls per tool, ok/error, reflect granted/refused, pad writers
 bun wb inspect pad <run-id> [--since 2h]                       # pad size over time, writes, cap refusals, drops flagged
 bun wb inspect pad <run-id> --at <iso>                         # the pad's text at a moment, rebuilt from the record
 bun wb inspect stuck [<run-id>] [--window 2h] [--until 1h]     # no game progress over a window, and the failure signals in it
+bun wb inspect session <run-id> [--stream calls] [--character Name] [--kind death,level] [--grep RE] [--last 20]   # a v1 run's record, a line per row
 bun wb inspect audit <run-id> [--op WB_MOVE_RESULT [--status S]] [--since 1h]
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
 bun wb inspect audit --smoke edge-drop --op move_edge_drop --since 1h   # a smoke's sessions (from the smoke-session ledger)
@@ -95,12 +96,12 @@ A run is live when its row has neither a termination nor a pause; one with
 neither whose heartbeat is older than two minutes has lost its process and
 reads `ownerless`.
 
-`live`, `run`, `trajectory`, `tools`, `pad` and `stuck` are
+`live`, `run`, `trajectory`, `tools`, `pad`, `stuck` and `session` are
 `infra/inspect-run.ts` in the runner pod. Before a release ships a change to
 it, the same file runs in the pod from stdin:
 `kubectl -n wrathbench exec -i deploy/wrathbench-runner -- bun run - run <run-id> < infra/inspect-run.ts`.
 
-Those six read a run's row, its state samples and its trajectory from
+All but `session` read a run's row, its state samples and its trajectory from
 ClickHouse (the runner pod's `CLICKHOUSE_*`), never by walking a live 0.5
 run's `run.sqlite`: a full read of one held it against the runner's writer
 long enough to kill the run. The heartbeat, a few `meta.json` fields, file sizes,
@@ -111,7 +112,17 @@ files: <why>` when there is no `CLICKHOUSE_URL`, ClickHouse does not answer,
 the run is not in it yet, or `--files` was given. The fallback reads
 `trajectory.jsonl`, which a reader cannot lock. A v1 run is read whole off
 its files: its row is `meta.json`'s and its level, quests and samples are its
-session record's, none of which a reader can hold. A 0.5 run's `run.sqlite`
+session record's, none of which a reader can hold. A fan-out run is read per
+character, each off its own record in `sessions/<Character>/` (the store's
+rows under `<run-id>~<Character>`): `run` prints a block per character, `live`
+a line per character under the run's, and `session` reads them together, each
+line naming its character. A v1 run's `marks` (deaths, levels gained, zones,
+turn-ins) are its record's `events` rows, not trajectory records, and
+`session` is the reader of its `events` and `calls` streams that `trajectory
+--grep` was on 0.5. `run`'s `cost` line is the whole run's: the provider's
+own charge where it reported one (OpenRouter's per response, the Claude Code
+CLI's per session) and the tokens the responses reported; the list-price
+figure is the viewer's. A 0.5 run's `run.sqlite`
 is opened only when it has no fresh heartbeat, so a live one's row reads
 `unread` and its level `not read`. Each query is `readonly=2`, capped at 60 s and 256 MiB, and
 tagged `log_comment = 'wb inspect'`, so on a Code 241 `system.query_log` shows
@@ -145,7 +156,10 @@ flagged. What covers it depends on the run:
   `live.json`'s heartbeat. The reading it starts from is the newest sample
   before the window, so a level gained just inside it is still progress. A
   character standing still while its record is written reads `STUCK`; a gap
-  of more than 15 minutes with nothing written at all reads `unjudged`.
+  of more than 15 minutes with nothing written at all reads `unjudged`;
+- a fan-out run's characters are each judged so off their own records, and
+  the run is `STUCK` only when every one is: one agent moving any of its
+  characters is making progress.
 
 Only that verdict flags a run. Beside it, each marked tripped or not with its
 count: the same error repeated (digits folded), the harness-delivered hint

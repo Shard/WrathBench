@@ -277,7 +277,7 @@ export const ENTRIES: readonly Entry[] = [
     group: "inspect",
     command: "run",
     takes: "<run-id> [--since D] [--until D] [--files]",
-    summary: "live, paused, ended or ownerless; level, quests across restarts, counts, errors by class, sizes, trace",
+    summary: "live, paused, ended or ownerless; level (per character on a fan-out run), quests across restarts, counts, errors by class, marks, cost, sizes, trace",
     ...inRunner("bun", INSPECT_RUN, "run"),
   },
   {
@@ -307,6 +307,13 @@ export const ENTRIES: readonly Entry[] = [
     takes: "[<run-id>] [--window D] [--until D] [--move N] [--max-gap D] [--repeat N] [--hints N] [--schema N] [--restarts N] [--asks N] [--files]",
     summary: "no game progress over a window (level, xp, quests, money, items, position), and the failure signals in it; no run id: every live run",
     ...inRunner("bun", INSPECT_RUN, "stuck"),
+  },
+  {
+    group: "inspect",
+    command: "session",
+    takes: "<run-id> [--stream events|calls] [--character NAME] [--kind K[,K]] [--grep RE] [--last N | --next N] [--since D] [--until D]",
+    summary: "a v1 run's session record, one capped line per row: events (deaths, levels, turn-ins) or calls (tool calls, actions, moves, served batches); a fan-out run's characters together",
+    ...inRunner("bun", INSPECT_RUN, "session"),
   },
   {
     group: "inspect",
