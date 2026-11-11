@@ -367,7 +367,8 @@ occurs in a run id, so the split is unambiguous, and it needs no escaping in
 a URL path. A packed window of one carries that id as its `run`. A
 single-character run's id stays its run id, byte for byte.
 
-The run itself lists like any run, with its row off `meta.json`. Its
+The run itself lists like any run, with its row off `meta.json` naming no
+character (its launch names the first; none is the run's). Its
 `/api/run/<id>` adds `fanout: [{ id, character }]`, the characters in name
 order, a field no other run's detail carries; the run page lists them, and
 shows the picked one's character and events through the inspector's API.

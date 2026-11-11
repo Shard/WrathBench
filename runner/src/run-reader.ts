@@ -14,12 +14,12 @@
  *   run stays readable, not comparable.
  * - A **fan-out** run (`<run>/sessions/<Character>/`, one record per
  *   character) has its run row and its trajectory read here, and no state
- *   samples, milestones or reading: every reader here answers for one
- *   character, and no one character is the run. Taking the highest-level one
- *   would present it as the run to a resume note, the listing and the
- *   scheduler's best level, and the collector, which does not ingest a
- *   fan-out run's records, would disagree. A character's own reading is its
- *   session's, through the viewer's runs source.
+ *   samples, milestones, reading or character name: every reader here
+ *   answers for one character, and no one character is the run. Taking the
+ *   highest-level one would present it as the run to a resume note, the
+ *   listing and the scheduler's best level, and the collector, which does
+ *   not ingest a fan-out run's records, would disagree. A character's own
+ *   reading is its session's, through the viewer's runs source.
  *
  * The run row is meta.json's (`runRowOfMeta`), except in a run directory that
  * has a run.sqlite: there the `run` table holds it, as 0.5 (and the first v1
@@ -206,6 +206,8 @@ function sqliteRunRow(dir: string, runId: string): Record<string, unknown> | nul
 export function readRunRow(dir: string, runId: string): Record<string, unknown> | null {
   const meta = readJson(join(dir, "meta.json"));
   const hasDb = existsSync(join(dir, RUN_DB_FILE));
+  // A fan-out run's launch names a character, and no one character is the run (the header).
+  if (meta !== null && isFanoutRunDir(dir)) return { ...runRowOfMeta(runId, meta), character: null } as unknown as Record<string, unknown>;
   if (isV1RunDir(dir) && meta !== null) {
     const row = runRowOfMeta(runId, meta);
     if (row.termination_reason === null && hasDb) {

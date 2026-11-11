@@ -221,6 +221,8 @@ describe("a pass over one run", () => {
     await collector.pass();
     const runs = rowsOf(sink, "runs").map((r) => r["run_id"]);
     expect(runs.sort()).toEqual([FANOUT_RUN, V1P1_RUN].sort());
+    // Its launch names a first character; the run's row names none.
+    expect(rowsOf(sink, "runs").find((r) => r["run_id"] === FANOUT_RUN)?.["character"]).toBe("");
     expect(rowsOf(sink, "turns").some((r) => r["run_id"] === FANOUT_RUN)).toBe(true);
     for (const table of ["states", "milestones", "moves"]) expect({ table, fanout: rowsOf(sink, table).filter((r) => r["run_id"] === FANOUT_RUN).length }).toEqual({ table, fanout: 0 });
     // The single-character run beside it reads as it does alone.

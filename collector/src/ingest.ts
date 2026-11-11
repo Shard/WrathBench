@@ -591,7 +591,8 @@ export class Ingester {
       shakeout: str(r["shakeout"]) || str(meta["shakeout"]),
       model: str(r["model"]) || str(config["model"]),
       objective: str(r["objective"]) || str(config["objective"]),
-      character: str(r["character"]) || str(config["character"]),
+      // A fan-out run's launch names a character, and no one character is the run (`readRunRow`).
+      character: isFanoutRunDir(dir) ? "" : str(r["character"]) || str(config["character"]),
       platform: str(r["platform"]),
       resolved_model: str(r["resolved_model"]) || str(resolved["model"]),
       resolved_cli_version: str(r["resolved_cli_version"]) || str(resolved["cliVersion"]),

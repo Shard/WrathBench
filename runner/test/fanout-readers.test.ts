@@ -32,7 +32,7 @@ describe("the run reader over a fan-out run", () => {
     expect(isFanoutRunDir(dir)).toBe(true);
     expect(isV1RunDir(dir)).toBe(false);
     expect(fanoutCharacters(dir)).toEqual(["Alfa", "Bravo"]);
-    expect(readRunRow(dir, FANOUT_RUN)?.["run_id"]).toBe(FANOUT_RUN);
+    expect(readRunRow(dir, FANOUT_RUN)).toMatchObject({ run_id: FANOUT_RUN, character: null });
     expect(readStateSamples(dir, FANOUT_RUN)).toEqual([]);
     expect(latestReading(dir, FANOUT_RUN)).toBeNull();
     expect(bestLevelOf(dir, FANOUT_RUN)).toBeNull();
@@ -57,13 +57,14 @@ describe("the private viewer over a fan-out run", () => {
     const h = handleFor(runs, false);
     const listed = (await (await get(h, "/api/runs")).json()) as { runs: { runId: string }[] };
     expect(listed.runs.map((r) => r.runId).sort()).toEqual([FANOUT_RUN, V1P1_RUN].sort());
-    const detail = (await (await get(h, `/api/run/${FANOUT_RUN}`)).json()) as { fanout?: unknown; run: { level: number | null } };
+    const detail = (await (await get(h, `/api/run/${FANOUT_RUN}`)).json()) as { fanout?: unknown; run: { level: number | null; character: string | null } };
     expect(detail.fanout).toEqual([
       { id: `${FANOUT_RUN}~Alfa`, character: "Alfa" },
       { id: `${FANOUT_RUN}~Bravo`, character: "Bravo" },
     ]);
-    // No one character's level stands for the run.
+    // No one character's name or level stands for the run.
     expect(detail.run.level).toBeNull();
+    expect(detail.run.character).toBeNull();
     const single = (await (await get(h, `/api/run/${V1P1_RUN}`)).json()) as Record<string, unknown>;
     expect("fanout" in single).toBe(false);
   });
