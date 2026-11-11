@@ -10,7 +10,7 @@
  */
 
 import { openRunDb } from "../runner/src/rundb";
-import { isV1RunDir, latestReading, readRunRow, readStateSamples, sessionDirOfRun } from "../runner/src/run-reader";
+import { characterSamplesOf, fanoutCharacters, fanoutLead, fanoutReadings, fanoutSessionDir, isFanoutRunDir, isV1RunDir, latestReading, readRunRow, readStateSamples, sessionDirOfRun } from "../runner/src/run-reader";
 import { type FleetRead, readFleetConfig } from "../runner/src/config-store";
 import { existsSync, readdirSync, readFileSync, realpathSync, statfsSync, statSync } from "node:fs";
 import { readCodexThread } from "../runner/src/codex-rollout";
@@ -611,19 +611,31 @@ export function liveRunStuck(runId: string, now = Date.now(), runsDir = RUNS_DIR
   if (now - hb >= HEARTBEAT_DEAD_MS) return undefined;
   const windowMs = STUCK_DEFAULTS.windowMs;
   let rows: Record<string, unknown>[];
-  if (isV1RunDir(dir)) {
-    // A v1 run's samples are its trace's (`runner/src/run-reader.ts`), kept
-    // and read on per run, so a status poll folds only what is new. The
-    // newest one before the window is the reading it starts from, and the
-    // record's other writes cover the stretches a still character leaves
-    // the trace silent through, as `inspect stuck` reads them.
-    const w = { since: now - windowMs, until: now };
-    const all = readStateSamples(dir, runId).filter((r) => typeof r["ts"] === "number");
+  // A v1 run's samples are its trace's (`runner/src/run-reader.ts`), kept
+  // and read on per run, so a status poll folds only what is new. The
+  // newest one before the window is the reading it starts from, and the
+  // record's other writes cover the stretches a still character leaves
+  // the trace silent through, as `inspect stuck` reads them.
+  const w = { since: now - windowMs, until: now };
+  const verdictOf = (rows: readonly Record<string, unknown>[], sessionDir: string): ReturnType<typeof progressVerdict> => {
+    const all = rows.filter((r) => typeof r["ts"] === "number");
     let from = all.findIndex((r) => (r["ts"] as number) >= w.since);
     from = from < 0 ? all.length - 1 : Math.max(0, from - 1);
     const samples = all.slice(from).map((r) => progressSampleOf(r, Number(r["ts"])));
-    const verdict = progressVerdict(samples, w, STUCK_DEFAULTS, recordWrites(sessionDirOfRun(dir), w).writes);
+    return progressVerdict(samples, w, STUCK_DEFAULTS, recordWrites(sessionDir, w).writes);
+  };
+  if (isV1RunDir(dir)) {
+    const verdict = verdictOf(readStateSamples(dir, runId), sessionDirOfRun(dir));
     return verdict.state === "stuck" ? stuckFlag(verdict, windowMs) : undefined;
+  }
+  // A fan-out run is stuck only when every character is: one agent moving
+  // any of its characters is making progress.
+  if (isFanoutRunDir(dir)) {
+    const verdicts = fanoutCharacters(dir).flatMap((c) => {
+      const sessionDir = fanoutSessionDir(dir, c);
+      return sessionDir === null ? [] : [verdictOf(characterSamplesOf(dir, c) as unknown as Record<string, unknown>[], sessionDir)];
+    });
+    return verdicts.length > 0 && verdicts.every((v) => v.state === "stuck") ? stuckFlag(verdicts[0]!, windowMs) : undefined;
   }
   const path = join(dir, "run.sqlite");
   if (!existsSync(path)) return undefined;
@@ -655,6 +667,13 @@ export function liveRunStuck(runId: string, now = Date.now(), runsDir = RUNS_DIR
  */
 export function runProgress(runId: string, runsDir = RUNS_DIR): { level: number; xp: number; startedAt?: number } | undefined {
   const dir = join(runsDir, runId);
+  // A fan-out run: its lead character's reading (`fanoutLead`), as the run listing shows it.
+  if (isFanoutRunDir(dir)) {
+    const lead = fanoutLead(fanoutReadings(dir));
+    if (lead === null || lead.level === null) return undefined;
+    const started = readRunRow(dir, runId)?.["started_at"];
+    return { level: lead.level, xp: lead.xp ?? 0, ...(typeof started === "number" ? { startedAt: started } : {}) };
+  }
   if (isV1RunDir(dir)) {
     // A v1 run: the newest sample its trace yields, and the start meta.json holds (`run-reader.ts`).
     const latest = latestReading(dir, runId);

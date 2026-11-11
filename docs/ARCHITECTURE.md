@@ -676,19 +676,23 @@ Every episode starts with a freshly created character at level 1 in its starting
   docs/METHODOLOGY.md, "Scoring").
 - Trajectories as JSONL next to it: the model's side of the run, and nothing
   of the game's.
-- A fan-out run, one agent driving several characters, has no `session/`:
-  each character's record is its own `data/runs/<id>/sessions/<Character>/`,
+- A fan-out run, one agent driving several characters, has no `session/`: each
+  character's record is its own `data/runs/<id>/sessions/<Character>/`,
   named as the server spells the character, beside one model-side
   trajectory, and the launch's `meta.json` says so (`config.fanout`). Its
   `roster.json` holds the characters' session tokens; only the runner reads
-  it back, on a resume. The readers answer for one character at a time, so no one character
-  stands for the run: the run row is the run's, and its samples, level and
-  milestones read as not recorded (`runner/src/run-reader.ts`); the viewer
-  serves each character as a session of its own (`runner/viewer/README.md`,
-  "A fan-out run's characters"); the collector does not ingest the
-  characters' records, since every table is keyed by run alone; and the
-  public site never publishes the run. A run has one layout or the other,
-  never both.
+  it back, on a resume. Each character is read as a v1 run is, under its
+  session id `<id>~<Character>` (`~` never occurs in a run id): the viewer
+  serves it as a session of its own and its replay feed under that id
+  (`runner/viewer/README.md`, "A fan-out run's characters"), and the
+  collector keys its state, move and milestone rows by it, so no table
+  needed a new key. No one character's curve, money or milestones are the
+  run's, so the run's own samples read empty and its latest reading, which a
+  resume tells the model, null (`runner/src/run-reader.ts`). Where a reader
+  needs one figure, the listing's level and the scheduler's best level, it
+  takes the lead: the character with the highest level, its xp beside it.
+  The public site never publishes the run. A run has one layout or the
+  other, never both.
 - A run recorded before the session record (a 0.5 run) has no `session/`:
   its run row, 60-second state samples, trace and movement intentions are
   tables of its `run.sqlite`, and its milestones are trajectory records. It stays

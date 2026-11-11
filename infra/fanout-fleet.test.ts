@@ -18,7 +18,8 @@ import { accountsOfRun, DEFAULT_POLICY, type RunFact } from "../runner/src/model
 import { defsBlock, ONE_AGENT_IMAGE, oneAgentDefinition, PARTY_MEMBERS } from "../runner/test/fixtures/campaigns";
 import { parseFleet, pinnedCampaignJobs, type FleetConfig } from "./run-fleet-config";
 import { fillEntries, finishesOnExit, jobSpawn, planResumes, planStaleRuns, planTick, sessionsOf, unownedLiveRuns } from "./run-fleet-plan";
-import { rosterResumes } from "./run-fleet-state";
+import { liveRunStuck, rosterResumes, runProgress } from "./run-fleet-state";
+import { FANOUT_RUN, writeFanoutRun } from "../runner/test/fixtures/fanout";
 import { accountHolderIn, episodeFlags, fanoutStageRequestOf, resolve, specAccounts, stagedFanoutFile } from "./run-roster";
 import { tempDirs } from "./temp-dirs";
 
@@ -290,3 +291,13 @@ function pinnedFile(cfg: FleetConfig) {
   const [job] = pinnedCampaignJobs(cfg, []);
   return fillEntries(jobSpawn(job!, cfg.roster, "PARTY1", STAMP, undefined, cfg.campaigns), STAMP)[0]!.campaignFile ?? null;
 }
+
+describe("fleet status reads a fan-out run", () => {
+  test("its progress is its lead character's level and xp, and a run with no heartbeat is never flagged stuck", async () => {
+    const root = tempDir("wb-fanout-progress-");
+    await writeFanoutRun(root);
+    expect(runProgress(FANOUT_RUN, root)).toMatchObject({ level: 5, xp: 900 });
+    // No heartbeat: not live, so no stuck flag either way.
+    expect(liveRunStuck(FANOUT_RUN, Date.now(), root)).toBeUndefined();
+  });
+});

@@ -413,6 +413,15 @@ export function groupTrack(id: string, tracks: readonly TrackResponse[]): TrackR
 }
 
 /**
+ * What a fan-out run's transport steps and scrubs over: its characters'
+ * points on one clock, as a party's are (`groupTrack`), under the run's own
+ * id, so the cursor is remembered as the run's.
+ */
+export function fanoutTrack(runId: string, tracks: readonly TrackResponse[]): TrackResponse {
+  return { ...groupTrack(runId, tracks), runId };
+}
+
+/**
  * Where a member last was, as one label: the map, then the zone and the area
  * where the client was served a name for them and it says something the one
  * before it did not. The ids are `whereIds`, for the hover.

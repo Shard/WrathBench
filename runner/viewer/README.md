@@ -382,16 +382,28 @@ a URL path. A packed window of one carries that id as its `run`. A
 single-character run's id stays its run id, byte for byte.
 
 The run itself lists like any run, with its row off `meta.json` naming no
-character (its launch names the first; none is the run's). Its
-`/api/run/<id>` adds `fanout: [{ id, character }]`, the characters in name
-order, a field no other run's detail carries; the run page lists them, and
-shows the picked one's character and events through the inspector's API.
-Everything that reads "the run's session" (the trace, the nearby ring, the
-track, the samples, the map's pip) answers empty for a fan-out run rather
-than present one character as the run: the run's own id opens no session.
-A public handle withholds the run whole, as it does a run whose driver is not
-a model, and the publisher hands it back as withdrawn. `roster.json`, the
-characters' session tokens, is never read.
+character (its launch names the first; none is the run's), and its level and
+xp its lead character's: the highest level, the higher xp then the name
+breaking a tie (`fanoutLead` in `runner/src/run-reader.ts`), read off the
+store's rows under the characters' ids (`withFanoutLeads`) or off their
+records, the same rule either way. Its money, quests and curve stay empty:
+they are no one character's. Its `/api/run/<id>` adds `fanout: [{ id,
+character }]`, the characters in name order, a field no other run's detail
+carries; the run page lists them, and shows the picked one's character and
+events through the inspector's API.
+
+A character's replay feed is `/api/run/<run-id>~<Character>/track`, `/trace`
+and `/trace/<t0>`, read as a run's are off its own record and the store's rows
+under its id, with the run's row answering the model, the harness and whether
+the track can still change; it carries no travel marks, which are the one
+trajectory's. The run's own `/track` has no points and adds the same `fanout`
+list, and the map replays every character's track on one clock, as it does a
+party's members. Everything else that reads "the run's session" (the trace,
+the nearby ring, the live map's pip) answers empty for a fan-out run rather
+than present one character as the run: the run's own id opens no session. A
+public handle withholds the run and its characters' ids whole, as it does a
+run whose driver is not a model, and the publisher hands it back as withdrawn.
+`roster.json`, the characters' session tokens, is never read.
 
 ## Token accounting
 

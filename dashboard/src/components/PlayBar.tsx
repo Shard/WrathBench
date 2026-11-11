@@ -59,6 +59,8 @@ export interface PlayBarProps {
   track: TrackResponse | undefined;
   /** A party's replay: the party's id and how many members' tracks it plays. */
   party?: { id: string; members: number } | undefined;
+  /** A fan-out run's replay: the run's id and how many characters' tracks it plays. */
+  fanout?: { id: string; characters: number } | undefined;
   /** Why the track did not land, already rendered for display. */
   replayError: string | undefined;
   /** The live poll's failure, already rendered for display. */
@@ -147,13 +149,27 @@ export function PlayBar(props: PlayBarProps) {
                 <Show
                   when={props.party}
                   fallback={
-                    <>
-                      <span class="swatch" style={{ background: colorOf(t().runId) }} />
-                      <span class="playbar-title" title={t().runId}>
-                        {t().characterName ?? shortRunId(t().runId)}
-                      </span>
-                      <span class="dim mono">{shortRunId(t().runId)}</span>
-                    </>
+                    <Show
+                      when={props.fanout}
+                      fallback={
+                        <>
+                          <span class="swatch" style={{ background: colorOf(t().runId) }} />
+                          <span class="playbar-title" title={t().runId}>
+                            {t().characterName ?? shortRunId(t().runId)}
+                          </span>
+                          <span class="dim mono">{shortRunId(t().runId)}</span>
+                        </>
+                      }
+                    >
+                      {(f) => (
+                        <>
+                          <A class="playbar-title" href={`/run/${encodeURIComponent(f().id)}`} title={f().id}>
+                            {shortRunId(f().id)}
+                          </A>
+                          <span class="dim">· {f().characters} characters</span>
+                        </>
+                      )}
+                    </Show>
                   }
                 >
                   {(pt) => (

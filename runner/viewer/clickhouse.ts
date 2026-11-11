@@ -40,6 +40,7 @@ import type { RunFact } from "../src/models";
 import type { RunTotals } from "./tail";
 import { LIVE_WINDOW_MS, campaignFieldsOf, itemSamplesOf } from "./runs";
 import { runCredentialOf } from "../src/credential-slots";
+import { fanoutLead, parseFanoutSessionId } from "../src/run-reader";
 
 // ------------------------------------------------------------- the row shapes
 
@@ -778,6 +779,33 @@ export function localRunStore(runsDir: string): RunStore {
         .sort(byTsSeq);
     },
   };
+}
+
+/**
+ * A fan-out run's reading for the listing, off its characters' readings: the
+ * store keys each character's samples by its session id
+ * (`<run-id>~<Character>`, collector/README.md), and the run's own id holds
+ * none. The run's is the lead's level and xp (`fanoutLead` in
+ * `run-reader.ts`, the rule the files are read by), and nothing else: no one
+ * character's money or quests are the run's. A run id that has readings of
+ * its own keeps them. Every other entry is returned as it was.
+ */
+export function withFanoutLeads(latest: ReadonlyMap<string, LatestReading>): Map<string, LatestReading> {
+  const out = new Map(latest);
+  const byRun = new Map<string, { character: string; level: number | null; xp: number | null }[]>();
+  for (const [id, r] of latest) {
+    const named = parseFanoutSessionId(id);
+    if (named === null) continue;
+    const list = byRun.get(named.runId) ?? [];
+    list.push({ character: named.character, level: r.level, xp: r.xp });
+    byRun.set(named.runId, list);
+  }
+  for (const [runId, readings] of byRun) {
+    if (out.has(runId)) continue;
+    const lead = fanoutLead(readings);
+    if (lead !== null) out.set(runId, { level: lead.level, xp: lead.xp, money: null, questsCompleted: null });
+  }
+  return out;
 }
 
 /** `latestStates`' answer as `latestReadings` gives it: the same readings, no inventory. */

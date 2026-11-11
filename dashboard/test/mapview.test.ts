@@ -78,7 +78,8 @@ import {
 /* The reactive build of solid-js stands behind this name for every dashboard
    test; `test/preload-solid.ts` installs it and says why. */
 import { createComputed, createRoot, createSignal } from "solid-js";
-import { clearReplayState, createMapState, replayHrefFor } from "../src/lib/mapstate";
+import { clearReplayState, createMapState, replayHrefFor, runPageHref } from "../src/lib/mapstate";
+import { fanoutTrack } from "../src/lib/party";
 
 const SCREEN = { w: 800, h: 600 };
 
@@ -1387,5 +1388,20 @@ describe("a fading trail", () => {
   test("asks nothing when no trail shows, or there is no playhead", () => {
     expect(trailFadeDue(false, 2000, 1000, 10_000, 0, 250)).toBe(false);
     expect(trailFadeDue(true, null, 1000, 10_000, 0, 250)).toBe(false);
+  });
+});
+
+describe("a fan-out run's replay", () => {
+  test("a character's pip opens its run's page on that character; a run's pip, the run's", () => {
+    expect(runPageHref("fanout-probe~Alfa")).toBe("/run/fanout-probe?character=Alfa");
+    expect(runPageHref("fleet-x-20261112")).toBe("/run/fleet-x-20261112");
+  });
+
+  test("its transport is its characters' points on one clock, under the run's id", () => {
+    const point = (ts: number) => ({ ts, map: 0, x: 0, y: 0, level: 1, xp: 0, money: null, questsCompleted: null, turn: null });
+    const track = (runId: string, ts: number[]): TrackResponse => ({ runId, characterName: null, model: "m", harnessVersion: null, points: ts.map(point) });
+    const t = fanoutTrack("fanout-probe", [track("fanout-probe~Alfa", [1, 3]), track("fanout-probe~Bravo", [2])]);
+    expect(t.runId).toBe("fanout-probe");
+    expect(t.points.map((p) => p.ts)).toEqual([1, 2, 3]);
   });
 });

@@ -29,8 +29,8 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ComparabilityView, ItemSample, MoveIntentView, RunRow, StateItemsRow, StatePoint } from "./api-types";
 import { moves } from "@wrathbench/inspector";
-import { runSession } from "./runs-source";
-import { isFanoutRunDir, isV1RunDir, latestReading, readRunRow, readStateSamples } from "../src/run-reader";
+import { fanoutSession, runSession } from "./runs-source";
+import { characterSamplesOf, fanoutLead, fanoutReadings, isFanoutRunDir, isV1RunDir, latestReading, parseFanoutSessionId, readRunRow, readStateSamples } from "../src/run-reader";
 import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./archive-dir";
 import { harnessOfRun, parseComparability } from "../src/comparability";
@@ -362,6 +362,12 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
       const r = readRunRow(dir, runId);
       if (r !== null) applyRunRow(row, r);
       const latest = latestReading(dir, runId);
+      // A fan-out run has no one reading: its lead character's level and xp (`fanoutLead`).
+      const lead = latest === null && isFanoutRunDir(dir) ? fanoutLead(fanoutReadings(dir)) : null;
+      if (lead !== null) {
+        row.level = lead.level;
+        row.xp = lead.xp;
+      }
       if (latest !== null) {
         row.level = latest.level;
         row.xp = latest.xp;
@@ -513,7 +519,17 @@ function statePointOfRow(r: Record<string, unknown>): StatePoint {
  * A run's state samples, oldest first: a v1 run's folded from its trace
  * (`trace-samples.ts`), a 0.5 run's its run.sqlite `state` rows.
  */
+/** A fan-out character's samples, by its session id (`<run-id>~<Character>`); null for an id that is not one. */
+function characterSamples(runsDir: string, id: string): Record<string, unknown>[] | null {
+  const named = parseFanoutSessionId(id);
+  if (named === null) return null;
+  const dir = runDir(runsDir, named.runId);
+  return dir === null || !isFanoutRunDir(dir) ? [] : (characterSamplesOf(dir, named.character) as unknown as Record<string, unknown>[]);
+}
+
 export function readStates(runsDir: string, runId: string): StatePoint[] {
+  const character = characterSamples(runsDir, runId);
+  if (character !== null) return character.map(statePointOfRow);
   const dir = join(runsDir, runId);
   if (isV1RunDir(dir)) return readStateSamples(dir, runId).map(statePointOfRow);
   const db = openReadonly(dir);
@@ -566,9 +582,10 @@ export function readQuestCounts(runsDir: string, runId: string): Pick<StatePoint
  */
 export function readStateItems(runsDir: string, runId: string): StateItemsRow[] {
   const dir = join(runsDir, runId);
-  if (isV1RunDir(dir)) {
+  const character = characterSamples(runsDir, runId);
+  if (character !== null || isV1RunDir(dir)) {
     const out: StateItemsRow[] = [];
-    for (const r of readStateSamples(dir, runId)) {
+    for (const r of character ?? readStateSamples(dir, runId)) {
       if (typeof r["items"] === "string" && r["items"].length > 0) out.push({ ts: num(r["ts"]) ?? 0, seq: num(r["seq"]) ?? 0, items: r["items"] });
     }
     return out;
@@ -596,7 +613,10 @@ export function readStateItems(runsDir: string, runId: string): StateItemsRow[] 
 /** Every movement intention a run recorded, oldest first: the inspector's readout over the run's session (`runs-source.ts`). */
 export async function readMoves(runsDir: string, runId: string): Promise<MoveIntentView[]> {
   try {
-    return await moves(runSession(runsDir, runId));
+    // A fan-out character's session id opens its own record; a run's id, the run's.
+    const session = parseFanoutSessionId(runId) === null ? runSession(runsDir, runId) : fanoutSession(runsDir, runId);
+    if (session === null) return [];
+    return await moves(session);
   } catch {
     return [];
   }

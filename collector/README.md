@@ -80,6 +80,19 @@ negative `line_no` so they never meet a trajectory line's; its `moves` are its
 meta.json's (`runner/src/run-reader.ts`). Its trajectory's `milestone`
 records, which only the first v1 builds wrote, are not read.
 
+A fan-out run, one agent driving several characters, has a session record per
+character (`sessions/<Character>/`) and none of its own. Each character's
+record is read as a v1 run's is, and its `states`, `milestones` and `moves`
+rows carry the character's session id, `<run-id>~<Character>`, as their
+`run_id`: the id the viewer serves the character under. A session's ordinals
+restart at one, so under the run's own id two characters' rows would land on
+each other's keys; under their own they cannot, and no table needs a new
+column or key, so a deployed store takes them as it is. `~` never occurs in a
+run id, so `splitByChar('~', run_id)` gives the run and the character. The
+run's own id keeps its `runs` and `run_totals` rows and its trajectory's
+lines, and no state, milestone or move row. A single-character run's rows are
+the bytes they were.
+
 Those live in `data/collector.sqlite`, which is the only thing this service
 owns on disk and is as disposable as the store itself.
 
@@ -129,7 +142,7 @@ there is no rarely-exercised branch to be wrong.
 | table | one row is | key |
 | --- | --- | --- |
 | `runs` | a run: its row (meta.json's, or a 0.5 `run.sqlite`'s) merged with `meta.json` | `run_id` |
-| `states` | one state sample: a 0.5 run's 60-second row, a v1 run's trace sample | `(run_id, ts, seq)` |
+| `states` | one state sample: a 0.5 run's 60-second row, a v1 run's trace sample (a fan-out character's under its session id) | `(run_id, ts, seq)` |
 | `moves` | one movement dispatch or verdict | `(run_id, ts, seq)` |
 | `milestones` | one milestone, typed: a 0.5 trajectory line, a v1 `events` row — ad-hoc analysis only | `(run_id, line_no)` |
 | `turns` | one turn-shaped trajectory line, with `messages` (empty on a slim fixed-loop request) | `(run_id, line_no)` |
