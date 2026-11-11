@@ -32,6 +32,7 @@ import { appendPendingActionHints, callTool, coerceToolArgs, toolsFor, type Tool
 import { SandboxHost } from "./sandbox/host";
 import { Trajectory } from "./trajectory";
 import { newRunId, newSessionToken, loadRunConfig } from "./config";
+import { partyOwnGuids } from "./party";
 import { openSessionRecord } from "./session-record";
 import { harnessVersion, stackCommit } from "./version";
 import { SDK_VERSION } from "@wrathbench/sdk";
@@ -107,7 +108,7 @@ async function main(): Promise<void> {
   if (lease.secret === undefined) console.error(`[wrathbench-mcp] ${lease.note}`);
 
   // The session record, written by the stack into the run directory (`session-record.ts`).
-  const session = openSessionRecord({ runDir, runsDir: config.runsDir, token: config.token ?? token, scrub: (text) => trajectory.scrub(text) });
+  const session = openSessionRecord({ runDir, runsDir: config.runsDir, ownGuids: partyOwnGuids(config.party), token: config.token ?? token, scrub: (text) => trajectory.scrub(text) });
 
   const sandbox = new SandboxHost({
     moduleUrl: config.moduleUrl,

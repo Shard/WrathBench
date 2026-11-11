@@ -73,7 +73,7 @@
  */
 
 import type { SQL } from "bun";
-import { connect as connectModule, type WrathClient } from "@wrathbench/sdk";
+import { connect as connectModule, guidKey, type WrathClient } from "@wrathbench/sdk";
 import { isValidCharacterName } from "../../runner/src/config";
 import { MODULE_SECRET } from "../smoke/lib/auth";
 import { characterNames, type FixtureContext } from "../smoke/lib/fixture";
@@ -545,7 +545,16 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
   throw new Error(USAGE);
 }
 
-/** Exit 0 staged (last stdout line `{"ok":true,"detail":…}`), 1 a staging that failed, 2 refused; the reason is stderr's last line. */
+/**
+ * The roster's line for a staging that succeeded: the detail for its log, and
+ * each member's character guid as the session record writes one (a player's
+ * guid is its low part, in decimal), for the members' campaign files.
+ */
+export function stageResultLine(out: Extract<StageOutcome, { ok: true }>): string {
+  return JSON.stringify({ ok: true, detail: out.detail, members: out.members.map((m) => ({ member: m.member, guid: guidKey(BigInt(m.characterGuid)) })) });
+}
+
+/** Exit 0 staged (last stdout line `{"ok":true,"detail":…,"members":[…]}`), 1 a staging that failed, 2 refused; the reason is stderr's last line. */
 async function main(argv: readonly string[]): Promise<number> {
   let args: CliArgs;
   try {
@@ -583,7 +592,7 @@ async function main(argv: readonly string[]): Promise<number> {
     await Bun.write(Bun.stderr, `stage-party: ${out.reason}\n`);
     return 1;
   }
-  await Bun.write(Bun.stdout, `${JSON.stringify({ ok: true, detail: out.detail })}\n`);
+  await Bun.write(Bun.stdout, `${stageResultLine(out)}\n`);
   return 0;
 }
 
