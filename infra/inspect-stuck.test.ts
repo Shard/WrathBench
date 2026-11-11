@@ -183,6 +183,98 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE_V1]
   });
 }
 
+/**
+ * A v1 run the way the stack really records a character standing still: one
+ * key row when its trace opens, and nothing on the trace after it, while its
+ * model calls a tool every 30 seconds (each a `calls` row) and the writer
+ * beats `live.json` every tick. `levelled` levels once ten minutes into the
+ * window and stands still after; `lapsed` stops writing anything for forty
+ * minutes in the middle of the window (a runner that was down).
+ */
+type IdleShape = "idle" | "levelled" | "lapsed";
+async function makeIdleV1Run(runsDir: string, runId: string, shape: IdleShape): Promise<void> {
+  const dir = join(runsDir, runId);
+  const minutes = 180;
+  const t0 = NOW - minutes * MIN;
+  let clock = t0;
+  const traj = new Trajectory(dir, { now: () => clock });
+  const config = { ...loadRunConfig({ driver: "stub" }), runId, token: TOKEN, runsDir, character: "Testwick", model: "test/model", account: "TESTACCT" };
+  traj.writeMeta({ runId, harnessVersion: "harness-test", startedAt: t0, config });
+  traj.setCharacter(runId, "Testwick");
+  const writer = new SessionWriter({ dir: join(dir, "session"), id: "5e5510aa0c0ffee2", stack: { version: "test" }, now: () => clock, log: () => {} });
+  writer.open();
+  const character = { guid: "7", name: "Testwick", race: 1, class: 1 };
+  const drain = (rows: TraceRow[]) => ({ trace: { rows, dropped: 0 }, events: { rows: [], dropped: 0 }, nearby: { rows: [], dropped: 0, through: 0 }, moves: [], character, stream: { connected: true, events: 1, seq: 1 } });
+  writer.ingest(drain([keyOf({ ts: t0, level: 12, xp: 1350, money: 4_210, map: 0, x: -9000, y: 400, z: 52, zone: 12, items: bags(20) })]));
+  const levelAt = NOW - 110 * MIN;
+  let call = 0;
+  for (let at = t0 + 30_000; at <= NOW - 5_000; at += 30_000) {
+    if (shape === "lapsed" && at > NOW - 80 * MIN && at < NOW - 40 * MIN) continue;
+    clock = at;
+    if (shape === "levelled" && at === levelAt) writer.ingest(drain([{ ts: at, kind: "state", data: { level: 13, xp: 20 } }]));
+    else writer.ingest(drain([]));
+    call++;
+    traj.append({ t: "tool_call", turn: call, call, name: "state_summary", args: {} });
+    const id = writer.call("state_summary", {}, at);
+    clock = at + 200;
+    writer.result(id, { text: "Testwick, level 12, standing at the gate." });
+    traj.append({ t: "tool_result", turn: call, call, name: "state_summary", isError: false, text: "ok" });
+    traj.append({ t: "response", turn: call, message: { role: "assistant", content: "Waiting." } });
+  }
+  // Live: the writer holds the session open, its heartbeat a tick ago.
+  clock = NOW - 2_000;
+  writer.ingest(null);
+  traj.close();
+  const hb = join(dir, "heartbeat");
+  writeFileSync(hb, "a-host 1\n");
+  utimesSync(hb, (NOW - 5_000) / 1000, (NOW - 5_000) / 1000);
+}
+
+const RUNS_IDLE = tmp("inspect-stuck-idle-");
+for (const s of ["idle", "levelled", "lapsed"] as const) await makeIdleV1Run(RUNS_IDLE, `run-${s}`, s);
+const STORE_IDLE = await memoryStore(RUNS_IDLE);
+
+for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE_IDLE]] as const) {
+  describe(`inspect stuck on a still v1 character, over ${where}`, () => {
+    test("a trace silent for hours is judged by the record's other writes: standing still while the model talks is stuck", async () => {
+      const r = await inspect(["stuck", "run-idle", "--runs-dir", RUNS_IDLE], store);
+      expect(line(r.out, "verdict")).toContain("STUCK");
+      const progress = line(r.out, "progress");
+      expect(progress).toContain("L12 1350xp throughout");
+      expect(progress).toContain("within 0.0 yd of (-9000, 400)");
+      // No trace row in the window: the reading is the one it started from.
+      expect(progress).toMatch(/0 trace sample\(s\) and \d+ other record write\(s\)/);
+    });
+
+    test("a level gained early in the window and nothing after is progress: the window starts from the reading before it", async () => {
+      const r = await inspect(["stuck", "run-levelled", "--runs-dir", RUNS_IDLE], store);
+      expect(line(r.out, "verdict")).toContain("not stuck");
+      expect(line(r.out, "progress")).toContain("L12 1350xp → L13 20xp");
+    });
+
+    test("a stretch with nothing written at all is unjudged, not stuck", async () => {
+      const r = await inspect(["stuck", "run-lapsed", "--runs-dir", RUNS_IDLE], store);
+      expect(line(r.out, "verdict")).toContain("unjudged");
+      expect(line(r.out, "progress")).toMatch(/record writes, but a 40m gap from 2030-01-02T10:40:00Z/);
+    });
+
+    test("with no run id: the same verdicts, one line each", async () => {
+      const r = await inspect(["stuck", "--runs-dir", RUNS_IDLE], store);
+      expect(r.out.find((l) => l.includes("run-idle"))).toContain("STUCK");
+      expect(r.out.find((l) => l.includes("run-levelled"))).toMatch(/ progressing$/);
+      expect(r.out.find((l) => l.includes("run-lapsed"))).toContain("unjudged");
+    });
+  });
+}
+
+describe("fleet status's flag on a still v1 character", () => {
+  test("reads what inspect stuck reads", () => {
+    expect(liveRunStuck("run-idle", NOW, RUNS_IDLE)).toMatch(/^no progress in 2h00m: L12 1350xp throughout/);
+    expect(liveRunStuck("run-levelled", NOW, RUNS_IDLE)).toBeUndefined();
+    expect(liveRunStuck("run-lapsed", NOW, RUNS_IDLE)).toBeUndefined();
+  });
+});
+
 for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE]] as const) {
   describe(`inspect stuck, over ${where}`, () => {
     test("a run that goes nowhere while its model keeps trying trips, with the evidence", async () => {
@@ -320,6 +412,20 @@ describe("progressVerdict", () => {
     const gappy = series().filter((s) => s.ts < 40 * MIN || s.ts > 60 * MIN);
     expect(progressVerdict(gappy, w, STUCK_DEFAULTS)).toMatchObject({ state: "unjudged" });
     expect(progressVerdict([], w, STUCK_DEFAULTS).state).toBe("unjudged");
+  });
+
+  test("given the record's writes, a still trace is covered by them and starts from the reading before the window", () => {
+    const writes = Array.from({ length: 240 }, (_, i) => i * 30_000 + 1_000);
+    const before = sample(-30);
+    // No sample in the window: the one before it, carried in, held throughout.
+    expect(progressVerdict([before], w, STUCK_DEFAULTS, writes)).toMatchObject({ state: "stuck" });
+    // The one sample in the window is a level over the one before it.
+    expect(progressVerdict([before, sample(5, { level: 11, xp: 0 })], w, STUCK_DEFAULTS, writes).state).toBe("progressing");
+    // Writes with a 20-minute hole, or none, do not cover it.
+    expect(progressVerdict([before], w, STUCK_DEFAULTS, writes.filter((t) => t < 40 * MIN || t > 60 * MIN)).state).toBe("unjudged");
+    expect(progressVerdict([before], w, STUCK_DEFAULTS, []).state).toBe("unjudged");
+    // Covered, but no reading in or before the window: nothing to compare.
+    expect(progressVerdict([], w, STUCK_DEFAULTS, writes)).toMatchObject({ state: "unjudged", evidence: expect.stringContaining("no trace reading") });
   });
 });
 

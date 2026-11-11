@@ -123,6 +123,11 @@ export async function memoryStore(runsDir: string): Promise<MemoryStore> {
         .filter((s) => s["run_id"] === id && (s["ts"] as number) >= since && (s["ts"] as number) <= until)
         .sort((a, b) => (a["ts"] as number) - (b["ts"] as number) || (a["seq"] as number) - (b["seq"] as number));
     },
+    async sampleBefore(id, ts) {
+      const mine = states.filter((s) => s["run_id"] === id && (s["ts"] as number) < ts);
+      mine.sort((a, b) => (b["ts"] as number) - (a["ts"] as number) || (b["seq"] as number) - (a["seq"] as number));
+      return mine[0] ?? null;
+    },
     async latestStates(ids) {
       const out = new Map<string, StateRow>();
       for (const id of ids) {

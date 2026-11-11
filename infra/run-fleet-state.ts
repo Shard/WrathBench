@@ -10,7 +10,7 @@
  */
 
 import { openRunDb } from "../runner/src/rundb";
-import { isV1RunDir, latestReading, readRunRow, readStateSamples } from "../runner/src/run-reader";
+import { isV1RunDir, latestReading, readRunRow, readStateSamples, sessionDirOfRun } from "../runner/src/run-reader";
 import { type FleetRead, readFleetConfig } from "../runner/src/config-store";
 import { existsSync, readdirSync, readFileSync, realpathSync, statfsSync, statSync } from "node:fs";
 import { readCodexThread } from "../runner/src/codex-rollout";
@@ -18,7 +18,7 @@ import { DEFAULT_CODEX_HOME_ENV } from "../runner/src/config";
 import type { CredentialStatus } from "./run-fleet-credentials";
 import { driverEntry } from "../runner/src/drivers";
 import { HEARTBEAT_DEAD_MS } from "../runner/src/trajectory";
-import { progressSampleOf, progressVerdict, STUCK_DEFAULTS, stuckFlag } from "./inspect-run";
+import { progressSampleOf, progressVerdict, recordWrites, STUCK_DEFAULTS, stuckFlag } from "./inspect-run";
 import { dirname, isAbsolute, join } from "node:path";
 import {
   type EpisodeId,
@@ -613,10 +613,16 @@ export function liveRunStuck(runId: string, now = Date.now(), runsDir = RUNS_DIR
   let rows: Record<string, unknown>[];
   if (isV1RunDir(dir)) {
     // A v1 run's samples are its trace's (`runner/src/run-reader.ts`), kept
-    // and read on per run, so a status poll folds only what is new.
-    rows = readStateSamples(dir, runId).filter((r) => typeof r["ts"] === "number" && (r["ts"] as number) >= now - windowMs - 60_000);
-    const samples = rows.map((r) => progressSampleOf(r, Number(r["ts"])));
-    const verdict = progressVerdict(samples, { since: now - windowMs, until: now }, STUCK_DEFAULTS);
+    // and read on per run, so a status poll folds only what is new. The
+    // newest one before the window is the reading it starts from, and the
+    // record's other writes cover the stretches a still character leaves
+    // the trace silent through, as `inspect stuck` reads them.
+    const w = { since: now - windowMs, until: now };
+    const all = readStateSamples(dir, runId).filter((r) => typeof r["ts"] === "number");
+    let from = all.findIndex((r) => (r["ts"] as number) >= w.since);
+    from = from < 0 ? all.length - 1 : Math.max(0, from - 1);
+    const samples = all.slice(from).map((r) => progressSampleOf(r, Number(r["ts"])));
+    const verdict = progressVerdict(samples, w, STUCK_DEFAULTS, recordWrites(sessionDirOfRun(dir), w).writes);
     return verdict.state === "stuck" ? stuckFlag(verdict, windowMs) : undefined;
   }
   const path = join(dir, "run.sqlite");
