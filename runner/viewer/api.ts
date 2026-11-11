@@ -2208,9 +2208,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
 
     /*
      * The inspector's own API over the runs (`@wrathbench/inspector`, through
-     * `runs-source.ts`): the session record as it is, every stream and its
-     * tail. Raw records with no projected form, so a public handle withholds
-     * it whole, like the raw lines and the run's tail.
+     * `runs-source.ts`): the session record as written, but for its `id`,
+     * which reads as the run id and never as the token's fingerprint; every
+     * stream and its tail. Raw records with no projected form, so a public
+     * handle withholds it whole, like the raw lines and the run's tail.
      */
     if (path === INSPECTOR_BASE || path.startsWith(`${INSPECTOR_BASE}/`)) {
       if (publicMode) return withheld();

@@ -15,13 +15,19 @@
  *   converted; a 0.5 run stays readable, not comparable.
  *
  * A session's id here is its run's id (one character per run), which is also
- * what every packed window carries as `run`. The viewer serves its handle as
- * the operator; nothing it serves is scoped to a user.
+ * what every packed window carries as `run`. A v1 run's `session.json` is
+ * presented with its `id` replaced by the run id, so the listing and the
+ * detail agree with the handle: the record's own `id` is the session token's
+ * fingerprint, the stem of the module's audit files, and no response of the
+ * viewer (which has no login) names one. The stack's own bin keys a bare
+ * store by that id and stays as it is. The viewer serves its handle as the
+ * operator; nothing it serves is scoped to a user.
  */
 
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { StoredSessionHandle, inScope, type SessionEntry, type SessionHandle, type SessionScope, type SessionSource } from "@wrathbench/inspector";
+import type { SessionFile } from "@wrathbench/mcp/record";
 import { legacy05Session } from "./legacy05-source";
 import { runDir } from "./runs";
 
@@ -34,12 +40,24 @@ export function isV1Run(runsDir: string, runId: string): boolean {
 }
 
 /**
+ * A v1 run's session record, read as the stack wrote it but for `session.json`'s
+ * `id`, which reads as the run id: the session's id as WrathBench defines it,
+ * never the token's fingerprint.
+ */
+class RunSessionHandle extends StoredSessionHandle {
+  override async session(): Promise<SessionFile | null> {
+    const s = await super.session();
+    return s === null ? null : { ...s, id: this.id };
+  }
+}
+
+/**
  * A run's session, opened by its id, whatever it recorded: its record when it
  * has one, else the 0.5 readers. A run with nothing reads as having recorded
  * nothing, never as an error.
  */
 export function runSession(runsDir: string, runId: string): SessionHandle {
-  return isV1Run(runsDir, runId) ? new StoredSessionHandle(runId, join(runsDir, runId, SESSION_DIR)) : legacy05Session(runsDir, runId);
+  return isV1Run(runsDir, runId) ? new RunSessionHandle(runId, join(runsDir, runId, SESSION_DIR)) : legacy05Session(runsDir, runId);
 }
 
 /**

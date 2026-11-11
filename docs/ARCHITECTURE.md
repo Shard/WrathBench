@@ -277,7 +277,8 @@ the SPA owns everything that is UI.
 
 - `runner/viewer/` serves a read-only JSON API under `/api`, an SSE tail per
   run, the inspector's API at `/api/inspector` (the session record unprojected,
-  so a public handle withholds it whole), minimap tiles from `data/minimap/` (the native tiles, the
+  so a public handle withholds it whole; its id reads as the run id, never
+  as the token's fingerprint), minimap tiles from `data/minimap/` (the native tiles, the
   downsampled levels baked from them, and the painted world-map art baked
   onto the same grid, each served from a smaller transcoded copy of the
   lossless masters), and the built SPA as static files. Every database is
