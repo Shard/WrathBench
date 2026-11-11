@@ -14,10 +14,12 @@
  * - a round trip whose second export matches the first.
  */
 
+import { writeLegacy05Run } from "./fixtures/legacy05-writer";
+import { readRunRow } from "../src/run-reader";
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import {
@@ -107,8 +109,9 @@ interface Run {
 
 /**
  * A paused claude-code freeplay run on RUNNER2 playing Brenna. Older records
- * still carry its session token (a trajectory line, run.sqlite's config_json),
- * as every run recorded before the token stopped reaching the record does.
+ * still carry its session token (a trajectory line, a 0.5 run.sqlite's
+ * config_json), as every run recorded before the token stopped reaching the
+ * record does.
  */
 function fixture(o: { pause?: boolean; character?: boolean } = {}): Run {
   const runsDir = tempDir("wb-char-runs-");
@@ -134,9 +137,8 @@ function fixture(o: { pause?: boolean; character?: boolean } = {}): Run {
   if (o.pause !== false) t.setPause(RUN_ID, "operator-pause", "SIGTERM: supervisor stop", 58 * 3_600_000);
   t.close();
   appendFileSync(join(dir, "trajectory.jsonl"), `${JSON.stringify({ t: "meta", ts: 1, config: { token } })}\n`);
-  const db = new Database(join(dir, "run.sqlite"));
-  db.query("UPDATE run SET config_json = ? WHERE run_id = ?").run(JSON.stringify({ token, model: "sonnet" }), RUN_ID);
-  db.close();
+  // A run.sqlite as a 0.5 run kept one, its row's config_json still carrying the token.
+  writeLegacy05Run(dir, { ...readRunRow(dir, RUN_ID)!, config_json: JSON.stringify({ token, model: "sonnet" }) });
   writeFileSync(join(dir, "scratchpad.md"), "# notes\nsell the linen at Goldshire\n");
   writeFileSync(join(dir, "episodic.jsonl"), `${JSON.stringify({ at: 1, text: "Hogger is up the road" })}\n`);
   writeFileSync(join(dir, "client-cache.json"), "{}\n");
@@ -295,6 +297,8 @@ describe("export", () => {
 
   test("an ended run exports as ended", async () => {
     const r = fixture();
+    // A v1 run, whose verdict is meta.json's: no 0.5 run.sqlite beside it.
+    rmSync(join(r.dir, "run.sqlite"));
     const t = new Trajectory(r.dir);
     t.setTermination(RUN_ID, "manual", "operator");
     t.close();

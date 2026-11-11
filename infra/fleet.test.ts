@@ -2679,7 +2679,7 @@ describe("a probe launch that failed before the run existed", () => {
     expect(meta.comparability).toEqual({ harnessVersion: "harness-0.5-950-gabc1234", episode: "probing", effort: null });
     // No trajectory: it played no turn.
     expect(holdsOnlyLaunchFiles(dir)).toBe(false);
-    expect(readdirSync(dir).sort()).toEqual(["meta.json", "run.sqlite"]);
+    expect(readdirSync(dir).sort()).toEqual(["meta.json"]);
   });
 });
 

@@ -106,12 +106,13 @@ Note that `curl http://<lan-ip>:8090` **from the host itself** succeeds even
 with the port firewalled — that traffic is delivered over `lo` and never crosses the zone — so
 verify from another machine, or the check proves nothing.
 
-It also only ever reads. Each `run.sqlite` is opened readonly, so a run being
-written by the harness inside the container is never disturbed, and an old run
-directory never gains a schema it did not have. The runs directory is still
-mounted writable: a live run's database is in WAL, and a read-only handle on a
-WAL-mode file creates and maps its `-wal` and `-shm` beside it, never writing
-the database itself (`runner/src/rundb.ts`).
+It also only ever reads. A v1 run has no database: its row is meta.json's and
+its game side its session record, read through the stack's reader
+(`runner/src/run-reader.ts`, `session-source.ts`). A 0.5 run's `run.sqlite` is
+opened readonly, so an old run directory never gains a schema it did not have.
+The runs directory is still mounted writable: a read-only handle on a WAL-mode
+file (a 0.5 run whose writer died) creates and maps its `-wal` and `-shm`
+beside it, never writing the database itself (`runner/src/rundb.ts`).
 
 ### Host allowlist
 
@@ -174,18 +175,19 @@ sample says nothing about the run. Within a process it only grows, so the
 run's count is summed across every drop (`questsAcrossRestarts`, a lower bound
 by whatever a stretch completed after its last sample) everywhere a reader is
 shown it: `/api/run/<id>` and the results rows, the map feed (each live run's
-counts read off its `run.sqlite`, two columns, `readQuestCounts`), and the
+counts read off its samples, `readQuestCounts`), and the
 replay track, whose every point carries the run's count up to it from the same
 fold (`questTally`), so the end of a replay reads what the run page does. Only
 the fleet listing's row is the newest sample, which on a resumed run is the
 count since the resume; `bun wb inspect run` prints each stretch.
 
-The trace's `qdone` turn-ins do not feed that count. They are the server's
-receipts and exact where the 60 s fold is a lower bound, so mixing them in
-would make the map disagree with the results page; they exist only since the
-character sheet, so a run that crossed that release would be counted two ways;
-and they are per window, so a total would be a fold over every segment of the
-run. The quest log panel shows them, as turn-ins since its window began.
+On a 0.5 run the trace's `qdone` turn-ins do not feed that count: they are
+the server's receipts and exact where the 60 s fold is a lower bound, so
+mixing them in would make the map disagree with the results page. On a v1 run
+they are the count: its samples are folded from the trace
+(`runner/src/trace-samples.ts`), and a sample's count is the run's running
+total of them, which the same fold sums to itself. The quest log panel shows
+them, as turn-ins since its window began.
 
 Tokens per second (`tps`, on the listing rows and on `/api/run/<id>`) is output
 tokens over the wall time of the model's REPLIES, never over the run's elapsed
@@ -195,7 +197,7 @@ loop, the `snippet_result` or `tool_result` the CLI was waiting on under
 claude-code — and closes at the last `response` before the next such record.
 Replies rather than turns because a turn is not the same unit under the two
 drivers: one claude-code run on disk is one `request` and 2,833 `response`
-records, so timing "a turn" there would time the whole six-hour episode. Ambient records (`state`, `milestone`, `claude_system`) are ignored
+records, so timing "a turn" there would time the whole six-hour episode. Ambient records (`state`, `milestone`, `claude_system`, and a v1 run's session record rows merged into the feed) are ignored
 rather than treated as boundaries — they are written by timers while the model
 is mid-reply, and one restarting the clock reads as a speed the model never had.
 A span still in flight, and one a `pause`/`resume`/`termination` landed inside,
@@ -347,7 +349,7 @@ and `group` milestones off the same incremental tail as the deaths, each
 death's time (which the run page's public death sites leave off), the
 member's own party chat off its trace (`readTraceChat`, the server's echo of
 its lines, so five members' lists never repeat each other), and where it last
-was, off the newest state sample. A kill is named by the run's own client
+was, off its session record's `live.json` (a 0.5 run's newest state sample). A kill is named by the run's own client
 cache (`client-cache.json`, the creature query the client was answered), and a
 zone or area by the `WB_AREA` event the run was served for that id
 (`areaNamesOf`); a run that was never told a name carries the id alone. There
@@ -391,12 +393,12 @@ the feed ran the public delay ahead of the pip; the run row keeps it
 
 The feed is polled every few seconds, so it opens as little as it can. Only
 runs the store lists as unterminated, with a trajectory it last saw inside the
-window (plus five minutes for the collector's lag), are opened at all: every
-state sample is written to the trajectory too, so a run quiet longer than the
-window has no position inside it, and the fleet's hundred-odd paused runs were
-each a database open a poll for nothing. A run that is opened has its
-`run.sqlite` opened once for the position, quest counts, latest move (one row,
-`ORDER BY ts DESC LIMIT 1`) and reflection window, and its `episodic.jsonl`
+window (plus five minutes for the collector's lag), or a session record whose
+`live.json` was rewritten inside it, are opened at all: the fleet's
+hundred-odd paused runs were each an open a poll for nothing. A v1 run that is
+opened has its `live.json` read for the position, its samples for the gauges
+and the quest counts, its newest move and its row's reflection window; a 0.5
+run has its `run.sqlite` opened once for the same. Its `episodic.jsonl` is
 read from the end.
 
 `/api/run/<id>/track` is the replay's feed: the positioned samples as points,
@@ -600,6 +602,17 @@ coverage, speed and segments are accumulated by the tail as it indexes (the
 token and speed derivations are held until it grows), so a warm poll and N
 open streams cost one derivation per batch rather than a walk over every
 entry each.
+
+A v1 run's trajectory is the model side only, so its tail also follows the
+run's session record (`record-feed.ts`): the `events` stream's milestones and
+turn-ins and the `calls` stream's action log, movement intentions and served
+event batches, each restated in the trajectory record shape the feed has
+always drawn, given the turn in flight by timestamp, and merged into the
+entries by time. Such an entry has no byte range in the trajectory: it keeps
+a locator into its segment instead, and `raw` reads it again from there. What
+the first v1 builds still mirrored into their trajectory (milestones,
+turn-ins, actions, moves, tool-served batches) is skipped, so nothing shows
+twice.
 
 A tail is the heaviest thing the viewer holds — roughly a third of its file's
 size in live objects, ~200 MB for a big freeplay run — so they are evicted:

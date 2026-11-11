@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { utimesSync, writeFileSync } from "node:fs";
+import { readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRunConfig } from "../runner/src/config";
 import { type ItemSample, Trajectory } from "../runner/src/trajectory";
@@ -16,6 +16,9 @@ import { memoryStore } from "./inspect-memory-store";
 import { formatAccounts, formatHolder, STUCK_MARK } from "./run-fleet-status";
 import { liveRunStuck, runProgress } from "./run-fleet-state";
 import { tempDirs } from "./temp-dirs";
+import { emptyTraceSheet, emptyTraceState, SessionWriter, type TraceRow } from "@wrathbench/mcp/record";
+import { writeLegacy05Run, type Legacy05State } from "../runner/test/fixtures/legacy05-writer";
+import { readRunRow } from "../runner/src/run-reader";
 
 const tmp = tempDirs();
 const NOW = Date.UTC(2030, 0, 2, 12, 0, 0);
@@ -30,6 +33,31 @@ const bags = (ore: number): ItemSample[] => [
   { name: "Copper Bar", count: 20 - ore, equipped: false, itemId: 2840 },
 ];
 
+/** A sample as a v1 trace's key row: the whole state and sheet, what is carried in the backpack. */
+function keyOf(s: Omit<Legacy05State, "items"> & { items?: ItemSample[] }): TraceRow {
+  const carried = (s.items ?? []).filter((i) => !i.equipped);
+  const worn = (s.items ?? []).filter((i) => i.equipped);
+  return {
+    ts: s.ts,
+    kind: "key",
+    map: s.map ?? null,
+    x: s.x ?? null,
+    y: s.y ?? null,
+    z: s.z ?? null,
+    o: 0,
+    data: {
+      ...emptyTraceState(),
+      ...emptyTraceSheet(),
+      level: s.level ?? null,
+      xp: s.xp ?? null,
+      zone: s.zone ?? null,
+      money: s.money ?? null,
+      equip: worn.map((i, n) => [n, i.itemId ?? 0]),
+      inv: carried.map((i, n) => [255, 23 + n, i.itemId ?? 0, i.count]),
+    },
+  };
+}
+
 /**
  * One run over the three hours before NOW, a state sample a minute, written
  * the way the runner writes it. `stuck`: a ghost at a navmesh gap, the same
@@ -38,7 +66,7 @@ const bags = (ore: number): ItemSample[] => [
  * with no way back whose snippets succeed, waiting on a resurrection that
  * never comes, its model saying so. The others vary only what the detector reads.
  */
-async function makeRun(runsDir: string, runId: string, shape: Shape): Promise<void> {
+async function makeRun(runsDir: string, runId: string, shape: Shape, v1 = false): Promise<void> {
   const dir = join(runsDir, runId);
   const minutes = shape === "young" ? 30 : 180;
   const t0 = NOW - minutes * MIN;
@@ -48,11 +76,17 @@ async function makeRun(runsDir: string, runId: string, shape: Shape): Promise<vo
   traj.writeMeta({ runId, harnessVersion: "harness-test", startedAt: t0, config });
   traj.setCharacter(runId, "Testwick");
   let call = 0;
+  const samples: Legacy05State[] = [];
+  const trace: TraceRow[] = [];
   for (let i = 0; i <= minutes; i++) {
     clock = t0 + i * MIN;
     const xp = shape === "progressing" ? 1000 + i * 10 : shape === "sleeping" && i % 20 === 0 ? 1000 + i : shape === "sleeping" ? 1000 + i - (i % 20) : 1350;
     const x = shape === "progressing" ? -9000 + i * 3 : -9000 + (i % 2) * 0.4;
-    await traj.recordState(runId, { level: 12, xp, money: 4_210, questsCompleted: 4, map: 0, x, y: 400, z: 52, zone: 12, items: bags(shape === "crafting" ? 20 - Math.min(20, Math.floor(i / 6)) : 20) });
+    const sample = { ts: clock, level: 12, xp, money: 4_210, questsCompleted: 4, map: 0, x, y: 400, z: 52, zone: 12, items: bags(shape === "crafting" ? 20 - Math.min(20, Math.floor(i / 6)) : 20) };
+    // A 0.5 run: the sample went to the trajectory and to run.sqlite (below).
+    traj.append({ t: "state", ...sample });
+    samples.push(sample);
+    if (v1) trace.push(keyOf(sample));
     if (shape === "stuck" && i === minutes - 10) {
       traj.append({ t: "harness", kind: "sandbox_restarted", text: "sandbox restarted (a snippet blocked the event loop past the timeout)." });
       traj.append({ t: "events_served", via: "context", count: 1, events: [{ seq: 9, opcode: "SMSG_X", schemaError: "bad field" }] });
@@ -85,6 +119,19 @@ async function makeRun(runsDir: string, runId: string, shape: Shape): Promise<vo
     }
   }
   traj.close();
+  if (v1) {
+    // A v1 run: the trajectory is the model side, the readings are the trace's.
+    const lines = readFileSync(join(dir, "trajectory.jsonl"), "utf8").split("\n").filter((l) => l.length > 0 && !l.includes('"t":"state"'));
+    writeFileSync(join(dir, "trajectory.jsonl"), `${lines.join("\n")}\n`);
+    let wclock = t0;
+    const writer = new SessionWriter({ dir: join(dir, "session"), id: "5e5510aa0c0ffee2", stack: { version: "test" }, now: () => wclock, log: () => {} });
+    writer.open();
+    for (const row of trace) {
+      wclock = row.ts;
+      writer.ingest({ trace: { rows: [row], dropped: 0 }, events: { rows: [], dropped: 0 }, nearby: { rows: [], dropped: 0, through: 0 }, moves: [], character: { guid: "7", name: "Testwick", race: 1, class: 1 }, stream: { connected: true, events: 1, seq: 1 } });
+    }
+    await writer.close();
+  } else writeLegacy05Run(dir, readRunRow(dir, runId)!, samples);
   const hb = join(dir, "heartbeat");
   writeFileSync(hb, "a-host 1\n");
   const at = (shape === "cold" ? NOW - 10 * MIN : NOW - 5_000) / 1000;
@@ -104,6 +151,27 @@ async function inspect(argv: string[], store?: InspectStore): Promise<{ code: nu
 }
 
 const line = (out: string[], label: string): string => out.find((l) => l.startsWith(label)) ?? "";
+
+/** The same shapes recorded by a v1 run: its readings are its trace's, and its trajectory has no `state` record. */
+const RUNS_V1 = tmp("inspect-stuck-v1-");
+for (const s of ["stuck", "progressing", "crafting"] as const) await makeRun(RUNS_V1, `run-${s}`, s, true);
+const STORE_V1 = await memoryStore(RUNS_V1);
+
+for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE_V1]] as const) {
+  describe(`inspect stuck on a v1 run, over ${where}`, () => {
+    test("the samples are the trace's: a character that goes nowhere trips, as on a 0.5 run", async () => {
+      const r = await inspect(["stuck", "run-stuck", "--runs-dir", RUNS_V1], store);
+      expect(line(r.out, "verdict")).toContain("STUCK");
+      expect(line(r.out, "progress")).toContain("L12 1350xp throughout");
+      expect(line(r.out, "errors")).toContain("TRIPPED");
+    });
+
+    test("progress and a crafting session are progress", async () => {
+      expect(line((await inspect(["stuck", "run-progressing", "--runs-dir", RUNS_V1], store)).out, "verdict")).toContain("not stuck");
+      expect(line((await inspect(["stuck", "run-crafting", "--runs-dir", RUNS_V1], store)).out, "verdict")).toContain("not stuck");
+    });
+  });
+}
 
 for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE]] as const) {
   describe(`inspect stuck, over ${where}`, () => {
@@ -263,11 +331,9 @@ describe("fleet status's flag", () => {
       const traj = new Trajectory(join(dir, runId), { now: () => clock });
       const config = { ...loadRunConfig({ driver: "stub" }), runId, runsDir: dir, model: "test/model", account: "TESTACCT" };
       traj.writeMeta({ runId, harnessVersion: "harness-test", startedAt: NOW - 10 * MIN, config });
-      for (const s of samples) {
-        clock += 1_000;
-        await traj.recordState(runId, { ...s, map: 0, x: 0, y: 0, z: 0 });
-      }
       traj.close();
+      // 0.5 runs: the fleet's reader of v1 records comes with its switch-over.
+      writeLegacy05Run(join(dir, runId), readRunRow(join(dir, runId), runId)!, samples.map((sm) => ({ ...sm, ts: (clock += 1_000), map: 0, x: 0, y: 0, z: 0 })));
     };
     await write("p-levelled", [{ level: 3, xp: 900 }, { level: 4, xp: 10 }, { level: 4, xp: 250 }]);
     await write("p-no-xp", [{ level: 2, xp: 40 }, { level: 2 }]);

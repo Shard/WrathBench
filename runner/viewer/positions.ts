@@ -23,7 +23,7 @@
 import type { Database } from "bun:sqlite";
 import { openRunDb } from "../src/rundb";
 import { STALL_PAUSE } from "../src/lapse";
-import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentPosition, CharacterStatus, MoveIntentView, RunRow } from "./api-types";
 import { STORE_LAG_MS, runRowOf, type RunStore } from "./clickhouse";
@@ -471,6 +471,20 @@ export function readPositions(
  * recorded mtime is kept, as unknown. And the latest readings are the
  * listing's `items`-free aggregate: nothing on the map reads an inventory.
  */
+/**
+ * Whether a v1 run's session writer has ticked since `since`: its `live.json`
+ * is rewritten on every tick while the run plays, and a v1 trajectory, which
+ * holds the model side only, can stand still through a long turn. One stat,
+ * and only for a run the trajectory test let go.
+ */
+function recordTouchedSince(runsDir: string, runId: string, since: number): boolean {
+  try {
+    return statSync(join(runsDir, runId, "session", "live.json")).mtimeMs >= since;
+  } catch {
+    return false;
+  }
+}
+
 export async function positionsFromStore(
   store: RunStore,
   runsDir: string,
@@ -484,7 +498,7 @@ export async function positionsFromStore(
       (r) =>
         r.archived === 0 &&
         r.termination_reason.length === 0 &&
-        (r.trajectory_mtime === 0 || r.trajectory_mtime >= since),
+        (r.trajectory_mtime === 0 || r.trajectory_mtime >= since || recordTouchedSince(runsDir, r.run_id, since)),
     )
     .map((r) => runRowOf(r, latest.get(r.run_id), now));
   runs.sort((a, b) => (b.startedAt ?? b.mtime ?? 0) - (a.startedAt ?? a.mtime ?? 0));

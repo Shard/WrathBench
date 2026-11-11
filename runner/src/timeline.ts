@@ -5,7 +5,8 @@
  */
 
 import { join } from "node:path";
-import { readMeta, readTrajectory, Trajectory, type TrajectoryRecord } from "./trajectory";
+import { calledEventCountOf, readRunRow, readStateSamples } from "./run-reader";
+import { readMeta, readTrajectory, type TrajectoryRecord } from "./trajectory";
 
 function fmtTs(ts: number): string {
   return new Date(ts).toISOString().replace("T", " ").slice(0, 19);
@@ -32,10 +33,10 @@ export function renderTimeline(runDir: string, runId: string): string {
   const records = readTrajectory(runDir);
   const lines: string[] = [];
 
-  const trajectory = new Trajectory(runDir);
-  const row = trajectory.runRow(runId);
-  const stateRows = trajectory.stateRows(runId);
-  trajectory.close();
+  // The run row and the state samples wherever the run keeps them: a v1 run's
+  // meta.json and trace, a 0.5 run's run.sqlite (`run-reader.ts`).
+  const row = readRunRow(runDir, runId);
+  const stateRows = readStateSamples(runDir, runId);
 
   const shakeout = (meta?.shakeout ?? row?.["shakeout"]) as string | null | undefined;
   if (typeof shakeout === "string" && shakeout.length > 0) {
@@ -73,7 +74,7 @@ export function renderTimeline(runDir: string, runId: string): string {
   const levels = stateRows
     .map((r) => r["level"] as number | null)
     .filter((l): l is number => typeof l === "number" && l > 0);
-  lines.push(`state lines: ${stateRows.length}`);
+  lines.push(`state samples: ${stateRows.length}`);
   if (stateRows.length > 0) {
     lines.push(`level:      ${levels[0] ?? "?"} -> ${levels[levels.length - 1] ?? "?"}   ${sparkline(levels)}`);
     const last = stateRows[stateRows.length - 1]!;
@@ -81,7 +82,7 @@ export function renderTimeline(runDir: string, runId: string): string {
     if (map !== null && map !== undefined) {
       lines.push(`last pos:   map ${String(map)} (${String(last["x"])}, ${String(last["y"])}, ${String(last["z"])})`);
     }
-    // Columns added later; a run.sqlite written before them has neither.
+    // Columns added later; a 0.5 run.sqlite written before them has neither.
     const money = last["money"];
     if (typeof money === "number") lines.push(`money:      ${money}c`);
     const quests = last["quests_completed"];
@@ -110,6 +111,9 @@ export function renderTimeline(runDir: string, runId: string): string {
     if ((r.t === "snippet_result" || r.t === "tool_result") && r["isError"] === true) errors.push(r);
     if (r.t === "harness") errors.push(r);
   }
+  // A v1 run's tool-served batches are its session record's (`calls`); the
+  // trajectory keeps only the windows each turn's context showed.
+  eventsServed += calledEventCountOf(runDir);
   const spanMin = lastTs > firstTs ? (lastTs - firstTs) / 60_000 : 0;
   lines.push("");
   lines.push(`model turns:     ${byType.get("request") ?? 0}`);

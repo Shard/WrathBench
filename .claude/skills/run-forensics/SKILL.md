@@ -1,6 +1,6 @@
 ---
 name: run-forensics
-description: Answer any question about a WrathBench run, live or past, with `bun wb inspect` — is it live, paused or ownerless, its level and xp, snippets and errors, tool calls by name, the scratchpad over time or at a moment, whether it is stuck, the module audit log, what the publisher last did. Use whenever a task needs run data, and always before writing a script that reads run.sqlite, trajectory.jsonl, meta.json, audit files or the publisher's state.
+description: Answer any question about a WrathBench run, live or past, with `bun wb inspect` — is it live, paused or ownerless, its level and xp, snippets and errors, tool calls by name, the scratchpad over time or at a moment, whether it is stuck, the module audit log, what the publisher last did. Use whenever a task needs run data, and always before writing a script that reads a run's session record, trajectory.jsonl, meta.json, a 0.5 run.sqlite, audit files or the publisher's state.
 ---
 
 # Run forensics
@@ -69,9 +69,11 @@ they live.
   line says the collector is behind or down and the newest records are
   missing: add `--files`.
 - `the files: <why>`: no `CLICKHOUSE_URL`, ClickHouse unreachable, the run
-  not in it yet, or `--files`. For a live run the verdict then reads `unread`
-  and the level `not read`, because the fallback will not open a live
-  `run.sqlite`; the trajectory views still work.
+  not in it yet, or `--files`. A v1 run is read whole off its files: the row
+  is meta.json's and the level, quests and `stuck`'s samples are its session
+  record's, which no reader can hold. For a live 0.5 run the verdict reads
+  `unread` and the level `not read`, because the fallback will not open a
+  live `run.sqlite`; the trajectory views still work.
 - `ClickHouse failed mid-read (…)` on stderr, exit 1: run it again, or with
   `--files`. On a `Code: 241`, check `system.query_log` by pod before blaming
   inspect, whose queries carry `log_comment = 'wb inspect'`.

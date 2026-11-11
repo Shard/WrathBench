@@ -21,41 +21,34 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { TERMINATION_REASONS, type TerminationReason } from "./config";
-import { openRunDb } from "./rundb";
+import { RUN_DB_FILE } from "./rundb";
+import { readRunRow } from "./run-reader";
 import { Trajectory } from "./trajectory";
 
 /** Exit code for a run the guard would not classify: nothing was written. */
 export const CLASSIFY_REFUSED_EXIT = 3;
 
 /**
- * The run's directory: `<runs>/<id>` when it holds a run.sqlite, else
- * `<runs>/archive/<id>` when that does, else null. Live first, as
- * `loadContinuation` reads them; a launch never lands on an archived id
- * (`assertRunDirFree`), so the two do not both hold a run.
+ * The run's directory: `<runs>/<id>` when it holds a run (a meta.json, or a
+ * 0.5 run.sqlite), else `<runs>/archive/<id>` when that does, else null. Live
+ * first, as `loadContinuation` reads them; a launch never lands on an archived
+ * id (`assertRunDirFree`), so the two do not both hold a run.
  */
 export function runDirOf(runsDir: string, runId: string): string | null {
   for (const dir of [join(runsDir, runId), join(runsDir, ARCHIVE_DIR, runId)]) {
-    if (existsSync(join(dir, "run.sqlite"))) return dir;
+    if (existsSync(join(dir, "meta.json")) || existsSync(join(dir, RUN_DB_FILE))) return dir;
   }
   return null;
 }
 
-/** What the run's own row says, read without writing: null when there is no such run. */
+/** What the run's own row says, read without writing (`run-reader.ts`): null when there is no such run. */
 export function readVerdict(runsDir: string, runId: string): { terminationReason: string | null; pauseReason: string | null } | null {
   const dir = runDirOf(runsDir, runId);
   if (dir === null) return null;
-  const db = openRunDb(join(dir, "run.sqlite"), { readonly: true });
-  try {
-    const row = db.query(`SELECT termination_reason, pause_reason FROM run WHERE run_id = ?`).get(runId) as {
-      termination_reason?: unknown;
-      pause_reason?: unknown;
-    } | null;
-    if (row === null) return null;
-    const str = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
-    return { terminationReason: str(row.termination_reason), pauseReason: str(row.pause_reason) };
-  } finally {
-    db.close();
-  }
+  const row = readRunRow(dir, runId);
+  if (row === null) return null;
+  const str = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
+  return { terminationReason: str(row["termination_reason"]), pauseReason: str(row["pause_reason"]) };
 }
 
 /**
@@ -69,7 +62,7 @@ export function classifyRefusal(
   verdict: { terminationReason: string | null; pauseReason: string | null } | null,
   force: boolean,
 ): string | null {
-  if (verdict === null) return `no run ${runId}: no run.sqlite with its row under the runs directory or its ${ARCHIVE_DIR}/`;
+  if (verdict === null) return `no run ${runId}: no run with its row under the runs directory or its ${ARCHIVE_DIR}/`;
   if (verdict.terminationReason === null && verdict.pauseReason === null && !force) {
     return `${runId} has no termination and no pause, so it may still be live — stop it first, or pass --force if you know it is not`;
   }

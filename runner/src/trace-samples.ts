@@ -231,13 +231,13 @@ export class TraceSampler {
         continue;
       }
       this.fold.apply(row);
-      const s = this.sampleOf(row.ts);
+      const s = this.sampleOf(row.ts, row.kind === "key");
       if (s !== null) out.push(s);
     }
     return out;
   }
 
-  private sampleOf(ts: number): StateSample | null {
+  private sampleOf(ts: number, restated: boolean): StateSample | null {
     const f = this.fold;
     const st = f.state;
     const items = f.itemSamples();
@@ -278,7 +278,7 @@ export class TraceSampler {
       prev !== null &&
       ts - prev.ts >= SAMPLE_HEARTBEAT_MS &&
       (next.x !== prev.x || next.y !== prev.y || next.z !== prev.z || next.health !== prev.health || next.power !== prev.power);
-    if (!scoredChanged && !itemsChanged && !drifted) return null;
+    if (!scoredChanged && !itemsChanged && !drifted && !restated) return null;
     // Nothing observed (a key before the world, or a restarted child's before
     // its login): not a reading, so no sample, and the next is compared with
     // the last one that was.

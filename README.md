@@ -31,8 +31,7 @@ flowchart TB
 
     subgraph records["data/runs/#lt;id#gt;/"]
         session[("session/<br/>trace, events, calls<br/>wrath-session/1")]
-        trajectory[("trajectory.jsonl, meta.json<br/>the model's side")]
-        rundb[("run.sqlite<br/>run row, 60 s state rows<br/>until the scorer reads the trace")]
+        trajectory[("trajectory.jsonl, meta.json<br/>the model's side, the run row")]
     end
 
     subgraph view["Reading results"]
@@ -54,10 +53,9 @@ flowchart TB
     stack <-->|"client opcodes,<br/>whitelisted packets"| world
     stack ==>|"records the session"| session
     runner -->|"writes"| trajectory
-    runner -->|"writes"| rundb
     records -.->|"run contract: read back"| supervisor
     trajectory -->|"tails"| collector
-    rundb -->|"tails"| collector
+    session -->|"tails"| collector
     collector --> clickhouse
     clickhouse -->|"listings"| viewer
     records -->|"live tail, session source"| viewer

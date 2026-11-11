@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { STALL_PAUSE } from "../src/lapse";
-import { moveLineOf, openSessionRecord } from "../src/session-record";
+import { openSessionRecord } from "../src/session-record";
 import { recordDrain, traceOfReading } from "./fixtures/v1-session";
 import { Trajectory } from "../src/trajectory";
 import { localRunStore, type RunStore } from "../viewer/clickhouse";
@@ -649,8 +649,8 @@ describe("readPositions", () => {
  * The same feed with its listing taken off the derived store. The fixture is
  * written by the runner's own writers rather than by hand, because the store is
  * filled by the collector, and the collector reads what the runner writes: the
- * trajectory and run.sqlite, and the session record the stack writes into the
- * run (`session-record.ts`), whose move the trajectory mirrors as run.ts wires it.
+ * trajectory and meta.json, and the session record the stack writes into the
+ * run (`session-record.ts`).
  */
 describe("positionsFromStore", () => {
   const NOW = 1_700_000_000_000;
@@ -690,7 +690,6 @@ describe("positionsFromStore", () => {
       carried: [[23, 90117, 4, "Invented Jerky", 1]],
     });
     const session = openSessionRecord({ runDir: dir, runsDir, token: `token-${runId}`, scrub: (t) => t });
-    session.signals.onMove = (m) => traj.recordMove(moveLineOf(m));
     session.writer.ingest({
       trace: { rows: reading.trace, dropped: 0, dict: reading.dict },
       events: { rows: [], dropped: 0 },

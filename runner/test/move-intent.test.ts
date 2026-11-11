@@ -11,7 +11,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRunConfig } from "../src/config";
 import { ContextBuilder } from "../src/loop";
@@ -23,7 +23,8 @@ import { Watchdogs } from "../src/watchdogs";
 import { readMoves } from "../viewer/runs";
 import { sessionSource } from "../viewer/session-source";
 import { SessionReader } from "@wrathbench/mcp/record";
-import { moveLineOf, openSessionRecord, sessionDirOf, type SessionRecord } from "../src/session-record";
+import { openSessionRecord, sessionDirOf, type SessionRecord } from "../src/session-record";
+import { TrajectoryTail } from "../viewer/tail";
 import { openTestSession, recordDrain, recordedMove } from "./fixtures/v1-session";
 import { readLatestMove, readPositions } from "../viewer/positions";
 import { tempDirs } from "./fixtures/temp-dirs";
@@ -95,12 +96,7 @@ describe("the loop's samples record no movement intention", () => {
     slot.move = { ...DISPATCH, moveId: 4, status: "too_far", endedAt: 1_000_900 };
     await h.tick();
     expect(readTrajectory(h.dir).filter((r) => r.t === "move")).toEqual([]);
-    const db = new Database(join(h.dir, "run.sqlite"), { readonly: true });
-    try {
-      expect(db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'move'`).all()).toEqual([]);
-    } finally {
-      db.close();
-    }
+    expect(existsSync(join(h.dir, "run.sqlite"))).toBe(false);
   });
 });
 
@@ -306,15 +302,13 @@ describe("the sandbox watches the dispatch, not the SDK call", () => {
   });
 });
 
-describe("the stack records the intention, and the run mirrors it", () => {
-  test("a dispatch and its verdict are two move rows in session/calls, read by the map and mirrored into the trajectory", async () => {
+describe("the stack records the intention, and the map and the feed read it there", () => {
+  test("a dispatch and its verdict are two move rows in session/calls, read by the map and the feed, and not in the trajectory", async () => {
     const stub = startModuleStub();
     const runsDir = tempDir("wrathbench-move-v1-");
     const runDir = join(runsDir, "run-move-v1");
     const trajectory = new Trajectory(runDir);
     const session = openSessionRecord({ runDir, runsDir, token: "test-token", scrub: (t) => trajectory.scrub(t) });
-    // As run.ts wires it: each move row written is mirrored as a trajectory `move` line.
-    session.signals.onMove = (m) => trajectory.recordMove(moveLineOf(m));
     const host = makeHost(stub.url, session);
     await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
     expect((await host.evalSnippet("await sdk.moveToAsync({ x: -6100, y: 400, z: 380 })")).ok).toBe(true);
@@ -339,10 +333,14 @@ describe("the stack records the intention, and the run mirrors it", () => {
     expect(readMoves(runsDir, "run-move-v1").map((m) => m.status)).toEqual([null, "too_far"]);
     expect(readLatestMove(runsDir, "run-move-v1")).toMatchObject({ ts: VERDICT, status: "too_far", x: -6100 });
 
-    // The trajectory's mirror: the same two, JSONL only.
-    const mirrored = readTrajectory(runDir).filter((r) => r.t === "move");
-    expect(mirrored.map((r) => r["status"])).toEqual([null, "too_far"]);
-    expect(mirrored[1]).toMatchObject({ ts: VERDICT, moveId: 1, x: -6100, y: 400, z: 380 });
+    // The trajectory is the model side: no mirror. The run page's feed reads the record.
+    expect(readTrajectory(runDir).filter((r) => r.t === "move")).toEqual([]);
+    writeFileSync(join(runDir, "trajectory.jsonl"), "");
+    const tail = new TrajectoryTail(join(runDir, "trajectory.jsonl"));
+    await tail.scan();
+    const fed = tail.entries.filter((e) => e.t === "move");
+    expect(fed.map((e) => e["status"])).toEqual([null, "too_far"]);
+    expect(JSON.parse((await tail.raw(fed[1]!.i))!)).toMatchObject({ t: "move", ts: VERDICT, moveId: 1, x: -6100, y: 400, z: 380 });
 
     await host.stop();
     await session.writer.close();

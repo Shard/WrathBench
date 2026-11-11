@@ -8,6 +8,7 @@
  * answers only the character listing and delete — the sandbox never dials
  * the module for a stub that calls no tool.
  */
+import { writeReadings } from "./fixtures/v1-session";
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -45,7 +46,7 @@ function endedFreeplayRun(over: { episode?: "freeplay" | "e90"; account?: string
     class: 2,
   });
   traj.writeMeta({ runId, harnessVersion: "0.0.0-test", startedAt: 1, config });
-  traj.recordState(runId, { level: 8, xp: 6410 });
+  writeReadings(dir, [{ ts: Date.now(), level: 8, xp: 6410 }]);
   traj.setTermination(runId, "manual", "operator: killed");
   traj.close();
   writeFileSync(join(dir, "scratchpad.md"), "# Bromdir\nHARD FACT: the pass bends west first.\n");

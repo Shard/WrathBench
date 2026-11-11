@@ -4,7 +4,7 @@ The service that tails the recorded runs under `data/runs/` into ClickHouse.
 It exists for the viewer (`runner/viewer/`), which can then answer a question
 about a thousand runs with one query instead of a thousand file opens, and for
 `bun wb inspect` (`infra/inspect-run.ts`), which reads a run from it rather
-than walk a live run's `run.sqlite`. It runs as a container beside the fleet,
+than walk a live run's files. It runs as a container beside the fleet,
 in both the compose quickstart and the Helm chart, and nothing else in the
 system depends on it: the runner does not know it exists, a viewer with no
 ClickHouse builds the same rows in memory, and inspect with none reads the
@@ -18,7 +18,7 @@ and everything comes back.
 It holds no copy of a run's module session token. `meta.json` keeps the token,
 because `--resume` reads it back, and nothing else the runner writes now
 carries it. Runs recorded by an older build do, though: in their `meta`
-records, in `run.sqlite`'s `config_json`, and wherever a snippet logged a
+records, in a 0.5 `run.sqlite`'s `config_json`, and wherever a snippet logged a
 module reply that echoed it. As a backstop for those, the collector strikes
 the run's token by value from every text it copies (each trajectory and
 `episodic.jsonl` line before it is read, `meta_json`, `config_json`;
@@ -61,24 +61,35 @@ Each source has its own resume rule, because each changes differently:
 | --- | --- | --- |
 | `trajectory.jsonl` | append-only | byte offset + next line ordinal |
 | `episodic.jsonl` | append-only | byte offset + next line ordinal |
-| `run.sqlite` `state` | append-only | sqlite rowid watermark |
-| `run.sqlite` `move` | append-only | sqlite rowid watermark |
-| `run.sqlite` `run` | mutated in place | `(size, mtime)` signature |
+| `session/trace` (v1) | append-only segments | folded in memory per run; a restart folds it again onto the same keys |
+| `session/events` (v1) | append-only segments | stream cursor (segment, offset) + row ordinal |
+| `run.sqlite` `state` (0.5) | append-only | sqlite rowid watermark |
+| `run.sqlite` `move` (0.5) | append-only | sqlite rowid watermark |
+| `run.sqlite` `run` (0.5) | mutated in place | `(size, mtime)` signature |
 | `meta.json` | rewritten | `(size, mtime)` signature |
+
+A v1 run (`session/session.json`) has no `run.sqlite`. Its `states` are the
+samples `runner/src/trace-samples.ts` folds from its trace (the scorer's
+reading, docs/METHODOLOGY.md "Scoring"), keyed by each sample's ordinal in
+that fold, which the same trace always reproduces; its `milestones` are its
+`events` stream's rows as the milestone records they stand for, keyed by a
+negative `line_no` so they never meet a trajectory line's; its row is
+meta.json's (`runner/src/run-reader.ts`). Its trajectory's `milestone`
+records, which only the first v1 builds wrote, are not read.
 
 Those live in `data/collector.sqlite`, which is the only thing this service
 owns on disk and is as disposable as the store itself.
 
 Not tailed, on purpose:
 
-- the session record (`session/`, `wrath-mcp/docs/SESSION-FORMAT.md`): the
-  trace, the events, the tool calls and movement intentions of a v1 run. Not
-  yet: ingesting it is the next step, and until then the store's `moves` are
-  a 0.5 run's only and the viewer reads a v1 run's from its files. The trace
-  is a ~1 Hz position feed per live character and is never in the
-  trajectory, so it never arrives here as tens of thousands of unknown lines
-  a day. (A 0.5 run's trace is the `trace` table of its `run.sqlite`, which
-  is not tailed either.)
+- the trace's rows themselves (`session/trace`): a ~1 Hz position feed per
+  live character, folded into samples (above) and never stored row by row,
+  so it never arrives here as tens of thousands of lines a day. The viewer
+  reads it from the files. (A 0.5 run's trace is the `trace` table of its
+  `run.sqlite`, which is not tailed either.)
+- a v1 run's tool calls and movement intentions (`session/calls`): not yet;
+  the store's `moves` are a 0.5 run's only, and the viewer reads a v1 run's
+  from its files.
 - the nearby ring (`session/nearby/`): the units around a live character for
   the live map, about 15 minutes of segments that the stack unlinks as they
   age and removes when the session closes.
@@ -113,10 +124,10 @@ there is no rarely-exercised branch to be wrong.
 
 | table | one row is | key |
 | --- | --- | --- |
-| `runs` | a run: its `run.sqlite` row merged with `meta.json` | `run_id` |
-| `states` | one periodic state sample | `(run_id, ts, seq)` |
+| `runs` | a run: its row (meta.json's, or a 0.5 `run.sqlite`'s) merged with `meta.json` | `run_id` |
+| `states` | one state sample: a 0.5 run's 60-second row, a v1 run's trace sample | `(run_id, ts, seq)` |
 | `moves` | one movement dispatch or verdict | `(run_id, ts, seq)` |
-| `milestones` | one `{"t":"milestone"}` line, typed — ad-hoc analysis only | `(run_id, line_no)` |
+| `milestones` | one milestone, typed: a 0.5 trajectory line, a v1 `events` row — ad-hoc analysis only | `(run_id, line_no)` |
 | `turns` | one turn-shaped trajectory line, with `messages` (empty on a slim fixed-loop request) | `(run_id, line_no)` |
 | `events` | every other trajectory line | `(run_id, line_no)` |
 | `episodic` | one `episodic.jsonl` entry — ad-hoc analysis only | `(run_id, line_no)` |

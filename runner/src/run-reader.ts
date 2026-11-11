@@ -133,11 +133,14 @@ function sqliteRunRow(dir: string, runId: string): Record<string, unknown> | nul
 }
 
 /**
- * The run's row: run.sqlite's `run` table where the directory has one, else
- * meta.json. Null when neither says anything about the run.
+ * The run's row: run.sqlite's `run` table where the directory has one with
+ * the run's row in it, else meta.json. Null when neither says anything.
  */
 export function readRunRow(dir: string, runId: string): Record<string, unknown> | null {
-  if (existsSync(join(dir, RUN_DB_FILE))) return sqliteRunRow(dir, runId);
+  if (existsSync(join(dir, RUN_DB_FILE))) {
+    const row = sqliteRunRow(dir, runId);
+    if (row !== null) return row;
+  }
   const meta = readJson(join(dir, "meta.json"));
   return meta === null ? null : (runRowOfMeta(runId, meta) as unknown as Record<string, unknown>);
 }
@@ -394,4 +397,20 @@ export function eventMilestonesOf(dir: string): Record<string, unknown>[] {
     if (m !== null) out.push(m);
   }
   return out.sort((a, b) => (a["ts"] as number) - (b["ts"] as number));
+}
+
+/**
+ * How many events a v1 run's tool calls served, off its session record's
+ * `calls` stream (`events` rows); 0 for a 0.5 run, whose served batches are
+ * all trajectory records.
+ */
+export function calledEventCountOf(dir: string): number {
+  if (!isV1RunDir(dir)) return 0;
+  let n = 0;
+  try {
+    for (const row of new SessionReader(sessionDirOfRun(dir)).rows("calls")) if (row.kind === "events") n += row.count;
+  } catch {
+    /* an unreadable segment counts nothing */
+  }
+  return n;
 }

@@ -48,6 +48,8 @@ import {
 } from "./inspect-run";
 import { memoryStore } from "./inspect-memory-store";
 import { tempDirs } from "./temp-dirs";
+import { writeLegacy05Run, type Legacy05State } from "../runner/test/fixtures/legacy05-writer";
+import { readRunRow } from "../runner/src/run-reader";
 
 const tmp = tempDirs();
 const NOW = Date.UTC(2030, 0, 2, 12, 0, 0);
@@ -66,9 +68,11 @@ function makeRun(runsDir: string, runId: string, shape: Shape, opts: { token?: s
   traj.setCharacter(runId, "Testwick");
   // What a pre-hardening writer left in the record: the token in a meta record.
   appendFileSync(join(dir, "trajectory.jsonl"), `${JSON.stringify({ ts: t0, t: "meta", runId, config: { token: opts.token ?? TOKEN } })}\n`);
+  // A 0.5 run's state rows, laid down after its row (below).
+  const states: Legacy05State[] = [];
   for (let i = 1; i <= 3; i++) {
     clock = t0 + i * 60_000;
-    traj.recordState(runId, { level: i + 1, xp: i * 100, money: 12_345, questsCompleted: i, turn: i, zone: 12 });
+    states.push({ ts: clock, level: i + 1, xp: i * 100, money: 12_345, questsCompleted: i, turn: i, zone: 12 });
     traj.append({ t: "tool_call", turn: i, call: i, name: "run_snippet", args: { code: `return ${i};` } });
     traj.append({ t: "snippet", turn: i, call: i, code: `return ${i};` });
     traj.append({ t: "snippet_result", turn: i, call: i, name: "run_snippet", isError: false, text: `ok (5ms)\n=> ${i}` });
@@ -95,6 +99,8 @@ function makeRun(runsDir: string, runId: string, shape: Shape, opts: { token?: s
   if (shape === "paused") traj.setPause(runId, "operator-pause", "SIGTERM");
   if (shape === "terminated") traj.setTermination(runId, "episode-limit", "episode limit reached");
   traj.close();
+  // These are 0.5 runs: the row and the samples are run.sqlite's (a v1 run's are below).
+  writeLegacy05Run(dir, readRunRow(dir, runId)!, states);
   if (shape === "live" || shape === "ownerless") {
     const hb = join(dir, "heartbeat");
     writeFileSync(hb, "a-host 1\n");
@@ -250,7 +256,9 @@ describe("inspect run", () => {
     });
     const live = await inspect(["run", "run-v1", "--runs-dir", runsDir], NOW);
     const at = (r: { out: string[] }, label: string): string => r.out.find((l) => l.startsWith(label)) ?? "";
-    expect(at(live, "session")).toContain("0123456789abcdef (Testwick), open");
+    expect(at(live, "session")).toContain("wrath-session/1 (Testwick), open");
+    // Never the session id: it is the token's fingerprint and the audit file's name.
+    expect(live.out.some((l) => l.includes("0123456789abcdef"))).toBe(false);
     expect(at(live, "session")).toContain("trace 1 segment(s)");
     expect(at(live, "session")).toContain("events none");
     expect(at(live, "nearby")).toContain("1 window file(s)");
@@ -260,6 +268,40 @@ describe("inspect run", () => {
     const closed = await inspect(["run", "run-v1", "--runs-dir", runsDir], NOW);
     expect(at(closed, "session")).toContain("closed 60s ago");
     expect(at(closed, "nearby")).toContain("none");
+    expect(closed.out.some((l) => l.includes("0123456789abcdef"))).toBe(false);
+  });
+
+  test("a v1 run with no run.sqlite reads its row off meta.json and its level and quests off its record, live owner or not", async () => {
+    const runsDir = tmp("inspect-v1-files-");
+    const dir = join(runsDir, "run-v1f");
+    const t0 = NOW - 600_000;
+    const traj = new Trajectory(dir, { now: () => t0 });
+    traj.writeMeta({ runId: "run-v1f", harnessVersion: "harness-test", startedAt: t0, config: { ...loadRunConfig({ driver: "stub" }), runId: "run-v1f", token: TOKEN, character: "Testwick", model: "test/model" } });
+    traj.close();
+    const writer = new SessionWriter({ dir: join(dir, "session"), id: "0123456789abcdef", stack: { version: "test" }, now: () => t0 + 1_000, log: () => {} });
+    writer.open();
+    const state = { hp: 1, hpMax: 1, pw: null, pwMax: null, pwType: null, level: 6, xp: 450, xpMax: 900, auras: [], combat: false, mounted: false, taxi: false, dead: false, ghost: false, resting: false, zone: 12, area: null, target: null, cast: null };
+    const sheet = { money: 1234, equip: null, bags: null, inv: null, dur: null, quests: null, rep: null, skills: null };
+    writer.ingest({
+      trace: { rows: [{ ts: t0 + 1_000, kind: "key", map: 0, x: 1, y: 2, z: 3, o: 0, data: { ...state, ...sheet } }, { ts: t0 + 2_000, kind: "state", data: { xp: 480 } }], dropped: 0 },
+      events: { rows: [{ ts: t0 + 1_500, kind: "quest", id: 7 }, { ts: t0 + 1_600, kind: "quest", id: 8 }], dropped: 0 },
+      nearby: { rows: [], dropped: 0, through: 0 },
+      moves: [],
+      character: { guid: "5", name: "Testwick", race: 1, class: 1 },
+      stream: { connected: true, events: 1, seq: 1 },
+    });
+    // A live owner: a 0.5 run's run.sqlite would not be opened; a v1 run has none to hold.
+    writeFileSync(join(dir, "heartbeat"), "a-host 1\n");
+    utimesSync(join(dir, "heartbeat"), (NOW - 5_000) / 1000, (NOW - 5_000) / 1000);
+    const r = await inspect(["run", "run-v1f", "--runs-dir", runsDir], NOW);
+    const at = (label: string): string => r.out.find((l) => l.startsWith(label)) ?? "";
+    expect(at("verdict")).toContain("live");
+    expect(at("level")).toContain("L6 480xp of 900");
+    expect(at("level")).toContain("money 12s 34c");
+    expect(at("quests")).toBe("quests     2 over the run");
+    expect(at("session")).toContain("wrath-session/1 (Testwick), open");
+    const live = await inspect(["live", "--runs-dir", runsDir], NOW);
+    expect(live.out.find((l) => l.includes("run-v1f"))).toContain("L6 480xp");
   });
 
   test("reads the level, the counts by kind and the errors by class", async () => {
@@ -290,13 +332,10 @@ describe("inspect run", () => {
     const runsDir = tmp("inspect-run-quests-");
     // Counted 1, 2, 3 from 11:01; resumed at 11:31 by a process whose count starts again at zero.
     const dir = makeRun(runsDir, "run-resumed", "live");
-    let clock = NOW - 30 * 60_000;
-    const traj = new Trajectory(dir, { now: () => clock });
-    for (const q of [0, 4]) {
-      clock += 60_000;
-      traj.recordState("run-resumed", { level: 4, xp: 400, questsCompleted: q });
-    }
-    traj.close();
+    writeLegacy05Run(dir, readRunRow(dir, "run-resumed")!, [
+      { ts: NOW - 29 * 60_000, level: 4, xp: 400, questsCompleted: 0 },
+      { ts: NOW - 28 * 60_000, level: 4, xp: 400, questsCompleted: 4 },
+    ]);
     const r = await inspect(["run", "run-resumed", "--runs-dir", runsDir], NOW, await memoryStore(runsDir));
     const at = (label: string): string => r.out.find((l) => l.startsWith(label)) ?? "";
     expect(at("quests")).toBe("quests     7 over the run, summed across 1 restart(s); the newest sample reads 4 · from 01-02 11:01 3 · from 01-02 11:31 4");

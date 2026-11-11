@@ -1,22 +1,29 @@
 /**
  * Trajectory persistence for one run: `data/runs/<run-id>/`
  *
- *   trajectory.jsonl   every model request/response, snippet + result, event
- *                      batch served, tool call, periodic state line, watchdog
- *                      firings, termination. Append-only, one JSON object per
- *                      line, `{ t, ts, ... }`. A fixed-loop `request` keeps
- *                      the fresh user message and points at the rest of the
- *                      prompt, which the file already holds
- *                      (`request-record.ts`; `replay.ts` rebuilds it).
- *   run.sqlite         run metadata row and periodic state rows, for querying
- *                      without parsing JSONL. WAL while the runner writes it,
- *                      the rollback journal at rest (`rundb.ts` says why). A
- *                      0.5 run's also holds its trace and movement rows; a
- *                      v1 run's are in session/, written by the stack.
- *   session/           the session record (`session-record.ts`): the trace,
- *                      events, tool calls and the live ring of nearby units.
- *   meta.json          the run config + harness version, for `--resume`.
+ *   trajectory.jsonl   the model side, and only that: every request and
+ *                      response with its tokens and cost, the turns, the
+ *                      snippets and tool calls with their results as the model
+ *                      saw them, the event window each turn's context showed,
+ *                      compaction, reflection, watchdog firings, pauses and the
+ *                      termination. Append-only, one JSON object per line,
+ *                      `{ t, ts, ... }`. A fixed-loop `request` keeps the fresh
+ *                      user message and points at the rest of the prompt, which
+ *                      the file already holds (`request-record.ts`; `replay.ts`
+ *                      rebuilds it).
+ *   session/           the session record, the game side (`session-record.ts`,
+ *                      wrath-mcp/docs/SESSION-FORMAT.md): the trace, events,
+ *                      tool calls and actions, and the live ring of nearby
+ *                      units. The scorer reads it (`run-reader.ts`).
+ *   meta.json          the run's own bookkeeping: its config and harness
+ *                      version, for `--resume`, and the verdict, the pause and
+ *                      the reflection window beside them (`RunVerdictFields`),
+ *                      rewritten whole and atomically (`writeMetaFile`).
  *   scratchpad.md      owned by Scratchpad, lives in the same directory.
+ *
+ * A v1 run has no run.sqlite. A 0.5 run's (its run row, 60-second state rows,
+ * trace and moves) stays readable through `run-reader.ts` and the viewer's
+ * `legacy05-source.ts`, and nothing here writes one.
  *
  * Redaction: records never carry API keys by construction (headers are never
  * logged), and every string is additionally scrubbed against the secret values
@@ -27,140 +34,14 @@
  * `[redacted]`.
  */
 
-import type { Database } from "bun:sqlite";
-import {
-  enterWal,
-  isTransientRunDbError,
-  leaveWal,
-  leaveWalPatiently,
-  openRunDb,
-  retryRunDbWrite,
-  RUN_DB_FILE,
-  type RunDbRetry,
-  type RunDbRetryOptions,
-} from "./rundb";
-import { appendFileSync, mkdirSync, readFileSync, existsSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, existsSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { jsonLine, toJsonSafe } from "@wrathbench/mcp/jsonsafe";
 import type { Comparability } from "./comparability";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
-import { platformOf } from "./platform";
 import { SecretRedactor } from "@wrathbench/mcp/redact";
-import type { ActionNote } from "@wrathbench/mcp";
 import type { SubscriptionUsage } from "./subscription-usage";
-
-export interface StateLine {
-  level?: number | undefined;
-  xp?: number | undefined;
-  map?: number | undefined;
-  x?: number | undefined;
-  y?: number | undefined;
-  z?: number | undefined;
-  eventCount?: number | undefined;
-  lastSeq?: number | undefined;
-  /** Copper on the character, from `PLAYER_FIELD_COINAGE`. */
-  money?: number | undefined;
-  /** Turn-ins the server confirmed this session, cumulative. */
-  questsCompleted?: number | undefined;
-  /**
-   * Which driver turn was in flight when this sample was taken.
-   *
-   * Samples are taken on `stateIntervalMs`, not once per turn, so this is the
-   * turn a value was *first observed* on, never the turn it was reached on.
-   * Optional: samples written before the column existed have none, and a
-   * sample taken before the first turn (or by a driver with no turn counter)
-   * records nothing rather than a misleading 0.
-   */
-  turn?: number | undefined;
-  /** Zone id from the state cache (`self.zone`, WB_AREA). Ids only: names are client text. */
-  zone?: number | undefined;
-  /** Area (subzone) id from the state cache (`self.area`). */
-  area?: number | undefined;
-  /**
-   * The player frame's own numbers, off the same snapshot
-   * every other field here comes from — no extra RPC. `health`/`maxHealth` and
-   * `power`/`maxPower` arrive as the state cache's derived gauges, which it
-   * withholds until both halves have actually been observed, so a pair is
-   * either wholly present or wholly absent and a ratio read off one row is
-   * never mismatched. `powerType` is the raw field the client picks the bar
-   * with; `nextLevelXp` is the denominator of the XP bar.
-   */
-  health?: number | undefined;
-  maxHealth?: number | undefined;
-  power?: number | undefined;
-  maxPower?: number | undefined;
-  powerType?: number | undefined;
-  nextLevelXp?: number | undefined;
-  /**
-   * What the character carries and wears: names, counts, ids and
-   * quality from the state cache's item queries, `equipped` for inventory
-   * slots 0-18, carried rows from `state.bag()` across every bag with the
-   * `bag`/`slot` pair the item actions take. Omitted when the snapshot had no
-   * inventory at all, and when it is the sample the same process last wrote
-   * (the loop decides; a process's first row, and its first after a sandbox
-   * restart, is always whole). A reader takes the newest sample at or before a
-   * point, never the row's own.
-   */
-  items?: ItemSample[] | undefined;
-}
-
-/**
- * One movement intention as the trajectory's `move` record carries it: the
- * destination a `move_to` was dispatched for, and the module's verdict once
- * it arrived. Two records per move in the normal case. The record is the
- * stack's (`session/calls`, a `move` row); this is its mirror, kept while the
- * feed still reads move verdicts from the trajectory.
- */
-export interface MoveLine {
-  /** When this happened: the dispatch, or the verdict. Defaults to now. */
-  ts?: number | undefined;
-  /** The module's move id; absent when the ack had not answered yet. */
-  moveId?: number | null | undefined;
-  /** The map the dispatch was made on. A destination is meaningless without it. */
-  map?: number | null | undefined;
-  x: number;
-  y: number;
-  z: number;
-  /** The unit the move was aimed at, when it was aimed at one. */
-  target?: string | null | undefined;
-  /** The module's verdict (`arrived`, `too_far`, `superseded`, …); absent while in flight. */
-  status?: string | null | undefined;
-}
-
-/**
- * One `{ t: "actions", ... }` record: what one snippet's async context put on
- * the wire as `POST /action` since the last flush, with the module's answer to
- * each (`ActionNote`, sandbox/ipc.ts) — the action log.
- *
- * One record per flush rather than one per action: a snippet dispatches about
- * ten actions on average (a fight is a `set_target`, an `attack_start`, a cast
- * per GCD and a `face` every 1.5s), and the viewer's feed is a window of the
- * last 200 records, so a record per action would push the snippets themselves
- * out of it. The sandbox flushes just before a snippet's result, so the usual
- * case is one record per snippet; a background routine's dispatches between
- * snippets flush on a 60s idle timer and carry `routine: true`.
- *
- * `callTs` is the `dispatchTs` the writer stamped on the snippet's `tool_call`
- * — the join key, because the CLI drivers append the call after it ran (this
- * record comes first) and the fixed loop before (this record comes between the
- * snippet and its result). Absent for actions dispatched outside every
- * snippet's context (an event callback, the SDK's client-parity queries).
- *
- * The record is the dispatch and the HTTP answer. A `200` is "queued"; what
- * the game made of it arrives on the event stream, and a `move_to`'s verdict
- * is the `move` record with the same `moveId`. Nothing here infers an outcome.
- * `move` records are unchanged: they are the map's intention feed and the
- * `move` table, and stay the verdict's home.
- */
-export interface ActionsLine {
-  ts?: number | undefined;
-  turn?: number | undefined;
-  callTs?: number | undefined;
-  routine?: true | undefined;
-  actions: ActionNote[];
-  /** Dispatches past the sandbox's per-flush cap, counted by action name. */
-  dropped?: Record<string, number> | undefined;
-}
+import { latestReading, runRowOfMeta, turnIndexOf } from "./run-reader";
 
 /**
  * One item on a state sample: a client-cache name, its stack count, worn or
@@ -196,202 +77,6 @@ export interface ItemSample {
   /** The container, when carried: 255 the backpack, 19-22 a worn bag. Absent when worn. */
   bag?: number;
 }
-
-/**
- * A world-state transition the loop noticed between two samples.
- * Kinds are additive; derivations (first capital, zone
- * coverage) come later and read these. `from`/`to` carry ids only — never
- * names — so the record stays what the server said, and a rendering choice
- * (which locale, which DBC) never changes a trajectory after the fact.
- */
-/**
- * One `{ t: "milestone", ... }` trajectory record. Kinds are
- * additive and every consumer ignores the ones it does not know, so a new kind
- * never invalidates a run.
- *
- * - `zone` / `area`: a change of `self.zone` / `self.area`, ids only, `from`
- *   absent on the first observation of a process.
- * - `achievement`: one of **our own** earns. Never another player's:
- *   `SMSG_ACHIEVEMENT_EARNED` is a say-range broadcast.
- * - `achievements_at_login`: the backlog `SMSG_ALL_ACHIEVEMENT_DATA` carried,
- *   written once per process so a resumed run's history is visible without its
- *   past being re-emitted as fresh firsts. Written even when the backlog is
- *   empty — it is the record that says the taps were live for this run, which
- *   is what lets a reader tell "flew nowhere" from "flights were not recorded".
- * - `taxi` / `taxi_landed`: `taxiFlight` on self flipping on after an accepted
- *   reply, and flipping back. The area id is keyed `areaId`, not `id`, so no
- *   consumer can mistake a flight record for a zone/area mark. Latched in the
- *   sandbox child at the event that flipped the flag (`FlightSignal`), so
- *   `observedTs` and `position` are the flip's own and a landing's `to` is the
- *   landing's area, not the area of the sample that wrote it; two legs inside
- *   one sample are two records. Absent `observedTs` marks a record the sampled
- *   fallback wrote.
- * - `level`: `self.level` changing, `from` absent on the first observation of a
- *   process exactly as on `zone` — so a run's starting level is on the record
- *   and a consumer counts level-ups as the marks that carry a `from`, never as
- *   the number of marks. `xp` is the reading at the moment the new level was
- *   first seen, which is what the client's bar showed.
- * - `death` / `release` / `resurrect`: own health reaching zero, the spirit
- *   being released to a graveyard, and the character being alive again.
- *   Produced from the events themselves — the sandbox child latches each
- *   transition as it arrives and the state sample drains what happened since
- *   the last one — with the sampled window read kept as the fallback for a
- *   process that opens on an already-dead character or a child that cannot
- *   answer. `observedTs` on a `death` is the timestamp of the event that
- *   carried it: the death's own moment, not the sample's. `zone` / `area` are
- *   the reading at that moment, which is the death site unless `released` says
- *   the spirit was already at the graveyard — on an event-driven death it
- *   normally is not, and the `release` record a moment later is what says when
- *   the spirit went; the field is absent when `playerFlags` had not been
- *   observed at all, which is ordinary.
- * - `spells_at_login`: the spellbook as the first sample that saw one read it
- *   (`SMSG_INITIAL_SPELLS`), written once per process. It does the job
- *   `achievements_at_login` does for flights — it is the record that says the
- *   spellbook, talent and trade producers were live for this run, which is what
- *   lets a reader tell "learned nothing" from "learning was not recorded" — and
- *   it is also what keeps a resumed character's whole book from landing as
- *   twenty fresh learns.
- * - `spell`: one id appearing in the book after that baseline. Ids only: the
- *   rank and the name are the client's own Spell.dbc reading of the id.
- * - `talent`: a talent whose rank climbed. `points` is the rank normalised to
- *   points spent (the wire rank is 0-based: rank 0 is one point), `rank` is the
- *   wire value as it arrived. The first observation of a talent frame seeds
- *   silently — a resumed character's already-spent points are not spends this
- *   run made — and a respec lowers the remembered rank without a record, so a
- *   relearn afterwards reads as a spend again.
- * - `trade`: one completed trade, read from `state.trade` latching
- *   `TRADE_STATUS_TRADE_COMPLETE` (8). `observedTs` is the cache's stamp for
- *   that packet, which is both the trade's own moment and what dedupes it
- *   across samples. What was traded is not on the record: the SDK clears both
- *   sides of the window as soon as the trade stops being open, so by the time a
- *   sample lands only the completion itself survives. Two completions inside
- *   one sampling gap record one — the usual lower bound.
- * - `group` / `instance` / `kill`: the party records (docs/proposals/
- *   GROUP-PLAY.md §6), latched in the sandbox child off the packets the server
- *   sends (the stack's party watcher), never off a map id read from a state
- *   sample. `group` is `SMSG_GROUP_LIST` as `state.group()` folds it —
- *   joined, changed or left, guids and counts only, `count` the party's size
- *   with self; a staged party's login list writes `joined`, which is the
- *   record that the party existed for the run. `instance` is a map transfer
- *   whose instance type changed, read off the `WB_AREA` that follows it
- *   (`instanceType` is the module's `Map.dbc` reading): `entered` into a type
- *   other than 0, `left` back to 0, ids only. `kill` is one
- *   `SMSG_PARTYKILLLOG` whose victim is of rank 1 or above (or of a rank the
- *   creature query never answered), with the victim's template `entry` and
- *   `rank` (the entry read off the victim's guid when the unit cache never
- *   held it), `self` when this character struck the blow, and `member` when
- *   the killer is this character or one of its group's members (absent on a
- *   record from before the field). `observedTs` is the packet's own
- *   timestamp on all three.
- */
-export type MilestoneLine =
-  | {
-      kind: "zone" | "area";
-      from: { id: number } | undefined;
-      to: { id: number };
-      turn?: number | undefined;
-    }
-  | {
-      kind: "achievement";
-      id: number;
-      name?: string | undefined;
-      points?: number | undefined;
-      categoryId?: number | undefined;
-      turn?: number | undefined;
-    }
-  | { kind: "achievements_at_login"; ids: number[]; points: number; turn?: number | undefined }
-  | {
-      kind: "taxi";
-      from?: { areaId: number } | undefined;
-      observedTs?: number | undefined;
-      position?: { map: number; x: number; y: number; z: number } | undefined;
-      turn?: number | undefined;
-    }
-  | {
-      kind: "taxi_landed";
-      to?: { areaId: number } | undefined;
-      observedTs?: number | undefined;
-      position?: { map: number; x: number; y: number; z: number } | undefined;
-      turn?: number | undefined;
-    }
-  | {
-      kind: "level";
-      from: number | undefined;
-      to: number;
-      xp?: number | undefined;
-      turn?: number | undefined;
-    }
-  | {
-      kind: "death";
-      /** The death event's own timestamp (the sampled fallback uses the cache's). */
-      observedTs?: number | undefined;
-      /** Where the corpse is, and which packet said so; absent when unobserved, or known only by its dungeon's entrance. */
-      position?:
-        | { map: number; x: number; y: number; z: number; source: "corpse_query" | "death_spot" }
-        | undefined;
-      zone?: { id: number } | undefined;
-      area?: { id: number } | undefined;
-      /** The ghost flag was already set when the death was first observed. */
-      released?: boolean | undefined;
-      turn?: number | undefined;
-    }
-  | {
-      kind: "release";
-      graveyard?: { map: number; x: number; y: number; z: number } | undefined;
-      turn?: number | undefined;
-    }
-  | { kind: "resurrect"; turn?: number | undefined }
-  | { kind: "spells_at_login"; ids: number[]; turn?: number | undefined }
-  | { kind: "spell"; id: number; turn?: number | undefined }
-  | {
-      kind: "talent";
-      id: number;
-      /** Points now spent in that talent: the wire rank plus one. */
-      points: number;
-      /** The wire rank, 0-based, exactly as `SMSG_TALENTS_INFO` carried it. */
-      rank: number;
-      /** The spec the points went into, when the packet named one. */
-      spec?: number | undefined;
-      turn?: number | undefined;
-    }
-  | {
-      kind: "trade";
-      /** The cache's stamp for the completion packet; the dedup key. */
-      observedTs?: number | undefined;
-      turn?: number | undefined;
-    }
-  | {
-      kind: "group";
-      event: "joined" | "changed" | "left";
-      groupGuid?: string | undefined;
-      leaderGuid?: string | undefined;
-      /** The other members' guids, in the server's order. */
-      members: string[];
-      /** The party's size, self included; 0 on `left`. */
-      count: number;
-      observedTs?: number | undefined;
-      turn?: number | undefined;
-    }
-  | {
-      kind: "instance";
-      event: "entered" | "left";
-      map: number;
-      instanceType: number;
-      from: { map: number; instanceType: number };
-      observedTs?: number | undefined;
-      turn?: number | undefined;
-    }
-  | {
-      kind: "kill";
-      killerGuid: string;
-      victimGuid: string;
-      entry?: number | undefined;
-      rank?: number | undefined;
-      self: boolean;
-      member?: boolean | undefined;
-      observedTs?: number | undefined;
-      turn?: number | undefined;
-    };
 
 export interface RunMeta {
   runId: string;
@@ -559,301 +244,70 @@ export interface TrajectoryRecord {
   [key: string]: unknown;
 }
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS run (
-  run_id TEXT PRIMARY KEY,
-  harness_version TEXT NOT NULL,
-  started_at INTEGER NOT NULL,
-  ended_at INTEGER,
-  -- The driver is its own column, not just a key inside config_json: a
-  -- cross-run SELECT must be able to exclude stub runs without parsing.
-  -- shakeout is the unscored stamp (legacy column name, see RunMeta).
-  driver TEXT,
-  shakeout TEXT,
-  model TEXT,
-  -- The operator objective this run was steered with, if any. Its
-  -- own column for the same reason the driver has one: a cross-run SELECT must
-  -- be able to exclude steered runs without parsing config_json.
-  objective TEXT,
-  -- The character this run played and the platform that served the model
-  --. Both were derivable from config_json and from the api
-  -- base; a column means a cross-run SELECT — and the viewer's listing — does
-  -- not have to parse a blob or re-derive a rule that could drift.
-  character TEXT,
-  platform TEXT,
-  -- What the provider actually served (RunMeta.resolved), promoted out of the
-  -- driver's own first word: the CLI resolves the alias 'sonnet' to the id
-  -- 'claude-sonnet-5' at launch, and a column means a cross-run SELECT can ask which Claude a row
-  -- was on without replaying the trajectory.
-  resolved_model TEXT,
-  resolved_cli_version TEXT,
-  -- And which backend served it (2026-09-16): an aggregator answers one slug
-  -- from many machines, so "which provider was this row on" is a question a
-  -- cross-run SELECT has to be able to ask without replaying the trajectory.
-  resolved_provider TEXT,
-  -- The freeplay run this one continues (RunConfig.continuedFrom): the
-  -- lineage of a freeplay character, so a listing can follow it across
-  -- the run ids the operator's disable/re-enable cycle gave it.
-  continued_from TEXT,
-  termination_reason TEXT,
-  termination_detail TEXT,
-  pause_reason TEXT,
-  -- When the run's reflection window opened, NULL whenever none is open. A
-  -- single nullable column rather than a table of transitions: the question
-  -- the viewer asks is "is this character reflecting right now", and a window
-  -- has no history worth keeping in sqlite: the reflect_window records in the
-  -- trajectory are that history.
-  reflecting_since INTEGER,
-  config_json TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS state (
-  run_id TEXT NOT NULL,
-  ts INTEGER NOT NULL,
-  level INTEGER,
-  xp INTEGER,
-  map INTEGER,
-  x REAL, y REAL, z REAL,
-  event_count INTEGER,
-  last_seq INTEGER,
-  -- Phase-1 signal vector groundwork: recorded, never scored here.
-  money INTEGER,
-  quests_completed INTEGER,
-  -- The driver turn in flight when the sample was taken, so turns-to-level is
-  -- derivable without replaying the JSONL. Nullable, like StateLine.turn.
-  turn INTEGER,
-  -- Zone and area ids: where the sample was taken, as the
-  -- game's own area ids; names are rendered from the client's DBC, not stored.
-  zone INTEGER,
-  area INTEGER
-);
-`;
+/**
+ * The run's own bookkeeping beside its identity in meta.json, the run row
+ * run.sqlite held in 0.5: the verdict, when it was reached, a pause in
+ * progress and an open reflection window. `run-reader.ts` reads them back in
+ * the row's column names (`runRowOfMeta`).
+ */
+export interface RunVerdictFields {
+  /** The run's end, as `setTermination` recorded it. */
+  termination?: { reason: string; detail?: string | undefined };
+  /** When the verdict was recorded (epoch ms). */
+  endedAt?: number;
+  /** The reason of a pause still standing; `--resume` clears it. */
+  pauseReason?: string;
+  /** When the reflection window still open opened; absent when none is. */
+  reflectingSince?: number;
+}
+
+/** The meta.json fields a launch's `writeMeta` carries over from the file it replaces. */
+const KEPT_ACROSS_WRITE_META = ["termination", "endedAt", "pauseReason"] as const;
 
 /**
- * Columns added to `run` inside the 0.4 series (at 0.4-6).
- * `CREATE TABLE IF NOT EXISTS` is a no-op on an existing run.sqlite, so a
- * resumed 0.4-1..0.4-5 run would otherwise write into a table that lacks
- * them. The only migration the runner carries: every run below the 0.4
- * floor is archived, and every 0.4 `state` table already has every column.
+ * Rewrite meta.json whole and atomically: a temporary file beside it, renamed
+ * into place, so a reader (the viewer, the collector, the supervisor) never
+ * sees half of one. Synchronous, so a verdict written here is on disk before
+ * the call returns, which the SIGTERM handler relies on.
  */
-const RUN_ADDED_COLUMNS: Record<string, string> = {
-  character: "TEXT",
-  platform: "TEXT",
-  // Added at 0.5: promoted from the driver's first word mid-episode, so a run
-  // launched by an older build (and any run resumed by this one) gains them here.
-  resolved_model: "TEXT",
-  resolved_cli_version: "TEXT",
-  // Added 2026-09-16: the backend that served the run (`routing.ts`).
-  resolved_provider: "TEXT",
-  // Added 2026-08-29: a freeplay continuation names its predecessor.
-  continued_from: "TEXT",
-  // Added 2026-08-30: the open reflection window, for the viewer's live feed.
-  reflecting_since: "INTEGER",
-};
-
-/**
- * Columns added to `state` inside the 0.4 series. Same
- * reason: a resumed run's sqlite predates them, and the insert names them.
- * No compat reads — a sample written before the column existed has NULL.
- */
-const STATE_ADDED_COLUMNS: Record<string, string> = {
-  zone: "INTEGER",
-  area: "INTEGER",
-  // JSON `ItemSample[]`; NULL when the sample carried none.
-  items: "TEXT",
-  // Added 2026-08-30: the player frame's numbers. Additive and
-  // nullable — nothing scored reads them, and a sample written before they
-  // existed has NULL, which every reader renders as unobserved.
-  health: "INTEGER",
-  max_health: "INTEGER",
-  power: "INTEGER",
-  max_power: "INTEGER",
-  power_type: "INTEGER",
-  next_level_xp: "INTEGER",
-};
+export function writeMetaFile(dir: string, meta: object): void {
+  const path = join(dir, "meta.json");
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(toJsonSafe(meta), null, 2)}\n`, "utf8");
+  renameSync(tmp, path);
+}
 
 export class Trajectory {
   readonly dir: string;
   readonly jsonlPath: string;
-  private readonly db: Database;
   private readonly secrets = new SecretRedactor();
   private readonly now: () => number;
   /**
    * The run this file belongs to, latched at `writeMeta` — which every launch
    * and every resume path calls before a turn is taken. It exists so `append`
-   * can mirror the one record kind that has a *current* answer worth querying
-   * (`reflect_window`) into the `run` row without every call site having to
-   * pass a run id it does not otherwise need. Null for the read-only openers
+   * can mirror the one record kind that has a *current* answer worth asking
+   * (`reflect_window`) into meta.json without every call site having to pass a
+   * run id it does not otherwise need. Null for the read-only openers
    * (`classify.ts`, `timeline.ts`), which append none of those kinds.
    */
   private runId: string | null = null;
   /**
-   * Whether this is the run's own long-lived writer, which keeps the file in
-   * WAL while it writes and puts it back on the rollback journal when it
-   * finishes (`rundb.ts`). Every other opener — the supervisor ending a run,
-   * the roster, `classify.ts` — writes once and closes, and at most heals a
-   * WAL-mode file nobody else holds back to the rollback journal.
-   */
-  private readonly walOwner: boolean;
-  /** The journal the owner's open left the file in, and why when it is not WAL; null for any other opener. */
-  readonly journal: { mode: string; error?: string } | null;
-  /** How a write that met a lock is retried; null writes once and throws, as every short-lived opener does. */
-  private readonly retry: RunDbRetryOptions | null;
-  /** The last write still retrying, settled either way; null when none is. Every later write waits behind it. */
-  private tail: Promise<void> | null = null;
-  /**
-   * A write spent its retries on a lock and gave up: until one lands, the
-   * writes it latches get one attempt and no waits. A verdict write's give-up
-   * latches every write; a minor write's (state, move, trace, the mirrors)
-   * latches only minor writes, so a sample the ticker swallows never leaves
-   * the verdict with a single attempt (`VERDICT_WRITES`).
-   */
-  private failing: "minor" | "verdict" | null = null;
-  /**
-   * The verdict this handle has recorded, kept in memory rather than read
-   * back from the row: a row write can still be queued behind a retrying one
-   * when the next pause asks "already paused?" (the SIGTERM handler's pause,
-   * then the driver's unwind reaching the same call), and reading the row
-   * then would append a second pause record.
+   * The verdict this handle has recorded, kept in memory as well as in
+   * meta.json, so the second pause of one segment (the SIGTERM handler's,
+   * then the driver's unwind reaching the same call) is recognised as one.
    */
   private recorded: { kind: "terminated" } | { kind: "paused"; mark: PauseMark } | null = null;
 
-  constructor(
-    dir: string,
-    opts: {
-      now?: () => number;
-      /** The run's own long-lived writer: WAL while open, the rollback journal after `finish()`. */
-      wal?: boolean;
-      /**
-       * Retry a write that meets a lock (`retryRunDbWrite`) rather than throw
-       * at once: `true` for the default waits, or the options (tests).
-       */
-      retry?: boolean | RunDbRetryOptions;
-      /** Each attempt's lock wait; `RUN_DB_BUSY_TIMEOUT_MS` by default (tests shorten it). */
-      busyTimeoutMs?: number;
-    } = {},
-  ) {
+  constructor(dir: string, opts: { now?: () => number } = {}) {
     this.dir = dir;
     this.now = opts.now ?? Date.now;
     mkdirSync(dir, { recursive: true });
     this.jsonlPath = join(dir, "trajectory.jsonl");
-    this.db = openRunDb(join(dir, RUN_DB_FILE), opts.busyTimeoutMs !== undefined ? { busyTimeoutMs: opts.busyTimeoutMs } : {});
-    this.walOwner = opts.wal === true;
-    this.journal = this.walOwner ? enterWal(this.db) : null;
-    this.retry = opts.retry === undefined || opts.retry === false ? null : opts.retry === true ? {} : opts.retry;
-    this.db.exec(SCHEMA);
-    this.migrateTable("run", RUN_ADDED_COLUMNS);
-    this.migrateTable("state", STATE_ADDED_COLUMNS);
   }
 
-  /** Additive, idempotent: add any column this build knows and the file lacks. */
-  private migrateTable(table: "run" | "state", columns: Record<string, string>): void {
-    const have = new Set(
-      (this.db.query(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name),
-    );
-    for (const [name, type] of Object.entries(columns)) {
-      if (!have.has(name)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
-    }
-  }
-
-  /**
-   * Run one run.sqlite write.
-   *
-   * Without `retry` this is the plain call: it runs now and throws what it
-   * throws, and the promise it returns is already settled. With `retry` (the
-   * live runner), a write that meets a lock (`isTransientRunDbError`) is tried
-   * again after each of the waits, and the promise settles when it lands or
-   * rejects with the last error when they are spent; any other error still
-   * throws here, synchronously. The first attempt is always synchronous, so a
-   * write that succeeds is on disk before this returns, whoever awaits it.
-   *
-   * Writes keep their order: while one is retrying, every later write queues
-   * behind it rather than racing it, and runs once it has settled. Each retry
-   * is a `harness` record, `rundb_retry`, in the trajectory; `what` names the
-   * write there.
-   *
-   * The waits are not each write's: once a write has spent them and given
-   * up, the writes after it get one attempt and no waits until one lands
-   * (`failing`), so a lock that outlasts the retries ends the run within one
-   * round of them rather than one round per queued write. The verdict's own
-   * writes (`VERDICT_WRITES`) keep a round of their own after a minor write
-   * gave up: the state ticker swallows its failures, and a swallowed sample
-   * must not spend the termination's retries.
-   *
-   * Only the statement is retried, never the record a method appends beside
-   * it, so a retried pause is still one pause record.
-   */
-  private write(what: string, op: () => void): Promise<void> {
-    const retry = this.retry;
-    if (retry === null) {
-      op();
-      return SETTLED;
-    }
-    const onRetry = (r: RunDbRetry): void => {
-      this.append({ t: "harness", kind: "rundb_retry", write: what, attempt: r.attempt, waitMs: r.waitMs, error: r.error });
-      retry.onRetry?.(r);
-    };
-    const verdict = VERDICT_WRITES.has(what);
-    const attempt = (firstError?: unknown): Promise<void> => {
-      const latched = this.failing === "verdict" || (this.failing === "minor" && !verdict);
-      return retryRunDbWrite(op, {
-        ...retry,
-        onRetry,
-        ...(latched ? { waitsMs: [] } : {}),
-        ...(firstError !== undefined ? { firstError } : {}),
-      }).then(
-        () => {
-          this.failing = null;
-        },
-        (e: unknown) => {
-          if (isTransientRunDbError(e)) this.failing = verdict ? "verdict" : (this.failing ?? "minor");
-          throw e;
-        },
-      );
-    };
-    if (this.tail === null) {
-      try {
-        op();
-        this.failing = null;
-        return SETTLED;
-      } catch (e) {
-        if (!isTransientRunDbError(e)) throw e;
-        return this.track(attempt(e));
-      }
-    }
-    return this.track(this.tail.then(() => attempt()));
-  }
-
-  /** Make `p` the write every later one waits behind, until it settles. */
-  private track(p: Promise<void>): Promise<void> {
-    const settled = p.then(noop, noop);
-    this.tail = settled;
-    void settled.then(() => {
-      if (this.tail === settled) this.tail = null;
-    });
-    return p;
-  }
-
-  /** Settles when every write issued so far has landed or given up. Never rejects: each write's own promise carries its error. */
+  /** Every write is synchronous; kept for the callers that await the run's writes before they exit. */
   flush(): Promise<void> {
-    return this.tail ?? SETTLED;
-  }
-
-  /**
-   * One movement intention, mirrored from the session record (`MoveLine`).
-   * JSONL only: the record's home is `session/calls`, and the map reads it there.
-   */
-  recordMove(m: MoveLine): void {
-    this.append({ t: "move", ...m });
-  }
-
-  /** One action-log flush (`ActionsLine`). JSONL only: no reader needs it in sqlite. */
-  recordActions(a: ActionsLine): void {
-    this.append({ t: "actions", ...a });
-  }
-
-  /** One `milestone` record, the way `quest_complete` is written. */
-  recordMilestone(m: MilestoneLine): void {
-    this.append({ t: "milestone", ...m });
+    return SETTLED;
   }
 
   /** Register a secret to scrub from every persisted string and from everything the model reads. */
@@ -877,118 +331,98 @@ export class Trajectory {
     if (record.t === "reflect_window") this.mirrorReflectWindow(full.ts, record["event"]);
   }
 
+  /** meta.json as it stands, or null when it is missing or unreadable. */
+  private readMetaFile(): (RunMeta & RunVerdictFields) | null {
+    try {
+      return JSON.parse(readFileSync(join(this.dir, "meta.json"), "utf8")) as RunMeta & RunVerdictFields;
+    } catch {
+      return null;
+    }
+  }
+
   /**
-   * Keep `run.reflecting_since` equal to the gate's window, so a reader can ask
-   * whether a character is reflecting *now* without replaying the JSONL. The
-   * transitions themselves stay in the trajectory; this is only the current
-   * answer, and it is written from the same records rather than from a second
+   * Change meta.json in place: read it, apply `change`, scrub and write it
+   * back whole (`writeMetaFile`). Nothing when there is no meta.json (a test
+   * harness, a torn launch): the record carries what happened.
+   */
+  private updateMeta(change: (meta: RunMeta & RunVerdictFields) => RunMeta & RunVerdictFields): void {
+    const meta = this.readMetaFile();
+    if (meta === null) return;
+    try {
+      writeMetaFile(this.dir, JSON.parse(this.scrub(jsonLine(change(meta)))) as object);
+    } catch {
+      /* a full or read-only disk: the record still carries it */
+    }
+  }
+
+  /**
+   * Keep meta.json's `reflectingSince` equal to the gate's window, so a reader
+   * can ask whether a character is reflecting *now* without replaying the
+   * JSONL. The transitions themselves stay in the trajectory; this is only the
+   * current answer, written from the same records rather than from a second
    * call site, so the two cannot disagree.
    */
   private mirrorReflectWindow(ts: number, event: unknown): void {
     if (this.runId === null || (event !== "open" && event !== "close")) return;
-    // `append` is synchronous and has no caller to hand a retry's failure to;
-    // the column mirrors the record just appended, so a mirror that gave up
-    // after its retries is let go rather than thrown into nobody.
-    this.setReflectingSince(event === "open" ? ts : null).catch(noop);
-  }
-
-  private setReflectingSince(since: number | null): Promise<void> {
-    const runId = this.runId;
-    if (runId === null) return SETTLED;
-    return this.write("reflecting_since", () => {
-      this.db.query(`UPDATE run SET reflecting_since = ? WHERE run_id = ?`).run(since, runId);
-    });
+    this.updateMeta(({ reflectingSince: _since, ...meta }) => (event === "open" ? { ...meta, reflectingSince: ts } : meta));
   }
 
   /**
-   * The run's identity, to its three places: meta.json whole, the `run` row,
-   * and a `meta` record in the trajectory.
+   * The run's identity, to its two places: meta.json whole and a `meta` record
+   * in the trajectory.
    *
    * The module session token goes to meta.json only. It is the bearer secret
    * for the run's game session, and the readers that need it — `--resume`
    * reattaching, the roster releasing a session, the viewer striking it out of
-   * an error message — all read meta.json. The record and `config_json` carry
-   * the rest of the config without it (`withoutSessionToken`), so the
-   * trajectory, the row and the store that copies both hold no copy of it.
+   * an error message — all read meta.json. The record carries the rest of the
+   * config without it (`withoutSessionToken`).
+   *
+   * The verdict fields meta.json already holds (`termination`, `endedAt`,
+   * `pauseReason`) are carried over unless `meta` states its own, as a 0.5
+   * run's `run` row kept them across a relaunch; an open reflection window is
+   * not, because no window is open at a process boundary (`reflect.ts`: "A
+   * resumed run starts with a fresh gate").
    */
   writeMeta(meta: RunMeta): Promise<void> {
     this.runId = meta.runId;
-    const safe = JSON.parse(this.scrub(jsonLine(meta))) as RunMeta;
-    writeFileSync(join(this.dir, "meta.json"), `${JSON.stringify(toJsonSafe(safe), null, 2)}\n`, "utf8");
-    const configJson = this.scrub(jsonLine(withoutSessionToken(meta.config)));
-    const row = this.write("meta", () => {
-      this.db
-        .query(
-          `INSERT INTO run (run_id, harness_version, started_at, driver, shakeout, model, objective, character, platform, resolved_model, resolved_cli_version, resolved_provider, continued_from, config_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(run_id) DO UPDATE SET harness_version = excluded.harness_version`,
-        )
-        .run(
-          meta.runId,
-          meta.harnessVersion,
-          meta.startedAt,
-          meta.config.driver,
-          meta.shakeout ?? null,
-          meta.config.model ?? null,
-          meta.config.objective ?? null,
-          meta.config.character ?? null,
-          platformOf(meta.config.apiBase, meta.config.driver),
-          meta.resolved?.model ?? null,
-          meta.resolved?.cliVersion ?? null,
-          meta.resolved?.provider ?? null,
-          meta.config.continuedFrom ?? null,
-          configJson,
-        );
-    });
-    /*
-     * No window is open at a process boundary. `reflect.ts`: "A resumed run
-     * starts with a fresh gate — closed window, un-armed until the next
-     * false→true transition", and a pause is the same boundary. Clearing here
-     * is that in-memory truth's persistent half: a run killed mid-window would
-     * otherwise leave the column standing and read as reflecting forever.
-     */
-    const reflecting = this.setReflectingSince(null);
+    const before = this.readMetaFile();
+    const kept: RunVerdictFields = {};
+    for (const k of KEPT_ACROSS_WRITE_META) {
+      if (before?.[k] !== undefined && (meta as RunVerdictFields)[k] === undefined) (kept as Record<string, unknown>)[k] = before[k];
+    }
+    const { reflectingSince: _since, ...next } = { ...meta, ...kept } as RunMeta & RunVerdictFields;
+    writeMetaFile(this.dir, JSON.parse(this.scrub(jsonLine(next))) as object);
     this.append({ t: "meta", ...meta, config: withoutSessionToken(meta.config) });
-    return Promise.all([row, reflecting]).then(noop);
+    return SETTLED;
   }
 
   /**
    * A continuation whose character turned out to be gone: the run goes on as
-   * a fresh one, and every place that said "continues run X on character Y"
-   * — the run row, meta.json and the trajectory — is told so, because a
-   * lineage the character does not back is exactly the wrong record.
+   * a fresh one, and both places that said "continues run X on character Y" —
+   * meta.json and the trajectory — are told so, because a lineage the
+   * character does not back is exactly the wrong record.
    */
-  dropContinuation(runId: string, detail: string): Promise<void> {
+  dropContinuation(_runId: string, detail: string): Promise<void> {
     this.append({ t: "harness", kind: "continue-dropped", detail });
-    const row = this.write("continue-dropped", () => {
-      this.db.query(`UPDATE run SET continued_from = NULL, character = NULL WHERE run_id = ?`).run(runId);
-    });
-    const path = join(this.dir, "meta.json");
-    try {
-      const meta = JSON.parse(readFileSync(path, "utf8")) as RunMeta;
+    this.updateMeta((meta) => {
       const { continuedFrom: _from, character: _name, ...config } = meta.config;
-      writeFileSync(path, `${JSON.stringify(toJsonSafe({ ...meta, config }), null, 2)}\n`, "utf8");
-    } catch {
-      // No meta.json (a test harness): the row and the record carry it.
-    }
-    return row;
+      return { ...meta, config: config as RunConfig };
+    });
+    return SETTLED;
   }
 
   /**
    * Promote what the provider said it served onto the run, once.
    *
-   * Not folded into `writeMeta`: the answer arrives mid-episode (the CLI's
-   * `init` event, the first response body), long after the launch write, and
-   * `writeMeta`'s conflict path deliberately updates only `harness_version`.
-   * So this owns both halves — the `run` row and `meta.json` — and is the only
-   * writer of either field. First observation wins: a call that would overwrite
-   * an already-recorded value with a different one is ignored, and the run
-   * keeps the id it was launched under.
+   * The answer arrives mid-episode (the CLI's `init` event, the first response
+   * body), long after the launch write. First observation wins: a call that
+   * would overwrite an already-recorded value with a different one is
+   * ignored, and the run keeps the id it was launched under.
    *
    * Returns whether anything was written, so a caller can log the promotion
    * exactly once without keeping its own flag honest.
    */
-  recordResolved(runId: string, r: Partial<ResolvedModel>): boolean {
+  recordResolved(_runId: string, r: Partial<ResolvedModel>): boolean {
     const model = r.model ?? null;
     const cliVersion = r.cliVersion ?? null;
     const provider = r.provider ?? null;
@@ -1013,15 +447,6 @@ export class Trajectory {
     ) {
       return false;
     }
-    try {
-      this.write("resolved", () => {
-        this.db
-          .query(`UPDATE run SET resolved_model = ?, resolved_cli_version = ?, resolved_provider = ? WHERE run_id = ?`)
-          .run(next.model, next.cliVersion, next.provider, runId);
-      }).catch(noop);
-    } catch {
-      /* a run.sqlite that cannot take the update must not end the episode */
-    }
     if (meta !== null) {
       /*
        * The tuple carries the same answer as an annotation, so a reader that
@@ -1029,15 +454,11 @@ export class Trajectory {
        * excluded from `sameComparability`, which is why
        * filling it here does not turn every resume into a restamp.
        */
-      const merged: RunMeta = {
-        ...meta,
+      this.updateMeta((m) => ({
+        ...m,
         resolved: next,
-        ...(meta.comparability !== undefined
-          ? { comparability: { ...meta.comparability, resolvedModel: next.model } }
-          : {}),
-      };
-      const safe = JSON.parse(this.scrub(jsonLine(merged))) as RunMeta;
-      writeFileSync(join(this.dir, "meta.json"), `${JSON.stringify(toJsonSafe(safe), null, 2)}\n`, "utf8");
+        ...(m.comparability !== undefined ? { comparability: { ...m.comparability, resolvedModel: next.model } } : {}),
+      }));
     }
     this.append({ t: "harness", kind: "resolved_model", ...next });
     return true;
@@ -1049,134 +470,59 @@ export class Trajectory {
    * The driver calls this only when the reading changed. The record carries
    * the windows and no text: a `harness` record's `text` is published, and a
    * usage percentage or a reset time never is (operator, 2026-10-16).
-   * meta.json is rewritten whole, like `recordResolved` does, and never
-   * throws into a turn.
+   * meta.json is rewritten whole, and never throws into a turn.
    */
   recordSubscriptionUsage(u: SubscriptionUsage, turn?: number): void {
     this.append({ t: "harness", kind: "rate_limits", ...(turn !== undefined ? { turn } : {}), lane: u.lane, windows: u.windows });
-    const meta = this.readMetaFile();
-    if (meta === null) return;
-    try {
-      const safe = JSON.parse(this.scrub(jsonLine({ ...meta, subscriptionUsage: u }))) as RunMeta;
-      writeFileSync(join(this.dir, "meta.json"), `${JSON.stringify(toJsonSafe(safe), null, 2)}\n`, "utf8");
-    } catch {
-      // the record has it; the gate reads the next one
-    }
-  }
-
-  /** meta.json as it stands, or null when it is missing or unreadable. */
-  private readMetaFile(): RunMeta | null {
-    try {
-      return JSON.parse(readFileSync(join(this.dir, "meta.json"), "utf8")) as RunMeta;
-    } catch {
-      return null;
-    }
-  }
-
-  recordState(runId: string, s: StateLine): Promise<void> {
-    this.append({ t: "state", ...s });
-    const ts = this.now();
-    return this.write("state", () => this.insertState(runId, ts, s));
-  }
-
-  private insertState(runId: string, ts: number, s: StateLine): void {
-    this.db
-      .query(
-        `INSERT INTO state (run_id, ts, level, xp, map, x, y, z, event_count, last_seq, money, quests_completed, turn, zone, area, items,
-                            health, max_health, power, max_power, power_type, next_level_xp)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        runId,
-        ts,
-        s.level ?? null,
-        s.xp ?? null,
-        s.map ?? null,
-        s.x ?? null,
-        s.y ?? null,
-        s.z ?? null,
-        s.eventCount ?? null,
-        s.lastSeq ?? null,
-        s.money ?? null,
-        s.questsCompleted ?? null,
-        s.turn ?? null,
-        s.zone ?? null,
-        s.area ?? null,
-        s.items === undefined ? null : JSON.stringify(s.items),
-        s.health ?? null,
-        s.maxHealth ?? null,
-        s.power ?? null,
-        s.maxPower ?? null,
-        s.powerType ?? null,
-        s.nextLevelXp ?? null,
-      );
+    this.updateMeta((meta) => ({ ...meta, subscriptionUsage: u }));
   }
 
   /**
    * The character the run is actually playing (the model names it).
    *
    * The launch config carries only the harness's suggestion, so every reader
-   * of "which character was this" — the runs page and the positions feed off
-   * `run.character`, and the resume note off `meta.json` — has to be told the
-   * name the model chose, once, at the first sight of it in the world.
-   * Recorded in all three places because they are read by different processes:
-   * a resumed runner reads meta.json before any database is open.
+   * of "which character was this" — the runs page, the positions feed and the
+   * resume note — has to be told the name the model chose, once, at the first
+   * sight of it in the world: in meta.json's config, and as a record.
    */
-  setCharacter(runId: string, character: string): Promise<void> {
+  setCharacter(_runId: string, character: string): Promise<void> {
     this.append({ t: "character", character });
-    const row = this.write("character", () => {
-      this.db.query(`UPDATE run SET character = ? WHERE run_id = ?`).run(character, runId);
-    });
-    const path = join(this.dir, "meta.json");
-    try {
-      const meta = JSON.parse(readFileSync(path, "utf8")) as RunMeta;
-      if (meta.config?.character === character) return row;
-      const next = { ...meta, config: { ...meta.config, character } };
-      writeFileSync(path, `${JSON.stringify(toJsonSafe(next), null, 2)}\n`, "utf8");
-    } catch {
-      // No meta.json yet (a test harness, a torn write): the database row and
-      // the trajectory record still carry the name.
-    }
-    return row;
+    this.updateMeta((meta) => (meta.config?.character === character ? meta : { ...meta, config: { ...meta.config, character } }));
+    return SETTLED;
   }
 
   /**
-   * The run's verdict: the trajectory record first, then the row.
+   * The run's verdict: the trajectory record first, then meta.json.
    *
-   * The record is appended before the row is written, so a row write that
-   * fails (after its retries, for the live runner) leaves the verdict in
-   * trajectory.jsonl alone. `readRunFact` reads it from there when the row has
-   * none (`terminationOfTrajectory`), so the supervisor neither resumes nor
-   * re-ends a run whose runner recorded its end, and repairs the row
-   * (`repairTermination`).
+   * The record is appended before meta.json is rewritten, so a rewrite that
+   * fails leaves the verdict in trajectory.jsonl alone. `readRunFact` reads it
+   * from there when meta.json has none (`terminationOfTrajectory`), so the
+   * supervisor neither resumes nor re-ends a run whose runner recorded its
+   * end, and repairs meta.json (`repairTermination`).
    */
-  setTermination(runId: string, reason: TerminationReason, detail?: string): Promise<void> {
+  setTermination(_runId: string, reason: TerminationReason, detail?: string): Promise<void> {
     this.recorded = { kind: "terminated" };
     this.append({ t: "termination", reason, detail });
-    const at = this.now();
-    return this.write("termination", () => this.updateTermination(runId, reason, detail, at));
+    this.writeTermination(reason, detail, this.now());
+    return SETTLED;
   }
 
   /**
-   * Write a verdict the trajectory already holds into a row that lacks it,
-   * appending nothing: the supervisor's repair of a run whose runner recorded
-   * its end but could not write the row (`setTermination`). A row that already
-   * carries a verdict is left alone. Returns whether it wrote.
+   * Write a verdict the trajectory already holds into a meta.json that lacks
+   * it, appending nothing: the supervisor's repair of a run whose runner
+   * recorded its end but could not write it down (`setTermination`). A
+   * meta.json that already carries a verdict is left alone. Returns whether it
+   * wrote.
    */
-  repairTermination(runId: string, reason: string, detail: string | null, at: number): boolean {
-    const row = this.db.query(`SELECT termination_reason FROM run WHERE run_id = ?`).get(runId) as { termination_reason?: unknown } | null;
-    if (row === null || (row.termination_reason ?? null) !== null) return false;
-    this.updateTermination(runId, reason, detail ?? undefined, at);
+  repairTermination(_runId: string, reason: string, detail: string | null, at: number): boolean {
+    const meta = this.readMetaFile();
+    if (meta === null || meta.termination !== undefined) return false;
+    this.writeTermination(reason, detail ?? undefined, at);
     return true;
   }
 
-  private updateTermination(runId: string, reason: string, detail: string | undefined, at: number): void {
-    this.db
-      .query(
-        `UPDATE run SET termination_reason = ?, termination_detail = ?, ended_at = ?, pause_reason = NULL
-         WHERE run_id = ?`,
-      )
-      .run(reason, detail ?? null, at, runId);
+  private writeTermination(reason: string, detail: string | undefined, at: number): void {
+    this.updateMeta(({ pauseReason: _pause, ...meta }) => ({ ...meta, termination: { reason, ...(detail !== undefined ? { detail } : {}) }, endedAt: at }));
   }
 
   /**
@@ -1186,27 +532,26 @@ export class Trajectory {
    * rides on it when the provider stated its reset: the pause streak reads it
    * off this record, and a pause that carries one is not on the ladder.
    *
-   * One pause per segment: a row that already carries a `pause_reason` is
-   * left as it is and no second record is appended. The signal handler in
-   * run.ts writes the pause the instant SIGTERM lands (so a SIGKILL a second
-   * later still leaves a verdict), and the driver's own cooperative unwind
-   * then reaches the same call — the first write is the verdict, and the
-   * pause count `readRunFact` derives from the trajectory stays one per
-   * segment. `--resume` clears the row (`clearPause`), so the next segment's
-   * pause is recorded again.
+   * One pause per segment: a run whose meta.json already carries a
+   * `pauseReason` is left as it is and no second record is appended. The
+   * signal handler in run.ts writes the pause the instant SIGTERM lands (so a
+   * SIGKILL a second later still leaves a verdict), and the driver's own
+   * cooperative unwind then reaches the same call — the first write is the
+   * verdict, and the pause count `readRunFact` derives from the trajectory
+   * stays one per segment. `--resume` clears it (`clearPause`), so the next
+   * segment's pause is recorded again.
    */
   setPause(runId: string, reason: PauseReason, detail?: string, episodeElapsedMs?: number, notBefore?: number): Promise<boolean> {
-    const taken = this.takePause(runId, reason, detail, episodeElapsedMs, notBefore);
-    return taken === null ? Promise.resolve(false) : taken.then(() => true);
+    return Promise.resolve(this.takePause(runId, reason, detail, episodeElapsedMs, notBefore));
   }
 
-  /** `setPause`'s synchronous half: null when the row already carries a pause, else the record appended and the row's write. */
-  private takePause(runId: string, reason: PauseReason, detail?: string, episodeElapsedMs?: number, notBefore?: number): Promise<void> | null {
-    // What this handle recorded first, then the row (a run paused before this
+  /** `setPause`'s synchronous half: false when the run already carries a pause, else the record appended and meta.json written. */
+  private takePause(_runId: string, reason: PauseReason, detail?: string, episodeElapsedMs?: number, notBefore?: number): boolean {
+    // What this handle recorded first, then meta.json (a run paused before this
     // process opened it). A recorded termination is never followed by a pause.
-    if (this.recorded !== null) return null;
-    const row = this.db.query(`SELECT pause_reason FROM run WHERE run_id = ?`).get(runId) as { pause_reason?: unknown } | null;
-    if (row !== null && typeof row.pause_reason === "string" && row.pause_reason !== "") return null;
+    if (this.recorded !== null) return false;
+    const standing = this.readMetaFile()?.pauseReason;
+    if (typeof standing === "string" && standing !== "") return false;
     this.recorded = {
       kind: "paused",
       mark: {
@@ -1224,27 +569,20 @@ export class Trajectory {
       ...(episodeElapsedMs !== undefined ? { episodeElapsedMs } : {}),
       ...(notBefore !== undefined ? { notBefore } : {}),
     });
-    return this.write("pause", () => {
-      this.db.query(`UPDATE run SET pause_reason = ? WHERE run_id = ?`).run(reason, runId);
-    });
+    this.updateMeta((meta) => ({ ...meta, pauseReason: reason }));
+    return true;
   }
 
   /**
    * The pause and its meta.json mark, together and once per segment: when the
-   * row already carries a pause, NOTHING is written — not the record, not the
-   * row, and not the mark. A run that paused on its provider and is then
+   * run already carries a pause, NOTHING is written — not the record, not the
+   * reason, and not the mark. A run that paused on its provider and is then
    * stopped keeps that pause's reason and its instant (`at`), which is what
    * the resume cadence counts from. `meta` is the run's meta as it stands.
    */
   pauseWithMark(runId: string, mark: PauseMark, meta: RunMeta): Promise<boolean> {
-    // Both halves start now, synchronously, rather than the mark waiting on
-    // the row: the SIGTERM handler relies on the record, the row and the mark
-    // all being written before it returns. A row write that meets a lock
-    // queues the mark's row write behind it; meta.json is written at once.
-    const taken = this.takePause(runId, mark.reason, mark.detail, mark.episodeElapsedMs, mark.notBefore);
-    if (taken === null) return Promise.resolve(false);
-    const marked = this.writeMeta({ ...meta, pause: mark });
-    return Promise.all([taken, marked]).then(() => true);
+    if (!this.takePause(runId, mark.reason, mark.detail, mark.episodeElapsedMs, mark.notBefore)) return Promise.resolve(false);
+    return this.writeMeta({ ...meta, pause: mark }).then(() => true);
   }
 
   /**
@@ -1256,109 +594,47 @@ export class Trajectory {
     return this.recorded?.kind === "paused" ? this.recorded.mark : null;
   }
 
-  clearPause(runId: string): Promise<void> {
+  clearPause(_runId: string): Promise<void> {
     if (this.recorded?.kind === "paused") this.recorded = null;
-    return this.write("clear-pause", () => {
-      this.db.query(`UPDATE run SET pause_reason = NULL WHERE run_id = ?`).run(runId);
-    });
+    this.updateMeta(({ pauseReason: _pause, ...meta }) => meta);
+    return SETTLED;
   }
 
+  /** The run row, in run.sqlite's column names, as meta.json now holds it (`runRowOfMeta`); null without a meta.json. */
   runRow(runId: string): Record<string, unknown> | null {
-    return this.db.query(`SELECT * FROM run WHERE run_id = ?`).get(runId) as Record<
-      string,
-      unknown
-    > | null;
+    const meta = this.readMetaFile();
+    return meta === null ? null : (runRowOfMeta(runId, meta as unknown as Record<string, unknown>) as unknown as Record<string, unknown>);
   }
 
   /**
-   * The highest turn this run has already recorded, or 0.
-   *
-   * Read on `--resume` so the recorded turn series keeps climbing across a
-   * restart. A run whose rows predate the column answers 0, which is the same
-   * answer a fresh run gives — a resumed old run then records turns from 1 and
-   * its series is visibly non-monotonic, which the eval side treats as "no
-   * usable turn index" rather than as a fast run.
+   * The highest turn this run has already recorded, or 0: where a resumed
+   * run's numbering continues from, so its turns-to-level is the run's cost
+   * and not this episode's. Read off the trajectory's own `request` records
+   * (`TurnIndex`), each `resume` moving the offset as this one will.
    */
-  maxTurn(runId: string): number {
-    try {
-      const r = this.db
-        .query(`SELECT MAX(turn) AS t FROM state WHERE run_id = ?`)
-        .get(runId) as { t?: unknown } | null;
-      return typeof r?.t === "number" ? r.t : 0;
-    } catch {
-      return 0;
-    }
+  maxTurn(_runId: string): number {
+    return turnIndexOf(this.dir).max;
   }
 
   /**
-   * The most recent state sample this run recorded, or null. Read on
-   * `--resume` so the resumed session note can tell the model where its
-   * character was left (the character survives a pause, so the note has to
-   * name it).
+   * The most recent reading of the character's level and XP, or null: off the
+   * session record's trace (`run-reader.ts`). Read on `--resume` so the
+   * resumed session note can tell the model where its character was left.
    */
   lastState(runId: string): { level?: number; xp?: number } | null {
-    try {
-      const r = this.db
-        .query(`SELECT level, xp FROM state WHERE run_id = ? ORDER BY ts DESC LIMIT 1`)
-        .get(runId) as { level?: unknown; xp?: unknown } | null;
-      if (r === null) return null;
-      return {
-        ...(typeof r.level === "number" ? { level: r.level } : {}),
-        ...(typeof r.xp === "number" ? { xp: r.xp } : {}),
-      };
-    } catch {
-      return null;
-    }
+    const r = latestReading(this.dir, runId);
+    if (r === null || (r.level === null && r.xp === null)) return null;
+    return { ...(r.level !== null ? { level: r.level } : {}), ...(r.xp !== null ? { xp: r.xp } : {}) };
   }
 
-  stateRows(runId: string): Record<string, unknown>[] {
-    return this.db
-      .query(`SELECT * FROM state WHERE run_id = ? ORDER BY ts`)
-      .all(runId) as Record<string, unknown>[];
-  }
+  /** Nothing to close: every write is a whole append or a whole rename. */
+  close(): void {}
 
-  /**
-   * Close the handle now. Any opener but the run's own writer also puts a
-   * WAL-mode file that nobody else holds back on the rollback journal (a run
-   * whose writer died, ended by the supervisor), without waiting; the owner
-   * should `finish()` instead, and closing it here makes one attempt at that.
-   * A write still retrying is abandoned: its promise rejects on the closed
-   * handle. Never throws.
-   */
-  close(): void {
-    try {
-      leaveWal(this.db, { checkpoint: this.walOwner });
-    } catch {
-      /* best effort; never in the way of the close */
-    }
-    this.db.close();
-  }
-
-  /**
-   * The owner's close: wait out every write still retrying, then checkpoint
-   * and put the file back on the rollback journal, trying for a few seconds
-   * while a reader holds it (`leaveWalPatiently`), then close. The waits are
-   * awaited, so the heartbeat beats through them. Returns the journal mode the
-   * file was left in. Never throws: a write that gave up has already thrown
-   * to whoever awaited it.
-   */
-  async finish(opts: { sleep?: (ms: number) => Promise<void> } = {}): Promise<string> {
-    await this.flush();
-    let mode = "";
-    try {
-      mode = this.walOwner ? await leaveWalPatiently(this.db, opts) : leaveWal(this.db, { checkpoint: false });
-    } catch {
-      /* best effort */
-    }
-    this.db.close();
-    return mode;
-  }
+  /** The owner's close; nothing is held open. */
+  async finish(): Promise<void> {}
 }
 
 const SETTLED: Promise<void> = Promise.resolve();
-/** The writes that carry the run's verdict or identity, by `write`'s `what`: a minor write's give-up never takes their retries. */
-const VERDICT_WRITES: ReadonlySet<string> = new Set(["termination", "pause", "clear-pause", "meta"]);
-function noop(): void {}
 
 /** Read every record of a trajectory file. Bad lines surface, not vanish. */
 export function readTrajectory(dir: string): TrajectoryRecord[] {

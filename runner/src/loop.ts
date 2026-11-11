@@ -6,11 +6,9 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { join } from "node:path";
 import { AdapterError, type AssistantTurn, type ChatAdapter } from "./adapter";
 import {
   CONTEXT_POLICY,
-  PLAYER_FLAGS_GHOST,
   assembleContext,
   eventWindow,
   formatStateSummary,
@@ -32,19 +30,11 @@ import { SUBSCRIPTION_PAUSE } from "./lapse";
 import { describeWindows, subscriptionThresholds, type SubscriptionUsage, type UsageHold } from "./subscription-usage";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
-import type { ContextEvents, DeathSignal, FlightSignal } from "./sandbox/signals";
+import type { ContextEvents } from "./sandbox/signals";
 import type { PartySignal } from "./sandbox/signals";
-import { groupKeyOf } from "@wrathbench/mcp/record";
 import type { Scratchpad } from "@wrathbench/mcp";
-import type { ItemSample, Trajectory } from "./trajectory";
+import type { Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
-
-/**
- * `TRADE_STATUS_TRADE_COMPLETE` on 3.3.5a: what `SMSG_TRADE_STATUS` carries
- * when a trade actually went through. The SDK names it in `tradeStatusText`
- * but exports no constant, and a bare `8` in the producer would be a riddle.
- */
-const TRADE_STATUS_COMPLETE = 8;
 
 /**
  * Written samples in a row that must find the observation standing still
@@ -210,81 +200,6 @@ export interface ContextBuilderOptions {
 export class ContextBuilder {
   private lastStateAt = 0;
   private live = false;
-  /** High-water mark into the snapshot's quest-completion list, for logging. */
-  private questsLogged = 0;
-  /** Last zone/area ids a milestone was written for; undefined until the first sample names one. */
-  private lastZoneId: number | undefined;
-  private lastAreaId: number | undefined;
-  /**
-   * Achievement ids already written as a milestone, and whether the login
-   * backlog record has been written.
-   *
-   * By id rather than by high-water mark, because the sandbox can restart: a
-   * rebuilt cache re-reads the whole login backlog, and a second pass over it
-   * must write nothing rather than re-report a run's own past as fresh earns.
-   */
-  private readonly recordedAchievements = new Set<number>();
-  private loginAchievementsRecorded = false;
-  /**
-   * The last `taxiFlight` reading. Seeded silently by the first observation:
-   * a resumed process whose first sample is already `true` joined a flight in
-   * progress, and calling that a takeoff would invent one.
-   */
-  private lastTaxiFlight: boolean | undefined;
-  /**
-   * The last level a milestone was written for; undefined until the first
-   * sample names one, which is written as a mark from `undefined`.
-   */
-  private lastLevel: number | undefined;
-  /**
-   * Spell ids already accounted for, and whether the login baseline record has
-   * been written. By id rather than by count, for the reason
-   * `recordedAchievements` is: a sandbox restart re-reads `SMSG_INITIAL_SPELLS`
-   * and the second pass must write nothing rather than report a run's own book
-   * as fresh learns.
-   */
-  private readonly recordedSpells = new Set<number>();
-  private loginSpellsRecorded = false;
-  /**
-   * talentId -> the highest rank seen. Seeded silently by the first talent
-   * frame — a resumed character's already-spent points are not spends this run
-   * made — and lowered silently when a respec takes ranks back, so a relearn
-   * afterwards reads as a spend again.
-   */
-  private readonly talentRanks = new Map<number, number>();
-  private talentsSeeded = false;
-  /** The `ts` of the last completed trade written; the dedup key. */
-  private lastTradeTs: number | undefined;
-  /**
-   * `groupKeyOf` of the last `group` record written. A restarted child reads
-   * the login group list afresh and calls it `joined`; the same party is
-   * not joined twice, so a signal whose key this already holds writes nothing.
-   */
-  private lastGroupKey: string | undefined;
-  /**
-   * The dead window and the ghost flag as the last sample read them. Both are
-   * seeded silently by the first observation, for the reason `lastTaxiFlight`
-   * is: a process that opens on a character already dead joined the window in
-   * progress, and calling that a death would invent one.
-   */
-  private lastDead: boolean | undefined;
-  private lastGhost: boolean | undefined;
-  /**
-   * A death window the child's signals opened and have not closed.
-   *
-   * While it stands the sampled window read updates its latches from the
-   * snapshot but writes nothing: the two producers disagree about the same
-   * sample. The signal path sets `lastGhost` from the release it saw, while the
-   * snapshot's `playerFlags` is routinely a stale `0` for the whole window (an
-   * update block need not carry it), so the window read would call that a
-   * resurrect the moment the spirit was released. And the snapshot is taken
-   * before the drain, so a cycle that drained whole leaves a snapshot still
-   * showing a corpse the record has already accounted for. The window that the
-   * signals opened is theirs to close.
-   */
-  private signalWindow = false;
-  /** `sandbox.totalRestarts` as the last sample read it; a change abandons `signalWindow`. */
-  private lastRestarts = 0;
   /**
    * The child's observation cursor at the last written sample, and how many
    * written samples in a row have found it standing still behind a stream that
@@ -301,16 +216,6 @@ export class ContextBuilder {
    * the detector for the rest of a run that had been observing fine.
    */
   private everObserved = false;
-  /**
-   * The `items` sample this process last wrote, as its stored JSON, and the
-   * `sandbox.totalRestarts` it was written under. A sample whose text matches
-   * is left off the row: the trace's character sheet is the record of gear, and
-   * every reader of `items` takes the newest reading at or before a point. In
-   * memory only and its own restart count (not `lastRestarts`, which the death
-   * read moves), so the first row of a process, and the first after a sandbox
-   * restart, always carries the whole sample.
-   */
-  private lastItems: { text: string; restarts: number } | null = null;
   /**
    * The driver turn currently in flight, stamped onto every state sample.
    *
@@ -410,84 +315,13 @@ export class ContextBuilder {
   private inFlight: Promise<SnapshotLike | null> | null = null;
 
   /**
-   * Write the death-window transitions the child latched since the last sample,
-   * in the order they happened, and leave the window read's latches holding
-   * what they left behind.
-   *
-   * The record shapes are exactly the ones the sampled read produces — the
-   * evidence is better, the record is the same — with `observedTs` the death
-   * event's own timestamp. `released` on an event-driven death is the ghost
-   * flag as it read at the instant of death, which is normally false: the
-   * spirit is released a moment later, and the `release` record is what says
-   * when. `zone` / `area` fall back to the sample's reading when the child's
-   * cache had not named one.
+   * Hand the watchdogs the kills the session record wrote since the last tick
+   * (`RecordSignals`, through `SandboxHost.partySignals`): a campaign's kill
+   * end reads them. The record itself is the stack's (`session/events`); the
+   * loop writes nothing of it. A sandbox without the drain (a test's fake)
+   * hands none.
    */
-  private async applyDeathSignals(
-    trajectory: Trajectory,
-    turn: { turn?: number },
-    zoneId: number | undefined,
-    areaId: number | undefined,
-  ): Promise<boolean> {
-    const sandbox = this.o.sandbox as SandboxHost & { deathSignals?: () => Promise<DeathSignal[]> };
-    // A child that died mid-window took its latches with it and will never
-    // send the resurrect that closes this one, so the fallback gets the window
-    // back rather than being muted for the rest of the run.
-    const restarts = sandbox.totalRestarts ?? 0;
-    if (restarts !== this.lastRestarts) {
-      this.lastRestarts = restarts;
-      this.signalWindow = false;
-    }
-    if (typeof sandbox.deathSignals !== "function") return false;
-    let signals: DeathSignal[];
-    try {
-      signals = await sandbox.deathSignals();
-    } catch {
-      // A child that cannot answer leaves the window read as the only producer,
-      // which is what it is there for.
-      return false;
-    }
-    for (const s of signals) {
-      if (s.kind === "death") {
-        const zone = s.zone ?? zoneId;
-        const area = s.area ?? areaId;
-        trajectory.recordMilestone({
-          kind: "death",
-          observedTs: s.ts,
-          ...(s.position === undefined ? {} : { position: s.position }),
-          ...(typeof zone === "number" ? { zone: { id: zone } } : {}),
-          ...(typeof area === "number" ? { area: { id: area } } : {}),
-          ...(s.released === undefined ? {} : { released: s.released }),
-          ...turn,
-        });
-        this.lastDead = true;
-        this.signalWindow = true;
-        if (s.released === true) this.lastGhost = true;
-      } else if (s.kind === "release") {
-        trajectory.recordMilestone({
-          kind: "release",
-          ...(s.graveyard === undefined ? {} : { graveyard: s.graveyard }),
-          ...turn,
-        });
-        this.lastDead = true;
-        this.lastGhost = true;
-        this.signalWindow = true;
-      } else {
-        trajectory.recordMilestone({ kind: "resurrect", ...turn });
-        this.lastDead = false;
-        this.lastGhost = false;
-        this.signalWindow = false;
-      }
-    }
-    return signals.length > 0;
-  }
-
-  /**
-   * Write the party records the child latched since the last sample
-   * (the stack's party watcher, handed over by `sandbox/host.ts`): `group`, `instance` and `kill`, in the order
-   * their packets arrived, each with the packet's own timestamp. A sandbox
-   * without the drain (an older child, a test's fake) writes none.
-   */
-  private async applyPartySignals(trajectory: Trajectory, turn: { turn?: number }): Promise<void> {
+  private async drainKills(): Promise<void> {
     const sandbox = this.o.sandbox as SandboxHost & { partySignals?: () => Promise<PartySignal[]> };
     if (typeof sandbox.partySignals !== "function") return;
     let signals: PartySignal[];
@@ -496,39 +330,8 @@ export class ContextBuilder {
     } catch {
       return;
     }
-    for (const s of signals) {
-      if (s.kind === "group") {
-        const key = groupKeyOf(s);
-        if (key === this.lastGroupKey) continue;
-        this.lastGroupKey = key;
-        trajectory.recordMilestone({
-          kind: "group",
-          event: s.event,
-          ...(s.groupGuid !== undefined ? { groupGuid: s.groupGuid } : {}),
-          ...(s.leaderGuid !== undefined ? { leaderGuid: s.leaderGuid } : {}),
-          members: s.members,
-          count: s.count,
-          observedTs: s.ts,
-          ...turn,
-        });
-      } else if (s.kind === "instance") {
-        trajectory.recordMilestone({ kind: "instance", event: s.event, map: s.map, instanceType: s.instanceType, from: s.from, observedTs: s.ts, ...turn });
-      } else {
-        trajectory.recordMilestone({
-          kind: "kill",
-          killerGuid: s.killerGuid,
-          victimGuid: s.victimGuid,
-          ...(s.entry !== undefined ? { entry: s.entry } : {}),
-          ...(s.rank !== undefined ? { rank: s.rank } : {}),
-          self: s.self,
-          member: s.member,
-          observedTs: s.ts,
-          ...turn,
-        });
-        // A campaign's kill end reads the record the trajectory keeps.
-        if (this.live) this.o.watchdogs.noteKill(s);
-      }
-    }
+    if (!this.live) return;
+    for (const s of signals) if (s.kind === "kill") this.o.watchdogs.noteKill(s);
   }
 
   /**
@@ -602,368 +405,26 @@ export class ContextBuilder {
   }
 
   private async doSampleState(): Promise<SnapshotLike | null> {
-    const { config, trajectory, watchdogs } = this.o;
+    const { config, watchdogs } = this.o;
     const snap = await this.snapshot();
     if (snap === null) return snap;
     // Ungated by `stateIntervalMs`: the gate re-arms on a rest visit or a
-    // flight beginning, and either can begin and end well inside one state row.
+    // flight beginning, and either can begin and end well inside one sample.
     this.reflect.note(restingOf(snap), taxiFlightOf(snap));
-    // The party records, ungated too: a `kill` is what a campaign's kill end
-    // reads, and drained only at row cadence it reached the end check up to a
+    // The kills, ungated too: a `kill` is what a campaign's kill end reads,
+    // and drained only at the sample cadence it reached the end check up to a
     // whole `stateIntervalMs` late — deadmines@4's members ended 2 to 22
     // seconds apart on one VanCleef packet, the last after the roster had
-    // already stopped it. Drained on every tick instead, so the check sees the
-    // kill within one; group, instance and kill stay one drain in packet
-    // order, which is what the retro reading folds members by.
-    await this.applyPartySignals(trajectory, this.turn > 0 ? { turn: this.turn } : {});
+    // already stopped it. Drained on every tick instead.
+    await this.drainKills();
     if (this.now() - this.lastStateAt < config.stateIntervalMs) return snap;
     this.lastStateAt = this.now();
-    const pos = snap.self?.position?.value as
-      | { map?: number; x?: number; y?: number; z?: number }
-      | undefined;
+    // What the character reads is the session record's to write (the trace
+    // and its events, `session/`); the sample only feeds the watchdogs and
+    // the stall detector, which act on the run while it plays.
     const level = snap.self?.level?.value as number | undefined;
     const xp = snap.xp?.value as number | undefined;
-    const money = snap.money?.value as number | undefined;
-    // The player frame's numbers, read off the snapshot this
-    // sample already took: the SDK's derived gauges, the raw `powerType` the
-    // client picks a bar with, and the XP denominator. No dead flag is written:
-    // `playerFlags` is routinely a stale 0 for a whole window (see the death
-    // block below), and health is the reliable reading — 0 is a corpse, 1 a
-    // ghost — so a reader infers it from the gauge instead.
-    const hp = gaugeOf(snap.self?.health?.value);
-    const pw = gaugeOf(snap.self?.power?.value);
-    const powerType = snap.self?.fields?.["powerType"]?.value;
-    const nextLevelXp = snap.nextLevelXp?.value;
-    // The list only grows, so anything past the high-water mark is new. One
-    // compact record each; the state line carries the count, not the list.
-    const completions = snap.questCompletions ?? [];
-    // A shorter list means the cache was rebuilt (sandbox restart); re-log from
-    // the start rather than going silent for the rest of the run.
-    if (completions.length < this.questsLogged) this.questsLogged = 0;
-    for (const c of completions.slice(this.questsLogged)) {
-      trajectory.append({ t: "quest_complete", questId: c.questId });
-    }
-    this.questsLogged = completions.length;
-    // Zone/area milestones, the series's first producer: ids only, from
-    // the state cache, never the names — the names are client DBC text the
-    // HUD renders, and a record must stay what the server said. The first
-    // observed pair is a milestone from `undefined` so a run's starting zone
-    // is on the record; a sample with no observation writes nothing.
-    const zone = snap.self?.zone?.value as { id?: number } | undefined;
-    const area = snap.self?.area?.value as { id?: number } | undefined;
-    const turn = this.turn > 0 ? { turn: this.turn } : {};
-    if (typeof zone?.id === "number" && zone.id !== this.lastZoneId) {
-      trajectory.recordMilestone({
-        kind: "zone",
-        from: this.lastZoneId === undefined ? undefined : { id: this.lastZoneId },
-        to: { id: zone.id },
-        ...turn,
-      });
-      this.lastZoneId = zone.id;
-    }
-    if (typeof area?.id === "number" && area.id !== this.lastAreaId) {
-      trajectory.recordMilestone({
-        kind: "area",
-        from: this.lastAreaId === undefined ? undefined : { id: this.lastAreaId },
-        to: { id: area.id },
-        ...turn,
-      });
-      this.lastAreaId = area.id;
-    }
-    // Achievements (issue #8): the backlog once, then one record per
-    // own earn. The state cache has already dropped the say-range broadcasts
-    // that were another player's, so everything here is this character's.
-    const ach = snap.self?.achievements;
-    if (ach !== undefined) {
-      const entries = ach.entries ?? [];
-      if (!this.loginAchievementsRecorded && ach.loginSeen === true) {
-        const backlog = entries.filter((e) => e.source === "login");
-        const ids: number[] = [];
-        let points = 0;
-        for (const e of backlog) {
-          if (typeof e.achievementId !== "number") continue;
-          ids.push(e.achievementId);
-          if (typeof e.points === "number") points += e.points;
-        }
-        trajectory.recordMilestone({ kind: "achievements_at_login", ids, points, ...turn });
-        for (const id of ids) this.recordedAchievements.add(id);
-        this.loginAchievementsRecorded = true;
-      }
-      for (const e of entries) {
-        if (e.source !== "earned" || typeof e.achievementId !== "number") continue;
-        if (this.recordedAchievements.has(e.achievementId)) continue;
-        trajectory.recordMilestone({
-          kind: "achievement",
-          id: e.achievementId,
-          ...(typeof e.name === "string" ? { name: e.name } : {}),
-          ...(typeof e.points === "number" ? { points: e.points } : {}),
-          ...(typeof e.categoryId === "number" ? { categoryId: e.categoryId } : {}),
-          ...turn,
-        });
-        this.recordedAchievements.add(e.achievementId);
-      }
-    }
-    // Flights: no packet says "a flight began", so the flip is read the way a
-    // client reads it — an accepted reply, then the taxi flag turning on.
-    // The flag turning off is the landing, recorded whether or not
-    // the takeoff was seen, because it is its own observation. The child
-    // latches each flip with the position and area at that instant
-    // (`FlightSignal`), so a landing is written with the landing's area and
-    // two legs inside one sample are two records; the sampled read below is
-    // the fallback for a sandbox without the drain.
-    const taxiFlight = snap.self?.taxiFlight?.value;
-    const flightSandbox = this.o.sandbox as SandboxHost & { flightSignals?: () => Promise<FlightSignal[]> };
-    let flightSignals: FlightSignal[] | undefined;
-    if (typeof flightSandbox.flightSignals === "function") {
-      try {
-        flightSignals = await flightSandbox.flightSignals();
-      } catch {
-        flightSignals = undefined;
-      }
-    }
-    if (flightSignals !== undefined) {
-      for (const s of flightSignals) {
-        const end = typeof s.area === "number" ? { areaId: s.area } : undefined;
-        const at = s.position === undefined ? {} : { position: s.position };
-        if (s.kind === "taxi") {
-          trajectory.recordMilestone({ kind: "taxi", observedTs: s.ts, ...at, ...(end === undefined ? {} : { from: end }), ...turn });
-        } else {
-          trajectory.recordMilestone({ kind: "taxi_landed", observedTs: s.ts, ...at, ...(end === undefined ? {} : { to: end }), ...turn });
-        }
-      }
-      if (typeof taxiFlight === "boolean") this.lastTaxiFlight = taxiFlight;
-    } else if (typeof taxiFlight === "boolean") {
-      const accepted = (snap.self?.taxiReply?.value as { ok?: unknown } | undefined)?.ok === true;
-      if (this.lastTaxiFlight === false && taxiFlight && accepted) {
-        trajectory.recordMilestone({
-          kind: "taxi",
-          ...(typeof area?.id === "number" ? { from: { areaId: area.id } } : {}),
-          ...turn,
-        });
-      } else if (this.lastTaxiFlight === true && !taxiFlight) {
-        trajectory.recordMilestone({
-          kind: "taxi_landed",
-          ...(typeof area?.id === "number" ? { to: { areaId: area.id } } : {}),
-          ...turn,
-        });
-      }
-      this.lastTaxiFlight = taxiFlight;
-    }
-    // Level: `self.level` on change, with the XP reading at the
-    // moment the new level was first seen. The first observation is a mark from
-    // `undefined` for the same reason the first zone is one — a run's starting
-    // level belongs on the record — so a level-up is a mark that carries a
-    // `from`, never simply a mark, and a resumed process's own first mark
-    // (which also carries none) cannot be counted as a gain.
-    if (typeof level === "number" && level !== this.lastLevel) {
-      trajectory.recordMilestone({
-        kind: "level",
-        from: this.lastLevel,
-        to: level,
-        ...(typeof xp === "number" ? { xp } : {}),
-        ...turn,
-      });
-      this.lastLevel = level;
-    }
-    // Spells, talents and trades. All three are reads over
-    // what the state cache already holds — the spellbook, the last
-    // `SMSG_TALENTS_INFO`, the trade window — so nothing here observes the
-    // world beyond what the sample already took.
-    //
-    // The spellbook is written the way the achievement backlog is: the first
-    // sample that sees a book at all is the baseline (`spells_at_login`), and
-    // everything appearing afterwards is a learn. A book seen empty is not a
-    // baseline — the cache has simply not had `SMSG_INITIAL_SPELLS` yet, and
-    // taking it as one would make the whole book arrive as fresh learns a
-    // moment later.
-    const book = snap.spells ?? [];
-    if (book.length > 0) {
-      const ids = book.map((s) => s?.spellId).filter((id): id is number => typeof id === "number");
-      if (!this.loginSpellsRecorded) {
-        this.loginSpellsRecorded = true;
-        for (const id of ids) this.recordedSpells.add(id);
-        trajectory.recordMilestone({ kind: "spells_at_login", ids: [...ids].sort((a, b) => a - b), ...turn });
-      } else {
-        for (const id of ids) {
-          if (this.recordedSpells.has(id)) continue;
-          this.recordedSpells.add(id);
-          trajectory.recordMilestone({ kind: "spell", id, ...turn });
-        }
-      }
-    }
-    // Talents: a rank that climbed is a spend. The wire rank is 0-based, so
-    // the record carries both it and the points it means, and a talent the
-    // frame stops listing (a respec) is forgotten rather than remembered at
-    // its old rank, which would swallow the relearn.
-    const talents = snap.talents;
-    if (talents !== undefined && talents !== null) {
-      const rows = (talents.talents ?? []).filter(
-        (t): t is { talentId: number; rank: number } =>
-          typeof t?.talentId === "number" && typeof t?.rank === "number",
-      );
-      const spec = typeof talents.activeSpec === "number" ? talents.activeSpec : undefined;
-      const seen = new Set<number>();
-      for (const t of rows) {
-        seen.add(t.talentId);
-        const prev = this.talentRanks.get(t.talentId);
-        if (prev !== undefined && t.rank <= prev) {
-          if (t.rank < prev) this.talentRanks.set(t.talentId, t.rank);
-          continue;
-        }
-        this.talentRanks.set(t.talentId, t.rank);
-        if (!this.talentsSeeded) continue;
-        trajectory.recordMilestone({
-          kind: "talent",
-          id: t.talentId,
-          points: t.rank + 1,
-          rank: t.rank,
-          ...(spec === undefined ? {} : { spec }),
-          ...turn,
-        });
-      }
-      for (const id of [...this.talentRanks.keys()]) if (!seen.has(id)) this.talentRanks.delete(id);
-      this.talentsSeeded = true;
-    }
-    // Trades: `TRADE_STATUS_TRADE_COMPLETE` (8) latches on the trade window and
-    // nothing clears it until the next trade packet, so a sample landing any
-    // time after the completion still sees it. Keyed on the cache's own stamp
-    // rather than its `seq`, which restarts when a session is recreated.
-    const trade = snap.trade;
-    if (trade !== undefined && trade !== null && trade.status === TRADE_STATUS_COMPLETE) {
-      // A completion with no stamp has no dedup key, and re-writing it on
-      // every sample for the rest of the run would be worse than missing it.
-      const tradeTs = typeof trade.ts === "number" ? trade.ts : undefined;
-      if (tradeTs !== undefined && tradeTs !== this.lastTradeTs) {
-        this.lastTradeTs = tradeTs;
-        trajectory.recordMilestone({ kind: "trade", observedTs: tradeTs, ...turn });
-      }
-    }
-    // Death: the transitions the sandbox child latched off the
-    // events themselves, drained here and written as they happened. The child
-    // sees every event; this sample lands every `stateIntervalMs`, and a whole
-    // death — die, repop, walk to the Spirit Healer, resurrect — fits between
-    // two samples. Run `fleet-sonnet-low-freeplay-sonnet-low-20260827-a2` lost
-    // three deaths that way, one of them by a single second, which is what the
-    // window read below cannot fix by tuning: the cache keeps no residue once
-    // the resurrect clears it.
-    //
-    // Applied in order and updating the same latches the window read uses, so
-    // two complete cycles inside one gap are two deaths, and so the window read
-    // that follows sees the state these signals left and repeats nothing.
-    const drained = await this.applyDeathSignals(trajectory, turn, zone?.id, area?.id);
-    // The signals own this sample's window if one is still open, and they own
-    // it for the rest of *this* sample even when they closed it: `snap` was
-    // taken before the drain, so a window that opened and closed whole still
-    // reads as a corpse here, and that corpse is already on the record.
-    const signalsOwnWindow = this.signalWindow || drained;
-    // The same window, still read from the sample, as the fallback it now is,
-    // and silent about anything the signals are already accounting for.
-    //
-    // Read as a *window* rather than as a health edge.
-    // A sample lands every `stateIntervalMs`, so an edge detector would see
-    // almost no deaths at all; but the cache latches the corpse, the graveyard
-    // and the reclaim delay from the death until the resurrect clears them, so
-    // any sample inside the window still sees it and can stamp the death with
-    // the cache's own timestamp instead of the sample's. A death that opened
-    // and closed entirely between two samples leaves nothing — the same lower
-    // bound the zone and flight records carry.
-    //
-    // Health comes off the raw field, not the derived gauge: `deriveGauges`
-    // withholds the gauge until `maxHealth` has been seen, and the ghost bit is
-    // read off `playerFlags` exactly as the HUD reads it.
-    const playerFlags = snap.self?.fields?.["playerFlags"]?.value;
-    const ghost =
-      typeof playerFlags === "number" ? (playerFlags & PLAYER_FLAGS_GHOST) !== 0 : undefined;
-    const health = snap.self?.fields?.["health"]?.value;
-    const corpse = snap.self?.corpse;
-    const dead = ghost === true || health === 0 || corpse !== undefined;
-    if (this.lastDead === undefined) {
-      this.lastDead = dead;
-      this.lastGhost = ghost;
-    } else {
-      if (dead && !this.lastDead && !signalsOwnWindow) {
-        const c = corpse?.value as
-          | { map?: number; x?: number; y?: number; z?: number; source?: unknown; instanceMap?: unknown }
-          | undefined;
-        const source: "corpse_query" | "death_spot" | undefined =
-          c?.source === "corpse_query" ? "corpse_query" : c?.source === "death_spot" ? "death_spot" : undefined;
-        // A corpse inside a dungeon is reported at its entrance, which is not the death site.
-        const site =
-          c !== undefined &&
-          source !== undefined &&
-          c.instanceMap === undefined &&
-          typeof c.map === "number" &&
-          typeof c.x === "number" &&
-          typeof c.y === "number" &&
-          typeof c.z === "number"
-            ? { map: c.map, x: c.x, y: c.y, z: c.z, source }
-            : undefined;
-        const observedTs = corpse?.ts ?? snap.self?.reclaimDelay?.ts;
-        trajectory.recordMilestone({
-          kind: "death",
-          ...(typeof observedTs === "number" ? { observedTs } : {}),
-          ...(site === undefined ? {} : { position: site }),
-          ...(typeof zone?.id === "number" ? { zone: { id: zone.id } } : {}),
-          ...(typeof area?.id === "number" ? { area: { id: area.id } } : {}),
-          ...(ghost === undefined ? {} : { released: ghost }),
-          ...turn,
-        });
-      }
-      if (ghost === true && this.lastGhost === false && !signalsOwnWindow) {
-        const g = snap.self?.graveyard?.value as
-          | { map?: number; x?: number; y?: number; z?: number }
-          | undefined;
-        trajectory.recordMilestone({
-          kind: "release",
-          ...(g !== undefined &&
-          typeof g.map === "number" &&
-          typeof g.x === "number" &&
-          typeof g.y === "number" &&
-          typeof g.z === "number"
-            ? { graveyard: { map: g.map, x: g.x, y: g.y, z: g.z } }
-            : {}),
-          ...turn,
-        });
-      } else if (ghost === false && this.lastGhost === true && !signalsOwnWindow) {
-        trajectory.recordMilestone({ kind: "resurrect", ...turn });
-      }
-      this.lastDead = dead;
-      // An unobserved flag leaves the last reading standing rather than
-      // erasing it: "we did not see playerFlags this sample" is not "not a ghost".
-      if (ghost !== undefined) this.lastGhost = ghost;
-    }
-    this.noteObservationStall(snap, turn);
-    const items = itemSample(snap);
-    const itemsText = items === undefined ? undefined : JSON.stringify(items);
-    const restarts = (this.o.sandbox as { totalRestarts?: number }).totalRestarts ?? 0;
-    const itemsUnchanged =
-      itemsText !== undefined && this.lastItems?.text === itemsText && this.lastItems.restarts === restarts;
-    await trajectory.recordState(config.runId, {
-      level,
-      xp,
-      map: pos?.map,
-      x: pos?.x,
-      y: pos?.y,
-      z: pos?.z,
-      eventCount: snap.eventCount,
-      lastSeq: snap.lastSeq,
-      money,
-      questsCompleted: completions.length,
-      ...turn,
-      zone: zone?.id,
-      area: area?.id,
-      ...(itemsUnchanged ? {} : { items }),
-      health: hp?.current,
-      maxHealth: hp?.max,
-      power: pw?.current,
-      maxPower: pw?.max,
-      ...(typeof powerType === "number" ? { powerType } : {}),
-      ...(typeof nextLevelXp === "number" ? { nextLevelXp } : {}),
-    });
-    // Only once the row has landed: a write that gave up leaves the key where
-    // it was, so the next sample writes the inventory again rather than leave
-    // run.sqlite's newest reading behind what this process saw.
-    if (itemsText !== undefined && !itemsUnchanged) this.lastItems = { text: itemsText, restarts };
+    this.noteObservationStall(snap, this.turn > 0 ? { turn: this.turn } : {});
     if (this.live) watchdogs.noteProgress(level, xp);
     return snap;
   }
@@ -1140,14 +601,6 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     turn: () => builder.currentTurn,
     secrets: trajectory,
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
-    onEventsServed: (events, folded) =>
-      trajectory.append({
-        t: "events_served",
-        via: "tool",
-        count: events.length,
-        events,
-        ...(folded !== undefined && folded > 0 ? { folded } : {}),
-      }),
   };
 
   /**
@@ -1496,74 +949,3 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   }
 }
 
-/** Equipment slots are 0-18 in the player's `invSlot<n>` numbering; 19-22 are worn bags. */
-const EQUIPMENT_LAST_SLOT = 18;
-
-/**
- * The `items` column of a state sample: what is worn (inventory slots 0-18)
- * and what is carried (`bag()` across every bag). A row whose name has not been
- * answered yet is kept under its item id so the count stays honest.
- * `undefined` when the snapshot carries no inventory. The state row carries it
- * only when it differs from the one this process last wrote
- * (`ContextBuilder.lastItems`).
- *
- * Each row carries where it sits and what it is — `slot`, `bag` (carried only),
- * `itemId`, `quality` — because a paperdoll and a bag grid are drawn from the
- * sample, not guessed from an order. Every one of those is written only when the
- * snapshot actually carried it: a slot whose item create block or item query has
- * not arrived yet is an occupied slot with no id, and the field is left off the
- * row rather than filled with a zero.
- */
-export function itemSample(snap: SnapshotLike): ItemSample[] | undefined {
-  const inv = snap.inventory;
-  const bag = snap.bag?.items;
-  if (inv === undefined && bag === undefined) return undefined;
-  const out: ItemSample[] = [];
-  const label = (name: unknown, itemId: unknown, fallback: string): string =>
-    typeof name === "string" ? name : itemId != null ? `item ${String(itemId)}` : fallback;
-  /** An optional numeric field, present only when the snapshot carried a number. */
-  const opt = (key: "itemId" | "quality" | "slot" | "bag", v: unknown): { [k: string]: number } =>
-    typeof v === "number" ? { [key]: v } : {};
-  for (const i of inv ?? []) {
-    if (typeof i.slot !== "number" || i.slot > EQUIPMENT_LAST_SLOT) continue;
-    const count = typeof i.stackCount === "number" ? i.stackCount : 1;
-    out.push({
-      name: label(i.name, i.itemId, `slot ${i.slot}`),
-      count,
-      equipped: true,
-      ...opt("itemId", i.itemId),
-      ...opt("quality", i.quality),
-      // Worn: `slot` is the equipment slot and there is no `bag`.
-      slot: i.slot,
-    });
-  }
-  for (const i of bag ?? []) {
-    const count = typeof i.count === "number" ? i.count : 1;
-    out.push({
-      name: label(i.name, i.itemId, `slot ${String(i.slot)}`),
-      count,
-      equipped: false,
-      ...opt("itemId", i.itemId),
-      ...opt("quality", i.quality),
-      // Carried: the `bag`/`slot` pair the item actions take, unchanged.
-      ...opt("slot", i.slot),
-      ...opt("bag", i.bag),
-    });
-  }
-  return out;
-}
-
-/**
- * A `{ current, max }` gauge off an `Observed.value`, or undefined.
- *
- * The SDK's `deriveGauges` publishes a gauge only once both halves have been
- * observed, so this either yields a whole pair or nothing — a ratio is never
- * read from a half-seen field.
- */
-export function gaugeOf(v: unknown): { current: number; max: number } | undefined {
-  if (typeof v !== "object" || v === null) return undefined;
-  const g = v as { current?: unknown; max?: unknown };
-  return typeof g.current === "number" && typeof g.max === "number"
-    ? { current: g.current, max: g.max }
-    : undefined;
-}

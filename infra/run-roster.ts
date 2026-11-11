@@ -62,7 +62,7 @@ import { DEFAULT_API_BASE, DEFAULT_API_KEY_ENV } from "../runner/src/providers";
 import { classifyLapse, PARTY_PAUSE, resumesOnPause, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
 import { readLaneUsage, laneOfSpec, subscriptionGate } from "./run-fleet-gate";
 import { subscriptionThresholds } from "../runner/src/subscription-usage";
-import { Trajectory } from "../runner/src/trajectory";
+import { Trajectory, writeMetaFile } from "../runner/src/trajectory";
 import { liveOwnerOf, MODEL_RESPONSE_RECORD, RecordCountScanner, verdictOfTrajectory, type ScanReads } from "../runner/src/models";
 import { CAMPAIGN_FILE, holdsOnlyLaunchFiles, parseCampaignFile, writeCampaignFile, type CampaignFile } from "../runner/src/campaign-file";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
@@ -1797,15 +1797,15 @@ function classify(spec: Resolved, exit: EpisodeExit): Verdict {
  * count (`readRunFact`): a `meta.json` with the stamps the run would have
  * written — the roster entry's identity, so the probing attempt counter moves
  * on to a fresh run id, and the campaign, version, cell, arm and ref, so it
- * lands in its square — and a `run` row terminated `launch-failed` with the
+ * lands in its square — and the run row's verdict, `launch-failed` with the
  * reason. No trajectory: it played no turn, so it is no model's evidence, no
  * rung on the defer ladder, and no play time on any page. It is left where it
  * is rather than archived, because the campaigns page reads only the runs
  * directory and must count the attempt the scheduler counts.
  *
- * The run row first and `meta.json` last, so a write cut short never leaves a
- * stamped run with no verdict for the resume planner to mistake for one that
- * went offline.
+ * The stamp and the verdict are one meta.json, written whole and renamed into
+ * place, so a write cut short never leaves a stamped run with no verdict for
+ * the resume planner to mistake for one that went offline.
  */
 export function writeLaunchFailure(runDir: string, spec: Resolved, detail: string, opts: { harnessVersion: string; now?: number }): void {
   const file = spec.campaignFile;
@@ -1837,17 +1837,8 @@ export function writeLaunchFailure(runDir: string, spec: Resolved, detail: strin
       : {}),
   };
   mkdirSync(runDir, { recursive: true });
-  // The run store's own schema, and nothing appended: no trajectory.
-  new Trajectory(runDir).close();
-  const db = openRunDb(join(runDir, "run.sqlite"));
-  try {
-    db.query(
-      `INSERT INTO run (run_id, harness_version, started_at, ended_at, driver, model, termination_reason, termination_detail, config_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(run_id) DO NOTHING`,
-    ).run(spec.runId, opts.harnessVersion, now, now, spec.driver, spec.model, "launch-failed", detail, JSON.stringify(config));
-  } finally {
-    db.close();
-  }
+  // Nothing appended: no trajectory. The row is meta.json's, verdict and all,
+  // in one atomic write (runner/src/trajectory.ts, `RunVerdictFields`).
   const meta = {
     runId: spec.runId,
     harnessVersion: opts.harnessVersion,
@@ -1859,8 +1850,10 @@ export function writeLaunchFailure(runDir: string, spec: Resolved, detail: strin
       effort: spec.effort ?? null,
       ...(stampedCompactWindow(spec.compactWindow) !== undefined ? { compactWindow: stampedCompactWindow(spec.compactWindow) } : {}),
     },
+    termination: { reason: "launch-failed", detail },
+    endedAt: now,
   };
-  writeFileSync(join(runDir, "meta.json"), `${JSON.stringify(meta, null, 2)}\n`);
+  writeMetaFile(runDir, meta);
 }
 
 /** The build a launch-failed stub names: the arm's pinned image's stamp, or this roster's own. */

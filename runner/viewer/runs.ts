@@ -1,7 +1,8 @@
 /**
- * Read-only view over `data/runs/`. Nothing here ever writes: the databases are
- * opened readonly so a live run's writer is never disturbed and an old run dir
- * never gains a schema it did not have.
+ * Read-only view over `data/runs/`. Nothing here ever writes. A v1 run is read
+ * off meta.json and its session record (`runner/src/run-reader.ts`); a 0.5
+ * run's `run.sqlite` is opened readonly, so an old run dir never gains a
+ * schema it did not have.
  *
  * This is no longer the viewer's listing path. `/api/runs`, `/api/results`,
  * `/api/models` and the run page read the derived store instead
@@ -16,10 +17,9 @@
  * All three prefilter: the first two to the handful of runs whose files moved
  * inside their window, the live map to the runs the derived store lists as
  * unterminated (`positionsFromStore`). What the map still opens per poll is
- * one `run.sqlite` per such run, because its whole subject is where a
- * character is *this second* and the store's state series is a five-second
- * poll behind; that last open goes when the store carries the live state
- * series, which is the same step that retires the per-run sqlite.
+ * one small file per such run (a v1 run's `live.json`, a 0.5 run's
+ * `run.sqlite`), because its whole subject is where a character is *this
+ * second* and the store's state series is a five-second poll behind.
  */
 
 import type { Database } from "bun:sqlite";
@@ -348,9 +348,11 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     row.bytes = st.size;
   }
 
-  if (isV1RunDir(dir)) {
+  if (isV1RunDir(dir) || !existsSync(join(dir, "run.sqlite"))) {
     // A v1 run: its row from meta.json (or a first-build run.sqlite), its
-    // readings from the session record's trace (`run-reader.ts`).
+    // readings from the session record's trace (`run-reader.ts`). A run with
+    // neither a record nor a run.sqlite (a launch that failed before its
+    // session opened) is one too: its row is its meta.json.
     try {
       const r = readRunRow(dir, runId);
       if (r !== null) applyRunRow(row, r);

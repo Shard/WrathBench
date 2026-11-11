@@ -18,7 +18,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Trajectory } from "../src/trajectory";
-import { writeLegacy05Moves } from "./fixtures/legacy05-writer";
+import { writeLegacy05Moves, writeLegacy05Run } from "./fixtures/legacy05-writer";
+import { readRunRow } from "../src/run-reader";
 import { openTestSession, recordDrain, recordedMove } from "./fixtures/v1-session";
 import { readRun, readStateItems, readStates, readMoves } from "../viewer/runs";
 import {
@@ -80,33 +81,38 @@ function writeRun(runsDir: string, runId: string, over: Record<string, unknown> 
     ts: 1_000_200,
     usage: { prompt_tokens: 10, completion_tokens: 5 },
   });
-  traj.recordState(runId, { level: 3, xp: 900, map: 0, x: 1, y: 2, z: 3, money: 0, questsCompleted: 2, turn: 1 });
-  traj.recordState(runId, {
-    level: 4,
-    xp: 120,
-    map: 0,
-    x: 4,
-    y: 5,
-    z: 6,
-    money: 71,
-    questsCompleted: 3,
-    turn: 2,
-    items: [
-      { name: "Invented Jerky", count: 4, equipped: false, itemId: 90117, quality: 1, slot: 23, bag: 255 },
-      // A row of the old three-field shape, beside the new one.
-      { name: "Invented Mace", count: 1, equipped: true },
-    ],
-  });
-  // The moves as a 0.5 run holds them, the run.sqlite table the collector copies
-  // beside the trajectory's lines; a v1 run's are in its session record (below).
+  // The moves as a 0.5 run holds them, the run.sqlite table the collector copies;
+  // a v1 run's are in its session record (below).
   const moves = [
     { ts: clock++, moveId: 1, map: 0, x: 7, y: 8, z: 9 },
     { ts: clock++, moveId: 1, map: 0, x: 7, y: 8, z: 9, status: "arrived" },
   ];
-  for (const m of moves) traj.recordMove(m);
   traj.setTermination(runId, "episode-elapsed" as never, "done");
   traj.close();
-  if (o.v1 !== true) writeLegacy05Moves(dir, runId, moves);
+  if (o.v1 !== true) {
+    // A 0.5 run: its row and its 60-second samples are run.sqlite's.
+    writeLegacy05Run(dir, readRunRow(dir, runId)!, [
+      { ts: 1_000_300, level: 3, xp: 900, map: 0, x: 1, y: 2, z: 3, money: 0, questsCompleted: 2, turn: 1 },
+      {
+        ts: 1_000_301,
+        level: 4,
+        xp: 120,
+        map: 0,
+        x: 4,
+        y: 5,
+        z: 6,
+        money: 71,
+        questsCompleted: 3,
+        turn: 2,
+        items: [
+          { name: "Invented Jerky", count: 4, equipped: false, itemId: 90117, quality: 1, slot: 23, bag: 255 },
+          // A row of the old three-field shape, beside the new one.
+          { name: "Invented Mace", count: 1, equipped: true },
+        ],
+      },
+    ]);
+    writeLegacy05Moves(dir, runId, moves);
+  }
   return dir;
 }
 

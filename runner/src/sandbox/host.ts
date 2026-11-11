@@ -21,7 +21,7 @@ import {
   type SandboxNoticeKind,
 } from "@wrathbench/mcp";
 import type { CallRecord } from "@wrathbench/mcp";
-import type { DeathSignal, FlightSignal, PartySignal } from "@wrathbench/mcp/record";
+import type { PartySignal } from "@wrathbench/mcp/record";
 import type { SessionRecord } from "../session-record";
 import type { ContextEvents } from "./signals";
 import type { SnippetDelta } from "./snippet-delta";
@@ -106,25 +106,9 @@ export class SandboxHost extends StackSandboxHost {
     return this.session.signals;
   }
 
-  /**
-   * The death-window transitions recorded since the last call (`DeathSignal`).
-   * The child sees every event and the loop samples on a 60 s clock, and a
-   * whole death fits between two samples, so the transitions are latched in
-   * the child and written by the stack. Destructive: the loop's state sample
-   * owns the drain, and every signal it takes is written as a milestone.
-   */
-  async deathSignals(): Promise<DeathSignal[]> {
-    return (await this.recorded()).drainDeath();
-  }
-
-  /** Flight transitions recorded since the last call (`FlightSignal`); destructive the same way. */
-  async flightSignals(): Promise<FlightSignal[]> {
-    return (await this.recorded()).drainFlight();
-  }
-
-  /** The party transitions (group, instance, kill) recorded since the last call; destructive the same way. */
+  /** The kills recorded since the last call (`RecordSignals`). Destructive: the loop owns the drain and hands each to the watchdogs. */
   async partySignals(): Promise<PartySignal[]> {
-    return (await this.recorded()).drainParty();
+    return (await this.recorded()).drainKills();
   }
 
   /**

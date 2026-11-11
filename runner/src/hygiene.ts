@@ -35,9 +35,8 @@
 
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import type { Database } from "bun:sqlite";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
-import { openRunDb } from "./rundb";
+import { readRunRow } from "./run-reader";
 import { readMeta } from "./trajectory";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 
@@ -92,20 +91,10 @@ export function characterOwners(runsDir: string, account: string, exceptRunId?: 
   return new Map([...out].map(([k, { runId, ended }]) => [k, { runId, ended }]));
 }
 
-/** Whether the run's row carries a termination. A missing or unreadable store is "not ended". */
+/** Whether the run's row carries a termination (`run-reader.ts`). A missing or unreadable one is "not ended". */
 function terminated(dir: string, runId: string): boolean {
-  const path = join(dir, "run.sqlite");
-  if (!existsSync(path)) return false;
-  let db: Database | null = null;
-  try {
-    db = openRunDb(path, { readonly: true });
-    const r = db.query(`SELECT termination_reason FROM run WHERE run_id = ?`).get(runId) as { termination_reason?: unknown } | null;
-    return r !== null && typeof r.termination_reason === "string" && r.termination_reason !== "";
-  } catch {
-    return false;
-  } finally {
-    db?.close();
-  }
+  const r = readRunRow(dir, runId)?.["termination_reason"];
+  return typeof r === "string" && r !== "";
 }
 
 export interface HygieneOptions {

@@ -1,14 +1,13 @@
 /**
  * The flight records: takeoffs and landings the stack recorded off the events
- * that flip the taxi flag (`@wrathbench/mcp/record`), handed to the loop by
- * the runner's host (`SandboxHost.flightSignals`, through `RecordSignals`)
- * with the flip's own position and area, and written by the loop as `taxi` /
- * `taxi_landed` milestones (`loop.test.ts`).
+ * that flip the taxi flag (`@wrathbench/mcp/record`), in the run's session
+ * record as `taxi` / `taxi_landed` rows with the flip's own position and
+ * area, and what the scorer reads off them (`RunTotalsScanner`).
  *
  * The watcher, frame by frame, is the stack's and is tested there
  * (`wrath-mcp/mcp/test/record-watchers.test.ts`, "flight watcher"). Here, one
- * real child with the run's session record, end to end: what the loop is
- * handed is what the child saw. Frames are hand-written from
+ * real child with the run's session record, end to end: what the scorer reads
+ * is what the child saw. Frames are hand-written from
  * wrath-mcp/module/PROTOCOL.md's tables, positions invented, nothing captured
  * from a running game (CLAUDE.md).
  *
@@ -17,7 +16,10 @@
  * legs of a chain inside one sample merged into one pair.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { SessionReader, type EventRow } from "@wrathbench/mcp/record";
+import { scanRunTotals } from "../viewer/tail";
 import { SandboxHost } from "../src/sandbox/host";
 import { openSessionRecord } from "../src/session-record";
 import { Scratchpad } from "@wrathbench/mcp";
@@ -27,15 +29,17 @@ const tempDir = tempDirs();
 
 const hosts: SandboxHost[] = [];
 
+let runDir = "";
 function makeHost(): SandboxHost {
   const runsDir = tempDir("wrathbench-flight-");
+  runDir = join(runsDir, "run-flight");
   const host = new SandboxHost({
     moduleUrl: "http://worldserver:8086",
     token: "test-token",
     scratchpad: new Scratchpad(join(runsDir, "scratchpad.md")),
     snippetTimeoutMs: 5_000,
     pingGraceMs: 1_000,
-    session: openSessionRecord({ runDir: join(runsDir, "run-flight"), runsDir, token: "test-token", scrub: (t) => t }),
+    session: openSessionRecord({ runDir, runsDir, token: "test-token", scrub: (t) => t }),
   });
   hosts.push(host);
   return host;
@@ -72,11 +76,17 @@ feed("WB_SESSION_STATE", 0xff03, {
 unitFlags(0x8);
 `;
 
-describe("the runner's host hands the loop the flights the stack recorded", () => {
+/** The flight rows the run's session record holds, after the host's drain. */
+async function flights(host: SandboxHost): Promise<Extract<EventRow, { kind: "taxi" | "taxi_landed" }>[]> {
+  await host.recordDrain();
+  return new SessionReader(join(runDir, "session")).rows("events").filter((r): r is Extract<EventRow, { kind: "taxi" | "taxi_landed" }> => r.kind === "taxi" || r.kind === "taxi_landed");
+}
+
+describe("the run's session record holds the flights the child saw, and the scorer counts them", () => {
   test("a takeoff and a landing carry the flip's own position and area; two legs in one drain are two pairs", async () => {
     const host = makeHost();
     expect((await host.evalSnippet(PRELUDE)).ok).toBe(true);
-    expect(await host.flightSignals()).toEqual([]);
+    expect(await flights(host)).toEqual([]);
 
     await host.evalSnippet(`
       // Leg one: accepted, the spline, the flag on. Mid-flight the area
@@ -99,7 +109,7 @@ describe("the runner's host hands the loop the flights the stack recorded", () =
       "fed";
     `);
 
-    const signals = await host.flightSignals();
+    const signals = await flights(host);
     expect(signals.map((s) => s.kind)).toEqual(["taxi", "taxi_landed", "taxi", "taxi_landed"]);
     const [takeoff, landing, , second] = signals;
     expect(takeoff!.area).toBe(1537);
@@ -110,7 +120,9 @@ describe("the runner's host hands the loop the flights the stack recorded", () =
     expect(landing!.position).toEqual({ map: 0, x: -5421, y: -2930, z: 351.5 });
     expect(second!.area).toBe(1537);
     expect(second!.ts).toBeGreaterThan(landing!.ts);
-    // Drained once: a second drain is empty.
-    expect(await host.flightSignals()).toEqual([]);
+    // The scorer reads the same rows: two flights.
+    writeFileSync(join(runDir, "trajectory.jsonl"), "");
+    const totals = await scanRunTotals(join(runDir, "trajectory.jsonl"));
+    expect(totals.taxi?.flights).toBe(2);
   });
 });

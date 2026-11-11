@@ -118,6 +118,11 @@ export async function memoryStore(runsDir: string): Promise<MemoryStore> {
       for (const r of runs) if (ids.includes(String(r["run_id"]))) out.set(String(r["run_id"]), { ...runRowOf(r), archived: r["archived"] === 1 });
       return out;
     },
+    async samples(id, since, until) {
+      return states
+        .filter((s) => s["run_id"] === id && (s["ts"] as number) >= since && (s["ts"] as number) <= until)
+        .sort((a, b) => (a["ts"] as number) - (b["ts"] as number) || (a["seq"] as number) - (b["seq"] as number));
+    },
     async latestStates(ids) {
       const out = new Map<string, StateRow>();
       for (const id of ids) {

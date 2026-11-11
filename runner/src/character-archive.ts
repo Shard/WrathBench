@@ -3,7 +3,7 @@
  * docs/RUNBOOK.md, "Backing up and moving a character").
  *
  * A freeplay character is two halves that only make sense together. One is
- * the run directory: meta.json, run.sqlite, the trajectory, the scratchpad,
+ * the run directory: meta.json, the trajectory, the session record, the scratchpad,
  * the episodic log, the driver's own state. The other is the character's rows
  * in the characters database. An archive holds both, so that a long-lived
  * character can be backed up before risky maintenance, moved to another host,

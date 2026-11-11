@@ -61,8 +61,9 @@ export const HELD_MS = 10 * 60_000;
 /** Age of the most recently written artefact of a run, or null when it has none. */
 export function runActivityAge(dir: string, now: number): number | null {
   let newest: number | null = null;
-  // `run.sqlite-wal`: a live run's database writes land there until a checkpoint.
-  for (const name of ["trajectory.jsonl", "run.sqlite", "run.sqlite-wal", "meta.json", "scratchpad.md", CLIENT_CACHE_FILE]) {
+  // `run.sqlite-wal`: a 0.5 run's database writes land there until a
+  // checkpoint; a v1 run's session writer rewrites `live.json` on every tick.
+  for (const name of ["trajectory.jsonl", "run.sqlite", "run.sqlite-wal", "meta.json", "scratchpad.md", CLIENT_CACHE_FILE, "session/live.json"]) {
     try {
       const m = statSync(join(dir, name)).mtimeMs;
       if (newest === null || m > newest) newest = m;

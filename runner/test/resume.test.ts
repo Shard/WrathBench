@@ -5,6 +5,7 @@
  * driver; the sandbox only dials the module on connect(), which a stub that
  * never calls a tool never asks for.
  */
+import { writeReadings } from "./fixtures/v1-session";
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -40,7 +41,7 @@ function pausedStubRun(elapsedMs: number): { runsDir: string; runId: string; scr
   });
   traj.writeMeta({ runId, harnessVersion: "0.0.0-test", startedAt: 1, config });
   // Where the character was left, so the resume note can say so.
-  traj.recordState(runId, { level: 4, xp: 586 });
+  writeReadings(dir, [{ ts: Date.now(), level: 4, xp: 586 }]);
   traj.setPause(runId, "operator-pause", "SIGTERM: supervisor stop", elapsedMs);
   traj.writeMeta({
     ...readMeta(dir)!,
@@ -79,7 +80,7 @@ function pausedFreeplayRun(storedCap: number | null = 500): { runsDir: string; r
     class: 2,
   });
   traj.writeMeta({ runId, harnessVersion: "0.0.0-test", startedAt: 1, config });
-  traj.recordState(runId, { level: 12, xp: 4210 });
+  writeReadings(dir, [{ ts: Date.now(), level: 12, xp: 4210 }]);
   traj.setPause(runId, "operator-pause", "SIGTERM: supervisor stop", 9 * 3_600_000);
   traj.writeMeta({
     ...readMeta(dir)!,

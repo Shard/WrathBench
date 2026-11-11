@@ -20,8 +20,7 @@ flowchart TB
 
     subgraph records["data/runs/#lt;id#gt;/"]
         session[("session/<br/>trace, events, calls<br/>wrath-session/1")]
-        trajectory[("trajectory.jsonl, meta.json<br/>the model's side")]
-        rundb[("run.sqlite<br/>run row, 60 s state rows<br/>until the scorer reads the trace")]
+        trajectory[("trajectory.jsonl, meta.json<br/>the model's side, the run row")]
     end
 
     subgraph view["Reading results"]
@@ -43,10 +42,9 @@ flowchart TB
     stack <-->|"client opcodes,<br/>whitelisted packets"| world
     stack ==>|"records the session"| session
     runner -->|"writes"| trajectory
-    runner -->|"writes"| rundb
     records -.->|"run contract: read back"| supervisor
     trajectory -->|"tails"| collector
-    rundb -->|"tails"| collector
+    session -->|"tails"| collector
     collector --> clickhouse
     clickhouse -->|"listings"| viewer
     records -->|"live tail, session source"| viewer
@@ -159,13 +157,13 @@ checks before a launch or resume (`fetchServerBuild`;
 - Snippet sandbox: the stack's (`wrath-mcp/mcp/src/sandbox/`), run with the benchmark's child extension. A persistent confined runtime per session, so snippets share state and can leave routines running, with a hard per-snippet timeout. Its environment carries only the run's own leased session secret, never the module's port secret or a provider key. The runner's host adds one directory to what the confined child may read, `runner/`, for its entry and extension; the confinement itself is the stack's ([wrath-mcp's architecture](https://github.com/Shard/wrath-mcp/blob/master/docs/ARCHITECTURE.md#the-sandbox); `runner/README.md`, "The sandbox"), and per-host and non-TCP egress are the deployment's network policy (`docs/RUNBOOK.md`, "Network policy").
 - Agent loop: model-agnostic. Fixed prompt, fixed event window and state summary, fixed retry policy. Persists scratchpad and summary so a session can resume after a process failure.
 - Watchdogs: idle timeout, no-XP timeout, episode time limit, snippet runaway. Each ends the episode with a named termination reason.
-- The run's records, in two halves. The session record is the stack's, written into the run's `session/` ("Persistence", below): the trace, game events, tool calls, the action log and movement intentions. The trajectory log is the runner's: JSONL per run with the model's side, every request and response, snippet and result, every event batch the model saw, token and cost figures, compaction, pauses and the termination. While the scorer, the collector and the feed still read them there, the trajectory also carries the periodic state line (level, zone, XP, position), the milestones, the action log and a mirror of each movement intention; those readers move onto the session record next, and these records go with them. A fixed-loop `request` record carries the turn's fresh user message whole and points at the rest of the prompt instead of re-logging it: the system prompt text once per process segment, and the message window as bounds over the `response` and result records already on the file, with the count of its folded messages and a hash of the bytes sent. `runner/src/replay.ts` rebuilds every request from the file alone and fails on any that does not hash to what was sent; the CLI scaffolds' requests keep their own shape (`runner/README.md`, "The request record and the replay").
+- The run's records, in two halves. The session record is the stack's, written into the run's `session/` ("Persistence", below): the trace, game events, tool calls, the action log and movement intentions. The trajectory log is the runner's: JSONL per run with the model's side, every request and response, snippet and result, every event batch the model saw, token and cost figures, compaction, pauses and the termination. Nothing game-side is in the trajectory: the scorer, the collector and the run page's feed read the session record, and the feed merges its rows into the trajectory's by time, each with the turn in flight joined by timestamp (`runner/viewer/record-feed.ts`). The one event list the trajectory keeps is each turn's context window (`events_served`, `via: "context"`), because it is what the model was shown. A fixed-loop `request` record carries the turn's fresh user message whole and points at the rest of the prompt instead of re-logging it: the system prompt text once per process segment, and the message window as bounds over the `response` and result records already on the file, with the count of its folded messages and a hash of the bytes sent. `runner/src/replay.ts` rebuilds every request from the file alone and fails on any that does not hash to what was sent; the CLI scaffolds' requests keep their own shape (`runner/README.md`, "The request record and the replay").
 - Model adapter: one OpenAI-compatible chat layer. Provider and model are run config.
 - Drivers (`runner/src/drivers.ts`): `openai`, the fixed loop over the chat adapter; three CLI scaffolds, `claude-code`, `codex` and `pi`; and two that never score, `stub` (a scripted response list, for testing the harness without a model) and `reference` (the scripted reference run, played through `run_snippet`). The driver contract (`runner/README.md`, "The driver contract") says what the runner keeps for every driver, what a driver may vary, and what the trajectory records regardless.
 
 **Harness-delivered hints.** A failed action's recovery hint reaches the model only if the snippet's own code keeps it: one run took 41 `too_far` refusals in four hours while reducing every result to `.status`, and read the hint zero times. So the stack's dispatcher also delivers each hint-bearing failure at the foot of the next tool result of any kind, on a channel the snippet cannot strip ([wrath-mcp's architecture](https://github.com/Shard/wrath-mcp/blob/master/docs/ARCHITECTURE.md#harness-delivered-hints); docs/METHODOLOGY.md, "The model surface"). It goes in the tool result rather than the next turn's harness-notice block because a claude-code turn is a whole CLI session: a notice there would arrive a turn late, and delivery must not cost the model a follow-up inspection. Every driver dispatches through the same `callTool`, so every driver gets it, and the trajectory's `snippet_result` or `tool_result` records it as part of what the model saw.
 
-**The action log.** A snippet's code says what the model asked for; it does not say what went on the wire — a helper's inner `set_target`, a routine's fortieth re-cast, the refusal the snippet swallowed. So the stack's sandbox watches its own client's `POST /action` requests (the same fetch the move intention is read from) and the host writes each dispatch, with the module's HTTP answer, to the session record's `calls` stream. The runner keeps its own copy as an `actions` record (`ActionsLine` in `runner/src/trajectory.ts`) while the feed reads it there: action name, the body with the token stripped, status, error code and hint on a refusal, the `move_to` move id, timing, and the client-cache names the session already held for the ids (unit, spell, item, quest). One record per snippet, flushed just before its result, rather than one per action: about ten dispatches per snippet would otherwise push the snippets out of the feed's 200-record window. A background routine's dispatches between snippets flush on a 60-second idle timer and are marked `routine`, so the record count is one per snippet that dispatched anything plus at most one a minute of routine activity between snippets; identical consecutive dispatches fold into a count, and past 120 notes per flush the rest are counted by action name, because a looping routine has dispatched millions. The record's `callTs` is the owning `tool_call`'s `dispatchTs`, which is the join: the CLI drivers append the call after it ran and the fixed loop before, so position cannot be. It records the dispatch and the module's answer and nothing more — a `200` is "queued", and what the game made of it is on the event stream, with a `move_to`'s verdict in the `move` row of the same move id (the session record's `calls` stream, mirrored into the trajectory as a `move` record). Nothing in it reaches the model. The module's audit log is the ground truth for the wire while it is kept, which is a few days (wrath-mcp/docs/CONTRACTS.md "Audit"); this record is the one that stays with the run, attributed to the snippet that caused it. Size, on a long freeplay run of about 9,600 snippets over 51 hours with a 104 MB trajectory: by its snippet code, about half its snippets call a dispatching helper and one in twelve launches a routine, so the records add at most about 9,600 lines to the 65,000 it has; by the module audit logs of earlier long runs, which dispatched 1,300–2,200 HTTP actions an hour, the notes come to roughly 70k–110k at about 100 bytes each, so 7–15 MB more, about a tenth.
+**The action log.** A snippet's code says what the model asked for; it does not say what went on the wire — a helper's inner `set_target`, a routine's fortieth re-cast, the refusal the snippet swallowed. So the stack's sandbox watches its own client's `POST /action` requests (the same fetch the move intention is read from) and the host writes each dispatch, with the module's HTTP answer, to the session record's `calls` stream. The run page's feed reads it there, as the `actions` record shape the 0.5 trajectory carried: action name, the body with the token stripped, status, error code and hint on a refusal, the `move_to` move id, timing, and the client-cache names the session already held for the ids (unit, spell, item, quest). One record per snippet, flushed just before its result, rather than one per action: about ten dispatches per snippet would otherwise push the snippets out of the feed's 200-record window. A background routine's dispatches between snippets flush on a 60-second idle timer and are marked `routine`, so the record count is one per snippet that dispatched anything plus at most one a minute of routine activity between snippets; identical consecutive dispatches fold into a count, and past 120 notes per flush the rest are counted by action name, because a looping routine has dispatched millions. The record's `callTs` is the owning `tool_call`'s `dispatchTs`, which is the join: the CLI drivers append the call after it ran and the fixed loop before, so position cannot be. It records the dispatch and the module's answer and nothing more — a `200` is "queued", and what the game made of it is on the event stream, with a `move_to`'s verdict in the `move` row of the same move id (the session record's `calls` stream). Nothing in it reaches the model. The module's audit log is the ground truth for the wire while it is kept, which is a few days (wrath-mcp/docs/CONTRACTS.md "Audit"); this record is the one that stays with the run, attributed to the snippet that caused it. Size, on a long freeplay run of about 9,600 snippets over 51 hours with a 104 MB trajectory: by its snippet code, about half its snippets call a dispatching helper and one in twelve launches a routine, so the records add at most about 9,600 lines to the 65,000 it has; by the module audit logs of earlier long runs, which dispatched 1,300–2,200 HTTP actions an hour, the notes come to roughly 70k–110k at about 100 bytes each, so 7–15 MB more, about a tenth.
 
 **Reflection, the episodic log, and the trim notices.** Three of the tools
 exist because of the message window rather than the world (docs/METHODOLOGY.md,
@@ -481,22 +479,22 @@ reference reader). `meta.json`: `harnessVersion`, `startedAt`,
 `config.{model, effort, compactWindow, account, character, token, campaign,
 campaignVersion, cell, arm, ref, subscription, extra, watchdogs}`,
 `comparability.{episode, episodeOverride, effort, compactWindow}` and, while
-paused, `pause.{reason, at, episodeElapsedMs, notBefore}`. `run.sqlite`: the
-`run` row (`started_at`, `ended_at`, `termination_reason`,
-`termination_detail`, `pause_reason`) is how the roster classifies an exit —
-a termination is done, a pause is resumable or a failed attempt by the lane's
-rule, neither is "unknown", and no row at all is a failed launch (for a
-fleet probe, the roster then writes a stub run terminated `launch-failed`, so
-the attempt counts toward its square's cap); the `state`
-table's `level` is the level it reports. A termination is appended to the
-trajectory before the row is written, so when the row has none and the run
-has no pause and no live owner, the trajectory's last `termination` record
-is the verdict, and the supervisor writes it into the row; a `pause` record
-there, or meta.json's pause mark, is the pause, unless a `resume` follows it. The file is in WAL
-while its runner writes it and back on the rollback journal once the runner
-finishes, so a live run's commits are in `run.sqlite-wal` until a checkpoint;
-anything that stats the database for change takes that file with it, and a
-copy goes through `VACUUM INTO` (`runner/src/rundb.ts`). `heartbeat`, one small file rewritten
+paused, `pause.{reason, at, episodeElapsedMs, notBefore}`. Beside those,
+meta.json holds the run row: `termination.{reason, detail}`, `endedAt` and
+`pauseReason` are how the roster classifies an exit — a termination is done,
+a pause is resumable or a failed attempt by the lane's rule, neither is
+"unknown", and no run at all is a failed launch (for a fleet probe, the
+roster then writes a stub meta.json terminated `launch-failed`, so the
+attempt counts toward its square's cap). The level it reports is the session
+record's (`runner/src/run-reader.ts`). A termination is appended to the
+trajectory before meta.json is rewritten, so when meta.json has none and the
+run has no pause and no live owner, the trajectory's last `termination`
+record is the verdict, and the supervisor writes it into meta.json; a `pause`
+record there, or meta.json's pause mark, is the pause, unless a `resume`
+follows it. meta.json is rewritten whole, through a temporary file renamed
+into place, so a reader never sees half of one. A 0.5 run kept its row in
+`run.sqlite` instead, which `run-reader.ts` still reads (`runner/src/rundb.ts`).
+`heartbeat`, one small file rewritten
 every 20 seconds and removed on a clean exit, is the only proof of a live
 owner: a resume onto a run with a fresh one is refused, and an account is held
 by a run whose heartbeat is fresh however quiet its trajectory. The
@@ -593,15 +591,19 @@ Every episode starts with a freshly created character at level 1 in its starting
   fingerprint of its token, the name the module's audit files use, and no
   file of it holds the token. Record only: the model sees none of it. A
   player who is not one of the deployment's own sessions is never written.
-- Run metadata and periodic state in `bun:sqlite` under `data/runs/`
-  (`run.sqlite`: the `run` row and the 60-second `state` rows). The state
-  rows repeat what the trace holds at finer grain and are kept only until the
-  scorer and the collector read the trace instead; a run's `run.sqlite` then
-  goes. A state row carries the inventory (`items`, about 4 KB) only when it
-  differs from the one its process last wrote.
-- Trajectories as JSONL next to it: the model's side of the run.
+- The run's own bookkeeping in `meta.json`: its config and stamps, and the
+  run row beside them (the verdict, when it was reached, a pause standing and
+  an open reflection window), rewritten whole and atomically. A v1 run has no
+  `run.sqlite`. Its level curve, XP, money, quests and position are the
+  trace's, folded into samples by `runner/src/trace-samples.ts` (one at each
+  change of a scored reading and at every key row), and its milestones are
+  the session record's `events` (decision 3 of wrath-mcp#29,
+  docs/METHODOLOGY.md, "Scoring").
+- Trajectories as JSONL next to it: the model's side of the run, and nothing
+  of the game's.
 - A run recorded before the session record (a 0.5 run) has no `session/`:
-  its trace and movement intentions are tables of its `run.sqlite`. It stays
+  its run row, 60-second state samples, trace and movement intentions are
+  tables of its `run.sqlite`, and its milestones are trajectory records. It stays
   readable through one adapter (`runner/viewer/legacy05-source.ts`) and is
   never converted, because the run files are the evidence a result points
   at; frozen 0.5 runs with golden API answers
@@ -652,7 +654,7 @@ those bytes were one field: `messages`, the rendered context re-logged on every
 turn. The fixed loop has since stopped re-logging it (a slim `request` keeps the
 fresh user message and points at the rest), but the trajectories written before
 that keep it. Without a store, every cold request to a listing route opens every
-`run.sqlite` over iSCSI and re-reads every trajectory to count what the
+run's record over iSCSI and re-reads every trajectory to count what the
 page shows. That is what the store is for.
 
 **The runner does not change.** It appends JSONL and moves on, the way a
@@ -693,12 +695,15 @@ code, same bytes, by construction.
 listing route answers from ClickHouse, and so does `bun wb inspect` for a
 run's row, samples and trajectory, which it once read by walking a live run's
 `run.sqlite` (`docs/RUNBOOK.md`, "Inspect a run"). The live-progress path — "is this run
-going right now", the supervisor's own polling of `run.sqlite`, the per-run
-trajectory tail behind `/entries` and the SSE stream — still reads files
-directly, because it asks about a process that
-is writing at this instant. The live map is the half-way case: the store says
-which runs are unterminated, and only those few have their `run.sqlite` opened. Retiring the per-run sqlite is a later step and
-waits on the store carrying the live state series.
+going right now", the supervisor's own polling, the per-run trajectory tail
+behind `/entries` and the SSE stream — still reads files directly, because it
+asks about a process that is writing at this instant. The live map is the
+half-way case: the store says which runs are unterminated, and each of those
+few has its session record's `live.json` read, the writer's last reading,
+which exists so that a map of every session opens one small file each. A v1
+run's samples reach the store folded from its trace by the same code the
+files path runs (`runner/src/trace-samples.ts`), each with a stable ordinal
+for its key, and its milestones from its `events` stream.
 
 With no `CLICKHOUSE_URL` the viewer builds the same rows in memory by running
 the collector's own ingestion over the runs directory — which is what a bare
