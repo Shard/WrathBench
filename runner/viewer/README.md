@@ -357,6 +357,27 @@ is no party route: the dashboard builds the attempt from the listing and the
 five details (`dashboard/src/lib/party.ts`), on the private viewer and the
 public bucket alike.
 
+## A fan-out run's characters
+
+A fan-out run is one agent driving several characters: one trajectory, and a
+session record per character in `<run>/sessions/<Character>/` instead of a
+`session/` (docs/ARCHITECTURE.md, "Persistence"). Each character is a session
+of its own in `runs-source.ts`, under `<run-id>~<Character>`: `~` never
+occurs in a run id, so the split is unambiguous, and it needs no escaping in
+a URL path. A packed window of one carries that id as its `run`. A
+single-character run's id stays its run id, byte for byte.
+
+The run itself lists like any run, with its row off `meta.json`. Its
+`/api/run/<id>` adds `fanout: [{ id, character }]`, the characters in name
+order, a field no other run's detail carries; the run page lists them, and
+shows the picked one's character and events through the inspector's API.
+Everything that reads "the run's session" (the trace, the nearby ring, the
+track, the samples, the map's pip) answers empty for a fan-out run rather
+than present one character as the run: the run's own id opens no session.
+A public handle withholds the run whole, as it does a run whose driver is not
+a model, and the publisher hands it back as withdrawn. `roster.json`, the
+characters' session tokens, is never read.
+
 ## Token accounting
 
 The runner records a provider `usage` block on `response` entries whenever the
@@ -685,8 +706,9 @@ route is the built SPA, or the not-built notice when there is none.
 
 `/api/inspector` is wrath-inspector's own API (`wrath-mcp/inspector/README.md`,
 "The API"), mounted over the runs through `runs-source.ts`: `/sessions` lists
-every run with a v1 session record, under its run id, and
-`/sessions/<run id>/…` reads one, its streams by range, its tail over SSE and
+every run with a v1 session record, under its run id, and each fan-out
+character under `<run-id>~<Character>` with the run id as its `group`, and
+`/sessions/<id>/…` reads one, its streams by range, its tail over SSE and
 its packed trace and nearby windows. A 0.5 run is not listed, because it has
 no `session.json`, and still opens through the adapter. It serves the record
 as it is, unprojected, so a public handle withholds every path of it with a

@@ -30,6 +30,7 @@ import { readRunRow } from "../../runner/src/run-reader";
 import { traceSamplesOf } from "../../runner/src/run-reader";
 import { materialiseV1p1, V1P1_RUN } from "../../runner/test/fixtures/v1p1";
 import { openTestSession, recordDrain, recordedMove } from "../../runner/test/fixtures/v1-session";
+import { FANOUT_ROSTER_TOKEN, FANOUT_RUN, writeFanoutRun } from "../../runner/test/fixtures/fanout";
 
 const roots: string[] = [];
 function tmpRoot(): string {
@@ -208,6 +209,29 @@ describe("a pass over one run", () => {
     ]);
     await collector.pass();
     expect(rowsOf(sink, "moves")).toHaveLength(2);
+  });
+
+  test("a fan-out run ingests its run row and trajectory, skips its characters' records with one log line, and leaves a single run's rows alone", async () => {
+    const runsDir = tmpRoot();
+    materialiseV1p1(runsDir);
+    await writeFanoutRun(runsDir);
+    const sink = memorySink();
+    const logged: string[] = [];
+    const collector = new Collector({ cfg: readConfig({ runsDir, dataDir: runsDir, stateDb: ":memory:" }), sink, offsets: new OffsetStore(":memory:"), log: (m) => logged.push(m) });
+    await collector.pass();
+    const runs = rowsOf(sink, "runs").map((r) => r["run_id"]);
+    expect(runs.sort()).toEqual([FANOUT_RUN, V1P1_RUN].sort());
+    expect(rowsOf(sink, "turns").some((r) => r["run_id"] === FANOUT_RUN)).toBe(true);
+    for (const table of ["states", "milestones", "moves"]) expect({ table, fanout: rowsOf(sink, table).filter((r) => r["run_id"] === FANOUT_RUN).length }).toEqual({ table, fanout: 0 });
+    // The single-character run beside it reads as it does alone.
+    expect(rowsOf(sink, "states").length).toBe(traceSamplesOf(join(runsDir, V1P1_RUN)).length);
+    expect(logged.filter((m) => m.includes(FANOUT_RUN))).toHaveLength(1);
+    // Touch the trajectory so the next pass reads the run again: still one line.
+    appendFileSync(join(runsDir, FANOUT_RUN, "trajectory.jsonl"), "");
+    writeFileSync(join(runsDir, FANOUT_RUN, "episodic.jsonl"), "");
+    await collector.pass();
+    expect(logged.filter((m) => m.includes(FANOUT_RUN))).toHaveLength(1);
+    for (const [table, rows] of sink.tables) expect({ table, leaked: JSON.stringify(rows).includes(FANOUT_ROSTER_TOKEN) }).toEqual({ table, leaked: false });
   });
 
   test("the run row merges run.sqlite with meta.json", () => {

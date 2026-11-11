@@ -44,7 +44,7 @@ import { localRunStore } from "../runner/viewer/clickhouse";
 import { createApi } from "../runner/viewer/api";
 import { createRenderer } from "../runner/viewer/snapshot";
 import { findChromium, launch, type Browser, type Page, type PageOptions } from "./shots/cdp";
-import { LIVE_RUN, writeFixture, type Fixture } from "./shots/fixture";
+import { ENDED_RUN, LIVE_RUN, writeFixture, type Fixture } from "./shots/fixture";
 import { describeReport, emptyState, publishPass, type ObjectStore } from "./publish-core";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
@@ -146,9 +146,11 @@ async function pick(handle: (req: Request) => Promise<Response>): Promise<{ live
   }[];
   // The fixture's own live run where it is there: the one with a nearby ring.
   const live = rows.find((r) => r.live === true && r.runId === LIVE_RUN) ?? rows.find((r) => r.live === true);
+  // And its own ended run: the fan-out run beside it has ended too, and has no one track to replay.
+  const ended = rows.find((r) => r.terminationReason != null && r.runId === ENDED_RUN) ?? rows.find((r) => r.terminationReason != null);
   return {
     live: live?.runId ?? null,
-    ended: rows.find((r) => r.terminationReason != null)?.runId ?? null,
+    ended: ended?.runId ?? null,
     liveCharacter: live?.character ?? null,
   };
 }

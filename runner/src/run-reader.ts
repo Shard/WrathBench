@@ -12,6 +12,14 @@
  * - A **0.5** run is read where 0.5 wrote it: run.sqlite's `state` table and
  *   the trajectory's `milestone` records. Nothing on disk is converted; a 0.5
  *   run stays readable, not comparable.
+ * - A **fan-out** run (`<run>/sessions/<Character>/`, one record per
+ *   character) has its run row and its trajectory read here, and no state
+ *   samples, milestones or reading: every reader here answers for one
+ *   character, and no one character is the run. Taking the highest-level one
+ *   would present it as the run to a resume note, the listing and the
+ *   scheduler's best level, and the collector, which does not ingest a
+ *   fan-out run's records, would disagree. A character's own reading is its
+ *   session's, through the viewer's runs source.
  *
  * The run row is meta.json's (`runRowOfMeta`), except in a run directory that
  * has a run.sqlite: there the `run` table holds it, as 0.5 (and the first v1
@@ -21,7 +29,7 @@
  * busy or missing file reads as nothing recorded, never as an error.
  */
 
-import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { SessionReader, type EventRow, type StreamCursor, type TraceRow } from "@wrathbench/mcp/record";
 import { platformOf } from "./platform";
@@ -33,9 +41,61 @@ export { TurnIndex, type StateSample } from "./trace-samples";
 /** The session record's directory inside a run directory (`session-record.ts`). */
 const SESSION_DIR = "session";
 
-/** Whether a run directory holds a v1 session record. */
+/**
+ * Where a fan-out run keeps its records: one session directory per character,
+ * `sessions/<Character>/`, and no `session/`. A run has one layout or the
+ * other, never both.
+ */
+export const SESSIONS_DIR = "sessions";
+
+/** A character's directory name in a fan-out run: the name as the server spells it, letters only. */
+const CHARACTER_NAME = /^[A-Za-z]+$/;
+
+/** Whether a run directory holds a single-character v1 session record. A fan-out run is not one. */
 export function isV1RunDir(dir: string): boolean {
   return existsSync(join(dir, SESSION_DIR, "session.json"));
+}
+
+/**
+ * Whether a run directory is a fan-out run: one agent driving several
+ * characters. Its meta.json's `config.fanout` says so from the launch, before
+ * any character's record exists; `sessions/` says so for a run whose
+ * meta.json cannot be read.
+ */
+export function isFanoutRunDir(dir: string): boolean {
+  if (isV1RunDir(dir)) return false;
+  const config = readJson(join(dir, "meta.json"))?.["config"];
+  if (typeof config === "object" && config !== null && typeof (config as Record<string, unknown>)["fanout"] === "object" && (config as Record<string, unknown>)["fanout"] !== null) return true;
+  try {
+    return statSync(join(dir, SESSIONS_DIR)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** Whether a string is a fan-out character's directory name; the only names `fanoutSessionDir` resolves. */
+export function isFanoutCharacterName(name: string): boolean {
+  return CHARACTER_NAME.test(name);
+}
+
+/**
+ * A fan-out run's characters with a session record (`sessions/<Character>/session.json`),
+ * in name order. Empty for any other run, and for a fan-out run whose
+ * characters have not logged in yet.
+ */
+export function fanoutCharacters(dir: string): string[] {
+  let names: string[];
+  try {
+    names = readdirSync(join(dir, SESSIONS_DIR));
+  } catch {
+    return [];
+  }
+  return names.filter((n) => isFanoutCharacterName(n) && existsSync(join(dir, SESSIONS_DIR, n, "session.json"))).sort();
+}
+
+/** One fan-out character's session directory, or null for a name that is not one. Never a path outside `sessions/`. */
+export function fanoutSessionDir(dir: string, character: string): string | null {
+  return isFanoutCharacterName(character) ? join(dir, SESSIONS_DIR, character) : null;
 }
 
 /** A run's session directory. */
@@ -303,6 +363,8 @@ function sqliteStateRows(dir: string, runId: string): Record<string, unknown>[] 
  */
 export function readStateSamples(dir: string, runId: string): Record<string, unknown>[] {
   if (isV1RunDir(dir)) return traceSamplesOf(dir) as unknown as Record<string, unknown>[];
+  // Several characters, none of them the run (the header).
+  if (isFanoutRunDir(dir)) return [];
   return sqliteStateRows(dir, runId);
 }
 
@@ -338,6 +400,7 @@ export function latestReading(dir: string, runId: string): { level: number | nul
 
 /** The highest level a run's samples reached, or null when none carried one: `MAX(level)` over the samples. */
 export function bestLevelOf(dir: string, runId: string): number | null {
+  if (isFanoutRunDir(dir)) return null;
   if (!isV1RunDir(dir)) {
     const path = join(dir, RUN_DB_FILE);
     if (!existsSync(path)) return null;
