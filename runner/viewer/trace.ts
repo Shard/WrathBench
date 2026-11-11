@@ -153,8 +153,19 @@ export const STATE_KEYS = [
   "resting",
   "target",
   "cast",
+  // Appended, so every key before them keeps its place; a keyframe carries
+  // them only once observed (`STATE_KEYS_IF_OBSERVED`).
+  "zone",
+  "area",
 ] as const;
 export type TraceStateKey = (typeof STATE_KEYS)[number];
+
+/**
+ * The state keys a keyframe carries only when they hold a reading: a 0.5
+ * trace never recorded a zone or an area, and its segments read exactly as
+ * they did (`legacy05-golden.test.ts`); a v1 trace's keyframes name them.
+ */
+const STATE_KEYS_IF_OBSERVED: ReadonlySet<TraceStateKey> = new Set(["zone", "area"]);
 
 /** A row as `run.sqlite` holds it (`data` is the column's JSON text). */
 export interface TraceRow {
@@ -252,6 +263,8 @@ export function emptyTraceState(): TraceState {
     resting: false,
     target: null,
     cast: null,
+    zone: null,
+    area: null,
   };
 }
 
@@ -307,6 +320,8 @@ const SANITIZE: { [K in TraceStateKey]: (v: unknown) => TraceState[K] | undefine
     const o = v as Record<string, unknown>;
     return finite(o["spellId"]) && finite(o["endsAt"]) ? { spellId: o["spellId"], endsAt: o["endsAt"] } : undefined;
   },
+  zone: numOrNull,
+  area: numOrNull,
 };
 
 /** Whether `kind` names a state key this decoder knows. */
@@ -741,7 +756,7 @@ export function encodeSegment(rows: readonly TraceRow[], window: TraceWindow, di
   const kp: [number, number, number, number, number] | null =
     base === null ? null : [base.map, qp(base.x), qp(base.y), qp(base.z ?? 0), qo(base.o ?? 0)];
   const s: Partial<TraceState & TraceSheet> = {};
-  for (const key of STATE_KEYS) setKey(s as TraceState, key, state[key]);
+  for (const key of STATE_KEYS) if (!STATE_KEYS_IF_OBSERVED.has(key) || state[key] !== null) setKey(s as TraceState, key, state[key]);
   // The sheet's observed keys only: one the run never recorded stays absent.
   for (const key of SHEET_KEYS) if (sheet[key] !== null) setSheet(s as TraceSheet, key, sheet[key]);
   const k: TraceKeyframe = { p: kp, ...(pt !== 0 ? { pt } : {}), s, ...(inFlight !== undefined ? { f: inFlight } : {}) };
