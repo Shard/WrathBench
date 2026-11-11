@@ -206,7 +206,8 @@ import { accountHeldBy, drainMarkerPath, releaseRunSession } from "./run-roster"
 import { K8sClient } from "./k8s-client";
 import { DRAIN_POD_QUERY_TIMEOUT_MS, rosterHasRunPod } from "./run-pod";
 import { runCampaignFile, writeCampaignFile } from "../runner/src/campaign-file";
-import { pruneRollouts, type RolloutPrune } from "../runner/src/codex-rollout";
+import { deleteCodexThread, pruneRollouts, type RolloutPrune } from "../runner/src/codex-rollout";
+import { cliBaseEnv } from "../runner/src/adapter-shared";
 import { DEFAULT_CLAUDE_TOKEN_ENV } from "../runner/src/config";
 import { subscriptionThresholds } from "../runner/src/subscription-usage";
 import { claudeLaneOpen, FleetGoUsage, gateSpawns, jobHoldOf, laneOfEntry, laneOfRun, subscriptionGate, writeLaneUsageSidecar } from "./run-fleet-gate";
@@ -360,8 +361,10 @@ export const CODEX_PRUNE_EVERY_MS = 60 * 60_000;
  * threads' rollouts would stay on the lane's volume for good. Each home loses
  * every rollout that is not the recorded thread of a run with a live owner
  * (`liveCodexThreads`, across every home — a thread id is a UUID) and has not
- * been written for two hours. Nothing is deleted while a live codex run has no
- * thread on record. One line per sweep, never per file; never throws.
+ * been written for two hours, and each thread whose rollouts all went is then
+ * deleted from the CLI's own stores (`deleteCodexThread`, run with the home as
+ * `CODEX_HOME`). Nothing is deleted while a live codex run has no thread on
+ * record. One line per sweep, never per file; never throws.
  */
 export function pruneCodexHomes(o: {
   homes: readonly CodexHome[];
@@ -370,6 +373,8 @@ export function pruneCodexHomes(o: {
   runsDir?: string;
   threadOf?: (runId: string) => string | undefined;
   minAgeMs?: number;
+  /** The CLI to delete threads with, `codex` on PATH by default; tests point it at a fake. */
+  codexBin?: string;
   say: (s: string) => void;
 }): RolloutPrune | undefined {
   if (o.homes.length === 0) return undefined;
@@ -383,7 +388,9 @@ export function pruneCodexHomes(o: {
       o.say(`codex rollouts: not swept — live codex run(s) with no thread on record: ${unrecorded.join(", ")}`);
       return undefined;
     }
-    const total: RolloutPrune = { files: 0, bytes: 0, errors: 0, kept: 0, dirs: 0 };
+    const total: RolloutPrune = { files: 0, bytes: 0, errors: 0, kept: 0, dirs: 0, threads: [] };
+    let notDeleted = 0;
+    let deleteError: string | undefined;
     for (const home of o.homes) {
       const r = pruneRollouts(home.path, { keep, now: o.now, ...(o.minAgeMs !== undefined ? { minAgeMs: o.minAgeMs } : {}) });
       total.files += r.files;
@@ -392,11 +399,22 @@ export function pruneCodexHomes(o: {
       total.kept += r.kept;
       total.dirs += r.dirs;
       if (r.error !== undefined) total.error ??= `${home.env}: ${r.error}`;
+      const env = { ...cliBaseEnv(process.env), CODEX_HOME: home.path };
+      for (const thread of r.threads) {
+        const failed = deleteCodexThread(thread, { env, ...(o.codexBin !== undefined ? { bin: o.codexBin } : {}) });
+        if (failed === undefined) total.threads.push(thread);
+        else {
+          notDeleted++;
+          deleteError ??= `${home.env}: ${failed}`;
+        }
+      }
     }
     o.say(
       `codex rollouts: removed ${total.files} (${(total.bytes / 1024 ** 2).toFixed(1)} MiB) under ${o.homes.map((h) => h.env).join(", ")}; ` +
         `kept ${total.kept} (${keep.size} live thread${keep.size === 1 ? "" : "s"})` +
-        (total.errors > 0 ? `; ${total.errors} not removed (${total.error})` : ""),
+        (total.errors > 0 ? `; ${total.errors} not removed (${total.error})` : "") +
+        (total.threads.length > 0 ? `; ${total.threads.length} thread${total.threads.length === 1 ? "" : "s"} deleted` : "") +
+        (notDeleted > 0 ? `; ${notDeleted} thread${notDeleted === 1 ? "" : "s"} not deleted (${deleteError})` : ""),
     );
     return total;
   } catch (e) {

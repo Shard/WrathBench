@@ -61,6 +61,9 @@
  *
  * Everything it saw is written to $WB_FAKE_RECORD as JSON after every event.
  * `--version` prints a version line and exits, as the real CLI does.
+ * `delete --force <thread>` appends `{argv, codexHome}` to `$WB_FAKE_RECORD`
+ * plus `.deletes.jsonl` (never the record's `argvs`) and exits 0, or 1 with the
+ * real CLI's words when `$WB_FAKE_DELETE` is `fail`.
  */
 
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
@@ -71,6 +74,18 @@ const recordPath = Bun.env["WB_FAKE_RECORD"];
 
 if (argv[0] === "--version") {
   console.log("codex-cli 0.0.0-fake");
+  process.exit(0);
+}
+
+if (argv[0] === "delete") {
+  if (recordPath !== undefined) {
+    appendFileSync(`${recordPath}.deletes.jsonl`, `${JSON.stringify({ argv, codexHome: Bun.env["CODEX_HOME"] ?? null })}\n`);
+  }
+  if (Bun.env["WB_FAKE_DELETE"] === "fail") {
+    console.error("Error: failed to delete session");
+    process.exit(1);
+  }
+  console.log(`Deleted session ${argv[argv.length - 1]}.`);
   process.exit(0);
 }
 

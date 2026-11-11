@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, utimesSync
 import { join } from "node:path";
 import {
   CODEX_THREAD_FILE,
+  deleteCodexThread,
   pruneRollouts,
   readCodexThread,
   removeThreadRollouts,
@@ -298,6 +299,8 @@ describe("rollout deletion", () => {
     writeFileSync(join(h, "sessions", "session_index.jsonl"), "{}\n");
     const r = pruneRollouts(h, { keep: new Set([LIVE.toUpperCase()]), now: NOW });
     expect(r).toMatchObject({ files: 1, bytes: 1_000, errors: 0, kept: 2 });
+    // Only the dead thread is handed on for `codex delete`: the live and the fresh one keep their rows.
+    expect(r.threads).toEqual([DEAD]);
     const day = readdirSync(join(h, "sessions", "2026", "10", "12")).sort();
     expect(day).toEqual(["README", "notes", `rollout-2026-10-12T00-00-00-${DEAD}.jsonl.zst`, `rollout-2026-10-12T01-02-03-${LIVE}.jsonl`].sort());
     expect(readdirSync(join(h, "sessions", "2026", "10", "16"))).toHaveLength(1);
@@ -343,6 +346,8 @@ describe("rollout deletion", () => {
       expect(r.files).toBe(0);
       expect(r.errors).toBe(1);
       expect(r.error).toContain("EACCES");
+      // A rollout that could not be removed keeps its thread's rows too.
+      expect(r.threads).toEqual([]);
     } finally {
       chmodSync(locked, 0o755);
     }
@@ -362,6 +367,48 @@ describe("rollout deletion", () => {
     expect(removeThreadRollouts(tmp("wrathbench-codex-none-"), DEAD).files).toBe(0);
     expect(removeThreadRollouts(h, "*").files).toBe(0);
     expect(existsSync(join(h, "auth.json"))).toBe(true);
+  });
+
+  test("a thread with an old rollout and a fresh one is not handed on: its rows stay until every rollout of it has gone", () => {
+    const h = codexHome([
+      { day: "2026/10/12", thread: DEAD, ageMs: 50 * HOUR },
+      { day: "2026/10/16", thread: DEAD, ageMs: 10 * 60_000, suffix: `_${FRESH}` },
+    ]);
+    const r = pruneRollouts(h, { keep: new Set(), now: NOW });
+    expect(r).toMatchObject({ files: 1, kept: 1, threads: [] });
+  });
+
+  /** A stand-in `codex` that logs its argv and `CODEX_HOME`, then runs `tail`. */
+  function fakeCli(tail: string): { bin: string; log: string } {
+    const dir = tmp("wrathbench-codex-delete-bin-");
+    const bin = join(dir, "codex");
+    const log = join(dir, "calls.log");
+    writeFileSync(bin, `#!/bin/sh\necho "$CODEX_HOME $*" >> ${log}\n${tail}\n`);
+    chmodSync(bin, 0o755);
+    return { bin, log };
+  }
+
+  test("a finished thread goes through `codex delete --force <thread>` in the lane's CODEX_HOME", () => {
+    const home = tmp("wrathbench-codex-delete-home-");
+    const { bin, log } = fakeCli("exit 0");
+    expect(deleteCodexThread(DEAD, { bin, env: { PATH: "/usr/bin:/bin", CODEX_HOME: home } })).toBeUndefined();
+    expect(readFileSync(log, "utf8")).toBe(`${home} delete --force ${DEAD}\n`);
+  });
+
+  test("a failed, hung or missing CLI is a reason, never a throw; no thread id or no CODEX_HOME runs nothing", () => {
+    const home = tmp("wrathbench-codex-delete-home-");
+    const env = { PATH: "/usr/bin:/bin", CODEX_HOME: home };
+    const failing = fakeCli(`echo "WARNING: proceeding" >&2\necho "Error: failed to delete session" >&2\nexit 1`);
+    expect(deleteCodexThread(DEAD, { bin: failing.bin, env })).toBe("codex delete exited 1: Error: failed to delete session");
+    const hung = fakeCli("exec sleep 30");
+    const started = Date.now();
+    expect(deleteCodexThread(DEAD, { bin: hung.bin, env, timeoutMs: 200 })).toBe("codex delete timed out after 200 ms");
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(deleteCodexThread(DEAD, { bin: join(home, "no-such-codex"), env })).toEqual(expect.any(String));
+    const quiet = fakeCli("exit 0");
+    expect(deleteCodexThread("fake-thread", { bin: quiet.bin, env })).toBe("not a thread id: fake-thread");
+    expect(deleteCodexThread(DEAD, { bin: quiet.bin, env: { PATH: "/usr/bin:/bin" } })).toBe("no CODEX_HOME");
+    expect(existsSync(quiet.log)).toBe(false);
   });
 
   test("the thread sidecar round-trips, and a missing or torn one reads as none", () => {

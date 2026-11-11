@@ -1803,8 +1803,13 @@ one live session), and an entry rides the default home unless its
 The CLI never deletes a thread's rollout (`sessions/**/rollout-*.jsonl`), so
 the fleet deletes them: the driver at a thread change and at its episode's
 end, and an hourly supervisor sweep for any rollout unwritten for two hours
-that is no live run's recorded thread (`<run-dir>/codex-thread.json`). Nothing
-else in the home is touched, so `thread_history_1.sqlite` still grows.
+that is no live run's recorded thread (`<run-dir>/codex-thread.json`). Each
+thread whose rollouts went is then deleted from the CLI's own stores
+(`thread_history_1.sqlite`, `state_5.sqlite`) with `codex delete --force
+<thread>`, which needs no login. That is best effort: a failure is logged (the
+driver's `codex_rollouts_removed` record, the sweep's line) and its rows stay.
+Deleting rows does not shrink the file; a `VACUUM` while no codex run is live
+does.
 
 #### Moving a run to another lane
 
