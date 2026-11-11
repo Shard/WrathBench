@@ -1483,6 +1483,29 @@ export function traceSamples(session: string, w: { since: number; until: number 
   return out;
 }
 
+/** A v1 run's served batches (`calls` `events` rows) in a window that carry a `schemaError`: what `events_served` records were. */
+export function calledSchemaBatches(session: string, w: { since: number; until: number }): number {
+  let n = 0;
+  for (const f of segmentFiles(session, "calls")) {
+    let text: string;
+    try {
+      text = segmentText(f);
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n")) {
+      if (!line.includes('"kind":"events"') || !line.includes(SCHEMA_ERROR_KEY)) continue;
+      try {
+        const r = JSON.parse(line) as { ts?: unknown };
+        if (typeof r.ts === "number" && r.ts >= w.since && r.ts <= w.until) n++;
+      } catch {
+        /* a torn line */
+      }
+    }
+  }
+  return n;
+}
+
 /** One process's stretch of the quest count: when its first sample was taken, and its last count. */
 export interface QuestStretch {
   from: number;
@@ -3132,6 +3155,8 @@ async function stuckOf(ctx: Ctx, runId: string, run: { dir: string; path: string
   if (isV1Dir(run.dir)) {
     const rows = via.store !== null ? await via.store.samples(runId, w.since, w.until) : traceSamples(join(run.dir, "session"), w);
     scan.samples = rows.map((r) => progressSampleOf(r, r["ts"] as number));
+    // Its tools' served batches are its record's `calls` rows, not trajectory records.
+    scan.schemaRecords += calledSchemaBatches(join(run.dir, "session"), w);
   }
   return { via, report: stuckReport(scan, w, t), anchor };
 }

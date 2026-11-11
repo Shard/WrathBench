@@ -129,6 +129,8 @@ async function makeRun(runsDir: string, runId: string, shape: Shape, v1 = false)
     for (const row of trace) {
       wclock = row.ts;
       writer.ingest({ trace: { rows: [row], dropped: 0 }, events: { rows: [], dropped: 0 }, nearby: { rows: [], dropped: 0, through: 0 }, moves: [], character: { guid: "7", name: "Testwick", race: 1, class: 1 }, stream: { connected: true, events: 1, seq: 1 } });
+      // A tool's served batch with a schema error: a v1 run's is a `calls` row.
+      if (shape === "stuck" && row.ts === t0 + (minutes - 9) * MIN) writer.eventsServed(undefined, [{ seq: 10, ts: row.ts, opcode: "SMSG_Y", schemaError: "bad field" } as never]);
     }
     await writer.close();
   } else writeLegacy05Run(dir, readRunRow(dir, runId)!, samples);
@@ -164,6 +166,8 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE_V1]
       expect(line(r.out, "verdict")).toContain("STUCK");
       expect(line(r.out, "progress")).toContain("L12 1350xp throughout");
       expect(line(r.out, "errors")).toContain("TRIPPED");
+      // The context window's record (trajectory) and the tool's batch (record).
+      expect(line(r.out, "schema")).toMatch(/ok\s+2 events_served/);
     });
 
     test("progress and a crafting session are progress", async () => {
