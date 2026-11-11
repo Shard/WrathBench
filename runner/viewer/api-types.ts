@@ -12,7 +12,8 @@
  * to declare, so nothing that imported them before has to move.
  */
 
-import type { CredentialHold, CredentialIssue, CredentialStatusLevel } from "../src/credential-health";
+import type { CredentialFix, CredentialHealth, CredentialHold, CredentialRead, CredentialWindow } from "../src/credential-health";
+export type { CredentialFix, CredentialHealth, CredentialWindow, HealthState } from "../src/credential-health";
 import type { Harness } from "../src/drivers";
 import type { ItemSample, NearbyWindow, SessionPosition, SessionTrack, SessionTrackPoint } from "@wrathbench/inspector/wire";
 
@@ -1576,6 +1577,11 @@ export interface FleetResponse extends SnapshotEnvelope {
     /** The holds, structured (`CredentialStatus.holds`); absent from a supervisor that predates them. */
     holds?: { scored?: CredentialHold; freeplay?: CredentialHold };
     lastError: { reason: string; at: number } | null;
+    /** The provider's newest read of it, where a reader reads it; absent from a supervisor that predates it. */
+    lastRead?: CredentialRead;
+    health?: CredentialHealth;
+    windows?: CredentialWindow[] | null;
+    fix?: CredentialFix | null;
   }[];
   /** Every account the supervisor knows, with its class and what holds it. */
   accounts: FleetAccountView[];
@@ -2662,13 +2668,16 @@ export interface AdminCredentialView {
   held: { scored?: string; freeplay?: string };
   lastError: { reason: string; at: number } | null;
   /**
-   * Its health: the worst level among its issues, `ok` with none
-   * (`credentialHealth`, runner/src/credential-health.ts). `unknown` while no
-   * supervisor is up to say, never `ok`.
+   * Its health (`credentialHealth`, runner/src/credential-health.ts): the
+   * state, why, since when and the provider's last answer. Null while no
+   * supervisor is up to say, unless the store or the chart already says it is
+   * switched off or its variable is not handed out.
    */
-  status: CredentialStatusLevel;
-  /** Each thing wrong with it: a code, a short message, and when it was seen. */
-  issues: CredentialIssue[];
+  health: CredentialHealth | null;
+  /** Its usage windows as meters, as the supervisor last read them; null with none. */
+  windows: CredentialWindow[] | null;
+  /** What makes it well again; null when it is, or when nobody is up to say. */
+  fix: CredentialFix | null;
 }
 
 export interface AdminProviderView {

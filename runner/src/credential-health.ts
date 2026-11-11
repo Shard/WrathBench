@@ -1,160 +1,176 @@
 /**
- * A credential's health, as the admin interface shows it (GitHub issue #427):
- * one status and the issues behind it, each a code, a short message, and when
- * it was seen. Derived, never tracked: every issue is read off state that
- * already exists — the store's row, the supervisor's published status
- * (`fleet-state.json`, `credentialStatuses` in infra/run-fleet-credentials.ts)
- * and the chart's `modelKeys` — so nothing here keeps a record of its own.
+ * A credential's health, as the supervisor publishes it beside the rest of its
+ * status (`CredentialStatus`, infra/run-fleet-credentials.ts) and the admin
+ * interface shows it (GitHub issue #427): one state, a line saying why, when
+ * it began and what the provider last answered; its usage windows as meters;
+ * and the fix, as the control or the instruction the page renders.
  *
- * A new kind of issue is a row in `ISSUES` and a branch in `credentialHealth`;
- * the shape a consumer reads (`CredentialIssue`) does not change.
+ * Derived, never tracked: every input is state that already exists — the
+ * store's switch, whether the supervisor's environment has the variable, the
+ * budget's holds (`CredentialGate.holdReasonOf`), the newest paused run that
+ * indicts the credential (`lastError`), the newest usage reading, and the
+ * provider's last read of the credential where a reader makes one
+ * (`CredentialRead`: OpenCode Go's usage endpoint today).
  *
- * Operator-only. Messages may carry what the public sentences of the gate may
- * not (`until` is a reset time), and none of it reaches a public surface.
+ * Operator-only. `reason` and `fix.text` may carry what the gate's public
+ * sentences may not, and none of it reaches a public surface.
  */
+
+import { EXHAUSTED_PCT, windowEndsAt, type SubscriptionUsage } from "./subscription-usage";
 
 /** Why the budget holds a launch on a credential, as a code (`CredentialGate.holdReasonOf`). */
 export const HOLD_CODES = ["usage-spent", "usage-threshold", "spend-budget", "runs-budget"] as const;
 export type HoldCode = (typeof HOLD_CODES)[number];
 
-/** A budget's hold on one class of launch, structured: what holds it and until when, where known. */
+/** A budget's hold on one class of launch, structured. `code` is null from a supervisor that worded it only. */
 export interface CredentialHold {
-  code: HoldCode;
+  code: HoldCode | null;
   until: number | null;
 }
 
 /**
- * What an issue does to the credential, and the status it gives it:
- * `disabled` — no new run starts on it (or every one that does fails);
- * `degraded` — it takes runs, but some are held or something is failing;
- * `unknown` — nobody is up to say.
+ * The states, in precedence order: the first that applies is the state.
+ * `disabled` is the operator's switch; every other one is observed and clears
+ * by itself when the observation changes.
  */
-export type CredentialStatusLevel = "ok" | "degraded" | "disabled" | "unknown";
+export const HEALTH_STATES = ["disabled", "secret-missing", "auth-failed", "no-access", "quota-spent", "overage", "held", "unread", "ok"] as const;
+export type HealthState = (typeof HEALTH_STATES)[number];
 
-export const ISSUE_CODES = [
-  "switched-off",
-  "supervisor-down",
-  "not-seen",
-  "secret-missing",
-  "not-deployed",
-  "auth-failed",
-  "quota-exhausted",
-  "usage-spent",
-  "usage-threshold",
-  "spend-budget",
-  "runs-budget",
-  "budget-held",
-] as const;
-export type CredentialIssueCode = (typeof ISSUE_CODES)[number];
-
-/** Each code's effect and where it comes from (the source is for the docs and the tooltip). */
-export const ISSUES: Readonly<Record<CredentialIssueCode, { level: Exclude<CredentialStatusLevel, "ok">; source: string }>> = {
-  "switched-off": { level: "disabled", source: "the store: enabled is false" },
-  "supervisor-down": { level: "unknown", source: "fleet-state.json: no heartbeat in three ticks" },
-  "not-seen": { level: "unknown", source: "fleet-state.json: written or renamed since the supervisor's last tick" },
-  "secret-missing": { level: "disabled", source: "fleet-state.json: the supervisor's environment lacks the variable (a Codex home: or its directory)" },
-  "not-deployed": { level: "disabled", source: "WRATHBENCH_MODEL_KEYS: the chart does not hand the variable to the model pods" },
-  "auth-failed": { level: "disabled", source: "a run on it paused auth-failed and is still paused" },
-  "quota-exhausted": { level: "degraded", source: "a run on it paused quota-exhausted and is still paused" },
-  "usage-spent": { level: "disabled", source: "the budget: a usage window at 100% holds every launch" },
-  "usage-threshold": { level: "degraded", source: "the budget: a usage window at or over a threshold holds that class" },
-  "spend-budget": { level: "disabled", source: "the budget: today's spend has reached its limit" },
-  "runs-budget": { level: "disabled", source: "the budget: today's runs have reached its limit" },
-  "budget-held": { level: "degraded", source: "the budget, as a supervisor that publishes no hold codes words it" },
-};
-
-/** One thing wrong with a credential. Times are epoch ms; null where the state does not say. */
-export interface CredentialIssue {
-  code: CredentialIssueCode;
-  level: Exclude<CredentialStatusLevel, "ok">;
-  /** A short reason, fit for a status cell. */
-  message: string;
-  /** When it began, where known. */
-  since: number | null;
-  /** When it was last seen to hold. */
-  lastSeen: number | null;
-  /** When it clears by itself, where known (a budget's reset). */
-  until: number | null;
+/**
+ * The provider's last read of a credential (OpenCode Go: its usage GET), as
+ * the reader classifies it. The meeting point between a reader and the
+ * status: a reader keeps one per credential (`GoUsagePoller.lastRead`,
+ * collected by `FleetGoUsage.lastReads()`), and `credentialStatuses` passes it
+ * here. Never carries the key or a response body.
+ *
+ * - `ok`: answered, windows read;
+ * - `auth-failed`: the key was refused (401);
+ * - `no-access`: the key may not read usage, or the workspace has no plan (403);
+ * - `spent`: the provider says an allowance is spent;
+ * - `overage`: the provider is billing the balance, past the allowance;
+ * - `unread`: no answer (timeout, 5xx, a shape the reader does not know).
+ */
+export interface CredentialRead {
+  at: number;
+  http: number | null;
+  /** The provider's error code (`api_key_expired`) or the failure's name (`TimeoutError`). */
+  code?: string;
+  classification: "ok" | "auth-failed" | "no-access" | "spent" | "overage" | "unread";
+  /** When this classification began, where the reader knows; else the state's `since` is null. */
+  since?: number;
 }
 
 export interface CredentialHealth {
-  status: CredentialStatusLevel;
-  issues: CredentialIssue[];
+  state: HealthState;
+  /** One operator line, never a secret. */
+  reason: string;
+  /** When this state began, where the inputs say. */
+  since: number | null;
+  /** The provider's newest read of it, whatever the state. */
+  lastCheck: { at: number; http: number | null; code?: string } | null;
 }
 
-/** The slice of the supervisor's per-credential status this reads (`CredentialStatus`). */
-export interface SupervisorCredentialView {
-  secretSet: boolean;
-  held: { scored?: string; freeplay?: string };
-  holds?: { scored?: CredentialHold; freeplay?: CredentialHold };
-  lastError: { reason: string; at: number } | null;
+/** One usage window, as a meter. */
+export interface CredentialWindow {
+  /** `5h`, `week` or `month` by its length; another length as hours or days. */
+  name: string;
+  /** The model family a per-model window binds, when it binds one. */
+  family?: string;
+  usedPercent: number;
+  resetsAt: number | null;
+  /** Spent: it holds every launch until it resets. */
+  limited: boolean;
 }
 
-const RANK: Record<CredentialStatusLevel, number> = { ok: 0, unknown: 1, degraded: 2, disabled: 3 };
+export const FIX_KINDS = ["replace-secret", "set-secret", "enable", "wait-reset", "raise-budget"] as const;
+export type FixKind = (typeof FIX_KINDS)[number];
 
-/** The worst of the issues' levels, `ok` with none. */
-export function worstLevel(issues: readonly Pick<CredentialIssue, "level">[]): CredentialStatusLevel {
-  let s: CredentialStatusLevel = "ok";
-  for (const i of issues) if (RANK[i.level] > RANK[s]) s = i.level;
-  return s;
+/** What makes it well again. Secret-writing fixes are rendered as a seam until secrets are written from the browser. */
+export interface CredentialFix {
+  kind: FixKind;
+  secretEnv?: string;
+  until?: number;
+  text: string;
 }
 
-function issue(code: CredentialIssueCode, message: string, t: Partial<Pick<CredentialIssue, "since" | "lastSeen" | "until">> = {}): CredentialIssue {
-  return { code, level: ISSUES[code].level, message, since: t.since ?? null, lastSeen: t.lastSeen ?? null, until: t.until ?? null };
-}
-
-const HOLD_MESSAGE: Record<HoldCode, string> = {
-  "usage-spent": "a usage window is spent",
-  "usage-threshold": "usage at its threshold",
-  "spend-budget": "today's spend budget is used",
-  "runs-budget": "today's runs are used",
-};
-
-/**
- * One credential's health. `supervisor` is the supervisor's word on this
- * credential, already joined by id and checked to be about the same variable,
- * or undefined when it has none to give (`up` false: nobody is up; `up` true:
- * it has not read this row yet).
- */
-export function credentialHealth(o: {
+/** What `credentialHealth` reads. */
+export interface HealthInput {
   enabled: boolean;
   secretEnv: string;
   /** What the variable holds: a Codex home's is a directory's path. */
   holds: "token" | "home" | "key";
-  up: boolean;
-  heartbeatAt: number | null;
-  supervisor: SupervisorCredentialView | undefined;
-  /** Whether the chart hands the variable to the model pods; null when the viewer was not told. */
-  deployed: boolean | null;
-}): CredentialHealth {
-  const issues: CredentialIssue[] = [];
-  const seen = { lastSeen: o.heartbeatAt };
-  if (!o.enabled) issues.push(issue("switched-off", "switched off"));
-  if (o.deployed === false) issues.push(issue("not-deployed", `${o.secretEnv} not in the chart's modelKeys`));
-  const s = o.supervisor;
-  if (!o.up) issues.push(issue("supervisor-down", "no supervisor up", seen));
-  else if (s === undefined) issues.push(issue("not-seen", "not yet read by the supervisor", seen));
-  else {
-    if (!s.secretSet) issues.push(issue("secret-missing", o.holds === "home" ? `${o.secretEnv} not set, or no such directory` : `${o.secretEnv} not set`, seen));
-    if (s.lastError !== null && (s.lastError.reason === "auth-failed" || s.lastError.reason === "quota-exhausted")) {
-      issues.push(issue(s.lastError.reason, s.lastError.reason === "auth-failed" ? "auth failed on a run" : "quota exhausted on a run", { lastSeen: s.lastError.at }));
-    }
-    // One issue per hold code, naming the classes it holds: spend and runs hold both alike.
-    const byCode = new Map<HoldCode | "budget-held", { classes: string[]; until: number | null }>();
-    for (const cls of ["scored", "freeplay"] as const) {
-      if (s.held[cls] === undefined) continue;
-      const h = s.holds?.[cls];
-      const code = h?.code ?? "budget-held";
-      const at = byCode.get(code) ?? { classes: [], until: null };
-      at.classes.push(cls);
-      if (h?.until != null) at.until = Math.max(at.until ?? 0, h.until);
-      byCode.set(code, at);
-    }
-    for (const [code, h] of byCode) {
-      const what = code === "budget-held" ? "held by its budget" : HOLD_MESSAGE[code];
-      const classes = code === "usage-threshold" || code === "budget-held" ? ` (${h.classes.join(", ")})` : "";
-      issues.push(issue(code, `${what}${classes}`, { ...seen, until: h.until }));
-    }
+  /** Whether the supervisor's environment has the variable set. */
+  secretSet: boolean;
+  /** Whether the chart hands the variable to the model pods; null or absent when not known. */
+  deployed?: boolean | null;
+  holdsOf: { scored?: CredentialHold; freeplay?: CredentialHold };
+  lastError: { reason: string; at: number } | null;
+  read?: CredentialRead | null;
+}
+
+const NEW_SECRET: Record<HealthInput["holds"], string> = { token: "a new token", key: "a new key", home: "a fresh login in the Codex home" };
+
+/** The state, its line and its fix: the first state in `HEALTH_STATES` that applies. */
+export function credentialHealth(i: HealthInput): { health: CredentialHealth; fix: CredentialFix | null } {
+  const read = i.read ?? null;
+  const lastCheck = read === null ? null : { at: read.at, http: read.http, ...(read.code !== undefined ? { code: read.code } : {}) };
+  const out = (state: HealthState, reason: string, since: number | null, fix: CredentialFix | null) => ({ health: { state, reason, since, lastCheck }, fix });
+  const http = (r: CredentialRead): string => [r.http !== null ? `HTTP ${r.http}` : null, r.code ?? null].filter((x) => x !== null).join(" ");
+  const env = i.secretEnv;
+
+  if (!i.enabled) return out("disabled", "switched off", null, { kind: "enable", text: "enable it" });
+  if (i.deployed === false) return out("secret-missing", `${env} not in the chart's modelKeys`, null, { kind: "set-secret", secretEnv: env, text: `add ${env} to the chart's modelKeys` });
+  if (!i.secretSet) {
+    return out("secret-missing", i.holds === "home" ? `${env} not set, or no such directory` : `${env} not set`, null, { kind: "set-secret", secretEnv: env, text: `set ${env}` });
   }
-  return { status: worstLevel(issues), issues };
+  const replace: CredentialFix = { kind: "replace-secret", secretEnv: env, text: `${NEW_SECRET[i.holds]} in ${env}` };
+  if (read?.classification === "auth-failed") return out("auth-failed", `key rejected: ${http(read)}`, read.since ?? null, replace);
+  if (i.lastError?.reason === "auth-failed") return out("auth-failed", "a run paused: auth failed", i.lastError.at, replace);
+  if (read?.classification === "no-access") {
+    return out("no-access", `usage not readable: ${http(read)}`, read.since ?? null, { kind: "replace-secret", secretEnv: env, text: `a key that may read usage in ${env}` });
+  }
+  const holds = [i.holdsOf.scored, i.holdsOf.freeplay].filter((h): h is CredentialHold => h !== undefined);
+  const latest = (hs: readonly CredentialHold[]): number | undefined => {
+    const t = hs.map((h) => h.until).filter((u): u is number => u !== null);
+    return t.length === 0 ? undefined : Math.max(...t);
+  };
+  const wait = (until: number | undefined): CredentialFix => ({ kind: "wait-reset", ...(until !== undefined ? { until } : {}), text: "wait for the window to reset" });
+  const spent = holds.filter((h) => h.code === "usage-spent");
+  if (spent.length > 0) return out("quota-spent", "a usage window is spent", null, wait(latest(spent)));
+  if (read?.classification === "spent") return out("quota-spent", "usage spent, as the provider reports", read.since ?? null, wait(undefined));
+  if (i.lastError?.reason === "quota-exhausted") return out("quota-spent", "a run paused: quota exhausted", i.lastError.at, wait(undefined));
+  if (read?.classification === "overage") return out("overage", "billing the balance past the allowance", read.since ?? null, wait(undefined));
+  if (holds.length > 0) {
+    const classes = (["scored", "freeplay"] as const).filter((c) => i.holdsOf[c] !== undefined);
+    const code = holds.find((h) => h.code !== null)?.code ?? null;
+    const what = code === "spend-budget" ? "today's spend budget is used" : code === "runs-budget" ? "today's runs are used" : code === "usage-threshold" ? "usage at its threshold" : "held by its budget";
+    const perDay = code === "spend-budget" || code === "runs-budget";
+    const until = latest(holds);
+    return out("held", `${what}${perDay ? "" : ` (${classes.join(", ")})`}`, null, {
+      kind: "raise-budget",
+      ...(until !== undefined ? { until } : {}),
+      text: perDay ? "raise its budget, or wait for 00:00 UTC" : "raise its threshold, or wait for the window to reset",
+    });
+  }
+  if (read?.classification === "unread") return out("unread", `usage not read${http(read) !== "" ? `: ${http(read)}` : ""}`, read.since ?? null, null);
+  return out("ok", "", null, null);
+}
+
+/** A window's name by its length: the three a plan states, else hours or days. */
+export function windowName(minutes: number | null): string {
+  if (minutes === null) return "window";
+  if (minutes === 300) return "5h";
+  if (minutes === 7 * 1440) return "week";
+  if (minutes >= 28 * 1440 && minutes <= 31 * 1440) return "month";
+  return minutes % 1440 === 0 ? `${minutes / 1440}d` : `${Math.round(minutes / 60)}h`;
+}
+
+/** The newest reading's windows still in force, as meters; null with no reading. */
+export function credentialWindows(u: SubscriptionUsage | undefined, now: number): CredentialWindow[] | null {
+  if (u === undefined) return null;
+  return u.windows.flatMap((w): CredentialWindow[] => {
+    const resetsAt = windowEndsAt(w, u.observedAt);
+    if (resetsAt !== null && resetsAt <= now) return [];
+    return [{ name: windowName(w.windowMinutes), ...(w.family !== undefined ? { family: w.family } : {}), usedPercent: w.usedPercent, resetsAt, limited: w.usedPercent >= EXHAUSTED_PCT }];
+  });
 }

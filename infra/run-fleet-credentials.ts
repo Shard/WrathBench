@@ -31,7 +31,7 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { credentialCandidates, describeBudget, providerById, type Credential } from "../runner/src/credential-slots";
-import type { CredentialHold } from "../runner/src/credential-health";
+import { credentialHealth, credentialWindows, type CredentialFix, type CredentialHealth, type CredentialHold, type CredentialRead, type CredentialWindow } from "../runner/src/credential-health";
 import { DEFAULT_DRIVER, driverEntry } from "../runner/src/drivers";
 import { utcDay, type RunFact } from "../runner/src/models";
 import { isOpenCodeGoBase } from "../runner/src/platform";
@@ -370,6 +370,20 @@ export class FleetGoUsage {
   observations(): SubscriptionUsage[] {
     return [...this.pollers.values()].flatMap((p) => (p.current !== undefined ? [p.current] : []));
   }
+
+  /**
+   * Each poller's last read as its reader classified it, by credential id: the
+   * status's health input (`credentialStatuses`' `reads`). A poller that does
+   * not keep one (`GoUsagePoller.lastRead`) contributes nothing.
+   */
+  lastReads(): Map<string, CredentialRead> {
+    const out = new Map<string, CredentialRead>();
+    for (const [id, p] of this.pollers) {
+      const r = (p as { lastRead?: CredentialRead }).lastRead;
+      if (r !== undefined) out.set(id, r);
+    }
+    return out;
+  }
 }
 
 /** Write the supervisor's readings beside the runs. Best effort: a failure is no reading for the others, never a stopped tick. */
@@ -412,6 +426,14 @@ export interface CredentialStatus {
   holds?: { scored?: CredentialHold; freeplay?: CredentialHold };
   /** The newest failure a run on it recorded that says the credential itself is the problem (`auth-failed`, `quota-exhausted`), with when. */
   lastError: { reason: string; at: number } | null;
+  /** The provider's newest read of it, where a reader reads it (OpenCode Go's usage endpoint): its health's input. */
+  lastRead?: CredentialRead;
+  /** Its state, why, since when, and the provider's last answer (`credentialHealth`). */
+  health?: CredentialHealth;
+  /** Its newest usage reading's windows in force, as meters; null with no reading. */
+  windows?: CredentialWindow[] | null;
+  /** What makes it well again; null when it is. */
+  fix?: CredentialFix | null;
 }
 
 /** The pauses that indict the credential rather than the model. */
@@ -424,8 +446,17 @@ export function credentialStatuses(o: {
   gate: CredentialGate;
   runs: readonly Pick<RunFact, "credential" | "pause">[];
   env?: Record<string, string | undefined>;
+  /**
+   * The providers' last reads, by credential id (`FleetGoUsage.lastReads()`).
+   * A read is of a secret, so a credential with none of its own takes the
+   * read of another of its provider's naming the same variable (Go's free
+   * side shares the paid side's key).
+   */
+  reads?: ReadonlyMap<string, CredentialRead>;
 }): CredentialStatus[] {
   const env = o.env ?? process.env;
+  const readOf = (c: Credential): CredentialRead | undefined =>
+    o.reads?.get(c.id) ?? o.credentials.filter((x) => x.provider === c.provider && x.secretEnv === c.secretEnv).map((x) => o.reads?.get(x.id)).find((r) => r !== undefined);
   return o.credentials.map((c) => {
     const u = o.gate.usage.get(c.id);
     const used =
@@ -446,25 +477,34 @@ export function credentialStatuses(o: {
       if (lastError === null || f.pause.at > lastError.at) lastError = { reason: f.pause.reason, at: f.pause.at };
     }
     const secret = env[c.secretEnv];
-    const home = providerById(c.provider)?.holds === "home";
+    const holds = providerById(c.provider)?.holds ?? "key";
+    const home = holds === "home";
+    // A home is a path, and a path that does not exist is as unset as an empty one.
+    const secretSet = secret !== undefined && secret.length > 0 && (!home || existsSync(secret));
+    const holdsOf = {
+      ...(scoredHold !== undefined ? { scored: { code: scoredHold.code, until: scoredHold.until } } : {}),
+      ...(freeplayHold !== undefined ? { freeplay: { code: freeplayHold.code, until: freeplayHold.until } } : {}),
+    };
+    const lastRead = readOf(c);
+    const { health, fix } = credentialHealth({ enabled: c.enabled, secretEnv: c.secretEnv, holds, secretSet, holdsOf, lastError, read: lastRead ?? null });
     return {
       id: c.id,
       provider: c.provider,
       billing: c.billing,
       enabled: c.enabled,
       secretEnv: c.secretEnv,
-      // A home is a path, and a path that does not exist is as unset as an empty one.
-      secretSet: secret !== undefined && secret.length > 0 && (!home || existsSync(secret)),
+      secretSet,
       slots: c.slots,
       inUse: o.book.inUse(credentialKey(c.id)),
       budget: describeBudget(c.budget),
       used,
       held: { ...(scored !== undefined ? { scored } : {}), ...(freeplay !== undefined ? { freeplay } : {}) },
-      holds: {
-        ...(scoredHold !== undefined ? { scored: { code: scoredHold.code, until: scoredHold.until } } : {}),
-        ...(freeplayHold !== undefined ? { freeplay: { code: freeplayHold.code, until: freeplayHold.until } } : {}),
-      },
+      holds: holdsOf,
       lastError,
+      ...(lastRead !== undefined ? { lastRead } : {}),
+      health,
+      windows: credentialWindows(u, o.gate.now),
+      fix,
     };
   });
 }
