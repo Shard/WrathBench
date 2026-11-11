@@ -312,7 +312,7 @@ function readRunDb(runsDir: string, runId: string): RunDbReading {
 /**
  * The same questions of a v1 run, off its session record: where it stands is
  * `live.json`, the writer's last reading, which exists so that a map of every
- * session opens one small file each; the gauges it does not carry and the
+ * session opens one small file each, and how fresh that is is its tick; the gauges it does not carry and the
  * turn-ins are the trace's newest samples (`run-reader.ts`); the reflection
  * window is the run row's.
  */
@@ -321,7 +321,10 @@ function readV1Reading(runsDir: string, runId: string, none: RunDbReading): RunD
   try {
     const live = new SessionReader(sessionDirOfRun(dir)).live();
     if (live === null || live.map === null || live.x === null || live.y === null) return none;
-    const ts = live.observed ?? live.ts;
+    // The writer's tick, not the newest trace row: a character standing still
+    // writes no trace row, and is still where its record says, for as long as
+    // the writer beats.
+    const ts = live.ts;
     const samples = readStateSamples(dir, runId);
     const last = samples[samples.length - 1];
     const gauge = (k: string): number | null => (last !== undefined && typeof last[k] === "number" ? (last[k] as number) : null);

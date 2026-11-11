@@ -261,8 +261,13 @@ export interface RunVerdictFields {
   reflectingSince?: number;
 }
 
-/** The meta.json fields a launch's `writeMeta` carries over from the file it replaces. */
-const KEPT_ACROSS_WRITE_META = ["termination", "endedAt", "pauseReason"] as const;
+/**
+ * The meta.json fields only the verdict methods write (`setTermination`,
+ * `repairTermination`, `setPause`, `clearPause`): `writeMeta` takes them from
+ * the file it replaces and never from the meta it is handed, which is often
+ * one read before a verdict moved (a resume's, read before `clearPause`).
+ */
+const VERDICT_FIELDS = ["termination", "endedAt", "pauseReason"] as const;
 
 /**
  * Rewrite meta.json whole and atomically: a temporary file beside it, renamed
@@ -377,20 +382,19 @@ export class Trajectory {
    * an error message — all read meta.json. The record carries the rest of the
    * config without it (`withoutSessionToken`).
    *
-   * The verdict fields meta.json already holds (`termination`, `endedAt`,
-   * `pauseReason`) are carried over unless `meta` states its own, as a 0.5
-   * run's `run` row kept them across a relaunch; an open reflection window is
-   * not, because no window is open at a process boundary (`reflect.ts`: "A
-   * resumed run starts with a fresh gate").
+   * The verdict fields (`VERDICT_FIELDS`) are the file's as it stands, never
+   * `meta`'s, as a 0.5 run's `run` row kept them across a relaunch; an open
+   * reflection window is dropped, because no window is open at a process
+   * boundary (`reflect.ts`: "A resumed run starts with a fresh gate").
    */
   writeMeta(meta: RunMeta): Promise<void> {
     this.runId = meta.runId;
     const before = this.readMetaFile();
+    const given = { ...meta } as RunMeta & RunVerdictFields;
+    for (const k of [...VERDICT_FIELDS, "reflectingSince"] as const) delete given[k];
     const kept: RunVerdictFields = {};
-    for (const k of KEPT_ACROSS_WRITE_META) {
-      if (before?.[k] !== undefined && (meta as RunVerdictFields)[k] === undefined) (kept as Record<string, unknown>)[k] = before[k];
-    }
-    const { reflectingSince: _since, ...next } = { ...meta, ...kept } as RunMeta & RunVerdictFields;
+    for (const k of VERDICT_FIELDS) if (before?.[k] !== undefined) (kept as Record<string, unknown>)[k] = before[k];
+    const next = { ...given, ...kept };
     writeMetaFile(this.dir, JSON.parse(this.scrub(jsonLine(next))) as object);
     this.append({ t: "meta", ...meta, config: withoutSessionToken(meta.config) });
     return SETTLED;

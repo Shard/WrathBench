@@ -208,3 +208,26 @@ describe("v1p1-solo: milestone facts, off the events stream and off the trajecto
     expect(e.leveling!.marks.length - r.leveling!.marks.length).toBe(1);
   });
 });
+
+describe("a first-build v1 run's row, once later builds write its verdicts", () => {
+  test("its run.sqlite's termination stands where meta.json has none; meta.json's verdict wins once written", async () => {
+    const { Database } = await import("bun:sqlite");
+    const { Trajectory } = await import("../src/trajectory");
+    const { readRunRow } = await import("../src/run-reader");
+    const runs = tempDir("record-equivalence-row-");
+    const dir = materialiseV1p1(runs, { sqlite: true });
+    // Ended by its own build: the row in run.sqlite, nothing in meta.json.
+    expect(readRunRow(dir, V1P1_RUN)).toMatchObject({ termination_reason: "episode-limit", termination_detail: "fixture" });
+    // A run of that build that was paused instead, then resumed and paused again by a later one.
+    const db = new Database(join(dir, "run.sqlite"));
+    db.run("UPDATE run SET termination_reason = NULL, ended_at = NULL, pause_reason = 'operator-pause'");
+    db.close();
+    expect(readRunRow(dir, V1P1_RUN)).toMatchObject({ termination_reason: null, pause_reason: null });
+    const t = new Trajectory(dir);
+    expect(await t.setPause(V1P1_RUN, "rate-limited", "429")).toBe(true);
+    expect(readRunRow(dir, V1P1_RUN)).toMatchObject({ termination_reason: null, pause_reason: "rate-limited" });
+    t.setTermination(V1P1_RUN, "manual", "operator");
+    t.close();
+    expect(readRunRow(dir, V1P1_RUN)).toMatchObject({ termination_reason: "manual", pause_reason: null });
+  });
+});

@@ -1285,7 +1285,29 @@ function lastState(db: Database): StateRow | null {
  * cannot hold a file a writer renames into place or appends to.
  */
 function isV1Dir(dir: string): boolean {
-  return !existsSync(join(dir, "run.sqlite")) && existsSync(join(dir, "session", "session.json"));
+  return existsSync(join(dir, "session", "session.json"));
+}
+
+/**
+ * A v1 run's row: meta.json's. A first-build v1 run also has a run.sqlite its
+ * own builds wrote a verdict into; a termination there that meta.json lacks
+ * is taken from it, as runner/src/run-reader.ts does, and only when no live
+ * owner could be writing it.
+ */
+function v1Row(dir: string, runId: string, meta: Record<string, unknown> | null, owned: boolean): RunRow | null {
+  const row = metaRow(meta);
+  if (row === null || row.termination_reason !== null || owned) return row;
+  const db = openDb(dir);
+  if (db === null) return row;
+  try {
+    const old = readRow(db, runId);
+    if (old?.termination_reason == null) return row;
+    return { ...row, termination_reason: old.termination_reason, termination_detail: old.termination_detail, ended_at: old.ended_at, pause_reason: null };
+  } catch {
+    return row;
+  } finally {
+    db.close();
+  }
 }
 
 /** The run row meta.json holds (`RunVerdictFields` in runner/src/trajectory.ts). */
@@ -1597,7 +1619,7 @@ export async function inspectRun(runId: string, opts: Ctx & Window, out: Out): P
   const db = openDb(dir);
   try {
     const v1 = isV1Dir(dir);
-    const row: RunRow | null | undefined = via.store !== null ? via.run : v1 ? metaRow(meta) : owned ? undefined : db === null ? null : readRow(db, runId);
+    const row: RunRow | null | undefined = via.store !== null ? via.run : v1 ? v1Row(dir, runId, meta, owned) : owned ? undefined : db === null ? null : readRow(db, runId);
     const verdict = verdictOf(row, heartbeat, opts.now);
     say("run", `${runId}${dir.includes(`/${ARCHIVE_DIR}/`) ? " (archived)" : ""}`);
     say("verdict", describeVerdict(verdict, meta, opts.now));
@@ -1716,7 +1738,7 @@ export async function inspectLive(opts: Ctx, out: Out): Promise<number> {
       row = rows.get(f.id)!;
       st = states.get(f.id) ?? null;
     } else if (isV1Dir(f.dir)) {
-      row = metaRow(readMeta(f.dir));
+      row = v1Row(f.dir, f.id, readMeta(f.dir), ownedAt(f.hb, opts.now));
       st = traceLatest(join(f.dir, "session"));
     } else if (ownedAt(f.hb, opts.now)) {
       row = undefined;
