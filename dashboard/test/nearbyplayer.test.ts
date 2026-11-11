@@ -1,5 +1,5 @@
 /**
- * The nearby player (`src/lib/nearbyplayer.ts`) over windows the viewer's own
+ * The nearby player (`@wrathbench/inspector/views/nearbyplayer`) over windows the viewer's own
  * codec encodes (`@wrathbench/inspector/codec/nearby`): spline sampling at the map's playhead,
  * one dot per guid across characters, the packet-field classes, label
  * culling, the redraw throttle and the zoom gates. Units, names and guids are
@@ -8,9 +8,9 @@
 import { describe, expect, test } from "bun:test";
 import { encodeNearby, type NearbyRingRow, type NearbyRingUnit } from "@wrathbench/inspector/codec/nearby";
 import { PUBLIC_NEARBY_SPAN_MS } from "@viewer/public-keys";
-import { cullLabels, classOf, createNearbyStore, nearbyFrameDue, placeLabel, questMark, NEARBY_FRAME_MS, NEARBY_SLACK_MS } from "../src/lib/nearbyplayer";
+import { cullLabels, classOf, createNearbyStore, nearbyFrameDue, placeLabel, questMark, NEARBY_FRAME_MS, NEARBY_SLACK_MS } from "@wrathbench/inspector/views/nearbyplayer";
 import { NEARBY_MIN_PX_PER_YD, NEARBY_NAME_PX_PER_YD, nearbyNamesShown, nearbyShown, pxPerYard } from "../src/lib/mapview";
-import { targetReading } from "../src/lib/unitframe";
+import { targetReading } from "@wrathbench/inspector/views/unitframe";
 import { createLiveClock, horizonOf, liveCadence } from "../src/lib/traceplayer";
 import { createSnapshotClient } from "../src/api/snapshot-client";
 

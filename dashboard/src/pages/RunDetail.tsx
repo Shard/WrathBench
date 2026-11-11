@@ -57,8 +57,7 @@ import { ChartCard } from "../components/ChartCard";
 import { CharacterPlot } from "../components/CharacterChart";
 import { AttemptStrip, CharacterTotalsCard } from "../components/CharacterCards";
 import { Coins, QuestCount } from "../components/CharacterFacts";
-import { XpBar } from "../components/UnitFrame";
-import { InventoryPanel } from "../components/Inventory";
+import { EventFeed, InventoryPanel, XpBar, createInspectorClient, type SessionSummary } from "@wrathbench/inspector/views";
 import { ScratchpadPanel } from "../components/Scratchpad";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
@@ -200,6 +199,21 @@ export default function RunDetail() {
    * failure never a banner — the pad is one panel, not the page.
    */
   const [pad, setPad] = createSignal<string | null>(null);
+
+  /*
+   * The run's session record as the inspector reads it (`/api/inspector`, the
+   * viewer's private mount): a v1 run's events feed, embedded from the
+   * inspector's views. The public build has no such mount and draws none, and
+   * a 0.5 run, which has no `session.json`, draws none either.
+   */
+  const inspector = SNAPSHOT_MODE ? null : createInspectorClient("/api/inspector");
+  const [session, setSession] = createSignal<SessionSummary["session"]>(null);
+  if (inspector !== null) {
+    void inspector
+      .session(params.id)
+      .then((s) => setSession(s.session))
+      .catch(() => setSession(null));
+  }
   const loadPad = (): void => {
     void api
       .scratchpad(params.id)
@@ -997,6 +1011,15 @@ export default function RunDetail() {
 
                   <h2 class="section">milestones</h2>
                   <Milestones detail={detail()} />
+
+                  <Show when={inspector !== null && session()}>
+                    {(sess) => (
+                      <>
+                        <h2 class="section">session events</h2>
+                        <EventFeed client={inspector!} id={params.id} live={run().live} end={sess().ended} />
+                      </>
+                    )}
+                  </Show>
 
                   <h2 class="section">comparability</h2>
                   <Tuple run={run()} />

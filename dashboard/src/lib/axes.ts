@@ -20,7 +20,7 @@
  */
 
 import type { ResultRun } from "@viewer/api-types";
-import { XP_FOR_LEVEL } from "./unitframe";
+import { XP_FOR_LEVEL } from "@wrathbench/inspector/views/unitframe";
 
 /* ---------------------------------------------------------------- readings */
 

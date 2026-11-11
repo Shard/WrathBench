@@ -18,11 +18,11 @@ import { createServer } from "vite";
 import solid from "vite-plugin-solid";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { QuestRow } from "../src/lib/questlog";
+import type { QuestRow } from "@wrathbench/inspector/views/questlog";
 
 const dashboardRoot = fileURLToPath(new URL("..", import.meta.url));
 
-type InventoryModule = typeof import("../src/components/Inventory");
+type InventoryModule = typeof import("@wrathbench/inspector/views");
 
 async function loadInventory(): Promise<InventoryModule> {
   const server = await createServer({
@@ -34,7 +34,7 @@ async function loadInventory(): Promise<InventoryModule> {
     server: { middlewareMode: true },
   });
   try {
-    return (await server.ssrLoadModule("/src/components/Inventory.tsx")) as InventoryModule;
+    return (await server.ssrLoadModule("@wrathbench/inspector/views")) as InventoryModule;
   } finally {
     await server.close();
   }

@@ -15,10 +15,10 @@ import { describe, expect, test } from "bun:test";
 import { CONTEXT_MS, SEG_MS, encodeSegment, type TraceDictLookup, type TraceRow } from "@wrathbench/inspector/codec/trace";
 import type { ItemSample, TraceItemName, TraceQuestReq, TraceSegment } from "../../runner/viewer/api-types";
 import { projectTraceSegment } from "../../runner/viewer/public-projection";
-import { carried, carriedCount, paperdoll, sheetItems, sheetReading, type InvItem } from "../src/lib/inventory";
+import { carried, carriedCount, paperdoll, sheetItems, sheetReading, type InvItem } from "@wrathbench/inspector/views/inventory";
 import { TRACE_MAX_SPEED, traceDrives } from "../src/lib/playback";
 import { createTraceStore } from "../src/lib/traceplayer";
-import { itemUrl } from "../src/lib/wowhead";
+import { itemUrl } from "@wrathbench/inspector/views/wowhead";
 
 const RUN = "run-sheet";
 const W = 1_760_000_100_000 - (1_760_000_100_000 % SEG_MS);

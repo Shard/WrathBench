@@ -477,7 +477,7 @@ export function pxPerYard(scale: number): number {
 }
 
 /*
- * The nearby layer (`lib/nearbyplayer.ts`): the units around a live character
+ * The nearby layer (`@wrathbench/inspector/views/nearbyplayer`): the units around a live character
  * draw only once the map is in close enough to tell one from another — about
  * a pixel a yard, where a character's ~100 yd of view spans a few hundred
  * pixels — and their names show unhovered only further in still. The map

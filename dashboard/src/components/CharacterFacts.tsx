@@ -19,8 +19,8 @@
 
 import { For, Show } from "solid-js";
 import { fmtMoney, moneyCoins } from "../lib/format";
-import { XpBar } from "./UnitFrame";
-import { xpCellTitle } from "../lib/unitframe";
+import { XpBar } from "@wrathbench/inspector/views";
+import { xpCellTitle } from "@wrathbench/inspector/views/unitframe";
 
 /**
  * The level, and how far into it the run got — the site's one xp reading.

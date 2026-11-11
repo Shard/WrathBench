@@ -122,6 +122,21 @@ describe("the shared pins", () => {
   });
 });
 
+describe("the UI's pins", () => {
+  test("the dashboard and the inspector's views run one Solid and one Vite", () => {
+    const root = tree({
+      "dashboard/package.json": pkg({ name: "@wrathbench/dashboard", dependencies: { "solid-js": "1.9.19" }, devDependencies: { vite: "8.3.7" } }),
+      "wrath-mcp/inspector/package.json": pkg({
+        name: "@wrathbench/inspector",
+        dependencies: { "@wrathbench/mcp": "workspace:*", "solid-js": "1.9.20" },
+        devDependencies: { vite: "8.3.7" },
+        exports: { ".": "./src/index.ts" },
+      }),
+    });
+    expect(checkStackPins(root)).toEqual(["solid-js is pinned differently: dashboard/package.json 1.9.19, wrath-mcp/inspector/package.json 1.9.20"]);
+  });
+});
+
 describe("the wrath-mcp pin record", () => {
   test("infra/PINS.md names the commit the submodule pins", () => {
     const root = resolve(import.meta.dir, "..");

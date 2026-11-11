@@ -120,6 +120,13 @@ function moveRowOf(r: Record<string, unknown>): CallRow {
   } as unknown as CallRow;
 }
 
+/**
+ * The trace's windows per database, while its size and mtime stand: every
+ * read of a window lists the windows first, and a 0.5 run is finished, so the
+ * seek per window is paid once per file rather than once per request.
+ */
+const windowsMemo = new Map<string, { stamp: string; windows: number[] }>();
+
 class Legacy05Session implements SessionHandle {
   private readonly path: string;
 
@@ -172,6 +179,24 @@ class Legacy05Session implements SessionHandle {
 
   /** Every five-minute window that has a trace row, one seek each, whatever the run's row count. */
   private traceWindows(): number[] {
+    let stamp: string | null = null;
+    try {
+      const st = runDbStat(join(this.runsDir, this.id));
+      stamp = st === null ? null : `${st.size}:${st.mtimeMs}`;
+    } catch {
+      stamp = null;
+    }
+    const hit = stamp === null ? undefined : windowsMemo.get(this.path);
+    if (hit !== undefined && hit.stamp === stamp) return hit.windows;
+    const windows = this.seekWindows();
+    if (stamp !== null) {
+      windowsMemo.set(this.path, { stamp, windows });
+      if (windowsMemo.size > 4096) windowsMemo.delete(windowsMemo.keys().next().value as string);
+    }
+    return windows;
+  }
+
+  private seekWindows(): number[] {
     return this.withDb<number[]>([], (db) => {
       if (!hasTraceTable(db)) return [];
       const next = db.query(`SELECT ts FROM trace WHERE run_id = ? AND ts >= ? ORDER BY ts LIMIT 1`);
@@ -226,9 +251,10 @@ class Legacy05Session implements SessionHandle {
         if (!hasTraceTable(db)) return segments.map(() => []);
         const only = kinds === undefined ? "" : ` AND kind IN (${kinds.map(() => "?").join(", ")})`;
         const q = db.query(`SELECT ts, kind, map, x, y, z, o, data FROM trace WHERE run_id = ? AND ts >= ? AND ts < ?${only} ORDER BY ts, rowid`);
+        // The whole dictionary once per read, at the first window's start: every window carries it.
+        const dict = kinds === undefined ? dictRowOf(db, this.id, segments[0]!.t0) : null;
         return segments.map((seg) => {
           const out: TraceRow[] = [];
-          const dict = kinds === undefined ? dictRowOf(db, this.id, seg.t0) : null;
           if (dict !== null) out.push(dict);
           for (const r of q.all(this.id, seg.t0, seg.t1, ...(kinds ?? [])) as Record<string, unknown>[]) {
             if (typeof r["ts"] !== "number" || typeof r["kind"] !== "string") continue;

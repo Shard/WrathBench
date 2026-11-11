@@ -34,7 +34,7 @@ import {
 } from "../src/lib/traceplayer";
 import { IDLE_GAP_MS, IDLE_PLAY_MS, SPEEDS, advanceCursor, idleSpans, nextSpeed } from "../src/lib/playback";
 import { classifySegments, positionsAt, trackPoseAt } from "../src/lib/replay";
-import { auraViews, gaugesOf, healthReading, targetReading, unitFlags } from "../src/lib/unitframe";
+import { auraViews, gaugesOf, healthReading, targetReading, unitFlags } from "@wrathbench/inspector/views/unitframe";
 import { projectTraceSegment } from "../../runner/viewer/public-projection";
 
 const RUN = "run-a";

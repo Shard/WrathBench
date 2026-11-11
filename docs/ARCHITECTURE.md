@@ -24,7 +24,7 @@ flowchart TB
     end
 
     subgraph view["Reading results"]
-        viewer["Viewer API<br/>runner/viewer: /api,<br/>derivations, ladder"]
+        viewer["Viewer API<br/>runner/viewer: /api,<br/>derivations, ladder;<br/>the inspector's API mounted"]
         dashboard["Dashboard SPA"]
     end
 
@@ -47,7 +47,7 @@ flowchart TB
     session -->|"tails"| collector
     collector --> clickhouse
     clickhouse -->|"listings"| viewer
-    records -->|"live tail, session source"| viewer
+    records -->|"live tail; sessions via<br/>the inspector's source"| viewer
     viewer -->|"/api"| dashboard
     viewer -->|"in-process"| publisher
     publisher -->|"projected JSON"| bucket
@@ -70,7 +70,8 @@ downstream of those files is derived.
 Two layers, deliberately separable. The **stack** is
 [wrath-mcp](https://github.com/Shard/wrath-mcp): the AzerothCore module, the
 SDK and the MCP surface (snippet sandbox, MCP server, core tools, the session
-record), a client-equivalent agent surface over a stock AzerothCore. It
+record), a client-equivalent agent surface over a stock AzerothCore, and
+wrath-inspector, which reads the session record back. It
 records what its own sessions did and knows nothing of what drove them: the
 session record (the trace and character sheet, game events, tool calls and
 their results) is the stack's, and it never learns a run id, a turn number, a
@@ -91,18 +92,22 @@ takes from the stack and how.
 
 **How it is consumed.**
 
-- One submodule, `wrath-mcp/`, pins the module, the SDK and the MCP stack
-  together; `infra/PINS.md` records the pin and the rules for moving it. The
-  worldserver image compiles `wrath-mcp/module/` into the pinned AzerothCore
-  tree ("infra/", below), and `wrath-mcp/sdk` and `wrath-mcp/mcp` are
-  workspaces of this repository that the runner imports by package name
-  (`@wrathbench/sdk`, `@wrathbench/mcp`) and in no other way.
+- One submodule, `wrath-mcp/`, pins the module, the SDK, the MCP stack and
+  the inspector together; `infra/PINS.md` records the pin and the rules for
+  moving it. The worldserver image compiles `wrath-mcp/module/` into the
+  pinned AzerothCore tree ("infra/", below), and `wrath-mcp/sdk`,
+  `wrath-mcp/mcp` and `wrath-mcp/inspector` are workspaces of this repository
+  that the runner, the viewer and the dashboard import by package name
+  (`@wrathbench/sdk`, `@wrathbench/mcp`, `@wrathbench/inspector`) and in no
+  other way.
 - The line is enforced on both sides. The stack's `wrath-mcp/scripts/boundary.ts` fails
   when anything in it imports outside itself but a declared dependency;
   `infra/stack-boundary.ts` (`bun run boundary`, also a test and a CI step
   here) fails when anything outside it reaches into stack sources by path,
-  when the shared pins disagree, or when the AzerothCore commit wrath-mcp's
-  README is tested against is not the one `deps/azerothcore` pins.
+  when the shared pins disagree (the toolchain, zod, and the UI's Solid and
+  Vite, which the dashboard and the inspector's views share), or when the
+  AzerothCore commit wrath-mcp's README is tested against is not the one
+  `deps/azerothcore` pins.
 - The model's SDK reference is the stack's: `wrath-mcp/sdk/API.md`, generated
   from the SDK source. The sandbox exposes its path as `API_MD_PATH` and the
   system prompt tells the model to read it from a snippet, so a pin that
@@ -141,6 +146,20 @@ takes from the stack and how.
   so the evidence is written in place as it happens. The deployment's own
   characters, which the stack's write gate may name in a party row, are the
   ones the other runs' records name; any other player is never written.
+- **Reading it back** (`@wrathbench/inspector`): the viewer reads every
+  session through the inspector's source interface. `runner/viewer/runs-source.ts`
+  implements it over the runs directory: a v1 run is a session under its run
+  id, read with the inspector's store reader, and a 0.5 run is presented
+  through `legacy05-source.ts` as the v1 record's rows. The inspector's
+  readout makes the packed trace and nearby windows, the movement intentions
+  and the party chat the viewer's routes serve, so its codecs are the ones
+  the public site publishes. Its API is mounted at `/api/inspector` on a
+  private viewer, and the dashboard embeds its views: the unit frame,
+  inventory and quest log on the map, the run page and the character page,
+  and a v1 run's session events on the run page. What stays here is the
+  benchmark's: the model's side, scoring, the ladder, campaigns, the fleet
+  pages, the public projection and publisher, the map's composition (models,
+  replay, parties) and the minimap and its tooling.
 
 **Versions, as built.** The SDK has its own version (docs/METHODOLOGY.md,
 "Fixed harness, frozen per version"), and `@wrathbench/mcp` carries the same
@@ -242,7 +261,8 @@ one line: the Bun process owns everything that needs the filesystem,
 the SPA owns everything that is UI.
 
 - `runner/viewer/` serves a read-only JSON API under `/api`, an SSE tail per
-  run, minimap tiles from `data/minimap/` (the native tiles, the
+  run, the inspector's API at `/api/inspector` (the session record unprojected,
+  so a public handle withholds it whole), minimap tiles from `data/minimap/` (the native tiles, the
   downsampled levels baked from them, and the painted world-map art baked
   onto the same grid, each served from a smaller transcoded copy of the
   lossless masters), and the built SPA as static files. Every database is
@@ -270,9 +290,10 @@ the SPA owns everything that is UI.
   map at continent scale, and the minimap is the ground a character walks on
   up close. Where the art has nothing, the minimap shows at full strength
   (`minimap/README.md`, `dashboard/src/lib/mapview.ts`). It imports modules from the viewer rather than copying them, so
-  drift between the two sides is a compile error. It is the only place in the
-  repository with a dependency graph; the harness itself still runs with no
-  build step. Without a build on disk there is no fallback UI.
+  drift between the two sides is a compile error, and the session-side views
+  and codecs from the inspector (`@wrathbench/inspector/views`, `…/codec/*`).
+  It and the inspector are the only places with a UI dependency graph, pinned
+  alike; the harness itself still runs with no build step. Without a build on disk there is no fallback UI.
 - **A resolved model id is shown only where it differs.** A run is launched
   with the string the roster named, which under the claude-code harness is
   usually an alias the CLI resolves minutes later to a real id; the resolved id
