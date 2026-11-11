@@ -322,8 +322,9 @@ the fleet sidesteps that collision.
 ## The fleet
 
 The config store is the whole answer to "what is running right now" —
-`docs/RUNBOOK.md`, "Where the config lives"; the viewer's `/config` page
-is where it is read and edited, and `infra/fleet.example.json` is the shape.
+`docs/RUNBOOK.md`, "Where the config lives"; `bun wb config` and, with the
+chart's `admin.enabled`, the viewer's `/config` page are where it is read and
+edited, and `infra/fleet.example.json` is the shape.
 Its unit of work is the **job**: a roster entry (or a rotation of
 several), an episode tier, a repeat count, run as one `run-roster` process on
 one game **account**, and every run on a provider **credential** with a free

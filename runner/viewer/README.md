@@ -55,6 +55,20 @@ is created empty, and every page serves its labelled empty state.
   `ingress.extraHosts`, so changing those values is the whole of a rename; a
   viewer reached by any other name — another alias, a hand-run process behind
   your own proxy — needs that name added here, or its pages answer 421.
+- `WRATHBENCH_GROUPS` lists the deployment's groups that are on
+  (`groups.ts`: `runner`, `evals`, `viewer`, comma-separated); unset is all
+  three. An off group's routes answer the 404 any unknown path gets: runner's
+  `/api/fleet` and `/api/models`, evals' `/api/ladder`, `/api/campaigns` and
+  `/api/episodes`. `/api/info` names the groups when one is off, the public
+  projection keeps them, and the dashboard drops those pages. A viewer told the
+  viewer group is off refuses to start.
+- `WRATHBENCH_ADMIN=1` is the admin switch: it mounts the config API and
+  `/api/admin` ("Endpoints"), the only routes that write or say anything about
+  credentials. Unset, this process has no write route at all. Refused together
+  with `WRATHBENCH_VIEWER_PUBLIC=1`. With it, `WRATHBENCH_MODEL_KEYS` (the env
+  var names the model pods carry), `WRATHBENCH_PUBLISHER` and the publisher's
+  non-secret settings, and `WRATHBENCH_PUBLISH_STATE` feed `/api/admin`; the
+  chart sets them.
 - `CLICKHOUSE_URL`, with `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` /
   `CLICKHOUSE_DATABASE`, point the listing routes at the derived store
   (`clickhouse.ts`; what it is and how it is filled are docs/ARCHITECTURE.md
@@ -697,8 +711,8 @@ either shape and none of the slim record's own.
 ## Endpoints
 
 Everything under `/api` is read-only with one exception: the config API below,
-which is the only write surface the viewer has and is not mounted at all in
-public mode. Everywhere else no route accepts a body, every database is opened
+which is the only write surface the viewer has and is mounted only with the
+admin switch on, never in public mode. Everywhere else no route accepts a body, every database is opened
 readonly, and the runs directory is only ever listed and read. The routes and
 their response shapes are `api.ts` and `api-types.ts`; anything that is not a
 route is the built SPA, or the not-built notice when there is none.
@@ -716,14 +730,14 @@ as it is, unprojected, so a public handle withholds every path of it with a
 403, as it does the raw lines and the run's tail. The run page's session
 events read it.
 
-### The config API (operator-only)
+### The config API (the admin switch)
 
 The fleet config is the sqlite store `docs/RUNBOOK.md`, "Where the config
 lives", describes (`runner/src/config-store.ts`); an edit here is live one tick
 later with no restart. The UI over these endpoints is the dashboard's `/config`
-page (`dashboard/src/pages/Config.tsx`). Its nav link appears only on a private build
-served by a non-public viewer, which is the same condition these routes are
-mounted under.
+page (`dashboard/src/pages/Config.tsx`, with its sections in `ConfigAdmin.tsx`).
+Its nav link appears only on a private build served by a viewer with the admin
+switch on, which is the same condition these routes are mounted under.
 
 A *key* is a row: `roster/<name>`, `campaigns/<name>`, `queue/<n>`, or one of
 the singletons `_notes`, `preflight`, `accounts`, `policy`. Published campaign
@@ -758,12 +772,12 @@ with — so a rejected edit is a 400 carrying that refusal word for word, and
 nothing the app accepts can be rejected at the next tick. `x-wrathbench-actor`
 and `x-wrathbench-note` name who changed what and why; the actor defaults to
 `viewer`. The viewer has no authentication of its own (loopback, or a trusted
-LAN behind `WRATHBENCH_VIEWER_LAN`), so "not public" is the whole of the
-authorisation — which is why a public handle answers 404 rather than the 403
-it gives for a withheld read route.
+LAN behind `WRATHBENCH_VIEWER_LAN`), so the admin switch on a handle that is
+not public is the whole of the authorisation — which is why a handle without
+it answers 404 rather than the 403 it gives for a withheld read route.
 
 What stops a web page on another site from writing through a LAN browser is
-`write-guard.ts`, in front of every route on a private handle: any method but
+`write-guard.ts`, in front of every route on a handle that is not public, admin switch or not: any method but
 GET, HEAD and OPTIONS must be `Content-Type: application/json` (a cross-site
 page can only send that after a CORS preflight, which the viewer never
 grants), must not carry `Sec-Fetch-Site: cross-site`, and, when it carries an
@@ -788,6 +802,25 @@ version moved under it. And **PATCH cannot remove a key** — it is a shallow
 merge, and JSON has no `undefined` — while an absent `routing`, `idle` or
 `billing` is a distinct, deliberate state; so the page PATCHes a set and PUTs
 the whole entry with the key omitted for a clear.
+
+### The admin status route (the admin switch)
+
+`GET /api/admin` (`admin-api.ts`) is what the admin pages show beside the
+config they edit, read-only: any other method is a 405 that points at the
+config API. It carries the groups; every credential the store holds, joined
+by id to the supervisor's status off `fleet-state.json` (whether its variable
+is set, sessions on its slots, what its budget has used, holds, its last
+indicting failure); the providers a credential may name; and how publishing is
+set, with the publisher's last flip, held passes and secret-scan withholds off
+its state file.
+
+It says nothing a viewer cannot know. A secret's value never reaches the
+viewer: the store holds the env var's name, and only the supervisor's
+environment holds the value, so "set" is the supervisor's word and is unknown
+(null) while no supervisor is up, or for a credential renamed since its last
+tick. "In the chart" is `WRATHBENCH_MODEL_KEYS`. Publishing is the chart's
+non-secret settings; the target is named only where the chart sets it as
+plain values, never from the Secret.
 
 ### What it will not serve
 

@@ -30,6 +30,8 @@ stack instead, where a command has a compose form.
 | run a probe campaign | "Probe campaigns", "Run pods" |
 | launch one episode by hand | "Ad-hoc launches", "The scripted reference run" |
 | manage provider credentials, their slots and their budgets | "Credentials" |
+| switch the runner, evals or viewer group off | "Groups" |
+| edit the fleet from the browser | "The admin interface" |
 | back up, move or restore a character | "Backing up and moving a character" |
 | operate the public site | "Public dashboard" |
 
@@ -194,8 +196,9 @@ the store to a document for reading or diffing, never for committing.
   tick, and `--status` leads with the `config REJECTED` banner. A transient
   read failure never reads as "every job vanished".
 
-Edit it from the **viewer's `/config` page**, which is operator-only: its nav
-link and its API exist only on the private build, never on the public one.
+Edit it from the **viewer's `/config` page**, the admin interface ("The admin
+interface"): it and its API exist only on a viewer with the admin switch on,
+which the chart leaves off (`admin.enabled`), and never on the public build.
 The viewer has no login; it answers only to its own names, `localhost` and IP
 addresses (`runner/viewer/README.md`, "Host allowlist"). On the cluster its names are the chart's
 `viewer.ingress.host` and `extraHosts`; elsewhere they are
@@ -222,7 +225,7 @@ same operations over HTTP (`runner/viewer/README.md`).
 
 ### Steer it
 
-Edit the config, on the `/config` page or with the CLI. Nothing to restart.
+Edit the config, on the `/config` page (with the admin switch on) or with the CLI. Nothing to restart.
 The unit you steer is the **job**: a roster entry (or a rotation of several),
 an episode and a repeat count, on one account — pinned to it when the job
 names an `account`, otherwise on whichever pool account is free, and on the
@@ -1354,6 +1357,70 @@ probe and party accounts.
 Server identity is `/health`'s `build` and `startedAtMs` (`serverIdentity`,
 `infra/run-fleet-plan.ts`), so it changes on every worldserver boot.
 
+### Groups
+
+A deployment is three groups, each on unless switched off (chart
+`groups.<name>.enabled`; `runner/viewer/groups.ts`):
+
+- **runner**: the fleet supervisor, its run pods, the runner pod and the
+  codex home. Off, nothing launches a run.
+- **evals**: scored episodes, campaigns, the ladder and comparability. It
+  has no workload of its own. Off, the supervisor launches no scored or
+  probing episode: every campaign and every e90, e360 or probing job reads as
+  disabled (each drains at its boundary, as a disabled job does), and an
+  `idle: unlimited` entry gets its freeplay session whether or not it owes a
+  counted run. What is counted does not change.
+- **viewer**: the viewer, the publisher, and ClickHouse with its collector.
+
+A group that is off is absent, not hidden: its workloads are not rendered,
+whatever their own `enabled` says, and the pods that remain are told through
+`WRATHBENCH_GROUPS` (the groups that are on, comma-separated; rendered only
+when one is off). The viewer then has none of that group's pages or routes
+(runner: `/fleet`, `/models`, `/api/fleet`, `/api/models`; evals: `/ladder`,
+`/campaigns`, `/about`, `/api/ladder`, `/api/campaigns`, `/api/episodes`),
+and the publisher none of its objects (evals: the ladders, `campaigns.json`,
+`episodes.json` and the social card; runner: `models.json` and the fleet in
+`live.json`). A viewer-only deployment reads the sessions its own agents
+produced. Groups are deployment config, so a change is a values commit and a
+rollout, not a store write. The world itself (worldserver, authserver,
+database) is in no group.
+
+### The admin interface
+
+The `/config` page and every write route the viewer has. Off by default
+(chart `admin.enabled`; `WRATHBENCH_ADMIN=1` for a hand-run viewer), so a
+deployment that does not turn it on has no write route at all; the chart
+refuses it with the viewer off, and `serve.ts` refuses it together with
+`WRATHBENCH_VIEWER_PUBLIC=1`. It is private only, like the viewer: no login,
+reached on the LAN by the viewer's own names ("Where the config lives").
+
+It is one more client of the config store, beside `bun wb config`: every
+write goes through `/api/config` and `parseFleet`, is refused with the
+supervisor's own sentence, and lands in `config_audit` with the actor and
+note the page requires. Beside the roster and the drafts it edits:
+
+- **credentials**: add one (provider, the env var NAME its secret is in,
+  slots, billing, a budget), change its slots, enable or disable it, remove
+  it. Its status is the supervisor's: whether the variable is set in its
+  environment (unknown while no supervisor is up), slots in use, what the
+  budget has used, holds and the last failure that indicts it. A variable
+  not in the chart's `modelKeys` is flagged, because no model pod carries it.
+- **freeplay agents**: an entry's `idle: unlimited` on or off, which plays or
+  pauses its durable character ("Freeplay characters are durable").
+- **campaigns**: enable, disable or remove one, or add one from a published
+  definition with its assignments. Publishing a definition stays the CLI's
+  ("Probe campaigns").
+- **the queue**: enable, disable or remove a job, or add one.
+- **deployment**: the groups and how publishing is set, read-only, with the
+  chart key on each row.
+
+New credentials, campaigns and jobs are written disabled. A secret's value is
+never read, shown or written from the browser: the store holds names, and
+values are the deployment's Secret ("Secrets"). The status comes from
+`GET /api/admin` (`runner/viewer/README.md`), which the chart feeds with the
+`modelKeys` names and, when there is a publisher, its non-secret settings and
+its state file, mounted read-only.
+
 ### Changing the config shape
 
 The new shape under the old code is the one thing that must not happen, and
@@ -2309,7 +2376,8 @@ so a dirty tree stamps `-dirty`.
 ## Public dashboard
 
 The public site is **push-based**: a publisher on the lab renders the viewer's
-own API to JSON on a timer and PUTs it to an R2 bucket, and the SPA is built a
+own API to JSON on a timer and PUTs it to a bucket (R2 here; any S3-compatible
+one, "Where it publishes, and how"), and the SPA is built a
 second time to read that bucket instead of `/api`. No public request ever
 reaches the lab. `docs/PUBLIC-DASHBOARD.md` is the design, the rejected
 alternatives and what the site may carry; `infra/cloudflare/README.md` is how
@@ -2324,7 +2392,7 @@ viewer, the module or the MCP bridge, and never a tunnel to one.
 `WRATHBENCH_VIEWER_PUBLIC=1` exists so the snapshot renderer can call the
 handle in-process; it is not an exposure plan.
 
-The publisher's R2 key pair (`S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) lives
+The publisher's key pair (`S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) lives
 in the `wrathbench-env` cluster secret, and in `.env` for a hand-run pass or the
 tile upload; the deploy token (`WRATHBENCH_CF_DEPLOY_TOKEN`) lives in `.env`
 alone. Neither can do the other's job.
@@ -2353,12 +2421,47 @@ variables, and they must stay in agreement:
 | `WRATHBENCH_PUBLISH_INTERVAL_MS` | `60000` in the script; the chart and compose set `300000` | `--loop` cadence. Five minutes is a cost choice against R2's class-A free tier, not a freshness one; the harness's own floor is 30–60s, so a faster push would buy little |
 | `WRATHBENCH_PUBLISH_BATCH` | `8` | runs projected before the pass uploads them and drops the bodies. The pass's memory dial: measured peak RSS over a 1,016-run tree is 1.08 GB at 25, 0.78 GB at 8 and 0.59 GB at 1. Eight matches the per-run read pool's width |
 | `WRATHBENCH_PUBLISH_FULL_RENDER_MS` | `21600000` (6 h) | the longest a cold run goes without being rendered in full. A pass skips a finished run whose inputs have not moved (docs/PUBLIC-DASHBOARD.md, "The publisher (lab side)"), and this bounds how stale anything the skip cannot see leaves its objects. `0` renders every run every pass |
-| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | the publisher's R2 key pair | `.env`, never argv |
-| `S3_BUCKET` | `wrathbench-public` | |
-| `S3_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` | the account's R2 S3 endpoint — the S3 API, not a public hostname |
+| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | the publisher's key pair | `.env`, never argv |
+| `S3_BUCKET` | `wrathbench-public` | the Secret's, or the chart's `publisher.target.bucket` |
+| `S3_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` | the bucket's S3 API endpoint, not a public hostname: the Secret's, or `publisher.target.endpoint`. Unset is AWS's, from the region |
+| `S3_REGION` | unset (Bun's `us-east-1`) | `publisher.target.region`; R2 takes `auto` |
+| `WRATHBENCH_PUBLISH_VIRTUAL_HOSTED` | unset | `1` for an endpoint that names the bucket in its hostname (`publisher.target.virtualHostedStyle`) |
+| `WRATHBENCH_PUBLISH_DELAY_MS` | `0` | how far the public view trails live play (`publisher.delayMs`) |
+| `WRATHBENCH_PUBLISH_HISTORY` | unset | `0` publishes only the current view (`publisher.history: false`) |
 
-The four `S3_*` names are `Bun.S3Client`'s own, which is why they are not
-spelled `WRATHBENCH_*`.
+The `S3_*` names are `Bun.S3Client`'s own, which is why they are not
+spelled `WRATHBENCH_*`; `infra/publish-settings.ts` reads all of these.
+
+### Where it publishes, and how
+
+Deployment config, in the chart's `publisher` block; every default is the
+publisher as it was.
+
+- **Target**: any S3-compatible bucket: R2, MinIO, Spaces or AWS. The key pair
+  is always the Secret's. The endpoint and bucket are too unless
+  `publisher.target` sets them, where they are plain values, since neither is
+  a secret. With `networkPolicy` on, the publisher reaches only
+  `networkPolicy.internet`, so a bucket on the LAN needs a rule of its own.
+- **Delay** (`publisher.delayMs`): the public view trails live play. A pass's
+  content-addressed objects go up at once, named by nothing yet; the keys a
+  reader can reach without the manifest (`live.json`, `nearby.json`, the
+  manifest and the trace windows) are held in the state file's `held` and
+  written once the pass is that old, with its flip and prune recorded then.
+  Nothing a held pass names is pruned before it is shown, and the social
+  card waits with its pass. The public map is unaffected: its playhead is set
+  from each snapshot's `generatedAt`, which is the render's. `live.json`
+  carries the delay (`delayMs`, only when there is one), so the shell's
+  staleness warning waits that much longer. The cost is a
+  state file that carries the held passes' mutable bodies, and a site the
+  delay plus one interval behind. Turning the delay off writes what is held,
+  oldest first, before the next pass.
+- **History** (`publisher.history`): `false` publishes only the current view:
+  the runs that have not ended (live, or paused and coming back) and the
+  aggregates over them. A run that ends is withheld and withdrawn like a run
+  that is never published, so its objects leave the bucket. Fewer objects
+  change a pass, which is what a bucket's writes are billed on.
+- **Off**: `publisher.enabled: false`, or the viewer group off. Nothing is
+  rendered, and nothing already in the bucket is touched.
 
 Then read the bucket back before trusting the loop with it: `bun wb site
 verify` (`infra/publish-accept.ts`) walks the whole generation, and `--base
