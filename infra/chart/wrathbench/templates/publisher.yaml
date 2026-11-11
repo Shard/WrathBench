@@ -2,7 +2,7 @@
 {{/*
 The public dashboard's publisher (infra/publish-dashboard.ts): renders the
 viewer's own API to JSON in-process, applies the public projection, and PUTs
-what changed to the R2 bucket.
+what changed to its bucket: any S3-compatible one (values.yaml "publisher").
 
 Only OUTBOUND traffic exists here. Nothing listens, no Service, no Ingress, and
 no public request ever reaches the lab — which is what lets the public
@@ -84,6 +84,7 @@ spec:
             # are Bun.S3Client's own variable names. This pod holds those four
             # and no model key at all.
             {{- include "wrathbench.publisherSecretEnv" . | nindent 12 }}
+            {{- with include "wrathbench.publishSettingsEnv" . | trim }}{{ . | nindent 12 }}{{ end }}
           resources: {{ toYaml .Values.publisher.resources | nindent 12 }}
           volumeMounts:
             # Writable, and nothing here writes run data. A live run's

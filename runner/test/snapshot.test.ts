@@ -716,6 +716,28 @@ describe("renderSnapshot", () => {
   });
 });
 
+describe("without the history", () => {
+  test("only the runs that have not ended are published, and an ended one is withdrawn", async () => {
+    const runs = fixture();
+    const all = await renderSnapshot({ runsDir: runs, now: 1_000 });
+    expect(all.withdrawn ?? []).not.toContain(DEAD_RUN);
+    expect(all.artifacts.some((a) => a.path.startsWith(`v1/run/${DEAD_RUN}/`))).toBe(true);
+
+    const current = await renderSnapshot({ runsDir: runs, now: 1_000, history: false });
+    expect(current.withdrawn).toContain(DEAD_RUN);
+    expect(current.withdrawn).not.toContain(LIVE_RUN);
+    expect(current.artifacts.some((a) => a.path.startsWith(`v1/run/${DEAD_RUN}/`))).toBe(false);
+    expect(current.artifacts.some((a) => a.path.startsWith(`v1/run/${LIVE_RUN}/`))).toBe(true);
+    const body = (name: string): string => current.artifacts.find((a) => a.path === current.snap[name])!.body;
+    for (const name of ["runs.json", "results.json", "ladder-e90.json"]) {
+      expect(body(name), name).not.toContain(DEAD_RUN);
+    }
+    expect(body("runs.json")).toContain(LIVE_RUN);
+    // The aggregate set and the mutable files are the same set either way.
+    expect(Object.keys(current.snap).sort()).toEqual(Object.keys(all.snap).sort());
+  });
+});
+
 describe("createRenderer", () => {
   test("renders pass after pass from one handle, on one address", async () => {
     // What the publisher's loop does: build once, render every interval. The

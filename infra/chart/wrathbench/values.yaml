@@ -537,8 +537,31 @@ viewer:
     hajimari:
       enabled: false
 
+# The public site's publisher (docs/RUNBOOK.md, "Public dashboard";
+# infra/publish-settings.ts). The viewer group's: off with it, and
+# `enabled: false` is a deployment that publishes nothing at all.
 publisher:
   enabled: true
+  # Where it publishes: any S3-compatible bucket, R2 or otherwise. The key pair
+  # is always the Secret's (S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY). The
+  # endpoint and bucket are too unless set here, where they are plain values:
+  # neither is a secret. Empty `region` is Bun's default (us-east-1; R2 takes
+  # `auto`), and `virtualHostedStyle` is for an endpoint that names the bucket
+  # in its hostname. With `networkPolicy` on, the publisher reaches only
+  # `networkPolicy.internet`, so a bucket on the LAN needs a rule of its own.
+  target:
+    endpoint: ""
+    bucket: ""
+    region: ""
+    virtualHostedStyle: false
+  # How far the public view trails live play, in ms: a pass's manifest,
+  # live.json, nearby.json and trace windows are written once they are this
+  # old. 0 shows each pass as it is rendered.
+  delayMs: 0
+  # false publishes only the current view: the runs that have not ended, and
+  # nothing of a run once it has. Fewer objects change each pass, which is
+  # what a bucket's write operations are billed on.
+  history: true
   intervalMs: 300000
   # Runs projected before a pass uploads them, drops the bodies and releases
   # their entry indexes — the pass's memory dial. See WRATHBENCH_PUBLISH_BATCH
