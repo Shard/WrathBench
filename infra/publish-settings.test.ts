@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { describePublishSettings, MAX_DELAY_MS, publishSettingsFromEnv } from "./publish-settings";
+import { describePublishSettings, MAX_DELAY_MS, publishSettingsFromEnv, storeKind } from "./publish-settings";
 
 const KEYS = { S3_ACCESS_KEY_ID: "id", S3_SECRET_ACCESS_KEY: "secret", S3_BUCKET: "public" };
 
@@ -24,13 +24,23 @@ describe("publishSettingsFromEnv", () => {
   test("any S3-compatible target: no endpoint is AWS's from the region, and AWS_* names are Bun's fallback", () => {
     const s = publishSettingsFromEnv({ AWS_ACCESS_KEY_ID: "id", AWS_SECRET_ACCESS_KEY: "s", AWS_BUCKET: "b", S3_REGION: "eu-west-1", WRATHBENCH_PUBLISH_VIRTUAL_HOSTED: "1" });
     expect(s).toMatchObject({ endpoint: null, bucket: "b", region: "eu-west-1", virtualHostedStyle: true });
-    expect(describePublishSettings(s as Exclude<typeof s, { error: string }>)).toBe("s3://b (region eu-west-1, virtual-hosted, no delay, with the history)");
+    expect(describePublishSettings(s as Exclude<typeof s, { error: string }>)).toBe("bucket b on aws s3 (region eu-west-1, virtual-hosted, no delay, with the history)");
   });
 
   test("a delay and the current view only", () => {
     const s = publishSettingsFromEnv({ ...KEYS, S3_ENDPOINT: "http://minio:9000", WRATHBENCH_PUBLISH_DELAY_MS: "900000", WRATHBENCH_PUBLISH_HISTORY: "0" });
     expect(s).toMatchObject({ delayMs: 900_000, history: false });
-    expect(describePublishSettings(s as Exclude<typeof s, { error: string }>)).toBe("http://minio:9000/public (15 min behind, the current view only)");
+    expect(describePublishSettings(s as Exclude<typeof s, { error: string }>)).toBe("bucket public on s3-compatible (15 min behind, the current view only)");
+  });
+
+  test("the line names the bucket and the kind of store, never the endpoint the Secret holds", () => {
+    const s = publishSettingsFromEnv({ ...KEYS, S3_ENDPOINT: "https://0123abcd.r2.cloudflarestorage.com", S3_REGION: "auto" });
+    const line = describePublishSettings(s as Exclude<typeof s, { error: string }>);
+    expect(line).toBe("bucket public on r2 (region auto, no delay, with the history)");
+    expect(line).not.toContain("0123abcd");
+    expect(line).not.toContain("cloudflarestorage");
+    expect(storeKind("https://s3.eu-west-1.amazonaws.com")).toBe("aws s3");
+    expect(storeKind("not a url")).toBe("s3-compatible");
   });
 
   test("what does not read is refused with the variable's name, never a value", () => {

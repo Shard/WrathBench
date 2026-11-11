@@ -1383,7 +1383,10 @@ A deployment is three groups, each on unless switched off (chart
   probing episode: every campaign and every e90, e360 or probing job reads as
   disabled (each drains at its boundary, as a disabled job does), and an
   `idle: unlimited` entry gets its freeplay session whether or not it owes a
-  counted run. What is counted does not change.
+  counted run. What is counted does not change. `bun wb fleet status` and
+  `dry-run` read the config the same way and say so on their first line: a
+  job only the group turned off reads `disabled (evals group off)`, a model
+  that owes a counted run reads `free`, and nothing is outstanding.
 - **viewer**: the viewer, the publisher, and ClickHouse with its collector.
 
 A group that is off is absent, not hidden: its workloads are not rendered,
@@ -1391,8 +1394,9 @@ whatever their own `enabled` says, and the pods that remain are told through
 `WRATHBENCH_GROUPS` (the groups that are on, comma-separated; rendered only
 when one is off). The viewer then has none of that group's pages or routes
 (runner: `/fleet`, `/models`, `/api/fleet`, `/api/models`; evals: `/ladder`,
-`/campaigns`, `/about`, `/api/ladder`, `/api/campaigns`, `/api/episodes`),
-and the publisher none of its objects (evals: the ladders, `campaigns.json`,
+`/campaigns`, `/about`, `/api/ladder`, `/api/campaigns`, `/api/episodes`), no
+link into them from the pages it keeps (a direct URL to one is the not-found
+page), and the publisher none of its objects (evals: the ladders, `campaigns.json`,
 `episodes.json` and the social card; runner: `models.json` and the fleet in
 `live.json`). A viewer-only deployment reads the sessions its own agents
 produced. Groups are deployment config, so a change is a values commit and a
@@ -2067,7 +2071,9 @@ runs), whether a scored and a freeplay launch are held, whether its variable
 is set, the newest `auth-failed` or `quota-exhausted` on it, and a Codex
 home's volume. The supervisor publishes the same in `fleet-state.json`, and the
 private viewer's `/api/fleet` serves it. None of the figures reach a public
-page.
+page: a paused run a credential holds shows there only as the kind of hold (a
+usage window, the day's runs or spend budget, or the credential itself), with
+no credential named and no reset time.
 
 **The Codex home.** `CODEX_HOME` names a logged-in Codex home (`codex login`;
 the login is its `auth.json`), and a second subscription is `CODEX_HOME_2`

@@ -27,6 +27,7 @@ import {
   probeRunsOf,
   rosterModels,
   scheduledAccounts,
+  withoutEvals,
 } from "./run-fleet-config";
 import {
   affinityFrom,
@@ -134,7 +135,9 @@ import {
   STATS_EPISODES,
   TIER_TABLE,
   TIERS,
+  verdictForGroups,
 } from "../runner/src/models";
+import { GROUPS_ENV, groupsEnvValue, groupsFromEnv, type Groups } from "../runner/viewer/groups";
 
 /**
  * The --status character rows: one per `idle: "unlimited"` ref. Pure.
@@ -545,6 +548,8 @@ export function formatModels(
   now = Date.now(),
   excluded: ReadonlyMap<string, string> = new Map(),
   policy: SchedulingPolicy = { ...DEFAULT_POLICY_FOR_FORMAT },
+  /** The evals group (`runner/viewer/groups.ts`): off, a model that owes a counted run reads as free, as the policy treats it. */
+  evals = true,
 ): string[] {
   const w = Math.max(12, ...states.map((s) => s.name.length));
   const series = policy.series ?? "any";
@@ -579,7 +584,7 @@ export function formatModels(
     // the whole reason the verdict stopped being a pair of booleans: `free` is
     // where probe campaigns and idle work draw from.
     const verdictWord = { eval: "yes", free: "free", blocked: "no" } as const;
-    const sched = ex !== undefined ? `no: ${ex}` : ((v) => `${verdictWord[v.verdict]}: ${v.why}`)(schedulability(s, running, policy));
+    const sched = ex !== undefined ? `no: ${ex}` : ((v) => `${verdictWord[v.verdict]}: ${v.why}`)(verdictForGroups(schedulability(s, running, policy), evals));
     const extras = extrasSoFar(s);
     const other = (["e90", "e360"] as const).reduce((n, ep) => n + (s.perEpisode[ep]?.otherSeries ?? 0), 0);
     out.push(
@@ -612,7 +617,13 @@ export function formatHeld(held: readonly HeldPick[]): string[] {
  * reads `done` whether or not a supervisor is up to say so — the supervisor's
  * own sets live in its memory, which is exactly what used to forget it.
  */
-export function formatQueue(queue: readonly FleetJob[], state: FleetState["queue"] | undefined, counted?: CountedRuns): string[] {
+export function formatQueue(
+  queue: readonly FleetJob[],
+  state: FleetState["queue"] | undefined,
+  counted?: CountedRuns,
+  /** Jobs the store enables that the evals group being off disables (`forGroups`). */
+  offByGroup: ReadonlySet<string> = new Set(),
+): string[] {
   if (queue.length === 0) return [];
   const enabled = queue.filter((j) => j.enabled);
   const out = [`queue: ${enabled.length} enabled manual job(s) of ${queue.length}` + (state === undefined ? " (supervisor has not reported on it)" : "")];
@@ -621,7 +632,9 @@ export function formatQueue(queue: readonly FleetJob[], state: FleetState["queue
     const done = counted !== undefined && owesNothing(owedCopies(job, job.refs, counted));
     const status =
       !job.enabled
-        ? "disabled"
+        ? offByGroup.has(job.name)
+          ? "disabled (evals group off)"
+          : "disabled"
         : state?.running.includes(job.name) === true
           ? "RUNNING"
           : done
@@ -831,7 +844,35 @@ export function fleetLogsHint(env: Readonly<Record<string, string | undefined>>)
   return `  logs: kubectl -n ${ns} logs -f deploy/${release}-fleet on the cluster, docker compose -f infra/compose.yml logs -f fleet on the quickstart`;
 }
 
-export function printStatus(): void {
+/**
+ * The config as this deployment's supervisor runs it (`run-fleet.ts`'s
+ * `effectiveJobs`): with the evals group off, every campaign and scored or
+ * probing job reads as disabled (`withoutEvals`), and `offByGroup` names the
+ * jobs and campaigns the store enables that only the group turns off, so a
+ * report can say why rather than show an operator's switch. Pure.
+ */
+export function forGroups(config: FleetConfig, groups: Groups): { config: FleetConfig; offByGroup: Set<string> } {
+  if (groups.evals) return { config, offByGroup: new Set() };
+  const off = withoutEvals(config);
+  const offByGroup = new Set([
+    ...config.jobs.filter((j, i) => j.enabled && !off.jobs[i]!.enabled).map((j) => j.name),
+    ...config.campaigns.filter((c, i) => c.enabled && !off.campaigns[i]!.enabled).map((c) => c.name),
+  ]);
+  return { config: off, offByGroup };
+}
+
+/** The line a report opens with when a group the fleet reads is off; nothing with every group on. Pure. */
+export function formatGroupsBanner(groups: Groups): string[] {
+  if (groups.evals) return [];
+  return [`evals group off (${GROUPS_ENV}=${groupsEnvValue(groups)}): no scored or probing episode is launched or owed; campaigns and scored or probing jobs read as disabled`];
+}
+
+/** The outstanding-work line: what the policy still owes, and nothing with the evals group off, which owes nothing. */
+export function formatOutstandingFor(o: Parameters<typeof outstandingWork>[0], evals: boolean): string {
+  return evals ? formatOutstanding(outstandingWork(o)) : "outstanding: none — the evals group is off";
+}
+
+export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
   const configPath = configDbPath();
   // State first, and the banner before anything else: the store may not parse
   // here either, and even when it does, this reader can be a different code
@@ -844,7 +885,12 @@ export function printStatus(): void {
   // is only as fresh as the last tick, and an operator who has just flipped the
   // switch is asking this very question.
   for (const line of formatPauseBanner(readPauseSidecar(), state?.pausedSwitch)) console.log(line);
-  const { config, error: configError, empty } = loadConfigForRead();
+  for (const line of formatGroupsBanner(groups)) console.log(line);
+  const loaded = loadConfigForRead();
+  const { error: configError, empty } = loaded;
+  const scoped = loaded.config !== undefined ? forGroups(loaded.config, groups) : undefined;
+  const config = scoped?.config;
+  const offByGroup = scoped?.offByGroup ?? new Set<string>();
   if (config === undefined) {
     console.log(
       `!! the config store does not load: ${configError}` +
@@ -1029,7 +1075,7 @@ export function printStatus(): void {
         if (job !== undefined) {
           const progress = progressLabel(job, counted);
           note = !job.enabled
-            ? `job ${job.name} disabled${rejected !== undefined ? " (FILE, NOT in effect)" : ""}${progress !== undefined ? ` (${progress})` : ""}`
+            ? `job ${job.name} disabled${offByGroup.has(job.name) ? " (evals group off)" : ""}${rejected !== undefined ? " (FILE, NOT in effect)" : ""}${progress !== undefined ? ` (${progress})` : ""}`
             : owesNothing(owedCopies(job, job.refs, counted))
               ? `job ${job.name} done (${progress ?? "met"}) — repeat met, nothing spawns (raise repeat for more)`
               : `job ${job.name} enabled${rejected !== undefined ? " (FILE, NOT in effect)" : ""}, not spawned${fleetUp ? "" : " (supervisor down)"}${progress !== undefined ? ` (${progress})` : ""}`;
@@ -1061,7 +1107,7 @@ export function printStatus(): void {
       const why = policyExclusion(config, name);
       if (why !== undefined) excluded.set(name, why);
     }
-    for (const line of formatModels(states, running, Date.now(), excluded, config.policy)) console.log(`  ${line}`);
+    for (const line of formatModels(states, running, Date.now(), excluded, config.policy, groups.evals)) console.log(`  ${line}`);
 
     if (state?.policy?.idle !== undefined) console.log(`  policy: ${state.policy.idle}`);
     // (c') freeplay characters: each unlimited ref's head and what the next pick
@@ -1085,14 +1131,15 @@ export function printStatus(): void {
      * with the supervisor down as up.
      */
     console.log(
-      `  ${formatOutstanding(
-        outstandingWork({
+      `  ${formatOutstandingFor(
+        {
           states,
           excluded: excluded.keys(),
           accounts: config.accounts.max,
           credentials: config.credentials,
           maxSessions: config.policy.maxSessions,
-        }),
+        },
+        groups.evals,
       )}`,
     );
   }
@@ -1123,7 +1170,7 @@ export function printStatus(): void {
   );
 
   // (f) the manual queue, only when there is one.
-  if (config !== undefined) for (const line of formatQueue(poolJobs(config), state?.queue, counted)) console.log(`  ${line}`);
+  if (config !== undefined) for (const line of formatQueue(poolJobs(config), state?.queue, counted, offByGroup)) console.log(`  ${line}`);
 
   // A /proc scan only means anything when the supervisor shares this namespace.
   // Against a containerized fleet every job would show up here as "hand
@@ -1243,6 +1290,10 @@ export function planDryRun(opts: {
   hasImageRecord?: (runId: string) => boolean;
   /** The credentials' budgets (`credentialGate`), as the tick applies them; absent holds nothing. */
   gate?: CredentialGate;
+  /** The evals group (`planTick`'s `evals`); the config is already `forGroups`'. Absent is on. */
+  evals?: boolean;
+  /** The jobs only the evals group being off disables (`forGroups`). */
+  offByGroup?: ReadonlySet<string>;
 }): DryRunPlan {
   const { config, runs, states, held, stamp, gate } = opts;
   const inFlight = opts.inFlight ?? [];
@@ -1273,6 +1324,7 @@ export function planDryRun(opts: {
     inFlight.filter((r) => r.owned),
     inFlight.filter((r) => !r.owned).flatMap((r) => r.refs),
     gate,
+    opts.evals ?? true,
   );
   const counted = countedFrom(states);
   const rows: AccountRow[] = [];
@@ -1347,7 +1399,9 @@ export function planDryRun(opts: {
             ? `held by run ${holder}`
             : met
               ? `job ${job.name} done (${progressLabel(job, counted) ?? "met"}) — repeat met, nothing spawns (raise repeat for more)`
-              : `job ${job?.name ?? "?"} disabled — flip enabled:true to spawn`,
+              : job !== undefined && opts.offByGroup?.has(job.name) === true
+                ? `job ${job.name} disabled (evals group off)`
+                : `job ${job?.name ?? "?"} disabled — flip enabled:true to spawn`,
       });
     }
   }
@@ -1397,8 +1451,17 @@ export function formatArgvBlock(
 }
 
 /** `facts` is the caller's `readReportFacts`, when it already made one; otherwise this reads its own. */
-export function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampToday: string, facts?: readonly RunFact[]): void {
+export function printDryRun(
+  read: FleetConfig,
+  cliUntil: string | undefined,
+  stampToday: string,
+  facts?: readonly RunFact[],
+  groups: Groups = groupsFromEnv(process.env),
+): void {
   console.log(`--- fleet plan (dry run; nothing spawned, nothing written) ---`);
+  // The config as the supervisor runs it under this deployment's groups; the
+  // entry point has already said which group is off.
+  const { config, offByGroup } = forGroups(read, groups);
   // The running supervisor, read the way --status reads it: this is the next
   // tick's plan, so what it already has in flight keeps its account and model.
   const state = readStateFile();
@@ -1443,6 +1506,8 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
     campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
     hasImageRecord: (id) => runHasImageRecord(id),
     gate: credGate,
+    evals: groups.evals,
+    offByGroup,
   });
   console.log("");
   for (const line of formatCredentialStatus(localCredentialStatuses(config, credGate, runs), config.policy.maxSessions, now)) console.log(line);
@@ -1459,7 +1524,7 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
     if (why !== undefined) excluded.set(name, why);
   }
   // Every run in flight holds its model, owned or not, as the plan above does.
-  for (const line of formatModels(states, new Set(inFlight.flatMap((r) => r.refs)), now, excluded, config.policy)) console.log(line);
+  for (const line of formatModels(states, new Set(inFlight.flatMap((r) => r.refs)), now, excluded, config.policy, groups.evals)) console.log(line);
   for (const line of formatHeld(plan.heldPicks)) console.log(line);
   for (const line of formatPaused(resumes.listed, pauseDetailOf())) console.log(line);
   for (const line of formatEnded(
@@ -1470,7 +1535,7 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
     console.log(line);
   }
   console.log("finished this session: 0 (ok 0, retried 0) — dry run");
-  for (const line of formatQueue(poolJobs(config), undefined, countedFrom(states))) console.log(line);
+  for (const line of formatQueue(poolJobs(config), undefined, countedFrom(states), offByGroup)) console.log(line);
   const running = inFlight.filter((r) => r.owned).length;
   console.log(
     `\n${running > 0 ? `${running} job(s) already running keep their accounts; ` : ""}` +

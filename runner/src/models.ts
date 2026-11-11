@@ -2227,6 +2227,16 @@ export function modelStates(input: ModelStatesInput): ModelState[] {
 export type Verdict = { verdict: "eval" | "free" | "blocked"; why: string };
 
 /**
+ * A verdict as a deployment with the evals group off reads it
+ * (`runner/viewer/groups.ts`): owing a counted run is owing nothing, so the
+ * model is free for its idle work. One rule for the policy's picks and the
+ * `--status` table.
+ */
+export function verdictForGroups(v: Verdict, evals: boolean): Verdict {
+  return !evals && v.verdict === "eval" ? { verdict: "free", why: "the evals group is off" } : v;
+}
+
+/**
  * Why a model is or is not schedulable right now — the `--status` line.
  * The policy argument is vestigial: nothing about how much a model runs is
  * read from the file any more.
@@ -2378,9 +2388,7 @@ export function planNextJobs(
   const verdicts = new Map<string, Verdict>();
   const byName = new Map(states.map((s) => [s.name, s]));
   states.forEach((s, order) => {
-    const scored = schedulability(s, running, policy);
-    // With the evals group off, owing a counted run is owing nothing.
-    const v: Verdict = !evals && scored.verdict === "eval" ? { verdict: "free", why: "the evals group is off" } : scored;
+    const v = verdictForGroups(schedulability(s, running, policy), evals);
     verdicts.set(s.name, v);
     if (wantsIdle(v, s)) {
       // One candidate, not one per tier: `unlimited` is the only idle mode left

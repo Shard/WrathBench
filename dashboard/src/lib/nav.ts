@@ -60,6 +60,18 @@ export function groupsOf(info: Pick<ApiInfoResponse, "groups"> | undefined): Gro
 }
 
 /**
+ * Whether a link to `href` may render on this deployment: its page is mounted
+ * for the groups `/api/info` states (`pageMounted`, on the path alone, so a
+ * query or a fragment does not hide which page it is). False until `/api/info`
+ * has settled, so a link into an off group never flashes on; the caller draws
+ * the text without the link instead.
+ */
+export function linkable(info: Pick<ApiInfoResponse, "groups"> | undefined, href: string): boolean {
+  if (info === undefined) return false;
+  return pageMounted(href.replace(/[?#].*$/, ""), groupsOf(info), false);
+}
+
+/**
  * The bar for this deployment: the reader's items whose group is on
  * (`pageMounted`), and the config item where the badge says ADMIN.
  *

@@ -32,8 +32,10 @@ import { UnitFrame } from "@wrathbench/inspector/views";
 import { XpChart } from "../components/XpChart";
 import { characterIsLive, characterSessionSeries, sessionCount } from "../lib/character";
 import { displayError } from "../lib/errors";
+import { useFeeds } from "../lib/feeds";
 import { fmtAge, fmtDuration, modelDisplay, num, shortHarness, shortRunId, stamp } from "../lib/format";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
+import { linkable } from "../lib/nav";
 import { Coins, LevelXp } from "../components/CharacterFacts";
 import { InfoHint } from "../components/InfoHint";
 import { poll, whileLive } from "../lib/poll";
@@ -65,6 +67,9 @@ export default function Character() {
   );
 
   const view = (): CharacterView | undefined => feed.latest?.character;
+  // The ladder is the evals group's: no crumb to it where that group is off.
+  const feeds = useFeeds();
+  const ladderLinked = (): boolean => linkable(feeds.info.latest, "/ladder");
   /** The attempt a reader would call "now": the last one in the chain. */
   const latest = () => view()?.runs[(view()?.runs.length ?? 0) - 1];
   const isLive = (): boolean => {
@@ -155,7 +160,10 @@ export default function Character() {
                 character's name below, and a section heading above the h1
                 would put the document's outline out of order. */}
             <div class="section">
-              <A href="/ladder">ladder</A> / <span title={st().characterId}>{shortRunId(st().characterId)}</span>
+              <Show when={ladderLinked()}>
+                <A href="/ladder">ladder</A> /{" "}
+              </Show>
+              <span title={st().characterId}>{shortRunId(st().characterId)}</span>
             </div>
 
             {/* The header: who this character is, and whether it is playing

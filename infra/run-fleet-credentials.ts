@@ -31,7 +31,7 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { credentialCandidates, describeBudget, providerById, type Credential } from "../runner/src/credential-slots";
-import { credentialHealth, credentialWindows, type CredentialFix, type CredentialHealth, type CredentialHold, type CredentialRead, type CredentialWindow } from "../runner/src/credential-health";
+import { credentialHealth, credentialWindows, type CredentialFix, type CredentialHealth, type CredentialHold, type CredentialRead, type CredentialWindow, type ResumeHoldCode } from "../runner/src/credential-health";
 import { DEFAULT_DRIVER, driverEntry } from "../runner/src/drivers";
 import { utcDay, type RunFact } from "../runner/src/models";
 import { isOpenCodeGoBase } from "../runner/src/platform";
@@ -53,6 +53,13 @@ import type { FleetRosterEntry, JobSpawn } from "./run-fleet-config";
 export { readCredentialUsage, CREDENTIAL_USAGE_SIDECAR };
 
 // ------------------------------------------------------------------ the budgets
+
+/** Why a paused run's credential holds its resume: the operator's sentence, and its code for the public phrase. */
+export interface ResumeHold {
+  text: string;
+  /** Null only from a gate that worded its hold without a code. */
+  code: ResumeHoldCode | null;
+}
 
 /** The run facts a budget reads. */
 export type BudgetRun = Pick<RunFact, "credential" | "startedAt"> & Partial<Pick<RunFact, "spendByDay" | "resumesByDay" | "credentialUsage">>;
@@ -564,19 +571,20 @@ export function driverOfEntry(e: Pick<FleetRosterEntry, "driver"> | undefined): 
 
 /**
  * Why a paused run's credential holds its resume, or undefined: gone from the
- * config, disabled, or its budget (`CredentialGate.holdOf`). A run that
+ * config, disabled, or its budget (`CredentialGate.holdReasonOf`), with its code. A run that
  * recorded none is held by nothing here.
  */
 export function resumeHoldOf(
   f: Pick<RunFact, "credential" | "episode" | "model">,
   cfg: { credentials: readonly Credential[] },
   gate: CredentialGate,
-): string | undefined {
+): ResumeHold | undefined {
   if (f.credential === null) return undefined;
   const c = cfg.credentials.find((x) => x.id === f.credential);
-  if (c === undefined) return `credential ${f.credential} is not configured — the run comes back only on it (or move it: bun wb config move-credential)`;
-  if (!c.enabled) return `credential ${f.credential} is disabled — the run comes back only on it (or move it: bun wb config move-credential)`;
-  return gate.holdOf(c.id, f.episode, f.model);
+  if (c === undefined) return { text: `credential ${f.credential} is not configured — the run comes back only on it (or move it: bun wb config move-credential)`, code: "credential-off" };
+  if (!c.enabled) return { text: `credential ${f.credential} is disabled — the run comes back only on it (or move it: bun wb config move-credential)`, code: "credential-off" };
+  const h = gate.holdReasonOf(c.id, f.episode, f.model);
+  return h === undefined ? undefined : { text: h.text, code: h.code };
 }
 
 /** A spawn the budget changed, and why. */
