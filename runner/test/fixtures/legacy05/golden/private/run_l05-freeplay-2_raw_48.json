@@ -1,0 +1,7 @@
+{
+ "path": "/api/run/l05-freeplay-2/raw/48",
+ "status": 200,
+ "contentType": "application/json; charset=utf-8",
+ "cacheControl": "no-store",
+ "body": {"ts":1760087118000,"t":"reflect_window","turn":5,"event":"open"}
+}

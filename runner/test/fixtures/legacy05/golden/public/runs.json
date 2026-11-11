@@ -1,0 +1,45 @@
+{
+ "path": "/api/runs",
+ "status": 200,
+ "contentType": "application/json; charset=utf-8",
+ "cacheControl": "no-store",
+ "body": {
+  "runs": [
+   {
+    "runId": "l05-freeplay-2",
+    "resolvedModel": "fixture/model-two-0815",
+    "level": 2,
+    "xp": 135,
+    "playtimeMs": 630000,
+    "tokens": {"totalTokens":21050},
+    "tps": {"overall":60,"recent":60,"replies":5,"recentReplies":5},
+    "cost": {"actual":{"usd":0.0035,"basis":"reported","note":"the provider's own charge, summed over the run's responses (OpenRouter usage.cost, in credits)"}},
+    "comparability": {"budget":{"episodeMs":null}}
+   },
+   {
+    "runId": "l05-party-a1",
+    "resolvedModel": "fixture/model-one-0901",
+    "level": 6,
+    "xp": 1900,
+    "playtimeMs": 702000,
+    "tokens": {"totalTokens":39035},
+    "tps": {"overall":134.67741935483872,"recent":134.67741935483872,"replies":6,"recentReplies":6},
+    "cost": {"actual":{"usd":0.0107,"basis":"reported","note":"the provider's own charge, summed over the run's responses (OpenRouter usage.cost, in credits)"}},
+    "comparability": {"budget":{"episodeMs":5400000}}
+   },
+   {
+    "runId": "l05-freeplay-1",
+    "resolvedModel": "fixture/model-two-0815",
+    "level": 2,
+    "xp": 360,
+    "playtimeMs": 540000,
+    "tokens": {"totalTokens":10318},
+    "tps": {"overall":69.25,"recent":69.25,"replies":4,"recentReplies":4},
+    "cost": {
+     "actual": {"usd":0.0024000000000000002,"basis":"reported","note":"the provider's own charge, summed over the run's responses (OpenRouter usage.cost, in credits) — partial: 1 of 4 responses reported no cost"}
+    },
+    "comparability": {"budget":{"episodeMs":null}}
+   }
+  ]
+ }
+}

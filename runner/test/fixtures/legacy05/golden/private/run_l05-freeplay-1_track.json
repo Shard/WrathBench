@@ -1,0 +1,21 @@
+{
+ "path": "/api/run/l05-freeplay-1/track",
+ "status": 200,
+ "contentType": "application/json; charset=utf-8",
+ "cacheControl": "no-cache",
+ "body": {
+  "runId": "l05-freeplay-1",
+  "characterName": "Quillfeather",
+  "model": "fixture/model-two",
+  "harnessVersion": "harness-0.5-610-g1a2b3c4d",
+  "points": [
+   {"ts":1759827332000,"map":7105,"x":520,"y":690,"level":1,"xp":90,"money":null,"questsCompleted":0,"turn":1,"health":61,"maxHealth":70,"power":50,"maxPower":60,"powerType":0,"nextLevelXp":400},
+   {"ts":1759827452000,"map":7105,"x":540,"y":680,"level":1,"xp":180,"money":null,"questsCompleted":0,"turn":2,"health":62,"maxHealth":70,"power":50,"maxPower":60,"powerType":0,"nextLevelXp":400},
+   {"ts":1759827572000,"map":7105,"x":560,"y":670,"level":2,"xp":270,"money":null,"questsCompleted":1,"turn":3,"health":63,"maxHealth":70,"power":50,"maxPower":60,"powerType":0,"nextLevelXp":400},
+   {"ts":1759827692000,"map":7105,"x":580,"y":660,"level":2,"xp":360,"money":null,"questsCompleted":1,"turn":4,"health":64,"maxHealth":70,"power":50,"maxPower":60,"powerType":0,"nextLevelXp":400}
+  ],
+  "moves": [],
+  "travel": [],
+  "character": {"characterId":"l05-freeplay-1","attempt":1,"attempts":2,"previous":null,"next":"l05-freeplay-2"}
+ }
+}

@@ -1,0 +1,7 @@
+{
+ "path": "/api/run/l05-freeplay-1/trace/1759827300000",
+ "status": 404,
+ "contentType": "application/json; charset=utf-8",
+ "cacheControl": "no-store",
+ "body": {"error":"no trace in that window"}
+}

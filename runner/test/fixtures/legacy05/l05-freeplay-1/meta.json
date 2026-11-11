@@ -1,0 +1,60 @@
+{
+  "runId": "l05-freeplay-1",
+  "harnessVersion": "harness-0.5-610-g1a2b3c4d",
+  "sdkVersion": "0.2.0",
+  "startedAt": 1759827330000,
+  "config": {
+    "moduleUrl": "http://worldserver:8086",
+    "character": "Quillfeather",
+    "account": "FIXFREE1",
+    "race": 4,
+    "class": 11,
+    "driver": "openai",
+    "model": "fixture/model-two",
+    "apiBase": "https://api.acme.invalid/v1",
+    "apiKeyEnv": "ACME_KEY",
+    "wikiCoords": false,
+    "wiki": true,
+    "extra": false,
+    "episode": "freeplay",
+    "maxToolCallsPerEpisode": 500,
+    "stepIntervalMs": 3000,
+    "stateIntervalMs": 60000,
+    "snippetTimeoutMs": 30000,
+    "sandboxPingGraceMs": 2000,
+    "runsDir": "data/runs",
+    "wikiBundle": "data/wiki/bundle.sqlite",
+    "watchdogs": {
+      "idleMs": 1200000,
+      "noXpMs": null,
+      "episodeMs": null,
+      "maxSandboxRestarts": 3
+    },
+    "runId": "l05-freeplay-1",
+    "token": "fixture-session-token-f1"
+  },
+  "comparability": {
+    "harnessVersion": "harness-0.5-610-g1a2b3c4d",
+    "promptHash": "sha256:3211d771263f42db",
+    "promptChars": 17902,
+    "harness": "wrathbench",
+    "effort": null,
+    "budget": {
+      "maxTurns": null,
+      "maxToolCalls": 500,
+      "idleMs": 1200000,
+      "noXpMs": null,
+      "episodeMs": null,
+      "maxSandboxRestarts": 3
+    },
+    "objective": false,
+    "wikiCoords": false,
+    "wikiBundle": null,
+    "episode": "freeplay",
+    "episodeOverride": false,
+    "serverBuild": {
+      "build": "fixture-worldserver-0.5",
+      "startedAtMs": 1759395300000
+    }
+  }
+}

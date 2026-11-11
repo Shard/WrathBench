@@ -1,0 +1,7 @@
+{
+ "path": "/api/run/l05-freeplay-1/raw/32",
+ "status": 200,
+ "contentType": "application/json; charset=utf-8",
+ "cacheControl": "no-store",
+ "body": {"ts":1759827870000,"t":"termination","reason":"manual","detail":"operator disabled the stream"}
+}

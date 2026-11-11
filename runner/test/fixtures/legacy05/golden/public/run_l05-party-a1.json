@@ -1,0 +1,110 @@
+{
+ "path": "/api/run/l05-party-a1",
+ "status": 200,
+ "contentType": "application/json; charset=utf-8",
+ "cacheControl": "no-store",
+ "body": {
+  "run": {
+   "runId": "l05-party-a1",
+   "model": "fixture/model-one",
+   "driver": "openai",
+   "harness": "wrathbench",
+   "shakeout": null,
+   "campaign": "l05-delve",
+   "cell": "trio",
+   "campaignVersion": 2,
+   "arm": "base",
+   "party": {"id":"l05-party","member":"a1","size":3,"role":"tank","index":0},
+   "extra": false,
+   "character": "Brannoch",
+   "race": 3,
+   "class": 1,
+   "characterLabel": "Dwarf Warrior",
+   "platform": "acme.invalid",
+   "resolvedModel": "fixture/model-one-0901",
+   "cliVersion": null,
+   "harnessVersion": "harness-0.5-912-gf61e391d",
+   "comparability": {
+    "harnessVersion": "harness-0.5-912-gf61e391d",
+    "promptHash": "sha256:3211d771263f42db",
+    "promptChars": 17902,
+    "harness": "wrathbench",
+    "effort": null,
+    "budget": {"maxTurns":null,"maxToolCalls":500,"idleMs":1200000,"noXpMs":null,"episodeMs":5400000,"maxSandboxRestarts":3},
+    "objective": false,
+    "wikiCoords": false,
+    "episode": "probing",
+    "episodeOverride": false,
+    "serverBuild": {"build":"fixture-worldserver-0.5","startedAtMs":1759395300000}
+   },
+   "startedAt": 1760000110000,
+   "endedAt": 1760000812000,
+   "terminationReason": "kill-target",
+   "terminationDetail": "the Hollow Regent fell to the party",
+   "pauseReason": null,
+   "continuedFrom": null,
+   "level": 6,
+   "xp": 1900,
+   "money": 1945,
+   "questsCompleted": 1,
+   "items": [
+    {"name":"Band of the Mere","count":1,"equipped":true,"itemId":91006,"quality":3,"slot":15},
+    {"name":"Pinewood Buckler","count":1,"equipped":true,"itemId":91002,"quality":1,"slot":16},
+    {"name":"Murky Tonic","count":3,"equipped":false,"itemId":91004,"quality":1,"slot":23,"bag":255},
+    {"name":"Matted Pelt","count":3,"equipped":false,"itemId":91005,"quality":0,"slot":0,"bag":19}
+   ],
+   "live": false
+  },
+  "states": [
+   {"ts":1760000112000,"level":5,"xp":1200},
+   {"ts":1760000172000,"level":5,"xp":1340},
+   {"ts":1760000232000,"level":5,"xp":2700},
+   {"ts":1760000233300,"level":6,"xp":100},
+   {"ts":1760000292000,"level":6,"xp":400},
+   {"ts":1760000412000,"level":6,"xp":400},
+   {"ts":1760000530000,"level":6,"xp":900},
+   {"ts":1760000531550,"level":6,"xp":1900}
+  ],
+  "total": 83,
+  "tokens": {"source":"reported","contextTokens":7100,"promptTokens":38200,"completionTokens":835,"totalTokens":39035,"cacheReadTokens":29200,"cacheWriteTokens":null,"turns":6},
+  "cost": {
+   "actual": {"usd":0.0107,"basis":"reported","asIfMetered":false,"priceId":null,"asOf":null,"note":"the provider's own charge, summed over the run's responses (OpenRouter usage.cost, in credits)"},
+   "expected": {"usd":null,"basis":"none","asIfMetered":false,"priceId":null,"asOf":null,"note":"no synced price — run `bun wb data prices` (infra/sync-prices.ts)"}
+  },
+  "playtimeMs": 702000,
+  "sessions": [{"start":1760000110000,"end":1760000812000}],
+  "rosterName": null,
+  "achievements": {"earned":3,"points":30,"ids":[96001,96002,96003]},
+  "taxi": {"flights":1},
+  "deaths": {"deaths":1,"releases":1,"resurrects":1,"sites":[{"turn":4}]},
+  "spells": {"learned":1,"atLogin":3,"ids":[93012],"marks":[{"id":93012,"ts":1760000233300,"turn":3}]},
+  "talents": {"spends":1,"talents":1,"marks":[{"id":98001,"points":1,"ts":1760000233300,"turn":3}]},
+  "trades": {"trades":1,"first":{"ts":1760000240000,"turn":3},"last":{"ts":1760000240000,"turn":3},"marks":[{"ts":1760000240000,"turn":3}]},
+  "tps": {"overall":134.67741935483872,"recent":134.67741935483872,"replies":6,"recentReplies":6},
+  "reflections": [],
+  "party": {
+   "id": "l05-party",
+   "member": "a1",
+   "role": "tank",
+   "size": 3,
+   "members": [
+    {"member":"a1","role":"tank","runId":"l05-party-a1","character":"Brannoch"},
+    {"member":"a2","role":"healer","runId":"l05-party-a2","character":"Ysolde"},
+    {"member":"a3","role":"damage","runId":"l05-party-a3","character":"Tarnwick"}
+   ],
+   "instances": [{"ts":1760000520000,"event":"entered","map":7302,"from":7101}],
+   "kills": [
+    {"ts":1760000750000,"victimGuid":"17379392590251556941","entry":97050,"name":"Hollow Regent","self":true},
+    {"ts":1760000755000,"victimGuid":"17379392590268334158","entry":97051,"name":null,"self":false}
+   ],
+   "chat": [
+    {"ts":1760000118000,"text":"Pulling the first warden, stay back."},
+    {"ts":1760000288000,"text":"Died, running back."},
+    {"ts":1760000715000,"text":"Boss pulled!"}
+   ],
+   "groups": [{"ts":1760000111500,"event":"joined","count":3}],
+   "deaths": [1760000286000],
+   "where": {"ts":1760000531550,"map":7302,"zone":8850,"zoneName":"The Gloomvault","area":8850,"areaName":"The Gloomvault"}
+  }
+ }
+}

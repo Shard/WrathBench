@@ -1,0 +1,40 @@
+{
+ "path": "/api/run/l05-freeplay-2/nearby",
+ "status": 200,
+ "contentType": "application/json; charset=utf-8",
+ "cacheControl": "no-store",
+ "body": {
+  "v": 1,
+  "run": "l05-freeplay-2",
+  "t0": 1760087070000,
+  "t1": 1760087128000,
+  "q": {"p":10,"o":1024},
+  "ids": ["17379392591107194885","17379392591123972102","17379392591157526540"],
+  "ty": [0,0,0],
+  "k": {
+   "self": {"guid":null,"map":7105,"target":null,"down":false},
+   "u": [0,1],
+   "s": [
+    {"entry":97101,"name":"Ashen Prowler","ctype":1,"level":3,"hp":100,"df":0,"tgs":true},
+    {"entry":97102,"name":"Merra Tallowmere","level":10,"hp":100,"nf":128,"qg":2}
+   ],
+   "m": [[1,-4200,6400,6900,120,-1,200,100,0,6000],[0,-10400,6000,6400,120,-1]]
+  },
+  "dt": [],
+  "mt": [],
+  "u": [],
+  "mk": [],
+  "x": [],
+  "y": [],
+  "z": [],
+  "o": [],
+  "sp": [],
+  "ev": [
+   [5000,2,"in",{"s":{"entry":97104},"m":[0,4800,7000,7200,130,-1]}],
+   [6000,2,"st",{"name":"Bog Lurker"}],
+   [10000,0,"st",{"hp":40}],
+   [25000,0,"st",{"hp":0,"df":32,"tgs":false}],
+   [30000,1,"out",0]
+  ]
+ }
+}

@@ -1,0 +1,7 @@
+{
+ "path": "/api/run/l05-freeplay-1/raw/1",
+ "status": 200,
+ "contentType": "application/json; charset=utf-8",
+ "cacheControl": "no-store",
+ "body": {"ts":1759827332000,"t":"state","level":1,"xp":90,"map":7105,"x":520,"y":690,"z":12,"eventCount":30,"lastSeq":30,"money":7,"questsCompleted":0,"turn":1,"zone":8901,"area":8902,"health":61,"maxHealth":70,"power":50,"maxPower":60,"powerType":0,"nextLevelXp":400}
+}
