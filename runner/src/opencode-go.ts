@@ -1,6 +1,6 @@
 /**
- * OpenCode Go's allowance, as a subscription lane (operator, 2026-10-16;
- * `subscription-usage.ts` has the gate).
+ * OpenCode Go's allowance, as a credential's usage windows (operator,
+ * 2026-10-16; `subscription-usage.ts` has the budget).
  *
  * Go sells a metered allowance behind the same `openai` driver every
  * OpenAI-compatible endpoint uses. Its chat responses carry no usage or
@@ -12,13 +12,14 @@
  * observation, said once, and the launch is allowed. Nothing here throws into
  * a caller, and nothing here ever logs or records the key.
  *
- * One lane per key (`opencode-go:<KEY ENV>`), for the entries that draw the
- * allowance down — a Go base and paid billing (`goKeyEnvOf`, models.ts). A
- * `$0` Go model does not, keeps working past the limit, and is never gated.
+ * One reading per `opencode-go` credential with a `usage` budget: the paid
+ * credential the allowance-drawing entries take. A `$0` Go model does not
+ * draw the allowance down, keeps working past the limit, and runs on a free
+ * credential with no usage budget, so nothing here holds it.
  *
  * Two readers share `GoUsagePoller`, which calls the endpoint at most once a
  * minute and keeps the newest answer: the fleet supervisor, before it decides
- * a launch or a resume (`FleetGoUsage`, infra/run-fleet-gate.ts), and a live
+ * a launch or a resume (`FleetGoUsage`, infra/run-fleet-credentials.ts), and a live
  * Go run, whose fixed loop pokes it at each turn boundary without waiting on
  * it (`GoUsageGauge`) — for the freeplay gate, and for a spent allowance's
  * reset when the adapter pauses `quota-exhausted` on Go's `GoUsageLimitError`.
@@ -27,7 +28,7 @@ import { SubscriptionUsageTracker, type SubscriptionUsage, type UsageHold, type 
 
 /** The usage endpoint's path on the Go base's origin. */
 export const GO_USAGE_PATH = "/inference/go/v1/usage";
-/** At most one call per lane in this long (the endpoint is undocumented: be a light client). */
+/** At most one call per credential in this long (the endpoint is undocumented: be a light client). */
 export const GO_USAGE_MIN_INTERVAL_MS = 60_000;
 /** A read that takes longer than this is no reading. */
 export const GO_USAGE_TIMEOUT_MS = 10_000;
@@ -129,7 +130,7 @@ export interface GoUsagePollerOptions {
   onReading?: (windows: UsageWindow[], at: number) => void;
 }
 
-/** One lane's endpoint, read at most once per interval, the newest answer kept. */
+/** One credential's endpoint, read at most once per interval, the newest answer kept. */
 export class GoUsagePoller {
   private lastAt = Number.NEGATIVE_INFINITY;
   private inFlight: Promise<void> | null = null;
@@ -137,7 +138,7 @@ export class GoUsagePoller {
   private noted = false;
 
   constructor(
-    readonly lane: string,
+    readonly credential: string,
     private readonly url: string,
     private readonly key: string,
     private readonly o: GoUsagePollerOptions = {},
@@ -157,11 +158,11 @@ export class GoUsagePoller {
     this.inFlight = readGoUsage(this.url, this.key, this.o.fetch, this.o.timeoutMs)
       .then((r) => {
         if ("windows" in r) {
-          this.latest = { lane: this.lane, observedAt: now, windows: r.windows };
+          this.latest = { credential: this.credential, observedAt: now, windows: r.windows };
           this.o.onReading?.(r.windows, now);
         } else if (!this.noted) {
           this.noted = true;
-          this.o.onNote?.(`OpenCode Go usage for ${this.lane} not read (${r.why}): no observation, so its launches are not held`);
+          this.o.onNote?.(`OpenCode Go usage for ${this.credential} not read (${r.why}): no observation, so its launches are not held`);
         }
       })
       .catch(() => undefined)
@@ -173,7 +174,7 @@ export class GoUsagePoller {
 }
 
 /**
- * A live Go run's view of its lane (`LoopOptions.usage`): poked at each turn
+ * A live Go run's view of its credential (`LoopOptions.usage`): poked at each turn
  * boundary and never waited on there, so a turn costs no call; readings are
  * recorded on change like the CLI drivers' (`SubscriptionUsageTracker`).
  */
@@ -181,9 +182,9 @@ export class GoUsageGauge {
   private readonly tracker: SubscriptionUsageTracker;
   private readonly poller: GoUsagePoller;
 
-  constructor(lane: string, url: string, key: string, write: (u: SubscriptionUsage) => void, o: Omit<GoUsagePollerOptions, "onReading"> = {}) {
-    this.tracker = new SubscriptionUsageTracker(lane, write);
-    this.poller = new GoUsagePoller(lane, url, key, { ...o, onReading: (windows, at) => this.tracker.observe(windows, at) });
+  constructor(credential: string, url: string, key: string, write: (u: SubscriptionUsage) => void, o: Omit<GoUsagePollerOptions, "onReading"> = {}) {
+    this.tracker = new SubscriptionUsageTracker(credential, write);
+    this.poller = new GoUsagePoller(credential, url, key, { ...o, onReading: (windows, at) => this.tracker.observe(windows, at) });
   }
 
   get current(): SubscriptionUsage | undefined {

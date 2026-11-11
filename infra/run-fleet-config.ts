@@ -9,7 +9,7 @@
 import { join } from "node:path";
 import type { RosterSpec } from "./run-roster";
 import { harnessSeries } from "../runner/src/comparability";
-import { compactWindowDriverRefusal, driverHasCompactWindow, harnessClash, isTokenEnvName, parseEntryCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
+import { compactWindowDriverRefusal, driverHasCompactWindow, harnessClash, parseEntryCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
 import type { Billing } from "../runner/src/model-cost";
 import { isOpenRouterBase, parseRouting } from "../runner/src/routing";
 import { QUEUE_JOB_KEYS, rosterEntryRefusal, strictKeyWhy, unknownKeysOf } from "../runner/src/roster-refusal";
@@ -28,11 +28,6 @@ import {
 } from "../runner/src/campaigns";
 import type { CampaignFile } from "../runner/src/campaign-file";
 import {
-  ACCOUNT_CLASSES,
-  claudeKeysFor,
-  claudeLanesOf,
-  CLAUDE_TOTAL_KEY,
-  concurrencyKeyOf,
   isCounted,
   parsePolicyBlock,
   parseTier,
@@ -41,7 +36,6 @@ import {
   pinnedRefs as pinnedRefsOf,
   policyExclusion as policyExclusionOf,
   policyRefs as policyRefsOf,
-  type AccountClass,
   type IdleMode,
   type ModelState,
   type RosterModel,
@@ -51,9 +45,10 @@ import {
   type Tier,
 } from "../runner/src/models";
 import { isScoredEpisode } from "../runner/src/episodes";
-import { parseCredentials, type Credential } from "../runner/src/credentials";
+import { credentialCandidates, isCredentialId, parseCredentials, type Credential } from "../runner/src/credentials";
+import type { PlacedCredential } from "./run-fleet-credentials";
 import { harnessVersion } from "../runner/src/version";
-import { DEFAULT_DRIVER, driverEntry, laneHoldsOf, ROSTER_DRIVERS } from "../runner/src/drivers";
+import { DEFAULT_DRIVER, driverEntry, ROSTER_DRIVERS } from "../runner/src/drivers";
 
 /**
  * The harness series this supervisor runs from: the projection
@@ -181,14 +176,13 @@ export interface FleetRosterEntry extends RosterSpec {
   /** Operator override of the free/paid verdict (`runner/src/model-cost.ts`); normally absent. */
   billing?: Billing;
   /**
-   * Optional: pin this model's runs to ONE Claude subscription, by env var
-   * NAME. Normally absent — a lane is the scheduler's to pick, and pinning
-   * costs the entry the other subscription's free slots: with its own lane busy
-   * the pick is HELD, exactly as if the fleet had one subscription. Its use is
-   * an entry that must be billed to a particular account (a borrowed one, a
-   * usage window being spent on purpose).
+   * Optional: pin this model's runs to ONE credential, by id. Normally absent
+   * — a credential is the scheduler's to pick, and pinning costs the entry the
+   * other credentials' free slots: with its own full the pick is HELD, never
+   * moved. Its use is an entry that must be billed to a particular account (a
+   * borrowed one, a usage window being spent on purpose).
    */
-  subscription?: string;
+  credential?: string;
   /**
    * Set by the parser when this entry was refused: it stays in the catalog so a
    * job naming it is gated rather than taking the whole file down, and nothing
@@ -291,15 +285,18 @@ export interface FleetJob {
    */
   campaignFile?: CampaignFile;
   /**
-   * The Claude subscription LANE this job's claude-code entries run on, by env
-   * var NAME (`policy.subscriptions`). Set by the scheduler — the first lane
-   * with a free slot — or, on a queue job, written in the file to pin the job
-   * to one subscription's usage window. Absent means the default lane.
-   *
-   * On the job rather than the roster entry because a subscription is a lane,
-   * not a model dimension: the same entry runs on whichever account is free.
+   * The credential this job's runs must take, by id: a queue job's or a
+   * pinned campaign's own `credential`, from the file. Absent: each ref's
+   * entry pin, else the scheduler's choice.
    */
-  subscription?: string;
+  credential?: string;
+  /**
+   * Where each ref was placed, by the scheduler (`placeRef`): the credential
+   * it took a slot on, or null for a scripted run that needs none. Never from
+   * the file. On the job rather than the roster entry because which key pays
+   * is not a model dimension: the same entry runs on whichever has room.
+   */
+  placed?: Readonly<Record<string, PlacedCredential | null>>;
   /**
    * Set by the planner on a config job with a numeric `repeat` it is about to
    * start (`owedCopies`): the copies each ref still owes, counted off the runs
@@ -320,25 +317,15 @@ export interface FleetJob {
 export interface FleetAccounts {
   /** account -> the pinned job on it. Derived from the jobs, never authored. */
   pinned: Record<string, string>;
-  /** free-for-the-pool accounts, in preference order. Free models only. */
+  /**
+   * The pool: every game account a run that names none is drawn from, in
+   * preference order, one live session each. Every account that is not
+   * reserved is in it: the reserved ones — the preflight gate's, `SMOKE*`,
+   * `PROBE` and an enabled pin's — are refused here.
+   */
   pool: string[];
-  /**
-   * The paid class (split out 2026-08-23): accounts a PAID policy
-   * pick may use, in preference order. A paid pick lands here and nowhere
-   * else; the pool stays free-only. Empty with `policy.paid` present means
-   * paid picks are held ("no paid account configured") rather than spilling
-   * into the pool.
-   */
-  paid: string[];
-  /**
-   * The local class: the accounts a model on the
-   * operator's own hardware may use — `isLocalBase` in `runner/src/model-cost.ts`
-   * decides which models those are. The LM Studio box serves one runner at a
-   * time, so its accounts are its own for the same reason the paid ones are:
-   * the resource is the limit, not a counter. Absent or empty with a local
-   * model in the roster means those picks are HELD, never spilled into the pool.
-   */
-  local: string[];
+  /** At most this many pool accounts live at once; the pool's size when the file says none. */
+  max: number;
 }
 
 export interface FleetConfig {
@@ -371,42 +358,6 @@ export interface FleetConfig {
   refusals: ConfigRefusal[];
   /** The scheduling policy's run targets; `policy.runsPerEpisode` in the file, defaults apply. */
   policy: SchedulingPolicy;
-  /**
-   * `policy.maxConcurrent`: runs the policy may have in flight per key
-   * (`concurrencyKeyOf`), counting every run on that key (pinned ones
-   * included). Absent key: unlimited. The knob for a subscription — or a
-   * shared free pool's daily budget — that tolerates only so many concurrent
-   * sessions.
-   */
-  maxConcurrent: Record<string, number>;
-}
-
-/**
- * The accounts each split-out class may use, for `planNextJobs`. `pool` is the
- * base class and is never in the map.
- *
- * Both split classes are unconditional. `paid` used to be split only when the
- * file said so — `accounts.paid` non-empty, or a `policy.paid` block present —
- * which left exactly one configuration where a paid pick took a free pool
- * account and spent real money on it: neither of those set. The file's own
- * `_notes` and the account-class rule state it with no such
- * exception, so the code was conditional where the record was absolute. An
- * unconfigured paid class now HOLDS its picks and names them in --status,
- * exactly as `local` always has: the failure of an incomplete config is
- * a model that does not run, never an account that quietly bills.
- *
- * That leaves `policy.paid` with its one real job, the concurrency cap. It no
- * longer doubles as the switch deciding whether the class exists.
- */
-export function classPoolsOf(config: Pick<FleetConfig, "accounts">): Partial<Record<AccountClass, string[]>> {
-  return { paid: config.accounts.paid, local: config.accounts.local };
-}
-
-/** The accounts of one class, in file order. `pool` is the base class. */
-export function classAccountsOf(config: Pick<FleetConfig, "accounts">, cls: AccountClass): string[] {
-  // `?? []`: a hand-built config (a test, a state file read back) may predate a
-  // class. An absent list is an empty one, never a crash in the scheduler.
-  return (cls === "pool" ? config.accounts.pool : cls === "paid" ? config.accounts.paid : config.accounts.local) ?? [];
 }
 
 /**
@@ -512,47 +463,41 @@ function pinClash(pin: Pin, accounts: FleetAccounts, byAccount: ReadonlyMap<stri
     const other = byAccount.get(key);
     if (other !== undefined) return `account ${account} is already ${other}'s — one enabled job per account`;
     // Listing an account says who may SCHEDULE it; `enabled` says who HOLDS it,
-    // and only an enabled pin holds. So a DISABLED pin may park on a listed
-    // account (the burn switch on the paid account); an enabled one may not, or
-    // the pin and the scheduler would fight over the session.
-    const listed = ACCOUNT_CLASSES.find((c) =>
-      classAccountsOf({ accounts }, c).some((a) => a.toUpperCase() === key),
-    );
-    if (listed !== undefined) return `account ${account} is in accounts.${listed} — only a disabled job may park on a listed account`;
+    // and only an enabled pin holds. So a DISABLED pin may park on a pool
+    // account; an enabled one may not, or the pin and the scheduler would
+    // fight over the session.
+    if (accounts.pool.some((a) => a.toUpperCase() === key)) return `account ${account} is in accounts.pool — a pinned account is reserved; only a disabled job may park on a pool account`;
   }
   return undefined;
 }
 
-/** Every account the scheduler may hand out, whatever its class. */
+/** Every account the scheduler may hand out: the pool. */
 export function scheduledAccounts(config: Pick<FleetConfig, "accounts">): string[] {
-  return ACCOUNT_CLASSES.flatMap((c) => classAccountsOf(config, c));
+  return config.accounts.pool;
 }
 
 /**
- * Why a campaign's `subscription` (its lane pin) cannot be honoured, or
- * undefined. The pin is checked as a roster entry's is: an env var NAME the
- * policy lists. It is a pinned campaign's (a lane chosen for launches the
- * policy does not place), and every assignment must be on a driver that bills
- * a lane of its kind: a Claude lane for claude-code, a Codex home for codex.
+ * Why a campaign's `credential` pin cannot be honoured, or undefined. It is a
+ * pinned campaign's (a credential chosen for launches the policy does not
+ * place), and it must carry every assignment: configured, of the
+ * assignment's provider, of its billing side (`credentialCandidates`). A
+ * disabled credential is no refusal; the campaign waits for it.
  */
-export function campaignLaneProblem(
-  c: Pick<Campaign, "name" | "subscription" | "account" | "assignments">,
-  roster: Readonly<Record<string, Pick<FleetRosterEntry, "driver">>>,
-  subscriptions: readonly string[],
+export function campaignCredentialProblem(
+  c: Pick<Campaign, "name" | "credential" | "account" | "assignments">,
+  roster: Readonly<Record<string, Pick<FleetRosterEntry, "model" | "driver" | "apiBase" | "billing">>>,
+  credentials: readonly Credential[],
 ): string | undefined {
-  const lane = c.subscription;
-  if (lane === undefined) return undefined;
-  if (!isTokenEnvName(lane)) return `campaign ${c.name}: subscription must be the NAME of the env var holding the lane's credential, never the credential`;
-  if (!subscriptions.includes(lane)) return `campaign ${c.name}: subscription ${lane} is not in policy.subscriptions (${subscriptions.join(", ")})`;
-  if (c.account === undefined) return `campaign ${c.name}: a lane pin is a pinned campaign's (give account or accounts); the policy places an unpinned campaign's lanes`;
+  const pin = c.credential;
+  if (pin === undefined) return undefined;
+  if (!isCredentialId(pin)) return `campaign ${c.name}: credential must be a credential's id (credentials/<id>), never a secret`;
+  if (c.account === undefined) return `campaign ${c.name}: a credential pin is a pinned campaign's (give account or accounts); the policy places an unpinned campaign's runs`;
   for (const a of c.assignments) {
-    const driver = roster[a.model]?.driver ?? DEFAULT_DRIVER;
-    const bills = driverEntry(driver)?.lane;
-    if (bills === undefined) return `campaign ${c.name}: ${a.model} runs on the ${driver} driver, which bills no subscription lane`;
-    const holds = laneHoldsOf(lane);
-    if (bills.holds !== holds) {
-      return `campaign ${c.name}: ${a.model} runs on ${driver}, and ${lane} ${holds === "home" ? "is a Codex home" : "is not a Codex home"}`;
-    }
+    const e = roster[a.model];
+    if (e === undefined) continue;
+    const fit = credentialCandidates(credentials.map((x) => ({ ...x, enabled: true })), e, { pin });
+    if (fit.why !== undefined) return `campaign ${c.name}: ${a.model}: ${fit.why}`;
+    if (fit.provider === null) return `campaign ${c.name}: ${a.model} needs no credential, so it cannot be pinned to one`;
   }
   return undefined;
 }
@@ -611,8 +556,8 @@ export function pinnedCampaignJobs(
       // the floor: the spawn numbers past every id on disk (`takenRunIds`), so
       // a restaged party never lands on the ids of one before it.
       ...(c.accounts !== undefined ? { accounts: [...c.accounts], attempt: next.attempts + 1 } : {}),
-      // The campaign's own lane, for its launches only (`campaigns.<id>.subscription`).
-      ...(c.subscription !== undefined ? { subscription: c.subscription } : {}),
+      // The campaign's own credential, for its launches only (`campaigns.<id>.credential`).
+      ...(c.credential !== undefined ? { credential: c.credential } : {}),
     });
   }
   return out;
@@ -954,7 +899,7 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
     fail((err as Error).message);
   }
   const roster = parseRoster(o.roster);
-  const { policy, maxConcurrent } = parsePolicy(o.policy);
+  const policy = parsePolicy(o.policy);
   // Never throws: a campaign row or a published definition that does not read
   // is refused by key below, and the roster, the policy and every other
   // campaign load as if it were not there. One bad row must not empty the board.
@@ -987,14 +932,33 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
     const pin = pinsOf(jobs, campaigns).find((p) => p.label === jobName);
     if (pin !== undefined) refuse(pin, refusals, strictKeyWhy("queue job", keys, QUEUE_JOB_KEYS));
   }
-  // A campaign's lane pin is checked as a roster entry's is, against the
-  // policy's subscriptions; a pin it cannot honour refuses the campaign, never
-  // runs it on another lane.
+  // A campaign's credential pin is checked as a roster entry's is, against the
+  // credentials; a pin it cannot honour refuses the campaign, never runs it on
+  // another credential.
   for (const c of campaigns) {
-    const why = campaignLaneProblem(c, roster, policy.subscriptions);
+    const why = campaignCredentialProblem(c, roster, credentials);
     if (why === undefined) continue;
     const pin = pinsOf(jobs, campaigns).find((p) => p.label === `campaign ${c.name}`);
     if (pin !== undefined && pin.enabled) refuse(pin, refusals, why);
+  }
+  // A queue job's credential pin must carry every ref of it, as a campaign's
+  // must; one it cannot honour refuses the job, never runs it elsewhere.
+  for (const j of jobs) {
+    if (j.credential === undefined || !j.enabled) continue;
+    for (const r of j.refs) {
+      const e = roster[r];
+      if (e === undefined) continue;
+      const fit = credentialCandidates(credentials.map((x) => ({ ...x, enabled: true })), e, { pin: j.credential, env });
+      const why = fit.why ?? (fit.provider === null ? `${r} needs no credential, so it cannot be pinned to one` : undefined);
+      if (why === undefined) continue;
+      const pin = pinsOf(jobs, campaigns).find((p) => p.label === j.name);
+      if (pin !== undefined) refuse(pin, refusals, `queue ${j.name}: ${why}`);
+      else {
+        j.enabled = false;
+        refusals.push({ pin: j.name, why: `queue ${j.name}: ${why}`, jobs: [j.name] });
+      }
+      break;
+    }
   }
   applyPinAccountRules(pinsOf(jobs, campaigns), accounts, refusals);
   for (const pin of pinsOf(jobs, campaigns)) {
@@ -1024,12 +988,7 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
         refuse(clash, refusals, `account ${account} is the preflight gate's — the gate needs its own account`);
       }
       if (accounts.pool.some((a) => a.toUpperCase() === account.toUpperCase())) {
-        fail(`preflight account ${account} is also in accounts.pool — the gate needs its own account`);
-      }
-      for (const cls of ["paid", "local"] as const) {
-        if (accounts[cls].some((a) => a.toUpperCase() === account.toUpperCase())) {
-          fail(`preflight account ${account} is also in accounts.${cls} — the gate needs its own account`);
-        }
+        fail(`preflight account ${account} is also in accounts.pool — the gate's account is reserved`);
       }
     }
   }
@@ -1052,16 +1011,16 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
   // Every refusal of a whole ENTRY, in one verdict the viewer's campaign
   // squares read too (`rosterEntryRefusal`, runner/src/roster-refusal.ts): a
   // key the harness does not read, a provider key towards a host its provider
-  // does not own, a subscription the policy does not list. Refused as the
+  // does not own, a pinned credential that cannot carry it. Refused as the
   // ENTRY, not the file: it stays in the catalog, nothing schedules it or
   // launches a run that would send its key anywhere, and the rest of the
   // roster stays in effect. One line per entry; the jobs it could have spawned
   // under ride along, as a pin's refusal carries them, so a live freeplay run
   // under it is spared.
   for (const [name, e] of Object.entries(roster)) {
-    const r = rosterEntryRefusal(e, policy.subscriptions, env);
+    const r = rosterEntryRefusal(e, credentials, env);
     if (r === null) continue;
-    roster[name] = r.kind === "subscription" ? { ...e, refused: r.why, subscription: undefined } : { ...e, refused: r.why };
+    roster[name] = { ...e, refused: r.why };
     refusals.push({
       pin: `roster ${name}`,
       why: `${r.why} — the entry is in the catalog and scheduled by nothing`,
@@ -1079,17 +1038,29 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
       ...(opts.onCluster !== undefined ? { onCluster: opts.onCluster } : {}),
     }),
   ];
-  return { notes, preflight, accounts, credentials, roster, jobs, campaigns, campaignDefs, campaignRefusals, policy, maxConcurrent, refusals };
+  return { notes, preflight, accounts, credentials, roster, jobs, campaigns, campaignDefs, campaignRefusals, policy, refusals };
+}
+
+/** An account that is reserved by name and never in the pool: the smokes' and the ad-hoc debugging one. */
+export function isReservedAccountName(a: string): boolean {
+  return /^SMOKE/i.test(a) || a.toUpperCase() === "PROBE";
 }
 
 function parseAccounts(raw: unknown): FleetAccounts {
-  if (raw === undefined) return { pinned: {}, pool: [], paid: [], local: [] };
+  if (raw === undefined) return { pinned: {}, pool: [], max: 0 };
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail("fleet config: accounts must be a JSON object");
-  const o = raw as { pinned?: unknown; pool?: unknown; paid?: unknown; local?: unknown };
+  const o = raw as { pinned?: unknown; pool?: unknown; max?: unknown; paid?: unknown; local?: unknown };
   // `pinned` is derived from the jobs (`account` on a queue entry), never authored.
   if (o.pinned !== undefined) {
-    fail("accounts.pinned is not a 0.4 key — pin the account on the job (`account` in its queue entry); the map is derived");
+    fail("accounts.pinned is not a key — pin the account on the job (`account` in its queue entry); the map is derived");
   }
+  // The account classes went with credentials: a paid run is held by its
+  // credential's slots, a model on the self-hosted box by its one-slot credential.
+  for (const cls of ["paid", "local"] as const) {
+    if (o[cls] !== undefined) fail(`accounts.${cls} is not a v1 key — every account is in the one pool; a provider's concurrency is its credentials' slots (credentials/<id>)`);
+  }
+  const extra = Object.keys(o).filter((k) => k !== "pool" && k !== "max");
+  if (extra.length > 0) fail(`accounts: unknown key ${extra.join(", ")} — accounts is { pool: [...], max? }`);
   const pinned: Record<string, string> = {};
   const pool: string[] = [];
   if (o.pool !== undefined) {
@@ -1097,30 +1068,16 @@ function parseAccounts(raw: unknown): FleetAccounts {
     for (const a of o.pool as unknown[]) {
       if (typeof a !== "string" || a.length === 0) fail("accounts.pool: entries are account names");
       if (pool.some((p) => p.toUpperCase() === a.toUpperCase())) fail(`accounts.pool: ${a} listed twice`);
+      if (isReservedAccountName(a)) fail(`accounts.pool: ${a} is reserved (SMOKE* and PROBE are never drawn from the pool)`);
       pool.push(a);
     }
   }
-  // The split-out classes, parsed alike: an account belongs to exactly one.
-  const classes: Record<"paid" | "local", string[]> = { paid: [], local: [] };
-  for (const cls of ["paid", "local"] as const) {
-    const list = o[cls];
-    if (list === undefined) continue;
-    if (!Array.isArray(list)) fail(`accounts.${cls} must be an array of account names`);
-    for (const a of list as unknown[]) {
-      if (typeof a !== "string" || a.length === 0) fail(`accounts.${cls}: entries are account names`);
-      const seen = [...pool, ...classes.paid, ...classes.local];
-      const dupe = seen.find((p) => p.toUpperCase() === a.toUpperCase());
-      if (dupe !== undefined) {
-        fail(
-          classes[cls].some((p) => p.toUpperCase() === a.toUpperCase())
-            ? `accounts.${cls}: ${a} listed twice`
-            : `accounts.${cls}: ${a} is already in another class — an account belongs to exactly one`,
-        );
-      }
-      classes[cls].push(a);
-    }
+  let max = pool.length;
+  if (o.max !== undefined) {
+    if (typeof o.max !== "number" || !Number.isInteger(o.max) || o.max < 0) fail("accounts.max must be a non-negative integer: at most that many pool accounts live at once");
+    max = Math.min(o.max, pool.length);
   }
-  return { pinned, pool, paid: classes.paid, local: classes.local };
+  return { pinned, pool, max };
 }
 
 function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
@@ -1130,23 +1087,19 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
   for (const [name, e] of Object.entries(raw as Record<string, unknown>)) {
     if (name.length === 0 || !/^[A-Za-z0-9._-]+$/.test(name)) fail(`roster: entry name ${JSON.stringify(name)} must be [A-Za-z0-9._-]+`);
     if (typeof e !== "object" || e === null || Array.isArray(e)) fail(`roster ${name}: entry must be an object`);
-    const { tier: rawTier, idle: rawIdle, tiers: rawTiers, runsPerEpisode: rawRuns, billing: rawBilling, subscription: rawSub, ...rest } = e as {
+    const { tier: rawTier, idle: rawIdle, tiers: rawTiers, runsPerEpisode: rawRuns, billing: rawBilling, credential: rawCred, ...rest } = e as {
       tier?: unknown;
       idle?: unknown;
       tiers?: unknown;
       runsPerEpisode?: unknown;
       billing?: unknown;
-      subscription?: unknown;
+      credential?: unknown;
     } & Record<string, unknown>;
-    // A NAME, never a token — the same rule the policy block and the queue keep.
-    // Whether the name is one of the CONFIGURED subscriptions is checked in
-    // `parseFleet`, where the policy block has been read: that one is a refusal
-    // of this entry, not of the file.
-    if (rawSub !== undefined && (typeof rawSub !== "string" || !isTokenEnvName(rawSub))) {
-      fail(`roster ${name}: subscription must be the NAME of the env var holding the token (e.g. CLAUDE_CODE_OAUTH_TOKEN_2), never the token`);
-    }
-    if (rawSub !== undefined && driverEntry((e as { driver?: unknown }).driver)?.lane === undefined) {
-      fail(`roster ${name}: subscription is a claude-code or codex lane — only an entry on those drivers bills a subscription`);
+    // An id, never a secret. Whether it is a CONFIGURED credential that can
+    // carry this entry is checked in `parseFleet` (`rosterEntryRefusal`): that
+    // one is a refusal of this entry, not of the file.
+    if (rawCred !== undefined && (typeof rawCred !== "string" || !isCredentialId(rawCred))) {
+      fail(`roster ${name}: credential must be a credential's id (credentials/<id>), never a secret`);
     }
     if (rawBilling !== undefined && rawBilling !== "free" && rawBilling !== "paid") fail(`roster ${name}: billing must be "free" or "paid" (normally absent: it is derived)`);
     // The retired 0.4 spellings, refused by name. Both said how much a model
@@ -1200,7 +1153,7 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
       tier,
       idle,
       ...(rawBilling !== undefined ? { billing: rawBilling as Billing } : {}),
-      ...(rawSub !== undefined ? { subscription: rawSub as string } : {}),
+      ...(rawCred !== undefined ? { credential: rawCred as string } : {}),
     };
   }
   // One model id, one harness: what keeps the harness a tag (`harnessClash`).
@@ -1210,15 +1163,18 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
 }
 
 /**
- * The file's `policy` block: what is left in it is the per-key concurrency cap
- * and the paid throttle — where runs may execute and how many at once
+ * The file's `policy` block: what is left in it is where runs may execute —
+ * the per-driver session cap, the routing default, run pods
  * (`parsePolicyBlock` in runner/src/models.ts is the one parser; the viewer
- * reads the same). The tier table, the idle character cycle, the defer ladder
- * and the promotion level are code. The series is this checkout's.
+ * reads the same). The tier table, the defer ladder and the promotion level
+ * are code. The series is this checkout's.
  */
-function parsePolicy(raw: unknown): { policy: SchedulingPolicy; maxConcurrent: Record<string, number> } {
-  const { maxConcurrent, ...policy } = parsePolicyBlock(raw, currentSeries());
-  return { policy, maxConcurrent };
+function parsePolicy(raw: unknown): SchedulingPolicy {
+  try {
+    return parsePolicyBlock(raw, currentSeries());
+  } catch (err) {
+    fail((err as Error).message);
+  }
 }
 
 /**
@@ -1262,51 +1218,6 @@ export function policyExclusion(config: Pick<FleetConfig, "jobs" | "roster">, na
 /** The driver a roster name runs on. */
 export function driverOf(roster: Record<string, FleetRosterEntry>, name: string): string {
   return roster[name]?.driver ?? DEFAULT_DRIVER;
-}
-
-/**
- * The concurrency key a roster name counts against for `policy.maxConcurrent`
- * (`concurrencyKeyOf`, models.ts): the free shared pools are capped per
- * platform, everything else per driver. `billing` is the derived verdict the
- * caller already holds (the projection's `state.billing`); a name the roster
- * does not carry falls back to its driver key, so a stranger can never eat a
- * free key.
- */
-/**
- * The concurrency line `--status` and `--dry-run` print: the configured caps,
- * and — when there is more than one subscription — the lane each claude run may
- * take with the cap it inherits. Empty when the file caps nothing.
- */
-export function formatConcurrency(max: Record<string, number>, policy: Pick<SchedulingPolicy, "subscriptions">): string | undefined {
-  const caps = Object.entries(max).map(([d, n]) => `${d} <= ${n}`);
-  if (caps.length === 0) return undefined;
-  const lanes = claudeLanesOf(policy.subscriptions);
-  const subs =
-    lanes.length > 1
-      ? `; ${lanes.length} subscriptions: ${lanes.join(", ")} — a claude run needs room on its own lane AND under claude-code`
-      : "";
-  return `concurrency: ${caps.join(", ")} (every run on the key counts)${subs}`;
-}
-
-/**
- * The keys one ref counts against while it runs on a given subscription lane.
- *
- * A claude run counts TWICE — against its subscription and against the overall
- * `claude-code` ceiling — and needs room in both to launch. Which subscription
- * it bills is not fixed by its roster entry (it is decided when the run is
- * scheduled), so every count of an in-flight claude run comes through here with
- * the lane that run is actually on: `FleetJob.subscription`, or the lane read
- * back off the live run. Everything else keeps the one key its entry gives it.
- */
-export function keysOfIn(keyOf: (n: string) => string, ref: string, lane: string | undefined): string[] {
-  const k = keyOf(ref);
-  return k === CLAUDE_TOTAL_KEY ? claudeKeysFor(lane) : [k];
-}
-
-export function concurrencyKeyOfRef(roster: Record<string, FleetRosterEntry>, name: string, billing: Billing | undefined): string {
-  const e = roster[name];
-  if (e === undefined || billing === undefined) return driverOf(roster, name);
-  return concurrencyKeyOf({ name, ...(e.driver !== undefined ? { driver: e.driver } : {}), ...(e.apiBase !== undefined ? { apiBase: e.apiBase } : {}) }, billing);
 }
 
 /** An eligibility predicate over the projection, for planQueue / runnableRefs. */
@@ -1376,15 +1287,14 @@ function parseQueue(
       if (typeof j.account !== "string" || j.account.length === 0) fail(`queue ${ref}: account must be a non-empty account name`);
       account = j.account;
     }
-    // Optional: pin the job to one subscription instead of letting the
-    // scheduler pick the free lane. A NAME, checked as one — the token itself
-    // here would be a credential in a committed file.
-    let subscription: string | undefined;
-    if (j.subscription !== undefined) {
-      if (typeof j.subscription !== "string" || !isTokenEnvName(j.subscription)) {
-        fail(`queue ${ref}: subscription must be the NAME of the env var holding the token (e.g. CLAUDE_CODE_OAUTH_TOKEN_2), never the token`);
+    // Optional: pin the job to one credential instead of letting the
+    // scheduler pick the first with room. An id, checked as one.
+    let credential: string | undefined;
+    if (j.credential !== undefined) {
+      if (typeof j.credential !== "string" || !isCredentialId(j.credential)) {
+        fail(`queue ${ref}: credential must be a credential's id (credentials/<id>), never a secret`);
       }
-      subscription = j.subscription;
+      credential = j.credential;
     }
     // Collected, not thrown: the job is refused by name below the parse, which
     // suppresses its scheduling and leaves the rest of the file in effect.
@@ -1398,7 +1308,7 @@ function parseQueue(
       name,
       enabled,
       ...(account !== undefined ? { account } : {}),
-      ...(subscription !== undefined ? { subscription } : {}),
+      ...(credential !== undefined ? { credential } : {}),
       source: account !== undefined ? "pinned" : "queue",
     });
   }

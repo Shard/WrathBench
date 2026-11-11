@@ -351,7 +351,7 @@ export function runHref(runId: string | null): string | null {
 }
 
 /** Classes in the order their idle rows are grouped at the bottom. */
-const CLASS_ORDER = ["pool", "paid", "local", "pinned"];
+const CLASS_ORDER = ["pool", "pinned"];
 
 /**
  * The order the table is read in, most alive first.

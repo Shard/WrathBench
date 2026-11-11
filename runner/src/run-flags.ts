@@ -38,6 +38,8 @@ export const RUN_FLAGS = [
   "continue-dropped",
   "continue-dropped-reason",
   "continue-from",
+  "credential",
+  "credential-env",
   "driver",
   "effort",
   "episode",
@@ -62,7 +64,7 @@ export const RUN_FLAGS = [
   "step-interval-ms",
   "stub",
   "token",
-  "token-env",
+  "usage-max-pct",
   "watchdogs-json",
   "wiki",
   "wiki-bundle",
@@ -86,7 +88,7 @@ export const PROBE_SHAPE_FLAGS = [
 
 /**
  * Every flag the fleet's roster can put on a run's argv (`episodeArgv` in
- * `infra/run-roster.ts`, every lane and the resume). An arm's args come after
+ * `infra/run-roster.ts`, every driver and the resume). An arm's args come after
  * these, so an arm that restated one would either fight the supervisor for
  * the run's identity or silently win it; publishing refuses that.
  * `run-argv.test.ts` asserts this list is exactly what the builder emits.
@@ -103,6 +105,8 @@ export const SUPERVISOR_FLAGS = [
   "continue-dropped",
   "continue-dropped-reason",
   "continue-from",
+  "credential",
+  "credential-env",
   "driver",
   "effort",
   "episode",
@@ -117,7 +121,7 @@ export const SUPERVISOR_FLAGS = [
   "resume",
   "routing-json",
   "run-id",
-  "token-env",
+  "usage-max-pct",
   "watchdogs-json",
   "wiki",
   "wiki-coords",

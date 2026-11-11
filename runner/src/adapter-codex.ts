@@ -162,7 +162,7 @@ import { CodexLastCallReader, CodexRolloutFollower, deleteCodexThread, removeThr
 import { CompactionAsk, codexAutoCompactLimit, codexWindowCapRefusal, compactionNotice, compactWindowTokens, summaryFields, type CompactionRecord } from "./cli-compaction";
 import { codexUsageDelta, codexUsageRegressed, normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 import { SUBSCRIPTION_PAUSE } from "./lapse";
-import { SubscriptionUsageTracker, describeWindows, newestLaneUsage, subscriptionLaneOf, subscriptionThresholds } from "./subscription-usage";
+import { SubscriptionUsageTracker, describeWindows, newestCredentialUsage, thresholdsOf, usageKeyOf } from "./subscription-usage";
 import { CODEX_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
 import type { ToolContext } from "./tools";
 import type { EpisodicLog } from "./episodic";
@@ -213,23 +213,23 @@ export function codexEffortRefusal(effort: string | undefined): string | null {
  * environment under `$CODEX_HOME/shell_snapshots`, on the lane's volume, so
  * whatever it inherits is also written to disk.
  *
- * An unset lane leaves `CODEX_HOME` unset: the CLI then has no login to bill
+ * An unset credential variable leaves `CODEX_HOME` unset: the CLI then has no login to bill
  * and refuses, which is what `run.ts` checks for before it gets this far. The
  * MCP bridge the CLI launches needs nothing from here (`CLI_BASE_ENV`), so the
  * `mcp_servers` overrides carry no `env`.
  */
 export function childEnv(
   parent: Record<string, string | undefined>,
-  o: { laneEnv?: string; extra?: Record<string, string> },
+  o: { credentialEnv?: string; extra?: Record<string, string> },
 ): Record<string, string> {
   const out = cliBaseEnv(parent);
-  const home = parent[o.laneEnv ?? DEFAULT_CODEX_HOME_ENV];
+  const home = parent[o.credentialEnv ?? DEFAULT_CODEX_HOME_ENV];
   if (home !== undefined && home.length > 0) out[DEFAULT_CODEX_HOME_ENV] = home;
   return { ...out, ...(o.extra ?? {}) };
 }
 
-/** Whether a lane directory looks logged in: the CLI keeps the login in auth.json there. */
-export function laneLooksLoggedIn(codexHome: string | undefined): boolean {
+/** Whether a Codex home looks logged in: the CLI keeps the login in auth.json there. */
+export function homeLooksLoggedIn(codexHome: string | undefined): boolean {
   return codexHome !== undefined && codexHome.length > 0 && existsSync(join(codexHome, "auth.json"));
 }
 
@@ -778,9 +778,9 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   // A cwd outside the repo: the CLI walks parents for AGENTS.md.
   const cwd = mkdtempSync(join(tmpdir(), "wrathbench-codex-"));
 
-  const laneEnv = config.subscription ?? DEFAULT_CODEX_HOME_ENV;
+  const credentialEnv = config.credentialEnv ?? DEFAULT_CODEX_HOME_ENV;
   const env = childEnv(o.env ?? process.env, {
-    laneEnv,
+    credentialEnv,
     ...(o.extraEnv !== undefined && Object.keys(o.extraEnv).length > 0 ? { extra: o.extraEnv } : {}),
   });
   const argsFor = (threadId: string | undefined): string[] =>
@@ -803,8 +803,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     bin,
     args: firstArgs,
     cwd,
-    // The lane by NAME (the env var whose value is the CODEX_HOME directory), never the path or its contents.
-    lane: laneEnv,
+    // The credential by NAME (the env var whose value is the CODEX_HOME directory), never the path or its contents.
+    credentialEnv,
     instructionsPath,
     mcpPort: listener.port,
     systemPromptChars: systemPrompt.length,
@@ -822,19 +822,16 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   let resolvedModel = false;
 
   /**
-   * The lane's usage windows, off the rollout after each turn, recorded on
-   * change; and the two thresholds (`subscription-usage.ts`). Only the
+   * The credential's usage windows, off the rollout after each turn, recorded
+   * on change; and its two thresholds (`subscription-usage.ts`). Only the
    * freeplay one is the driver's to act on: a scored run is never paused by
-   * the gate, which holds the next launch instead.
+   * the budget, which holds the next launch instead.
    */
-  const thresholds = subscriptionThresholds(o.env ?? process.env);
-  for (const note of thresholds.notes) console.error(`[wrathbench] ${note}`);
-  const usage = new SubscriptionUsageTracker(subscriptionLaneOf({ driver: "codex", lane: laneEnv })!, (u) =>
-    trajectory.recordSubscriptionUsage(u, turn),
-  );
-  // The lane's newest reading from before this run, so a first turn that
-  // meets a spent quota still knows the window it was spent in.
-  usage.seed(newestLaneUsage(config.runsDir, usage.lane));
+  const thresholds = thresholdsOf(config.usageMaxPct);
+  const usage = new SubscriptionUsageTracker(usageKeyOf(config, credentialEnv)!, (u) => trajectory.recordSubscriptionUsage(u, turn));
+  // The credential's newest reading from before this run, so a first turn
+  // that meets a spent quota still knows the window it was spent in.
+  usage.seed(newestCredentialUsage(config.runsDir, usage.credential));
 
   // ---- one process at a time; the group kill and the exit net track it
   const spawnCodex = (args: string[]) =>

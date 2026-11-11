@@ -52,7 +52,6 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parseFleet } from "../../infra/run-fleet-config";
-import { rosterKeyRefusal } from "./providers";
 import {
   CAMPAIGN_DEFS_PREFIX,
   campaignDefKey,
@@ -63,7 +62,7 @@ import {
   type PublishedCampaignDoc,
 } from "./campaign-def";
 import { campaignRowProblem } from "./campaigns";
-import { describeBudget, parseCredentials, type Credential } from "./credentials";
+import { describeBudget, parseCredentials, rosterProviderRefusal, type Credential } from "./credentials";
 
 /** How long a reader waits for the single writer. Same posture as `rundb.ts`. */
 export const CONFIG_DB_BUSY_TIMEOUT_MS = 5000;
@@ -348,8 +347,9 @@ export function validateFleet(doc: unknown, env: Record<string, string | undefin
 }
 
 /**
- * The store's own refusal of a roster entry whose provider key would go to a
- * host its provider does not own (`runner/src/providers.ts`).
+ * The store's own refusal of a roster entry whose base no credential provider
+ * serves, or whose provider's key may not go there (`rosterProviderRefusal`,
+ * runner/src/credentials.ts).
  *
  * `parseFleet` only REFUSES such an entry — it stays in the catalog and nothing
  * schedules it, which is right for a document already on disk. A write is
@@ -360,7 +360,7 @@ export function validateFleet(doc: unknown, env: Record<string, string | undefin
  */
 function refuseKeyPairing(key: string, value: unknown, env: Record<string, string | undefined>): void {
   if (!key.startsWith("roster/") || typeof value !== "object" || value === null || Array.isArray(value)) return;
-  const why = rosterKeyRefusal(value as Record<string, unknown>, env);
+  const why = rosterProviderRefusal(value as Record<string, unknown>, env);
   if (why !== null) throw new ConfigRejected(`${key}: ${why}`);
 }
 
@@ -534,7 +534,7 @@ export class ConfigStore {
    * Whether `patch(key, partial)` would be accepted, without writing it: the
    * same key rules and the same whole-config validation, throwing the same
    * `ConfigRejected`. For a caller that must know a store write will succeed
-   * before it makes another, unrelated write first (`move-lane`, whose
+   * before it makes another, unrelated write first (`move-credential`, whose
    * meta.json rewrite has to precede its roster pin).
    */
   checkPatch(key: string, partial: unknown): void {
@@ -855,16 +855,17 @@ const USAGE = `usage: bun runner/src/config-store.ts <command>
   credentials edit <id> <json>
                             merge into one credential; validated
   credentials disable <id>  stop new runs taking it; live runs on it finish
-  move-lane <run-id> <ENV NAME> --note <why> [--pin]
-                            move a paused or ended run to another subscription lane: rewrite its meta.json's
-                            config.subscription and append to its laneHistory; with --pin, then pin its roster
-                            entry to the same lane. Refuses a live run, a lane policy.subscriptions does not
-                            list, and a driver whose lane is not a bare credential (runner/src/move-lane.ts)
+  move-credential <run-id> <credential id> --note <why> [--pin]
+                            move a paused or ended run to another credential of its provider: rewrite its
+                            meta.json's config.credential and append to its credentialHistory; with --pin, then
+                            pin its roster entry to the same credential. Refuses a live run, a credential that
+                            would not carry it, and a driver whose credential is not a bare secret
+                            (runner/src/move-credential.ts)
 
   --db <path>        the store (default $WRATHBENCH_CONFIG_DB, else $WRATHBENCH_DATA/config.sqlite)
   --actor <name>     who to record the change as (default "cli")
   --note <text>      why
-  --runs-dir <dir>   move-lane: the runs directory (default $WRATHBENCH_RUNS_DIR, else data/runs in the checkout)
+  --runs-dir <dir>   move-credential: the runs directory (default $WRATHBENCH_RUNS_DIR, else data/runs in the checkout)
 `;
 
 async function main(argv: string[]): Promise<number> {
@@ -972,19 +973,19 @@ async function main(argv: string[]): Promise<number> {
       }
       case "credentials":
         return credentialsCommand(store, args, opts);
-      case "move-lane": {
+      case "move-credential": {
         const [runId, to] = args;
         if (runId === undefined || to === undefined || args.length > 2 || note === undefined) {
           console.error(USAGE);
           return 2;
         }
-        const { moveLane } = await import("./move-lane");
+        const { moveCredential } = await import("./move-credential");
         const runsDir = runsDirFlag ?? (process.env["WRATHBENCH_RUNS_DIR"] || join(repoRoot, "data", "runs"));
-        const r = moveLane({ runsDir, runId, to, pin, actor, note, store });
+        const r = moveCredential({ runsDir, runId, to, pin, actor, note, store });
         console.error(
           r.moved
-            ? `moved ${runId}: ${r.from} -> ${r.to} in its meta.json (laneHistory: ${r.history} move${r.history === 1 ? "" : "s"})`
-            : `${runId} already bills ${r.to}; only the pin was owed`,
+            ? `moved ${runId}: ${r.from} -> ${r.to} in its meta.json (credentialHistory: ${r.history} move${r.history === 1 ? "" : "s"})`
+            : `${runId} is already on ${r.to}; only the pin was owed`,
         );
         if (r.pinned !== null) console.error(`pinned ${r.pinned} to ${r.to}`);
         for (const w of r.warnings) console.error(`warning: ${w}`);

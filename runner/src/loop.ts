@@ -29,7 +29,7 @@ import { fixedLoopRequestRecord } from "./request-record";
 import { appendPendingActionHints, callTool, coerceToolArgs, normalizeToolArgs, toolsFor, type ToolContext } from "./tools";
 import { harnessOf } from "./config";
 import { SUBSCRIPTION_PAUSE } from "./lapse";
-import { describeWindows, subscriptionThresholds, type SubscriptionUsage, type UsageHold } from "./subscription-usage";
+import { describeWindows, thresholdsOf, type SubscriptionUsage, type UsageHold } from "./subscription-usage";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { ContextEvents, DeathSignal, FlightSignal } from "./sandbox/signals";
@@ -1106,7 +1106,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   const { config, trajectory, watchdogs } = o;
   const runId = config.runId;
   // Only the freeplay threshold is the loop's to act on (`subscription-usage.ts`).
-  const usageThresholds = subscriptionThresholds(process.env);
+  const usageThresholds = thresholdsOf(config.usageMaxPct);
   // The first reading, early: a turn's boundary will want it.
   o.usage?.poke();
 

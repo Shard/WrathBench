@@ -30,7 +30,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DRIVER_POD_VOLUMES, entryOf, HOME_LANE_ENVS, type RosterDriver } from "../runner/src/drivers";
+import { DRIVER_POD_VOLUMES, entryOf, HOME_CREDENTIAL_ENVS, type RosterDriver } from "../runner/src/drivers";
 import type { EpisodeExit, EpisodeHandle, EpisodeLaunch, EpisodeLauncher } from "./episode-launcher";
 import { EPISODE_TERM_GRACE_MS, refusedEpisode } from "./episode-launcher";
 import { digestOf, K8sClient, K8sError, type Pod, type PodEnvVar } from "./k8s-client";
@@ -165,7 +165,8 @@ function writeImageRecord(runDir: string, record: ImageRecord): void {
 
 export interface RunPodEnvOptions {
   driver: RosterDriver;
-  tokenEnv: string | undefined;
+  /** The CLI driver's credential variable (its credential's `secretEnv`); undefined is the driver's default. */
+  credentialEnv: string | undefined;
   apiKeyEnv: string;
   /** Plain values set last, over the template's. */
   stamps: Record<string, string>;
@@ -174,17 +175,17 @@ export interface RunPodEnvOptions {
 /**
  * The template's env with every credential the driver does not bill removed,
  * then the stamps. A `secretKeyRef` survives only as the module secret or the
- * one key this driver reads: claude-code its lane's OAuth token, openai its
- * `apiKeyEnv`, codex nothing (its lane is the mounted home directory, named by
- * a plain variable that survives only for codex). Anything `ANTHROPIC_*` is
+ * one key this driver reads: claude-code its credential's OAuth token, openai
+ * its `apiKeyEnv`, codex nothing (its credential is the mounted home
+ * directory, named by a plain variable that survives only for codex). Anything `ANTHROPIC_*` is
  * refused outright, template or stamp: there is no run that may carry one.
  */
 export function runPodEnv(template: readonly PodEnvVar[], opts: RunPodEnvOptions): PodEnvVar[] {
   const driver = entryOf(opts.driver);
-  const lane = driver.lane?.holds === "token" ? opts.tokenEnv ?? driver.lane.defaultEnv : undefined;
-  const homeLane = driver.lane?.holds === "home" ? opts.tokenEnv ?? driver.lane.defaultEnv : undefined;
+  const token = driver.credential?.holds === "token" ? opts.credentialEnv ?? driver.credential.defaultEnv : undefined;
+  const home = driver.credential?.holds === "home" ? opts.credentialEnv ?? driver.credential.defaultEnv : undefined;
   const keep = new Set<string>(["WRATHBENCH_MODULE_SECRET"]);
-  if (lane !== undefined) keep.add(lane);
+  if (token !== undefined) keep.add(token);
   if (driver.endpoint) keep.add(opts.apiKeyEnv);
   // Checked on the inputs, not the output: a template that carries one is
   // wrong for every driver, and must fail before a single pod is built from it.
@@ -197,9 +198,9 @@ export function runPodEnv(template: readonly PodEnvVar[], opts: RunPodEnvOptions
   const out: PodEnvVar[] = [];
   for (const e of template) {
     if (e.valueFrom?.secretKeyRef !== undefined && !keep.has(e.name)) continue;
-    // The codex lane's directory is a plain value; it is still a credential's
+    // The codex home's directory is a plain value; it is still a credential's
     // address and goes only to the driver that reads it.
-    if (HOME_LANE_ENVS.includes(e.name) && homeLane === undefined) continue;
+    if (HOME_CREDENTIAL_ENVS.includes(e.name) && home === undefined) continue;
     if (e.name in opts.stamps) continue;
     out.push(structuredClone(e));
   }
@@ -339,7 +340,7 @@ export class PodLauncher implements EpisodeLauncher {
       args: launch.args,
       env: {
         driver: launch.spec.driver,
-        tokenEnv: launch.spec.tokenEnv,
+        credentialEnv: launch.spec.placedOn?.env,
         apiKeyEnv: launch.spec.apiKeyEnv,
         stamps: { ...launch.env, WRATHBENCH_HARNESS_VERSION: resolved.stamp, WRATHBENCH_RUN_IMAGE: resolved.requested.ref },
       },

@@ -32,10 +32,10 @@
  *   tools, the same dispatch, the same trajectory records.
  * - Billing: the child environment is an allowlist (`childEnv`) holding no
  *   Anthropic/Bedrock/Vertex credential and no other secret of the runner's,
- *   so the CLI can only bill the subscription this run was scheduled on — its LANE, named by
- *   `RunConfig.subscription` and copied onto `CLAUDE_CODE_OAUTH_TOKEN` — or
- *   refuse. It can never silently fall back to API-key credits, and it never
- *   sees another lane's token.
+ *   so the CLI can only bill the subscription this run was scheduled on — its
+ *   CREDENTIAL, whose variable is `RunConfig.credentialEnv` and is copied onto
+ *   `CLAUDE_CODE_OAUTH_TOKEN` — or refuse. It can never silently fall back to
+ *   API-key credits, and it never sees another credential's token.
  *
  * ## Measured scaffold gap (claude 2.1.238, verified against a local capture
  * proxy, no model calls)
@@ -135,9 +135,9 @@ import { SUBSCRIPTION_PAUSE } from "./lapse";
 import {
   SubscriptionUsageTracker,
   describeWindows,
-  newestLaneUsage,
-  subscriptionLaneOf,
-  subscriptionThresholds,
+  newestCredentialUsage,
+  thresholdsOf,
+  usageKeyOf,
   type UsageWindow,
 } from "./subscription-usage";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
@@ -271,7 +271,7 @@ export function detectLimit(text: string | undefined | null): { reason: PauseRea
 /** The window lengths the CLI's `unifiedWindows` keys name, in minutes. */
 const CLAUDE_WINDOWS: Readonly<Record<string, number>> = { five_hour: 300, seven_day: 10_080 };
 
-/** The model family a per-model cap's `rateLimitType` names (`seven_day_opus` → `opus`), or undefined for a lane-wide one. */
+/** The model family a per-model cap's `rateLimitType` names (`seven_day_opus` → `opus`), or undefined for a credential-wide one. */
 function claudeFamilyOfType(type: unknown): string | undefined {
   if (typeof type !== "string") return undefined;
   const m = /^seven_day_([a-z]+)$/.exec(type);
@@ -945,25 +945,22 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   const extra = { ...thinking, ...compactEnv(config.compactWindow), ...(o.extraEnv ?? {}) };
   const env = childEnv(o.env ?? process.env, {
     configDir,
-    // The run's subscription lane (`RunConfig.subscription`): the CLI only ever
-    // sees the token, under the one name it knows.
-    ...(config.subscription !== undefined ? { tokenEnv: config.subscription } : {}),
+    // The run's credential (`RunConfig.credentialEnv`): the CLI only ever sees
+    // the token, under the one name it knows.
+    ...(config.credentialEnv !== undefined ? { tokenEnv: config.credentialEnv } : {}),
     ...(Object.keys(extra).length > 0 ? { extra } : {}),
   });
 
   /**
-   * The lane's usage windows, off the CLI's `rate_limit_event` frames,
-   * recorded on change; and the two thresholds (`subscription-usage.ts`). Only
+   * The credential's usage windows, off the CLI's `rate_limit_event` frames,
+   * recorded on change; and its two thresholds (`subscription-usage.ts`). Only
    * the freeplay one is the driver's to act on: a scored run is never paused
-   * by the gate, which holds the next launch instead.
+   * by the budget, which holds the next launch instead.
    */
-  const thresholds = subscriptionThresholds(o.env ?? process.env);
-  for (const note of thresholds.notes) console.error(`[wrathbench] ${note}`);
-  const usage = new SubscriptionUsageTracker(subscriptionLaneOf({ driver: "claude-code", lane: config.subscription })!, (u) =>
-    trajectory.recordSubscriptionUsage(u, turn),
-  );
-  // The lane's newest reading from before this run (`SubscriptionUsageTracker.seed`).
-  usage.seed(newestLaneUsage(config.runsDir, usage.lane));
+  const thresholds = thresholdsOf(config.usageMaxPct);
+  const usage = new SubscriptionUsageTracker(usageKeyOf(config, DEFAULT_CLAUDE_TOKEN_ENV)!, (u) => trajectory.recordSubscriptionUsage(u, turn));
+  // The credential's newest reading from before this run (`SubscriptionUsageTracker.seed`).
+  usage.seed(newestCredentialUsage(config.runsDir, usage.credential));
   /** A spent quota's pause, waiting for its window's reset when one is known. */
   const quotaPause = (l: { reason: PauseReason; detail: string; resetAt?: number }): Promise<LoopOutcome> => {
     const notBefore = l.reason === "quota-exhausted" ? usage.quotaReset(Date.now(), l.resetAt, cliModel ?? config.model) : undefined;

@@ -6,10 +6,10 @@
  *   bun runner/src/run.ts --driver stub --stub <script.json> [flags]
  *   bun runner/src/run.ts --driver reference --episode e90 --account PROBE  [the scripted reference; never scored]
  *   bun runner/src/run.ts --driver claude-code --model opus  [claude-code harness]
- *   bun runner/src/run.ts --driver claude-code --model opus --token-env CLAUDE_CODE_OAUTH_TOKEN_2
+ *   bun runner/src/run.ts --driver claude-code --model opus --credential-env CLAUDE_CODE_OAUTH_TOKEN_2
  *   bun runner/src/run.ts --driver claude-code --model haiku --effort max --compact-window 100k
- *   bun runner/src/run.ts --driver codex --model gpt-6-astra --effort high  [codex harness; lane $CODEX_HOME]
- *   bun runner/src/run.ts --driver codex --model gpt-5.5 --token-env CODEX_HOME_2
+ *   bun runner/src/run.ts --driver codex --model gpt-6-astra --effort high  [codex harness; home $CODEX_HOME]
+ *   bun runner/src/run.ts --driver codex --model gpt-5.5 --credential-env CODEX_HOME_2
  *   bun runner/src/run.ts --resume <run-id>
  *   bun runner/src/run.ts --driver openai --model <id> --campaign-file data/runs/<id>/campaign.json --run-id <id>
  *
@@ -84,7 +84,8 @@ import { CLIENT_CACHE_FILE, ClientCacheStore } from "@wrathbench/mcp/client-cach
 import { SandboxHost } from "./sandbox/host";
 import { EpisodicLog } from "./episodic";
 import { Scratchpad } from "@wrathbench/mcp/scratchpad";
-import { goKeyEnvOf, liveOwnerOf, RESUME_REFUSED_EXIT, subscriptionLaneOfConfig } from "./models";
+import { liveOwnerOf, RESUME_REFUSED_EXIT } from "./models";
+import { isOpenCodeGoBase } from "./platform";
 import { GoUsageGauge, goUsageUrl } from "./opencode-go";
 import { Trajectory, readMeta, startHeartbeat, type PauseMark, type RunMeta } from "./trajectory";
 import { moveLineOf, openSessionRecord, removeSessionRing } from "./session-record";
@@ -213,10 +214,13 @@ export function configFromArgs(
         ? args["api-base"]
         : process.env["OPENAI_BASE_URL"] ?? undefined,
     apiKeyEnv: typeof args["api-key-env"] === "string" ? args["api-key-env"] : undefined,
-    // The subscription lane, by env var NAME (claude-code and codex). Identity, like
-    // the account: a resumed run bills the subscription it started on, so
-    // --token-env is not an override on --resume.
-    subscription: typeof args["token-env"] === "string" ? args["token-env"] : undefined,
+    // The credential the fleet placed the run on (its id), the env var NAME a
+    // CLI driver reads it from, and its usage thresholds ("<scored>,<freeplay>").
+    // Identity, like the account: a resumed run stays on the credential it
+    // started on, so none of these is an override on --resume.
+    credential: typeof args["credential"] === "string" ? args["credential"] : undefined,
+    credentialEnv: typeof args["credential-env"] === "string" ? args["credential-env"] : undefined,
+    usageMaxPct: typeof args["usage-max-pct"] === "string" ? usageMaxPctOf(args["usage-max-pct"]) : undefined,
     // Identity, like model and driver: a resumed run keeps the effort it was
     // launched with, so --effort is not an override on --resume.
     effort: typeof args["effort"] === "string" ? args["effort"] : undefined,
@@ -1338,18 +1342,27 @@ async function main(): Promise<void> {
 }
 
 /**
+ * `--usage-max-pct <scored>,<freeplay>`: a credential's usage thresholds, each
+ * a percent in (0, 100]. Anything else is refused by `loadRunConfig`'s schema.
+ */
+export function usageMaxPctOf(raw: string): { scored: number; freeplay: number } | undefined {
+  const [a, b] = raw.split(",").map((x) => Number(x.trim()));
+  return a === undefined || b === undefined || !Number.isFinite(a) || !Number.isFinite(b) ? undefined : { scored: a, freeplay: b };
+}
+
+/**
  * The OpenCode Go allowance a fixed-loop run draws on, as the loop's usage
  * gauge (`opencode-go.ts`), or undefined for any run that draws on none: not
- * a Go base, a `$0` Go model, no key in the environment, or a base with no
- * usage endpoint. The key is handed to the reader and nothing else.
+ * on a Go base, no credential with a usage budget (a `$0` Go model's free
+ * credential has none), no key in the environment, or a base with no usage
+ * endpoint. The key is handed to the reader and nothing else.
  */
 export function goUsageGaugeFor(config: RunConfig, trajectory: Trajectory): GoUsageGauge | undefined {
-  const keyEnv = goKeyEnvOf(config);
-  const lane = subscriptionLaneOfConfig(config);
+  if (!isOpenCodeGoBase(config.apiBase) || config.credential === undefined || config.usageMaxPct === undefined) return undefined;
   const url = goUsageUrl(config.apiBase);
-  const key = keyEnv !== undefined ? process.env[keyEnv] : undefined;
-  if (keyEnv === undefined || lane === null || url === undefined || key === undefined || key.length === 0) return undefined;
-  return new GoUsageGauge(lane, url, key, (u) => trajectory.recordSubscriptionUsage(u), {
+  const key = process.env[config.apiKeyEnv];
+  if (url === undefined || key === undefined || key.length === 0) return undefined;
+  return new GoUsageGauge(config.credential, url, key, (u) => trajectory.recordSubscriptionUsage(u), {
     onNote: (text) => console.error(`[wrathbench] ${text}`),
   });
 }

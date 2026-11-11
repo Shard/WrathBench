@@ -13,7 +13,8 @@ import { openRunDb } from "../runner/src/rundb";
 import { type FleetRead, readFleetConfig } from "../runner/src/config-store";
 import { existsSync, readdirSync, readFileSync, realpathSync, statfsSync, statSync } from "node:fs";
 import { readCodexThread } from "../runner/src/codex-rollout";
-import { DEFAULT_CODEX_HOME_ENV, isCodexHomeEnvName } from "../runner/src/config";
+import { DEFAULT_CODEX_HOME_ENV } from "../runner/src/config";
+import type { CredentialStatus } from "./run-fleet-credentials";
 import { driverEntry } from "../runner/src/drivers";
 import { HEARTBEAT_DEAD_MS } from "../runner/src/trajectory";
 import { progressSampleOf, progressVerdict, STUCK_DEFAULTS, stuckFlag } from "./inspect-run";
@@ -247,13 +248,13 @@ export interface CodexHome {
 }
 
 /**
- * The Codex homes this process can reach: `CODEX_HOME`, and each
- * `CODEX_HOME_N` that `policy.subscriptions` names (`isCodexHomeEnvName`),
+ * The Codex homes this process can reach: `CODEX_HOME`, and each variable a
+ * ChatGPT credential names (`codexHomeEnvsOf`, run-fleet-credentials.ts),
  * read from `env`, kept only when set to a directory that exists here, and
  * one entry per real path (two variables may name one directory).
  */
-export function codexHomesOf(subscriptions: readonly string[], env: Record<string, string | undefined> = process.env): CodexHome[] {
-  const names = [DEFAULT_CODEX_HOME_ENV, ...subscriptions.filter((s) => s !== DEFAULT_CODEX_HOME_ENV && isCodexHomeEnvName(s))];
+export function codexHomesOf(homeEnvs: readonly string[], env: Record<string, string | undefined> = process.env): CodexHome[] {
+  const names = [DEFAULT_CODEX_HOME_ENV, ...homeEnvs.filter((s) => s !== DEFAULT_CODEX_HOME_ENV)];
   const seen = new Set<string>();
   const out: CodexHome[] = [];
   for (const name of names) {
@@ -403,18 +404,19 @@ export interface FleetState {
    */
   pausedSwitch?: FleetPause;
   /**
-   * The subscription usage gate's thresholds this supervisor runs with
-   * (`WRATHBENCH_SUB_SCORED_MAX_PCT`, `WRATHBENCH_SUB_FREEPLAY_MAX_PCT`), so
-   * `--status` from another pod reports the supervisor's, not its own env's.
-   * Thresholds only: no usage figure is ever written here.
+   * Every credential's state as of the last tick (`credentialStatuses`): slots
+   * in use, the budget and what it has used, whether its secret is set, what
+   * it holds and the newest failure that indicts it — so `--status` from
+   * another pod reports what the supervisor sees. Operator-only, like the
+   * rest of this file; never a secret's value.
    */
-  subscriptionGate?: { scored: number; freeplay: number; notes?: string[] };
+  credentials?: CredentialStatus[];
   /** Who holds which account: pinned -> job name; pool -> job name or null when free. */
   accounts?: {
     pinned: Record<string, string>;
     pool: Record<string, string | null>;
-    paid?: Record<string, string | null>;
-    local?: Record<string, string | null>;
+    /** `accounts.max`: at most this many pool accounts live at once. */
+    max?: number;
   };
   /** The manual queue's shape, present only when the file has one. */
   queue?: {
@@ -460,11 +462,8 @@ export interface StateJob {
    * file written by an older supervisor.
    */
   runIds?: string[];
-  /**
-   * The Claude subscription this job is billing, by env var NAME. Absent on the
-   * default lane and on everything that is not a claude-code job.
-   */
-  subscription?: string;
+  /** The credentials this job's runs took slots on, by id. Absent on a job placed on none (a scripted run). */
+  credentials?: string[];
   models: string[];
   pid: number;
   /** Repo-relative: the reader may be on the other side of the mount. */
@@ -512,9 +511,8 @@ export function resolveStatePath(
 export interface PoolView {
   pinned: Record<string, string>;
   pool: string[];
-  /** `accounts.paid` / `accounts.local`: the split-out classes, reported so --status can render them with the fleet up. */
-  paid: string[];
-  local: string[];
+  /** `accounts.max`. */
+  max: number;
   /** job name -> the account it is running on (pinned or pool) */
   assigned: Map<string, string>;
   /** job name -> the job, for every job with a live process */
@@ -541,7 +539,7 @@ export interface PoolView {
 export function stateJobFacts(
   name: string,
   job: FleetJob | undefined,
-): { ref: string; episode: EpisodeId | null; source: JobSource; attempt?: number; extra?: StartingCharacter; subscription?: string } {
+): { ref: string; episode: EpisodeId | null; source: JobSource; attempt?: number; extra?: StartingCharacter; credentials?: string[] } {
   if (job === undefined) return { ref: name, episode: null, source: "pinned" };
   return {
     ref: job.ref,
@@ -549,8 +547,13 @@ export function stateJobFacts(
     source: job.source,
     ...(job.attempt !== undefined ? { attempt: job.attempt } : {}),
     ...(job.extra !== undefined ? { extra: job.extra } : {}),
-    ...(job.subscription !== undefined ? { subscription: job.subscription } : {}),
+    ...(credentialIdsOf(job).length > 0 ? { credentials: credentialIdsOf(job) } : {}),
   };
+}
+
+/** The credentials a job's refs were placed on, de-duplicated, in ref order. */
+export function credentialIdsOf(job: Pick<FleetJob, "placed">): string[] {
+  return [...new Set(Object.values(job.placed ?? {}).flatMap((c) => (c != null ? [c.id] : [])))];
 }
 
 // ------------------------------------------------------------ server state

@@ -58,42 +58,27 @@ export function isDriver(raw: string): raw is Driver {
 export const HARNESSES = ["wrathbench", "claude-code", "codex", "pi"] as const;
 export type Harness = (typeof HARNESSES)[number];
 
-// ------------------------------------------------------------ lanes, stamps
+// ------------------------------------------------------- credentials, stamps
 
 /**
- * The default subscription lane: the env var the Claude Code CLI itself knows,
- * and the only one a run names when nothing says otherwise. A second
- * subscription is a second variable (`CLAUDE_CODE_OAUTH_TOKEN_2`), never a
- * second spelling of this one — see `RunConfig.subscription`.
+ * The Claude Code CLI's credential variable: the env var the CLI itself knows,
+ * and the one a run reads when nothing says otherwise. A second subscription
+ * is a second variable (`CLAUDE_CODE_OAUTH_TOKEN_2`), never a second spelling
+ * of this one — see `RunConfig.credentialEnv`.
  */
 export const DEFAULT_CLAUDE_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 
 /**
- * The `codex` driver's default lane: the env var the Codex CLI itself reads
- * for its home directory, whose `auth.json` is the ChatGPT login. The lane
+ * The `codex` driver's credential variable: the env var the Codex CLI itself
+ * reads for its home directory, whose `auth.json` is the ChatGPT login. The
  * variable names a DIRECTORY, not a token — one directory per subscription,
- * shared by every run on that lane and never copied per run: a copied
+ * shared by every run on that credential and never copied per run: a copied
  * `auth.json` carries a refresh token that whichever process refreshes first
  * consumes, and the other side then fails with "refresh token was already
  * used" (observed on this host, 2026-09-05). A second subscription is a second
  * variable (`CODEX_HOME_2`) pointing at a second directory.
  */
 export const DEFAULT_CODEX_HOME_ENV = "CODEX_HOME";
-
-/**
- * Whether a lane variable NAME is a Codex home (`CODEX_HOME`, `CODEX_HOME_2`)
- * rather than a Claude token. `policy.subscriptions` lists both kinds, because
- * a roster entry may only pin a lane that list names, so the kind is read off
- * the name, which is the convention the two defaults already set.
- */
-export function isCodexHomeEnvName(name: string): boolean {
-  return new RegExp(`^${DEFAULT_CODEX_HOME_ENV}(_[0-9]+)?$`).test(name);
-}
-
-/** What a lane variable NAME holds, read off the name (`isCodexHomeEnvName`). */
-export function laneHoldsOf(name: string): LaneHolds {
-  return isCodexHomeEnvName(name) ? "home" : "token";
-}
 
 /**
  * The stamp carried by meta.json, run.sqlite and the timeline for a scripted
@@ -112,33 +97,25 @@ export const REFERENCE_STAMP = "unscored (scripted reference)";
 
 // ------------------------------------------------------------------ entries
 
-/** A lane variable holds a secret token (redacted, a pod secret) or a home directory's path (a plain value and a mounted volume). */
-export type LaneHolds = "token" | "home";
+/** A credential variable holds a secret token (redacted, a pod secret) or a home directory's path (a plain value and a mounted volume). */
+export type CredentialHolds = "token" | "home";
 
-/** A driver that bills a flat subscription: how its lane is named, kept and placed. */
-export interface SubscriptionLane {
-  /** The lane's spelling is `<key>:<ENV NAME>`: the gate's, the usage sidecar's and the concurrency cap's. */
-  key: string;
-  /** The lane a run names when nothing says otherwise. */
+/** A CLI driver that bills a flat subscription: the credential variable its CLI reads. */
+export interface CliCredential {
+  /** The variable a run reads when nothing names another. */
   defaultEnv: string;
-  holds: LaneHolds;
-  /**
-   * True when the fleet places a policy job among the policy's lanes of this
-   * kind and gates it on all of them (Claude subscriptions); false when a
-   * policy job runs on the default lane unless a job pins one (Codex homes).
-   */
-  placed: boolean;
+  holds: CredentialHolds;
   /**
    * Whether the operator may move a paused or ended run of this driver to
-   * another lane of its kind (`move-lane`, runner/src/move-lane.ts). True only
-   * where the lane is a credential and nothing else: the run's own state names
-   * no account, and a resume starts the CLI a fresh conversation, so the next
-   * segment simply bills the other subscription. A home lane is not that — it
-   * holds the CLI's own thread rollouts — so it stays where it started until
-   * resume semantics across homes are checked.
+   * another credential of its provider (`move-credential`,
+   * runner/src/move-credential.ts). True only where the credential is a
+   * credential and nothing else: the run's own state names no account, and a
+   * resume starts the CLI a fresh conversation, so the next segment simply
+   * bills the other subscription. A Codex home is not that — it holds the
+   * CLI's own thread rollouts — so a run stays where it started.
    */
   movable: boolean;
-  /** The dry run's endpoint line for a run on `env` (the lane as the spec names it, absent for the default). */
+  /** The dry run's endpoint line for a run on `env` (absent for the default). */
   describe(env: string | undefined): string;
   /** Why a launch in the fleet container cannot start when `env` is unset there. */
   containerRefusal(env: string): string;
@@ -156,7 +133,7 @@ export interface DriverCost {
   table: "synced" | "claude";
   /**
    * The catalogue vendor a bare model slug is priced under (`openai/<slug>`),
-   * read as as-if-metered because the lane bills a subscription. Absent where
+   * read as as-if-metered because the driver bills a subscription. Absent where
    * the slug is already the catalogue's id.
    */
   vendor?: string;
@@ -191,8 +168,8 @@ export interface DriverEntry {
   roster: boolean;
   /** Why a roster entry may never name it, said by name rather than as an unknown driver. */
   rosterRefusal?: string;
-  /** Whether `policy.maxConcurrent` may cap it under its own id. */
-  capKey: boolean;
+  /** Whether `policy.maxSessions` may cap how many of its sessions one host carries. */
+  sessionCap: boolean;
   /**
    * Reaches an OpenAI-compatible endpoint by base and key: it takes `apiBase`,
    * `apiKeyEnv` and a declared `billing`, the provider table guards the pair,
@@ -224,8 +201,8 @@ export interface DriverEntry {
    * is in a scored lane. Promoting it is turning this off.
    */
   probeOnly: boolean;
-  /** The subscription it bills, for a driver that bills one. */
-  lane?: SubscriptionLane;
+  /** The credential variable its CLI reads, for a driver that bills a subscription. */
+  credential?: CliCredential;
   /**
    * Who pays: per call (`metered`, judged by the billing rules), a flat
    * subscription, or nobody (no model, no provider). `billingOf` and
@@ -238,7 +215,7 @@ export interface DriverEntry {
   /** Whether the scaffold has an auto-compaction window a run can set (`compactWindow`). */
   compactWindow: boolean;
   /**
-   * The window a fresh launch on this driver gets, on any lane, when
+   * The window a fresh launch on this driver gets, on any credential, when
    * nothing states one (`launchCompactWindow`, config.ts), canonical like any
    * other. Absent: the CLI's own `auto`. claude-code alone has one (operator,
    * 2026-11-10); a roster entry opts out with `compactWindow: "auto"`.
@@ -271,7 +248,7 @@ export interface DriverEntry {
    * (`exec-tally`).
    */
   usage: "response" | "turn-snapshot" | "exec-tally";
-  /** Whether its CLI leaves session files (rollouts) in the lane's home, which the fleet sweeps. */
+  /** Whether its CLI leaves session files (rollouts) in its credential's home, which the fleet sweeps. */
   rollouts: boolean;
   /** Run-pod template volumes only this driver mounts; every other driver's pod has them removed. */
   podVolumes: readonly string[];
@@ -289,7 +266,7 @@ export const DRIVER_TABLE = {
     harness: "wrathbench",
     kind: "loop",
     roster: true,
-    capKey: true,
+    sessionCap: true,
     endpoint: true,
     routing: true,
     probeOnly: false,
@@ -310,15 +287,13 @@ export const DRIVER_TABLE = {
     harness: "claude-code",
     kind: "scaffold",
     roster: true,
-    capKey: true,
+    sessionCap: true,
     endpoint: false,
     routing: false,
     probeOnly: false,
-    lane: {
-      key: "claude-code",
+    credential: {
       defaultEnv: DEFAULT_CLAUDE_TOKEN_ENV,
       holds: "token",
-      placed: true,
       movable: true,
       describe: () => "claude CLI subscription",
       containerRefusal: (env) =>
@@ -341,24 +316,22 @@ export const DRIVER_TABLE = {
     harness: "codex",
     kind: "scaffold",
     roster: true,
-    capKey: true,
+    sessionCap: true,
     endpoint: false,
     routing: false,
     probeOnly: false,
-    lane: {
-      key: "codex",
+    credential: {
       defaultEnv: DEFAULT_CODEX_HOME_ENV,
       holds: "home",
-      placed: false,
       movable: false,
-      describe: (env) => `codex CLI subscription, lane ${env ?? DEFAULT_CODEX_HOME_ENV}`,
+      describe: (env) => `codex CLI subscription, home ${env ?? DEFAULT_CODEX_HOME_ENV}`,
       containerRefusal: (env) =>
         `${env} is not visible to the fleet container — put it in /wrathbench/.env as the path of a ` +
         "logged-in Codex home (`codex login`); it is loaded by Bun there and never passed via argv",
     },
     bill: "subscription",
     cost: { reported: "none", table: "synced", vendor: "openai" },
-    // The Codex CLI is a ChatGPT-subscription lane: OpenAI's catalogue only.
+    // The Codex CLI bills a ChatGPT subscription: OpenAI's catalogue only.
     claudeModels: { only: false, refusal: "roster policy — the codex driver carries no claude models" },
     compactWindow: true,
     snippetDelta: false,
@@ -375,7 +348,7 @@ export const DRIVER_TABLE = {
     harness: "pi",
     kind: "scaffold",
     roster: true,
-    capKey: true,
+    sessionCap: true,
     endpoint: true,
     routing: false,
     cliProvider: true,
@@ -398,7 +371,7 @@ export const DRIVER_TABLE = {
     kind: "loop",
     stamp: STUB_STAMP,
     roster: false,
-    capKey: true,
+    sessionCap: true,
     endpoint: false,
     routing: false,
     probeOnly: false,
@@ -422,7 +395,7 @@ export const DRIVER_TABLE = {
     route: true,
     roster: false,
     rosterRefusal: "driver reference is the scripted reference run — launched by hand on PROBE, never a roster entry",
-    capKey: false,
+    sessionCap: false,
     endpoint: false,
     routing: false,
     probeOnly: false,
@@ -495,13 +468,6 @@ export function isRosterDriver(raw: string): raw is RosterDriver {
   return driverEntry(raw)?.roster === true;
 }
 
-/**
- * The one driver whose runs the fleet places among several subscription lanes
- * (`SubscriptionLane.placed`). Its id is also the concurrency key every such
- * session counts against, whichever lane bills it.
- */
-export const PLACED_LANE_DRIVER: Driver = DRIVER_LIST.find((d) => d.lane?.placed === true)!.id;
-
 /** Whether a stored or configured driver name — absent is the default — is probe-only (`DriverEntry.probeOnly`). */
 export function isProbeOnlyDriver(name: unknown): boolean {
   return driverEntry(name ?? DEFAULT_DRIVER)?.probeOnly === true;
@@ -515,5 +481,5 @@ export function probeOnlyRefusal(driver: string): string {
 /** Every run-pod template volume some driver mounts; a pod keeps only its own driver's. */
 export const DRIVER_POD_VOLUMES: readonly string[] = [...new Set(DRIVER_LIST.flatMap((d) => d.podVolumes))];
 
-/** The plain env vars naming a home lane's directory: a credential's address, passed only to the driver that reads it. */
-export const HOME_LANE_ENVS: readonly string[] = DRIVER_LIST.flatMap((d) => (d.lane?.holds === "home" ? [d.lane.defaultEnv] : []));
+/** The plain env vars naming a home credential's directory: a credential's address, passed only to the driver that reads it. */
+export const HOME_CREDENTIAL_ENVS: readonly string[] = DRIVER_LIST.flatMap((d) => (d.credential?.holds === "home" ? [d.credential.defaultEnv] : []));

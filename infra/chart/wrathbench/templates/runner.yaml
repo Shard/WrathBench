@@ -49,6 +49,15 @@ spec:
           env:
             - name: WRATHBENCH_IN_CONTAINER
               value: "1"
+            # Where this pod is, in the CLI's own terms (`bun wb -n/--release`):
+            # what `bun wb fleet status`, exec'd here, names in its hints, so an
+            # operator on a second install is sent to that install's fleet.
+            - name: WRATHBENCH_K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: WRATHBENCH_K8S_RELEASE
+              value: {{ include "wrathbench.fullname" . | quote }}
             {{- include "wrathbench.harnessEnv" . | nindent 12 }}
             {{- include "wrathbench.dbEnv" . | nindent 12 }}
             {{- include "wrathbench.harnessSecretEnv" . | nindent 12 }}
@@ -62,7 +71,7 @@ spec:
             {{- /* The party stager and its smokes, run here by hand: staging on only. */}}
             {{- with include "wrathbench.stagerEnv" . | trim }}{{ . | nindent 12 }}{{ end }}
             {{- if .Values.codex.enabled }}
-            # The `codex` driver's subscription lane, mounted below. The CLI
+            # The `codex` driver's credential, a Codex home mounted below. The CLI
             # writes its token refresh back into this directory, so it is one
             # live copy on a PVC and never a copy of the operator's ~/.codex.
             - name: CODEX_HOME

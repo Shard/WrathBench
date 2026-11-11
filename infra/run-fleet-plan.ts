@@ -9,8 +9,6 @@
  */
 
 import {
-  classPoolsOf,
-  concurrencyKeyOfRef,
   type Eligible,
   eligibleFrom,
   episodeDimensions,
@@ -22,7 +20,6 @@ import {
   healthyFrom,
   type JobSource,
   type JobSpawn,
-  keysOfIn,
   pinnedCampaignJobs,
   pinnedJobs,
   policyRefs,
@@ -45,22 +42,14 @@ import {
 import { cellDimensions } from "../runner/src/campaign-def";
 import { campaignFileOf, type CampaignFile } from "../runner/src/campaign-file";
 import { memberRunId } from "../runner/src/party";
-import { DEFAULT_CLAUDE_TOKEN_ENV, stampedCompactWindow, type TerminationReason } from "../runner/src/config";
+import { stampedCompactWindow, type TerminationReason } from "../runner/src/config";
 import { driverEntry, isProbeOnlyDriver } from "../runner/src/drivers";
 import { isScoredEpisode } from "../runner/src/episodes";
 import { classifyLapse, OFFLINE_PAUSE, PARTY_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
-import { jobHoldOf, laneOfEntry, laneOfRun, type FleetSubscriptionGate } from "./run-fleet-gate";
+import { driverOfEntry, placeRef, SlotBook, type CredentialGate, type PlacedCredential } from "./run-fleet-credentials";
+import type { Credential } from "../runner/src/credentials";
 import {
-  ACCOUNT_CLASSES,
-  type AccountClass,
-  accountClassOf,
-  type BusyAccount,
   byNewestStart,
-  capFor,
-  CLAUDE_TOTAL_KEY,
-  claudeKeysFor,
-  claudeLanesOf,
-  DEFAULT_POLICY as DEFAULT_POLICY_FOR_FORMAT,
   entryOwnsRun,
   type HeldPick,
   inSeries,
@@ -246,10 +235,20 @@ export function planQueue(opts: {
   queue: FleetJob[];
   roster: Record<string, FleetRosterEntry>;
   pool: string[];
+  /** The pool's cap (`accounts.max`): at most that many pool accounts live at once. */
+  maxLive?: number;
   running: Map<string, string>;
   finished: Set<string>;
   held: (account: string) => string | undefined;
-  cooling: (job: FleetJob) => string | undefined;
+  /** Why a job may not start yet (the defer ladder), or undefined. */
+  cooling?: (job: FleetJob) => string | undefined;
+  /**
+   * Where a job's runs start (`placeJob` over this tick's book, committing the
+   * slots on success), or why they may not: a job with no credential room is
+   * skipped with the reason and gives its account back. Absent: every job
+   * starts (a test's shorthand).
+   */
+  place?: (job: FleetJob) => { ok: true; job: FleetJob } | { ok: false; why: string };
   /**
    * Who may run what. Default: only what needs no promotion. The
    * supervisor passes `eligibleFrom(modelStates(...))`, which adds what run
@@ -271,7 +270,7 @@ export function planQueue(opts: {
 }): QueuePlan {
   const plan: QueuePlan = { assign: [], waiting: [], skipped: [], done: [] };
   const taken = new Set([...opts.running.values()].map((a) => a.toUpperCase()));
-  const free = opts.pool.filter((a) => !taken.has(a.toUpperCase()) && opts.held(a) === undefined);
+  const free = freePoolAccounts({ pool: opts.pool, maxLive: opts.maxLive, taken, held: opts.held });
   const runningRefs = new Set<string>(opts.runningRefs ?? []);
   for (const job of opts.queue) if (opts.running.has(job.name)) for (const r of job.refs) runningRefs.add(r);
   for (const job of opts.queue) {
@@ -299,7 +298,7 @@ export function planQueue(opts: {
       plan.skipped.push({ job, reason: `${clash} is already running under another job — one character per model` });
       continue;
     }
-    const cool = opts.cooling(job);
+    const cool = opts.cooling?.(job);
     if (cool !== undefined) {
       plan.skipped.push({ job, reason: cool });
       continue;
@@ -309,8 +308,15 @@ export function planQueue(opts: {
       plan.waiting.push(job);
       continue;
     }
+    const placed = opts.place === undefined ? { ok: true as const, job } : opts.place({ ...job, refs });
+    if (!placed.ok) {
+      free.unshift(account);
+      plan.skipped.push({ job, reason: placed.why });
+      continue;
+    }
     for (const r of refs) runningRefs.add(r);
-    plan.assign.push({ job: owed === undefined ? job : { ...job, owed: { copies: owed, taken: opts.takenRunIds ?? new Set() } }, account });
+    const out = placed.job.placed !== undefined ? { ...job, placed: placed.job.placed } : job;
+    plan.assign.push({ job: owed === undefined ? out : { ...out, owed: { copies: owed, taken: opts.takenRunIds ?? new Set() } }, account });
   }
   return plan;
 }
@@ -395,49 +401,32 @@ export interface PolicyPick {
 }
 
 /**
- * The policy's fill for whatever the queue left free. Pure: the
- * projection is handed in. Only runs when no manual job is waiting — a manual
- * entry always outranks the policy — and never puts a second run on a
- * model. `concurrency` is the per-key cap (`concurrencyKeyOf`): `running`
- * counts every run in flight on that key, pinned jobs included, so a
- * subscription (or a shared free pool's daily budget) that tolerates only so
- * many sessions is a number in the file rather than a model removed from the
- * roster. `paid` is the paid cap (`policy.paid.maxConcurrent`):
- * `running` counts paid policy models in flight (pinned jobs excluded), and a
- * paid pick over the cap is held, with the reason in `held` for `--dry-run`.
+ * The policy's fill for whatever the queue left free. Pure: the projection is
+ * handed in. Only runs when no manual job is waiting — a manual entry always
+ * outranks the policy — and never puts a second run on a model.
+ *
+ * `place` is where a pick may start (`placeRef` over this tick's `SlotBook`:
+ * the first credential that serves it and has room under its slots, its
+ * budget and the driver's host cap), and `take` commits a placement to that
+ * book. A pick with nowhere to start is passed over and the next candidate is
+ * asked for its account, until a round yields nothing to pass over; the pick
+ * is held with the reason in `held` for `--dry-run`. Without `place`, every
+ * pick starts (a test's shorthand).
+ *
+ * `maxLive` is the pool's cap (`accounts.max`): at most that many pool
+ * accounts live at once, the running ones and the queue's included.
  */
 export function planPolicy(opts: {
   states: readonly ModelState[];
   pool: string[];
-  /**
-   * The accounts each split-out class may use (`classPoolsOf`): `accounts.paid`
-   * and `accounts.local`, both unconditional. Picks of that class draw from
-   * here and never from `pool`; an EMPTY array holds them and reports them.
-   * A class ABSENT from the map shares the pool — a shape `classPoolsOf` no
-   * longer produces, kept because hand-built configs (tests, a state file read
-   * back) may predate a class.
-   */
-  classPools?: Partial<Record<AccountClass, string[]>>;
+  maxLive?: number;
   running: Map<string, string>;
   held: (account: string) => string | undefined;
   queuePlan: QueuePlan;
   runningRefs: ReadonlySet<string>;
-  concurrency?: {
-    keyOf: (name: string) => string;
-    max: Record<string, number>;
-    running: ReadonlyMap<string, number>;
-    /** A roster entry pinned to one subscription (`FleetRosterEntry.subscription`): its only candidate lane. */
-    pinnedLane?: (name: string) => string | undefined;
-    /**
-     * Why the subscription usage gate holds a pick of `episode` on a candidate
-     * lane (`""` for a pick with no claude lane), or undefined: a held lane is
-     * passed over like a full key (`FleetSubscriptionGate`).
-     */
-    gate?: (name: string, episode: EpisodeId, lane: string) => string | undefined;
-  };
+  place?: (name: string, episode: EpisodeId) => PlaceOutcome;
+  take?: (keys: readonly string[]) => void;
   policy?: SchedulingPolicy;
-  /** Paid policy models already in flight (pinned jobs excluded). */
-  paidRunning?: number;
   /** The enabled, unpinned campaigns the policy may schedule. */
   campaigns?: readonly Campaign[];
   /** Probe runs on disk, counted or not: what a campaign's remaining work is derived from. */
@@ -448,131 +437,64 @@ export function planPolicy(opts: {
   return planPolicyHeld(opts).picks;
 }
 
+/** Where a pick may start: its credential (null when it needs none) and the keys it spends, or why it may not. */
+export type PlaceOutcome = { ok: true; credential: PlacedCredential | null; keys: readonly string[] } | { ok: false; why: string };
+
+/** The pool accounts still free, under the pool's cap. */
+export function freePoolAccounts(o: {
+  pool: readonly string[];
+  maxLive?: number | undefined;
+  taken: ReadonlySet<string>;
+  held: (account: string) => string | undefined;
+}): string[] {
+  const free = o.pool.filter((a) => !o.taken.has(a.toUpperCase()) && o.held(a) === undefined);
+  if (o.maxLive === undefined) return free;
+  const live = o.pool.filter((a) => o.taken.has(a.toUpperCase())).length;
+  return free.slice(0, Math.max(0, o.maxLive - live));
+}
+
 /** `planPolicy` plus what it held back and why. */
 export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks: PolicyPick[]; held: HeldPick[] } {
-  // A waiting manual job reserves the POOL, and nothing else. Such a job has no
-  // account, and a job with no account can only ever take a pool one (the
-  // class split governs the policy; a manual queue job draws from the
-  // pool), so vetoing every class starved paid and local picks on accounts the
-  // queue could never have used — a queue job stuck behind a busy RUNNER would
-  // hold the local box idle. Returning no `held` with it also broke this file's
-  // own rule that a held pick is always named. Reserve the pool, let the other
-  // classes pick, and say what the reservation was for.
+  // A waiting manual job reserves the pool. Such a job has no account and can
+  // only ever take a pool one, so the policy takes none this tick, and says
+  // what the reservation was for.
   const reserved =
     opts.queuePlan.waiting.length > 0
       ? `pool reserved for waiting manual job(s): ${opts.queuePlan.waiting.map((j) => j.name).join(", ")}`
       : undefined;
   const taken = new Set([...opts.running.values(), ...opts.queuePlan.assign.map((a) => a.account)].map((a) => a.toUpperCase()));
-  const usable = (list: readonly string[]): string[] => list.filter((a) => !taken.has(a.toUpperCase()) && opts.held(a) === undefined);
-  const free = reserved === undefined ? usable(opts.pool) : [];
-  // Per split-out class: the accounts of that class still free right now.
-  const splitFree: Partial<Record<AccountClass, string[]>> = {};
-  for (const cls of ACCOUNT_CLASSES) {
-    const declared = opts.classPools?.[cls];
-    if (cls !== "pool" && declared !== undefined) splitFree[cls] = usable(declared);
-  }
-  // Nothing to place on, and nothing to say. A split class with nothing FREE
-  // still has held picks to report — whether it is unconfigured or merely all
-  // busy — so it does not short-circuit here.
-  const gap = ACCOUNT_CLASSES.some((c) => c !== "pool" && opts.classPools?.[c] !== undefined && splitFree[c]!.length === 0);
-  // A reserved pool still has something to report, so it does not short-circuit
-  // either: the held rows are the whole point of naming the reservation.
-  if (free.length === 0 && Object.values(splitFree).every((l) => l.length === 0) && !gap && reserved === undefined)
-    return { picks: [], held: [] };
+  const free = reserved === undefined ? freePoolAccounts({ pool: opts.pool, maxLive: opts.maxLive, taken, held: opts.held }) : [];
+  // A reserved pool still has something to report: the held rows are the
+  // whole point of naming the reservation.
+  if (free.length === 0 && reserved === undefined) return { picks: [], held: [] };
   const running = new Set(opts.runningRefs);
   for (const a of opts.queuePlan.assign) for (const r of a.job.refs) running.add(r);
-  // The subscription lane each claude-code pick was placed on, decided by the
-  // cap loop below and carried onto the job it spawns.
-  const chosenLane = new Map<string, string>();
+  // The credential each pick was placed on, decided by the loop below and
+  // carried onto the job it spawns.
+  const chosen = new Map<string, PlacedCredential | null>();
   const wrap = (pick: NextJob): PolicyPick => {
     const job = policyJob(pick);
-    const lane = chosenLane.get(pick.name);
-    return { job: lane !== undefined ? { ...job, subscription: lane } : job, account: pick.account, why: pick.why };
+    const c = chosen.get(pick.name);
+    return { job: c !== undefined ? { ...job, placed: { [pick.name]: c } } : job, account: pick.account, why: pick.why };
   };
-  const billingOf = new Map(opts.states.map((s) => [s.name, s.billing]));
-  const classOf = new Map(opts.states.map((s) => [s.name, accountClassOf(s)]));
-  /** The class a pick draws its account from: `pool` unless that class is split out. */
-  const listClass = (name: string): AccountClass => {
-    const cls = classOf.get(name) ?? "pool";
-    return splitFree[cls] !== undefined ? cls : "pool";
-  };
-  /** A class's accounts still free once the picks made so far have taken theirs. */
-  const left = (cls: AccountClass, also: readonly NextJob[]): string[] =>
-    (splitFree[cls] ?? []).filter((a) => !also.some((p) => listClass(p.name) === cls && p.account === a));
-  /** Who holds an account that is not free: the run id if any, else the job on it. */
-  const holderOf = (account: string): string | undefined =>
-    opts.held(account) ??
-    [...opts.running].find(([, a]) => a.toUpperCase() === account.toUpperCase())?.[0] ??
-    opts.queuePlan.assign.find((a) => a.account.toUpperCase() === account.toUpperCase())?.job.name;
-  /**
-   * A class's accounts that exist but are taken — by a live run, by this
-   * tick's queue, or by a pick already made in this round. Without it an
-   * all-busy class reads as an unconfigured one.
-   */
-  const busy = (cls: AccountClass, also: readonly NextJob[]): BusyAccount[] => [
-    ...(opts.classPools?.[cls] ?? [])
-      .filter((a) => !(splitFree[cls] ?? []).includes(a))
-      .map((a) => {
-        const by = holderOf(a);
-        return by !== undefined ? { account: a, by } : { account: a };
-      }),
-    ...also.filter((p) => listClass(p.name) === cls).map((p) => ({ account: p.account, by: p.name })),
-  ];
   const next = (states: readonly ModelState[], accounts: readonly string[], also: readonly NextJob[]): ReturnType<typeof planNextJobs> =>
     planNextJobs(states, accounts, new Set([...running, ...also.map((p) => p.name)]), {
       ...(opts.policy !== undefined ? { policy: opts.policy } : {}),
-      classAccounts: Object.fromEntries(
-        ACCOUNT_CLASSES.filter((c) => splitFree[c] !== undefined).map((c) => [c, left(c, also)]),
-      ) as Partial<Record<AccountClass, string[]>>,
-      classBusy: Object.fromEntries(
-        ACCOUNT_CLASSES.filter((c) => splitFree[c] !== undefined).map((c) => [c, busy(c, also)]),
-      ) as Partial<Record<AccountClass, BusyAccount[]>>,
-      paidRunning: (opts.paidRunning ?? 0) + also.filter((p) => billingOf.get(p.name) === "paid").length,
       ...(reserved !== undefined ? { poolHeld: reserved } : {}),
       ...(opts.campaigns !== undefined ? { campaigns: opts.campaigns } : {}),
       ...(opts.probeRuns !== undefined ? { probeRuns: opts.probeRuns } : {}),
     });
   /*
-   * Accounts in preference order over the FINAL picks, each class over its own
-   * list — a paid pick keeps a paid account, a local one keeps the box, and
-   * the pool rows stay free-only. Affinity is the one thing that
-   * reorders a class's list: a pick whose model left its character on a free
-   * account of its own class takes that one instead of the first.
+   * Accounts in preference order over the FINAL picks. Affinity is the one
+   * thing that reorders the pool: a pick whose model left its character on a
+   * free account takes that one instead of the first.
    */
-  const pools: Partial<Record<AccountClass, string[]>> = { pool: [...free] };
-  for (const cls of ACCOUNT_CLASSES) if (splitFree[cls] !== undefined) pools[cls] = [...splitFree[cls]!];
-  const place = (pick: NextJob): PolicyPick =>
-    wrap({ ...pick, account: takeAccount(pools[listClass(pick.name)] ?? [], opts.affinity?.(pick.name)) ?? pick.account });
-  if (opts.concurrency === undefined) {
+  const pool = [...free];
+  const place = (pick: NextJob): PolicyPick => wrap({ ...pick, account: takeAccount(pool, opts.affinity?.(pick.name)) ?? pick.account });
+  if (opts.place === undefined) {
     const plan = next(opts.states, free, []);
     return { picks: plan.jobs.map(place), held: plan.held };
   }
-  // The cap, over the projection's own priority order: a pick whose key is
-  // full is passed over and the next candidate is asked for its account, until
-  // a round yields nothing to pass over.
-  const { keyOf, max } = opts.concurrency;
-  const lanes = claudeLanesOf(opts.policy?.subscriptions ?? DEFAULT_POLICY_FOR_FORMAT.subscriptions);
-  /**
-   * The keys a pick may count against, in preference order. One for everything
-   * but a claude-code pick, which may go on any configured subscription: the
-   * lane is not a property of the model, it is whichever account has a session
-   * free, so the choice is made here and recorded on the job.
-   */
-  /** The candidate placements for a pick: one per lane it may take, each with the keys it would spend. */
-  const keysOf = (name: string): { keys: string[]; lane: string }[] => {
-    const k = keyOf(name);
-    if (k !== CLAUDE_TOTAL_KEY) return [{ keys: [k], lane: "" }];
-    // An entry pinned to one subscription has one candidate: with that lane
-    // busy the pick is held, never quietly moved to the other account.
-    const pin = opts.concurrency?.pinnedLane?.(name);
-    const usable = pin !== undefined ? [pin] : lanes;
-    return usable.map((l) => ({ keys: claudeKeysFor(l), lane: l }));
-  };
-  const count = new Map(opts.concurrency.running);
-  const bump = (key: string): void => {
-    count.set(key, (count.get(key) ?? 0) + 1);
-  };
-  for (const a of opts.queuePlan.assign) for (const r of a.job.refs) for (const k of keysOfIn(keyOf, r, a.job.subscription)) bump(k);
   const out: NextJob[] = [];
   const held: HeldPick[] = [];
   const passed = new Set<string>();
@@ -583,42 +505,15 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
     for (const h of plan.held) if (!held.some((x) => x.name === h.name)) held.push(h);
     let rejected = false;
     for (const pick of plan.jobs) {
-      const all = keysOf(pick.name);
-      // A lane the subscription gate holds is no candidate at all; with
-      // every candidate held, the pick is held with the gate's reason.
-      const gateWhy = all.map((c) => opts.concurrency?.gate?.(pick.name, pick.episode, c.lane));
-      const cands = all.filter((_, i) => gateWhy[i] === undefined);
-      if (cands.length === 0) {
+      const r = opts.place(pick.name, pick.episode);
+      if (!r.ok) {
         passed.add(pick.name);
-        held.push({ name: pick.name, episode: pick.episode, why: gateWhy[0]! });
+        held.push({ name: pick.name, episode: pick.episode, why: r.why });
         rejected = true;
         continue;
       }
-      /** A key with no room left; undefined when this placement can be made. */
-      const fullKey = (keys: readonly string[]): string | undefined =>
-        keys.find((k) => {
-          const cap = capFor(max, k);
-          return cap !== undefined && (count.get(k) ?? 0) >= cap;
-        });
-      const room = cands.find(({ keys }) => fullKey(keys) === undefined);
-      if (room === undefined) {
-        passed.add(pick.name);
-        // Name the key that actually blocked each candidate: "the other
-        // subscription had a slot but the overall ceiling is spent" and "this
-        // subscription is busy" are different problems with different fixes.
-        const blocked = cands.map((c) => fullKey(c.keys)!);
-        const why =
-          cands.length === 1
-            ? `cap: ${blocked[0]} <= ${capFor(max, blocked[0]!)}, ${count.get(blocked[0]!) ?? 0} in flight${cands[0]!.lane !== "" ? " (pinned to this subscription)" : ""}`
-            : `cap: no claude session free (${blocked.map((k) => `${k} ${count.get(k) ?? 0}/${capFor(max, k)}`).join(", ")})`;
-        held.push({ name: pick.name, episode: pick.episode, why });
-        rejected = true;
-        continue;
-      }
-      for (const k of room.keys) bump(k);
-      // Only a non-default lane is recorded: the default lane is what a job
-      // with nothing said about it already runs on.
-      if (room.lane !== "" && room.lane !== DEFAULT_CLAUDE_TOKEN_ENV) chosenLane.set(pick.name, room.lane);
+      opts.take?.(r.keys);
+      chosen.set(pick.name, r.credential);
       out.push(pick);
     }
     if (!rejected) break;
@@ -626,6 +521,51 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
     accounts = free.filter((a) => !out.some((p) => p.account === a));
   }
   return { picks: out.map(place), held };
+}
+
+/**
+ * Where every ref of a job may start — a rotation's refs one after another
+ * on the same book, a party's members (`sessionsOf`) all on one credential —
+ * or why not. The pin is the job's (a queue job's or a pinned campaign's),
+ * else each ref's roster entry's. Never mutates `book`; the keys to commit
+ * come back with the placed job.
+ */
+export function placeJob(
+  job: FleetJob,
+  roster: Readonly<Record<string, FleetRosterEntry>>,
+  o: { credentials: readonly Credential[]; book: SlotBook; gate?: CredentialGate | undefined; env?: Record<string, string | undefined> },
+): { ok: true; job: FleetJob; keys: string[] } | { ok: false; why: string } {
+  const book = o.book.clone();
+  const sessions = sessionsOf(job);
+  const placed: Record<string, PlacedCredential | null> = {};
+  const keys: string[] = [];
+  for (const ref of job.refs) {
+    const r = placeRef(roster[ref], job.episode, { ...o, book, pin: job.credential ?? roster[ref]?.credential, sessions });
+    if (!r.ok) return { ok: false, why: sessions > 1 ? `a party of ${sessions} starts whole or not at all: ${r.why}` : job.refs.length > 1 ? `${ref}: ${r.why}` : r.why };
+    book.add(r.placement.keys, sessions);
+    for (let i = 0; i < sessions; i++) keys.push(...r.placement.keys);
+    placed[ref] = r.placement.credential;
+  }
+  return { ok: true, job: { ...job, placed }, keys };
+}
+
+/**
+ * Count a job that holds its sessions already (live, or about to spawn) on
+ * the book: each ref on the credential it was placed on, else the one its
+ * live or paused run recorded (`liveCredentials`), and its driver's sessions.
+ */
+export function countJob(
+  book: SlotBook,
+  job: { refs: readonly string[]; placed?: FleetJob["placed"]; accounts?: readonly string[] | undefined },
+  roster: Readonly<Record<string, FleetRosterEntry>>,
+  runCredentials: ReadonlyMap<string, string>,
+): void {
+  const sessions = sessionsOf(job);
+  for (const ref of job.refs) {
+    const placed = job.placed?.[ref];
+    const id = placed !== undefined ? (placed?.id ?? null) : (runCredentials.get(ref) ?? null);
+    book.add(book.keysOf(driverOfEntry(roster[ref]), id), sessions);
+  }
 }
 
 /**
@@ -745,9 +685,9 @@ export function jobSpawn(
       ...(uncappedLane && job.continueFrom !== undefined ? { continueFrom: job.continueFrom } : {}),
       ...(job.keepCharacters !== undefined && job.keepCharacters.length > 0 ? { keepCharacters: [...job.keepCharacters] } : {}),
       ...(uncappedLane && job.continueDropped !== undefined ? { continueDropped: { ...job.continueDropped } } : {}),
-      // The subscription lane, for the one driver that has one. Omitted on the
-      // default lane, so a spawn is byte-identical to a pre-lane one.
-      ...(job.subscription !== undefined && driverEntry(entry.driver)?.lane !== undefined ? { tokenEnv: job.subscription } : {}),
+      // The credential the scheduler placed this ref on: its id, its secret's
+      // variable and its usage thresholds, which the run records.
+      ...(job.placed?.[r] != null ? { placedOn: { ...job.placed[r]! } } : {}),
     };
     const idBase =
       `fleet-${job.name}-${slug(base.model)}${base.effort !== undefined ? `-${slug(base.effort)}` : ""}` +
@@ -1039,7 +979,7 @@ export function resumeNotBefore(pause: NonNullable<RunFact["pause"]>): number | 
   if (pause.reason === PARTY_PAUSE) return null;
   // The subscription gate stopped a freeplay run (operator, 2026-10-16): it
   // waits for the window's reset, and is on no ladder at all — the lane gate
-  // (`subscriptionHold`) is what holds it while the window stays over.
+  // (`credentialHold`) is what holds it while the window stays over.
   if (pause.reason === SUBSCRIPTION_PAUSE) return pause.notBefore ?? null;
   // An offline pause is the harness's own doing too — the runner was killed
   // under the run, and nothing about the provider changed — but it is derived,
@@ -1325,10 +1265,12 @@ export function planResumes(opts: {
    */
   hasImageRecord?: (runId: string) => boolean;
   /**
-   * Why the subscription usage gate holds this run's resume
-   * (`FleetSubscriptionGate`), or undefined. Absent holds nothing.
+   * Why this run's credential holds its resume — its budget
+   * (`CredentialGate`), or the credential gone or disabled — or undefined.
+   * Absent holds nothing. A paused run comes back only on the credential it
+   * recorded (`placeResume`).
    */
-  subscriptionHold?: (f: RunFact) => string | undefined;
+  credentialHold?: (f: RunFact) => string | undefined;
 }): { resume: ResumePlan[]; listed: PausedListing[]; end: EndedRun[] } {
   const { config, now } = opts;
   const ownCampaignFile = opts.campaignFileOf ?? ((): CampaignFile | null => null);
@@ -1354,8 +1296,8 @@ export function planResumes(opts: {
   const partyPaused = new Map<string, RunFact[]>();
   for (const f of paused) {
     const pause = f.pause!;
-    // A wait on a subscription usage window: its figures are the operator's.
-    const onLane = laneOfRun(f) !== null;
+    // A wait on a credential's usage window: its figures are the operator's.
+    const onCredential = f.credential !== null;
     const list = (why: string, resumeAfter: number | null = null, subscriptionWait = false): void => {
       listed.push({
         runId: f.runId,
@@ -1630,14 +1572,15 @@ export function planResumes(opts: {
     if (notBefore !== null && now < notBefore) {
       const waiting =
         providerResetOf(pause) !== undefined
-          ? `${pause.reason}, resuming at ${new Date(notBefore).toLocaleString()} (${onLane ? "usage window reset" : "provider reset"})`
+          ? `${pause.reason}, resuming at ${new Date(notBefore).toLocaleString()} (${onCredential ? "usage window reset" : "provider reset"})`
           : `${pause.reason}, pause ${pause.count}: resuming after ${new Date(notBefore).toLocaleTimeString()}`;
-      list(waiting, notBefore, onLane && providerResetOf(pause) !== undefined);
+      list(waiting, notBefore, onCredential && providerResetOf(pause) !== undefined);
       continue;
     }
-    // The subscription usage gate: a lane at or over this run's threshold
-    // holds the resume until its window resets (operator, 2026-10-16).
-    const gated = opts.subscriptionHold?.(f);
+    // The credential's budget: one at or over this run's threshold holds the
+    // resume until its window resets (operator, 2026-10-16), and a credential
+    // gone or disabled holds it until the operator says otherwise.
+    const gated = opts.credentialHold?.(f);
     if (gated !== undefined) {
       list(gated, null, true);
       continue;
@@ -1684,7 +1627,7 @@ export function planResumes(opts: {
       takenJobs,
       held: opts.held,
       running: opts.running,
-      ...(opts.subscriptionHold !== undefined ? { subscriptionHold: opts.subscriptionHold } : {}),
+      ...(opts.credentialHold !== undefined ? { credentialHold: opts.credentialHold } : {}),
     });
     if ("listed" in plan) {
       listed.push(...plan.listed);
@@ -1721,7 +1664,7 @@ function planPartyResume(
     takenJobs: ReadonlySet<string>;
     held: (account: string) => string | undefined;
     running: ReadonlyMap<string, string>;
-    subscriptionHold?: (f: RunFact) => string | undefined;
+    credentialHold?: (f: RunFact) => string | undefined;
   },
 ): { resume: ResumePlan; skip?: false } | { skip: true } | { listed: PausedListing[] } {
   const listAll = (why: string, resumeAfter: number | null = null, subscriptionWait = false): { listed: PausedListing[] } => ({
@@ -1782,7 +1725,7 @@ function planPartyResume(
     return listAll(`${cause.party!.member} ${cause.pause!.reason}: resuming after ${new Date(notBefore).toLocaleTimeString()}`, notBefore);
   }
   for (const f of ordered) {
-    const gated = o.subscriptionHold?.(f);
+    const gated = o.credentialHold?.(f);
     if (gated !== undefined) return listAll(gated, null, true);
   }
   for (const [i, a] of accounts.entries()) {
@@ -2604,37 +2547,8 @@ export const fmtElapsed = (ms: number): string => {
   return m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m` : `${m}m`;
 };
 
-/**
- * Whether a party fits, all of it, under every cap it counts against
- * (GROUP-PLAY.md §1, "Capacity"): its members count `size` each on every
- * concurrency key the job's ref counts on (`keysOfIn`: for a claude-code
- * entry, its lane's key and the total), and `size` against
- * `policy.paid.maxConcurrent` when its model is paid. `running` is what is
- * in flight on those keys without the party; a cap with no room for every
- * member holds the whole party — never a part of it, which could not play.
- * Undefined when it fits; the reason otherwise. A key with no cap is never
- * full. Pure.
- */
-export function partyAdmission(o: {
-  size: number;
-  keys: readonly string[];
-  running: ReadonlyMap<string, number>;
-  max: Readonly<Record<string, number>>;
-  paid?: { running: number; cap: number } | undefined;
-}): string | undefined {
-  for (const k of o.keys) {
-    const cap = o.max[k];
-    const n = o.running.get(k) ?? 0;
-    if (cap !== undefined && n + o.size > cap) return `a party of ${o.size} needs ${o.size} sessions on ${k}, and ${n} of its cap ${cap} are in flight — it starts whole or not at all`;
-  }
-  if (o.paid !== undefined && o.paid.running + o.size > o.paid.cap) {
-    return `a party of ${o.size} needs ${o.size} paid slots, and ${o.paid.running} of policy.paid.maxConcurrent ${o.paid.cap} are in flight — it starts whole or not at all`;
-  }
-  return undefined;
-}
-
 /** How many sessions a job holds: a party's members, else one per ref. */
-export function sessionsOf(job: Pick<FleetJob, "accounts">): number {
+export function sessionsOf(job: { accounts?: readonly string[] | undefined }): number {
   return job.accounts?.length ?? 1;
 }
 
@@ -2648,8 +2562,12 @@ export interface InFlight {
   name: string;
   account: string;
   refs: readonly string[];
-  /** The job's source. A pinned job is outside the paid cap, as on the live tick. */
+  /** The job's source. */
   source?: JobSource;
+  /** Where its refs were placed, when the job says (`FleetJob.placed`); else each ref's live run says. */
+  placed?: FleetJob["placed"];
+  /** A party's accounts: it holds a session per member. */
+  accounts?: readonly string[];
 }
 
 /**
@@ -2661,7 +2579,8 @@ export interface InFlight {
  * (2026-10-14, codex-sol-61's a3 beside its live a2). `unownedRefs` are the
  * refs of live runs no job owns (`unownedLiveRuns`), held for their model as
  * the live tick holds them: never planned again, but not counted against a
- * driver or paid cap, which the tick does not count them against either.
+ * credential or a driver cap, which the tick does not count them against
+ * either.
  */
 export function planTick(
   config: FleetConfig,
@@ -2671,19 +2590,19 @@ export function planTick(
   resumes: readonly ResumePlan[] = [],
   probeRuns: readonly ProbeRun[] = [],
   affinity?: AccountAffinity,
-  /** Which subscription each ref's live run is on (`liveSubscriptions`); absent reads every claude ref as the default lane. */
-  lanes: ReadonlyMap<string, string> = new Map(),
+  /** Which credential each ref's live or paused run is on (`liveCredentials`). */
+  runCredentials: ReadonlyMap<string, string> = new Map(),
   /** Every run id on disk, so a planned remainder names the ids its spawn will really use. */
   takenRunIds: ReadonlySet<string> = new Set(),
   inFlight: readonly InFlight[] = [],
   unownedRefs: readonly string[] = [],
-  /** The subscription usage gate (`run-fleet-gate.ts`); absent holds nothing. */
-  gate?: FleetSubscriptionGate,
+  /** The credentials' budgets (`credentialGate`); absent holds nothing. */
+  gate?: CredentialGate,
 ): {
   pinned: { job: FleetJob; spawn: JobSpawn }[];
   queue: QueuePlan;
   policy: PolicyPick[];
-  /** Picks the policy wanted but held back (paid cap, driver cap), with why. */
+  /** Picks the policy wanted but held back (no credential with room, the driver cap), with why. */
   heldPicks: HeldPick[];
 } {
   const eligible = eligibleFrom(states);
@@ -2705,16 +2624,27 @@ export function planTick(
       return [owed === undefined ? j : { ...j, owed: { copies: owed, taken: takenRunIds } }];
     })
     .map((job) => ({ job, spawn: jobSpawn(job, config.roster, job.account!, stamp, eligible, config.campaigns) }));
-  // A pinned job the subscription gate holds does not spawn: it is reported
-  // with the picks the policy held, which is where `--dry-run` says why.
+  // Everything already holding a session is on the book first: what is in
+  // flight, and the resumes, each on the credential it records.
+  const book = new SlotBook(config.credentials, config.policy.maxSessions);
+  for (const j of inFlight) countJob(book, j, config.roster, runCredentials);
+  for (const r of resumes) countJob(book, r.job, config.roster, runCredentials);
+  const placing = { credentials: config.credentials, book, gate };
+  // A pinned job that no credential has room for does not spawn: it is
+  // reported with the picks the policy held, which is where `--dry-run` says
+  // why. A party fits whole or not at all.
   const gatedPinned: HeldPick[] = [];
-  if (gate !== undefined) {
-    for (let i = pinned.length - 1; i >= 0; i--) {
-      const why = jobHoldOf(pinned[i]!.job, config.roster, config.policy.subscriptions, gate);
-      if (why === undefined) continue;
-      gatedPinned.unshift({ name: pinned[i]!.job.name, episode: pinned[i]!.job.episode, why });
+  for (let i = 0; i < pinned.length; ) {
+    const p = pinned[i]!;
+    const r = placeJob(p.job, config.roster, placing);
+    if (!r.ok) {
+      gatedPinned.push({ name: p.job.name, episode: p.job.episode, why: r.why });
       pinned.splice(i, 1);
+      continue;
     }
+    book.add(r.keys);
+    pinned[i] = { job: r.job, spawn: jobSpawn(r.job, config.roster, r.job.account!, stamp, eligible, config.campaigns) };
+    i++;
   }
   // What is running, and the resumes, hold their accounts and their refs
   // ahead of everything fresh.
@@ -2726,65 +2656,37 @@ export function planTick(
     queue: poolJobs(config),
     roster: config.roster,
     pool: config.accounts.pool,
+    maxLive: config.accounts.max,
     running: occupied,
     finished: new Set(),
     held,
-    cooling: (job) => (gate === undefined ? undefined : jobHoldOf(job, config.roster, config.policy.subscriptions, gate)),
     eligible,
     runningRefs: heldRefs,
     ...(affinity !== undefined ? { affinity } : {}),
     counted,
     takenRunIds,
+    place: (job) => {
+      const r = placeJob(job, config.roster, placing);
+      if (!r.ok) return { ok: false, why: r.why };
+      book.add(r.keys);
+      return { ok: true, job: r.job };
+    },
   });
   const policyStates = states.filter((st) => policyRefs(config).has(st.name));
-  const billingOfName = new Map(states.map((st) => [st.name, st.billing]));
-  const keyOf = (n: string): string => concurrencyKeyOfRef(config.roster, n, billingOfName.get(n));
-  const keyCount = new Map<string, number>();
-  // Same rule the live tick uses: a claude ref counts against the subscription
-  // its own run says it is on, so --status and --dry-run agree with the fleet.
-  // A party counts every member (`sessionsOf`).
-  const sessionsOfRef = new Map<string, number>();
-  for (const p of pinned) for (const r of p.job.refs) sessionsOfRef.set(r, Math.max(sessionsOfRef.get(r) ?? 1, sessionsOf(p.job)));
-  for (const r of resumes) for (const ref of r.job.refs) sessionsOfRef.set(ref, Math.max(sessionsOfRef.get(ref) ?? 1, sessionsOf(r.job)));
-  for (const r of runningRefs) {
-    for (const k of keysOfIn(keyOf, r, lanes.get(r))) keyCount.set(k, (keyCount.get(k) ?? 0) + (sessionsOfRef.get(r) ?? 1));
-  }
-  // A pinned party that does not fit whole is held, with the reason, as the
-  // live tick holds it (`partyAdmission`).
-  for (let i = pinned.length - 1; i >= 0; i--) {
-    const p = pinned[i]!;
-    if (p.job.accounts === undefined) continue;
-    const size = sessionsOf(p.job);
-    const keys = p.job.refs.flatMap((r) => keysOfIn(keyOf, r, p.job.subscription ?? config.roster[r]?.subscription ?? lanes.get(r)));
-    const without = new Map(keyCount);
-    for (const k of keys) without.set(k, (without.get(k) ?? size) - size);
-    const paid = billingOfName.get(p.job.ref) === "paid" && config.policy.paid !== null ? { running: inFlight.filter((j) => j.source !== "pinned").flatMap((j) => j.refs).filter((r) => billingOfName.get(r) === "paid").length, cap: config.policy.paid.maxConcurrent } : undefined;
-    const why = partyAdmission({ size, keys, running: without, max: config.maxConcurrent, paid });
-    if (why === undefined) continue;
-    gatedPinned.push({ name: p.job.name, episode: p.job.episode, why });
-    pinned.splice(i, 1);
-    for (const k of keys) keyCount.set(k, (keyCount.get(k) ?? size) - size);
-  }
-  // The paid cap counts what the live tick counts: every paid model in flight
-  // but a pinned job's.
-  const paidRunning = inFlight.filter((j) => j.source !== "pinned").flatMap((j) => j.refs).filter((r) => billingOfName.get(r) === "paid").length;
   const { picks: policy, held: heldPicks } = planPolicyHeld({
     states: policyStates,
     pool: config.accounts.pool,
-    classPools: classPoolsOf(config),
+    maxLive: config.accounts.max,
     running: occupied,
     held,
     queuePlan: queue,
     runningRefs: heldRefs,
-    concurrency: {
-      keyOf,
-      max: config.maxConcurrent,
-      running: keyCount,
-      pinnedLane: (n) => config.roster[n]?.subscription,
-      ...(gate !== undefined ? { gate: (n: string, ep: EpisodeId, lane: string) => gate.holdOf(laneOfEntry(config.roster[n], lane), ep, config.roster[n]?.model) } : {}),
+    place: (n, ep) => {
+      const r = placeRef(config.roster[n], ep, { ...placing, pin: config.roster[n]?.credential });
+      return r.ok ? { ok: true, credential: r.placement.credential, keys: r.placement.keys } : r;
     },
+    take: (keys) => book.add(keys),
     policy: config.policy,
-    paidRunning,
     campaigns: unpinnedCampaigns(config),
     probeRuns,
     ...(affinity !== undefined ? { affinity } : {}),

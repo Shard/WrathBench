@@ -178,10 +178,10 @@ export const ENTRIES: readonly Entry[] = [
   },
   {
     group: "config",
-    command: "move-lane",
-    takes: "<run-id> <ENV NAME> --note <why> [--pin]",
-    summary: "move a paused or ended run to another subscription lane: its meta.json, then (--pin) its roster entry's pin",
-    ...inRunner("bun", CONFIG_STORE, "move-lane"),
+    command: "move-credential",
+    takes: "<run-id> <credential id> --note <why> [--pin]",
+    summary: "move a paused or ended run to another credential of its provider: its meta.json, then (--pin) its roster entry's pin",
+    ...inRunner("bun", CONFIG_STORE, "move-credential"),
   },
   {
     group: "config",

@@ -85,14 +85,14 @@ export const campaignRowSchema = z
      */
     accounts: z.array(z.string().min(2).max(16)).min(1).optional(),
     /**
-     * The subscription lane this campaign's launches bill, by env var NAME
-     * (`policy.subscriptions`), for a pinned campaign: it overrides the
-     * assignment's roster lane for this campaign's runs and nothing else, so
-     * the same entry's scored evals keep their own placement (operator,
-     * 2026-10-19: the Deadmines party on the second Claude lane). Checked
-     * against the policy and the assignments' drivers (`campaignLaneProblem`).
+     * The credential this campaign's launches take a slot on, by id
+     * (`credentials/<id>`), for a pinned campaign: it overrides the
+     * assignment's own placement for this campaign's runs and nothing else,
+     * so the same entry's scored evals keep their own (operator, 2026-10-19:
+     * the Deadmines party on the second Claude subscription). Checked against
+     * the credentials and the assignments (`campaignCredentialProblem`).
      */
-    subscription: z.string().min(1).max(128).optional(),
+    credential: z.string().min(1).max(64).optional(),
     /**
      * Skip a model the projection considers unhealthy (retired, or cooling on
      * the defer ladder). Default true: burning a square against a dead
@@ -138,8 +138,8 @@ export interface Campaign {
   account?: string;
   /** A party campaign's pinned accounts, one per member in member order. */
   accounts?: string[];
-  /** The lane this campaign's launches bill (`campaigns.<id>.subscription`); absent: the assignment's own. */
-  subscription?: string;
+  /** The credential this campaign's launches take (`campaigns.<id>.credential`); absent: the assignment's own placement. */
+  credential?: string;
   excludeUnhealthy: boolean;
   /** The versions of this id the operator declared finished (`campaigns.<id>.concluded`); empty when none. */
   concluded: number[];
@@ -189,8 +189,8 @@ export interface PairRosterEntry {
   /**
    * The fleet's refusal of the whole entry (`rosterEntryRefusal`, the one
    * verdict the parser's `FleetRosterEntry.refused` and the viewer both read:
-   * a key it does not read, a provider key towards a host the provider table
-   * does not pair it with, a subscription the policy does not list).
+   * a key it does not read, a base no credential provider serves, a pinned
+   * credential that cannot carry it).
    */
   refused?: string | undefined;
 }
@@ -318,7 +318,7 @@ export function campaignRowProblem(name: string, spec: unknown): string | null {
   if (!CAMPAIGN_NAME.test(name)) return `campaign ${name}: the id must match ${CAMPAIGN_NAME}`;
   const parsed = campaignRowSchema.safeParse(spec);
   if (parsed.success) return null;
-  return `campaign ${name}: ${issuesOf(parsed.error)} — a row is { version, enabled, assignments [{ model, runsPerCell }], account?, accounts?, subscription?, excludeUnhealthy?, concluded? }`;
+  return `campaign ${name}: ${issuesOf(parsed.error)} — a row is { version, enabled, assignments [{ model, runsPerCell }], account?, accounts?, credential?, excludeUnhealthy?, concluded? }`;
 }
 
 /**
@@ -380,7 +380,7 @@ export function parseCampaigns(
       // A party is pinned whole: the leader's account stands for the pin
       // wherever one account is read, and the list carries the rest.
       ...(accounts !== undefined ? { account: accounts[0]!, accounts: [...accounts] } : {}),
-      ...(row.subscription !== undefined ? { subscription: row.subscription } : {}),
+      ...(row.credential !== undefined ? { credential: row.credential } : {}),
       excludeUnhealthy: row.excludeUnhealthy,
       concluded: [...(row.concluded ?? [])],
       cells: def.cells,

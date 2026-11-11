@@ -17,14 +17,13 @@
  * `.env` — and never from the config store, which is the thing being guarded.
  * The key NAMES are never configurable.
  *
- * One function, three places: where a roster entry is parsed (`parseFleet`
- * refuses the entry by name and schedules nothing under it), where the config
- * store writes (`ConfigStore.put` and `seed` refuse the write), and at launch
- * (`run.ts` refuses to start, and the adapter refuses to be built with a pair
- * the table does not hold).
+ * Asked where a roster entry is read (`rosterProviderRefusal`,
+ * credentials.ts: its base must be a provider's, so a credential of that
+ * provider can carry it), where a credential is written (its `secretEnv` must
+ * be its provider's key name), and at launch (`run.ts` refuses to start, and
+ * the adapter refuses to be built with a pair the table does not hold).
  */
 
-import { DEFAULT_DRIVER, driverEntry } from "./drivers";
 
 /** One provider: the env var holding its key, and where that key may go. */
 export interface KeyProvider {
@@ -176,40 +175,4 @@ export function piProviderOf(keyEnv: string): { provider: string } | { refusal: 
       `the pi driver has no pi provider for ${keyEnv} — it runs on ${have.join(", ")}; ` +
       "another endpoint is a piProvider on its row in runner/src/providers.ts",
   };
-}
-
-/**
- * Why a roster entry's `apiKeyEnv` may not be sent to its `apiBase`
- * (the table above), or null when the pairing holds. The defaults
- * are the runner's: no base is OpenRouter and no key name is `OPENROUTER_KEY`,
- * so an entry stating only a non-OpenRouter base is refused — it would send
- * the OpenRouter key there. Only an endpoint driver (openai, pi) sends a key; the subscription CLI
- * drivers are given no `--api-key-env` at all (`episodeArgv` in
- * `infra/run-roster.ts`). Every reader of a roster entry asks this: the store's
- * write path, and the fleet parser and the viewer's campaign squares through
- * `rosterEntryRefusal` (runner/src/roster-refusal.ts).
- *
- * `env` is where the self-hosted hosts are read from (deploy-time config),
- * injected so a test states the deployment it means.
- */
-export function rosterKeyRefusal(
-  e: { driver?: unknown; apiBase?: unknown; apiKeyEnv?: unknown },
-  env: Record<string, string | undefined> = process.env,
-): string | null {
-  const driver = driverEntry(e.driver ?? DEFAULT_DRIVER);
-  if (driver?.endpoint !== true) return null;
-  if (e.apiKeyEnv !== undefined && typeof e.apiKeyEnv !== "string") return "apiKeyEnv must be the NAME of the env var holding the key";
-  if (e.apiBase !== undefined && typeof e.apiBase !== "string") return "apiBase must be a URL";
-  const keyEnv = e.apiKeyEnv ?? DEFAULT_API_KEY_ENV;
-  const pair = apiKeyRefusal(keyEnv, e.apiBase ?? DEFAULT_API_BASE, env);
-  if (pair !== null) return pair;
-  // A driver that reaches the base through its CLI's own provider
-  // (`DriverEntry.cliProvider`) needs one named on the key's row; without it
-  // every launch would fail, so the entry is refused here and its campaign
-  // squares are parked, not spent.
-  if (driver.cliProvider === true) {
-    const provider = piProviderOf(keyEnv);
-    if ("refusal" in provider) return provider.refusal;
-  }
-  return null;
 }

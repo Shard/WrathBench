@@ -86,15 +86,12 @@ import {
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import {
-  classPoolsOf,
-  concurrencyKeyOfRef,
   eligibleFrom,
   healthyFrom,
   type FleetConfig,
   type FleetJob,
   type FleetPreflight,
   type JobSpawn,
-  keysOfIn,
   parseFleet,
   pinnedCampaignJobs,
   pinnedJobs,
@@ -109,8 +106,8 @@ import {
 } from "./run-fleet-config";
 import {
   affinityFrom,
-  partyAdmission,
-  sessionsOf,
+  countJob,
+  placeJob,
   affinityOf,
   applyPause,
   bootMarker,
@@ -208,16 +205,22 @@ import { DRAIN_POD_QUERY_TIMEOUT_MS, rosterHasRunPod } from "./run-pod";
 import { runCampaignFile, writeCampaignFile } from "../runner/src/campaign-file";
 import { deleteCodexThread, pruneRollouts, type RolloutPrune } from "../runner/src/codex-rollout";
 import { cliBaseEnv } from "../runner/src/adapter-shared";
-import { DEFAULT_CLAUDE_TOKEN_ENV } from "../runner/src/config";
-import { subscriptionThresholds } from "../runner/src/subscription-usage";
-import { claudeLaneOpen, FleetGoUsage, gateSpawns, jobHoldOf, laneOfEntry, laneOfRun, subscriptionGate, writeLaneUsageSidecar } from "./run-fleet-gate";
+import {
+  codexHomeEnvsOf,
+  credentialGate,
+  credentialStatuses,
+  FleetGoUsage,
+  gateSpawns,
+  placeRef,
+  resumeHoldOf,
+  SlotBook,
+  writeCredentialUsageSidecar,
+  type CredentialGate,
+} from "./run-fleet-credentials";
+import type { Credential } from "../runner/src/credentials";
 import { configDbPath, EMPTY_STORE_HINT, readFleetConfig } from "../runner/src/config-store";
 import {
-  capFor,
-  CLAUDE_TOTAL_KEY,
-  claudeKeysFor,
-  claudeLanesOf,
-  liveSubscriptions,
+  liveCredentials,
   MODELS_SIDECAR,
   modelStates,
   parseModelsSidecar,
@@ -646,22 +649,20 @@ let configLoadedAt: number | undefined;
 /** The pause switch as of the last tick; every writeState carries it. */
 let pauseSwitch: FleetPause | undefined;
 /**
- * The subscription usage gate's thresholds, read once at boot like every other
- * env knob (operator, 2026-10-16; `runner/src/subscription-usage.ts`).
- */
-const subThresholds = subscriptionThresholds(process.env);
-/**
- * The OpenCode Go allowances the roster draws on, read off Go's usage
- * endpoint at most once a minute per key, before each tick decides anything
- * (`FleetGoUsage`). The CLI lanes' readings come off the runs instead.
+ * The OpenCode Go credentials with a usage budget, read off Go's usage
+ * endpoint at most once a minute per credential, before each tick decides
+ * anything (`FleetGoUsage`). The CLI credentials' readings come off the runs
+ * instead.
  */
 const goUsage = new FleetGoUsage({ say });
 /** Refresh the Go readings and leave them where the roster and `--status` read them. Never throws. */
-async function refreshGoUsage(roster: FleetConfig["roster"]): Promise<void> {
-  await goUsage.refresh(roster);
+async function refreshGoUsage(cfg: Pick<FleetConfig, "credentials" | "roster">): Promise<void> {
+  await goUsage.refresh(cfg.credentials, cfg.roster);
   const readings = goUsage.observations();
-  if (readings.length > 0) writeLaneUsageSidecar(RUNS_DIR, readings);
+  if (readings.length > 0) writeCredentialUsageSidecar(RUNS_DIR, readings);
 }
+/** The newest tick's credential ledger, for the state file's `credentials` block. */
+let lastCredentials: { gate: CredentialGate; book: SlotBook; credentials: readonly Credential[]; runs: readonly RunFact[] } | undefined;
 /**
  * The refusals last logged, joined. Deduping on the SET rather than a count
  * means a swap — one pin fixed and another broken in the same edit — is still
@@ -714,14 +715,13 @@ function writeState(
     ...(preflight !== undefined ? { preflight } : {}),
     ...(preflightInFlight !== undefined ? { preflightInFlight } : {}),
     ...(pauseSwitch !== undefined ? { pausedSwitch: pauseSwitch } : {}),
-    subscriptionGate: { scored: subThresholds.scored, freeplay: subThresholds.freeplay, ...(subThresholds.notes.length > 0 ? { notes: subThresholds.notes } : {}) },
+    ...(lastCredentials !== undefined ? { credentials: credentialStatuses(lastCredentials) } : {}),
     ...(pool !== undefined
       ? {
           accounts: {
             pinned: pool.pinned,
             pool: Object.fromEntries(pool.pool.map((a) => [a, [...pool.assigned].find(([, acct]) => acct === a)?.[0] ?? null])),
-            paid: Object.fromEntries(pool.paid.map((a) => [a, [...pool.assigned].find(([, acct]) => acct === a)?.[0] ?? null])),
-            local: Object.fromEntries(pool.local.map((a) => [a, [...pool.assigned].find(([, acct]) => acct === a)?.[0] ?? null])),
+            max: pool.max,
           },
           ...(pool.queue.length > 0
             ? {
@@ -971,13 +971,13 @@ async function main(): Promise<void> {
   const pending = new Map<string, FleetJob>();
   const announcedPicks = new Set<string>();
   /**
-   * The subscription lane a job was last placed on, by job name. A run does not
-   * appear on disk for a few seconds after it is spawned, and until it does the
-   * only record of which subscription it took is this. Pruned every tick to the
-   * jobs that are running or about to; across a restart the runs themselves are
-   * the record (`liveSubscriptions`).
+   * Where a job was last placed, by job name. A run does not appear on disk
+   * for a few seconds after it is spawned, and until it does the only record
+   * of which credential it took is this. Pruned every tick to the jobs that
+   * are running or about to; across a restart the runs themselves are the
+   * record (`liveCredentials`).
    */
-  const laneMemo = new Map<string, string>();
+  const placedMemo = new Map<string, NonNullable<FleetJob["placed"]>>();
   /** Why the newest projection dropped a live job, by job name; what the drain says. */
   const drainReasons = new Map<string, string>();
   let policyIdle: string | undefined;
@@ -1066,95 +1066,38 @@ async function main(): Promise<void> {
     // the policy read at the bottom of it.
     let states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(cfg.roster), policy: cfg.policy, runs });
     let eligible = eligibleFrom(states);
-    // The subscription usage gate over the same facts: the newest reading per
-    // lane, asked at every launch below (`run-fleet-gate.ts`).
-    const subGate = subscriptionGate([...runs.map((f) => f.subscriptionUsage), ...goUsage.observations()], subThresholds, Date.now());
+    // The credentials over the same facts: each one's budget (its newest usage
+    // reading, its runs and spend today) and every live session on its slots
+    // and its driver's host cap, asked at every launch below
+    // (`run-fleet-credentials.ts`).
+    const credGate = credentialGate(cfg.credentials, [...runs.map((f) => f.credentialUsage), ...goUsage.observations()], runs, Date.now());
+    const book = new SlotBook(cfg.credentials, cfg.policy.maxSessions);
+    lastCredentials = { gate: credGate, book, credentials: cfg.credentials, runs };
     const byName = new Map(cfg.jobs.map((j) => [j.name, j]));
     const runningRefs = new Set<string>();
-    const keyCount = new Map<string, number>();
-    // Paid policy models in flight, for the paid cap (pinned jobs excluded).
-    const billingOf = new Map(states.map((st) => [st.name, st.billing]));
-    let paidRunning = 0;
     const pinnedSkips: QueueSkip[] = [];
-    const keyOf = (n: string): string => concurrencyKeyOfRef(cfg.roster, n, billingOf.get(n));
     /**
-     * The subscription lane each roster entry's live-or-paused run is on, read
-     * back off the runs. This is what makes the per-lane count survive a
-     * supervisor restart: the job objects that remember which token they were
-     * spawned with die with the process, the runs do not.
+     * The credential each roster entry's live-or-paused run is on, read back
+     * off the runs. This is what makes the per-credential count survive a
+     * supervisor restart: the job objects that remember where they were placed
+     * die with the process, the runs do not.
      */
-    const runLanes = liveSubscriptions(runs, rosterModels(cfg.roster));
-    /** A job's lane: what it was scheduled on, else what its live run says. */
-    const laneOf = (job: { subscription?: string; refs: readonly string[] }): string | undefined =>
-      job.subscription ?? job.refs.map((r) => runLanes.get(r)).find((l) => l !== undefined);
-    /** Count a job's sessions on its keys: one per ref, or a party's every member (`sessionsOf`). */
-    const countKey = (refs: readonly string[], lane?: string, sessions = 1): void => {
-      for (const r of refs) {
-        for (const k of keysOfIn(keyOf, r, lane ?? runLanes.get(r))) keyCount.set(k, (keyCount.get(k) ?? 0) + sessions);
-      }
+    const runCreds = liveCredentials(runs, rosterModels(cfg.roster));
+    /** A job with where it was placed: what it carries, else what this supervisor placed it on (`placedMemo`). */
+    const withPlaced = (job: FleetJob): FleetJob => {
+      const placed = job.placed ?? placedMemo.get(job.name);
+      return placed !== undefined ? { ...job, placed } : job;
     };
-    /**
-     * Pinned parties this tick would start, admitted only once every other
-     * session is counted: all of a party under every cap, or none of it.
-     */
-    const partyAdmissions: { job: FleetJob; placed: FleetJob; idx: number }[] = [];
-    /**
-     * The lane a claude-code job that nothing has placed yet should take: the
-     * first subscription with a slot free, else the default one. Pinned jobs,
-     * manual queue jobs and campaign cells all come through here — they bypass
-     * the policy's cap loop, so without this every one of them would pile onto
-     * the default subscription while the second sat idle.
-     */
-    /**
-     * Lanes taken by this tick's queue assignments, which `keyCount` does not
-     * hold: `planPolicyHeld` counts those itself, so counting them twice would
-     * hide a free session from the policy.
-     */
-    const laneReserve = new Map<string, number>();
-    const withLane = (job: FleetJob, lane: string | undefined): FleetJob => {
-      if (lane !== undefined) laneMemo.set(job.name, lane);
-      return lane === undefined || lane === DEFAULT_CLAUDE_TOKEN_ENV ? job : { ...job, subscription: lane };
+    const placing = { credentials: cfg.credentials, book, gate: credGate };
+    /** Place a job that holds no session yet and commit its slots, or say why it may not start. */
+    const placeFresh = (job: FleetJob): { ok: true; job: FleetJob } | { ok: false; why: string } => {
+      const r = placeJob(job, cfg.roster, placing);
+      if (!r.ok) return r;
+      book.add(r.keys);
+      if (r.job.placed !== undefined) placedMemo.set(job.name, r.job.placed);
+      return { ok: true, job: r.job };
     };
-    const assignLane = (job: FleetJob): FleetJob => {
-      if (job.subscription !== undefined) return job;
-      if (!job.refs.some((r) => keyOf(r) === CLAUDE_TOTAL_KEY)) return job;
-      // A roster pin outranks everything: that entry bills that subscription.
-      const pin = job.refs.map((r) => cfg.roster[r]?.subscription).find((l) => l !== undefined);
-      if (pin !== undefined) return withLane(job, pin);
-      const model = cfg.roster[job.ref]?.model;
-      // A remembered lane binds a job only while it has a run in progress: a
-      // fresh launch with no resume whose remembered lane the subscription
-      // gate now holds is placed afresh, on an open one if there is one.
-      const memo = laneMemo.get(job.name);
-      const memoHeld = memo !== undefined && !sets.running.has(job.name) && job.resume === undefined && !claudeLaneOpen(subGate, memo, job.episode, model);
-      const known = laneOf(job) ?? (memoHeld ? undefined : memo);
-      if (known !== undefined) return withLane(job, known);
-      // Room in the lane AND under the overall ceiling: a claude session spends
-      // both, so a free subscription with the total spent is not free. A lane
-      // the subscription gate holds is passed over for one it does not. Room
-      // for the whole job: a party needs a slot per member (`sessionsOf`),
-      // which for one run is the old `count < cap`.
-      const open = claudeLanesOf(cfg.policy.subscriptions).filter((l) => claudeLaneOpen(subGate, l, job.episode, model));
-      const free = open.find((l) =>
-        claudeKeysFor(l).every((k) => {
-          const cap = capFor(cfg.maxConcurrent, k);
-          return cap === undefined || (keyCount.get(k) ?? 0) + (laneReserve.get(k) ?? 0) + sessionsOf(job) <= cap;
-        }),
-      );
-      // Nothing free: the job is pinned or manual, so it is not held for a cap
-      // it never consulted — it takes an open lane, else the default one, as it
-      // did before there was a second.
-      return withLane(job, free ?? open[0]);
-    };
-    /** Assign a lane and reserve it: for a job the policy's own cap loop will count. */
-    const reserveLane = (job: FleetJob): FleetJob => {
-      const placed = assignLane(job);
-      if (job.refs.some((r) => keyOf(r) === CLAUDE_TOTAL_KEY)) {
-        for (const k of claudeKeysFor(placed.subscription)) laneReserve.set(k, (laneReserve.get(k) ?? 0) + 1);
-      }
-      return placed;
-    };
-    for (const n of [...laneMemo.keys()]) if (!sets.running.has(n) && !pending.has(n)) laneMemo.delete(n);
+    for (const n of [...placedMemo.keys()]) if (!sets.running.has(n) && !pending.has(n)) placedMemo.delete(n);
     // Pinned jobs: from the file, on their own accounts — plus a pinned
     // campaign's next cell, which is a pinned job in everything but where it
     // was written down.
@@ -1163,6 +1106,34 @@ async function main(): Promise<void> {
     // one, and a campaign square's fresh attempt numbers past them.
     const takenRunIds = new Set(runs.map((f) => f.runId));
     campaignJobs = withTakenRunIds(pinnedCampaignJobs(cfg, probes, healthyFrom(states)), takenRunIds);
+    // Every session already held goes on the book first — a live job of this
+    // supervisor's, pinned, pooled, drained or no longer in the file — so a
+    // fresh placement below never takes a slot a live run is on (the
+    // 2026-08-24 spill: a draining campaign cell no loop yielded).
+    for (const name of sets.running) {
+      const job = liveJobs.get(name) ?? [...pinnedJobs(cfg), ...campaignJobs].find((j) => j.name === name);
+      if (job === undefined) continue;
+      countJob(book, withPlaced(job), cfg.roster, runCreds);
+    }
+    const held = (a: string): string | undefined => accountHeldBy(a, "");
+    // Resumes before anything fresh: a paused run goes back onto
+    // its own account ahead of the queue and the policy, so nothing can wipe
+    // its character first. A pinned job's spawn is replaced by its resume
+    // spawn; a pool job's resume reserves its account like an assignment.
+    const runningMap = new Map<string, string>(assigned);
+    for (const job of pinnedJobs(cfg)) if (sets.running.has(job.name)) runningMap.set(job.name, job.account!);
+    const resumes = planResumes({
+      runs,
+      config: cfg,
+      running: runningMap,
+      held,
+      now: Date.now(),
+      campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
+      hasImageRecord: (id) => runHasImageRecord(id),
+      credentialHold: (f) => resumeHoldOf(f, cfg, credGate),
+    });
+    lastPaused = resumes.listed;
+    const resumingNames = new Set(resumes.resume.filter((r) => !sets.running.has(r.job.name)).map((r) => r.job.name));
     pinnedDone = [];
     for (const job of [...pinnedJobs(cfg), ...campaignJobs]) {
       if (job.enabled && runnableRefs(job, cfg.roster, eligible).length === 0) {
@@ -1181,27 +1152,35 @@ async function main(): Promise<void> {
         pinnedDone.push(job);
         continue;
       }
-      const placed = assignLane(owed === undefined ? job : { ...job, owed: { copies: owed, taken: takenRunIds } });
-      // The subscription usage gate holds a pinned job that is not running:
-      // it waits with the reason said, and spends no slot it will not use.
-      const gated = job.enabled && !sets.running.has(job.name) ? jobHoldOf(placed, cfg.roster, cfg.policy.subscriptions, subGate) : undefined;
-      if (gated !== undefined) {
-        pinnedSkips.push({ job, reason: gated });
-        out.push({ ...jobSpawn(placed, cfg.roster, job.account!, stampToday, eligible, cfg.campaigns), enabled: false });
+      const owing = owed === undefined ? job : { ...job, owed: { copies: owed, taken: takenRunIds } };
+      if (sets.running.has(job.name) || !job.enabled) {
+        // Live (counted above), or disabled and so a drain or a park.
+        out.push(jobSpawn(withPlaced(owing), cfg.roster, job.account!, stampToday, eligible, cfg.campaigns));
+        if (sets.running.has(job.name)) for (const r of job.refs) runningRefs.add(r);
         continue;
       }
-      out.push(jobSpawn(placed, cfg.roster, job.account!, stampToday, eligible, cfg.campaigns));
-      if (job.enabled || sets.running.has(job.name)) {
+      // A pinned job about to resume a paused run is placed with the resume,
+      // on the credential that run is on.
+      if (resumingNames.has(job.name)) {
+        out.push({ ...jobSpawn(owing, cfg.roster, job.account!, stampToday, eligible, cfg.campaigns), enabled: false });
         for (const r of job.refs) runningRefs.add(r);
-        // An enabled pinned job spawns this tick if it is not already running,
-        // so it counts against the driver cap either way — otherwise the first
-        // tick after a restart fills the pool before the pinned session exists.
-        countKey(placed.refs, placed.subscription, sessionsOf(placed));
-        if (placed.accounts !== undefined && job.enabled && !sets.running.has(job.name)) partyAdmissions.push({ job, placed, idx: out.length - 1 });
+        continue;
       }
+      // A slot on a credential with room, and a session under the driver's
+      // host cap, or it waits with the reason said — a party for all of its
+      // members at once. It spends no slot it will not use.
+      const placed = placeFresh(owing);
+      if (!placed.ok) {
+        pinnedSkips.push({ job, reason: placed.why });
+        out.push({ ...jobSpawn(owing, cfg.roster, job.account!, stampToday, eligible, cfg.campaigns), enabled: false });
+        continue;
+      }
+      out.push(jobSpawn(placed.job, cfg.roster, job.account!, stampToday, eligible, cfg.campaigns));
+      for (const r of job.refs) runningRefs.add(r);
     }
     // Pool jobs with a live process: keep running whatever the file now says,
-    // drain if the file dropped them or their refs.
+    // drain if the file dropped them or their refs. Their sessions are on the
+    // book already.
     for (const [name, account] of assigned) {
       const running = liveJobs.get(name);
       const fromFile = byName.get(name);
@@ -1212,23 +1191,15 @@ async function main(): Promise<void> {
           // character a drain is an immediate SIGTERM (`pausesOnDrain`): the run
           // pauses as `operator-pause` and `planResumes` leaves it listed while
           // the ref stays out of the unlimited lane, so nothing respawns it.
+          // A session under SIGTERM still holds its slot until the process
+          // exits (runner backstop 60s, roster SIGKILL grace 90s), which is
+          // why it was counted above with the rest.
           drainReasons.set(name, dropped);
           out.push({ name, enabled: false, account, loop: false, entries: [{ model: "gone" }] });
-          // A session under SIGTERM still holds its driver slot until the
-          // process exits (runner backstop 60s, roster SIGKILL grace 90s), and
-          // this tick's picks are planned below: without this the flip frees a
-          // claude lane a live run is still on and the policy spills a spawn
-          // onto it, which is the 2026-08-24 incident the backstop block below
-          // was written for — and that block skips anything in `assigned`.
           runningRefs.add(running.ref);
-          countKey(running.refs, laneOf(running));
-          if (billingOf.get(running.ref) === "paid") paidRunning++;
         } else {
-          const placed = assignLane(running);
-          out.push(jobSpawn(placed, cfg.roster, account, stampToday, undefined, cfg.campaigns));
+          out.push(jobSpawn(withPlaced(running), cfg.roster, account, stampToday, undefined, cfg.campaigns));
           runningRefs.add(running.ref);
-          countKey(placed.refs, placed.subscription);
-          if (billingOf.get(running.ref) === "paid") paidRunning++;
         }
         continue;
       }
@@ -1238,21 +1209,13 @@ async function main(): Promise<void> {
         out.push({ name, enabled: false, account, loop: false, entries: [{ model: "gone" }] });
         continue;
       }
-      const placed = assignLane(fromFile);
-      out.push(jobSpawn(placed, cfg.roster, account, stampToday, eligible, cfg.campaigns));
+      out.push(jobSpawn(withPlaced(running ?? fromFile), cfg.roster, account, stampToday, eligible, cfg.campaigns));
       for (const r of fromFile.refs) runningRefs.add(r);
-      countKey(placed.refs, placed.subscription);
-      // A manual pool job on a paid model holds a paid slot too: the cap is
-      // about what is billing at once, not about who asked for it.
-      for (const r of fromFile.refs) if (billingOf.get(r) === "paid") paidRunning++;
     }
-    // Live processes the file no longer YIELDS still hold a session on their
-    // driver: a completed campaign cell draining to its episode boundary, a
-    // job whose config entry vanished. The pinned loop above walks what the
-    // config yields, so such a process silently stopped occupying a slot —
-    // which is how a third claude-code run spilled onto a cap of 2 while
-    // nav-probe-coldridge (cell quota met, draining) was still alive
-    // (2026-08-24). Count every live job the loops above did not.
+    // Live processes the file no longer YIELDS — a completed campaign cell
+    // draining to its episode boundary, a job whose config entry vanished —
+    // hold their model, and the drain line says why. Their sessions were
+    // counted with every live one above.
     {
       const yielded = new Set([...pinnedJobs(cfg), ...campaignJobs].map((j) => j.name));
       for (const name of sets.running) {
@@ -1262,28 +1225,7 @@ async function main(): Promise<void> {
         // Words only: what the drain line says about a job nothing yields.
         drainReasons.set(name, unyieldedDrainReason(job, cfg.campaigns, Object.keys(cfg.roster), probes));
         for (const r of job.refs) runningRefs.add(r);
-        countKey(job.refs, laneOf(job), sessionsOf(job));
-        for (const r of job.refs) if (billingOf.get(r) === "paid") paidRunning++;
       }
-    }
-    // A party starts whole or not at all (GROUP-PLAY.md §1): with every other
-    // session counted, a pinned party that would not fit under a cap on one
-    // of its keys — its lane, the claude total, the paid cap — is held this
-    // tick with the reason, and gives back the slots it was counted for.
-    for (const p of partyAdmissions) {
-      const size = sessionsOf(p.placed);
-      const keys = p.placed.refs.flatMap((r) => keysOfIn(keyOf, r, p.placed.subscription ?? runLanes.get(r)));
-      const without = new Map(keyCount);
-      for (const k of keys) without.set(k, (without.get(k) ?? size) - size);
-      const paid = billingOf.get(p.placed.ref) === "paid" && cfg.policy.paid !== null ? { running: paidRunning, cap: cfg.policy.paid.maxConcurrent } : undefined;
-      const why = partyAdmission({ size, keys, running: without, max: cfg.maxConcurrent, paid });
-      if (why === undefined) {
-        if (paid !== undefined) paidRunning += size;
-        continue;
-      }
-      pinnedSkips.push({ job: p.job, reason: why });
-      out[p.idx] = { ...out[p.idx]!, enabled: false };
-      for (const k of keys) keyCount.set(k, (keyCount.get(k) ?? size) - size);
     }
     // A live fleet run none of this supervisor's jobs is playing — the two
     // minutes a killed runner's heartbeat stays warm after a pod recreate, or
@@ -1303,24 +1245,7 @@ async function main(): Promise<void> {
         say(`hold ${refs.join("+")}: ${u.runId} is live on ${u.account} and no job of this supervisor owns it — nothing new is planned for it until the run stops or reads cold`);
       }
     }
-    const held = (a: string): string | undefined => accountHeldBy(a, "");
-    // Resumes before anything fresh: a paused run goes back onto
-    // its own account ahead of the queue and the policy, so nothing can wipe
-    // its character first. A pinned job's spawn is replaced by its resume
-    // spawn; a pool job's resume reserves its account like an assignment.
-    const runningMap = new Map<string, string>(assigned);
-    for (const job of pinnedJobs(cfg)) if (sets.running.has(job.name)) runningMap.set(job.name, job.account!);
-    const resumes = planResumes({
-      runs,
-      config: cfg,
-      running: runningMap,
-      held,
-      now: Date.now(),
-      campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
-      hasImageRecord: (id) => runHasImageRecord(id),
-      subscriptionHold: (f) => subGate.holdOf(laneOfRun(f), f.episode, f.model),
-    });
-    lastPaused = resumes.listed;
+
     // A verdict the runner recorded but could not write into the row: the
     // facts already read it from the trajectory, and the row is told now.
     for (const r of repairRecordedTerminations(RUNS_DIR, runs)) {
@@ -1384,28 +1309,23 @@ async function main(): Promise<void> {
           continue;
         }
       }
-      // A resumed run goes back to the subscription it started on: the runner
-      // rebuilds its config from meta.json, and the lane is in it. Stamped on
-      // the spawn too so the count and the state file agree with the run.
-      const resumed = assignLane(r.job);
-      // A paused party comes back whole under the caps, as it starts: every
-      // member counted, or the resume waits for a tick with room.
-      if (resumed.accounts !== undefined) {
-        const size = sessionsOf(resumed);
-        const keys = resumed.refs.flatMap((ref) => keysOfIn(keyOf, ref, resumed.subscription ?? runLanes.get(ref)));
-        const paid = billingOf.get(resumed.ref) === "paid" && cfg.policy.paid !== null ? { running: paidRunning, cap: cfg.policy.paid.maxConcurrent } : undefined;
-        const why = partyAdmission({ size, keys, running: keyCount, max: cfg.maxConcurrent, paid });
-        if (why !== undefined) {
-          const key = `party-held:${r.runId}:${why}`;
-          if (!announcedPicks.has(key)) {
-            announcedPicks.add(key);
-            say(`resume ${name}: held — ${why}`);
-          }
-          continue;
+      // A resumed run goes back to the credential it started on: the runner
+      // rebuilds its config from meta.json, and the credential is in it. It
+      // needs a slot there, like a fresh start, and a paused party needs one
+      // per member, whole; with none the resume waits for a tick with room.
+      // Stamped on the spawn too so the count and the state file agree with
+      // the run.
+      const recorded = runs.find((f) => f.runId === r.runId)?.credential ?? null;
+      const placedResume = placeFresh(recorded !== null ? { ...r.job, credential: recorded } : r.job);
+      if (!placedResume.ok) {
+        const key = `resume-held:${r.runId}:${placedResume.why}`;
+        if (!announcedPicks.has(key)) {
+          announcedPicks.add(key);
+          say(`resume ${name}: held — ${placedResume.why}`);
         }
-        countKey(resumed.refs, resumed.subscription, size);
-        if (paid !== undefined) paidRunning += size;
+        continue;
       }
+      const resumed = placedResume.job;
       const spawn = jobSpawn(resumed, cfg.roster, r.account, stampToday, undefined, cfg.campaigns);
       if (r.job.account !== undefined) {
         pending.set(name, resumed);
@@ -1417,11 +1337,7 @@ async function main(): Promise<void> {
         sets.finished.delete(name);
         reserved.set(name, r.account);
         out.push(spawn);
-        for (const ref of r.job.refs) {
-          runningRefs.add(ref);
-          if (billingOf.get(ref) === "paid") paidRunning++;
-        }
-        countKey(resumed.refs, resumed.subscription);
+        for (const ref of r.job.refs) runningRefs.add(ref);
       }
       // Once per pause, named by its instant: the streak starts over at 1
       // after every segment that made a turn, so it cannot tell two pauses of
@@ -1458,10 +1374,13 @@ async function main(): Promise<void> {
       queue: poolJobs(cfg),
       roster: cfg.roster,
       pool: cfg.accounts.pool,
+      maxLive: cfg.accounts.max,
       running: runningAndReserved,
       finished: sets.finished,
       held,
-      cooling: (job) => jobCooling(job) ?? jobHoldOf(job, cfg.roster, cfg.policy.subscriptions, subGate),
+      cooling: (job) => jobCooling(job),
+      // A slot on a credential with room, committed as the queue assigns.
+      place: placeFresh,
       eligible,
       runningRefs,
       affinity,
@@ -1473,9 +1392,7 @@ async function main(): Promise<void> {
     const freshAssign: { ref: string; account: string }[] = [];
     for (const a of lastPlan.assign) {
       const { account } = a;
-      // The lane is settled here, on the plan's own job, so the policy's cap
-      // loop counts this assignment against the subscription it actually took.
-      a.job = reserveLane(a.job);
+      // The credential was settled by the plan (`place`), and is on the book.
       const keep = keepFor(account, characters);
       if (keep.length > 0) a.job = { ...a.job, keepCharacters: keep };
       pending.set(a.job.name, a.job);
@@ -1490,20 +1407,17 @@ async function main(): Promise<void> {
         planPolicy({
         states: states.filter((st) => allowed.has(st.name)),
         pool: cfg.accounts.pool,
-        classPools: classPoolsOf(cfg),
+        maxLive: cfg.accounts.max,
         running: runningAndReserved,
         held,
         queuePlan: lastPlan,
         runningRefs,
-        concurrency: {
-          keyOf,
-          max: cfg.maxConcurrent,
-          running: keyCount,
-          pinnedLane: (n) => cfg.roster[n]?.subscription,
-          gate: (n, ep, lane) => subGate.holdOf(laneOfEntry(cfg.roster[n], lane), ep, cfg.roster[n]?.model),
+        place: (n, ep) => {
+          const r = placeRef(cfg.roster[n], ep, { ...placing, pin: cfg.roster[n]?.credential });
+          return r.ok ? { ok: true, credential: r.placement.credential, keys: r.placement.keys } : r;
         },
+        take: (keys) => book.add(keys),
         policy: cfg.policy,
-        paidRunning,
         campaigns: unpinnedCampaigns(cfg),
         probeRuns: probes,
         affinity,
@@ -1544,9 +1458,9 @@ async function main(): Promise<void> {
         }
       }
       for (const { job, account, why } of picks) {
-        // Remember the lane the cap loop placed this pick on: the run does not
-        // exist on disk yet, and the next tick must not move it.
-        laneMemo.set(job.name, job.subscription ?? DEFAULT_CLAUDE_TOKEN_ENV);
+        // Remember the credential the pick was placed on: the run does not
+        // exist on disk yet, and the next tick must count it there.
+        if (job.placed !== undefined) placedMemo.set(job.name, job.placed);
         pending.set(job.name, job);
         // A policy job that finished an earlier attempt is fair game again;
         // the projection, not the finished set, decides whether it runs.
@@ -1619,17 +1533,17 @@ async function main(): Promise<void> {
       record({ job: j.name, event: "queue-done", detail: progress });
     }
     for (const n of [...announcedDone]) if (!done.some((j) => j.name === n)) announcedDone.delete(n);
-    // The subscription usage gate over every spawn, last: a pinned job, or a
-    // running job's next episode, on a held lane. A running freeplay job is
-    // its driver's to pause; a running scored one drains to its boundary.
-    const gated = gateSpawns(out, subGate, sets.running);
+    // The credentials' budgets over every spawn, last: a running job's next
+    // episode on a held credential. A running freeplay job is its driver's to
+    // pause; a running scored one drains to its boundary.
+    const gated = gateSpawns(out, credGate, sets.running);
     for (const g of gated.gated) {
       if (g.drained) drainReasons.set(g.name, g.why);
       const key = `gate:${g.name}:${g.drained}:${g.why}`;
       if (!announcedPicks.has(key)) {
         announcedPicks.add(key);
         say(`${g.drained ? "drain" : "hold"} ${g.name}: ${g.why}${g.drained ? " — its live episode finishes, the next does not start" : ""}`);
-        record({ job: g.name, event: "subscription-gate", detail: g.why });
+        record({ job: g.name, event: "credential-budget", detail: g.why });
       }
     }
     return gated.spawns;
@@ -1637,8 +1551,7 @@ async function main(): Promise<void> {
   const poolView = (cfg: FleetConfig): PoolView => ({
     pinned: cfg.accounts.pinned,
     pool: cfg.accounts.pool,
-    paid: cfg.accounts.paid,
-    local: cfg.accounts.local,
+    max: cfg.accounts.max,
     assigned,
     jobs: liveJobs,
     queue: poolJobs(cfg),
@@ -1811,8 +1724,11 @@ async function main(): Promise<void> {
       `, stamp ${stampToday}${CONTAINER ? " (the fleet container)" : ""}` +
       `${args.until !== undefined ? `, deadline ${args.until}` : ", no deadline — steer on /config"}`,
   );
-  say(`subscription gate: scored starts held at ${subThresholds.scored}%, freeplay at ${subThresholds.freeplay}% (100 = off)`);
-  for (const note of subThresholds.notes) say(`subscription gate: ${note}`);
+  say(
+    config.credentials.length === 0
+      ? "credentials: none configured — no model run can start (bun wb config credentials add <id> <json>)"
+      : `credentials: ${config.credentials.map((c) => `${c.id} (${c.provider}, ${c.slots} slot${c.slots === 1 ? "" : "s"}${c.enabled ? "" : ", disabled"})`).join(", ")}`,
+  );
   // The gate: nothing is spawned against a server nobody has smoked. Held
   // across ticks so a passing result is not re-run for the same identity.
   let gate: PreflightRecord | undefined;
@@ -1926,7 +1842,7 @@ async function main(): Promise<void> {
     () => undefined,
     stampToday,
   );
-  await refreshGoUsage(config.roster);
+  await refreshGoUsage(config);
   if (mayStart) for (const spawn of diffJobs(applyPause(effectiveJobs(config), pauseSwitch !== undefined), sets).start) spawnJob(spawn);
   writeState(configPath, stampToday, procs, sets.draining, gate, poolView(config));
 
@@ -2028,7 +1944,7 @@ async function main(): Promise<void> {
 
     readPause();
     // Not while stopping: the stop polls fast so rosters are reaped in the grace.
-    if (!stopping) await refreshGoUsage(config.roster);
+    if (!stopping) await refreshGoUsage(config);
     const actions = diffJobs(applyPause(effectiveJobs(config), pauseSwitch !== undefined), sets);
     // A refusal suppresses SCHEDULING; it must never drain. A disabled pin
     // normally means the operator parked it, so `diffJobs` drains its live run
@@ -2102,7 +2018,7 @@ async function main(): Promise<void> {
     // no live codex run claims (`pruneCodexHomes`).
     if (!stopping && Date.now() - codexPrunedAt >= CODEX_PRUNE_EVERY_MS) {
       codexPrunedAt = Date.now();
-      const homes = codexHomesOf(config.policy.subscriptions);
+      const homes = codexHomesOf(codexHomeEnvsOf(config.credentials));
       if (homes.length > 0) {
         try {
           pruneCodexHomes({

@@ -16,7 +16,7 @@ import {
   codexStatedReset,
   codexEffortRefusal,
   detectCodexFailure,
-  laneLooksLoggedIn,
+  homeLooksLoggedIn,
   normalizeCodexUsage,
   parseCodexEvent,
   runCodexEpisode,
@@ -1080,20 +1080,20 @@ describe("childEnv", () => {
 
   test("a second lane arrives as CODEX_HOME, and an empty chosen lane leaves none", () => {
     const parent = { PATH: "/usr/bin", CODEX_HOME: "/first", CODEX_HOME_2: "/second" };
-    expect(childEnv(parent, { laneEnv: "CODEX_HOME_2" })["CODEX_HOME"]).toBe("/second");
-    expect(childEnv(parent, { laneEnv: "CODEX_HOME_2" })["CODEX_HOME_2"]).toBeUndefined();
+    expect(childEnv(parent, { credentialEnv: "CODEX_HOME_2" })["CODEX_HOME"]).toBe("/second");
+    expect(childEnv(parent, { credentialEnv: "CODEX_HOME_2" })["CODEX_HOME_2"]).toBeUndefined();
     expect(childEnv(parent, {})["CODEX_HOME"]).toBe("/first");
-    expect(childEnv({ CODEX_HOME: "/first" }, { laneEnv: "CODEX_HOME_2" })["CODEX_HOME"]).toBeUndefined();
+    expect(childEnv({ CODEX_HOME: "/first" }, { credentialEnv: "CODEX_HOME_2" })["CODEX_HOME"]).toBeUndefined();
   });
 
   test("a lane looks logged in only with an auth.json in it", () => {
     const home = fakeCodexHome();
-    expect(laneLooksLoggedIn(home)).toBe(true);
+    expect(homeLooksLoggedIn(home)).toBe(true);
     const empty = tempDir("wrathbench-codex-empty-");
     mkdirSync(join(empty, "sessions"), { recursive: true });
-    expect(laneLooksLoggedIn(empty)).toBe(false);
-    expect(laneLooksLoggedIn(undefined)).toBe(false);
-    expect(laneLooksLoggedIn("")).toBe(false);
+    expect(homeLooksLoggedIn(empty)).toBe(false);
+    expect(homeLooksLoggedIn(undefined)).toBe(false);
+    expect(homeLooksLoggedIn("")).toBe(false);
   });
 });
 

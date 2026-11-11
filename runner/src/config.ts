@@ -148,10 +148,10 @@ export type TerminationReason = (typeof TERMINATION_REASONS)[number];
  * or a subscription's usage window. `rate-limited` covers post-retry HTTP 429
  * without quota wording (free pools). Neither has anything to do with context
  * size — which is what the old name, `window-exhausted`, kept implying.
- * `auth-failed` is a subscription lane whose credential stopped working
+ * `auth-failed` is a subscription credential that stopped working
  * (codex: "Your access token could not be refreshed" — a refresh token spent
  * by another process on the same CODEX_HOME, or a 401). Nothing about the
- * model; the run resumes once the operator has logged the lane back in.
+ * model; the run resumes once the operator has logged the credential back in.
  * `infrastructure-failed` is a CLI scaffold failing on the host under it —
  * the codex CLI unable to write its thread under `$CODEX_HOME` (a full disk;
  * `detectCodexFailure`). Nothing about the model or the provider either: it
@@ -161,7 +161,7 @@ export type TerminationReason = (typeof TERMINATION_REASONS)[number];
  * `observation-stalled` is the sandbox's event stream closed with the
  * observation standing still (`STALL_PAUSE`, lapse.ts).
  * `subscription-budget` is a freeplay run stopped at its turn boundary because
- * its subscription lane's usage window reached the freeplay threshold
+ * its credential's usage window reached the freeplay threshold
  * (`SUBSCRIPTION_PAUSE`, lapse.ts; `subscription-usage.ts`).
  * `party-paused` is a party member paused because another member paused
  * first (`PARTY_PAUSE`, lapse.ts): a party resumes whole or not at all.
@@ -194,7 +194,6 @@ export {
   HARNESS_OF_DRIVER,
   HARNESSES,
   harnessOf,
-  isCodexHomeEnvName,
   isDriver,
   REFERENCE_STAMP,
   STUB_STAMP,
@@ -203,10 +202,9 @@ export {
 } from "./drivers";
 
 /**
- * Whether a string is usable as a subscription lane name. An env var name and
- * nothing else: the fleet builds a concurrency key out of it and the runner
- * looks it up in `process.env`, so a value that snuck in here would be a
- * credential in a config file.
+ * Whether a string is usable as the NAME of an env var holding a credential.
+ * An env var name and nothing else: the runner looks it up in `process.env`,
+ * so a value that snuck in here would be a credential in a config file.
  */
 export function isTokenEnvName(raw: string): boolean {
   return /^[A-Z][A-Z0-9_]{0,63}$/.test(raw);
@@ -480,23 +478,33 @@ export const runConfigSchema = z.object({
   /** Name of the env var holding the API key. The key itself is never stored. */
   apiKeyEnv: z.string().default("OPENROUTER_KEY"),
   /**
-   * `claude-code` and `codex` only: the SUBSCRIPTION LANE this run bills,
-   * named by the env var holding its credential — never the credential itself.
-   * For claude-code that is the OAuth token (a secret, redacted out of
-   * everything this run writes); for codex it is the CODEX_HOME directory
-   * whose auth.json holds the ChatGPT login (`DEFAULT_CODEX_HOME_ENV`).
-   *
-   * A subscription is a lane, not a model dimension: the same roster entry may
-   * run on either account, so this says nothing about what was measured. It is
-   * recorded for two reasons. The fleet counts in-flight runs per lane to keep
-   * one live session per subscription, and that count has to survive a
-   * supervisor restart, so it is read back off the run rather than held in
-   * memory. And a resumed run must go back to the subscription it started on —
-   * `--resume` rebuilds the config from meta.json, so this field is how.
-   *
-   * Absent means the driver's default lane (`CLAUDE_CODE_OAUTH_TOKEN`,
-   * `CODEX_HOME`); `run.ts` fills it in for every run on those drivers, so a
-   * run launched by this build always names its lane.
+   * The credential this run took a slot on (`runner/src/credentials.ts`), by
+   * id. Recorded because the fleet counts live runs per credential and that
+   * count has to survive a supervisor restart, so it is read back off the run;
+   * and a resume goes back to the credential it started on. Like the account
+   * it is identity, never a model dimension: which key paid says nothing
+   * about what a run measured. Absent on a run launched by hand with none.
+   */
+  credential: z.string().min(1).max(64).optional(),
+  /**
+   * `claude-code` and `codex` only: the NAME of the env var holding the
+   * credential the CLI reads — the OAuth token (a secret, redacted out of
+   * everything this run writes), or the Codex home directory whose auth.json
+   * holds the ChatGPT login. Never the secret. An endpoint run names its key
+   * in `apiKeyEnv` instead. Absent: the driver's default variable.
+   */
+  credentialEnv: z.string().min(1).max(128).optional(),
+  /**
+   * The credential's `usage` budget, as the run acts on it: a live freeplay
+   * run pauses at its turn boundary at `freeplay` percent of a usage window
+   * (`subscription-usage.ts`). Absent: no budget, and only a spent window
+   * holds anything.
+   */
+  usageMaxPct: z.object({ scored: z.number().gt(0).lte(100), freeplay: z.number().gt(0).lte(100) }).strict().optional(),
+  /**
+   * 0.5's subscription lane (the env var NAME a claude-code or codex run
+   * billed). Read so a 0.5 run's meta.json still parses and shows the lane it
+   * ran on; never written by a v1 launch, which records `credential`.
    */
   subscription: z.string().min(1).max(128).optional(),
   /**

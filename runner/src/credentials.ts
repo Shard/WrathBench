@@ -39,7 +39,7 @@ import { z } from "zod";
 import { DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV, DEFAULT_DRIVER, driverEntry } from "./drivers";
 import { billingOf, isLocalBase, type Billing } from "./model-cost";
 import { hostOfBase, isOpenCodeGoBase } from "./platform";
-import { DEFAULT_API_BASE, KEY_PROVIDERS, localModelHosts } from "./providers";
+import { apiKeyRefusal, DEFAULT_API_BASE, KEY_PROVIDERS, localModelHosts, piProviderOf } from "./providers";
 
 // ------------------------------------------------------------------ providers
 
@@ -114,8 +114,8 @@ export function providerOfModel(
   const driver = driverEntry(m.driver ?? DEFAULT_DRIVER);
   if (driver === undefined) return null;
   // A CLI subscription driver bills the provider whose secret its CLI reads.
-  const lane = driver.lane;
-  if (lane !== undefined) return CREDENTIAL_PROVIDERS.find((p) => p.bill === "subscription" && p.envBase === lane.defaultEnv)?.id ?? null;
+  const cli = driver.credential;
+  if (cli !== undefined) return CREDENTIAL_PROVIDERS.find((p) => p.bill === "subscription" && p.envBase === cli.defaultEnv)?.id ?? null;
   if (driver.endpoint !== true) return null;
   const base = m.apiBase ?? DEFAULT_API_BASE;
   const host = hostOfBase(base);
@@ -130,6 +130,36 @@ export function providerOfModel(
     // hostOfBase already parsed it
   }
   if (isLocalBase(base) || localModelHosts(env).some((h) => h === host || h === port)) return "local";
+  return null;
+}
+
+/**
+ * Why a roster entry's endpoint cannot be served by any credential, or null.
+ * Only an endpoint driver (openai, pi) reaches a base; a CLI subscription's
+ * provider is its driver's. The entry names a base and never a key: the key
+ * is its credential's (`secretEnv`), which is its provider's own name, so the
+ * base must be a host one of the provider table's rows owns — a self-hosted
+ * one only where the deployment lists it — and is checked here as the
+ * credential's key would be sent to it (`apiKeyRefusal`). A driver that
+ * reaches the base through its CLI's own provider (`cliProvider`, pi) also
+ * needs one named on that row, or every launch would fail.
+ */
+export function rosterProviderRefusal(e: { driver?: unknown; apiBase?: unknown }, env: Record<string, string | undefined> = process.env): string | null {
+  const driver = driverEntry(e.driver ?? DEFAULT_DRIVER);
+  if (driver?.endpoint !== true) return null;
+  if (e.apiBase !== undefined && typeof e.apiBase !== "string") return "apiBase must be a URL";
+  const base = (e.apiBase as string | undefined) ?? DEFAULT_API_BASE;
+  const provider = providerOfModel({ driver: driver.id, apiBase: base }, env);
+  if (provider === null) {
+    return `apiBase ${hostOfBase(base) ?? base} is no credential provider's host (${KEY_PROVIDERS.flatMap((p) => p.hosts).join(", ")}, or a self-hosted host the deployment lists) — a new provider is a row in runner/src/providers.ts and runner/src/credentials.ts`;
+  }
+  const keyEnv = providerById(provider)!.envBase;
+  const pair = apiKeyRefusal(keyEnv, base, env);
+  if (pair !== null) return pair;
+  if (driver.cliProvider === true) {
+    const pi = piProviderOf(keyEnv);
+    if ("refusal" in pi) return pi.refusal;
+  }
   return null;
 }
 
