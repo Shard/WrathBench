@@ -16,8 +16,11 @@
  * applied at its level, its loadout and talents in place, logged out in the
  * scenario's spot, and the party formed with the first member leading — or
  * non-zero when it is not, saying why on stderr. Its last stdout line may be
- * a JSON `{ "ok": true, "detail": "…" }` for the roster's log; nothing else
- * on stdout is read. It must leave no session open on any member's account:
+ * a JSON `{ "ok": true, "detail": "…", "members": [{ "member", "guid" }] }`:
+ * the detail for the roster's log, and each member's character guid (decimal),
+ * which the roster writes into every member's campaign file before any of
+ * them launches, so each session record knows the others as the deployment's
+ * own from its first row. Nothing else on stdout is read. It must leave no session open on any member's account:
  * the members' own runs log in next.
  *
  * Called only before a fresh party launch, never on a resume (the members'
@@ -58,8 +61,29 @@ export interface StageRequest {
   members: StageMember[];
 }
 
+/** One staged member's character, as the stager reports it: the guid the session record writes. */
+export interface StagedGuid {
+  member: string;
+  guid: string;
+}
+
 /** The stager's answer. A refusal's `reason` is the operator's whole notice, and lands on every member's launch-failed record. */
-export type StageResult = { ok: true; detail?: string } | { ok: false; reason: string };
+export type StageResult = { ok: true; detail?: string; members?: StagedGuid[] } | { ok: false; reason: string };
+
+/** A decimal guid low part, as `partyMemberRecordSchema` takes one. */
+const GUID_RE = /^[1-9][0-9]{0,9}$/;
+
+/** The members a stager's last line reports, keeping only well-formed entries; undefined when it reports none. */
+export function stagedGuidsOf(v: unknown): StagedGuid[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: StagedGuid[] = [];
+  for (const e of v as unknown[]) {
+    if (typeof e !== "object" || e === null) continue;
+    const { member, guid } = e as { member?: unknown; guid?: unknown };
+    if (typeof member === "string" && typeof guid === "string" && GUID_RE.test(guid)) out.push({ member, guid });
+  }
+  return out.length > 0 ? out : undefined;
+}
 
 /**
  * What the roster holds of a stager. `signal` is the roster's stop: an
@@ -127,8 +151,9 @@ export function commandStager(opts: { cwd: string; script?: string; timeoutMs?: 
           return { ok: false, reason: `staging failed (exit ${code}${proc.signalCode === "SIGKILL" ? `, killed after ${Math.round(timeoutMs / 60_000)}m` : ""}): ${why.slice(0, 500)}` };
         }
         try {
-          const doc = JSON.parse(lastLine(out)) as { ok?: unknown; detail?: unknown };
-          return { ok: true, ...(typeof doc.detail === "string" ? { detail: doc.detail } : {}) };
+          const doc = JSON.parse(lastLine(out)) as { ok?: unknown; detail?: unknown; members?: unknown };
+          const members = stagedGuidsOf(doc.members);
+          return { ok: true, ...(typeof doc.detail === "string" ? { detail: doc.detail } : {}), ...(members !== undefined ? { members } : {}) };
         } catch {
           return { ok: true };
         }

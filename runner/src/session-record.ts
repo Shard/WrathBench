@@ -27,6 +27,7 @@ import {
   SessionWriter,
   ownGuidIndex,
   type EventRow,
+  type OwnGuid,
   type PartySignal,
   type SessionFile,
   type StreamName,
@@ -92,6 +93,13 @@ export class RecordSignals {
   }
 }
 
+/** The gate's own set: the seeded guids first, then whatever the index finds. */
+function seededOwn(seed: readonly string[], index: OwnGuid): OwnGuid {
+  if (seed.length === 0) return index;
+  const known = new Set(seed);
+  return (guid) => known.has(guid) || index(guid);
+}
+
 /** The run's session record, opened: the writer the stack records through, and the bridge's signals. */
 export interface SessionRecord {
   writer: SessionWriter;
@@ -102,6 +110,13 @@ export interface OpenSessionRecordOptions {
   runDir: string;
   /** The directory every run of this deployment lives in: its sessions are the own ones. */
   runsDir: string;
+  /**
+   * Character guids that are the deployment's own before any record names
+   * them: a party's members, which the stager created and the launch carries
+   * (`partyOwnGuids(config.party)`). Read from the run's config, so a resume
+   * has them too.
+   */
+  ownGuids?: readonly string[];
   token: string;
   /** The run's secret scrub, applied to every line written. */
   scrub: (text: string) => string;
@@ -123,13 +138,16 @@ export function openSessionRecord(o: OpenSessionRecordOptions): SessionRecord {
     id: tokenFingerprint(o.token),
     stack: { version: SDK_VERSION, ...(commit !== undefined ? { commit } : {}) },
     ...(o.module !== undefined ? { module: o.module } : {}),
-    own: ownGuidIndex(() => {
-      try {
-        return readdirSync(o.runsDir).map((run) => join(o.runsDir, run, SESSION_DIR));
-      } catch {
-        return [];
-      }
-    }),
+    own: seededOwn(
+      o.ownGuids ?? [],
+      ownGuidIndex(() => {
+        try {
+          return readdirSync(o.runsDir).map((run) => join(o.runsDir, run, SESSION_DIR));
+        } catch {
+          return [];
+        }
+      }),
+    ),
     scrub: o.scrub,
     // Struck by the writer itself: a snippet can print `sdk.token`, and the record must not hold it.
     token: o.token,

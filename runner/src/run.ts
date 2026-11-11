@@ -87,6 +87,7 @@ import { liveOwnerOf, RESUME_REFUSED_EXIT } from "./models";
 import { isOpenCodeGoBase } from "./platform";
 import { GoUsageGauge, goUsageUrl } from "./opencode-go";
 import { Trajectory, readMeta, startHeartbeat, type PauseMark, type RunMeta } from "./trajectory";
+import { partyOwnGuids } from "./party";
 import { openSessionRecord, removeSessionRing } from "./session-record";
 import { harnessVersion, stackCommit } from "./version";
 import { SDK_VERSION } from "@wrathbench/sdk";
@@ -806,7 +807,7 @@ async function main(): Promise<void> {
    * live only: the writer removes it when the session closes, and the exit
    * hook catches the exits that never get that far.
    */
-  const session = openSessionRecord({ runDir, runsDir: config.runsDir, token: config.token, scrub: (text) => trajectory.scrub(text) });
+  const session = openSessionRecord({ runDir, runsDir: config.runsDir, ownGuids: partyOwnGuids(config.party), token: config.token, scrub: (text) => trajectory.scrub(text) });
   process.on("exit", () => removeSessionRing(runDir));
   void moduleIdentity(config.moduleUrl, moduleAuthHeaders()).then((m) => session.writer.setModule(m));
 
