@@ -77,6 +77,8 @@ inside the client is what keeps a fast poller off the network.
 bun wb dashboard shots --out <dir>                    # private-*.png and public-*.png, and facts.json
 bun wb dashboard shots --run <run-dir> --path /runs --viewport 390x844
 bun wb dashboard shots --serve                        # the same stack, no browser: URLs until Ctrl-C
+bun wb dashboard shots --seed --site private --path /config   # the admin page over a seeded config
+bun wb dashboard shots --groups viewer                # a deployment with only the viewer group on
 ```
 
 `infra/dashboard-shots.ts` writes invented fixture runs (or copies the run
@@ -91,9 +93,21 @@ the Deadmines, so the list has an order to show and a pick a map to cross to; `-
 ended runs gives the map with nobody live.
 Wowhead's tooltip script is stubbed and every other third party refused, so a
 page renders as it does where the script is blocked; `--real-wowhead` lets it
-through. Nothing reads the operator's ClickHouse, config store or runs. For
-states that need clicks, import `startRig` and drive `rig.page(...)` from a
-script.
+through. Nothing reads the operator's ClickHouse, config store or runs. The
+private viewer has the admin switch on (`--no-admin` is the chart's default
+viewer, without it); `--seed` gives its config store
+`infra/fleet.example.json`, and `--groups` sets the deployment's groups on
+both sites. For states that need clicks, import `startRig` and drive
+`rig.page(...)` from a script.
+
+**Groups and the admin switch** decide which pages exist (`@viewer/groups`):
+the shell reads `/api/info` (or a snapshot's `info.json`), drops an off
+group's pages from the bar and answers them with the not-found page, and
+shows the config page and the ADMIN badge only with the admin switch on. A
+page that belongs to a group or to admin waits for `/api/info` before it
+renders, so a deployment without it never draws it on the way. The status
+badge and the fleet feed are the runner group's; the homepage's ladder is the
+evals group's.
 
 ## The ladder's derivations
 

@@ -65,6 +65,31 @@ tuple. The stack records what the character did into the
 run's `session/`; the runner writes the model's side beside it. Everything
 downstream of those files is derived.
 
+### Groups
+
+A deployment is made of three groups, and any of them can be switched off
+(GitHub issue #427; `runner/viewer/groups.ts`): **runner** (the agent loop, the
+drivers, providers and credentials, the fleet supervisor), **evals** (episodes,
+campaigns, scoring, the ladder, comparability) and **viewer** (the inspector,
+the run pages, the public site). A group that is off is absent, not hidden:
+the chart renders none of its workloads, and the processes that remain read
+`WRATHBENCH_GROUPS` once at start and mount none of its routes, render none of
+its pages and run none of its background work. A viewer-only deployment, for
+example, reads the sessions its own agents produced with no supervisor and no
+ladder. Which groups are on is deployment config, a chart value, because it
+decides which workloads exist, which the config store cannot; the store keeps
+deciding what the deployment runs. Switching a group changes what is launched
+and shown, never what a result means: with evals off nothing scored is
+launched, and nothing is counted differently.
+
+The admin interface sits beside the groups as a switch of its own, off by
+default: the viewer's config API, its admin status route and the admin pages,
+from which the operator edits credentials, the roster, freeplay agents,
+campaigns and the queue. It is one more client of the config store, through
+the same validation as the CLI, and private only: the public build never has
+it, and a secret's value never passes through it (`docs/RUNBOOK.md`, "The
+admin interface").
+
 ### The stack and the benchmark
 
 Two layers, deliberately separable. The **stack** is
@@ -274,7 +299,8 @@ never close.
 
 ### runner/viewer/ + dashboard/ (Bun/TypeScript, MIT)
 
-The operator's read-only window on runs, live and finished. Split in two along
+The operator's window on runs, live and finished: read-only, except the
+config API the admin switch mounts. Split in two along
 one line: the Bun process owns everything that needs the filesystem,
 the SPA owns everything that is UI.
 
@@ -444,13 +470,17 @@ the SPA owns everything that is UI.
 - **Public hosting is push-based, so the lab is never an origin.**
   `infra/publish-dashboard.ts` calls the viewer's own `createApi` handler
   in-process, applies an allowlist projection, and PUTs generation-addressed
-  JSON to an R2 bucket on a timer, manifest last so a reader never
+  JSON to a bucket on a timer (R2 here, any S3-compatible one by
+  configuration), manifest last so a reader never
   observes a torn generation; every public read is then a static asset or an
   edge-cached object and no inbound path to the harness exists at all. The SPA
   builds a second time in **snapshot mode** — a build-time
   `VITE_WRATHBENCH_SNAPSHOT_BASE` selects a client implementing the same
   `Client` interface over the bucket instead of `/api`, so the pages are the
   same pages and the private build keeps its same-origin, CORS-free posture.
+  A deployment may also hold the public view back by a delay, publish only the
+  current view without the run history, or publish nothing
+  (`docs/RUNBOOK.md`, "Where it publishes, and how").
   Design and cost model are docs/PUBLIC-DASHBOARD.md, the Cloudflare setup is
   infra/cloudflare/README.md, and the gate above still binds.
 
