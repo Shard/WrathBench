@@ -8,8 +8,9 @@
  *   definition: the size, and per member its id, role, start and staged
  *   character name, and the objective it is given;
  * - the launch's half (`PartyLaunch`), in each member's `campaign.json`: the
- *   party id and which member this run is, with every member's run id and
- *   account, so the five trajectories name each other;
+ *   party id and which member this run is, with every member's run id,
+ *   account and, once staged, character guid, so the five trajectories name
+ *   each other and each session record knows the other four as its own;
  * - the run's stamp (`PartyConfig`), `meta.config.party`, built from the two.
  *
  * The party id is the job's run-id stem and a member's run id is
@@ -79,6 +80,15 @@ export const partyMemberRecordSchema = z
     runId: z.string().min(1),
     account: z.string().min(2).max(16),
     character: characterSchema,
+    /**
+     * The character's guid as the session record writes one (decimal, a
+     * player's high part zero), which the stager learns when it creates the
+     * character and the roster writes here before any member launches. Each
+     * member's write gate counts these as the deployment's own from its first
+     * row (`partyOwnGuids`), rather than only once a sibling's record names
+     * its character. Absent on a launch whose stager did not say.
+     */
+    guid: z.string().regex(/^[1-9][0-9]{0,9}$/, "a character guid is its decimal low part").optional(),
   })
   .strict();
 export type PartyMemberRecord = z.infer<typeof partyMemberRecordSchema>;
@@ -138,6 +148,29 @@ export function partyLaunchProblem(def: PartyDefinition, launch: PartyLaunch): s
   const accounts = launch.members.map((m) => m.account.toUpperCase());
   if (new Set(accounts).size !== accounts.length) return "two members share an account — the module holds one session per account";
   return null;
+}
+
+/**
+ * The launch with the guids the stager reported stamped onto its members
+ * (member id to guid). A member the map does not name keeps what it had.
+ */
+export function withMemberGuids(launch: PartyLaunch, guids: ReadonlyMap<string, string>): PartyLaunch {
+  return {
+    ...launch,
+    members: launch.members.map((m) => {
+      const guid = guids.get(m.member);
+      return guid === undefined ? { ...m } : { ...m, guid };
+    }),
+  };
+}
+
+/**
+ * The party's characters by guid, as the run's write gate takes them to be
+ * the deployment's own (`session-record.ts`). Empty for a run that is no
+ * party member or whose launch carried no guids.
+ */
+export function partyOwnGuids(party: Pick<PartyConfig, "members"> | undefined): string[] {
+  return party === undefined ? [] : party.members.flatMap((m) => (m.guid !== undefined ? [m.guid] : []));
 }
 
 /** The run's stamp for one member of a launch. */

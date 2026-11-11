@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { tokenFingerprint } from "@wrathbench/mcp/module-auth";
 import { SessionReader, type CallRow, type EventRow, type NearbyRow, type SessionFile, type TraceRow } from "@wrathbench/mcp/record";
 import { RecordSignals, SESSION_DIR, openSessionRecord, removeSessionRing, sessionDirOf } from "../src/session-record";
+import { partyConfigSchema, partyOwnGuids, type PartyConfig } from "../src/party";
 import { openTestSession, recordDrain, recordedMove } from "./fixtures/v1-session";
 import { tempDirs } from "./fixtures/temp-dirs";
 
@@ -141,6 +142,57 @@ describe("openSessionRecord", () => {
       { kind: "kill", killerGuid: "", victimGuid: "4001", entry: 639, rank: 1, self: false, member: true, ts: now + 2, seq: 3 },
     ]);
     expect(readFileSync(join(writer.dir, "events", readdirSync(join(writer.dir, "events"))[0]!), "utf8")).not.toContain('"13"');
+  });
+});
+
+describe("openSessionRecord: a party's members are own from the first row", () => {
+  const MEMBERS = ["tank", "healer", "rogue", "mage", "priest"];
+  // The guids the stager reported and the launch carried into each member's config.
+  const GUIDS = ["4100", "4101", "4102", "4103", "4104"];
+  const FOREIGN = "9999";
+  const config: PartyConfig = partyConfigSchema.parse({
+    id: "party-stem",
+    member: "tank",
+    role: "tank",
+    size: 5,
+    members: MEMBERS.map((m, i) => ({ member: m, role: i === 0 ? "tank" : i === 1 ? "healer" : "damage", runId: `party-stem-${m}`, account: `PARTY${i + 1}`, character: `Member${"abcde"[i]}`, guid: GUIDS[i] })),
+  });
+
+  /** Member `i` opens its record, names its character, and writes a group row naming every other member and one stranger. */
+  function memberWrites(runsDir: string, i: number, ownGuids: readonly string[], now: number): EventRow[] {
+    const { writer } = openSessionRecord({ runDir: join(runsDir, `party-stem-${MEMBERS[i]}`), runsDir, ownGuids, token: `tok-party-member-${i}-invented`, scrub: (t) => t });
+    writer.ingest(recordDrain({ character: { guid: GUIDS[i]!, name: `Member${"abcde"[i]}`, race: 1, class: 1 } }));
+    const others = GUIDS.filter((_, j) => j !== i);
+    writer.ingest(recordDrain({ events: [{ ts: now, kind: "group", seq: 1, event: "joined", groupGuid: "9001", leaderGuid: GUIDS[0]!, members: [...others, FOREIGN], foreign: 0, count: 6 }] }));
+    return new SessionReader(writer.dir).rows("events").filter((r) => r.kind === "group");
+  }
+
+  test("staggered starts: each member's group row, written before the later members have a session.json, keeps all four others and counts the stranger", () => {
+    const runsDir = tempDir("wrathbench-session-record-party-");
+    const seed = partyOwnGuids(config);
+    expect(seed).toEqual(GUIDS);
+    const now = Date.now();
+    for (let i = 0; i < MEMBERS.length; i++) {
+      // Members after i have not launched: no run directory, no session.json.
+      for (let j = i + 1; j < MEMBERS.length; j++) expect(existsSync(join(runsDir, `party-stem-${MEMBERS[j]}`, SESSION_DIR, "session.json"))).toBe(false);
+      const rows = memberWrites(runsDir, i, seed, now + i);
+      expect(rows).toEqual([
+        { ts: now + i, kind: "group", seq: 1, event: "joined", groupGuid: "9001", leaderGuid: GUIDS[0]!, members: GUIDS.filter((_, j) => j !== i), foreign: 1, count: 6 },
+      ]);
+    }
+  });
+
+  test("a resumed member's seed comes from its config as meta.json kept it", () => {
+    const runsDir = tempDir("wrathbench-session-record-party-resume-");
+    const reloaded = partyConfigSchema.parse(JSON.parse(JSON.stringify(config)));
+    const rows = memberWrites(runsDir, 2, partyOwnGuids(reloaded), Date.now());
+    expect(rows[0]).toMatchObject({ members: ["4100", "4101", "4103", "4104"], foreign: 1 });
+  });
+
+  test("without the seed the first member counts the others foreign, which is what the seed is for", () => {
+    const runsDir = tempDir("wrathbench-session-record-party-unseeded-");
+    const rows = memberWrites(runsDir, 0, [], Date.now());
+    expect(rows[0]).toMatchObject({ members: [], foreign: 5 });
   });
 });
 
