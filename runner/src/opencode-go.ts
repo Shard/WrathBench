@@ -3,19 +3,41 @@
  * 2026-10-16; `subscription-usage.ts` has the budget).
  *
  * Go sells a metered allowance behind the same `openai` driver every
- * OpenAI-compatible endpoint uses. Its chat responses carry no usage or
- * rate-limit headers; what does is an account-wide usage endpoint,
- * `GET <origin>/inference/go/v1/usage` with the entry's own key as a bearer
- * token, which answers the allowance's `rolling`, `weekly` and `monthly`
- * windows, each with a `status`, an integer `percent` and a `resetsAt`. It is
- * undocumented, so it is read tolerantly: a shape this does not know is no
- * observation, said once, and the launch is allowed. Nothing here throws into
- * a caller, and nothing here ever logs or records the key.
+ * OpenAI-compatible endpoint uses. Its chat responses carry no rate-limit
+ * headers; what does say how full the allowance is is an account-wide usage
+ * endpoint, `GET <origin>/inference/go/v1/usage` with the entry's own key as
+ * a bearer token — the endpoint OpenCode's own client reads with a key —
+ * which answers the allowance's `rolling` (five hours), `weekly` and
+ * `monthly` windows, each with a `status` (`ok`, or `rate-limited` when it is
+ * spent), an integer `percent` and a `resetsAt`. It is not on a public docs
+ * page, so it is read tolerantly. Nothing here throws into a caller, and
+ * nothing here ever logs or records the key.
+ *
+ * Every read is classified (`CredentialRead`), and a failed read is not
+ * "nothing to hold" (an expired key read as an open gate for days once):
+ *
+ * - 401 is `auth-failed`: the key itself is refused, so every launch on it
+ *   would fail too. The fleet holds every Go credential naming that key.
+ * - 403 is `no-access`: the key may not read usage, or the workspace has no
+ *   Go plan. The fleet holds that credential.
+ * - Anything else that is not an answer — a timeout, a 5xx, a shape this does
+ *   not know — is `unread`: no observation, nothing held, but visible with
+ *   when it began.
+ * - A window Go says is spent is `spent`, and reads 100% whatever its percent
+ *   rounds to, so the quota-reset rule holds it.
+ *
+ * Each response also carries `usage.opencode.billing_source`: `balance` means
+ * the call was billed to the account's balance past the allowance (Go's Extra
+ * Usage), which is money, not allowance. The run that sees it records it
+ * (`goOverageOf`, `Trajectory.recordCredentialOverage`) and marks its
+ * allowance spent; the supervisor reads it off the run and classifies the
+ * credential `overage`, held until a later usage read shows room again.
  *
  * One reading per `opencode-go` credential with a `usage` budget: the paid
  * credential the allowance-drawing entries take. A `$0` Go model does not
  * draw the allowance down, keeps working past the limit, and runs on a free
- * credential with no usage budget, so nothing here holds it.
+ * credential with no usage budget, so no reading holds it — only a refused
+ * key, which is the same key.
  *
  * Two readers share `GoUsagePoller`, which calls the endpoint at most once a
  * minute and keeps the newest answer: the fleet supervisor, before it decides
@@ -24,7 +46,7 @@
  * it (`GoUsageGauge`) — for the freeplay gate, and for a spent allowance's
  * reset when the adapter pauses `quota-exhausted` on Go's `GoUsageLimitError`.
  */
-import { SubscriptionUsageTracker, type SubscriptionUsage, type UsageHold, type UsageWindow } from "./subscription-usage";
+import { EXHAUSTED_PCT, SubscriptionUsageTracker, spentWindowOf, type SubscriptionUsage, type UsageHold, type UsageWindow } from "./subscription-usage";
 
 /** The usage endpoint's path on the Go base's origin. */
 export const GO_USAGE_PATH = "/inference/go/v1/usage";
@@ -44,13 +66,14 @@ export function goUsageUrl(apiBase: string | null | undefined): string | undefin
 }
 
 /**
- * Go's windows by name, and their lengths where the name says one. A rolling
- * and a monthly window carry their own `resetsAt`, which is what the gate
- * reads; their length is not stated, so it is not invented.
+ * Go's windows by name, and their lengths: five hours, a week, a month. The
+ * month's is nominal (a plan's month runs from its own subscription day); a
+ * reading carries each window's own `resetsAt`, which is what the gate reads,
+ * and the length only names the window and stands in when a reset is missing.
  */
-const GO_WINDOWS: Readonly<Record<string, number | null>> = { rolling: null, weekly: 10_080, monthly: null };
-/** A window status that says the allowance is spent, whatever its percent rounds to. */
-const SPENT_STATUS = /exceed|exhaust|reached|block|reject|deplet/i;
+const GO_WINDOWS: Readonly<Record<string, number>> = { rolling: 300, weekly: 10_080, monthly: 43_200 };
+/** The one status Go sends for a window with room. Any other (`rate-limited`) is a spent window. */
+const OPEN_STATUS = /^ok$/i;
 
 const finite = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
@@ -84,8 +107,8 @@ export function goUsageWindows(body: unknown): UsageWindow[] | undefined {
       const o = w as Record<string, unknown>;
       const pct = finite(o["percent"]) ?? finite(o["usedPercent"]) ?? finite(o["used_percent"]);
       if (pct === undefined) continue;
-      const spent = typeof o["status"] === "string" && SPENT_STATUS.test(o["status"]);
-      windows.push({ usedPercent: spent ? Math.max(pct, 100) : pct, windowMinutes: minutes, resetsAt: resetMsOf(o["resetsAt"] ?? o["resets_at"]) });
+      const spent = typeof o["status"] === "string" && !OPEN_STATUS.test(o["status"]);
+      windows.push({ usedPercent: spent ? Math.max(pct, EXHAUSTED_PCT) : pct, windowMinutes: minutes, resetsAt: resetMsOf(o["resetsAt"] ?? o["resets_at"]) });
     }
     if (windows.length > 0) return windows;
   }
@@ -98,25 +121,88 @@ export type GoFetch = (
   init: { headers: Record<string, string>; signal: AbortSignal },
 ) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 
-/** One read of the endpoint: the windows, or why there are none. Never throws, never names the key. */
+/**
+ * The provider's last read of a credential, as the reader classifies it: the
+ * status's health input. Never carries the key or a response body. Structurally
+ * the admin status's `CredentialRead`; keep the two field for field.
+ *
+ * - `ok`: answered, every window with room;
+ * - `auth-failed`: the key was refused (401);
+ * - `no-access`: the key may not read usage, or the workspace has no plan (403);
+ * - `spent`: answered, and a window is spent;
+ * - `overage`: a run on it was billed to the balance past the allowance;
+ * - `unread`: no answer (a timeout, a 5xx, a shape this reader does not know).
+ */
+export interface CredentialRead {
+  /** When the read was made (epoch ms). */
+  at: number;
+  /** The endpoint's HTTP status, or null when none came back. */
+  http: number | null;
+  /** The provider's error code (`api_key_expired`) or the failure's name (`TimeoutError`). */
+  code?: string;
+  classification: "ok" | "auth-failed" | "no-access" | "spent" | "overage" | "unread";
+  /** When this classification began. */
+  since?: number;
+}
+
+/** One read of the endpoint: the windows, or how it failed. */
+export type GoUsageResult =
+  | { ok: true; windows: UsageWindow[] }
+  | { ok: false; classification: "auth-failed" | "no-access" | "unread"; http: number | null; code?: string };
+
+/** A code a body or an error may name, kept only when it is one short token: never a message, which can quote anything. */
+function codeToken(v: unknown): string | undefined {
+  return typeof v === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(v) ? v : undefined;
+}
+
+/** The error code off a refusal's body (`{ error: { code | type } }` or `{ type }`), or undefined. */
+function errorCodeOf(body: unknown): string | undefined {
+  if (body === null || typeof body !== "object") return undefined;
+  const b = body as Record<string, unknown>;
+  const e = b["error"] !== null && typeof b["error"] === "object" ? (b["error"] as Record<string, unknown>) : undefined;
+  return codeToken(e?.["code"]) ?? codeToken(e?.["type"]) ?? codeToken(b["code"]) ?? codeToken(b["type"]) ?? codeToken(b["error"]);
+}
+
+/** One read of the endpoint, classified. Never throws, never names the key. */
 export async function readGoUsage(
   url: string,
   key: string,
   fetchImpl: GoFetch = fetch as unknown as GoFetch,
   timeoutMs = GO_USAGE_TIMEOUT_MS,
-): Promise<{ windows: UsageWindow[] } | { why: string }> {
+): Promise<GoUsageResult> {
   try {
     const res = await fetchImpl(url, {
       headers: { Authorization: `Bearer ${key}`, Accept: "application/json" },
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!res.ok) return { why: `HTTP ${res.status}` };
+    if (!res.ok) {
+      const code = errorCodeOf(await res.json().catch(() => undefined));
+      const classification = res.status === 401 ? "auth-failed" : res.status === 403 ? "no-access" : "unread";
+      return { ok: false, classification, http: res.status, ...(code !== undefined ? { code } : {}) };
+    }
     const windows = goUsageWindows(await res.json());
-    return windows === undefined ? { why: "a response shape this reader does not know" } : { windows };
+    return windows === undefined ? { ok: false, classification: "unread", http: res.status, code: "unknown-shape" } : { ok: true, windows };
   } catch (e) {
     // The error's NAME only: a message can quote the request.
-    return { why: e instanceof Error ? e.name : "fetch failed" };
+    return { ok: false, classification: "unread", http: null, code: e instanceof Error ? e.name : "fetch-failed" };
   }
+}
+
+/** "HTTP 401 api_key_expired", "TimeoutError": a read's failure in a few words, never a secret. */
+export function describeRead(r: Pick<CredentialRead, "http" | "code">): string {
+  return [r.http !== null ? `HTTP ${r.http}` : null, r.code ?? null].filter((x) => x !== null).join(" ") || "no answer";
+}
+
+/**
+ * Whether a Go response was billed to the account's balance rather than the
+ * allowance: its `usage.opencode.billing_source` is `balance` (Go's Extra
+ * Usage, past a spent window). Read off the response body as the adapter kept
+ * it (`AssistantTurn.raw`); false for anything else, any other provider included.
+ */
+export function goOverageOf(raw: unknown): boolean {
+  const usage = raw !== null && typeof raw === "object" ? (raw as Record<string, unknown>)["usage"] : undefined;
+  const oc = usage !== null && typeof usage === "object" ? (usage as Record<string, unknown>)["opencode"] : undefined;
+  return oc !== null && typeof oc === "object" && (oc as Record<string, unknown>)["billing_source"] === "balance";
 }
 
 export interface GoUsagePollerOptions {
@@ -124,7 +210,7 @@ export interface GoUsagePollerOptions {
   now?: () => number;
   minIntervalMs?: number;
   timeoutMs?: number;
-  /** Said once per poller (per boot): the first read that came back with nothing. */
+  /** Said when the read's classification changes (never the key). */
   onNote?: (text: string) => void;
   /** Every successful reading. */
   onReading?: (windows: UsageWindow[], at: number) => void;
@@ -135,7 +221,12 @@ export class GoUsagePoller {
   private lastAt = Number.NEGATIVE_INFINITY;
   private inFlight: Promise<void> | null = null;
   private latest: SubscriptionUsage | undefined;
-  private noted = false;
+  /** The newest balance charge a run on this credential recorded, until a read shows room after it. */
+  private overageAt: number | undefined;
+  /** The newest read that showed every window with room. */
+  private roomAt: number | undefined;
+  /** The last read, classified; undefined before the first. The status's health input (`FleetGoUsage`). */
+  lastRead: CredentialRead | undefined;
 
   constructor(
     readonly credential: string,
@@ -149,20 +240,43 @@ export class GoUsagePoller {
     return this.latest;
   }
 
+  /**
+   * A run on this credential was billed to the balance at `at`. It stands —
+   * the read classified `overage` — until a read made at least an interval
+   * later shows every window with room; one already made is honoured.
+   */
+  noteOverage(at: number): void {
+    if (!Number.isFinite(at)) return;
+    if (this.roomAt !== undefined && this.roomAt >= at + this.interval()) return;
+    if (this.overageAt !== undefined && this.overageAt >= at) return;
+    this.overageAt = at;
+    const prev = this.lastRead;
+    if (prev?.classification === "auth-failed" || prev?.classification === "no-access") return;
+    this.classify(prev?.at ?? at, prev?.http ?? null, "balance", "overage", at);
+  }
+
   /** Read again when the last read is older than the interval; resolves once done, or at once when not due. Never rejects. */
   refresh(): Promise<void> {
     if (this.inFlight !== null) return this.inFlight;
     const now = (this.o.now ?? Date.now)();
-    if (now - this.lastAt < (this.o.minIntervalMs ?? GO_USAGE_MIN_INTERVAL_MS)) return Promise.resolve();
+    if (now - this.lastAt < this.interval()) return Promise.resolve();
     this.lastAt = now;
     this.inFlight = readGoUsage(this.url, this.key, this.o.fetch, this.o.timeoutMs)
       .then((r) => {
-        if ("windows" in r) {
+        if (r.ok) {
           this.latest = { credential: this.credential, observedAt: now, windows: r.windows };
           this.o.onReading?.(r.windows, now);
-        } else if (!this.noted) {
-          this.noted = true;
-          this.o.onNote?.(`OpenCode Go usage for ${this.credential} not read (${r.why}): no observation, so its launches are not held`);
+          const spent = r.windows.some((w) => w.usedPercent >= EXHAUSTED_PCT);
+          if (!spent) {
+            this.roomAt = now;
+            if (this.overageAt !== undefined && now >= this.overageAt + this.interval()) this.overageAt = undefined;
+          }
+          if (this.overageAt !== undefined) this.classify(now, 200, "balance", "overage");
+          else this.classify(now, 200, spent ? "rate-limited" : undefined, spent ? "spent" : "ok");
+        } else if (this.overageAt !== undefined && r.classification === "unread") {
+          this.classify(now, r.http, "balance", "overage");
+        } else {
+          this.classify(now, r.http, r.code, r.classification);
         }
       })
       .catch(() => undefined)
@@ -170,6 +284,30 @@ export class GoUsagePoller {
         this.inFlight = null;
       });
     return this.inFlight;
+  }
+
+  private interval(): number {
+    return this.o.minIntervalMs ?? GO_USAGE_MIN_INTERVAL_MS;
+  }
+
+  /** Keep the read, carrying `since` while the classification stands (else `began`), and say a change. */
+  private classify(at: number, http: number | null, code: string | undefined, classification: CredentialRead["classification"], began = at): void {
+    const prev = this.lastRead;
+    const since = prev !== undefined && prev.classification === classification ? (prev.since ?? prev.at) : began;
+    this.lastRead = { at, http, ...(code !== undefined ? { code } : {}), classification, since };
+    if (prev?.classification === classification || (prev === undefined && (classification === "ok" || classification === "spent"))) return;
+    const said = describeRead(this.lastRead);
+    const text =
+      classification === "auth-failed"
+        ? `its key was refused reading OpenCode Go usage (${said}): its launches are held until a read succeeds`
+        : classification === "no-access"
+          ? `its key may not read OpenCode Go usage (${said}): its launches are held until a read succeeds`
+          : classification === "overage"
+            ? "a run on it was billed to the balance past the OpenCode Go allowance: its launches are held until its usage shows room"
+            : classification === "unread"
+              ? `OpenCode Go usage not read (${said}): no observation, so its launches are not held`
+              : `OpenCode Go usage read again (${classification})`;
+    this.o.onNote?.(`OpenCode Go usage for ${this.credential}: ${text}`);
   }
 }
 
@@ -198,6 +336,23 @@ export class GoUsageGauge {
 
   freeplayHold(threshold: number, now: number): UsageHold | null {
     return this.tracker.freeplayHold(threshold, now);
+  }
+
+  /**
+   * A response billed to the balance (`goOverageOf`): the allowance is spent,
+   * whatever the last reading said. The most-used window in force is recorded
+   * at 100% — or, with no reading, a five-hour window — so the freeplay gate
+   * stops this run at its turn boundary and the fleet's budget holds the
+   * credential until a newer reading says otherwise.
+   */
+  overage(now: number): void {
+    const u = this.tracker.current;
+    const most = spentWindowOf(u, now);
+    const windows =
+      u !== undefined && most !== undefined
+        ? u.windows.map((w) => (w === most ? { ...w, usedPercent: Math.max(w.usedPercent, EXHAUSTED_PCT) } : { ...w }))
+        : [{ usedPercent: EXHAUSTED_PCT, windowMinutes: GO_WINDOWS["rolling"]!, resetsAt: null }];
+    this.tracker.observe(windows, now);
   }
 
   /** A spent allowance's reset (the pause's `notBefore`), off a reading at most a minute old. */

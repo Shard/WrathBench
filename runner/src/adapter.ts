@@ -97,6 +97,12 @@
  *   it from the ladder would let a saturated key resume every few minutes
  *   forever; a farther one is not believed. Either way the pause falls back to
  *   the ladder.
+ * - A 401 PAUSES at once (`auth-failed`), unretried: the provider refused the
+ *   key — expired, revoked, mistyped — which is the credential's problem, not
+ *   the model's, and no retry makes it right. The run resumes once the
+ *   operator has replaced the key, as a CLI driver's dead login does. The same
+ *   for every provider on this driver; a 2xx body whose error names code 401
+ *   is read alike.
  * - Any other 4xx is fatal immediately (`adapter-error`): the request is
  *   malformed and retrying would burn budget on a harness bug.
  *
@@ -207,7 +213,7 @@ export type AdapterOutcome =
   | { kind: "ok"; turn: AssistantTurn }
   | {
       kind: "pause";
-      reason: "quota-exhausted" | "rate-limited";
+      reason: "quota-exhausted" | "rate-limited" | "auth-failed";
       detail: string;
       /** The provider's own stated reset (`statedResetOf`), already inside the carried window. */
       notBefore?: number;
@@ -1182,6 +1188,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
                   ? Number(code)
                   : undefined;
             lastStatus = numCode;
+            if (numCode === 401) return { kind: "pause", reason: "auth-failed", detail: lastError };
             if (
               numCode === 429 ||
               numCode === 402 ||
@@ -1231,6 +1238,8 @@ export class OpenAiChatAdapter implements ChatAdapter {
       }
       lastStatus = res.status;
       lastError = `HTTP ${res.status}${requestId !== undefined ? ` [req ${requestId}]` : ""}: ${text.slice(0, 500)}`;
+      // The key refused: the credential's, never retried (see the policy above).
+      if (res.status === 401) return { kind: "pause", reason: "auth-failed", detail: lastError };
       retryAfterMs = parseRetryAfter(res.headers.get("retry-after"), Date.now());
       // A 429 is a pause whatever the body says; the hints only decide whether
       // it reads as a spent budget or as ordinary rate limiting. Body wording

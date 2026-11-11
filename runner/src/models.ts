@@ -622,6 +622,13 @@ export interface RunFact {
    */
   credentialUsage?: SubscriptionUsage | null;
   /**
+   * When a response on this run was last billed to the provider's balance
+   * past the allowance (meta.json's `credentialOverage`, OpenCode Go's
+   * `billing_source: "balance"`), or null. The fleet holds its credential
+   * until a usage read shows room after it (`FleetGoUsage.noteOverages`).
+   */
+  credentialOverageAt?: number | null;
+  /**
    * The provider's own reported charge on this run's responses, in dollars,
    * per UTC day (`YYYY-MM-DD`) the response was recorded on: what a `spend`
    * budget sums. Absent on a fact built by hand; empty on a run whose
@@ -1305,6 +1312,7 @@ export function readRunFact(
     comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown; compactWindow?: unknown };
     pause?: { reason?: unknown; at?: unknown; episodeElapsedMs?: unknown; notBefore?: unknown };
     subscriptionUsage?: unknown;
+    credentialOverage?: { at?: unknown };
   };
   try {
     meta = JSON.parse(readFileSync(metaPath, "utf8")) as typeof meta;
@@ -1350,6 +1358,7 @@ export function readRunFact(
     credential: str(meta.config?.credential),
     driver: str(meta.config?.driver),
     credentialUsage: parseSubscriptionUsage(meta.subscriptionUsage) ?? null,
+    credentialOverageAt: num(meta.credentialOverage?.at),
   };
 
   const jsonl = join(dir, "trajectory.jsonl");

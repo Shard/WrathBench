@@ -511,16 +511,23 @@ An OpenCode Go model is an openai entry with `apiBase`
 `https://opencode.ai/inference/go/openai/v1` (the older
 `https://opencode.ai/zen/go/v1` is the same surface), carried by an
 `opencode-go` credential on `OPENCODE_KEY`, under the id Go's own listing uses
-(`https://opencode.ai/inference/go/v1/models`, no key needed). Only the
-models Go serves over chat completions can be reached this way. The adapter
-identifies as itself: its own user agent, `x-opencode-session` set to the run
-id, and never the headers of OpenCode's own client. Go picks the backend and
-the request cannot name one, so a Go run stamps unpinned routing, keyed apart
-from a pinned run of the same model, and records the backend that answered
-each call from Go's response headers. A `-free` Go slug derives free; any
-other derives paid, which puts it under the paid throttle, and is priced by
-an `opencode-go` endpoint row on its catalogue entry, since Go reports no
-per-response charge.
+(`https://opencode.ai/inference/go/v1/models`, no key needed). Go serves
+every text model it lists over chat completions. The adapter identifies as
+itself: its own user agent, `x-opencode-session` set to the run id, and never
+the headers of OpenCode's own client. Go picks the backend and the request
+cannot name one, so a Go run stamps unpinned routing, keyed apart from a
+pinned run of the same model. Go no longer names the backend in its response
+headers, so the run records the slug only. A `-free` Go slug derives free and
+runs on a free `opencode-go` credential; any other derives paid, runs on the
+paid one with its usage budget, and is priced by an `opencode-go` endpoint
+row on its catalogue entry. Each response reports its charge (`usage.cost`,
+zero inside the allowance) and where it was billed
+(`usage.opencode.billing_source`): `balance` means Go's Extra Usage billed the
+account past a spent allowance, which the run records and the fleet holds as
+`overage` ("The usage window"). With Extra Usage off, a spent allowance
+arrives as a 429 `GoUsageLimitError` instead, which pauses `quota-exhausted`.
+An API key can expire: issue the fleet's with no expiry, and with permission
+to read usage.
 
 **A new model also needs a catalogue entry** in `infra/model-catalogue.json`,
 the one place a model's static facts live (docs/ARCHITECTURE.md). The roster
@@ -791,12 +798,16 @@ Some pauses wait for a known instant instead of climbing the ladder:
   (`subscription-budget`) is on no ladder: it resumes once its window is back
   under the threshold ("Credentials", "The usage window").
 
-Two pauses cool on the ladder but always come back, because the runner
+Three pauses cool on the ladder but always come back, because the runner
 releases the session and the roster advances, so the supervisor resumes the
 run with a fresh sandbox and session:
 
 - `observation-stalled`: the sandbox's event stream closed and the recorded
   state stopped moving.
+- `auth-failed`: the credential refused — a Codex login that could not
+  refresh, or any provider's 401 on an API key. It says nothing about the
+  model. The run comes back once the operator has logged the credential in
+  again or replaced the key; until then it climbs the ladder and is listed.
 - `infrastructure-failed`: a CLI scaffold failing on its host, such as the
   codex CLI unable to write its thread under `CODEX_HOME` on a full volume. A
   volume the operator has freed is picked back up; one still full climbs the
@@ -2022,8 +2033,22 @@ kind `rate_limits`, keyed by the run's credential: the used percent, the
 window's length and its reset, nothing else. For OpenCode Go the supervisor
 reads Go's usage endpoint for each `opencode-go` credential with a usage
 budget, at most once a minute, and leaves the reading in
-`data/runs/fleet-credential-usage.json`. No reading counts for longer than
-seven days, and a credential with no reading is open. A Claude per-model weekly
+`data/runs/fleet-credential-usage.json`; Go's windows are the five hours, the
+week and the month, and one Go reports `rate-limited` is spent whatever its
+percent. No reading counts for longer than seven days, and a credential with
+no reading is open — unless its last read failed in a way that says so. Each
+Go read is classified, and a change of class is logged:
+
+- the key refused (401, `auth-failed`): every Go credential naming that key
+  is held, free side included, until a read succeeds;
+- no access to usage (403, `no-access`: a key without usage permission, or a
+  workspace with no Go plan): that credential is held until a read succeeds;
+- no answer (a timeout, a 5xx, a shape the reader does not know, `unread`):
+  nothing is held, and the class is kept with when it began;
+- a response a run on it saw billed to the balance (`overage`): that
+  credential is held until a read at least a minute later shows every window
+  with room. The run marks its allowance spent, so a live freeplay run pauses
+  at its turn boundary like any spent window; a live scored run finishes. A Claude per-model weekly
 cap (a refusal naming `seven_day_opus`, say) is a window of its own that holds
 only that family's launches.
 

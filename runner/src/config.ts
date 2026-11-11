@@ -148,10 +148,11 @@ export type TerminationReason = (typeof TERMINATION_REASONS)[number];
  * or a subscription's usage window. `rate-limited` covers post-retry HTTP 429
  * without quota wording (free pools). Neither has anything to do with context
  * size — which is what the old name, `window-exhausted`, kept implying.
- * `auth-failed` is a subscription credential that stopped working
- * (codex: "Your access token could not be refreshed" — a refresh token spent
- * by another process on the same CODEX_HOME, or a 401). Nothing about the
- * model; the run resumes once the operator has logged the credential back in.
+ * `auth-failed` is a credential that stopped working (codex: "Your access
+ * token could not be refreshed" — a refresh token spent by another process on
+ * the same CODEX_HOME; any provider's 401 on an API key, `adapter.ts`).
+ * Nothing about the model; the run resumes once the operator has logged the
+ * credential back in or replaced the key.
  * `infrastructure-failed` is a CLI scaffold failing on the host under it —
  * the codex CLI unable to write its thread under `$CODEX_HOME` (a full disk;
  * `detectCodexFailure`). Nothing about the model or the provider either: it

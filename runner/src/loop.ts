@@ -29,6 +29,7 @@ import { digestCharacter, PLAIN_FANOUT_RENDER, type CharacterDigest, type Fanout
 import { harnessOf } from "./config";
 import { SUBSCRIPTION_PAUSE } from "./lapse";
 import { describeWindows, thresholdsOf, type SubscriptionUsage, type UsageHold } from "./subscription-usage";
+import { goOverageOf } from "./opencode-go";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { ContextEvents } from "./sandbox/signals";
@@ -104,6 +105,8 @@ export interface UsageGauge {
   freeplayHold(threshold: number, now: number): UsageHold | null;
   /** A spent allowance's reset, capped, with the spent window recorded; undefined when none is known. */
   quotaReset(now: number): Promise<number | undefined>;
+  /** A response billed past the allowance (`goOverageOf`): record the allowance as spent. */
+  overage?(now: number): void;
   readonly current: SubscriptionUsage | undefined;
 }
 
@@ -694,6 +697,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
    * once and a replay never has to look before the segment for it.
    */
   let lastSystemText: string | null = null;
+  /** Whether the last response was billed past the allowance (`goOverageOf`): its record is written once per stretch. */
+  let overageStretch = false;
   // The mid-turn state clock: `build` samples once per turn, and
   // that used to be this loop's only sampling — one 485s request left an
   // 8.1-minute blackout with no state row and no XP signal. Live for the whole
@@ -882,6 +887,21 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         ...(outcome.turn.finishReason !== undefined ? { finishReason: outcome.turn.finishReason } : {}),
       });
       history.push(assistant);
+
+      // A response billed to the provider's balance past the allowance
+      // (OpenCode Go's Extra Usage, `billing_source: "balance"`) is money, not
+      // allowance: recorded — on the record once per stretch, in meta.json each
+      // time, where the fleet reads it and holds the credential — and the
+      // allowance marked spent, so a freeplay run stops at this boundary
+      // (`opencode-go.ts`). A scored run plays on: pausing it would spend its attempt.
+      if (goOverageOf(outcome.turn.raw)) {
+        const at = o.now?.() ?? Date.now();
+        trajectory.recordCredentialOverage(config.credential ?? null, at, { turn, record: !overageStretch });
+        overageStretch = true;
+        o.usage?.overage?.(at);
+      } else {
+        overageStretch = false;
+      }
 
       // A "length" finish is the provider truncating the turn, possibly mid
       // tool-call JSON — which would otherwise reach the model as an ordinary

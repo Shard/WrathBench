@@ -22,6 +22,7 @@ import {
   credentialGate,
   credentialStatuses,
   FleetGoUsage,
+  withReadHolds,
   formatCredentialStatus,
   gateSpawns,
   placeRef,
@@ -551,6 +552,62 @@ describe("OpenCode Go", () => {
     expect(nokey.observations()).toEqual([]);
     expect(said).toHaveLength(2);
     expect(said[1]).toContain("OPENCODE_KEY is not set");
+  });
+
+  /** A fetch that refuses with `status` (and an error code) every time. */
+  const refusing = (status: number, code?: string): GoFetch =>
+    (async () => ({ ok: false, status, json: () => Promise.resolve(code !== undefined ? { error: { code } } : {}) })) as unknown as GoFetch;
+  const gateAfter = async (go: FleetGoUsage, runs: RunFact[] = []) => {
+    await go.refresh(config.credentials, config.roster);
+    go.noteOverages(runs);
+    return withReadHolds(credentialGate(config.credentials, go.observations(), [], NOW), go.readHolds(config.credentials));
+  };
+
+  test("a refused key (401) holds every Go credential naming it, free side included, said once with its code", async () => {
+    const said: string[] = [];
+    const go = new FleetGoUsage({ env: { OPENCODE_KEY: "fake-go-key" }, fetch: refusing(401, "api_key_expired"), now: () => NOW, say: (l) => said.push(l) });
+    const gate = await gateAfter(go);
+    const { on, held } = picks(config, [], gate);
+    expect(on).toEqual({});
+    expect(held["gopaid"]).toBe("credential go-paid: its key was refused (auth-failed) — held until a usage read succeeds");
+    expect(held["gofree"]).toBe("credential go-free: its key was refused (auth-failed) — held until a usage read succeeds");
+    expect(gate.holdOf("go-free", "freeplay")).toContain("auth-failed");
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain("HTTP 401 api_key_expired");
+    expect(said.join("\n")).not.toContain("fake-go-key");
+    expect(go.readHolds(config.credentials).size).toBe(2);
+  });
+
+  test("a key that may not read usage (403) holds only the credential read; an unread endpoint (5xx, timeout) holds nothing", async () => {
+    const forbidden = await gateAfter(new FleetGoUsage({ env: { OPENCODE_KEY: "fake-go-key" }, fetch: refusing(403), now: () => NOW }));
+    const a = picks(config, [], forbidden);
+    expect(a.on).toEqual({ gofree: "go-free" });
+    expect(a.held["gopaid"]).toContain("no-access");
+    for (const fetch of [refusing(502), (async () => Promise.reject(new DOMException("t", "TimeoutError"))) as unknown as GoFetch]) {
+      const go = new FleetGoUsage({ env: { OPENCODE_KEY: "fake-go-key" }, fetch, now: () => NOW });
+      const b = picks(config, [], await gateAfter(go));
+      expect(b.on).toEqual({ gopaid: "go-paid", gofree: "go-free" });
+      expect(go.readHolds(config.credentials).size).toBe(0);
+    }
+  });
+
+  test("a balance charge a run recorded holds that credential as overage until a later read shows room", async () => {
+    let now = NOW;
+    const go = new FleetGoUsage({ env: { OPENCODE_KEY: "fake-go-key" }, fetch: fetchOf([okBody(20)]), now: () => now });
+    const billed = fact({ runId: "fleet-go-1", credential: "go-paid", credentialOverageAt: NOW + 1_000 });
+    const gate = await gateAfter(go, [billed]);
+    expect(picks(config, [], gate).held["gopaid"]).toBe("credential go-paid: billed past its allowance (overage) — held until its usage shows room");
+    expect(gate.holdOf("go-free", "freeplay")).toBeUndefined();
+    // Off disk: the run's meta.json carries the charge as the loop recorded it.
+    const dir = tempDir("wrathbench-go-overage-");
+    const t = new Trajectory(join(dir, "fleet-go-1"));
+    t.writeMeta({ runId: "fleet-go-1", harnessVersion: "t", startedAt: NOW - H, config: loadRunConfig({ runId: "fleet-go-1", driver: "openai", model: "m", episode: "e90", account: "POOL01", credential: "go-paid" }), comparability: { episode: "e90" } as unknown as RunMeta["comparability"] });
+    t.recordCredentialOverage("go-paid", NOW + 1_000, { turn: 3 });
+    t.close();
+    expect(readRunFact(dir, "fleet-go-1", NOW)!.credentialOverageAt).toBe(NOW + 1_000);
+    now += 2 * 60_000;
+    const later = await gateAfter(go, [billed]);
+    expect(later.holdOf("go-paid", "e90")).toBeUndefined();
   });
 
   test("the supervisor's readings reach the roster and --status through the sidecar beside the runs", () => {

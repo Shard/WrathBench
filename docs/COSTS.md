@@ -17,15 +17,16 @@ the operator's figure in GitHub issue #66.
 - Every `t:"response"` trajectory record carries the provider-reported
   `usage` block when the provider sends one: `prompt_tokens`,
   `completion_tokens`, `cached_tokens`, `cache_write_tokens`,
-  `reasoning_tokens`, and OpenRouter's own `cost` in credits. OpenCode Go
-  and DeepSeek's own platform send no `cost`, so a run there carries an
-  expected figure from its endpoint price row (`prices.endpoints` on its
+  `reasoning_tokens`, and the provider's own `cost` where it sends one
+  (OpenRouter's credits; OpenCode Go's dollars charged to the balance, zero
+  inside its allowance). DeepSeek's own platform sends no `cost`, so a run
+  there carries an expected figure from its endpoint price row (`prices.endpoints` on its
   entry in `infra/model-catalogue.json`) and no actual one. DeepSeek
   bills double in weekday peak hours, which a dated row cannot express, so
   its row holds the off-peak rate and says so. The record also names
   the serving `provider` when the body reports one, or OpenCode's response
   headers do (`x-opencode-endpoint-id`, with the upstream's own model id beside
-  it), and the first one seen is
+  it; Go has stopped sending them), and the first one seen is
   promoted onto the run itself
   (`run.resolved_provider`, `meta.resolved.provider`) so a cost sweep can group
   by backend without replaying the trajectory. Routing is pinned

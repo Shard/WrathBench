@@ -155,6 +155,13 @@ export interface RunMeta {
    */
   subscriptionUsage?: SubscriptionUsage;
   /**
+   * The newest response billed to the provider's balance past the allowance
+   * (OpenCode Go's `billing_source: "balance"`): the credential and when.
+   * Written by `recordCredentialOverage`; the fleet holds the credential until
+   * a usage read shows room after it. Operator-only like `subscriptionUsage`.
+   */
+  credentialOverage?: { credential: string | null; at: number };
+  /**
    * Every credential move the operator made on this run
    * (`runner/src/move-credential.ts`), oldest first: the credential it left,
    * the one it went to, when, who, and why. `config.credential` says which
@@ -482,6 +489,17 @@ export class Trajectory {
   recordSubscriptionUsage(u: SubscriptionUsage, turn?: number): void {
     this.append({ t: "harness", kind: "rate_limits", ...(turn !== undefined ? { turn } : {}), credential: u.credential, windows: u.windows });
     this.updateMeta((meta) => ({ ...meta, subscriptionUsage: u }));
+  }
+
+  /**
+   * A response billed to the provider's balance past the allowance: in
+   * meta.json, where the fleet reads it, and — when `record` — as a `harness`
+   * record of kind `usage_overage`, which carries no text and no figure.
+   * Never throws into a turn.
+   */
+  recordCredentialOverage(credential: string | null, at: number, opts: { turn?: number; record?: boolean } = {}): void {
+    if (opts.record !== false) this.append({ t: "harness", kind: "usage_overage", ...(opts.turn !== undefined ? { turn: opts.turn } : {}), credential, billingSource: "balance" });
+    this.updateMeta((meta) => ({ ...meta, credentialOverage: { credential, at } }));
   }
 
   /**
