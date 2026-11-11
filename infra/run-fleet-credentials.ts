@@ -31,6 +31,7 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { credentialCandidates, describeBudget, providerById, type Credential } from "../runner/src/credential-slots";
+import { credentialHealth, credentialWindows, type CredentialFix, type CredentialHealth, type CredentialHold, type CredentialRead, type CredentialWindow, type ResumeHoldCode } from "../runner/src/credential-health";
 import { DEFAULT_DRIVER, driverEntry } from "../runner/src/drivers";
 import { utcDay, type RunFact } from "../runner/src/models";
 import { isOpenCodeGoBase } from "../runner/src/platform";
@@ -48,16 +49,16 @@ import {
   type UsageHold,
 } from "../runner/src/subscription-usage";
 import type { FleetRosterEntry, JobSpawn } from "./run-fleet-config";
-import type { CredentialHoldKind } from "../runner/viewer/api-types";
 
 export { readCredentialUsage, CREDENTIAL_USAGE_SIDECAR };
 
 // ------------------------------------------------------------------ the budgets
 
-/** Why a credential holds a launch or a resume: the sentence for the operator, and its kind for the public build. */
-export interface CredentialHold {
-  why: string;
-  kind: CredentialHoldKind;
+/** Why a paused run's credential holds its resume: the operator's sentence, and its code for the public phrase. */
+export interface ResumeHold {
+  text: string;
+  /** Null only from a gate that worded its hold without a code. */
+  code: ResumeHoldCode | null;
 }
 
 /** The run facts a budget reads. */
@@ -75,8 +76,12 @@ export interface CredentialGate {
    * resume are held alike: each segment is a run to a runs-per-day budget.
    */
   holdOf(id: string, episode: string | null | undefined, model?: string | null): string | undefined;
-  /** `holdOf` with what kind of hold it is. */
-  hold(id: string, episode: string | null | undefined, model?: string | null): CredentialHold | undefined;
+  /**
+   * `holdOf`, structured: the sentence, plus what holds (`HoldCode`) and
+   * until when where known. The code and the time are operator-only (the
+   * admin interface's status); the sentence stays the one any surface gets.
+   */
+  holdReasonOf(id: string, episode: string | null | undefined, model?: string | null): (CredentialHold & { text: string }) | undefined;
   /**
    * Launches on `id` since 00:00 UTC, as the runs on disk record them: fresh
    * starts and the segments resumes started. A tick's own starts count from
@@ -127,23 +132,21 @@ export function credentialGate(
     const t = c.budget?.kind === "usage" ? { scored: c.budget.scoredMaxPct, freeplay: c.budget.freeplayMaxPct } : { scored: EXHAUSTED_PCT, freeplay: EXHAUSTED_PCT };
     return usageHold(usage.get(id), thresholdOf(gateClassOf(episode), t), now, model ?? null);
   };
-  const hold = (id: string, episode: string | null | undefined, model?: string | null): CredentialHold | undefined => {
+  const holdReasonOf = (id: string, episode: string | null | undefined, model?: string | null): (CredentialHold & { text: string }) | undefined => {
     const c = byId.get(id);
     if (c === undefined) return undefined;
     const h = usageHoldOf(id, episode, model);
     if (h !== null) {
       const cls = gateClassOf(episode);
-      const why =
-        h.threshold >= EXHAUSTED_PCT || cls === "spent-only" || h.windows.some((w) => w.usedPercent >= EXHAUSTED_PCT)
-          ? `credential ${id}: a usage window is spent — held until it resets`
-          : `credential ${id}: at or over its ${cls} usage threshold — held until its usage window resets`;
-      return { why, kind: "usage" };
+      return h.threshold >= EXHAUSTED_PCT || cls === "spent-only" || h.windows.some((w) => w.usedPercent >= EXHAUSTED_PCT)
+        ? { code: "usage-spent", until: h.until, text: `credential ${id}: a usage window is spent — held until it resets` }
+        : { code: "usage-threshold", until: h.until, text: `credential ${id}: at or over its ${cls} usage threshold — held until its usage window resets` };
     }
     if (c.budget?.kind === "spend" && (spendToday.get(id) ?? 0) >= c.budget.usdPerDay) {
-      return { why: `credential ${id}: its spend budget for the day is used — held until 00:00 UTC`, kind: "spend" };
+      return { code: "spend-budget", until: nextUtcMidnight(now), text: `credential ${id}: its spend budget for the day is used — held until 00:00 UTC` };
     }
     if (c.budget?.kind === "runs" && (runsToday.get(id) ?? 0) >= c.budget.perDay) {
-      return { why: `credential ${id}: its runs for the day are used — held until 00:00 UTC`, kind: "runs" };
+      return { code: "runs-budget", until: nextUtcMidnight(now), text: `credential ${id}: its runs for the day are used — held until 00:00 UTC` };
     }
     return undefined;
   };
@@ -151,8 +154,8 @@ export function credentialGate(
     now,
     usage,
     usageHoldOf,
-    hold,
-    holdOf: (id, episode, model) => hold(id, episode, model)?.why,
+    holdReasonOf,
+    holdOf: (id, episode, model) => holdReasonOf(id, episode, model)?.text,
     runsToday: (id) => runsToday.get(id) ?? 0,
     spendToday: (id) => spendToday.get(id) ?? 0,
   };
@@ -374,6 +377,20 @@ export class FleetGoUsage {
   observations(): SubscriptionUsage[] {
     return [...this.pollers.values()].flatMap((p) => (p.current !== undefined ? [p.current] : []));
   }
+
+  /**
+   * Each poller's last read as its reader classified it, by credential id: the
+   * status's health input (`credentialStatuses`' `reads`). A poller that does
+   * not keep one (`GoUsagePoller.lastRead`) contributes nothing.
+   */
+  lastReads(): Map<string, CredentialRead> {
+    const out = new Map<string, CredentialRead>();
+    for (const [id, p] of this.pollers) {
+      const r = (p as { lastRead?: CredentialRead }).lastRead;
+      if (r !== undefined) out.set(id, r);
+    }
+    return out;
+  }
 }
 
 /** Write the supervisor's readings beside the runs. Best effort: a failure is no reading for the others, never a stopped tick. */
@@ -408,8 +425,22 @@ export interface CredentialStatus {
   used: string | null;
   /** Why a scored and a freeplay launch are held, when they are. */
   held: { scored?: string; freeplay?: string };
+  /**
+   * The same holds, structured: what holds each and until when. Absent from a
+   * state file a supervisor wrote before it published them; the admin
+   * interface then reads a held class as held by its budget, code unknown.
+   */
+  holds?: { scored?: CredentialHold; freeplay?: CredentialHold };
   /** The newest failure a run on it recorded that says the credential itself is the problem (`auth-failed`, `quota-exhausted`), with when. */
   lastError: { reason: string; at: number } | null;
+  /** The provider's newest read of it, where a reader reads it (OpenCode Go's usage endpoint): its health's input. */
+  lastRead?: CredentialRead;
+  /** Its state, why, since when, and the provider's last answer (`credentialHealth`). */
+  health?: CredentialHealth;
+  /** Its newest usage reading's windows in force, as meters; null with no reading. */
+  windows?: CredentialWindow[] | null;
+  /** What makes it well again; null when it is. */
+  fix?: CredentialFix | null;
 }
 
 /** The pauses that indict the credential rather than the model. */
@@ -422,8 +453,22 @@ export function credentialStatuses(o: {
   gate: CredentialGate;
   runs: readonly Pick<RunFact, "credential" | "pause">[];
   env?: Record<string, string | undefined>;
+  /**
+   * The providers' last reads, by credential id (`FleetGoUsage.lastReads()`).
+   * A credential with none of its own takes another's of its provider naming
+   * the same variable only where the read is about the key itself (refused,
+   * or no access): Go's free side shares the paid side's key but bills no
+   * plan, so the paid side's usage says nothing about it.
+   */
+  reads?: ReadonlyMap<string, CredentialRead>;
 }): CredentialStatus[] {
   const env = o.env ?? process.env;
+  const readOf = (c: Credential): CredentialRead | undefined =>
+    o.reads?.get(c.id) ??
+    o.credentials
+      .filter((x) => x.provider === c.provider && x.secretEnv === c.secretEnv)
+      .map((x) => o.reads?.get(x.id))
+      .find((r) => r !== undefined && (r.classification === "auth-failed" || r.classification === "no-access"));
   return o.credentials.map((c) => {
     const u = o.gate.usage.get(c.id);
     const used =
@@ -434,29 +479,44 @@ export function credentialStatuses(o: {
           : u !== undefined && u.windows.length > 0
             ? describeWindows(u.windows, u.observedAt)
             : null;
-    const scored = o.gate.holdOf(c.id, "e90");
-    const freeplay = o.gate.holdOf(c.id, "freeplay");
+    const scoredHold = o.gate.holdReasonOf(c.id, "e90");
+    const freeplayHold = o.gate.holdReasonOf(c.id, "freeplay");
+    const scored = scoredHold?.text;
+    const freeplay = freeplayHold?.text;
     let lastError: CredentialStatus["lastError"] = null;
     for (const f of o.runs) {
       if (f.credential !== c.id || f.pause === null || !CREDENTIAL_PAUSES.has(f.pause.reason)) continue;
       if (lastError === null || f.pause.at > lastError.at) lastError = { reason: f.pause.reason, at: f.pause.at };
     }
     const secret = env[c.secretEnv];
-    const home = providerById(c.provider)?.holds === "home";
+    const holds = providerById(c.provider)?.holds ?? "key";
+    const home = holds === "home";
+    // A home is a path, and a path that does not exist is as unset as an empty one.
+    const secretSet = secret !== undefined && secret.length > 0 && (!home || existsSync(secret));
+    const holdsOf = {
+      ...(scoredHold !== undefined ? { scored: { code: scoredHold.code, until: scoredHold.until } } : {}),
+      ...(freeplayHold !== undefined ? { freeplay: { code: freeplayHold.code, until: freeplayHold.until } } : {}),
+    };
+    const lastRead = readOf(c);
+    const { health, fix } = credentialHealth({ enabled: c.enabled, secretEnv: c.secretEnv, holds, secretSet, holdsOf, lastError, read: lastRead ?? null });
     return {
       id: c.id,
       provider: c.provider,
       billing: c.billing,
       enabled: c.enabled,
       secretEnv: c.secretEnv,
-      // A home is a path, and a path that does not exist is as unset as an empty one.
-      secretSet: secret !== undefined && secret.length > 0 && (!home || existsSync(secret)),
+      secretSet,
       slots: c.slots,
       inUse: o.book.inUse(credentialKey(c.id)),
       budget: describeBudget(c.budget),
       used,
       held: { ...(scored !== undefined ? { scored } : {}), ...(freeplay !== undefined ? { freeplay } : {}) },
+      holds: holdsOf,
       lastError,
+      ...(lastRead !== undefined ? { lastRead } : {}),
+      health,
+      windows: credentialWindows(u, o.gate.now),
+      fix,
     };
   });
 }
@@ -511,19 +571,20 @@ export function driverOfEntry(e: Pick<FleetRosterEntry, "driver"> | undefined): 
 
 /**
  * Why a paused run's credential holds its resume, or undefined: gone from the
- * config, disabled, or its budget (`CredentialGate.hold`), with its kind. A run that
+ * config, disabled, or its budget (`CredentialGate.holdReasonOf`), with its code. A run that
  * recorded none is held by nothing here.
  */
 export function resumeHoldOf(
   f: Pick<RunFact, "credential" | "episode" | "model">,
   cfg: { credentials: readonly Credential[] },
   gate: CredentialGate,
-): CredentialHold | undefined {
+): ResumeHold | undefined {
   if (f.credential === null) return undefined;
   const c = cfg.credentials.find((x) => x.id === f.credential);
-  if (c === undefined) return { why: `credential ${f.credential} is not configured — the run comes back only on it (or move it: bun wb config move-credential)`, kind: "credential" };
-  if (!c.enabled) return { why: `credential ${f.credential} is disabled — the run comes back only on it (or move it: bun wb config move-credential)`, kind: "credential" };
-  return gate.hold(c.id, f.episode, f.model);
+  if (c === undefined) return { text: `credential ${f.credential} is not configured — the run comes back only on it (or move it: bun wb config move-credential)`, code: "credential-off" };
+  if (!c.enabled) return { text: `credential ${f.credential} is disabled — the run comes back only on it (or move it: bun wb config move-credential)`, code: "credential-off" };
+  const h = gate.holdReasonOf(c.id, f.episode, f.model);
+  return h === undefined ? undefined : { text: h.text, code: h.code };
 }
 
 /** A spawn the budget changed, and why. */

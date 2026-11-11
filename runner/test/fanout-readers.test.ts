@@ -12,15 +12,17 @@
  */
 
 import { describe, expect, setSystemTime, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import { createRenderer, type SnapshotResult } from "../viewer/snapshot";
-import { bestLevelOf, characterSamplesOf, fanoutCharacters, fanoutLead, fanoutReadings, isFanoutRunDir, isV1RunDir, latestReading, parseFanoutSessionId, readRunRow, readStateSamples } from "../src/run-reader";
-import { withFanoutLeads } from "../viewer/clickhouse";
+import { MAX_CHARACTERS_LIMIT } from "@wrathbench/mcp/fanout";
+import { bestLevelOf, characterSamplesOf, fanoutCharacters, fanoutLead, fanoutReadings, isFanoutRunDir, isV1RunDir, latestReading, parseFanoutSessionId, readRunRow, readStateSamples, SAMPLER_MEMO_MAX, traceSamplesOf } from "../src/run-reader";
+import { localRunStore, withFanoutLeads } from "../viewer/clickhouse";
+import { positionsFromStore, readPositions } from "../viewer/positions";
 import { readRun } from "../viewer/runs";
 import type { TrackResponse } from "../viewer/api-types";
-import { FANOUT_ROSTER_TOKEN, FANOUT_RUN, writeFanoutRun } from "./fixtures/fanout";
+import { FANOUT_CHARACTERS, FANOUT_ROSTER_TOKEN, FANOUT_RUN, writeFanoutRun, type FanoutCharacter } from "./fixtures/fanout";
 import { DEAD_RUN, poisonedRunsDir } from "./fixtures/poisoned-runs";
 import { tempDirs } from "./fixtures/temp-dirs";
 import { V1P1_RUN, materialiseV1p1 } from "./fixtures/v1p1";
@@ -105,13 +107,18 @@ describe("the private viewer over a fan-out run", () => {
     const h = handleFor(runs, false);
     const listed = (await (await get(h, "/api/runs")).json()) as { runs: { runId: string }[] };
     expect(listed.runs.map((r) => r.runId).sort()).toEqual([FANOUT_RUN, V1P1_RUN].sort());
-    const detail = (await (await get(h, `/api/run/${FANOUT_RUN}`)).json()) as { fanout?: unknown; states: unknown[]; run: { level: number | null; xp: number | null; money: number | null; character: string | null } };
+    const detail = (await (await get(h, `/api/run/${FANOUT_RUN}`)).json()) as { fanout?: unknown; fanoutLead?: string; states: unknown[]; run: { level: number | null; xp: number | null; money: number | null; character: string | null } };
     expect(detail.fanout).toEqual([
       { id: `${FANOUT_RUN}~Alfa`, character: "Alfa" },
       { id: `${FANOUT_RUN}~Bravo`, character: "Bravo" },
     ]);
     // The run reads its lead's level and xp, and no one character's name, money or curve.
     expect(detail.run).toMatchObject({ level: 5, xp: 900, money: null, character: null });
+    // And names whose they are, the same off the store's rows as off the files.
+    expect(detail.fanoutLead).toBe("Alfa");
+    const stored = createApi({ runsDir: runs, tilesDir: join(runs, "no-tiles"), publicMode: false, moduleUrl: "http://127.0.0.1:1", store: localRunStore(runs) });
+    const viaStore = (await (await get(stored, `/api/run/${FANOUT_RUN}`)).json()) as { fanoutLead?: string; run: { level: number | null; xp: number | null } };
+    expect(viaStore).toMatchObject({ fanoutLead: "Alfa", run: { level: 5, xp: 900 } });
     expect(detail.states).toEqual([]);
     // The listing off the store and the run read off its files agree.
     const row = (listed.runs as unknown as { runId: string; level: number | null; xp: number | null }[]).find((r) => r.runId === FANOUT_RUN);
@@ -119,6 +126,7 @@ describe("the private viewer over a fan-out run", () => {
     expect(readRun(runs, FANOUT_RUN)).toMatchObject({ level: 5, xp: 900, character: null });
     const single = (await (await get(h, `/api/run/${V1P1_RUN}`)).json()) as Record<string, unknown>;
     expect("fanout" in single).toBe(false);
+    expect("fanoutLead" in single).toBe(false);
   });
 
   test("its routes that read the run's one session answer empty, never a character or an error", async () => {
@@ -224,5 +232,102 @@ describe("a public pass beside a fan-out run", () => {
       expect({ route, named: (await (await get(pub, route)).text()).includes(FANOUT_RUN) }).toEqual({ route, named: false });
     }
     expect(await pub.unpublishedRuns()).toContain(FANOUT_RUN);
+  });
+});
+
+/** End a run as `setTermination` records it, in its meta.json. */
+function endRun(dir: string): void {
+  const path = join(dir, "meta.json");
+  const meta = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+  writeFileSync(path, JSON.stringify({ ...meta, termination: { reason: "episode-limit", detail: "fixture" }, endedAt: 1762000400000 }));
+}
+
+describe("a fan-out run on the live map", () => {
+  // Just after the fixture's newest reading (Bravo's), inside the window for both characters.
+  const NOW = 1762000300000 + 5_000;
+
+  test("each character is a pip of its own, under its session id, at its own level, in both feeds", async () => {
+    const runs = tempDir("fanout-map-");
+    await writeFanoutRun(runs);
+    const walked = await readPositions(runs, NOW);
+    // Newest position first: Bravo's reading is the later one.
+    expect(walked.map((p) => [p.runId, p.character])).toEqual([
+      [`${FANOUT_RUN}~Bravo`, "Bravo"],
+      [`${FANOUT_RUN}~Alfa`, "Alfa"],
+    ]);
+    expect(walked.map((p) => [p.level, p.xp, p.money, p.map, p.x])).toEqual([
+      [3, 120, 40, 0, -9450],
+      [5, 900, 250, 0, -9460],
+    ]);
+    // The agent's episodic line names no one character, and a character's id serves no `/nearby`.
+    for (const p of walked) {
+      expect(p.status).toBeNull();
+      expect(p.nearby).toBeUndefined();
+    }
+    expect(JSON.stringify(walked)).not.toContain(FANOUT_ROSTER_TOKEN);
+    const fromStore = await positionsFromStore(localRunStore(runs), runs, NOW);
+    expect(JSON.stringify(fromStore)).toBe(JSON.stringify(walked));
+  });
+
+  test("a character's own trace segments open under the pip's id", async () => {
+    const runs = tempDir("fanout-map-trace-");
+    await writeFanoutRun(runs);
+    const h = handleFor(runs, false);
+    for (const p of await readPositions(runs, NOW)) {
+      const index = (await (await get(h, `/api/run/${p.runId}/trace`)).json()) as { segs: [number, number][] };
+      expect(index.segs.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("an ended run, or a character standing nowhere inside the window, is no pip", async () => {
+    const runs = tempDir("fanout-map-off-");
+    endRun(await writeFanoutRun(runs, { closed: true }));
+    expect(await readPositions(runs, NOW)).toEqual([]);
+    expect(await positionsFromStore(localRunStore(runs), runs, NOW)).toEqual([]);
+    const live = tempDir("fanout-map-stale-");
+    await writeFanoutRun(live);
+    // Alfa's reading is 100 s older than Bravo's: a window that ends between them keeps Bravo only.
+    expect((await readPositions(live, NOW, 50_000)).map((p) => p.character)).toEqual(["Bravo"]);
+    expect(await readPositions(live, NOW + 3_600_000)).toEqual([]);
+  });
+
+  test("the store's feed opens a fan-out run whose trajectory is quiet while a character's record beats", async () => {
+    const runs = tempDir("fanout-map-quiet-");
+    const dir = await writeFanoutRun(runs);
+    const old = (NOW - 3_600_000) / 1000;
+    utimesSync(join(dir, "trajectory.jsonl"), old, old);
+    for (const c of ["Alfa", "Bravo"]) utimesSync(join(dir, "sessions", c, "live.json"), old, old);
+    expect(await positionsFromStore(localRunStore(runs), runs, NOW)).toEqual([]);
+    utimesSync(join(dir, "sessions", "Bravo", "live.json"), NOW / 1000, NOW / 1000);
+    expect((await positionsFromStore(localRunStore(runs), runs, NOW)).map((p) => p.runId)).toEqual([`${FANOUT_RUN}~Bravo`, `${FANOUT_RUN}~Alfa`]);
+  });
+
+  test("a public handle draws none of its characters", async () => {
+    const runs = poisonedRunsDir();
+    await writeFanoutRun(runs);
+    const body = await (await get(handleFor(runs, true), "/api/positions")).text();
+    expect(body).not.toContain(FANOUT_RUN);
+  });
+});
+
+describe("the sampler memo at fan-out's ceiling", () => {
+  test("holds a run of the most characters the stack allows beside sixteen single runs, so a second read folds nothing", async () => {
+    expect(SAMPLER_MEMO_MAX).toBe(MAX_CHARACTERS_LIMIT + 16);
+    const runs = tempDir("fanout-memo-");
+    const letters = "abcdefghijklmnopqrstuvwxyz";
+    const characters: FanoutCharacter[] = Array.from({ length: MAX_CHARACTERS_LIMIT }, (_, i) => ({
+      name: `Seat${letters[Math.floor(i / 26)]}${letters[i % 26]}`,
+      guid: String(1000 + i),
+      readings: FANOUT_CHARACTERS[0]!.readings,
+    }));
+    const dir = await writeFanoutRun(runs, { runId: "fanout-memo", characters });
+    const singles = Array.from({ length: 16 }, (_, i) => materialiseV1p1(runs, { as: `single-${i}` }));
+    const pass = (): unknown[] => [...characters.map((c) => characterSamplesOf(dir, c.name)), ...singles.map((d) => traceSamplesOf(d))];
+    const first = pass();
+    const second = pass();
+    expect(first.length).toBe(MAX_CHARACTERS_LIMIT + 16);
+    // The memo hands back the samples it kept, so the same array is a read that refolded nothing.
+    for (const [i, kept] of first.entries()) expect({ i, same: second[i] === kept }).toEqual({ i, same: true });
+    expect(fanoutReadings(dir)).toHaveLength(MAX_CHARACTERS_LIMIT);
   });
 });

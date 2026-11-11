@@ -10,6 +10,7 @@ import { ModelIcon } from "../components/ModelIcon";
 import { HOME_EPISODE, homeLadderRuns } from "../lib/homeladder";
 import { poll } from "../lib/poll";
 import { STALE_MS } from "../lib/mapview";
+import { runPageHref } from "../lib/mapstate";
 import { positionAgeMs, type FeedClock } from "@wrathbench/inspector/views/feedclock";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { SDK_FAMILIES, paramNames, selectedTool } from "../lib/tools";
@@ -85,7 +86,7 @@ export default function Home() {
               {(p, i) => (
                 <>
                   <Show when={i() > 0}>, </Show>
-                  <A href={`/run/${encodeURIComponent(p.runId)}`}>
+                  <A href={runPageHref(p.runId)}>
                     <ModelIcon model={p.model ?? ""} />
                     <span title={p.model ?? ""}>{p.model === null ? "unknown" : modelDisplay(p.model)}</span>
                     <Show when={p.level !== null}> L{p.level}</Show>

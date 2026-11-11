@@ -79,7 +79,7 @@ import type {
   FleetEndedView,
   FleetJobView,
   FleetPausedView,
-  CredentialHoldKind,
+  ResumeHoldCode,
   FleetRunFacts,
   FleetPreflightView,
   FleetResponse,
@@ -233,13 +233,15 @@ export const SUBSCRIPTION_WAIT_WHY = "waiting for its subscription usage window 
 
 /**
  * What the public fleet page says about a paused run its credential holds, by
- * kind: no credential id, no figure, no time.
+ * hold code: no credential id, no figure, no time. Both usage codes read as
+ * the usage window, which is all the public build says of one.
  */
-export const CREDENTIAL_HOLD_WHY: Readonly<Record<CredentialHoldKind, string>> = {
-  usage: SUBSCRIPTION_WAIT_WHY,
-  runs: "waiting for its daily run budget to reset",
-  spend: "waiting for its daily spend budget to reset",
-  credential: "waiting for its credential",
+export const CREDENTIAL_HOLD_WHY: Readonly<Record<ResumeHoldCode, string>> = {
+  "usage-spent": SUBSCRIPTION_WAIT_WHY,
+  "usage-threshold": SUBSCRIPTION_WAIT_WHY,
+  "runs-budget": "waiting for its daily run budget to reset",
+  "spend-budget": "waiting for its daily spend budget to reset",
+  "credential-off": "waiting for its credential",
 };
 
 /** A paused row's public `why`: the kind of credential hold, the usage-window wait, or the supervisor's own sentence. */

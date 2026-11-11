@@ -46,7 +46,8 @@ import { stampedCompactWindow, type TerminationReason } from "../runner/src/conf
 import { driverEntry, isProbeOnlyDriver } from "../runner/src/drivers";
 import { isScoredEpisode } from "../runner/src/episodes";
 import { classifyLapse, OFFLINE_PAUSE, PARTY_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
-import { driverOfEntry, placeRef, SlotBook, type CredentialGate, type CredentialHold, type PlacedCredential } from "./run-fleet-credentials";
+import { driverOfEntry, placeRef, SlotBook, type CredentialGate, type PlacedCredential, type ResumeHold } from "./run-fleet-credentials";
+import type { ResumeHoldCode } from "../runner/src/credential-health";
 import type { Credential } from "../runner/src/credential-slots";
 import {
   accountsOfRun,
@@ -978,8 +979,8 @@ export interface PausedListing {
    * projection that predates `hold` still withholds them.
    */
   subscriptionWait?: true;
-  /** What kind of credential hold this is, when the credential holds it (`FleetPausedView.hold`): the public phrase. */
-  hold?: CredentialHold["kind"];
+  /** What holds it, when its credential does (`FleetPausedView.hold`): the public phrase's code. */
+  hold?: ResumeHoldCode;
 }
 
 /** "41m of 90m" — what the accounts table and the paused listing say about a paused run. */
@@ -1317,7 +1318,7 @@ export function planResumes(opts: {
    * Absent holds nothing. A paused run comes back only on the credential it
    * recorded (`placeResume`).
    */
-  credentialHold?: (f: RunFact) => CredentialHold | undefined;
+  credentialHold?: (f: RunFact) => ResumeHold | undefined;
 }): { resume: ResumePlan[]; listed: PausedListing[]; end: EndedRun[] } {
   const { config, now } = opts;
   const ownCampaignFile = opts.campaignFileOf ?? ((): CampaignFile | null => null);
@@ -1344,7 +1345,7 @@ export function planResumes(opts: {
     const pause = f.pause!;
     // A wait on a credential's usage window: its figures are the operator's.
     const onCredential = f.credential !== null;
-    const list = (why: string, resumeAfter: number | null = null, subscriptionWait = false, hold?: CredentialHold["kind"]): void => {
+    const list = (why: string, resumeAfter: number | null = null, subscriptionWait = false, hold?: ResumeHoldCode): void => {
       listed.push({
         runId: f.runId,
         model: f.model,
@@ -1646,7 +1647,7 @@ export function planResumes(opts: {
     // projection of any build keys on), and `hold` says which kind it is.
     const gated = opts.credentialHold?.(f);
     if (gated !== undefined) {
-      list(gated.why, null, true, gated.kind);
+      list(gated.text, null, true, gated.code ?? undefined);
       continue;
     }
     // Every account or none: a fan-out run never comes back on part of its grant.
@@ -1730,10 +1731,10 @@ function planPartyResume(
     takenJobs: ReadonlySet<string>;
     held: (account: string) => string | undefined;
     running: ReadonlyMap<string, string>;
-    credentialHold?: (f: RunFact) => CredentialHold | undefined;
+    credentialHold?: (f: RunFact) => ResumeHold | undefined;
   },
 ): { resume: ResumePlan; skip?: false } | { skip: true } | { listed: PausedListing[] } {
-  const listAll = (why: string, resumeAfter: number | null = null, subscriptionWait = false, hold?: CredentialHold["kind"]): { listed: PausedListing[] } => ({
+  const listAll = (why: string, resumeAfter: number | null = null, subscriptionWait = false, hold?: ResumeHoldCode): { listed: PausedListing[] } => ({
     listed: members.map((f) => ({
       runId: f.runId,
       model: f.model,
@@ -1793,7 +1794,7 @@ function planPartyResume(
   }
   for (const f of ordered) {
     const gated = o.credentialHold?.(f);
-    if (gated !== undefined) return listAll(gated.why, null, true, gated.kind);
+    if (gated !== undefined) return listAll(gated.text, null, true, gated.code ?? undefined);
   }
   for (const [i, a] of accounts.entries()) {
     if (o.takenAccounts.has(a.toUpperCase())) {

@@ -320,8 +320,24 @@ interface KeptSampler {
   stat: string;
 }
 const samplerMemo = new Map<string, KeptSampler>();
-// A long run's samples are a few MB with their inventories: a handful of runs, not the corpus.
-const SAMPLER_MEMO_MAX = 16;
+/**
+ * The most characters a fan-out run drives: the stack's ceiling on
+ * `--max-characters` (`MAX_CHARACTERS_LIMIT`, `@wrathbench/mcp/fanout`, which
+ * a test holds this to; not imported, since that module brings the stack's
+ * tool surface with it).
+ */
+const FANOUT_CHARACTERS_MAX = 40;
+/**
+ * How many session records keep their folded samples, least recently read
+ * evicted first. Every poll of a fan-out run reads each of its characters in
+ * turn, and a cycle through more records than the memo holds evicts each one
+ * just before it is read again, refolding every trace from scratch every
+ * poll. So the memo holds the largest fan-out run whole, beside the sixteen
+ * single runs it held before. Bounded, because a long run's samples are a few
+ * MB with their inventories: a few hundred MB at the worst, never the corpus.
+ * Two fan-out runs at the ceiling read in the same poll would still cycle.
+ */
+export const SAMPLER_MEMO_MAX = FANOUT_CHARACTERS_MAX + 16;
 
 function streamStat(reader: SessionReader): string {
   const segs = reader.segments("trace");
@@ -414,13 +430,33 @@ export function readStateSamples(dir: string, runId: string): Record<string, unk
  * none. A column is the newest sample that carried it (a sample with no level
  * does not hide the level before it), so `level` and `xp` are read as a pair.
  */
-export function latestReading(dir: string, runId: string): { level: number | null; xp: number | null; money: number | null; questsCompleted: number | null; items: string | null; map: number | null; zone: number | null; area: number | null; ts: number | null } | null {
-  const rows = readStateSamples(dir, runId);
+export function latestReading(dir: string, runId: string): LatestReading | null {
+  return readingOfSamples(readStateSamples(dir, runId));
+}
+
+/** A run's or one fan-out character's newest reading of each column (`latestReading`). */
+export interface LatestReading {
+  level: number | null;
+  xp: number | null;
+  money: number | null;
+  questsCompleted: number | null;
+  items: string | null;
+  map: number | null;
+  zone: number | null;
+  area: number | null;
+  ts: number | null;
+}
+
+/**
+ * `latestReading` over samples in hand, oldest first: a fan-out character's
+ * (`characterSamplesOf`) as well as a run's. Null when there are none.
+ */
+export function readingOfSamples(rows: readonly Record<string, unknown>[] | readonly StateSample[]): LatestReading | null {
   if (rows.length === 0) return null;
   const out = { level: null as number | null, xp: null as number | null, money: null as number | null, questsCompleted: null as number | null, items: null as string | null, map: null as number | null, zone: null as number | null, area: null as number | null, ts: null as number | null };
   let pairSeen = false;
   for (let i = rows.length - 1; i >= 0; i--) {
-    const r = rows[i]!;
+    const r = rows[i]! as Record<string, unknown>;
     out.ts ??= num(r["ts"]);
     if (!pairSeen && typeof r["level"] === "number" && r["level"] > 0) {
       out.level = r["level"];

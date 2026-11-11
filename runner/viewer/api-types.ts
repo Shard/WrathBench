@@ -12,6 +12,8 @@
  * to declare, so nothing that imported them before has to move.
  */
 
+import type { CredentialFix, CredentialHealth, CredentialHold, CredentialRead, CredentialWindow, ResumeHoldCode } from "../src/credential-health";
+export type { CredentialFix, CredentialHealth, CredentialWindow, HealthState, ResumeHoldCode } from "../src/credential-health";
 import type { Harness } from "../src/drivers";
 import type { ItemSample, NearbyWindow, SessionPosition, SessionTrack, SessionTrackPoint } from "@wrathbench/inspector/wire";
 
@@ -1245,6 +1247,13 @@ export interface RunDetailResponse extends SnapshotEnvelope {
    * published.
    */
   fanout?: FanoutSessionView[];
+  /**
+   * The fan-out character whose level and xp `run` reads (`fanoutLead`:
+   * the highest level, then the higher xp, then the first by name), so the
+   * page can say whose they are. Present only on a fan-out run once one of
+   * its characters has a level.
+   */
+  fanoutLead?: string;
 }
 
 /** One character of a fan-out run (`RunDetailResponse.fanout`). */
@@ -1438,17 +1447,14 @@ export interface FleetPausedView {
    */
   subscriptionWait?: true;
   /**
-   * What holds the resume when its credential does: a usage window, the
-   * day's runs or spend budget, or the credential gone or disabled. The
-   * public build says which in a fixed phrase. Absent when the credential
-   * holds nothing (and on a row from a supervisor that predates it, which
-   * reads as a usage window).
+   * What holds the resume when its credential does (`ResumeHoldCode`): a
+   * budget's hold code, or the credential gone or disabled. The public build
+   * says which in a fixed phrase. Absent when the credential holds nothing
+   * (and on a row from a supervisor that predates it, which reads as a usage
+   * window).
    */
-  hold?: CredentialHoldKind;
+  hold?: ResumeHoldCode;
 }
-
-/** What a credential holds a paused run's resume on (`FleetPausedView.hold`). */
-export type CredentialHoldKind = "usage" | "runs" | "spend" | "credential";
 
 /**
  * One run's progress as the fleet table shows it: the listing row's own
@@ -1584,7 +1590,14 @@ export interface FleetResponse extends SnapshotEnvelope {
     budget: string;
     used: string | null;
     held: { scored?: string; freeplay?: string };
+    /** The holds, structured (`CredentialStatus.holds`); absent from a supervisor that predates them. */
+    holds?: { scored?: CredentialHold; freeplay?: CredentialHold };
     lastError: { reason: string; at: number } | null;
+    /** The provider's newest read of it, where a reader reads it; absent from a supervisor that predates it. */
+    lastRead?: CredentialRead;
+    health?: CredentialHealth;
+    windows?: CredentialWindow[] | null;
+    fix?: CredentialFix | null;
   }[];
   /** Every account the supervisor knows, with its class and what holds it. */
   accounts: FleetAccountView[];
@@ -2670,6 +2683,17 @@ export interface AdminCredentialView {
   used: string | null;
   held: { scored?: string; freeplay?: string };
   lastError: { reason: string; at: number } | null;
+  /**
+   * Its health (`credentialHealth`, runner/src/credential-health.ts): the
+   * state, why, since when and the provider's last answer. Null while no
+   * supervisor is up to say, unless the store or the chart already says it is
+   * switched off or its variable is not handed out.
+   */
+  health: CredentialHealth | null;
+  /** Its usage windows as meters, as the supervisor last read them; null with none. */
+  windows: CredentialWindow[] | null;
+  /** What makes it well again; null when it is, or when nobody is up to say. */
+  fix: CredentialFix | null;
 }
 
 export interface AdminProviderView {
@@ -2678,6 +2702,8 @@ export interface AdminProviderView {
   bill: "subscription" | "metered";
   /** The env var name a credential of it names: this, or this with `_<n>`. */
   envBase: string;
+  /** What its variable holds: a token, a key, or a Codex home's path. */
+  holds: "token" | "home" | "key";
   budgets: readonly string[];
 }
 

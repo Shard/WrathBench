@@ -16,7 +16,7 @@ import { tempDirs } from "./temp-dirs";
 const tmp = tempDirs();
 
 describe("the fixture", () => {
-  test("the viewer reads four live runs, one with a trace to now, and one ended run, and the sheet travels with the trace", async () => {
+  test("the viewer reads four live runs, one with a trace to now, a live fan-out run and one ended run, and the sheet travels with the trace", async () => {
     const root = tmp("shots-fixture-");
     const runsDir = join(root, "runs");
     const now = Date.now();
@@ -42,6 +42,8 @@ describe("the fixture", () => {
         [3, 1],
         [18, 36],
       ]);
+      // The live fan-out run is a pip per character, each under its session id at its own level.
+      expect(f.fanoutLive.characters.map((c) => byRun.get(`${f.fanoutLive.runId}~${c}`)?.level)).toEqual([5, 8, 6]);
       const index = (await (await api(new Request(`http://127.0.0.1/api/run/${LIVE_RUN}/trace`))).json()) as { segs: [number, number][]; tail: unknown };
       // Twenty minutes written close three five-minute windows at least, and leave an open tail.
       expect(index.segs.reduce((n, r) => n + r[1], 0)).toBeGreaterThanOrEqual(3);
