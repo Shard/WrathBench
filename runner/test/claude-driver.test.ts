@@ -78,10 +78,13 @@ function setupEpisode(
     ...loadRunConfig({
       driver: "claude-code",
       model: "opus",
-      // A runs directory of its own: the driver seeds its lane reading from one.
+      // A runs directory of its own: the driver seeds its credential's reading from one.
       runsDir: tempDir("wrathbench-claude-runs-"),
       stepIntervalMs: 0,
       stateIntervalMs: 1,
+      // The credential the fleet placed it on, with its usage budget.
+      credential: "claude-1",
+      usageMaxPct: { scored: 80, freeplay: 80 },
       ...extraConfig,
     }),
     runId: "run-test",
@@ -1072,14 +1075,14 @@ describe("childEnv", () => {
     expect(compactionRecord(1, { type: "system", subtype: "compact_boundary" })).toMatchObject({ trigger: null, preTokens: null });
   });
 
-  test("a second subscription lane arrives under the one name the CLI knows", () => {
+  test("a second subscription's token arrives under the one name the CLI knows", () => {
     const parent = {
       PATH: "/usr/bin",
       CLAUDE_CODE_OAUTH_TOKEN: "first-subscription",
       CLAUDE_CODE_OAUTH_TOKEN_2: "second-subscription",
       OPENROUTER_KEY: "not-a-claude-credential",
     };
-    const env = childEnv(parent, { configDir: "/runs/x/claude-config", tokenEnv: "CLAUDE_CODE_OAUTH_TOKEN_2" });
+    const env = childEnv(parent, { configDir: "/runs/x/claude-config", credentialEnv: "CLAUDE_CODE_OAUTH_TOKEN_2" });
     expect(env["CLAUDE_CODE_OAUTH_TOKEN"]).toBe("second-subscription");
     expect(env["CLAUDE_CODE_OAUTH_TOKEN_2"]).toBeUndefined();
     // Another provider's key is no more the CLI's on this lane than on the other.
@@ -1091,7 +1094,7 @@ describe("childEnv", () => {
   test("an empty chosen lane leaves the CLI with no token to bill", () => {
     const env = childEnv(
       { CLAUDE_CODE_OAUTH_TOKEN: "first-subscription" },
-      { configDir: "/c", tokenEnv: "CLAUDE_CODE_OAUTH_TOKEN_2" },
+      { configDir: "/c", credentialEnv: "CLAUDE_CODE_OAUTH_TOKEN_2" },
     );
     expect(env["CLAUDE_CODE_OAUTH_TOKEN"]).toBeUndefined();
   });
@@ -1327,7 +1330,7 @@ describe("driver selection and stamping", () => {
     expect(stderr).toContain("claude setup-token");
   }, 20_000);
 
-  test("the refusal names the chosen subscription lane, not the default one", async () => {
+  test("the refusal names the chosen credential's variable, not the default one", async () => {
     const dir = tempDir("wrathbench-refuse-lane-");
     const env = { ...process.env };
     // The DEFAULT lane is present and the chosen one is not: a run that read
@@ -1342,7 +1345,7 @@ describe("driver selection and stamping", () => {
         "claude-code",
         "--model",
         "opus",
-        "--token-env",
+        "--credential-env",
         "CLAUDE_CODE_OAUTH_TOKEN_2",
         "--runs-dir",
         dir,
@@ -1443,7 +1446,7 @@ describe("claude driver: the subscription's usage windows", () => {
     const records = readTrajectory(runDir).filter((r) => r.t === "harness" && r["kind"] === "rate_limits");
     expect(records.map((r) => (r["windows"] as { usedPercent: number }[])[0]!.usedPercent)).toEqual([10, 15]);
     const meta = readMeta(runDir)!;
-    expect(meta.subscriptionUsage?.lane).toBe("claude-code:CLAUDE_CODE_OAUTH_TOKEN");
+    expect(meta.subscriptionUsage?.credential).toBe("claude-1");
     const all = readFileSync(join(runDir, "trajectory.jsonl"), "utf8") + JSON.stringify(meta);
     for (const word of ["overage", "canUserPurchaseCredits", "isUsingOverage"]) expect(all).not.toContain(word);
     trajectory.close();

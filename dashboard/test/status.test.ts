@@ -31,8 +31,8 @@ function fleet(over: Partial<FleetResponse> = {}): FleetResponse {
       { account: "RUNNER", class: "pool", job: "a" },
       { account: "RUNNER2", class: "pool", job: "b" },
       { account: "RUNNER3", class: "pool", job: null },
-      { account: "PAID", class: "paid", job: null },
-      { account: "BOX", class: "local", job: null },
+      { account: "PAID", class: "pool", job: null },
+      { account: "BOX", class: "pool", job: null },
       { account: "PIN", class: "pinned", job: "x" },
     ],
     paused: [],
@@ -107,7 +107,7 @@ describe("statusRows", () => {
     expect(value(rows, "queue drains in")).toBe("4h–9h");
     expect(value(rows, "uptime")).toBe("1h00m");
     expect(value(rows, "harness")).toBe("harness-0.4-73");
-    expect(rows.find((r) => r.label === "accounts")!.lines).toEqual(["pool 2/3", "paid 0/1", "local 0/1"]);
+    expect(rows.find((r) => r.label === "accounts")!.lines).toEqual(["pool 2/5"]);
   });
 
   test("a stale heartbeat says so in the row; missing facts say unknown rather than vanish", () => {
@@ -168,9 +168,9 @@ describe("statusRows", () => {
     expect(statusRows({ fleet: undefined, error: undefined, stalled: true }, undefined)[0]!.value).toContain("stalled");
   });
 
-  test("accounts busy counts alive jobs per schedulable class; pinned is not a class here", () => {
+  test("accounts busy counts alive jobs in the pool; a pinned account is not the pool's", () => {
     expect(accountsBusy({ accounts: [], jobs: [] })).toEqual(["none"]);
-    expect(accountsBusy(fleet())).toEqual(["pool 2/3", "paid 0/1", "local 0/1"]);
+    expect(accountsBusy(fleet())).toEqual(["pool 2/5"]);
   });
 });
 

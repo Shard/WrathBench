@@ -126,7 +126,7 @@ describe("the generic write paths", () => {
     // stopped listing it (WRATHBENCH_LOCAL_MODEL_HOSTS, the chart's
     // localModelHosts). Each reader states the deployment it means.
     const LAN = { WRATHBENCH_LOCAL_MODEL_HOSTS: "192.168.100.20:1234" };
-    const lan = { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "LMSTUDIO_KEY" };
+    const lan = { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1" };
     const path = join(tempDir("wb-campaign-provider-"), "config.sqlite");
     const then = new ConfigStore(path, { env: LAN });
     then.seed({ ...CONFIG, roster: { ...CONFIG.roster, lan } }, { actor: "fixture" });
@@ -165,14 +165,14 @@ describe("the generic write paths", () => {
 
   test("every entry the supervisor refuses is refused on the page too, and the page never says what the refusal names", () => {
     // One assigned entry per rule (`rosterEntryRefusal`): a key the harness
-    // does not read, a subscription the policy does not list, and a provider
-    // key towards a host this deployment does not list. glm is fine.
+    // does not read, a credential the config does not hold, and a base on a
+    // host this deployment does not list. glm is fine.
     const LAN = { WRATHBENCH_LOCAL_MODEL_HOSTS: "192.168.100.20:1234" };
     const roster = {
       ...CONFIG.roster,
       extra: { tier: "t1", model: "z-ai/glm-5.2:free", pagerAlias: "ops-desk-7" },
-      lane9: { tier: "t1", model: "claude-sonnet-5-5", driver: "claude-code", subscription: "CLAUDE_CODE_OAUTH_TOKEN_9" },
-      lan: { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "LMSTUDIO_KEY" },
+      lane9: { tier: "t1", model: "claude-sonnet-5-5", driver: "claude-code", credential: "claude-9" },
+      lan: { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1" },
     };
     const path = join(tempDir("wb-campaign-refused-"), "config.sqlite");
     const s = new ConfigStore(path, { env: LAN });
@@ -188,7 +188,7 @@ describe("the generic write paths", () => {
     const why = Object.fromEntries(config.refusals.map((r) => [r.pin, r.why]));
     expect(Object.keys(why).sort()).toEqual(["roster extra", "roster lan", "roster lane9"]);
     expect(why["roster extra"]).toContain("unknown key `pagerAlias`");
-    expect(why["roster lane9"]).toContain("subscription CLAUDE_CODE_OAUTH_TOKEN_9 is not in policy.subscriptions");
+    expect(why["roster lane9"]).toContain("pinned credential claude-9 is not configured");
     expect(why["roster lan"]).toContain("names no self-hosted model host");
 
     // … and the page parks exactly the squares the scheduler parks.
@@ -212,7 +212,7 @@ describe("the generic write paths", () => {
     // the entry and nothing its refusal names: no key, value, lane or host.
     const pub = JSON.stringify(projectCampaigns({ now: 0, campaigns: view.campaigns, refused: view.refused }));
     const shown = [...squares.map((q) => q.refused ?? ""), ...view.refused.map((r) => r.reason), pub];
-    for (const secret of ["pagerAlias", "ops-desk-7", "CLAUDE_CODE_OAUTH_TOKEN_9", "192.168.100.20", "LMSTUDIO_KEY"]) {
+    for (const secret of ["pagerAlias", "ops-desk-7", "claude-9", "192.168.100.20", "LMSTUDIO_KEY"]) {
       for (const text of shown) expect(text).not.toContain(secret);
     }
   });

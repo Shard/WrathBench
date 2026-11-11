@@ -33,6 +33,7 @@ import { isV1RunDir, latestReading, readRunRow, readStateSamples } from "../src/
 import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./archive-dir";
 import { harnessOfRun, parseComparability } from "../src/comparability";
+import { runCredentialOf } from "../src/credentials";
 import { platformOf as sharedPlatformOf } from "../src/platform";
 
 /**
@@ -322,6 +323,8 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     // Launch config only, like `extra`: no column carries it.
     const declared = meta.config?.billing;
     if (declared === "free" || declared === "paid") row.declaredBilling = declared;
+    // What paid: a v1 run's credential, or a 0.5 run's lane. Launch config only.
+    Object.assign(row, runCredentialOf(meta.config));
     /*
      * What the provider actually served, promoted onto the run mid-episode
      * (`Trajectory.recordResolved`). Read here and from the columns below;

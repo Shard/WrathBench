@@ -209,7 +209,7 @@ function launch(runDir: string, over: Partial<EpisodeLaunch> & { image?: string 
     spec: {
       runId: "fleet-race-probe-1-orc-warrior-sonnet-20260101",
       driver: "claude-code",
-      tokenEnv: "CLAUDE_CODE_OAUTH_TOKEN_2",
+      placedOn: { id: "claude-2", env: "CLAUDE_CODE_OAUTH_TOKEN_2" },
       apiKeyEnv: "OPENROUTER_KEY",
       launch: { pod: true, image: image ?? null, command: command ?? null },
     },
@@ -273,33 +273,33 @@ describe("runPodEnv", () => {
   const secrets = (env: PodEnvVar[]): string[] => env.filter((e) => e.valueFrom?.secretKeyRef !== undefined).map((e) => e.name);
 
   test("claude-code gets the module secret and its own lane's token, nothing else that is secret", () => {
-    const env = runPodEnv(tpl, { driver: "claude-code", tokenEnv: "CLAUDE_CODE_OAUTH_TOKEN_2", apiKeyEnv: "OPENROUTER_KEY", stamps: {} });
+    const env = runPodEnv(tpl, { driver: "claude-code", credentialEnv: "CLAUDE_CODE_OAUTH_TOKEN_2", apiKeyEnv: "OPENROUTER_KEY", stamps: {} });
     expect(secrets(env).sort()).toEqual(["CLAUDE_CODE_OAUTH_TOKEN_2", "WRATHBENCH_MODULE_SECRET"]);
     expect(names(env)).not.toContain("CODEX_HOME");
     // The default lane when the spec names none.
-    expect(secrets(runPodEnv(tpl, { driver: "claude-code", tokenEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} })).sort()).toEqual(["CLAUDE_CODE_OAUTH_TOKEN", "WRATHBENCH_MODULE_SECRET"]);
+    expect(secrets(runPodEnv(tpl, { driver: "claude-code", credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} })).sort()).toEqual(["CLAUDE_CODE_OAUTH_TOKEN", "WRATHBENCH_MODULE_SECRET"]);
   });
 
   test("openai gets its apiKeyEnv only; codex gets no key at all and keeps its home", () => {
-    expect(secrets(runPodEnv(tpl, { driver: "openai", tokenEnv: undefined, apiKeyEnv: "CEREBRAS_KEY", stamps: {} })).sort()).toEqual(["CEREBRAS_KEY", "WRATHBENCH_MODULE_SECRET"]);
-    const codex = runPodEnv(tpl, { driver: "codex", tokenEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} });
+    expect(secrets(runPodEnv(tpl, { driver: "openai", credentialEnv: undefined, apiKeyEnv: "CEREBRAS_KEY", stamps: {} })).sort()).toEqual(["CEREBRAS_KEY", "WRATHBENCH_MODULE_SECRET"]);
+    const codex = runPodEnv(tpl, { driver: "codex", credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} });
     expect(secrets(codex)).toEqual(["WRATHBENCH_MODULE_SECRET"]);
     expect(names(codex)).toContain("CODEX_HOME");
   });
 
   test("pi gets its apiKeyEnv only: no lane token, no other provider's key, no Codex home", () => {
     const withDeepSeek = [...tpl, secretRef("DEEPSEEK_KEY")];
-    const pi = runPodEnv(withDeepSeek, { driver: "pi", tokenEnv: undefined, apiKeyEnv: "DEEPSEEK_KEY", stamps: {} });
+    const pi = runPodEnv(withDeepSeek, { driver: "pi", credentialEnv: undefined, apiKeyEnv: "DEEPSEEK_KEY", stamps: {} });
     expect(secrets(pi).sort()).toEqual(["DEEPSEEK_KEY", "WRATHBENCH_MODULE_SECRET"]);
     expect(names(pi)).not.toContain("CODEX_HOME");
     expect(names(pi).some((n) => n.startsWith("CLAUDE_CODE_") || n.startsWith("ANTHROPIC_"))).toBe(false);
     // A run pod for pi mounts no home either.
-    const pod = buildRunPod(template(), { runId: "fleet-pi-1", image: RELEASE, requestedRef: RELEASE, command: null, args: [], env: { driver: "pi", tokenEnv: undefined, apiKeyEnv: "DEEPSEEK_KEY", stamps: {} }, owner: { name: "f", uid: "u" }, rosterPid: 1, graceMs: EPISODE_TERM_GRACE_MS });
+    const pod = buildRunPod(template(), { runId: "fleet-pi-1", image: RELEASE, requestedRef: RELEASE, command: null, args: [], env: { driver: "pi", credentialEnv: undefined, apiKeyEnv: "DEEPSEEK_KEY", stamps: {} }, owner: { name: "f", uid: "u" }, rosterPid: 1, graceMs: EPISODE_TERM_GRACE_MS });
     expect(pod.spec.volumes!.map((v) => v.name)).toEqual(["data", "tmp"]);
   });
 
   test("the plain values survive and the stamps win", () => {
-    const env = runPodEnv(tpl, { driver: "openai", tokenEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: { WRATHBENCH_HARNESS_VERSION: "harness-0.5-940-gabc1234-pr12", WRATHBENCH_RUN_IMAGE: "x:y" } });
+    const env = runPodEnv(tpl, { driver: "openai", credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: { WRATHBENCH_HARNESS_VERSION: "harness-0.5-940-gabc1234-pr12", WRATHBENCH_RUN_IMAGE: "x:y" } });
     const by = Object.fromEntries(env.map((e) => [e.name, e.value]));
     expect(by["WRATHBENCH_IN_CONTAINER"]).toBe("1");
     expect(by["WRATHBENCH_MODULE_URL"]).toBe("http://worldserver:8086");
@@ -309,7 +309,7 @@ describe("runPodEnv", () => {
   });
 
   test("no ANTHROPIC_* variable can reach a run pod, from the template or a stamp", () => {
-    const opts = { driver: "claude-code" as const, tokenEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} };
+    const opts = { driver: "claude-code" as const, credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} };
     expect(() => runPodEnv([...tpl, { name: "ANTHROPIC_API_KEY", value: "sk-ant" }], opts)).toThrow(/ANTHROPIC_API_KEY may never reach a run pod/);
     expect(() => runPodEnv([...tpl, secretRef("ANTHROPIC_AUTH_TOKEN")], opts)).toThrow(/ANTHROPIC_AUTH_TOKEN/);
     expect(() => runPodEnv(tpl, { ...opts, stamps: { ANTHROPIC_BASE_URL: "https://example.invalid" } })).toThrow(/ANTHROPIC_BASE_URL/);
@@ -317,7 +317,7 @@ describe("runPodEnv", () => {
 
   test("no SOAP or STAGER variable can reach a run pod, from the template or a stamp, whatever the driver", () => {
     for (const driver of ["claude-code", "openai", "codex", "pi"] as const) {
-      const opts = { driver, tokenEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} };
+      const opts = { driver, credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} };
       expect(() => runPodEnv([...tpl, secretRef("WRATHBENCH_STAGER_PASSWORD")], opts)).toThrow(/WRATHBENCH_STAGER_PASSWORD may never reach a run pod/);
       expect(() => runPodEnv([...tpl, { name: "WRATHBENCH_SOAP_URL", value: "http://worldserver:7878/" }], opts)).toThrow(/WRATHBENCH_SOAP_URL/);
       expect(() => runPodEnv(tpl, { ...opts, stamps: { AC_SOAP_ENABLED: "1" } })).toThrow(/AC_SOAP_ENABLED/);
@@ -329,7 +329,7 @@ describe("runPodEnv", () => {
 // --------------------------------------------------------------- pod builder
 
 describe("buildRunPod", () => {
-  const base = { runId: "fleet-race-probe-1-orc-warrior-sonnet-20260101", image: RELEASE, requestedRef: RELEASE, command: null, args: ["--resume", "x"], env: { driver: "claude-code" as const, tokenEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} }, owner: { name: "wrathbench-fleet-abc", uid: "fleet-uid" }, rosterPid: 77, graceMs: EPISODE_TERM_GRACE_MS };
+  const base = { runId: "fleet-race-probe-1-orc-warrior-sonnet-20260101", image: RELEASE, requestedRef: RELEASE, command: null, args: ["--resume", "x"], env: { driver: "claude-code" as const, credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} }, owner: { name: "wrathbench-fleet-abc", uid: "fleet-uid" }, rosterPid: 77, graceMs: EPISODE_TERM_GRACE_MS };
 
   test("labels, annotations, the owner reference and the grace", () => {
     const pod = buildRunPod(template(), base);
@@ -814,7 +814,7 @@ describe("the chart's run-pod template", () => {
     expect(tpl.spec.containers[0]!.volumeMounts!.some((m) => m.subPath === "config")).toBe(false);
     expect(tpl.spec.containers[0]!.image).toBe(RELEASE);
 
-    const pod = buildRunPod(tpl, { runId: "r", image: RELEASE, requestedRef: RELEASE, command: null, args: [], env: { driver: "claude-code", tokenEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} }, owner: undefined, rosterPid: 1, graceMs: EPISODE_TERM_GRACE_MS });
+    const pod = buildRunPod(tpl, { runId: "r", image: RELEASE, requestedRef: RELEASE, command: null, args: [], env: { driver: "claude-code", credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} }, owner: undefined, rosterPid: 1, graceMs: EPISODE_TERM_GRACE_MS });
     const env = envOf(pod);
     expect(Object.keys(env).filter((n) => env[n]!.valueFrom !== undefined).sort()).toEqual(["CLAUDE_CODE_OAUTH_TOKEN", "WRATHBENCH_MODULE_SECRET"]);
     expect(pod.spec.containers[0]!.command).toEqual(["/usr/bin/tini", "--", "bun", "runner/src/run.ts"]);
@@ -842,7 +842,7 @@ describe("the chart's run-pod template", () => {
     expect(tpl.spec.containers[0]!.env!.some((e) => /SOAP|STAGER/.test(e.name))).toBe(false);
     expect(JSON.stringify(tpl)).not.toMatch(/STAGER|7878/);
     for (const driver of ["claude-code", "openai", "codex", "pi"] as const) {
-      const pod = buildRunPod(tpl, { runId: "r", image: RELEASE, requestedRef: RELEASE, command: null, args: [], env: { driver, tokenEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} }, owner: undefined, rosterPid: 1, graceMs: EPISODE_TERM_GRACE_MS });
+      const pod = buildRunPod(tpl, { runId: "r", image: RELEASE, requestedRef: RELEASE, command: null, args: [], env: { driver, credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} }, owner: undefined, rosterPid: 1, graceMs: EPISODE_TERM_GRACE_MS });
       expect([driver, Object.keys(envOf(pod)).filter((n) => /SOAP|STAGER/.test(n))]).toEqual([driver, []]);
     }
   }, HELM_TEST_MS);
@@ -871,7 +871,7 @@ describe("the chart's run-pod template", () => {
     // The run pod gets them as a plain value, and the launcher keeps it for an openai run.
     const cm = docs.find((x) => x?.kind === "ConfigMap" && x.metadata?.name === "wrathbench-run-pod-template");
     const tpl = JSON.parse(cm!.data!["pod.json"]!) as Pod;
-    const pod = buildRunPod(tpl, { runId: "r", image: RELEASE, requestedRef: RELEASE, command: null, args: [], env: { driver: "openai", tokenEnv: undefined, apiKeyEnv: "LMSTUDIO_KEY", stamps: {} }, owner: undefined, rosterPid: 1, graceMs: EPISODE_TERM_GRACE_MS });
+    const pod = buildRunPod(tpl, { runId: "r", image: RELEASE, requestedRef: RELEASE, command: null, args: [], env: { driver: "openai", credentialEnv: undefined, apiKeyEnv: "LMSTUDIO_KEY", stamps: {} }, owner: undefined, rosterPid: 1, graceMs: EPISODE_TERM_GRACE_MS });
     const env = envOf(pod);
     expect(env["WRATHBENCH_LOCAL_MODEL_HOSTS"]).toEqual({ name: "WRATHBENCH_LOCAL_MODEL_HOSTS", value: want });
     expect(Object.keys(env).filter((n) => env[n]!.valueFrom !== undefined).sort()).toEqual(["LMSTUDIO_KEY", "WRATHBENCH_MODULE_SECRET"]);

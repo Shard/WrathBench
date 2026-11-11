@@ -39,6 +39,7 @@ import { platformOf } from "../src/platform";
 import type { RunFact } from "../src/models";
 import type { RunTotals } from "./tail";
 import { LIVE_WINDOW_MS, campaignFieldsOf, itemSamplesOf } from "./runs";
+import { runCredentialOf } from "../src/credentials";
 
 // ------------------------------------------------------------- the row shapes
 
@@ -538,6 +539,7 @@ export function runRowOf(r: RunTableRow, latest: LatestState | LatestReading | u
   // Launch config only, like `extra`, and absent unless stated — as `readRun` leaves it.
   const declared = config["billing"];
   if (declared === "free" || declared === "paid") row.declaredBilling = declared;
+  Object.assign(row, runCredentialOf(config));
   return row;
 }
 

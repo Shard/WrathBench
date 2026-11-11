@@ -11,7 +11,8 @@
  * the config store; a hand-written roster is the ad-hoc path.
  *
  * Every entry is config: `model`, `driver` (openai | claude-code),
- * `account`, `effort`, `apiBase`/`apiKeyEnv`/`billing` (openai only),
+ * `account`, `effort`, `apiBase`/`apiKeyEnv`/`billing` (openai only; the fleet
+ * names the key through `placedOn`, the credential it placed the run on),
  * `race`/`class`, `episodeMs`. No name: the model names its own character and
  * the run records what it chose. Everything but `model` has a default, so the old shape — a bare
  * list of `{ "model": ... }` — still means exactly what it meant before.
@@ -60,8 +61,8 @@ import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
 import { isOpenRouterBase, parseRouting, resolveRouting, routingLabel, type RoutingSpec } from "../runner/src/routing";
 import { DEFAULT_API_BASE, DEFAULT_API_KEY_ENV } from "../runner/src/providers";
 import { classifyLapse, PARTY_PAUSE, resumesOnPause, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
-import { readLaneUsage, laneOfSpec, subscriptionGate } from "./run-fleet-gate";
-import { subscriptionThresholds } from "../runner/src/subscription-usage";
+import { readCredentialUsage, type PlacedCredential } from "./run-fleet-credentials";
+import { EXHAUSTED_PCT, gateClassOf, newestByCredential, thresholdOf, thresholdsOf, usageHold } from "../runner/src/subscription-usage";
 import { Trajectory } from "../runner/src/trajectory";
 import { liveOwnerOf, MODEL_RESPONSE_RECORD, RecordCountScanner, verdictOfTrajectory, type ScanReads } from "../runner/src/models";
 import { CAMPAIGN_FILE, holdsOnlyLaunchFiles, parseCampaignFile, writeCampaignFile, type CampaignFile } from "../runner/src/campaign-file";
@@ -122,15 +123,14 @@ export interface RosterSpec {
    */
   routing?: RoutingSpec;
   /**
-   * `claude-code` and `codex` only: the subscription LANE this entry runs on,
-   * named by the env var holding its credential — the OAuth token for
-   * claude-code, the CODEX_HOME directory for codex — never the credential.
-   * Absent means the driver's default lane (`CLAUDE_CODE_OAUTH_TOKEN`,
-   * `CODEX_HOME`), which is every roster written before there was a second
-   * subscription. The fleet assigns it; a hand-written roster may set it to
-   * pin an entry to one account's usage window.
+   * The credential the fleet placed this entry's run on (`placeRef`,
+   * infra/run-fleet-credentials.ts): its id, the NAME of the env var holding
+   * its secret — the OAuth token for claude-code, the CODEX_HOME directory
+   * for codex, the key for an endpoint, whose `apiKeyEnv` it replaces — and
+   * its usage thresholds. Never the secret. Absent on a hand-written roster:
+   * the run reads its driver's default variable and records no credential.
    */
-  tokenEnv?: string;
+  placedOn?: PlacedCredential;
   runId?: string;
   race?: number;
   class?: number;
@@ -247,8 +247,8 @@ export interface Resolved {
   routing: RoutingSpec | undefined;
   /** The entry's own billing (openai only), recorded on the run; undefined is derived. */
   billing: "free" | "paid" | undefined;
-  /** The subscription lane, by env var NAME; undefined is the default lane. */
-  tokenEnv: string | undefined;
+  /** The credential the run takes (`RosterSpec.placedOn`); undefined on a hand-written roster. */
+  placedOn: PlacedCredential | undefined;
   runId: string;
   race: number;
   class: number;
@@ -570,10 +570,10 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
         throw new Error(`roster entry ${s.model}: ${(err as Error).message}`);
       }
     }
-    if (s.tokenEnv !== undefined && !isTokenEnvName(s.tokenEnv)) {
-      // A NAME, never a token: the value would end up in argv, and argv is
+    if (s.placedOn !== undefined && !isTokenEnvName(s.placedOn.env)) {
+      // A NAME, never a secret: the value would end up in argv, and argv is
       // visible in `ps` to anything sharing the container.
-      throw new Error(`roster entry ${s.model}: tokenEnv must be an environment variable name, not a token`);
+      throw new Error(`roster entry ${s.model}: placedOn.env must be an environment variable name, not a secret`);
     }
     const apiBase = s.apiBase ?? DEFAULT_API_BASE;
     if (s.routing !== undefined) {
@@ -593,15 +593,15 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       effort: s.effort,
       compactWindow,
       apiBase,
-      apiKeyEnv: s.apiKeyEnv ?? DEFAULT_API_KEY_ENV,
+      // An endpoint's key is its credential's when the fleet placed it on one.
+      apiKeyEnv: (entry.endpoint ? s.placedOn?.env : undefined) ?? s.apiKeyEnv ?? DEFAULT_API_KEY_ENV,
       // Normalised here too: a hand-written roster passed straight to
       // `run-roster.ts` never went through `parseFleet`, and the shorthands
       // must mean the same thing on both paths.
       routing: s.routing === undefined ? undefined : parseRouting(s.routing, `roster entry ${s.model}`),
       // A subscription driver's bill is the subscription, so only openai records one.
       billing: entry.endpoint ? s.billing : undefined,
-      // Only the subscription drivers (claude-code, codex) have a lane to bill.
-      tokenEnv: entry.lane !== undefined ? s.tokenEnv : undefined,
+      placedOn: s.placedOn,
       // Effort is part of the run's identity, so it is part of the derived id:
       // opus at low and opus at high are two rows in the matrix, and a shared
       // run id would make them one run appended to twice.
@@ -751,9 +751,14 @@ export function episodeFlags(spec: Resolved, resume: boolean): string[] {
     // Only when the entry stated one, so every other argv is unchanged.
     if (spec.billing !== undefined) argv.push("--billing", spec.billing);
   }
-  // The subscription lane, by NAME. Emitted only when it is not the default, so
-  // every argv a pre-lane roster produced is unchanged.
-  if (spec.tokenEnv !== undefined) argv.push("--token-env", spec.tokenEnv);
+  // The credential the fleet placed the run on: its id, which the run
+  // records; for a CLI driver the variable its CLI reads (an endpoint's is
+  // `--api-key-env` above); its usage thresholds when it has a usage budget.
+  if (spec.placedOn !== undefined) {
+    argv.push("--credential", spec.placedOn.id);
+    if (entryOf(spec.driver).credential !== undefined) argv.push("--credential-env", spec.placedOn.env);
+    if (spec.placedOn.usageMaxPct !== undefined) argv.push("--usage-max-pct", `${spec.placedOn.usageMaxPct.scored},${spec.placedOn.usageMaxPct.freeplay}`);
+  }
   if (spec.account !== undefined) argv.push("--account", spec.account);
   if (spec.effort !== undefined) argv.push("--effort", spec.effort);
   // Only when the entry stated one, `auto` included where its driver defaults
@@ -1418,23 +1423,25 @@ async function awaitAccount(
   }
 }
 
-/** How often a launch held by the subscription gate looks again. */
+/** How often a launch held by a credential's usage budget looks again. */
 const SUB_GATE_POLL_MS = 60_000;
 
 /**
- * The subscription usage gate before a launch (operator, 2026-10-16;
- * `infra/run-fleet-gate.ts`). A roster runs `repeat: n` back to back, faster
- * than the supervisor's tick, so the next scored episode on a lane at or over
- * its threshold — or any launch on a lane whose quota is spent — waits here,
- * re-reading the lane every minute. The supervisor drains the job on its next
- * tick, which ends the wait (`drainSeen`); a hand-run roster waits for the
- * reset. False when stopping or drained: launch nothing.
+ * A credential's usage budget before a launch (operator, 2026-10-16;
+ * `infra/run-fleet-credentials.ts`). A roster runs `repeat: n` back to back,
+ * faster than the supervisor's tick, so the next scored episode on a
+ * credential at or over its threshold — or any launch on one whose quota is
+ * spent — waits here, re-reading the credential every minute. The supervisor
+ * drains the job on its next tick, which ends the wait (`drainSeen`); a
+ * hand-run roster has no credential and is not held. False when stopping or
+ * drained: launch nothing. A spend or runs budget is the supervisor's alone,
+ * which drains the job on the tick it is used.
  *
  * `deps` is for tests: the runs directory, the environment, the clock, the
  * wait, the stop check and the two writers, each defaulting to this process's.
  */
-export async function awaitSubscriptionGate(
-  spec: Pick<Resolved, "model" | "runId" | "episode" | "driver" | "tokenEnv" | "apiBase" | "apiKeyEnv" | "billing">,
+export async function awaitUsageBudget(
+  spec: Pick<Resolved, "model" | "runId" | "episode" | "placedOn">,
   deadline: number | undefined,
   deps: {
     runsDir?: string;
@@ -1446,8 +1453,8 @@ export async function awaitSubscriptionGate(
     record?: (entry: Parameters<typeof record>[0]) => void;
   } = {},
 ): Promise<boolean> {
-  const lane = laneOfSpec(spec);
-  if (lane === null) return true;
+  const placed = spec.placedOn;
+  if (placed === undefined) return true;
   const now = deps.now ?? Date.now;
   const tell = deps.say ?? say;
   const log = deps.record ?? record;
@@ -1468,13 +1475,17 @@ export async function awaitSubscriptionGate(
     const t = now();
     if (said !== undefined && deadline !== undefined && t >= deadline) {
       tell(`wall-clock budget reached — not launching ${spec.model}`);
-      log({ runId: spec.runId, model: spec.model, outcome: "budget-stop", detail: "not launched (subscription gate)" });
+      log({ runId: spec.runId, model: spec.model, outcome: "budget-stop", detail: "not launched (credential usage budget)" });
       return false;
     }
-    const gate = subscriptionGate(readLaneUsage(deps.runsDir ?? join(REPO_ROOT, RUNS_DIR)), subscriptionThresholds(deps.env ?? process.env), t);
-    const hold = gate.hold(lane, spec.episode, spec.model);
+    const usage = newestByCredential(readCredentialUsage(deps.runsDir ?? join(REPO_ROOT, RUNS_DIR))).get(placed.id);
+    const threshold = thresholdOf(gateClassOf(spec.episode), thresholdsOf(placed.usageMaxPct));
+    const hold = usageHold(usage, threshold, t, spec.model);
     if (hold === null) return true;
-    const why = gate.holdOf(lane, spec.episode, spec.model)!;
+    const why =
+      hold.threshold >= EXHAUSTED_PCT || gateClassOf(spec.episode) === "spent-only" || hold.windows.some((w) => w.usedPercent >= EXHAUSTED_PCT)
+        ? `credential ${placed.id}: a usage window is spent — held until it resets`
+        : `credential ${placed.id}: at or over its ${gateClassOf(spec.episode)} usage threshold — held until its usage window resets`;
     if (why !== said) {
       said = why;
       tell(`hold ${spec.model} (${spec.runId}): ${why} — not launching until it reopens`);
@@ -1901,16 +1912,16 @@ async function attemptSpec(
   // run-episode.sh's driver preflight does not run on the in-container path, and
   // its one load-bearing check is this: without the token every claude episode
   // burns a session setup to fail at the first turn.
-  const lane = entryOf(spec.driver).lane;
-  if (CONTAINER && lane !== undefined && !opts.dryRun) {
-    // The CHOSEN lane's variable, and the message names it: with two
-    // subscriptions the useful sentence is which one is missing. A Claude lane
-    // holds a token, a Codex lane a CODEX_HOME directory; without it the CLI
-    // has no login to bill.
-    const laneEnv = spec.tokenEnv ?? lane.defaultEnv;
-    const value = process.env[laneEnv];
+  const cli = entryOf(spec.driver).credential;
+  if (CONTAINER && cli !== undefined && !opts.dryRun) {
+    // The CHOSEN credential's variable, and the message names it: with two
+    // subscriptions the useful sentence is which one is missing. A Claude
+    // credential holds a token, a Codex one a CODEX_HOME directory; without it
+    // the CLI has no login to bill.
+    const credentialEnv = spec.placedOn?.env ?? cli.defaultEnv;
+    const value = process.env[credentialEnv];
     if (value === undefined || value.trim().length === 0) {
-      const detail = lane.containerRefusal(laneEnv);
+      const detail = cli.containerRefusal(credentialEnv);
       say(`launch-failed ${spec.runId}: ${detail}`);
       record({ runId: spec.runId, model: spec.model, outcome: "launch-failed", detail });
       return "done";
@@ -2049,10 +2060,10 @@ async function attemptSpec(
       return "done";
     }
     if (verdict.reason === SUBSCRIPTION_PAUSE) {
-      // The subscription gate stopped a freeplay run (operator, 2026-10-16):
+      // A credential's usage budget stopped a freeplay run (operator, 2026-10-16):
       // nothing to retry here, no defer, no strike — the supervisor resumes
       // it once its lane's usage window resets.
-      say(`paused ${spec.runId}: ${verdict.reason} — the supervisor resumes it once the lane's usage window resets, advancing`);
+      say(`paused ${spec.runId}: ${verdict.reason} — the supervisor resumes it once its credential's usage window resets, advancing`);
       record({
         runId: spec.runId,
         model: spec.model,
@@ -2083,7 +2094,7 @@ async function attemptSpec(
     // tool-call limit, and a pause that does happen will not be cleared by
     // running a different model first. So a claude entry never defers: it is
     // recorded and the roster advances.
-    if (entryOf(spec.driver).lane !== undefined) {
+    if (entryOf(spec.driver).credential !== undefined) {
       say(`paused ${spec.runId}: ${verdict.reason} (${spec.driver} — no defer queue), advancing`);
       record({
         runId: spec.runId,
@@ -2480,15 +2491,15 @@ async function main(): Promise<void> {
       const s = a.spec;
       // A resumed episode reloads identity from meta.json; the derived values
       // here would be a lie, so show what it will actually use.
-      const lane = entryOf(s.driver).lane;
+      const cli = entryOf(s.driver).credential;
       const endpoint =
         entryOf(s.driver).endpoint
           ? `   apiBase   ${s.apiBase} (key env ${s.apiKeyEnv})\n` +
             (entryOf(s.driver).routing && isOpenRouterBase(s.apiBase)
               ? `   routing   ${routingLabel(resolveRouting(s.routing, undefined, s.model, { effort: s.effort }))}${s.routing === undefined ? " [default: the model author's own provider]" : ""}\n`
               : "")
-          : lane !== undefined
-            ? `   endpoint  ${lane.describe(s.tokenEnv)} (no api-base/api-key-env)\n`
+          : cli !== undefined
+            ? `   endpoint  ${cli.describe(s.placedOn?.env)} (no api-base/api-key-env)\n`
             : "";
       const cycle1 = a.doneCycle1 === true ? " [cycle 1 skipped (already terminated, or its run id is taken) — launches fresh from cycle 2 under --loop]" : "";
       const identity = a.resume
@@ -2568,7 +2579,7 @@ async function main(): Promise<void> {
       say(`party ${party.id}: its members are not in one state (${states}) — a party launches or resumes whole; nothing launched`);
       for (const a of pending) record({ runId: a.spec.runId, model: a.spec.model, outcome: "skipped", detail: `party ${party.id} not whole: ${states}` });
     } else if (!stopping && !drainSeen() && (deadline === undefined || Date.now() < deadline)) {
-      if (await awaitSubscriptionGate(pending[0]!.spec, deadline)) await attemptParty(pending, { deadline });
+      if (await awaitUsageBudget(pending[0]!.spec, deadline)) await attemptParty(pending, { deadline });
     }
     say("roster complete");
     return;
@@ -2701,7 +2712,7 @@ async function main(): Promise<void> {
           detail: `resuming in place after ${plan.reason}; resume restores trajectory + scratchpad, not level`,
         });
       }
-      if (!(await awaitSubscriptionGate(target, deadline))) break;
+      if (!(await awaitUsageBudget(target, deadline))) break;
       launched++;
       const res = await attemptSpec(target, { resume, deadline, dryRun: false });
       if (res === "defer") {

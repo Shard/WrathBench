@@ -61,8 +61,8 @@ function fleet(over: Partial<FleetResponse> = {}): FleetResponse {
     accounts: [
       { account: "RUNNER", class: "pool", job: "ox-alpha-e90" },
       { account: "RUNNER2", class: "pool", job: null },
-      { account: "BOX", class: "local", job: null },
-      { account: "PAID", class: "paid", job: null },
+      { account: "BOX", class: "pool", job: null },
+      { account: "PAID", class: "pool", job: null },
       { account: "SHAKEOUT", class: "pinned", job: "nav-probe-freeplay" },
     ],
     paused: [],
@@ -88,9 +88,9 @@ function run(over: Partial<RunListRow> = {}): RunListRow {
 
 describe("columns", () => {
   test("state leads; one table carries the job, its account and the run it is driving", () => {
-    expect([...FLEET_COLUMNS]).toEqual(["state", "job", "model", "episode", "account class", "attempt", "run", "lvl / xp", "tokens", "tok/s", "cost", "elapsed"]);
+    expect([...FLEET_COLUMNS]).toEqual(["state", "job", "model", "episode", "account from", "attempt", "run", "lvl / xp", "tokens", "tok/s", "cost", "elapsed"]);
     // The process is bookkeeping, not something an operator scans a table for;
-    // the source (file, queue, policy) maps to the account class and says nothing more.
+    // the source (file, queue, policy) maps to where its account came from and says nothing more.
     expect(FLEET_COLUMNS).not.toContain("pid");
     expect(FLEET_COLUMNS).not.toContain("lane");
     expect(FLEET_COLUMNS).not.toContain("source");
@@ -212,11 +212,11 @@ describe("the rows", () => {
     expect(at(run({ tokens: null } as Partial<RunListRow>))).toBe(0.42);
   });
 
-  test("accounts holding nothing are idle rows below the working ones, grouped by class", () => {
+  test("accounts holding nothing are idle rows below the working ones, the pool's before the pinned", () => {
     const rows = fleetRows(fleet(), [run()]);
-    // State rank puts the running job first; the idle accounts follow in class
-    // order: pool, paid, local, pinned. The rank list is asserted in "the row order".
-    expect(rows.map((r) => r.key)).toEqual(["ox-alpha-e90", "account:RUNNER2", "account:PAID", "account:BOX", "account:SHAKEOUT"]);
+    // State rank puts the running job first; the idle accounts follow, the
+    // pool's by name, then the pinned. The rank list is asserted in "the row order".
+    expect(rows.map((r) => r.key)).toEqual(["ox-alpha-e90", "account:BOX", "account:PAID", "account:RUNNER2", "account:SHAKEOUT"]);
     // The account a job is on never doubles as an idle row.
     expect(rows.filter((r) => r.account === "RUNNER")).toHaveLength(1);
     expect(rows[1]).toMatchObject({ state: "idle", job: null, accountClass: "pool", episode: null });
@@ -266,7 +266,7 @@ describe("the row order", () => {
       accounts: [
         { account: "FF", class: "pool", job: null },
         { account: "GG", class: "pool", job: null },
-        { account: "AH", class: "local", job: null },
+        { account: "AH", class: "pool", job: null },
       ],
       paused: [
         {
@@ -290,9 +290,9 @@ describe("the row order", () => {
       ["draining", "CC"],
       ["paused-deploy", "DD"],
       ["paused", "FF"],
-      // Inside idle the classes stay grouped: pool before local, name second.
-      ["idle", "GG"],
+      // Inside idle the pool's accounts go by name.
       ["idle", "AH"],
+      ["idle", "GG"],
       ["exited", "EE"],
     ]);
   });

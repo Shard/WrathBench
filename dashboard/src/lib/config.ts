@@ -167,7 +167,8 @@ export interface NewEntryForm {
   race: string;
   class: string;
   apiBase: string;
-  apiKeyEnv: string;
+  /** A credential id to pin the entry to (`credentials/<id>`); empty is the scheduler's choice. */
+  credential: string;
 }
 
 export const EMPTY_NEW_ENTRY: NewEntryForm = {
@@ -180,7 +181,7 @@ export const EMPTY_NEW_ENTRY: NewEntryForm = {
   race: "",
   class: "",
   apiBase: "",
-  apiKeyEnv: "",
+  credential: "",
 };
 
 /**
@@ -195,7 +196,7 @@ export function newEntryDoc(form: NewEntryForm): Record<string, unknown> {
   const doc: Record<string, unknown> = { model: form.model.trim(), tier: form.tier.trim() };
   const routing = parseRouting(form.routing);
   if (routing !== undefined) doc["routing"] = routing;
-  for (const [key, raw] of [["billing", form.billing], ["idle", form.idle], ["apiBase", form.apiBase], ["apiKeyEnv", form.apiKeyEnv]] as const) {
+  for (const [key, raw] of [["billing", form.billing], ["idle", form.idle], ["apiBase", form.apiBase], ["credential", form.credential]] as const) {
     const v = raw.trim();
     if (v.length > 0) doc[key] = v;
   }

@@ -21,7 +21,7 @@ for `data`.
 
 `db` is the MySQL datadir and nothing else.
 
-`codex-home` is the `codex` driver's subscription lane: a logged-in Codex home
+`codex-home` is the `codex` driver's credential: a logged-in Codex home
 directory that the CLI writes its token refresh back into. It is a volume
 rather than a Secret key because it is a directory with mutable state, and it
 is mounted rather than copied because a second live copy invalidates the first.

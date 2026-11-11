@@ -29,7 +29,7 @@ stack instead, where a command has a compose form.
 | see why a model is or is not scheduled | "The scheduling policy" |
 | run a probe campaign | "Probe campaigns", "Run pods" |
 | launch one episode by hand | "Ad-hoc launches", "The scripted reference run" |
-| manage subscription lanes and their quota | "Subscription lanes", "The subscription usage gate" |
+| manage provider credentials, their slots and their budgets | "Credentials" |
 | back up, move or restore a character | "Backing up and moving a character" |
 | operate the public site | "Public dashboard" |
 
@@ -162,8 +162,8 @@ the store to a document for reading or diffing, never for committing.
   `--status`. The viewer's `/api/models`, `/api/campaigns` and `/api/config`
   and the publisher read the same store.
 - An edit is live **one tick later**, with nothing restarted. A tick can
-  land between two writes, so write a cap (`policy.maxConcurrent`) before the
-  roster entries it caps.
+  land between two writes, so write a credential (`credentials/<id>`) before
+  the roster entries that need it.
 - Every write is validated against the whole config, refused with the
   sentence the supervisor would use, and recorded in the store's
   `config_audit` table with the actor, the note, and the before and after
@@ -191,7 +191,11 @@ bun wb config seed                     # once, on a fresh deployment: infra/flee
 bun wb config get roster/sonnet
 bun wb config patch roster/sonnet '{"tier":"t2"}' --actor operator --note "promote"
 bun wb config audit 20
-bun wb config move-lane <run-id> CLAUDE_CODE_OAUTH_TOKEN_2 --pin --note "why"  # a paused run to another lane ("Moving a run to another lane")
+bun wb config credentials                            # the credentials, in preference order ("Credentials")
+bun wb config credentials add claude-2 '{"provider":"claude","secretEnv":"CLAUDE_CODE_OAUTH_TOKEN_2","slots":1,"budget":{"kind":"usage"},"billing":"paid","enabled":true}'
+bun wb config credentials edit claude-2 '{"slots":2}' --note "why"
+bun wb config credentials disable claude-2 --note "why"   # no new run takes it; live runs finish
+bun wb config move-credential <run-id> claude-2 --pin --note "why"  # a paused run to another credential ("Moving a run to another credential")
 bun wb config export > /tmp/fleet.json # to read or diff; never to commit
 ```
 
@@ -205,7 +209,8 @@ same operations over HTTP (`runner/viewer/README.md`).
 Edit the config, on the `/config` page or with the CLI. Nothing to restart.
 The unit you steer is the **job**: a roster entry (or a rotation of several),
 an episode and a repeat count, on one account — pinned to it when the job
-names an `account`, otherwise on whichever pool account is free.
+names an `account`, otherwise on whichever pool account is free, and on the
+first credential that serves its model and has room ("Credentials").
 
 - `"enabled": false` — the job **drains**: no signal while it has an episode in
   flight, SIGTERM at the next episode boundary. A pool job frees its account
@@ -251,11 +256,11 @@ models.
 Billing is derived, not policed, so no model id is refused for what it costs.
 An entry the rules put on the wrong side (a stealth id quoted at zero with no
 free suffix, say) states `billing: "free"` or `"paid"`, and its runs carry
-that word to every reader. Free models on OpenRouter or OpenCode Zen share one
-rate-limit key per platform, because those free tiers are pooled per upstream
-provider: two runs on one pool trip the same limits twice. OpenCode Go is
-billed apart from Zen on the same host, so every model on a Go base counts
-against its own key, `opencode-go`, its free slugs included.
+that word to every reader. To the scheduler it says only which credential may
+carry a run: on a metered provider a free credential carries only free models
+and a paid one only paid ones, so a free tier's shared key and a paid key are
+two credentials even when one secret serves both. OpenCode Go is a provider
+of its own (`opencode-go`), apart from Zen on the same host.
 
 #### Config reference
 
@@ -268,9 +273,13 @@ change ships.
 preflight   the gate ("The preflight gate"): enabled, account, smokes [{script, account}], timeoutMs,
             deploySmokes (empty), deployTimeoutMs. Its accounts may not be in the
             pool or on a job.
-accounts    { pool: [...], paid: [...], local: [...] } — the account classes, each in
-            preference order. Never PROBE, never SMOKE*. `pinned` is derived from the jobs and
-            refused if authored.
+accounts    { pool: [...], max? } — the one account pool, in preference order: every account a run
+            that names none is drawn from, one live session each, at most `max` live at once
+            (default: all). Never PROBE, never SMOKE*, never the gate's: those are refused by
+            name. `pinned` is derived from the jobs and refused if authored.
+credentials id -> { provider, secretEnv, slots, budget?, billing, enabled }, in preference order
+            ("Credentials"; `runner/src/credentials.ts`). The NAME of the env var holding each
+            secret, never the secret. A seeded store's examples are all disabled.
 roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
             (runner/src/roster-refusal.ts) and nothing else; anything else REFUSES the entry by
             name ("Strict keys").
@@ -348,34 +357,36 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               entry are two rows, which in 0.5 only a freeplay character or a probe can show,
               since its scored runs all stay on `auto`. Pages show a run's window after the effort
               (`max · 100k`). Mechanics: runner/README.md, "The compaction window".
-            `apiBase` / `apiKeyEnv` — openai entries: the endpoint, and the NAME of the env var
-              holding its key (absent: OpenRouter and `OPENROUTER_KEY`). The pair must be one the
-              provider table holds (`KEY_PROVIDERS`, runner/src/providers.ts): each key goes only
-              to its own provider's host over https, and `LMSTUDIO_KEY` only to a host the
-              deployment lists in `WRATHBENCH_LOCAL_MODEL_HOSTS` (chart: `localModelHosts`). Any
-              other pairing REFUSES the entry by name, a write through the store is a 400, and
-              run.ts refuses to start one. A new provider is a row in that table, not config.
+            `apiBase` — openai and pi entries: the endpoint (absent: OpenRouter). Its host is the
+              entry's credential provider (`providerOfModel`, runner/src/credentials.ts): a host the
+              provider table owns, over https, or a self-hosted host the deployment lists in
+              `WRATHBENCH_LOCAL_MODEL_HOSTS` (chart: `localModelHosts`). Any other base REFUSES the
+              entry by name, and run.ts refuses to start one. An entry never names a key: the key is
+              its credential's, and a roster write carrying `apiKeyEnv` is a 400. A new provider is a
+              row in the provider tables, not config.
+            `credential` — optional: pin this entry's runs to one credential, by id. They take that
+              one or wait for it, never another. Normally absent. A pin that cannot carry the entry
+              (not configured, another provider's, the other billing side) refuses the entry by name.
             A t0 model that reaches level 5 KEEPS the witness (`t0*` in --status) without spending
             it: move it to t1 and it promotes at once on evidence it already has. Moving a model
             by hand is always allowed and never records a promotion — "promoted" is said only of
             a climb.
-policy      Only where runs execute and how many at once. maxConcurrent { <rate-limit key>: n }
-            caps the runs in flight per key (`concurrencyKeyOf`), counting every job on that
-            key, pinned ones included.
-            `paid { maxConcurrent 1 }` — optional: at most that many paid runs in flight. A
-            THROTTLE, not a budget: how much a paid model runs is its tier.
-            Billing is derived per model (free slug / LAN apiBase / claude-code -> free, else
+policy      Only where runs execute. `maxSessions { <driver>: n }` — how many sessions of a driver
+            one host carries at once, whichever credential pays (each CLI session is a process and a
+            sandbox): the one cap that is not a credential's. Absent: none beyond the slots.
+            Billing is derived per model (free slug / LAN apiBase / subscription CLI -> free, else
             paid); `roster.<name>.billing: "free"|"paid"` overrides it. To the scheduler, billing
-            says only WHERE a run may execute — the account class and the rate-limit key. An
-            openai entry's override is also recorded on each run it launches: the ladders'
-            "exclude free" follows it, and a recorded free needs no price.
+            says only which credential may carry a run. An openai entry's override is also
+            recorded on each run it launches: the ladders' "exclude free" follows it, and a
+            recorded free needs no price.
             `routing` — the fleet-wide default for OpenRouter entries, same shape as an entry's.
             An entry that states its own keeps it WHOLE: the two are never merged. Absent means
             the built-in default (the model author's own provider, fallbacks off).
             `runPods` — `"off"` (default) or `"probes"`: every probing episode runs as its own
             pod on the arm's image ("Run pods"). While it is not `probes`, or off the cluster, an
             arm that pins an image or a command is a refused pair, never run on master.
-            `subscriptions` — the subscription lanes, by env var NAME ("Subscription lanes").
+            `maxConcurrent`, `paid` and `subscriptions` are refused by name: their work is the
+            credentials' ("Credentials").
 campaign-defs  published campaign definitions, `<id>@<version>` → { definition, hash, source,
             publishedAt }. Written ONLY by runner/src/campaign-publish.ts and never changed: `set`,
             `patch`, `delete`, the /config page and a reseed all refuse the prefix, and a second
@@ -384,7 +395,7 @@ campaign-defs  published campaign definitions, `<id>@<version>` → { definition
             store gets its definitions by publishing them, then seeding the rest.
 campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only —
             { <id>: { version, enabled, assignments [{ model: <roster name>, runsPerCell }],
-            account?, accounts?, subscription?, excludeUnhealthy?, concluded? } }, strict. The
+            account?, accounts?, credential?, excludeUnhealthy?, concluded? } }, strict. The
             shape (cells, arms, start, leash, stop level, resume, attempt cap) is the published
             definition `<id>@<version>`; `version` is explicit, never "latest". A row the store
             will not write, or one naming a version nobody published, is refused by name on read,
@@ -395,12 +406,11 @@ campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only
             `accounts` — a PARTY definition's pin, never `account`: one per member, member order,
               the leader first; any other count, a shared account or a clash refuses the whole
               pin. Its square launches one roster of all members together, after the stager,
-              counts every member against the lane and paid caps, starts only when all fit, and
+              takes a slot per member on one credential, starts only when all fit, and
               resumes whole (docs/proposals/GROUP-PLAY.md; `infra/party-fate.ts`).
-            `subscription` — a PINNED campaign's lane (an env var NAME `policy.subscriptions`
-              lists, of the assignments' drivers' kind): every launch of the campaign bills it,
-              overriding the roster entry's own lane for those runs only. A lane it cannot honour
-              refuses the campaign.
+            `credential` — a PINNED campaign's credential, by id: every launch of the campaign
+              takes it, overriding the assignments' own placement for those runs only. One that
+              cannot carry every assignment refuses the campaign.
             `excludeUnhealthy` — skips a retired or cooling model.
             `concluded` — a list of versions of this id the operator declares finished: each
               launches and resumes nothing, and the page shows it `complete*` with its counts
@@ -409,14 +419,14 @@ campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only
             probe runs on disk; set `enabled: false` when a sweep is done and its results stay
             visible. Progress is on the /campaigns page.
 queue       jobs, in priority order (never `probing`): { ref | [refs], episode e90|e360|freeplay,
-            repeat n|"loop", enabled, account?, subscription? } and nothing else ("Strict keys").
+            repeat n|"loop", enabled, account?, credential? } and nothing else ("Strict keys").
             With `account` the job is PINNED to it and never the policy's; without, it is a
             manual pool job that outranks the policy. The name is always `<first ref>-<episode>`
             (run ids `fleet-<name>-<model>[-<effort>][-<compactWindow>]-<stamp>`), one job per
             (ref, episode). A numeric `repeat` is a total of counted runs ("Steer it"). A pool
             job whose ref is not eligible for its EPISODE is skipped with the reason in
-            --status; a pinned one waits the same way. A waiting manual job reserves the POOL
-            only — the paid and local classes still pick — and --status names the reservation.
+            --status; a pinned one waits the same way. A waiting manual job reserves the pool,
+            and --status names the reservation. `credential` pins the job's runs to one.
 ```
 
 #### Strict keys, and how to pause a character
@@ -472,13 +482,13 @@ on the row, and the draft stays.
 
 Nothing calls the model first: whether a slug really answers a tool call is
 what its `t0` trial finds out. A model OpenRouter's catalogue does not carry
-(a claude-code or codex lane, the LAN box, Cerebras, OpenCode Go) is added
+(a claude-code or codex model, the LAN box, Cerebras, OpenCode Go) is added
 with **add a roster entry**. The endpoints are in `runner/viewer/README.md`.
 
 An OpenCode Go model is an openai entry with `apiBase`
 `https://opencode.ai/inference/go/openai/v1` (the older
-`https://opencode.ai/zen/go/v1` is the same surface) and `apiKeyEnv`
-`OPENCODE_KEY`, under the id Go's own listing uses
+`https://opencode.ai/zen/go/v1` is the same surface), carried by an
+`opencode-go` credential on `OPENCODE_KEY`, under the id Go's own listing uses
 (`https://opencode.ai/inference/go/v1/models`, no key needed). Only the
 models Go serves over chat completions can be reached this way. The adapter
 identifies as itself: its own user agent, `x-opencode-session` set to the run
@@ -565,7 +575,7 @@ On the cluster the code is baked into the images, so the first question is
 | the config store (`/config` page or `bun wb config`) | the **next tick** (60s). Hot-reloaded; every write is validated, and a config the running code refuses is complained about and ignored. |
 | the wiki bundle | the next episode spawn: it is on the data volume. |
 | any code: `runner/`, `wrath-mcp/sdk/`, `wrath-mcp/mcp/`, `infra/`, `wrath-mcp/module/`, `dashboard/` | a **release** (`bun wb release run`, "Deploy window"). A stack change in `wrath-mcp/` merges in wrath-mcp first and ships as a pointer bump here (`infra/PINS.md`). A run in flight keeps the code it started with. The viewer picks up a new image with `bun wb server restart-viewer`. |
-| anything the supervisor reads only at start: its own code, its env, a lane's token | a fleet pod restart. A release does one; the two recipes below do one without a release. |
+| anything the supervisor reads only at start: its own code, its env, a credential's secret | a fleet pod restart. A release does one; the two recipes below do one without a release. |
 
 `fleet-update.sh` does not build or pin an image: new code reaches the fleet
 pod through a release, whose drain and resume phases are this script's.
@@ -753,11 +763,11 @@ Some pauses wait for a known instant instead of climbing the ladder:
   spends a rung nor counts toward the streak. Only a reset 10 minutes to 48
   hours out is honoured, so a per-minute window stays on the ladder.
   `--status` lists the run as `resuming at <time> (provider reset)`.
-- A subscription lane's spent quota (codex, claude-code, an OpenCode Go
+- A subscription credential's spent quota (codex, claude-code, an OpenCode Go
   allowance) waits for its usage window's reset the same way, up to seven
-  days out, listed as `(usage window reset)`. A freeplay run the gate paused
+  days out, listed as `(usage window reset)`. A freeplay run its budget paused
   (`subscription-budget`) is on no ladder: it resumes once its window is back
-  under the threshold ("The subscription usage gate").
+  under the threshold ("Credentials", "The usage window").
 
 Two pauses cool on the ladder but always come back, because the runner
 releases the session and the roster advances, so the supervisor resumes the
@@ -1137,8 +1147,8 @@ hold is one short real run per driver on PROBE (or SHAKEOUT), a couple of
 minutes, then `bun wb fleet resume`. Module smokes and anything longer wait
 until after the resume.
 
-Each run has no `--episode`, so it is unscored; `--token-env` picks a second
-subscription lane. The CLI drivers have no turn limit, so `--max-tool-calls`
+Each run has no `--episode`, so it is unscored; `--credential-env` picks a
+second subscription's variable. The CLI drivers have no turn limit, so `--max-tool-calls`
 bounds them. Read each trajectory as far as a logged-in CLI and a snippet that
 reached the module. A run that hits its limit costs the model nothing, but one
 that dies before the model answers, or on an adapter error, is a rung on that
@@ -1317,7 +1327,7 @@ account's password if it differs: `docker compose -f infra/compose.yml run
 WRATHBENCH_ACCOUNT_PASSWORD=SMOKE2 bootstrap`.
 
 The gate accounts must be their own: an enabled job or campaign pinned to
-one is refused, a gate account in an account class rejects the config, and
+one is refused, a gate account in the account pool rejects the config, and
 none should be `PROBE`, the ad-hoc debugging account. Benchmark characters
 are never fixtured: the fixture tool (`infra/fixtures`) writes only to smoke,
 probe and party accounts.
@@ -1352,11 +1362,12 @@ The `queue` normally holds only the pinned jobs: the supervisor fills free
 pool accounts from the roster by policy — each model's tier budget
 (`t0`/`t1`/`t2`, "Config reference"), `e90` for everyone, `e360` once earned,
 newest-to-the-roster first, shorter episode first, fewest runs first, one
-character per model, within `policy.maxConcurrent` per rate-limit key. Only
-runs from the running build's harness **series** (`0.5` of
-`harness-0.5-1437-g…`) count; a minor bump starts every model's evidence
-over, a fix commit does not. With `policy.paid` set, at most that many paid
-runs are in flight at once — a throttle, never a budget. A model whose entry
+character per model, each pick on the first credential with room
+("Credentials"). Only runs from the running build's harness **series** (`0.5`
+of `harness-0.5-1437-g…`) count; a minor bump starts every model's evidence
+over, a fix commit does not. How many paid runs are in flight at once is the
+paid credentials' slots — never a budget: how much a paid model runs is its
+tier. A model whose entry
 says `idle: "unlimited"` takes one continuous freeplay session at a time once
 its targets are met, stamped `extra: true`: an attempt but never counted.
 
@@ -1476,11 +1487,11 @@ pinned to an image built before the default runs that image's runner, which
 has none.
 
 Every pair of an assignment whose roster entry the fleet refuses (an unknown
-key, a provider key towards a host the provider table does not pair it with,
-a subscription the policy does not list) is refused too: the campaign sweeps
+key, a base no credential provider serves, a pinned credential that cannot
+carry it) is refused too: the campaign sweeps
 its other assignments, and the entry's own refusal, with its reason, is under
 `--status`'s refused pins. The campaigns page shows those squares as refused
-without the reason, because the reason can name a key, a lane or a host.
+without the reason, because the reason can name a key, a credential or a host.
 
 **A hand launch** names the square and nothing that sets its shape.
 `run-episode.sh` writes the run's `campaign.json` from the published
@@ -1502,7 +1513,7 @@ the campaign compares at a fixed one:
 
 ```
 bun wb config set roster/deepseek-flash-pi \
-  '{"model":"deepseek-flash","driver":"pi","tier":"t1","apiBase":"https://api.deepseek.com/v1","apiKeyEnv":"DEEPSEEK_KEY","effort":"high","compactWindow":"300k"}' \
+  '{"model":"deepseek-flash","driver":"pi","tier":"t1","apiBase":"https://api.deepseek.com/v1","effort":"high","compactWindow":"300k"}' \
   --actor <you> --note "pi on deepseek-flash, probe-only (#257)"
 ```
 
@@ -1570,7 +1581,7 @@ and the launcher's settings. Two values matter at deploy time:
   `allowedImages` the chart-wide Secret cannot pull.
 
 A run pod gets the module secret and the one credential its driver bills (its
-lane's `CLAUDE_CODE_OAUTH_TOKEN*`, its `apiKeyEnv`, or the mounted codex home),
+credential's `CLAUDE_CODE_OAUTH_TOKEN*`, its endpoint key, or the mounted codex home),
 `WRATHBENCH_LOCAL_MODEL_HOSTS` from the chart's `localModelHosts`, the runs
 and wiki volumes, and no config store, no database variables and no
 `ANTHROPIC_*` variable. Its harness stamp is the arm's image tag, never
@@ -1663,7 +1674,7 @@ release that carries the series:
 bun wb run episode --driver reference --episode e90 --account PROBE
 ```
 
-It needs no key, no lane and no `--model`: the route is the model
+It needs no key, no credential and no `--model`: the route is the model
 (`reference/<route>@<version>`). Nothing schedules it: the fleet config
 refuses `driver: reference`, and the scheduler counts it toward nothing. What
 it shares with everything else is the account, so run no smoke on `PROBE`
@@ -1752,161 +1763,171 @@ this must not touch, and `archiveRun` is a rename with no guard of its own.
 An id that names no movable run (a typo, a run already parked, a directory
 that is not a run) is reported on its own line and counted separately.
 
-### Subscription lanes
+### Credentials
 
-A Claude subscription is a **lane**, not a model dimension. The roster keeps one
-entry per model however many accounts are behind it; what the lane decides is
-how many sessions may be live at once.
+The scarce things a run spends are a provider credential and a game account,
+so the fleet models those and nothing else. A **credential** is one provider
+secret — an OpenRouter key, a Claude subscription token, a Codex home, an
+OpenCode key — kept as a `credentials/<id>` row in the config store, in
+preference order (`runner/src/credentials.ts`):
 
-`policy.subscriptions` lists the lanes, as the **names** of the env vars holding
-their OAuth tokens (`["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2"]`).
-The tokens themselves stay in `.env`; a token where a name belongs is refused
-everywhere it can be written. Absent means the single default lane.
+```
+"credentials": {
+  "claude-1":        { "provider": "claude",     "secretEnv": "CLAUDE_CODE_OAUTH_TOKEN",   "slots": 1, "budget": { "kind": "usage", "scoredMaxPct": 80, "freeplayMaxPct": 80 }, "billing": "paid", "enabled": true },
+  "claude-2":        { "provider": "claude",     "secretEnv": "CLAUDE_CODE_OAUTH_TOKEN_2", "slots": 1, "budget": { "kind": "usage" }, "billing": "paid", "enabled": true },
+  "chatgpt-1":       { "provider": "chatgpt",    "secretEnv": "CODEX_HOME",                "slots": 1, "budget": { "kind": "usage" }, "billing": "paid", "enabled": true },
+  "openrouter-free": { "provider": "openrouter", "secretEnv": "OPENROUTER_KEY",            "slots": 1, "budget": { "kind": "runs", "perDay": 40 }, "billing": "free", "enabled": true },
+  "openrouter-paid": { "provider": "openrouter", "secretEnv": "OPENROUTER_KEY",            "slots": 1, "budget": { "kind": "spend", "usdPerDay": 5 }, "billing": "paid", "enabled": true },
+  "lmstudio":        { "provider": "local",      "secretEnv": "LMSTUDIO_KEY",              "slots": 1, "billing": "free", "enabled": true }
+}
+```
 
-A claude-code run counts against **two** concurrency keys and needs a free
-slot in both; a key `policy.maxConcurrent` does not name is uncapped:
+- **provider** — `claude` (a Claude subscription, the claude-code driver),
+  `chatgpt` (a Codex home, the codex driver), `openrouter`, `opencode` (Zen),
+  `opencode-go`, `cerebras`, `deepseek`, `local` (the self-hosted server). A
+  model's provider is its CLI driver's, or its `apiBase`'s host. A new one is
+  a row in `runner/src/credentials.ts` and `runner/src/providers.ts`.
+- **secretEnv** — the NAME of the env var holding the secret (for `chatgpt`,
+  the var naming the logged-in Codex home), never the secret: the provider's
+  own name or that with a numbered suffix (`CLAUDE_CODE_OAUTH_TOKEN_2`,
+  `CODEX_HOME_2`, `OPENROUTER_KEY_2`). A value where a name belongs is refused
+  by shape, and a numbered key still goes only to its provider's host. Two
+  credentials share a secret only as a metered key's free/paid split.
+- **slots** — how many runs may be live on it at once.
+- **budget** — absent is none. `{ kind: "usage", scoredMaxPct?, freeplayMaxPct? }`
+  (claude, chatgpt, opencode-go; each default 80, 100 is off) is the usage
+  window, below. `{ kind: "spend", usdPerDay }` (openrouter) is the provider's
+  own reported charge on the credential's runs since 00:00 UTC. `{ kind:
+  "runs", perDay }` (any) is fresh launches since 00:00 UTC. Spend holds new
+  starts and resumes, runs holds new starts only (a resume is no new run), and
+  neither ever pauses or ends a live run.
+- **billing** — on a metered provider, which models the credential carries: a
+  free credential only free models, a paid one only paid models. On a
+  subscription every model bills it and the word describes it. It never
+  reaches a run's recorded billing, a price or a ladder.
+- **enabled** — a disabled credential takes no new run; live runs on it finish.
 
-- `claude-code` — every Claude session in flight, whoever pays.
-- `claude-code:<ENV NAME>` — that one subscription's sessions. Every lane has
-  one, the default lane included.
+`bun wb config credentials [list | add | edit | disable]` edits them ("Where
+the config lives"). A credential is config, but its secret reaches a pod
+only when the pod starts: a new one is a key in the env Secret and a
+`modelKeys` line in the chart ("Secrets"), so it lands with a release, not
+with the 60s re-read. `--status` names a credential whose variable is not
+set.
 
-The scheduler assigns the lane: a claude pick takes the first subscription with
-room, and the run **records** the lane it billed. The count is re-derived from
-that record every tick, so it survives a supervisor restart, and a resumed run
-goes back to the subscription it started on. Pinned jobs, campaign cells and
-manual queue jobs are assigned the same way.
+**How a run starts.** A run takes a slot on the first enabled credential that
+serves its model's provider and has room under its slots and its budget, and
+the host carries a session of its driver under `policy.maxSessions` (the one
+cap that is not a credential's). Every launch path asks the same question:
+pinned jobs, the manual queue, the policy's picks, resumes and parties. A
+party takes a slot per member on one credential, all of them or none. A pick
+with nowhere to start is held with the reason (`--dry-run`'s `HELD`); a pick
+with no credential at all says so ("no enabled … credential").
 
-Two ways to override, both normally absent:
+`roster.<name>.credential`, `queue[].credential` and
+`campaigns.<id>.credential` pin one credential: the run takes that one or
+waits for it, never another. Normally absent.
 
-- `queue[].subscription: "<ENV NAME>"` pins one job to one subscription.
-- `roster.<name>.subscription: "<ENV NAME>"` pins a model: its runs always bill
-  that account, and its pick is **held** when that lane is busy rather than
-  moved to the other one. A name that is not in `policy.subscriptions` refuses
-  that entry (named in `--status`) and leaves the rest of the config in
-  effect.
+**What a run records.** `config.credential` (the id), and for a CLI driver
+`config.credentialEnv` (the variable its CLI reads) and `config.usageMaxPct`
+(its usage thresholds). The fleet counts live runs per credential off that
+record every tick, so the count survives a supervisor restart, and a resumed
+run goes back to the credential it started on and nowhere else: a paused run
+whose credential is gone or disabled is listed and waits. A 0.5 run recorded
+its subscription lane (`config.subscription`) instead; the viewer reads both,
+the scheduler only the credential.
 
-Listing a lane is config, but its credential reaches a pod only when the pod
-starts: a new Claude lane is a key in the env Secret and a `modelKeys` line in
-the chart ("Secrets"), so it lands with a release, not with the 60s re-read.
+**The usage window.** A subscription bills a flat plan whose allowance is
+metered in rolling windows, and a window the fleet drains stays empty until it
+resets. So the fleet reads each credential's usage and stops short of the top:
 
-**The Codex lane** is the same idea with a directory for a credential:
-`CODEX_HOME` names a logged-in Codex home (`codex login`; the login is its
-`auth.json`), and a second subscription is `CODEX_HOME_2` pointing at a second
-directory. A directory is never copied per run: its refresh token is spent by
-whichever process refreshes first. A home's variable is listed in
-`policy.subscriptions` like a Claude lane's, which lets an entry or a pinned
-campaign name it in `subscription`. The scheduler does not place codex lanes:
-a codex run counts against the one `codex` concurrency key (`"codex": 1` is
-one live session), and an entry rides the default home unless its
-`subscription` pins another.
+- a scored run (`e90`, `e360`) does not start on a credential while any of its
+  windows is at or over `scoredMaxPct`. A scored run already live is never
+  paused (that would spend its attempt): its episode finishes, and the job's
+  next episode waits;
+- a freeplay run does not start or resume on a credential at or over
+  `freeplayMaxPct`, and a live one pauses at its next turn boundary as
+  `subscription-budget`, resumable, waiting for the window's reset. That pause
+  is the harness's doing: no strike, no rung on the defer ladder, no streak;
+- a window at 100% — or a `quota-exhausted` pause — holds every launch on the
+  credential, scored, freeplay or probe, until it resets, capped at seven
+  days, with or without a usage budget. A probe is held only by that.
+
+The readings: the codex driver reads the thread's rollout after each turn, the
+claude-code driver the CLI's `rate_limit_event` frames, and each records the
+newest reading on change in the run's meta.json and as a `harness` record of
+kind `rate_limits`, keyed by the run's credential: the used percent, the
+window's length and its reset, nothing else. For OpenCode Go the supervisor
+reads Go's usage endpoint for each `opencode-go` credential with a usage
+budget, at most once a minute, and leaves the reading in
+`data/runs/fleet-credential-usage.json`. No reading counts for longer than
+seven days, and a credential with no reading is open. A Claude per-model weekly
+cap (a refusal naming `seven_day_opus`, say) is a window of its own that holds
+only that family's launches.
+
+`--status` prints one line per credential: slots in use, the budget and what
+it has used (the windows with their percent and reset, today's spend or
+runs), whether a scored and a freeplay launch are held, whether its variable
+is set, the newest `auth-failed` or `quota-exhausted` on it, and a Codex
+home's volume. The supervisor publishes the same in `fleet-state.json`, and the
+private viewer's `/api/fleet` serves it. None of the figures reach a public
+page.
+
+**The Codex home.** `CODEX_HOME` names a logged-in Codex home (`codex login`;
+the login is its `auth.json`), and a second subscription is `CODEX_HOME_2`
+pointing at a second directory. A directory is never copied per run: its
+refresh token is spent by whichever process refreshes first.
 
 The CLI never deletes a thread's rollout (`sessions/**/rollout-*.jsonl`), so
 the fleet deletes them: the driver at a thread change and at its episode's
-end, and an hourly supervisor sweep for any rollout unwritten for two hours
-that is no live run's recorded thread (`<run-dir>/codex-thread.json`). Each
-thread whose rollouts went is then deleted from the CLI's own stores
-(`thread_history_1.sqlite`, `state_5.sqlite`) with `codex delete --force
-<thread>`, which needs no login. That is best effort: a failure is logged (the
-driver's `codex_rollouts_removed` record, the sweep's line) and its rows stay.
-Deleting rows does not shrink the file; a `VACUUM` while no codex run is live
-does.
+end, and an hourly supervisor sweep of every home a `chatgpt` credential names
+for any rollout unwritten for two hours that is no live run's recorded thread
+(`<run-dir>/codex-thread.json`). Each thread whose rollouts went is then
+deleted from the CLI's own stores (`thread_history_1.sqlite`,
+`state_5.sqlite`) with `codex delete --force <thread>`, which needs no login.
+That is best effort: a failure is logged (the driver's
+`codex_rollouts_removed` record, the sweep's line) and its rows stay. Deleting
+rows does not shrink the file; a `VACUUM` while no codex run is live does.
 
-#### Moving a run to another lane
+#### Moving a run to another credential
 
 Quotas run out at different rates, so a durable freeplay character sometimes
 has to move to the subscription with room. Patching the roster pin alone does
 not do it: a resume rebuilds the run's config from its `meta.json`, whose
-`config.subscription` is the lane it bills, and `--token-env` is no override on
-a resume. `move-lane` is the supported way:
+`config.credential` is the credential it is on. `move-credential` is the
+supported way:
 
 ```
 # 1. pause it, so nothing resumes it mid-move: the runner writes operator-pause
-bun wb config patch roster/sonnet '{"idle":"none"}' --actor operator --note "moving lanes"
+bun wb config patch roster/sonnet '{"idle":"none"}' --actor operator --note "moving credentials"
 bun wb inspect run <run-id>             # wait for "paused: operator-pause"
 # 2. move it: meta.json first, then the roster pin
-bun wb config move-lane <run-id> CLAUDE_CODE_OAUTH_TOKEN --pin --actor operator --note "lane 2 spent until Friday"
-# 3. let the fleet resume it, on the new lane
-bun wb config patch roster/sonnet '{"idle":"unlimited"}' --actor operator --note "moved lanes"
+bun wb config move-credential <run-id> claude-1 --pin --actor operator --note "claude-2 spent until Friday"
+# 3. let the fleet resume it, on the new credential
+bun wb config patch roster/sonnet '{"idle":"unlimited"}' --actor operator --note "moved credentials"
 ```
 
 **Step 1 is not optional**, even for a run that already reads paused. While
 its ref is `unlimited` the fleet may resume it on any tick, and a resume that
-read `meta.json` before the move writes the old lane back over it. The command
-re-checks the owner and the file just before its rename, but cannot see a
-resume that has read the file and not yet started its heartbeat.
+read `meta.json` before the move writes the old credential back over it. The
+command re-checks the owner and the file just before its rename, but cannot
+see a resume that has read the file and not yet started its heartbeat.
 
-`--pin` writes the roster entry's `subscription` too, after `meta.json`: the
-fleet places and counts a pinned entry by its roster pin while the runner
-bills the lane in `meta.json`, so the two must agree. Without `--pin`, an
-entry that pins a different lane refuses the move. The pin is validated
-before `meta.json` is touched; if writing it still fails, the command says so,
-and running it again applies only the pin.
+The move rewrites `config.credential`, `config.credentialEnv` and
+`config.usageMaxPct` to the new credential's. `--pin` writes the roster
+entry's `credential` too, after `meta.json`, so the fleet counts the run where
+it bills. Without `--pin`, an entry that pins a different credential refuses
+the move. The pin is validated before `meta.json` is touched; if writing it
+still fails, the command says so, and running it again applies only the pin.
 
 What it refuses, writing nothing: a run with a live owner or with no verdict
-at all (the fleet would resume it as `offline` on its next tick); a lane
-`policy.subscriptions` does not list; a lane of another kind than the run's
-driver bills; an archived run; and any driver but claude-code. A Codex lane is
-a home holding the CLI's own threads, so codex runs stay where they started.
+at all (the fleet would resume it as `offline` on its next tick); a credential
+that is not configured, disabled, another provider's or the other billing
+side; a run that records no credential (0.5, or launched by hand); an
+archived run; and any driver but claude-code. A Codex home holds the CLI's own
+threads, so codex runs stay where they started.
 
-Each move is appended to the run's `laneHistory` in `meta.json` as `{ from,
-to, at, actor, note }`, which no public projection carries. The run's
-`run.sqlite` row keeps the lane it launched on; the fleet and a resume read
-the lane from `meta.json`.
-
-### The subscription usage gate
-
-A subscription bills a flat plan whose allowance is metered in rolling
-windows, and a window the fleet drains stays empty until it resets. So the
-fleet reads each lane's usage and stops short of the top by default. The
-lanes are the concurrency key's: `claude-code:<TOKEN ENV>` per Claude OAuth
-token, `codex:<HOME ENV>` per Codex home, and `opencode-go:<KEY ENV>` per
-OpenCode Go key for the entries that draw the Go allowance down (a Go base,
-paid billing; a `$0` Go model is never gated).
-
-Two knobs, both env vars read by the supervisor, the roster and the runner,
-each a percent in (0, 100], default 80:
-
-- `WRATHBENCH_SUB_SCORED_MAX_PCT` — a scored run (`e90`, `e360`) does not
-  start on a lane while any of its windows is at or over it. A scored run
-  already live is never paused by the gate (that would spend its attempt):
-  its episode finishes, and the job's next episode waits.
-- `WRATHBENCH_SUB_FREEPLAY_MAX_PCT` — a freeplay run does not start or resume
-  on a lane at or over it, and a live one pauses at its next turn boundary as
-  `subscription-budget`, resumable, waiting for the window's reset. That
-  pause is the harness's doing: no strike, no rung on the defer ladder, no
-  streak.
-
-`100` turns a gate off. What stays on regardless is the quota-reset rule: a
-lane whose quota is spent — a window at 100%, or a `quota-exhausted` pause —
-holds every launch on it, scored, freeplay or probe, until the window resets,
-capped at seven days, so no failed attempt is spent against a quota known to
-be empty. A scored run that pauses on a spent quota is still a failed attempt
-(docs/METHODOLOGY.md); its retry just waits for the reset. A probe is held
-only by that rule. An invalid value falls back to 80 and says so in the
-supervisor log and in `--status`.
-
-Where the readings come from: the codex driver reads the thread's rollout
-after each turn, the claude-code driver the CLI's `rate_limit_event` frames,
-and each records the newest reading on change in the run's meta.json and as a
-`harness` record of kind `rate_limits`: the used percent, the window's length
-and its reset, nothing else. For Go, the supervisor reads Go's usage endpoint
-with the entry's key, at most once a minute per key, and leaves the reading in
-`data/runs/fleet-subscription-usage.json`. A window counts until its reset,
-and no reading counts for longer than seven days; a lane with no reading is
-open. A Claude per-model weekly cap (a refusal naming `seven_day_opus`, say)
-is a window of its own that holds only that family's launches. A quota pause
-whose CLI names its reset waits for that instant over the reading's guess.
-
-`--status` prints the gate per lane: the newest windows with their percent
-and reset, the reading's age, whether a scored and a freeplay launch are held,
-and the supervisor's own thresholds. `--dry-run` shows a held launch as a
-`HELD` pick, a `SKIP`, or a paused run not resumed, each with the gate's
-reason. None of the figures reach a public page.
-
-The chart has no values key for the two knobs. To set them on the cluster,
-add them to the `wrathbench.runEnv` block in
-`infra/chart/wrathbench/templates/_helpers.tpl`, which the fleet, the runner
-pod and the run pods include; a value there rolls those pods.
+Each move is appended to the run's `credentialHistory` in `meta.json` as
+`{ from, to, at, actor, note }`, which no public projection carries.
 
 ### Secrets
 
@@ -1914,12 +1935,15 @@ Never argv. On the cluster every key is a key of the env Secret
 (`envSecretName`, `wrathbench-env`), which the cluster repo generates from
 `.env`; the chart hands each pod only the keys it names (`modelKeys` and
 `templates/_helpers.tpl`), never the whole Secret, so a new provider key is a
-`modelKeys` line plus the key in the Secret. On the quickstart Bun loads
+`modelKeys` line plus the key in the Secret — a second key of a provider
+(`OPENROUTER_KEY_2`, `CLAUDE_CODE_OAUTH_TOKEN_2`) included, which reaches no
+pod until it is named there ("Credentials"). On the quickstart Bun loads
 `/wrathbench/.env` inside the container, in the supervisor and again in every
-child. A claude-code job needs the token of the lane it was scheduled on
+child. A claude-code job needs the token of the credential it was placed on
 (`claude setup-token`): `CLAUDE_CODE_OAUTH_TOKEN`, or
 `CLAUDE_CODE_OAUTH_TOKEN_2` for the second subscription. Without it the roster
-refuses the episode with a `launch-failed` row naming that variable.
+refuses the episode with a `launch-failed` row naming that variable. The
+config store holds only each secret's variable NAME, never the secret.
 
 Database clients follow the same rule: `mysql`, `mysqladmin` and `mysqldump`
 take the password as `MYSQL_PWD` and `clickhouse-client` as
@@ -1933,7 +1957,7 @@ Where a secret may travel from the runner is fixed in code, not config:
 - No child inherits the runner's environment: the snippet child gets a named
   list (`sandboxChildEnv`), and each CLI driver an allowlist of its own
   (`childEnv` in `adapter-claude.ts` and `adapter-codex.ts`), the plumbing a
-  process needs plus the one lane credential it bills.
+  process needs plus the one credential it bills.
 - The per-run session secret the child authenticates with is registered for
   redaction the moment it is leased: a snippet that prints its environment
   writes `[redacted]` into the trajectory, the sandbox host scrubs it from the
@@ -2078,7 +2102,7 @@ The compose quickstart keeps SOAP off.
 
 **Turning it on** takes one deploy window, because SOAP, the allowlist and
 the module are all read when the worldserver is recreated. Everything after
-the window runs with the fleet live: PARTY1–PARTY5 are in no account class and
+the window runs with the fleet live: PARTY1–PARTY5 are not in the pool and
 on no job until a party campaign is enabled, and neither the gate nor the
 suite touches them.
 

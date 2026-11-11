@@ -6,11 +6,11 @@
  * owed). Two copies of the rule were how the page came to agree with the
  * scheduler on provider-key refusals and on nothing else.
  *
- * Pure: the entry as the document holds it, the policy's subscriptions, and the
- * deploy-time env the provider table reads its self-hosted hosts from.
+ * Pure: the entry as the document holds it, the configured credentials, and
+ * the deploy-time env the provider table reads its self-hosted hosts from.
  */
 
-import { rosterKeyRefusal } from "./providers";
+import { credentialCandidates, rosterProviderRefusal, type Credential } from "./credentials";
 
 /**
  * The keys a ROSTER ENTRY may carry, and the keys a QUEUE JOB may carry.
@@ -27,22 +27,24 @@ import { rosterKeyRefusal } from "./providers";
  * naming them is worth taking the file down for.
  */
 export const ROSTER_ENTRY_KEYS = [
-  "model", "tier", "idle", "driver", "effort", "apiBase", "apiKeyEnv",
-  "billing", "subscription", "race", "class", "watchdogs", "maxToolCalls",
+  "model", "tier", "idle", "driver", "effort", "apiBase",
+  "billing", "credential", "race", "class", "watchdogs", "maxToolCalls",
   "routing", "wiki", "compactWindow",
 ] as const;
 
-export const QUEUE_JOB_KEYS = ["ref", "episode", "repeat", "enabled", "account", "subscription"] as const;
+export const QUEUE_JOB_KEYS = ["ref", "episode", "repeat", "enabled", "account", "credential"] as const;
 
 /**
- * The nearest valid alternative, where there is an obvious one. Both entries
- * are keys that LOOK like they would work and quietly would not: `enabled` is
- * the queue job's word, not the entry's, and `tokenEnv` is the runner-side
- * spelling of a lane that an entry states as `subscription`.
+ * The nearest valid alternative, where there is an obvious one. Each is a key
+ * that LOOKS like it would work and quietly would not: `enabled` is the queue
+ * job's word, not the entry's, and a key or a subscription is a credential's
+ * (`credentials/<id>`), which an entry may only pin.
  */
 const ROSTER_KEY_HINTS: Record<string, string> = {
   enabled: 'roster entries have no `enabled`; to pause a character set `idle: "none"`; to stop scheduling set tier/idle accordingly',
-  tokenEnv: "use `subscription`, the NAME of the env var holding the token",
+  apiKeyEnv: "a key is a credential's (credentials/<id>.secretEnv); pin one with `credential`",
+  subscription: "a subscription is a credential (credentials/<id>); pin one with `credential`",
+  tokenEnv: "a subscription is a credential (credentials/<id>); pin one with `credential`",
 };
 
 /** The keys of `entry` that are outside `allowed`, in the file's own order. */
@@ -61,14 +63,14 @@ export function strictKeyWhy(kind: "roster entry" | "queue job", keys: readonly 
   );
 }
 
-/** Which rule refused an entry. The parser acts on one of them (`subscription`). */
-export type RosterRefusalKind = "unknown-key" | "provider-key" | "subscription";
+/** Which rule refused an entry. The parser acts on one of them (`credential`). */
+export type RosterRefusalKind = "unknown-key" | "provider" | "credential";
 
 export interface RosterEntryRefusal {
   kind: RosterRefusalKind;
   /**
-   * The operator's line. It can name a key, a host or a subscription's env
-   * var, so it goes to `--status` and the supervisor log, never to a page:
+   * The operator's line. It can name a key, a host or a credential, so it goes
+   * to `--status` and the supervisor log, never to a page:
    * the campaign squares say only that the entry is refused
    * (`campaignPairRefusals`).
    */
@@ -81,27 +83,36 @@ export interface RosterEntryRefusal {
  * enough to take it out of scheduling:
  *
  * - **a key the harness does not read** (`ROSTER_ENTRY_KEYS`);
- * - **a provider key towards a host its provider does not own**
- *   (`rosterKeyRefusal`, runner/src/providers.ts);
- * - **a subscription the policy does not list** (`policy.subscriptions`).
+ * - **a base no credential provider serves**, or one its provider's key may
+ *   not go to (`rosterProviderRefusal`, runner/src/credentials.ts);
+ * - **a pinned credential that cannot carry it** — not configured, another
+ *   provider's, the other billing side (`credentialCandidates`). A pinned
+ *   credential that is merely disabled is no refusal: the entry waits for it.
  *
  * Each is a refusal of the ENTRY, not the file: the rest of the roster stays in
  * effect, and a rejected re-read would make every other flag in the file inert.
  */
 export function rosterEntryRefusal(
-  e: { driver?: unknown; apiBase?: unknown; apiKeyEnv?: unknown; subscription?: unknown },
-  subscriptions: readonly string[],
+  e: { model?: unknown; driver?: unknown; apiBase?: unknown; billing?: unknown; credential?: unknown },
+  credentials: readonly Credential[],
   env: Record<string, string | undefined> = process.env,
 ): RosterEntryRefusal | null {
   const keys = unknownKeysOf(e, ROSTER_ENTRY_KEYS);
   if (keys.length > 0) return { kind: "unknown-key", why: strictKeyWhy("roster entry", keys, ROSTER_ENTRY_KEYS) };
-  const key = rosterKeyRefusal(e, env);
-  if (key !== null) return { kind: "provider-key", why: key };
-  if (e.subscription !== undefined && !subscriptions.includes(e.subscription as string)) {
-    return {
-      kind: "subscription",
-      why: `subscription ${String(e.subscription)} is not in policy.subscriptions (${subscriptions.join(", ")})`,
-    };
+  const provider = rosterProviderRefusal(e, env);
+  if (provider !== null) return { kind: "provider", why: provider };
+  if (e.credential !== undefined) {
+    const fit = credentialCandidates(
+      credentials.map((c) => ({ ...c, enabled: true })),
+      {
+        model: typeof e.model === "string" ? e.model : "",
+        driver: typeof e.driver === "string" ? e.driver : undefined,
+        apiBase: typeof e.apiBase === "string" ? e.apiBase : undefined,
+        billing: e.billing === "free" || e.billing === "paid" ? e.billing : undefined,
+      },
+      { pin: String(e.credential), env },
+    );
+    if (fit.why !== undefined) return { kind: "credential", why: fit.why };
   }
   return null;
 }

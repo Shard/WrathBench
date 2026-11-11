@@ -486,8 +486,8 @@ function RosterRow(props: {
           <Show when={typeof props.entry["apiBase"] === "string"}>
             <div title={String(props.entry["apiBase"])}>{String(props.entry["apiBase"])}</div>
           </Show>
-          <Show when={typeof props.entry["apiKeyEnv"] === "string"}>
-            <div>{String(props.entry["apiKeyEnv"])}</div>
+          <Show when={typeof props.entry["credential"] === "string"}>
+            <div>{String(props.entry["credential"])}</div>
           </Show>
         </td>
         <td>
@@ -576,7 +576,7 @@ function AddEntry(props: { write: Write }) {
                 ["class", "class"],
                 ["routing", "routing"],
                 ["apiBase", "apiBase"],
-                ["apiKeyEnv", "apiKeyEnv"],
+                ["credential", "credential"],
               ] as [keyof NewEntryForm, string][]
             }
           >

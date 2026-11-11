@@ -399,7 +399,7 @@ describe("/api/fleet carries its rows' run figures", () => {
           { account: "RUNNER", class: "pool", job: "j-RUNNER" },
           { account: "SPARE", class: "pool", job: "j-SPARE" },
           { account: "idle", class: "pool", job: null },
-          { account: "EMPTY", class: "paid", job: null },
+          { account: "EMPTY", class: "pool", job: null },
         ],
         // A long paused list: only the first on an idle account has a row.
         paused: [paused("p-busy", "RUNNER"), paused("p-idle", "IDLE"), paused("p-idle-2", "IDLE"), paused("p-none", null), paused("p-gone", "NOWHERE")],

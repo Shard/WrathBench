@@ -2,14 +2,14 @@
  * The supervisor's half of rollout deletion: which Codex homes it sweeps,
  * which threads it keeps, the one line a sweep logs, and the operator's
  * `--status` lines that say what an `infrastructure-failed` pause was and how
- * full a lane's volume is. Fixture homes in temp directories; no live stack.
+ * full a Codex home credential's volume is. Fixture homes in temp directories; no live stack.
  */
 import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { codexHomesOf, liveCodexThreads, pruneCodexHomes, volumeUsage, type PausedListing } from "./run-fleet";
-import { codexLaneVolume, formatPaused, pauseDetailLine, pauseDetailOf } from "./run-fleet-status";
-import { formatSubscriptionGate, subscriptionGate } from "./run-fleet-gate";
+import { codexHomeVolume, formatPaused, pauseDetailLine, pauseDetailOf } from "./run-fleet-status";
+import { formatCredentialStatus, type CredentialStatus } from "./run-fleet-credentials";
 import { writeCodexThread } from "../runner/src/codex-rollout";
 import { tempDirs } from "./temp-dirs";
 
@@ -54,15 +54,15 @@ const fact = (runId: string, o: { driver?: string; live?: boolean; heartbeatAt?:
 });
 
 describe("the Codex homes a supervisor sweeps", () => {
-  test("CODEX_HOME and each CODEX_HOME_N policy.subscriptions names, set to a directory here, once per real path", () => {
+  test("CODEX_HOME and each home a ChatGPT credential names, set to a directory here, once per real path", () => {
     const a = home([]);
     const b = home([]);
     const link = join(tmp("wrathbench-fleet-codex-link-"), "same");
     symlinkSync(a, link);
     const env = { CODEX_HOME: a, CODEX_HOME_2: b, CODEX_HOME_3: link, CODEX_HOME_4: join(a, "missing"), CLAUDE_CODE_OAUTH_TOKEN_2: b };
-    const homes = codexHomesOf(["CLAUDE_CODE_OAUTH_TOKEN_2", "CODEX_HOME_2", "CODEX_HOME_3", "CODEX_HOME_4"], env);
+    const homes = codexHomesOf(["CODEX_HOME_2", "CODEX_HOME_3", "CODEX_HOME_4"], env);
     expect(homes.map((h) => h.env)).toEqual(["CODEX_HOME", "CODEX_HOME_2"]);
-    // A home the policy does not name is not this supervisor's to sweep; an unset one is not here.
+    // A home no credential names is not this supervisor's to sweep; an unset one is not here.
     expect(codexHomesOf([], { CODEX_HOME_2: b }).map((h) => h.env)).toEqual([]);
   });
 });
@@ -216,16 +216,20 @@ describe("--status", () => {
     expect(formatPaused([listing("infrastructure-failed")])[1]).not.toContain("CLI:");
   });
 
-  test("a codex lane's line says how full its volume is; any other lane's says nothing more", () => {
+  test("a Codex home credential's line says how full its volume is; any other credential's says nothing more", () => {
     const h = home([]);
     expect(volumeUsage(h)).toMatch(/^\d+% of \d+\.\dG used$/);
     expect(volumeUsage(join(h, "missing"))).toBeUndefined();
-    expect(codexLaneVolume("codex:CODEX_HOME", { CODEX_HOME: h })).toBe(volumeUsage(h));
-    expect(codexLaneVolume("codex:CODEX_HOME_2", { CODEX_HOME: h })).toBeUndefined();
-    expect(codexLaneVolume("claude-code:CLAUDE_CODE_OAUTH_TOKEN", { CODEX_HOME: h })).toBeUndefined();
-    const gate = subscriptionGate([], { scored: 80, freeplay: 80 }, NOW);
-    const lines = formatSubscriptionGate(gate, ["claude-code:CLAUDE_CODE_OAUTH_TOKEN", "codex:CODEX_HOME"], { volumeOf: (l) => codexLaneVolume(l, { CODEX_HOME: h }) });
-    expect(lines.find((l) => l.includes("codex:CODEX_HOME"))).toBe(`  codex:CODEX_HOME: no observation — open; volume ${volumeUsage(h)}`);
-    expect(lines.find((l) => l.includes("claude-code:"))).toBe("  claude-code:CLAUDE_CODE_OAUTH_TOKEN: no observation — open");
+    const status = (provider: string, secretEnv: string, id: string): CredentialStatus => ({
+      id, provider, billing: "paid", enabled: true, secretEnv, secretSet: true, slots: 1, inUse: 0, budget: "no budget", used: null, held: {}, lastError: null,
+    });
+    const codex = status("chatgpt", "CODEX_HOME", "chatgpt-1");
+    const claude = status("claude", "CLAUDE_CODE_OAUTH_TOKEN", "claude-1");
+    expect(codexHomeVolume(codex, { CODEX_HOME: h })).toBe(volumeUsage(h));
+    expect(codexHomeVolume(status("chatgpt", "CODEX_HOME_2", "chatgpt-2"), { CODEX_HOME: h })).toBeUndefined();
+    expect(codexHomeVolume(claude, { CODEX_HOME: h, CLAUDE_CODE_OAUTH_TOKEN: h })).toBeUndefined();
+    const lines = formatCredentialStatus([claude, codex], {}, NOW, { volumeOf: (s) => codexHomeVolume(s, { CODEX_HOME: h }) });
+    expect(lines.find((l) => l.includes("chatgpt-1"))).toEndWith(`CODEX_HOME ok; volume ${volumeUsage(h)}`);
+    expect(lines.find((l) => l.includes("claude-1"))).toEndWith("CLAUDE_CODE_OAUTH_TOKEN ok");
   });
 });

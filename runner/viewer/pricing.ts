@@ -313,7 +313,7 @@ export function syncedPrice(model: string, at: number | null = null): PriceRow |
  * the fleet maps the two, so a codex run read as unpriced and fell off the
  * ladder's cost axis entirely. The prefix is the mapping: the catalogue carries
  * OpenAI's own published list price under it, which is the only sourced figure
- * available for a lane whose CLI reports no cost. Operator's decision,
+ * available for a driver whose CLI reports no cost. Operator's decision,
  * 2026-09-05, on the first codex run (`gpt-6-astra`, verified that day against
  * OpenAI's published API list price: $10/$50/$1 per million).
  *

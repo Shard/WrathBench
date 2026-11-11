@@ -58,7 +58,12 @@ flowchart TB
 
 The supervisor launches each run from the config store, and the runner drives
 the model against the stack, which is one box here because wrath-mcp's own
-documents draw its insides. The stack records what the character did into the
+documents draw its insides. What a run spends is modelled and nothing else: a
+provider credential with a free slot and room in its budget, and a game
+account from one pool (`infra/run-fleet-credentials.ts`; `docs/RUNBOOK.md`,
+"Credentials"). Which credential paid decides when a run starts, never what
+it measures: it is recorded on the run and kept out of the comparability
+tuple. The stack records what the character did into the
 run's `session/`; the runner writes the model's side beside it. Everything
 downstream of those files is derived.
 
@@ -446,12 +451,13 @@ is the one interface a roster starts an episode through, with two
 implementations: today's child process, and a Kubernetes pod
 (`infra/run-pod.ts`) created from the chart's template. Everything the roster
 does around an episode — session hygiene, classification, retries, the defer
-ladder, lane accounting — reads the files below and never the handle, so it is
+ladder, credential accounting — reads the files below and never the handle, so it is
 the same for both.
 
 **What the supervisor passes.** The flags `episodeFlags` builds
 (`infra/run-roster.ts`): on a fresh launch `--driver`, `--model`, `--run-id`,
-the driver's credentials by env var *name* (`--api-key-env`, `--token-env`),
+the run's credential by id and env var *name* (`--credential`, and `--api-key-env` or
+`--credential-env`, with `--usage-max-pct` for a usage budget),
 `--account`, `--effort`, `--compact-window`, the lane's leash
 (`--episode-ms`, `--max-tool-calls`, `--watchdogs-json`), and for a probe
 `--episode probing --campaign-file <runs/id/campaign.json> --ref <name>`
@@ -467,8 +473,8 @@ when the arm pinned one; a digest-only pin stamps
 `WRATHBENCH_LOCAL_MODEL_HOSTS` (the self-hosted hosts the provider table pairs
 with `LMSTUDIO_KEY`, which run.ts checks the key and base against before it
 reads the key), the module port secret, and the one credential the driver
-bills: its lane's `CLAUDE_CODE_OAUTH_TOKEN*` for claude-code, its `apiKeyEnv`
-for openai, the mounted `CODEX_HOME` for codex. Nothing else: no database variables, no config
+bills: its credential's `CLAUDE_CODE_OAUTH_TOKEN*` for claude-code, its key
+for openai and pi, the mounted `CODEX_HOME` for codex. Nothing else: no database variables, no config
 store, and no `ANTHROPIC_*` variable ever (claude-code is subscription-only;
 the pod env builder refuses to build a pod that would carry one). The run
 directory is on a shared volume. Before the run starts it holds at most launch
@@ -479,7 +485,7 @@ overwrites them, where anything else there refuses the launch.
 **What it reads back** (`readRunFact`, `runner/src/models.ts`, is the
 reference reader). `meta.json`: `harnessVersion`, `startedAt`,
 `config.{model, effort, compactWindow, account, character, token, campaign,
-campaignVersion, cell, arm, ref, subscription, extra, watchdogs}`,
+campaignVersion, cell, arm, ref, credential, extra, watchdogs}`,
 `comparability.{episode, episodeOverride, effort, compactWindow}` and, while
 paused, `pause.{reason, at, episodeElapsedMs, notBefore}`. `run.sqlite`: the
 `run` row (`started_at`, `ended_at`, `termination_reason`,

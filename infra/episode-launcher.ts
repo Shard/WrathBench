@@ -21,6 +21,7 @@
  * that launch is refused with the reason, not downgraded.
  */
 
+import type { PlacedCredential } from "./run-fleet-credentials";
 import type { RosterDriver } from "../runner/src/drivers";
 import { parseRunPodsMode, RUN_PODS_MODES, type RunPodsMode } from "../runner/src/models";
 
@@ -54,8 +55,8 @@ export interface LaunchSpec {
 export interface EpisodeSpec {
   runId: string;
   driver: RosterDriver;
-  /** The subscription lane's env var NAME (claude-code, codex), or the default lane. */
-  tokenEnv: string | undefined;
+  /** The credential the fleet placed the run on (`RosterSpec.placedOn`), or none on a hand-written roster. */
+  placedOn: PlacedCredential | undefined;
   /** The openai driver's key, by env var NAME. */
   apiKeyEnv: string;
   launch: LaunchSpec | undefined;
