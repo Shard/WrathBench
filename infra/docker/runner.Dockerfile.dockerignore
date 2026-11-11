@@ -17,6 +17,7 @@ runner/node_modules
 wrath-mcp/node_modules
 wrath-mcp/sdk/node_modules
 wrath-mcp/mcp/node_modules
+wrath-mcp/inspector/node_modules
 wiki/node_modules
 minimap/node_modules
 wrath-mcp/module

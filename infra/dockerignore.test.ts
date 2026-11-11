@@ -28,7 +28,7 @@ describe("the runner image's ignore list", () => {
   });
 
   test("keeps the workspace it is made of", () => {
-    for (const p of ["runner/src/env.ts", "wrath-mcp/sdk/src/index.ts", "wrath-mcp/mcp/src/index.ts", "wrath-mcp/package.json", "wrath-mcp/tsconfig.base.json", "infra/docker/runner.Dockerfile", "package.json", "bun.lock", "dashboard/src/App.tsx"]) {
+    for (const p of ["runner/src/env.ts", "wrath-mcp/sdk/src/index.ts", "wrath-mcp/mcp/src/index.ts", "wrath-mcp/inspector/src/index.ts", "wrath-mcp/package.json", "wrath-mcp/tsconfig.base.json", "infra/docker/runner.Dockerfile", "package.json", "bun.lock", "dashboard/src/App.tsx"]) {
       expect([p, ignored(patterns, p)]).toEqual([p, false]);
     }
   });
@@ -54,7 +54,7 @@ describe("the server image's ignore list", () => {
   });
 
   test("leaves out the TypeScript workspaces, which the server image is not made of", () => {
-    for (const p of ["runner/src/run.ts", "wrath-mcp/sdk/src/index.ts", "wrath-mcp/mcp/src/index.ts", "wiki/src/bundle.ts"]) {
+    for (const p of ["runner/src/run.ts", "wrath-mcp/sdk/src/index.ts", "wrath-mcp/mcp/src/index.ts", "wrath-mcp/inspector/src/index.ts", "wiki/src/bundle.ts"]) {
       expect([p, ignored(patterns, p)]).toEqual([p, true]);
     }
   });
