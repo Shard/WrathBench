@@ -744,8 +744,12 @@ character under `<run-id>~<Character>` with the run id as its `group`, and
 `/sessions/<id>/…` reads one, its streams by range, its tail over SSE and
 its packed trace and nearby windows. A 0.5 run is not listed, because it has
 no `session.json`, and still opens through the adapter. It serves the record
-as it is, unprojected, so a public handle withholds every path of it with a
-403, as it does the raw lines and the run's tail. The run page's session
+as it is, unprojected, but for `session.json`'s `id`, which reads as the
+session's id here (the run id, or a fan-out character's `<run-id>~<Character>`):
+the record's own is the session token's fingerprint, the name of the module's
+audit files, which nothing the viewer serves may carry. Unprojected,
+a public handle withholds every path of it with a 403, as it does the raw
+lines and the run's tail. The run page's session
 events read it.
 
 ### The config API (the admin switch)
