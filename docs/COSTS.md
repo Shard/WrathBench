@@ -117,10 +117,10 @@ the operator's figure in GitHub issue #66.
   prompt size and a run's totals cannot say which calls were which; a flat
   rate would be a guess, and a guessed price is worse than a blank (the rule
   in `pricing.ts`'s header), so its runs read the CLI's own figure.
-- **Cost control is external to the fleet by decision**: a tier is
-  denominated in runs, dollars are the operator's reasoning. If an in-fleet
-  money budget is wanted, it is a credential's, never a tier's: a `spend`
-  budget holds new starts on that key (docs/RUNBOOK.md, "Credentials").
+- **A tier is denominated in runs, never dollars**: money is a credential's
+  budget, not a tier's. A `spend` budget holds new starts and resumes on that
+  key, and a subscription's `usage` budget holds them at a share of its usage
+  window (docs/RUNBOOK.md, "Credentials").
 - **Subscription episodes are $0 marginal but not free in value**: ~99.5%+ of
   their prompt volume is cache reads, and the one clean e360 measurement
   as-metered was ~$44 — reserve the subscription for confirmed candidates, not volume
