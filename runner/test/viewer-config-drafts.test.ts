@@ -209,7 +209,7 @@ describe("drafts never reach anything public", () => {
     const db = seededStore();
     const root = tempDir("drafts-api-");
     mkdirSync(join(root, "runs"), { recursive: true });
-    const handle = createApi({ runsDir: join(root, "runs"), tilesDir: join(root, "tiles"), configDbPath: db, ...(publicMode ? { publicMode: true } : {}) });
+    const handle = createApi({ runsDir: join(root, "runs"), tilesDir: join(root, "tiles"), configDbPath: db, admin: true, ...(publicMode ? { publicMode: true } : {}) });
     return { handle, db, root };
   }
 

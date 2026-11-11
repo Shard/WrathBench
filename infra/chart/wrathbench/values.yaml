@@ -192,10 +192,49 @@ staging:
   soapPort: 7878
   stagerPasswordKey: WRATHBENCH_STAGER_PASSWORD
 
+# The three groups a deployment is made of (runner/viewer/groups.ts;
+# docs/ARCHITECTURE.md, "Groups"). Each is on by default, which renders what
+# the chart rendered before groups existed. A group that is off is absent, not
+# hidden: its workloads are not rendered, whatever their own `enabled` says,
+# and its pages, API routes and background work are gone from the pods that
+# remain (they read WRATHBENCH_GROUPS, rendered only when a group is off).
+#
+#   runner  the fleet supervisor and its run pods, the runner pod, the codex
+#           home. Off, nothing launches a run: a viewer-only deployment
+#           reads sessions its own agents produced.
+#   evals   scored episodes, campaigns, the ladder and comparability. No
+#           workload of its own: off, the supervisor launches no scored or
+#           probing episode (campaigns and scored jobs read as disabled, and
+#           an `idle: unlimited` model gets its freeplay session), and the
+#           ladder, campaigns and about pages are gone.
+#   viewer  the viewer, the publisher, and ClickHouse with its collector.
+#
+# Which groups are on is deployment config rather than fleet config: it
+# decides which workloads exist, which the config store cannot.
+groups:
+  runner:
+    enabled: true
+  evals:
+    enabled: true
+  viewer:
+    enabled: true
+
+# The admin interface: the viewer's config API (every write route it has)
+# and its admin pages, from which the operator edits credentials, the roster,
+# freeplay agents, campaigns and the queue through the config store's own
+# validation (docs/RUNBOOK.md, "The admin interface"). OFF by default: a
+# deployment that does not turn it on has no write route at all. It is
+# private only: it needs the viewer, which is LAN-only and unauthenticated by
+# design, and the published site never carries it. The chart refuses it with
+# the viewer off.
+admin:
+  enabled: false
+
 # There is no fleet config value and no ConfigMap: the fleet config is the
 # sqlite store on the data PVC (WRATHBENCH_CONFIG_DB, templates/_helpers.tpl),
 # seeded once from infra/fleet.example.json through the runner pod and edited
-# on the viewer's /config page from then on. The chart ships no copy of it.
+# with `bun wb config` or, with `admin` on, the viewer's /config page from then
+# on. The chart ships no copy of it.
 
 # Realm identity. Not secret; the account credentials are.
 realm:

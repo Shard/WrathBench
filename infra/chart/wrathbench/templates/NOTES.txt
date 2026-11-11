@@ -1,7 +1,7 @@
 WrathBench {{ .Values.image.tag }} is installed in namespace {{ .Release.Namespace }}.
 
 Nothing is exposed outside the cluster except the LAN viewer:
-{{- if and .Values.viewer.enabled .Values.viewer.ingress.enabled }}
+{{- if and (include "wrathbench.on.viewer" $) .Values.viewer.ingress.enabled }}
   https://{{ .Values.viewer.ingress.host }}
 {{- range .Values.viewer.ingress.extraHosts }}
   https://{{ . }}  (alias)

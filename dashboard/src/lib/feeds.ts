@@ -13,6 +13,7 @@ import type { ApiInfoResponse, FleetResponse } from "@viewer/api-types";
 import { api } from "../api/client";
 import { type Poll, poll } from "./poll";
 import { SERIES_LATEST, type SeriesChoice, readSeriesPref, seriesParam, writeSeriesPref } from "./harness";
+import { groupsOf } from "./nav";
 
 export interface Feeds {
   fleet: Poll<FleetResponse>;
@@ -67,8 +68,23 @@ export interface SeriesUrl {
   write: (v: string) => void;
 }
 
+/** A promise that never settles, shared, so a feed with nothing to ask holds no new one per tick. */
+const NEVER: Promise<never> = new Promise(() => {});
+
 export function createFeeds(url: SeriesUrl): Feeds {
-  const info = poll(() => api.info(), 60_000);
+  /*
+   * The first `/api/info` is shared with the fleet feed, which must know
+   * whether the runner group is on before it asks for a fleet a deployment
+   * without one does not serve. A failed one reads as every group, which is
+   * what an older viewer is.
+   */
+  let opening: Promise<ApiInfoResponse> | undefined = api.info();
+  const firstInfo = opening.catch((): undefined => undefined);
+  const info = poll(() => {
+    const p = opening ?? api.info();
+    opening = undefined;
+    return p;
+  }, 60_000);
   const seriesAvailable = (): string[] => (info.latest?.harnessSeries ?? []).map((s) => s.series);
   /*
    * URL first, then what this browser last chose, then `latest`. The URL wins
@@ -88,7 +104,15 @@ export function createFeeds(url: SeriesUrl): Feeds {
   // now", so letting it follow the newest value would make it always equal.
   let first: string | null | undefined;
   return {
-    fleet: poll(() => api.fleet(), 5_000),
+    /*
+     * The runner group's feed: with that group off there is no fleet to ask
+     * for, and the feed waits on a promise that never settles, slowly. Nothing
+     * reads it then: the status badge and the fleet page are that group's too.
+     */
+    fleet: poll(
+      async () => (groupsOf(info.latest ?? (await firstInfo)).runner ? api.fleet() : NEVER),
+      () => (groupsOf(info.latest).runner ? 5_000 : 3_600_000),
+    ),
     info,
     stale: (): boolean => {
       const now = info.latest?.dashboardBuild;

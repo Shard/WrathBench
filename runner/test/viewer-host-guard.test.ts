@@ -34,6 +34,7 @@ function fixture(allowedHosts: readonly string[] | null = [OWN]): { handle: Retu
       runsDir: join(root, "runs"),
       tilesDir: join(root, "tiles"),
       configDbPath: dbPath,
+      admin: true,
       ...(allowedHosts !== null ? { allowedHosts } : {}),
     }),
     dbPath,

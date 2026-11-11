@@ -49,7 +49,7 @@ spec:
           value: "1"
         {{- include "wrathbench.runEnv" . | nindent 8 }}
         {{- include "wrathbench.harnessSecretEnv" . | nindent 8 }}
-        {{- if .Values.codex.enabled }}
+        {{- if include "wrathbench.on.codex" $ }}
         - name: CODEX_HOME
           value: /home/bun/.codex
         {{- end }}
@@ -61,7 +61,7 @@ spec:
         - name: data
           mountPath: /wrathbench/data/wiki
           subPath: wiki
-        {{- if .Values.codex.enabled }}
+        {{- if include "wrathbench.on.codex" $ }}
         # Kept by the launcher for the codex driver only.
         - name: codex-home
           mountPath: /home/bun/.codex
@@ -72,7 +72,7 @@ spec:
     - name: data
       persistentVolumeClaim:
         claimName: {{ include "wrathbench.fullname" . }}-data
-    {{- if .Values.codex.enabled }}
+    {{- if include "wrathbench.on.codex" $ }}
     - name: codex-home
       persistentVolumeClaim:
         claimName: {{ include "wrathbench.fullname" . }}-codex-home
@@ -81,7 +81,7 @@ spec:
       emptyDir:
         sizeLimit: {{ .Values.runPods.tmpSizeLimit }}
 {{- end -}}
-{{- if .Values.fleet.enabled }}
+{{- if include "wrathbench.on.fleet" $ }}
 {{/*
 Run pods: one probe-campaign episode as its own pod (infra/run-pod.ts,
 docs/RUNBOOK.md "Run pods"). Three objects:

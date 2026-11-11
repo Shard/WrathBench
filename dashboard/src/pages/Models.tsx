@@ -26,6 +26,8 @@ import { characterRows } from "../lib/ladder";
 import { LevelXp } from "../components/CharacterFacts";
 import { InfoHint } from "../components/InfoHint";
 import { poll } from "../lib/poll";
+import { useFeeds } from "../lib/feeds";
+import { groupsOf } from "../lib/nav";
 import { runsHref, statusTitle, statusTone } from "../lib/runs";
 import { displayError } from "../lib/errors";
 
@@ -43,7 +45,10 @@ export default function Models() {
   // The freeplay column reads the ladder's own character rows, unfiltered by
   // series: a paused character from an older harness version is still the
   // model's freeplay state.
-  const freeplay = poll(() => api.ladder("freeplay"), POLL_MS);
+  // With the evals group off there is no ladder route, and the same rows come
+  // from the runs listing it projects (`/api/results`, the viewer's own).
+  const feeds = useFeeds();
+  const freeplay = poll(() => (groupsOf(feeds.info.latest).evals ? api.ladder("freeplay") : api.results("freeplay")), POLL_MS);
   const characters = createMemo(() => characterRows(freeplay.latest?.runs ?? []));
   const [open, setOpen] = createSignal<string | null>(null);
 

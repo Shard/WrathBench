@@ -87,7 +87,7 @@ describe("the generic write paths", () => {
     s.publishDefinition(publication(def));
     s.close();
     const root = tempDir("wb-campaign-api-");
-    const handle = createApi({ runsDir: join(root, "runs"), tilesDir: join(root, "tiles"), configDbPath: path });
+    const handle = createApi({ runsDir: join(root, "runs"), tilesDir: join(root, "tiles"), configDbPath: path, admin: true });
     for (const method of ["PUT", "PATCH", "DELETE"] as const) {
       const body = method === "DELETE" ? {} : { body: JSON.stringify({ hash: "x" }) };
       // The write guard stands in front of these rows as of every other: a

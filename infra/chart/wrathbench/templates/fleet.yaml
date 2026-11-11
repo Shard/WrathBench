@@ -1,4 +1,4 @@
-{{- if .Values.fleet.enabled }}
+{{- if include "wrathbench.on.fleet" $ }}
 {{/*
 The fleet supervisor (infra/run-fleet.ts) as a Deployment. The supervisor is a
 long-lived service, not a cron of one-shot episodes, so it is deployed as one:
@@ -99,7 +99,7 @@ spec:
             {{- /* The party stager, which the roster runs before a fresh party
                    launch: staging on only (values.yaml `staging`). */}}
             {{- with include "wrathbench.stagerEnv" . | trim }}{{ . | nindent 12 }}{{ end }}
-            {{- if .Values.codex.enabled }}
+            {{- if include "wrathbench.on.codex" $ }}
             # The `codex` driver's credential, a Codex home mounted below. The CLI
             # writes its token refresh back into this directory, so it is one
             # live copy on a PVC and never a copy of the operator's ~/.codex.
@@ -122,7 +122,7 @@ spec:
             - name: data
               mountPath: /wrathbench/data/config
               subPath: config
-            {{- if .Values.codex.enabled }}
+            {{- if include "wrathbench.on.codex" $ }}
             # NOT a subPath: the CLI rewrites auth.json in place and expects a
             # real directory it owns (uid 1000, via the pod's fsGroup).
             - name: codex-home
@@ -143,7 +143,7 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "wrathbench.fullname" . }}-data
-        {{- if .Values.codex.enabled }}
+        {{- if include "wrathbench.on.codex" $ }}
         - name: codex-home
           persistentVolumeClaim:
             claimName: {{ include "wrathbench.fullname" . }}-codex-home

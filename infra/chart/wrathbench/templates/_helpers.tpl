@@ -291,6 +291,7 @@ here: run.ts never opens it, and a run pod mounts no config. */}}
        that parses it must read the same pool, as with the store itself. */}}
 - name: WRATHBENCH_POOL_SIZE
   value: {{ include "wrathbench.poolSize" . | quote }}
+{{- include "wrathbench.groupsEnv" . }}
 {{- end -}}
 
 {{/*
@@ -372,5 +373,44 @@ template or stamp would carry.
       name: {{ .Values.envSecretName }}
       key: {{ .Values.staging.stagerPasswordKey }}
       optional: true
+{{- end }}
+{{- end -}}
+
+{{/*
+The three groups (runner/viewer/groups.ts; values.yaml "groups") and the
+workloads each one owns. A group that is off renders none of its workloads,
+whatever the workload's own `enabled` says; on, the workload's own switch
+decides, as it always has. Each helper is "true" or empty, so `if include …`
+reads it.
+
+  runner  the fleet supervisor and its run pods, the runner (dev) pod, the
+          codex home
+  viewer  the viewer, the publisher, and the derived store with its collector
+  evals   no workload of its own: the supervisor's scored and probing
+          launches and the viewer's eval pages, told by WRATHBENCH_GROUPS
+*/}}
+{{- define "wrathbench.on.fleet" -}}{{ if and .Values.groups.runner.enabled .Values.fleet.enabled }}true{{ end }}{{- end -}}
+{{- define "wrathbench.on.runner" -}}{{ if and .Values.groups.runner.enabled .Values.runner.enabled }}true{{ end }}{{- end -}}
+{{- define "wrathbench.on.codex" -}}{{ if and .Values.groups.runner.enabled .Values.codex.enabled }}true{{ end }}{{- end -}}
+{{- define "wrathbench.on.viewer" -}}{{ if and .Values.groups.viewer.enabled .Values.viewer.enabled }}true{{ end }}{{- end -}}
+{{- define "wrathbench.on.publisher" -}}{{ if and .Values.groups.viewer.enabled .Values.publisher.enabled }}true{{ end }}{{- end -}}
+{{- define "wrathbench.on.clickhouse" -}}{{ if and .Values.groups.viewer.enabled .Values.clickhouse.enabled }}true{{ end }}{{- end -}}
+{{- define "wrathbench.on.collector" -}}{{ if and (include "wrathbench.on.clickhouse" .) .Values.collector.enabled }}true{{ end }}{{- end -}}
+
+{{/*
+WRATHBENCH_GROUPS, the groups that are on, for every long-lived pod that reads
+it (through harnessEnv): the supervisor drops scored and probing launches with
+evals off, the viewer drops the pages and routes of an off group, and the
+publisher what it would have published for one. Rendered only when a group is
+off, so a deployment with every group on renders what it always did.
+*/}}
+{{- define "wrathbench.groupsEnv" -}}
+{{- $on := list -}}
+{{- range $name := list "runner" "evals" "viewer" -}}
+{{- if (index $.Values.groups $name).enabled -}}{{- $on = append $on $name -}}{{- end -}}
+{{- end -}}
+{{- if lt (len $on) 3 }}
+- name: WRATHBENCH_GROUPS
+  value: {{ join "," $on | quote }}
 {{- end }}
 {{- end -}}

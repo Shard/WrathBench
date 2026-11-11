@@ -119,7 +119,7 @@ IPv4:port; anything else is refused at render rather than opened wider.
 {{- end -}}
 
 {{- if .Values.networkPolicy.enabled }}
-{{- if .Values.fleet.enabled }}
+{{- if include "wrathbench.on.fleet" $ }}
 {{- if not .Values.networkPolicy.kubeApi }}
 {{- fail "networkPolicy.enabled: set networkPolicy.kubeApi to the Kubernetes API's addresses (the `kubernetes` Service and its endpoints). The fleet pod launches, watches and drains run pods through it, and a policy without it would shut it out." }}
 {{- end }}
@@ -183,7 +183,7 @@ spec:
 {{- end }}
 {{- /* Egress only from here on: the viewer is reached through the Ingress,
        and the publisher and collector listen on nothing. */}}
-{{- if .Values.viewer.enabled }}
+{{- if include "wrathbench.on.viewer" $ }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -197,7 +197,7 @@ spec:
   policyTypes: [Egress]
   egress:
     {{- include "wrathbench.np.dns" . | nindent 4 }}
-    {{- if .Values.clickhouse.enabled }}
+    {{- if include "wrathbench.on.clickhouse" $ }}
     {{- include "wrathbench.np.clickhouse" . | nindent 4 }}
     {{- end }}
     # /health, for the worldserver build /api/info names.
@@ -205,7 +205,7 @@ spec:
     # The OpenRouter catalogue a /config draft fetch reads.
     {{- include "wrathbench.np.internet" . | nindent 4 }}
 {{- end }}
-{{- if .Values.publisher.enabled }}
+{{- if include "wrathbench.on.publisher" $ }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -219,7 +219,7 @@ spec:
   policyTypes: [Egress]
   egress:
     {{- include "wrathbench.np.dns" . | nindent 4 }}
-    {{- if .Values.clickhouse.enabled }}
+    {{- if include "wrathbench.on.clickhouse" $ }}
     {{- include "wrathbench.np.clickhouse" . | nindent 4 }}
     {{- end }}
     # The viewer's handler, rendered in-process, asks /health too.
@@ -227,7 +227,7 @@ spec:
     # The bucket (S3_ENDPOINT, https).
     {{- include "wrathbench.np.internet" . | nindent 4 }}
 {{- end }}
-{{- if and .Values.clickhouse.enabled .Values.collector.enabled }}
+{{- if include "wrathbench.on.collector" $ }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

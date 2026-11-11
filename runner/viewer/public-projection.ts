@@ -720,6 +720,9 @@ export function projectInfo(i: ApiInfoResponse): ApiInfoResponse {
     ...(i.harnessSeries !== undefined
       ? { harnessSeries: i.harnessSeries.map((s) => ({ series: s.series, runs: s.runs })) }
       : {}),
+    // What the deployment is made of, so the public build draws its pages and
+    // no others. Absent when every group is on; `admin` is never carried.
+    ...(i.groups !== undefined ? { groups: { runner: i.groups.runner, evals: i.groups.evals, viewer: i.groups.viewer } } : {}),
     now: i.now,
   });
 }

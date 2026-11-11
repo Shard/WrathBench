@@ -14,7 +14,9 @@ import { For, Show, createSignal, onCleanup, type ParentProps } from "solid-js";
 import { SNAPSHOT_MODE, snapshotSource } from "../api/client";
 import { snapshotBanner, type SnapshotBanner, type SnapshotSource } from "../api/snapshot-client";
 import { useClock } from "../lib/clock";
-import { navItems, surface } from "../lib/nav";
+import { groupsOf, navItems, surface } from "../lib/nav";
+import { groupOfPage, isAdminPage, pageMounted, type Groups } from "@viewer/groups";
+import NotFound from "../pages/NotFound";
 import { FeedsContext, createFeeds } from "../lib/feeds";
 import { REPO_URL, repoLabel } from "../lib/repo";
 import { SeriesSelect } from "./SeriesSelect";
@@ -54,7 +56,18 @@ export function Layout(props: ParentProps) {
    * (`lib/nav.ts`), so the two can never disagree; null until `/api/info` has
    * settled on a private build, and nothing is drawn in the meantime.
    */
-  const which = (): ReturnType<typeof surface> => surface(SNAPSHOT_MODE, feeds.info.latest?.publicMode);
+  const which = (): ReturnType<typeof surface> => surface(SNAPSHOT_MODE, feeds.info.latest);
+  /*
+   * What the deployment is made of (`@viewer/groups`): an off group's pages
+   * are not in the bar and not routed, and the config page only with the
+   * admin switch on. A page that belongs to a group or to admin waits for
+   * `/api/info` before it renders, so a deployment without it never draws it
+   * on the way to the not-found page.
+   */
+  const groups = (): Groups => groupsOf(feeds.info.latest);
+  const settled = (): boolean => feeds.info.latest !== undefined || feeds.info.error !== undefined;
+  const mounted = (): boolean => pageMounted(location.pathname, groups(), which() === "ADMIN");
+  const gated = (): boolean => groupOfPage(location.pathname) !== null || isAdminPage(location.pathname);
   /* Required of every published artifact; see docs/DATA-AND-LEGAL.md. Null on
      the private build, which publishes nothing and so attributes nothing. */
   const attribution = () => {
@@ -98,7 +111,7 @@ export function Layout(props: ParentProps) {
             in public mode, and `=== false` rather than `!publicMode` keeps the
             link from flashing on before the first `/api/info` settles.
           */}
-          <For each={navItems(which() === "ADMIN")}>
+          <For each={navItems({ admin: which() === "ADMIN", groups: groups() })}>
             {(n) => (
               <A href={n.href} activeClass="on">
                 {n.label}
@@ -157,7 +170,10 @@ export function Layout(props: ParentProps) {
         <Show when={!flush()}>
           <SeriesSelect />
         </Show>
-        <StatusBadge />
+        {/* The fleet's state: the runner group's, and absent with it. */}
+        <Show when={groups().runner}>
+          <StatusBadge />
+        </Show>
       </header>
       {/*
         * The footer rides INSIDE the scroll container on every page that
@@ -170,7 +186,11 @@ export function Layout(props: ParentProps) {
         * optional per page. There it stays a sibling of `main`, where it was.
         */}
       <main class={flush() ? "flush" : ""}>
-        {props.children}
+        <Show when={!gated() || settled()}>
+          <Show when={mounted()} fallback={<NotFound />}>
+            {props.children}
+          </Show>
+        </Show>
         <Show when={!flush()}>{attribution()}</Show>
       </main>
       <Show when={flush()}>{attribution()}</Show>

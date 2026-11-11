@@ -20,6 +20,7 @@
  *   WRATHBENCH_PUBLISH_BATCH        default 8; runs projected per upload flush
  *   WRATHBENCH_PUBLISH_FULL_RENDER_MS  default 21600000 (6 h); the longest a cold run goes unrendered
  *   WRATHBENCH_MODULE_URL           optional; names the worldserver build on info.json
+ *   WRATHBENCH_GROUPS               the deployment's groups (runner/viewer/groups.ts); unset is all
  *   S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET, S3_ENDPOINT
  *                                   Bun.S3Client's own names, autoloaded from .env
  *
@@ -47,6 +48,7 @@ import { OG_KEY, renderOgPng } from "./og-render";
 import { ROBOTS_KEY, ROBOTS_TXT } from "./robots";
 import { publishLoop, type ObjectStore, type PassRenderer, type SnapshotResult } from "./publish-core";
 import { describeFindings, envSecrets, runTokenSecrets, SecretScanner } from "../runner/src/secret-scan";
+import { groupsEnvValue, groupsFromEnv, type Groups } from "../runner/viewer/groups";
 
 const RUNS_DIR = Bun.env.WRATHBENCH_RUNS_DIR ?? "data/runs";
 const STATE_PATH = Bun.env.WRATHBENCH_PUBLISH_STATE ?? "data/publish/state.json";
@@ -86,6 +88,19 @@ const mode = ((): "once" | "loop" => {
 })();
 
 if (!existsSync(RUNS_DIR)) fail(`runs directory ${RUNS_DIR} does not exist`);
+/*
+ * The deployment's groups (runner/viewer/groups.ts): a group that is off
+ * publishes nothing of its own. The publisher is the viewer group's, so with
+ * that group off there is nothing for it to do, and it says so rather than
+ * publish a site the deployment says it has not got.
+ */
+let GROUPS: Groups;
+try {
+  GROUPS = groupsFromEnv(Bun.env);
+} catch (e) {
+  fail(e instanceof Error ? e.message : String(e));
+}
+if (!GROUPS.viewer) fail(`WRATHBENCH_GROUPS=${groupsEnvValue(GROUPS)} leaves the viewer group off, and the public site is that group's`);
 if (!Number.isFinite(INTERVAL_MS) || INTERVAL_MS < 1000) {
   fail(`WRATHBENCH_PUBLISH_INTERVAL_MS=${Bun.env.WRATHBENCH_PUBLISH_INTERVAL_MS} is not a sane interval`);
 }
@@ -124,6 +139,7 @@ const renderer = createRenderer({
   runsDir: RUNS_DIR,
   fullRenderMs: FULL_RENDER,
   ...(MODULE_URL !== undefined ? { moduleUrl: MODULE_URL } : {}),
+  groups: GROUPS,
 });
 
 // The secret scan's known values: this process's own credentials, read once
@@ -151,7 +167,8 @@ const refreshScanner = (): void => {
 const render: PassRenderer = async (sink, published) => {
   refreshScanner();
   const result = await renderer(undefined, { sink, batch: BATCH }, published);
-  await publishCard(result);
+  // The card draws the ladder, which is the evals group's.
+  if (GROUPS.evals) await publishCard(result);
   await publishRobots();
   return result;
 };
