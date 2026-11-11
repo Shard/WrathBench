@@ -1,0 +1,65 @@
+{"ts":1762000200000,"t":"meta","runId":"v1p1-solo","harnessVersion":"0.6-1","sdkVersion":"0.0.0-fixture","startedAt":1762000200000,"config":{"moduleUrl":"http://worldserver:8086","character":"Testwick","account":"RUNNER","race":1,"class":2,"driver":"stub","apiKeyEnv":"OPENROUTER_KEY","wikiCoords":false,"wiki":true,"extra":false,"maxToolCallsPerEpisode":500,"stepIntervalMs":3000,"stateIntervalMs":60000,"snippetTimeoutMs":30000,"sandboxPingGraceMs":2000,"runsDir":"data/runs","wikiBundle":"data/wiki/bundle.sqlite","watchdogs":{"idleMs":600000,"noXpMs":2700000,"episodeMs":21600000,"maxSandboxRestarts":3},"runId":"v1p1-solo"}}
+{"ts":1762000200250,"t":"milestone","kind":"zone","to":{"id":12}}
+{"ts":1762000200250,"t":"milestone","kind":"area","to":{"id":87}}
+{"ts":1762000200250,"t":"milestone","kind":"achievements_at_login","ids":[9501],"points":10}
+{"ts":1762000200250,"t":"milestone","kind":"level","to":5,"xp":300}
+{"ts":1762000200250,"t":"milestone","kind":"spells_at_login","ids":[90001,90002]}
+{"ts":1762000200250,"t":"state","level":5,"xp":300,"map":0,"x":-9000,"y":-100,"z":80,"eventCount":11,"lastSeq":10,"money":1000,"questsCompleted":0,"zone":12,"area":87,"items":[{"name":"Testing Mace","count":1,"equipped":true,"itemId":61101,"quality":1,"slot":16},{"name":"Testing Stone","count":1,"equipped":false,"itemId":61103,"quality":1,"slot":23,"bag":255},{"name":"Testing Cloth","count":3,"equipped":false,"itemId":61104,"quality":1,"slot":0,"bag":19}],"health":120,"maxHealth":120,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":2800}
+{"ts":1762000205250,"t":"request","turn":1,"messages":[{"role":"user","content":"turn 1"}]}
+{"ts":1762000205250,"t":"response","turn":1,"message":{"role":"assistant","content":"ok"},"usage":{"prompt_tokens":100,"completion_tokens":10}}
+{"ts":1762000260250,"t":"state","level":5,"xp":435,"map":0,"x":-8920,"y":-73.33333333333343,"z":80,"eventCount":38,"lastSeq":37,"money":1037,"questsCompleted":0,"turn":1,"zone":12,"area":87,"health":90,"maxHealth":120,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":2800}
+{"ts":1762000295250,"t":"request","turn":2,"messages":[{"role":"user","content":"turn 2"}]}
+{"ts":1762000295250,"t":"response","turn":2,"message":{"role":"assistant","content":"ok"},"usage":{"prompt_tokens":100,"completion_tokens":10}}
+{"ts":1762000320250,"t":"state","level":5,"xp":570,"map":0,"x":-8840,"y":-46.666666666666764,"z":80,"eventCount":67,"lastSeq":66,"money":1074,"questsCompleted":0,"turn":2,"zone":12,"area":87,"items":[{"name":"Testing Mace","count":1,"equipped":true,"itemId":61101,"quality":1,"slot":16},{"name":"Testing Stone","count":1,"equipped":false,"itemId":61103,"quality":1,"slot":23,"bag":255},{"name":"Testing Sword","count":1,"equipped":false,"itemId":61105,"quality":2,"slot":24,"bag":255},{"name":"Testing Cloth","count":3,"equipped":false,"itemId":61104,"quality":1,"slot":0,"bag":19}],"health":90,"maxHealth":120,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":2800}
+{"ts":1762000380250,"t":"state","level":5,"xp":705,"map":0,"x":-8760,"y":-20.00000000000008,"z":80,"eventCount":95,"lastSeq":94,"money":1148,"questsCompleted":0,"turn":2,"zone":12,"area":87,"health":90,"maxHealth":120,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":2800}
+{"ts":1762000385250,"t":"request","turn":3,"messages":[{"role":"user","content":"turn 3"}]}
+{"ts":1762000385250,"t":"response","turn":3,"message":{"role":"assistant","content":"ok"},"usage":{"prompt_tokens":100,"completion_tokens":10}}
+{"ts":1762000440250,"t":"quest_complete","questId":101}
+{"ts":1762000440250,"t":"state","level":5,"xp":1090,"map":0,"x":-8680,"y":6.666666666666583,"z":80,"eventCount":124,"lastSeq":123,"money":1335,"questsCompleted":1,"turn":3,"zone":12,"area":87,"health":90,"maxHealth":120,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":2800}
+{"ts":1762000475250,"t":"request","turn":4,"messages":[{"role":"user","content":"turn 4"}]}
+{"ts":1762000475250,"t":"response","turn":4,"message":{"role":"assistant","content":"ok"},"usage":{"prompt_tokens":100,"completion_tokens":10}}
+{"ts":1762000500250,"t":"state","level":5,"xp":1225,"map":0,"x":-8600,"y":33.333333333333236,"z":80,"eventCount":151,"lastSeq":150,"money":1372,"questsCompleted":1,"turn":4,"zone":12,"area":87,"health":90,"maxHealth":120,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":2800}
+{"ts":1762000560250,"t":"milestone","kind":"achievement","id":9502,"name":"Invented Feat","points":10,"categoryId":92,"turn":4}
+{"ts":1762000560250,"t":"milestone","kind":"level","from":5,"to":6,"xp":210,"turn":4}
+{"ts":1762000560250,"t":"milestone","kind":"spell","id":90003,"turn":4}
+{"ts":1762000560250,"t":"state","level":6,"xp":210,"map":0,"x":-8520,"y":59.99999999999995,"z":80,"eventCount":181,"lastSeq":180,"money":1409,"questsCompleted":1,"turn":4,"zone":12,"area":87,"health":105,"maxHealth":135,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":3300}
+{"ts":1762000565250,"t":"request","turn":5,"messages":[{"role":"user","content":"turn 5"}]}
+{"ts":1762000565250,"t":"response","turn":5,"message":{"role":"assistant","content":"ok"},"usage":{"prompt_tokens":100,"completion_tokens":10}}
+{"ts":1762000620250,"t":"milestone","kind":"area","from":{"id":87},"to":{"id":88},"turn":5}
+{"ts":1762000620250,"t":"state","level":6,"xp":345,"map":0,"x":-8440,"y":86.66666666666654,"z":80,"eventCount":209,"lastSeq":208,"money":1446,"questsCompleted":1,"turn":5,"zone":12,"area":88,"health":105,"maxHealth":135,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":3300}
+{"ts":1762000655250,"t":"request","turn":6,"messages":[{"role":"user","content":"turn 6"}]}
+{"ts":1762000655250,"t":"response","turn":6,"message":{"role":"assistant","content":"ok"},"usage":{"prompt_tokens":100,"completion_tokens":10}}
+{"ts":1762000680250,"t":"quest_complete","questId":102}
+{"ts":1762000680250,"t":"state","level":6,"xp":730,"map":0,"x":-8360,"y":113.33333333333312,"z":80,"eventCount":239,"lastSeq":238,"money":1670,"questsCompleted":2,"turn":6,"zone":12,"area":88,"health":105,"maxHealth":135,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":3300}
+{"ts":1762000740250,"t":"state","level":6,"xp":865,"map":0,"x":-8280,"y":139.9999999999998,"z":80,"eventCount":268,"lastSeq":267,"money":1707,"questsCompleted":2,"turn":6,"zone":12,"area":88,"items":[{"name":"Testing Sword","count":1,"equipped":true,"itemId":61105,"quality":2,"slot":16},{"name":"Testing Stone","count":1,"equipped":false,"itemId":61103,"quality":1,"slot":23,"bag":255},{"name":"Testing Mace","count":1,"equipped":false,"itemId":61101,"quality":1,"slot":24,"bag":255},{"name":"Testing Cloth","count":3,"equipped":false,"itemId":61104,"quality":1,"slot":0,"bag":19}],"health":105,"maxHealth":135,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":3300}
+{"ts":1762000745250,"t":"request","turn":7,"messages":[{"role":"user","content":"turn 7"}]}
+{"ts":1762000745250,"t":"response","turn":7,"message":{"role":"assistant","content":"ok"},"usage":{"prompt_tokens":100,"completion_tokens":10}}
+{"ts":1762000800250,"t":"milestone","kind":"zone","from":{"id":12},"to":{"id":40},"turn":7}
+{"ts":1762000800250,"t":"milestone","kind":"area","from":{"id":88},"to":{"id":120},"turn":7}
+{"ts":1762000800250,"t":"state","level":6,"xp":1000,"map":0,"x":-8200,"y":166.66666666666666,"z":80,"eventCount":296,"lastSeq":295,"money":1744,"questsCompleted":2,"turn":7,"zone":40,"area":120,"health":105,"maxHealth":135,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":3300}
+{"ts":1762000835250,"t":"request","turn":8,"messages":[{"role":"user","content":"turn 8"}]}
+{"ts":1762000835250,"t":"response","turn":8,"message":{"role":"assistant","content":"ok"},"usage":{"prompt_tokens":100,"completion_tokens":10}}
+{"ts":1762000860750,"t":"state","level":6,"xp":1135,"map":0,"x":-8120,"y":193.3333333333335,"z":80,"eventCount":11,"lastSeq":332,"money":1781,"questsCompleted":0,"turn":8,"zone":40,"area":120,"items":[{"name":"Testing Sword","count":1,"equipped":true,"itemId":61105,"quality":2,"slot":16},{"name":"Testing Stone","count":1,"equipped":false,"itemId":61103,"quality":1,"slot":23,"bag":255},{"name":"Testing Mace","count":1,"equipped":false,"itemId":61101,"quality":1,"slot":24,"bag":255},{"name":"Testing Cloth","count":3,"equipped":false,"itemId":61104,"quality":1,"slot":0,"bag":19}],"health":120,"maxHealth":135,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":3300}
+{"ts":1762000921250,"t":"quest_complete","questId":103}
+{"ts":1762000921250,"t":"state","level":6,"xp":1520,"map":0,"x":-8040,"y":220.00000000000037,"z":80,"eventCount":40,"lastSeq":361,"money":1968,"questsCompleted":1,"turn":8,"zone":40,"area":120,"health":105,"maxHealth":135,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":3300}
+{"ts":1762000925250,"t":"request","turn":9,"messages":[{"role":"user","content":"turn 9"}]}
+{"ts":1762000925250,"t":"response","turn":9,"message":{"role":"assistant","content":"ok"},"usage":{"prompt_tokens":100,"completion_tokens":10}}
+{"ts":1762000981250,"t":"state","level":6,"xp":1655,"map":0,"x":-7960,"y":246.66666666666723,"z":80,"eventCount":68,"lastSeq":389,"money":2042,"questsCompleted":1,"turn":9,"zone":40,"area":120,"health":105,"maxHealth":135,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":3300}
+{"ts":1762001015250,"t":"request","turn":10,"messages":[{"role":"user","content":"turn 10"}]}
+{"ts":1762001015250,"t":"response","turn":10,"message":{"role":"assistant","content":"ok"},"usage":{"prompt_tokens":100,"completion_tokens":10}}
+{"ts":1762001041250,"t":"state","level":6,"xp":1790,"map":0,"x":-7880,"y":273.3333333333337,"z":80,"eventCount":95,"lastSeq":416,"money":2079,"questsCompleted":1,"turn":10,"zone":40,"area":120,"health":105,"maxHealth":135,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":3300}
+{"ts":1762001101250,"t":"milestone","kind":"level","from":6,"to":7,"xp":120,"turn":10}
+{"ts":1762001101250,"t":"state","level":7,"xp":120,"map":0,"x":-7800,"y":300,"z":80,"eventCount":123,"lastSeq":444,"money":2116,"questsCompleted":1,"turn":10,"zone":40,"area":120,"health":150,"maxHealth":150,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":3800}
+{"ts":1762001105250,"t":"request","turn":11,"messages":[{"role":"user","content":"turn 11"}]}
+{"ts":1762001105250,"t":"response","turn":11,"message":{"role":"assistant","content":"ok"},"usage":{"prompt_tokens":100,"completion_tokens":10}}
+{"ts":1762001161250,"t":"state","level":7,"xp":255,"map":0,"x":-7720,"y":326.6666666666663,"z":80,"eventCount":150,"lastSeq":471,"money":2153,"questsCompleted":1,"turn":11,"zone":40,"area":120,"health":120,"maxHealth":150,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":3800}
+{"ts":1762001195250,"t":"request","turn":12,"messages":[{"role":"user","content":"turn 12"}]}
+{"ts":1762001195250,"t":"response","turn":12,"message":{"role":"assistant","content":"ok"},"usage":{"prompt_tokens":100,"completion_tokens":10}}
+{"ts":1762001221250,"t":"state","level":7,"xp":390,"map":0,"x":-7640,"y":353.3333333333326,"z":80,"eventCount":177,"lastSeq":498,"money":2190,"questsCompleted":1,"turn":12,"zone":40,"area":120,"health":120,"maxHealth":150,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":3800}
+{"ts":1762001281250,"t":"state","level":7,"xp":525,"map":0,"x":-7560,"y":379.99999999999886,"z":80,"eventCount":205,"lastSeq":526,"money":2264,"questsCompleted":1,"turn":12,"zone":40,"area":120,"health":120,"maxHealth":150,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":3800}
+{"ts":1762001285250,"t":"request","turn":13,"messages":[{"role":"user","content":"turn 13"}]}
+{"ts":1762001285250,"t":"response","turn":13,"message":{"role":"assistant","content":"ok"},"usage":{"prompt_tokens":100,"completion_tokens":10}}
+{"ts":1762001341250,"t":"state","level":7,"xp":660,"map":0,"x":-7480,"y":406.66666666666515,"z":80,"eventCount":232,"lastSeq":553,"money":2301,"questsCompleted":1,"turn":13,"zone":40,"area":120,"health":120,"maxHealth":150,"power":0,"maxPower":1000,"powerType":1,"nextLevelXp":3800}
+{"ts":1762001375250,"t":"request","turn":14,"messages":[{"role":"user","content":"turn 14"}]}
+{"ts":1762001375250,"t":"response","turn":14,"message":{"role":"assistant","content":"ok"},"usage":{"prompt_tokens":100,"completion_tokens":10}}
+{"ts":1762001401250,"t":"termination","reason":"episode-limit","detail":"fixture"}

@@ -1,0 +1,61 @@
+{
+  "format": "wrath-session/1",
+  "id": "f1c7a5e5e5510001",
+  "written": 1762001401250,
+  "segments": [
+    {
+      "stream": "trace",
+      "file": "1762000200000.jsonl.zst",
+      "bytes": 1805,
+      "sha256": "edb8dbf88fec7bdcd9fdd4c7d0af325123f2fc1bbf4b01e16d5d5a4c2396b6a2"
+    },
+    {
+      "stream": "trace",
+      "file": "1762000500000.jsonl.zst",
+      "bytes": 1792,
+      "sha256": "b950391657442cb0ce6a7c8223d7901f14b9b5335bb604a846c9805e80f013fa"
+    },
+    {
+      "stream": "trace",
+      "file": "1762000800000.jsonl.zst",
+      "bytes": 1923,
+      "sha256": "52cc8ddcfa53a0a26ba5af961d1e5c74a4e1ed34ec421eb915273b86d9a2355b"
+    },
+    {
+      "stream": "trace",
+      "file": "1762001100000.jsonl.zst",
+      "bytes": 1725,
+      "sha256": "d10edeff436e86efd4e4952951947636a26b4bc7ba0ca82c179f860445152a44"
+    },
+    {
+      "stream": "trace",
+      "file": "1762001400000.jsonl.zst",
+      "bytes": 412,
+      "sha256": "d74bce50217dd5bf36f078051957bacfa8649f5599c7355c3e5c73fa18cb772e"
+    },
+    {
+      "stream": "events",
+      "file": "1762000200000.jsonl.zst",
+      "bytes": 261,
+      "sha256": "bf0d0a112d1468aba0ad2198a4b20a27dd9483a6754ab812ce0fb352eecf933d"
+    },
+    {
+      "stream": "events",
+      "file": "1762000500000.jsonl.zst",
+      "bytes": 263,
+      "sha256": "76cb74d383dfe14d685a47d2d0b758d88eab8d98e7b3faf50d3e595fb46d7a42"
+    },
+    {
+      "stream": "events",
+      "file": "1762000800000.jsonl.zst",
+      "bytes": 325,
+      "sha256": "695452b7e21d0200f8b9ad4d416b4f31349f38a4f4fbb2ecda58461c15f135f2"
+    },
+    {
+      "stream": "events",
+      "file": "1762001100000.jsonl.zst",
+      "bytes": 149,
+      "sha256": "ac5b4832937405c70b4098840222db0b5388d7afef74dab73cb2389a9c4b0c7a"
+    }
+  ]
+}
