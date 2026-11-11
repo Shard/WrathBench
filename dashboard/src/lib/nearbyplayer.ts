@@ -21,11 +21,11 @@
  * - **The throttle** (`nearbyFrameDue`): NPCs nearly always move, and drawing
  *   them every frame would hold the whole map at the display's rate.
  *
- * The codec is `runner/viewer/nearby.ts`, reached over `@viewer/nearby`.
+ * The codec is `@wrathbench/inspector/codec/nearby`.
  */
 
 import type { NearbyStateView, NearbyWindow } from "@viewer/api-types";
-import { decodeNearby, nearbyAt, nearbyCovers, nearbySelfAt, type DecodedNearby, type NearbySample } from "@viewer/nearby";
+import { decodeNearby, nearbyAt, nearbyCovers, nearbySelfAt, type DecodedNearby, type NearbySample } from "@wrathbench/inspector/codec/nearby";
 
 export type { NearbyWindow };
 

@@ -84,8 +84,8 @@ import {
 } from "../runner/viewer/public-projection";
 import { REDACTED_PROSE } from "../runner/viewer/redact-prose";
 import { LOCAL_PATH_ROOTS } from "../runner/viewer/scrub-paths";
-import { unpackSegs } from "../runner/viewer/trace";
-import { PUBLIC_NEARBY_SPAN_MS } from "../runner/viewer/nearby";
+import { unpackSegs } from "@wrathbench/inspector/codec/trace";
+import { PUBLIC_NEARBY_SPAN_MS } from "../runner/viewer/public-keys";
 import { describeFindings, SecretScanner } from "../runner/src/secret-scan";
 import { isNotAModelRun } from "../runner/src/config";
 import { LIVE_PATH, MANIFEST_PATH, NEARBY_PATH, classifyPath, traceSegmentPath } from "./publish-core";

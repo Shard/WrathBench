@@ -32,7 +32,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 /** Where the stack is checked out, relative to the repository root (`.gitmodules`). */
 export const STACK_ROOT = "wrath-mcp";
 /** The stack's workspaces, under `STACK_ROOT`. */
-export const STACK_PACKAGES = ["sdk", "mcp"] as const;
+export const STACK_PACKAGES = ["sdk", "mcp", "inspector"] as const;
 /** The rest of the repository's code, which may use the stack but never be used by it. */
 export const NON_STACK_DIRS = ["runner", "infra", "wiki", "dashboard", "collector", "minimap"] as const;
 /** This repository's workspaces that may declare a shared dependency (`zod`). */

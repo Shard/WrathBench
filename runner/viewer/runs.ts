@@ -28,7 +28,8 @@ import { holdsOnlyLaunchFiles } from "../src/launch-files";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ComparabilityView, ItemSample, MoveIntentView, RunRow, StateItemsRow, StatePoint } from "./api-types";
-import { sessionSource } from "./session-source";
+import { moves } from "@wrathbench/inspector";
+import { runSession } from "./runs-source";
 import { isV1RunDir, latestReading, readRunRow, readStateSamples } from "../src/run-reader";
 import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./archive-dir";
@@ -591,9 +592,13 @@ export function readStateItems(runsDir: string, runId: string): StateItemsRow[] 
   }
 }
 
-/** Every movement intention a run recorded, oldest first, from its session source (`session-source.ts`). */
-export function readMoves(runsDir: string, runId: string): MoveIntentView[] {
-  return sessionSource(runsDir, runId).moves();
+/** Every movement intention a run recorded, oldest first: the inspector's readout over the run's session (`runs-source.ts`). */
+export async function readMoves(runsDir: string, runId: string): Promise<MoveIntentView[]> {
+  try {
+    return await moves(runSession(runsDir, runId));
+  } catch {
+    return [];
+  }
 }
 
 export function readScratchpad(runsDir: string, runId: string): string | null {

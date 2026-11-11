@@ -36,6 +36,11 @@ function tree(files: Record<string, string>): string {
       dependencies: { "@wrathbench/sdk": "workspace:*", zod: "4.4.3" },
       exports: { ".": "./src/index.ts", "./sandbox-child": "./src/sandbox/child.ts" },
     }),
+    "wrath-mcp/inspector/package.json": pkg({
+      name: "@wrathbench/inspector",
+      dependencies: { "@wrathbench/mcp": "workspace:*" },
+      exports: { ".": "./src/index.ts", "./codec/trace": "./src/codec/trace.ts" },
+    }),
     "wrath-mcp/sdk/src/index.ts": "export const x = 1;\n",
     "runner/src/ok.ts": 'import { connect } from "@wrathbench/sdk";\nimport { startSandboxChild } from "@wrathbench/mcp/sandbox-child";\n',
   };

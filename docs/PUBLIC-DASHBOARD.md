@@ -193,7 +193,7 @@ mutable URLs after each push tightens it to the push cadence.
 
 A run the trace recorder drove has positions at about 1 Hz and the unit state
 beside them, packed one segment per run per UTC-aligned five-minute window
-(`runner/viewer/trace.ts` is the codec and the format). That is what lets the
+(`@wrathbench/inspector/codec/trace`, in the stack, is the codec and the format). That is what lets the
 map play a character back as movement rather than a pip that jumps once a pass.
 Since the character sheet joined it, a segment also says what the character
 had at any moment in the window: money, equipment, worn bags, what it carried,
@@ -313,7 +313,7 @@ holds its window.
   nine minutes behind the newest `live.json`, and from one pass to the next
   its playhead reaches about nine minutes behind the pass in hand at the
   nominal cadence and eleven with passes ten minutes apart. Twelve covers both
-  (`runner/viewer/nearby.ts`; `dashboard/test/nearbyplayer.test.ts` runs the
+  (`runner/viewer/public-keys.ts`; `dashboard/test/nearbyplayer.test.ts` runs the
   clock against it). A slower publisher leaves the layer empty for part of a
   cycle rather than showing old units. The window is read straight after the
   feed, at the top of the pass, so it reaches as far back as the playhead.

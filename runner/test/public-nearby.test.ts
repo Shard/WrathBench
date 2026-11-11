@@ -24,11 +24,12 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import type { NearbyRow, NearbyUnit, NearbyUnitType } from "@wrathbench/mcp/record";
 import { openSessionRecord, removeSessionRing } from "../src/session-record";
-import { sessionSource } from "../viewer/session-source";
+import { sessionKind } from "./fixtures/run-readout";
 import { LEGACY05_RING, writeLegacy05Ring } from "./fixtures/legacy05-writer";
 import { recordDrain, traceOfReading } from "./fixtures/v1-session";
 import type { LiveNearby, PositionsResponse } from "../viewer/api-types";
-import { PUBLIC_NEARBY_SPAN_MS, decodeNearby, nearbyAt } from "../viewer/nearby";
+import { decodeNearby, nearbyAt } from "@wrathbench/inspector/codec/nearby";
+import { PUBLIC_NEARBY_SPAN_MS } from "../viewer/public-keys";
 import { PUBLIC_NEARBY_KEYS, projectLiveNearby } from "../viewer/public-projection";
 import { createRenderer, type SnapshotArtifact } from "../viewer/snapshot";
 import { emptyState, publishPass, LIVE_PATH, NEARBY_PATH, type ObjectStore } from "../../infra/publish-core";
@@ -135,7 +136,7 @@ async function setup(aheadMs?: number, layout: Layout = "v1"): Promise<{ runs: s
   // The fixture's own 0.5 ring is replaced, whichever layout is under test.
   rmSync(join(runs, LIVE_RUN, LEGACY05_RING.dir), { recursive: true, force: true });
   const ring = await writeRing(runs, join(runs, LIVE_RUN), aheadMs, layout);
-  expect(sessionSource(runs, LIVE_RUN).kind).toBe(layout === "v1" ? "v1" : "legacy-0.5");
+  expect(sessionKind(runs, LIVE_RUN)).toBe(layout === "v1" ? "v1" : "legacy-0.5");
   return { runs, ring };
 }
 

@@ -32,7 +32,7 @@ import { createApi } from "../viewer/api";
 import { emptyState, publishPass, type ObjectStore } from "../../infra/publish-core";
 import { PUBLIC_ATTRIBUTION } from "../viewer/public-projection";
 import type { PositionsResponse, TraceSegment } from "../viewer/api-types";
-import { SEG_MS, unpackSegs, windowOf } from "../viewer/trace";
+import { SEG_MS, unpackSegs, windowOf } from "@wrathbench/inspector/codec/trace";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

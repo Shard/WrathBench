@@ -1,5 +1,5 @@
 /**
- * The trace codec (`runner/viewer/trace.ts`): what a segment carries, what
+ * The trace codec (`@wrathbench/inspector/codec/trace`): what a segment carries, what
  * decoding it gives back, and how the player reads a position and a state off
  * it. Every fixture is built in the recorder's row shape, the one `run.sqlite`
  * holds, so the codec is tested against the contract rather than against
@@ -25,13 +25,13 @@ import {
   segRunsHas,
   stateAt,
   tailStart,
-  traceSegmentKey,
   unpackSegs,
   windowOf,
   type TraceRow,
   type TraceSegment,
   type TraceState,
-} from "../viewer/trace";
+} from "@wrathbench/inspector/codec/trace";
+import { traceSegmentKey } from "../viewer/public-keys";
 import { projectTraceSegment } from "../viewer/public-projection";
 
 /** A window boundary well inside the epoch-ms range real rows carry. */
@@ -158,9 +158,10 @@ const angDiff = (a: number, b: number): number => {
 
 /* ------------------------------------------------------------- module --- */
 
-describe("trace module", () => {
+describe("public keys module", () => {
+  // The codec's own bundling rule is the stack's (`wrath-mcp/scripts/boundary.ts`).
   test("has no runtime imports, so the dashboard can bundle it", async () => {
-    const src = await Bun.file(new URL("../viewer/trace.ts", import.meta.url).pathname).text();
+    const src = await Bun.file(new URL("../viewer/public-keys.ts", import.meta.url).pathname).text();
     // Type-only imports are erased; anything else would follow it into the browser.
     expect(src).not.toMatch(/^\s*import\s+(?!type\b)/m);
     expect(src).not.toMatch(/\brequire\s*\(/);

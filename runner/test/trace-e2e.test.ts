@@ -3,13 +3,13 @@
  * recorder (`@wrathbench/mcp/record/recorder`) over a real SDK state cache fed
  * hand-written frames, the stack's `SessionWriter` folding, keying and
  * segmenting what each drain hands it into the run's `session/trace`, the
- * viewer's `trace-db.ts` reading it back through the run's session source, and
+ * inspector's readout reading it back through the run's session (`runs-source.ts`), and
  * the codec decoding what the viewer encoded. What the player gets out must be
  * what the recorder put in.
  *
  * Also here: the storage contract has two spellings, the stack's
  * (`@wrathbench/mcp/record`, rows with parsed `data`) and the browser-safe
- * codec's (`viewer/api-types.ts` and `viewer/trace.ts`, a row with `data` as
+ * codec's (`viewer/api-types.ts` and `@wrathbench/inspector/codec/trace`, a row with `data` as
  * text). The codec cannot import the stack (it ships to the browser over
  * `@viewer/*` and imports nothing), so the two are pinned compatible here, at
  * the type level and at runtime. Where v1 differs from the codec's spelling on
@@ -39,7 +39,7 @@ import {
 import { TraceRecorder } from "@wrathbench/mcp/record/recorder";
 import type { TraceItemName, TraceQuestReq as ViewerQuestReq, TraceSheet as ViewerSheet, TraceState as ViewerState } from "../viewer/api-types";
 import { projectTraceSegment } from "../viewer/public-projection";
-import { sessionSource } from "../viewer/session-source";
+import { sessionKind } from "./fixtures/run-readout";
 import {
   GAP_MS,
   Q_O,
@@ -60,8 +60,8 @@ import {
   unpackSegs,
   type DecodedSegment,
   type TraceRow as ViewerRow,
-} from "../viewer/trace";
-import { readPositionTrace, readTraceIndex, readTraceSegment } from "../viewer/trace-db";
+} from "@wrathbench/inspector/codec/trace";
+import { readPositionTrace, readTraceIndex, readTraceSegment } from "./fixtures/run-readout";
 import { tempDirs } from "./fixtures/temp-dirs";
 import { openTestSession, recordDrain, type TestSession } from "./fixtures/v1-session";
 
@@ -158,7 +158,7 @@ function storedRows(session: TestSession): WriterRow[] {
   return session.reader.rows("trace").filter((r) => r.kind !== "dict");
 }
 
-describe("the trace end to end", () => {
+describe("the trace end to end", async () => {
   test("a walk across a window boundary, an aura, a hearth and a flight come back as recorded", async () => {
     const runs = tempDir("trace-e2e-");
 
@@ -235,7 +235,7 @@ describe("the trace end to end", () => {
     // The session closes: every segment closed and compressed, and still read.
     session.clock.now = clock;
     await session.writer.close();
-    expect(sessionSource(runs, RUN).kind).toBe("v1");
+    expect(sessionKind(runs, RUN)).toBe("v1");
     expect(readdirSync(join(session.dir, "trace")).every((f) => f.endsWith(".jsonl.zst"))).toBe(true);
 
     const stored = storedRows(session);
@@ -251,14 +251,15 @@ describe("the trace end to end", () => {
 
     // The viewer, once both windows have settled.
     const now = W1 + SEG_MS + SETTLE_MS;
-    const index = readTraceIndex(runs, RUN, now);
+    const index = await readTraceIndex(runs, RUN, now);
     expect(unpackSegs(index.segs)).toEqual([W0, W1]);
     expect(index.tail).toBeNull();
-    const segs: DecodedSegment[] = [W0, W1].map((t0) => {
-      const found = readTraceSegment(runs, RUN, t0, now)!;
+    const segs: DecodedSegment[] = [];
+    for (const t0 of [W0, W1]) {
+      const found = (await readTraceSegment(runs, RUN, t0, now))!;
       expect(found.closed).toBe(true);
-      return decodeSegment(JSON.parse(JSON.stringify(found.segment)));
-    });
+      segs.push(decodeSegment(JSON.parse(JSON.stringify(found.segment))));
+    }
     const frames = segs.flatMap((s) => s.frames);
     const segOf = (ts: number): DecodedSegment => segs.find((s) => ts >= s.t0 && ts < s.t1)!;
 
@@ -354,7 +355,7 @@ describe("the trace end to end", () => {
       .filter((t) => t !== undefined && t !== null);
     expect(targets).toContainEqual({ kind: "player" });
     expect(targets.filter((t) => (t as { kind: string }).kind === "player").every((t) => JSON.stringify(t) === '{"kind":"player"}')).toBe(true);
-    const seg = decodeSegment(JSON.parse(JSON.stringify(readTraceSegment(runs, RUN, W0, W1 + SEG_MS)!.segment)));
+    const seg = decodeSegment(JSON.parse(JSON.stringify((await readTraceSegment(runs, RUN, W0, W1 + SEG_MS))!.segment)));
     expect(stateAt(seg, W0 + 15_000).target).toEqual({ kind: "player" });
     expect(stateAt(seg, W0 + 22_000).target).toMatchObject({ kind: "creature", entry: 299 });
     expect(JSON.stringify(seg)).not.toContain("4242");
@@ -449,7 +450,7 @@ describe("the trace end to end", () => {
     while (clock < W1 + 30_000) second();
     ingest();
     rec.stop();
-    expect(sessionSource(runs, RUN).kind).toBe("v1");
+    expect(sessionKind(runs, RUN)).toBe("v1");
 
     // The names travel with the record: every segment names each id its rows
     // reference, once, and the item template's name is all a name is.
@@ -466,9 +467,9 @@ describe("the trace end to end", () => {
 
     // The viewer, once both windows have settled; then the public projection of the same.
     const now = W1 + SEG_MS + SETTLE_MS;
-    const read = (t0: number): DecodedSegment => decodeSegment(JSON.parse(JSON.stringify(readTraceSegment(runs, RUN, t0, now)!.segment)));
-    const segs = [read(W0), read(W1)];
-    const pub = [W0, W1].map((t0) => decodeSegment(JSON.parse(JSON.stringify(projectTraceSegment(readTraceSegment(runs, RUN, t0, now)!.segment)))));
+    const raw = [(await readTraceSegment(runs, RUN, W0, now))!.segment, (await readTraceSegment(runs, RUN, W1, now))!.segment];
+    const segs = raw.map((seg): DecodedSegment => decodeSegment(JSON.parse(JSON.stringify(seg))));
+    const pub = raw.map((seg) => decodeSegment(JSON.parse(JSON.stringify(projectTraceSegment(seg)))));
     const segOf = (list: DecodedSegment[], t: number): DecodedSegment => list.find((s) => t >= s.t0 && t < s.t1)!;
 
     // At every change, a second after it (the sheet is read at most once a
@@ -501,15 +502,15 @@ describe("the trace end to end", () => {
     expect(segs[1]!.items.get(51004)).toEqual([1, "Test Ring"]);
 
     // The live tail carries the same sheet in its keyframe.
-    const live = readPositionTrace(runs, RUN, W1 + 25_000)!;
+    const live = (await readPositionTrace(runs, RUN, W1 + 25_000))!;
     const tail = decodeSegment(JSON.parse(JSON.stringify(live.tail)));
     expect(shape(sheetAt(tail, W1 + 21_500))).toEqual(truths.at(-1)!.at);
-    expect(readTraceIndex(runs, RUN, W1 + 25_000).tail!.items).toBeDefined();
+    expect((await readTraceIndex(runs, RUN, W1 + 25_000)).tail!.items).toBeDefined();
 
     // Still read the same once the session has closed and its segments are compressed.
     session.clock.now = clock;
     await session.writer.close();
-    expect(JSON.stringify(read(W0))).toBe(JSON.stringify(segs[0]));
+    expect(JSON.stringify(decodeSegment(JSON.parse(JSON.stringify((await readTraceSegment(runs, RUN, W0, now))!.segment))))).toBe(JSON.stringify(segs[0]));
     expect(validateSession(session.dir).errors).toEqual([]);
   });
 });

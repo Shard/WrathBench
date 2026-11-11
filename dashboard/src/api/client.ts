@@ -301,7 +301,7 @@ export function createClient(opts: ClientOptions = {}) {
       get<TraceIndexResponse>(`/api/run/${encodeURIComponent(id)}/trace`),
     /**
      * The units around a live character over the last `spanMs`, one window
-     * (`@viewer/nearby`). Asked only for a position the feed flagged `nearby`,
+     * (`@wrathbench/inspector/codec/nearby`). Asked only for a position the feed flagged `nearby`,
      * on the map's own poll.
      */
     nearby: (id: string, spanMs: number): Promise<NearbyWindow> =>

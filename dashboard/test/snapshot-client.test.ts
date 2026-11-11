@@ -40,7 +40,8 @@ import type {
   RunDetailResponse,
   TrackResponse,
 } from "../../runner/viewer/api-types";
-import { PUBLIC_NEARBY_KEY, emptyNearbyWindow } from "../../runner/viewer/nearby";
+import { emptyNearbyWindow } from "@wrathbench/inspector/codec/nearby";
+import { PUBLIC_NEARBY_KEY } from "@viewer/public-keys";
 import { ApiError } from "../src/api/client";
 import {
   CHARACTER_TRACK_CONCURRENCY,

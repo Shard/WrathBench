@@ -87,12 +87,12 @@ import {
   projectTraceSegment,
   projectNearby,
 } from "./public-projection";
-import { NEARBY_SPAN_MS } from "./nearby";
-import { readNearbyWindow } from "./nearby-ring";
+import { NEARBY_SPAN_MS } from "@wrathbench/inspector/codec/nearby";
 import { scrubPathsText } from "./scrub-paths";
 import { strikableSessionToken, strikeSessionTokens } from "../src/session-token";
-import { SEG_MS } from "./trace";
-import { readTraceIndex, readTraceSegment, traceSegsMemo } from "./trace-db";
+import { SEG_MS } from "@wrathbench/inspector/codec/trace";
+import { closedWindowsMemo, createInspectorApi, nearbyWindow, traceIndex, traceSegment } from "@wrathbench/inspector";
+import { runSession, runsSource } from "./runs-source";
 import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStateItems, readStates, runDir } from "./runs";
 import {
   factOf,
@@ -276,6 +276,9 @@ function taintOf(r: Pick<ResultRun, "live" | "pauseReason" | "modelResponses" | 
 function notFound(msg: string): Response {
   return json({ error: msg }, 404);
 }
+
+/** Where the inspector's API is mounted on a private handle. */
+export const INSPECTOR_BASE = "/api/inspector";
 
 function withheld(): Response {
   return json({ error: "withheld in public mode" }, 403);
@@ -841,7 +844,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
   const worldserver = worldserverIdentity(opts.moduleUrl ?? "http://127.0.0.1:8086");
 
   /** Each run's closed trace windows, for its track (see `release` for why it is never dropped). */
-  const traceSegs = traceSegsMemo();
+  const closedWindows = closedWindowsMemo();
+  const inspector = createInspectorApi(runsSource(runsDir), { base: INSPECTOR_BASE });
+  /** A run's closed trace windows, memoised per run (`closedWindowsMemo`). */
+  const traceSegs = (runId: string, now: number) => closedWindows(`${runsDir}\0${runId}`, runSession(runsDir, runId), now);
 
   /**
    * One tail per run, shared by every reader; scans are serialised per run.
@@ -1515,7 +1521,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       ...trackFrom(states, items),
       // Same fallback as the track's own points: a run whose moves the
       // collector has not reached yet still draws its intentions.
-      moves: moveRows.length > 0 ? moveViewsOf(moveRows) : readMoves(runsDir, runId),
+      moves: moveRows.length > 0 ? moveViewsOf(moveRows) : await readMoves(runsDir, runId),
     };
     if (settled) {
       trackCores.set(runId, core);
@@ -1795,7 +1801,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * scanned and the run's own files: gated on the row's stamp, so every
        * other run's page pays nothing and keeps its shape.
        */
-      const party = run.party === undefined ? null : partyDetailOf(runsDir, runId, dir, tail);
+      const party = run.party === undefined ? null : await partyDetailOf(runsDir, runId, dir, tail);
       const body: RunDetailResponse = {
         /*
          * The row's quest count is the newest sample's, and the counter is the
@@ -1878,7 +1884,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       // Same threshold as the detail route's, for the same reason: a bar with
       // no attempt either side of it has nothing to step to.
       const character = whole !== null && whole.attempts > 1 ? whole : null;
-      const trace = traceSegs(runsDir, runId, Date.now());
+      const trace = await traceSegs(runId, Date.now());
       // The travel marks ride the same incremental tail the run page reads, so
       // a replay opened after the page — and every publisher pass, which asks
       // for both — pays nothing for them; a cold replay pays the page's scan.
@@ -1935,14 +1941,14 @@ export function createApi(opts: ApiOptions): ApiHandle {
     if (rest === "/trace") {
       // The trace index: the closed windows and the tail so far. Never cached:
       // the tail moves with every drain.
-      return pub(readTraceIndex(runsDir, runId, Date.now()), projectTraceIndex, [runId]);
+      return pub(await traceIndex(runSession(runsDir, runId), Date.now()), projectTraceIndex, [runId]);
     }
 
     const traceMatch = /^\/trace\/(\d+)$/.exec(rest);
     if (traceMatch !== null) {
       const t0 = Number(traceMatch[1]);
       if (!Number.isSafeInteger(t0) || t0 % SEG_MS !== 0) return notFound("no such trace window");
-      const found = readTraceSegment(runsDir, runId, t0, Date.now());
+      const found = await traceSegment(runSession(runsDir, runId), t0, Date.now());
       if (found === null) return notFound("no trace in that window");
       /*
        * A closed window is settled (`SETTLE_MS` past its end), so its segment
@@ -1963,14 +1969,14 @@ export function createApi(opts: ApiOptions): ApiHandle {
     if (rest === "/nearby") {
       /*
        * The units around a live character, for the live map: the last `span`
-       * ms of the run's ring (`nearby-ring.ts`, at most its reach), one
+       * ms of the run's ring (the inspector's `nearbyWindow`, at most its reach), one
        * window. Never cached — the ring moves every drain — and an empty
        * window, not a 404, for a run with none: no units is a state. In public
        * mode the window crosses `projectNearby`.
        */
       const spanParam = Number(url.searchParams.get("span") ?? NEARBY_SPAN_MS);
       const span = Number.isFinite(spanParam) ? spanParam : NEARBY_SPAN_MS;
-      return pub(readNearbyWindow(runsDir, runId, span, Date.now()), projectNearby);
+      return pub(await nearbyWindow(runSession(runsDir, runId), span, Date.now()), projectNearby);
     }
 
     if (rest === "/entries") {
@@ -2130,7 +2136,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * memoised here because each one cost a file open or a whole-file scan; they
    * are rows in the derived store now, shared only over a few seconds
    * (`sharedStore`). The one other, the trace window
-   * list (`traceSegsMemo`), is a few numbers per run and is kept on purpose:
+   * list (`closedWindowsMemo`), is a few numbers per run and is kept on purpose:
    * it is what spares a pass a `run.sqlite` open per run.
    */
   const release = (runId: string): void => {
@@ -2198,6 +2204,17 @@ export function createApi(opts: ApiOptions): ApiHandle {
       // Anything but a read may have changed the roster: the next poll reads it afresh.
       if (req.method !== "GET" && req.method !== "HEAD") rosterHeld = undefined;
       if (res !== null) return res;
+    }
+
+    /*
+     * The inspector's own API over the runs (`@wrathbench/inspector`, through
+     * `runs-source.ts`): the session record as it is, every stream and its
+     * tail. Raw records with no projected form, so a public handle withholds
+     * it whole, like the raw lines and the run's tail.
+     */
+    if (path === INSPECTOR_BASE || path.startsWith(`${INSPECTOR_BASE}/`)) {
+      if (publicMode) return withheld();
+      return (await inspector(req)) ?? notFound("no such path");
     }
 
     if (path.startsWith("/api")) return (await api(req, url, path)) ?? notFound("no such path");

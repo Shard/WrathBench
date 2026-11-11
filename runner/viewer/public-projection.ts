@@ -158,10 +158,9 @@ import {
   stateOf,
   type TraceSheetKey,
   type TraceStateKey,
-} from "./trace";
+} from "@wrathbench/inspector/codec/trace";
 import {
   NEARBY_VERSION,
-  PUBLIC_NEARBY_SPAN_MS,
   emptyNearbyWindow,
   emptySelf,
   encodeNearby,
@@ -171,7 +170,8 @@ import {
   type NearbyRingUnit,
   type NearbyStateKey,
   type NearbyUnitTypeName,
-} from "./nearby";
+} from "@wrathbench/inspector/codec/nearby";
+import { PUBLIC_NEARBY_SPAN_MS } from "./public-keys";
 
 /**
  * What is published is what the public dashboard reads (operator, 2026-10-18).
@@ -1634,7 +1634,7 @@ const tupleList = <T extends number[]>(a: unknown, width: number): T[] =>
   Array.isArray(a) ? a.map((t) => numTuple<T>(t, width)).filter((t): t is T => t !== null) : [];
 
 /**
- * One trace segment (`runner/viewer/trace.ts`), field by field.
+ * One trace segment (`@wrathbench/inspector/codec/trace`), field by field.
  *
  * Positions, cuts and flights pass as numbers — a cut says that the character
  * did not travel there and never why. The state crosses `PUBLIC_TRACE_KEYS`:
@@ -1949,7 +1949,7 @@ function publicNearbyRows(rows: readonly NearbyRingRow[]): NearbyRingRow[] {
 }
 
 /**
- * One nearby window (`runner/viewer/nearby.ts`) as the public may see it, by
+ * One nearby window (`@wrathbench/inspector/codec/nearby`) as the public may see it, by
  * the operator's decisions of 2026-10-18: creatures only — no other player,
  * no unit another player owns, charms or drives, and none while it targets
  * another player or their pet — with the state cut to `PUBLIC_NEARBY_KEYS`

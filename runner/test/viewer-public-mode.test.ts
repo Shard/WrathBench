@@ -84,7 +84,17 @@ const JSON_ROUTES = [
 ] as const;
 
 /** Routes with no projected form: public mode answers 403 rather than guessing. */
-const WITHHELD_ROUTES = [`/api/run/${DEAD_RUN}/raw/0`, `/api/run/${DEAD_RUN}/stream`, "/tiles/0/0_0.png"] as const;
+const WITHHELD_ROUTES = [
+  `/api/run/${DEAD_RUN}/raw/0`,
+  `/api/run/${DEAD_RUN}/stream`,
+  "/tiles/0/0_0.png",
+  // The inspector's API: the session record unprojected, every path of it.
+  "/api/inspector/sessions",
+  `/api/inspector/sessions/${DEAD_RUN}`,
+  `/api/inspector/sessions/${DEAD_RUN}/trace`,
+  `/api/inspector/sessions/${DEAD_RUN}/tail/calls`,
+  "/api/inspector/nothing",
+] as const;
 
 describe("public mode is projected everywhere", () => {
   test("no poisoned value reaches any public JSON body", async () => {
@@ -162,7 +172,7 @@ describe("public mode is projected everywhere", () => {
     }
   });
 
-  test("raw lines, tiles and the live tail are withheld", async () => {
+  test("raw lines, tiles, the live tail and the inspector's API are withheld", async () => {
     const runs = poisonedRunsDir();
     try {
       const handle = handleFor(runs, true);

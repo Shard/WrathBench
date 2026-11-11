@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { CONTEXT_MS, SEG_MS, encodeSegment, type TraceDictLookup, type TraceRow } from "@viewer/trace";
+import { CONTEXT_MS, SEG_MS, encodeSegment, type TraceDictLookup, type TraceRow } from "@wrathbench/inspector/codec/trace";
 import type { ItemSample, TraceItemName, TraceQuestReq, TraceSegment } from "../../runner/viewer/api-types";
 import { projectTraceSegment } from "../../runner/viewer/public-projection";
 import { carried, carriedCount, paperdoll, sheetItems, sheetReading, type InvItem } from "../src/lib/inventory";

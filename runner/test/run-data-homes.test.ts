@@ -34,7 +34,7 @@ import { readConfig } from "../../collector/src/config";
 import { SessionReader, emptyTraceState } from "@wrathbench/mcp/record";
 import { tokenFingerprint } from "@wrathbench/mcp/module-auth";
 import { openSessionRecord, sessionDirOf } from "../src/session-record";
-import { SEG_MS, windowOf } from "../viewer/trace";
+import { SEG_MS, windowOf } from "@wrathbench/inspector/codec/trace";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

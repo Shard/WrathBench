@@ -21,7 +21,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describeFindings, type ScanFinding } from "../runner/src/secret-scan";
-import { SEG_MS, unpackSegs } from "../runner/viewer/trace";
+import { SEG_MS, unpackSegs } from "@wrathbench/inspector/codec/trace";
 import { cap, fmtAge, fmtBytes, isValidRunId, iso } from "./inspect-run";
 import { parseState, RUN_PREFIX, type PublishState } from "./publish-core";
 

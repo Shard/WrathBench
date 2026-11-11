@@ -25,7 +25,7 @@ import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import { createRenderer, type SnapshotResult } from "../viewer/snapshot";
 import { REFERENCE_STAMP, STUB_STAMP } from "../src/config";
-import { SEG_MS, windowOf } from "../viewer/trace";
+import { SEG_MS, windowOf } from "@wrathbench/inspector/codec/trace";
 import { emptyState, publishPass, traceSegmentPath, type ObjectStore } from "../../infra/publish-core";
 import { verifyPublication } from "../../infra/publish-accept";
 import { DEAD_RUN, LIVE_RUN, poisonedRunsDir } from "./fixtures/poisoned-runs";

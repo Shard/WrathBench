@@ -35,7 +35,7 @@
  *   bytes, which every page's shell fetched while only the zoomed-in map
  *   draws units (operator, 2026-10-24).
  * - `v1/run/<id>/trace/<t0>.json` is one closed trace window
- *   (`runner/viewer/trace.ts`), immutable because a closed window never
+ *   (`@wrathbench/inspector/codec/trace`), immutable because a closed window never
  *   changes. The run's track lists them and `live.json` names the newest; both
  *   are written after them, and each is rendered once — the publisher passes
  *   in which windows the bucket already holds.
@@ -92,8 +92,9 @@ import type {
   TraceSegment,
   TrackResponse,
 } from "./api-types";
-import { traceSegmentKey, unpackSegs } from "./trace";
-import { PUBLIC_NEARBY_KEY, PUBLIC_NEARBY_SPAN_MS } from "./nearby";
+import { unpackSegs } from "@wrathbench/inspector/codec/trace";
+import { traceSegmentKey } from "./public-keys";
+import { PUBLIC_NEARBY_KEY, PUBLIC_NEARBY_SPAN_MS } from "./public-keys";
 import {
   PUBLIC_ATTRIBUTION,
   projectCampaigns,
