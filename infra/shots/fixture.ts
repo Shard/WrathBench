@@ -23,6 +23,11 @@
  *                  `sessions/<Character>/` and a `roster.json` no reader may
  *                  serve; on the private site only, since a fan-out run is
  *                  never published
+ *   fixture-fanout-live
+ *                  the same, unterminated and kept live by `tick`: three
+ *                  characters, Bramblewick, Corriva and Duskel, walking loops
+ *                  between the live runs on the open field, a pip each on the
+ *                  private map
  *
  * Both carry a character sheet on the trace (money, worn and carried items, a
  * quest log with one quest that completes, one in progress and one of four
@@ -63,6 +68,7 @@ import { Trajectory } from "../../runner/src/trajectory";
 export const LIVE_RUN = "fixture-live";
 export const ENDED_RUN = "fixture-ended";
 export const FANOUT_RUN = "fixture-fanout";
+export const FANOUT_LIVE_RUN = "fixture-fanout-live";
 /** In the fan-out run's `roster.json` only. */
 export const FANOUT_ROSTER_TOKEN = "fixture-roster-token-0000000000000000";
 
@@ -474,6 +480,8 @@ export interface Fixture {
   live: string;
   /** Every live run, `live` first. */
   lives: string[];
+  /** The live fan-out run, and its characters in name order. */
+  fanoutLive: { runId: string; characters: string[] };
   ended: string;
   /** Resolves once the ended run's session record is closed; the live runs' rings are on disk before `writeFixture` returns. */
   ready: Promise<void>;
@@ -578,8 +586,18 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
     const heartbeat = join(runsDir, spec.runId, "heartbeat");
     return { spec, traj, session, heartbeat, last: spec.traceTo };
   });
+  // A live fan-out run: one agent, three characters, a record each and a pip each; private only.
+  const fanoutLiveSpecs: Spec[] = [
+    { ...liveSpec, runId: FANOUT_LIVE_RUN, character: "Bramblewick", model: "fixture/fanout-model", startedAt: at(now - 40 * 60_000), phase: LOOP_MS / 3, scratchpad: PAD("Bramblewick"), ground: { map: 0, x: -9330, y: 200, z: 57 }, level: 5 },
+    { ...liveSpec, runId: FANOUT_LIVE_RUN, character: "Corriva", model: "fixture/fanout-model", startedAt: at(now - 40 * 60_000), phase: (LOOP_MS * 2) / 3, scratchpad: PAD("Corriva"), ground: { map: 0, x: -9280, y: 290, z: 57 }, level: 8 },
+    { ...liveSpec, runId: FANOUT_LIVE_RUN, character: "Duskel", model: "fixture/fanout-model", startedAt: at(now - 40 * 60_000), phase: 0, scratchpad: PAD("Duskel"), ground: { map: 0, x: -9380, y: 300, z: 57 }, level: 6 },
+  ];
+  const fanoutLive = writeRun(runsDir, fanoutLiveSpecs[0]!, null, fanoutLiveSpecs);
+  writeFileSync(join(runsDir, FANOUT_LIVE_RUN, "roster.json"), JSON.stringify({ characters: fanoutLiveSpecs.map((s) => ({ character: s.character, token: FANOUT_ROSTER_TOKEN })) }), { mode: 0o600 });
+  const fanoutHeartbeat = join(runsDir, FANOUT_LIVE_RUN, "heartbeat");
+  const ticking = [...lives, ...fanoutLive.sessions.map((session, i) => ({ spec: fanoutLiveSpecs[i]!, session, heartbeat: fanoutHeartbeat, last: fanoutLiveSpecs[i]!.traceTo }))];
   const beat = (t: number): void => {
-    for (const l of lives) {
+    for (const l of ticking) {
       writeFileSync(l.heartbeat, "fixture 0\n");
       utimesSync(l.heartbeat, t / 1000, t / 1000);
     }
@@ -590,12 +608,13 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
     runsDir,
     live: LIVE_RUN,
     lives: liveSpecs.map((s) => s.runId),
+    fanoutLive: { runId: FANOUT_LIVE_RUN, characters: fanoutLiveSpecs.map((s) => s.character).sort() },
     ended: ENDED_RUN,
     ready,
     tick(t = Date.now()) {
       ring.tick(t);
       const to = at(t);
-      for (const l of lives) {
+      for (const l of ticking) {
         if (to > l.last) {
           l.session.writer.ingest(drainOf(l.spec, { trace: traceRows({ ...l.spec, traceTo: to }, l.last + 2_000, to, false) }));
           l.last = to;
@@ -608,6 +627,8 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
         l.traj.close();
         void l.session.writer.close();
       }
+      fanoutLive.traj.close();
+      for (const s of fanoutLive.sessions) void s.writer.close();
     },
   };
 }
