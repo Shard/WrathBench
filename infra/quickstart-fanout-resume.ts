@@ -21,21 +21,26 @@
  * expected, not a failure.
  *
  * The quickstart must be up with the runner and the worldserver, and the five
- * accounts on the module's allowlist. The default accounts are the stock
- * compose's (`RUNNER` and `POOL01` … `POOL04`, which bootstrap creates):
+ * accounts on the module's allowlist; the stock compose's `RUNNER` and
+ * `POOL01` … `POOL04` are, and bootstrap creates them. **The launch deletes
+ * every character on the accounts it is given** (launch hygiene, as for any
+ * fresh run), so name accounts whose characters nobody wants, on a stack
+ * whose fleet service is not running (the script refuses one that is). Both
+ * flags are required, so it is never pointed at a stack by default:
  *
- *   docker compose --env-file .env -f infra/compose.yml up -d --build runner
- *   bun infra/quickstart-fanout-resume.ts [--project wrathbench] [--accounts A,B,C,D,E] [--no-kill]
+ *   docker compose -p <project> --env-file .env -f infra/compose.yml up -d --build runner
+ *   bun infra/quickstart-fanout-resume.ts --project <project> --accounts RUNNER,POOL01,POOL02,POOL03,POOL04 [--no-kill]
  *
- * It reads the run directory on this machine's `data/runs` (the runner
- * container's bind mount), never prints a token, writes nothing under the run
- * directory, and leaves the run in place for `bun infra/inspect-run.ts run <id>`.
+ * It reads the run directory on this machine's `data/runs`, which must be the
+ * runner container's (it refuses another checkout's), never prints a token,
+ * writes nothing under the run directory, and leaves the run in place for
+ * `bun infra/inspect-run.ts run <id>`.
  * About eight minutes: two of them wait out the killed run's heartbeat, and
  * up to two wait for the server to take logged-out characters out of the world.
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, openSync, readFileSync, statSync } from "node:fs";
+import { existsSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listSegments, readSegment, STREAMS } from "@wrathbench/mcp/record/read";
@@ -50,13 +55,18 @@ const flag = (name: string): string | undefined => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
 };
-const project = flag("--project") ?? "wrathbench";
-const accounts = (flag("--accounts") ?? "RUNNER,POOL01,POOL02,POOL03,POOL04").split(",").map((a) => a.trim()).filter((a) => a.length > 0);
+const project = flag("--project");
+const accountsFlag = flag("--accounts");
+if (project === undefined || accountsFlag === undefined) {
+  console.error("usage: bun infra/quickstart-fanout-resume.ts --project <compose project> --accounts A,B,C,D,E [--no-kill]  (the launch deletes every character on those accounts)");
+  process.exit(2);
+}
+const accounts = accountsFlag.split(",").map((a) => a.trim()).filter((a) => a.length > 0);
 const hardKill = !argv.includes("--no-kill");
 const COUNT = 5;
+const runsDir = "data/runs";
 if (accounts.length < COUNT) throw new Error(`five characters need five accounts, got ${accounts.length}`);
 
-const runsDir = "data/runs";
 const runId = newRunId();
 const runDir = join(runsDir, runId);
 const pidFile = `/tmp/${runId}.pid`;
@@ -69,15 +79,25 @@ function check(ok: boolean, what: string): void {
   if (!ok) failures++;
 }
 
-function container(service: string): string {
+function running(service: string): string {
   const p = Bun.spawnSync(["docker", "ps", "-q", "--filter", `label=com.docker.compose.project=${project}`, "--filter", `label=com.docker.compose.service=${service}`]);
-  const id = p.stdout.toString().trim().split("\n")[0] ?? "";
+  return p.stdout.toString().trim().split("\n")[0] ?? "";
+}
+function container(service: string): string {
+  const id = running(service);
   if (id === "") throw new Error(`no running ${service} container in compose project ${project}`);
   return id;
 }
+// A supervisor on the same stack would hand these accounts to its own jobs.
+if (running("fleet") !== "") throw new Error(`compose project ${project} has its fleet service running; stop it first`);
 const runner = container("runner");
 const worldserver = container("worldserver");
 const db = container("db");
+// The run directory is read off this checkout: it must be the one the runner container writes.
+const mounted = Bun.spawnSync(["docker", "inspect", "-f", '{{range .Mounts}}{{if eq .Destination "/wrathbench/data/runs"}}{{.Source}}{{end}}{{end}}', runner]).stdout.toString().trim();
+if (mounted === "" || !existsSync(runsDir) || realpathSync(mounted) !== realpathSync(runsDir)) {
+  throw new Error(`the runner container writes runs to ${mounted || "(no runs mount)"}, not this checkout's ${runsDir}; run this from that checkout's root`);
+}
 
 function sh(id: string, script: string): string {
   const p = Bun.spawnSync(["docker", "exec", id, "sh", "-c", script], { stderr: "pipe" });

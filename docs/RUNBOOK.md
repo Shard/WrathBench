@@ -1793,13 +1793,15 @@ with the flags above): it logs five characters in, acts for all of them from
 one snippet, reads the roll-up and the merged feed, logs one out and back in,
 and blocks the sandbox once to show every character reattached.
 
-`bun infra/quickstart-fanout-resume.ts [--project <compose project>]`, with
-the quickstart up, checks a resume on that session end to end: it stops the
-run with SIGTERM once the five are in, resumes it, kills it with SIGKILL,
-resumes it again, and lets it end, checking the roster file, the module's
-sessions and each character's record at every step. Its header says what it
-proves; the stock compose's `RUNNER` and `POOL01` … `POOL04` are its default
-accounts. By hand only: it needs the live stack.
+`bun infra/quickstart-fanout-resume.ts --project <compose project> --accounts
+<five accounts>`, with the quickstart up and its fleet service stopped,
+checks a resume on that session end to end: it stops the run with SIGTERM
+once the five are in, resumes it, kills it with SIGKILL, resumes it again,
+and lets it end, checking the roster file, the module's sessions and each
+character's record at every step. Its launch deletes every character on the
+accounts it is given, as any fresh run's does; on the stock compose,
+`RUNNER` and `POOL01` … `POOL04` are allowlisted. Its header says what it
+proves. By hand only: it needs the live stack.
 
 ### The scripted reference run
 
