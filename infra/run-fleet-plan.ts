@@ -2663,6 +2663,8 @@ export function planTick(
   unownedRefs: readonly string[] = [],
   /** The credentials' budgets (`credentialGate`); absent holds nothing. */
   gate?: CredentialGate,
+  /** The evals group (`planPolicy`'s `evals`): off, the policy picks no scored or probing episode. The caller passes the config `withoutEvals` too. */
+  evals = true,
 ): {
   pinned: { job: FleetJob; spawn: JobSpawn }[];
   queue: QueuePlan;
@@ -2755,6 +2757,7 @@ export function planTick(
     campaigns: unpinnedCampaigns(config),
     probeRuns,
     ...(affinity !== undefined ? { affinity } : {}),
+    evals,
   });
   return { pinned, queue, policy, heldPicks: [...gatedPinned, ...heldPicks] };
 }

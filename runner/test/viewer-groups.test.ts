@@ -22,7 +22,9 @@ import {
   pageMounted,
   type Groups,
 } from "../viewer/groups";
-import { parseFleet, withoutEvals } from "../../infra/run-fleet-config";
+import { parseFleet, rosterModels, withoutEvals } from "../../infra/run-fleet-config";
+import { forGroups, formatGroupsBanner, formatModels, formatOutstandingFor, formatQueue, planDryRun } from "../../infra/run-fleet-status";
+import { modelStates } from "../src/models";
 
 const roots: string[] = [];
 afterAll(() => {
@@ -148,5 +150,62 @@ describe("the supervisor with evals off", () => {
     expect(off.campaigns.every((c) => !c.enabled)).toBe(true);
     // Pure: the config read stays as it was.
     expect(cfg.jobs.map((j) => j.enabled)).toEqual([true, true]);
+  });
+});
+
+describe("bun wb fleet status with evals off", () => {
+  const NOW = 1_800_000_000_000;
+  const cfg = parseFleet({
+    accounts: { pool: ["RUNNER", "RUNNER2"] },
+    credentials: { "or-paid": { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 8, billing: "paid", enabled: true } },
+    roster: { a: { model: "v/a", tier: "t1" }, b: { model: "v/b", tier: "t1", idle: "unlimited" } },
+    queue: [
+      { ref: "a", episode: "e90", repeat: 1, enabled: true },
+      { ref: "b", episode: "freeplay", repeat: "loop", enabled: true },
+      { ref: "a", episode: "e360", repeat: 1, enabled: false },
+    ],
+  });
+  const states = modelStates({ runsDir: "/nonexistent", roster: rosterModels(cfg.roster), runs: [], sidecar: { version: 1, cleared: {} }, now: NOW, policy: cfg.policy });
+  const evalsOff: Groups = { runner: true, evals: false, viewer: true };
+
+  test("reads the config as the supervisor runs it, and names what only the group turned off", () => {
+    expect(forGroups(cfg, ALL_GROUPS).config).toBe(cfg);
+    expect(forGroups(cfg, ALL_GROUPS).offByGroup.size).toBe(0);
+    const { config, offByGroup } = forGroups(cfg, evalsOff);
+    expect(config.jobs.map((j) => j.enabled)).toEqual([false, true, false]);
+    // The e360 job was the operator's switch, not the group's.
+    expect([...offByGroup]).toEqual([cfg.jobs[0]!.name]);
+  });
+
+  test("says so once, and the queue says why a job is off", () => {
+    expect(formatGroupsBanner(ALL_GROUPS)).toEqual([]);
+    expect(formatGroupsBanner(evalsOff)).toEqual([
+      "evals group off (WRATHBENCH_GROUPS=runner,viewer): no scored or probing episode is launched or owed; campaigns and scored or probing jobs read as disabled",
+    ]);
+    const { config, offByGroup } = forGroups(cfg, evalsOff);
+    const lines = formatQueue(config.jobs, undefined, undefined, offByGroup);
+    expect(lines[0]).toBe("queue: 1 enabled manual job(s) of 3 (supervisor has not reported on it)");
+    expect(lines[1]).toEndWith("e90 x1 — disabled (evals group off)");
+    expect(lines[3]).toEndWith("e360 x1 — disabled");
+  });
+
+  test("owes no scored run: the models table reads free, and nothing is outstanding", () => {
+    const on = formatModels(states, new Set(), NOW, new Map(), cfg.policy).join("\n");
+    const off = formatModels(states, new Set(), NOW, new Map(), cfg.policy, false).join("\n");
+    expect(on).toMatch(/^ {2}a .* yes: /m);
+    expect(off).toMatch(/^ {2}a .* free: the evals group is off/m);
+    expect(off).not.toMatch(/ yes: /);
+    const input = { states, accounts: 2 };
+    expect(formatOutstandingFor(input, true)).toMatch(/^outstanding: \d/);
+    expect(formatOutstandingFor(input, false)).toBe("outstanding: none — the evals group is off");
+  });
+
+  test("the dry-run plans no scored pick, only the idle freeplay session", () => {
+    const plan = (groups: Groups) => {
+      const { config, offByGroup } = forGroups({ ...cfg, jobs: [] }, groups);
+      return planDryRun({ config, runs: [], states, held: () => undefined, stamp: "20261112", now: NOW, evals: groups.evals, offByGroup }).plan.policy;
+    };
+    expect(plan(ALL_GROUPS).map((p) => p.job.episode)).toContain("e90");
+    expect(plan(evalsOff).map((p) => p.job.episode)).toEqual(["freeplay"]);
   });
 });
