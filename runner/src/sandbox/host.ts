@@ -21,8 +21,9 @@ import {
   type SandboxNoticeKind,
 } from "@wrathbench/mcp";
 import type { CallRecord } from "@wrathbench/mcp";
+import type { CharacterRoster } from "@wrathbench/mcp/fanout";
 import type { PartySignal } from "@wrathbench/mcp/record";
-import type { SessionRecord } from "../session-record";
+import type { RecordSignals, SessionRecord } from "../session-record";
 import type { ContextEvents } from "./signals";
 import type { SnippetDelta } from "./snippet-delta";
 
@@ -63,25 +64,50 @@ export type RunnerSandboxHostOptions = Omit<SandboxHostOptions, "record"> & {
   session?: SessionRecord | undefined;
   /** The record tick, when not the stack's default. */
   recordTickMs?: number | undefined;
+  /**
+   * A fan-out run's drain (`../fanout-run.ts`): there is no one session
+   * record, each character brings its own, and every one of them feeds these
+   * signals. Given with `fanout` and without `session`.
+   */
+  signals?: RecordSignals | undefined;
 };
 
 export class SandboxHost extends StackSandboxHost {
   private readonly session: SessionRecord | undefined;
+  private readonly signals: RecordSignals | undefined;
+  private characters: CharacterRoster | undefined;
 
   constructor(opts: RunnerSandboxHostOptions) {
-    const { session, recordTickMs, ...stack } = opts;
+    const { session, recordTickMs, signals, ...stack } = opts;
+    const tick = recordTickMs !== undefined ? { tickMs: recordTickMs } : {};
     super({
       ...stack,
       entryPath: opts.entryPath ?? RUNNER_SANDBOX_ENTRY,
       readDirs: [RUNNER_DIR, ...(opts.readDirs ?? [])],
-      ...(session !== undefined ? { record: { writer: session.writer, ...(recordTickMs !== undefined ? { tickMs: recordTickMs } : {}) } } : {}),
+      // A fan-out run records too, with no writer of its own here: each seat brings its character's.
+      ...(session !== undefined ? { record: { writer: session.writer, ...tick } } : signals !== undefined ? { record: { ...tick } } : {}),
     });
     this.session = session;
+    this.signals = session?.signals ?? signals;
+  }
+
+  /**
+   * A fan-out run's roster (`../fanout-run.ts`), attached once it is built on
+   * this host. Every dispatcher reads it from here, so a tool context needs
+   * nothing more to serve the fan-out tools (`../tools.ts`).
+   */
+  attachFanout(roster: CharacterRoster): void {
+    this.characters = roster;
+  }
+
+  /** The roster of a fan-out run; undefined for a run that drives one character. */
+  get roster(): CharacterRoster | undefined {
+    return this.characters;
   }
 
   /** The session record's side of a tool call, for a tool context (`CoreToolContext.record`). */
   get callRecord(): CallRecord | undefined {
-    return this.session?.writer;
+    return this.characters?.calls ?? this.session?.writer;
   }
 
   /**
@@ -101,9 +127,9 @@ export class SandboxHost extends StackSandboxHost {
    * loop reads as "no drain" and falls back to its sampled reading.
    */
   private async recorded(): Promise<NonNullable<SessionRecord["signals"]>> {
-    if (this.session === undefined) throw new Error("this host keeps no session record");
+    if (this.signals === undefined) throw new Error("this host keeps no session record");
     await this.recordDrain();
-    return this.session.signals;
+    return this.signals;
   }
 
   /** The kills recorded since the last call (`RecordSignals`). Destructive: the loop owns the drain and hands each to the watchdogs. */
