@@ -33,6 +33,7 @@ import {
   type StreamName,
   type StreamRows,
 } from "@wrathbench/mcp/record";
+import { fanoutSessionDir, SESSIONS_DIR } from "./run-reader";
 import { stackCommit } from "./version";
 
 /** The session record's directory inside a run directory. */
@@ -48,12 +49,13 @@ export function sessionDirOf(runDir: string): string {
  * spells it (Shard/wrath-mcp#29). A run has `session/` or `sessions/`, never
  * both: one agent with one character is `session/`, exactly as it was.
  */
-export const SESSIONS_DIR = "sessions";
+export { SESSIONS_DIR };
 
 export function characterSessionDir(runDir: string, character: string): string {
-  // A name is letters only; anything else never becomes a path.
-  if (!/^\p{L}{1,32}$/u.test(character)) throw new Error(`not a character name: ${JSON.stringify(character)}`);
-  return join(runDir, SESSIONS_DIR, character);
+  // A name is letters only; anything else never becomes a path (`run-reader.ts` owns the rule its readers resolve by).
+  const dir = fanoutSessionDir(runDir, character);
+  if (dir === null) throw new Error(`not a character name: ${JSON.stringify(character)}`);
+  return dir;
 }
 
 /** A fan-out run's session directories, one per character; none for a single-character run. */
