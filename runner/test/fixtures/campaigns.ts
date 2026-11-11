@@ -102,3 +102,23 @@ export function partyDefinition(over: Partial<CampaignDefinition> = {}): Campaig
     ...over,
   });
 }
+
+/** The image both arms of a one-agent fixture pin: a definition with two arms pins every arm. */
+export const ONE_AGENT_IMAGE = "registry.example/wb/runner:v1-t1";
+
+/**
+ * A party definition with a second arm, one agent driving all five members
+ * on one run (`arms[].agents: 1`), whose objective is the top-level one.
+ */
+export function oneAgentDefinition(over: Partial<CampaignDefinition> = {}): CampaignDefinition {
+  return partyDefinition({
+    version: 5,
+    arms: [
+      { id: "party", image: ONE_AGENT_IMAGE },
+      { id: "one-agent", image: ONE_AGENT_IMAGE, agents: 1 },
+    ],
+    objective: "You play all five: Aldric, Brenna, Corvin, Dagny and Edrin.",
+    end: [{ kill: { entry: 639 } }],
+    ...over,
+  });
+}

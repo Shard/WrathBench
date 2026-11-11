@@ -96,6 +96,8 @@ describe("what a fresh probe launch must name", () => {
       "no-xp-ms": "0",
       "episode-ms": "60000",
       "watchdogs-json": "{}",
+      "max-characters": "5",
+      accounts: "POOL01,POOL02",
     };
     const file = fileFor("race-probe@1", "orc-warrior");
     for (const f of PROBE_SHAPE_FLAGS) expect(refused(["--campaign-file", file, `--${f}`, values[f]])).toContain(`--${f}`);

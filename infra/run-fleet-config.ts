@@ -27,6 +27,7 @@ import {
   type PublishedCampaign,
 } from "../runner/src/campaigns";
 import type { CampaignFile } from "../runner/src/campaign-file";
+import { isOneAgentArm } from "../runner/src/campaign-def";
 import {
   isCounted,
   parsePolicyBlock,
@@ -221,8 +222,16 @@ export interface FleetJob {
    * roster process, every member's account in member order, `account` being
    * the leader's. The spawn materialises one entry per member, launched,
    * stopped and counted together. Never from the file.
+   *
+   * With `fanout`, the accounts of one run instead: a party definition's
+   * one-agent arm, one agent driving every member's character (fan-out). The
+   * job holds every account all the same, for the run's whole life, but
+   * takes one credential slot and one driver session, and its spawn is one
+   * entry (`sessionsOf`, `jobSpawn`).
    */
   accounts?: string[];
+  /** Set with `accounts` on a one-agent arm's job: one run on every account. Never from the file. */
+  fanout?: true;
   /**
    * Set by `planResumes` on a paused party's job: the party id the members'
    * run ids hang off, so the spawn names the paused runs rather than a fresh
@@ -561,6 +570,8 @@ export function pinnedCampaignJobs(
       // the floor: the spawn numbers past every id on disk (`takenRunIds`), so
       // a restaged party never lands on the ids of one before it.
       ...(c.accounts !== undefined ? { accounts: [...c.accounts], attempt: next.attempts + 1 } : {}),
+      // A one-agent arm holds the same accounts for one run on all of them.
+      ...(c.accounts !== undefined && isOneAgentArm(c.def, next.arm) ? { fanout: true as const } : {}),
       // The campaign's own credential, for its launches only (`campaigns.<id>.credential`).
       ...(c.credential !== undefined ? { credential: c.credential } : {}),
     });

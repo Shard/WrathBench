@@ -19,15 +19,18 @@
  * stager made before the launch: the launch names it (`--character`), and a
  * party member's must be the one its definition names for it. `--character`
  * means nothing anywhere else — a fresh start's name is the model's — so it is
- * refused on every other launch.
+ * refused on every other launch. A one-agent arm (`arms[].agents: 1`) runs
+ * every member's staged character on one run: its grant (`RunConfig.fanout`)
+ * comes from the campaign file's `fanout` half, and it names no `--character`,
+ * since no one character is the run.
  *
  * Fresh launches only. A `--resume` reloads the run's own stored config and
  * never comes through here.
  */
 
 import { readCampaignFile, CampaignFileError, type CampaignFile } from "./campaign-file";
-import { campaignRef, cellDimensions } from "./campaign-def";
-import { partyConfigOf, type PartyMember } from "./party";
+import { campaignRef, cellDimensions, isOneAgentArm } from "./campaign-def";
+import { fanoutConfigOf, partyConfigOf, type PartyMember } from "./party";
 import { PROBE_SHAPE_FLAGS } from "./run-flags";
 
 export { PROBE_SHAPE_FLAGS } from "./run-flags";
@@ -104,6 +107,29 @@ export function campaignLaunch(
   const def = file.definition;
   const staged = def.start !== undefined && def.start !== "fresh";
   const character = args["character"];
+  if (isOneAgentArm(def, file.arm)) {
+    if (character !== undefined) {
+      throw new CampaignLaunchError(`arm ${file.arm.id} of ${campaignRef(def)} is one agent driving the whole party, whose characters its campaign file names; --character is a party member's`);
+    }
+    if (file.fanout === undefined) {
+      throw new CampaignLaunchError(`arm ${file.arm.id} of ${campaignRef(def)} drives a party's staged characters, and this campaign file names none — it launches through the fleet's roster`);
+    }
+    const dims = cellDimensions(def, file.cell);
+    return {
+      ...probeStamp(file, rosterRef),
+      race: dims.race,
+      class: dims.class,
+      watchdogs: dims.watchdogs,
+      maxToolCallsPerEpisode: dims.maxToolCalls,
+      wikiCoords: dims.wikiCoords,
+      wiki: dims.wiki,
+      ...(dims.objective !== undefined ? { objective: dims.objective } : {}),
+      ...(dims.stopAtLevel !== undefined ? { stopAtLevel: dims.stopAtLevel } : {}),
+      ...(dims.end !== undefined ? { end: dims.end } : {}),
+      // The grant, and every staged character with where it lives.
+      fanout: fanoutConfigOf(file.fanout),
+    };
+  }
   if (!staged && character !== undefined) {
     throw new CampaignLaunchError(`${campaignRef(def)} starts fresh, on a character the model names and creates; --character is for a staged start`);
   }
@@ -124,13 +150,7 @@ export function campaignLaunch(
   }
   const dims = cellDimensions(def, file.cell, member);
   return {
-    episode: "probing",
-    campaign: file.campaign,
-    campaignVersion: file.version,
-    campaignHash: file.hash,
-    cell: file.cell.id,
-    arm: file.arm.id,
-    ...(typeof rosterRef === "string" ? { ref: rosterRef } : {}),
+    ...probeStamp(file, rosterRef),
     race: dims.race,
     class: dims.class,
     watchdogs: dims.watchdogs,
@@ -143,5 +163,18 @@ export function campaignLaunch(
     // Only on a staged start, so every fresh probe's config is what it was.
     ...(staged ? { character } : {}),
     ...(def.party !== undefined && file.party !== undefined ? { party: partyConfigOf(def.party, file.party) } : {}),
+  };
+}
+
+/** What every probe launch stamps: the campaign, its version and hash, the cell, the arm, and the roster name it was launched as. */
+function probeStamp(file: CampaignFile, rosterRef: string | boolean | undefined): Record<string, unknown> {
+  return {
+    episode: "probing",
+    campaign: file.campaign,
+    campaignVersion: file.version,
+    campaignHash: file.hash,
+    cell: file.cell.id,
+    arm: file.arm.id,
+    ...(typeof rosterRef === "string" ? { ref: rosterRef } : {}),
   };
 }

@@ -64,6 +64,7 @@ import { classifyLapse, PARTY_PAUSE, resumesOnPause, SUBSCRIPTION_PAUSE } from "
 import { readCredentialUsage, type PlacedCredential } from "./run-fleet-credentials";
 import { EXHAUSTED_PCT, gateClassOf, newestByCredential, thresholdOf, thresholdsOf, usageHold } from "../runner/src/subscription-usage";
 import { Trajectory, writeMetaFile } from "../runner/src/trajectory";
+import { readRoster } from "../runner/src/fanout-run";
 import { liveOwnerOf, MODEL_RESPONSE_RECORD, RecordCountScanner, verdictOfTrajectory, type ScanReads } from "../runner/src/models";
 import { CAMPAIGN_FILE, holdsOnlyLaunchFiles, parseCampaignFile, writeCampaignFile, type CampaignFile } from "../runner/src/campaign-file";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
@@ -83,7 +84,7 @@ import {
 } from "./episode-launcher";
 import { K8sClient } from "./k8s-client";
 import { harnessStampOf, IMAGE_RECORD_FILE, loadPodLauncher, parseImageRef } from "./run-pod";
-import { partyConfigOf, withMemberGuids, type PartyStamp } from "../runner/src/party";
+import { partyConfigOf, withFanoutGuids, withMemberGuids, type PartyStamp } from "../runner/src/party";
 import { PARTY_END_GRACE_MS, writeEndRequest } from "../runner/src/end-request";
 import { runParty, type MemberVerdict, type PartyMemberRun } from "./party-fate";
 import { commandStager, STAGER_SCRIPT, type PartyStager, type StagedGuid, type StageRequest } from "./party-stager";
@@ -1147,7 +1148,12 @@ function runDir(runId: string): string {
 
 /** The run's row (`runner/src/run-reader.ts`): meta.json's on a v1 run, run.sqlite's on a 0.5 one. */
 function readRunRow(runId: string): RunRow | undefined {
-  const row = readRecordedRunRow(runDir(runId), runId);
+  return rowOf(runDir(runId), runId);
+}
+
+/** `readRunRow` for a run directory. */
+function rowOf(dir: string, runId: string): RunRow | undefined {
+  const row = readRecordedRunRow(dir, runId);
   if (row === null) return undefined;
   const s = (v: unknown): string | null => (typeof v === "string" ? v : null);
   return { termination_reason: s(row["termination_reason"]), termination_detail: s(row["termination_detail"]), pause_reason: s(row["pause_reason"]) };
@@ -1193,6 +1199,21 @@ function tokenOfRun(runId: string): string {
   } catch {
     return runId;
   }
+}
+
+/**
+ * The session tokens a run holds: a fan-out run's characters' (its roster
+ * file, `runner/src/fanout-run.ts`; its config's own token names no
+ * session), else its one token (`tokenOfRun`).
+ */
+function tokensOfRun(runId: string): string[] {
+  try {
+    const meta = JSON.parse(readFileSync(join(runDir(runId), "meta.json"), "utf8")) as { config?: { fanout?: unknown } };
+    if (typeof meta.config?.fanout === "object" && meta.config.fanout !== null) return readRoster(runDir(runId)).map((e) => e.token);
+  } catch {
+    // no meta.json, or one that does not read: the run's own token, as before
+  }
+  return [tokenOfRun(runId)];
 }
 
 /** The highest level the run's samples reached (`run-reader.ts`): its trace's on a v1 run, its state rows' on a 0.5 one. */
@@ -1300,14 +1321,18 @@ function turnsText(turns: number | null): string {
  * The spec's own run id is always excluded — a `--resume` attempt would
  * otherwise refuse to launch the entry it is guarding, forever.
  */
-function accountOfRun(runId: string): string | undefined {
-  const path = join(runDir(runId), "meta.json");
-  if (!existsSync(path)) return undefined;
+function accountsOfRunDir(dir: string): string[] {
+  const path = join(dir, "meta.json");
+  if (!existsSync(path)) return [];
   try {
-    const meta = JSON.parse(readFileSync(path, "utf8")) as { config?: { account?: string } };
-    return meta.config?.account;
+    const meta = JSON.parse(readFileSync(path, "utf8")) as { config?: { account?: unknown; fanout?: { accounts?: unknown } } };
+    // A fan-out run holds every account of its grant, the first of which is
+    // also its `account`; any other run holds the one.
+    const fanout = meta.config?.fanout?.accounts;
+    const all = [...(typeof meta.config?.account === "string" ? [meta.config.account] : []), ...(Array.isArray(fanout) ? fanout.filter((a): a is string => typeof a === "string") : [])];
+    return [...new Set(all.map((a) => a.toUpperCase()))];
   } catch {
-    return undefined;
+    return [];
   }
 }
 
@@ -1320,13 +1345,20 @@ function accountOfRun(runId: string): string | undefined {
  * writes the moment a run pod's container starts — before run.ts has opened
  * anything — so a booting pod is live from its first second.
  */
-function activityAgeMs(runId: string): number | undefined {
+function activityAgeMs(dir: string): number | undefined {
   let newest: number | undefined;
   // `run.sqlite-wal`: a 0.5 run's database writes land there until a
   // checkpoint; a v1 run's session writer rewrites `live.json` on every tick.
-  for (const name of ["trajectory.jsonl", "run.sqlite", "run.sqlite-wal", "session/live.json", "heartbeat", IMAGE_RECORD_FILE]) {
+  // A fan-out run's characters each rewrite their own `sessions/<Character>/live.json`.
+  let characters: string[] = [];
+  try {
+    characters = readdirSync(join(dir, "sessions")).map((c) => join("sessions", c, "live.json"));
+  } catch {
+    // not a fan-out run, or none logged in yet
+  }
+  for (const name of ["trajectory.jsonl", "run.sqlite", "run.sqlite-wal", "session/live.json", "heartbeat", IMAGE_RECORD_FILE, ...characters]) {
     try {
-      const m = statSync(join(runDir(runId), name)).mtimeMs;
+      const m = statSync(join(dir, name)).mtimeMs;
       if (newest === undefined || m > newest) newest = m;
     } catch {
       // not written yet
@@ -1337,10 +1369,19 @@ function activityAgeMs(runId: string): number | undefined {
 
 /** @returns the run id holding `account`, or undefined when it is free. */
 export function accountHeldBy(account: string | undefined, ownRunId: string): string | undefined {
+  return accountHolderIn(join(REPO_ROOT, RUNS_DIR), account, ownRunId);
+}
+
+/**
+ * `accountHeldBy` over a given runs directory. A run holds every account it
+ * was launched on: a fan-out run its whole grant (`config.fanout.accounts`),
+ * live while any of its characters' records is.
+ */
+export function accountHolderIn(root: string, account: string | undefined, ownRunId: string): string | undefined {
   const want = (account ?? "RUNNER").toUpperCase();
   let dirs: string[];
   try {
-    dirs = readdirSync(join(REPO_ROOT, RUNS_DIR));
+    dirs = readdirSync(root);
   } catch {
     return undefined;
   }
@@ -1355,11 +1396,11 @@ export function accountHeldBy(account: string | undefined, ownRunId: string): st
      * which is all of them but a handful. The answer is
      * unchanged: same conjunction, same readdir order, same first match.
      */
-    const age = activityAgeMs(id);
+    const dir = join(root, id);
+    const age = activityAgeMs(dir);
     if (age === undefined || age >= LIVE_TRAJECTORY_MS) continue;
-    const acct = accountOfRun(id);
-    if (acct === undefined || acct.toUpperCase() !== want) continue;
-    const row = readRunRow(id);
+    if (!accountsOfRunDir(dir).includes(want)) continue;
+    const row = rowOf(dir, id);
     if (row !== undefined && row.termination_reason !== null && row.termination_reason !== "") continue;
     // A pause row means the session is already gone: every path in attemptSpec
     // that leaves a paused run behind frees its session first, and
@@ -1383,22 +1424,42 @@ async function awaitAccount(
 ): Promise<boolean> {
   if (dryRun) return true;
   const giveUp = Date.now() + ACCOUNT_WAIT_MAX_MS;
+  // A one-agent run's every account, which it launches on together or not at all.
+  const accounts = specAccounts(spec);
   for (;;) {
-    const holder = accountHeldBy(spec.account, spec.runId);
-    if (holder === undefined) return true;
+    let held: { account: string; holder: string } | undefined;
+    for (const a of accounts) {
+      const holder = accountHeldBy(a, spec.runId);
+      if (holder !== undefined) {
+        held = { account: a ?? "RUNNER", holder };
+        break;
+      }
+    }
+    if (held === undefined) return true;
+    const { account, holder } = held;
     if (stopping || Date.now() >= giveUp || (deadline !== undefined && Date.now() >= deadline)) {
-      say(`account ${spec.account ?? "RUNNER"} still held by ${holder} — skipping ${spec.runId}`);
+      say(`account ${account} still held by ${holder} — skipping ${spec.runId}`);
       record({
         runId: spec.runId,
         model: spec.model,
         outcome: "skipped",
-        detail: `account ${spec.account ?? "RUNNER"} in use by ${holder}`,
+        detail: `account ${account} in use by ${holder}`,
       });
       return false;
     }
-    say(`account ${spec.account ?? "RUNNER"} is live under ${holder} — waiting before ${spec.runId}`);
-    await nap(ACCOUNT_WAIT_POLL_MS, deadline, `account ${spec.account ?? "RUNNER"} held by ${holder}`);
+    say(`account ${account} is live under ${holder} — waiting before ${spec.runId}`);
+    await nap(ACCOUNT_WAIT_POLL_MS, deadline, `account ${account} held by ${holder}`);
   }
+}
+
+/**
+ * Every account a spec launches on: a one-agent arm's whole party (its
+ * campaign file's `fanout` half), else its one account (undefined being the
+ * default RUNNER).
+ */
+export function specAccounts(spec: Pick<Resolved, "account" | "campaignFile">): (string | undefined)[] {
+  const fanout = spec.campaignFile?.fanout?.members.map((m) => m.account);
+  return fanout !== undefined && fanout.length > 0 ? fanout : [spec.account];
 }
 
 /** How often a launch held by a credential's usage budget looks again. */
@@ -1691,7 +1752,9 @@ async function freeSession(spec: { runId: string; model: string }, why: string, 
 }
 
 /**
- * DELETE the module session a run's token names, and return what happened.
+ * DELETE the module session a run's token names, and return what happened:
+ * every character's, for a fan-out run, whose tokens are its roster file's
+ * (`tokensOfRun`).
  *
  * The transport only — no roster logging, no defer bookkeeping — so the fleet
  * supervisor can release the account of a run it just ended without
@@ -1700,6 +1763,19 @@ async function freeSession(spec: { runId: string; model: string }, why: string, 
  * is always doing something else that matters more.
  */
 export async function releaseRunSession(runId: string): Promise<string> {
+  const tokens = tokensOfRun(runId);
+  // A fan-out run with no seat on record yet holds no session.
+  if (tokens.length === 0) return "no session: a fan-out run with no character on its roster";
+  if (tokens.length === 1) return releaseToken(tokens[0]!);
+  // A fan-out run's every character, one DELETE each; a failure of one is said, not thrown.
+  const out: string[] = [];
+  for (const [i, t] of tokens.entries()) out.push(`seat ${i + 1}: ${await releaseToken(t)}`);
+  const text = out.join("; ");
+  return out.some((o) => o.includes(": failed:")) ? `failed: ${text}` : text;
+}
+
+/** DELETE the module session one token names. */
+async function releaseToken(token: string): Promise<string> {
   // Inside the container the module is one fetch away; on the host it is only
   // reachable from the compose network, hence the exec hop.
   if (CONTAINER) {
@@ -1709,7 +1785,7 @@ export async function releaseRunSession(runId: string): Promise<string> {
         method: "DELETE",
         // Operator class: the roster holds the port secret, not the run's lease.
         headers: { "content-type": "application/json", ...moduleAuthHeaders() },
-        body: JSON.stringify({ token: tokenOfRun(runId) }),
+        body: JSON.stringify({ token }),
       });
       return `delete-session ${r.status} ${(await r.text()).trim()}`;
     } catch (e) {
@@ -1725,7 +1801,7 @@ const r=await fetch(url,{method:"DELETE",headers:h,body:JSON.stringify({token:pr
 console.log("delete-session",r.status,await r.text());`;
   try {
     const p = Bun.spawn(
-      ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", "-e", `WB_TOKEN=${tokenOfRun(runId)}`, "runner", "bun", "-e", code],
+      ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", "-e", `WB_TOKEN=${token}`, "runner", "bun", "-e", code],
       { cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe" },
     );
     const out = (await new Response(p.stdout).text()).trim();
@@ -1913,6 +1989,30 @@ async function attemptSpec(
         return "done";
       }
     }
+    // A one-agent arm's party is staged before its fresh launch, as a party's
+    // is: every character on its own account, in its loadout and its spot,
+    // grouped. Never on a resume or a retry (the characters are the run's own).
+    let campaignFile = spec.campaignFile;
+    if (!resume && campaignFile?.fanout !== undefined && !opts.dryRun) {
+      say(`stage ${spec.runId}: ${campaignFile.fanout.members.map((m) => `${m.character} on ${m.account}`).join(", ")}`);
+      const staged = await partyStager.stage(fanoutStageRequestOf(spec), stagingAbort.signal);
+      if (!staged.ok) {
+        const detail = `staging: ${staged.reason}`;
+        say(`launch-failed ${spec.runId}: ${detail}`);
+        record({ runId: spec.runId, model: spec.model, outcome: "launch-failed", detail });
+        const dir = join(REPO_ROOT, RUNS_DIR, spec.runId);
+        if (!existsSync(join(dir, "meta.json"))) {
+          try {
+            writeLaunchFailure(dir, spec, detail, { harnessVersion: launchStamp(spec) });
+          } catch (e) {
+            say(`launch-failed ${spec.runId}: could not record the attempt — ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+        return "done";
+      }
+      if (staged.detail !== undefined) say(`staged ${spec.runId}: ${staged.detail}`);
+      campaignFile = stagedFanoutFile(campaignFile, staged.members);
+    }
     await freeSession(spec, resume ? "pre-resume hygiene" : "pre-launch hygiene", opts.dryRun);
     const launchedAt = launchOffset(trajectoryOf(spec.runId));
     // The name is the model's own and is not known until it creates the
@@ -1921,7 +2021,7 @@ async function attemptSpec(
     // A fresh probe's campaign file goes beside the run before the run exists:
     // the runner reads its whole shape from it, and a run pod needs no store.
     // A resume keeps the file the run launched with.
-    if (!resume && spec.campaignFile !== undefined && !opts.dryRun) writeCampaignFile(join(REPO_ROOT, RUNS_DIR, spec.runId), spec.campaignFile);
+    if (!resume && campaignFile !== undefined && !opts.dryRun) writeCampaignFile(join(REPO_ROOT, RUNS_DIR, spec.runId), campaignFile);
     const exit = await runEpisode(spec, resume);
     const verdict = classify(spec, exit);
     const level = readLevel(spec.runId);
@@ -2190,6 +2290,42 @@ export function stageRequestOf(specs: readonly Resolved[]): StageRequest {
 export function stagedCampaignFile(file: CampaignFile, staged: readonly StagedGuid[] | undefined): CampaignFile {
   if (file.party === undefined || staged === undefined || staged.length === 0) return file;
   return { ...file, party: withMemberGuids(file.party, new Map(staged.map((m) => [m.member, m.guid]))) };
+}
+
+/**
+ * What the stager is asked for before a fresh one-agent launch: the same
+ * party, staged the same way, every member's character on its own account,
+ * all of them this one run's (its id stands as the party id and every
+ * member's run id).
+ */
+export function fanoutStageRequestOf(spec: Pick<Resolved, "runId" | "campaignFile">): StageRequest {
+  const file = spec.campaignFile;
+  const launch = file?.fanout;
+  const def = file?.definition;
+  if (file === undefined || launch === undefined || def?.party === undefined) throw new Error(`${spec.runId}: not a one-agent arm's launch`);
+  const start = def.start;
+  if (start === undefined || start === "fresh") throw new Error(`${spec.runId}: ${file.campaign}@${file.version} does not start staged`);
+  return {
+    party: spec.runId,
+    campaign: file.campaign,
+    version: file.version,
+    scenario: start.staged,
+    level: start.level,
+    members: def.party.members.map((m) => {
+      const rec = launch.members.find((r) => r.member === m.id)!;
+      return { member: m.id, role: m.role, race: m.race, class: m.class, character: m.character, account: rec.account, runId: spec.runId };
+    }),
+  };
+}
+
+/**
+ * A one-agent run's campaign file as a fresh launch writes it: with each
+ * character's guid the stager reported, which the run's write gate counts as
+ * the deployment's own from the first row (`RunConfig.fanout.staged`).
+ */
+export function stagedFanoutFile(file: CampaignFile, staged: readonly StagedGuid[] | undefined): CampaignFile {
+  if (file.fanout === undefined || staged === undefined || staged.length === 0) return file;
+  return { ...file, fanout: withFanoutGuids(file.fanout, new Map(staged.map((m) => [m.member, m.guid]))) };
 }
 
 /**
