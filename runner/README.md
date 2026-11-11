@@ -3,23 +3,27 @@
 The agent loop. The runner sits between a model and the game: it hands the
 model a fixed set of tools (a TypeScript snippet sandbox with the SDK loaded,
 a scratchpad, the event and state views, the reference search), supervises
-the episode with watchdogs, and records everything that happened as a
-trajectory under `data/runs/<run-id>/`.
+the episode with watchdogs, and records the model's side of what happened as
+a trajectory under `data/runs/<run-id>/`, beside the session record the stack
+writes there.
 
 It is the benchmark built on the stack, not the stack itself. The sandbox,
 the MCP server, the tool dispatcher and the five core tools are
 `@wrathbench/mcp` (`wrath-mcp/mcp/`), over `@wrathbench/sdk` (`wrath-mcp/sdk/`), over the module
-(`wrath-mcp/module/`) — the client-equivalent agent stack, which knows nothing of
-episodes, scores or trajectories and is its own repository (`wrath-mcp/README.md`;
-`docs/ARCHITECTURE.md`, "The stack and the benchmark"). The runner plugs in
+(`wrath-mcp/module/`) — the client-equivalent agent stack, which records what
+its own sessions did, knows nothing of episodes, scores or model trajectories,
+and is its own repository (`wrath-mcp/README.md`; `docs/ARCHITECTURE.md`, "The
+stack and the benchmark"). The runner plugs in
 through the stack's hooks: its four tools (`search_reference`, `reflect`,
 `log_status`, `read_log`) and its rendering of the core tools' answers
 (`src/tools.ts`), its child extension (`src/sandbox/child-extension.ts`: the
-death, flight and party watchers, the trace and nearby recorders, the spell
-marks, the snippet delta, the turn's event window and the HUD's snapshot
+spell marks, the snippet delta, the turn's event window and the HUD's snapshot
 fields), the drains for them (`src/sandbox/host.ts`, a `SandboxHost`
-subclass), and the trajectory, secret registry, context and watchdogs it
-supplies every dispatcher. It depends on the stack at an exact version
+subclass), the directory the stack writes the session record into
+(`src/session-record.ts`: `session/` in the run directory, the trace, game
+events, tool calls and the live ring of nearby units, in the format
+`wrath-mcp/docs/SESSION-FORMAT.md` specifies), and the trajectory, secret
+registry, context and watchdogs it supplies every dispatcher. It depends on the stack at an exact version
 (`package.json`, `workspace:0.2.0`) and records it in `meta.json` as
 `sdkVersion`. The operator launches it through
 `infra/run-episode.sh` or the fleet supervisor; the viewer (`runner/viewer/`)
@@ -97,7 +101,9 @@ launch note says it already exists, and `meta.config.party` names every
 member's run, account and character. Its trajectory carries three more
 milestone kinds, `group`, `instance` and `kill`, latched in the sandbox
 child off `SMSG_GROUP_LIST`, the `instanceType` on the `WB_AREA` after a
-transfer and `SMSG_PARTYKILLLOG` (`src/sandbox/party-watch.ts`).
+transfer and `SMSG_PARTYKILLLOG` by the stack's recorder, which writes them
+to the session record's `events` stream; the loop mirrors them as milestones
+(`src/session-record.ts`).
 
 ## Drivers
 

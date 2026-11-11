@@ -2,25 +2,81 @@
 
 ## Components
 
+```mermaid
+flowchart TB
+    subgraph fleet["Fleet"]
+        store[("Config store<br/>roster, campaigns, policy")]
+        supervisor["Fleet supervisor<br/>run-fleet, run-roster"]
+    end
+
+    model["Model<br/>API or CLI agent"]
+
+    subgraph run["One run"]
+        runner["runner/<br/>agent loop, drivers,<br/>context policy, watchdogs"]
+        stack["wrath-mcp stack<br/>(submodule, see its README)<br/>sandbox, tools, session recorder"]
+    end
+
+    world(("AzerothCore<br/>game world"))
+
+    subgraph records["data/runs/#lt;id#gt;/"]
+        session[("session/<br/>trace, events, calls<br/>wrath-session/1")]
+        trajectory[("trajectory.jsonl, meta.json<br/>the model's side")]
+        rundb[("run.sqlite<br/>run row, 60 s state rows<br/>until the scorer reads the trace")]
+    end
+
+    subgraph view["Reading results"]
+        viewer["Viewer API<br/>runner/viewer: /api,<br/>derivations, ladder"]
+        dashboard["Dashboard SPA"]
+    end
+
+    subgraph downstream["Downstream, derived"]
+        collector["Collector"]
+        clickhouse[("ClickHouse")]
+        publisher["Publisher"]
+        bucket[("Public snapshot<br/>bucket")]
+    end
+
+    store --> supervisor
+    supervisor -->|"launches: argv, env"| runner
+    model <-->|"turns, tool calls"| runner
+    runner -->|"hooks, and where to record"| stack
+    stack <-->|"client opcodes,<br/>whitelisted packets"| world
+    stack ==>|"records the session"| session
+    runner -->|"writes"| trajectory
+    runner -->|"writes"| rundb
+    records -.->|"run contract: read back"| supervisor
+    trajectory -->|"tails"| collector
+    rundb -->|"tails"| collector
+    collector --> clickhouse
+    clickhouse -->|"listings"| viewer
+    records -->|"live tail, session source"| viewer
+    viewer -->|"/api"| dashboard
+    viewer -->|"in-process"| publisher
+    publisher -->|"projected JSON"| bucket
+    bucket -->|"public build"| dashboard
 ```
- model  <--MCP-->  mcp (Bun)  <--SDK calls-->  sdk (Bun)  <--HTTP/WS-->  module (C++ in worldserver)
-                    ^  sandbox, MCP server,                                     |
-                    |  core tools                                               v
-                 runner (Bun): benchmark tools, context,             AzerothCore worldserver + DBs
-                 records, watchdogs  -->  data/runs/<id>/ (trajectory JSONL, sqlite)
-```
+
+The supervisor launches each run from the config store, and the runner drives
+the model against the stack, which is one box here because wrath-mcp's own
+documents draw its insides. The stack records what the character did into the
+run's `session/`; the runner writes the model's side beside it. Everything
+downstream of those files is derived.
 
 ### The stack and the benchmark
 
 Two layers, deliberately separable. The **stack** is
 [wrath-mcp](https://github.com/Shard/wrath-mcp): the AzerothCore module, the
-SDK and the MCP surface (snippet sandbox, MCP server, core tools), a
-client-equivalent agent surface over a stock AzerothCore that knows nothing of
-episodes, scores, trajectories or the wiki. The **benchmark** is this
-repository: `runner/` with `infra/`, `wiki/`, `dashboard/`, `collector/` and
-`minimap/` around it, which is what turns that surface into a measurement: the
-fixed loop and the CLI drivers, the prompt and context policy, its own tools,
-the records, the watchdogs, the scoring.
+SDK and the MCP surface (snippet sandbox, MCP server, core tools, the session
+record), a client-equivalent agent surface over a stock AzerothCore. It
+records what its own sessions did and knows nothing of what drove them: the
+session record (the trace and character sheet, game events, tool calls and
+their results) is the stack's, and it never learns a run id, a turn number, a
+score or the wiki. The **benchmark** is this repository: `runner/` with
+`infra/`, `wiki/`, `dashboard/`, `collector/` and `minimap/` around it, which
+is what turns that surface into a measurement: the fixed loop and the CLI
+drivers, the prompt and context policy, its own tools, the model's side of
+the record (requests, responses, tokens, cost, turns, compaction), the
+watchdogs, the scoring.
 
 How the stack works inside (the module's attachment to the core and its mover,
 the SDK, the sandbox and its confinement, hint delivery, one action's path end
@@ -65,15 +121,23 @@ takes from the stack and how.
   the core tools rather than known by them.
 - **The sandbox child** (`SandboxChildExtension`,
   `wrath-mcp/mcp/src/sandbox/child.ts`): the runner's extension
-  (`runner/src/sandbox/child-extension.ts`) latches deaths, flights, party
-  records, the trace and nearby rows, spell marks, the snippet delta, the
-  turn's event window and the HUD's fields. Nothing an extension holds is
-  reachable from a snippet. The runner's host (`runner/src/sandbox/host.ts`)
-  subclasses the stack's to drain them.
+  (`runner/src/sandbox/child-extension.ts`) latches spell marks, the snippet
+  delta, the turn's event window and the HUD's fields: what the benchmark
+  shows a model. Nothing an extension holds is reachable from a snippet. The
+  runner's host (`runner/src/sandbox/host.ts`) subclasses the stack's to drain
+  them. What the session leaves on the record is not an extension's: the
+  stack's own recorder runs in the same child.
 - **Records and secrets**: every dispatcher is handed a secret registry
   (`CoreToolContext.secrets`, the trajectory on a run) and callbacks for what
   it served; the sandbox host takes `onNotice` and `onActions`. Run config,
   ids, the harness stamp, the wiki and the episodic log never enter the stack.
+- **The session record** (`SandboxHostOptions.record`,
+  `CoreToolContext.record`): the stack records every session it serves
+  (`wrath-mcp/docs/SESSION-FORMAT.md`), and the runner hands it a place to
+  write, `session/` inside the run directory (`runner/src/session-record.ts`),
+  so the evidence is written in place as it happens. The deployment's own
+  characters, which the stack's write gate may name in a party row, are the
+  ones the other runs' records name; any other player is never written.
 
 **Versions, as built.** The SDK has its own version (docs/METHODOLOGY.md,
 "Fixed harness, frozen per version"), and `@wrathbench/mcp` carries the same
@@ -95,13 +159,13 @@ checks before a launch or resume (`fetchServerBuild`;
 - Snippet sandbox: the stack's (`wrath-mcp/mcp/src/sandbox/`), run with the benchmark's child extension. A persistent confined runtime per session, so snippets share state and can leave routines running, with a hard per-snippet timeout. Its environment carries only the run's own leased session secret, never the module's port secret or a provider key. The runner's host adds one directory to what the confined child may read, `runner/`, for its entry and extension; the confinement itself is the stack's ([wrath-mcp's architecture](https://github.com/Shard/wrath-mcp/blob/master/docs/ARCHITECTURE.md#the-sandbox); `runner/README.md`, "The sandbox"), and per-host and non-TCP egress are the deployment's network policy (`docs/RUNBOOK.md`, "Network policy").
 - Agent loop: model-agnostic. Fixed prompt, fixed event window and state summary, fixed retry policy. Persists scratchpad and summary so a session can resume after a process failure.
 - Watchdogs: idle timeout, no-XP timeout, episode time limit, snippet runaway. Each ends the episode with a named termination reason.
-- Trajectory log: JSONL per run containing every snippet, its result, every action the snippet dispatched (below), every event batch the model saw, and a periodic state line (level, zone, XP, position). A fixed-loop `request` record carries the turn's fresh user message whole and points at the rest of the prompt instead of re-logging it: the system prompt text once per process segment, and the message window as bounds over the `response` and result records already on the file, with the count of its folded messages and a hash of the bytes sent. `runner/src/replay.ts` rebuilds every request from the file alone and fails on any that does not hash to what was sent; the CLI scaffolds' requests keep their own shape (`runner/README.md`, "The request record and the replay").
+- The run's records, in two halves. The session record is the stack's, written into the run's `session/` ("Persistence", below): the trace, game events, tool calls, the action log and movement intentions. The trajectory log is the runner's: JSONL per run with the model's side, every request and response, snippet and result, every event batch the model saw, token and cost figures, compaction, pauses and the termination. While the scorer, the collector and the feed still read them there, the trajectory also carries the periodic state line (level, zone, XP, position), the milestones, the action log and a mirror of each movement intention; those readers move onto the session record next, and these records go with them. A fixed-loop `request` record carries the turn's fresh user message whole and points at the rest of the prompt instead of re-logging it: the system prompt text once per process segment, and the message window as bounds over the `response` and result records already on the file, with the count of its folded messages and a hash of the bytes sent. `runner/src/replay.ts` rebuilds every request from the file alone and fails on any that does not hash to what was sent; the CLI scaffolds' requests keep their own shape (`runner/README.md`, "The request record and the replay").
 - Model adapter: one OpenAI-compatible chat layer. Provider and model are run config.
-- Drivers: the fixed loop's adapter is one, and the Claude Code and Codex CLIs are the others. The driver contract (`runner/README.md`, "The driver contract") says what the runner keeps for every driver, what a driver may vary, and what the trajectory records regardless.
+- Drivers (`runner/src/drivers.ts`): `openai`, the fixed loop over the chat adapter; three CLI scaffolds, `claude-code`, `codex` and `pi`; and two that never score, `stub` (a scripted response list, for testing the harness without a model) and `reference` (the scripted reference run, played through `run_snippet`). The driver contract (`runner/README.md`, "The driver contract") says what the runner keeps for every driver, what a driver may vary, and what the trajectory records regardless.
 
 **Harness-delivered hints.** A failed action's recovery hint reaches the model only if the snippet's own code keeps it: one run took 41 `too_far` refusals in four hours while reducing every result to `.status`, and read the hint zero times. So the stack's dispatcher also delivers each hint-bearing failure at the foot of the next tool result of any kind, on a channel the snippet cannot strip ([wrath-mcp's architecture](https://github.com/Shard/wrath-mcp/blob/master/docs/ARCHITECTURE.md#harness-delivered-hints); docs/METHODOLOGY.md, "The model surface"). It goes in the tool result rather than the next turn's harness-notice block because a claude-code turn is a whole CLI session: a notice there would arrive a turn late, and delivery must not cost the model a follow-up inspection. Every driver dispatches through the same `callTool`, so every driver gets it, and the trajectory's `snippet_result` or `tool_result` records it as part of what the model saw.
 
-**The action log.** A snippet's code says what the model asked for; it does not say what went on the wire — a helper's inner `set_target`, a routine's fortieth re-cast, the refusal the snippet swallowed. So the sandbox watches its own client's `POST /action` requests (the same fetch the move intention is read from) and records each dispatch with the module's HTTP answer as an `actions` record (`ActionsLine` in `runner/src/trajectory.ts`): action name, the body with the token stripped, status, error code and hint on a refusal, the `move_to` move id, timing, and the client-cache names the session already held for the ids (unit, spell, item, quest). One record per snippet, flushed just before its result, rather than one per action: about ten dispatches per snippet would otherwise push the snippets out of the feed's 200-record window. A background routine's dispatches between snippets flush on a 60-second idle timer and are marked `routine`, so the record count is one per snippet that dispatched anything plus at most one a minute of routine activity between snippets; identical consecutive dispatches fold into a count, and past 120 notes per flush the rest are counted by action name, because a looping routine has dispatched millions. The record's `callTs` is the owning `tool_call`'s `dispatchTs`, which is the join: the CLI drivers append the call after it ran and the fixed loop before, so position cannot be. It records the dispatch and the module's answer and nothing more — a `200` is "queued", and what the game made of it is on the event stream, with a `move_to`'s verdict in the `move` record of the same move id, which is unchanged. Nothing in it reaches the model. The module's audit log is the ground truth for the wire while it is kept, which is a few days (wrath-mcp/docs/CONTRACTS.md "Audit"); this record is the one that stays with the run, attributed to the snippet that caused it. Size, on a long freeplay run of about 9,600 snippets over 51 hours with a 104 MB trajectory: by its snippet code, about half its snippets call a dispatching helper and one in twelve launches a routine, so the records add at most about 9,600 lines to the 65,000 it has; by the module audit logs of earlier long runs, which dispatched 1,300–2,200 HTTP actions an hour, the notes come to roughly 70k–110k at about 100 bytes each, so 7–15 MB more, about a tenth.
+**The action log.** A snippet's code says what the model asked for; it does not say what went on the wire — a helper's inner `set_target`, a routine's fortieth re-cast, the refusal the snippet swallowed. So the stack's sandbox watches its own client's `POST /action` requests (the same fetch the move intention is read from) and the host writes each dispatch, with the module's HTTP answer, to the session record's `calls` stream. The runner keeps its own copy as an `actions` record (`ActionsLine` in `runner/src/trajectory.ts`) while the feed reads it there: action name, the body with the token stripped, status, error code and hint on a refusal, the `move_to` move id, timing, and the client-cache names the session already held for the ids (unit, spell, item, quest). One record per snippet, flushed just before its result, rather than one per action: about ten dispatches per snippet would otherwise push the snippets out of the feed's 200-record window. A background routine's dispatches between snippets flush on a 60-second idle timer and are marked `routine`, so the record count is one per snippet that dispatched anything plus at most one a minute of routine activity between snippets; identical consecutive dispatches fold into a count, and past 120 notes per flush the rest are counted by action name, because a looping routine has dispatched millions. The record's `callTs` is the owning `tool_call`'s `dispatchTs`, which is the join: the CLI drivers append the call after it ran and the fixed loop before, so position cannot be. It records the dispatch and the module's answer and nothing more — a `200` is "queued", and what the game made of it is on the event stream, with a `move_to`'s verdict in the `move` row of the same move id (the session record's `calls` stream, mirrored into the trajectory as a `move` record). Nothing in it reaches the model. The module's audit log is the ground truth for the wire while it is kept, which is a few days (wrath-mcp/docs/CONTRACTS.md "Audit"); this record is the one that stays with the run, attributed to the snippet that caused it. Size, on a long freeplay run of about 9,600 snippets over 51 hours with a 104 MB trajectory: by its snippet code, about half its snippets call a dispatching helper and one in twelve launches a routine, so the records add at most about 9,600 lines to the 65,000 it has; by the module audit logs of earlier long runs, which dispatched 1,300–2,200 HTTP actions an hour, the notes come to roughly 70k–110k at about 100 bytes each, so 7–15 MB more, about a tenth.
 
 **Reflection, the episodic log, and the trim notices.** Three of the tools
 exist because of the message window rather than the world (docs/METHODOLOGY.md,
@@ -506,26 +570,43 @@ Every episode starts with a freshly created character at level 1 in its starting
 
 ## Persistence
 
-- Run metadata and periodic state in `bun:sqlite` under `data/runs/`. A state
-  row carries the inventory (`items`, about 4 KB) only when it differs from the
-  one its process last wrote; a process's first row, and its first after a
-  sandbox restart, carries it whole. The trace's character sheet below is the
-  record of gear, and every reader of `items` takes the newest reading at or
-  before a point, so an unchanged copy on every 60-second row bought nothing.
-- Trajectories as JSONL next to it.
-- The trace: the character's own position at observation cadence (about 1 Hz
-  while moving), its state on change and its character sheet (money, what is
-  worn and carried, the quest log's counters, reputation, skills, turn-ins)
-  as increments, and the lines it said in chat as the server echoed them, for
-  playback, in the same sqlite (`trace`, with the item
-  names and quest requirements it references in `trace_dict`) and nowhere
-  else. The sandbox child records it off the
-  SDK's own cache and event stream (`runner/src/sandbox/trace-recorder.ts`)
-  and the state ticker drains it on every driver (`runner/src/trace.ts`); the
-  row contract is `runner/src/trace-row.ts`. Record only: the model sees none
-  of it, the scorer reads none of it, and the collector does not tail it —
-  copying a 1 Hz feed into the store as unknown trajectory lines is the shape
-  that has put ClickHouse out of memory before.
+- The session record, `data/runs/<id>/session/`: what the character did, in
+  the stack's format (`wrath-mcp/docs/SESSION-FORMAT.md`, `wrath-session/1`).
+  Append-only, UTC-aligned, five-minute JSONL segments per stream, each
+  opening with a key row so it decodes alone and compressed with zstd once it
+  closes; `session.json` says whose it is, `live.json` its last reading, and
+  `manifest.json`, written when the session closes, lists every segment with
+  its size and hash.
+  - `trace/`: the character's own position at observation cadence (about 1 Hz
+    while moving), its state on change and its character sheet (money, what
+    is worn and carried, the quest log's counters, reputation, skills,
+    turn-ins) as increments, and the lines it said in chat as the server
+    echoed them. It is the record of level, XP, money, position and gear.
+  - `events/`: zone, level, deaths, flights, the party records, turn-ins,
+    achievements, spells, talents, trades.
+  - `calls/`: tool calls and results, the action log, movement intentions and
+    the event batches a call served.
+  The stack's recorder runs in the sandbox child off the SDK's own cache and
+  event stream, and the stack's host drains it into a writer the runner
+  opened on that directory (`runner/src/session-record.ts`), so it is written
+  in place and the same on every driver. The session is named by a
+  fingerprint of its token, the name the module's audit files use, and no
+  file of it holds the token. Record only: the model sees none of it. A
+  player who is not one of the deployment's own sessions is never written.
+- Run metadata and periodic state in `bun:sqlite` under `data/runs/`
+  (`run.sqlite`: the `run` row and the 60-second `state` rows). The state
+  rows repeat what the trace holds at finer grain and are kept only until the
+  scorer and the collector read the trace instead; a run's `run.sqlite` then
+  goes. A state row carries the inventory (`items`, about 4 KB) only when it
+  differs from the one its process last wrote.
+- Trajectories as JSONL next to it: the model's side of the run.
+- A run recorded before the session record (a 0.5 run) has no `session/`:
+  its trace and movement intentions are tables of its `run.sqlite`. It stays
+  readable through one adapter (`runner/viewer/legacy05-source.ts`) and is
+  never converted, because the run files are the evidence a result points
+  at; frozen 0.5 runs with golden API answers
+  (`runner/test/legacy05-golden.test.ts`) keep that true. Readable, not
+  comparable.
 - The module's audit log: one JSONL per session and UTC day, named by a
   fingerprint of its token, under
   `logs/wrathbench` on the same volume, written by the worldserver, which
@@ -533,18 +614,16 @@ Every episode starts with a freshly created character at level 1 in its starting
   a window (the chart's
   `worldserver.logRetention`, default three days; docs/RUNBOOK.md "Server log
   retention"), not part of the evidence record below.
-- Not persisted: the units around a live character, for the live map. The
-  sandbox child records them off the same cache
-  (`runner/src/sandbox/nearby-recorder.ts`, contract
-  `runner/src/nearby-row.ts`) and the state ticker appends them to a ring of
-  one-minute files under the run's `nearby/` (`runner/src/nearby.ts`): about
-  15 minutes, unlinked as they age, deleted on every pause, stop and exit and
-  swept at start, never in `run.sqlite`, `trajectory.jsonl` or
-  the store. It is a delay line for a reader a few seconds behind, not a record.
-  The public site sees it the same way: each publisher pass puts the last
-  twelve minutes of each live run's projected window in `nearby.json`, one
-  object overwritten by the next pass and gone with the run, which only the
-  zoomed-in map reads (docs/PUBLIC-DASHBOARD.md, "The units around a live
+- Not persisted: the units around a live character, for the live map. They
+  are the session record's fourth stream, `session/nearby/`, a ring and not a
+  record: about 15 minutes, unlinked as it ages, removed when the session
+  closes (every pause, stop and exit) and swept at start, never compressed,
+  listed in the manifest, or in the store. Creatures, pets and vehicles only;
+  a player is never in it. It is a delay line for a reader a few seconds
+  behind. The public site sees it the same way: each publisher pass puts the
+  last twelve minutes of each live run's projected window in `nearby.json`,
+  one object overwritten by the next pass and gone with the run, which only
+  the zoomed-in map reads (docs/PUBLIC-DASHBOARD.md, "The units around a live
   run").
 - The client's query-answer cache, `client-cache.json`: the creature, game
   object, item, quest, player and pet name, and page and letter answers this
@@ -553,7 +632,8 @@ Every episode starts with a freshly created character at level 1 in its starting
   start with them, as a client's on-disk cache (WDB) survives a restart —
   operator decision of 2026-10-18, because a restart reattaches to a module
   session that never asks for an entry twice. A new run, a continuation
-  included, starts without one, and the collector does not read it.
+  included, starts without one, and the collector does not read it. It is
+  operational state, outside the session record.
 - Server state in the AzerothCore databases; the server is authoritative for XP, level, deaths, quests, gold.
 - A single-node ClickHouse holding a **derived, disposable** copy of all of it,
   filled by `collector/`.
