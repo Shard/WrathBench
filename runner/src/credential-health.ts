@@ -18,8 +18,12 @@
 
 import { EXHAUSTED_PCT, type SubscriptionUsage } from "./subscription-usage";
 
-/** Why the budget holds a launch on a credential, as a code (`CredentialGate.holdReasonOf`). */
-export const HOLD_CODES = ["usage-spent", "usage-threshold", "spend-budget", "runs-budget"] as const;
+/**
+ * Why a launch on a credential is held, as a code (`CredentialGate.holdReasonOf`):
+ * its budget's (the first four), or the provider's last read of its key
+ * (`CredentialRead`: refused, no access to usage, billed past the allowance).
+ */
+export const HOLD_CODES = ["usage-spent", "usage-threshold", "spend-budget", "runs-budget", "auth-failed", "no-access", "overage"] as const;
 export type HoldCode = (typeof HOLD_CODES)[number];
 
 /**
@@ -42,7 +46,7 @@ export interface CredentialHold {
  * `disabled` is the operator's switch; every other one is observed and clears
  * by itself when the observation changes.
  */
-export const HEALTH_STATES = ["disabled", "secret-missing", "auth-failed", "no-access", "quota-spent", "overage", "held", "unread", "ok"] as const;
+export const HEALTH_STATES = ["disabled", "secret-missing", "auth-failed", "no-access", "overage", "quota-spent", "held", "unread", "ok"] as const;
 export type HealthState = (typeof HEALTH_STATES)[number];
 
 /**
@@ -144,15 +148,30 @@ export function credentialHealth(i: HealthInput): { health: CredentialHealth; fi
     return t.length === 0 ? undefined : Math.max(...t);
   };
   const wait = (until: number | undefined): CredentialFix => ({ kind: "wait-reset", ...(until !== undefined ? { until } : {}), text: "wait for the reset" });
+  // Ahead of a spent window: billing the balance spends money, and a run that
+  // saw it also marks its allowance spent, which would otherwise hide it.
+  if (read?.classification === "overage") return out("overage", "billing the balance past the allowance", read.since ?? null, wait(undefined));
   const spent = holds.filter((h) => h.code === "usage-spent");
   if (spent.length > 0) return out("quota-spent", "a usage window is spent", null, wait(latest(spent)));
   if (read?.classification === "spent") return out("quota-spent", "usage spent, as the provider reports", read.since ?? null, wait(undefined));
   if (i.lastError?.reason === "quota-exhausted") return out("quota-spent", "a run paused: quota exhausted", i.lastError.at, wait(undefined));
-  if (read?.classification === "overage") return out("overage", "billing the balance past the allowance", read.since ?? null, wait(undefined));
   if (holds.length > 0) {
     const classes = (["scored", "freeplay"] as const).filter((c) => i.holdsOf[c] !== undefined);
     const code = holds.find((h) => h.code !== null)?.code ?? null;
-    const what = code === "spend-budget" ? "today's spend budget is used" : code === "runs-budget" ? "today's runs are used" : code === "usage-threshold" ? "usage at its threshold" : "held by its budget";
+    const what =
+      code === "spend-budget"
+        ? "today's spend budget is used"
+        : code === "runs-budget"
+          ? "today's runs are used"
+          : code === "usage-threshold"
+            ? "usage at its threshold"
+            : code === "auth-failed"
+              ? "its key was refused"
+              : code === "no-access"
+                ? "its usage is not readable"
+                : code === "overage"
+                  ? "billed past its allowance"
+                  : "held by its budget";
     const perDay = code === "spend-budget" || code === "runs-budget";
     const until = latest(holds);
     return out("held", `${what}${perDay ? "" : ` (${classes.join(", ")})`}`, null, {

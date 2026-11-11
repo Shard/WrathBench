@@ -31,7 +31,17 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { credentialCandidates, describeBudget, providerById, type Credential } from "../runner/src/credential-slots";
-import { credentialHealth, credentialWindows, type CredentialFix, type CredentialHealth, type CredentialHold, type CredentialRead, type CredentialWindow, type ResumeHoldCode } from "../runner/src/credential-health";
+import {
+  credentialHealth,
+  credentialWindows,
+  type CredentialFix,
+  type CredentialHealth,
+  type CredentialHold,
+  type CredentialRead,
+  type CredentialWindow,
+  type HoldCode,
+  type ResumeHoldCode,
+} from "../runner/src/credential-health";
 import { DEFAULT_DRIVER, driverEntry } from "../runner/src/drivers";
 import { utcDay, type RunFact } from "../runner/src/models";
 import { isOpenCodeGoBase } from "../runner/src/platform";
@@ -99,12 +109,23 @@ export function nextUtcMidnight(now: number): number {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
 }
 
-/** The gate over the credentials, the readings and the runs. Pure. */
+/** A hold the provider's last read of a credential's key puts on it (`FleetGoUsage.readHolds`). */
+export interface ReadHold {
+  code: Extract<HoldCode, "auth-failed" | "no-access" | "overage">;
+  text: string;
+}
+
+/**
+ * The gate over the credentials, the readings and the runs, and the holds the
+ * providers' reads of their keys put on them (`readHolds`), which come first:
+ * a credential whose key was refused is held before its budget is asked. Pure.
+ */
 export function credentialGate(
   credentials: readonly Credential[],
   observations: Iterable<SubscriptionUsage | null | undefined>,
   runs: readonly BudgetRun[],
   now: number,
+  readHolds: ReadonlyMap<string, ReadHold> = new Map(),
 ): CredentialGate {
   const usage = newestByCredential(observations);
   const byId = new Map(credentials.map((c) => [c.id, c]));
@@ -135,6 +156,8 @@ export function credentialGate(
   const holdReasonOf = (id: string, episode: string | null | undefined, model?: string | null): (CredentialHold & { text: string }) | undefined => {
     const c = byId.get(id);
     if (c === undefined) return undefined;
+    const read = readHolds.get(id);
+    if (read !== undefined) return { code: read.code, until: null, text: read.text };
     const h = usageHoldOf(id, episode, model);
     if (h !== null) {
       const cls = gateClassOf(episode);
@@ -324,14 +347,20 @@ export function placeResume(
  * The supervisor's reader for the OpenCode Go credentials with a usage
  * budget (`opencode-go.ts`): one poller per credential, each calling its
  * endpoint at most once a minute, refreshed before a tick decides anything.
- * The endpoint is the Go base's origin, which the roster's Go entries name. A
- * key missing from the environment, or a reading that fails, is no
- * observation — said once per boot — and holds nothing. The key is read from
- * the environment at the call and never logged.
+ * The endpoint is the Go base's origin, which the roster's Go entries name.
+ * A key missing from the environment is no observation, said once per boot.
+ * Every read is classified (`GoUsagePoller.lastRead`), and a change of class
+ * is said: a refused key (`auth-failed`) holds every Go credential naming it,
+ * a key that may not read usage (`no-access`) and a balance charge a run
+ * recorded (`overage`, `noteOverages`) hold that credential, and an unread
+ * endpoint holds nothing (`readHolds`, which the gate takes). The key is
+ * read from the environment at the call and never logged.
  */
 export class FleetGoUsage {
   private readonly pollers = new Map<string, GoUsagePoller>();
   private readonly missingKey = new Set<string>();
+  /** The variable each polled credential's key is in: a refused key holds every credential naming it. */
+  private readonly envOf = new Map<string, { provider: string; secretEnv: string }>();
 
   constructor(
     private readonly o: {
@@ -368,9 +397,50 @@ export class FleetGoUsage {
         });
         this.pollers.set(c.id, poller);
       }
+      this.envOf.set(c.id, { provider: c.provider, secretEnv: c.secretEnv });
       due.push(poller.refresh());
     }
     await Promise.all(due);
+  }
+
+  /**
+   * The balance charges the runs recorded (meta.json's `credentialOverage`,
+   * `RunFact.credentialOverageAt`), handed to each polled credential's
+   * poller: the newest stands until a read shows room after it.
+   */
+  noteOverages(runs: Iterable<Pick<RunFact, "credential"> & Partial<Pick<RunFact, "credentialOverageAt">>>): void {
+    for (const f of runs) {
+      if (f.credential === null || f.credentialOverageAt == null) continue;
+      this.pollers.get(f.credential)?.noteOverage(f.credentialOverageAt);
+    }
+  }
+
+  /**
+   * Why each credential's launches are held by its key's last read, by id: a
+   * refused key holds every enabled credential of its provider naming the
+   * same variable (the free side shares the paid side's key); no access to
+   * the usage and a balance charge hold the credential read. The sentences
+   * name the credential and the class only, like every hold's.
+   */
+  readHolds(credentials: readonly Credential[]): Map<string, ReadHold> {
+    const out = new Map<string, ReadHold>();
+    for (const [id, p] of this.pollers) {
+      const r = p.lastRead;
+      const of = this.envOf.get(id);
+      if (r === undefined || of === undefined) continue;
+      if (r.classification === "auth-failed") {
+        for (const c of credentials) {
+          if (c.enabled && c.provider === of.provider && c.secretEnv === of.secretEnv && !out.has(c.id)) {
+            out.set(c.id, { code: "auth-failed", text: `credential ${c.id}: its key was refused (auth-failed) — held until a usage read succeeds` });
+          }
+        }
+      } else if (r.classification === "no-access" && !out.has(id)) {
+        out.set(id, { code: "no-access", text: `credential ${id}: its key may not read its usage (no-access) — held until a usage read succeeds` });
+      } else if (r.classification === "overage" && !out.has(id)) {
+        out.set(id, { code: "overage", text: `credential ${id}: billed past its allowance (overage) — held until its usage shows room` });
+      }
+    }
+    return out;
   }
 
   /** The newest reading of every credential read so far. */

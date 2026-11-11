@@ -1084,7 +1084,14 @@ async function main(): Promise<void> {
     // reading, its runs and spend today) and every live session on its slots
     // and its driver's host cap, asked at every launch below
     // (`run-fleet-credentials.ts`).
-    const credGate = credentialGate(cfg.credentials, [...runs.map((f) => f.credentialUsage), ...goUsage.observations()], runs, Date.now());
+    goUsage.noteOverages(runs);
+    const credGate = credentialGate(
+      cfg.credentials,
+      [...runs.map((f) => f.credentialUsage), ...goUsage.observations()],
+      runs,
+      Date.now(),
+      goUsage.readHolds(cfg.credentials),
+    );
     const book = new SlotBook(cfg.credentials, cfg.policy.maxSessions);
     lastCredentials = { gate: credGate, book, credentials: cfg.credentials, runs };
     const byName = new Map(cfg.jobs.map((j) => [j.name, j]));

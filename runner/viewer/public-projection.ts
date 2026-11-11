@@ -233,8 +233,10 @@ export const SUBSCRIPTION_WAIT_WHY = "waiting for its subscription usage window 
 
 /**
  * What the public fleet page says about a paused run its credential holds, by
- * hold code: no credential id, no figure, no time. Both usage codes read as
- * the usage window, which is all the public build says of one.
+ * hold code: no credential id, no figure, no time. Both usage codes, and an
+ * overage (held until the usage shows room), read as the usage window, which
+ * is all the public build says of one; a refused key and a key that may not
+ * read its usage say only that the credential is the wait.
  */
 export const CREDENTIAL_HOLD_WHY: Readonly<Record<ResumeHoldCode, string>> = {
   "usage-spent": SUBSCRIPTION_WAIT_WHY,
@@ -242,6 +244,9 @@ export const CREDENTIAL_HOLD_WHY: Readonly<Record<ResumeHoldCode, string>> = {
   "runs-budget": "waiting for its daily run budget to reset",
   "spend-budget": "waiting for its daily spend budget to reset",
   "credential-off": "waiting for its credential",
+  "auth-failed": "waiting for its credential's key",
+  "no-access": "waiting for access to its credential's usage",
+  overage: SUBSCRIPTION_WAIT_WHY,
 };
 
 /** A paused row's public `why`: the kind of credential hold, the usage-window wait, or the supervisor's own sentence. */

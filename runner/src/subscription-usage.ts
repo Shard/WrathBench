@@ -289,22 +289,31 @@ export function newestByCredential(observations: Iterable<SubscriptionUsage | nu
   return out;
 }
 
-/** "5h", "7d", "90m" — a window by its length, for the operator's lines. */
+/** "5h", "week", "month", "90m" — a window by its length, for the operator's lines. */
 export function windowLabel(w: UsageWindow): string {
   const m = w.windowMinutes;
   const scope = w.family !== undefined ? ` ${w.family}` : "";
   if (m === null) return `window${scope}`;
+  if (m === 7 * 1440) return `week${scope}`;
+  if (m >= 28 * 1440 && m <= 31 * 1440) return `month${scope}`;
   if (m % 1440 === 0) return `${m / 1440}d${scope}`;
   if (m % 60 === 0) return `${m / 60}h${scope}`;
   return `${m}m${scope}`;
 }
 
-/** "5h 82% (resets 2026-…Z)" — operator-only wording; never for a public surface. */
+/**
+ * "5h 82% (resets 2026-…Z)" — operator-only wording; never for a public
+ * surface. A reset past the seven-day ceiling is named as the window's, with
+ * the instant it stops counting beside it.
+ */
 export function describeWindows(windows: readonly UsageWindow[], observedAt: number): string {
   return windows
     .map((w) => {
       const end = windowEndsAt(w, observedAt);
-      return `${windowLabel(w)} ${Math.round(w.usedPercent)}%${end !== null ? ` (resets ${new Date(end).toISOString()})` : ""}`;
+      const iso = (t: number): string => new Date(t).toISOString();
+      const when =
+        end === null ? "" : w.resetsAt !== null && w.resetsAt > end ? ` (resets ${iso(w.resetsAt)}, counted only to ${iso(end)})` : ` (resets ${iso(end)})`;
+      return `${windowLabel(w)} ${Math.round(w.usedPercent)}%${when}`;
     })
     .join(", ");
 }

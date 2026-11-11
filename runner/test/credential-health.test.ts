@@ -43,7 +43,9 @@ describe("credentialHealth", () => {
     expect(state({ ...everything, enabled: true })).toBe("secret-missing");
     expect(state({ ...everything, enabled: true, secretSet: true })).toBe("auth-failed");
     expect(state({ read: read({ http: 403, classification: "no-access" }), holdsOf: { scored: { code: "usage-spent", until: null } } })).toBe("no-access");
-    expect(state({ read: read({ classification: "overage" }), holdsOf: { scored: { code: "usage-spent", until: null } } })).toBe("quota-spent");
+    // A balance charge reads overage even with the window it marked spent beside it.
+    expect(state({ read: read({ classification: "overage" }), holdsOf: { scored: { code: "overage", until: null }, freeplay: { code: "usage-spent", until: null } } })).toBe("overage");
+    expect(state({ read: read({ classification: "ok" }), holdsOf: { scored: { code: "usage-spent", until: null } } })).toBe("quota-spent");
     expect(state({ read: read({ classification: "overage" }), holdsOf: { scored: { code: "usage-threshold", until: null } } })).toBe("overage");
     expect(state({ read: read({ http: null, classification: "unread" }), holdsOf: { scored: { code: "runs-budget", until: null } } })).toBe("held");
     expect(state({ read: read({ http: null, classification: "unread" }) })).toBe("unread");

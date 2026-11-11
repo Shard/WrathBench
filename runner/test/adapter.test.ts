@@ -863,6 +863,43 @@ describe("OpenAiChatAdapter budget pauses", () => {
       /HTTP 400/,
     );
   });
+
+  test("a 401 is the key's, not the model's: one request, then a pause as auth-failed, on any provider", async () => {
+    for (const baseUrl of ["http://model.invalid/v1", "https://opencode.ai/inference/go/openai/v1"]) {
+      let calls = 0;
+      const adapter = new OpenAiChatAdapter({
+        baseUrl,
+        apiKey: "k",
+        model: "m",
+        fetchImpl: Object.assign(
+          (): Promise<Response> => {
+            calls++;
+            return Promise.resolve(status(401, JSON.stringify({ type: "authentication_error", message: "Invalid credential" })));
+          },
+          { preconnect: () => {} },
+        ) as unknown as typeof fetch,
+        sleep: () => Promise.resolve(),
+      });
+      const out = await adapter.complete(req);
+      expect(out).toMatchObject({ kind: "pause", reason: "auth-failed" });
+      expect(out.kind === "pause" && out.detail).toContain("HTTP 401");
+      expect(calls).toBe(1);
+    }
+  });
+
+  test("a 401 after a 429 is still the key's: auth-failed, not a rate limit", async () => {
+    const out = await adapterPlaying([status(429, "slow down"), status(401, "api_key_expired")]).complete(req);
+    expect(out).toMatchObject({ kind: "pause", reason: "auth-failed" });
+  });
+
+  test("a 2xx body whose error names code 401 pauses as auth-failed too", async () => {
+    const out = await adapterPlaying([new Response(JSON.stringify({ error: { code: 401, message: "User not found" } }), { status: 200 })]).complete(req);
+    expect(out).toMatchObject({ kind: "pause", reason: "auth-failed" });
+  });
+
+  test("a 403 is not a 401: still fatal", async () => {
+    await expect(adapterPlaying([status(403, "forbidden")]).complete(req)).rejects.toThrow(/HTTP 403/);
+  });
 });
 
 describe("OpenAiChatAdapter stated reset", () => {

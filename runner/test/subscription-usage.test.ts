@@ -18,6 +18,7 @@ import {
   usageHold,
   usageKeyOf,
   windowLabel,
+  describeWindows,
   type SubscriptionUsage,
 } from "../src/subscription-usage";
 
@@ -92,8 +93,15 @@ describe("windows, staleness and holds", () => {
     expect(parseSubscriptionUsage(JSON.parse(JSON.stringify(b)))).toEqual(b);
     expect(parseSubscriptionUsage({ credential: "x", observedAt: "soon", windows: [] })).toBeUndefined();
     expect(parseSubscriptionUsage({ credential: "x", observedAt: 1, windows: [{ usedPercent: "lots" }] })).toEqual({ credential: "x", observedAt: 1, windows: [] });
-    expect(windowLabel({ usedPercent: 1, windowMinutes: 10_080, resetsAt: null })).toBe("7d");
+    expect(windowLabel({ usedPercent: 1, windowMinutes: 10_080, resetsAt: null })).toBe("week");
     expect(windowLabel({ usedPercent: 1, windowMinutes: 300, resetsAt: null })).toBe("5h");
+    expect(windowLabel({ usedPercent: 1, windowMinutes: 43_200, resetsAt: null })).toBe("month");
+    expect(windowLabel({ usedPercent: 1, windowMinutes: 2_880, resetsAt: null })).toBe("2d");
+    // A reset past the seven-day ceiling is named, with where it stops counting.
+    const far = NOW + 9 * 24 * H;
+    expect(describeWindows([{ usedPercent: 20, windowMinutes: 43_200, resetsAt: far }], NOW)).toBe(
+      `month 20% (resets ${new Date(far).toISOString()}, counted only to ${new Date(NOW + 7 * 24 * H).toISOString()})`,
+    );
   });
 });
 
@@ -200,7 +208,7 @@ describe("a per-model cap", () => {
     const wide: SubscriptionUsage = { ...scoped, windows: [{ usedPercent: 100, windowMinutes: 10_080, resetsAt: NOW + 50 * H }] };
     expect(usageHold(wide, 80, NOW, "sonnet")).not.toBeNull();
     expect(usageHold(wide, 80, NOW, "claude-opus-4-8")).not.toBeNull();
-    expect(windowLabel(scoped.windows[1]!)).toBe("7d opus");
+    expect(windowLabel(scoped.windows[1]!)).toBe("week opus");
   });
 
   test("a spent cap survives a newer reading that does not mention it, until it ends", () => {
