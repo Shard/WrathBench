@@ -1235,6 +1235,23 @@ export interface RunDetailResponse extends SnapshotEnvelope {
    * its shape; optional for the reason `achievements` is.
    */
   party?: PartyDetailView;
+  /**
+   * A fan-out run's characters, one session record each, in name order: the
+   * session id the inspector's API opens each by (`<run-id>~<Character>`)
+   * and the character's name. Present only on a fan-out run, so every other
+   * run's detail keeps its shape. The run's own game-side figures (level,
+   * states, milestones) are no one character's and read as not recorded;
+   * each character's are its session's. Private: a fan-out run is never
+   * published.
+   */
+  fanout?: FanoutSessionView[];
+}
+
+/** One character of a fan-out run (`RunDetailResponse.fanout`). */
+export interface FanoutSessionView {
+  /** The session id: `<run-id>~<Character>`. */
+  id: string;
+  character: string;
 }
 
 /**

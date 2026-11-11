@@ -30,7 +30,7 @@ import { join } from "node:path";
 import type { ComparabilityView, ItemSample, MoveIntentView, RunRow, StateItemsRow, StatePoint } from "./api-types";
 import { moves } from "@wrathbench/inspector";
 import { runSession } from "./runs-source";
-import { isV1RunDir, latestReading, readRunRow, readStateSamples } from "../src/run-reader";
+import { isFanoutRunDir, isV1RunDir, latestReading, readRunRow, readStateSamples } from "../src/run-reader";
 import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./archive-dir";
 import { harnessOfRun, parseComparability } from "../src/comparability";
@@ -309,7 +309,8 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     // disagree about a character whose character went away.
     row.continuedFrom = str(meta.config?.continuedFrom);
     row.driver = str(meta.config?.driver);
-    row.character = str(meta.config?.character);
+    // A fan-out run's characters are its sessions' (`fanout` on its detail); none is the run's.
+    row.character = isFanoutRunDir(dir) ? null : str(meta.config?.character);
     /*
      * Race and class are config, not comparability: they are read here beside
      * the character name and nothing recomputes or back-labels them. A run

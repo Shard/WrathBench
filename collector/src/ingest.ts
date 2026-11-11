@@ -36,7 +36,7 @@ import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import { SessionReader, type CallRow, type EventRow, type StreamCursor } from "@wrathbench/mcp/record";
 import { openRunDb } from "../../runner/src/rundb";
-import { isV1RunDir, milestoneOfEvent, readRunRow, sessionDirOfRun, traceSamplesOf, turnIndexOf } from "../../runner/src/run-reader";
+import { isFanoutRunDir, isV1RunDir, milestoneOfEvent, readRunRow, sessionDirOfRun, traceSamplesOf, turnIndexOf } from "../../runner/src/run-reader";
 import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tail";
 import { type CountCache, readRunFact, type RecordCountScanner } from "../../runner/src/models";
 import { strikableSessionToken, strikeSessionToken } from "../../runner/src/session-token";
@@ -60,6 +60,8 @@ export interface IngestDeps {
   now: () => number;
   /** Chunk size for the tailer; only a test narrows it. */
   chunkBytes?: number;
+  /** Where a pass says what it chose not to read. */
+  log?: (msg: string) => void;
 }
 
 export interface IngestResult {
@@ -142,6 +144,8 @@ export class Ingester {
   private readonly counts: CountCache = new Map();
   /** How many of a v1 run's trace samples this process has added to the store. */
   private readonly statesAdded = new Map<string, number>();
+  /** Fan-out runs already reported as having their session records skipped; logged once each. */
+  private readonly reportedFanout = new Set<string>();
 
   constructor(private readonly deps: IngestDeps) {}
 
@@ -200,6 +204,18 @@ export class Ingester {
       out.states = await this.readTraceStates(runId, dir);
       await this.readEventMilestones(runId, dir);
       out.moves = await this.readCallMoves(runId, dir);
+    } else if (isFanoutRunDir(dir)) {
+      /*
+       * A fan-out run's game side is several characters' records, and every
+       * table here is keyed by the run alone: one character's samples would
+       * stand for the run, or several would interleave under one key. So none
+       * is read until the store can key a row by character; the run row,
+       * totals and trajectory are the run's and ingest as for any run.
+       */
+      if (!this.reportedFanout.has(runId)) {
+        this.reportedFanout.add(runId);
+        this.deps.log?.(`collector: ${runId} is a fan-out run; its characters' session records are not ingested`);
+      }
     } else {
       const sqlite = await this.readSqlite(runId, dir);
       out.states = sqlite.states;
@@ -225,7 +241,8 @@ export class Ingester {
     const from = st.size < at.offset ? { offset: 0, nextLine: 0 } : at;
     if (st.size === from.offset) return 0;
     const ingestedAt = this.deps.now();
-    const v1 = isV1RunDir(dir);
+    // A fan-out run's trajectory is a v1 one: model-side, its milestones in the session records.
+    const v1 = isV1RunDir(dir) || isFanoutRunDir(dir);
     let lineNo = from.nextLine;
     let offset = from.offset;
     let count = 0;
@@ -574,7 +591,8 @@ export class Ingester {
       shakeout: str(r["shakeout"]) || str(meta["shakeout"]),
       model: str(r["model"]) || str(config["model"]),
       objective: str(r["objective"]) || str(config["objective"]),
-      character: str(r["character"]) || str(config["character"]),
+      // A fan-out run's launch names a character, and no one character is the run (`readRunRow`).
+      character: isFanoutRunDir(dir) ? "" : str(r["character"]) || str(config["character"]),
       platform: str(r["platform"]),
       resolved_model: str(r["resolved_model"]) || str(resolved["model"]),
       resolved_cli_version: str(r["resolved_cli_version"]) || str(resolved["cliVersion"]),

@@ -92,7 +92,7 @@ import { scrubPathsText } from "./scrub-paths";
 import { strikableSessionToken, strikeSessionTokens } from "../src/session-token";
 import { SEG_MS } from "@wrathbench/inspector/codec/trace";
 import { closedWindowsMemo, createInspectorApi, nearbyWindow, traceIndex, traceSegment } from "@wrathbench/inspector";
-import { runSession, runsSource } from "./runs-source";
+import { fanoutSessions, isFanoutRun, runSession, runsSource } from "./runs-source";
 import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStateItems, readStates, runDir } from "./runs";
 import {
   factOf,
@@ -767,7 +767,8 @@ export type ApiHandle = ((req: Request) => Promise<Response>) & {
   cachedRuns(): { entries: number };
   /**
    * The runs a public handle withholds, sorted: every run whose driver is not a
-   * model (`isNotAModelRun`, by driver or by stamp). The publisher hands them
+   * model (`isNotAModelRun`, by driver or by stamp), and every fan-out run
+   * (`isFanoutRun`). The publisher hands them
    * to its engine to delete what an earlier pass published for them
    * (`runner/viewer/snapshot.ts`, `withdrawn`). Not a route: it is answered
    * in-process only, so no public reader learns the ids.
@@ -987,20 +988,32 @@ export function createApi(opts: ApiOptions): ApiHandle {
    */
   async function runRows(now = Date.now()): Promise<RunRow[]> {
     const rows = await allRunRows(now);
-    return publicMode ? rows.filter((r) => !isWithheldRow(r)) : rows;
+    return publicMode ? rows.filter((r) => !withheldRow(r)) : rows;
+  }
+
+  /**
+   * Whether a public handle withholds this row: its driver is not a model, or
+   * it is a fan-out run, one agent driving several characters, which is an
+   * unscored probe and has no public form (its run detail would present no
+   * character and its game side is per character). Fan-out is read off the
+   * run's directory (`isFanoutRun`), from meta.json's launch config, so a
+   * run is withheld from its first pass rather than published and withdrawn.
+   */
+  function withheldRow(r: Pick<RunRow, "runId" | "driver" | "shakeout">): boolean {
+    return isWithheldRow(r) || isFanoutRun(runsDir, r.runId);
   }
 
   /** The ids a public handle withholds (`ApiHandle.unpublishedRuns`). */
   async function unpublishedRuns(): Promise<string[]> {
     return (await allRunRows())
-      .filter(isWithheldRow)
+      .filter(withheldRow)
       .map((r) => r.runId)
       .sort();
   }
 
   /** Whether a public handle answers this run as if it did not exist. Always false on a private one. */
   async function withheldRun(runId: string): Promise<boolean> {
-    return publicMode && isWithheldRow(await runRowOne(runId));
+    return publicMode && withheldRow(await runRowOne(runId));
   }
 
   /**
@@ -1238,7 +1251,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
    */
   async function resultRuns(): Promise<ResultRun[]> {
     const rows = await allResultRuns();
-    return publicMode ? rows.filter((r) => !isNotAModelRun(r)) : rows;
+    return publicMode ? rows.filter((r) => !isNotAModelRun(r) && !isFanoutRun(runsDir, r.runId)) : rows;
   }
   /** Every run, withheld or not: what the scripted reference line is read from. */
   function allResultRuns(): Promise<ResultRun[]> {
@@ -1880,6 +1893,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // falls back from, the same shape the facts above take.
         ...(character === null ? {} : { character }),
         ...(party === null ? {} : { party }),
+        // A fan-out run's characters, so the page can open each one's session.
+        ...(isFanoutRun(runsDir, runId) ? { fanout: fanoutSessions(runsDir, runId) } : {}),
       };
       return pub(body, projectRunDetail, [runId]);
     }

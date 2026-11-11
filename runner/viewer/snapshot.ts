@@ -65,7 +65,8 @@
  * projects every body again. The ids come back from the handle in-process
  * (`unpublishedRuns`) and go out as `withdrawn`, so the publisher deletes
  * whatever an earlier pass published for them (`infra/publish-core.ts`,
- * `planWithdraw`).
+ * `planWithdraw`). A fan-out run, one agent driving several characters, is
+ * withheld the same way: an unscored probe with no public form.
  */
 
 import { statSync } from "node:fs";
@@ -147,7 +148,8 @@ export interface SnapshotResult {
   artifacts: SnapshotArtifact[];
   /**
    * Runs the listing holds that are never published, because their driver is
-   * not a model (`isNotAModelRun`). The publisher deletes what it remembers
+   * not a model (`isNotAModelRun`) or they are fan-out runs (`isFanoutRun`).
+   * The publisher deletes what it remembers
    * publishing for them; sorted, so a pass's result is deterministic.
    */
   withdrawn: string[];
