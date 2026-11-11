@@ -8,7 +8,9 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { isStaleRun, liveCredentials, modelStates, utcDay, type ModelState, type RunFact } from "../runner/src/models";
+import { isStaleRun, liveCredentials, modelStates, readRunFact, utcDay, type ModelState, type RunFact } from "../runner/src/models";
+import { loadRunConfig } from "../runner/src/config";
+import { Trajectory, type RunMeta } from "../runner/src/trajectory";
 import { parseCredentials } from "../runner/src/credentials";
 import type { SubscriptionUsage } from "../runner/src/subscription-usage";
 import { projectEntry, projectFleet, SUBSCRIPTION_WAIT_WHY } from "../runner/viewer/public-projection";
@@ -272,6 +274,24 @@ describe("a credential's budget holds new starts", () => {
     expect(resumeHoldOf(fact({ credential: "r", episode: "freeplay" }), { credentials: creds }, used)).toBe(
       "credential r: its runs for the day are used — held until 00:00 UTC",
     );
+    // From disk: a run started yesterday and resumed twice today reads as two
+    // of today's runs on its credential, its start counting only on its own day.
+    const dir = tempDir("wrathbench-runs-today-");
+    const t = new Trajectory(join(dir, "seg"), { now: () => NOW - 10 * 60_000 });
+    t.writeMeta({
+      runId: "seg",
+      harnessVersion: "harness-0.5-1-gabc",
+      startedAt: NOW - 30 * H,
+      config: loadRunConfig({ runId: "seg", driver: "openai", model: "m/free", episode: "freeplay", account: "POOL01", credential: "r" }),
+      comparability: { episode: "freeplay" } as unknown as RunMeta["comparability"],
+    });
+    t.append({ t: "resume" });
+    t.append({ t: "resume" });
+    t.close();
+    const onDisk = readRunFact(dir, "seg", NOW)!;
+    expect(onDisk.credential).toBe("r");
+    expect(onDisk.resumesByDay).toEqual({ [today]: 2 });
+    expect(credentialGate(creds, [], [onDisk], NOW).runsToday("r")).toBe(2);
     // Yesterday's segments count nothing today.
     expect(credentialGate(creds, [], [runs[0]!, { ...runs[1]!, resumesByDay: { [yesterday]: 3 } }], NOW).holdOf("r", "freeplay")).toBeUndefined();
     expect(g.spendToday("s")).toBeCloseTo(0.6);

@@ -170,8 +170,7 @@ const pct = z.number().gt(0).lte(100);
 /**
  * The budget, by kind. Every kind holds only NEW starts and resumes; the one
  * thing that also pauses a live run is a subscription's freeplay threshold,
- * which is what the usage gate always did (docs/METHODOLOGY.md, "The tier is
- * the evidence budget").
+ * which is what the usage gate always did (docs/RUNBOOK.md, "Credentials").
  *
  * - `usage` — the subscription's usage windows. A scored run does not start
  *   while any window is at or over `scoredMaxPct`; a freeplay run does not

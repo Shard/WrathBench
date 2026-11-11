@@ -20,6 +20,7 @@
  * Operator tooling. Nothing in runner/ or sdk/ imports this.
  */
 
+import { isPoolAccountName } from "../../../runner/src/account-pool";
 import { RETRY_MARK } from "./transient";
 
 export interface SuiteMember {
@@ -58,7 +59,7 @@ export const SUITE_MEMBERS: readonly SuiteMember[] = [
 /** Accounts the fleet can hold, and why; a member on one is refused. */
 export function fleetHeld(account: string): string | undefined {
   const a = account.toUpperCase();
-  if (/^RUNNER\d*$/.test(a) || /^SHAKEOUT\d*$/.test(a)) return "a fleet pool account";
+  if (/^RUNNER\d*$/.test(a) || /^SHAKEOUT\d*$/.test(a) || isPoolAccountName(a)) return "a fleet pool account";
   if (a === "PROBE") return "held by a reference run";
   if (/^PARTY\d+$/.test(a)) return "held by the deadmines campaign's party";
   if (a === "SMOKE") return "the launch gate's account, smoked on every supervisor boot";

@@ -34,7 +34,7 @@ describe("the members", () => {
 
 describe("fleetHeld", () => {
   test("the pool, the reference run's PROBE, the party and the launch gate's SMOKE are refused, case-folded", () => {
-    for (const a of ["RUNNER", "runner3", "SHAKEOUT2", "PROBE", "PARTY1", "party5", "SMOKE", "smoke"]) expect(fleetHeld(a)).toBeDefined();
+    for (const a of ["RUNNER", "runner3", "SHAKEOUT2", "POOL01", "pool17", "PROBE", "PARTY1", "party5", "SMOKE", "smoke"]) expect(fleetHeld(a)).toBeDefined();
     for (const a of ["SMOKE2", "SMOKE3", "smoke4"]) expect(fleetHeld(a)).toBeUndefined();
   });
 
