@@ -1,0 +1,7 @@
+{
+ "path": "/api/run/l05-freeplay-1/trace",
+ "status": 200,
+ "contentType": "application/json; charset=utf-8",
+ "cacheControl": "no-store",
+ "body": {"segMs":300000,"segs":[],"tail":null,"now":1760087130000}
+}

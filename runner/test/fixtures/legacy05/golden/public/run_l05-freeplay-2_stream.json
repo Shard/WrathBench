@@ -1,0 +1,7 @@
+{
+ "path": "/api/run/l05-freeplay-2/stream",
+ "status": 403,
+ "contentType": "application/json; charset=utf-8",
+ "cacheControl": "no-store",
+ "body": {"error":"withheld in public mode"}
+}

@@ -1,0 +1,88 @@
+{
+ "path": "/api/positions",
+ "status": 200,
+ "contentType": "application/json; charset=utf-8",
+ "cacheControl": "no-store",
+ "body": {
+  "positions": [
+   {
+    "runId": "l05-freeplay-2",
+    "character": "Quillfeather",
+    "model": "fixture/model-two",
+    "effort": null,
+    "map": 7105,
+    "x": 680,
+    "y": 660,
+    "ts": 1760087000000,
+    "level": 2,
+    "xp": 135,
+    "money": 33,
+    "questsCompleted": 1,
+    "harnessVersion": "harness-0.5-912-gf61e391d",
+    "health": 74,
+    "maxHealth": 74,
+    "power": 64,
+    "maxPower": 64,
+    "powerType": 0,
+    "nextLevelXp": 400,
+    "class": 11,
+    "move": {"ts":1760087110000,"map":7105,"x":800,"y":660,"z":12,"target":null,"status":null},
+    "status": {"turn":5,"level":2,"zone":"Thistledown Glade","text":"Six minnows soon; Wendlerook is fishing next to me.","ts":1760087001450},
+    "reflecting": true,
+    "trace": {
+     "segMs": 300000,
+     "recent": [1760086500000],
+     "tail": {
+      "v": 1,
+      "run": "l05-freeplay-2",
+      "t0": 1760086800000,
+      "t1": 1760087400000,
+      "q": {"p":10,"o":1024},
+      "k": {
+       "p": [7105,6800,6600,120,0],
+       "pt": -10000,
+       "s": {
+        "hp": 74,
+        "hpMax": 74,
+        "pw": 64,
+        "pwMax": 64,
+        "pwType": 0,
+        "level": 2,
+        "xp": 60,
+        "xpMax": 400,
+        "auras": [],
+        "combat": false,
+        "mounted": false,
+        "taxi": false,
+        "dead": false,
+        "ghost": false,
+        "resting": false,
+        "target": null,
+        "cast": null,
+        "money": 28,
+        "equip": [[15,91101]],
+        "bags": [],
+        "inv": [[255,23,91102,3]],
+        "dur": [[15,20,20]],
+        "quests": [[0,92101,0]],
+        "rep": [],
+        "skills": [[95101,12,75]]
+       }
+      },
+      "dt": [5000,15000,15000,15000,15000,15000,15000,15000,15000,15000,15000,15000,15000,15000,15000,15000,15000,15000,15000,15000,15000,15000],
+      "x": [50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50],
+      "y": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+      "z": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+      "o": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+      "cuts": [],
+      "flights": [],
+      "ev": [[100000,"inv",[[255,23,91102,5]]],[100000,"skills",[[95101,14,75]]],[310000,"resting",true],[310000,"target",{"kind":"player"}]],
+      "items": {"91101":[1,"Bent Willow Rod"],"91102":[0,"Speckled Minnow"]},
+      "qreq": {"92101":[0,0,0,0]}
+     }
+    },
+    "nearby": true
+   }
+  ]
+ }
+}

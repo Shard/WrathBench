@@ -1,0 +1,35 @@
+{
+ "path": "/api/run/l05-party-a1/raw/1",
+ "status": 200,
+ "contentType": "application/json; charset=utf-8",
+ "cacheControl": "no-store",
+ "body": {
+  "ts": 1760000112000,
+  "t": "state",
+  "level": 5,
+  "xp": 1200,
+  "map": 7101,
+  "x": 1000,
+  "y": 2000,
+  "z": 50,
+  "eventCount": 40,
+  "lastSeq": 40,
+  "money": 1520,
+  "questsCompleted": 0,
+  "turn": 1,
+  "zone": 8801,
+  "area": 8811,
+  "health": 420,
+  "maxHealth": 420,
+  "power": 0,
+  "maxPower": 100,
+  "powerType": 1,
+  "nextLevelXp": 2800,
+  "items": [
+   {"name":"Fixture Longblade","count":1,"equipped":true,"itemId":91001,"quality":2,"slot":15},
+   {"name":"Pinewood Buckler","count":1,"equipped":true,"itemId":91002,"quality":1,"slot":16},
+   {"name":"Murky Tonic","count":3,"equipped":false,"itemId":91004,"quality":1,"slot":23,"bag":255},
+   {"name":"Matted Pelt","count":2,"equipped":false,"itemId":91005,"quality":0,"slot":0,"bag":19}
+  ]
+ }
+}

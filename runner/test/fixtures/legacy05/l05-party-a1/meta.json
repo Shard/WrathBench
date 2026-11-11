@@ -1,0 +1,95 @@
+{
+  "runId": "l05-party-a1",
+  "harnessVersion": "harness-0.5-912-gf61e391d",
+  "sdkVersion": "0.2.0",
+  "stackCommit": "a22e4fa05d4e",
+  "startedAt": 1760000110000,
+  "config": {
+    "moduleUrl": "http://worldserver:8086",
+    "character": "Brannoch",
+    "account": "FIXPARTY1",
+    "race": 3,
+    "class": 1,
+    "driver": "openai",
+    "model": "fixture/model-one",
+    "apiBase": "https://api.acme.invalid/v1",
+    "apiKeyEnv": "ACME_KEY",
+    "wikiCoords": false,
+    "wiki": true,
+    "extra": false,
+    "campaign": "l05-delve",
+    "cell": "trio",
+    "campaignVersion": 2,
+    "arm": "base",
+    "ref": "fixture/model-one@delve",
+    "party": {
+      "id": "l05-party",
+      "member": "a1",
+      "role": "tank",
+      "size": 3,
+      "members": [
+        {
+          "member": "a1",
+          "role": "tank",
+          "runId": "l05-party-a1",
+          "account": "FIXPARTY1",
+          "character": "Brannoch"
+        },
+        {
+          "member": "a2",
+          "role": "healer",
+          "runId": "l05-party-a2",
+          "account": "FIXPARTY2",
+          "character": "Ysolde"
+        },
+        {
+          "member": "a3",
+          "role": "damage",
+          "runId": "l05-party-a3",
+          "account": "FIXPARTY3",
+          "character": "Tarnwick"
+        }
+      ]
+    },
+    "episode": "probing",
+    "maxToolCallsPerEpisode": 500,
+    "stepIntervalMs": 3000,
+    "stateIntervalMs": 60000,
+    "snippetTimeoutMs": 30000,
+    "sandboxPingGraceMs": 2000,
+    "runsDir": "data/runs",
+    "wikiBundle": "data/wiki/bundle.sqlite",
+    "watchdogs": {
+      "idleMs": 1200000,
+      "noXpMs": null,
+      "episodeMs": 5400000,
+      "maxSandboxRestarts": 3
+    },
+    "runId": "l05-party-a1",
+    "token": "fixture-session-token-a1"
+  },
+  "comparability": {
+    "harnessVersion": "harness-0.5-912-gf61e391d",
+    "promptHash": "sha256:3211d771263f42db",
+    "promptChars": 17902,
+    "harness": "wrathbench",
+    "effort": null,
+    "budget": {
+      "maxTurns": null,
+      "maxToolCalls": 500,
+      "idleMs": 1200000,
+      "noXpMs": null,
+      "episodeMs": 5400000,
+      "maxSandboxRestarts": 3
+    },
+    "objective": false,
+    "wikiCoords": false,
+    "wikiBundle": null,
+    "episode": "probing",
+    "episodeOverride": false,
+    "serverBuild": {
+      "build": "fixture-worldserver-0.5",
+      "startedAtMs": 1759395300000
+    }
+  }
+}

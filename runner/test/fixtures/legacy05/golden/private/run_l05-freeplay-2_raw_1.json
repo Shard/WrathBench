@@ -1,0 +1,7 @@
+{
+ "path": "/api/run/l05-freeplay-2/raw/1",
+ "status": 200,
+ "contentType": "application/json; charset=utf-8",
+ "cacheControl": "no-store",
+ "body": {"ts":1760086500000,"t":"harness","kind":"resolved_model","model":"fixture/model-two-0815","cliVersion":null,"provider":"AcmeCloud"}
+}

@@ -1,0 +1,28 @@
+{
+ "path": "/api/run/l05-party-a1/entries?from=40&limit=5",
+ "status": 200,
+ "contentType": "application/json; charset=utf-8",
+ "cacheControl": "no-store",
+ "body": {
+  "from": 40,
+  "total": 83,
+  "entries": [
+   {"i":40,"t":"milestone","ts":1760000233300,"turn":3,"kind":"trade","observedTs":1760000240000},
+   {"i":41,"t":"state","ts":1760000292000,"turn":4,"level":6,"xp":400,"map":7101,"x":1160,"y":1990,"z":50,"eventCount":230,"lastSeq":230,"money":2085,"questsCompleted":1,"zone":8801,"area":8811,"health":0,"maxHealth":470,"power":0,"maxPower":100,"powerType":1,"nextLevelXp":3300},
+   {
+    "i": 42,
+    "t": "milestone",
+    "ts": 1760000292000,
+    "turn": 4,
+    "kind": "death",
+    "observedTs": 1760000286000,
+    "position": {"map":7101,"x":1170,"y":1985,"z":50,"source":"corpse_query"},
+    "zone": {"id":8801},
+    "area": {"id":8811},
+    "released": false
+   },
+   {"i":43,"t":"milestone","ts":1760000292000,"turn":4,"kind":"release","graveyard":{"map":7101,"x":900,"y":1900,"z":48}},
+   {"i":44,"t":"milestone","ts":1760000292000,"turn":4,"kind":"resurrect"}
+  ]
+ }
+}

@@ -1,0 +1,26 @@
+{
+ "path": "/api/run/l05-party-a1/nearby",
+ "status": 200,
+ "contentType": "application/json; charset=utf-8",
+ "cacheControl": "no-store",
+ "body": {
+  "v": 1,
+  "run": "l05-party-a1",
+  "t0": 1760087070000,
+  "t1": 1760087070000,
+  "q": {"p":10,"o":1024},
+  "ids": [],
+  "ty": [],
+  "k": {"self":{"guid":null,"map":null,"target":null,"down":false},"u":[],"s":[],"m":[]},
+  "dt": [],
+  "mt": [],
+  "u": [],
+  "mk": [],
+  "x": [],
+  "y": [],
+  "z": [],
+  "o": [],
+  "sp": [],
+  "ev": []
+ }
+}

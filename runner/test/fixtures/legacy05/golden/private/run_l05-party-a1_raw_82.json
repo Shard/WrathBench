@@ -1,0 +1,7 @@
+{
+ "path": "/api/run/l05-party-a1/raw/82",
+ "status": 200,
+ "contentType": "application/json; charset=utf-8",
+ "cacheControl": "no-store",
+ "body": {"ts":1760000812000,"t":"termination","reason":"kill-target","detail":"the Hollow Regent fell to the party"}
+}
