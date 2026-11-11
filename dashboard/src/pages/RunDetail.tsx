@@ -852,12 +852,26 @@ export default function RunDetail() {
                       feed keeps the page's height: cumulative XP with level
                       bands, drawn compact, and the full drawing a click away —
                       with, for a character, its climb across every attempt.
+                      A fan-out run has no curve of its own (each character's
+                      is its session's, under "characters"), so no card.
                     */}
-                    <ChartCard
-                      label="xp"
-                      compact={
+                    <Show when={d().fanout === undefined}>
+                      <ChartCard
+                        label="xp"
+                        compact={
+                          <XpChart
+                            compact
+                            states={chart().states}
+                            startedAt={chart().startedAt}
+                            endedAt={chart().endedAt}
+                            episodeMs={run().comparability?.budget.episodeMs ?? null}
+                            now={chart().now}
+                            seams={chart().seams}
+                          />
+                        }
+                      >
+                        <h2 class="section">this attempt</h2>
                         <XpChart
-                          compact
                           states={chart().states}
                           startedAt={chart().startedAt}
                           endedAt={chart().endedAt}
@@ -865,35 +879,36 @@ export default function RunDetail() {
                           now={chart().now}
                           seams={chart().seams}
                         />
-                      }
-                    >
-                      <h2 class="section">this attempt</h2>
-                      <XpChart
-                        states={chart().states}
-                        startedAt={chart().startedAt}
-                        endedAt={chart().endedAt}
-                        episodeMs={run().comparability?.budget.episodeMs ?? null}
-                        now={chart().now}
-                        seams={chart().seams}
-                      />
-                      {/*
-                        Level against cumulative active playtime, stitched
-                        across the attempts: the same line the freeplay field
-                        draws, so a character reads the same on both pages.
-                      */}
-                      <Show when={characterPlot()}>
-                        {(plot) => (
-                          <>
-                            <h2 class="section">the character, across {d().character?.attempts} attempts</h2>
-                            <CharacterPlot series={plot().series} omitted={plot().omitted} single />
-                          </>
-                        )}
-                      </Show>
-                    </ChartCard>
+                        {/*
+                          Level against cumulative active playtime, stitched
+                          across the attempts: the same line the freeplay field
+                          draws, so a character reads the same on both pages.
+                        */}
+                        <Show when={characterPlot()}>
+                          {(plot) => (
+                            <>
+                              <h2 class="section">the character, across {d().character?.attempts} attempts</h2>
+                              <CharacterPlot series={plot().series} omitted={plot().omitted} single />
+                            </>
+                          )}
+                        </Show>
+                      </ChartCard>
+                    </Show>
                     <div class="card">
                       <div class="k">character</div>
                       <div class="v">
-                        {run().character ?? "—"}
+                        {/* A fan-out run's row is no one character's: its level and xp are its lead's, named here. */}
+                        <Show when={run().character ?? d().fanoutLead} fallback="—">
+                          {(name) =>
+                            run().character === null ? (
+                              <A href={`/run/${encodeURIComponent(run().runId)}?character=${encodeURIComponent(name())}`} title="the level and xp below are this character's: the highest level of the run's characters">
+                                lead: {name()}
+                              </A>
+                            ) : (
+                              name()
+                            )
+                          }
+                        </Show>
                         {/* Race and class: the baseline is Human Paladin; the extras cycle varies it. */}
                         <Show when={run().characterLabel !== null}>
                           <span class="dim"> · {run().characterLabel}</span>

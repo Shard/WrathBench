@@ -1247,6 +1247,13 @@ export interface RunDetailResponse extends SnapshotEnvelope {
    * published.
    */
   fanout?: FanoutSessionView[];
+  /**
+   * The fan-out character whose level and xp `run` reads (`fanoutLead`:
+   * the highest level, then the higher xp, then the first by name), so the
+   * page can say whose they are. Present only on a fan-out run once one of
+   * its characters has a level.
+   */
+  fanoutLead?: string;
 }
 
 /** One character of a fan-out run (`RunDetailResponse.fanout`). */

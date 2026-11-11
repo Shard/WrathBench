@@ -89,7 +89,8 @@ states: `home`, `run-live`, `map-live` (nothing selected: the sidebar's live
 list), `map-live-selected` (the live character's row clicked: framed, with its
 sheet), `map-live-nearby` (then zoomed in on it) and `map-replay`. The fixture
 has four live characters at different levels, one of them on Kalimdor and one in
-the Deadmines, so the list has an order to show and a pick a map to cross to; `--run` with only
+the Deadmines, so the list has an order to show and a pick a map to cross to, and
+a live fan-out run whose three characters are a pip each on the private map; `--run` with only
 ended runs gives the map with nobody live.
 Wowhead's tooltip script is stubbed and every other third party refused, so a
 page renders as it does where the script is blocked; `--real-wowhead` lets it
