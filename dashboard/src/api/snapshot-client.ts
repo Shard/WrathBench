@@ -196,6 +196,12 @@ interface NearbyArtifact {
 export interface SnapshotState {
   /** The freshest `generatedAt` any artifact has carried; null before the first. */
   generatedAt: number | null;
+  /**
+   * How far the publisher holds the public view back on purpose (`live.json`'s
+   * `delayMs`, present only when there is one): data that old is on time, not
+   * stale. Absent is none.
+   */
+  delayMs?: number;
   /** The attribution statement: the build's own from the start, and whatever the artifacts carry after. */
   attribution: string;
 }
@@ -234,7 +240,7 @@ export function snapshotBanner(state: SnapshotState, now: number): SnapshotBanne
   const age = Math.max(0, now - at);
   return {
     text: `public snapshot · data as of ${fmtAge(age)}`,
-    tone: age >= SNAPSHOT_STALE_MS ? "warn" : "dim",
+    tone: age >= SNAPSHOT_STALE_MS + (state.delayMs ?? 0) ? "warn" : "dim",
   };
 }
 
@@ -344,11 +350,12 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
   const cache = new Map<string, CacheEntry>();
 
   let generatedAt: number | null = null;
+  let delayMs = 0;
   // The build's own copy until an artifact says otherwise: the footer is
   // required of the page, not of a successful fetch.
   let attribution: string = PUBLIC_ATTRIBUTION;
   const watchers = new Set<(state: SnapshotState) => void>();
-  const state = (): SnapshotState => ({ generatedAt, attribution });
+  const state = (): SnapshotState => ({ generatedAt, attribution, ...(delayMs > 0 ? { delayMs } : {}) });
 
   /**
    * Record what an artifact says about itself. The freshest stamp wins across
@@ -357,8 +364,13 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
    */
   function saw(body: unknown): void {
     if (typeof body !== "object" || body === null) return;
-    const env = body as { generatedAt?: unknown; attribution?: unknown };
+    const env = body as { generatedAt?: unknown; attribution?: unknown; delayMs?: unknown };
     let changed = false;
+    // Only `live.json` carries it, and only with a delay; it never goes back to none mid-session.
+    if (typeof env.delayMs === "number" && env.delayMs > 0 && env.delayMs !== delayMs) {
+      delayMs = env.delayMs;
+      changed = true;
+    }
     if (typeof env.generatedAt === "number" && (generatedAt === null || env.generatedAt > generatedAt)) {
       generatedAt = env.generatedAt;
       changed = true;

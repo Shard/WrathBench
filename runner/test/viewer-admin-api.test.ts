@@ -101,6 +101,31 @@ describe("GET /api/admin", () => {
   });
 });
 
+describe("a credential written from the admin page", () => {
+  test("names only its provider's own variable: never the module's secret, the bucket's or another provider's", async () => {
+    const { handle } = fixture();
+    const put = async (provider: string, secretEnv: string): Promise<number> =>
+      (
+        await handle(
+          new Request("http://x/api/config/credentials/x1", {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ provider, secretEnv, slots: 1, billing: "paid", enabled: false }),
+          }),
+        )
+      ).status;
+    for (const [provider, env] of [
+      ["openrouter", "WRATHBENCH_MODULE_SECRET"],
+      ["openrouter", "S3_SECRET_ACCESS_KEY"],
+      ["claude", "OPENROUTER_KEY"],
+      ["chatgpt", "WRATHBENCH_DB_PASSWORD"],
+    ] as const) {
+      expect([provider, env, await put(provider, env)]).toEqual([provider, env, 400]);
+    }
+    expect(await put("openrouter", "OPENROUTER_KEY_9")).toBe(200);
+  });
+});
+
 describe("credentialViews", () => {
   const stored = [
     { id: "a", provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 1, budget: null, billing: "paid" as const, enabled: true },

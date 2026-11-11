@@ -716,6 +716,17 @@ describe("renderSnapshot", () => {
   });
 });
 
+describe("a delay", () => {
+  test("live.json says it only when there is one", async () => {
+    const runs = fixture();
+    const live = async (delayMs?: number): Promise<Record<string, unknown>> =>
+      JSON.parse((await renderSnapshot({ runsDir: runs, now: 1_000, ...(delayMs !== undefined ? { delayMs } : {}) })).artifacts.find((a) => a.path === "v1/live.json")!.body) as Record<string, unknown>;
+    expect("delayMs" in (await live())).toBe(false);
+    expect("delayMs" in (await live(0))).toBe(false);
+    expect((await live(900_000))["delayMs"]).toBe(900_000);
+  });
+});
+
 describe("without the history", () => {
   test("only the runs that have not ended are published, and an ended one is withdrawn", async () => {
     const runs = fixture();
