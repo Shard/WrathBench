@@ -129,7 +129,7 @@ describe("newEntryDoc", () => {
       idle: "unlimited",
       routing: "gmicloud",
       apiBase: "https://api.example/v1",
-      apiKeyEnv: "EXAMPLE_KEY",
+      credential: "or-paid",
     });
     expect(doc).toEqual({
       model: "m",
@@ -138,7 +138,7 @@ describe("newEntryDoc", () => {
       billing: "paid",
       idle: "unlimited",
       apiBase: "https://api.example/v1",
-      apiKeyEnv: "EXAMPLE_KEY",
+      credential: "or-paid",
     });
   });
 });
