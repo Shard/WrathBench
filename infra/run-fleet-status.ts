@@ -954,7 +954,7 @@ export function printStatus(): void {
       } else {
         row.elapsedMs = Date.now() - j.spawnedAt;
       }
-      // Only a run with a live owner is looked at; one statement on its run.sqlite.
+      // Only a run with a live owner is looked at; its newest samples (`liveRunStuck`).
       if (alive) {
         const stuck = liveRunStuck(runId);
         if (stuck !== undefined) row.stuck = stuck;
