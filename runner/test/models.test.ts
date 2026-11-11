@@ -4,7 +4,6 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  accountClassOf,
   DEFAULT_POLICY,
   LADDER_MS,
   countModelResponses,
@@ -16,7 +15,6 @@ import {
   modelStates,
   nextJobs,
   planNextJobs,
-  DEFAULT_PAID,
   TIER_TABLE,
   effectiveTier,
   type SchedulingPolicy,
@@ -32,22 +30,15 @@ import {
   type ModelState,
   outstandingWork,
   formatOutstanding,
-  capFor,
-  claudeKeysFor,
-  claudeLaneKey,
-  concurrencyKeyOf,
-  laneOfKey,
-  liveSubscriptions,
-  isConcurrencyKey,
-  CONCURRENCY_KEYS,
+  liveCredentials,
   parsePolicyBlock,
-  isOpenCodeGoBase,
   entryOwnsRun,
   entryOwnsWindow,
   ownedWindows,
   rosterWindowKey,
 } from "../src/models";
 import { billingOf } from "../src/model-cost";
+import { parseCredentials } from "../src/credentials";
 import { rowOf } from "../viewer/models";
 import type { EpisodeId } from "../src/episodes";
 import type { Campaign } from "../src/campaigns";
@@ -263,7 +254,7 @@ describe("the ladder", () => {
     episodeMs: null,
     campaign: null,
     cell: null,
-    subscription: null,
+    credential: null,
   });
   const m: RosterModel = { name: "m", model: "m", tier: "t1" };
 
@@ -462,7 +453,7 @@ describe("nextJobs", () => {
     episodeMs: null,
     campaign: null,
     cell: null,
-    subscription: null,
+    credential: null,
   });
 
   test("priority: never-run first, then e90 before e360, then fewest counted, then roster order", () => {
@@ -532,9 +523,9 @@ describe("paid and free", () => {
     episodeMs: null,
     campaign: null,
     cell: null,
-    subscription: null,
+    credential: null,
   });
-  const policy: SchedulingPolicy = { ...DEFAULT_POLICY, paid: { ...DEFAULT_PAID } };
+  const policy: SchedulingPolicy = { ...DEFAULT_POLICY };
   const st = (r: Omit<RosterModel, "tier"> & { tier?: RosterModel["tier"] }, runs: RunFact[], p = policy) =>
     projectModel({ tier: "t1", ...r }, runs, p, { now: NOW });
 
@@ -589,120 +580,27 @@ describe("paid and free", () => {
     expect(TIER_TABLE[effectiveTier("t1", true)].promotesTo).toBeNull();
   });
 
-  test("the paid cap: one paid model in flight across the pool, the next candidate takes the account, held says why", () => {
+  test("one pool: paid, free and local picks all draw from it, in priority order; a reserved pool says why", () => {
     const p1 = st({ name: "p1", model: "v/one" }, []);
-    const p2 = st({ name: "p2", model: "v/two" }, []);
-    const f1 = st({ name: "f1", model: "v/three:free" }, []);
-    const plan = planNextJobs([p1, p2, f1], ["R1", "R2", "R3"], new Set(), { policy });
-    expect(plan.jobs.map((j) => [j.name, j.account])).toEqual([
-      ["p1", "R1"],
-      ["f1", "R2"],
-    ]);
-    expect(plan.held).toEqual([{ name: "p2", episode: "e90", why: "paid cap: 1/1 paid model(s) already in flight" }]);
-    // A paid model already running elsewhere fills the cap before any pick.
-    expect(planNextJobs([p1, p2, f1], ["R1", "R2"], new Set(), { policy, paidRunning: 1 }).jobs.map((j) => j.name)).toEqual(["f1"]);
-    // Cap of two lets both through; no paid policy is no cap.
-    expect(planNextJobs([p1, p2], ["R1", "R2"], new Set(), { policy: { ...policy, paid: { ...policy.paid!, maxConcurrent: 2 } } }).jobs).toHaveLength(2);
-    expect(planNextJobs([p1, p2], ["R1", "R2"], new Set(), { policy: DEFAULT_POLICY }).jobs).toHaveLength(2);
-  });
-
-  test("the paid account class: a paid pick takes a paid account and never a pool one; no paid account is held, not spilled", () => {
-    const p1 = st({ name: "p1", model: "v/one" }, []);
-    const f1 = st({ name: "f1", model: "v/three:free" }, []);
-    // Split on: the paid model takes PAID, the free one the pool, in order.
-    const plan = planNextJobs([p1, f1], ["R1", "R2"], new Set(), { policy, classAccounts: { paid: ["PAID"] } });
-    expect(plan.jobs.map((j) => [j.name, j.account])).toEqual([
-      ["p1", "PAID"],
-      ["f1", "R1"],
-    ]);
-    // Configured but empty: held with the actionable reason, never on a pool account.
-    const none = planNextJobs([p1, f1], ["R1", "R2"], new Set(), { policy, classAccounts: { paid: [] } });
-    expect(none.jobs.map((j) => [j.name, j.account])).toEqual([["f1", "R1"]]);
-    expect(none.held).toEqual([{ name: "p1", episode: "e90", why: "no paid account configured — add one to accounts.paid" }]);
-    // The empty-list reason wins over the cap: it is the one the operator can act on.
-    expect(planNextJobs([p1], ["R1"], new Set(), { policy, classAccounts: { paid: [] }, paidRunning: 1 }).held[0]!.why).toContain("no paid account configured");
-    // Paid accounts busy, pool free: the paid pick waits rather than borrowing one.
-    const busy = planNextJobs([p1, f1], ["R1"], new Set(), { policy, classAccounts: { paid: ["PAID"] }, paidRunning: 1 });
-    expect(busy.jobs.map((j) => j.account)).toEqual(["R1"]);
-    expect(busy.held[0]).toMatchObject({ name: "p1", why: "paid cap: 1/1 paid model(s) already in flight" });
-    // A free pick never takes a paid account, even with the pool exhausted.
-    expect(planNextJobs([f1], [], new Set(), { policy, classAccounts: { paid: ["PAID"] } }).jobs).toEqual([]);
-    // Absent: the pre-split behaviour, paid picks share the pool.
-    expect(planNextJobs([p1], ["R1"], new Set(), { policy }).jobs.map((j) => j.account)).toEqual(["R1"]);
-  });
-
-  test("held reasons: an unconfigured class and an all-busy one are different sentences", () => {
-    const p1 = st({ name: "p1", model: "v/one" }, []);
-    const l1 = st({ name: "l1", model: "q/one", apiBase: "http://192.168.100.20:1234/v1" }, []);
-    const l2 = st({ name: "l2", model: "q/two", apiBase: "http://192.168.100.20:1234/v1" }, []);
-    // Nothing free and nothing busy: the class really is empty, and the fix is
-    // a line in the file.
-    expect(planNextJobs([p1], ["R1"], new Set(), { policy, classAccounts: { paid: [] } }).held[0]!.why).toBe(
-      "no paid account configured — add one to accounts.paid",
-    );
-    // Nothing free because the one account is taken: the account exists, so we
-    // name it and its holder instead of asking for one that is already there.
-    const busy = planNextJobs([p1], ["R1"], new Set(), {
-      policy,
-      classAccounts: { paid: [] },
-      classBusy: { paid: [{ account: "SHAKEOUT2", by: "fleet-deepseek-flash-e90-20260823-a2" }] },
-      paidRunning: 1,
-    });
-    expect(busy.jobs).toEqual([]);
-    expect(busy.held).toEqual([
-      { name: "p1", episode: "e90", why: "paid account(s) busy: SHAKEOUT2 held by fleet-deepseek-flash-e90-20260823-a2" },
-    ]);
-    // A holder the caller cannot name: still busy, never invented.
-    expect(planNextJobs([p1], ["R1"], new Set(), { policy, classAccounts: { paid: [] }, classBusy: { paid: [{ account: "SHAKEOUT2" }] } }).held[0]!.why).toBe(
-      "paid account(s) busy: SHAKEOUT2",
-    );
-    // Two local models, one box: the first takes it, the second is busy-by-the
-    // -first — the box is configured, so "no local account" would be a lie.
-    const local = planNextJobs([l1, l2], ["R1"], new Set(), { policy, classAccounts: { local: ["LOCALBOX"] } });
-    expect(local.jobs.map((j) => [j.name, j.account])).toEqual([["l1", "LOCALBOX"]]);
-    expect(local.held).toEqual([{ name: "l2", episode: "e90", why: "local account(s) busy: LOCALBOX held by l1" }]);
-    // And with no box at all, the other sentence.
-    expect(planNextJobs([l1], [], new Set(), { policy, classAccounts: { local: [] } }).held[0]!.why).toBe(
-      "no local account configured — add one to accounts.local",
-    );
-  });
-
-  test("the local account class: a local model lands on the box, never the pool, and is held when the box has no account", () => {
     const l1 = st({ name: "l1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1" }, []);
     const f1 = st({ name: "f1", model: "v/three:free" }, []);
-    const p1 = st({ name: "p1", model: "v/one" }, []);
-    // Local is its own class even though `model-cost` prices it free.
-    expect(l1.billing).toBe("free");
-    expect(accountClassOf(l1)).toBe("local");
-    expect(accountClassOf(f1)).toBe("pool");
-    expect(accountClassOf(p1)).toBe("paid");
-    const plan = planNextJobs([l1, f1, p1], ["R1", "R2"], new Set(), { policy, classAccounts: { local: ["BOX"], paid: ["PAID"] } });
+    // Which credential carries a pick, and whether it has a slot, is the
+    // caller's (`planPolicyHeld`); the projection only hands out accounts.
+    const plan = planNextJobs([p1, l1, f1], ["R1", "R2", "R3"], new Set(), { policy });
     expect(plan.jobs.map((j) => [j.name, j.account])).toEqual([
-      ["l1", "BOX"],
-      ["f1", "R1"],
-      ["p1", "PAID"],
+      ["p1", "R1"],
+      ["l1", "R2"],
+      ["f1", "R3"],
     ]);
-    // A free pick never borrows the box, even with the pool exhausted...
-    expect(planNextJobs([f1], [], new Set(), { policy, classAccounts: { local: ["BOX"] } }).jobs).toEqual([]);
-    // ...and the local pick never borrows a pool account when the box is busy.
-    const busy = planNextJobs([l1, f1], ["R1"], new Set(), { policy, classAccounts: { local: [] } });
-    expect(busy.jobs.map((j) => [j.name, j.account])).toEqual([["f1", "R1"]]);
-    expect(busy.held).toEqual([{ name: "l1", episode: "e90", why: "no local account configured — add one to accounts.local" }]);
-    // An extra follows its model's class: the local model's extra takes the box.
-    // `idle` is the model's own axis, so what a local model does when it is
-    // spent is spelled on the entry rather than inferred from a policy knob.
-    const met = st({ name: "l1", model: "qwen/q", apiBase: "http://10.0.0.5:1234/v1", idle: "unlimited" }, [
-      good("qwen/q", "e90", 1, 5),
-      good("qwen/q", "e90", 2),
-      good("qwen/q", "e90", 3),
-      good("qwen/q", "e360", 4),
-    ]);
-    const extras = planNextJobs([met], ["R1"], new Set(), { policy, classAccounts: { local: ["BOX"] } });
-    expect(extras.jobs.map((j) => [j.name, j.account, j.episode])).toEqual([["l1", "BOX", "freeplay"]]);
-    expect(planNextJobs([met], ["R1"], new Set(), { policy, classAccounts: { local: [] } }).jobs).toEqual([]);
+    expect(plan.held).toEqual([]);
+    // Fewer accounts than picks: the rest wait in silence, as a busy pool always has.
+    expect(planNextJobs([p1, l1, f1], ["R1"], new Set(), { policy }).jobs.map((j) => j.name)).toEqual(["p1"]);
+    // A pool a waiting manual job reserves names the reservation.
+    const reserved = planNextJobs([p1], [], new Set(), { policy, poolHeld: "pool reserved for waiting manual job(s): q-e90" });
+    expect(reserved.held).toEqual([{ name: "p1", episode: "e90", why: "pool reserved for waiting manual job(s): q-e90" }]);
   });
 
-  test("idle: unlimited — one freeplay session at a time, on its own class's account, never counted", () => {
+  test("idle: unlimited — one freeplay session at a time, on a pool account, never counted", () => {
     const local = { name: "l1", model: "qwen/q", apiBase: "http://10.0.0.5:1234/v1", idle: "unlimited" as const };
     // Targets met on e90 only: unpromoted (no counted run reached L5), so e360 is not open.
     const met = st(local, [good("qwen/q", "e90", 1, 3), good("qwen/q", "e90", 2, 4), good("qwen/q", "e90", 3, 2)]);
@@ -711,12 +609,11 @@ describe("paid and free", () => {
     expect(v.verdict).toBe("free");
     expect(wantsIdle(v, met)).toBe(true);
     expect(v.why).toContain("unlimited sessions");
-    const plan = planNextJobs([met], ["R1"], new Set(), { policy, classAccounts: { local: ["BOX"] } });
-    expect(plan.jobs.map((j) => [j.name, j.episode, j.account, j.extra])).toEqual([["l1", "freeplay", "BOX", undefined]]);
+    const plan = planNextJobs([met], ["R1"], new Set(), { policy });
+    expect(plan.jobs.map((j) => [j.name, j.episode, j.account, j.extra])).toEqual([["l1", "freeplay", "R1", undefined]]);
     expect(plan.jobs[0]!.why).toContain("unlimited session");
-    // Never on a pool account, and one at a time: a running model is not picked again.
-    expect(planNextJobs([met], ["R1"], new Set(), { policy, classAccounts: { local: [] } }).jobs).toEqual([]);
-    expect(planNextJobs([met], ["R1"], new Set(["l1"]), { policy, classAccounts: { local: ["BOX"] } }).jobs).toEqual([]);
+    // One at a time: a running model is not picked again.
+    expect(planNextJobs([met], ["R1"], new Set(["l1"]), { policy }).jobs).toEqual([]);
     // Freeplay runs are attempts, never counted, and they number the next one.
     const after = st(local, [
       good("qwen/q", "e90", 1, 3),
@@ -727,19 +624,18 @@ describe("paid and free", () => {
     expect(after.perEpisode.freeplay).toMatchObject({ counted: 0, attempts: 1, extras: 1, target: 0 });
     expect(after.perEpisode.e90!.counted).toBe(3);
     expect(after.eligible).toEqual(["e90"]);
-    const next = planNextJobs([after], [], new Set(), { policy, classAccounts: { local: ["BOX"] } }).jobs[0]!;
-    expect(next).toMatchObject({ episode: "freeplay", attempt: 2, account: "BOX" });
+    const next = planNextJobs([after], ["R1"], new Set(), { policy }).jobs[0]!;
+    expect(next).toMatchObject({ episode: "freeplay", attempt: 2, account: "R1" });
     expect(next.why).toContain("extra #2");
     // A new harness series re-arms the scheduled runs first, freeplay after.
     const series = { ...policy, series: "0.5" };
     const rearmed = st(local, [good("qwen/q", "e90", 1, 3), good("qwen/q", "freeplay", 2, 5, true)], series);
     expect(rearmed.perEpisode.e90).toMatchObject({ counted: 0, otherSeries: 1 });
-    expect(planNextJobs([rearmed], [], new Set(), { policy: series, classAccounts: { local: ["BOX"] } }).jobs[0]).toMatchObject({
+    expect(planNextJobs([rearmed], ["R1"], new Set(), { policy: series }).jobs[0]).toMatchObject({
       episode: "e90",
-      account: "BOX",
+      account: "R1",
     });
-    // The axis is per model, so — unlike the old knob it replaced — a NON-local
-    // model may take unlimited sessions too.
+    // The axis is per model, so a non-local model may take unlimited sessions too.
     const pooled = st({ name: "f1", model: "v/f:free", idle: "unlimited" }, [good("v/f:free", "e90", 1, 3), good("v/f:free", "e90", 2), good("v/f:free", "e90", 3)]);
     expect(planNextJobs([pooled], ["R1"], new Set(), { policy }).jobs[0]).toMatchObject({ episode: "freeplay", account: "R1" });
   });
@@ -768,17 +664,18 @@ describe("outstandingWork", () => {
     episodeMs: null,
     campaign: null,
     cell: null,
-    subscription: null,
+    credential: null,
   });
-  const policy: SchedulingPolicy = { ...DEFAULT_POLICY, paid: { ...DEFAULT_PAID } };
+  const policy: SchedulingPolicy = { ...DEFAULT_POLICY };
   const st = (r: Omit<RosterModel, "tier"> & { tier?: RosterModel["tier"] }, runs: RunFact[]): ModelState =>
     projectModel({ tier: "t1", ...r }, runs, policy, { now: NOW });
 
   // One of each thing the metric has to tell apart: a model that climbed (owes
-  // e360 now), one that has not (owes it only in the upper bound), a paid one,
-  // a local one (its own single box), one placed on t2 by hand (eligible
-  // without a witness), a claude-code one (the driver cap), and a pinned one
-  // that owes runs nobody schedules.
+  // e360 now), one that has not (owes it only in the upper bound), a paid one
+  // (its own credential's slot), a local one (the box's one-slot credential),
+  // one placed on t2 by hand (eligible without a witness), a claude-code one
+  // (two credential slots under a host cap of one), and a pinned one that
+  // owes runs nobody schedules.
   const promoted = st({ name: "promoted", model: "v/promoted:free" }, [1, 2, 3].map((i) => good("v/promoted:free", "e90", i, 5)));
   const unpromoted = st({ name: "unpromoted", model: "v/unpromoted:free" }, [good("v/unpromoted:free", "e90", 1)]);
   const paid = st({ name: "paid", model: "vendor/paid" }, []);
@@ -787,12 +684,20 @@ describe("outstandingWork", () => {
   const cc = st({ name: "cc", model: "opus", driver: "claude-code" }, []);
   const pinned = st({ name: "pinned", model: "v/pinned:free" }, []);
   const states = [promoted, unpromoted, paid, local, forced, cc, pinned];
+  const credentials = parseCredentials({
+    "or-free": { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 3, billing: "free", enabled: true },
+    "or-paid": { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 1, billing: "paid", enabled: true },
+    box: { provider: "local", secretEnv: "LMSTUDIO_KEY", slots: 1, billing: "free", enabled: true },
+    "claude-1": { provider: "claude", secretEnv: "CLAUDE_CODE_OAUTH_TOKEN", slots: 1, billing: "paid", enabled: true },
+    "claude-2": { provider: "claude", secretEnv: "CLAUDE_CODE_OAUTH_TOKEN_2", slots: 1, billing: "paid", enabled: true },
+    "claude-3": { provider: "claude", secretEnv: "CLAUDE_CODE_OAUTH_TOKEN_3", slots: 4, billing: "paid", enabled: false },
+  });
   const input = {
     states,
-    policy,
     excluded: ["pinned"],
-    accounts: { pool: 5, paid: 1, local: 1 },
-    maxConcurrent: { "claude-code": 2 },
+    accounts: 5,
+    credentials,
+    maxSessions: { "claude-code": 1 },
   };
 
   test("bounds: promotion is the only unknown, and extras and excluded models are not work", () => {
@@ -812,162 +717,51 @@ describe("outstandingWork", () => {
     // A t0 model's ladder is held, so the upper bound makes no bet on it:
     // a trial is one run, and the metric says so rather than hinting at four.
     const trial = st({ name: "trial", model: "v/trial:free", tier: "t0" }, []);
-    const t = outstandingWork({ states: [trial], accounts: { pool: 1 } });
+    const t = outstandingWork({ states: [trial], accounts: 1, credentials });
     expect(t).toMatchObject({ lower: 1, upper: 1 });
   });
 
-  test("eta: class-wise minutes over class concurrency, claude-code carved out of the pool", () => {
+  test("eta: minutes per credential group over its enabled slots, under the pool and the host cap", () => {
     const o = outstandingWork(input);
     const by = new Map(o.breakdown.map((g) => [g.group, g]));
-    expect([...by.keys()].sort()).toEqual(["claude-code", "local", "paid", "pool"]);
-    expect(by.get("pool")).toMatchObject({ concurrency: 5, lowerRuns: 7, lowerMinutes: 1170, upperRuns: 8, upperMinutes: 1530 });
-    // The driver cap binds tighter than the five pool accounts.
-    expect(by.get("claude-code")).toMatchObject({ concurrency: 2, lowerMinutes: 270, upperMinutes: 630 });
-    // policy.paid.maxConcurrent caps the paid class at one in flight.
-    expect(by.get("paid")).toMatchObject({ concurrency: 1, lowerRuns: 3, upperRuns: 4 });
-    expect(by.get("local")).toMatchObject({ concurrency: 1, lowerRuns: 3 });
-    const min = (ms: number | null): number => Math.round((ms ?? 0) / 60_000);
-    expect(min(o.etaLowerMs)).toBe(1170 / 5 + 270 / 2 + 270 + 270);
-    expect(min(o.etaUpperMs)).toBe(1530 / 5 + 630 / 2 + 630 + 630);
+    expect([...by.keys()].sort()).toEqual(["claude", "local (free)", "openrouter (free)", "openrouter (paid)"]);
+    // The free key's three slots, under the pool's five accounts.
+    expect(by.get("openrouter (free)")).toMatchObject({ concurrency: 3, lowerRuns: 6, upperRuns: 7 });
+    // Two enabled subscriptions (the disabled third adds nothing), under a host cap of one.
+    expect(by.get("claude")).toMatchObject({ concurrency: 1, lowerMinutes: 270, upperMinutes: 630 });
+    expect(by.get("openrouter (paid)")).toMatchObject({ concurrency: 1, lowerRuns: 3, upperRuns: 4 });
+    expect(by.get("local (free)")).toMatchObject({ concurrency: 1, lowerRuns: 3 });
+    // Without the host cap the two subscriptions both count.
+    expect(new Map(outstandingWork({ ...input, maxSessions: {} }).breakdown.map((g) => [g.group, g])).get("claude")!.concurrency).toBe(2);
     expect(o.etaLowerMs!).toBeLessThanOrEqual(o.etaUpperMs!);
   });
 
   test("work with nowhere to run has no eta; nothing owed is exhausted", () => {
-    expect(outstandingWork({ ...input, accounts: { pool: 5, paid: 0, local: 1 } }).etaLowerMs).toBeNull();
-    const none = outstandingWork({ states: [], accounts: { pool: 5 } });
+    // No paid credential: the paid model's runs have nowhere to go.
+    expect(outstandingWork({ ...input, credentials: credentials.filter((c) => c.id !== "or-paid") }).etaLowerMs).toBeNull();
+    // No account at all: nothing runs anywhere.
+    expect(outstandingWork({ ...input, accounts: 0 }).etaLowerMs).toBeNull();
+    const none = outstandingWork({ states: [], accounts: 5 });
     expect(none).toMatchObject({ lower: 0, upper: 0, etaLowerMs: 0, etaUpperMs: 0 });
     expect(formatOutstanding(none)).toContain("exhausted");
-    expect(formatOutstanding(outstandingWork(input))).toBe("outstanding: 16–20 scheduled runs, ≈ 15h–31h to exhaust");
   });
 });
 
-describe("concurrency lanes (cap keys on the rate-limit key)", () => {
-  const key = (r: { name?: string; driver?: string; apiBase?: string }, billing: "free" | "paid") =>
-    concurrencyKeyOf({ name: r.name ?? "x", ...(r.driver !== undefined ? { driver: r.driver } : {}), ...(r.apiBase !== undefined ? { apiBase: r.apiBase } : {}) }, billing);
-
-  test("free models on a shared pool key on the platform; everything else on the driver", () => {
-    // claude-code keeps its driver key (a subscription, not a shared free pool).
-    expect(key({ driver: "claude-code" }, "free")).toBe("claude-code");
-    // Free OpenRouter: a `:free` slug with no apiBase is the OpenRouter default.
-    expect(key({}, "free")).toBe("openrouter");
-    // Advisor's case: a `:free` slug pinned to driver openai, still no base — must
-    // not escape the cap via the driver fallback.
-    expect(key({ driver: "openai" }, "free")).toBe("openrouter");
-    // Free OpenCode Zen: the opencode.ai host normalizes to the `opencode` key.
-    expect(key({ apiBase: "https://opencode.ai/zen/v1" }, "free")).toBe("opencode");
-    // Paid on OpenRouter (deepseek-flash): governed by policy.paid, NOT a free key.
-    expect(key({}, "paid")).toBe("openai");
-    // Local (qwen3-8-27b): free by billing but its one box is its limit — driver key.
-    expect(key({ driver: "openai", apiBase: "http://192.168.100.20:1234/v1" }, "free")).toBe("openai");
-    // Stub keeps its driver key.
-    expect(key({ driver: "stub" }, "free")).toBe("stub");
-  });
-
-  test("OpenCode Zen's zen/go is a separate billing surface and takes a separate key", () => {
-    // omen-alpha: paid, so it never reaches the free branch — the go key has to
-    // be decided outside it or it would apply to nothing on that surface.
-    expect(key({ name: "omen-alpha", apiBase: "https://opencode.ai/zen/go/v1" }, "paid")).toBe("opencode-go");
-    expect(key({ apiBase: "https://opencode.ai/zen/go/v1" }, "free")).toBe("opencode-go");
-    // The five free zen/v1 entries are untouched: same host, different key.
-    expect(key({ apiBase: "https://opencode.ai/zen/v1" }, "free")).toBe("opencode");
-    expect(key({ apiBase: "https://opencode.ai/zen/v1" }, "paid")).toBe("openai");
-    expect(key({ apiBase: "https://opencode.ai/zen/go/v1" }, "paid")).not.toBe(
-      key({ apiBase: "https://opencode.ai/zen/v1" }, "free"),
-    );
-    // The PATH is what distinguishes them, and only on that host.
-    expect(isOpenCodeGoBase("https://opencode.ai/zen/go/v1")).toBe(true);
-    expect(isOpenCodeGoBase("https://opencode.ai/zen/v1")).toBe(false);
-    expect(isOpenCodeGoBase("https://openrouter.ai/zen/go/v1")).toBe(false);
-    expect(isOpenCodeGoBase(undefined)).toBe(false);
-    // The host exactly: a lookalike or an unparseable string is not that surface.
-    expect(isOpenCodeGoBase("https://opencode.ai.example.com/zen/go/v1")).toBe(false);
-    expect(isOpenCodeGoBase("https://notopencode.ai/zen/go/v1")).toBe(false);
-    expect(isOpenCodeGoBase("opencode.ai/zen/go/v1")).toBe(false);
-    // A go slug on the claude-code or stub driver keeps its driver key.
-    expect(key({ driver: "stub", apiBase: "https://opencode.ai/zen/go/v1" }, "paid")).toBe("stub");
-  });
-
-  test("Go's documented /inference/go path is the same surface as the older /zen/go", () => {
-    const go = "https://opencode.ai/inference/go/openai/v1";
-    expect(isOpenCodeGoBase(go)).toBe(true);
-    expect(isOpenCodeGoBase("https://opencode.ai/inference/go/v1")).toBe(true);
-    expect(isOpenCodeGoBase("https://opencode.ai/inference/go")).toBe(true);
-    expect(isOpenCodeGoBase("https://opencode.ai/inference/go/openai/v1/")).toBe(true);
-    // Both spellings land in the one key, whatever the entry's billing: a free
-    // Go slug and a paid one share the surface, and the older base still does.
-    expect(key({ apiBase: go }, "free")).toBe("opencode-go");
-    expect(key({ apiBase: go }, "paid")).toBe("opencode-go");
-    expect(key({ apiBase: go }, "paid")).toBe(key({ apiBase: "https://opencode.ai/zen/go/v1" }, "paid"));
-    // The shared tier's new path is not Go, and keeps its own key.
-    expect(isOpenCodeGoBase("https://opencode.ai/inference/openai/v1")).toBe(false);
-    expect(key({ apiBase: "https://opencode.ai/inference/openai/v1" }, "free")).toBe("opencode");
-    // A segment that merely starts with "go" is not the go segment.
-    expect(isOpenCodeGoBase("https://opencode.ai/inference/google/v1beta")).toBe(false);
-    // The host is still matched exactly.
-    expect(isOpenCodeGoBase("https://opencode.ai.example.com/inference/go/openai/v1")).toBe(false);
-    expect(isOpenCodeGoBase("https://openrouter.ai/inference/go/openai/v1")).toBe(false);
-  });
-
-  test("the go surface classifies paid by the RULE, with no billing override in play", () => {
-    // cost: 0 on the wire today (free alpha preview); the entry is still paid —
-    // no `-free`/`:free` suffix, not a contributor slug, not local.
-    expect(billingOf({ model: "omen-alpha", apiBase: "https://opencode.ai/zen/go/v1" })).toBe("paid");
-    expect(billingOf({ model: "hy3-free", apiBase: "https://opencode.ai/zen/v1" })).toBe("free");
-  });
-
-  test("parsePolicyBlock accepts the keys and rejects an unknown concurrency key", () => {
-    expect(isConcurrencyKey("openrouter")).toBe(true);
-    expect(isConcurrencyKey("opencode")).toBe(true);
-    expect(isConcurrencyKey("claude-code")).toBe(true);
-    expect(isConcurrencyKey("warp")).toBe(false);
-    expect(isConcurrencyKey("opencode-go")).toBe(true);
-    expect(CONCURRENCY_KEYS).toEqual(["openai", "claude-code", "codex", "pi", "stub", "openrouter", "opencode", "opencode-go"]);
-    expect(parsePolicyBlock({ maxConcurrent: { "claude-code": 2, openrouter: 1, opencode: 1, "opencode-go": 1 } }).maxConcurrent).toEqual({ "claude-code": 2, openrouter: 1, opencode: 1, "opencode-go": 1 });
-    expect(() => parsePolicyBlock({ maxConcurrent: { warp: 1 } })).toThrow(/unknown concurrency key warp — allowed: openai, claude-code, codex, pi, stub, openrouter, opencode, opencode-go/);
-    expect(() => parsePolicyBlock({ maxConcurrent: { openrouter: 0 } })).toThrow(/positive integer/);
+describe("the policy block", () => {
+  test("maxSessions caps a driver's host sessions; the retired knobs are refused by name", () => {
+    expect(parsePolicyBlock(undefined).maxSessions).toEqual({});
+    expect(parsePolicyBlock({ maxSessions: { "claude-code": 2, codex: 1 } }).maxSessions).toEqual({ "claude-code": 2, codex: 1 });
+    expect(() => parsePolicyBlock({ maxSessions: { warp: 1 } })).toThrow(/warp is not a driver/);
+    expect(() => parsePolicyBlock({ maxSessions: { reference: 1 } })).toThrow(/not a driver/);
+    expect(() => parsePolicyBlock({ maxSessions: { "claude-code": 0 } })).toThrow(/positive integer/);
+    expect(() => parsePolicyBlock({ maxConcurrent: { openrouter: 1 } })).toThrow(/credentials\/<id>.slots/);
+    expect(() => parsePolicyBlock({ paid: { maxConcurrent: 1 } })).toThrow(/paid credentials/);
+    expect(() => parsePolicyBlock({ subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN"] })).toThrow(/each subscription is a credential/);
   });
 });
 
-describe("subscription lanes", () => {
-  test("every lane has its own key, the default one included; `claude-code` is the total", () => {
-    expect(claudeLaneKey(undefined)).toBe("claude-code:CLAUDE_CODE_OAUTH_TOKEN");
-    expect(claudeLaneKey(null)).toBe("claude-code:CLAUDE_CODE_OAUTH_TOKEN");
-    expect(claudeLaneKey("CLAUDE_CODE_OAUTH_TOKEN_2")).toBe("claude-code:CLAUDE_CODE_OAUTH_TOKEN_2");
-    expect(laneOfKey("claude-code:CLAUDE_CODE_OAUTH_TOKEN_2")).toBe("CLAUDE_CODE_OAUTH_TOKEN_2");
-    expect(laneOfKey("claude-code")).toBeNull();
-    expect(laneOfKey("openrouter")).toBeNull();
-    // A run spends its lane AND the total, so both have to have room.
-    expect(claudeKeysFor("CLAUDE_CODE_OAUTH_TOKEN_2")).toEqual(["claude-code:CLAUDE_CODE_OAUTH_TOKEN_2", "claude-code"]);
-    expect(claudeKeysFor(undefined)).toEqual(["claude-code:CLAUDE_CODE_OAUTH_TOKEN", "claude-code"]);
-  });
-
-  test("a lane key is a concurrency key; a key the file does not name is uncapped", () => {
-    expect(isConcurrencyKey("claude-code:CLAUDE_CODE_OAUTH_TOKEN_2")).toBe(true);
-    // Still a NAME, still checked as one: a token in the key is not a key.
-    expect(isConcurrencyKey("claude-code:sk-ant-oat01-secret")).toBe(false);
-    const max = { "claude-code": 3, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2": 2, openrouter: 2 };
-    expect(capFor(max, "claude-code")).toBe(3);
-    expect(capFor(max, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2")).toBe(2);
-    // No inheritance: an unnamed lane is bounded only by the total, which is
-    // what an old file saying just `"claude-code": 2` has always meant.
-    expect(capFor(max, "claude-code:CLAUDE_CODE_OAUTH_TOKEN")).toBeUndefined();
-    expect(capFor(max, "opencode")).toBeUndefined();
-  });
-
-  test("policy.subscriptions is a list of env var NAMES, and defaults to the one lane", () => {
-    expect(parsePolicyBlock(undefined).subscriptions).toEqual(["CLAUDE_CODE_OAUTH_TOKEN"]);
-    expect(parsePolicyBlock({}).subscriptions).toEqual(["CLAUDE_CODE_OAUTH_TOKEN"]);
-    expect(parsePolicyBlock({ subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2"] }).subscriptions).toEqual([
-      "CLAUDE_CODE_OAUTH_TOKEN",
-      "CLAUDE_CODE_OAUTH_TOKEN_2",
-    ]);
-    // The one mistake that would put a credential in a committed file.
-    expect(() => parsePolicyBlock({ subscriptions: ["sk-ant-oat01-secret"] })).toThrow(/never the token/);
-    expect(() => parsePolicyBlock({ subscriptions: [] })).toThrow(/non-empty array/);
-    expect(() => parsePolicyBlock({ subscriptions: ["A_TOKEN", "A_TOKEN"] })).toThrow(/listed twice/);
-  });
-
-  test("a live run's own lane is read back off the run, so a restart does not lose it", () => {
+describe("a run's credential", () => {
+  test("a live or paused run's own credential is read back off the run, so a restart does not lose it", () => {
     const fact = (over: Partial<RunFact>): RunFact => ({
       runId: "r",
       model: "opus",
@@ -989,7 +783,7 @@ describe("subscription lanes", () => {
       episodeMs: null,
       campaign: null,
       cell: null,
-      subscription: null,
+      credential: null,
       ...over,
     });
     const roster = [
@@ -997,23 +791,23 @@ describe("subscription lanes", () => {
       { name: "sub-opus-low", model: "opus", effort: "low", driver: "claude-code" },
       { name: "sonnet", model: "sonnet", driver: "claude-code" },
     ];
-    const lanes = liveSubscriptions(
+    const creds = liveCredentials(
       [
-        fact({ runId: "a", subscription: "CLAUDE_CODE_OAUTH_TOKEN_2" }),
-        // Same model, different effort: a different entry, and its own lane.
-        fact({ runId: "b", effort: "low", subscription: "CLAUDE_CODE_OAUTH_TOKEN" }),
-        // A paused run still holds its lane — it is resumed onto that subscription.
-        fact({ runId: "c", model: "sonnet", live: false, pause: { reason: "quota-exhausted", at: 1, count: 1, episodeElapsedMs: null }, subscription: "CLAUDE_CODE_OAUTH_TOKEN_2" }),
+        fact({ runId: "a", credential: "claude-2" }),
+        // Same model, different effort: a different entry, and its own credential.
+        fact({ runId: "b", effort: "low", credential: "claude-1" }),
+        // A paused run still holds its credential — it is resumed onto that one.
+        fact({ runId: "c", model: "sonnet", live: false, pause: { reason: "quota-exhausted", at: 1, count: 1, episodeElapsedMs: null }, credential: "claude-2" }),
         // A finished run holds nothing.
-        fact({ runId: "d", model: "sonnet", live: false, terminationReason: "episode-limit", subscription: "CLAUDE_CODE_OAUTH_TOKEN" }),
+        fact({ runId: "d", model: "sonnet", live: false, terminationReason: "episode-limit", credential: "claude-1" }),
       ],
       roster,
     );
-    expect(lanes.get("sub-opus")).toBe("CLAUDE_CODE_OAUTH_TOKEN_2");
-    expect(lanes.get("sub-opus-low")).toBe("CLAUDE_CODE_OAUTH_TOKEN");
-    expect(lanes.get("sonnet")).toBe("CLAUDE_CODE_OAUTH_TOKEN_2");
-    // A run with no lane recorded (one launched before lanes existed) says nothing.
-    expect(liveSubscriptions([fact({})], roster).size).toBe(0);
+    expect(creds.get("sub-opus")).toBe("claude-2");
+    expect(creds.get("sub-opus-low")).toBe("claude-1");
+    expect(creds.get("sonnet")).toBe("claude-2");
+    // A run that recorded none (0.5, or launched by hand) says nothing.
+    expect(liveCredentials([fact({})], roster).size).toBe(0);
   });
 });
 
@@ -1041,7 +835,7 @@ describe("probe campaigns in the schedule", () => {
     episodeMs: null,
     campaign: null,
     cell: null,
-    subscription: null,
+    credential: null,
     ...over,
   });
   /** A model on t0 whose single e90 is done: owes nothing, so it is `free`. */
@@ -1253,7 +1047,7 @@ describe("the claude-code compaction window is part of an entry's identity", () 
     episodeMs: null,
     campaign: null,
     cell: null,
-    subscription: null,
+    credential: null,
     ...over,
   });
   const auto: RosterModel = { name: "haiku-max", model: "claude-haiku-5-5", effort: "max", driver: "claude-code", tier: "t2" };
@@ -1288,7 +1082,7 @@ describe("the claude-code compaction window is part of an entry's identity", () 
         ...(window !== undefined ? { compactWindow: window } : {}),
         ...over,
       });
-    const runs = [probe(1, "auto", undefined), probe(2, "w200k", "200k"), probe(3, "w300k", "300k", { live: true, terminationReason: null, endedAt: null, subscription: "CODEX_HOME_2" })];
+    const runs = [probe(1, "auto", undefined), probe(2, "w200k", "200k"), probe(3, "w300k", "300k", { live: true, terminationReason: null, endedAt: null, credential: "chatgpt-2" })];
     // Every arm's run is the entry's: the arm's window is not the entry's identity.
     expect(projectModel(astra, runs, DEFAULT_POLICY, { now: NOW3 }).perEpisode.probing!.attempts).toBe(3);
     // Not a windowed copy's, whose identity the 200k arm's run shares: the
@@ -1297,8 +1091,8 @@ describe("the claude-code compaction window is part of an entry's identity", () 
     // The copy's own probes are its, on its own window only.
     const own = [probe(5, "auto", "200k", { ref: "astra-200k" }), probe(6, "w300k", "300k", { ref: "astra-200k" })];
     expect(projectModel(astra200, own, DEFAULT_POLICY, { now: NOW3 }).perEpisode.probing!.attempts).toBe(1);
-    // The live 300k arm's lane is the entry's, so a restart sees the lane taken.
-    expect(liveSubscriptions(runs, [astra, astra200]).get("astra")).toBe("CODEX_HOME_2");
+    // The live 300k arm's credential is the entry's, so a restart sees its slot taken.
+    expect(liveCredentials(runs, [astra, astra200]).get("astra")).toBe("chatgpt-2");
     // A run with no roster stamp still matches by identity alone.
     expect(projectModel(astra, [probe(4, "w200k", "200k", { ref: null })], DEFAULT_POLICY, { now: NOW3 }).perEpisode.probing?.attempts ?? 0).toBe(0);
     expect(projectModel(astra200, [probe(4, "w200k", "200k", { ref: null })], DEFAULT_POLICY, { now: NOW3 }).perEpisode.probing!.attempts).toBe(1);
@@ -1359,7 +1153,7 @@ describe("claude-code defaults its compaction window to 300k (operator, 2026-11-
     episodeMs: null,
     campaign: null,
     cell: null,
-    subscription: null,
+    credential: null,
     ...over,
   });
   const plain: RosterModel = { name: "sub-sonnet-55", model: "claude-sonnet-5-5", driver: "claude-code", tier: "t1" };

@@ -353,7 +353,7 @@ describe("never counted, never a member, never a row", () => {
     episodeMs: 90 * 60_000,
     campaign: null,
     cell: null,
-    subscription: null,
+    credential: null,
     driver: "openai",
     ...o,
   });

@@ -132,7 +132,7 @@ describe.skipIf(helm === null)("the chart's NetworkPolicies", () => {
       requestedRef: "ghcr.io/example/other-harness:v1",
       command: ["/entrypoint"],
       args: [],
-      env: { driver: "openai", tokenEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} },
+      env: { driver: "openai", credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} },
       owner: undefined,
       rosterPid: 1,
       graceMs: EPISODE_TERM_GRACE_MS,

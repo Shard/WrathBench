@@ -251,10 +251,10 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
   const out = { ...base };
   out.runPods = parseRunPodsMode(o.runPods, "policy.runPods");
   if (o.runsPerEpisode !== undefined) {
-    throw new Error(`policy.runsPerEpisode is not a key — run counts are a model's tier (${TIERS.join(", ")}); set roster.<name>.tier`);
+    throw new Error(`policy.runsPerEpisode is not a 0.5 key — run counts are a model's tier (${TIERS.join(", ")}); set roster.<name>.tier`);
   }
   if (o.extras !== undefined) {
-    throw new Error('policy.extras is not a key — idle behaviour is per model; set roster.<name>.idle to "unlimited", and put a race/class sweep in a probe campaign');
+    throw new Error('policy.extras is not a 0.5 key — idle behaviour is per model; set roster.<name>.idle to "unlimited", and put a race/class sweep in a probe campaign');
   }
   if (o.resume !== undefined) {
     throw new Error(

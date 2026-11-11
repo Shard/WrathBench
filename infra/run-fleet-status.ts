@@ -1043,7 +1043,7 @@ export function printStatus(): void {
   // runs it has just spawned), else this reader's, off the live runs.
   if (config !== undefined && credGate !== undefined) {
     const statuses = fleetUp && state?.credentials !== undefined ? state.credentials : localCredentialStatuses(config, credGate, runFacts);
-    for (const line of formatCredentialStatus(statuses, config.policy.maxSessions, Date.now())) console.log(`  ${line}`);
+    for (const line of formatCredentialStatus(statuses, config.policy.maxSessions, Date.now(), { volumeOf: (s) => codexHomeVolume(s) })) console.log(`  ${line}`);
   }
 
   // (c) models: the projection, every roster entry, with why (not) schedulable.

@@ -25,7 +25,8 @@ import { comparabilityOf, promptHash } from "../src/comparability";
 import { harnessClash, loadRunConfig } from "../src/config";
 import { CODEX_SYSTEM_PROMPT, CLAUDE_CODE_SYSTEM_PROMPT, PI_SYSTEM_PROMPT, SNIPPET_DELTA_SENTENCE, SYSTEM_PROMPT, buildSystemPrompt, contextSentence } from "../src/prompt";
 import wrathbenchPromptExtension, { PI_PROMPT_MISSING } from "../src/pi-extension";
-import { piProviderOf, rosterKeyRefusal } from "../src/providers";
+import { piProviderOf } from "../src/providers";
+import { rosterProviderRefusal } from "../src/credentials";
 import { priceFor, rosterPriceGap, runCost } from "../viewer/pricing";
 import { projectEntry } from "../viewer/public-projection";
 import { summarize, tokenTotals } from "../viewer/tail";
@@ -419,9 +420,9 @@ describe("pi driver pieces", () => {
     expect(piProviderOf("DEEPSEEK_KEY")).toEqual({ provider: "deepseek" });
     expect(piProviderOf("OPENROUTER_KEY")).toMatchObject({ refusal: expect.stringContaining("no pi provider for OPENROUTER_KEY") });
     // Refused as the roster entry, so a campaign's squares of it are parked rather than spent on failed launches.
-    expect(rosterKeyRefusal({ driver: "pi", apiBase: BASE, apiKeyEnv: "DEEPSEEK_KEY" })).toBeNull();
-    expect(rosterKeyRefusal({ driver: "pi", apiBase: "https://openrouter.ai/api/v1", apiKeyEnv: "OPENROUTER_KEY" })).toContain("no pi provider for OPENROUTER_KEY");
-    expect(rosterKeyRefusal({ driver: "openai", apiBase: "https://openrouter.ai/api/v1", apiKeyEnv: "OPENROUTER_KEY" })).toBeNull();
+    expect(rosterProviderRefusal({ driver: "pi", apiBase: BASE })).toBeNull();
+    expect(rosterProviderRefusal({ driver: "pi", apiBase: "https://openrouter.ai/api/v1" })).toContain("no pi provider for OPENROUTER_KEY");
+    expect(rosterProviderRefusal({ driver: "openai", apiBase: "https://openrouter.ai/api/v1" })).toBeNull();
   });
 
   test("the prompt: the CLI render, byte for byte, so no existing pin moves", () => {

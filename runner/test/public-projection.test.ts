@@ -1765,13 +1765,13 @@ describe("projectModels", () => {
       policy: smuggle<ModelsResponse["policy"]>({
         promoteAtLevel: 5,
         series: "0.5",
-        paid: { maxConcurrent: 2 },
         tiers: {
           t0: { runsPerEpisode: { e90: 1, e360: 0 }, promotesTo: "t1", label: "one look" },
           t1: { runsPerEpisode: { e90: 3, e360: 1 }, promotesTo: "t2", label: "evidence" },
           t2: { runsPerEpisode: { e90: 5, e360: 3 }, promotesTo: null, label: "full" },
         },
-        maxConcurrent: { "claude-code": 3, "claude-code:MAX20": 1 },
+        maxSessions: { "claude-code": 3 },
+        credentials: [{ id: "claude-max20", provider: "claude", billing: "paid", slots: 1, enabled: true }],
       }),
       ladderMs: [60_000, 300_000],
       harness: "all",
@@ -1849,21 +1849,20 @@ describe("projectModels", () => {
         "policy",
         "policy.promoteAtLevel",
         "policy.series",
-        "policy.paid",
-        "policy.paid.maxConcurrent",
         "policy.tiers",
         ...tierKeys("t0"),
         ...tierKeys("t1"),
         ...tierKeys("t2"),
-        "policy.maxConcurrent",
-        "policy.maxConcurrent.claude-code",
-        "policy.maxConcurrent.claude-code:MAX20",
+        "policy.maxSessions",
+        "policy.maxSessions.claude-code",
         "ladderMs",
         "harness",
         "now",
       ]),
     );
     assertClean(JSON.stringify(out));
+    // The credentials are the operator's: none leaves.
+    expect(JSON.stringify(out)).not.toContain("claude-max20");
     const row = out.models[0]!;
     expect(row.lastError!.reason).toBe("http-401");
     expect(row.lastError!.message).toBe("");

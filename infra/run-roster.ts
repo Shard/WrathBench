@@ -1439,7 +1439,7 @@ const SUB_GATE_POLL_MS = 60_000;
  * `deps` is for tests: the runs directory, the environment, the clock, the
  * wait, the stop check and the two writers, each defaulting to this process's.
  */
-export async function awaitSubscriptionGate(
+export async function awaitUsageBudget(
   spec: Pick<Resolved, "model" | "runId" | "episode" | "placedOn">,
   deadline: number | undefined,
   deps: {
@@ -1474,7 +1474,7 @@ export async function awaitSubscriptionGate(
     const t = now();
     if (said !== undefined && deadline !== undefined && t >= deadline) {
       tell(`wall-clock budget reached — not launching ${spec.model}`);
-      log({ runId: spec.runId, model: spec.model, outcome: "budget-stop", detail: "not launched (subscription gate)" });
+      log({ runId: spec.runId, model: spec.model, outcome: "budget-stop", detail: "not launched (credential usage budget)" });
       return false;
     }
     const usage = newestByCredential(readCredentialUsage(deps.runsDir ?? join(REPO_ROOT, RUNS_DIR))).get(placed.id);
@@ -1482,7 +1482,7 @@ export async function awaitSubscriptionGate(
     const hold = usageHold(usage, threshold, t, spec.model);
     if (hold === null) return true;
     const why =
-      hold.threshold >= EXHAUSTED_PCT || gateClassOf(spec.episode) === "spent-only"
+      hold.threshold >= EXHAUSTED_PCT || gateClassOf(spec.episode) === "spent-only" || hold.windows.some((w) => w.usedPercent >= EXHAUSTED_PCT)
         ? `credential ${placed.id}: a usage window is spent — held until it resets`
         : `credential ${placed.id}: at or over its ${gateClassOf(spec.episode)} usage threshold — held until its usage window resets`;
     if (why !== said) {
@@ -2059,7 +2059,7 @@ async function attemptSpec(
       return "done";
     }
     if (verdict.reason === SUBSCRIPTION_PAUSE) {
-      // The subscription gate stopped a freeplay run (operator, 2026-10-16):
+      // A credential's usage budget stopped a freeplay run (operator, 2026-10-16):
       // nothing to retry here, no defer, no strike — the supervisor resumes
       // it once its lane's usage window resets.
       say(`paused ${spec.runId}: ${verdict.reason} — the supervisor resumes it once its credential's usage window resets, advancing`);
@@ -2578,7 +2578,7 @@ async function main(): Promise<void> {
       say(`party ${party.id}: its members are not in one state (${states}) — a party launches or resumes whole; nothing launched`);
       for (const a of pending) record({ runId: a.spec.runId, model: a.spec.model, outcome: "skipped", detail: `party ${party.id} not whole: ${states}` });
     } else if (!stopping && !drainSeen() && (deadline === undefined || Date.now() < deadline)) {
-      if (await awaitSubscriptionGate(pending[0]!.spec, deadline)) await attemptParty(pending, { deadline });
+      if (await awaitUsageBudget(pending[0]!.spec, deadline)) await attemptParty(pending, { deadline });
     }
     say("roster complete");
     return;
@@ -2711,7 +2711,7 @@ async function main(): Promise<void> {
           detail: `resuming in place after ${plan.reason}; resume restores trajectory + scratchpad, not level`,
         });
       }
-      if (!(await awaitSubscriptionGate(target, deadline))) break;
+      if (!(await awaitUsageBudget(target, deadline))) break;
       launched++;
       const res = await attemptSpec(target, { resume, deadline, dryRun: false });
       if (res === "defer") {

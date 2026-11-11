@@ -1052,7 +1052,7 @@ function parseAccounts(raw: unknown): FleetAccounts {
   const o = raw as { pinned?: unknown; pool?: unknown; max?: unknown; paid?: unknown; local?: unknown };
   // `pinned` is derived from the jobs (`account` on a queue entry), never authored.
   if (o.pinned !== undefined) {
-    fail("accounts.pinned is not a key — pin the account on the job (`account` in its queue entry); the map is derived");
+    fail("accounts.pinned is not a 0.4 key — pin the account on the job (`account` in its queue entry); the map is derived");
   }
   // The account classes went with credentials: a paid run is held by its
   // credential's slots, a model on the self-hosted box by its one-slot credential.

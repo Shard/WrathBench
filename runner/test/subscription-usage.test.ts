@@ -1,23 +1,22 @@
 /**
- * The subscription usage gate's rule (operator, 2026-10-16): the two
- * thresholds, the lanes, staleness, and the driver-side tracker. Synthetic
- * figures only.
+ * A credential's usage budget's rule (operator, 2026-10-16; credentials since
+ * #429): the two thresholds, the reading's key, staleness, and the
+ * driver-side tracker. Synthetic figures only.
  */
 import { describe, expect, test } from "bun:test";
-import { goKeyEnvOf, subscriptionLaneOfConfig } from "../src/models";
 import {
-  DEFAULT_SUB_MAX_PCT,
+  EXHAUSTED_PCT,
   SUBSCRIPTION_RESET_CEILING_MS,
   SubscriptionUsageTracker,
   capReset,
   gateClassOf,
   liveWindows,
-  newestByLane,
+  newestByCredential,
   parseSubscriptionUsage,
-  subscriptionLaneOf,
-  subscriptionThresholds,
   thresholdOf,
+  thresholdsOf,
   usageHold,
+  usageKeyOf,
   windowLabel,
   type SubscriptionUsage,
 } from "../src/subscription-usage";
@@ -26,16 +25,9 @@ const NOW = 1_900_000_000_000;
 const H = 3_600_000;
 
 describe("the two thresholds", () => {
-  test("default to 80, take a percent in (0, 100], and fall back with a note on anything else", () => {
-    expect(subscriptionThresholds({})).toEqual({ scored: DEFAULT_SUB_MAX_PCT, freeplay: DEFAULT_SUB_MAX_PCT, notes: [] });
-    expect(subscriptionThresholds({ WRATHBENCH_SUB_SCORED_MAX_PCT: "90", WRATHBENCH_SUB_FREEPLAY_MAX_PCT: "100" })).toMatchObject({ scored: 90, freeplay: 100, notes: [] });
-    expect(subscriptionThresholds({ WRATHBENCH_SUB_SCORED_MAX_PCT: "75%" }).scored).toBe(75);
-    for (const bad of ["0", "-5", "150", "lots"]) {
-      const t = subscriptionThresholds({ WRATHBENCH_SUB_FREEPLAY_MAX_PCT: bad });
-      expect(t.freeplay).toBe(80);
-      expect(t.notes).toHaveLength(1);
-      expect(t.notes[0]).toContain("WRATHBENCH_SUB_FREEPLAY_MAX_PCT");
-    }
+  test("are the credential's usage budget, carried by the run; no budget is the quota-reset rule alone", () => {
+    expect(thresholdsOf({ scored: 70, freeplay: 85 })).toEqual({ scored: 70, freeplay: 85 });
+    expect(thresholdsOf(undefined)).toEqual({ scored: EXHAUSTED_PCT, freeplay: EXHAUSTED_PCT });
   });
 
   test("a scored episode reads the scored threshold, freeplay its own, and a probe only a spent window", () => {
@@ -48,32 +40,21 @@ describe("the two thresholds", () => {
   });
 });
 
-describe("lanes", () => {
-  test("one per claude token, codex home and OpenCode Go key; nothing for any other run", () => {
-    expect(subscriptionLaneOf({ driver: "claude-code" })).toBe("claude-code:CLAUDE_CODE_OAUTH_TOKEN");
-    expect(subscriptionLaneOf({ driver: "claude-code", lane: "CLAUDE_CODE_OAUTH_TOKEN_2" })).toBe("claude-code:CLAUDE_CODE_OAUTH_TOKEN_2");
-    expect(subscriptionLaneOf({ driver: "codex" })).toBe("codex:CODEX_HOME");
-    expect(subscriptionLaneOf({ driver: "openai", goKeyEnv: "OPENCODE_KEY" })).toBe("opencode-go:OPENCODE_KEY");
-    expect(subscriptionLaneOf({ driver: "openai" })).toBeNull();
-    expect(subscriptionLaneOf({ driver: "stub" })).toBeNull();
+describe("the reading's key", () => {
+  test("is the credential a run took; a hand-launched run keys on its variable under a prefix no credential id has", () => {
+    expect(usageKeyOf({ credential: "claude-2", credentialEnv: "CLAUDE_CODE_OAUTH_TOKEN_2" })).toBe("claude-2");
+    expect(usageKeyOf({ credentialEnv: "CODEX_HOME_2" })).toBe("env:CODEX_HOME_2");
+    expect(usageKeyOf({}, "CLAUDE_CODE_OAUTH_TOKEN")).toBe("env:CLAUDE_CODE_OAUTH_TOKEN");
+    expect(usageKeyOf({})).toBeNull();
   });
 
-  test("an OpenCode Go entry bills a lane only when it draws the allowance down: a Go base, paid", () => {
-    const go = { driver: "openai", model: "vendor/m", apiBase: "https://opencode.ai/zen/go/v1", apiKeyEnv: "OPENCODE_KEY" };
-    expect(goKeyEnvOf({ ...go, billing: "paid" })).toBe("OPENCODE_KEY");
-    expect(goKeyEnvOf(go)).toBe("OPENCODE_KEY");
-    // A $0 Go model keeps working past the limit: no lane, never gated.
-    expect(goKeyEnvOf({ ...go, billing: "free" })).toBeUndefined();
-    // Zen's free tier and every other base are not Go.
-    expect(goKeyEnvOf({ ...go, apiBase: "https://opencode.ai/zen/v1" })).toBeUndefined();
-    expect(subscriptionLaneOfConfig({ ...go, billing: "paid" })).toBe("opencode-go:OPENCODE_KEY");
-    expect(subscriptionLaneOfConfig({ driver: "codex", subscription: "CODEX_HOME_2" })).toBe("codex:CODEX_HOME_2");
-    expect(subscriptionLaneOfConfig({ driver: "openai", model: "z-ai/glm:free" })).toBeNull();
+  test("a 0.5 reading, keyed by its lane, is no reading of any credential", () => {
+    expect(parseSubscriptionUsage({ lane: "claude-code:CLAUDE_CODE_OAUTH_TOKEN", observedAt: 1, windows: [] })).toBeUndefined();
   });
 });
 
 describe("windows, staleness and holds", () => {
-  const usage = (windows: SubscriptionUsage["windows"], observedAt = NOW): SubscriptionUsage => ({ lane: "codex:CODEX_HOME", observedAt, windows });
+  const usage = (windows: SubscriptionUsage["windows"], observedAt = NOW): SubscriptionUsage => ({ credential: "chatgpt-1", observedAt, windows });
 
   test("a window counts until its reset; one without a reset until its own length past the reading; one with neither never", () => {
     const u = usage(
@@ -104,13 +85,13 @@ describe("windows, staleness and holds", () => {
     expect(capReset(NOW + H, NOW)).toBe(NOW + H);
   });
 
-  test("the newest reading per lane wins; a malformed one is no reading", () => {
+  test("the newest reading per credential wins; a malformed one is no reading", () => {
     const a = usage([{ usedPercent: 10, windowMinutes: 300, resetsAt: NOW + H }], NOW - H);
     const b = usage([{ usedPercent: 50, windowMinutes: 300, resetsAt: NOW + H }], NOW);
-    expect(newestByLane([b, a, null]).get("codex:CODEX_HOME")).toBe(b);
+    expect(newestByCredential([b, a, null]).get("chatgpt-1")).toBe(b);
     expect(parseSubscriptionUsage(JSON.parse(JSON.stringify(b)))).toEqual(b);
-    expect(parseSubscriptionUsage({ lane: "x", observedAt: "soon", windows: [] })).toBeUndefined();
-    expect(parseSubscriptionUsage({ lane: "x", observedAt: 1, windows: [{ usedPercent: "lots" }] })).toEqual({ lane: "x", observedAt: 1, windows: [] });
+    expect(parseSubscriptionUsage({ credential: "x", observedAt: "soon", windows: [] })).toBeUndefined();
+    expect(parseSubscriptionUsage({ credential: "x", observedAt: 1, windows: [{ usedPercent: "lots" }] })).toEqual({ credential: "x", observedAt: 1, windows: [] });
     expect(windowLabel({ usedPercent: 1, windowMinutes: 10_080, resetsAt: null })).toBe("7d");
     expect(windowLabel({ usedPercent: 1, windowMinutes: 300, resetsAt: null })).toBe("5h");
   });
@@ -119,7 +100,7 @@ describe("windows, staleness and holds", () => {
 describe("SubscriptionUsageTracker", () => {
   test("records a reading only when it changed", () => {
     const written: SubscriptionUsage[] = [];
-    const t = new SubscriptionUsageTracker("codex:CODEX_HOME", (u) => written.push(u));
+    const t = new SubscriptionUsageTracker("chatgpt-1", (u) => written.push(u));
     const w = [{ usedPercent: 20, windowMinutes: 10_080, resetsAt: NOW + H }];
     t.observe(w, NOW);
     t.observe(w.map((x) => ({ ...x })), NOW + 1);
@@ -170,15 +151,15 @@ describe("SubscriptionUsageTracker", () => {
     );
     expect(t.quotaReset(NOW, NOW + 96 * H)).toBe(NOW + 96 * H);
     expect(t.current!.windows.at(-1)).toEqual({ usedPercent: 100, windowMinutes: null, resetsAt: NOW + 96 * H });
-    // The lane gate holds until then, not until the guessed hour.
+    // The usage budget holds until then, not until the guessed hour.
     expect(usageHold(t.current, 100, NOW + 2 * H)?.until).toBe(NOW + 96 * H);
   });
 
   test("a seeded reading stands in for the run's own until it has one, and is not written", () => {
     const written: SubscriptionUsage[] = [];
-    const t = new SubscriptionUsageTracker("codex:CODEX_HOME", (u) => written.push(u));
-    t.seed({ lane: "codex:CODEX_HOME", observedAt: NOW - H, windows: [{ usedPercent: 96, windowMinutes: 10_080, resetsAt: NOW + 3 * H }] });
-    t.seed({ lane: "codex:CODEX_HOME_2", observedAt: NOW, windows: [] });
+    const t = new SubscriptionUsageTracker("chatgpt-1", (u) => written.push(u));
+    t.seed({ credential: "chatgpt-1", observedAt: NOW - H, windows: [{ usedPercent: 96, windowMinutes: 10_080, resetsAt: NOW + 3 * H }] });
+    t.seed({ credential: "chatgpt-2", observedAt: NOW, windows: [] });
     expect(written).toEqual([]);
     expect(t.quotaReset(NOW)).toBe(NOW + 3 * H);
     expect(written.at(-1)!.windows[0]!.usedPercent).toBe(100);
@@ -188,11 +169,11 @@ describe("SubscriptionUsageTracker", () => {
 describe("the seven-day ceiling", () => {
   test("every reading expires within seven days of being taken, whatever its reset says", () => {
     // A monthly window spent, its reset 30 days out.
-    const monthly: SubscriptionUsage = { lane: "opencode-go:OPENCODE_KEY", observedAt: NOW, windows: [{ usedPercent: 100, windowMinutes: null, resetsAt: NOW + 30 * 24 * H }] };
+    const monthly: SubscriptionUsage = { credential: "opencode-go", observedAt: NOW, windows: [{ usedPercent: 100, windowMinutes: null, resetsAt: NOW + 30 * 24 * H }] };
     expect(usageHold(monthly, 100, NOW + 6 * 24 * H)).not.toBeNull();
     expect(usageHold(monthly, 100, NOW + 8 * 24 * H)).toBeNull();
-    // A reset mis-scaled (seconds × 1000 twice over) cannot hold the lane for good.
-    const misScaled: SubscriptionUsage = { lane: "codex:CODEX_HOME", observedAt: NOW, windows: [{ usedPercent: 95, windowMinutes: 300, resetsAt: NOW * 1000 }] };
+    // A reset mis-scaled (seconds × 1000 twice over) cannot hold the credential for good.
+    const misScaled: SubscriptionUsage = { credential: "chatgpt-1", observedAt: NOW, windows: [{ usedPercent: 95, windowMinutes: 300, resetsAt: NOW * 1000 }] };
     expect(usageHold(misScaled, 80, NOW + H)!.until).toBe(NOW + SUBSCRIPTION_RESET_CEILING_MS);
     expect(usageHold(misScaled, 80, NOW + SUBSCRIPTION_RESET_CEILING_MS + 1)).toBeNull();
     expect(liveWindows(misScaled, NOW + 8 * 24 * H)).toEqual([]);
@@ -201,7 +182,7 @@ describe("the seven-day ceiling", () => {
 
 describe("a per-model cap", () => {
   const scoped: SubscriptionUsage = {
-    lane: "claude-code:CLAUDE_CODE_OAUTH_TOKEN",
+    credential: "claude-1",
     observedAt: NOW,
     windows: [
       { usedPercent: 40, windowMinutes: 10_080, resetsAt: NOW + 50 * H },
@@ -209,31 +190,31 @@ describe("a per-model cap", () => {
     ],
   };
 
-  test("holds only its family's launches; a lane-wide window holds every one", () => {
+  test("holds only its family's launches; a credential-wide window holds every one", () => {
     expect(usageHold(scoped, 80, NOW, "claude-opus-4-8")).not.toBeNull();
     expect(usageHold(scoped, 80, NOW, "opus")).not.toBeNull();
     expect(usageHold(scoped, 80, NOW, "sonnet")).toBeNull();
     expect(usageHold(scoped, 80, NOW, "claude-haiku-5-5")).toBeNull();
-    // No model named: only the lane-wide windows bind.
+    // No model named: only the credential-wide windows bind.
     expect(usageHold(scoped, 80, NOW)).toBeNull();
-    const laneWide: SubscriptionUsage = { ...scoped, windows: [{ usedPercent: 100, windowMinutes: 10_080, resetsAt: NOW + 50 * H }] };
-    expect(usageHold(laneWide, 80, NOW, "sonnet")).not.toBeNull();
-    expect(usageHold(laneWide, 80, NOW, "claude-opus-4-8")).not.toBeNull();
+    const wide: SubscriptionUsage = { ...scoped, windows: [{ usedPercent: 100, windowMinutes: 10_080, resetsAt: NOW + 50 * H }] };
+    expect(usageHold(wide, 80, NOW, "sonnet")).not.toBeNull();
+    expect(usageHold(wide, 80, NOW, "claude-opus-4-8")).not.toBeNull();
     expect(windowLabel(scoped.windows[1]!)).toBe("7d opus");
   });
 
   test("a spent cap survives a newer reading that does not mention it, until it ends", () => {
-    const newer: SubscriptionUsage = { lane: scoped.lane, observedAt: NOW + H, windows: [{ usedPercent: 45, windowMinutes: 10_080, resetsAt: NOW + 50 * H }] };
-    const lane = newestByLane([newer, scoped]).get(scoped.lane)!;
-    expect(lane.observedAt).toBe(NOW + H);
-    expect(lane.windows.find((w) => w.family === "opus")?.usedPercent).toBe(100);
-    expect(usageHold(lane, 80, NOW + 2 * H, "opus")).not.toBeNull();
-    expect(usageHold(lane, 80, NOW + 2 * H, "sonnet")).toBeNull();
+    const newer: SubscriptionUsage = { credential: scoped.credential, observedAt: NOW + H, windows: [{ usedPercent: 45, windowMinutes: 10_080, resetsAt: NOW + 50 * H }] };
+    const held = newestByCredential([newer, scoped]).get(scoped.credential)!;
+    expect(held.observedAt).toBe(NOW + H);
+    expect(held.windows.find((w) => w.family === "opus")?.usedPercent).toBe(100);
+    expect(usageHold(held, 80, NOW + 2 * H, "opus")).not.toBeNull();
+    expect(usageHold(held, 80, NOW + 2 * H, "sonnet")).toBeNull();
     // A newer reading that says the cap is back is believed.
     const cleared: SubscriptionUsage = { ...newer, windows: [...newer.windows, { usedPercent: 10, windowMinutes: 10_080, resetsAt: NOW + 50 * H, family: "opus" }] };
-    expect(usageHold(newestByLane([cleared, scoped]).get(scoped.lane), 80, NOW + 2 * H, "opus")).toBeNull();
+    expect(usageHold(newestByCredential([cleared, scoped]).get(scoped.credential), 80, NOW + 2 * H, "opus")).toBeNull();
     // The tracker keeps it across its own readings the same way.
-    const t = new SubscriptionUsageTracker(scoped.lane, () => {});
+    const t = new SubscriptionUsageTracker(scoped.credential, () => {});
     t.observe(scoped.windows, NOW);
     t.observe(newer.windows, NOW + H);
     expect(t.freeplayHold(80, NOW + 2 * H, "claude-opus-4-8")).not.toBeNull();

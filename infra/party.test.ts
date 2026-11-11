@@ -18,7 +18,7 @@ import { defsBlock, joined, PARTY_MEMBERS, partyDefinition, definition } from ".
 import { runParty, type MemberHandle, type MemberVerdict, type PartyFateDeps, type PartyMemberRun } from "./party-fate";
 import { commandStager, type StageRequest } from "./party-stager";
 import { parseFleet, pinnedCampaignJobs, probeRunsOf, rosterModels, type FleetConfig, type FleetJob, type FleetRosterEntry } from "./run-fleet-config";
-import { diffJobs, fillEntries, finishesOnExit, jobSpawn, partyAdmission, planResumes, planTick, withTakenRunIds } from "./run-fleet-plan";
+import { diffJobs, fillEntries, finishesOnExit, jobSpawn, planResumes, planTick, withTakenRunIds } from "./run-fleet-plan";
 import { jobArgv, rosterResumes } from "./run-fleet-state";
 import { formatArgvBlock } from "./run-fleet-status";
 import { partyOfRoster, resolve, stageRequestOf } from "./run-roster";
@@ -27,6 +27,13 @@ import { tempDirs } from "./temp-dirs";
 const tempDir = tempDirs();
 const ACCOUNTS = ["PARTY1", "PARTY2", "PARTY3", "PARTY4", "PARTY5"];
 const LANE2 = "CLAUDE_CODE_OAUTH_TOKEN_2";
+const CRED2 = "claude-2";
+/** Two Claude subscriptions, the second big enough for a party of five, and a free OpenRouter key. */
+const credentialsWith = (slots2 = 5): Record<string, unknown> => ({
+  "claude-1": { provider: "claude", secretEnv: "CLAUDE_CODE_OAUTH_TOKEN", slots: 1, billing: "paid", enabled: true },
+  [CRED2]: { provider: "claude", secretEnv: LANE2, slots: slots2, billing: "paid", enabled: true },
+  "or-free": { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 1, billing: "free", enabled: true },
+});
 const STAMP = "20261020";
 const party = partyDefinition();
 const MEMBERS = PARTY_MEMBERS.map((m) => m.id);
@@ -433,9 +440,9 @@ function fleet(row: Record<string, unknown> = {}, over: Record<string, unknown> 
     _notes: ["n"],
     accounts: { pool: ["RUNNER", "RUNNER2"] },
     roster: ROSTER,
-    policy: { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", LANE2] },
+    credentials: credentialsWith(),
     "campaign-defs": defsBlock(party, definition({ id: "solo" })),
-    campaigns: { deadmines: { version: 1, assignments: [{ model: "son2" }], accounts: ACCOUNTS, subscription: LANE2, ...row } },
+    campaigns: { deadmines: { version: 1, assignments: [{ model: "son2" }], accounts: ACCOUNTS, credential: CRED2, ...row } },
     queue: [],
     ...over,
   });
@@ -456,7 +463,7 @@ describe("a party campaign's row", () => {
         _notes: ["n"],
         accounts: { pool: ["RUNNER"] },
         roster: ROSTER,
-        policy: { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", LANE2] },
+        credentials: credentialsWith(),
         "campaign-defs": defsBlock(party, definition({ id: "solo" })),
         campaigns: rows ?? { deadmines: { version: 1, assignments: [{ model: "son2" }], ...row } },
         queue: [],
@@ -488,13 +495,14 @@ describe("a party's spawn", () => {
     expect(job).toMatchObject({ name: "deadmines-party-base", account: "PARTY1", accounts: ACCOUNTS, attempt: 1, source: "pinned" });
   });
 
-  test("materialises one entry per member: its run id off one stem, its account, start, lane and campaign file", () => {
-    const spawn = jobSpawn(job!, cfg.roster, "PARTY1", STAMP, undefined, cfg.campaigns);
+  test("materialises one entry per member: its run id off one stem, its account, start, credential and campaign file", () => {
+    // Placed as the tick places it: the whole party on the campaign's credential.
+    const spawn = planTick(cfg, [], () => undefined, STAMP).pinned.find((p) => p.job.name === job!.name)!.spawn;
     expect(spawn.accounts).toEqual(ACCOUNTS);
     const entries = fillEntries(spawn, STAMP);
     const stem = `fleet-deadmines-party-base-sonnet-max-${STAMP}`;
-    expect(entries.map((e) => [e.runId, e.account, e.race, e.class, e.tokenEnv, e.party?.member])).toEqual(
-      PARTY_MEMBERS.map((m, i) => [`${stem}-${m.id}`, ACCOUNTS[i], m.race, m.class, LANE2, m.id]),
+    expect(entries.map((e) => [e.runId, e.account, e.race, e.class, e.placedOn?.id, e.placedOn?.env, e.party?.member])).toEqual(
+      PARTY_MEMBERS.map((m, i) => [`${stem}-${m.id}`, ACCOUNTS[i], m.race, m.class, CRED2, LANE2, m.id]),
     );
     expect(entries.every((e) => e.campaignFile!.party!.id === stem)).toBe(true);
     // The roster reads it back as one party, and asks the stager for exactly these five.
@@ -649,72 +657,61 @@ describe("a fresh attempt never reuses a run id", () => {
   });
 });
 
-// ------------------------------------------------------------ the lane pin
+// ------------------------------------------------------------ the credential pin
 
-describe("a campaign's own lane (campaigns.<id>.subscription)", () => {
-  test("every member of the campaign's launches bills it, and the same entry's scored evals keep their own lane", () => {
+describe("a campaign's own credential (campaigns.<id>.credential)", () => {
+  test("every member of the campaign's launches takes it, and the same entry's scored evals keep their own placement", () => {
     const cfg = fleet({}, { queue: [{ ref: "son2", episode: "e90", account: "SHAKEOUT" }] });
-    expect(cfg.roster["son2"]!.subscription).toBeUndefined();
+    expect(cfg.roster["son2"]!.credential).toBeUndefined();
     const [job] = pinnedCampaignJobs(cfg, []);
-    expect(job!.subscription).toBe(LANE2);
-    expect(jobSpawn(job!, cfg.roster, "PARTY1", STAMP, undefined, cfg.campaigns).entries.map((e) => e.tokenEnv)).toEqual([LANE2, LANE2, LANE2, LANE2, LANE2]);
-    // The e90 of the same roster entry: a pinned queue job, and the policy's own pick.
+    expect(job!.credential).toBe(CRED2);
+    const plan = planTick(cfg, [], () => undefined, STAMP);
+    const party = plan.pinned.find((p) => p.job.name === job!.name)!;
+    expect(party.spawn.entries.map((e) => e.placedOn?.id)).toEqual([CRED2, CRED2, CRED2, CRED2, CRED2]);
+    // The e90 of the same roster entry, a pinned queue job, is placed by its own rules: the first with room.
     const e90 = cfg.jobs.find((j) => j.name === "son2-e90")!;
-    expect(e90.subscription).toBeUndefined();
-    expect(jobSpawn(e90, cfg.roster, "SHAKEOUT", STAMP).entries[0]!.tokenEnv).toBeUndefined();
-    // With the party not holding the model (one character per model), the policy places its e90 by its own rules.
-    const open = fleet({ enabled: false });
-    const states = modelStates({ runsDir: "/nonexistent", roster: rosterModels(open.roster), runs: [], sidecar: { version: 1, cleared: {} }, now: 1_800_000_000_000, policy: open.policy });
-    const plan = planTick(open, states, () => undefined, STAMP);
-    const pick = plan.policy.find((p) => p.job.ref === "son2" && p.job.episode === "e90");
-    expect(pick).toBeDefined();
-    expect(pick!.job.subscription).not.toBe(LANE2);
+    expect(e90.credential).toBeUndefined();
+    const solo = planTick({ ...cfg, campaigns: [] }, [], () => undefined, STAMP).pinned.find((p) => p.job.name === "son2-e90")!;
+    expect(solo.spawn.entries[0]!.placedOn?.id).toBe("claude-1");
   });
 
-  test("a lane the policy does not list, an unpinned campaign, or an assignment that bills no lane refuses the campaign", () => {
-    const refused = (row: Record<string, unknown>, policy: Record<string, unknown> = { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", LANE2] }): string => {
-      const cfg = fleet(row, { policy });
+  test("a credential the config does not hold, an unpinned campaign, or an assignment it cannot carry refuses the campaign", () => {
+    const refused = (row: Record<string, unknown>, over: Record<string, unknown> = {}): string => {
+      const cfg = fleet(row, over);
       expect(cfg.campaigns.find((c) => c.name === "deadmines")!.enabled).toBe(false);
       return cfg.refusals.map((r) => r.why).join("; ");
     };
-    expect(refused({ subscription: "CLAUDE_CODE_OAUTH_TOKEN_3" })).toContain("not in policy.subscriptions");
-    expect(refused({}, { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN"] })).toContain("not in policy.subscriptions");
-    expect(refused({ subscription: "CODEX_HOME" }, { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", LANE2, "CODEX_HOME"] })).toContain("is a Codex home");
-    expect(refused({ assignments: [{ model: "glm" }] })).toContain("bills no subscription lane");
+    expect(refused({ credential: "claude-9" })).toContain("pinned credential claude-9 is not configured");
+    expect(refused({ credential: "or-free" })).toContain("or-free is openrouter's");
+    expect(refused({ assignments: [{ model: "glm" }] })).toContain("is claude's, and this model is served by openrouter");
+    expect(refused({ credential: "sk-ant-oat01 secret" })).toContain("never a secret");
     const unpinned = parseFleet({
       _notes: ["n"],
       accounts: { pool: ["RUNNER"] },
       roster: ROSTER,
-      policy: { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", LANE2] },
+      credentials: credentialsWith(),
       "campaign-defs": defsBlock(definition({ id: "solo" })),
-      campaigns: { solo: { version: 1, assignments: [{ model: "son2" }], subscription: LANE2 } },
+      campaigns: { solo: { version: 1, assignments: [{ model: "son2" }], credential: CRED2 } },
       queue: [],
     });
     expect(unpinned.campaigns[0]!.enabled).toBe(false);
-    expect(unpinned.refusals.map((r) => r.why).join(" ")).toContain("a lane pin is a pinned campaign's");
+    expect(unpinned.refusals.map((r) => r.why).join(" ")).toContain("a credential pin is a pinned campaign's");
   });
 });
 
 // ------------------------------------------------------------ admission
 
 describe("admission: a party starts whole or not at all", () => {
-  test("the cap on the lane, the claude total and the paid cap each hold the whole party", () => {
-    const keys = [`claude-code:${LANE2}`, "claude-code"];
-    expect(partyAdmission({ size: 5, keys, running: new Map(), max: {} })).toBeUndefined();
-    expect(partyAdmission({ size: 5, keys, running: new Map([[`claude-code:${LANE2}`, 1]]), max: { [`claude-code:${LANE2}`]: 6 } })).toBeUndefined();
-    expect(partyAdmission({ size: 5, keys, running: new Map([[`claude-code:${LANE2}`, 2]]), max: { [`claude-code:${LANE2}`]: 6 } })).toContain("needs 5 sessions");
-    expect(partyAdmission({ size: 5, keys, running: new Map([["claude-code", 1]]), max: { "claude-code": 5 } })).toContain("claude-code");
-    expect(partyAdmission({ size: 5, keys: ["openrouter"], running: new Map(), max: {}, paid: { running: 1, cap: 5 } })).toContain("paid slots");
-  });
-
-  test("planTick holds a pinned party the lane has no room for, with the reason, and plans it when there is", () => {
-    const tight = fleet({}, { policy: { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", LANE2], maxConcurrent: { [`claude-code:${LANE2}`]: 4 } } });
+  test("planTick holds a pinned party its credential has no room for, with the reason, and plans it when there is", () => {
+    const tight = fleet({}, { credentials: credentialsWith(4) });
     const held = planTick(tight, [], () => undefined, STAMP);
     expect(held.pinned).toEqual([]);
-    expect(held.heldPicks.find((h) => h.name === "deadmines-party-base")?.why).toContain("a party of 5 needs 5 sessions on claude-code:CLAUDE_CODE_OAUTH_TOKEN_2");
-    const room = fleet({}, { policy: { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", LANE2], maxConcurrent: { [`claude-code:${LANE2}`]: 5 } } });
-    const planned = planTick(room, [], () => undefined, STAMP);
+    expect(held.heldPicks.find((h) => h.name === "deadmines-party-base")?.why).toBe(`a party of 5 starts whole or not at all: cap: credential ${CRED2} 0/4 in flight`);
+    const planned = planTick(fleet(), [], () => undefined, STAMP);
     expect(planned.pinned.map((p) => p.spawn.entries.length)).toEqual([5]);
+    // The host's session cap holds the whole party too.
+    const hosted = fleet({}, { policy: { maxSessions: { "claude-code": 4 } } });
+    expect(planTick(hosted, [], () => undefined, STAMP).heldPicks.find((h) => h.name === "deadmines-party-base")?.why).toContain("claude-code 0/4 sessions on this host");
   });
 });
 
@@ -855,7 +852,7 @@ describe("a paused party is planned whole", () => {
     campaignVersion: 1,
     ref: "son2",
     arm: "base",
-    subscription: LANE2,
+    credential: CRED2,
     driver: "claude-code",
     party: { id: stem, member, size: 5 },
     ...over,
@@ -869,7 +866,7 @@ describe("a paused party is planned whole", () => {
       held: o.held ?? (() => undefined),
       now: NOW,
       campaignFileOf: fileOf,
-      ...(o.hold !== undefined ? { subscriptionHold: o.hold } : {}),
+      ...(o.hold !== undefined ? { credentialHold: o.hold } : {}),
     });
 
   test("one resume of all five, on the party's own run ids and accounts, under its pinned job", () => {
@@ -901,11 +898,11 @@ describe("a paused party is planned whole", () => {
     expect(p.listed[0]!.why).toContain("a party resumes whole");
   });
 
-  test("it waits on the slowest member's own pause, the usage gate on any member's lane, and every account", () => {
+  test("it waits on the slowest member's own pause, the usage budget of any member's credential, and every account", () => {
     const cooling = plan(facts((m) => (m === "rogue" ? { pause: { reason: "rate-limited", at: NOW - 30_000, count: 2, episodeElapsedMs: 1 } } : {})));
     expect(cooling.resume).toEqual([]);
     expect(cooling.listed[0]!.why).toContain("rogue rate-limited: resuming after");
-    const gated = plan(facts(), { hold: (f) => (f.party?.member === "mage" ? "lane CLAUDE_CODE_OAUTH_TOKEN_2 at 82% of its window" : undefined) });
+    const gated = plan(facts(), { hold: (f) => (f.party?.member === "mage" ? "credential claude-2 at 82% of its window" : undefined) });
     expect(gated.resume).toEqual([]);
     expect(gated.listed.every((l) => l.why.includes("82%"))).toBe(true);
     const busy = plan(facts(), { held: (a) => (a === "PARTY4" ? "fleet-other-run" : undefined) });
@@ -919,7 +916,7 @@ describe("a paused party is planned whole", () => {
       _notes: ["n"],
       accounts: { pool: ["RUNNER"] },
       roster: ROSTER,
-      policy: { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", LANE2] },
+      credentials: credentialsWith(),
       "campaign-defs": defsBlock(noResume),
       campaigns: { deadmines: { version: 1, assignments: [{ model: "son2" }], accounts: ACCOUNTS } },
       queue: [],
@@ -995,7 +992,7 @@ describe("the defer ladder", () => {
       episodeMs: 14_400_000,
       campaign: "deadmines",
       cell: "party",
-      subscription: LANE2,
+      credential: CRED2,
       ...over,
     });
     // The paladin's pod never pulled; the other four were ended with it before a response.

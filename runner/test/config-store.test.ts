@@ -52,7 +52,7 @@ function fixtureConfig(over: Record<string, unknown> = {}): Record<string, unkno
 
 describe("split and render", () => {
   test("a config round-trips through rows unchanged", () => {
-    const doc = fixtureConfig({ policy: { maxConcurrent: { openrouter: 1 } } });
+    const doc = fixtureConfig({ policy: { maxSessions: { "claude-code": 1 } } });
     expect(renderFleet(splitFleet(doc))).toEqual(doc);
   });
 

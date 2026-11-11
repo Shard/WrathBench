@@ -83,7 +83,7 @@ export default function Models() {
     // A run takes a slot on the first credential that serves its provider and
     // has room; a host carries only so many sessions of a driver. The
     // credentials are the operator's, so only the private build names them.
-    const creds = SNAPSHOT_MODE ? [] : (b.policy.credentials ?? []).filter((c) => c.enabled);
+    const creds = !SNAPSHOT_MODE ? (b.policy.credentials ?? []).filter((c) => c.enabled) : [];
     if (creds.length > 0) {
       lines.push(
         `A run takes a slot on the first credential that serves its provider and has room: ${creds

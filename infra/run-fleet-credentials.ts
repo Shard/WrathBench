@@ -113,7 +113,7 @@ export function credentialGate(
       const h = usageHoldOf(id, episode, model);
       if (h !== null) {
         const cls = gateClassOf(episode);
-        return h.threshold >= EXHAUSTED_PCT || cls === "spent-only"
+        return h.threshold >= EXHAUSTED_PCT || cls === "spent-only" || h.windows.some((w) => w.usedPercent >= EXHAUSTED_PCT)
           ? `credential ${id}: a usage window is spent — held until it resets`
           : `credential ${id}: at or over its ${cls} usage threshold — held until its usage window resets`;
       }
@@ -441,7 +441,15 @@ function ago(ms: number): string {
  * are held, and the newest failure that indicts it — plus the per-driver
  * session caps. Operator-only.
  */
-export function formatCredentialStatus(statuses: readonly CredentialStatus[], maxSessions: Readonly<Record<string, number>>, now: number): string[] {
+export function formatCredentialStatus(
+  statuses: readonly CredentialStatus[],
+  maxSessions: Readonly<Record<string, number>>,
+  now: number,
+  opts: {
+    /** How full a credential's own volume is (a Codex home's), appended to its line; undefined adds nothing. */
+    volumeOf?: (s: CredentialStatus) => string | undefined;
+  } = {},
+): string[] {
   const out: string[] = [];
   const caps = Object.entries(maxSessions).map(([d, n]) => `${d} <= ${n}`);
   if (statuses.length === 0) {
@@ -449,11 +457,12 @@ export function formatCredentialStatus(statuses: readonly CredentialStatus[], ma
   } else {
     out.push("credentials (a run takes a slot on the first enabled one that serves its provider and has room):");
     for (const s of statuses) {
-      const state = !s.enabled ? "disabled" : !s.secretSet ? `!! ${s.secretEnv} not set` : "ok";
+      const state = !s.enabled ? "disabled" : !s.secretSet ? "!! not set" : "ok";
       const held = s.held.scored !== undefined && s.held.freeplay !== undefined ? "starts HELD" : s.held.scored !== undefined ? "scored starts HELD" : s.held.freeplay !== undefined ? "freeplay HELD" : "open";
       const err = s.lastError !== null ? `; last ${s.lastError.reason} ${ago(now - s.lastError.at)}` : "";
+      const volume = opts.volumeOf?.(s);
       out.push(
-        `  ${s.id.padEnd(16)} ${s.provider.padEnd(12)} ${s.billing.padEnd(4)}  ${s.inUse}/${s.slots} slots  ${s.budget}${s.used !== null ? ` (${s.used})` : ""} — ${held}; ${s.secretEnv} ${state}${err}`,
+        `  ${s.id.padEnd(16)} ${s.provider.padEnd(12)} ${s.billing.padEnd(4)}  ${s.inUse}/${s.slots} slots  ${s.budget}${s.used !== null ? ` (${s.used})` : ""} — ${held}; ${s.secretEnv} ${state}${err}${volume !== undefined ? `; volume ${volume}` : ""}`,
       );
     }
   }

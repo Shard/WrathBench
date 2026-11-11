@@ -1443,7 +1443,8 @@ describe("claude driver: the subscription's usage windows", () => {
     const records = readTrajectory(runDir).filter((r) => r.t === "harness" && r["kind"] === "rate_limits");
     expect(records.map((r) => (r["windows"] as { usedPercent: number }[])[0]!.usedPercent)).toEqual([10, 15]);
     const meta = readMeta(runDir)!;
-    expect(meta.subscriptionUsage?.lane).toBe("claude-code:CLAUDE_CODE_OAUTH_TOKEN");
+    // A run launched with no credential records under its variable's name, which no credential id can be.
+    expect(meta.subscriptionUsage?.credential).toBe("env:CLAUDE_CODE_OAUTH_TOKEN");
     const all = readFileSync(join(runDir, "trajectory.jsonl"), "utf8") + JSON.stringify(meta);
     for (const word of ["overage", "canUserPurchaseCredits", "isUsingOverage"]) expect(all).not.toContain(word);
     trajectory.close();
