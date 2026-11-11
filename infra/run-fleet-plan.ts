@@ -39,9 +39,9 @@ import {
   type ProbeRun,
   type PublishedCampaign,
 } from "../runner/src/campaigns";
-import { cellDimensions } from "../runner/src/campaign-def";
+import { cellDimensions, isOneAgentArm } from "../runner/src/campaign-def";
 import { campaignFileOf, type CampaignFile } from "../runner/src/campaign-file";
-import { memberRunId } from "../runner/src/party";
+import { fanoutLaunchOf, memberRunId } from "../runner/src/party";
 import { stampedCompactWindow, type TerminationReason } from "../runner/src/config";
 import { driverEntry, isProbeOnlyDriver } from "../runner/src/drivers";
 import { isScoredEpisode } from "../runner/src/episodes";
@@ -49,6 +49,7 @@ import { classifyLapse, OFFLINE_PAUSE, PARTY_PAUSE, resumesOnPause, staleAfterMs
 import { driverOfEntry, placeRef, SlotBook, type CredentialGate, type PlacedCredential } from "./run-fleet-credentials";
 import type { Credential } from "../runner/src/credential-slots";
 import {
+  accountsOfRun,
   byNewestStart,
   entryOwnsRun,
   type HeldPick,
@@ -544,7 +545,10 @@ export function placeJob(
   const keys: string[] = [];
   for (const ref of job.refs) {
     const r = placeRef(roster[ref], job.episode, { ...o, book, pin: job.credential ?? roster[ref]?.credential, sessions });
-    if (!r.ok) return { ok: false, why: sessions > 1 ? `a party of ${sessions} starts whole or not at all: ${r.why}` : job.refs.length > 1 ? `${ref}: ${r.why}` : r.why };
+    if (!r.ok) {
+      const why = sessions > 1 ? `a party of ${sessions} starts whole or not at all: ${r.why}` : job.refs.length > 1 ? `${ref}: ${r.why}` : r.why;
+      return { ok: false, why: job.fanout === true ? `one agent on ${job.accounts?.length ?? 1} accounts: ${why}` : why };
+    }
     book.add(r.placement.keys, sessions);
     for (let i = 0; i < sessions; i++) keys.push(...r.placement.keys);
     placed[ref] = r.placement.credential;
@@ -559,7 +563,7 @@ export function placeJob(
  */
 export function countJob(
   book: SlotBook,
-  job: { refs: readonly string[]; placed?: FleetJob["placed"]; accounts?: readonly string[] | undefined },
+  job: { refs: readonly string[]; placed?: FleetJob["placed"]; accounts?: readonly string[] | undefined; fanout?: true | undefined },
   roster: Readonly<Record<string, FleetRosterEntry>>,
   runCredentials: ReadonlyMap<string, string>,
 ): void {
@@ -697,7 +701,8 @@ export function jobSpawn(
       `${stampedCompactWindow(base.compactWindow) !== undefined ? `-${slug(stampedCompactWindow(base.compactWindow)!)}` : ""}-${stamp}`;
     const attemptStem = (n: number | undefined): string => (n !== undefined && n > 1 ? `${idBase}-a${n}` : bareRunId(job.name, base, stamp));
     // A fresh campaign square numbers past every id on disk (`freshAttempt`).
-    const attempt = freshAttempt(job, attemptStem, probeFile?.definition.party?.members.map((m) => m.id));
+    // A one-agent arm's attempt is one run, so its id is the stem alone.
+    const attempt = freshAttempt(job, attemptStem, job.fanout === true ? undefined : probeFile?.definition.party?.members.map((m) => m.id));
     const runId = idBase + (attempt !== undefined && attempt > 1 ? `-a${attempt}` : "");
     // Copy k's id: the first is the attempt's, else the bare id `fillEntries`
     // stamps; the rest are `-r<k>`. A remainder skips every id already on disk
@@ -713,6 +718,7 @@ export function jobSpawn(
   }
   if (entries.length === 0 && owesNothing(job.owed?.copies)) fail(`job ${job.name}: its repeat is already met by counted runs — nothing to spawn`);
   if (entries.length === 0) fail(`job ${job.name}: no ref of ${job.ref} is eligible for ${job.episode}`);
+  if (job.accounts !== undefined && job.fanout === true) return fanoutSpawn(job, entries, probeFile);
   if (job.accounts !== undefined) return partySpawn(job, entries, probeFile, stamp);
   const spawn: JobSpawn = {
     name: job.name,
@@ -804,6 +810,30 @@ function partySpawn(job: FleetJob, entries: RosterSpec[], probeFile: CampaignFil
     entries: memberEntries,
     ...(job.resume !== undefined ? { resumeRunId: members[0]!.runId } : {}),
   };
+}
+
+/**
+ * A one-agent arm's spawn (`arms[].agents: 1`): the job's one entry, on the
+ * leader's account, with a campaign file that names every member's account
+ * and character (`fanout`), for the roster to stage and launch as one run.
+ * The spawn holds every account (`accounts`), as a party's does, so nothing
+ * else is placed on one while the run lives; a resume brings the run's own
+ * file, which already names them.
+ */
+function fanoutSpawn(job: FleetJob, entries: RosterSpec[], probeFile: CampaignFile | undefined): JobSpawn {
+  const party = probeFile?.definition.party;
+  const accounts = job.accounts!;
+  if (probeFile === undefined || party === undefined || !isOneAgentArm(probeFile.definition, probeFile.arm)) {
+    fail(`job ${job.name}: a fan-out job needs a party campaign's one-agent arm`);
+  }
+  if (accounts.length !== party.size) fail(`job ${job.name}: one agent on a party of ${party.size} needs ${party.size} accounts, the job holds ${accounts.length}`);
+  if (entries.length !== 1) fail(`job ${job.name}: a one-agent run is one model's — ${entries.length} entries to place`);
+  const launch = probeFile.fanout ?? fanoutLaunchOf(party, accounts);
+  const named = launch.members.map((m) => m.account.toUpperCase());
+  if (named.some((a, i) => a !== accounts[i]!.toUpperCase())) fail(`job ${job.name}: its campaign file names accounts ${named.join(", ")}, the job holds ${accounts.join(", ")}`);
+  const entry: RosterSpec = { ...entries[0]!, account: accounts[0]!, campaignFile: { ...probeFile, fanout: launch } };
+  const spawn: JobSpawn = { name: job.name, enabled: job.enabled, account: accounts[0]!, accounts: [...accounts], loop: false, entries: [entry] };
+  return job.resume === undefined ? spawn : withResume(spawn, job.resume);
 }
 
 /**
@@ -1089,7 +1119,7 @@ export function implicitPauses(opts: {
     // exits on "no meta.json" every tick, ahead of the model's real paused run.
     if (f.archived === true) return f;
     if (!f.runId.startsWith("fleet-") || running.has(f.runId)) return f;
-    if (f.account !== null && busy.has(f.account.toUpperCase())) return f;
+    if (onBusyAccount(f, busy)) return f;
     if (!resumesOnPause(f.episode, campaignResumeOf(opts.campaigns, f.campaign, f.campaignVersion ?? null))) return f;
     // Stamped either way — a run that is waiting out its proof still holds its
     // model, its account's character and the head, or the policy would start
@@ -1102,10 +1132,17 @@ export function implicitPauses(opts: {
   });
 }
 
+/** Whether any account a run holds (a fan-out run's every one) is on a live job's set. */
+function onBusyAccount(f: Pick<RunFact, "account" | "fanoutAccounts">, busy: ReadonlySet<string>): boolean {
+  return accountsOfRun(f).some((a) => busy.has(a.toUpperCase()));
+}
+
 /** A live fleet run that no job of the running supervisor owns (`unownedLiveRuns`). */
 export interface UnownedRun {
   runId: string;
   account: string;
+  /** Every account it holds, when that is more than `account`: a fan-out run's. */
+  accounts?: string[];
   /** The roster ref it plays; empty when no roster entry matches it any more. */
   refs: string[];
   model: string;
@@ -1152,15 +1189,18 @@ export function unownedLiveRuns(opts: {
   const names = Object.keys(opts.roster);
   for (const f of opts.runs) {
     if (!f.live || !f.runId.startsWith("fleet-") || f.account === null) continue;
-    if (opts.running.has(f.runId) || busy.has(f.account.toUpperCase())) continue;
+    if (opts.running.has(f.runId) || onBusyAccount(f, busy)) continue;
     const ref =
       (f.ref != null && opts.roster[f.ref] !== undefined ? f.ref : undefined) ??
       refOfRunId(f.runId, f.episode, names) ??
       names.find((n) => entryOwnsRun(opts.roster[n]!, f));
-    busy.add(f.account.toUpperCase());
+    // Every account the run holds: a fan-out run's whole grant.
+    const held = accountsOfRun(f);
+    for (const a of held) busy.add(a.toUpperCase());
     out.push({
       runId: f.runId,
       account: f.account,
+      ...(held.length > 1 ? { accounts: held } : {}),
       refs: ref !== undefined ? [ref] : [],
       model: f.model,
       episode: f.episode,
@@ -1207,7 +1247,7 @@ export function planStaleRuns(opts: {
   for (const f of opts.runs) {
     if (f.pause !== null || running.has(f.runId)) continue;
     if (!f.runId.startsWith("fleet-")) continue; // not the fleet's run, not the fleet's verdict
-    if (f.account !== null && busy.has(f.account.toUpperCase())) continue;
+    if (onBusyAccount(f, busy)) continue;
     const gap = staleForMs(f, opts.now);
     if (gap === null) continue;
     const lapse = classifyLapse({
@@ -1499,6 +1539,13 @@ export function planResumes(opts: {
           list(`campaign ${c.name} is pinned to ${c.account}, the run was on ${f.account} — resume by hand`);
           continue;
         }
+        // A one-agent arm's run holds the party's accounts, which the
+        // campaign must still be pinned to, in the same order.
+        const fanout = file.fanout?.members.map((m) => m.account);
+        if (fanout !== undefined && (c.accounts === undefined || c.accounts.length !== fanout.length || c.accounts.some((a, i) => a.toUpperCase() !== fanout[i]!.toUpperCase()))) {
+          list(`campaign ${c.name} is pinned to ${(c.accounts ?? [c.account]).join(", ")}, the run holds ${fanout.join(", ")} — resume by hand`);
+          continue;
+        }
         job = {
           refs: [ref],
           ref,
@@ -1510,6 +1557,7 @@ export function planResumes(opts: {
           source: "pinned",
           probe,
           campaignFile: file,
+          ...(fanout !== undefined ? { accounts: fanout, fanout: true as const } : {}),
         };
         account = c.account;
       } else {
@@ -1561,6 +1609,13 @@ export function planResumes(opts: {
       list("the run recorded no account — resume by hand");
       continue;
     }
+    // A fan-out run comes back holding every one of its accounts, and only as
+    // what the fleet launches one as: a party campaign's one-agent arm.
+    if (f.fanoutAccounts != null && job.fanout !== true) {
+      list(`a fan-out run on ${f.fanoutAccounts.join(", ")} comes back only as a party campaign's one-agent arm — resume by hand`);
+      continue;
+    }
+    const holds = job.fanout === true ? job.accounts! : [account];
     if (job.account === undefined && !poolSet.has(account.toUpperCase())) {
       list(`account ${account} is not in the account pool — resume by hand`);
       continue;
@@ -1587,16 +1642,18 @@ export function planResumes(opts: {
       list(gated, null, true);
       continue;
     }
-    if (takenAccounts.has(account.toUpperCase())) {
-      list(`waiting: account ${account} is busy (${[...opts.running].find(([, a]) => a.toUpperCase() === account!.toUpperCase())?.[0] ?? "another job"})`);
+    // Every account or none: a fan-out run never comes back on part of its grant.
+    const busyOne = holds.find((a) => takenAccounts.has(a.toUpperCase()));
+    if (busyOne !== undefined) {
+      list(`waiting: account ${busyOne} is busy (${[...opts.running].find(([, a]) => a.toUpperCase() === busyOne.toUpperCase())?.[0] ?? "another job"})`);
       continue;
     }
-    const holder = opts.held(account);
-    if (holder !== undefined && holder !== f.runId) {
-      list(`waiting: account ${account} is held by run ${holder}`);
+    const heldOne = holds.map((a) => [a, opts.held(a)] as const).find(([, h]) => h !== undefined && h !== f.runId);
+    if (heldOne !== undefined) {
+      list(`waiting: account ${heldOne[0]} is held by run ${heldOne[1]}`);
       continue;
     }
-    takenAccounts.add(account.toUpperCase());
+    for (const a of holds) takenAccounts.add(a.toUpperCase());
     takenJobs.add(job.name);
     resume.push({
       job: {
@@ -2549,8 +2606,13 @@ export const fmtElapsed = (ms: number): string => {
   return m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m` : `${m}m`;
 };
 
-/** How many sessions a job holds: a party's members, else one per ref. */
-export function sessionsOf(job: { accounts?: readonly string[] | undefined }): number {
+/**
+ * How many sessions a job holds on its credential and its driver's host cap:
+ * a party's members, else one per ref. A fan-out job holds every one of its
+ * accounts but runs one agent, so it takes one (`FleetJob.fanout`).
+ */
+export function sessionsOf(job: { accounts?: readonly string[] | undefined; fanout?: true | undefined }): number {
+  if (job.fanout === true) return 1;
   return job.accounts?.length ?? 1;
 }
 
@@ -2568,8 +2630,9 @@ export interface InFlight {
   source?: JobSource;
   /** Where its refs were placed, when the job says (`FleetJob.placed`); else each ref's live run says. */
   placed?: FleetJob["placed"];
-  /** A party's accounts: it holds a session per member. */
+  /** A party's accounts: it holds a session per member. A fan-out job's (`fanout`): it holds them all on one session. */
   accounts?: readonly string[];
+  fanout?: true;
 }
 
 /**
