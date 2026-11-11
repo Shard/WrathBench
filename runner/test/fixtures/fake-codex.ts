@@ -48,6 +48,10 @@
  *   enospc       like tools, but stderr carries the CLI's rollout-write
  *                failure on a full disk while the turn still completes.
  *
+ * $WB_FAKE_CALLS replaces the default turn's one `run_snippet` with a script:
+ * a JSON array indexed by turn, each entry the `{name, arguments}` calls that
+ * turn makes in order (none past the array's end). A fan-out run's script.
+ *
  * $WB_FAKE_ROLLOUT makes the default turn write the thread's rollout as well
  * (`writeRollout`), compactions, the turn's `turn_context` and the
  * subscription's `rate_limits` included.
@@ -254,6 +258,8 @@ if (mcp !== null) {
   });
   const listed = (await mcp.call("tools/list")) as { result?: { tools?: { name: string }[] } };
   record["mcpTools"] = (listed.result?.tools ?? []).map((t) => t.name);
+  // The whole `tools/list` result this process was served, one per turn: what a fan-out-1 golden hashes.
+  record["mcpToolsLists"] = [...((record["mcpToolsLists"] as unknown[] | undefined) ?? []), listed.result ?? null];
 }
 saveRecord();
 
@@ -281,16 +287,17 @@ function threadUsage(): typeof PER_TURN {
   };
 }
 
-/** One MCP tool call, as the real CLI reports it: an item started, then completed. */
-async function callTool(i: number): Promise<{ isError?: boolean; content?: { text?: string }[] } | undefined> {
-  const args = { code: `await sdk.say("inner ${i}")` };
-  emit({ type: "item.started", item: { id: `item_${i}`, type: "mcp_tool_call", server: "wrathbench", tool: "run_snippet", arguments: args, result: null, error: null, status: "in_progress" } });
-  const res = (await mcp!.call("tools/call", { name: "run_snippet", arguments: args })) as {
+/** One MCP tool call, as the real CLI reports it: an item started, then completed. A `run_snippet` saying `inner <i>` unless the call is named. */
+async function callTool(i: number, call?: { name: string; arguments: Record<string, unknown> }): Promise<{ isError?: boolean; content?: { text?: string }[] } | undefined> {
+  const tool = call?.name ?? "run_snippet";
+  const args = call?.arguments ?? { code: `await sdk.say("inner ${i}")` };
+  emit({ type: "item.started", item: { id: `item_${i}`, type: "mcp_tool_call", server: "wrathbench", tool, arguments: args, result: null, error: null, status: "in_progress" } });
+  const res = (await mcp!.call("tools/call", { name: tool, arguments: args })) as {
     result?: { isError?: boolean; content?: { text?: string }[] };
   };
   (record["toolResults"] as unknown[]).push(res["result"]);
   saveRecord();
-  emit({ type: "item.completed", item: { id: `item_${i}`, type: "mcp_tool_call", server: "wrathbench", tool: "run_snippet", arguments: args, result: res.result ?? null, error: null, status: "completed" } });
+  emit({ type: "item.completed", item: { id: `item_${i}`, type: "mcp_tool_call", server: "wrathbench", tool, arguments: args, result: res.result ?? null, error: null, status: "completed" } });
   return res.result;
 }
 
@@ -490,7 +497,12 @@ emit({ type: "item.completed", item: { id: "item_0", type: "agent_message", text
 if (mode === "reroute") {
   emit({ type: "item.completed", item: { id: "item_r", type: "error", message: "model rerouted: gpt-5.5 -> gpt-5.5-mini (HighRiskCyberActivity)" } });
 }
-if (mcp !== null) await callTool(1);
+if (mcp !== null) {
+  // $WB_FAKE_CALLS: a JSON array indexed by turn, each entry the `{name, arguments}` calls that turn makes.
+  const spec = Bun.env["WB_FAKE_CALLS"];
+  if (spec === undefined) await callTool(1);
+  else for (const [i, c] of ((JSON.parse(spec) as { name: string; arguments: Record<string, unknown> }[][])[turn - 1] ?? []).entries()) await callTool(i + 1, c);
+}
 emit({ type: "item.completed", item: { id: "item_2", type: "agent_message", text: `turn ${turn} done` } });
 writeRollout();
 emit({ type: "turn.completed", usage: threadUsage() });

@@ -68,8 +68,10 @@
  * `view_image`, `apply_patch` and the goal tools for `gpt-5.5` — inert under
  * `sandbox_mode="read-only"` in an empty temp cwd — and, for GPT-6 models, the
  * CLI's code mode (`functions.exec`, `functions.wait`) and collaboration tools
- * as well, which no flag here removes (runner/README.md, "The codex driver"). Our nine tools arrive via `mcp_servers.wrathbench.*`
- * overrides on the command line (`--ignore-user-config` keeps the operator's
+ * as well, which no flag here removes (runner/README.md, "The codex driver").
+ * Our tools (the nine, or a fan-out run's twelve: the CLI lists whatever the
+ * server serves, and the approval below is per server) arrive via
+ * `mcp_servers.wrathbench.*` overrides on the command line (`--ignore-user-config` keeps the operator's
  * ~/.codex/config.toml — trusted projects, other MCP servers — out of the run;
  * auth still comes from CODEX_HOME). Codex presents them to the model as
  * `mcp__wrathbench__<tool>` (`mcp__wrathbench.<tool>` before 0.159) and calls
