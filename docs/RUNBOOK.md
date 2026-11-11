@@ -101,7 +101,7 @@ reads `ownerless`.
 it, the same file runs in the pod from stdin:
 `kubectl -n wrathbench exec -i deploy/wrathbench-runner -- bun run - run <run-id> < infra/inspect-run.ts`.
 
-Those six read a run's row, its state samples and its trajectory from
+All but `session` read a run's row, its state samples and its trajectory from
 ClickHouse (the runner pod's `CLICKHOUSE_*`), never by walking a live 0.5
 run's `run.sqlite`: a full read of one held it against the runner's writer
 long enough to kill the run. The heartbeat, a few `meta.json` fields, file sizes,

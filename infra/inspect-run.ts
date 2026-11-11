@@ -1974,14 +1974,17 @@ export function costLine(c: CostTally): string {
   const cli = c.cli.size === 0 ? null : [...c.cli.values()].reduce((a, b) => a + b, 0);
   const charged: string[] = [];
   if (u.usd !== null) charged.push(`${fmtUsd(u.usd)} reported by the provider on ${u.costed} of ${u.responses} responses`);
-  if (cli !== null) charged.push(`${fmtUsd(cli)} the CLI's total_cost_usd over ${c.cli.size} session(s)`);
+  // The CLI's figure alone: the viewer adds the turns no result covered, at list (runner/viewer/pricing.ts `backfilled`).
+  if (cli !== null) charged.push(`${fmtUsd(cli)} the CLI's total_cost_usd over ${c.cli.size} session(s), turns it never reported left out`);
   const total = u.usd !== null && cli !== null ? `${fmtUsd(u.usd + cli)}: ` : "";
   const usd = charged.length === 0 ? "no charge reported by the provider (the viewer prices the tokens at list)" : `${total}${charged.join(" + ")}`;
   const cache = [u.cacheRead !== null ? `cache read ${fmtTokens(u.cacheRead)}` : null, u.cacheWrite !== null ? `write ${fmtTokens(u.cacheWrite)}` : null].filter((b) => b !== null);
+  // A claude-code response's output count is the turn's opening snapshot, far below what it produced (runner/viewer/tail.ts `tokenTotals`).
+  const out = cli !== null ? `out ${fmtTokens(u.output)} (claude-code's opening snapshots, not its output: the viewer's figure is)` : `out ${fmtTokens(u.output)}`;
   const tokens =
     u.reported === 0
       ? `no tokens reported on ${u.responses} responses`
-      : `tokens in ${fmtTokens(u.input)}${cache.length > 0 ? ` (${cache.join(", ")})` : ""}, out ${fmtTokens(u.output)}, reported on ${u.reported} of ${u.responses} responses`;
+      : `tokens in ${fmtTokens(u.input)}${cache.length > 0 ? ` (${cache.join(", ")})` : ""}, ${out}, reported on ${u.reported} of ${u.responses} responses`;
   return `over the run: ${usd} · ${tokens}`;
 }
 

@@ -226,7 +226,7 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE]] a
       const cost = line((await inspect(["run", FAN], store)).out, "cost");
       expect(cost).toContain("$2.00 the CLI's total_cost_usd over 2 session(s)");
       expect(reportedCostUsd(CLAUDE_TURNS as { t: string }[])).toBe(2);
-      expect(cost).toContain("tokens in 4.5k (cache read 1.5k, write 400), out 35");
+      expect(cost).toContain("tokens in 4.5k (cache read 1.5k, write 400), out 35 (claude-code's opening snapshots");
     });
 
     test("a fan-out run is its characters, one block each, its lead on the level line", async () => {

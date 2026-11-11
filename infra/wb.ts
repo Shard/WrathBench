@@ -277,7 +277,7 @@ export const ENTRIES: readonly Entry[] = [
     group: "inspect",
     command: "run",
     takes: "<run-id> [--since D] [--until D] [--files]",
-    summary: "live, paused, ended or ownerless; level, quests across restarts, counts, errors by class, sizes, trace",
+    summary: "live, paused, ended or ownerless; level (per character on a fan-out run), quests across restarts, counts, errors by class, marks, cost, sizes, trace",
     ...inRunner("bun", INSPECT_RUN, "run"),
   },
   {
