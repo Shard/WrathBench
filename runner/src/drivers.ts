@@ -171,10 +171,10 @@ export interface DriverEntry {
   /** Whether `policy.maxSessions` may cap how many of its sessions one host carries. */
   sessionCap: boolean;
   /**
-   * Reaches an OpenAI-compatible endpoint by base and key: it takes `apiBase`,
-   * `apiKeyEnv` and a declared `billing`, the provider table guards the pair,
-   * a run pod keeps that one key, and a free-platform cap or an OpenCode Go
-   * allowance applies to it.
+   * Reaches an OpenAI-compatible endpoint by base and key: it takes `apiBase`
+   * and a declared `billing`, its key is its credential's (`apiKeyEnv` on the
+   * run), the provider table guards where that key goes, and a run pod keeps
+   * that one key.
    */
   endpoint: boolean;
   /**

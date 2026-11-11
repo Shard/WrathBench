@@ -11,7 +11,8 @@
  * the config store; a hand-written roster is the ad-hoc path.
  *
  * Every entry is config: `model`, `driver` (openai | claude-code),
- * `account`, `effort`, `apiBase`/`apiKeyEnv`/`billing` (openai only),
+ * `account`, `effort`, `apiBase`/`apiKeyEnv`/`billing` (openai only; the fleet
+ * names the key through `placedOn`, the credential it placed the run on),
  * `race`/`class`, `episodeMs`. No name: the model names its own character and
  * the run records what it chose. Everything but `model` has a default, so the old shape — a bare
  * list of `{ "model": ... }` — still means exactly what it meant before.
