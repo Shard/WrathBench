@@ -171,6 +171,13 @@ export const ENTRIES: readonly Entry[] = [
   { group: "config", command: "audit", takes: "[n]", summary: "the last n changes", ...inRunner("bun", CONFIG_STORE, "audit") },
   {
     group: "config",
+    command: "credentials",
+    takes: "[list | add <id> <json> | edit <id> <json> | disable <id>]",
+    summary: "the provider credentials runs take slots on; validated, never a secret",
+    ...inRunner("bun", CONFIG_STORE, "credentials"),
+  },
+  {
+    group: "config",
     command: "move-lane",
     takes: "<run-id> <ENV NAME> --note <why> [--pin]",
     summary: "move a paused or ended run to another subscription lane: its meta.json, then (--pin) its roster entry's pin",

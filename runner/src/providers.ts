@@ -65,6 +65,18 @@ export const KEY_PROVIDERS: readonly KeyProvider[] = [
   { keyEnv: "LMSTUDIO_KEY", provider: "the self-hosted model server", hosts: [], local: true },
 ];
 
+/**
+ * The provider row a key NAME belongs to: its row's `keyEnv`, or that name
+ * with a numbered suffix (`OPENROUTER_KEY_2`) for a second key of the same
+ * provider, as a second Claude subscription is `CLAUDE_CODE_OAUTH_TOKEN_2`.
+ * The suffix is the only freedom: a key name is still never configurable
+ * beyond the provider it belongs to, so a numbered key goes only where its
+ * row's key goes.
+ */
+export function keyProviderOf(keyEnv: string): KeyProvider | undefined {
+  return KEY_PROVIDERS.find((p) => keyEnv === p.keyEnv || new RegExp(`^${p.keyEnv}_[0-9]+$`).test(keyEnv));
+}
+
 /** What an openai-driver run uses when it states no base and no key name. */
 export const DEFAULT_API_BASE = "https://openrouter.ai/api/v1";
 export const DEFAULT_API_KEY_ENV = "OPENROUTER_KEY";
@@ -114,11 +126,11 @@ export function apiKeyRefusal(
   if (NEVER_A_PROVIDER_KEY.some((re) => re.test(keyEnv))) {
     return `apiKeyEnv ${keyEnv} names a harness or infrastructure credential, never a model provider's key`;
   }
-  const row = KEY_PROVIDERS.find((p) => p.keyEnv === keyEnv);
+  const row = keyProviderOf(keyEnv);
   if (row === undefined) {
     return (
       `apiKeyEnv ${keyEnv} is not a provider key this harness sends anywhere ` +
-      `(one of: ${KEY_PROVIDERS.map((p) => p.keyEnv).join(", ")}) — a new provider is a row in runner/src/providers.ts`
+      `(one of: ${KEY_PROVIDERS.map((p) => p.keyEnv).join(", ")}, or one of those with a numbered suffix) — a new provider is a row in runner/src/providers.ts`
     );
   }
   if (apiBase === undefined || apiBase.trim().length === 0) return `${keyEnv} has no apiBase to be sent to`;
@@ -156,7 +168,7 @@ export function apiKeyRefusal(
  * `apiKeyRefusal`, so the pair itself is already one the table allows.
  */
 export function piProviderOf(keyEnv: string): { provider: string } | { refusal: string } {
-  const row = KEY_PROVIDERS.find((p) => p.keyEnv === keyEnv);
+  const row = keyProviderOf(keyEnv);
   if (row?.piProvider !== undefined) return { provider: row.piProvider };
   const have = KEY_PROVIDERS.filter((p) => p.piProvider !== undefined).map((p) => `${p.keyEnv} (${p.provider})`);
   return {
