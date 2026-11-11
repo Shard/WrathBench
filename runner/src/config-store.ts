@@ -63,6 +63,7 @@ import {
   type PublishedCampaignDoc,
 } from "./campaign-def";
 import { campaignRowProblem } from "./campaigns";
+import { describeBudget, parseCredentials, type Credential } from "./credentials";
 
 /** How long a reader waits for the single writer. Same posture as `rundb.ts`. */
 export const CONFIG_DB_BUSY_TIMEOUT_MS = 5000;
@@ -76,10 +77,10 @@ export const CONFIG_DB_BUSY_TIMEOUT_MS = 5000;
  * unknown top-level keys, and silently round-tripping something nothing reads
  * would make the store a place to hide config that does nothing.
  */
-export const TOP_LEVEL_KEYS = ["_notes", "preflight", "accounts", "roster", "policy", "campaign-defs", "campaigns", "queue"] as const;
+export const TOP_LEVEL_KEYS = ["_notes", "preflight", "accounts", "credentials", "roster", "policy", "campaign-defs", "campaigns", "queue"] as const;
 
 /** The keys whose entries get a row each. Everything else is a singleton row. */
-export const COLLECTION_KEYS = ["roster", "campaign-defs", "campaigns", "queue"] as const;
+export const COLLECTION_KEYS = ["credentials", "roster", "campaign-defs", "campaigns", "queue"] as const;
 export type CollectionKey = (typeof COLLECTION_KEYS)[number];
 
 function isCollection(k: string): k is CollectionKey {
@@ -845,6 +846,15 @@ const USAGE = `usage: bun runner/src/config-store.ts <command>
                             runner/src/campaign-publish.ts --k8s pipes in; campaign-defs/* is refused by
                             set, patch and delete, and seed writes none)
   audit [n]                 the last n changes (default 20)
+  credentials [list]        the provider credentials, in preference order: provider, secret env NAME, slots,
+                            budget, billing, enabled (runner/src/credentials.ts)
+  credentials add <id> <json>
+                            a new credential, e.g. '{"provider":"claude","secretEnv":"CLAUDE_CODE_OAUTH_TOKEN_2",
+                            "slots":1,"budget":{"kind":"usage"},"billing":"paid","enabled":true}'; validated, never
+                            a secret (secretEnv is the env var's NAME)
+  credentials edit <id> <json>
+                            merge into one credential; validated
+  credentials disable <id>  stop new runs taking it; live runs on it finish
   move-lane <run-id> <ENV NAME> --note <why> [--pin]
                             move a paused or ended run to another subscription lane: rewrite its meta.json's
                             config.subscription and append to its laneHistory; with --pin, then pin its roster
@@ -960,6 +970,8 @@ async function main(argv: string[]): Promise<number> {
         }
         return 0;
       }
+      case "credentials":
+        return credentialsCommand(store, args, opts);
       case "move-lane": {
         const [runId, to] = args;
         if (runId === undefined || to === undefined || args.length > 2 || note === undefined) {
@@ -990,6 +1002,78 @@ async function main(argv: string[]): Promise<number> {
     return 1;
   } finally {
     store.close();
+  }
+}
+
+/** The credential rows, parsed as the supervisor parses them. */
+export function storedCredentials(store: ConfigStore): Credential[] {
+  return parseCredentials(store.render()["credentials"]);
+}
+
+/** One credential as a list line: everything but the secret, which the store never holds. */
+export function credentialLine(c: Credential): string {
+  return [
+    c.id.padEnd(16),
+    c.provider.padEnd(12),
+    c.secretEnv.padEnd(28),
+    `${c.slots} slot${c.slots === 1 ? "" : "s"}`.padEnd(8),
+    describeBudget(c.budget).padEnd(34),
+    c.billing.padEnd(5),
+    c.enabled ? "enabled" : "disabled",
+  ].join("  ");
+}
+
+/** `credentials list|add|edit|disable`: the credential rows through the same validated writes as `set` and `patch`. */
+async function credentialsCommand(store: ConfigStore, args: string[], opts: PutOptions): Promise<number> {
+  const [sub = "list", id, raw] = args;
+  const key = `credentials/${id ?? ""}`;
+  switch (sub) {
+    case "list": {
+      const creds = storedCredentials(store);
+      if (creds.length === 0) {
+        console.log("no credentials — add one: credentials add <id> <json>");
+        return 0;
+      }
+      for (const c of creds) console.log(credentialLine(c));
+      return 0;
+    }
+    case "add":
+    case "edit": {
+      if (id === undefined || raw === undefined) {
+        console.error(USAGE);
+        return 2;
+      }
+      const doc = JSON.parse(raw === "-" ? await Bun.stdin.text() : raw) as unknown;
+      const exists = store.get(key) !== undefined;
+      if (sub === "add" && exists) {
+        console.error(`credentials/${id} exists — edit it instead`);
+        return 1;
+      }
+      if (sub === "edit" && !exists) {
+        console.error(`no credential ${id} — add it first`);
+        return 1;
+      }
+      if (sub === "add") store.put(key, doc, opts);
+      else store.patch(key, doc, opts);
+      console.error(`${sub === "add" ? "added" : "edited"} credentials/${id}`);
+      return 0;
+    }
+    case "disable": {
+      if (id === undefined) {
+        console.error(USAGE);
+        return 2;
+      }
+      if (store.get(key) === undefined) {
+        console.error(`no credential ${id}`);
+        return 1;
+      }
+      store.patch(key, { enabled: false }, opts);
+      console.error(`disabled credentials/${id}: no new run takes it; live runs on it finish`);
+      return 0;
+    }
+    default:
+      console.error(USAGE);
+      return 2;
   }
 }
 
