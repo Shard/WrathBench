@@ -128,11 +128,23 @@ smoke's name in `data/runs/smoke-sessions.jsonl`, so `--smoke <name>` (or
 
 `stuck` is the detector for a run that keeps talking while its character goes
 nowhere. It judges a trailing window (two hours by default, ending now, or at
-an ended run's last record, or at `--until`) from the `state` records: any
+an ended run's last record, or at `--until`) from the character's samples: any
 rise in level, xp or quests, any change of money, items or map, or straying
 more than 50 yards from where the window began is progress, and none of it is
-`STUCK`. Samples more than 15 minutes apart, or not reaching either end of the
-window, leave it `unjudged`, so a young or just-resumed run is never flagged.
+`STUCK`. The window must be covered, or the verdict is `unjudged`, since
+nothing recorded is not no progress; a young or just-resumed run is never
+flagged. What covers it depends on the run:
+
+- a 0.5 run sampled its state every minute (`state` rows), so its samples
+  must be at most 15 minutes apart and reach both ends of the window;
+- a v1 run's trace writes a change and nothing between, so a character
+  standing still has no trace row for hours. Its window is covered by the
+  record's other writes as well: the `calls` and `events` rows and
+  `live.json`'s heartbeat. The reading it starts from is the newest sample
+  before the window, so a level gained just inside it is still progress. A
+  character standing still while its record is written reads `STUCK`; a gap
+  of more than 15 minutes with nothing written at all reads `unjudged`.
+
 Only that verdict flags a run. Beside it, each marked tripped or not with its
 count: the same error repeated (digits folded), the harness-delivered hint
 tallies, `events_served` records carrying a `schemaError`, sandbox restarts,
@@ -141,10 +153,11 @@ operator. With no run id it prints one line per run with a live owner. Every
 threshold is a flag; the defaults are `STUCK_DEFAULTS` in
 `infra/inspect-run.ts`. It reports and nothing more: no record is written and
 nothing acts on the run. `bun wb fleet status` flags a live run with the same
-verdict (`!! STUCK: …` on its account row) from its newest samples (a v1
-run's trace, folded on from the last poll; a 0.5 run's newest `run.sqlite`
-state rows by rowid), a few milliseconds per live run;
-the failure signals are `inspect stuck`'s alone.
+verdict, by the same rule for each kind of run (`!! STUCK: …` on its account
+row), from its newest samples (a v1 run's trace with its record's other
+writes, folded on from the last poll; a 0.5 run's newest `run.sqlite` state
+rows by rowid), a few milliseconds per live run. The flag is reported only:
+the fleet never acts on it. The failure signals are `inspect stuck`'s alone.
 
 ### Where the config lives
 
