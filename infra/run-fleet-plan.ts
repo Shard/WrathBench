@@ -972,11 +972,13 @@ export interface PausedListing {
   why: string;
   /**
    * Set when the wait is a subscription usage window's — a `subscription-budget`
-   * pause, a spent quota's reset, a credential's usage budget — whose figures are the
-   * operator's: the public projection withholds `resumeAfter` and `why` then.
+   * pause, a spent quota's reset — or any credential's hold, whose figures and
+   * name are the operator's: the public projection withholds `resumeAfter` and
+   * `why` then. Kept on every credential hold, not only a usage one, so a
+   * projection that predates `hold` still withholds them.
    */
   subscriptionWait?: true;
-  /** What kind of credential hold this is, when the credential holds it (`FleetPausedView.hold`). */
+  /** What kind of credential hold this is, when the credential holds it (`FleetPausedView.hold`): the public phrase. */
   hold?: CredentialHold["kind"];
 }
 
@@ -1640,11 +1642,11 @@ export function planResumes(opts: {
     // The credential's budget: one at or over this run's threshold holds the
     // resume until its window resets (operator, 2026-10-16), and a credential
     // gone or disabled holds it until the operator says otherwise.
-    // Only a usage window's hold is a subscription wait; a day's budget and a
-    // credential gone or disabled say so as themselves (`hold`).
+    // Every credential hold is withheld publicly (`subscriptionWait`, which a
+    // projection of any build keys on), and `hold` says which kind it is.
     const gated = opts.credentialHold?.(f);
     if (gated !== undefined) {
-      list(gated.why, null, gated.kind === "usage", gated.kind);
+      list(gated.why, null, true, gated.kind);
       continue;
     }
     // Every account or none: a fan-out run never comes back on part of its grant.
@@ -1791,7 +1793,7 @@ function planPartyResume(
   }
   for (const f of ordered) {
     const gated = o.credentialHold?.(f);
-    if (gated !== undefined) return listAll(gated.why, null, gated.kind === "usage", gated.kind);
+    if (gated !== undefined) return listAll(gated.why, null, true, gated.kind);
   }
   for (const [i, a] of accounts.entries()) {
     if (o.takenAccounts.has(a.toUpperCase())) {

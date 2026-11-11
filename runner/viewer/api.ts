@@ -1724,7 +1724,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       // says "running (one character per model)" exactly where --status does.
       const cold = coldRuns(await store.runListing(), now);
       const running = new Set(readFleet(runsDir, now, cold).jobs.flatMap((j) => j.ref.split("+")));
-      const body: ModelsResponse = modelsResponse({ states, runs, runsDir, roster, now, harness, running });
+      const body: ModelsResponse = modelsResponse({ states, runs, runsDir, roster, now, harness, running, evals: groups.evals });
       /*
        * Cost is attached here rather than in the projection: `runner/src/models.ts`
        * is what the supervisor schedules on and knows nothing about prices, and

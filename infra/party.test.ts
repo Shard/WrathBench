@@ -939,9 +939,9 @@ describe("a paused party is planned whole", () => {
     const gated = plan(facts(), { hold: (f) => (f.party?.member === "mage" ? { why: "credential claude-2 at 82% of its window", kind: "usage" } : undefined) });
     expect(gated.resume).toEqual([]);
     expect(gated.listed.every((l) => l.why.includes("82%") && l.subscriptionWait === true && l.hold === "usage")).toBe(true);
-    // A day's budget holds the party as itself, not as a usage window.
+    // A day's budget holds the party as itself, not as a usage window, and is withheld publicly all the same.
     const budget = plan(facts(), { hold: (f) => (f.party?.member === "mage" ? { why: "credential claude-2: its runs for the day are used", kind: "runs" } : undefined) });
-    expect(budget.listed.every((l) => l.hold === "runs" && l.subscriptionWait === undefined)).toBe(true);
+    expect(budget.listed.every((l) => l.hold === "runs" && l.subscriptionWait === true)).toBe(true);
     const busy = plan(facts(), { held: (a) => (a === "PARTY4" ? "fleet-other-run" : undefined) });
     expect(busy.resume).toEqual([]);
     expect(busy.listed[0]!.why).toContain("PARTY4 is held by run fleet-other-run");

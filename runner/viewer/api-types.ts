@@ -1431,16 +1431,18 @@ export interface FleetPausedView {
   budgetMs: number | null;
   why: string;
   /**
-   * The wait is a subscription usage window's (operator, 2026-10-16): its
-   * reset time is the operator's, so the public build withholds `resumeAfter`
-   * and `why` on such a row. Absent on every other row.
+   * The wait is a subscription usage window's (operator, 2026-10-16) or any
+   * credential's hold: its reset time and the credential are the operator's,
+   * so the public build withholds `resumeAfter` and `why` on such a row.
+   * Absent on every other row.
    */
   subscriptionWait?: true;
   /**
    * What holds the resume when its credential does: a usage window, the
    * day's runs or spend budget, or the credential gone or disabled. The
-   * public build says which in a fixed phrase and withholds the rest (the
-   * credential's id and figures). Absent when the credential holds nothing.
+   * public build says which in a fixed phrase. Absent when the credential
+   * holds nothing (and on a row from a supervisor that predates it, which
+   * reads as a usage window).
    */
   hold?: CredentialHoldKind;
 }

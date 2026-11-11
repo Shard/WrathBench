@@ -389,8 +389,8 @@ describe("resumes and the pause a usage budget writes", () => {
     const runsCfg = { ...config, credentials: config.credentials.map((c) => (c.id === "chatgpt-1" ? { ...c, budget: { kind: "runs" as const, perDay: 1 } } : c)) };
     const spentRuns = credentialGate(runsCfg.credentials, [], [fact({ runId: "today", credential: "chatgpt-1", startedAt: NOW - 60_000 })], NOW);
     const budget = planResumes({ runs: [paused({ pause: { reason: "operator-pause", at: NOW - 60_000, count: 1, episodeElapsedMs: null } })], config: series, running: new Map(), held: () => undefined, now: NOW, credentialHold: (f) => resumeHoldOf(f, runsCfg, spentRuns) });
-    expect(budget.listed).toEqual([expect.objectContaining({ hold: "runs", resumeAfter: null })]);
-    expect(budget.listed[0]!.subscriptionWait).toBeUndefined();
+    // Still withheld under the flag a projection of any build keys on.
+    expect(budget.listed).toEqual([expect.objectContaining({ hold: "runs", subscriptionWait: true, resumeAfter: null })]);
     // Open: it comes back on its account.
     const open = planResumes({ runs: [paused()], config: series, running: new Map(), held: () => undefined, now: NOW, credentialHold: () => undefined });
     expect(open.resume.map((r) => [r.runId, r.account])).toEqual([["fleet-cx-freeplay-gpt-5-5-20300101", "RUNNER"]]);
@@ -419,7 +419,7 @@ describe("resumes and the pause a usage budget writes", () => {
     expect(JSON.stringify(out)).not.toContain("subscriptionWait");
     // A credential's hold says only its kind, whatever the row's own sentence.
     const held = (hold: "usage" | "runs" | "spend" | "credential", why: string) =>
-      projectFleet({ ...input, paused: [{ ...listing, resumeAfter: null, why, ...(hold === "usage" ? { subscriptionWait: true as const } : {}), hold }] } as unknown as FleetResponse).paused[0];
+      projectFleet({ ...input, paused: [{ ...listing, resumeAfter: null, why, subscriptionWait: true as const, hold }] } as unknown as FleetResponse).paused[0];
     expect(held("usage", "credential chatgpt-1: a usage window is spent — held until it resets")).toMatchObject({ why: "waiting for its subscription usage window to reset" });
     expect(held("runs", "credential chatgpt-1: its runs for the day are used — held until 00:00 UTC")).toMatchObject({ why: "waiting for its daily run budget to reset", resumeAfter: null });
     expect(held("spend", "party p: credential chatgpt-1: its spend budget for the day is used — held until 00:00 UTC")).toMatchObject({ why: "waiting for its daily spend budget to reset" });

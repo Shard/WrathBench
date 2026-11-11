@@ -25,6 +25,7 @@ import {
 import { parseFleet, rosterModels, withoutEvals } from "../../infra/run-fleet-config";
 import { forGroups, formatGroupsBanner, formatModels, formatOutstandingFor, formatQueue, planDryRun } from "../../infra/run-fleet-status";
 import { modelStates } from "../src/models";
+import { rowOf } from "../viewer/models";
 
 const roots: string[] = [];
 afterAll(() => {
@@ -198,6 +199,12 @@ describe("bun wb fleet status with evals off", () => {
     const input = { states, accounts: 2 };
     expect(formatOutstandingFor(input, true)).toMatch(/^outstanding: \d/);
     expect(formatOutstandingFor(input, false)).toBe("outstanding: none — the evals group is off");
+  });
+
+  test("the viewer's models table gives the same verdict", () => {
+    const a = states.find((st) => st.name === "a")!;
+    expect(rowOf(a, [], "/nowhere").schedulable).toMatchObject({ ok: true });
+    expect(rowOf(a, [], "/nowhere", new Set(), cfg.policy, false).schedulable).toMatchObject({ why: "the evals group is off" });
   });
 
   test("the dry-run plans no scored pick, only the idle freeplay session", () => {
