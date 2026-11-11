@@ -1752,8 +1752,10 @@ same store while the fleet is up: both would spawn jobs on the same accounts.
 
 ### A fan-out run, by hand
 
-One agent driving several characters (Shard/wrath-mcp#29) is launched by
-hand for now: the fleet does not plan one.
+One agent driving several characters (Shard/wrath-mcp#29). The fleet
+launches one only as a party campaign's one-agent arm (docs/EPISODES.md,
+"One agent, the whole party"), on the party's pinned accounts, staged as the
+party is; anything else is launched by hand.
 
 ```
 bun runner/src/run.ts --driver <driver> --model <id> [--objective "<text>"] \
@@ -1767,12 +1769,13 @@ bun runner/src/run.ts --driver <driver> --model <id> [--objective "<text>"] \
   single-character one, unchanged.
 - It is refused for a scored episode (`e90`, `e360`), a party member and a
   continuation: a fan-out run is a probe until its eval is defined.
-- **The accounts must be ones nothing else will launch on.** The supervisor
-  knows a run by its one `account` (the first listed) and would hand the
-  others to another job, whose create reclaims the account and logs the
-  fan-out run's character out. Use accounts outside the fleet's pool, or
-  launch with the fleet drained. Each must be on the module's allowlist
-  ("The account pool").
+- The supervisor counts every account a live fan-out run's grant names
+  (`config.fanout.accounts` in its `meta.json`) as held, pool accounts
+  included, so the queue and the policy leave them alone and a roster waits
+  for all of them. A paused run's accounts are reserved only by its resume,
+  which the fleet plans for a run it launched; a paused hand launch on pool
+  accounts is not protected, so resume it or launch on accounts outside the
+  pool. Each must be on the module's allowlist ("The account pool").
 - Launch hygiene clears every listed account, as it clears the one account of
   any fresh run.
 - The run directory has `sessions/<Character>/` (a session record per

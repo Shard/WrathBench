@@ -86,6 +86,9 @@ export const PROBE_SHAPE_FLAGS = [
   "no-xp-ms",
   "episode-ms",
   "watchdogs-json",
+  // A probe's fan-out grant is its arm's (`arms[].agents`), from the file.
+  "max-characters",
+  "accounts",
 ] as const satisfies readonly RunFlag[];
 
 /**

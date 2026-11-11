@@ -23,8 +23,10 @@
  * `~` and the character's name, and its windows carry that: `~` never occurs
  * in a run id (`isValidRunId` in `runs.ts` allows letters, digits, `.`, `_`
  * and `-`), so the split is unambiguous, and it needs no escaping in a URL
- * path. A fan-out run's own id opens nothing, since no one character is the
- * run, and its sessions are listed with the run id as their `group`. The
+ * path (`FANOUT_SEP`, `run-reader.ts`). A fan-out run's own id opens
+ * nothing, since no one character is the run, and its sessions are listed
+ * with the run id as their `group`; the API's replay routes open a character
+ * by its id (`fanoutSession`). The
  * viewer serves its handle as the operator; nothing it serves is scoped to a
  * user.
  */
@@ -32,17 +34,14 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { StoredSessionHandle, inScope, type SessionEntry, type SessionHandle, type SessionScope, type SessionSource } from "@wrathbench/inspector";
-import { fanoutCharacters, fanoutSessionDir, isFanoutRunDir, SESSIONS_DIR } from "../src/run-reader";
+import { FANOUT_SEP, fanoutCharacters, fanoutSessionDir, fanoutSessionId, isFanoutRunDir, parseFanoutSessionId, SESSIONS_DIR } from "../src/run-reader";
 import { legacy05Session } from "./legacy05-source";
 import { runDir } from "./runs";
 
-export { SESSIONS_DIR };
+export { FANOUT_SEP, fanoutSessionId, SESSIONS_DIR };
 
 /** The session record's directory inside a run directory (`runner/src/session-record.ts`). */
 export const SESSION_DIR = "session";
-
-/** What joins a fan-out run's id to one of its characters' names in a session id. */
-export const FANOUT_SEP = "~";
 
 /** Whether a run directory holds a single-character v1 session record. */
 export function isV1Run(runsDir: string, runId: string): boolean {
@@ -52,11 +51,6 @@ export function isV1Run(runsDir: string, runId: string): boolean {
 /** Whether a run is a fan-out run (`isFanoutRunDir`): several characters, a record each. */
 export function isFanoutRun(runsDir: string, runId: string): boolean {
   return isFanoutRunDir(join(runsDir, runId));
-}
-
-/** A fan-out character's session id. */
-export function fanoutSessionId(runId: string, character: string): string {
-  return `${runId}${FANOUT_SEP}${character}`;
 }
 
 /** A fan-out run's sessions, one per character with a record, in name order; empty for any other run. */
@@ -79,13 +73,12 @@ export function runSession(runsDir: string, runId: string): SessionHandle {
  * null when the id is not one: a run that is not a fan-out run, a name that
  * is not letters only, or a character with no record there.
  */
-function fanoutSession(runsDir: string, id: string): SessionHandle | null {
-  const at = id.indexOf(FANOUT_SEP);
-  if (at < 0) return null;
-  const runId = id.slice(0, at);
-  const dir = runDir(runsDir, runId);
+export function fanoutSession(runsDir: string, id: string): SessionHandle | null {
+  const named = parseFanoutSessionId(id);
+  if (named === null) return null;
+  const dir = runDir(runsDir, named.runId);
   if (dir === null || !isFanoutRunDir(dir)) return null;
-  const sessionDir = fanoutSessionDir(dir, id.slice(at + FANOUT_SEP.length));
+  const sessionDir = fanoutSessionDir(dir, named.character);
   if (sessionDir === null || !existsSync(join(sessionDir, "session.json"))) return null;
   return new StoredSessionHandle(id, sessionDir);
 }

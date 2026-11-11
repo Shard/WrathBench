@@ -9,7 +9,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Trajectory } from "../../runner/src/trajectory";
@@ -27,7 +27,7 @@ import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tai
 import { readRunFact } from "../../runner/src/models";
 import { writeLegacy05Run } from "../../runner/test/fixtures/legacy05-writer";
 import { readRunRow } from "../../runner/src/run-reader";
-import { traceSamplesOf } from "../../runner/src/run-reader";
+import { characterSamplesOf, traceSamplesOf } from "../../runner/src/run-reader";
 import { materialiseV1p1, V1P1_RUN } from "../../runner/test/fixtures/v1p1";
 import { openTestSession, recordDrain, recordedMove } from "../../runner/test/fixtures/v1-session";
 import { FANOUT_ROSTER_TOKEN, FANOUT_RUN, writeFanoutRun } from "../../runner/test/fixtures/fanout";
@@ -211,13 +211,18 @@ describe("a pass over one run", () => {
     expect(rowsOf(sink, "moves")).toHaveLength(2);
   });
 
-  test("a fan-out run ingests its run row and trajectory, skips its characters' records with one log line, and leaves a single run's rows alone", async () => {
+  test("a fan-out run's characters' rows carry their session ids, the run's own id carries its row and trajectory, and a single run's rows are as they were", async () => {
     const runsDir = tmpRoot();
     materialiseV1p1(runsDir);
-    await writeFanoutRun(runsDir);
+    await writeFanoutRun(runsDir, { closed: true });
+    // A model and an episode, so the scheduler's reader has a fact to give: a probe's.
+    const metaPath = join(runsDir, FANOUT_RUN, "meta.json");
+    const meta = JSON.parse(readFileSync(metaPath, "utf8")) as { config: Record<string, unknown>; comparability?: Record<string, unknown> };
+    meta.config["model"] = "fixture/fanout-model";
+    meta.comparability = { ...meta.comparability, episode: "probing" };
+    writeFileSync(metaPath, JSON.stringify(meta));
     const sink = memorySink();
-    const logged: string[] = [];
-    const collector = new Collector({ cfg: readConfig({ runsDir, dataDir: runsDir, stateDb: ":memory:" }), sink, offsets: new OffsetStore(":memory:"), log: (m) => logged.push(m) });
+    const collector = new Collector({ cfg: readConfig({ runsDir, dataDir: runsDir, stateDb: ":memory:" }), sink, offsets: new OffsetStore(":memory:"), log: () => {} });
     await collector.pass();
     const runs = rowsOf(sink, "runs").map((r) => r["run_id"]);
     expect(runs.sort()).toEqual([FANOUT_RUN, V1P1_RUN].sort());
@@ -225,15 +230,33 @@ describe("a pass over one run", () => {
     expect(rowsOf(sink, "runs").find((r) => r["run_id"] === FANOUT_RUN)?.["character"]).toBe("");
     expect(rowsOf(sink, "turns").some((r) => r["run_id"] === FANOUT_RUN)).toBe(true);
     for (const table of ["states", "milestones", "moves"]) expect({ table, fanout: rowsOf(sink, table).filter((r) => r["run_id"] === FANOUT_RUN).length }).toEqual({ table, fanout: 0 });
+    const states = (id: string) => rowsOf(sink, "states").filter((r) => r["run_id"] === id).map((r) => [r["seq"], r["level"], r["xp"], r["x"]]);
+    const dir = join(runsDir, FANOUT_RUN);
+    expect(states(`${FANOUT_RUN}~Alfa`)).toEqual(characterSamplesOf(dir, "Alfa").map((r) => [r.seq, r.level, r.xp, r.x]));
+    expect(states(`${FANOUT_RUN}~Alfa`).map((r) => r[1])).toEqual([5]);
+    expect(states(`${FANOUT_RUN}~Bravo`).map((r) => r[1])).toEqual([3]);
+    // The scheduler's fact reads the lead's level.
+    const fact = JSON.parse(String(rowsOf(sink, "run_totals").find((r) => r["run_id"] === FANOUT_RUN)?.["fact_json"])) as { bestLevel: number | null };
+    expect(fact.bestLevel).toBe(5);
     // The single-character run beside it reads as it does alone.
-    expect(rowsOf(sink, "states").length).toBe(traceSamplesOf(join(runsDir, V1P1_RUN)).length);
-    expect(logged.filter((m) => m.includes(FANOUT_RUN))).toHaveLength(1);
-    // Touch the trajectory so the next pass reads the run again: still one line.
-    appendFileSync(join(runsDir, FANOUT_RUN, "trajectory.jsonl"), "");
-    writeFileSync(join(runsDir, FANOUT_RUN, "episodic.jsonl"), "");
+    expect(rowsOf(sink, "states").filter((r) => r["run_id"] === V1P1_RUN).length).toBe(traceSamplesOf(join(runsDir, V1P1_RUN)).length);
+    // Read again: nothing a character already gave is added twice.
+    appendFileSync(join(dir, "trajectory.jsonl"), "");
+    writeFileSync(join(dir, "episodic.jsonl"), "");
     await collector.pass();
-    expect(logged.filter((m) => m.includes(FANOUT_RUN))).toHaveLength(1);
+    expect(states(`${FANOUT_RUN}~Alfa`)).toHaveLength(1);
     for (const [table, rows] of sink.tables) expect({ table, leaked: JSON.stringify(rows).includes(FANOUT_ROSTER_TOKEN) }).toEqual({ table, leaked: false });
+  });
+
+  test("a fan-out character's writes move its run's signature, and a single run's signature is the one it was", async () => {
+    const runsDir = tmpRoot();
+    materialiseV1p1(runsDir);
+    await writeFanoutRun(runsDir, { closed: true });
+    const sigOf = (id: string) => [...listRunDirs(runsDir)].find((e) => e.runId === id)!.sig;
+    const before = sigOf(FANOUT_RUN);
+    expect(sigOf(V1P1_RUN)).not.toContain("sessions/");
+    utimesSync(join(runsDir, FANOUT_RUN, "sessions", "Bravo", "live.json"), new Date(), new Date(Date.now() + 5_000));
+    expect(sigOf(FANOUT_RUN)).not.toBe(before);
   });
 
   test("the run row merges run.sqlite with meta.json", () => {

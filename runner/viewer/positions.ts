@@ -26,7 +26,7 @@ import { STALL_PAUSE } from "../src/lapse";
 import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentPosition, CharacterStatus, MoveIntentView, RunRow } from "./api-types";
-import { STORE_LAG_MS, runRowOf, type RunStore } from "./clickhouse";
+import { STORE_LAG_MS, runRowOf, withFanoutLeads, type RunStore } from "./clickhouse";
 import { listRuns } from "./runs";
 import { questsAcrossRestarts } from "./results";
 import { latestMove, nearbyFresh, recentTrace } from "@wrathbench/inspector";
@@ -501,7 +501,8 @@ export async function positionsFromStore(
   now = Date.now(),
   windowMs = POSITION_WINDOW_MS,
 ): Promise<AgentPosition[]> {
-  const [rows, latest] = await Promise.all([store.runRows(), store.latestReadings()]);
+  const [rows, readings] = await Promise.all([store.runRows(), store.latestReadings()]);
+  const latest = withFanoutLeads(readings);
   const since = now - windowMs - STORE_LAG_MS;
   const runs = rows
     .filter(

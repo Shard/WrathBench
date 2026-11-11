@@ -37,6 +37,7 @@
 import { isEndReason } from "./end-conditions";
 import { z } from "zod";
 import { DEFAULT_DRIVER, driverHasCompactWindow } from "./config";
+import { entryOf, isDriver } from "./drivers";
 import type { RunPodsMode } from "./models";
 import {
   CAMPAIGN_NAME,
@@ -260,6 +261,11 @@ export function campaignPairRefusals(
         } else if (entry.compactWindow !== undefined) {
           reasons.push(`arm ${arm.id} sets --compact-window ${window}, and roster entry ${a.model} already sets compactWindow ${entry.compactWindow} — assign an entry with no window`);
         }
+      }
+      // A one-agent arm is a fan-out run, which a route driver refuses at launch.
+      const driver = entry.driver ?? DEFAULT_DRIVER;
+      if (arm.agents === 1 && isDriver(driver) && entryOf(driver).route === true) {
+        reasons.push(`arm ${arm.id} is one agent driving the whole party, and ${a.model} runs on the ${driver} driver, which plays one character's route`);
       }
       if (reasons.length > 0) out.push({ ref: a.model, arm: arm.id, reason: reasons.join("; ") });
     }
