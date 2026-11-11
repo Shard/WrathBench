@@ -29,6 +29,14 @@ x-db-info: &db-info
 # directly (bootstrap, fixtures, and the smokes that stage a fixture through
 # infra/fixtures/apply.ts). One definition, referenced by every service that
 # needs it, so the password lives in exactly one place.
+# The generated account pool's size (runner/src/account-pool.ts): bootstrap
+# creates POOL01 … POOLnn, the fleet, runner and publisher read it to expand a
+# config that lists no `accounts.pool`. Compose cannot loop, so the
+# worldserver's AC_WRATH_BENCH_ACCOUNTS lists the same names by hand: change
+# the two together, then recreate the worldserver (the chart derives both from
+# one value, worldserver.pool.size).
+x-pool-size: &pool-size "4"
+
 x-wb-db: &wb-db
   WRATHBENCH_DB_HOST: db
   WRATHBENCH_DB_PORT: "3306"
@@ -127,6 +135,8 @@ services:
       # Uppercase: AzerothCore uppercases both before deriving the verifier.
       WRATHBENCH_ACCOUNT_USER: ${WRATHBENCH_ACCOUNT_USER:-RUNNER}
       WRATHBENCH_ACCOUNT_PASSWORD: ${WRATHBENCH_ACCOUNT_PASSWORD:-RUNNER}
+      # The generated pool: each missing POOLnn is created, its password its name.
+      WRATHBENCH_POOL_SIZE: *pool-size
     volumes:
       - ..:/wrathbench
     networks: [wrathbench]
@@ -259,7 +269,9 @@ services:
       # `preflight` block): the gate's smokes log in as them, one account per parallel
       # chain, so they never contend with a job or with PROBE (the ad-hoc
       # debugging account).
-      # RUNNER7 is one more account for the config's account pool.
+      # RUNNER2..RUNNER7 are the 0.5-era named pool, kept so a character on
+      # one can still resume; POOL01..POOL04 are the generated pool, which
+      # must match x-pool-size above.
       #
       # ADDING ONE IS TWO STEPS. A name here takes effect only when the
       # worldserver container is next recreated, and until then the module
@@ -267,7 +279,7 @@ services:
       # auth first: `docker compose -f infra/compose.yml run --rm --no-deps
       # -e WRATHBENCH_ACCOUNT_USER=SMOKE2 -e WRATHBENCH_ACCOUNT_PASSWORD=SMOKE2
       # bootstrap`.
-      AC_WRATH_BENCH_ACCOUNTS: "${WRATHBENCH_ACCOUNT_USER:-RUNNER},RUNNER2,RUNNER3,RUNNER4,RUNNER5,RUNNER6,RUNNER7,SHAKEOUT,SHAKEOUT2,PROBE,SMOKE,SMOKE2,SMOKE3,SMOKE4"
+      AC_WRATH_BENCH_ACCOUNTS: "${WRATHBENCH_ACCOUNT_USER:-RUNNER},RUNNER2,RUNNER3,RUNNER4,RUNNER5,RUNNER6,RUNNER7,SHAKEOUT,SHAKEOUT2,PROBE,SMOKE,SMOKE2,SMOKE3,SMOKE4,POOL01,POOL02,POOL03,POOL04"
       AC_WRATH_BENCH_THREADS: "2"
     volumes:
       - ../data/etc:/azerothcore/env/dist/etc
@@ -313,6 +325,7 @@ services:
     # relies on.
     environment:
       <<: *wb-db
+      WRATHBENCH_POOL_SIZE: *pool-size
       # The codex home inside the container (see x-codex-home above).
       CODEX_HOME: /home/bun/.codex
       # The derived store, which `bun wb --local inspect` reads a run from
@@ -373,6 +386,7 @@ services:
       # sandboxChildEnv), which is what keeps a model off the database on this
       # service and on `runner` alike.
       <<: *wb-db
+      WRATHBENCH_POOL_SIZE: *pool-size
       # git lives in the image and the repo mount carries .git, so every episode
       # is stamped with a real `git describe` (dirty trees included) rather than
       # a version frozen at `up` time. The repo is uid 1000 and so is `bun`, but
@@ -536,6 +550,7 @@ services:
       WRATHBENCH_RUNS_DIR: /wrathbench/data/runs
       # The roster it labels comes from the config store at the default path,
       # data/config.sqlite on the bind mount — the fleet's and the viewer's.
+      WRATHBENCH_POOL_SIZE: *pool-size
       # What was uploaded last, so a pass PUTs only what changed. On the bind
       # mount so a restart re-uploads nothing.
       WRATHBENCH_PUBLISH_STATE: /wrathbench/data/publish/state.json
