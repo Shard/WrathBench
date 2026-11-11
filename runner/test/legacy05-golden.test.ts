@@ -29,17 +29,8 @@
 import { afterAll, beforeAll, describe, expect, setSystemTime, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  LEGACY05_DIR,
-  LEGACY05_GOLDEN_DIR,
-  LEGACY05_NOW,
-  LEGACY05_RUNS,
-  LEGACY05_WINDOWS,
-  legacy05Api,
-  legacy05Get,
-  materialiseLegacy05,
-  type Legacy05Answer,
-} from "./fixtures/legacy05";
+import { LEGACY05_DIR, LEGACY05_GOLDEN_DIR, LEGACY05_NOW, LEGACY05_RUNS, LEGACY05_WINDOWS, materialiseLegacy05 } from "./fixtures/legacy05";
+import { legacy05Api, legacy05Get, type Legacy05Answer } from "./fixtures/legacy05-api";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const REGENERATE = process.env["LEGACY05_REGENERATE_GOLDENS"] === "1";

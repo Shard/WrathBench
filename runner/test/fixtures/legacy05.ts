@@ -1,18 +1,17 @@
 /**
- * The frozen 0.5 runs in `legacy05/`, laid out as a runs directory, and an
- * in-process viewer over them at a fixed instant.
+ * The frozen 0.5 runs in `legacy05/`, laid out as a runs directory.
  *
- * The runs are artifacts, not builders: the loader below reads the committed
- * text files and nothing in `runner/src`, so deleting or changing a 0.5 writer
- * cannot change what these runs hold. `run.sql` is replayed into `run.sqlite`
- * with `bun:sqlite` alone. See `legacy05/README.md` for what each run covers.
+ * The runs are artifacts, not builders: this loader reads the committed text
+ * files and imports nothing but `bun:sqlite` and `node:`, so deleting or
+ * changing a 0.5 writer, or anything else in `runner/`, cannot change what
+ * these runs hold. `run.sql` is replayed into `run.sqlite` with `bun:sqlite`
+ * alone. The viewer over them is `legacy05-api.ts`; `legacy05/README.md` says
+ * what each run covers.
  */
 
 import { Database } from "bun:sqlite";
 import { mkdirSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createApi } from "../../viewer/api";
-import { localRunStore } from "../../viewer/clickhouse";
 
 export const LEGACY05_DIR = join(import.meta.dir, "legacy05");
 export const LEGACY05_GOLDEN_DIR = join(LEGACY05_DIR, "golden");
@@ -88,38 +87,4 @@ export function materialiseLegacy05(runsDir: string): void {
     touched.push([dst, stamp]);
     for (const [path, s] of touched) utimesSync(path, s, s);
   }
-}
-
-/** One handle over a materialised runs directory: the local store, no module, no tiles. */
-export function legacy05Api(runsDir: string, publicMode: boolean): ReturnType<typeof createApi> {
-  return createApi({
-    runsDir,
-    tilesDir: join(runsDir, "..", "tiles"),
-    publicMode,
-    moduleUrl: "http://127.0.0.1:1",
-    store: localRunStore(runsDir),
-  });
-}
-
-/** What a golden holds of one response: the status, the two headers a reader keys on, and the body. */
-export interface Legacy05Answer {
-  path: string;
-  status: number;
-  contentType: string | null;
-  cacheControl: string | null;
-  body: unknown;
-}
-
-/** GET `path` from a handle; a JSON body parsed, any other kept as text. */
-export async function legacy05Get(handle: (req: Request) => Promise<Response>, path: string): Promise<Legacy05Answer> {
-  const res = await handle(new Request(`http://viewer.local${path}`));
-  const contentType = res.headers.get("content-type");
-  const text = await res.text();
-  return {
-    path,
-    status: res.status,
-    contentType,
-    cacheControl: res.headers.get("cache-control"),
-    body: contentType?.startsWith("application/json") === true ? (JSON.parse(text) as unknown) : text,
-  };
 }
