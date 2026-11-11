@@ -2207,12 +2207,14 @@ export function createApi(opts: ApiOptions): ApiHandle {
 
     /*
      * Every unsafe method, on every path, must come from the viewer's own pages
-     * (`write-guard.ts`): JSON, from this host, not cross-site. Only on a handle
-     * with the admin switch on — any other, a public one included, has no write
-     * route at all, and answers every one with the 404 below rather than a
-     * refusal that would say one exists.
+     * (`write-guard.ts`): JSON, from this host, not cross-site. On every handle
+     * that is not public, admin switch or not: without the switch there is no
+     * write route, and the guard still keeps a cross-site page from reaching
+     * any route with a method the reads do not look at. A public handle has no
+     * write route at all, and answers every one with the 404 below rather than
+     * a refusal that would say one exists.
      */
-    if (admin) {
+    if (!publicMode) {
       const refused = writeGuard(req);
       if (refused !== null) return refused;
     }
