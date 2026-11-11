@@ -3,8 +3,10 @@
  * columnar window — the codec the viewer serves and the dashboard's map
  * decodes and plays.
  *
- * The runner writes ring rows (`runner/src/nearby-row.ts`) to the run's
- * `nearby/<t0>.jsonl`: `key` (every unit in view and the self, whole), `in`,
+ * The stack writes ring rows to the `nearby` stream of the run's session
+ * record (`wrath-mcp/docs/SESSION-FORMAT.md`; a 0.5 run's were one-minute
+ * files in its `nearby/`, and held player units, which the session record
+ * never does): `key` (every unit in view and the self, whole), `in`,
  * `mv` (a spline or a stop), `pos` (a position sample), `st` (changed state
  * keys), `nm` (a late name), `out`, `self` and `tick` (the child's horizon).
  * Each row's `ts` is the child's poll that saw it; a motion also carries the

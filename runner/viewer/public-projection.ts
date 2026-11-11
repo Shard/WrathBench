@@ -1821,6 +1821,9 @@ function nearbyUnitPublic(u: PrivateUnit, self: NearbySelfView, units: ReadonlyM
   if (!mine(u.s.ow) || !mine(u.s.ch)) return false;
   if (((u.s.uf ?? 0) & UNIT_FLAG_PLAYER_CONTROLLED) !== 0 && (me === null || u.s.ow !== me)) return false;
   const tg = u.s.tg;
+  // A session record never holds a player's guid: a unit's player target is
+  // the literal "player", and `tgs` says whether that player is this character.
+  if (tg === "player") return u.s.tgs === true;
   if (tg !== undefined && tg !== null && tg !== me) {
     const high = guidHigh(tg);
     if (high === 0x0000) return false;

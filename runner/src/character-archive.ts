@@ -424,6 +424,9 @@ function excluded(rel: string, trajectory: boolean): boolean {
   if (rel === HEARTBEAT_FILE || rel === "claude-mcp.json") return true;
   if (!trajectory && rel === "trajectory.jsonl") return true;
   if (rel === "claude-config/backups" || rel.startsWith("claude-config/backups/")) return true;
+  // The session record's ring is live only, and a half-written temporary of it is nobody's.
+  if (rel === "session/nearby" || rel.startsWith("session/nearby/")) return true;
+  if (rel.startsWith("session/") && rel.endsWith(".tmp")) return true;
   const base = basename(rel);
   if (/^\..*\.tmp$/.test(base)) return true;
   return /\.sqlite-(journal|wal|shm)$/.test(base);

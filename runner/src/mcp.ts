@@ -32,6 +32,7 @@ import { appendPendingActionHints, callTool, coerceToolArgs, toolsFor, type Tool
 import { SandboxHost } from "./sandbox/host";
 import { Trajectory } from "./trajectory";
 import { newRunId, newSessionToken, loadRunConfig } from "./config";
+import { moveLineOf, openSessionRecord } from "./session-record";
 import { harnessVersion, stackCommit } from "./version";
 import { SDK_VERSION } from "@wrathbench/sdk";
 
@@ -105,6 +106,10 @@ async function main(): Promise<void> {
   const lease = await leaseRunSecret({ moduleUrl: config.moduleUrl, token: config.token ?? token, account: config.account }, trajectory);
   if (lease.secret === undefined) console.error(`[wrathbench-mcp] ${lease.note}`);
 
+  // The session record, written by the stack into the run directory (`session-record.ts`).
+  const session = openSessionRecord({ runDir, runsDir: config.runsDir, token: config.token ?? token, scrub: (text) => trajectory.scrub(text) });
+  session.signals.onMove = (m) => trajectory.recordMove(moveLineOf(m));
+
   const sandbox = new SandboxHost({
     moduleUrl: config.moduleUrl,
     token: config.token ?? token,
@@ -116,6 +121,7 @@ async function main(): Promise<void> {
     onNotice: (n) => trajectory.append({ t: "harness", ...n }),
     onActions: (flush) => trajectory.recordActions(flush),
     clientCache,
+    session,
   });
 
   const wiki =config.wiki ? openWikiBundle(config.wikiBundle) : undefined;
@@ -133,6 +139,7 @@ async function main(): Promise<void> {
     episodic: new EpisodicLog(join(runDir, "episodic.jsonl")),
     turn: () => 0, // MCP mode has no driver turn to stamp
     secrets: trajectory,
+    record: session.writer,
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
     onEventsServed: (events, folded) =>
       trajectory.append({
@@ -150,6 +157,7 @@ async function main(): Promise<void> {
   console.error(`[wrathbench-mcp] run ${runId} — trajectory at ${runDir}`);
   await serveStdio(server);
   await sandbox.stop();
+  await session.writer.close();
   trajectory.close();
 }
 

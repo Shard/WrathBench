@@ -2,10 +2,11 @@
  * The runner's extension of the sandbox child (`@wrathbench/mcp`'s
  * `SandboxChildExtension`): everything the benchmark watches from inside the
  * child, latched as events arrive and drained by the runner's host
- * (`host.ts`). The death and flight transitions, the party records, the trace
- * and nearby recorders, the spell combat-log marks, the snippet delta, the
- * turn's event window and the HUD's fields on the state snapshot. Record and
- * context only: a snippet reaches none of it.
+ * (`host.ts`): the spell combat-log marks, the snippet delta, the turn's
+ * event window and the HUD's fields on the state snapshot. Context only: a
+ * snippet reaches none of it. What the session leaves on the record (the
+ * trace, the units around it, deaths, flights, the party records) is the
+ * stack's own recorder, which this child runs ahead of this extension.
  *
  * Installed by `entry.ts`, the child entry the runner's host spawns. Its
  * listeners run in the order they register here, after the client's own
@@ -20,246 +21,16 @@ import {
   DISPEL_LOG_OPCODES,
   emoteShown,
   foldUiOpenWindows,
-  PLAYER_FLAGS_GHOST,
   SPELL_LOG_OPCODES,
   spellLogNote,
   spellLogShown,
 } from "../context";
-import { NearbyRecorder } from "./nearby-recorder";
-import { PartyWatcher } from "./party-watch";
-import type { ContextEvents, DeathSignal, FlightSignal } from "./signals";
+import type { ContextEvents } from "./signals";
 import { SnippetDeltaRecorder } from "./snippet-delta";
-import { TraceRecorder } from "./trace-recorder";
 
 export function benchmarkChildExtension({ client, summarize, forwardClientCache }: SandboxChildApi): SandboxChildExtension {
-  // ------------------------------------------------------------ death watcher
-
-  /**
-   * The death window, latched from the events that carry it.
-   *
-   * The host's state sample is the run's clock for milestones, and at 60s it is
-   * far coarser than a death: die, `repop()`, walk to the Spirit Healer,
-   * resurrect — the whole window closes in half a minute, and the state cache
-   * keeps no residue afterwards (`SMSG_DEATH_RELEASE_LOC` with `map: -1` clears
-   * the corpse, the graveyard and the reclaim delay). Three deaths in run
-   * `fleet-sonnet-low-freeplay-sonnet-low-20260827-a2` were missed exactly that
-   * way, one of them by a single second. So the transitions are read here, where
-   * every event arrives, and the host drains what happened between its samples.
-   *
-   * The readings are the same ones the host's fallback window read uses, for the
-   * same reasons: own `health` off the raw field record (the derived gauge is
-   * withheld until `maxHealth` has been seen) and the ghost bit off `playerFlags`
-   * exactly as the HUD reads it. Release and resurrect additionally have a
-   * packet that says so outright — `SMSG_DEATH_RELEASE_LOC`, the graveyard on the
-   * way in and the clear marker on the way out — and that is the primary trigger,
-   * because `playerFlags` rides an update block that need not arrive with it.
-   *
-   * Registered after the client's own state fold (`onAny` runs in registration
-   * order), so every reading below is of a cache that already holds this event.
-   */
-  const DEATH_SIGNAL_CAP = 64;
-  const deathSignals: DeathSignal[] = [];
-  /** Own health last read as zero. */
-  let watchedDead = false;
-  /** The spirit is released: the ghost flag, or the graveyard packet that made it one. */
-  let watchedReleased = false;
-  /**
-   * The ghost bit was actually seen set. Separate from `watchedReleased` because
-   * `playerFlags` need not ride the blocks that arrive during a death: a stale 0
-   * all the way through is ordinary, so only a bit that was seen *on* can be read
-   * as meaning anything when it goes off again.
-   */
-  let watchedGhost = false;
-  /**
-   * The ghost bit as the previous event left it, undefined until first seen. A
-   * release read off the bit needs it to RISE: the bit is still set for an event
-   * or two after the resurrect's clear marker, and reading "set" as "released"
-   * there re-opened the window the resurrect had just closed — every death was
-   * written as death, release, resurrect, release, resurrect.
-   */
-  let lastGhostRead: boolean | undefined;
-
-  function pushDeathSignal(signal: DeathSignal): void {
-    deathSignals.push(signal);
-    if (deathSignals.length > DEATH_SIGNAL_CAP) deathSignals.splice(0, deathSignals.length - DEATH_SIGNAL_CAP);
-  }
-
-  /** Drain what the watcher latched since the last call. Host-only. */
-  function drainDeathSignals(): DeathSignal[] {
-    return deathSignals.splice(0, deathSignals.length);
-  }
-
-  function point(v: unknown): { map: number; x: number; y: number; z: number } | undefined {
-    const p = v as { map?: unknown; x?: unknown; y?: unknown; z?: unknown } | undefined;
-    if (p === undefined || p === null) return undefined;
-    if (typeof p.map !== "number" || typeof p.x !== "number" || typeof p.y !== "number" || typeof p.z !== "number") {
-      return undefined;
-    }
-    return { map: p.map, x: p.x, y: p.y, z: p.z };
-  }
-
-  client.events.onAny((event) => {
-    const self = client.state.self;
-    const health = self.fields.get("health")?.value;
-    const flags = self.fields.get("playerFlags")?.value;
-    const ghost = typeof flags === "number" ? (flags & PLAYER_FLAGS_GHOST) !== 0 : undefined;
-    const releaseLoc =
-      event.opcode === "SMSG_DEATH_RELEASE_LOC" ? (event.data as { map?: unknown }) : undefined;
-    // The window as it stood *before* this event: a resurrect is only ever read
-    // against a window some earlier event opened, never against this one.
-    const wasDead = watchedDead;
-    const wasReleased = watchedReleased;
-    const wasGhost = watchedGhost;
-    const releasedTo = typeof releaseLoc?.map === "number" && releaseLoc.map >= 0;
-    const cleared = typeof releaseLoc?.map === "number" && releaseLoc.map < 0;
-
-    // The death: own health observed at zero, from a reading that was not.
-    if (health === 0 && !watchedDead) {
-      watchedDead = true;
-      const corpse = self.corpse?.value as { source?: unknown; instanceMap?: unknown } | undefined;
-      // A corpse inside a dungeon is reported at its entrance, which is not the death site.
-      const at = typeof corpse?.instanceMap === "number" ? undefined : point(corpse);
-      const source = corpse?.source === "corpse_query" ? "corpse_query" : corpse?.source === "death_spot" ? "death_spot" : undefined;
-      const zone = (self.zone?.value as { id?: unknown } | undefined)?.id;
-      const area = (self.area?.value as { id?: unknown } | undefined)?.id;
-      pushDeathSignal({
-        kind: "death",
-        ts: event.ts,
-        seq: event.seq,
-        ...(at !== undefined && source !== undefined ? { position: { ...at, source } } : {}),
-        ...(typeof zone === "number" ? { zone } : {}),
-        ...(typeof area === "number" ? { area } : {}),
-        ...(ghost === undefined ? {} : { released: ghost }),
-      });
-    }
-
-    // The release: the graveyard packet, or the ghost flag turning on — an
-    // edge, not a level (`lastGhostRead`).
-    const ghostRose = ghost === true && lastGhostRead !== true;
-    if (ghost !== undefined) lastGhostRead = ghost;
-    if (!watchedReleased && (releasedTo || ghostRose)) {
-      watchedReleased = true;
-      const grave = point(self.graveyard?.value);
-      pushDeathSignal({
-        kind: "release",
-        ts: event.ts,
-        seq: event.seq,
-        ...(grave === undefined ? {} : { graveyard: grave }),
-      });
-    }
-    // The bit counts as "seen on" only inside a window this watcher opened: the
-    // stale bit after a resurrect latched outside one would make the next
-    // death's first `ghost === false` read as a resurrect.
-    if (ghost === true && (watchedDead || watchedReleased)) watchedGhost = true;
-
-    // The resurrect: the clear marker, health back above the single point a
-    // released ghost carries, or the ghost flag turning off again. Read against
-    // the window as it stood before this event, so the event that opened the
-    // window cannot also close it — an unreleased corpse reads `ghost === false`
-    // too, and `playerFlags` is usually a stale 0 all through a death.
-    const alive = cleared || (typeof health === "number" && health > 1) || (ghost === false && wasGhost);
-    if ((wasDead || wasReleased) && alive) {
-      watchedDead = false;
-      watchedReleased = false;
-      watchedGhost = false;
-      pushDeathSignal({ kind: "resurrect", ts: event.ts, seq: event.seq });
-    }
-  });
-
-  // ----------------------------------------------------------- flight watcher
-
-  /**
-   * Flights, latched the way deaths are and for the same reason (`ipc.ts`,
-   * `FlightSignal`): the takeoff is the taxi flag turning on after an accepted
-   * reply, the landing is it turning off, and each carries the position and the
-   * zone/area pair as the cache held them at that event — the landing's own
-   * area, not the one the host's next sample finds the character in. The flag
-   * is read off `taxiFlight`, which the cache derives only from a block that
-   * carried `unitFlags`, so a block without it changes nothing here. The first
-   * reading seeds silently: a process that opens mid-flight did not see this
-   * flight begin.
-   */
-  const FLIGHT_SIGNAL_CAP = 64;
-  const flightSignals: FlightSignal[] = [];
-  let lastFlightRead: boolean | undefined;
-
-  function pushFlightSignal(signal: FlightSignal): void {
-    flightSignals.push(signal);
-    if (flightSignals.length > FLIGHT_SIGNAL_CAP) flightSignals.splice(0, flightSignals.length - FLIGHT_SIGNAL_CAP);
-  }
-
-  /** Drain what the flight watcher latched since the last call. Host-only. */
-  function drainFlightSignals(): FlightSignal[] {
-    return flightSignals.splice(0, flightSignals.length);
-  }
-
-  client.events.onAny((event) => {
-    const self = client.state.self;
-    const flying = self.taxiFlight?.value;
-    if (typeof flying !== "boolean") return;
-    const was = lastFlightRead;
-    lastFlightRead = flying;
-    if (was === undefined || was === flying) return;
-    const accepted = (self.taxiReply?.value as { ok?: unknown } | undefined)?.ok === true;
-    if (flying && !accepted) return;
-    const at = point(self.position?.value);
-    const zone = (self.zone?.value as { id?: unknown } | undefined)?.id;
-    const area = (self.area?.value as { id?: unknown } | undefined)?.id;
-    pushFlightSignal({
-      kind: flying ? "taxi" : "taxi_landed",
-      ts: event.ts,
-      seq: event.seq,
-      ...(at === undefined ? {} : { position: at }),
-      ...(typeof zone === "number" ? { zone } : {}),
-      ...(typeof area === "number" ? { area } : {}),
-    });
-  });
-
-  // ------------------------------------------------------------ party watcher
-
-  /**
-   * The party records — `group`, `instance`, `kill` — latched as their packets
-   * arrive (`party-watch.ts`), drained by the host's state sample like the death
-   * and flight signals above. Registered after the client's own state fold, so
-   * `state.group()` and the unit cache already hold the event it reads.
-   */
-  const partyWatcher = new PartyWatcher({
-    group: () => client.state.group(),
-    selfGuid: () => client.state.self.guid,
-    objectOf: (guid) => {
-      const o = client.state.nearby.get(guid);
-      return o === undefined ? undefined : { entry: o.entry?.value, type: o.objectType?.value };
-    },
-    rankOf: (entry) => client.state.creatures.get(entry)?.value.rank,
-  });
-  client.events.onAny((event) => partyWatcher.observe(event));
-
-  // ----------------------------------------------------------- trace recorder
-
-  /**
-   * The character's own position and state, latched as they change for the
-   * host's state ticker to drain (`trace-recorder.ts`; the row contract is
-   * `../trace-row.ts`). Record only: a snippet cannot reach it, and nothing it
-   * reads is an observation the cache did not already hold. Registered here,
-   * after the client's own state fold and the watchers above, so its hooks see
-   * a cache that already has each event in it. Its opening key row is this
-   * child's: a restart is a new process and a new key.
-   */
-  const traceRecorder = new TraceRecorder({ state: client.state, events: client.events });
-  traceRecorder.start();
-
-  /**
-   * The units around the character, for the live map's ring and nothing else
-   * (`nearby-recorder.ts`; the row contract is `../nearby-row.ts`). The same
-   * posture as the trace recorder above: record only, unreachable from a
-   * snippet, a reader of the cache that sends nothing. Its opening key is this
-   * child's, so a restart restates the scene.
-   */
-  const nearbyRecorder = new NearbyRecorder({ state: client.state, events: client.events });
-  nearbyRecorder.start();
-
-  // The stack's client-cache forward, here in the listener order, between the
-  // recorders and the spell marks, where the child has always registered it.
+  // The stack's client-cache forward, here in the listener order, ahead of
+  // the spell marks, where the child has always registered it.
   forwardClientCache();
 
   /**
@@ -475,12 +246,7 @@ export function benchmarkChildExtension({ client, summarize, forwardClientCache 
   return {
     rpc: {
       context_events: (params) => contextEvents(params.limit ?? CONTEXT_EVENT_CAP),
-      death_signals: () => drainDeathSignals(),
-      flight_signals: () => drainFlightSignals(),
-      party_signals: () => partyWatcher.drain(),
       snippet_delta: () => snippetDelta.drain(),
-      trace_drain: () => traceRecorder.drain(),
-      nearby_drain: () => nearbyRecorder.drain(),
     },
     summarize: (e: StreamEvent): Partial<Pick<EventSummary, "note" | "bystander">> | undefined => {
       const mark = spellLogMarks.get(e);

@@ -8,10 +8,13 @@
  *                      the fresh user message and points at the rest of the
  *                      prompt, which the file already holds
  *                      (`request-record.ts`; `replay.ts` rebuilds it).
- *   run.sqlite         run metadata row, periodic state rows, movement rows
- *                      and the trace, for querying without parsing JSONL.
- *                      WAL while the runner writes it, the rollback journal
- *                      at rest (`rundb.ts` says why).
+ *   run.sqlite         run metadata row and periodic state rows, for querying
+ *                      without parsing JSONL. WAL while the runner writes it,
+ *                      the rollback journal at rest (`rundb.ts` says why). A
+ *                      0.5 run's also holds its trace and movement rows; a
+ *                      v1 run's are in session/, written by the stack.
+ *   session/           the session record (`session-record.ts`): the trace,
+ *                      events, tool calls and the live ring of nearby units.
  *   meta.json          the run config + harness version, for `--resume`.
  *   scratchpad.md      owned by Scratchpad, lives in the same directory.
  *
@@ -45,7 +48,6 @@ import { platformOf } from "./platform";
 import { SecretRedactor } from "@wrathbench/mcp/redact";
 import type { ActionNote } from "@wrathbench/mcp";
 import type { SubscriptionUsage } from "./subscription-usage";
-import type { TraceChat, TraceDict, TraceRow, TraceStateDelta } from "./trace-row";
 
 export interface StateLine {
   level?: number | undefined;
@@ -103,10 +105,11 @@ export interface StateLine {
 }
 
 /**
- * One movement intention, as the sandbox watched it (`MoveIntentNote`): the
- * destination a `move_to` was dispatched for, and the module's verdict once it
- * arrived. Two rows per move in the normal case — the dispatch, then the
- * verdict — so a replay can show a move in flight and then how it ended.
+ * One movement intention as the trajectory's `move` record carries it: the
+ * destination a `move_to` was dispatched for, and the module's verdict once
+ * it arrived. Two records per move in the normal case. The record is the
+ * stack's (`session/calls`, a `move` row); this is its mirror, kept while the
+ * feed still reads move verdicts from the trajectory.
  */
 export interface MoveLine {
   /** When this happened: the dispatch, or the verdict. Defaults to now. */
@@ -149,13 +152,6 @@ export interface MoveLine {
  * `move` records are unchanged: they are the map's intention feed and the
  * `move` table, and stay the verdict's home.
  */
-/** A trace row's data with each chat line's text scrubbed; anything else as it is. */
-function scrubChat(data: NonNullable<TraceRow["data"]>, scrub: (text: string) => string): NonNullable<TraceRow["data"]> {
-  const chat = (data as TraceStateDelta).chat;
-  if (!Array.isArray(chat)) return data;
-  return { ...data, chat: chat.map(([kind, text]): TraceChat => [kind, scrub(text)]) };
-}
-
 export interface ActionsLine {
   ts?: number | undefined;
   turn?: number | undefined;
@@ -272,7 +268,7 @@ export interface ItemSample {
  *   one sampling gap record one — the usual lower bound.
  * - `group` / `instance` / `kill`: the party records (docs/proposals/
  *   GROUP-PLAY.md §6), latched in the sandbox child off the packets the server
- *   sends (`sandbox/party-watch.ts`), never off a map id read from a state
+ *   sends (the stack's party watcher), never off a map id read from a state
  *   sample. `group` is `SMSG_GROUP_LIST` as `state.group()` folds it —
  *   joined, changed or left, guids and counts only, `count` the party's size
  *   with self; a staged party's login list writes `joined`, which is the
@@ -630,47 +626,6 @@ CREATE TABLE IF NOT EXISTS state (
   zone INTEGER,
   area INTEGER
 );
--- Movement intention: where the character was trying to get to, one row per
--- (dispatch, verdict). Its own table rather than columns on the state table,
--- because state is what the scorer and every derivation in the viewer read,
--- and an intention is not an observation of the world: it is this run's own
--- last request. CREATE TABLE IF NOT EXISTS gives an older run.sqlite the
--- table (empty) the first time this build opens it.
-CREATE TABLE IF NOT EXISTS move (
-  run_id TEXT NOT NULL,
-  ts INTEGER NOT NULL,
-  move_id INTEGER,
-  map INTEGER,
-  x REAL, y REAL, z REAL,
-  -- The unit the move was aimed at, when it was aimed at one.
-  target TEXT,
-  -- The module's verdict; NULL on the row that records the dispatch itself.
-  status TEXT
-);
--- The trace (trace-row.ts): the character's own position at observation
--- cadence and its state on change, for playback. Its own table for the
--- reason move is: state is what the scorer reads, and a trace row is not a
--- sample the scorer counts. Append-only; ts-indexed because a reader asks for
--- one 300 000 ms window at a time.
-CREATE TABLE IF NOT EXISTS trace (
-  run_id TEXT NOT NULL,
-  ts INTEGER NOT NULL,
-  kind TEXT NOT NULL,
-  map INTEGER, x REAL, y REAL, z REAL, o REAL,
-  data TEXT
-);
-CREATE INDEX IF NOT EXISTS trace_run_ts ON trace(run_id, ts);
--- What the trace's ids are shown by (trace-row.ts TraceDict), once per id per
--- run: kind 'item' is [quality, name], the item template's name; kind 'quest'
--- is the quest's required counts, numbers only. A segment carries the entries
--- its rows reference, so it decodes alone.
-CREATE TABLE IF NOT EXISTS trace_dict (
-  run_id TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  id INTEGER NOT NULL,
-  data TEXT NOT NULL,
-  PRIMARY KEY (run_id, kind, id)
-);
 `;
 
 /**
@@ -884,95 +839,11 @@ export class Trajectory {
   }
 
   /**
-   * One movement intention: a `move_to` dispatch, or the verdict that ended it.
-   *
-   * Written whenever the sandbox's watched intent changes — the state ticker
-   * samples every 5s, so a walk shorter than the state-row cadence still gets
-   * both of its rows. The caller owns the change detection (`MoveLine` is
-   * whatever it saw); this only records.
+   * One movement intention, mirrored from the session record (`MoveLine`).
+   * JSONL only: the record's home is `session/calls`, and the map reads it there.
    */
-  recordMove(runId: string, m: MoveLine): Promise<void> {
+  recordMove(m: MoveLine): void {
     this.append({ t: "move", ...m });
-    const ts = m.ts ?? this.now();
-    return this.write("move", () => {
-      this.db
-        .query(
-          `INSERT INTO move (run_id, ts, move_id, map, x, y, z, target, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(runId, ts, m.moveId ?? null, m.map ?? null, m.x, m.y, m.z, m.target ?? null, m.status ?? null);
-    });
-  }
-
-  /**
-   * One drain of trace rows (`trace-row.ts`), in order, to the `trace` table:
-   * the trace's one home. Not to trajectory.jsonl: the collector copies every
-   * trajectory line it does not know into the store, and a 1 Hz position feed
-   * is tens of thousands of rows per character per day. Not to a file of its
-   * own either: a `trace.jsonl` beside the table held the same rows and had no
-   * reader. One transaction per drain. The rows hold numbers and booleans,
-   * and the character's chat lines; the drain's dictionary (`TraceDict`)
-   * holds item names. Those are the strings the trace keeps, and they cross
-   * `scrub` like every other string this writes. An entry already held is
-   * replaced, so a quality learned late is kept.
-   */
-  recordTrace(runId: string, rows: readonly TraceRow[], dict?: TraceDict): Promise<void> {
-    const items = dict?.items ?? [];
-    const quests = dict?.quests ?? [];
-    if (rows.length === 0 && items.length === 0 && quests.length === 0) return SETTLED;
-    // Built once, outside the attempt: a retry re-runs the same transaction.
-    const traced = rows.map((r) => ({
-      r,
-      data: r.data === undefined || r.data === null ? null : JSON.stringify(scrubChat(r.data, (t) => this.scrub(t))),
-    }));
-    const named = items.map(([id, quality, text]) => [id, JSON.stringify([quality, this.scrub(text)])] as const);
-    return this.write("trace", () => {
-      const insert = this.db.query(
-        `INSERT INTO trace (run_id, ts, kind, map, x, y, z, o, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      );
-      const name = this.db.query(`INSERT OR REPLACE INTO trace_dict (run_id, kind, id, data) VALUES (?, ?, ?, ?)`);
-      this.db.transaction(() => {
-        for (const { r, data } of traced) insert.run(runId, r.ts, r.kind, r.map ?? null, r.x ?? null, r.y ?? null, r.z ?? null, r.o ?? null, data);
-        for (const [id, data] of named) name.run(runId, "item", id, data);
-        for (const [id, req] of quests) name.run(runId, "quest", id, JSON.stringify(req));
-      })();
-    });
-  }
-
-  /** The run's trace dictionary, `data` parsed. For tests and in-process readers. */
-  traceDict(runId: string): { kind: string; id: number; data: unknown }[] {
-    return (
-      this.db.query(`SELECT kind, id, data FROM trace_dict WHERE run_id = ? ORDER BY kind, id`).all(runId) as {
-        kind: string;
-        id: number;
-        data: string;
-      }[]
-    ).map((r) => ({ kind: r.kind, id: r.id, data: JSON.parse(r.data) as unknown }));
-  }
-
-  /** Every trace row of a run, oldest first; `data` parsed. For tests and in-process readers. */
-  traceRows(runId: string): TraceRow[] {
-    return (
-      this.db.query(`SELECT ts, kind, map, x, y, z, o, data FROM trace WHERE run_id = ? ORDER BY ts, rowid`).all(runId) as {
-        ts: number;
-        kind: TraceRow["kind"];
-        map: number | null;
-        x: number | null;
-        y: number | null;
-        z: number | null;
-        o: number | null;
-        data: string | null;
-      }[]
-    ).map((r) => ({
-      ts: r.ts,
-      kind: r.kind,
-      map: r.map,
-      x: r.x,
-      y: r.y,
-      z: r.z,
-      o: r.o,
-      data: r.data === null ? null : (JSON.parse(r.data) as TraceRow["data"]),
-    }));
   }
 
   /** One action-log flush (`ActionsLine`). JSONL only: no reader needs it in sqlite. */

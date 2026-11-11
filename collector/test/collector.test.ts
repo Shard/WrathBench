@@ -36,12 +36,25 @@ afterAll(() => {
   for (const d of roots) rmSync(d, { recursive: true, force: true });
 });
 
+/** The `move` table as a 0.5 run's run.sqlite held it: frozen, because the runner no longer writes one. */
+const LEGACY_MOVE_DDL = `CREATE TABLE IF NOT EXISTS move (
+  run_id TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  move_id INTEGER,
+  map INTEGER,
+  x REAL, y REAL, z REAL,
+  target TEXT,
+  status TEXT
+)`;
+
 /**
  * One run directory written the way the runner writes one: meta.json, a
- * run.sqlite with run/state/move rows, and a trajectory.jsonl carrying turn
- * lines, a milestone and a termination.
+ * run.sqlite with run and state rows, and a trajectory.jsonl carrying turn
+ * lines, a milestone and a termination. With `legacyMoves` it is a 0.5 run:
+ * its run.sqlite also holds the `move` table, which a v1 run's does not (its
+ * movement intentions are in its session record).
  */
-function writeRun(runsDir: string, runId: string): string {
+function writeRun(runsDir: string, runId: string, legacyMoves = true): string {
   const dir = join(runsDir, runId);
   const traj = new Trajectory(dir);
   traj.writeMeta({
@@ -74,10 +87,18 @@ function writeRun(runsDir: string, runId: string): string {
   traj.recordMilestone({ kind: "zone", from: { id: 1 }, to: { id: 12 }, turn: 1 });
   traj.recordState(runId, { level: 2, xp: 400, map: 0, x: 1, y: 2, z: 3, turn: 1, zone: 12 });
   traj.recordState(runId, { level: 2, xp: 500, map: 0, x: 4, y: 5, z: 6, turn: 2, zone: 12 });
-  traj.recordMove(runId, { map: 0, x: 9, y: 9, z: 9, moveId: 1 });
-  traj.recordMove(runId, { map: 0, x: 9, y: 9, z: 9, moveId: 1, status: "arrived" });
+  traj.recordMove({ map: 0, x: 9, y: 9, z: 9, moveId: 1 });
+  traj.recordMove({ map: 0, x: 9, y: 9, z: 9, moveId: 1, status: "arrived" });
   traj.setTermination(runId, "episode-elapsed" as never, "done");
   traj.close();
+  if (legacyMoves) {
+    const db = new Database(join(dir, "run.sqlite"));
+    db.exec(LEGACY_MOVE_DDL);
+    const put = db.query("INSERT INTO move (run_id, ts, move_id, map, x, y, z, target, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    put.run(runId, 1_290, 1, 0, 9, 9, 9, null, null);
+    put.run(runId, 1_295, 1, 0, 9, 9, 9, null, "arrived");
+    db.close();
+  }
   writeFileSync(join(dir, "episodic.jsonl"), `${JSON.stringify({ t: "note", ts: 1_300, text: "hi" })}\n`);
   return dir;
 }
@@ -124,6 +145,16 @@ describe("a pass over one run", () => {
     expect(rowsOf(sink, "episodic")).toHaveLength(1);
     expect(rowsOf(sink, "runs")).toHaveLength(1);
     expect(rowsOf(sink, "run_totals")).toHaveLength(1);
+  });
+
+  test("a v1 run, whose run.sqlite has no move table, costs the pass nothing: its states land and it has no moves", async () => {
+    const runsDir = tmpRoot();
+    writeRun(runsDir, "run-v1", false);
+    const { collector, sink } = collectorOver(runsDir);
+    await collector.pass();
+    expect(rowsOf(sink, "states")).toHaveLength(2);
+    expect(rowsOf(sink, "moves")).toHaveLength(0);
+    expect(rowsOf(sink, "runs")).toHaveLength(1);
   });
 
   test("the run row merges run.sqlite with meta.json", () => {

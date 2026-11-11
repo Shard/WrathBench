@@ -1,8 +1,11 @@
 /**
  * A run as this build writes it, end to end: launched through run.ts with the
  * stub driver, then read back by the viewer and by the collector. It pins
- * where each fact a run records lives — the trace in run.sqlite with no
- * `trace.jsonl` beside it, the module session token in meta.json as the
+ * where each fact a run records lives — the session record (the trace, the
+ * ring, the stack's copy of the action log and the movement intentions) in
+ * `session/`, written by the stack; run.sqlite holding the run row and the
+ * state samples and nothing of the session's; no trace in trajectory.jsonl and
+ * no `trace.jsonl` beside it; the module session token in meta.json as the
  * harness's one copy — and that the readers still get the whole run.
  *
  * The token has one other way into a trajectory, which the stub never takes:
@@ -18,7 +21,7 @@
  */
 import { beforeAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { appendFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import { loadRunConfig, newSessionToken } from "../src/config";
@@ -28,7 +31,9 @@ import { Collector } from "../../collector/src/collector";
 import { memorySink } from "../../collector/src/sink";
 import { OffsetStore } from "../../collector/src/offsets";
 import { readConfig } from "../../collector/src/config";
-import { emptyTraceState } from "../src/trace-row";
+import { SessionReader, emptyTraceState } from "@wrathbench/mcp/record";
+import { tokenFingerprint } from "@wrathbench/mcp/module-auth";
+import { openSessionRecord, sessionDirOf } from "../src/session-record";
 import { SEG_MS, windowOf } from "../viewer/trace";
 import { tempDirs } from "./fixtures/temp-dirs";
 
@@ -91,16 +96,28 @@ beforeAll(async () => {
   lt.writeMeta({ runId: LIVE_ID, harnessVersion: "0.0.0-test", startedAt: Date.now() - 60_000, config: loadRunConfig({ runId: LIVE_ID, token: liveToken, driver: "openai", model: "test/model" }) });
   lt.recordState(LIVE_ID, { level: 3, xp: 120, map: 0, x: -6240, y: 330, z: 383, turn: 4 });
   // Its trace, where it said its token and something shaped like a key: in a
-  // window long closed, and in the tail.
+  // window long closed, and in the tail. Written as run.ts writes a v1 run's,
+  // by the stack's session writer into session/, through the run's scrub.
   const closedAt = windowOf(Date.now() - 4 * SEG_MS);
   const tailAt = Date.now() - 5_000;
   const said = `${CHAT_SAID} ${liveToken} and ${CHAT_KEY}`;
-  lt.recordTrace(LIVE_ID, [
-    { ts: closedAt + 1_000, kind: "key", map: 0, x: -6240, y: 330, z: 383, o: 0, data: { ...emptyTraceState(), level: 3 } },
-    { ts: closedAt + 2_000, kind: "state", data: { chat: [["party", said]] } },
-    { ts: windowOf(tailAt), kind: "key", map: 0, x: -6240, y: 330, z: 383, o: 0, data: { ...emptyTraceState(), level: 3 } },
-    { ts: tailAt, kind: "state", data: { chat: [["say", said]] } },
-  ]);
+  const session = openSessionRecord({ runDir: live, runsDir, token: liveToken, scrub: (text) => lt.scrub(text) });
+  session.writer.ingest({
+    trace: {
+      rows: [
+        { ts: closedAt + 1_000, kind: "key", map: 0, x: -6240, y: 330, z: 383, o: 0, data: { ...emptyTraceState(), level: 3 } },
+        { ts: closedAt + 2_000, kind: "state", data: { chat: [["party", said]] } },
+        { ts: tailAt, kind: "state", data: { chat: [["say", said]] } },
+      ],
+      dropped: 0,
+    },
+    events: { rows: [], dropped: 0 },
+    nearby: { rows: [], dropped: 0, through: 0 },
+    moves: [],
+    character: { guid: "7", name: "Homeswick", race: 1, class: 1 },
+    stream: { connected: true, events: 1, seq: 1 },
+  });
+  await session.writer.close();
   lt.close();
   new EpisodicLog(join(live, "episodic.jsonl")).append({ turn: 4, level: 3, text: `parked, session ${liveToken} still held` });
 }, 30_000);
@@ -138,6 +155,48 @@ describe("where a run's facts live", () => {
 
   test("the run directory holds no trace.jsonl", () => {
     expect(readdirSync(join(runsDir, RUN_ID))).not.toContain("trace.jsonl");
+  });
+
+  test("the session record is session/, the stack's, named by the token's fingerprint and holding no token", () => {
+    const dir = join(runsDir, RUN_ID);
+    const reader = new SessionReader(sessionDirOf(dir));
+    expect(reader.session()).toMatchObject({ format: "wrath-session/1", id: tokenFingerprint(token) });
+    // The stub's run closed its record on the way out; the ring is live-only.
+    expect(reader.session()!.ended).not.toBeNull();
+    expect(readdirSync(sessionDirOf(dir))).not.toContain("nearby");
+    for (const name of readdirSync(sessionDirOf(dir), { recursive: true }) as string[]) {
+      if (!name.endsWith(".json") && !name.endsWith(".jsonl")) continue;
+      expect({ name, leaked: readFileSync(join(sessionDirOf(dir), name), "utf8").includes(token) }).toEqual({ name, leaked: false });
+    }
+  });
+
+  test("run.sqlite holds the run row and the state samples, and none of the session's tables", () => {
+    for (const id of [RUN_ID, LIVE_ID]) {
+      const db = new Database(join(runsDir, id, "run.sqlite"), { readonly: true });
+      const tables = (db.query(`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`).all() as { name: string }[]).map((r) => r.name);
+      db.close();
+      expect({ id, tables }).toEqual({ id, tables: ["run", "state"] });
+    }
+  });
+
+  test("the trace is in session/trace and nowhere in the trajectory; a trajectory `move` line is only the record's mirror", () => {
+    const live = join(runsDir, LIVE_ID);
+    const rows = new SessionReader(sessionDirOf(live)).rows("trace");
+    expect(rows.filter((r) => r.kind === "state").length).toBe(2);
+    for (const id of [RUN_ID, LIVE_ID]) {
+      const kinds = new Set(readTrajectory(join(runsDir, id)).map((r) => r.t));
+      expect({ id, trace: kinds.has("trace") }).toEqual({ id, trace: false });
+    }
+    // `recordMove` writes the trajectory line and nothing else: no table, no file.
+    const dir = tempDir("wrathbench-homes-move-");
+    const t = new Trajectory(dir);
+    t.recordMove({ ts: 1, moveId: 1, map: 0, x: 1, y: 2, z: 3, target: null, status: null });
+    t.close();
+    expect(readTrajectory(dir).filter((r) => r.t === "move")).toEqual([{ t: "move", ts: 1, moveId: 1, map: 0, x: 1, y: 2, z: 3, target: null, status: null }]);
+    const db = new Database(join(dir, "run.sqlite"), { readonly: true });
+    expect(db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'move'`).all()).toEqual([]);
+    db.close();
+    expect(readdirSync(dir).filter((f) => !f.startsWith("run.sqlite") && f !== "trajectory.jsonl")).toEqual([]);
   });
 });
 
@@ -185,7 +244,7 @@ describe("the readers get the whole run", () => {
     expect((await statusOf(false)).text).toBe(`parked, session ${liveToken} still held`);
   });
 
-  test("the trace's chat — a closed window, the index's tail, live.json's tail — has the token struck and a key's shape masked; the operator's keeps both", async () => {
+  test("the trace's chat — a closed window, the index's tail, live.json's tail — has the token struck and a key's shape masked; the operator's keeps the key, and the record never held the token", async () => {
     const bodiesOf = async (publicMode: boolean): Promise<string[]> => {
       const api = createApi({ runsDir, tilesDir: join(runsDir, "minimap"), moduleUrl: "http://127.0.0.1:1", publicMode });
       const index = JSON.parse(await get(api, `/api/run/${LIVE_ID}/trace`)) as { segs: [number, number][] };
@@ -199,7 +258,13 @@ describe("the readers get the whole run", () => {
       expect(body.includes(liveToken)).toBe(false);
       expect(body.includes(CHAT_KEY)).toBe(false);
     }
-    for (const body of await bodiesOf(false)) expect(body).toContain(`${CHAT_SAID} ${liveToken} and ${CHAT_KEY}`);
+    // The stack's writer strikes the session's own token from every line it
+    // writes (an agent can print it), so not even the operator's reads hold it;
+    // the key's shape is not the session's secret and is masked only publicly.
+    // (The operator's positions body still quotes the token, from the episodic status line above.)
+    const priv = await bodiesOf(false);
+    for (const body of priv) expect(body).toContain(`${CHAT_SAID} [redacted] and ${CHAT_KEY}`);
+    for (const body of priv.slice(0, 2)) expect(body.includes(liveToken)).toBe(false);
   });
 
   test("the collector stores every line, and no table holds the token", async () => {

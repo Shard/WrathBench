@@ -14,7 +14,7 @@
  *                         ends on Edwin VanCleef).
  *
  * The kill reading is the `kill` milestone the sandbox child latches off
- * `SMSG_PARTYKILLLOG` (`sandbox/party-watch.ts`): the server sends it to every
+ * `SMSG_PARTYKILLLOG` (the stack's party watcher, `wrath-mcp/mcp/src/record/party-watch.ts`): the server sends it to every
  * member of the tapping group, wherever each stands, naming the loot
  * recipient as the killer, or to the killer alone when it has no group. A
  * kill a client outside that group made is never sent to it, and a killer
@@ -105,7 +105,9 @@ export function killEndMet(ends: readonly EndCondition[], k: KillReading, member
 }
 
 export function killEndDetail(k: { entry: number; killerGuid: string; self: boolean }): string {
-  return `entry ${k.entry} killed (killer ${k.self ? "this character" : `party member ${k.killerGuid}`})`;
+  // A party member that is not one of the deployment's own sessions has no guid on the record.
+  const who = k.self ? "this character" : k.killerGuid === "" ? "a party member" : `party member ${k.killerGuid}`;
+  return `entry ${k.entry} killed (killer ${who})`;
 }
 
 /** The milestone records the retro reading folds. */

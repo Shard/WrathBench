@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { applySheetPatch as writerPatch, SHEET_KEY_LEN as WRITER_KEY_LEN } from "../src/trace-row";
+import { applySheetPatch as writerPatch, SHEET_KEY_LEN as WRITER_KEY_LEN } from "@wrathbench/mcp/record";
 import {
   SEG_MS,
   STATE_KEYS,
@@ -72,7 +72,7 @@ function dict(): TraceDictLookup & { asked: number[] } {
   };
 }
 
-/** The writer's own fold, from the runner's spelling of the patch rule: what `sheetAt` must agree with. */
+/** The writer's own fold, from the stack's spelling of the patch rule (`@wrathbench/mcp/record`): what `sheetAt` must agree with. */
 function writerFold(rows: TraceRow[], until: number): TraceSheet {
   let s = emptyTraceSheet();
   for (const r of rows) {

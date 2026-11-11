@@ -1,156 +1,35 @@
 /**
  * The party records (docs/proposals/GROUP-PLAY.md §6): `group`, `instance`
- * and `kill` milestones, latched in the sandbox child off the packets the
- * server sends and drained by the loop's state sample.
+ * and `kill` milestones. The stack records the transitions off the packets
+ * the server sends (`@wrathbench/mcp/record`, the session record's `events`
+ * stream, after its write gate), the runner's host hands them to the loop
+ * (`SandboxHost.partySignals`, through `RecordSignals`), and the loop writes
+ * them on its state sample.
  *
- * Three halves, all fixture-based, in the shape of `flight.test.ts`. The
- * watcher alone over a hand-built cache; the real sandbox child fed frames
- * written from wrath-mcp/module/PROTOCOL.md's tables (and, for the two the module has
- * not tapped yet, the shapes the design gives them: `instanceType` on
- * `WB_AREA`, `killerGuid`/`victimGuid` on `SMSG_PARTYKILLLOG`); and the loop
- * writing what a fake sandbox hands it. Guids, positions and names are
- * invented; nothing is captured from a running game.
+ * The watcher over a hand-built cache is the stack's and is tested there
+ * (`wrath-mcp/mcp/test/record-party-watch.test.ts`), as is the gate
+ * (`record-gate.test.ts`). Here: one real child with the run's session record,
+ * end to end, and the loop writing what a fake sandbox hands it. Frames are
+ * written from wrath-mcp/module/PROTOCOL.md's tables (and, for the two the
+ * module has not tapped yet, the shapes the design gives them: `instanceType`
+ * on `WB_AREA`, `killerGuid`/`victimGuid` on `SMSG_PARTYKILLLOG`). Guids,
+ * positions and names are invented; nothing is captured from a running game.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import type { PartySignal } from "@wrathbench/mcp/record";
 import { loadRunConfig } from "../src/config";
 import { ContextBuilder } from "../src/loop";
 import { SandboxHost } from "../src/sandbox/host";
-import { PartyWatcher, type PartySignal, type PartyWatchState } from "../src/sandbox/party-watch";
+import { openSessionRecord } from "../src/session-record";
 import { Scratchpad } from "@wrathbench/mcp";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
+import { openTestSession, recordDrain } from "./fixtures/v1-session";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
-
-// ------------------------------------------------------------ the watcher
-
-/** A cache the test sets by hand. */
-function fakeState(): PartyWatchState & {
-  g: ReturnType<PartyWatchState["group"]>;
-  objects: Map<string, { entry: number | undefined; type: string | undefined }>;
-  ranks: Map<number, number>;
-} {
-  const s = {
-    g: undefined as ReturnType<PartyWatchState["group"]>,
-    objects: new Map<string, { entry: number | undefined; type: string | undefined }>(),
-    ranks: new Map<number, number>(),
-    group: () => s.g,
-    selfGuid: () => "7",
-    objectOf: (guid: string) => s.objects.get(guid),
-    rankOf: (entry: number) => s.ranks.get(entry),
-  };
-  return s;
-}
-
-let seq = 0;
-const ev = (opcode: string, data: unknown = {}): { opcode: string; ts: number; seq: number; data: unknown } => ({ opcode, ts: 1000 + ++seq, seq, data });
-const inGroup = (members: string[], leader = "7", groupGuid = "9001") => ({
-  inGroup: true,
-  groupGuid,
-  leaderGuid: leader,
-  members: members.map((guid) => ({ guid })),
-});
-
-describe("the party watcher", () => {
-  test("a login list is joined; a new member or leader is changed; leaving is left; nothing repeats", () => {
-    const st = fakeState();
-    const w = new PartyWatcher(st);
-    st.g = inGroup(["11", "12", "13", "14"]);
-    w.observe(ev("SMSG_GROUP_LIST"));
-    w.observe(ev("SMSG_GROUP_LIST")); // the same list again: nothing
-    st.g = inGroup(["11", "12", "13", "14"], "11");
-    w.observe(ev("SMSG_GROUP_SET_LEADER"));
-    st.g = { inGroup: false, groupGuid: undefined, leaderGuid: undefined, members: [] };
-    w.observe(ev("SMSG_GROUP_DESTROYED"));
-    const got = w.drain();
-    expect(got.map((s) => (s.kind === "group" ? s.event : s.kind))).toEqual(["joined", "changed", "left"]);
-    expect(got[0]).toMatchObject({ kind: "group", groupGuid: "9001", leaderGuid: "7", members: ["11", "12", "13", "14"], count: 5 });
-    expect(got[1]).toMatchObject({ leaderGuid: "11" });
-    expect(got[2]).toMatchObject({ members: [], count: 0 });
-    expect(got[2]).not.toHaveProperty("groupGuid");
-    expect(w.drain()).toEqual([]);
-  });
-
-  test("a first reading outside a group seeds silently", () => {
-    const st = fakeState();
-    const w = new PartyWatcher(st);
-    st.g = { inGroup: false, groupGuid: undefined, leaderGuid: undefined, members: [] };
-    w.observe(ev("SMSG_GROUP_LIST"));
-    expect(w.drain()).toEqual([]);
-  });
-
-  test("an instance is a map change whose instance type changed, seeded silently, and silent with no instanceType", () => {
-    const st = fakeState();
-    const w = new PartyWatcher(st);
-    // No instanceType: a module that does not serve it yet.
-    w.observe(ev("WB_AREA", { mapId: 0, zoneId: 40, zoneName: "", areaId: 20, areaName: "" }));
-    w.observe(ev("WB_AREA", { mapId: 36, zoneId: 1581, zoneName: "", areaId: 1581, areaName: "" }));
-    expect(w.drain()).toEqual([]);
-    // Seeded in Moonbrook, a subzone change on the same map, then the portal.
-    w.observe(ev("WB_AREA", { mapId: 0, instanceType: 0, zoneId: 40, zoneName: "", areaId: 20, areaName: "" }));
-    w.observe(ev("WB_AREA", { mapId: 0, instanceType: 0, zoneId: 40, zoneName: "", areaId: 21, areaName: "" }));
-    w.observe(ev("WB_AREA", { mapId: 36, instanceType: 1, zoneId: 1581, zoneName: "", areaId: 1581, areaName: "" }));
-    // Out by the far trigger, and a reattach that says where the character is.
-    w.observe(ev("WB_SESSION_STATE", { map: 0, instanceType: 0, x: 0, y: 0, z: 0 }));
-    const got = w.drain();
-    expect(got).toEqual([
-      expect.objectContaining({ kind: "instance", event: "entered", map: 36, instanceType: 1, from: { map: 0, instanceType: 0 } }),
-      expect.objectContaining({ kind: "instance", event: "left", map: 0, instanceType: 0, from: { map: 36, instanceType: 1 } }),
-    ]);
-  });
-
-  test("a map change inside one instance type writes nothing (a tram, a continent hop)", () => {
-    const st = fakeState();
-    const w = new PartyWatcher(st);
-    w.observe(ev("WB_AREA", { mapId: 0, instanceType: 0 }));
-    w.observe(ev("WB_AREA", { mapId: 1, instanceType: 0 }));
-    w.observe(ev("WB_AREA", { mapId: 369, instanceType: 0 }));
-    expect(w.drain()).toEqual([]);
-  });
-
-  test("a kill of rank 1 or above is recorded with its entry and rank; rank 0 and players are not; an unanswered rank is", () => {
-    const st = fakeState();
-    const w = new PartyWatcher(st);
-    st.objects.set("4000", { entry: 639, type: "unit" });
-    st.ranks.set(639, 1);
-    st.objects.set("4001", { entry: 299, type: "unit" });
-    st.ranks.set(299, 0);
-    st.objects.set("4002", { entry: 657, type: "unit" }); // no creature query answered
-    st.objects.set("42", { entry: undefined, type: "player" });
-    w.observe(ev("SMSG_PARTYKILLLOG", { killerGuid: "7", victimGuid: "4000" }));
-    w.observe(ev("SMSG_PARTYKILLLOG", { killerGuid: "11", victimGuid: "4001" }));
-    w.observe(ev("SMSG_PARTYKILLLOG", { killer: 11, victim: "4002" }));
-    w.observe(ev("SMSG_PARTYKILLLOG", { killerGuid: "11", victimGuid: "42" }));
-    w.observe(ev("SMSG_PARTYKILLLOG", { killerGuid: "not a guid" }));
-    const got = w.drain() as Extract<PartySignal, { kind: "kill" }>[];
-    expect(got.map((k) => [k.victimGuid, k.entry, k.rank, k.self])).toEqual([
-      ["4000", 639, 1, true],
-      ["4002", 657, undefined, false],
-    ]);
-    expect(got[1]!.killerGuid).toBe("11");
-  });
-
-  test("a kill says whether its killer is this character or a group member, and names a victim out of sight by its guid", () => {
-    const st = fakeState();
-    const w = new PartyWatcher(st);
-    st.g = inGroup(["11", "12", "13", "14"]);
-    // A creature guid as a party's tank was told of one: high 0xF130, entry 639 in bits 24..47.
-    const vancleef = "17379390972743385188";
-    st.ranks.set(639, 1);
-    w.observe(ev("SMSG_PARTYKILLLOG", { killerGuid: "12", victimGuid: vancleef }));
-    w.observe(ev("SMSG_PARTYKILLLOG", { killerGuid: "7", victimGuid: vancleef }));
-    w.observe(ev("SMSG_PARTYKILLLOG", { killerGuid: "99", victimGuid: vancleef }));
-    const got = w.drain() as Extract<PartySignal, { kind: "kill" }>[];
-    expect(got.map((k) => [k.killerGuid, k.entry, k.rank, k.self, k.member])).toEqual([
-      ["12", 639, 1, false, true],
-      ["7", 639, 1, true, true],
-      ["99", 639, 1, false, false],
-    ]);
-  });
-});
 
 // ------------------------------------------------------- the sandbox child
 
@@ -159,21 +38,30 @@ afterEach(async () => {
   await Promise.all(hosts.splice(0, hosts.length).map((h) => h.stop()));
 });
 
-function makeHost(): SandboxHost {
-  const dir = tempDir("wrathbench-party-");
+/**
+ * A real runner host with the run's session record, in a runs directory
+ * where a sibling run's session is the character with guid "12": that member
+ * is the deployment's own, the other three are foreign.
+ */
+async function makeHost(): Promise<SandboxHost> {
+  const runsDir = tempDir("wrathbench-party-");
+  const sibling = openTestSession(join(runsDir, "sibling-run"), Date.now());
+  sibling.writer.ingest(recordDrain({ character: { guid: "12", name: "Corvin", race: 1, class: 1 } }));
+  await sibling.writer.close();
   const host = new SandboxHost({
     moduleUrl: "http://worldserver:8086",
     token: "test-token",
-    scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+    scratchpad: new Scratchpad(join(runsDir, "scratchpad.md")),
     snippetTimeoutMs: 5_000,
     pingGraceMs: 1_000,
+    session: openSessionRecord({ runDir: join(runsDir, "run-party"), runsDir, token: "test-token", scrub: (t) => t }),
   });
   hosts.push(host);
   return host;
 }
 
 /**
- * Enter the world as guid "7" in Moonbrook. `WB_SESSION_STATE` 0xFF03,
+ * Enter the world as guid "7". `WB_SESSION_STATE` 0xFF03,
  * `SMSG_GROUP_LIST` 0x07D (PROTOCOL.md's shape), `WB_AREA` 0xFF07 with the
  * `instanceType` the module's phase-1 change adds, `SMSG_UPDATE_OBJECT`
  * 0x0A9, `SMSG_CREATURE_QUERY_RESPONSE` 0x061, and `SMSG_PARTYKILLLOG` 0x1F5
@@ -197,9 +85,9 @@ feed("WB_SESSION_STATE", 0xff03, {
 });
 `;
 
-describe("sandbox child: the party records latched from the events", () => {
-  test("the login group list, the portal and a boss kill come back in order, drained once", async () => {
-    const host = makeHost();
+describe("the runner's host hands the loop the party records the stack wrote", () => {
+  test("the login group list, the portal and a boss kill come back in order, as written, drained once", async () => {
+    const host = await makeHost();
     expect((await host.evalSnippet(PRELUDE)).ok).toBe(true);
     await host.evalSnippet(`
       groupList("7");
@@ -209,13 +97,19 @@ describe("sandbox child: the party records latched from the events", () => {
         pos: { x: -80, y: -800, z: 20, o: 0 }, fields: { entry: 639, health: 0, maxHealth: 5000, level: 21 } }] });
       feed("SMSG_CREATURE_QUERY_RESPONSE", 0x061, { entry: 639, found: true, name: "Invented Boss", subname: "", type: 7, rank: 1 });
       feed("SMSG_PARTYKILLLOG", 0x1f5, { killerGuid: "12", victimGuid: "4000" });
+      feed("SMSG_PARTYKILLLOG", 0x1f5, { killerGuid: "13", victimGuid: "4000" });
       "fed";
     `);
     const got = await host.partySignals();
-    expect(got.map((s) => s.kind)).toEqual(["group", "instance", "kill"]);
-    expect(got[0]).toMatchObject({ event: "joined", groupGuid: "9001", leaderGuid: "7", members: ["11", "12", "13", "14"], count: 5 });
+    expect(got.map((s) => s.kind)).toEqual(["group", "instance", "kill", "kill"]);
+    // What the gate wrote: the sibling run's character is a member by guid,
+    // the three foreign players are only counted (`foreign`, which the signal
+    // does not carry), and the count still says five.
+    expect(got[0]).toMatchObject({ event: "joined", groupGuid: "9001", leaderGuid: "7", members: ["12"], count: 5 });
     expect(got[1]).toMatchObject({ event: "entered", map: 36, instanceType: 1 });
-    expect(got[2]).toMatchObject({ killerGuid: "12", victimGuid: "4000", entry: 639, rank: 1, self: false });
+    expect(got[2]).toMatchObject({ killerGuid: "12", victimGuid: "4000", entry: 639, rank: 1, self: false, member: true });
+    // A foreign member's kill: its guid is never written, and the signal says so with "" while `member` stands.
+    expect(got[3]).toMatchObject({ killerGuid: "", victimGuid: "4000", entry: 639, rank: 1, self: false, member: true });
     expect(await host.partySignals()).toEqual([]);
   });
 });
@@ -266,7 +160,7 @@ function builder(queue: PartySignal[][], o: { drain?: boolean; watchdogs?: Watch
 
 const joinedSignal = (ts: number): PartySignal => ({ kind: "group", event: "joined", groupGuid: "9001", leaderGuid: "7", members: ["11", "12", "13", "14"], count: 5, ts, seq: ts });
 
-describe("the loop writes what the child latched", () => {
+describe("the loop writes what its host hands it", () => {
   test("each record carries the packet's own timestamp; a restarted child's re-read login list is not a second join", async () => {
     const { dir, sample } = builder([
       [joinedSignal(4000), { kind: "instance", event: "entered", map: 36, instanceType: 1, from: { map: 0, instanceType: 0 }, ts: 4100, seq: 41 }],
@@ -314,13 +208,13 @@ describe("the loop writes what the child latched", () => {
   });
 
   test("a kill latched mid-row is written and read by the end check at the next tick, not the next state row", async () => {
-    // deadmines@4: the VanCleef packet reached every member at once, but the
-    // kill was written on each member's own 60 s row phase, so the members
-    // ended up to 22 s apart and the last after the roster had stopped it.
+    // A five-member run's boss kill: the packet reached every member at once,
+    // but the kill was written on each member's own 60 s row phase, so the
+    // members ended up to 22 s apart and the last after the roster had stopped it.
     const config = loadRunConfig({ driver: "stub" });
     const watchdogs = new Watchdogs(config.watchdogs, Date.now, 0, { end: [{ kill: { entry: 639 } }] });
-    const vancleef: PartySignal = { kind: "kill", killerGuid: "12", victimGuid: "17379390972743385188", entry: 639, rank: 1, self: false, member: true, ts: 5_100, seq: 51 };
-    const { dir, sample, sampleAfter } = builder([[joinedSignal(4000)], [vancleef]], { watchdogs });
+    const boss: PartySignal = { kind: "kill", killerGuid: "12", victimGuid: "17379390972743385188", entry: 639, rank: 1, self: false, member: true, ts: 5_100, seq: 51 };
+    const { dir, sample, sampleAfter } = builder([[joinedSignal(4000)], [boss]], { watchdogs });
     await sample(); // a state row, and the login group list
     expect(watchdogs.check()).toBeNull();
     await sampleAfter(5_000); // one tick later, well inside the row gate
@@ -332,6 +226,16 @@ describe("the loop writes what the child latched", () => {
     ]);
     // ...and the row cadence itself did not move: still the one state row.
     expect(records.filter((r) => r.t === "state")).toHaveLength(1);
+  });
+
+  test("a kill the stack wrote without a foreign killer's guid still meets a kill end as a member's", async () => {
+    const config = loadRunConfig({ driver: "stub" });
+    const watchdogs = new Watchdogs(config.watchdogs, Date.now, 0, { end: [{ kill: { entry: 639 } }] });
+    const kill: PartySignal = { kind: "kill", killerGuid: "", victimGuid: "17379390972743385188", entry: 639, rank: 1, self: false, member: true, ts: 4100, seq: 41 };
+    const { dir, sample } = builder([[joinedSignal(4000), kill]], { watchdogs });
+    await sample();
+    expect(watchdogs.check()).toEqual({ reason: "kill-target", detail: "entry 639 killed (killer a party member)" });
+    expect(readTrajectory(dir).find((r) => r.t === "milestone" && r["kind"] === "kill")).toMatchObject({ member: true, self: false, entry: 639 });
   });
 
   test("a sandbox without the drain writes no party record", async () => {

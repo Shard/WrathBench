@@ -404,6 +404,8 @@ describe("sandbox evaluation", () => {
         "WRATHBENCH_TOKEN",
         "WRATHBENCH_SECRET",
         "WRATHBENCH_ACCOUNT",
+        // Whether the child runs the session recorder: set by the host, never a credential.
+        "WRATHBENCH_RECORD",
       ]);
       expect(keys.filter((k) => !admitted.has(k))).toEqual([]);
       expect(keys).not.toContain("WB_CANARY_SECRET");
@@ -480,7 +482,7 @@ describe("sandbox evaluation", () => {
       join(import.meta.dir, "..", "src", "sandbox", "child-extension.ts"),
     ];
     const read = files.flatMap((f) => [...readFileSync(f, "utf8").matchAll(/process\.env\["([A-Z0-9_]+)"\]/g)].map((m) => m[1]!));
-    const provided = new Set([...SANDBOX_FORWARDED_ENV, "WRATHBENCH_MODULE_URL", "WRATHBENCH_TOKEN", "WRATHBENCH_SECRET", "WRATHBENCH_ACCOUNT"]);
+    const provided = new Set([...SANDBOX_FORWARDED_ENV, "WRATHBENCH_MODULE_URL", "WRATHBENCH_TOKEN", "WRATHBENCH_SECRET", "WRATHBENCH_ACCOUNT", "WRATHBENCH_RECORD"]);
     expect(read.length).toBeGreaterThan(0);
     expect(read.filter((k) => !provided.has(k))).toEqual([]);
   });

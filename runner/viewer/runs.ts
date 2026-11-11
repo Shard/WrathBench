@@ -28,6 +28,7 @@ import { holdsOnlyLaunchFiles } from "../src/launch-files";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ComparabilityView, ItemSample, MoveIntentView, RunRow, StateItemsRow, StatePoint } from "./api-types";
+import { sessionSource } from "./session-source";
 import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./archive-dir";
 import { harnessOfRun, parseComparability } from "../src/comparability";
@@ -535,44 +536,9 @@ export function readStateItems(runsDir: string, runId: string): StateItemsRow[] 
   }
 }
 
-/**
- * Every movement intention a run recorded, oldest first.
- *
- * The table is young: a run.sqlite written before it existed has no `move`
- * table at all, and the `catch` is what turns that into "this run recorded
- * none" rather than an error the map has to handle.
- */
+/** Every movement intention a run recorded, oldest first, from its session source (`session-source.ts`). */
 export function readMoves(runsDir: string, runId: string): MoveIntentView[] {
-  const dir = join(runsDir, runId);
-  const db = openReadonly(dir);
-  if (db === null) return [];
-  try {
-    const rows = db.query(`SELECT * FROM move WHERE run_id = ? ORDER BY ts`).all(runId) as Record<
-      string,
-      unknown
-    >[];
-    const out: MoveIntentView[] = [];
-    for (const r of rows) {
-      const x = num(r["x"]);
-      const y = num(r["y"]);
-      const z = num(r["z"]);
-      if (x === null || y === null || z === null) continue;
-      out.push({
-        ts: num(r["ts"]) ?? 0,
-        map: num(r["map"]),
-        x,
-        y,
-        z,
-        target: typeof r["target"] === "string" ? r["target"] : null,
-        status: typeof r["status"] === "string" ? r["status"] : null,
-      });
-    }
-    return out;
-  } catch {
-    return [];
-  } finally {
-    db.close();
-  }
+  return sessionSource(runsDir, runId).moves();
 }
 
 export function readScratchpad(runsDir: string, runId: string): string | null {

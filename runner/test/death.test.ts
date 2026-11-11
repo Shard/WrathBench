@@ -1,13 +1,16 @@
 /**
- * The death producer: transitions latched in the sandbox child off the events
- * that carry them, drained by the loop's state sample and written as
- * `death` / `release` / `resurrect` milestones.
+ * The death records: the transitions the stack recorded off the events that
+ * carry them (`@wrathbench/mcp/record`, the session record's `events` stream),
+ * handed to the loop by the runner's host (`SandboxHost.deathSignals`, through
+ * `RecordSignals`) and written as `death` / `release` / `resurrect` milestones.
  *
- * Two halves, both fixture-based. The child half runs the real sandbox process
- * against a fake event stream — no game stack, frames hand-written from
- * wrath-mcp/module/PROTOCOL.md's own tables (positions are invented; nothing here is
- * captured from a running game, CLAUDE.md). The loop half feeds the drained
- * signals to `ContextBuilder` through a fake sandbox and reads the trajectory.
+ * The watcher itself, frame by frame, is the stack's and is tested there
+ * (`wrath-mcp/mcp/test/record-watchers.test.ts`). Here: that the runner's host
+ * hands the loop what the stack recorded from a real child, that a host
+ * keeping no record says so by throwing and the loop then reads the window
+ * from its sample, and that the loop writes what it is handed. Frames are
+ * hand-written from wrath-mcp/module/PROTOCOL.md's own tables; positions are
+ * invented and nothing here is captured from a running game (CLAUDE.md).
  *
  * The shape of the sequence is the one run
  * `fleet-sonnet-low-freeplay-sonnet-low-20260827-a2` produced three times and
@@ -21,6 +24,7 @@ import { loadRunConfig } from "../src/config";
 import { ContextBuilder } from "../src/loop";
 import { SandboxHost } from "../src/sandbox/host";
 import type { DeathSignal } from "../src/sandbox/signals";
+import { openSessionRecord } from "../src/session-record";
 import { Scratchpad } from "@wrathbench/mcp";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
@@ -30,14 +34,17 @@ const tempDir = tempDirs();
 
 const hosts: SandboxHost[] = [];
 
-function makeHost(): SandboxHost {
-  const dir = tempDir("wrathbench-death-");
+/** A real runner host; with `record`, the run's session record as run.ts opens it. */
+function makeHost(o: { record?: boolean } = {}): SandboxHost {
+  const runsDir = tempDir("wrathbench-death-");
+  const runDir = join(runsDir, "run-death");
   const host = new SandboxHost({
     moduleUrl: "http://worldserver:8086",
     token: "test-token",
-    scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+    scratchpad: new Scratchpad(join(runsDir, "scratchpad.md")),
     snippetTimeoutMs: 5_000,
     pingGraceMs: 1_000,
+    ...(o.record === true ? { session: openSessionRecord({ runDir, runsDir, token: "test-token", scrub: (t) => t }) } : {}),
   });
   hosts.push(host);
   return host;
@@ -72,150 +79,68 @@ feed("WB_SESSION_STATE", 0xff03, {
 selfFields({ health: 186, maxHealth: 186, playerFlags: 0 });
 `;
 
-describe("sandbox child: the death window latched from the events", () => {
-  test("one death, release and resurrect, in order and with the packets' own facts", async () => {
-    const host = makeHost();
+/** One whole window: death, repop to the graveyard, the Spirit Healer. */
+const WINDOW = `
+  selfFields({ health: 0 });
+  reclaimDelay(30000);
+  releaseLoc(0, -6164, 336, 399);
+  selfFields({ playerFlags: 0x10, health: 1 });
+  releaseLoc(-1, 0, 0, 0);
+  selfFields({ playerFlags: 0, health: 132 });
+  "fed";
+`;
+
+describe("the runner's host hands the loop what the stack recorded", () => {
+  test("a death, release and resurrect the child saw come back from the session record, in order and drained once", async () => {
+    const host = makeHost({ record: true });
     expect((await host.evalSnippet(PRELUDE)).ok).toBe(true);
     // Nothing has happened: the drain is empty, not undefined.
     expect(await host.deathSignals()).toEqual([]);
-
-    await host.evalSnippet(`
-      // The death: own health to zero. The cache latches the corpse at the
-      // spot the character stood on (source "death_spot").
-      selfFields({ health: 0 });
-      reclaimDelay(30000);
-      // repop(): the server answers with the graveyard.
-      releaseLoc(0, -6164, 336, 399);
-      selfFields({ playerFlags: 0x10, health: 1 });
-      // The Spirit Healer: the clear marker, then health back.
-      releaseLoc(-1, 0, 0, 0);
-      selfFields({ playerFlags: 0, health: 132 });
-      "fed";
-    `);
-
+    expect((await host.evalSnippet(WINDOW)).ok).toBe(true);
+    // No record tick has run since: `deathSignals` forces one drain itself.
     const signals = await host.deathSignals();
     expect(signals.map((s) => s.kind)).toEqual(["death", "release", "resurrect"]);
-    const death = signals[0]!;
-    expect(death.position).toEqual({ map: 0, x: -6572, y: 405, z: 387, source: "death_spot" });
-    // The ghost flag at the instant of death: not yet released. The `release`
-    // record a moment later is what says the spirit went to the graveyard.
-    expect(death.released).toBe(false);
-    // ... and when `playerFlags` has never arrived the field is simply absent,
-    // which is the ordinary case: an update block need not carry it.
-    expect([death.zone, death.area]).toEqual([1, 132]);
+    expect(signals[0]).toMatchObject({ position: { map: 0, x: -6572, y: 405, z: 387, source: "death_spot" }, zone: 1, area: 132, released: false });
     expect(signals[1]!.graveyard).toEqual({ map: 0, x: -6164, y: 336, z: 399 });
-    // Each signal carries the timestamp of the event that made it, and they
-    // climb: this is the fact the sampled read could not produce.
-    expect(death.ts).toBeLessThan(signals[1]!.ts);
+    // Each carries the timestamp and seq of the event that made it.
+    expect(signals[0]!.ts).toBeLessThan(signals[1]!.ts);
     expect(signals[1]!.ts).toBeLessThan(signals[2]!.ts);
+    expect(signals.every((s) => s.seq > 0)).toBe(true);
     // Draining is destructive: the same window is never written twice.
     expect(await host.deathSignals()).toEqual([]);
   });
 
-  test("two complete windows between two drains are two deaths", async () => {
+  test("a host that keeps no record throws from every drain, and the loop reads the death from its sample instead", async () => {
     const host = makeHost();
-    await host.evalSnippet(PRELUDE);
-    await host.evalSnippet(`
-      for (const n of [1, 2]) {
-        selfFields({ health: 0 });
-        releaseLoc(0, -6164, 336, 399);
-        releaseLoc(-1, 0, 0, 0);
-        selfFields({ health: 100 });
-      }
-      "fed";
-    `);
-    const kinds = (await host.deathSignals()).map((s) => s.kind);
-    expect(kinds).toEqual(["death", "release", "resurrect", "death", "release", "resurrect"]);
-  });
+    expect((await host.evalSnippet(PRELUDE)).ok).toBe(true);
+    await expect(host.deathSignals()).rejects.toThrow("keeps no session record");
+    await expect(host.flightSignals()).rejects.toThrow("keeps no session record");
+    await expect(host.partySignals()).rejects.toThrow("keeps no session record");
 
-  test("the ghost bit still set after the clear marker is not a second release, and the next death is clean", async () => {
-    // The shape behind every death of a long freeplay run being written as
-    // death, release, resurrect, release, resurrect: the Spirit Healer's clear
-    // marker (and health back) arrive while the cached ghost bit still reads
-    // set, and only a later block clears it. Reading the bit as a level re-
-    // opened the window on the next event and closed it again when the bit
-    // went off. Then a second death, to prove nothing stale is left latched —
-    // a ghost bit remembered from the first would read the second death's
-    // first `ghost === false` as a resurrect.
-    const host = makeHost();
-    await host.evalSnippet(PRELUDE);
-    await host.evalSnippet(`
-      selfFields({ health: 0 });
-      releaseLoc(0, -6164, 336, 399);
-      selfFields({ playerFlags: 0x10, health: 1 });
-      releaseLoc(-1, 0, 0, 0);
-      selfFields({ health: 132 });
-      reclaimDelay(0);
-      selfFields({ playerFlags: 0 });
-      selfFields({ health: 0 });
-      selfFields({ health: 0, maxHealth: 186 });
-      releaseLoc(0, -6164, 336, 399);
-      selfFields({ playerFlags: 0x10, health: 1 });
-      releaseLoc(-1, 0, 0, 0);
-      selfFields({ playerFlags: 0, health: 140 });
-      "fed";
-    `);
-    const signals = await host.deathSignals();
-    expect(signals.map((s) => s.kind)).toEqual(["death", "release", "resurrect", "death", "release", "resurrect"]);
-    expect(signals.filter((s) => s.kind === "release").every((s) => s.graveyard !== undefined)).toBe(true);
-  });
-
-  test("a death with the ghost flag never observed carries no `released` at all", async () => {
-    const host = makeHost();
-    await host.evalSnippet(PRELUDE.replace(", playerFlags: 0", ""));
-    await host.evalSnippet('selfFields({ health: 0 }); "fed";');
-    const death = (await host.deathSignals())[0]!;
-    expect(death.kind).toBe("death");
-    expect(death.released).toBeUndefined();
-  });
-
-  test("a stale playerFlags 0 through the whole window is not a resurrect", async () => {
-    // The ordinary case, and the one that would have made this producer worse
-    // than the sampled read: `playerFlags` need not ride the blocks a death
-    // brings, so a ghost can read `ghost === false` for the whole window. Only
-    // a bit that was seen *on* means anything when it goes off.
-    const host = makeHost();
-    await host.evalSnippet(PRELUDE);
-    await host.evalSnippet(`
-      selfFields({ health: 0 });
-      releaseLoc(0, -6164, 336, 399);
-      reclaimDelay(30000);
-      selfFields({ health: 1 });
-      "fed";
-    `);
-    expect((await host.deathSignals()).map((s) => s.kind)).toEqual(["death", "release"]);
-  });
-
-  test("a release and resurrect seen only through the ghost flag are read too", async () => {
-    const host = makeHost();
-    await host.evalSnippet(PRELUDE);
-    await host.evalSnippet(`
-      selfFields({ health: 0 });
-      selfFields({ playerFlags: 0x10, health: 1 });
-      selfFields({ playerFlags: 0, health: 1 });
-      "fed";
-    `);
-    expect((await host.deathSignals()).map((s) => s.kind)).toEqual(["death", "release", "resurrect"]);
-  });
-
-  test("a corpse that is never released still records the death", async () => {
-    // No repop: the character lies dead and the run ends there. The death is
-    // still the death.
-    const host = makeHost();
-    await host.evalSnippet(PRELUDE);
+    // The loop over that real host: the throw is "no drain", and the sampled
+    // window read is the producer. The first sample seeds it alive; the
+    // second lands inside the window, a corpse in the cache.
+    const dir = tempDir("wrathbench-death-fallback-");
+    let clock = 1_000_000;
+    const config = { ...loadRunConfig({ driver: "stub", stateIntervalMs: 60_000 }), runId: "run-test", token: "run-test" };
+    const trajectory = new Trajectory(dir);
+    trajectory.writeMeta({ runId: "run-test", harnessVersion: "t", startedAt: Date.now(), config });
+    const ctx = new ContextBuilder({
+      config,
+      sandbox: host,
+      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      trajectory,
+      watchdogs: new Watchdogs(config.watchdogs),
+      now: () => clock,
+    });
+    expect(await ctx.sampleState()).not.toBeNull();
+    expect(deathRecords(dir)).toEqual([]);
     await host.evalSnippet('selfFields({ health: 0 }); reclaimDelay(30000); "fed";');
-    expect((await host.deathSignals()).map((s) => s.kind)).toEqual(["death"]);
-  });
-
-  test("staying dead across many events is one death, not one per event", async () => {
-    const host = makeHost();
-    await host.evalSnippet(PRELUDE);
-    await host.evalSnippet(`
-      selfFields({ health: 0 });
-      for (let i = 0; i < 20; i++) selfFields({ health: 0 });
-      "fed";
-    `);
-    expect((await host.deathSignals()).map((s) => s.kind)).toEqual(["death"]);
+    clock += 60_000;
+    await ctx.sampleState();
+    expect(deathRecords(dir).map((r) => r["kind"])).toEqual(["death"]);
+    expect(deathRecords(dir)[0]).toMatchObject({ zone: { id: 1 }, area: { id: 132 } });
+    trajectory.close();
   });
 });
 

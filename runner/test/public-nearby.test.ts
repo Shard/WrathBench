@@ -7,19 +7,26 @@
  * it wrote and flags a planted token, a planted player and a window that is
  * not live.
  *
- * Over the poisoned runs directory, with the live run's ring rewritten by the
- * runner's own `NearbyWriter` to reach back fourteen minutes: a plain
- * creature that walks, a vendor with a subname and a quest mark, another
- * player and their pet, and a creature that chases that player and then the
- * character. Names, entries and guids are invented. The ring is stamped on
- * the wall clock, because the viewer's route reads the ring at `Date.now()`.
+ * Over the poisoned runs directory, with the live run's ring rewritten to
+ * reach back fourteen minutes: a plain creature that walks, a vendor with a
+ * subname and a quest mark, another player and their pet, and a creature that
+ * chases that player and then the character. A v1 run's ring is written by
+ * the stack's `SessionWriter` into `session/nearby` through the run's session
+ * record, whose gate keeps the player and its pet out and cuts the chaser's
+ * target to `"player"`; a 0.5 run's is one-minute files as 0.5 left them
+ * (`fixtures/legacy05-writer.ts`), players and all. Names, entries and guids
+ * are invented. The ring is stamped on the wall clock, because the viewer's
+ * route reads the ring at `Date.now()`.
  */
 
 import { describe, expect, test } from "bun:test";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { NearbyWriter } from "../src/nearby";
-import type { NearbyRow, NearbyUnit } from "../src/nearby-row";
+import type { NearbyRow, NearbyUnit, NearbyUnitType } from "@wrathbench/mcp/record";
+import { openSessionRecord, removeSessionRing } from "../src/session-record";
+import { sessionSource } from "../viewer/session-source";
+import { LEGACY05_RING, writeLegacy05Ring } from "./fixtures/legacy05-writer";
+import { recordDrain } from "./fixtures/v1-session";
 import type { LiveNearby, PositionsResponse } from "../viewer/api-types";
 import { PUBLIC_NEARBY_SPAN_MS, decodeNearby, nearbyAt } from "../viewer/nearby";
 import { PUBLIC_NEARBY_KEYS, projectLiveNearby } from "../viewer/public-projection";
@@ -47,13 +54,17 @@ const NAMES = {
 /** How far back the ring reaches when the pass runs: past the public span, inside the ring's own reach. */
 const RING_BACK_MS = 14 * 60_000;
 
+/** Where the live run's ring is: a v1 run's session record, or a 0.5 run's minute files. */
+type Layout = "v1" | "0.5";
+const LAYOUTS: readonly Layout[] = ["v1", "0.5"];
+
 /**
  * The scene, fourteen minutes back to a second ago: the wolf walks, the chaser
  * goes after the other player and then the character. `aheadMs` stamps the
  * child's horizon that far past now instead, as a runner pod's clock ahead of
  * the publisher's would.
  */
-async function writeRing(runDir: string, aheadMs = -1_000): Promise<{ from: number; chaseSelfAt: number }> {
+async function writeRing(runsDir: string, runDir: string, aheadMs = -1_000, layout: Layout = "v1"): Promise<{ from: number; chaseSelfAt: number }> {
   const now = Date.now();
   const from = now - RING_BACK_MS;
   const at = (x: number, t: number): NonNullable<NearbyUnit["m"]> => ({ k: "pos", t, p: [-6230 + x, 380, 385, 0] });
@@ -61,7 +72,8 @@ async function writeRing(runDir: string, aheadMs = -1_000): Promise<{ from: numb
     { id: WOLF, ty: "creature", s: { entry: 299, name: NAMES.wolf, level: 3, hp: 100 }, m: at(0, from) },
     { id: VENDOR, ty: "creature", s: { entry: 1250, name: NAMES.vendor, sub: NAMES.sub, nf: 0x80, qg: 8 }, m: at(8, from) },
     { id: CHASER, ty: "creature", s: { entry: 40, name: NAMES.chaser, level: 4, hp: 100 }, m: at(-8, from) },
-    { id: OTHER, ty: "player", s: { name: NAMES.other, level: 9 }, m: at(12, from) },
+    // As the recorder of 0.5 handed it; the v1 record never writes it.
+    { id: OTHER, ty: "player" as NearbyUnitType, s: { name: NAMES.other, level: 9 }, m: at(12, from) },
     { id: OTHER_PET, ty: "pet", s: { entry: 416, name: NAMES.otherPet, ow: OTHER }, m: at(13, from) },
   ];
   const rows: NearbyRow[] = [{ ts: from, kind: "key", self: { guid: "7", map: 0, target: null, down: false }, units }];
@@ -74,12 +86,13 @@ async function writeRing(runDir: string, aheadMs = -1_000): Promise<{ from: numb
   rows.push({ ts: chaseOtherAt, kind: "st", id: CHASER, s: { tg: OTHER, tgs: false } });
   rows.push({ ts: chaseSelfAt, kind: "st", id: CHASER, s: { tg: "7", tgs: true } });
   rows.sort((a, b) => a.ts - b.ts);
-  const writer = new NearbyWriter({
-    runDir,
-    sandbox: { nearbyDrain: async () => ({ rows, dropped: 0, through: now + aheadMs }) },
-    log: () => {},
-  });
-  await writer.drain();
+  if (layout === "0.5") {
+    // 0.5's writer keyed every minute file from its fold, and ended on the child's horizon.
+    writeLegacy05Ring(runDir, [...rows, { ts: now + aheadMs, kind: "tick" }], { keyEachFile: true });
+  } else {
+    const session = openSessionRecord({ runDir, runsDir, token: "public-nearby-token", scrub: (t) => t });
+    session.writer.ingest(recordDrain({ nearby: rows, through: now + aheadMs }));
+  }
   return { from, chaseSelfAt };
 }
 
@@ -115,15 +128,24 @@ interface Nearby {
   nearby: LiveNearby;
 }
 
-async function setup(aheadMs?: number): Promise<{ runs: string; ring: { from: number; chaseSelfAt: number } }> {
+async function setup(aheadMs?: number, layout: Layout = "v1"): Promise<{ runs: string; ring: { from: number; chaseSelfAt: number } }> {
   const runs = poisonedRunsDir();
-  const ring = await writeRing(join(runs, LIVE_RUN), aheadMs);
+  // The fixture's own 0.5 ring is replaced, whichever layout is under test.
+  rmSync(join(runs, LIVE_RUN, LEGACY05_RING.dir), { recursive: true, force: true });
+  const ring = await writeRing(runs, join(runs, LIVE_RUN), aheadMs, layout);
+  expect(sessionSource(runs, LIVE_RUN).kind).toBe(layout === "v1" ? "v1" : "legacy-0.5");
   return { runs, ring };
 }
 
+/** Remove the live run's ring, as a pause, a stop or an exit does. */
+function dropRing(runs: string, layout: Layout): void {
+  if (layout === "v1") removeSessionRing(join(runs, LIVE_RUN));
+  else rmSync(join(runs, LIVE_RUN, LEGACY05_RING.dir), { recursive: true, force: true });
+}
+
 describe("the public nearby layer", () => {
-  test("a pass carries the live run's public window in nearby.json, which live.json names, and no other object names a unit", async () => {
-    const { runs, ring } = await setup();
+  test.each(LAYOUTS)("a pass carries the live run's public window in nearby.json, which live.json names, and no other object names a unit (%s)", async (layout) => {
+    const { runs, ring } = await setup(undefined, layout);
     try {
       const render = createRenderer({ runsDir: runs });
       const before = Date.now();
@@ -173,8 +195,21 @@ describe("the public nearby layer", () => {
     }
   });
 
-  test("published, the window is overwritten each pass and gone the pass after the ring goes; the verifier finds nothing", async () => {
-    const { runs } = await setup();
+  // A v1 record cuts a player target to the literal "player"; the projection reads that, with `tgs` not true, as another player.
+  test("v1: a creature is withheld publicly while it targets another player", async () => {
+    const { runs, ring } = await setup(undefined, "v1");
+    try {
+      const out = await createRenderer({ runsDir: runs })(Date.now());
+      const near = JSON.parse(out.artifacts.find((a) => a.path === NEARBY_PATH)!.body) as Nearby;
+      const d = decodeNearby(near.nearby[LIVE_RUN]!);
+      expect(nearbyAt(d, ring.chaseSelfAt - 30_000).find((u) => u.id === CHASER)).toBeUndefined();
+    } finally {
+      rmSync(runs, { recursive: true, force: true });
+    }
+  });
+
+  test.each(LAYOUTS)("published, the window is overwritten each pass and gone the pass after the ring goes; the verifier finds nothing (%s)", async (layout) => {
+    const { runs } = await setup(undefined, layout);
     try {
       const bucket = memoryBucket();
       const state = emptyState();
@@ -196,7 +231,7 @@ describe("the public nearby layer", () => {
       // The run's ring goes (a pause, a stop, an exit): the next pass overwrites
       // the windows with none, rather than leaving the last ones at a key
       // anyone can read, and live.json flags nothing.
-      rmSync(join(runs, LIVE_RUN, "nearby"), { recursive: true, force: true });
+      dropRing(runs, layout);
       await pass();
       const second = JSON.parse(bucket.objects.get(NEARBY_PATH)!) as Nearby;
       expect(second.nearby).toEqual({});

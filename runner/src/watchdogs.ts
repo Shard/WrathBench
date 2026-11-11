@@ -116,7 +116,7 @@ export class Watchdogs {
   }
 
   /**
-   * A kill the sandbox child latched (`SMSG_PARTYKILLLOG`, `party-watch.ts`).
+   * A kill the sandbox child latched (`SMSG_PARTYKILLLOG`, the stack's party watcher).
    * The server's word, like the level: only a kill credited to this character
    * or a member of its group meets a kill end, and the first one that does
    * ends the run at the next check.

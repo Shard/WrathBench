@@ -3,6 +3,7 @@
  * trajectory records, message-window mechanics. No live stack, no real model.
  */
 import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StubAdapter, type ChatAdapter, type ChatRequest, type AdapterOutcome, type ToolCall } from "../src/adapter";
@@ -17,7 +18,6 @@ import { EpisodicLog } from "../src/episodic";
 import { Scratchpad } from "@wrathbench/mcp";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import type { ActionHintNote } from "@wrathbench/mcp";
-import { emptyTraceState, type TraceDrain } from "../src/trace-row";
 import { renderActionHints } from "../src/tools";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
@@ -535,10 +535,11 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
-  test("the ticker drains the trace off the same clock, and the rows land beside the state samples", async () => {
-    // The trace (trace.ts) rides the state ticker: what the sandbox's recorder
-    // latched comes home on every tick, on this driver as on the CLI ones,
-    // without the loop sampling anything extra for it.
+  test("the ticker only samples: it drains no record of its own, and run.sqlite gets no trace", async () => {
+    // The session record is the stack's: its host drains the child's recorder
+    // on a tick of its own (`SandboxHost.recordDrain`). A ticker that still
+    // drained a trace or a ring here would be a second reader racing the
+    // stack's for one destructive buffer.
     const slow: ChatAdapter = {
       label: "slow",
       complete: async (): Promise<AdapterOutcome> => {
@@ -546,24 +547,24 @@ describe("runLoop", () => {
         return { kind: "stub-complete" };
       },
     };
-    const { options } = setup(slow);
-    const drains: TraceDrain[] = [
-      { rows: [{ ts: 1_000, kind: "key", map: null, x: null, y: null, z: null, o: null, data: emptyTraceState() }], dropped: 0 },
-      { rows: [{ ts: 2_000, kind: "pos", map: 0, x: 1, y: 2, z: 3, o: 0.5, data: { jump: 1 } }], dropped: 0 },
-    ];
-    let drained = 0;
-    Object.assign(options.sandbox, {
-      traceDrain: () => {
-        drained += 1;
-        return Promise.resolve(drains.shift() ?? { rows: [], dropped: 0 });
-      },
-    });
+    const { dir, options } = setup(slow);
+    const asked: string[] = [];
+    const spy = (name: string) => () => {
+      asked.push(name);
+      return Promise.resolve(null);
+    };
+    Object.assign(options.sandbox, { recordDrain: spy("recordDrain"), traceDrain: spy("traceDrain"), nearbyDrain: spy("nearbyDrain") });
     await runLoop({ ...options, stateTickMs: 10 });
-    expect(drained).toBeGreaterThanOrEqual(2);
-    const rows = options.trajectory.traceRows("run-test");
-    expect(rows.filter((r) => r.kind === "pos")).toEqual([{ ts: 2_000, kind: "pos", map: 0, x: 1, y: 2, z: 3, o: 0.5, data: { jump: 1 } }]);
-    expect(rows[0]!.kind).toBe("key");
+    expect(options.trajectory.stateRows("run-test").length).toBeGreaterThanOrEqual(3);
+    expect(asked).toEqual([]);
     options.trajectory.close();
+    const db = new Database(join(dir, "run.sqlite"), { readonly: true });
+    try {
+      const tables = (db.query(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as { name: string }[]).map((r) => r.name);
+      for (const gone of ["trace", "trace_dict", "move"]) expect(tables).not.toContain(gone);
+    } finally {
+      db.close();
+    }
   });
 
   test("the ticker stops with the loop: nothing samples after runLoop returns", async () => {

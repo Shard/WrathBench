@@ -1138,13 +1138,55 @@ function fileLine(dir: string): string {
   return parts.join(" · ") || "(none of the usual files)";
 }
 
+/** The v1 session record's directory in a run directory, or null on a 0.5 run (`runner/src/session-record.ts`). */
+function sessionDir(dir: string): string | null {
+  const session = join(dir, "session");
+  return existsSync(join(session, "session.json")) ? session : null;
+}
+
+/** One stream of a session record, by its files alone: how many segments, how big, and how long since the newest was written. */
+function streamLine(session: string, stream: string, now: number): string {
+  let names: string[];
+  try {
+    names = readdirSync(join(session, stream)).filter((n) => /\.jsonl(\.zst)?$/.test(n));
+  } catch {
+    return `${stream} none`;
+  }
+  let bytes = 0;
+  let newest = 0;
+  for (const n of names) {
+    try {
+      const st = statSync(join(session, stream, n));
+      bytes += st.size;
+      newest = Math.max(newest, st.mtimeMs);
+    } catch {
+      /* compressed or unlinked as it was listed */
+    }
+  }
+  return names.length === 0 ? `${stream} none` : `${stream} ${names.length} segment(s) ${fmtBytes(bytes)}, newest written ${fmtAge(now - newest)} ago`;
+}
+
+/** The session record's line for a v1 run: who it is, whether it closed, and its captured streams. */
+function sessionLine(session: string, now: number): string {
+  let head = "unreadable session.json";
+  try {
+    const s = JSON.parse(readFileSync(join(session, "session.json"), "utf8")) as { id?: unknown; ended?: unknown; character?: { name?: unknown } | null };
+    const who = typeof s.character?.name === "string" ? s.character.name : "no character yet";
+    head = `${String(s.id)} (${who}), ${typeof s.ended === "number" ? `closed ${fmtAge(now - s.ended)} ago` : "open"}`;
+  } catch {
+    /* said above */
+  }
+  return `${head} · ${["trace", "events", "calls"].map((stream) => streamLine(session, stream, now)).join(" · ")}`;
+}
+
 function nearbyLine(dir: string, now: number): string {
-  const ring = join(dir, "nearby");
+  // A v1 run's ring is a stream of its session record; a 0.5 run's was `nearby/` in the run directory.
+  const ring = sessionDir(dir) !== null ? join(dir, "session", "nearby") : join(dir, "nearby");
   let names: string[];
   try {
     names = readdirSync(ring);
   } catch {
-    return "none (no nearby/ ring: not live, or a run from before it)";
+    return "none (no ring: not live, or a run from before it)";
   }
   if (names.length === 0) return "empty ring";
   let bytes = 0;
@@ -1182,14 +1224,15 @@ export function scanByRowid<T>(db: Database, table: string, windowed: (lo: numbe
 }
 
 /**
- * The trace's line. The collector does not hold the trace (collector/README.md,
+ * A 0.5 run's trace line (a v1 run's trace is in its session record,
+ * `sessionLine`). The collector does not hold the trace (collector/README.md,
  * "Not tailed, on purpose"), so it is read here, and only ever by rowid: the
  * newest row and the highest rowid are each one index lookup, which is all a
  * live run gets. A run with no live owner also gets its rows by kind, walked
  * in windows.
  */
 function traceLine(db: Database, now: number, live: boolean): string {
-  if (!hasTable(db, "trace")) return "no trace table (a run from before the recorder)";
+  if (!hasTable(db, "trace")) return "none (no session record, and no 0.5 trace table)";
   const max = (db.query("SELECT max(rowid) AS m FROM trace").get() as { m: number | null }).m;
   if (max === null) return "no rows";
   const newest = (db.query("SELECT ts FROM trace ORDER BY rowid DESC LIMIT 1").get() as { ts: number | null } | null)?.ts ?? null;
@@ -1409,7 +1452,9 @@ export async function inspectRun(runId: string, opts: Ctx & Window, out: Out): P
       if (marks.length > 0) say("marks", marks.join(", "));
     }
     say("files", fileLine(dir));
-    say("trace", db === null ? "no run.sqlite" : traceLine(db, opts.now, owned));
+    const session = sessionDir(dir);
+    if (session !== null) say("session", sessionLine(session, opts.now));
+    else say("trace", db === null ? "no run.sqlite" : traceLine(db, opts.now, owned));
     say("nearby", nearbyLine(dir, opts.now));
     return 0;
   } finally {

@@ -67,7 +67,8 @@
  *
  * Imports nothing but wire types, like `sessions.ts`: the dashboard reaches it
  * over the `@viewer/*` alias at runtime, so nothing server-side may follow it
- * into the browser bundle. The sqlite side is `trace-db.ts`.
+ * into the browser bundle. The server half is `trace-db.ts`, over the run's
+ * session source (`session-source.ts`).
  */
 
 import type {
