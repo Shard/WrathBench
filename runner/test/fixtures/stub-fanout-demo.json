@@ -1,0 +1,132 @@
+[
+  {
+    "content": "Seeing who is logged in.",
+    "toolCalls": [{ "name": "list_characters", "arguments": {} }]
+  },
+  {
+    "content": "Logging five characters in.",
+    "toolCalls": [
+      { "name": "login_character", "arguments": { "name": "Fanalfa", "race": 1, "class": 1 } },
+      { "name": "login_character", "arguments": { "name": "Fanbravo", "race": 1, "class": 2 } },
+      { "name": "login_character", "arguments": { "name": "Fancharli", "race": 1, "class": 4 } },
+      { "name": "login_character", "arguments": { "name": "Fandelta", "race": 1, "class": 5 } },
+      { "name": "login_character", "arguments": { "name": "Fanecho", "race": 1, "class": 8 } }
+    ]
+  },
+  {
+    "content": "The roster and the roll-up.",
+    "toolCalls": [
+      { "name": "list_characters", "arguments": {} },
+      { "name": "state_summary", "arguments": {} }
+    ]
+  },
+  {
+    "content": "Measuring how late the sandbox's event loop runs from here on.",
+    "toolCalls": [
+      {
+        "name": "run_snippet",
+        "arguments": {
+          "code": "(globalThis.lags = [], globalThis.lagAt = performance.now(), globalThis.lagTimer = setInterval(() => { const n = performance.now(); lags.push(n - lagAt - 10); lagAt = n; }, 10), globalThis.cpu0 = process.cpuUsage(), globalThis.t0 = Date.now(), 'sampling')"
+        }
+      }
+    ]
+  },
+  {
+    "content": "One snippet acting for all five: each says a line.",
+    "toolCalls": [
+      {
+        "name": "run_snippet",
+        "arguments": {
+          "code": "(await Promise.all(Object.values(chars).map((c) => c.sdk.say('hello from ' + c.name)))).map((r) => r.ok)"
+        }
+      }
+    ]
+  },
+  {
+    "content": "One character on its own.",
+    "toolCalls": [
+      {
+        "name": "run_snippet",
+        "arguments": { "character": "Fanalfa", "code": "state.self.name + ', level ' + state.self.level?.value + ', ' + state.units().length + ' units in view'" }
+      }
+    ]
+  },
+  {
+    "content": "All five walk a few yards apart, at once.",
+    "toolCalls": [
+      {
+        "name": "run_snippet",
+        "arguments": {
+          "code": "await Promise.all(Object.values(chars).map(async (c, i) => { const p = c.state.self.position.value; const r = await c.sdk.moveTo({ x: p.x + 8 * Math.cos(i * 1.26), y: p.y + 8 * Math.sin(i * 1.26), z: p.z }); return c.name + ': ' + r.status; }))"
+        }
+      }
+    ]
+  },
+  {
+    "content": "A routine that keeps every character moving for a minute, left running.",
+    "toolCalls": [
+      {
+        "name": "run_snippet",
+        "arguments": {
+          "code": "(globalThis.pacing = Promise.all(Object.values(chars).map(async (c, i) => { const home = c.state.self.position.value; const until = Date.now() + 60000; let k = 0; while (Date.now() < until) { k++; await c.sdk.moveTo({ x: home.x + 6 * Math.cos(i * 1.26 + k), y: home.y + 6 * Math.sin(i * 1.26 + k), z: home.z }).catch(() => null); await sleep(500, { wake: false }); } return k; })), 'pacing')"
+        }
+      }
+    ]
+  },
+  {
+    "content": "The merged feed, and one character's own.",
+    "toolCalls": [
+      { "name": "recent_events", "arguments": { "limit": 12 } },
+      { "name": "recent_events", "arguments": { "character": "Fanbravo", "limit": 5 } }
+    ]
+  },
+  {
+    "content": "One character's full summary, and a note.",
+    "toolCalls": [
+      { "name": "state_summary", "arguments": { "character": "Fanbravo" } },
+      { "name": "write_scratchpad", "arguments": { "content": "# fan-out demonstration\n- five characters logged in\n- pacing routine running" } }
+    ]
+  },
+  {
+    "content": "Waiting for the pacing to finish.",
+    "toolCalls": [{ "name": "run_snippet", "arguments": { "code": "await Promise.race([pacing, sleep(25000, { wake: false })])" } }]
+  },
+  {
+    "content": "Still pacing.",
+    "toolCalls": [{ "name": "run_snippet", "arguments": { "code": "await Promise.race([pacing, sleep(25000, { wake: false })])" } }]
+  },
+  {
+    "content": "How many laps each walked.",
+    "toolCalls": [{ "name": "run_snippet", "arguments": { "code": "await Promise.race([pacing, sleep(20000, { wake: false })])" } }]
+  },
+  {
+    "content": "What the minute cost.",
+    "toolCalls": [
+      {
+        "name": "run_snippet",
+        "arguments": {
+          "code": "(() => { clearInterval(lagTimer); const s = [...lags].sort((a, b) => a - b); const q = (p) => Math.round(100 * s[Math.min(s.length - 1, Math.floor(p * s.length))]) / 100; const cpu = process.cpuUsage(cpu0); const secs = (Date.now() - t0) / 1000; return { seconds: Math.round(secs), samples: s.length, lagMs: { p50: q(0.5), p99: q(0.99), max: q(1) }, cpuShare: Math.round((100 * (cpu.user + cpu.system)) / 1e6 / secs) / 100, eventsFolded: Object.values(chars).map((c) => c.state.eventCount).reduce((a, b) => a + b, 0) }; })()"
+        }
+      }
+    ]
+  },
+  {
+    "content": "One logs out and comes back by name.",
+    "toolCalls": [
+      { "name": "logout_character", "arguments": { "character": "Fanecho" } },
+      { "name": "list_characters", "arguments": {} },
+      { "name": "login_character", "arguments": { "name": "Fanecho" } }
+    ]
+  },
+  {
+    "content": "A snippet that blocks the event loop: the sandbox is killed and every character reattached.",
+    "toolCalls": [{ "name": "run_snippet", "arguments": { "code": "for (;;) {}" } }]
+  },
+  {
+    "content": "Everyone is back.",
+    "toolCalls": [
+      { "name": "run_snippet", "arguments": { "code": "Object.values(chars).map((c) => c.name + ': ' + (c.events.connected ? 'connected' : 'closed') + ', level ' + c.state.self.level?.value)" } },
+      { "name": "state_summary", "arguments": {} }
+    ]
+  }
+]
