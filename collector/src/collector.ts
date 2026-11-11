@@ -60,6 +60,7 @@ export class Collector {
       offsets: deps.offsets,
       now: this.now,
       ...(deps.chunkBytes === undefined ? {} : { chunkBytes: deps.chunkBytes }),
+      log: deps.log ?? ((m: string) => console.log(m)),
     });
   }
 

@@ -58,6 +58,7 @@ import { CharacterPlot } from "../components/CharacterChart";
 import { AttemptStrip, CharacterTotalsCard } from "../components/CharacterCards";
 import { Coins, QuestCount } from "../components/CharacterFacts";
 import { EventFeed, InventoryPanel, XpBar, createInspectorClient, type SessionSummary } from "@wrathbench/inspector/views";
+import { FanoutCharacters } from "../components/FanoutCharacters";
 import { ScratchpadPanel } from "../components/Scratchpad";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
@@ -1019,6 +1020,10 @@ export default function RunDetail() {
                         <EventFeed client={inspector!} id={params.id} live={run().live} end={sess().ended} />
                       </>
                     )}
+                  </Show>
+                  {/* A fan-out run has no session of its own: a record per character, picked here. */}
+                  <Show when={inspector !== null && detail()?.fanout}>
+                    {(f) => <FanoutCharacters client={inspector!} runId={params.id} sessions={f()} live={run().live} now={now()} />}
                   </Show>
 
                   <h2 class="section">comparability</h2>
