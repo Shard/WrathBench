@@ -1798,8 +1798,9 @@ preference order (`runner/src/credentials.ts`):
   (claude, chatgpt, opencode-go; each default 80, 100 is off) is the usage
   window, below. `{ kind: "spend", usdPerDay }` (openrouter) is the provider's
   own reported charge on the credential's runs since 00:00 UTC. `{ kind:
-  "runs", perDay }` (any) is fresh launches since 00:00 UTC. Spend and runs
-  hold new starts and resumes only: they never pause or end a live run.
+  "runs", perDay }` (any) is fresh launches since 00:00 UTC. Spend holds new
+  starts and resumes, runs holds new starts only (a resume is no new run), and
+  neither ever pauses or ends a live run.
 - **billing** — on a metered provider, which models the credential carries: a
   free credential only free models, a paid one only paid models. On a
   subscription every model bills it and the word describes it. It never
