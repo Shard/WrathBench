@@ -36,6 +36,11 @@
  * `--episode-ms`/`--watchdogs-json` on top of it still wins, and the run is
  * then stamped `episodeOverride: true` so it cannot pass as a clean tier run.
  *
+ * `--max-characters <n> --accounts <a,b,…>` is fan-out (`fanout-run.ts`): this
+ * run's one agent may have up to `n` characters in the world at once, on
+ * those accounts. An operator's grant, never a scored episode's, and absent
+ * on every run that drives one character.
+ *
  * Flags map 1:1 onto config.ts. A resumed run reloads its config from
  * meta.json, keeps its token (so a still-alive module session is reattached by
  * the model's next createSession call), keeps its scratchpad and trajectory,
@@ -88,7 +93,9 @@ import { isOpenCodeGoBase } from "./platform";
 import { GoUsageGauge, goUsageUrl } from "./opencode-go";
 import { Trajectory, readMeta, startHeartbeat, type PauseMark, type RunMeta } from "./trajectory";
 import { partyOwnGuids } from "./party";
-import { openSessionRecord, removeSessionRing } from "./session-record";
+import { fanoutSessionNote, openFanout, writeRoster } from "./fanout-run";
+import { openSessionRecord, RecordSignals, removeSessionRing } from "./session-record";
+import type { CharacterRoster } from "@wrathbench/mcp/fanout";
 import { harnessVersion, stackCommit } from "./version";
 import { SDK_VERSION } from "@wrathbench/sdk";
 import { Watchdogs } from "./watchdogs";
@@ -130,6 +137,28 @@ function routingOverride(v: string | boolean | undefined): RoutingSpec | undefin
 
 function num(v: string | boolean | undefined): number | undefined {
   return typeof v === "string" ? Number(v) : undefined;
+}
+
+/**
+ * `--max-characters <n> --accounts <a,b,…>`: the fan-out grant, or undefined
+ * for a run that drives one character (the flags absent, or a count of 1).
+ * The schema refuses the rest (`fanoutConfigSchema`); what it cannot see is
+ * refused here: accounts with no count, which would be a grant nobody asked
+ * for, and a count that is no whole number.
+ */
+export function fanoutFromArgs(args: Readonly<Record<string, string | boolean>>): { characters: number; accounts: string[] } | undefined {
+  const raw = args["max-characters"];
+  const accounts = typeof args["accounts"] === "string" ? args["accounts"].split(",").map((a) => a.trim()).filter((a) => a.length > 0) : undefined;
+  if (raw === undefined) {
+    if (accounts !== undefined) throw new RunArgsError("--accounts is the fan-out grant's and needs --max-characters above 1; a run that drives one character takes --account");
+    return undefined;
+  }
+  if (typeof raw !== "string" || !/^\d+$/.test(raw) || Number(raw) < 1) throw new RunArgsError("--max-characters must be a whole number, 1 or more");
+  if (Number(raw) === 1) {
+    if (accounts !== undefined) throw new RunArgsError("--accounts is the fan-out grant's and needs --max-characters above 1; a run that drives one character takes --account");
+    return undefined;
+  }
+  return { characters: Number(raw), accounts: accounts ?? [] };
 }
 
 /**
@@ -196,14 +225,19 @@ export function configFromArgs(
   // build without a reader having to trust the harness version alone.
   const runImage = env[RUN_IMAGE_ENV];
   const runId = typeof args["run-id"] === "string" ? args["run-id"] : newRunId();
+  const fanout = fanoutFromArgs(args);
   const c = loadRunConfig({
     runId,
+    // The grant, when the launch carries one. The run's `account` is then the
+    // first of its accounts unless the launch names one: every reader that
+    // asks which account a run is on still gets an answer that is true.
+    ...(fanout !== undefined ? { fanout } : {}),
     moduleUrl:
       typeof args["module-url"] === "string"
         ? args["module-url"]
         : process.env["WRATHBENCH_MODULE_URL"] ?? undefined,
     token: typeof args["token"] === "string" ? args["token"] : newSessionToken(),
-    account: typeof args["account"] === "string" ? args["account"] : undefined,
+    account: typeof args["account"] === "string" ? args["account"] : fanout?.accounts[0],
     race: num(args["race"]),
     class: num(args["class"]),
     episode: typeof args["episode"] === "string" ? args["episode"] : undefined,
@@ -796,8 +830,10 @@ async function main(): Promise<void> {
    * trajectory's redaction list before the child exists (`leaseRunSecret`): a
    * snippet can print its own environment.
    */
-  const lease = await leaseRunSecret({ moduleUrl: config.moduleUrl, token: config.token, account: config.account }, trajectory);
-  if (lease.secret === undefined) console.error(`[wrathbench] ${lease.note}`);
+  // A fan-out run leases nothing here: each character's token is leased as it
+  // is logged in (`fanout-run.ts`), and `config.token` names no session.
+  const lease = config.fanout !== undefined ? { secret: undefined } : await leaseRunSecret({ moduleUrl: config.moduleUrl, token: config.token, account: config.account }, trajectory);
+  if (config.fanout === undefined && lease.secret === undefined) console.error(`[wrathbench] ${(lease as { note: string }).note}`);
 
   /*
    * The session record (`session-record.ts`): the stack writes what the
@@ -807,9 +843,12 @@ async function main(): Promise<void> {
    * live only: the writer removes it when the session closes, and the exit
    * hook catches the exits that never get that far.
    */
-  const session = openSessionRecord({ runDir, runsDir: config.runsDir, ownGuids: partyOwnGuids(config.party), token: config.token, scrub: (text) => trajectory.scrub(text) });
+  // A fan-out run has no one record: each character's is opened in
+  // `sessions/<Character>/` as it logs in, and all of them feed one drain.
+  const session = config.fanout !== undefined ? undefined : openSessionRecord({ runDir, runsDir: config.runsDir, ownGuids: partyOwnGuids(config.party), token: config.token, scrub: (text) => trajectory.scrub(text) });
+  const fanoutSignals = config.fanout !== undefined ? new RecordSignals() : undefined;
   process.on("exit", () => removeSessionRing(runDir));
-  void moduleIdentity(config.moduleUrl, moduleAuthHeaders()).then((m) => session.writer.setModule(m));
+  if (session !== undefined) void moduleIdentity(config.moduleUrl, moduleAuthHeaders()).then((m) => session.writer.setModule(m));
 
   const sandbox = new SandboxHost({
     moduleUrl: config.moduleUrl,
@@ -821,12 +860,48 @@ async function main(): Promise<void> {
     pingGraceMs: config.sandboxPingGraceMs,
     onNotice: (n) => trajectory.append({ t: "harness", ...n }),
     clientCache,
-    session,
+    ...(session !== undefined ? { session } : {}),
+    ...(config.fanout !== undefined ? { fanout: { maxCharacters: config.fanout.characters }, signals: fanoutSignals } : {}),
   });
+  /** A fan-out run's roster, on that sandbox: its seats, their leases and their records (`fanout-run.ts`). */
+  const roster: CharacterRoster | undefined =
+    config.fanout !== undefined && fanoutSignals !== undefined
+      ? openFanout({ fanout: config.fanout, moduleUrl: config.moduleUrl, runDir, runsDir: config.runsDir, sandbox, secrets: trajectory, signals: fanoutSignals })
+      : undefined;
   /** Stop the sandbox, then close the record it was draining into: bounded, and never the reason an exit fails. */
   const stopSandbox = async (): Promise<void> => {
     await sandbox.stop();
-    await Promise.race([session.writer.close(), new Promise((r) => setTimeout(r, 10_000))]).catch(() => undefined);
+    if (session !== undefined) await Promise.race([session.writer.close(), new Promise((r) => setTimeout(r, 10_000))]).catch(() => undefined);
+  };
+  /**
+   * Give a run's game sessions back, as each exit below decides: `logout`
+   * frees the account (a finished run, and the pauses that free it), without
+   * it the session stays in the world for an in-place retry. `ended` says the
+   * run will never resume. A single character is logged out by its own
+   * client, before the sandbox stops, and its lease released when the run
+   * has ended. A fan-out run's characters are given back by the roster once
+   * the sandbox has stopped, with the port secret, their records closed
+   * either way; a paused one keeps on record which of them were in the
+   * world, so the resume brings those back.
+   */
+  const releaseSessions = async (o: { logout: boolean; ended: boolean }): Promise<void> => {
+    if (roster === undefined) {
+      if (o.logout) {
+        try {
+          await sandbox.evalSnippet("if (typeof sdk !== 'undefined' && sdk) { try { await sdk.deleteSession(); } catch {} }");
+        } catch {
+          // Best-effort: a dead sandbox or module leaves the session to the
+          // module's own logout path.
+        }
+      }
+      await stopSandbox();
+      if (o.ended) await releaseSessionSecret({ moduleUrl: config.moduleUrl, token: config.token }).catch(() => undefined);
+      return;
+    }
+    const before = roster.snapshot();
+    await stopSandbox();
+    await Promise.race([roster.shutdown({ logout: o.logout }), new Promise((r) => setTimeout(r, 10_000 + 2_000 * before.length))]).catch(() => undefined);
+    if (!o.ended) writeRoster(runDir, before);
   };
   /*
    * The episode clock continues from where the last segment left it: a
@@ -980,10 +1055,43 @@ async function main(): Promise<void> {
     // archives and the scheduler's defer ladder retries in a minute — after
     // the core has released the account. The guids hygiene saw arm the
     // watchdogs' first-observation tripwire, the belt to this braces.
+    // A fan-out run clears each of its accounts the same way, keeping the
+    // characters staged on it; the first one that cannot be read ends the
+    // launch as the single account's refusal does. What follows this block
+    // (the names a model must not pick, the freshness tripwire) is one
+    // character's, so the last account's outcome stands in and is then
+    // ignored below.
+    const fanoutAccounts = config.fanout?.accounts ?? [];
+    for (const account of fanoutAccounts.slice(0, -1)) {
+      const h = await clearAccountCharacters({
+        moduleUrl: config.moduleUrl,
+        token: config.token,
+        account,
+        log: (line) => console.error(`[wrathbench] ${account}: ${line}`),
+        keep: (config.fanout?.staged ?? []).filter((s) => s.account.toUpperCase() === account.toUpperCase()).map((s) => s.character),
+        owners: characterOwners(config.runsDir, account, config.runId),
+        allowCharacterDelete,
+      });
+      if (!h.ok) {
+        console.error(`[wrathbench] ${account}: ${h.reason}`);
+        await trajectory.setTermination(config.runId, "stale-character", `${account}: ${h.reason}`);
+        await trajectory.finish();
+        try {
+          const moved = archiveIfNoResponses(config.runsDir, config.runId);
+          if (moved !== null) console.error(`[wrathbench] no model response — archived to ${moved}`);
+        } catch (err) {
+          console.error(`[wrathbench] could not archive ${config.runId}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        wiki?.close();
+        process.exit(1);
+      }
+      if (h.cleared > 0) trajectory.append({ t: "harness", kind: "hygiene", cleared: h.cleared });
+    }
+    const lastAccount = fanoutAccounts.at(-1);
     const hygiene = await clearAccountCharacters({
       moduleUrl: config.moduleUrl,
       token: config.token,
-      account: config.account,
+      account: lastAccount ?? config.account,
       log: (line) => console.error(`[wrathbench] ${line}`),
       // A continuation keeps its predecessor's character, and every launch
       // keeps another ref's freeplay character it shares the account with;
@@ -994,8 +1102,9 @@ async function main(): Promise<void> {
         ...(continuation !== undefined ? [continuation.character] : []),
         ...(staged !== undefined ? [staged] : []),
         ...keepCharacters,
+        ...(lastAccount !== undefined ? (config.fanout?.staged ?? []).filter((s) => s.account.toUpperCase() === lastAccount.toUpperCase()).map((s) => s.character) : []),
       ],
-      owners: characterOwners(config.runsDir, config.account, config.runId),
+      owners: characterOwners(config.runsDir, lastAccount ?? config.account, config.runId),
       allowCharacterDelete,
     });
     if (!hygiene.ok) {
@@ -1076,8 +1185,18 @@ async function main(): Promise<void> {
         if (existsSync(scratchpad.path)) rmSync(scratchpad.path);
         continuation = undefined;
       }
-      watchdogs.expectFreshCharacter(new Set(hygiene.seen.values()));
+      // The freshness tripwire is one character's first sight; a fan-out
+      // run's characters are logged in one by one and judged by nothing here.
+      if (config.fanout === undefined) watchdogs.expectFreshCharacter(new Set(hygiene.seen.values()));
     }
+  }
+
+  // A resumed fan-out run brings back the characters that were in the world
+  // when it paused, before the model's first turn.
+  const fanoutLost = roster !== undefined && resumed ? await roster.resume() : [];
+  if (roster !== undefined && config.fanout !== undefined) {
+    for (const l of fanoutLost) console.error(`[wrathbench] ${l.character} was not logged back in: ${trajectory.scrub(l.error)}`);
+    trajectory.append({ t: "harness", kind: "fanout", characters: config.fanout.characters, accounts: config.fanout.accounts.length, ...(resumed ? { back: roster.views().filter((v) => v.state === "in").map((v) => v.character) } : {}) });
   }
 
   /* The resumed run's session note (prompt.ts owns the wording). */
@@ -1126,7 +1245,21 @@ async function main(): Promise<void> {
     });
   };
 
-  const initialNotices = resumed
+  const initialNotices = roster !== undefined && config.fanout !== undefined
+      ? [
+          {
+            ts: Date.now(),
+            kind: "session_note",
+            text: fanoutSessionNote({
+              characters: config.fanout.characters,
+              staged: (config.fanout.staged ?? []).map((s) => s.character),
+              resumed,
+              back: roster.views().filter((v) => v.state === "in").map((v) => v.character),
+              lost: fanoutLost,
+            }),
+          } as const,
+        ]
+      : resumed
       ? [
           {
             ts: Date.now(),
@@ -1234,15 +1367,10 @@ async function main(): Promise<void> {
         console.error(`[wrathbench] could not write the pause mark: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
-    if (paused === null || paused.reason === "operator-pause" || paused.reason === STALL_PAUSE || paused.reason === SUBSCRIPTION_PAUSE) {
-      try {
-        await sandbox.evalSnippet("if (typeof sdk !== 'undefined' && sdk) { try { await sdk.deleteSession(); } catch {} }");
-      } catch {
-        /* best effort, as below */
-      }
-    }
-    await stopSandbox().catch(() => undefined);
-    if (paused === null) await releaseSessionSecret({ moduleUrl: config.moduleUrl, token: config.token }).catch(() => undefined);
+    await releaseSessions({
+      logout: paused === null || paused.reason === "operator-pause" || paused.reason === STALL_PAUSE || paused.reason === SUBSCRIPTION_PAUSE,
+      ended: paused === null,
+    }).catch(() => undefined);
     await trajectory.finish();
     wiki?.close();
     throw err;
@@ -1262,39 +1390,30 @@ async function main(): Promise<void> {
     const metaThen = readMeta(runDir);
     if (metaThen?.pause === undefined) await trajectory.writeMeta({ ...(metaThen ?? metaNow()), pause: pauseMark(outcome) });
   }
-  if (
-    outcome.kind === "terminated" ||
-    outcome.reason === "operator-pause" ||
-    outcome.reason === STALL_PAUSE ||
-    outcome.reason === SUBSCRIPTION_PAUSE
-  ) {
-    // A finished run frees its module session so the account is not held
-    // (the realm caps characters/sessions per account). So does a run the
-    // supervisor paused: the fleet is going down, and the account must be
-    // free for the resume (same character — logout, never a wipe). So does a
-    // run whose observation stalled: the session is what stopped reporting,
-    // and the resume's fresh one is the cure. So does a freeplay run the
-    // usage budget stopped: it waits hours or days for a usage window,
-    // and nothing retries it in place. A run
-    // paused by its provider keeps the session alive on purpose: that is
-    // the in-place retry path, and the roster frees it when it moves on.
-    try {
-      await sandbox.evalSnippet(
-        "if (typeof sdk !== 'undefined' && sdk) { try { await sdk.deleteSession(); } catch {} }",
-      );
-    } catch {
-      // Best-effort: a dead sandbox or module leaves the session to the
-      // module's own logout path.
-    }
-  }
-  await stopSandbox();
+  // A finished run frees its module session so the account is not held
+  // (the realm caps characters/sessions per account). So does a run the
+  // supervisor paused: the fleet is going down, and the account must be
+  // free for the resume (same character — logout, never a wipe). So does a
+  // run whose observation stalled: the session is what stopped reporting,
+  // and the resume's fresh one is the cure. So does a freeplay run the
+  // usage budget stopped: it waits hours or days for a usage window,
+  // and nothing retries it in place. A run
+  // paused by its provider keeps the session alive on purpose: that is
+  // the in-place retry path, and the roster frees it when it moves on.
+  // The token's lease goes with a terminated run; a resume never follows a
+  // termination, so nothing will present that secret again.
+  await releaseSessions({
+    logout:
+      outcome.kind === "terminated" ||
+      outcome.reason === "operator-pause" ||
+      outcome.reason === STALL_PAUSE ||
+      outcome.reason === SUBSCRIPTION_PAUSE,
+    ended: outcome.kind === "terminated",
+  });
   if (outcome.kind === "paused") {
     const reset = outcome.notBefore !== undefined ? ` (provider reset at ${new Date(outcome.notBefore).toISOString()})` : "";
     console.error(`[wrathbench] paused: ${outcome.reason}${reset} — resume with --resume ${config.runId}`);
   } else {
-    // The token's lease goes with the run; a resume never follows a
-    // termination, so nothing will present that secret again.
-    await releaseSessionSecret({ moduleUrl: config.moduleUrl, token: config.token });
     console.error(`[wrathbench] terminated: ${outcome.reason}${outcome.detail !== undefined ? ` (${outcome.detail})` : ""}`);
   }
   // Every write landed (or threw to its caller), the file checkpointed and

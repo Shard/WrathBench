@@ -25,6 +25,7 @@ import type { EpisodicLog } from "./episodic";
 import { buildSystemPrompt } from "./prompt";
 import { fixedLoopRequestRecord } from "./request-record";
 import { appendPendingActionHints, callTool, coerceToolArgs, normalizeToolArgs, toolsFor, type ToolContext } from "./tools";
+import { digestCharacter, PLAIN_FANOUT_RENDER, type CharacterDigest, type FanoutSurface } from "@wrathbench/mcp/fanout";
 import { harnessOf } from "./config";
 import { SUBSCRIPTION_PAUSE } from "./lapse";
 import { describeWindows, thresholdsOf, type SubscriptionUsage, type UsageHold } from "./subscription-usage";
@@ -259,7 +260,39 @@ export class ContextBuilder {
     return this.turn;
   }
 
+  /**
+   * A fan-out run's sample (`fanout-run.ts`): the stack's brief of every
+   * character (`stateBriefs`), reduced to its digests, and one reading in a snapshot's shape for
+   * what acts on the run while it plays. The run is live once any character
+   * is in the world; the stall detector is fed the streams' combined cursor
+   * and whether every one of them is open. No level or xp: whose level ends
+   * a fan-out run is its eval's to say, so a level end and the no-XP watchdog
+   * read nothing here, and the freshness tripwire and the run's one recorded
+   * character name, both a single character's, are left alone.
+   */
+  private fanoutDigests: CharacterDigest[] = [];
+  private async fanoutSnapshot(roster: FanoutSurface): Promise<SnapshotLike | null> {
+    try {
+      const inWorld = roster.views().some((v) => v.state === "in");
+      const snaps = inWorld ? await roster.sandbox.stateBriefs() : {};
+      this.fanoutDigests = Object.entries(snaps).map(([name, snap]) => digestCharacter(name, snap));
+      this.live = this.fanoutDigests.some((d) => d.inWorld);
+      let eventCount = 0;
+      let lastSeq = -1;
+      for (const snap of Object.values(snaps)) {
+        const s = snap as SnapshotLike;
+        eventCount += s.eventCount ?? 0;
+        lastSeq += (s.lastSeq ?? -1) + 1;
+      }
+      return { eventCount, lastSeq, observation: { connected: this.fanoutDigests.every((d) => d.connected) } } as SnapshotLike;
+    } catch {
+      return null;
+    }
+  }
+
   async snapshot(): Promise<SnapshotLike | null> {
+    const roster = this.o.sandbox.roster;
+    if (roster !== undefined) return this.fanoutSnapshot(roster);
     try {
       const snap = (await this.o.sandbox.stateSnapshot()) as SnapshotLike;
       const wasLive = this.live;
@@ -454,10 +487,17 @@ export class ContextBuilder {
     // those in a ring of their own; a sandbox without it (an older child, a
     // test's fake) is read the old way, over its raw tail.
     const sandbox = this.o.sandbox as SandboxHost & { contextEvents?: (limit: number) => Promise<ContextEvents> };
+    const roster = this.o.sandbox.roster;
     let fetched: ContextEvents = { events: [], folded: 0 };
     try {
+      // A fan-out run's turn carries no event window: the window is one
+      // character's stream, and which of several streams a turn should show,
+      // and how, is the harness round's to decide. `recent_events` serves the
+      // merged feed on request.
       fetched =
-        typeof sandbox.contextEvents === "function"
+        roster !== undefined
+          ? { events: [], folded: 0 }
+          : typeof sandbox.contextEvents === "function"
           ? await sandbox.contextEvents(CONTEXT_POLICY.EVENT_WINDOW)
           : { events: await sandbox.recentEvents(CONTEXT_POLICY.EVENT_WINDOW), folded: 0 };
     } catch {
@@ -471,7 +511,11 @@ export class ContextBuilder {
     // results the same way, `ToolContext.secrets`).
     const contextText = this.o.trajectory.scrub(
       assembleContext({
-        stateSummary: formatStateSummary(snap, { sessionLive: this.live }),
+        // A fan-out run's state is the stack's roll-up, in its plain default wording.
+        stateSummary:
+          roster !== undefined
+            ? PLAIN_FANOUT_RENDER.rollup(this.fanoutDigests, { maxCharacters: roster.maxCharacters, views: roster.views() })
+            : formatStateSummary(snap, { sessionLive: this.live }),
         events,
         folded,
         scratchpad: this.o.scratchpad.read(),
@@ -764,7 +808,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       } else {
         trajectory.append({ t: "harness", kind: "request_replay_mismatch", turn, detail: mismatch });
       }
-      const outcome = await o.adapter.complete({ messages, tools: toolsFor({ wikiCoords: config.wikiCoords, wikiSearch: config.wiki }), signal: o.signal });
+      const outcome = await o.adapter.complete({ messages, tools: toolsFor({ wikiCoords: config.wikiCoords, wikiSearch: config.wiki, sandbox: o.sandbox }), signal: o.signal });
       if (outcome.kind === "stub-complete") return await terminate("stub-complete");
       if (outcome.kind === "pause") {
         // A spent subscription allowance waits for its window's reset when the
