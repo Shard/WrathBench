@@ -1435,10 +1435,12 @@ editor sits in the section of the table that edits it:
   applies of `disabled` (the store's switch), `secret-missing` (the
   supervisor's environment lacks the variable, or the chart's `modelKeys`
   does not hand it to the model pods), `auth-failed` (a provider read or a
-  paused run says the key was refused), `no-access`, `quota-spent` (a usage
+  paused run says the key was refused), `no-access`, `overage` (a run on it
+  was billed to the balance past the allowance; ahead of a spent window,
+  since that run also marks its allowance spent), `quota-spent` (a usage
   window at 100%, the provider's word, or a paused `quota-exhausted` run),
-  `overage`, `held` (a budget holding starts: a usage threshold, today's
-  spend or runs), `unread` (the provider's usage endpoint gave no answer) and
+  `held` (a budget holding starts: a usage threshold, today's spend or runs),
+  `unread` (the provider's usage endpoint gave no answer) and
   `ok`, with the reason, since when where known, the provider's last answer,
   the usage windows as meters, and the fix. Unknown while no supervisor is
   up, except what the store and the chart say themselves. Every state is

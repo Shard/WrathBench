@@ -216,7 +216,6 @@ import {
   resumeHoldOf,
   SlotBook,
   writeCredentialUsageSidecar,
-  withReadHolds,
   type CredentialGate,
 } from "./run-fleet-credentials";
 import type { Credential } from "../runner/src/credential-slots";
@@ -1086,8 +1085,11 @@ async function main(): Promise<void> {
     // and its driver's host cap, asked at every launch below
     // (`run-fleet-credentials.ts`).
     goUsage.noteOverages(runs);
-    const credGate = withReadHolds(
-      credentialGate(cfg.credentials, [...runs.map((f) => f.credentialUsage), ...goUsage.observations()], runs, Date.now()),
+    const credGate = credentialGate(
+      cfg.credentials,
+      [...runs.map((f) => f.credentialUsage), ...goUsage.observations()],
+      runs,
+      Date.now(),
       goUsage.readHolds(cfg.credentials),
     );
     const book = new SlotBook(cfg.credentials, cfg.policy.maxSessions);

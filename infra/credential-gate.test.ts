@@ -22,7 +22,6 @@ import {
   credentialGate,
   credentialStatuses,
   FleetGoUsage,
-  withReadHolds,
   formatCredentialStatus,
   gateSpawns,
   placeRef,
@@ -607,7 +606,7 @@ describe("OpenCode Go", () => {
   const gateAfter = async (go: FleetGoUsage, runs: RunFact[] = []) => {
     await go.refresh(config.credentials, config.roster);
     go.noteOverages(runs);
-    return withReadHolds(credentialGate(config.credentials, go.observations(), [], NOW), go.readHolds(config.credentials));
+    return credentialGate(config.credentials, go.observations(), [], NOW, go.readHolds(config.credentials));
   };
 
   test("a refused key (401) holds every Go credential naming it, free side included, said once with its code", async () => {
@@ -619,6 +618,12 @@ describe("OpenCode Go", () => {
     expect(held["gopaid"]).toBe("credential go-paid: its key was refused (auth-failed) — held until a usage read succeeds");
     expect(held["gofree"]).toBe("credential go-free: its key was refused (auth-failed) — held until a usage read succeeds");
     expect(gate.holdOf("go-free", "freeplay")).toContain("auth-failed");
+    // One hold path: the structured reason carries the read's code, and the status says why.
+    expect(gate.holdReasonOf("go-paid", "e90")).toEqual({ code: "auth-failed", until: null, text: gate.holdOf("go-paid", "e90")! });
+    const [paid] = credentialStatuses({ credentials: config.credentials, book: new SlotBook(config.credentials, {}), gate, runs: [], env: { OPENCODE_KEY: "fake-go-key" }, reads: go.lastReads() });
+    expect(paid!.held.scored).toContain("its key was refused");
+    expect(paid!.holds?.scored?.code).toBe("auth-failed");
+    expect(paid!.health?.state).toBe("auth-failed");
     expect(said).toHaveLength(1);
     expect(said[0]).toContain("HTTP 401 api_key_expired");
     expect(said.join("\n")).not.toContain("fake-go-key");
@@ -644,6 +649,9 @@ describe("OpenCode Go", () => {
     const billed = fact({ runId: "fleet-go-1", credential: "go-paid", credentialOverageAt: NOW + 1_000 });
     const gate = await gateAfter(go, [billed]);
     expect(picks(config, [], gate).held["gopaid"]).toBe("credential go-paid: billed past its allowance (overage) — held until its usage shows room");
+    const [paid] = credentialStatuses({ credentials: config.credentials, book: new SlotBook(config.credentials, {}), gate, runs: [], env: { OPENCODE_KEY: "fake-go-key" }, reads: go.lastReads() });
+    expect(paid!.holds?.scored?.code).toBe("overage");
+    expect(paid!.health?.state).toBe("overage");
     expect(gate.holdOf("go-free", "freeplay")).toBeUndefined();
     // Off disk: the run's meta.json carries the charge as the loop recorded it.
     const dir = tempDir("wrathbench-go-overage-");

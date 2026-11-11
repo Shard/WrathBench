@@ -46,6 +46,7 @@
  * it (`GoUsageGauge`) — for the freeplay gate, and for a spent allowance's
  * reset when the adapter pauses `quota-exhausted` on Go's `GoUsageLimitError`.
  */
+import type { CredentialRead } from "./credential-health";
 import { EXHAUSTED_PCT, SUBSCRIPTION_RESET_CEILING_MS, SubscriptionUsageTracker, spentWindowOf, type SubscriptionUsage, type UsageHold, type UsageWindow } from "./subscription-usage";
 
 /** The usage endpoint's path on the Go base's origin. */
@@ -120,30 +121,6 @@ export type GoFetch = (
   url: string,
   init: { headers: Record<string, string>; signal: AbortSignal },
 ) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
-
-/**
- * The provider's last read of a credential, as the reader classifies it: the
- * status's health input. Never carries the key or a response body. Structurally
- * the admin status's `CredentialRead`; keep the two field for field.
- *
- * - `ok`: answered, every window with room;
- * - `auth-failed`: the key was refused (401);
- * - `no-access`: the key may not read usage, or the workspace has no plan (403);
- * - `spent`: answered, and a window is spent;
- * - `overage`: a run on it was billed to the balance past the allowance;
- * - `unread`: no answer (a timeout, a 5xx, a shape this reader does not know).
- */
-export interface CredentialRead {
-  /** When the read was made (epoch ms). */
-  at: number;
-  /** The endpoint's HTTP status, or null when none came back. */
-  http: number | null;
-  /** The provider's error code (`api_key_expired`) or the failure's name (`TimeoutError`). */
-  code?: string;
-  classification: "ok" | "auth-failed" | "no-access" | "spent" | "overage" | "unread";
-  /** When this classification began. */
-  since?: number;
-}
 
 /** One read of the endpoint: the windows, or how it failed. */
 export type GoUsageResult =
@@ -225,7 +202,7 @@ export class GoUsagePoller {
   private overageAt: number | undefined;
   /** The newest read that showed every window with room. */
   private roomAt: number | undefined;
-  /** The last read, classified; undefined before the first. The status's health input (`FleetGoUsage`). */
+  /** The last read, classified (`CredentialRead`); undefined before the first. The status's health input (`FleetGoUsage.lastReads`). */
   lastRead: CredentialRead | undefined;
 
   constructor(
