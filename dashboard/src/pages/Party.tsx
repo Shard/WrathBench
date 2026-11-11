@@ -35,6 +35,8 @@ import {
 import { poll, whileLive } from "../lib/poll";
 import { statusText, statusTitle, statusTone } from "../lib/runs";
 import { campaignHref } from "../lib/campaigns";
+import { useFeeds } from "../lib/feeds";
+import { linkable } from "../lib/nav";
 
 /** A live party's members level, die and talk. */
 const LIVE_POLL_MS = 15_000;
@@ -60,6 +62,8 @@ export default function Party() {
   const params = useParams<{ id: string }>();
   const feed = poll<PartyView | null>(() => loadParty(api, params.id), whileLive(partyIsLive, LIVE_POLL_MS, IDLE_POLL_MS));
   const view = (): PartyView | null | undefined => feed.latest;
+  // A campaign is the evals group's: named, not linked, where that group is off.
+  const feeds = useFeeds();
   const [hidden, setHidden] = createSignal<ReadonlySet<string>>(new Set());
   const toggle = (label: string): void => {
     const next = new Set(hidden());
@@ -132,7 +136,11 @@ export default function Party() {
                     <Show when={v().campaign} fallback="—">
                       {(c) => (
                         <Show when={v().campaignVersion} fallback={c()}>
-                          {(ver) => <A href={campaignHref({ id: c(), version: ver() })}>{c()} v{ver()}</A>}
+                          {(ver) => (
+                            <Show when={linkable(feeds.info.latest, campaignHref({ id: c(), version: ver() }))} fallback={`${c()} v${ver()}`}>
+                              <A href={campaignHref({ id: c(), version: ver() })}>{c()} v{ver()}</A>
+                            </Show>
+                          )}
                         </Show>
                       )}
                     </Show>

@@ -1,6 +1,6 @@
 /** The top bar's order is the brief's: about last, no home item, and no fleet — it moved into the status popout. */
 import { describe, expect, test } from "bun:test";
-import { CONFIG_NAV, NAV, groupsOf, navItems, surface } from "../src/lib/nav";
+import { CONFIG_NAV, NAV, groupsOf, linkable, navItems, surface } from "../src/lib/nav";
 
 describe("NAV", () => {
   test("about is last", () => {
@@ -85,5 +85,31 @@ describe("groupsOf", () => {
     expect(groupsOf(undefined)).toEqual({ runner: true, evals: true, viewer: true });
     expect(groupsOf({})).toEqual({ runner: true, evals: true, viewer: true });
     expect(groupsOf({ groups: { runner: false, evals: true, viewer: true } }).runner).toBe(false);
+  });
+});
+
+describe("linkable", () => {
+  const off = (g: "runner" | "evals") => ({ groups: { runner: g !== "runner", evals: g !== "evals", viewer: true } });
+
+  test("nothing links into a group until /api/info has said the deployment has it", () => {
+    expect(linkable(undefined, "/ladder")).toBe(false);
+    expect(linkable(undefined, "/runs")).toBe(false);
+    expect(linkable({}, "/ladder")).toBe(true);
+  });
+
+  test("an off group's pages are not linked, whatever the query or fragment", () => {
+    expect(linkable(off("evals"), "/ladder")).toBe(false);
+    expect(linkable(off("evals"), "/ladder?episode=e90")).toBe(false);
+    expect(linkable(off("evals"), "/campaigns/probe/2")).toBe(false);
+    expect(linkable(off("runner"), "/models#claude-a")).toBe(false);
+    expect(linkable(off("runner"), "/fleet")).toBe(false);
+    expect(linkable(off("runner"), "/ladder?episode=e90")).toBe(true);
+    expect(linkable(off("evals"), "/models#claude-a")).toBe(true);
+  });
+
+  test("the viewer's own pages always link, and config never does", () => {
+    expect(linkable(off("evals"), "/runs")).toBe(true);
+    expect(linkable(off("runner"), "/run/abc")).toBe(true);
+    expect(linkable({}, "/config")).toBe(false);
   });
 });
