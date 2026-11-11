@@ -51,6 +51,7 @@ import {
   type Tier,
 } from "../runner/src/models";
 import { isScoredEpisode } from "../runner/src/episodes";
+import { parseCredentials, type Credential } from "../runner/src/credentials";
 import { harnessVersion } from "../runner/src/version";
 import { DEFAULT_DRIVER, driverEntry, laneHoldsOf, ROSTER_DRIVERS } from "../runner/src/drivers";
 
@@ -344,6 +345,11 @@ export interface FleetConfig {
   notes: string[];
   preflight: FleetPreflight;
   accounts: FleetAccounts;
+  /**
+   * The provider credentials runs take a slot on (`runner/src/credentials.ts`),
+   * in preference order. Empty when the store has none.
+   */
+  credentials: Credential[];
   roster: Record<string, FleetRosterEntry>;
   /** Every job the file names, pinned and pool, in file order. */
   jobs: FleetJob[];
@@ -929,6 +935,7 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
     lanes?: unknown;
     preflight?: unknown;
     accounts?: unknown;
+    credentials?: unknown;
     roster?: unknown;
     queue?: unknown;
     policy?: unknown;
@@ -940,6 +947,12 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
   }
   const notes = Array.isArray(o._notes) ? o._notes.filter((n): n is string => typeof n === "string") : [];
   const accounts = parseAccounts(o.accounts);
+  let credentials: Credential[];
+  try {
+    credentials = parseCredentials(o.credentials);
+  } catch (err) {
+    fail((err as Error).message);
+  }
   const roster = parseRoster(o.roster);
   const { policy, maxConcurrent } = parsePolicy(o.policy);
   // Never throws: a campaign row or a published definition that does not read
@@ -1066,7 +1079,7 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
       ...(opts.onCluster !== undefined ? { onCluster: opts.onCluster } : {}),
     }),
   ];
-  return { notes, preflight, accounts, roster, jobs, campaigns, campaignDefs, campaignRefusals, policy, maxConcurrent, refusals };
+  return { notes, preflight, accounts, credentials, roster, jobs, campaigns, campaignDefs, campaignRefusals, policy, maxConcurrent, refusals };
 }
 
 function parseAccounts(raw: unknown): FleetAccounts {
