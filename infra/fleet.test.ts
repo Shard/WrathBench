@@ -2744,7 +2744,7 @@ describe("pause and resume across a fleet stop", () => {
     // The tick still holds the model this pass — the pause fact is only gone
     // once the termination is written — and gives it a fresh attempt after.
     const states = modelStatesOf(rosterModels(roster), [run], NOW);
-    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], campaignDefs: [], campaignRefusals: [], maxConcurrent: {}, refusals: [] };
+    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, credentials: [], campaigns: [], campaignDefs: [], campaignRefusals: [], maxConcurrent: {}, refusals: [] };
     const tick = planTick(cfg, states, held, "20260823", plan.resume);
     expect(tick.policy.map((p) => p.job.ref)).toEqual(["ox", "nav"]); // glm is held by its paused run for one more tick
   });
@@ -2849,7 +2849,7 @@ describe("pause and resume across a fleet stop", () => {
       "class-probe": { version: 2, account: "RUNNER", assignments: [{ model: "nav" }] },
     });
     const freeplay: FleetJob = { refs: ["nav"], ref: "nav", episode: "freeplay", repeat: "loop", name: "nav-freeplay", enabled: true, account: "RUNNER2", source: "pinned" };
-    const cfg: FleetConfig = { ...config([freeplay]), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: j.campaigns, campaignDefs: [], campaignRefusals: [], maxConcurrent: {}, refusals: [] };
+    const cfg: FleetConfig = { ...config([freeplay]), notes: [], preflight: DEFAULT_PREFLIGHT, credentials: [], campaigns: j.campaigns, campaignDefs: [], campaignRefusals: [], maxConcurrent: {}, refusals: [] };
     const probe = (campaign: "race-probe" | "class-probe", cell: string, account: string, suffix: string, startedAt: number): RunFact => {
       const run = paused({
         runId: `fleet-${campaign}-${cell}-base-sonnet-20261024${suffix}`,
@@ -3330,7 +3330,7 @@ describe("pause and resume across a fleet stop", () => {
     expect(planResumes({ runs: [mine], config: config(), running: new Map(), held, now: NOW }).end).toHaveLength(1);
     // And the account it sits on is free for the policy: a not-in-config run holds nothing.
     const states = modelStatesOf(rosterModels(roster), [run], NOW);
-    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], campaignDefs: [], campaignRefusals: [], maxConcurrent: {}, refusals: [] };
+    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, credentials: [], campaigns: [], campaignDefs: [], campaignRefusals: [], maxConcurrent: {}, refusals: [] };
     expect(planTick(cfg, states, held, "20260823", plan.resume).policy.map((p) => p.account)).toEqual(["RUNNER3", "RUNNER4"]);
   });
 
@@ -3466,7 +3466,7 @@ describe("pause and resume across a fleet stop", () => {
       pause: { reason: "quota-exhausted", at: NOW - 60_000, count: 1, episodeElapsedMs: 12 * 60_000 },
     });
     const runs = [ended(1), ended(2), third];
-    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], campaignDefs: [], campaignRefusals: [], maxConcurrent: {}, refusals: [] };
+    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, credentials: [], campaigns: [], campaignDefs: [], campaignRefusals: [], maxConcurrent: {}, refusals: [] };
     const plan = planResumes({ runs, config: cfg, running: new Map(), held, now: NOW });
     expect(plan.end).toHaveLength(1);
     expect(retryNumbers(plan.end, (e) => failedAttemptsFor(modelStatesOf(rosterModels(roster), runs, NOW), e) ?? 0)).toEqual([3]);
