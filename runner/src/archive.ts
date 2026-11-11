@@ -52,6 +52,7 @@ import { join } from "node:path";
 import { listRuns, runDir } from "../viewer/runs";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { countModelResponses } from "./models";
+import { fanoutCharacters, fanoutSessionDir, SESSIONS_DIR } from "./run-reader";
 import { removeSessionRing } from "./session-record";
 import { CLIENT_CACHE_FILE } from "@wrathbench/mcp/client-cache";
 
@@ -62,8 +63,10 @@ export const HELD_MS = 10 * 60_000;
 export function runActivityAge(dir: string, now: number): number | null {
   let newest: number | null = null;
   // `run.sqlite-wal`: a 0.5 run's database writes land there until a
-  // checkpoint; a v1 run's session writer rewrites `live.json` on every tick.
-  for (const name of ["trajectory.jsonl", "run.sqlite", "run.sqlite-wal", "meta.json", "scratchpad.md", CLIENT_CACHE_FILE, "session/live.json"]) {
+  // checkpoint; a v1 run's session writer rewrites `live.json` on every tick,
+  // and so does each of a fan-out run's, one per character.
+  const ticks = fanoutCharacters(dir).map((c) => join(SESSIONS_DIR, c, "live.json"));
+  for (const name of ["trajectory.jsonl", "run.sqlite", "run.sqlite-wal", "meta.json", "scratchpad.md", CLIENT_CACHE_FILE, "session/live.json", ...ticks]) {
     try {
       const m = statSync(join(dir, name)).mtimeMs;
       if (newest === null || m > newest) newest = m;
@@ -290,8 +293,9 @@ export function planRunIds(runsDir: string, ids: readonly string[], now = Date.n
 
 /**
  * Move one run directory under `archive/`. Never overwrites. The session
- * record's ring of nearby units is dropped first, and so is a 0.5 run's: it
- * is a delay line for a run being watched, and an archived run is not one.
+ * record's ring of nearby units is dropped first, each fan-out character's
+ * too, and so is a 0.5 run's: it is a delay line for a run being watched,
+ * and an archived run is not one.
  */
 export function archiveRun(runsDir: string, runId: string): string {
   const from = join(runsDir, runId);
@@ -300,9 +304,35 @@ export function archiveRun(runsDir: string, runId: string): string {
   const to = join(root, runId);
   if (existsSync(to)) throw new Error(`already archived: ${to}`);
   removeSessionRing(from);
+  removeFanoutRings(from);
   rmSync(join(from, "nearby"), { recursive: true, force: true });
   renameSync(from, to);
   return to;
+}
+
+/**
+ * Remove every fan-out character's ring of nearby units
+ * (`sessions/<Character>/nearby`), as `removeSessionRing` does a single run's.
+ * Every directory under `sessions/` whose name is a character's, recorded or
+ * not, so a character whose `session.json` never landed loses its ring too.
+ * Never throws.
+ */
+export function removeFanoutRings(runDir: string): void {
+  let names: string[];
+  try {
+    names = readdirSync(join(runDir, SESSIONS_DIR));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const dir = fanoutSessionDir(runDir, name);
+    if (dir === null) continue;
+    try {
+      rmSync(join(dir, "nearby"), { recursive: true, force: true });
+    } catch {
+      /* already gone, or a read-only disk the writer could not have used either */
+    }
+  }
 }
 
 /**

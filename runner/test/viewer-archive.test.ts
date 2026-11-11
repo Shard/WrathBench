@@ -16,7 +16,8 @@ import { createApi } from "../viewer/api";
 import { listRuns } from "../viewer/runs";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { scanRunTotals } from "../viewer/tail";
-import { archiveIfNoResponses, archiveRun, inSeries, parseRunIds, planPreSeries, planRunIds, recentFleetRunIds } from "../src/archive";
+import { archiveIfNoResponses, archiveRun, inSeries, parseRunIds, planPreSeries, planRunIds, recentFleetRunIds, runActivityAge } from "../src/archive";
+import { FANOUT_CHARACTERS, FANOUT_RUN, writeFanoutRun } from "./fixtures/fanout";
 import { readRunFacts } from "../src/models";
 import { tempDirs } from "./fixtures/temp-dirs";
 
@@ -165,6 +166,27 @@ describe("the archive directory", () => {
     archiveRun(runs, "worked");
     expect(existsSync(join(runs, ARCHIVE_DIR, "worked", "trajectory.jsonl"))).toBe(true);
     expect(existsSync(join(runs, ARCHIVE_DIR, "worked", "nearby"))).toBe(false);
+  });
+
+  test("a fan-out run loses every character's ring before the move, and a character's tick keeps it warm", async () => {
+    const runs = tempDir("archive-fanout-");
+    const dir = await writeFanoutRun(runs, { closed: true });
+    for (const c of FANOUT_CHARACTERS) {
+      mkdirSync(join(dir, "sessions", c.name, "nearby"), { recursive: true });
+      writeFileSync(join(dir, "sessions", c.name, "nearby", "1760000040000.jsonl"), `{"ts":1,"kind":"tick"}\n`);
+    }
+    // Everything else old, one character's `live.json` ticking: the run is not quiet.
+    for (const name of ["meta.json", "trajectory.jsonl", "roster.json"]) utimesSync(join(dir, name), OLD, OLD);
+    for (const c of FANOUT_CHARACTERS) utimesSync(join(dir, "sessions", c.name, "live.json"), OLD, OLD);
+    const now = Date.now();
+    expect(runActivityAge(dir, now)! > 600_000).toBe(true);
+    utimesSync(join(dir, "sessions", "Bravo", "live.json"), now / 1000, now / 1000);
+    expect(runActivityAge(dir, now)! < 600_000).toBe(true);
+    archiveRun(runs, FANOUT_RUN);
+    for (const c of FANOUT_CHARACTERS) {
+      expect(existsSync(join(runs, ARCHIVE_DIR, FANOUT_RUN, "sessions", c.name, "session.json"))).toBe(true);
+      expect(existsSync(join(runs, ARCHIVE_DIR, FANOUT_RUN, "sessions", c.name, "nearby"))).toBe(false);
+    }
   });
 
   test("a fleet job log names what it recently started; an old record holds nothing", () => {

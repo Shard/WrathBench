@@ -50,6 +50,7 @@ import { memoryStore } from "./inspect-memory-store";
 import { tempDirs } from "./temp-dirs";
 import { writeLegacy05Run, type Legacy05State } from "../runner/test/fixtures/legacy05-writer";
 import { readRunRow } from "../runner/src/run-reader";
+import { FANOUT_ROSTER_TOKEN, FANOUT_RUN, writeFanoutRun } from "../runner/test/fixtures/fanout";
 
 const tmp = tempDirs();
 const NOW = Date.UTC(2030, 0, 2, 12, 0, 0);
@@ -369,6 +370,18 @@ describe("inspect run", () => {
   test("refuses an id that would leave the runs directory", async () => {
     expect((await inspect(["run", "../etc", "--runs-dir", RUNS])).code).toBe(2);
     expect((await inspect(["run", "nope", "--runs-dir", RUNS])).code).toBe(1);
+  });
+});
+
+describe("inspect over a fan-out run", () => {
+  test("run, trajectory and live read it without throwing, and never print its roster's token", async () => {
+    const runsDir = tmp("inspect-fanout-");
+    await writeFanoutRun(runsDir);
+    for (const argv of [["run", FANOUT_RUN], ["trajectory", FANOUT_RUN], ["live"]]) {
+      const r = await inspect([...argv, "--runs-dir", runsDir], NOW);
+      expect({ argv, err: r.err.filter((l) => /TypeError|Error:/.test(l)) }).toEqual({ argv, err: [] });
+      expect({ argv, leaked: [...r.out, ...r.err].some((l) => l.includes(FANOUT_ROSTER_TOKEN)) }).toEqual({ argv, leaked: false });
+    }
   });
 });
 
