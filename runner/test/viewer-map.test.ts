@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { STALL_PAUSE } from "../src/lapse";
 import { moveLineOf, openSessionRecord } from "../src/session-record";
+import { recordDrain, traceOfReading } from "./fixtures/v1-session";
 import { Trajectory } from "../src/trajectory";
 import { localRunStore, type RunStore } from "../viewer/clickhouse";
 import { positionsFromStore, readLatestPosition, readLatestStatus, readPositions, readReflecting } from "../viewer/positions";
@@ -672,7 +673,10 @@ describe("positionsFromStore", () => {
     });
     traj.setCharacter(runId, `C-${runId}`);
     clock = o.stateTs;
-    traj.recordState(runId, {
+    // A v1 run's readings are its trace's, and its movement intention is the
+    // session record's (`session/calls`); the trajectory's `move` line is its mirror.
+    const reading = traceOfReading({
+      ts: clock,
       level: 4,
       xp: 120,
       map: 0,
@@ -680,17 +684,15 @@ describe("positionsFromStore", () => {
       y: 380,
       z: 380,
       money: 71,
-      questsCompleted: 3,
+      quests: 3,
       health: 140,
       maxHealth: 220,
-      items: [{ name: "Invented Jerky", count: 4, equipped: false, itemId: 90117, quality: 1, slot: 23, bag: 255 }],
+      carried: [[23, 90117, 4, "Invented Jerky", 1]],
     });
-    // A v1 run's movement intention is the session record's (`session/calls`);
-    // the trajectory's `move` line is its mirror.
     const session = openSessionRecord({ runDir: dir, runsDir, token: `token-${runId}`, scrub: (t) => t });
     session.signals.onMove = (m) => traj.recordMove(moveLineOf(m));
     session.writer.ingest({
-      trace: { rows: [], dropped: 0 },
+      trace: { rows: reading.trace, dropped: 0, dict: reading.dict },
       events: { rows: [], dropped: 0 },
       nearby: { rows: [], dropped: 0, through: 0 },
       moves: [{ ts: clock, at: clock, evalId: null, moveId: 1, map: 0, x: 7, y: 8, z: 9, target: null, status: null }],
@@ -778,19 +780,18 @@ describe("positionsFromStore", () => {
     expect((await positionsFromStore(store, runsDir, NOW)).map((p) => p.runId)).toEqual(["live-b"]);
   });
 
-  test("both feeds carry the run's quest count across a resume, where the store's row has the newest sample's", async () => {
+  test("both feeds carry the run's quest count across a resume, which a v1 run's newest sample already holds", async () => {
     const runsDir = tempDir("wrathbench-map-resumed-");
     writeRun(runsDir, "resumed", { stateTs: NOW - 300_000 });
-    // The fleet resumed it in place: a new process, whose count starts at zero.
-    let clock = NOW - 120_000;
-    const traj = new Trajectory(join(runsDir, "resumed"), { now: () => clock });
-    for (const [ts, q] of [[NOW - 120_000, 0], [NOW - 60_000, 1], [NOW - 2_000, 2]] as const) {
-      clock = ts;
-      traj.recordState("resumed", { level: 4, xp: 130, map: 0, x: -6240, y: 380, z: 380, money: 71, questsCompleted: q });
-    }
-    traj.close();
+    // The fleet resumed it in place: a new process, whose recorder states the
+    // character again and then sees two more turn-ins. The trace's count is the
+    // run's (`trace-samples.ts`), so nothing starts again at zero.
+    const session = openSessionRecord({ runDir: join(runsDir, "resumed"), runsDir, token: "token-resumed", scrub: (t) => t });
+    const again = traceOfReading({ ts: NOW - 120_000, level: 4, xp: 130, map: 0, x: -6240, y: 380, z: 380, money: 71 });
+    session.writer.ingest(recordDrain({ trace: [...again.trace, { ts: NOW - 60_000, kind: "state", data: { qdone: [80_001] } }, { ts: NOW - 2_000, kind: "state", data: { qdone: [80_002] } }], dict: again.dict, character: null }));
+    await session.writer.close();
     const store = localRunStore(runsDir);
-    expect((await store.latestStates()).get("resumed")?.questsCompleted).toBe(2);
+    expect((await store.latestStates()).get("resumed")?.questsCompleted).toBe(5);
     const fromStore = await positionsFromStore(store, runsDir, NOW);
     expect(fromStore.map((p) => p.questsCompleted)).toEqual([5]);
     expect(JSON.stringify(fromStore)).toBe(JSON.stringify(readPositions(runsDir, NOW)));

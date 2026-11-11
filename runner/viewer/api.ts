@@ -426,8 +426,9 @@ const ACCOUNT_HELD_MS = 3 * 60_000;
  */
 function runActivityAge(dir: string, now: number): number | undefined {
   let newest: number | undefined;
-  // `run.sqlite-wal`: a live run's database writes land there until a checkpoint.
-  for (const name of ["trajectory.jsonl", "run.sqlite", "run.sqlite-wal"]) {
+  // `run.sqlite-wal`: a 0.5 run's database writes land there until a checkpoint;
+  // a v1 run's session writer rewrites `live.json` on every tick.
+  for (const name of ["trajectory.jsonl", "run.sqlite", "run.sqlite-wal", "session/live.json"]) {
     try {
       const m = statSync(join(dir, name)).mtimeMs;
       if (newest === undefined || m > newest) newest = m;

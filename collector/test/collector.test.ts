@@ -25,6 +25,8 @@ import { EpisodicLog } from "../../runner/src/episodic";
 import { retryDelayMs, clickhouseSink, SinkAborted, jsonEachRow } from "../src/sink";
 import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tail";
 import { readRunFact } from "../../runner/src/models";
+import { traceSamplesOf } from "../../runner/src/run-reader";
+import { materialiseV1p1, V1P1_RUN } from "../../runner/test/fixtures/v1p1";
 
 const roots: string[] = [];
 function tmpRoot(): string {
@@ -155,6 +157,35 @@ describe("a pass over one run", () => {
     expect(rowsOf(sink, "states")).toHaveLength(2);
     expect(rowsOf(sink, "moves")).toHaveLength(0);
     expect(rowsOf(sink, "runs")).toHaveLength(1);
+  });
+
+  test("a v1 run's states are its trace's samples and its milestones its events, each once across passes", async () => {
+    const runsDir = tmpRoot();
+    // The frozen phase-1 run, without its run.sqlite: what a v1 run directory holds.
+    materialiseV1p1(runsDir);
+    const { collector, sink, offsets } = collectorOver(runsDir);
+    await collector.pass();
+    const samples = traceSamplesOf(join(runsDir, V1P1_RUN));
+    const states = rowsOf(sink, "states");
+    expect(states).toHaveLength(samples.length);
+    expect(states.map((r) => r["seq"])).toEqual(samples.map((s) => s.seq));
+    expect(states.at(-1)).toMatchObject({ run_id: V1P1_RUN, level: 7, quests_completed: 3 });
+    // The trajectory's milestone records (a phase-1 mirror) are not read; the events stream's rows are.
+    const milestones = rowsOf(sink, "milestones");
+    expect(milestones.every((r) => (r["line_no"] as number) < 0)).toBe(true);
+    expect(milestones.filter((r) => r["kind"] === "level" && r["from_id"] !== null).map((r) => r["to_id"])).toEqual([6, 7]);
+    expect(milestones.find((r) => r["kind"] === "level" && r["to_id"] === 6)?.["turn"]).toBe(4);
+    const run = rowsOf(sink, "runs")[0]!;
+    expect(run["character"]).toBe("Testwick");
+    // A second pass over the unchanged run adds nothing; a new collector re-adds onto the same keys.
+    await collector.pass();
+    expect(rowsOf(sink, "states")).toHaveLength(samples.length);
+    expect(rowsOf(sink, "milestones")).toHaveLength(milestones.length);
+    offsets.reset();
+    const again = collectorOver(runsDir);
+    await again.collector.pass();
+    expect(rowsOf(again.sink, "states").map((r) => `${r["ts"]}:${r["seq"]}`)).toEqual(states.map((r) => `${r["ts"]}:${r["seq"]}`));
+    expect(rowsOf(again.sink, "milestones").map((r) => r["line_no"])).toEqual(milestones.map((r) => r["line_no"]));
   });
 
   test("the run row merges run.sqlite with meta.json", () => {
