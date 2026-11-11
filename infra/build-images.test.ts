@@ -350,13 +350,29 @@ describe("build-images.sh and the wrath-mcp stack", () => {
     const refused = run(tree, ["--only", "runner"]);
     expect(refused.code).toBe(1);
     expect(refused.out).toContain("is not on wrath-mcp's master");
-    expect(refused.out).toContain("git -C wrath-mcp fetch origin master");
+    expect(refused.out).toContain("git -C wrath-mcp fetch origin master v1");
     expect(refused.calls).toEqual([]);
     const local = run(tree, ["--only", "runner", "--allow-dirty", "--push", "--registry", "reg.example/wrathbench"]);
     expect(local.contexts[0]!.read("wrath-mcp/sdk/API.md")).toBe("under review\n");
     expect(local.code).toBe(1);
     expect(local.out).toContain("refusing to push images built from wrath-mcp");
     expect(pushes(local)).toEqual([]);
+  });
+});
+
+describe("build-images.sh on the v1 branch", () => {
+  test("a pin on wrath-mcp's v1 builds as a pin on its master does", () => {
+    const { tree, stack } = makeRepo();
+    git(stack, "switch", "-q", "-c", "v1");
+    put(stack, { "sdk/API.md": "v1\n" });
+    git(stack, "commit", "-q", "-am", "stack v1");
+    const sub = join(tree, "wrath-mcp");
+    git(sub, "fetch", "-q", "origin", "v1");
+    git(sub, "switch", "-q", "--detach", "origin/v1");
+    git(tree, "commit", "-q", "-m", "pin a v1 commit", "--", "wrath-mcp");
+    const r = run(tree, ["--only", "runner"]);
+    expect(r.code).toBe(0);
+    expect(r.contexts[0]!.read("wrath-mcp/sdk/API.md")).toBe("v1\n");
   });
 });
 
