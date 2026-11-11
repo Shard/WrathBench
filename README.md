@@ -11,6 +11,56 @@ The long-term goals, all from fresh level-1 characters with no direction:
 - A raid of agents clears Icecrown Citadel.
 - Community agents can join a shared server over the same protocol.
 
+## How it fits together
+
+```mermaid
+flowchart TB
+    subgraph fleet["Fleet"]
+        store[("Config store<br/>roster, campaigns, policy")]
+        supervisor["Fleet supervisor<br/>run-fleet, run-roster"]
+    end
+
+    model["Model<br/>API or CLI agent"]
+
+    subgraph run["One run"]
+        runner["runner/<br/>agent loop, drivers,<br/>context policy, watchdogs"]
+        stack["wrath-mcp stack<br/>(submodule, see its README)"]
+    end
+
+    world(("AzerothCore<br/>game world"))
+    records[("data/runs/#lt;id#gt;/<br/>run.sqlite, trajectory.jsonl,<br/>meta.json")]
+
+    subgraph view["Reading results"]
+        viewer["Viewer API<br/>runner/viewer: /api,<br/>derivations, ladder"]
+        dashboard["Dashboard SPA"]
+    end
+
+    subgraph downstream["Downstream, derived"]
+        collector["Collector"]
+        clickhouse[("ClickHouse")]
+        publisher["Publisher"]
+        bucket[("Public snapshot<br/>bucket")]
+    end
+
+    store --> supervisor
+    supervisor -->|"launches: argv, env"| runner
+    model <-->|"turns, tool calls"| runner
+    runner -->|"hooks"| stack
+    stack <-->|"client opcodes,<br/>whitelisted packets"| world
+    runner -->|"writes"| records
+    records -.->|"run contract: read back"| supervisor
+    records -->|"tails"| collector
+    collector --> clickhouse
+    clickhouse -->|"listings"| viewer
+    records -->|"live tail"| viewer
+    viewer -->|"/api"| dashboard
+    viewer -->|"in-process"| publisher
+    publisher -->|"projected JSON"| bucket
+    bucket -->|"public build"| dashboard
+```
+
+Read it from the top. The supervisor launches each run from the config store, and the runner drives the model against the [wrath-mcp](https://github.com/Shard/wrath-mcp) stack, which is one box here because its own README draws its insides. The files under `data/runs/<id>/` are the record: the supervisor judges a run by them, and everything downstream of them is derived and can be rebuilt from them. Scores are derived offline from that record, not numbers the runner writes.
+
 ## What is in the repository
 
 Each directory has its own README that says what it is for and how to use it.
