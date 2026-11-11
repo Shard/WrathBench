@@ -33,10 +33,9 @@
  * than mysterious, and neither is added to anything: there is no aggregate
  * score.
  *
- * One of the eight rungs cannot be answered by anything the harness records
- * today — group joins and instance clears are not in the trajectory, and the
- * harness runs one character per session. It reads "not instrumented" rather
- * than being approximated by a level threshold. Rung 2 reads the zone/area
+ * One of the eight rungs cannot be answered from scored runs: only unscored
+ * probe campaigns run the parties rung 6 would read. It reads
+ * "not instrumented" rather than being approximated by a level threshold. Rung 2 reads the zone/area
  * milestone records and rung 4 reads those plus the flight
  * milestones, so 4 now tests both clauses of its title. Every derived rung
  * prints the exact rule it applied so a reader can disagree with the
