@@ -62,6 +62,7 @@ describe("GET /api/admin", () => {
   test("with no supervisor up: the store's credentials, their status unknown rather than unset", async () => {
     const body = (await (await get(fixture().handle)).json()) as AdminResponse;
     expect(body.fleet.up).toBe(false);
+    expect(body.credentials.map((c) => c.status)).toEqual(["unknown", "disabled"]);
     expect(body.groups).toEqual({ runner: true, evals: true, viewer: true });
     expect(body.credentials.map((c) => [c.id, c.secretEnv, c.secretSet, c.inUse, c.budget, c.enabled])).toEqual([
       ["or-1", "OPENROUTER_KEY", null, null, "$5/day", true],
@@ -89,6 +90,11 @@ describe("GET /api/admin", () => {
       ["or-2", false, 0, null],
     ]);
     expect(body.credentials[1]!.lastError?.reason).toBe("auth-failed");
+    // Each one's health, derived from the same state: or-1 is fine, or-2 is off, unset and failing auth.
+    expect(body.credentials.map((c) => [c.id, c.status, c.issues.map((i) => i.code)])).toEqual([
+      ["or-1", "ok", []],
+      ["or-2", "disabled", ["switched-off", "secret-missing", "auth-failed"]],
+    ]);
     // Nothing a body carries is a value: the fixture has none to leak, and the shape has no field for one.
     expect(JSON.stringify(body)).not.toMatch(/sk-|Bearer/);
   });

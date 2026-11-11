@@ -17,12 +17,19 @@
  * supervisor is not up to say. Whether the chart hands the variable to those
  * pods at all is the chart's `modelKeys`, which it passes here as
  * `WRATHBENCH_MODEL_KEYS`. No value is read, served or written by this route.
+ *
+ * **Each credential's health** (`status` and `issues`) is derived here from
+ * those same three sources and nothing else (`credentialHealth`,
+ * runner/src/credential-health.ts): the store's switch, the supervisor's word
+ * on the variable, its budget holds and the newest paused run that indicts
+ * it, and the chart's `modelKeys`. With no supervisor up it is `unknown`.
  */
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { configDbPath, ConfigStore } from "../src/config-store";
-import { CREDENTIAL_PROVIDERS, describeBudget, parseCredentials, type Credential } from "../src/credential-slots";
+import { credentialHealth } from "../src/credential-health";
+import { CREDENTIAL_PROVIDERS, describeBudget, parseCredentials, providerById, type Credential } from "../src/credential-slots";
 import { publishViewFromEnv } from "../../infra/publish-settings";
 import type { AdminCredentialView, AdminPublishView, AdminResponse, FleetResponse } from "./api-types";
 import type { Groups } from "./groups";
@@ -80,11 +87,25 @@ export function credentialViews(o: {
   stored: readonly Credential[];
   fleet: Pick<FleetResponse, "credentials">;
   up: boolean;
+  /** The supervisor's last heartbeat: when what it said was last true. */
+  heartbeatAt?: number | null;
   modelKeys: readonly string[] | null;
 }): AdminCredentialView[] {
   const status = new Map((o.up ? (o.fleet.credentials ?? []) : []).map((c) => [c.id, c]));
   return o.stored.map((c): AdminCredentialView => {
-    const s = status.get(c.id);
+    const found = status.get(c.id);
+    // A status about another variable (renamed since the tick) is about another secret.
+    const s = found !== undefined && found.secretEnv === c.secretEnv ? found : undefined;
+    const deployed = o.modelKeys === null ? null : o.modelKeys.includes(c.secretEnv);
+    const health = credentialHealth({
+      enabled: c.enabled,
+      secretEnv: c.secretEnv,
+      holds: providerById(c.provider)?.holds ?? "key",
+      up: o.up,
+      heartbeatAt: o.heartbeatAt ?? null,
+      supervisor: s,
+      deployed,
+    });
     return {
       id: c.id,
       provider: c.provider,
@@ -93,12 +114,14 @@ export function credentialViews(o: {
       secretEnv: c.secretEnv,
       slots: c.slots,
       budget: describeBudget(c.budget),
-      secretSet: s !== undefined && s.secretEnv === c.secretEnv ? s.secretSet : null,
-      deployed: o.modelKeys === null ? null : o.modelKeys.includes(c.secretEnv),
+      secretSet: s !== undefined ? s.secretSet : null,
+      deployed,
       inUse: s?.inUse ?? null,
       used: s?.used ?? null,
       held: s?.held ?? {},
       lastError: s?.lastError ?? null,
+      status: health.status,
+      issues: health.issues,
     };
   });
 }
@@ -169,8 +192,8 @@ export function createAdminApi(opts: AdminApiOptions): (req: Request, path: stri
       groups: opts.groups,
       fleet: { up, heartbeatAt },
       modelKeys,
-      credentials: credentialViews({ stored: storedCredentials(opts.dbPath ?? configDbPath()), fleet: fleet ?? {}, up, modelKeys }),
-      providers: CREDENTIAL_PROVIDERS.map((p) => ({ id: p.id, label: p.label, bill: p.bill, envBase: p.envBase, budgets: p.budgets })),
+      credentials: credentialViews({ stored: storedCredentials(opts.dbPath ?? configDbPath()), fleet: fleet ?? {}, up, heartbeatAt, modelKeys }),
+      providers: CREDENTIAL_PROVIDERS.map((p) => ({ id: p.id, label: p.label, bill: p.bill, envBase: p.envBase, holds: p.holds, budgets: p.budgets })),
       publishing: { ...publishViewFromEnv(env), last: lastPass() },
       now: t,
     };

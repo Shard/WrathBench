@@ -471,6 +471,25 @@ describe("--status", () => {
     expect(lines.join("\n")).not.toContain("FAKE-NEVER-PRINTED");
     expect(formatCredentialStatus([], {}, NOW)[0]).toContain("none configured — no model run can start");
   });
+
+  test("the holds, structured for the admin interface: a code and until when, beside the same sentence", () => {
+    const cfg = fleet();
+    const book = new SlotBook(cfg.credentials, cfg.policy.maxSessions);
+    const gate = credentialGate(cfg.credentials, [reading("claude-1", 85, 5 * H), reading("claude-2", 100, 2 * H)], [], NOW);
+    expect(gate.holdReasonOf("claude-1", "e90")).toEqual({ code: "usage-threshold", until: NOW + 5 * H, text: gate.holdOf("claude-1", "e90")! });
+    expect(gate.holdReasonOf("claude-2", "probing")?.code).toBe("usage-spent");
+    expect(gate.holdReasonOf("or-free", "e90")).toBeUndefined();
+    const statuses = credentialStatuses({ credentials: cfg.credentials, book, gate, runs: [] });
+    expect(statuses.map((s) => [s.id, s.holds?.scored?.code, s.holds?.freeplay?.code])).toEqual([
+      ["claude-1", "usage-threshold", "usage-threshold"],
+      ["claude-2", "usage-spent", "usage-spent"],
+      ["or-free", undefined, undefined],
+    ]);
+    // A per-day budget clears at the next 00:00 UTC.
+    const creds = parseCredentials({ r: { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 1, budget: { kind: "runs", perDay: 1 }, billing: "free", enabled: true } });
+    const runs = credentialGate(creds, [], [fact({ credential: "r", startedAt: NOW - 60_000 })], NOW);
+    expect(runs.holdReasonOf("r", "freeplay")).toMatchObject({ code: "runs-budget", until: Date.parse("2030-03-15T00:00:00Z") });
+  });
 });
 
 describe("the seeded example", () => {

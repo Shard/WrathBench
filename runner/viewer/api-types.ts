@@ -12,6 +12,7 @@
  * to declare, so nothing that imported them before has to move.
  */
 
+import type { CredentialHold, CredentialIssue, CredentialStatusLevel } from "../src/credential-health";
 import type { Harness } from "../src/drivers";
 import type { ItemSample, NearbyWindow, SessionPosition, SessionTrack, SessionTrackPoint } from "@wrathbench/inspector/wire";
 
@@ -1572,6 +1573,8 @@ export interface FleetResponse extends SnapshotEnvelope {
     budget: string;
     used: string | null;
     held: { scored?: string; freeplay?: string };
+    /** The holds, structured (`CredentialStatus.holds`); absent from a supervisor that predates them. */
+    holds?: { scored?: CredentialHold; freeplay?: CredentialHold };
     lastError: { reason: string; at: number } | null;
   }[];
   /** Every account the supervisor knows, with its class and what holds it. */
@@ -2658,6 +2661,14 @@ export interface AdminCredentialView {
   used: string | null;
   held: { scored?: string; freeplay?: string };
   lastError: { reason: string; at: number } | null;
+  /**
+   * Its health: the worst level among its issues, `ok` with none
+   * (`credentialHealth`, runner/src/credential-health.ts). `unknown` while no
+   * supervisor is up to say, never `ok`.
+   */
+  status: CredentialStatusLevel;
+  /** Each thing wrong with it: a code, a short message, and when it was seen. */
+  issues: CredentialIssue[];
 }
 
 export interface AdminProviderView {
@@ -2666,6 +2677,8 @@ export interface AdminProviderView {
   bill: "subscription" | "metered";
   /** The env var name a credential of it names: this, or this with `_<n>`. */
   envBase: string;
+  /** What its variable holds: a token, a key, or a Codex home's path. */
+  holds: "token" | "home" | "key";
   budgets: readonly string[];
 }
 
