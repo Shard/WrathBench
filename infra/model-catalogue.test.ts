@@ -222,6 +222,7 @@ describe("weights", () => {
     expect(weightsOf("gpt-6-luna")).toBe("closed");
     expect(weightsOf("google/gemma-4-31b-it:free")).toBe("open");
     expect(weightsOf("google/gemini-4-argon")).toBe("closed");
+    expect(weightsOf("google/gemini-4-carbon")).toBe("closed");
   });
 
   test("every spelling of one model reads the same", () => {
