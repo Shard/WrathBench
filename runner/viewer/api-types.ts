@@ -2462,6 +2462,13 @@ export interface TraceState {
   resting: boolean;
   target: TraceTarget | null;
   cast: TraceCast | null;
+  /**
+   * Zone and area (subzone) ids, as the record's unit state carries them
+   * (`wrath-mcp/docs/SESSION-FORMAT.md`, "Unit state"); ids only, the names
+   * are client text. Null when not observed, which is every 0.5 trace.
+   */
+  zone: number | null;
+  area: number | null;
 }
 
 /** `[slot, itemId]` or `[slot, itemId, rand]`: equipment slots 0-18. */
