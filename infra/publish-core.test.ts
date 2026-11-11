@@ -1807,3 +1807,118 @@ describe("a run that is never published is withdrawn", () => {
     expect(state.traceSegs).toEqual({});
   });
 });
+
+/**
+ * A delay (`delayMs`): the public view trails the render. A pass's
+ * content-addressed objects go up at once and nothing names them; the keys a
+ * reader can reach without the manifest — the mutable files and the trace
+ * windows — wait until the pass is `delayMs` old, and its flip is recorded
+ * then. Without a delay the engine is what it was, which every test above is.
+ */
+describe("a delayed pass", () => {
+  const DELAY = 10 * 60_000;
+  const T0 = 1_700_000_000_000 - (1_700_000_000_000 % SEG_MS);
+  const withTrace = (gen: string, runs: RunSpec[], t0s: number[]): SnapshotResult => {
+    const r = snapshot(gen, runs);
+    for (const t0 of t0s) r.artifacts.push(json(traceSegmentPath(runs[0]!.id, t0), { t0 }, IMMUTABLE));
+    return r;
+  };
+  const clock = (start: number): { now: () => number; set: (t: number) => void } => {
+    let t = start;
+    return { now: () => t, set: (v) => (t = v) };
+  };
+
+  test("is held: its objects go up, its mutable files and trace windows do not, and nothing flips", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    const c = clock(1_000_000);
+    const report = await publish(withTrace("g1", [{ id: "a", ver: "1" }], [T0]), store, state, { delayMs: DELAY, now: c.now });
+    expect(store.puts()).toContain("v1/run/a/1/detail.json");
+    expect(store.puts()).toContain("v1/snap/g1/runs.json");
+    for (const k of [MANIFEST_PATH, LIVE_PATH, traceSegmentPath("a", T0)]) expect(store.puts()).not.toContain(k);
+    expect(report.flipped).toBe(false);
+    expect(report.held).toBe(1);
+    expect(state.held?.[0]).toMatchObject({ gen: "g1", renderedAt: 1_000_000, due: 1_000_000 + DELAY });
+    expect(state.lastGen).toBeUndefined();
+    expect(describeReport(report)).toContain("1 held");
+  });
+
+  test("is shown once it is old enough: windows, then live.json, then the manifest, then its flip", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    const c = clock(1_000_000);
+    await publish(withTrace("g1", [{ id: "a", ver: "1" }], [T0]), store, state, { delayMs: DELAY, now: c.now });
+    // A pass before it is due shows nothing yet, and holds a second.
+    c.set(1_000_000 + DELAY / 2);
+    await publish(withTrace("g2", [{ id: "a", ver: "2" }], [T0, T0 + SEG_MS]), store, state, { delayMs: DELAY, now: c.now });
+    expect(store.puts()).not.toContain(MANIFEST_PATH);
+    expect(state.held?.map((h) => h.gen)).toEqual(["g1", "g2"]);
+    store.reset();
+    c.set(1_000_000 + DELAY);
+    const report = await publish(withTrace("g3", [{ id: "a", ver: "3" }], [T0, T0 + SEG_MS]), store, state, { delayMs: DELAY, now: c.now });
+    const puts = store.puts();
+    // g1 is due: its window, its live.json and its manifest, in that order.
+    expect(at(puts, traceSegmentPath("a", T0))).toBeLessThan(at(puts, LIVE_PATH));
+    expect(at(puts, LIVE_PATH)).toBeLessThan(at(puts, MANIFEST_PATH));
+    expect(JSON.parse(store.objects.get(MANIFEST_PATH)!).gen).toBe("g1");
+    // g2's second window is still held, and not written by g1's release.
+    expect(puts).not.toContain(traceSegmentPath("a", T0 + SEG_MS));
+    expect(report.flipped).toBe(true);
+    expect(state.lastGen).toBe("g1");
+    expect(state.held?.map((h) => h.gen)).toEqual(["g2", "g3"]);
+    // Nothing a held pass names was pruned: g2's and g3's objects are all there.
+    for (const v of ["2", "3"]) expect(store.objects.has(`v1/run/a/${v}/detail.json`)).toBe(true);
+    expect(store.objects.has("v1/snap/g2/runs.json")).toBe(true);
+  });
+
+  test("a held window is one the renderer need not make again", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    const seen: boolean[] = [];
+    const render: PassRenderer = async (_sink, published) => {
+      seen.push(published.traceSegment("a", T0));
+      return withTrace(`g${seen.length}`, [{ id: "a", ver: String(seen.length) }], seen.length === 1 ? [T0] : []);
+    };
+    await publishPass(render, store, state, { delayMs: DELAY, now: () => 1 });
+    await publishPass(render, store, state, { delayMs: DELAY, now: () => 2 });
+    expect(seen).toEqual([false, true]);
+  });
+
+  test("a failed write leaves the pass held, and the next pass writes only what did not land", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    await publish(snapshot("g1", [{ id: "a", ver: "1" }]), store, state, { delayMs: DELAY, now: () => 0 });
+    store.failPuts.add(MANIFEST_PATH);
+    await expect(publish(snapshot("g2", [{ id: "a", ver: "2" }]), store, state, { delayMs: DELAY, now: () => DELAY })).rejects.toBeInstanceOf(PublishError);
+    expect(state.held?.map((h) => h.gen)).toEqual(["g1", "g2"]);
+    store.failPuts.clear();
+    store.reset();
+    await publish(snapshot("g3", [{ id: "a", ver: "3" }]), store, state, { delayMs: DELAY, now: () => DELAY + 1 });
+    // live.json landed last time; only the manifest is left of g1.
+    expect(store.puts().filter((p) => p === LIVE_PATH || p === MANIFEST_PATH)).toEqual([MANIFEST_PATH]);
+    expect(state.lastGen).toBe("g1");
+  });
+
+  test("the held passes survive the state file", () => {
+    const state = emptyState();
+    state.held = [
+      { renderedAt: 1, due: 2, gen: "g", mutable: [json(LIVE_PATH, { x: 1 }, MUTABLE)], traces: [], runPairs: [["a", "1"]], snap: ["v1/snap/g/runs.json"], withdrawn: [] },
+    ];
+    const back = parseState(JSON.stringify(state));
+    expect(back.held).toEqual(state.held);
+    // And a state without them reads, and writes, as it always did.
+    expect("held" in parseState(JSON.stringify(emptyState()))).toBe(false);
+  });
+
+  test("a delay turned off shows what it held first, then this pass", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    await publish(snapshot("g1", [{ id: "a", ver: "1" }]), store, state, { delayMs: DELAY, now: () => 0 });
+    store.reset();
+    await publish(snapshot("g2", [{ id: "a", ver: "2" }]), store, state, { now: () => 1 });
+    const manifests = store.calls.filter((c) => c.op === "put" && c.path === MANIFEST_PATH).map((c) => JSON.parse(c.body!).gen as string);
+    expect(manifests).toEqual(["g1", "g2"]);
+    expect(state.held).toBeUndefined();
+    expect(state.lastGen).toBe("g2");
+  });
+});

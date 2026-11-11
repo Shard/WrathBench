@@ -13,8 +13,9 @@
  * a trusted private network in with WRATHBENCH_VIEWER_LAN=1. The module stays
  * loopback regardless — LAN viewers can read pages, not reach the server.
  *
- * Everything here reads. The runs directory is never written to, and each
- * run.sqlite is opened readonly so a live writer is untouched.
+ * Everything here reads, unless the admin switch is on (WRATHBENCH_ADMIN=1),
+ * which mounts the config API. The runs directory is never written to, and
+ * each run.sqlite is opened readonly so a live writer is untouched.
  */
 
 import { existsSync, mkdirSync } from "node:fs";
@@ -22,6 +23,7 @@ import { join } from "node:path";
 import { createApi, json } from "./api";
 import { clickhouseConfigFromEnv } from "./clickhouse";
 import { allowedHostsFromEnv } from "./host-guard";
+import { adminFromEnv, groupsEnvValue, groupsFromEnv, type Groups } from "./groups";
 
 const REQUIRED_HOST = "127.0.0.1";
 const lanOptIn = process.env["WRATHBENCH_VIEWER_LAN"] === "1";
@@ -46,6 +48,35 @@ try {
   allowedHosts = allowedHostsFromEnv(process.env);
 } catch (err) {
   console.error(`refusing to start: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}
+
+/*
+ * What this deployment is made of (`groups.ts`): WRATHBENCH_GROUPS, unset for
+ * every group. A group that is off has no pages or routes here. The viewer is
+ * itself the viewer group, so a viewer told that group is off refuses to start
+ * rather than serve a deployment that says it has none.
+ *
+ * The admin switch, WRATHBENCH_ADMIN=1, mounts the config API and the admin
+ * pages; without it this process has no write route. Never with public mode:
+ * the read-only public site never gains a write surface.
+ */
+let groups: Groups;
+try {
+  groups = groupsFromEnv(process.env);
+} catch (err) {
+  console.error(`refusing to start: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}
+if (!groups.viewer) {
+  console.error(`refusing to start: WRATHBENCH_GROUPS=${groupsEnvValue(groups)} leaves the viewer group off, and this is the viewer.`);
+  process.exit(1);
+}
+const admin = adminFromEnv(process.env);
+if (admin && process.env["WRATHBENCH_VIEWER_PUBLIC"] === "1") {
+  console.error(
+    "refusing to start: WRATHBENCH_ADMIN=1 with WRATHBENCH_VIEWER_PUBLIC=1. The admin interface is private only; a public handle never mounts it.",
+  );
   process.exit(1);
 }
 
@@ -105,6 +136,8 @@ const handle = createApi({
   tilesPublic,
   moduleUrl,
   allowedHosts,
+  groups,
+  admin,
 });
 
 const server = Bun.serve({
@@ -120,6 +153,7 @@ const server = Bun.serve({
 console.log(
   `wrathbench viewer: http://${host}:${server.port}  (runs: ${runsDir}, store: ${clickhouse === null ? "local (no CLICKHOUSE_URL)" : clickhouse.url})` +
     `  (hosts: localhost, any IP${allowedHosts.map((h) => `, ${h}`).join("")})` +
+    `  (groups: ${groupsEnvValue(groups)}${admin ? "; admin on" : ""})` +
     (built ? "" : "  [dashboard not built — run `bun run --cwd dashboard build`]") +
     (publicMode
       ? tilesPublic

@@ -222,7 +222,7 @@ so the pod annotation below can checksum the same bytes.
     </profiles>
 </clickhouse>
 {{- end -}}
-{{- if .Values.clickhouse.enabled }}
+{{- if include "wrathbench.on.clickhouse" $ }}
 {{/*
 The derived store (collector/README.md), and the collector that fills it.
 

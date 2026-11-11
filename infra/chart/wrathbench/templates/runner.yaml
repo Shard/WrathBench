@@ -1,4 +1,4 @@
-{{- if .Values.runner.enabled }}
+{{- if include "wrathbench.on.runner" $ }}
 {{/*
 The `sleep infinity` dev pod — compose's `runner` service, unchanged in
 purpose. It is the exec target for infra/run-episode.sh --k8s, for the deploy
@@ -61,7 +61,7 @@ spec:
             {{- include "wrathbench.harnessEnv" . | nindent 12 }}
             {{- include "wrathbench.dbEnv" . | nindent 12 }}
             {{- include "wrathbench.harnessSecretEnv" . | nindent 12 }}
-            {{- if .Values.clickhouse.enabled }}
+            {{- if include "wrathbench.on.clickhouse" $ }}
             # The derived store, which `bun wb inspect` reads a run from rather
             # than a live run's run.sqlite (infra/inspect-run.ts). This pod
             # only: the fleet and run pods are kept from ClickHouse
@@ -70,7 +70,7 @@ spec:
             {{- end }}
             {{- /* The party stager and its smokes, run here by hand: staging on only. */}}
             {{- with include "wrathbench.stagerEnv" . | trim }}{{ . | nindent 12 }}{{ end }}
-            {{- if .Values.codex.enabled }}
+            {{- if include "wrathbench.on.codex" $ }}
             # The `codex` driver's credential, a Codex home mounted below. The CLI
             # writes its token refresh back into this directory, so it is one
             # live copy on a PVC and never a copy of the operator's ~/.codex.
@@ -97,7 +97,7 @@ spec:
             - name: data
               mountPath: /wrathbench/data/characters
               subPath: characters
-            {{- if .Values.codex.enabled }}
+            {{- if include "wrathbench.on.codex" $ }}
             # NOT a subPath: the CLI rewrites auth.json in place and expects a
             # real directory it owns (uid 1000, via the pod's fsGroup).
             - name: codex-home
@@ -109,7 +109,7 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "wrathbench.fullname" . }}-data
-        {{- if .Values.codex.enabled }}
+        {{- if include "wrathbench.on.codex" $ }}
         - name: codex-home
           persistentVolumeClaim:
             claimName: {{ include "wrathbench.fullname" . }}-codex-home

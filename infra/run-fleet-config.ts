@@ -583,6 +583,23 @@ export function pinnedRefs(config: Pick<FleetConfig, "jobs">): Set<string> {
 }
 
 /**
+ * The config as a deployment with the evals group off runs it
+ * (`runner/viewer/groups.ts`): every campaign and every scored or probing job
+ * disabled, so each drains at its episode boundary and nothing resumes under
+ * it, exactly as if the operator had switched it off. The policy's own scored
+ * picks are the other half (`planPolicy`'s `evals`). Freeplay jobs are left as
+ * they are. Pure, and applied to each config as it is read, so turning the
+ * group back on is the next read.
+ */
+export function withoutEvals(config: FleetConfig): FleetConfig {
+  return {
+    ...config,
+    campaigns: config.campaigns.map((c) => (c.enabled ? { ...c, enabled: false } : c)),
+    jobs: config.jobs.map((j) => (j.enabled && (isScoredEpisode(j.episode) || j.episode === "probing") ? { ...j, enabled: false } : j)),
+  };
+}
+
+/**
  * The campaigns the policy may schedule: enabled, and unpinned. A pinned
  * campaign is a pinned job in every way that matters here — its account is by
  * definition not one the policy draws from — so it is built into a pinned

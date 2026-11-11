@@ -192,10 +192,49 @@ staging:
   soapPort: 7878
   stagerPasswordKey: WRATHBENCH_STAGER_PASSWORD
 
+# The three groups a deployment is made of (runner/viewer/groups.ts;
+# docs/ARCHITECTURE.md, "Groups"). Each is on by default, which renders what
+# the chart rendered before groups existed. A group that is off is absent, not
+# hidden: its workloads are not rendered, whatever their own `enabled` says,
+# and its pages, API routes and background work are gone from the pods that
+# remain (they read WRATHBENCH_GROUPS, rendered only when a group is off).
+#
+#   runner  the fleet supervisor and its run pods, the runner pod, the codex
+#           home. Off, nothing launches a run: a viewer-only deployment
+#           reads sessions its own agents produced.
+#   evals   scored episodes, campaigns, the ladder and comparability. No
+#           workload of its own: off, the supervisor launches no scored or
+#           probing episode (campaigns and scored jobs read as disabled, and
+#           an `idle: unlimited` model gets its freeplay session), and the
+#           ladder, campaigns and about pages are gone.
+#   viewer  the viewer, the publisher, and ClickHouse with its collector.
+#
+# Which groups are on is deployment config rather than fleet config: it
+# decides which workloads exist, which the config store cannot.
+groups:
+  runner:
+    enabled: true
+  evals:
+    enabled: true
+  viewer:
+    enabled: true
+
+# The admin interface: the viewer's config API (every write route it has)
+# and its admin pages, from which the operator edits credentials, the roster,
+# freeplay agents, campaigns and the queue through the config store's own
+# validation (docs/RUNBOOK.md, "The admin interface"). OFF by default: a
+# deployment that does not turn it on has no write route at all. It is
+# private only: it needs the viewer, which is LAN-only and unauthenticated by
+# design, and the published site never carries it. The chart refuses it with
+# the viewer off.
+admin:
+  enabled: false
+
 # There is no fleet config value and no ConfigMap: the fleet config is the
 # sqlite store on the data PVC (WRATHBENCH_CONFIG_DB, templates/_helpers.tpl),
 # seeded once from infra/fleet.example.json through the runner pod and edited
-# on the viewer's /config page from then on. The chart ships no copy of it.
+# with `bun wb config` or, with `admin` on, the viewer's /config page from then
+# on. The chart ships no copy of it.
 
 # Realm identity. Not secret; the account credentials are.
 realm:
@@ -498,8 +537,31 @@ viewer:
     hajimari:
       enabled: false
 
+# The public site's publisher (docs/RUNBOOK.md, "Public dashboard";
+# infra/publish-settings.ts). The viewer group's: off with it, and
+# `enabled: false` is a deployment that publishes nothing at all.
 publisher:
   enabled: true
+  # Where it publishes: any S3-compatible bucket, R2 or otherwise. The key pair
+  # is always the Secret's (S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY). The
+  # endpoint and bucket are too unless set here, where they are plain values:
+  # neither is a secret. Empty `region` is Bun's default (us-east-1; R2 takes
+  # `auto`), and `virtualHostedStyle` is for an endpoint that names the bucket
+  # in its hostname. With `networkPolicy` on, the publisher reaches only
+  # `networkPolicy.internet`, so a bucket on the LAN needs a rule of its own.
+  target:
+    endpoint: ""
+    bucket: ""
+    region: ""
+    virtualHostedStyle: false
+  # How far the public view trails live play, in ms: a pass's manifest,
+  # live.json, nearby.json and trace windows are written once they are this
+  # old. 0 shows each pass as it is rendered.
+  delayMs: 0
+  # false publishes only the current view: the runs that have not ended, and
+  # nothing of a run once it has. Fewer objects change each pass, which is
+  # what a bucket's write operations are billed on.
+  history: true
   intervalMs: 300000
   # Runs projected before a pass uploads them, drops the bodies and releases
   # their entry indexes — the pass's memory dial. See WRATHBENCH_PUBLISH_BATCH
