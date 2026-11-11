@@ -29,6 +29,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ComparabilityView, ItemSample, MoveIntentView, RunRow, StateItemsRow, StatePoint } from "./api-types";
 import { sessionSource } from "./session-source";
+import { isV1RunDir, latestReading, readRunRow, readStateSamples } from "../src/run-reader";
 import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./archive-dir";
 import { harnessOfRun, parseComparability } from "../src/comparability";
@@ -347,40 +348,33 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     row.bytes = st.size;
   }
 
+  if (isV1RunDir(dir)) {
+    // A v1 run: its row from meta.json (or a first-build run.sqlite), its
+    // readings from the session record's trace (`run-reader.ts`).
+    try {
+      const r = readRunRow(dir, runId);
+      if (r !== null) applyRunRow(row, r);
+      const latest = latestReading(dir, runId);
+      if (latest !== null) {
+        row.level = latest.level;
+        row.xp = latest.xp;
+        row.money = latest.money;
+        row.questsCompleted = latest.questsCompleted;
+        row.items = latest.items === null ? null : itemSamplesOf(latest.items);
+      }
+    } catch (err) {
+      row.error = err instanceof Error ? err.message : String(err);
+    }
+    return finishRow(row, now);
+  }
+
   // A single unreadable or busy database degrades one row, never the listing.
   const db = openReadonly(dir);
   if (db !== null) {
     try {
       const r = db.query(`SELECT * FROM run WHERE run_id = ?`).get(runId) as Record<string, unknown> | null;
       if (r !== null) {
-        row.harnessVersion = str(r["harness_version"]) ?? row.harnessVersion;
-        row.startedAt = num(r["started_at"]) ?? row.startedAt;
-        row.endedAt = num(r["ended_at"]);
-        row.model = str(r["model"]) ?? row.model;
-        row.driver = str(r["driver"]) ?? row.driver;
-        row.shakeout = str(r["shakeout"]) ?? row.shakeout;
-        row.objective = str(r["objective"]) ?? row.objective;
-        // `character`/`platform` landed at 0.4-6: a 0.4-1..5 run.sqlite has
-        // neither, and the meta read above / the derivation below answer.
-        row.character = str(r["character"]) ?? row.character;
-        row.platform = str(r["platform"]);
-        // Added at 0.5: a run.sqlite that predates the columns yields undefined
-        // here, which `str` reads as null — the same as "not recorded".
-        row.resolvedModel = str(r["resolved_model"]) ?? row.resolvedModel;
-        row.cliVersion = str(r["resolved_cli_version"]) ?? row.cliVersion;
-        row.terminationReason = str(r["termination_reason"]);
-        row.terminationDetail = str(r["termination_detail"]);
-        row.pauseReason = str(r["pause_reason"]);
-        // Added at 0.5 with the durable character: a run.sqlite that predates the
-        // column has no key here, which `str` reads as null.
-        row.continuedFrom = str(r["continued_from"]) ?? row.continuedFrom;
-        if (row.apiBase === null && typeof r["config_json"] === "string") {
-          try {
-            row.apiBase = str((JSON.parse(r["config_json"]) as { apiBase?: unknown }).apiBase);
-          } catch {
-            /* a run row with unparseable config still lists */
-          }
-        }
+        applyRunRow(row, r);
       }
       const last = db
         .query(
@@ -425,6 +419,43 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     }
   }
 
+  return finishRow(row, now);
+}
+
+/** The run row's columns onto a listing row: a column wins where it has an answer, the meta read fills the rest. */
+function applyRunRow(row: RunRow, r: Record<string, unknown>): void {
+  row.harnessVersion = str(r["harness_version"]) ?? row.harnessVersion;
+  row.startedAt = num(r["started_at"]) ?? row.startedAt;
+  row.endedAt = num(r["ended_at"]);
+  row.model = str(r["model"]) ?? row.model;
+  row.driver = str(r["driver"]) ?? row.driver;
+  row.shakeout = str(r["shakeout"]) ?? row.shakeout;
+  row.objective = str(r["objective"]) ?? row.objective;
+  // `character`/`platform` landed at 0.4-6: a 0.4-1..5 run.sqlite has
+  // neither, and the meta read above / the derivation below answer.
+  row.character = str(r["character"]) ?? row.character;
+  row.platform = str(r["platform"]);
+  // Added at 0.5: a run.sqlite that predates the columns yields undefined
+  // here, which `str` reads as null — the same as "not recorded".
+  row.resolvedModel = str(r["resolved_model"]) ?? row.resolvedModel;
+  row.cliVersion = str(r["resolved_cli_version"]) ?? row.cliVersion;
+  row.terminationReason = str(r["termination_reason"]);
+  row.terminationDetail = str(r["termination_detail"]);
+  row.pauseReason = str(r["pause_reason"]);
+  // Added at 0.5 with the durable character: a run.sqlite that predates the
+  // column has no key here, which `str` reads as null.
+  row.continuedFrom = str(r["continued_from"]) ?? row.continuedFrom;
+  if (row.apiBase === null && typeof r["config_json"] === "string") {
+    try {
+      row.apiBase = str((JSON.parse(r["config_json"]) as { apiBase?: unknown }).apiBase);
+    } catch {
+      /* a run row with unparseable config still lists */
+    }
+  }
+}
+
+/** What every row is finished with, however it was read. */
+function finishRow(row: RunRow, now: number): RunRow {
   row.harness = harnessOfRun({ comparability: row.comparability, driver: row.driver });
   // The stamped column wins; a run that predates it is derived the same way.
   if (row.platform === null) row.platform = platformOf(row.apiBase, row.driver);
@@ -445,8 +476,39 @@ export function listRuns(runsDir: string, now = Date.now()): RunRow[] {
 }
 
 
+/** A state row's columns as a `StatePoint`: the one mapping both homes go through. */
+function statePointOfRow(r: Record<string, unknown>): StatePoint {
+  return {
+    ts: num(r["ts"]) ?? 0,
+    level: num(r["level"]),
+    xp: num(r["xp"]),
+    map: num(r["map"]),
+    x: num(r["x"]),
+    y: num(r["y"]),
+    z: num(r["z"]),
+    eventCount: num(r["event_count"]),
+    lastSeq: num(r["last_seq"]),
+    // `SELECT *` on a database that predates the column simply has no key
+    // here, which `num` turns into null — no schema guard needed.
+    turn: num(r["turn"]),
+    // The player frame's numbers, same rule.
+    health: num(r["health"]),
+    maxHealth: num(r["max_health"]),
+    power: num(r["power"]),
+    maxPower: num(r["max_power"]),
+    powerType: num(r["power_type"]),
+    nextLevelXp: num(r["next_level_xp"]),
+    questsCompleted: num(r["quests_completed"]),
+  };
+}
+
+/**
+ * A run's state samples, oldest first: a v1 run's folded from its trace
+ * (`trace-samples.ts`), a 0.5 run's its run.sqlite `state` rows.
+ */
 export function readStates(runsDir: string, runId: string): StatePoint[] {
   const dir = join(runsDir, runId);
+  if (isV1RunDir(dir)) return readStateSamples(dir, runId).map(statePointOfRow);
   const db = openReadonly(dir);
   if (db === null) return [];
   try {
@@ -454,28 +516,7 @@ export function readStates(runsDir: string, runId: string): StatePoint[] {
       string,
       unknown
     >[];
-    return rows.map((r) => ({
-      ts: num(r["ts"]) ?? 0,
-      level: num(r["level"]),
-      xp: num(r["xp"]),
-      map: num(r["map"]),
-      x: num(r["x"]),
-      y: num(r["y"]),
-      z: num(r["z"]),
-      eventCount: num(r["event_count"]),
-      lastSeq: num(r["last_seq"]),
-      // `SELECT *` on a database that predates the column simply has no key
-      // here, which `num` turns into null — no schema guard needed.
-      turn: num(r["turn"]),
-      // The player frame's numbers, same rule.
-      health: num(r["health"]),
-      maxHealth: num(r["max_health"]),
-      power: num(r["power"]),
-      maxPower: num(r["max_power"]),
-      powerType: num(r["power_type"]),
-      nextLevelXp: num(r["next_level_xp"]),
-      questsCompleted: num(r["quests_completed"]),
-    }));
+    return rows.map(statePointOfRow);
   } catch {
     return [];
   } finally {
@@ -490,7 +531,9 @@ export function readStates(runsDir: string, runId: string): StatePoint[] {
  * every poll; empty where the schema predates the column.
  */
 export function readQuestCounts(runsDir: string, runId: string): Pick<StatePoint, "questsCompleted">[] {
-  const db = openReadonly(join(runsDir, runId));
+  const dir = join(runsDir, runId);
+  if (isV1RunDir(dir)) return readStateSamples(dir, runId).map((r) => ({ questsCompleted: num(r["quests_completed"]) }));
+  const db = openReadonly(dir);
   if (db === null) return [];
   try {
     if (!stateColumns(db).has("quests_completed")) return [];
@@ -516,6 +559,13 @@ export function readQuestCounts(runsDir: string, runId: string): Pick<StatePoint
  */
 export function readStateItems(runsDir: string, runId: string): StateItemsRow[] {
   const dir = join(runsDir, runId);
+  if (isV1RunDir(dir)) {
+    const out: StateItemsRow[] = [];
+    for (const r of readStateSamples(dir, runId)) {
+      if (typeof r["items"] === "string" && r["items"].length > 0) out.push({ ts: num(r["ts"]) ?? 0, seq: num(r["seq"]) ?? 0, items: r["items"] });
+    }
+    return out;
+  }
   const db = openReadonly(dir);
   if (db === null) return [];
   try {

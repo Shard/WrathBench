@@ -162,6 +162,8 @@ async function v1RunFixture(moves: [number, number | null, number, number, numbe
   const { writer } = openTestSession(join(runsDir, "live-1"), Date.now());
   writer.ingest(
     recordDrain({
+      // Where the character stands: a v1 run's map reads it off the record's `live.json`.
+      trace: [{ ts: Date.now() - 5_000, kind: "pos", map: 0, x: -6240, y: 380, z: 380, o: 0 }],
       moves: moves.map(([ts, moveId, map, x, y, z, name, status]) =>
         recordedMove({ ts, moveId, map, x, y, z, status, ...(name !== null ? { target: WARDEN_GUID, name } : {}) }),
       ),

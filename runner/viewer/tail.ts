@@ -39,6 +39,9 @@ import type {
   UnreportedUsage,
 } from "./api-types";
 import { statSync } from "node:fs";
+import { dirname } from "node:path";
+import { SessionReader, type EventRow, type StreamCursor } from "@wrathbench/mcp/record";
+import { isV1RunDir, milestoneOfEvent, sessionDirOfRun, TurnIndex } from "../src/run-reader";
 import { CodexUsageCorrector } from "../src/codex-usage";
 import { CONTEXT_POLICY } from "../src/context";
 import { driverEntry } from "../src/drivers";
@@ -1820,8 +1823,10 @@ export function reflectionWindowsFrom(marks: readonly ReflectMark[]): Reflection
  *    `responseCost.unreported` (`ClaudeCostTally`).
  *    A codex run's context, the prompt of its last API call (`lastCall`),
  *    rides on the same revision.
+ * 3: a v1 run's milestones are its session record's `events` rows, each with
+ *    the turn in flight joined by time, and its trajectory's are not read.
  */
-export const RUN_TOTALS_DERIVATION = 2;
+export const RUN_TOTALS_DERIVATION = 3;
 
 export interface RunTotals {
   tokens: TokenTotals;
@@ -1960,6 +1965,12 @@ export class RunTotalsScanner {
   private readonly spellMarks: SpellMark[] = [];
   private readonly talentMarks: TalentSpendMark[] = [];
   private readonly tradeMarks: TradeMarkView[] = [];
+  /** The turn in flight at an instant, from the lines read so far. */
+  private readonly turns = new TurnIndex();
+  /** Whether this is a v1 run, whose milestones are its session record's; latched once seen. */
+  private v1 = false;
+  /** Where the last scan left the session record's `events` stream. */
+  private eventsCursor: StreamCursor | undefined;
 
   private readonly decoder = new TextDecoder();
 
@@ -2036,24 +2047,11 @@ export class RunTotalsScanner {
           this.resolvedCli ??= mark.cliVersion;
         }
       }
-      if (t === "milestone") {
-        const mark = areaMarkOf(rec);
-        if (mark !== null) this.areaMarks.push(mark);
-        const ach = achievementMarkOf(rec);
-        if (ach !== null) this.achievementMarks.push(ach);
-        const taxi = taxiMarkOf(rec);
-        if (taxi !== null) this.taxiMarks.push(taxi);
-        const lvl = levelUpMarkOf(rec);
-        if (lvl !== null) this.levelUpMarks.push(lvl);
-        const death = deathMarkOf(rec);
-        if (death !== null) this.deathMarks.push(death);
-        const spell = spellMarkOf(rec);
-        if (spell !== null) this.spellMarks.push(spell);
-        const talent = talentMarkOf(rec);
-        if (talent !== null) this.talentMarks.push(talent);
-        const trade = tradeMarkOf(rec);
-        if (trade !== null) this.tradeMarks.push(trade);
-      }
+      // The run's turn in flight, for the session record's milestones (decision 9: joined by time).
+      this.turns.note(rec);
+      // A v1 run's milestones are its session record's (`followEvents`); a
+      // milestone record in its trajectory is a phase-1 mirror of the same.
+      if (t === "milestone" && !this.v1) this.takeMilestone(rec);
       if (t !== "request" && t !== "response") {
         // `claude_result` rides along with the span openers: it is what tells the
         // derivation how many output tokens the turn actually produced, and a
@@ -2093,6 +2091,48 @@ export class RunTotalsScanner {
     this.spanMarks.push(p);
   }
 
+  /** Fold one milestone record, from the trajectory or the session record, into the marks. */
+  private takeMilestone(rec: Record<string, unknown>): void {
+    const mark = areaMarkOf(rec);
+    if (mark !== null) this.areaMarks.push(mark);
+    const ach = achievementMarkOf(rec);
+    if (ach !== null) this.achievementMarks.push(ach);
+    const taxi = taxiMarkOf(rec);
+    if (taxi !== null) this.taxiMarks.push(taxi);
+    const lvl = levelUpMarkOf(rec);
+    if (lvl !== null) this.levelUpMarks.push(lvl);
+    const death = deathMarkOf(rec);
+    if (death !== null) this.deathMarks.push(death);
+    const spell = spellMarkOf(rec);
+    if (spell !== null) this.spellMarks.push(spell);
+    const talent = talentMarkOf(rec);
+    if (talent !== null) this.talentMarks.push(talent);
+    const trade = tradeMarkOf(rec);
+    if (trade !== null) this.tradeMarks.push(trade);
+  }
+
+  /**
+   * A v1 run's milestones, read on from where the last scan left its `events`
+   * stream: each row as the milestone record it stands for, with the turn in
+   * flight at its instant. A batch is folded in time order, which is the
+   * order the trajectory's records were in.
+   */
+  private followEvents(): void {
+    if (!this.v1) return;
+    let batch: { rows: EventRow[]; cursor: StreamCursor | undefined };
+    try {
+      batch = new SessionReader(sessionDirOfRun(dirname(this.path))).tail("events", this.eventsCursor);
+    } catch {
+      return;
+    }
+    this.eventsCursor = batch.cursor;
+    const rows = [...batch.rows].sort((a, b) => a.ts - b.ts);
+    for (const row of rows) {
+      const rec = milestoneOfEvent(row, this.turns.at(row.ts));
+      if (rec !== null) this.takeMilestone(rec);
+    }
+  }
+
   /**
    * Read whatever has been appended since the last call and answer the totals
    * for everything read so far.
@@ -2110,6 +2150,7 @@ export class RunTotalsScanner {
     } catch {
       return this.totals();
     }
+    if (!this.v1) this.v1 = isV1RunDir(dirname(this.path));
     // A window at a time (`SCAN_CHUNK_BYTES`), resuming from `this.size`, which
     // the loop advances as lines are consumed and the remainder is held.
     while (this.size < size) {
@@ -2128,6 +2169,8 @@ export class RunTotalsScanner {
         break;
       }
     }
+    // After the trajectory, so every milestone finds the turn it fell in.
+    this.followEvents();
     return this.totals();
   }
 

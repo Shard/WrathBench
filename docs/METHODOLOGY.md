@@ -345,7 +345,11 @@ does, so a claim the ladder wants to make later has to be in the recording
 first, and Goodhart pressure moves to the derivation author, where it can be
 revised without re-running anything. A run that predates a signal carries no
 reading for it, and a derivation treats that as *not recorded*, never zero.
-The ladder orders on three separate numbers — highest rung, the `(level, xp)`
+Since v1 the recording is the stack's session record and the scorer reads it
+(operator, 2026-11-11): the level curve, XP, money, quests and position are
+read from the trace's key and delta rows, and the milestones from its events,
+with no separate 60-second state table; a 0.5 run is still read from the state
+table it recorded. The ladder orders on three separate numbers — highest rung, the `(level, xp)`
 pair, gold — and no aggregate score.
 
 **The ladder shows its dispersion, and one reference line: a scripted run

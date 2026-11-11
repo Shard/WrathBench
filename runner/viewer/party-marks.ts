@@ -18,6 +18,8 @@
  * read, and run.sqlite is opened readonly.
  */
 
+import { SessionReader } from "@wrathbench/mcp/record";
+import { isV1RunDir, sessionDirOfRun } from "../src/run-reader";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { openRunDb } from "../src/rundb";
@@ -88,6 +90,12 @@ export function creatureNamesOf(dir: string, entries: ReadonlySet<number>): Map<
 
 /** The newest state sample's map, zone and area ids, or null when the run recorded none. */
 function lastPlace(dir: string, runId: string): { ts: number; map: number | null; zone: number | null; area: number | null } | null {
+  // A v1 run: the session record's last reading, which carries the zone and area.
+  if (isV1RunDir(dir)) {
+    const live = new SessionReader(sessionDirOfRun(dir)).live();
+    if (live === null || live.map === null) return null;
+    return { ts: live.observed ?? live.ts, map: live.map, zone: live.zone, area: live.area };
+  }
   const path = join(dir, "run.sqlite");
   if (!existsSync(path)) return null;
   let db;

@@ -1,0 +1,33 @@
+{
+  "runId": "v1p1-solo",
+  "harnessVersion": "0.6-1",
+  "sdkVersion": "0.0.0-fixture",
+  "startedAt": 1762000200000,
+  "config": {
+    "moduleUrl": "http://worldserver:8086",
+    "character": "Testwick",
+    "account": "RUNNER",
+    "race": 1,
+    "class": 2,
+    "driver": "stub",
+    "apiKeyEnv": "OPENROUTER_KEY",
+    "wikiCoords": false,
+    "wiki": true,
+    "extra": false,
+    "maxToolCallsPerEpisode": 500,
+    "stepIntervalMs": 3000,
+    "stateIntervalMs": 60000,
+    "snippetTimeoutMs": 30000,
+    "sandboxPingGraceMs": 2000,
+    "runsDir": "data/runs",
+    "wikiBundle": "data/wiki/bundle.sqlite",
+    "watchdogs": {
+      "idleMs": 600000,
+      "noXpMs": 2700000,
+      "episodeMs": 21600000,
+      "maxSandboxRestarts": 3
+    },
+    "runId": "v1p1-solo",
+    "token": "fixture-token"
+  }
+}

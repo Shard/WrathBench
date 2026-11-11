@@ -8,9 +8,13 @@
  *
  * Two honesty rules are baked in and repeated in the wire types:
  *
- * - **First observation, not first reach.** Samples are taken on
- *   `stateIntervalMs` (60s), not once per turn, so a level's turn and time are
- *   those of the first sample that showed it.
+ * - **First observation, not first reach.** A level's turn and time are those
+ *   of the first sample that showed it. A 0.5 run's samples were taken on
+ *   `stateIntervalMs` (60s); a v1 run's are folded from its trace
+ *   (`runner/src/trace-samples.ts`), one at each change of a scored reading,
+ *   so its observation is the client's and a level, an XP reading or a quest
+ *   count lands at the packet rather than at the next minute. The lower
+ *   bounds here (XP earned, quests) are tighter for it by that cadence alone.
  * - **Active time, not wall clock.** A run that sat `quota-exhausted` for two
  *   hours is not charged for them; the same `ActiveSegment[]` the run page's
  *   playtime comes from is what is integrated here, so the two agree.
