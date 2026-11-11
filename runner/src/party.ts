@@ -117,6 +117,76 @@ export const partyConfigSchema = z
   .strict();
 export type PartyConfig = z.infer<typeof partyConfigSchema>;
 
+/**
+ * One member's character as a one-agent launch knows it: the account and the
+ * staged name, and the guid once the stager reported one. No run id of its
+ * own: every member is a character of the one run.
+ */
+export const fanoutMemberRecordSchema = partyMemberRecordSchema.omit({ runId: true });
+export type FanoutMemberRecord = z.infer<typeof fanoutMemberRecordSchema>;
+
+/**
+ * The launch half of a one-agent arm (`arms[].agents: 1`), as its run's
+ * `campaign.json` carries it: every member's character, in member order, all
+ * on the one run. What `RunConfig.fanout` is built from (`fanoutConfigOf`).
+ */
+export const fanoutLaunchSchema = z
+  .object({
+    members: z.array(fanoutMemberRecordSchema).min(2),
+  })
+  .strict();
+export type FanoutLaunch = z.infer<typeof fanoutLaunchSchema>;
+
+/**
+ * Why a one-agent launch half does not belong to a definition's party, or
+ * null when it does: the members are the definition's, in its order, with
+ * its roles and characters, each on an account of its own.
+ */
+export function fanoutLaunchProblem(def: PartyDefinition, launch: FanoutLaunch): string | null {
+  if (launch.members.length !== def.size) return `the launch names ${launch.members.length} member(s), the party is ${def.size}`;
+  for (const [i, m] of def.members.entries()) {
+    const l = launch.members[i]!;
+    if (l.member !== m.id) return `member ${i + 1} is ${l.member}, the definition's is ${m.id}`;
+    if (l.role !== m.role) return `member ${m.id} is launched as ${l.role}, the definition says ${m.role}`;
+    if (l.character !== m.character) return `member ${m.id} is launched as ${l.character}, the definition names ${m.character}`;
+  }
+  const accounts = launch.members.map((m) => m.account.toUpperCase());
+  if (new Set(accounts).size !== accounts.length) return "two members share an account — the module holds one session per account";
+  return null;
+}
+
+/** The one-agent launch half for a party pinned to `accounts` (member order). */
+export function fanoutLaunchOf(def: PartyDefinition, accounts: readonly string[]): FanoutLaunch {
+  return { members: def.members.map((m, i) => ({ member: m.id, role: m.role, account: accounts[i]!, character: m.character })) };
+}
+
+/** The launch with the guids the stager reported stamped onto its members (member id to guid). */
+export function withFanoutGuids(launch: FanoutLaunch, guids: ReadonlyMap<string, string>): FanoutLaunch {
+  return {
+    members: launch.members.map((m) => {
+      const guid = guids.get(m.member);
+      return guid === undefined ? { ...m } : { ...m, guid };
+    }),
+  };
+}
+
+/**
+ * The run's fan-out grant for a one-agent launch (`RunConfig.fanout`): as
+ * many characters as the party has, on its members' accounts, each member's
+ * character staged on its own account, so the agent logs them in by name.
+ */
+export function fanoutConfigOf(launch: FanoutLaunch): {
+  characters: number;
+  accounts: string[];
+  staged: { character: string; account: string; guid?: string }[];
+} {
+  return {
+    characters: launch.members.length,
+    accounts: launch.members.map((m) => m.account),
+    staged: launch.members.map((m) => ({ character: m.character, account: m.account, ...(m.guid !== undefined ? { guid: m.guid } : {}) })),
+  };
+}
+
 /** The stamp each of a party's roster entries carries (`RosterSpec.party`). */
 export interface PartyStamp {
   id: string;

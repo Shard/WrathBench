@@ -132,7 +132,7 @@ and is informational only.
   there) and a published definition that no longer checks out: one bad row
   never empties the board.
 
-**Arms.** An arm is `{id, note?, image?, command?, args?}`, and a definition
+**Arms.** An arm is `{id, note?, image?, command?, args?, agents?}`, and a definition
 has at least one; a sweep that tests nothing harness-side has one arm
 `{ "id": "base" }`.
 
@@ -228,6 +228,17 @@ fleet can launch in a run pod.
   is on disk, none is `launch-failed` or still in flight, and every member
   that ended on its own verdict counts; a paused party resumes whole or not at
   all. Unscored like every probe.
+- **One agent, the whole party.** An arm of a party definition may say
+  `agents: 1`: each of its launches is one run on which one agent drives
+  every member's staged character (fan-out, `docs/ARCHITECTURE.md`), beside
+  the five-agent arm with the same staging and ends (operator, 2026-11-11,
+  Shard/wrath-mcp#29 decision 2: a probe arm first, for a baseline against
+  the five-agent results). Its objective is the definition's top-level one,
+  which a party definition states only when it has such an arm; its run
+  carries the leader's start, the party's accounts and characters
+  (`config.fanout`, from the campaign file's `fanout` half) and no
+  `--character`, and it is tallied as one run, not as a party. The fleet holds
+  every one of its accounts and one credential slot for the run's life.
 - **A campaign's credential.** A pinned campaign's store row may name the
   credential its launches take (`credential`; operator, 2026-10-19: the
   Deadmines party on the second Claude subscription). It overrides the
