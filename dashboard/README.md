@@ -77,7 +77,7 @@ inside the client is what keeps a fast poller off the network.
 bun wb dashboard shots --out <dir>                    # private-*.png and public-*.png, and facts.json
 bun wb dashboard shots --run <run-dir> --path /runs --viewport 390x844
 bun wb dashboard shots --serve                        # the same stack, no browser: URLs until Ctrl-C
-bun wb dashboard shots --seed --site private --path /config   # the admin page over a seeded config
+bun wb dashboard shots --seed --site private --path /config/providers   # an admin section over a seeded config
 bun wb dashboard shots --groups viewer                # a deployment with only the viewer group on
 ```
 

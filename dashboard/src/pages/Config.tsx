@@ -24,18 +24,28 @@
  * operator can actually hit — a second operator, or the CLI in a pod — and
  * leaves a genuinely simultaneous pair racing, which is what the API allows.
  *
+ * **Sections.** One section at a time, each its own route (`/config/<id>`,
+ * `CONFIG_SECTIONS` in lib/admin.ts) so it can be linked to, under one shell
+ * that stays mounted across them: the document, the actor and the note
+ * survive a switch with no refetch. A section whose group is off is absent,
+ * and a route naming none this deployment has goes to the first that is.
+ *
  * **Attribution.** `x-wrathbench-actor` and `x-wrathbench-note` are optional
  * server-side; the note is required HERE, because the audit table is the only
  * record of why the fleet changed and an unexplained row is worth less than
  * the edit cost.
  */
 
-import { For, Show, createMemo, createSignal, onMount } from "solid-js";
+import { A, Navigate, useParams } from "@solidjs/router";
+import { For, Match, Show, Switch, createMemo, createSignal, onMount } from "solid-js";
 import type { AdminResponse, DraftView, DraftsResponse } from "@viewer/api-types";
+import { ALL_GROUPS } from "@viewer/groups";
 import { SNAPSHOT_MODE } from "../api/client";
 import { ConfigError, configApi, type AuditRow, type ConfigResponse } from "../api/config-client";
 import { Collapsible } from "../components/Collapsible";
-import { CampaignsSection, CredentialsSection, DeploymentSection, FreeplaySection, QueueSection } from "./ConfigAdmin";
+import { InfoHint } from "../components/InfoHint";
+import { CampaignsSection, DeploymentSection, FreeplaySection, ProvidersSection, QueueSection } from "./ConfigAdmin";
+import { sectionOf, sectionOfKey, sectionsShown, type ConfigSectionId } from "../lib/admin";
 import {
   BILLINGS,
   DRAFT_FILTERS,
@@ -203,10 +213,21 @@ export default function Config() {
   });
 
   const editorKeys = createMemo(() => jsonEditorKeys(doc()?.keys ?? []));
+  const keysOf = (id: ConfigSectionId): string[] => editorKeys().filter((k) => sectionOfKey(k) === id);
+
+  const params = useParams<{ section?: string }>();
+  // Every group until /api/admin says otherwise: a deep link is not bounced before it has loaded.
+  const shown = createMemo(() => sectionsShown(admin()?.groups ?? ALL_GROUPS));
+  const section = createMemo(() => sectionOf(params.section, admin()?.groups ?? ALL_GROUPS));
+  // The sections that write show who and why; deployment and history only read.
+  const writes = (): boolean => section() !== "deployment" && section() !== "history";
 
   return (
     <div class="page">
-      <h1>config</h1>
+      <h1>
+        config{" "}
+        <InfoHint text="The live fleet config, as the store holds it. Every write is validated against the whole config by the parser the supervisor reads it with, and takes effect on its next 60 s re-read: nothing restarts." />
+      </h1>
 
       {/*
         Three states, not two. The public build and a public viewer withhold
@@ -217,12 +238,9 @@ export default function Config() {
         when={!SNAPSHOT_MODE && !(loadError() instanceof ConfigError && (loadError() as ConfigError).status === 404)}
         fallback={<p class="dim">{SNAPSHOT_WITHHELD_TEXT}</p>}
       >
-        <p>
-          The live fleet config, as the store holds it. Every write is validated against the whole
-          config by the same parser the supervisor reads it with, and
-          takes effect on the supervisor's next 60s re-read — nothing restarts. The store's history
-          is below.
-        </p>
+        <Show when={section() === null && shown().length > 0}>
+          <Navigate href={`/config/${shown()[0]!.id}`} />
+        </Show>
 
         <Show when={loadError() !== undefined}>
           <div class="banner bad">{refusal(loadError())}</div>
@@ -242,99 +260,133 @@ export default function Config() {
                 </div>
               }
             >
-              <div class="configbar">
-                <label>
-                  actor
-                  <input
-                    type="text"
-                    value={actor()}
-                    placeholder="who you are"
-                    onInput={(e) => setActor(e.currentTarget.value)}
-                  />
-                </label>
-                <label class="grow">
-                  note
-                  <input
-                    type="text"
-                    value={note()}
-                    placeholder="why — recorded in the audit table with the before and after"
-                    title="The note travels as an HTTP header, which carries Latin-1 only: an em dash is recorded as a hyphen and anything further out as ?"
-                    onInput={(e) => setNote(e.currentTarget.value)}
-                  />
-                </label>
-                <span class="dim mono">v{body().version}</span>
-                <button type="button" onClick={() => void reload()}>
-                  reload
-                </button>
+              <div class="configpage">
+                <nav class="confignav">
+                  <For each={shown()}>
+                    {(s) => (
+                      <A href={`/config/${s.id}`} activeClass="on">
+                        {s.label}
+                      </A>
+                    )}
+                  </For>
+                </nav>
+                <div>
+                  <Show when={writes()}>
+                    <div class="configbar">
+                      <label>
+                        actor
+                        <input
+                          type="text"
+                          value={actor()}
+                          placeholder="who you are"
+                          onInput={(e) => setActor(e.currentTarget.value)}
+                        />
+                      </label>
+                      <label class="grow">
+                        note
+                        <input
+                          type="text"
+                          value={note()}
+                          placeholder="why — recorded in the audit table with the before and after"
+                          title="The note travels as an HTTP header, which carries Latin-1 only: an em dash is recorded as a hyphen and anything further out as ?"
+                          onInput={(e) => setNote(e.currentTarget.value)}
+                        />
+                      </label>
+                      <span class="dim mono">v{body().version}</span>
+                      <button type="button" onClick={() => void reload()}>
+                        reload
+                      </button>
+                    </div>
+                  </Show>
+
+                  <Switch>
+                    <Match when={section() === "providers"}>
+                      <ProvidersSection admin={admin()} config={body().config} write={write} />
+                      <RawRows keys={keysOf("providers")} value={body().config} write={write} />
+                    </Match>
+                    <Match when={section() === "roster"}>
+                      <h3 class="section">roster</h3>
+                      <RosterTable rows={roster()} write={write} messages={rowMessages()} setMessage={setRowMessage} />
+                      <AddEntry write={write} />
+                      <Drafts body={drafts()} error={draftsError()} write={write} actor={actor} reload={reloadDrafts} />
+                    </Match>
+                    <Match when={section() === "freeplay"}>
+                      <FreeplaySection config={body().config} write={write} />
+                    </Match>
+                    <Match when={section() === "campaigns"}>
+                      <CampaignsSection config={body().config} write={write} />
+                      <RawRows keys={keysOf("campaigns")} value={body().config} write={write} />
+                    </Match>
+                    <Match when={section() === "queue"}>
+                      <QueueSection config={body().config} keys={body().keys} write={write} />
+                      <RawRows keys={keysOf("queue")} value={body().config} write={write} />
+                    </Match>
+                    <Match when={section() === "policy"}>
+                      <RawRows keys={keysOf("policy")} value={body().config} write={write} title="policy" />
+                    </Match>
+                    <Match when={section() === "deployment"}>
+                      <DeploymentSection admin={admin()} />
+                    </Match>
+                    <Match when={section() === "history"}>
+                      <h3 class="section">history</h3>
+                      <AuditPanel rows={audit()} />
+                      <h3 class="section">
+                        export{" "}
+                        <InfoHint text="The store is the only fleet config; the active config is operational state and is never committed. Export renders it to a document for reading or for diffing against an earlier export." />
+                      </h3>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void configApi
+                            .export()
+                            .then((r) => setExported(r.text))
+                            .catch((e: unknown) => setBanner(refusal(e)));
+                        }}
+                      >
+                        export as JSON
+                      </button>
+                      <Show when={exported()}>
+                        {(text) => (
+                          <div class="detail">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void navigator.clipboard?.writeText(text());
+                              }}
+                            >
+                              copy
+                            </button>
+                            <pre class="mono scroller">{text()}</pre>
+                          </div>
+                        )}
+                      </Show>
+                    </Match>
+                  </Switch>
+                </div>
               </div>
-
-              <CredentialsSection admin={admin()} write={write} />
-
-              <h3 class="section">roster</h3>
-              <RosterTable rows={roster()} write={write} messages={rowMessages()} setMessage={setRowMessage} />
-
-              <AddEntry write={write} />
-
-              <Drafts body={drafts()} error={draftsError()} write={write} actor={actor} reload={reloadDrafts} />
-
-              <FreeplaySection config={body().config} write={write} />
-
-              <CampaignsSection config={body().config} write={write} />
-
-              <QueueSection config={body().config} keys={body().keys} write={write} />
-
-              <DeploymentSection admin={admin()} />
-
-              <h3 class="section">policy, accounts, campaigns, pinned jobs</h3>
-              <p class="dim">
-                One editor per row key, as the store holds them — a collection's entries are rows of
-                their own (<code>campaigns/&lt;name&gt;</code>, <code>queue/&lt;n&gt;</code>), so each is
-                edited on its own and file order is kept.
-              </p>
-              <For each={editorKeys()}>
-                {(key) => <JsonEditor rowKey={key} value={body().config} write={write} />}
-              </For>
-
-              <h3 class="section">export</h3>
-              <p class="dim">
-                The store is the only fleet config; the active config is operational state and is
-                never committed. Export renders it to a document for reading or for diffing against
-                an earlier export.
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  void configApi
-                    .export()
-                    .then((r) => setExported(r.text))
-                    .catch((e: unknown) => setBanner(refusal(e)));
-                }}
-              >
-                export as JSON
-              </button>
-              <Show when={exported()}>
-                {(text) => (
-                  <div class="detail">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void navigator.clipboard?.writeText(text());
-                      }}
-                    >
-                      copy
-                    </button>
-                    <pre class="mono scroller">{text()}</pre>
-                  </div>
-                )}
-              </Show>
-
-              <h3 class="section">history</h3>
-              <AuditPanel rows={audit()} />
             </Show>
           )}
         </Show>
       </Show>
     </div>
+  );
+}
+
+/**
+ * A section's store rows as raw JSON, one editor per row key as the store
+ * holds them: a collection's entries are rows of their own
+ * (`campaigns/<name>`, `queue/<n>`), so each is edited on its own and file
+ * order is kept. Nothing when the section has none.
+ */
+function RawRows(props: { keys: string[]; value: Record<string, unknown>; write: Write; title?: string }) {
+  return (
+    <Show when={props.keys.length > 0}>
+      <h3 class="section">
+        {props.title ?? "rows"}{" "}
+        <InfoHint text="One editor per row key, as the store holds them: a collection's entries are rows of their own (campaigns/<name>, queue/<n>), so each is edited on its own and file order is kept." />
+      </h3>
+      <For each={props.keys}>{(key) => <JsonEditor rowKey={key} value={props.value} write={props.write} />}</For>
+    </Show>
   );
 }
 

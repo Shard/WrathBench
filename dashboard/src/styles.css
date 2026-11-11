@@ -127,7 +127,7 @@ header.top {
 }
 header.top .wordmark { font-size: var(--fs-lg); margin: 0; font-weight: 600; }
 header.top nav { display: inline-flex; gap: 10px; flex-wrap: wrap; }
-header.top nav a.on { color: var(--fg); font-weight: 700; }
+header.top nav a.on, .confignav a.on { color: var(--fg); font-weight: 700; }
 header.top .spacer { flex: 1; }
 
 /*
@@ -325,10 +325,11 @@ tbody tr.hovered { outline: 1px solid var(--accent); outline-offset: -1px; }
 /* Row state, as a compact badge: the column an operator scans first. */
 .badge { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .05em; font-weight: 700;
          border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; color: var(--dim); }
-.badge.running { color: var(--ok); border-color: var(--ok); }
-.badge.draining, .badge.paused-deploy { color: var(--warn); border-color: var(--warn); }
+/* `ok` / `warn` / `err` are the shared tones, as a credential's health wears them. */
+.badge.running, .badge.ok { color: var(--ok); border-color: var(--ok); }
+.badge.draining, .badge.paused-deploy, .badge.warn { color: var(--warn); border-color: var(--warn); }
 /* `.combat` is the unit frame's flag (`unitFlags`): the same red as a run that exited. */
-.badge.exited, .badge.combat { color: var(--err); border-color: var(--err); }
+.badge.exited, .badge.combat, .badge.err { color: var(--err); border-color: var(--err); }
 .badge.resuming { color: var(--accent); border-color: var(--accent); }
 .badge.paused { color: var(--warn); }
 /* Harness tags: a label, not a verdict. */
@@ -1022,6 +1023,16 @@ button.update:hover { background: var(--panel); }
 .auditdiff { display: flex; gap: 16px; flex-wrap: wrap; }
 .auditdiff > div { flex: 1 1 280px; min-width: 0; }
 .auditdiff pre { overflow-x: auto; font-size: var(--fs-sm); }
+/* One section at a time beside the list of them; on a phone the list is a
+   wrapped row above the section, the header nav's own treatment. */
+.configpage { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0 20px; align-items: start; }
+.confignav { display: flex; flex-direction: column; gap: 4px; padding-right: 16px;
+             border-right: 1px solid var(--line); position: sticky; top: 0; }
+@media (max-width: 720px) {
+  .configpage { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .confignav { flex-direction: row; flex-wrap: wrap; gap: 4px 12px; padding: 0 0 8px;
+               border-right: none; border-bottom: 1px solid var(--line); position: static; }
+}
 
 /* Which site this is, top right of the header. Superscript-sized
    and its own two colours — neither is an accent used anywhere else, so it

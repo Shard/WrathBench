@@ -719,7 +719,7 @@ function writeState(
     ...(preflight !== undefined ? { preflight } : {}),
     ...(preflightInFlight !== undefined ? { preflightInFlight } : {}),
     ...(pauseSwitch !== undefined ? { pausedSwitch: pauseSwitch } : {}),
-    ...(lastCredentials !== undefined ? { credentials: credentialStatuses(lastCredentials) } : {}),
+    ...(lastCredentials !== undefined ? { credentials: credentialStatuses({ ...lastCredentials, reads: goUsage.lastReads() }) } : {}),
     ...(pool !== undefined
       ? {
           accounts: {
