@@ -59,7 +59,7 @@ flowchart TB
     bucket -->|"public build"| dashboard
 ```
 
-Read it from the top. The supervisor launches each run from the config store, and the runner drives the model against the [wrath-mcp](https://github.com/Shard/wrath-mcp) stack, which is one box here because its own README draws its insides. The files under `data/runs/<id>/` are the record: the supervisor judges a run by them, and everything downstream of them is derived and can be rebuilt from them. Scores are derived offline from that record, not numbers the runner writes.
+The supervisor launches each run from the config store, and the runner drives the model against the [wrath-mcp](https://github.com/Shard/wrath-mcp) stack, which is one box here because its own README draws its insides. The files under `data/runs/<id>/` are the record: the supervisor judges a run by them, and everything downstream of them is derived and can be rebuilt from them. Scores are derived offline from that record, not numbers the runner writes.
 
 ## What is in the repository
 
