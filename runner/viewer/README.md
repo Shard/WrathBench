@@ -388,9 +388,10 @@ breaking a tie (`fanoutLead` in `runner/src/run-reader.ts`), read off the
 store's rows under the characters' ids (`withFanoutLeads`) or off their
 records, the same rule either way. Its money, quests and curve stay empty:
 they are no one character's. Its `/api/run/<id>` adds `fanout: [{ id,
-character }]`, the characters in name order, a field no other run's detail
-carries; the run page lists them, and shows the picked one's character and
-events through the inspector's API.
+character }]`, the characters in name order, and `fanoutLead`, the name of the
+character its level and xp are, fields no other run's detail carries; the run
+page names the lead beside its xp bar, lists the characters, and shows the
+picked one's character and events through the inspector's API.
 
 A character's replay feed is `/api/run/<run-id>~<Character>/track`, `/trace`
 and `/trace/<t0>`, read as a run's are off its own record and the store's rows
@@ -398,9 +399,14 @@ under its id, with the run's row answering the model, the harness and whether
 the track can still change; it carries no travel marks, which are the one
 trajectory's. The run's own `/track` has no points and adds the same `fanout`
 list, and the map replays every character's track on one clock, as it does a
-party's members. Everything else that reads "the run's session" (the trace,
-the nearby ring, the live map's pip) answers empty for a fan-out run rather
-than present one character as the run: the run's own id opens no session. A
+party's members. The live map's feed (`/api/positions`, `positions.ts`) has a
+pip per character standing inside the window, under its session id, with its
+own level, xp, money and gauges off its record; the agent's episodic line and
+the nearby flag are left off, since the one names no character and no
+`/nearby` route answers a character's id. Everything else that reads "the
+run's session" (the trace, the nearby ring) answers empty for a fan-out run
+rather than present one character as the run: the run's own id opens no
+session. A
 public handle withholds the run and its characters' ids whole, as it does a
 run whose driver is not a model, and the publisher hands it back as withdrawn.
 `roster.json`, the characters' session tokens, is never read.
@@ -826,7 +832,12 @@ config they edit, read-only: any other method is a 405 that points at the
 config API. It carries the groups; every credential the store holds, joined
 by id to the supervisor's status off `fleet-state.json` (whether its variable
 is set, sessions on its slots, what its budget has used, holds, its last
-indicting failure); the providers a credential may name; and how publishing is
+indicting failure) and its health (`health: { state, reason, since,
+lastCheck }`, `windows`, `fix`; `runner/src/credential-health.ts`), derived
+from the store's switch, `WRATHBENCH_MODEL_KEYS` and the supervisor's
+published inputs (its structured `holds` and a reader's `lastRead`), and null
+while no supervisor is up unless the store or the chart already says what is
+wrong; the providers a credential may name; and how publishing is
 set, with the publisher's last flip, held passes and secret-scan withholds off
 its state file.
 

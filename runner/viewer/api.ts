@@ -93,7 +93,7 @@ import { strikableSessionToken, strikeSessionTokens } from "../src/session-token
 import { SEG_MS } from "@wrathbench/inspector/codec/trace";
 import { closedWindowsMemo, createInspectorApi, nearbyWindow, traceIndex, traceSegment } from "@wrathbench/inspector";
 import { fanoutSession, fanoutSessions, isFanoutRun, runSession, runsSource } from "./runs-source";
-import { parseFanoutSessionId } from "../src/run-reader";
+import { fanoutLead, fanoutReadings, parseFanoutSessionId } from "../src/run-reader";
 import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStateItems, readStates, runDir } from "./runs";
 import {
   factOf,
@@ -1036,18 +1036,34 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * a scan — and this route already opens that run's trajectory for its feed.
    */
   async function runRowOne(runId: string, now = Date.now()): Promise<RunRow> {
+    return (await runRowAndLead(runId, now)).run;
+  }
+
+  /**
+   * `runRowOne`, and for a fan-out run the name of the character whose level
+   * and xp the row reads (`fanoutLead`), off the same source as the row: the
+   * store's readings, or the files'. Null for any other run, and before any
+   * character has a level.
+   */
+  async function runRowAndLead(runId: string, now = Date.now()): Promise<{ run: RunRow; lead: string | null }> {
     const r = await store.runRow(runId);
-    if (r === null) return readRun(runsDir, runId, now);
+    if (r === null) {
+      const run = readRun(runsDir, runId, now);
+      const dir = runDir(runsDir, runId);
+      const lead = run.character === null && dir !== null && isFanoutRun(runsDir, runId) ? (fanoutLead(fanoutReadings(dir))?.character ?? null) : null;
+      return { run, lead };
+    }
     // The store's own aggregate, not every row of the run mapped here: this
     // needs five values, and pulling the series to get them meant reading the
     // `items` JSON of every sample.
     const own = await store.latestState(runId);
-    if (own !== undefined || !isFanoutRun(runsDir, runId)) return runRowOf(r, own, now);
+    if (own !== undefined || !isFanoutRun(runsDir, runId)) return { run: runRowOf(r, own, now), lead: null };
     // A fan-out run's are its characters', each under its session id: the listing's roll-up.
     const sessions = fanoutSessions(runsDir, runId);
-    const got = await Promise.all(sessions.map(async (s) => [s.id, await store.latestState(s.id)] as const));
-    const lead = withFanoutLeads(new Map(got.flatMap(([id, l]) => (l === undefined ? [] : [[id, l] as const])))).get(runId);
-    return runRowOf(r, lead, now);
+    const got = await Promise.all(sessions.map(async (s) => [s, await store.latestState(s.id)] as const));
+    const readings = got.flatMap(([s, l]) => (l === undefined ? [] : [{ id: s.id, character: s.character, level: l.level, xp: l.xp, reading: l }]));
+    const lead = withFanoutLeads(new Map(readings.map((x) => [x.id, x.reading] as const))).get(runId);
+    return { run: runRowOf(r, lead, now), lead: fanoutLead(readings)?.character ?? null };
   }
 
   /**
@@ -1836,7 +1852,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * one derivation, shared with the listing — and a run that stamped it at
        * write time short-circuits the scan entirely.
        */
-      const run = withResolved(await runRowOne(runId), await runTotals(runId));
+      const { run: row, lead } = await runRowAndLead(runId);
+      const run = withResolved(row, await runTotals(runId));
       /*
        * Playtime comes off the tail's own index rather than `runTotals`: the
        * tail is incremental, where a live run misses the (size, mtime) totals
@@ -1956,8 +1973,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // falls back from, the same shape the facts above take.
         ...(character === null ? {} : { character }),
         ...(party === null ? {} : { party }),
-        // A fan-out run's characters, so the page can open each one's session.
+        // A fan-out run's characters, so the page can open each one's session,
+        // and the one whose level and xp the run's row reads.
         ...(isFanoutRun(runsDir, runId) ? { fanout: fanoutSessions(runsDir, runId) } : {}),
+        ...(lead === null ? {} : { fanoutLead: lead }),
       };
       return pub(body, projectRunDetail, [runId]);
     }

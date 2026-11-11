@@ -25,6 +25,10 @@
  *               like long-turn, but it ignores refusals and keeps hammering
  *               tools forever, so the grace expires and the CLI is killed.
  *
+ * $WB_FAKE_CALLS replaces the default turn's one `run_snippet` with a script:
+ * a JSON array indexed by turn, each entry the `{name, arguments}` calls that
+ * turn makes in order (none past the array's end). A fan-out run's script.
+ *
  * $WB_FAKE_COMPACT_TURN=<n> adds a `compact_boundary` envelope at the start of
  * turn n, in any mode; $WB_FAKE_COMPACT_SUMMARY also writes its summary into
  * the session transcript, as the real CLI does.
@@ -172,8 +176,21 @@ if (mcp !== null) {
   await mcp.call("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "fake-claude", version: "0" } });
   const listed = (await mcp.call("tools/list")) as { result?: { tools?: { name: string }[] } };
   record["mcpTools"] = (listed.result?.tools ?? []).map((t) => t.name);
+  // The whole `tools/list` result, as served: what a fan-out-1 golden hashes.
+  record["mcpToolsList"] = listed.result ?? null;
 }
 saveRecord();
+
+/**
+ * The default turn's tool calls: $WB_FAKE_CALLS (a JSON array indexed by
+ * turn, each entry a list of `{name, arguments}`) when it names this turn,
+ * else the one `run_snippet` every default turn makes.
+ */
+function callsOf(turn: number): { name: string; arguments: Record<string, unknown> }[] {
+  const spec = Bun.env["WB_FAKE_CALLS"];
+  if (spec !== undefined) return (JSON.parse(spec) as { name: string; arguments: Record<string, unknown> }[][])[turn - 1] ?? [];
+  return [{ name: "run_snippet", arguments: { code: `await sdk.say("turn ${turn}")` } }];
+}
 
 // ------------------------------------------------------------- turn loop
 
@@ -433,32 +450,22 @@ for await (const chunk of Bun.stdin.stream()) {
     });
 
     if (mcp !== null) {
-      emit({
-        type: "assistant",
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: "tool_use",
-              id: `tu-${turn}`,
-              name: "mcp__wrathbench__run_snippet",
-              input: { code: `await sdk.say("turn ${turn}")` },
-            },
-          ],
-        },
-        session_id: "fake-session",
-      });
-      const res = await mcp.call("tools/call", {
-        name: "run_snippet",
-        arguments: { code: `await sdk.say("turn ${turn}")` },
-      });
-      (record["toolResults"] as unknown[]).push(res["result"]);
-      saveRecord();
-      emit({
-        type: "user",
-        message: { role: "user", content: [{ type: "tool_result", tool_use_id: `tu-${turn}`, content: "ok" }] },
-        session_id: "fake-session",
-      });
+      for (const [i, c] of callsOf(turn).entries()) {
+        const id = i === 0 ? `tu-${turn}` : `tu-${turn}-${i}`;
+        emit({
+          type: "assistant",
+          message: { role: "assistant", content: [{ type: "tool_use", id, name: `mcp__wrathbench__${c.name}`, input: c.arguments }] },
+          session_id: "fake-session",
+        });
+        const res = await mcp.call("tools/call", { name: c.name, arguments: c.arguments });
+        (record["toolResults"] as unknown[]).push(res["result"]);
+        saveRecord();
+        emit({
+          type: "user",
+          message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] },
+          session_id: "fake-session",
+        });
+      }
     }
 
     emit({

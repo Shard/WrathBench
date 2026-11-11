@@ -30,9 +30,9 @@ import { STORE_LAG_MS, runRowOf, withFanoutLeads, type RunStore } from "./clickh
 import { listRuns } from "./runs";
 import { questsAcrossRestarts } from "./results";
 import { latestMove, nearbyFresh, recentTrace } from "@wrathbench/inspector";
-import { runSession } from "./runs-source";
+import { fanoutSession, runSession } from "./runs-source";
 import { SessionReader } from "@wrathbench/mcp/record";
-import { isV1RunDir, readRunRow, readStateSamples, sessionDirOfRun } from "../src/run-reader";
+import { characterSamplesOf, fanoutCharacters, fanoutSessionDir, fanoutSessionId, isFanoutRunDir, isV1RunDir, readingOfSamples, readRunRow, readStateSamples, SESSIONS_DIR, sessionDirOfRun } from "../src/run-reader";
 
 /**
  * How stale a position may be and still count as an agent on the map. Longer
@@ -324,27 +324,9 @@ async function readRunDb(runsDir: string, runId: string): Promise<RunDbReading> 
 async function readV1Reading(runsDir: string, runId: string, none: RunDbReading): Promise<RunDbReading> {
   const dir = join(runsDir, runId);
   try {
-    const live = new SessionReader(sessionDirOfRun(dir)).live();
-    if (live === null || live.map === null || live.x === null || live.y === null) return none;
-    // The writer's tick, not the newest trace row: a character standing still
-    // writes no trace row, and is still where its record says, for as long as
-    // the writer beats.
-    const ts = live.ts;
+    const pos = livePositionOf(sessionDirOfRun(dir), () => readStateSamples(dir, runId));
+    if (pos === null) return none;
     const samples = readStateSamples(dir, runId);
-    const last = samples[samples.length - 1];
-    const gauge = (k: string): number | null => (last !== undefined && typeof last[k] === "number" ? (last[k] as number) : null);
-    const pos: LatestPosition = {
-      map: live.map,
-      x: live.x,
-      y: live.y,
-      ts,
-      health: live.hp ?? gauge("health"),
-      maxHealth: live.hpMax ?? gauge("max_health"),
-      power: gauge("power"),
-      maxPower: gauge("max_power"),
-      powerType: gauge("power_type"),
-      nextLevelXp: gauge("next_level_xp"),
-    };
     const row = readRunRow(dir, runId);
     return {
       pos,
@@ -355,6 +337,35 @@ async function readV1Reading(runsDir: string, runId: string, none: RunDbReading)
   } catch {
     return none;
   }
+}
+
+/**
+ * Where one session record says its character stands: `live.json`, the
+ * writer's last reading, which exists so that a map of every session opens
+ * one small file each, with the gauges it does not carry off the newest of
+ * `samples` (the trace's, `run-reader.ts`). Null when it has no position.
+ * The stamp is the writer's tick, not the newest trace row: a character
+ * standing still writes no trace row, and is still where its record says, for
+ * as long as the writer beats.
+ */
+function livePositionOf(sessionDir: string, samples: () => readonly Record<string, unknown>[]): LatestPosition | null {
+  const live = new SessionReader(sessionDir).live();
+  if (live === null || live.map === null || live.x === null || live.y === null) return null;
+  const rows = samples();
+  const last = rows[rows.length - 1];
+  const gauge = (k: string): number | null => (last !== undefined && typeof last[k] === "number" ? (last[k] as number) : null);
+  return {
+    map: live.map,
+    x: live.x,
+    y: live.y,
+    ts: live.ts,
+    health: live.hp ?? gauge("health"),
+    maxHealth: live.hpMax ?? gauge("max_health"),
+    power: gauge("power"),
+    maxPower: gauge("max_power"),
+    powerType: gauge("power_type"),
+    nextLevelXp: gauge("next_level_xp"),
+  };
 }
 
 /**
@@ -431,10 +442,84 @@ async function positionOf(runsDir: string, run: RunRow, now: number, windowMs: n
   };
 }
 
-/** The feed over a listing: every run worth drawing, newest position first. */
+/**
+ * A fan-out run's entries on the map: one per character standing somewhere
+ * inside the window, each read off its own session record
+ * (`sessions/<Character>/`) as `positionOf` reads a run's, and keyed by its
+ * session id (`<run-id>~<Character>`), which is what its trace and track are
+ * served under, so the map's per-pip asks (trace segments, the run page, a
+ * replay) reach that character. Level, xp, money, quests and class are the
+ * character's own, not the run row's roll-up. The run's stall pause and
+ * reflection window are the one agent's, so every character shares them.
+ *
+ * Left off, until a character can answer for them: `status`, since the
+ * episodic log is the agent's and names no character, and `nearby`, since a
+ * character's id serves no `/nearby` route. A public handle never draws one:
+ * a session id is in no listing (`/api/positions`) and no snapshot.
+ */
+async function fanoutPositionsOf(runsDir: string, run: RunRow, now: number, windowMs: number): Promise<AgentPosition[]> {
+  if (run.terminationReason !== null) return [];
+  if (run.pauseReason === STALL_PAUSE) return [];
+  const dir = join(runsDir, run.runId);
+  const out: AgentPosition[] = [];
+  let reflecting: boolean | undefined;
+  for (const character of fanoutCharacters(dir)) {
+    const sessionDir = fanoutSessionDir(dir, character);
+    if (sessionDir === null) continue;
+    const id = fanoutSessionId(run.runId, character);
+    try {
+      const samples = (): Record<string, unknown>[] => characterSamplesOf(dir, character) as unknown as Record<string, unknown>[];
+      const pos = livePositionOf(sessionDir, samples);
+      if (pos === null || now - pos.ts > windowMs) continue;
+      const rows = samples();
+      const reading = readingOfSamples(rows);
+      const session = fanoutSession(runsDir, id);
+      if (session === null) continue;
+      const trace = await recentTrace(session, now);
+      reflecting ??= typeof readRunRow(dir, run.runId)?.["reflecting_since"] === "number";
+      const klass = new SessionReader(sessionDir).session()?.character?.class;
+      out.push({
+        runId: id,
+        character,
+        model: run.model,
+        effort: run.comparability?.effort ?? null,
+        ...(run.comparability?.compactWindow != null ? { compactWindow: run.comparability.compactWindow } : {}),
+        map: pos.map,
+        x: pos.x,
+        y: pos.y,
+        ts: pos.ts,
+        level: reading?.level ?? null,
+        xp: reading?.xp ?? null,
+        money: reading?.money ?? null,
+        questsCompleted: questsAcrossRestarts(rows.map((r) => ({ questsCompleted: num(r["quests_completed"]) }))) ?? reading?.questsCompleted ?? null,
+        harnessVersion: run.harnessVersion,
+        health: pos.health,
+        maxHealth: pos.maxHealth,
+        power: pos.power,
+        maxPower: pos.maxPower,
+        powerType: pos.powerType,
+        nextLevelXp: pos.nextLevelXp,
+        class: typeof klass === "number" ? klass : run.class,
+        move: await latestMove(session).catch(() => null),
+        status: null,
+        reflecting,
+        ...(trace === null ? {} : { trace }),
+      });
+    } catch {
+      // One character's record mid-write costs only its own pip.
+    }
+  }
+  return out;
+}
+
+/** The feed over a listing: every run worth drawing, newest position first; a fan-out run's characters each. */
 async function positionsOf(runsDir: string, runs: readonly RunRow[], now: number, windowMs: number): Promise<AgentPosition[]> {
   const out: AgentPosition[] = [];
   for (const run of runs) {
+    if (isFanoutRunDir(join(runsDir, run.runId))) {
+      out.push(...(await fanoutPositionsOf(runsDir, run, now, windowMs)));
+      continue;
+    }
     const p = await positionOf(runsDir, run, now, windowMs);
     if (p !== null) out.push(p);
   }
@@ -485,14 +570,21 @@ export async function readPositions(
  * Whether a v1 run's session writer has ticked since `since`: its `live.json`
  * is rewritten on every tick while the run plays, and a v1 trajectory, which
  * holds the model side only, can stand still through a long turn. One stat,
- * and only for a run the trajectory test let go.
+ * and only for a run the trajectory test let go; a fan-out run's are its
+ * characters' (`sessions/<Character>/live.json`), any one of which will do.
  */
 function recordTouchedSince(runsDir: string, runId: string, since: number): boolean {
-  try {
-    return statSync(join(runsDir, runId, "session", "live.json")).mtimeMs >= since;
-  } catch {
-    return false;
-  }
+  const touched = (path: string): boolean => {
+    try {
+      return statSync(path).mtimeMs >= since;
+    } catch {
+      return false;
+    }
+  };
+  const dir = join(runsDir, runId);
+  if (touched(join(dir, "session", "live.json"))) return true;
+  if (!existsSync(join(dir, SESSIONS_DIR))) return false;
+  return fanoutCharacters(dir).some((c) => touched(join(dir, SESSIONS_DIR, c, "live.json")));
 }
 
 export async function positionsFromStore(

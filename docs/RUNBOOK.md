@@ -76,13 +76,14 @@ run directories and `fleet-<stamp>.jsonl` are the record.
 
 ```
 bun wb inspect live                                  # every run with a heartbeat, one line each
-bun wb inspect run <run-id> [--since 2h] [--until 1h] # verdict, level, quests across restarts, counts, errors by class, sizes, trace
+bun wb inspect run <run-id> [--since 2h] [--until 1h] # verdict, level, quests across restarts, counts, errors by class, marks, cost, sizes, trace
 bun wb inspect trajectory <run-id> --errors --last 10
 bun wb inspect trajectory <run-id> --since <iso> --next 20   # the first 20 after a moment
 bun wb inspect tools <run-id> [--since 2h] [--until 1h]       # calls per tool, ok/error, reflect granted/refused, pad writers
 bun wb inspect pad <run-id> [--since 2h]                       # pad size over time, writes, cap refusals, drops flagged
 bun wb inspect pad <run-id> --at <iso>                         # the pad's text at a moment, rebuilt from the record
 bun wb inspect stuck [<run-id>] [--window 2h] [--until 1h]     # no game progress over a window, and the failure signals in it
+bun wb inspect session <run-id> [--stream calls] [--character Name] [--kind death,level] [--grep RE] [--last 20]   # a v1 run's record, a line per row
 bun wb inspect audit <run-id> [--op WB_MOVE_RESULT [--status S]] [--since 1h]
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
 bun wb inspect audit --smoke edge-drop --op move_edge_drop --since 1h   # a smoke's sessions (from the smoke-session ledger)
@@ -95,12 +96,12 @@ A run is live when its row has neither a termination nor a pause; one with
 neither whose heartbeat is older than two minutes has lost its process and
 reads `ownerless`.
 
-`live`, `run`, `trajectory`, `tools`, `pad` and `stuck` are
+`live`, `run`, `trajectory`, `tools`, `pad`, `stuck` and `session` are
 `infra/inspect-run.ts` in the runner pod. Before a release ships a change to
 it, the same file runs in the pod from stdin:
 `kubectl -n wrathbench exec -i deploy/wrathbench-runner -- bun run - run <run-id> < infra/inspect-run.ts`.
 
-Those six read a run's row, its state samples and its trajectory from
+All but `session` read a run's row, its state samples and its trajectory from
 ClickHouse (the runner pod's `CLICKHOUSE_*`), never by walking a live 0.5
 run's `run.sqlite`: a full read of one held it against the runner's writer
 long enough to kill the run. The heartbeat, a few `meta.json` fields, file sizes,
@@ -111,7 +112,17 @@ files: <why>` when there is no `CLICKHOUSE_URL`, ClickHouse does not answer,
 the run is not in it yet, or `--files` was given. The fallback reads
 `trajectory.jsonl`, which a reader cannot lock. A v1 run is read whole off
 its files: its row is `meta.json`'s and its level, quests and samples are its
-session record's, none of which a reader can hold. A 0.5 run's `run.sqlite`
+session record's, none of which a reader can hold. A fan-out run is read per
+character, each off its own record in `sessions/<Character>/` (the store's
+rows under `<run-id>~<Character>`): `run` prints a block per character, `live`
+a line per character under the run's, and `session` reads them together, each
+line naming its character. A v1 run's `marks` (deaths, levels gained, zones,
+turn-ins) are its record's `events` rows, not trajectory records, and
+`session` is the reader of its `events` and `calls` streams that `trajectory
+--grep` was on 0.5. `run`'s `cost` line is the whole run's: the provider's
+own charge where it reported one (OpenRouter's per response, the Claude Code
+CLI's per session) and the tokens the responses reported; the list-price
+figure is the viewer's. A 0.5 run's `run.sqlite`
 is opened only when it has no fresh heartbeat, so a live one's row reads
 `unread` and its level `not read`. Each query is `readonly=2`, capped at 60 s and 256 MiB, and
 tagged `log_comment = 'wb inspect'`, so on a Code 241 `system.query_log` shows
@@ -145,7 +156,10 @@ flagged. What covers it depends on the run:
   `live.json`'s heartbeat. The reading it starts from is the newest sample
   before the window, so a level gained just inside it is still progress. A
   character standing still while its record is written reads `STUCK`; a gap
-  of more than 15 minutes with nothing written at all reads `unjudged`.
+  of more than 15 minutes with nothing written at all reads `unjudged`;
+- a fan-out run's characters are each judged so off their own records, and
+  the run is `STUCK` only when every one is: one agent moving any of its
+  characters is making progress.
 
 Only that verdict flags a run. Beside it, each marked tripped or not with its
 count: the same error repeated (digits folded), the harness-delivered hint
@@ -1408,26 +1422,46 @@ reached on the LAN by the viewer's own names ("Where the config lives").
 It is one more client of the config store, beside `bun wb config`: every
 write goes through `/api/config` and `parseFleet`, is refused with the
 supervisor's own sentence, and lands in `config_audit` with the actor and
-note the page requires. Beside the roster and the drafts it edits:
+note the page requires. It is one section at a time, each its own address
+(`/config/<section>`), listed down the side (a row across the top on a
+phone); a section whose group is off is absent, and every store row's raw
+editor sits in the section of the table that edits it:
 
-- **credentials**: add one (provider, the env var NAME its secret is in,
-  slots, billing, a budget), change its slots, enable or disable it, remove
-  it. Its status is the supervisor's: whether the variable is set in its
-  environment (unknown while no supervisor is up), slots in use, what the
-  budget has used, holds and the last failure that indicts it. A variable
-  not in the chart's `modelKeys` is flagged, because no model pod carries it.
-- **freeplay agents**: an entry's `idle: unlimited` on or off, which plays or
+- **providers** (`/config/providers`): every credential with its health, and
+  its non-secret fields edited in place: add one (provider, the env var NAME
+  its secret is in, slots, billing, a budget), edit those of an existing one
+  (its id and provider stay; a new provider is a new credential), enable or
+  disable it, remove it. A credential's health is one state, the first that
+  applies of `disabled` (the store's switch), `secret-missing` (the
+  supervisor's environment lacks the variable, or the chart's `modelKeys`
+  does not hand it to the model pods), `auth-failed` (a provider read or a
+  paused run says the key was refused), `no-access`, `quota-spent` (a usage
+  window at 100%, the provider's word, or a paused `quota-exhausted` run),
+  `overage`, `held` (a budget holding starts: a usage threshold, today's
+  spend or runs), `unread` (the provider's usage endpoint gave no answer) and
+  `ok`, with the reason, since when where known, the provider's last answer,
+  the usage windows as meters, and the fix. Unknown while no supervisor is
+  up, except what the store and the chart say themselves. Every state is
+  derived from state that already exists (`runner/src/credential-health.ts`).
+- **roster**: the roster's fields, a new entry, and the drafts ("Adding a
+  model").
+- **freeplay**: an entry's `idle: unlimited` on or off, which plays or
   pauses its durable character ("Freeplay characters are durable").
 - **campaigns**: enable, disable or remove one, or add one from a published
   definition with its assignments. Publishing a definition stays the CLI's
   ("Probe campaigns").
-- **the queue**: enable, disable or remove a job, or add one.
+- **queue**: enable, disable or remove a job, or add one.
+- **policy**: the remaining rows (`policy`, `accounts`, `preflight`) as raw
+  JSON.
 - **deployment**: the groups and how publishing is set, read-only, with the
   chart key on each row.
+- **history**: the audit table and the export.
 
 New credentials, campaigns and jobs are written disabled. A secret's value is
 never read, shown or written from the browser: the store holds names, and
-values are the deployment's Secret ("Secrets"). The status comes from
+values are the deployment's Secret ("Secrets"). Each credential's `set key`
+(an endpoint) or `re-auth` (a subscription) control is there and switched
+off, until where a secret written from the browser goes is decided. The status comes from
 `GET /api/admin` (`runner/viewer/README.md`), which the chart feeds with the
 `modelKeys` names and, when there is a publisher, its non-secret settings and
 its state file, mounted read-only.

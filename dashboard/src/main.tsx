@@ -85,7 +85,7 @@ render(
       <Route path="/campaigns" component={Campaigns} preload={preload.campaigns} />
       {/* One campaign version: the index row's own page. */}
       <Route path="/campaigns/:id/:version" component={Campaigns} preload={preload.campaigns} />
-      <Route path="/config" component={Config} />
+      <Route path="/config/:section?" component={Config} />
       <Route path="*" component={NotFound} />
     </Router>
   ),

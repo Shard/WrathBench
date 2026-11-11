@@ -28,8 +28,9 @@
  *   fallback; it is not needed and would re-pay session startup every turn.)
  * - Tools reach the runner's *single* SandboxHost over a loopback TCP MCP
  *   server plus `wrath-mcp/mcp/src/bridge.ts` (see that file for why the bridge exists).
- *   The MCP server is `mcp.ts`'s `McpServer` over `tools.ts` — the same six
- *   tools, the same dispatch, the same trajectory records.
+ *   The MCP server is `mcp.ts`'s `McpServer` over `tools.ts` — the same
+ *   tools, the same dispatch, the same trajectory records. A fan-out run's
+ *   server serves the fan-out list, and `--allowed-tools` grants that list.
  * - Billing: the child environment is an allowlist (`childEnv`) holding no
  *   Anthropic/Bedrock/Vertex credential and no other secret of the runner's,
  *   so the CLI can only bill the subscription this run was scheduled on — its
@@ -512,8 +513,8 @@ export function compactionRecord(turn: number, msg: Record<string, unknown>): Co
  * Every flag here exists in claude 2.1.238 (`claude -p --help`); nothing is
  * invented. Notably absent: `--max-turns` (not in this CLI version — driver
  * turns are bounded by `maxTurns` in the runner instead) and
- * `--permission-mode` (`--allowed-tools` grants exactly our six, which is the
- * narrower grant).
+ * `--permission-mode` (`--allowed-tools` grants exactly the tools our server
+ * serves, which is the narrower grant).
  */
 export function claudeArgs(o: ClaudeArgsOptions): string[] {
   return [

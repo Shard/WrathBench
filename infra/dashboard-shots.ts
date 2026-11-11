@@ -10,7 +10,8 @@
  * What it stands up, all on loopback and ephemeral ports, all under DIR/.rig:
  *
  *  - the runs: the synthetic fixture (`infra/shots/fixture.ts`: four live runs
- *    kept live while the rig runs, one ended run to replay), or copies of the
+ *    and a live fan-out run kept live while the rig runs, one ended run to
+ *    replay), or copies of the
  *    run directories `--run` names, which are never served or written in place;
  *  - the private viewer: the viewer's own `createApi` over those runs, with an
  *    in-memory run store and a config store of its own, hosting a private build;
@@ -183,7 +184,7 @@ export async function startRig(opts: RigOptions): Promise<Rig> {
   if (opts.runs === undefined || opts.runs.length === 0) {
     fixture = writeFixture(runsDir);
     await fixture.ready;
-    log(`fixture runs: ${fixture.lives.join(", ")} (live), ${fixture.ended} (ended)`);
+    log(`fixture runs: ${fixture.lives.join(", ")} (live), ${fixture.fanoutLive.runId} (live, fan-out), ${fixture.ended} (ended)`);
   } else {
     for (const src of opts.runs) {
       const from = resolve(src);
