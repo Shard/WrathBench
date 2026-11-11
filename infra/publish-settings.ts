@@ -76,9 +76,27 @@ export function publishSettingsFromEnv(env: Record<string, string | undefined>):
   };
 }
 
-/** One line for a log or a page: where it goes and how. Names no secret. */
+/**
+ * Which kind of store an endpoint is, and nothing more of it: the endpoint is
+ * read from the Secret, and R2's carries the account id in its hostname.
+ * No endpoint is AWS's, which Bun derives from the region.
+ */
+export function storeKind(endpoint: string | null): "aws s3" | "r2" | "s3-compatible" {
+  if (endpoint === null) return "aws s3";
+  let host: string;
+  try {
+    host = new URL(endpoint).hostname.toLowerCase();
+  } catch {
+    return "s3-compatible";
+  }
+  if (host.endsWith(".r2.cloudflarestorage.com")) return "r2";
+  if (host === "amazonaws.com" || host.endsWith(".amazonaws.com")) return "aws s3";
+  return "s3-compatible";
+}
+
+/** One line for a log or a page: the bucket and the kind of store, and how. Never the endpoint, and no secret. */
 export function describePublishSettings(s: PublishSettings): string {
-  const where = s.endpoint === null ? `s3://${s.bucket}` : `${s.endpoint.replace(/\/+$/, "")}/${s.bucket}`;
+  const where = `bucket ${s.bucket} on ${storeKind(s.endpoint)}`;
   const how = [
     ...(s.region !== null ? [`region ${s.region}`] : []),
     ...(s.virtualHostedStyle ? ["virtual-hosted"] : []),
