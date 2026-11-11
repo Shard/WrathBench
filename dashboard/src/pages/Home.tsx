@@ -16,6 +16,8 @@ import { SDK_FAMILIES, paramNames, selectedTool } from "../lib/tools";
 import { displayError } from "../lib/errors";
 import { modelDisplay } from "../lib/format";
 import { InfoHint } from "../components/InfoHint";
+import { useFeeds } from "../lib/feeds";
+import { groupsOf } from "../lib/nav";
 
 /** What the loop diagram is showing, one hover off its heading. */
 const LOOP_NOTE =
@@ -56,14 +58,10 @@ export default function Home() {
   };
   const [picked, setPicked] = createSignal<string | undefined>(undefined);
   const current = () => selectedTool(tools.latest ?? [], picked());
-  // The e90 ladder, fixed: latest series present, free runs always out (`lib/homeladder.ts`);
-  // the one control draws the Pareto front of cost against XP over the field
-  // (`lib/pareto.ts`) — the same treatment as the ladder page's toggle, so the
-  // words mean one thing on both. It used to filter to the front; the field
-  // is the context that makes the front a claim, so it stays.
-  const ladder = poll(() => api.ladder(HOME_EPISODE).then((r) => r.runs), LADDER_POLL_MS);
-  const [pareto, setPareto] = createSignal(readBoolPref(PARETO_KEY, false));
-  const ladderRuns = () => homeLadderRuns(ladder.latest ?? [], true);
+  // The ladder is the evals group's: absent with it, and not asked for until
+  // `/api/info` has said the group is there.
+  const feeds = useFeeds();
+  const evals = (): boolean => feeds.info.latest !== undefined && groupsOf(feeds.info.latest).evals;
 
   return (
     <div class="page home">
@@ -103,42 +101,9 @@ export default function Home() {
       </section>
       </div>
 
-      {/* Full-bleed: the one thing on the page that wants the whole width. */}
-      <section class="home-bleed">
-        <div class="home-bleed-inner">
-          <div class="ladder-controls">
-            <span class="dim">
-              <h2 class="section home-ladder-title">the {HOME_EPISODE} ladder</h2> 90 minutes of play from a fresh level-1 character ·{" "}
-              <A href={`/ladder?episode=${HOME_EPISODE}`}>full ladder</A>
-            </span>
-            <div class="ladder-filters">
-            <label class="filter check" title="Draw the Pareto front: the entries no other entry beats on both axes, cheaper per run and more XP earned. Every point stays; the dominated ones are dimmed.">
-              <input
-                type="checkbox"
-                checked={pareto()}
-                onChange={(e) => {
-                  setPareto(e.currentTarget.checked);
-                  writeBoolPref(PARETO_KEY, e.currentTarget.checked);
-                }}
-              />
-              <span>pareto front</span>
-            </label>
-            </div>
-          </div>
-          <Show when={ladder.error !== undefined}>
-            <div class="banner bad">{displayError(ladder.error)}</div>
-          </Show>
-          <Show when={ladder.latest !== undefined} fallback={<p class="dim loading-chart">loading…</p>}>
-            <div class="wide-scroll">
-              {/* No "Not plotted: …" roll-call here: the
-                  landing page's first screen is worth more to a stranger than a
-                  list of the entries this chart could not place, and /ladder
-                  still gives that account in full. */}
-              <LadderChart runs={ladderRuns()} episode={HOME_EPISODE} pareto={pareto()} omittedNote={false} />
-            </div>
-          </Show>
-        </div>
-      </section>
+      <Show when={evals()}>
+        <HomeLadder />
+      </Show>
 
       <div class="home-col">
       <h2 class="section">
@@ -343,5 +308,55 @@ function LoopDiagram() {
       <text x="66" y="200" text-anchor="end" class="loop-sub">read into every</text>
       <text x="66" y="211" text-anchor="end" class="loop-sub">turn's context</text>
     </svg>
+  );
+}
+
+/** The e90 ladder, full-bleed; mounted only where the evals group is on. */
+function HomeLadder() {
+  // The e90 ladder, fixed: latest series present, free runs always out (`lib/homeladder.ts`);
+  // the one control draws the Pareto front of cost against XP over the field
+  // (`lib/pareto.ts`) — the same treatment as the ladder page's toggle, so the
+  // words mean one thing on both. It used to filter to the front; the field
+  // is the context that makes the front a claim, so it stays.
+  const ladder = poll(() => api.ladder(HOME_EPISODE).then((r) => r.runs), LADDER_POLL_MS);
+  const [pareto, setPareto] = createSignal(readBoolPref(PARETO_KEY, false));
+  const ladderRuns = () => homeLadderRuns(ladder.latest ?? [], true);
+  // Full-bleed: the one thing on the page that wants the whole width.
+  return (
+    <section class="home-bleed">
+      <div class="home-bleed-inner">
+        <div class="ladder-controls">
+          <span class="dim">
+            <h2 class="section home-ladder-title">the {HOME_EPISODE} ladder</h2> 90 minutes of play from a fresh level-1 character ·{" "}
+            <A href={`/ladder?episode=${HOME_EPISODE}`}>full ladder</A>
+          </span>
+          <div class="ladder-filters">
+          <label class="filter check" title="Draw the Pareto front: the entries no other entry beats on both axes, cheaper per run and more XP earned. Every point stays; the dominated ones are dimmed.">
+            <input
+              type="checkbox"
+              checked={pareto()}
+              onChange={(e) => {
+                setPareto(e.currentTarget.checked);
+                writeBoolPref(PARETO_KEY, e.currentTarget.checked);
+              }}
+            />
+            <span>pareto front</span>
+          </label>
+          </div>
+        </div>
+        <Show when={ladder.error !== undefined}>
+          <div class="banner bad">{displayError(ladder.error)}</div>
+        </Show>
+        <Show when={ladder.latest !== undefined} fallback={<p class="dim loading-chart">loading…</p>}>
+          <div class="wide-scroll">
+            {/* No "Not plotted: …" roll-call here: the
+                landing page's first screen is worth more to a stranger than a
+                list of the entries this chart could not place, and /ladder
+                still gives that account in full. */}
+            <LadderChart runs={ladderRuns()} episode={HOME_EPISODE} pareto={pareto()} omittedNote={false} />
+          </div>
+        </Show>
+      </div>
+    </section>
   );
 }

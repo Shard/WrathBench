@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Publish the public dashboard snapshot to the R2 bucket.
+ * Publish the public dashboard snapshot to its bucket (any S3-compatible one).
  *
  * The wiring and nothing else: `renderSnapshot` (runner/viewer/snapshot.ts)
  * makes the artifacts, `publishLoop` (infra/publish-core.ts) decides what to
@@ -20,8 +20,13 @@
  *   WRATHBENCH_PUBLISH_BATCH        default 8; runs projected per upload flush
  *   WRATHBENCH_PUBLISH_FULL_RENDER_MS  default 21600000 (6 h); the longest a cold run goes unrendered
  *   WRATHBENCH_MODULE_URL           optional; names the worldserver build on info.json
- *   S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET, S3_ENDPOINT
- *                                   Bun.S3Client's own names, autoloaded from .env
+ *   WRATHBENCH_GROUPS               the deployment's groups (runner/viewer/groups.ts); unset is all
+ *   S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET, S3_ENDPOINT, S3_REGION
+ *                                   Bun.S3Client's own names, autoloaded from .env; any
+ *                                   S3-compatible bucket (infra/publish-settings.ts)
+ *   WRATHBENCH_PUBLISH_VIRTUAL_HOSTED=1  a bucket-in-the-hostname endpoint
+ *   WRATHBENCH_PUBLISH_DELAY_MS     default 0; how far the public view trails live play
+ *   WRATHBENCH_PUBLISH_HISTORY=0    publish only the current view, not the run history
  *
  * Secret scan: every body is scanned before it is written (`SecretScanner`,
  * runner/src/secret-scan.ts), against the credentials in this process's own
@@ -45,8 +50,10 @@ import { createRenderer, FULL_RENDER_MS } from "../runner/viewer/snapshot";
 import { HOME_EPISODE } from "../dashboard/src/lib/homeladder";
 import { OG_KEY, renderOgPng } from "./og-render";
 import { ROBOTS_KEY, ROBOTS_TXT } from "./robots";
-import { publishLoop, type ObjectStore, type PassRenderer, type SnapshotResult } from "./publish-core";
+import { publishLoop, type ObjectStore, type PassRenderer, type SnapshotArtifact, type SnapshotResult } from "./publish-core";
+import { describePublishSettings, publishSettingsFromEnv } from "./publish-settings";
 import { describeFindings, envSecrets, runTokenSecrets, SecretScanner } from "../runner/src/secret-scan";
+import { groupsEnvValue, groupsFromEnv, type Groups } from "../runner/viewer/groups";
 
 const RUNS_DIR = Bun.env.WRATHBENCH_RUNS_DIR ?? "data/runs";
 const STATE_PATH = Bun.env.WRATHBENCH_PUBLISH_STATE ?? "data/publish/state.json";
@@ -86,6 +93,19 @@ const mode = ((): "once" | "loop" => {
 })();
 
 if (!existsSync(RUNS_DIR)) fail(`runs directory ${RUNS_DIR} does not exist`);
+/*
+ * The deployment's groups (runner/viewer/groups.ts): a group that is off
+ * publishes nothing of its own. The publisher is the viewer group's, so with
+ * that group off there is nothing for it to do, and it says so rather than
+ * publish a site the deployment says it has not got.
+ */
+let GROUPS: Groups;
+try {
+  GROUPS = groupsFromEnv(Bun.env);
+} catch (e) {
+  fail(e instanceof Error ? e.message : String(e));
+}
+if (!GROUPS.viewer) fail(`WRATHBENCH_GROUPS=${groupsEnvValue(GROUPS)} leaves the viewer group off, and the public site is that group's`);
 if (!Number.isFinite(INTERVAL_MS) || INTERVAL_MS < 1000) {
   fail(`WRATHBENCH_PUBLISH_INTERVAL_MS=${Bun.env.WRATHBENCH_PUBLISH_INTERVAL_MS} is not a sane interval`);
 }
@@ -95,16 +115,16 @@ if (!Number.isInteger(BATCH) || BATCH < 1) {
 if (!Number.isFinite(FULL_RENDER) || FULL_RENDER < 0) {
   fail(`WRATHBENCH_PUBLISH_FULL_RENDER_MS=${FULL_RENDER_ENV} is not a duration in ms (0 renders every run every pass)`);
 }
-// S3Client also honours AWS_*-style names; this check covers the documented
-// contract, so a half-filled .env fails here with the runbook's names rather
-// than mid-pass with the SDK's.
-for (const name of ["S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_BUCKET", "S3_ENDPOINT"] as const) {
-  if ((Bun.env[name] ?? "") === "" && (Bun.env[name.replace("S3_", "AWS_")] ?? "") === "") {
-    fail(`${name} is not set (docs/RUNBOOK.md, "Public dashboard" — the R2 key pair lives in .env)`);
-  }
-}
+// Where and how (infra/publish-settings.ts): any S3-compatible bucket, a delay,
+// the history or only the current view. S3Client also honours AWS_*-style
+// names; this check covers the documented contract, so a half-filled .env
+// fails here with the runbook's names rather than mid-pass with the SDK's.
+const settingsRead = publishSettingsFromEnv(Bun.env);
+if ("error" in settingsRead) fail(settingsRead.error);
+const SETTINGS = settingsRead;
 
-const s3 = new S3Client();
+// The key pair, bucket, endpoint and region from the environment, as Bun reads them.
+const s3 = new S3Client(SETTINGS.virtualHostedStyle ? { virtualHostedStyle: true } : {});
 const store: ObjectStore = {
   put: async (path, body, opts) => {
     await s3.write(path, body, { type: opts.contentType });
@@ -124,6 +144,8 @@ const renderer = createRenderer({
   runsDir: RUNS_DIR,
   fullRenderMs: FULL_RENDER,
   ...(MODULE_URL !== undefined ? { moduleUrl: MODULE_URL } : {}),
+  groups: GROUPS,
+  history: SETTINGS.history,
 });
 
 // The secret scan's known values: this process's own credentials, read once
@@ -151,7 +173,9 @@ const refreshScanner = (): void => {
 const render: PassRenderer = async (sink, published) => {
   refreshScanner();
   const result = await renderer(undefined, { sink, batch: BATCH }, published);
-  await publishCard(result);
+  // The card draws the ladder, which is the evals group's. With a delay it
+  // waits for its pass to be shown, as the manifest does.
+  if (GROUPS.evals) await publishCard(cardDue(result));
   await publishRobots();
   return result;
 };
@@ -190,9 +214,26 @@ async function publishRobots(): Promise<void> {
  * Never fails a pass. A card is a nicety; the JSON is the site.
  */
 let cardStamp: string | null = null;
-async function publishCard(result: SnapshotResult): Promise<void> {
+/**
+ * The ladder the card is drawn from: this pass's, or with a delay the newest
+ * one at least the delay old, so the card never runs ahead of the site. Held
+ * in memory only: a restart shows the next one a delay later.
+ */
+const cardQueue: { due: number; ladder: SnapshotArtifact | undefined }[] = [];
+function cardDue(result: SnapshotResult): SnapshotArtifact | undefined | null {
+  const ladder = result.artifacts.find((a) => a.path.endsWith(`/ladder-${HOME_EPISODE}.json`));
+  if (SETTINGS.delayMs === 0) return ladder;
+  const now = Date.now();
+  cardQueue.push({ due: now + SETTINGS.delayMs, ladder });
+  let due: (typeof cardQueue)[number] | undefined;
+  while (cardQueue.length > 0 && cardQueue[0]!.due <= now) due = cardQueue.shift();
+  return due === undefined ? null : due.ladder;
+}
+
+/** `null`: nothing is due yet (a delay), so the card stays as it is. */
+async function publishCard(artifact: SnapshotArtifact | undefined | null): Promise<void> {
+  if (artifact === null) return;
   try {
-    const artifact = result.artifacts.find((a) => a.path.endsWith(`/ladder-${HOME_EPISODE}.json`));
     if (artifact === undefined) {
       log(`publish: no ladder-${HOME_EPISODE}.json in this pass — the card is unchanged`);
       return;
@@ -224,7 +265,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 const log = (line: string): void => console.log(`${new Date().toISOString()} ${line}`);
-log(`publishing ${RUNS_DIR} -> ${Bun.env.S3_BUCKET ?? Bun.env.AWS_BUCKET} (${mode}, every ${INTERVAL_MS}ms, ${BATCH} runs per flush)`);
+log(`publishing ${RUNS_DIR} -> ${describePublishSettings(SETTINGS)} (${mode}, every ${INTERVAL_MS}ms, ${BATCH} runs per flush)`);
 log(
   `secret scan: ${ownSecrets.secrets.length} credential(s) of this process's own and every run's session token, by value, and the credential shapes` +
     (ownSecrets.skipped.length > 0 ? `; not matched by value, too weak or not a value: ${ownSecrets.skipped.join(", ")}` : ""),
@@ -232,6 +273,7 @@ log(
 
 const summary = await publishLoop(render, store, STATE_PATH, {
   intervalMs: INTERVAL_MS,
+  ...(SETTINGS.delayMs > 0 ? { delayMs: SETTINGS.delayMs } : {}),
   once: mode === "once",
   signal: abort.signal,
   log,

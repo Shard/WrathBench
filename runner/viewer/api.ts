@@ -110,6 +110,7 @@ import { compressResponse } from "./compress";
 import { CONFIG_API_PREFIX, handleConfigRequest } from "./config-api";
 import { hostAllowlist, hostGuard } from "./host-guard";
 import { writeGuard } from "./write-guard";
+import { ALL_GROUPS, allGroupsOn, groupOfApiPath, type Groups } from "./groups";
 import { e90TokenProfile } from "./drafts";
 import {
   ART_TILE_CACHE_CONTROL,
@@ -219,6 +220,18 @@ export interface ApiOptions {
    * place a handle is bound to a port, always passes it.
    */
   allowedHosts?: readonly string[];
+  /**
+   * Which of the deployment's groups are on (`groups.ts`). A group that is off
+   * has no route here: its paths answer the 404 any unknown path gets. Absent
+   * is every group, which is today's deployment and what a bare clone runs.
+   */
+  groups?: Groups;
+  /**
+   * The admin switch (`groups.ts`): mounts the config API, the one write
+   * surface. Off by default, so a handle that is not told otherwise has no
+   * write route at all; a public handle never has one, whatever this says.
+   */
+  admin?: boolean;
 }
 
 /** How long one /health answer (or one failure) stands in for the next. */
@@ -790,6 +803,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
   };
   const publicMode = opts.publicMode === true;
   const tilesPublic = opts.tilesPublic === true;
+  const groups = opts.groups ?? ALL_GROUPS;
+  // Never on a public handle: the read-only public site has no write surface.
+  const admin = opts.admin === true && !publicMode;
   const allowedHosts = opts.allowedHosts === undefined ? null : hostAllowlist(opts.allowedHosts);
   /**
    * Serve a body, through the public projection when this handle is public.
@@ -1544,6 +1560,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
   }
 
   async function api(req: Request, url: URL, path: string): Promise<Response | null> {
+    // A group that is off has no routes: its paths are unknown paths here.
+    const group = groupOfApiPath(path);
+    if (group !== null && !groups[group]) return null;
     if (path === "/api" || path === "/api/info") {
       const body: ApiInfoResponse = {
         service: "wrathbench-viewer",
@@ -1552,6 +1571,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
         dashboardBuild: dashboardBuildOf(dashboardDir, buildCache),
         worldserver: await worldserver(),
         harnessSeries: await seriesCensus(),
+        // Only when one is off, so today's deployment serves the body it did.
+        ...(allGroupsOn(groups) ? {} : { groups: { ...groups } }),
+        ...(admin ? { admin: true } : {}),
         now: Date.now(),
       };
       return pub(body, projectInfo);
@@ -2196,22 +2218,23 @@ export function createApi(opts: ApiOptions): ApiHandle {
     /*
      * Every unsafe method, on every path, must come from the viewer's own pages
      * (`write-guard.ts`): JSON, from this host, not cross-site. Only on a handle
-     * that is not public — a public one has no write route at all, and answers
-     * every one with the 404 below rather than a refusal that would say one
-     * exists.
+     * with the admin switch on — any other, a public one included, has no write
+     * route at all, and answers every one with the 404 below rather than a
+     * refusal that would say one exists.
      */
-    if (!publicMode) {
+    if (admin) {
       const refused = writeGuard(req);
       if (refused !== null) return refused;
     }
 
     /*
-     * The config API: read and edit the fleet config. Operator-only,
-     * so a public handle does not serve it at all — a 404, not the 403
-     * `withheld()` gives, because a write surface should not announce itself.
-     * It lives in `config-api.ts`; this is the whole of its presence here.
+     * The config API: read and edit the fleet config. Behind the admin switch
+     * (`groups.ts`), which a public handle never has, so without it the routes
+     * are not served at all — a 404, not the 403 `withheld()` gives, because a
+     * write surface should not announce itself. It lives in `config-api.ts`;
+     * this is the whole of its presence here.
      */
-    if (!publicMode && path.startsWith(CONFIG_API_PREFIX)) {
+    if (admin && path.startsWith(CONFIG_API_PREFIX)) {
       const res = await handleConfigRequest(req, url, path, {
         ...(opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {}),
         e90Profile,

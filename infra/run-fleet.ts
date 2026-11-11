@@ -103,6 +103,7 @@ import {
   rosterModels,
   scheduledAccounts,
   unpinnedCampaigns,
+  withoutEvals,
 } from "./run-fleet-config";
 import {
   affinityFrom,
@@ -219,6 +220,7 @@ import {
 } from "./run-fleet-credentials";
 import type { Credential } from "../runner/src/credential-slots";
 import { configDbPath, EMPTY_STORE_HINT, readFleetConfig } from "../runner/src/config-store";
+import { GROUPS_ENV, groupsEnvValue, groupsFromEnv } from "../runner/viewer/groups";
 import {
   liveCredentials,
   MODELS_SIDECAR,
@@ -428,6 +430,8 @@ export function pruneCodexHomes(o: {
 
 /** Where the module answers. Same default the runner and roster use. */
 const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086";
+/** The deployment's groups (`runner/viewer/groups.ts`), read once: a change is a new pod. */
+const GROUPS = groupsFromEnv(process.env);
 /** The worldserver's log directory as seen from this side of the mounts. */
 const SERVER_LOG_DIR = join(REPO_ROOT, "data", "logs");
 /** Read the boot marker off the shared logs volume. */
@@ -908,6 +912,13 @@ async function main(): Promise<void> {
   // fresh namespace mid-flight; keeping it fixed leaves both semantics exactly
   // as they were. Roll it deliberately: stop the service, start it again.
   const stampToday = dateStamp();
+  // The supervisor is the runner group's background job: a deployment with
+  // that group off renders no fleet pod, and one started by hand refuses.
+  if (!GROUPS.runner) {
+    console.error(`run-fleet: ${GROUPS_ENV}=${groupsEnvValue(GROUPS)} leaves the runner group off, and the fleet supervisor is that group's`);
+    process.exit(2);
+  }
+  if (!GROUPS.evals) say("the evals group is off: no scored or probing episode is launched, campaigns and scored jobs read as disabled");
   /*
    * Config comes from the STORE and nowhere else (`runner/src/config-store.ts`).
    * The boot read is the first tick's read against an empty last-good config,
@@ -1039,7 +1050,10 @@ async function main(): Promise<void> {
    * campaign's jobs exist only for the tick that planned them.
    */
   let campaignJobs: FleetJob[] = [];
-  const effectiveJobs = (cfg: FleetConfig): JobSpawn[] => {
+  const effectiveJobs = (read: FleetConfig): JobSpawn[] => {
+    // With the evals group off, every campaign and scored or probing job reads
+    // as disabled, and the policy below picks none (`withoutEvals`).
+    const cfg = GROUPS.evals ? read : withoutEvals(read);
     const out: JobSpawn[] = [];
     // Rebuilt, not appended to: this runs twice a tick, and a reason must
     // describe the projection the drain is acting on.
@@ -1421,6 +1435,7 @@ async function main(): Promise<void> {
         campaigns: unpinnedCampaigns(cfg),
         probeRuns: probes,
         affinity,
+        evals: GROUPS.evals,
         }),
         characters,
         cfg.roster,

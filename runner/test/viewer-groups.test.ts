@@ -1,0 +1,152 @@
+/**
+ * The deployment's groups (runner/viewer/groups.ts) as the viewer, the
+ * publisher's renderer and the supervisor read them: an off group's routes are
+ * unknown paths, its aggregates are not rendered, its jobs read as disabled,
+ * and every group on is today's deployment, byte for byte where it is
+ * published.
+ */
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createApi } from "../viewer/api";
+import { createRenderer } from "../viewer/snapshot";
+import { projectInfo } from "../viewer/public-projection";
+import type { ApiInfoResponse } from "../viewer/api-types";
+import {
+  ALL_GROUPS,
+  adminFromEnv,
+  groupOfApiPath,
+  groupsEnvValue,
+  groupsFromEnv,
+  pageMounted,
+  type Groups,
+} from "../viewer/groups";
+import { parseFleet, withoutEvals } from "../../infra/run-fleet-config";
+
+const roots: string[] = [];
+afterAll(() => {
+  for (const r of roots) rmSync(r, { recursive: true, force: true });
+});
+
+function handle(groups?: Groups, publicMode = false): ReturnType<typeof createApi> {
+  const root = mkdtempSync(join(tmpdir(), "groups-"));
+  roots.push(root);
+  return createApi({
+    runsDir: join(root, "runs"),
+    tilesDir: join(root, "tiles"),
+    configDbPath: join(root, "config.sqlite"),
+    moduleUrl: "http://127.0.0.1:1",
+    ...(groups !== undefined ? { groups } : {}),
+    ...(publicMode ? { publicMode } : {}),
+  });
+}
+
+const get = async (h: ReturnType<typeof createApi>, path: string): Promise<Response> => await h(new Request(`http://x${path}`));
+
+describe("WRATHBENCH_GROUPS", () => {
+  test("unset is every group; set lists the ones that are on; empty is none", () => {
+    expect(groupsFromEnv({})).toEqual(ALL_GROUPS);
+    expect(groupsFromEnv({ WRATHBENCH_GROUPS: "viewer" })).toEqual({ runner: false, evals: false, viewer: true });
+    expect(groupsFromEnv({ WRATHBENCH_GROUPS: " runner , viewer " })).toEqual({ runner: true, evals: false, viewer: true });
+    expect(groupsFromEnv({ WRATHBENCH_GROUPS: "" })).toEqual({ runner: false, evals: false, viewer: false });
+    expect(groupsEnvValue({ runner: true, evals: false, viewer: true })).toBe("runner,viewer");
+  });
+
+  test("a name that is not a group is refused, not read as off", () => {
+    expect(() => groupsFromEnv({ WRATHBENCH_GROUPS: "viewer,eval" })).toThrow('"eval" is not a group');
+  });
+
+  test("the admin switch is WRATHBENCH_ADMIN=1 and nothing else", () => {
+    expect(adminFromEnv({})).toBe(false);
+    expect(adminFromEnv({ WRATHBENCH_ADMIN: "1" })).toBe(true);
+    expect(adminFromEnv({ WRATHBENCH_ADMIN: "true" })).toBe(false);
+  });
+
+  test("routes and pages belong to the groups the issue names", () => {
+    expect(groupOfApiPath("/api/fleet")).toBe("runner");
+    expect(groupOfApiPath("/api/models")).toBe("runner");
+    expect(groupOfApiPath("/api/ladder")).toBe("evals");
+    expect(groupOfApiPath("/api/campaigns")).toBe("evals");
+    expect(groupOfApiPath("/api/episodes")).toBe("evals");
+    for (const p of ["/api/runs", "/api/results", "/api/positions", "/api/info", "/api/tools", "/api/run/x"]) expect(groupOfApiPath(p)).toBeNull();
+    const viewerOnly: Groups = { runner: false, evals: false, viewer: true };
+    for (const p of ["/", "/map", "/runs", "/run/x", "/character/x", "/party/x"]) expect(pageMounted(p, viewerOnly, false)).toBe(true);
+    for (const p of ["/fleet", "/models", "/ladder", "/campaigns/x/1", "/about", "/config"]) expect(pageMounted(p, viewerOnly, false)).toBe(false);
+    expect(pageMounted("/config", ALL_GROUPS, true)).toBe(true);
+    expect(pageMounted("/config", ALL_GROUPS, false)).toBe(false);
+  });
+});
+
+describe("the viewer's routes", () => {
+  test("an off group's routes are the 404 any unknown path gets; the viewer's own stay", async () => {
+    const h = handle({ runner: false, evals: false, viewer: true });
+    for (const p of ["/api/fleet", "/api/models", "/api/ladder?episode=e90", "/api/campaigns", "/api/episodes"]) {
+      const res = await get(h, p);
+      expect([p, res.status]).toEqual([p, 404]);
+      expect(await res.json()).toEqual({ error: "no such path" });
+    }
+    for (const p of ["/api/runs", "/api/results?episode=all", "/api/positions", "/api/tools"]) expect([p, (await get(h, p)).status]).toEqual([p, 200]);
+  });
+
+  test("/api/info names the groups only when one is off, and the public projection keeps them", async () => {
+    const all = (await (await get(handle(), "/api/info")).json()) as ApiInfoResponse;
+    expect(all.groups).toBeUndefined();
+    const some = (await (await get(handle({ runner: false, evals: true, viewer: true }), "/api/info")).json()) as ApiInfoResponse;
+    expect(some.groups).toEqual({ runner: false, evals: true, viewer: true });
+    expect(projectInfo(some).groups).toEqual({ runner: false, evals: true, viewer: true });
+    expect("groups" in projectInfo(all)).toBe(false);
+    const pub = (await (await get(handle({ runner: false, evals: true, viewer: true }, true), "/api/info")).json()) as ApiInfoResponse;
+    expect(pub.groups).toEqual({ runner: false, evals: true, viewer: true });
+  });
+});
+
+describe("the public snapshot", () => {
+  const render = async (groups?: Groups): Promise<{ paths: string[]; live: Record<string, unknown> }> => {
+    const root = mkdtempSync(join(tmpdir(), "groups-snap-"));
+    roots.push(root);
+    const r = createRenderer({ runsDir: join(root, "runs"), configDbPath: join(root, "config.sqlite"), ...(groups !== undefined ? { groups } : {}) });
+    const result = await r(1_000);
+    const live = result.artifacts.find((a) => a.path === "v1/live.json")!;
+    return { paths: Object.keys(result.snap).sort(), live: JSON.parse(live.body) as Record<string, unknown> };
+  };
+
+  test("every group on publishes today's aggregates; an off group's are not rendered", async () => {
+    const all = await render();
+    expect(all.paths).toContain("campaigns.json");
+    expect(all.paths).toContain("models.json");
+    expect(all.paths).toContain("episodes.json");
+    expect(all.paths.some((p) => p.startsWith("ladder-"))).toBe(true);
+    expect(all.live["fleet"]).toBeDefined();
+
+    const evalsOff = await render({ runner: true, evals: false, viewer: true });
+    expect(evalsOff.paths).toEqual(["info.json", "models.json", "results.json", "runs.json", "tools.json"]);
+    expect(evalsOff.live["fleet"]).toBeDefined();
+
+    const viewerOnly = await render({ runner: false, evals: false, viewer: true });
+    expect(viewerOnly.paths).toEqual(["info.json", "results.json", "runs.json", "tools.json"]);
+    expect("fleet" in viewerOnly.live).toBe(false);
+    expect(Object.keys(viewerOnly.live)).toEqual(["generatedAt", "attribution", "positions", "nearbyKey"]);
+  });
+});
+
+describe("the supervisor with evals off", () => {
+  test("every campaign and every scored or probing job reads as disabled; freeplay jobs as written", () => {
+    const cfg = parseFleet({
+      accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3"] },
+      roster: { a: { model: "v/a", tier: "t1" }, b: { model: "v/b", tier: "t1", idle: "unlimited" } },
+      queue: [
+        { ref: "a", episode: "e90", repeat: 1, enabled: true },
+        { ref: "b", episode: "freeplay", repeat: "loop", enabled: true },
+      ],
+    });
+    const off = withoutEvals(cfg);
+    expect(off.jobs.map((j) => [j.episode, j.enabled])).toEqual([
+      ["e90", false],
+      ["freeplay", true],
+    ]);
+    expect(off.campaigns.every((c) => !c.enabled)).toBe(true);
+    // Pure: the config read stays as it was.
+    expect(cfg.jobs.map((j) => j.enabled)).toEqual([true, true]);
+  });
+});
