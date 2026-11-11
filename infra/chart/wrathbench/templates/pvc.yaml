@@ -59,7 +59,7 @@ spec:
   resources:
     requests:
       storage: {{ .Values.storage.db.size }}
-{{- if .Values.codex.enabled }}
+{{- if include "wrathbench.on.codex" $ }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

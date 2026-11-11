@@ -27,7 +27,7 @@ const CONFIG = {
   queue: [],
 };
 
-function fixture(opts: { seed?: boolean; publicMode?: boolean } = {}): {
+function fixture(opts: { seed?: boolean; publicMode?: boolean; admin?: boolean } = {}): {
   handle: ReturnType<typeof createApi>;
   dbPath: string;
 } {
@@ -43,6 +43,7 @@ function fixture(opts: { seed?: boolean; publicMode?: boolean } = {}): {
     runsDir: join(root, "runs"),
     tilesDir: join(root, "tiles"),
     configDbPath: dbPath,
+    admin: opts.admin !== false,
     ...(opts.publicMode === true ? { publicMode: true } : {}),
   });
   return { handle, dbPath };
@@ -87,6 +88,43 @@ describe("public mode", () => {
     const store = new ConfigStore(dbPath, { readonly: true });
     expect(store.get("roster/glm")).toEqual({ tier: "t1", model: "z-ai/glm-5.2:free" });
     store.close();
+  });
+});
+
+describe("the admin switch off", () => {
+  test("a private handle without it has no config route, read or write, and writes nothing", async () => {
+    const { handle, dbPath } = fixture({ admin: false });
+    for (const [method, path] of [
+      ["GET", "/api/config"],
+      ["GET", "/api/config/proposed"],
+      ["PUT", "/api/config/roster/glm"],
+      ["PATCH", "/api/config/roster/glm"],
+      ["DELETE", "/api/config/roster/glm"],
+      ["POST", "/api/config/export"],
+      ["POST", "/api/config/proposed/fetch"],
+    ] as const) {
+      const body = method === "GET" || method === "DELETE" ? undefined : JSON.stringify({ tier: "t2", model: "x:free" });
+      const res = await handle(req(path, { method, body }));
+      expect([method, path, res.status]).toEqual([method, path, 404]);
+    }
+    const store = new ConfigStore(dbPath, { readonly: true });
+    expect(store.get("roster/glm")).toEqual({ tier: "t1", model: "z-ai/glm-5.2:free" });
+    store.close();
+  });
+
+  test("nor does it run the write guard: a write it would refuse is the same 404 as any other", async () => {
+    const { handle } = fixture({ admin: false });
+    const res = await handle(new Request("http://x/api/config/roster/glm", { method: "PUT", body: "x", headers: { "content-type": "text/plain" } }));
+    expect(res.status).toBe(404);
+  });
+
+  test("/api/info says admin only when it is on", async () => {
+    const off = (await (await fixture({ admin: false }).handle(req("/api/info"))).json()) as { admin?: unknown };
+    expect(off.admin).toBeUndefined();
+    const on = (await (await fixture().handle(req("/api/info"))).json()) as { admin?: unknown };
+    expect(on.admin).toBe(true);
+    const pub = (await (await fixture({ publicMode: true }).handle(req("/api/info"))).json()) as { admin?: unknown };
+    expect(pub.admin).toBeUndefined();
   });
 });
 

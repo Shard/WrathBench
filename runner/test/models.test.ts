@@ -600,6 +600,21 @@ describe("paid and free", () => {
     expect(reserved.held).toEqual([{ name: "p1", episode: "e90", why: "pool reserved for waiting manual job(s): q-e90" }]);
   });
 
+  test("the evals group off: no scored pick, and an unlimited model owing evidence gets its freeplay session", () => {
+    const owes = st({ name: "u1", model: "v/u", idle: "unlimited" }, []);
+    const none = st({ name: "n1", model: "v/n" }, []);
+    // On: both owe an e90, and that is what they get.
+    expect(planNextJobs([owes, none], ["R1", "R2"], new Set(), { policy }).jobs.map((j) => [j.name, j.episode])).toEqual([
+      ["u1", "e90"],
+      ["n1", "e90"],
+    ]);
+    // Off: nothing scored, the unlimited one plays freeplay, the other idles.
+    const off = planNextJobs([owes, none], ["R1", "R2"], new Set(), { policy, evals: false });
+    expect(off.jobs.map((j) => [j.name, j.episode, j.account])).toEqual([["u1", "freeplay", "R1"]]);
+    // The counts are untouched: owing is a fact about the runs, not the group.
+    expect(owes.perEpisode.e90!.counted).toBe(0);
+  });
+
   test("idle: unlimited — one freeplay session at a time, on a pool account, never counted", () => {
     const local = { name: "l1", model: "qwen/q", apiBase: "http://10.0.0.5:1234/v1", idle: "unlimited" as const };
     // Targets met on e90 only: unpromoted (no counted run reached L5), so e360 is not open.

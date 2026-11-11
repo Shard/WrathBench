@@ -1,4 +1,4 @@
-{{- if .Values.publisher.enabled }}
+{{- if include "wrathbench.on.publisher" $ }}
 {{/*
 The public dashboard's publisher (infra/publish-dashboard.ts): renders the
 viewer's own API to JSON in-process, applies the public projection, and PUTs
@@ -64,7 +64,7 @@ spec:
           env:
             {{- include "wrathbench.harnessEnv" . | nindent 12 }}
             {{- /* As the viewer: none at all when ClickHouse is off. */}}
-            {{- if .Values.clickhouse.enabled }}
+            {{- if include "wrathbench.on.clickhouse" $ }}
             # The publisher renders the viewer's own handler in-process, and
             # that handler reads its run listings from the derived store — so
             # the publisher needs the same coordinates the viewer does.

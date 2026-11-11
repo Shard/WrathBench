@@ -26,7 +26,7 @@ function fixture(publicMode = false): { handle: ReturnType<typeof createApi>; db
   const store = new ConfigStore(dbPath);
   store.seed({ accounts: { pool: ["RUNNER"] }, roster: { glm: GLM }, queue: [] });
   store.close();
-  return { handle: createApi({ runsDir: join(root, "runs"), tilesDir: join(root, "tiles"), configDbPath: dbPath, ...(publicMode ? { publicMode: true } : {}) }), dbPath };
+  return { handle: createApi({ runsDir: join(root, "runs"), tilesDir: join(root, "tiles"), configDbPath: dbPath, admin: true, ...(publicMode ? { publicMode: true } : {}) }), dbPath };
 }
 
 function stored(dbPath: string): unknown {

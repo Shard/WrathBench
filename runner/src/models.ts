@@ -2304,6 +2304,14 @@ export interface NextJobsOptions {
   probeRuns?: readonly ProbeRun[];
   /** The scheduling policy; only the parts `schedulability` reads. */
   policy?: SchedulingPolicy;
+  /**
+   * Whether the deployment's evals group is on (`runner/viewer/groups.ts`).
+   * Off, the policy picks no scored episode and no campaign work, and a model
+   * that would owe a counted run is treated as owing none, so its idle work
+   * (an `unlimited` freeplay session) is what it gets. It changes what is
+   * launched, never what is counted. Absent is on.
+   */
+  evals?: boolean;
 }
 
 /**
@@ -2326,7 +2334,8 @@ export function planNextJobs(
   opts: NextJobsOptions = {},
 ): { jobs: NextJob[]; held: HeldPick[] } {
   const policy = opts.policy ?? DEFAULT_POLICY;
-  const campaigns = opts.campaigns ?? [];
+  const evals = opts.evals !== false;
+  const campaigns = evals ? (opts.campaigns ?? []) : [];
   const probeRuns = opts.probeRuns ?? [];
   interface Cand {
     s: ModelState;
@@ -2342,7 +2351,9 @@ export function planNextJobs(
   const verdicts = new Map<string, Verdict>();
   const byName = new Map(states.map((s) => [s.name, s]));
   states.forEach((s, order) => {
-    const v = schedulability(s, running, policy);
+    const scored = schedulability(s, running, policy);
+    // With the evals group off, owing a counted run is owing nothing.
+    const v: Verdict = !evals && scored.verdict === "eval" ? { verdict: "free", why: "the evals group is off" } : scored;
     verdicts.set(s.name, v);
     if (wantsIdle(v, s)) {
       // One candidate, not one per tier: `unlimited` is the only idle mode left

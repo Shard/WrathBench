@@ -1625,6 +1625,19 @@ export interface ApiInfoResponse extends SnapshotEnvelope {
    * still work, so it is absent rather than empty on an older process.
    */
   harnessSeries?: { series: string; runs: number }[];
+  /**
+   * Which of the deployment's groups are on (`groups.ts`), present only when
+   * one is off: absent is every group, which is how a body from an older
+   * viewer, and today's deployment, read. The public projection keeps it, so
+   * the public build draws the same pages the deployment has.
+   */
+  groups?: { runner: boolean; evals: boolean; viewer: boolean };
+  /**
+   * True when this handle has the admin switch on: the config API and the
+   * admin pages are mounted. Absent otherwise, and never on a public handle
+   * or in a snapshot.
+   */
+  admin?: true;
   now: number;
 }
 
