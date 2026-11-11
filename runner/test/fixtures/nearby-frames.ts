@@ -8,7 +8,10 @@
  */
 
 import { EventStream, StateCache } from "@wrathbench/sdk";
-import type { NearbySource } from "../../src/sandbox/nearby-recorder";
+import type { NearbyRecorderOptions } from "@wrathbench/mcp/record/recorder";
+
+/** The slice of a client the nearby recorder reads (the stack's `NearbySource`). */
+type NearbySource = Pick<NearbyRecorderOptions, "state" | "events">;
 
 /** Our own character, seeded the way `POST /session` seeds it. */
 export const SELF_GUID = "7";

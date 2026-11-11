@@ -2,13 +2,15 @@
  * The runner's sandbox host: `@wrathbench/mcp`'s `SandboxHost`, running the
  * runner's own child entry (`entry.ts`, the stack's child plus the
  * benchmark's extension, `child-extension.ts`) and draining what that
- * extension latches — the death, flight and party transitions, the turn's
- * event window, the snippet delta, and the trace and nearby recorders.
+ * extension latches: the turn's event window and the snippet delta.
  *
  * Everything about the child's lifecycle, its timeout, its confinement and
- * its environment is the stack's (`wrath-mcp/mcp/src/sandbox/host.ts`); this file adds
- * only the benchmark's drains and names the runner's directory as one the
- * confined child may read, because the extension's code lives here.
+ * its environment is the stack's (`wrath-mcp/mcp/src/sandbox/host.ts`), and
+ * so is the session record, which the stack's host drains from its child on
+ * its own tick. This file names the runner's directory as one the confined
+ * child may read, because the extension's code lives here, and hands the
+ * loop the death, flight and party transitions the stack recorded
+ * (`../session-record.ts`), in the shapes the loop has always drained.
  */
 
 import { join } from "node:path";
@@ -18,10 +20,10 @@ import {
   type SandboxHostOptions,
   type SandboxNoticeKind,
 } from "@wrathbench/mcp";
-import type { NearbyDrain } from "../nearby-row";
-import type { TraceDrain } from "../trace-row";
-import type { PartySignal } from "./party-watch";
-import type { ContextEvents, DeathSignal, FlightSignal } from "./signals";
+import type { CallRecord } from "@wrathbench/mcp";
+import type { DeathSignal, FlightSignal, PartySignal } from "@wrathbench/mcp/record";
+import type { SessionRecord } from "../session-record";
+import type { ContextEvents } from "./signals";
 import type { SnippetDelta } from "./snippet-delta";
 
 export { SANDBOX_FORWARDED_ENV, sandboxChildEnv, STATE_LOSS_RECOVERY } from "@wrathbench/mcp";
@@ -55,9 +57,31 @@ export const RUNNER_SANDBOX_ENTRY = join(import.meta.dir, "entry.ts");
 /** The runner's workspace, which the confined child must read for that entry and its extension. */
 const RUNNER_DIR = join(import.meta.dir, "..", "..");
 
+/** The runner's host options: the stack's, with the run's session record in place of a bare writer. */
+export type RunnerSandboxHostOptions = Omit<SandboxHostOptions, "record"> & {
+  /** The run's session record (`../session-record.ts`). Undefined records nothing. */
+  session?: SessionRecord | undefined;
+  /** The record tick, when not the stack's default. */
+  recordTickMs?: number | undefined;
+};
+
 export class SandboxHost extends StackSandboxHost {
-  constructor(opts: SandboxHostOptions) {
-    super({ ...opts, entryPath: opts.entryPath ?? RUNNER_SANDBOX_ENTRY, readDirs: [RUNNER_DIR, ...(opts.readDirs ?? [])] });
+  private readonly session: SessionRecord | undefined;
+
+  constructor(opts: RunnerSandboxHostOptions) {
+    const { session, recordTickMs, ...stack } = opts;
+    super({
+      ...stack,
+      entryPath: opts.entryPath ?? RUNNER_SANDBOX_ENTRY,
+      readDirs: [RUNNER_DIR, ...(opts.readDirs ?? [])],
+      ...(session !== undefined ? { record: { writer: session.writer, ...(recordTickMs !== undefined ? { tickMs: recordTickMs } : {}) } } : {}),
+    });
+    this.session = session;
+  }
+
+  /** The session record's side of a tool call, for a tool context (`CoreToolContext.record`). */
+  get callRecord(): CallRecord | undefined {
+    return this.session?.writer;
   }
 
   /**
@@ -71,33 +95,36 @@ export class SandboxHost extends StackSandboxHost {
   }
 
   /**
-   * Drain the death-window transitions the child latched since the last call.
-   *
-   * The child sees every event; the host samples on a 60s clock, and a whole
-   * death fits between two samples (`signals.ts`, `DeathSignal`). Draining is
-   * destructive by design: these are the record, so every drained signal must
-   * be written, and one caller (the loop's state sample) owns the drain.
+   * The signals the stack recorded since the last call, after one record
+   * drain so that what the child latched a moment ago is in them. A host with
+   * no session record has none to give and says so by throwing, which the
+   * loop reads as "no drain" and falls back to its sampled reading.
+   */
+  private async recorded(): Promise<NonNullable<SessionRecord["signals"]>> {
+    if (this.session === undefined) throw new Error("this host keeps no session record");
+    await this.recordDrain();
+    return this.session.signals;
+  }
+
+  /**
+   * The death-window transitions recorded since the last call (`DeathSignal`).
+   * The child sees every event and the loop samples on a 60 s clock, and a
+   * whole death fits between two samples, so the transitions are latched in
+   * the child and written by the stack. Destructive: the loop's state sample
+   * owns the drain, and every signal it takes is written as a milestone.
    */
   async deathSignals(): Promise<DeathSignal[]> {
-    return ((await this.rpc("death_signals")) ?? []) as DeathSignal[];
+    return (await this.recorded()).drainDeath();
   }
 
-  /**
-   * Flight transitions the child latched since the last drain (`signals.ts`,
-   * `FlightSignal`): the same shape as `deathSignals`, for the same reason,
-   * and destructive the same way — the loop's state sample owns the drain.
-   */
+  /** Flight transitions recorded since the last call (`FlightSignal`); destructive the same way. */
   async flightSignals(): Promise<FlightSignal[]> {
-    return ((await this.rpc("flight_signals")) ?? []) as FlightSignal[];
+    return (await this.recorded()).drainFlight();
   }
 
-  /**
-   * The party transitions — group, instance, kill — the child latched since
-   * the last drain (`party-watch.ts`). Destructive like `deathSignals`; the
-   * loop's state sample owns the drain.
-   */
+  /** The party transitions (group, instance, kill) recorded since the last call; destructive the same way. */
   async partySignals(): Promise<PartySignal[]> {
-    return ((await this.rpc("party_signals")) ?? []) as PartySignal[];
+    return (await this.recorded()).drainParty();
   }
 
   /**
@@ -111,43 +138,5 @@ export class SandboxHost extends StackSandboxHost {
   async snippetDelta(): Promise<SnippetDelta | null> {
     const drained = await this.drain("snippet_delta");
     return drained === null ? null : ((drained.value ?? null) as SnippetDelta | null);
-  }
-
-  /**
-   * Drain the trace recorder's buffer (`trace-recorder.ts`): the position and
-   * state rows the child latched since the last drain, how many its cap
-   * dropped, and the item and quest ids it named for the first time
-   * (`TraceDict`). Destructive like `deathSignals`, and owned by one caller — the
-   * trace writer the state ticker runs (`trace.ts`).
-   *
-   * Never spawns a child, unlike `stateSnapshot`: with none running there is
-   * nothing to drain, and a paused run must not get a sandbox out of its
-   * ticker. Null says so; an empty drain from a live child is `{ rows: [] }`.
-   */
-  async traceDrain(): Promise<TraceDrain | null> {
-    const drained = await this.drain("trace_drain");
-    if (drained === null) return null;
-    const v = (drained.value ?? {}) as Partial<TraceDrain>;
-    const out: TraceDrain = { rows: Array.isArray(v.rows) ? v.rows : [], dropped: typeof v.dropped === "number" ? v.dropped : 0 };
-    if (v.dict !== null && typeof v.dict === "object") out.dict = v.dict;
-    return out;
-  }
-
-  /**
-   * Drain the nearby recorder's buffer (`nearby-recorder.ts`): the rows about
-   * the units in view since the last drain, how many its cap dropped, and how
-   * far its poll has looked. Owned by one caller, the ring writer the state
-   * ticker runs (`../nearby.ts`), and like `traceDrain` it never spawns a
-   * child: with none running it answers null.
-   */
-  async nearbyDrain(): Promise<NearbyDrain | null> {
-    const drained = await this.drain("nearby_drain");
-    if (drained === null) return null;
-    const v = (drained.value ?? {}) as Partial<NearbyDrain>;
-    return {
-      rows: Array.isArray(v.rows) ? v.rows : [],
-      dropped: typeof v.dropped === "number" ? v.dropped : 0,
-      through: typeof v.through === "number" ? v.through : 0,
-    };
   }
 }

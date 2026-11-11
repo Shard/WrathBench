@@ -1,19 +1,34 @@
 /**
- * The nearby codec (`viewer/nearby.ts`), the ring's reads (`viewer/nearby-ring.ts`),
- * the route, and the public boundary (`projectNearby`).
+ * The nearby codec (`viewer/nearby.ts`), the ring's reads (`viewer/nearby-ring.ts`)
+ * over both homes a ring has had, the route, and the public boundary
+ * (`projectNearby`).
  *
- * Rows are hand-written in the ring's own shape (`runner/src/nearby-row.ts`);
- * positions, names and guids are invented.
+ * Rows are hand-written in the ring's own shape (`@wrathbench/mcp/record`'s
+ * `NearbyRow`; the codec still reads 0.5's, which held players); positions,
+ * names and guids are invented. A v1 run's ring is `session/nearby`, written
+ * here by the stack's `SessionWriter`; a 0.5 run's is one-minute files in
+ * `<run>/nearby/`, written here as 0.5 left them (`fixtures/legacy05-writer.ts`).
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { NEARBY_DIR, NEARBY_FILE_MS, NEARBY_RING_MS, NEARBY_STATE_KEYS as ROW_KEYS, type NearbySelf, type NearbyState } from "../src/nearby-row";
+import {
+  NEARBY_RING_MS,
+  NEARBY_STATE_KEYS as ROW_KEYS,
+  SEGMENT_MS,
+  type NearbyRow,
+  type NearbySelf,
+  type NearbyState,
+  type NearbyUnit,
+  type NearbyUnitType,
+} from "@wrathbench/mcp/record";
+import { SESSION_DIR as RUNNER_SESSION_DIR } from "../src/session-record";
 import type { NearbySelfView, NearbyStateView } from "../viewer/api-types";
 import { createApi } from "../viewer/api";
 import {
   EASE_MS,
   NEARBY_POS_GAP_MS,
+  NEARBY_SPAN_MAX_MS,
   NEARBY_STATE_KEYS,
   decodeNearby,
   encodeNearby,
@@ -22,10 +37,15 @@ import {
   windowRows,
   type NearbyRingRow,
   type NearbyRingUnit,
+  type NearbyUnitTypeName,
   type NearbyWindow,
 } from "../viewer/nearby";
-import { RING_DIR, RING_FILE_MS, RING_REACH_MS, nearbyFresh, readNearbyWindow } from "../viewer/nearby-ring";
+import { nearbyFresh, readNearbyWindow } from "../viewer/nearby-ring";
+import { LEGACY_RING_DIR, LEGACY_RING_FILE_MS, LEGACY_RING_REACH_MS } from "../viewer/legacy05-source";
+import { SESSION_DIR as VIEWER_SESSION_DIR, sessionSource } from "../viewer/session-source";
 import { projectNearby } from "../viewer/public-projection";
+import { LEGACY05_RING, writeLegacy05Ring } from "./fixtures/legacy05-writer";
+import { openTestSession, recordDrain, touchNewestSegment } from "./fixtures/v1-session";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -53,12 +73,25 @@ const unit = (id: string, ty: NearbyRingUnit["ty"], s: NearbyRingUnit["s"], x: n
 const key = (ts: number, units: NearbyRingUnit[], self: NearbySelfView = SELF): NearbyRingRow => ({ ts, kind: "key", self, units });
 
 describe("the two spellings of the contract", () => {
-  test("the codec's state and self are the recorder's, key for key, and the ring's layout is one", () => {
-    expect(pin<Equal<keyof NearbyState, keyof NearbyStateView>>()).toBe(true);
-    expect(pin<Equal<NearbyState, NearbyStateView>>()).toBe(true);
+  test("the codec's state and self are the record's, key for key; what the codec has besides is 0.5's players", () => {
+    // The v1 row contract is the stack's. The codec reads 0.5 rings too, whose
+    // player units carried race, class and gender: those three keys, and the
+    // `player` unit type, are the codec's only additions, and named here.
+    expect(pin<Equal<NearbyState, Omit<NearbyStateView, "race" | "cls" | "gender">>>()).toBe(true);
+    expect(pin<Partial<NearbyState> extends Partial<NearbyStateView> ? true : false>()).toBe(true);
     expect(pin<Equal<NearbySelf, NearbySelfView>>()).toBe(true);
-    expect([...NEARBY_STATE_KEYS]).toEqual([...ROW_KEYS]);
-    expect([RING_DIR, RING_FILE_MS, RING_REACH_MS]).toEqual([NEARBY_DIR, NEARBY_FILE_MS, NEARBY_RING_MS]);
+    expect(pin<Equal<NearbyUnitTypeName, NearbyUnitType | "player">>()).toBe(true);
+    expect([...NEARBY_STATE_KEYS]).toEqual([...ROW_KEYS, "race", "cls", "gender"]);
+  });
+
+  test("the ring's layout: v1's is the session record's, 0.5's is what 0.5 wrote", () => {
+    // v1: the viewer names the session directory as the runner makes it, and
+    // never serves a span longer than the ring keeps.
+    expect(VIEWER_SESSION_DIR).toBe(RUNNER_SESSION_DIR);
+    expect(NEARBY_SPAN_MAX_MS).toBe(NEARBY_RING_MS);
+    expect(SEGMENT_MS).toBe(300_000);
+    // 0.5: one-minute files under `nearby/`, fifteen minutes of reach.
+    expect([LEGACY_RING_DIR, LEGACY_RING_FILE_MS, LEGACY_RING_REACH_MS]).toEqual([LEGACY05_RING.dir, LEGACY05_RING.fileMs, LEGACY05_RING.reachMs]);
   });
 });
 
@@ -212,10 +245,10 @@ describe("the window round-trips", () => {
   });
 });
 
-describe("the ring's reads", () => {
+describe("the ring's reads, a 0.5 run (one-minute files)", () => {
   function ringWith(files: Record<number, string>, opts: { mtime?: number } = {}) {
     const runs = tempDir("nearby-ring-");
-    const dir = join(runs, "run-a", "nearby");
+    const dir = join(runs, "run-a", LEGACY05_RING.dir);
     mkdirSync(dir, { recursive: true });
     for (const [t0, text] of Object.entries(files)) {
       const p = join(dir, `${t0}.jsonl`);
@@ -237,12 +270,28 @@ describe("the ring's reads", () => {
         line({ ts: T0 + 2000, kind: "st", id: WOLF, s: { hp: 10 } }) +
         `{"ts":${T0 + 3000},"kind":"st","id":"${WOLF}","s":{"hp":`,
     });
+    expect(sessionSource(runs, "run-a").kind).toBe("legacy-0.5");
     const w = readNearbyWindow(runs, "run-a", 60_000, now);
     expect(w.t0).toBe(T0);
     expect(w.ids).toEqual([WOLF]);
     expect(w.ev).toEqual([[2000, 0, "st", { hp: 10 }]]);
     expect(w.t1).toBe(T0 + 2000);
     expect(JSON.stringify(w)).not.toContain("Stale");
+  });
+
+  test("a window reaches back across the minute files it spans, and a 0.5 ring's players still decode", () => {
+    const now = T0 + 2 * 60_000 + 30_000;
+    const runs = tempDir("nearby-ring-files-");
+    writeLegacy05Ring(join(runs, "run-a"), [
+      key(T0, [unit(WOLF, "creature", { entry: 299 }, 0), unit(PLAYER, "player", { name: "Wanderer" }, 3)]),
+      { ts: T0 + 70_000, kind: "st", id: WOLF, s: { hp: 50 } },
+      { ts: T0 + 130_000, kind: "out", id: PLAYER },
+      { ts: T0 + 140_000, kind: "tick" },
+    ]);
+    const d = decodeNearby(readNearbyWindow(runs, "run-a", 5 * 60_000, now));
+    expect(nearbyAt(d, T0 + 60_000).map((u) => u.s.name ?? u.id).sort()).toEqual([WOLF, "Wanderer"].sort());
+    expect(nearbyAt(d, T0 + 80_000).find((u) => u.id === WOLF)!.s.hp).toBe(50);
+    expect(nearbyAt(d, T0 + 135_000).map((u) => u.id)).toEqual([WOLF]);
   });
 
   test("the span is clamped to the reach; a run with no ring answers an empty window", () => {
@@ -258,6 +307,103 @@ describe("the ring's reads", () => {
     expect(nearbyFresh(ringWith({ [t0]: line(key(t0, [])) }), "run-a", now)).toBe(true);
     expect(nearbyFresh(ringWith({ [t0]: line(key(t0, [])) }, { mtime: now - 60_000 }), "run-a", now)).toBe(false);
     expect(nearbyFresh(tempDir("nearby-none-"), "run-a", now)).toBe(false);
+  });
+});
+
+describe("the ring's reads, a v1 run (session/nearby)", () => {
+  const self: NearbySelf = { guid: "7", map: 0, target: null, down: false };
+  const creature = (id: string, s: Partial<NearbyState>, x: number, t = T0 - 1000): NearbyUnit => ({ id, ty: "creature", s, m: { k: "pos", t, p: [x, 0, 0, 0] } });
+  /** A player unit as the recorder would hand it, which the record never writes. */
+  const player = (id: string, x: number, t = T0 - 1000): NearbyUnit => ({ id, ty: "player" as NearbyUnitType, s: { name: "Wanderer" } as Partial<NearbyState>, m: { k: "pos", t, p: [x, 0, 0, 0] } });
+
+  /** A run whose session writer was handed `rows` at `now`, on its own clock. */
+  function ringOf(rows: NearbyRow[], now: number, through = 0) {
+    const runs = tempDir("nearby-v1-");
+    const session = openTestSession(join(runs, "run-a"), now);
+    session.writer.ingest(recordDrain({ nearby: rows, through }));
+    return { runs, session };
+  }
+
+  test("a window reads off the session's segments; a player in view is not in the ring, a creature is", () => {
+    const now = T0 + 30_000;
+    const { runs } = ringOf(
+      [
+        { ts: T0, kind: "key", self: { ...self, target: PLAYER }, units: [creature(WOLF, { entry: 299, name: "Invented Wolf" }, 0), player(PLAYER, 3)] },
+        { ts: T0 + 1000, kind: "in", u: player("89", 4, T0 + 900) },
+        { ts: T0 + 1500, kind: "pos", id: PLAYER, m: { k: "pos", t: T0 + 1400, p: [5, 0, 0, 0] } },
+        { ts: T0 + 2000, kind: "st", id: WOLF, s: { hp: 10, tg: PLAYER } },
+      ],
+      now,
+      T0 + 3000,
+    );
+    expect(sessionSource(runs, "run-a").kind).toBe("v1");
+    const w = readNearbyWindow(runs, "run-a", 60_000, now);
+    expect(w.ids).toEqual([WOLF]);
+    const d = decodeNearby(w);
+    expect(nearbyAt(d, T0 + 2500).map((u) => u.id)).toEqual([WOLF]);
+    expect(nearbyAt(d, T0 + 2500)[0]!.s).toMatchObject({ name: "Invented Wolf", hp: 10, tg: "player" });
+    // The player's target and the player itself are their kind at most, never a guid or a name.
+    expect(nearbySelfAt(d, T0 + 500).target).toBe("player");
+    const text = JSON.stringify(w);
+    expect(text).not.toContain("Wanderer");
+    expect(text).not.toContain(`"${PLAYER}"`);
+    expect(text).not.toContain('"89"');
+  });
+
+  test("each five-minute segment opens with a key restating the scene, so a window late in one needs nothing before it", () => {
+    const now = T0 + SEGMENT_MS + 50_000;
+    const { runs, session } = ringOf(
+      [
+        { ts: T0, kind: "key", self, units: [creature(WOLF, { entry: 299 }, 0)] },
+        { ts: T0 + 10_000, kind: "st", id: WOLF, s: { hp: 40 } },
+      ],
+      T0 + 20_000,
+      T0 + 20_000,
+    );
+    session.clock.now = now;
+    // T0 is four minutes into its window, so this lands in the next one.
+    session.writer.ingest(recordDrain({ nearby: [{ ts: T0 + SEGMENT_MS + 30_000, kind: "in", u: creature(VENDOR, { entry: 1250 }, 5, T0 + SEGMENT_MS + 29_000) }], through: T0 + SEGMENT_MS + 40_000 }));
+    const segs = session.reader.segments("nearby");
+    expect(segs.length).toBe(2);
+    const second = session.reader.segment("nearby", segs[1]!);
+    expect(second[0]).toMatchObject({ kind: "key", units: [{ id: WOLF, s: { entry: 299, hp: 40 } }] });
+    // Asked from inside the second segment: the wolf's state comes from its key.
+    const w = readNearbyWindow(runs, "run-a", 20_000, now);
+    const d = decodeNearby(w);
+    expect(nearbyAt(d, T0 + SEGMENT_MS + 35_000).map((u) => u.id).sort()).toEqual([WOLF, VENDOR].sort());
+    expect(nearbyAt(d, T0 + SEGMENT_MS + 35_000).find((u) => u.id === WOLF)!.s.hp).toBe(40);
+  });
+
+  test("a torn last line and a foreign one are left out", () => {
+    const now = T0 + 30_000;
+    const { runs, session } = ringOf([{ ts: T0, kind: "key", self, units: [creature(WOLF, { entry: 299 }, 0)] }, { ts: T0 + 2000, kind: "st", id: WOLF, s: { hp: 10 } }], now);
+    const live = session.reader.segments("nearby").at(-1)!.path;
+    appendFileSync(live, `not json\n${JSON.stringify({ ts: T0 + 2500, kind: "weird" })}\n{"ts":${T0 + 3000},"kind":"st","id":"${WOLF}","s":{"hp":`);
+    const w = readNearbyWindow(runs, "run-a", 60_000, now);
+    expect(w.ids).toEqual([WOLF]);
+    expect(w.ev).toEqual([[2000, 0, "st", { hp: 10 }]]);
+  });
+
+  test("the span is clamped to the reach; a session with no ring answers an empty window", () => {
+    const now = T0 + 30_000;
+    const { runs } = ringOf([{ ts: T0, kind: "key", self, units: [] }], now);
+    expect(readNearbyWindow(runs, "run-a", 99 * 60 * 60_000, now).t0).toBe(T0);
+    const bare = tempDir("nearby-v1-bare-");
+    openTestSession(join(bare, "run-b"), now);
+    expect(sessionSource(bare, "run-b").kind).toBe("v1");
+    expect(readNearbyWindow(bare, "run-b", 60_000, now)).toMatchObject({ t0: now - 60_000, ids: [], ev: [] });
+  });
+
+  test("fresh means the newest segment was written within the last half minute; a closed session has no ring", async () => {
+    const now = Date.now();
+    const a = ringOf([{ ts: now - 2_000, kind: "key", self, units: [] }], now);
+    expect(nearbyFresh(a.runs, "run-a", now)).toBe(true);
+    touchNewestSegment(a.session.reader, "nearby", now - 60_000);
+    expect(nearbyFresh(a.runs, "run-a", now)).toBe(false);
+    const b = ringOf([{ ts: now - 2_000, kind: "key", self, units: [] }], now);
+    await b.session.writer.close();
+    expect(nearbyFresh(b.runs, "run-a", now)).toBe(false);
+    expect(readNearbyWindow(b.runs, "run-a", 60_000, now).ids).toEqual([]);
   });
 });
 
@@ -350,6 +496,24 @@ describe("the route", () => {
         .map((r) => `${JSON.stringify(r)}\n`)
         .join(""),
     );
+    // A v1 run beside it: the same scene through the stack's writer, which never writes the player.
+    const v1 = openTestSession(join(runs, "live-v1"), now);
+    v1.writer.ingest(
+      recordDrain({
+        nearby: [
+          {
+            ts,
+            kind: "key",
+            self: { guid: "7", map: 0, target: null, down: false },
+            units: [
+              { id: WOLF, ty: "creature", s: { entry: 299, name: "Invented Wolf" }, m: { k: "pos", t: ts, p: [0, 0, 0, 0] } },
+              { id: PLAYER, ty: "player" as NearbyUnitType, s: {}, m: { k: "pos", t: ts, p: [3, 0, 0, 0] } },
+            ],
+          },
+        ],
+        through: ts + 1000,
+      }),
+    );
     return runs;
   }
   const handle = (runs: string, publicMode: boolean) => createApi({ runsDir: runs, tilesDir: join(runs, "tiles"), publicMode, moduleUrl: "http://127.0.0.1:1" });
@@ -364,6 +528,18 @@ describe("the route", () => {
     expect(nearbyAt(decodeNearby(w), w.t0).map((u) => u.s.name).sort()).toEqual(["Invented Wolf", "Wanderer"]);
     const pub = (await (await get(handle(runs, true), "/api/run/live-run/nearby")).json()) as NearbyWindow;
     expect(nearbyAt(decodeNearby(pub), pub.t0).map((u) => u.s.name)).toEqual(["Invented Wolf"]);
+  });
+
+  test("a v1 run's window is its session ring: the creature privately and publicly, the player in neither", async () => {
+    const runs = runsWithRing();
+    for (const publicMode of [false, true]) {
+      const res = await get(handle(runs, publicMode), "/api/run/live-v1/nearby?span=60000");
+      expect(res.status).toBe(200);
+      const w = (await res.json()) as NearbyWindow;
+      expect(nearbyAt(decodeNearby(w), w.t1).map((u) => u.s.name)).toEqual(["Invented Wolf"]);
+      expect(JSON.stringify(w)).not.toContain(`"${PLAYER}"`);
+    }
+    expect(nearbyFresh(runs, "live-v1", Date.now())).toBe(true);
   });
 
   test("a run with no ring is an empty window, a run that does not exist a 404, a junk span the default", async () => {

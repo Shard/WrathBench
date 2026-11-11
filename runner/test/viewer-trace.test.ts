@@ -1,8 +1,10 @@
 /**
- * The trace's private surface: `trace-db.ts` over a `run.sqlite` built in the
- * recorder's own schema, and the routes and feed fields the viewer serves from
- * it — `/api/run/<id>/trace`, `/api/run/<id>/trace/<t0>`, the track's window
- * list and the position feed's tail.
+ * The trace's private surface: `trace-db.ts` over a 0.5 run's `run.sqlite`
+ * built in the 0.5 recorder's own schema and over a v1 run's session record
+ * (`session/trace`, written by the stack's `SessionWriter`), and the routes and
+ * feed fields the viewer serves from it — `/api/run/<id>/trace`,
+ * `/api/run/<id>/trace/<t0>`, the track's window list and moves, and the
+ * position feed's tail.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -12,7 +14,10 @@ import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import type { PositionsResponse, TraceIndexResponse, TraceSegment, TrackResponse } from "../viewer/api-types";
 import { CONTEXT_MS, SEG_MS, SETTLE_MS, decodeSegment, unpackSegs, windowOf } from "../viewer/trace";
-import { readPositionTrace, readTraceIndex, readTraceSegment, traceSegsMemo } from "../viewer/trace-db";
+import { readPositionTrace, readTraceChat, readTraceIndex, readTraceSegment, traceSegsMemo } from "../viewer/trace-db";
+import { sessionSource } from "../viewer/session-source";
+import { emptyTraceState, type TraceRow as RecordRow } from "@wrathbench/mcp/record";
+import { openTestSession, recordDrain, recordedMove, type TestSession } from "./fixtures/v1-session";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -178,6 +183,129 @@ describe("trace-db: windows", () => {
     appendRows(db, "r4", walk(W + SEG_MS, W + 2 * SEG_MS));
     db.close();
     expect(segs(rdir, "r4", now + 10 * SEG_MS)).toEqual({ segMs: SEG_MS, segs: [[W, 2]] });
+  });
+});
+
+/*
+ * The same windows over a v1 run: the rows handed to the stack's session
+ * writer, which keys each five-minute segment itself from its fold, and read
+ * back through `V1Source` (`traceWindowsBefore`, `withTrace`, `traceStat`,
+ * `traceChat`), which answers by segment file rather than by SQL.
+ */
+describe("trace-db: windows, a v1 run (session/trace)", () => {
+  /** `walk`'s rows as the recorder hands them: a key at the start, then samples; the writer keys each segment. */
+  function v1Rows(rows: Row[]): RecordRow[] {
+    const out: RecordRow[] = [];
+    for (const [ts, kind, p, data] of rows) {
+      if (kind === "key" && out.length > 0) continue;
+      const pos = p === null ? {} : { map: p[0], x: p[1], y: p[2], z: p[3], o: p[4] };
+      if (kind === "key") out.push({ ts, kind: "key", map: p?.[0] ?? null, x: p?.[1] ?? null, y: p?.[2] ?? null, z: p?.[3] ?? null, o: p?.[4] ?? null, data: { ...emptyTraceState(), ...(data as object) } as RecordRow["data"] });
+      else out.push({ ts, kind: kind as RecordRow["kind"], ...pos, ...(data === null ? {} : { data: data as RecordRow["data"] }) });
+    }
+    return out;
+  }
+  function writeV1Run(runs: string, runId: string, rows: Row[]): TestSession {
+    const dir = writeRun(runs, runId, null);
+    const last = rows.at(-1)?.[0] ?? W;
+    const session = openTestSession(dir, last);
+    session.writer.ingest(recordDrain({ trace: v1Rows(rows) }));
+    expect(sessionSource(runs, runId).kind).toBe("v1");
+    return session;
+  }
+
+  const runs = tempDir("trace-v1-windows-");
+  // Windows 0 and 1 walked, 2 empty, 3 and 4 walked, as above.
+  writeV1Run(runs, "r1", [...walk(W, W + 2 * SEG_MS), ...walk(W + 3 * SEG_MS, W + 5 * SEG_MS)]);
+
+  test("the index lists the closed windows that have rows, packed, and the tail after them", () => {
+    const now = W + 5 * SEG_MS + 30_000;
+    const idx = readTraceIndex(runs, "r1", now);
+    expect(idx.segs).toEqual([
+      [W, 2],
+      [W + 3 * SEG_MS, 1],
+    ]);
+    expect(idx.tail).toMatchObject({ t0: W + 4 * SEG_MS, t1: W + 6 * SEG_MS });
+    expect(decodeSegment(idx.tail!).frames.length).toBeGreaterThan(250);
+    const later = readTraceIndex(runs, "r1", W + 5 * SEG_MS + SETTLE_MS);
+    expect(unpackSegs(later.segs)).toEqual([W, W + SEG_MS, W + 3 * SEG_MS, W + 4 * SEG_MS]);
+    expect(later.tail).toBeNull();
+  });
+
+  test("a window is a segment once, closed or not, and an empty window is none; a segment's keyframe is the writer's key", () => {
+    const now = W + 5 * SEG_MS + 30_000;
+    expect(readTraceSegment(runs, "r1", W + SEG_MS, now)).toMatchObject({ closed: true, segment: { t0: W + SEG_MS, t1: W + 2 * SEG_MS } });
+    expect(readTraceSegment(runs, "r1", W + 4 * SEG_MS, now)?.closed).toBe(false);
+    expect(readTraceSegment(runs, "r1", W + 2 * SEG_MS, now)).toBeNull();
+    expect(readTraceSegment(runs, "r1", W + 9 * SEG_MS, now)).toBeNull();
+    // Window 3 follows a gap: its keyframe is the key the writer opened it with, from its fold.
+    const seg = readTraceSegment(runs, "r1", W + 3 * SEG_MS, now)!.segment;
+    expect(seg.k.s).toMatchObject({ hp: 100, level: 3 });
+    // And it decodes alone, from its own file.
+    expect(decodeSegment(JSON.parse(JSON.stringify(seg))).frames.length).toBeGreaterThan(250);
+  });
+
+  test("the position feed's tail is the index's tail, and recent names the closed windows before it", () => {
+    const now = W + 5 * SEG_MS + 30_000;
+    const live = readPositionTrace(runs, "r1", now)!;
+    expect(JSON.stringify(live.tail)).toBe(JSON.stringify(readTraceIndex(runs, "r1", now).tail));
+    expect(live.recent).toEqual([W + SEG_MS, W + 3 * SEG_MS]);
+  });
+
+  test("the window list reaches across a long gap", () => {
+    const rdir = tempDir("trace-v1-gap-");
+    const far = W - 200 * SEG_MS;
+    writeV1Run(rdir, "r3", [[far + 10, "key", null, {}], [far + SEG_MS + 5, "state", null, { hp: 1 }], [W + 7, "state", null, { hp: 2 }]]);
+    expect(readTraceIndex(rdir, "r3", W + 2 * SEG_MS).segs).toEqual([
+      [far, 2],
+      [W, 1],
+    ]);
+  });
+
+  test("the track's window list follows the record: a write moves it, and a finished run's stays put", () => {
+    const rdir = tempDir("trace-v1-memo-");
+    const session = writeV1Run(rdir, "r4", walk(W, W + SEG_MS));
+    const segs = traceSegsMemo();
+    const now = W + 2 * SEG_MS;
+    expect(segs(rdir, "r4", now)).toEqual({ segMs: SEG_MS, segs: [[W, 1]] });
+    expect(segs(rdir, "r4", now + 10 * SEG_MS)).toEqual({ segMs: SEG_MS, segs: [[W, 1]] });
+    session.clock.now = W + 2 * SEG_MS;
+    session.writer.ingest(recordDrain({ trace: v1Rows(walk(W + SEG_MS, W + 2 * SEG_MS)).filter((r) => r.kind !== "key") }));
+    expect(segs(rdir, "r4", now + 10 * SEG_MS)).toEqual({ segMs: SEG_MS, segs: [[W, 2]] });
+  });
+
+  test("the character's own lines are read back by kind, oldest first, across segments", () => {
+    const rdir = tempDir("trace-v1-chat-");
+    writeV1Run(rdir, "r5", [
+      [W + 10, "key", [0, 0, 0, 0, 0], { level: 3 }],
+      [W + 1_000, "state", null, { chat: [["say", "first words"]] }],
+      [W + SEG_MS + 1_000, "state", null, { chat: [["party", "to the group"], ["say", "second words"]] }],
+    ]);
+    expect(readTraceChat(rdir, "r5", "say")).toEqual([
+      { ts: W + 1_000, text: "first words" },
+      { ts: W + SEG_MS + 1_000, text: "second words" },
+    ]);
+    expect(readTraceChat(rdir, "r5", "party")).toEqual([{ ts: W + SEG_MS + 1_000, text: "to the group" }]);
+    expect(readTraceChat(rdir, "r5", "yell")).toEqual([]);
+  });
+
+  test("the track route carries the windows and the session's movement intentions", async () => {
+    const rdir = tempDir("trace-v1-track-");
+    const session = writeV1Run(rdir, "r6", walk(W, W + SEG_MS));
+    session.writer.ingest(
+      recordDrain({
+        moves: [
+          recordedMove({ ts: W + 5_000, moveId: 1, map: 0, x: 70, y: 0, z: 0 }),
+          recordedMove({ ts: W + 9_000, at: W + 5_000, moveId: 1, map: 0, x: 70, y: 0, z: 0, status: "arrived" }),
+        ],
+      }),
+    );
+    const handle = createApi({ runsDir: rdir, tilesDir: join(rdir, "tiles"), moduleUrl: "http://127.0.0.1:1" });
+    const track = (await (await handle(new Request("http://viewer.local/api/run/r6/track"))).json()) as TrackResponse;
+    expect(unpackSegs(track.trace!.segs)).toEqual([W]);
+    expect(track.moves?.map((m) => [m.ts, m.status])).toEqual([
+      [W + 5_000, null],
+      [W + 9_000, "arrived"],
+    ]);
   });
 });
 

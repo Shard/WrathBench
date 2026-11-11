@@ -735,6 +735,8 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   // ---- MCP over loopback TCP, dispatching into the one live sandbox
   const toolCtx: ToolContext = {
     sandbox: o.sandbox,
+    // The session record's side of every tool call; absent on a sandbox that keeps none.
+    ...(o.sandbox.callRecord !== undefined ? { record: o.sandbox.callRecord } : {}),
     scratchpad: o.scratchpad,
     wiki: o.wiki,
     wikiCoords: config.wikiCoords,

@@ -18,6 +18,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Trajectory } from "../src/trajectory";
+import { writeLegacy05Moves } from "./fixtures/legacy05-writer";
+import { openTestSession, recordDrain, recordedMove } from "./fixtures/v1-session";
 import { readRun, readStateItems, readStates, readMoves } from "../viewer/runs";
 import {
   clickhouseConfigFromEnv,
@@ -45,7 +47,7 @@ afterAll(() => {
 const NOW = 2_000_000;
 
 /** One run, written the way the runner writes one. */
-function writeRun(runsDir: string, runId: string, over: Record<string, unknown> = {}): string {
+function writeRun(runsDir: string, runId: string, over: Record<string, unknown> = {}, o: { v1?: boolean } = {}): string {
   const dir = join(runsDir, runId);
   let clock = 1_000_000;
   const traj = new Trajectory(dir, { now: () => clock++ });
@@ -90,15 +92,21 @@ function writeRun(runsDir: string, runId: string, over: Record<string, unknown> 
     questsCompleted: 3,
     turn: 2,
     items: [
-      { name: "Tough Jerky", count: 4, equipped: false, itemId: 117, quality: 1, slot: 23, bag: 255 },
+      { name: "Invented Jerky", count: 4, equipped: false, itemId: 90117, quality: 1, slot: 23, bag: 255 },
       // A row of the old three-field shape, beside the new one.
-      { name: "Worn Mace", count: 1, equipped: true },
+      { name: "Invented Mace", count: 1, equipped: true },
     ],
   });
-  traj.recordMove(runId, { map: 0, x: 7, y: 8, z: 9, moveId: 1 });
-  traj.recordMove(runId, { map: 0, x: 7, y: 8, z: 9, moveId: 1, status: "arrived" });
+  // The moves as a 0.5 run holds them, the run.sqlite table the collector copies
+  // beside the trajectory's lines; a v1 run's are in its session record (below).
+  const moves = [
+    { ts: clock++, moveId: 1, map: 0, x: 7, y: 8, z: 9 },
+    { ts: clock++, moveId: 1, map: 0, x: 7, y: 8, z: 9, status: "arrived" },
+  ];
+  for (const m of moves) traj.recordMove(m);
   traj.setTermination(runId, "episode-elapsed" as never, "done");
   traj.close();
+  if (o.v1 !== true) writeLegacy05Moves(dir, runId, moves);
   return dir;
 }
 
@@ -130,8 +138,8 @@ describe("a run row off the store is the run row off the files", () => {
     // no migration; what they did need is for the shape check not to drop them.
     const row = runRowOf((await store.runRows())[0]!, (await store.latestStates()).get("run-1"), NOW);
     expect(row.items).toEqual([
-      { name: "Tough Jerky", count: 4, equipped: false, itemId: 117, quality: 1, slot: 23, bag: 255 },
-      { name: "Worn Mace", count: 1, equipped: true },
+      { name: "Invented Jerky", count: 4, equipped: false, itemId: 90117, quality: 1, slot: 23, bag: 255 },
+      { name: "Invented Mace", count: 1, equipped: true },
     ]);
     expect(Object.keys(row.items![1]!)).toEqual(["name", "count", "equipped"]);
   });
@@ -163,7 +171,23 @@ describe("a run row off the store is the run row off the files", () => {
 
   test("the movement intentions are the movement intentions", async () => {
     const fromStore = moveViewsOf(await store.moveRows("run-1"));
+    expect(fromStore).toHaveLength(2);
     expect(JSON.stringify(fromStore)).toBe(JSON.stringify(readMoves(runsDir, "run-1")));
+  });
+
+  test("a v1 run's intentions are its session record's; the store's copy, when it has one, is the same", async () => {
+    const dir = tmpRoot();
+    // No 0.5 move table: the moves are in session/calls, the trajectory's lines their mirror.
+    const runDir = writeRun(dir, "run-v1", {}, { v1: true });
+    const { writer } = openTestSession(runDir, 1_000_500);
+    writer.ingest(recordDrain({ moves: [recordedMove({ ts: 1_000_400, moveId: 1, map: 0, x: 7, y: 8, z: 9 }), recordedMove({ ts: 1_000_450, at: 1_000_400, moveId: 1, map: 0, x: 7, y: 8, z: 9, status: "arrived" })] }));
+    await writer.close();
+    const files = readMoves(dir, "run-v1");
+    expect(files.map((m) => [m.ts, m.status])).toEqual([[1_000_400, null], [1_000_450, "arrived"]]);
+    // The track route takes the store's rows when it has any and the files'
+    // otherwise (`trackCoreOf`), so either answer must be this one.
+    const fromStore = moveViewsOf(await localRunStore(dir).moveRows("run-v1"));
+    if (fromStore.length > 0) expect(JSON.stringify(fromStore)).toBe(JSON.stringify(files));
   });
 
   test("the totals and the fact come back whole", async () => {

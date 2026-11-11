@@ -51,7 +51,7 @@ import { openRunDb } from "./rundb";
 import { archiveIfNoResponses } from "./archive";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { characterOwners, clearAccountCharacters } from "./hygiene";
-import { leaseRunSecret, releaseSessionSecret } from "@wrathbench/mcp/module-auth";
+import { leaseRunSecret, moduleAuthHeaders, moduleIdentity, releaseSessionSecret } from "@wrathbench/mcp/module-auth";
 import { comparabilityOf, fetchServerBuild, harnessSeries, sameComparability } from "./comparability";
 import { CampaignLaunchError, RUN_IMAGE_ENV, campaignLaunch } from "./campaign-launch";
 import { holdsOnlyLaunchFiles, readCampaignFile } from "./campaign-file";
@@ -87,7 +87,7 @@ import { Scratchpad } from "@wrathbench/mcp/scratchpad";
 import { goKeyEnvOf, liveOwnerOf, RESUME_REFUSED_EXIT, subscriptionLaneOfConfig } from "./models";
 import { GoUsageGauge, goUsageUrl } from "./opencode-go";
 import { Trajectory, readMeta, startHeartbeat, type PauseMark, type RunMeta } from "./trajectory";
-import { removeNearbyRing } from "./nearby";
+import { moveLineOf, openSessionRecord, removeSessionRing } from "./session-record";
 import { harnessVersion, stackCommit } from "./version";
 import { SDK_VERSION } from "@wrathbench/sdk";
 import { Watchdogs } from "./watchdogs";
@@ -650,10 +650,6 @@ async function main(): Promise<void> {
     trajectory.append({ t: "harness", kind: "rundb_journal", mode: trajectory.journal.mode, detail: trajectory.journal.error ?? "" });
   }
   process.on("exit", stopHeartbeat);
-  // The live map's ring is live only (`nearby.ts`): the ticker's stop removes
-  // it on every exit a driver makes, and this catches the ones it does not —
-  // a backstop `process.exit`, a launch that never reached a driver.
-  process.on("exit", () => removeNearbyRing(runDir));
   const scratchpad = new Scratchpad(join(runDir, "scratchpad.md"));
   // The episodic log lives beside the scratchpad and survives a pause the same
   // way: it is append-only, so a resumed run reads its own past back.
@@ -814,6 +810,20 @@ async function main(): Promise<void> {
   const lease = await leaseRunSecret({ moduleUrl: config.moduleUrl, token: config.token, account: config.account }, trajectory);
   if (lease.secret === undefined) console.error(`[wrathbench] ${lease.note}`);
 
+  /*
+   * The session record (`session-record.ts`): the stack writes what the
+   * character did into `session/` in the run directory, as it happens, and
+   * the run mirrors each movement intention into the trajectory while the
+   * feed still reads it there. Opened after the lease, so the leased secret
+   * is already on the scrub every line passes. The ring of nearby units is
+   * live only: the writer removes it when the session closes, and the exit
+   * hook catches the exits that never get that far.
+   */
+  const session = openSessionRecord({ runDir, runsDir: config.runsDir, token: config.token, scrub: (text) => trajectory.scrub(text) });
+  session.signals.onMove = (m) => trajectory.recordMove(moveLineOf(m));
+  process.on("exit", () => removeSessionRing(runDir));
+  void moduleIdentity(config.moduleUrl, moduleAuthHeaders()).then((m) => session.writer.setModule(m));
+
   const sandbox = new SandboxHost({
     moduleUrl: config.moduleUrl,
     token: config.token,
@@ -825,7 +835,13 @@ async function main(): Promise<void> {
     onNotice: (n) => trajectory.append({ t: "harness", ...n }),
     onActions: (flush) => trajectory.recordActions(flush),
     clientCache,
+    session,
   });
+  /** Stop the sandbox, then close the record it was draining into: bounded, and never the reason an exit fails. */
+  const stopSandbox = async (): Promise<void> => {
+    await sandbox.stop();
+    await Promise.race([session.writer.close(), new Promise((r) => setTimeout(r, 10_000))]).catch(() => undefined);
+  };
   /*
    * The episode clock continues from where the last segment left it: a
    * paused run's meta.json carries the wall clock it had spent, so a 90-minute
@@ -1239,7 +1255,7 @@ async function main(): Promise<void> {
         /* best effort, as below */
       }
     }
-    await sandbox.stop().catch(() => undefined);
+    await stopSandbox().catch(() => undefined);
     if (paused === null) await releaseSessionSecret({ moduleUrl: config.moduleUrl, token: config.token }).catch(() => undefined);
     await trajectory.finish();
     wiki?.close();
@@ -1285,7 +1301,7 @@ async function main(): Promise<void> {
       // module's own logout path.
     }
   }
-  await sandbox.stop();
+  await stopSandbox();
   if (outcome.kind === "paused") {
     const reset = outcome.notBefore !== undefined ? ` (provider reset at ${new Date(outcome.notBefore).toISOString()})` : "";
     console.error(`[wrathbench] paused: ${outcome.reason}${reset} — resume with --resume ${config.runId}`);

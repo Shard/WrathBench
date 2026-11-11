@@ -213,10 +213,11 @@ describe("no secret is within a snippet's reach", () => {
     // running child's environment (#74; operator, 2026-10-19).
     expect(names).not.toContain("WRATHBENCH_SECRET");
     expect(names).not.toContain("WRATHBENCH_ACCOUNT");
-    // What it does get: the plumbing and the two values the host passes that
-    // are not credentials (module URL and the session token).
+    // What it does get: the plumbing and the three values the host passes that
+    // are not credentials (module URL, the session token, and whether the
+    // child runs the session recorder, `"1"` or empty).
     for (const name of names) {
-      expect(["PATH", "HOME", "TMPDIR", "WRATHBENCH_MODULE_URL", "WRATHBENCH_TOKEN", "NODE_CHANNEL_FD", "NODE_CHANNEL_SERIALIZATION_MODE"]).toContain(name);
+      expect(["PATH", "HOME", "TMPDIR", "WRATHBENCH_MODULE_URL", "WRATHBENCH_TOKEN", "WRATHBENCH_RECORD", "NODE_CHANNEL_FD", "NODE_CHANNEL_SERIALIZATION_MODE"]).toContain(name);
     }
   });
 });

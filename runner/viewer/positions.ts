@@ -31,6 +31,7 @@ import { listRuns } from "./runs";
 import { questsAcrossRestarts } from "./results";
 import { readPositionTrace } from "./trace-db";
 import { nearbyFresh } from "./nearby-ring";
+import { sessionSource } from "./session-source";
 
 /**
  * How stale a position may be and still count as an agent on the map. Longer
@@ -252,41 +253,9 @@ function reflectingIn(db: Database, runId: string): boolean {
   return typeof r?.since === "number";
 }
 
-/**
- * The newest movement intention a run recorded, or null.
- *
- * The row `readMoves` would list last — the newest by `ts` with a whole
- * position, the later-written on a tie — asked for as one row. Reading the
- * table to keep its last row was ~32k rows a poll on a long run, for every
- * agent on the map. A run whose table does not exist reads null, as an empty
- * one does.
- */
+/** The newest movement intention a run recorded, or null, from its session source (`session-source.ts`). */
 export function readLatestMove(runsDir: string, runId: string): MoveIntentView | null {
-  return withRunDb(runsDir, runId, null, (db) => latestMoveIn(db, runId));
-}
-
-function latestMoveIn(db: Database, runId: string): MoveIntentView | null {
-  const r = db
-    .query(
-      `SELECT ts, map, x, y, z, target, status FROM move
-        WHERE run_id = ? AND x IS NOT NULL AND y IS NOT NULL AND z IS NOT NULL
-        ORDER BY ts DESC, rowid DESC LIMIT 1`,
-    )
-    .get(runId) as Record<string, unknown> | null;
-  if (r === null) return null;
-  const x = num(r["x"]);
-  const y = num(r["y"]);
-  const z = num(r["z"]);
-  if (x === null || y === null || z === null) return null;
-  return {
-    ts: num(r["ts"]) ?? 0,
-    map: num(r["map"]),
-    x,
-    y,
-    z,
-    target: typeof r["target"] === "string" ? r["target"] : null,
-    status: typeof r["status"] === "string" ? r["status"] : null,
-  };
+  return sessionSource(runsDir, runId).latestMove();
 }
 
 /** `readQuestCounts` (`runs.ts`) over an open database: every sample's quest count, oldest first. */
@@ -327,7 +296,7 @@ function readRunDb(runsDir: string, runId: string): RunDbReading {
     return {
       pos,
       quests: guard([], () => questCountsIn(db, runId)),
-      move: guard(null, () => latestMoveIn(db, runId)),
+      move: guard(null, () => readLatestMove(runsDir, runId)),
       reflecting: guard(false, () => reflectingIn(db, runId)),
     };
   });

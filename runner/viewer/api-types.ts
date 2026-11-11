@@ -2481,7 +2481,7 @@ export type TraceSkillRow = [skillId: number, value: number, max: number];
 
 /**
  * The character sheet the trace carries beside the unit state, as numbers
- * and ids (`runner/src/trace-row.ts` is the contract and documents each
+ * and ids (the session format's trace rows, `wrath-mcp/docs/SESSION-FORMAT.md`, are the contract and documents each
  * row). Null is not observed, and a segment from before the sheet was
  * recorded carries none of these keys, which also reads as null: "not
  * recorded", never "empty".
@@ -2509,7 +2509,7 @@ export type TraceQuestReq = [number, number, number, number, ...[itemId: number,
 /** One state change: `[ms from t0, kind, value]`, the kind a `TraceState` or `TraceSheet` key, `qdone`, or `chat`. */
 export type TraceEventWire = [number, string, unknown];
 
-/** Where a chat line went (`runner/src/trace-row.ts`, `TraceChatKind`). */
+/** Where a chat line went (the session format's `TraceChatKind`). */
 export type TraceChatKind = "say" | "party" | "raid" | "yell" | "whisper" | "emote";
 
 /** A `chat` event's value: one line the character said, its kind and its text. */
@@ -2597,8 +2597,9 @@ export interface PositionTrace {
 
 /**
  * What a nearby window says about one unit besides where it is
- * (`runner/viewer/nearby.ts`; the recorder's contract is
- * `runner/src/nearby-row.ts`, pinned compatible by `runner/test/nearby-e2e.test.ts`).
+ * (`runner/viewer/nearby.ts`; the recorder's contract is the session format's
+ * `nearby` stream, `wrath-mcp/docs/SESSION-FORMAT.md`, pinned compatible by
+ * `runner/test/nearby-e2e.test.ts`).
  * Absent keys are unobserved. A public window carries `entry`, `name`, `ctype`,
  * `level`, `hp`, `df`, `nf`, `qg` and `tgs` only.
  */

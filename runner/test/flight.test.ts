@@ -1,14 +1,16 @@
 /**
- * The flight producer: takeoffs and landings latched in the sandbox child off
- * the events that flip the taxi flag, drained by the loop's state sample and
- * written as `taxi` / `taxi_landed` milestones with the flip's own position
- * and area.
+ * The flight records: takeoffs and landings the stack recorded off the events
+ * that flip the taxi flag (`@wrathbench/mcp/record`), handed to the loop by
+ * the runner's host (`SandboxHost.flightSignals`, through `RecordSignals`)
+ * with the flip's own position and area, and written by the loop as `taxi` /
+ * `taxi_landed` milestones (`loop.test.ts`).
  *
- * Two halves, both fixture-based, in the shape of `death.test.ts`. The child
- * half runs the real sandbox process against a fake event stream — frames
- * hand-written from wrath-mcp/module/PROTOCOL.md's tables, positions invented, nothing
- * captured from a running game (CLAUDE.md). The loop half feeds drained
- * signals through a fake sandbox and reads the trajectory.
+ * The watcher, frame by frame, is the stack's and is tested there
+ * (`wrath-mcp/mcp/test/record-watchers.test.ts`, "flight watcher"). Here, one
+ * real child with the run's session record, end to end: what the loop is
+ * handed is what the child saw. Frames are hand-written from
+ * wrath-mcp/module/PROTOCOL.md's tables, positions invented, nothing captured
+ * from a running game (CLAUDE.md).
  *
  * The case that earned this: a `taxi_landed` written by a 60s sample placed a
  * landing in the Deeprun Tram the character had walked into since, and two
@@ -17,6 +19,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { SandboxHost } from "../src/sandbox/host";
+import { openSessionRecord } from "../src/session-record";
 import { Scratchpad } from "@wrathbench/mcp";
 import { tempDirs } from "./fixtures/temp-dirs";
 
@@ -25,13 +28,14 @@ const tempDir = tempDirs();
 const hosts: SandboxHost[] = [];
 
 function makeHost(): SandboxHost {
-  const dir = tempDir("wrathbench-flight-");
+  const runsDir = tempDir("wrathbench-flight-");
   const host = new SandboxHost({
     moduleUrl: "http://worldserver:8086",
     token: "test-token",
-    scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+    scratchpad: new Scratchpad(join(runsDir, "scratchpad.md")),
     snippetTimeoutMs: 5_000,
     pingGraceMs: 1_000,
+    session: openSessionRecord({ runDir: join(runsDir, "run-flight"), runsDir, token: "test-token", scrub: (t) => t }),
   });
   hosts.push(host);
   return host;
@@ -68,7 +72,7 @@ feed("WB_SESSION_STATE", 0xff03, {
 unitFlags(0x8);
 `;
 
-describe("sandbox child: flights latched from the events", () => {
+describe("the runner's host hands the loop the flights the stack recorded", () => {
   test("a takeoff and a landing carry the flip's own position and area; two legs in one drain are two pairs", async () => {
     const host = makeHost();
     expect((await host.evalSnippet(PRELUDE)).ok).toBe(true);
@@ -108,19 +112,5 @@ describe("sandbox child: flights latched from the events", () => {
     expect(second!.ts).toBeGreaterThan(landing!.ts);
     // Drained once: a second drain is empty.
     expect(await host.flightSignals()).toEqual([]);
-  });
-
-  test("a flag turning on without an accepted reply is not a takeoff, and a process that opens mid-flight sees no takeoff", async () => {
-    const host = makeHost();
-    expect((await host.evalSnippet(PRELUDE.replace("unitFlags(0x8);", "unitFlags(0x100008);"))).ok).toBe(true);
-    await host.evalSnippet(`
-      // Seeded flying: the landing is an observation, the takeoff was not seen.
-      unitFlags(0x8);
-      // On again with no accepted reply behind it: nothing said a flight began.
-      unitFlags(0x100008);
-      unitFlags(0x8);
-      "fed";
-    `);
-    expect((await host.flightSignals()).map((s) => s.kind)).toEqual(["taxi_landed", "taxi_landed"]);
   });
 });

@@ -33,11 +33,10 @@ import { describeWindows, subscriptionThresholds, type SubscriptionUsage, type U
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { ContextEvents, DeathSignal, FlightSignal } from "./sandbox/signals";
-import { groupKeyOf, type PartySignal } from "./sandbox/party-watch";
+import type { PartySignal } from "./sandbox/signals";
+import { groupKeyOf } from "@wrathbench/mcp/record";
 import type { Scratchpad } from "@wrathbench/mcp";
 import type { ItemSample, Trajectory } from "./trajectory";
-import { NearbyWriter } from "./nearby";
-import { TraceWriter } from "./trace";
 import type { Watchdogs } from "./watchdogs";
 
 /**
@@ -211,13 +210,6 @@ export interface ContextBuilderOptions {
 export class ContextBuilder {
   private lastStateAt = 0;
   private live = false;
-  /**
-   * The movement intention already recorded, as `dispatch:verdict` — the
-   * sandbox keeps one slot and re-reports it on every 5s sample, so this is
-   * what turns a standing intent into exactly two rows: the dispatch, and the
-   * verdict that ended it.
-   */
-  private lastMoveKey: string | null = null;
   /** High-water mark into the snapshot's quest-completion list, for logging. */
   private questsLogged = 0;
   /** Last zone/area ids a milestone was written for; undefined until the first sample names one. */
@@ -339,45 +331,8 @@ export class ContextBuilder {
   /** The sample in flight, if any; concurrent callers share it. */
   private sampling: Promise<SnapshotLike | null> | null = null;
   private readonly now: () => number;
-  /**
-   * The trace writer (`trace.ts`), drained by the state ticker beside the
-   * sample. It lives on the builder for the reason the reflection gate does:
-   * this is the one object every driver hands the ticker, so the trace is
-   * recorded on each of them by construction rather than by per-driver wiring.
-   * It never calls `sampleState` and drains none of the loop's own signals.
-   */
-  readonly trace: TraceWriter;
-  /**
-   * The live map's ring of nearby units (`nearby.ts`), drained by the same
-   * ticker for the same reason. It is not the record: it takes no trajectory,
-   * writes only the run directory's `nearby/`, and is removed when the ticker
-   * stops.
-   */
-  readonly nearby: NearbyWriter;
-
   constructor(private readonly o: ContextBuilderOptions) {
     this.now = o.now ?? Date.now;
-    this.trace = new TraceWriter({
-      runId: o.config.runId,
-      trajectory: o.trajectory,
-      sandbox: o.sandbox as Pick<SandboxHost, "traceDrain"> | { traceDrain?: undefined },
-      now: this.now,
-    });
-    this.nearby = new NearbyWriter({
-      runDir: typeof o.config.runsDir === "string" ? join(o.config.runsDir, o.config.runId) : null,
-      sandbox: o.sandbox as Pick<SandboxHost, "nearbyDrain"> | { nearbyDrain?: undefined },
-      now: this.now,
-    });
-  }
-
-  /** Drain the sandbox's trace buffer into the record (`TraceWriter.drain`). Never samples. */
-  drainTrace(): Promise<void> {
-    return this.trace.drain();
-  }
-
-  /** Drain the sandbox's nearby buffer into the live map's ring (`NearbyWriter.drain`). Never samples. */
-  drainNearby(): Promise<void> {
-    return this.nearby.drain();
   }
 
   /**
@@ -528,7 +483,7 @@ export class ContextBuilder {
 
   /**
    * Write the party records the child latched since the last sample
-   * (`sandbox/party-watch.ts`): `group`, `instance` and `kill`, in the order
+   * (the stack's party watcher, handed over by `sandbox/host.ts`): `group`, `instance` and `kill`, in the order
    * their packets arrived, each with the packet's own timestamp. A sandbox
    * without the drain (an older child, a test's fake) writes none.
    */
@@ -574,38 +529,6 @@ export class ContextBuilder {
         if (this.live) this.o.watchdogs.noteKill(s);
       }
     }
-  }
-
-  /**
-   * Record the sandbox's movement intention when it changed.
-   *
-   * The change is (move id, status): a dispatch writes one row, the verdict
-   * that ends it writes a second, and every sample in between writes nothing.
-   * A move whose ack has not answered yet has no id, and is keyed by its
-   * dispatch time so the id arriving does not re-record it.
-   */
-  private async noteMove(snap: SnapshotLike): Promise<void> {
-    const m = snap.move;
-    if (m === undefined || m === null) return;
-    if (typeof m.x !== "number" || typeof m.y !== "number" || typeof m.z !== "number") return;
-    // Keyed on the dispatch's own timestamp, not the move id: the id is
-    // learned from the ack a moment later, and keying on it would record the
-    // same dispatch twice.
-    const key = `${m.ts}:${m.status ?? ""}`;
-    if (key === this.lastMoveKey) return;
-    this.lastMoveKey = key;
-    await this.o.trajectory.recordMove(this.o.config.runId, {
-      // The intent's own instants: when it was dispatched, and when the
-      // verdict landed. The sample that carried it home is up to a tick later.
-      ts: m.endedAt ?? m.ts,
-      moveId: m.moveId,
-      map: m.map,
-      x: m.x,
-      y: m.y,
-      z: m.z,
-      target: m.target,
-      status: m.status,
-    });
   }
 
   /**
@@ -682,13 +605,8 @@ export class ContextBuilder {
     const { config, trajectory, watchdogs } = this.o;
     const snap = await this.snapshot();
     if (snap === null) return snap;
-    // Ungated by `stateIntervalMs`: a ~250y walk is over well inside one state
-    // row, so an intention only recorded at row cadence would be one nobody
-    // could ever see in flight.
-    await this.noteMove(snap);
-    // Ungated for the same reason `noteMove` is: the gate re-arms on a rest
-    // visit or a flight beginning, and either can begin and end well inside
-    // one state row.
+    // Ungated by `stateIntervalMs`: the gate re-arms on a rest visit or a
+    // flight beginning, and either can begin and end well inside one state row.
     this.reflect.note(restingOf(snap), taxiFlightOf(snap));
     // The party records, ungated too: a `kill` is what a campaign's kill end
     // reads, and drained only at row cadence it reached the end check up to a
@@ -1149,14 +1067,8 @@ export interface StateTickerOptions {
  * be called on every exit path — a live ticker outliving `runLoop` would write
  * to a closed trajectory.
  *
- * Each tick also drains the trace (`ContextBuilder.drainTrace`, `trace.ts`)
- * after the sample: the sandbox child latches the character's position and
- * state as they change, and this is the clock that carries them into the
- * record on every driver. The drain is inside the tick's promise, so the stop
- * waits for it the way it waits for the sample, and a drain never starts a
- * sandbox (`SandboxHost.traceDrain`). The nearby ring (`nearby.ts`) is drained
- * last, the same way; it is the live map's and not the record, so the stop
- * removes it once the last tick has settled.
+ * The session record is not this ticker's: the stack's host drains its child's
+ * recorder on a tick of its own (`wrath-mcp/mcp/src/sandbox/host.ts`).
  */
 export function startStateTicker(o: StateTickerOptions): () => Promise<void> {
   let sampling: Promise<unknown> | null = null;
@@ -1164,10 +1076,6 @@ export function startStateTicker(o: StateTickerOptions): () => Promise<void> {
     if (sampling !== null || o.stopped()) return;
     sampling = o.builder
       .sampleState()
-      .catch(() => null)
-      .then(() => o.builder.drainTrace())
-      .catch(() => null)
-      .then(() => o.builder.drainNearby())
       .catch(() => null)
       .finally(() => {
         sampling = null;
@@ -1183,7 +1091,6 @@ export function startStateTicker(o: StateTickerOptions): () => Promise<void> {
   return async () => {
     clearInterval(timer);
     await sampling?.catch(() => undefined);
-    o.builder.nearby.close();
   };
 }
 
@@ -1221,6 +1128,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   let turn = 0;
   const toolCtx: ToolContext = {
     sandbox: o.sandbox,
+    // The session record's side of every tool call; absent on a sandbox that keeps none.
+    ...(o.sandbox.callRecord !== undefined ? { record: o.sandbox.callRecord } : {}),
     scratchpad: o.scratchpad,
     wiki: o.wiki,
     wikiCoords: config.wikiCoords,

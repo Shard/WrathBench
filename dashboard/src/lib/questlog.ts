@@ -1,7 +1,7 @@
 /**
  * The quest log at the playhead, from the trace's character sheet.
  *
- * The sheet carries the log as numbers (`runner/src/trace-row.ts`): each
+ * The sheet carries the log as numbers (the session format's trace rows, `wrath-mcp/docs/SESSION-FORMAT.md`): each
  * slot's quest id, its state and its four objective counters, and beside them
  * the counts each quest needs (`qreq`, the segment's own dictionary). Nothing
  * here names a quest: the trace records no title and the public projection

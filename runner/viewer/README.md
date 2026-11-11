@@ -463,13 +463,25 @@ run the extraction. The public site's tiles are a separate upload
 
 ## The trace: positions second by second
 
-A run recorded by the trace recorder has a `trace` table in its `run.sqlite`:
-positions at about 1 Hz and the unit state beside them (health, power, auras,
-combat, a cast, a flight). `trace.ts` is the codec — one segment per run per
-UTC-aligned five-minute window, columnar and delta-encoded, with its format at
-the top of the file — and it imports nothing, so the dashboard's player decodes
-with the same code. `trace-db.ts` is the reads, all ranges over the
-`(run_id, ts)` index.
+A run's trace is positions at about 1 Hz and the unit state beside them
+(health, power, auras, combat, a cast, a flight). `trace.ts` is the codec —
+one segment per run per UTC-aligned five-minute window, columnar and
+delta-encoded, with its format at the top of the file — and it imports
+nothing, so the dashboard's player decodes with the same code. `trace-db.ts`
+is the reads, all ranges.
+
+Where the rows come from is the run's **session source**
+(`session-source.ts`), one interface over two homes. A v1 run has a session
+record in `<run>/session/`, written by the stack
+(`wrath-mcp/docs/SESSION-FORMAT.md`), and `V1Source` reads its `trace`,
+`nearby` and `calls` streams through the stack's own reader. A 0.5 run has
+none: its trace and movement intentions are the `trace`, `trace_dict` and
+`move` tables of its `run.sqlite` and its ring one-minute files in
+`<run>/nearby/`, and `legacy05-source.ts` reads those with the readers the
+0.5 viewer had. Nothing on disk is converted, and
+`runner/test/legacy05-golden.test.ts` holds the API's answers over frozen 0.5
+runs to what they were. The codecs and every route below are the same for
+both.
 
 The same rows carry the character sheet: money, equipment, worn bags, what is
 carried, durability, the quest log's ids and counters, visible reputation,
@@ -481,8 +493,9 @@ read. A segment states each part whole in its
 keyframe and as patches after it (the rows that changed, and a key alone for
 one that went), and `sheetAt` folds it at a playhead, apart from `stateAt` so
 the unit frame's per-frame read never copies an inventory. The item names and
-quest requirements live once per id in `trace_dict`; every read joins the ones
-a segment references into its `items` and `qreq`. A segment from before the
+quest requirements travel as dictionary entries (once per record segment in a
+session record, once per id in a 0.5 run's `trace_dict`); every read joins the
+ones a segment references into its `items` and `qreq`. A segment from before the
 sheet has none of its keys, which reads as "not recorded", never as empty
 bags.
 
@@ -504,11 +517,12 @@ an event and never state, so no keyframe holds it.
   windows and the tail, from one range read — so the live map and the replay
   read one shape, privately and publicly.
 
-A run from before the recorder has no table, and every one of these answers as
-"no trace": an empty index, a 404, and no `trace` field at all, so its track is
-the bytes it always was. The track's window list is memoised on the database
-file's size and mtime, which is what keeps the publisher from opening every
-run's sqlite on every pass. In public mode a segment crosses
+A run from before the recorder has no trace at all, and every one of these
+answers as "no trace": an empty index, a 404, and no `trace` field at all, so
+its track is the bytes it always was. The track's window list is memoised on
+two numbers that move whenever the trace is written (the newest segment's
+size and mtime, or a 0.5 run's database file's), which is what keeps the
+publisher from opening every run on every pass. In public mode a segment crosses
 `projectTraceSegment`: no `target`. Deaths are public, so `dead`, `ghost` and
 the gauges at a corpse pass. The sheet passes as numbers with its items'
 template names, and never the bank or the vendor buyback slots. Chat passes
@@ -517,13 +531,15 @@ run's session token struck like its other text.
 
 ## Nearby units: the live map's ring
 
-A live run also keeps the units around its character — creatures and other
-players in view, where each is going, and the packet fields and query answers
-the map colours and names them by — in a ring of one-minute files under
-`data/runs/<id>/nearby/` (`runner/src/nearby.ts`; the rows are
-`runner/src/nearby-row.ts`). It is live only: about 15 minutes, unlinked as it
-ages, deleted on every pause, stop and exit, never in `run.sqlite`, the trace,
-the trajectory or the store, and never read by a replay. `nearby.ts` here is
+A live run also keeps the units around its character — creatures, pets and
+vehicles in view, where each is going, and the packet fields and query answers
+the map colours and names them by — in the `nearby` stream of its session
+record, `data/runs/<id>/session/nearby/`, a ring of five-minute segments
+(`wrath-mcp/docs/SESSION-FORMAT.md`, "nearby"). A player is never in it. It
+is live only: about 15 minutes, unlinked as it ages, removed when the session
+closes (every pause, stop and exit), never in the trace, the trajectory or
+the store, and never read by a replay. (A 0.5 run's ring was one-minute files
+in `<run>/nearby/` and did hold players, which the codec still decodes.) `nearby.ts` here is
 the codec — one columnar window, its format at the top of the file, import-free
 so the dashboard plays it with the same code — and `nearby-ring.ts` the reads.
 

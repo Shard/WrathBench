@@ -1,44 +1,45 @@
 /**
- * The trace end to end, on the real code at every step: the sandbox child's
- * recorder over a real SDK state cache fed hand-written frames (as
- * `trace-recorder.test.ts` feeds it), the host's `TraceWriter` folding and
- * keying windows, a real `run.sqlite` written by `Trajectory.recordTrace`, the
- * viewer's `trace-db.ts` reading it back, and the codec decoding what the
- * viewer encoded. What the player gets out must be what the recorder put in.
+ * The trace end to end, on the real code at every step: the stack's trace
+ * recorder (`@wrathbench/mcp/record/recorder`) over a real SDK state cache fed
+ * hand-written frames, the stack's `SessionWriter` folding, keying and
+ * segmenting what each drain hands it into the run's `session/trace`, the
+ * viewer's `trace-db.ts` reading it back through the run's session source, and
+ * the codec decoding what the viewer encoded. What the player gets out must be
+ * what the recorder put in.
  *
- * Also here: the storage contract has two spellings, the runner's
- * (`src/trace-row.ts`, rows with parsed `data`) and the browser-safe codec's
- * (`viewer/api-types.ts` and `viewer/trace.ts`, the sqlite row with `data` as
- * text). The codec cannot import `runner/src` — it ships to the browser over
- * `@viewer/*` and imports nothing — so the two are pinned compatible here, at
- * the type level and at runtime.
+ * Also here: the storage contract has two spellings, the stack's
+ * (`@wrathbench/mcp/record`, rows with parsed `data`) and the browser-safe
+ * codec's (`viewer/api-types.ts` and `viewer/trace.ts`, a row with `data` as
+ * text). The codec cannot import the stack (it ships to the browser over
+ * `@viewer/*` and imports nothing), so the two are pinned compatible here, at
+ * the type level and at runtime. Where v1 differs from the codec's spelling on
+ * purpose, the difference is its own pin.
  */
 
 import { describe, expect, test } from "bun:test";
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { EventStream, StateCache } from "@wrathbench/sdk";
-import type { SandboxHost } from "../src/sandbox/host";
-import { TraceRecorder } from "../src/sandbox/trace-recorder";
-import { TraceWriter } from "../src/trace";
 import {
   applySheetPatch as writerApplyPatch,
   emptyTraceSheet as writerEmptySheet,
   emptyTraceState as writerEmptyState,
+  SEGMENT_MS,
   SHEET_KEY_LEN as WRITER_SHEET_KEY_LEN,
   SHEET_KEYS as WRITER_SHEET_KEYS,
   sheetPatch as writerSheetPatch,
-  TRACE_WINDOW_MS,
+  validateSession,
   type TraceDict as WriterDict,
   type TraceKind,
   type TraceQuestReq as WriterQuestReq,
   type TraceRow as WriterRow,
   type TraceSheet as WriterSheet,
   type TraceState as WriterState,
-} from "../src/trace-row";
-import { Trajectory } from "../src/trajectory";
+} from "@wrathbench/mcp/record";
+import { TraceRecorder } from "@wrathbench/mcp/record/recorder";
 import type { TraceItemName, TraceQuestReq as ViewerQuestReq, TraceSheet as ViewerSheet, TraceState as ViewerState } from "../viewer/api-types";
 import { projectTraceSegment } from "../viewer/public-projection";
+import { sessionSource } from "../viewer/session-source";
 import {
   GAP_MS,
   Q_O,
@@ -61,6 +62,7 @@ import {
 } from "../viewer/trace";
 import { readPositionTrace, readTraceIndex, readTraceSegment } from "../viewer/trace-db";
 import { tempDirs } from "./fixtures/temp-dirs";
+import { openTestSession, recordDrain, type TestSession } from "./fixtures/v1-session";
 
 const tempDir = tempDirs();
 
@@ -74,27 +76,42 @@ function pin<T extends true>(): T {
 
 describe("the two spellings of the contract", () => {
   test("the state keys are the same keys, and a state the writer folds is one the codec reads", () => {
-    // Type level: identical key sets, and the writer's state assignable to the
-    // codec's (the codec's auras also admit the public three-element form).
-    expect(pin<Equal<keyof WriterState, keyof ViewerState>>()).toBe(true);
+    // Type level: identical key sets but two, and the writer's state assignable
+    // to the codec's (the codec's auras also admit the public three-element form).
+    // v1 difference, not settled: the record's unit state carries `zone` and
+    // `area` (SESSION-FORMAT.md, "Unit state"), and the codec does not, so a
+    // segment's keyframe and `stateAt` drop them (a reader ignores what it
+    // does not know). Pinned here so that adding them to the codec, or
+    // dropping them from the record, is a change this test names.
+    expect(pin<Equal<Exclude<keyof WriterState, "zone" | "area">, keyof ViewerState>>()).toBe(true);
+    expect(pin<"zone" | "area" extends keyof WriterState ? true : false>()).toBe(true);
     expect(pin<WriterState extends ViewerState ? true : false>()).toBe(true);
     expect(pin<Equal<WriterState["target"], ViewerState["target"]>>()).toBe(true);
     expect(pin<Equal<WriterState["cast"], ViewerState["cast"]>>()).toBe(true);
-    // Runtime: the same keys in the codec's order, the same empty state.
-    expect<string[]>([...STATE_KEYS].sort()).toEqual(Object.keys(writerEmptyState()).sort());
-    expect(viewerEmptyState()).toEqual(writerEmptyState());
+    // Runtime: the same keys in the codec's order, the same empty state, but those two.
+    const { zone: _zone, area: _area, ...recordState } = writerEmptyState();
+    expect<string[]>([...STATE_KEYS].sort()).toEqual(Object.keys(recordState).sort());
+    expect(viewerEmptyState()).toEqual(recordState);
   });
 
   test("a row the writer stores is a row the codec reads: the same columns, the same kinds, one window", () => {
-    expect(pin<Equal<keyof WriterRow, keyof ViewerRow>>()).toBe(true);
-    expect(pin<TraceKind extends ViewerRow["kind"] ? true : false>()).toBe(true);
+    // v1 difference: a segment line may carry the dictionary (`dict`), which
+    // the session source folds into the lookup it hands the codec and never
+    // passes on as a column.
+    expect(pin<Equal<Exclude<keyof WriterRow, "dict">, keyof ViewerRow>>()).toBe(true);
+    expect(pin<"dict" extends keyof WriterRow ? true : false>()).toBe(true);
+    // v1 difference: a `dict` row is a kind of its own, which the source drops
+    // before the codec sees a row; every other kind is one the codec reads.
+    expect(pin<Exclude<TraceKind, "dict"> extends ViewerRow["kind"] ? true : false>()).toBe(true);
+    expect(pin<"dict" extends TraceKind ? true : false>()).toBe(true);
     expect(pin<Equal<Exclude<WriterRow["map"], undefined>, ViewerRow["map"]>>()).toBe(true);
     expect(pin<Equal<Exclude<WriterRow["x"], undefined>, ViewerRow["x"]>>()).toBe(true);
     expect(pin<Equal<Exclude<WriterRow["o"], undefined>, ViewerRow["o"]>>()).toBe(true);
     expect(pin<Equal<WriterRow["ts"], ViewerRow["ts"]>>()).toBe(true);
     // `data` is parsed on the writer's side and the column's text on the codec's.
     expect(pin<ViewerRow["data"] extends string | null ? true : false>()).toBe(true);
-    expect(TRACE_WINDOW_MS).toBe(SEG_MS);
+    // A segment of the record is a window of the codec.
+    expect(SEGMENT_MS).toBe(SEG_MS);
   });
 
   test("the sheet is one contract in both spellings: the same keys, rows, key lengths and patch rule", () => {
@@ -127,10 +144,27 @@ const RUN = "trace-e2e-run";
 /** A creature guid with high type 0xF130 and entry 299, as the recorder's own test builds one. */
 const CREATURE_GUID = ((0xf130n << 48n) | (299n << 24n) | 41n).toString(10);
 
+/** The host's side: the run's session record, written on the recorder's clock from each drain of it. */
+function host(runs: string, rec: TraceRecorder, clock: () => number): { session: TestSession; ingest: () => void } {
+  const session = openTestSession(join(runs, RUN), clock());
+  return {
+    session,
+    ingest: () => {
+      session.clock.now = clock();
+      const d = rec.drain();
+      session.writer.ingest(recordDrain({ trace: d.rows, ...(d.dict !== undefined ? { dict: d.dict } : {}) }));
+    },
+  };
+}
+
+/** The trace as the record holds it, the dictionary rows left out: what the viewer's rows are made of. */
+function storedRows(session: TestSession): WriterRow[] {
+  return session.reader.rows("trace").filter((r) => r.kind !== "dict");
+}
+
 describe("the trace end to end", () => {
   test("a walk across a window boundary, an aura, a hearth and a flight come back as recorded", async () => {
     const runs = tempDir("trace-e2e-");
-    const trajectory = new Trajectory(join(runs, RUN));
 
     // The child: a real cache and stream, fed by hand, and the recorder over them.
     const events = new EventStream({ url: "ws://worldserver:8086/events", token: "t", reconnect: false });
@@ -146,20 +180,14 @@ describe("the trace end to end", () => {
     const selfFields = (fields: Record<string, unknown>, ts: number): void =>
       feed("SMSG_UPDATE_OBJECT", 0xa9, { blocks: 1, objects: [{ update: "values", guid: "7", fields }] }, ts);
 
-    // The host: the real writer, draining the child on its ticker.
-    const writer = new TraceWriter({
-      runId: RUN,
-      trajectory,
-      sandbox: { traceDrain: () => Promise.resolve(rec.drain()) } as unknown as SandboxHost,
-      now: () => clock,
-      log: () => {},
-    });
+    // The host: the stack's session writer, ingesting the child's drain on its tick.
+    const { session, ingest } = host(runs, rec, () => clock);
     let lastDrain = clock;
-    const tick = async (): Promise<void> => {
+    const tick = (): void => {
       rec.poll();
-      // The ticker's own cadence: a drain every 5 s of clock.
+      // The record tick's cadence: a drain every 5 s of clock.
       if (clock - lastDrain >= 5_000) {
-        await writer.drain();
+        ingest();
         lastDrain = clock;
       }
     };
@@ -167,7 +195,7 @@ describe("the trace end to end", () => {
     rec.start();
     feed("SMSG_LOGIN_VERIFY_WORLD", 0x236, { map: 0, x: -8949, y: -132, z: 83.5, o: 1.0 }, W0 + 271_000);
     selfFields({ health: 120, maxHealth: 120, powerType: 0, power1: 80, maxPower1: 100, level: 5, xp: 300, nextLevelXp: 1400, unitFlags: 0x8 }, W0 + 271_100);
-    await tick();
+    tick();
 
     // A walk east at about 7 yd/s, across the window boundary at W1.
     let x = -8949;
@@ -180,17 +208,17 @@ describe("the trace end to end", () => {
       }
       if (ts === W0 + 290_000) selfFields({ targetGuid: CREATURE_GUID, health: 95 }, ts + 20);
       if (ts === W0 + 295_000) selfFields({ targetGuid: "0", health: 101 }, ts + 20);
-      await tick();
+      tick();
     }
     const beforeHearth = { x, y: -132 + (W1 + 20_000 - W0) / 10_000 };
 
     // A hearth: the server's teleport ack about self, then a few steps.
     const HEARTH = W1 + 25_000;
     feed("MSG_MOVE_TELEPORT_ACK", 0xc7, { guid: "7", flags: 0, pos: { x: -4821, y: -1155, z: 502, o: 1.7 } }, HEARTH);
-    await tick();
+    tick();
     for (let i = 1; i <= 3; i++) {
       feed("WB_MOVE_PROGRESS", 0xff02, { moveId: 2, pos: { x: -4821 + i, y: -1155, z: 502, o: 1.7 } }, HEARTH + i * 1000);
-      await tick();
+      tick();
     }
 
     // A flight: the spline a tick ahead of the flag, the flag, a minute aloft, the landing.
@@ -198,26 +226,32 @@ describe("the trace end to end", () => {
     feed("SMSG_ACTIVATETAXIREPLY", 0x1ae, { reply: 0, ok: true }, TAKEOFF - 100);
     feed("SMSG_MONSTER_MOVE", 0xdd, { guid: "7", pos: { x: -4818, y: -1155, z: 502 }, destination: { x: -5418, y: -2955, z: 352 }, durationMs: 60_000 }, TAKEOFF - 50);
     selfFields({ unitFlags: 0x100008 }, TAKEOFF);
-    await tick();
+    tick();
     for (let ts = TAKEOFF + 5_000; ts < TAKEOFF + 60_000; ts += 5_000) {
       clock = ts;
-      await tick();
+      tick();
     }
     selfFields({ unitFlags: 0x8 }, TAKEOFF + 60_000);
-    await tick();
+    tick();
     clock = TAKEOFF + 70_000;
-    await writer.drain();
+    ingest();
     rec.stop();
+    // The session closes: every segment closed and compressed, and still read.
+    session.clock.now = clock;
+    await session.writer.close();
+    expect(sessionSource(runs, RUN).kind).toBe("v1");
+    expect(readdirSync(join(session.dir, "trace")).every((f) => f.endsWith(".jsonl.zst"))).toBe(true);
 
-    const stored = trajectory.traceRows(RUN);
-    // The host keyed the second window at its start, from its fold.
+    const stored = storedRows(session);
+    // The writer keyed the second window from its fold, as its first row arrived.
     expect(stored.some((r) => r.kind === "key" && r.ts === W1)).toBe(true);
     expect(stored.filter((r) => r.kind === "flight")).toHaveLength(1);
     expect(stored.some((r) => r.kind === "pos" && (r.data as { jump?: number } | null)?.jump === 1 && r.ts === HEARTH)).toBe(true);
 
-    // run.sqlite is the trace's one home: every row the viewer reads back
-    // below came from there, and nothing else in the run directory holds one.
-    expect(readdirSync(join(runs, RUN)).filter((f) => f !== "run.sqlite" && f !== "trajectory.jsonl")).toEqual([]);
+    // `session/` is the trace's one home: every row the viewer reads back
+    // below came from there, and the run directory holds nothing else.
+    expect(readdirSync(join(runs, RUN))).toEqual(["session"]);
+    expect(existsSync(join(runs, RUN, "run.sqlite"))).toBe(false);
 
     // The viewer, once both windows have settled.
     const now = W1 + SEG_MS + SETTLE_MS;
@@ -268,12 +302,14 @@ describe("the trace end to end", () => {
     // does and ask the codec at each row's time.
     // The unit keys only: the sheet rides the same rows and `sheetAt` reads it.
     const unit = (d: object): Partial<WriterState> => Object.fromEntries(Object.entries(d).filter(([k]) => (STATE_KEYS as readonly string[]).includes(k)));
-    let fold = writerEmptyState();
+    // The codec's keys only (the record's `zone` and `area` are not among them).
+    const codecEmpty = (): Partial<WriterState> => unit(writerEmptyState());
+    let fold = codecEmpty();
     for (const r of stored) {
-      if (r.kind === "key") fold = { ...writerEmptyState(), ...unit(r.data as object) };
+      if (r.kind === "key") fold = { ...codecEmpty(), ...unit(r.data as object) };
       else if (r.kind === "state") fold = { ...fold, ...unit(r.data as object) };
       else continue;
-      expect(stateAt(segOf(r.ts), r.ts)).toEqual(fold);
+      expect<object>(stateAt(segOf(r.ts), r.ts)).toEqual(fold);
     }
     // Spot checks against what was fed, not only against the fold.
     expect(stateAt(segOf(W1 + 6_000), W1 + 6_000).auras).toEqual([[1126, 1, W1 + 5_010 + 1_800_000, 0x13]]);
@@ -281,13 +317,56 @@ describe("the trace end to end", () => {
     expect(stateAt(segOf(W0 + 296_000), W0 + 296_000)).toMatchObject({ hp: 101, target: null });
     expect(stateAt(segOf(TAKEOFF + 30_000), TAKEOFF + 30_000).taxi).toBe(true);
     expect(stateAt(segOf(TAKEOFF + 65_000), TAKEOFF + 65_000).taxi).toBe(false);
-    // The second window's keyframe is the host's key: the state at W1, whole.
+    // The second window's keyframe is the writer's key: the state at W1, whole.
     expect(segs[1]!.key).toMatchObject({ hp: 101, level: 5, pwType: 0, combat: false });
+
+    expect(validateSession(session.dir).errors).toEqual([]);
   });
 
-  test("the character sheet: recorder, writer, run.sqlite, the viewer's reads, the codec and the public projection give back the cache's own sheet at every moment", async () => {
+  test("a player target is its kind and nothing else, in the record and in the codec", async () => {
+    const runs = tempDir("trace-e2e-player-");
+    const events = new EventStream({ url: "ws://worldserver:8086/events", token: "t", reconnect: false });
+    const cache = new StateCache({ seed: { guid: "7", name: "Fenwick" } });
+    events.onAny((e) => cache.apply(e));
+    let clock = W0 + 10_000;
+    const rec = new TraceRecorder({ state: cache, events, now: () => clock, pollMs: 60_000 });
+    let seq = 1;
+    const feed = (opcode: string, data: unknown, ts: number): void => {
+      clock = ts;
+      events.ingest(JSON.stringify({ seq: seq++, opcode, opcodeId: 1, ts, data }));
+    };
+    const { session, ingest } = host(runs, rec, () => clock);
+    rec.start();
+    feed("SMSG_LOGIN_VERIFY_WORLD", { map: 0, x: -8949, y: -132, z: 83.5, o: 1 }, W0 + 11_000);
+    feed("SMSG_UPDATE_OBJECT", { blocks: 1, objects: [{ update: "values", guid: "7", fields: { health: 120, maxHealth: 120, level: 5 } }] }, W0 + 11_100);
+    // Another player (high type 0, a bare counter) is targeted, with health showing.
+    feed("SMSG_UPDATE_OBJECT", { blocks: 1, objects: [{ update: "create", guid: "4242", objectType: "player", fields: { health: 50, maxHealth: 100, level: 9 } }] }, W0 + 12_000);
+    feed("SMSG_UPDATE_OBJECT", { blocks: 1, objects: [{ update: "values", guid: "7", fields: { targetGuid: "4242" } }] }, W0 + 13_000);
+    clock = W0 + 14_000;
+    rec.poll();
+    ingest();
+    // Then a creature, which keeps its entry.
+    feed("SMSG_UPDATE_OBJECT", { blocks: 1, objects: [{ update: "values", guid: "7", fields: { targetGuid: CREATURE_GUID } }] }, W0 + 20_000);
+    clock = W0 + 21_000;
+    rec.poll();
+    ingest();
+    rec.stop();
+    await session.writer.close();
+
+    const targets = storedRows(session)
+      .map((r) => (r.data as { target?: unknown } | null | undefined)?.target)
+      .filter((t) => t !== undefined && t !== null);
+    expect(targets).toContainEqual({ kind: "player" });
+    expect(targets.filter((t) => (t as { kind: string }).kind === "player").every((t) => JSON.stringify(t) === '{"kind":"player"}')).toBe(true);
+    const seg = decodeSegment(JSON.parse(JSON.stringify(readTraceSegment(runs, RUN, W0, W1 + SEG_MS)!.segment)));
+    expect(stateAt(seg, W0 + 15_000).target).toEqual({ kind: "player" });
+    expect(stateAt(seg, W0 + 22_000).target).toMatchObject({ kind: "creature", entry: 299 });
+    expect(JSON.stringify(seg)).not.toContain("4242");
+    expect(validateSession(session.dir).errors).toEqual([]);
+  });
+
+  test("the character sheet: recorder, writer, session record, the viewer's reads, the codec and the public projection give back the cache's own sheet at every moment", async () => {
     const runs = tempDir("trace-e2e-sheet-");
-    const trajectory = new Trajectory(join(runs, RUN));
     const events = new EventStream({ url: "ws://worldserver:8086/events", token: "t", reconnect: false });
     const cache = new StateCache({ seed: { guid: "7", name: "Fenwick" } });
     events.onAny((e) => cache.apply(e));
@@ -304,17 +383,11 @@ describe("the trace end to end", () => {
     const item = (lo: number, fields: Record<string, number>) => ({ update: "create", guid: guid(lo), objectType: "item", fields });
     const named = (itemId: number, name: string, ts: number): void => feed("SMSG_ITEM_QUERY_SINGLE_RESPONSE", { itemId, found: true, name, quality: 1 }, ts);
 
-    const writer = new TraceWriter({
-      runId: RUN,
-      trajectory,
-      sandbox: { traceDrain: () => Promise.resolve(rec.drain()) } as unknown as SandboxHost,
-      now: () => clock,
-      log: () => {},
-    });
+    const { session, ingest } = host(runs, rec, () => clock);
     let lastDrain = clock;
     let x = -8949;
     /** One second of play: a step, a poll per 250 ms, a drain every 5 s. */
-    const second = async (): Promise<void> => {
+    const second = (): void => {
       const end = clock + 1_000;
       x += 3;
       feed("WB_MOVE_PROGRESS", { moveId: 1, pos: { x, y: -132, z: 83.5, o: 1 } }, clock + 1);
@@ -324,7 +397,7 @@ describe("the trace end to end", () => {
       }
       clock = end;
       if (clock - lastDrain >= 5_000) {
-        await writer.drain();
+        ingest();
         lastDrain = clock;
       }
     };
@@ -372,17 +445,28 @@ describe("the trace end to end", () => {
       [W1 + 20_000, () => update([{ update: "values", guid: guid(2), fields: { bagSlot1Lo: 0, bagSlot1Hi: 0 } }], clock)],
     ];
     for (const [at, change] of script) {
-      while (clock + 1_000 <= at) await second();
+      while (clock + 1_000 <= at) second();
       clock = at;
       change();
       mark();
     }
-    while (clock < W1 + 30_000) await second();
-    await writer.drain();
+    while (clock < W1 + 30_000) second();
+    ingest();
     rec.stop();
+    expect(sessionSource(runs, RUN).kind).toBe("v1");
 
-    // The run's names are in run.sqlite, each once.
-    expect(trajectory.traceDict(RUN).filter((d) => d.kind === "item").map((d) => d.id)).toEqual([51001, 51002, 51003, 51004, 51005]);
+    // The names travel with the record: every segment names each id its rows
+    // reference, once, and the item template's name is all a name is.
+    const bySegment = session.reader.segments("trace").map((seg) => {
+      const ids: number[] = [];
+      for (const r of session.reader.segment("trace", seg)) for (const e of r.dict?.items ?? []) ids.push(e[0]);
+      return ids;
+    });
+    expect(bySegment).toHaveLength(2);
+    for (const ids of bySegment) expect(ids.length).toBe(new Set(ids).size);
+    expect([...new Set(bySegment.flat())].sort()).toEqual([51001, 51002, 51003, 51004, 51005]);
+    const names = new Map(session.reader.rows("trace").flatMap((r) => (r.dict?.items ?? []).map((e) => [e[0], e[2]] as const)));
+    expect(names.get(51005)).toBe("Test Token");
 
     // The viewer, once both windows have settled; then the public projection of the same.
     const now = W1 + SEG_MS + SETTLE_MS;
@@ -409,8 +493,8 @@ describe("the trace end to end", () => {
         expect(sheetAt(segOf(pub, probe), probe)).toEqual(sheetAt(segOf(segs, probe), probe));
       }
     }
-    // The money observed 300 ms before the boundary was latched after the host
-    // keyed W1: it stands from W1 on, never taken back by that key.
+    // The money observed 300 ms before the boundary was latched after the
+    // writer keyed W1: it stands from W1 on, never taken back by that key.
     expect(sheetAt(segs[1]!, W1).money).toBe(950);
     // The turn-in, as an event, once; durability as it fell.
     expect(sheetAt(segs[1]!, W1 + 12_000).qdone).toEqual([4100]);
@@ -425,6 +509,11 @@ describe("the trace end to end", () => {
     const tail = decodeSegment(JSON.parse(JSON.stringify(live.tail)));
     expect(shape(sheetAt(tail, W1 + 21_500))).toEqual(truths.at(-1)!.at);
     expect(readTraceIndex(runs, RUN, W1 + 25_000).tail!.items).toBeDefined();
-    trajectory.close();
+
+    // Still read the same once the session has closed and its segments are compressed.
+    session.clock.now = clock;
+    await session.writer.close();
+    expect(JSON.stringify(read(W0))).toBe(JSON.stringify(segs[0]));
+    expect(validateSession(session.dir).errors).toEqual([]);
   });
 });

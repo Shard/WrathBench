@@ -179,7 +179,7 @@ test("the run's own writer, in WAL, writes straight through a reader that holds 
   expect(t.journal).toEqual({ mode: "wal" });
   const elapsed = await whileReading(join(runDir, "run.sqlite"), 1500, async () => {
     const started = Date.now();
-    for (let i = 0; i < 5; i++) await t.recordMove("r", { ts: i, moveId: i, map: 0, x: 1, y: 2, z: 3 });
+    for (let i = 0; i < 5; i++) await t.recordState("r", { level: i });
     return Date.now() - started;
   });
   expect(elapsed).toBeLessThan(500);
@@ -187,7 +187,7 @@ test("the run's own writer, in WAL, writes straight through a reader that holds 
   // A reader sees every commit, before any checkpoint.
   const db = openRunDb(join(runDir, "run.sqlite"), { readonly: true });
   try {
-    expect(db.query("SELECT COUNT(*) AS n FROM move").get()).toEqual({ n: 5 });
+    expect(db.query("SELECT COUNT(*) AS n FROM state").get()).toEqual({ n: 5 });
   } finally {
     db.close();
   }
@@ -197,11 +197,11 @@ test("the run's own writer, in WAL, writes straight through a reader that holds 
 test("a read-only open of a WAL-mode file works in a writable directory: live, after a crash, and after a clean finish", async () => {
   const runDir = join(dir, "wal-readers");
   const t = new Trajectory(runDir, { wal: true });
-  await t.recordMove("r", { ts: 1, moveId: 1, map: 0, x: 1, y: 2, z: 3 });
+  await t.recordState("r", { level: 1 });
   const count = (): number => {
     const db = openRunDb(join(runDir, "run.sqlite"), { readonly: true });
     try {
-      return (db.query("SELECT COUNT(*) AS n FROM move").get() as { n: number }).n;
+      return (db.query("SELECT COUNT(*) AS n FROM state").get() as { n: number }).n;
     } finally {
       db.close();
     }
@@ -226,8 +226,8 @@ test("a read-only open of a WAL-mode file works in a writable directory: live, a
     `import { Database } from "bun:sqlite";
 const db = new Database(process.argv[2] + "/run.sqlite");
 db.exec("PRAGMA journal_mode = WAL");
-db.exec("CREATE TABLE move (n INTEGER)");
-for (let i = 0; i < 50; i++) db.exec("INSERT INTO move VALUES (1)");
+db.exec("CREATE TABLE probe (n INTEGER)");
+for (let i = 0; i < 50; i++) db.exec("INSERT INTO probe VALUES (1)");
 process.kill(process.pid, "SIGKILL");
 `,
   );
@@ -235,7 +235,7 @@ process.kill(process.pid, "SIGKILL");
   expect(statSync(join(crashDir, "run.sqlite-wal")).size).toBeGreaterThan(0);
   const db = openRunDb(join(crashDir, "run.sqlite"), { readonly: true });
   try {
-    expect(db.query("SELECT COUNT(*) AS n FROM move").get()).toEqual({ n: 50 });
+    expect(db.query("SELECT COUNT(*) AS n FROM probe").get()).toEqual({ n: 50 });
   } finally {
     db.close();
   }
@@ -245,7 +245,7 @@ process.kill(process.pid, "SIGKILL");
   const healed = openRunDb(join(crashDir, "run.sqlite"), { readonly: true });
   try {
     expect(journalMode(healed)).toBe("delete");
-    expect(healed.query("SELECT COUNT(*) AS n FROM move").get()).toEqual({ n: 50 });
+    expect(healed.query("SELECT COUNT(*) AS n FROM probe").get()).toEqual({ n: 50 });
   } finally {
     healed.close();
   }
@@ -268,7 +268,7 @@ db.close();
 test("finish waits out a reader's statement before leaving WAL, its waits awaited", async () => {
   const runDir = join(dir, "wal-finish-read");
   const t = new Trajectory(runDir, { wal: true });
-  await t.recordMove("r", { ts: 1, moveId: 1, map: 0, x: 1, y: 2, z: 3 });
+  await t.recordState("r", { level: 1 });
   let beats = 0;
   const timer = setInterval(() => beats++, 20);
   const mode = await whileReading(join(runDir, "run.sqlite"), 800, () => t.finish()).finally(() => clearInterval(timer));
@@ -280,7 +280,7 @@ test("finish waits out a reader's statement before leaving WAL, its waits awaite
 test("finish tries again while a reader holds the file open, and checkpoints when it never lets go", async () => {
   const runDir = join(dir, "wal-finish-open");
   const t = new Trajectory(runDir, { wal: true });
-  await t.recordMove("r", { ts: 1, moveId: 1, map: 0, x: 1, y: 2, z: 3 });
+  await t.recordState("r", { level: 1 });
   // An idle connection held open for the whole of finish's patience: the file
   // stays in WAL, but its commits are folded into run.sqlite and the WAL is empty.
   const sleeps: number[] = [];
@@ -292,7 +292,7 @@ test("finish tries again while a reader holds the file open, and checkpoints whe
   expect(statSync(join(runDir, "run.sqlite-wal")).size).toBe(0);
   const raw = new Database(join(runDir, "run.sqlite"), { readonly: true });
   try {
-    expect(raw.query("SELECT COUNT(*) AS n FROM move").get()).toEqual({ n: 1 });
+    expect(raw.query("SELECT COUNT(*) AS n FROM state").get()).toEqual({ n: 1 });
   } finally {
     raw.close();
   }
@@ -418,9 +418,9 @@ describe("the run's writer retries a real lock without stopping the event loop",
     const timer = setInterval(() => beats++, 20);
     try {
       await whileWriting(join(runDir, "run.sqlite"), 500, async () => {
-        const first = t.recordMove("r", { ts: 1, moveId: 1, map: 0, x: 1, y: 2, z: 3 });
+        const first = t.recordState("r", { level: 1 });
         // Issued while the first is retrying: queued behind it, not raced.
-        const second = t.recordMove("r", { ts: 2, moveId: 2, map: 0, x: 1, y: 2, z: 3 });
+        const second = t.recordState("r", { level: 2 });
         await Promise.all([first, second]);
       });
     } finally {
@@ -430,10 +430,10 @@ describe("the run's writer retries a real lock without stopping the event loop",
     expect(beats).toBeGreaterThan(5);
     const retries = readTrajectory(runDir).filter((r) => r.t === "harness" && r["kind"] === "rundb_retry");
     expect(retries.length).toBe(waits.length);
-    expect(retries[0]).toMatchObject({ write: "move", attempt: 1, waitMs: 300, error: "SQLITE_BUSY: database is locked" });
+    expect(retries[0]).toMatchObject({ write: "state", attempt: 1, waitMs: 300, error: "SQLITE_BUSY: database is locked" });
     const db = openRunDb(join(runDir, "run.sqlite"), { readonly: true });
     try {
-      expect(db.query("SELECT move_id FROM move ORDER BY rowid").all()).toEqual([{ move_id: 1 }, { move_id: 2 }]);
+      expect(db.query("SELECT level FROM state ORDER BY rowid").all()).toEqual([{ level: 1 }, { level: 2 }]);
     } finally {
       db.close();
     }
@@ -460,16 +460,16 @@ describe("the run's writer retries a real lock without stopping the event loop",
     const t = new Trajectory(runDir, { wal: true, busyTimeoutMs: 30, retry: { waitsMs: [100, 100, 100], sleep: (ms) => (waits.push(ms), Bun.sleep(ms)) } });
     const outcomes = await whileWriting(join(runDir, "run.sqlite"), 2500, () =>
       Promise.allSettled([
-        t.recordMove("r", { ts: 1, moveId: 1, map: 0, x: 1, y: 2, z: 3 }),
-        t.recordMove("r", { ts: 2, moveId: 2, map: 0, x: 1, y: 2, z: 3 }),
-        t.recordMove("r", { ts: 3, moveId: 3, map: 0, x: 1, y: 2, z: 3 }),
+        t.recordState("r", { level: 1 }),
+        t.recordState("r", { level: 2 }),
+        t.recordState("r", { level: 3 }),
       ]),
     );
     expect(outcomes.map((o) => o.status)).toEqual(["rejected", "rejected", "rejected"]);
     expect(waits).toEqual([100, 100, 100]);
     expect(readTrajectory(runDir).filter((r) => r.t === "harness" && r["kind"] === "rundb_retry")).toHaveLength(3);
     // The lock gone, the next write lands at once and the run's budget is whole again.
-    await t.recordMove("r", { ts: 4, moveId: 4, map: 0, x: 1, y: 2, z: 3 });
+    await t.recordState("r", { level: 4 });
     await t.finish();
   }, 20_000);
 
@@ -485,7 +485,7 @@ describe("the run's writer retries a real lock without stopping the event loop",
         // …then the verdict, queued behind it: a round of its own.
         t.setTermination("r", "turn-limit"),
         // After the verdict gave up, everything gets one attempt.
-        t.recordMove("r", { ts: 1, moveId: 1, map: 0, x: 1, y: 2, z: 3 }),
+        t.recordState("r", { level: 2 }),
       ]),
     );
     expect(outcomes.map((o) => o.status)).toEqual(["rejected", "rejected", "rejected"]);
@@ -500,7 +500,7 @@ describe("the run's writer retries a real lock without stopping the event loop",
     const t = new Trajectory(runDir, { wal: true, retry: { waitsMs: [50, 50, 50] } });
     t.close();
     // A closed handle is not a lock: the call throws at once.
-    expect(() => t.recordMove("r", { ts: 1, moveId: 1, map: 0, x: 1, y: 2, z: 3 })).toThrow();
+    expect(() => t.recordState("r", { level: 1 })).toThrow();
     expect(readTrajectory(runDir).filter((r) => r.t === "harness")).toEqual([]);
   });
 
@@ -512,7 +512,7 @@ describe("the run's writer retries a real lock without stopping the event loop",
     db.exec("PRAGMA journal_mode = WAL");
     db.close();
     await whileWriting(join(runDir, "run.sqlite"), 500, () => {
-      expect(() => t.recordMove("r", { ts: 1, moveId: 1, map: 0, x: 1, y: 2, z: 3 })).toThrow("database is locked");
+      expect(() => t.recordState("r", { level: 1 })).toThrow("database is locked");
     });
     t.close();
   }, 20_000);
@@ -523,7 +523,7 @@ describe("the run's writer retries a real lock without stopping the event loop",
 test("copyRunDb carries commits still in the WAL into one standalone file", async () => {
   const runDir = join(dir, "copy-src");
   const t = new Trajectory(runDir, { wal: true });
-  for (let i = 0; i < 20; i++) await t.recordMove("r", { ts: i, moveId: i, map: 0, x: 1, y: 2, z: 3 });
+  for (let i = 0; i < 20; i++) await t.recordState("r", { level: i });
   // The writer is still open, so its commits are in the -wal, not the file.
   expect(statSync(join(runDir, "run.sqlite-wal")).size).toBeGreaterThan(0);
   const out = join(dir, "copy-dest");
@@ -533,7 +533,7 @@ test("copyRunDb carries commits still in the WAL into one standalone file", asyn
   const copy = new Database(join(out, "run.sqlite"), { readonly: true });
   try {
     expect(journalMode(copy)).toBe("delete");
-    expect(copy.query("SELECT COUNT(*) AS n FROM move").get()).toEqual({ n: 20 });
+    expect(copy.query("SELECT COUNT(*) AS n FROM state").get()).toEqual({ n: 20 });
   } finally {
     copy.close();
   }
@@ -544,11 +544,11 @@ test("copyRunDb carries commits still in the WAL into one standalone file", asyn
 test("runDbStat moves when a commit reaches only the WAL", async () => {
   const runDir = join(dir, "stat");
   const t = new Trajectory(runDir, { wal: true });
-  await t.recordMove("r", { ts: 1, moveId: 1, map: 0, x: 1, y: 2, z: 3 });
+  await t.recordState("r", { level: 1 });
   const before = runDbStat(runDir)!;
   const fileBefore = statSync(join(runDir, "run.sqlite"));
   await Bun.sleep(5);
-  await t.recordMove("r", { ts: 2, moveId: 2, map: 0, x: 1, y: 2, z: 3 });
+  await t.recordState("r", { level: 2 });
   const fileAfter = statSync(join(runDir, "run.sqlite"));
   // run.sqlite itself did not move; the pair did.
   expect([fileAfter.size, fileAfter.mtimeMs]).toEqual([fileBefore.size, fileBefore.mtimeMs]);

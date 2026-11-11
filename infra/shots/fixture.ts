@@ -1,8 +1,9 @@
 /**
  * Synthetic runs for the dashboard render rig (`infra/dashboard-shots.ts`),
- * written through the runner's own `Trajectory`, so the viewer and the
- * publisher read them exactly as they read a real run. Every name, id and word
- * is invented here; nothing reads `data/`.
+ * written through the runner's own `Trajectory` and the stack's own
+ * `SessionWriter`, so the viewer and the publisher read them exactly as they
+ * read a real v1 run. Every name, id and word is invented here; nothing reads
+ * `data/`.
  *
  *   fixture-live   unterminated, a fresh heartbeat, a trace to now, walking a
  *                  loop; `tick` keeps it live while the rig runs
@@ -27,23 +28,32 @@
  * (`questsAt`), as a resumed process's does, so the map's quest figure shows
  * the run's sum (3) where the newest sample says 1.
  *
- * The live run also has a nearby ring (`nearbyScene`), written by the
- * runner's own `NearbyWriter` and reaching back fourteen minutes so the public
- * map, which plays about nine behind, has units at its playhead: boars that
- * wander, one fighting the character, one dead, a questgiver of each mark,
- * and another player with their pet and a creature chasing them, which only
- * the private map draws.
+ * The live run also has a nearby ring (`nearbyScene`), written through the
+ * session writer and reaching back fourteen minutes so the public map, which
+ * plays about nine behind, has units at its playhead: boars that wander, one
+ * fighting the character, one dead, a questgiver of each mark, and a creature
+ * chasing another player. That player is not in the ring: the record never
+ * holds one, and the creature's target is written as its kind.
  */
 
+import { createHash } from "node:crypto";
 import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  SEGMENT_MS as TRACE_WINDOW_MS,
+  SessionWriter,
+  type NearbyRow,
+  type NearbyUnit,
+  type RecordDrain,
+  type TraceChat,
+  type TraceDict,
+  type TraceKeyData,
+  type TraceRow,
+} from "@wrathbench/mcp/record";
 import { comparabilityOf } from "../../runner/src/comparability";
 import { loadRunConfig, unscoredStamp } from "../../runner/src/config";
-import { NearbyWriter } from "../../runner/src/nearby";
-import type { NearbyRow, NearbyUnit } from "../../runner/src/nearby-row";
+import { sessionDirOf } from "../../runner/src/session-record";
 import { Trajectory } from "../../runner/src/trajectory";
-import type { TraceChat, TraceDict, TraceKeyData, TraceRow } from "../../runner/src/trace-row";
-import { TRACE_WINDOW_MS } from "../../runner/src/trace-row";
 
 export const LIVE_RUN = "fixture-live";
 export const ENDED_RUN = "fixture-ended";
@@ -104,6 +114,8 @@ function keyData(level: number, xp: number, pelts: number, money: number, comple
     dead: false,
     ghost: false,
     resting: false,
+    zone: null,
+    area: null,
     target: null,
     cast: null,
     money,
@@ -225,7 +237,34 @@ function questsAt(f: number): number {
   return f > 0.7 ? 1 : 0;
 }
 
-function writeRun(runsDir: string, spec: Spec, ended: number | null): Trajectory {
+/** A run's session record and the clock it is written on: the fixture's own while it lays the past down, the wall clock after. */
+interface FixtureSession {
+  writer: SessionWriter;
+  clock: { now: number | null };
+}
+
+/** One drain as the stack's host would hand its writer: the fixture's rows, and a character in the world. */
+function drainOf(spec: Spec, o: { trace?: TraceRow[]; dict?: TraceDict; nearby?: NearbyRow[]; through?: number }): RecordDrain {
+  return {
+    trace: { rows: o.trace ?? [], dropped: 0, ...(o.dict !== undefined ? { dict: o.dict } : {}) },
+    events: { rows: [], dropped: 0 },
+    nearby: { rows: o.nearby ?? [], dropped: 0, through: o.through ?? 0 },
+    moves: [],
+    character: { guid: SELF_GUID, name: spec.character, race: 1, class: 1 },
+    stream: { connected: true, events: 0, seq: 0 },
+  };
+}
+
+/** The run's session record, opened in `<run>/session/` as a run opens it. The id is a fingerprint of the fixture's token. */
+function openSession(runsDir: string, spec: Spec): FixtureSession {
+  const clock: FixtureSession["clock"] = { now: spec.traceFrom };
+  const id = createHash("sha256").update(`${spec.runId}-fixture-token-0000000000000000`).digest("hex").slice(0, 16);
+  const writer = new SessionWriter({ dir: sessionDirOf(join(runsDir, spec.runId)), id, stack: { version: "fixture" }, now: () => clock.now ?? Date.now(), log: () => {} });
+  writer.open();
+  return { writer, clock };
+}
+
+function writeRun(runsDir: string, spec: Spec, ended: number | null): { traj: Trajectory; session: FixtureSession } {
   const dir = join(runsDir, spec.runId);
   mkdirSync(dir, { recursive: true });
   // The run's own clock while it is written; the wall clock after, for the live run's ticker.
@@ -289,13 +328,17 @@ function writeRun(runsDir: string, spec: Spec, ended: number | null): Trajectory
     if (turn === 6) traj.append({ t: "harness", kind: "session_note", text: "an invented notice" });
   }
 
-  traj.recordTrace(spec.runId, traceRows(spec, spec.traceFrom, spec.traceTo), DICT);
+  const session = openSession(runsDir, spec);
+  session.clock.now = spec.traceTo;
+  session.writer.ingest(drainOf(spec, { trace: traceRows(spec, spec.traceFrom, spec.traceTo), dict: DICT }));
   if (ended !== null) {
     clock = ended;
+    session.clock.now = ended;
     traj.setTermination(spec.runId, "episode-limit", "episode limit reached");
   }
   clock = null;
-  return traj;
+  if (ended === null) session.clock.now = null;
+  return { traj, session };
 }
 
 /**
@@ -387,9 +430,9 @@ function nearbyScene(): SceneUnit[] {
     { id: unitGuid(90002, 7), ty: "creature", s: { entry: 90002, name: "Invented Quartermaster", sub: "Supplies", level: 30, hp: 100, nf: 0x3, qg: 8 }, at: still(-6, 8), moves: false },
     { id: unitGuid(90003, 8), ty: "creature", s: { entry: 90003, name: "Invented Scout", level: 12, hp: 100, nf: 0x2, qg: 10 }, at: still(6, -8), moves: false },
     { id: unitGuid(90004, 9), ty: "creature", s: { entry: 90004, name: "Invented Hare", ctype: 8, level: 1, hp: 100 }, at: wander(-30, 34, 3, 40_000, 0), moves: true },
-    // Private only: another player, their pet, and a creature chasing them.
-    { id: OTHER_PLAYER, ty: "player", s: { name: "Otherwick", level: 9 }, at: wander(48, 30, 9, 120_000, 0), moves: true },
-    { id: unitGuid(90005, 10, 0xf140), ty: "pet", s: { entry: 90005, name: "Otherwick's Hound", ow: OTHER_PLAYER }, at: wander(48, 30, 9, 120_000, -2_000), moves: true },
+    // The character's own pet, and a creature chasing another player: the
+    // player is never in the ring, and the writer's gate cuts the target's guid to its kind.
+    { id: unitGuid(90005, 10, 0xf140), ty: "pet", s: { entry: 90005, name: "Invented Hound", ow: SELF_GUID }, at: wander(-4, -4, 3, 50_000, 0), moves: true },
     { id: unitGuid(90006, 11), ty: "creature", s: { entry: 90006, name: "Invented Prowler", level: 8, hp: 100, tg: OTHER_PLAYER, tgs: false }, at: wander(48, 30, 9, 120_000, -4_000), moves: true },
   ];
 }
@@ -408,44 +451,26 @@ function sceneRows(scene: readonly SceneUnit[], from: number, to: number): Nearb
   return rows;
 }
 
-/** The live run's ring, written by the runner's own writer: a key `backMs` ago, the scene since, and a ticker to keep it going. */
-function writeRing(runDir: string, now: number, backMs: number): { ready: Promise<void>; tick: (t: number) => void; close: () => void } {
+/** The live run's ring, written through its session writer: a key `backMs` ago, the scene since, and a ticker to keep it going. */
+function writeRing(spec: Spec, session: FixtureSession, now: number, backMs: number): { tick: (t: number) => void } {
   const scene = nearbyScene();
   const from = now - backMs;
-  let pending: NearbyRow[] = [
-    {
-      ts: from,
-      kind: "key",
-      self: { guid: SELF_GUID, map: 0, target: null, down: false },
-      units: scene.map((u) => {
-        const p = u.at(from);
-        return { id: u.id, ty: u.ty, s: u.s, m: { k: "pos", t: from, p: [p.x, p.y, CENTRE.z, 0] } };
-      }),
-    },
-    ...sceneRows(scene, from, now),
-  ];
-  let through = now;
-  const writer = new NearbyWriter({
-    runDir,
-    sandbox: {
-      nearbyDrain: async () => {
-        const rows = pending;
-        pending = [];
-        return { rows, dropped: 0, through };
-      },
-    },
-    log: () => {},
-  });
+  const key: NearbyRow = {
+    ts: from,
+    kind: "key",
+    self: { guid: SELF_GUID, map: 0, target: null, down: false },
+    units: scene.map((u) => {
+      const p = u.at(from);
+      return { id: u.id, ty: u.ty, s: u.s, m: { k: "pos", t: from, p: [p.x, p.y, CENTRE.z, 0] } };
+    }),
+  };
+  session.writer.ingest(drainOf(spec, { nearby: [key, ...sceneRows(scene, from, now)], through: now }));
   let last = now;
   return {
-    ready: writer.drain(),
     tick(t) {
-      pending.push(...sceneRows(scene, last, t));
+      session.writer.ingest(drainOf(spec, { nearby: sceneRows(scene, last, t), through: t }));
       last = t;
-      through = t;
-      void writer.drain();
     },
-    close: () => writer.close(),
   };
 }
 
@@ -456,7 +481,7 @@ export interface Fixture {
   /** Every live run, `live` first. */
   lives: string[];
   ended: string;
-  /** Resolves once the live run's nearby ring is on disk. */
+  /** Resolves once the ended run's session record is closed; the live runs' rings are on disk before `writeFixture` returns. */
   ready: Promise<void>;
   /** Keep the live run live: a position, a heartbeat and now and then a state sample. */
   tick(now?: number): void;
@@ -492,7 +517,9 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
     phase: LOOP_MS / 3,
     scratchpad: PAD("Replayna"),
   };
-  writeRun(runsDir, endedSpec, endedAt).close();
+  const endedRun = writeRun(runsDir, endedSpec, endedAt);
+  endedRun.traj.close();
+  const ready = endedRun.session.writer.close();
   writeLadderRun(runsDir, E90_RUN, { driver: "openai", model: "fixture/e90-model", character: "Laddera" }, 6, at(now - 5 * 3_600_000));
   // A second row, under an invented id a family's weights rules still answer
   // for (Anthropic's catch-all reads `closed`), so the ladder's weights filter
@@ -537,9 +564,9 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
     },
   ];
   const lives = liveSpecs.map((spec) => {
-    const traj = writeRun(runsDir, spec, null);
+    const { traj, session } = writeRun(runsDir, spec, null);
     const heartbeat = join(runsDir, spec.runId, "heartbeat");
-    return { spec, traj, heartbeat, last: spec.traceTo, lastState: spec.traceTo };
+    return { spec, traj, session, heartbeat, last: spec.traceTo, lastState: spec.traceTo };
   });
   const beat = (t: number): void => {
     for (const l of lives) {
@@ -548,19 +575,19 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
     }
   };
   beat(now);
-  const ring = writeRing(join(runsDir, LIVE_RUN), now, 14 * 60_000);
+  const ring = writeRing(liveSpec, lives[0]!.session, now, 14 * 60_000);
   return {
     runsDir,
     live: LIVE_RUN,
     lives: liveSpecs.map((s) => s.runId),
     ended: ENDED_RUN,
-    ready: ring.ready,
+    ready,
     tick(t = Date.now()) {
       ring.tick(t);
       const to = at(t);
       for (const l of lives) {
         if (to > l.last) {
-          l.traj.recordTrace(l.spec.runId, traceRows({ ...l.spec, traceTo: to }, l.last + 2_000, to, false));
+          l.session.writer.ingest(drainOf(l.spec, { trace: traceRows({ ...l.spec, traceTo: to }, l.last + 2_000, to, false) }));
           l.last = to;
         }
         if (to - l.lastState >= 60_000) {
@@ -573,8 +600,10 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
       beat(t);
     },
     close() {
-      ring.close();
-      for (const l of lives) l.traj.close();
+      for (const l of lives) {
+        l.traj.close();
+        void l.session.writer.close();
+      }
     },
   };
 }

@@ -11,6 +11,7 @@ import { appendFileSync, mkdirSync, readFileSync, utimesSync, writeFileSync } fr
 import { join } from "node:path";
 import { loadRunConfig, MIN_TOKEN_LENGTH as RUNNER_MIN_TOKEN_LENGTH } from "../runner/src/config";
 import { REDACTED as RUNNER_REDACTED } from "@wrathbench/mcp/redact";
+import { SessionWriter } from "@wrathbench/mcp/record";
 import { RUN_DB_BUSY_TIMEOUT_MS as RUNNER_RUN_DB_BUSY_TIMEOUT_MS } from "../runner/src/rundb";
 import { HEARTBEAT_DEAD_MS as RUNNER_HEARTBEAT_DEAD_MS, Trajectory } from "../runner/src/trajectory";
 import { ARCHIVE_DIR as VIEWER_ARCHIVE_DIR } from "../runner/viewer/archive-dir";
@@ -182,7 +183,7 @@ describe("the live rule", () => {
       // The trajectory takes no lock, so it is still read; the character comes from meta.json.
       expect(at("activity")).toContain("6 snippets");
       expect(at("character")).toContain("Testwick on TESTACCT");
-      expect(at("trace")).toContain("no rows");
+      expect(at("trace")).toContain("none (no session record");
     }
     expect((await inspect(["run", "run-live", "--runs-dir", RUNS])).out.find((l) => l.startsWith("source"))).toBe("source     the files: ClickHouse not configured (no CLICKHOUSE_URL)");
     expect((await inspect(["run", "run-live", "--runs-dir", RUNS, "--files"], NOW, STORE)).out.find((l) => l.startsWith("source"))).toBe("source     the files: --files");
@@ -228,7 +229,37 @@ describe("inspect run", () => {
     expect(await holder.exited).toBe(0);
     expect(r.err.join("\n")).not.toContain("SQLITE_BUSY");
     expect(r.code).toBe(0);
-    expect(r.out.find((l) => l.startsWith("trace"))).toContain("no rows");
+    expect(r.out.find((l) => l.startsWith("trace"))).toContain("none (no session record");
+  });
+
+  test("a v1 run's session record is one line: who it is, whether it closed, and its streams; the ring is read from it", async () => {
+    const runsDir = tmp("inspect-v1-");
+    const dir = makeRun(runsDir, "run-v1", "terminated");
+    let clock = NOW - 600_000;
+    const writer = new SessionWriter({ dir: join(dir, "session"), id: "0123456789abcdef", stack: { version: "test" }, now: () => clock, log: () => {} });
+    writer.open();
+    const state = { hp: 1, hpMax: 1, pw: null, pwMax: null, pwType: null, level: 4, xp: 1, xpMax: 2, auras: [], combat: false, mounted: false, taxi: false, dead: false, ghost: false, resting: false, zone: null, area: null, target: null, cast: null };
+    const sheet = { money: null, equip: null, bags: null, inv: null, dur: null, quests: null, rep: null, skills: null };
+    writer.ingest({
+      trace: { rows: [{ ts: clock, kind: "key", map: 0, x: 1, y: 2, z: 3, o: 0, data: { ...state, ...sheet } }], dropped: 0 },
+      events: { rows: [], dropped: 0 },
+      nearby: { rows: [{ ts: clock, kind: "key", self: { guid: "5", map: 0, target: null, down: false }, units: [] }], dropped: 0, through: clock },
+      moves: [],
+      character: { guid: "5", name: "Testwick", race: 1, class: 1 },
+      stream: { connected: true, events: 1, seq: 1 },
+    });
+    const live = await inspect(["run", "run-v1", "--runs-dir", runsDir], NOW);
+    const at = (r: { out: string[] }, label: string): string => r.out.find((l) => l.startsWith(label)) ?? "";
+    expect(at(live, "session")).toContain("0123456789abcdef (Testwick), open");
+    expect(at(live, "session")).toContain("trace 1 segment(s)");
+    expect(at(live, "session")).toContain("events none");
+    expect(at(live, "nearby")).toContain("1 window file(s)");
+    expect(live.out.some((l) => l.startsWith("trace"))).toBe(false);
+    clock = NOW - 60_000;
+    await writer.close();
+    const closed = await inspect(["run", "run-v1", "--runs-dir", runsDir], NOW);
+    expect(at(closed, "session")).toContain("closed 60s ago");
+    expect(at(closed, "nearby")).toContain("none");
   });
 
   test("reads the level, the counts by kind and the errors by class", async () => {
@@ -247,7 +278,7 @@ describe("inspect run", () => {
     expect(at("errors")).toContain("tools 1/1: reflect 1");
     expect(at("harness")).toContain("sandbox_restarted 1");
     expect(at("files")).toContain("trajectory.jsonl");
-    expect(at("trace")).toContain("no rows");
+    expect(at("trace")).toContain("none (no session record");
     expect(at("nearby")).toContain("none");
     // A run with no live owner reads the same off its own files.
     const ended = await inspect(["run", "run-ended", "--runs-dir", RUNS]);

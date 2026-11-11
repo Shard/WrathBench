@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { STALL_PAUSE } from "../src/lapse";
+import { moveLineOf, openSessionRecord } from "../src/session-record";
 import { Trajectory } from "../src/trajectory";
 import { localRunStore, type RunStore } from "../viewer/clickhouse";
 import { positionsFromStore, readLatestPosition, readLatestStatus, readPositions, readReflecting } from "../viewer/positions";
@@ -470,8 +471,8 @@ describe("readPositions", () => {
 
   test("the feed carries no inventory, however much the state line recorded: the sidebar reads the trace's sheet", () => {
     const items = JSON.stringify([
-      { name: "Worn Mace", count: 1, equipped: true, itemId: 5956, quality: 1, slot: 16 },
-      { name: "Tough Jerky", count: 5, equipped: false, itemId: 117, quality: 1, slot: 23, bag: 255 },
+      { name: "Invented Mace", count: 1, equipped: true, itemId: 5956, quality: 1, slot: 16 },
+      { name: "Invented Jerky", count: 5, equipped: false, itemId: 90117, quality: 1, slot: 23, bag: 255 },
     ]);
     const runsDir = fixture([
       { id: "live-items", states: [[NOW - 5000, 4, 900, 0, -6240, 380, 380, 1, 0]], items },
@@ -645,8 +646,10 @@ describe("readPositions", () => {
 
 /*
  * The same feed with its listing taken off the derived store. The fixture is
- * written by the runner's own writer rather than by hand, because the store is
- * filled by the collector, and the collector reads what the runner writes.
+ * written by the runner's own writers rather than by hand, because the store is
+ * filled by the collector, and the collector reads what the runner writes: the
+ * trajectory and run.sqlite, and the session record the stack writes into the
+ * run (`session-record.ts`), whose move the trajectory mirrors as run.ts wires it.
  */
 describe("positionsFromStore", () => {
   const NOW = 1_700_000_000_000;
@@ -680,9 +683,20 @@ describe("positionsFromStore", () => {
       questsCompleted: 3,
       health: 140,
       maxHealth: 220,
-      items: [{ name: "Tough Jerky", count: 4, equipped: false, itemId: 117, quality: 1, slot: 23, bag: 255 }],
+      items: [{ name: "Invented Jerky", count: 4, equipped: false, itemId: 90117, quality: 1, slot: 23, bag: 255 }],
     });
-    traj.recordMove(runId, { map: 0, x: 7, y: 8, z: 9, moveId: 1 });
+    // A v1 run's movement intention is the session record's (`session/calls`);
+    // the trajectory's `move` line is its mirror.
+    const session = openSessionRecord({ runDir: dir, runsDir, token: `token-${runId}`, scrub: (t) => t });
+    session.signals.onMove = (m) => traj.recordMove(moveLineOf(m));
+    session.writer.ingest({
+      trace: { rows: [], dropped: 0 },
+      events: { rows: [], dropped: 0 },
+      nearby: { rows: [], dropped: 0, through: 0 },
+      moves: [{ ts: clock, at: clock, evalId: null, moveId: 1, map: 0, x: 7, y: 8, z: 9, target: null, status: null }],
+      character: null,
+      stream: { connected: true, events: 1, seq: 1 },
+    });
     if (o.reflecting === true) traj.append({ t: "reflect_window", event: "open" });
     if (o.terminated === true) traj.setTermination(runId, "episode-elapsed" as never, "done");
     if (o.paused !== undefined) traj.setPause(runId, o.paused, "fixture");
