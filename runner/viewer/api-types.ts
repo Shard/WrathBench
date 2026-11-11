@@ -422,6 +422,14 @@ export interface RunRow {
    * (`declaredBillingOf` in `runner/src/billing.ts`).
    */
   declaredBilling?: "free" | "paid";
+  /**
+   * What paid for the run, as it recorded at launch (`runCredentialOf`): a v1
+   * run's credential id, a 0.5 run's subscription lane (the env var NAME a
+   * claude-code or codex run billed). Absent when the run recorded neither.
+   * Operator-only: a public row carries neither.
+   */
+  credential?: string;
+  lane?: string;
   harnessVersion: string | null;
   /**
    * The stamped comparability tuple, or null for a run whose metadata predates
@@ -1454,8 +1462,8 @@ export interface FleetJobView {
    */
   episode: string | null;
   account: string;
-  /** The class of the account it landed on: pool, paid, local, or pinned. */
-  accountClass: "pinned" | "pool" | "paid" | "local";
+  /** Where the account it landed on comes from: the pool, or a pin. */
+  accountClass: "pinned" | "pool";
   source: string;
   /** The n-th attempt on (model, episode); absent on a job from the file. */
   attempt?: number;
@@ -1482,8 +1490,8 @@ export interface FleetJobView {
  */
 export interface FleetAccountView {
   account: string;
-  /** `pinned` (a job names it), or the class that may schedule it. */
-  class: "pinned" | "pool" | "paid" | "local";
+  /** `pinned` (a job names it), or `pool`. */
+  class: "pinned" | "pool";
   job: string | null;
 }
 
@@ -1629,6 +1637,26 @@ export interface FleetResponse extends SnapshotEnvelope {
   preflight?: FleetPreflightView;
   /** Every job with a process, as the supervisor published it. */
   jobs: FleetJobView[];
+  /**
+   * Every credential's state as the supervisor last saw it: slots in use, the
+   * budget and what it has used, whether its secret's variable is set (never
+   * its value), what it holds, the newest failure that indicts it.
+   * Operator-only: the public build ships none (`projectFleet`).
+   */
+  credentials?: {
+    id: string;
+    provider: string;
+    billing: "free" | "paid";
+    enabled: boolean;
+    secretEnv: string;
+    secretSet: boolean;
+    slots: number;
+    inUse: number;
+    budget: string;
+    used: string | null;
+    held: { scored?: string; freeplay?: string };
+    lastError: { reason: string; at: number } | null;
+  }[];
   /** Every account the supervisor knows, with its class and what holds it. */
   accounts: FleetAccountView[];
   /** Paused runs the supervisor is not resuming right now, with why. */
@@ -2849,8 +2877,8 @@ export interface ModelRowView {
   /**
    * Free or paid (`runner/src/model-cost.ts`). Since the tier became the only
    * budget this says only
-   * where a run may physically execute — the account class and the rate-limit
-   * key. It buys no runs and costs none: that is the tier.
+   * which credential may carry a run (a metered key's billing side). It buys
+   * no runs and costs none: that is the tier.
    *
    * NOT the same verdict as `ResultRun.billing`, and the two disagree on
    * purpose: this one answers "does this consume the paid concurrency budget",
@@ -2921,23 +2949,16 @@ export interface ModelsResponse extends SnapshotEnvelope {
     promoteAtLevel: number;
     /** The series the counts are keyed on (this checkout's); null when unversioned, which counts every run. */
     series: string | null;
-    /** The paid throttle when the file turns it on; null is no split. Only a cap — never a budget. */
-    paid: { maxConcurrent: number } | null;
     /** The ladder itself, so a page can name a tier's budget without hardcoding it. */
     tiers: Record<TierView, { runsPerEpisode: { e90: number; e360: number }; promotesTo: TierView | null; label: string }>;
+    /** `policy.maxSessions`: how many sessions of a driver one host carries at once. An empty object caps none. */
+    maxSessions: Record<string, number>;
     /**
-     * `policy.maxConcurrent`: runs the policy may have in flight per key,
-     * counting every run on that key. An absent key is unlimited; an empty
-     * object is a file that names no cap.
-     *
-     * Most keys are a roster entry's own (`concurrencyKeyOf`). The exception is
-     * Claude: a run counts against BOTH `claude-code` — every session in flight,
-     * whichever subscription pays — and `claude-code:<ENV NAME>`, that one
-     * subscription's, and needs room in both. Which subscription a run bills is
-     * decided when it is scheduled, so no key here is derivable from the entry
-     * alone.
+     * The provider credentials runs take slots on, in preference order: id,
+     * provider, billing, slots, enabled — never where the secret lives.
+     * Private: the public build ships none (`projectModels`).
      */
-    maxConcurrent: Record<string, number>;
+    credentials?: { id: string; provider: string; billing: "free" | "paid"; slots: number; enabled: boolean }[];
   };
   /** The defer ladder's rungs, so the page can say "rung 3 of 9" honestly. */
   ladderMs: number[];

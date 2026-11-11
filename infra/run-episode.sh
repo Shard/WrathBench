@@ -55,7 +55,7 @@ DRIVER=""
 RESUME=""
 MODEL=""
 LOCAL=0
-# The subscription lane, by env var NAME. The runner defaults to the same one;
+# The credential's variable, by NAME (a claude-code token, a codex home). The runner defaults to the same one;
 # it is read here only so the preflight below checks the var this run will
 # actually use, and names it when it is missing. Empty means "the driver's
 # default": CLAUDE_CODE_OAUTH_TOKEN for claude-code, CODEX_HOME for codex.
@@ -108,9 +108,9 @@ while [ $# -gt 0 ]; do
       PASSTHROUGH+=("--resume" "${2:-}")
       shift 2
       ;;
-    --token-env)
+    --credential-env)
       TOKEN_ENV="${2:-}"
-      PASSTHROUGH+=("--token-env" "${2:-}")
+      PASSTHROUGH+=("--credential-env" "${2:-}")
       shift 2
       ;;
     --local)
@@ -214,7 +214,7 @@ run-episode.sh: ${TOKEN_ENV} is not available to the runner.
   2. put the token in .env as ${TOKEN_ENV}=... (.env is gitignored)
      — .env, not just your shell: inside the container Bun loads it from
      /wrathbench/.env, which is how the token reaches the runner at all.
-  (${TOKEN_ENV} is this run's subscription LANE; another subscription's
+  (${TOKEN_ENV} is this run's credential variable; another subscription's
    token in another variable does not stand in for it.)
 EOF
   }

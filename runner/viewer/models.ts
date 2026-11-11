@@ -47,7 +47,6 @@ import {
   type RosterModel,
   type SchedulingPolicy,
   type RunFact,
-  type ClassAccountCounts,
   TIERS,
   TIER_TABLE,
   IDLE_MODES,
@@ -56,6 +55,7 @@ import { harnessSeries } from "../src/comparability";
 import { isEpisodeId } from "../src/episodes";
 import { parseCampaignBlocks, type Campaign, type CampaignRefusal, type PublishedCampaign } from "../src/campaigns";
 import { rosterEntryRefusal } from "../src/roster-refusal";
+import { parseCredentials, type Credential } from "../src/credentials";
 import { harnessVersion } from "../src/version";
 import type { EpisodeIdView, HarnessView, ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse } from "./api-types";
 import { redactSecrets } from "./tail";
@@ -116,16 +116,14 @@ const fleetJobSchema = z
   .loose();
 
 /**
- * The account classes, as counts. Read from the file rather than
- * from `fleet-state.json` so the page's concurrency figures agree with
- * `--status` even with the supervisor down — `--status` reads
- * `classAccountsOf(config, …)`, which is this same block.
+ * The account pool, as a count of live sessions. Read from the file rather
+ * than from `fleet-state.json` so the page's concurrency figures agree with
+ * `--status` even with the supervisor down.
  */
 const fleetAccountsSchema = z
   .object({
     pool: z.array(z.string()).optional(),
-    paid: z.array(z.string()).optional(),
-    local: z.array(z.string()).optional(),
+    max: z.number().optional(),
   })
   .loose();
 
@@ -135,6 +133,7 @@ const fleetRosterSchema = z
     queue: z.array(fleetJobSchema).optional(),
     policy: z.unknown().optional(),
     accounts: fleetAccountsSchema.optional(),
+    credentials: z.unknown().optional(),
     campaigns: z.unknown().optional(),
     "campaign-defs": z.unknown().optional(),
   })
@@ -151,12 +150,11 @@ export interface RosterRead {
   /** The file's `policy` block over the defaults (`parsePolicyBlock`), keyed on this checkout's series. */
   policy: SchedulingPolicy;
   /**
-   * `policy.maxConcurrent`: runs the policy may have in flight per key
-   * (`concurrencyKeyOf`, plus the `claude-code:<ENV NAME>` subscription lanes,
-   * which a claude run spends alongside the `claude-code` total). Absent key
-   * means unlimited; an empty object means the file names no cap.
+   * The provider credentials runs take slots on (`runner/src/credentials.ts`),
+   * in preference order; empty when the store names none, or names them
+   * unreadably (the supervisor's to refuse).
    */
-  maxConcurrent: Record<string, number>;
+  credentials: Credential[];
   /**
    * Roster names the policy does not schedule, with why (`policyRefs` in
    * `runner/src/models.ts` — the supervisor's own predicate): a name a pinned
@@ -171,8 +169,8 @@ export interface RosterRead {
    * budget), so this is what the page means by "the roster has N entries".
    */
   count: number;
-  /** `accounts.pool` / `.paid` / `.local` as counts: the ETA's concurrency. */
-  accounts: ClassAccountCounts;
+  /** How many pool accounts may be live at once (`accounts.max`, else the pool's size): the ETA's concurrency. */
+  accounts: number;
   /**
    * The `campaigns` block joined to its published definitions, or empty when
    * the store names none or names them unreadably — a campaigns block that
@@ -228,7 +226,7 @@ export function readFleetRoster(
   env: Record<string, string | undefined> = process.env,
 ): RosterRead {
   const defaults: SchedulingPolicy = { ...DEFAULT_POLICY, series };
-  const empty = { models: [], policy: defaults, maxConcurrent: {}, excluded: [], count: 0, accounts: {}, campaigns: [], campaignDefs: [], campaignRefusals: [] };
+  const empty = { models: [], policy: defaults, credentials: [], excluded: [], count: 0, accounts: 0, campaigns: [], campaignDefs: [], campaignRefusals: [] };
   const read = readFleetConfig(dbPath);
   const path = read.path;
   if (read.status === "empty") return { ...empty, shape: "missing", path };
@@ -240,13 +238,16 @@ export function readFleetRoster(
     return { ...empty, shape: "unreadable", path };
   }
   let policy: SchedulingPolicy = defaults;
-  let maxConcurrent: Record<string, number> = {};
   try {
-    const { maxConcurrent: cap, ...rest } = parsePolicyBlock(parsed.policy, series);
-    policy = rest;
-    maxConcurrent = cap;
+    policy = parsePolicyBlock(parsed.policy, series);
   } catch {
     /* a malformed policy block is the supervisor's to refuse; the page shows the defaults */
+  }
+  let credentials: Credential[] = [];
+  try {
+    credentials = parseCredentials(parsed.credentials);
+  } catch {
+    /* a malformed credential is the supervisor's to refuse; the page shows none */
   }
   const models: RosterModel[] = [];
   for (const [name, e] of Object.entries(parsed.roster)) {
@@ -281,11 +282,8 @@ export function readFleetRoster(
     const reason = policyExclusion(jobs, {}, name);
     if (reason !== undefined) excluded.push({ name, reason });
   }
-  const accounts: ClassAccountCounts = {
-    pool: parsed.accounts?.pool?.length ?? 0,
-    paid: parsed.accounts?.paid?.length ?? 0,
-    local: parsed.accounts?.local?.length ?? 0,
-  };
+  const poolSize = parsed.accounts?.pool?.length ?? 0;
+  const accounts = Math.min(poolSize, parsed.accounts?.max ?? poolSize);
   let campaigns: Campaign[] = [];
   let campaignDefs: PublishedCampaign[] = [];
   let campaignRefusals: CampaignRefusal[] = [];
@@ -294,15 +292,15 @@ export function readFleetRoster(
     // unpublished version, a definition that no longer checks out, an
     // (assignment, arm) pair that cannot launch. Carried to the page, never
     // swallowed.
-    // An entry the supervisor refuses — an unknown key, a provider key
-    // towards a host its provider does not own, a subscription the policy
-    // does not list — is scheduled by nothing, so its squares are refused here
+    // An entry the supervisor refuses — an unknown key, a base no
+    // credential provider serves, a pinned credential that cannot carry it —
+    // is scheduled by nothing, so its squares are refused here
     // too (`campaignPairRefusals`), not shown as owed work. The verdict is the
     // supervisor's own function (`rosterEntryRefusal`); its text stays off the
     // page, whose squares say only that the entry is refused.
     const pairs = Object.fromEntries(
       Object.entries(parsed.roster).map(([n, e]) => {
-        const refused = rosterEntryRefusal(e, policy.subscriptions, env)?.why;
+        const refused = rosterEntryRefusal(e, credentials, env)?.why;
         return [n, { driver: e.driver, compactWindow: windowOf(e.compactWindow, e.driver), ...(refused !== undefined ? { refused } : {}) }];
       }),
     );
@@ -319,7 +317,7 @@ export function readFleetRoster(
     shape: "roster",
     path,
     policy,
-    maxConcurrent,
+    credentials,
     excluded,
     count: Object.keys(parsed.roster).length,
     accounts,
@@ -566,9 +564,9 @@ export function modelsResponse(opts: {
     policy: {
       promoteAtLevel: opts.roster.policy.promoteAtLevel,
       series: opts.roster.policy.series,
-      paid: opts.roster.policy.paid,
       tiers: TIER_TABLE,
-      maxConcurrent: opts.roster.maxConcurrent,
+      maxSessions: { ...opts.roster.policy.maxSessions },
+      credentials: opts.roster.credentials.map((c) => ({ id: c.id, provider: c.provider, billing: c.billing, slots: c.slots, enabled: c.enabled })),
     },
     ladderMs: [...LADDER_MS],
     harness,

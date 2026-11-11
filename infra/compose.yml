@@ -35,7 +35,7 @@ x-wb-db: &wb-db
   WRATHBENCH_DB_USER: root
   WRATHBENCH_DB_PASSWORD: ${WRATHBENCH_DB_ROOT_PASSWORD:-wrathbench}
 
-# The `codex` driver's subscription LANE (runner/README.md, "The codex driver"): a
+# The `codex` driver's CREDENTIAL (runner/README.md, "The codex driver"): a
 # logged-in Codex home — a DIRECTORY holding auth.json and the persisted
 # threads, never a token. It is mounted, never copied: the CLI refreshes the
 # ChatGPT token in place and a second copy invalidates the first ("refresh
@@ -45,7 +45,7 @@ x-wb-db: &wb-db
 # same directory run-episode.sh's host `--local` path uses; compose reads it
 # from the shell or from `--env-file .env`. Unset or empty, it is data/codex
 # in this checkout: gitignored, empty until someone logs in there, and nobody
-# else's home. So a stack with no codex lane comes up, and only a codex
+# else's home. So a stack with no codex home comes up, and only a codex
 # episode fails, at its first call.
 #
 # The container side is a fixed path, and the services set CODEX_HOME to it:
@@ -53,7 +53,7 @@ x-wb-db: &wb-db
 # autoload does not overwrite a variable the environment already set, so the
 # compose value wins inside the container. uid 1000 on both sides, so the
 # refresh writes through.
-x-codex-lane: &codex-lane "${CODEX_HOME:-../data/codex}:/home/bun/.codex"
+x-codex-home: &codex-home "${CODEX_HOME:-../data/codex}:/home/bun/.codex"
 
 x-ac-build: &ac-build
   context: ..
@@ -253,13 +253,13 @@ services:
       AC_WRATH_BENCH_ACCOUNT: "${WRATHBENCH_ACCOUNT_USER:-RUNNER}"
       # Account allowlist: every surface taking an "account" param serves only
       # these (module refuses others with 403 account_not_permitted).
-      # SHAKEOUT2 is the second subscription-lane account (parallel opus+sonnet;
+      # SHAKEOUT2 is a second hand-launch account (parallel opus+sonnet;
       # one live session per account).
       # SMOKE..SMOKE4 are the fleet's preflight-gate accounts (the config store's
       # `preflight` block): the gate's smokes log in as them, one account per parallel
-      # chain, so they never contend with a lane or with PROBE (the ad-hoc
+      # chain, so they never contend with a job or with PROBE (the ad-hoc
       # debugging account).
-      # RUNNER7 is the second PAID account (accounts.paid in the config).
+      # RUNNER7 is one more account for the config's account pool.
       #
       # ADDING ONE IS TWO STEPS. A name here takes effect only when the
       # worldserver container is next recreated, and until then the module
@@ -313,7 +313,7 @@ services:
     # relies on.
     environment:
       <<: *wb-db
-      # The codex lane inside the container (see x-codex-lane above).
+      # The codex home inside the container (see x-codex-home above).
       CODEX_HOME: /home/bun/.codex
       # The derived store, which `bun wb --local inspect` reads a run from
       # rather than a live run's run.sqlite (infra/inspect-run.ts). Like the
@@ -328,7 +328,7 @@ services:
       # named explicitly so the contract survives the repo mount going away.
       - ../data/wiki:/wrathbench/data/wiki
       - ../data/runs:/wrathbench/data/runs
-      - *codex-lane
+      - *codex-home
     networks: [wrathbench]
     restart: unless-stopped
     depends_on:
@@ -350,7 +350,7 @@ services:
   # image) and onto direct child processes.
   #
   # `profiles` keeps a bare `docker compose up -d` from starting a SECOND
-  # supervisor against the same config (two lanes on one account is a night
+  # supervisor against the same config (two jobs on one account is a night
   # of account_in_use). Naming the service activates the profile, so
   #   docker compose --env-file .env -f infra/compose.yml up -d --no-deps fleet
   # still works — and --no-deps is not optional: without it compose may decide a
@@ -380,7 +380,7 @@ services:
       GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: safe.directory
       GIT_CONFIG_VALUE_0: /wrathbench
-      # The codex lane inside the container (see x-codex-lane above). The
+      # The codex home inside the container (see x-codex-home above). The
       # supervisor's own preflight only checks the variable is set; the mount
       # below is what makes it name a logged-in home.
       CODEX_HOME: /home/bun/.codex
@@ -388,7 +388,7 @@ services:
       - ..:/wrathbench
       - ../data/wiki:/wrathbench/data/wiki
       - ../data/runs:/wrathbench/data/runs
-      - *codex-lane
+      - *codex-home
     networks: [wrathbench]
     # Reaps the orphaned grandchildren an episode can leave behind; bun as pid 1
     # would not.

@@ -80,7 +80,7 @@ const config: Pick<FleetConfig, "jobs" | "roster" | "policy" | "accounts"> = {
   jobs: [],
   roster,
   policy: { ...DEFAULT_POLICY, series: "0.5" },
-  accounts: { pinned: {}, pool: ["RUNNER2", "RUNNER3", "RUNNER4"], paid: [], local: [] },
+  accounts: { pinned: {}, pool: ["RUNNER2", "RUNNER3", "RUNNER4"], max: 3 },
 };
 const held = (): string | undefined => undefined;
 

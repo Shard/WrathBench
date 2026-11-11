@@ -165,11 +165,11 @@ function exhaustEta(lo: number | null, hi: number | null): string {
   return a === b ? a : `${a}–${b}`;
 }
 
-/** `pool 4/5`, `paid 0/1`, `local 0/1` — busy over total per schedulable class, one line each; classes with no accounts left out. */
+/** `pool 4/5` — busy over total in the pool; left out when it has no accounts. */
 export function accountsBusy(f: Pick<FleetResponse, "accounts" | "jobs">): string[] {
   const busy = new Set(f.jobs.filter((j) => j.alive).map((j) => j.account.toUpperCase()));
   const parts: string[] = [];
-  for (const cls of ["pool", "paid", "local"] as const) {
+  for (const cls of ["pool"] as const) {
     const of = f.accounts.filter((a) => a.class === cls);
     if (of.length === 0) continue;
     parts.push(`${cls} ${of.filter((a) => busy.has(a.account.toUpperCase())).length}/${of.length}`);

@@ -228,11 +228,12 @@ fleet can launch in a run pod.
   is on disk, none is `launch-failed` or still in flight, and every member
   that ended on its own verdict counts; a paused party resumes whole or not at
   all. Unscored like every probe.
-- **A campaign's lane.** A pinned campaign's store row may name the
-  subscription lane its launches bill (`subscription`; operator, 2026-10-19:
-  the Deadmines party on the second Claude lane). It overrides the assignment's
-  roster lane for that campaign's runs only and never reaches a scored run of
-  the same entry, so pinning a probe to a lane does not move an eval.
+- **A campaign's credential.** A pinned campaign's store row may name the
+  credential its launches take (`credential`; operator, 2026-10-19: the
+  Deadmines party on the second Claude subscription). It overrides the
+  assignment's own placement for that campaign's runs only and never reaches a
+  scored run of the same entry, so pinning a probe to a credential does not
+  move an eval.
 - **Objective.** Allowed, and set only by the definition. The to-level-10
   campaigns carry none: the standing goal already drives levelling, and naming
   a level is the statistic the goal wording avoids. An objective replaces the

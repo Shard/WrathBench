@@ -1,31 +1,36 @@
 /**
- * Move a paused or ended run to another subscription lane (GitHub issue #331,
- * proposal 1; docs/RUNBOOK.md, "Moving a run to another lane").
+ * Move a paused or ended run to another credential of its provider (GitHub
+ * issue #331, proposal 1, on credentials since #429; docs/RUNBOOK.md, "Moving
+ * a run to another credential").
  *
- * A run's lane is part of its identity: `meta.json`'s `config.subscription`
- * names it, and `--resume` rebuilds the config from there, so `--token-env` is
- * no override on a resume and a roster pin alone does not move a paused run.
- * This is the one supported write that does. It holds two things together
- * that a hand edit kept apart:
+ * A run's credential is part of its identity: `meta.json`'s
+ * `config.credential` names it (with the variable its CLI reads,
+ * `config.credentialEnv`, and its usage thresholds, `config.usageMaxPct`), and
+ * `--resume` rebuilds the config from there, so a roster pin alone does not
+ * move a paused run. This is the one supported write that does. It holds two
+ * things together that a hand edit kept apart:
  *
- * - **Two writes, one invariant.** The runner bills the lane in meta.json; the
- *   fleet places and counts a pinned entry by its roster `subscription`. With
- *   `pin` both move, meta.json first: the fleet may resume the run within
- *   seconds of a roster write, and a resume that read the old meta.json would
- *   bill the old lane and write it back. The pin is validated before meta.json
- *   is touched, so after the rewrite only I/O can fail it, and a re-run of the
- *   same command applies a pin that is still owed. Without `pin`, an entry
- *   that already pins another lane refuses the move rather than diverge.
+ * - **Two writes, one invariant.** The runner bills the credential in
+ *   meta.json; the fleet places and counts a pinned entry by its roster
+ *   `credential`. With `pin` both move, meta.json first: the fleet may resume
+ *   the run within seconds of a roster write, and a resume that read the old
+ *   meta.json would bill the old credential and write it back. The pin is
+ *   validated before meta.json is touched, so after the rewrite only I/O can
+ *   fail it, and a re-run of the same command applies a pin that is still
+ *   owed. Without `pin`, an entry that already pins another credential
+ *   refuses the move rather than diverge.
  * - **A record.** Each move appends `{ from, to, at, actor, note }` to the
- *   run's `laneHistory` (top level, never `config`; operator-only like
+ *   run's `credentialHistory` (top level, never `config`; operator-only like
  *   `subscriptionUsage`).
  *
  * Refused, writing nothing: a run with a live owner (`liveOwnerOf`, the check
  * `run.ts --resume` and the roster make) or with no verdict at all (the fleet
- * resumes that as `offline` on its next tick); a lane `policy.subscriptions`
- * does not list; a lane of another kind than the run's driver bills; and any
- * driver whose lane is not `movable` (drivers.ts) — today everything but the
- * Claude CLI, whose lane is a bare credential.
+ * resumes that as `offline` on its next tick); a credential the config does
+ * not hold, is disabled, or would not carry the run's model
+ * (`credentialCandidates`); and any driver whose credential is not `movable`
+ * (drivers.ts) — today everything but the Claude CLI, whose credential is a
+ * bare token. A Codex home holds the CLI's own threads, so a codex run stays
+ * where it started.
  *
  * meta.json is rewritten atomically — a temp file in the same directory, then
  * a rename — in its own indentation and trailing newline, with its mode bits
@@ -35,33 +40,33 @@
 import { chmodSync, chownSync, closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { parseFleet, rosterModels, type FleetConfig } from "../../infra/run-fleet-config";
-import { isTokenEnvName } from "./config";
 import type { ConfigStore } from "./config-store";
-import { DEFAULT_DRIVER, driverEntry, laneHoldsOf } from "./drivers";
+import { credentialCandidates, isCredentialId } from "./credentials";
+import { DEFAULT_DRIVER, driverEntry } from "./drivers";
 import { liveOwnerOf, matchesRoster, readRunFact } from "./models";
-import type { LaneMove } from "./trajectory";
+import type { CredentialMove } from "./trajectory";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 
 /** A move refused before anything was written. */
-export class LaneMoveRefused extends Error {
+export class CredentialMoveRefused extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "LaneMoveRefused";
+    this.name = "CredentialMoveRefused";
   }
 }
 
 /** meta.json was moved, and the roster pin that should follow it was not written. */
-export class LanePinFailed extends Error {
+export class CredentialPinFailed extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "LanePinFailed";
+    this.name = "CredentialPinFailed";
   }
 }
 
-export interface MoveLaneOptions {
+export interface MoveCredentialOptions {
   runsDir: string;
   runId: string;
-  /** The lane variable NAME to move to (`CLAUDE_CODE_OAUTH_TOKEN_2`). */
+  /** The credential id to move to (`claude-2`). */
   to: string;
   /** Also pin the run's roster entry to `to`, after meta.json. */
   pin: boolean;
@@ -72,7 +77,7 @@ export interface MoveLaneOptions {
   now?: () => number;
 }
 
-export interface MoveLaneResult {
+export interface MoveCredentialResult {
   from: string;
   to: string;
   /** Whether meta.json was rewritten: false when it already named `to` and only the pin was owed. */
@@ -81,27 +86,27 @@ export interface MoveLaneResult {
   pinned: string | null;
   /** The roster entry the run belongs to, when exactly one does. */
   ref: string | null;
-  /** How many moves `laneHistory` holds now. */
+  /** How many moves `credentialHistory` holds now. */
   history: number;
   /** Things the operator should know that did not stop the move. */
   warnings: string[];
 }
 
-type MetaDoc = Record<string, unknown> & { config: Record<string, unknown>; laneHistory?: unknown };
+type MetaDoc = Record<string, unknown> & { config: Record<string, unknown>; credentialHistory?: unknown };
 
-export function moveLane(o: MoveLaneOptions): MoveLaneResult {
+export function moveCredential(o: MoveCredentialOptions): MoveCredentialResult {
   const now = o.now ?? Date.now;
   const note = o.note.trim();
-  if (note.length === 0) throw new LaneMoveRefused("a lane move needs --note: laneHistory records why the run moved");
-  if (!isTokenEnvName(o.to)) throw new LaneMoveRefused(`${JSON.stringify(o.to)} is not an env var name — name the variable that holds the lane's credential, never the credential`);
+  if (note.length === 0) throw new CredentialMoveRefused("a credential move needs --note: credentialHistory records why the run moved");
+  if (!isCredentialId(o.to)) throw new CredentialMoveRefused(`${JSON.stringify(o.to)} is not a credential id — name the credential (bun wb config credentials), never a secret`);
 
   const dir = join(o.runsDir, o.runId);
   const metaPath = join(dir, "meta.json");
   if (!existsSync(metaPath)) {
     if (existsSync(join(o.runsDir, ARCHIVE_DIR, o.runId, "meta.json"))) {
-      throw new LaneMoveRefused(`run ${o.runId} is archived; nothing resumes an archived run, so there is no lane to move`);
+      throw new CredentialMoveRefused(`run ${o.runId} is archived; nothing resumes an archived run, so there is no credential to move`);
     }
-    throw new LaneMoveRefused(`no meta.json for run ${o.runId} under ${o.runsDir}`);
+    throw new CredentialMoveRefused(`no meta.json for run ${o.runId} under ${o.runsDir}`);
   }
   const text = readFileSync(metaPath, "utf8");
   const meta = parseMeta(text, o.runId);
@@ -109,29 +114,32 @@ export function moveLane(o: MoveLaneOptions): MoveLaneResult {
   // The driver's facts, never its name.
   const driverName = typeof meta.config["driver"] === "string" ? meta.config["driver"] : DEFAULT_DRIVER;
   const entry = driverEntry(driverName);
-  if (entry === undefined) throw new LaneMoveRefused(`run ${o.runId} names driver ${driverName}, which this build does not know`);
-  const lane = entry.lane;
-  if (lane === undefined) throw new LaneMoveRefused(`run ${o.runId} is a ${entry.id} run, which bills no subscription lane — there is nothing to move`);
-  if (!lane.movable) {
-    throw new LaneMoveRefused(
-      `run ${o.runId} is a ${entry.id} run: its lane holds more than a credential (the CLI's own threads), so moving it is not supported`,
+  if (entry === undefined) throw new CredentialMoveRefused(`run ${o.runId} names driver ${driverName}, which this build does not know`);
+  const cli = entry.credential;
+  if (cli === undefined) throw new CredentialMoveRefused(`run ${o.runId} is a ${entry.id} run, whose credential is its endpoint key — there is nothing to move`);
+  if (!cli.movable) {
+    throw new CredentialMoveRefused(
+      `run ${o.runId} is a ${entry.id} run: its credential holds more than a secret (the CLI's own threads), so moving it is not supported`,
     );
   }
-  if (laneHoldsOf(o.to) !== lane.holds) throw new LaneMoveRefused(`${o.to} is not a ${entry.id} lane`);
 
   const fleet = parsedFleet(o.store, o.env);
-  if (!fleet.policy.subscriptions.includes(o.to)) {
-    throw new LaneMoveRefused(`${o.to} is not in policy.subscriptions (${fleet.policy.subscriptions.join(", ")}) — list it there first`);
-  }
+  const model = typeof meta.config["model"] === "string" ? meta.config["model"] : "";
+  const fit = credentialCandidates(fleet.credentials, { model, driver: driverName }, { pin: o.to, ...(o.env !== undefined ? { env: o.env } : {}) });
+  const target = fit.candidates[0];
+  if (target === undefined) throw new CredentialMoveRefused(`${fit.why ?? `${o.to} cannot carry this run`} — nothing written`);
 
-  const from = typeof meta.config["subscription"] === "string" ? meta.config["subscription"] : lane.defaultEnv;
+  const from = typeof meta.config["credential"] === "string" ? meta.config["credential"] : null;
+  if (from === null) {
+    throw new CredentialMoveRefused(`run ${o.runId} records no credential (a 0.5 run, or one launched by hand) — nothing resumes it on one`);
+  }
 
   // Not live, and paused or ended: the same owner check a resume makes, then a verdict.
   refuseOwned(o.runsDir, o.runId, now());
   const fact = readRunFact(o.runsDir, o.runId, now());
-  if (fact === null) throw new LaneMoveRefused(`run ${o.runId}: meta.json does not read as a run (no episode or no model)`);
+  if (fact === null) throw new CredentialMoveRefused(`run ${o.runId}: meta.json does not read as a run (no episode or no model)`);
   if (fact.pause === null && fact.terminationReason === null) {
-    throw new LaneMoveRefused(
+    throw new CredentialMoveRefused(
       `run ${o.runId} is neither paused nor ended — a run with no verdict is resumed as offline on the fleet's next tick; pause it first (roster idle "none")`,
     );
   }
@@ -143,44 +151,47 @@ export function moveLane(o: MoveLaneOptions): MoveLaneResult {
   const rawPin = key === null ? undefined : pinOf(o.store.get(key));
 
   if (o.pin && key === null) {
-    throw new LaneMoveRefused(
+    throw new CredentialMoveRefused(
       owners.length === 0
         ? `--pin: no roster entry is run ${o.runId}'s (model ${fact.model}${fact.effort !== null ? `, effort ${fact.effort}` : ""}) — nothing written`
         : `--pin: ${owners.map((r) => `roster/${r.name}`).join(" and ")} all match run ${o.runId}; pin the right one with \`config patch\` — nothing written`,
     );
   }
   if (!o.pin && rawPin !== undefined && rawPin !== o.to) {
-    throw new LaneMoveRefused(
-      `${key} pins ${rawPin}: the fleet would count the run against ${rawPin} while it bills ${o.to}. Pass --pin to move the pin with it — nothing written`,
+    throw new CredentialMoveRefused(
+      `${key} pins ${rawPin}: the fleet would count the run against ${rawPin} while it is on ${o.to}. Pass --pin to move the pin with it — nothing written`,
     );
   }
 
   const pinOwed = o.pin && rawPin !== o.to;
   if (from === o.to && !pinOwed) {
-    throw new LaneMoveRefused(`run ${o.runId} is already on ${o.to}${o.pin ? ` and ${key} pins it` : ""} — nothing written`);
+    throw new CredentialMoveRefused(`run ${o.runId} is already on ${o.to}${o.pin ? ` and ${key} pins it` : ""} — nothing written`);
   }
   // Validated now, so that once meta.json has moved only I/O can stop the pin.
   if (pinOwed) {
     try {
-      o.store.checkPatch(key!, { subscription: o.to });
+      o.store.checkPatch(key!, { credential: o.to });
     } catch (e) {
-      throw new LaneMoveRefused(`--pin: ${key} would be refused: ${e instanceof Error ? e.message : String(e)} — nothing written`);
+      throw new CredentialMoveRefused(`--pin: ${key} would be refused: ${e instanceof Error ? e.message : String(e)} — nothing written`);
     }
   }
 
   const warnings: string[] = [];
-  let history = Array.isArray(meta.laneHistory) ? meta.laneHistory.length : 0;
+  let history = Array.isArray(meta.credentialHistory) ? meta.credentialHistory.length : 0;
   const moved = from !== o.to;
   if (moved) {
-    const move: LaneMove = { from, to: o.to, at: now(), actor: o.actor, note };
-    meta.config["subscription"] = o.to;
-    meta.laneHistory = [...(Array.isArray(meta.laneHistory) ? meta.laneHistory : []), move];
+    const move: CredentialMove = { from, to: o.to, at: now(), actor: o.actor, note };
+    meta.config["credential"] = target.id;
+    meta.config["credentialEnv"] = target.secretEnv;
+    if (target.budget?.kind === "usage") meta.config["usageMaxPct"] = { scored: target.budget.scoredMaxPct, freeplay: target.budget.freeplayMaxPct };
+    else delete meta.config["usageMaxPct"];
+    meta.credentialHistory = [...(Array.isArray(meta.credentialHistory) ? meta.credentialHistory : []), move];
     history += 1;
     const out = formatLike(text, meta);
     // The last look before the rename: a resume that started since would
     // rewrite meta.json itself, and the rename must not clobber that.
     refuseOwned(o.runsDir, o.runId, now());
-    if (readFileSync(metaPath, "utf8") !== text) throw new LaneMoveRefused(`run ${o.runId}: meta.json changed while the move was prepared — nothing written; run it again`);
+    if (readFileSync(metaPath, "utf8") !== text) throw new CredentialMoveRefused(`run ${o.runId}: meta.json changed while the move was prepared — nothing written; run it again`);
     writeAtomic(metaPath, out);
     const after = liveOwnerOf(o.runsDir, o.runId, now());
     if (after !== null) {
@@ -191,12 +202,12 @@ export function moveLane(o: MoveLaneOptions): MoveLaneResult {
   let pinned: string | null = null;
   if (pinOwed) {
     try {
-      o.store.patch(key!, { subscription: o.to }, { actor: o.actor, note: `move-lane ${o.runId}: ${note}` });
+      o.store.patch(key!, { credential: o.to }, { actor: o.actor, note: `move-credential ${o.runId}: ${note}` });
       pinned = key;
     } catch (e) {
-      throw new LanePinFailed(
+      throw new CredentialPinFailed(
         `meta.json ${moved ? "moved to" : "already names"} ${o.to}, but ${key} was not pinned: ${e instanceof Error ? e.message : String(e)}. ` +
-          `The run bills ${o.to} while the fleet counts ${key} against ${rawPin ?? "the lane it places it on"}; run the same command again to apply the pin`,
+          `The run is on ${o.to} while the fleet counts ${key} against ${rawPin ?? "the credential it places it on"}; run the same command again to apply the pin`,
       );
     }
   }
@@ -208,31 +219,31 @@ function parseMeta(text: string, runId: string): MetaDoc {
   try {
     raw = JSON.parse(text);
   } catch (e) {
-    throw new LaneMoveRefused(`run ${runId}: meta.json does not parse (${e instanceof Error ? e.message : String(e)})`);
+    throw new CredentialMoveRefused(`run ${runId}: meta.json does not parse (${e instanceof Error ? e.message : String(e)})`);
   }
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new LaneMoveRefused(`run ${runId}: meta.json is not an object`);
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new CredentialMoveRefused(`run ${runId}: meta.json is not an object`);
   const config = (raw as { config?: unknown }).config;
-  if (typeof config !== "object" || config === null || Array.isArray(config)) throw new LaneMoveRefused(`run ${runId}: meta.json has no config`);
+  if (typeof config !== "object" || config === null || Array.isArray(config)) throw new CredentialMoveRefused(`run ${runId}: meta.json has no config`);
   return raw as MetaDoc;
 }
 
 function parsedFleet(store: ConfigStore, env: Record<string, string | undefined> | undefined): FleetConfig {
-  if (store.isEmpty()) throw new LaneMoveRefused("the config store is empty — there is no policy.subscriptions to check the lane against");
+  if (store.isEmpty()) throw new CredentialMoveRefused("the config store is empty — there are no credentials to move to");
   try {
     return parseFleet(store.render(), env !== undefined ? { env } : {});
   } catch (e) {
-    throw new LaneMoveRefused(`the config store does not parse: ${e instanceof Error ? e.message : String(e)}`);
+    throw new CredentialMoveRefused(`the config store does not parse: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
 function refuseOwned(runsDir: string, runId: string, now: number): void {
   const owner = liveOwnerOf(runsDir, runId, now);
-  if (owner !== null) throw new LaneMoveRefused(`run ${runId} has a live owner: ${owner} — pause it first (roster idle "none")`);
+  if (owner !== null) throw new CredentialMoveRefused(`run ${runId} has a live owner: ${owner} — pause it first (roster idle "none")`);
 }
 
 function pinOf(row: unknown): string | undefined {
   if (typeof row !== "object" || row === null) return undefined;
-  const v = (row as { subscription?: unknown }).subscription;
+  const v = (row as { credential?: unknown }).credential;
   return typeof v === "string" ? v : undefined;
 }
 

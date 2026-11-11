@@ -177,7 +177,7 @@ const CAMPAIGNS: CampaignsResponse = { campaigns: [], refused: [], now: GENERATE
 const MODELS: ModelsResponse = {
   models: [],
   roster: { path: null, shape: "roster", count: 0, excluded: [] },
-  policy: { promoteAtLevel: 10, series: "0.4", paid: null, tiers: {} as ModelsResponse["policy"]["tiers"], maxConcurrent: {} },
+  policy: { promoteAtLevel: 10, series: "0.4", tiers: {} as ModelsResponse["policy"]["tiers"], maxSessions: {} },
   ladderMs: [],
   harness: "all",
   now: GENERATED_AT,

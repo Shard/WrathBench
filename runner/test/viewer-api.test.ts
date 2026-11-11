@@ -793,7 +793,7 @@ function jobState(runs: string, account: string, extra: Record<string, unknown> 
       stamp: "20260822",
       fleetConfig: "/wrathbench/infra/fleet.json",
       configLoadedAt: 3,
-      accounts: { pinned: { SHAKEOUT: "probe-freeplay" }, pool: { [account]: "job-a" }, paid: { PAID: null } },
+      accounts: { pinned: { SHAKEOUT: "probe-freeplay" }, pool: { [account]: "job-a", PAID: null } },
       jobs: {
         "job-a": {
           ref: "a",
@@ -839,16 +839,16 @@ describe("fleet state", () => {
     });
     const f = readFleet(runs);
     expect(f.present).toBe(true);
-    expect(f.jobs.map((j) => [j.name, j.accountClass])).toEqual([["probe-freeplay", "pinned"], ["z-e90", "paid"]]);
+    expect(f.jobs.map((j) => [j.name, j.accountClass])).toEqual([["probe-freeplay", "pinned"], ["z-e90", "pool"]]);
     expect(f.jobs[0]).toMatchObject({ alive: false, draining: true, exitCode: 0, pid: 2 });
     expect(f.configLoadedAt).toBe(3);
     expect(JSON.stringify(f)).not.toContain("fleet.json");
     expect(JSON.stringify(f)).not.toContain("rosterPath");
-    // Accounts: pinned first (filtered against the classes), then the classes in order.
+    // Accounts: pinned first (filtered against the pool), then the pool in order.
     expect(f.accounts).toEqual([
       { account: "SHAKEOUT", class: "pinned", job: "probe-freeplay" },
       { account: "RUNNER", class: "pool", job: "job-a" },
-      { account: "PAID", class: "paid", job: null },
+      { account: "PAID", class: "pool", job: null },
     ]);
   });
 

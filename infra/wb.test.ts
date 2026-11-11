@@ -163,10 +163,10 @@ describe("where a command runs", () => {
     expect(planned(entry("config", "get"), CLUSTER, ["preflight"]).argv).toEqual([
       "kubectl", "-n", "wrathbench", "exec", "-i", "deploy/wrathbench-runner", "--", "bun", "runner/src/config-store.ts", "get", "preflight",
     ]);
-    // A lane move rewrites a run's meta.json under the runs volume, so it runs where that is mounted.
-    expect(planned(entry("config", "move-lane"), CLUSTER, ["fleet-x", "CLAUDE_CODE_OAUTH_TOKEN", "--pin", "--note", "two words"]).argv).toEqual([
+    // A credential move rewrites a run's meta.json under the runs volume, so it runs where that is mounted.
+    expect(planned(entry("config", "move-credential"), CLUSTER, ["fleet-x", "claude-2", "--pin", "--note", "two words"]).argv).toEqual([
       "kubectl", "-n", "wrathbench", "exec", "-i", "deploy/wrathbench-runner", "--",
-      "bun", "runner/src/config-store.ts", "move-lane", "fleet-x", "CLAUDE_CODE_OAUTH_TOKEN", "--pin", "--note", "two words",
+      "bun", "runner/src/config-store.ts", "move-credential", "fleet-x", "claude-2", "--pin", "--note", "two words",
     ]);
     // The character archive reads the runs volume and the databases and drives SOAP: all in the runner.
     expect(planned(entry("accounts", "export-character"), CLUSTER, ["fleet-x", "--no-trajectory"]).argv).toEqual([

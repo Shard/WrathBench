@@ -88,22 +88,29 @@ describe("resolve", () => {
     expect(() => resolve([{ model: "reference/elwynn-human-paladin@1", driver: "reference" as never }], "20261019")).toThrow(/unknown driver reference/);
   });
 
-  test("a codex entry resolves like a claude one: no api flags, a lane by NAME, effort in the id", () => {
-    const s = resolve([{ model: "gpt-6-astra", driver: "codex", effort: "high", tokenEnv: "CODEX_HOME_2", account: "SHAKEOUT" }], "20260905")[0]!;
-    expect(s).toMatchObject({ driver: "codex", tokenEnv: "CODEX_HOME_2", effort: "high", account: "SHAKEOUT" });
+  test("a codex entry resolves like a claude one: no api flags, its credential by id and variable NAME, effort in the id", () => {
+    const placedOn = { id: "chatgpt-2", env: "CODEX_HOME_2", usageMaxPct: { scored: 80, freeplay: 70 } };
+    const s = resolve([{ model: "gpt-6-astra", driver: "codex", effort: "high", placedOn, account: "SHAKEOUT" }], "20260905")[0]!;
+    expect(s).toMatchObject({ driver: "codex", placedOn, effort: "high", account: "SHAKEOUT" });
     expect(s.runId).toBe("roster-gpt-6-astra-high-20260905");
     const argv = episodeArgv(s, false);
     expect(argv[argv.indexOf("--driver") + 1]).toBe("codex");
     expect(argv).not.toContain("--api-base");
     expect(argv).not.toContain("--api-key-env");
-    expect(argv[argv.indexOf("--token-env") + 1]).toBe("CODEX_HOME_2");
-    // The default lane is not restated, exactly as for claude-code.
+    expect(argv[argv.indexOf("--credential") + 1]).toBe("chatgpt-2");
+    expect(argv[argv.indexOf("--credential-env") + 1]).toBe("CODEX_HOME_2");
+    expect(argv[argv.indexOf("--usage-max-pct") + 1]).toBe("80,70");
+    // A hand-written roster names none, and the run reads its driver's default variable.
     const plain = resolve([{ model: "gpt-5.5", driver: "codex" }], "20260905")[0]!;
-    expect(plain.tokenEnv).toBeUndefined();
-    expect(episodeArgv(plain, false)).not.toContain("--token-env");
-    // A lane name on an openai entry is dropped: nothing there bills a subscription.
-    const oa = resolve([{ model: "x:free", tokenEnv: "CODEX_HOME" }], "20260905")[0]!;
-    expect(oa.tokenEnv).toBeUndefined();
+    expect(plain.placedOn).toBeUndefined();
+    expect(episodeArgv(plain, false)).not.toContain("--credential");
+    // On an endpoint the credential's variable is the key: `--api-key-env`, never `--credential-env`.
+    const oa = resolve([{ model: "x:free", placedOn: { id: "or-free", env: "OPENROUTER_KEY_2" } }], "20260905")[0]!;
+    expect(oa.apiKeyEnv).toBe("OPENROUTER_KEY_2");
+    const oaArgv = episodeArgv(oa, false);
+    expect(oaArgv[oaArgv.indexOf("--api-key-env") + 1]).toBe("OPENROUTER_KEY_2");
+    expect(oaArgv[oaArgv.indexOf("--credential") + 1]).toBe("or-free");
+    expect(oaArgv).not.toContain("--credential-env");
   });
 
   test("resumeOnPause follows the lane, and falls back to the episode", () => {

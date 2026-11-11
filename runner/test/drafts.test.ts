@@ -254,7 +254,7 @@ function fact(over: Partial<RunFact>): RunFact {
     episodeMs: null,
     campaign: null,
     cell: null,
-    subscription: null,
+    credential: null,
     ...over,
   };
 }

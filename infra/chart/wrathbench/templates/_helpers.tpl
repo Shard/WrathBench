@@ -222,7 +222,7 @@ other key in the Secret, which nothing on these pods reads.
     secretKeyRef:
       name: {{ .Values.envSecretName }}
       key: WRATHBENCH_MODULE_SECRET
-{{- /* optional: a lane whose key is absent fails its own preflight with a
+{{- /* optional: a credential whose key is absent fails its own preflight with a
        clear message rather than wedging the pod in CreateContainerConfigError. */}}
 {{- range .Values.modelKeys }}
 - name: {{ . }}

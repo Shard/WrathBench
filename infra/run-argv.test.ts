@@ -104,7 +104,7 @@ function partySpecs(): Resolved[] {
       source: "pinned",
       account: "PARTY1",
       accounts: PARTY_ACCOUNTS,
-      subscription: "CLAUDE_CODE_OAUTH_TOKEN_2",
+      placed: { sonnet: { id: "claude-2", env: "CLAUDE_CODE_OAUTH_TOKEN_2" } },
       probe: { campaign: "deadmines", version: 1, cell: "party", arm: "base" },
     }),
     campaigns,
@@ -119,7 +119,10 @@ function everyLane(): { name: string; spec: Resolved; resume: boolean }[] {
   };
   add("e90 openai, routed and billed", specsOf(job({ ref: "glm-free", episode: "e90", attempt: 2 })));
   add("e90 extra", specsOf(job({ ref: "glm-free", episode: "e90", attempt: 4, extra: { race: 3, class: 3 } })));
-  add("e360 claude-code with a window and a lane", specsOf(job({ ref: "sonnet-100k", episode: "e360", attempt: 1, subscription: "CLAUDE_CODE_OAUTH_TOKEN_2" })));
+  add(
+    "e360 claude-code with a window and a credential",
+    specsOf(job({ ref: "sonnet-100k", episode: "e360", attempt: 1, placed: { "sonnet-100k": { id: "claude-2", env: "CLAUDE_CODE_OAUTH_TOKEN_2", usageMaxPct: { scored: 80, freeplay: 80 } } } })),
+  );
   add("e90 codex", specsOf(job({ ref: "astra", episode: "e90", attempt: 1 })));
   add(
     "freeplay, the policy's uncapped session, continued",
@@ -146,7 +149,7 @@ function everyLane(): { name: string; spec: Resolved; resume: boolean }[] {
   );
   // A hand-written roster may say what the fleet never does: an objective,
   // coordinates, no wiki. The roster still builds argv for it.
-  add("probe, a party's members on the second lane", partySpecs());
+  add("probe, a party's members on the second Claude credential", partySpecs());
   add("hand roster, steered, on an account", resolve([{ model: "x/y", objective: "go north", wikiCoords: true, episode: "probing", account: "SHAKEOUT" } as RosterSpec], STAMP));
   add("hand roster, no wiki, no clock", resolve([{ model: "x/y", wiki: false, watchdogs: { episodeMs: null, idleMs: 0 } } as RosterSpec], STAMP));
   for (const { name, spec } of [...out]) out.push({ name: `${name}, resumed`, spec, resume: true });
@@ -200,7 +203,7 @@ describe("the roster's argv, every lane, through run.ts's parser", () => {
 
   test("a party member's argv names its staged character, and the fresh-launch seam takes it as the member", () => {
     const specs = partySpecs();
-    expect(specs.map((s) => [s.party?.member, s.account, s.tokenEnv])).toEqual([
+    expect(specs.map((s) => [s.party?.member, s.account, s.placedOn?.env])).toEqual([
       ["tank", "PARTY1", "CLAUDE_CODE_OAUTH_TOKEN_2"],
       ["healer", "PARTY2", "CLAUDE_CODE_OAUTH_TOKEN_2"],
       ["mage", "PARTY3", "CLAUDE_CODE_OAUTH_TOKEN_2"],
@@ -211,7 +214,7 @@ describe("the roster's argv, every lane, through run.ts's parser", () => {
     const flags = episodeFlags(healer, false);
     expect(flags.slice(flags.indexOf("--episode"))).toEqual(["--episode", "probing", "--campaign-file", campaignFilePath(healer.runId), "--ref", "sonnet", "--character", "Brenna"]);
     const config = probeConfig(healer);
-    expect(config).toMatchObject({ character: "Brenna", race: 1, class: 5, account: "PARTY2", subscription: "CLAUDE_CODE_OAUTH_TOKEN_2", party: { member: "healer", role: "healer", size: 5 } });
+    expect(config).toMatchObject({ character: "Brenna", race: 1, class: 5, account: "PARTY2", credential: "claude-2", credentialEnv: "CLAUDE_CODE_OAUTH_TOKEN_2", party: { member: "healer", role: "healer", size: 5 } });
     expect(config.party!.id).toBe(specs[0]!.party!.id);
     // A resume restates none of it.
     expect(episodeFlags(healer, true)).not.toContain("--character");

@@ -80,20 +80,23 @@ export default function Models() {
       "Rows are ordered by tier, highest first; an episode cell links to that model's runs on the runs page, and the row itself opens its runs below.",
       `Cooling is the defer ladder — the scheduler backs off over ${b.ladderMs.length} steps, ending at ${fmtDuration(b.ladderMs[b.ladderMs.length - 1] ?? null)}; one more no-progress attempt at the ceiling retires the model until an operator clears it.`,
     ];
-    if (Object.keys(b.policy.maxConcurrent).length > 0) {
+    // A run takes a slot on the first credential that serves its provider and
+    // has room; a host carries only so many sessions of a driver. The
+    // credentials are the operator's, so only the private build names them.
+    const creds = !SNAPSHOT_MODE ? (b.policy.credentials ?? []).filter((c) => c.enabled) : [];
+    if (creds.length > 0) {
       lines.push(
-        `At most ${Object.entries(b.policy.maxConcurrent)
-          .map(([key, n]) => `${n} on ${key}`)
-          .join(", ")} at a time, counting every run on the key.`,
+        `A run takes a slot on the first credential that serves its provider and has room: ${creds
+          .map((c) => `${c.id} (${c.provider}, ${c.slots} slot${c.slots === 1 ? "" : "s"})`)
+          .join(", ")}.`,
       );
-      // A `claude-code:<VAR>` key is one Claude SUBSCRIPTION, and a run spends
-      // both it and the `claude-code` total — without this the two numbers read
-      // as a contradiction rather than a ceiling and a per-account share of it.
-      if (!SNAPSHOT_MODE && Object.keys(b.policy.maxConcurrent).some((k) => k.startsWith("claude-code:"))) {
-        lines.push(
-          "A claude-code:<VAR> key is one Claude subscription (named by the env var holding its token): a run needs a free slot on its own subscription and under the claude-code total.",
-        );
-      }
+    }
+    if (Object.keys(b.policy.maxSessions).length > 0) {
+      lines.push(
+        `At most ${Object.entries(b.policy.maxSessions)
+          .map(([driver, n]) => `${n} ${driver}`)
+          .join(", ")} session(s) at a time on a host, whichever credential pays.`,
+      );
     }
     return lines.join("\n");
   };

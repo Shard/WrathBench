@@ -59,13 +59,14 @@ import { join } from "node:path";
 import { openRunDb, RUN_DB_JOURNAL_FILE, RUN_DB_WAL_FILE } from "./rundb";
 import { bestLevelOf, readRunRow } from "./run-reader";
 import { harnessSeries } from "./comparability";
-import { DEFAULT_DRIVER, defaultCompactWindowOf, driverEntry, eitherHas, entryOf, harnessDriver, isProbeOnlyDriver, PLACED_LANE_DRIVER, probeOnlyRefusal } from "./drivers";
-import { AUTO_COMPACT_WINDOW, DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isCodexHomeEnvName, isDriver, isTokenEnvName, isUnscoredDriverName, type Driver, type Harness } from "./config";
+import { DEFAULT_DRIVER, defaultCompactWindowOf, driverEntry, eitherHas, entryOf, harnessDriver, isProbeOnlyDriver, probeOnlyRefusal } from "./drivers";
+import { AUTO_COMPACT_WINDOW, DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isDriver, isTokenEnvName, isUnscoredDriverName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
 import { badEvidenceReason, neverStale, OFFLINE_PAUSE, PARTY_PAUSE, SUBSCRIPTION_PAUSE, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
-import { parseSubscriptionUsage, subscriptionLaneOf, type SubscriptionUsage } from "./subscription-usage";
+import { parseSubscriptionUsage, type SubscriptionUsage } from "./subscription-usage";
 import { billingOf, type Billing } from "./model-cost";
+import { credentialCarries, providerById, providerOfModel, type Credential } from "./credentials";
 import { hostOfBase, isOpenCodeGoBase, platformOfBase } from "./platform";
 import { parseRouting, type RoutingSpec } from "./routing";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
@@ -110,8 +111,8 @@ export interface StartingCharacter {
  * model's entry at 03:00.
  *
  * Money is deliberately not modelled. A tier is denominated in runs; a spend
- * cap, when one is wanted, belongs beside `paid.maxConcurrent` as its own
- * thing. Minting `t0a`/`t0b` to approximate dollars is the accretion this
+ * cap is a credential's `spend` budget (`runner/src/credentials.ts`), its own
+ * thing beside the tier. Minting `t0a`/`t0b` to approximate dollars is the accretion this
  * table exists to stop.
  */
 export const TIERS = ["t0", "t1", "t2"] as const;
@@ -176,29 +177,14 @@ export interface SchedulingPolicy {
    */
   series: string | null;
   /**
-   * The paid-model throttle, or null to treat paid and free alike. Only a
-   * throttle now: how much evidence a paid model gets is its tier, the same
-   * sentence a free model's budget is written in. Paid-ness buys a model
-   * nothing and costs it nothing here — it says only where a run may
-   * physically execute (the paid account class) and how many at once.
+   * How many sessions of a driver one host may carry at once, by driver id
+   * (`{ "claude-code": 2 }`): the one cap that is not a credential's. Each
+   * CLI session is a process with its own memory and sandbox, and a host
+   * carries only so many whichever credential pays. Absent: no cap beyond
+   * the credentials' slots. Credentials are the config's own block
+   * (`runner/src/credentials.ts`), never this one.
    */
-  paid: { maxConcurrent: number } | null;
-  /**
-   * The Claude subscription LANES the fleet may schedule on, as the names of
-   * the env vars holding their OAuth tokens — never the tokens, which stay in
-   * `.env`. In preference order: a claude-code run takes the first lane with a
-   * free slot.
-   *
-   * A subscription is a lane, not a model dimension. The roster stays one entry
-   * per model however many accounts are behind it, because which subscription
-   * paid for a run says nothing about what the run measured. What it does
-   * decide is how many claude-code sessions may be live at once, which is why
-   * it lives here with the rest of "where a run may physically execute".
-   *
-   * Defaults to the single default lane, which is exactly the behaviour of
-   * every config written before there was a second subscription.
-   */
-  subscriptions: string[];
+  maxSessions: Record<string, number>;
   /**
    * The fleet-wide routing default for OpenRouter entries (`routing.ts`), or
    * undefined for the built-in one — the model author's own provider, with
@@ -234,45 +220,41 @@ export function parseRunPodsMode(raw: unknown, where: string): RunPodsMode {
   return raw as RunPodsMode;
 }
 
-/** The paid default once `policy.paid` is present: one paid run in flight. */
-export const DEFAULT_PAID = { maxConcurrent: 1 } as const;
-
 export const DEFAULT_POLICY: SchedulingPolicy = {
   promoteAtLevel: 5,
   series: null,
-  paid: null,
-  subscriptions: [DEFAULT_CLAUDE_TOKEN_ENV],
+  maxSessions: {},
   runPods: "off",
 };
 
 /**
  * The fleet config's `policy` block (the config store; `infra/fleet.example.json`
- * shows the shape) over the defaults, in one
- * place so the supervisor, `--status` and the viewer read the same answer.
+ * shows the shape) over the defaults, in one place so the supervisor,
+ * `--status` and the viewer read the same answer.
  *
- * What is left here is only ever about **where a run may physically execute
- * and how many at once**: `maxConcurrent` per rate-limit key, and `paid` as
- * the paid class's throttle. How much evidence a model gets is its tier
- * and is not expressible in this block at all.
+ * What is left here is only ever about **where a run may physically execute**:
+ * the per-driver session cap, the routing default and run pods. Which provider
+ * credential a run takes, and how many runs one carries, is the `credentials`
+ * block's (`runner/src/credentials.ts`); how much evidence a model gets is its
+ * tier and is not expressible here at all.
  *
- * The removed keys are refused BY NAME rather than ignored. A file still
- * carrying `policy.runsPerEpisode` meant something specific by it, and
- * silently dropping it would quietly re-scope every model's budget; the
- * supervisor keeps its last good config and says which key to move where.
- * The series is the caller's (the checkout it runs from), never the file's.
+ * The removed keys are refused BY NAME rather than ignored: a file still
+ * carrying one meant something specific by it, and silently dropping it would
+ * re-scope the fleet. The series is the caller's (the checkout it runs from),
+ * never the file's.
  */
-export function parsePolicyBlock(raw: unknown, series: string | null = null): SchedulingPolicy & { maxConcurrent: Record<string, number> } {
-  const base = { ...DEFAULT_POLICY, series, maxConcurrent: {} as Record<string, number> };
+export function parsePolicyBlock(raw: unknown, series: string | null = null): SchedulingPolicy {
+  const base: SchedulingPolicy = { ...DEFAULT_POLICY, series, maxSessions: {} };
   if (raw === undefined) return base;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("fleet config: policy must be an object");
-  const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown; paid?: unknown; extras?: unknown; resume?: unknown; subscriptions?: unknown; routing?: unknown; runPods?: unknown };
+  const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown; maxSessions?: unknown; paid?: unknown; extras?: unknown; resume?: unknown; subscriptions?: unknown; routing?: unknown; runPods?: unknown };
   const out = { ...base };
   out.runPods = parseRunPodsMode(o.runPods, "policy.runPods");
   if (o.runsPerEpisode !== undefined) {
-    throw new Error(`policy.runsPerEpisode is not a 0.5 key — run counts are a model's tier now (${TIERS.join(", ")}); set roster.<name>.tier`);
+    throw new Error(`policy.runsPerEpisode is not a 0.5 key — run counts are a model's tier (${TIERS.join(", ")}); set roster.<name>.tier`);
   }
   if (o.extras !== undefined) {
-    throw new Error('policy.extras is not a 0.5 key — idle behaviour is per model now; set roster.<name>.idle to "unlimited", and put a race/class sweep in a probe campaign');
+    throw new Error('policy.extras is not a 0.5 key — idle behaviour is per model; set roster.<name>.idle to "unlimited", and put a race/class sweep in a probe campaign');
   }
   if (o.resume !== undefined) {
     throw new Error(
@@ -280,44 +262,20 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
     );
   }
   if (o.maxConcurrent !== undefined) {
-    if (typeof o.maxConcurrent !== "object" || o.maxConcurrent === null || Array.isArray(o.maxConcurrent)) {
-      throw new Error('policy.maxConcurrent must be an object like { "claude-code": 2 }');
-    }
-    for (const [k, v] of Object.entries(o.maxConcurrent as Record<string, unknown>)) {
-      if (!isConcurrencyKey(k)) throw new Error(`policy.maxConcurrent: unknown concurrency key ${k} — allowed: ${CONCURRENCY_KEYS.join(", ")}`);
-      const key = k;
-      if (typeof v !== "number" || !Number.isInteger(v) || v < 1) throw new Error(`policy.maxConcurrent.${k} must be a positive integer`);
-      out.maxConcurrent[key] = v;
-    }
+    throw new Error("policy.maxConcurrent is not a v1 key — a provider's concurrency is its credentials' slots (credentials/<id>.slots), and a host's per-driver cap is policy.maxSessions");
   }
-  if (o.paid !== undefined) {
-    if (typeof o.paid !== "object" || o.paid === null || Array.isArray(o.paid)) throw new Error('policy.paid must be an object like { "maxConcurrent": 1 }');
-    const p = o.paid as { runsPerEpisode?: unknown; maxConcurrent?: unknown };
-    if (p.runsPerEpisode !== undefined) {
-      throw new Error("policy.paid.runsPerEpisode is not a 0.5 key — a paid model's budget is its tier, the same sentence a free model's is written in");
+  if (o.paid !== undefined) throw new Error("policy.paid is not a v1 key — paid concurrency is the slots of the paid credentials (credentials/<id>)");
+  if (o.subscriptions !== undefined) throw new Error("policy.subscriptions is not a v1 key — each subscription is a credential (credentials/<id>, provider claude or chatgpt)");
+  if (o.maxSessions !== undefined) {
+    if (typeof o.maxSessions !== "object" || o.maxSessions === null || Array.isArray(o.maxSessions)) {
+      throw new Error('policy.maxSessions must be an object like { "claude-code": 2 }');
     }
-    let cap: number = DEFAULT_PAID.maxConcurrent;
-    if (p.maxConcurrent !== undefined) {
-      if (typeof p.maxConcurrent !== "number" || !Number.isInteger(p.maxConcurrent) || p.maxConcurrent < 0) throw new Error("policy.paid.maxConcurrent must be a non-negative integer");
-      cap = p.maxConcurrent;
+    for (const [k, v] of Object.entries(o.maxSessions as Record<string, unknown>)) {
+      const d = driverEntry(k);
+      if (d === undefined || !d.roster || !d.sessionCap) throw new Error(`policy.maxSessions: ${k} is not a driver a host carries sessions of — one of ${DRIVERS.filter((x) => entryOf(x).roster && entryOf(x).sessionCap).join(", ")}`);
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 1) throw new Error(`policy.maxSessions.${k} must be a positive integer`);
+      out.maxSessions[k] = v;
     }
-    out.paid = { maxConcurrent: cap };
-  }
-  if (o.subscriptions !== undefined) {
-    if (!Array.isArray(o.subscriptions) || o.subscriptions.length === 0) {
-      throw new Error('policy.subscriptions must be a non-empty array of env var NAMES, like ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2"]');
-    }
-    const names: string[] = [];
-    for (const v of o.subscriptions as unknown[]) {
-      // A NAME, checked as one: the token itself in this field would put a
-      // credential in a file that is committed and printed by --status.
-      if (typeof v !== "string" || !isTokenEnvName(v)) {
-        throw new Error(`policy.subscriptions: ${JSON.stringify(v)} is not an environment variable name — name the var that holds the token, never the token`);
-      }
-      if (names.includes(v)) throw new Error(`policy.subscriptions: ${v} listed twice — one entry per subscription`);
-      names.push(v);
-    }
-    out.subscriptions = names;
   }
   if (o.routing !== undefined) {
     out.routing = parseRouting(o.routing, "policy.routing");
@@ -370,7 +328,7 @@ export const RESUME_RECORD = "resume";
 /**
  * Pause reasons that ride no backoff ladder: the fleet stopped under the run
  * (`operator-pause`), its runner died before it could write a verdict
- * (`offline`, derived and never on disk), or the subscription usage gate
+ * (`offline`, derived and never on disk), or a credential's usage budget
  * stopped a freeplay run at the freeplay threshold (`subscription-budget`,
  * operator 2026-10-16), or a party member was paused because another member
  * paused first (`party-paused`, whose party waits on that member's own
@@ -640,34 +598,28 @@ export interface RunFact {
    */
   party?: { id: string; member: string; size: number } | null;
   /**
-   * The Claude subscription lane this run bills, as the env var NAME holding
-   * its token (`RunConfig.subscription`); null on anything that is not a
-   * claude-code run, and on a claude-code run launched before lanes existed —
-   * which is the default lane, and reads as one (`claudeLaneKey`).
-   *
-   * Read off the run's own config for the same reason `campaign` is: the fleet
-   * counts live runs per lane, and that count has to survive a supervisor
-   * restart, which nothing held in memory does.
+   * The credential this run took a slot on (`RunConfig.credential`), or null
+   * on a run that recorded none (a 0.5 run, one launched by hand). Read off the
+   * run's own config for the same reason `campaign` is: the fleet counts live
+   * runs per credential, and that count has to survive a supervisor restart,
+   * which nothing held in memory does.
    */
-  subscription: string | null;
-  /**
-   * The run's driver (`config.driver`), or null when meta.json names none.
-   * With `subscription` it names the subscription lane the run bills
-   * (`subscriptionLaneOf`). Optional so a fact built by hand need not spell it.
-   */
+  credential: string | null;
+  /** The run's driver (`config.driver`), or null when meta.json names none. Optional so a fact built by hand need not spell it. */
   driver?: string | null;
   /**
    * The newest subscription usage reading the run recorded (meta.json's
-   * `subscriptionUsage`), or null. What the fleet's lane gate reads, newest
-   * per lane (operator, 2026-10-16).
+   * `subscriptionUsage`), or null. What a credential's `usage` budget reads,
+   * newest per credential (operator, 2026-10-16).
    */
-  subscriptionUsage?: SubscriptionUsage | null;
+  credentialUsage?: SubscriptionUsage | null;
   /**
-   * The subscription lane the run bills (`subscriptionLaneOfConfig`) — a
-   * claude-code token, a codex home, an OpenCode Go key — or null. Optional so
-   * a fact built by hand need not spell it.
+   * The provider's own reported charge on this run's responses, in dollars,
+   * per UTC day (`YYYY-MM-DD`) the response was recorded on: what a `spend`
+   * budget sums. Absent on a fact built by hand; empty on a run whose
+   * provider reports no charge.
    */
-  lane?: string | null;
+  spendByDay?: Record<string, number>;
 }
 
 // ----------------------------------------------------------------- outputs
@@ -724,6 +676,12 @@ export interface ModelState {
   /** The entry's declared CLI compaction window (`RosterModel.compactWindow`); absent is its driver's default. */
   compactWindow?: string;
   platform: string | null;
+  /**
+   * The credential provider its runs are served through (`providerOfModel`,
+   * credentials.ts), or null for one that needs none. Optional so a state
+   * built by hand need not spell it.
+   */
+  provider?: string | null;
   /** The harness this entry's runs go through, from its driver; a tag, not a partition. */
   harness: Harness;
   status: ModelStatus;
@@ -848,8 +806,13 @@ function streakOf(s: StreakFold): number {
   return s.turn ? own : s.closed + own;
 }
 
-/** A record a scanner watches, as far as the counts and the streak read it. */
-type WatchedRecord = { t: string; reason?: unknown; notBefore?: unknown; kind?: unknown };
+/** A record a scanner watches, as far as the counts, the streak and the spend read it. */
+type WatchedRecord = { t: string; reason?: unknown; notBefore?: unknown; kind?: unknown; ts?: unknown; cost?: unknown };
+
+/** The UTC day (`YYYY-MM-DD`) an instant falls on: what a credential's per-day budget counts in. */
+export function utcDay(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
 
 function foldStreak(s: StreakFold, rec: WatchedRecord): void {
   if (rec.t === MODEL_RESPONSE_RECORD) s.turn = true;
@@ -882,6 +845,12 @@ export interface RecordTally {
   counts: Map<string, number>;
   /** The pause streak (`streakOf`), or null when the scanner was not asked to fold it. */
   pauseStreak: number | null;
+  /**
+   * The provider's own reported charge (`usage.cost` on a `response`) per UTC
+   * day of the record, when `response` is among the kinds counted: what a
+   * credential's `spend` budget sums. Empty when no response carried one.
+   */
+  spendByDay: Record<string, number>;
 }
 
 /**
@@ -936,6 +905,7 @@ export class RecordCountScanner {
   private readonly needles: Buffer[];
   private readonly counts: Map<string, number>;
   private readonly streak: StreakFold = { closed: 0, turn: false, pause: false };
+  private readonly spend: Record<string, number> = {};
   /** Bytes folded as complete lines; where the next scan resumes. */
   private consumed = 0;
   /** Bytes after the last newline: a record still being written, never counted. */
@@ -981,23 +951,30 @@ export class RecordCountScanner {
 
   /** The parse alone, for a line already known to carry a needle. */
   private parsed(line: Buffer): WatchedRecord | null {
-    let rec: { t?: unknown; reason?: unknown; notBefore?: unknown; kind?: unknown } | null;
+    let rec: { t?: unknown; reason?: unknown; notBefore?: unknown; kind?: unknown; ts?: unknown; usage?: { cost?: unknown } } | null;
     try {
-      rec = JSON.parse(line.toString("utf8")) as { t?: unknown; reason?: unknown; notBefore?: unknown; kind?: unknown } | null;
+      rec = JSON.parse(line.toString("utf8")) as typeof rec;
     } catch {
       return null; // a torn line is not a record
     }
     const t = rec?.t;
-    return typeof t === "string" && this.watched.has(t) ? { t, reason: rec!.reason, notBefore: rec!.notBefore, kind: rec!.kind } : null;
+    return typeof t === "string" && this.watched.has(t)
+      ? { t, reason: rec!.reason, notBefore: rec!.notBefore, kind: rec!.kind, ts: rec!.ts, cost: rec!.usage?.cost }
+      : null;
   }
 
   /** One line into a set of counts and a streak: the scanner's own, or a copy of them. */
-  private apply(line: Buffer, counts: Map<string, number>, streak: StreakFold): void {
-    this.applyRecord(this.recordOf(line), counts, streak);
+  private apply(line: Buffer, counts: Map<string, number>, streak: StreakFold, spend: Record<string, number> = this.spend): void {
+    this.applyRecord(this.recordOf(line), counts, streak, spend);
   }
 
-  private applyRecord(rec: WatchedRecord | null, counts: Map<string, number>, streak: StreakFold): void {
+  private applyRecord(rec: WatchedRecord | null, counts: Map<string, number>, streak: StreakFold, spend: Record<string, number> = this.spend): void {
     if (rec === null) return;
+    // Billed usage, a CLI's compaction call included: whatever the provider charged.
+    if (rec.t === MODEL_RESPONSE_RECORD && counts.has(MODEL_RESPONSE_RECORD) && typeof rec.cost === "number" && Number.isFinite(rec.cost) && rec.cost > 0 && typeof rec.ts === "number") {
+      const day = utcDay(rec.ts);
+      spend[day] = (spend[day] ?? 0) + rec.cost;
+    }
     // A CLI's own summarisation call (pi's compaction, a `response` of kind
     // `compaction`) is billed usage, not a reply of the model's: it neither
     // counts as one nor ends a pause streak.
@@ -1140,13 +1117,14 @@ export class RecordCountScanner {
     const tally = this.scan();
     if (tally === null || this.pending.length === 0) return tally;
     const streak = { ...this.streak };
-    this.apply(this.pending, tally.counts, streak);
-    return { counts: tally.counts, pauseStreak: this.pauseStreak ? streakOf(streak) : null };
+    const spend = { ...tally.spendByDay };
+    this.apply(this.pending, tally.counts, streak, spend);
+    return { counts: tally.counts, pauseStreak: this.pauseStreak ? streakOf(streak) : null, spendByDay: spend };
   }
 
   /** A copy: the caller must never hold a reference to resumable state. */
   private snapshot(): RecordTally {
-    return { counts: new Map(this.counts), pauseStreak: this.pauseStreak ? streakOf(this.streak) : null };
+    return { counts: new Map(this.counts), pauseStreak: this.pauseStreak ? streakOf(this.streak) : null, spendByDay: { ...this.spend } };
   }
 }
 
@@ -1266,11 +1244,8 @@ export function readRunFact(
       ref?: unknown;
       arm?: unknown;
       party?: { id?: unknown; member?: unknown; size?: unknown };
-      subscription?: unknown;
+      credential?: unknown;
       driver?: unknown;
-      apiBase?: unknown;
-      apiKeyEnv?: unknown;
-      billing?: unknown;
       watchdogs?: { episodeMs?: unknown; idleMs?: unknown };
     };
     comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown; compactWindow?: unknown };
@@ -1317,17 +1292,9 @@ export function readRunFact(
     ref: str(meta.config?.ref),
     arm: str(meta.config?.arm),
     party: partyOfConfig(meta.config?.party),
-    subscription: str(meta.config?.subscription),
+    credential: str(meta.config?.credential),
     driver: str(meta.config?.driver),
-    subscriptionUsage: parseSubscriptionUsage(meta.subscriptionUsage) ?? null,
-    lane: subscriptionLaneOfConfig({
-      driver: str(meta.config?.driver),
-      model,
-      apiBase: str(meta.config?.apiBase),
-      apiKeyEnv: str(meta.config?.apiKeyEnv),
-      billing: meta.config?.billing === "free" || meta.config?.billing === "paid" ? meta.config.billing : null,
-      subscription: str(meta.config?.subscription),
-    }),
+    credentialUsage: parseSubscriptionUsage(meta.subscriptionUsage) ?? null,
   };
 
   const jsonl = join(dir, "trajectory.jsonl");
@@ -1347,6 +1314,7 @@ export function readRunFact(
       ? tallyRecords(jsonl, kinds, { pauseStreak: true })
       : tallyRecordsCached(opts.counts, jsonl, kinds, { pauseStreak: true });
   fact.modelResponses = tally?.counts.get(MODEL_RESPONSE_RECORD) ?? null;
+  fact.spendByDay = tally?.spendByDay ?? {};
   let pauseReason: string | null = null;
 
   // The run row and the best level, wherever the run keeps them (`run-reader.ts`).
@@ -1518,7 +1486,7 @@ export function runFactCacheVersion(): string {
     .update(
       [
         String(RUN_FACT_CACHE_SCHEMA),
-        ...[readRunFact, partyOfConfig, runFactKey, runDbWriteInFlight, verdictOfTrajectory, tallyRecords, RecordCountScanner, harnessSeries, isEpisodeId, heartbeatAt, openRunDb, readRunRow, bestLevelOf, str, num, parseSubscriptionUsage, subscriptionLaneOfConfig, goKeyEnvOf, isOpenCodeGoBase, billingOf].map(String),
+        ...[readRunFact, partyOfConfig, runFactKey, runDbWriteInFlight, verdictOfTrajectory, tallyRecords, RecordCountScanner, harnessSeries, isEpisodeId, heartbeatAt, openRunDb, readRunRow, bestLevelOf, str, num, parseSubscriptionUsage].map(String),
         JSON.stringify([EPISODE_IDS, MODEL_RESPONSE_RECORD, HEARTBEAT_FILE]),
       ].join("\n"),
     )
@@ -1679,170 +1647,6 @@ export function platformOf(apiBase: string | undefined, driver: string | undefin
   return platformOfBase(apiBase) ?? (driver ?? "openrouter");
 }
 
-/**
- * OpenCode Go, a surface billed apart from Zen's shared tier on the same host
- * and so capped apart from it.
- */
-export const OPENCODE_GO_KEY = "opencode-go";
-
-/** Whether an api base points at that surface (`platform.ts`, where routing reads it too). */
-export { isOpenCodeGoBase };
-
-/**
- * The key env NAME of the OpenCode Go allowance an `openai` entry or run
- * draws on, or undefined when it draws on none: its base is a Go base and its
- * billing is paid. A `$0` Go model (billing free) does not draw the allowance
- * down — Go's free models keep working past the limit — so it bills no lane
- * and the subscription gate never holds it (operator, 2026-10-16).
- */
-export function goKeyEnvOf(r: {
-  driver?: string | null | undefined;
-  model?: string | null | undefined;
-  apiBase?: string | null | undefined;
-  apiKeyEnv?: string | null | undefined;
-  billing?: Billing | null | undefined;
-}): string | undefined {
-  const driver = r.driver ?? DEFAULT_DRIVER;
-  if (driverEntry(driver)?.endpoint !== true || !isOpenCodeGoBase(r.apiBase)) return undefined;
-  const billing = billingOf({ model: r.model ?? "", apiBase: r.apiBase ?? undefined, driver, ...(r.billing != null ? { billing: r.billing } : {}) });
-  return billing === "paid" ? (r.apiKeyEnv ?? GO_DEFAULT_KEY_ENV) : undefined;
-}
-
-/** The key the provider table pairs with opencode.ai (`KEY_PROVIDERS`). */
-const GO_DEFAULT_KEY_ENV = "OPENCODE_KEY";
-
-/**
- * The subscription lane (`subscriptionLaneOf`) of a run config or a roster
- * entry: a claude-code token, a codex home, an OpenCode Go key — or null.
- * `subscription` is the CLI lane variable (a spec's `tokenEnv`).
- */
-export function subscriptionLaneOfConfig(r: {
-  driver?: string | null | undefined;
-  model?: string | null | undefined;
-  apiBase?: string | null | undefined;
-  apiKeyEnv?: string | null | undefined;
-  billing?: Billing | null | undefined;
-  subscription?: string | null | undefined;
-}): string | null {
-  return subscriptionLaneOf({ driver: r.driver ?? DEFAULT_DRIVER, lane: r.subscription ?? null, goKeyEnv: goKeyEnvOf(r) ?? null });
-}
-
-/**
- * The rate-limit keys `policy.maxConcurrent` may cap: every driver, plus the
- * two shared free-cloud platforms whose free tiers are metered separately by
- * their upstream provider, plus OpenCode Zen's separately billed `zen/go`
- * surface (`concurrencyKeyOf`). Widening validation from drivers to these keys
- * is purely additive — an old per-driver cap still parses.
- */
-// Not the scripted reference (`capKey`): it is never a roster entry, so the
-// policy has nothing of it to cap (run-fleet-config.ts refuses the driver).
-export const CONCURRENCY_KEYS: readonly string[] = [...DRIVERS.filter((d) => entryOf(d).capKey), "openrouter", "opencode", OPENCODE_GO_KEY];
-
-/**
- * A claude-code run counts against TWO keys, and needs a free slot in both.
- *
- *  - `claude-code` — every Claude session in flight, whichever subscription
- *    pays for it. The operator's overall ceiling, and the same key (with the
- *    same meaning) that every config written before there was a second
- *    subscription already had.
- *  - `claude-code:<ENV NAME>` — that one subscription's sessions. Every lane
- *    has one, the default lane included, so the two questions never share a
- *    number: "how many Claude sessions at once" and "how many on THIS account"
- *    are different limits and are written as different keys.
- *
- * A key the file does not name is uncapped, as everywhere else. So an old file
- * saying only `"claude-code": 2` still means exactly what it meant — two
- * sessions, and nothing said about which account — and a per-account limit is
- * added by naming the lane, never by re-reading the total.
- */
-export const CLAUDE_TOTAL_KEY: string = PLACED_LANE_DRIVER;
-
-export function claudeLaneKey(tokenEnv: string | null | undefined): string {
-  return `${CLAUDE_TOTAL_KEY}:${tokenEnv ?? DEFAULT_CLAUDE_TOKEN_ENV}`;
-}
-
-/** The lane a `claude-code:<NAME>` key names, or null for anything else. */
-export function laneOfKey(key: string): string | null {
-  return key.startsWith(`${CLAUDE_TOTAL_KEY}:`) ? key.slice(CLAUDE_TOTAL_KEY.length + 1) : null;
-}
-
-export function isConcurrencyKey(k: string): boolean {
-  if ((CONCURRENCY_KEYS as readonly string[]).includes(k)) return true;
-  const lane = laneOfKey(k);
-  return lane !== null && isTokenEnvName(lane);
-}
-
-/**
- * Both keys a claude-code run on `tokenEnv` counts against, in the order a
- * refusal should name them. Everything else counts against its one key.
- */
-export function claudeKeysFor(tokenEnv: string | null | undefined): string[] {
-  return [claudeLaneKey(tokenEnv), CLAUDE_TOTAL_KEY];
-}
-
-/**
- * The Claude lanes among `policy.subscriptions`, which also names Codex homes.
- * A claude run is placed, gated and counted only over these: a Codex home is
- * not a place a Claude session can bill. Never empty, so a list naming only
- * Codex homes still leaves claude the default lane.
- */
-export function claudeLanesOf(subscriptions: readonly string[]): string[] {
-  const out = subscriptions.filter((l) => !isCodexHomeEnvName(l));
-  return out.length > 0 ? out : [DEFAULT_CLAUDE_TOKEN_ENV];
-}
-
-/** The cap on a key; undefined is uncapped. */
-export function capFor(max: Record<string, number>, key: string): number | undefined {
-  return max[key];
-}
-
-/**
- * The concurrency key a roster entry counts against for `policy.maxConcurrent`.
- *
- * The cap keys on a RATE-LIMIT key, not a driver, because the shared free-cloud
- * pools (OpenRouter, OpenCode Zen) all drive through the `openai` driver yet
- * meter their `:free`/`-free` tiers per upstream provider — running several at
- * once burns one daily budget and breaks the runs. So a FREE model on a shared
- * free platform lands in that platform's key (`openrouter` / `opencode`);
- * everything else keeps its driver key: paid models (governed by the separate
- * `policy.paid` cap even when their platform projects to OpenRouter), the local
- * box (its one account is its limit), `stub`, and `claude-code`.
- *
- * The free branch is gated on `driver === "openai"` and reads the platform from
- * the api base alone — `platformOfBase(apiBase) ?? "openrouter"`, an absent base
- * being the OpenRouter default — never from the driver, so a `:free` slug
- * pinned to `driver: "openai"` with no base still lands in the openrouter key
- * rather than escaping the cap. The `opencode.ai`
- * host is normalized to `opencode`/`opencode-go` here and nowhere else:
- * `platformOfBase` keeps its host spelling so `run.platform` and the viewer's
- * listing stay stable against runs already on disk; the key is the one seam
- * that renames it, and the only place in this module that reads the base's
- * PATH rather than its host.
- *
- * OpenCode Zen's `zen/go` is a second, separately billed surface on the same
- * host (pay-as-you-go, not the shared free tier), so it takes its own key —
- * outside the free gate, because Go has paid models too, and a key reached
- * only by free models would never apply to one. `platformOfBase` cannot make
- * this distinction: it returns a hostname and discards the path.
- *
- * `claude-code` is the only key that is refined further, and not here: which
- * SUBSCRIPTION a claude run bills is decided when it is scheduled, not by the
- * roster entry, so the fleet turns this key into the run's lane key with
- * `claudeLaneKey`. A caller with no lane in hand gets the default lane's key,
- * which is this one.
- */
-export function concurrencyKeyOf(r: Pick<RosterModel, "name" | "driver" | "apiBase">, billing: Billing): string {
-  const driver = driverOf(r);
-  const endpoint = entryOf(driver).endpoint;
-  if (endpoint && isOpenCodeGoBase(r.apiBase)) return OPENCODE_GO_KEY;
-  if (endpoint && billing === "free") {
-    const platform = platformOfBase(r.apiBase) ?? "openrouter";
-    if (platform === "openrouter") return "openrouter";
-    if (platform === "opencode.ai" || platform === "opencode") return "opencode";
-  }
-  return driver;
-}
-
 /** A roster entry's driver; `openai` when it names none. A name outside the vocabulary is a config error. */
 export function driverOf(r: { name: string; driver?: string }): Driver {
   const d = r.driver ?? DEFAULT_DRIVER;
@@ -1883,7 +1687,7 @@ export { NOT_THE_MODELS_FAULT } from "./lapse";
  */
 export function lastActivityOf(f: Pick<RunFact, "pause" | "endedAt" | "startedAt">): number {
   if (f.pause === null) return Math.max(f.endedAt ?? 0, f.startedAt);
-  // A pause waiting on a stated reset — a spent quota, the subscription gate —
+  // A pause waiting on a stated reset — a spent quota, a credential's usage budget —
   // is not gone quiet while it waits: nothing may play it before then, so its
   // gap starts at the reset, and a resuming probe whose reset is farther than
   // its own budget is not aged into stale while it waits.
@@ -2082,8 +1886,8 @@ export function entryOwnsRun(entry: RosterIdentity, run: RosterIdentity): boolea
  * the entry has none — an arm may set the window itself (`--compact-window`,
  * operator 2026-10-11), and that window is in the run's tuple without being
  * the entry's identity. Matched by identity alone, such a run belonged to no
- * entry, or to a windowed copy it never ran as, and its lane and its ladder
- * went unseen. Every other run matches by identity (`entryOwnsRun`).
+ * entry, or to a windowed copy it never ran as, and its credential and its
+ * ladder went unseen. Every other run matches by identity (`entryOwnsRun`).
  * Arms that differ only by window still never pool: the square is keyed on
  * the arm, and the results on the tuple.
  */
@@ -2099,24 +1903,19 @@ export function matchesRoster(f: RunFact, r: Pick<RosterModel, "name" | "model" 
 }
 
 /**
- * The subscription lane each roster entry's live-or-paused run is on, read off
- * the runs themselves.
- *
- * This is what makes lane assignment survive a supervisor restart: the fleet's
- * own record of which token a job was spawned with dies with the process, but
- * the run wrote its lane into its meta.json, and a paused run resumed later
- * goes back to the subscription it started on. A run with no lane recorded (one
- * launched before lanes existed) is the default lane, and the caller reads it
- * as one.
+ * The credential each roster entry's live-or-paused run is on, read off the
+ * runs themselves: what makes the per-credential count survive a supervisor
+ * restart, and what sends a resume back to the credential it started on. A
+ * run that recorded none (0.5, or launched by hand) is not listed.
  */
-export function liveSubscriptions(
+export function liveCredentials(
   runs: readonly RunFact[],
   roster: readonly Pick<RosterModel, "name" | "model" | "effort" | "compactWindow" | "driver">[],
 ): Map<string, string> {
   const out = new Map<string, string>();
   for (const r of roster) {
-    const f = runs.find((x) => (x.live || x.pause !== null) && x.subscription !== null && matchesRoster(x, r));
-    if (f?.subscription != null) out.set(r.name, f.subscription);
+    const f = runs.find((x) => (x.live || x.pause !== null) && x.credential !== null && matchesRoster(x, r));
+    if (f?.credential != null) out.set(r.name, f.credential);
   }
   return out;
 }
@@ -2260,6 +2059,7 @@ export function projectModel(
     effort: r.effort ?? null,
     ...(r.compactWindow !== undefined ? { compactWindow: r.compactWindow } : {}),
     platform: platformOf(r.apiBase, r.driver),
+    provider: providerOfModel(r),
     harness: harnessOf(driverOf(r)),
     status: "active",
     billing,
@@ -2378,7 +2178,7 @@ export type Verdict = { verdict: "eval" | "free" | "blocked"; why: string };
 export function schedulability(
   s: ModelState,
   running: ReadonlySet<string> = new Set(),
-  _policy: Pick<SchedulingPolicy, "paid"> = DEFAULT_POLICY,
+  _policy: SchedulingPolicy = DEFAULT_POLICY,
 ): Verdict {
   const blocked = (why: string): Verdict => ({ verdict: "blocked", why });
   if (s.retired !== undefined) return blocked(`retired: ${s.retired.reason} — clear with bun wb fleet clear-model ${s.name}`);
@@ -2415,7 +2215,7 @@ export function schedulability(
   }
   if (open.length === 0) {
     // Idle work is the model's own axis now, not a consequence of its billing
-    // or its account class: what it does with a spare account is what its entry
+    // or where its account comes from: what it does with a spare account is what its entry
     // says it does. A paid model defaults to `none` and so buys nothing extra.
     // One idle mode past `none`, so one thing to say. (The retired third,
     // `idle: "characters"`, is a probe campaign now — nothing here rolls a
@@ -2457,63 +2257,11 @@ function episodeOrder(ep: EpisodeId): number {
   return EPISODE_IDS.indexOf(ep);
 }
 
-/**
- * The account class a pick belongs to (docs/RUNBOOK.md, "Steer it",
- * `accounts`): which of `accounts.pool` / `accounts.paid` / `accounts.local`
- * it may land on. `pool` is the base class — every account that is not
- * split out belongs to it.
- */
-export type AccountClass = "pool" | "paid" | "local";
-
-/** Every class, pool first: the order `--status` and `--dry-run` print them in. */
-export const ACCOUNT_CLASSES = ["pool", "paid", "local"] as const;
-
-/**
- * Which class a model's picks belong to. Local wins over billing: the LM Studio
- * box is free by `model-cost.ts` and still has exactly one runner, so its models
- * are kept off the shared pool for the same reason paid models are.
- */
-export function accountClassOf(s: Pick<ModelState, "billing" | "platform">): AccountClass {
-  if (s.platform === "local") return "local";
-  return s.billing === "paid" ? "paid" : "pool";
-}
-
-/**
- * The same verdict from a roster entry, for callers that have the file rather
- * than the projection (`--status` renders its accounts table before the
- * projection is read). One classifier, two entry points.
- */
-export function rosterClass(r: RosterModel): AccountClass {
-  return accountClassOf({ billing: rosterBilling(r), platform: platformOf(r.apiBase, r.driver) });
-}
-
 export interface NextJobsOptions {
-  /** Paid models already in flight (pinned jobs excluded), for the paid cap. */
-  paidRunning?: number;
-  policy?: Pick<SchedulingPolicy, "paid">;
   /**
-   * The accounts each SPLIT-OUT class may use (`accounts.paid`,
-   * `accounts.local`; the account classes). A class missing from this
-   * map is not split: its picks share `freeAccounts`, which is what every
-   * caller did before the split. A class present takes its accounts from here
-   * and never from `freeAccounts`; an empty array is therefore "this class has
-   * nowhere free to run", and every pick of it is held saying so — `classBusy`
-   * says which of the two reasons.
-   */
-  classAccounts?: Partial<Record<AccountClass, readonly string[]>>;
-  /**
-   * Accounts of a split-out class that EXIST but are occupied right now, with
-   * the run or job holding each where the caller knows it. `classAccounts`
-   * carries only what is free, so without this an all-busy class is
-   * indistinguishable from an unconfigured one — and the fleet told operators
-   * to add an account they already had (the SHAKEOUT2 report).
-   */
-  classBusy?: Partial<Record<AccountClass, readonly BusyAccount[]>>;
-  /**
-   * Why the POOL has no accounts this tick when something outside the policy
-   * has reserved them — today, a manual queue job waiting for one. A pool pick
-   * with nowhere to go is otherwise dropped in silence (a split class has
-   * `noRoom` to say it, the pool never had an equivalent), which is how a
+   * Why the pool has no accounts this tick when something outside the policy
+   * has reserved them — today, a manual queue job waiting for one. A pick
+   * with nowhere to go is otherwise dropped in silence, which is how a
    * reserved pool read as "the models are just not schedulable today".
    */
   poolHeld?: string;
@@ -2525,6 +2273,8 @@ export interface NextJobsOptions {
   campaigns?: readonly Campaign[];
   /** Probe runs on disk, counted or not: what a campaign's remaining work is derived from. */
   probeRuns?: readonly ProbeRun[];
+  /** The scheduling policy; only the parts `schedulability` reads. */
+  policy?: SchedulingPolicy;
 }
 
 /**
@@ -2533,17 +2283,12 @@ export interface NextJobsOptions {
  * episode first, (3) fewest counted runs toward target, ties by roster order.
  * One job per model. `running` holds roster names with a run in flight.
  *
- * Two additions under the paid/free split. A paid pick is held when
- * `policy.paid.maxConcurrent` paid models are already in flight, and the
- * next candidate takes its account; `held` says so. A pick of a SPLIT-OUT
- * class (paid, local) draws from `opts.classAccounts[class]` — never from
- * `freeAccounts` — so a paid model can only ever land on a paid account and a
- * local one only on the local box's account.
- * When every account still
- * free has nothing schedulable left, free models with an extras policy get an
- * **extra** run: fewest extras first, the shorter tier first (`e360` only for
- * a promoted model), roster order — and the pick carries the next character
- * in the cycle.
+ * Every pick draws from the one pool of game accounts: which provider
+ * credential it runs on, and whether that credential has a slot, is the
+ * caller's (`planPolicyHeld` in infra/run-fleet-plan.ts), which passes over a
+ * pick with no room and asks again. When every account still free has
+ * nothing schedulable left, a model with `idle: "unlimited"` gets its
+ * freeplay session.
  */
 export function planNextJobs(
   states: readonly ModelState[],
@@ -2594,62 +2339,20 @@ export function planNextJobs(
   const held: HeldPick[] = [];
   const taken = new Set<string>();
   const accounts = [...freeAccounts];
-  // The split-out classes' accounts, each drawn down separately. A class absent
-  // here is not split and shares `accounts` — the pre-split behaviour.
-  const split: Partial<Record<AccountClass, string[]>> = {};
-  for (const cls of ACCOUNT_CLASSES) {
-    const declared = opts.classAccounts?.[cls];
-    if (cls !== "pool" && declared !== undefined) split[cls] = [...declared];
-  }
-  const listOf = (cls: AccountClass): string[] => split[cls] ?? accounts;
-  const empty = (): boolean => accounts.length === 0 && Object.values(split).every((l) => l.length === 0);
-  // Who took which account of a split class in THIS call: a second local model
-  // is held because the box is busy, not because the box is missing.
-  const tookHere = new Map<AccountClass, BusyAccount[]>();
-  /**
-   * Why a split class has nothing free. Two different operator actions, so
-   * never one message: an empty class needs an account added to the file, a
-   * busy one needs a run to finish (or the cap raised).
-   */
-  const noRoom = (cls: AccountClass): string => {
-    const busy = [...(opts.classBusy?.[cls] ?? []), ...(tookHere.get(cls) ?? [])];
-    if (busy.length === 0) return `no ${cls} account configured — add one to accounts.${cls}`;
-    return `${cls} account(s) busy: ${busy.map((b) => (b.by !== undefined ? `${b.account} held by ${b.by}` : b.account)).join(", ")}`;
-  };
-  let paid = opts.paidRunning ?? 0;
-  const cap = policy.paid?.maxConcurrent;
   for (const c of cands) {
     if (taken.has(c.s.name)) continue;
-    const cls = accountClassOf(c.s);
-    const isPaid = c.s.billing === "paid";
-    const from = listOf(cls);
-    if (split[cls] !== undefined && from.length === 0) {
-      // The actionable reason wins over the cap: there is no account to run on.
-      taken.add(c.s.name);
-      held.push({ name: c.s.name, episode: c.ep, why: noRoom(cls) });
-      continue;
-    }
-    if (isPaid && cap !== undefined && paid >= cap) {
-      taken.add(c.s.name);
-      held.push({ name: c.s.name, episode: c.ep, why: `paid cap: ${paid}/${cap} paid model(s) already in flight` });
-      continue;
-    }
-    if (from.length === 0) {
-      taken.add(c.s.name);
-      // The pool's counterpart to `noRoom`: only said when the caller knows
-      // why the pool is empty. An ordinarily busy pool stays silent, as before.
-      if (split[cls] === undefined && opts.poolHeld !== undefined) held.push({ name: c.s.name, episode: c.ep, why: opts.poolHeld });
-      continue;
-    }
     taken.add(c.s.name);
-    if (isPaid) paid++;
+    if (accounts.length === 0) {
+      // Only said when the caller knows why the pool is empty. An ordinarily
+      // busy pool stays silent.
+      if (opts.poolHeld !== undefined) held.push({ name: c.s.name, episode: c.ep, why: opts.poolHeld });
+      continue;
+    }
     const st = c.s.perEpisode[c.ep]!;
-    const account = from.shift()!;
-    if (split[cls] !== undefined) tookHere.set(cls, [...(tookHere.get(cls) ?? []), { account, by: c.s.name }]);
     jobs.push({
       name: c.s.name,
       episode: c.ep,
-      account,
+      account: accounts.shift()!,
       attempt: st.attempts + 1,
       why: `${c.fresh === 0 ? "no counted runs yet" : `${st.counted}/${st.target} on ${c.ep}`}${c.s.status === "promoted" ? ", promoted" : ""}`,
     });
@@ -2664,7 +2367,7 @@ export function planNextJobs(
   // that account is by definition not one the policy may draw from. This loop
   // is the pool case.
   for (const w of campaignWork(campaigns, [...byName.keys()], probeRuns, (n) => verdicts.get(n)?.verdict !== "blocked")) {
-    if (empty()) break;
+    if (accounts.length === 0) break;
     if (taken.has(w.model)) continue;
     const s = byName.get(w.model);
     if (s === undefined) continue;
@@ -2675,42 +2378,31 @@ export function planNextJobs(
     // what makes the loop correct on its own terms rather than correct because
     // of the order the loops happen to run in.
     if (verdicts.get(w.model)?.verdict !== "free") continue;
-    const pcls = accountClassOf(s);
-    const from = listOf(pcls);
-    if (from.length === 0) continue;
     taken.add(w.model);
     // Attempt numbers come from the probing bucket, which exists precisely so a
     // second probe in one day gets a real run id rather than colliding.
     const st = s.perEpisode["probing"];
-    const account = from.shift()!;
-    if (split[pcls] !== undefined) tookHere.set(pcls, [...(tookHere.get(pcls) ?? []), { account, by: w.model }]);
     jobs.push({
       name: w.model,
       episode: "probing",
-      account,
+      account: accounts.shift()!,
       attempt: (st?.attempts ?? 0) + 1,
       why: `campaign ${w.campaign}@${w.version} cell ${w.cell.id} arm ${w.arm.id} (${w.done}/${w.want}${w.maxAttempts !== undefined ? `, attempt ${w.attempts + 1}/${w.maxAttempts}` : ""})`,
       probe: { campaign: w.campaign, version: w.version, cell: w.cell.id, arm: w.arm.id },
     });
   }
-  // Idle work: lowest priority, only for accounts nothing else wanted, and only
-  // ever on the candidate's own class — so an unlimited session takes the
-  // account its own class owns and never one a counted run could have used.
+  // Idle work: lowest priority, only for accounts nothing else wanted, so an
+  // unlimited session never takes an account a counted run could have used.
   for (const c of extraCands) {
-    if (empty()) break;
+    if (accounts.length === 0) break;
     if (taken.has(c.s.name)) continue;
-    const xcls = accountClassOf(c.s);
-    const from = listOf(xcls);
-    if (from.length === 0) continue;
     taken.add(c.s.name);
     const st = c.s.perEpisode[c.ep]!;
     const n = extrasSoFar(c.s);
-    const account = from.shift()!;
-    if (split[xcls] !== undefined) tookHere.set(xcls, [...(tookHere.get(xcls) ?? []), { account, by: c.s.name }]);
     jobs.push({
       name: c.s.name,
       episode: c.ep,
-      account,
+      account: accounts.shift()!,
       attempt: st.attempts + 1,
       why: `extra #${n + 1}: unlimited session (targets met; one continuous session, idle watchdog only)`,
     });
@@ -2760,24 +2452,24 @@ export function nextJobs(
  *
  *     eta = Σ over groups  (group's remaining minutes / group's concurrency)
  *
- * The groups are the account classes — pool, paid, local — because
- * a model can only ever land on its own class's accounts, with `policy.paid.
- * maxConcurrent` capping the paid class below its account count. Claude-code
- * models are carved out of the pool as their own group, since
- * `policy.maxConcurrent["claude-code"]` binds them tighter than the pool's
- * account count does.
+ * The groups are the credential providers a model's runs are served through,
+ * a metered provider split by billing (a free model takes only a free
+ * credential, a paid one only a paid credential), because a run can only
+ * take a slot on a credential of its own group. A group's concurrency is the
+ * slots its enabled credentials carry, under the pool's account cap and the
+ * driver's per-host session cap.
  *
- * Two simplifications worth stating rather than hiding. The classes actually
+ * Two simplifications worth stating rather than hiding. The groups actually
  * drain in *parallel*, so the true exhaustion time is the largest term and
- * this sum is a pessimistic bound. And the claude-code group shares the pool's
- * accounts with the rest of the pool group, so their concurrencies overlap.
- * Both are deliberate: the number is a planning aid ("is tonight enough?"),
- * and a queueing model would be a worse answer to that question than one an
- * operator can check in their head. A group with work and no account to run it
- * on has no ETA at all, and the whole figure goes null rather than pretend.
+ * this sum is a pessimistic bound. And every group shares the one account
+ * pool, so their concurrencies overlap. Both are deliberate: the number is a
+ * planning aid ("is tonight enough?"), and a queueing model would be a worse
+ * answer to that question than one an operator can check in their head. A
+ * group with work and no credential or account to run it on has no ETA at
+ * all, and the whole figure goes null rather than pretend.
  */
 export interface OutstandingGroup {
-  /** An account class, or `claude-code` for the driver-capped carve-out. */
+  /** A credential provider, `<provider> (free|paid)` for a metered one, or `none` for a run that needs no credential. */
   group: string;
   /** Runs of this group that can be in flight at once; 0 means nowhere to run. */
   concurrency: number;
@@ -2792,53 +2484,51 @@ export interface Outstanding {
   lower: number;
   /** The same assuming every still-eligible model promotes. */
   upper: number;
-  /** Wall clock to exhaust `lower`, or null when some of it has no account. */
+  /** Wall clock to exhaust `lower`, or null when some of it has nowhere to run. */
   etaLowerMs: number | null;
   etaUpperMs: number | null;
   breakdown: OutstandingGroup[];
 }
 
-/** Accounts per class, as `accounts.pool` / `.paid` / `.local` name them. */
-export type ClassAccountCounts = Partial<Record<AccountClass, number>>;
-
 export interface OutstandingInput {
   /** The projection — `modelStates` output. */
   states: readonly ModelState[];
-  /** The policy in force; only `paid.maxConcurrent` is read. */
-  policy?: Pick<SchedulingPolicy, "paid">;
   /** Roster names outside the policy (pinned, or carrying an objective). */
   excluded?: Iterable<string>;
-  /** How many accounts each class has. */
-  accounts?: ClassAccountCounts;
-  /** `policy.maxConcurrent`: per-driver concurrency caps; `claude-code` and `codex` are the ones read. */
-  maxConcurrent?: Record<string, number>;
+  /** How many live sessions the account pool carries (`accounts.max`, else its size). */
+  accounts?: number;
+  /** The configured credentials; the enabled ones' slots are a group's concurrency. */
+  credentials?: readonly Credential[];
+  /** `policy.maxSessions`: the per-driver host cap. */
+  maxSessions?: Record<string, number>;
 }
 
-/** The group a model's runs queue in: its account class, the subscription scaffolds (claude-code, codex) apart. */
-function outstandingGroupOf(s: ModelState): string {
-  return harnessDriver(s.harness)?.bill === "subscription" ? s.harness : accountClassOf(s);
+/** The group a model's runs queue in: its provider, a metered one split by billing. */
+function outstandingGroupOf(s: Pick<ModelState, "provider" | "billing">): string {
+  const p = s.provider ?? null;
+  if (p === null) return "none";
+  return providerById(p)?.bill === "metered" ? `${p} (${s.billing})` : p;
 }
 
 /** The whole metric, pure over the same inputs the projection was built from. */
 export function outstandingWork(input: OutstandingInput): Outstanding {
   const excluded = new Set(input.excluded ?? []);
-  const accounts = input.accounts ?? {};
-  const paidCap = input.policy?.paid?.maxConcurrent;
-  const concurrencyOf = (group: string): number => {
-    if (harnessDriver(group)?.bill === "subscription") {
-      const cap = input.maxConcurrent?.[group];
-      const pool = accounts.pool ?? 0;
-      return cap === undefined ? pool : Math.min(pool, cap);
-    }
-    const n = accounts[group as AccountClass] ?? 0;
-    return group === "paid" && paidCap !== undefined ? Math.min(n, paidCap) : n;
+  const accounts = input.accounts ?? 0;
+  const concurrencyOf = (s: ModelState): number => {
+    const p = s.provider ?? null;
+    if (p === null) return accounts;
+    const slots = (input.credentials ?? []).filter((c) => c.enabled && c.provider === p && credentialCarries(c, s.billing)).reduce((n, c) => n + c.slots, 0);
+    const driver = harnessDriver(s.harness)?.id;
+    const cap = driver !== undefined ? input.maxSessions?.[driver] : undefined;
+    return Math.min(accounts, slots, cap ?? Number.POSITIVE_INFINITY);
   };
 
   const groups = new Map<string, OutstandingGroup>();
-  const groupFor = (name: string): OutstandingGroup => {
+  const groupFor = (s: ModelState): OutstandingGroup => {
+    const name = outstandingGroupOf(s);
     let g = groups.get(name);
     if (g === undefined) {
-      g = { group: name, concurrency: concurrencyOf(name), lowerRuns: 0, upperRuns: 0, lowerMinutes: 0, upperMinutes: 0 };
+      g = { group: name, concurrency: concurrencyOf(s), lowerRuns: 0, upperRuns: 0, lowerMinutes: 0, upperMinutes: 0 };
       groups.set(name, g);
     }
     return g;
@@ -2846,7 +2536,7 @@ export function outstandingWork(input: OutstandingInput): Outstanding {
 
   for (const s of input.states) {
     if (excluded.has(s.name) || s.retired !== undefined) continue;
-    const g = groupFor(outstandingGroupOf(s));
+    const g = groupFor(s);
     // The upper bound's bet is that the model climbs: what its tier would buy
     // if it earned rung 1. For a `t0` model the bet is off — the ladder is
     // held — so its upper and lower agree, which is the honest reading of a
@@ -2900,7 +2590,7 @@ export function formatOutstanding(o: Outstanding): string {
   const hi = formatEtaHours(o.etaUpperMs);
   const eta =
     lo === null || hi === null
-      ? "eta unknown — some of it has no account to run on"
+      ? "eta unknown — some of it has no credential or account to run on"
       : lo === hi
         ? `≈ ${lo} to exhaust`
         : `≈ ${lo}–${hi} to exhaust`;
