@@ -99,17 +99,19 @@ it, the same file runs in the pod from stdin:
 `kubectl -n wrathbench exec -i deploy/wrathbench-runner -- bun run - run <run-id> < infra/inspect-run.ts`.
 
 Those six read a run's row, its state samples and its trajectory from
-ClickHouse (the runner pod's `CLICKHOUSE_*`), never by walking a live run's
-`run.sqlite`: a full read of one held it against the runner's writer long
-enough to kill the run. The heartbeat, a few `meta.json` fields, file sizes,
+ClickHouse (the runner pod's `CLICKHOUSE_*`), never by walking a live 0.5
+run's `run.sqlite`: a full read of one held it against the runner's writer
+long enough to kill the run. The heartbeat, a few `meta.json` fields, file sizes,
 `scratchpad.md`, the nearby ring and the trace stay on the files. Every view
 carries a `source` line: `ClickHouse through <time>, 8s behind the file`,
 flagged as the collector being behind or down past two minutes, or `the
 files: <why>` when there is no `CLICKHOUSE_URL`, ClickHouse does not answer,
 the run is not in it yet, or `--files` was given. The fallback reads
-`trajectory.jsonl`, which a reader cannot lock, and opens `run.sqlite` only
-for a run with no fresh heartbeat, so a live run's row reads `unread` and its
-level `not read`. Each query is `readonly=2`, capped at 60 s and 256 MiB, and
+`trajectory.jsonl`, which a reader cannot lock. A v1 run is read whole off
+its files: its row is `meta.json`'s and its level, quests and samples are its
+session record's, none of which a reader can hold. A 0.5 run's `run.sqlite`
+is opened only when it has no fresh heartbeat, so a live one's row reads
+`unread` and its level `not read`. Each query is `readonly=2`, capped at 60 s and 256 MiB, and
 tagged `log_comment = 'wb inspect'`, so on a Code 241 `system.query_log` shows
 whether inspect was in flight.
 
@@ -139,8 +141,9 @@ operator. With no run id it prints one line per run with a live owner. Every
 threshold is a flag; the defaults are `STUCK_DEFAULTS` in
 `infra/inspect-run.ts`. It reports and nothing more: no record is written and
 nothing acts on the run. `bun wb fleet status` flags a live run with the same
-verdict (`!! STUCK: …` on its account row) from one statement on its
-`run.sqlite`, the newest state rows by rowid, a few milliseconds per live run;
+verdict (`!! STUCK: …` on its account row) from its newest samples (a v1
+run's trace, folded on from the last poll; a 0.5 run's newest `run.sqlite`
+state rows by rowid), a few milliseconds per live run;
 the failure signals are `inspect stuck`'s alone.
 
 ### Where the config lives
@@ -2288,7 +2291,7 @@ variables, and they must stay in agreement:
 
 | variable | value | why |
 | --- | --- | --- |
-| `WRATHBENCH_RUNS_DIR` | `data/runs` | the evidence record. The publisher only reads it, and opens every `run.sqlite` read-only, but the mount is writable: a reader of a WAL-mode database creates and maps its `-wal` and `-shm` beside it (`runner/src/rundb.ts`) |
+| `WRATHBENCH_RUNS_DIR` | `data/runs` | the evidence record. The publisher only reads it, and opens a 0.5 run's `run.sqlite` read-only, but the mount is writable: a reader of a WAL-mode database creates and maps its `-wal` and `-shm` beside it (`runner/src/rundb.ts`) |
 | `WRATHBENCH_CONFIG_DB` | the config store (the chart sets the PVC's path; unset under compose, where the default `data/config.sqlite` holds) | the store's roster names the models the pages label |
 | `WRATHBENCH_PUBLISH_STATE` | `data/publish/state.json` | what was uploaded last, so a pass PUTs only what changed. Deleting it is the repair for a bad immutable object, and it also re-uploads every published trace segment in one pass: 288 a day for each character a trace recorded, which for a long freeplay fleet is tens of thousands of PUTs at once |
 | `WRATHBENCH_PUBLISH_INTERVAL_MS` | `60000` in the script; the chart and compose set `300000` | `--loop` cadence. Five minutes is a cost choice against R2's class-A free tier, not a freshness one; the harness's own floor is 30–60s, so a faster push would buy little |

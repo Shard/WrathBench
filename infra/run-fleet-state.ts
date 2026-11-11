@@ -10,6 +10,7 @@
  */
 
 import { openRunDb } from "../runner/src/rundb";
+import { isV1RunDir, latestReading, readRunRow, readStateSamples } from "../runner/src/run-reader";
 import { type FleetRead, readFleetConfig } from "../runner/src/config-store";
 import { existsSync, readdirSync, readFileSync, realpathSync, statfsSync, statSync } from "node:fs";
 import { readCodexThread } from "../runner/src/codex-rollout";
@@ -592,8 +593,9 @@ export function lastLine(path: string): string | undefined {
  * The stuck detector's flag for a run with a live owner, or undefined: no
  * game progress over the last `STUCK_DEFAULTS.windowMs` (`progressVerdict`,
  * infra/inspect-run.ts). A run whose heartbeat is cold or gone is not looked
- * at. The cost is bounded per run, because status runs often: one statement
- * on run.sqlite, the newest state rows by rowid (an index walk from the end,
+ * at. The cost is bounded per run, because status runs often: a v1 run's
+ * trace samples, folded on from where the last poll left them, or on a 0.5
+ * run one statement on run.sqlite, the newest state rows by rowid (an index walk from the end,
  * never a scan, and never `ORDER BY ts`, which has no index), as many as the
  * window holds at two samples a minute. The failure signals are left to
  * `bun wb inspect stuck`, which reads the trajectory.
@@ -607,10 +609,18 @@ export function liveRunStuck(runId: string, now = Date.now(), runsDir = RUNS_DIR
     return undefined;
   }
   if (now - hb >= HEARTBEAT_DEAD_MS) return undefined;
-  const path = join(dir, "run.sqlite");
-  if (!existsSync(path)) return undefined;
   const windowMs = STUCK_DEFAULTS.windowMs;
   let rows: Record<string, unknown>[];
+  if (isV1RunDir(dir)) {
+    // A v1 run's samples are its trace's (`runner/src/run-reader.ts`), kept
+    // and read on per run, so a status poll folds only what is new.
+    rows = readStateSamples(dir, runId).filter((r) => typeof r["ts"] === "number" && (r["ts"] as number) >= now - windowMs - 60_000);
+    const samples = rows.map((r) => progressSampleOf(r, Number(r["ts"])));
+    const verdict = progressVerdict(samples, { since: now - windowMs, until: now }, STUCK_DEFAULTS);
+    return verdict.state === "stuck" ? stuckFlag(verdict, windowMs) : undefined;
+  }
+  const path = join(dir, "run.sqlite");
+  if (!existsSync(path)) return undefined;
   try {
     const db = openRunDb(path, { readonly: true });
     try {
@@ -638,6 +648,14 @@ export function liveRunStuck(runId: string, now = Date.now(), runsDir = RUNS_DIR
  * sorted the whole table.
  */
 export function runProgress(runId: string, runsDir = RUNS_DIR): { level: number; xp: number; startedAt?: number } | undefined {
+  const dir = join(runsDir, runId);
+  if (isV1RunDir(dir)) {
+    // A v1 run: the newest sample its trace yields, and the start meta.json holds (`run-reader.ts`).
+    const latest = latestReading(dir, runId);
+    if (latest === null || latest.level === null) return undefined;
+    const started = readRunRow(dir, runId)?.["started_at"];
+    return { level: latest.level, xp: latest.xp ?? 0, ...(typeof started === "number" ? { startedAt: started } : {}) };
+  }
   const path = join(runsDir, runId, "run.sqlite");
   if (!existsSync(path)) return undefined;
   try {

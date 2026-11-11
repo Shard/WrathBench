@@ -2251,7 +2251,7 @@ export function bareRunId(job: string, e: { model: string; effort?: string | und
  * Respawn circuit breaker (2026-08-24). A job whose process keeps dying
  * within seconds of spawning leaves no run artifact, so nothing else cools
  * it: the defer ladder reads runs from disk, and a launch that failed before
- * `run.sqlite` existed is invisible to it. `sonnet-low` respawned every 60s
+ * the run wrote anything is invisible to it. `sonnet-low` respawned every 60s
  * tick for two hours on a character name the runner refuses — the name is
  * validated at config load now, but the MECHANISM outlives any one cause
  * (a bad flag, a broken driver binary, the next config gap). Three
