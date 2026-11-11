@@ -412,7 +412,7 @@ describe("codex driver", () => {
     const thread = "01a119da-ef89-7a63-ac51-314ac6a70a54";
     const other = "01a13865-5045-7781-8109-0b9505ae9af2";
     const rollout = [{ total: 100_000 }, { total: 120_000, compact: { pre: 446_911, post: 50_000 } }];
-    const { runDir, codexHome, trajectory, options } = setupEpisode("tools", { maxTurns: 2 }, {
+    const { runDir, recordPath, codexHome, trajectory, options } = setupEpisode("tools", { maxTurns: 2 }, {
       WB_FAKE_THREAD_ID: thread,
       WB_FAKE_ROLLOUT: JSON.stringify(rollout),
     });
@@ -429,11 +429,34 @@ describe("codex driver", () => {
     // Everything taken off the rollout is on the trajectory before it goes.
     expect(records.filter((r) => r.t === "harness" && r["kind"] === "compaction")).toHaveLength(1);
     const removed = records.filter((r) => r.t === "harness" && r["kind"] === "codex_rollouts_removed");
-    expect(removed).toEqual([expect.objectContaining({ when: "exit", threads: [thread], files: 1 })]);
+    expect(removed).toEqual([expect.objectContaining({ when: "exit", threads: [thread], files: 1, threadsDeleted: 1 })]);
+    expect(removed[0]).not.toHaveProperty("deleteError");
     expect((removed[0]?.["bytes"] as number) > 0).toBe(true);
     expect(records.findIndex((r) => r["kind"] === "compaction")).toBeLessThan(records.findIndex((r) => r["kind"] === "codex_rollouts_removed"));
     expect(readdirSync(day)).toEqual([`rollout-2026-10-14T00-00-00-${other}.jsonl`]);
+    // Its rows in the CLI's own stores go too, through the CLI, in the lane's home; the other run's thread is never named.
+    const deletes = readFileSync(`${recordPath}.deletes.jsonl`, "utf8").trim().split("\n").map((l) => JSON.parse(l) as { argv: string[]; codexHome: string });
+    expect(deletes).toEqual([{ argv: ["delete", "--force", thread], codexHome }]);
     for (const f of ["auth.json", "state_5.sqlite"]) expect(existsSync(join(codexHome, f))).toBe(true);
+  }, 30_000);
+
+  test("a thread delete the CLI refuses is logged on the removal record and costs the run nothing", async () => {
+    const thread = "01a119da-ef89-7a63-ac51-314ac6a70a55";
+    const { runDir, recordPath, codexHome, trajectory, options } = setupEpisode("tools", { maxTurns: 2 }, {
+      WB_FAKE_THREAD_ID: thread,
+      WB_FAKE_ROLLOUT: JSON.stringify([{ total: 100_000 }, { total: 110_000 }]),
+      WB_FAKE_DELETE: "fail",
+    });
+    const outcome = await runCodexEpisode(options);
+    trajectory.close();
+    expect(outcome.reason).toBe("turn-limit");
+    const removed = readTrajectory(runDir).filter((r) => r.t === "harness" && r["kind"] === "codex_rollouts_removed");
+    expect(removed).toEqual([
+      expect.objectContaining({ when: "exit", threads: [thread], files: 1, threadsDeleted: 0, deleteError: "codex delete exited 1: Error: failed to delete session" }),
+    ]);
+    expect(removed[0]).not.toHaveProperty("error");
+    expect(readFileSync(`${recordPath}.deletes.jsonl`, "utf8")).toContain(thread);
+    expect(readdirSync(join(codexHome, "sessions", "2026", "10", "14"))).toEqual([]);
   }, 30_000);
 
   test("a thread the episode moves off is deleted after the turn that left it; the live one at the end", async () => {

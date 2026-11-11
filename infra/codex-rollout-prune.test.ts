@@ -5,7 +5,7 @@
  * full a lane's volume is. Fixture homes in temp directories; no live stack.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { codexHomesOf, liveCodexThreads, pruneCodexHomes, volumeUsage, type PausedListing } from "./run-fleet";
 import { codexLaneVolume, formatPaused, pauseDetailLine, pauseDetailOf } from "./run-fleet-status";
@@ -33,6 +33,16 @@ function home(threads: string[], ageMs = 30 * HOUR): string {
     utimesSync(f, new Date(NOW - ageMs), new Date(NOW - ageMs));
   }
   return h;
+}
+
+/** A stand-in `codex` for the sweep's thread deletes: logs `CODEX_HOME` and its argv, then exits `code`. */
+function fakeCodex(code = 0): { bin: string; calls: () => string[] } {
+  const dir = tmp("wrathbench-fleet-codex-bin-");
+  const bin = join(dir, "codex");
+  const log = join(dir, "calls.log");
+  writeFileSync(bin, `#!/bin/sh\necho "$CODEX_HOME $*" >> ${log}\n${code === 0 ? "" : 'echo "Error: failed to delete session" >&2\n'}exit ${code}\n`);
+  chmodSync(bin, 0o755);
+  return { bin, calls: () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : []) };
 }
 
 const fact = (runId: string, o: { driver?: string; live?: boolean; heartbeatAt?: number | null; archived?: boolean } = {}) => ({
@@ -89,36 +99,57 @@ describe("the threads a sweep keeps", () => {
 });
 
 describe("the hourly sweep", () => {
-  test("deletes every old rollout no live run claims, in every home, and says so in one line", () => {
+  test("deletes every old rollout no live run claims, in every home, then those threads from the CLI's stores, and says so in one line", () => {
     const a = home([LIVE, DEAD]);
     const b = home([PAUSING]);
+    const cli = fakeCodex();
     const lines: string[] = [];
     const r = pruneCodexHomes({
       homes: [{ env: "CODEX_HOME", path: a }, { env: "CODEX_HOME_2", path: b }],
       runs: [fact("live", { live: true })],
       now: NOW,
       threadOf: () => LIVE,
+      codexBin: cli.bin,
       say: (s) => lines.push(s),
     });
-    expect(r).toMatchObject({ files: 2, bytes: 2048, kept: 1, errors: 0 });
+    expect(r).toMatchObject({ files: 2, bytes: 2048, kept: 1, errors: 0, threads: [DEAD, PAUSING] });
     expect(readdirSync(join(a, "sessions", "2026", "10", "14"))).toEqual([`rollout-2026-10-14T03-12-06-${LIVE}.jsonl`]);
     expect(readdirSync(join(b, "sessions", "2026", "10", "14"))).toEqual([]);
     for (const h of [a, b]) for (const f of ["auth.json", "thread_history_1.sqlite"]) expect(existsSync(join(h, f))).toBe(true);
-    expect(lines).toEqual(["codex rollouts: removed 2 (0.0 MiB) under CODEX_HOME, CODEX_HOME_2; kept 1 (1 live thread)"]);
+    // Each dead thread in its own home; the live one is never offered.
+    expect(cli.calls()).toEqual([`${a} delete --force ${DEAD}`, `${b} delete --force ${PAUSING}`]);
+    expect(lines).toEqual(["codex rollouts: removed 2 (0.0 MiB) under CODEX_HOME, CODEX_HOME_2; kept 1 (1 live thread); 2 threads deleted"]);
   });
 
-  test("a rollout written in the last two hours stays, whoever owns it", () => {
+  test("a failed thread delete is counted in the line, never thrown, and the rollouts still go", () => {
+    const a = home([DEAD]);
+    const cli = fakeCodex(1);
+    const lines: string[] = [];
+    const r = pruneCodexHomes({ homes: [{ env: "CODEX_HOME", path: a }], runs: [], now: NOW, codexBin: cli.bin, say: (s) => lines.push(s) });
+    expect(r).toMatchObject({ files: 1, errors: 0, threads: [] });
+    expect(cli.calls()).toEqual([`${a} delete --force ${DEAD}`]);
+    expect(readdirSync(join(a, "sessions", "2026", "10", "14"))).toEqual([]);
+    expect(lines).toEqual([
+      "codex rollouts: removed 1 (0.0 MiB) under CODEX_HOME; kept 0 (0 live threads); 1 thread not deleted (CODEX_HOME: codex delete exited 1: Error: failed to delete session)",
+    ]);
+  });
+
+  test("a rollout written in the last two hours stays, whoever owns it, and so does its thread", () => {
     const a = home([DEAD], 90 * 60_000);
-    const r = pruneCodexHomes({ homes: [{ env: "CODEX_HOME", path: a }], runs: [], now: NOW, say: () => {} });
-    expect(r).toMatchObject({ files: 0, kept: 1 });
+    const cli = fakeCodex();
+    const r = pruneCodexHomes({ homes: [{ env: "CODEX_HOME", path: a }], runs: [], now: NOW, codexBin: cli.bin, say: () => {} });
+    expect(r).toMatchObject({ files: 0, kept: 1, threads: [] });
+    expect(cli.calls()).toEqual([]);
   });
 
   test("nothing is deleted while a live codex run has no thread on record", () => {
     const a = home([DEAD]);
+    const cli = fakeCodex();
     const lines: string[] = [];
-    const r = pruneCodexHomes({ homes: [{ env: "CODEX_HOME", path: a }], runs: [fact("fresh", { live: true })], now: NOW, threadOf: () => undefined, say: (s) => lines.push(s) });
+    const r = pruneCodexHomes({ homes: [{ env: "CODEX_HOME", path: a }], runs: [fact("fresh", { live: true })], now: NOW, threadOf: () => undefined, codexBin: cli.bin, say: (s) => lines.push(s) });
     expect(r).toBeUndefined();
     expect(readdirSync(join(a, "sessions", "2026", "10", "14"))).toHaveLength(1);
+    expect(cli.calls()).toEqual([]);
     expect(lines).toEqual(["codex rollouts: not swept — live codex run(s) with no thread on record: fresh"]);
   });
 
@@ -130,6 +161,7 @@ describe("the hourly sweep", () => {
       homes: [{ env: "CODEX_HOME", path: home([]) }],
       runs: [fact("x", { live: true })],
       now: NOW,
+      codexBin: fakeCodex().bin,
       threadOf: () => {
         throw new Error("boom");
       },

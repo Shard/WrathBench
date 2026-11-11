@@ -701,7 +701,8 @@ and differs only where the CLI does:
   of it comes back from the thread's rollout instead (below). The CLI never
   deletes a rollout, so the driver does once that thread is done with — an
   old thread's after the turn that moved off it, every one at the episode's
-  end after the last read — and names the thread it is on in
+  end after the last read, then the thread's rows in the CLI's own stores
+  through `codex delete --force <thread>` — and names the thread it is on in
   `<run-dir>/codex-thread.json`, which the supervisor's hourly sweep keeps
   (docs/RUNBOOK.md, "The Codex lane"). Nothing resumes a thread across
   episodes: a resumed run starts a new one. The standalone

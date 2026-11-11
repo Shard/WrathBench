@@ -17,7 +17,8 @@
  *
  * Rollouts reach hundreds of megabytes, so only the tail is ever read. Nothing
  * here may fail or delay a turn: every failure is an absent figure. Only
- * `sessions/**` is touched, never `auth.json`. No imports beyond
+ * `sessions/**` is read or deleted here, never `auth.json`; a finished
+ * thread's rows go through the CLI itself (`deleteCodexThread`). No imports beyond
  * `codex-usage.ts` (and a type from `subscription-usage.ts`), so tests can use
  * it without the driver.
  *
@@ -26,9 +27,11 @@
  * turn ran on (`turnModelOfLine`); `CodexRolloutFollower` reads both.
  *
  * The end of this file deletes rollouts (`removeThreadRollouts`,
- * `pruneRollouts`): the CLI never does, and a lane's volume filled twice.
+ * `pruneRollouts`) and the threads they belong to (`deleteCodexThread`): the
+ * CLI never does, and a lane's volume filled twice.
  */
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeCodexUsage } from "./codex-usage";
 import type { UsageWindow } from "./subscription-usage";
@@ -550,13 +553,22 @@ export class CodexRolloutFollower {
  *   not been written for `ROLLOUT_PRUNE_MIN_AGE_MS` (`pruneRollouts`).
  *
  * Only `sessions/YYYY/MM/DD/rollout-*.jsonl` files are deleted, then the date
- * directories they leave empty; never `auth.json`, the CLI's config or its
- * sqlite stores. Neither ever throws.
+ * directories they leave empty; never `auth.json` or the CLI's config. Neither
+ * ever throws.
  *
- * The CLI's state db keeps its row for a deleted thread, and says "state db
- * returned stale rollout path for thread …" when it next looks one up — the
- * first `exec` of a new thread does, once per old shell snapshot, while it
- * clears those — which `detectCodexFailure` does not classify.
+ * The CLI's sqlite stores keep a thread after its rollout is gone, and
+ * `thread_history_1.sqlite` holds every item of it: tens of MiB a day on a
+ * freeplay stream, with no retention setting in the pinned CLI. So each thread
+ * whose rollout either of the two just unlinked then goes through the CLI's own
+ * `codex delete --force <thread>` (`deleteCodexThread`), which drops its rows
+ * there and in `state_5.sqlite`. It is offered nothing else, so it can never
+ * reach a thread the rollout rules keep. A delete that fails leaves the rows
+ * behind and nothing revisits them; the space is the CLI's, never a run's.
+ *
+ * A thread whose rows are still there says "state db returned stale rollout
+ * path for thread …" when the CLI next looks it up — the first `exec` of a new
+ * thread does, once per old shell snapshot, while it clears those — which
+ * `detectCodexFailure` does not classify.
  */
 
 /** The thread a run is on: a sidecar in its run directory, rewritten by the driver when the thread changes. */
@@ -592,6 +604,47 @@ const ROLLOUT_NAME = new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d
 /** The thread a rollout file name belongs to, lowercased, or undefined for any other name. */
 export function rolloutThreadId(name: string): string | undefined {
   return ROLLOUT_NAME.exec(name)?.[1]?.toLowerCase();
+}
+
+/** How long `codex delete` may take: it is ~60 ms, and a shared home's sqlite may be busy with a live run's writes. */
+export const THREAD_DELETE_TIMEOUT_MS = 10_000;
+
+const STRICT_THREAD_ID = new RegExp(`^${UUID}$`, "i");
+
+/**
+ * Delete one finished thread from the CLI's own stores with
+ * `codex delete --force <thread>`, run as the driver runs the CLI: `env` is the
+ * lane's child environment, `CODEX_HOME` included, stdin closed, a temp cwd.
+ * It needs no login and no network (checked against the pinned CLI), and
+ * succeeds whether or not the rollout is still there. Only a UUID is passed
+ * (`--force` takes nothing else), and never without a `CODEX_HOME`: unset, the
+ * CLI would fall back to `~/.codex`. Undefined on success, else why; never
+ * throws, and a busy store or a hung CLI costs at most `timeoutMs`.
+ */
+export function deleteCodexThread(
+  threadId: string,
+  o: { bin?: string; env: Record<string, string>; timeoutMs?: number },
+): string | undefined {
+  if (!STRICT_THREAD_ID.test(threadId)) return `not a thread id: ${threadId}`;
+  if ((o.env["CODEX_HOME"] ?? "").length === 0) return "no CODEX_HOME";
+  const timeoutMs = o.timeoutMs ?? THREAD_DELETE_TIMEOUT_MS;
+  try {
+    const r = Bun.spawnSync({
+      cmd: [o.bin ?? "codex", "delete", "--force", threadId],
+      cwd: tmpdir(),
+      env: o.env,
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "pipe",
+      timeout: timeoutMs,
+    });
+    if (r.success) return undefined;
+    if (r.exitedDueToTimeout === true) return `codex delete timed out after ${timeoutMs} ms`;
+    const said = new TextDecoder().decode(r.stderr).trim().split("\n").at(-1)?.trim().slice(0, 200);
+    return `codex delete exited ${r.exitCode ?? r.signalCode ?? "?"}${said ? `: ${said}` : ""}`;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
 }
 
 /** What a deletion removed; `error` is the first failure's message. */
@@ -650,10 +703,11 @@ export function removeThreadRollouts(codexHome: string | undefined, threadId: st
  */
 export const ROLLOUT_PRUNE_MIN_AGE_MS = 2 * 60 * 60_000;
 
-/** What a sweep did: files and bytes removed, rollouts kept, date directories removed. */
+/** What a sweep did: files and bytes removed, rollouts kept, date directories removed, and the threads none of whose rollouts are left. */
 export interface RolloutPrune extends RolloutRemoval {
   kept: number;
   dirs: number;
+  threads: string[];
 }
 
 const pad2 = (n: number): string => String(n).padStart(2, "0");
@@ -680,7 +734,9 @@ function currentDays(now: number): string[] {
  * and the sweep goes on.
  */
 export function pruneRollouts(codexHome: string, o: { keep: ReadonlySet<string>; now: number; minAgeMs?: number }): RolloutPrune {
-  const out: RolloutPrune = { files: 0, bytes: 0, errors: 0, kept: 0, dirs: 0 };
+  const out: RolloutPrune = { files: 0, bytes: 0, errors: 0, kept: 0, dirs: 0, threads: [] };
+  const removed = new Set<string>();
+  const stays = new Set<string>();
   const minAge = o.minAgeMs ?? ROLLOUT_PRUNE_MIN_AGE_MS;
   const keep = new Set([...o.keep].map((t) => t.toLowerCase()));
   const current = currentDays(o.now);
@@ -724,13 +780,16 @@ export function pruneRollouts(codexHome: string, o: { keep: ReadonlySet<string>;
         if (!st.isFile()) continue;
         if (keep.has(thread) || !settled(st.mtimeMs)) {
           out.kept++;
+          stays.add(thread);
           continue;
         }
       } catch (err) {
         if (errCode(err) !== "ENOENT") failed(out, err);
         continue;
       }
+      const before = out.files;
       unlinkRollout(path, out);
+      (out.files > before ? removed : stays).add(thread);
     }
   };
   try {
@@ -738,5 +797,6 @@ export function pruneRollouts(codexHome: string, o: { keep: ReadonlySet<string>;
   } catch (err) {
     failed(out, err);
   }
+  out.threads = [...removed].filter((t) => !stays.has(t));
   return out;
 }

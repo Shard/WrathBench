@@ -158,7 +158,7 @@ import { entryOf } from "./drivers";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { MCP_BRIDGE_PATH } from "@wrathbench/mcp/paths";
 import { McpServer } from "./mcp";
-import { CodexLastCallReader, CodexRolloutFollower, removeThreadRollouts, writeCodexThread, type CodexCompaction } from "./codex-rollout";
+import { CodexLastCallReader, CodexRolloutFollower, deleteCodexThread, removeThreadRollouts, writeCodexThread, type CodexCompaction } from "./codex-rollout";
 import { CompactionAsk, codexAutoCompactLimit, codexWindowCapRefusal, compactionNotice, compactWindowTokens, summaryFields, type CompactionRecord } from "./cli-compaction";
 import { codexUsageDelta, codexUsageRegressed, normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 import { SUBSCRIPTION_PAUSE } from "./lapse";
@@ -1010,15 +1010,32 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       let files = 0;
       let bytes = 0;
       let error: string | undefined;
+      let threadsDeleted = 0;
+      let deleteError: string | undefined;
       for (const id of ids) {
         const r = removeThreadRollouts(env["CODEX_HOME"], id);
         ownThreads.delete(id);
         files += r.files;
         bytes += r.bytes;
         error ??= r.error;
+        // Then the thread's rows in the CLI's own stores (`codex-rollout.ts`, "deletion").
+        const failed = r.files > 0 ? deleteCodexThread(id, { bin, env }) : undefined;
+        if (r.files > 0 && failed === undefined) threadsDeleted++;
+        deleteError ??= failed;
       }
       if (files > 0 || error !== undefined) {
-        trajectory.append({ t: "harness", kind: "codex_rollouts_removed", turn, when, threads: [...ids], files, bytes, ...(error !== undefined ? { error } : {}) });
+        trajectory.append({
+          t: "harness",
+          kind: "codex_rollouts_removed",
+          turn,
+          when,
+          threads: [...ids],
+          files,
+          bytes,
+          threadsDeleted,
+          ...(error !== undefined ? { error } : {}),
+          ...(deleteError !== undefined ? { deleteError } : {}),
+        });
       }
     } catch {
       // best effort: the supervisor's sweep collects what is left
