@@ -22,6 +22,11 @@
  *   long-turn   one turn that keeps calling tools until a call is refused.
  *   wind-down   like long-turn, but on the refusal it stops and settles.
  *
+ * $WB_FAKE_CALLS replaces the default turn's one `run_snippet` with a script:
+ * a JSON array indexed by turn, each entry the `{name, arguments}` calls that
+ * turn makes in order, one assistant message each (none past the array's
+ * end). A fan-out run's script.
+ *
  * $WB_FAKE_CONTEXT_WINDOW sets the model's context window `get_state`
  * reports (default 1000000); $WB_FAKE_CLAMP=<asked>:<runs> makes pi run a
  * different thinking level than `--thinking` named; $WB_FAKE_COMPACT_TURN=<n>
@@ -150,6 +155,8 @@ if (mcp !== null) {
   await mcp.call("initialize", { protocolVersion: "2025-11-25", capabilities: { roots: {} }, clientInfo: { name: "pi", version: "1.4.0" } });
   const listed = (await mcp.call("tools/list")) as { result?: { tools?: { name: string }[] } };
   record["mcpTools"] = (listed.result?.tools ?? []).map((t) => t.name);
+  // The whole `tools/list` result, as served: what a fan-out-1 golden hashes.
+  record["mcpToolsList"] = listed.result ?? null;
 }
 saveRecord();
 
@@ -229,6 +236,33 @@ async function runPrompt(text: string): Promise<void> {
       }
       await new Promise((r) => setTimeout(r, 20));
     }
+    return;
+  }
+
+  // $WB_FAKE_CALLS: this turn's scripted calls, one assistant message each, then one closing text.
+  const spec = Bun.env["WB_FAKE_CALLS"];
+  if (spec !== undefined) {
+    const calls = (JSON.parse(spec) as { name: string; arguments: Record<string, unknown> }[][])[turn - 1] ?? [];
+    const messages: unknown[] = [];
+    for (const [i, c] of calls.entries()) {
+      const id = `call-${turn}-${i}`;
+      const name = `mcp__wrathbench__${c.name}`;
+      const msg = assistant([{ type: "toolCall", id, name, arguments: c.arguments }], usage(200, 20, 800 * turn), "toolUse");
+      messages.push(msg);
+      emit({ type: "message_end", message: msg });
+      emit({ type: "tool_execution_start", toolCallId: id, toolName: name, args: c.arguments });
+      const res = mcp === null ? undefined : ((await mcp.call("tools/call", { name: c.name, arguments: c.arguments })) as { result?: { isError?: boolean; content?: unknown[] } }).result;
+      (record["toolResults"] as unknown[]).push(res);
+      saveRecord();
+      emit({ type: "tool_execution_end", toolCallId: id, toolName: name, result: { content: res?.content ?? [] }, isError: res?.isError === true });
+      emit({ type: "turn_end", message: msg, toolResults: [] });
+      emit({ type: "turn_start" });
+    }
+    const done = assistant([{ type: "text", text: `turn ${turn}: acting` }], usage(100, 5, 1000 * turn), "stop");
+    emit({ type: "message_end", message: done });
+    emit({ type: "turn_end", message: done, toolResults: [] });
+    emit({ type: "agent_end", messages: [...messages, done], willRetry: false });
+    emit({ type: "agent_settled", aborted: false });
     return;
   }
 
