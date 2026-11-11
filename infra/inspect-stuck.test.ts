@@ -170,6 +170,12 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE_V1]
       expect(line(r.out, "schema")).toMatch(/ok\s+2 events_served/);
     });
 
+    test("the fleet's flag and progress read the same samples", () => {
+      expect(liveRunStuck("run-stuck", NOW, RUNS_V1)).toContain("no progress");
+      expect(liveRunStuck("run-progressing", NOW, RUNS_V1)).toBeUndefined();
+      expect(runProgress("run-stuck", RUNS_V1)).toEqual({ level: 12, xp: 1350, startedAt: NOW - 180 * MIN });
+    });
+
     test("progress and a crafting session are progress", async () => {
       expect(line((await inspect(["stuck", "run-progressing", "--runs-dir", RUNS_V1], store)).out, "verdict")).toContain("not stuck");
       expect(line((await inspect(["stuck", "run-crafting", "--runs-dir", RUNS_V1], store)).out, "verdict")).toContain("not stuck");

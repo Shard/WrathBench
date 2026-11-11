@@ -255,9 +255,9 @@ export * from "./run-fleet-status";
 
 /**
  * End the runs `planResumes` said to end, through the runner's own writer
- * (`Trajectory.setTermination`: the trajectory record, the run row, the
- * pause cleared) — the same path `classify.ts` takes, so nothing else writes
- * a termination into run.sqlite. Returns what it ended; a run directory that
+ * (`Trajectory.setTermination`: the trajectory record, the run row in
+ * meta.json, the pause cleared) — the same path `classify.ts` takes, so
+ * nothing else writes a termination. Returns what it ended; a run directory that
  * will not open is reported, not fatal.
  */
 export function endRuns(runsDir: string, ended: readonly EndedRun[]): { runId: string; error?: string }[] {
@@ -278,7 +278,7 @@ export function endRuns(runsDir: string, ended: readonly EndedRun[]): { runId: s
 
 /**
  * Write into the row each verdict the runner recorded in the trajectory but
- * could not write into run.sqlite (`RunFact.recordedTermination`), appending
+ * could not write into its row (`RunFact.recordedTermination`), appending
  * nothing: the record is already there, and a second one would read as a
  * second ending. A row that has a verdict by now is left alone. Returns what
  * it repaired; a run directory that will not open is reported, not fatal.
