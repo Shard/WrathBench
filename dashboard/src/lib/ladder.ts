@@ -137,12 +137,13 @@ export const EXPANSION_MAPS = [530, 571];
  * (`run.deaths`, `run.leveling`), but neither bears on a rung: no rung asks how
  * often a character died, and the level rungs already read `maxLevel`.
  *
- * Rung 6 stays not instrumented, though the records it would read exist: the
- * `group`, `instance` and `kill` milestones, on party runs of five loops of one
- * model (docs/proposals/GROUP-PLAY.md). They exist only in probe campaigns,
- * which have no comparability group and so no ladder, so the rung needs a
- * scored party episode. That episode and the derivation the rung would use
- * are the operator's decisions: issue #9, and the proposal in issue #416.
+ * Rung 6 stays not instrumented, though the records it would read exist: every
+ * run records the `group`, `instance` and `kill` milestones. But only probe
+ * campaigns run parties, five loops of one model (docs/proposals/GROUP-PLAY.md),
+ * and probe campaigns have no comparability group and so no ladder, so the
+ * rung needs a scored party episode. That episode and the derivation the rung
+ * would use are the operator's decisions: issue #9, and the proposal in issue
+ * #416.
  */
 export const RUNGS: Rung[] = [
   {
@@ -186,7 +187,7 @@ export const RUNGS: Rung[] = [
     n: 6,
     title: "A 5-man dungeon cleared by a party of agents",
     rule:
-      "only probe campaigns have party records; needs a scored party episode " +
+      "only probe campaigns run parties; needs a scored party episode " +
       "(docs/proposals/GROUP-PLAY.md)",
     test: null,
     askable: () => false,

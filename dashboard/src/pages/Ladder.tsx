@@ -33,8 +33,8 @@
  * than mysterious, and neither is added to anything: there is no aggregate
  * score.
  *
- * One of the eight rungs cannot be answered from scored runs: the party
- * records rung 6 would read exist only in unscored probe campaigns. It reads
+ * One of the eight rungs cannot be answered from scored runs: only unscored
+ * probe campaigns run the parties rung 6 would read. It reads
  * "not instrumented" rather than being approximated by a level threshold. Rung 2 reads the zone/area
  * milestone records and rung 4 reads those plus the flight
  * milestones, so 4 now tests both clauses of its title. Every derived rung
