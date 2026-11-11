@@ -26,14 +26,21 @@
  * path (`FANOUT_SEP`, `run-reader.ts`). A fan-out run's own id opens
  * nothing, since no one character is the run, and its sessions are listed
  * with the run id as their `group`; the API's replay routes open a character
- * by its id (`fanoutSession`). The
- * viewer serves its handle as the operator; nothing it serves is scoped to a
- * user.
+ * by its id (`fanoutSession`).
+ *
+ * Every v1 record's `session.json` is presented with its `id` replaced by the
+ * session's id as defined here, so the listing and the detail agree with the
+ * handle: the record's own `id` is the session token's fingerprint, the stem
+ * of the module's audit files, and no response of the viewer (which has no
+ * login) names one. The stack's own bin keys a bare store by that id and
+ * stays as it is. The viewer serves its handle as the operator; nothing it
+ * serves is scoped to a user.
  */
 
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { StoredSessionHandle, inScope, type SessionEntry, type SessionHandle, type SessionScope, type SessionSource } from "@wrathbench/inspector";
+import type { SessionFile } from "@wrathbench/mcp/record";
 import { FANOUT_SEP, fanoutCharacters, fanoutSessionDir, fanoutSessionId, isFanoutRunDir, parseFanoutSessionId, SESSIONS_DIR } from "../src/run-reader";
 import { legacy05Session } from "./legacy05-source";
 import { runDir } from "./runs";
@@ -59,13 +66,26 @@ export function fanoutSessions(runsDir: string, runId: string): { id: string; ch
 }
 
 /**
+ * A v1 session record, a single-character run's or a fan-out character's,
+ * read as the stack wrote it but for `session.json`'s `id`, which reads as the
+ * handle's id (the run id, or `<run-id>~<Character>`): the session's id as
+ * WrathBench defines it, never the token's fingerprint.
+ */
+class RunSessionHandle extends StoredSessionHandle {
+  override async session(): Promise<SessionFile | null> {
+    const s = await super.session();
+    return s === null ? null : { ...s, id: this.id };
+  }
+}
+
+/**
  * A run's session, opened by its id, whatever it recorded: its record when it
  * has one, else the 0.5 readers. A run with nothing reads as having recorded
  * nothing, never as an error, and so does a fan-out run, whose run id is no
  * one character's: its routes that read "the run's session" answer empty.
  */
 export function runSession(runsDir: string, runId: string): SessionHandle {
-  return isV1Run(runsDir, runId) ? new StoredSessionHandle(runId, join(runsDir, runId, SESSION_DIR)) : legacy05Session(runsDir, runId);
+  return isV1Run(runsDir, runId) ? new RunSessionHandle(runId, join(runsDir, runId, SESSION_DIR)) : legacy05Session(runsDir, runId);
 }
 
 /**
@@ -80,7 +100,7 @@ export function fanoutSession(runsDir: string, id: string): SessionHandle | null
   if (dir === null || !isFanoutRunDir(dir)) return null;
   const sessionDir = fanoutSessionDir(dir, named.character);
   if (sessionDir === null || !existsSync(join(sessionDir, "session.json"))) return null;
-  return new StoredSessionHandle(id, sessionDir);
+  return new RunSessionHandle(id, sessionDir);
 }
 
 /**
