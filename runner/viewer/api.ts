@@ -108,6 +108,7 @@ import {
 import { isArchiveDir } from "./archive-dir";
 import { compressResponse } from "./compress";
 import { CONFIG_API_PREFIX, handleConfigRequest } from "./config-api";
+import { createAdminApi } from "./admin-api";
 import { hostAllowlist, hostGuard } from "./host-guard";
 import { writeGuard } from "./write-guard";
 import { ALL_GROUPS, allGroupsOn, groupOfApiPath, type Groups } from "./groups";
@@ -805,6 +806,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
   const groups = opts.groups ?? ALL_GROUPS;
   // Never on a public handle: the read-only public site has no write surface.
   const admin = opts.admin === true && !publicMode;
+  // The admin pages' status beside the config they edit (`admin-api.ts`).
+  const adminApi = admin
+    ? createAdminApi({ groups, runsDir, ...(opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {}) })
+    : null;
   const allowedHosts = opts.allowedHosts === undefined ? null : hostAllowlist(opts.allowedHosts);
   /**
    * Serve a body, through the public projection when this handle is public.
@@ -2226,6 +2231,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
       });
       // Anything but a read may have changed the roster: the next poll reads it afresh.
       if (req.method !== "GET" && req.method !== "HEAD") rosterHeld = undefined;
+      if (res !== null) return res;
+    }
+    if (adminApi !== null) {
+      const res = adminApi(req, path);
       if (res !== null) return res;
     }
 

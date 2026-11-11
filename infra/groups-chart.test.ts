@@ -83,6 +83,23 @@ describe.skipIf(helm === null)("the chart's admin switch", () => {
     for (const [name, v] of Object.entries(env)) if (name !== "wrathbench-viewer") expect(v, name).toBeUndefined();
   }, HELM_TEST_MS);
 
+  test("on: the viewer is told the model keys' names and how publishing is set, and is handed no S3 secret", () => {
+    const docs = render("--set", "admin.enabled=true", "--set", "publisher.delayMs=60000", "--set", "publisher.target.endpoint=https://s3.example", "--set", "publisher.target.bucket=pub");
+    const viewer = docs.find((d) => d?.kind === "Deployment" && d.metadata?.name === "wrathbench-viewer")!;
+    const env = viewer.spec!.template!.spec!.containers![0]!.env as { name: string; value?: string; valueFrom?: unknown }[];
+    const by = new Map(env.map((e) => [e.name, e]));
+    expect(by.get("WRATHBENCH_MODEL_KEYS")?.value).toContain("OPENROUTER_KEY");
+    expect(by.get("WRATHBENCH_PUBLISHER")?.value).toBe("1");
+    expect(by.get("WRATHBENCH_PUBLISH_DELAY_MS")?.value).toBe("60000");
+    expect(by.get("WRATHBENCH_PUBLISH_TARGET")?.value).toBe("https://s3.example/pub");
+    for (const e of env) if (e.name.startsWith("S3_") && e.name !== "S3_REGION") throw new Error(`the viewer carries ${e.name}`);
+    expect(env.filter((e) => e.valueFrom !== undefined && JSON.stringify(e.valueFrom).includes("S3_"))).toEqual([]);
+    // Without admin, none of it.
+    const plain = render().find((d) => d?.kind === "Deployment" && d.metadata?.name === "wrathbench-viewer")!;
+    const names = (plain.spec!.template!.spec!.containers![0]!.env ?? []).map((e) => e.name);
+    for (const n of ["WRATHBENCH_MODEL_KEYS", "WRATHBENCH_PUBLISHER", "WRATHBENCH_PUBLISH_STATE"]) expect(names).not.toContain(n);
+  }, HELM_TEST_MS);
+
   test("on with the viewer off is refused", () => {
     for (const off of ["groups.viewer.enabled=false", "viewer.enabled=false"]) {
       const r = run("--set", "admin.enabled=true", "--set", off);

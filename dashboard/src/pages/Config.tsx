@@ -31,10 +31,11 @@
  */
 
 import { For, Show, createMemo, createSignal, onMount } from "solid-js";
-import type { DraftView, DraftsResponse } from "@viewer/api-types";
+import type { AdminResponse, DraftView, DraftsResponse } from "@viewer/api-types";
 import { SNAPSHOT_MODE } from "../api/client";
 import { ConfigError, configApi, type AuditRow, type ConfigResponse } from "../api/config-client";
 import { Collapsible } from "../components/Collapsible";
+import { CampaignsSection, CredentialsSection, DeploymentSection, FreeplaySection, QueueSection } from "./ConfigAdmin";
 import {
   BILLINGS,
   DRAFT_FILTERS,
@@ -95,6 +96,8 @@ export default function Config() {
   // document swapped under it on a timer; the version check before each write
   // is what catches an edit from elsewhere, and it says so out loud.
   const [doc, setDoc] = createSignal<ConfigResponse | undefined>(undefined);
+  // The status beside the config (`/api/admin`): credentials' state, groups, publishing.
+  const [admin, setAdmin] = createSignal<AdminResponse | undefined>(undefined);
   const [audit, setAudit] = createSignal<AuditRow[]>([]);
   const [loadError, setLoadError] = createSignal<unknown>(undefined);
   const [actor, setActor] = createSignal(readActor());
@@ -143,6 +146,8 @@ export default function Config() {
         setAudit((await configApi.audit(50)).audit);
         await reloadDrafts();
       }
+      // Its own failure costs the status columns, never the page.
+      setAdmin(await configApi.admin().catch(() => undefined));
     } catch (e) {
       setLoadError(e);
     }
@@ -263,12 +268,22 @@ export default function Config() {
                 </button>
               </div>
 
+              <CredentialsSection admin={admin()} write={write} />
+
               <h3 class="section">roster</h3>
               <RosterTable rows={roster()} write={write} messages={rowMessages()} setMessage={setRowMessage} />
 
               <AddEntry write={write} />
 
               <Drafts body={drafts()} error={draftsError()} write={write} actor={actor} reload={reloadDrafts} />
+
+              <FreeplaySection config={body().config} write={write} />
+
+              <CampaignsSection config={body().config} write={write} />
+
+              <QueueSection config={body().config} keys={body().keys} write={write} />
+
+              <DeploymentSection admin={admin()} />
 
               <h3 class="section">policy, accounts, campaigns, pinned jobs</h3>
               <p class="dim">
