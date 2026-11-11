@@ -8,6 +8,7 @@
  *   episodic.jsonl    append-only  → tailed from a byte offset
  *   session/trace     append-only  → folded into state samples (v1)
  *   session/events    append-only  → tailed from a stream cursor (v1)
+ *   session/calls     append-only  → tailed from a stream cursor: moves (v1)
  *   run.sqlite state  append-only  → read from a rowid cursor (0.5)
  *   run.sqlite move   append-only  → read from a rowid cursor (0.5)
  *   run.sqlite run    mutated      → re-read whole when (size, mtime) moves (0.5)
@@ -15,8 +16,9 @@
  *
  * A v1 run (`session/session.json`) is read off its session record: its
  * `states` are the samples `runner/src/trace-samples.ts` folds from the
- * trace, its `milestones` the `events` stream's rows, and its run row
- * meta.json's (`runner/src/run-reader.ts`). Its trajectory is model-side.
+ * trace, its `milestones` the `events` stream's rows, its `moves` the `calls`
+ * stream's move rows, and its run row meta.json's (`runner/src/run-reader.ts`).
+ * Its trajectory is model-side.
  *
  * Nothing here decides anything about a run. It reads what the runner wrote
  * and hands it to the sink; the runner is untouched by design and
@@ -32,7 +34,7 @@
 import { existsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
-import { SessionReader, type EventRow, type StreamCursor } from "@wrathbench/mcp/record";
+import { SessionReader, type CallRow, type EventRow, type StreamCursor } from "@wrathbench/mcp/record";
 import { openRunDb } from "../../runner/src/rundb";
 import { isV1RunDir, milestoneOfEvent, readRunRow, sessionDirOfRun, traceSamplesOf, turnIndexOf } from "../../runner/src/run-reader";
 import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tail";
@@ -197,6 +199,7 @@ export class Ingester {
     if (isV1RunDir(dir)) {
       out.states = await this.readTraceStates(runId, dir);
       await this.readEventMilestones(runId, dir);
+      out.moves = await this.readCallMoves(runId, dir);
     } else {
       const sqlite = await this.readSqlite(runId, dir);
       out.states = sqlite.states;
@@ -369,6 +372,48 @@ export class Ingester {
     }
     await this.deps.batcher.flushAll();
     if (batch.cursor !== undefined) this.deps.offsets.setSignature(runId, "events", `${batch.cursor.segment}:${batch.cursor.offset}:${n}`);
+    return count;
+  }
+
+  /**
+   * A v1 run's movement intentions: the `calls` stream's `move` rows (the
+   * dispatch, and the module's verdict), read on from a stream cursor kept in
+   * the offsets store, in the `moves` table's shape a 0.5 run's `move` rows
+   * have: the target by its client-cache name. `seq` is the row's ordinal
+   * among the stream's move rows, which a replay reproduces.
+   */
+  private async readCallMoves(runId: string, dir: string): Promise<number> {
+    const kept = parseEventsCursor(this.deps.offsets.signature(runId, "calls"));
+    let batch: { rows: CallRow[]; cursor: StreamCursor | undefined };
+    try {
+      batch = new SessionReader(sessionDirOfRun(dir)).tail("calls", kept.cursor);
+    } catch {
+      return 0;
+    }
+    if (batch.rows.length === 0) return 0;
+    const ingestedAt = this.deps.now();
+    let n = kept.n;
+    let count = 0;
+    for (const row of batch.rows) {
+      if (row.kind !== "move") continue;
+      n++;
+      await this.deps.batcher.add("moves", {
+        run_id: runId,
+        seq: n,
+        ts: row.ts,
+        move_id: int(row.moveId),
+        map: int(row.map),
+        x: real(row.x),
+        y: real(row.y),
+        z: real(row.z),
+        target: str(row.name),
+        status: str(row.status),
+        ingested_at: ingestedAt,
+      });
+      count++;
+    }
+    await this.deps.batcher.flushAll();
+    if (batch.cursor !== undefined) this.deps.offsets.setSignature(runId, "calls", `${batch.cursor.segment}:${batch.cursor.offset}:${n}`);
     return count;
   }
 

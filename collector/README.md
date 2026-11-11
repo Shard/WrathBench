@@ -63,6 +63,7 @@ Each source has its own resume rule, because each changes differently:
 | `episodic.jsonl` | append-only | byte offset + next line ordinal |
 | `session/trace` (v1) | append-only segments | folded in memory per run; a restart folds it again onto the same keys |
 | `session/events` (v1) | append-only segments | stream cursor (segment, offset) + row ordinal |
+| `session/calls` (v1) | append-only segments | stream cursor (segment, offset) + move ordinal |
 | `run.sqlite` `state` (0.5) | append-only | sqlite rowid watermark |
 | `run.sqlite` `move` (0.5) | append-only | sqlite rowid watermark |
 | `run.sqlite` `run` (0.5) | mutated in place | `(size, mtime)` signature |
@@ -73,7 +74,9 @@ samples `runner/src/trace-samples.ts` folds from its trace (the scorer's
 reading, docs/METHODOLOGY.md "Scoring"), keyed by each sample's ordinal in
 that fold, which the same trace always reproduces; its `milestones` are its
 `events` stream's rows as the milestone records they stand for, keyed by a
-negative `line_no` so they never meet a trajectory line's; its row is
+negative `line_no` so they never meet a trajectory line's; its `moves` are its
+`calls` stream's move rows, the target by its client-cache name as a 0.5
+`move` row had it, keyed by their ordinal among them; its row is
 meta.json's (`runner/src/run-reader.ts`). Its trajectory's `milestone`
 records, which only the first v1 builds wrote, are not read.
 
@@ -87,9 +90,10 @@ Not tailed, on purpose:
   so it never arrives here as tens of thousands of lines a day. The viewer
   reads it from the files. (A 0.5 run's trace is the `trace` table of its
   `run.sqlite`, which is not tailed either.)
-- a v1 run's tool calls and movement intentions (`session/calls`): not yet;
-  the store's `moves` are a 0.5 run's only, and the viewer reads a v1 run's
-  from its files.
+- a v1 run's tool calls, results, action log and served batches
+  (`session/calls`, all but its moves): the trajectory already holds the
+  calls and results as the model saw them, and the run page's feed reads the
+  rest from the files (`runner/viewer/record-feed.ts`).
 - the nearby ring (`session/nearby/`): the units around a live character for
   the live map, about 15 minutes of segments that the stack unlinks as they
   age and removes when the session closes.
