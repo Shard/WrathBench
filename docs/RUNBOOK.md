@@ -1683,6 +1683,49 @@ whole supervisor by hand, on the quickstart. Both read the config store and
 cluster they have nothing to read. Never run a second supervisor against the
 same store while the fleet is up: both would spawn jobs on the same accounts.
 
+### A fan-out run, by hand
+
+One agent driving several characters (Shard/wrath-mcp#29) is launched by
+hand for now: the fleet does not plan one.
+
+```
+bun runner/src/run.ts --driver <driver> --model <id> [--objective "<text>"] \
+  --max-characters 5 --accounts POOL01,POOL02,POOL03,POOL04,POOL05
+```
+
+- `--max-characters <n>` above 1 with `--accounts <a,b,…>` is the grant: up
+  to `n` characters in the world at once, on those accounts, at least `n` of
+  them (the module holds one session per account). The run uses one model
+  credential. Without the flags, or with a count of 1, the run is the
+  single-character one, unchanged.
+- It is refused for a scored episode (`e90`, `e360`), a party member and a
+  continuation: a fan-out run is a probe until its eval is defined.
+- **The accounts must be ones nothing else will launch on.** The supervisor
+  knows a run by its one `account` (the first listed) and would hand the
+  others to another job, whose create reclaims the account and logs the
+  fan-out run's character out. Use accounts outside the fleet's pool, or
+  launch with the fleet drained. Each must be on the module's allowlist
+  ("The account pool").
+- Launch hygiene clears every listed account, as it clears the one account of
+  any fresh run.
+- The run directory has `sessions/<Character>/` (a session record per
+  character) where a single-character run has `session/`, and `roster.json`,
+  mode 0600, which holds each character's session token: never copy it out
+  of the runs volume. A resume (`--resume <run-id>`) logs back in the
+  characters that were in the world when the run paused.
+- What it is served: the nine tools with `character` on `run_snippet`,
+  `recent_events` and `state_summary`, plus `login_character`,
+  `logout_character` and `list_characters`, in the stack's plain default
+  wording; the fixed loop's turn context carries the stack's roll-up and no
+  event window. The system prompt is the single-character one. All of that is
+  placeholder until the harness round decides the benchmark's own.
+
+`runner/test/fixtures/stub-fanout-demo.json` is a scripted five-character
+session for the stub driver (`--driver stub --stub <that file> --wiki false`,
+with the flags above): it logs five characters in, acts for all of them from
+one snippet, reads the roll-up and the merged feed, logs one out and back in,
+and blocks the sandbox once to show every character reattached.
+
 ### The scripted reference run
 
 Once per harness series, by hand, on `PROBE` (docs/EPISODES.md, "The scripted

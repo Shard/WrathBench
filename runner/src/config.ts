@@ -402,6 +402,46 @@ const compactWindowSchema = z.string().transform((v, ctx) => {
   }
 });
 
+const accountSchema = z.string().min(2).max(16);
+
+/** `RunConfig.fanout`: the grant, and the characters staged for it. */
+export const fanoutConfigSchema = z
+  .object({
+    /**
+     * How many characters may be in the world at once: 2 to 40, the stack's
+     * own ceiling (`MAX_CHARACTERS_LIMIT`). One is a run with no `fanout` at all.
+     */
+    characters: z.number().int().min(2).max(40),
+    accounts: z.array(accountSchema).min(2),
+    staged: z
+      .array(
+        z
+          .object({
+            character: z.string().refine(isValidCharacterName, { message: CHARACTER_NAME_RULE }),
+            account: accountSchema,
+            /** The character's guid as the session record writes one, when the stager said: the write gate's own from the first row. */
+            guid: z.string().regex(/^[1-9][0-9]{0,9}$/).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .optional(),
+  })
+  .strict()
+  .superRefine((f, ctx) => {
+    const upper = f.accounts.map((a) => a.toUpperCase());
+    if (new Set(upper).size !== upper.length) ctx.addIssue({ code: "custom", path: ["accounts"], message: "an account is listed twice — the module holds one session per account" });
+    if (f.accounts.length < f.characters) {
+      ctx.addIssue({ code: "custom", path: ["accounts"], message: `${f.characters} characters at once need ${f.characters} accounts, and ${f.accounts.length} are given` });
+    }
+    for (const [i, s] of (f.staged ?? []).entries()) {
+      if (!upper.includes(s.account.toUpperCase())) ctx.addIssue({ code: "custom", path: ["staged", i], message: `${s.character} is staged on ${s.account}, which is not one of this run's accounts` });
+    }
+    const names = (f.staged ?? []).map((s) => s.character.toLowerCase());
+    if (new Set(names).size !== names.length) ctx.addIssue({ code: "custom", path: ["staged"], message: "a character is staged twice" });
+  });
+export type FanoutConfig = z.infer<typeof fanoutConfigSchema>;
+
 export const runConfigSchema = z.object({
   /** Generated as `run-<timestamp>` when absent. */
   runId: z.string().min(1).optional(),
@@ -619,6 +659,21 @@ export const runConfigSchema = z.object({
    * unscored, and what a party key would mean is the promotion's to decide.
    */
   party: partyConfigSchema.optional(),
+  /**
+   * Fan-out (Shard/wrath-mcp#29): this run's one agent may have up to
+   * `characters` characters in the world at once, on `accounts` (one live
+   * session per account, so at least that many). An operator's grant, like
+   * the account itself: set at launch (`--max-characters`, `--accounts`) and
+   * identity on a resume. `staged` names characters the operator put in
+   * place before the launch and where each lives, so the agent logs them in
+   * by name. Absent on every run that drives one character, which is every
+   * run that does not say otherwise; such a run's record, prompt and tools
+   * are exactly what they were. Not in the comparability tuple: a fan-out
+   * run is a probe, and what its key is belongs to the eval's definition
+   * (the operator's working assumption of 2026-11-11: the character count is
+   * part of it).
+   */
+  fanout: fanoutConfigSchema.optional(),
 
   /**
    * The episode tier this run was launched under (`runner/src/episodes.ts`).
@@ -884,6 +939,19 @@ export function loadRunConfig(raw: unknown): RunConfig {
   // another driver would record a dimension nothing applied.
   if (config.compactWindow !== undefined && !driverHasCompactWindow(config.driver)) {
     throw new Error(compactWindowDriverRefusal(config.driver));
+  }
+  // Refused, never ignored: one agent driving several characters is its own
+  // measurement (operator, 2026-11-11), which runs first as a probe campaign
+  // and has no scored episode yet, so a scored tier never starts as one; a
+  // party is several agents, and a continuation or a staged `--character` is
+  // one character's.
+  if (config.fanout !== undefined) {
+    if (config.episode !== undefined && config.episode !== "probing" && config.episode !== "freeplay") {
+      throw new Error(`fan-out (--max-characters above 1) is a probe's or a freeplay run's; --episode ${config.episode} is a scored single-character episode`);
+    }
+    if (config.party !== undefined) throw new Error("fan-out is one agent driving several characters; a party member drives one");
+    if (config.continuedFrom !== undefined) throw new Error("fan-out does not continue a single character's run (--continue-from)");
+    if (entryOf(config.driver).route === true) throw new Error(`driver ${config.driver} plays one character's route; it has no fan-out`);
   }
   // Refused at launch as well as in the scheduler: a probe-only driver's run
   // is a campaign's square and nothing else, so a hand launch on a scored,

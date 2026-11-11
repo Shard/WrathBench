@@ -33,6 +33,7 @@ import {
   type StreamName,
   type StreamRows,
 } from "@wrathbench/mcp/record";
+import { fanoutSessionDir, SESSIONS_DIR } from "./run-reader";
 import { stackCommit } from "./version";
 
 /** The session record's directory inside a run directory. */
@@ -43,15 +44,41 @@ export function sessionDirOf(runDir: string): string {
 }
 
 /**
+ * Where a fan-out run keeps its records: one session directory per
+ * character, `sessions/<Character>/`, named by the character as the server
+ * spells it (Shard/wrath-mcp#29). A run has `session/` or `sessions/`, never
+ * both: one agent with one character is `session/`, exactly as it was.
+ */
+export { SESSIONS_DIR };
+
+export function characterSessionDir(runDir: string, character: string): string {
+  // A name is letters only; anything else never becomes a path (`run-reader.ts` owns the rule its readers resolve by).
+  const dir = fanoutSessionDir(runDir, character);
+  if (dir === null) throw new Error(`not a character name: ${JSON.stringify(character)}`);
+  return dir;
+}
+
+/** A fan-out run's session directories, one per character; none for a single-character run. */
+export function characterSessionDirs(runDir: string): string[] {
+  try {
+    return readdirSync(join(runDir, SESSIONS_DIR)).map((name) => join(runDir, SESSIONS_DIR, name));
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Remove a run's ring of nearby units, whatever is in it. The writer removes
  * it when the session closes; this is for the exits that never reach that (a
  * backstop `process.exit`) and for the archiver. Never throws.
  */
 export function removeSessionRing(runDir: string): void {
-  try {
-    rmSync(join(sessionDirOf(runDir), "nearby"), { recursive: true, force: true });
-  } catch {
-    /* already gone, or a read-only disk the writer could not have used either */
+  for (const dir of [sessionDirOf(runDir), ...characterSessionDirs(runDir)]) {
+    try {
+      rmSync(join(dir, "nearby"), { recursive: true, force: true });
+    } catch {
+      /* already gone, or a read-only disk the writer could not have used either */
+    }
   }
 }
 
@@ -121,6 +148,13 @@ export interface OpenSessionRecordOptions {
   /** The run's secret scrub, applied to every line written. */
   scrub: (text: string) => string;
   module?: SessionFile["module"];
+  /**
+   * A fan-out run's character: its record goes in `sessions/<character>/`
+   * rather than `session/`, and `token` is that character's own.
+   */
+  character?: string;
+  /** The signals to feed, when several records share one drain (a fan-out run's characters). */
+  signals?: RecordSignals;
 }
 
 /**
@@ -131,10 +165,10 @@ export interface OpenSessionRecordOptions {
  * in each other's group rows.
  */
 export function openSessionRecord(o: OpenSessionRecordOptions): SessionRecord {
-  const signals = new RecordSignals();
+  const signals = o.signals ?? new RecordSignals();
   const commit = stackCommit();
   const writer = new SessionWriter({
-    dir: sessionDirOf(o.runDir),
+    dir: o.character !== undefined ? characterSessionDir(o.runDir, o.character) : sessionDirOf(o.runDir),
     id: tokenFingerprint(o.token),
     stack: { version: SDK_VERSION, ...(commit !== undefined ? { commit } : {}) },
     ...(o.module !== undefined ? { module: o.module } : {}),
@@ -142,7 +176,8 @@ export function openSessionRecord(o: OpenSessionRecordOptions): SessionRecord {
       o.ownGuids ?? [],
       ownGuidIndex(() => {
         try {
-          return readdirSync(o.runsDir).map((run) => join(o.runsDir, run, SESSION_DIR));
+          // Every run's one record, and every character's of a fan-out run.
+          return readdirSync(o.runsDir).flatMap((run) => [join(o.runsDir, run, SESSION_DIR), ...characterSessionDirs(join(o.runsDir, run))]);
         } catch {
           return [];
         }

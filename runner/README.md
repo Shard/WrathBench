@@ -60,6 +60,11 @@ bun runner/src/run.ts --driver openai --model <id> [--api-base <url>] [--api-key
 # the same loop driven by a scripted stub — harness testing without a model
 bun runner/src/run.ts --driver stub --stub runner/test/fixtures/stub-live-check.json
 
+# one agent, several characters (fan-out; docs/RUNBOOK.md, "A fan-out run, by
+# hand"): here the scripted five-character session
+bun runner/src/run.ts --driver stub --stub runner/test/fixtures/stub-fanout-demo.json --wiki false \
+  --max-characters 5 --accounts POOL01,POOL02,POOL03,POOL04,POOL05
+
 # the scripted reference run: the private program played through run_snippet,
 # stamped and never scored (docs/EPISODES.md); a build without it refuses
 bun runner/src/run.ts --driver reference --episode e90 --account PROBE
