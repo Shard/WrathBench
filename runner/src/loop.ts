@@ -261,8 +261,8 @@ export class ContextBuilder {
   }
 
   /**
-   * A fan-out run's sample (`fanout-run.ts`): every character's snapshot
-   * reduced to the stack's digests, and one reading in a snapshot's shape for
+   * A fan-out run's sample (`fanout-run.ts`): the stack's brief of every
+   * character (`stateBriefs`), reduced to its digests, and one reading in a snapshot's shape for
    * what acts on the run while it plays. The run is live once any character
    * is in the world; the stall detector is fed the streams' combined cursor
    * and whether every one of them is open. No level or xp: whose level ends
@@ -274,7 +274,7 @@ export class ContextBuilder {
   private async fanoutSnapshot(roster: FanoutSurface): Promise<SnapshotLike | null> {
     try {
       const inWorld = roster.views().some((v) => v.state === "in");
-      const snaps = inWorld ? await roster.sandbox.stateSnapshots() : {};
+      const snaps = inWorld ? await roster.sandbox.stateBriefs() : {};
       this.fanoutDigests = Object.entries(snaps).map(([name, snap]) => digestCharacter(name, snap));
       this.live = this.fanoutDigests.some((d) => d.inWorld);
       let eventCount = 0;
