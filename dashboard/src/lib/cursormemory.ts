@@ -22,7 +22,7 @@
  */
 
 import type { TrackResponse } from "@viewer/api-types";
-import { trackSpan } from "./replay";
+import { trackSpan } from "@wrathbench/inspector/views/replay";
 
 export interface CursorMemory {
   /** Record where an operator moved the cursor to. Deliberate moves only. */

@@ -22,7 +22,7 @@ export function traceSegmentKey(runId: string, t0: number): string {
  * the public live map's playhead needs from one pass to the next, and no more.
  *
  * The public map plays a delay behind the newest `live.json`
- * (`createLiveClock` in `dashboard/src/lib/traceplayer.ts`): a pass's period
+ * (`createLiveClock`, `@wrathbench/inspector/views/traceplayer`): a pass's period
  * (about 420 s), plus the client memo, the edge TTL and a poll (65 s), plus a
  * tenth of the period (42 s), so about 8.8 minutes, and from there it runs
  * forward toward the pass's own horizon. Run against the live clock, the

@@ -1,5 +1,5 @@
 /**
- * The map's camera fit (`lib/mapfit.ts`) on the page's real graph: the sources,
+ * The map's camera fit (`@wrathbench/inspector/views/mapfit`) on the page's real graph: the sources,
  * `createMapState`, the fit, and the effect that turns the replay's cursor into
  * its feed, created in the page's order, with the track arriving after the
  * effects first ran, as it does over the network.
@@ -20,7 +20,7 @@ import type { AgentPosition, TrackPoint, TrackResponse } from "../../runner/view
 /* The reactive build of solid-js stands behind this name for every dashboard
    test; `test/preload-solid.ts` installs it and says why. */
 import { createEffect, createRoot, createSignal } from "solid-js";
-import { createMapFit } from "../src/lib/mapfit";
+import { createMapFit } from "@wrathbench/inspector/views/mapfit";
 import { createMapState } from "../src/lib/mapstate";
 import { positionsAt } from "../src/lib/replay";
 

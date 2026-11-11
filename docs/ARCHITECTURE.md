@@ -156,10 +156,20 @@ takes from the stack and how.
   the public site publishes. Its API is mounted at `/api/inspector` on a
   private viewer, and the dashboard embeds its views: the unit frame,
   inventory and quest log on the map, the run page and the character page,
-  and a v1 run's session events on the run page. What stays here is the
-  benchmark's: the model's side, scoring, the ladder, campaigns, the fleet
-  pages, the public projection and publisher, the map's composition (models,
-  replay, parties) and the minimap and its tooling.
+  and a v1 run's session events on the run page. The map's session-side
+  logic is the inspector's too: the trace player and its clocks, the replay's
+  cursor maths and route, the transport's arithmetic, the movement
+  intentions, the camera's fit, and the position and track shapes the feeds
+  extend (`SessionPosition`, `SessionTrack`), with the track's inventory
+  codec. So are the views' stylesheet (`@wrathbench/inspector/views/views.css`,
+  imported after the dashboard's own) and the classes it styles. What stays
+  here is the benchmark's: the model's side, scoring, the ladder, campaigns,
+  the fleet pages, the public projection and publisher, and the map's
+  composition: the map page with its live list and play bar, which draw
+  models and logos, run ids, replay and party links, reflection status and
+  attempts; the map view's maths, which are built on the viewer's world and
+  tile-pyramid transforms (`runner/viewer/worldmap.ts`, `tileindex.ts`) and
+  key a pip by run; and the minimap and its tooling.
 
 **Versions, as built.** The SDK has its own version (docs/METHODOLOGY.md,
 "Fixed harness, frozen per version"), and `@wrathbench/mcp` carries the same

@@ -13,7 +13,7 @@
  */
 
 import type { Harness } from "../src/drivers";
-import type { MoveIntentView, NearbyWindow, PositionTrace, TrackTrace } from "@wrathbench/inspector/wire";
+import type { ItemSample, NearbyWindow, SessionPosition, SessionTrack, SessionTrackPoint } from "@wrathbench/inspector/wire";
 
 /**
  * The envelope a published public snapshot stamps onto every response body it
@@ -476,40 +476,6 @@ export interface RunRow {
   error?: string;
 }
 
-/**
- * One item on a state sample: a client-cache name, its stack count, worn or
- * carried, and where it sits.
- *
- * Everything past `name`, `count` and `equipped` is optional and arrived later
- * (the paperdoll/bag UI). Every row written before it carries those three and
- * nothing else, so a reader treats an absent field as **unobserved** — never as
- * zero, and never as slot 0. A live sample can be missing them too: a slot whose
- * item create block or item query has not arrived yet is a real observation of
- * an occupied slot with no id, name or quality behind it.
- *
- * `slot` and `bag` are the SDK's own addressing pair, unchanged, so a row is
- * what `equipItem`/`useItem`/`destroyItem` take:
- * - worn (`equipped: true`): `bag` absent, `slot` the equipment slot 0-18.
- * - carried (`equipped: false`): `bag` 255 for the backpack (slots 23-38) or a
- *   worn bag's own equipment slot 19-22 (slots 0..numSlots-1), `slot` the slot
- *   within it.
- *
- * So `bag !== undefined` is the carried discriminator and `slot` means the same
- * kind of thing on both sides of it. There is no separate `bagSlot`.
- */
-export interface ItemSample {
-  name: string;
-  count: number;
-  equipped: boolean;
-  /** The item template id, once the item's own create block has been seen. */
-  itemId?: number;
-  /** Item quality (0 poor .. 7 heirloom), from the item query, once answered. */
-  quality?: number;
-  /** The equipment slot when worn, the slot within `bag` when carried. */
-  slot?: number;
-  /** The container, when carried: 255 the backpack, 19-22 a worn bag. Absent when worn. */
-  bag?: number;
-}
 
 /** One `state` sample. Every field but `ts` may be absent from a given sample. */
 export interface StatePoint {
@@ -905,7 +871,11 @@ export interface CharacterStatus {
   ts: number;
 }
 
-export interface AgentPosition {
+/**
+ * A run's character on the map now: the session's position (`SessionPosition`,
+ * the inspector's) and the run it belongs to.
+ */
+export interface AgentPosition extends SessionPosition {
   runId: string;
   character: string | null;
   model: string | null;
@@ -919,54 +889,17 @@ export interface AgentPosition {
   effort?: string | null;
   /** The CLI compaction window off the same stamp; absent is `auto`. */
   compactWindow?: string | null;
-  map: number;
-  x: number;
-  y: number;
-  /** Epoch ms of the state sample this position came from. */
-  ts: number;
-  level: number | null;
-  xp: number | null;
-  money: number | null;
-  /**
-   * Quests turned in over the whole run, summed across the counter's restarts
-   * (`questsAcrossRestarts`), as on `ResultRun.questsCompleted`; on a replay,
-   * the run's count up to the point.
-   */
-  questsCompleted: number | null;
   /*
-   * No inventory: the map's sidebar reads what the character wears and
-   * carries off the trace's character sheet at the playhead (`trace`), and
-   * the newest reading here ran the public delay ahead of the pip beside it.
+   * `questsCompleted` is summed across the counter's restarts
+   * (`questsAcrossRestarts`), as on `ResultRun.questsCompleted`. No inventory:
+   * the map's sidebar reads what the character wears and carries off the
+   * trace's character sheet at the playhead (`trace`), and the newest reading
+   * here ran the public delay ahead of the pip beside it. `class` is off the
+   * run row (launch config, not a state sample), and `nearby` is set exactly
+   * where `nearby.json` carries the run's window (`LiveNearby`), its ring
+   * (`/api/run/<id>/nearby`) written within `NEARBY_FRESH_MS`.
    */
   harnessVersion: string | null;
-  /**
-   * The newest recorded movement intention, when the run has one. Optional
-   * because a published snapshot rendered before this existed carries none,
-   * and the map must read those the same way it reads a run that never moved.
-   */
-  move?: MoveIntentView | null;
-  /**
-   * The player frame's numbers, from the newest state sample that carried a
-   * position. Optional for the reason `move` is: a run
-   * recorded before the columns existed, and a snapshot published before this
-   * shipped, carry none, and every reader must draw those as unobserved rather
-   * than as zero. A health/maxHealth pair is whole or absent — the SDK
-   * withholds a gauge until both halves are seen.
-   */
-  health?: number | null;
-  maxHealth?: number | null;
-  power?: number | null;
-  maxPower?: number | null;
-  /** The raw `powerType` field the client picks a power bar with. */
-  powerType?: number | null;
-  /** The XP bar's denominator, as the client shows it. */
-  nextLevelXp?: number | null;
-  /**
-   * The character's class, off the run row (it is launch config, not a state
-   * sample). Lets a pip from a run recorded before `powerType` still tint its
-   * power bar the way that class's bar is tinted.
-   */
-  class?: number | null;
   /**
    * The newest episodic entry, or null when the run has logged none. Optional
    * for the reason `move` is: a snapshot published before this shipped carries
@@ -979,18 +912,6 @@ export interface AgentPosition {
    * reason: an older feed says nothing, and nothing is not "reflecting".
    */
   reflecting?: boolean;
-  /**
-   * The fine-grained trace near now (`PositionTrace`). Absent on a run that
-   * recorded none, and on a feed or snapshot from before the recorder.
-   */
-  trace?: PositionTrace;
-  /**
-   * True when the run's nearby ring (`/api/run/<id>/nearby`) is being written:
-   * its newest file was touched within `NEARBY_FRESH_MS`. Absent otherwise, so
-   * the map asks for units only where there are some. In `live.json` it is
-   * set exactly where `nearby.json` carries the run's window (`LiveNearby`).
-   */
-  nearby?: true;
 }
 
 /** A run row as the listing serves it: the row plus whole-file totals. */
@@ -2251,83 +2172,9 @@ export interface StateItemsRow {
   items: string;
 }
 
-/** A run's whole recorded track, for map replay. */
-export interface TrackPoint {
-  ts: number;
-  map: number;
-  x: number;
-  y: number;
-  level: number | null;
-  xp: number | null;
-  money: number | null;
-  /**
-   * The run's quest count up to this point, summed across the counter's
-   * restarts (`questTally`), so the last point's is the run page's figure.
-   * Null before any sample carried one, and on every point of a track
-   * published before it was filled.
-   */
-  questsCompleted: number | null;
+/** A run's whole recorded track, for map replay: a session's track point (`SessionTrackPoint`, the inspector's) and the driver turn it fell in. */
+export interface TrackPoint extends SessionTrackPoint {
   turn: number | null;
-  /**
-   * The player frame's numbers, from the newest state sample that carried a
-   * position. Optional for the reason `move` is: a run
-   * recorded before the columns existed, and a snapshot published before this
-   * shipped, carry none, and every reader must draw those as unobserved rather
-   * than as zero. A health/maxHealth pair is whole or absent — the SDK
-   * withholds a gauge until both halves are seen.
-   */
-  health?: number | null;
-  maxHealth?: number | null;
-  power?: number | null;
-  maxPower?: number | null;
-  /** The raw `powerType` field the client picks a power bar with. */
-  powerType?: number | null;
-  /** The XP bar's denominator, as the client shows it. */
-  nextLevelXp?: number | null;
-  /**
-   * The inventory as a track served and published before `TrackResponse.inv`
-   * carried it, read only from a track that old: the whole inventory on each
-   * point where the stored sample changed, a point without the field meaning
-   * "unchanged" and one before the first reading "not yet observed". The
-   * viewer no longer writes it.
-   */
-  items?: ItemSample[];
-}
-
-/**
- * One item a track's inventory names: `[name, itemId, quality]`, null where
- * the stored row carried none. Keyed by the whole triple, not the id: a
- * random suffix is stored in the name, so one id can carry two names at once.
- */
-export type TrackInvItem = [name: string, itemId: number | null, quality: number | null];
-
-/**
- * A slot filled, in a patch: `item` indexes `TrackInventory.items`, and
- * `count` is there only when the stack is not 1. `bag` is -1 for a worn item
- * (`slot` the equipment slot 0-18), else the carried pair `ItemSample` names.
- */
-export type TrackInvRow = [bag: number, slot: number, item: number] | [bag: number, slot: number, item: number, count: number];
-
-/** A slot emptied, in a patch. */
-export type TrackInvGone = [bag: number, slot: number];
-
-/**
- * One reading, on the index of the point it surfaces at: a patch onto the
- * reading before it (onto empty bags for the first), or `null` and the reading
- * whole, as stored, where a patch cannot say it.
- */
-export type TrackInvEntry = [point: number, patch: (TrackInvRow | TrackInvGone)[]] | [point: number, patch: null, whole: ItemSample[]];
-
-/**
- * What the character wore and carried along a track, as changes
- * (`runner/viewer/track-inv.ts` is the codec and the format; `inventoryAt`
- * reads it). Built at read time from the same stored samples the points come
- * from, so nothing about what is recorded changed.
- */
-export interface TrackInventory {
-  items: TrackInvItem[];
-  /** The readings, oldest first; a point before the first has none yet observed. */
-  at: TrackInvEntry[];
 }
 
 /**
@@ -2357,63 +2204,24 @@ export interface TrackCharacter {
 }
 
 /**
- * One recorded fact about how the character crossed the gap between two track
- * points, which is what the replay's route is drawn by: a flight path's
- * takeoff and landing, a hearthstone used, a spirit released to a graveyard.
- *
- * Derived at read time from records the trajectory already carries — the
- * `taxi`, `taxi_landed` and `release` milestones, a `death` first seen already
- * released (no separate release follows one), and the action log's
- * hearthstone — and never stored. `ts` is the record's own: a milestone's is
- * the state sample that observed it, so the change it names happened since the
- * sample before; a hearth's is the dispatch, about ten seconds before the
- * teleport lands.
+ * A run's whole recorded track, for map replay: the session's track
+ * (`SessionTrack`, the inspector's: its points, inventory, moves, travel and
+ * trace windows) and the run it belongs to. The travel marks are derived at
+ * read time from records the run already carries: the `taxi`, `taxi_landed`
+ * and `release` milestones, a `death` first seen already released, and the
+ * action log's hearthstone.
  */
-export interface TrackTravelMark {
-  kind: "taxi" | "taxi_landed" | "hearth" | "release";
-  ts: number;
-}
-
-export interface TrackResponse extends SnapshotEnvelope {
+export interface TrackResponse extends SnapshotEnvelope, SessionTrack<TrackPoint> {
   runId: string;
   characterName: string | null;
   model: string | null;
   harnessVersion: string | null;
-  points: TrackPoint[];
-  /**
-   * What the character wore and carried, so a replay pip can show what a live
-   * pip shows: a reading wherever the stored sample changed, as a patch onto
-   * the one before (`TrackInventory`). Absent on a run whose samples recorded
-   * no inventory, and on a track served or published before it existed, whose
-   * points carry `items` instead.
-   */
-  inv?: TrackInventory;
   /**
    * The character this run is an attempt of, when it is one: the play bar's
    * previous/next steps. Optional — an older viewer and an older snapshot
    * carry none, and the controls simply do not render.
    */
   character?: TrackCharacter;
-  /**
-   * Every movement intention the run recorded, oldest first. Separate from
-   * `points` because it has its own cadence: a move is dispatched when the
-   * model decides to walk, not when the state ticker writes a row. Optional
-   * for the same reason as `AgentPosition.move`.
-   */
-  moves?: MoveIntentView[];
-  /**
-   * The flight, hearth and graveyard marks, oldest first (`TrackTravelMark`).
-   * Optional: an older viewer and a snapshot published before this carry
-   * none, and the replay then breaks its line on map changes, the moves'
-   * typed teleports and its speed backstop alone.
-   */
-  travel?: TrackTravelMark[];
-  /**
-   * The run's closed trace windows (`TrackTrace`). Absent — not empty — on a
-   * run that recorded no trace, which is every run from before the recorder,
-   * so their tracks serve and publish exactly the bytes they did before.
-   */
-  trace?: TrackTrace;
 }
 
 /* ------------------------------------------------------ trace, nearby --- */

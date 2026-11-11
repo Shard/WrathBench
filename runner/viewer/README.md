@@ -404,8 +404,9 @@ read from the end.
 `/api/run/<id>/track` is the replay's feed: the positioned samples as points,
 and what the character wore and carried along them as `inv`, a reading
 wherever the stored inventory changed, written as the slots that moved since
-the reading before. `track-inv.ts` is the codec and the format, import-free so
-the dashboard folds with the same code. The whole inventory on every changed
+the reading before. The codec and the format are the inspector's
+(`@wrathbench/inspector/codec/inventory`), import-free so the dashboard folds
+with the same code. The whole inventory on every changed
 point was most of a long run's track (24.7 of a level-43 character's 30.3 MB,
 re-uploaded by the publisher on every pass while the run was live), and the
 patches say the same readings in 136 KB. It is built at read time from the

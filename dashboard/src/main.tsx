@@ -5,6 +5,8 @@ import { lazy } from "solid-js";
 import { render } from "solid-js/web";
 import { Layout } from "./components/Layout";
 import "./styles.css";
+// The inspector's views' own rules, after the shell they sit in.
+import "@wrathbench/inspector/views/views.css";
 import { SNAPSHOT_MODE, api } from "./api/client";
 import { routePreloads } from "./lib/routepreload";
 import { enableWowhead } from "@wrathbench/inspector/views/wowhead";

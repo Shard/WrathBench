@@ -36,11 +36,11 @@
 import { A } from "@solidjs/router";
 import { Show, createMemo } from "solid-js";
 import type { AgentPosition, TrackResponse } from "../api/client";
-import { shortRunId, stamp } from "../lib/format";
+import { playbackClock, shortRunId, stamp } from "../lib/format";
 import { replayHref, replayHrefFor } from "../lib/mapstate";
 import { colorOf, pipName } from "../lib/mapview";
-import { type Span, type Speed, playbackClock, prevSampleBefore, progressOf } from "../lib/playback";
-import { nextSampleAfter, trackSpan } from "../lib/replay";
+import { type Span, type Speed, prevSampleBefore, progressOf } from "@wrathbench/inspector/views/playback";
+import { nextSampleAfter, trackSpan } from "@wrathbench/inspector/views/replay";
 import { InfoHint } from "./InfoHint";
 import { partyHref } from "../lib/party";
 

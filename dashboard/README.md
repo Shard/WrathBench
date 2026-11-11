@@ -120,7 +120,7 @@ its older attempts would report a long-lived character as attempt 1.
 ## The map's player
 
 A run the trace recorder drove (`@wrathbench/inspector/codec/trace`) is drawn by one
-clock-driven player, `src/lib/traceplayer.ts`, the same in the live map and in
+clock-driven player, the inspector's `@wrathbench/inspector/views/traceplayer`, the same in the live map and in
 a replay: every frame each pip is placed where the trace puts the character at
 the playhead, with a heading wedge from its facing and a trail of the last
 90 s fading out behind it (flights in `--flight`; a cut ends the trail, so a
@@ -222,8 +222,8 @@ segment from before the sheet, and while a key is null — not observed, as afte
 a sandbox restart before the character's own create block, never empty bags.
 Live, the feed carries money but no inventory, so a live character the sheet
 cannot answer for reads "—"; in a replay, the reading is the track's at or
-before the cursor (`itemsAtCursor` in `src/lib/replay.ts`), folded from the track's
-patches by the viewer's own codec (`@viewer/track-inv`). It keeps a reading
+before the cursor (`itemsAtCursor`, `@wrathbench/inspector/views/replay`), folded from the track's
+patches by the inspector's codec (`@wrathbench/inspector/codec/inventory`). It keeps a reading
 every 64 patches and hands back the same array while the cursor stays between
 two changes, so the bag and the paperdoll redraw only when the inventory
 does. A track published before the patches carries each reading whole on its
@@ -319,7 +319,7 @@ not drawn on this page (`docs/ARCHITECTURE.md`).
 The map's replay draws the route behind the pip in the run's colour, a flight
 path in `--flight`, and no line across a teleport or a change of map. Which is
 which comes from what the record says happened, not from speed
-(`classifySegments` in `src/lib/replay.ts`): a flying character's position was
+(`classifySegments`, `@wrathbench/inspector/views/replay`): a flying character's position was
 held at the departure flight master for the whole flight, so its landing is
 one jump that looks exactly like a hearthstone by distance, and a release to a
 nearby graveyard is slower than a mounted ride. The viewer derives the events
@@ -364,13 +364,17 @@ src/components/  the shell and the pieces shared between pages
 The session-side views are wrath-inspector's (`@wrathbench/inspector/views`,
 in the stack): the unit frame, the inventory and quest log, the nearby layer's
 store and classes, the chat bubbles' layout, the popover's placement and the
-Wowhead links, and the event feed the run page shows for a v1 run. The map,
-the run page and the character page compose them with what is the
-benchmark's: models, logos, replay, parties and the public snapshot. The
-views ask for Wowhead's tooltip script only on a page that allows it, and the
-dashboard does on both builds (`src/main.tsx`, `enableWowhead`). Their
-classes are styled here, in `src/styles.css`; the inspector's own page carries
-a copy of the same rules.
+Wowhead links, and the event feed the run page shows for a v1 run. So is
+the map's session-side logic: the trace player, the replay's cursor maths and
+route, the transport's arithmetic, the movement intentions and the camera's
+fit. The map, the run page and the character page compose them with what is
+the benchmark's: models, logos, replay and party links, the map view's maths
+over the viewer's tile pyramid, and the public snapshot. The views ask for
+Wowhead's tooltip script only on a page that allows it, and the dashboard
+does on both builds (`src/main.tsx`, `enableWowhead`). Their classes are
+styled once, by the inspector's `@wrathbench/inspector/views/views.css`,
+which `src/main.tsx` imports after `src/styles.css`; the shell they sit in
+(tokens, cards, tables, badges, buttons) is `src/styles.css`'s.
 
 What both sides need is imported from the viewer rather than copied, under
 the `@viewer/*` alias, and the session-side codecs from the inspector in the
