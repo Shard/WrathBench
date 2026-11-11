@@ -366,7 +366,9 @@ in the stack): the unit frame, the inventory and quest log, the nearby layer's
 store and classes, the chat bubbles' layout, the popover's placement and the
 Wowhead links, and the event feed the run page shows for a v1 run. The map,
 the run page and the character page compose them with what is the
-benchmark's: models, logos, replay, parties and the public snapshot. Their
+benchmark's: models, logos, replay, parties and the public snapshot. The
+views ask for Wowhead's tooltip script only on a page that allows it, and the
+dashboard does on both builds (`src/main.tsx`, `enableWowhead`). Their
 classes are styled here, in `src/styles.css`; the inspector's own page carries
 a copy of the same rules.
 
