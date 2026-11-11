@@ -36,15 +36,17 @@
  * `startRig` and drive `rig.page(...)` from a script of your own.
  */
 
-import { cpSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, normalize, resolve } from "node:path";
 import { copyRunDb, isRunDbSideFile, RUN_DB_FILE } from "../runner/src/rundb";
 import { localRunStore } from "../runner/viewer/clickhouse";
 import { createApi } from "../runner/viewer/api";
 import { createRenderer } from "../runner/viewer/snapshot";
+import { ALL_GROUPS, groupsFromEnv, type Groups } from "../runner/viewer/groups";
+import { ConfigStore } from "../runner/src/config-store";
 import { findChromium, launch, type Browser, type Page, type PageOptions } from "./shots/cdp";
-import { LIVE_RUN, writeFixture, type Fixture } from "./shots/fixture";
+import { ENDED_RUN, LIVE_RUN, writeFixture, type Fixture } from "./shots/fixture";
 import { describeReport, emptyState, publishPass, type ObjectStore } from "./publish-core";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
@@ -59,6 +61,12 @@ export interface RigOptions {
   /** Run directories to copy in instead of the fixture. */
   runs?: readonly string[];
   wowhead?: "stub" | "real";
+  /** The deployment's groups (`runner/viewer/groups.ts`); every group when absent. */
+  groups?: Groups;
+  /** Seed the rig's config store from `infra/fleet.example.json`, so the admin pages have a config to show. */
+  seed?: boolean;
+  /** The private viewer's admin switch; on unless set false, which is the chart's default deployment. */
+  admin?: boolean;
   log?: (line: string) => void;
 }
 
@@ -146,9 +154,11 @@ async function pick(handle: (req: Request) => Promise<Response>): Promise<{ live
   }[];
   // The fixture's own live run where it is there: the one with a nearby ring.
   const live = rows.find((r) => r.live === true && r.runId === LIVE_RUN) ?? rows.find((r) => r.live === true);
+  // And its own ended run: the fan-out run beside it has ended too, and has no one track to replay.
+  const ended = rows.find((r) => r.terminationReason != null && r.runId === ENDED_RUN) ?? rows.find((r) => r.terminationReason != null);
   return {
     live: live?.runId ?? null,
-    ended: rows.find((r) => r.terminationReason != null)?.runId ?? null,
+    ended: ended?.runId ?? null,
     liveCharacter: live?.character ?? null,
   };
 }
@@ -193,6 +203,16 @@ export async function startRig(opts: RigOptions): Promise<Rig> {
 
   const minimap = join(REPO_ROOT, "data", "minimap");
   const tilesDir = existsSync(minimap) ? minimap : join(work, "no-tiles");
+  if (opts.seed === true) {
+    const config = new ConfigStore(configDbPath);
+    try {
+      config.seed(JSON.parse(readFileSync(join(REPO_ROOT, "infra", "fleet.example.json"), "utf8")) as unknown, { actor: "shots", note: "the rig's seed" });
+    } finally {
+      config.close();
+    }
+  }
+  const groups = opts.groups ?? ALL_GROUPS;
+  // The operator's own viewer, admin switch on unless told otherwise: the rig shows the pages it has.
   const privateApi = createApi({
     runsDir,
     tilesDir,
@@ -201,9 +221,11 @@ export async function startRig(opts: RigOptions): Promise<Rig> {
     store: localRunStore(runsDir),
     configDbPath,
     allowedHosts: [],
+    groups,
+    admin: opts.admin !== false,
   });
-  const publicApi = createApi({ runsDir, tilesDir: join(work, "no-tiles"), publicMode: true, moduleUrl: "http://127.0.0.1:1", store: localRunStore(runsDir), configDbPath });
-  const renderer = createRenderer({ runsDir, api: publicApi, configDbPath });
+  const publicApi = createApi({ runsDir, tilesDir: join(work, "no-tiles"), publicMode: true, moduleUrl: "http://127.0.0.1:1", store: localRunStore(runsDir), configDbPath, groups });
+  const renderer = createRenderer({ runsDir, api: publicApi, configDbPath, groups });
   const store: ObjectStore = {
     put: async (path, body) => {
       const p = join(bucketDir, path);
@@ -391,10 +413,14 @@ interface Cli {
   settle: number;
   wowhead: "stub" | "real";
   serve: boolean;
+  groups?: Groups;
+  seed: boolean;
+  admin: boolean;
 }
 
 export const USAGE = `usage: bun infra/dashboard-shots.ts [--out DIR] [--run DIR]... [--path P]... [--site private|public|both]
-                                   [--viewport WxH] [--scheme dark|light] [--settle MS] [--real-wowhead] [--serve]`;
+                                   [--viewport WxH] [--scheme dark|light] [--settle MS] [--real-wowhead] [--serve]
+                                   [--groups runner,evals,viewer] [--seed] [--no-admin]`;
 
 export function parseCli(argv: readonly string[], now = new Date()): Cli | { error: string } {
   const c: Cli = {
@@ -407,16 +433,27 @@ export function parseCli(argv: readonly string[], now = new Date()): Cli | { err
     settle: 2_500,
     wowhead: "stub",
     serve: false,
+    seed: false,
+    admin: true,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     const val = (): string | undefined => argv[++i];
     if (a === "--real-wowhead") c.wowhead = "real";
     else if (a === "--serve") c.serve = true;
-    else if (["--out", "--run", "--path", "--site", "--viewport", "--scheme", "--settle"].includes(a)) {
+    else if (a === "--seed") c.seed = true;
+    else if (a === "--no-admin") c.admin = false;
+    else if (["--out", "--run", "--path", "--site", "--viewport", "--scheme", "--settle", "--groups"].includes(a)) {
       const v = val();
       if (v === undefined) return { error: `${a} needs a value` };
-      if (a === "--out") c.out = v;
+      if (a === "--groups") {
+        try {
+          c.groups = groupsFromEnv({ WRATHBENCH_GROUPS: v });
+        } catch (e) {
+          return { error: `--groups: ${e instanceof Error ? e.message : String(e)}` };
+        }
+        if (!c.groups.viewer) return { error: "--groups: the rig is the viewer group's, so it must be on" };
+      } else if (a === "--out") c.out = v;
       else if (a === "--run") c.runs.push(v);
       else if (a === "--path") {
         if (!v.startsWith("/")) return { error: "--path is a path on the site, starting with /" };
@@ -452,7 +489,15 @@ async function main(argv: readonly string[]): Promise<number> {
     return 2;
   }
   mkdirSync(c.out, { recursive: true });
-  const rig = await startRig({ out: c.out, runs: c.runs, wowhead: c.wowhead, log: (l) => console.log(l) });
+  const rig = await startRig({
+    out: c.out,
+    runs: c.runs,
+    wowhead: c.wowhead,
+    ...(c.groups !== undefined ? { groups: c.groups } : {}),
+    seed: c.seed,
+    admin: c.admin,
+    log: (l) => console.log(l),
+  });
   console.log(`private ${rig.privateUrl} · public ${rig.publicUrl} · bucket ${rig.bucketUrl}`);
   if (c.serve) {
     console.log("serving until Ctrl-C; a publisher pass every 60 s keeps the public site in step");

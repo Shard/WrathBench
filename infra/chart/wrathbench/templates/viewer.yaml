@@ -1,4 +1,7 @@
-{{- if .Values.viewer.enabled }}
+{{- if and .Values.admin.enabled (not (include "wrathbench.on.viewer" $)) }}
+{{- fail "admin.enabled: the admin interface is served by the viewer, and the viewer is off here (groups.viewer.enabled or viewer.enabled). Turn admin off, or the viewer on." }}
+{{- end }}
+{{- if include "wrathbench.on.viewer" $ }}
 {{/*
 The operator viewer (runner/viewer/serve.ts).
 
@@ -92,7 +95,7 @@ spec:
                    runs directory (runner/viewer/clickhouse.ts `storeFor`): fine
                    for a small tree, and the only answer that works, since a URL
                    naming a Service the chart did not render fails every listing. */}}
-            {{- if .Values.clickhouse.enabled }}
+            {{- if include "wrathbench.on.clickhouse" $ }}
             # The derived store. Every listing route reads it rather than
             # opening a thousand run directories over iSCSI; the live-progress
             # polling still reads run.sqlite directly.
@@ -102,6 +105,33 @@ spec:
               value: "1"
             - name: WRATHBENCH_VIEWER_PORT
               value: "8090"
+            {{- if .Values.admin.enabled }}
+            # The admin interface (values.yaml "admin"): the config API and the
+            # admin pages. Unset, this viewer has no write route at all.
+            - name: WRATHBENCH_ADMIN
+              value: "1"
+            # What the admin pages say about the deployment around the store
+            # (runner/viewer/admin-api.ts): the variable NAMES the model pods
+            # carry, never a value, and how the publisher is set, never its
+            # key pair or anything else from the Secret.
+            {{- $keys := .Values.modelKeys | default list }}
+            {{- if include "wrathbench.on.codex" $ }}{{ $keys = append $keys "CODEX_HOME" }}{{ end }}
+            - name: WRATHBENCH_MODEL_KEYS
+              value: {{ join "," $keys | quote }}
+            - name: WRATHBENCH_PUBLISHER
+              value: {{ if include "wrathbench.on.publisher" $ }}"1"{{ else }}"0"{{ end }}
+            {{- if include "wrathbench.on.publisher" $ }}
+            {{- with include "wrathbench.publishSettingsEnv" . | trim }}{{ . | nindent 12 }}{{ end }}
+            {{- $t := .Values.publisher.target | default dict }}
+            {{- if and $t.endpoint $t.bucket }}
+            - name: WRATHBENCH_PUBLISH_TARGET
+              value: {{ printf "%s/%s" (trimSuffix "/" $t.endpoint) $t.bucket | quote }}
+            {{- end }}
+            # The publisher's state file, read-only, for its last pass.
+            - name: WRATHBENCH_PUBLISH_STATE
+              value: /wrathbench/data/publish/state.json
+            {{- end }}
+            {{- end }}
             {{- if $ing.enabled }}
             # The names a browser may address the viewer by: the Ingress hosts.
             # Any other Host is a 421 (runner/viewer/host-guard.ts).
@@ -161,6 +191,14 @@ spec:
             - name: data
               mountPath: /wrathbench/data/config
               subPath: config
+            {{- if and .Values.admin.enabled (include "wrathbench.on.publisher" $) }}
+            # The publisher's state, for the admin page's publishing status.
+            # Read-only: the publisher is its one writer.
+            - name: data
+              mountPath: /wrathbench/data/publish
+              subPath: publish
+              readOnly: true
+            {{- end }}
       volumes:
         - name: data
           persistentVolumeClaim:

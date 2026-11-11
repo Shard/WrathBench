@@ -83,6 +83,15 @@ reading in windows rather than whole files, is what puts a pass over a
 1,016-run tree at 0.78 GB peak RSS rather than 4.4 GB. Credentials are one R2
 key pair scoped to the one bucket, held only by the publisher.
 
+The bucket is R2 here, and any S3-compatible one by configuration; a
+deployment may also hold the public view back by a delay, publish only the
+runs that have not ended, or publish nothing (`docs/RUNBOOK.md`, "Where it
+publishes, and how"). A delay holds back exactly the keys a reader can reach
+without the manifest: the three mutable files and the trace windows, whose
+keys are their windows. Content-addressed objects go up at once because
+nothing names them until the held manifest does, and the prune keeps whatever
+a held pass names. Every default is the design above, unchanged.
+
 A finished run is not rendered again once it has gone cold. That means all
 its files have been still for 15 minutes (`COLD_MS`), past the live window,
 the trace's settling and the collector's catch-up. A pass skips it, pointing

@@ -433,6 +433,8 @@ export function planPolicy(opts: {
   probeRuns?: readonly ProbeRun[];
   /** The account a pick's model would rather have (`affinityOf`). */
   affinity?: AccountAffinity;
+  /** The evals group (`NextJobsOptions.evals`): off picks no scored or probing episode. Absent is on. */
+  evals?: boolean;
 }): PolicyPick[] {
   return planPolicyHeld(opts).picks;
 }
@@ -483,6 +485,7 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
       ...(reserved !== undefined ? { poolHeld: reserved } : {}),
       ...(opts.campaigns !== undefined ? { campaigns: opts.campaigns } : {}),
       ...(opts.probeRuns !== undefined ? { probeRuns: opts.probeRuns } : {}),
+      ...(opts.evals !== undefined ? { evals: opts.evals } : {}),
     });
   /*
    * Accounts in preference order over the FINAL picks. Affinity is the one

@@ -1235,6 +1235,23 @@ export interface RunDetailResponse extends SnapshotEnvelope {
    * its shape; optional for the reason `achievements` is.
    */
   party?: PartyDetailView;
+  /**
+   * A fan-out run's characters, one session record each, in name order: the
+   * session id the inspector's API opens each by (`<run-id>~<Character>`)
+   * and the character's name. Present only on a fan-out run, so every other
+   * run's detail keeps its shape. The run's own game-side figures (level,
+   * states, milestones) are no one character's and read as not recorded;
+   * each character's are its session's. Private: a fan-out run is never
+   * published.
+   */
+  fanout?: FanoutSessionView[];
+}
+
+/** One character of a fan-out run (`RunDetailResponse.fanout`). */
+export interface FanoutSessionView {
+  /** The session id: `<run-id>~<Character>`. */
+  id: string;
+  character: string;
 }
 
 /**
@@ -1625,6 +1642,19 @@ export interface ApiInfoResponse extends SnapshotEnvelope {
    * still work, so it is absent rather than empty on an older process.
    */
   harnessSeries?: { series: string; runs: number }[];
+  /**
+   * Which of the deployment's groups are on (`groups.ts`), present only when
+   * one is off: absent is every group, which is how a body from an older
+   * viewer, and today's deployment, read. The public projection keeps it, so
+   * the public build draws the same pages the deployment has.
+   */
+  groups?: { runner: boolean; evals: boolean; viewer: boolean };
+  /**
+   * True when this handle has the admin switch on: the config API and the
+   * admin pages are mounted. Absent otherwise, and never on a public handle
+   * or in a snapshot.
+   */
+  admin?: true;
   now: number;
 }
 
@@ -2598,4 +2628,62 @@ export interface DraftPromoteBody {
   tier: string;
   race?: number;
   class?: number;
+}
+
+// ------------------------------------------------------------- the admin API
+// `GET /api/admin` (`admin-api.ts`), mounted only with the admin switch on.
+
+/** One credential as the admin page shows it: the store's row, and the supervisor's status when it is up. */
+export interface AdminCredentialView {
+  id: string;
+  provider: string;
+  billing: "free" | "paid";
+  enabled: boolean;
+  secretEnv: string;
+  slots: number;
+  budget: string;
+  /** Whether the supervisor's environment has the variable set; null while no supervisor is up to say. */
+  secretSet: boolean | null;
+  /** Whether the chart hands the variable to the model pods (`modelKeys`); null when the viewer was not told. */
+  deployed: boolean | null;
+  /** Sessions on its slots now; null without a supervisor. */
+  inUse: number | null;
+  /** What the budget has used, as the supervisor last read it. */
+  used: string | null;
+  held: { scored?: string; freeplay?: string };
+  lastError: { reason: string; at: number } | null;
+}
+
+export interface AdminProviderView {
+  id: string;
+  label: string;
+  bill: "subscription" | "metered";
+  /** The env var name a credential of it names: this, or this with `_<n>`. */
+  envBase: string;
+  budgets: readonly string[];
+}
+
+/** How the deployment publishes, as the viewer was told (`infra/publish-settings.ts`, `publishViewFromEnv`). */
+export interface AdminPublishView {
+  /** Whether the deployment renders a publisher at all; null when the viewer was not told. */
+  enabled: boolean | null;
+  /** `<endpoint>/<bucket>` when the chart sets both as plain values; null when they are the Secret's. */
+  target: string | null;
+  region: string | null;
+  virtualHostedStyle: boolean;
+  delayMs: number;
+  history: boolean;
+  /** The publisher's last pass as its state file says, when the viewer can read it. */
+  last: { flipAt: number | null; gen: string | null; held: number; scanAt: number | null; withheld: number } | null;
+}
+
+export interface AdminResponse {
+  groups: { runner: boolean; evals: boolean; viewer: boolean };
+  fleet: { up: boolean; heartbeatAt: number | null };
+  /** The env var names the chart hands the model pods, or null when the viewer was not told. */
+  modelKeys: string[] | null;
+  credentials: AdminCredentialView[];
+  providers: AdminProviderView[];
+  publishing: AdminPublishView;
+  now: number;
 }

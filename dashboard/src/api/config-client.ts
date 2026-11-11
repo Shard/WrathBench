@@ -20,7 +20,7 @@
  * build reads a bucket. The page checks both before it renders anything.
  */
 
-import type { DraftFetchResponse, DraftPromoteBody, DraftStatusResponse, DraftsResponse } from "@viewer/api-types";
+import type { AdminResponse, DraftFetchResponse, DraftPromoteBody, DraftStatusResponse, DraftsResponse } from "@viewer/api-types";
 import { headerSafe } from "../lib/config";
 
 /**
@@ -142,6 +142,8 @@ export function createConfigClient(opts: ConfigClientOptions = {}) {
   return {
     /** The whole config. One shot, never memoised — see the header. */
     config: (): Promise<ConfigResponse> => send<ConfigResponse>(f, at("/api/config"), { method: "GET" }),
+    /** The admin pages' status beside the config (`runner/viewer/admin-api.ts`): read-only. */
+    admin: (): Promise<AdminResponse> => send<AdminResponse>(f, at("/api/admin"), { method: "GET" }),
     audit: (limit = 50): Promise<ConfigAuditResponse> =>
       send<ConfigAuditResponse>(f, at(`/api/config/audit?limit=${String(limit)}`), { method: "GET" }),
     /** Shallow-merge into one row. Cannot remove a key — see `lib/config.ts`. */

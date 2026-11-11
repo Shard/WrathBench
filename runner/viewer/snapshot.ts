@@ -65,7 +65,8 @@
  * projects every body again. The ids come back from the handle in-process
  * (`unpublishedRuns`) and go out as `withdrawn`, so the publisher deletes
  * whatever an earlier pass published for them (`infra/publish-core.ts`,
- * `planWithdraw`).
+ * `planWithdraw`). A fan-out run, one agent driving several characters, is
+ * withheld the same way: an unscored probe with no public form.
  */
 
 import { statSync } from "node:fs";
@@ -114,6 +115,7 @@ import {
 } from "./public-projection";
 import { scrubPathsText } from "./scrub-paths";
 import { isNotAModelRun } from "../src/config";
+import { ALL_GROUPS, type Groups } from "./groups";
 
 /** The mutable keys are polled; everything else is content-addressed. */
 export const MUTABLE_CACHE = "public, max-age=30";
@@ -146,7 +148,8 @@ export interface SnapshotResult {
   artifacts: SnapshotArtifact[];
   /**
    * Runs the listing holds that are never published, because their driver is
-   * not a model (`isNotAModelRun`). The publisher deletes what it remembers
+   * not a model (`isNotAModelRun`) or they are fan-out runs (`isFanoutRun`).
+   * The publisher deletes what it remembers
    * publishing for them; sorted, so a pass's result is deterministic.
    */
   withdrawn: string[];
@@ -223,6 +226,28 @@ export interface RendererOptions {
   fullRenderMs?: number;
   /** The wall clock cold runs are judged on; `Date.now` but in tests. */
   clock?: () => number;
+  /**
+   * The deployment's groups (`groups.ts`). A group that is off publishes
+   * nothing of its own: with evals off no ladder, `campaigns.json` or
+   * `episodes.json`; with runner off no `models.json` and no fleet in
+   * `live.json`. Absent is every group, today's set of objects exactly.
+   */
+  groups?: Groups;
+  /**
+   * Whether the public site carries the run history (true, the default) or
+   * only the current view: false publishes the runs that have not ended —
+   * live, or paused and coming back — and every aggregate over those alone,
+   * and withdraws whatever an earlier pass published for a run that has
+   * ended (`withdrawn`, which the engine deletes). The map, the fleet and the
+   * live runs' pages stay; a finished run's page, trace and ladder row go.
+   */
+  history?: boolean;
+  /**
+   * The publisher's delay (`infra/publish-settings.ts`), carried on `live.json`
+   * when it is above zero so the public shell reads data that old as on time
+   * rather than stale. Absent or 0, `live.json` is what it always was.
+   */
+  delayMs?: number;
 }
 
 /**
@@ -396,7 +421,9 @@ export function createRenderer(
       // worldserver reports `worldserver: null` quickly instead of hanging.
       moduleUrl: opts.moduleUrl ?? "http://127.0.0.1:1",
       ...(opts.configDbPath !== undefined ? { configDbPath: opts.configDbPath } : {}),
+      ...(opts.groups !== undefined ? { groups: opts.groups } : {}),
     });
+  const groups = opts.groups ?? ALL_GROUPS;
 
   /**
    * The handle's own eviction, when it has one. A test may inject a bare
@@ -493,9 +520,25 @@ export function createRenderer(
     const info = projectInfo(await get<ApiInfoResponse>("/api/info"));
     // The runs that are never published. A handle that cannot say (a bare
     // function a test injects) withholds none beyond what it serves.
-    const withdrawn = unpublishedRuns === undefined ? [] : await unpublishedRuns();
+    const withdrawn = unpublishedRuns === undefined ? [] : [...(await unpublishedRuns())];
     const withheld = new Set(withdrawn);
     const fullListing = await get<RunsResponse>("/api/runs");
+    /*
+     * Without the history, a run that has ended is withheld like a run that is
+     * never published, and withdrawn with them, so its objects leave the
+     * bucket as it ends. Ended is the results row's verdict, which the public
+     * handle keeps where its listing row does not; a run with no row there
+     * stays. With the history (the default) none of this runs.
+     */
+    if (opts.history === false) {
+      const verdicts = await get<ResultsResponse>("/api/results?episode=all&includeOverrides=1");
+      for (const r of verdicts.runs) {
+        if (r.terminationReason !== null && !withheld.has(r.runId)) {
+          withheld.add(r.runId);
+          withdrawn.push(r.runId);
+        }
+      }
+    }
     const listing: RunsResponse = { ...fullListing, runs: fullListing.runs.filter((r) => !withheld.has(r.runId)) };
     /**
      * The runs that may be published: listed, and not withheld. Positions
@@ -516,14 +559,18 @@ export function createRenderer(
     const ladders: [string, ResultsResponse][] = [];
     // `probing` has no ladder (operator, 2026-08-29; the reason is at
     // `LADDER_EPISODES` in api.ts), so no `ladder-probing.json` is published.
-    for (const ep of EPISODE_IDS.filter((id) => id !== "probing")) {
-      ladders.push([ep, projectResults(keepResults(await get<ResultsResponse>(`/api/ladder?episode=${ep}`)))]);
+    // None at all with the evals group off, nor its other two aggregates.
+    if (groups.evals) {
+      for (const ep of EPISODE_IDS.filter((id) => id !== "probing")) {
+        ladders.push([ep, projectResults(keepResults(await get<ResultsResponse>(`/api/ladder?episode=${ep}`)))]);
+      }
     }
-    const episodes = projectEpisodes(await get<EpisodesResponse>("/api/episodes"));
-    const models = projectModels(await get<ModelsResponse>("/api/models"));
-    const campaigns = projectCampaigns(await get<CampaignsResponse>("/api/campaigns"));
+    const episodes = groups.evals ? projectEpisodes(await get<EpisodesResponse>("/api/episodes")) : null;
+    // The runner group's two: the scheduler's verdict per model, and the fleet.
+    const models = groups.runner ? projectModels(await get<ModelsResponse>("/api/models")) : null;
+    const campaigns = groups.evals ? projectCampaigns(await get<CampaignsResponse>("/api/campaigns")) : null;
     const tools = projectTools(await get<ToolsResponse>("/api/tools"));
-    const fleet = projectFleet(withoutRuns(await get<FleetResponse>("/api/fleet"), withheld));
+    const fleet = groups.runner ? projectFleet(withoutRuns(await get<FleetResponse>("/api/fleet"), withheld)) : null;
     const allPositions = await get<PositionsResponse>("/api/positions");
     const positions = projectPositions({ ...allPositions, positions: allPositions.positions.filter((p) => publishable.has(p.runId)) });
     /*
@@ -731,9 +778,9 @@ export function createRenderer(
       ["runs.json", runs],
       ["results.json", results],
       ...ladders.map(([ep, body]): [string, object] => [`ladder-${ep}.json`, body]),
-      ["episodes.json", episodes],
-      ["models.json", models],
-      ["campaigns.json", campaigns],
+      ...(episodes === null ? [] : [["episodes.json", episodes] as [string, object]]),
+      ...(models === null ? [] : [["models.json", models] as [string, object]]),
+      ...(campaigns === null ? [] : [["campaigns.json", campaigns] as [string, object]]),
       ["tools.json", tools],
     ];
     const versions = snap.map(([name, payload]): [string, object, string] => [name, payload, hash12(addressable(payload))]);
@@ -775,11 +822,13 @@ export function createRenderer(
         body: JSON.stringify({
           generatedAt: now,
           attribution: PUBLIC_ATTRIBUTION,
-          fleet,
+          // Absent, not null, with the runner group off: there is no fleet.
+          ...(fleet === null ? {} : { fleet }),
           positions: livePositions(positions, traceListed, nearby),
           // Where this pass's units are. Its presence is also what tells a
           // reader the windows are no longer inline here.
           nearbyKey: PUBLIC_NEARBY_KEY,
+          ...(opts.delayMs !== undefined && opts.delayMs > 0 ? { delayMs: opts.delayMs } : {}),
         }),
         contentType: "application/json",
         cacheControl: MUTABLE_CACHE,

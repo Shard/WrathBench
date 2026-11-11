@@ -18,6 +18,11 @@
  *   fixture-e90, fixture-e90-closed, fixture-reference
  *                  three finished `e90` runs, two models' rows and the scripted
  *                  reference's line, for the ladder (`writeLadderRun`)
+ *   fixture-fanout terminated a quarter of an hour ago: one agent driving two
+ *                  characters, Oakhart and Pellira, a session record each in
+ *                  `sessions/<Character>/` and a `roster.json` no reader may
+ *                  serve; on the private site only, since a fan-out run is
+ *                  never published
  *
  * Both carry a character sheet on the trace (money, worn and carried items, a
  * quest log with one quest that completes, one in progress and one of four
@@ -51,11 +56,15 @@ import {
 } from "@wrathbench/mcp/record";
 import { comparabilityOf } from "../../runner/src/comparability";
 import { loadRunConfig, unscoredStamp } from "../../runner/src/config";
+import { SESSIONS_DIR } from "../../runner/src/run-reader";
 import { sessionDirOf } from "../../runner/src/session-record";
 import { Trajectory } from "../../runner/src/trajectory";
 
 export const LIVE_RUN = "fixture-live";
 export const ENDED_RUN = "fixture-ended";
+export const FANOUT_RUN = "fixture-fanout";
+/** In the fan-out run's `roster.json` only. */
+export const FANOUT_ROSTER_TOKEN = "fixture-roster-token-0000000000000000";
 
 /** Where a character walks its loop: a map and the loop's centre. */
 interface Ground {
@@ -233,16 +242,27 @@ function drainOf(spec: Spec, o: { trace?: TraceRow[]; dict?: TraceDict; nearby?:
   };
 }
 
-/** The run's session record, opened in `<run>/session/` as a run opens it. The id is a fingerprint of the fixture's token. */
-function openSession(runsDir: string, spec: Spec): FixtureSession {
+/**
+ * The run's session record, opened in `<run>/session/` as a run opens it, or
+ * a fan-out character's in `<run>/sessions/<Character>/`. The id is a
+ * fingerprint of the fixture's token (a fan-out character's, of its own).
+ */
+function openSession(runsDir: string, spec: Spec, fanout = false): FixtureSession {
   const clock: FixtureSession["clock"] = { now: spec.traceFrom };
-  const id = createHash("sha256").update(`${spec.runId}-fixture-token-0000000000000000`).digest("hex").slice(0, 16);
-  const writer = new SessionWriter({ dir: sessionDirOf(join(runsDir, spec.runId)), id, stack: { version: "fixture" }, now: () => clock.now ?? Date.now(), log: () => {} });
+  const token = `${spec.runId}${fanout ? `-${spec.character}` : ""}-fixture-token-0000000000000000`;
+  const id = createHash("sha256").update(token).digest("hex").slice(0, 16);
+  const dir = fanout ? join(runsDir, spec.runId, SESSIONS_DIR, spec.character) : sessionDirOf(join(runsDir, spec.runId));
+  const writer = new SessionWriter({ dir, id, stack: { version: "fixture" }, now: () => clock.now ?? Date.now(), log: () => {} });
   writer.open();
   return { writer, clock };
 }
 
-function writeRun(runsDir: string, spec: Spec, ended: number | null): { traj: Trajectory; session: FixtureSession } {
+/**
+ * Write one run: its trajectory, and its session record, or with `fanout` one
+ * record per character (`<run>/sessions/<Character>/`) and the launch's
+ * `config.fanout`, as a fan-out run is laid out.
+ */
+function writeRun(runsDir: string, spec: Spec, ended: number | null, fanout?: Spec[]): { traj: Trajectory; session: FixtureSession; sessions: FixtureSession[] } {
   const dir = join(runsDir, spec.runId);
   mkdirSync(dir, { recursive: true });
   // The run's own clock while it is written; the wall clock after, for the live run's ticker.
@@ -259,6 +279,7 @@ function writeRun(runsDir: string, spec: Spec, ended: number | null): { traj: Tr
     character: spec.character,
     model: spec.model,
     account: "FIXTURE",
+    ...(fanout === undefined ? {} : { fanout: { characters: fanout.length, accounts: fanout.map((_, i) => `FIXTURE${i + 1}`) } }),
   };
   traj.writeMeta({ runId: spec.runId, harnessVersion: "harness-fixture", startedAt: spec.startedAt, config });
   traj.setCharacter(spec.runId, spec.character);
@@ -290,17 +311,20 @@ function writeRun(runsDir: string, spec: Spec, ended: number | null): { traj: Tr
     if (turn === 6) traj.append({ t: "harness", kind: "session_note", text: "an invented notice" });
   }
 
-  const session = openSession(runsDir, spec);
-  session.clock.now = spec.traceTo;
-  session.writer.ingest(drainOf(spec, { trace: traceRows(spec, spec.traceFrom, spec.traceTo), dict: DICT }));
+  const sessions = (fanout ?? [spec]).map((s) => {
+    const session = openSession(runsDir, s, fanout !== undefined);
+    session.clock.now = s.traceTo;
+    session.writer.ingest(drainOf(s, { trace: traceRows(s, s.traceFrom, s.traceTo), dict: DICT }));
+    return session;
+  });
   if (ended !== null) {
     clock = ended;
-    session.clock.now = ended;
+    for (const session of sessions) session.clock.now = ended;
     traj.setTermination(spec.runId, "episode-limit", "episode limit reached");
   }
   clock = null;
-  if (ended === null) session.clock.now = null;
-  return { traj, session };
+  if (ended === null) for (const session of sessions) session.clock.now = null;
+  return { traj, session: sessions[0]!, sessions };
 }
 
 /**
@@ -489,7 +513,23 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
   };
   const endedRun = writeRun(runsDir, endedSpec, endedAt);
   endedRun.traj.close();
-  const ready = endedRun.session.writer.close();
+  // A fan-out run: one agent, two characters, a record each; private only.
+  const fanoutAt = at(now - 15 * 60_000);
+  const fanoutSpec: Spec = {
+    runId: FANOUT_RUN,
+    character: "Oakhart",
+    model: "fixture/fanout-model",
+    startedAt: at(now - 2 * 3_600_000),
+    traceFrom: at(now - 2 * 3_600_000 + 60_000),
+    traceTo: fanoutAt,
+    phase: 0,
+    scratchpad: PAD("Oakhart"),
+  };
+  const fanoutRun = writeRun(runsDir, fanoutSpec, fanoutAt, [fanoutSpec, { ...fanoutSpec, character: "Pellira", phase: LOOP_MS / 2, ground: { map: 0, x: -9420, y: 90, z: 57 }, level: 9 }]);
+  fanoutRun.traj.close();
+  // Its launch's session tokens, which no reader may serve.
+  writeFileSync(join(runsDir, FANOUT_RUN, "roster.json"), JSON.stringify({ characters: [{ character: "Oakhart", token: FANOUT_ROSTER_TOKEN }, { character: "Pellira", token: FANOUT_ROSTER_TOKEN }] }), { mode: 0o600 });
+  const ready = Promise.all([endedRun.session.writer.close(), ...fanoutRun.sessions.map((x) => x.writer.close())]).then(() => undefined);
   writeLadderRun(runsDir, E90_RUN, { driver: "openai", model: "fixture/e90-model", character: "Laddera" }, 6, at(now - 5 * 3_600_000));
   // A second row, under an invented id a family's weights rules still answer
   // for (Anthropic's catch-all reads `closed`), so the ladder's weights filter

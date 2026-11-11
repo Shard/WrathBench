@@ -937,6 +937,12 @@ describe("freshness", () => {
     // negative age.
     expect(snapshotBanner(at, GENERATED_AT - 60_000).text).toBe("public snapshot · data as of 0s ago");
   });
+
+  test("a publisher's delay is on time, not stale: the warning waits that much longer", () => {
+    const delayed = { generatedAt: GENERATED_AT, attribution: PUBLIC_ATTRIBUTION, delayMs: 900_000 };
+    expect(snapshotBanner(delayed, GENERATED_AT + 900_000).tone).toBe("dim");
+    expect(snapshotBanner(delayed, GENERATED_AT + 900_000 + SNAPSHOT_STALE_MS).tone).toBe("warn");
+  });
 });
 
 /* --- the character, assembled ------------------------------- */

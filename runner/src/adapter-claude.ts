@@ -154,7 +154,7 @@ export const MCP_SERVER_NAME = "wrathbench";
  * without the reference wiki (`wiki: false`) is not granted `search_reference`;
  * absent reads as "the run has it", which is every run by default.
  */
-export function mcpToolNames(opts: { wikiSearch?: boolean | undefined } = {}): string[] {
+export function mcpToolNames(opts: { wikiSearch?: boolean | undefined; fanout?: boolean | undefined } = {}): string[] {
   return toolsFor(opts).map((t) => `mcp__${MCP_SERVER_NAME}__${t.name}`);
 }
 
@@ -432,6 +432,8 @@ export interface ClaudeArgsOptions {
   systemPrompt?: string;
   /** Whether this run has `search_reference` (`config.wiki`); absent is true. */
   wikiSearch?: boolean | undefined;
+  /** A fan-out run (`config.fanout`): grant the fan-out tool list. */
+  fanout?: boolean | undefined;
 }
 
 /**
@@ -539,7 +541,7 @@ export function claudeArgs(o: ClaudeArgsOptions): string[] {
     ...(o.effort !== undefined && o.effort !== NO_THINKING ? ["--effort", o.effort] : []),
     // variadic, therefore last
     "--allowed-tools",
-    ...mcpToolNames({ wikiSearch: o.wikiSearch }),
+    ...mcpToolNames({ wikiSearch: o.wikiSearch, ...(o.fanout === true ? { fanout: true } : {}) }),
   ];
 }
 
@@ -931,6 +933,8 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     systemPrompt,
     model: config.model,
     wikiSearch: config.wiki,
+    // A fan-out run is granted the fan-out list, the one its MCP server serves.
+    ...(config.fanout !== undefined ? { fanout: true } : {}),
     ...(config.effort !== undefined ? { effort: config.effort } : {}),
   });
   const thinking = thinkingEnv(config.effort);

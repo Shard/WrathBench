@@ -92,7 +92,7 @@ import { scrubPathsText } from "./scrub-paths";
 import { strikableSessionToken, strikeSessionTokens } from "../src/session-token";
 import { SEG_MS } from "@wrathbench/inspector/codec/trace";
 import { closedWindowsMemo, createInspectorApi, nearbyWindow, traceIndex, traceSegment } from "@wrathbench/inspector";
-import { runSession, runsSource } from "./runs-source";
+import { fanoutSessions, isFanoutRun, runSession, runsSource } from "./runs-source";
 import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStateItems, readStates, runDir } from "./runs";
 import {
   factOf,
@@ -108,8 +108,10 @@ import {
 import { isArchiveDir } from "./archive-dir";
 import { compressResponse } from "./compress";
 import { CONFIG_API_PREFIX, handleConfigRequest } from "./config-api";
+import { createAdminApi } from "./admin-api";
 import { hostAllowlist, hostGuard } from "./host-guard";
 import { writeGuard } from "./write-guard";
+import { ALL_GROUPS, allGroupsOn, groupOfApiPath, type Groups } from "./groups";
 import { e90TokenProfile } from "./drafts";
 import {
   ART_TILE_CACHE_CONTROL,
@@ -219,6 +221,18 @@ export interface ApiOptions {
    * place a handle is bound to a port, always passes it.
    */
   allowedHosts?: readonly string[];
+  /**
+   * Which of the deployment's groups are on (`groups.ts`). A group that is off
+   * has no route here: its paths answer the 404 any unknown path gets. Absent
+   * is every group, which is today's deployment and what a bare clone runs.
+   */
+  groups?: Groups;
+  /**
+   * The admin switch (`groups.ts`): mounts the config API, the one write
+   * surface. Off by default, so a handle that is not told otherwise has no
+   * write route at all; a public handle never has one, whatever this says.
+   */
+  admin?: boolean;
 }
 
 /** How long one /health answer (or one failure) stands in for the next. */
@@ -754,7 +768,8 @@ export type ApiHandle = ((req: Request) => Promise<Response>) & {
   cachedRuns(): { entries: number };
   /**
    * The runs a public handle withholds, sorted: every run whose driver is not a
-   * model (`isNotAModelRun`, by driver or by stamp). The publisher hands them
+   * model (`isNotAModelRun`, by driver or by stamp), and every fan-out run
+   * (`isFanoutRun`). The publisher hands them
    * to its engine to delete what an earlier pass published for them
    * (`runner/viewer/snapshot.ts`, `withdrawn`). Not a route: it is answered
    * in-process only, so no public reader learns the ids.
@@ -789,6 +804,13 @@ export function createApi(opts: ApiOptions): ApiHandle {
   };
   const publicMode = opts.publicMode === true;
   const tilesPublic = opts.tilesPublic === true;
+  const groups = opts.groups ?? ALL_GROUPS;
+  // Never on a public handle: the read-only public site has no write surface.
+  const admin = opts.admin === true && !publicMode;
+  // The admin pages' status beside the config they edit (`admin-api.ts`).
+  const adminApi = admin
+    ? createAdminApi({ groups, runsDir, ...(opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {}) })
+    : null;
   const allowedHosts = opts.allowedHosts === undefined ? null : hostAllowlist(opts.allowedHosts);
   /**
    * Serve a body, through the public projection when this handle is public.
@@ -971,20 +993,32 @@ export function createApi(opts: ApiOptions): ApiHandle {
    */
   async function runRows(now = Date.now()): Promise<RunRow[]> {
     const rows = await allRunRows(now);
-    return publicMode ? rows.filter((r) => !isWithheldRow(r)) : rows;
+    return publicMode ? rows.filter((r) => !withheldRow(r)) : rows;
+  }
+
+  /**
+   * Whether a public handle withholds this row: its driver is not a model, or
+   * it is a fan-out run, one agent driving several characters, which is an
+   * unscored probe and has no public form (its run detail would present no
+   * character and its game side is per character). Fan-out is read off the
+   * run's directory (`isFanoutRun`), from meta.json's launch config, so a
+   * run is withheld from its first pass rather than published and withdrawn.
+   */
+  function withheldRow(r: Pick<RunRow, "runId" | "driver" | "shakeout">): boolean {
+    return isWithheldRow(r) || isFanoutRun(runsDir, r.runId);
   }
 
   /** The ids a public handle withholds (`ApiHandle.unpublishedRuns`). */
   async function unpublishedRuns(): Promise<string[]> {
     return (await allRunRows())
-      .filter(isWithheldRow)
+      .filter(withheldRow)
       .map((r) => r.runId)
       .sort();
   }
 
   /** Whether a public handle answers this run as if it did not exist. Always false on a private one. */
   async function withheldRun(runId: string): Promise<boolean> {
-    return publicMode && isWithheldRow(await runRowOne(runId));
+    return publicMode && withheldRow(await runRowOne(runId));
   }
 
   /**
@@ -1222,7 +1256,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
    */
   async function resultRuns(): Promise<ResultRun[]> {
     const rows = await allResultRuns();
-    return publicMode ? rows.filter((r) => !isNotAModelRun(r)) : rows;
+    return publicMode ? rows.filter((r) => !isNotAModelRun(r) && !isFanoutRun(runsDir, r.runId)) : rows;
   }
   /** Every run, withheld or not: what the scripted reference line is read from. */
   function allResultRuns(): Promise<ResultRun[]> {
@@ -1531,6 +1565,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
   }
 
   async function api(req: Request, url: URL, path: string): Promise<Response | null> {
+    // A group that is off has no routes: its paths are unknown paths here.
+    const group = groupOfApiPath(path);
+    if (group !== null && !groups[group]) return null;
     if (path === "/api" || path === "/api/info") {
       const body: ApiInfoResponse = {
         service: "wrathbench-viewer",
@@ -1539,6 +1576,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
         dashboardBuild: dashboardBuildOf(dashboardDir, buildCache),
         worldserver: await worldserver(),
         harnessSeries: await seriesCensus(),
+        // Only when one is off, so today's deployment serves the body it did.
+        ...(allGroupsOn(groups) ? {} : { groups: { ...groups } }),
+        ...(admin ? { admin: true } : {}),
         now: Date.now(),
       };
       return pub(body, projectInfo);
@@ -1858,6 +1898,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // falls back from, the same shape the facts above take.
         ...(character === null ? {} : { character }),
         ...(party === null ? {} : { party }),
+        // A fan-out run's characters, so the page can open each one's session.
+        ...(isFanoutRun(runsDir, runId) ? { fanout: fanoutSessions(runsDir, runId) } : {}),
       };
       return pub(body, projectRunDetail, [runId]);
     }
@@ -2180,10 +2222,12 @@ export function createApi(opts: ApiOptions): ApiHandle {
 
     /*
      * Every unsafe method, on every path, must come from the viewer's own pages
-     * (`write-guard.ts`): JSON, from this host, not cross-site. Only on a handle
-     * that is not public — a public one has no write route at all, and answers
-     * every one with the 404 below rather than a refusal that would say one
-     * exists.
+     * (`write-guard.ts`): JSON, from this host, not cross-site. On every handle
+     * that is not public, admin switch or not: without the switch there is no
+     * write route, and the guard still keeps a cross-site page from reaching
+     * any route with a method the reads do not look at. A public handle has no
+     * write route at all, and answers every one with the 404 below rather than
+     * a refusal that would say one exists.
      */
     if (!publicMode) {
       const refused = writeGuard(req);
@@ -2191,12 +2235,13 @@ export function createApi(opts: ApiOptions): ApiHandle {
     }
 
     /*
-     * The config API: read and edit the fleet config. Operator-only,
-     * so a public handle does not serve it at all — a 404, not the 403
-     * `withheld()` gives, because a write surface should not announce itself.
-     * It lives in `config-api.ts`; this is the whole of its presence here.
+     * The config API: read and edit the fleet config. Behind the admin switch
+     * (`groups.ts`), which a public handle never has, so without it the routes
+     * are not served at all — a 404, not the 403 `withheld()` gives, because a
+     * write surface should not announce itself. It lives in `config-api.ts`;
+     * this is the whole of its presence here.
      */
-    if (!publicMode && path.startsWith(CONFIG_API_PREFIX)) {
+    if (admin && path.startsWith(CONFIG_API_PREFIX)) {
       const res = await handleConfigRequest(req, url, path, {
         ...(opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {}),
         e90Profile,
@@ -2205,12 +2250,17 @@ export function createApi(opts: ApiOptions): ApiHandle {
       if (req.method !== "GET" && req.method !== "HEAD") rosterHeld = undefined;
       if (res !== null) return res;
     }
+    if (adminApi !== null) {
+      const res = adminApi(req, path);
+      if (res !== null) return res;
+    }
 
     /*
      * The inspector's own API over the runs (`@wrathbench/inspector`, through
      * `runs-source.ts`): the session record as written, but for its `id`,
-     * which reads as the run id and never as the token's fingerprint; every
-     * stream and its tail. Raw records with no projected form, so a public
+     * which reads as the session's id there (the run id, or a fan-out
+     * character's `<run-id>~<Character>`) and never as the token's
+     * fingerprint; every stream and its tail. Raw records with no projected form, so a public
      * handle withholds it whole, like the raw lines and the run's tail.
      */
     if (path === INSPECTOR_BASE || path.startsWith(`${INSPECTOR_BASE}/`)) {

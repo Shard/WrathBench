@@ -26,6 +26,7 @@
  */
 export const RUN_FLAGS = [
   "account",
+  "accounts",
   "adapter",
   "allow-character-delete",
   "api-base",
@@ -47,6 +48,7 @@ export const RUN_FLAGS = [
   "extra",
   "idle-ms",
   "keep-characters",
+  "max-characters",
   "max-tool-calls",
   "max-turns",
   "model",
@@ -133,7 +135,7 @@ export const SUPERVISOR_FLAGS = [
  * the fleet's, and the character-delete escape hatch is an operator's choice
  * on a hand launch only.
  */
-export const LAUNCH_INPUT_FLAGS = ["runs-dir", "token", "module-url", "allow-character-delete", "adapter", "stub"] as const satisfies readonly RunFlag[];
+export const LAUNCH_INPUT_FLAGS = ["runs-dir", "token", "module-url", "allow-character-delete", "adapter", "stub", "max-characters", "accounts"] as const satisfies readonly RunFlag[];
 
 /**
  * Supervisor flags an arm may set anyway, because varying them is what an arm

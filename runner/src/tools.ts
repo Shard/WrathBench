@@ -21,10 +21,12 @@ import {
   ToolSet,
   type CallOrigin,
   type CoreToolContext,
+  type CoreToolRender,
   type ToolDef,
   type ToolResult,
   type ToolSpec,
 } from "@wrathbench/mcp/tools";
+import { fanoutTools, type FanoutSurface } from "@wrathbench/mcp/fanout";
 import { parseIdQuery, searchReference } from "@wrathbench/wiki/search";
 import { bundleHasIds } from "@wrathbench/wiki/bundle";
 import { CONTEXT_POLICY, formatEventLine, formatStateSummary, type SnapshotLike } from "./context";
@@ -131,13 +133,16 @@ async function drainSnippetDelta(ctx: ToolContext): Promise<string | undefined> 
   }
 }
 
-/** The core tools as the benchmark renders them (docs/METHODOLOGY.md, "Context policy"). */
-const CORE = coreTools<ToolContext>({
+/** How the benchmark renders the core tools (docs/METHODOLOGY.md, "Context policy"). */
+const RENDER: CoreToolRender<ToolContext> = {
   eventLine: formatEventLine,
   isAmbient: (opcode) => CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(opcode),
   stateSummary: (snapshot, o) => formatStateSummary(snapshot as SnapshotLike, o),
   afterSnippet: (ctx) => (ctx.snippetDelta === true ? drainSnippetDelta(ctx) : Promise.resolve(undefined)),
-});
+};
+
+/** The core tools as the benchmark renders them. */
+const CORE = coreTools<ToolContext>(RENDER);
 
 /**
  * Per-episode memory of what has already been searched.
@@ -452,18 +457,75 @@ const RUNNER_TOOLS = new ToolSet<ToolContext>([
 export const TOOLS: ToolDef[] = RUNNER_TOOLS.defs;
 
 /**
+ * A tool context of a fan-out run (`fanout-run.ts`): the same context, with
+ * the run's roster where the stack's fan-out tools read it.
+ */
+type FanoutContext = ToolContext & { fanout: FanoutSurface };
+
+/**
+ * The tools of a fan-out run: the stack's fan-out rendering of the three
+ * core tools that take a `character`, with the benchmark's own event line
+ * and state summary for one character and the stack's plain default wording
+ * for the roll-up, the merged feed and the three roster tools
+ * (Shard/wrath-mcp#29, decision 8: the benchmark's own rendering is decided
+ * with its harness round). The benchmark's own four are served unchanged and
+ * in their places, and the roster tools follow them.
+ */
+const FANOUT = fanoutTools<FanoutContext>(RENDER as CoreToolRender<FanoutContext>);
+const RUNNER_FANOUT_TOOLS = new ToolSet<FanoutContext>([
+  FANOUT.run_snippet,
+  FANOUT.recent_events,
+  FANOUT.state_summary,
+  searchReferenceTool as ToolSpec<FanoutContext>,
+  FANOUT.write_scratchpad,
+  FANOUT.edit_scratchpad,
+  reflectTool as ToolSpec<FanoutContext>,
+  logStatusTool as ToolSpec<FanoutContext>,
+  readLogTool as ToolSpec<FanoutContext>,
+  FANOUT.login_character,
+  FANOUT.logout_character,
+  FANOUT.list_characters,
+]);
+
+/**
+ * The context as the fan-out tools take it, or null for a run that drives
+ * one character. The roster is the sandbox's (`SandboxHost.roster`), set on
+ * the context itself the first time it is asked for, because the dispatcher
+ * keys its per-episode state on the context's identity.
+ */
+function fanoutContext(ctx: ToolContext): FanoutContext | null {
+  // A context with no sandbox at all (a dispatcher under test) drives one character.
+  const roster = (ctx.sandbox as { roster?: FanoutSurface | undefined } | undefined)?.roster;
+  if (roster === undefined) return null;
+  const c = ctx as ToolContext & { fanout?: FanoutSurface };
+  c.fanout ??= roster;
+  return c as FanoutContext;
+}
+
+/** The dispatcher a context is served by: the fan-out set for a fan-out run, else the nine. */
+function toolSetOf(ctx: ToolContext): { set: ToolSet<ToolContext>; ctx: ToolContext } {
+  const fan = fanoutContext(ctx);
+  return fan !== null ? { set: RUNNER_FANOUT_TOOLS as unknown as ToolSet<ToolContext>, ctx: fan } : { set: RUNNER_TOOLS, ctx };
+}
+
+/**
  * The tool list for a run: `TOOLS` with the `search_reference` description
  * stating whether coordinates are served — or, on a run configured without the
  * reference wiki, without `search_reference` at all. `TOOLS` itself is the
  * names-first, wiki-on (default) rendering.
  */
-export function toolsFor(opts: { wikiCoords?: boolean | undefined; wikiSearch?: boolean | undefined }): ToolDef[] {
+export function toolsFor(opts: { wikiCoords?: boolean | undefined; wikiSearch?: boolean | undefined; sandbox?: unknown; fanout?: unknown }): ToolDef[] {
+  // A fan-out run is served the fan-out list: the same options, over the
+  // other set. Asked either with a tool context (its sandbox holds the
+  // roster) or with `fanout` said outright by a caller that has no context.
+  const fanout = opts.fanout !== undefined && opts.fanout !== false ? true : (opts.sandbox as { roster?: unknown } | undefined)?.roster !== undefined;
+  const all = fanout ? RUNNER_FANOUT_TOOLS.defs : TOOLS;
   // A run configured without the reference wiki (`wiki: false`, issue #61) is
   // not handed the tool at all. Absent reads as true: the reference surface is
   // a capability every run has unless the run said otherwise.
-  if (opts.wikiSearch === false) return TOOLS.filter((t) => t.name !== "search_reference");
-  if (opts.wikiCoords !== true) return TOOLS;
-  return TOOLS.map((t) =>
+  if (opts.wikiSearch === false) return all.filter((t) => t.name !== "search_reference");
+  if (opts.wikiCoords !== true) return all;
+  return all.map((t) =>
     t.name === "search_reference"
       ? { ...t, description: t.description.replace(WIKI_COORDS_SENTENCE.withheld, WIKI_COORDS_SENTENCE.served) }
       : t,
@@ -471,12 +533,17 @@ export function toolsFor(opts: { wikiCoords?: boolean | undefined; wikiSearch?: 
 }
 
 export function isKnownTool(name: string): boolean {
-  return RUNNER_TOOLS.isKnown(name);
+  return RUNNER_TOOLS.isKnown(name) || RUNNER_FANOUT_TOOLS.isKnown(name);
 }
 
 /** Rename known alias keys to their canonical names. Deterministic, model-agnostic. */
 export function normalizeToolArgs(name: string, args: unknown): unknown {
-  return RUNNER_TOOLS.normalize(name, args);
+  return byName(name).normalize(name, args);
+}
+
+/** The set that knows a tool by name alone: the nine, else the fan-out run's three more. */
+function byName(name: string): ToolSet<ToolContext> {
+  return RUNNER_TOOLS.isKnown(name) || !RUNNER_FANOUT_TOOLS.isKnown(name) ? RUNNER_TOOLS : (RUNNER_FANOUT_TOOLS as unknown as ToolSet<ToolContext>);
 }
 
 /**
@@ -485,7 +552,7 @@ export function normalizeToolArgs(name: string, args: unknown): unknown {
  * expected parameters in prose.
  */
 export function coerceToolArgs(name: string, raw: unknown): { ok: true; args: unknown } | { ok: false; error: string } {
-  return RUNNER_TOOLS.coerce(name, raw);
+  return byName(name).coerce(name, raw);
 }
 
 /** Nearest valid tool for a misspelled/mangled name, or undefined. */
@@ -500,10 +567,16 @@ export function nearestTool(name: string): string | undefined {
  * of registered secrets.
  */
 export function callTool(ctx: ToolContext, name: string, args: unknown, origin: CallOrigin = {}): Promise<ToolResult> {
-  return RUNNER_TOOLS.call(ctx, name, args, origin);
+  const served = toolSetOf(ctx);
+  return served.set.call(served.ctx, name, args, origin);
 }
 
 /** `result` with the pending hint block at its foot (the stack's `appendPendingActionHints`). */
 export function appendPendingActionHints(ctx: ToolContext, result: ToolResult): Promise<ToolResult> {
   return appendPending(ctx, result);
+}
+
+/** Whether a run's sandbox serves the fan-out tools: for a caller that lists tools with no tool context. */
+export function servesFanout(sandbox: unknown): boolean {
+  return (sandbox as { roster?: unknown } | undefined)?.roster !== undefined;
 }

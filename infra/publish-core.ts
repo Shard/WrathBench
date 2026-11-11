@@ -276,6 +276,36 @@ export interface PublishState {
    * matched. Status for the operator, rewritten every pass; never read back.
    */
   secretScan?: SecretScanStatus;
+  /**
+   * Passes rendered but not yet shown, oldest first, while the publisher runs
+   * with a delay (`PublishOptions.delayMs`). Absent when there are none, which
+   * is always without a delay, so the file is what it was.
+   */
+  held?: HeldPass[];
+}
+
+/**
+ * One pass held back by the delay: what it will write when it is due — its
+ * mutable files and its trace windows, the two kinds of key a reader can find
+ * without the manifest — and what its flip records. Its content-addressed
+ * objects are already in the bucket, named by nothing a reader has yet.
+ */
+export interface HeldPass {
+  /** When the pass was rendered: what its `generatedAt` says. */
+  renderedAt: number;
+  /** When it may be shown: `renderedAt` plus the delay. */
+  due: number;
+  gen: string;
+  /** `live.json`, `nearby.json` and the manifest, in that order. */
+  mutable: SnapshotArtifact[];
+  /** Trace windows this pass rendered, guessable keys, so they wait too. */
+  traces: SnapshotArtifact[];
+  /** Every `(run, version)` its runs.json names, for the flip's keep window. */
+  runPairs: [string, string][];
+  /** Every aggregate key its manifest names. */
+  snap: string[];
+  /** Runs its renderer said are never published. */
+  withdrawn: string[];
 }
 
 export interface SecretScanStatus {
@@ -337,9 +367,48 @@ export function parseState(json: string): PublishState {
       if (runs.length > 0) state.traceSegs[runId] = runs.map(([t0, n]): [number, number] => [t0, n]);
     }
   }
+  const held = parseHeld(raw["held"]);
+  if (held.length > 0) state.held = held;
   if (typeof raw["lastGen"] === "string") state.lastGen = raw["lastGen"];
   if (typeof raw["lastFlipAt"] === "number") state.lastFlipAt = raw["lastFlipAt"];
   return state;
+}
+
+/** The held passes as written, each kept only whole: a torn one is a pass the next render replaces. */
+function parseHeld(v: unknown): HeldPass[] {
+  if (!Array.isArray(v)) return [];
+  const artifactsOf = (x: unknown): SnapshotArtifact[] | null => {
+    if (!Array.isArray(x)) return null;
+    const out: SnapshotArtifact[] = [];
+    for (const a of x) {
+      const o = a as Partial<SnapshotArtifact> | null;
+      if (o === null || typeof o !== "object" || typeof o.path !== "string" || typeof o.body !== "string" || typeof o.cacheControl !== "string") return null;
+      out.push({ path: o.path, body: o.body, contentType: "application/json", cacheControl: o.cacheControl });
+    }
+    return out;
+  };
+  const out: HeldPass[] = [];
+  for (const h of v) {
+    const o = h as Record<string, unknown> | null;
+    if (o === null || typeof o !== "object") continue;
+    const mutable = artifactsOf(o["mutable"]);
+    const traces = artifactsOf(o["traces"]);
+    const pairs = Array.isArray(o["runPairs"])
+      ? (o["runPairs"] as unknown[]).filter((p): p is [string, string] => Array.isArray(p) && p.length === 2 && typeof p[0] === "string" && typeof p[1] === "string")
+      : null;
+    if (typeof o["renderedAt"] !== "number" || typeof o["due"] !== "number" || typeof o["gen"] !== "string" || mutable === null || traces === null || pairs === null) continue;
+    out.push({
+      renderedAt: o["renderedAt"],
+      due: o["due"],
+      gen: o["gen"],
+      mutable,
+      traces,
+      runPairs: pairs.map(([a, b]): [string, string] => [a, b]),
+      snap: asStringArray(o["snap"]),
+      withdrawn: asStringArray(o["withdrawn"]),
+    });
+  }
+  return out;
 }
 
 export function serializeState(state: PublishState): string {
@@ -607,6 +676,18 @@ export interface PublishOptions extends PruneLimits {
    * Absent writes without scanning, as tests of the engine alone do.
    */
   scan?: (body: string) => readonly ScanFinding[];
+  /**
+   * How far the public view trails the render, in ms; 0 or absent shows each
+   * pass as it is rendered, as the publisher always has. Above 0 a pass's
+   * content-addressed objects go up at once — nothing names them until its
+   * manifest does — while the keys a reader can reach without the manifest
+   * are held (`PublishState.held`): `live.json`, `nearby.json`, the manifest
+   * itself, and the trace windows, whose keys are their windows. A held pass
+   * is written once it is `delayMs` old, its flip recorded and the prune run
+   * then, so the keep windows count what readers were shown and nothing a held
+   * pass names is pruned before it.
+   */
+  delayMs?: number;
 }
 
 export interface PublishReport {
@@ -625,6 +706,8 @@ export interface PublishReport {
   flipped: boolean;
   /** Bodies the secret scan read this pass, when there is one. */
   scanned?: number;
+  /** With a delay: the passes still held after this one, its own included. */
+  held?: number;
 }
 
 /**
@@ -806,6 +889,10 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
   };
 
   const report: PublishReport = { gen: "", put: [], unchanged: 0, bytes: 0, deleted: [], deleteFailures: [], flipped: false };
+  const delayMs = Math.max(0, opts.delayMs ?? 0);
+  const holding = delayMs > 0;
+  // This pass's trace windows, when they wait with it.
+  const heldTraces: SnapshotArtifact[] = [];
   // Rewritten every pass the scan runs, failed passes included: the loop
   // saves the state either way, so this is what the operator reads.
   const scan = opts.scan;
@@ -898,23 +985,98 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
       streamedRuns.push([c.runId, c.version]);
     }
     assertArtifacts(artifacts, seen);
-    streamedFailures.push(...(await uploadWave(artifacts, "run", "")));
+    // With a delay, a window waits with its pass (`delayMs`): its key is its window.
+    if (holding) heldTraces.push(...artifacts.filter((a) => classifyPath(a.path).kind === "trace"));
+    const upload = holding ? artifacts.filter((a) => classifyPath(a.path).kind !== "trace") : artifacts;
+    streamedFailures.push(...(await uploadWave(upload, "run", "")));
   };
 
+  /**
+   * Record a flip the bucket now shows: the generation, the versions it names
+   * for the keep windows, the withdrawals and the prune. Without a delay, this
+   * pass's own, straight after its mutable wave; with one, each held pass's
+   * as it is written, with what the passes still held name kept from the prune.
+   */
+  const flip = async (
+    gen: string,
+    runPairs: readonly [string, string][],
+    snap: readonly string[],
+    withdrawn: readonly string[],
+    stillHeld: readonly HeldPass[] = [],
+  ): Promise<void> => {
+    report.flipped = true;
+    recordGen(state, gen, now());
+    for (const path of snap) {
+      const c = classifyPath(path);
+      if (c.kind === "snap") registerVersion(state.snapVersions, c.name, c.version);
+    }
+    for (const [runId, version] of runPairs) settleRun(state, runId, version);
+    // After the flip, like the prune: the manifest now in the bucket names none
+    // of these runs, so nothing a current reader follows is deleted. Not gated on
+    // `prune`, which skips the housekeeping; this is what keeps them unpublished.
+    const withdrawals = planWithdraw(state, withdrawn);
+    if (withdrawals.length > 0) log(`publish: withdrawing ${withdrawals.length} object(s) of ${withdrawn.length} run(s) that are never published`);
+    await runPrune(
+      store,
+      state,
+      report,
+      { keepGens: opts.keepGens, keepRunVersions: opts.keepRunVersions },
+      concurrency,
+      log,
+      withdrawals,
+      opts.prune !== false,
+      heldNames(stillHeld),
+    );
+  };
+
+  /**
+   * Write every held pass due by `until`, oldest first: its trace windows,
+   * then its mutable files (live.json, nearby.json, the manifest last), then
+   * its flip. A failure leaves it held, and what did land is recorded, so the
+   * next pass retries only the rest.
+   */
+  const release = async (until: number): Promise<void> => {
+    while (state.held !== undefined && state.held.length > 0 && state.held[0]!.due <= until) {
+      const h = state.held[0]!;
+      // Each held pass carries its own body under a shared key: hashed afresh.
+      for (const a of [...h.traces, ...h.mutable]) hashes.delete(a.path);
+      const traceFailed = await uploadWave([...h.traces], "run", h.gen);
+      if (traceFailed.length > 0) throw new PublishError("run", traceFailed);
+      const mutableFailed = await uploadWave([...h.mutable], "mutable", h.gen);
+      // And forgotten again: the next body under the key is another pass's.
+      for (const a of [...h.traces, ...h.mutable]) hashes.delete(a.path);
+      if (mutableFailed.length > 0) throw new PublishError("mutable", mutableFailed);
+      state.held.shift();
+      const rest = state.held;
+      if (rest.length === 0) delete state.held;
+      await flip(h.gen, h.runPairs, h.snap, h.withdrawn, rest);
+    }
+  };
+
+  // Passes a delay held, when the delay has since been turned off: shown now,
+  // oldest first, so this pass's newer flip lands after them.
+  if (!holding && state.held !== undefined) await release(Number.POSITIVE_INFINITY);
+
   const result = await render(sink, {
-    traceSegment: (runId, t0) => hasTraceSegment(state, runId, t0),
+    traceSegment: (runId, t0) => hasTraceSegment(state, runId, t0) || heldTrace(state, runId, t0),
     object: (path) => state.uploaded[path] !== undefined,
   });
   report.gen = result.gen;
   assertResult(result, seen);
   if (streamedFailures.length > 0) throw new PublishError("run", streamedFailures);
 
+  let heldMutable: SnapshotArtifact[] = [];
   for (const wave of WAVES) {
-    const failed = await uploadWave(
-      result.artifacts.filter((a) => waveOf(a.path) === wave),
-      wave,
-      result.gen,
-    );
+    let inWave = result.artifacts.filter((a) => waveOf(a.path) === wave);
+    if (holding && wave === "run") {
+      heldTraces.push(...inWave.filter((a) => classifyPath(a.path).kind === "trace"));
+      inWave = inWave.filter((a) => classifyPath(a.path).kind !== "trace");
+    }
+    if (holding && wave === "mutable") {
+      heldMutable = inWave;
+      continue;
+    }
+    const failed = await uploadWave(inWave, wave, result.gen);
     if (failed.length > 0) throw new PublishError(wave, failed);
   }
 
@@ -927,9 +1089,7 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
     log(`publish: gen ${result.gen} rendered no ${MANIFEST_PATH} — nothing was flipped and nothing was pruned`);
     return report;
   }
-  report.flipped = true;
-  recordGen(state, result.gen, now());
-  // Registered here, with the flip, and for the same reason: history is
+  // Registered with the flip, and for the same reason: history is
   // what flipped, not what was attempted. A pass that died before the flip must
   // not spend one of the `keepRunVersions` slots, or a run of failures would
   // push the version the live manifest still names out of the keep window and
@@ -941,6 +1101,7 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
   // second history to keep correct for no gain.
   const runPairs = [...streamedRuns];
   const runPairSeen = new Set(streamedRunKeys);
+  const snap: string[] = [];
   for (const a of result.artifacts) {
     const c = classifyPath(a.path);
     if (c.kind === "run") {
@@ -951,26 +1112,44 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
         runPairSeen.add(`${c.runId} ${c.version}`);
         runPairs.push([c.runId, c.version]);
       }
-    } else if (c.kind === "snap") registerVersion(state.snapVersions, c.name, c.version);
+    } else if (c.kind === "snap") snap.push(a.path);
   }
-  for (const [runId, version] of runPairs) settleRun(state, runId, version);
-
-  // After the flip, like the prune: the manifest now in the bucket names none
-  // of these runs, so nothing a current reader follows is deleted. Not gated on
-  // `prune`, which skips the housekeeping; this is what keeps them unpublished.
-  const withdrawals = planWithdraw(state, result.withdrawn ?? []);
-  if (withdrawals.length > 0) log(`publish: withdrawing ${withdrawals.length} object(s) of ${(result.withdrawn ?? []).length} run(s) that are never published`);
-  await runPrune(
-    store,
-    state,
-    report,
-    { keepGens: opts.keepGens, keepRunVersions: opts.keepRunVersions },
-    concurrency,
-    log,
-    withdrawals,
-    opts.prune !== false,
-  );
+  const withdrawn = [...(result.withdrawn ?? [])];
+  if (!holding) {
+    await flip(result.gen, runPairs, snap, withdrawn);
+    return report;
+  }
+  // Held: shown once it is `delayMs` old, by this pass or a later one.
+  const at = now();
+  state.held = [
+    ...(state.held ?? []),
+    { renderedAt: at, due: at + delayMs, gen: result.gen, mutable: heldMutable, traces: heldTraces, runPairs, snap, withdrawn },
+  ];
+  await release(at);
+  report.held = state.held?.length ?? 0;
   return report;
+}
+
+/** Whether a held pass carries a run's trace window, which the renderer then need not make again. */
+function heldTrace(state: PublishState, runId: string, t0: number): boolean {
+  if (state.held === undefined) return false;
+  const path = traceSegmentPath(runId, t0);
+  return state.held.some((h) => h.traces.some((a) => a.path === path));
+}
+
+/** What the passes still held name: kept from the prune until they are shown. */
+interface HeldNames {
+  snap: ReadonlySet<string>;
+  /** `<run id> <version>`. */
+  runs: ReadonlySet<string>;
+}
+
+function heldNames(held: readonly HeldPass[]): HeldNames | undefined {
+  if (held.length === 0) return undefined;
+  return {
+    snap: new Set(held.flatMap((h) => h.snap)),
+    runs: new Set(held.flatMap((h) => h.runPairs.map(([id, v]) => `${id} ${v}`))),
+  };
 }
 
 /**
@@ -989,6 +1168,7 @@ async function runPrune(
   log: (line: string) => void,
   withdrawals: readonly string[] = [],
   surplus = true,
+  held?: HeldNames,
 ): Promise<void> {
   /*
    * A pending delete that names a key this pass re-uploaded is dropped rather
@@ -1003,7 +1183,14 @@ async function runPrune(
   const retries = surplus ? state.pendingDeletes.filter((p) => state.uploaded[p] === undefined) : [];
   const carried = surplus ? [] : state.pendingDeletes;
   if (surplus) state.pendingDeletes = retries;
-  const targets = [...new Set([...retries, ...withdrawals, ...(surplus ? planPrune(state, limits) : [])])].sort();
+  // Surplus by the keep windows, less what a held pass will name when it is shown.
+  const keptForHeld = (path: string): boolean => {
+    if (held === undefined) return false;
+    const c = classifyPath(path);
+    return c.kind === "snap" ? held.snap.has(path) : c.kind === "run" ? held.runs.has(`${c.runId} ${c.version}`) : false;
+  };
+  const surplusKeys = surplus ? planPrune(state, limits).filter((p) => !keptForHeld(p)) : [];
+  const targets = [...new Set([...retries, ...withdrawals, ...surplusKeys])].sort();
   if (targets.length === 0) {
     if (surplus) trimHistory(state, limits);
     return;
@@ -1046,6 +1233,7 @@ export function describeReport(report: PublishReport): string {
   if (report.deleted.length > 0) parts.push(`${report.deleted.length} pruned`);
   if (report.deleteFailures.length > 0) parts.push(`${report.deleteFailures.length} deletes deferred`);
   parts.push(report.flipped ? "manifest flipped" : "no flip");
+  if (report.held !== undefined) parts.push(`${report.held} held`);
   return `publish: gen ${report.gen} — ${parts.join(", ")}`;
 }
 

@@ -65,6 +65,31 @@ tuple. The stack records what the character did into the
 run's `session/`; the runner writes the model's side beside it. Everything
 downstream of those files is derived.
 
+### Groups
+
+A deployment is made of three groups, and any of them can be switched off
+(GitHub issue #427; `runner/viewer/groups.ts`): **runner** (the agent loop, the
+drivers, providers and credentials, the fleet supervisor), **evals** (episodes,
+campaigns, scoring, the ladder, comparability) and **viewer** (the inspector,
+the run pages, the public site). A group that is off is absent, not hidden:
+the chart renders none of its workloads, and the processes that remain read
+`WRATHBENCH_GROUPS` once at start and mount none of its routes, render none of
+its pages and run none of its background work. A viewer-only deployment, for
+example, reads the sessions its own agents produced with no supervisor and no
+ladder. Which groups are on is deployment config, a chart value, because it
+decides which workloads exist, which the config store cannot; the store keeps
+deciding what the deployment runs. Switching a group changes what is launched
+and shown, never what a result means: with evals off nothing scored is
+launched, and nothing is counted differently.
+
+The admin interface sits beside the groups as a switch of its own, off by
+default: the viewer's config API, its admin status route and the admin pages,
+from which the operator edits credentials, the roster, freeplay agents,
+campaigns and the queue. It is one more client of the config store, through
+the same validation as the CLI, and private only: the public build never has
+it, and a secret's value never passes through it (`docs/RUNBOOK.md`, "The
+admin interface").
+
 ### The stack and the benchmark
 
 Two layers, deliberately separable. The **stack** is
@@ -154,8 +179,10 @@ takes from the stack and how.
 - **Reading it back** (`@wrathbench/inspector`): the viewer reads every
   session through the inspector's source interface. `runner/viewer/runs-source.ts`
   implements it over the runs directory: a v1 run is a session under its run
-  id, read with the inspector's store reader, and a 0.5 run is presented
-  through `legacy05-source.ts` as the v1 record's rows. The inspector's
+  id, read with the inspector's store reader, a fan-out run's characters are
+  sessions under `<run-id>~<Character>` listed with the run id as their
+  group, and a 0.5 run is presented through `legacy05-source.ts` as the v1
+  record's rows. The inspector's
   readout makes the packed trace and nearby windows, the movement intentions
   and the party chat the viewer's routes serve, so its codecs are the ones
   the public site publishes. Its API is mounted at `/api/inspector` on a
@@ -195,6 +222,7 @@ checks before a launch or resume (`fetchServerBuild`;
 - MCP server exposing the model-facing tools: the stack's server and dispatcher over the nine the runner assembles (`runner/src/tools.ts`: the stack's five core tools, rendered the benchmark's way, and its own four). The tool list is fixed and identical for every harness group. The scratchpad has a write tool and an edit tool and no read tool: the pad is injected verbatim into every turn's context already, so `read_scratchpad` was removed (2026-08-30).
 - Snippet sandbox: the stack's (`wrath-mcp/mcp/src/sandbox/`), run with the benchmark's child extension. A persistent confined runtime per session, so snippets share state and can leave routines running, with a hard per-snippet timeout. Its environment carries only the run's own leased session secret, never the module's port secret or a provider key. The runner's host adds one directory to what the confined child may read, `runner/`, for its entry and extension; the confinement itself is the stack's ([wrath-mcp's architecture](https://github.com/Shard/wrath-mcp/blob/master/docs/ARCHITECTURE.md#the-sandbox); `runner/README.md`, "The sandbox"), and per-host and non-TCP egress are the deployment's network policy (`docs/RUNBOOK.md`, "Network policy").
 - Agent loop: model-agnostic. Fixed prompt, fixed event window and state summary, fixed retry policy. Persists scratchpad and summary so a session can resume after a process failure.
+- Fan-out, by grant: `--max-characters <n> --accounts <a,b,…>` (`RunConfig.fanout`, `runner/src/fanout-run.ts`) lets one run's agent have up to `n` characters in the world at once, on those accounts and one model credential (Shard/wrath-mcp#29). The mechanism is the stack's ([wrath-mcp's architecture](https://github.com/Shard/wrath-mcp/blob/master/docs/ARCHITECTURE.md), "Several characters"): one sandbox child holding a client per character, the roster that leases each character's token, and the tool list a granted client is served. The run adds the grant, a session record per character (`sessions/<Character>/`), and `roster.json` (mode 0600: each character's account and session token), which is what a resume logs the characters back in from. It is served the nine tools with `character` on three of them and the three roster tools after, in the stack's default wording, and its turn context is the stack's roll-up: placeholders, because the benchmark's own rendering and prompt for it are not decided. It is refused for a scored episode, a party member and a continuation, is not in the comparability tuple (as a party is not), and is launched by hand: the fleet does not plan one (`docs/RUNBOOK.md`, "A fan-out run, by hand"). A run with no `fanout` in its config, which is every other run, is served, recorded and torn down exactly as before.
 - Watchdogs: idle timeout, no-XP timeout, episode time limit, snippet runaway. Each ends the episode with a named termination reason.
 - The run's records, in two halves. The session record is the stack's, written into the run's `session/` ("Persistence", below): the trace, game events, tool calls, the action log and movement intentions. The trajectory log is the runner's: JSONL per run with the model's side, every request and response, snippet and result, every event batch the model saw, token and cost figures, compaction, pauses and the termination. Nothing game-side is in the trajectory: the scorer, the collector and the run page's feed read the session record, and the feed merges its rows into the trajectory's by time, each with the turn in flight joined by timestamp (`runner/viewer/record-feed.ts`). The one event list the trajectory keeps is each turn's context window (`events_served`, `via: "context"`), because it is what the model was shown. A fixed-loop `request` record carries the turn's fresh user message whole and points at the rest of the prompt instead of re-logging it: the system prompt text once per process segment, and the message window as bounds over the `response` and result records already on the file, with the count of its folded messages and a hash of the bytes sent. `runner/src/replay.ts` rebuilds every request from the file alone and fails on any that does not hash to what was sent; the CLI scaffolds' requests keep their own shape (`runner/README.md`, "The request record and the replay").
 - Model adapter: one OpenAI-compatible chat layer. Provider and model are run config.
@@ -271,14 +299,16 @@ never close.
 
 ### runner/viewer/ + dashboard/ (Bun/TypeScript, MIT)
 
-The operator's read-only window on runs, live and finished. Split in two along
+The operator's window on runs, live and finished: read-only, except the
+config API the admin switch mounts. Split in two along
 one line: the Bun process owns everything that needs the filesystem,
 the SPA owns everything that is UI.
 
 - `runner/viewer/` serves a read-only JSON API under `/api`, an SSE tail per
   run, the inspector's API at `/api/inspector` (the session record unprojected,
-  so a public handle withholds it whole; its id reads as the run id, never
-  as the token's fingerprint), minimap tiles from `data/minimap/` (the native tiles, the
+  so a public handle withholds it whole; its id reads as the session's id
+  there, the run id or `<run-id>~<Character>`, never as the token's
+  fingerprint), minimap tiles from `data/minimap/` (the native tiles, the
   downsampled levels baked from them, and the painted world-map art baked
   onto the same grid, each served from a smaller transcoded copy of the
   lossless masters), and the built SPA as static files. Every database is
@@ -442,13 +472,17 @@ the SPA owns everything that is UI.
 - **Public hosting is push-based, so the lab is never an origin.**
   `infra/publish-dashboard.ts` calls the viewer's own `createApi` handler
   in-process, applies an allowlist projection, and PUTs generation-addressed
-  JSON to an R2 bucket on a timer, manifest last so a reader never
+  JSON to a bucket on a timer (R2 here, any S3-compatible one by
+  configuration), manifest last so a reader never
   observes a torn generation; every public read is then a static asset or an
   edge-cached object and no inbound path to the harness exists at all. The SPA
   builds a second time in **snapshot mode** — a build-time
   `VITE_WRATHBENCH_SNAPSHOT_BASE` selects a client implementing the same
   `Client` interface over the bucket instead of `/api`, so the pages are the
   same pages and the private build keeps its same-origin, CORS-free posture.
+  A deployment may also hold the public view back by a delay, publish only the
+  current view without the run history, or publish nothing
+  (`docs/RUNBOOK.md`, "Where it publishes, and how").
   Design and cost model are docs/PUBLIC-DASHBOARD.md, the Cloudflare setup is
   infra/cloudflare/README.md, and the gate above still binds.
 
@@ -644,6 +678,19 @@ Every episode starts with a freshly created character at level 1 in its starting
   docs/METHODOLOGY.md, "Scoring").
 - Trajectories as JSONL next to it: the model's side of the run, and nothing
   of the game's.
+- A fan-out run, one agent driving several characters, has no `session/`:
+  each character's record is its own `data/runs/<id>/sessions/<Character>/`,
+  named as the server spells the character, beside one model-side
+  trajectory, and the launch's `meta.json` says so (`config.fanout`). Its
+  `roster.json` holds the characters' session tokens; only the runner reads
+  it back, on a resume. The readers answer for one character at a time, so no one character
+  stands for the run: the run row is the run's, and its samples, level and
+  milestones read as not recorded (`runner/src/run-reader.ts`); the viewer
+  serves each character as a session of its own (`runner/viewer/README.md`,
+  "A fan-out run's characters"); the collector does not ingest the
+  characters' records, since every table is keyed by run alone; and the
+  public site never publishes the run. A run has one layout or the other,
+  never both.
 - A run recorded before the session record (a 0.5 run) has no `session/`:
   its run row, 60-second state samples, trace and movement intentions are
   tables of its `run.sqlite`, and its milestones are trajectory records. It stays
