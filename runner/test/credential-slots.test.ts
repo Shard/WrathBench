@@ -1,5 +1,5 @@
 /**
- * Credentials with slots (runner/src/credentials.ts): the record, what it
+ * Credentials with slots (runner/src/credential-slots.ts): the record, what it
  * refuses, which provider serves a model, and which credentials a pick may
  * take. Every secret here is a NAME; no test holds a value.
  */
@@ -13,7 +13,7 @@ import {
   parseCredentials,
   providerOfModel,
   type Credential,
-} from "../src/credentials";
+} from "../src/credential-slots";
 import { ConfigRejected, ConfigStore } from "../src/config-store";
 import { parseFleet } from "../../infra/run-fleet-config";
 import { apiKeyRefusal } from "../src/providers";

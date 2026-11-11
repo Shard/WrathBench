@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { comparabilityOf } from "../src/comparability";
 import { loadRunConfig, newSessionToken } from "../src/config";
-import { runCredentialOf } from "../src/credentials";
+import { runCredentialOf } from "../src/credential-slots";
 import { readRunFact } from "../src/models";
 import { Trajectory } from "../src/trajectory";
 import { createApi } from "../viewer/api";

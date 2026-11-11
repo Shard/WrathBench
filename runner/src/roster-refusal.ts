@@ -10,7 +10,7 @@
  * the deploy-time env the provider table reads its self-hosted hosts from.
  */
 
-import { credentialCandidates, rosterProviderRefusal, type Credential } from "./credentials";
+import { credentialCandidates, rosterProviderRefusal, type Credential } from "./credential-slots";
 
 /**
  * The keys a ROSTER ENTRY may carry, and the keys a QUEUE JOB may carry.
@@ -84,7 +84,7 @@ export interface RosterEntryRefusal {
  *
  * - **a key the harness does not read** (`ROSTER_ENTRY_KEYS`);
  * - **a base no credential provider serves**, or one its provider's key may
- *   not go to (`rosterProviderRefusal`, runner/src/credentials.ts);
+ *   not go to (`rosterProviderRefusal`, runner/src/credential-slots.ts);
  * - **a pinned credential that cannot carry it** — not configured, another
  *   provider's, the other billing side (`credentialCandidates`). A pinned
  *   credential that is merely disabled is no refusal: the entry waits for it.

@@ -17,7 +17,7 @@
  * fleet reads the newest observation per credential.
  *
  * Two thresholds, both the credential's own `usage` budget
- * (`runner/src/credentials.ts`), carried to the run in its config:
+ * (`runner/src/credential-slots.ts`), carried to the run in its config:
  *
  * - `scoredMaxPct` (default 80): a scored run (`e90`, `e360`) does not START
  *   on a credential while any of its windows is at or over it. A scored run

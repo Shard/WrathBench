@@ -39,7 +39,7 @@ import { platformOf } from "../src/platform";
 import type { RunFact } from "../src/models";
 import type { RunTotals } from "./tail";
 import { LIVE_WINDOW_MS, campaignFieldsOf, itemSamplesOf } from "./runs";
-import { runCredentialOf } from "../src/credentials";
+import { runCredentialOf } from "../src/credential-slots";
 
 // ------------------------------------------------------------- the row shapes
 

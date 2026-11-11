@@ -151,7 +151,7 @@ export function rosterProviderRefusal(e: { driver?: unknown; apiBase?: unknown }
   const base = (e.apiBase as string | undefined) ?? DEFAULT_API_BASE;
   const provider = providerOfModel({ driver: driver.id, apiBase: base }, env);
   if (provider === null) {
-    return `apiBase ${hostOfBase(base) ?? base} is no credential provider's host (${KEY_PROVIDERS.flatMap((p) => p.hosts).join(", ")}, or a self-hosted host the deployment lists) — a new provider is a row in runner/src/providers.ts and runner/src/credentials.ts`;
+    return `apiBase ${hostOfBase(base) ?? base} is no credential provider's host (${KEY_PROVIDERS.flatMap((p) => p.hosts).join(", ")}, or a self-hosted host the deployment lists) — a new provider is a row in runner/src/providers.ts and runner/src/credential-slots.ts`;
   }
   const keyEnv = providerById(provider)!.envBase;
   const pair = apiKeyRefusal(keyEnv, base, env);

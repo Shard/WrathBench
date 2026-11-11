@@ -34,7 +34,7 @@ import { isV1RunDir, latestReading, readRunRow, readStateSamples } from "../src/
 import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./archive-dir";
 import { harnessOfRun, parseComparability } from "../src/comparability";
-import { runCredentialOf } from "../src/credentials";
+import { runCredentialOf } from "../src/credential-slots";
 import { platformOf as sharedPlatformOf } from "../src/platform";
 
 /**

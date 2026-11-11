@@ -1,6 +1,6 @@
 /**
  * Credentials with slots, the fleet's half (Shard/WrathBench#429;
- * `runner/src/credentials.ts` has the record and `runner/src/subscription-usage.ts`
+ * `runner/src/credential-slots.ts` has the record and `runner/src/subscription-usage.ts`
  * the usage windows).
  *
  * "Can this run start now, and on what?" has one answer: a run takes a slot on
@@ -30,7 +30,7 @@
  */
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { credentialCandidates, describeBudget, providerById, type Credential } from "../runner/src/credentials";
+import { credentialCandidates, describeBudget, providerById, type Credential } from "../runner/src/credential-slots";
 import { DEFAULT_DRIVER, driverEntry } from "../runner/src/drivers";
 import { utcDay, type RunFact } from "../runner/src/models";
 import { isOpenCodeGoBase } from "../runner/src/platform";

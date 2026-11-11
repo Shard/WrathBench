@@ -38,7 +38,7 @@
     "  provider a free credential carries only free models and a paid one only paid models. Trial a paid model by giving it t0.",
     "  An openai entry's override is recorded on its runs: the ladders' \"exclude free\" reads it, and a recorded free needs no price.",
     "",
-    "credentials: { <id>: { provider, secretEnv, slots, budget?, billing, enabled } }, in preference order (runner/src/credentials.ts).",
+    "credentials: { <id>: { provider, secretEnv, slots, budget?, billing, enabled } }, in preference order (runner/src/credential-slots.ts).",
     "  The one answer to \"can this run start, and on what\": a run takes a slot on the FIRST enabled credential that serves its",
     "  model's provider and has room under its slots and its budget, and it records that credential. No credential, no run.",
     "  provider    claude (a Claude subscription), chatgpt (a Codex home), openrouter, opencode (Zen), opencode-go, cerebras,",

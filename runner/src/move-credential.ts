@@ -41,7 +41,7 @@ import { chmodSync, chownSync, closeSync, existsSync, fsyncSync, openSync, readF
 import { basename, dirname, join } from "node:path";
 import { parseFleet, rosterModels, type FleetConfig } from "../../infra/run-fleet-config";
 import type { ConfigStore } from "./config-store";
-import { credentialCandidates, isCredentialId } from "./credentials";
+import { credentialCandidates, isCredentialId } from "./credential-slots";
 import { DEFAULT_DRIVER, driverEntry } from "./drivers";
 import { liveOwnerOf, matchesRoster, readRunFact } from "./models";
 import type { CredentialMove } from "./trajectory";

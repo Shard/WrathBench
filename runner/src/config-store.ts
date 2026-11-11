@@ -62,7 +62,7 @@ import {
   type PublishedCampaignDoc,
 } from "./campaign-def";
 import { campaignRowProblem } from "./campaigns";
-import { describeBudget, parseCredentials, rosterProviderRefusal, type Credential } from "./credentials";
+import { describeBudget, parseCredentials, rosterProviderRefusal, type Credential } from "./credential-slots";
 
 /** How long a reader waits for the single writer. Same posture as `rundb.ts`. */
 export const CONFIG_DB_BUSY_TIMEOUT_MS = 5000;
@@ -349,7 +349,7 @@ export function validateFleet(doc: unknown, env: Record<string, string | undefin
 /**
  * The store's own refusal of a roster entry whose base no credential provider
  * serves, or whose provider's key may not go there (`rosterProviderRefusal`,
- * runner/src/credentials.ts).
+ * runner/src/credential-slots.ts).
  *
  * `parseFleet` only REFUSES such an entry — it stays in the catalog and nothing
  * schedules it, which is right for a document already on disk. A write is
@@ -850,7 +850,7 @@ const USAGE = `usage: bun runner/src/config-store.ts <command>
                             set, patch and delete, and seed writes none)
   audit [n]                 the last n changes (default 20)
   credentials [list]        the provider credentials, in preference order: provider, secret env NAME, slots,
-                            budget, billing, enabled (runner/src/credentials.ts)
+                            budget, billing, enabled (runner/src/credential-slots.ts)
   credentials add <id> <json>
                             a new credential, e.g. '{"provider":"claude","secretEnv":"CLAUDE_CODE_OAUTH_TOKEN_2",
                             "slots":1,"budget":{"kind":"usage"},"billing":"paid","enabled":true}'; validated, never

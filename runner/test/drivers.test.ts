@@ -27,7 +27,7 @@ import {
   probeOnlyRefusal,
   type RosterDriver,
 } from "../src/drivers";
-import { providerOfModel } from "../src/credentials";
+import { providerOfModel } from "../src/credential-slots";
 
 /** Compile-time: the roster's driver union is exactly these four. */
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;

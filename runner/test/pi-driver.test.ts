@@ -26,7 +26,7 @@ import { harnessClash, loadRunConfig } from "../src/config";
 import { CODEX_SYSTEM_PROMPT, CLAUDE_CODE_SYSTEM_PROMPT, PI_SYSTEM_PROMPT, SNIPPET_DELTA_SENTENCE, SYSTEM_PROMPT, buildSystemPrompt, contextSentence } from "../src/prompt";
 import wrathbenchPromptExtension, { PI_PROMPT_MISSING } from "../src/pi-extension";
 import { piProviderOf } from "../src/providers";
-import { rosterProviderRefusal } from "../src/credentials";
+import { rosterProviderRefusal } from "../src/credential-slots";
 import { priceFor, rosterPriceGap, runCost } from "../viewer/pricing";
 import { projectEntry } from "../viewer/public-projection";
 import { summarize, tokenTotals } from "../viewer/tail";

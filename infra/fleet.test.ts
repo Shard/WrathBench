@@ -123,7 +123,7 @@ import {
   unyieldedDrainReason,
 } from "./run-fleet";
 import { billingOf } from "../runner/src/model-cost";
-import { parseCredentials } from "../runner/src/credentials";
+import { parseCredentials } from "../runner/src/credential-slots";
 import { DEFAULT_POLICY, IDLE_MODES, isStandingPause, TIERS, TIER_TABLE, modelStates, planNextJobs, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import { campaignSquares, campaignWork, type Campaign } from "../runner/src/campaigns";
 import type { EpisodeId } from "../runner/src/episodes";

@@ -18,7 +18,7 @@
  * The key NAMES are never configurable.
  *
  * Asked where a roster entry is read (`rosterProviderRefusal`,
- * credentials.ts: its base must be a provider's, so a credential of that
+ * credential-slots.ts: its base must be a provider's, so a credential of that
  * provider can carry it), where a credential is written (its `secretEnv` must
  * be its provider's key name), and at launch (`run.ts` refuses to start, and
  * the adapter refuses to be built with a pair the table does not hold).

@@ -315,7 +315,7 @@ of the three outside the registry and the adapters.
     `credential`: the default variable, whether it holds a token or a home
     directory, whether a run may be moved to another credential, and the
     dry-run and container-preflight wording. The credential provider it bills
-    is the row of `CREDENTIAL_PROVIDERS` (`src/credentials.ts`) whose variable
+    is the row of `CREDENTIAL_PROVIDERS` (`src/credential-slots.ts`) whose variable
     that is.
   - `cost`: where the actual figure comes from, which price table, the
     catalogue vendor for a bare slug, and the prefix that tells a model id
@@ -356,7 +356,7 @@ What the entry does not cover, because it carries no driver name for the
 guard to see:
 
 - A new subscription CLI needs a credential provider: a row in
-  `CREDENTIAL_PROVIDERS` (`src/credentials.ts`) naming its variable, what the
+  `CREDENTIAL_PROVIDERS` (`src/credential-slots.ts`) naming its variable, what the
   variable holds and the budgets it can be measured by. A home provider's
   directories are what the rollout sweep walks (`codexHomeEnvsOf`).
 - The fleet's placement (`placeRef`, `infra/run-fleet-credentials.ts`) is
