@@ -41,6 +41,7 @@ import {
   entryOwnsWindow,
   ownedWindows,
   schedulability,
+  verdictForGroups,
   schedulableView,
   type ModelState,
   type PolicyJob,
@@ -463,7 +464,15 @@ function runView(f: RunFact): ModelRunView {
  * detail panel's list — and the per-episode id lists are slices of it, so a row
  * cannot show a count whose runs are not in its own panel.
  */
-export function rowOf(state: ModelState, runs: readonly RunFact[], runsDir: string, running: ReadonlySet<string> = new Set(), policy: SchedulingPolicy = DEFAULT_POLICY): ModelRowView {
+export function rowOf(
+  state: ModelState,
+  runs: readonly RunFact[],
+  runsDir: string,
+  running: ReadonlySet<string> = new Set(),
+  policy: SchedulingPolicy = DEFAULT_POLICY,
+  /** The evals group (`runner/viewer/groups.ts`): off, owing a counted run reads as free, as the supervisor treats it. */
+  evals = true,
+): ModelRowView {
   const mine = runs
     .filter((f) => entryOwnsRun(state, f))
     .slice()
@@ -501,7 +510,7 @@ export function rowOf(state: ModelState, runs: readonly RunFact[], runsDir: stri
     tier: state.tier,
     earnedRung1: state.earnedRung1,
     idle: state.idle,
-    schedulable: schedulableView(schedulability(state, running, policy), state),
+    schedulable: schedulableView(verdictForGroups(schedulability(state, running, policy), evals), state),
     runs: mine.map(runView),
     newestRunId: mine.length > 0 ? mine[0]!.runId : null,
     lastError,
@@ -544,6 +553,8 @@ export function modelsResponse(opts: {
   harness?: HarnessView | "all";
   /** Roster refs with a job in flight (the supervisor's state), for the verdict. */
   running?: ReadonlySet<string>;
+  /** The evals group; absent is on. */
+  evals?: boolean;
 }): ModelsResponse {
   const harness = opts.harness ?? "all";
   const byHarness = harness === "all" ? opts.states : opts.states.filter((s) => s.harness === harness);
@@ -557,7 +568,7 @@ export function modelsResponse(opts: {
   const outside = new Set(opts.roster.excluded.map((e) => e.name));
   const states = byHarness.filter((s) => !outside.has(s.name));
   return {
-    models: states.map((s) => rowOf(s, opts.runs, opts.runsDir, opts.running ?? new Set(), opts.roster.policy)),
+    models: states.map((s) => rowOf(s, opts.runs, opts.runsDir, opts.running ?? new Set(), opts.roster.policy, opts.evals ?? true)),
     roster: {
       path: opts.roster.path,
       shape: opts.roster.shape,

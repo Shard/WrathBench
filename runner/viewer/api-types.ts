@@ -12,8 +12,8 @@
  * to declare, so nothing that imported them before has to move.
  */
 
-import type { CredentialFix, CredentialHealth, CredentialHold, CredentialRead, CredentialWindow } from "../src/credential-health";
-export type { CredentialFix, CredentialHealth, CredentialWindow, HealthState } from "../src/credential-health";
+import type { CredentialFix, CredentialHealth, CredentialHold, CredentialRead, CredentialWindow, ResumeHoldCode } from "../src/credential-health";
+export type { CredentialFix, CredentialHealth, CredentialWindow, HealthState, ResumeHoldCode } from "../src/credential-health";
 import type { Harness } from "../src/drivers";
 import type { ItemSample, NearbyWindow, SessionPosition, SessionTrack, SessionTrackPoint } from "@wrathbench/inspector/wire";
 
@@ -1440,11 +1440,20 @@ export interface FleetPausedView {
   budgetMs: number | null;
   why: string;
   /**
-   * The wait is a subscription usage window's (operator, 2026-10-16): its
-   * reset time is the operator's, so the public build withholds `resumeAfter`
-   * and `why` on such a row. Absent on every other row.
+   * The wait is a subscription usage window's (operator, 2026-10-16) or any
+   * credential's hold: its reset time and the credential are the operator's,
+   * so the public build withholds `resumeAfter` and `why` on such a row.
+   * Absent on every other row.
    */
   subscriptionWait?: true;
+  /**
+   * What holds the resume when its credential does (`ResumeHoldCode`): a
+   * budget's hold code, or the credential gone or disabled. The public build
+   * says which in a fixed phrase. Absent when the credential holds nothing
+   * (and on a row from a supervisor that predates it, which reads as a usage
+   * window).
+   */
+  hold?: ResumeHoldCode;
 }
 
 /**

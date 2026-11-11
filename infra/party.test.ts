@@ -25,6 +25,7 @@ import { parseFleet, pinnedCampaignJobs, probeRunsOf, rosterModels, type FleetCo
 import { diffJobs, fillEntries, finishesOnExit, jobSpawn, planResumes, planTick, withTakenRunIds } from "./run-fleet-plan";
 import { jobArgv, rosterResumes } from "./run-fleet-state";
 import { formatArgvBlock } from "./run-fleet-status";
+import type { ResumeHold } from "./run-fleet-credentials";
 import { partyOfRoster, resolve, stagedCampaignFile, stageRequestOf } from "./run-roster";
 import { tempDirs } from "./temp-dirs";
 
@@ -891,7 +892,7 @@ describe("a paused party is planned whole", () => {
     ...over,
   });
   const facts = (over: (m: string, i: number) => Partial<RunFact> = () => ({})): RunFact[] => MEMBERS.map((m, i) => fact(m, i, over(m, i)));
-  const plan = (runs: RunFact[], o: { held?: (a: string) => string | undefined; hold?: (f: RunFact) => string | undefined; running?: Map<string, string> } = {}) =>
+  const plan = (runs: RunFact[], o: { held?: (a: string) => string | undefined; hold?: (f: RunFact) => ResumeHold | undefined; running?: Map<string, string> } = {}) =>
     planResumes({
       runs,
       config: { ...cfg, policy: { ...DEFAULT_POLICY, ...cfg.policy } },
@@ -935,9 +936,12 @@ describe("a paused party is planned whole", () => {
     const cooling = plan(facts((m) => (m === "rogue" ? { pause: { reason: "rate-limited", at: NOW - 30_000, count: 2, episodeElapsedMs: 1 } } : {})));
     expect(cooling.resume).toEqual([]);
     expect(cooling.listed[0]!.why).toContain("rogue rate-limited: resuming after");
-    const gated = plan(facts(), { hold: (f) => (f.party?.member === "mage" ? "credential claude-2 at 82% of its window" : undefined) });
+    const gated = plan(facts(), { hold: (f) => (f.party?.member === "mage" ? { text: "credential claude-2 at 82% of its window", code: "usage-threshold" } : undefined) });
     expect(gated.resume).toEqual([]);
-    expect(gated.listed.every((l) => l.why.includes("82%"))).toBe(true);
+    expect(gated.listed.every((l) => l.why.includes("82%") && l.subscriptionWait === true && l.hold === "usage-threshold")).toBe(true);
+    // A day's budget holds the party as itself, not as a usage window, and is withheld publicly all the same.
+    const budget = plan(facts(), { hold: (f) => (f.party?.member === "mage" ? { text: "credential claude-2: its runs for the day are used", code: "runs-budget" } : undefined) });
+    expect(budget.listed.every((l) => l.hold === "runs-budget" && l.subscriptionWait === true)).toBe(true);
     const busy = plan(facts(), { held: (a) => (a === "PARTY4" ? "fleet-other-run" : undefined) });
     expect(busy.resume).toEqual([]);
     expect(busy.listed[0]!.why).toContain("PARTY4 is held by run fleet-other-run");

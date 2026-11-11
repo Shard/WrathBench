@@ -62,12 +62,14 @@ import { FanoutCharacters } from "../components/FanoutCharacters";
 import { ScratchpadPanel } from "../components/Scratchpad";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
+import { useFeeds } from "../lib/feeds";
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
 import { actionLines, isActionsEntry, keepLines, moveVerdicts, sameLine, sameVerdicts, type MoveVerdict } from "../lib/actionlog";
 import type { ActionsEntry } from "@viewer/api-types";
 import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
 import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
 import { modelsHref } from "../lib/models";
+import { linkable } from "../lib/nav";
 import { poll } from "../lib/poll";
 import {
   EXPAND_LABELS,
@@ -158,6 +160,8 @@ function tpsLine(d: RunDetailResponse | undefined, source?: string): string {
 export default function RunDetail() {
   const params = useParams<{ id: string }>();
   const location = useLocation();
+  // The models table is the runner group's: the model is named, not linked, where that group is off.
+  const feeds = useFeeds();
 
   /* Which worldserver the viewer can see, for the footer. */
   const [info, setInfo] = createSignal<ApiInfoResponse | undefined>(undefined);
@@ -818,7 +822,7 @@ export default function RunDetail() {
                         <Show when={run().model} fallback="—">
                           {(full) => (
                             <span title={full()}>
-                              <Show when={detail()?.rosterName} fallback={modelDisplay(full())}>
+                              <Show when={linkable(feeds.info.latest, "/models") ? detail()?.rosterName : undefined} fallback={modelDisplay(full())}>
                                 {(name) => <A href={modelsHref(name())}>{modelDisplay(full())}</A>}
                               </Show>
                             </span>

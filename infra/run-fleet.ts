@@ -894,7 +894,7 @@ async function main(): Promise<void> {
   const args = parseArgs(Bun.argv.slice(2));
   const configPath = configDbPath();
   if (args.status) {
-    printStatus();
+    printStatus(GROUPS);
     return;
   }
   if (args.liveRuns) {
@@ -949,7 +949,7 @@ async function main(): Promise<void> {
     const facts = readReportFacts();
     // Fail fast on anything that would fail at spawn time.
     planTick(config, modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs: facts }), () => undefined, stampToday);
-    printDryRun(config, args.until, stampToday, facts);
+    printDryRun(config, args.until, stampToday, facts, GROUPS);
     return;
   }
 

@@ -14,7 +14,7 @@ import { Trajectory, type RunMeta } from "../runner/src/trajectory";
 import { parseCredentials } from "../runner/src/credential-slots";
 import type { SubscriptionUsage } from "../runner/src/subscription-usage";
 import { projectEntry, projectFleet, SUBSCRIPTION_WAIT_WHY } from "../runner/viewer/public-projection";
-import type { EntrySummary, FleetResponse } from "../runner/viewer/api-types";
+import type { EntrySummary, FleetResponse, ResumeHoldCode } from "../runner/viewer/api-types";
 import { parseFleet, planResumes, planTick, resumeNotBefore, rosterModels, type FleetConfig } from "./run-fleet";
 import type { JobSpawn } from "./run-fleet-config";
 import {
@@ -271,9 +271,10 @@ describe("a credential's budget holds new starts", () => {
     const used = credentialGate(creds, [], resumed, NOW);
     expect(used.runsToday("r")).toBe(2);
     expect(used.holdOf("r", "freeplay")).toBe("credential r: its runs for the day are used — held until 00:00 UTC");
-    expect(resumeHoldOf(fact({ credential: "r", episode: "freeplay" }), { credentials: creds }, used)).toBe(
-      "credential r: its runs for the day are used — held until 00:00 UTC",
-    );
+    expect(resumeHoldOf(fact({ credential: "r", episode: "freeplay" }), { credentials: creds }, used)).toEqual({
+      text: "credential r: its runs for the day are used — held until 00:00 UTC",
+      code: "runs-budget",
+    });
     // From disk: a run started yesterday and resumed twice today reads as two
     // of today's runs on its credential, its start counting only on its own day.
     const dir = tempDir("wrathbench-runs-today-");
@@ -298,6 +299,7 @@ describe("a credential's budget holds new starts", () => {
     expect(g.holdOf("s", "e90")).toBeUndefined();
     const spent = credentialGate(creds, [], [...runs, fact({ runId: "e", credential: "s", spendByDay: { [today]: 0.5 } })], NOW);
     expect(spent.holdOf("s", "freeplay")).toBe("credential s: its spend budget for the day is used — held until 00:00 UTC");
+    expect(spent.holdReasonOf("s", "freeplay")?.code).toBe("spend-budget");
     // Neither pauses a live run: the spawns gate drains only a scored job's next episode.
   });
 
@@ -376,11 +378,19 @@ describe("resumes and the pause a usage budget writes", () => {
     const gate = credentialGate(config.credentials, [reading("chatgpt-1", 85)], [], NOW);
     const held = planResumes({ runs: [paused()], config: series, running: new Map(), held: () => undefined, now: NOW, credentialHold: (f) => resumeHoldOf(f, config, gate) });
     expect(held.resume).toEqual([]);
-    expect(held.listed).toEqual([expect.objectContaining({ reason: "subscription-budget", subscriptionWait: true, resumeAfter: null })]);
+    expect(held.listed).toEqual([expect.objectContaining({ reason: "subscription-budget", subscriptionWait: true, hold: "usage-threshold", resumeAfter: null })]);
     // chatgpt-2 is open, and still no resume: a Codex home holds its threads.
     expect(gate.holdOf("chatgpt-2", "freeplay")).toBeUndefined();
     const gone = planResumes({ runs: [paused({ credential: "chatgpt-9" })], config: series, running: new Map(), held: () => undefined, now: NOW, credentialHold: (f) => resumeHoldOf(f, config, gate) });
     expect(gone.listed[0]!.why).toContain("credential chatgpt-9 is not configured");
+    expect(gone.listed[0]).toMatchObject({ hold: "credential-off" });
+    // A day's budget is not a usage window: listed as itself (a freeplay pause
+    // that is not the driver's own subscription-budget one).
+    const runsCfg = { ...config, credentials: config.credentials.map((c) => (c.id === "chatgpt-1" ? { ...c, budget: { kind: "runs" as const, perDay: 1 } } : c)) };
+    const spentRuns = credentialGate(runsCfg.credentials, [], [fact({ runId: "today", credential: "chatgpt-1", startedAt: NOW - 60_000 })], NOW);
+    const budget = planResumes({ runs: [paused({ pause: { reason: "operator-pause", at: NOW - 60_000, count: 1, episodeElapsedMs: null } })], config: series, running: new Map(), held: () => undefined, now: NOW, credentialHold: (f) => resumeHoldOf(f, runsCfg, spentRuns) });
+    // Still withheld under the flag a projection of any build keys on.
+    expect(budget.listed).toEqual([expect.objectContaining({ hold: "runs-budget", subscriptionWait: true, resumeAfter: null })]);
     // Open: it comes back on its account.
     const open = planResumes({ runs: [paused()], config: series, running: new Map(), held: () => undefined, now: NOW, credentialHold: () => undefined });
     expect(open.resume.map((r) => [r.runId, r.account])).toEqual([["fleet-cx-freeplay-gpt-5-5-20300101", "RUNNER"]]);
@@ -407,6 +417,23 @@ describe("resumes and the pause a usage budget writes", () => {
     expect(out.paused[0]).toMatchObject({ resumeAfter: null, why: SUBSCRIPTION_WAIT_WHY });
     expect(out.paused[1]).toMatchObject({ resumeAfter: NOW + H, why: "quota-exhausted, resuming at (provider reset)" });
     expect(JSON.stringify(out)).not.toContain("subscriptionWait");
+    // A credential's hold says only its code's phrase, whatever the row's own sentence.
+    const held = (hold: ResumeHoldCode, why: string) =>
+      projectFleet({ ...input, paused: [{ ...listing, resumeAfter: null, why, subscriptionWait: true as const, hold }] } as unknown as FleetResponse).paused[0];
+    expect(held("usage-threshold", "credential chatgpt-1: at or over its scored usage threshold — held until its usage window resets")).toMatchObject({ why: "waiting for its subscription usage window to reset" });
+    expect(held("usage-spent", "credential chatgpt-1: a usage window is spent — held until it resets")).toMatchObject({ why: "waiting for its subscription usage window to reset" });
+    expect(held("runs-budget", "credential chatgpt-1: its runs for the day are used — held until 00:00 UTC")).toMatchObject({ why: "waiting for its daily run budget to reset", resumeAfter: null });
+    expect(held("spend-budget", "party p: credential chatgpt-1: its spend budget for the day is used — held until 00:00 UTC")).toMatchObject({ why: "waiting for its daily spend budget to reset" });
+    expect(held("credential-off", "credential chatgpt-1 is disabled — the run comes back only on it (or move it: bun wb config move-credential)")).toMatchObject({ why: "waiting for its credential" });
+    // A provider's read of the key: the kind of wait, never the class or the key's variable.
+    expect(held("auth-failed", "credential go-paid: its key was refused (auth-failed) — held until a usage read succeeds")).toMatchObject({ why: "waiting for its credential's key" });
+    expect(held("no-access", "credential go-paid: its key may not read its usage (no-access) — held until a usage read succeeds")).toMatchObject({ why: "waiting for access to its credential's usage" });
+    expect(held("overage", "credential go-paid: billed past its allowance (overage) — held until its usage shows room")).toMatchObject({ why: SUBSCRIPTION_WAIT_WHY });
+    for (const code of ["usage-spent", "usage-threshold", "runs-budget", "spend-budget", "credential-off", "auth-failed", "no-access", "overage"] as const) {
+      const row = JSON.stringify(held(code, "credential chatgpt-1: x"));
+      expect(row).not.toContain("chatgpt-1");
+      expect(row).not.toContain('"hold"');
+    }
     expect(JSON.stringify(out)).not.toContain("chatgpt-1");
     expect(JSON.stringify(out)).not.toContain("CODEX_HOME");
   });

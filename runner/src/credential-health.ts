@@ -26,6 +26,15 @@ import { EXHAUSTED_PCT, type SubscriptionUsage } from "./subscription-usage";
 export const HOLD_CODES = ["usage-spent", "usage-threshold", "spend-budget", "runs-budget", "auth-failed", "no-access", "overage"] as const;
 export type HoldCode = (typeof HOLD_CODES)[number];
 
+/**
+ * What holds a paused run's resume when its credential does: a budget's code,
+ * or `credential-off`, the credential it recorded gone from the config or
+ * disabled (a resume comes back only on it). One vocabulary for the
+ * supervisor's paused listing and the public phrase it maps to
+ * (`FleetPausedView.hold`).
+ */
+export type ResumeHoldCode = HoldCode | "credential-off";
+
 /** A budget's hold on one class of launch, structured. `code` is null from a supervisor that worded it only. */
 export interface CredentialHold {
   code: HoldCode | null;
