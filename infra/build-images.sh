@@ -27,7 +27,7 @@
 # wrath-mcp submodule, and the server images also need AzerothCore; each is
 # exported the same way from the submodule commit the commit pins (AzerothCore
 # only the paths server.Dockerfile copies, AC_PATHS below; wrath-mcp whole, and
-# only from a commit on wrath-mcp's master). Each image is then
+# only from a commit on wrath-mcp's master, or on this branch its v1). Each image is then
 # scanned by infra/image-guard.sh before anything is pushed; one it refuses is
 # untagged and stops the run.
 #
@@ -221,10 +221,20 @@ export_azerothcore() {
 #
 # The pin must be on wrath-mcp's master (origin/master as last fetched into
 # wrath-mcp/), so every image that can be deployed is reproducible from the
-# public stack. A pin still under review builds only under --allow-dirty, for a
-# local image: such images are never pushed (below).
+# public stack. On the v1 branch it may instead be on wrath-mcp's v1
+# (origin/v1), the long-lived branch v1 is built on (infra/PINS.md). A pin
+# still under review builds only under --allow-dirty, for a local image: such
+# images are never pushed (below).
 STACK_SHA=""
 STACK_UNMERGED=0
+STACK_BRANCHES=(master v1)
+stack_pin_merged() {
+  local sub="$1" branch
+  for branch in "${STACK_BRANCHES[@]}"; do
+    git -C "${sub}" merge-base --is-ancestor "${STACK_SHA}" "origin/${branch}" 2>/dev/null && return 0
+  done
+  return 1
+}
 export_wrath_mcp() {
   local sub="${REPO_ROOT}/wrath-mcp" mode type rest real top
   read -r mode type STACK_SHA rest <<< "$(git ls-tree "${SHA}" wrath-mcp)"
@@ -234,12 +244,12 @@ export_wrath_mcp() {
   if [[ -z "${real}" || "${top}" != "${real}" ]] || ! git -C "${sub}" cat-file -e "${STACK_SHA}^{commit}" 2>/dev/null; then
     die "wrath-mcp ${STACK_SHA} (the submodule commit ${SHA} pins) is not available in wrath-mcp/; run: git submodule update --init wrath-mcp"
   fi
-  if ! git -C "${sub}" merge-base --is-ancestor "${STACK_SHA}" origin/master 2>/dev/null; then
+  if ! stack_pin_merged "${sub}"; then
     if [[ "${ALLOW_DIRTY}" -eq 0 ]]; then
-      die "wrath-mcp ${STACK_SHA} is not on wrath-mcp's master (origin/master in wrath-mcp/): a deployable image pins a merged stack commit. Merge the stack change first, then run: git -C wrath-mcp fetch origin master (--allow-dirty builds a local image that is never pushed)"
+      die "wrath-mcp ${STACK_SHA} is not on wrath-mcp's master or v1 (origin/master, origin/v1 in wrath-mcp/): a deployable image pins a merged stack commit. Merge the stack change first, then run: git -C wrath-mcp fetch origin master v1 (--allow-dirty builds a local image that is never pushed)"
     fi
     STACK_UNMERGED=1
-    say "WARNING: --allow-dirty — wrath-mcp ${STACK_SHA} is not on wrath-mcp's master; these images are never pushed"
+    say "WARNING: --allow-dirty — wrath-mcp ${STACK_SHA} is not on wrath-mcp's master or v1; these images are never pushed"
   fi
   say "exporting wrath-mcp ${STACK_SHA} to wrath-mcp/"
   git -C "${sub}" archive --format=tar --prefix=wrath-mcp/ "${STACK_SHA}" | tar -xf - -C "${CONTEXT}"
@@ -320,7 +330,7 @@ if [[ "${PUSH}" -eq 1 ]]; then
     die "refusing to push a --allow-dirty tag"
   fi
   if [[ "${STACK_UNMERGED}" -eq 1 ]]; then
-    die "refusing to push images built from wrath-mcp ${STACK_SHA}, which is not on wrath-mcp's master"
+    die "refusing to push images built from wrath-mcp ${STACK_SHA}, which is not on wrath-mcp's master or v1"
   fi
   for ref in "${BUILT[@]}"; do
     say "pushing ${ref}"
