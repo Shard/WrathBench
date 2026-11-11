@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { CONTEXT_MS, SEG_MS, encodeSegment, tailStart, type TraceRow } from "@viewer/trace";
+import { CONTEXT_MS, SEG_MS, encodeSegment, tailStart, type TraceRow } from "@wrathbench/inspector/codec/trace";
 import type { AgentPosition, TraceAura, TraceSegment, TrackPoint, TrackResponse } from "../../runner/viewer/api-types";
 import {
   CATCHUP_RATE,
@@ -25,16 +25,17 @@ import {
   horizonOf,
   ingestIndex,
   ingestPositions,
-  ingestTrack,
+  ingestTracks,
   replaySpan,
   liveCadence,
   marginOf,
   replayCursorAt,
   replayReach,
-} from "../src/lib/traceplayer";
-import { IDLE_GAP_MS, IDLE_PLAY_MS, SPEEDS, advanceCursor, idleSpans, nextSpeed } from "../src/lib/playback";
-import { classifySegments, positionsAt, trackPoseAt } from "../src/lib/replay";
-import { auraViews, gaugesOf, healthReading, targetReading, unitFlags } from "../src/lib/unitframe";
+} from "@wrathbench/inspector/views/traceplayer";
+import { IDLE_GAP_MS, IDLE_PLAY_MS, SPEEDS, advanceCursor, idleSpans, nextSpeed } from "@wrathbench/inspector/views/playback";
+import { classifySegments, trackPoseAt } from "@wrathbench/inspector/views/replay";
+import { positionsAt } from "../src/lib/replay";
+import { auraViews, gaugesOf, healthReading, targetReading, unitFlags } from "@wrathbench/inspector/views/unitframe";
 import { projectTraceSegment } from "../../runner/viewer/public-projection";
 
 const RUN = "run-a";
@@ -287,9 +288,9 @@ describe("fetch selection", () => {
     const store = createTraceStore();
     const at = (runId: string, recent: number[]): AgentPosition =>
       ({ runId, ts: W, trace: { segMs: SEG_MS, recent, tail: null } }) as unknown as AgentPosition;
-    ingestPositions(store, [at("a", [W - SEG_MS]), at("b", [W - 2 * SEG_MS])]);
+    ingestPositions(store, [at("a", [W - SEG_MS]), at("b", [W - 2 * SEG_MS])], (p) => p.runId);
     expect(store.wanted("a", W - SEG_MS + 5)).toEqual([W - SEG_MS]);
-    ingestPositions(store, [at("b", [W - 2 * SEG_MS])]);
+    ingestPositions(store, [at("b", [W - 2 * SEG_MS])], (p) => p.runId);
     expect(store.has("a")).toBe(false);
     expect(store.has("b")).toBe(true);
   });
@@ -335,12 +336,12 @@ describe("replaying a short or unfinished run", () => {
   test("one point and one closed window: scrubbable over the window's frames, its path drawn", async () => {
     const track = onePoint({ segMs: SEG_MS, segs: [[W, 1]] });
     const store = createTraceStore();
-    ingestTrack(store, track);
+    ingestTracks(store, [track], (t) => t.runId);
     // Before the window lands the span reaches its edges, and the store asks for it.
-    expect(replaySpan(track, store)).toEqual({ from: W, to: W + SEG_MS });
+    expect(replaySpan(track.points, track.runId, store)).toEqual({ from: W, to: W + SEG_MS });
     expect(store.wanted(RUN, start + 60_000, { ends: true })).toEqual([W]);
     await store.load(RUN, W, fetcher(new Map([[W, seg(rows, W)]])));
-    const span = replaySpan(track, store)!;
+    const span = replaySpan(track.points, track.runId, store)!;
     expect(span).toEqual({ from: start, to: start + 239_000 });
     expect(span.to).toBeGreaterThan(span.from);
     for (const t of [start + 1_500, start + 120_500, span.to]) {
@@ -361,9 +362,9 @@ describe("replaying a short or unfinished run", () => {
       points: [...onePoint().points, { ts: end, map: 1, x: -4025.4, y: -3787.6, level: 1, xp: 0, money: null, questsCompleted: null, turn: null }],
     };
     const store = createTraceStore();
-    ingestTrack(store, track);
+    ingestTracks(store, [track], (t) => t.runId);
     await store.load(RUN, W, fetcher(new Map([[W, seg(rows, W)]])));
-    const span = replaySpan(track, store)!;
+    const span = replaySpan(track.points, track.runId, store)!;
     expect(span.to).toBe(end);
     expect(store.poseAt(RUN, span.to)).toBeNull();
     // What the map places instead: the track's reading, and its coarse pose.
@@ -374,10 +375,10 @@ describe("replaying a short or unfinished run", () => {
   test("one point and only a tail, the window still open: scrubbable over the tail", () => {
     const track = onePoint();
     const store = createTraceStore();
-    ingestTrack(store, track);
-    expect(replaySpan(track, store)).toEqual({ from: start + 60_000, to: start + 60_000 });
+    ingestTracks(store, [track], (t) => t.runId);
+    expect(replaySpan(track.points, track.runId, store)).toEqual({ from: start + 60_000, to: start + 60_000 });
     ingestIndex(store, RUN, { segMs: SEG_MS, segs: [], tail: seg(rows.filter((r) => r.ts < start + 180_000), W) });
-    const span = replaySpan(track, store)!;
+    const span = replaySpan(track.points, track.runId, store)!;
     expect(span).toEqual({ from: start, to: start + 179_000 });
     expect(store.poseAt(RUN, start + 90_000)?.x).toBeCloseTo(90, 1);
     expect(store.wanted(RUN, start + 90_000, { ends: true })).toEqual([]);
@@ -386,19 +387,19 @@ describe("replaying a short or unfinished run", () => {
   test("the tail's window closing keeps the cursor where it was, before and after the closed copy lands", async () => {
     const track = onePoint();
     const store = createTraceStore();
-    ingestTrack(store, track);
+    ingestTracks(store, [track], (t) => t.runId);
     ingestIndex(store, RUN, { segMs: SEG_MS, segs: [], tail: seg(rows, W) });
     const cursor = start + 200_000;
     const before = store.poseAt(RUN, cursor)!.x;
-    const spanBefore = replaySpan(track, store)!;
+    const spanBefore = replaySpan(track.points, track.runId, store)!;
     // Settled: the window is listed and the run has no tail any more.
     ingestIndex(store, RUN, { segMs: SEG_MS, segs: [[W, 1]], tail: null });
     expect(store.poseAt(RUN, cursor)?.x).toBe(before);
-    expect(replaySpan(track, store)).toEqual(spanBefore);
+    expect(replaySpan(track.points, track.runId, store)).toEqual(spanBefore);
     expect(store.wanted(RUN, cursor)).toEqual([W]);
     await store.load(RUN, W, fetcher(new Map([[W, seg(rows, W)]])));
     expect(store.poseAt(RUN, cursor)?.x).toBeCloseTo(before, 1);
-    expect(replaySpan(track, store)).toEqual(spanBefore);
+    expect(replaySpan(track.points, track.runId, store)).toEqual(spanBefore);
     // Or it moved on to the next window: the same, with the new tail beyond.
     const moving = createTraceStore();
     const longer = walk(start, W + SEG_MS + 60_000);
@@ -677,7 +678,7 @@ describe("a run with no trace", () => {
   test("the store knows nothing and asks for nothing", () => {
     const store = createTraceStore();
     const track = { runId: RUN, points: [point(0, 0)] } as unknown as TrackResponse;
-    ingestTrack(store, track);
+    ingestTracks(store, [track], (t) => t.runId);
     expect(store.has(RUN)).toBe(false);
     expect(store.poseAt(RUN, 0)).toBeNull();
     expect(store.unitAt(RUN, 0)).toBeNull();

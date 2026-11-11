@@ -12,7 +12,8 @@
  *    stack is consumed as a package.
  *  - The pinned stack and this repository agree on the shared pins: the Bun
  *    version (`.bun-version` and `engines.bun`), `typescript` and `@types/bun`,
- *    and `zod` wherever a workspace on either side declares it. Two lockfiles
+ *    and `zod`, `solid-js`, `vite` and `vite-plugin-solid` wherever a
+ *    workspace on either side declares them. Two lockfiles
  *    resolve these, and a disagreement would install two copies or test the
  *    stack under a toolchain its own CI never ran.
  *  - The AzerothCore commit the stack's README says it is tested against is
@@ -32,13 +33,17 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 /** Where the stack is checked out, relative to the repository root (`.gitmodules`). */
 export const STACK_ROOT = "wrath-mcp";
 /** The stack's workspaces, under `STACK_ROOT`. */
-export const STACK_PACKAGES = ["sdk", "mcp"] as const;
+export const STACK_PACKAGES = ["sdk", "mcp", "inspector"] as const;
 /** The rest of the repository's code, which may use the stack but never be used by it. */
 export const NON_STACK_DIRS = ["runner", "infra", "wiki", "dashboard", "collector", "minimap"] as const;
 /** This repository's workspaces that may declare a shared dependency (`zod`). */
 const CONSUMER_WORKSPACES = ["", ...NON_STACK_DIRS.filter((d) => d !== "infra")] as const;
-/** Pins both sides must agree on, wherever either declares them. */
-const SHARED_DEPS = ["zod", "typescript", "@types/bun"] as const;
+/**
+ * Pins both sides must agree on, wherever either declares them: the toolchain,
+ * zod, and the UI's graph, which the dashboard and the inspector's views share
+ * (one Solid runtime, or a component renders and then stops updating).
+ */
+const SHARED_DEPS = ["zod", "typescript", "@types/bun", "solid-js", "vite", "vite-plugin-solid"] as const;
 
 interface Manifest {
   name: string;

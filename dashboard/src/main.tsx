@@ -5,8 +5,11 @@ import { lazy } from "solid-js";
 import { render } from "solid-js/web";
 import { Layout } from "./components/Layout";
 import "./styles.css";
+// The inspector's views' own rules, after the shell they sit in.
+import "@wrathbench/inspector/views/views.css";
 import { SNAPSHOT_MODE, api } from "./api/client";
 import { routePreloads } from "./lib/routepreload";
+import { enableWowhead } from "@wrathbench/inspector/views/wowhead";
 
 /**
  * Cloudflare Web Analytics, public site only. The beacon is cookieless and the
@@ -20,6 +23,12 @@ if (SNAPSHOT_MODE) {
   beacon.dataset["cfBeacon"] = JSON.stringify({ token: "75492948b1e04489a2808cec401da6cb" });
   document.head.append(beacon);
 }
+
+/*
+ * Item, spell and quest icons and names from Wowhead's tooltip script, on
+ * both builds: the inspector's views ask for it only where a page allows it.
+ */
+enableWowhead();
 
 const Home = lazy(() => import("./pages/Home"));
 const Fleet = lazy(() => import("./pages/Fleet"));

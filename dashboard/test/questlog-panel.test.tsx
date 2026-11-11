@@ -18,11 +18,11 @@ import { createServer } from "vite";
 import solid from "vite-plugin-solid";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { QuestRow } from "../src/lib/questlog";
+import type { QuestRow } from "@wrathbench/inspector/views/questlog";
 
 const dashboardRoot = fileURLToPath(new URL("..", import.meta.url));
 
-type InventoryModule = typeof import("../src/components/Inventory");
+type InventoryModule = typeof import("@wrathbench/inspector/views");
 
 async function loadInventory(): Promise<InventoryModule> {
   const server = await createServer({
@@ -34,7 +34,7 @@ async function loadInventory(): Promise<InventoryModule> {
     server: { middlewareMode: true },
   });
   try {
-    return (await server.ssrLoadModule("/src/components/Inventory.tsx")) as InventoryModule;
+    return (await server.ssrLoadModule("@wrathbench/inspector/views")) as InventoryModule;
   } finally {
     await server.close();
   }
@@ -285,7 +285,8 @@ describe("a long title beside several objectives", () => {
 
   test("in a 320 px panel the objectives drop under the title rather than pair their last line with its last line", () => {
     // happy-dom does no layout, so the rule is what the classes carry; `bun wb dashboard shots` shows it drawn.
-    const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+    // The rules are the inspector's views' stylesheet, which the dashboard imports after its own.
+    const css = readFileSync(Bun.resolveSync("@wrathbench/inspector/views/views.css", import.meta.dir), "utf8");
     const body = (selector: string): string => {
       const m = new RegExp(`(?:^|\\n)${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{([^}]*)\\}`).exec(css);
       expect(m).not.toBeNull();

@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@wrathbench/inspector": "workspace:0.2.0",
     "@solidjs/router": "1.0.3",
     "solid-js": "1.9.19"
   },

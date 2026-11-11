@@ -21,7 +21,8 @@
  * between. The move between live and replay is therefore a change of what that
  * one strip says, with the way back — the live link — always in the same place,
  * rather than a second cluster of controls appearing in a corner. Its
- * arithmetic is `lib/playback.ts`; this file only wires it.
+ * arithmetic is the inspector's (`@wrathbench/inspector/views/playback`); this
+ * file only wires it.
  *
  * Canvas drawing sits outside Solid's reactivity on purpose. Pips move every
  * frame, so the draw loop is a requestAnimationFrame with its own mutable
@@ -32,7 +33,7 @@
  * visibly moved (dashboard/README.md, "The map's redraws").
  *
  * Where a run recorded a trace, a pip is *placed* every frame rather than
- * walked toward its newest reading: the trace player (`lib/traceplayer.ts`)
+ * walked toward its newest reading: the trace player (`@wrathbench/inspector/views/traceplayer`)
  * says where the character was at the playhead, and the playhead is one clock
  * for the whole map — live, a delay behind the feed sized from its cadence;
  * in a replay, the cursor at a wall-clock speed. A run with no trace, and any
@@ -53,13 +54,14 @@ import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMou
 import { api, type AgentPosition, type TrackResponse } from "../api/client";
 import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
 import { PlayBar } from "../components/PlayBar";
-import { UnitFrame } from "../components/UnitFrame";
-import { InventoryPanel } from "../components/Inventory";
+import { UnitFrame } from "@wrathbench/inspector/views";
+import { InventoryPanel } from "@wrathbench/inspector/views";
 import { LiveList } from "../components/LiveList";
-import { sheetReading } from "../lib/inventory";
-import { questLog } from "../lib/questlog";
+import { sheetReading } from "@wrathbench/inspector/views/inventory";
+import { questLog } from "@wrathbench/inspector/views/questlog";
 import { cursorMemory } from "../lib/cursormemory";
-import { intentLabel, intentToDraw, intentTone, type IntentTone } from "../lib/mapintent";
+import { intentLabel, intentToDraw, intentTone, type IntentTone } from "@wrathbench/inspector/views/mapintent";
+import { positionAgeMs, type FeedClock } from "@wrathbench/inspector/views/feedclock";
 import { restFrameDue, restPhase, statusStamp } from "../lib/reflect";
 import {
   type UnitFlag,
@@ -70,7 +72,7 @@ import {
   sameAuras,
   targetReading,
   unitFlags,
-} from "../lib/unitframe";
+} from "@wrathbench/inspector/views/unitframe";
 import { NO_TILE_BASE, nativeFormat, tileIndexSrc, tileSrc } from "../lib/tiles";
 import { type TileIndex, parseTileIndex } from "@viewer/tileindex";
 import {
@@ -82,7 +84,7 @@ import {
   cullLabels,
   nearbyFrameDue,
   placeLabel,
-} from "../lib/nearbyplayer";
+} from "@wrathbench/inspector/views/nearbyplayer";
 import { type LodLayer, ART_LAYER, LOD_MAX, MINIMAP_LAYER } from "@viewer/worldmap";
 import { fmtAge, fmtItems, fmtMoney, modelDisplay, num, shortHarness, shortRunId } from "../lib/format";
 import {
@@ -95,7 +97,7 @@ import {
   playbackKey,
   prevSampleBefore,
   traceDrives as traceDrivesAt,
-} from "../lib/playback";
+} from "@wrathbench/inspector/views/playback";
 import {
   type ReplayAnchor,
   type TrailRun,
@@ -106,28 +108,26 @@ import {
   horizonOf,
   ingestPositions,
   ingestIndex,
-  ingestTrack,
   ingestTracks,
   replaySpan,
   replaySpans,
   liveCadence,
   replayCursorAt,
   replayReach,
-} from "../lib/traceplayer";
+} from "@wrathbench/inspector/views/traceplayer";
 import {
   clearReplayState,
   createLeftReplay,
   createMapState,
   replayHrefFor,
 } from "../lib/mapstate";
-import { createMapFit } from "../lib/mapfit";
-import { bubbleLifeMs, bubblesAt, layoutStacks, stacksKey, type BubbleStack, type StackBox } from "../lib/chatbubbles";
+import { createMapFit } from "@wrathbench/inspector/views/mapfit";
+import { bubbleLifeMs, bubblesAt, layoutStacks, stacksKey, type BubbleStack, type StackBox } from "@wrathbench/inspector/views/chatbubbles";
 import {
   DEFAULT_MAP,
   STALE_MS,
   TILE_CACHE_MAX,
   type DrawnPose,
-  type FeedClock,
   type LayerKey,
   type Pip,
   type Touch,
@@ -158,7 +158,6 @@ import {
   pinchView,
   pipName,
   posesMoved,
-  positionAgeMs,
   project,
   MOVE_PX,
   stepPips,
@@ -177,12 +176,11 @@ import {
   indexAt,
   itemsAtCursor,
   nextSampleAfter,
-  positionsAt,
   routeUpTo,
-  runParam,
   trackPoseAt,
   trackSpan,
-} from "../lib/replay";
+} from "@wrathbench/inspector/views/replay";
+import { positionsAt, runParam } from "../lib/replay";
 import { displayError, logError } from "../lib/errors";
 import { MEMBER_SLOTS, groupTrack, loadParty, memberClass, memberToken, partyHref, partyParam, type PartyView } from "../lib/party";
 
@@ -396,7 +394,7 @@ export default function MapPage() {
     },
   });
   /*
-   * The units around each live character (`lib/nearbyplayer.ts`): each run's
+   * The units around each live character (`@wrathbench/inspector/views/nearbyplayer`): each run's
    * newest window, sampled at the same playhead the pips are placed at. Live
    * only — a replay has no units; the public build's windows ride in
    * `live.json`.
@@ -432,7 +430,7 @@ export default function MapPage() {
         ? api.positions().then((p) => {
             if (replayId() === undefined) {
               const arrival = horizonOf(p, Date.now(), performance.now());
-              ingestPositions(store, p.positions);
+              ingestPositions(store, p.positions, (q) => q.runId);
               if (arrival !== null) liveClock.arrive(arrival);
               queueMicrotask(pumpTraces);
               nearbyStore.retain(p.positions.filter((x) => x.nearby === true).map((x) => x.runId));
@@ -467,7 +465,7 @@ export default function MapPage() {
     traceRev();
     const ts = replayed();
     if (ts.length === 0) return null;
-    return ts.length === 1 ? replaySpan(ts[0]!, store) : replaySpans(ts, store);
+    return ts.length === 1 ? replaySpan(ts[0]!.points, ts[0]!.runId, store) : replaySpans(ts, store, (t) => t.runId);
   });
   /** The replay's idle stretches, compressed in playback (`advanceCursor`): where no member moved. Once per load. */
   const idle = createMemo(() => {
@@ -502,7 +500,7 @@ export default function MapPage() {
   let stage!: HTMLDivElement;
 
   /*
-   * The chat bubbles (`lib/chatbubbles.ts`): which are up is a signal, written
+   * The chat bubbles (`@wrathbench/inspector/views/chatbubbles`): which are up is a signal, written
    * by the frame loop only when the set changes, and where each stack sits is
    * set on its element by the same loop, every frame the map is drawn. Each
    * stack's size is measured when the set changes or the stage resizes, not
@@ -534,7 +532,7 @@ export default function MapPage() {
   /*
    * Fitting is deliberate, not reactive: on the first map to appear, a track
    * load, a chip click, and a replay's cursor crossing to another continent
-   * (`lib/mapfit.ts`, which says why a crossing fits on the spot).
+   * (`@wrathbench/inspector/views/mapfit`, which says why a crossing fits on the spot).
    */
   const mapFit = createMapFit({
     activeMap,
@@ -1100,7 +1098,7 @@ export default function MapPage() {
    * Drawn under the pips, so a destination reached (the marker lands under the
    * character) never hides the character. The tone is the intention's own —
    * dashed and bright while it walks, faded once it is over, red when the
-   * module refused it or the walk broke down; `lib/mapintent.ts` owns that
+   * module refused it or the walk broke down; `@wrathbench/inspector/views/mapintent` owns that
    * reading and the staleness bounds, and this only paints.
    */
   function drawIntents(ctx: CanvasRenderingContext2D, list: Pip[], mapId: number, cursorNow: number | null): boolean {
@@ -1874,7 +1872,7 @@ export default function MapPage() {
           if (mine !== trackToken) return;
           const tracks = got.filter((t): t is TrackResponse => t !== null);
           if (tracks.length === 0) throw new Error(`no member of ${pid} has a track`);
-          ingestTracks(store, tracks);
+          ingestTracks(store, tracks, (t) => t.runId);
           for (const t of tracks) followTail(t.runId);
           setParty(view);
           setGroup(tracks);
@@ -1889,7 +1887,7 @@ export default function MapPage() {
         if (mine !== trackToken) return;
         // The run's closed windows, the only ones its replay will ask for.
         // A track from before the recorder lists none and plays coarse.
-        ingestTrack(store, t);
+        ingestTracks(store, [t], (t) => t.runId);
         followTail(id);
         setSingle(t);
         open(t);
@@ -2520,7 +2518,7 @@ export default function MapPage() {
                 Inventory: the bag opens over the sidebar rather
                 than widening it, and the paperdoll sits under it. The trace's
                 sheet at the playhead where it answers; otherwise, in a replay,
-                the track's newest reading behind the cursor (`lib/replay.ts`).
+                the track's newest reading behind the cursor (`itemsAtCursor`).
                 Where neither says there is nothing to show, which the null
                 line says rather than drawing empty bags.
                 The quest log beside them is the sheet's alone (`shownQuests`),

@@ -20,7 +20,7 @@ It measures how well a model drives a fixed toolkit toward long-horizon goals in
 ## Repository layout
 
 ```
-wrath-mcp/     Submodule (Shard/wrath-mcp), the agent stack: module/ (C++ AzerothCore module), sdk/, mcp/ (with the session record); its own repo, licence and docs
+wrath-mcp/     Submodule (Shard/wrath-mcp), the agent stack: module/ (C++ AzerothCore module), sdk/, mcp/ (with the session record), inspector/ (wrath-inspector, reading it back); its own repo, licence and docs
 runner/        Agent loop, benchmark tools and the stack's hooks, the model-side trajectory, the viewer's API (MIT)
 dashboard/     SolidJS SPA over the viewer's read-only /api (MIT)
 wiki/          Tooling to build the wiki bundle from a local dump (MIT); the dump itself is in data/

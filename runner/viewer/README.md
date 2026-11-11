@@ -108,7 +108,7 @@ verify from another machine, or the check proves nothing.
 
 It also only ever reads. A v1 run has no database: its row is meta.json's and
 its game side its session record, read through the stack's reader
-(`runner/src/run-reader.ts`, `session-source.ts`). A 0.5 run's `run.sqlite` is
+(`runner/src/run-reader.ts`) and the inspector's (`runs-source.ts`). A 0.5 run's `run.sqlite` is
 opened readonly, so an old run directory never gains a schema it did not have.
 The runs directory is still mounted writable: a read-only handle on a WAL-mode
 file (a 0.5 run whose writer died) creates and maps its `-wal` and `-shm`
@@ -404,8 +404,9 @@ read from the end.
 `/api/run/<id>/track` is the replay's feed: the positioned samples as points,
 and what the character wore and carried along them as `inv`, a reading
 wherever the stored inventory changed, written as the slots that moved since
-the reading before. `track-inv.ts` is the codec and the format, import-free so
-the dashboard folds with the same code. The whole inventory on every changed
+the reading before. The codec and the format are the inspector's
+(`@wrathbench/inspector/codec/inventory`), import-free so the dashboard folds
+with the same code. The whole inventory on every changed
 point was most of a long run's track (24.7 of a level-43 character's 30.3 MB,
 re-uploaded by the publisher on every pass while the run was live), and the
 patches say the same readings in 136 KB. It is built at read time from the
@@ -466,21 +467,22 @@ run the extraction. The public site's tiles are a separate upload
 ## The trace: positions second by second
 
 A run's trace is positions at about 1 Hz and the unit state beside them
-(health, power, auras, combat, a cast, a flight). `trace.ts` is the codec —
-one segment per run per UTC-aligned five-minute window, columnar and
-delta-encoded, with its format at the top of the file — and it imports
-nothing, so the dashboard's player decodes with the same code. `trace-db.ts`
-is the reads, all ranges.
+(health, power, auras, combat, a cast, a flight). The codec is the
+inspector's (`@wrathbench/inspector/codec/trace`, in the stack) — one segment
+per run per UTC-aligned five-minute window, columnar and delta-encoded, with
+its format at the top of the file — and it imports nothing, so the
+dashboard's player decodes with the same code. The inspector's readout
+(`wrath-mcp/inspector/src/readout.ts`) is the reads, all ranges.
 
-Where the rows come from is the run's **session source**
-(`session-source.ts`), one interface over two homes. A v1 run has a session
-record in `<run>/session/`, written by the stack
-(`wrath-mcp/docs/SESSION-FORMAT.md`), and `V1Source` reads its `trace`,
-`nearby` and `calls` streams through the stack's own reader. A 0.5 run has
-none: its trace and movement intentions are the `trace`, `trace_dict` and
-`move` tables of its `run.sqlite` and its ring one-minute files in
-`<run>/nearby/`, and `legacy05-source.ts` reads those with the readers the
-0.5 viewer had. Nothing on disk is converted, and
+Where the rows come from is the run's **session**, opened through
+`runs-source.ts`, WrathBench's implementation of the inspector's source
+interface over two homes. A v1 run has a session record in `<run>/session/`,
+written by the stack (`wrath-mcp/docs/SESSION-FORMAT.md`), read through the
+inspector's own store reader under the run's id. A 0.5 run has none: its
+trace and movement intentions are the `trace`, `trace_dict` and `move` tables
+of its `run.sqlite` and its ring one-minute files in `<run>/nearby/`, and
+`legacy05-source.ts` reads those with the 0.5 viewer's queries and hands them
+on as the v1 record's rows. Nothing on disk is converted, and
 `runner/test/legacy05-golden.test.ts` holds the API's answers over frozen 0.5
 runs to what they were. The codecs and every route below are the same for
 both.
@@ -541,9 +543,10 @@ record, `data/runs/<id>/session/nearby/`, a ring of five-minute segments
 is live only: about 15 minutes, unlinked as it ages, removed when the session
 closes (every pause, stop and exit), never in the trace, the trajectory or
 the store, and never read by a replay. (A 0.5 run's ring was one-minute files
-in `<run>/nearby/` and did hold players, which the codec still decodes.) `nearby.ts` here is
-the codec — one columnar window, its format at the top of the file, import-free
-so the dashboard plays it with the same code — and `nearby-ring.ts` the reads.
+in `<run>/nearby/` and did hold players, which the codec still decodes.) The
+codec is the inspector's (`@wrathbench/inspector/codec/nearby`) — one columnar
+window, its format at the top of the file, import-free so the dashboard plays
+it with the same code — and the inspector's readout the reads.
 
 - `/api/run/<id>/nearby?span=<ms>` is the last `span` (default 60 s, at most
   the ring's 15 minutes) as one window: a keyframe at its start and every
@@ -677,6 +680,18 @@ public mode. Everywhere else no route accepts a body, every database is opened
 readonly, and the runs directory is only ever listed and read. The routes and
 their response shapes are `api.ts` and `api-types.ts`; anything that is not a
 route is the built SPA, or the not-built notice when there is none.
+
+### The inspector's API
+
+`/api/inspector` is wrath-inspector's own API (`wrath-mcp/inspector/README.md`,
+"The API"), mounted over the runs through `runs-source.ts`: `/sessions` lists
+every run with a v1 session record, under its run id, and
+`/sessions/<run id>/…` reads one, its streams by range, its tail over SSE and
+its packed trace and nearby windows. A 0.5 run is not listed, because it has
+no `session.json`, and still opens through the adapter. It serves the record
+as it is, unprojected, so a public handle withholds every path of it with a
+403, as it does the raw lines and the run's tail. The run page's session
+events read it.
 
 ### The config API (operator-only)
 

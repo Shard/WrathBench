@@ -83,10 +83,10 @@ import {
 } from "./episode-launcher";
 import { K8sClient } from "./k8s-client";
 import { harnessStampOf, IMAGE_RECORD_FILE, loadPodLauncher, parseImageRef } from "./run-pod";
-import { partyConfigOf, type PartyStamp } from "../runner/src/party";
+import { partyConfigOf, withMemberGuids, type PartyStamp } from "../runner/src/party";
 import { PARTY_END_GRACE_MS, writeEndRequest } from "../runner/src/end-request";
 import { runParty, type MemberVerdict, type PartyMemberRun } from "./party-fate";
-import { commandStager, STAGER_SCRIPT, type PartyStager, type StageRequest } from "./party-stager";
+import { commandStager, STAGER_SCRIPT, type PartyStager, type StagedGuid, type StageRequest } from "./party-stager";
 
 // ------------------------------------------------------------------ types
 
@@ -2181,6 +2181,18 @@ export function stageRequestOf(specs: readonly Resolved[]): StageRequest {
 }
 
 /**
+ * A member's campaign file as a fresh launch writes it: with every member's
+ * character guid the stager reported, so the member's session record counts
+ * the other members as the deployment's own from its first row
+ * (`runner/src/session-record.ts`). A stager that reported none leaves the
+ * file as it was, and the record learns them from the siblings' records.
+ */
+export function stagedCampaignFile(file: CampaignFile, staged: readonly StagedGuid[] | undefined): CampaignFile {
+  if (file.party === undefined || staged === undefined || staged.length === 0) return file;
+  return { ...file, party: withMemberGuids(file.party, new Map(staged.map((m) => [m.member, m.guid]))) };
+}
+
+/**
  * The stager the roster process runs before a fresh party launch. A test or
  * a hand roster may swap it (`setPartyStager`); the fleet's is the script
  * the staging track installs (`party-stager.ts`).
@@ -2263,12 +2275,23 @@ async function attemptParty(party: readonly Attempt[], opts: { deadline: number 
   const specOf = (m: PartyMemberRun): Resolved => bySpec.get(m.runId)!.spec;
   const members: PartyMemberRun[] = party.map((a) => ({ member: a.spec.party!.member, runId: a.spec.runId, resume: a.resume }));
   say(`party ${id}: ${resume ? "resuming" : "launching"} ${members.map((m) => `${m.member} as ${m.runId}`).join(", ")}`);
+  // Each member's character guid, as the stager reports it; written into
+  // every member's campaign file before any member launches.
+  let staged: StagedGuid[] | undefined;
   const outcome = await runParty<EpisodeExit>(members, {
-    ...(resume ? {} : { stage: () => partyStager.stage(stageRequestOf(party.map((a) => a.spec)), stagingAbort.signal) }),
+    ...(resume
+      ? {}
+      : {
+          stage: async () => {
+            const r = await partyStager.stage(stageRequestOf(party.map((a) => a.spec)), stagingAbort.signal);
+            if (r.ok) staged = r.members;
+            return r;
+          },
+        }),
     launch: async (m) => {
       const spec = specOf(m);
       await freeSession(spec, m.resume ? "pre-resume hygiene" : "pre-launch hygiene", false);
-      if (!m.resume && spec.campaignFile !== undefined) writeCampaignFile(join(REPO_ROOT, RUNS_DIR, spec.runId), spec.campaignFile);
+      if (!m.resume && spec.campaignFile !== undefined) writeCampaignFile(join(REPO_ROOT, RUNS_DIR, spec.runId), stagedCampaignFile(spec.campaignFile, staged));
       say(`launch ${spec.model} as ${spec.runId} (party ${id}, ${m.member})${m.resume ? " (--resume)" : ""}`);
       return startPartyEpisode(spec, m.resume);
     },

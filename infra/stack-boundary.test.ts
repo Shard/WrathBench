@@ -36,6 +36,11 @@ function tree(files: Record<string, string>): string {
       dependencies: { "@wrathbench/sdk": "workspace:*", zod: "4.4.3" },
       exports: { ".": "./src/index.ts", "./sandbox-child": "./src/sandbox/child.ts" },
     }),
+    "wrath-mcp/inspector/package.json": pkg({
+      name: "@wrathbench/inspector",
+      dependencies: { "@wrathbench/mcp": "workspace:*" },
+      exports: { ".": "./src/index.ts", "./codec/trace": "./src/codec/trace.ts" },
+    }),
     "wrath-mcp/sdk/src/index.ts": "export const x = 1;\n",
     "runner/src/ok.ts": 'import { connect } from "@wrathbench/sdk";\nimport { startSandboxChild } from "@wrathbench/mcp/sandbox-child";\n',
   };
@@ -114,6 +119,21 @@ describe("the shared pins", () => {
       "zod is pinned differently: runner/package.json 4.4.3, collector/package.json 4.4.3, wrath-mcp/sdk/package.json 4.5.0, wrath-mcp/mcp/package.json 4.4.3",
       "typescript is pinned differently: package.json 7.0.2, wrath-mcp/package.json 7.0.3",
     ]);
+  });
+});
+
+describe("the UI's pins", () => {
+  test("the dashboard and the inspector's views run one Solid and one Vite", () => {
+    const root = tree({
+      "dashboard/package.json": pkg({ name: "@wrathbench/dashboard", dependencies: { "solid-js": "1.9.19" }, devDependencies: { vite: "8.3.7" } }),
+      "wrath-mcp/inspector/package.json": pkg({
+        name: "@wrathbench/inspector",
+        dependencies: { "@wrathbench/mcp": "workspace:*", "solid-js": "1.9.20" },
+        devDependencies: { vite: "8.3.7" },
+        exports: { ".": "./src/index.ts" },
+      }),
+    });
+    expect(checkStackPins(root)).toEqual(["solid-js is pinned differently: dashboard/package.json 1.9.19, wrath-mcp/inspector/package.json 1.9.20"]);
   });
 });
 

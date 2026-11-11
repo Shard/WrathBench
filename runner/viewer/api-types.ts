@@ -13,6 +13,7 @@
  */
 
 import type { Harness } from "../src/drivers";
+import type { ItemSample, NearbyWindow, SessionPosition, SessionTrack, SessionTrackPoint } from "@wrathbench/inspector/wire";
 
 /**
  * The envelope a published public snapshot stamps onto every response body it
@@ -475,40 +476,6 @@ export interface RunRow {
   error?: string;
 }
 
-/**
- * One item on a state sample: a client-cache name, its stack count, worn or
- * carried, and where it sits.
- *
- * Everything past `name`, `count` and `equipped` is optional and arrived later
- * (the paperdoll/bag UI). Every row written before it carries those three and
- * nothing else, so a reader treats an absent field as **unobserved** — never as
- * zero, and never as slot 0. A live sample can be missing them too: a slot whose
- * item create block or item query has not arrived yet is a real observation of
- * an occupied slot with no id, name or quality behind it.
- *
- * `slot` and `bag` are the SDK's own addressing pair, unchanged, so a row is
- * what `equipItem`/`useItem`/`destroyItem` take:
- * - worn (`equipped: true`): `bag` absent, `slot` the equipment slot 0-18.
- * - carried (`equipped: false`): `bag` 255 for the backpack (slots 23-38) or a
- *   worn bag's own equipment slot 19-22 (slots 0..numSlots-1), `slot` the slot
- *   within it.
- *
- * So `bag !== undefined` is the carried discriminator and `slot` means the same
- * kind of thing on both sides of it. There is no separate `bagSlot`.
- */
-export interface ItemSample {
-  name: string;
-  count: number;
-  equipped: boolean;
-  /** The item template id, once the item's own create block has been seen. */
-  itemId?: number;
-  /** Item quality (0 poor .. 7 heirloom), from the item query, once answered. */
-  quality?: number;
-  /** The equipment slot when worn, the slot within `bag` when carried. */
-  slot?: number;
-  /** The container, when carried: 255 the backpack, 19-22 a worn bag. Absent when worn. */
-  bag?: number;
-}
 
 /** One `state` sample. Every field but `ts` may be absent from a given sample. */
 export interface StatePoint {
@@ -884,28 +851,6 @@ export type FeedEntry =
   | ActionsEntry
   | OtherEntry;
 
-/**
- * Where a character was trying to get to: one recorded movement intention.
- *
- * The destination the runner watched a `move_to` dispatch for, and the
- * module's verdict once it arrived. `status` is null while the move is in
- * flight, `"arrived"` when it worked, and the module's own failure word
- * (`too_far`, `drop`, `lost`, `target_off_mesh`, …) when it did not.
- */
-export interface MoveIntentView {
-  /** When this was recorded: the dispatch, or the verdict that ended it. */
-  ts: number;
-  /** The map the move was dispatched on. A destination on another map is not this one's. */
-  map: number | null;
-  x: number;
-  y: number;
-  z: number;
-  /** The unit the move was aimed at, when it was aimed at one. */
-  target: string | null;
-  /** The module's verdict; null while the move was still walking. */
-  status: string | null;
-}
-
 /** One agent, at one moment (the map's position feed). */
 /**
  * The newest entry in a run's episodic log (`runner/src/episodic.ts`): what the
@@ -926,7 +871,11 @@ export interface CharacterStatus {
   ts: number;
 }
 
-export interface AgentPosition {
+/**
+ * A run's character on the map now: the session's position (`SessionPosition`,
+ * the inspector's) and the run it belongs to.
+ */
+export interface AgentPosition extends SessionPosition {
   runId: string;
   character: string | null;
   model: string | null;
@@ -940,54 +889,17 @@ export interface AgentPosition {
   effort?: string | null;
   /** The CLI compaction window off the same stamp; absent is `auto`. */
   compactWindow?: string | null;
-  map: number;
-  x: number;
-  y: number;
-  /** Epoch ms of the state sample this position came from. */
-  ts: number;
-  level: number | null;
-  xp: number | null;
-  money: number | null;
-  /**
-   * Quests turned in over the whole run, summed across the counter's restarts
-   * (`questsAcrossRestarts`), as on `ResultRun.questsCompleted`; on a replay,
-   * the run's count up to the point.
-   */
-  questsCompleted: number | null;
   /*
-   * No inventory: the map's sidebar reads what the character wears and
-   * carries off the trace's character sheet at the playhead (`trace`), and
-   * the newest reading here ran the public delay ahead of the pip beside it.
+   * `questsCompleted` is summed across the counter's restarts
+   * (`questsAcrossRestarts`), as on `ResultRun.questsCompleted`. No inventory:
+   * the map's sidebar reads what the character wears and carries off the
+   * trace's character sheet at the playhead (`trace`), and the newest reading
+   * here ran the public delay ahead of the pip beside it. `class` is off the
+   * run row (launch config, not a state sample), and `nearby` is set exactly
+   * where `nearby.json` carries the run's window (`LiveNearby`), its ring
+   * (`/api/run/<id>/nearby`) written within `NEARBY_FRESH_MS`.
    */
   harnessVersion: string | null;
-  /**
-   * The newest recorded movement intention, when the run has one. Optional
-   * because a published snapshot rendered before this existed carries none,
-   * and the map must read those the same way it reads a run that never moved.
-   */
-  move?: MoveIntentView | null;
-  /**
-   * The player frame's numbers, from the newest state sample that carried a
-   * position. Optional for the reason `move` is: a run
-   * recorded before the columns existed, and a snapshot published before this
-   * shipped, carry none, and every reader must draw those as unobserved rather
-   * than as zero. A health/maxHealth pair is whole or absent — the SDK
-   * withholds a gauge until both halves are seen.
-   */
-  health?: number | null;
-  maxHealth?: number | null;
-  power?: number | null;
-  maxPower?: number | null;
-  /** The raw `powerType` field the client picks a power bar with. */
-  powerType?: number | null;
-  /** The XP bar's denominator, as the client shows it. */
-  nextLevelXp?: number | null;
-  /**
-   * The character's class, off the run row (it is launch config, not a state
-   * sample). Lets a pip from a run recorded before `powerType` still tint its
-   * power bar the way that class's bar is tinted.
-   */
-  class?: number | null;
   /**
    * The newest episodic entry, or null when the run has logged none. Optional
    * for the reason `move` is: a snapshot published before this shipped carries
@@ -1000,18 +912,6 @@ export interface AgentPosition {
    * reason: an older feed says nothing, and nothing is not "reflecting".
    */
   reflecting?: boolean;
-  /**
-   * The fine-grained trace near now (`PositionTrace`). Absent on a run that
-   * recorded none, and on a feed or snapshot from before the recorder.
-   */
-  trace?: PositionTrace;
-  /**
-   * True when the run's nearby ring (`/api/run/<id>/nearby`) is being written:
-   * its newest file was touched within `NEARBY_FRESH_MS`. Absent otherwise, so
-   * the map asks for units only where there are some. In `live.json` it is
-   * set exactly where `nearby.json` carries the run's window (`LiveNearby`).
-   */
-  nearby?: true;
 }
 
 /** A run row as the listing serves it: the row plus whole-file totals. */
@@ -2272,83 +2172,9 @@ export interface StateItemsRow {
   items: string;
 }
 
-/** A run's whole recorded track, for map replay. */
-export interface TrackPoint {
-  ts: number;
-  map: number;
-  x: number;
-  y: number;
-  level: number | null;
-  xp: number | null;
-  money: number | null;
-  /**
-   * The run's quest count up to this point, summed across the counter's
-   * restarts (`questTally`), so the last point's is the run page's figure.
-   * Null before any sample carried one, and on every point of a track
-   * published before it was filled.
-   */
-  questsCompleted: number | null;
+/** A run's whole recorded track, for map replay: a session's track point (`SessionTrackPoint`, the inspector's) and the driver turn it fell in. */
+export interface TrackPoint extends SessionTrackPoint {
   turn: number | null;
-  /**
-   * The player frame's numbers, from the newest state sample that carried a
-   * position. Optional for the reason `move` is: a run
-   * recorded before the columns existed, and a snapshot published before this
-   * shipped, carry none, and every reader must draw those as unobserved rather
-   * than as zero. A health/maxHealth pair is whole or absent — the SDK
-   * withholds a gauge until both halves are seen.
-   */
-  health?: number | null;
-  maxHealth?: number | null;
-  power?: number | null;
-  maxPower?: number | null;
-  /** The raw `powerType` field the client picks a power bar with. */
-  powerType?: number | null;
-  /** The XP bar's denominator, as the client shows it. */
-  nextLevelXp?: number | null;
-  /**
-   * The inventory as a track served and published before `TrackResponse.inv`
-   * carried it, read only from a track that old: the whole inventory on each
-   * point where the stored sample changed, a point without the field meaning
-   * "unchanged" and one before the first reading "not yet observed". The
-   * viewer no longer writes it.
-   */
-  items?: ItemSample[];
-}
-
-/**
- * One item a track's inventory names: `[name, itemId, quality]`, null where
- * the stored row carried none. Keyed by the whole triple, not the id: a
- * random suffix is stored in the name, so one id can carry two names at once.
- */
-export type TrackInvItem = [name: string, itemId: number | null, quality: number | null];
-
-/**
- * A slot filled, in a patch: `item` indexes `TrackInventory.items`, and
- * `count` is there only when the stack is not 1. `bag` is -1 for a worn item
- * (`slot` the equipment slot 0-18), else the carried pair `ItemSample` names.
- */
-export type TrackInvRow = [bag: number, slot: number, item: number] | [bag: number, slot: number, item: number, count: number];
-
-/** A slot emptied, in a patch. */
-export type TrackInvGone = [bag: number, slot: number];
-
-/**
- * One reading, on the index of the point it surfaces at: a patch onto the
- * reading before it (onto empty bags for the first), or `null` and the reading
- * whole, as stored, where a patch cannot say it.
- */
-export type TrackInvEntry = [point: number, patch: (TrackInvRow | TrackInvGone)[]] | [point: number, patch: null, whole: ItemSample[]];
-
-/**
- * What the character wore and carried along a track, as changes
- * (`runner/viewer/track-inv.ts` is the codec and the format; `inventoryAt`
- * reads it). Built at read time from the same stored samples the points come
- * from, so nothing about what is recorded changed.
- */
-export interface TrackInventory {
-  items: TrackInvItem[];
-  /** The readings, oldest first; a point before the first has none yet observed. */
-  at: TrackInvEntry[];
 }
 
 /**
@@ -2378,345 +2204,35 @@ export interface TrackCharacter {
 }
 
 /**
- * One recorded fact about how the character crossed the gap between two track
- * points, which is what the replay's route is drawn by: a flight path's
- * takeoff and landing, a hearthstone used, a spirit released to a graveyard.
- *
- * Derived at read time from records the trajectory already carries — the
- * `taxi`, `taxi_landed` and `release` milestones, a `death` first seen already
- * released (no separate release follows one), and the action log's
- * hearthstone — and never stored. `ts` is the record's own: a milestone's is
- * the state sample that observed it, so the change it names happened since the
- * sample before; a hearth's is the dispatch, about ten seconds before the
- * teleport lands.
+ * A run's whole recorded track, for map replay: the session's track
+ * (`SessionTrack`, the inspector's: its points, inventory, moves, travel and
+ * trace windows) and the run it belongs to. The travel marks are derived at
+ * read time from records the run already carries: the `taxi`, `taxi_landed`
+ * and `release` milestones, a `death` first seen already released, and the
+ * action log's hearthstone.
  */
-export interface TrackTravelMark {
-  kind: "taxi" | "taxi_landed" | "hearth" | "release";
-  ts: number;
-}
-
-export interface TrackResponse extends SnapshotEnvelope {
+export interface TrackResponse extends SnapshotEnvelope, SessionTrack<TrackPoint> {
   runId: string;
   characterName: string | null;
   model: string | null;
   harnessVersion: string | null;
-  points: TrackPoint[];
-  /**
-   * What the character wore and carried, so a replay pip can show what a live
-   * pip shows: a reading wherever the stored sample changed, as a patch onto
-   * the one before (`TrackInventory`). Absent on a run whose samples recorded
-   * no inventory, and on a track served or published before it existed, whose
-   * points carry `items` instead.
-   */
-  inv?: TrackInventory;
   /**
    * The character this run is an attempt of, when it is one: the play bar's
    * previous/next steps. Optional — an older viewer and an older snapshot
    * carry none, and the controls simply do not render.
    */
   character?: TrackCharacter;
-  /**
-   * Every movement intention the run recorded, oldest first. Separate from
-   * `points` because it has its own cadence: a move is dispatched when the
-   * model decides to walk, not when the state ticker writes a row. Optional
-   * for the same reason as `AgentPosition.move`.
-   */
-  moves?: MoveIntentView[];
-  /**
-   * The flight, hearth and graveyard marks, oldest first (`TrackTravelMark`).
-   * Optional: an older viewer and a snapshot published before this carry
-   * none, and the replay then breaks its line on map changes, the moves'
-   * typed teleports and its speed backstop alone.
-   */
-  travel?: TrackTravelMark[];
-  /**
-   * The run's closed trace windows (`TrackTrace`). Absent — not empty — on a
-   * run that recorded no trace, which is every run from before the recorder,
-   * so their tracks serve and publish exactly the bytes they did before.
-   */
-  trace?: TrackTrace;
 }
 
-/* --------------------------------------------------------------- trace --- */
+/* ------------------------------------------------------ trace, nearby --- */
 
 /*
- * The fine-grained trace (`runner/viewer/trace.ts` is the codec and the format
- * spec): positions at about 1 Hz and the unit state beside them, packed one
- * segment per run per UTC-aligned five-minute window. The shapes live here
- * with every other wire shape because the viewer serves them and the
- * dashboard decodes them.
+ * The session-side wire shapes (the trace's and the ring's packed windows,
+ * the trace index, a movement intention) are the inspector's
+ * (`@wrathbench/inspector/wire`), served here unchanged; re-exported so
+ * every importer of this file keeps one place to look.
  */
-
-/**
- * One aura: `[spellId, stacks, expiresAt, flags]`, `expiresAt` in epoch ms and
- * 0 for none. A public segment carries the first three only.
- */
-export type TraceAura = [number, number, number] | [number, number, number, number];
-
-/** What the character has targeted: its kind, and for a creature its entry and health. */
-export interface TraceTarget {
-  kind: "creature" | "player" | "object" | "other";
-  entry?: number;
-  hpPct?: number;
-}
-
-/** A cast in progress; `endsAt` is epoch ms. */
-export interface TraceCast {
-  spellId: number;
-  endsAt: number;
-}
-
-/**
- * The unit state the trace records. Every key is present in a keyframe; null
- * is unobserved. Fixed by the recorder's contract (`runner/src/` writes the
- * rows), so a key is added here only alongside it.
- */
-export interface TraceState {
-  hp: number | null;
-  hpMax: number | null;
-  pw: number | null;
-  pwMax: number | null;
-  /** 0 mana, 1 rage, 3 energy, 6 runic power. */
-  pwType: number | null;
-  level: number | null;
-  xp: number | null;
-  xpMax: number | null;
-  auras: TraceAura[];
-  combat: boolean;
-  mounted: boolean;
-  taxi: boolean;
-  dead: boolean;
-  ghost: boolean;
-  resting: boolean;
-  target: TraceTarget | null;
-  cast: TraceCast | null;
-  /**
-   * Zone and area (subzone) ids, as the record's unit state carries them
-   * (`wrath-mcp/docs/SESSION-FORMAT.md`, "Unit state"); ids only, the names
-   * are client text. Null when not observed, which is every 0.5 trace.
-   */
-  zone: number | null;
-  area: number | null;
-}
-
-/** `[slot, itemId]` or `[slot, itemId, rand]`: equipment slots 0-18. */
-export type TraceEquipRow = [slot: number, itemId: number, ...rand: number[]];
-/** `[slot, itemId, numSlots]`: a worn bag, slots 19-22. */
-export type TraceBagRow = [slot: number, itemId: number, numSlots: number];
-/** `[bag, slot, itemId]`, `[bag, slot, itemId, count]` or `[bag, slot, itemId, count, rand]`: a carried item. */
-export type TraceInvRow = [bag: number, slot: number, itemId: number, ...countRand: number[]];
-/** `[slot, cur, max]`: an equipped item's durability. */
-export type TraceDurRow = [slot: number, cur: number, max: number];
-/** `[slot, questId, state]` and up to four objective counters: one quest-log slot's raw fields. */
-export type TraceQuestRow = [slot: number, questId: number, state: number, ...counters: number[]];
-/** `[factionId, standing]`: a visible faction. */
-export type TraceRepRow = [factionId: number, standing: number];
-/** `[skillId, value, max]`. */
-export type TraceSkillRow = [skillId: number, value: number, max: number];
-
-/**
- * The character sheet the trace carries beside the unit state, as numbers
- * and ids (the session format's trace rows, `wrath-mcp/docs/SESSION-FORMAT.md`, are the contract and documents each
- * row). Null is not observed, and a segment from before the sheet was
- * recorded carries none of these keys, which also reads as null: "not
- * recorded", never "empty".
- */
-export interface TraceSheet {
-  money: number | null;
-  equip: TraceEquipRow[] | null;
-  bags: TraceBagRow[] | null;
-  inv: TraceInvRow[] | null;
-  dur: TraceDurRow[] | null;
-  quests: TraceQuestRow[] | null;
-  rep: TraceRepRow[] | null;
-  skills: TraceSkillRow[] | null;
-}
-
-/** An item as a segment names it: its quality (null when the query did not say) and its template's name. */
-export type TraceItemName = [quality: number | null, name: string];
-
-/**
- * A quest's required counts: the four counter objectives in the log's
- * counter order, then `[itemId, count]` per item to collect. Numbers only.
- */
-export type TraceQuestReq = [number, number, number, number, ...[itemId: number, count: number][]];
-
-/** One state change: `[ms from t0, kind, value]`, the kind a `TraceState` or `TraceSheet` key, `qdone`, or `chat`. */
-export type TraceEventWire = [number, string, unknown];
-
-/** Where a chat line went (the session format's `TraceChatKind`). */
-export type TraceChatKind = "say" | "party" | "raid" | "yell" | "whisper" | "emote";
-
-/** A `chat` event's value: one line the character said, its kind and its text. */
-export type TraceChat = [kind: TraceChatKind, text: string];
-
-/**
- * The state at a segment's `t0`, and where the character stood.
- *
- * `p` is `[map, x, y, z, o]` quantised (`TraceSegment.q`), or null when no
- * position was known. `pt` is when that position was observed, in ms from
- * `t0` (absent is 0: interpolated to `t0` itself). `f` is a flight still in
- * the air at `t0`: `[map, x, y, z, ms]`, its destination and the ms left.
- */
-export interface TraceKeyframe {
-  p: [number, number, number, number, number] | null;
-  pt?: number;
-  /** Every `TraceState` key, and each `TraceSheet` key that is observed. */
-  s: Partial<TraceState & TraceSheet>;
-  f?: [number, number, number, number, number];
-}
-
-/** One run × one window, columnar. The full spec is the comment atop `trace.ts`. */
-export interface TraceSegment {
-  v: number;
-  run: string;
-  t0: number;
-  t1: number;
-  /** Quantisation: `p` units per yard, `o` units per turn. */
-  q: { p: number; o: number };
-  k: TraceKeyframe;
-  /** Per sample: ms since the previous one (the first since `t0`). */
-  dt: number[];
-  /** Per sample: integer deltas in `1/q.p` yd and `1/q.o` turn. */
-  x: number[];
-  y: number[];
-  z: number[];
-  o: number[];
-  /** `[sample, map]`: a sample reached by a jump or onto another map. */
-  cuts: [number, number][];
-  /** `[sample, map, x, y, z, ms]`: a taxi takeoff, its destination and duration. */
-  flights: [number, number, number, number, number, number][];
-  ev: TraceEventWire[];
-  /** The items the sheet references, by id; absent when it references none. */
-  items?: Record<string, TraceItemName>;
-  /** The quests the sheet's log references, by id: their required counts. */
-  qreq?: Record<string, TraceQuestReq>;
-}
-
-/** Window `t0`s as runs of consecutive windows: `[firstT0, count]`. */
-export type TraceSegRuns = [number, number][];
-
-/**
- * `GET /api/run/<id>/trace`: which windows have a segment, and the open tail.
- *
- * `segs` lists the closed windows that have rows; each is
- * `/api/run/<id>/trace/<t0>`. `tail` is everything after the last closed
- * window, encoded so far — one window, or two while the newest closed one is
- * still settling — or null when there is none.
- */
-export interface TraceIndexResponse {
-  segMs: number;
-  segs: TraceSegRuns;
-  tail: TraceSegment | null;
-  now: number;
-}
-
-/** The closed windows, as a track carries them. */
-export interface TrackTrace {
-  segMs: number;
-  segs: TraceSegRuns;
-}
-
-/**
- * A live agent's trace on the position feed: the newest closed windows and the
- * tail, so the live map reads one shape privately and publicly.
- */
-export interface PositionTrace {
-  segMs: number;
-  /** Up to the last three closed windows with rows, oldest first. */
-  recent: number[];
-  tail: TraceSegment | null;
-}
-
-/* ------------------------------------------------------------- nearby --- */
-
-/**
- * What a nearby window says about one unit besides where it is
- * (`runner/viewer/nearby.ts`; the recorder's contract is the session format's
- * `nearby` stream, `wrath-mcp/docs/SESSION-FORMAT.md`, pinned compatible by
- * `runner/test/nearby-e2e.test.ts`).
- * Absent keys are unobserved. A public window carries `entry`, `name`, `ctype`,
- * `level`, `hp`, `df`, `nf`, `qg` and `tgs` only.
- */
-export interface NearbyStateView {
-  entry: number | null;
-  name: string | null;
-  sub: string | null;
-  ctype: number | null;
-  level: number | null;
-  /** Health as a percentage, 0–100. */
-  hp: number | null;
-  uf: number | null;
-  df: number | null;
-  nf: number | null;
-  qg: number | null;
-  tg: string | null;
-  /** The unit targets the character this window is about. */
-  tgs: boolean | null;
-  ow: string | null;
-  ch: string | null;
-  disp: number | null;
-  scale: number | null;
-  mf: number | null;
-  race: number | null;
-  cls: number | null;
-  gender: number | null;
-}
-
-/** The character a window is about: which map its units are on, and (privately) who it is and targets. */
-export interface NearbySelfView {
-  guid: string | null;
-  map: number | null;
-  target: string | null;
-  down: boolean;
-}
-
-/**
- * A unit's motion, quantised (`NearbyWindow.q`): `[kind, t, x, y, z, o]`, with
- * `dx, dy, dz, ms` appended on a spline. `kind` is 0 a position sample, 1 a
- * spline from `x, y, z` by `dx, dy, dz` over `ms`, 2 a hold; `t` is ms from the
- * window's `t0` (negative when the motion began before it); `o` is -1 when the
- * packet carried no facing.
- */
-export type NearbyMotionWire = number[];
-
-/** One event: `[ms from t0, unit index or -1 for the self, kind, value]`. */
-export type NearbyEventWire = [number, number, string, unknown];
-
-/** One run's nearby units over a span, columnar. The full spec is the comment atop `nearby.ts`. */
-export interface NearbyWindow {
-  v: number;
-  run: string;
-  /** The keyframe's instant, and the data's horizon (the child's last poll). */
-  t0: number;
-  t1: number;
-  q: { p: number; o: number };
-  /** The unit table: guid and type code (0 creature, 1 pet, 2 vehicle, 3 player) per index. */
-  ids: string[];
-  ty: number[];
-  k: {
-    self: Partial<NearbySelfView>;
-    u: number[];
-    s: Partial<NearbyStateView>[];
-    m: NearbyMotionWire[];
-  };
-  /**
-   * Per motion row: ms since the previous row (the first since `t0`), the
-   * motion's own time relative to its row, the unit, the kind, position deltas
-   * from that unit's previous keyframe-or-column position, and the facing.
-   */
-  dt: number[];
-  mt: number[];
-  u: number[];
-  mk: number[];
-  x: number[];
-  y: number[];
-  z: number[];
-  o: number[];
-  /** `[motion, dx, dy, dz, ms]`: a spline's destination as a delta from its start. */
-  sp: [number, number, number, number, number][];
-  ev: NearbyEventWire[];
-}
+export type * from "@wrathbench/inspector/wire";
 
 /**
  * `nearby.json`'s `nearby`: each live run's public window (`projectLiveNearby`),

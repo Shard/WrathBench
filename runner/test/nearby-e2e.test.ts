@@ -20,7 +20,7 @@
  *   its name, and each spline ending where the packet said.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { NEARBY_RING_MS, SEGMENT_MS, readSegmentBytes, validateSession, type NearbyRow } from "@wrathbench/mcp/record";
 import { EventsRecorder, NearbyRecorder, TraceRecorder } from "@wrathbench/mcp/record/recorder";
@@ -28,9 +28,9 @@ import { removeSessionRing } from "../src/session-record";
 import { SELF_GUID, guardedSource, nearbyRig, playerGuid, unitGuid } from "./fixtures/nearby-frames";
 import { tempDirs } from "./fixtures/temp-dirs";
 import { openTestSession, recordDrain } from "./fixtures/v1-session";
-import { NEARBY_SPAN_MS, decodeNearby, nearbyAt, type NearbyWindow } from "../viewer/nearby";
-import { nearbyFresh, readNearbyWindow } from "../viewer/nearby-ring";
-import { sessionSource } from "../viewer/session-source";
+import { NEARBY_SPAN_MS, decodeNearby, nearbyAt, type NearbyWindow } from "@wrathbench/inspector/codec/nearby";
+import { nearbyFresh, readNearbyWindow } from "./fixtures/run-readout";
+import { sessionKind } from "./fixtures/run-readout";
 
 const tempDir = tempDirs();
 
@@ -208,13 +208,19 @@ describe("nearby end to end: the ring is the only place the units go", () => {
 
   test("the viewer reads back what the recorder saw: the creatures, their names, and where each spline puts them", async () => {
     const runs = tempDir("nearby-e2e-viewer-");
-    const seen: { clock: number; window: ReturnType<typeof readNearbyWindow> }[] = [];
+    // What the live map's poll asks for, as the drains land: the run as it
+    // stood at each tick, copied aside, and read once the scene is done.
+    const polls: { clock: number; runs: string }[] = [];
     const scene = driveScene(runs, 3, (clock) => {
-      // What the live map's poll asks for, as the drains land.
-      if (seen.length < 40) seen.push({ clock, window: readNearbyWindow(runs, RUN, NEARBY_SPAN_MS, clock) });
+      if (polls.length >= 40) return;
+      const snap = tempDir("nearby-e2e-poll-");
+      cpSync(join(runs, RUN), join(snap, RUN), { recursive: true });
+      polls.push({ clock, runs: snap });
     });
-    expect(sessionSource(runs, RUN).kind).toBe("v1");
-    const last = readNearbyWindow(runs, RUN, NEARBY_SPAN_MS, scene.clock());
+    const seen: { clock: number; window: NearbyWindow }[] = [];
+    for (const p of polls) seen.push({ clock: p.clock, window: await readNearbyWindow(p.runs, RUN, NEARBY_SPAN_MS, p.clock) });
+    expect(sessionKind(runs, RUN)).toBe("v1");
+    const last = await readNearbyWindow(runs, RUN, NEARBY_SPAN_MS, scene.clock());
     const d = decodeNearby(JSON.parse(JSON.stringify(last)) as NearbyWindow);
     expect(d.t0).toBe(scene.clock() - NEARBY_SPAN_MS);
     expect(d.t1).toBeGreaterThanOrEqual(scene.clock() - 500);
@@ -284,7 +290,7 @@ describe("nearby end to end: the ring is the only place the units go", () => {
     expect(existsSync(ring)).toBe(false);
     expect(scene.session.reader.rows("trace").length).toBeGreaterThan(0);
     expect(scene.session.reader.session()?.ended).toBe(scene.clock());
-    expect(readNearbyWindow(runs, RUN, NEARBY_SPAN_MS, scene.clock()).ids).toEqual([]);
+    expect((await readNearbyWindow(runs, RUN, NEARBY_SPAN_MS, scene.clock())).ids).toEqual([]);
     expect(validateSession(scene.session.dir).errors).toEqual([]);
 
     // A writer that never closes (a backstop exit) leaves its ring: the runner's
@@ -293,10 +299,10 @@ describe("nearby end to end: the ring is the only place the units go", () => {
     const dead = driveScene(runs2, 1);
     dead.stop();
     expect(existsSync(join(dead.session.dir, "nearby"))).toBe(true);
-    expect(nearbyFresh(runs2, RUN, Date.now())).toBe(true);
+    expect(await nearbyFresh(runs2, RUN, Date.now())).toBe(true);
     removeSessionRing(dead.dir);
     expect(existsSync(join(dead.session.dir, "nearby"))).toBe(false);
-    expect(nearbyFresh(runs2, RUN, Date.now())).toBe(false);
+    expect(await nearbyFresh(runs2, RUN, Date.now())).toBe(false);
     expect(existsSync(join(dead.session.dir, "session.json"))).toBe(true);
   }, 60_000);
 });

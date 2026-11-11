@@ -56,9 +56,9 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 // The codec's window arithmetic, pure and import-free: the state below records
 // published trace windows in the same packed runs a track lists them in.
-import { segRunsAdd, segRunsHas, unpackSegs, type TraceSegRuns } from "../runner/viewer/trace";
+import { segRunsAdd, segRunsHas, unpackSegs, type TraceSegRuns } from "@wrathbench/inspector/codec/trace";
 import { describeFindings, type ScanFinding } from "../runner/src/secret-scan";
-import { PUBLIC_NEARBY_KEY } from "../runner/viewer/nearby";
+import { PUBLIC_NEARBY_KEY } from "../runner/viewer/public-keys";
 
 // ------------------------------------------------------------------ contracts
 
@@ -111,7 +111,7 @@ export interface ObjectStore {
 
 export const MANIFEST_PATH = "v1/manifest.json";
 export const LIVE_PATH = "v1/live.json";
-/** The units around the live runs, which `live.json` names (`runner/viewer/nearby.ts`). */
+/** The units around the live runs, which `live.json` names (`@wrathbench/inspector/codec/nearby`). */
 export const NEARBY_PATH = PUBLIC_NEARBY_KEY;
 export const RUN_PREFIX = "v1/run/";
 export const SNAP_PREFIX = "v1/snap/";
@@ -151,7 +151,7 @@ export type PathKind =
 
 /**
  * A trace segment: `v1/run/<id>/trace/<t0>.json`, one closed five-minute window
- * (`runner/viewer/trace.ts`). Under the run's prefix, so the zone's `/v1/run/`
+ * (`@wrathbench/inspector/codec/trace`). Under the run's prefix, so the zone's `/v1/run/`
  * rules cover it, but not a content version: the window is the address, since a
  * closed window never changes.
  */

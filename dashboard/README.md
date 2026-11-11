@@ -119,8 +119,8 @@ its older attempts would report a long-lived character as attempt 1.
 
 ## The map's player
 
-A run the trace recorder drove (`runner/viewer/trace.ts`) is drawn by one
-clock-driven player, `src/lib/traceplayer.ts`, the same in the live map and in
+A run the trace recorder drove (`@wrathbench/inspector/codec/trace`) is drawn by one
+clock-driven player, the inspector's `@wrathbench/inspector/views/traceplayer`, the same in the live map and in
 a replay: every frame each pip is placed where the trace puts the character at
 the playhead, with a heading wedge from its facing and a trail of the last
 90 s fading out behind it (flights in `--flight`; a cut ends the trail, so a
@@ -184,9 +184,9 @@ level and experience (a gauge the trace did not observe stays unobserved
 rather than being filled from the 60 s sample beside it, and the health bar
 reads dead at a corpse), a cast bar, combat, mounted, flying, resting and
 ghost badges, the target's health where it is published, and the buffs row: spell
-icons as Wowhead links (`src/lib/wowhead.ts`), stacks, and the time left.
+icons as Wowhead links (`@wrathbench/inspector/views/wowhead`), stacks, and the time left.
 
-**Chat bubbles** (`src/lib/chatbubbles.ts`) put what a character said over
+**Chat bubbles** (`@wrathbench/inspector/views/chatbubbles`) put what a character said over
 its pip, from the trace's `chat` events at the same playhead
 (`TraceStore.chat`, where each loaded piece answers only for its own stretch,
 so a window seen in the tail and then closed says its lines once). A line is
@@ -204,7 +204,7 @@ and of every character's puck, and keeps a leader down to its pip. What the publ
 sheet at the same playhead as the pip and the unit frame, wherever the trace
 answers for it: live, paused, and in a replay at 60× or slower
 (`TraceStore.sheetAt`, folded by the codec's `sheetAt`, turned into the
-panels' rows by `sheetItems` in `src/lib/inventory.ts`). That puts the public
+panels' rows by `sheetItems` in `@wrathbench/inspector/views/inventory`). That puts the public
 sidebar in step with the pip, where the position's newest reading ran the
 publish delay ahead of it. The sheet's rows are the ones the 60 s reading
 carries, worn bags, the keyring and the currency slots left out as there,
@@ -222,8 +222,8 @@ segment from before the sheet, and while a key is null — not observed, as afte
 a sandbox restart before the character's own create block, never empty bags.
 Live, the feed carries money but no inventory, so a live character the sheet
 cannot answer for reads "—"; in a replay, the reading is the track's at or
-before the cursor (`itemsAtCursor` in `src/lib/replay.ts`), folded from the track's
-patches by the viewer's own codec (`@viewer/track-inv`). It keeps a reading
+before the cursor (`itemsAtCursor`, `@wrathbench/inspector/views/replay`), folded from the track's
+patches by the inspector's codec (`@wrathbench/inspector/codec/inventory`). It keeps a reading
 every 64 patches and hands back the same array while the cursor stays between
 two changes, so the bag and the paperdoll redraw only when the inventory
 does. A track published before the patches carries each reading whole on its
@@ -231,7 +231,7 @@ points, and is read as it is.
 
 **The quest log** is a third button beside the bag and the paperdoll, "N
 quests", over the same sheet at the same playhead (`questLog` in
-`src/lib/questlog.ts`). Its panel lists the log in slot order, then any quest
+`@wrathbench/inspector/views/questlog`). Its panel lists the log in slot order, then any quest
 turned in since the playhead's five-minute window began. Each row is a link to
 `quest=<id>` that asks Wowhead's script to rename it, because the trace records
 no quest title and publishes none; where the script is blocked the row reads
@@ -270,7 +270,7 @@ the runs on the continent on screen, the playhead's window and the next one
 in its last minute, at most four in flight.
 
 **The units around a live character** draw under the pips on the private
-live map (`src/lib/nearbyplayer.ts`, over the viewer's nearby codec): each
+live map (`@wrathbench/inspector/views/nearbyplayer`, over the viewer's nearby codec): each
 run's newest window from `/api/run/<id>/nearby`, sampled at the same playhead
 as the pip, so a creature and the character fighting it line up however far
 behind the feed the map runs. A unit two characters both see is one guid and
@@ -319,7 +319,7 @@ not drawn on this page (`docs/ARCHITECTURE.md`).
 The map's replay draws the route behind the pip in the run's colour, a flight
 path in `--flight`, and no line across a teleport or a change of map. Which is
 which comes from what the record says happened, not from speed
-(`classifySegments` in `src/lib/replay.ts`): a flying character's position was
+(`classifySegments`, `@wrathbench/inspector/views/replay`): a flying character's position was
 held at the departure flight master for the whole flight, so its landing is
 one jump that looks exactly like a hearthstone by distance, and a release to a
 nearby graveyard is slower than a mounted ride. The viewer derives the events
@@ -361,8 +361,24 @@ src/pages/    one file per route
 src/components/  the shell and the pieces shared between pages
 ```
 
+The session-side views are wrath-inspector's (`@wrathbench/inspector/views`,
+in the stack): the unit frame, the inventory and quest log, the nearby layer's
+store and classes, the chat bubbles' layout, the popover's placement and the
+Wowhead links, and the event feed the run page shows for a v1 run. So is
+the map's session-side logic: the trace player, the replay's cursor maths and
+route, the transport's arithmetic, the movement intentions and the camera's
+fit. The map, the run page and the character page compose them with what is
+the benchmark's: models, logos, replay and party links, the map view's maths
+over the viewer's tile pyramid, and the public snapshot. The views ask for
+Wowhead's tooltip script only on a page that allows it, and the dashboard
+does on both builds (`src/main.tsx`, `enableWowhead`). Their classes are
+styled once, by the inspector's `@wrathbench/inspector/views/views.css`,
+which `src/main.tsx` imports after `src/styles.css`; the shell they sit in
+(tokens, cards, tables, badges, buttons) is `src/styles.css`'s.
+
 What both sides need is imported from the viewer rather than copied, under
-the `@viewer/*` alias. The viewer imports the same files, so a drift between
+the `@viewer/*` alias, and the session-side codecs from the inspector in the
+stack (`@wrathbench/inspector/codec/*`). The viewer imports the same files, so a drift between
 what it serves and what this expects is a compile error rather than a runtime
 surprise, and nothing server-side may follow them into the browser bundle.
 

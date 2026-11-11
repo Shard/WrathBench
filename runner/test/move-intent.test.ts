@@ -21,7 +21,7 @@ import { Scratchpad } from "@wrathbench/mcp";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 import { readMoves } from "../viewer/runs";
-import { sessionSource } from "../viewer/session-source";
+import { sessionKind } from "./fixtures/run-readout";
 import { SessionReader } from "@wrathbench/mcp/record";
 import { openSessionRecord, sessionDirOf, type SessionRecord } from "../src/session-record";
 import { TrajectoryTail } from "../viewer/tail";
@@ -172,9 +172,9 @@ async function v1RunFixture(moves: [number, number | null, number, number, numbe
 describe("readMoves over a v1 run's session record", () => {
   test("a session with no move rows has no intentions", async () => {
     const runsDir = await v1RunFixture([]);
-    expect(sessionSource(runsDir, "live-1").kind).toBe("v1");
-    expect(readMoves(runsDir, "live-1")).toEqual([]);
-    expect(readLatestMove(runsDir, "live-1")).toBeNull();
+    expect(sessionKind(runsDir, "live-1")).toBe("v1");
+    expect(await readMoves(runsDir, "live-1")).toEqual([]);
+    expect(await readLatestMove(runsDir, "live-1")).toBeNull();
   });
 
   test("rows come back oldest first, and the newest is the one the map draws", async () => {
@@ -183,44 +183,44 @@ describe("readMoves over a v1 run's session record", () => {
       [1400, 1, 0, -6100, 400, 380, "Warden Oakhollow", "arrived"],
       [2000, 2, 0, -5000, 900, 370, null, null],
     ]);
-    expect(sessionSource(runsDir, "live-1").kind).toBe("v1");
-    const moves = readMoves(runsDir, "live-1");
+    expect(sessionKind(runsDir, "live-1")).toBe("v1");
+    const moves = await readMoves(runsDir, "live-1");
     expect(moves.map((m) => m.ts)).toEqual([1000, 1400, 2000]);
     // The map shows the target's name, never its guid.
     expect(moves[0]).toEqual({ ts: 1000, map: 0, x: -6100, y: 400, z: 380, target: "Warden Oakhollow", status: null });
     expect(moves[1]!.status).toBe("arrived");
-    expect(readLatestMove(runsDir, "live-1")).toMatchObject({ ts: 2000, target: null, x: -5000 });
+    expect(await readLatestMove(runsDir, "live-1")).toMatchObject({ ts: 2000, target: null, x: -5000 });
   });
 
   test("the position feed carries the newest intention beside the pip", async () => {
     const runsDir = await v1RunFixture([[1000, 1, 0, -6100, 400, 380, "Warden Oakhollow", null]]);
-    const [p] = readPositions(runsDir);
+    const [p] = await readPositions(runsDir);
     expect(p!.move).toMatchObject({ map: 0, x: -6100, y: 400, target: "Warden Oakhollow", status: null });
   });
 });
 
 describe("readMoves over a 0.5 run's move table", () => {
-  test("a run recorded before the table existed has no intentions, not an error", () => {
+  test("a run recorded before the table existed has no intentions, not an error", async () => {
     const runsDir = runFixture();
-    expect(readMoves(runsDir, "live-1")).toEqual([]);
-    expect(readLatestMove(runsDir, "live-1")).toBeNull();
+    expect(await readMoves(runsDir, "live-1")).toEqual([]);
+    expect(await readLatestMove(runsDir, "live-1")).toBeNull();
   });
 
-  test("rows come back oldest first, and the newest is the one the map draws", () => {
+  test("rows come back oldest first, and the newest is the one the map draws", async () => {
     const runsDir = runFixture([
       [1000, 1, 0, -6100, 400, 380, "Warden Oakhollow", null],
       [1400, 1, 0, -6100, 400, 380, "Warden Oakhollow", "arrived"],
       [2000, 2, 0, -5000, 900, 370, null, null],
     ]);
-    const moves = readMoves(runsDir, "live-1");
+    const moves = await readMoves(runsDir, "live-1");
     expect(moves.map((m) => m.ts)).toEqual([1000, 1400, 2000]);
     expect(moves[1]!.status).toBe("arrived");
-    expect(readLatestMove(runsDir, "live-1")).toMatchObject({ ts: 2000, target: null, x: -5000 });
+    expect(await readLatestMove(runsDir, "live-1")).toMatchObject({ ts: 2000, target: null, x: -5000 });
   });
 
-  test("the position feed carries the newest intention beside the pip", () => {
+  test("the position feed carries the newest intention beside the pip", async () => {
     const runsDir = runFixture([[1000, 1, 0, -6100, 400, 380, "Warden Oakhollow", null]]);
-    const [p] = readPositions(runsDir);
+    const [p] = await readPositions(runsDir);
     expect(p!.move).toMatchObject({ map: 0, x: -6100, y: 400, target: "Warden Oakhollow", status: null });
   });
 });
@@ -329,9 +329,9 @@ describe("the stack records the intention, and the map and the feed read it ther
     expect(rows[1]).toMatchObject({ ts: VERDICT, moveId: 1, x: -6100, y: 400, z: 380, target: null });
 
     // The map reads the record.
-    expect(sessionSource(runsDir, "run-move-v1").kind).toBe("v1");
-    expect(readMoves(runsDir, "run-move-v1").map((m) => m.status)).toEqual([null, "too_far"]);
-    expect(readLatestMove(runsDir, "run-move-v1")).toMatchObject({ ts: VERDICT, status: "too_far", x: -6100 });
+    expect(sessionKind(runsDir, "run-move-v1")).toBe("v1");
+    expect((await readMoves(runsDir, "run-move-v1")).map((m) => m.status)).toEqual([null, "too_far"]);
+    expect(await readLatestMove(runsDir, "run-move-v1")).toMatchObject({ ts: VERDICT, status: "too_far", x: -6100 });
 
     // The trajectory is the model side: no mirror. The run page's feed reads the record.
     expect(readTrajectory(runDir).filter((r) => r.t === "move")).toEqual([]);

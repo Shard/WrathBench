@@ -38,8 +38,13 @@ forward from `--since` (or the start). A command refuses a flag it does not
 take; `bun wb inspect` lists each command's flags.
 
 `stuck`'s verdict is the progress line alone; the other lines are evidence,
-and `asks` is a phrase heuristic. `unjudged` means the state samples do not
-cover the window (a young or resumed run), not that the run is fine.
+and `asks` is a phrase heuristic. `unjudged` means what was recorded does not
+cover the window (a young or resumed run, a pause, a runner that was down),
+not that the run is fine. A 0.5 run is covered by its minute state samples;
+a v1 run's trace writes only changes, so a character standing still has no
+trace row for hours, and its window is covered by the record's other writes
+(its `calls` and `events` rows and `live.json`'s heartbeat, read off the
+files on either source) and starts from the newest reading before it.
 
 ## Rules
 

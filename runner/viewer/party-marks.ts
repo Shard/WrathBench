@@ -12,7 +12,7 @@
  * (`SMSG_CREATURE_QUERY_RESPONSE`), the name that client would have drawn
  * over the corpse; a zone's is the `WB_AREA` the run was served for that id.
  * The chat is the member's own lines as the server echoed them, which is what
- * the trace records (`readTraceChat`), so five members' lists are disjoint.
+ * the trace records (the inspector's `traceChat`), so five members' lists are disjoint.
  *
  * Read-only like the rest of the viewer: meta.json and client-cache.json are
  * read, and run.sqlite is opened readonly.
@@ -25,7 +25,8 @@ import { join } from "node:path";
 import { openRunDb } from "../src/rundb";
 import type { PartyDetailView, PartyKillMark, PartyMemberRefView, PartyWhereView } from "./api-types";
 import type { TrajectoryTail } from "./tail";
-import { readTraceChat } from "./trace-db";
+import { traceChat } from "@wrathbench/inspector";
+import { runSession } from "./runs-source";
 
 /** The client cache's file name (`CLIENT_CACHE_FILE`, `wrath-mcp/mcp/src/sandbox/client-cache.ts`; a test holds the two equal). */
 export const CLIENT_CACHE_NAME = "client-cache.json";
@@ -126,7 +127,7 @@ function lastPlace(dir: string, runId: string): { ts: number; map: number | null
  * This run's party block, or null when it is no party member. `tail` must
  * already be scanned: the marks are its accumulators.
  */
-export function partyDetailOf(runsDir: string, runId: string, dir: string, tail: TrajectoryTail): PartyDetailView | null {
+export async function partyDetailOf(runsDir: string, runId: string, dir: string, tail: TrajectoryTail): Promise<PartyDetailView | null> {
   const stamp = partyStampOf(dir);
   if (stamp === null) return null;
   const raw = tail.kills;
@@ -145,7 +146,7 @@ export function partyDetailOf(runsDir: string, runId: string, dir: string, tail:
     ...stamp,
     instances: tail.instances,
     kills,
-    chat: readTraceChat(runsDir, runId, "party"),
+    chat: await traceChat(runSession(runsDir, runId), "party"),
     groups: tail.groups,
     deaths: (tail.deaths?.sites ?? []).map((s) => s.ts),
     where,

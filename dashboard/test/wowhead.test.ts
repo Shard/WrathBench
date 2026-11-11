@@ -13,13 +13,14 @@
  * 2026-09-18; `docs/PUBLIC-DASHBOARD.md` records the request audit.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Window } from "happy-dom";
-import { carried, carriedCount, paperdoll, splitLinked, type InvItem } from "../src/lib/inventory";
-import { popoverPlacement } from "../src/lib/popover";
+import { carried, carriedCount, paperdoll, splitLinked, type InvItem } from "@wrathbench/inspector/views/inventory";
+import { popoverPlacement } from "@wrathbench/inspector/views/popover";
 import {
+  enableWowhead,
   EQUIPMENT_SLOTS,
   PAPERDOLL_BOTTOM,
   PAPERDOLL_LEFT,
@@ -38,7 +39,7 @@ import {
   slotLabel,
   wowheadConfig,
   wowheadStatus,
-} from "../src/lib/wowhead";
+} from "@wrathbench/inspector/views/wowhead";
 
 const SRC = join(import.meta.dir, "..", "src");
 
@@ -141,6 +142,10 @@ describe("quality colours survive the light theme", () => {
 });
 
 describe("the script is fetched once, configured before it loads", () => {
+  // The views ask for it only where the page turned it on, as the dashboard does (`src/main.tsx`).
+  beforeAll(() => enableWowhead());
+  afterAll(() => enableWowhead(false));
+
   test("a second call adds no second tag", () => {
     const win = new Window();
     const host = win as unknown as { document: Document; whTooltips?: unknown };
@@ -282,14 +287,17 @@ describe("what a sample says, and what it does not", () => {
 });
 
 describe("one place spells the external origins", () => {
-  test("no source outside lib/wowhead.ts names zamimg or wowhead.com", () => {
+  test("no dashboard source names zamimg or wowhead.com: the inspector's views/wowhead is the one place", () => {
     const users = sources().filter((p) => {
-      if (p === join(SRC, "lib", "wowhead.ts")) return false;
       // A comment naming the decision is prose, not a second request path; the
       // check is for a literal URL.
       return /https:\/\/(wow\.zamimg\.com|www\.wowhead\.com)/.test(readFileSync(p, "utf8"));
     });
     expect(users.map((p) => p.slice(SRC.length + 1))).toEqual([]);
+  });
+
+  test("the dashboard turns the script on, on both builds", () => {
+    expect(readFileSync(join(SRC, "main.tsx"), "utf8")).toMatch(/^enableWowhead\(\);$/m);
   });
 
   test("the script is injected at runtime, never from index.html", () => {
@@ -343,6 +351,9 @@ describe("a square is only drawn where an icon can arrive", () => {
 });
 
 describe("a script that never arrives is a state, not a wait", () => {
+  beforeAll(() => enableWowhead());
+  afterAll(() => enableWowhead(false));
+
   test("the tag's error says so, and every watcher hears it", () => {
     resetWowheadStatus();
     const win = new Window();

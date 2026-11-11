@@ -4,7 +4,7 @@
  * This is an interface rather than a query the renderer runs, so one renderer
  * can sit behind any position feed. The
  * map draws `AgentPosition[]` and knows nothing about where they came from —
- * live mode fills them from each run's `run.sqlite` (here), and a replay mode
+ * live mode fills them from each run's files (here), and a replay mode
  * later fills the same shape from a trajectory reader plus a time cursor. That
  * seam is the reason this file is separate from the page.
  *
@@ -29,9 +29,8 @@ import type { AgentPosition, CharacterStatus, MoveIntentView, RunRow } from "./a
 import { STORE_LAG_MS, runRowOf, type RunStore } from "./clickhouse";
 import { listRuns } from "./runs";
 import { questsAcrossRestarts } from "./results";
-import { readPositionTrace } from "./trace-db";
-import { nearbyFresh } from "./nearby-ring";
-import { sessionSource } from "./session-source";
+import { latestMove, nearbyFresh, recentTrace } from "@wrathbench/inspector";
+import { runSession } from "./runs-source";
 import { SessionReader } from "@wrathbench/mcp/record";
 import { isV1RunDir, readRunRow, readStateSamples, sessionDirOfRun } from "../src/run-reader";
 
@@ -89,11 +88,11 @@ export interface PositionGauges {
  * coordinates, and taking it would make a live agent blink off the map even
  * though a position landed seconds earlier.
  */
-export function readLatestPosition(
+export async function readLatestPosition(
   runsDir: string,
   runId: string,
-): ({ map: number; x: number; y: number; ts: number } & PositionGauges) | null {
-  if (isV1RunDir(join(runsDir, runId))) return readRunDb(runsDir, runId).pos;
+): Promise<({ map: number; x: number; y: number; ts: number } & PositionGauges) | null> {
+  if (isV1RunDir(join(runsDir, runId))) return (await readRunDb(runsDir, runId)).pos;
   return withRunDb(runsDir, runId, null, (db) => latestPositionIn(db, runId));
 }
 
@@ -258,9 +257,13 @@ function reflectingIn(db: Database, runId: string): boolean {
   return typeof r?.since === "number";
 }
 
-/** The newest movement intention a run recorded, or null, from its session source (`session-source.ts`). */
-export function readLatestMove(runsDir: string, runId: string): MoveIntentView | null {
-  return sessionSource(runsDir, runId).latestMove();
+/** The newest movement intention a run recorded, or null: the inspector's readout over the run's session (`runs-source.ts`). */
+export async function readLatestMove(runsDir: string, runId: string): Promise<MoveIntentView | null> {
+  try {
+    return await latestMove(runSession(runsDir, runId));
+  } catch {
+    return null;
+  }
 }
 
 /** `readQuestCounts` (`runs.ts`) over an open database: every sample's quest count, oldest first. */
@@ -285,11 +288,11 @@ interface RunDbReading {
  * that throws (a table an old run never had) answers its own empty value and
  * costs the others nothing.
  */
-function readRunDb(runsDir: string, runId: string): RunDbReading {
+async function readRunDb(runsDir: string, runId: string): Promise<RunDbReading> {
   const none: RunDbReading = { pos: null, quests: [], move: null, reflecting: false };
   const dir = join(runsDir, runId);
-  if (isV1RunDir(dir)) return readV1Reading(runsDir, runId, none);
-  return withRunDb(runsDir, runId, none, (db) => {
+  if (isV1RunDir(dir)) return await readV1Reading(runsDir, runId, none);
+  const reading = withRunDb(runsDir, runId, none, (db) => {
     const guard = <T>(empty: T, read: () => T): T => {
       try {
         return read();
@@ -303,10 +306,12 @@ function readRunDb(runsDir: string, runId: string): RunDbReading {
     return {
       pos,
       quests: guard([], () => questCountsIn(db, runId)),
-      move: guard(null, () => readLatestMove(runsDir, runId)),
+      move: null,
       reflecting: guard(false, () => reflectingIn(db, runId)),
     };
   });
+  // The move is the session's to read, after the database is closed again.
+  return reading.pos === null ? reading : { ...reading, move: await readLatestMove(runsDir, runId) };
 }
 
 /**
@@ -316,7 +321,7 @@ function readRunDb(runsDir: string, runId: string): RunDbReading {
  * turn-ins are the trace's newest samples (`run-reader.ts`); the reflection
  * window is the run row's.
  */
-function readV1Reading(runsDir: string, runId: string, none: RunDbReading): RunDbReading {
+async function readV1Reading(runsDir: string, runId: string, none: RunDbReading): Promise<RunDbReading> {
   const dir = join(runsDir, runId);
   try {
     const live = new SessionReader(sessionDirOfRun(dir)).live();
@@ -344,7 +349,7 @@ function readV1Reading(runsDir: string, runId: string, none: RunDbReading): RunD
     return {
       pos,
       quests: samples.map((r) => ({ questsCompleted: num(r["quests_completed"]) })),
-      move: readLatestMove(runsDir, runId),
+      move: await readLatestMove(runsDir, runId),
       reflecting: typeof row?.["reflecting_since"] === "number",
     };
   } catch {
@@ -363,11 +368,11 @@ function readV1Reading(runsDir: string, runId: string, none: RunDbReading): RunD
  * newest rows are the last reading repeated while the character went on
  * elsewhere, so the position is fresh by its stamp and wrong by its content.
  */
-function positionOf(runsDir: string, run: RunRow, now: number, windowMs: number): AgentPosition | null {
+async function positionOf(runsDir: string, run: RunRow, now: number, windowMs: number): Promise<AgentPosition | null> {
   if (run.terminationReason !== null) return null;
   if (run.pauseReason === STALL_PAUSE) return null;
   // One open of the run's database for every question below it answers.
-  const db = readRunDb(runsDir, run.runId);
+  const db = await readRunDb(runsDir, run.runId);
   const pos = db.pos;
   if (pos === null) return null;
   if (now - pos.ts > windowMs) return null;
@@ -375,9 +380,11 @@ function positionOf(runsDir: string, run: RunRow, now: number, windowMs: number)
   // at zero: the feed carries the whole run's instead, as the run page does,
   // so every `run.questsCompleted` below reads the sum.
   run = { ...run, questsCompleted: questsAcrossRestarts(db.quests) ?? run.questsCompleted };
-  // One range read over the last few windows (`trace-db.ts`); null on a run
-  // that recorded no trace, which leaves the field off.
-  const trace = readPositionTrace(runsDir, run.runId, now);
+  // One range read over the last few windows (the inspector's `recentTrace`);
+  // null on a run that recorded no trace, which leaves the field off.
+  const session = runSession(runsDir, run.runId);
+  const trace = await recentTrace(session, now);
+  const nearby = await nearbyFresh(session, now);
   return {
     runId: run.runId,
     character: run.character,
@@ -418,17 +425,17 @@ function positionOf(runsDir: string, run: RunRow, now: number, windowMs: number)
     // Where it has been, second by second: the newest closed windows and the
     // tail, so the map can play the last minutes back rather than jump.
     ...(trace === null ? {} : { trace }),
-    // The units around it are being recorded (`nearby-ring.ts`): the map's
+    // The units around it are being recorded (the ring is fresh): the map's
     // cue to ask `/nearby`, so it never asks a run that has none.
-    ...(nearbyFresh(runsDir, run.runId, now) ? { nearby: true as const } : {}),
+    ...(nearby ? { nearby: true as const } : {}),
   };
 }
 
 /** The feed over a listing: every run worth drawing, newest position first. */
-function positionsOf(runsDir: string, runs: readonly RunRow[], now: number, windowMs: number): AgentPosition[] {
+async function positionsOf(runsDir: string, runs: readonly RunRow[], now: number, windowMs: number): Promise<AgentPosition[]> {
   const out: AgentPosition[] = [];
   for (const run of runs) {
-    const p = positionOf(runsDir, run, now, windowMs);
+    const p = await positionOf(runsDir, run, now, windowMs);
     if (p !== null) out.push(p);
   }
   out.sort((a, b) => b.ts - a.ts);
@@ -442,12 +449,12 @@ function positionsOf(runsDir: string, runs: readonly RunRow[], now: number, wind
  * unterminated, which is the fan-out `positionsFromStore` exists to avoid. It
  * stays as the feed for a caller that has no store.
  */
-export function readPositions(
+export async function readPositions(
   runsDir: string,
   now = Date.now(),
   windowMs = POSITION_WINDOW_MS,
-): AgentPosition[] {
-  return positionsOf(runsDir, listRuns(runsDir, now), now, windowMs);
+): Promise<AgentPosition[]> {
+  return await positionsOf(runsDir, listRuns(runsDir, now), now, windowMs);
 }
 
 /**
@@ -505,5 +512,5 @@ export async function positionsFromStore(
     )
     .map((r) => runRowOf(r, latest.get(r.run_id), now));
   runs.sort((a, b) => (b.startedAt ?? b.mtime ?? 0) - (a.startedAt ?? a.mtime ?? 0));
-  return positionsOf(runsDir, runs, now, windowMs);
+  return await positionsOf(runsDir, runs, now, windowMs);
 }

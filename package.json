@@ -5,6 +5,7 @@
   "workspaces": [
     "wrath-mcp/sdk",
     "wrath-mcp/mcp",
+    "wrath-mcp/inspector",
     "runner",
     "wiki",
     "minimap",
@@ -17,7 +18,7 @@
   "scripts": {
     "test": "bun runner/test/preload-checkout.ts && bun test --parallel=8 --no-isolate --timeout=20000",
     "wb": "bun infra/wb.ts",
-    "typecheck": "for p in wrath-mcp/sdk wrath-mcp/mcp runner infra dashboard wiki minimap collector; do tsc --noEmit -p $p || exit 1; done",
+    "typecheck": "for p in wrath-mcp/sdk wrath-mcp/mcp wrath-mcp/inspector runner infra dashboard wiki minimap collector; do tsc --noEmit -p $p || exit 1; done",
     "dashboard:dev": "bun run --cwd dashboard dev",
     "dashboard:build": "bun run --cwd dashboard build",
     "viewer": "bun runner/viewer/serve.ts",
@@ -31,6 +32,7 @@
     "ship": "./infra/deploy-dashboard.sh"
   },
   "dependencies": {
+    "@wrathbench/inspector": "workspace:*",
     "@wrathbench/mcp": "workspace:*",
     "@wrathbench/sdk": "workspace:*"
   },

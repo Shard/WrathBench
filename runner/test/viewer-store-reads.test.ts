@@ -230,7 +230,7 @@ describe("which runs /api/positions opens", () => {
     writeRun(runsDir, "live-a");
     writeRun(runsDir, "live-b");
     const now = Date.now();
-    expect(readPositions(runsDir, now).map((p) => p.runId).sort()).toEqual(["live-a", "live-b"]);
+    expect((await readPositions(runsDir, now)).map((p) => p.runId).sort()).toEqual(["live-a", "live-b"]);
     const inner = localRunStore(runsDir);
     const store: RunStore = {
       ...inner,
@@ -241,7 +241,7 @@ describe("which runs /api/positions opens", () => {
     expect((await positionsFromStore(store, runsDir, now)).map((p) => p.runId)).toEqual(["live-a"]);
   });
 
-  test("the latest move is the row readMoves lists last, ties and position-less rows included", () => {
+  test("the latest move is the row readMoves lists last, ties and position-less rows included", async () => {
     const runsDir = tempDir("viewer-reads-move-");
     const dir = join(runsDir, "r");
     mkdirSync(dir, { recursive: true });
@@ -254,15 +254,15 @@ describe("which runs /api/positions opens", () => {
     ins.run("r", 200, 3, 0, 9, 9, 9, null, null); // written late, stamped earlier
     ins.run("r", 400, 4, 0, null, null, null, null, "no_path"); // no position: never listed
     db.close();
-    const all = readMoves(runsDir, "r");
-    expect(readLatestMove(runsDir, "r")).toEqual(all[all.length - 1]!);
-    expect(readLatestMove(runsDir, "r")).toMatchObject({ x: 3, status: "arrived" });
+    const all = await readMoves(runsDir, "r");
+    expect(await readLatestMove(runsDir, "r")).toEqual(all[all.length - 1]!);
+    expect(await readLatestMove(runsDir, "r")).toMatchObject({ x: 3, status: "arrived" });
     // No table, and no database: nothing, not an error.
     const bare = join(runsDir, "bare");
     mkdirSync(bare);
     new Database(join(bare, "run.sqlite")).close();
-    expect(readLatestMove(runsDir, "bare")).toBeNull();
-    expect(readLatestMove(runsDir, "absent")).toBeNull();
+    expect(await readLatestMove(runsDir, "bare")).toBeNull();
+    expect(await readLatestMove(runsDir, "absent")).toBeNull();
   });
 
   test("the newest status line is read off the file's end, and the whole file when the end holds none", () => {

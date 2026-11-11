@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { CONTEXT_MS, SEG_MS, encodeSegment, type TraceChatLine, type TraceRow } from "@viewer/trace";
+import { CONTEXT_MS, SEG_MS, encodeSegment, type TraceChatLine, type TraceRow } from "@wrathbench/inspector/codec/trace";
 import type { TraceSegment } from "../../runner/viewer/api-types";
 import { projectTraceSegment } from "../../runner/viewer/public-projection";
 import {
@@ -21,8 +21,8 @@ import {
   layoutStacks,
   stacksKey,
   type StackBox,
-} from "../src/lib/chatbubbles";
-import { createTraceStore, replayCursorAt } from "../src/lib/traceplayer";
+} from "@wrathbench/inspector/views/chatbubbles";
+import { createTraceStore, replayCursorAt } from "@wrathbench/inspector/views/traceplayer";
 
 const W = 1_760_000_100_000 - (1_760_000_100_000 % SEG_MS);
 const line = (t: number, text: string, kind: TraceChatLine["kind"] = "say"): TraceChatLine => ({ t, kind, text });

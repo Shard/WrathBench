@@ -23,31 +23,6 @@ export const MAX_SCALE = 8;
 /** How stale a reading may be before its pip is drawn dimmed. */
 export const STALE_MS = 120_000;
 
-/** The feed's own reference clock: when the response was rendered, and when this tab received it. */
-export interface FeedClock {
-  /** The snapshot envelope's `generatedAt` (server clock). */
-  generatedAt: number;
-  /** When this browser got the body (browser clock). */
-  fetchedAt: number;
-}
-
-/**
- * How old a position reading is, for the stale dimming.
- *
- * Against the browser's clock alone the public build reads healthy agents as
- * stale: the snapshot pipeline's legitimate worst case — a 60s publish cadence
- * plus 30s at the edge plus the 30s client memo — is exactly `STALE_MS`, with
- * zero margin for the reading's own age. When the feed carries its envelope,
- * the age is measured the way `snapshotBanner` separates the same two clocks:
- * how old the reading was on the server's clock when the snapshot was rendered,
- * plus how long this tab has been holding the response on its own. Without an
- * envelope (the live API, replays) the plain arithmetic stands.
- */
-export function positionAgeMs(ts: number, now: number, clock: FeedClock | null): number {
-  if (clock === null) return now - ts;
-  return clock.generatedAt - ts + (now - clock.fetchedAt);
-}
-
 /**
  * The maps we can name by id. A map id is what the server sends and what a
  * `/map?map=1` link carries, so it stays the title and the URL; the label is
@@ -477,7 +452,7 @@ export function pxPerYard(scale: number): number {
 }
 
 /*
- * The nearby layer (`lib/nearbyplayer.ts`): the units around a live character
+ * The nearby layer (`@wrathbench/inspector/views/nearbyplayer`): the units around a live character
  * draw only once the map is in close enough to tell one from another — about
  * a pixel a yard, where a character's ~100 yd of view spans a few hundred
  * pixels — and their names show unhovered only further in still. The map
@@ -602,7 +577,7 @@ export function colorOf(runId: string): string {
 /**
  * A drawn agent: its newest reading, and where it is *currently drawn* — which
  * lags the reading while the pip walks toward it, and on a run with a trace
- * is wherever the trace puts it at the playhead (`lib/traceplayer.ts`).
+ * is wherever the trace puts it at the playhead (`@wrathbench/inspector/views/traceplayer`).
  */
 export interface Pip extends Placeable {
   runId: string;

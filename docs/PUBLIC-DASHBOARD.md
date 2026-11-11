@@ -193,7 +193,7 @@ mutable URLs after each push tightens it to the push cadence.
 
 A run the trace recorder drove has positions at about 1 Hz and the unit state
 beside them, packed one segment per run per UTC-aligned five-minute window
-(`runner/viewer/trace.ts` is the codec and the format). That is what lets the
+(`@wrathbench/inspector/codec/trace`, in the stack, is the codec and the format). That is what lets the
 map play a character back as movement rather than a pip that jumps once a pass.
 Since the character sheet joined it, a segment also says what the character
 had at any moment in the window: money, equipment, worn bags, what it carried,
@@ -259,7 +259,7 @@ them. A replay asks for one segment per five minutes of play, so even 60×
 playback is about one request every five seconds. A player should prefetch
 around the cursor, not a whole run.
 
-The reader is `dashboard/src/lib/traceplayer.ts`, and it is written to that
+The reader is the inspector's trace player (`@wrathbench/inspector/views/traceplayer`), and it is written to that
 budget. The live map fetches only for the runs drawn on the continent on
 screen: the window under the playhead, and the next listed one in the last
 minute before the playhead reaches it, with at most four requests in flight
@@ -313,7 +313,7 @@ holds its window.
   nine minutes behind the newest `live.json`, and from one pass to the next
   its playhead reaches about nine minutes behind the pass in hand at the
   nominal cadence and eleven with passes ten minutes apart. Twelve covers both
-  (`runner/viewer/nearby.ts`; `dashboard/test/nearbyplayer.test.ts` runs the
+  (`runner/viewer/public-keys.ts`; `dashboard/test/nearbyplayer.test.ts` runs the
   clock against it). A slower publisher leaves the layer empty for part of a
   cycle rather than showing old units. The window is read straight after the
   feed, at the top of the pass, so it reaches as far back as the playhead.
@@ -525,7 +525,7 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   Every run is re-keyed once by it, as it was for the travel marks.
 - **A track's travel marks ship.** The replay draws flights in their own
   colour and leaves a gap at a teleport from the track's `travel` list, read
-  off the trajectory at request time (`dashboard/src/lib/replay.ts`). Its
+  off the trajectory at request time (`classifySegments`, `@wrathbench/inspector/views/replay`). Its
   flight takeoffs and landings, its hearthstone uses and its graveyard
   releases ship as kinds and timestamps, facts the safe core, the action log
   and the deaths already carry. The track is hashed into the run's key with
@@ -739,7 +739,7 @@ bytes, so the release re-keys those runs once, all four objects (the old set is
 pruned as usual), and a run from before the column keeps its key. The shape is
 unchanged, so a site on any build reads the new numbers.
 
-**A track's inventory is patches** (`inv`, `runner/viewer/track-inv.ts`): each
+**A track's inventory is patches** (`inv`, `@wrathbench/inspector/codec/inventory`): each
 change as the slots that moved, where the track used to carry the whole
 inventory on every point it changed on. That took a level-43 character's track
 from 30.3 MB to 5.7 MB, and a live run's track is re-uploaded on every pass.
@@ -869,7 +869,7 @@ mean xp as the level badge and xp bar the table uses, mean gold and quests as
 the table draws them, then how many runs the means rest on, the mean cost
 with its basis, the mean active playtime and any axis in view the card does not
 already show. It sits inside the visible part of the chart beside the point,
-flipping away from an edge (`cardPlacement`, `lib/popover.ts`), and never
+flipping away from an edge (`cardPlacement`, `@wrathbench/inspector/views/popover`), and never
 takes the pointer, so the mark under it is still the link. On a touch screen
 the first tap opens the card, a second follows the link, and a tap elsewhere
 closes it.
@@ -1223,7 +1223,7 @@ the only third-party origins the application asks for, alongside the
 Cloudflare Web Analytics script (`static.cloudflareinsights.com`) — cookieless,
 and appended at startup by `dashboard/src/main.tsx` on the public build only,
 so the same bundle served by the private viewer reports nothing. The tooltip script is injected at runtime by
-`dashboard/src/lib/wowhead.ts` rather than sitting in `index.html`, so a page
+`@wrathbench/inspector/views/wowhead` rather than sitting in `index.html`, so a page
 with no items asks for nothing. The reason for the
 arrangement is the red line in `docs/DATA-AND-LEGAL.md`: we extract and serve
 no item art — we publish the `item_template.entry` the server already gave us

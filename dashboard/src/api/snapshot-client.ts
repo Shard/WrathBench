@@ -554,7 +554,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
      * a 404 the edge then caches for a day.
      */
     traceSegment: async (id: string, t0: number): Promise<TraceSegment> => {
-      const { traceSegmentKey } = await import("@viewer/trace");
+      const { traceSegmentKey } = await import("@viewer/public-keys");
       return await held<TraceSegment>(traceSegmentKey(id, Number(traceWindow(t0))));
     },
     /*
@@ -564,7 +564,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
      * whole of its trace — an index with no windows and no tail adds nothing.
      */
     traceIndex: async (id: string): Promise<TraceIndexResponse> => {
-      const { SEG_MS, packSegs } = await import("@viewer/trace");
+      const { SEG_MS, packSegs } = await import("@wrathbench/inspector/codec/trace");
       const l = await live();
       const trace = l.positions.positions.find((p) => p.runId === id)?.trace;
       return {
@@ -583,7 +583,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
      * recorded) answers an empty one, which the map draws as no units.
      */
     nearby: async (id: string): Promise<NearbyWindow> => {
-      const { emptyNearbyWindow } = await import("@viewer/nearby");
+      const { emptyNearbyWindow } = await import("@wrathbench/inspector/codec/nearby");
       const { windows, generatedAt: at } = await nearbyWindows();
       return windows[id] ?? emptyNearbyWindow(id, at);
     },
