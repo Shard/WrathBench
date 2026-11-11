@@ -822,7 +822,12 @@ config they edit, read-only: any other method is a 405 that points at the
 config API. It carries the groups; every credential the store holds, joined
 by id to the supervisor's status off `fleet-state.json` (whether its variable
 is set, sessions on its slots, what its budget has used, holds, its last
-indicting failure); the providers a credential may name; and how publishing is
+indicting failure) and its health (`health: { state, reason, since,
+lastCheck }`, `windows`, `fix`; `runner/src/credential-health.ts`), derived
+from the store's switch, `WRATHBENCH_MODEL_KEYS` and the supervisor's
+published inputs (its structured `holds` and a reader's `lastRead`), and null
+while no supervisor is up unless the store or the chart already says what is
+wrong; the providers a credential may name; and how publishing is
 set, with the publisher's last flip, held passes and secret-scan withholds off
 its state file.
 

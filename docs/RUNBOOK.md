@@ -1397,26 +1397,46 @@ reached on the LAN by the viewer's own names ("Where the config lives").
 It is one more client of the config store, beside `bun wb config`: every
 write goes through `/api/config` and `parseFleet`, is refused with the
 supervisor's own sentence, and lands in `config_audit` with the actor and
-note the page requires. Beside the roster and the drafts it edits:
+note the page requires. It is one section at a time, each its own address
+(`/config/<section>`), listed down the side (a row across the top on a
+phone); a section whose group is off is absent, and every store row's raw
+editor sits in the section of the table that edits it:
 
-- **credentials**: add one (provider, the env var NAME its secret is in,
-  slots, billing, a budget), change its slots, enable or disable it, remove
-  it. Its status is the supervisor's: whether the variable is set in its
-  environment (unknown while no supervisor is up), slots in use, what the
-  budget has used, holds and the last failure that indicts it. A variable
-  not in the chart's `modelKeys` is flagged, because no model pod carries it.
-- **freeplay agents**: an entry's `idle: unlimited` on or off, which plays or
+- **providers** (`/config/providers`): every credential with its health, and
+  its non-secret fields edited in place: add one (provider, the env var NAME
+  its secret is in, slots, billing, a budget), edit those of an existing one
+  (its id and provider stay; a new provider is a new credential), enable or
+  disable it, remove it. A credential's health is one state, the first that
+  applies of `disabled` (the store's switch), `secret-missing` (the
+  supervisor's environment lacks the variable, or the chart's `modelKeys`
+  does not hand it to the model pods), `auth-failed` (a provider read or a
+  paused run says the key was refused), `no-access`, `quota-spent` (a usage
+  window at 100%, the provider's word, or a paused `quota-exhausted` run),
+  `overage`, `held` (a budget holding starts: a usage threshold, today's
+  spend or runs), `unread` (the provider's usage endpoint gave no answer) and
+  `ok`, with the reason, since when where known, the provider's last answer,
+  the usage windows as meters, and the fix. Unknown while no supervisor is
+  up, except what the store and the chart say themselves. Every state is
+  derived from state that already exists (`runner/src/credential-health.ts`).
+- **roster**: the roster's fields, a new entry, and the drafts ("Adding a
+  model").
+- **freeplay**: an entry's `idle: unlimited` on or off, which plays or
   pauses its durable character ("Freeplay characters are durable").
 - **campaigns**: enable, disable or remove one, or add one from a published
   definition with its assignments. Publishing a definition stays the CLI's
   ("Probe campaigns").
-- **the queue**: enable, disable or remove a job, or add one.
+- **queue**: enable, disable or remove a job, or add one.
+- **policy**: the remaining rows (`policy`, `accounts`, `preflight`) as raw
+  JSON.
 - **deployment**: the groups and how publishing is set, read-only, with the
   chart key on each row.
+- **history**: the audit table and the export.
 
 New credentials, campaigns and jobs are written disabled. A secret's value is
 never read, shown or written from the browser: the store holds names, and
-values are the deployment's Secret ("Secrets"). The status comes from
+values are the deployment's Secret ("Secrets"). Each credential's `set key`
+(an endpoint) or `re-auth` (a subscription) control is there and switched
+off, until where a secret written from the browser goes is decided. The status comes from
 `GET /api/admin` (`runner/viewer/README.md`), which the chart feeds with the
 `modelKeys` names and, when there is a publisher, its non-secret settings and
 its state file, mounted read-only.
