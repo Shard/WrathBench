@@ -42,6 +42,7 @@ import { statSync } from "node:fs";
 import { dirname } from "node:path";
 import { SessionReader, type EventRow, type StreamCursor } from "@wrathbench/mcp/record";
 import { isV1RunDir, milestoneOfEvent, sessionDirOfRun, TurnIndex } from "../src/run-reader";
+import { feedRecordOf, readRecordRow, RecordFollower, type RecordLine, type RecordLoc } from "./record-feed";
 import { CodexUsageCorrector } from "../src/codex-usage";
 import { CONTEXT_POLICY } from "../src/context";
 import { driverEntry } from "../src/drivers";
@@ -2263,6 +2264,18 @@ function unparseable(text: string, i: number, start: number, end: number): Entry
   return { i, t: "unparseable-line", ts: 0, start, end, line: clip(text, 400).text, clipped: true };
 }
 
+/**
+ * A trajectory record that the first v1 builds wrote beside the session
+ * record's own row for the same thing (wrath-mcp#29 phase 1): a milestone, a
+ * turn-in, the action log, a movement intention, a tool's event batch. A v1
+ * run's feed takes those from the record (`record-feed.ts`), so these are
+ * skipped rather than shown twice.
+ */
+function isRecordMirror(rec: Record<string, unknown>): boolean {
+  const t = rec["t"];
+  return t === "milestone" || t === "quest_complete" || t === "actions" || t === "move" || (t === "events_served" && rec["via"] === "tool");
+}
+
 export class TrajectoryTail {
   readonly path: string;
   readonly entries: EntrySummary[] = [];
@@ -2300,6 +2313,16 @@ export class TrajectoryTail {
   private readonly systemTextAt = new Map<string, number>();
   /** Per-turn codex usage for records written before the driver logged it; see `CodexUsageCorrector`. */
   private readonly codexUsage = new CodexUsageCorrector();
+  /** The turn in flight at an instant, from the lines read so far: the session record's rows are joined to turns by it. */
+  private turns = new TurnIndex();
+  /** Whether this is a v1 run, whose game side is its session record's; latched once seen. */
+  private v1 = false;
+  /** The session record's `events` and `calls`, followed; null for a 0.5 run. */
+  private follower: RecordFollower | null = null;
+  /** Record rows read but not yet in the feed: each waits for the trajectory to reach its stamp. */
+  private readonly pendingRecord: RecordLine[] = [];
+  /** Where each entry that came from the session record is, by entry index, for `raw`. */
+  private readonly recordLocs = new Map<number, RecordLoc>();
   /**
    * The last timestamp the FILE carries, served or not: the run page closes a
    * finished run's last segment on it, and `scanRunTotals` reads it off every
@@ -2405,9 +2428,17 @@ export class TrajectoryTail {
       this.uncosted = 0;
       this.segmentMarkList.length = 0;
       this.spanMemo = null;
+      this.turns = new TurnIndex();
+      this.follower = null;
+      this.pendingRecord.length = 0;
+      this.recordLocs.clear();
       this.gen++;
     }
-    if (size === this.size) return [];
+    // A v1 run's game side is its session record's, merged in by time (`record-feed.ts`).
+    if (!this.v1 && isV1RunDir(dirname(this.path))) this.v1 = true;
+    if (this.v1 && this.follower === null) this.follower = new RecordFollower(sessionDirOfRun(dirname(this.path)));
+    this.followRecord();
+    if (size === this.size && this.pendingRecord.length === 0) return [];
 
     const added: EntrySummary[] = [];
     // A window at a time; see `SCAN_CHUNK_BYTES`. Byte offsets are the file's
@@ -2425,10 +2456,65 @@ export class TrajectoryTail {
         offset = end + 1; // the newline
         if (line.length === 0) continue;
         const text = this.decoder.decode(line);
+        let rec: Record<string, unknown> | null = null;
+        try {
+          rec = JSON.parse(text) as Record<string, unknown>;
+        } catch {
+          /* summarised as unparseable below */
+        }
+        if (rec !== null) {
+          this.turns.note(rec);
+          // The session record's rows from before this line come first: the feed is in time order.
+          if (this.pendingRecord.length > 0 && typeof rec["ts"] === "number") this.flushRecord(rec["ts"], added);
+          // What a first-build v1 trajectory mirrored of the record is read off the record alone.
+          if (this.v1 && isRecordMirror(rec)) continue;
+        }
+        this.take(rec, text, start, end, added);
+      }
+      this.consumed = offset;
+      this.pending = rest.length === 0 ? new Uint8Array(0) : new Uint8Array(rest);
+    }
+    // Whatever of the record is newer than every trajectory line read.
+    this.flushRecord(Infinity, added);
+    return added;
+  }
+
+  /**
+   * Read the session record on from where the last scan stopped, into the
+   * rows waiting to be merged into the feed (`record-feed.ts`), oldest first.
+   */
+  private followRecord(): void {
+    if (this.follower === null) return;
+    const lines = this.follower.read();
+    if (lines.length === 0) return;
+    this.pendingRecord.push(...lines);
+    this.pendingRecord.sort((a, b) => a.row.ts - b.row.ts);
+  }
+
+  /** Feed the waiting record rows stamped at or before `ts`, each as the trajectory record it stands for. */
+  private flushRecord(ts: number, added: EntrySummary[]): void {
+    let n = 0;
+    while (n < this.pendingRecord.length && this.pendingRecord[n]!.row.ts <= ts) n++;
+    if (n === 0) return;
+    for (const line of this.pendingRecord.splice(0, n)) {
+      const rec = feedRecordOf(line.row, this.turns.at(line.row.ts), line.loc.stream);
+      if (rec === null) continue;
+      this.recordLocs.set(this.entries.length, line.loc);
+      this.take(rec, JSON.stringify(rec), -1, -1, added);
+    }
+  }
+
+  /**
+   * One record into the index: every accumulator, then the feed. `rec` null
+   * is a line that will not parse. A trajectory line's `start`/`end` are its
+   * bytes in the file; a session record row's are -1, and `recordLocs` says
+   * where it is.
+   */
+  private take(rec: Record<string, unknown> | null, text: string, start: number, end: number, added: EntrySummary[]): void {
         const i = this.entries.length;
         let summary: EntrySummary;
         try {
-          const rec = JSON.parse(text) as Record<string, unknown>;
+          if (rec === null) throw new Error("unparseable");
           // Before anything reads its usage: a codex response written before
           // the driver logged per-turn deltas carries the thread's total.
           this.codexUsage.note(rec);
@@ -2463,11 +2549,12 @@ export class TrajectoryTail {
           const reflect = reflectMarkOf(rec);
           if (reflect !== null) this.reflectMarks.push(reflect);
           const ts = rec["ts"];
-          if (typeof ts === "number" && ts > 0) this.lastTsSeen = ts;
+          // The file's, never a session record row's: the run page closes a finished run's last segment on it.
+          if (start >= 0 && typeof ts === "number" && ts > 0) this.lastTsSeen = ts;
           // After the accumulators, so a record that is not served still counts
           // toward everything derived from the file, and after the offset above,
           // so the byte range of every later entry — what `raw` reads — stands.
-          if (!isServedEntry(rec)) continue;
+          if (!isServedEntry(rec)) return;
           if (rec["t"] === "request" && typeof rec["systemText"] === "string" && typeof rec["systemHash"] === "string") {
             this.systemTextAt.set(rec["systemHash"], i);
           }
@@ -2478,11 +2565,6 @@ export class TrajectoryTail {
         this.entries.push(summary);
         this.index(summary);
         added.push(summary);
-      }
-      this.consumed = offset;
-      this.pending = rest.length === 0 ? new Uint8Array(0) : new Uint8Array(rest);
-    }
-    return added;
   }
 
   /**
@@ -2650,6 +2732,13 @@ export class TrajectoryTail {
   async raw(i: number): Promise<string | null> {
     const e = this.entries[i];
     if (e === undefined) return null;
+    const loc = this.recordLocs.get(i);
+    if (loc !== undefined) {
+      // A session record row: read again, and served as the record the feed drew.
+      const row = readRecordRow(sessionDirOfRun(dirname(this.path)), loc);
+      const rec = row === null ? null : feedRecordOf(row, this.turns.at(row.ts), loc.stream);
+      return rec === null ? null : redactRawLine(JSON.stringify(rec));
+    }
     const text = await this.lineOf(e);
     if (e.t !== "request") return redactRawLine(text);
     let rec: Record<string, unknown>;

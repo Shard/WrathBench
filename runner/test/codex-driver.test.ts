@@ -36,6 +36,19 @@ import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { LEAKED_SECRET, LEAKY_PAD, LEAKY_RESULT_AS_READ, leakyCrashNotice, leakySnippetResult } from "./fixtures/leaky-snippet";
 import { tempDirs } from "./fixtures/temp-dirs";
 
+
+/** Count the state snapshots a sandbox is asked for, from now on. */
+function countSnapshots(sandbox: unknown): () => number {
+  let n = 0;
+  const s = sandbox as { stateSnapshot: () => Promise<unknown> };
+  const real = s.stateSnapshot.bind(s);
+  s.stateSnapshot = () => {
+    n++;
+    return real();
+  };
+  return () => n;
+}
+
 const tempDir = tempDirs();
 
 const FIXTURE = join(import.meta.dir, "fixtures", "fake-codex.ts");
@@ -801,15 +814,16 @@ describe("codex driver", () => {
     trajectory.close();
   }, 30_000);
 
-  test("the state ticker samples during a turn: the state rows land through this driver too", async () => {
-    // The trace is not the ticker's any more (the stack's host drains its
-    // child's recorder on a tick of its own); what the ticker still owes every
-    // driver is its samples, written while the CLI holds the turn.
+  test("the state ticker samples during a turn, through this driver too", async () => {
+    // The record is not the ticker's (the stack's host drains its child's
+    // recorder on a tick of its own); what the ticker still owes every driver
+    // is its samples, for the watchdogs, taken while the CLI holds the turn.
     const { trajectory, options } = setupEpisode("long-turn", { watchdogs: { episodeMs: 300 } });
+    const sampled = countSnapshots(options.sandbox);
     const outcome = await runCodexEpisode({ ...options, watchdogTickMs: 25, killGraceMs: 200 });
     expect(outcome.kind === "terminated" && outcome.reason).toBe("episode-limit");
-    // More than the turn preamble's one: the ticker wrote them while the CLI ran.
-    expect(trajectory.stateRows("run-test").length).toBeGreaterThanOrEqual(3);
+    // More than the turn preamble's one: the ticker sampled while the CLI ran.
+    expect(sampled()).toBeGreaterThanOrEqual(3);
     trajectory.close();
   }, 30_000);
 

@@ -1,9 +1,10 @@
 /**
- * A verdict the runner recorded but could not write into run.sqlite.
+ * A verdict the runner recorded but could not write into its run row (a 0.5
+ * run.sqlite whose write met a lock past its retries; meta.json, now, on a
+ * full disk).
  *
  * `Trajectory.setTermination` appends the `termination` record first and then
- * writes the row; a row write that still meets a lock after its retries
- * throws, and the record stands alone. Before, such a run read as ownerless
+ * writes the row, so a row write that fails leaves the record alone. Before, such a run read as ownerless
  * once its heartbeat went cold: a resuming lane stamped it `offline` and
  * brought back a run that had recorded its own end, and the stale sweep ended
  * a scored one a second time under another reason. `readRunFact` now takes
@@ -19,8 +20,7 @@ import { readRunFact, terminationOfTrajectory, verdictOfTrajectory } from "../ru
 import { HEARTBEAT_FILE, readTrajectory, Trajectory } from "../runner/src/trajectory";
 import { implicitPauses, repairRecordedTerminations } from "./run-fleet";
 import { tempDirs } from "./temp-dirs";
-import { existsSync, writeFileSync } from "node:fs";
-import { Database } from "bun:sqlite";
+import { writeFileSync } from "node:fs";
 
 const tempDir = tempDirs();
 const HARNESS = "harness-0.5-1068-g0000000";
@@ -96,58 +96,6 @@ describe("a termination on record but not in the row", () => {
     expect(again.recordedTermination).toBeUndefined();
     expect(repairRecordedTerminations(runsDir, [f])).toEqual([]);
   });
-
-  test("a pause queued behind a retrying write: it reads as paused at once, and the unwind writes no second pause record", async () => {
-    const runsDir = tempDir("wb-rec-pause-");
-    const runId = "fleet-rec-p1";
-    const dir = join(runsDir, runId);
-    const t = new Trajectory(dir, { wal: true, busyTimeoutMs: 30, retry: { waitsMs: [3000, 3000, 3000] } });
-    const config = loadRunConfig({ runId, token: newSessionToken(), driver: "openai", model: "z-ai/glm-5.2:free", episode: "e90", runsDir, moduleUrl: "http://127.0.0.1:9", account: "RUNNER3" });
-    const meta = { runId, harnessVersion: HARNESS, startedAt: Date.now() - 60_000, config, comparability: comparabilityOf(config, HARNESS) };
-    await t.writeMeta(meta);
-    // A second writer holds the file while a state write is issued: the state
-    // write goes into its retry's three-second sleep.
-    const hold = join(runsDir, "hold.ts");
-    writeFileSync(
-      hold,
-      `import { Database } from "bun:sqlite";
-import { existsSync, writeFileSync } from "node:fs";
-import { Database } from "bun:sqlite";
-const [path, sentinel] = process.argv.slice(2) as [string, string];
-const db = new Database(path);
-db.exec("BEGIN IMMEDIATE");
-writeFileSync(sentinel, "x");
-Bun.sleepSync(400);
-db.exec("COMMIT");
-db.close();
-`,
-    );
-    const sentinel = join(runsDir, "held");
-    const child = Bun.spawn([process.execPath, hold, join(dir, "run.sqlite"), sentinel]);
-    while (!existsSync(sentinel)) await Bun.sleep(5);
-    const state = t.recordState(runId, { level: 3, xp: 10 });
-    await child.exited;
-    // The file is free now, but the state write is still asleep: the SIGTERM
-    // handler's pause queues behind it.
-    const paused = t.pauseWithMark(runId, { reason: "operator-pause", detail: "SIGTERM: supervisor stop", at: Date.now(), episodeElapsedMs: 4000 }, meta);
-    const other = new Database(join(dir, "run.sqlite"), { readonly: true });
-    try {
-      expect(other.query("SELECT pause_reason FROM run").get()).toEqual({ pause_reason: null });
-    } finally {
-      other.close();
-    }
-    // A SIGKILL here would leave only the record and the mark: they are the verdict.
-    const f = readRunFact(runsDir, runId, Date.now() + 10 * 60_000)!;
-    expect(f.pause?.reason).toBe("operator-pause");
-    expect(f.pause?.episodeElapsedMs).toBe(4000);
-    expect(f.live).toBe(false);
-    // The driver's unwind reaches the same call: no second record.
-    expect(await t.setPause(runId, "rate-limited", "429", 4100)).toBe(false);
-    await Promise.all([state, paused]);
-    expect(readTrajectory(dir).filter((r) => r.t === "pause")).toHaveLength(1);
-    expect(t.runRow(runId)?.["pause_reason"]).toBe("operator-pause");
-    await t.finish();
-  }, 20_000);
 
   test("a pause only meta.json marks still reads as paused; a resume after a pause record cancels it", async () => {
     const runsDir = tempDir("wb-rec-pause-");

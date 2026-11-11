@@ -111,6 +111,80 @@ export function writeLegacy05Moves(runDir: string, runId: string, moves: readonl
   });
 }
 
+/**
+ * 0.5's `run` and `state` tables, as its `Trajectory` created them (every
+ * column it ever added folded in). A v1 run has neither: its row is meta.json's
+ * and its readings are its trace's.
+ */
+export const LEGACY05_RUN_DDL = `
+CREATE TABLE IF NOT EXISTS run (
+  run_id TEXT PRIMARY KEY, harness_version TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER,
+  driver TEXT, shakeout TEXT, model TEXT, objective TEXT, character TEXT, platform TEXT,
+  resolved_model TEXT, resolved_cli_version TEXT, resolved_provider TEXT, continued_from TEXT,
+  termination_reason TEXT, termination_detail TEXT, pause_reason TEXT, reflecting_since INTEGER, config_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS state (
+  run_id TEXT NOT NULL, ts INTEGER NOT NULL, level INTEGER, xp INTEGER, map INTEGER, x REAL, y REAL, z REAL,
+  event_count INTEGER, last_seq INTEGER, money INTEGER, quests_completed INTEGER, turn INTEGER, zone INTEGER, area INTEGER,
+  items TEXT, health INTEGER, max_health INTEGER, power INTEGER, max_power INTEGER, power_type INTEGER, next_level_xp INTEGER
+);
+`;
+
+/** One 0.5 `state` row, in its camelCase `StateLine` spelling; `items` as the samples (stored as JSON). */
+export interface Legacy05State {
+  ts: number;
+  level?: number;
+  xp?: number;
+  map?: number;
+  x?: number;
+  y?: number;
+  z?: number;
+  eventCount?: number;
+  lastSeq?: number;
+  money?: number;
+  questsCompleted?: number;
+  turn?: number;
+  zone?: number;
+  area?: number;
+  items?: unknown[];
+  health?: number;
+  maxHealth?: number;
+  power?: number;
+  maxPower?: number;
+  powerType?: number;
+  nextLevelXp?: number;
+}
+
+/**
+ * Write a 0.5 run's `run` row and `state` rows into its `run.sqlite`, as 0.5's
+ * `Trajectory.writeMeta` and `recordState` left them. `row` is the run row's
+ * columns by name (`run_id`, `harness_version` and `started_at` at least);
+ * `config_json` defaults to `{}`.
+ */
+export function writeLegacy05Run(runDir: string, row: Record<string, unknown>, states: readonly Legacy05State[] = []): void {
+  mkdirSync(runDir, { recursive: true });
+  const db = new Database(join(runDir, "run.sqlite"), { create: true });
+  try {
+    db.exec(LEGACY05_RUN_DDL);
+    const full: Record<string, unknown> = { config_json: "{}", ...row };
+    const cols = Object.keys(full);
+    db.query(`INSERT OR REPLACE INTO run (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`).run(...(Object.values(full) as never[]));
+    const insert = db.query(
+      `INSERT INTO state (run_id, ts, level, xp, map, x, y, z, event_count, last_seq, money, quests_completed, turn, zone, area, items, health, max_health, power, max_power, power_type, next_level_xp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const s of states) {
+      const n = (v: number | undefined): number | null => v ?? null;
+      insert.run(
+        String(full["run_id"]), s.ts, n(s.level), n(s.xp), n(s.map), n(s.x), n(s.y), n(s.z), n(s.eventCount), n(s.lastSeq), n(s.money), n(s.questsCompleted), n(s.turn), n(s.zone), n(s.area),
+        s.items === undefined ? null : JSON.stringify(s.items), n(s.health), n(s.maxHealth), n(s.power), n(s.maxPower), n(s.powerType), n(s.nextLevelXp),
+      );
+    }
+  } finally {
+    db.close();
+  }
+}
+
 /** The ring file a row of time `ts` went to. */
 export function legacy05RingFile(ts: number): number {
   return Math.floor(ts / LEGACY05_RING.fileMs) * LEGACY05_RING.fileMs;

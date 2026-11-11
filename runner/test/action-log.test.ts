@@ -18,6 +18,9 @@ import type { ToolContext } from "../src/tools";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { SecretRedactor } from "@wrathbench/mcp";
 import { summarize } from "../viewer/tail";
+import { feedRecordOf } from "../viewer/record-feed";
+import { openSessionRecord } from "../src/session-record";
+import { SessionReader } from "@wrathbench/mcp/record";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -182,17 +185,19 @@ describe("the viewer's summary of an actions record", () => {
 });
 
 describe("the record joins its tool call", () => {
-  test("an MCP-driven snippet's actions carry the call's dispatchTs as callTs", async () => {
+  test("an MCP-driven snippet's actions carry the call's dispatchTs, and the feed reads it as callTs", async () => {
     const stub = startModuleStub();
-    const dir = tempDir("wrathbench-actions-traj-");
+    const runsDir = tempDir("wrathbench-actions-traj-");
+    const dir = join(runsDir, "run-actions");
     const trajectory = new Trajectory(dir);
+    const session = openSessionRecord({ runDir: dir, runsDir, token: TOKEN, scrub: (t) => t });
     const host = new SandboxHost({
       moduleUrl: stub.url,
       token: TOKEN,
       scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
       snippetTimeoutMs: 6_000,
       pingGraceMs: 1_000,
-      onActions: (flush) => trajectory.recordActions(flush),
+      session,
     });
     hosts.push(host);
     const ctx: ToolContext = {
@@ -204,6 +209,7 @@ describe("the record joins its tool call", () => {
       episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
       turn: () => 5,
       secrets: new SecretRedactor(),
+      record: session.writer,
     };
     const server = new McpServer(ctx, { onToolCall: trajectoryToolCallWriter(trajectory) });
     await server.handleLine(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }));
@@ -213,18 +219,20 @@ describe("the record joins its tool call", () => {
       );
     await run(2, "await connect(); await sdk.createSession({ character: 'Fenwick' });");
     await run(3, `await sdk.say("hello"); 1`);
+    await host.recordDrain();
     trajectory.close();
 
-    const records = readTrajectory(dir);
-    const calls = records.filter((r) => r.t === "tool_call");
-    const actions = records.filter((r) => r.t === "actions");
-    expect(actions.length).toBe(1);
-    expect(actions[0]).toMatchObject({ turn: 5, actions: [{ action: "say", args: { text: "hello" }, status: 200 }] });
-    // Appended before the call it belongs to (the MCP writer records after the
-    // fact), and joined by value rather than by position.
-    const owner = calls.find((c) => c["dispatchTs"] === actions[0]!["callTs"]);
+    const calls = readTrajectory(dir).filter((r) => r.t === "tool_call");
+    // The trajectory is the model side: the action log is the record's.
+    expect(readTrajectory(dir).filter((r) => r.t === "actions")).toEqual([]);
+    const rows = new SessionReader(join(dir, "session")).rows("calls").filter((r) => r.kind === "actions");
+    const said = rows.filter((r) => r.kind === "actions" && r.actions.some((a) => a.action === "say"));
+    expect(said).toHaveLength(1);
+    const feed = feedRecordOf(said[0]!, 5, "calls")!;
+    expect(feed).toMatchObject({ t: "actions", turn: 5, actions: [{ action: "say", args: { text: "hello" }, status: 200 }] });
+    // Joined by value: the call that sent it is the one whose dispatch stamp it names.
+    const owner = calls.find((c) => c["dispatchTs"] === feed["callTs"]);
     expect(owner).toBeDefined();
-    expect(records.indexOf(actions[0]!)).toBeLessThan(records.indexOf(owner!));
     expect(calls.map((c) => c["dispatchTs"] as number)).toEqual(
       [...new Set(calls.map((c) => c["dispatchTs"] as number))],
     );

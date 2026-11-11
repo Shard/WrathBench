@@ -21,12 +21,11 @@
  *
  * Both carry a character sheet on the trace (money, worn and carried items, a
  * quest log with one quest that completes, one in progress and one of four
- * items to collect, two never found, and a turn-in), the 60 s
- * state line, snippets and tool calls with one failure each, a harness notice
- * and a scratchpad, and a chat line every 20 s on the trace (`chatAt`), so the
- * map has bubbles up in every shot. The state line's quest count starts again at zero halfway
- * (`questsAt`), as a resumed process's does, so the map's quest figure shows
- * the run's sum (3) where the newest sample says 1.
+ * items to collect, two never found, and a turn-in), which is where the run's
+ * level, XP, money and bags are read from, a turn a minute with snippets and
+ * tool calls with one failure each, a harness notice and a scratchpad, and a
+ * chat line every 20 s on the trace (`chatAt`), so the map has bubbles up in
+ * every shot.
  *
  * The live run also has a nearby ring (`nearbyScene`), written through the
  * session writer and reaching back fourteen minutes so the public map, which
@@ -89,8 +88,6 @@ const DICT: TraceDict = {
   ],
 };
 
-const ITEM_NAMES = new Map((DICT.items ?? []).map(([id, quality, name]) => [id, { quality, name }]));
-
 function position(t: number, phase: number, at: Ground = CENTRE): { x: number; y: number; o: number } {
   const a = (2 * Math.PI * ((t + phase) % LOOP_MS)) / LOOP_MS;
   return { x: at.x + 25 * Math.cos(a), y: at.y + 25 * Math.sin(a), o: (a + Math.PI / 2) % (2 * Math.PI) };
@@ -140,16 +137,6 @@ function keyData(level: number, xp: number, pelts: number, money: number, comple
   };
 }
 
-function itemsOf(pelts: number): { name: string; count: number; equipped: boolean; itemId: number; quality?: number; slot: number; bag?: number }[] {
-  const named = (id: number) => ITEM_NAMES.get(id)!;
-  return [
-    { name: named(1001).name, count: 1, equipped: true, itemId: 1001, quality: 1, slot: 15 },
-    { name: named(1002).name, count: 1, equipped: true, itemId: 1002, quality: 1, slot: 4 },
-    { name: named(1003).name, count: 1, equipped: true, itemId: 1003, quality: 2, slot: 7 },
-    { name: named(1004).name, count: pelts, equipped: false, itemId: 1004, quality: 0, slot: 23, bag: 255 },
-    { name: named(1005).name, count: 4, equipped: false, itemId: 1005, quality: 1, slot: 24, bag: 255 },
-  ];
-}
 
 interface Spec {
   runId: string;
@@ -227,15 +214,6 @@ function traceRows(spec: Spec, from: number, to: number, keyAtFrom = true): Trac
   return rows;
 }
 
-/**
- * The recorded quest count at fraction `f` of a run: its first process turns
- * in two, a restart halfway starts the count again, and the second turns in
- * one. The run's count is 3 by the end; the newest sample's is 1.
- */
-function questsAt(f: number): number {
-  if (f < 0.5) return f > 0.35 ? 2 : f > 0.2 ? 1 : 0;
-  return f > 0.7 ? 1 : 0;
-}
 
 /** A run's session record and the clock it is written on: the fixture's own while it lays the past down, the wall clock after. */
 interface FixtureSession {
@@ -286,28 +264,12 @@ function writeRun(runsDir: string, spec: Spec, ended: number | null): { traj: Tr
   traj.setCharacter(spec.runId, spec.character);
   writeFileSync(join(dir, "scratchpad.md"), spec.scratchpad);
 
-  // The 60 s state line, from the start.
+  // A turn a minute, from the start. What the character reads is its trace's (`session/`, below).
   const until = ended ?? spec.traceTo;
   let turn = 0;
-  const at = spec.ground ?? CENTRE;
   for (let t = spec.startedAt + 30_000; t <= until; t += 60_000) {
     clock = t;
-    const p = position(t, spec.phase, at);
-    const pelts = 1 + Math.min(4, Math.floor(((t - spec.startedAt) / Math.max(1, until - spec.startedAt)) * 5));
-    traj.recordState(spec.runId, {
-      level: spec.level ?? 7,
-      xp: 1000 + Math.floor(((t - spec.startedAt) / (until - spec.startedAt)) * 3000),
-      map: at.map,
-      ...p,
-      z: at.z,
-      money: 2500 + Math.floor((t - spec.startedAt) / 60_000) * 7,
-      questsCompleted: questsAt((t - spec.startedAt) / Math.max(1, until - spec.startedAt)),
-      turn: ++turn,
-      health: 180,
-      maxHealth: 200,
-      nextLevelXp: 4400,
-      items: itemsOf(pelts),
-    });
+    ++turn;
     // A turn of play beside each sample: a snippet, its result, a reply.
     traj.append({ t: "request", turn, adapter: "stub", promptChars: 9000 + turn * 50 });
     traj.append({ t: "response", turn, message: { role: "assistant", content: `Turn ${turn}: checking the field for invented boars.` } });
@@ -366,12 +328,20 @@ function writeLadderRun(runsDir: string, runId: string, raw: Record<string, unkn
     comparability: comparabilityOf(config, "harness-fixture"),
     ...(shakeout !== undefined ? { shakeout } : {}),
   });
+  // Its levels are its trace's: a key row each nine minutes, in its session record.
+  const id = createHash("sha256").update(`${runId}-fixture-token-000000000000`).digest("hex").slice(0, 16);
+  const writer = new SessionWriter({ dir: sessionDirOf(dir), id, stack: { version: "fixture" }, now: () => clock, log: () => {} });
+  writer.open();
+  const rows: TraceRow[] = [];
   for (let l = 1, t = startedAt + 60_000; l <= level; l++, t += 9 * 60_000) {
     clock = t;
+    traj.append({ t: "request", turn: l, adapter: "stub", promptChars: 9000 });
     traj.append({ t: "response", turn: l, message: { role: "assistant", content: `Turn ${l}.` } });
-    traj.recordState(runId, { level: l, xp: 100 * l, map: 0, x: CENTRE.x, y: CENTRE.y, z: CENTRE.z, money: 50 * l, turn: l });
+    rows.push({ ts: t, kind: "key", map: 0, x: CENTRE.x, y: CENTRE.y, z: CENTRE.z, o: 0, data: { ...keyData(l, 100 * l, 1, 50 * l, false), xpMax: null } });
   }
+  writer.ingest({ trace: { rows, dropped: 0, dict: DICT }, events: { rows: [], dropped: 0 }, nearby: { rows: [], dropped: 0, through: 0 }, moves: [], character: { guid: SELF_GUID, name: runId, race: 1, class: 1 }, stream: { connected: true, events: 0, seq: 0 } });
   clock = startedAt + 90 * 60_000;
+  void writer.close();
   traj.setTermination(runId, "episode-limit", "episode limit reached");
   traj.close();
 }
@@ -566,7 +536,7 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
   const lives = liveSpecs.map((spec) => {
     const { traj, session } = writeRun(runsDir, spec, null);
     const heartbeat = join(runsDir, spec.runId, "heartbeat");
-    return { spec, traj, session, heartbeat, last: spec.traceTo, lastState: spec.traceTo };
+    return { spec, traj, session, heartbeat, last: spec.traceTo };
   });
   const beat = (t: number): void => {
     for (const l of lives) {
@@ -589,12 +559,6 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
         if (to > l.last) {
           l.session.writer.ingest(drainOf(l.spec, { trace: traceRows({ ...l.spec, traceTo: to }, l.last + 2_000, to, false) }));
           l.last = to;
-        }
-        if (to - l.lastState >= 60_000) {
-          const g = l.spec.ground ?? CENTRE;
-          const p = position(to, l.spec.phase, g);
-          l.traj.recordState(l.spec.runId, { level: l.spec.level ?? 7, xp: 4000, map: g.map, ...p, z: g.z, money: 2800, questsCompleted: 1, items: itemsOf(5) });
-          l.lastState = to;
         }
       }
       beat(t);

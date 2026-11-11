@@ -74,7 +74,7 @@ function harness(slot: { eventCount: number; lastSeq: number; connected?: boolea
 }
 
 describe("the sampler names an observation that stopped arriving", () => {
-  test("a closed stream behind a standing cursor is named, reasserted, and the rows keep coming", async () => {
+  test("a closed stream behind a standing cursor is named and reasserted", async () => {
     const slot = { eventCount: 220_302, lastSeq: 219_471, connected: false };
     const h = harness(slot);
     for (let i = 0; i < 7; i++) await h.sample();
@@ -85,9 +85,6 @@ describe("the sampler names an observation that stopped arriving", () => {
     expect(stalled.map((r) => r["samples"])).toEqual([3, 6]);
     expect(stalled[0]!["eventCount"]).toBe(220_302);
     expect(stalled[0]!["lastSeq"]).toBe(219_471);
-    // The state rows are still written: the last known reading is what a
-    // resumed run counts its turns from.
-    expect(h.trajectory.stateRows("run-stall").length).toBe(7);
     h.trajectory.close();
   });
 

@@ -19,8 +19,8 @@
  * run row is relabelled as a model's: what a public body would carry is the
  * question here, not which driver wrote the bytes.
  */
+import { readRunRow } from "../src/run-reader";
 import { beforeAll, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { appendFileSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
@@ -94,7 +94,6 @@ beforeAll(async () => {
   liveToken = newSessionToken();
   const lt = new Trajectory(live);
   lt.writeMeta({ runId: LIVE_ID, harnessVersion: "0.0.0-test", startedAt: Date.now() - 60_000, config: loadRunConfig({ runId: LIVE_ID, token: liveToken, driver: "openai", model: "test/model" }) });
-  lt.recordState(LIVE_ID, { level: 3, xp: 120, map: 0, x: -6240, y: 330, z: 383, turn: 4 });
   // Its trace, where it said its token and something shaped like a key: in a
   // window long closed, and in the tail. Written as run.ts writes a v1 run's,
   // by the stack's session writer into session/, through the run's scrub.
@@ -105,7 +104,8 @@ beforeAll(async () => {
   session.writer.ingest({
     trace: {
       rows: [
-        { ts: closedAt + 1_000, kind: "key", map: 0, x: -6240, y: 330, z: 383, o: 0, data: { ...emptyTraceState(), level: 3 } },
+        { ts: closedAt + 1_000, kind: "key", map: 0, x: -6240, y: 330, z: 383, o: 0, data: { ...emptyTraceState(), level: 3, xp: 120 } },
+        { ts: tailAt - 1_000, kind: "pos", map: 0, x: -6240, y: 330, z: 383, o: 0 },
         { ts: closedAt + 2_000, kind: "state", data: { chat: [["party", said]] } },
         { ts: tailAt, kind: "state", data: { chat: [["say", said]] } },
       ],
@@ -123,17 +123,14 @@ beforeAll(async () => {
 }, 30_000);
 
 /**
- * The stub's run, relabelled as a model's: its run row, and the stamp in its
- * meta.json, which is what the readers judge a run by. The config and the
- * trajectory keep what the stub wrote, which the first test below reads.
+ * The stub's run, relabelled as a model's: the driver and the stamp in its
+ * meta.json, which is what the readers judge a run by. The trajectory keeps
+ * what the stub wrote, which the first test below reads.
  */
 function asModelRun(dir: string): void {
-  const db = new Database(join(dir, "run.sqlite"));
-  db.run(`UPDATE run SET driver = 'openai', shakeout = NULL, model = 'test/model'`);
-  db.close();
-  // And the stamp, which meta.json carries beside the config and a reader takes either way.
+  // The stamp and the driver, which meta.json carries and a reader judges a run by.
   const { shakeout: _stamp, ...meta } = readMeta(dir)!;
-  writeFileSync(join(dir, "meta.json"), JSON.stringify(meta));
+  writeFileSync(join(dir, "meta.json"), JSON.stringify({ ...meta, config: { ...meta.config, driver: "openai", model: "test/model" } }));
 }
 
 describe("where a run's facts live", () => {
@@ -143,14 +140,15 @@ describe("where a run's facts live", () => {
     const records = readTrajectory(dir);
     // The one record that holds it is the result the model read.
     expect(records.filter((r) => JSON.stringify(r).includes(token)).map((r) => r.t)).toEqual(["snippet_result"]);
-    const db = new Database(join(dir, "run.sqlite"), { readonly: true });
-    const config = (db.query(`SELECT config_json FROM run`).get() as { config_json: string }).config_json;
-    db.close();
+    // The run row as its readers see it (`run-reader.ts`) carries the config without it.
+    const config = String(readRunRow(dir, RUN_ID)!["config_json"]);
     expect(config.includes(token)).toBe(false);
     // The rest of the config is still in both: the record and the row are complete without it.
-    const { token: _t, ...rest } = readMeta(dir)!.config;
-    expect(records.find((r) => r.t === "meta")!["config"]).toEqual(JSON.parse(JSON.stringify(rest)));
-    expect(JSON.parse(config)).toEqual(JSON.parse(JSON.stringify(rest)));
+    // (`asModelRun` relabelled the driver and the model in meta.json after the record was written.)
+    const { token: _t, driver: _d, model: _m, ...rest } = readMeta(dir)!.config;
+    const { driver: _rd, model: _rm, ...recorded } = records.find((r) => r.t === "meta")!["config"] as Record<string, unknown>;
+    expect(recorded).toEqual(JSON.parse(JSON.stringify(rest)));
+    expect(JSON.parse(config)).toEqual(JSON.parse(JSON.stringify({ ...rest, driver: "openai", model: "test/model" })));
   });
 
   test("the run directory holds no trace.jsonl", () => {
@@ -170,33 +168,23 @@ describe("where a run's facts live", () => {
     }
   });
 
-  test("run.sqlite holds the run row and the state samples, and none of the session's tables", () => {
-    for (const id of [RUN_ID, LIVE_ID]) {
-      const db = new Database(join(runsDir, id, "run.sqlite"), { readonly: true });
-      const tables = (db.query(`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`).all() as { name: string }[]).map((r) => r.name);
-      db.close();
-      expect({ id, tables }).toEqual({ id, tables: ["run", "state"] });
-    }
+  test("a v1 run directory holds no run.sqlite: the row is meta.json's, the game side is session/", () => {
+    // What run.ts left: the trajectory, meta.json, and the session record.
+    const files = readdirSync(join(runsDir, RUN_ID)).sort();
+    expect(files).not.toContain("run.sqlite");
+    expect(files).toEqual(expect.arrayContaining(["meta.json", "trajectory.jsonl", "session"]));
+    expect(readMeta(join(runsDir, RUN_ID))).toMatchObject({ termination: { reason: expect.any(String) }, endedAt: expect.any(Number) });
+    expect(readdirSync(join(runsDir, LIVE_ID))).not.toContain("run.sqlite");
   });
 
-  test("the trace is in session/trace and nowhere in the trajectory; a trajectory `move` line is only the record's mirror", () => {
+  test("the trace is in session/trace, and the trajectory is the model side: no state, milestone or move record", () => {
     const live = join(runsDir, LIVE_ID);
     const rows = new SessionReader(sessionDirOf(live)).rows("trace");
     expect(rows.filter((r) => r.kind === "state").length).toBe(2);
     for (const id of [RUN_ID, LIVE_ID]) {
       const kinds = new Set(readTrajectory(join(runsDir, id)).map((r) => r.t));
-      expect({ id, trace: kinds.has("trace") }).toEqual({ id, trace: false });
+      for (const gone of ["trace", "state", "milestone", "move", "actions", "quest_complete"]) expect({ id, gone, there: kinds.has(gone) }).toEqual({ id, gone, there: false });
     }
-    // `recordMove` writes the trajectory line and nothing else: no table, no file.
-    const dir = tempDir("wrathbench-homes-move-");
-    const t = new Trajectory(dir);
-    t.recordMove({ ts: 1, moveId: 1, map: 0, x: 1, y: 2, z: 3, target: null, status: null });
-    t.close();
-    expect(readTrajectory(dir).filter((r) => r.t === "move")).toEqual([{ t: "move", ts: 1, moveId: 1, map: 0, x: 1, y: 2, z: 3, target: null, status: null }]);
-    const db = new Database(join(dir, "run.sqlite"), { readonly: true });
-    expect(db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'move'`).all()).toEqual([]);
-    db.close();
-    expect(readdirSync(dir).filter((f) => !f.startsWith("run.sqlite") && f !== "trajectory.jsonl")).toEqual([]);
   });
 });
 

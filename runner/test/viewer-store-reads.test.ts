@@ -11,6 +11,8 @@
  * - `/api/positions` opens only runs whose trajectory could hold a position.
  */
 
+import { writeLegacy05Run } from "./fixtures/legacy05-writer";
+import { readRunRow } from "../src/run-reader";
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -44,12 +46,12 @@ function writeRun(runsDir: string, runId: string, opts: { terminated?: boolean; 
   });
   traj.setCharacter(runId, "Brakk");
   traj.append({ t: "request", turn: 1, ts: Date.now() - 50_000, messages: [{ role: "user", content: "go" }] });
-  traj.recordState(runId, {
-    level: 4, xp: 120, map: 0, x: 4, y: 5, z: 6, money: 71, questsCompleted: 3, turn: 1,
-    items: [{ name: "Tough Jerky", count: 4, equipped: false }],
-  });
   if (opts.terminated === true) traj.setTermination(runId, "episode-elapsed" as never, "done");
   traj.close();
+  // A 0.5 run's row and newest sample, as run.sqlite held them.
+  writeLegacy05Run(dir, readRunRow(dir, runId)!, [
+    { ts: Date.now() - 50_000, level: 4, xp: 120, map: 0, x: 4, y: 5, z: 6, money: 71, questsCompleted: 3, turn: 1, items: [{ name: "Tough Jerky", count: 4, equipped: false }] },
+  ]);
 }
 
 /** The local store, counting each corpus-wide read. */

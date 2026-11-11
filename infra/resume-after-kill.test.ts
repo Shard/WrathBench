@@ -18,6 +18,7 @@
  * — even one the supervisor told nothing — never issues a character-delete
  * for guid 625.
  */
+import { writeReadings } from "../runner/test/fixtures/v1-session";
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -59,7 +60,8 @@ function killedFreeplayRun(runsDir: string, o: { runId: string; model: string; a
   const startedAt = NOW - o.quietForMs - 20 * H;
   traj.writeMeta({ runId: o.runId, harnessVersion: "harness-0.5-776-g170e07de", startedAt, config, comparability: comparabilityOf(config, "harness-0.5-776-g170e07de") });
   for (let i = 0; i < 40; i++) traj.append({ t: "response", text: "…" });
-  for (let l = 1; l <= o.level; l++) traj.recordState(o.runId, { level: l, xp: l * 100 });
+  // Its levels are its trace's (a v1 run's session record).
+  if (o.level > 0) writeReadings(dir, Array.from({ length: o.level }, (_, i) => ({ ts: Date.now() - 3_000_000 + i, level: i + 1, xp: (i + 1) * 100 })));
   traj.close();
   const row = new Trajectory(dir).runRow(o.runId);
   expect(row?.["ended_at"]).toBeNull();

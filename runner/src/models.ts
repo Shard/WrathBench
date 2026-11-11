@@ -56,7 +56,6 @@
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type { Database } from "bun:sqlite";
 import { openRunDb, RUN_DB_JOURNAL_FILE, RUN_DB_WAL_FILE } from "./rundb";
 import { bestLevelOf, readRunRow } from "./run-reader";
 import { harnessSeries } from "./comparability";

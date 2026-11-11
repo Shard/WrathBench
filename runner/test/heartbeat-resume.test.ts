@@ -7,6 +7,7 @@
  * a resume refused while the mark is warm, the same resume accepted once it
  * is cold, and a clean stop that removes the mark.
  */
+import { writeReadings } from "./fixtures/v1-session";
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -163,7 +164,7 @@ describe("--resume and a run's live owner", () => {
     });
     t.writeMeta({ runId: RUN_ID, harnessVersion: "harness-0.5-1", startedAt: Date.now() - 3_600_000, config, comparability: comparabilityOf(config, "harness-0.5-1") });
     t.append({ t: "response", text: "…" });
-    t.recordState(RUN_ID, { level: 1, xp: 0 });
+    writeReadings(join(runsDir, RUN_ID), [{ ts: Date.now(), level: 1, xp: 0 }]);
     expect(readRunFact(runsDir, RUN_ID)?.idleMs).toBe(1_200_000);
     expect(liveOwnerOf(runsDir, RUN_ID)).toContain("trajectory");
     t.setPause(RUN_ID, "operator-pause");

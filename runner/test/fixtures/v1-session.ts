@@ -146,3 +146,23 @@ export function traceOfReading(r: TraceReading): { trace: TraceRow[]; dict: NonN
   if ((r.quests ?? 0) > 0) rows.push({ ts: r.ts, kind: "state", data: { qdone: Array.from({ length: r.quests! }, (_, i) => 70_000 + i) } });
   return { trace: rows, dict: { items: (r.carried ?? []).map(([, itemId, , name, quality]) => [itemId, quality, name] as [number, number, string]) } };
 }
+
+/**
+ * Lay a v1 run's readings down in its session record, as its trace would hold
+ * them (`traceOfReading`, one key row each): what a test that used to write
+ * 60-second state rows writes now. The session is left open, as a live
+ * writer's is; its rows are on disk when this returns.
+ */
+export function writeReadings(runDir: string, readings: TraceReading[], character: SessionCharacter | null = TEST_CHARACTER): TestSession {
+  const session = openTestSession(runDir, readings[0]?.ts ?? Date.now());
+  const trace: TraceRow[] = [];
+  const items: NonNullable<NonNullable<RecordDrain["trace"]["dict"]>["items"]> = [];
+  for (const r of readings) {
+    const t = traceOfReading(r);
+    trace.push(...t.trace);
+    items.push(...(t.dict.items ?? []));
+  }
+  session.clock.now = readings.at(-1)?.ts ?? session.clock.now;
+  session.writer.ingest(recordDrain({ trace, dict: { items }, character }));
+  return session;
+}

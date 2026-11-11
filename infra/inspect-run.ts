@@ -716,6 +716,12 @@ export interface InspectStore {
   latestStates(ids: readonly string[]): Promise<Map<string, StateRow>>;
   /** Every sample that carries a quest count, in (ts, rowid) order. */
   quests(id: string): Promise<{ ts: number; quests: number | null }[]>;
+  /**
+   * The `states` rows of [since, until], in (ts, seq) order: what `stuck`
+   * judges a v1 run by, whose samples the collector folds from its trace and
+   * whose trajectory carries none.
+   */
+  samples(id: string, since: number, until: number): Promise<Record<string, unknown>[]>;
   extent(id: string, w: Window): Promise<Extent>;
   /** The lines numbered [from, to) that the spec wants, in the window. */
   rows(id: string, spec: ReadSpec, w: Window, from: number, to: number): Promise<StoreRow[]>;
@@ -934,6 +940,11 @@ export function clickhouseStore(cfg: ClickhouseConfig, fetchImpl: (url: URL, ini
     },
     async quests(id) {
       return rows(`SELECT ts, quests_completed AS quests FROM states FINAL WHERE run_id = ${sqlStr(id)} AND quests_completed IS NOT NULL ORDER BY ts, seq`);
+    },
+    async samples(id, since, until) {
+      return rows(
+        `SELECT ts, level, xp, money, quests_completed, map, x, y, z, items FROM states FINAL WHERE run_id = ${sqlStr(id)} AND ts >= ${Math.floor(since)} AND ts <= ${Math.floor(until)} ORDER BY ts, seq`,
+      );
     },
     async extent(id, w) {
       return extentOf(await rows<ExtentRow>(extentSql(id, w)));
@@ -1166,13 +1177,18 @@ function streamLine(session: string, stream: string, now: number): string {
   return names.length === 0 ? `${stream} none` : `${stream} ${names.length} segment(s) ${fmtBytes(bytes)}, newest written ${fmtAge(now - newest)} ago`;
 }
 
-/** The session record's line for a v1 run: who it is, whether it closed, and its captured streams. */
-function sessionLine(session: string, now: number): string {
+/**
+ * The session record's line for a v1 run: its format, who it is, whether it
+ * closed, and its captured streams. Never the session id: it is the token's
+ * fingerprint and the module audit file's name, which no view prints
+ * (skill `fleet-readonly`).
+ */
+export function sessionLine(session: string, now: number): string {
   let head = "unreadable session.json";
   try {
-    const s = JSON.parse(readFileSync(join(session, "session.json"), "utf8")) as { id?: unknown; ended?: unknown; character?: { name?: unknown } | null };
+    const s = JSON.parse(readFileSync(join(session, "session.json"), "utf8")) as { format?: unknown; ended?: unknown; character?: { name?: unknown } | null };
     const who = typeof s.character?.name === "string" ? s.character.name : "no character yet";
-    head = `${String(s.id)} (${who}), ${typeof s.ended === "number" ? `closed ${fmtAge(now - s.ended)} ago` : "open"}`;
+    head = `${typeof s.format === "string" ? s.format : "unknown format"} (${who}), ${typeof s.ended === "number" ? `closed ${fmtAge(now - s.ended)} ago` : "open"}`;
   } catch {
     /* said above */
   }
@@ -1257,6 +1273,237 @@ function lastState(db: Database): StateRow | null {
   // The newest row by rowid, which the state table is appended in, not by ts:
   // the table has no index on ts, and the sort was a full scan of a live run.
   return db.query(`SELECT ${cols.map(pick).join(", ")} FROM state ORDER BY rowid DESC LIMIT 1`).get() as StateRow | null;
+}
+
+// ------------------------------------------------------------------ a v1 run's files
+
+/**
+ * A v1 run (`session/session.json`) has no run.sqlite: its row is meta.json's
+ * (runner/src/run-reader.ts, `runRowOfMeta`) and its readings are its session
+ * record's (wrath-mcp/docs/SESSION-FORMAT.md). Neither is a database, so a
+ * fallback reads them whether or not the run has a live owner: a reader
+ * cannot hold a file a writer renames into place or appends to.
+ */
+function isV1Dir(dir: string): boolean {
+  return existsSync(join(dir, "session", "session.json"));
+}
+
+/**
+ * A v1 run's row: meta.json's. A first-build v1 run also has a run.sqlite its
+ * own builds wrote a verdict into; a termination there that meta.json lacks
+ * is taken from it, as runner/src/run-reader.ts does, and only when no live
+ * owner could be writing it.
+ */
+function v1Row(dir: string, runId: string, meta: Record<string, unknown> | null, owned: boolean): RunRow | null {
+  const row = metaRow(meta);
+  if (row === null || row.termination_reason !== null || owned) return row;
+  const db = openDb(dir);
+  if (db === null) return row;
+  try {
+    const old = readRow(db, runId);
+    if (old?.termination_reason == null) return row;
+    return { ...row, termination_reason: old.termination_reason, termination_detail: old.termination_detail, ended_at: old.ended_at, pause_reason: null };
+  } catch {
+    return row;
+  } finally {
+    db.close();
+  }
+}
+
+/** The run row meta.json holds (`RunVerdictFields` in runner/src/trajectory.ts). */
+export function metaRow(meta: Record<string, unknown> | null): RunRow | null {
+  if (meta === null) return null;
+  const config = obj(meta["config"]);
+  const termination = obj(meta["termination"]);
+  return runRowOf({
+    termination_reason: termination["reason"],
+    termination_detail: termination["detail"],
+    pause_reason: meta["pauseReason"],
+    started_at: meta["startedAt"],
+    ended_at: meta["endedAt"],
+    model: config["model"],
+    driver: config["driver"],
+    character: config["character"],
+    harness_version: meta["harnessVersion"],
+  });
+}
+
+/** A segment's lines, plain or zstd, as text; the last line when it has no newline is left off. */
+function segmentText(path: string): string {
+  const bytes = readFileSync(path);
+  const plain = path.endsWith(".zst") ? Bun.zstdDecompressSync(bytes) : bytes;
+  const text = new TextDecoder().decode(plain);
+  const end = text.lastIndexOf("\n");
+  return end < 0 ? "" : text.slice(0, end);
+}
+
+/** A stream's segment files, oldest first, each once (the compressed one when both are there). */
+function segmentFiles(session: string, stream: string): string[] {
+  let names: string[];
+  try {
+    names = readdirSync(join(session, stream));
+  } catch {
+    return [];
+  }
+  const byStem = new Map<string, string>();
+  for (const n of names) {
+    const m = /^(\d{13}(?:-\d+)?)\.jsonl(\.zst)?$/.exec(n);
+    if (m === null) continue;
+    if (m[2] !== undefined || !byStem.has(m[1]!)) byStem.set(m[1]!, n);
+  }
+  return [...byStem.keys()].sort().map((stem) => join(session, stream, byStem.get(stem)!));
+}
+
+/**
+ * The newest reading a v1 run's trace holds: its newest segment folded from
+ * its last `key` row (a key states everything whole, so no earlier segment is
+ * read). `turn` is not on the record; it is the trajectory's.
+ */
+export function traceLatest(session: string): StateRow | null {
+  const files = segmentFiles(session, "trace");
+  for (let i = files.length - 1; i >= 0; i--) {
+    let rows: Record<string, unknown>[];
+    try {
+      rows = segmentText(files[i]!).split("\n").flatMap((l) => {
+        try {
+          return [JSON.parse(l) as Record<string, unknown>];
+        } catch {
+          return [];
+        }
+      });
+    } catch {
+      continue;
+    }
+    let from = -1;
+    for (let j = rows.length - 1; j >= 0; j--) if (rows[j]!["kind"] === "key") {
+      from = j;
+      break;
+    }
+    if (from < 0) continue;
+    const fold: Record<string, unknown> = { ...obj(rows[from]!["data"]) };
+    let ts = typeof rows[from]!["ts"] === "number" ? (rows[from]!["ts"] as number) : 0;
+    for (const r of rows.slice(from + 1)) {
+      if (typeof r["ts"] === "number") ts = r["ts"];
+      if (r["kind"] === "state") Object.assign(fold, obj(r["data"]));
+    }
+    const n = (k: string): number | null => (typeof fold[k] === "number" ? (fold[k] as number) : null);
+    return { ts, level: n("level"), xp: n("xp"), money: n("money"), quests_completed: null, turn: null, zone: n("zone"), next_level_xp: n("xpMax") };
+  }
+  return null;
+}
+
+/** A v1 run's turn-ins, off its `events` stream's `quest` rows: one stretch, the run's own count. */
+export function eventQuests(session: string): { ts: number; quests: number | null }[] {
+  const out: { ts: number; quests: number | null }[] = [];
+  let n = 0;
+  for (const f of segmentFiles(session, "events")) {
+    let text: string;
+    try {
+      text = segmentText(f);
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n")) {
+      if (!line.includes('"kind":"quest"')) continue;
+      try {
+        const r = JSON.parse(line) as { ts?: unknown; kind?: unknown };
+        if (r.kind === "quest" && typeof r.ts === "number") out.push({ ts: r.ts, quests: ++n });
+      } catch {
+        /* a torn line */
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * A v1 run's trace folded into samples over a window, off its files: a sample
+ * at every row that changes the level, XP, money, map, the turn-ins or what is
+ * carried, at every key row, and once a minute while only the position moves
+ * (runner/src/trace-samples.ts is the full derivation; this is the part
+ * `stuck` reads, kept here because this file imports nothing). Items are
+ * keyed by id and count, which is all `itemsKey` compares.
+ */
+export function traceSamples(session: string, w: { since: number; until: number }): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  const fold: Record<string, unknown> = {};
+  let pos: { map: unknown; x: unknown; y: unknown; z: unknown } = { map: null, x: null, y: null, z: null };
+  let quests = 0;
+  let last = "";
+  let lastPos = "";
+  let lastAt = -Infinity;
+  const inv = new Map<string, number[]>();
+  const equip = new Map<number, number[]>();
+  for (const f of segmentFiles(session, "trace")) {
+    let text: string;
+    try {
+      text = segmentText(f);
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n")) {
+      let r: Record<string, unknown>;
+      try {
+        r = JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      const ts = typeof r["ts"] === "number" ? r["ts"] : null;
+      if (ts === null || ts > w.until) return out;
+      const d = obj(r["data"]);
+      if (typeof r["map"] === "number") pos = { map: r["map"], x: r["x"], y: r["y"], z: r["z"] };
+      if (r["kind"] === "key") {
+        for (const k of Object.keys(fold)) delete fold[k];
+        Object.assign(fold, d);
+        inv.clear();
+        equip.clear();
+      } else if (r["kind"] === "state") Object.assign(fold, d);
+      if (r["kind"] === "key" || r["kind"] === "state") {
+        if (Array.isArray(d["qdone"])) quests += d["qdone"].length;
+        for (const row of (Array.isArray(d["inv"]) ? d["inv"] : []) as number[][]) {
+          if (row.length <= 2) inv.delete(`${row[0]}:${row[1]}`);
+          else inv.set(`${row[0]}:${row[1]}`, row);
+        }
+        for (const row of (Array.isArray(d["equip"]) ? d["equip"] : []) as number[][]) {
+          if (row.length <= 1) equip.delete(row[0]!);
+          else equip.set(row[0]!, row);
+        }
+      }
+      const items = [...[...equip.values()].map((e) => ({ itemId: e[1], count: 1, equipped: true })), ...[...inv.values()].map((e) => ({ itemId: e[2], count: e[3] ?? 1 }))];
+      const sample = { ts, level: fold["level"] ?? null, xp: fold["xp"] ?? null, money: fold["money"] ?? null, quests_completed: quests, ...pos, items };
+      const key = JSON.stringify({ ...sample, ts: 0, x: 0, y: 0, z: 0 });
+      const moved = JSON.stringify(pos) !== lastPos && ts - lastAt >= 60_000;
+      if (ts < w.since || (key === last && !moved && r["kind"] !== "key")) continue;
+      last = key;
+      lastPos = JSON.stringify(pos);
+      lastAt = ts;
+      out.push(sample);
+    }
+  }
+  return out;
+}
+
+/** A v1 run's served batches (`calls` `events` rows) in a window that carry a `schemaError`: what `events_served` records were. */
+export function calledSchemaBatches(session: string, w: { since: number; until: number }): number {
+  let n = 0;
+  for (const f of segmentFiles(session, "calls")) {
+    let text: string;
+    try {
+      text = segmentText(f);
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n")) {
+      if (!line.includes('"kind":"events"') || !line.includes(SCHEMA_ERROR_KEY)) continue;
+      try {
+        const r = JSON.parse(line) as { ts?: unknown };
+        if (typeof r.ts === "number" && r.ts >= w.since && r.ts <= w.until) n++;
+      } catch {
+        /* a torn line */
+      }
+    }
+  }
+  return n;
 }
 
 /** One process's stretch of the quest count: when its first sample was taken, and its last count. */
@@ -1394,7 +1641,8 @@ export async function inspectRun(runId: string, opts: Ctx & Window, out: Out): P
   // Opened only on a fallback for a run with no live owner, and for the trace, which only the file holds.
   const db = openDb(dir);
   try {
-    const row: RunRow | null | undefined = via.store !== null ? via.run : owned ? undefined : db === null ? null : readRow(db, runId);
+    const v1 = isV1Dir(dir);
+    const row: RunRow | null | undefined = via.store !== null ? via.run : v1 ? v1Row(dir, runId, meta, owned) : owned ? undefined : db === null ? null : readRow(db, runId);
     const verdict = verdictOf(row, heartbeat, opts.now);
     say("run", `${runId}${dir.includes(`/${ARCHIVE_DIR}/`) ? " (archived)" : ""}`);
     say("verdict", describeVerdict(verdict, meta, opts.now));
@@ -1424,6 +1672,10 @@ export async function inspectRun(runId: string, opts: Ctx & Window, out: Out): P
       say("level", levelLine((await via.store.latestStates([runId])).get(runId) ?? null, opts.now));
       // The newest sample's count is its process's, so the run's is its own line.
       const quests = questLine(await via.store.quests(runId));
+      if (quests !== null) say("quests", quests);
+    } else if (v1) {
+      say("level", levelLine(traceLatest(join(dir, "session")), opts.now));
+      const quests = questLine(eventQuests(join(dir, "session")));
       if (quests !== null) say("quests", quests);
     } else if (owned) {
       say("level", notOpened(heartbeat, opts.now));
@@ -1508,6 +1760,9 @@ export async function inspectLive(opts: Ctx, out: Out): Promise<number> {
     if (rows !== null && rows.has(f.id)) {
       row = rows.get(f.id)!;
       st = states.get(f.id) ?? null;
+    } else if (isV1Dir(f.dir)) {
+      row = v1Row(f.dir, f.id, readMeta(f.dir), ownedAt(f.hb, opts.now));
+      st = traceLatest(join(f.dir, "session"));
     } else if (ownedAt(f.hb, opts.now)) {
       row = undefined;
     } else {
@@ -2894,6 +3149,14 @@ async function stuckOf(ctx: Ctx, runId: string, run: { dir: string; path: string
     const r = stuckReducer(w);
     fileForward(run.path, r.fn, seekTime(run.path, w.since));
     scan = r.a;
+  }
+  // A v1 run's trajectory is the model side: its samples are its trace's,
+  // folded by the collector into the store, or read off the record here.
+  if (isV1Dir(run.dir)) {
+    const rows = via.store !== null ? await via.store.samples(runId, w.since, w.until) : traceSamples(join(run.dir, "session"), w);
+    scan.samples = rows.map((r) => progressSampleOf(r, r["ts"] as number));
+    // Its tools' served batches are its record's `calls` rows, not trajectory records.
+    scan.schemaRecords += calledSchemaBatches(join(run.dir, "session"), w);
   }
   return { via, report: stuckReport(scan, w, t), anchor };
 }

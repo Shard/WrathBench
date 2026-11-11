@@ -98,12 +98,11 @@ file names its party: the fleet's roster launches it with `--character
 campaign launch whose definition starts `staged` and must be the member's
 own. Hygiene keeps that character, the freshness tripwire stays off, the
 launch note says it already exists, and `meta.config.party` names every
-member's run, account and character. Its trajectory carries three more
-milestone kinds, `group`, `instance` and `kill`, latched in the sandbox
-child off `SMSG_GROUP_LIST`, the `instanceType` on the `WB_AREA` after a
-transfer and `SMSG_PARTYKILLLOG` by the stack's recorder, which writes them
-to the session record's `events` stream; the loop mirrors them as milestones
-(`src/session-record.ts`).
+member's run, account and character. Its session record carries three more
+event kinds, `group`, `instance` and `kill`, latched in the sandbox child off
+`SMSG_GROUP_LIST`, the `instanceType` on the `WB_AREA` after a transfer and
+`SMSG_PARTYKILLLOG` by the stack's recorder; the loop hands each kill to the
+watchdogs for a campaign's kill end (`src/session-record.ts`).
 
 ## Drivers
 

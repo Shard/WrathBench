@@ -3,8 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { STALL_PAUSE } from "../src/lapse";
-import { moveLineOf, openSessionRecord } from "../src/session-record";
-import { recordDrain, traceOfReading } from "./fixtures/v1-session";
+import { openTestSession, recordDrain, traceOfReading, writeReadings } from "./fixtures/v1-session";
 import { Trajectory } from "../src/trajectory";
 import { localRunStore, type RunStore } from "../viewer/clickhouse";
 import { positionsFromStore, readLatestPosition, readLatestStatus, readPositions, readReflecting } from "../viewer/positions";
@@ -649,8 +648,8 @@ describe("readPositions", () => {
  * The same feed with its listing taken off the derived store. The fixture is
  * written by the runner's own writers rather than by hand, because the store is
  * filled by the collector, and the collector reads what the runner writes: the
- * trajectory and run.sqlite, and the session record the stack writes into the
- * run (`session-record.ts`), whose move the trajectory mirrors as run.ts wires it.
+ * trajectory and meta.json, and the session record the stack writes into the
+ * run (`session-record.ts`).
  */
 describe("positionsFromStore", () => {
   const NOW = 1_700_000_000_000;
@@ -689,8 +688,8 @@ describe("positionsFromStore", () => {
       maxHealth: 220,
       carried: [[23, 90117, 4, "Invented Jerky", 1]],
     });
-    const session = openSessionRecord({ runDir: dir, runsDir, token: `token-${runId}`, scrub: (t) => t });
-    session.signals.onMove = (m) => traj.recordMove(moveLineOf(m));
+    // On the fixture's clock: the writer's tick is when the map last heard from it.
+    const session = openTestSession(dir, clock);
     session.writer.ingest({
       trace: { rows: reading.trace, dropped: 0, dict: reading.dict },
       events: { rows: [], dropped: 0 },
@@ -786,7 +785,7 @@ describe("positionsFromStore", () => {
     // The fleet resumed it in place: a new process, whose recorder states the
     // character again and then sees two more turn-ins. The trace's count is the
     // run's (`trace-samples.ts`), so nothing starts again at zero.
-    const session = openSessionRecord({ runDir: join(runsDir, "resumed"), runsDir, token: "token-resumed", scrub: (t) => t });
+    const session = openTestSession(join(runsDir, "resumed"), NOW - 2_000);
     const again = traceOfReading({ ts: NOW - 120_000, level: 4, xp: 130, map: 0, x: -6240, y: 380, z: 380, money: 71 });
     session.writer.ingest(recordDrain({ trace: [...again.trace, { ts: NOW - 60_000, kind: "state", data: { qdone: [80_001] } }, { ts: NOW - 2_000, kind: "state", data: { qdone: [80_002] } }], dict: again.dict, character: null }));
     await session.writer.close();
@@ -797,3 +796,21 @@ describe("positionsFromStore", () => {
     expect(JSON.stringify(fromStore)).toBe(JSON.stringify(readPositions(runsDir, NOW)));
   });
 });
+
+describe("a v1 run on the live map", () => {
+  test("a character standing still is drawn while its writer beats, though its newest trace row is old", () => {
+    const runsDir = tempDir("wrathbench-map-still-");
+    const now = Date.now();
+    const dir = join(runsDir, "still-1");
+    const traj = new Trajectory(dir);
+    traj.writeMeta({ runId: "still-1", harnessVersion: "harness-0.6-1", startedAt: now - 3_600_000, config: { runId: "still-1", driver: "openai", model: "a-model" } as never });
+    traj.close();
+    // One reading half an hour ago, then nothing new: the writer only ticks.
+    const session = writeReadings(dir, [{ ts: now - 30 * 60_000, level: 4, xp: 120, map: 0, x: -6240, y: 380, z: 380 }]);
+    session.clock.now = now - 1_000;
+    session.writer.ingest(null);
+    const [p] = readPositions(runsDir, now);
+    expect(p).toMatchObject({ runId: "still-1", map: 0, x: -6240, y: 380 });
+  });
+});
+

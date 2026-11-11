@@ -32,7 +32,7 @@ import { appendPendingActionHints, callTool, coerceToolArgs, toolsFor, type Tool
 import { SandboxHost } from "./sandbox/host";
 import { Trajectory } from "./trajectory";
 import { newRunId, newSessionToken, loadRunConfig } from "./config";
-import { moveLineOf, openSessionRecord } from "./session-record";
+import { openSessionRecord } from "./session-record";
 import { harnessVersion, stackCommit } from "./version";
 import { SDK_VERSION } from "@wrathbench/sdk";
 
@@ -108,7 +108,6 @@ async function main(): Promise<void> {
 
   // The session record, written by the stack into the run directory (`session-record.ts`).
   const session = openSessionRecord({ runDir, runsDir: config.runsDir, token: config.token ?? token, scrub: (text) => trajectory.scrub(text) });
-  session.signals.onMove = (m) => trajectory.recordMove(moveLineOf(m));
 
   const sandbox = new SandboxHost({
     moduleUrl: config.moduleUrl,
@@ -119,7 +118,6 @@ async function main(): Promise<void> {
     snippetTimeoutMs: config.snippetTimeoutMs,
     pingGraceMs: config.sandboxPingGraceMs,
     onNotice: (n) => trajectory.append({ t: "harness", ...n }),
-    onActions: (flush) => trajectory.recordActions(flush),
     clientCache,
     session,
   });
@@ -141,13 +139,6 @@ async function main(): Promise<void> {
     secrets: trajectory,
     record: session.writer,
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
-    onEventsServed: (events, folded) =>
-      trajectory.append({
-        t: "events_served",
-        count: events.length,
-        events,
-        ...(folded !== undefined && folded > 0 ? { folded } : {}),
-      }),
   };
   const server = new McpServer(ctx, {
     serverVersion: harnessVersion(),
