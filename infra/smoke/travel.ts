@@ -28,6 +28,11 @@
  *          the check is skipped there with a line saying so); only cars docked
  *          on the boarding lane are tried (the other track is 60y away across
  *          the pit). Attempts alternate moveTo(point) and moveTo(car.guid).
+ *          The skip is the right call on the cluster: `inspect audit` reaches
+ *          those files only by `kubectl exec` into the worldserver from the
+ *          operator's host, and the runner pod holds no API token by design,
+ *          so the operator reads the module's record after the run with
+ *          `bun wb inspect audit --smoke travel --op move_transport_leg`.
  *   leg 5  WB_RIDE_PROGRESS y rises monotonically to > 2400 and the ride
  *          (departure to standstill) takes 50..70s — the upper bound so a car
  *          that rode back is not a pass;
