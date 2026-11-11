@@ -3,12 +3,13 @@
  * scheduler's.
  *
  * There are two billing verdicts in this repo and they disagree on purpose.
- * `billingOf` in `model-cost.ts` answers **"does this model consume the paid
- * concurrency budget?"** — a `claude-code` job bills a flat subscription, so it
- * spends none of the metered budget and lands on `free` there, which is what
- * `policy.paid`'s cap and the account classes are built on. This one answers
+ * `billingOf` in `model-cost.ts` answers **"which side of a metered key may
+ * carry this model?"** — a `claude-code` job bills a flat subscription, so it
+ * spends none of the metered budget and lands on `free` there, which is what a
+ * metered credential's `billing` is matched against (runner/src/credentials.ts).
+ * This one answers
  * **"did we pay for this run?"** — a subscription is money, so `claude-code` is
- * `paid` here. Sharing the two would silently re-scope the fleet's cap, so they
+ * `paid` here. Sharing the two would silently re-scope which credential carries a run, so they
  * stay two functions with one shared set of predicates and this comment.
  *
  * The rules, in order:

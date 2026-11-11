@@ -61,11 +61,11 @@ export const PROVIDER_PAUSES: ReadonlySet<string> = new Set(["quota-exhausted", 
 export const STALL_PAUSE = "observation-stalled";
 
 /**
- * The pause a freeplay run takes when its subscription lane's usage window
+ * The pause a freeplay run takes when its credential's usage window
  * reaches the freeplay threshold (`runner/src/subscription-usage.ts`; operator,
  * 2026-10-16). The harness's own doing, not the provider's refusal and not the
  * model's: no strike, no rung on the defer ladder, no streak. It carries the
- * window's reset as `notBefore`, and the lane gate holds the resume until the
+ * window's reset as `notBefore`, and the credential's budget holds the resume until the
  * window is back under the threshold. Declared here for the reason
  * `STALL_PAUSE` is: the public projection reads it.
  */

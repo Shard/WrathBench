@@ -74,7 +74,7 @@ describe("the checked-in definitions", () => {
     expect(def.arms[0]!.args).toBeUndefined();
     // The two entries the comparison assigns: one model and endpoint, effort
     // high on both, and pi's 300k window on the pi entry, not on the arm.
-    const endpoint = { model: "deepseek-flash", apiBase: "https://api.deepseek.com/v1", apiKeyEnv: "DEEPSEEK_KEY", effort: "high", tier: "t1" };
+    const endpoint = { model: "deepseek-flash", apiBase: "https://api.deepseek.com/v1", effort: "high", tier: "t1" };
     const roster: Record<string, PairRosterEntry & typeof endpoint> = { ds: { ...endpoint }, "ds-pi": { ...endpoint, driver: "pi", compactWindow: "300k" } };
     for (const e of Object.values(roster)) expect(rosterEntryRefusal(e, [], {})).toBeNull();
     const c = { name: def.id, version: def.version, arms: def.arms, assignments: [{ model: "ds", runsPerCell: 1 }, { model: "ds-pi", runsPerCell: 1 }] };

@@ -422,6 +422,14 @@ export interface RunRow {
    * (`declaredBillingOf` in `runner/src/billing.ts`).
    */
   declaredBilling?: "free" | "paid";
+  /**
+   * What paid for the run, as it recorded at launch (`runCredentialOf`): a v1
+   * run's credential id, a 0.5 run's subscription lane (the env var NAME a
+   * claude-code or codex run billed). Absent when the run recorded neither.
+   * Operator-only: a public row carries neither.
+   */
+  credential?: string;
+  lane?: string;
   harnessVersion: string | null;
   /**
    * The stamped comparability tuple, or null for a run whose metadata predates

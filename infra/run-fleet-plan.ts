@@ -767,8 +767,8 @@ export function withTakenRunIds(jobs: readonly FleetJob[], taken: ReadonlySet<st
  * campaign file that names the member and every other one — for one roster
  * process to launch together. The stem is the id the job's single entry
  * would have had (`-a<n>` from the second attempt), or, on a resume, the
- * paused party's own id. Every member shares the entry's credentials and
- * the job's subscription lane, so a party is never spread across lanes.
+ * paused party's own id. Every member shares the entry's credential
+ * (`placedOn`), so a party is never spread across credentials.
  */
 function partySpawn(job: FleetJob, entries: RosterSpec[], probeFile: CampaignFile | undefined, stamp: string): JobSpawn {
   const party = probeFile?.definition.party;
@@ -939,7 +939,7 @@ export interface PausedListing {
   why: string;
   /**
    * Set when the wait is a subscription usage window's — a `subscription-budget`
-   * pause, a spent quota's reset, the lane gate — whose figures are the
+   * pause, a spent quota's reset, a credential's usage budget — whose figures are the
    * operator's: the public projection withholds `resumeAfter` and `why` then.
    */
   subscriptionWait?: true;
@@ -977,8 +977,8 @@ export function resumeNotBefore(pause: NonNullable<RunFact["pause"]>): number | 
   // when that member's own pause says, which `planResumes` asks of the whole
   // party at once, so this member waits on nothing of its own.
   if (pause.reason === PARTY_PAUSE) return null;
-  // The subscription gate stopped a freeplay run (operator, 2026-10-16): it
-  // waits for the window's reset, and is on no ladder at all — the lane gate
+  // A credential's usage budget stopped a freeplay run (operator, 2026-10-16):
+  // it waits for the window's reset, and is on no ladder at all — the budget
   // (`credentialHold`) is what holds it while the window stays over.
   if (pause.reason === SUBSCRIPTION_PAUSE) return pause.notBefore ?? null;
   // An offline pause is the harness's own doing too — the runner was killed
@@ -1281,8 +1281,7 @@ export function planResumes(opts: {
   const takenAccounts = new Set([...opts.running.values()].map((a) => a.toUpperCase()));
   const takenJobs = new Set(opts.running.keys());
   const policyNames = policyRefs(config);
-  // Any scheduled class may carry a resume: a paid or local run comes back on
-  // its own account, exactly as a pool run comes back on its pool account.
+  // A pool account may carry a resume: a run comes back on its own account.
   const poolSet = new Set(scheduledAccounts(config).map((a) => a.toUpperCase()));
   // Archived runs are read for the ladder, never for a resume: there is no
   // directory under the runs dir for `--resume` to open.
@@ -1560,7 +1559,7 @@ export function planResumes(opts: {
       continue;
     }
     if (job.account === undefined && !poolSet.has(account.toUpperCase())) {
-      list(`account ${account} is in no account class (pool, paid, local) — resume by hand`);
+      list(`account ${account} is not in the account pool — resume by hand`);
       continue;
     }
     if (takenJobs.has(job.name)) continue; // its roster is running; it handles its own pause
@@ -2045,7 +2044,7 @@ export function pausesOnDrain(job: Pick<FleetJob, "source" | "episode"> | undefi
  * The question is asked of the LOADED CONFIG, never of the plan. The caller
  * walks the accounts that are assigned, so a live policy job is reached every
  * tick whether or not the policy would pick it again, and the reasons the
- * policy would not (account busy, a lane or paid cap, cooling on the defer
+ * policy would not (account busy, no credential with room, cooling on the defer
  * ladder, tier not eligible) are transient: none of them belongs on a character
  * the operator has not turned off, and none of them is visible here. The ref's
  * presence in the roster and its idle mode are the whole answer.

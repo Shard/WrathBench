@@ -168,59 +168,59 @@ describe("writes", () => {
 
   test("a refusal that depends on the WHOLE config is caught at write time", () => {
     const { store } = tempStore();
-    store.seed(fixtureConfig({ policy: { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN"] } }));
-    // Legal in isolation; the entry is refused (not the file) for naming a lane
-    // the policy does not list, which parseFleet reports as a refusal rather
-    // than a throw — so this is accepted and shows up in `--status`.
-    store.put("roster/son", { tier: "t1", model: "sonnet", driver: "claude-code", subscription: "NOPE" });
+    store.seed(fixtureConfig());
+    // Legal in isolation; the entry is refused (not the file) for pinning a
+    // credential the config does not hold, which parseFleet reports as a
+    // refusal rather than a throw — so this is accepted and shows up in `--status`.
+    store.put("roster/son", { tier: "t1", model: "sonnet", driver: "claude-code", credential: "nope" });
     const refused = parseFleet(store.render()).refusals.map((r) => r.pin);
     expect(refused).toContain("roster son");
     store.close();
   });
 
-  test("a roster write that would send a key anywhere but its own provider is refused outright, and nothing is written", () => {
+  test("a roster write naming a key, or a base no credential provider serves, is refused outright, and nothing is written", () => {
     const root = tempDir("config-store-keys-");
     const store = new ConfigStore(join(root, "config.sqlite"), { env: {} });
     store.seed(fixtureConfig());
     const refusals: [unknown, RegExp][] = [
-      // Any variable the runner holds, named as the key.
-      [{ tier: "t1", model: "vendor/x", apiKeyEnv: "CLAUDE_CODE_OAUTH_TOKEN_2" }, /harness or infrastructure credential/],
-      [{ tier: "t1", model: "vendor/x", apiKeyEnv: "WRATHBENCH_MODULE_SECRET" }, /harness or infrastructure credential/],
-      [{ tier: "t1", model: "vendor/x", apiKeyEnv: "CLICKHOUSE_PASSWORD" }, /harness or infrastructure credential/],
-      [{ tier: "t1", model: "vendor/x", apiKeyEnv: "S3_SECRET_ACCESS_KEY" }, /harness or infrastructure credential/],
-      [{ tier: "t1", model: "vendor/x", apiKeyEnv: "ANTHROPIC_API_KEY" }, /harness or infrastructure credential/],
-      // A real key, to a host its provider does not own.
-      [{ tier: "t1", model: "vendor/x", apiBase: "https://collector.example/v1", apiKeyEnv: "OPENROUTER_KEY" }, /may be sent only to openrouter.ai/],
-      [{ tier: "t1", model: "vendor/x", apiBase: "https://collector.example/v1", apiKeyEnv: "CEREBRAS_KEY" }, /may be sent only to api.cerebras.ai/],
-      // The self-hosted key, on a deployment that names no self-hosted host.
-      [{ tier: "t1", model: "vendor/x", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "LMSTUDIO_KEY" }, /names no self-hosted model host/],
+      // Any variable the runner holds, named as the key: a key is a credential's, never an entry's.
+      [{ tier: "t1", model: "vendor/x", apiKeyEnv: "CLAUDE_CODE_OAUTH_TOKEN_2" }, /a key is a credential's/],
+      [{ tier: "t1", model: "vendor/x", apiKeyEnv: "WRATHBENCH_MODULE_SECRET" }, /a key is a credential's/],
+      [{ tier: "t1", model: "vendor/x", apiKeyEnv: "OPENROUTER_KEY" }, /a key is a credential's/],
+      // A host no provider owns, so no credential's key would ever go there.
+      [{ tier: "t1", model: "vendor/x", apiBase: "https://collector.example/v1" }, /collector.example is no credential provider's host/],
+      [{ tier: "t1", model: "vendor/x", apiBase: "https://openrouter.ai.collector.example/v1" }, /no credential provider's host/],
+      // The right host over plain http.
+      [{ tier: "t1", model: "vendor/x", apiBase: "http://openrouter.ai/api/v1" }, /https only/],
+      // The self-hosted server, on a deployment that names no self-hosted host.
+      [{ tier: "t1", model: "vendor/x", apiBase: "http://192.168.100.20:1234/v1" }, /names no self-hosted model host/],
     ];
     for (const [value, why] of refusals) {
       expect(() => store.put("roster/sneak", value)).toThrow(ConfigRejected);
       expect(() => store.put("roster/sneak", value)).toThrow(why);
     }
-    // A PATCH that changes only the key name of an existing entry is the same write.
-    expect(() => store.patch("roster/glm", { apiKeyEnv: "WRATHBENCH_MODULE_SECRET" })).toThrow(/harness or infrastructure credential/);
+    // A PATCH that adds a key to an existing entry is the same write.
+    expect(() => store.patch("roster/glm", { apiKeyEnv: "WRATHBENCH_MODULE_SECRET" })).toThrow(/a key is a credential's/);
     expect(store.get("roster/sneak")).toBeUndefined();
     expect(store.get("roster/glm")).toEqual({ tier: "t1", model: "z-ai/glm-5.2:free" });
     expect(store.audit().filter((a) => a.key === "roster/sneak")).toEqual([]);
-    // Every pairing the table holds is a write like any other.
-    store.put("roster/cb", { tier: "t1", model: "qwen-3.8-27b", apiBase: "https://api.cerebras.ai/v1", apiKeyEnv: "CEREBRAS_KEY" });
-    store.put("roster/ds", { tier: "t1", model: "deepseek-flash", apiBase: "https://api.deepseek.com/v1", apiKeyEnv: "DEEPSEEK_KEY" });
-    expect(store.get("roster/cb")).toMatchObject({ apiKeyEnv: "CEREBRAS_KEY" });
+    // Every provider's own host is a write like any other.
+    store.put("roster/cb", { tier: "t1", model: "qwen-3.8-27b", apiBase: "https://api.cerebras.ai/v1" });
+    store.put("roster/ds", { tier: "t1", model: "deepseek-flash", apiBase: "https://api.deepseek.com/v1" });
+    expect(store.get("roster/cb")).toMatchObject({ apiBase: "https://api.cerebras.ai/v1" });
     store.close();
-    // And the self-hosted key, where the deployment names that host.
+    // And the self-hosted server, where the deployment names that host.
     const lan = new ConfigStore(join(root, "config.sqlite"), { env: { WRATHBENCH_LOCAL_MODEL_HOSTS: "192.168.100.20:1234" } });
-    lan.put("roster/box", { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "LMSTUDIO_KEY" });
-    expect(lan.get("roster/box")).toMatchObject({ apiKeyEnv: "LMSTUDIO_KEY" });
+    lan.put("roster/box", { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1" });
+    expect(lan.get("roster/box")).toMatchObject({ apiBase: "http://192.168.100.20:1234/v1" });
     lan.close();
   });
 
-  test("a seed carrying a pairing the table refuses is refused whole, and nothing is imported", () => {
+  test("a seed carrying a key on an entry is refused whole, and nothing is imported", () => {
     const root = tempDir("config-store-keys-seed-");
     const store = new ConfigStore(join(root, "config.sqlite"), { env: {} });
     const bad = fixtureConfig({ roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free", apiKeyEnv: "WRATHBENCH_MODULE_SECRET" } } });
-    expect(() => store.seed(bad)).toThrow(/roster\/glm: apiKeyEnv WRATHBENCH_MODULE_SECRET names a harness or infrastructure credential/);
+    expect(() => store.seed(bad)).toThrow(/roster\/glm: apiKeyEnv is not an entry's — a key is a credential's/);
     expect(store.isEmpty()).toBe(true);
     store.close();
   });

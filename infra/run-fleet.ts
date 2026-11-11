@@ -361,7 +361,7 @@ export const CODEX_PRUNE_EVERY_MS = 60 * 60_000;
 /**
  * The backstop for the codex driver's own rollout deletion (`codex-rollout.ts`,
  * "deletion"): a runner killed outright never reaches its cleanup, and its
- * threads' rollouts would stay on the lane's volume for good. Each home loses
+ * threads' rollouts would stay on the home's volume for good. Each home loses
  * every rollout that is not the recorded thread of a run with a live owner
  * (`liveCodexThreads`, across every home — a thread id is a UUID) and has not
  * been written for two hours, and each thread whose rollouts all went is then

@@ -71,8 +71,8 @@ export const campaignRowSchema = z
     /** In priority order: the sweep spreads across them breadth-first. */
     assignments: z.array(campaignAssignmentSchema).default([]),
     /**
-     * Pin the whole campaign to one account. Absent or null: it draws from each
-     * model's own account class like anything else. A pinned campaign follows
+     * Pin the whole campaign to one account. Absent or null: it draws from the
+     * account pool like anything else. A pinned campaign follows
      * the pinned-job account rules.
      */
     account: z.string().min(1).nullable().optional(),

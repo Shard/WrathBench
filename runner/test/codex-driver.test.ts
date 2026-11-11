@@ -90,10 +90,13 @@ function setupEpisode(
     ...loadRunConfig({
       driver: "codex",
       model: "gpt-5.5",
-      // A runs directory of its own: the driver seeds its lane reading from one.
+      // A runs directory of its own: the driver seeds its credential's reading from one.
       runsDir: tempDir("wrathbench-codex-runs-"),
       stepIntervalMs: 0,
       stateIntervalMs: 1,
+      // The credential the fleet placed it on, with its usage budget.
+      credential: "chatgpt-1",
+      usageMaxPct: { scored: 80, freeplay: 80 },
       ...extraConfig,
     }),
     runId: "run-test",
@@ -223,11 +226,11 @@ describe("codex driver", () => {
     expect(dispatchTs as number).toBeGreaterThan(0);
     expect(dispatchTs as number).toBeLessThanOrEqual(toolCall!.ts);
     expect(snippetResult?.["dispatchTs"]).toBeUndefined();
-    // The driver record names the lane by NAME, never by path or contents.
+    // The driver record names the credential's variable by NAME, never by path or contents.
     const driver = records.find((r) => r.t === "driver");
     expect(driver?.["driver"]).toBe("codex");
     expect(driver?.["harness"]).toBe("codex");
-    expect(driver?.["lane"]).toBe("CODEX_HOME");
+    expect(driver?.["credentialEnv"]).toBe("CODEX_HOME");
     expect(JSON.stringify(driver)).not.toContain("auth.json");
     // Thread and per-turn results are on the record.
     expect(records.find((r) => r.t === "codex_thread")?.["threadId"]).toBe("fake-thread");
@@ -539,14 +542,14 @@ describe("codex driver", () => {
     trajectory.close();
   }, 20_000);
 
-  test("a second lane arrives under the one name the CLI reads", async () => {
+  test("a second home arrives under the one name the CLI reads", async () => {
     const other = fakeCodexHome();
-    const { recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 1, subscription: "CODEX_HOME_2" }, { CODEX_HOME_2: other });
+    const { recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 1, credentialEnv: "CODEX_HOME_2" }, { CODEX_HOME_2: other });
     await runCodexEpisode(options);
     const env = readRecord(recordPath)["env"] as Record<string, unknown>;
     expect(env["codexHome"]).toBe(other);
     expect(env["hasCodexHome2"]).toBe(false);
-    expect(readTrajectory(trajectory.dir).find((r) => r.t === "driver")?.["lane"]).toBe("CODEX_HOME_2");
+    expect(readTrajectory(trajectory.dir).find((r) => r.t === "driver")?.["credentialEnv"]).toBe("CODEX_HOME_2");
     trajectory.close();
   }, 20_000);
 
@@ -1151,7 +1154,7 @@ describe("driver, harness and prompt vocabulary", () => {
     expect(noAuth.code).toBe(2);
     expect(noAuth.stderr).toContain("auth.json");
 
-    const lane2 = await launch(["--model", "gpt-5.5", "--token-env", "CODEX_HOME_2"], { CODEX_HOME: fakeCodexHome() });
+    const lane2 = await launch(["--model", "gpt-5.5", "--credential-env", "CODEX_HOME_2"], { CODEX_HOME: fakeCodexHome() });
     expect(lane2.code).toBe(2);
     expect(lane2.stderr).toContain("$CODEX_HOME_2");
     expect(lane2.stderr).toContain("CODEX_HOME_2=");
@@ -1226,9 +1229,9 @@ describe("codex driver: the subscription's usage windows", () => {
     await runCodexEpisode(options);
     const records = readTrajectory(runDir).filter((r) => r.t === "harness" && r["kind"] === "rate_limits");
     expect(records.map((r) => (r["windows"] as { usedPercent: number }[])[0]!.usedPercent)).toEqual([20, 30]);
-    expect(records[0]).toMatchObject({ turn: 1, lane: "codex:CODEX_HOME" });
+    expect(records[0]).toMatchObject({ turn: 1, credential: "chatgpt-1" });
     const meta = readMeta(runDir)!;
-    expect(meta.subscriptionUsage).toMatchObject({ lane: "codex:CODEX_HOME", windows: [{ usedPercent: 30, windowMinutes: 10_080 }] });
+    expect(meta.subscriptionUsage).toMatchObject({ credential: "chatgpt-1", windows: [{ usedPercent: 30, windowMinutes: 10_080 }] });
     const all = readFileSync(join(runDir, "trajectory.jsonl"), "utf8") + JSON.stringify(meta);
     for (const word of ["fake-plan", "fake-balance", "plan_type", "credits"]) expect(all).not.toContain(word);
     // The model the CLI ran, off the rollout's turn_context, as the other drivers record theirs.
@@ -1237,7 +1240,7 @@ describe("codex driver: the subscription's usage windows", () => {
     trajectory.close();
   }, 30_000);
 
-  test("a spent quota pauses until the window's reset, recorded as spent for the lane gate", async () => {
+  test("a spent quota pauses until the window's reset, recorded as spent for the credential's budget", async () => {
     const rollout = [{ total: 1_000, rateLimits: primary(97, 3 * 3_600_000) }];
     const { runDir, trajectory, options } = setupEpisode("limit", { maxTurns: 3 }, { WB_FAKE_THREAD_ID: thread, WB_FAKE_ROLLOUT: JSON.stringify(rollout) });
     const outcome = await runCodexEpisode(options);
@@ -1261,18 +1264,18 @@ describe("codex driver: the subscription's usage windows", () => {
     trajectory.close();
   }, 20_000);
 
-  test("a fresh run whose first turn meets a spent quota waits for the lane's last known window, seeded from another run", async () => {
+  test("a fresh run whose first turn meets a spent quota waits for the credential's last known window, seeded from another run", async () => {
     const runsDir = tempDir("wrathbench-codex-lane-");
     const reset = Date.now() + 3 * 3_600_000;
     mkdirSync(join(runsDir, "fleet-earlier"), { recursive: true });
     writeFileSync(
       join(runsDir, "fleet-earlier", "meta.json"),
-      JSON.stringify({ subscriptionUsage: { lane: "codex:CODEX_HOME", observedAt: Date.now() - 600_000, windows: [{ usedPercent: 97, windowMinutes: 10_080, resetsAt: reset }] } }),
+      JSON.stringify({ subscriptionUsage: { credential: "chatgpt-1", observedAt: Date.now() - 600_000, windows: [{ usedPercent: 97, windowMinutes: 10_080, resetsAt: reset }] } }),
     );
     const { runDir, trajectory, options } = setupEpisode("limit", { maxTurns: 3, runsDir });
     const outcome = await runCodexEpisode(options);
     expect(outcome).toMatchObject({ kind: "paused", reason: "quota-exhausted", notBefore: reset });
-    // Recorded as spent on this run, so the lane gate holds the next attempt.
+    // Recorded as spent on this run, so the credential's budget holds the next attempt.
     expect(readMeta(runDir)!.subscriptionUsage?.windows[0]?.usedPercent).toBe(100);
     trajectory.close();
   }, 20_000);
@@ -1321,12 +1324,12 @@ describe("codex driver: the subscription's usage windows", () => {
     expect(held.trajectory.runRow("run-test")?.["pause_reason"]).toBe("subscription-budget");
     held.trajectory.close();
 
-    const open = setupEpisode("tools", { maxTurns: 2, episode: "freeplay" }, { ...env, WRATHBENCH_SUB_FREEPLAY_MAX_PCT: "90" });
+    const open = setupEpisode("tools", { maxTurns: 2, episode: "freeplay", usageMaxPct: { scored: 80, freeplay: 90 } }, env);
     expect(await runCodexEpisode(open.options)).toEqual({ kind: "terminated", reason: "turn-limit", detail: "2 turns" });
     open.trajectory.close();
   }, 30_000);
 
-  test("a scored run is never paused by the gate, however full the window", async () => {
+  test("a scored run is never paused by the budget, however full the window", async () => {
     const rollout = [
       { total: 1_000, rateLimits: primary(95, 2 * 3_600_000) },
       { total: 2_000, rateLimits: primary(96, 2 * 3_600_000) },

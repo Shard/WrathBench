@@ -92,13 +92,13 @@
  * OPENAI_BASE_URL its endpoint. So the child environment is an allowlist
  * (`childEnv`): the plumbing a process needs to run, and exactly one
  * credential — `CODEX_HOME`, set to
- * the directory the run's LANE names (`RunConfig.subscription`, an env var
- * whose VALUE is a CODEX_HOME path; default `CODEX_HOME`). One directory per
- * lane, shared by that lane's runs, never copied per run — a copied auth.json
+ * the directory the run's credential names (`RunConfig.credentialEnv`, an env
+ * var whose VALUE is a CODEX_HOME path; default `CODEX_HOME`). One directory
+ * per subscription, shared by its runs, never copied per run — a copied auth.json
  * carries a refresh token that whichever process refreshes first consumes,
  * after which the other fails with "refresh token was already used" (seen on
- * this host, 2026-09-05). One live session per lane is the fleet's rule, as
- * for the Claude lanes. auth.json is never read by this driver and never
+ * this host, 2026-09-05). How many sessions share one is its credential's
+ * slots. auth.json is never read by this driver and never
  * logged.
  *
  * ## What the CLI reports, and what it does not
@@ -110,9 +110,9 @@
  * the driver logs the turn's delta against the previous total of the same
  * thread and keeps the total beside it (`codex-usage.ts`). No cost (a
  * subscription has no per-turn price, so cost stays absent as on the Claude
- * lanes) and no rate-limit window on stdout (codex issue #14728): the window
- * is read off the rollout after each turn and recorded on change
- * (`subscription-usage.ts`), where the fleet's lane gate reads it.
+ * subscriptions) and no rate-limit window on stdout (codex issue #14728): the
+ * window is read off the rollout after each turn and recorded on change
+ * (`subscription-usage.ts`), where the credential's budget reads it.
  *
  * Exhaustion still shows up only as a failed turn, and in exec mode only as
  * words: `turn.failed` / `error` carry `{message}` alone — the server's
@@ -205,12 +205,12 @@ export function codexEffortRefusal(effort: string | undefined): string | null {
  * `extra`, which only a test sets.
  *
  * So no `CODEX_API_KEY` or `CODEX_ACCESS_TOKEN` (the CLI's two overrides of the
- * persisted login) and no second lane's directory (`CODEX_HOME_2`) reach it;
+ * persisted login) and no second home's directory (`CODEX_HOME_2`) reach it;
  * no `OPENAI_*` either, which is the `openai` driver's key and base URL; and
- * nothing else the runner holds — the other providers' keys, the Claude lanes'
- * tokens, the module's port secret, the database and derived-store passwords.
+ * nothing else the runner holds — the other providers' keys, the Claude
+ * subscriptions' tokens, the module's port secret, the database and derived-store passwords.
  * That matters beyond the process itself: the CLI writes snapshots of its
- * environment under `$CODEX_HOME/shell_snapshots`, on the lane's volume, so
+ * environment under `$CODEX_HOME/shell_snapshots`, on the home's volume, so
  * whatever it inherits is also written to disk.
  *
  * An unset credential variable leaves `CODEX_HOME` unset: the CLI then has no login to bill
@@ -991,7 +991,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   let threadId: string | undefined;
   let failedTurns = 0;
   /**
-   * This episode's threads whose rollouts are still on the lane's volume, and
+   * This episode's threads whose rollouts are still on the home's volume, and
    * the ones it has moved off since the last turn ended. A rollout is deleted
    * once its thread is done with (`codex-rollout.ts`, "deletion"): a thread
    * left behind after that turn's read, and every one at the episode's end
@@ -1375,7 +1375,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       if (config.maxTurns !== undefined && turn >= config.maxTurns) {
         return terminate("turn-limit", `${turn} turns`);
       }
-      // The freeplay gate, at the turn boundary: a lane at or over the
+      // The freeplay budget, at the turn boundary: a credential at or over its
       // freeplay threshold stops the run until the window resets. Never a
       // scored run: pausing one would spend its attempt.
       if (config.episode === "freeplay") {

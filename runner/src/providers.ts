@@ -82,7 +82,7 @@ export const DEFAULT_API_KEY_ENV = "OPENROUTER_KEY";
 
 /**
  * Names that are never a model provider's key, whatever the table says: the
- * subscription lanes, the harness's own secrets, and the infrastructure
+ * subscription credentials, the harness's own secrets, and the infrastructure
  * credentials (database, derived store, object storage, CDN). Checked first so
  * the refusal says why, and pinned by a test against the table, so a row for
  * one of these can never be added by mistake.

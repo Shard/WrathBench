@@ -11,7 +11,7 @@
  * Three rules shape everything here.
  *
  * **The store holds the config as WRITTEN, never as parsed.** `parseFleet`
- * fills defaults (`preflight.timeoutMs`, `policy.subscriptions`), normalises
+ * fills defaults (`preflight.timeoutMs`, a credential's usage thresholds), normalises
  * shapes (`smokes: ["x.ts"]` becomes `{script, account}`) and annotates
  * entries it refuses. Rendering a parsed config back out would therefore never
  * equal the document that came in, and an export an operator diffs against an
@@ -360,6 +360,9 @@ export function validateFleet(doc: unknown, env: Record<string, string | undefin
  */
 function refuseKeyPairing(key: string, value: unknown, env: Record<string, string | undefined>): void {
   if (!key.startsWith("roster/") || typeof value !== "object" || value === null || Array.isArray(value)) return;
+  // A key is a credential's (`credentials/<id>.secretEnv`), never an entry's:
+  // naming one here is the field that once sent any variable anywhere.
+  if ("apiKeyEnv" in value) throw new ConfigRejected(`${key}: apiKeyEnv is not an entry's — a key is a credential's (credentials/<id>.secretEnv); pin one with credential`);
   const why = rosterProviderRefusal(value as Record<string, unknown>, env);
   if (why !== null) throw new ConfigRejected(`${key}: ${why}`);
 }

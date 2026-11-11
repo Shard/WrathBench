@@ -1456,8 +1456,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       if (config.maxTurns !== undefined && turn >= config.maxTurns) {
         return await terminate("turn-limit", `${turn} turns`);
       }
-      // The subscription gate at the turn boundary (operator, 2026-10-16): a
-      // freeplay run on a lane at or over the freeplay threshold stops until
+      // The usage budget at the turn boundary (operator, 2026-10-16): a
+      // freeplay run on a credential at or over its freeplay threshold stops until
       // the window resets. A scored run never: pausing it would spend its
       // attempt. The reading is refreshed in the background, never awaited.
       if (o.usage !== undefined) {

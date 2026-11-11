@@ -726,7 +726,7 @@ describe("outstandingWork", () => {
     const by = new Map(o.breakdown.map((g) => [g.group, g]));
     expect([...by.keys()].sort()).toEqual(["claude", "local (free)", "openrouter (free)", "openrouter (paid)"]);
     // The free key's three slots, under the pool's five accounts.
-    expect(by.get("openrouter (free)")).toMatchObject({ concurrency: 3, lowerRuns: 6, upperRuns: 7 });
+    expect(by.get("openrouter (free)")).toMatchObject({ concurrency: 3, lowerRuns: 7, upperRuns: 8 });
     // Two enabled subscriptions (the disabled third adds nothing), under a host cap of one.
     expect(by.get("claude")).toMatchObject({ concurrency: 1, lowerMinutes: 270, upperMinutes: 630 });
     expect(by.get("openrouter (paid)")).toMatchObject({ concurrency: 1, lowerRuns: 3, upperRuns: 4 });

@@ -68,9 +68,9 @@
  *
  * The CLI reports its subscription's five-hour and weekly windows on the
  * stream as `rate_limit_event` frames (`claudeRateLimitWindows`). The driver
- * records them on change (`subscription-usage.ts`) for the fleet's lane gate,
+ * records them on change (`subscription-usage.ts`) for the credential's budget,
  * waits a spent quota's pause for the window's reset, and stops a freeplay run
- * at its turn boundary once the lane reaches the freeplay threshold
+ * at its turn boundary once the credential reaches its freeplay threshold
  * (`subscription-budget`; operator, 2026-10-16). None of it reaches the model.
  *
  * ## Winding down instead of killing mid-turn
@@ -184,7 +184,7 @@ export const COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
  * `cliBaseEnv` (adapter-shared.ts) is the plumbing — PATH, HOME, temp, locale,
  * terminal. On top of it exactly three things, all explicit:
  *
- * - The run's LANE credential: the token in `$<tokenEnv>`, copied onto
+ * - The run's credential: the token in `$<credentialEnv>`, copied onto
  *   `CLAUDE_CODE_OAUTH_TOKEN`, the only name the CLI knows. No other
  *   subscription's token is in the child at all — a run bills the subscription
  *   it was scheduled on and cannot see, let alone spend, another — and no
@@ -205,10 +205,10 @@ export const COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
  */
 export function childEnv(
   parent: Record<string, string | undefined>,
-  o: { configDir: string; tokenEnv?: string; extra?: Record<string, string> },
+  o: { configDir: string; credentialEnv?: string; extra?: Record<string, string> },
 ): Record<string, string> {
   const out = cliBaseEnv(parent);
-  const token = parent[o.tokenEnv ?? DEFAULT_CLAUDE_TOKEN_ENV];
+  const token = parent[o.credentialEnv ?? DEFAULT_CLAUDE_TOKEN_ENV];
   if (token !== undefined && token.length > 0) out[DEFAULT_CLAUDE_TOKEN_ENV] = token;
   out["CLAUDE_CONFIG_DIR"] = o.configDir;
   return { ...out, ...(o.extra ?? {}) };
@@ -324,7 +324,7 @@ export function claudeRateLimitWindows(info: unknown): UsageWindow[] | undefined
   const scoped: UsageWindow[] = [];
   if (named !== undefined && family !== undefined) {
     // A per-model weekly cap: its own window, binding only that family's
-    // launches; the lane-wide weekly window stays what the frame says of it.
+    // launches; the subscription-wide weekly window stays what the frame says of it.
     const topUsed = num(i["utilization"]);
     const usedPercent = i["status"] === "rejected" ? 100 : topUsed !== undefined ? topUsed * 100 : undefined;
     if (usedPercent !== undefined) {
@@ -947,7 +947,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     configDir,
     // The run's credential (`RunConfig.credentialEnv`): the CLI only ever sees
     // the token, under the one name it knows.
-    ...(config.credentialEnv !== undefined ? { tokenEnv: config.credentialEnv } : {}),
+    ...(config.credentialEnv !== undefined ? { credentialEnv: config.credentialEnv } : {}),
     ...(Object.keys(extra).length > 0 ? { extra } : {}),
   });
 
@@ -1549,7 +1549,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
       if (config.maxTurns !== undefined && turn >= config.maxTurns) {
         return terminate("turn-limit", `${turn} turns`);
       }
-      // The freeplay gate, at the turn boundary: a lane at or over the
+      // The freeplay budget, at the turn boundary: a credential at or over its
       // freeplay threshold stops the run until the window resets. Never a
       // scored run: pausing one would spend its attempt.
       if (config.episode === "freeplay") {

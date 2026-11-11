@@ -141,7 +141,7 @@ import { entryOwnsRun, isCounted, readRunFacts } from "../runner/src/models";
 import { listRuns } from "../runner/viewer/runs";
 import { STALL_PAUSE } from "../runner/src/lapse";
 import { tempDirs } from "./temp-dirs";
-import { formatConcludedCampaigns } from "./run-fleet-status";
+import { fleetLogsHint, formatConcludedCampaigns } from "./run-fleet-status";
 
 const tempDir = tempDirs();
 
@@ -4656,5 +4656,23 @@ describe("claude-code's default window leaves an entry's runs its own (operator,
     expect(retryNumbers([failed, { ...failed, runId: "b", compactWindow: "300k" }], () => 0)).toEqual([1, 2]);
     // Another window is another entry's count, as it was.
     expect(retryNumbers([failed, { ...failed, runId: "c", compactWindow: "100k" }], () => 0)).toEqual([1, 1]);
+  });
+});
+
+describe("--status names the log of the install it is about", () => {
+  test("the logs hint is built from the namespace and release the CLI targets, defaulting to 0.5's", () => {
+    expect(fleetLogsHint({})).toContain("kubectl -n wrathbench logs -f deploy/wrathbench-fleet");
+    const v1 = fleetLogsHint({ WRATHBENCH_K8S_NAMESPACE: "wrathbench-v1", WRATHBENCH_K8S_RELEASE: "wrathbench-v1" });
+    expect(v1).toContain("kubectl -n wrathbench-v1 logs -f deploy/wrathbench-v1-fleet");
+    expect(v1).not.toContain("deploy/wrathbench-fleet");
+    // An empty value is no value: the default, never `-n ` with nothing after it.
+    expect(fleetLogsHint({ WRATHBENCH_K8S_NAMESPACE: "", WRATHBENCH_K8S_RELEASE: "" })).toContain("kubectl -n wrathbench logs -f deploy/wrathbench-fleet");
+    expect(v1).toContain("docker compose -f infra/compose.yml logs -f fleet");
+  });
+
+  test("the chart hands the runner pod its own namespace and release, where the status is exec'd", () => {
+    const tpl = readFileSync(new URL("./chart/wrathbench/templates/runner.yaml", import.meta.url).pathname, "utf8");
+    expect(tpl).toMatch(/- name: WRATHBENCH_K8S_NAMESPACE\n\s+valueFrom:\n\s+fieldRef:\n\s+fieldPath: metadata.namespace/);
+    expect(tpl).toMatch(/- name: WRATHBENCH_K8S_RELEASE\n\s+value: \{\{ include "wrathbench.fullname" \. \| quote \}\}/);
   });
 });

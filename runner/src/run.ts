@@ -1292,7 +1292,7 @@ async function main(): Promise<void> {
     // free for the resume (same character — logout, never a wipe). So does a
     // run whose observation stalled: the session is what stopped reporting,
     // and the resume's fresh one is the cure. So does a freeplay run the
-    // subscription gate stopped: it waits hours or days for a usage window,
+    // usage budget stopped: it waits hours or days for a usage window,
     // and nothing retries it in place. A run
     // paused by its provider keeps the session alive on purpose: that is
     // the in-place retry path, and the roster frees it when it moves on.

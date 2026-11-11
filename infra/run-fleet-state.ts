@@ -241,7 +241,7 @@ export function runHasImageRecord(runId: string, runsDir: string = RUNS_DIR): bo
   return existsSync(join(runsDir, runId, IMAGE_RECORD_FILE));
 }
 
-/** A Codex home this process can reach: the lane variable that names it, and its real path. */
+/** A Codex home this process can reach: the credential variable that names it, and its real path. */
 export interface CodexHome {
   env: string;
   path: string;

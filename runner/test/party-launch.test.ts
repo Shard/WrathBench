@@ -22,7 +22,7 @@ import { checkedIn, checkedInFiles, definition, joined, PARTY_MEMBERS, partyDefi
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
-const MODEL = ["--driver", "claude-code", "--model", "sonnet", "--token-env", "CLAUDE_CODE_OAUTH_TOKEN_2"];
+const MODEL = ["--driver", "claude-code", "--model", "sonnet", "--credential", "claude-2", "--credential-env", "CLAUDE_CODE_OAUTH_TOKEN_2"];
 const STEM = "fleet-deadmines-party-base-sonnet-20261020";
 const ACCOUNTS = ["PARTY1", "PARTY2", "PARTY3", "PARTY4", "PARTY5"];
 
@@ -122,7 +122,7 @@ describe("a member's launch", () => {
     expect(c.character).toBe("Corvin");
     expect([c.race, c.class]).toEqual([7, 8]);
     expect(c.objective).toBe("You are Corvin, the party's damage.");
-    expect(c.subscription).toBe("CLAUDE_CODE_OAUTH_TOKEN_2");
+    expect([c.credential, c.credentialEnv]).toEqual(["claude-2", "CLAUDE_CODE_OAUTH_TOKEN_2"]);
     expect(c.party).toEqual({ id: STEM, member: "mage", role: "damage", size: 5, members: launchOf("mage").members });
     expect(c.watchdogs).toMatchObject({ episodeMs: 14_400_000, idleMs: 1_200_000, noXpMs: null });
     // The party is not a key: the tuple a member stamps has no party in it.
