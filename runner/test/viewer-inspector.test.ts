@@ -135,6 +135,11 @@ describe("the session token's fingerprint", () => {
       `/api/inspector/sessions/${id}/moves`,
     ]),
   ];
+  const fanoutReplayPaths = SESSIONS.filter((id) => id.startsWith(`${FANOUT_RUN}~`)).flatMap((id) => [
+    `/api/run/${id}/track`,
+    `/api/run/${id}/trace`,
+    `/api/run/${id}/trace/${T0}`,
+  ]);
   const paths = [
     ...inspectorPaths,
     "/api",
@@ -159,6 +164,8 @@ describe("the session token's fingerprint", () => {
       `/api/run/${run}/scratchpad`,
       `/api/run/${run}/stream`,
     ]),
+    // A fan-out character's replay feed opens the same handle (`fanoutSession`).
+    ...fanoutReplayPaths,
   ];
 
   /** The v1 run and the fan-out run side by side, and every fingerprint their records hold, read off disk. */
@@ -203,7 +210,7 @@ describe("the session token's fingerprint", () => {
         expect({ path, leaks }).toEqual({ path, leaks: [] });
       }
       // The walk reached the routes that read the records, not only 404s.
-      if (!publicMode) expect(served).toEqual(expect.arrayContaining(inspectorPaths));
+      if (!publicMode) expect(served).toEqual(expect.arrayContaining([...inspectorPaths, ...fanoutReplayPaths]));
     });
   }
 
