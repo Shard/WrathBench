@@ -62,8 +62,12 @@ export interface CredentialGate {
   usage: ReadonlyMap<string, SubscriptionUsage>;
   /** The usage hold on a launch of `episode`'s class and `model` on credential `id`, or null. */
   usageHoldOf(id: string, episode: string | null | undefined, model?: string | null): UsageHold | null;
-  /** Why a launch of `episode`'s class is held on credential `id` by its budget, in words fit for any surface, or undefined. */
-  holdOf(id: string, episode: string | null | undefined, model?: string | null): string | undefined;
+  /**
+   * Why a launch of `episode`'s class is held on credential `id` by its
+   * budget, in words fit for any surface, or undefined. A resume is no new
+   * run, so a runs-per-day budget never holds one (`opts.resume`).
+   */
+  holdOf(id: string, episode: string | null | undefined, model?: string | null, opts?: { resume?: boolean }): string | undefined;
   /** Fresh launches on `id` since 00:00 UTC. */
   runsToday(id: string): number;
   /** The provider's reported charge on `id`'s runs since 00:00 UTC, in dollars. */
@@ -107,7 +111,7 @@ export function credentialGate(
     now,
     usage,
     usageHoldOf,
-    holdOf: (id, episode, model) => {
+    holdOf: (id, episode, model, opts) => {
       const c = byId.get(id);
       if (c === undefined) return undefined;
       const h = usageHoldOf(id, episode, model);
@@ -118,7 +122,7 @@ export function credentialGate(
           : `credential ${id}: at or over its ${cls} usage threshold — held until its usage window resets`;
       }
       if (c.budget?.kind === "spend" && (spendToday.get(id) ?? 0) >= c.budget.usdPerDay) return `credential ${id}: its spend budget for the day is used — held until 00:00 UTC`;
-      if (c.budget?.kind === "runs" && (runsToday.get(id) ?? 0) >= c.budget.perDay) return `credential ${id}: its runs for the day are used — held until 00:00 UTC`;
+      if (c.budget?.kind === "runs" && opts?.resume !== true && (runsToday.get(id) ?? 0) >= c.budget.perDay) return `credential ${id}: its runs for the day are used — held until 00:00 UTC`;
       return undefined;
     },
     runsToday: (id) => runsToday.get(id) ?? 0,
@@ -491,7 +495,7 @@ export function resumeHoldOf(
   const c = cfg.credentials.find((x) => x.id === f.credential);
   if (c === undefined) return `credential ${f.credential} is not configured — the run comes back only on it (or move it: bun wb config move-credential)`;
   if (!c.enabled) return `credential ${f.credential} is disabled — the run comes back only on it (or move it: bun wb config move-credential)`;
-  return gate.holdOf(c.id, f.episode, f.model);
+  return gate.holdOf(c.id, f.episode, f.model, { resume: true });
 }
 
 /** A spawn the budget changed, and why. */

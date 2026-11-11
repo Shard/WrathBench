@@ -259,6 +259,10 @@ describe("a credential's budget holds new starts", () => {
     expect(credentialGate(creds, [], [...runs, fact({ runId: "d", credential: "r", startedAt: NOW - 60_000 })], NOW).holdOf("r", "e90")).toBe(
       "credential r: its runs for the day are used — held until 00:00 UTC",
     );
+    // A resume is no new run: a runs budget that is used never holds one.
+    const used = credentialGate(creds, [], [...runs, fact({ runId: "d", credential: "r", startedAt: NOW - 60_000 })], NOW);
+    expect(used.holdOf("r", "freeplay", null, { resume: true })).toBeUndefined();
+    expect(resumeHoldOf(fact({ credential: "r", episode: "freeplay" }), { credentials: creds }, used)).toBeUndefined();
     expect(g.spendToday("s")).toBeCloseTo(0.6);
     expect(g.holdOf("s", "e90")).toBeUndefined();
     const spent = credentialGate(creds, [], [...runs, fact({ runId: "e", credential: "s", spendByDay: { [today]: 0.5 } })], NOW);
