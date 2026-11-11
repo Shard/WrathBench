@@ -722,6 +722,8 @@ export interface InspectStore {
    * whose trajectory carries none.
    */
   samples(id: string, since: number, until: number): Promise<Record<string, unknown>[]>;
+  /** The newest `states` row before `ts`: the reading a window that starts there starts from. */
+  sampleBefore(id: string, ts: number): Promise<Record<string, unknown> | null>;
   extent(id: string, w: Window): Promise<Extent>;
   /** The lines numbered [from, to) that the spec wants, in the window. */
   rows(id: string, spec: ReadSpec, w: Window, from: number, to: number): Promise<StoreRow[]>;
@@ -945,6 +947,12 @@ export function clickhouseStore(cfg: ClickhouseConfig, fetchImpl: (url: URL, ini
       return rows(
         `SELECT ts, level, xp, money, quests_completed, map, x, y, z, items FROM states FINAL WHERE run_id = ${sqlStr(id)} AND ts >= ${Math.floor(since)} AND ts <= ${Math.floor(until)} ORDER BY ts, seq`,
       );
+    },
+    async sampleBefore(id, ts) {
+      const r = await rows<Record<string, unknown>>(
+        `SELECT ts, level, xp, money, quests_completed, map, x, y, z, items FROM states FINAL WHERE run_id = ${sqlStr(id)} AND ts < ${Math.floor(ts)} ORDER BY ts DESC, seq DESC LIMIT 1`,
+      );
+      return r[0] ?? null;
     },
     async extent(id, w) {
       return extentOf(await rows<ExtentRow>(extentSql(id, w)));
@@ -1422,7 +1430,9 @@ export function eventQuests(session: string): { ts: number; quests: number | nul
  * carried, at every key row, and once a minute while only the position moves
  * (runner/src/trace-samples.ts is the full derivation; this is the part
  * `stuck` reads, kept here because this file imports nothing). Items are
- * keyed by id and count, which is all `itemsKey` compares.
+ * keyed by id and count, which is all `itemsKey` compares. The newest sample
+ * before the window comes first when there is one: the trace writes a change
+ * and nothing between, so it is the reading the window starts from.
  */
 export function traceSamples(session: string, w: { since: number; until: number }): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
@@ -1434,6 +1444,7 @@ export function traceSamples(session: string, w: { since: number; until: number 
   let lastAt = -Infinity;
   const inv = new Map<string, number[]>();
   const equip = new Map<number, number[]>();
+  let before: Record<string, unknown> | null = null;
   for (const f of segmentFiles(session, "trace")) {
     let text: string;
     try {
@@ -1449,7 +1460,8 @@ export function traceSamples(session: string, w: { since: number; until: number 
         continue;
       }
       const ts = typeof r["ts"] === "number" ? r["ts"] : null;
-      if (ts === null || ts > w.until) return out;
+      if (ts === null) continue;
+      if (ts > w.until) return out.length === 0 && before !== null ? [before] : out;
       const d = obj(r["data"]);
       if (typeof r["map"] === "number") pos = { map: r["map"], x: r["x"], y: r["y"], z: r["z"] };
       if (r["kind"] === "key") {
@@ -1473,37 +1485,81 @@ export function traceSamples(session: string, w: { since: number; until: number 
       const sample = { ts, level: fold["level"] ?? null, xp: fold["xp"] ?? null, money: fold["money"] ?? null, quests_completed: quests, ...pos, items };
       const key = JSON.stringify({ ...sample, ts: 0, x: 0, y: 0, z: 0 });
       const moved = JSON.stringify(pos) !== lastPos && ts - lastAt >= 60_000;
-      if (ts < w.since || (key === last && !moved && r["kind"] !== "key")) continue;
+      if (key === last && !moved && r["kind"] !== "key") continue;
       last = key;
       lastPos = JSON.stringify(pos);
       lastAt = ts;
-      out.push(sample);
-    }
-  }
-  return out;
-}
-
-/** A v1 run's served batches (`calls` `events` rows) in a window that carry a `schemaError`: what `events_served` records were. */
-export function calledSchemaBatches(session: string, w: { since: number; until: number }): number {
-  let n = 0;
-  for (const f of segmentFiles(session, "calls")) {
-    let text: string;
-    try {
-      text = segmentText(f);
-    } catch {
-      continue;
-    }
-    for (const line of text.split("\n")) {
-      if (!line.includes('"kind":"events"') || !line.includes(SCHEMA_ERROR_KEY)) continue;
-      try {
-        const r = JSON.parse(line) as { ts?: unknown };
-        if (typeof r.ts === "number" && r.ts >= w.since && r.ts <= w.until) n++;
-      } catch {
-        /* a torn line */
+      if (ts < w.since) before = sample;
+      else {
+        if (before !== null && out.length === 0) out.push(before);
+        out.push(sample);
       }
     }
   }
-  return n;
+  return out.length === 0 && before !== null ? [before] : out;
+}
+
+/** A session segment's window: five minutes from the time its name starts with (wrath-mcp/docs/SESSION-FORMAT.md). */
+const SEGMENT_MS = 5 * 60_000;
+
+/** What a v1 run's record says about a window beside its trace: when its writer was writing, and the served batches that failed to decode. */
+export interface RecordWrites {
+  /**
+   * The times the session's writer is known to have been running in the
+   * window: every `calls` and `events` row (a tool call, the actions a
+   * snippet or routine dispatched, a served batch, a game event) and
+   * `live.json`'s heartbeat, which the writer rewrites on every tick.
+   */
+  writes: number[];
+  /** Served batches (`calls` `events` rows) that carry a `schemaError`: what `events_served` records were. */
+  schemaBatches: number;
+}
+
+/**
+ * The writes of a v1 run's record in a window, off its files, other than its
+ * trace's. A character standing still writes no trace rows (the trace is a
+ * change and nothing between), so these are what say the record was being
+ * written through a quiet stretch, and the silence is the character's. Only
+ * the segments that can hold the window are read.
+ */
+export function recordWrites(session: string, w: { since: number; until: number }): RecordWrites {
+  const out: RecordWrites = { writes: [], schemaBatches: 0 };
+  const inWindow = (ts: unknown): ts is number => typeof ts === "number" && ts >= w.since && ts <= w.until;
+  for (const stream of ["calls", "events"] as const) {
+    for (const f of segmentFiles(session, stream)) {
+      // A segment holds rows from before the time it is named for (a late row) but none from after its five minutes.
+      const t0 = Number(/(\d{13})(?:-\d+)?\.jsonl/.exec(f)?.[1]);
+      if (Number.isFinite(t0) && t0 + SEGMENT_MS < w.since) continue;
+      let text: string;
+      try {
+        text = segmentText(f);
+      } catch {
+        continue;
+      }
+      for (const line of text.split("\n")) {
+        // The writer puts `ts` first; a row that does not is parsed whole.
+        const at = /^\{"ts":(\d+)[,}]/.exec(line);
+        let ts: unknown = at === null ? null : Number(at[1]);
+        if (at === null) {
+          try {
+            ts = (JSON.parse(line) as { ts?: unknown }).ts;
+          } catch {
+            continue;
+          }
+        }
+        if (!inWindow(ts)) continue;
+        out.writes.push(ts);
+        if (stream === "calls" && line.includes('"kind":"events"') && line.includes(SCHEMA_ERROR_KEY)) out.schemaBatches++;
+      }
+    }
+  }
+  try {
+    const live = JSON.parse(readFileSync(join(session, "live.json"), "utf8")) as { ts?: unknown };
+    if (inWindow(live.ts)) out.writes.push(live.ts);
+  } catch {
+    /* no heartbeat yet, or one being renamed into place */
+  }
+  return out;
 }
 
 /** One process's stretch of the quest count: when its first sample was taken, and its last count. */
@@ -2855,7 +2911,7 @@ export function progressSampleOf(r: Record<string, unknown>, ts: number): Progre
 }
 
 export interface ProgressVerdict {
-  /** `stuck`: no progress of any kind over a window the samples cover; `unjudged`: they do not cover it. */
+  /** `stuck`: no progress of any kind over a window the record covers; `unjudged`: it does not cover it. */
   state: "stuck" | "progressing" | "unjudged";
   /** What changed, what held, or why the window cannot be judged. */
   evidence: string;
@@ -2864,24 +2920,52 @@ export interface ProgressVerdict {
 
 /**
  * Whether the character made any progress over [since, until], from its state
- * samples alone. Progress is any of: (level, xp) rising, the quest count
- * rising (a drop is a restart, the count being the process's own), the money
- * or the items changing, the map changing, or the position straying more than
+ * samples. Progress is any of: (level, xp) rising, the quest count rising (a
+ * drop is a restart, the count being the process's own), the money or the
+ * items changing, the map changing, or the position straying more than
  * `moveYards` from where the window began. A field a sample did not carry is
- * unknown, never a change. The window must be covered: samples at most
- * `maxGapMs` apart and from either end, or the answer is `unjudged`, since no
- * samples is not no progress. Pure.
+ * unknown, never a change. The window must be covered, or the answer is
+ * `unjudged`, since nothing recorded is not no progress. Pure.
+ *
+ * Covered means two things, by what the samples are. A 0.5 run sampled its
+ * state every minute, so its samples must be at most `maxGapMs` apart and from
+ * either end. A v1 run's samples are its trace's, which writes a change and
+ * nothing between, so a character standing still has none for hours: given
+ * `writes`, the times its record was being written (`recordWrites`), the
+ * window is covered when those and the samples are that close, the newest
+ * sample before the window is the reading it starts from, and a stretch with
+ * no sample is a stretch in which nothing changed.
  */
-export function progressVerdict(all: readonly ProgressSample[], w: { since: number; until: number }, t: Pick<StuckThresholds, "moveYards" | "maxGapMs">): ProgressVerdict {
-  const s = all.filter((x) => x.ts >= w.since && x.ts <= w.until).sort((a, b) => a.ts - b.ts);
-  const n = s.length;
-  if (n < 2) return { state: "unjudged", evidence: `${n} state sample(s) in the window`, samples: n };
-  let gap = { ms: s[0]!.ts - w.since, at: w.since };
-  for (let i = 1; i < n; i++) if (s[i]!.ts - s[i - 1]!.ts > gap.ms) gap = { ms: s[i]!.ts - s[i - 1]!.ts, at: s[i - 1]!.ts };
-  if (w.until - s[n - 1]!.ts > gap.ms) gap = { ms: w.until - s[n - 1]!.ts, at: s[n - 1]!.ts };
+export function progressVerdict(
+  all: readonly ProgressSample[],
+  w: { since: number; until: number },
+  t: Pick<StuckThresholds, "moveYards" | "maxGapMs">,
+  writes?: readonly number[],
+): ProgressVerdict {
+  const inside = all.filter((x) => x.ts >= w.since && x.ts <= w.until).sort((a, b) => a.ts - b.ts);
+  // When the window's coverage was seen: the samples alone, or with the record's other writes.
+  const seen = writes === undefined ? inside.map((x) => x.ts) : [...inside.map((x) => x.ts), ...writes.filter((ts) => ts >= w.since && ts <= w.until)].sort((a, b) => a - b);
+  const what = writes === undefined ? "state samples" : "record writes";
+  const k = seen.length;
+  if (k < 2) return { state: "unjudged", evidence: writes === undefined ? `${k} state sample(s) in the window` : `${k} record write(s) in the window`, samples: inside.length };
+  let gap = { ms: seen[0]! - w.since, at: w.since };
+  for (let i = 1; i < k; i++) if (seen[i]! - seen[i - 1]! > gap.ms) gap = { ms: seen[i]! - seen[i - 1]!, at: seen[i - 1]! };
+  if (w.until - seen[k - 1]! > gap.ms) gap = { ms: w.until - seen[k - 1]!, at: seen[k - 1]! };
   if (gap.ms > t.maxGapMs) {
-    return { state: "unjudged", evidence: `${n} state samples, but a ${fmtAge(gap.ms)} gap from ${iso(gap.at)} (over ${fmtAge(t.maxGapMs)}): a run younger than the window, a pause, or samples not being written`, samples: n };
+    return {
+      state: "unjudged",
+      evidence: `${k} ${what}, but a ${fmtAge(gap.ms)} gap from ${iso(gap.at)} (over ${fmtAge(t.maxGapMs)}): a run younger than the window, a pause, or ${writes === undefined ? "samples" : "a record"} not being written`,
+      samples: inside.length,
+    };
   }
+  let s = inside;
+  if (writes !== undefined) {
+    // The reading the window starts from: the newest sample before it, as of its start.
+    const before = all.filter((x) => x.ts < w.since).reduce<ProgressSample | null>((a, x) => (a === null || x.ts >= a.ts ? x : a), null);
+    if (before !== null) s = [{ ...before, ts: w.since }, ...inside];
+    if (s.length === 0) return { state: "unjudged", evidence: `${k} record writes, but no trace reading in or before the window`, samples: 0 };
+  }
+  const n = s.length;
   const changes: string[] = [];
   const last = <K extends keyof ProgressSample>(k: K): ProgressSample[K] | null => {
     for (let i = n - 1; i >= 0; i--) if (s[i]![k] !== null) return s[i]![k];
@@ -2939,7 +3023,10 @@ export function progressVerdict(all: readonly ProgressSample[], w: { since: numb
   if (items) changes.push("items changed");
   if (map) changes.push(`maps ${[...maps].join(", ")}`);
   if (stray > t.moveYards) changes.push(`moved ${Math.round(stray)} yd from where the window began`);
-  const span = `${n} samples over ${fmtAge(s[n - 1]!.ts - s[0]!.ts)}, largest gap ${fmtAge(gap.ms)}`;
+  const span =
+    writes === undefined
+      ? `${n} samples over ${fmtAge(s[n - 1]!.ts - s[0]!.ts)}, largest gap ${fmtAge(gap.ms)}`
+      : `${inside.length} trace sample(s) and ${k - inside.length} other record write(s) in the window, largest gap ${fmtAge(gap.ms)}`;
   if (changes.length > 0) return { state: "progressing", evidence: `${changes.join(" · ")} · ${span}`, samples: n };
   const where = origin === null ? "position unknown" : `map ${origin.map}, within ${stray.toFixed(1)} yd of (${origin.x!.toFixed(0)}, ${origin.y!.toFixed(0)})`;
   const held = [`${lvl} throughout`, "quests +0", `money ${first("money") === null ? "unknown" : "unchanged"}`, `items ${first("items") === null ? "unknown" : "unchanged"}`, where];
@@ -3087,9 +3174,9 @@ export interface StuckReport {
 }
 
 /** Every signal over a scan, the progress verdict first: the only one that flags a run. Pure. */
-export function stuckReport(a: StuckScan, w: { since: number; until: number }, t: StuckThresholds): StuckReport {
+export function stuckReport(a: StuckScan, w: { since: number; until: number }, t: StuckThresholds, writes?: readonly number[]): StuckReport {
   const top = (m: Map<string, number>): [string, number] | null => [...m].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))[0] ?? null;
-  const progress = progressVerdict(a.samples, w, t);
+  const progress = progressVerdict(a.samples, w, t, writes);
   const err = top(a.errors);
   const errTotal = [...a.errors.values()].reduce((x, y) => x + y, 0);
   const hint = top(a.hints);
@@ -3151,14 +3238,26 @@ async function stuckOf(ctx: Ctx, runId: string, run: { dir: string; path: string
     scan = r.a;
   }
   // A v1 run's trajectory is the model side: its samples are its trace's,
-  // folded by the collector into the store, or read off the record here.
+  // folded by the collector into the store, or read off the record here,
+  // and the newest one before the window with them. The trace is silent
+  // while nothing changes, so what covers the window is the record's other
+  // writes, off its files on either path: the store holds neither the
+  // `calls` stream whole nor `live.json`.
+  let writes: number[] | undefined;
   if (isV1Dir(run.dir)) {
-    const rows = via.store !== null ? await via.store.samples(runId, w.since, w.until) : traceSamples(join(run.dir, "session"), w);
+    const session = join(run.dir, "session");
+    let rows: Record<string, unknown>[];
+    if (via.store !== null) {
+      const before = await via.store.sampleBefore(runId, w.since);
+      rows = [...(before !== null ? [before] : []), ...(await via.store.samples(runId, w.since, w.until))];
+    } else rows = traceSamples(session, w);
     scan.samples = rows.map((r) => progressSampleOf(r, r["ts"] as number));
+    const rec = recordWrites(session, w);
+    writes = rec.writes;
     // Its tools' served batches are its record's `calls` rows, not trajectory records.
-    scan.schemaRecords += calledSchemaBatches(join(run.dir, "session"), w);
+    scan.schemaRecords += rec.schemaBatches;
   }
-  return { via, report: stuckReport(scan, w, t), anchor };
+  return { via, report: stuckReport(scan, w, t, writes), anchor };
 }
 
 export async function inspectStuck(runId: string, opts: Ctx & { until: number | null; thresholds: StuckThresholds }, out: Out): Promise<number> {
@@ -3171,7 +3270,7 @@ export async function inspectStuck(runId: string, opts: Ctx & { until: number | 
   const a = report.scan;
   say(`${runId}: the stuck detector over ${fmtAge(t.windowMs)} to ${iso(report.window.until)} (${anchor}), UTC`);
   say(
-    `verdict   ${p.state === "stuck" ? "STUCK: no game progress in the window" : p.state === "progressing" ? "not stuck: the character made progress" : "unjudged: the state samples do not cover the window"} (only the progress signal flags a run; the rest are evidence)`,
+    `verdict   ${p.state === "stuck" ? "STUCK: no game progress in the window" : p.state === "progressing" ? "not stuck: the character made progress" : "unjudged: what was recorded does not cover the window"} (only the progress signal flags a run; the rest are evidence)`,
   );
   say(`source    ${via.line}`);
   say(`progress  ${p.state === "stuck" ? "TRIPPED" : p.state === "unjudged" ? "unjudged" : "ok     "}  ${p.evidence}`);
