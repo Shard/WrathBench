@@ -2877,8 +2877,8 @@ export interface ModelRowView {
   /**
    * Free or paid (`runner/src/model-cost.ts`). Since the tier became the only
    * budget this says only
-   * where a run may physically execute — the account class and the rate-limit
-   * key. It buys no runs and costs none: that is the tier.
+   * which credential may carry a run (a metered key's billing side). It buys
+   * no runs and costs none: that is the tier.
    *
    * NOT the same verdict as `ResultRun.billing`, and the two disagree on
    * purpose: this one answers "does this consume the paid concurrency budget",

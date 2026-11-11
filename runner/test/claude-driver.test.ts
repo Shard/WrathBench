@@ -1075,7 +1075,7 @@ describe("childEnv", () => {
     expect(compactionRecord(1, { type: "system", subtype: "compact_boundary" })).toMatchObject({ trigger: null, preTokens: null });
   });
 
-  test("a second subscription lane arrives under the one name the CLI knows", () => {
+  test("a second subscription's token arrives under the one name the CLI knows", () => {
     const parent = {
       PATH: "/usr/bin",
       CLAUDE_CODE_OAUTH_TOKEN: "first-subscription",

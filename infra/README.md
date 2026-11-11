@@ -279,9 +279,9 @@ config and everything but `model` has a default (`infra/run-roster.ts` is the
 schema). An unset `effort` means the provider's own default, which is not the
 same as any named level.
 
-The codex lane is a directory, so under compose it is BIND-MOUNTED —
+The codex credential is a directory, so under compose it is BIND-MOUNTED —
 `CODEX_HOME` on the host to `/home/bun/.codex` in `runner` and `fleet`,
-which is what those services set `CODEX_HOME` to (`x-codex-lane` in
+which is what those services set `CODEX_HOME` to (`x-codex-home` in
 compose.yml). Compose reads the host path from the shell or from
 `--env-file .env`; unset or empty, it is `data/codex` in the checkout, which
 holds no login until someone runs `codex login` with `CODEX_HOME` pointing
@@ -326,11 +326,12 @@ The config store is the whole answer to "what is running right now" —
 is where it is read and edited, and `infra/fleet.example.json` is the shape.
 Its unit of work is the **job**: a roster entry (or a rotation of
 several), an episode tier, a repeat count, run as one `run-roster` process on
-one game **account**. Accounts have a **class** — `pool`, `paid`, `local`, or
-pinned to one job — and the class decides which job may land on them. A job
-that names an `account` is pinned to it; a job without one is pool work; and
-the scheduling policy makes up jobs of its own for whatever the manual queue
-leaves free. Inspect the config, and you have inspected the fleet.
+one game **account**, and every run on a provider **credential** with a free
+slot (`docs/RUNBOOK.md`, "Credentials"). An account is in the one pool or
+pinned to one job: a job that names an `account` is pinned to it; a job
+without one is pool work; and the scheduling policy makes up jobs of its own
+for whatever the manual queue leaves free. Inspect the config, and you have
+inspected the fleet.
 
 The supervisor (`infra/run-fleet.ts`) runs as the chart's `fleet` Deployment,
 or compose's `fleet` service on the quickstart stack. It reads its state where
@@ -354,13 +355,14 @@ operating it is `docs/RUNBOOK.md`, "Run pods".
 An openai entry may point `apiBase` at a self-hosted OpenAI-compatible endpoint
 instead of a cloud pool, for example an LM Studio box on the LAN
 (`http://192.0.2.20:1234/v1`, model `qwen/qwen3.8-27b`). A local apiBase
-(loopback, RFC-1918 or `.local`) bills free, and its runs land only on the
-`local` account class:
+(loopback, RFC-1918 or `.local`) bills free, and its runs take a slot on a
+`local` credential, whose `slots: 1` is what keeps one runner on the box:
 
 - **Claude-barred.** No `claude-*` id ever rides an openai entry, local or
   cloud; claude runs only on the `claude-code` driver.
-- **`apiKeyEnv` names a dummy key.** LM Studio ignores the bearer value, but the
-  pipeline needs the env var to exist, so `.env` carries a non-secret
+- **The credential names a dummy key.** LM Studio ignores the bearer value, but
+  the pipeline needs the env var to exist, so the `local` credential's
+  `secretEnv` is `LMSTUDIO_KEY` and `.env` carries a non-secret
   `LMSTUDIO_KEY=lm-studio` placeholder. Delivery mirrors the cloud entries
   exactly: the key travels only in `.env` (Bun autoloads `/wrathbench/.env`
   inside the runner container), never through argv. The adapter still sends its

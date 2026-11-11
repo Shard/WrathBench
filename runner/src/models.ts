@@ -111,8 +111,8 @@ export interface StartingCharacter {
  * model's entry at 03:00.
  *
  * Money is deliberately not modelled. A tier is denominated in runs; a spend
- * cap, when one is wanted, belongs beside `paid.maxConcurrent` as its own
- * thing. Minting `t0a`/`t0b` to approximate dollars is the accretion this
+ * cap is a credential's `spend` budget (`runner/src/credentials.ts`), its own
+ * thing beside the tier. Minting `t0a`/`t0b` to approximate dollars is the accretion this
  * table exists to stop.
  */
 export const TIERS = ["t0", "t1", "t2"] as const;
@@ -328,7 +328,7 @@ export const RESUME_RECORD = "resume";
 /**
  * Pause reasons that ride no backoff ladder: the fleet stopped under the run
  * (`operator-pause`), its runner died before it could write a verdict
- * (`offline`, derived and never on disk), or the subscription usage gate
+ * (`offline`, derived and never on disk), or a credential's usage budget
  * stopped a freeplay run at the freeplay threshold (`subscription-budget`,
  * operator 2026-10-16), or a party member was paused because another member
  * paused first (`party-paused`, whose party waits on that member's own
@@ -1709,7 +1709,7 @@ export { NOT_THE_MODELS_FAULT } from "./lapse";
  */
 export function lastActivityOf(f: Pick<RunFact, "pause" | "endedAt" | "startedAt">): number {
   if (f.pause === null) return Math.max(f.endedAt ?? 0, f.startedAt);
-  // A pause waiting on a stated reset — a spent quota, the subscription gate —
+  // A pause waiting on a stated reset — a spent quota, a credential's usage budget —
   // is not gone quiet while it waits: nothing may play it before then, so its
   // gap starts at the reset, and a resuming probe whose reset is farther than
   // its own budget is not aged into stale while it waits.
@@ -2237,7 +2237,7 @@ export function schedulability(
   }
   if (open.length === 0) {
     // Idle work is the model's own axis now, not a consequence of its billing
-    // or its account class: what it does with a spare account is what its entry
+    // or where its account comes from: what it does with a spare account is what its entry
     // says it does. A paid model defaults to `none` and so buys nothing extra.
     // One idle mode past `none`, so one thing to say. (The retired third,
     // `idle: "characters"`, is a probe campaign now — nothing here rolls a

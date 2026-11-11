@@ -42,7 +42,7 @@ A run is live when it has neither a termination nor a pause (skill
 - `bun wb release run|deploy`, `bun wb server restart-viewer`, `--apply` on
   log retention. `release build --push` rolls nothing but publishes images:
   only as part of a release the operator asked for.
-- `bun wb config set|patch|delete|seed|move-lane`, `bun wb campaign publish`:
+- `bun wb config set|patch|delete|seed|credentials add|edit|disable|move-credential`, `bun wb campaign publish`:
   writes to the store
 - `bun wb run episode`, `bun wb smoke …`, `bun wb accounts …`: they log game
   accounts in, create them, or move characters

@@ -119,11 +119,11 @@ the operator's figure in GitHub issue #66.
   in `pricing.ts`'s header), so its runs read the CLI's own figure.
 - **Cost control is external to the fleet by decision**: a tier is
   denominated in runs, dollars are the operator's reasoning. If an in-fleet
-  money budget is ever wanted, it belongs beside `policy.paid.maxConcurrent`,
-  not as a new tier.
+  money budget is wanted, it is a credential's, never a tier's: a `spend`
+  budget holds new starts on that key (docs/RUNBOOK.md, "Credentials").
 - **Subscription episodes are $0 marginal but not free in value**: ~99.5%+ of
   their prompt volume is cache reads, and the one clean e360 measurement
-  as-metered was ~$44 — reserve the lane for confirmed candidates, not volume
+  as-metered was ~$44 — reserve the subscription for confirmed candidates, not volume
   sampling.
 
 ## 3. Context growth across an episode
@@ -162,7 +162,7 @@ it explains these numbers rather than unscoring the rows. Nothing of the harness
 conversation today — the CLI compacts it itself near its auto-compaction window, which `auto` puts close
 to the model's whole context, which defaults to 300k for runs launched since 2026-11-10, and which a
 roster entry may set (`compactWindow`, runner/README.md, "The compaction window"); the harness's own compaction gate was never tripped by the fixed-context lanes, and
-the subscription lane arguably trips it already.
+the subscription harness arguably trips it already.
 
 **codex harness (OpenAI models via the Codex CLI on a ChatGPT subscription):** the same
 regime with a different scaffold — one persisted thread, resumed per turn, compacted by the CLI on

@@ -1647,7 +1647,7 @@ export function planResumes(opts: {
  * paused, its campaign still names the same accounts, every member's own
  * pause has run its course (the latest `resumeNotBefore` of them, which is
  * the first member's — a `party-paused` member waits on nothing of its own),
- * no member's lane is held by the usage gate, and every member's account is
+ * no member's credential is held by its budget, and every member's account is
  * free. A party whose members cannot all come back — one ended, one missing,
  * one in another series — is listed, never half-resumed.
  */

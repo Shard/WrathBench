@@ -88,9 +88,9 @@ function run(over: Partial<RunListRow> = {}): RunListRow {
 
 describe("columns", () => {
   test("state leads; one table carries the job, its account and the run it is driving", () => {
-    expect([...FLEET_COLUMNS]).toEqual(["state", "job", "model", "episode", "account class", "attempt", "run", "lvl / xp", "tokens", "tok/s", "cost", "elapsed"]);
+    expect([...FLEET_COLUMNS]).toEqual(["state", "job", "model", "episode", "account from", "attempt", "run", "lvl / xp", "tokens", "tok/s", "cost", "elapsed"]);
     // The process is bookkeeping, not something an operator scans a table for;
-    // the source (file, queue, policy) maps to the account class and says nothing more.
+    // the source (file, queue, policy) maps to where its account came from and says nothing more.
     expect(FLEET_COLUMNS).not.toContain("pid");
     expect(FLEET_COLUMNS).not.toContain("lane");
     expect(FLEET_COLUMNS).not.toContain("source");
