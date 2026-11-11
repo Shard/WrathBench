@@ -137,14 +137,12 @@ export const EXPANSION_MAPS = [530, 571];
  * (`run.deaths`, `run.leveling`), but neither bears on a rung: no rung asks how
  * often a character died, and the level rungs already read `maxLevel`.
  *
- * Rung 6 stays not instrumented, and what it lacks is specifically: a record of
- * joining or leaving a party (no group milestone exists) and a record of
- * entering an instance (no instance milestone exists — a map-id change in the
- * state samples is not one, since it cannot tell a dungeon from a boat ride).
- * Even with both, the harness runs one character per session, so the rung's
- * "party of agents" clause needs multi-session work that does not exist
- * either. The framing of that rung is issue #9, and what it would take is
- * written up in docs/proposals/GROUP-PLAY.md.
+ * Rung 6 stays not instrumented, though the records it would read exist: the
+ * `group`, `instance` and `kill` milestones, on party runs of five loops of one
+ * model (docs/proposals/GROUP-PLAY.md). They exist only in probe campaigns,
+ * which have no comparability group and so no ladder, so the rung needs a
+ * scored party episode. That episode and the derivation the rung would use
+ * are the operator's decisions: issue #9, and the proposal in issue #416.
  */
 export const RUNGS: Rung[] = [
   {
@@ -188,8 +186,8 @@ export const RUNGS: Rung[] = [
     n: 6,
     title: "A 5-man dungeon cleared by a party of agents",
     rule:
-      "needs grouping and instance records; the harness runs one character per " +
-      "session (docs/proposals/GROUP-PLAY.md)",
+      "only probe campaigns have party records; needs a scored party episode " +
+      "(docs/proposals/GROUP-PLAY.md)",
     test: null,
     askable: () => false,
   },

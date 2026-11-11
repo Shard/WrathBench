@@ -361,8 +361,8 @@ Tooling for local map assets used by the viewer: the extractor that decodes the 
 The images (`infra/docker/`) and two ways to run them. The Helm chart (`infra/chart/wrathbench`) is how the fleet runs and the reference for a real deployment; its release and deploy scripts are `infra/k8s-release.sh` and `infra/k8s-deploy.sh`. `infra/compose.yml` brings the same services up on one machine as a quickstart, with no deploy or update path of its own, because nothing is operated on it over time. The server data directory is supplied by the operator under `data/`. The smoke scripts under `infra/smoke/` drive the module end to end through the SDK.
 
 The core is stock AzerothCore, pinned by commit — no playerbots fork, so there
-is one dependency tree; the party question waits for encounter work and will
-be answered with data from real runs.
+is one dependency tree. A party's members are agents too: five loops of one
+model, a character each (`docs/proposals/GROUP-PLAY.md`), not server-side bots.
 
 The worldserver image (`infra/docker/server.Dockerfile`) is a close adaptation of upstream AzerothCore's own multi-stage Dockerfile with the build context at our repo root: it copies the pinned submodule plus `wrath-mcp/module/` as `modules/mod-wrathbench` and keeps upstream's stage names, base image, toolchain, runtime user and filesystem layout, so upstream docker fixes diff cleanly against ours at each submodule bump. Two departures: `-DWITHOUT_GIT=1`, because a submodule checkout has no usable `.git` (version strings read `unknown`; the submodule pointer and `infra/PINS.md` are the pin), and a 10G ccache mount, because upstream's 1G thrashes on a full core build and module iteration is the hot path. RelWithDebInfo is kept because symbols matter when the module crashes the worldserver. A `db-import` target is built alongside because upstream's boot flow expects it.
 
@@ -630,4 +630,4 @@ on the real corpus it does once per start what the store does once, ever.
 
 ## What is deliberately absent
 
-Results pipeline, perturbation tooling, snapshot/restore, per-character credentials, multi-agent support, concurrency beyond a few sequential or lightly parallel characters on one server.
+Results pipeline, perturbation tooling, snapshot/restore, per-character credentials, multi-agent play beyond a party of five loops of one model, concurrency beyond a few sequential or lightly parallel characters on one server.
