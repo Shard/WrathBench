@@ -2252,6 +2252,12 @@ export interface TrackResponse extends SnapshotEnvelope, SessionTrack<TrackPoint
    * carry none, and the controls simply do not render.
    */
   character?: TrackCharacter;
+  /**
+   * A fan-out run's characters, on the run's own track, which has no points
+   * of its own: each one's track is `/api/run/<id>/track` under its session
+   * id. Absent on every other run. Private: a fan-out run is never published.
+   */
+  fanout?: FanoutSessionView[];
 }
 
 /* ------------------------------------------------------ trace, nearby --- */

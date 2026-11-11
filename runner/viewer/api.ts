@@ -92,7 +92,8 @@ import { scrubPathsText } from "./scrub-paths";
 import { strikableSessionToken, strikeSessionTokens } from "../src/session-token";
 import { SEG_MS } from "@wrathbench/inspector/codec/trace";
 import { closedWindowsMemo, createInspectorApi, nearbyWindow, traceIndex, traceSegment } from "@wrathbench/inspector";
-import { fanoutSessions, isFanoutRun, runSession, runsSource } from "./runs-source";
+import { fanoutSession, fanoutSessions, isFanoutRun, runSession, runsSource } from "./runs-source";
+import { parseFanoutSessionId } from "../src/run-reader";
 import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStateItems, readStates, runDir } from "./runs";
 import {
   factOf,
@@ -101,6 +102,7 @@ import {
   statePointOf,
   storeFor,
   totalsOf,
+  withFanoutLeads,
   STORE_LAG_MS,
   type RunListingRow,
   type RunStore,
@@ -976,7 +978,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
      * inventory. A row here has `items: null`; the one page that shows an
      * inventory is a run's own, which reads `latestState` for that run.
      */
-    const [rows, latest] = await Promise.all([store.runRows(), store.latestReadings()]);
+    const [rows, readings] = await Promise.all([store.runRows(), store.latestReadings()]);
+    // A fan-out run reads its lead character's level and xp (`withFanoutLeads`).
+    const latest = withFanoutLeads(readings);
     const out = rows
       .filter((r) => r.archived === 0)
       .map((r) => runRowOf(r, latest.get(r.run_id), now));
@@ -1037,7 +1041,13 @@ export function createApi(opts: ApiOptions): ApiHandle {
     // The store's own aggregate, not every row of the run mapped here: this
     // needs five values, and pulling the series to get them meant reading the
     // `items` JSON of every sample.
-    return runRowOf(r, await store.latestState(runId), now);
+    const own = await store.latestState(runId);
+    if (own !== undefined || !isFanoutRun(runsDir, runId)) return runRowOf(r, own, now);
+    // A fan-out run's are its characters', each under its session id: the listing's roll-up.
+    const sessions = fanoutSessions(runsDir, runId);
+    const got = await Promise.all(sessions.map(async (s) => [s.id, await store.latestState(s.id)] as const));
+    const lead = withFanoutLeads(new Map(got.flatMap(([id, l]) => (l === undefined ? [] : [[id, l] as const])))).get(runId);
+    return runRowOf(r, lead, now);
   }
 
   /**
@@ -1564,6 +1574,51 @@ export function createApi(opts: ApiOptions): ApiHandle {
     return core;
   }
 
+  /**
+   * A fan-out character's replay feed, under its session id
+   * (`<run-id>~<Character>`, `runs-source.ts`): `/track`, `/trace` and
+   * `/trace/<t0>`, read as a run's are, off the character's own record and
+   * the store's rows under that id (the collector keys them so). Its run's
+   * row answers the rest: the model, the harness, whether the track can still
+   * change, and whether a public handle withholds it, which it always does,
+   * since no fan-out run is published. No travel marks: those are the
+   * trajectory's, and the run's one trajectory is no one character's.
+   */
+  async function fanoutCharacterRoute(id: string, parent: string, character: string, rest: string): Promise<Response> {
+    const session = runDir(runsDir, parent) === null ? null : fanoutSession(runsDir, id);
+    if (session === null || (await withheldRun(parent))) return notFound(`no such run: ${id}`);
+    if (rest === "/trace") return pub(await traceIndex(session, Date.now()), projectTraceIndex, [parent]);
+    const traceMatch = /^\/trace\/(\d+)$/.exec(rest);
+    if (traceMatch !== null) {
+      const t0 = Number(traceMatch[1]);
+      if (!Number.isSafeInteger(t0) || t0 % SEG_MS !== 0) return notFound("no such trace window");
+      const found = await traceSegment(session, t0, Date.now());
+      if (found === null) return notFound("no trace in that window");
+      return new Response(JSON.stringify(found.segment), {
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": found.closed ? "public, max-age=31536000, immutable" : "no-store",
+        },
+      });
+    }
+    if (rest !== "/track") return notFound(`no such route for ${id}`);
+    const run = await runRowOne(parent);
+    const core = await trackCoreOf(id, isSettled(run));
+    const trace = await closedWindows(`${runsDir}\0${id}`, session, Date.now());
+    const body: TrackResponse = {
+      runId: id,
+      characterName: character,
+      model: run.model,
+      harnessVersion: run.harnessVersion,
+      points: core.points,
+      inv: core.inv,
+      moves: core.moves,
+      travel: [],
+      ...(trace === null ? {} : { trace }),
+    };
+    return pub(body, projectTrack, [parent]);
+  }
+
   async function api(req: Request, url: URL, path: string): Promise<Response | null> {
     // A group that is off has no routes: its paths are unknown paths here.
     const group = groupOfApiPath(path);
@@ -1762,6 +1817,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
     if (m === null) return null;
     const runId = m[1]!;
     const rest = m[2] ?? "";
+    // A fan-out character, under its session id: its replay feed and nothing else.
+    const named = parseFanoutSessionId(runId);
+    if (named !== null) return await fanoutCharacterRoute(runId, named.runId, named.character, rest);
     const dir = runDir(runsDir, runId);
     if (dir === null) return notFound(`no such run: ${runId}`);
     // Every per-run route, the trace windows and the nearby ring included: a
@@ -1962,6 +2020,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // The closed trace windows, each `/trace/<t0>`. Absent on a run with
         // none, so a track from before the recorder is the bytes it was.
         ...(trace === null ? {} : { trace }),
+        // A fan-out run's characters, whose tracks the map replays together.
+        ...(isFanoutRun(runsDir, runId) ? { fanout: fanoutSessions(runsDir, runId) } : {}),
       };
       if (!settled) return pub(body, projectTrack, [runId]);
       /*

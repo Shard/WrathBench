@@ -24,7 +24,7 @@ import type { PartySignal } from "@wrathbench/mcp/record";
 import { loadRunConfig } from "../src/config";
 import { ContextBuilder } from "../src/loop";
 import { SandboxHost } from "../src/sandbox/host";
-import { openSessionRecord } from "../src/session-record";
+import { openSessionRecord, RecordSignals } from "../src/session-record";
 import { Scratchpad } from "@wrathbench/mcp";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
@@ -218,4 +218,41 @@ describe("the loop hands the kills it is drained to the watchdogs", () => {
     expect(watchdogs.check()).toEqual({ reason: "kill-target", detail: "entry 639 killed (killer a party member)" });
   });
 
+});
+
+describe("a fan-out run's kill end", () => {
+  test("any character's kill of the end's creature, written to its own record, reaches the one drain and ends the run as kill-target", async () => {
+    const runsDir = tempDir("wrathbench-fanout-kill-");
+    const dir = join(runsDir, "run-fanout");
+    // One drain for every character's record, as `openFanout` opens them.
+    const signals = new RecordSignals();
+    const seat = (character: string, token: string) => openSessionRecord({ runDir: dir, runsDir, token, scrub: (t) => t, character, signals });
+    const aldric = seat("Aldric", "seat-token-aldric");
+    const brenna = seat("Brenna", "seat-token-brenna");
+    const host = new SandboxHost({
+      moduleUrl: "http://worldserver:8086",
+      token: "f".repeat(32),
+      scratchpad: new Scratchpad(join(runsDir, "scratchpad.md")),
+      snippetTimeoutMs: 5_000,
+      pingGraceMs: 1_000,
+      fanout: { maxCharacters: 2 },
+      signals,
+      recordTickMs: 3_600_000,
+    });
+    hosts.push(host);
+    const now = Date.now();
+    // The second character's client is told its own kill of the boss; the first sees only a trash kill.
+    aldric.writer.ingest(recordDrain({ character: { guid: "7", name: "Aldric", race: 1, class: 1 }, events: [{ ts: now, kind: "kill", killerGuid: "7", victimGuid: "4001", entry: 657, self: true, member: true } as never] }));
+    brenna.writer.ingest(recordDrain({ character: { guid: "11", name: "Brenna", race: 1, class: 5 }, events: [{ ts: now + 1, kind: "kill", killerGuid: "11", victimGuid: "4000", entry: 639, rank: 1, self: true, member: true } as never] }));
+    await aldric.writer.close();
+    await brenna.writer.close();
+    const kills = await host.partySignals();
+    expect(kills.map((k) => (k.kind === "kill" ? [k.killerGuid, k.entry] : null))).toEqual([["7", 657], ["11", 639]]);
+    // The run has no party and no one character: the kill is credited by the record's own `self`.
+    const config = loadRunConfig({ driver: "stub", fanout: { characters: 2, accounts: ["PARTY1", "PARTY2"] } });
+    const watchdogs = new Watchdogs(config.watchdogs, Date.now, 0, { end: [{ kill: { entry: 639 } }] });
+    const b = builder([kills], { watchdogs });
+    await b.sample();
+    expect(watchdogs.check()).toEqual({ reason: "kill-target", detail: "entry 639 killed (killer this character)" });
+  });
 });

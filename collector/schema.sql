@@ -23,6 +23,11 @@
 --     absent on most record kinds; keying on it would silently collapse a
 --     turn's lines into one and lose the rest. Replay reads the same bytes in
 --     the same order, so the ordinal is stable.
+--   * A fan-out run's characters' `states`, `moves` and `milestones` rows
+--     carry each character's session id, `<run-id>~<Character>`, as their
+--     `run_id` (collector/README.md, "How it reads"): a session's ordinals
+--     restart at one, so the run's own id would put two characters on one
+--     key. `~` never occurs in a run id.
 --   * `raw` holds the whole JSONL line on every trajectory row. Nothing is
 --     lost when a typed column does not exist yet, which is what lets the
 --     schema stay small without the store becoming lossy.

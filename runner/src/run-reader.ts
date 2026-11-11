@@ -13,13 +13,18 @@
  *   the trajectory's `milestone` records. Nothing on disk is converted; a 0.5
  *   run stays readable, not comparable.
  * - A **fan-out** run (`<run>/sessions/<Character>/`, one record per
- *   character) has its run row and its trajectory read here, and no state
- *   samples, milestones, reading or character name: every reader here
- *   answers for one character, and no one character is the run. Taking the
- *   highest-level one would present it as the run to a resume note, the
- *   listing and the scheduler's best level, and the collector, which does
- *   not ingest a fan-out run's records, would disagree. A character's own
- *   reading is its session's, through the viewer's runs source.
+ *   character) has its run row and its trajectory read here, and each
+ *   character's samples and reading off its own record
+ *   (`characterSamplesOf`, `fanoutReadings`), under its session id
+ *   `<run-id>~<Character>` (`fanoutSessionId`). The run-level readers keep
+ *   answering for one character: `readStateSamples` and `latestReading` read
+ *   empty and null, because no one character's curve or money is the run's,
+ *   and `latestReading` is what a resume tells the model it was last seen
+ *   at. Where a reader needs one figure for the run (the listing's level, the
+ *   scheduler's best level) it takes the roll-up (`fanoutLead`): the
+ *   character with the highest level, its xp beside it, the higher xp then
+ *   the name breaking a tie. `bestLevelOf` is the highest level any
+ *   character reached, which is the lead's.
  *
  * The run row is meta.json's (`runRowOfMeta`), except in a run directory that
  * has a run.sqlite: there the `run` table holds it, as 0.5 (and the first v1
@@ -50,6 +55,26 @@ export const SESSIONS_DIR = "sessions";
 
 /** A character's directory name in a fan-out run: the name as the server spells it, letters only. */
 const CHARACTER_NAME = /^[A-Za-z]+$/;
+
+/**
+ * What joins a fan-out run's id to one of its characters' names in a session
+ * id. `~` never occurs in a run id (`isValidRunId` in `viewer/runs.ts`), so
+ * the split is unambiguous, and it needs no escaping in a URL path.
+ */
+export const FANOUT_SEP = "~";
+
+/** A fan-out character's session id: the viewer's, and the collector's key for its rows. */
+export function fanoutSessionId(runId: string, character: string): string {
+  return `${runId}${FANOUT_SEP}${character}`;
+}
+
+/** The run id and character a fan-out session id names, or null for an id that is not one. */
+export function parseFanoutSessionId(id: string): { runId: string; character: string } | null {
+  const at = id.indexOf(FANOUT_SEP);
+  if (at <= 0) return null;
+  const character = id.slice(at + FANOUT_SEP.length);
+  return isFanoutCharacterName(character) ? { runId: id.slice(0, at), character } : null;
+}
 
 /** Whether a run directory holds a single-character v1 session record. A fan-out run is not one. */
 export function isV1RunDir(dir: string): boolean {
@@ -312,7 +337,21 @@ function streamStat(reader: SessionReader): string {
  * polled every few seconds folds only what is new.
  */
 export function traceSamplesOf(dir: string): StateSample[] {
-  const sessionDir = sessionDirOfRun(dir);
+  return sessionSamplesOf(sessionDirOfRun(dir), dir);
+}
+
+/**
+ * One fan-out character's samples, off its own record, each with the run's
+ * turn in flight (one agent, one trajectory); empty for a name that is not
+ * one of the run's.
+ */
+export function characterSamplesOf(dir: string, character: string): StateSample[] {
+  const sessionDir = fanoutSessionDir(dir, character);
+  return sessionDir === null ? [] : sessionSamplesOf(sessionDir, dir);
+}
+
+/** The samples a session record's trace yields, the turns read off the run's trajectory in `dir`. */
+export function sessionSamplesOf(sessionDir: string, dir: string): StateSample[] {
   const reader = new SessionReader(sessionDir);
   let stat: string;
   try {
@@ -400,9 +439,54 @@ export function latestReading(dir: string, runId: string): { level: number | nul
   return out;
 }
 
-/** The highest level a run's samples reached, or null when none carried one: `MAX(level)` over the samples. */
+/** The newest level and xp a run of samples carried, read as a pair; null when none carried a level. */
+function levelXpOf(samples: readonly StateSample[]): { level: number; xp: number | null; ts: number } | null {
+  for (let i = samples.length - 1; i >= 0; i--) {
+    const r = samples[i]!;
+    if (r.level !== null && r.level > 0) return { level: r.level, xp: r.xp, ts: r.ts };
+  }
+  return null;
+}
+
+/** One fan-out character's newest level and xp, and when it was read. */
+export interface FanoutReading {
+  character: string;
+  level: number | null;
+  xp: number | null;
+  ts: number | null;
+}
+
+/**
+ * Each fan-out character's newest level and xp, off its own record, in name
+ * order; a character whose trace carried no level yet reads nulls. Empty for
+ * any other run.
+ */
+export function fanoutReadings(dir: string): FanoutReading[] {
+  return fanoutCharacters(dir).map((character) => {
+    const r = levelXpOf(characterSamplesOf(dir, character));
+    return { character, level: r?.level ?? null, xp: r?.xp ?? null, ts: r?.ts ?? null };
+  });
+}
+
+/**
+ * The one figure a fan-out run is summed up by where a reader needs one (the
+ * listing's level, the scheduler's best level): the character with the
+ * highest level, then the higher xp, then the first by name. Null when no
+ * character carries a level. The same rule over the store's rows
+ * (`viewer/clickhouse.ts`) and the files, so the two cannot disagree.
+ */
+export function fanoutLead<T extends { character: string; level: number | null; xp: number | null }>(readings: readonly T[]): T | null {
+  let lead: T | null = null;
+  for (const r of readings) {
+    if (r.level === null || r.level <= 0) continue;
+    if (lead === null || r.level > lead.level! || (r.level === lead.level && (r.xp ?? -1) > (lead.xp ?? -1)) || (r.level === lead.level && r.xp === lead.xp && r.character < lead.character)) lead = r;
+  }
+  return lead;
+}
+
+/** The highest level a run's samples reached, or null when none carried one: `MAX(level)` over the samples. A fan-out run's is its lead's (`fanoutLead`). */
 export function bestLevelOf(dir: string, runId: string): number | null {
-  if (isFanoutRunDir(dir)) return null;
+  if (isFanoutRunDir(dir)) return fanoutLead(fanoutReadings(dir))?.level ?? null;
   if (!isV1RunDir(dir)) {
     const path = join(dir, RUN_DB_FILE);
     if (!existsSync(path)) return null;

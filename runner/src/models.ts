@@ -57,7 +57,7 @@ import { createHash } from "node:crypto";
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { openRunDb, RUN_DB_JOURNAL_FILE, RUN_DB_WAL_FILE } from "./rundb";
-import { bestLevelOf, readRunRow } from "./run-reader";
+import { bestLevelOf, fanoutLead, fanoutReadings, readRunRow } from "./run-reader";
 import { harnessSeries } from "./comparability";
 import { DEFAULT_DRIVER, defaultCompactWindowOf, driverEntry, eitherHas, entryOf, harnessDriver, isProbeOnlyDriver, probeOnlyRefusal } from "./drivers";
 import { AUTO_COMPACT_WINDOW, DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isDriver, isTokenEnvName, isUnscoredDriverName, type Driver, type Harness } from "./config";
@@ -597,6 +597,14 @@ export interface RunFact {
    * paused party back whole.
    */
   party?: { id: string; member: string; size: number } | null;
+  /**
+   * Every account a fan-out run holds (`config.fanout.accounts`): one agent
+   * driving several characters, each on an account of its own, the first of
+   * which is also `account`. Null on every other run; optional so a fact
+   * built by hand need not spell it. What the fleet holds for the run's whole
+   * life, live or paused (`accountsOfRun`).
+   */
+  fanoutAccounts?: string[] | null;
   /**
    * The credential this run took a slot on (`RunConfig.credential`), or null
    * on a run that recorded none (a 0.5 run, one launched by hand). Read off the
@@ -1239,6 +1247,23 @@ export function tallyRecordsCached(
  * "no data", never to an exception that costs the whole projection.
  */
 /** `config.party` as a fact reads it: id, member and size, or null when the run is no party member. */
+/** A fan-out run's accounts, off its config's grant; null when it has none. */
+function fanoutAccountsOfConfig(f: { accounts?: unknown } | undefined): string[] | null {
+  if (f === undefined || f === null || typeof f !== "object" || !Array.isArray(f.accounts)) return null;
+  const accounts = f.accounts.filter((a): a is string => typeof a === "string" && a.length > 0);
+  return accounts.length > 0 ? accounts : null;
+}
+
+/**
+ * Every account a run holds: a fan-out run's whole grant, else the one it was
+ * launched on, else none. The one answer the fleet asks of a run whenever an
+ * account's holder matters.
+ */
+export function accountsOfRun(f: Pick<RunFact, "account" | "fanoutAccounts">): string[] {
+  if (f.fanoutAccounts != null && f.fanoutAccounts.length > 0) return [...f.fanoutAccounts];
+  return f.account === null ? [] : [f.account];
+}
+
 function partyOfConfig(p: { id?: unknown; member?: unknown; size?: unknown } | undefined): RunFact["party"] {
   if (p === undefined || p === null || typeof p !== "object") return null;
   const id = str(p.id);
@@ -1272,6 +1297,7 @@ export function readRunFact(
       ref?: unknown;
       arm?: unknown;
       party?: { id?: unknown; member?: unknown; size?: unknown };
+      fanout?: { accounts?: unknown };
       credential?: unknown;
       driver?: unknown;
       watchdogs?: { episodeMs?: unknown; idleMs?: unknown };
@@ -1320,6 +1346,7 @@ export function readRunFact(
     ref: str(meta.config?.ref),
     arm: str(meta.config?.arm),
     party: partyOfConfig(meta.config?.party),
+    fanoutAccounts: fanoutAccountsOfConfig(meta.config?.fanout),
     credential: str(meta.config?.credential),
     driver: str(meta.config?.driver),
     credentialUsage: parseSubscriptionUsage(meta.subscriptionUsage) ?? null,
@@ -1515,7 +1542,7 @@ export function runFactCacheVersion(): string {
     .update(
       [
         String(RUN_FACT_CACHE_SCHEMA),
-        ...[readRunFact, partyOfConfig, runFactKey, runDbWriteInFlight, verdictOfTrajectory, tallyRecords, RecordCountScanner, harnessSeries, isEpisodeId, heartbeatAt, openRunDb, readRunRow, bestLevelOf, str, num, parseSubscriptionUsage].map(String),
+        ...[readRunFact, partyOfConfig, fanoutAccountsOfConfig, runFactKey, runDbWriteInFlight, verdictOfTrajectory, tallyRecords, RecordCountScanner, harnessSeries, isEpisodeId, heartbeatAt, openRunDb, readRunRow, bestLevelOf, fanoutReadings, fanoutLead, str, num, parseSubscriptionUsage].map(String),
         JSON.stringify([EPISODE_IDS, MODEL_RESPONSE_RECORD, HEARTBEAT_FILE]),
       ].join("\n"),
     )

@@ -189,6 +189,17 @@ export function replayHref(runId: string): string {
 }
 
 /**
+ * The run page a replayed pip opens. A fan-out character's id is its run's,
+ * `~` and its name (`runner/viewer/runs-source.ts`), and it opens the run's
+ * page on that character; any other id is a run's own.
+ */
+export function runPageHref(id: string): string {
+  const at = id.indexOf("~");
+  if (at <= 0) return `/run/${encodeURIComponent(id)}`;
+  return `/run/${encodeURIComponent(id.slice(0, at))}?character=${encodeURIComponent(id.slice(at + 1))}`;
+}
+
+/**
  * A route-change classifier: did *this* change leave a replay for the live map?
  *
  * The live poll answers with nothing while a replay owns the map, so its last

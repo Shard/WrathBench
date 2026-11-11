@@ -87,6 +87,15 @@ const armSchema = z
     command: z.array(z.string().min(1)).min(1).optional(),
     /** Appended after the supervisor's own argv; opaque to the supervisor, validated by the image. */
     args: z.array(z.string()).optional(),
+    /**
+     * How many agent loops play a party: absent is one per member (the
+     * party's own shape), and 1 is one agent driving every member's character
+     * on one run (fan-out, Shard/wrath-mcp#29, decision 2). Only a party
+     * definition's arm says it, and the one agent's objective is then the
+     * definition's top-level `objective`. Optional with no default, so an arm
+     * written before it hashes as it always did.
+     */
+    agents: z.literal(1).optional(),
   })
   .strict();
 
@@ -193,9 +202,15 @@ export const campaignDefinitionSchema = z
       if (d.start === undefined || d.start === "fresh") {
         ctx.addIssue({ code: "custom", path: ["start"], message: "a party starts on staged characters: give start { staged, level }" });
       }
-      // Each member carries its own objective, rendered in its own block.
-      if (d.objective !== null) {
+      // Each member carries its own objective, rendered in its own block; a
+      // one-agent arm's run is every member at once, so its objective is the
+      // top-level one, which only a definition with such an arm states.
+      const oneAgent = d.arms.some((a) => a.agents === 1);
+      if (!oneAgent && d.objective !== null) {
         ctx.addIssue({ code: "custom", path: ["objective"], message: "a party's objective is per member (party.members[].objective); the top-level objective is null" });
+      }
+      if (oneAgent && d.objective === null) {
+        ctx.addIssue({ code: "custom", path: ["objective"], message: "a one-agent arm drives the whole party on one run: its objective is the top-level objective, which is null" });
       }
       // The cell is the party; its start reads as the leader's, so a reader
       // of the cell is never told a start no member had.
@@ -208,6 +223,13 @@ export const campaignDefinitionSchema = z
             message: `a party's cell carries its leader's start (race ${leader.race}, class ${leader.class}), not race ${c.race}, class ${c.class}`,
           });
         }
+      });
+    }
+    // Fan-out drives a party's staged characters; a definition with no party
+    // has none to hand one agent.
+    if (d.party === undefined) {
+      d.arms.forEach((a, i) => {
+        if (a.agents !== undefined) ctx.addIssue({ code: "custom", path: ["arms", i, "agents"], message: `arm ${a.id}: agents is a party's (one agent driving its members); this definition has no party` });
       });
     }
     // Harness drift between builds is as large as a model difference, so the
@@ -340,6 +362,14 @@ export function campaignHash(def: CampaignDefinition): string {
 /** The cell a definition declares under `cellId`, or undefined. */
 export function cellOf(def: Pick<CampaignDefinition, "cells">, cellId: string | null): CampaignCell | undefined {
   return cellId === null ? undefined : def.cells.find((c) => c.id === cellId);
+}
+
+/**
+ * Whether a run of this arm is one agent driving every member of the
+ * definition's party (fan-out), rather than one run per member.
+ */
+export function isOneAgentArm(def: Pick<CampaignDefinition, "party">, arm: Pick<CampaignArm, "agents"> | undefined): boolean {
+  return def.party !== undefined && arm?.agents === 1;
 }
 
 /** The arm a definition declares under `armId`, or undefined. */

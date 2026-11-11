@@ -25,6 +25,7 @@ import { z } from "zod";
 import {
   armOf,
   campaignHash,
+  isOneAgentArm,
   campaignRef,
   campaignSourceSchema,
   canonicalJson,
@@ -37,7 +38,7 @@ import {
   type CampaignDefinition,
 } from "./campaign-def";
 import type { PublishedCampaign } from "./campaigns";
-import { partyLaunchProblem, partyLaunchSchema, type PartyLaunch } from "./party";
+import { fanoutLaunchProblem, fanoutLaunchSchema, partyLaunchProblem, partyLaunchSchema, type FanoutLaunch, type PartyLaunch } from "./party";
 
 /** The file a probe's run directory holds; one of the `LAUNCH_FILES`. */
 export const CAMPAIGN_FILE = "campaign.json";
@@ -55,6 +56,8 @@ export const campaignFileSchema = z
     definition: campaignDefinitionSchema,
     /** A party member's launch: the party id, which member this run is, and every member's run. */
     party: partyLaunchSchema.optional(),
+    /** A one-agent arm's launch: every member's character, all on this one run. */
+    fanout: fanoutLaunchSchema.optional(),
   })
   .strict();
 
@@ -73,6 +76,12 @@ export interface CampaignFile {
    * without it is a square's file before the spawn has placed its members.
    */
   party?: PartyLaunch;
+  /**
+   * A one-agent arm's launch half (`party.ts`, `FanoutLaunch`): absent on
+   * every other file. A one-agent arm's file without it is a square's file
+   * before the spawn has placed its characters.
+   */
+  fanout?: FanoutLaunch;
 }
 
 /** A campaign file that cannot be built or read. The message is the operator's whole notice. */
@@ -130,8 +139,14 @@ export function parseCampaignFile(raw: unknown, where = CAMPAIGN_FILE): Campaign
   if (arm === undefined) throw new CampaignFileError(`${where}: its arm is not one of ${campaignRef(def)}'s`);
   if (f.party !== undefined) {
     if (def.party === undefined) throw new CampaignFileError(`${where}: names a party member, and ${campaignRef(def)} is not a party`);
+    if (isOneAgentArm(def, arm)) throw new CampaignFileError(`${where}: names a party member, and arm ${arm.id} of ${campaignRef(def)} is one agent driving the whole party`);
     const problem = partyLaunchProblem(def.party, f.party);
     if (problem !== null) throw new CampaignFileError(`${where}: its party is not ${campaignRef(def)}'s — ${problem}`);
+  }
+  if (f.fanout !== undefined) {
+    if (def.party === undefined || !isOneAgentArm(def, arm)) throw new CampaignFileError(`${where}: names a one-agent launch, and arm ${arm.id} of ${campaignRef(def)} is not one`);
+    const problem = fanoutLaunchProblem(def.party, f.fanout);
+    if (problem !== null) throw new CampaignFileError(`${where}: its characters are not ${campaignRef(def)}'s party — ${problem}`);
   }
   return {
     campaign: f.campaign,
@@ -142,6 +157,7 @@ export function parseCampaignFile(raw: unknown, where = CAMPAIGN_FILE): Campaign
     arm,
     definition: def,
     ...(f.party !== undefined ? { party: f.party } : {}),
+    ...(f.fanout !== undefined ? { fanout: f.fanout } : {}),
   };
 }
 
