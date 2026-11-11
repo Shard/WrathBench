@@ -16,12 +16,16 @@ import { DEFAULT_POLICY, modelStates, readRunFacts, type RunFact } from "../runn
 import { Trajectory } from "../runner/src/trajectory";
 import { defsBlock, joined, PARTY_MEMBERS, partyDefinition, definition } from "../runner/test/fixtures/campaigns";
 import { runParty, type MemberHandle, type MemberVerdict, type PartyFateDeps, type PartyMemberRun } from "./party-fate";
-import { commandStager, type StageRequest } from "./party-stager";
+import { commandStager, stagedGuidsOf, type StageRequest } from "./party-stager";
+import { campaignLaunch } from "../runner/src/campaign-launch";
+import { CAMPAIGN_FILE, writeCampaignFile } from "../runner/src/campaign-file";
+import { partyOwnGuids, type PartyConfig } from "../runner/src/party";
+import { stageResultLine } from "./fixtures/stage-party";
 import { parseFleet, pinnedCampaignJobs, probeRunsOf, rosterModels, type FleetConfig, type FleetJob, type FleetRosterEntry } from "./run-fleet-config";
 import { diffJobs, fillEntries, finishesOnExit, jobSpawn, planResumes, planTick, withTakenRunIds } from "./run-fleet-plan";
 import { jobArgv, rosterResumes } from "./run-fleet-state";
 import { formatArgvBlock } from "./run-fleet-status";
-import { partyOfRoster, resolve, stageRequestOf } from "./run-roster";
+import { partyOfRoster, resolve, stagedCampaignFile, stageRequestOf } from "./run-roster";
 import { tempDirs } from "./temp-dirs";
 
 const tempDir = tempDirs();
@@ -513,6 +517,35 @@ describe("a party's spawn", () => {
     expect(req.members.map((m) => [m.member, m.character, m.account, m.race, m.class])).toEqual(PARTY_MEMBERS.map((m, i) => [m.id, m.character, ACCOUNTS[i]!, m.race, m.class]));
   });
 
+  test("the stager's guids reach every member's config before any launches, and its resume reads them back", () => {
+    const spawn = planTick(cfg, [], () => undefined, STAMP).pinned.find((p) => p.job.name === job!.name)!.spawn;
+    const specs = resolve(fillEntries(spawn, STAMP), STAMP);
+    // What the stager reports, as its CLI prints it: one guid per member, by the characters it created.
+    const line = stageResultLine({
+      ok: true,
+      detail: "staged 5",
+      leader: PARTY_MEMBERS[0]!.character,
+      ms: 1,
+      members: PARTY_MEMBERS.map((m, i) => ({ member: m.id, account: ACCOUNTS[i]!, character: m.character, loadout: "l", characterGuid: 4100 + i, equipped: {}, talents: [] })),
+    });
+    const staged = stagedGuidsOf((JSON.parse(line) as { members: unknown }).members);
+    const GUIDS = PARTY_MEMBERS.map((_, i) => String(4100 + i));
+    expect(staged).toEqual(PARTY_MEMBERS.map((m, i) => ({ member: m.id, guid: GUIDS[i]! })));
+    // Each member's campaign file, written by the roster at launch, and the config the runner makes of it.
+    const configs = specs.map((spec, i): PartyConfig => {
+      const dir = tempDir(`wb-party-guids-${i}-`);
+      writeCampaignFile(dir, stagedCampaignFile(spec.campaignFile!, staged));
+      const raw = campaignLaunch({ "campaign-file": join(dir, CAMPAIGN_FILE), episode: "probing", character: PARTY_MEMBERS[i]!.character }, {});
+      return raw!["party"] as PartyConfig;
+    });
+    for (const c of configs) expect(partyOwnGuids(c)).toEqual(GUIDS);
+    // The config is what meta.json keeps and a resume reloads: the seed rides it.
+    expect(partyOwnGuids(JSON.parse(JSON.stringify(configs[3]!)) as PartyConfig)).toEqual(GUIDS);
+    // A stager that said nothing leaves the file as it was, and the seed empty.
+    expect(stagedCampaignFile(specs[0]!.campaignFile!, undefined)).toBe(specs[0]!.campaignFile!);
+    expect(partyOwnGuids(specs[0]!.campaignFile!.party as never)).toEqual([]);
+  });
+
   test("a later attempt is its own stem, and no fresh attempt is planned while one is live or paused", () => {
     const tried: ProbeRun[] = MEMBERS.map((m) => probe(m, { terminationReason: "party-ended", counted: false }));
     tried[0] = { ...tried[0]!, terminationReason: "adapter-error" };
@@ -958,12 +991,14 @@ describe("the stager's command contract", () => {
         "const req = JSON.parse(await Bun.stdin.text());",
         'if (req.party === "bad") { console.error("loading"); console.error("SOAP: STAGER refused"); process.exit(3); }',
         'console.log("staging " + req.scenario);',
+        'if (req.party === "guids") { console.log(JSON.stringify({ ok: true, detail: "0 staged for guids", members: [{ member: "tank", guid: "4100" }, { member: "healer", guid: "0x12" }, { member: 3 }] })); process.exit(0); }',
         "console.log(JSON.stringify({ ok: true, detail: `${req.members.length} staged for ${req.party}` }));",
       ].join("\n"),
     );
     chmodSync(script, 0o755);
     const stager = commandStager({ cwd: dir, command: ["bun", script] });
     expect(await stager.stage(req)).toEqual({ ok: true, detail: "0 staged for p" });
+    expect(await stager.stage({ ...req, party: "guids" })).toEqual({ ok: true, detail: "0 staged for guids", members: [{ member: "tank", guid: "4100" }] });
     expect(await stager.stage({ ...req, party: "bad" })).toEqual({ ok: false, reason: "staging failed (exit 3): SOAP: STAGER refused" });
   });
 });
