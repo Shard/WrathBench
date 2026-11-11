@@ -46,7 +46,7 @@
  * it (`GoUsageGauge`) — for the freeplay gate, and for a spent allowance's
  * reset when the adapter pauses `quota-exhausted` on Go's `GoUsageLimitError`.
  */
-import { EXHAUSTED_PCT, SubscriptionUsageTracker, spentWindowOf, type SubscriptionUsage, type UsageHold, type UsageWindow } from "./subscription-usage";
+import { EXHAUSTED_PCT, SUBSCRIPTION_RESET_CEILING_MS, SubscriptionUsageTracker, spentWindowOf, type SubscriptionUsage, type UsageHold, type UsageWindow } from "./subscription-usage";
 
 /** The usage endpoint's path on the Go base's origin. */
 export const GO_USAGE_PATH = "/inference/go/v1/usage";
@@ -243,10 +243,11 @@ export class GoUsagePoller {
   /**
    * A run on this credential was billed to the balance at `at`. It stands —
    * the read classified `overage` — until a read made at least an interval
-   * later shows every window with room; one already made is honoured.
+   * later shows every window with room; one already made is honoured. One
+   * older than the seven-day ceiling every reading keeps is no longer news.
    */
   noteOverage(at: number): void {
-    if (!Number.isFinite(at)) return;
+    if (!Number.isFinite(at) || at <= (this.o.now ?? Date.now)() - SUBSCRIPTION_RESET_CEILING_MS) return;
     if (this.roomAt !== undefined && this.roomAt >= at + this.interval()) return;
     if (this.overageAt !== undefined && this.overageAt >= at) return;
     this.overageAt = at;

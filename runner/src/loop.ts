@@ -30,6 +30,7 @@ import { harnessOf } from "./config";
 import { SUBSCRIPTION_PAUSE } from "./lapse";
 import { describeWindows, thresholdsOf, type SubscriptionUsage, type UsageHold } from "./subscription-usage";
 import { goOverageOf } from "./opencode-go";
+import { isOpenCodeGoBase } from "./platform";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { ContextEvents } from "./sandbox/signals";
@@ -893,8 +894,9 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       // allowance: recorded — on the record once per stretch, in meta.json each
       // time, where the fleet reads it and holds the credential — and the
       // allowance marked spent, so a freeplay run stops at this boundary
-      // (`opencode-go.ts`). A scored run plays on: pausing it would spend its attempt.
-      if (goOverageOf(outcome.turn.raw)) {
+      // (`opencode-go.ts`). A scored run plays on: pausing it would spend its
+      // attempt. Go's only: Zen sends the same field, where the balance is how it bills.
+      if (isOpenCodeGoBase(config.apiBase) && goOverageOf(outcome.turn.raw)) {
         const at = o.now?.() ?? Date.now();
         trajectory.recordCredentialOverage(config.credential ?? null, at, { turn, record: !overageStretch });
         overageStretch = true;

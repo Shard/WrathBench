@@ -209,6 +209,15 @@ describe("GoUsagePoller", () => {
     expect(p.lastRead!.classification).toBe("ok");
   });
 
+  test("an overage older than the seven-day ceiling is not news, even before any read", () => {
+    const now = 100 * 24 * H;
+    const p = new GoUsagePoller(CRED, "u", KEY, { fetch: fakeFetch([500]), now: () => now });
+    p.noteOverage(now - 8 * 24 * H);
+    expect(p.lastRead).toBeUndefined();
+    p.noteOverage(now - H);
+    expect(p.lastRead!.classification).toBe("overage");
+  });
+
   test("a refused key outranks an overage", async () => {
     const p = new GoUsagePoller(CRED, "u", KEY, { fetch: fakeFetch([401]), now: () => 5_000 });
     await p.refresh();
@@ -231,10 +240,12 @@ function fakeSandbox(): SandboxHost {
   } as unknown as SandboxHost;
 }
 
-function setup(adapter: ChatAdapter, episode: string) {
+const GO_BASE = "https://opencode.ai/inference/go/openai/v1";
+
+function setup(adapter: ChatAdapter, episode: string, apiBase = GO_BASE) {
   const dir = tempDir("wrathbench-go-loop-");
   // The credential's usage budget rides the run's config, as the fleet hands it over.
-  const config = { ...loadRunConfig({ driver: "stub", stepIntervalMs: 0, stateIntervalMs: 1, episode, credential: CRED, usageMaxPct: { scored: 80, freeplay: 80 } }), runId: "run-test", token: "run-test" };
+  const config = { ...loadRunConfig({ driver: "stub", stepIntervalMs: 0, stateIntervalMs: 1, episode, apiBase, credential: CRED, usageMaxPct: { scored: 80, freeplay: 80 } }), runId: "run-test", token: "run-test" };
   const trajectory = new Trajectory(dir);
   trajectory.writeMeta({ runId: "run-test", harnessVersion: "t", startedAt: Date.now(), config });
   return {
@@ -339,6 +350,20 @@ describe("the fixed loop on an OpenCode Go allowance", () => {
     expect(await runLoop(options)).toEqual({ kind: "terminated", reason: "stub-complete" });
     expect(readTrajectory(dir).filter((r) => r.t === "harness" && r["kind"] === "usage_overage")).toHaveLength(1);
     expect(readMeta(dir)!.credentialOverage).toMatchObject({ credential: CRED });
+    trajectory.close();
+  });
+
+  test("Zen's balance is how Zen bills: the same field on a Zen base records nothing", async () => {
+    let turn = 0;
+    const zen: ChatAdapter = {
+      label: "zen",
+      complete: (): Promise<AdapterOutcome> =>
+        Promise.resolve(++turn > 2 ? { kind: "stub-complete" } : { kind: "ok", turn: { content: "acting", toolCalls: [], raw: { usage: { opencode: { billing_source: "balance" } } } } }),
+    };
+    const { dir, trajectory, options } = setup(zen, "freeplay", "https://opencode.ai/zen/v1");
+    expect(await runLoop(options)).toEqual({ kind: "terminated", reason: "stub-complete" });
+    expect(readTrajectory(dir).some((r) => r.t === "harness" && r["kind"] === "usage_overage")).toBe(false);
+    expect(readMeta(dir)!.credentialOverage).toBeUndefined();
     trajectory.close();
   });
 
