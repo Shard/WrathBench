@@ -168,4 +168,9 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.envSecretName }}
                   key: WRATHBENCH_ACCOUNT_PASSWORD
+            # The generated pool, POOL01 … POOLnn: each missing one is created
+            # with its name as its password, the harness accounts' convention;
+            # the allowlist carries the same names from the same value.
+            - name: WRATHBENCH_POOL_SIZE
+              value: {{ include "wrathbench.poolSize" . | quote }}
           resources: {{ toYaml .Values.jobs.bootstrap.resources | nindent 12 }}

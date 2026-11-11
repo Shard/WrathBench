@@ -54,7 +54,7 @@ export { readCredentialUsage, CREDENTIAL_USAGE_SIDECAR };
 // ------------------------------------------------------------------ the budgets
 
 /** The run facts a budget reads. */
-export type BudgetRun = Pick<RunFact, "credential" | "startedAt"> & Partial<Pick<RunFact, "spendByDay" | "credentialUsage">>;
+export type BudgetRun = Pick<RunFact, "credential" | "startedAt"> & Partial<Pick<RunFact, "spendByDay" | "resumesByDay" | "credentialUsage">>;
 
 export interface CredentialGate {
   now: number;
@@ -64,11 +64,16 @@ export interface CredentialGate {
   usageHoldOf(id: string, episode: string | null | undefined, model?: string | null): UsageHold | null;
   /**
    * Why a launch of `episode`'s class is held on credential `id` by its
-   * budget, in words fit for any surface, or undefined. A resume is no new
-   * run, so a runs-per-day budget never holds one (`opts.resume`).
+   * budget, in words fit for any surface, or undefined. A fresh start and a
+   * resume are held alike: each segment is a run to a runs-per-day budget.
    */
-  holdOf(id: string, episode: string | null | undefined, model?: string | null, opts?: { resume?: boolean }): string | undefined;
-  /** Fresh launches on `id` since 00:00 UTC. */
+  holdOf(id: string, episode: string | null | undefined, model?: string | null): string | undefined;
+  /**
+   * Launches on `id` since 00:00 UTC, as the runs on disk record them: fresh
+   * starts and the segments resumes started. A tick's own starts count from
+   * the next tick, so one tick may pass the budget by what it starts at once,
+   * at most the credential's free slots.
+   */
   runsToday(id: string): number;
   /** The provider's reported charge on `id`'s runs since 00:00 UTC, in dollars. */
   spendToday(id: string): number;
@@ -93,9 +98,15 @@ export function credentialGate(
   const midnight = Date.parse(`${today}T00:00:00.000Z`);
   const runsToday = new Map<string, number>();
   const spendToday = new Map<string, number>();
+  const started = (id: string, n = 1): void => {
+    runsToday.set(id, (runsToday.get(id) ?? 0) + n);
+  };
   for (const f of runs) {
     if (f.credential === null) continue;
-    if (f.startedAt >= midnight) runsToday.set(f.credential, (runsToday.get(f.credential) ?? 0) + 1);
+    if (f.startedAt >= midnight) started(f.credential);
+    // Each segment a resume started today is a run too (operator, 2026-11-11).
+    const resumed = f.resumesByDay?.[today];
+    if (resumed !== undefined && resumed > 0) started(f.credential, resumed);
     const spent = f.spendByDay?.[today];
     if (spent !== undefined) spendToday.set(f.credential, (spendToday.get(f.credential) ?? 0) + spent);
   }
@@ -111,7 +122,7 @@ export function credentialGate(
     now,
     usage,
     usageHoldOf,
-    holdOf: (id, episode, model, opts) => {
+    holdOf: (id, episode, model) => {
       const c = byId.get(id);
       if (c === undefined) return undefined;
       const h = usageHoldOf(id, episode, model);
@@ -122,7 +133,7 @@ export function credentialGate(
           : `credential ${id}: at or over its ${cls} usage threshold — held until its usage window resets`;
       }
       if (c.budget?.kind === "spend" && (spendToday.get(id) ?? 0) >= c.budget.usdPerDay) return `credential ${id}: its spend budget for the day is used — held until 00:00 UTC`;
-      if (c.budget?.kind === "runs" && opts?.resume !== true && (runsToday.get(id) ?? 0) >= c.budget.perDay) return `credential ${id}: its runs for the day are used — held until 00:00 UTC`;
+      if (c.budget?.kind === "runs" && (runsToday.get(id) ?? 0) >= c.budget.perDay) return `credential ${id}: its runs for the day are used — held until 00:00 UTC`;
       return undefined;
     },
     runsToday: (id) => runsToday.get(id) ?? 0,
@@ -495,7 +506,7 @@ export function resumeHoldOf(
   const c = cfg.credentials.find((x) => x.id === f.credential);
   if (c === undefined) return `credential ${f.credential} is not configured — the run comes back only on it (or move it: bun wb config move-credential)`;
   if (!c.enabled) return `credential ${f.credential} is disabled — the run comes back only on it (or move it: bun wb config move-credential)`;
-  return gate.holdOf(c.id, f.episode, f.model, { resume: true });
+  return gate.holdOf(c.id, f.episode, f.model);
 }
 
 /** A spawn the budget changed, and why. */

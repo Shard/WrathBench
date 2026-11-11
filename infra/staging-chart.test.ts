@@ -44,8 +44,10 @@ const find = (docs: Doc[], kind: string, name: string) => {
 const worldserver = (docs: Doc[]) => find(docs, "Deployment", "wrathbench-worldserver").spec!.template!.spec!.containers!.find((c) => c.name === "worldserver")!;
 const envOf = (c: { env?: Env[] }) => Object.fromEntries((c.env ?? []).map((e) => [e.name, e]));
 
-/** The default allowlist, as values.yaml lists it. */
-const DEFAULT_ACCOUNTS = "RUNNER,RUNNER2,RUNNER3,RUNNER4,RUNNER5,RUNNER6,RUNNER7,SHAKEOUT,SHAKEOUT2,PROBE,SMOKE,SMOKE2,SMOKE3,SMOKE4";
+/** The generated pool at values.yaml's default size (account-pool-chart.test.ts has the rest of it). */
+const DEFAULT_POOL = "POOL01,POOL02,POOL03,POOL04,POOL05,POOL06,POOL07,POOL08";
+/** The default allowlist: values.yaml's named accounts, then the generated pool. */
+const DEFAULT_ACCOUNTS = `RUNNER,RUNNER2,RUNNER3,RUNNER4,RUNNER5,RUNNER6,RUNNER7,SHAKEOUT,SHAKEOUT2,PROBE,SMOKE,SMOKE2,SMOKE3,SMOKE4,${DEFAULT_POOL}`;
 
 describe.skipIf(helm === null)("the chart's party-staging switch", () => {
   test("off by default: SOAP off, no SOAP port or address, today's allowlist, and no SOAP or STAGER in any rendered object", () => {
@@ -122,7 +124,7 @@ describe.skipIf(helm === null)("the chart's party-staging switch", () => {
 
   test("a party account already on worldserver.accounts is listed once", () => {
     const { docs } = render(["--set", "staging.enabled=true", "--set", "worldserver.accounts={RUNNER,PARTY1}"]);
-    expect(envOf(worldserver(docs))["AC_WRATH_BENCH_ACCOUNTS"]?.value).toBe("RUNNER,PARTY1,PARTY2,PARTY3,PARTY4,PARTY5");
+    expect(envOf(worldserver(docs))["AC_WRATH_BENCH_ACCOUNTS"]?.value).toBe(`RUNNER,PARTY1,${DEFAULT_POOL},PARTY2,PARTY3,PARTY4,PARTY5`);
   }, HELM_TEST_MS);
 });
 

@@ -128,11 +128,23 @@ smoke's name in `data/runs/smoke-sessions.jsonl`, so `--smoke <name>` (or
 
 `stuck` is the detector for a run that keeps talking while its character goes
 nowhere. It judges a trailing window (two hours by default, ending now, or at
-an ended run's last record, or at `--until`) from the `state` records: any
+an ended run's last record, or at `--until`) from the character's samples: any
 rise in level, xp or quests, any change of money, items or map, or straying
 more than 50 yards from where the window began is progress, and none of it is
-`STUCK`. Samples more than 15 minutes apart, or not reaching either end of the
-window, leave it `unjudged`, so a young or just-resumed run is never flagged.
+`STUCK`. The window must be covered, or the verdict is `unjudged`, since
+nothing recorded is not no progress; a young or just-resumed run is never
+flagged. What covers it depends on the run:
+
+- a 0.5 run sampled its state every minute (`state` rows), so its samples
+  must be at most 15 minutes apart and reach both ends of the window;
+- a v1 run's trace writes a change and nothing between, so a character
+  standing still has no trace row for hours. Its window is covered by the
+  record's other writes as well: the `calls` and `events` rows and
+  `live.json`'s heartbeat. The reading it starts from is the newest sample
+  before the window, so a level gained just inside it is still progress. A
+  character standing still while its record is written reads `STUCK`; a gap
+  of more than 15 minutes with nothing written at all reads `unjudged`.
+
 Only that verdict flags a run. Beside it, each marked tripped or not with its
 count: the same error repeated (digits folded), the harness-delivered hint
 tallies, `events_served` records carrying a `schemaError`, sandbox restarts,
@@ -141,10 +153,11 @@ operator. With no run id it prints one line per run with a live owner. Every
 threshold is a flag; the defaults are `STUCK_DEFAULTS` in
 `infra/inspect-run.ts`. It reports and nothing more: no record is written and
 nothing acts on the run. `bun wb fleet status` flags a live run with the same
-verdict (`!! STUCK: …` on its account row) from its newest samples (a v1
-run's trace, folded on from the last poll; a 0.5 run's newest `run.sqlite`
-state rows by rowid), a few milliseconds per live run;
-the failure signals are `inspect stuck`'s alone.
+verdict, by the same rule for each kind of run (`!! STUCK: …` on its account
+row), from its newest samples (a v1 run's trace with its record's other
+writes, folded on from the last poll; a 0.5 run's newest `run.sqlite` state
+rows by rowid), a few milliseconds per live run. The flag is reported only:
+the fleet never acts on it. The failure signals are `inspect stuck`'s alone.
 
 ### Where the config lives
 
@@ -276,10 +289,13 @@ change ships.
 preflight   the gate ("The preflight gate"): enabled, account, smokes [{script, account}], timeoutMs,
             deploySmokes (empty), deployTimeoutMs. Its accounts may not be in the
             pool or on a job.
-accounts    { pool: [...], max? } — the one account pool, in preference order: every account a run
-            that names none is drawn from, one live session each, at most `max` live at once
-            (default: all). Never PROBE, never SMOKE*, never the gate's: those are refused by
-            name. `pinned` is derived from the jobs and refused if authored.
+accounts    { pool?: [...], max? }, or absent — the one account pool: every account a run that
+            names none is drawn from, one live session each, at most `max` live at once
+            (default: all). Absent, the generated pool POOL01 … POOLnn the chart sizes ("The
+            account pool"); a listed pool replaces it, in preference order, and an empty list
+            drains it. Never PROBE, never SMOKE*, never the gate's, and a POOLnn name is never
+            listed or pinned: those are refused by name. `pinned` is derived from the jobs and
+            refused if authored.
 credentials id -> { provider, secretEnv, slots, budget?, billing, enabled }, in preference order
             ("Credentials"; `runner/src/credentials.ts`). The NAME of the env var holding each
             secret, never the secret. A seeded store's examples are all disabled.
@@ -1797,13 +1813,16 @@ preference order (`runner/src/credentials.ts`):
   by shape, and a numbered key still goes only to its provider's host. Two
   credentials share a secret only as a metered key's free/paid split.
 - **slots** — how many runs may be live on it at once.
-- **budget** — absent is none. `{ kind: "usage", scoredMaxPct?, freeplayMaxPct? }`
-  (claude, chatgpt, opencode-go; each default 80, 100 is off) is the usage
-  window, below. `{ kind: "spend", usdPerDay }` (openrouter) is the provider's
-  own reported charge on the credential's runs since 00:00 UTC. `{ kind:
-  "runs", perDay }` (any) is fresh launches since 00:00 UTC. Spend holds new
-  starts and resumes, runs holds new starts only (a resume is no new run), and
-  neither ever pauses or ends a live run.
+- **budget** — one limit on the credential's total use, below. `{ kind:
+  "usage", scoredMaxPct?, freeplayMaxPct? }` (claude, chatgpt, opencode-go;
+  each default 80, 100 is off) is the usage window. `{ kind: "spend",
+  usdPerDay }` (openrouter) is the provider's own reported charge on the
+  credential's runs since 00:00 UTC. `{ kind: "runs", perDay }` (any) counts
+  launches since 00:00 UTC: each fresh start, and each segment a resume
+  starts. Absent is `usage` at 80/80 on a credential that bills a plan with
+  usage windows (claude, chatgpt, and opencode-go's paid side), and none on
+  any other; to run a subscription without the shares, write `usage` at
+  100/100 or another kind.
 - **billing** — on a metered provider, which models the credential carries: a
   free credential only free models, a paid one only paid models. On a
   subscription every model bills it and the word describes it. It never
@@ -1816,6 +1835,24 @@ only when the pod starts: a new one is a key in the env Secret and a
 `modelKeys` line in the chart ("Secrets"), so it lands with a release, not
 with the 60s re-read. `--status` names a credential whose variable is not
 set.
+
+**What a budget holds.** A budget holds launches, never a run in flight, with
+one exception, the freeplay share of a usage window:
+
+- `spend` and `runs` hold every launch the supervisor makes on the
+  credential once used: a fresh start, a resume, and a running scored job's
+  next episode, which waits while its live episode finishes. Both reopen at
+  00:00 UTC. Neither pauses or ends a live run, so a running job's own retry
+  of a deferred attempt is counted but not held. Each counts from the runs on
+  disk at every tick, so a tick that starts several runs on one credential at
+  once can pass a `runs` budget by what it starts together, at most the
+  credential's free slots.
+- `usage` holds a scored start at `scoredMaxPct`, holds a freeplay start or
+  resume at `freeplayMaxPct` and also pauses a live freeplay run there, and
+  holds everything at a spent window ("The usage window", below).
+
+`--status` says which budget holds which credential and why; `--dry-run`
+names it on every held pick.
 
 **How a run starts.** A run takes a slot on the first enabled credential that
 serves its model's provider and has room under its slots and its budget, and
@@ -1931,6 +1968,49 @@ threads, so codex runs stay where they started.
 
 Each move is appended to the run's `credentialHistory` in `meta.json` as
 `{ from, to, at, actor, note }`, which no public projection carries.
+
+### The account pool
+
+A run that names no account is drawn from the pool, one live session per
+account. Nobody names the pool's accounts: they are `POOL01` … `POOLnn`, and
+one chart value sizes them, `worldserver.pool.size` (default 8, at most 99;
+`runner/src/account-pool.ts`). From that value the chart:
+
+- appends the names to the module's allowlist (`AC_WRATH_BENCH_ACCOUNTS`),
+  after `worldserver.accounts`;
+- gives the bootstrap Job `WRATHBENCH_POOL_SIZE`, and the Job creates each
+  missing pool account in auth with its name as its password, the convention
+  every harness account follows (the module opens its sessions in-process and
+  never uses it). No secret is in values, and an account that exists is left
+  alone;
+- gives the fleet, viewer, runner and publisher pods the same
+  `WRATHBENCH_POOL_SIZE`, so a config with no `accounts.pool` reads the same
+  pool everywhere.
+
+The size lives in values and nowhere else, because the allowlist is rendered
+from values and Helm cannot read the config store. **Changing it is a values
+change and a worldserver restart**: the Job creates any new accounts at the
+upgrade, but the module reads its allowlist only at start, so until the
+worldserver is recreated a new account answers 403 `account_not_permitted`.
+That is a deploy window ("Deploy window"). Shrinking it deletes no account and
+no character; an account past the new size is simply never drawn from again.
+`accounts.max` in the config still caps how many are live at once, with no
+restart.
+
+A config may list `accounts.pool` instead, in preference order: the 0.5-era
+named accounts (`RUNNER` … `RUNNER7`, still on the default allowlist), which
+replace the generated pool while they are listed. A paused run comes back only
+on its own account, and one whose account is no longer in the pool is listed
+"not in the account pool — resume by hand". So a deployment with paused
+characters on the named accounts keeps listing them until those runs are done.
+The reserved accounts are as they were: `SMOKE*`, `PROBE` and the preflight
+gate's are never in the pool, and a `POOLnn` name is never listed, pinned by
+an enabled job, or a gate account.
+
+On the quickstart, compose cannot loop: `x-pool-size` in `infra/compose.yml`
+(4) sizes bootstrap and the services, and the worldserver's allowlist lists
+`POOL01` … `POOL04` by hand. Change the two together and recreate the
+worldserver.
 
 ### Secrets
 

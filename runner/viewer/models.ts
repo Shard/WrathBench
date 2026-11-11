@@ -55,6 +55,7 @@ import { harnessSeries } from "../src/comparability";
 import { isEpisodeId } from "../src/episodes";
 import { parseCampaignBlocks, type Campaign, type CampaignRefusal, type PublishedCampaign } from "../src/campaigns";
 import { rosterEntryRefusal } from "../src/roster-refusal";
+import { poolSizeOf } from "../src/account-pool";
 import { parseCredentials, type Credential } from "../src/credentials";
 import { harnessVersion } from "../src/version";
 import type { EpisodeIdView, HarnessView, ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse } from "./api-types";
@@ -282,7 +283,9 @@ export function readFleetRoster(
     const reason = policyExclusion(jobs, {}, name);
     if (reason !== undefined) excluded.push({ name, reason });
   }
-  const poolSize = parsed.accounts?.pool?.length ?? 0;
+  // No pool listed is the generated one, sized by the deployment as the supervisor reads it.
+  const generated = poolSizeOf(env);
+  const poolSize = parsed.accounts?.pool?.length ?? ("size" in generated ? generated.size : 0);
   const accounts = Math.min(poolSize, parsed.accounts?.max ?? poolSize);
   let campaigns: Campaign[] = [];
   let campaignDefs: PublishedCampaign[] = [];

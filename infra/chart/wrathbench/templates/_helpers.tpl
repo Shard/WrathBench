@@ -286,6 +286,11 @@ here: run.ts never opens it, and a run pod mounts no config. */}}
        read into an error. */}}
 - name: WRATHBENCH_CONFIG_DB
   value: /wrathbench/data/config/config.sqlite
+{{- /* The generated account pool's size (worldserver.pool.size): a config
+       that lists no accounts.pool draws from POOL01 … POOLnn, and every pod
+       that parses it must read the same pool, as with the store itself. */}}
+- name: WRATHBENCH_POOL_SIZE
+  value: {{ include "wrathbench.poolSize" . | quote }}
 {{- end -}}
 
 {{/*
@@ -309,16 +314,37 @@ password does.
 {{- end -}}
 
 {{/*
+The generated pool's size, `worldserver.pool.size`, checked: a whole number
+from 0 to 99, the two digits POOL01 … POOL99 have (runner/src/account-pool.ts).
+*/}}
+{{- define "wrathbench.poolSize" -}}
+{{- $size := int (.Values.worldserver.pool.size | default 0) -}}
+{{- if or (lt $size 0) (gt $size 99) -}}
+{{- fail "worldserver.pool.size must be from 0 to 99: the pool's names are POOL01 … POOL99" -}}
+{{- end -}}
+{{- $size -}}
+{{- end -}}
+
+{{/* The generated pool's accounts, POOL01 … POOLnn, as a list (fromJson of a JSON array). */}}
+{{- define "wrathbench.poolAccounts" -}}
+{{- $names := list -}}
+{{- range $i := until (int (include "wrathbench.poolSize" .)) -}}
+{{- $names = append $names (printf "POOL%02d" (add1 $i)) -}}
+{{- end -}}
+{{- toJson $names -}}
+{{- end -}}
+
+{{/*
 The module's account allowlist (AC_WRATH_BENCH_ACCOUNTS): `worldserver.accounts`,
-plus the party's accounts when staging is on. STAGER is the account SOAP
-trusts as an administrator, and a bench session on it would put that account
-on the agent's control surface, so the render refuses it in either list
-(docs/proposals/GROUP-PLAY.md §2-3).
+then the generated pool (`worldserver.pool.size`), plus the party's accounts
+when staging is on. STAGER is the account SOAP trusts as an administrator, and
+a bench session on it would put that account on the agent's control surface,
+so the render refuses it in either list (docs/proposals/GROUP-PLAY.md §2-3).
 */}}
 {{- define "wrathbench.moduleAccounts" -}}
-{{- $accounts := .Values.worldserver.accounts -}}
+{{- $accounts := uniq (concat .Values.worldserver.accounts (fromJsonArray (include "wrathbench.poolAccounts" .))) -}}
 {{- if .Values.staging.enabled -}}
-{{- $accounts = uniq (concat .Values.worldserver.accounts .Values.staging.accounts) -}}
+{{- $accounts = uniq (concat $accounts .Values.staging.accounts) -}}
 {{- end -}}
 {{- range $accounts -}}
 {{- if eq (upper (toString .)) "STAGER" -}}

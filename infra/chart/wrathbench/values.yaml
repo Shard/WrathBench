@@ -254,6 +254,16 @@ worldserver:
     - SMOKE2
     - SMOKE3
     - SMOKE4
+  # The fleet's game-account pool: POOL01 … POOLnn, appended to the allowlist
+  # above, created by the bootstrap Job (password = its name, as every harness
+  # account's: the module opens their sessions in-process and never uses it),
+  # and handed to every pod that reads the fleet config as
+  # WRATHBENCH_POOL_SIZE, so a config that lists no `accounts.pool` draws from
+  # exactly these. The one place the size lives; 0 to 99. Changing it is this
+  # value plus a worldserver restart, since the module reads its allowlist at
+  # start (docs/RUNBOOK.md, "The account pool"). Shrinking deletes no account.
+  pool:
+    size: 8
   resources:
     requests:
       cpu: "2"

@@ -214,12 +214,12 @@ describe("the move", () => {
     // keeps the record.
     expect(loadRunConfig(readMeta(f.dir)!.config).credentialEnv).toBe(T1);
 
-    // A second move appends, and a credential with no usage budget carries no thresholds.
+    // A second move appends, and a subscription credential that names no budget carries the default 80/80.
     const back = moveCredential(f.opts({ to: C2, note: "claude-1 now", now: () => 1_700_000_100_000 }));
     expect(back).toMatchObject({ from: C1, to: C2, history: 2, pinned: "roster/son" });
     const after = JSON.parse(readFileSync(f.metaPath, "utf8")) as RunMeta;
     expect(after.credentialHistory?.map((m) => `${m.from}>${m.to}`)).toEqual([`${C2}>${C1}`, `${C1}>${C2}`]);
-    expect(after.config.usageMaxPct).toBeUndefined();
+    expect(after.config.usageMaxPct).toEqual({ scored: 80, freeplay: 80 });
   });
 
   test("--pin writes the roster pin only after meta.json names the new credential, through the validated path", () => {

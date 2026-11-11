@@ -4,11 +4,15 @@
  * The chart runs it as the `bootstrap` Job, a Helm hook after db-import on
  * every install and upgrade; the quickstart runs it as compose's `bootstrap`
  * service, after db-import and before the servers. With no arguments it
- * converges the auth database on two things: realm 1's realmlist row at the
+ * converges the auth database on three things: realm 1's realmlist row at the
  * configured address (loopback in both: a spectator's client connects through
- * a forwarded port), and a runner account whose password is the configured
- * one. Safe to re-run; every write is an upsert and the account is only
- * rewritten when the stored verifier does not match the configured password.
+ * a forwarded port), a runner account whose password is the configured one,
+ * and the fleet's generated account pool, `POOL01`… to WRATHBENCH_POOL_SIZE
+ * (runner/src/account-pool.ts), each missing one created the way
+ * `--accounts-only` creates it, its password its name. Safe to re-run; every
+ * write is an upsert, the runner account is only rewritten when the stored
+ * verifier does not match the configured password, and a pool account that
+ * exists is left as it is. A pool that shrinks deletes nothing.
  *
  * `--accounts-only NAME…` (`bun wb accounts ensure NAME…`) does neither. It
  * creates each named account that does not exist yet, with its own name as its
@@ -68,6 +72,7 @@
 
 import { SQL } from "bun";
 import { createHash, randomBytes } from "node:crypto";
+import { poolAccountNames, poolSizeOf } from "../../runner/src/account-pool";
 
 // --------------------------------------------------------------------- SRP6
 
@@ -352,7 +357,8 @@ export const ACCOUNTS_ONLY = "--accounts-only";
 /** A harness account name, uppercased: a letter, then letters and digits, 16 at most (the client's password field, and the password is the name). */
 const ACCOUNT_NAME = /^[A-Z][A-Z0-9]{0,15}$/;
 
-const USAGE = `usage: bun infra/bootstrap/bootstrap.ts                    the realm row and the configured runner account
+const USAGE = `usage: bun infra/bootstrap/bootstrap.ts                    the realm row, the configured runner account and the
+                                                             generated pool (POOL01… to WRATHBENCH_POOL_SIZE)
        bun infra/bootstrap/bootstrap.ts ${ACCOUNTS_ONLY} NAME…   create each named account that is missing, password = its name;
                                                              nothing else is written`;
 
@@ -376,8 +382,16 @@ export function parseArgs(argv: readonly string[]): Mode {
   return { kind: "accounts", names };
 }
 
-/** The whole program, with the connection injectable for the tests. Arguments are checked before anything connects. */
-export async function main(argv: readonly string[], open: () => Promise<SQL> = connect): Promise<number> {
+/**
+ * The whole program, with the connection and the environment injectable for
+ * the tests. Arguments, and the pool size the plain run reads, are checked
+ * before anything connects.
+ */
+export async function main(
+  argv: readonly string[],
+  open: () => Promise<SQL> = connect,
+  env: Record<string, string | undefined> = process.env,
+): Promise<number> {
   const mode = parseArgs(argv);
   if (mode.kind === "help") {
     console.log(USAGE);
@@ -387,6 +401,12 @@ export async function main(argv: readonly string[], open: () => Promise<SQL> = c
     console.error(`bootstrap: ${mode.message}\n${USAGE}`);
     return 2;
   }
+  // Only the plain run creates the pool; the account-only mode writes exactly what it is named.
+  const pool = mode.kind === "bootstrap" ? poolSizeOf(env) : { size: 0 };
+  if ("error" in pool) {
+    console.error(`bootstrap: ${pool.error}`);
+    return 2;
+  }
   const sql = await open();
   try {
     if (mode.kind === "accounts") {
@@ -394,6 +414,10 @@ export async function main(argv: readonly string[], open: () => Promise<SQL> = c
     } else {
       await ensureRealm(sql);
       await ensureAccount(sql);
+      if (pool.size > 0) {
+        log(`the generated pool: POOL01 to ${poolAccountNames(pool.size).at(-1)}`);
+        await ensureNamedAccounts(sql, poolAccountNames(pool.size));
+      }
     }
     log("done");
   } finally {

@@ -239,6 +239,35 @@ describe("the streak is a fold like the counts", () => {
     expect(tallyRecords(p, ["response"], { pauseStreak: true })!.pauseStreak).toBe(0);
   });
 
+  test("each resume record is a segment on its UTC day, across cuts and through the cache; a resume with no ts counts nowhere", () => {
+    const day1 = Date.parse("2030-01-01T23:59:00.000Z");
+    const day2 = Date.parse("2030-01-02T00:01:00.000Z");
+    const lines = [
+      JSON.stringify({ t: "resume", ts: day1 }),
+      JSON.stringify({ ...response(1), ts: day1 }),
+      JSON.stringify({ t: "resume", ts: day2 }),
+      JSON.stringify({ t: "resume" }),
+      JSON.stringify({ t: "resume", ts: day2 + 1000 }),
+    ];
+    const whole = `${lines.join("\n")}\n`;
+    const p = join(runs, "segments.jsonl");
+    writeFileSync(p, whole);
+    const once = tallyRecords(p, ["response"], { pauseStreak: true })!;
+    expect(once.resumesByDay).toEqual({ "2030-01-01": 1, "2030-01-02": 2 });
+    // Read only when the streak is folded, which is how every run fact reads.
+    expect(tallyRecords(p, ["response"])!.resumesByDay).toEqual({});
+    const cached = join(runs, "segments-cached.jsonl");
+    const cache: CountCache = new Map();
+    writeFileSync(cached, "");
+    let at = 0;
+    for (const cut of [7, whole.indexOf("response"), whole.length - 3, whole.length]) {
+      appendFileSync(cached, whole.slice(at, cut));
+      at = cut;
+      tallyRecordsCached(cache, cached, ["response"], { pauseStreak: true });
+    }
+    expect(tallyRecordsCached(cache, cached, ["response"], { pauseStreak: true })!.resumesByDay).toEqual(once.resumesByDay);
+  });
+
   test("readRunFacts answers the same streak with and without a scanner cache", () => {
     const NOW = Date.now();
     writeRun("cached-a", [
