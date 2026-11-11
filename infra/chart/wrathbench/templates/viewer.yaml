@@ -87,10 +87,17 @@ spec:
           command: ["bun", "runner/viewer/serve.ts"]
           env:
             {{- include "wrathbench.harnessEnv" . | nindent 12 }}
+            {{- /* With ClickHouse off no CLICKHOUSE_* variable is set, and the
+                   viewer lists runs from the in-memory store it builds over the
+                   runs directory (runner/viewer/clickhouse.ts `storeFor`): fine
+                   for a small tree, and the only answer that works, since a URL
+                   naming a Service the chart did not render fails every listing. */}}
+            {{- if .Values.clickhouse.enabled }}
             # The derived store. Every listing route reads it rather than
             # opening a thousand run directories over iSCSI; the live-progress
             # polling still reads run.sqlite directly.
             {{- include "wrathbench.clickhouseEnv" . | nindent 12 }}
+            {{- end }}
             - name: WRATHBENCH_VIEWER_LAN
               value: "1"
             - name: WRATHBENCH_VIEWER_PORT

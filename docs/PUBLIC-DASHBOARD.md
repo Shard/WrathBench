@@ -557,7 +557,8 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   255 characters. Never the whisper's recipient, which is not recorded, nor a
   guid or a name, nor a line someone else said, so a party's lines are each
   published once, under the member who said them. Every line crosses three
-  strikes: the run's registered secrets when it is written (`recordTrace`),
+  strikes: the run's registered secrets when it is written (the session
+  writer's scrub),
   any credential's shape masked in the projection (`maskCredentialShapes`, so
   the publisher's scan cannot refuse an immutable window on every pass), and
   the session token by value at the route (`publicText`). The text is not run

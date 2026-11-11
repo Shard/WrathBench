@@ -11,14 +11,72 @@ The long-term goals, all from fresh level-1 characters with no direction:
 - A raid of agents clears Icecrown Citadel.
 - Community agents can join a shared server over the same protocol.
 
+## How it fits together
+
+```mermaid
+flowchart TB
+    subgraph fleet["Fleet"]
+        store[("Config store<br/>roster, campaigns, policy")]
+        supervisor["Fleet supervisor<br/>run-fleet, run-roster"]
+    end
+
+    model["Model<br/>API or CLI agent"]
+
+    subgraph run["One run"]
+        runner["runner/<br/>agent loop, drivers,<br/>context policy, watchdogs"]
+        stack["wrath-mcp stack<br/>(submodule, see its README)<br/>sandbox, tools, session recorder"]
+    end
+
+    world(("AzerothCore<br/>game world"))
+
+    subgraph records["data/runs/#lt;id#gt;/"]
+        session[("session/<br/>trace, events, calls<br/>wrath-session/1")]
+        trajectory[("trajectory.jsonl, meta.json<br/>the model's side")]
+        rundb[("run.sqlite<br/>run row, 60 s state rows<br/>until the scorer reads the trace")]
+    end
+
+    subgraph view["Reading results"]
+        viewer["Viewer API<br/>runner/viewer: /api,<br/>derivations, ladder"]
+        dashboard["Dashboard SPA"]
+    end
+
+    subgraph downstream["Downstream, derived"]
+        collector["Collector"]
+        clickhouse[("ClickHouse")]
+        publisher["Publisher"]
+        bucket[("Public snapshot<br/>bucket")]
+    end
+
+    store --> supervisor
+    supervisor -->|"launches: argv, env"| runner
+    model <-->|"turns, tool calls"| runner
+    runner -->|"hooks, and where to record"| stack
+    stack <-->|"client opcodes,<br/>whitelisted packets"| world
+    stack ==>|"records the session"| session
+    runner -->|"writes"| trajectory
+    runner -->|"writes"| rundb
+    records -.->|"run contract: read back"| supervisor
+    trajectory -->|"tails"| collector
+    rundb -->|"tails"| collector
+    collector --> clickhouse
+    clickhouse -->|"listings"| viewer
+    records -->|"live tail, session source"| viewer
+    viewer -->|"/api"| dashboard
+    viewer -->|"in-process"| publisher
+    publisher -->|"projected JSON"| bucket
+    bucket -->|"public build"| dashboard
+```
+
+The supervisor launches each run from the config store, and the runner drives the model against the [wrath-mcp](https://github.com/Shard/wrath-mcp) stack, which is one box here because its own README draws its insides. The files under `data/runs/<id>/` are the record, in two halves: the stack writes what the character did into `session/` as it happens (the trace, game events and tool calls, in its own format, `wrath-mcp/docs/SESSION-FORMAT.md`), and the runner writes the model's side beside it. The supervisor judges a run by them, and everything downstream of them is derived and can be rebuilt from them. A run recorded before the session record (0.5) has no `session/` and stays readable through one adapter. Scores are derived offline from that record, not numbers the runner writes.
+
 ## What is in the repository
 
 Each directory has its own README that says what it is for and how to use it.
 
 | Directory | What it is |
 | --- | --- |
-| `wrath-mcp/` | The agent stack, a submodule ([Shard/wrath-mcp](https://github.com/Shard/wrath-mcp)) with its own README, licence and docs: the thin AzerothCore module that exposes what a game client could see and do and nothing more, the TypeScript SDK a model's snippets call, and the confined snippet sandbox, MCP server and core tools over it. |
-| `runner/` | The agent loop: hands a model the SDK in a sandbox, supervises the episode and records everything that happened. |
+| `wrath-mcp/` | The agent stack, a submodule ([Shard/wrath-mcp](https://github.com/Shard/wrath-mcp)) with its own README, licence and docs: the thin AzerothCore module that exposes what a game client could see and do and nothing more, the TypeScript SDK a model's snippets call, and the confined snippet sandbox, MCP server and core tools over it, and the session record every session leaves. |
+| `runner/` | The agent loop: hands a model the SDK in a sandbox, supervises the episode and records the model's side of it, beside the session record the stack writes. |
 | `runner/viewer/` | The read-only API over recorded runs that the dashboard reads. |
 | `dashboard/` | The web UI over that API, which is also the public site at <https://wrathbench.shard.page>. |
 | `collector/` | Tails recorded runs into ClickHouse so the viewer can answer questions about many runs at once. |
@@ -50,7 +108,7 @@ docker compose -f infra/compose.yml exec runner bun infra/smoke/module-slice.ts
   --api-base <openai-compatible base url> --api-key-env <ENV_KEY_NAME>
 ```
 
-Trajectories land under `data/runs/<run-id>/`. `infra/README.md` has the service graph and why each step is there.
+A run's records land under `data/runs/<run-id>/`: the session record in `session/`, the trajectory beside it. `infra/README.md` has the service graph and why each step is there.
 
 ## Running it for real
 

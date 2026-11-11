@@ -71,15 +71,17 @@ owns on disk and is as disposable as the store itself.
 
 Not tailed, on purpose:
 
-- the trace (`run.sqlite` `trace`, `runner/src/trace-row.ts`). It is a ~1 Hz
-  position feed per live character, and it has its own table precisely so it
-  never arrives here as tens of thousands of unknown trajectory lines a day;
-  its readers encode it from the run directory. Runs recorded before that
-  table was its only home also carry a `trace.jsonl` holding the same rows;
-  nothing reads it.
-- the nearby ring (`nearby/<t0>.jsonl`, `runner/src/nearby-row.ts`): the units
-  around a live character for the live map, about 15 minutes of one-minute
-  files that the runner unlinks as they age and deletes when the run stops.
+- the session record (`session/`, `wrath-mcp/docs/SESSION-FORMAT.md`): the
+  trace, the events, the tool calls and movement intentions of a v1 run. Not
+  yet: ingesting it is the next step, and until then the store's `moves` are
+  a 0.5 run's only and the viewer reads a v1 run's from its files. The trace
+  is a ~1 Hz position feed per live character and is never in the
+  trajectory, so it never arrives here as tens of thousands of unknown lines
+  a day. (A 0.5 run's trace is the `trace` table of its `run.sqlite`, which
+  is not tailed either.)
+- the nearby ring (`session/nearby/`): the units around a live character for
+  the live map, about 15 minutes of segments that the stack unlinks as they
+  age and removes when the session closes.
   It is not history, so nothing here may keep it; the scan's fixed file list
   never names it. (The public site's copy is live only too: a window in
   `nearby.json`, rewritten every pass.)
