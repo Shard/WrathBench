@@ -186,6 +186,16 @@ export interface FleetRosterEntry extends RosterSpec {
    */
   credential?: string;
   /**
+   * The entry runs only as a probe campaign's assignment, as a probe-only
+   * driver's entry does (`DriverEntry.probeOnly`): its tier buys no scored
+   * run, it has no idle work, and a queue job naming it for a scored or
+   * freeplay episode is gated. For a harness variant that is not a driver of
+   * its own (an arm's `--loop program` on the wrathbench driver), so its
+   * model's probe needs no scored run first. Its probe runs map back to it by
+   * name (`matchesRoster`), so it never pools with another entry's.
+   */
+  campaignOnly?: true;
+  /**
    * Set by the parser when this entry was refused: it stays in the catalog so a
    * job naming it is gated rather than taking the whole file down, and nothing
    * schedules it (`policyExclusion`). The operator's notice is the refusal line
@@ -1140,9 +1150,10 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
   for (const [name, e] of Object.entries(raw as Record<string, unknown>)) {
     if (name.length === 0 || !/^[A-Za-z0-9._-]+$/.test(name)) fail(`roster: entry name ${JSON.stringify(name)} must be [A-Za-z0-9._-]+`);
     if (typeof e !== "object" || e === null || Array.isArray(e)) fail(`roster ${name}: entry must be an object`);
-    const { tier: rawTier, idle: rawIdle, tiers: rawTiers, runsPerEpisode: rawRuns, billing: rawBilling, credential: rawCred, ...rest } = e as {
+    const { tier: rawTier, idle: rawIdle, tiers: rawTiers, runsPerEpisode: rawRuns, billing: rawBilling, credential: rawCred, campaignOnly: rawCampaignOnly, ...rest } = e as {
       tier?: unknown;
       idle?: unknown;
+      campaignOnly?: unknown;
       tiers?: unknown;
       runsPerEpisode?: unknown;
       billing?: unknown;
@@ -1154,6 +1165,8 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
     if (rawCred !== undefined && (typeof rawCred !== "string" || !isCredentialId(rawCred))) {
       fail(`roster ${name}: credential must be a credential's id (credentials/<id>), never a secret`);
     }
+    if (rawCampaignOnly !== undefined && rawCampaignOnly !== true) fail(`roster ${name}: campaignOnly is true or absent`);
+    if (rawCampaignOnly === true && rawIdle !== undefined && rawIdle !== "none") fail(`roster ${name}: a campaignOnly entry has no idle work — drop idle or set it to "none"`);
     if (rawBilling !== undefined && rawBilling !== "free" && rawBilling !== "paid") fail(`roster ${name}: billing must be "free" or "paid" (normally absent: it is derived)`);
     // The retired 0.4 spellings, refused by name. Both said how much a model
     // runs, which is its tier now; dropping them silently would re-scope a
@@ -1207,6 +1220,7 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
       idle,
       ...(rawBilling !== undefined ? { billing: rawBilling as Billing } : {}),
       ...(rawCred !== undefined ? { credential: rawCred as string } : {}),
+      ...(rawCampaignOnly === true ? { campaignOnly: true as const } : {}),
     };
   }
   // One model id, one harness: what keeps the harness a tag (`harnessClash`).
@@ -1253,6 +1267,7 @@ export function rosterModels(roster: Record<string, FleetRosterEntry>): RosterMo
             tier: e.tier,
             idle: e.idle,
             ...(e.billing !== undefined ? { billing: e.billing } : {}),
+            ...(e.campaignOnly === true ? { campaignOnly: true as const } : {}),
           },
         ],
   );

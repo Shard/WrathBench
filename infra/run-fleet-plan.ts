@@ -336,10 +336,10 @@ export function runnableRefs(job: FleetJob, roster: Record<string, FleetRosterEn
     // A refused entry (`FleetRosterEntry.refused`) runs under no job at all: it
     // is in the catalog only so a job naming it is gated with a reason.
     if (e.refused !== undefined) return false;
-    // A probe-only driver's entry (`DriverEntry.probeOnly`) runs as a probe
-    // campaign's square and under nothing else: a queue job naming it for a
+    // A probe-only driver's entry (`DriverEntry.probeOnly`), or a campaignOnly
+    // one, runs as a probe campaign's square and under nothing else: a queue job naming it for a
     // scored or freeplay episode is the scored lane it is kept out of.
-    if (isProbeOnlyDriver(e.driver) && job.probe === undefined && job.campaignFile === undefined) return false;
+    if ((isProbeOnlyDriver(e.driver) || e.campaignOnly === true) && job.probe === undefined && job.campaignFile === undefined) return false;
     // A policy job was made from the projection that answers eligibility; it is its own witness.
     if (job.attempt !== undefined) return true;
     // An unscored episode needs no promotion: no tier buys one, so there is no
