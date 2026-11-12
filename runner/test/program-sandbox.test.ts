@@ -104,7 +104,9 @@ describe("the program loop over a real sandbox", () => {
     expect(third).toMatch(/^\[turn 3\]\n\n\[wake 1 · slept \d+s · woke for: routine ended \(trip, returned\)\]/);
     expect(third).toContain('trip returned');
     expect(third).toContain("no routine is running");
-    expect(third).toContain("  [trip] arrived at Goldshire");
+    // Its console rides the beat: this wake's, or, when a timer beat was in
+    // flight as the wake asked for one, the next wake's.
+    expect(`${third}\n${results[3]}`).toContain("  [trip] arrived at Goldshire");
     // The yield found nothing in its one second, with idle running.
     expect(results[3]).toContain("[wake 2 · slept 1s · woke for: 1s passed]");
     expect(results[3]).toContain("idle running");
