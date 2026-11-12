@@ -314,6 +314,8 @@ describe("the host side", () => {
     expect(parseArgs([RUN, "--op", "move_to,face"], 0)).toMatchObject({ op: "move_to,face", summary: false });
     expect(parseArgs([RUN], 0)).toMatchObject({ target: "compose" });
     expect("error" in parseArgs([RUN, "--op", "a;b"], 0)).toBe(true);
+    // A fan-out character's session id is refused by name: its token is not the run's.
+    expect(parseArgs([`${RUN}~Alfa`], 0)).toEqual({ error: `${RUN}~Alfa is a fan-out character's session: its audit is under its own session's token, which inspect audit does not read; it reads a run's` });
     expect("error" in parseArgs([RUN, "--status", "ok"], 0)).toBe(true);
     expect("error" in parseArgs(["../x"], 0)).toBe(true);
     expect(parseArgs(["--smoke", "edge-drop"], 0)).toMatchObject({ smoke: "edge-drop", runId: "smoke-edge-drop" });
