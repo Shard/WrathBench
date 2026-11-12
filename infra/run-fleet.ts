@@ -218,6 +218,7 @@ import {
   writeCredentialUsageSidecar,
   type CredentialGate,
 } from "./run-fleet-credentials";
+import { FleetModelLists } from "./run-fleet-model-lists";
 import type { Credential } from "../runner/src/credential-slots";
 import { configDbPath, EMPTY_STORE_HINT, readFleetConfig } from "../runner/src/config-store";
 import { GROUPS_ENV, groupsEnvValue, groupsFromEnv } from "../runner/viewer/groups";
@@ -664,6 +665,15 @@ async function refreshGoUsage(cfg: Pick<FleetConfig, "credentials" | "roster">):
   await goUsage.refresh(cfg.credentials, cfg.roster);
   const readings = goUsage.observations();
   if (readings.length > 0) writeCredentialUsageSidecar(RUNS_DIR, readings);
+}
+/**
+ * The providers' model lists, read at most every six hours in the background
+ * (`infra/run-fleet-model-lists.ts`): the tick never waits on one, and the
+ * projection reads what the last read wrote.
+ */
+const modelLists = new FleetModelLists({ runsDir: RUNS_DIR, say });
+function refreshModelLists(cfg: Pick<FleetConfig, "credentials" | "roster">): void {
+  void modelLists.refresh(cfg.roster, cfg.credentials);
 }
 /** The newest tick's credential ledger, for the state file's `credentials` block. */
 let lastCredentials: { gate: CredentialGate; book: SlotBook; credentials: readonly Credential[]; runs: readonly RunFact[] } | undefined;
@@ -1865,6 +1875,7 @@ async function main(): Promise<void> {
     stampToday,
   );
   await refreshGoUsage(config);
+  refreshModelLists(config);
   if (mayStart) for (const spawn of diffJobs(applyPause(effectiveJobs(config), pauseSwitch !== undefined), sets).start) spawnJob(spawn);
   writeState(configPath, stampToday, procs, sets.draining, gate, poolView(config));
 
@@ -1967,6 +1978,7 @@ async function main(): Promise<void> {
     readPause();
     // Not while stopping: the stop polls fast so rosters are reaped in the grace.
     if (!stopping) await refreshGoUsage(config);
+    if (!stopping) refreshModelLists(config);
     const actions = diffJobs(applyPause(effectiveJobs(config), pauseSwitch !== undefined), sets);
     // A refusal suppresses SCHEDULING; it must never drain. A disabled pin
     // normally means the operator parked it, so `diffJobs` drains its live run

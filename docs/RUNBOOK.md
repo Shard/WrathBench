@@ -483,7 +483,9 @@ character, set the entry's `idle: "none"`: the freeplay job stops being
 generated, the paused run reads "not in config — resume by hand", and it
 stays down until `idle: "unlimited"` comes back ("Freeplay characters are
 durable"). To take a model out of scheduling, set its tier and idle to what
-you want; a catalog entry has no on/off switch.
+you want; a catalog entry has no on/off switch. A model its provider has
+withdrawn is retired by itself ("The scheduling policy"); keep its entry, so
+its runs keep their row on the models page.
 
 A roster entry referenced by a pinned job is never policy-scheduled: the
 account is spoken for. Nothing else takes an entry out of the policy; a
@@ -1514,7 +1516,7 @@ stored except an operator's clear.
 ```
 bun wb fleet status                       # models table: status, counted/target per episode, why (not) schedulable
 bun wb fleet dry-run                      # the picks the policy would make for the free accounts right now
-bun wb fleet clear-model <roster-name>    # forgive a retired/cooling model; picked up on the next tick
+bun wb fleet clear-model <roster-name>    # forgive a retired/cooling model (not one gone from its provider's list); picked up on the next tick
 ```
 
 Both reports read what is running as the supervisor does: a job whose process
@@ -1537,6 +1539,29 @@ will not be scheduled until cleared; `pinned` is outside the policy (a pinned
 ref or a probe). A launch that produced no model response never counts toward
 a target but does climb the ladder, so a dead provider costs at most ten
 launches over about 11 hours before it is retired.
+
+`retired` has a second cause that needs no launch at all: the model's
+provider no longer lists it. The supervisor reads the model list of every
+provider a roster entry is on (the entry's `<apiBase>/models`) at boot and
+then every six hours, in the background, and writes what it found to
+`fleet-model-lists.json` beside the runs (`runner/src/model-lists.ts`). An
+entry whose model every successful read has left out for at least a day, two
+reads or more, is `retired` with the reason "gone from <provider>'s model list
+since <date>", in `--status`, on the models page and in `/api/models`. The
+first read that lists it again brings it back, with no clear; `clear-model`
+does not lift it. The lists read are OpenRouter's public catalogue (every
+output modality), OpenCode Zen's and Go's (public too), and Cerebras's and
+DeepSeek's with the provider's key (the first enabled credential of that
+provider whose variable is set, else the provider's own variable, sent only
+where the provider table lets it go). A Claude or ChatGPT subscription's and
+the self-hosted server's are not read: the CLI credentials read no model list,
+and the local server lists only what is loaded. A failed read (an error, a
+timeout, a non-200, an empty list, no key) is said in the supervisor log and
+in `--status`, and changes nothing: it neither confirms an absence nor resets
+one. Like the ladder's, this retirement only stops the policy picking the
+model: a run in flight runs on, a pinned job is outside the policy as always,
+no row is deleted, and nothing is counted differently. `--status` ends the
+models table with each list's newest read and what is not on it.
 
 A manual pool job (a `queue` entry without an account) always outranks the
 policy for a pool account; add one to force a specific run (an `e360` for a

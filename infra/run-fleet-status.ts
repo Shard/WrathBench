@@ -112,6 +112,8 @@ import {
   type CredentialGate,
   type CredentialStatus,
 } from "./run-fleet-credentials";
+import { formatModelLists } from "./run-fleet-model-lists";
+import { readModelListsSidecar } from "../runner/src/model-lists";
 import { providerById } from "../runner/src/credential-slots";
 import { credentialIdsOf } from "./run-fleet-state";
 import { rosterPriceGap } from "../runner/viewer/pricing";
@@ -1108,6 +1110,7 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
       if (why !== undefined) excluded.set(name, why);
     }
     for (const line of formatModels(states, running, Date.now(), excluded, config.policy, groups.evals)) console.log(`  ${line}`);
+    for (const line of formatModelLists(readModelListsSidecar(RUNS_DIR), Date.now())) console.log(`  ${line}`);
 
     if (state?.policy?.idle !== undefined) console.log(`  policy: ${state.policy.idle}`);
     // (c') freeplay characters: each unlimited ref's head and what the next pick

@@ -72,6 +72,7 @@ import { parseRouting, type RoutingSpec } from "./routing";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { HEARTBEAT_DEAD_MS, HEARTBEAT_FILE, heartbeatAt, heartbeatOwner } from "./trajectory";
 import { RunFactCache } from "./run-fact-cache";
+import { goneReason, modelGoneOf, readModelListsSidecar, type ModelGone, type ModelListsSidecar } from "./model-lists";
 
 // ----------------------------------------------------------------- policy
 
@@ -735,6 +736,12 @@ export interface ModelState {
   perEpisode: Partial<Record<EpisodeId, EpisodeStats>>;
   cooling?: ModelCooling;
   retired?: ModelRetired;
+  /**
+   * Set with `retired` when the retirement is its provider's list, not the
+   * ladder (`runner/src/model-lists.ts`): it lifts by itself once the model is
+   * listed again, and no clear lifts it.
+   */
+  gone?: ModelGone;
   /** Consecutive no-progress attempts on the ladder (0 when the last attempt progressed). */
   ladder: number;
   /**
@@ -2022,7 +2029,7 @@ export function projectModel(
   r: RosterModel,
   runs: readonly RunFact[],
   policy: SchedulingPolicy,
-  opts: { now: number; clearedAt?: number },
+  opts: { now: number; clearedAt?: number; gone?: ModelGone },
 ): ModelState {
   const billing = rosterBilling(r);
   // A run whose driver is not a model is no roster entry's, even under a
@@ -2150,6 +2157,12 @@ export function projectModel(
       episodeMs: pausedRun.episodeMs,
     };
   }
+  if (opts.gone !== undefined) {
+    state.gone = opts.gone;
+    state.retired = { at: opts.gone.since, reason: goneReason(opts.gone) };
+    state.status = "retired";
+    return state;
+  }
   if (lastFail !== undefined && ladder > 0) {
     const reason = stillbornOf(lastFail) === true ? "stillborn" : (lastFail.terminationReason ?? "no progress");
     if (ladder > LADDER_MS.length) {
@@ -2183,6 +2196,8 @@ export interface ModelStatesInput {
   policy?: SchedulingPolicy;
   /** The operator sidecar; omitted reads `<runsDir>/fleet-models.json`. */
   sidecar?: ModelsSidecar;
+  /** The providers' model-list reads; omitted reads `<runsDir>/fleet-model-lists.json`. */
+  modelLists?: ModelListsSidecar;
   now?: number;
   /** Pre-read facts, for callers that already have them (tests, the viewer). */
   runs?: readonly RunFact[];
@@ -2209,7 +2224,11 @@ export function modelStates(input: ModelStatesInput): ModelState[] {
   // that has already read the facts — the viewer — decides for itself.
   const runs = input.runs ?? readRunFacts(input.runsDir, now, { includeArchived: true });
   const sidecar = input.sidecar ?? readModelsSidecar(input.runsDir);
-  return input.roster.map((r) => projectModel(r, runs, policy, { now, clearedAt: sidecar.cleared[r.name] }));
+  const lists = input.modelLists ?? readModelListsSidecar(input.runsDir);
+  return input.roster.map((r) => {
+    const gone = modelGoneOf(lists, r);
+    return projectModel(r, runs, policy, { now, clearedAt: sidecar.cleared[r.name], ...(gone !== undefined ? { gone } : {}) });
+  });
 }
 
 // -------------------------------------------------------------- scheduling
@@ -2256,6 +2275,7 @@ export function schedulability(
   _policy: SchedulingPolicy = DEFAULT_POLICY,
 ): Verdict {
   const blocked = (why: string): Verdict => ({ verdict: "blocked", why });
+  if (s.gone !== undefined) return blocked(`retired: ${s.retired?.reason ?? goneReason(s.gone)} — back by itself once it is listed again`);
   if (s.retired !== undefined) return blocked(`retired: ${s.retired.reason} — clear with bun wb fleet clear-model ${s.name}`);
   if (s.cooling !== undefined) {
     return blocked(`cooling rung ${s.cooling.rung}/${LADDER_MS.length} until ${new Date(s.cooling.until).toISOString()} (${s.cooling.reason})`);
