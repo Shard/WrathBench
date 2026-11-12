@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * `bun wb inspect live|run|trajectory|tools|pad|stuck|session`: read-only views of the runs,
+ * `bun wb inspect live|run|trajectory|tools|pad|stuck|session|requests`: read-only views of the runs,
  * every one bounded by default.
  *
  *   bun infra/inspect-run.ts live                      runs with a heartbeat, one line each
@@ -18,6 +18,9 @@
  *   bun infra/inspect-run.ts session <run-id> [--stream events|calls] [--character NAME] [--kind K[,K]]
  *                                   [--grep RE] [--last N | --next N] [--since D] [--until D]
  *                                                      a v1 run's session record, one line per row
+ *   bun infra/inspect-run.ts requests <run-id> [--since D] [--until D] [--at-level N[,N]] [--at-minutes N[,N]]
+ *                                    [--stall D] [--price-at DAY] [--catalogue FILE] [--json]
+ *                                                      tokens and cost per request, wakes, levels, turn-ins and stalls per hour
  *
  * D is `90s`, `30m`, `2h`, `1d`, epoch ms or an ISO time. The runs directory is
  * `--runs-dir`, else WRATHBENCH_RUNS_DIR, else `data/runs`. Where a view takes
@@ -1936,8 +1939,9 @@ function scanActivity(path: string, window: Window, token: string | null, cost?:
  * as runner/viewer/tail.ts `reportedCostUsd` reads them: OpenRouter's per
  * response (`usage.cost`, summed), and the Claude Code CLI's per session
  * (`claude_result.costUsd`, cumulative, so a session's is its largest). No
- * price table is read here (this file imports nothing): the list-price figure
- * is the viewer's (runner/viewer/pricing.ts).
+ * price table is read for this line: the list-price figure is the viewer's
+ * (runner/viewer/pricing.ts), and `requests` prices a window's tokens at the
+ * model catalogue's row (`requestPrice`).
  */
 export interface CostTally {
   usage: UsageTotals;
@@ -3362,6 +3366,56 @@ export function progressSampleOf(r: Record<string, unknown>, ts: number): Progre
   };
 }
 
+/** The last value of each progress field a sample carried: what the next sample is compared with. */
+export interface ProgressCarry {
+  lx: { level: number; xp: number } | null;
+  q: number | null;
+  m: number | null;
+  it: string | null;
+  mp: number | null;
+}
+
+export function newProgressCarry(): ProgressCarry {
+  return { lx: null, q: null, m: null, it: null, mp: null };
+}
+
+/** What one sample changed against the carry: the progress rule `stuck` and `requests` share, movement aside. */
+export interface ProgressStep {
+  /** (level, xp) rose. */
+  rose: boolean;
+  /** Turn-ins added; a drop is a restart (the count is the process's own) and adds none. */
+  quests: number;
+  money: boolean;
+  items: boolean;
+  map: boolean;
+}
+
+/** One sample against the carry, which it then updates; a field the sample does not carry is unknown, never a change. Pure but for the carry. */
+export function progressStep(c: ProgressCarry, x: ProgressSample): ProgressStep {
+  const step: ProgressStep = { rose: false, quests: 0, money: false, items: false, map: false };
+  if (x.level !== null && x.xp !== null) {
+    if (c.lx !== null && (x.level > c.lx.level || (x.level === c.lx.level && x.xp > c.lx.xp))) step.rose = true;
+    c.lx = { level: x.level, xp: x.xp };
+  }
+  if (x.quests !== null) {
+    if (c.q !== null && x.quests > c.q) step.quests = x.quests - c.q;
+    c.q = x.quests;
+  }
+  if (x.money !== null) {
+    if (c.m !== null && x.money !== c.m) step.money = true;
+    c.m = x.money;
+  }
+  if (x.items !== null) {
+    if (c.it !== null && x.items !== c.it) step.items = true;
+    c.it = x.items;
+  }
+  if (x.map !== null) {
+    if (c.mp !== null && x.map !== c.mp) step.map = true;
+    c.mp = x.map;
+  }
+  return step;
+}
+
 export interface ProgressVerdict {
   /** `stuck`: no progress of any kind over a window the record covers; `unjudged`: it does not cover it. */
   state: "stuck" | "progressing" | "unjudged";
@@ -3431,33 +3485,15 @@ export function progressVerdict(
   let items = false;
   const maps = new Set<number>();
   let map = false;
-  let lx: { level: number; xp: number } | null = null;
-  let q: number | null = null;
-  let m: number | null = null;
-  let it: string | null = null;
-  let mp: number | null = null;
+  const carry = newProgressCarry();
   for (const x of s) {
-    if (x.level !== null && x.xp !== null) {
-      if (lx !== null && (x.level > lx.level || (x.level === lx.level && x.xp > lx.xp))) rose = true;
-      lx = { level: x.level, xp: x.xp };
-    }
-    if (x.quests !== null) {
-      if (q !== null && x.quests > q) quests += x.quests - q;
-      q = x.quests;
-    }
-    if (x.money !== null) {
-      if (m !== null && x.money !== m) money = true;
-      m = x.money;
-    }
-    if (x.items !== null) {
-      if (it !== null && x.items !== it) items = true;
-      it = x.items;
-    }
-    if (x.map !== null) {
-      maps.add(x.map);
-      if (mp !== null && x.map !== mp) map = true;
-      mp = x.map;
-    }
+    const step = progressStep(carry, x);
+    rose ||= step.rose;
+    quests += step.quests;
+    money ||= step.money;
+    items ||= step.items;
+    map ||= step.map;
+    if (x.map !== null) maps.add(x.map);
   }
   // How far the character strayed from the window's first position on that map.
   const origin = s.find((x) => x.map !== null && x.x !== null && x.y !== null && x.z !== null) ?? null;
@@ -3991,6 +4027,905 @@ export async function inspectSession(runId: string, opts: SessionOptions, out: O
   return 0;
 }
 
+// ------------------------------------------------------------------ inspect requests
+
+/**
+ * How a driver's records carry a model call's usage: runner/src/drivers.ts
+ * `DriverEntry.usage`, copied because this file imports nothing, and pinned by
+ * the test. `response`: one `response` record per request, its usage the
+ * request's. `turn-snapshot` (claude-code): one usage-bearing `response` per
+ * API call, its input finished but its output the stream's opening snapshot,
+ * the turn's finished output on its `claude_result`. `exec-tally` (codex): one
+ * `response` per CLI turn, its figures a tally of every call in it.
+ */
+export type UsageShape = "response" | "turn-snapshot" | "exec-tally";
+export const DRIVER_USAGE: Readonly<Record<string, UsageShape>> = {
+  openai: "response",
+  "claude-code": "turn-snapshot",
+  codex: "exec-tally",
+  pi: "response",
+  stub: "response",
+  reference: "response",
+};
+
+/**
+ * One request as its `response` record reported it (on codex, one CLI turn).
+ * A figure not reported is null, never 0. `prompt` is the whole prompt with
+ * the cached part inside it, the runner's convention for every driver;
+ * `output` is the finished count, which on claude-code is the turn's result
+ * spread evenly over the turn's requests, and null where the turn has none.
+ */
+export interface ModelCall {
+  ts: number;
+  turn: number | null;
+  prompt: number | null;
+  cached: number | null;
+  write: number | null;
+  output: number | null;
+  reasoning: number | null;
+  usd: number | null;
+}
+
+/** A codex thread total in the runner's normalised shape (runner/src/codex-usage.ts `CodexUsage`). */
+interface CodexTotal {
+  prompt: number;
+  completion: number;
+  cached?: number;
+  write?: number;
+  reasoning?: number;
+}
+
+/**
+ * One turn's usage from two thread totals: runner/src/codex-usage.ts
+ * `codexUsageDelta`, copied and pinned by the test. Each field on its own,
+ * never below zero (a drop is a new baseline); no previous total is the total.
+ */
+export function codexDelta(prev: CodexTotal | undefined, cur: CodexTotal): CodexTotal {
+  if (prev === undefined) return { ...cur };
+  const d = (a: number | undefined, b: number | undefined): number => Math.max(0, (a ?? 0) - (b ?? 0));
+  const out: CodexTotal = { prompt: d(cur.prompt, prev.prompt), completion: d(cur.completion, prev.completion) };
+  if (cur.cached !== undefined) out.cached = d(cur.cached, prev.cached);
+  if (cur.write !== undefined) out.write = d(cur.write, prev.write);
+  if (cur.reasoning !== undefined) out.reasoning = d(cur.reasoning, prev.reasoning);
+  return out;
+}
+
+/** What a `requests` read takes off the trajectory, the whole run's, oldest first. */
+export interface RequestScan {
+  shape: UsageShape;
+  calls: ModelCall[];
+  /** A scaffold's `response` records with no usage: a message's (claude-code) or a CLI turn's (codex) earlier records, not requests. */
+  envelopes: number;
+  /** codex: responses whose usage was the thread's running total, turned into the turn's here. */
+  derived: number;
+  /** codex: thread totals that went down, each read as a new baseline. */
+  regressions: number;
+  /** claude-code: each turn's finished output, off its `claude_result`. */
+  turnOutput: Map<number, number>;
+  /** claude-code: a turn's output with no request of its own to spread it over. */
+  orphanOutput: number;
+  /** claude-code: the CLI's cumulative charge per session, as each result reported it. */
+  cli: { ts: number; session: string; usd: number }[];
+  /** `wake` records (the shape `harness/wake` defined): what ended each wait, and how long it slept. */
+  wakes: { ts: number; fired: string; sleptMs: number }[];
+  /** Spans from a `pause` record to the next `resume`, `to` null when the run never resumed. */
+  pauses: { from: number; to: number | null }[];
+  /** A 0.5 trajectory's own `state` records, for a run with no other samples. */
+  states: ProgressSample[];
+  first: number | null;
+  last: number | null;
+}
+
+function finite(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/**
+ * A response's usage in one shape. The runner writes every driver's as
+ * `prompt_tokens` (the whole prompt) with the cached part inside it; a record
+ * with `input_tokens` instead is a raw shape, and what that counts is the
+ * driver's: Codex's includes the cache, Anthropic's leaves it beside.
+ */
+function usageFigures(u: Record<string, unknown>, shape: UsageShape): Omit<ModelCall, "ts" | "turn"> | null {
+  const details = obj(u["prompt_tokens_details"]);
+  const cached = intOf(u["cached_tokens"]) ?? intOf(details["cached_tokens"]) ?? intOf(u["cache_read_input_tokens"]) ?? intOf(u["cached_input_tokens"]);
+  const write = intOf(u["cache_write_tokens"]) ?? intOf(details["cache_write_tokens"]) ?? intOf(u["cache_creation_input_tokens"]) ?? intOf(u["cache_write_input_tokens"]);
+  let prompt = intOf(u["prompt_tokens"]);
+  const input = intOf(u["input_tokens"]);
+  if (prompt === null && input !== null) prompt = shape === "exec-tally" ? input : input + (cached ?? 0) + (write ?? 0);
+  const output = intOf(u["completion_tokens"]) ?? intOf(u["output_tokens"]);
+  const reasoning = intOf(u["reasoning_tokens"]) ?? intOf(obj(u["completion_tokens_details"])["reasoning_tokens"]) ?? intOf(u["reasoning_output_tokens"]);
+  const usd = finite(u["cost"]);
+  if (prompt === null && output === null && cached === null && usd === null) return null;
+  return { prompt, cached, write, output, reasoning, usd };
+}
+
+/** The record-by-record read behind `requests`; `done` settles claude-code's output once every result is in. */
+function requestReducer(shape: UsageShape): { fn: RecFn; done: () => RequestScan } {
+  const a: RequestScan = {
+    shape,
+    calls: [],
+    envelopes: 0,
+    derived: 0,
+    regressions: 0,
+    turnOutput: new Map(),
+    orphanOutput: 0,
+    cli: [],
+    wakes: [],
+    pauses: [],
+    states: [],
+    first: null,
+    last: null,
+  };
+  // codex: the thread total the next one is measured from (runner/src/codex-usage.ts `CodexUsageCorrector`).
+  let prev: CodexTotal | undefined;
+  let thread: string | null = null;
+  const fn: RecFn = (r) => {
+    if (Number.isFinite(r.ts)) {
+      a.first ??= r.ts;
+      a.last = Math.max(a.last ?? r.ts, r.ts);
+    }
+    switch (r.t) {
+      case "driver":
+        // Every episode opens a new thread.
+        prev = undefined;
+        thread = null;
+        return;
+      case "codex_thread": {
+        const id = str(r.parse()?.["threadId"]);
+        if (id !== thread) {
+          thread = id;
+          prev = undefined;
+        }
+        return;
+      }
+      case "pause":
+        if (a.pauses.length === 0 || a.pauses[a.pauses.length - 1]!.to !== null) a.pauses.push({ from: r.ts, to: null });
+        return;
+      case "resume": {
+        const open = a.pauses[a.pauses.length - 1];
+        if (open !== undefined && open.to === null) open.to = r.ts;
+        return;
+      }
+      case "wake": {
+        const p = r.parse();
+        a.wakes.push({ ts: r.ts, fired: str(p?.["fired"]) ?? "?", sleptMs: finite(p?.["sleptMs"]) ?? 0 });
+        return;
+      }
+      case "state": {
+        const p = r.bytes < 1 << 20 ? r.parse() : null;
+        if (p !== null) a.states.push(progressSampleOf(p, r.ts));
+        return;
+      }
+      case "claude_result": {
+        const p = r.parse();
+        const turn = intOf(p?.["turn"]);
+        const out = intOf(obj(p?.["usageRaw"])["output_tokens"]) ?? intOf(obj(p?.["usage"])["completion_tokens"]);
+        // A result that reports no output speaks for nothing (runner/viewer/tail.ts `claudeTurns`).
+        if (turn !== null && out !== null && out > 0) a.turnOutput.set(turn, out);
+        const usd = finite(p?.["costUsd"]);
+        if (usd !== null) a.cli.push({ ts: r.ts, session: str(p?.["sessionId"]) ?? "", usd });
+        return;
+      }
+      case "response": {
+        const p = r.bytes < RAW_CAP_BYTES ? r.parse() : null;
+        const turn = intOf(p?.["turn"]);
+        const raw = p?.["usage"];
+        let f = raw !== null && typeof raw === "object" ? usageFigures(raw as Record<string, unknown>, shape) : null;
+        // A scaffold's message (claude-code) or CLI turn (codex) writes several records, and only its last carries the usage.
+        if (shape !== "response" && f === null) {
+          a.envelopes++;
+          return;
+        }
+        if (shape === "turn-snapshot" && f !== null) {
+          // The input is the finished count; the output an opening snapshot, settled from the turn's result in `done`.
+          f = { ...f, output: null, reasoning: null };
+        } else if (shape === "exec-tally" && f !== null && p?.["usageCumulative"] === undefined) {
+          // A thread total, from before the driver wrote per-turn deltas: the turn's is what it added.
+          const cur: CodexTotal = { prompt: f.prompt ?? 0, completion: f.output ?? 0 };
+          if (f.cached !== null) cur.cached = f.cached;
+          if (f.write !== null) cur.write = f.write;
+          if (f.reasoning !== null) cur.reasoning = f.reasoning;
+          if (prev !== undefined && (cur.prompt < prev.prompt || cur.completion < prev.completion)) a.regressions++;
+          const d = codexDelta(prev, cur);
+          prev = cur;
+          a.derived++;
+          f = { prompt: d.prompt, cached: d.cached ?? null, write: d.write ?? null, output: d.completion, reasoning: d.reasoning ?? null, usd: f.usd };
+        }
+        a.calls.push({ ts: r.ts, turn, prompt: f?.prompt ?? null, cached: f?.cached ?? null, write: f?.write ?? null, output: f?.output ?? null, reasoning: f?.reasoning ?? null, usd: f?.usd ?? null });
+        return;
+      }
+    }
+  };
+  const done = (): RequestScan => {
+    if (shape !== "turn-snapshot") return a;
+    const byTurn = new Map<number, ModelCall[]>();
+    for (const c of a.calls) if (c.turn !== null) byTurn.set(c.turn, [...(byTurn.get(c.turn) ?? []), c]);
+    for (const [turn, out] of a.turnOutput) {
+      const calls = byTurn.get(turn) ?? [];
+      if (calls.length === 0) a.orphanOutput += out;
+      for (const c of calls) c.output = out / calls.length;
+    }
+    return a;
+  };
+  return { fn, done };
+}
+
+/** What `requests` asks of the store: the usage-bearing records whole, and the rest by their kind and clock alone. */
+const REQUESTS_SPEC: ReadSpec = {
+  kinds: {
+    response: { raw: "all" },
+    claude_result: { raw: "all" },
+    codex_thread: { raw: "all" },
+    wake: { raw: "all" },
+    state: { raw: "all" },
+    driver: { raw: "none" },
+    pause: { raw: "none" },
+    resume: { raw: "none" },
+  },
+};
+
+// ---------------------------------------------------------------- prices
+
+/** One price row as `requests` prices tokens at it: dollars per million, and where the figure is from. */
+export interface RequestPrice {
+  id: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** The row, its window and the catalogue it was read from, in words. */
+  basis: string;
+}
+
+/** Where the model catalogue is looked for: beside this file, else the repository's from the working directory (the runner pod's is /wrathbench). */
+function catalogueAt(path: string | null): { cat: Record<string, unknown> | null; path: string } {
+  const tries = path !== null ? [path] : [join(import.meta.dir, "model-catalogue.json"), join("infra", "model-catalogue.json")];
+  for (const p of tries) {
+    try {
+      return { cat: JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>, path: p };
+    } catch {
+      /* not there */
+    }
+  }
+  return { cat: null, path: tries[tries.length - 1]! };
+}
+
+interface RateWindowRow {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  from?: string;
+}
+
+/** The window in force at `at`: runner/viewer/pricing.ts `windowAt`. */
+function rateAt(windows: unknown, at: number): RateWindowRow | null {
+  if (!Array.isArray(windows) || windows.length === 0) return null;
+  let chosen: RateWindowRow | null = null;
+  for (const w of windows as RateWindowRow[]) {
+    if (w.from !== undefined && Date.parse(w.from) > at) break;
+    chosen = w;
+  }
+  return chosen ?? (windows[0] as RateWindowRow);
+}
+
+/** Two api bases name one endpoint: same origin and path, trailing slash ignored (pricing.ts `sameBase`). */
+function sameBase(a: string | null, b: unknown): boolean {
+  if (a === null || typeof b !== "string") return false;
+  const norm = (u: string): string | null => {
+    try {
+      const url = new URL(u);
+      return `${url.origin.toLowerCase()}${url.pathname.replace(/\/+$/, "")}`;
+    } catch {
+      return null;
+    }
+  };
+  const x = norm(a);
+  return x !== null && x === norm(b);
+}
+
+/**
+ * The run's price row out of the model catalogue (infra/model-catalogue.json),
+ * at the rate window in force at `at`: the part of runner/viewer/pricing.ts
+ * `priceFor` that names a metered row, matched the same way, and pinned to it
+ * by the test. A free slug reads zero; a metered endpoint's row is matched on
+ * its base and id; an OpenRouter row on its id, and only for a run on
+ * OpenRouter or with no base; a codex slug under `openai/`; a Claude row on the
+ * model the CLI served. Anything else (a local base, a declared-free run, an id
+ * no row names) is a reason, never a guess: the viewer's figure is then the one.
+ */
+export function requestPrice(
+  cat: Record<string, unknown> | null,
+  run: { model: string | null; driver: string | null; apiBase: string | null; resolvedModel: string | null; billing: string | null },
+  at: number,
+): RequestPrice | { none: string } {
+  const model = run.model ?? "";
+  if (cat === null) return { none: "no price table here (infra/model-catalogue.json not found)" };
+  if (run.billing === "free") return { none: "the launch declared it free (the viewer's figure is the one)" };
+  if (/(?::free$|-free$)/.test(model)) return { id: model, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, basis: `${model}: a free slug, request-capped, not token-billed` };
+  const models = obj(cat["models"]);
+  const providers = obj(cat["providers"]);
+  const when = (w: RateWindowRow, asOf: unknown): string => (w.from !== undefined ? `in force from ${w.from}` : `its first window${typeof asOf === "string" ? `, read ${asOf}` : ""}`);
+  const row = (id: string, w: RateWindowRow | null, basis: string): RequestPrice | null =>
+    w === null ? null : { id, input: w.input, output: w.output, cacheRead: w.cacheRead, cacheWrite: w.cacheWrite, basis };
+  const base = run.apiBase;
+  if (base !== null) {
+    for (const [key, entry] of Object.entries(models)) {
+      for (const [provider, p] of Object.entries(obj(obj(obj(entry)["prices"])["endpoints"]))) {
+        const pr = obj(p);
+        const ids = Array.isArray(pr["ids"]) ? (pr["ids"] as string[]) : [key];
+        const at0 = obj(providers[provider]);
+        if (!ids.includes(model) || !sameBase(base, at0["apiBase"])) continue;
+        const w = rateAt(pr["windows"], at);
+        if (w !== null) return row(`${str(at0["label"]) ?? provider}/${model}`, w, `${provider} endpoint row, ${when(w, pr["asOf"])}`)!;
+      }
+    }
+    let host = "";
+    try {
+      host = new URL(base).hostname;
+    } catch {
+      /* not a URL */
+    }
+    if (host !== "openrouter.ai") return { none: `no row here for ${model} on ${base} (the viewer's pricing decides local and other bases)` };
+  }
+  const synced = (id: string): { w: RateWindowRow | null } | null => {
+    for (const entry of Object.values(models)) {
+      const p = obj(obj(obj(entry)["prices"])["openrouter"])[id];
+      if (p !== undefined) return { w: rateAt(obj(p)["windows"], at) };
+    }
+    return null;
+  };
+  const asOf = obj(providers["openrouter"])["asOf"];
+  const or = synced(model);
+  if (or !== null) return row(model, or.w, `OpenRouter row, ${or.w === null ? "" : when(or.w, asOf)}`) ?? { none: `OpenRouter no longer prices ${model}` };
+  if (run.driver === "codex" && !model.includes("/")) {
+    const v = synced(`openai/${model}`);
+    if (v !== null && v.w !== null) return row(`openai/${model}`, v.w, `OpenAI list price via the OpenRouter row openai/${model}, ${when(v.w, asOf)}; as-if-metered (a ChatGPT subscription)`)!;
+  }
+  if (run.driver === "claude-code" || /claude/i.test(model)) {
+    const served = run.resolvedModel ?? model;
+    for (const [key, entry] of Object.entries(models)) {
+      const p = obj(obj(obj(entry)["prices"])["anthropic"]);
+      const ids = Array.isArray(p["ids"]) ? (p["ids"] as string[]) : [key];
+      if (!ids.includes(served)) continue;
+      const w = rateAt(p["windows"], at);
+      if (w !== null) return row(served, w, `Anthropic list price, ${when(w, p["asOf"])}; as-if-metered (a subscription)`)!;
+      return { none: `no Anthropic row for ${served}${typeof p["unpriced"] === "string" ? `: ${p["unpriced"]}` : ""}` };
+    }
+    return { none: `no Anthropic row for ${served}` };
+  }
+  return { none: `no price row here for ${model}` };
+}
+
+// ---------------------------------------------------------------- spans
+
+type Span = [number, number];
+
+function spanTotal(xs: readonly Span[]): number {
+  return xs.reduce((n, [a, b]) => n + Math.max(0, b - a), 0);
+}
+
+/** `xs` with every part `holes` covers taken out. Both sorted, neither overlapping itself. */
+function spanMinus(xs: readonly Span[], holes: readonly Span[]): Span[] {
+  const out: Span[] = [];
+  for (const [a0, b] of xs) {
+    let a = a0;
+    for (const [h0, h1] of holes) {
+      if (h1 <= a || h0 >= b) continue;
+      if (h0 > a) out.push([a, h0]);
+      a = Math.max(a, h1);
+      if (a >= b) break;
+    }
+    if (a < b) out.push([a, b]);
+  }
+  return out;
+}
+
+/** The parts both lists cover. */
+function spanAnd(xs: readonly Span[], ys: readonly Span[]): Span[] {
+  const out: Span[] = [];
+  for (const [a, b] of xs) {
+    for (const [c, d] of ys) {
+      const lo = Math.max(a, c);
+      const hi = Math.min(b, d);
+      if (lo < hi) out.push([lo, hi]);
+    }
+  }
+  return out.sort((p, q) => p[0] - q[0]);
+}
+
+/** How long a stretch with no game progress must last, past this, to be a stall rather than play. */
+export const STALL_DEFAULT_MS = 5 * 60_000;
+
+/**
+ * The stretches of [since, until] in which the character made no game
+ * progress, by `stuck`'s rule (`progressStep`, and movement past `moveYards`),
+ * and the stretches the record does not cover. A stretch runs from one
+ * progress to the next, its movement measured from where it began; one longer
+ * than `stallMs` is a stall. Covered is `stuck`'s sense: the samples (and on
+ * a v1 run the record's other writes, `recordWrites`) no further apart than
+ * `maxGapMs`, and nothing before the first reading. What is not covered is
+ * never a stall: nothing recorded is not no progress. Pure.
+ */
+export function stallSpans(
+  all: readonly ProgressSample[],
+  w: { since: number; until: number },
+  t: { moveYards: number; maxGapMs: number; stallMs: number },
+  writes?: readonly number[],
+): { stalls: Span[]; uncovered: Span[] } {
+  const inside = all.filter((x) => x.ts >= w.since && x.ts <= w.until).sort((a, b) => a.ts - b.ts);
+  const before = all.filter((x) => x.ts < w.since).reduce<ProgressSample | null>((a, x) => (a === null || x.ts >= a.ts ? x : a), null);
+  const s = before !== null ? [{ ...before, ts: w.since }, ...inside] : inside;
+  if (s.length === 0) return { stalls: [], uncovered: [[w.since, w.until]] };
+  // Coverage: nothing before the first reading, and no gap past maxGapMs between writes.
+  const uncovered: Span[] = [];
+  if (s[0]!.ts > w.since) uncovered.push([w.since, s[0]!.ts]);
+  const seen = [...s.map((x) => x.ts), ...(writes ?? []).filter((ts) => ts >= s[0]!.ts && ts <= w.until)].sort((a, b) => a - b);
+  for (let i = 1; i < seen.length; i++) if (seen[i]! - seen[i - 1]! > t.maxGapMs) uncovered.push([seen[i - 1]!, seen[i]!]);
+  if (w.until - seen[seen.length - 1]! > t.maxGapMs) uncovered.push([seen[seen.length - 1]!, w.until]);
+  // Progress: each sample against the carry, movement against where the stretch began.
+  const carry = newProgressCarry();
+  let anchor: ProgressSample | null = null;
+  const marks: number[] = [];
+  for (const [i, x] of s.entries()) {
+    const step = progressStep(carry, x);
+    const placed = x.map !== null && x.x !== null && x.y !== null && x.z !== null;
+    const moved = placed && anchor !== null && anchor.map === x.map && Math.hypot(x.x! - anchor.x!, x.y! - anchor.y!, x.z! - anchor.z!) > t.moveYards;
+    const progressed = i > 0 && (step.rose || step.quests > 0 || step.money || step.items || step.map || moved);
+    if (progressed) marks.push(x.ts);
+    if (placed && (anchor === null || progressed || anchor.map !== x.map)) anchor = x;
+  }
+  const edges = [s[0]!.ts, ...marks.filter((ts) => ts > s[0]!.ts && ts < w.until), w.until];
+  const quiet: Span[] = [];
+  for (let i = 1; i < edges.length; i++) if (edges[i]! - edges[i - 1]! > t.stallMs) quiet.push([edges[i - 1]!, edges[i]!]);
+  return { stalls: spanMinus(quiet, uncovered), uncovered };
+}
+
+// ---------------------------------------------------------------- windows
+
+/** One character's readings over the run, and when its record was written. */
+interface CharacterTrack {
+  name: string | null;
+  samples: ProgressSample[];
+  /** A v1 record's writes beside its trace; undefined for a 0.5 run, whose samples are a minute apart. */
+  writes: number[] | undefined;
+}
+
+/** The active milliseconds of [a, b]: its wall clock less the paused spans. */
+function activeMs(a: number, b: number, pauses: readonly { from: number; to: number | null }[]): number {
+  return Math.max(0, b - a - spanTotal(spanAnd([[a, b]], pauses.map((p) => [p.from, p.to ?? Infinity] as Span))));
+}
+
+/** The moment `ms` of active time has passed since `start`, the paused spans left out; Infinity when a pause never ends first. */
+function activeAt(start: number, ms: number, pauses: readonly { from: number; to: number | null }[]): number {
+  let t = start;
+  let left = ms;
+  for (const p of [...pauses].sort((x, y) => x.from - y.from)) {
+    if (p.to !== null && p.to <= t) continue;
+    if (p.from >= t + left) break;
+    left -= Math.max(0, p.from - t);
+    if (p.to === null) return Infinity;
+    t = Math.max(t, p.to);
+  }
+  return t + left;
+}
+
+/** The first moment a track's level reached `level`; null when it never did. */
+function levelReached(track: CharacterTrack, level: number): number | null {
+  for (const x of [...track.samples].sort((a, b) => a.ts - b.ts)) if (x.level !== null && x.level >= level) return x.ts;
+  return null;
+}
+
+/** One character's figures over a window. */
+export interface CharacterFigures {
+  name: string | null;
+  levelFrom: number | null;
+  levelTo: number | null;
+  levelsPerHour: number | null;
+  quests: number;
+  questsPerHour: number | null;
+  stallMinutes: number;
+  uncoveredMinutes: number;
+}
+
+/** One window's figures. A figure no record reported is null, never 0. */
+export interface WindowFigures {
+  label: string;
+  since: number;
+  until: number;
+  /** False for a cut the run never reached; every other figure is then absent. */
+  reached: boolean;
+  activeMinutes: number;
+  requests: number;
+  requestsPerHour: number | null;
+  /** How many requests reported each figure. */
+  reported: { input: number; cached: number; write: number; output: number; reasoning: number; cost: number };
+  uncachedInPerRequest: number | null;
+  cachedInPerRequest: number | null;
+  cacheWritePerRequest: number | null;
+  outputPerRequest: number | null;
+  reasoningPerRequest: number | null;
+  /** Wakes off `wake` records where the run has them, else harness turns. */
+  wakes: { by: "wake" | "turn"; count: number; perHour: number | null; requestsPer: number | null; fired: Record<string, number>; asleepShare: number | null };
+  /** The provider's own charge: OpenRouter's per response, the Claude Code CLI's per session. */
+  reportedUsd: number | null;
+  /** The window's tokens at the price row; output only where it is known. */
+  pricedUsd: number | null;
+  levelsPerHour: number | null;
+  questsPerHour: number | null;
+  quests: number;
+  stallMinutes: number;
+  uncoveredMinutes: number;
+  characters: CharacterFigures[];
+}
+
+function perHour(n: number, activeMinutes: number): number | null {
+  return activeMinutes > 0 ? (n * 60) / activeMinutes : null;
+}
+
+/** One track over a window: its levels and turn-ins (restarts read as `stuck` reads them), and its stalls. */
+function characterFigures(track: CharacterTrack, w: { since: number; until: number }, minutes: number, t: { moveYards: number; maxGapMs: number; stallMs: number }): CharacterFigures & { stalls: Span[]; uncovered: Span[] } {
+  const sorted = [...track.samples].sort((a, b) => a.ts - b.ts);
+  const upTo = sorted.filter((x) => x.ts <= w.until);
+  const before = upTo.filter((x) => x.ts < w.since);
+  const inside = upTo.filter((x) => x.ts >= w.since);
+  const levelAt = (xs: readonly ProgressSample[]): number | null => {
+    for (let i = xs.length - 1; i >= 0; i--) if (xs[i]!.level !== null) return xs[i]!.level;
+    return null;
+  };
+  const levelFrom = levelAt(before) ?? inside.find((x) => x.level !== null)?.level ?? null;
+  const levelTo = levelAt(upTo);
+  const carry = newProgressCarry();
+  for (const x of before) progressStep(carry, x);
+  let quests = 0;
+  for (const x of inside) quests += progressStep(carry, x).quests;
+  const { stalls, uncovered } = stallSpans(track.samples, w, t, track.writes);
+  return {
+    name: track.name,
+    levelFrom,
+    levelTo,
+    levelsPerHour: levelFrom !== null && levelTo !== null ? perHour(levelTo - levelFrom, minutes) : null,
+    quests,
+    questsPerHour: perHour(quests, minutes),
+    stallMinutes: spanTotal(stalls) / 60_000,
+    uncoveredMinutes: spanTotal(uncovered) / 60_000,
+    stalls,
+    uncovered,
+  };
+}
+
+/** Every figure of one window, off the scan and the tracks. Pure. */
+export function windowFigures(
+  scan: RequestScan,
+  tracks: readonly CharacterTrack[],
+  w: { label: string; since: number; until: number },
+  price: RequestPrice | null,
+  t: { moveYards: number; maxGapMs: number; stallMs: number },
+): WindowFigures {
+  const inW = (ts: number): boolean => ts >= w.since && ts <= w.until;
+  const calls = scan.calls.filter((c) => inW(c.ts));
+  const minutes = activeMs(w.since, w.until, scan.pauses) / 60_000;
+  const sum = (pick: (c: ModelCall) => number | null): { n: number; total: number } => {
+    let n = 0;
+    let total = 0;
+    for (const c of calls) {
+      const v = pick(c);
+      if (v === null) continue;
+      n++;
+      total += v;
+    }
+    return { n, total };
+  };
+  const uncached = sum((c) => (c.prompt === null ? null : c.prompt - (c.cached ?? 0)));
+  const cached = sum((c) => (c.prompt === null && c.cached === null ? null : (c.cached ?? 0)));
+  const write = sum((c) => c.write);
+  const output = sum((c) => c.output);
+  const reasoning = sum((c) => c.reasoning);
+  const usd = sum((c) => c.usd);
+  const per = (s: { n: number; total: number }): number | null => (s.n > 0 ? s.total / s.n : null);
+  // The Claude Code CLI's charge is cumulative per session: the window's is what each session added in it.
+  let cliUsd: number | null = null;
+  if (scan.cli.length > 0) {
+    const sessions = new Set(scan.cli.map((c) => c.session));
+    for (const s of sessions) {
+      const of = scan.cli.filter((c) => c.session === s);
+      const upTo = of.filter((c) => c.ts <= w.until).reduce((m, c) => Math.max(m, c.usd), 0);
+      const before = of.filter((c) => c.ts < w.since).reduce((m, c) => Math.max(m, c.usd), 0);
+      if (of.some((c) => inW(c.ts))) cliUsd = (cliUsd ?? 0) + Math.max(0, upTo - before);
+    }
+  }
+  const reportedUsd = usd.n > 0 || cliUsd !== null ? (usd.n > 0 ? usd.total : 0) + (cliUsd ?? 0) : null;
+  let pricedUsd: number | null = null;
+  if (price !== null && uncached.n > 0) {
+    const read = cached.total;
+    const fresh = Math.max(0, uncached.total - write.total);
+    pricedUsd = (fresh * price.input + read * price.cacheRead + write.total * price.cacheWrite + output.total * price.output) / 1e6;
+  }
+  // Wakes: the `wake` records where the run has them, else its harness turns.
+  const wakes = scan.wakes.filter((x) => inW(x.ts));
+  const byWake = scan.wakes.length > 0;
+  const turns = new Set(calls.map((c) => c.turn).filter((n) => n !== null));
+  const count = byWake ? wakes.length : turns.size;
+  const fired: Record<string, number> = {};
+  for (const x of wakes) fired[x.fired] = (fired[x.fired] ?? 0) + 1;
+  const slept = wakes.reduce((n, x) => n + x.sleptMs, 0);
+  const chars = tracks.map((tr) => characterFigures(tr, w, minutes, t));
+  // A run stalls while every character does: one agent moving any of them is making progress (`fanoutProgress`).
+  const runStalls = chars.length === 0 ? [] : chars.slice(1).reduce((acc, c) => spanAnd(acc, c.stalls), chars[0]!.stalls);
+  const runUncovered = chars.length === 0 ? [[w.since, w.until] as Span] : chars.slice(1).reduce((acc, c) => spanAnd(acc, c.uncovered), chars[0]!.uncovered);
+  const gained = chars.reduce<number | null>((n, c) => (c.levelFrom !== null && c.levelTo !== null ? (n ?? 0) + c.levelTo - c.levelFrom : n), null);
+  const quests = chars.reduce((n, c) => n + c.quests, 0);
+  return {
+    label: w.label,
+    since: w.since,
+    until: w.until,
+    reached: true,
+    activeMinutes: minutes,
+    requests: calls.length,
+    requestsPerHour: perHour(calls.length, minutes),
+    reported: { input: uncached.n, cached: cached.n, write: write.n, output: output.n, reasoning: reasoning.n, cost: usd.n },
+    uncachedInPerRequest: per(uncached),
+    cachedInPerRequest: per(cached),
+    cacheWritePerRequest: per(write),
+    outputPerRequest: per(output),
+    reasoningPerRequest: per(reasoning),
+    wakes: {
+      by: byWake ? "wake" : "turn",
+      count,
+      perHour: perHour(count, minutes),
+      requestsPer: count > 0 ? calls.length / count : null,
+      fired,
+      asleepShare: byWake && minutes > 0 ? slept / (minutes * 60_000) : null,
+    },
+    reportedUsd,
+    pricedUsd,
+    levelsPerHour: gained === null ? null : perHour(gained, minutes),
+    questsPerHour: chars.length === 0 ? null : perHour(quests, minutes),
+    quests,
+    stallMinutes: spanTotal(runStalls) / 60_000,
+    uncoveredMinutes: spanTotal(runUncovered) / 60_000,
+    characters: chars.map(({ stalls: _s, uncovered: _u, ...c }) => c),
+  };
+}
+
+// ---------------------------------------------------------------- the view
+
+export interface RequestsOptions extends Ctx, Window {
+  /** Cut the run where its first character reached each level. */
+  atLevels: number[];
+  /** Cut the run at each many active minutes from its start. */
+  atMinutes: number[];
+  stallMs: number;
+  /** Re-price the tokens at the rates in force on this day instead of the run's start. */
+  priceAt: number | null;
+  /** The catalogue to price from, in place of the one beside this file. */
+  catalogue: string | null;
+  json: boolean;
+}
+
+/** A 0.5 run's state rows, read only once no live owner can be writing it, in rowid windows (`scanByRowid`). */
+function samples05(db: Database, runId: string): ProgressSample[] {
+  if (!hasTable(db, "state")) return [];
+  const have = columns(db, "state");
+  const pick = (c: string): string => (have.has(c) ? c : `NULL AS ${c}`);
+  const cols = ["ts", "level", "xp", "money", "quests_completed", "map", "x", "y", "z", "items"].map(pick).join(", ");
+  const byWindow = db.query(`SELECT ${cols} FROM state WHERE rowid > ? AND rowid <= ? AND run_id = ?`);
+  return scanByRowid(db, "state", (lo, hi) => byWindow.all(lo, hi, runId) as Record<string, unknown>[]).map((r) => progressSampleOf(r, r["ts"] as number));
+}
+
+/** One store key's samples over the run, the newest one before it first. */
+async function storeSamples(store: InspectStore, key: string, since: number, until: number): Promise<ProgressSample[]> {
+  const before = await store.sampleBefore(key, since);
+  return [...(before !== null ? [before] : []), ...(await store.samples(key, since, until))].map((r) => progressSampleOf(r, r["ts"] as number));
+}
+
+function fmtPer(n: number | null, digits = 1): string {
+  return n === null ? "—" : n.toFixed(digits);
+}
+
+function fmtTok(n: number | null): string {
+  return n === null ? "—" : fmtTokens(Math.round(n));
+}
+
+/** A figure with how many requests reported it, when not all of them did. */
+function covered(text: string, n: number, of: number): string {
+  return text === "—" || n >= of ? text : `${text} (${n}/${of})`;
+}
+
+/**
+ * `requests`: what each model request cost the run, over the run (or
+ * `--since`/`--until`) and up to each cut (`--at-level`, `--at-minutes`), from
+ * the trajectory's `response` records and the run's readings. Per request:
+ * uncached and cached input, output and reasoning; per wake (or harness turn):
+ * requests; per hour: requests, wakes, levels and turn-ins; the provider's own
+ * charge and, where the catalogue has a row, the tokens priced at it; and the
+ * minutes no character made progress by `stuck`'s rule. Each driver's usage is
+ * read in its own shape and said so (`UsageShape`); a figure a record did not
+ * carry is a dash or a count of how many did, never a zero.
+ */
+export async function inspectRequests(runId: string, opts: RequestsOptions, out: Out): Promise<number> {
+  const run = trajectoryOf(runId, opts, out);
+  if (run === null) return 1;
+  const { dir, token } = run;
+  const meta = readMeta(dir);
+  const config = obj(meta?.["config"]);
+  const via = await viaFor(opts, runId, dir, { since: null, until: null });
+  const driver = (via.store !== null ? via.run?.driver : null) ?? str(config["driver"]) ?? "?";
+  const shape = DRIVER_USAGE[driver] ?? "response";
+  const r = requestReducer(shape);
+  if (via.store !== null) await storeRead(via.store, runId, REQUESTS_SPEC, { since: null, until: null }, via.ext.window, true, r.fn);
+  else fileForward(run.path, r.fn);
+  const scan = r.done();
+  const heartbeat = heartbeatAt(dir);
+  const owned = ownedAt(heartbeat, opts.now);
+  const row = via.store !== null ? via.run : isV1Dir(dir) || isFanoutDir(dir, meta) ? metaRow(meta) : null;
+  const start = row?.started_at ?? finite(meta?.["startedAt"]) ?? scan.first ?? opts.now;
+  const end = row?.ended_at ?? finite(meta?.["endedAt"]) ?? (owned ? opts.now : (scan.last ?? opts.now));
+  const notes: string[] = [];
+
+  // The readings: a v1 run's record (a fan-out run's, each character's), else a 0.5 run's samples.
+  const tracks: CharacterTrack[] = [];
+  const refs = sessionsOf(dir);
+  if (refs.length > 0) {
+    const fanout = sessionDir(dir) === null;
+    for (const ref of refs) {
+      const key = fanout ? fanoutKey(runId, ref.character ?? "?") : runId;
+      const samples = via.store !== null ? await storeSamples(via.store, key, start, end) : traceSamples(ref.session, { since: start, until: end }).map((x) => progressSampleOf(x, x["ts"] as number));
+      tracks.push({ name: ref.character, samples, writes: recordWrites(ref.session, { since: start, until: end }).writes });
+    }
+  } else if (isFanoutDir(dir, meta)) {
+    notes.push("no character has a session record yet: levels, turn-ins and stalls are unknown");
+  } else {
+    let samples: ProgressSample[] = [];
+    if (via.store !== null) samples = await storeSamples(via.store, runId, start, end);
+    else if (!owned) {
+      const db = openDb(dir);
+      try {
+        samples = db === null ? [] : samples05(db, runId);
+      } finally {
+        db?.close();
+      }
+    } else notes.push(`levels, turn-ins and stalls ${notOpened(heartbeat, opts.now)}`);
+    if (samples.length === 0) samples = scan.states;
+    if (samples.length > 0 || !owned) tracks.push({ name: str(config["character"]), samples, writes: undefined });
+  }
+
+  // The price row, at the run's start or at --price-at.
+  const { cat } = catalogueAt(opts.catalogue);
+  const resolved = obj(meta?.["resolved"]);
+  const priceAt = opts.priceAt ?? start;
+  const price = requestPrice(
+    cat,
+    { model: row?.model ?? str(config["model"]), driver, apiBase: str(config["apiBase"]), resolvedModel: str(resolved["model"]), billing: str(config["billing"]) },
+    priceAt,
+  );
+  const priceRow = "none" in price ? null : price;
+
+  // The windows: the run or --since/--until, then each cut from the run's start.
+  const t = { moveYards: STUCK_DEFAULTS.moveYards, maxGapMs: STUCK_DEFAULTS.maxGapMs, stallMs: opts.stallMs };
+  const whole = { label: windowPhrase(opts) === "" ? "run" : "window", since: Math.max(start, opts.since ?? start), until: Math.min(end, opts.until ?? end) };
+  const windows: WindowFigures[] = [windowFigures(scan, tracks, whole, priceRow, t)];
+  const unreached = (label: string): WindowFigures => ({ ...windowFigures(scan, [], { label, since: start, until: start }, null, t), reached: false });
+  for (const level of opts.atLevels) {
+    const at = tracks.map((tr) => ({ name: tr.name, at: levelReached(tr, level) })).filter((x) => x.at !== null) as { name: string | null; at: number }[];
+    const first = at.reduce<{ name: string | null; at: number } | null>((m, x) => (m === null || x.at < m.at ? x : m), null);
+    const label = `to L${level}`;
+    if (first === null) windows.push(unreached(label));
+    else {
+      windows.push(windowFigures(scan, tracks, { label, since: start, until: Math.max(start, first.at) }, priceRow, t));
+      if (tracks.length > 1) notes.push(`${label}: ${at.sort((a, b) => a.at - b.at).map((x) => `${x.name ?? "?"} at ${fmtAge(activeMs(start, x.at, scan.pauses))}`).join(", ")}${at.length < tracks.length ? `; ${tracks.length - at.length} never` : ""}`);
+    }
+  }
+  for (const m of opts.atMinutes) {
+    const at = activeAt(start, m * 60_000, scan.pauses);
+    const label = `to ${m}m`;
+    windows.push(at > end ? unreached(label) : windowFigures(scan, tracks, { label, since: start, until: at }, priceRow, t));
+  }
+
+  // What each shape's figures are, said once.
+  if (shape === "turn-snapshot") {
+    const turns = new Set(scan.calls.map((c) => c.turn).filter((n) => n !== null));
+    const open = [...turns].filter((n) => !scan.turnOutput.has(n!)).length;
+    notes.push(
+      `claude-code: a request is a response record carrying usage (${scan.envelopes} earlier envelope(s) of a message carry none and are not counted); ` +
+        `its input is the finished count, its output the stream's opening snapshot, so output is each turn's claude_result spread evenly over the turn's requests` +
+        (open > 0 ? `; ${open} of ${turns.size} turn(s) have no result (cut short): their requests carry only snapshots, shown as unreported output, never as a figure` : ""),
+    );
+    if (scan.orphanOutput > 0) notes.push(`claude-code: ${fmtTokens(scan.orphanOutput)} output on result(s) whose turn has no request is left out`);
+    notes.push("claude-code: the CLI's charge arrives only on a turn's result, so a cut that ends inside a long turn shows no reported cost for it, not a cost of nothing");
+  } else if (shape === "exec-tally") {
+    notes.push(
+      `codex: a request here is one CLI turn (codex exec), whose usage tallies every model call in it (the CLI reports no per-call figure), on the turn's last response record (${scan.envelopes} earlier one(s) carry none)` +
+        (scan.derived > 0
+          ? `; ${scan.derived} turn(s) recorded the thread's running total, so each is what it added to the previous total (runner/src/codex-usage.ts)${scan.regressions > 0 ? `, ${scan.regressions} drop(s) read as a new baseline` : ""}`
+          : "; each turn's usage is the driver's own per-turn delta"),
+    );
+  }
+  notes.push("uncached input is the prompt less its cache reads (cache writes are in it); reasoning, where reported, is part of output");
+  if (scan.pauses.length > 0) notes.push(`${scan.pauses.length} pause(s): paused time is left out of every minute and per-hour figure, and of the --at-minutes cuts`);
+  notes.push("active time is the wall clock less pause-to-resume spans; a process that died and was resumed with no pause record counts as active");
+  if (scan.wakes.length === 0) notes.push("no wake records: wakes are harness turns (distinct turn numbers among the requests)");
+  else notes.push("wakes are the run's wake records; asleep is their slept time over the active time");
+  notes.push(`stall: a stretch longer than ${fmtAge(opts.stallMs)} with no game progress by stuck's rule (level, xp, turn-ins, money, items, map, ${t.moveYards} yd); time the record does not cover is never a stall${tracks.length > 1 ? "; the run stalls while every character does" : ""}`);
+  const cost =
+    "none" in price
+      ? `not priced: ${price.none}`
+      : `${price.id} at $${price.input}/$${price.output}/$${price.cacheRead}/$${price.cacheWrite} per M (in/out/cache read/write): ${price.basis}, at ${opts.priceAt !== null ? `--price-at ${iso(opts.priceAt).slice(0, 10)}` : `the run's start`} (infra/model-catalogue.json)`;
+
+  if (opts.json) {
+    out(
+      strike(
+        JSON.stringify({
+          run: runId,
+          model: row?.model ?? str(config["model"]),
+          driver,
+          usage: shape,
+          source: via.line,
+          started: start,
+          ended: end,
+          price: "none" in price ? { none: price.none } : { ...price, at: priceAt },
+          windows,
+          notes,
+        }),
+        token,
+      ),
+    );
+    return 0;
+  }
+  const say = (text: string): void => out(cap(strike(text, token), opts.width));
+  say(`${runId}: model requests over ${windows.map((w) => w.label).join(", ")}, UTC`);
+  say(`model     ${row?.model ?? str(config["model"]) ?? "?"} · driver ${driver} · usage ${shape} · started ${iso(start)} · ${row?.ended_at != null ? `ended ${iso(end)}` : owned ? "live" : `last record ${iso(end)}`}`);
+  say(`source    ${via.line}`);
+  say(`price     ${cost}`);
+  const colW = 16;
+  const head = (label: string, cells: readonly string[]): void => say(`${label.padEnd(22)}${cells.map((c) => c.padStart(colW)).join("")}`);
+  const cell = (f: (w: WindowFigures) => string): string[] => windows.map((w) => (w.reached ? f(w) : "not reached"));
+  head("", windows.map((w) => w.label));
+  head("span", cell((w) => `${clock(w.since).slice(6, 11)}–${clock(w.until).slice(6, 11)}`));
+  head("active minutes", cell((w) => w.activeMinutes.toFixed(1)));
+  head(shape === "exec-tally" ? "CLI turns (requests)" : "requests", cell((w) => String(w.requests)));
+  head("  per hour", cell((w) => fmtPer(w.requestsPerHour)));
+  head("uncached in/request", cell((w) => covered(fmtTok(w.uncachedInPerRequest), w.reported.input, w.requests)));
+  head("cached in/request", cell((w) => covered(fmtTok(w.cachedInPerRequest), w.reported.cached, w.requests)));
+  if (windows.some((w) => w.reported.write > 0)) head("cache write/request", cell((w) => covered(fmtTok(w.cacheWritePerRequest), w.reported.write, w.requests)));
+  head("output/request", cell((w) => covered(fmtTok(w.outputPerRequest), w.reported.output, w.requests)));
+  head("  reasoning/request", cell((w) => covered(fmtTok(w.reasoningPerRequest), w.reported.reasoning, w.requests)));
+  const by = scan.wakes.length > 0 ? "wakes" : "turns";
+  head(by, cell((w) => String(w.wakes.count)));
+  head(`  per hour`, cell((w) => fmtPer(w.wakes.perHour)));
+  head(`  requests per ${by === "wakes" ? "wake" : "turn"}`, cell((w) => fmtPer(w.wakes.requestsPer)));
+  if (scan.wakes.length > 0) {
+    head("  asleep", cell((w) => (w.wakes.asleepShare === null ? "—" : `${Math.round(w.wakes.asleepShare * 100)}%`)));
+    head("  fired by", cell((w) => Object.entries(w.wakes.fired).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k, n]) => `${k} ${n}`).join(", ") || "—"));
+  }
+  head("cost reported", cell((w) => (w.reportedUsd === null ? "—" : scan.cli.length > 0 ? fmtUsd(w.reportedUsd) : covered(fmtUsd(w.reportedUsd), w.reported.cost, w.requests))));
+  head("cost priced", cell((w) => (w.pricedUsd === null ? "—" : `${fmtUsd(w.pricedUsd)}${w.reported.output < w.requests ? "*" : ""}`)));
+  if (tracks.length > 0) {
+    head("levels per hour", cell((w) => fmtPer(w.levelsPerHour, 2)));
+    head("turn-ins", cell((w) => String(w.quests)));
+    head("  per hour", cell((w) => fmtPer(w.questsPerHour, 2)));
+    head("stall minutes", cell((w) => `${w.stallMinutes.toFixed(1)}${w.uncoveredMinutes >= 0.05 ? ` (+${w.uncoveredMinutes.toFixed(1)}?)` : ""}`));
+    if (tracks.length > 1 || tracks[0]!.name !== null) {
+      for (const [i, tr] of tracks.entries()) {
+        head(tr.name ?? "?", cell((w) => {
+          const c = w.characters[i]!;
+          return `L${c.levelFrom ?? "?"}→L${c.levelTo ?? "?"}`;
+        }));
+        head("  turn-ins", cell((w) => String(w.characters[i]!.quests)));
+        head("  stall minutes", cell((w) => {
+          const c = w.characters[i]!;
+          return `${c.stallMinutes.toFixed(1)}${c.uncoveredMinutes >= 0.05 ? ` (+${c.uncoveredMinutes.toFixed(1)}?)` : ""}`;
+        }));
+      }
+    }
+  }
+  if (windows.some((w) => w.reached && w.pricedUsd !== null && w.reported.output < w.requests)) notes.unshift("cost priced*: output priced only where it is known");
+  if (tracks.length > 0) notes.push("(+N?) after stall minutes: minutes the record does not cover, judged neither way");
+  for (const n of notes) say(`note      ${n}`);
+  return 0;
+}
+
 // ------------------------------------------------------------------ CLI
 
 const USAGE = `usage: bun infra/inspect-run.ts live
@@ -4000,12 +4935,15 @@ const USAGE = `usage: bun infra/inspect-run.ts live
        bun infra/inspect-run.ts pad <run-id> [--since D] [--until D] [--last N] | --at D
        bun infra/inspect-run.ts stuck [<run-id>] [--window D] [--until D] [--move N] [--max-gap D] [--repeat N] [--hints N] [--schema N] [--restarts N] [--asks N]
        bun infra/inspect-run.ts session <run-id> [--stream events|calls] [--character NAME] [--kind K[,K]] [--grep RE] [--last N | --next N] [--since D] [--until D]
+       bun infra/inspect-run.ts requests <run-id> [--since D] [--until D] [--at-level N[,N]] [--at-minutes N[,N]] [--stall D] [--price-at DAY] [--catalogue FILE] [--json]
 common: [--runs-dir DIR] (else WRATHBENCH_RUNS_DIR, else data/runs) [--width N] [--files]; D is 90s, 30m, 2h, 1d, epoch ms or ISO
 <run-id> may be a fan-out character's session id, <run-id>~<Name>: session reads that character alone (--character), the rest the run
 --next N: the first N items from --since (or the file's start) instead of the last N
 --files: read the files, not ClickHouse (CLICKHOUSE_URL); a live run's run.sqlite is still not opened
 stuck: with no run id, every run with a live owner; --window and --max-gap are durations (2h, 15m), the rest whole numbers
-session: a v1 run's record, events by default; a fan-out run's characters together unless --character; --kind key shows the restating rows`;
+session: a v1 run's record, events by default; a fan-out run's characters together unless --character; --kind key shows the restating rows
+requests: per request, wake and hour over the run (or --since/--until) and up to each cut from its start: --at-level (the first character to reach it),
+  --at-minutes (active minutes, pauses left out); --stall is the shortest stall (default 5m); --price-at re-prices at that day's rates; --json for a script`;
 
 /** `inspect stuck`'s threshold flags, each with the threshold it sets and whether it is a duration. */
 const STUCK_FLAGS: readonly (readonly [string, keyof StuckThresholds, "duration" | "count"])[] = [
@@ -4035,9 +4973,28 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   pad: ["--since", "--until", "--last", "--at"],
   stuck: ["--until", ...STUCK_FLAGS.map(([f]) => f)],
   session: ["--stream", "--character", "--kind", "--grep", "--last", "--next", "--since", "--until"],
+  requests: ["--since", "--until", "--at-level", "--at-minutes", "--stall", "--price-at", "--catalogue", "--json"],
 };
 const COMMON_FLAGS = new Set(["--runs-dir", "--width", "--files"]);
-const VALUED = new Set(["--since", "--until", "--at", "--last", "--next", "--grep", "--width", "--runs-dir", "--stream", "--character", "--kind", ...STUCK_FLAGS.map(([f]) => f)]);
+const VALUED = new Set([
+  "--since",
+  "--until",
+  "--at",
+  "--last",
+  "--next",
+  "--grep",
+  "--width",
+  "--runs-dir",
+  "--stream",
+  "--character",
+  "--kind",
+  "--at-level",
+  "--at-minutes",
+  "--stall",
+  "--price-at",
+  "--catalogue",
+  ...STUCK_FLAGS.map(([f]) => f),
+]);
 
 /**
  * A view of the run asked for by one character's session id: true, with a line
@@ -4095,7 +5052,7 @@ export async function main(
       continue;
     }
     if (!COMMON_FLAGS.has(a) && !allowed.includes(a)) {
-      err(`${VALUED.has(a) || a === "--errors" || a === "--all" ? `${a} does not apply to ${command}` : `unknown flag ${a}`}\n${USAGE}`);
+      err(`${VALUED.has(a) || a === "--errors" || a === "--all" || a === "--json" ? `${a} does not apply to ${command}` : `unknown flag ${a}`}\n${USAGE}`);
       return 2;
     }
     if (VALUED.has(a)) {
@@ -4168,7 +5125,8 @@ export async function main(
     const runId = target.runId;
     // A character's session id: `session` reads that character's record; every
     // other view is the run's, whose trajectory is the one agent's.
-    if (target.character !== null && command !== "session" && !sessionOfRun(runsDir, runId, target.character, out)) return 1;
+    // `--json` keeps stdout to the one object, so the line saying so goes to stderr.
+    if (target.character !== null && command !== "session" && !sessionOfRun(runsDir, runId, target.character, flags.has("--json") ? err : out)) return 1;
     const last = count("--last");
     const next = count("--next");
     for (const [f, n] of [["--last", last], ["--next", next]] as const) {
@@ -4178,6 +5136,40 @@ export async function main(
       }
     }
     if (command === "run") return await inspectRun(runId, { ...base, ...window }, out);
+    if (command === "requests") {
+      const list = (f: string): number[] | null => {
+        if (!flags.has(f)) return [];
+        const xs = (flags.get(f) as string).split(",").map((x) => Number(x.trim()));
+        return xs.length > 0 && xs.every((x) => Number.isInteger(x) && x >= 1) ? xs : null;
+      };
+      const atLevels = list("--at-level");
+      const atMinutes = list("--at-minutes");
+      for (const [f, xs] of [["--at-level", atLevels], ["--at-minutes", atMinutes]] as const) {
+        if (xs === null) {
+          err(`${f} is a whole number of at least 1, or several comma-separated`);
+          return 2;
+        }
+      }
+      const stallMs = flags.has("--stall") ? parseDuration(flags.get("--stall") as string) : STALL_DEFAULT_MS;
+      if (!(stallMs > 0)) {
+        err("--stall is a duration: 90s, 5m, 1h");
+        return 2;
+      }
+      let priceAt: number | null = null;
+      if (flags.has("--price-at")) {
+        const day = flags.get("--price-at") as string;
+        priceAt = /^\d{4}-\d{2}-\d{2}$/.test(day) ? Date.parse(`${day}T00:00:00Z`) : Number.NaN;
+        if (!Number.isFinite(priceAt)) {
+          err("--price-at is a day, YYYY-MM-DD");
+          return 2;
+        }
+      }
+      return await inspectRequests(
+        runId,
+        { ...base, ...window, atLevels: atLevels!, atMinutes: atMinutes!, stallMs, priceAt, catalogue: (flags.get("--catalogue") as string | undefined) ?? null, json: flags.has("--json") },
+        out,
+      );
+    }
     if (command === "tools") return await inspectTools(runId, { ...base, ...window }, out);
     if (command === "pad") {
       const at = times["--at"];

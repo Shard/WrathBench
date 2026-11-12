@@ -307,4 +307,33 @@ describe("the CLI", () => {
     expect(run(["secrets", "clear", "OPENROUTER_KEY", "--db", path], {}).code).toBe(0);
     expect(storedSecretsAt(path)).toEqual([]);
   });
+
+  test("list says whether the key is set and opens, with no secret stored too", () => {
+    const { store, path } = seeded();
+    store.close();
+    const none = run(["secrets", "list", "--db", path], {});
+    expect(none.code).toBe(0);
+    expect(none.out).toContain(`store key: not configured (${STORE_KEY_ENV} is not set)`);
+    expect(none.out).toContain("no stored secrets");
+    const set = run(["secrets", "list", "--db", path], { [STORE_KEY_ENV]: KEY_HEX });
+    expect(set.out).toMatch(new RegExp(`store key: ${STORE_KEY_ENV} is set \\(key id [0-9a-f]{8}\\), and it opens what it seals`));
+    expect(set.out).not.toContain(KEY_HEX);
+    expect(run(["secrets", "list", "--db", path], { [STORE_KEY_ENV]: "not-a-key" }).out).toContain(`store key: ${STORE_KEY_ENV} is set but unusable`);
+  });
+
+  test("a stored secret whose bytes were changed reads as not opening, not as opens", () => {
+    const { store, path } = seeded();
+    store.close();
+    const env = { [STORE_KEY_ENV]: KEY_HEX };
+    expect(run(["secrets", "set", "OPENROUTER_KEY", "--db", path], env, `${SENTINEL}\n`).code).toBe(0);
+    const db = new Database(path);
+    const sealed = (db.query("SELECT sealed FROM config_secrets WHERE name = 'OPENROUTER_KEY'").get() as { sealed: string }).sealed;
+    const parts = sealed.split(".");
+    parts[3] = Buffer.from("tampered").toString("base64url");
+    db.run("UPDATE config_secrets SET sealed = ? WHERE name = 'OPENROUTER_KEY'", [parts.join(".")]);
+    db.close();
+    const out = run(["secrets", "list", "--db", path], env).out;
+    expect(out).toContain("does not open");
+    expect(out).not.toMatch(/OPENROUTER_KEY.*\bopens$/m);
+  });
 });
