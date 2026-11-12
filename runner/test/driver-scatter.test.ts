@@ -40,6 +40,7 @@ const OWNERS = [
   "runner/src/pi-extension.ts",
   "runner/src/codex-usage.ts",
   "runner/src/codex-rollout.ts",
+  "runner/src/codex-login.ts",
   "runner/src/reference-adapter.ts",
   "runner/src/reference-program.ts",
   // The private program's place in a build that carries it (gitignored here).
