@@ -431,10 +431,15 @@ hard".
 **Provenance is stamped, and partial.** Every run carries the harness build
 and the comparability tuple — series, prompt hash of the rendered bytes,
 harness tag, effort, episode id and budget, objective presence, `wikiCoords`,
-`wiki`, routing, bundle identity, module build. Not yet: a hash of the SDK
-source, the AzerothCore pin, the contract version, the compose configuration.
-A run is traceable to a build of this repository, not yet to one manifest
-naming every version it depended on.
+`wiki`, routing, bundle identity, module build. Beside the tuple, as labels
+outside it, `meta.json` names the stack's version and the wrath-mcp commit the
+run's stack came from, `-dirty` when its checkout differed from that commit
+(2026-10-29), and a v1 run's session record names the stack's version and
+commit again with the module's build and wire protocol (2026-11-12). Not yet:
+the AzerothCore pin and the deployment's configuration, which a run reaches
+only through the module build's tag. A run is traceable to a build of this
+repository and a commit of the stack, not yet to one manifest naming every
+version it depended on.
 
 **A CLI-scaffold run's cost is not comparable to an API-driver one.** The CLI
 harnesses run one growing conversation rather than the fixed window and bill a
