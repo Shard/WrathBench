@@ -575,6 +575,18 @@ describe("parseFleet", () => {
     ).toThrow(/routing is an OpenRouter setting — this entry runs on the pi CLI/);
   });
 
+  test("campaignOnly parses as true or absent, carries to the projection, and leaves no idle work", () => {
+    const ds = { tier: "t0", model: "deepseek/deepseek-v4.1-flash", routing: "DeepInfra" };
+    const config = parseFleet(fleetJson([], { roster: { "ds-a": { ...ds, campaignOnly: true }, "ds-b": { ...ds, campaignOnly: true }, ds } }));
+    expect(config.roster["ds-a"]).toMatchObject({ campaignOnly: true, idle: "none" });
+    expect(config.roster["ds"]!.campaignOnly).toBeUndefined();
+    expect(rosterModels(config.roster).map((m) => m.campaignOnly ?? false)).toEqual([true, true, false]);
+    for (const bad of [false, "yes", 1]) {
+      expect(() => parseFleet(fleetJson([], { roster: { ds: { ...ds, campaignOnly: bad } } }))).toThrow(/campaignOnly is true or absent/);
+    }
+    expect(() => parseFleet(fleetJson([], { roster: { ds: { ...ds, campaignOnly: true, idle: "unlimited" } } }))).toThrow(/campaignOnly entry has no idle work/);
+  });
+
   test("policy.routing is the fleet default, and an entry's own routing wins", () => {
     const config = parseFleet(
       fleetJson([], {
@@ -2060,6 +2072,14 @@ describe("scheduling policy: defer ladder and retirement", () => {
     // A campaign's square names its probe identity.
     const probe = job({ ref: "ds-pi", episode: "probing", probe: { campaign: "pi-vs", version: 1, cell: "c", arm: "pi" } });
     expect(runnableRefs(probe, withPi)).toEqual(["ds-pi"]);
+  });
+
+  test("a campaignOnly entry runs under a campaign's job and no other, on any driver", () => {
+    const withProbe: Record<string, FleetRosterEntry> = { ...roster, "ds-probe": { model: "deepseek/deepseek-v4.1-flash", tier: "t0", idle: "none", campaignOnly: true } };
+    expect(runnableRefs(job({ ref: "ds-probe" }), withProbe)).toEqual([]);
+    expect(runnableRefs(job({ ref: "ds-probe", episode: "freeplay" }), withProbe)).toEqual([]);
+    const probe = job({ ref: "ds-probe", episode: "probing", probe: { campaign: "program-probe", version: 1, cell: "c", arm: "snippet" } });
+    expect(runnableRefs(probe, withProbe)).toEqual(["ds-probe"]);
   });
 
   test("the policy fills the accounts the queue leaves free, never while a manual job waits, never a second run", () => {

@@ -152,8 +152,8 @@ export interface CampaignView {
    */
   concluded: boolean;
   /**
-   * In RUNS, all five: `want` is cells × arms × Σ runsPerCell over the
-   * assignments the roster still holds; `done` the counted runs, never more per
+   * In RUNS, all five: `want` is Σ runsPerCell over the squares (cell, arm)
+   * of the assignments the roster still holds, each sweeping its `arms`; `done` the counted runs, never more per
    * square than it wants; `capped` the runs wanted on squares abandoned at
    * the attempt cap, which are never coming — so `done + capped === want`
    * exactly when every square is settled; `attempted` every launch, counted

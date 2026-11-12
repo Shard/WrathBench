@@ -391,6 +391,8 @@ export interface RosterModel {
   idle?: IdleMode;
   /** Operator override of the billing verdict (`model-cost.ts`). */
   billing?: Billing;
+  /** Runs only as a probe campaign's assignment (`FleetRosterEntry.campaignOnly`): projected like a probe-only driver's entry. */
+  campaignOnly?: true;
 }
 
 /**
@@ -728,10 +730,13 @@ export interface ModelState {
   /** What it does with an account once its tier is spent. */
   idle: IdleMode;
   /**
-   * The entry's driver is probe-only (`DriverEntry.probeOnly`): no target, no
-   * eligible episode and no idle work, so only a probe campaign runs it.
+   * The entry's driver is probe-only (`DriverEntry.probeOnly`), or the entry
+   * says `campaignOnly`: no target, no eligible episode and no idle work, so
+   * only a probe campaign runs it.
    */
   probeOnly?: true;
+  /** The probe-only status is the entry's own `campaignOnly`, not its driver's. */
+  campaignOnly?: true;
   /** Episode tiers the model may be scheduled on, in policy order. */
   eligible: EpisodeId[];
   perEpisode: Partial<Record<EpisodeId, EpisodeStats>>;
@@ -2159,8 +2164,9 @@ export function projectModel(
   const earnedRung1 = perEpisode.e90!.reachedL5;
   const tier = effectiveTier(r.tier, earnedRung1);
   // A probe-only driver's entry is no scored lane's: its tier buys nothing
-  // until the operator promotes the driver (`DriverEntry.probeOnly`).
-  const probeOnly = isProbeOnlyDriver(r.driver);
+  // until the operator promotes the driver (`DriverEntry.probeOnly`). A
+  // campaignOnly entry is the same on any driver.
+  const probeOnly = isProbeOnlyDriver(r.driver) || r.campaignOnly === true;
   for (const ep of STATS_EPISODES) perEpisode[ep]!.target = probeOnly ? 0 : targetFor(tier, ep);
 
   // Eligibility falls out of the budget: an episode the tier buys no runs of is
@@ -2209,6 +2215,7 @@ export function projectModel(
     earnedRung1,
     idle: probeOnly ? "none" : (r.idle ?? "none"),
     ...(probeOnly ? { probeOnly: true as const } : {}),
+    ...(r.campaignOnly === true ? { campaignOnly: true as const } : {}),
     eligible,
     perEpisode,
     ladder,
@@ -2362,6 +2369,7 @@ export function schedulability(
     return blocked(`paused run ${s.paused.runId} (${s.paused.reason}, ${spent}${of} elapsed) — ${fate}`);
   }
   // Free, so a probe campaign may take it, and owing nothing, so nothing else does.
+  if (s.campaignOnly === true) return { verdict: "free", why: "campaignOnly: it runs only as a probe campaign's assignment" };
   if (s.probeOnly === true) return { verdict: "free", why: probeOnlyRefusal(harnessDriver(s.harness)?.id ?? s.harness) };
   // Three failed attempts on an episode stop the spending. The
   // model is blocked rather than "free": idle work is not the reward for

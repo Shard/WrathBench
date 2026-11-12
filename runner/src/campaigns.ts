@@ -59,6 +59,12 @@ export const campaignAssignmentSchema = z
     /** A roster name: the catalog entry whose model, effort and credentials the runs use. */
     model: z.string().min(1),
     runsPerCell: z.number().int().positive().default(1),
+    /**
+     * The arms this assignment sweeps, by id. Absent: every arm. An entry runs
+     * one square at a time, so arms meant to run side by side are given to
+     * separate entries, one arm each.
+     */
+    arms: z.array(z.string().min(1)).min(1).optional(),
   })
   .strict();
 export type CampaignAssignment = z.infer<typeof campaignAssignmentSchema>;
@@ -242,7 +248,7 @@ export function campaignPairRefusals(
   for (const a of c.assignments) {
     const entry = roster[a.model];
     if (entry === undefined) continue;
-    for (const arm of c.arms) {
+    for (const arm of assignmentArms(c, a)) {
       const reasons: string[] = [];
       if (entry.refused !== undefined) reasons.push(`roster entry ${a.model} is refused, so nothing schedules it`);
       const pins = arm.image !== undefined ? `image ${arm.image}` : arm.command !== undefined ? `command ${arm.command.join(" ")}` : undefined;
@@ -324,7 +330,7 @@ export function campaignRowProblem(name: string, spec: unknown): string | null {
   if (!CAMPAIGN_NAME.test(name)) return `campaign ${name}: the id must match ${CAMPAIGN_NAME}`;
   const parsed = campaignRowSchema.safeParse(spec);
   if (parsed.success) return null;
-  return `campaign ${name}: ${issuesOf(parsed.error)} — a row is { version, enabled, assignments [{ model, runsPerCell }], account?, accounts?, credential?, excludeUnhealthy?, concluded? }`;
+  return `campaign ${name}: ${issuesOf(parsed.error)} — a row is { version, enabled, assignments [{ model, runsPerCell, arms? }], account?, accounts?, credential?, excludeUnhealthy?, concluded? }`;
 }
 
 /**
@@ -368,6 +374,11 @@ export function parseCampaigns(
       continue;
     }
     const def = published.def;
+    const unknownArm = row.assignments.flatMap((a) => (a.arms ?? []).filter((id) => !def.arms.some((arm) => arm.id === id)).map((id) => `${a.model}: ${id}`));
+    if (unknownArm.length > 0) {
+      refused.push({ key: `campaigns/${name}`, campaign: name, reason: `campaign ${name}: an assignment names an arm ${ref} does not have (${unknownArm.join(", ")}; its arms are ${def.arms.map((a) => a.id).join(", ")})` });
+      continue;
+    }
     const partyProblem = partyRowProblem(def, row);
     if (partyProblem !== null) {
       refused.push({ key: `campaigns/${name}`, campaign: name, reason: `campaign ${name}: ${partyProblem}` });
@@ -478,6 +489,11 @@ export function campaignAssignments(
   const named = c.assignments.filter((a) => catalog.includes(a.model));
   if (!c.excludeUnhealthy || eligible === undefined) return named;
   return named.filter((a) => eligible(a.model));
+}
+
+/** The arms an assignment sweeps: its `arms`, in the definition's order, else every arm. */
+export function assignmentArms(c: Pick<Campaign, "arms">, a: Pick<CampaignAssignment, "arms">): readonly CampaignArm[] {
+  return a.arms === undefined ? c.arms : c.arms.filter((arm) => a.arms!.includes(arm.id));
 }
 
 /** Which square a probe job is: travels on a pick, a job and a resume. */
@@ -635,7 +651,7 @@ export function campaignSquares(c: Campaign, catalog: readonly string[], probeRu
   const out: CampaignSquare[] = [];
   for (const a of campaignAssignments(c, catalog)) {
     for (const cell of c.cells) {
-      for (const arm of c.arms) {
+      for (const arm of assignmentArms(c, a)) {
         const t = tally.get(squareKey(c.name, c.version, a.model, arm.id, cell.id)) ?? { done: 0, reached: 0, attempts: 0, live: 0 };
         const capped = c.maxAttemptsPerCell !== undefined && t.attempts >= c.maxAttemptsPerCell;
         out.push({
