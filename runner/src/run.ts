@@ -1390,6 +1390,7 @@ async function main(): Promise<void> {
           turnOffset,
           signal: abort.signal,
           onObservationStalled,
+          ...(programWake !== undefined ? { programWake } : {}),
         })
       : runLoop({
           config,

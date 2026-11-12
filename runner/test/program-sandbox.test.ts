@@ -7,11 +7,13 @@
  * that was running back. No module: the routines touch nothing of the game.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Scratchpad } from "@wrathbench/mcp";
 import { Workspace } from "@wrathbench/mcp/workspace";
 import { leaseSessionSecret } from "@wrathbench/mcp/module-auth";
 import { StubAdapter, type ChatRequest } from "../src/adapter";
+import { runCodexEpisode } from "../src/adapter-codex";
 import { loadRunConfig } from "../src/config";
 import { EpisodicLog } from "../src/episodic";
 import { runLoop } from "../src/loop";
@@ -125,5 +127,117 @@ describe("the program loop over a real sandbox", () => {
     await again.start();
     expect(again.program!.routines().find((r) => r.name === "idle")).toMatchObject({ state: "running", deploy: 1 });
     expect(resumedWake.waker.peek().map((r) => r.key)).toContain("sandbox_restart");
+  }, 60_000);
+});
+
+// ------------------------------------------------------------ the codex driver
+
+/** A directory holding a `codex` that runs the scripted fake (`fixtures/fake-codex.ts`). */
+function fakeCodexBin(): string {
+  const dir = tempDir("wrathbench-program-codex-bin-");
+  const path = join(dir, "codex");
+  writeFileSync(path, `#!/bin/sh\nexec ${process.execPath} ${join(import.meta.dir, "fixtures", "fake-codex.ts")} "$@"\n`, "utf8");
+  chmodSync(path, 0o755);
+  return path;
+}
+
+/** A codex home that looks logged in. */
+function fakeCodexHome(): string {
+  const dir = tempDir("wrathbench-program-codex-home-");
+  writeFileSync(join(dir, "auth.json"), '{"auth_mode":"chatgpt","tokens":{"access_token":"fake"}}\n', "utf8");
+  return dir;
+}
+
+/** A program-loop codex run over a real sandbox, its CLI the fake playing `calls` (one list per turn). */
+async function codexProgramRun(calls: unknown[][], o: { maxTurns?: number; idleMs?: number; signal?: AbortSignal } = {}) {
+  const runDir = tempDir("wrathbench-program-codex-");
+  const config = {
+    ...loadRunConfig({
+      driver: "codex",
+      model: "gpt-6.1-sol",
+      credential: "chatgpt-1",
+      usageMaxPct: { scored: 80, freeplay: 80 },
+      episode: "probing",
+      stepIntervalMs: 50,
+      stateIntervalMs: 1,
+      loop: "program",
+      yield: true,
+      ...(o.maxTurns !== undefined ? { maxTurns: o.maxTurns } : {}),
+    }),
+    runId: "run-program-codex",
+    token: "run-program-codex",
+  };
+  const trajectory = new Trajectory(runDir);
+  trajectory.writeMeta({ runId: config.runId, harnessVersion: "t", startedAt: Date.now(), config });
+  const wake = new ProgramWake({ trajectory, tickMs: 20, coalesceMs: 100 });
+  const module = startStub();
+  stubs.push(module);
+  const lease = await leaseSessionSecret({ moduleUrl: module.url, token: TOKEN, account: "RUNNER", env: { WRATHBENCH_MODULE_SECRET: PORT_SECRET } });
+  const sandbox = host(runDir, wake, module, lease.secret!);
+  expect((await sandbox.evalSnippet(LOGIN)).value).toContain("Thalvorn");
+  const record = join(runDir, "fake-record.json");
+  const started = Date.now();
+  const outcome = await runCodexEpisode({
+    config: config as typeof config & { runId: string; token: string },
+    runDir,
+    sandbox,
+    scratchpad: new Scratchpad(join(runDir, "scratchpad.md")),
+    episodic: new EpisodicLog(join(runDir, "episodic.jsonl")),
+    trajectory,
+    watchdogs: new Watchdogs({ ...config.watchdogs, ...(o.idleMs !== undefined ? { idleMs: o.idleMs } : {}) }),
+    codexBin: fakeCodexBin(),
+    env: { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "/tmp", CODEX_HOME: fakeCodexHome() },
+    extraEnv: { WB_FAKE_MODE: "tools", WB_FAKE_RECORD: record, WB_FAKE_CALLS: JSON.stringify(calls) },
+    killGraceMs: 500,
+    programWake: wake,
+    ...(o.signal !== undefined ? { signal: o.signal } : {}),
+  });
+  trajectory.close();
+  return { outcome, ms: Date.now() - started, rec: JSON.parse(readFileSync(record, "utf8")) as Record<string, unknown>, records: readTrajectory(runDir) };
+}
+
+describe("the program loop on the codex driver, through the fake CLI", () => {
+  test("the turn-end pause sleeps until a wake, whose block opens the next turn; yield is served and answers its wake", async () => {
+    const r = await codexProgramRun(
+      [
+        [
+          { name: "write_file", arguments: { path: "main.ts", content: MAIN } },
+          { name: "start_routine", arguments: { name: "trip", args: { to: "Goldshire" } } },
+        ],
+        [
+          { name: "start_routine", arguments: { name: "idle" } },
+          { name: "yield", arguments: { seconds: 1 } },
+        ],
+      ],
+      { maxTurns: 2 },
+    );
+    expect(r.outcome).toEqual({ kind: "terminated", reason: "turn-limit", detail: "2 turns" });
+    // The program's prompt, tools and the raised tool timeout are what the CLI was handed.
+    expect(String(r.rec["instructions"])).toContain("## Your program");
+    const served = (r.rec["mcpToolsLists"] as { tools: { name: string }[] }[])[0]!.tools.map((t) => t.name);
+    expect(served).toEqual(expect.arrayContaining(["write_file", "start_routine", "stop_routine", "yield"]));
+    expect((r.rec["argvs"] as string[][])[0]).toContain("mcp_servers.wrathbench.tool_timeout_sec=600");
+    // The second turn opens with the wake trip's end caused, and only that turn.
+    const messages = r.rec["userMessages"] as string[];
+    expect(messages[0]).not.toContain("[wake");
+    expect(messages[1]).toMatch(/^\[turn 2\]\n\n\[wake 1 · slept \d+s · woke for: routine ended \(trip, returned\)\]/);
+    const results = r.records.filter((x) => x.t === "tool_result").map((x) => [x["name"], String(x["text"])]);
+    expect(results.find(([n]) => n === "write_file")?.[1]).toContain("loaded: deploy 1 · routines: idle, trip");
+    expect(results.find(([n]) => n === "yield")?.[1]).toContain("[wake 2 · slept 1s · woke for: 1s passed]");
+    expect(r.records.filter((x) => x.t === "wake").map((x) => [x["via"], x["fired"]])).toEqual([
+      ["turn-end", "routine_ended"],
+      ["yield", "cap"],
+    ]);
+  }, 60_000);
+
+  test("a stop request ends the sleep at once, and time asleep is not idle", async () => {
+    const ac = new AbortController();
+    // Nothing runs, so the turn-end sleep would last five minutes; idle is far shorter than the sleep.
+    setTimeout(() => ac.abort(), 6_000);
+    const r = await codexProgramRun([[{ name: "write_file", arguments: { path: "main.ts", content: MAIN } }]], { idleMs: 3_000, signal: ac.signal });
+    expect(r.outcome).toEqual({ kind: "terminated", reason: "manual", detail: "aborted" });
+    expect(r.ms).toBeLessThan(15_000);
+    expect(r.records.filter((x) => x.t === "wake").map((x) => [x["via"], x["fired"]])).toEqual([["turn-end", "stopped"]]);
+    expect(r.records.some((x) => x.t === "watchdog")).toBe(false);
   }, 60_000);
 });

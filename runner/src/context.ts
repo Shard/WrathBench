@@ -74,6 +74,15 @@ export const CONTEXT_POLICY = {
    */
   WINDOW_MESSAGE_CHARS: 4_000,
   /**
+   * Tool results the per-message cap does not cut: the program loop's
+   * `read_file`, whose answer is a workspace file exactly as stored and is
+   * already bounded by the 32,000-char file cap (a cut file cannot be read
+   * back at all: it has no range), and its `yield`, whose answer is the
+   * [wake] block, bounded by its own caps. The snippet loop serves neither,
+   * so its window is cut as it always was. Older results still fold.
+   */
+  WINDOW_UNCAPPED_TOOLS: ["read_file", "yield"] as readonly string[],
+  /**
    * Max chars of a call's arguments on a folded tool result's line
    * (`foldToolResult`). Short on purpose: the call itself stays in the window
    * as the model sent it, so the line only has to say which call it answers.
@@ -1850,7 +1859,8 @@ function windowMessage(m: HistoryMessage): ChatMessage {
 
 /**
  * A window as it is sent: the tool results among its first `fold` messages
- * folded, every other message capped, and nothing but `ChatMessage` fields.
+ * folded, every other message capped (but the results of
+ * `WINDOW_UNCAPPED_TOOLS`), and nothing but `ChatMessage` fields.
  * The one rendering the loop, the writer's self-check and the replay share.
  *
  * A tool result is matched to its call by position after the assistant
@@ -1872,6 +1882,7 @@ export function renderWindow(
     } else if (m.role === "tool") {
       const call = calls[answered++]?.function;
       if (i < fold) return foldToolResult(call, m);
+      if (call !== undefined && CONTEXT_POLICY.WINDOW_UNCAPPED_TOOLS.includes(call.name)) return windowMessage(m);
     }
     return capWindowMessage(windowMessage(m), cap);
   });

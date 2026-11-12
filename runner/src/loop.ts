@@ -685,6 +685,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       ? {
           program,
           onRoutinesShown: () => programWake.routinesShown(),
+          onResultShown: () => programWake.resultShown(),
           ...(programPrompt?.yield === true
             ? {
                 yieldWake: async (seconds: number): Promise<string> => {

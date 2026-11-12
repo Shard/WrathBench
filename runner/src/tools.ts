@@ -132,6 +132,8 @@ export interface ToolContext extends CoreToolContext {
   yieldWake?: ((seconds: number) => Promise<string>) | undefined;
   /** Called after a routine tool answered: its routine lines are the model's news of every routine's state. */
   onRoutinesShown?: (() => void) | undefined;
+  /** Called after any tool result is ready for the model: the action hints pending at its drain ride it (`ProgramWake.resultShown`). */
+  onResultShown?: (() => void) | undefined;
 }
 
 /**
@@ -701,14 +703,18 @@ export function nearestTool(name: string): string | undefined {
  * snippet's result already carries its own. Either way the result is scrubbed
  * of registered secrets.
  */
-export function callTool(ctx: ToolContext, name: string, args: unknown, origin: CallOrigin = {}): Promise<ToolResult> {
+export async function callTool(ctx: ToolContext, name: string, args: unknown, origin: CallOrigin = {}): Promise<ToolResult> {
   const served = toolSetOf(ctx);
-  return served.set.call(served.ctx, name, args, origin);
+  const result = await served.set.call(served.ctx, name, args, origin);
+  ctx.onResultShown?.();
+  return result;
 }
 
 /** `result` with the pending hint block at its foot (the stack's `appendPendingActionHints`). */
-export function appendPendingActionHints(ctx: ToolContext, result: ToolResult): Promise<ToolResult> {
-  return appendPending(ctx, result);
+export async function appendPendingActionHints(ctx: ToolContext, result: ToolResult): Promise<ToolResult> {
+  const out = await appendPending(ctx, result);
+  ctx.onResultShown?.();
+  return out;
 }
 
 /** Whether a run's sandbox serves the fan-out tools: for a caller that lists tools with no tool context. */

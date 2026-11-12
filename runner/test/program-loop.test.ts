@@ -13,6 +13,7 @@ import { Scratchpad } from "@wrathbench/mcp";
 import { StubAdapter, type ChatRequest } from "../src/adapter";
 import { campaignPairRefusals, type PairRosterEntry } from "../src/campaigns";
 import { comparabilityOf, promptHash } from "../src/comparability";
+import { capWindowMessage, CONTEXT_POLICY, renderWindow, type HistoryMessage } from "../src/context";
 import { loadRunConfig, programLoopRefusal } from "../src/config";
 import { EpisodicLog } from "../src/episodic";
 import { runLoop } from "../src/loop";
@@ -86,6 +87,9 @@ describe("config, flags and the tuple", () => {
     expect(refused(["--driver", "stub", "--loop", "nope"])).toContain("--loop takes program or snippet");
     expect(programLoopRefusal({ loop: "program", driver: "stub", episode: "freeplay", continuedFrom: "r0" })).toContain("--continue-from");
     expect(programLoopRefusal({ loop: "program", driver: "openai", episode: "probing" })).toBeNull();
+    // codex runs it (its turn-end pause is the sleep); pi and claude-code, whose one turn runs for hours, do not yet.
+    expect(programLoopRefusal({ loop: "program", yield: true, driver: "codex", episode: "probing" })).toBeNull();
+    expect(programLoopRefusal({ loop: "program", driver: "pi", episode: "probing" })).toContain("runs a CLI's own turn loop");
     expect(programLoopRefusal({ driver: "openai", episode: "e90" })).toBeNull();
   });
 
@@ -94,16 +98,16 @@ describe("config, flags and the tuple", () => {
   });
 
   test("a campaign pair refuses the program loop on a scaffold and --yield without it", () => {
-    const roster: Record<string, PairRosterEntry> = { ds: { driver: "openai" }, cc: { driver: "claude-code" } };
+    const roster: Record<string, PairRosterEntry> = { ds: { driver: "openai" }, cc: { driver: "claude-code" }, cx: { driver: "codex" } };
     const arms = [
       { id: "snippet" },
       { id: "program", args: ["--loop", "program"] },
       { id: "program-yield", args: ["--loop", "program", "--yield", "true"] },
       { id: "stray", args: ["--yield", "true"] },
     ];
-    const c = { name: "program-probe", version: 1, arms, assignments: [{ model: "ds", runsPerCell: 1 }, { model: "cc", runsPerCell: 1 }] };
+    const c = { name: "program-probe", version: 1, arms, assignments: [{ model: "ds", runsPerCell: 1 }, { model: "cc", runsPerCell: 1 }, { model: "cx", runsPerCell: 1 }] };
     const out = campaignPairRefusals(c, roster).map((r) => `${r.ref}:${r.arm}`);
-    expect(out.sort()).toEqual(["cc:program", "cc:program-yield", "cc:stray", "ds:stray"]);
+    expect(out.sort()).toEqual(["cc:program", "cc:program-yield", "cc:stray", "cx:stray", "ds:stray"]);
   });
 });
 
@@ -142,6 +146,14 @@ describe("the program prompt", () => {
   test("a successful load restarts every running routine, as the stack does", () => {
     expect(program).toContain("When a load succeeds, every running routine is stopped and started again from the top with the same arguments.");
     expect(program).not.toContain("A running routine whose code changed is stopped");
+  });
+
+  test("the codex harness renders the program body too, and its snippet body is the one it always was", () => {
+    const codexProgram = buildSystemPrompt(undefined, "probing", "codex", true, 5_400_000, { yield: true });
+    expect(codexProgram).toContain("## Your program");
+    expect(codexProgram).toContain("- yield: sleep until something wakes you.");
+    expect(codexProgram.endsWith(`${PROGRAM_BODY_TAIL} ${PROGRAM_YIELD_TAIL}`)).toBe(true);
+    expect(buildSystemPrompt(undefined, "probing", "codex", true, 5_400_000, programPromptOf({}))).toBe(buildSystemPrompt(undefined, "probing", "codex", true, 5_400_000));
   });
 
   test("yield adds one bullet and one closing sentence, and nothing else", () => {
@@ -478,6 +490,28 @@ describe("ProgramWake", () => {
     expect(second.block).toContain("[wake 2 · slept 5m00s · woke for: five minutes passed]");
   });
 
+  test("a refusal a tool result carried does not wake a later sleep, even when its fact lands late; a new one does", async () => {
+    // Round 1's wake 9: a refusal of deploy 6, shown in a result, then a save, then a yield that woke at its floor for it.
+    const c = fakeClock(10_000_000);
+    const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
+    const p = fakeProgram();
+    const refusal = (ts: number, status: string): ProgramFact => ({ kind: "refusal", ts, routine: "grind", deploy: 6, action: "moveTo", status, hint: "h", signature: `grind||moveTo|${status}`, fresh: true });
+    p.push(refusal(c.now(), "path_incomplete"), wake);
+    c.advance(500);
+    const late = refusal(c.now() - 200, "too_far");
+    wake.resultShown();
+    // Its fact arrives after the result that carried its hint: still not news.
+    p.push(late, wake);
+    p.push({ kind: "loaded", ts: c.now(), deploy: 7, routines: ["grind"], restarted: ["grind"], dropped: [], by: "save" }, wake);
+    const first = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false });
+    expect(first.fired).toBe("cap");
+    // The signatures are still the wake's to show.
+    expect(first.block).toContain("path_incomplete");
+    c.schedule(30_000, () => p.push(refusal(c.now(), "no_path"), wake));
+    const second = await wake.sleep(p, { via: "yield", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false });
+    expect(second.fired).toBe("refusal");
+  });
+
   test("a death and a closed stream wake; a notice the context showed does not", async () => {
     const c = fakeClock();
     const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
@@ -597,6 +631,16 @@ describe("the fixed loop on the program loop", () => {
     ]);
   });
 
+  test("a refusal from before a tool result is delivered with it, so the turn-end sleep after does not wake for it", async () => {
+    const s = programSetup([
+      { content: null, toolCalls: [{ name: "run_snippet", arguments: { code: "1" } }] },
+      { content: "waiting", toolCalls: [] },
+    ]);
+    s.program.push({ kind: "refusal", ts: s.clock.now(), routine: "grind", deploy: 2, action: "moveTo", status: "too_far", hint: "h", signature: "grind||moveTo|too_far", fresh: true }, s.wake);
+    await runLoop(s.options);
+    expect(userOf(s.requests[2]!)).toContain("woke for: five minutes passed]");
+  });
+
   test("yield answers the wake as its result, and the next request does not repeat it", async () => {
     const s = programSetup(
       [
@@ -614,5 +658,25 @@ describe("the fixed loop on the program loop", () => {
     expect(String(result?.["text"])).toContain('[wake 1 · slept 22s · woke for: wake("bags full") from grind]');
     expect(userOf(s.requests[1]!)).not.toContain("[wake");
     expect(records.find((r) => r.t === "wake")).toMatchObject({ via: "yield", turn: 1, fired: "wake", maxMs: WAKE_CAP_MS });
+  });
+});
+
+describe("the window cap and the program's tools", () => {
+  test("read_file and yield results are sent whole; every other message is capped as it always was", () => {
+    const long = "x".repeat(10_000);
+    const call = (id: string, name: string) => ({ id, type: "function" as const, function: { name, arguments: "{}" } });
+    const window: HistoryMessage[] = [
+      { role: "assistant", content: null, tool_calls: [call("a", "read_file"), call("b", "run_snippet"), call("c", "yield")] },
+      { role: "tool", tool_call_id: "a", content: long },
+      { role: "tool", tool_call_id: "b", content: long },
+      { role: "tool", tool_call_id: "c", content: long },
+    ];
+    const sent = renderWindow(window, 0).map((m) => String(m.content));
+    expect(sent[1]).toBe(long);
+    expect(sent[2]).toBe(capWindowMessage({ role: "tool", tool_call_id: "b", content: long }).content as string);
+    expect(sent[2]).toEndWith(`…[truncated ${10_000 - CONTEXT_POLICY.WINDOW_MESSAGE_CHARS} chars]`);
+    expect(sent[3]).toBe(long);
+    // Folded like any result once the window's older block.
+    expect(String(renderWindow(window, 4)[1]!.content)).toStartWith("[folded by harness] read_file");
   });
 });

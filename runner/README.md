@@ -1264,9 +1264,10 @@ not reproduce those bytes either.
 ## The program loop (a probe arm, not adopted)
 
 `--loop program` (config `loop: "program"`) is a spike's probe arm, on the
-fixed loop only and refused on a scored tier, at fan-out, on a continuation
-and on a CLI driver (`programLoopRefusal`; a campaign pair is refused the same
-way). The sandbox then hosts the model's program (the stack's
+fixed loop and the codex driver, and refused on a scored tier, at fan-out, on
+a continuation and on claude-code and pi, whose one turn runs for hours
+(`programLoopRefusal`, `DriverEntry.programLoop`; a campaign pair is refused
+the same way). The sandbox then hosts the model's program (the stack's
 `SandboxHostOptions.program`, wrath-mcp `docs/ARCHITECTURE.md`, "A program"):
 a file workspace in the run directory's `program/`, rooted at `main.ts`, whose
 exported functions are routines the stack runs and tracks. The model is served
@@ -1288,7 +1289,19 @@ every routine as it stands, new errors with the model's own file lines,
 refusals with their hints, moves that replaced one another, `wake` calls, what
 changed for the character, and the routines' last console lines. After a
 turn-end sleep it opens every request of that wake, right after `[turn N]`;
-after a `yield` it is the tool's result and is not repeated.
+after a `yield` it is the tool's result and is not repeated. A refusal that a
+tool result has already carried (every result carries the action hints pending
+when it was drained, a routine's among them) wakes no later sleep, whenever
+its fact arrives; its signature is still in the next wake. `read_file` and
+`yield` results are exempt from the window's 4,000-character message cap
+(`WINDOW_UNCAPPED_TOOLS`): a file is bounded by the 32,000-character file cap
+and has no range to read it in parts, and a wake by its own caps.
+
+On codex the CLI ends its turn every few calls, so the pause after each turn
+is the sleep, and the wake opens the next turn's message; `yield` is held on
+the MCP call, under a tool timeout of 600 s rather than 300 s
+(`PROGRAM_TOOL_TIMEOUT_SEC`). Either sleep also ends on a stop request or a
+watchdog verdict.
 
 Time asleep is not `idle`, and a restart the program is blamed for (a blocked
 event loop with no snippet in flight) counts toward `snippet-runaway` as a

@@ -18,6 +18,7 @@ import {
   detectCodexFailure,
   homeLooksLoggedIn,
   normalizeCodexUsage,
+  PROGRAM_TOOL_TIMEOUT_SEC,
   parseCodexEvent,
   runCodexEpisode,
   tomlString,
@@ -970,6 +971,10 @@ describe("codex driver", () => {
       "-c", "mcp_servers.wrathbench.tool_timeout_sec=300", "-c", "mcp_servers.wrathbench.startup_timeout_sec=30", "-",
     ];
     expect(codexArgs(base)).toEqual(before);
+    // The program loop raises the MCP tool timeout above a yield's five-minute hold, and moves nothing else.
+    const program = codexArgs({ ...base, toolTimeoutSec: PROGRAM_TOOL_TIMEOUT_SEC });
+    expect(program.filter((a) => !before.includes(a))).toEqual(["mcp_servers.wrathbench.tool_timeout_sec=600"]);
+    expect(program.length).toBe(before.length);
     const windowed = codexArgs({ ...base, compactWindow: "1M" });
     expect(windowed.filter((a) => !before.includes(a))).toEqual(["model_auto_compact_token_limit=1000000"]);
     expect(windowed.length).toBe(before.length + 2);

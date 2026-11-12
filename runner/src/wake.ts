@@ -109,8 +109,12 @@ export function wakeReasonOf(fact: ProgramFact): WakeReason | null {
 /** The reasons pending since the model was last shown a wake, in arrival order. */
 export class Waker {
   private pending: WakeReason[] = [];
+  /** Per key, the newest moment the model has been shown its reasons up to (`forget`). */
+  private readonly seenUntil = new Map<WakeKey, number>();
 
   note(reason: WakeReason): void {
+    // A reason from before the model was shown its key's news is not news, however late its fact arrives.
+    if (reason.ts <= (this.seenUntil.get(reason.key) ?? -Infinity)) return;
     this.pending.push(reason);
     // A program that throws on a tight loop must not grow this without bound.
     if (this.pending.length > 200) this.pending.splice(0, this.pending.length - 200);
@@ -131,8 +135,9 @@ export class Waker {
     this.pending = this.pending.filter((r) => !r.inContext);
   }
 
-  /** Drop the pending reasons of `key` that arrived at or before `ts`. */
+  /** Drop the reasons of `key` from at or before `ts`, pending or still to arrive. */
   forget(key: WakeKey, ts: number): void {
+    this.seenUntil.set(key, Math.max(ts, this.seenUntil.get(key) ?? -Infinity));
     this.pending = this.pending.filter((r) => r.key !== key || r.ts > ts);
   }
 
@@ -516,6 +521,16 @@ export class ProgramWake {
    */
   routinesShown(): void {
     this.waker.forget("routine_ended", this.now());
+  }
+
+  /**
+   * A tool result was just answered: it carried every action hint pending
+   * when it was drained, a routine's refusals with their owner among them,
+   * so a refusal from before it has been delivered and no longer wakes a
+   * sleep that starts after. Its signature still shows in the next wake.
+   */
+  resultShown(): void {
+    this.waker.forget("refusal", this.now());
   }
 
   /** Restarts the program was blamed for since the last call. */

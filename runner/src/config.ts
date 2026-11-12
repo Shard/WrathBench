@@ -758,7 +758,7 @@ export const runConfigSchema = z.object({
    * harness runs and tracks, and it sleeps between wakes (`wake.ts`). ABSENT
    * on the snippet loop, which every run is unless an arm says otherwise, so
    * every config and tuple stamped before the field existed reads the same.
-   * The fixed loop only, never a scored tier, never fan-out
+   * The fixed loop and codex only, never a scored tier, never fan-out
    * (`programLoopRefusal`). Identity: a resume keeps it.
    */
   loop: z.literal("program").optional(),
@@ -1003,17 +1003,27 @@ export function loadRunConfig(raw: unknown): RunConfig {
 }
 
 /**
+ * Whether a driver's loop runs the program loop: the fixed loop, and a
+ * scaffold the registry says does (`DriverEntry.programLoop`: codex, whose
+ * end-of-turn pause becomes the sleep). claude-code and pi, whose one turn
+ * runs for hours, do not yet.
+ */
+export function runsProgramLoop(driver: Driver): boolean {
+  return entryOf(driver).kind === "loop" || entryOf(driver).programLoop === true;
+}
+
+/**
  * Why a config's agent loop cannot run as stated, or null. The program loop
- * (`loop: "program"`) is a spike's probe arm: the fixed loop runs it, a CLI
- * scaffold's own turn loop does not yet, a route driver plays no model, a
- * scored tier measures the snippet loop, and one agent driving several
- * characters is a later step. `yield` is a setting of the program loop and
- * means nothing without it.
+ * (`loop: "program"`) is a spike's probe arm: the fixed loop and codex run it
+ * (`runsProgramLoop`), the other scaffolds' own turn loops do not yet, a
+ * route driver plays no model, a scored tier measures the snippet loop, and
+ * one agent driving several characters is a later step. `yield` is a setting
+ * of the program loop and means nothing without it.
  */
 export function programLoopRefusal(c: Pick<RunConfig, "loop" | "yield" | "driver" | "episode" | "fanout" | "continuedFrom">): string | null {
   if (c.loop === undefined) return c.yield === true ? "--yield is a setting of the program loop; it needs --loop program" : null;
   const entry = entryOf(c.driver);
-  if (entry.kind !== "loop") return `--loop program runs on the fixed loop; the ${c.driver} driver runs a CLI's own turn loop`;
+  if (!runsProgramLoop(c.driver)) return `--loop program runs on the fixed loop and codex; the ${c.driver} driver runs a CLI's own turn loop`;
   if (entry.route === true) return `--loop program drives a model; the ${c.driver} driver plays a scripted route`;
   if (c.episode !== undefined && isScoredEpisode(c.episode)) return `--loop program is a probe arm's; --episode ${c.episode} is a scored episode, which runs the snippet loop`;
   if (c.fanout !== undefined) return "--loop program drives one character; fan-out is not built for it";
