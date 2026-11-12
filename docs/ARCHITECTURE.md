@@ -543,7 +543,11 @@ when the arm pinned one; a digest-only pin stamps
 with `LMSTUDIO_KEY`, which run.ts checks the key and base against before it
 reads the key), the module port secret, and the one credential the driver
 bills: its credential's `CLAUDE_CODE_OAUTH_TOKEN*` for claude-code, its key
-for openai and pi, the mounted `CODEX_HOME` for codex. Nothing else: no database variables, no config
+for openai and pi, the mounted `CODEX_HOME` for codex. A key or token the
+config store holds arrives instead as `WRATHBENCH_SEALED_SECRET`, with
+`WRATHBENCH_STORE_KEY` by reference, and a harness opens it into its variable
+and drops both before anything reads its environment
+(`runner/src/store-secrets.ts`, `unsealLaunchSecret`). Nothing else: no database variables, no config
 store, and no `ANTHROPIC_*` variable ever (claude-code is subscription-only;
 the pod env builder refuses to build a pod that would carry one). The run
 directory is on a shared volume. Before the run starts it holds at most launch

@@ -80,6 +80,11 @@ imagePullSecrets: []
 # the `.env` names.
 # The chart never templates a secret value and never puts one on a command
 # line; see docs/RUNBOOK.md ("Secrets").
+# Its optional `WRATHBENCH_STORE_KEY` (32 random bytes, `openssl rand -hex
+# 32`) seals the secrets set on the admin page into the config store; the
+# chart hands it to the fleet, runner and admin viewer pods and the run-pod
+# template with no value to set here (docs/RUNBOOK.md, "Secrets set from the
+# browser").
 envSecretName: wrathbench-env
 
 # The model-provider keys the fleet and runner pods carry, by NAME. They are
@@ -88,7 +93,8 @@ envSecretName: wrathbench-env
 # wedging the pod. Adding a provider, or a second key of one (a credential's
 # `secretEnv` such as OPENROUTER_KEY_2), is one line here and one key in that
 # Secret: a credential in the config store reaches no pod until its variable
-# is named here (docs/RUNBOOK.md, "Credentials").
+# is named here (docs/RUNBOOK.md, "Credentials"), unless its secret is set on
+# the admin page, sealed in the config store, which needs no line here.
 #
 # Enumerated rather than `envFrom` on the whole Secret on purpose — see the
 # note in templates/_helpers.tpl: the pods carry only the keys they use.

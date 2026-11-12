@@ -22,9 +22,11 @@
  *   a ladder (`billingOf` and `runBilling` are the model's and the run's);
  * - **enabled**.
  *
- * The store holds where the secret lives, never the secret: `secretEnv` is the
+ * The row holds where the secret lives, never the secret: `secretEnv` is the
  * NAME of the env var holding it (for a Codex home, the var naming the
- * directory), and it must be its provider's own name or that name with a
+ * directory). The value is the deployment's Secret, or one set from the admin
+ * page and sealed in the store's own table (`store-secrets.ts`), which wins;
+ * either way the variable's name is the key. It must be its provider's own name or that name with a
  * numbered suffix (`CLAUDE_CODE_OAUTH_TOKEN_2`, `OPENROUTER_KEY_2`), so a value
  * pasted where a name belongs is refused by shape, and a key name still goes
  * only where its provider's key goes (`keyProviderOf`, providers.ts).

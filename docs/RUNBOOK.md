@@ -315,7 +315,8 @@ accounts    { pool?: [...], max? }, or absent — the one account pool: every ac
             refused if authored.
 credentials id -> { provider, secretEnv, slots, budget?, billing, enabled }, in preference order
             ("Credentials"; `runner/src/credential-slots.ts`). The NAME of the env var holding each
-            secret, never the secret. A seeded store's examples are all disabled.
+            secret, never the secret, which is the Secret's or one sealed beside the config
+            ("Secrets set from the browser"). A seeded store's examples are all disabled.
 roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
             (runner/src/roster-refusal.ts) and nothing else; anything else REFUSES the entry by
             name ("Strict keys").
@@ -1463,11 +1464,14 @@ editor sits in the section of the table that edits it:
   chart key on each row.
 - **history**: the audit table and the export.
 
-New credentials, campaigns and jobs are written disabled. A secret's value is
-never read, shown or written from the browser: the store holds names, and
-values are the deployment's Secret ("Secrets"). Each credential's `set key`
-(an endpoint) or `re-auth` (a subscription) control is there and switched
-off, until where a secret written from the browser goes is decided. The status comes from
+New credentials, campaigns and jobs are written disabled. A secret is
+write-only from the browser: each credential's `set key` (an endpoint) or
+`re-auth` (a Claude subscription: paste what `claude setup-token` prints)
+takes a value into a password field and stores it sealed in the config store,
+and `clear` removes it; nothing ever reads one back ("Secrets set from the
+browser"). A Codex home's `re-auth` asks the supervisor to log it in again
+and shows the link and code ("The Codex home"). A refusal seen before a
+secret was replaced no longer reads `auth-failed`. The status comes from
 `GET /api/admin` (`runner/viewer/README.md`), which the chart feeds with the
 `modelKeys` names and, when there is a publisher, its non-secret settings and
 its state file, mounted read-only.
@@ -1718,7 +1722,9 @@ and the launcher's settings. Two values matter at deploy time:
   `allowedImages` the chart-wide Secret cannot pull.
 
 A run pod gets the module secret and the one credential its driver bills (its
-credential's `CLAUDE_CODE_OAUTH_TOKEN*`, its endpoint key, or the mounted codex home),
+credential's `CLAUDE_CODE_OAUTH_TOKEN*`, its endpoint key, or the mounted codex home;
+a key or token the config store holds arrives sealed with the store key's
+reference, "Secrets set from the browser"),
 `WRATHBENCH_LOCAL_MODEL_HOSTS` from the chart's `localModelHosts`, the runs
 and wiki volumes, and no config store, no database variables and no
 `ANTHROPIC_*` variable. Its harness stamp is the arm's image tag, never
@@ -2004,11 +2010,13 @@ preference order (`runner/src/credential-slots.ts`):
 - **enabled** — a disabled credential takes no new run; live runs on it finish.
 
 `bun wb config credentials [list | add | edit | disable]` edits them ("Where
-the config lives"). A credential is config, but its secret reaches a pod
-only when the pod starts: a new one is a key in the env Secret and a
-`modelKeys` line in the chart ("Secrets"), so it lands with a release, not
-with the 60s re-read. `--status` names a credential whose variable is not
-set.
+the config lives"). A credential is config, and its secret is one of two
+things ("Secrets"): a key in the env Secret plus a `modelKeys` line in the
+chart, which reaches a pod only when the pod starts and so lands with a
+release; or a secret set on the admin page (or `bun wb config secrets set`),
+sealed in the config store, which wins and applies to the next launch with
+nothing restarted ("Secrets set from the browser"). `--status` names a
+credential whose variable is not set.
 
 **What a budget holds.** A budget holds launches, never a run in flight, with
 one exception, the freeplay share of a usage window:
@@ -2106,6 +2114,22 @@ no credential named and no reset time.
 the login is its `auth.json`), and a second subscription is `CODEX_HOME_2`
 pointing at a second directory. A directory is never copied per run: its
 refresh token is spent by whichever process refreshes first.
+
+A home whose login has gone bad is logged in again from the Providers
+section's `re-auth` (`runner/src/codex-login.ts`). The home's volume is the
+fleet's and the runner pod's, never the viewer's, so the page leaves a
+request beside the config store (`codex-login/<id>.request.json` in the
+`config` subPath) and the supervisor, polling every two seconds, runs `codex
+login --device-auth` against the home with only the CLI's plumbing and
+`CODEX_HOME` in its environment. The page shows the link and the one-time
+code; enter the code there within its 15 minutes, signed in to the
+subscription the credential is. The CLI writes `auth.json` into that home
+itself; nothing is copied. One login per home at a time, and none while a run
+is live on the credential, since a login replaces the refresh token a live
+CLI may be about to spend: disable the credential and let its runs finish
+first. A code not entered in time ends the login as failed; ask again. By
+hand it is still `kubectl exec -it deploy/<release>-runner -- codex login
+--device-auth`.
 
 The CLI never deletes a thread's rollout (`sessions/**/rollout-*.jsonl`), so
 the fleet deletes them: the driver at a thread change and at its episode's
@@ -2215,8 +2239,71 @@ pod until it is named there ("Credentials"). On the quickstart Bun loads
 child. A claude-code job needs the token of the credential it was placed on
 (`claude setup-token`): `CLAUDE_CODE_OAUTH_TOKEN`, or
 `CLAUDE_CODE_OAUTH_TOKEN_2` for the second subscription. Without it the roster
-refuses the episode with a `launch-failed` row naming that variable. The
-config store holds only each secret's variable NAME, never the secret.
+refuses the episode with a `launch-failed` row naming that variable. A
+credential's row holds only its secret's variable NAME; a value set from the
+browser lives sealed in the store's own table (below).
+
+#### Secrets set from the browser
+
+A model key or a Claude token may instead be set on the admin page's
+Providers section, or with `bun wb config secrets set <NAME>` (the value on
+stdin, never argv), and is then kept in the config store, sealed
+(`runner/src/store-secrets.ts`; operator decision, 2026-11-12, over a SOPS
+PR to GitOps or an app-owned Secret):
+
+- **Where it lives.** The `config_secrets` table of `config.sqlite`, one row
+  per variable NAME (`OPENROUTER_KEY`, `CLAUDE_CODE_OAUTH_TOKEN_2`), as
+  AES-256-GCM ciphertext with the name bound in, so a row moved to another
+  name or a changed byte does not open. Only a token's or a key's variable
+  that a credential names may be set, never a Codex home and never an
+  arbitrary variable. Not a config row: `export`, `get`, `/api/config` and
+  every reader of the config never see one, not even as ciphertext. A copy of
+  the sqlite file carries ciphertext that is useless without the key.
+- **The history.** Each set, rotation and clear is a `secrets/<NAME>` line in
+  `config_audit` with the actor, the note, and an 8-hex HMAC fingerprint
+  keyed by the store key, enough to tell two values apart and nothing else.
+- **Precedence.** A stored secret wins over the env Secret's value for that
+  variable; with none, the environment's stands as before. It is read at
+  each use: every launch (a child episode gets it in its environment, a run
+  pod the sealed row, below), and every supervisor tick (health, the
+  OpenCode Go usage reader), so a new one applies to the next launch with no
+  restart and no `modelKeys` line. `clear` puts the environment's back.
+- **Fail closed.** A stored secret that does not open (another key, a changed
+  byte, no key in the pod) makes its variable unset, never the environment's
+  value: a launch that needs it is refused with the reason, and the
+  credential's health reads `secret-missing` with it.
+- **Run pods.** The pod spec never holds the value: the launcher drops the
+  Secret's reference for that variable and hands the pod the sealed row as
+  `WRATHBENCH_SEALED_SECRET`, with the store key's reference kept for that
+  pod only, and run.ts opens it before anything reads its environment, then
+  drops both. An arm image that predates this, or a harness that is not this
+  repository, cannot open it: keep that credential's key in the Secret, or
+  clear the stored one, while such an arm runs.
+- **The store key.** `WRATHBENCH_STORE_KEY`, 32 random bytes (`openssl rand
+  -hex 32`), a key of the env Secret, which the chart hands, optional, to the
+  fleet and runner pods, the admin viewer and the run-pod template. Without
+  it, setting a secret is refused with the reason and everything else works
+  as before; it is never on a page, in a log or in an API answer.
+- **Rotating a secret** is setting it again; the audit line's fingerprint
+  changes. **Rotating the store key**: change it in the Secret and restart
+  the pods that carry it; every stored secret then reads as sealed under
+  another key (`bun wb config secrets list` names them) until set again, and
+  until then their launches are refused. **A lost store key** is the same:
+  nothing else in the store depends on it, so set each secret again, or
+  clear it to fall back to the Secret's.
+- **Who can set one.** Whoever reaches the admin viewer, which has no login
+  ("The admin interface"). The viewer holds the key so it can seal, which
+  means the LAN-reachable process could open what it seals; it never does,
+  and no route reads one back.
+
+**Moving a SOPS model key into the store** is optional, per key: set it on
+the page (or `printf %s "$KEY" | bun wb config secrets set OPENROUTER_KEY
+--actor <you> --note "into the store"`), check the credential reads `stored`
+and its next run starts, then remove it from SOPS and from `modelKeys` in a
+later release if nothing else needs it. Bootstrap secrets stay in SOPS: the
+database passwords, the module secret, the store key itself, image pull
+credentials, the publisher's bucket pair and anything a pod needs before the
+store is readable.
 
 Database clients follow the same rule: `mysql`, `mysqladmin` and `mysqldump`
 take the password as `MYSQL_PWD` and `clickhouse-client` as
@@ -2239,7 +2326,9 @@ Where a secret may travel from the runner is fixed in code, not config:
   carry `[redacted]` too (runner/README.md, "The sandbox", says what no scrub
   catches).
 - A run pod gets only the module secret and its driver's one credential ("Run
-  pods").
+  pods"), sealed when the store holds it.
+- The store key reaches no child: the launcher strips it from an episode's
+  environment, and run.ts drops it before anything reads its own.
 
 **The images are private.** Every pod built from WrathBench's images pulls
 with a Secret the cluster owns, named in the chart's `imagePullSecrets` value;
