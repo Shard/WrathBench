@@ -108,6 +108,7 @@ import {
 import {
   affinityFrom,
   countJob,
+  countOutsideRuns,
   placeJob,
   affinityOf,
   applyPause,
@@ -162,6 +163,7 @@ import {
   tailOf,
   TICK_MS,
   tripsBreaker,
+  outsideRuns,
   unownedLiveRuns,
   unyieldedDrainReason,
   withTakenRunIds,
@@ -185,7 +187,7 @@ import {
   PAUSE_PATH,
   type PoolView,
   readPauseSidecar,
-  readReportFacts,
+  readReportRuns,
   REPO_ROOT,
   rereadFleet,
   RUN_FACTS_CACHE,
@@ -219,6 +221,7 @@ import {
   writeCredentialUsageSidecar,
   type CredentialGate,
 } from "./run-fleet-credentials";
+import { FleetModelLists } from "./run-fleet-model-lists";
 import type { Credential } from "../runner/src/credential-slots";
 import { configDbPath, EMPTY_STORE_HINT, readFleetConfig } from "../runner/src/config-store";
 import { resolveStoreSecrets } from "../runner/src/store-secrets";
@@ -230,12 +233,13 @@ import {
   modelStates,
   parseModelsSidecar,
   readModelsSidecar,
-  readRunFacts,
+  readFleetRuns,
   runFactCache,
   type RunFact,
   schedulability,
   serializeModelsSidecar,
   type CountCache,
+  type UnstampedRun,
 } from "../runner/src/models";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
 import { Trajectory } from "../runner/src/trajectory";
@@ -670,8 +674,18 @@ async function refreshGoUsage(cfg: Pick<FleetConfig, "credentials" | "roster">):
   const readings = goUsage.observations();
   if (readings.length > 0) writeCredentialUsageSidecar(RUNS_DIR, readings);
 }
+/**
+ * The providers' model lists, read at most every six hours in the background
+ * (`infra/run-fleet-model-lists.ts`): the tick never waits on one, and the
+ * projection reads what the last read wrote.
+ */
+const modelLists = new FleetModelLists({ runsDir: RUNS_DIR, say });
+function refreshModelLists(cfg: Pick<FleetConfig, "credentials" | "roster">): void {
+  // Keys from the config store's secrets over the environment, as the Go usage reader reads them.
+  modelLists.refresh(cfg.roster, cfg.credentials, resolveStoreSecrets(process.env).env).catch((e: unknown) => say(`model lists: refresh failed: ${e instanceof Error ? e.message : String(e)}`));
+}
 /** The newest tick's credential ledger, for the state file's `credentials` block. */
-let lastCredentials: { gate: CredentialGate; book: SlotBook; credentials: readonly Credential[]; runs: readonly RunFact[] } | undefined;
+let lastCredentials: { gate: CredentialGate; book: SlotBook; credentials: readonly Credential[]; runs: readonly Pick<RunFact, "credential" | "pause">[] } | undefined;
 /**
  * The refusals last logged, joined. Deduping on the SET rather than a count
  * means a swap — one pin fixed and another broken in the same edit — is still
@@ -950,11 +964,11 @@ async function main(): Promise<void> {
   if (wasEmpty) console.error(`run-fleet: ${EMPTY_STORE_HINT}`);
 
   if (args.dryRun) {
-    // One read of every run for the whole report (`readReportFacts`).
-    const facts = readReportFacts();
+    // One read of every run for the whole report (`readReportRuns`).
+    const read = readReportRuns();
     // Fail fast on anything that would fail at spawn time.
-    planTick(config, modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs: facts }), () => undefined, stampToday);
-    printDryRun(config, args.until, stampToday, facts, GROUPS);
+    planTick(config, modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs: read.facts }), () => undefined, stampToday);
+    printDryRun(config, args.until, stampToday, read, GROUPS);
     return;
   }
 
@@ -1019,9 +1033,14 @@ async function main(): Promise<void> {
    */
   const factCache = runFactCache(RUN_FACTS_CACHE);
   let factCacheFailure: string | undefined;
-  /** Every run's facts, archive included, through both caches; a store that cannot be read or written is said once. */
-  const readFacts = (): RunFact[] => {
-    const runs = readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true, counts: factCounts, facts: factCache });
+  /**
+   * Every run's facts, archive included, through both caches, and beside them
+   * the runs with no episode (a hand launch without `--episode`), which only
+   * the credentials read (`readFleetRuns`); a store that cannot be read or
+   * written is said once.
+   */
+  const readFacts = (): { facts: RunFact[]; unstamped: UnstampedRun[] } => {
+    const runs = readFleetRuns(RUNS_DIR, Date.now(), { includeArchived: true, counts: factCounts, facts: factCache });
     if (factCache.failure !== undefined && factCache.failure !== factCacheFailure) say(`run facts cache: ${factCache.failure}`);
     factCacheFailure = factCache.failure;
     return runs;
@@ -1073,8 +1092,9 @@ async function main(): Promise<void> {
     const ownAccounts = new Set(
       [...assigned.values(), ...pinnedJobs(cfg).filter((j) => sets.running.has(j.name)).map((j) => j.account!)].map((a) => a.toUpperCase()),
     );
+    const onDisk = readFacts();
     const runs = implicitPauses({
-      runs: readFacts(),
+      runs: onDisk.facts,
       campaigns: cfg.campaigns,
       running: ownRunIds,
       busyAccounts: ownAccounts,
@@ -1088,17 +1108,19 @@ async function main(): Promise<void> {
     // The credentials over the same facts: each one's budget (its newest usage
     // reading, its runs and spend today) and every live session on its slots
     // and its driver's host cap, asked at every launch below
-    // (`run-fleet-credentials.ts`).
-    goUsage.noteOverages(runs);
+    // (`run-fleet-credentials.ts`). Every run on a credential costs it,
+    // whether or not it carries an episode: a hand launch's are read too.
+    const billed = [...runs, ...onDisk.unstamped];
+    goUsage.noteOverages(billed);
     const credGate = credentialGate(
       cfg.credentials,
-      [...runs.map((f) => f.credentialUsage), ...goUsage.observations()],
-      runs,
+      [...billed.map((f) => f.credentialUsage), ...goUsage.observations()],
+      billed,
       Date.now(),
       goUsage.readHolds(cfg.credentials),
     );
     const book = new SlotBook(cfg.credentials, cfg.policy.maxSessions);
-    lastCredentials = { gate: credGate, book, credentials: cfg.credentials, runs };
+    lastCredentials = { gate: credGate, book, credentials: cfg.credentials, runs: billed };
     const byName = new Map(cfg.jobs.map((j) => [j.name, j]));
     const runningRefs = new Set<string>();
     const pinnedSkips: QueueSkip[] = [];
@@ -1141,6 +1163,9 @@ async function main(): Promise<void> {
       if (job === undefined) continue;
       countJob(book, withPlaced(job), cfg.roster, runCreds);
     }
+    // And every live run this fleet did not launch, on the credential it
+    // bills: a hand launch takes a slot as surely as a job does.
+    countOutsideRuns(book, outsideRuns(billed, { running: ownRunIds, busyAccounts: ownAccounts }));
     const held = (a: string): string | undefined => accountHeldBy(a, "");
     // Resumes before anything fresh: a paused run goes back onto
     // its own account ahead of the queue and the policy, so nothing can wipe
@@ -1880,12 +1905,13 @@ async function main(): Promise<void> {
       runsDir: RUNS_DIR,
       roster: rosterModels(config.roster),
       policy: config.policy,
-      runs: readFacts(),
+      runs: readFacts().facts,
     }),
     () => undefined,
     stampToday,
   );
   await refreshGoUsage(config);
+  refreshModelLists(config);
   if (mayStart) for (const spawn of diffJobs(applyPause(effectiveJobs(config), pauseSwitch !== undefined), sets).start) spawnJob(spawn);
   writeState(configPath, stampToday, procs, sets.draining, gate, poolView(config));
 
@@ -1988,6 +2014,7 @@ async function main(): Promise<void> {
     readPause();
     // Not while stopping: the stop polls fast so rosters are reaped in the grace.
     if (!stopping) await refreshGoUsage(config);
+    if (!stopping) refreshModelLists(config);
     const actions = diffJobs(applyPause(effectiveJobs(config), pauseSwitch !== undefined), sets);
     // A refusal suppresses SCHEDULING; it must never drain. A disabled pin
     // normally means the operator parked it, so `diffJobs` drains its live run
@@ -2064,9 +2091,11 @@ async function main(): Promise<void> {
       const homes = codexHomesOf(codexHomeEnvsOf(config.credentials));
       if (homes.length > 0) {
         try {
+          // Every run's, a hand launch's included: its live thread is kept like any other.
+          const onDisk = readFacts();
           pruneCodexHomes({
             homes,
-            runs: readFacts(),
+            runs: [...onDisk.facts, ...onDisk.unstamped],
             now: Date.now(),
             say,
           });

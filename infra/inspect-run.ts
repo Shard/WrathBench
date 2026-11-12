@@ -20,7 +20,10 @@
  *                                                      a v1 run's session record, one line per row
  *
  * D is `90s`, `30m`, `2h`, `1d`, epoch ms or an ISO time. The runs directory is
- * `--runs-dir`, else WRATHBENCH_RUNS_DIR, else `data/runs`.
+ * `--runs-dir`, else WRATHBENCH_RUNS_DIR, else `data/runs`. Where a view takes
+ * a run id it takes a fan-out character's session id too, `<run-id>~<Name>`
+ * as the viewer names it: `session` reads that character's record alone (its
+ * `--character`), and every other view reads the run, the one agent's.
  *
  * Where each view reads. A run's heavy facts (its row, its state samples and
  * every trajectory record) come from ClickHouse, the derived store the
@@ -1636,6 +1639,20 @@ const CHARACTER_NAME = /^[A-Za-z]+$/;
 export const FANOUT_SEP = "~";
 
 /**
+ * What a command's run argument names: a run id, or a fan-out character's
+ * session id (`<run-id>~<Name>`, the viewer's and the store's key for it:
+ * runner/src/run-reader.ts `parseFanoutSessionId`) as its run and character.
+ * Null when it is neither.
+ */
+export function parseRunArg(arg: string): { runId: string; character: string | null } | null {
+  const at = arg.indexOf(FANOUT_SEP);
+  if (at < 0) return isValidRunId(arg) ? { runId: arg, character: null } : null;
+  const runId = arg.slice(0, at);
+  const character = arg.slice(at + FANOUT_SEP.length);
+  return isValidRunId(runId) && CHARACTER_NAME.test(character) ? { runId, character } : null;
+}
+
+/**
  * A fan-out run: one agent driving several characters, each with its own
  * session record in `sessions/<Character>/` and no `session/`. Its meta.json's
  * `config.fanout` says so from the launch, `sessions/` for a run whose
@@ -1834,10 +1851,23 @@ function questLine(samples: readonly { ts: number; quests: number | null }[] | n
   return restarts > 0 ? `${head} · ${q.stretches.map((s) => `from ${clock(s.from).slice(0, 11)} ${s.last}`).join(" · ")}` : head;
 }
 
+/**
+ * A reading's xp, or 0 where the reading shows it is: a values update carries
+ * only a create block's non-zero fields, so a character at exactly 0 xp has no
+ * `xp` until its first gain, while the bar's length (`next_level_xp`, never 0
+ * below the cap) arrived in the same block. Null when neither was read. For
+ * the views' lines only: the samples, and what is derived from them, keep the
+ * reading as recorded.
+ */
+export function xpOf(st: Pick<StateRow, "xp" | "next_level_xp"> | null | undefined): number | null {
+  if (st === null || st === undefined) return null;
+  return st.xp ?? (st.next_level_xp != null && st.next_level_xp > 0 ? 0 : null);
+}
+
 function levelLine(st: StateRow | null, now: number): string {
   if (st === null) return "no state sample yet";
   return [
-    `L${st.level ?? "?"} ${st.xp ?? "?"}xp${st.next_level_xp != null ? ` of ${st.next_level_xp}` : ""}`,
+    `L${st.level ?? "?"} ${xpOf(st) ?? "?"}xp${st.next_level_xp != null ? ` of ${st.next_level_xp}` : ""}`,
     money(st.money) !== null ? `money ${money(st.money)}` : null,
     st.zone != null ? `zone ${st.zone}` : null,
     st.turn != null ? `turn ${st.turn}` : null,
@@ -2100,7 +2130,7 @@ export async function inspectRun(runId: string, opts: Ctx & Window, out: Out): P
 
     const characters = fanout ? await characterReadings(via, runId, refs) : [];
     if (fanout) {
-      const lead = leadOf(characters.map((c) => ({ character: c.character, level: c.st?.level ?? null, xp: c.st?.xp ?? null })));
+      const lead = leadOf(characters.map((c) => ({ character: c.character, level: c.st?.level ?? null, xp: xpOf(c.st) })));
       say("level", `per character below${lead === null ? "; none has a level yet" : `; the lead is ${lead.character}, L${lead.level} ${lead.xp ?? "?"}xp`}`);
     } else if (via.store !== null) {
       say("level", levelLine((await via.store.latestStates([runId])).get(runId) ?? null, opts.now));
@@ -2223,7 +2253,7 @@ export async function inspectLive(opts: Ctx, out: Out): Promise<number> {
       }
       const readings = refs.map((r) => {
         const s = rows !== null && rows.has(f.id) ? (byKey.get(fanoutKey(f.id, r.character ?? "?")) ?? null) : traceLatest(r.session);
-        return { character: r.character ?? "?", level: s?.level ?? null, xp: s?.xp ?? null, ts: s?.ts ?? null };
+        return { character: r.character ?? "?", level: s?.level ?? null, xp: xpOf(s), ts: s?.ts ?? null };
       });
       const lead = leadOf(readings);
       const v = verdictOf(row, f.hb, opts.now);
@@ -2253,7 +2283,7 @@ export async function inspectLive(opts: Ctx, out: Out): Promise<number> {
       }
     }
     const v = verdictOf(row, f.hb, opts.now);
-    const level = st === null ? "L?" : `L${st.level ?? "?"} ${st.xp ?? "?"}xp`;
+    const level = st === null ? "L?" : `L${st.level ?? "?"} ${xpOf(st) ?? "?"}xp`;
     const age = row?.started_at != null ? `up ${fmtAge(opts.now - row.started_at)}` : "";
     const reason = v.reason !== null ? ` ${v.reason}` : "";
     const missing = rows !== null && !rows.has(f.id) ? "  (not in ClickHouse yet)" : "";
@@ -3971,6 +4001,7 @@ const USAGE = `usage: bun infra/inspect-run.ts live
        bun infra/inspect-run.ts stuck [<run-id>] [--window D] [--until D] [--move N] [--max-gap D] [--repeat N] [--hints N] [--schema N] [--restarts N] [--asks N]
        bun infra/inspect-run.ts session <run-id> [--stream events|calls] [--character NAME] [--kind K[,K]] [--grep RE] [--last N | --next N] [--since D] [--until D]
 common: [--runs-dir DIR] (else WRATHBENCH_RUNS_DIR, else data/runs) [--width N] [--files]; D is 90s, 30m, 2h, 1d, epoch ms or ISO
+<run-id> may be a fan-out character's session id, <run-id>~<Name>: session reads that character alone (--character), the rest the run
 --next N: the first N items from --since (or the file's start) instead of the last N
 --files: read the files, not ClickHouse (CLICKHOUSE_URL); a live run's run.sqlite is still not opened
 stuck: with no run id, every run with a live owner; --window and --max-gap are durations (2h, 15m), the rest whole numbers
@@ -4007,6 +4038,26 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
 };
 const COMMON_FLAGS = new Set(["--runs-dir", "--width", "--files"]);
 const VALUED = new Set(["--since", "--until", "--at", "--last", "--next", "--grep", "--width", "--runs-dir", "--stream", "--character", "--kind", ...STUCK_FLAGS.map(([f]) => f)]);
+
+/**
+ * A view of the run asked for by one character's session id: true, with a line
+ * saying the view is the run's, when the run has that character; false, having
+ * said which characters it has, when it does not. A run not found is the
+ * view's to report.
+ */
+function sessionOfRun(runsDir: string, runId: string, character: string, out: Out): boolean {
+  const dir = findRunDir(runsDir, runId);
+  if (dir === null) return true;
+  const refs = sessionsOf(dir);
+  const ref = refs.find((r) => r.character?.toLowerCase() === character.toLowerCase());
+  if (ref === undefined) {
+    out(`${runId} has no character ${character}${refs.length > 0 ? `: ${refs.map((r) => r.character ?? "(unnamed)").join(", ")}` : ""}`);
+    return false;
+  }
+  const id = `${runId}${FANOUT_SEP}${ref.character}`;
+  out(`${id} is ${ref.character}'s session: this view is the run's, every character's together; session ${id} is ${ref.character}'s alone`);
+  return true;
+}
 
 /** What the CLI is handed besides its arguments: a store in place of CLICKHOUSE_URL's, for the tests. */
 export interface Deps {
@@ -4101,18 +4152,23 @@ export async function main(
         thresholds[key] = v;
       }
       if (positional.length === 0) return await inspectStuckLive({ ...base, thresholds }, out);
-      const id = positional[0]!;
-      if (positional.length > 1 || !isValidRunId(id)) {
+      const target = positional.length === 1 ? parseRunArg(positional[0]!) : null;
+      if (target === null) {
         err(`not one run id: ${positional.join(" ")}`);
         return 2;
       }
-      return await inspectStuck(id, { ...base, until: window.until, thresholds }, out);
+      if (target.character !== null && !sessionOfRun(runsDir, target.runId, target.character, out)) return 1;
+      return await inspectStuck(target.runId, { ...base, until: window.until, thresholds }, out);
     }
-    const runId = positional[0];
-    if (runId === undefined || positional.length > 1 || !isValidRunId(runId)) {
-      err(runId === undefined ? `${command} needs a run id\n${USAGE}` : `not one run id: ${positional.join(" ")}`);
+    const target = positional.length === 1 ? parseRunArg(positional[0]!) : null;
+    if (target === null) {
+      err(positional.length === 0 ? `${command} needs a run id\n${USAGE}` : `not one run id: ${positional.join(" ")}`);
       return 2;
     }
+    const runId = target.runId;
+    // A character's session id: `session` reads that character's record; every
+    // other view is the run's, whose trajectory is the one agent's.
+    if (target.character !== null && command !== "session" && !sessionOfRun(runsDir, runId, target.character, out)) return 1;
     const last = count("--last");
     const next = count("--next");
     for (const [f, n] of [["--last", last], ["--next", next]] as const) {
@@ -4151,11 +4207,16 @@ export async function main(
         err(`--stream is ${SESSION_STREAMS.join(" or ")}\n${USAGE}`);
         return 2;
       }
-      const character = (flags.get("--character") as string | undefined) ?? null;
-      if (character !== null && !CHARACTER_NAME.test(character)) {
+      const flagged = (flags.get("--character") as string | undefined) ?? null;
+      if (flagged !== null && !CHARACTER_NAME.test(flagged)) {
         err(`--character is a character's name, letters only`);
         return 2;
       }
+      if (flagged !== null && target.character !== null && flagged.toLowerCase() !== target.character.toLowerCase()) {
+        err(`${positional[0]} is ${target.character}'s session; --character ${flagged} names another`);
+        return 2;
+      }
+      const character = flagged ?? target.character;
       const kindList = flags.has("--kind") ? (flags.get("--kind") as string).split(",").map((k) => k.trim()).filter((k) => k !== "") : null;
       if (kindList !== null && kindList.length === 0) {
         err(`--kind names one kind or more, comma-separated\n${USAGE}`);

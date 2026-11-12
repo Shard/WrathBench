@@ -269,6 +269,24 @@ describe("a fan-out run on the live map", () => {
     expect(JSON.stringify(fromStore)).toBe(JSON.stringify(walked));
   });
 
+  test("a character at exactly 0 xp reads 0 once its bar's length is known, and unknown before", async () => {
+    const runs = tempDir("fanout-map-xp0-");
+    await writeFanoutRun(runs, {
+      characters: [
+        // Fresh: the create block carried the bar's length and, its value being 0, no xp.
+        { name: "Bravo", guid: "902", readings: [{ ts: 1762000300000, level: 1, xpMax: 400, map: 0, x: -9450, y: 70, z: 57, money: 0 }] },
+        // Nothing read yet beyond the level: no figure to give.
+        { name: "Alfa", guid: "901", readings: [{ ts: 1762000200000, level: 1, map: 0, x: -9460, y: 60, z: 57, money: 0 }] },
+      ],
+    });
+    const walked = await readPositions(runs, NOW);
+    expect(walked.map((p) => [p.character, p.level, p.xp, p.nextLevelXp])).toEqual([
+      ["Bravo", 1, 0, 400],
+      ["Alfa", 1, null, null],
+    ]);
+    expect(JSON.stringify(await positionsFromStore(localRunStore(runs), runs, NOW))).toBe(JSON.stringify(walked));
+  });
+
   test("a character's own trace segments open under the pip's id", async () => {
     const runs = tempDir("fanout-map-trace-");
     await writeFanoutRun(runs);

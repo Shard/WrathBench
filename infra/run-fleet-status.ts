@@ -65,6 +65,9 @@ import {
   characterStanding,
   TICK_MS,
   unownedLiveRuns,
+  countOutsideRuns,
+  outsideRuns,
+  type OutsideRun,
 } from "./run-fleet-plan";
 import { fmtAge } from "./inspect-run";
 import {
@@ -83,7 +86,8 @@ import {
   runHasImageRecord,
   pidAlive,
   readPauseSidecar,
-  readReportFacts,
+  readReportRuns,
+  type ReportRuns,
   resolveStatePath,
   runProgress,
   liveRunStuck,
@@ -113,6 +117,8 @@ import {
   type CredentialGate,
   type CredentialStatus,
 } from "./run-fleet-credentials";
+import { formatModelLists } from "./run-fleet-model-lists";
+import { readModelListsSidecar } from "../runner/src/model-lists";
 import { providerById } from "../runner/src/credential-slots";
 import { credentialIdsOf } from "./run-fleet-state";
 import { rosterPriceGap } from "../runner/viewer/pricing";
@@ -130,6 +136,7 @@ import {
   modelStates,
   outstandingWork,
   type RunFact,
+  type UnstampedRun,
   schedulability,
   type SchedulingPolicy,
   type StartingCharacter,
@@ -308,10 +315,16 @@ export function localCredentialStatuses(
   config: Pick<FleetConfig, "credentials" | "policy" | "roster">,
   gate: CredentialGate,
   runs: readonly RunFact[],
+  /** The runs with no episode (`readReportRuns`): a live one is on its credential's slot like any run the fleet did not launch. */
+  unstamped: readonly UnstampedRun[] = [],
 ): CredentialStatus[] {
   const book = new SlotBook(config.credentials, config.policy.maxSessions);
-  for (const f of runs) if (f.live) book.add(book.keysOf(f.driver ?? undefined, f.credential), f.party != null ? 1 : 1);
-  return credentialStatuses({ credentials: config.credentials, book, gate, runs, secrets: resolveStoreSecrets(process.env) });
+  // A run the fleet did not launch is on its credential's slot alone, as the tick counts it (`countOutsideRuns`).
+  const outside = outsideRuns([...runs, ...unstamped]);
+  const theirs = new Set(outside.map((f) => f.runId));
+  for (const f of runs) if (f.live && !theirs.has(f.runId)) book.add(book.keysOf(f.driver ?? undefined, f.credential), f.party != null ? 1 : 1);
+  countOutsideRuns(book, outside);
+  return credentialStatuses({ credentials: config.credentials, book, gate, runs: [...runs, ...unstamped], secrets: resolveStoreSecrets(process.env) });
 }
 
 /**
@@ -927,7 +940,7 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
   // Every run's facts, once (`readReportFacts`): the projection and the
   // characters read them whole, archive included, as the tick does; the paused
   // runs are the runs directory's alone (`unarchived`).
-  const facts = readReportFacts();
+  const { facts, unstamped } = readReportRuns();
   // The projection, once: the models table reads it, and so does every job's
   // progress toward its `repeat` (archive included, as the supervisor counts).
   const projected = config !== undefined ? modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs: facts }) : [];
@@ -956,7 +969,7 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
   const pausedRuns = runFacts.filter((f) => isStandingPause(f, Date.now())).sort(byNewestStart);
   // The credentials' budgets as the supervisor applies them, off the same
   // readings and runs.
-  const credGate = config !== undefined ? credentialGate(config.credentials, readCredentialUsage(RUNS_DIR), facts, Date.now()) : undefined;
+  const credGate = config !== undefined ? credentialGate(config.credentials, readCredentialUsage(RUNS_DIR), [...facts, ...unstamped], Date.now()) : undefined;
   const resumePlan =
     config !== undefined
       ? planResumes({
@@ -1089,7 +1102,7 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
   // The credentials: the supervisor's own view while it is up (it counts the
   // runs it has just spawned), else this reader's, off the live runs.
   if (config !== undefined && credGate !== undefined) {
-    const statuses = fleetUp && state?.credentials !== undefined ? state.credentials : localCredentialStatuses(config, credGate, runFacts);
+    const statuses = fleetUp && state?.credentials !== undefined ? state.credentials : localCredentialStatuses(config, credGate, runFacts, unarchived(unstamped));
     for (const line of formatCredentialStatus(statuses, config.policy.maxSessions, Date.now(), { volumeOf: (s) => codexHomeVolume(s) })) console.log(`  ${line}`);
   }
 
@@ -1109,6 +1122,7 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
       if (why !== undefined) excluded.set(name, why);
     }
     for (const line of formatModels(states, running, Date.now(), excluded, config.policy, groups.evals)) console.log(`  ${line}`);
+    for (const line of formatModelLists(readModelListsSidecar(RUNS_DIR), Date.now())) console.log(`  ${line}`);
 
     if (state?.policy?.idle !== undefined) console.log(`  policy: ${state.policy.idle}`);
     // (c') freeplay characters: each unlimited ref's head and what the next pick
@@ -1295,6 +1309,8 @@ export function planDryRun(opts: {
   evals?: boolean;
   /** The jobs only the evals group being off disables (`forGroups`). */
   offByGroup?: ReadonlySet<string>;
+  /** Live runs the fleet did not launch, each on its credential's slot (`outsideRuns`), as the tick counts them. */
+  outside?: readonly OutsideRun[];
 }): DryRunPlan {
   const { config, runs, states, held, stamp, gate } = opts;
   const inFlight = opts.inFlight ?? [];
@@ -1326,6 +1342,7 @@ export function planDryRun(opts: {
     inFlight.filter((r) => !r.owned).flatMap((r) => r.refs),
     gate,
     opts.evals ?? true,
+    opts.outside ?? [],
   );
   const counted = countedFrom(states);
   const rows: AccountRow[] = [];
@@ -1451,12 +1468,12 @@ export function formatArgvBlock(
   ];
 }
 
-/** `facts` is the caller's `readReportFacts`, when it already made one; otherwise this reads its own. */
+/** `facts` is the caller's `readReportRuns`, when it already made one; otherwise this reads its own. */
 export function printDryRun(
   read: FleetConfig,
   cliUntil: string | undefined,
   stampToday: string,
-  facts?: readonly RunFact[],
+  facts?: ReportRuns,
   groups: Groups = groupsFromEnv(process.env),
 ): void {
   console.log(`--- fleet plan (dry run; nothing spawned, nothing written) ---`);
@@ -1479,16 +1496,13 @@ export function printDryRun(
     console.log("  gate open: jobs spawn without smoking the server first");
   }
   // The tick's own read: a verdict-less run is a paused one unless a live job holds it.
-  const runs = implicitPauses({
-    runs: facts ?? readReportFacts(now),
-    campaigns: config.campaigns,
-    running: new Set([...jobs.values()].flatMap((j) => j.runIds ?? [])),
-    busyAccounts: new Set([...jobs.values()].map((j) => j.account.toUpperCase())),
-    now,
-  });
+  const { facts: stamped, unstamped } = facts ?? readReportRuns(now);
+  const ownRunIds = new Set([...jobs.values()].flatMap((j) => j.runIds ?? []));
+  const busyAccounts = new Set([...jobs.values()].map((j) => j.account.toUpperCase()));
+  const runs = implicitPauses({ runs: stamped, campaigns: config.campaigns, running: ownRunIds, busyAccounts, now });
   const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs });
   // The credentials' budgets as the supervisor applies them.
-  const credGate = credentialGate(config.credentials, readCredentialUsage(RUNS_DIR), runs, now);
+  const credGate = credentialGate(config.credentials, readCredentialUsage(RUNS_DIR), [...runs, ...unstamped], now);
   const inFlight = inFlightRuns({
     jobs,
     runs,
@@ -1509,9 +1523,10 @@ export function printDryRun(
     gate: credGate,
     evals: groups.evals,
     offByGroup,
+    outside: outsideRuns([...runs, ...unstamped], { running: ownRunIds, busyAccounts }),
   });
   console.log("");
-  for (const line of formatCredentialStatus(localCredentialStatuses(config, credGate, runs), config.policy.maxSessions, now)) console.log(line);
+  for (const line of formatCredentialStatus(localCredentialStatuses(config, credGate, runs, unstamped), config.policy.maxSessions, now)) console.log(line);
   for (const line of formatAccounts(rows, config.accounts.max)) console.log(line);
   for (const line of formatArgvBlock(spawns, { stamp: stampToday, until: cliUntil })) console.log(line);
   for (const job of plan.queue.waiting) console.log(`  ${job.name}: waiting — ${job.ref} ${job.episode} x${job.repeat} (no free pool account)`);

@@ -369,6 +369,17 @@ function livePositionOf(sessionDir: string, samples: () => readonly Record<strin
 }
 
 /**
+ * A pip's xp, or 0 where its reading shows it is: a values update carries only
+ * a create block's non-zero fields, so a character at exactly 0 xp has no xp
+ * reading until its first gain, while the bar's length (`nextLevelXp`, never 0
+ * below the cap) arrived in the same block. Null when neither was read. The
+ * map's figure only: the samples and the run row keep the reading as recorded.
+ */
+export function knownXp(xp: number | null, nextLevelXp: number | null): number | null {
+  return xp ?? (nextLevelXp !== null && nextLevelXp > 0 ? 0 : null);
+}
+
+/**
  * One run's entry on the map, or null when it is not worth drawing:
  * terminated, paused because its observation stalled, or not standing
  * anywhere inside the window.
@@ -411,7 +422,7 @@ async function positionOf(runsDir: string, run: RunRow, now: number, windowMs: n
     y: pos.y,
     ts: pos.ts,
     level: run.level,
-    xp: run.xp,
+    xp: knownXp(run.xp, pos.nextLevelXp),
     money: run.money,
     questsCompleted: run.questsCompleted,
     harnessVersion: run.harnessVersion,
@@ -489,7 +500,7 @@ async function fanoutPositionsOf(runsDir: string, run: RunRow, now: number, wind
         y: pos.y,
         ts: pos.ts,
         level: reading?.level ?? null,
-        xp: reading?.xp ?? null,
+        xp: knownXp(reading?.xp ?? null, pos.nextLevelXp),
         money: reading?.money ?? null,
         questsCompleted: questsAcrossRestarts(rows.map((r) => ({ questsCompleted: num(r["quests_completed"]) }))) ?? reading?.questsCompleted ?? null,
         harnessVersion: run.harnessVersion,

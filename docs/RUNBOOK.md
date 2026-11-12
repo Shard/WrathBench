@@ -84,6 +84,7 @@ bun wb inspect pad <run-id> [--since 2h]                       # pad size over t
 bun wb inspect pad <run-id> --at <iso>                         # the pad's text at a moment, rebuilt from the record
 bun wb inspect stuck [<run-id>] [--window 2h] [--until 1h]     # no game progress over a window, and the failure signals in it
 bun wb inspect session <run-id> [--stream calls] [--character Name] [--kind death,level] [--grep RE] [--last 20]   # a v1 run's record, a line per row
+bun wb inspect session '<run-id>~Name'                         # one fan-out character, by the session id the viewer shows
 bun wb inspect audit <run-id> [--op WB_MOVE_RESULT [--status S]] [--since 1h]
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
 bun wb inspect audit --smoke edge-drop --op move_edge_drop --since 1h   # a smoke's sessions (from the smoke-session ledger)
@@ -92,6 +93,10 @@ bun wb inspect publisher [<run-id>]                  # last flip, versions per r
 
 All read-only and bounded: a trajectory line is never printed whole, only
 capped fields of it, and the session token is struck from everything printed.
+Every view that takes a run id but `audit` takes a fan-out character's
+session id too (`<run-id>~<Name>`): `session` reads that character alone, the
+rest the run. `audit` refuses one: each character's session has its own token,
+which it does not read.
 A run is live when its row has neither a termination nor a pause; one with
 neither whose heartbeat is older than two minutes has lost its process and
 reads `ownerless`.
@@ -484,7 +489,9 @@ character, set the entry's `idle: "none"`: the freeplay job stops being
 generated, the paused run reads "not in config — resume by hand", and it
 stays down until `idle: "unlimited"` comes back ("Freeplay characters are
 durable"). To take a model out of scheduling, set its tier and idle to what
-you want; a catalog entry has no on/off switch.
+you want; a catalog entry has no on/off switch. A model its provider has
+withdrawn is retired by itself ("The scheduling policy"); keep its entry, so
+its runs keep their row on the models page.
 
 A roster entry referenced by a pinned job is never policy-scheduled: the
 account is spoken for. Nothing else takes an entry out of the policy; a
@@ -1518,7 +1525,7 @@ stored except an operator's clear.
 ```
 bun wb fleet status                       # models table: status, counted/target per episode, why (not) schedulable
 bun wb fleet dry-run                      # the picks the policy would make for the free accounts right now
-bun wb fleet clear-model <roster-name>    # forgive a retired/cooling model; picked up on the next tick
+bun wb fleet clear-model <roster-name>    # forgive a retired/cooling model (not one gone from its provider's list); picked up on the next tick
 ```
 
 Both reports read what is running as the supervisor does: a job whose process
@@ -1541,6 +1548,30 @@ will not be scheduled until cleared; `pinned` is outside the policy (a pinned
 ref or a probe). A launch that produced no model response never counts toward
 a target but does climb the ladder, so a dead provider costs at most ten
 launches over about 11 hours before it is retired.
+
+`retired` has a second cause that needs no launch at all: the model's
+provider no longer lists it. The supervisor reads the model list of every
+provider a roster entry is on (the entry's `<apiBase>/models`) at boot and
+then every six hours, in the background, and writes what it found to
+`fleet-model-lists.json` beside the runs (`runner/src/model-lists.ts`). An
+entry whose model every successful read has left out for at least a day, two
+reads or more, is `retired` with the reason "gone from <provider>'s model list
+since <date>", in `--status`, on the models page and in `/api/models`. The
+first read that lists it again brings it back, with no clear; `clear-model`
+does not lift it. The lists read are OpenRouter's public catalogue (every
+output modality), OpenCode Zen's and Go's (public too), and Cerebras's and
+DeepSeek's with the provider's key (the first enabled credential of that
+provider whose variable is set, else the provider's own variable, sent only
+where the provider table lets it go). A Claude or ChatGPT subscription's and
+the self-hosted server's are not read: the CLI credentials read no model list,
+and the local server lists only what is loaded. A failed read (an error, a
+timeout, a non-200, an empty list, no key) is said in the supervisor log and
+in `--status`, and changes nothing: it neither confirms an absence nor resets
+one. Like the ladder's, this retirement only stops the policy picking the
+model: a run in flight runs on, a pinned job is outside the policy as always,
+no row is deleted, and nothing is counted differently. `--status` ends the
+models table with each list's newest read and what is not on it (operator,
+2026-11-12).
 
 A manual pool job (a `queue` entry without an account) always outranks the
 policy for a pool account; add one to force a specific run (an `e360` for a
@@ -1798,8 +1829,16 @@ One episode, launched in the runner pod (`bun wb --local run episode`: in the
 quickstart's runner container):
 
 ```
-bun wb run episode --model <id> [--driver openai|claude-code|codex|pi]
+bun wb run episode --model <id> [--driver openai|claude-code|codex|pi] [--credential <id>]
 ```
+
+`--credential <id>` names the credential the run is counted against. It
+records the id and chooses no key, so name the one whose key the run uses (a
+CLI driver's variable is `--credential-env`). The supervisor counts a live
+run it did not launch against that credential, with an episode or without
+one: a slot while it is live, and its launch and spend in the day's budgets.
+A run that records no credential is counted against none. Its accounts are
+held while it is live either way ("A fan-out run, by hand").
 
 `./infra/run-roster.sh` and `./infra/run-fleet.sh` still start a roster or a
 whole supervisor by hand, on the quickstart. Both read the config store and
@@ -1815,7 +1854,7 @@ launches one only as a party campaign's one-agent arm (docs/EPISODES.md,
 party is; anything else is launched by hand.
 
 ```
-bun runner/src/run.ts --driver <driver> --model <id> [--objective "<text>"] \
+bun runner/src/run.ts --driver <driver> --model <id> [--objective "<text>"] [--credential <id>] \
   --max-characters 5 --accounts POOL01,POOL02,POOL03,POOL04,POOL05
 ```
 
@@ -1832,7 +1871,9 @@ bun runner/src/run.ts --driver <driver> --model <id> [--objective "<text>"] \
   for all of them. A paused run's accounts are reserved only by its resume,
   which the fleet plans for a run it launched; a paused hand launch on pool
   accounts is not protected, so resume it or launch on accounts outside the
-  pool. Each must be on the module's allowlist ("The account pool").
+  pool. Each must be on the module's allowlist ("The account pool"). The run
+  takes one slot on its `--credential`, as any hand launch does ("Ad-hoc
+  launches").
 - Launch hygiene clears every listed account, as it clears the one account of
   any fresh run.
 - The run directory has `sessions/<Character>/` (a session record per
@@ -2179,7 +2220,8 @@ still fails, the command says so, and running it again applies only the pin.
 What it refuses, writing nothing: a run with a live owner or with no verdict
 at all (the fleet would resume it as `offline` on its next tick); a credential
 that is not configured, disabled, another provider's or the other billing
-side; a run that records no credential (0.5, or launched by hand); an
+side; a run that records no credential (0.5, or launched by hand without
+`--credential`); an
 archived run; and any driver but claude-code. A Codex home holds the CLI's own
 threads, so codex runs stay where they started.
 
