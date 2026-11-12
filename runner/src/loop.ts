@@ -487,7 +487,7 @@ export class ContextBuilder {
     }
     pendingNotices.push(...this.o.sandbox.drainNotices());
     // The window: ambient movement excluded first, then the last EVENT_WINDOW
-    // of what remains (context.ts, `EVENT_WINDOW_EXCLUDE`). The child keeps
+    // of what remains (context.ts, `isAmbientEvent`). The child keeps
     // those in a ring of their own; a sandbox without it (an older child, a
     // test's fake) is read the old way, over its raw tail.
     const sandbox = this.o.sandbox as SandboxHost & { contextEvents?: (limit: number) => Promise<ContextEvents> };

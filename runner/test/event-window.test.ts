@@ -1,7 +1,7 @@
 /**
  * The per-turn event window: ambient movement excluded FIRST, then the last
  * `CONTEXT_POLICY.EVENT_WINDOW` of what remains (context.ts,
- * `EVENT_WINDOW_EXCLUDE`; operator decision, 2026-10-05).
+ * `isAmbientEvent`; operator decision, 2026-10-05).
  *
  * Three layers, all fixture-based. The sandbox child's own ring of non-ambient
  * events, run for real against a hand-fed event stream (no game stack; frames
@@ -12,7 +12,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { loadRunConfig } from "../src/config";
-import { CONTEXT_POLICY, assembleContext, eventWindow } from "../src/context";
+import { CONTEXT_POLICY, assembleContext, eventWindow, isAmbientEvent, transportSighting } from "../src/context";
 import { ContextBuilder } from "../src/loop";
 import { SandboxHost } from "../src/sandbox/host";
 import type { EventSummary } from "@wrathbench/mcp";
@@ -237,5 +237,90 @@ describe("eventWindow and assembleContext", () => {
     ]);
     expect(window.map((e) => e.opcode)).toEqual(["SMSG_ATTACKSTART", "SMSG_THREAT_CLEAR"]);
     expect(folded).toBe(3);
+  });
+});
+
+/**
+ * A ship or zeppelin coming into view and leaving it (operator, 2026-11-12).
+ * Guids are invented: `SHIP` and `ZEPPELIN` carry the map-transport high part
+ * (0x1FC0), `CAR` a game object's (a tram car), `WOLF` a creature's.
+ */
+describe("a map transport's create and out-of-range are ambient; everything else an update says is not", () => {
+  const SHIP = ((0x1fc0n << 48n) | 9n).toString();
+  const ZEPPELIN = ((0x1fc0n << 48n) | 12n).toString();
+  const CAR = ((0xf120n << 48n) | 77n).toString();
+  const WOLF = ((0xf130n << 48n) | 4321n).toString();
+  const update = (seq: number, objects: unknown[]): EventSummary => ({ seq, ts: seq, opcode: "SMSG_UPDATE_OBJECT", data: { blocks: objects.length, objects } });
+  const create = (guid: string, fields: Record<string, unknown> = { entry: 181646, goType: 15 }) => ({
+    update: "create",
+    guid,
+    objectType: "gameObject",
+    pos: { x: -3800.2, y: -10932.8, z: 0, o: 0.83 },
+    pathProgress: 5_031_818,
+    fields,
+  });
+  const gone = (...guids: string[]) => ({ update: "outOfRange", guids });
+
+  test("the sighting alone, either way round, and two transports in one packet", () => {
+    expect(transportSighting("SMSG_UPDATE_OBJECT", update(1, [create(SHIP)]).data)).toBe(true);
+    expect(transportSighting("SMSG_UPDATE_OBJECT", update(2, [gone(SHIP)]).data)).toBe(true);
+    expect(transportSighting("SMSG_UPDATE_OBJECT", update(3, [gone(SHIP, ZEPPELIN), create(ZEPPELIN)]).data)).toBe(true);
+    expect(isAmbientEvent("SMSG_UPDATE_OBJECT", update(1, [create(SHIP)]).data)).toBe(true);
+  });
+
+  test("anything else stays: another object's create or leaving, a values block, a mixed packet, another opcode", () => {
+    for (const objects of [
+      [create(CAR, { entry: 176080, goType: 11 })],
+      [create(WOLF, { entry: 299 })],
+      [gone(WOLF)],
+      [gone(SHIP, WOLF)],
+      [{ update: "values", guid: SHIP, fields: { goState: 0 } }],
+      [create(SHIP), { update: "values", guid: WOLF, fields: { health: 40 } }],
+      [],
+    ]) {
+      expect(isAmbientEvent("SMSG_UPDATE_OBJECT", update(1, objects).data)).toBe(false);
+    }
+    // The transport's own destroy, and its guid on any other opcode, are ordinary events.
+    expect(isAmbientEvent("SMSG_DESTROY_OBJECT", { guid: SHIP, onDeath: false })).toBe(false);
+    expect(isAmbientEvent("SMSG_UPDATE_OBJECT", undefined)).toBe(false);
+    expect(isAmbientEvent("SMSG_UPDATE_OBJECT", { objects: "cut" })).toBe(false);
+  });
+
+  test("the window leaves the flapping out and counts it; what a ride shows stays", () => {
+    const events: EventSummary[] = [];
+    for (let i = 0; i < 40; i++) events.push(update(2 * i, [i % 2 === 0 ? create(SHIP) : gone(SHIP)]));
+    events.push(
+      ev(100, "SMSG_ATTACKSTART"),
+      update(101, [create(SHIP), { update: "values", guid: WOLF, fields: { health: 40 } }]),
+      ev(102, "WB_RIDE_PROGRESS"),
+      ev(103, "SMSG_TRANSFER_PENDING"),
+      ev(104, "SMSG_NEW_WORLD"),
+      ev(105, "WB_AREA"),
+    );
+    const { window, folded } = eventWindow(events);
+    expect(window.map((e) => e.seq)).toEqual([100, 101, 102, 103, 104, 105]);
+    expect(folded).toBe(40);
+    expect(assembleContext({ stateSummary: "[state]", scratchpad: "", notices: [], turn: 3, events })).toContain(
+      "[events: last 6, newest last; 40 ambient movement and party-frame events folded into state only]",
+    );
+  });
+
+  test("the sandbox child's ring leaves it out as it arrives, and the cache still holds the ship", async () => {
+    const host = makeHost();
+    expect((await host.evalSnippet(PRELUDE)).ok).toBe(true);
+    const block = JSON.stringify(create(SHIP));
+    await host.evalSnippet(
+      `swings(2); for (let i = 0; i < 30; i++) { feed("SMSG_UPDATE_OBJECT", 0x0a9, { blocks: 1, objects: [${block}] }); ` +
+        `if (i < 29) feed("SMSG_UPDATE_OBJECT", 0x0a9, { blocks: 1, objects: [{ update: "outOfRange", guids: ["${SHIP}"] }] }); } swings(1); "fed";`,
+    );
+    const { events, folded } = await host.contextEvents(CONTEXT_POLICY.EVENT_WINDOW);
+    expect(events.map((e) => e.opcode)).toEqual(["SMSG_ATTACKSWING_NOTINRANGE", "SMSG_ATTACKSWING_NOTINRANGE", "SMSG_ATTACKSWING_NOTINRANGE"]);
+    expect(folded).toBe(59);
+    // Folded into state all the same: the last sighting was a create, so it is in view.
+    const seen = await host.evalSnippet(`state.nearby.has("${SHIP}")`);
+    expect(seen.value).toBe("true");
+    // And the model's own listeners and recent() are untouched.
+    const raw = await host.recentEvents(500);
+    expect(raw.filter((e) => e.opcode === "SMSG_UPDATE_OBJECT")).toHaveLength(59);
   });
 });

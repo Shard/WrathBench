@@ -148,7 +148,7 @@ takes from the stack and how.
   `state_summary`, `write_scratchpad`, `edit_scratchpad`); the runner adds its
   four as `ToolSpec`s and lists all nine in the order they are served
   (`runner/src/tools.ts`).
-- **Rendering** (`CoreToolRender`): the event line, which opcodes are ambient,
+- **Rendering** (`CoreToolRender`): the event line, which events are ambient,
   the state summary and what a snippet result ends with are the harness's
   context rendering (`runner/src/context.ts`, the snippet delta), handed to
   the core tools rather than known by them.

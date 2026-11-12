@@ -521,6 +521,23 @@ describe("recent_events movement fold", () => {
     expect(res.text).toContain("(+2 ambient movement and party-frame events folded into state");
   });
 
+  test("a ship's coming into view and leaving it is folded; a creature's is shown", async () => {
+    const ship = ((0x1fc0n << 48n) | 9n).toString();
+    const wolf = ((0xf130n << 48n) | 4321n).toString();
+    const update = (seq: number, block: unknown) => ({ seq, ts: seq, opcode: "SMSG_UPDATE_OBJECT", data: { blocks: 1, objects: [block] } });
+    const events = [
+      update(1, { update: "create", guid: ship, objectType: "gameObject", fields: { goType: 15 } }),
+      update(2, { update: "outOfRange", guids: [ship] }),
+      update(3, { update: "outOfRange", guids: [wolf] }),
+    ];
+    const res = await callTool(streamCtx(events), "recent_events", {});
+    expect(res.text.split("\n")).toHaveLength(2);
+    expect(res.text).toContain(`#3 SMSG_UPDATE_OBJECT`);
+    expect(res.text).toContain("(+2 ambient movement and party-frame events folded into state");
+    // The raw stream shows every one of them.
+    expect((await callTool(streamCtx(events), "recent_events", { includeMovement: true })).text.split("\n")).toHaveLength(3);
+  });
+
   test("an all-movement stream says so instead of claiming no events", async () => {
     const events = Array.from({ length: 5 }, (_, i) => ev(i, "SMSG_MONSTER_MOVE"));
     const res = await callTool(streamCtx(events), "recent_events", {});

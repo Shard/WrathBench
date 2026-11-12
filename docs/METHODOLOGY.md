@@ -190,7 +190,10 @@ left; a player there presses Help → "I'm stuck". `unstuck()` sends what that
 button sends, the Stuck spell through the ordinary cast handler, and the
 server decides the move. It acts only on a second call within a minute, the
 first sending nothing and saying what will happen. It is in the SDK
-reference like any helper, and by the same decision not in the prompt.
+reference like any helper, and the hints of the two refusals a stranded
+character keeps meeting, a route that ends (`path_incomplete`) and a step
+that cannot be climbed (a climb's `drop`), name it (operator decision,
+2026-11-12). The system prompt does not.
 
 ## Context policy
 

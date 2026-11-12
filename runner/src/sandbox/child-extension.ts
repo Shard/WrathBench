@@ -18,6 +18,7 @@ import type { EventSummary, SandboxChildApi, SandboxChildExtension } from "@wrat
 import { toJsonSafe } from "@wrathbench/mcp/jsonsafe";
 import {
   CONTEXT_POLICY,
+  isAmbientEvent,
   DISPEL_LOG_OPCODES,
   emoteShown,
   foldUiOpenWindows,
@@ -117,7 +118,7 @@ export function benchmarkChildExtension({ client, summarize, forwardClientCache 
    * The turn's event window, kept apart from the SDK's event buffer.
    *
    * The context shows the last `CONTEXT_POLICY.EVENT_WINDOW` events that are not
-   * ambient movement (context.ts, `EVENT_WINDOW_EXCLUDE`). The SDK buffer holds
+   * ambient (context.ts, `isAmbientEvent`). The SDK buffer holds
    * the last 500 events of every kind, and where transports report every second
    * ambient ones are nine in ten of them, so filtering that buffer would reach
    * back only as far as the ambient rate allowed. So the non-ambient events are
@@ -136,7 +137,7 @@ export function benchmarkChildExtension({ client, summarize, forwardClientCache 
   let contextSignals = 0;
 
   client.events.onAny((event) => {
-    if (CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(event.opcode)) {
+    if (isAmbientEvent(event.opcode, event.data)) {
       contextAmbient++;
       return;
     }
