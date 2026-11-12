@@ -559,8 +559,11 @@ describe("a secret the config store holds", () => {
       env: { OPENROUTER_KEY: "sk-or-STORED-NEVER-PRINTED" },
       stored: new Set(["OPENROUTER_KEY", "OPENROUTER_KEY_2"]),
       unreadable: new Map([["OPENROUTER_KEY_2", "OPENROUTER_KEY_2: sealed under another store key (aaaa; this one is bbbb)"]]),
+      updatedAt: new Map([["OPENROUTER_KEY", NOW - H]]),
     };
-    const statuses = credentialStatuses({ credentials: creds, book, gate, runs: [], env: { OPENROUTER_KEY_2: "from-sops" }, secrets });
+    // A run paused auth-failed before the key was replaced: that was the old key.
+    const runs = [fact({ credential: "or", live: false, pause: { reason: "auth-failed", at: NOW - 2 * H, count: 1, episodeElapsedMs: null } })];
+    const statuses = credentialStatuses({ credentials: creds, book, gate, runs, env: { OPENROUTER_KEY_2: "from-sops" }, secrets });
     expect(statuses.map((s) => [s.id, s.secretSet, s.stored ?? false, s.health?.state])).toEqual([
       ["or", true, true, "ok"],
       ["or2", false, true, "secret-missing"],
@@ -569,6 +572,9 @@ describe("a secret the config store holds", () => {
     expect(statuses[1]!.fix?.kind).toBe("replace-secret");
     expect(JSON.stringify(statuses)).not.toContain("NEVER-PRINTED");
     expect(formatCredentialStatus(statuses, {}, NOW).join("\n")).not.toContain("NEVER-PRINTED");
+    // Without the replacement, the same pause still indicts it.
+    const old = credentialStatuses({ credentials: creds, book, gate, runs, env: { OPENROUTER_KEY: "from-sops" } });
+    expect(old[0]!.health?.state).toBe("auth-failed");
   });
 });
 

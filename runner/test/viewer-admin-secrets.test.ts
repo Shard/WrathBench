@@ -161,6 +161,23 @@ describe("PUT /api/admin/secrets/<NAME>", () => {
   });
 });
 
+describe("a secret replaced since a refusal", () => {
+  test("a run paused auth-failed before a key was stored, or before a home logged in again, no longer reads auth-failed", async () => {
+    const f = fixture();
+    const now = Date.now();
+    const st = (id: string, provider: string, secretEnv: string) => ({ id, provider, billing: "paid", enabled: true, secretEnv, secretSet: true, slots: 1, inUse: 0, budget: "no budget", used: null, held: {}, holds: {}, lastError: { reason: "auth-failed", at: now - 60_000 } });
+    writeFileSync(join(f.runsDir, "fleet-state.json"), JSON.stringify({ heartbeatAt: now, credentials: [st("or-1", "openrouter", "OPENROUTER_KEY"), st("claude-2", "claude", "CLAUDE_CODE_OAUTH_TOKEN_2"), st("chatgpt-1", "chatgpt", "CODEX_HOME")] }));
+    const states = async (): Promise<Record<string, string | undefined>> =>
+      Object.fromEntries((JSON.parse((await f.call("GET", "/api/admin")).text) as AdminResponse).credentials.map((c) => [c.id, c.health?.state]));
+    expect(await states()).toEqual({ "or-1": "auth-failed", "claude-2": "auth-failed", "chatgpt-1": "auth-failed" });
+    await f.call("PUT", "/api/admin/secrets/CLAUDE_CODE_OAUTH_TOKEN_2", { value: SENTINEL });
+    const dir = codexLoginDir(f.env);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "chatgpt-1.state.json"), JSON.stringify({ state: "ok", requestedAt: now - 30_000, at: now - 1_000, actor: "mark" }));
+    expect(await states()).toEqual({ "or-1": "auth-failed", "claude-2": "ok", "chatgpt-1": "ok" });
+  });
+});
+
 describe("POST /api/admin/codex-login/<id>", () => {
   test("leaves a request beside the store for the supervisor, once", async () => {
     const f = fixture({ supervisorUp: true });

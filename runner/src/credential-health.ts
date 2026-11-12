@@ -127,12 +127,25 @@ export interface HealthInput {
   holdsOf: { scored?: CredentialHold; freeplay?: CredentialHold };
   lastError: { reason: string; at: number } | null;
   read?: CredentialRead | null;
+  /**
+   * When the secret was last replaced (stored from the admin page or the CLI,
+   * or a Codex home logged in again). A refusal seen before it was about the
+   * old secret, so it no longer says this one is refused.
+   */
+  replacedAt?: number | null;
 }
 
 const NEW_SECRET: Record<HealthInput["holds"], string> = { token: "a new token", key: "a new key", home: "a fresh login in the Codex home" };
 
 /** The state, its line and its fix: the first state in `HEALTH_STATES` that applies. */
-export function credentialHealth(i: HealthInput): { health: CredentialHealth; fix: CredentialFix | null } {
+export function credentialHealth(input: HealthInput): { health: CredentialHealth; fix: CredentialFix | null } {
+  const replaced = input.replacedAt ?? null;
+  const before = (at: number): boolean => replaced !== null && at < replaced;
+  const i: HealthInput = {
+    ...input,
+    lastError: input.lastError !== null && before(input.lastError.at) ? null : input.lastError,
+    read: input.read != null && (input.read.classification === "auth-failed" || input.read.classification === "no-access") && before(input.read.at) ? null : (input.read ?? null),
+  };
   const read = i.read ?? null;
   const lastCheck = read === null ? null : { at: read.at, http: read.http, ...(read.code !== undefined ? { code: read.code } : {}) };
   const out = (state: HealthState, reason: string, since: number | null, fix: CredentialFix | null) => ({ health: { state, reason, since, lastCheck }, fix });

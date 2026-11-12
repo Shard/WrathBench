@@ -593,7 +593,8 @@ export function credentialStatuses(o: {
     const lastRead = readOf(c);
     const stored = o.secrets?.stored.has(c.secretEnv) === true;
     const storedUnreadable = o.secrets?.unreadable.get(c.secretEnv) ?? null;
-    const { health, fix } = credentialHealth({ enabled: c.enabled, secretEnv: c.secretEnv, holds, secretSet, stored, storedUnreadable, holdsOf, lastError, read: lastRead ?? null });
+    const replacedAt = o.secrets?.updatedAt.get(c.secretEnv) ?? null;
+    const { health, fix } = credentialHealth({ enabled: c.enabled, secretEnv: c.secretEnv, holds, secretSet, stored, storedUnreadable, holdsOf, lastError, read: lastRead ?? null, replacedAt });
     return {
       id: c.id,
       provider: c.provider,

@@ -326,6 +326,8 @@ export interface SecretResolution {
   stored: ReadonlySet<string>;
   /** Names whose stored secret does not open, with why. */
   unreadable: ReadonlyMap<string, string>;
+  /** When each stored secret was last set. */
+  updatedAt: ReadonlyMap<string, number>;
 }
 
 export function resolveStoreSecrets(
@@ -335,6 +337,7 @@ export function resolveStoreSecrets(
   const out: Record<string, string | undefined> = { ...env };
   const stored = new Set<string>();
   const unreadable = new Map<string, string>();
+  const updatedAt = new Map<string, number>();
   let rows: Row[];
   try {
     rows = readRows(opts.dbPath ?? configDbPath(env));
@@ -344,10 +347,11 @@ export function resolveStoreSecrets(
     rows = [];
     void e;
   }
-  if (rows.length === 0) return { env: out, stored, unreadable };
+  if (rows.length === 0) return { env: out, stored, unreadable, updatedAt };
   const k = storeKeyOf(env);
   for (const r of rows) {
     stored.add(r.name);
+    updatedAt.set(r.name, r.updated_at);
     // A row a name check would refuse now is never applied (a table edited by hand).
     const byName = secretNameRefusal(r.name);
     if (byName !== null) {
@@ -366,7 +370,7 @@ export function resolveStoreSecrets(
       delete out[r.name];
     }
   }
-  return { env: out, stored, unreadable };
+  return { env: out, stored, unreadable, updatedAt };
 }
 
 /** One variable's stored secret, read fresh: what a launch reads. */

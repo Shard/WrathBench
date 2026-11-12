@@ -133,6 +133,9 @@ export function credentialViews(o: {
       meta !== undefined && o.keyId != null && meta.keyId !== o.keyId ? `${c.secretEnv}: sealed under another store key (${meta.keyId}; this one is ${o.keyId})` : null;
     const storedOk = stored && storedUnreadable === null;
     const secretSet = storedOk ? true : storedUnreadable !== null ? false : s !== undefined ? s.secretSet : null;
+    // A secret replaced since a refusal was seen: the refusal was the old one's.
+    const login = o.logins?.get(c.id) ?? null;
+    const replacedAt = Math.max(meta?.updatedAt ?? 0, login?.state === "ok" ? login.at : 0) || null;
     // Derived here again rather than taken as published: the store's switch and
     // the chart's modelKeys are the viewer's to read, and fresher than a tick.
     let derived: ReturnType<typeof credentialHealth> | null = null;
@@ -149,6 +152,7 @@ export function credentialViews(o: {
         holdsOf: s.holds ?? Object.fromEntries(Object.keys(s.held).map((k) => [k, { code: null, until: null }])),
         lastError: s.lastError,
         read: s.lastRead ?? null,
+        replacedAt,
       });
     } else if (!c.enabled || (deployed === false && !stored) || storedUnreadable !== null) {
       derived = credentialHealth({ enabled: c.enabled, secretEnv: c.secretEnv, holds, secretSet: true, stored, storedUnreadable, deployed, holdsOf: {}, lastError: null });
@@ -163,7 +167,7 @@ export function credentialViews(o: {
       budget: describeBudget(c.budget),
       secretSet,
       stored,
-      login: o.logins?.get(c.id) ?? null,
+      login,
       deployed,
       inUse: s?.inUse ?? null,
       used: s?.used ?? null,
