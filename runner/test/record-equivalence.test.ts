@@ -231,3 +231,21 @@ describe("a first-build v1 run's row, once later builds write its verdicts", () 
     expect(readRunRow(dir, V1P1_RUN)).toMatchObject({ termination_reason: "manual", pause_reason: null });
   });
 });
+
+describe("an item's random suffix: the name a state row held is the trace's", () => {
+  // The fixture has no item with a random property; these rows are invented, in the recorder's shape.
+  const T = 1_762_000_000_000;
+  const sheet = { money: 0, equip: [[6, 501, -12]], bags: [], inv: [[255, 23, 702, 1, 44], [255, 24, 702, 1, 7], [255, 25, 703, 3]], dur: [], quests: [], rep: [], skills: [] };
+  const rows = [
+    { ts: T, kind: "key", data: { level: 9, ...sheet }, dict: { items: [[501, 2, "Sentry's Leggings"], [702, 2, "Lupine Handwraps"], [703, 1, "Linen Cloth"]], rands: [[-12, "of the Bear"]] } },
+    // Named later in the segment, ahead of the row that needs it.
+    { ts: T + 1000, kind: "dict", dict: { rands: [[44, "of Strength"]] } },
+  ] as TraceRow[];
+
+  test("the template's name and the suffix, as state.bag() gave it; an id the record never named reads as the template's", () => {
+    const items = JSON.parse(foldedAt(rows, T + 2000)["items"] as string) as { name: string }[];
+    expect(items.map((i) => i.name)).toEqual(["Sentry's Leggings of the Bear", "Lupine Handwraps of Strength", "Lupine Handwraps", "Linen Cloth"]);
+    // Before the dict row, the suffix it names is not known yet.
+    expect((JSON.parse(foldedAt(rows, T)["items"] as string) as { name: string }[])[1]!.name).toBe("Lupine Handwraps");
+  });
+});
