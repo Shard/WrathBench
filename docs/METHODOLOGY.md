@@ -436,8 +436,8 @@ outside it, `meta.json` names the stack's version and the wrath-mcp commit the
 run's stack came from, `-dirty` when its checkout differed from that commit
 (2026-10-29), and a v1 run's session record names the stack's version and
 commit again with the module's build and wire protocol (2026-11-12). Not yet:
-the AzerothCore pin and the deployment's configuration, which a run reaches
-only through the module build's tag. A run is traceable to a build of this
+the AzerothCore pin, which a run reaches only through the module build's tag,
+and the deployment's configuration. A run is traceable to a build of this
 repository and a commit of the stack, not yet to one manifest naming every
 version it depended on.
 
