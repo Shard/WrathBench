@@ -35,7 +35,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tokenFingerprint } from "@wrathbench/mcp/module-auth";
-import { cap, fmtBytes, isValidRunId, iso, MIN_TOKEN_LENGTH, parseSince, REDACTED } from "./inspect-run";
+import { cap, fmtBytes, isValidRunId, iso, MIN_TOKEN_LENGTH, parseRunArg, parseSince, REDACTED } from "./inspect-run";
 import { SMOKE_SESSION_NAME, SMOKE_SESSIONS_NAME, smokeFingerprints } from "./smoke/lib/session";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
@@ -90,6 +90,10 @@ export function parseArgs(argv: readonly string[], now: number): AuditArgs | { e
   if (smoke !== null) {
     if (!SMOKE_SESSION_NAME.test(smoke)) return { error: "--smoke is a smoke's name, as bun wb smoke takes it (edge-drop, quest-accept-status), or a name and role (group-a)" };
     if (positional.length > 0) return { error: "--smoke reads a smoke's sessions, not a run's: no run id with it" };
+  } else if (positional.length === 1 && parseRunArg(positional[0]!)?.character != null) {
+    // Each fan-out character's session has its own token, which lives in the
+    // run's roster.json and nowhere this reads.
+    return { error: `${positional[0]} is a fan-out character's session: its audit is under its own session's token, which inspect audit does not read; it reads a run's` };
   } else if (positional.length !== 1 || !isValidRunId(positional[0]!)) {
     return { error: positional.length === 0 ? "a run id is needed" : `not one run id: ${positional.join(" ")}` };
   }

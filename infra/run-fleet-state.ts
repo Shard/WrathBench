@@ -47,11 +47,12 @@ import {
   type ModelsSidecar,
   type ModelState,
   modelStates,
-  readRunFacts,
+  readFleetRuns,
   type RunFact,
   runFactCache,
   type RunPodsMode,
   type StartingCharacter,
+  type UnstampedRun,
 } from "../runner/src/models";
 
 /** Set where the runner image runs the fleet or an episode: the chart's fleet, runner and run pods, and compose's `fleet` service; see run-roster's inContainer(). */
@@ -86,11 +87,22 @@ export const RUN_FACTS_CACHE = join(RUNS_DIR, "run-facts.cache.json");
  * supervisor's first tick rewrites it), it is one cold read.
  */
 export function readReportFacts(now = Date.now(), runsDir = RUNS_DIR, cachePath = RUN_FACTS_CACHE): RunFact[] {
-  return readRunFacts(runsDir, now, { includeArchived: true, facts: runFactCache(cachePath, { readOnly: true }) });
+  return readReportRuns(now, runsDir, cachePath).facts;
+}
+
+/** `readReportFacts`, with the runs that carry no episode beside the facts, as the tick reads them for the credentials (`readFleetRuns`). */
+export function readReportRuns(now = Date.now(), runsDir = RUNS_DIR, cachePath = RUN_FACTS_CACHE): ReportRuns {
+  return readFleetRuns(runsDir, now, { includeArchived: true, facts: runFactCache(cachePath, { readOnly: true }) });
+}
+
+/** One read of every run for a report: the facts, and the runs with no episode, which only the credentials read. */
+export interface ReportRuns {
+  facts: RunFact[];
+  unstamped: UnstampedRun[];
 }
 
 /** The facts an archive-less `readRunFacts` answers, out of an archive-inclusive read: the same runs, in the same order. Pure. */
-export function unarchived(facts: readonly RunFact[]): RunFact[] {
+export function unarchived<T extends Pick<RunFact, "archived">>(facts: readonly T[]): T[] {
   return facts.filter((f) => f.archived !== true);
 }
 

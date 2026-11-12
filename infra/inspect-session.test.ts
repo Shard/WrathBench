@@ -31,7 +31,10 @@ interface Character {
   name: string;
   guid: string;
   level: number;
-  xp: number;
+  /** Null: none read yet, as a character at exactly 0 has none until its first gain. */
+  xp: number | null;
+  /** The bar's length, when the key carries it. */
+  xpMax?: number;
   events: EventRow[];
 }
 
@@ -49,7 +52,7 @@ function writeRecord(session: string, id: string, c: Character, calls: (w: Sessi
     character,
     stream: { connected: true, events: 1, seq: 1 },
   });
-  writer.ingest(drain([{ ts: T0, kind: "key", map: 0, x: 1, y: 2, z: 3, o: 0, data: { ...emptyTraceState(), ...emptyTraceSheet(), level: c.level, xp: c.xp, money: 1234, zone: 12 } }], []));
+  writer.ingest(drain([{ ts: T0, kind: "key", map: 0, x: 1, y: 2, z: 3, o: 0, data: { ...emptyTraceState(), ...emptyTraceSheet(), level: c.level, xp: c.xp, ...(c.xpMax !== undefined ? { xpMax: c.xpMax } : {}), money: 1234, zone: 12 } }], []));
   // What the trace says beside an event: a level gained, a turn-in.
   for (const e of c.events) {
     clock = e.ts;
@@ -164,6 +167,14 @@ const OLD = "run-05";
 writeRun(join(RUNS, OLD), OLD, { character: "Oldwick" }, OPENROUTER_TURNS, false);
 writeLegacy05Run(join(RUNS, OLD), readRunRow(join(RUNS, OLD), OLD)!, [{ ts: T0 + MIN, level: 3, xp: 40, money: 5, questsCompleted: 1, turn: 1, zone: 12 }]);
 
+/** A v1 run's fresh character: the bar's length read, and no xp, which is how exactly 0 arrives. */
+const FRESH = "run-fresh";
+{
+  const dir = join(RUNS, FRESH);
+  writeRun(dir, FRESH, { character: "Newwick", account: "NEWACCT" }, [...OPENROUTER_TURNS, { t: "termination", reason: "episode-limit" }], false);
+  await writeRecord(join(dir, "session"), "0123456789abcdee", { name: "Newwick", guid: "6", level: 1, xp: null, xpMax: 400, events: [] }, () => {}, false).close();
+}
+
 const STORE = await memoryStore(RUNS);
 
 async function inspect(argv: string[], store?: InspectStore): Promise<{ code: number; out: string[]; err: string[] }> {
@@ -204,6 +215,10 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE]] a
       expect(marks).toContain("zone 1");
       expect(marks).not.toContain("achievements_at_login");
       expect(line(r.out, "quests")).toBe("quests     2 over the run");
+    });
+
+    test("a character at exactly 0 xp reads 0 once its bar's length is known", async () => {
+      expect(line((await inspect(["run", FRESH], store)).out, "level")).toStartWith("level      L1 0xp of 400");
     });
 
     test("--since and --until bound the marks", async () => {
@@ -306,6 +321,30 @@ describe("inspect session", () => {
     const bravo = await inspect(["session", FAN, "--character", "bravo", "--stream", "calls", "--kind", "call"]);
     expect(bravo.out[0]).toContain("of 1 character(s): Bravo");
     expect(bravo.out.slice(2)).toHaveLength(1);
+  });
+
+  test("a character's session id, as the viewer names it, is that character: session reads it alone, every other view the run", async () => {
+    const id = `${FAN}${FANOUT_SEP}Bravo`;
+    const byFlag = await inspect(["session", FAN, "--character", "Bravo", "--stream", "calls", "--kind", "call"]);
+    const byId = await inspect(["session", id, "--stream", "calls", "--kind", "call"]);
+    expect(byId).toEqual(byFlag);
+    expect((await inspect(["session", `${FAN}${FANOUT_SEP}bravo`, "--character", "Bravo"])).code).toBe(0);
+    const clash = await inspect(["session", id, "--character", "Alfa"]);
+    expect(clash.code).toBe(2);
+    expect(clash.err[0]).toContain("is Bravo's session; --character Alfa names another");
+    const missing = await inspect(["session", `${FAN}${FANOUT_SEP}Charlie`]);
+    expect(missing.code).toBe(1);
+    expect(missing.out[0]).toContain("has no character Charlie: Alfa, Bravo");
+    for (const view of [["run"], ["stuck"], ["trajectory"], ["tools"], ["pad"]]) {
+      const r = await inspect([view[0]!, id]);
+      const whole = await inspect([view[0]!, FAN]);
+      expect({ view, code: r.code }).toEqual({ view, code: whole.code });
+      expect(r.out[0]).toBe(`${id} is Bravo's session: this view is the run's, every character's together; session ${id} is Bravo's alone`);
+      expect(r.out.slice(1)).toEqual(whole.out);
+      expect((await inspect([view[0]!, `${FAN}${FANOUT_SEP}Charlie`])).out[0]).toContain("has no character Charlie");
+    }
+    expect((await inspect(["run", `${FAN}${FANOUT_SEP}../x`])).code).toBe(2);
+    expect((await inspect(["run", `${FANOUT_SEP}Bravo`])).code).toBe(2);
   });
 
   test("a run with no record, a character it does not have, and a bad flag each say so", async () => {

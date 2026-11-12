@@ -28,6 +28,7 @@ bun wb inspect stuck [<run-id>] [--window 2h] [--until 1h]   # no game progress 
 bun wb inspect session <run-id> [--kind death,level] [--last 20]       # a v1 run's events stream: deaths, levels, zones, turn-ins
 bun wb inspect session <run-id> --stream calls --grep 'moveTo|too_far' # its calls stream: each call, result, actions, moves, served batches
 bun wb inspect session <run-id> --character Alfa --since 30m           # one fan-out character; without it, all of them, a column each
+bun wb inspect session '<run-id>~Alfa' --since 30m                     # the same, by the session id the viewer shows
 bun wb inspect audit <run-id>                         # module audit log: counts per kind, op/opcode and status
 bun wb inspect audit <run-id> --op WB_MOVE_RESULT --status target_off_mesh --last 20
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
@@ -49,7 +50,9 @@ stream). A fan-out run (`sessions/<Character>/`, one agent, several
 characters) is read per character: `run` prints a block each, `live` a line
 each under the run's, and `stuck` judges each and calls the run stuck only
 when every one is. A call that named no character is in every character's
-record; `session` shows it once, as `Alfa+1`.
+record; `session` shows it once, as `Alfa+1`. A character's session id,
+`<run-id>~<Name>` as the viewer names it, is taken wherever a run id is but
+`audit`: `session` reads that character alone, every other view the run.
 
 **Cost.** `run`'s `cost` line is the whole run's whatever the window: the
 provider's own charge where it reported one (OpenRouter's `usage.cost` per

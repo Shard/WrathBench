@@ -46,7 +46,7 @@ import { stampedCompactWindow, type TerminationReason } from "../runner/src/conf
 import { driverEntry, isProbeOnlyDriver } from "../runner/src/drivers";
 import { isScoredEpisode } from "../runner/src/episodes";
 import { classifyLapse, OFFLINE_PAUSE, PARTY_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
-import { driverOfEntry, placeRef, SlotBook, type CredentialGate, type PlacedCredential, type ResumeHold } from "./run-fleet-credentials";
+import { credentialKey, driverOfEntry, placeRef, SlotBook, type CredentialGate, type PlacedCredential, type ResumeHold } from "./run-fleet-credentials";
 import type { ResumeHoldCode } from "../runner/src/credential-health";
 import type { Credential } from "../runner/src/credential-slots";
 import {
@@ -555,6 +555,45 @@ export function placeJob(
     placed[ref] = r.placement.credential;
   }
   return { ok: true, job: { ...job, placed }, keys };
+}
+
+/** What `outsideRuns` reads of a run, stamped (`RunFact`) or not (`UnstampedRun`). */
+export type OutsideRun = Pick<RunFact, "runId" | "live" | "credential" | "account" | "fanoutAccounts">;
+
+/**
+ * The live runs this fleet did not launch that bill a credential: a hand
+ * launch (`bun wb run episode`, `run.ts` with a fan-out grant), with an
+ * episode or without one. Each takes a slot on the credential it recorded for
+ * as long as it is live, so the fleet never plans past the credential's slots
+ * around it (`countOutsideRuns`); its runs and spend today are the budgets'
+ * (`credentialGate`) and its accounts are held off the files (`accountHeldBy`),
+ * both whatever launched it.
+ *
+ * Not a `fleet-` run: the fleet's own runs are on the book through their jobs,
+ * and one no job of this supervisor owns (`unownedLiveRuns`) holds its model
+ * and account only, as it always has. Nor a run one of the supervisor's
+ * processes holds (`running`) or one on an account a live job holds
+ * (`busyAccounts`, upper-cased), which are that job's. Pure.
+ */
+export function outsideRuns<T extends OutsideRun>(
+  runs: readonly T[],
+  opts: { running?: ReadonlySet<string>; busyAccounts?: ReadonlySet<string> } = {},
+): T[] {
+  const busy = opts.busyAccounts ?? new Set<string>();
+  return runs.filter(
+    (f) => f.live && f.credential !== null && !f.runId.startsWith("fleet-") && opts.running?.has(f.runId) !== true && !onBusyAccount(f, busy),
+  );
+}
+
+/**
+ * Put the runs `outsideRuns` answers on the book: one session each on the
+ * credential it recorded — a fan-out run is one agent on one credential,
+ * however many characters it drives (`sessionsOf`). Not on a driver's host
+ * cap: a hand launch runs in the runner pod, not as one of the host's
+ * children that cap is for.
+ */
+export function countOutsideRuns(book: SlotBook, runs: readonly OutsideRun[]): void {
+  for (const f of runs) if (f.credential !== null) book.add([credentialKey(f.credential)]);
 }
 
 /**
@@ -2654,7 +2693,8 @@ export interface InFlight {
  * refs of live runs no job owns (`unownedLiveRuns`), held for their model as
  * the live tick holds them: never planned again, but not counted against a
  * credential or a driver cap, which the tick does not count them against
- * either.
+ * either. `outside` are the live runs the fleet did not launch, each on its
+ * credential's slot as the tick counts them (`countOutsideRuns`).
  */
 export function planTick(
   config: FleetConfig,
@@ -2674,6 +2714,8 @@ export function planTick(
   gate?: CredentialGate,
   /** The evals group (`planPolicy`'s `evals`): off, the policy picks no scored or probing episode. The caller passes the config `withoutEvals` too. */
   evals = true,
+  /** Live runs this fleet did not launch, each on its credential's slot (`outsideRuns`). */
+  outside: readonly OutsideRun[] = [],
 ): {
   pinned: { job: FleetJob; spawn: JobSpawn }[];
   queue: QueuePlan;
@@ -2705,6 +2747,7 @@ export function planTick(
   const book = new SlotBook(config.credentials, config.policy.maxSessions);
   for (const j of inFlight) countJob(book, j, config.roster, runCredentials);
   for (const r of resumes) countJob(book, r.job, config.roster, runCredentials);
+  countOutsideRuns(book, outside);
   const placing = { credentials: config.credentials, book, gate };
   // A pinned job that no credential has room for does not spawn: it is
   // reported with the picks the policy held, which is where `--dry-run` says
