@@ -858,8 +858,9 @@ const USAGE = `usage: bun runner/src/config-store.ts <command>
   credentials edit <id> <json>
                             merge into one credential; validated
   credentials disable <id>  stop new runs taking it; live runs on it finish
-  secrets [list]            the secrets the store holds, sealed: each variable's NAME, when and by whom it
-                            was set, and whether it opens with this WRATHBENCH_STORE_KEY; never a value
+  secrets [list]            whether WRATHBENCH_STORE_KEY is set here and opens what it seals, then the
+                            secrets the store holds, sealed: each variable's NAME, when and by whom it
+                            was set, and whether it opens with this key; never a value
   secrets set <NAME>        store a credential's secret, read from stdin (never argv), sealed under
                             WRATHBENCH_STORE_KEY; it wins over the environment's (runner/src/store-secrets.ts)
   secrets clear <NAME>      remove it: the environment's value stands again
@@ -1027,11 +1028,11 @@ async function secretsCommand(store: ConfigStore, args: string[], opts: PutOptio
   switch (sub) {
     case "list": {
       const metas = s.storeSecretMetas(store.db);
-      const key = s.storeKeyOf();
+      // The key first, stored secrets or none: whether one could be set, and opened, here.
+      console.log(s.storeKeyStatus());
       if (metas.length === 0) console.log("no stored secrets — every credential's secret is the environment's");
       for (const m of metas) {
-        const opens = key.key === null ? `no key here (${key.why})` : m.keyId === key.key.id ? "opens" : `sealed under another key (${m.keyId})`;
-        console.log(`${m.name.padEnd(28)}  ${new Date(m.updatedAt).toISOString()}  ${m.actor.padEnd(8)}  ${opens}`);
+        console.log(`${m.name.padEnd(28)}  ${new Date(m.updatedAt).toISOString()}  ${m.actor.padEnd(8)}  ${s.storedSecretOpens(store.db, m.name)}`);
       }
       return 0;
     }
