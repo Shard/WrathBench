@@ -1,6 +1,6 @@
 ---
 name: run-forensics
-description: Answer any question about a WrathBench run, live or past, with `bun wb inspect` — is it live, paused or ownerless, its level and xp (per character on a fan-out run), what it cost, snippets and errors, tool calls by name, a v1 run's events and calls, the scratchpad over time or at a moment, whether it is stuck, the module audit log, what the publisher last did. Use whenever a task needs run data, and always before writing a script that reads a run's session record, trajectory.jsonl, meta.json, a 0.5 run.sqlite, audit files or the publisher's state.
+description: Answer any question about a WrathBench run, live or past, with `bun wb inspect` — is it live, paused or ownerless, its level and xp (per character on a fan-out run), what it cost, what each request cost and how often it woke (a probe readout), snippets and errors, tool calls by name, a v1 run's events and calls, the scratchpad over time or at a moment, whether it is stuck, the module audit log, what the publisher last did. Use whenever a task needs run data, and always before writing a script that reads a run's session record, trajectory.jsonl, meta.json, a 0.5 run.sqlite, audit files or the publisher's state.
 ---
 
 # Run forensics
@@ -29,6 +29,8 @@ bun wb inspect session <run-id> [--kind death,level] [--last 20]       # a v1 ru
 bun wb inspect session <run-id> --stream calls --grep 'moveTo|too_far' # its calls stream: each call, result, actions, moves, served batches
 bun wb inspect session <run-id> --character Alfa --since 30m           # one fan-out character; without it, all of them, a column each
 bun wb inspect session '<run-id>~Alfa' --since 30m                     # the same, by the session id the viewer shows
+bun wb inspect requests <run-id> [--since 1h] [--until 30m]            # per request: uncached/cached input, output, reasoning; per wake or turn; per hour; cost; stall minutes
+bun wb inspect requests <run-id> --at-level 5 --at-minutes 60,90 --json   # up to each cut from the start, as one JSON object for a script
 bun wb inspect audit <run-id>                         # module audit log: counts per kind, op/opcode and status
 bun wb inspect audit <run-id> --op WB_MOVE_RESULT --status target_off_mesh --last 20
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
@@ -63,6 +65,19 @@ carry opening snapshots; the line says so) nor on a codex run from before
 per-turn deltas (running totals), and the CLI's dollar figure leaves out the
 turns it never reported, which the run page adds at list.
 
+**Requests.** `requests` is the probe readout: a column for the run (or the
+window) and one per cut, each from the run's start. Read its `note` lines
+before its numbers: they say what a request is on that driver (claude-code: a
+usage-bearing response, output its turn's result spread over the turn's
+requests, a turn with no result unreported, never its snapshots; codex: a whole
+CLI turn, a running thread total turned into the turn's), whether wakes are
+`wake` records or harness turns, and that paused time is left out. A figure
+with `(n/m)` was reported on n of m requests; `cost priced*` priced output only
+where it is known; `(+N?)` after stall minutes is time the record does not
+cover, which is never a stall. The price row is the model catalogue's at the
+run's start (`--price-at DAY` for another day's), and a run it cannot price
+says why: the viewer's figure is then the one.
+
 `stuck`'s verdict is the progress line alone; the other lines are evidence,
 and `asks` is a phrase heuristic. `unjudged` means what was recorded does not
 cover the window (a young or resumed run, a pause, a runner that was down),
@@ -90,7 +105,7 @@ files on either source) and starts from the newest reading before it.
 
 ## Reading the `source` line
 
-`live`, `run`, `trajectory`, `tools`, `pad` and `stuck` read ClickHouse, the store the
+`live`, `run`, `trajectory`, `tools`, `pad`, `stuck` and `requests` read ClickHouse, the store the
 collector tails runs into, and say so on a `source` line. `session` reads the
 session record's files, which the store does not hold whole. `audit` and
 `publisher` read the module's audit files and the publisher's state where
@@ -135,7 +150,7 @@ prints `per-turn  none for N of M snippet write(s)` when any went unsized.
 
 ## When the checkout is ahead of the deployed image
 
-`live`, `run`, `trajectory`, `tools`, `pad`, `stuck` and `session` run the runner pod's copy of
+`live`, `run`, `trajectory`, `tools`, `pad`, `stuck`, `session` and `requests` run the runner pod's copy of
 `infra/inspect-run.ts`; `audit` and `publisher` run this checkout's code. If
 `bun wb` says the file is not in the runner pod, or the pod's copy answers
 `unknown command` or refuses a flag, run this checkout's copy in the pod from
@@ -150,6 +165,7 @@ kubectl -n <ns> exec -i deploy/<release>-runner -- bun run - tools <run-id> --si
 ```
 bun infra/inspect-run.ts run <run-id> --runs-dir <dir>
 bun infra/inspect-run.ts session <run-id> --stream calls --runs-dir <dir>
+bun infra/inspect-run.ts requests <run-id> --at-level 5 --runs-dir <dir>
 bun infra/inspect-audit.ts <run-id> --audit-dir <dir> --runs-dir <dir>
 bun infra/inspect-publisher.ts --state <file>
 ```

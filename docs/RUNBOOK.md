@@ -85,6 +85,7 @@ bun wb inspect pad <run-id> --at <iso>                         # the pad's text 
 bun wb inspect stuck [<run-id>] [--window 2h] [--until 1h]     # no game progress over a window, and the failure signals in it
 bun wb inspect session <run-id> [--stream calls] [--character Name] [--kind death,level] [--grep RE] [--last 20]   # a v1 run's record, a line per row
 bun wb inspect session '<run-id>~Name'                         # one fan-out character, by the session id the viewer shows
+bun wb inspect requests <run-id> [--at-level 5] [--at-minutes 60,90] [--json]   # per request, per wake or turn and per hour, cost, stall minutes
 bun wb inspect audit <run-id> [--op WB_MOVE_RESULT [--status S]] [--since 1h]
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
 bun wb inspect audit --smoke edge-drop --op move_edge_drop --since 1h   # a smoke's sessions (from the smoke-session ledger)
@@ -101,7 +102,7 @@ A run is live when its row has neither a termination nor a pause; one with
 neither whose heartbeat is older than two minutes has lost its process and
 reads `ownerless`.
 
-`live`, `run`, `trajectory`, `tools`, `pad`, `stuck` and `session` are
+`live`, `run`, `trajectory`, `tools`, `pad`, `stuck`, `session` and `requests` are
 `infra/inspect-run.ts` in the runner pod. Before a release ships a change to
 it, the same file runs in the pod from stdin:
 `kubectl -n wrathbench exec -i deploy/wrathbench-runner -- bun run - run <run-id> < infra/inspect-run.ts`.
@@ -179,6 +180,23 @@ row), from its newest samples (a v1 run's trace with its record's other
 writes, folded on from the last poll; a 0.5 run's newest `run.sqlite` state
 rows by rowid), a few milliseconds per live run. The flag is reported only:
 the fleet never acts on it. The failure signals are `inspect stuck`'s alone.
+
+`requests` is the per-request readout a probe campaign is measured by. Over
+the run (or `--since`/`--until`) and up to each cut from its start
+(`--at-level`: where the first character reached it; `--at-minutes`: active
+minutes, paused spans left out), it prints requests, uncached and cached
+input, output and reasoning per request, requests per wake (a run's `wake`
+records, else its harness turns), wakes, levels and turn-ins per hour, the
+provider's reported cost and the tokens priced at the model catalogue's row in
+force at the start (`--price-at` re-prices at another day's), and stall
+minutes: stretches longer than `--stall` (5m) with no progress by `stuck`'s
+rule, never time the record does not cover, and on a fan-out run only while
+every character stalls. Each driver's usage is read in its own shape and said
+so: claude-code counts its usage-bearing responses and takes output from each
+turn's result, spread over the turn's requests (a turn cut short shows none,
+never its snapshots); codex's request is a whole CLI turn, a thread's running
+total turned into what each turn added. `--json` prints the same as one
+object for a script.
 
 ### Where the config lives
 
