@@ -149,6 +149,8 @@ await writeRun(
   { driver: "claude-code", model: "sonnet" },
   [
     [T0, { t: "driver", driver: "claude-code" }],
+    // The context it hands the CLI once a session, as the driver records it.
+    [T0 + 1, { t: "request", turn: 1, adapter: "claude-code", messages: "m".repeat(400) }],
     [T0 + 1 * MIN, { t: "response", turn: 1, message: { role: "assistant", content: "a" } }],
     [T0 + 1 * MIN + 1, { t: "response", turn: 1, message: { role: "assistant", content: "b" }, usage: claudeUsage(3000, 2000, 2, 500) }],
     [T0 + 2 * MIN, { t: "response", turn: 1, message: { role: "assistant", content: "c" }, usage: claudeUsage(3200, 2900, 1) }],
@@ -165,6 +167,7 @@ await writeRun(
   { driver: "claude-code", model: "sonnet" },
   [
     [T0, { t: "driver", driver: "claude-code" }],
+    [T0 + 1, { t: "request", turn: 1, adapter: "claude-code", messages: "m".repeat(400) }],
     [T0 + 1 * MIN, { t: "response", turn: 1, message: { role: "assistant", content: "a" }, usage: claudeUsage(3000, 2000, 2) }],
     [T0 + 2 * MIN, { t: "response", turn: 1, message: { role: "assistant", content: "b" }, usage: claudeUsage(3300, 3000, 1) }],
   ],
@@ -430,6 +433,10 @@ describe("claude-code", () => {
     const w = r.windows[0]!;
     expect([w.requests, w.reported.output, w.outputPerRequest, w.reportedUsd]).toEqual([2, 0, null, null]);
     expect(r.notes.find((n) => n.startsWith("claude-code:"))).toContain("1 of 1 turn(s) have no result");
+    // Where the viewer can only sum the snapshots, and labels its figure so, this reads unreported.
+    const viewer = (await scanRunTotals(join(RUNS, SNAPSHOTS, "trajectory.jsonl"))).tokens;
+    expect([viewer.source, viewer.completionTokens]).toEqual(["snapshot", 3]);
+    expect(totals(w).prompt).toBe(viewer.promptTokens);
     const text = (await inspect(["requests", SNAPSHOTS, "--runs-dir", RUNS])).out.join("\n");
     expect(text).toMatch(/^output\/request +—$/m);
   });
@@ -458,6 +465,11 @@ describe("wake records", () => {
     const w = r.windows[0]!;
     expect(w.wakes).toEqual({ by: "wake", count: 3, perHour: 9, requestsPer: 2, fired: { cap: 2, died: 1 }, asleepShare: 0.5 });
     expect(r.notes).toContain("wakes are the run's wake records; asleep is their slept time over the active time");
+    const text = (await inspect(["requests", WAKE, "--runs-dir", RUNS])).out.join("\n");
+    expect(text).toMatch(/^wakes +3$/m);
+    expect(text).toMatch(/^ {2}requests per wake +2\.0$/m);
+    expect(text).toMatch(/^ {2}asleep +50%$/m);
+    expect(text).toMatch(/^ {2}fired by +cap 2, died 1$/m);
   });
 });
 
@@ -490,6 +502,13 @@ describe("the command line", () => {
       expect(r.err.join("\n")).toContain(msg);
     }
     expect((await inspect(["run", V1, "--runs-dir", RUNS, "--json"])).err.join("\n")).toContain("--json does not apply to run");
+  });
+
+  test("--json keeps stdout to the one object, a character's session id too", async () => {
+    const r = await inspect(["requests", `${FAN}~Alfa`, "--runs-dir", RUNS, "--json"]);
+    expect(r.code).toBe(0);
+    expect((JSON.parse(r.out.join("")) as Readout).windows[0]!.requests).toBe(4);
+    expect(r.err.join("\n")).toContain(`${FAN}~Alfa is Alfa's session: this view is the run's`);
   });
 
   test("--price-at re-prices at that day's window and says so", async () => {

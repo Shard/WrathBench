@@ -1939,8 +1939,9 @@ function scanActivity(path: string, window: Window, token: string | null, cost?:
  * as runner/viewer/tail.ts `reportedCostUsd` reads them: OpenRouter's per
  * response (`usage.cost`, summed), and the Claude Code CLI's per session
  * (`claude_result.costUsd`, cumulative, so a session's is its largest). No
- * price table is read here (this file imports nothing): the list-price figure
- * is the viewer's (runner/viewer/pricing.ts).
+ * price table is read for this line: the list-price figure is the viewer's
+ * (runner/viewer/pricing.ts), and `requests` prices a window's tokens at the
+ * model catalogue's row (`requestPrice`).
  */
 export interface CostTally {
   usage: UsageTotals;
@@ -4832,6 +4833,7 @@ export async function inspectRequests(runId: string, opts: RequestsOptions, out:
         (open > 0 ? `; ${open} of ${turns.size} turn(s) have no result (cut short): their requests carry only snapshots, shown as unreported output, never as a figure` : ""),
     );
     if (scan.orphanOutput > 0) notes.push(`claude-code: ${fmtTokens(scan.orphanOutput)} output on result(s) whose turn has no request is left out`);
+    notes.push("claude-code: the CLI's charge arrives only on a turn's result, so a cut that ends inside a long turn shows no reported cost for it, not a cost of nothing");
   } else if (shape === "exec-tally") {
     notes.push(
       `codex: a request here is one CLI turn (codex exec), whose usage tallies every model call in it (the CLI reports no per-call figure), on the turn's last response record (${scan.envelopes} earlier one(s) carry none)` +
@@ -4842,6 +4844,7 @@ export async function inspectRequests(runId: string, opts: RequestsOptions, out:
   }
   notes.push("uncached input is the prompt less its cache reads (cache writes are in it); reasoning, where reported, is part of output");
   if (scan.pauses.length > 0) notes.push(`${scan.pauses.length} pause(s): paused time is left out of every minute and per-hour figure, and of the --at-minutes cuts`);
+  notes.push("active time is the wall clock less pause-to-resume spans; a process that died and was resumed with no pause record counts as active");
   if (scan.wakes.length === 0) notes.push("no wake records: wakes are harness turns (distinct turn numbers among the requests)");
   else notes.push("wakes are the run's wake records; asleep is their slept time over the active time");
   notes.push(`stall: a stretch longer than ${fmtAge(opts.stallMs)} with no game progress by stuck's rule (level, xp, turn-ins, money, items, map, ${t.moveYards} yd); time the record does not cover is never a stall${tracks.length > 1 ? "; the run stalls while every character does" : ""}`);
@@ -4892,7 +4895,10 @@ export async function inspectRequests(runId: string, opts: RequestsOptions, out:
   head(by, cell((w) => String(w.wakes.count)));
   head(`  per hour`, cell((w) => fmtPer(w.wakes.perHour)));
   head(`  requests per ${by === "wakes" ? "wake" : "turn"}`, cell((w) => fmtPer(w.wakes.requestsPer)));
-  if (scan.wakes.length > 0) head("  asleep", cell((w) => (w.wakes.asleepShare === null ? "—" : `${Math.round(w.wakes.asleepShare * 100)}%`)));
+  if (scan.wakes.length > 0) {
+    head("  asleep", cell((w) => (w.wakes.asleepShare === null ? "—" : `${Math.round(w.wakes.asleepShare * 100)}%`)));
+    head("  fired by", cell((w) => Object.entries(w.wakes.fired).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k, n]) => `${k} ${n}`).join(", ") || "—"));
+  }
   head("cost reported", cell((w) => (w.reportedUsd === null ? "—" : scan.cli.length > 0 ? fmtUsd(w.reportedUsd) : covered(fmtUsd(w.reportedUsd), w.reported.cost, w.requests))));
   head("cost priced", cell((w) => (w.pricedUsd === null ? "—" : `${fmtUsd(w.pricedUsd)}${w.reported.output < w.requests ? "*" : ""}`)));
   if (tracks.length > 0) {
@@ -5119,7 +5125,8 @@ export async function main(
     const runId = target.runId;
     // A character's session id: `session` reads that character's record; every
     // other view is the run's, whose trajectory is the one agent's.
-    if (target.character !== null && command !== "session" && !sessionOfRun(runsDir, runId, target.character, out)) return 1;
+    // `--json` keeps stdout to the one object, so the line saying so goes to stderr.
+    if (target.character !== null && command !== "session" && !sessionOfRun(runsDir, runId, target.character, flags.has("--json") ? err : out)) return 1;
     const last = count("--last");
     const next = count("--next");
     for (const [f, n] of [["--last", last], ["--next", next]] as const) {

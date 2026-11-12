@@ -59,8 +59,8 @@ record; `session` shows it once, as `Alfa+1`. A character's session id,
 **Cost.** `run`'s `cost` line is the whole run's whatever the window: the
 provider's own charge where it reported one (OpenRouter's `usage.cost` per
 response, the Claude Code CLI's `total_cost_usd` per session) and the tokens
-the responses reported. Nothing is priced here; the list-price figure is the
-viewer's. The token sums are not the bill on a claude-code run (its responses
+the responses reported. The line prices nothing: the list-price figure is the
+viewer's, and `requests` prices a window's tokens at the catalogue's row. The token sums are not the bill on a claude-code run (its responses
 carry opening snapshots; the line says so) nor on a codex run from before
 per-turn deltas (running totals), and the CLI's dollar figure leaves out the
 turns it never reported, which the run page adds at list.
