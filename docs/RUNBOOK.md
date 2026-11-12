@@ -2321,7 +2321,13 @@ PR to GitOps or an app-owned Secret):
   Secret's reference for that variable and hands the pod the sealed row as
   `WRATHBENCH_SEALED_SECRET`, with the store key's reference kept for that
   pod only, and run.ts opens it before anything reads its environment, then
-  drops both. An arm image that predates this, or a harness that is not this
+  drops both. The key stays in the pod's initial environment (PID 1's and
+  run.ts's `/proc/<pid>/environ`), which nothing a model drives can read: the
+  snippet sandbox's Landlock ruleset refuses every other process's `/proc`
+  entry (`runner/test/sandbox-secrets.test.ts` plants it there), the Claude
+  and pi CLIs run with no built-in tools, and a codex pod is never handed
+  one. A run pod mounts no config store, so the key there opens only the row
+  it was handed. An arm image that predates this, or a harness that is not this
   repository, cannot open it: keep that credential's key in the Secret, or
   clear the stored one, while such an arm runs.
 - **The store key.** `WRATHBENCH_STORE_KEY`, 32 random bytes (`openssl rand

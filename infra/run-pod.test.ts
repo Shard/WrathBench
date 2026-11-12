@@ -823,6 +823,7 @@ describe("the chart's run-pod template", () => {
     expect(pod.spec.containers[0]!.command).toEqual(["/usr/bin/tini", "--", "bun", "runner/src/run.ts"]);
     expect(pod.spec.volumes!.map((v) => v.name)).toEqual(["data", "tmp"]);
     // The store key is in the template, by reference and optional, and only a pod handed a sealed secret keeps it.
+    // With no config mount (above), the key there opens only the row that pod was handed.
     expect(tpl.spec.containers[0]!.env!.find((e) => e.name === STORE_KEY_ENV)).toEqual(secretRef(STORE_KEY_ENV));
     const sealedPod = buildRunPod(tpl, { runId: "r", image: RELEASE, requestedRef: RELEASE, command: null, args: [], env: { driver: "claude-code", credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {}, sealed: { name: "CLAUDE_CODE_OAUTH_TOKEN", sealed: "v1.x.y.z.w" } }, owner: undefined, rosterPid: 1, graceMs: EPISODE_TERM_GRACE_MS });
     const sealedEnv = envOf(sealedPod);
@@ -931,10 +932,14 @@ describe("a secret the config store holds", () => {
     expect(runEnv).toEqual({ CLAUDE_CODE_OAUTH_TOKEN_2: SENTINEL });
   });
 
-  test("without one, the store key is stripped like any other reference", () => {
-    const env = runPodEnv(tplWithKey().spec.containers[0]!.env!, { driver: "openai", credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} });
-    expect(env.map((e) => e.name)).not.toContain(STORE_KEY_ENV);
-    expect(env.map((e) => e.name)).not.toContain(SEALED_SECRET_ENV);
+  test("without one, the store key is stripped like any other reference, for every driver; a codex pod never gets it", () => {
+    for (const driver of ["openai", "claude-code", "codex", "pi"] as const) {
+      const env = runPodEnv(tplWithKey().spec.containers[0]!.env!, { driver, credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} });
+      expect([driver, env.map((e) => e.name).includes(STORE_KEY_ENV)]).toEqual([driver, false]);
+      expect(env.map((e) => e.name)).not.toContain(SEALED_SECRET_ENV);
+    }
+    // A Codex home is no stored secret, so its pod is never handed one, nor the key to open it.
+    expect(() => runPodEnv(tplWithKey().spec.containers[0]!.env!, { driver: "codex", credentialEnv: "CODEX_HOME", apiKeyEnv: "OPENROUTER_KEY", stamps: {}, sealed: { name: "CODEX_HOME", sealed: "x" } })).toThrow(/not the variable this driver bills/);
   });
 
   test("refused: a sealed variable the driver does not bill, a template without the key, the key or the sealed form as a value", () => {
