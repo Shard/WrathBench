@@ -324,6 +324,13 @@ export const ENTRIES: readonly Entry[] = [
   },
   {
     group: "inspect",
+    command: "requests",
+    takes: "<run-id> [--since D] [--until D] [--at-level N[,N]] [--at-minutes N[,N]] [--stall D] [--price-at DAY] [--json] [--files]",
+    summary: "per request (uncached and cached input, output, reasoning), per wake or turn, and per hour (requests, levels, turn-ins), the reported and the priced cost, and stall minutes; over the run and up to each cut",
+    ...inRunner("bun", INSPECT_RUN, "requests"),
+  },
+  {
+    group: "inspect",
     command: "audit",
     takes: "<run-id> | --smoke <name> [--op X[,Y] [--status S] [--last N | --summary]] [--since D] [--until D]",
     summary: "the module audit log of a run or of a smoke's sessions (one session name at a time: group-a, mail-r), counts per op and status or the last records, reduced where it lives",

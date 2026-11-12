@@ -122,6 +122,41 @@ export function storeKeyOf(env: Record<string, string | undefined> = process.env
   }
 }
 
+/**
+ * The store key as `secrets list` reports it, whether or not anything is
+ * sealed yet: not set, set but unusable (and why), or set with its id and a
+ * seal-and-open round trip in memory. Never the key itself.
+ */
+export function storeKeyStatus(env: Record<string, string | undefined> = process.env): string {
+  const k = storeKeyOf(env);
+  if (k.key === null) {
+    const raw = env[STORE_KEY_ENV];
+    return raw === undefined || raw.trim().length === 0 ? `store key: not configured (${STORE_KEY_ENV} is not set)` : `store key: ${STORE_KEY_ENV} is set but unusable: ${k.why}`;
+  }
+  let opens: boolean;
+  try {
+    opens = openSecret(k.key, "store-key-check", sealSecret(k.key, "store-key-check", "check")) === "check";
+  } catch {
+    opens = false;
+  }
+  return `store key: ${STORE_KEY_ENV} is set (key id ${k.key.id})${opens ? ", and it opens what it seals" : ", but it does not open what it seals"}`;
+}
+
+/** Whether this environment's key opens one stored secret: `opens`, or why not. Nothing of the value leaves. */
+export function storedSecretOpens(db: Database, name: string, env: Record<string, string | undefined> = process.env): string {
+  const row = selectRows(db).find((r) => r.name === name);
+  if (row === undefined) return "not stored";
+  const k = storeKeyOf(env);
+  if (k.key === null) return `no key here (${k.why})`;
+  if (row.key_id !== k.key.id) return `sealed under another key (${row.key_id})`;
+  try {
+    openSecret(k.key, name, row.sealed);
+    return "opens";
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
 const aad = (name: string): Buffer => Buffer.from(`wrathbench-store-secret ${FORMAT} ${name}`, "utf8");
 const b64 = (b: Buffer): string => b.toString("base64url");
 

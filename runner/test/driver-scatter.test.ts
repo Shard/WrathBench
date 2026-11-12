@@ -53,6 +53,10 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
     count: 7,
     why: "model-facing: the context sentence is an exhaustive switch over Harness, so a new harness fails typecheck until its sentence is decided, and the prompt bytes are pinned",
   },
+  "infra/inspect-run.ts": {
+    count: 3,
+    why: "import-free so it can be streamed into a pod: `requests` copies the drivers' usage shapes (DRIVER_USAGE) and pricing.ts's codex-vendor and Claude-row rules, each pinned to the registry or the viewer by infra/inspect-requests.test.ts",
+  },
 };
 
 const UNAMBIGUOUS = new Set(["claude-code", "codex", "pi"]);
