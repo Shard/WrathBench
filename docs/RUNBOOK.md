@@ -1771,6 +1771,14 @@ and the launcher's settings. Two values matter at deploy time:
   with the chart-wide `imagePullSecrets` ("Secrets"), for a repository in
   `allowedImages` the chart-wide Secret cannot pull.
 
+**An arm image from an unmerged branch.** `bun wb release build --probe <name>
+--only runner --push` builds one whose wrath-mcp pin is on any pushed branch of
+wrath-mcp, not only master or v1, so it still rebuilds from the public stack.
+It refuses a dirty tree, pushes only to the operator's own registry, tags it
+`probe-<name>-<12-hex commit>` and prints the digest to pin the arms to. A
+build without `--probe`, `release run` and `release deploy` all refuse a
+`probe-` tag, and the deploy window refuses a cluster running one.
+
 A run pod gets the module secret and the one credential its driver bills (its
 credential's `CLAUDE_CODE_OAUTH_TOKEN*`, its endpoint key, or the mounted codex home;
 a key or token the config store holds arrives sealed with the store key's

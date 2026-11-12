@@ -173,6 +173,8 @@ const PREFLIGHT = {
 
 interface Case {
   args?: string[];
+  /** The tag the fake cluster reports, when not the expected one. */
+  clusterTag?: string;
   /** How many `get pods` reads still report a pod; -1 never stops reporting one. */
   podPolls?: number;
   /** The same for the RUN pods (`component=run`). */
@@ -230,7 +232,7 @@ function run(c: Case): Result {
         PATH: `${bin}:${process.env.PATH}`,
         FORCE_COLOR: "3",
         FAKE_LOG: log,
-        FAKE_TAG: TAG,
+        FAKE_TAG: c.clusterTag ?? TAG,
         FAKE_POD_POLLS: String(c.podPolls ?? 0),
         FAKE_RUN_POD_POLLS: String(c.runPodPolls ?? 0),
         FAKE_POD_FAILS: String(c.podFails ?? 0),
@@ -260,6 +262,24 @@ function run(c: Case): Result {
 
 const firstIndex = (r: Result, prefix: string) => r.calls.findIndex((l) => l.startsWith(prefix));
 const lastIndex = (r: Result, prefix: string) => r.calls.map((l) => l.startsWith(prefix)).lastIndexOf(true);
+
+describe("k8s-deploy.sh and probe images", () => {
+  test("a probe- --expect-tag is refused before any command, --allow-tag-mismatch or not", () => {
+    for (const extra of [[], ["--allow-tag-mismatch"]]) {
+      const r = run({ args: ["--expect-tag", "probe-program-0123456789ab", ...extra] });
+      expect(r.exitCode).toBe(2);
+      expect(r.out).toContain("a probe image is pinned by a campaign arm and never deployed");
+      expect(r.calls).toEqual([]);
+    }
+  });
+
+  test("a cluster on a probe tag is refused before anything is drained, --allow-tag-mismatch or not", () => {
+    const r = run({ clusterTag: "probe-program-0123456789ab", args: ["--allow-tag-mismatch"] });
+    expect(r.exitCode).toBe(1);
+    expect(r.out).toContain("a probe image's tag");
+    expect(r.calls.some((l) => l.includes("scale"))).toBe(false);
+  });
+});
 
 describe("k8s-deploy.sh draining", () => {
   test("no smoke runs while a fleet pod is still listed, and one runs once it is gone", () => {
