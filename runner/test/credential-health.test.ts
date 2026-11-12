@@ -62,6 +62,13 @@ describe("credentialHealth", () => {
     // Not handed to the model pods is as missing as unset, whatever the supervisor's own environment holds.
     expect(credentialHealth(input({ deployed: false })).health).toMatchObject({ state: "secret-missing", reason: "OPENCODE_KEY not in the chart's modelKeys" });
     expect(state({ deployed: null })).toBe("ok");
+    // A secret the config store holds reaches each launch from the store, so modelKeys no longer decides.
+    expect(state({ deployed: false, stored: true })).toBe("ok");
+    // One that does not open is missing, and says why, whatever the environment holds.
+    expect(credentialHealth(input({ stored: true, storedUnreadable: "OPENCODE_KEY: sealed under another store key (a; this one is b)" }))).toMatchObject({
+      health: { state: "secret-missing", reason: "OPENCODE_KEY: sealed under another store key (a; this one is b)" },
+      fix: { kind: "replace-secret", secretEnv: "OPENCODE_KEY" },
+    });
   });
 
   test("auth: a refused read or a run paused auth-failed, since when it was first seen; the fix is a new secret", () => {

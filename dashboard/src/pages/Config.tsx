@@ -168,6 +168,12 @@ export default function Config() {
     void reload();
   });
 
+  /** The status alone, for a section waiting on the supervisor (a Codex login): the document is left as it is. */
+  const refreshAdmin = async (): Promise<void> => {
+    const next = await configApi.admin().catch(() => undefined);
+    if (next !== undefined) setAdmin(next);
+  };
+
   /** Who and why, or the reason it is not usable yet. */
   const attribution = (): { actor: string; note: string } | string => {
     const a = actor().trim();
@@ -301,7 +307,7 @@ export default function Config() {
 
                   <Switch>
                     <Match when={section() === "providers"}>
-                      <ProvidersSection admin={admin()} config={body().config} write={write} />
+                      <ProvidersSection admin={admin()} config={body().config} write={write} refreshAdmin={refreshAdmin} />
                       <RawRows keys={keysOf("providers")} value={body().config} write={write} />
                     </Match>
                     <Match when={section() === "roster"}>

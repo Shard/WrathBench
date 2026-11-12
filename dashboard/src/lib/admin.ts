@@ -7,7 +7,7 @@
  */
 
 import type { Groups } from "@viewer/groups";
-import type { CredentialFix, CredentialHealth, HealthState } from "@viewer/api-types";
+import type { AdminCodexLoginView, AdminCredentialView, AdminProviderView, CredentialFix, CredentialHealth, HealthState } from "@viewer/api-types";
 
 /** A credential row as the store holds it (`runner/src/credential-slots.ts`). */
 export interface CredentialDoc {
@@ -320,4 +320,40 @@ export const GROUP_ROWS: readonly { group: keyof Groups; holds: string }[] = [
 export function fmtDelay(ms: number): string {
   if (ms <= 0) return "none";
   return ms < 60_000 ? `${Math.round(ms / 1000)} s` : `${Math.round(ms / 60_000)} min`;
+}
+
+// ------------------------------------------------------------------ secrets
+
+/**
+ * How a credential's secret is replaced from the page: a key typed in (an
+ * endpoint), a `claude setup-token` pasted in (a Claude subscription), or a
+ * Codex home logged in again by the supervisor. Null for a provider the page
+ * does not know.
+ */
+export function secretControl(p: AdminProviderView | undefined): "key" | "token" | "login" | null {
+  if (p === undefined) return null;
+  return p.holds === "home" ? "login" : p.holds === "token" ? "token" : "key";
+}
+
+/** The control's label: a new key on an endpoint, logging in again on a subscription. */
+export function secretControlLabel(kind: "key" | "token" | "login"): string {
+  return kind === "key" ? "set key" : "re-auth";
+}
+
+/** Whether a Codex login is under way, so the page polls for its link and its end. */
+export function loginInFlight(l: AdminCodexLoginView | null): boolean {
+  return l !== null && (l.state === "requested" || l.state === "starting" || l.state === "waiting");
+}
+
+/** Why a secret control is off, or null when it may be used. */
+export function secretControlOff(
+  kind: "key" | "token" | "login",
+  c: Pick<AdminCredentialView, "login" | "inUse">,
+  o: { storeKey: { ok: true } | { ok: false; why: string }; fleetUp: boolean },
+): string | null {
+  if (kind !== "login") return o.storeKey.ok ? null : o.storeKey.why;
+  if (!o.fleetUp) return "no supervisor is up to run the login";
+  if (loginInFlight(c.login)) return "a login is under way";
+  if (c.inUse !== null && c.inUse > 0) return "a run is live on it: disable it and let its runs finish first";
+  return null;
 }

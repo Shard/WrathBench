@@ -281,3 +281,30 @@ describe("a run pod's sealed variable", () => {
     expect(() => unsealLaunchSecret({ [SEALED_SECRET_ENV]: `OPENROUTER_KEY:${sealed}` })).toThrow(StoreKeyError);
   });
 });
+
+describe("the CLI", () => {
+  const CLI = resolve(import.meta.dir, "..", "src", "config-store.ts");
+  const run = (args: string[], env: Record<string, string>, stdin?: string) => {
+    const p = Bun.spawnSync(["bun", CLI, ...args], { env: { PATH: process.env["PATH"]!, HOME: process.env["HOME"] ?? "/tmp", ...env }, stdin: stdin === undefined ? "ignore" : Buffer.from(stdin), stdout: "pipe", stderr: "pipe" });
+    return { code: p.exitCode, out: p.stdout.toString() + p.stderr.toString() };
+  };
+
+  test("set reads the value from stdin only; list, audit and export never print it", () => {
+    const { store, path } = seeded();
+    store.close();
+    const env = { [STORE_KEY_ENV]: KEY_HEX };
+    // A value on argv is refused before anything is written.
+    expect(run(["secrets", "set", "OPENROUTER_KEY", SENTINEL, "--db", path], env).code).toBe(2);
+    const set = run(["secrets", "set", "OPENROUTER_KEY", "--db", path, "--actor", "mark"], env, `${SENTINEL}\n`);
+    expect(set.code).toBe(0);
+    expect(readStoreSecret("OPENROUTER_KEY", { env, dbPath: path })).toMatchObject({ status: "ok", value: SENTINEL });
+    const outs = [set, run(["secrets", "list", "--db", path], env), run(["audit", "--db", path], env), run(["export", "--db", path], env), run(["get", "--db", path], env)];
+    expect(outs[1]!.out).toContain("OPENROUTER_KEY");
+    expect(outs[1]!.out).toContain("opens");
+    expect(outs[2]!.out).toContain("secrets/OPENROUTER_KEY");
+    for (const o of outs) expect(o.out).not.toContain("SENTINEL");
+    expect(run(["secrets", "list", "--db", path], { [STORE_KEY_ENV]: OTHER_KEY_HEX }).out).toContain("sealed under another key");
+    expect(run(["secrets", "clear", "OPENROUTER_KEY", "--db", path], {}).code).toBe(0);
+    expect(storedSecretsAt(path)).toEqual([]);
+  });
+});

@@ -232,6 +232,26 @@ other key in the Secret, which nothing on these pods reads.
       key: {{ . }}
       optional: true
 {{- end }}
+{{ include "wrathbench.storeKeyEnv" . }}
+{{- end -}}
+
+{{/*
+The config store's key (runner/src/store-secrets.ts): it seals the secrets set
+on the admin page, and opens them where a model's process needs one. From the
+env Secret, optional: without the key nothing can be set from the browser and
+everything else works as before, and the pod never wedges on its absence. On
+the fleet and runner pods (they open stored secrets for each launch), the
+admin viewer (it seals them), and the run-pod template, where the launcher
+keeps it only for a pod handed a sealed secret. Generate it once with
+`openssl rand -hex 32` (docs/RUNBOOK.md, "Secrets").
+*/}}
+{{- define "wrathbench.storeKeyEnv" -}}
+- name: WRATHBENCH_STORE_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.envSecretName }}
+      key: WRATHBENCH_STORE_KEY
+      optional: true
 {{- end -}}
 
 {{/* The publisher holds one credential pair, scoped to one bucket, and no

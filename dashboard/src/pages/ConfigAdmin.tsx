@@ -8,11 +8,14 @@
  * sentence. The status beside the rows is `/api/admin`'s and is read-only.
  *
  * What a secret's value is never appears: a credential names the env var its
- * secret is in, and the page says whether the supervisor has it set.
+ * secret is in, and the page says whether it is set. A secret typed or pasted
+ * here goes to the store sealed and is never read back
+ * (`runner/viewer/admin-api.ts`); a Codex home is logged in again by the
+ * supervisor, and the page shows the link and the one-time code it waits on.
  */
 
-import { For, Show, createMemo, createSignal } from "solid-js";
-import type { AdminCredentialView, AdminProviderView, AdminResponse } from "@viewer/api-types";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import type { AdminCodexLoginView, AdminCredentialView, AdminProviderView, AdminResponse } from "@viewer/api-types";
 import { configApi } from "../api/config-client";
 import {
   EMPTY_CREDENTIAL,
@@ -28,9 +31,13 @@ import {
   healthTitle,
   healthTone,
   jobDoc,
+  loginInFlight,
   nextQueueKey,
   publishedDefs,
   queueRows,
+  secretControl,
+  secretControlLabel,
+  secretControlOff,
   storedCredentialRows,
   type BudgetKind,
   type NewCredentialForm,
@@ -73,11 +80,15 @@ function SecretState(props: { c: AdminCredentialView }) {
           </span>
         }
       >
-        <Show when={props.c.secretSet} fallback={<span class="err" title="the supervisor's environment does not have this variable">not set</span>}>
-          <span class="ok" title="the supervisor's environment has this variable; its value is never shown">set</span>
+        <Show when={props.c.secretSet} fallback={<span class="err" title="neither the config store nor the supervisor's environment has this variable">not set</span>}>
+          <span class="ok" title="set; its value is never shown">set</span>
         </Show>
       </Show>
-      <Show when={props.c.deployed === false}>
+      <Show when={props.c.stored}>
+        {" "}
+        <span class="dim" title="sealed in the config store, set from this page or the CLI; it wins over the deployment's Secret">stored</span>
+      </Show>
+      <Show when={props.c.deployed === false && !props.c.stored}>
         {" "}
         <span class="warn" title="not in the chart's modelKeys, so no pod that runs a model carries it">not in chart</span>
       </Show>
@@ -85,12 +96,18 @@ function SecretState(props: { c: AdminCredentialView }) {
   );
 }
 
-/** Why the secret controls are there but off: where a secret written from the browser goes is not decided. */
-const SECRET_SEAM = "not built yet: the secret's value is set in the deployment's Secret, not here";
+/** How often the page asks after a Codex login under way: its link, then its end. */
+const LOGIN_POLL_MS = 2_000;
 
-export function ProvidersSection(props: { admin: AdminResponse | undefined; config: Record<string, unknown>; write: Write }) {
+export function ProvidersSection(props: { admin: AdminResponse | undefined; config: Record<string, unknown>; write: Write; refreshAdmin: () => Promise<void> }) {
   const r = useResult();
   const rows = createMemo(() => storedCredentialRows(props.config));
+  // Polled only while a login is under way: the page is otherwise still.
+  createEffect(() => {
+    if (!(props.admin?.credentials ?? []).some((c) => loginInFlight(c.login))) return;
+    const t = setInterval(() => void props.refreshAdmin(), LOGIN_POLL_MS);
+    onCleanup(() => clearInterval(t));
+  });
   const toggle = (c: AdminCredentialView): Promise<void> =>
     r.run(props.write((att) => configApi.patch(`credentials/${c.id}`, { enabled: !c.enabled }, att)), `${c.id} ${c.enabled ? "disabled" : "enabled"}`);
   const remove = (c: AdminCredentialView): Promise<void> => r.run(props.write((att) => configApi.remove(`credentials/${c.id}`, att)), `${c.id} removed`);
@@ -124,6 +141,7 @@ export function ProvidersSection(props: { admin: AdminResponse | undefined; conf
                     {(c) => (
                       <CredentialRow
                         c={c}
+                        admin={a()}
                         provider={a().providers.find((p) => p.id === c.provider)}
                         providers={a().providers}
                         row={rows()[c.id]}
@@ -198,8 +216,75 @@ function UsedCell(props: { c: AdminCredentialView }) {
   );
 }
 
+/** A Codex login's line: the link and the code while it waits, then how it ended. */
+function LoginLine(props: { login: AdminCodexLoginView }) {
+  return (
+    <div>
+      <Show when={props.login.state === "requested" || props.login.state === "starting"}>
+        <span class="dim">login starting…</span>
+      </Show>
+      <Show when={props.login.state === "waiting" && props.login.url !== null ? props.login : undefined}>
+        {(l) => (
+          <>
+            <a href={l().url!} target="_blank" rel="noopener noreferrer">
+              {l().url}
+            </a>{" "}
+            <span class="mono" title={l().expiresAt !== null ? `enter it there before ${stamp(l().expiresAt!)}` : "enter it there"}>
+              {l().code}
+            </span>
+          </>
+        )}
+      </Show>
+      <Show when={props.login.state === "ok"}>
+        <span class="ok" title={props.login.actor !== null ? `by ${props.login.actor}` : ""}>
+          logged in {fmtWhen(props.login.at)}
+        </span>
+      </Show>
+      <Show when={props.login.state === "failed"}>
+        <span class="err">login failed: {props.login.detail ?? "unknown"}</span>
+      </Show>
+    </div>
+  );
+}
+
+/** A secret typed or pasted in, write-only: a password field, cleared once sent. */
+function SecretForm(props: { c: AdminCredentialView; kind: "key" | "token"; write: Write; close: () => void }) {
+  const [value, setValue] = createSignal("");
+  const r = useResult();
+  const save = (): void => {
+    const v = value();
+    if (v.trim() === "") {
+      void r.run(Promise.resolve(props.kind === "token" ? "paste the token" : "type the key"), "");
+      return;
+    }
+    void r.run(props.write((att) => configApi.setSecret(props.c.secretEnv, v, att)), `${props.c.secretEnv} stored`).then(() => {
+      if (r.line()?.ok !== true) return;
+      setValue("");
+      props.close();
+    });
+  };
+  return (
+    <>
+      <div class="configform">
+        <label title={props.kind === "token" ? "the token `claude setup-token` prints; sealed in the config store and never shown again" : "sealed in the config store and never shown again; it wins over the deployment's Secret"}>
+          {props.kind === "token" ? "token" : "key"} for {props.c.secretEnv}
+          <input type="password" autocomplete="off" spellcheck={false} value={value()} onInput={(e) => setValue(e.currentTarget.value)} />
+        </label>
+        <button type="button" onClick={save}>
+          store
+        </button>
+        <button type="button" onClick={() => props.close()}>
+          cancel
+        </button>
+      </div>
+      <ResultLine line={r.line()} />
+    </>
+  );
+}
+
 function CredentialRow(props: {
   c: AdminCredentialView;
+  admin: AdminResponse;
   provider: AdminProviderView | undefined;
   providers: readonly AdminProviderView[];
   row: unknown;
@@ -209,11 +294,27 @@ function CredentialRow(props: {
 }) {
   const [editing, setEditing] = createSignal(false);
   const [confirming, setConfirming] = createSignal(false);
-  // A secret is replaced by logging in again on a subscription, by a new key on an endpoint.
-  const secretLabel = (): string => (props.provider?.bill === "subscription" ? "re-auth" : "set key");
+  const [entering, setEntering] = createSignal(false);
+  const [clearing, setClearing] = createSignal(false);
+  const secret = useResult();
+  const kind = (): "key" | "token" | "login" | null => secretControl(props.provider);
+  const off = (): string | null => {
+    const k = kind();
+    return k === null ? "unknown provider" : secretControlOff(k, props.c, { storeKey: props.admin.storeKey, fleetUp: props.admin.fleet.up });
+  };
   const fixText = (): string => {
     const f = props.c.fix;
-    return f !== null && (f.kind === "set-secret" || f.kind === "replace-secret") ? `${f.text}; ${SECRET_SEAM}` : SECRET_SEAM;
+    const k = kind();
+    const how = k === "login" ? "the supervisor runs codex login --device-auth on this home" : k === "token" ? "paste a token from claude setup-token" : "type a new key";
+    return [off(), f !== null && (f.kind === "set-secret" || f.kind === "replace-secret") ? f.text : null, how].filter((x): x is string => x !== null).join("; ");
+  };
+  const onSecret = (): void => {
+    if (kind() === "login") void secret.run(props.write((att) => configApi.codexLogin(props.c.id, att)), "login asked for");
+    else setEntering(!entering());
+  };
+  const clear = (): void => {
+    setClearing(false);
+    void secret.run(props.write((att) => configApi.clearSecret(props.c.secretEnv, att)), `${props.c.secretEnv} cleared`);
   };
   return (
     <>
@@ -229,9 +330,32 @@ function CredentialRow(props: {
         </td>
         <td>
           <SecretState c={props.c} />{" "}
-          <button type="button" disabled title={fixText()}>
-            {secretLabel()}
-          </button>
+          <Show when={kind()}>
+            {(k) => (
+              <button type="button" class={entering() ? "on" : ""} disabled={off() !== null} title={fixText()} onClick={onSecret}>
+                {secretControlLabel(k())}
+              </button>
+            )}
+          </Show>{" "}
+          <Show when={props.c.stored}>
+            <Show
+              when={clearing()}
+              fallback={
+                <button type="button" title="remove the stored secret: the deployment's Secret stands again" onClick={() => setClearing(true)}>
+                  clear
+                </button>
+              }
+            >
+              <button type="button" class="on" onClick={clear}>
+                really clear
+              </button>{" "}
+              <button type="button" onClick={() => setClearing(false)}>
+                cancel
+              </button>
+            </Show>
+          </Show>
+          <Show when={props.c.login}>{(l) => <LoginLine login={l()} />}</Show>
+          <ResultLine line={secret.line()} />
         </td>
         <td class="mono">
           {props.c.inUse === null ? "?" : String(props.c.inUse)}/{props.c.slots}
@@ -264,6 +388,15 @@ function CredentialRow(props: {
           </Show>
         </td>
       </tr>
+      <Show when={entering() && (kind() === "key" || kind() === "token") ? (kind() as "key" | "token") : undefined}>
+        {(k) => (
+          <tr>
+            <td colSpan={6}>
+              <SecretForm c={props.c} kind={k()} write={props.write} close={() => setEntering(false)} />
+            </td>
+          </tr>
+        )}
+      </Show>
       <Show when={editing()}>
         <tr>
           <td colSpan={6}>

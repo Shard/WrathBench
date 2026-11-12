@@ -858,6 +858,11 @@ const USAGE = `usage: bun runner/src/config-store.ts <command>
   credentials edit <id> <json>
                             merge into one credential; validated
   credentials disable <id>  stop new runs taking it; live runs on it finish
+  secrets [list]            the secrets the store holds, sealed: each variable's NAME, when and by whom it
+                            was set, and whether it opens with this WRATHBENCH_STORE_KEY; never a value
+  secrets set <NAME>        store a credential's secret, read from stdin (never argv), sealed under
+                            WRATHBENCH_STORE_KEY; it wins over the environment's (runner/src/store-secrets.ts)
+  secrets clear <NAME>      remove it: the environment's value stands again
   move-credential <run-id> <credential id> --note <why> [--pin]
                             move a paused or ended run to another credential of its provider: rewrite its
                             meta.json's config.credential and append to its credentialHistory; with --pin, then
@@ -975,7 +980,9 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       }
       case "credentials":
-        return credentialsCommand(store, args, opts);
+        return await credentialsCommand(store, args, opts);
+      case "secrets":
+        return await secretsCommand(store, args, opts);
       case "move-credential": {
         const [runId, to] = args;
         if (runId === undefined || to === undefined || args.length > 2 || note === undefined) {
@@ -1009,12 +1016,54 @@ async function main(argv: string[]): Promise<number> {
   }
 }
 
+/**
+ * `secrets list|set|clear`: the sealed secrets (runner/src/store-secrets.ts).
+ * A value is read from stdin only, so it is never on a command line, and
+ * nothing here prints one.
+ */
+async function secretsCommand(store: ConfigStore, args: string[], opts: PutOptions): Promise<number> {
+  const s = await import("./store-secrets");
+  const [sub = "list", name] = args;
+  switch (sub) {
+    case "list": {
+      const metas = s.storeSecretMetas(store.db);
+      const key = s.storeKeyOf();
+      if (metas.length === 0) console.log("no stored secrets — every credential's secret is the environment's");
+      for (const m of metas) {
+        const opens = key.key === null ? `no key here (${key.why})` : m.keyId === key.key.id ? "opens" : `sealed under another key (${m.keyId})`;
+        console.log(`${m.name.padEnd(28)}  ${new Date(m.updatedAt).toISOString()}  ${m.actor.padEnd(8)}  ${opens}`);
+      }
+      return 0;
+    }
+    case "set": {
+      if (name === undefined || args.length > 2) {
+        console.error("usage: secrets set <NAME>, the value on stdin (never on the command line)");
+        return 2;
+      }
+      s.setStoreSecret(store, name, await Bun.stdin.text(), opts);
+      console.error(`stored ${name}, sealed; it applies to the next launch`);
+      return 0;
+    }
+    case "clear": {
+      if (name === undefined) {
+        console.error(USAGE);
+        return 2;
+      }
+      console.error(s.clearStoreSecret(store, name, opts) ? `cleared ${name}: the environment's value stands again` : `no stored secret ${name}`);
+      return 0;
+    }
+    default:
+      console.error(USAGE);
+      return 2;
+  }
+}
+
 /** The credential rows, parsed as the supervisor parses them. */
 export function storedCredentials(store: ConfigStore): Credential[] {
   return parseCredentials(store.render()["credentials"]);
 }
 
-/** One credential as a list line: everything but the secret, which the store never holds. */
+/** One credential as a list line: everything but the secret, which `secrets list` names and nothing prints. */
 export function credentialLine(c: Credential): string {
   return [
     c.id.padEnd(16),

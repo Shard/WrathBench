@@ -110,6 +110,10 @@ spec:
             # admin pages. Unset, this viewer has no write route at all.
             - name: WRATHBENCH_ADMIN
               value: "1"
+            # The store key, to seal a secret set on the admin page. Never a
+            # model key: a secret set here is written sealed and never read
+            # back by this pod.
+            {{- include "wrathbench.storeKeyEnv" . | nindent 12 }}
             # What the admin pages say about the deployment around the store
             # (runner/viewer/admin-api.ts): the variable NAMES the model pods
             # carry, never a value, and how the publisher is set, never its
