@@ -29,7 +29,7 @@ import {
 import { fanoutTools, type FanoutSurface } from "@wrathbench/mcp/fanout";
 import { parseIdQuery, searchReference } from "@wrathbench/wiki/search";
 import { bundleHasIds } from "@wrathbench/wiki/bundle";
-import { CONTEXT_POLICY, formatEventLine, formatStateSummary, type SnapshotLike } from "./context";
+import { formatEventLine, formatStateSummary, isAmbientEvent, type SnapshotLike } from "./context";
 import {
   EPISODIC_ORDERS,
   EPISODIC_PAGE_DEFAULT,
@@ -136,7 +136,7 @@ async function drainSnippetDelta(ctx: ToolContext): Promise<string | undefined> 
 /** How the benchmark renders the core tools (docs/METHODOLOGY.md, "Context policy"). */
 const RENDER: CoreToolRender<ToolContext> = {
   eventLine: formatEventLine,
-  isAmbient: (opcode) => CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(opcode),
+  isAmbient: isAmbientEvent,
   stateSummary: (snapshot, o) => formatStateSummary(snapshot as SnapshotLike, o),
   afterSnippet: (ctx) => (ctx.snippetDelta === true ? drainSnippetDelta(ctx) : Promise.resolve(undefined)),
 };

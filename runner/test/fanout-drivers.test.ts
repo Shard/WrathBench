@@ -56,10 +56,14 @@ const FANOUT_NAMES = toolsFor({ fanout: true }).map((t) => t.name);
  * MCP, the tools claude-code is granted, and claude-code's argv. Taken at
  * WrathBench `v1` e846355a, the head before fan-out (#450, #453) existed, and
  * equal at d251f31e; not regenerated to make this pass (wrath-mcp's
- * `fanout1-identity.test.ts` holds the stack's side the same way).
+ * `fanout1-identity.test.ts` holds the stack's side the same way). The tools
+ * list has moved once since, on a decision about the single-character
+ * surface itself: `run_snippet`'s description says the `scratchpad` calls
+ * return Promises (operator, 2026-11-12). With that one clause taken back
+ * out the list hashes b6b0f118bee75e59, as it did before fan-out.
  */
 const SINGLE = {
-  toolsList: "b6b0f118bee75e59",
+  toolsList: "cb0608ca57a2e422",
   claudeAllowedTools: "a24dbe820edb9b8b",
   claudeArgs: "90a5a17af291fcf4",
 };

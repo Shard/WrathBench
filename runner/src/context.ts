@@ -132,10 +132,58 @@ export const CONTEXT_POLICY = {
    * still receive them. The cache folds both (a unit's `threat`,
    * `self.worldStates`); the list's removal and clear and the zone's initial
    * states stay ordinary events.
+   *
+   * One kind of event is ambient by what it carries, not by its opcode: an
+   * update that says only that a ship or zeppelin came into view or left it
+   * (`transportSighting`, below; operator, 2026-11-12). `isAmbientEvent` is
+   * the whole test, this pattern and that one, and is what every reader of
+   * the window asks.
    */
   EVENT_WINDOW_EXCLUDE:
     /^(SMSG_MONSTER_MOVE|MSG_MOVE|WB_TRANSPORT_PROGRESS|SMSG_PARTY_MEMBER_STATS|(SMSG_THREAT_UPDATE|SMSG_HIGHEST_THREAT_UPDATE|SMSG_UPDATE_WORLD_STATE)$)/,
 } as const;
+
+/** `HighGuid::Mo_Transport`: the top 16 bits of the guid of a ship or zeppelin, a transport that crosses a whole map. */
+const MO_TRANSPORT_HIGH = 0x1fc0n;
+
+function isMapTransportGuid(guid: unknown): boolean {
+  if (typeof guid !== "string" || !/^\d+$/.test(guid)) return false;
+  return BigInt(guid) >> 48n === MO_TRANSPORT_HIGH;
+}
+
+/**
+ * Whether an event says only that a ship or zeppelin came into view or left
+ * it: an `SMSG_UPDATE_OBJECT` whose every block is the create of such a
+ * transport or an out-of-range list of nothing else.
+ *
+ * A character playing near such a transport's route is sent its create and
+ * its out-of-range in alternation, for hours: one character's window held
+ * one ship's pair in 47% of its turns, 11.7% of every event line it was
+ * shown. It is the motion `WB_TRANSPORT_PROGRESS` reports, said as a
+ * sighting, and the cache folds it the same way: the transport is in
+ * `state.units({ type: "gameObject" })` with its position and `docked` while
+ * in view. Nothing about riding one is here: boarding is the move's own
+ * arrival (`onTransport`), the ride `WB_RIDE_PROGRESS`, the far side
+ * `SMSG_NEW_WORLD` and `WB_AREA`, all ordinary events. A block of anything
+ * else in the same packet keeps the whole event in the window, uncut.
+ */
+export function transportSighting(opcode: string, data: unknown): boolean {
+  if (opcode !== "SMSG_UPDATE_OBJECT") return false;
+  const objects = (data as { objects?: unknown } | null | undefined)?.objects;
+  if (!Array.isArray(objects) || objects.length === 0) return false;
+  return objects.every((o: unknown) => {
+    if (o === null || typeof o !== "object") return false;
+    const block = o as { update?: unknown; guid?: unknown; guids?: unknown };
+    if (block.update === "create") return isMapTransportGuid(block.guid);
+    if (block.update === "outOfRange") return Array.isArray(block.guids) && block.guids.length > 0 && block.guids.every(isMapTransportGuid);
+    return false;
+  });
+}
+
+/** Whether an event is ambient: left out of the model's event window and counted on its fold line (`EVENT_WINDOW_EXCLUDE`, `transportSighting`). */
+export function isAmbientEvent(opcode: string, data: unknown): boolean {
+  return CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(opcode) || transportSighting(opcode, data);
+}
 
 // ------------------------------------------------------------ state summary
 
@@ -1389,8 +1437,8 @@ export function formatEventLine(e: EventSummary): string {
  * ambient: it is not movement and the cache does not fold it.
  */
 export function eventWindow(events: readonly EventSummary[], folded = 0): { window: EventSummary[]; folded: number } {
-  const ambient = events.filter((e) => CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(e.opcode)).length;
-  const eligible = events.filter((e) => !CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(e.opcode) && e.bystander !== true);
+  const ambient = events.filter((e) => isAmbientEvent(e.opcode, e.data)).length;
+  const eligible = events.filter((e) => !isAmbientEvent(e.opcode, e.data) && e.bystander !== true);
   return {
     window: eligible.slice(-CONTEXT_POLICY.EVENT_WINDOW),
     folded: folded + ambient,

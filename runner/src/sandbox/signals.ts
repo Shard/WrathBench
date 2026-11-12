@@ -12,7 +12,7 @@ export type { DeathSignal, FlightSignal, PartySignal } from "@wrathbench/mcp/rec
 
 /**
  * The events a turn's context is built from: the last N events that are not
- * ambient movement (`CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE`) nor a bystander's
+ * ambient (`isAmbientEvent` in context.ts) nor a bystander's
  * spell combat-log line or emote (`spellLogShown`, `emoteShown`, not counted
  * as ambient), oldest first, and
  * how many ambient events arrived in the span they cover — from the oldest

@@ -190,7 +190,10 @@ left; a player there presses Help → "I'm stuck". `unstuck()` sends what that
 button sends, the Stuck spell through the ordinary cast handler, and the
 server decides the move. It acts only on a second call within a minute, the
 first sending nothing and saying what will happen. It is in the SDK
-reference like any helper, and by the same decision not in the prompt.
+reference like any helper, and the hints of the two refusals a stranded
+character keeps meeting, a route that ends (`path_incomplete`) and a step
+that cannot be climbed (a climb's `drop`), name it (operator decision,
+2026-11-12). The system prompt does not.
 
 ## Context policy
 
@@ -202,7 +205,9 @@ the full scratchpad. Recent events leave out a creature's emote unless it is
 the character's pet or is targeting the character, since a town's NPCs repeat
 theirs endlessly; players' emotes stay (operator, 2026-10-30). Creature
 threat updates and world-state updates are ambient like movement: readable in
-state, kept out of recent events (operator, 2026-10-30). It restates no
+state, kept out of recent events (operator, 2026-10-30). So is a ship's or
+zeppelin's coming into view and leaving it, which a character near its route
+is sent over and over (operator, 2026-11-12). It restates no
 goal: the directive is the system prompt's alone, so nothing per turn competes with an objective (operator,
 2026-10-23). Within the window only the most recent block is verbatim: in the
 older block each tool result is folded to a deterministic one-line record —
