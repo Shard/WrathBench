@@ -93,8 +93,10 @@ bun wb inspect publisher [<run-id>]                  # last flip, versions per r
 
 All read-only and bounded: a trajectory line is never printed whole, only
 capped fields of it, and the session token is struck from everything printed.
-Every view that takes a run id takes a fan-out character's session id too
-(`<run-id>~<Name>`): `session` reads that character alone, the rest the run.
+Every view that takes a run id but `audit` takes a fan-out character's
+session id too (`<run-id>~<Name>`): `session` reads that character alone, the
+rest the run. `audit` refuses one: each character's session has its own token,
+which it does not read.
 A run is live when its row has neither a termination nor a pause; one with
 neither whose heartbeat is older than two minutes has lost its process and
 reads `ownerless`.
@@ -1798,11 +1800,13 @@ quickstart's runner container):
 bun wb run episode --model <id> [--driver openai|claude-code|codex|pi] [--credential <id>]
 ```
 
-`--credential <id>` records the credential the run bills. The supervisor
-counts a live run it did not launch against that credential, with an episode
-or without one: a slot while it is live, and its launch and spend in the
-day's budgets. A run that records no credential is counted against none. Its
-accounts are held while it is live either way ("A fan-out run, by hand").
+`--credential <id>` names the credential the run is counted against. It
+records the id and chooses no key, so name the one whose key the run uses (a
+CLI driver's variable is `--credential-env`). The supervisor counts a live
+run it did not launch against that credential, with an episode or without
+one: a slot while it is live, and its launch and spend in the day's budgets.
+A run that records no credential is counted against none. Its accounts are
+held while it is live either way ("A fan-out run, by hand").
 
 `./infra/run-roster.sh` and `./infra/run-fleet.sh` still start a roster or a
 whole supervisor by hand, on the quickstart. Both read the config store and

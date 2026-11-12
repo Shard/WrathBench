@@ -51,8 +51,8 @@ characters) is read per character: `run` prints a block each, `live` a line
 each under the run's, and `stuck` judges each and calls the run stuck only
 when every one is. A call that named no character is in every character's
 record; `session` shows it once, as `Alfa+1`. A character's session id,
-`<run-id>~<Name>` as the viewer names it, is taken wherever a run id is:
-`session` reads that character alone, every other view the run.
+`<run-id>~<Name>` as the viewer names it, is taken wherever a run id is but
+`audit`: `session` reads that character alone, every other view the run.
 
 **Cost.** `run`'s `cost` line is the whole run's whatever the window: the
 provider's own charge where it reported one (OpenRouter's `usage.cost` per

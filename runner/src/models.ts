@@ -1297,7 +1297,7 @@ export function readRunFact(
  * public row reads it, so it is never a scored run, an owed one or a strike.
  * What reads it is what it costs the fleet while it runs — the credential it
  * bills (its slot, its runs and spend today, its usage readings) — through
- * `readFleetRuns`.
+ * `readFleetRuns`. Its `bestLevel` is not read and is null.
  */
 export type UnstampedRun = Omit<RunFact, "episode"> & { episode: null };
 
@@ -1427,7 +1427,8 @@ function readRunReading(
     fact.terminationReason = str(r["termination_reason"]);
     pauseReason = str(r["pause_reason"]);
   }
-  fact.bestLevel = bestLevelOf(dir, runId);
+  // Nothing reads a level off a run with no episode, and it is the costly part of the read.
+  fact.bestLevel = fact.episode === null ? null : bestLevelOf(dir, runId);
   const beating = fact.heartbeatAt != null && now - fact.heartbeatAt < HEARTBEAT_DEAD_MS;
   // A verdict the row lacks but the trajectory holds: the runner appends the
   // record before it writes the row, and a row write that gave up (after its
