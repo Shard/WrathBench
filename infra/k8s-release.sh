@@ -134,6 +134,9 @@ tree_dirty() { ! { git -C "${REPO_ROOT}" diff --quiet && git -C "${REPO_ROOT}" d
 [[ -n "${TAG}" ]] || TAG="$(git -C "${REPO_ROOT}" describe --tags --always 2>/dev/null || true)"
 [[ -n "${TAG}" ]] || die "could not compute a tag from git (--tag names one)"
 [[ "${TAG}" != "latest" ]] || die "'latest' is not an immutable tag and is refused (GitHub issue 7)"
+# A probe- tag is a probe campaign arm's image (build-images.sh --probe), built
+# from a branch that is not deployable; it is pinned by an arm, never released.
+[[ "${TAG}" != probe-* ]] || die "${TAG} is a probe image's tag (build-images.sh --probe); a probe image is pinned by a campaign arm and never released"
 SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || true)"
 [[ -n "${SHA}" ]] || die "could not read HEAD from ${REPO_ROOT}"
 

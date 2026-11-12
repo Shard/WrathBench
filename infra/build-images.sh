@@ -10,6 +10,7 @@
 #   ./infra/build-images.sh --commit <sha> --tag <tag>   # a named commit (k8s-release.sh)
 #   ./infra/build-images.sh --private-dir <dir>  # where the reference program comes from
 #   ./infra/build-images.sh --without-reference  # a runner image without it (local, or a public registry)
+#   ./infra/build-images.sh --probe <name> --only runner --push   # a probe image (below)
 #
 # The tag is `git describe --tags --always` of the working tree, and the tree
 # must be clean: on Kubernetes the tag IS the pin (GitHub issue 7 — no `latest`,
@@ -53,6 +54,18 @@
 # public registry host, the only place it may be pushed. An image carrying the
 # program is never pushed to a public registry host; it goes only to the
 # operator's own registry.
+#
+# --probe <name> builds an image for a probe campaign arm from a branch that is
+# not deployable: its stack pin may be on ANY branch of wrath-mcp's origin
+# (as last fetched into wrath-mcp/), not only master or v1, so the image is
+# still reproducible from the public stack. Everything else holds: the tree
+# must be clean (--allow-dirty is refused with it), the image guard runs, and
+# a push goes only to the operator's own registry, never a public host, with
+# or without the reference program. The tag is forced to
+# probe-<name>-<12-hex commit> (--tag is refused with it), and that prefix is
+# the probe's alone: a build without --probe refuses a probe- tag, and so does
+# infra/k8s-release.sh, so a probe image can be pinned by an arm and never
+# become a release or the chart's image.tag.
 
 set -Eeuo pipefail
 
@@ -70,6 +83,8 @@ ALLOW_DIRTY=0
 ONLY=()
 PRIVATE_DIR="${WRATHBENCH_PRIVATE_DIR:-/home/mark/git/wrathbench-private}"
 WITHOUT_REFERENCE=0
+PROBE=""
+PROBE_SET=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -81,7 +96,8 @@ while [[ $# -gt 0 ]]; do
     --allow-dirty) ALLOW_DIRTY=1; shift ;;
     --private-dir) PRIVATE_DIR="$2"; shift 2 ;;
     --without-reference) WITHOUT_REFERENCE=1; shift ;;
-    -h|--help) sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --probe) PROBE="${2:-}"; PROBE_SET=1; shift 2 ;;
+    -h|--help) sed -n '2,68p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "build-images: unknown flag $1" >&2; exit 2 ;;
   esac
 done
@@ -90,6 +106,14 @@ cd "${REPO_ROOT}"
 
 say() { echo "[$(date +%H:%M:%S)] build-images: $*"; }
 die() { echo "[$(date +%H:%M:%S)] build-images: $*" >&2; exit 1; }
+
+if [[ "${PROBE_SET}" -eq 1 ]]; then
+  [[ "${PROBE}" =~ ^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$ ]] || die "--probe takes a short lowercase name (letters, digits, inner hyphens; got $(printf %q "${PROBE}"))"
+  [[ -z "${TAG}" ]] || die "--probe sets the tag itself (probe-${PROBE}-<commit>); drop --tag"
+  [[ "${ALLOW_DIRTY}" -eq 0 ]] || die "--probe refuses --allow-dirty: a probe image is pushed and pinned, so it is built from a clean commit and a merged-or-pushed stack"
+elif [[ "${TAG}" == probe-* ]]; then
+  die "a probe- tag is made only by --probe <name>; a release or chart tag never starts with probe-"
+fi
 
 # The commit every image is built from: HEAD, or --commit. k8s-release.sh
 # passes the commit its tag describes, so a commit landing in the checkout
@@ -112,7 +136,9 @@ if tree_dirty; then
   say "WARNING: --allow-dirty — the uncommitted changes are NOT in these images (they are built from ${SHA}); the -dirty tag is never pushed"
 fi
 
-if [[ -z "${TAG}" ]]; then
+if [[ -n "${PROBE}" ]]; then
+  TAG="probe-${PROBE}-${SHA:0:12}"
+elif [[ -z "${TAG}" ]]; then
   TAG="$(git describe --tags --always $(tree_dirty && echo --dirty) 2>/dev/null || echo unknown)"
 fi
 [[ "${TAG}" != "unknown" && -n "${TAG}" ]] || die "could not compute a tag from git"
@@ -150,6 +176,9 @@ case "${registry_host}" in
   localhost|*.*|*:*) ;;
   *) public_registry=1 ;;
 esac
+if [[ -n "${PROBE}" && "${PUSH}" -eq 1 && "${public_registry}" -eq 1 ]]; then
+  die "refusing to push a probe image to ${registry_host}, a public registry host; a probe image goes only to the operator's own registry"
+fi
 if wants wrathbench-runner; then
   if [[ "${PUSH}" -eq 1 && "${public_registry}" -eq 1 && "${WITHOUT_REFERENCE}" -eq 0 ]]; then
     die "refusing to push a runner image carrying the private reference program to ${registry_host}, a public registry host; a branch image there is built with --without-reference"
@@ -224,7 +253,9 @@ export_azerothcore() {
 # public stack. On the v1 branch it may instead be on wrath-mcp's v1
 # (origin/v1), the long-lived branch v1 is built on (infra/PINS.md). A pin
 # still under review builds only under --allow-dirty, for a local image: such
-# images are never pushed (below).
+# images are never pushed (below). Under --probe the pin may be on any branch
+# of wrath-mcp's origin (refs/remotes/origin/*), so the image is still
+# reproducible from the public stack.
 STACK_SHA=""
 STACK_UNMERGED=0
 STACK_BRANCHES=(master v1)
@@ -235,6 +266,9 @@ stack_pin_merged() {
   done
   return 1
 }
+stack_pin_pushed() {
+  [[ -n "$(git -C "$1" for-each-ref --contains "${STACK_SHA}" --format='%(refname)' refs/remotes/origin/ 2>/dev/null)" ]]
+}
 export_wrath_mcp() {
   local sub="${REPO_ROOT}/wrath-mcp" mode type rest real top
   read -r mode type STACK_SHA rest <<< "$(git ls-tree "${SHA}" wrath-mcp)"
@@ -244,7 +278,10 @@ export_wrath_mcp() {
   if [[ -z "${real}" || "${top}" != "${real}" ]] || ! git -C "${sub}" cat-file -e "${STACK_SHA}^{commit}" 2>/dev/null; then
     die "wrath-mcp ${STACK_SHA} (the submodule commit ${SHA} pins) is not available in wrath-mcp/; run: git submodule update --init wrath-mcp"
   fi
-  if ! stack_pin_merged "${sub}"; then
+  if [[ -n "${PROBE}" ]]; then
+    stack_pin_pushed "${sub}" || die "wrath-mcp ${STACK_SHA} is on no branch of wrath-mcp's origin (refs/remotes/origin/* in wrath-mcp/): a probe image pins a pushed stack commit. Push the stack branch, then run: git -C wrath-mcp fetch origin"
+    stack_pin_merged "${sub}" || say "probe: wrath-mcp ${STACK_SHA} is on a branch of wrath-mcp's origin, not on its master or v1"
+  elif ! stack_pin_merged "${sub}"; then
     if [[ "${ALLOW_DIRTY}" -eq 0 ]]; then
       die "wrath-mcp ${STACK_SHA} is not on wrath-mcp's master or v1 (origin/master, origin/v1 in wrath-mcp/): a deployable image pins a merged stack commit. Merge the stack change first, then run: git -C wrath-mcp fetch origin master v1 (--allow-dirty builds a local image that is never pushed)"
     fi
@@ -336,7 +373,14 @@ if [[ "${PUSH}" -eq 1 ]]; then
     say "pushing ${ref}"
     docker push "${ref}"
   done
-  say "pushed ${#BUILT[@]} image(s) at ${TAG}; set image.tag=${TAG} in the cluster repo"
+  if [[ -n "${PROBE}" ]]; then
+    say "pushed ${#BUILT[@]} probe image(s) at ${TAG}; pin an arm to one by digest, never the chart's image.tag:"
+    for ref in "${BUILT[@]}"; do
+      say "  $(docker image inspect -f '{{join .RepoDigests "\n"}}' "${ref}" | grep -F "${ref%:*}@" | head -n1 || true)"
+    done
+  else
+    say "pushed ${#BUILT[@]} image(s) at ${TAG}; set image.tag=${TAG} in the cluster repo"
+  fi
 else
   say "not pushed (--push to push). image.tag for the chart: ${TAG}"
 fi

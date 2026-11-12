@@ -158,7 +158,10 @@ case "$1" in
   export) tar -cf - -C "\${FAKE_IMAGE_ROOT}" . ;;
   image)
     if [[ "$2" == "inspect" ]]; then
-      if [[ "$*" == *Size* ]]; then echo 1073741824; else echo sha256:0123456789abcdef0123; fi
+      ref="\${!#}"
+      if [[ "$*" == *Size* ]]; then echo 1073741824
+      elif [[ "$*" == *RepoDigests* ]]; then echo "\${ref%:*}@sha256:feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface"
+      else echo sha256:0123456789abcdef0123; fi
     fi
     ;;
 esac
@@ -373,6 +376,104 @@ describe("build-images.sh on the v1 branch", () => {
     const r = run(tree, ["--only", "runner"]);
     expect(r.code).toBe(0);
     expect(r.contexts[0]!.read("wrath-mcp/sdk/API.md")).toBe("v1\n");
+  });
+});
+
+describe("build-images.sh --probe", () => {
+  /** Pin a stack commit on a branch of wrath-mcp's origin that is neither master nor v1. */
+  function pinPushedBranch(): { tree: string; stackSha: string; sha: string } {
+    const { tree, stack } = makeRepo();
+    git(stack, "switch", "-q", "-c", "spike/program");
+    put(stack, { "sdk/API.md": "spike\n" });
+    git(stack, "commit", "-q", "-am", "stack spike");
+    const sub = join(tree, "wrath-mcp");
+    git(sub, "fetch", "-q", "origin");
+    git(sub, "switch", "-q", "--detach", "origin/spike/program");
+    git(tree, "commit", "-q", "-m", "pin a spike commit", "--", "wrath-mcp");
+    return { tree, stackSha: git(sub, "rev-parse", "HEAD"), sha: git(tree, "rev-parse", "HEAD") };
+  }
+
+  test("a stack pin on any pushed branch builds and pushes at probe-<name>-<commit>, to the operator's registry, printing the digest", () => {
+    const { tree, stackSha, sha } = pinPushedBranch();
+    const refused = run(tree, ["--only", "runner", "--push", "--registry", "reg.example/wrathbench"]);
+    expect(refused.code).toBe(1);
+    expect(refused.out).toContain("is not on wrath-mcp's master or v1");
+    expect(refused.calls).toEqual([]);
+    const r = run(tree, ["--probe", "program", "--only", "runner", "--push", "--registry", "reg.example/wrathbench"]);
+    expect(r.code).toBe(0);
+    const ref = `reg.example/wrathbench/wrathbench-runner:probe-program-${sha.slice(0, 12)}`;
+    expect(builds(r)[0]).toContain(`-t ${ref}`);
+    expect(builds(r)[0]).toContain(`--build-arg WRATHBENCH_BUILD_VERSION=probe-program-${sha.slice(0, 12)}`);
+    expect(r.contexts[0]!.read("wrath-mcp/sdk/API.md")).toBe("spike\n");
+    expect(r.out).toContain(`wrath-mcp ${stackSha} is on a branch of wrath-mcp's origin, not on its master or v1`);
+    expect(pushes(r)).toEqual([`docker push ${ref}`]);
+    // The guard still runs before the push.
+    expect(r.calls.indexOf(`docker push ${ref}`)).toBeGreaterThan(r.calls.indexOf("docker export fake-container"));
+    expect(r.out).toContain("never the chart's image.tag");
+    expect(r.out).toContain("reg.example/wrathbench/wrathbench-runner@sha256:feedface");
+    expect(r.leftovers).toEqual([]);
+  });
+
+  test("a merged pin builds under --probe too, at the probe tag", () => {
+    const { tree, sha } = makeRepo();
+    const r = run(tree, ["--probe", "program", "--only", "runner"]);
+    expect(r.code).toBe(0);
+    expect(builds(r)[0]).toContain(`wrathbench-runner:probe-program-${sha.slice(0, 12)}`);
+    expect(r.out).not.toContain("not on its master or v1");
+  });
+
+  test("a stack commit on no branch of wrath-mcp's origin is refused before anything is built", () => {
+    const { tree } = makeRepo();
+    const sub = join(tree, "wrath-mcp");
+    git(sub, "switch", "-q", "-c", "local-only");
+    put(sub, { "sdk/API.md": "never pushed\n" });
+    git(sub, "commit", "-q", "-am", "never pushed");
+    git(tree, "commit", "-q", "-m", "pin an unpushed commit", "--", "wrath-mcp");
+    const r = run(tree, ["--probe", "program", "--only", "runner", "--push", "--registry", "reg.example/wrathbench"]);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("is on no branch of wrath-mcp's origin");
+    expect(r.out).toContain("git -C wrath-mcp fetch origin");
+    expect(r.calls).toEqual([]);
+    expect(r.leftovers).toEqual([]);
+  });
+
+  test("a dirty tree is refused, and so are --allow-dirty and --tag beside it", () => {
+    const { tree } = pinPushedBranch();
+    const flags = run(tree, ["--probe", "program", "--only", "runner", "--tag", "mine"]);
+    expect(flags.code).toBe(1);
+    expect(flags.out).toContain("drop --tag");
+    const dirtyFlag = run(tree, ["--probe", "program", "--only", "runner", "--allow-dirty"]);
+    expect(dirtyFlag.code).toBe(1);
+    expect(dirtyFlag.out).toContain("--probe refuses --allow-dirty");
+    writeFileSync(join(tree, "a.txt"), "two\n");
+    const dirty = run(tree, ["--probe", "program", "--only", "runner", "--push", "--registry", "reg.example/wrathbench"]);
+    expect(dirty.code).toBe(1);
+    expect(dirty.out).toContain("uncommitted changes");
+    for (const r of [flags, dirtyFlag, dirty]) expect(r.calls).toEqual([]);
+  });
+
+  test("a probe image is never pushed to a public registry host, with or without the reference program", () => {
+    const { tree } = pinPushedBranch();
+    for (const extra of [[], ["--without-reference"]]) {
+      const r = run(tree, ["--probe", "program", "--only", "runner", "--push", "--registry", "ghcr.io/shard", ...extra], { env: { WRATHBENCH_PRIVATE_DIR: "/nonexistent" } });
+      expect(r.code).toBe(1);
+      expect(r.out).toContain("refusing to push a probe image to ghcr.io");
+      expect(r.calls).toEqual([]);
+    }
+  });
+
+  test("a bad name is refused, and a probe- tag is made only by --probe", () => {
+    const { tree } = makeRepo();
+    for (const name of ["", "Program", "-x", "a b", "x".repeat(40)]) {
+      const r = run(tree, ["--probe", name, "--only", "runner"]);
+      expect(r.code).toBe(1);
+      expect(r.out).toContain("--probe takes a short lowercase name");
+      expect(r.calls).toEqual([]);
+    }
+    const tagged = run(tree, ["--only", "runner", "--tag", "probe-program-0123456789ab"]);
+    expect(tagged.code).toBe(1);
+    expect(tagged.out).toContain("a probe- tag is made only by --probe");
+    expect(tagged.calls).toEqual([]);
   });
 });
 

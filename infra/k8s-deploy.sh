@@ -92,6 +92,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# A probe- tag is a probe campaign arm's image (build-images.sh --probe), built
+# from a branch that is not deployable: never a window's tag, whatever the flags.
+[[ "${EXPECT_TAG}" != probe-* ]] || { echo "k8s-deploy: ${EXPECT_TAG} is a probe image's tag (build-images.sh --probe); a probe image is pinned by a campaign arm and never deployed" >&2; exit 2; }
+
 FLEET_DEPLOY="deployment/${RELEASE}-fleet"
 RUNNER_DEPLOY="deployment/${RELEASE}-runner"
 WORLD_DEPLOY="deployment/${RELEASE}-worldserver"
@@ -297,6 +301,9 @@ resolve_tag_check() {
 }
 enforce_tag_check() {
   resolve_tag_check
+  if [[ "${CLUSTER_TAG}" == probe-* ]]; then
+    die "REFUSING TO DEPLOY: the cluster runs ${CLUSTER_TAG}, a probe image's tag (build-images.sh --probe), which is never the chart's image.tag; pin a release tag"
+  fi
   if [[ "${TAG_CHECK}" == "ok" ]]; then
     say "pin check: ${TAG_CHECK_WHY}"
     return 0
