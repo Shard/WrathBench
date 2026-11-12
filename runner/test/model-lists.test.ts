@@ -27,7 +27,8 @@ import {
   type ModelListSource,
   type ModelListsSidecar,
 } from "../src/model-lists";
-import { modelStates, planNextJobs, schedulability, type RosterModel } from "../src/models";
+import { DEFAULT_POLICY, modelStates, planNextJobs, schedulability, type RosterModel } from "../src/models";
+import { modelsResponse, type RosterRead } from "../viewer/models";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -244,6 +245,16 @@ describe("what the projection makes of it", () => {
     const back = applyModelListRead(gone, goSource, ["cat-jam-free", "beam-free"], listed("cat-jam-free", "beam-free"), T0 + 36 * H);
     const states = modelStates({ runsDir: tempDir("wb-model-lists-"), roster, now: T0 + 37 * H, runs: [], sidecar: { version: 1, cleared: {} }, modelLists: back });
     expect(states.find((s) => s.name === "cat-jam-go")!.status).toBe("new");
+  });
+
+  test("/api/models, which the models page reads, carries the retirement and why", () => {
+    const states = modelStates({ runsDir: tempDir("wb-model-lists-"), roster, now: T0 + 31 * H, runs: [], sidecar: { version: 1, cleared: {} }, modelLists: gone });
+    const read = { models: roster, shape: "roster", path: null, policy: DEFAULT_POLICY, credentials: [], excluded: [], count: 2, accounts: 2, campaigns: [], campaignDefs: [] } as unknown as RosterRead;
+    const row = modelsResponse({ states, runs: [], runsDir: tempDir("wb-model-lists-"), roster: read, now: T0 + 31 * H }).models.find((m) => m.name === "cat-jam-go")!;
+    expect(row.status).toBe("retired");
+    expect(row.retired).toEqual({ at: T0, reason: "gone from OpenCode Go's model list since 2026-11-12" });
+    expect(row.schedulable.ok).toBe(false);
+    expect(row.schedulable.why).toContain("back by itself once it is listed again");
   });
 
   test("with no file, nothing is retired", () => {

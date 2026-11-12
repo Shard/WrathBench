@@ -1566,7 +1566,8 @@ in `--status`, and changes nothing: it neither confirms an absence nor resets
 one. Like the ladder's, this retirement only stops the policy picking the
 model: a run in flight runs on, a pinned job is outside the policy as always,
 no row is deleted, and nothing is counted differently. `--status` ends the
-models table with each list's newest read and what is not on it.
+models table with each list's newest read and what is not on it (operator,
+2026-11-12).
 
 A manual pool job (a `queue` entry without an account) always outranks the
 policy for a pool account; add one to force a specific run (an `e360` for a

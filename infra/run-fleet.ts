@@ -676,7 +676,7 @@ async function refreshGoUsage(cfg: Pick<FleetConfig, "credentials" | "roster">):
  */
 const modelLists = new FleetModelLists({ runsDir: RUNS_DIR, say });
 function refreshModelLists(cfg: Pick<FleetConfig, "credentials" | "roster">): void {
-  void modelLists.refresh(cfg.roster, cfg.credentials);
+  modelLists.refresh(cfg.roster, cfg.credentials).catch((e: unknown) => say(`model lists: refresh failed: ${e instanceof Error ? e.message : String(e)}`));
 }
 /** The newest tick's credential ledger, for the state file's `credentials` block. */
 let lastCredentials: { gate: CredentialGate; book: SlotBook; credentials: readonly Credential[]; runs: readonly Pick<RunFact, "credential" | "pause">[] } | undefined;
