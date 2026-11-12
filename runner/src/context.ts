@@ -1353,6 +1353,12 @@ export interface ContextInputs {
   notices: HarnessNotice[];
   /** Model turn number, for the model's own orientation. */
   turn: number;
+  /**
+   * The program loop's [wake] block (`wake.ts`, `renderWake`), on every
+   * request of a wake that ended a turn-end sleep. Absent renders nothing,
+   * which is every turn of the snippet loop.
+   */
+  wake?: string | undefined;
 }
 
 /**
@@ -1615,6 +1621,10 @@ export function assembleContext(inputs: ContextInputs): string {
   // never names and contradicted every objective (issue #285, operator
   // 2026-10-23). The `[turn N]` prefix is parsed back (`codex-rollout.ts`).
   parts.push(`[turn ${inputs.turn}]`);
+
+  // The program loop's wake, first after the turn's number: the prompt says
+  // the turn begins with it. Never on the snippet loop.
+  if (inputs.wake !== undefined && inputs.wake.length > 0) parts.push(inputs.wake);
 
   if (inputs.notices.length > 0) {
     parts.push(

@@ -35,7 +35,7 @@ import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
 import { HARNESSES, episodeOverrideOf, harnessOf, type Harness, type RunConfig } from "./config";
 import { driverEntry } from "./drivers";
 import { episodeIdSchema } from "./episodes";
-import { buildSystemPrompt } from "./prompt";
+import { buildSystemPrompt, programPromptOf } from "./prompt";
 import { routingForRun, routingSchema } from "./routing";
 import type { WikiBundleMeta } from "./wiki";
 
@@ -205,6 +205,16 @@ export const comparabilitySchema = z.object({
    */
   compactWindow: z.string().nullable().optional(),
   /**
+   * The agent loop, when it is not the snippet loop (`RunConfig.loop`): a
+   * probe arm's program loop. A KEY: the model writes and supervises a
+   * different thing, so the two loops are two conditions. ABSENT on the
+   * snippet loop, which keeps every tuple stamped before the field existed
+   * byte-for-byte what it was.
+   */
+  loop: z.literal("program").optional(),
+  /** The program loop's `yield` tool (`RunConfig.yield`). A KEY; absent when off. */
+  yield: z.literal(true).optional(),
+  /**
    * The model id the provider said it actually served — `claude-sonnet-5` for a
    * run launched as `sonnet`.
    *
@@ -301,7 +311,7 @@ export function comparabilityOf(
   const harness = harnessOf(config.driver);
   // Rendered for THIS run's harness: the prompt's context sentence differs
   // between them, so the hash below is per-harness by design.
-  const prompt = buildSystemPrompt(config.objective, config.episode, harness, config.wiki, config.watchdogs.episodeMs);
+  const prompt = buildSystemPrompt(config.objective, config.episode, harness, config.wiki, config.watchdogs.episodeMs, programPromptOf(config));
   const routing = routingForRun(config);
   return {
     harnessVersion,
@@ -332,6 +342,9 @@ export function comparabilityOf(
     ...(config.wiki ? {} : { wiki: false as const }),
     // After `wiki`, for the same reason again; absent is the CLI's `auto`.
     ...(config.compactWindow !== undefined ? { compactWindow: config.compactWindow } : {}),
+    // After `compactWindow`, for the same reason; absent is the snippet loop.
+    ...(config.loop !== undefined ? { loop: config.loop } : {}),
+    ...(config.yield === true ? { yield: true as const } : {}),
   };
 }
 

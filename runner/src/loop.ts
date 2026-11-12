@@ -22,7 +22,7 @@ import {
 } from "./context";
 import { REFLECT_BREAKER_NOTICE, ReflectGate, restingOf, taxiFlightOf } from "./reflect";
 import type { EpisodicLog } from "./episodic";
-import { buildSystemPrompt } from "./prompt";
+import { buildSystemPrompt, programPromptOf } from "./prompt";
 import { fixedLoopRequestRecord } from "./request-record";
 import { appendPendingActionHints, callTool, coerceToolArgs, normalizeToolArgs, toolsFor, type ToolContext } from "./tools";
 import { digestCharacter, PLAIN_FANOUT_RENDER, type CharacterDigest, type FanoutSurface } from "@wrathbench/mcp/fanout";
@@ -38,6 +38,7 @@ import type { PartySignal } from "./sandbox/signals";
 import type { Scratchpad } from "@wrathbench/mcp";
 import type { Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
+import { WAKE_CAP_MS, type ProgramWake } from "./wake";
 
 /**
  * Written samples in a row that must find the observation standing still
@@ -96,6 +97,12 @@ export interface LoopOptions {
    * (operator, 2026-10-16). Absent on every other run.
    */
   usage?: UsageGauge | undefined;
+  /**
+   * The program loop's waking (`wake.ts`), on a run with `loop: "program"`:
+   * made before the sandbox, whose program's facts it takes, and slept
+   * through here. Absent on the snippet loop, which never sleeps.
+   */
+  programWake?: ProgramWake | undefined;
 }
 
 /** What the loop asks of a subscription allowance it runs on (`LoopOptions.usage`). */
@@ -194,6 +201,8 @@ export interface ContextBuilderOptions {
    * nothing else happens.
    */
   onObservationStalled?: ObservationStallHook | undefined;
+  /** Every state sample this builder takes, as it is taken: the program loop's wake reads the stream and the level off it. */
+  onSample?: ((snap: SnapshotLike) => void) | undefined;
 }
 
 /**
@@ -445,6 +454,7 @@ export class ContextBuilder {
     const { config, watchdogs } = this.o;
     const snap = await this.snapshot();
     if (snap === null) return snap;
+    this.o.onSample?.(snap);
     // Ungated by `stateIntervalMs`: the gate re-arms on a rest visit or a
     // flight beginning, and either can begin and end well inside one sample.
     this.reflect.note(restingOf(snap), taxiFlightOf(snap));
@@ -471,7 +481,7 @@ export class ContextBuilder {
    * `events_served` trajectory record as a side effect, exactly as the loop
    * did before this was extracted.
    */
-  async build(turn: number, pendingNotices: HarnessNotice[]): Promise<string> {
+  async build(turn: number, pendingNotices: HarnessNotice[], wake?: string): Promise<string> {
     this.noteTurn(turn);
     const snap = await this.sampleState();
     // The reflection window's per-turn bookkeeping, in the one hook both
@@ -525,6 +535,7 @@ export class ContextBuilder {
         scratchpad: this.o.scratchpad.read(),
         notices: pendingNotices.splice(0, pendingNotices.length),
         turn,
+        ...(wake !== undefined ? { wake } : {}),
       }),
     );
     // What the model was shown, and how many ambient events the span folded —
@@ -632,7 +643,28 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     ...(o.turnOffset !== undefined ? { turnOffset: o.turnOffset } : {}),
     ...(o.now !== undefined ? { now: o.now } : {}),
     onObservationStalled: o.onObservationStalled,
+    ...(o.programWake !== undefined ? { onSample: (snap: SnapshotLike) => o.programWake!.onSample(snap) } : {}),
   });
+
+  /*
+   * The program loop (`loop: "program"`): the model's routines run in the
+   * sandbox's program whether it is awake or not, a reply with no tool call
+   * sleeps until a wake (`wake.ts`) instead of re-prompting after the step
+   * interval, and the wake's block opens every request of the wake that
+   * follows. Absent on the snippet loop, which this function runs exactly as
+   * it always has.
+   */
+  const programPrompt = programPromptOf(config);
+  const programTools = programPrompt !== undefined ? { yield: programPrompt.yield } : undefined;
+  const program = programPrompt !== undefined ? o.sandbox.program : undefined;
+  const programWake = o.programWake;
+  if (programPrompt !== undefined && (program === undefined || programWake === undefined)) {
+    throw new Error("loop: \"program\" needs a sandbox that hosts a program and the run's wake (run.ts)");
+  }
+  /** The block of the last turn-end wake, on every request until the model sleeps again. */
+  let currentWake: string | undefined;
+  /** A sleep ends on a stop request or a watchdog verdict as well as a wake: neither waits out five minutes. */
+  const sleepStopped = (): boolean => stopRequestOf(o.signal) !== null || watchdogs.check() !== null;
 
   let turn = 0;
   const toolCtx: ToolContext = {
@@ -649,6 +681,30 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     turn: () => builder.currentTurn,
     secrets: trajectory,
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
+    ...(program !== undefined && programWake !== undefined
+      ? {
+          program,
+          onRoutinesShown: () => programWake.routinesShown(),
+          ...(programPrompt?.yield === true
+            ? {
+                yieldWake: async (seconds: number): Promise<string> => {
+                  const woke = await programWake.sleep(program, {
+                    via: "yield",
+                    turn,
+                    capMs: Math.min(WAKE_CAP_MS, Math.round(seconds * 1000)),
+                    floorMs: config.stepIntervalMs,
+                    stopped: sleepStopped,
+                    queuedNotices: () => pendingNotices.length,
+                    idle: watchdogs,
+                  });
+                  // The block is this call's result, in the history: the next request does not repeat it.
+                  currentWake = undefined;
+                  return woke.block;
+                },
+              }
+            : {}),
+        }
+      : {}),
   };
 
   /**
@@ -723,6 +779,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       // 0. a stop request wins over everything, at the turn boundary
       const stop = await stopped();
       if (stop !== null) return stop;
+      // A restart the program was blamed for counts toward snippet-runaway as a snippet's does.
+      if (programWake !== undefined) for (let k = programWake.takeBlamedRestarts(); k > 0; k--) watchdogs.noteSandboxRestart();
       // 1. watchdogs
       const verdict = watchdogs.check();
       if (verdict !== null) {
@@ -772,7 +830,9 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         lastCut = cut;
       }
       lastFold = fold;
-      const contextText = await builder.build(turn, pendingNotices);
+      const contextText = await builder.build(turn, pendingNotices, currentWake);
+      // What this context shows (the HUD, the notices) is no longer a reason to wake.
+      programWake?.shown();
       // The sample above may have been the one that found the observation
       // stalled, and the pause it asked for wins before a request is written.
       const stopBuilt = await stopped();
@@ -785,7 +845,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         return await terminate(integrity.reason, integrity.detail);
       }
 
-      const systemText = buildSystemPrompt(config.objective, config.episode, harnessOf(config.driver), config.wiki, config.watchdogs.episodeMs);
+      const systemText = buildSystemPrompt(config.objective, config.episode, harnessOf(config.driver), config.wiki, config.watchdogs.episodeMs, programPrompt);
       const messages: ChatMessage[] = [
         { role: "system", content: systemText },
         ...messageWindow(history),
@@ -814,7 +874,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       } else {
         trajectory.append({ t: "harness", kind: "request_replay_mismatch", turn, detail: mismatch });
       }
-      const outcome = await o.adapter.complete({ messages, tools: toolsFor({ wikiCoords: config.wikiCoords, wikiSearch: config.wiki, sandbox: o.sandbox }), signal: o.signal });
+      const outcome = await o.adapter.complete({ messages, tools: toolsFor({ wikiCoords: config.wikiCoords, wikiSearch: config.wiki, sandbox: o.sandbox, programTools }), signal: o.signal });
       if (outcome.kind === "stub-complete") return await terminate("stub-complete");
       if (outcome.kind === "pause") {
         // A spent subscription allowance waits for its window's reset when the
@@ -927,7 +987,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         if (stopMid !== null) return stopMid;
         let args: unknown = {};
         let argError: string | null = null;
-        const coerced = coerceToolArgs(tc.name, tc.arguments);
+        const coerced = coerceToolArgs(tc.name, tc.arguments, programTools);
         if (coerced.ok) args = coerced.args;
         else argError = coerced.error;
         // Written before the call runs, so `ts` already is the dispatch; the
@@ -940,7 +1000,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           // source/script/ts) has the real source under that key, and callTool
           // normalizes internally — so read it the same way here or the snippet
           // record (what analysis greps) is empty.
-          const normalized = normalizeToolArgs(tc.name, args) as { code?: string };
+          const normalized = normalizeToolArgs(tc.name, args, programTools) as { code?: string };
           trajectory.append({ t: "snippet", turn, code: normalized.code ?? "" });
         }
         const restartsBefore = o.sandbox.totalRestarts;
@@ -990,6 +1050,21 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
             return { kind: "paused", reason: SUBSCRIPTION_PAUSE, detail, notBefore: hold.until };
           }
         }
+      }
+      if (program !== undefined && programWake !== undefined && outcome.turn.toolCalls.length === 0) {
+        // The program loop: a reply with no tool call sleeps until a wake,
+        // and the wake's block opens every request until the next sleep.
+        const woke = await programWake.sleep(program, {
+          via: "turn-end",
+          turn,
+          capMs: WAKE_CAP_MS,
+          floorMs: config.stepIntervalMs,
+          stopped: sleepStopped,
+          queuedNotices: () => pendingNotices.length,
+          idle: watchdogs,
+        });
+        currentWake = woke.block;
+        continue;
       }
       await sleep(config.stepIntervalMs);
     }
