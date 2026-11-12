@@ -295,6 +295,21 @@ describe("the supervisor's poller", () => {
     expect(asked.length).toBe(2);
   });
 
+  test("a keyed list reads its key from where the supervisor passes it: the config store's secret over the environment", async () => {
+    const keys: (string | undefined)[] = [];
+    const lists = new FleetModelLists({
+      runsDir: tempDir("wb-model-lists-"),
+      env: { CEREBRAS_KEY: "from-sops" },
+      now: () => T0,
+      read: async (_source, opts) => {
+        keys.push(opts.key?.value);
+        return listed("x");
+      },
+    });
+    await lists.refresh({ c: { model: "x", driver: "openai", apiBase: "https://api.cerebras.ai/v1" } }, [{ provider: "cerebras", secretEnv: "CEREBRAS_KEY", enabled: true }], { CEREBRAS_KEY: "from-the-store" });
+    expect(keys).toEqual(["from-the-store"]);
+  });
+
   test("a failed read is said and leaves the absences as they were", async () => {
     const dir = tempDir("wb-model-lists-");
     let now = T0;

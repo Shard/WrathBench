@@ -22,8 +22,9 @@
  */
 
 import type { PlacedCredential } from "./run-fleet-credentials";
-import type { RosterDriver } from "../runner/src/drivers";
+import { entryOf, type RosterDriver } from "../runner/src/drivers";
 import { parseRunPodsMode, RUN_PODS_MODES, type RunPodsMode } from "../runner/src/models";
+import { launchSecret, STORE_KEY_ENV } from "../runner/src/store-secrets";
 
 /** The fleet setting's vocabulary lives with the policy block it is part of; re-exported for the launchers' callers. */
 export { parseRunPodsMode, RUN_PODS_MODES, type RunPodsMode };
@@ -154,23 +155,64 @@ export function refusedEpisode(reason: string): EpisodeHandle {
 }
 
 /**
- * Today's launch, unchanged: a child of this process, stdio inherited (the
- * runner's operator lines go to stderr and land in the job log), `env`
- * applied over the roster's own environment.
+ * The variable holding the secret an episode bills, by NAME: a CLI driver's
+ * token (its credential's, else the driver's default), an endpoint driver's
+ * key. Undefined for a driver whose credential is a Codex home (a directory,
+ * never a stored secret) or that bills nothing.
+ */
+export function episodeSecretEnv(spec: Pick<EpisodeSpec, "driver" | "placedOn" | "apiKeyEnv">): string | undefined {
+  const driver = entryOf(spec.driver);
+  if (driver.credential !== undefined) return driver.credential.holds === "token" ? (spec.placedOn?.env ?? driver.credential.defaultEnv) : undefined;
+  return driver.endpoint ? spec.apiKeyEnv : undefined;
+}
+
+/** Reads one variable's stored secret at launch (`launchSecret`); a test injects its own. */
+export type LaunchSecretReader = (name: string) => ReturnType<typeof launchSecret>;
+
+/**
+ * A child episode's environment: the parent's with the stamps, then the
+ * variable it bills from the config store when one is stored there, which
+ * wins over the parent's. A stored secret that does not open refuses the
+ * launch rather than falling back. The store key never reaches the child: it
+ * opens nothing there, and a model's process has no business holding it.
+ */
+export function processEpisodeEnv(
+  parent: Record<string, string | undefined>,
+  launch: Pick<EpisodeLaunch, "spec" | "env">,
+  secrets: LaunchSecretReader,
+): { env: Record<string, string | undefined> } | { refused: string } {
+  const env: Record<string, string | undefined> = { ...parent, ...launch.env };
+  delete env[STORE_KEY_ENV];
+  const name = episodeSecretEnv(launch.spec);
+  if (name === undefined) return { env };
+  const s = secrets(name);
+  if (s.source === "refused") return { refused: `${launch.spec.runId}: ${s.why}` };
+  if (s.source === "store") env[name] = s.value;
+  return { env };
+}
+
+/**
+ * Today's launch: a child of this process, stdio inherited (the runner's
+ * operator lines go to stderr and land in the job log), `env` applied over the
+ * roster's own environment, and the episode's one stored secret over that.
  */
 export class ProcessLauncher implements EpisodeLauncher {
   readonly kind = "process" as const;
-  constructor(private readonly opts: { cwd: string }) {}
+  constructor(private readonly opts: { cwd: string; secrets?: LaunchSecretReader }) {}
 
   async start(launch: EpisodeLaunch): Promise<EpisodeHandle> {
+    const env = processEpisodeEnv(process.env, launch, this.opts.secrets ?? ((name) => launchSecret(name)));
+    if ("refused" in env) return refusedEpisode(env.refused);
     const proc = Bun.spawn(launch.argv, {
       cwd: this.opts.cwd,
       stdin: "inherit",
       stdout: "inherit",
       stderr: "inherit",
-      // Secrets still never travel via argv or env from here: Bun loads
-      // /wrathbench/.env in the child itself; `env` carries only the stamps.
-      env: { ...process.env, ...launch.env },
+      // Secrets never travel via argv. The child inherits the roster's
+      // environment (the Secret's keys on the cluster; on the quickstart Bun
+      // loads /wrathbench/.env in it too), the stamps, and the one stored
+      // secret its credential has, read from the store at this launch.
+      env: env.env,
     });
     const exited = proc.exited.then((code) => ({ code }));
     return {

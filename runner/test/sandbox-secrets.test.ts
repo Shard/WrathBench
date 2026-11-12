@@ -16,7 +16,7 @@
  * own in sandbox-confine.test.ts.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Subprocess } from "bun";
 import { SandboxHost } from "../src/sandbox/host";
@@ -50,6 +50,11 @@ const PARENT_ENV = [
   "S3_SECRET_ACCESS_KEY",
   "CF_API_KEY_DEPLOY",
   "WRATHBENCH_CF_DEPLOY_TOKEN",
+  // The config store's key, and a run pod's sealed secret (runner/src/store-secrets.ts). run.ts
+  // drops both from process.env, but a process's initial environ keeps them: the decoy below is
+  // spawned with them in its real environ, which is what PID 1 and run.ts hold in a run pod.
+  "WRATHBENCH_STORE_KEY",
+  "WRATHBENCH_SEALED_SECRET",
 ] as const;
 
 const OWN_LEASE = "own-lease-secret-0123456789abcdef0123456789abcdef";
@@ -109,7 +114,9 @@ beforeAll(() => {
   }
   // A process with a secret on its command line, the shape a `mysql -p…` or a
   // `curl -H "Authorization: …"` has.
-  decoy = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 60000)", planted("argv")], { stdout: "ignore", stderr: "ignore" });
+  // Its environment is the planted one, stated: Bun.spawn's default is the
+  // environment this process started with, not process.env as changed above.
+  decoy = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 60000)", planted("argv")], { stdout: "ignore", stderr: "ignore", env: { ...process.env } });
 });
 
 afterAll(async () => {
@@ -189,6 +196,9 @@ describe("no secret is within a snippet's reach", () => {
     expect(out["self/environ"]).toBe("READ");
     expect(out["self/status"]).toBe("READ");
 
+    // The decoy really holds the store key in its initial environ, as PID 1 and run.ts do in a
+    // run pod: this process, outside the sandbox, reads it there; the snippet above could not.
+    if (decoy !== null) expect(readFileSync(`/proc/${decoy.pid}/environ`, "latin1").includes(planted("WRATHBENCH_STORE_KEY"))).toBe(true);
     // Every other process is out of reach, its command line included.
     for (const who of ["parent", "decoy", "sibling", "init"]) {
       for (const f of ["environ", "cmdline", "status", "mem", "root/etc/hostname"]) {

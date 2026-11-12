@@ -48,6 +48,7 @@
  * scratchpad, not the chat history, is the durable memory.
  */
 
+import { unsealLaunchSecret } from "./store-secrets";
 import { copyFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { hostname } from "node:os";
@@ -448,6 +449,16 @@ async function settledWithin(p: Promise<unknown>, ms: number): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // First, before anything reads the environment: a run pod's stored secret
+  // arrives sealed, and is opened into its variable here; the sealed form and
+  // the store key are dropped either way, so no child can inherit them
+  // (runner/src/store-secrets.ts). One that does not open refuses the launch.
+  try {
+    unsealLaunchSecret(process.env);
+  } catch (err) {
+    console.error(`[wrathbench] refusing to start: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(2);
+  }
   /** This process segment's start: an end request older than it is not this segment's (`end-request.ts`). */
   const segmentStartedAt = Date.now();
   const rawArgs = Bun.argv.slice(2);

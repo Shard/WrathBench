@@ -178,6 +178,13 @@ export const ENTRIES: readonly Entry[] = [
   },
   {
     group: "config",
+    command: "secrets",
+    takes: "[list | set <NAME> (value on stdin) | clear <NAME>]",
+    summary: "credentials' secrets sealed in the store under WRATHBENCH_STORE_KEY; write-only, a value only ever on stdin",
+    ...inRunner("bun", CONFIG_STORE, "secrets"),
+  },
+  {
+    group: "config",
     command: "move-credential",
     takes: "<run-id> <credential id> --note <why> [--pin]",
     summary: "move a paused or ended run to another credential of its provider: its meta.json, then (--pin) its roster entry's pin",

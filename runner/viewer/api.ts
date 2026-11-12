@@ -2330,7 +2330,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       if (res !== null) return res;
     }
     if (adminApi !== null) {
-      const res = adminApi(req, path);
+      const res = await adminApi(req, path);
       if (res !== null) return res;
     }
 

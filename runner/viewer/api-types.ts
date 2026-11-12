@@ -2673,8 +2673,15 @@ export interface AdminCredentialView {
   secretEnv: string;
   slots: number;
   budget: string;
-  /** Whether the supervisor's environment has the variable set; null while no supervisor is up to say. */
+  /**
+   * Whether the variable is set: its secret in the config store, else the
+   * supervisor's environment; null while neither can say. Never which value.
+   */
   secretSet: boolean | null;
+  /** Whether the config store holds its secret (set from this page or the CLI), which wins over the environment's. */
+  stored: boolean;
+  /** A Codex home's re-auth from this page, as the supervisor last wrote it; null for any other credential or with none. */
+  login: AdminCodexLoginView | null;
   /** Whether the chart hands the variable to the model pods (`modelKeys`); null when the viewer was not told. */
   deployed: boolean | null;
   /** Sessions on its slots now; null without a supervisor. */
@@ -2694,6 +2701,22 @@ export interface AdminCredentialView {
   windows: CredentialWindow[] | null;
   /** What makes it well again; null when it is, or when nobody is up to say. */
   fix: CredentialFix | null;
+}
+
+/**
+ * A Codex home's device login (runner/src/codex-login.ts): asked for and not
+ * yet taken (`requested`), the CLI starting, waiting with the link and the
+ * one-time code to enter there, or done. The code is a sign-in step the
+ * operator completes, not a secret the home holds.
+ */
+export interface AdminCodexLoginView {
+  state: "requested" | "starting" | "waiting" | "ok" | "failed";
+  at: number;
+  actor: string | null;
+  url: string | null;
+  code: string | null;
+  expiresAt: number | null;
+  detail: string | null;
 }
 
 export interface AdminProviderView {
@@ -2726,6 +2749,8 @@ export interface AdminResponse {
   fleet: { up: boolean; heartbeatAt: number | null };
   /** The env var names the chart hands the model pods, or null when the viewer was not told. */
   modelKeys: string[] | null;
+  /** Whether this viewer holds a usable store key, so a secret can be set here; else why not. */
+  storeKey: { ok: true } | { ok: false; why: string };
   credentials: AdminCredentialView[];
   providers: AdminProviderView[];
   publishing: AdminPublishView;

@@ -547,6 +547,37 @@ describe("--status", () => {
   });
 });
 
+describe("a secret the config store holds", () => {
+  test("reads as set, wins over the chart's modelKeys, and one that does not open reads as missing with why", () => {
+    const creds = parseCredentials({
+      or: { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 1, billing: "paid", enabled: true },
+      or2: { provider: "openrouter", secretEnv: "OPENROUTER_KEY_2", slots: 1, billing: "free", enabled: true },
+    });
+    const book = new SlotBook(creds, {});
+    const gate = credentialGate(creds, [], [], NOW);
+    const secrets = {
+      env: { OPENROUTER_KEY: "sk-or-STORED-NEVER-PRINTED" },
+      stored: new Set(["OPENROUTER_KEY", "OPENROUTER_KEY_2"]),
+      unreadable: new Map([["OPENROUTER_KEY_2", "OPENROUTER_KEY_2: sealed under another store key (aaaa; this one is bbbb)"]]),
+      updatedAt: new Map([["OPENROUTER_KEY", NOW - H]]),
+    };
+    // A run paused auth-failed before the key was replaced: that was the old key.
+    const runs = [fact({ credential: "or", live: false, pause: { reason: "auth-failed", at: NOW - 2 * H, count: 1, episodeElapsedMs: null } })];
+    const statuses = credentialStatuses({ credentials: creds, book, gate, runs, env: { OPENROUTER_KEY_2: "from-sops" }, secrets });
+    expect(statuses.map((s) => [s.id, s.secretSet, s.stored ?? false, s.health?.state])).toEqual([
+      ["or", true, true, "ok"],
+      ["or2", false, true, "secret-missing"],
+    ]);
+    expect(statuses[1]!.health?.reason).toContain("another store key");
+    expect(statuses[1]!.fix?.kind).toBe("replace-secret");
+    expect(JSON.stringify(statuses)).not.toContain("NEVER-PRINTED");
+    expect(formatCredentialStatus(statuses, {}, NOW).join("\n")).not.toContain("NEVER-PRINTED");
+    // Without the replacement, the same pause still indicts it.
+    const old = credentialStatuses({ credentials: creds, book, gate, runs, env: { OPENROUTER_KEY: "from-sops" } });
+    expect(old[0]!.health?.state).toBe("auth-failed");
+  });
+});
+
 describe("the seeded example", () => {
   test("infra/fleet.example.json parses and schedules nothing: every credential it carries is disabled", () => {
     const doc = JSON.parse(readFileSync(resolve(import.meta.dir, "fleet.example.json"), "utf8")) as unknown;
@@ -611,6 +642,25 @@ describe("OpenCode Go", () => {
     await go.refresh(config.credentials, config.roster);
     expect(f.urls).toHaveLength(2);
     expect(said.join("\n")).not.toContain("fake-go-key");
+  });
+
+  test("the key is read each refresh from where it is passed, and a key set or rotated since gets a fresh poller", async () => {
+    const f = fetchOf([okBody(10)]);
+    const said: string[] = [];
+    let now = NOW;
+    const go = new FleetGoUsage({ env: {}, fetch: f, now: () => now, say: (l) => said.push(l) });
+    await go.refresh(config.credentials, config.roster);
+    expect(f.auth).toEqual([]);
+    // Stored since: the supervisor hands the store's secrets over its environment.
+    await go.refresh(config.credentials, config.roster, { OPENCODE_KEY: "stored-key-1" });
+    expect(f.auth).toEqual(["Bearer stored-key-1"]);
+    // Rotated inside the minute: the new key is read now, not after a restart.
+    await go.refresh(config.credentials, config.roster, { OPENCODE_KEY: "stored-key-2" });
+    expect(f.auth).toEqual(["Bearer stored-key-1", "Bearer stored-key-2"]);
+    now += 10_000;
+    await go.refresh(config.credentials, config.roster, { OPENCODE_KEY: "stored-key-2" });
+    expect(f.auth).toHaveLength(2);
+    expect(said.join("\n")).not.toContain("stored-key");
   });
 
   test("an unknown shape or a missing key is no observation, said once, and holds nothing", async () => {

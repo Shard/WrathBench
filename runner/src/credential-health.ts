@@ -98,7 +98,7 @@ export interface CredentialWindow {
 export const FIX_KINDS = ["replace-secret", "set-secret", "enable", "wait-reset", "raise-budget"] as const;
 export type FixKind = (typeof FIX_KINDS)[number];
 
-/** What makes it well again. Secret-writing fixes are rendered as a seam until secrets are written from the browser. */
+/** What makes it well again. A secret-writing fix is the admin page's set key or re-auth. */
 export interface CredentialFix {
   kind: FixKind;
   secretEnv?: string;
@@ -112,19 +112,40 @@ export interface HealthInput {
   secretEnv: string;
   /** What the variable holds: a Codex home's is a directory's path. */
   holds: "token" | "home" | "key";
-  /** Whether the supervisor's environment has the variable set. */
+  /** Whether the variable is set: a secret in the config store, else the supervisor's environment. */
   secretSet: boolean;
+  /**
+   * Whether the config store holds its secret (`runner/src/store-secrets.ts`).
+   * A stored secret reaches every launch from the store, so the chart's
+   * `modelKeys` no longer decides whether a model's process gets it.
+   */
+  stored?: boolean;
+  /** Why a stored secret does not open (another key, changed bytes): the variable is then unset, never the environment's. */
+  storedUnreadable?: string | null;
   /** Whether the chart hands the variable to the model pods; null or absent when not known. */
   deployed?: boolean | null;
   holdsOf: { scored?: CredentialHold; freeplay?: CredentialHold };
   lastError: { reason: string; at: number } | null;
   read?: CredentialRead | null;
+  /**
+   * When the secret was last replaced (stored from the admin page or the CLI,
+   * or a Codex home logged in again). A refusal seen before it was about the
+   * old secret, so it no longer says this one is refused.
+   */
+  replacedAt?: number | null;
 }
 
 const NEW_SECRET: Record<HealthInput["holds"], string> = { token: "a new token", key: "a new key", home: "a fresh login in the Codex home" };
 
 /** The state, its line and its fix: the first state in `HEALTH_STATES` that applies. */
-export function credentialHealth(i: HealthInput): { health: CredentialHealth; fix: CredentialFix | null } {
+export function credentialHealth(input: HealthInput): { health: CredentialHealth; fix: CredentialFix | null } {
+  const replaced = input.replacedAt ?? null;
+  const before = (at: number): boolean => replaced !== null && at < replaced;
+  const i: HealthInput = {
+    ...input,
+    lastError: input.lastError !== null && before(input.lastError.at) ? null : input.lastError,
+    read: input.read != null && (input.read.classification === "auth-failed" || input.read.classification === "no-access") && before(input.read.at) ? null : (input.read ?? null),
+  };
   const read = i.read ?? null;
   const lastCheck = read === null ? null : { at: read.at, http: read.http, ...(read.code !== undefined ? { code: read.code } : {}) };
   const out = (state: HealthState, reason: string, since: number | null, fix: CredentialFix | null) => ({ health: { state, reason, since, lastCheck }, fix });
@@ -132,7 +153,10 @@ export function credentialHealth(i: HealthInput): { health: CredentialHealth; fi
   const env = i.secretEnv;
 
   if (!i.enabled) return out("disabled", "switched off", null, { kind: "enable", text: "enable it" });
-  if (i.deployed === false) return out("secret-missing", `${env} not in the chart's modelKeys`, null, { kind: "set-secret", secretEnv: env, text: `add ${env} to the chart's modelKeys` });
+  if (i.storedUnreadable != null) return out("secret-missing", i.storedUnreadable, null, { kind: "replace-secret", secretEnv: env, text: `set ${env} again, or clear it` });
+  if (i.deployed === false && i.stored !== true) {
+    return out("secret-missing", `${env} not in the chart's modelKeys`, null, { kind: "set-secret", secretEnv: env, text: `set ${env} here, or add it to the chart's modelKeys` });
+  }
   if (!i.secretSet) {
     return out("secret-missing", i.holds === "home" ? `${env} not set, or no such directory` : `${env} not set`, null, { kind: "set-secret", secretEnv: env, text: `set ${env}` });
   }

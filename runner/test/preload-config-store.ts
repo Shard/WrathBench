@@ -14,3 +14,6 @@
  */
 
 process.env["WRATHBENCH_CONFIG_DB"] = "/nonexistent/wrathbench-test/config.sqlite";
+
+// Nor the operator's store key: a secret test states the key it means.
+delete process.env["WRATHBENCH_STORE_KEY"];

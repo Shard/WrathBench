@@ -68,7 +68,10 @@ is created empty, and every page serves its labelled empty state.
   with `WRATHBENCH_VIEWER_PUBLIC=1`. With it, `WRATHBENCH_MODEL_KEYS` (the env
   var names the model pods carry), `WRATHBENCH_PUBLISHER` and the publisher's
   non-secret settings, and `WRATHBENCH_PUBLISH_STATE` feed `/api/admin`; the
-  chart sets them.
+  chart sets them. `WRATHBENCH_STORE_KEY`, from the env Secret and optional,
+  lets the admin pages seal a secret into the config store
+  (`runner/src/store-secrets.ts`); without it setting one is refused with the
+  reason.
 - `CLICKHOUSE_URL`, with `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` /
   `CLICKHOUSE_DATABASE`, point the listing routes at the derived store
   (`clickhouse.ts`; what it is and how it is filled are docs/ARCHITECTURE.md
@@ -825,11 +828,11 @@ merge, and JSON has no `undefined` — while an absent `routing`, `idle` or
 `billing` is a distinct, deliberate state; so the page PATCHes a set and PUTs
 the whole entry with the key omitted for a clear.
 
-### The admin status route (the admin switch)
+### The admin routes (the admin switch)
 
 `GET /api/admin` (`admin-api.ts`) is what the admin pages show beside the
-config they edit, read-only: any other method is a 405 that points at the
-config API. It carries the groups; every credential the store holds, joined
+config they edit; any other method on it is a 405 that points at the config
+API. It carries the groups; every credential the store holds, joined
 by id to the supervisor's status off `fleet-state.json` (whether its variable
 is set, sessions on its slots, what its budget has used, holds, its last
 indicting failure) and its health (`health: { state, reason, since,
@@ -841,13 +844,33 @@ wrong; the providers a credential may name; and how publishing is
 set, with the publisher's last flip, held passes and secret-scan withholds off
 its state file.
 
-It says nothing a viewer cannot know. A secret's value never reaches the
-viewer: the store holds the env var's name, and only the supervisor's
-environment holds the value, so "set" is the supervisor's word and is unknown
-(null) while no supervisor is up, or for a credential renamed since its last
-tick. "In the chart" is `WRATHBENCH_MODEL_KEYS`. Publishing is the chart's
-non-secret settings; the target is named only where the chart sets it as
-plain values, never from the Secret.
+It says nothing a viewer cannot know. "Set" is a secret the config store
+holds that opens with this viewer's key, else the supervisor's word, unknown
+(null) while no supervisor is up or for a credential renamed since its last
+tick; `stored` says the store holds one, never which value. A stored secret
+sealed under another key reads as not set, with why. "In the chart" is
+`WRATHBENCH_MODEL_KEYS`, which a stored secret makes moot. `storeKey` says
+whether this viewer can seal one. A Codex home's `login` is the supervisor's
+device login: requested, starting, waiting (the link and the one-time code),
+ok or failed. Publishing is the chart's non-secret settings; the target is
+named only where the chart sets it as plain values, never from the Secret.
+
+Three writes beside it, attributed by the same actor and note headers as the
+config API and behind the same write guard:
+
+- `PUT /api/admin/secrets/<NAME>` with `{ "value": "…" }` stores a
+  credential's secret sealed (AES-256-GCM under `WRATHBENCH_STORE_KEY`, the
+  name bound in), recording `secrets/<NAME>` in the audit with an HMAC
+  fingerprint and nothing else. `<NAME>` must be a variable a stored
+  credential names, and a token's or a key's, never a Codex home's. The
+  answer is `{ name, stored, version }`; no route ever serves the value or
+  its ciphertext, and a refusal never quotes the value.
+- `DELETE /api/admin/secrets/<NAME>` removes it; the environment's value
+  stands again.
+- `POST /api/admin/codex-login/<id>` asks the supervisor to run `codex login
+  --device-auth` against a `chatgpt` credential's home
+  (`runner/src/codex-login.ts`): refused with no supervisor up, or with one
+  under way. The page polls `GET /api/admin` while it is.
 
 ### What it will not serve
 

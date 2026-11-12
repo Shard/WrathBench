@@ -33,6 +33,9 @@ import {
   runPodEnv,
 } from "./run-pod";
 import { tempDirs } from "./temp-dirs";
+import { episodeSecretEnv, processEpisodeEnv } from "./episode-launcher";
+import { parseStoreKey, sealSecret, SEALED_SECRET_ENV, STORE_KEY_ENV, unsealLaunchSecret } from "../runner/src/store-secrets";
+import { KEY_HEX, SENTINEL } from "../runner/test/fixtures/store-secrets";
 
 const tempDir = tempDirs();
 const REPO_ROOT = join(import.meta.dir, "..");
@@ -819,6 +822,13 @@ describe("the chart's run-pod template", () => {
     expect(Object.keys(env).filter((n) => env[n]!.valueFrom !== undefined).sort()).toEqual(["CLAUDE_CODE_OAUTH_TOKEN", "WRATHBENCH_MODULE_SECRET"]);
     expect(pod.spec.containers[0]!.command).toEqual(["/usr/bin/tini", "--", "bun", "runner/src/run.ts"]);
     expect(pod.spec.volumes!.map((v) => v.name)).toEqual(["data", "tmp"]);
+    // The store key is in the template, by reference and optional, and only a pod handed a sealed secret keeps it.
+    // With no config mount (above), the key there opens only the row that pod was handed.
+    expect(tpl.spec.containers[0]!.env!.find((e) => e.name === STORE_KEY_ENV)).toEqual(secretRef(STORE_KEY_ENV));
+    const sealedPod = buildRunPod(tpl, { runId: "r", image: RELEASE, requestedRef: RELEASE, command: null, args: [], env: { driver: "claude-code", credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {}, sealed: { name: "CLAUDE_CODE_OAUTH_TOKEN", sealed: "v1.x.y.z.w" } }, owner: undefined, rosterPid: 1, graceMs: EPISODE_TERM_GRACE_MS });
+    const sealedEnv = envOf(sealedPod);
+    expect(Object.keys(sealedEnv).filter((n) => sealedEnv[n]!.valueFrom !== undefined).sort()).toEqual(["WRATHBENCH_MODULE_SECRET", STORE_KEY_ENV]);
+    expect(sealedEnv[SEALED_SECRET_ENV]).toEqual({ name: SEALED_SECRET_ENV, value: "CLAUDE_CODE_OAUTH_TOKEN:v1.x.y.z.w" });
   }, HELM_TEST_MS);
 
   test.skipIf(helm === null)("rendered with party staging on, the SOAP URL and STAGER's password reach the fleet and runner pods and never a run pod, for any driver", () => {
@@ -877,4 +887,93 @@ describe("the chart's run-pod template", () => {
     expect(Object.keys(env).filter((n) => env[n]!.valueFrom !== undefined).sort()).toEqual(["LMSTUDIO_KEY", "WRATHBENCH_MODULE_SECRET"]);
     expect(Object.keys(env).some((n) => n.startsWith("ANTHROPIC_"))).toBe(false);
   }, HELM_TEST_MS);
+});
+
+// ------------------------------------------------------------- stored secrets
+
+describe("a secret the config store holds", () => {
+  const key = parseStoreKey(KEY_HEX);
+  const tplWithKey = (): Pod => {
+    const t = template();
+    t.spec.containers[0]!.env!.push(secretRef(STORE_KEY_ENV));
+    return t;
+  };
+  const sealedToken = sealSecret(key, "CLAUDE_CODE_OAUTH_TOKEN_2", SENTINEL);
+
+  test("the variable an episode bills: a CLI token or an endpoint key, never a Codex home", () => {
+    expect(episodeSecretEnv({ driver: "claude-code", placedOn: { id: "c2", env: "CLAUDE_CODE_OAUTH_TOKEN_2" }, apiKeyEnv: "OPENROUTER_KEY" })).toBe("CLAUDE_CODE_OAUTH_TOKEN_2");
+    expect(episodeSecretEnv({ driver: "claude-code", placedOn: undefined, apiKeyEnv: "OPENROUTER_KEY" })).toBe("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(episodeSecretEnv({ driver: "openai", placedOn: { id: "or", env: "OPENROUTER_KEY_2" }, apiKeyEnv: "OPENROUTER_KEY_2" })).toBe("OPENROUTER_KEY_2");
+    expect(episodeSecretEnv({ driver: "codex", placedOn: { id: "cx", env: "CODEX_HOME" }, apiKeyEnv: "OPENROUTER_KEY" })).toBeUndefined();
+  });
+
+  test("a child episode: the stored value over the environment's, never the store key, never on argv", () => {
+    const l = launch("/tmp/x");
+    const parent = { CLAUDE_CODE_OAUTH_TOKEN_2: "from-sops", [STORE_KEY_ENV]: KEY_HEX, PATH: "/usr/bin" };
+    const r = processEpisodeEnv(parent, l, (name) => (name === "CLAUDE_CODE_OAUTH_TOKEN_2" ? { source: "store", value: SENTINEL, sealed: sealedToken } : { source: "env" }));
+    expect(r).toEqual({ env: { CLAUDE_CODE_OAUTH_TOKEN_2: SENTINEL, PATH: "/usr/bin", WRATHBENCH_HARNESS_VERSION: "harness-0.5-934-ge0ca125f" } });
+    expect(l.argv.join(" ")).not.toContain("SENTINEL");
+    // Without one, the environment's stands; the store key still never reaches the child.
+    expect(processEpisodeEnv(parent, l, () => ({ source: "env" }))).toEqual({ env: { CLAUDE_CODE_OAUTH_TOKEN_2: "from-sops", PATH: "/usr/bin", WRATHBENCH_HARNESS_VERSION: "harness-0.5-934-ge0ca125f" } });
+    // One that does not open refuses the launch: never the environment's in its place.
+    expect(processEpisodeEnv(parent, l, () => ({ source: "refused", why: "sealed under another store key" }))).toEqual({ refused: `${l.spec.runId}: sealed under another store key` });
+  });
+
+  test("a run pod: the sealed row in place of the Secret's reference, the store key by reference, no value", () => {
+    const env = runPodEnv(tplWithKey().spec.containers[0]!.env!, { driver: "claude-code", credentialEnv: "CLAUDE_CODE_OAUTH_TOKEN_2", apiKeyEnv: "OPENROUTER_KEY", stamps: {}, sealed: { name: "CLAUDE_CODE_OAUTH_TOKEN_2", sealed: sealedToken } });
+    const by = Object.fromEntries(env.map((e) => [e.name, e]));
+    expect(by["CLAUDE_CODE_OAUTH_TOKEN_2"]).toBeUndefined();
+    expect(by[STORE_KEY_ENV]).toEqual(secretRef(STORE_KEY_ENV));
+    expect(by[SEALED_SECRET_ENV]!.value).toBe(`CLAUDE_CODE_OAUTH_TOKEN_2:${sealedToken}`);
+    expect(JSON.stringify(env)).not.toContain("SENTINEL");
+    // And what run.ts does with it opens to the value.
+    const runEnv: Record<string, string | undefined> = { [STORE_KEY_ENV]: KEY_HEX, [SEALED_SECRET_ENV]: by[SEALED_SECRET_ENV]!.value };
+    expect(unsealLaunchSecret(runEnv)).toBe("CLAUDE_CODE_OAUTH_TOKEN_2");
+    expect(runEnv).toEqual({ CLAUDE_CODE_OAUTH_TOKEN_2: SENTINEL });
+  });
+
+  test("without one, the store key is stripped like any other reference, for every driver; a codex pod never gets it", () => {
+    for (const driver of ["openai", "claude-code", "codex", "pi"] as const) {
+      const env = runPodEnv(tplWithKey().spec.containers[0]!.env!, { driver, credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} });
+      expect([driver, env.map((e) => e.name).includes(STORE_KEY_ENV)]).toEqual([driver, false]);
+      expect(env.map((e) => e.name)).not.toContain(SEALED_SECRET_ENV);
+    }
+    // A Codex home is no stored secret, so its pod is never handed one, nor the key to open it.
+    expect(() => runPodEnv(tplWithKey().spec.containers[0]!.env!, { driver: "codex", credentialEnv: "CODEX_HOME", apiKeyEnv: "OPENROUTER_KEY", stamps: {}, sealed: { name: "CODEX_HOME", sealed: "x" } })).toThrow(/not the variable this driver bills/);
+  });
+
+  test("refused: a sealed variable the driver does not bill, a template without the key, the key or the sealed form as a value", () => {
+    const base = { driver: "openai" as const, credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} };
+    expect(() => runPodEnv(tplWithKey().spec.containers[0]!.env!, { ...base, sealed: { name: "CLAUDE_CODE_OAUTH_TOKEN", sealed: "x" } })).toThrow(/not the variable this driver bills/);
+    expect(() => runPodEnv(template().spec.containers[0]!.env!, { ...base, sealed: { name: "OPENROUTER_KEY", sealed: "x" } })).toThrow(/carries no WRATHBENCH_STORE_KEY/);
+    expect(() => runPodEnv(template().spec.containers[0]!.env!, { ...base, stamps: { [STORE_KEY_ENV]: KEY_HEX } })).toThrow(/only from the Secret/);
+    expect(() => runPodEnv([...template().spec.containers[0]!.env!, { name: STORE_KEY_ENV, value: KEY_HEX }], base)).toThrow(/only from the Secret/);
+    expect(() => runPodEnv(template().spec.containers[0]!.env!, { ...base, stamps: { [SEALED_SECRET_ENV]: "x" } })).toThrow(/launcher's to set/);
+  });
+
+  test("the launcher reads it at launch: the pod it creates carries ciphertext only; one that does not open creates no pod", async () => {
+    const api = new FakeApi();
+    try {
+      const dir = tempDir("run-pod-secret-");
+      const l = launcher(api, { template: tplWithKey(), secrets: (name) => (name === "CLAUDE_CODE_OAUTH_TOKEN_2" ? { source: "store", value: SENTINEL, sealed: sealedToken } : { source: "env" }) });
+      const h = await l.start(launch(dir));
+      const pod = api.only();
+      expect(JSON.stringify(pod)).not.toContain("SENTINEL");
+      expect(envOf(pod)[SEALED_SECRET_ENV]!.value).toBe(`CLAUDE_CODE_OAUTH_TOKEN_2:${sealedToken}`);
+      expect(h.describe()).not.toContain("SENTINEL");
+      api.setStatus(pod.metadata.name!, terminated(0, `x@${DIGEST}`));
+      await h.exited;
+
+      const api2 = new FakeApi();
+      try {
+        const refused = await launcher(api2, { template: tplWithKey(), secrets: () => ({ source: "refused", why: "CLAUDE_CODE_OAUTH_TOKEN_2: sealed under another store key" }) }).start(launch(tempDir("run-pod-secret-")));
+        expect((await refused.exited).failure).toContain("sealed under another store key");
+        expect(api2.pods.size).toBe(0);
+      } finally {
+        api2.stop();
+      }
+    } finally {
+      api.stop();
+    }
+  });
 });

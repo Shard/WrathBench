@@ -105,6 +105,7 @@ import { readImageRecord } from "./run-pod";
 import { type CampaignFile, runCampaignFile } from "../runner/src/campaign-file";
 import { isConcluded, type Campaign, type CampaignRefusal } from "../runner/src/campaigns";
 import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
+import { resolveStoreSecrets } from "../runner/src/store-secrets";
 import { resumesOnPause, TAINT_AFTER } from "../runner/src/lapse";
 import {
   credentialGate,
@@ -323,7 +324,7 @@ export function localCredentialStatuses(
   const theirs = new Set(outside.map((f) => f.runId));
   for (const f of runs) if (f.live && !theirs.has(f.runId)) book.add(book.keysOf(f.driver ?? undefined, f.credential), f.party != null ? 1 : 1);
   countOutsideRuns(book, outside);
-  return credentialStatuses({ credentials: config.credentials, book, gate, runs: [...runs, ...unstamped] });
+  return credentialStatuses({ credentials: config.credentials, book, gate, runs: [...runs, ...unstamped], secrets: resolveStoreSecrets(process.env) });
 }
 
 /**

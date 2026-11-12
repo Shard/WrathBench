@@ -72,6 +72,13 @@ export interface ConfigWriteResponse {
   version: number;
 }
 
+/** A secret write's answer: the name and whether one is stored now. Never the value. */
+export interface AdminSecretResponse {
+  name: string;
+  stored: boolean;
+  version: number;
+}
+
 export interface ConfigAuditResponse {
   audit: AuditRow[];
 }
@@ -178,6 +185,19 @@ export function createConfigClient(opts: ConfigClientOptions = {}) {
         body: JSON.stringify({ model }),
         ...(actor !== undefined ? { actor } : {}),
       }),
+    /**
+     * Store a credential's secret, sealed (`runner/viewer/admin-api.ts`). The
+     * value travels in the body and nowhere else: never the URL, never a
+     * header, and the answer never carries it back.
+     */
+    setSecret: (name: string, value: string, attribution: Attribution): Promise<AdminSecretResponse> =>
+      send<AdminSecretResponse>(f, at(`/api/admin/secrets/${encodeURIComponent(name)}`), { method: "PUT", body: JSON.stringify({ value }), attribution }),
+    /** Remove a stored secret: the deployment's Secret stands again. */
+    clearSecret: (name: string, attribution: Attribution): Promise<AdminSecretResponse> =>
+      send<AdminSecretResponse>(f, at(`/api/admin/secrets/${encodeURIComponent(name)}`), { method: "DELETE", attribution }),
+    /** Ask the supervisor to log a Codex home in again; its link and code arrive on `/api/admin`. */
+    codexLogin: (id: string, attribution: Attribution): Promise<{ id: string; state: string }> =>
+      send<{ id: string; state: string }>(f, at(`/api/admin/codex-login/${encodeURIComponent(id)}`), { method: "POST", body: "{}", attribution }),
     /** A roster write: attributed, validated by `parseFleet`, recorded in the history. */
     promoteDraft: (body: DraftPromoteBody, attribution: Attribution): Promise<ConfigWriteResponse> =>
       send<ConfigWriteResponse>(f, at("/api/config/proposed/promote"), { method: "POST", body: JSON.stringify(body), attribution }),

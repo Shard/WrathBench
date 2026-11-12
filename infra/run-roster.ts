@@ -50,6 +50,7 @@
  *    retried in place *before* being deferred.
  */
 
+import { launchSecret } from "../runner/src/store-secrets";
 import { bestLevelOf, readRunRow as readRecordedRunRow } from "../runner/src/run-reader";
 // The one zod schema for a watchdog override lives with the run config it
 // overrides (runner/src/config.ts). Importing it keeps roster, fleet and
@@ -1966,9 +1967,11 @@ async function attemptSpec(
     // credential holds a token, a Codex one a CODEX_HOME directory; without it
     // the CLI has no login to bill.
     const credentialEnv = spec.placedOn?.env ?? cli.defaultEnv;
-    const value = process.env[credentialEnv];
+    // A stored secret wins over the environment's, and one that does not open is not there.
+    const stored = cli.holds === "token" ? launchSecret(credentialEnv) : ({ source: "env" } as const);
+    const value = stored.source === "store" ? stored.value : stored.source === "env" ? process.env[credentialEnv] : undefined;
     if (value === undefined || value.trim().length === 0) {
-      const detail = cli.containerRefusal(credentialEnv);
+      const detail = stored.source === "refused" ? stored.why : cli.containerRefusal(credentialEnv);
       say(`launch-failed ${spec.runId}: ${detail}`);
       record({ runId: spec.runId, model: spec.model, outcome: "launch-failed", detail });
       return "done";

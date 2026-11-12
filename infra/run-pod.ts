@@ -31,8 +31,9 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DRIVER_POD_VOLUMES, entryOf, HOME_CREDENTIAL_ENVS, type RosterDriver } from "../runner/src/drivers";
-import type { EpisodeExit, EpisodeHandle, EpisodeLaunch, EpisodeLauncher } from "./episode-launcher";
-import { EPISODE_TERM_GRACE_MS, refusedEpisode } from "./episode-launcher";
+import type { EpisodeExit, EpisodeHandle, EpisodeLaunch, EpisodeLauncher, LaunchSecretReader } from "./episode-launcher";
+import { EPISODE_TERM_GRACE_MS, episodeSecretEnv, refusedEpisode } from "./episode-launcher";
+import { launchSecret, SEALED_SECRET_ENV, STORE_KEY_ENV } from "../runner/src/store-secrets";
 import { digestOf, K8sClient, K8sError, type Pod, type PodEnvVar } from "./k8s-client";
 
 // ------------------------------------------------------------------ names
@@ -170,6 +171,12 @@ export interface RunPodEnvOptions {
   apiKeyEnv: string;
   /** Plain values set last, over the template's. */
   stamps: Record<string, string>;
+  /**
+   * The episode's secret as the config store holds it, sealed: it replaces
+   * the template's reference to that variable, and the pod opens it with the
+   * store key (`unsealLaunchSecret`). Absent: the template's reference stands.
+   */
+  sealed?: { name: string; sealed: string };
 }
 
 /**
@@ -179,6 +186,12 @@ export interface RunPodEnvOptions {
  * its `apiKeyEnv`, codex nothing (its credential is the mounted home
  * directory, named by a plain variable that survives only for codex). Anything `ANTHROPIC_*` is
  * refused outright, template or stamp: there is no run that may carry one.
+ *
+ * A secret the config store holds for that one variable wins over the
+ * template's reference (`sealed`): the reference is dropped, and the pod gets
+ * the row's ciphertext in `WRATHBENCH_SEALED_SECRET` beside the store key's
+ * own reference, which it keeps only then. The pod spec, and so the API
+ * server, never holds the value.
  */
 export function runPodEnv(template: readonly PodEnvVar[], opts: RunPodEnvOptions): PodEnvVar[] {
   const driver = entryOf(opts.driver);
@@ -187,13 +200,22 @@ export function runPodEnv(template: readonly PodEnvVar[], opts: RunPodEnvOptions
   const keep = new Set<string>(["WRATHBENCH_MODULE_SECRET"]);
   if (token !== undefined) keep.add(token);
   if (driver.endpoint) keep.add(opts.apiKeyEnv);
+  if (opts.sealed !== undefined) {
+    if (!keep.has(opts.sealed.name)) throw new Error(`run pod env: a sealed ${opts.sealed.name} is not the variable this driver bills`);
+    keep.delete(opts.sealed.name);
+    keep.add(STORE_KEY_ENV);
+  }
   // Checked on the inputs, not the output: a template that carries one is
   // wrong for every driver, and must fail before a single pod is built from it.
   for (const name of [...template.map((e) => e.name), ...Object.keys(opts.stamps)]) {
     if (name.startsWith("ANTHROPIC_")) throw new Error(`run pod env: ${name} may never reach a run pod (claude-code is subscription-only)`);
+    if (name === SEALED_SECRET_ENV) throw new Error(`run pod env: ${name} is the launcher's to set, never a template's or a stamp`);
     // The party stager's SOAP console and its admin credential are the
     // fleet's and the runner's, never an episode's (docs/proposals/GROUP-PLAY.md §3).
     if (/SOAP|STAGER/.test(name)) throw new Error(`run pod env: ${name} may never reach a run pod (SOAP and the STAGER credential are the stager's alone)`);
+  }
+  if (STORE_KEY_ENV in opts.stamps || template.some((e) => e.name === STORE_KEY_ENV && e.valueFrom?.secretKeyRef === undefined)) {
+    throw new Error(`run pod env: ${STORE_KEY_ENV} comes only from the Secret, by reference`);
   }
   const out: PodEnvVar[] = [];
   for (const e of template) {
@@ -205,6 +227,10 @@ export function runPodEnv(template: readonly PodEnvVar[], opts: RunPodEnvOptions
     out.push(structuredClone(e));
   }
   for (const [name, value] of Object.entries(opts.stamps)) out.push({ name, value });
+  if (opts.sealed !== undefined) {
+    if (!out.some((e) => e.name === STORE_KEY_ENV)) throw new Error(`run pod env: ${opts.sealed.name} is stored sealed, and the template carries no ${STORE_KEY_ENV} to open it`);
+    out.push({ name: SEALED_SECRET_ENV, value: `${opts.sealed.name}:${opts.sealed.sealed}` });
+  }
   return out;
 }
 
@@ -279,6 +305,8 @@ export interface PodLauncherOptions {
   rosterPid: number;
   /** Pull Secrets the chart adds for run pods on top of the template's. */
   imagePullSecrets?: readonly string[];
+  /** Reads the episode's stored secret at launch (`launchSecret`); a test injects its own. */
+  secrets?: LaunchSecretReader;
   pollMs?: number;
   /** A pod still Pending this long is a launch failure. */
   pendingMaxMs?: number;
@@ -332,7 +360,14 @@ export class PodLauncher implements EpisodeLauncher {
   async start(launch: EpisodeLaunch): Promise<EpisodeHandle> {
     const resolved = this.resolveImage(launch);
     if ("refused" in resolved) return refusedEpisode(resolved.refused);
-    const body = buildRunPod(this.opts.template, {
+    // The stored secret, read at this launch and checked here with the fleet's
+    // key: one that does not open refuses the launch before a pod exists.
+    const secretName = episodeSecretEnv(launch.spec);
+    const stored = secretName === undefined ? undefined : (this.opts.secrets ?? ((n) => launchSecret(n)))(secretName);
+    if (stored?.source === "refused") return refusedEpisode(`${launch.spec.runId}: ${stored.why}`);
+    let body: Pod;
+    try {
+      body = buildRunPod(this.opts.template, {
       runId: launch.spec.runId,
       image: resolved.image,
       requestedRef: resolved.requested.ref,
@@ -343,12 +378,16 @@ export class PodLauncher implements EpisodeLauncher {
         credentialEnv: launch.spec.placedOn?.env,
         apiKeyEnv: launch.spec.apiKeyEnv,
         stamps: { ...launch.env, WRATHBENCH_HARNESS_VERSION: resolved.stamp, WRATHBENCH_RUN_IMAGE: resolved.requested.ref },
+        ...(stored?.source === "store" && secretName !== undefined ? { sealed: { name: secretName, sealed: stored.sealed } } : {}),
       },
       owner: this.opts.owner,
       rosterPid: this.opts.rosterPid,
       graceMs: EPISODE_TERM_GRACE_MS,
       ...(this.opts.imagePullSecrets !== undefined ? { extraPullSecrets: this.opts.imagePullSecrets } : {}),
-    });
+      });
+    } catch (e) {
+      return refusedEpisode(`run pod for ${launch.spec.runId} refused: ${e instanceof Error ? e.message : String(e)}`);
+    }
     let created: Pod;
     try {
       created = await this.opts.client.createPod(body);

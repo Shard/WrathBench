@@ -211,6 +211,7 @@ import { cliBaseEnv } from "../runner/src/adapter-shared";
 import {
   codexHomeEnvsOf,
   credentialGate,
+  credentialKey,
   credentialStatuses,
   FleetGoUsage,
   gateSpawns,
@@ -223,6 +224,8 @@ import {
 import { FleetModelLists } from "./run-fleet-model-lists";
 import type { Credential } from "../runner/src/credential-slots";
 import { configDbPath, EMPTY_STORE_HINT, readFleetConfig } from "../runner/src/config-store";
+import { resolveStoreSecrets } from "../runner/src/store-secrets";
+import { CODEX_LOGIN_POLL_MS, CodexLogins } from "../runner/src/codex-login";
 import { GROUPS_ENV, groupsEnvValue, groupsFromEnv } from "../runner/viewer/groups";
 import {
   liveCredentials,
@@ -665,7 +668,9 @@ let pauseSwitch: FleetPause | undefined;
 const goUsage = new FleetGoUsage({ say });
 /** Refresh the Go readings and leave them where the roster and `--status` read them. Never throws. */
 async function refreshGoUsage(cfg: Pick<FleetConfig, "credentials" | "roster">): Promise<void> {
-  await goUsage.refresh(cfg.credentials, cfg.roster);
+  // Keys from the config store's secrets over the environment, read each tick,
+  // so a key set on the admin page is read with no restart.
+  await goUsage.refresh(cfg.credentials, cfg.roster, resolveStoreSecrets(process.env).env);
   const readings = goUsage.observations();
   if (readings.length > 0) writeCredentialUsageSidecar(RUNS_DIR, readings);
 }
@@ -676,7 +681,8 @@ async function refreshGoUsage(cfg: Pick<FleetConfig, "credentials" | "roster">):
  */
 const modelLists = new FleetModelLists({ runsDir: RUNS_DIR, say });
 function refreshModelLists(cfg: Pick<FleetConfig, "credentials" | "roster">): void {
-  modelLists.refresh(cfg.roster, cfg.credentials).catch((e: unknown) => say(`model lists: refresh failed: ${e instanceof Error ? e.message : String(e)}`));
+  // Keys from the config store's secrets over the environment, as the Go usage reader reads them.
+  modelLists.refresh(cfg.roster, cfg.credentials, resolveStoreSecrets(process.env).env).catch((e: unknown) => say(`model lists: refresh failed: ${e instanceof Error ? e.message : String(e)}`));
 }
 /** The newest tick's credential ledger, for the state file's `credentials` block. */
 let lastCredentials: { gate: CredentialGate; book: SlotBook; credentials: readonly Credential[]; runs: readonly Pick<RunFact, "credential" | "pause">[] } | undefined;
@@ -732,7 +738,7 @@ function writeState(
     ...(preflight !== undefined ? { preflight } : {}),
     ...(preflightInFlight !== undefined ? { preflightInFlight } : {}),
     ...(pauseSwitch !== undefined ? { pausedSwitch: pauseSwitch } : {}),
-    ...(lastCredentials !== undefined ? { credentials: credentialStatuses({ ...lastCredentials, reads: goUsage.lastReads() }) } : {}),
+    ...(lastCredentials !== undefined ? { credentials: credentialStatuses({ ...lastCredentials, reads: goUsage.lastReads(), secrets: resolveStoreSecrets(process.env) }) } : {}),
     ...(pool !== undefined
       ? {
           accounts: {
@@ -1744,10 +1750,26 @@ async function main(): Promise<void> {
     }
   };
 
+  /**
+   * A Codex home's re-auth, asked for on the admin page (runner/src/codex-login.ts):
+   * the supervisor's pod mounts the home and the viewer's does not, so the
+   * viewer leaves a request beside the config store and this runs it. Polled
+   * on its own short interval, because the page is waiting for the code.
+   */
+  const codexLogins = new CodexLogins({
+    credentials: () => config.credentials,
+    inUse: (id) => lastCredentials?.book.inUse(credentialKey(id)) ?? 0,
+    say,
+  });
+  const loginPoll = setInterval(() => void codexLogins.poll(), CODEX_LOGIN_POLL_MS);
+  loginPoll.unref();
+
   let wakeTick: (() => void) | undefined;
   const requestStop = (): void => {
     if (stopping) process.exit(130);
     stopping = true;
+    clearInterval(loginPoll);
+    codexLogins.stop();
     say("stopping: SIGTERM to every job — each live episode PAUSES as operator-pause; waiting for the rosters to exit");
     wakeTick?.();
     for (const [name, p] of procs) {

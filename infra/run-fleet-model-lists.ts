@@ -90,8 +90,9 @@ export class FleetModelLists {
   async refresh(
     roster: Readonly<Record<string, ListedEntry>>,
     credentials: readonly Pick<Credential, "provider" | "secretEnv" | "enabled">[],
+    /** Where the keys are read from this time: the supervisor passes its environment with the config store's secrets over it. */
+    env: Record<string, string | undefined> = this.o.env ?? process.env,
   ): Promise<void> {
-    const env = this.o.env ?? process.env;
     const now = this.o.now ?? Date.now;
     const due = modelListsToRead(roster, env).filter(({ source }) => {
       const at = this.attempted.get(source.url);

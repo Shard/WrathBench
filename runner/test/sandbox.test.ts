@@ -381,6 +381,9 @@ describe("sandbox evaluation", () => {
       WRATHBENCH_ACCOUNT_PASSWORD: "fake-account-password",
       WRATHBENCH_CF_DEPLOY_TOKEN: "fake-cf-token",
       WRATHBENCH_CLICKHOUSE_PASSWORD: "fake-clickhouse-password",
+      // The config store's key and a run pod's sealed secret (runner/src/store-secrets.ts).
+      WRATHBENCH_STORE_KEY: "fake-store-key",
+      WRATHBENCH_SEALED_SECRET: "OPENROUTER_KEY:fake-sealed",
     };
     Object.assign(process.env, prefixed);
     try {
