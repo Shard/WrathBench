@@ -93,9 +93,12 @@ export class TraceFold {
   questsDone = 0;
   /** Item names and qualities, from every dictionary entry seen. */
   readonly items = new Map<number, { quality: number | null; name: string }>();
+  /** Random properties' name suffixes by signed id, from every dictionary entry seen. */
+  readonly rands = new Map<number, string>();
 
   learn(dict: TraceDict | undefined): void {
     for (const [id, quality, name] of dict?.items ?? []) this.items.set(id, { quality, name });
+    for (const [id, suffix] of dict?.rands ?? []) this.rands.set(id, suffix);
   }
 
   apply(row: TraceRow): void {
@@ -154,24 +157,28 @@ export class TraceFold {
    * slots 0-18 by slot, then the backpack's slots 23-38, then each worn bag's
    * slots, the order `state.bag()` walks them. The sheet's `inv` also holds
    * the keyring and the currency slots, which the 0.5 sample did not, so they
-   * are left out. A name is the item template's (the dictionary's); an item
-   * the client was never told the name of is `item <id>`, and a slot whose
-   * item was never seen is `slot <n>` with no id. Null when neither list has
-   * been observed.
+   * are left out. A name is the client's, as `state.bag()` gave it: the item
+   * template's (the dictionary's), then its random property's suffix when
+   * the row has one the dictionary names ("Sentry's Leggings of the Bear").
+   * An item the client was never told the name of is `item <id>`, and a slot
+   * whose item was never seen is `slot <n>` with no id. Null when neither
+   * list has been observed.
    */
   itemSamples(): ItemSample[] | null {
     const equip = this.sheet.equip ?? null;
     const inv = this.sheet.inv ?? null;
     if (equip === null && inv === null) return null;
     const out: ItemSample[] = [];
-    const named = (itemId: number, slot: number): { name: string; itemId?: number; quality?: number } => {
+    const named = (itemId: number, slot: number, rand: number | undefined): { name: string; itemId?: number; quality?: number } => {
       if (itemId === 0) return { name: `slot ${slot}` };
       const d = this.items.get(itemId);
-      return { name: d?.name ?? `item ${itemId}`, itemId, ...(typeof d?.quality === "number" ? { quality: d.quality } : {}) };
+      const suffix = rand === undefined || rand === 0 ? undefined : this.rands.get(rand);
+      const name = d === undefined ? `item ${itemId}` : suffix === undefined ? d.name : `${d.name} ${suffix}`;
+      return { name, itemId, ...(typeof d?.quality === "number" ? { quality: d.quality } : {}) };
     };
-    for (const [slot, itemId] of [...(equip ?? [])].sort((a, b) => a[0] - b[0])) {
+    for (const [slot, itemId, rand] of [...(equip ?? [])].sort((a, b) => a[0] - b[0])) {
       if (slot > EQUIPMENT_LAST_SLOT) continue;
-      const n = named(itemId, slot);
+      const n = named(itemId, slot, rand);
       out.push({ name: n.name, count: 1, equipped: true, ...(n.itemId !== undefined ? { itemId: n.itemId } : {}), ...(n.quality !== undefined ? { quality: n.quality } : {}), slot });
     }
     const carried = (inv ?? []).filter(
@@ -179,8 +186,8 @@ export class TraceFold {
     );
     // The backpack first, then the bags in slot order: 255 sorts last numerically, so it is put first by hand.
     carried.sort((a, b) => (a[0] === BACKPACK ? -1 : a[0]) - (b[0] === BACKPACK ? -1 : b[0]) || a[1] - b[1]);
-    for (const [bag, slot, itemId, count] of carried) {
-      const n = named(itemId, slot);
+    for (const [bag, slot, itemId, count, rand] of carried) {
+      const n = named(itemId, slot, rand);
       out.push({
         name: n.name,
         count: typeof count === "number" ? count : 1,

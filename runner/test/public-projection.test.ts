@@ -1337,6 +1337,8 @@ function sheetSegmentFixture(): TraceSegment {
     901: [1, 0, 0, 0],
     902: [1, 0, 0, 0, "Kill the thing"],
   } as unknown as TraceSegment["qreq"];
+  // The suffix of the bow's random property: in public the property stays its id.
+  seg.rands = { "-12": "of the Bear" };
   return seg;
 }
 
@@ -1372,6 +1374,8 @@ describe("projectTraceSegment: the character sheet", () => {
       704: [1, "Test Herb"],
     });
     expect(out.qreq).toEqual({ 900: [8, 1, 0, 0, [704, 5], [906, 1]] });
+    // The random property's suffix does not pass: the row's id does.
+    expect(out.rands).toBeUndefined();
     // Top-level and keyframe keys, exactly.
     expect(Object.keys(out).sort()).toEqual(allow(["v", "run", "t0", "t1", "q", "k", "dt", "x", "y", "z", "o", "cuts", "flights", "ev", "items", "qreq"]));
     const PUBLIC_STATE = ["hp", "hpMax", "pw", "pwMax", "pwType", "level", "xp", "xpMax", "auras", "combat", "mounted", "taxi", "dead", "ghost", "resting", "cast"];
