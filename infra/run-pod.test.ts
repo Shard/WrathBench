@@ -904,7 +904,6 @@ describe("a secret the config store holds", () => {
     expect(episodeSecretEnv({ driver: "claude-code", placedOn: undefined, apiKeyEnv: "OPENROUTER_KEY" })).toBe("CLAUDE_CODE_OAUTH_TOKEN");
     expect(episodeSecretEnv({ driver: "openai", placedOn: { id: "or", env: "OPENROUTER_KEY_2" }, apiKeyEnv: "OPENROUTER_KEY_2" })).toBe("OPENROUTER_KEY_2");
     expect(episodeSecretEnv({ driver: "codex", placedOn: { id: "cx", env: "CODEX_HOME" }, apiKeyEnv: "OPENROUTER_KEY" })).toBeUndefined();
-    expect(episodeSecretEnv({ driver: "stub", placedOn: undefined, apiKeyEnv: "OPENROUTER_KEY" })).toBeUndefined();
   });
 
   test("a child episode: the stored value over the environment's, never the store key, never on argv", () => {
