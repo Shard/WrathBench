@@ -243,6 +243,15 @@ describe("k8s-release.sh", () => {
     expect(deploy).toContain("--release wrathbench");
   });
 
+  test("a probe image's tag is never released, not even from a later phase", () => {
+    for (const from of [[], ["--from", "pin"], ["--dry-run"]]) {
+      const r = run({ args: ["--tag", "probe-program-0123456789ab", ...from] });
+      expect(r.exitCode).toBe(2);
+      expect(r.out).toContain("a probe image is pinned by a campaign arm and never released");
+      expect(r.calls).toEqual([]);
+    }
+  });
+
   test("--from restarts at a phase and skips everything before it", () => {
     const r = run({ args: ["--from", "pin"] });
     expect(r.exitCode).toBe(0);
