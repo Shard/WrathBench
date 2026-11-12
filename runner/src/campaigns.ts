@@ -262,6 +262,19 @@ export function campaignPairRefusals(
           reasons.push(`arm ${arm.id} sets --compact-window ${window}, and roster entry ${a.model} already sets compactWindow ${entry.compactWindow} — assign an entry with no window`);
         }
       }
+      // The program loop (`--loop program`) runs on the fixed loop, which a
+      // CLI scaffold's own turn loop and a route driver are not; `--yield`
+      // is a setting of it. Refused here as `programLoopRefusal` refuses at launch.
+      const loop = armArg(arm, "loop");
+      const yieldOn = armArg(arm, "yield");
+      if (loop === "program") {
+        const d = entry.driver ?? DEFAULT_DRIVER;
+        if (!isDriver(d) || entryOf(d).kind !== "loop") reasons.push(`arm ${arm.id} sets --loop program, and ${a.model} runs on the ${d} driver, which runs a CLI's own turn loop`);
+        else if (entryOf(d).route === true) reasons.push(`arm ${arm.id} sets --loop program, and ${a.model} runs on the ${d} driver, which plays a scripted route`);
+        else if (arm.agents === 1) reasons.push(`arm ${arm.id} sets --loop program, which drives one character, and is one agent driving the whole party`);
+      } else if (yieldOn !== undefined && yieldOn !== "false") {
+        reasons.push(`arm ${arm.id} sets --yield, which is a setting of the program loop, without --loop program`);
+      }
       // A one-agent arm is a fan-out run, which a route driver refuses at launch.
       const driver = entry.driver ?? DEFAULT_DRIVER;
       if (arm.agents === 1 && isDriver(driver) && entryOf(driver).route === true) {
