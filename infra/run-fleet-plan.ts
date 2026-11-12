@@ -671,7 +671,7 @@ export function jobSpawn(
   for (const r of job.resume !== undefined ? job.refs.filter((x) => roster[x] !== undefined) : runnableRefs(job, roster, eligible)) {
     const copies = copiesOf(r);
     if (copies <= 0) continue;
-    const { tier: _tier, idle: _idle, ...entry } = roster[r]!;
+    const { tier: _tier, idle: _idle, campaignOnly: _campaignOnly, ...entry } = roster[r]!;
     // A probe keeps only what identifies the model; the campaign owns the rest.
     const { objective: _obj, watchdogs: _wd, maxToolCalls: _mtc, wikiCoords: _wc, wiki: _wk, ...credentials } = entry;
     const isProbe = job.probe !== undefined;
