@@ -46,6 +46,7 @@ import { DEFAULT_DRIVER, driverEntry } from "../runner/src/drivers";
 import { utcDay, type RunFact } from "../runner/src/models";
 import { isOpenCodeGoBase } from "../runner/src/platform";
 import { GoUsagePoller, goUsageUrl, type GoFetch } from "../runner/src/opencode-go";
+import type { SecretResolution } from "../runner/src/store-secrets";
 import {
   CREDENTIAL_USAGE_SIDECAR,
   describeWindows,
@@ -361,6 +362,8 @@ export class FleetGoUsage {
   private readonly missingKey = new Set<string>();
   /** The variable each polled credential's key is in: a refused key holds every credential naming it. */
   private readonly envOf = new Map<string, { provider: string; secretEnv: string }>();
+  /** The key each poller was built with, compared by value and never logged. */
+  private readonly keyOf = new Map<string, string>();
 
   constructor(
     private readonly o: {
@@ -371,9 +374,16 @@ export class FleetGoUsage {
     } = {},
   ) {}
 
-  /** Read every due Go credential; resolves when done. Never rejects. */
-  async refresh(credentials: readonly Credential[], roster: Readonly<Record<string, Pick<FleetRosterEntry, "apiBase">>>): Promise<void> {
-    const env = this.o.env ?? process.env;
+  /**
+   * Read every due Go credential; resolves when done. Never rejects. `env` is
+   * where the keys are read from this time: the supervisor passes its
+   * environment with the config store's secrets over it, read each tick.
+   */
+  async refresh(
+    credentials: readonly Credential[],
+    roster: Readonly<Record<string, Pick<FleetRosterEntry, "apiBase">>>,
+    env: Record<string, string | undefined> = this.o.env ?? process.env,
+  ): Promise<void> {
     const base = Object.values(roster).map((e) => e.apiBase).find((b) => isOpenCodeGoBase(b));
     const url = goUsageUrl(base);
     if (url === undefined) return;
@@ -388,7 +398,11 @@ export class FleetGoUsage {
         }
         continue;
       }
+      this.missingKey.delete(c.id);
       let poller = this.pollers.get(c.id);
+      // A key set or rotated since (the config store, read each tick) is a new
+      // key: a fresh poller reads it, rather than the old one reading the old.
+      if (poller !== undefined && this.keyOf.get(c.id) !== key) poller = undefined;
       if (poller === undefined) {
         poller = new GoUsagePoller(c.id, url, key, {
           ...(this.o.fetch !== undefined ? { fetch: this.o.fetch } : {}),
@@ -396,6 +410,7 @@ export class FleetGoUsage {
           ...(this.o.say !== undefined ? { onNote: (t: string) => this.o.say!(`credential ${c.id}: ${t}`) } : {}),
         });
         this.pollers.set(c.id, poller);
+        this.keyOf.set(c.id, key);
       }
       this.envOf.set(c.id, { provider: c.provider, secretEnv: c.secretEnv });
       due.push(poller.refresh());
@@ -486,8 +501,10 @@ export interface CredentialStatus {
   billing: "free" | "paid";
   enabled: boolean;
   secretEnv: string;
-  /** Whether the supervisor's environment has the variable set. */
+  /** Whether the variable is set: its secret in the config store, else the supervisor's environment. Never which value. */
   secretSet: boolean;
+  /** Present and true when the config store holds its secret, which then wins over the environment's. */
+  stored?: boolean;
   slots: number;
   inUse: number;
   budget: string;
@@ -524,6 +541,12 @@ export function credentialStatuses(o: {
   runs: readonly Pick<RunFact, "credential" | "pause">[];
   env?: Record<string, string | undefined>;
   /**
+   * The config store's secrets over the environment (`resolveStoreSecrets`):
+   * a variable reads as set from its stored secret, and as unset when its
+   * stored secret does not open. Absent: the environment alone.
+   */
+  secrets?: SecretResolution;
+  /**
    * The providers' last reads, by credential id (`FleetGoUsage.lastReads()`).
    * A credential with none of its own takes another's of its provider naming
    * the same variable only where the read is about the key itself (refused,
@@ -532,7 +555,7 @@ export function credentialStatuses(o: {
    */
   reads?: ReadonlyMap<string, CredentialRead>;
 }): CredentialStatus[] {
-  const env = o.env ?? process.env;
+  const env = o.secrets?.env ?? o.env ?? process.env;
   const readOf = (c: Credential): CredentialRead | undefined =>
     o.reads?.get(c.id) ??
     o.credentials
@@ -568,7 +591,9 @@ export function credentialStatuses(o: {
       ...(freeplayHold !== undefined ? { freeplay: { code: freeplayHold.code, until: freeplayHold.until } } : {}),
     };
     const lastRead = readOf(c);
-    const { health, fix } = credentialHealth({ enabled: c.enabled, secretEnv: c.secretEnv, holds, secretSet, holdsOf, lastError, read: lastRead ?? null });
+    const stored = o.secrets?.stored.has(c.secretEnv) === true;
+    const storedUnreadable = o.secrets?.unreadable.get(c.secretEnv) ?? null;
+    const { health, fix } = credentialHealth({ enabled: c.enabled, secretEnv: c.secretEnv, holds, secretSet, stored, storedUnreadable, holdsOf, lastError, read: lastRead ?? null });
     return {
       id: c.id,
       provider: c.provider,
@@ -576,6 +601,7 @@ export function credentialStatuses(o: {
       enabled: c.enabled,
       secretEnv: c.secretEnv,
       secretSet,
+      ...(stored ? { stored } : {}),
       slots: c.slots,
       inUse: o.book.inUse(credentialKey(c.id)),
       budget: describeBudget(c.budget),

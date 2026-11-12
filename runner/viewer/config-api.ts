@@ -102,7 +102,7 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-function actorOf(req: Request): { actor: string; note?: string } {
+export function actorOf(req: Request): { actor: string; note?: string } {
   const actor = req.headers.get(ACTOR_HEADER);
   const note = req.headers.get(NOTE_HEADER);
   return {

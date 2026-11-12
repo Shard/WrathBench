@@ -101,6 +101,7 @@ import { readImageRecord } from "./run-pod";
 import { type CampaignFile, runCampaignFile } from "../runner/src/campaign-file";
 import { isConcluded, type Campaign, type CampaignRefusal } from "../runner/src/campaigns";
 import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
+import { resolveStoreSecrets } from "../runner/src/store-secrets";
 import { resumesOnPause, TAINT_AFTER } from "../runner/src/lapse";
 import {
   credentialGate,
@@ -310,7 +311,7 @@ export function localCredentialStatuses(
 ): CredentialStatus[] {
   const book = new SlotBook(config.credentials, config.policy.maxSessions);
   for (const f of runs) if (f.live) book.add(book.keysOf(f.driver ?? undefined, f.credential), f.party != null ? 1 : 1);
-  return credentialStatuses({ credentials: config.credentials, book, gate, runs });
+  return credentialStatuses({ credentials: config.credentials, book, gate, runs, secrets: resolveStoreSecrets(process.env) });
 }
 
 /**
