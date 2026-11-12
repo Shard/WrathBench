@@ -122,6 +122,35 @@ describe("the published definitions", () => {
   });
 });
 
+describe("an assignment's arms", () => {
+  const three = definition({
+    id: "p",
+    cells: [{ id: "c", race: 1, class: 2 }],
+    arms: [
+      { id: "x", image: "r.example/wb:t1" },
+      { id: "y", image: "r.example/wb:t1" },
+      { id: "z", image: "r.example/wb:t1" },
+    ],
+  });
+
+  test("restrict its squares, its work, its pairs and its progress to the arms it names, in the definition's order", () => {
+    const c = joined([three], { p: { version: 1, assignments: [{ model: "a", arms: ["z", "x"] }, { model: "b" }] } }).campaigns[0]!;
+    const squares = campaignSquares(c, ["a", "b"], []);
+    expect(squares.map((s) => `${s.ref}:${s.arm.id}`)).toEqual(["a:x", "a:z", "b:x", "b:y", "b:z"]);
+    expect(campaignProgress(squares).want).toBe(5);
+    expect(campaignWork([c], ["a", "b"], []).filter((w) => w.model === "a").map((w) => w.arm.id).sort()).toEqual(["x", "z"]);
+    expect(campaignPairRefusals(c, { a: {}, b: {} }, { runPods: "off" }).map((p) => `${p.ref}:${p.arm}`)).toEqual(["a:x", "a:z", "b:x", "b:y", "b:z"]);
+  });
+
+  test("an arm the definition does not have refuses the row by key, alone; an empty list does not read", () => {
+    const r = parseCampaignBlocks(defsBlock(three), { p: { version: 1, assignments: [{ model: "a", arms: ["x", "w"] }] } });
+    expect(r.campaigns).toEqual([]);
+    expect(r.refused).toEqual([{ key: "campaigns/p", campaign: "p", reason: expect.stringContaining("an assignment names an arm p@1 does not have (a: w; its arms are x, y, z)") }]);
+    expect(campaignRowProblem("p", { version: 1, assignments: [{ model: "a", arms: [] }] })).not.toBeNull();
+    expect(campaignRowProblem("p", { version: 1, assignments: [{ model: "a", arms: ["x"] }] })).toBeNull();
+  });
+});
+
 describe("pairs that cannot launch", () => {
   const windows = definition({
     id: "w",

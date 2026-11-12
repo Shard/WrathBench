@@ -428,6 +428,12 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
             `credential` — optional: pin this entry's runs to one credential, by id. They take that
               one or wait for it, never another. Normally absent. A pin that cannot carry the entry
               (not configured, another provider's, the other billing side) refuses the entry by name.
+            `campaignOnly` — `true` or absent. The entry runs only as a probe campaign's
+              assignment, as a probe-only driver's entry does: its tier buys no scored run, it has
+              no idle work (`idle` other than `none` is refused), and a queue job naming it for a
+              scored or freeplay episode is gated. For a harness variant that is an arm rather than
+              a driver, so a probe of it needs no scored run first. Its probe runs map back to it
+              by name, so copies of one model never pool.
             A t0 model that reaches level 5 KEEPS the witness (`t0*` in --status) without spending
             it: move it to t1 and it promotes at once on evidence it already has. Moving a model
             by hand is always allowed and never records a promotion — "promoted" is said only of
@@ -455,7 +461,7 @@ campaign-defs  published campaign definitions, `<id>@<version>` → { definition
             carry them only exactly as the store holds them (an export, restored), so a fresh
             store gets its definitions by publishing them, then seeding the rest.
 campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only —
-            { <id>: { version, enabled, assignments [{ model: <roster name>, runsPerCell }],
+            { <id>: { version, enabled, assignments [{ model: <roster name>, runsPerCell, arms? }],
             account?, accounts?, credential?, excludeUnhealthy?, concluded? } }, strict. The
             shape (cells, arms, start, leash, stop level, resume, attempt cap) is the published
             definition `<id>@<version>`; `version` is explicit, never "latest". A row the store
@@ -472,6 +478,8 @@ campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only
             `credential` — a PINNED campaign's credential, by id: every launch of the campaign
               takes it, overriding the assignments' own placement for those runs only. One that
               cannot carry every assignment refuses the campaign.
+            `arms` (on an assignment) — the arm ids it sweeps; absent is every arm. An arm the
+              definition lacks refuses the row.
             `excludeUnhealthy` — skips a retired or cooling model.
             `concluded` — a list of versions of this id the operator declares finished: each
               launches and resumes nothing, and the page shows it `complete*` with its counts
@@ -1638,9 +1646,12 @@ published `id@version` is refused. Which commits may publish is
    `runsPerCell` counted runs per square, and a square is one (cell, arm).
 2. Enable the row.
 3. To queue more data later, raise an assignment's `runsPerCell` or append
-   another assignment. To move to a new version, point `version` at it; work
+   another assignment.
+4. An entry runs one square at a time. To run arms side by side, give each
+   arm its own `campaignOnly` copy of the entry and an assignment with
+   `arms: ["<arm>"]`; nothing scored is bought for the copies. To move to a new version, point `version` at it; work
    is counted per version, so the new one starts from nothing.
-4. To declare a version finished whatever its squares hold, list it in
+5. To declare a version finished whatever its squares hold, list it in
    `concluded` (the whole list: a patch replaces it). It launches and resumes
    nothing, and the page marks it `complete*`.
 

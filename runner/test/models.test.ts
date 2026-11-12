@@ -893,6 +893,47 @@ describe("probe campaigns in the schedule", () => {
     expect(plan.jobs.map((j) => ({ episode: j.episode, probe: j.probe?.campaign }))).toEqual([{ episode: "probing", probe: "class-probe" }]);
   });
 
+  test("a campaignOnly entry owes nothing on any driver, and three of them, one arm each, take their squares at once", () => {
+    const img = "reg.example/wrathbench/wrathbench-runner:probe-x-0123456789ab";
+    const arms = [
+      { id: "snippet", image: img },
+      { id: "program", image: img, args: ["--loop", "program"] },
+      { id: "program-yield", image: img, args: ["--loop", "program", "--yield", "true"] },
+    ];
+    const probe = joined(
+      [definition({ id: "program-probe", version: 1, cells: [{ id: "human-paladin", race: 1, class: 2 }], arms, resume: false, maxAttemptsPerCell: 3 })],
+      {
+        "program-probe": {
+          version: 1,
+          assignments: [
+            { model: "ds-snippet", arms: ["snippet"] },
+            { model: "ds-program", arms: ["program"] },
+            { model: "ds-yield", arms: ["program-yield"] },
+          ],
+        },
+      },
+    ).campaigns[0]!;
+    const entry = (name: string): ModelState =>
+      projectModel({ name, model: "deepseek/deepseek-v4.1-flash", tier: "t0", campaignOnly: true }, [], DEFAULT_POLICY, { now: NOW2 });
+    const states = ["ds-snippet", "ds-program", "ds-yield"].map(entry);
+    expect(states[0]).toMatchObject({ probeOnly: true, campaignOnly: true, eligible: [], idle: "none", harness: "wrathbench" });
+    expect(states[0]!.perEpisode.e90!.target).toBe(0);
+    const v = schedulability(states[0]!);
+    expect(v).toEqual({ verdict: "free", why: "campaignOnly: it runs only as a probe campaign's assignment" });
+    expect(wantsIdle(v, states[0]!)).toBe(false);
+    // Nothing scored is bought: no campaign, no job.
+    expect(planNextJobs(states, ["R1", "R2", "R3"], new Set()).jobs).toEqual([]);
+    const plan = planNextJobs(states, ["R1", "R2", "R3"], new Set(), { campaigns: [probe] });
+    expect(plan.jobs.map((j) => [j.name, j.episode, j.probe?.arm, j.account])).toEqual([
+      ["ds-snippet", "probing", "snippet", "R1"],
+      ["ds-program", "probing", "program", "R2"],
+      ["ds-yield", "probing", "program-yield", "R3"],
+    ]);
+    // The same entries without the flag owe their t0 e90 first.
+    const scored = ["ds-snippet", "ds-program", "ds-yield"].map((name) => projectModel({ name, model: "deepseek/deepseek-v4.1-flash", tier: "t0" }, [], DEFAULT_POLICY, { now: NOW2 }));
+    expect(planNextJobs(scored, ["R1", "R2", "R3"], new Set(), { campaigns: [probe] }).jobs.map((j) => j.episode)).toEqual(["e90", "e90", "e90"]);
+  });
+
   test("a pi entry and a wrathbench entry of one model and effort, no window on either, never take each other's runs", () => {
     const ds = { name: "ds", model: "deepseek-flash", effort: "high", tier: "t1" as const };
     const pi = { name: "ds-pi", model: "deepseek-flash", effort: "high", driver: "pi", tier: "t1" as const };
