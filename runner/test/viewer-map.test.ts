@@ -519,6 +519,17 @@ describe("readPositions", () => {
     });
   });
 
+  test("a character at exactly 0 xp reads 0 once its bar's length is known, and unknown before", async () => {
+    // The create block carries non-zero fields only: the bar's length, and no xp at 0.
+    const runsDir = fixture([
+      { id: "fresh-bar", states: [[NOW - 5000, 1, null, 0, 1, 2, 3, 0, 0]], gauges: [50, 50, 0, 0, 0, 400] },
+      { id: "fresh-none", states: [[NOW - 4000, 1, null, 0, 1, 2, 3, 0, 0]] },
+    ]);
+    const byId = new Map((await readPositions(runsDir, NOW)).map((p) => [p.runId, p]));
+    expect([byId.get("fresh-bar")?.xp, byId.get("fresh-bar")?.nextLevelXp]).toEqual([0, 400]);
+    expect(byId.get("fresh-none")?.xp).toBeNull();
+  });
+
   test("the recorded track carries the frame's numbers through readStates", () => {
     // The replay path: state row → readStates → trackFrom. Distinct values, so
     // a max_health/max_power transposition in either mapping fails here.

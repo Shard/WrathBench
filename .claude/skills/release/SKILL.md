@@ -37,7 +37,10 @@ bun wb release run --dry-run       # the plan, the tag, what the cluster carries
 - **The checkout.** The build refuses a dirty tree and a `wrath-mcp/` that
   does not hold the pinned commit: after a fast-forward,
   `git submodule update --init wrath-mcp` (and `bun install --frozen-lockfile`
-  for the host-side commands that follow). Build early only at the commit you
+  for the host-side commands that follow). The server images also need the
+  pinned AzerothCore: `git submodule update --init deps/azerothcore` in a
+  fresh clone or worktree, where `--reference` to another checkout's
+  `deps/azerothcore` saves the clone. Build early only at the commit you
   will release: the tag is `git describe` of HEAD.
 - **A chart change and the values that need it go in separate pins**, chart
   first, when a GitOps controller applies them: otherwise the old chart can
