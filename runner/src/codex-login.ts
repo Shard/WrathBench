@@ -39,6 +39,9 @@ export const CODEX_LOGIN_TTL_MS = 15 * 60_000;
 /** How often the supervisor looks for a request. */
 export const CODEX_LOGIN_POLL_MS = 2_000;
 
+/** A request the supervisor has not taken in this long was never going to be: it was down, or went down. */
+export const CODEX_LOGIN_REQUEST_STALE_MS = 60_000;
+
 export const CODEX_LOGIN_STATES = ["starting", "waiting", "ok", "failed"] as const;
 export type CodexLoginState = (typeof CODEX_LOGIN_STATES)[number];
 
@@ -89,18 +92,35 @@ export function loginActive(s: CodexLoginStatus | null, now: number): boolean {
   return s !== null && (s.state === "starting" || s.state === "waiting") && now - s.requestedAt < CODEX_LOGIN_TTL_MS + 60_000;
 }
 
-/** The viewer's half: ask for a login. Refused while one is under way, or one is already asked for. */
+/** A request waiting for the supervisor, or null; `stale` when it has waited past `CODEX_LOGIN_REQUEST_STALE_MS`. */
+export function readCodexLoginRequest(dir: string, id: string, now: number = Date.now()): (CodexLoginRequest & { stale: boolean }) | null {
+  try {
+    const parsed = requestSchema.safeParse(JSON.parse(readFileSync(requestPath(dir, id), "utf8")));
+    if (!parsed.success) return null;
+    return { ...parsed.data, stale: now - parsed.data.at > CODEX_LOGIN_REQUEST_STALE_MS };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The login as the page should read it: a state left starting or waiting past
+ * the code's life (the supervisor stopped during it) reads failed, so nothing
+ * waits on it for ever.
+ */
+export function effectiveCodexLogin(s: CodexLoginStatus | null, now: number): CodexLoginStatus | null {
+  if (s === null || (s.state !== "starting" && s.state !== "waiting") || loginActive(s, now)) return s;
+  return { ...s, state: "failed", detail: "it expired, or the supervisor stopped during it", url: undefined, code: undefined };
+}
+
+/** The viewer's half: ask for a login. Refused while one is under way, or a fresh request waits for the supervisor. */
 export function requestCodexLogin(dir: string, id: string, actor: string, now: number = Date.now()): { ok: true } | { ok: false; why: string } {
   if (!isCredentialId(id)) return { ok: false, why: `${id} is not a credential id` };
   if (loginActive(readCodexLogin(dir, id), now)) return { ok: false, why: `a login for ${id} is already under way` };
-  if (existsSync(requestPath(dir, id))) return { ok: false, why: `a login for ${id} is already asked for, and the supervisor has not taken it yet` };
+  const waiting = readCodexLoginRequest(dir, id, now);
+  if (waiting !== null && !waiting.stale) return { ok: false, why: `a login for ${id} is already asked for, and the supervisor has not taken it yet` };
   writeWhole(requestPath(dir, id), { at: now, actor: actor.slice(0, 64) } satisfies CodexLoginRequest);
   return { ok: true };
-}
-
-/** Whether a request is waiting for the supervisor. */
-export function codexLoginRequested(dir: string, id: string): boolean {
-  return existsSync(requestPath(dir, id));
 }
 
 // ------------------------------------------------------------ the CLI's output
@@ -154,6 +174,24 @@ export class CodexLogins {
   constructor(private readonly deps: CodexLoginDeps) {
     this.env = deps.env ?? process.env;
     this.dir = deps.dir ?? codexLoginDir(this.env);
+    this.recover();
+  }
+
+  /** A login a previous supervisor left starting or waiting died with it: say so, so the page stops waiting. */
+  private recover(): void {
+    let names: string[];
+    try {
+      names = readdirSync(this.dir).filter((n) => n.endsWith(".state.json"));
+    } catch {
+      return;
+    }
+    for (const n of names) {
+      const id = n.slice(0, -".state.json".length);
+      const s = readCodexLogin(this.dir, id);
+      if (s !== null && (s.state === "starting" || s.state === "waiting")) {
+        this.write(id, { state: "failed", requestedAt: s.requestedAt, actor: s.actor, at: this.now(), detail: "the supervisor restarted during it" });
+      }
+    }
   }
 
   private now(): number {
@@ -205,6 +243,8 @@ export class CodexLogins {
     const c = this.deps.credentials().find((x) => x.id === id);
     if (c === undefined) return fail(`no credential ${id}`);
     if (providerById(c.provider)?.holds !== "home") return fail(`${id} is a ${c.provider} credential, not a Codex home`);
+    // Disabled for the whole login: a run placed on it meanwhile would have its token replaced under it.
+    if (c.enabled) return fail(`${id} is enabled: disable it first, so no run is placed on it while the login replaces its token`);
     const home = this.env[c.secretEnv];
     if (home === undefined || home.length === 0) return fail(`${c.secretEnv} is not set in the supervisor's environment`);
     if (!existsSync(home)) return fail(`${c.secretEnv} names no directory here`);

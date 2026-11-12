@@ -2124,10 +2124,13 @@ login --device-auth` against the home with only the CLI's plumbing and
 `CODEX_HOME` in its environment. The page shows the link and the one-time
 code; enter the code there within its 15 minutes, signed in to the
 subscription the credential is. The CLI writes `auth.json` into that home
-itself; nothing is copied. One login per home at a time, and none while a run
-is live on the credential, since a login replaces the refresh token a live
-CLI may be about to spend: disable the credential and let its runs finish
-first. A code not entered in time ends the login as failed; ask again. By
+itself; nothing is copied. One login per home at a time, and only on a
+disabled credential with no run live on it, since a login replaces the
+refresh token a live CLI may be about to spend and a run placed on it during
+the login would lose its token: disable it, let its runs finish, log in, then
+enable it. A code not entered in time ends the login as failed, as does one a
+supervisor restart cut short or a request no supervisor took within a
+minute; ask again. By
 hand it is still `kubectl exec -it deploy/<release>-runner -- codex login
 --device-auth`.
 
@@ -2291,6 +2294,10 @@ PR to GitOps or an app-owned Secret):
   until then their launches are refused. **A lost store key** is the same:
   nothing else in the store depends on it, so set each secret again, or
   clear it to fall back to the Secret's.
+- **Hand launches.** `bun wb run episode` runs run.ts directly in the runner
+  pod, which reads only its environment: a key kept only in the store does
+  not reach it. Launch through a roster (`./infra/run-roster.sh`), or keep
+  that key in the Secret too.
 - **Who can set one.** Whoever reaches the admin viewer, which has no login
   ("The admin interface"). The viewer holds the key so it can seal, which
   means the LAN-reachable process could open what it seals; it never does,

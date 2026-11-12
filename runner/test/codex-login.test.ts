@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Credential } from "../src/credential-slots";
-import { CodexLogins, parseDeviceAuth, readCodexLogin, requestCodexLogin } from "../src/codex-login";
+import { CodexLogins, effectiveCodexLogin, parseDeviceAuth, readCodexLogin, readCodexLoginRequest, requestCodexLogin } from "../src/codex-login";
 import { STORE_KEY_ENV } from "../src/store-secrets";
 import { KEY_HEX, SENTINEL } from "./fixtures/store-secrets";
 import { tempDirs } from "./fixtures/temp-dirs";
@@ -54,7 +54,7 @@ esac
   return bin;
 }
 
-const cred = (id: string, provider: string, secretEnv: string): Credential => ({ id, provider, secretEnv, slots: 1, budget: null, billing: "paid", enabled: true });
+const cred = (id: string, provider: string, secretEnv: string, enabled = false): Credential => ({ id, provider, secretEnv, slots: 1, budget: null, billing: "paid", enabled });
 
 function rig(o: { inUse?: number; ttlMs?: number } = {}) {
   const root = tempDir("codex-login-");
@@ -64,7 +64,7 @@ function rig(o: { inUse?: number; ttlMs?: number } = {}) {
   const lines: string[] = [];
   const env = { PATH: process.env["PATH"], HOME: root, CODEX_HOME: home, OPENROUTER_KEY: SENTINEL, [STORE_KEY_ENV]: KEY_HEX, WRATHBENCH_MODULE_SECRET: SENTINEL };
   const logins = new CodexLogins({
-    credentials: () => [cred("chatgpt-1", "chatgpt", "CODEX_HOME"), cred("or-1", "openrouter", "OPENROUTER_KEY")],
+    credentials: () => [cred("chatgpt-1", "chatgpt", "CODEX_HOME"), cred("or-1", "openrouter", "OPENROUTER_KEY"), cred("chatgpt-on", "chatgpt", "CODEX_HOME", true)],
     inUse: () => o.inUse ?? 0,
     env,
     dir,
@@ -137,6 +137,9 @@ describe("CodexLogins", () => {
     expect(readCodexLogin(busy.dir, "chatgpt-1")?.detail).toContain("live on chatgpt-1");
 
     const r = rig();
+    requestCodexLogin(r.dir, "chatgpt-on", "mark");
+    expect(r.logins.poll()).toEqual([]);
+    expect(readCodexLogin(r.dir, "chatgpt-on")?.detail).toContain("disable it first");
     requestCodexLogin(r.dir, "or-1", "mark");
     requestCodexLogin(r.dir, "ghost", "mark");
     expect(r.logins.poll()).toEqual([]);
@@ -144,5 +147,27 @@ describe("CodexLogins", () => {
     expect(readCodexLogin(r.dir, "ghost")?.detail).toContain("no credential ghost");
     // Each request is answered once.
     expect(r.logins.poll()).toEqual([]);
+  });
+});
+
+describe("a login nobody finishes", () => {
+  test("a state a stopped supervisor left reads failed, and a new supervisor says so; a request it never took can be asked again", () => {
+    const r = rig();
+    mkdirSync(r.dir, { recursive: true });
+    const now = Date.now();
+    writeFileSync(join(r.dir, "chatgpt-1.state.json"), JSON.stringify({ state: "waiting", requestedAt: now - 20 * 60_000, at: now - 19 * 60_000, actor: "mark", url: "https://x", code: "ABCD-EFGH" }));
+    expect(effectiveCodexLogin(readCodexLogin(r.dir, "chatgpt-1"), now)).toMatchObject({ state: "failed" });
+    expect(effectiveCodexLogin(readCodexLogin(r.dir, "chatgpt-1"), now)?.code).toBeUndefined();
+    // A fresh one under way stays as it is.
+    writeFileSync(join(r.dir, "chatgpt-1.state.json"), JSON.stringify({ state: "waiting", requestedAt: now - 60_000, at: now, actor: "mark", url: "https://x", code: "ABCD-EFGH" }));
+    expect(effectiveCodexLogin(readCodexLogin(r.dir, "chatgpt-1"), now)?.state).toBe("waiting");
+    // A supervisor starting over finds it and fails it.
+    new CodexLogins({ credentials: () => [], inUse: () => 0, dir: r.dir });
+    expect(readCodexLogin(r.dir, "chatgpt-1")).toMatchObject({ state: "failed", detail: "the supervisor restarted during it" });
+    // A request older than a minute no longer blocks a new one.
+    writeFileSync(join(r.dir, "chatgpt-1.request.json"), JSON.stringify({ at: now - 5 * 60_000, actor: "mark" }));
+    expect(readCodexLoginRequest(r.dir, "chatgpt-1", now)?.stale).toBe(true);
+    expect(requestCodexLogin(r.dir, "chatgpt-1", "mark", now)).toEqual({ ok: true });
+    expect(requestCodexLogin(r.dir, "chatgpt-1", "mark", now).ok).toBe(false);
   });
 });

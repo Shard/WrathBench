@@ -46,7 +46,7 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { codexLoginDir, codexLoginRequested, readCodexLogin, requestCodexLogin } from "../src/codex-login";
+import { codexLoginDir, effectiveCodexLogin, readCodexLogin, readCodexLoginRequest, requestCodexLogin } from "../src/codex-login";
 import { configDbPath, ConfigStore } from "../src/config-store";
 import { credentialHealth } from "../src/credential-health";
 import { CREDENTIAL_PROVIDERS, describeBudget, parseCredentials, providerById, type Credential } from "../src/credential-slots";
@@ -232,13 +232,16 @@ export function readSupervisor(runsDir: string): Pick<FleetResponse, "present" |
 const MAX_SECRET_BODY = 16 * 1024;
 
 /** A Codex home's login as the page shows it: the supervisor's state, or a request it has not taken yet. */
-function loginViews(dir: string, credentials: readonly Credential[]): Map<string, AdminCodexLoginView> {
+function loginViews(dir: string, credentials: readonly Credential[], now: number): Map<string, AdminCodexLoginView> {
   const out = new Map<string, AdminCodexLoginView>();
   for (const c of credentials) {
     if (providerById(c.provider)?.holds !== "home") continue;
-    const s = readCodexLogin(dir, c.id);
-    if (codexLoginRequested(dir, c.id)) {
-      out.set(c.id, { state: "requested", at: s?.at ?? 0, actor: null, url: null, code: null, expiresAt: null, detail: null });
+    const s = effectiveCodexLogin(readCodexLogin(dir, c.id), now);
+    const req = readCodexLoginRequest(dir, c.id, now);
+    if (req !== null && !req.stale) {
+      out.set(c.id, { state: "requested", at: req.at, actor: req.actor, url: null, code: null, expiresAt: null, detail: null });
+    } else if (req !== null) {
+      out.set(c.id, { state: "failed", at: req.at, actor: req.actor, url: null, code: null, expiresAt: null, detail: "the supervisor did not take the request" });
     } else if (s !== null) {
       out.set(c.id, { state: s.state, at: s.at, actor: s.actor, url: s.url ?? null, code: s.code ?? null, expiresAt: s.expiresAt ?? null, detail: s.detail ?? null });
     }
@@ -307,6 +310,7 @@ export function createAdminApi(opts: AdminApiOptions): (req: Request, path: stri
     const c = storedCredentials(dbPath()).find((x) => x.id === id);
     if (c === undefined) return json({ error: `no credential ${id}` }, 404);
     if (providerById(c.provider)?.holds !== "home") return json({ error: `${id} is not a Codex home: its secret is set, not logged in` }, 400);
+    if (c.enabled) return json({ error: `${id} is enabled: disable it first, so no run is placed on it while the login replaces its token` }, 409);
     if (!supervisorUp(now()).up) return json({ error: "no supervisor is up to run the login" }, 409);
     const r = requestCodexLogin(loginDir(), id, actorOf(req).actor, now());
     return r.ok ? json({ id, state: "requested" }, 202) : json({ error: r.why }, 409);
@@ -336,7 +340,7 @@ export function createAdminApi(opts: AdminApiOptions): (req: Request, path: stri
         modelKeys,
         secrets: storedSecrets(dbPath()),
         keyId: key.key?.id ?? null,
-        logins: loginViews(loginDir(), stored),
+        logins: loginViews(loginDir(), stored, t),
       }),
       providers: CREDENTIAL_PROVIDERS.map((p) => ({ id: p.id, label: p.label, bill: p.bill, envBase: p.envBase, holds: p.holds, budgets: p.budgets })),
       publishing: { ...publishViewFromEnv(env), last: lastPass() },

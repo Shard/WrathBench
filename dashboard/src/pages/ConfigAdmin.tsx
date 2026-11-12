@@ -268,7 +268,7 @@ function SecretForm(props: { c: AdminCredentialView; kind: "key" | "token"; writ
       <div class="configform">
         <label title={props.kind === "token" ? "the token `claude setup-token` prints; sealed in the config store and never shown again" : "sealed in the config store and never shown again; it wins over the deployment's Secret"}>
           {props.kind === "token" ? "token" : "key"} for {props.c.secretEnv}
-          <input type="password" autocomplete="off" spellcheck={false} value={value()} onInput={(e) => setValue(e.currentTarget.value)} />
+          <input type="password" autocomplete="new-password" spellcheck={false} value={value()} onInput={(e) => setValue(e.currentTarget.value)} />
         </label>
         <button type="button" onClick={save}>
           store

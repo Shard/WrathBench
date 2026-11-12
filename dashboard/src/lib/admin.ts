@@ -348,12 +348,13 @@ export function loginInFlight(l: AdminCodexLoginView | null): boolean {
 /** Why a secret control is off, or null when it may be used. */
 export function secretControlOff(
   kind: "key" | "token" | "login",
-  c: Pick<AdminCredentialView, "login" | "inUse">,
+  c: Pick<AdminCredentialView, "login" | "inUse" | "enabled">,
   o: { storeKey: { ok: true } | { ok: false; why: string }; fleetUp: boolean },
 ): string | null {
   if (kind !== "login") return o.storeKey.ok ? null : o.storeKey.why;
   if (!o.fleetUp) return "no supervisor is up to run the login";
   if (loginInFlight(c.login)) return "a login is under way";
+  if (c.enabled) return "disable it first: no run may be placed on it while the login replaces its token";
   if (c.inUse !== null && c.inUse > 0) return "a run is live on it: disable it and let its runs finish first";
   return null;
 }
