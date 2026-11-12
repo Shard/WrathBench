@@ -607,7 +607,8 @@ export interface RunFact {
   fanoutAccounts?: string[] | null;
   /**
    * The credential this run took a slot on (`RunConfig.credential`), or null
-   * on a run that recorded none (a 0.5 run, one launched by hand). Read off the
+   * on a run that recorded none (a 0.5 run, one launched by hand without
+   * `--credential`). Read off the
    * run's own config for the same reason `campaign` is: the fleet counts live
    * runs per credential, and that count has to survive a supervisor restart,
    * which nothing held in memory does.
@@ -1285,6 +1286,39 @@ export function readRunFact(
   now = Date.now(),
   opts: { counts?: CountCache } = {},
 ): RunFact | null {
+  const r = readRunReading(runsDir, runId, now, { ...opts, stampedOnly: true });
+  return r !== null && isStamped(r) ? r : null;
+}
+
+/**
+ * A run with no episode stamp: one launched by hand without `--episode`
+ * (docs/RUNBOOK.md, "Ad-hoc launches", "A fan-out run, by hand"). Read the way
+ * a fact is, and never one: no projection, ladder, target, attempt number or
+ * public row reads it, so it is never a scored run, an owed one or a strike.
+ * What reads it is what it costs the fleet while it runs — the credential it
+ * bills (its slot, its runs and spend today, its usage readings) — through
+ * `readFleetRuns`.
+ */
+export type UnstampedRun = Omit<RunFact, "episode"> & { episode: null };
+
+/** A run directory as `readRunReading` reads it: a fact, or a run with no episode. */
+export type RunReading = RunFact | UnstampedRun;
+
+function isStamped(r: RunReading): r is RunFact {
+  return r.episode !== null;
+}
+
+/**
+ * `readRunFact`, and the same reading of a run with no episode stamp
+ * (`UnstampedRun`). `stampedOnly` stops at the stamp, as `readRunFact` always
+ * has, for a reader that has no use for the rest.
+ */
+function readRunReading(
+  runsDir: string,
+  runId: string,
+  now: number,
+  opts: { counts?: CountCache; stampedOnly?: boolean },
+): RunReading | null {
   const dir = join(runsDir, runId);
   const metaPath = join(dir, "meta.json");
   if (!existsSync(metaPath)) return null;
@@ -1319,13 +1353,16 @@ export function readRunFact(
   } catch {
     return null;
   }
-  const episode = meta.comparability?.episode;
-  if (!isEpisodeId(episode)) return null;
+  const stamp = meta.comparability?.episode;
+  // No stamp at all is a hand launch; a stamp this reader does not know is not
+  // a run it can read.
+  const episode = isEpisodeId(stamp) ? stamp : stamp === null || stamp === undefined ? null : undefined;
+  if (episode === undefined || (episode === null && opts.stampedOnly === true)) return null;
   const model = str(meta.config?.model);
   if (model === null) return null;
   const compactWindow = str(meta.comparability?.compactWindow) ?? str(meta.config?.compactWindow);
 
-  const fact: RunFact = {
+  const fact: RunReading = {
     runId,
     model,
     effort: str(meta.comparability?.effort) ?? str(meta.config?.effort),
@@ -1551,7 +1588,7 @@ export function runFactCacheVersion(): string {
     .update(
       [
         String(RUN_FACT_CACHE_SCHEMA),
-        ...[readRunFact, partyOfConfig, fanoutAccountsOfConfig, runFactKey, runDbWriteInFlight, verdictOfTrajectory, tallyRecords, RecordCountScanner, harnessSeries, isEpisodeId, heartbeatAt, openRunDb, readRunRow, bestLevelOf, fanoutReadings, fanoutLead, str, num, parseSubscriptionUsage].map(String),
+        ...[readRunFact, readRunReading, isStamped, partyOfConfig, fanoutAccountsOfConfig, runFactKey, runDbWriteInFlight, verdictOfTrajectory, tallyRecords, RecordCountScanner, harnessSeries, isEpisodeId, heartbeatAt, openRunDb, readRunRow, bestLevelOf, fanoutReadings, fanoutLead, str, num, parseSubscriptionUsage].map(String),
         JSON.stringify([EPISODE_IDS, MODEL_RESPONSE_RECORD, HEARTBEAT_FILE]),
       ].join("\n"),
     )
@@ -1624,7 +1661,7 @@ export function runFactKey(dir: string): { key: string; newest: number } | null 
  * write in the same timestamp tick as the key cannot hide behind it. Paused
  * and open runs are always read fresh.
  */
-export function cacheableFact(f: RunFact, newest: number, now: number): boolean {
+export function cacheableFact(f: RunReading, newest: number, now: number): boolean {
   return f.terminationReason !== null && now - newest >= RUN_FACT_SETTLE_MS;
 }
 
@@ -1657,8 +1694,34 @@ export function readRunFacts(
   now = Date.now(),
   opts: { includeArchived?: boolean; counts?: CountCache; facts?: RunFactCache } = {},
 ): RunFact[] {
-  if (!existsSync(runsDir)) return [];
+  return scanRunReadings(runsDir, now, opts, false).facts;
+}
+
+/**
+ * `readRunFacts`, and beside the facts every run under `runsDir` with no
+ * episode stamp (`UnstampedRun`), read in the same walk and kept the same way.
+ * For the fleet's budgets and slots, which every run on a credential costs,
+ * stamped or not; nothing that reads the facts' meaning is given the others.
+ */
+export function readFleetRuns(
+  runsDir: string,
+  now = Date.now(),
+  opts: { includeArchived?: boolean; counts?: CountCache; facts?: RunFactCache } = {},
+): { facts: RunFact[]; unstamped: UnstampedRun[] } {
+  return scanRunReadings(runsDir, now, opts, true);
+}
+
+function scanRunReadings(
+  runsDir: string,
+  now: number,
+  opts: { includeArchived?: boolean; counts?: CountCache; facts?: RunFactCache },
+  withUnstamped: boolean,
+): { facts: RunFact[]; unstamped: UnstampedRun[] } {
+  if (!existsSync(runsDir)) return { facts: [], unstamped: [] };
   const out: RunFact[] = [];
+  const unstamped: UnstampedRun[] = [];
+  const read = (dir: string, runId: string): RunReading | null =>
+    readRunReading(dir, runId, now, { ...(opts.counts === undefined ? {} : { counts: opts.counts }), stampedOnly: !withUnstamped });
   const seen = new Set<string>();
   const kept = new Set<string>();
   const facts = opts.facts;
@@ -1667,21 +1730,23 @@ export function readRunFacts(
     for (const d of readdirSync(dir, { withFileTypes: true })) {
       if (!d.isDirectory() || !RUN_ID.test(d.name) || d.name === ARCHIVE_DIR) continue;
       seen.add(join(dir, d.name, "trajectory.jsonl"));
-      let f: RunFact | null = null;
+      let f: RunReading | null = null;
       if (facts === undefined) {
-        f = readRunFact(dir, d.name, now, opts.counts === undefined ? {} : { counts: opts.counts });
+        f = read(dir, d.name);
       } else {
         const rel = archived ? `${ARCHIVE_DIR}/${d.name}` : d.name;
         kept.add(rel);
         const key = runFactKey(join(dir, d.name));
         f = key === null ? null : (facts.get(rel, key.key) ?? null);
         if (f === null) {
-          f = readRunFact(dir, d.name, now, opts.counts === undefined ? {} : { counts: opts.counts });
+          f = read(dir, d.name);
           if (key !== null && f !== null && cacheableFact(f, key.newest, now)) facts.set(rel, key.key, f);
           else facts.delete(rel);
         }
       }
-      if (f !== null) out.push(archived ? { ...f, archived: true } : f);
+      if (f === null) continue;
+      if (isStamped(f)) out.push(archived ? { ...f, archived: true } : f);
+      else if (withUnstamped) unstamped.push(archived ? { ...f, archived: true } : f);
     }
   };
   scan(runsDir, false);
@@ -1695,8 +1760,10 @@ export function readRunFacts(
     if (opts.includeArchived === true) facts.retain(kept);
     facts.flush();
   }
-  out.sort((a, b) => a.startedAt - b.startedAt || (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0));
-  return out;
+  const order = (a: RunReading, b: RunReading): number => a.startedAt - b.startedAt || (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0);
+  out.sort(order);
+  unstamped.sort(order);
+  return { facts: out, unstamped };
 }
 
 // ------------------------------------------------------------- projection
@@ -1971,7 +2038,8 @@ export function matchesRoster(f: RunFact, r: Pick<RosterModel, "name" | "model" 
  * The credential each roster entry's live-or-paused run is on, read off the
  * runs themselves: what makes the per-credential count survive a supervisor
  * restart, and what sends a resume back to the credential it started on. A
- * run that recorded none (0.5, or launched by hand) is not listed.
+ * run that recorded none (0.5, or launched by hand without `--credential`) is
+ * not listed.
  */
 export function liveCredentials(
   runs: readonly RunFact[],

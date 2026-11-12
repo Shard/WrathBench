@@ -31,11 +31,11 @@
  */
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
-import type { RunFact } from "./models";
+import type { RunReading } from "./models";
 
 interface Entry {
   key: string;
-  fact: RunFact;
+  fact: RunReading;
 }
 
 export class RunFactCache {
@@ -81,21 +81,21 @@ export class RunFactCache {
     for (const [rel, e] of Object.entries(d.entries as Record<string, unknown>)) {
       const entry = e as Partial<Entry> | null;
       if (entry === null || typeof entry !== "object" || typeof entry.key !== "string") continue;
-      const fact = entry.fact as Partial<RunFact> | undefined;
+      const fact = entry.fact as Partial<RunReading> | undefined;
       // Only what this store is ever given: a terminated run, under its own id.
       if (fact === null || typeof fact !== "object" || fact.runId !== basename(rel) || typeof fact.terminationReason !== "string") continue;
-      entries.set(rel, { key: entry.key, fact: fact as RunFact });
+      entries.set(rel, { key: entry.key, fact: fact as RunReading });
     }
     return entries;
   }
 
   /** The fact kept for a run directory under exactly this key, as a copy; undefined on any difference. */
-  get(rel: string, key: string): RunFact | undefined {
+  get(rel: string, key: string): RunReading | undefined {
     const e = this.load().get(rel);
     return e !== undefined && e.key === key ? { ...e.fact } : undefined;
   }
 
-  set(rel: string, key: string, fact: RunFact): void {
+  set(rel: string, key: string, fact: RunReading): void {
     const e = this.load().get(rel);
     if (e !== undefined && e.key === key) return;
     this.entries!.set(rel, { key, fact: { ...fact } });

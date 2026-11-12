@@ -84,6 +84,7 @@ bun wb inspect pad <run-id> [--since 2h]                       # pad size over t
 bun wb inspect pad <run-id> --at <iso>                         # the pad's text at a moment, rebuilt from the record
 bun wb inspect stuck [<run-id>] [--window 2h] [--until 1h]     # no game progress over a window, and the failure signals in it
 bun wb inspect session <run-id> [--stream calls] [--character Name] [--kind death,level] [--grep RE] [--last 20]   # a v1 run's record, a line per row
+bun wb inspect session '<run-id>~Name'                         # one fan-out character, by the session id the viewer shows
 bun wb inspect audit <run-id> [--op WB_MOVE_RESULT [--status S]] [--since 1h]
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
 bun wb inspect audit --smoke edge-drop --op move_edge_drop --since 1h   # a smoke's sessions (from the smoke-session ledger)
@@ -92,6 +93,8 @@ bun wb inspect publisher [<run-id>]                  # last flip, versions per r
 
 All read-only and bounded: a trajectory line is never printed whole, only
 capped fields of it, and the session token is struck from everything printed.
+Every view that takes a run id takes a fan-out character's session id too
+(`<run-id>~<Name>`): `session` reads that character alone, the rest the run.
 A run is live when its row has neither a termination nor a pause; one with
 neither whose heartbeat is older than two minutes has lost its process and
 reads `ownerless`.
@@ -1792,8 +1795,14 @@ One episode, launched in the runner pod (`bun wb --local run episode`: in the
 quickstart's runner container):
 
 ```
-bun wb run episode --model <id> [--driver openai|claude-code|codex|pi]
+bun wb run episode --model <id> [--driver openai|claude-code|codex|pi] [--credential <id>]
 ```
+
+`--credential <id>` records the credential the run bills. The supervisor
+counts a live run it did not launch against that credential, with an episode
+or without one: a slot while it is live, and its launch and spend in the
+day's budgets. A run that records no credential is counted against none. Its
+accounts are held while it is live either way ("A fan-out run, by hand").
 
 `./infra/run-roster.sh` and `./infra/run-fleet.sh` still start a roster or a
 whole supervisor by hand, on the quickstart. Both read the config store and
@@ -1809,7 +1818,7 @@ launches one only as a party campaign's one-agent arm (docs/EPISODES.md,
 party is; anything else is launched by hand.
 
 ```
-bun runner/src/run.ts --driver <driver> --model <id> [--objective "<text>"] \
+bun runner/src/run.ts --driver <driver> --model <id> [--objective "<text>"] [--credential <id>] \
   --max-characters 5 --accounts POOL01,POOL02,POOL03,POOL04,POOL05
 ```
 
@@ -1826,7 +1835,9 @@ bun runner/src/run.ts --driver <driver> --model <id> [--objective "<text>"] \
   for all of them. A paused run's accounts are reserved only by its resume,
   which the fleet plans for a run it launched; a paused hand launch on pool
   accounts is not protected, so resume it or launch on accounts outside the
-  pool. Each must be on the module's allowlist ("The account pool").
+  pool. Each must be on the module's allowlist ("The account pool"). The run
+  takes one slot on its `--credential`, as any hand launch does ("Ad-hoc
+  launches").
 - Launch hygiene clears every listed account, as it clears the one account of
   any fresh run.
 - The run directory has `sessions/<Character>/` (a session record per
@@ -2152,7 +2163,8 @@ still fails, the command says so, and running it again applies only the pin.
 What it refuses, writing nothing: a run with a live owner or with no verdict
 at all (the fleet would resume it as `offline` on its next tick); a credential
 that is not configured, disabled, another provider's or the other billing
-side; a run that records no credential (0.5, or launched by hand); an
+side; a run that records no credential (0.5, or launched by hand without
+`--credential`); an
 archived run; and any driver but claude-code. A Codex home holds the CLI's own
 threads, so codex runs stay where they started.
 
