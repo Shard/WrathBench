@@ -1852,13 +1852,15 @@ describe("jobs, pinned and pool: one unit of work over the account pool", () => 
       { account: "SHAKEOUT", kind: "pinned", job: { name: "probe-freeplay", models: ["sonnet"], episode: "freeplay", runId: "fleet-probe-freeplay-sonnet-20260101", level: 5, xp: 120, elapsedMs: 3_900_000 } },
       { account: "RUNNER", kind: "pool", job: { name: "glm-e90", models: ["z-ai/glm-5.2:free"], episode: "e90", attempt: 2, runId: "r", cooling: "cooling until 03:00 (429)" } },
       { account: "RUNNER2", kind: "pool", free: true },
-      { account: "RUNNER3", kind: "pool", free: true, note: "held by run x — not fleet-managed" },
+      { account: "RUNNER3", kind: "pool", free: true, held: true, note: "held by run x — not fleet-managed" },
     ]).join("\n");
     expect(lines).toContain("accounts: 1 pinned, 3 pool");
     expect(lines).toMatch(/SHAKEOUT +pinned +probe-freeplay: sonnet freeplay — fleet-probe-freeplay-sonnet-20260101 — L5 120xp, 1h05m/);
     expect(lines).toMatch(/RUNNER +pool +glm-e90: z-ai\/glm-5.2:free e90 attempt 2 — r — no state rows yet — cooling until 03:00/);
     expect(lines).toMatch(/RUNNER2 +pool +free$/m);
-    expect(lines).toMatch(/RUNNER3 +pool +free — held by run x/);
+    // Held, never "free — held by": the account is not free while a run holds it.
+    expect(lines).toMatch(/RUNNER3 +pool +held by run x — not fleet-managed$/m);
+    expect(lines).not.toContain("free — held");
     // The queue block exists only when a manual queue does.
     expect(formatQueue([], undefined)).toEqual([]);
     const config = parseFleet(nextShape());
@@ -4369,7 +4371,7 @@ describe("the read-only views read what is running, not every job the supervisor
       expect(text).not.toContain("-a3");
       expect(text).toMatch(/RUNNER +pool +free$/m);
       expect(text).toContain(
-        `RUNNER3   pool   free — held by run ${A2} — live, and no job of a running supervisor owns it; ${REF} is held while it stays live; if it stops without a verdict, the supervisor resumes it in place here`,
+        `RUNNER3   pool   held by run ${A2} — live, and no job of a running supervisor owns it; ${REF} is held while it stays live; if it stops without a verdict, the supervisor resumes it in place here`,
       );
     });
   });

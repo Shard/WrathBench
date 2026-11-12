@@ -504,7 +504,14 @@ export function stuckTail(runId: string, flag: string | undefined): string {
 /** What an account is doing right now, for the accounts table. */
 export type AccountRow =
   | { account: string; kind: AccountKind; job: JobRow }
-  | { account: string; kind: AccountKind; free: true; note?: string };
+  | {
+      account: string;
+      kind: AccountKind;
+      free: true;
+      /** No job of this supervisor is on it, but a live run holds it: the note says which, and the row reads held, not free. */
+      held?: true;
+      note?: string;
+    };
 
 /** Which an account row is: reserved by a pin, or one of the pool. */
 export type AccountKind = "pinned" | "pool";
@@ -523,7 +530,8 @@ export function formatAccounts(rows: readonly AccountRow[], max?: number): strin
   for (const r of rows) {
     const head = `  ${r.account.padEnd(w)} ${r.kind.padEnd(6)} `;
     if ("free" in r) {
-      out.push(`${head}free${r.note !== undefined ? ` — ${r.note}` : ""}`);
+      // A run no job owns still holds the account: say held, never "free — held by".
+      out.push(r.held === true && r.note !== undefined ? `${head}${r.note}` : `${head}free${r.note !== undefined ? ` — ${r.note}` : ""}`);
       continue;
     }
     const j = r.job;
@@ -1095,7 +1103,7 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
               : `job ${job.name} enabled${rejected !== undefined ? " (FILE, NOT in effect)" : ""}, not spawned${fleetUp ? "" : " (supervisor down)"}${progress !== undefined ? ` (${progress})` : ""}`;
         }
       }
-      rows.push({ account, kind, free: true, ...(note !== undefined ? { note } : {}) });
+      rows.push({ account, kind, free: true, ...(holder !== undefined ? { held: true } : {}), ...(note !== undefined ? { note } : {}) });
     }
   }
   for (const line of formatAccounts(rows, config?.accounts.max ?? state?.accounts?.max)) console.log(`  ${line}`);
@@ -1388,6 +1396,7 @@ export function planDryRun(opts: {
           account,
           kind,
           free: true,
+          held: true,
           // Said plainly: nothing here knows when this run stops. The plan
           // above holds its model while it is live, and its lane decides what
           // comes after.
@@ -1412,6 +1421,7 @@ export function planDryRun(opts: {
         account,
         kind: "pinned",
         free: true,
+        ...(holder !== undefined ? { held: true as const } : {}),
         note:
           holder !== undefined
             ? `held by run ${holder}`
@@ -1436,7 +1446,7 @@ export function planDryRun(opts: {
         rows.push({ account, kind, job: planned(pp.job, jobSpawn(pp.job, config.roster, account, stamp, undefined, config.campaigns), `${pp.job.name} (policy: ${pp.why})`) });
       } else {
         const holder = held(account);
-        rows.push({ account, kind, free: true, ...(holder !== undefined ? { note: `held by run ${holder}` } : {}) });
+        rows.push({ account, kind, free: true, ...(holder !== undefined ? { held: true as const, note: `held by run ${holder}` } : {}) });
       }
     }
   }
