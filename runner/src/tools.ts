@@ -137,7 +137,7 @@ export interface ToolContext extends CoreToolContext {
    * The run's turn messages follow a scaffold's thread context
    * (`threadContextOf`, config.ts), so the pad as last written may be in an
    * earlier message: `edit_scratchpad`'s not-found refusal says so. The
-   * program loop's tools always do; this is the `snippet-delta` arm's.
+   * program loop's tools always do; this is the `snippet-slim` arm's.
    */
   threadContext?: boolean | undefined;
 }
@@ -581,7 +581,7 @@ const RUNNER_TOOLS = new ToolSet<ToolContext>([
 export const TOOLS: ToolDef[] = RUNNER_TOOLS.defs;
 
 /**
- * The nine as the `snippet-delta` arm serves them: the same list and
+ * The nine as the `snippet-slim` arm serves them: the same list and
  * definitions, with `edit_scratchpad`'s not-found refusal saying the pad may
  * be in an earlier message, as the program loop's does (D8).
  */

@@ -166,7 +166,7 @@ import { CompactionAsk, codexAutoCompactLimit, codexWindowCapRefusal, compaction
 import { codexUsageDelta, codexUsageRegressed, normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 import { SUBSCRIPTION_PAUSE } from "./lapse";
 import { SubscriptionUsageTracker, describeWindows, newestCredentialUsage, thresholdsOf, usageKeyOf } from "./subscription-usage";
-import { CODEX_SYSTEM_PROMPT, buildSystemPrompt, programPromptOf, snippetDeltaPromptOf } from "./prompt";
+import { CODEX_SYSTEM_PROMPT, buildSystemPrompt, programPromptOf, snippetSlimPromptOf } from "./prompt";
 import type { ToolContext } from "./tools";
 import type { EpisodicLog } from "./episodic";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
@@ -661,7 +661,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   let currentWake: string | undefined;
   /**
    * What the thread holds of the scratchpad and the event window, on the
-   * program loop and the `snippet-delta` arm (`threadContextOf`): a turn's
+   * program loop and the `snippet-slim` arm (`threadContextOf`): a turn's
    * message sends the pad whole only when the thread does not hold it as it
    * stands (D8), and only the events newer than the last one it was sent.
    * Undefined on the snippet loop, whose every message carries the whole pad
@@ -696,7 +696,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     // The registry's switch (`DriverEntry.snippetDelta`): what changed since
     // the previous snippet rides each snippet result on a driver that has it.
     snippetDelta: entryOf(config.driver).snippetDelta,
-    // The snippet-delta arm's edit_scratchpad miss says the pad may be in an earlier message (D8).
+    // The snippet-slim arm's edit_scratchpad miss says the pad may be in an earlier message (D8).
     ...(thread !== undefined && programPrompt === undefined ? { threadContext: true } : {}),
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
     ...(program !== undefined && programWake !== undefined
@@ -838,7 +838,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   // ---- files the CLI needs, all inside the run directory (absolute paths:
   // the CLI runs from a scratch temp cwd)
   const instructionsPath = resolve(o.runDir, "codex-instructions.md");
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("codex"), config.wiki, config.watchdogs.episodeMs, programPrompt, snippetDeltaPromptOf(config));
+  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("codex"), config.wiki, config.watchdogs.episodeMs, programPrompt, snippetSlimPromptOf(config));
   writeFileSync(instructionsPath, systemPrompt, "utf8");
   // The bridge by its REPOSITORY path: the CLI's sandbox gives MCP servers a
   // private /tmp, so a temp copy would not be found ("Module not found").

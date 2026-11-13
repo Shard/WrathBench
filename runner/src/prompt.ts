@@ -193,13 +193,13 @@ export const TOOLS_NOT_AMBIENT = {
  * and context sentences in it, and — with `wiki: false` — without the
  * reference tool.
  */
-function bodyFor(harness: Harness, wiki = true, program?: ProgramPrompt, snippetDelta = false): string {
+function bodyFor(harness: Harness, wiki = true, program?: ProgramPrompt, snippetSlim = false): string {
   // The wiki-on rendering is `BODY_HEAD` untouched, by construction rather
   // than by test: `wiki: false` is two exact deletions from it and nothing
   // else, so every run that has the reference surface hashes as it always did.
   // The program loop's body is built from it by exact replacements
   // (`programBodyHead`), so the same two deletions apply to it.
-  const base = program !== undefined ? programBodyHead(program) : snippetDelta ? SNIPPET_DELTA_BODY_HEAD : BODY_HEAD;
+  const base = program !== undefined ? programBodyHead(program) : snippetSlim ? SNIPPET_SLIM_BODY_HEAD : BODY_HEAD;
   const head = wiki
     ? base
     : base.replace(WIKI_TOOL_BULLET, "").replace(TOOLS_NOT_AMBIENT.withWiki, TOOLS_NOT_AMBIENT.withoutWiki);
@@ -305,23 +305,23 @@ function programBodyHead(program: ProgramPrompt): string {
   return programReplacements(program).reduce((text, [from, to]) => replaceExactly(text, from, to), BODY_HEAD);
 }
 
-// ------------------------------------------------------- snippet-delta arm
+// ------------------------------------------------------- snippet-slim arm
 
 /**
- * Whether a run renders the `snippet-delta` arm's body (`loop:
- * "snippet-delta"`, operator 2026-11-13): the snippet loop under a scaffold's
+ * Whether a run renders the `snippet-slim` arm's body (`loop:
+ * "snippet-slim"`, operator 2026-11-13): the snippet loop under a scaffold's
  * thread context, where a turn's message may carry a line in place of the
  * pad (D8). Its two sentences that say every turn carries the pad say what
  * the program arms' say instead, and nothing else changes. "The most recent
  * events" stays: under the rule a turn still carries the newest events, and
  * its header says how many are new.
  */
-export function snippetDeltaPromptOf(config: Pick<RunConfig, "loop">): boolean {
-  return config.loop === "snippet-delta";
+export function snippetSlimPromptOf(config: Pick<RunConfig, "loop">): boolean {
+  return config.loop === "snippet-slim";
 }
 
 /** The snippet body with the program arms' two pad sentences (`programReplacements`) in place of its own. */
-const SNIPPET_DELTA_BODY_HEAD = (
+const SNIPPET_SLIM_BODY_HEAD = (
   [
     [
       "There is no read tool: every turn's context already carries the scratchpad as last written, and inside a snippet await scratchpad.read() returns it.",
@@ -498,15 +498,15 @@ export function buildSystemPrompt(
   episodeMs: number | null = null,
   /** The program loop's prompt (`programPromptOf`); undefined is the snippet loop, this prompt as it always was. */
   program?: ProgramPrompt,
-  /** The `snippet-delta` arm's two pad sentences (`snippetDeltaPromptOf`), on the snippet loop only; false is this prompt as it always was. */
-  snippetDelta = false,
+  /** The `snippet-slim` arm's two pad sentences (`snippetSlimPromptOf`), on the snippet loop only; false is this prompt as it always was. */
+  snippetSlim = false,
 ): string {
   const steered = objective !== undefined && objective.trim().length > 0;
   const parts = program === undefined ? [steered ? WORLD_SECTION : GOAL_SECTION] : [steered ? PROGRAM_WORLD_SECTION : PROGRAM_GOAL_SECTION];
   const tier = steered && episode === "probing" ? probingClockSentence(episodeMs) : episodeSection(episode);
   if (tier !== undefined) parts.push(tier);
   if (steered) parts.push(objectiveSection(objective.trim()));
-  parts.push(bodyFor(harness, wiki, program, snippetDelta));
+  parts.push(bodyFor(harness, wiki, program, snippetSlim));
   return parts.join("\n\n");
 }
 

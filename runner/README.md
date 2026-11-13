@@ -1308,7 +1308,7 @@ watchdog verdict.
 
 A codex thread keeps what it was sent, so its turn messages follow a thread
 context (`ThreadContext`, `threadContextOf`): on the program loop and on the
-`--loop snippet-delta` arm, never the released snippet loop or the fixed loop.
+`--loop snippet-slim` arm, never the released snippet loop or the fixed loop.
 The scratchpad goes whole only when the thread does not already hold it as it
 stands (`PadSeen`, the spike's D8): the first message of a thread, the first
 after a compaction, and any after the pad changed outside the conversation (a
@@ -1326,7 +1326,7 @@ resumed run's thread is new, so its first message is plain. The message that
 reaches a thread the CLI moved to unannounced is the one meant for the old
 thread: the CLI names its thread only once the turn has started.
 
-`--loop snippet-delta` is the snippet loop under that context, codex only and
+`--loop snippet-slim` is the snippet loop under that context, codex only and
 refused on a scored tier and at fan-out (claude-code and pi send a fresh
 message once in a turn that runs for hours, so the rule would save nothing). Its
 prompt and its `edit_scratchpad` miss say what the program arms' say about the
@@ -1347,8 +1347,10 @@ share asleep off the `wake` records; `bun wb inspect messages` sizes each
 turn's message by part and prints the wake blocks.
 `events_served` under the rule logs the events the message showed, with
 `mode` `new` or `resent`, and `inspect messages` counts each form of the window
-and its mean size. `loop` (`program` or `snippet-delta`) and `yield` are
-config and comparability keys, absent on the snippet loop.
+and its mean size. `loop` (`program` or `snippet-slim`) and `yield` are
+config and comparability keys, absent on the snippet loop, and `context:
+"slim"` is a comparability key on every run under the thread context, absent
+on every run sent the full context.
 
 ## The sandbox
 

@@ -1844,7 +1844,7 @@ export class EventsSeen {
  * conversation already holds of the scratchpad (`PadSeen`, D8) and of the
  * event window (`EventsSeen`), so a turn's message does not repeat them. One
  * object, so every reset reaches both. Used on codex, on the program loop
- * and on the `snippet-delta` arm (`threadContextOf`, config.ts).
+ * and on the `snippet-slim` arm (`threadContextOf`, config.ts).
  */
 export class ThreadContext {
   readonly pad = new PadSeen();

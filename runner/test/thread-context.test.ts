@@ -1,6 +1,6 @@
 /**
  * A scaffold's thread context (`ThreadContext`, context.ts): on codex, the
- * program loop and the `snippet-delta` arm send a turn's message the events
+ * program loop and the `snippet-slim` arm send a turn's message the events
  * newer than the last one the thread was sent and the pad only when the
  * thread does not hold it (D8), and send both whole after the thread lost
  * them. The released snippet loop's messages, prompt and tools are its own,
@@ -16,7 +16,7 @@ import { comparabilityOf, promptHash } from "../src/comparability";
 import { loadRunConfig, programLoopRefusal, threadContextOf } from "../src/config";
 import { assembleContext, EVENTS_RESENT_NOTE, EventsSeen, eventsNewHeader, eventsPart, formatEventLine, ThreadContext } from "../src/context";
 import { EpisodicLog } from "../src/episodic";
-import { buildSystemPrompt, snippetDeltaPromptOf } from "../src/prompt";
+import { buildSystemPrompt, snippetSlimPromptOf } from "../src/prompt";
 import { configFromArgs } from "../src/run";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { callTool, TOOLS, toolsFor } from "../src/tools";
@@ -135,7 +135,7 @@ function fakeCodexHome(): string {
 const THREAD = "01a119da-ef89-7a63-ac51-314ac6a70a61";
 
 interface CodexRun {
-  loop?: "snippet-delta";
+  loop?: "snippet-slim";
   counts: number[];
   turns: number;
   /** `WB_FAKE_ROLLOUT`'s entries; absent writes none, so every read fails. */
@@ -193,9 +193,9 @@ async function codexRun(o: CodexRun) {
 
 const eventsOf = (message: string): string => messageParts(message).events;
 
-describe("the snippet-delta arm on the codex driver, through the fake CLI", () => {
+describe("the snippet-slim arm on the codex driver, through the fake CLI", () => {
   test("consecutive turns carry the window, then only the new events, then none new; the record logs what was shown", async () => {
-    const r = await codexRun({ loop: "snippet-delta", counts: [3, 5, 5, 6], turns: 4 });
+    const r = await codexRun({ loop: "snippet-slim", counts: [3, 5, 5, 6], turns: 4 });
     expect(r.messages.map(eventsOf)).toEqual([
       `[events: last 3, newest last]\n${evs(1, 3).map(formatEventLine).join("\n")}`,
       `${eventsNewHeader(2)}\n${evs(4, 5).map(formatEventLine).join("\n")}`,
@@ -214,7 +214,7 @@ describe("the snippet-delta arm on the codex driver, through the fake CLI", () =
 
   test("a compaction resets the window and the pad to whole, saying so for the events; the turn after is a delta again", async () => {
     const r = await codexRun({
-      loop: "snippet-delta",
+      loop: "snippet-slim",
       counts: [3, 4, 5, 6],
       turns: 4,
       calls: [[{ name: "write_scratchpad", arguments: { content: "# plan\nGoldshire" } }], [], [], []],
@@ -230,7 +230,7 @@ describe("the snippet-delta arm on the codex driver, through the fake CLI", () =
   }, 30_000);
 
   test("after the CLI moved to another thread the next message sends the window whole, saying so", async () => {
-    const r = await codexRun({ loop: "snippet-delta", counts: [3, 4, 5, 6], turns: 4, mode: "new-thread", rollout: [{ total: 1 }, { total: 2 }, { total: 3 }, { total: 4 }] });
+    const r = await codexRun({ loop: "snippet-slim", counts: [3, 4, 5, 6], turns: 4, mode: "new-thread", rollout: [{ total: 1 }, { total: 2 }, { total: 3 }, { total: 4 }] });
     // Every turn starts a thread of its own. The driver learns it only once the
     // turn's message is on its way (the CLI names its thread as the turn
     // starts), so that message is the delta it meant for the old thread, as
@@ -241,21 +241,21 @@ describe("the snippet-delta arm on the codex driver, through the fake CLI", () =
   }, 30_000);
 
   test("a resumed run's first message is the plain window: its thread is new, and nothing was lost from it", async () => {
-    const first = await codexRun({ loop: "snippet-delta", counts: [3, 4], turns: 2 });
+    const first = await codexRun({ loop: "snippet-slim", counts: [3, 4], turns: 2 });
     expect(eventsOf(first.messages[1]!)).toStartWith(eventsNewHeader(1));
-    const resumed = await codexRun({ loop: "snippet-delta", counts: [6, 7], turns: 2, runDir: first.runDir });
+    const resumed = await codexRun({ loop: "snippet-slim", counts: [6, 7], turns: 2, runDir: first.runDir });
     expect(eventsOf(resumed.messages[0]!)).toBe(`[events: last 6, newest last]\n${evs(1, 6).map(formatEventLine).join("\n")}`);
     expect(eventsOf(resumed.messages[1]!)).toStartWith(eventsNewHeader(1));
   }, 30_000);
 
   test("a turn whose rollout cannot be read sends the next window plainly and whole: a compaction may have gone unseen", async () => {
-    const r = await codexRun({ loop: "snippet-delta", counts: [3, 4, 5], turns: 3, rollout: null });
+    const r = await codexRun({ loop: "snippet-slim", counts: [3, 4, 5], turns: 3, rollout: null });
     expect(r.messages.map((m) => eventsForm(eventsOf(m)))).toEqual(["window", "window", "window"]);
     expect(r.messages.every((m) => !m.includes(EVENTS_RESENT_NOTE))).toBe(true);
   }, 30_000);
 
   test("the arm's prompt says the pad may be a line or earlier, its tools are the snippet loop's, and its pad miss says where the pad may be", async () => {
-    const r = await codexRun({ loop: "snippet-delta", counts: [1], turns: 1 });
+    const r = await codexRun({ loop: "snippet-slim", counts: [1], turns: 1 });
     const snippet = buildSystemPrompt(undefined, "probing", "codex", true, 5_400_000);
     const delta = String(r.rec["instructions"]);
     expect(delta).toBe(buildSystemPrompt(undefined, "probing", "codex", true, 5_400_000, undefined, true));
@@ -288,45 +288,53 @@ describe("the snippet-delta arm on the codex driver, through the fake CLI", () =
   }, 30_000);
 });
 
-describe("--loop snippet-delta: config, tuple and refusals", () => {
+describe("--loop snippet-slim: config, tuple and refusals", () => {
   const CODEX = ["--driver", "codex", "--model", "gpt-5.5", "--credential", "chatgpt-1", "--run-id", "r1", "--token", "tok-aaaaaaaaaaaaaaaaaaaaaa", "--module-url", "http://x"];
 
   test("a config and tuple key of its own, absent on the snippet loop, with its own prompt hash", () => {
     const snippet = configFromArgs(CODEX, {});
-    const delta = configFromArgs([...CODEX, "--loop", "snippet-delta"], {});
-    expect(delta.loop).toBe("snippet-delta");
-    expect(snippetDeltaPromptOf(delta)).toBe(true);
-    expect(snippetDeltaPromptOf(snippet)).toBe(false);
+    const slim = configFromArgs([...CODEX, "--loop", "snippet-slim"], {});
+    expect(slim.loop).toBe("snippet-slim");
+    expect(snippetSlimPromptOf(slim)).toBe(true);
+    expect(snippetSlimPromptOf(snippet)).toBe(false);
     const tSnippet = comparabilityOf(snippet, "harness-1.0-1-gabc");
-    const tDelta = comparabilityOf(delta, "harness-1.0-1-gabc");
+    const tSlim = comparabilityOf(slim, "harness-1.0-1-gabc");
     expect("loop" in tSnippet).toBe(false);
-    expect(tDelta.loop).toBe("snippet-delta");
-    expect(tDelta.promptHash).not.toBe(tSnippet.promptHash);
+    expect(tSlim.loop).toBe("snippet-slim");
+    expect(tSlim.context).toBe("slim");
+    expect("context" in tSnippet).toBe(false);
+    expect(Object.keys(tSlim).slice(-2)).toEqual(["loop", "context"]);
+    // The program loop on codex sends the same context; on the fixed loop the full one.
+    const program = configFromArgs([...CODEX, "--loop", "program"], {});
+    expect(comparabilityOf(program, "harness-1.0-1-gabc")).toMatchObject({ loop: "program", context: "slim" });
+    const fixed = configFromArgs(["--driver", "stub", "--run-id", "r1", "--token", "tok-aaaaaaaaaaaaaaaaaaaaaa", "--module-url", "http://x", "--loop", "program"], {});
+    expect("context" in comparabilityOf(fixed, "harness-1.0-1-gabc")).toBe(false);
+    expect(tSlim.promptHash).not.toBe(tSnippet.promptHash);
     expect(tSnippet.promptHash).toBe(promptHash(buildSystemPrompt(undefined, undefined, "codex", true, snippet.watchdogs.episodeMs)));
-    expect(loadRunConfig(JSON.parse(JSON.stringify(delta))).loop).toBe("snippet-delta");
-    expect(threadContextOf(delta)).toBe(true);
+    expect(loadRunConfig(JSON.parse(JSON.stringify(slim))).loop).toBe("snippet-slim");
+    expect(threadContextOf(slim)).toBe(true);
     expect(threadContextOf(snippet)).toBe(false);
     expect(threadContextOf({ loop: "program", driver: "codex" })).toBe(true);
     expect(threadContextOf({ loop: "program", driver: "openai" })).toBe(false);
   });
 
   test("codex only, never scored, never fan-out, and --yield is still the program loop's", () => {
-    expect(programLoopRefusal({ loop: "snippet-delta", driver: "codex", episode: "probing" })).toBeNull();
-    expect(programLoopRefusal({ loop: "snippet-delta", driver: "openai", episode: "probing" })).toContain("rebuilds its window every turn");
-    expect(programLoopRefusal({ loop: "snippet-delta", driver: "stub" })).toContain("rebuilds its window every turn");
-    expect(programLoopRefusal({ loop: "snippet-delta", driver: "claude-code" })).toContain("a turn that runs for hours");
-    expect(programLoopRefusal({ loop: "snippet-delta", driver: "pi" })).toContain("a turn that runs for hours");
-    expect(programLoopRefusal({ loop: "snippet-delta", driver: "codex", episode: "e90" })).toContain("is a scored episode");
-    expect(programLoopRefusal({ loop: "snippet-delta", driver: "codex", fanout: { maxCharacters: 2 } as never })).toContain("fan-out");
-    expect(programLoopRefusal({ loop: "snippet-delta", yield: true, driver: "codex" })).toContain("needs --loop program");
+    expect(programLoopRefusal({ loop: "snippet-slim", driver: "codex", episode: "probing" })).toBeNull();
+    expect(programLoopRefusal({ loop: "snippet-slim", driver: "openai", episode: "probing" })).toContain("rebuilds its window every turn");
+    expect(programLoopRefusal({ loop: "snippet-slim", driver: "stub" })).toContain("rebuilds its window every turn");
+    expect(programLoopRefusal({ loop: "snippet-slim", driver: "claude-code" })).toContain("a turn that runs for hours");
+    expect(programLoopRefusal({ loop: "snippet-slim", driver: "pi" })).toContain("a turn that runs for hours");
+    expect(programLoopRefusal({ loop: "snippet-slim", driver: "codex", episode: "e90" })).toContain("is a scored episode");
+    expect(programLoopRefusal({ loop: "snippet-slim", driver: "codex", fanout: { maxCharacters: 2 } as never })).toContain("fan-out");
+    expect(programLoopRefusal({ loop: "snippet-slim", yield: true, driver: "codex" })).toContain("needs --loop program");
   });
 
   test("a campaign pair refuses it off codex", () => {
     const roster: Record<string, PairRosterEntry> = { ds: { driver: "openai" }, cc: { driver: "claude-code" }, cx: { driver: "codex" }, pi: { driver: "pi" } };
-    const arms = [{ id: "snippet" }, { id: "snippet-delta", args: ["--loop", "snippet-delta"] }, { id: "program", args: ["--loop", "program"] }];
+    const arms = [{ id: "snippet" }, { id: "snippet-slim", args: ["--loop", "snippet-slim"] }, { id: "program", args: ["--loop", "program"] }];
     const c = { name: "program-probe", version: 4, arms, assignments: ["ds", "cc", "cx", "pi"].map((model) => ({ model, runsPerCell: 1 })) };
     const out = campaignPairRefusals(c, roster).map((r) => `${r.ref}:${r.arm}`);
-    expect(out.sort()).toEqual(["cc:program", "cc:snippet-delta", "ds:snippet-delta", "pi:program", "pi:snippet-delta"]);
+    expect(out.sort()).toEqual(["cc:program", "cc:snippet-slim", "ds:snippet-slim", "pi:program", "pi:snippet-slim"]);
   });
 
   test("the released snippet tool list is the one it always was", () => {
