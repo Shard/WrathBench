@@ -712,6 +712,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
                     stopped: sleepStopped,
                     queuedNotices: () => pendingNotices.length,
                     idle: watchdogs,
+                    // A tool result: in the history until a trim.
+                    kept: true,
                   });
                   // The block is this call's result, in the history: the next request does not repeat it.
                   currentWake = undefined;
@@ -844,6 +846,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           text: `Older conversation was trimmed (${dropped} message${dropped === 1 ? "" : "s"} dropped${foldNote}); your scratchpad is your memory.`,
         });
         lastCut = cut;
+        // The results that showed routine errors and values may be gone or folded: the next lines show them whole.
+        program?.forgetShown();
       }
       lastFold = fold;
       const contextText = await builder.build(turn, pendingNotices, currentWake);
@@ -1078,6 +1082,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           stopped: sleepStopped,
           queuedNotices: () => pendingNotices.length,
           idle: watchdogs,
+          // The fresh message is never kept: what it shows is not in the history after the next sleep.
+          kept: false,
         });
         currentWake = woke.block;
         continue;

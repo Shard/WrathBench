@@ -677,6 +677,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       stopped: () => done() || watchdogs.check() !== null,
       queuedNotices: () => pendingNotices.length,
       idle: watchdogs,
+      // A yield result and a turn's message alike stay in the thread.
+      kept: true,
     });
 
   // ---- MCP over loopback TCP, dispatching into the one live sandbox
@@ -1239,7 +1241,10 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
             if (typeof id === "string" && id.length > 0) {
               if (threadId !== id) {
                 // A thread other than the one the last message went to holds no pad (D8), no events, and nothing else of ours.
-                if (threadId !== undefined) thread?.reset();
+                if (threadId !== undefined) {
+                  thread?.reset();
+                  program?.forgetShown();
+                }
                 trajectory.append({ t: "codex_thread", turn, threadId: id });
                 // The supervisor's sweep keeps the rollout of the thread this names.
                 writeCodexThread(o.runDir, id);
@@ -1388,6 +1393,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       // sent: the next message sends them whole, and says so. A turn whose
       // rollout could not be read may have hidden a compaction: the next
       // message sends them whole too, claiming nothing.
+      // The routine errors and values results showed go with them.
+      if (followed.compactions.length > 0 || followed.failed === true) program?.forgetShown();
       if (followed.compactions.length > 0) thread?.reset();
       else if (followed.failed === true) thread?.forget();
       if (!resolvedModel && followed.model !== undefined) {

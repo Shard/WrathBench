@@ -51,8 +51,15 @@ export const WAKE_COALESCE_MS = 2_000;
 export const WAKE_TICK_MS = 250;
 /** Error and refusal signatures shown in one wake; past it they are counted. */
 export const WAKE_SIGNATURES_SHOWN = 8;
-/** Console lines shown in one wake. */
+/** Console entries (log calls, repeats folded) shown in one wake, at most. */
 export const WAKE_CONSOLE_SHOWN = 20;
+/**
+ * Characters of console shown in one wake, at most: one log call can print an
+ * object over many lines (a pretty-printed move result), so the entry cap
+ * alone does not hold the block's size. The newest entries that fit are
+ * shown; a newest entry longer than this alone is cut to its head.
+ */
+export const WAKE_CONSOLE_CHARS = 2_000;
 /** Pre-emptions and `wake` calls shown in one wake, each. */
 export const WAKE_EVENTS_SHOWN = 8;
 /** Wake reasons named in a wake's header; past it they are counted. */
@@ -258,6 +265,8 @@ export interface WakeView {
   signatures: ReadonlyMap<string, SignatureLine>;
   progress: WakeProgress | null;
   now: number;
+  /** The routine errors and values the model was already shown (the stack's `ProgramHost.shownDetails`): their lines refer to them. */
+  shown?: ReadonlySet<string> | undefined;
 }
 
 /** How an error or refusal signature reads in a wake. */
@@ -299,7 +308,8 @@ export function signatureLineOf(fact: ProgramFact): { signature: string; line: S
 /**
  * The [wake] block. Pure: the same view renders the same bytes, so a replay
  * of the request that carried it is byte-identical. Capped everywhere: eight
- * signatures, twenty console lines, eight of each event, no file contents.
+ * signatures, twenty console entries in at most `WAKE_CONSOLE_CHARS`, eight of
+ * each event, no file contents.
  */
 export function renderWake(v: WakeView): string {
   const why =
@@ -313,7 +323,7 @@ export function renderWake(v: WakeView): string {
   const lines: string[] = [`[wake ${v.n} · slept ${sleptWords(v.sleptMs)} · woke for: ${why}]`];
 
   // Every routine as it stands, in the stack's own words, and the stall fact.
-  lines.push(renderRoutines(v.facts.routines, v.now));
+  lines.push(renderRoutines(v.facts.routines, v.now, v.shown));
   if (!v.facts.routines.some((r) => r.state === "running")) lines.push("no routine is running");
 
   const facts = v.facts.facts;
@@ -388,11 +398,36 @@ export function renderWake(v: WakeView): string {
 
   const con = v.facts.console;
   if (con.total > 0) {
-    const tail = con.lines.slice(-WAKE_CONSOLE_SHOWN);
+    const tail = consoleTail(con.lines);
     lines.push(`program console: ${con.total.toLocaleString("en-US")} line${con.total === 1 ? "" : "s"}, last ${tail.length} shown, repeats folded`);
-    for (const l of tail) lines.push(`  [${label(l)}]${l.level === "log" || l.level === "info" ? "" : ` ${l.level}:`} ${l.text}${l.count > 1 ? ` ×${l.count}` : ""}`);
+    lines.push(...tail);
   }
   return lines.join("\n");
+}
+
+/**
+ * The console entries a wake shows, oldest first: the newest that fit in
+ * `WAKE_CONSOLE_CHARS`, at most `WAKE_CONSOLE_SHOWN`. The newest entry is
+ * always shown, cut to its head when it alone is over the cap.
+ */
+function consoleTail(entries: readonly ProgramLogLine[]): string[] {
+  const out: string[] = [];
+  let left = WAKE_CONSOLE_CHARS;
+  for (let k = entries.length - 1; k >= 0 && out.length < WAKE_CONSOLE_SHOWN; k--) {
+    const l = entries[k]!;
+    const head = `  [${label(l)}]${l.level === "log" || l.level === "info" ? "" : ` ${l.level}:`} `;
+    const tail = l.count > 1 ? ` ×${l.count}` : "";
+    if (head.length + l.text.length + tail.length <= left) {
+      out.unshift(`${head}${l.text}${tail}`);
+      left -= head.length + l.text.length + tail.length;
+      continue;
+    }
+    if (out.length > 0) break;
+    const keep = Math.max(0, left - head.length - tail.length);
+    out.unshift(`${head}${l.text.slice(0, keep)}… (${(l.text.length - keep).toLocaleString("en-US")} more chars)${tail}`);
+    break;
+  }
+  return out;
 }
 
 function namedReasons(reasons: readonly WakeReason[]): string {
@@ -432,6 +467,9 @@ export function mergeFacts(a: ProgramFacts | null, b: ProgramFacts): ProgramFact
 export interface WakeProgram {
   beat(): Promise<void>;
   drainFacts(): ProgramFacts;
+  /** The routine errors and values the model was already shown, and how a wake marks what it showed. */
+  shownDetails(): ReadonlySet<string>;
+  markShown(rows: readonly RoutineRow[]): void;
 }
 
 /** A state sample, as far as a wake reads it. */
@@ -464,6 +502,14 @@ export interface WakeSleepOptions {
   queuedNotices?: () => number;
   /** The watchdogs' idle clock, held while asleep (`Watchdogs.noteAsleep`). */
   idle?: { noteAsleep(): void; noteAwake(): void } | undefined;
+  /**
+   * Whether the block stays in the model's conversation: a `yield` result
+   * does, and so does a codex turn's message; the fixed loop's turn-end
+   * message is never kept. Only a kept block marks the routine errors and
+   * values it showed as shown, so a later line never refers to text the
+   * model no longer has.
+   */
+  kept: boolean;
 }
 
 /**
@@ -650,8 +696,10 @@ export class ProgramWake {
         signatures: this.signatures,
         progress,
         now,
+        shown: program.shownDetails(),
       }),
     );
+    if (o.kept) program.markShown(facts.routines);
     // The block itself, as the model reads it: `bun wb inspect` shows a wake from its record alone.
     this.o.trajectory.append({
       t: "wake",

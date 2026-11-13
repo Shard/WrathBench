@@ -9,7 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import type { ActionHintNote, ProgramFact, ProgramFacts, RoutineRow } from "@wrathbench/mcp";
-import { PROGRAM_EDIT_SCRATCHPAD_NOT_FOUND, Scratchpad } from "@wrathbench/mcp";
+import { PROGRAM_EDIT_SCRATCHPAD_NOT_FOUND, routineDetailKey, Scratchpad } from "@wrathbench/mcp";
 import { StubAdapter, type ChatRequest } from "../src/adapter";
 import { campaignPairRefusals, type PairRosterEntry } from "../src/campaigns";
 import { comparabilityOf, promptHash } from "../src/comparability";
@@ -32,7 +32,7 @@ import { parseRunArgs } from "../src/run-flags";
 import type { SandboxHost } from "../src/sandbox/host";
 import { callTool, coerceToolArgs, isKnownTool, toolsFor, TOOLS } from "../src/tools";
 import { readTrajectory, Trajectory } from "../src/trajectory";
-import { mergeFacts, ProgramWake, renderWake, sleepUntilWake, WAKE_CAP_MS, Waker, type WakeReason, type WakeView } from "../src/wake";
+import { mergeFacts, ProgramWake, renderWake, sleepUntilWake, WAKE_CAP_MS, WAKE_CONSOLE_CHARS, Waker, type WakeReason, type WakeView } from "../src/wake";
 import { Watchdogs } from "../src/watchdogs";
 import { LEAKED_SECRET } from "./fixtures/leaky-snippet";
 import { tempDirs } from "./fixtures/temp-dirs";
@@ -426,6 +426,30 @@ describe("renderWake", () => {
     expect(text).toContain("line 29");
   });
 
+  test("the console is capped in characters too: one log call printed over many lines cannot carry the block", () => {
+    // Sol program round 3, wake 18: seven entries, about 5.7k characters, each a pretty-printed move result.
+    const big = (k: number) => ({ ts: NOW - 10 + k, level: "log" as const, routine: "grind", text: `move ${k} {\n${"  field: value,\n".repeat(40)}}`, count: 1 });
+    const text = renderWake(view({ facts: emptyFacts({ console: { lines: [0, 1, 2, 3, 4, 5, 6].map(big), total: 7 } }) }));
+    const con = text.slice(text.indexOf("program console:"));
+    expect(con.length).toBeLessThan(WAKE_CONSOLE_CHARS + 100);
+    expect(con).toStartWith("program console: 7 lines, last 3 shown, repeats folded\n  [grind] move 4 {");
+    expect(con).toContain("move 6 {");
+    // A newest entry alone over the cap is shown cut to its head, and says so.
+    const huge = { ts: NOW, level: "warn" as const, routine: "grind", text: "x".repeat(5_000), count: 2 };
+    const cut = renderWake(view({ facts: emptyFacts({ console: { lines: [big(0), huge], total: 3 } }) }));
+    const tail = cut.slice(cut.indexOf("program console:"));
+    expect(tail).toStartWith("program console: 3 lines, last 1 shown, repeats folded\n  [grind] warn: xxx");
+    expect(tail).toMatch(/… \(3,0\d\d more chars\) ×2$/);
+    expect(tail.length).toBeLessThan(WAKE_CONSOLE_CHARS + 100);
+  });
+
+  test("a routine's error or value the model was shown before is referred to, not repeated", () => {
+    const trip = row({ name: "trip", state: "threw", startedAt: NOW - 120_000, endedAt: NOW - 60_000, error: (thrown as { routine: RoutineRow }).routine.error });
+    const done = row({ name: "scout", state: "returned", startedAt: NOW - 50_000, endedAt: NOW - 40_000, value: '{ x: 1, y: 2, view: [ "a long list" ] }' });
+    const v = view({ fired: "cap", reasons: [], facts: emptyFacts({ routines: [trip, done] }), progress: null, shown: new Set([routineDetailKey(trip)!, routineDetailKey(done)!]) });
+    expect(renderWake(v).split("\n")).toEqual(["[wake 12 · slept 4m05s · woke for: five minutes passed]", "routines:", "trip threw 1m ago: TypeError (shown before)", "scout returned 40s ago (value shown before)", "no routine is running"]);
+  });
+
   test("two drains are one span", () => {
     const a = emptyFacts({ facts: [refusal], repeats: [{ signature: "s", count: 2, ts: 1 }], console: { lines: [{ ts: 1, level: "log", routine: "r", text: "a", count: 1 }], total: 5 } });
     const b = emptyFacts({ deploy: 8, facts: [thrown], repeats: [{ signature: "s", count: 3, ts: 4 }], console: { lines: [], total: 2 } });
@@ -459,6 +483,19 @@ function fakeProgram() {
       pending = emptyFacts({ routines: out.routines });
       return out;
     },
+    shown: new Set<string>(),
+    shownDetails(): ReadonlySet<string> {
+      return new Set(this.shown);
+    },
+    markShown(rows: readonly RoutineRow[]) {
+      for (const r of rows) {
+        const k = routineDetailKey(r);
+        if (k !== undefined) this.shown.add(k);
+      }
+    },
+    setRoutines(routines: RoutineRow[]) {
+      pending = { ...pending, routines };
+    },
     readFile: () => ({ ok: true, text: "" }),
     writeFile: async () => ({ ok: true, text: "" }),
     editFile: async () => ({ ok: true, text: "" }),
@@ -483,7 +520,7 @@ describe("ProgramWake", () => {
     p.console(`token=${LEAKED_SECRET}`);
     c.schedule(40_000, () => p.push(ended(c.now()), wake));
     const idle = { asleep: 0, awake: 0, noteAsleep() { this.asleep++; }, noteAwake() { this.awake++; } };
-    const woke = await wake.sleep(p, { via: "turn-end", turn: 3, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, idle });
+    const woke = await wake.sleep(p, { via: "turn-end", turn: 3, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: false, idle });
     expect(woke.fired).toBe("routine_ended");
     expect(idle).toMatchObject({ asleep: 1, awake: 1 });
     expect(p.beats).toBe(1);
@@ -497,18 +534,32 @@ describe("ProgramWake", () => {
     expect(records.find((r) => r.t === "wake")).toMatchObject({ via: "turn-end", turn: 3, fired: "routine_ended", sleptMs: 42_000, maxMs: WAKE_CAP_MS, reasons: ["routine_ended"] });
   });
 
+  test("a wake that stays in the conversation marks the routine values it showed; a fixed-loop turn-end wake, never kept, does not", async () => {
+    const c = fakeClock();
+    const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
+    const p = fakeProgram();
+    p.setRoutines([{ name: "trip", deploy: 2, startedAt: c.now() - 5_000, endedAt: c.now(), state: "returned", value: '"done"' }]);
+    const sleep = (via: "turn-end" | "yield", kept: boolean) => wake.sleep(p, { via, turn: 1, capMs: 10_000, floorMs: 3_000, stopped: () => false, kept });
+    // The fixed loop's turn-end message is gone after the next sleep: shown whole each time.
+    expect((await sleep("turn-end", false)).block).toContain('trip returned 10s ago: "done"');
+    expect((await sleep("turn-end", false)).block).toContain('trip returned 20s ago: "done"');
+    // A yield result stays: shown whole once, referred to after.
+    expect((await sleep("yield", true)).block).toContain('trip returned 30s ago: "done"');
+    expect((await sleep("yield", true)).block).toContain("trip returned 40s ago (value shown before)");
+  });
+
   test("a fact from while the model was awake still wakes the next sleep, unless a routine tool showed it", async () => {
     const c = fakeClock();
     const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
     const p = fakeProgram();
     p.push(ended(c.now()), wake);
     c.advance(1_000);
-    const first = await wake.sleep(p, { via: "turn-end", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false });
+    const first = await wake.sleep(p, { via: "turn-end", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: false });
     expect(first).toMatchObject({ fired: "routine_ended", sleptMs: 3_000 });
     p.push(ended(c.now()), wake);
     c.advance(1_000);
     wake.routinesShown();
-    const second = await wake.sleep(p, { via: "turn-end", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false });
+    const second = await wake.sleep(p, { via: "turn-end", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: false });
     expect(second.fired).toBe("cap");
     // The end is still in the block's own lines: it was drained as the sleep began.
     expect(second.block).toContain("[wake 2 · slept 5m00s · woke for: five minutes passed]");
@@ -528,17 +579,17 @@ describe("ProgramWake", () => {
     wake.hintsDelivered([hint("path_incomplete"), hint("too_far")]);
     // Its fact arrives after the result that carried its hint: still not news.
     p.push(late, wake);
-    const first = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false });
+    const first = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
     expect(first.fired).toBe("cap");
     // The signatures are still the wake's to show.
     expect(first.block).toContain("path_incomplete");
     c.schedule(30_000, () => p.push(refusal(c.now(), "no_path"), wake));
-    const second = await wake.sleep(p, { via: "yield", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false });
+    const second = await wake.sleep(p, { via: "yield", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
     expect(second.fired).toBe("refusal");
     // After a load, a delivered signature's first refusal on the new code is news again.
     p.push({ kind: "loaded", ts: c.now(), deploy: 7, routines: ["grind"], restarted: ["grind"], dropped: [], by: "save" }, wake);
     c.schedule(30_000, () => p.push(refusal(c.now(), "too_far"), wake));
-    const third = await wake.sleep(p, { via: "yield", turn: 3, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false });
+    const third = await wake.sleep(p, { via: "yield", turn: 3, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
     expect(third.fired).toBe("refusal");
   });
 
@@ -552,7 +603,7 @@ describe("ProgramWake", () => {
     wake.hintsDelivered([{ action: "moveTo", status: "too_far", count: 1, hint: "h", ts: c.now(), routine: "grind" }]);
     c.advance(1);
     p.push(refusal(c.now(), "drop"), wake);
-    const woke = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false });
+    const woke = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
     expect(woke.fired).toBe("refusal");
     expect(woke.block).toContain("new refusal (grind: moveTo drop)");
     expect(woke.block).not.toContain("new refusal (grind: moveTo too_far)");
@@ -574,7 +625,7 @@ describe("ProgramWake", () => {
       // Replaced by a newer run since its call.
       row({ name: "work", state: "running", startedAt: c.now() - 100 }),
     ]);
-    const woke = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false });
+    const woke = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
     expect(woke.fired).toBe("wake");
     expect(woke.block).toContain('woke for: wake("bags full") from grind]');
     // The calls themselves are still the wake's to list.
@@ -592,11 +643,11 @@ describe("ProgramWake", () => {
     wake.onDeath(c.now());
     c.advance(1_000);
     wake.hintsDelivered([{ action: "moveTo", status: "dead", count: 8, hint: "you are dead", ts: c.now(), routine: "work" }]);
-    const first = await wake.sleep(p, { via: "turn-end", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false });
+    const first = await wake.sleep(p, { via: "turn-end", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: false });
     expect(first.fired).toBe("cap");
     // A later death, told of by no hint, wakes.
     c.schedule(10_000, () => wake.onDeath(c.now()));
-    const second = await wake.sleep(p, { via: "turn-end", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false });
+    const second = await wake.sleep(p, { via: "turn-end", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: false });
     expect(second.fired).toBe("died");
   });
 
@@ -608,9 +659,9 @@ describe("ProgramWake", () => {
     wake.shown();
     wake.onSample({ observation: { connected: true } });
     c.schedule(30_000, () => wake.onSample({ observation: { connected: false } }));
-    expect((await wake.sleep(p, { via: "turn-end", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false })).fired).toBe("stream_closed");
+    expect((await wake.sleep(p, { via: "turn-end", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: false })).fired).toBe("stream_closed");
     c.schedule(30_000, () => wake.onDeath(c.now()));
-    expect((await wake.sleep(p, { via: "yield", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false })).fired).toBe("died");
+    expect((await wake.sleep(p, { via: "yield", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true })).fired).toBe("died");
   });
 
   test("a restart the program is blamed for is counted once, for snippet-runaway", () => {

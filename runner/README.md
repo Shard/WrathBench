@@ -1287,7 +1287,15 @@ way inside a turn, whose result is the wake. What a wake shows is facts only,
 rendered by a pure function (`renderWake`) and scrubbed of the run's secrets:
 every routine as it stands, new errors with the model's own file lines,
 refusals with their hints, moves that replaced one another, `wake` calls, what
-changed for the character, and the routines' last console lines. After a
+changed for the character, and the routines' last console entries (at most
+20, in at most 2,000 characters, since one log call can print an object over
+many lines). A routine's error or returned value is shown whole once; a later
+routine line refers to it (`(value shown before)`). The stack's program host
+keeps that ledger for its own tool results and the wake alike; a wake marks
+what it showed only when its block stays in the conversation (a `yield`
+result, a codex turn's message, not the fixed loop's turn-end message), and
+the ledger is cleared when the conversation lost it (a codex compaction or
+thread change, a fixed-loop trim) and in a new process. After a
 turn-end sleep it opens every request of that wake, right after `[turn N]`;
 after a `yield` it is the tool's result and is not repeated. What the model
 has already been told wakes no later sleep, and still shows in the next wake:
