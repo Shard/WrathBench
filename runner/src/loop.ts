@@ -11,6 +11,7 @@ import {
   CONTEXT_POLICY,
   assembleContext,
   eventWindow,
+  eventsPart,
   formatStateSummary,
   messageWindow,
   messageWindowCut,
@@ -18,7 +19,7 @@ import {
   trimExpected,
   type ChatMessage,
   type HistoryMessage,
-  type PadSeen,
+  type ThreadContext,
   type SnapshotLike,
 } from "./context";
 import { REFLECT_BREAKER_NOTICE, ReflectGate, restingOf, taxiFlightOf } from "./reflect";
@@ -482,7 +483,7 @@ export class ContextBuilder {
    * `events_served` trajectory record as a side effect, exactly as the loop
    * did before this was extracted.
    */
-  async build(turn: number, pendingNotices: HarnessNotice[], wake?: string, padSeen?: PadSeen): Promise<string> {
+  async build(turn: number, pendingNotices: HarnessNotice[], wake?: string, thread?: ThreadContext): Promise<string> {
     this.noteTurn(turn);
     const snap = await this.sampleState();
     // The reflection window's per-turn bookkeeping, in the one hook both
@@ -519,9 +520,14 @@ export class ContextBuilder {
       // sandbox mid-restart: an empty window is honest
     }
     const { window: events, folded } = eventWindow(fetched.events, fetched.folded);
-    // A scaffold's program loop sends the pad only when its thread does not hold it as it is (`PadSeen`, D8).
+    // A scaffold's thread context (`ThreadContext`): the pad only when the
+    // thread does not hold it as it is (D8), and only the events newer than
+    // the last one it was sent.
     const scratchpad = this.o.scratchpad.read();
-    const padUnchanged = padSeen !== undefined && !padSeen.sendWhole(scratchpad);
+    const padUnchanged = thread !== undefined && !thread.pad.sendWhole(scratchpad);
+    const eventsHeld = thread?.events.held();
+    const shownEvents = eventsPart(events, folded, eventsHeld);
+    thread?.events.carried(shownEvents.shown);
     // Scrubbed of the run's registered secrets as a whole, after the pure
     // assembly: a notice (the crash notice's stderr tail), a chat line or an
     // event a snippet's text came back in, and the scratchpad all reach the
@@ -541,17 +547,20 @@ export class ContextBuilder {
         turn,
         ...(wake !== undefined ? { wake } : {}),
         ...(padUnchanged ? { scratchpadUnchanged: true } : {}),
+        ...(eventsHeld !== undefined ? { eventsHeld } : {}),
       }),
     );
     // What the model was shown, and how many ambient events the span folded —
     // the same shape the recent_events tool logs. The ambient packets
     // themselves were never shown; logging them was most of the file.
+    // Under a thread context, the events it showed: the new ones alone (`mode: "new"`), or the window resent.
     this.o.trajectory.append({
       t: "events_served",
       via: "context",
-      count: events.length,
-      events,
-      ...(folded > 0 ? { folded } : {}),
+      count: shownEvents.shown.length,
+      events: shownEvents.shown,
+      ...(folded > 0 && shownEvents.mode !== "new" ? { folded } : {}),
+      ...(shownEvents.mode !== "window" ? { mode: shownEvents.mode } : {}),
     });
     return contextText;
   }

@@ -85,7 +85,7 @@ describe("config, flags and the tuple", () => {
     expect(refused(["--driver", "claude-code", "--loop", "program"])).toContain("runs a CLI's own turn loop");
     expect(refused(["--driver", "stub", "--loop", "program", "--episode", "e90"])).toContain("is a scored episode");
     expect(refused(["--driver", "stub", "--loop", "program", "--max-characters", "2", "--accounts", "ALPHA,BRAVO", "--episode", "freeplay"])).toMatch(/drives one character|fan-out/);
-    expect(refused(["--driver", "stub", "--loop", "nope"])).toContain("--loop takes program or snippet");
+    expect(refused(["--driver", "stub", "--loop", "nope"])).toContain("--loop takes program, snippet-delta or snippet");
     expect(programLoopRefusal({ loop: "program", driver: "stub", episode: "freeplay", continuedFrom: "r0" })).toContain("--continue-from");
     expect(programLoopRefusal({ loop: "program", driver: "openai", episode: "probing" })).toBeNull();
     // codex runs it (its turn-end pause is the sleep); pi and claude-code, whose one turn runs for hours, do not yet.

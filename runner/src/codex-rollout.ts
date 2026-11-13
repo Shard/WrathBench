@@ -448,6 +448,12 @@ export interface CodexRolloutRead {
   rateLimits: UsageWindow[] | undefined;
   /** The model the thread's newest `turn_context` names. */
   model: string | undefined;
+  /**
+   * The rollout could not be read this time, so a compaction may have gone
+   * unseen: a thread context (`ThreadContext`) no longer trusts what it
+   * thinks the thread holds. Absent on a read that worked.
+   */
+  failed?: true;
 }
 
 /** How much of the rollout one read step takes. */
@@ -529,7 +535,7 @@ export class CodexRolloutFollower {
         // a log line never costs a turn
       }
     }
-    return { compactions: [], context: undefined, rateLimits: undefined, model: undefined };
+    return { compactions: [], context: undefined, rateLimits: undefined, model: undefined, failed: true };
   }
 }
 

@@ -155,10 +155,10 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 import { MCP_SERVER_NAME, toolCallLimitReached } from "./adapter-claude";
 import { MessageQueue, cliBaseEnv, readLines, signalGroup } from "./adapter-shared";
-import { DEFAULT_CODEX_HOME_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
+import { DEFAULT_CODEX_HOME_ENV, harnessOf, threadContextOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { entryOf } from "./drivers";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
-import { PadSeen } from "./context";
+import { ThreadContext } from "./context";
 import { MCP_BRIDGE_PATH } from "@wrathbench/mcp/paths";
 import { McpServer } from "./mcp";
 import { CodexLastCallReader, CodexRolloutFollower, deleteCodexThread, removeThreadRollouts, writeCodexThread, type CodexCompaction } from "./codex-rollout";
@@ -166,7 +166,7 @@ import { CompactionAsk, codexAutoCompactLimit, codexWindowCapRefusal, compaction
 import { codexUsageDelta, codexUsageRegressed, normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 import { SUBSCRIPTION_PAUSE } from "./lapse";
 import { SubscriptionUsageTracker, describeWindows, newestCredentialUsage, thresholdsOf, usageKeyOf } from "./subscription-usage";
-import { CODEX_SYSTEM_PROMPT, buildSystemPrompt, programPromptOf } from "./prompt";
+import { CODEX_SYSTEM_PROMPT, buildSystemPrompt, programPromptOf, snippetDeltaPromptOf } from "./prompt";
 import type { ToolContext } from "./tools";
 import type { EpisodicLog } from "./episodic";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
@@ -660,12 +660,14 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   /** The last turn-end wake's block, for the next turn's message only. */
   let currentWake: string | undefined;
   /**
-   * What the thread holds of the scratchpad, on the program loop (D8): a
-   * turn's message sends the pad whole only when the thread does not hold
-   * it as it stands. Undefined on the snippet loop, whose every message
-   * carries the whole pad as it always has.
+   * What the thread holds of the scratchpad and the event window, on the
+   * program loop and the `snippet-delta` arm (`threadContextOf`): a turn's
+   * message sends the pad whole only when the thread does not hold it as it
+   * stands (D8), and only the events newer than the last one it was sent.
+   * Undefined on the snippet loop, whose every message carries the whole pad
+   * and the whole window as it always has.
    */
-  const padSeen = programPrompt !== undefined ? new PadSeen() : undefined;
+  const thread = threadContextOf(config) ? new ThreadContext() : undefined;
   const sleepFor = (via: "turn-end" | "yield", capMs: number) =>
     programWake!.sleep(program!, {
       via,
@@ -694,6 +696,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     // The registry's switch (`DriverEntry.snippetDelta`): what changed since
     // the previous snippet rides each snippet result on a driver that has it.
     snippetDelta: entryOf(config.driver).snippetDelta,
+    // The snippet-delta arm's edit_scratchpad miss says the pad may be in an earlier message (D8).
+    ...(thread !== undefined && programPrompt === undefined ? { threadContext: true } : {}),
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
     ...(program !== undefined && programWake !== undefined
       ? {
@@ -745,10 +749,10 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       // call ran, so `dispatchTs` carries when it started.
       const short = name.replace(`mcp__${MCP_SERVER_NAME}__`, "").replace(`mcp__${MCP_SERVER_NAME}.`, "");
       // The model's own pad tools leave a pad the thread holds (`PadSeen`).
-      if (padSeen !== undefined && result.isError !== true) {
+      if (thread !== undefined && result.isError !== true) {
         const a = args as { content?: unknown; old?: unknown; new?: unknown; replaceAll?: unknown };
-        if (short === "write_scratchpad" && typeof a.content === "string") padSeen.wrote(a.content, o.scratchpad.read());
-        else if (short === "edit_scratchpad" && typeof a.old === "string" && typeof a.new === "string") padSeen.edited(a.old, a.new, a.replaceAll === true, o.scratchpad.read());
+        if (short === "write_scratchpad" && typeof a.content === "string") thread.pad.wrote(a.content, o.scratchpad.read());
+        else if (short === "edit_scratchpad" && typeof a.old === "string" && typeof a.new === "string") thread.pad.edited(a.old, a.new, a.replaceAll === true, o.scratchpad.read());
       }
       trajectory.append({ t: "tool_call", turn, call: toolCalls, name: short, args, dispatchTs });
       if (short === "run_snippet") {
@@ -834,7 +838,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   // ---- files the CLI needs, all inside the run directory (absolute paths:
   // the CLI runs from a scratch temp cwd)
   const instructionsPath = resolve(o.runDir, "codex-instructions.md");
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("codex"), config.wiki, config.watchdogs.episodeMs, programPrompt);
+  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("codex"), config.wiki, config.watchdogs.episodeMs, programPrompt, snippetDeltaPromptOf(config));
   writeFileSync(instructionsPath, systemPrompt, "utf8");
   // The bridge by its REPOSITORY path: the CLI's sandbox gives MCP servers a
   // private /tmp, so a temp copy would not be found ("Module not found").
@@ -1152,7 +1156,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       if (programWake !== undefined) for (let k = programWake.takeBlamedRestarts(); k > 0; k--) watchdogs.noteSandboxRestart();
 
       turn++;
-      const contextText = await builder.build(turn, pendingNotices, currentWake, padSeen);
+      const contextText = await builder.build(turn, pendingNotices, currentWake, thread);
       currentWake = undefined;
       // What this context shows (the HUD, the notices) is no longer a reason to wake.
       programWake?.shown();
@@ -1234,8 +1238,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
             const id = msg["thread_id"];
             if (typeof id === "string" && id.length > 0) {
               if (threadId !== id) {
-                // A thread other than the one the last message went to holds no pad (D8), and nothing else of ours.
-                if (threadId !== undefined) padSeen?.reset();
+                // A thread other than the one the last message went to holds no pad (D8), no events, and nothing else of ours.
+                if (threadId !== undefined) thread?.reset();
                 trajectory.append({ t: "codex_thread", turn, threadId: id });
                 // The supervisor's sweep keeps the rollout of the thread this names.
                 writeCodexThread(o.runDir, id);
@@ -1380,8 +1384,12 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       // The process has exited, so the rollout holds every line of this turn.
       const followed = rollout.read(threadId);
       for (const c of followed.compactions) trajectory.append(codexCompactionRecord(turn, c));
-      // A compacted thread no longer holds the pad as it was sent (D8): the next message sends it whole.
-      if (followed.compactions.length > 0) padSeen?.reset();
+      // A compacted thread no longer holds the pad or the events as they were
+      // sent: the next message sends them whole, and says so. A turn whose
+      // rollout could not be read may have hidden a compaction: the next
+      // message sends them whole too, claiming nothing.
+      if (followed.compactions.length > 0) thread?.reset();
+      else if (followed.failed === true) thread?.forget();
       if (!resolvedModel && followed.model !== undefined) {
         resolvedModel = true;
         trajectory.recordResolved(runId, { model: followed.model, cliVersion: version });

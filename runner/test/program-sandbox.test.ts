@@ -187,7 +187,14 @@ async function codexProgramRun(calls: unknown[][], o: { maxTurns?: number; idleM
     watchdogs: new Watchdogs({ ...config.watchdogs, ...(o.idleMs !== undefined ? { idleMs: o.idleMs } : {}) }),
     codexBin: fakeCodexBin(),
     env: { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "/tmp", CODEX_HOME: fakeCodexHome() },
-    extraEnv: { WB_FAKE_MODE: "tools", WB_FAKE_RECORD: record, WB_FAKE_CALLS: JSON.stringify(calls) },
+    // A thread whose rollout the CLI writes, as the real one does: the thread context trusts only a turn it could read.
+    extraEnv: {
+      WB_FAKE_MODE: "tools",
+      WB_FAKE_RECORD: record,
+      WB_FAKE_CALLS: JSON.stringify(calls),
+      WB_FAKE_THREAD_ID: "01a119da-ef89-7a63-ac51-314ac6a70a60",
+      WB_FAKE_ROLLOUT: JSON.stringify(calls.map((_, i) => ({ total: 10_000 * (i + 1) }))),
+    },
     killGraceMs: 500,
     programWake: wake,
     ...(o.signal !== undefined ? { signal: o.signal } : {}),

@@ -133,6 +133,13 @@ export interface ToolContext extends CoreToolContext {
   yieldWake?: ((seconds: number) => Promise<string>) | undefined;
   /** Called after a routine tool answered: its routine lines are the model's news of every routine's state. */
   onRoutinesShown?: (() => void) | undefined;
+  /**
+   * The run's turn messages follow a scaffold's thread context
+   * (`threadContextOf`, config.ts), so the pad as last written may be in an
+   * earlier message: `edit_scratchpad`'s not-found refusal says so. The
+   * program loop's tools always do; this is the `snippet-delta` arm's.
+   */
+  threadContext?: boolean | undefined;
 }
 
 /**
@@ -574,6 +581,23 @@ const RUNNER_TOOLS = new ToolSet<ToolContext>([
 export const TOOLS: ToolDef[] = RUNNER_TOOLS.defs;
 
 /**
+ * The nine as the `snippet-delta` arm serves them: the same list and
+ * definitions, with `edit_scratchpad`'s not-found refusal saying the pad may
+ * be in an earlier message, as the program loop's does (D8).
+ */
+const RUNNER_THREAD_TOOLS = new ToolSet<ToolContext>([
+  CORE.run_snippet,
+  CORE.recent_events,
+  CORE.state_summary,
+  searchReferenceTool,
+  CORE.write_scratchpad,
+  programEditScratchpad(CORE.edit_scratchpad),
+  reflectTool,
+  logStatusTool,
+  readLogTool,
+]);
+
+/**
  * A tool context of a fan-out run (`fanout-run.ts`): the same context, with
  * the run's roster where the stack's fan-out tools read it.
  */
@@ -625,7 +649,8 @@ function toolSetOf(ctx: ToolContext): { set: ToolSet<ToolContext>; ctx: ToolCont
   const program = ctx.program !== undefined ? programSet({ yield: ctx.yieldWake !== undefined }) : null;
   if (program !== null) return { set: program, ctx };
   const fan = fanoutContext(ctx);
-  return fan !== null ? { set: RUNNER_FANOUT_TOOLS as unknown as ToolSet<ToolContext>, ctx: fan } : { set: RUNNER_TOOLS, ctx };
+  if (fan !== null) return { set: RUNNER_FANOUT_TOOLS as unknown as ToolSet<ToolContext>, ctx: fan };
+  return { set: ctx.threadContext === true ? RUNNER_THREAD_TOOLS : RUNNER_TOOLS, ctx };
 }
 
 /**

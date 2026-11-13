@@ -760,8 +760,15 @@ export const runConfigSchema = z.object({
    * every config and tuple stamped before the field existed reads the same.
    * The fixed loop and codex only, never a scored tier, never fan-out
    * (`programLoopRefusal`). Identity: a resume keeps it.
+   *
+   * `snippet-delta` is the snippet loop under a scaffold's thread context
+   * (`threadContextOf`, operator 2026-11-13, a probe arm of the same spike):
+   * a turn's message carries the scratchpad only when the thread does not
+   * hold it as it stands (D8) and only the events newer than the last one
+   * the thread was sent, with the prompt's two pad sentences saying so. It
+   * separates that context saving from the program loop's. Codex only.
    */
-  loop: z.literal("program").optional(),
+  loop: z.enum(["program", "snippet-delta"]).optional(),
   /**
    * The program loop's `yield` tool (`--yield true`): a call held open until
    * a wake, whose result is the wake. Absent when off; only with
@@ -1021,7 +1028,10 @@ export function runsProgramLoop(driver: Driver): boolean {
  * of the program loop and means nothing without it.
  */
 export function programLoopRefusal(c: Pick<RunConfig, "loop" | "yield" | "driver" | "episode" | "fanout" | "continuedFrom">): string | null {
-  if (c.loop === undefined) return c.yield === true ? "--yield is a setting of the program loop; it needs --loop program" : null;
+  if (c.loop !== "program") {
+    if (c.yield === true) return "--yield is a setting of the program loop; it needs --loop program";
+    return c.loop === "snippet-delta" ? snippetDeltaRefusal({ ...c, loop: c.loop }) : null;
+  }
   const entry = entryOf(c.driver);
   if (!runsProgramLoop(c.driver)) return `--loop program runs on the fixed loop and codex; the ${c.driver} driver runs a CLI's own turn loop`;
   if (entry.route === true) return `--loop program drives a model; the ${c.driver} driver plays a scripted route`;
@@ -1031,11 +1041,47 @@ export function programLoopRefusal(c: Pick<RunConfig, "loop" | "yield" | "driver
   return null;
 }
 
-/** `--loop`: `program`, or `snippet`, which is the default and stated as absent. */
-export function loopOf(v: string | boolean | undefined): "program" | undefined {
+/**
+ * Whether a driver keeps a scaffold's thread context (`ThreadContext`,
+ * context.ts): a scaffold whose CLI ends a turn every few calls, so a fresh
+ * message with the HUD, the events and the pad goes to the same thread many
+ * times a run. That is codex (`DriverEntry.programLoop`). claude-code and pi
+ * run one turn for hours, so a fresh message comes once or twice a run and
+ * the rule would save nothing; the fixed loop rebuilds its window each turn
+ * and holds no thread.
+ */
+export function keepsThreadContext(driver: Driver): boolean {
+  const entry = entryOf(driver);
+  return entry.kind === "scaffold" && entry.programLoop === true;
+}
+
+/**
+ * Whether a run's turn messages follow a scaffold's thread context: the
+ * program loop and the `snippet-delta` arm, on a driver that keeps one
+ * (`keepsThreadContext`). Never the fixed loop, never the released snippet
+ * loop.
+ */
+export function threadContextOf(c: Pick<RunConfig, "loop" | "driver">): boolean {
+  return c.loop !== undefined && keepsThreadContext(c.driver);
+}
+
+/** Why `--loop snippet-delta` cannot run as stated, or null: codex only, never a scored tier, never fan-out. */
+function snippetDeltaRefusal(c: Pick<RunConfig, "driver" | "episode" | "fanout"> & { loop: "snippet-delta" }): string | null {
+  if (!keepsThreadContext(c.driver)) {
+    return entryOf(c.driver).kind === "loop"
+      ? `--loop snippet-delta is a scaffold thread's context rule, which runs on codex; the ${c.driver} driver rebuilds its window every turn`
+      : `--loop snippet-delta is a scaffold thread's context rule, which runs on codex; the ${c.driver} driver sends a fresh message once in a turn that runs for hours`;
+  }
+  if (c.episode !== undefined && isScoredEpisode(c.episode)) return `--loop snippet-delta is a probe arm's; --episode ${c.episode} is a scored episode, which runs the snippet loop as released`;
+  if (c.fanout !== undefined) return "--loop snippet-delta drives one character; a fan-out run's turn carries no event window";
+  return null;
+}
+
+/** `--loop`: `program`, `snippet-delta`, or `snippet`, which is the default and stated as absent. */
+export function loopOf(v: string | boolean | undefined): "program" | "snippet-delta" | undefined {
   if (v === undefined || v === "snippet") return undefined;
-  if (v === "program") return "program";
-  throw new Error(`--loop takes program or snippet, got ${JSON.stringify(v)}`);
+  if (v === "program" || v === "snippet-delta") return v;
+  throw new Error(`--loop takes program, snippet-delta or snippet, got ${JSON.stringify(v)}`);
 }
 
 /**

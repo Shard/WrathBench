@@ -36,7 +36,7 @@
 
 import { isEndReason } from "./end-conditions";
 import { z } from "zod";
-import { DEFAULT_DRIVER, driverHasCompactWindow, runsProgramLoop } from "./config";
+import { DEFAULT_DRIVER, driverHasCompactWindow, keepsThreadContext, runsProgramLoop } from "./config";
 import { entryOf, isDriver } from "./drivers";
 import type { RunPodsMode } from "./models";
 import {
@@ -281,6 +281,13 @@ export function campaignPairRefusals(
         else if (arm.agents === 1) reasons.push(`arm ${arm.id} sets --loop program, which drives one character, and is one agent driving the whole party`);
       } else if (yieldOn !== undefined && yieldOn !== "false") {
         reasons.push(`arm ${arm.id} sets --yield, which is a setting of the program loop, without --loop program`);
+      }
+      // `--loop snippet-delta` is a scaffold thread's context rule, kept on
+      // codex alone (`keepsThreadContext`), and drives one character.
+      if (loop === "snippet-delta") {
+        const d = entry.driver ?? DEFAULT_DRIVER;
+        if (!isDriver(d) || !keepsThreadContext(d)) reasons.push(`arm ${arm.id} sets --loop snippet-delta, and ${a.model} runs on the ${d} driver, which keeps no scaffold thread's context (codex only)`);
+        else if (arm.agents === 1) reasons.push(`arm ${arm.id} sets --loop snippet-delta, which drives one character, and is one agent driving the whole party`);
       }
       // A one-agent arm is a fan-out run, which a route driver refuses at launch.
       const driver = entry.driver ?? DEFAULT_DRIVER;

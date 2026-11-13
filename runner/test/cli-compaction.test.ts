@@ -359,8 +359,8 @@ describe("codex rollout compactions", () => {
   test("the follower fails quietly, once, and starts over on a new thread", () => {
     const failures: string[] = [];
     const none = new CodexRolloutFollower(undefined, (r) => failures.push(r));
-    expect(none.read(THREAD)).toEqual({ compactions: [], context: undefined, rateLimits: undefined, model: undefined });
-    expect(none.read(THREAD)).toEqual({ compactions: [], context: undefined, rateLimits: undefined, model: undefined });
+    expect(none.read(THREAD)).toEqual({ compactions: [], context: undefined, rateLimits: undefined, model: undefined, failed: true });
+    expect(none.read(THREAD)).toEqual({ compactions: [], context: undefined, rateLimits: undefined, model: undefined, failed: true });
     expect(failures).toEqual(["no CODEX_HOME"]);
     const { home, path } = rolloutHome();
     const missing = new CodexRolloutFollower(home, (r) => failures.push(r));

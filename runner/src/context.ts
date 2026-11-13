@@ -1375,6 +1375,80 @@ export interface ContextInputs {
    * run always has.
    */
   scratchpadUnchanged?: boolean | undefined;
+  /**
+   * What the conversation already holds of the event window (`EventsSeen`,
+   * a scaffold's thread context): the window renders only the events after
+   * the last one the thread was sent, or whole with a line saying the
+   * conversation lost the earlier ones. Absent renders the window as every
+   * other run always has.
+   */
+  eventsHeld?: EventsHeld | undefined;
+}
+
+/**
+ * What a scaffold's thread holds of the event window, for the next message
+ * (`EventsSeen.held`): `through` names the last event it was sent, by
+ * `eventKey`; `lost` is a thread that was sent events and no longer holds
+ * them (the CLI compacted it, or moved to another thread).
+ */
+export type EventsHeld = { kind: "through"; last: string } | { kind: "lost" };
+
+/**
+ * An event's identity, for finding the last one a thread was sent in a later
+ * window. Not the seq alone: a `stream_gap` carries the next real event's
+ * seq, and the module restarts its counter when it recreates the session.
+ */
+export function eventKey(e: EventSummary): string {
+  return `${e.seq}:${e.ts}:${e.opcode}`;
+}
+
+/**
+ * The event window's header when the thread holds the events before the
+ * ones it shows (`EventsHeld`, `through`): how many are new, and where the
+ * rest are. No ambient count: the window's folded count spans the whole
+ * window, not the new part.
+ */
+export function eventsNewHeader(count: number): string {
+  return `[events: ${count === 0 ? "none" : count} new since your last message; earlier ones are above in this conversation]`;
+}
+
+/** The note a whole window after a lost thread carries in its header (`EventsHeld`, `lost`). */
+export const EVENTS_RESENT_NOTE = "sent in full again: this conversation no longer holds the earlier ones";
+
+/**
+ * The event window as a message renders it: its text, the events it shows,
+ * and which form it took. `window` is the plain header over the last
+ * EVENT_WINDOW; `new` is the events after the last one the thread holds,
+ * when it is in the window (when it is not, every event in the window is new
+ * and some never reached the thread, so the plain window is what is true);
+ * `resent` is the whole window after the thread lost it. Pure.
+ */
+export function eventsPart(
+  events: readonly EventSummary[],
+  folded = 0,
+  held?: EventsHeld,
+): { text: string; shown: EventSummary[]; mode: "window" | "new" | "resent" } {
+  const { window, folded: excluded } = eventWindow(events, folded);
+  if (held?.kind === "through") {
+    const at = window.findIndex((e) => eventKey(e) === held.last);
+    if (at >= 0) {
+      const fresh = window.slice(at + 1);
+      return { text: [eventsNewHeader(fresh.length), ...fresh.map(formatEventLine)].join("\n"), shown: fresh, mode: "new" };
+    }
+  }
+  if (events.length === 0 && excluded === 0) return { text: "[events]\nnone yet", shown: [], mode: "window" };
+  if (window.length === 0) {
+    // Everything fetched was ambient: say so, rather than "none yet" over a
+    // stream that is plainly running.
+    return { text: `[events]\nno non-ambient events; ${excluded} ambient movement and party-frame events folded into state only`, shown: [], mode: "window" };
+  }
+  const note = excluded > 0 ? `; ${excluded} ambient movement and party-frame events folded into state only` : "";
+  const resent = held?.kind === "lost";
+  return {
+    text: `[events: last ${window.length}, newest last${resent ? `, ${EVENTS_RESENT_NOTE}` : ""}${note}]\n${window.map(formatEventLine).join("\n")}`,
+    shown: window,
+    mode: resent ? "resent" : "window",
+  };
 }
 
 /**
@@ -1650,19 +1724,7 @@ export function assembleContext(inputs: ContextInputs): string {
 
   parts.push(inputs.stateSummary);
 
-  const { window, folded: excluded } = eventWindow(inputs.events, inputs.folded ?? 0);
-  if (inputs.events.length === 0 && excluded === 0) {
-    parts.push("[events]\nnone yet");
-  } else if (window.length === 0) {
-    // Everything fetched was ambient: say so, rather than "none yet" over a
-    // stream that is plainly running.
-    parts.push(`[events]\nno non-ambient events; ${excluded} ambient movement and party-frame events folded into state only`);
-  } else {
-    const note = excluded > 0 ? `; ${excluded} ambient movement and party-frame events folded into state only` : "";
-    parts.push(
-      `[events: last ${window.length}, newest last${note}]\n${window.map(formatEventLine).join("\n")}`,
-    );
-  }
+  parts.push(eventsPart(inputs.events, inputs.folded ?? 0, inputs.eventsHeld).text);
 
   // The size against the cap, every turn: a write past the cap is refused
   // (scratchpad.ts), and a model should see the wall before it walks into it.
@@ -1731,6 +1793,73 @@ export class PadSeen {
     const at = k.indexOf(old);
     const next = at < 0 ? undefined : replaceAll ? k.split(old).join(replacement) : k.slice(0, at) + replacement + k.slice(at + old.length);
     this.known = next === now ? now : undefined;
+  }
+}
+
+/**
+ * What a scaffold's conversation holds of the event window (operator
+ * 2026-11-13): a message carries only the events newer than the last one the
+ * thread was sent (`eventsPart`, `new`). The first message of a thread
+ * carries the window as every run does; after the thread lost what it held
+ * (`reset`: a compaction, another thread) the next carries it whole again,
+ * saying why. The fixed loop never uses this: its window is not a thread.
+ */
+export class EventsSeen {
+  /** The key of the last event the thread was sent, while it holds it. */
+  private last: string | undefined;
+  /** Whether this thread has been sent a message since it started or was last reset. */
+  private sent = false;
+  /** Whether the thread held events and lost them, until the next message. */
+  private lost = false;
+
+  /** What the next message may take the thread to hold. */
+  held(): EventsHeld | undefined {
+    if (this.last !== undefined) return { kind: "through", last: this.last };
+    return this.lost ? { kind: "lost" } : undefined;
+  }
+
+  /** A message carried `shown` (oldest first): the thread holds through its last, or still through the one before. */
+  carried(shown: readonly EventSummary[]): void {
+    this.sent = true;
+    this.lost = false;
+    const newest = shown.at(-1);
+    if (newest !== undefined) this.last = eventKey(newest);
+  }
+
+  /** The conversation lost what it held: a new thread, or a compaction. */
+  reset(): void {
+    this.lost = this.sent;
+    this.sent = false;
+    this.last = undefined;
+  }
+
+  /** Whether the thread still holds what it was sent is unknown: the next message carries the window plainly, claiming neither. */
+  forget(): void {
+    this.last = undefined;
+  }
+}
+
+/**
+ * A scaffold's thread context (operator 2026-11-12 and 2026-11-13): what its
+ * conversation already holds of the scratchpad (`PadSeen`, D8) and of the
+ * event window (`EventsSeen`), so a turn's message does not repeat them. One
+ * object, so every reset reaches both. Used on codex, on the program loop
+ * and on the `snippet-delta` arm (`threadContextOf`, config.ts).
+ */
+export class ThreadContext {
+  readonly pad = new PadSeen();
+  readonly events = new EventsSeen();
+
+  /** The thread lost what it held (a compaction, another thread): the next message sends both whole and says the events were lost. */
+  reset(): void {
+    this.pad.reset();
+    this.events.reset();
+  }
+
+  /** Whether the thread still holds them is unknown (its record could not be read): the next message sends both whole, claiming nothing. */
+  forget(): void {
+    this.pad.reset();
+    this.events.forget();
   }
 }
 
