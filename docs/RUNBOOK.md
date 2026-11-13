@@ -1561,8 +1561,10 @@ is alive, never a row `fleet-state.json` keeps for a roster that has exited.
 and its model, and its row says what a restart does to its run; a paused run
 the supervisor would bring back reads `resumes <run id> in place`. A live
 fleet run no job owns (a killed runner's heartbeat stays warm for two minutes
-after a pod recreate) keeps its account and its model, so nothing launches a
-second session for that model. Once it reads cold, on a resuming lane it is an
+after a pod recreate; a run pod plays on after a supervisor container restart)
+keeps its account and its model, so nothing launches a second session for
+that model, and its credential slot and, a run pod, its place under
+`runPods.maxPods`. Once it reads cold, on a resuming lane it is an
 `offline` pause and resumes in place, and a scored run waits for the stale
 sweep. With the pause switch set the dry-run leads with the switch, and the
 plan is what launches once it is cleared.
@@ -1650,7 +1652,9 @@ published `id@version` is refused. Which commits may publish is
 4. An entry runs one square at a time. To run arms side by side, give each
    arm its own `campaignOnly` copy of the entry and an assignment with
    `arms: ["<arm>"]`; nothing scored is bought for the copies. To move to a new version, point `version` at it; work
-   is counted per version, so the new one starts from nothing.
+   is counted per version, so the new one starts from nothing. A run in flight
+   on the old version plays to its end and is recorded against the version it
+   launched on, as it is if the row is deleted.
 5. To declare a version finished whatever its squares hold, list it in
    `concluded` (the whole list: a patch replaces it). It launches and resumes
    nothing, and the page marks it `complete*`.
@@ -1781,6 +1785,13 @@ and the launcher's settings. Two values matter at deploy time:
 - `runPods.imagePullSecrets` — pull Secret names for run pods only, merged
   with the chart-wide `imagePullSecrets` ("Secrets"), for a repository in
   `allowedImages` the chart-wide Secret cannot pull.
+- `runPods.maxPods` — how many run pods may be in flight at once; unset is no
+  cap. In a namespace with a ResourceQuota, set it to what the quota fits
+  beside the release's own pods. The supervisor plans under it like a
+  credential's slots, so a probe past it waits with `cap: run pods 3/3 in
+  flight` on `--dry-run` instead of being launched into a namespace that
+  refuses the pod. It is a chart value rather than a `policy` key because it
+  follows the namespace, which the deployment owns, not the fleet config.
 
 **An arm image from an unmerged branch.** `bun wb release build --probe <name>
 --only runner --push` builds one whose wrath-mcp pin is on any pushed branch of
@@ -1807,8 +1818,16 @@ back on, and the supervisor exempts a probe from the harness-series gate only
 when it has an `image.json` and the switch is on.
 
 **Lifecycle.** Each pod carries an ownerReference to the fleet pod, so a fleet
-stop or crash deletes its run pods with the pod's 90s grace — the same
-SIGTERM → `operator-pause` an episode gets from its roster. A roster's SIGTERM
+stop or a recreated fleet pod deletes its run pods with the pod's 90s grace —
+the same SIGTERM → `operator-pause` an episode gets from its roster. A
+supervisor *container* restart (the process crashed, the pod stayed) deletes
+nothing: the run pod plays on with no roster behind it. The restarted
+supervisor reads it as a live fleet run no job owns ("The scheduling
+policy"): it keeps its account, its model, its credential slot and its place
+under `runPods.maxPods` until the run ends, and the run records its own
+verdict on the runs volume. Its log is not followed into a job log (read it
+with `kubectl logs`), and the finished pod is left until the next deploy
+window removes it with the fleet pod; a finished pod holds no quota. A roster's SIGTERM
 deletes its pod with that grace and waits for it to be gone, and the
 supervisor's drain counts a roster's run pod as an episode in flight.
 `infra/k8s-deploy.sh` waits for zero run pods after the fleet pod is gone and
@@ -1824,7 +1843,12 @@ So does an image the allow-list refuses, a pod the API will not create, and a
 run.ts that refuses its flags. Each leaves a stub run terminated `launch-failed`
 with that reason, which counts toward the definition's `maxAttemptsPerCell`:
 a square that cannot launch settles as capped instead of being picked again
-every tick. The pod's log is followed into the job log, and the finished pod
+every tick. One refusal is not an attempt: the namespace's ResourceQuota
+refusing the pod at creation (`403 … exceeded quota`). Nothing ran and the
+namespace will have room once a run ends, so the roster records nothing (its
+log says `no capacity for <run id>`), the run id is reused, and the square is
+picked again on a later tick. `runPods.maxPods` keeps the supervisor from
+launching into a full namespace in the first place. The pod's log is followed into the job log, and the finished pod
 is deleted.
 
 **Debugging one.** Pods are labelled `app.kubernetes.io/component=run`, with

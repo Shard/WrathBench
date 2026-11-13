@@ -279,6 +279,7 @@ export interface Resolved {
 
 type Outcome =
   | "launch-failed"
+  | "no-capacity"
   | "done"
   | "done-failed"
   | "retry"
@@ -2026,6 +2027,17 @@ async function attemptSpec(
     // A resume keeps the file the run launched with.
     if (!resume && campaignFile !== undefined && !opts.dryRun) writeCampaignFile(join(REPO_ROOT, RUNS_DIR, spec.runId), campaignFile);
     const exit = await runEpisode(spec, resume);
+    // The namespace had no room for the pod (`isQuotaRefusal`): nothing ran, so
+    // this is no attempt — no stub, no ladder, the run left as it was. The
+    // supervisor plans under the chart's run-pod cap, so this is the race
+    // that cap cannot see (another pod taking the room), and the square is
+    // picked again once there is room.
+    if (exit.noCapacity === true) {
+      const detail = exit.failure ?? "no capacity";
+      say(`no capacity for ${spec.runId}: ${detail} — not an attempt, nothing recorded`);
+      record({ runId: spec.runId, model: spec.model, outcome: "no-capacity", detail });
+      return "done";
+    }
     const verdict = classify(spec, exit);
     const level = readLevel(spec.runId);
     // Resolved again: a run archived as it exited has moved, bytes and all.

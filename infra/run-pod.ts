@@ -35,6 +35,7 @@ import type { EpisodeExit, EpisodeHandle, EpisodeLaunch, EpisodeLauncher, Launch
 import { EPISODE_TERM_GRACE_MS, episodeSecretEnv, refusedEpisode } from "./episode-launcher";
 import { launchSecret, SEALED_SECRET_ENV, STORE_KEY_ENV } from "../runner/src/store-secrets";
 import { digestOf, K8sClient, K8sError, type Pod, type PodEnvVar } from "./k8s-client";
+import { runPodsOf } from "./run-fleet-credentials";
 
 // ------------------------------------------------------------------ names
 
@@ -392,12 +393,26 @@ export class PodLauncher implements EpisodeLauncher {
     try {
       created = await this.opts.client.createPod(body);
     } catch (e) {
-      return refusedEpisode(`run pod create refused: ${e instanceof Error ? e.message : String(e)}`);
+      const why = `run pod create refused: ${e instanceof Error ? e.message : String(e)}`;
+      return refusedEpisode(why, isQuotaRefusal(e) ? { noCapacity: true } : {});
     }
     const name = created.metadata.name ?? body.metadata.generateName ?? "?";
     launch.log(`run pod ${name} created for ${launch.spec.runId}: image ${resolved.image}, harness stamp ${resolved.stamp}`);
     return new PodHandle(this.opts, name, resolved.image, resolved.requested.ref, launch);
   }
+}
+
+/**
+ * A pod create the namespace's ResourceQuota refused: `403 Forbidden … exceeded
+ * quota: <name>, requested: …, used: …, limited: …`. Quota admission rejects
+ * at creation, so no pod ever exists and nothing ran: the namespace is full
+ * now and will have room once a run ends. Only that: every other refusal at
+ * creation (an invalid spec, a policy webhook, RBAC) would refuse the same
+ * pod every time, and stays a counted `launch-failed` so its square settles
+ * as capped instead of being picked again every tick.
+ */
+export function isQuotaRefusal(e: unknown): boolean {
+  return e instanceof K8sError && e.status === 403 && /\bexceeded quota\b/.test(e.message);
 }
 
 class PodHandle implements EpisodeHandle {
@@ -565,17 +580,40 @@ class PodHandle implements EpisodeHandle {
 export interface LauncherSettings {
   allowedImages: string[];
   imagePullSecrets: string[];
+  /**
+   * How many run pods may be in flight at once (the chart's `runPods.maxPods`),
+   * or undefined for no cap. The supervisor plans under it (`SlotBook`'s
+   * run-pod key), so it never launches a pod the namespace has no room for.
+   */
+  maxPods?: number;
 }
 
 export function parseLauncherSettings(raw: unknown): LauncherSettings {
   if (typeof raw !== "object" || raw === null) throw new Error("launcher settings must be an object");
-  const o = raw as { allowedImages?: unknown; imagePullSecrets?: unknown };
+  const o = raw as { allowedImages?: unknown; imagePullSecrets?: unknown; maxPods?: unknown };
   const list = (v: unknown, what: string): string[] => {
     if (v === undefined) return [];
     if (!Array.isArray(v) || !v.every((x) => typeof x === "string" && x.length > 0)) throw new Error(`${what} must be an array of non-empty strings`);
     return v as string[];
   };
-  return { allowedImages: list(o.allowedImages, "allowedImages"), imagePullSecrets: list(o.imagePullSecrets, "imagePullSecrets") };
+  if (o.maxPods !== undefined && o.maxPods !== null && !(typeof o.maxPods === "number" && Number.isInteger(o.maxPods) && o.maxPods > 0)) {
+    throw new Error("maxPods must be a positive integer, or null for no cap");
+  }
+  return {
+    allowedImages: list(o.allowedImages, "allowedImages"),
+    imagePullSecrets: list(o.imagePullSecrets, "imagePullSecrets"),
+    ...(typeof o.maxPods === "number" ? { maxPods: o.maxPods } : {}),
+  };
+}
+
+/** The launcher settings the chart mounts into the fleet pod, or why they could not be read. */
+export function readLauncherSettings(env: Record<string, string | undefined> = process.env): LauncherSettings | { error: string } {
+  const settingsPath = env[RUN_POD_LAUNCHER_ENV] ?? DEFAULT_RUN_POD_LAUNCHER;
+  try {
+    return parseLauncherSettings(JSON.parse(readFileSync(settingsPath, "utf8")));
+  } catch (e) {
+    return { error: `run pod launcher settings ${settingsPath} could not be read (${e instanceof Error ? e.message : String(e)})` };
+  }
 }
 
 /**
@@ -588,24 +626,31 @@ export function loadPodLauncher(opts: { rosterPid: number; env?: Record<string, 
   const client = opts.client === undefined ? K8sClient.inCluster(undefined, env) : opts.client;
   if (client === null) return { error: "no Kubernetes ServiceAccount token is mounted — this process is not a fleet pod" };
   const templatePath = env[RUN_POD_TEMPLATE_ENV] ?? DEFAULT_RUN_POD_TEMPLATE;
-  const settingsPath = env[RUN_POD_LAUNCHER_ENV] ?? DEFAULT_RUN_POD_LAUNCHER;
   let template: Pod;
-  let settings: LauncherSettings;
   try {
     template = JSON.parse(readFileSync(templatePath, "utf8")) as Pod;
     if (template.spec?.containers?.[0]?.image === undefined) return { error: `${templatePath} is not a pod template with a container` };
   } catch (e) {
     return { error: `run pod template ${templatePath} could not be read (${e instanceof Error ? e.message : String(e)}) — the chart mounts it; is the deployed chart older than run pods?` };
   }
-  try {
-    settings = parseLauncherSettings(JSON.parse(readFileSync(settingsPath, "utf8")));
-  } catch (e) {
-    return { error: `run pod launcher settings ${settingsPath} could not be read (${e instanceof Error ? e.message : String(e)})` };
-  }
+  const settings = readLauncherSettings(env);
+  if ("error" in settings) return settings;
   const name = env["POD_NAME"];
   const uid = env["POD_UID"];
   const owner = name !== undefined && name.length > 0 && uid !== undefined && uid.length > 0 ? { name, uid } : undefined;
   return new PodLauncher({ client, template, allowedImages: settings.allowedImages, imagePullSecrets: settings.imagePullSecrets, owner, rosterPid: opts.rosterPid });
+}
+
+/**
+ * The book's run-pod setting where this process runs (`runPodsOf`): pods only
+ * on the cluster, under the chart's cap when the mounted settings name one.
+ * For a report; the supervisor reads the same settings on its tick.
+ */
+export function runPodsHere(mode: string, env: Record<string, string | undefined> = process.env): { max: number | undefined } | undefined {
+  const onCluster = env["WRATHBENCH_IN_CONTAINER"] === "1" && K8sClient.inCluster(undefined, env) !== null;
+  if (!onCluster) return runPodsOf(mode, false, undefined);
+  const settings = readLauncherSettings(env);
+  return runPodsOf(mode, true, "error" in settings ? undefined : settings.maxPods);
 }
 
 /** How long the drain waits for the pod list on a tick: one roster's answer must not stall the others. */

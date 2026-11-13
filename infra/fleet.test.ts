@@ -121,6 +121,9 @@ import {
   stateLiveness,
   unownedLiveRuns,
   unyieldedDrainReason,
+  countUnownedRuns,
+  publishedVersion,
+  type InFlight,
 } from "./run-fleet";
 import { billingOf } from "../runner/src/model-cost";
 import { parseCredentials } from "../runner/src/credential-slots";
@@ -137,6 +140,8 @@ import { campaignFileOf, runCampaignFile, writeCampaignFile, type CampaignFile }
 import { checkedIn, defsBlock, definition, joined, seedPublished } from "../runner/test/fixtures/campaigns";
 import { backoffMs, drainMarkerPath, drainRequested, episodeArgv, resolve, writeLaunchFailure } from "./run-roster";
 import { holdsOnlyLaunchFiles } from "../runner/src/launch-files";
+import { refusedEpisode } from "./episode-launcher";
+import { runPodsOf, SlotBook } from "./run-fleet-credentials";
 import { entryOwnsRun, isCounted, readRunFacts } from "../runner/src/models";
 import { listRuns } from "../runner/viewer/runs";
 import { STALL_PAUSE } from "../runner/src/lapse";
@@ -2287,6 +2292,171 @@ describe("a probe launch that failed before the run existed", () => {
     // No trajectory: it played no turn.
     expect(holdsOnlyLaunchFiles(dir)).toBe(false);
     expect(readdirSync(dir).sort()).toEqual(["meta.json"]);
+  });
+});
+
+describe("a quota refusal at pod creation is no capacity, not an attempt", () => {
+  // v1, 2026-11-12: the namespace's quota fitted three run pods, the scheduler
+  // launched seven, and each refused pod left a counted launch-failed stub, so
+  // squares went to attempt 2/3 and 3/3 without a run. The launcher now flags
+  // the quota's 403 (`isQuotaRefusal`) and the roster leaves nothing for it.
+  const NOW = 1_800_000_000_000;
+  const roster: Record<string, FleetRosterEntry> = { glm: { model: "z-ai/glm-5.2:free", tier: "t1", idle: "none" } };
+  const solo = definition({ id: "solo", cells: [{ id: "coldridge", race: 3, class: 2 }], maxAttemptsPerCell: 3 });
+  const j = joined([solo], { solo: { version: 1, assignments: [{ model: "glm" }] } });
+  const QUOTA = 'run pod create refused: POST …/pods: 403 Forbidden — pods "wrathbench-v1-run-2wgbv" is forbidden: exceeded quota: wrathbench-v1-quota';
+
+  test("five refused launches leave the square's attempts at 0, on the same run id each time; a counted refusal still caps it", async () => {
+    const runs = tempDir("fleet-no-capacity-");
+    const catalog = Object.keys(roster);
+    const pick = (): ReturnType<typeof resolve>[number] => {
+      const facts = readRunFacts(runs, NOW, { includeArchived: true });
+      const state = modelStatesOf(rosterModels(roster), facts, NOW).find((st) => st.name === "glm")!;
+      const job = policyJob({ name: "glm", episode: "probing", account: "RUNNER3", attempt: (state.perEpisode.probing?.attempts ?? 0) + 1, why: "w", probe: { campaign: "solo", version: 1, cell: "coldridge", arm: "base" } });
+      return resolve(fillEntries(jobSpawn(job, roster, "RUNNER3", "20261112", undefined, j.campaigns), "20261112"), "20261112")[0]!;
+    };
+    const ids = new Set<string>();
+    for (let tick = 0; tick < 5; tick++) {
+      const spec = pick();
+      ids.add(spec.runId);
+      // What the roster does around the launch: the campaign file first, then
+      // the launcher's answer, and a stub only for an exit that spent an attempt.
+      writeCampaignFile(join(runs, spec.runId), spec.campaignFile!);
+      const exit = await refusedEpisode(QUOTA, { noCapacity: true }).exited;
+      expect(exit.noCapacity).toBe(true);
+      if (exit.noCapacity !== true) writeLaunchFailure(join(runs, spec.runId), spec, exit.failure!, { harnessVersion: "harness-0.5-1986-g720bee8d", now: NOW + tick });
+      expect(holdsOnlyLaunchFiles(join(runs, spec.runId))).toBe(true);
+    }
+    expect([...ids]).toEqual(["fleet-glm-solo-coldridge-base-glm-5-2-20261112"]);
+    const facts = readRunFacts(runs, NOW, { includeArchived: true });
+    expect(facts).toEqual([]);
+    const [square] = campaignSquares(j.campaigns[0]!, catalog, probeRunsOf(facts));
+    expect(square).toMatchObject({ attempts: 0, done: 0, settled: null });
+    expect(campaignWork(j.campaigns, catalog, probeRunsOf(facts))).toHaveLength(1);
+    // Any other refusal at creation is the same pod refused every time: it is
+    // counted, and the square settles as capped after its three.
+    const forbidden = await refusedEpisode("run pod create refused: POST …/pods: 403 Forbidden — admission webhook denied the request").exited;
+    expect(forbidden.noCapacity).toBeUndefined();
+    for (let tick = 0; tick < 3; tick++) {
+      const spec = pick();
+      writeLaunchFailure(join(runs, spec.runId), spec, forbidden.failure!, { harnessVersion: "harness-0.5-1986-g720bee8d", now: NOW + tick });
+    }
+    const after = readRunFacts(runs, NOW, { includeArchived: true });
+    expect(campaignSquares(j.campaigns[0]!, catalog, probeRunsOf(after))[0]).toMatchObject({ attempts: 3, settled: "capped" });
+  });
+});
+
+describe("run pods in flight under the chart's cap", () => {
+  // The other half of the quota fix: the supervisor never launches past what
+  // the namespace fits. `runPods.maxPods` is a key on the slot book that every
+  // probing placement takes while run pods are on.
+  const NOW = 1_800_000_000_000;
+  const config = parseFleet({
+    accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3", "RUNNER4", "RUNNER5", "RUNNER6"] },
+    credentials: OPEN_CREDENTIALS,
+    roster: {
+      a: { tier: "t1", model: "z-ai/glm-5.2:free", campaignOnly: true },
+      b: { tier: "t1", model: "stealth/ox-alpha:free", campaignOnly: true },
+      c: { tier: "t1", model: "z-ai/glm-5.2:free", effort: "low", campaignOnly: true },
+      d: { tier: "t1", model: "stealth/ox-alpha:free", effort: "low", campaignOnly: true },
+      e: { tier: "t1", model: "z-ai/glm-5.2:free", effort: "high", campaignOnly: true },
+    },
+    policy: { runPods: "probes" },
+    "campaign-defs": FLEET_DEFS,
+    campaigns: { "solo-probe": { version: 1, assignments: ["a", "b", "c", "d", "e"].map((model) => ({ model })) } },
+  });
+  const states = modelStatesOf(rosterModels(config.roster));
+  const probes = (plan: ReturnType<typeof planTick>): string[] => plan.policy.filter((p) => p.job.episode === "probing").map((p) => p.job.ref);
+  const tick = (o: { runPods?: { max: number | undefined }; inFlight?: InFlight[]; unowned?: { credential: string | null; episode: string | null }[] } = {}) =>
+    planTick(config, states, () => undefined, "20261112", [], [], undefined, new Map(), new Set(), o.inFlight ?? [], [], undefined, true, [], o.unowned ?? [], o.runPods);
+
+  test("no cap plans a probe on every free account; the cap stops it at maxPods, and the held picks say why", () => {
+    expect(probes(tick({ runPods: { max: undefined } }))).toEqual(["a", "b", "c", "d", "e"]);
+    const capped = tick({ runPods: { max: 3 } });
+    expect(probes(capped)).toEqual(["a", "b", "c"]);
+    expect(capped.heldPicks.map((h) => h.why)).toContain("cap: run pods 3/3 in flight (the chart's runPods.maxPods)");
+    // Run pods off (or off the cluster): a probe is a child process, and the chart's cap is not the planner's business.
+    expect(probes(tick())).toEqual(["a", "b", "c", "d", "e"]);
+  });
+
+  test("what is in flight counts: an owned probe job, and a run pod no job owns any more (a supervisor container restart)", () => {
+    const owned: InFlight = { name: "a-solo-probe-coldridge-base", account: "RUNNER", refs: ["a"], source: "policy", episode: "probing" };
+    expect(probes(tick({ runPods: { max: 3 }, inFlight: [owned] }))).toEqual(["b", "c"]);
+    // The orphan from 2026-11-12: its roster died with the container, its pod played on.
+    expect(probes(tick({ runPods: { max: 3 }, inFlight: [owned], unowned: [{ credential: "or-free", episode: "probing" }] }))).toEqual(["b"]);
+    // A scored run in flight is no run pod.
+    expect(probes(tick({ runPods: { max: 3 }, unowned: [{ credential: "or-free", episode: "e90" }] }))).toEqual(["a", "b", "c"]);
+  });
+
+  const liveProbe = (now: number): RunFact => ({
+    runId: "fleet-a-solo-probe-coldridge-base-glm-5-2-20261112",
+    model: "z-ai/glm-5.2:free",
+    effort: null,
+    episode: "probing",
+    episodeOverride: false,
+    harnessVersion: null,
+    harnessSeries: null,
+    extra: false,
+    startedAt: now - 20 * 60_000,
+    endedAt: null,
+    terminationReason: null,
+    modelResponses: 5,
+    bestLevel: 1,
+    live: true,
+    pause: null,
+    account: "RUNNER",
+    character: null,
+    episodeMs: 12 * 3_600_000,
+    campaign: "solo-probe",
+    campaignVersion: 1,
+    cell: "coldridge",
+    arm: "base",
+    ref: "a",
+    credential: null,
+  });
+
+  test("a run no job owns is on its recorded credential's slot, as the dry-run's credential table counts it", () => {
+    const book = new SlotBook(parseCredentials({ "or-free": { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 1, billing: "free", enabled: true } }), {}, runPodsOf("probes", true, 3));
+    const orphan = unownedLiveRuns({
+      runs: [{ ...liveProbe(NOW), credential: "or-free" }],
+      roster: config.roster,
+      campaigns: config.campaigns,
+      running: new Set(),
+      busyAccounts: new Set(),
+    });
+    expect(orphan.map((u) => [u.credential, u.episode])).toEqual([["or-free", "probing"]]);
+    countUnownedRuns(book, orphan);
+    expect(book.fullKey(book.keysOf("openai", "or-free", "probing"))).toBe("credential:or-free");
+    expect(book.inUse("run-pods")).toBe(1);
+  });
+});
+
+describe("a live probe job outlives its campaign row's version (program-probe, 2026-11-12)", () => {
+  // `campaigns/program-probe` moved from @1 to @2 under a live @1 run pod; the
+  // next tick projected the live job through `jobSpawn`, which found only the
+  // active @2 and threw, and the supervisor exited 1.
+  const roster: Record<string, FleetRosterEntry> = { glm: { model: "z-ai/glm-5.2:free", tier: "t1", idle: "none" } };
+  const v1 = definition({ id: "solo", cells: [{ id: "coldridge", race: 3, class: 2 }], objective: "The first question." });
+  const v2 = definition({ id: "solo", version: 2, cells: [{ id: "coldridge", race: 3, class: 2 }], objective: "The second question." });
+  const live = policyJob({ name: "glm", episode: "probing", account: "POOL01", attempt: 1, why: "w", probe: { campaign: "solo", version: 1, cell: "coldridge", arm: "base" } });
+  const fileOf = (c: ReturnType<typeof joined>, job: FleetJob = live, defs = c.definitions) => jobSpawn(job, roster, "POOL01", "20261112", undefined, c.campaigns, defs).entries[0]!;
+
+  test("after the row moves to @2 the live job's spawn is still @1's, and its square is @1's", () => {
+    const moved = joined([v1, v2], { solo: { version: 2, assignments: [{ model: "glm" }] } });
+    expect(moved.campaigns[0]!.version).toBe(2);
+    const entry = fileOf(moved);
+    expect(entry.campaignFile).toMatchObject({ campaign: "solo", version: 1, hash: moved.definitions.find((d) => d.ref === "solo@1")!.hash, cell: { id: "coldridge" } });
+    expect(entry.objective).toBe("The first question.");
+    // The row alone is enough: it carries every published version of its id.
+    expect(fileOf(moved, live, []).campaignFile?.version).toBe(1);
+    expect(publishedVersion({ campaign: "solo", version: 2 }, moved.campaigns)?.def.objective).toBe("The second question.");
+  });
+
+  test("after the row is deleted it resolves from the published definitions; a version nobody published is still refused by name", () => {
+    const gone = joined([v1, v2], {});
+    expect(gone.campaigns).toEqual([]);
+    expect(fileOf(gone).campaignFile?.version).toBe(1);
+    expect(() => fileOf(gone, { ...live, probe: { ...live.probe!, version: 9 } })).toThrow("solo@9 is not a published campaign this config names");
   });
 });
 
@@ -4503,7 +4673,7 @@ describe("the read-only views read what is running, not every job the supervisor
       // continued a1 there beside Brannoc's live a2 — two sessions of one model.
       expect(picked(before.picks)).toEqual([[REF, "freeplay", "RUNNER", A1]]);
       const { unowned, states, picks, printed } = tick(runs, heldBy(A2), { refs: [REF] });
-      expect(unowned).toEqual([{ runId: A2, account: "RUNNER3", refs: [REF], model: MODEL, episode: "freeplay", resumesInPlace: true }]);
+      expect(unowned).toEqual([{ runId: A2, account: "RUNNER3", refs: [REF], model: MODEL, episode: "freeplay", credential: null, resumesInPlace: true }]);
       expect(picks).toEqual([]);
       expect(printed.policy).toEqual([]);
       // The model is held the way a job's is, and says so.

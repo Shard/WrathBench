@@ -86,6 +86,12 @@ export interface EpisodeLaunch {
 export interface EpisodeExit {
   code: number;
   failure?: string;
+  /**
+   * The launcher found no room for the episode before anything ran — the
+   * namespace's ResourceQuota refused the pod at creation. No capacity, not
+   * an attempt: the roster writes nothing for it (`attemptSpec`).
+   */
+  noCapacity?: true;
 }
 
 export interface EpisodeHandle {
@@ -146,11 +152,11 @@ export function parseLaunchSpec(raw: unknown, where: string): LaunchSpec {
  * the roster reads it the way it reads a run.ts that refused its flags: no
  * run row, `launch-failed`, with this reason.
  */
-export function refusedEpisode(reason: string): EpisodeHandle {
+export function refusedEpisode(reason: string, opts: { noCapacity?: true } = {}): EpisodeHandle {
   return {
-    exited: Promise.resolve({ code: 2, failure: reason }),
+    exited: Promise.resolve({ code: 2, failure: reason, ...(opts.noCapacity === true ? { noCapacity: true as const } : {}) }),
     stop: async () => {},
-    describe: () => `refused: ${reason}`,
+    describe: () => `${opts.noCapacity === true ? "no capacity" : "refused"}: ${reason}`,
   };
 }
 

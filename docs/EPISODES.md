@@ -197,7 +197,10 @@ attempt on its square, so the roster turns its directory into a stub run:
 the stamps the run would have had and a termination of `launch-failed` with
 the reason, no trajectory. It counts toward `maxAttemptsPerCell` and never as
 a run, is listed rather than archived so the campaigns page counts the
-attempt the scheduler counts, and is no rung on the defer ladder. An arm that
+attempt the scheduler counts, and is no rung on the defer ladder. A pod the
+namespace's ResourceQuota refuses at creation is the exception: that is no
+capacity, not an attempt, so no stub is written and the square is picked
+again once there is room. An arm that
 pins an image or a command while run pods are off, or off the cluster, is a
 refused pair and is never launched at all. A hand launch goes through `infra/run-episode.sh --campaign <id>@<v>
 --cell <id> [--arm <id>]`, which writes the same file from the store where the
