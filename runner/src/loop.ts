@@ -698,7 +698,11 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     ...(program !== undefined && programWake !== undefined
       ? {
           program,
-          onRoutinesShown: () => programWake.routinesShown(program.routines()),
+          onRoutinesShown: (text) => {
+            programWake.routinesShown(program.routines());
+            // The window keeps a result's head (`capWindowMessage`): routine lines past the cap were never seen, so none count as shown.
+            if (text.length > CONTEXT_POLICY.WINDOW_MESSAGE_CHARS) program.forgetShown();
+          },
           // What a result carries of the routines' refusals, and of a death, is delivered (`ProgramWake.hintsDelivered`).
           onHintsDelivered: (hints) => programWake.hintsDelivered(hints),
           ...(programPrompt?.yield === true

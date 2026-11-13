@@ -131,8 +131,8 @@ export interface ToolContext extends CoreToolContext {
    * presence is what serves the tool.
    */
   yieldWake?: ((seconds: number) => Promise<string>) | undefined;
-  /** Called after a routine tool answered: its routine lines are the model's news of every routine's state. */
-  onRoutinesShown?: (() => void) | undefined;
+  /** Called after a routine tool answered, with its text: its routine lines are the model's news of every routine's state. */
+  onRoutinesShown?: ((text: string) => void) | undefined;
   /**
    * The run's turn messages follow a scaffold's thread context
    * (`threadContextOf`, config.ts), so the pad as last written may be in an
@@ -518,7 +518,7 @@ function routineTool(spec: ToolSpec<ProgramContext>): ToolSpec<ProgramContext> {
     ...spec,
     run: async (ctx, args, origin) => {
       const res = await spec.run(ctx, args, origin);
-      ctx.onRoutinesShown?.();
+      ctx.onRoutinesShown?.(res.text);
       return res;
     },
   };

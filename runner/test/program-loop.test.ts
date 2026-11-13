@@ -496,6 +496,11 @@ function fakeProgram() {
     setRoutines(routines: RoutineRow[]) {
       pending = { ...pending, routines };
     },
+    forgets: 0,
+    forgetShown() {
+      this.forgets++;
+      this.shown.clear();
+    },
     readFile: () => ({ ok: true, text: "" }),
     writeFile: async () => ({ ok: true, text: "" }),
     editFile: async () => ({ ok: true, text: "" }),
@@ -768,6 +773,22 @@ describe("the fixed loop on the program loop", () => {
       ["turn-end", 2, "routine_ended"],
       ["turn-end", 4, "cap"],
     ]);
+  });
+
+  test("a routine result longer than the window keeps is not counted as shown; a turn-end wake, never kept, marks nothing", async () => {
+    const s = programSetup([
+      { content: null, toolCalls: [{ name: "stop_routine", arguments: { name: "grind" } }] },
+      { content: null, toolCalls: [{ name: "stop_routine", arguments: { name: "grind" } }] },
+      { content: "waiting", toolCalls: [] },
+    ]);
+    const texts = ["stopped grind\nroutines:\ngrind stopped 0s ago", `stopped grind\nroutines:\n${"trip threw 1m ago: Error: in view [ … ]\n".repeat(120)}`];
+    s.program.stopRoutine = async () => ({ ok: true, text: texts.shift()! });
+    s.program.setRoutines([{ name: "trip", deploy: 2, startedAt: s.clock.now() - 5_000, endedAt: s.clock.now(), state: "returned", value: '"done"' }]);
+    await runLoop(s.options);
+    // The first result fit; the second was cut by the window, so the ledger was cleared.
+    expect(s.program.forgets).toBe(1);
+    expect(userOf(s.requests[3]!)).toContain('trip returned');
+    expect(s.program.shown.size).toBe(0);
   });
 
   test("a refusal from before a tool result is delivered with it, so the turn-end sleep after does not wake for it", async () => {
