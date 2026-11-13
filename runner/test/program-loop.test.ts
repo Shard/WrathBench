@@ -8,12 +8,13 @@
  */
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import type { ProgramFact, ProgramFacts, RoutineRow } from "@wrathbench/mcp";
+import type { ActionHintNote, ProgramFact, ProgramFacts, RoutineRow } from "@wrathbench/mcp";
 import { Scratchpad } from "@wrathbench/mcp";
 import { StubAdapter, type ChatRequest } from "../src/adapter";
 import { campaignPairRefusals, type PairRosterEntry } from "../src/campaigns";
 import { comparabilityOf, promptHash } from "../src/comparability";
-import { capWindowMessage, CONTEXT_POLICY, renderWindow, type HistoryMessage } from "../src/context";
+import { assembleContext, capWindowMessage, CONTEXT_POLICY, PadSeen, renderWindow, scratchpadUnchangedLine, type HistoryMessage } from "../src/context";
+import { PAD_HEADER_PATTERN } from "../../infra/inspect-run";
 import { loadRunConfig, programLoopRefusal } from "../src/config";
 import { EpisodicLog } from "../src/episodic";
 import { runLoop } from "../src/loop";
@@ -441,6 +442,7 @@ function fakeProgram() {
     editFile: async () => ({ ok: true, text: "" }),
     deleteFile: async () => ({ ok: true, text: "" }),
     startRoutine: async () => ({ ok: true, text: "started grind on deploy 2\nroutines:\ngrind running 0s, deploy 2, no action yet" }),
+    routines: (): RoutineRow[] => [],
     stopRoutine: async () => ({ ok: true, text: "stopped grind" }),
   };
 }
@@ -499,10 +501,11 @@ describe("ProgramWake", () => {
     p.push(refusal(c.now(), "path_incomplete"), wake);
     c.advance(500);
     const late = refusal(c.now() - 200, "too_far");
-    wake.resultShown();
+    const hint = (status: string): ActionHintNote => ({ action: "moveTo", status, count: 1, hint: "h", ts: c.now(), routine: "grind" });
+    // The result carries both hints, as the stack's `onHintsDelivered` says.
+    wake.hintsDelivered([hint("path_incomplete"), hint("too_far")]);
     // Its fact arrives after the result that carried its hint: still not news.
     p.push(late, wake);
-    p.push({ kind: "loaded", ts: c.now(), deploy: 7, routines: ["grind"], restarted: ["grind"], dropped: [], by: "save" }, wake);
     const first = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false });
     expect(first.fired).toBe("cap");
     // The signatures are still the wake's to show.
@@ -510,6 +513,69 @@ describe("ProgramWake", () => {
     c.schedule(30_000, () => p.push(refusal(c.now(), "no_path"), wake));
     const second = await wake.sleep(p, { via: "yield", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false });
     expect(second.fired).toBe("refusal");
+    // After a load, a delivered signature's first refusal on the new code is news again.
+    p.push({ kind: "loaded", ts: c.now(), deploy: 7, routines: ["grind"], restarted: ["grind"], dropped: [], by: "save" }, wake);
+    c.schedule(30_000, () => p.push(refusal(c.now(), "too_far"), wake));
+    const third = await wake.sleep(p, { via: "yield", turn: 3, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false });
+    expect(third.fired).toBe("refusal");
+  });
+
+  test("a refusal that lands after the hint drain, before the result returns, still wakes: only what a result carried is delivered", async () => {
+    // The millisecond window round 2 left: delivery was "everything up to the moment the result returned".
+    const c = fakeClock(10_000_000);
+    const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
+    const p = fakeProgram();
+    const refusal = (ts: number, status: string): ProgramFact => ({ kind: "refusal", ts, routine: "grind", deploy: 6, action: "moveTo", status, hint: "h", signature: `grind||moveTo|${status}`, fresh: true });
+    p.push(refusal(c.now(), "too_far"), wake);
+    wake.hintsDelivered([{ action: "moveTo", status: "too_far", count: 1, hint: "h", ts: c.now(), routine: "grind" }]);
+    c.advance(1);
+    p.push(refusal(c.now(), "drop"), wake);
+    const woke = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false });
+    expect(woke.fired).toBe("refusal");
+    expect(woke.block).toContain("new refusal (grind: moveTo drop)");
+    expect(woke.block).not.toContain("new refusal (grind: moveTo too_far)");
+  });
+
+  test("a wake(reason) from a routine the routine lines showed as over does not wake; a running routine's still does", async () => {
+    // Round 2's wake 6: explore called wake("explore done") and returned while the model was awake; a stop_routine result showed it returned.
+    const c = fakeClock(10_000_000);
+    const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
+    const p = fakeProgram();
+    const started = c.now() - 60_000;
+    p.push({ kind: "wake", ts: c.now(), reason: "explore done", routine: "explore" }, wake);
+    p.push({ kind: "wake", ts: c.now(), reason: "bags full", routine: "grind" }, wake);
+    p.push({ kind: "wake", ts: c.now(), reason: "old leg done", routine: "work" }, wake);
+    c.advance(1_000);
+    wake.routinesShown([
+      row({ name: "explore", state: "returned", startedAt: started, endedAt: c.now() - 500 }),
+      row({ name: "grind", state: "running", startedAt: started }),
+      // Replaced by a newer run since its call.
+      row({ name: "work", state: "running", startedAt: c.now() - 100 }),
+    ]);
+    const woke = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false });
+    expect(woke.fired).toBe("wake");
+    expect(woke.block).toContain('woke for: wake("bags full") from grind]');
+    // The calls themselves are still the wake's to list.
+    expect(woke.block).toContain('explore: "explore done"');
+  });
+
+  test("a death a result told the model of, by a dead hint, does not wake the sleep after it", async () => {
+    // Sol P n=14: the turn's own result showed `moveTo dead ×8`; the turn-end sleep woke 3 s later for the death.
+    const c = fakeClock(10_000_000);
+    const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
+    const p = fakeProgram();
+    // The context went out; the death came after it, so the HUD never showed it.
+    wake.shown();
+    c.advance(1_000);
+    wake.onDeath(c.now());
+    c.advance(1_000);
+    wake.hintsDelivered([{ action: "moveTo", status: "dead", count: 8, hint: "you are dead", ts: c.now(), routine: "work" }]);
+    const first = await wake.sleep(p, { via: "turn-end", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false });
+    expect(first.fired).toBe("cap");
+    // A later death, told of by no hint, wakes.
+    c.schedule(10_000, () => wake.onDeath(c.now()));
+    const second = await wake.sleep(p, { via: "turn-end", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false });
+    expect(second.fired).toBe("died");
   });
 
   test("a death and a closed stream wake; a notice the context showed does not", async () => {
@@ -637,8 +703,22 @@ describe("the fixed loop on the program loop", () => {
       { content: "waiting", toolCalls: [] },
     ]);
     s.program.push({ kind: "refusal", ts: s.clock.now(), routine: "grind", deploy: 2, action: "moveTo", status: "too_far", hint: "h", signature: "grind||moveTo|too_far", fresh: true }, s.wake);
+    // The snippet's result carries the routine's hint, as the child drains it onto the result.
+    const hint: ActionHintNote = { action: "moveTo", status: "too_far", count: 1, hint: "h", ts: s.clock.now(), routine: "grind" };
+    (s.options.sandbox as unknown as { evalSnippet: unknown }).evalSnippet = async (code: string) => ({ ok: true, value: `ran:${code}`, logs: [], actionHints: [hint], durationMs: 1 });
     await runLoop(s.options);
+    expect(s.requests[1]!.messages.some((m) => m.role === "tool" && (m.content ?? "").includes("moveTo too_far (routine grind): h"))).toBe(true);
     expect(userOf(s.requests[2]!)).toContain("woke for: five minutes passed]");
+  });
+
+  test("the same refusal with no result to carry its hint wakes the turn-end sleep", async () => {
+    const s = programSetup([
+      { content: null, toolCalls: [{ name: "run_snippet", arguments: { code: "1" } }] },
+      { content: "waiting", toolCalls: [] },
+    ]);
+    s.program.push({ kind: "refusal", ts: s.clock.now(), routine: "grind", deploy: 2, action: "moveTo", status: "too_far", hint: "h", signature: "grind||moveTo|too_far", fresh: true }, s.wake);
+    await runLoop(s.options);
+    expect(userOf(s.requests[2]!)).toContain("woke for: new refusal (grind: moveTo too_far)]");
   });
 
   test("yield answers the wake as its result, and the next request does not repeat it", async () => {
@@ -678,5 +758,51 @@ describe("the window cap and the program's tools", () => {
     expect(sent[3]).toBe(long);
     // Folded like any result once the window's older block.
     expect(String(renderWindow(window, 4)[1]!.content)).toStartWith("[folded by harness] read_file");
+  });
+});
+
+describe("PadSeen: a scaffold's program loop sends the pad only when its thread does not hold it (D8)", () => {
+  const inputs = (pad: string, unchanged?: boolean) => ({ stateSummary: "== state ==", events: [], scratchpad: pad, notices: [], turn: 3, ...(unchanged !== undefined ? { scratchpadUnchanged: unchanged } : {}) });
+
+  test("the first message sends it, an unchanged pad is a line with its size, a change outside the conversation sends it again", () => {
+    const seen = new PadSeen();
+    expect(seen.sendWhole("# plan\nfarm boars")).toBe(true);
+    expect(seen.sendWhole("# plan\nfarm boars")).toBe(false);
+    // A routine's scratchpad.write: the conversation never saw it.
+    expect(seen.sendWhole("# plan\nfarm wolves")).toBe(true);
+    expect(seen.sendWhole("# plan\nfarm wolves")).toBe(false);
+    seen.reset();
+    expect(seen.sendWhole("# plan\nfarm wolves")).toBe(true);
+    // An empty pad is always its one line.
+    expect(seen.sendWhole("")).toBe(true);
+    expect(seen.sendWhole("")).toBe(true);
+  });
+
+  test("the model's own write and edit leave a pad the conversation holds; an edit of a pad it did not hold does not", () => {
+    const seen = new PadSeen();
+    seen.sendWhole("a\nb");
+    seen.wrote("x\ny", "x\ny");
+    expect(seen.sendWhole("x\ny")).toBe(false);
+    seen.edited("y", "z", false, "x\nz");
+    expect(seen.sendWhole("x\nz")).toBe(false);
+    // A snippet appended between, so the edit's result is not what the model can know.
+    seen.edited("z", "w", false, "x\nw\nappended");
+    expect(seen.sendWhole("x\nw\nappended")).toBe(true);
+    seen.reset();
+    seen.edited("w", "v", false, "x\nv\nappended");
+    expect(seen.sendWhole("x\nv\nappended")).toBe(true);
+  });
+
+  test("the line in its place keeps the size and is no pad header, and the snippet loop's context is byte-identical", () => {
+    const pad = "# plan\n".repeat(500);
+    const unchanged = assembleContext(inputs(pad, true));
+    expect(unchanged).toEndWith(`[scratchpad 3.5k/32k: unchanged since you last saw it in this conversation, so not repeated]`);
+    expect(unchanged).not.toContain("# plan");
+    expect(unchanged.endsWith(scratchpadUnchangedLine(pad.length))).toBe(true);
+    // The inspect readers' pad header (a JSON-escaped line) must not match it.
+    expect(new RegExp(PAD_HEADER_PATTERN).test(JSON.stringify(unchanged))).toBe(false);
+    expect(new RegExp(PAD_HEADER_PATTERN).test(JSON.stringify(assembleContext(inputs(pad))))).toBe(true);
+    expect(assembleContext(inputs(pad))).toBe(assembleContext(inputs(pad, false)));
+    expect(assembleContext(inputs(pad))).toEndWith(`[scratchpad 3.5k/32k]\n${pad}`);
   });
 });

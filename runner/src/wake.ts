@@ -37,7 +37,7 @@
  * from the trajectory alone.
  */
 
-import { renderRoutines, type MoveOwner, type ProgramFact, type ProgramFacts, type ProgramLogLine, type RoutineRow } from "@wrathbench/mcp";
+import { renderRoutines, type ActionHintNote, type MoveOwner, type ProgramFact, type ProgramFacts, type ProgramLogLine, type RoutineRow } from "@wrathbench/mcp";
 import type { HarnessNotice } from "./sandbox/host";
 
 /** The program loop's workspace, in the run directory: files, versions, registry and memory. */
@@ -77,6 +77,10 @@ export interface WakeReason {
    * arrived before the last context was assembled is no reason to wake.
    */
   inContext: boolean;
+  /** A refusal's signature (`routine|character|action|status`): how a delivered hint is matched to it. */
+  signature?: string | undefined;
+  /** The routine a `wake(reason)` came from, when a routine called it. */
+  routine?: { name: string; character?: string | undefined } | undefined;
 }
 
 const label = (o: object): string => {
@@ -93,9 +97,15 @@ export function wakeReasonOf(fact: ProgramFact): WakeReason | null {
     case "error":
       return { key: "error", ts: fact.ts, text: `new error (${label(fact)}: ${fact.error.name})`, inContext: false };
     case "refusal":
-      return { key: "refusal", ts: fact.ts, text: `new refusal (${label(fact)}: ${fact.action} ${fact.status})`, inContext: false };
+      return { key: "refusal", ts: fact.ts, text: `new refusal (${label(fact)}: ${fact.action} ${fact.status})`, inContext: false, signature: fact.signature };
     case "wake":
-      return { key: "wake", ts: fact.ts, text: `wake(${JSON.stringify(fact.reason)}) from ${label(fact)}`, inContext: false };
+      return {
+        key: "wake",
+        ts: fact.ts,
+        text: `wake(${JSON.stringify(fact.reason)}) from ${label(fact)}`,
+        inContext: false,
+        ...(fact.routine !== undefined ? { routine: { name: fact.routine, ...(fact.character !== undefined ? { character: fact.character } : {}) } } : {}),
+      };
     case "restart":
       return { key: "sandbox_restart", ts: fact.ts, text: "sandbox restart", inContext: false };
     case "restarted":
@@ -111,10 +121,14 @@ export class Waker {
   private pending: WakeReason[] = [];
   /** Per key, the newest moment the model has been shown its reasons up to (`forget`). */
   private readonly seenUntil = new Map<WakeKey, number>();
+  /** Refusal signatures a tool result has carried the hint of since the last load (`deliver`). */
+  private readonly delivered = new Set<string>();
 
   note(reason: WakeReason): void {
     // A reason from before the model was shown its key's news is not news, however late its fact arrives.
     if (reason.ts <= (this.seenUntil.get(reason.key) ?? -Infinity)) return;
+    // Nor a refusal whose hint a result has already carried, however late its fact arrives.
+    if (reason.signature !== undefined && this.delivered.has(reason.signature)) return;
     this.pending.push(reason);
     // A program that throws on a tight loop must not grow this without bound.
     if (this.pending.length > 200) this.pending.splice(0, this.pending.length - 200);
@@ -139,6 +153,23 @@ export class Waker {
   forget(key: WakeKey, ts: number): void {
     this.seenUntil.set(key, Math.max(ts, this.seenUntil.get(key) ?? -Infinity));
     this.pending = this.pending.filter((r) => r.key !== key || r.ts > ts);
+  }
+
+  /** Drop the pending reasons `drop` picks. */
+  forgetWhere(drop: (r: WakeReason) => boolean): void {
+    this.pending = this.pending.filter((r) => !drop(r));
+  }
+
+  /** A tool result carried the hint of this refusal signature: it is no reason to wake, now or when its fact lands, until the next load. */
+  deliver(signature: string): void {
+    if (this.delivered.size > 1_000) this.delivered.clear();
+    this.delivered.add(signature);
+    this.pending = this.pending.filter((r) => r.signature !== signature);
+  }
+
+  /** A load: a signature's first refusal on the new code is news again. */
+  loaded(): void {
+    this.delivered.clear();
   }
 
   /** The reasons a wake reports, cleared. */
@@ -476,6 +507,7 @@ export class ProgramWake {
       if (this.signatures.size > 1_000) this.signatures.delete(this.signatures.keys().next().value as string);
     }
     if (fact.kind === "restart" && fact.blamed) this.blamed++;
+    if (fact.kind === "loaded") this.waker.loaded();
     try {
       this.o.trajectory.append(factRecord(fact));
     } catch {
@@ -515,22 +547,35 @@ export class ProgramWake {
   }
 
   /**
-   * A routine tool just answered with every routine's state: a routine that
-   * ended before it is news the model has, so it no longer wakes a sleep that
-   * starts after. The end is still in the next wake's routine lines.
+   * A routine tool just answered with every routine's state (`rows`, as its
+   * lines showed them): a routine that ended before it is news the model
+   * has, so it no longer wakes a sleep that starts after. Nor does a
+   * `wake(reason)` from a run those lines show as over: one that has ended,
+   * or that a newer run of the same name has replaced. A still-running
+   * routine's call stays pending. Both are still in the next wake's lines.
    */
-  routinesShown(): void {
+  routinesShown(rows: readonly RoutineRow[] = []): void {
     this.waker.forget("routine_ended", this.now());
+    this.waker.forgetWhere((r) => {
+      if (r.key !== "wake" || r.routine === undefined) return false;
+      const run = rows.find((x) => x.name === r.routine!.name && x.character === r.routine!.character);
+      return run !== undefined && (run.state !== "running" || run.startedAt > r.ts);
+    });
   }
 
   /**
-   * A tool result was just answered: it carried every action hint pending
-   * when it was drained, a routine's refusals with their owner among them,
-   * so a refusal from before it has been delivered and no longer wakes a
-   * sleep that starts after. Its signature still shows in the next wake.
+   * A tool result is carrying these action hints (the stack's
+   * `onHintsDelivered`, called as the result is built): a routine's refusal
+   * whose hint it carries is delivered, by signature, and no longer wakes a
+   * sleep, nor does its fact when it lands late, until the next load. A hint
+   * whose status is `dead` tells the model its character is dead, so a death
+   * from before it no longer wakes either. Both still show in the next wake.
    */
-  resultShown(): void {
-    this.waker.forget("refusal", this.now());
+  hintsDelivered(hints: readonly ActionHintNote[]): void {
+    for (const h of hints) {
+      if (h.routine !== undefined) this.waker.deliver(`${h.routine}|${h.character ?? ""}|${h.action}|${h.status}`);
+      if (h.status === "dead") this.waker.forget("died", h.ts);
+    }
   }
 
   /** Restarts the program was blamed for since the last call. */
@@ -587,12 +632,27 @@ export class ProgramWake {
     const reasons = this.waker.take();
     this.n++;
     const after = this.reading();
+    const now = this.now();
     const progress: WakeProgress = {
       ...(before.level !== undefined && after.level !== undefined ? { level: { from: before.level, to: after.level } } : {}),
       ...(before.level !== undefined && before.level === after.level && before.xp !== undefined && after.xp !== undefined ? { xp: Math.max(0, after.xp - before.xp) } : {}),
       quests: Math.max(0, after.counts.quests - before.counts.quests),
       deaths: Math.max(0, after.counts.deaths - before.counts.deaths),
     };
+    const block = this.o.trajectory.scrub(
+      renderWake({
+        n: this.n,
+        sleptMs: woke.sleptMs,
+        fired: woke.fired,
+        capMs: o.capMs,
+        reasons,
+        facts,
+        signatures: this.signatures,
+        progress,
+        now,
+      }),
+    );
+    // The block itself, as the model reads it: `bun wb inspect` shows a wake from its record alone.
     this.o.trajectory.append({
       t: "wake",
       via: o.via,
@@ -602,20 +662,10 @@ export class ProgramWake {
       maxMs: o.capMs,
       ...(reasons.length > 0 ? { reasons: [...new Set(reasons.map((r) => r.key))] } : {}),
       n: this.n,
+      block,
     });
     for (const r of facts.repeats) this.o.trajectory.append({ t: "program_error", kind: "repeat", signature: r.signature, count: r.count });
-    const block = renderWake({
-      n: this.n,
-      sleptMs: woke.sleptMs,
-      fired: woke.fired,
-      capMs: o.capMs,
-      reasons,
-      facts,
-      signatures: this.signatures,
-      progress,
-      now: this.now(),
-    });
-    return { block: this.o.trajectory.scrub(block), fired: woke.fired, sleptMs: woke.sleptMs };
+    return { block, fired: woke.fired, sleptMs: woke.sleptMs };
   }
 }
 

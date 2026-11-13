@@ -18,6 +18,7 @@ import {
   trimExpected,
   type ChatMessage,
   type HistoryMessage,
+  type PadSeen,
   type SnapshotLike,
 } from "./context";
 import { REFLECT_BREAKER_NOTICE, ReflectGate, restingOf, taxiFlightOf } from "./reflect";
@@ -481,7 +482,7 @@ export class ContextBuilder {
    * `events_served` trajectory record as a side effect, exactly as the loop
    * did before this was extracted.
    */
-  async build(turn: number, pendingNotices: HarnessNotice[], wake?: string): Promise<string> {
+  async build(turn: number, pendingNotices: HarnessNotice[], wake?: string, padSeen?: PadSeen): Promise<string> {
     this.noteTurn(turn);
     const snap = await this.sampleState();
     // The reflection window's per-turn bookkeeping, in the one hook both
@@ -518,6 +519,9 @@ export class ContextBuilder {
       // sandbox mid-restart: an empty window is honest
     }
     const { window: events, folded } = eventWindow(fetched.events, fetched.folded);
+    // A scaffold's program loop sends the pad only when its thread does not hold it as it is (`PadSeen`, D8).
+    const scratchpad = this.o.scratchpad.read();
+    const padUnchanged = padSeen !== undefined && !padSeen.sendWhole(scratchpad);
     // Scrubbed of the run's registered secrets as a whole, after the pure
     // assembly: a notice (the crash notice's stderr tail), a chat line or an
     // event a snippet's text came back in, and the scratchpad all reach the
@@ -532,10 +536,11 @@ export class ContextBuilder {
             : formatStateSummary(snap, { sessionLive: this.live }),
         events,
         folded,
-        scratchpad: this.o.scratchpad.read(),
+        scratchpad,
         notices: pendingNotices.splice(0, pendingNotices.length),
         turn,
         ...(wake !== undefined ? { wake } : {}),
+        ...(padUnchanged ? { scratchpadUnchanged: true } : {}),
       }),
     );
     // What the model was shown, and how many ambient events the span folded —
@@ -684,8 +689,9 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     ...(program !== undefined && programWake !== undefined
       ? {
           program,
-          onRoutinesShown: () => programWake.routinesShown(),
-          onResultShown: () => programWake.resultShown(),
+          onRoutinesShown: () => programWake.routinesShown(program.routines()),
+          // What a result carries of the routines' refusals, and of a death, is delivered (`ProgramWake.hintsDelivered`).
+          onHintsDelivered: (hints) => programWake.hintsDelivered(hints),
           ...(programPrompt?.yield === true
             ? {
                 yieldWake: async (seconds: number): Promise<string> => {

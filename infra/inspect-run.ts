@@ -2331,6 +2331,16 @@ function splitResult(text: string): { head: string; rest: string } {
   return nl < 0 ? { head: text, rest: "" } : { head: text.slice(0, nl), rest: text.slice(nl + 1) };
 }
 
+/** How long one value of a record's line runs before it is cut; the line itself is still held to `--width`. */
+const VALUE_CHARS = 80;
+/**
+ * The values that say what went wrong, and a wake's block: a routine's thrown
+ * text, a program error's frames, a hint. Cut at 80 they lost the message
+ * itself (`TypeError: turnInQ…`), so they run to this many, `--width` allowing.
+ */
+const LONG_VALUE_CHARS = 2_000;
+const LONG_VALUE_KEYS: ReadonlySet<string> = new Set(["error", "frames", "hint", "reason", "block", "detail", "note"]);
+
 /** A record as one capped line of JSON, each value struck and then cut short, its bulky fields elided. */
 function compact(r: Record<string, unknown>, width: number, token: string | null): string {
   const shown: Record<string, unknown> = {};
@@ -2342,7 +2352,8 @@ function compact(r: Record<string, unknown>, width: number, token: string | null
     }
     const raw = typeof v === "string" ? v : JSON.stringify(v);
     const s = raw === undefined ? undefined : strike(raw, token);
-    shown[k] = s === undefined ? v : s.length > 80 ? `${s.slice(0, 79)}…` : typeof v === "string" ? s : s === raw ? v : s;
+    const most = LONG_VALUE_KEYS.has(k) ? LONG_VALUE_CHARS : VALUE_CHARS;
+    shown[k] = s === undefined ? v : s.length > most ? `${s.slice(0, most - 1)}…` : typeof v === "string" ? s : s === raw ? v : s;
   }
   return cap(JSON.stringify(shown), width);
 }
@@ -4108,6 +4119,8 @@ export interface RequestScan {
   cli: { ts: number; session: string; usd: number }[];
   /** `wake` records (the shape `harness/wake` defined): what ended each wait, and how long it slept. */
   wakes: { ts: number; fired: string; sleptMs: number }[];
+  /** Every `response` record's clock, usage or none: on a scaffold, one per item the model answered with (a tool call, a message), not one per model call. */
+  responseTs: number[];
   /** Spans from a `pause` record to the next `resume`, `to` null when the run never resumed. */
   pauses: { from: number; to: number | null }[];
   /** A 0.5 trajectory's own `state` records, for a run with no other samples. */
@@ -4152,6 +4165,7 @@ function requestReducer(shape: UsageShape): { fn: RecFn; done: () => RequestScan
     orphanOutput: 0,
     cli: [],
     wakes: [],
+    responseTs: [],
     pauses: [],
     states: [],
     first: null,
@@ -4208,6 +4222,7 @@ function requestReducer(shape: UsageShape): { fn: RecFn; done: () => RequestScan
         return;
       }
       case "response": {
+        a.responseTs.push(r.ts);
         const p = r.bytes < RAW_CAP_BYTES ? r.parse() : null;
         const turn = intOf(p?.["turn"]);
         const raw = p?.["usage"];
@@ -4547,7 +4562,16 @@ export interface WindowFigures {
   outputPerRequest: number | null;
   reasoningPerRequest: number | null;
   /** Wakes off `wake` records where the run has them, else harness turns. */
-  wakes: { by: "wake" | "turn"; count: number; perHour: number | null; requestsPer: number | null; fired: Record<string, number>; asleepShare: number | null };
+  wakes: {
+    by: "wake" | "turn";
+    count: number;
+    perHour: number | null;
+    requestsPer: number | null;
+    /** `response` records per wake: on codex, where a request is a CLI turn, the items the model answered with. */
+    responsesPer: number | null;
+    fired: Record<string, number>;
+    asleepShare: number | null;
+  };
   /** The provider's own charge: OpenRouter's per response, the Claude Code CLI's per session. */
   reportedUsd: number | null;
   /** The window's tokens at the price row; output only where it is known. */
@@ -4675,6 +4699,7 @@ export function windowFigures(
       count,
       perHour: perHour(count, minutes),
       requestsPer: count > 0 ? calls.length / count : null,
+      responsesPer: count > 0 ? scan.responseTs.filter(inW).length / count : null,
       fired,
       asleepShare: byWake && minutes > 0 ? slept / (minutes * 60_000) : null,
     },
@@ -4841,6 +4866,7 @@ export async function inspectRequests(runId: string, opts: RequestsOptions, out:
           ? `; ${scan.derived} turn(s) recorded the thread's running total, so each is what it added to the previous total (runner/src/codex-usage.ts)${scan.regressions > 0 ? `, ${scan.regressions} drop(s) read as a new baseline` : ""}`
           : "; each turn's usage is the driver's own per-turn delta"),
     );
+    notes.push("codex: responses per wake counts the response records, one per item the model answered with (a tool call, a message); several items can share one model call");
   }
   notes.push("uncached input is the prompt less its cache reads (cache writes are in it); reasoning, where reported, is part of output");
   if (scan.pauses.length > 0) notes.push(`${scan.pauses.length} pause(s): paused time is left out of every minute and per-hour figure, and of the --at-minutes cuts`);
@@ -4895,6 +4921,8 @@ export async function inspectRequests(runId: string, opts: RequestsOptions, out:
   head(by, cell((w) => String(w.wakes.count)));
   head(`  per hour`, cell((w) => fmtPer(w.wakes.perHour)));
   head(`  requests per ${by === "wakes" ? "wake" : "turn"}`, cell((w) => fmtPer(w.wakes.requestsPer)));
+  // A CLI turn is one request and one wake: what varies per wake is how many items the model answered with.
+  if (shape === "exec-tally") head(`  responses per ${by === "wakes" ? "wake" : "turn"}`, cell((w) => fmtPer(w.wakes.responsesPer)));
   if (scan.wakes.length > 0) {
     head("  asleep", cell((w) => (w.wakes.asleepShare === null ? "—" : `${Math.round(w.wakes.asleepShare * 100)}%`)));
     head("  fired by", cell((w) => Object.entries(w.wakes.fired).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k, n]) => `${k} ${n}`).join(", ") || "—"));
@@ -4928,6 +4956,182 @@ export async function inspectRequests(runId: string, opts: RequestsOptions, out:
 
 // ------------------------------------------------------------------ CLI
 
+// ------------------------------------------------------------------ inspect messages
+
+/**
+ * The parts of a turn's context message, in the order the runner writes them
+ * (runner/src/context.ts `assembleContext`): the turn's number, the program
+ * loop's [wake] block, the harness notices, the state summary (the HUD), the
+ * event window and the scratchpad.
+ */
+export const MESSAGE_PARTS = ["turn", "wake", "notices", "hud", "events", "pad"] as const;
+export type MessagePart = (typeof MESSAGE_PARTS)[number];
+
+/** A context message cut into its parts: each part's text, "" for one it lacks. Pure; the parts join back to the message with their "\n\n". */
+export function messageParts(text: string): Record<MessagePart, string> {
+  const out: Record<MessagePart, string> = { turn: "", wake: "", notices: "", hud: "", events: "", pad: "" };
+  const turnEnd = text.startsWith("[turn ") ? text.indexOf("\n\n") : -1;
+  if (turnEnd < 0) {
+    out.hud = text;
+    return out;
+  }
+  out.turn = text.slice(0, turnEnd);
+  // The pad and the events are the last two parts, each under its own header.
+  const padAt = text.lastIndexOf("\n\n[scratchpad");
+  const eventsAt = text.lastIndexOf("\n\n[events", padAt < 0 ? text.length : padAt);
+  const bodyEnd = eventsAt >= 0 ? eventsAt : padAt >= 0 ? padAt : text.length;
+  if (padAt >= 0) out.pad = text.slice(padAt + 2);
+  if (eventsAt >= 0) out.events = text.slice(eventsAt + 2, padAt >= 0 ? padAt : text.length);
+  // Between the turn and the events: the wake, the notices, then the HUD.
+  let at = turnEnd + 2;
+  const noticesAt = text.indexOf("[harness notices]\n", at);
+  const notices = noticesAt >= 0 && noticesAt < bodyEnd && (noticesAt === at || text.startsWith("\n\n", noticesAt - 2)) ? noticesAt : -1;
+  if (text.startsWith("[wake ", at)) {
+    const wakeEnd = notices >= 0 ? notices - 2 : hudStart(text, at, bodyEnd);
+    out.wake = text.slice(at, wakeEnd);
+    at = wakeEnd + 2;
+  }
+  if (notices >= 0) {
+    const noticesEnd = hudStart(text, notices, bodyEnd);
+    out.notices = text.slice(notices, noticesEnd);
+    at = noticesEnd + 2;
+  }
+  out.hud = at < bodyEnd ? text.slice(at, bodyEnd) : "";
+  return out;
+}
+
+/** Where the state summary starts after `from`: its `== ` header line, else the last "\n\n" before `end`; the index of that "\n\n". */
+function hudStart(text: string, from: number, end: number): number {
+  const header = text.indexOf("\n\n== ", from);
+  if (header >= 0 && header < end) return header;
+  const last = text.lastIndexOf("\n\n", end - 1);
+  return last > from ? last : end;
+}
+
+/** A request record's context message: the slim record's `user`, else the last user message it carries. */
+export function contextMessageOf(r: Record<string, unknown>): string | null {
+  if (typeof r["user"] === "string") return r["user"];
+  const messages = r["messages"];
+  if (!Array.isArray(messages)) return null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = obj(messages[i]);
+    if (m["role"] === "user" && typeof m["content"] === "string") return m["content"];
+  }
+  return null;
+}
+
+export interface MessagesOptions extends Ctx, Window {
+  last: number;
+  /** Print the wake blocks themselves. */
+  wakes: boolean;
+}
+
+/** One request's message as `messages` reads it. */
+interface MessageRow {
+  ts: number;
+  turn: number | null;
+  parts: Record<MessagePart, string>;
+}
+
+/** One wake's block: off its record (`block`) on a run that writes it, else off the yield result that carried it. */
+interface WakeText {
+  ts: number;
+  text: string;
+}
+
+/** The read behind `messages`: the requests' messages cut into parts, and the wake blocks a record or a yield result holds. */
+function messagesReducer(o: Window): { fn: RecFn; rows: MessageRow[]; wakes: WakeText[]; yields: WakeText[]; unread: number } {
+  const a = { rows: [] as MessageRow[], wakes: [] as WakeText[], yields: [] as WakeText[], unread: 0, fn: (() => undefined) as RecFn };
+  a.fn = (r) => {
+    if (Number.isFinite(r.ts) && ((o.since !== null && r.ts < o.since) || (o.until !== null && r.ts > o.until))) return;
+    if (r.t === "request") {
+      const p = r.bytes < RAW_CAP_BYTES ? r.parse() : null;
+      const text = p === null ? null : contextMessageOf(p);
+      if (text === null) {
+        a.unread++;
+        return;
+      }
+      a.rows.push({ ts: r.ts, turn: intOf(p!["turn"]), parts: messageParts(text) });
+    } else if (r.t === "wake") {
+      const block = str(r.parse()?.["block"]);
+      if (block !== null) a.wakes.push({ ts: r.ts, text: block });
+    } else if (r.t === "tool_result" && r.name() === "yield") {
+      const text = str(r.parse()?.["text"]);
+      if (text !== null) a.yields.push({ ts: r.ts, text });
+    }
+  };
+  return a;
+}
+
+/** What `messages` asks of the store: requests by their rows (their lines come whole, by number), wakes and yield results whole. */
+const MESSAGES_SPEC: ReadSpec = {
+  kinds: { request: { raw: "none" }, wake: { raw: "all" }, tool_result: { row: { names: ["yield"] }, raw: "all" } },
+};
+
+/** The same read off the store: request lines fetched whole by number, the newest `last` of them. */
+async function storeMessages(store: InspectStore, runId: string, ext: Extent, w: Window, last: number, fn: RecFn): Promise<void> {
+  if (ext.window === null) return;
+  const rows: StoreRow[] = [];
+  for (let lo = ext.window.lo; lo <= ext.window.hi; lo += MAX_PAGE_LINES) rows.push(...(await store.rows(runId, MESSAGES_SPEC, w, lo, Math.min(ext.window.hi + 1, lo + MAX_PAGE_LINES))));
+  rows.sort((x, y) => x.l - y.l);
+  const wanted = rows.filter((r) => r.k === "request").slice(-last).map((r) => r.l);
+  const whole = new Map<number, string>();
+  for (let i = 0; i < wanted.length; i += RAWS_PER_QUERY) for (const [l, raw] of await store.raws(runId, wanted.slice(i, i + RAWS_PER_QUERY))) whole.set(l, raw);
+  for (const r of rows) {
+    if (r.k === "request" && !whole.has(r.l)) continue;
+    fn(storeRec(r.k === "request" ? { ...r, r: whole.get(r.l)! } : r, null));
+  }
+}
+
+/**
+ * `messages`: what each turn's context message carried, by part, in
+ * characters: the turn's number, the [wake] block, the notices, the HUD, the
+ * event window and the scratchpad, for the newest `--last` requests and their
+ * mean. With `--wakes`, the wake blocks themselves, off the `wake` records
+ * that carry them, else off the messages and the `yield` results that did.
+ */
+export async function inspectMessages(runId: string, opts: MessagesOptions, out: Out): Promise<number> {
+  const run = trajectoryOf(runId, opts, out);
+  if (run === null) return 1;
+  const via = await viaFor(opts, runId, run.dir, opts);
+  const m = messagesReducer(opts);
+  if (via.store !== null) await storeMessages(via.store, runId, via.ext, opts, opts.last, m.fn);
+  else fileForward(run.path, m.fn);
+  const say = (text: string): void => out(cap(strike(text, run.token), opts.width));
+  const rows = m.rows.slice(-opts.last);
+  say(`${runId}: each request's context message by part, in characters, ${windowPhrase(opts) || "whole run"}, the last ${rows.length}, UTC`);
+  say(`source    ${via.line}`);
+  const head = ["", "turn", "total", ...MESSAGE_PARTS.slice(1)];
+  const line = (cells: string[]): string => cells.map((c, i) => (i === 0 ? c.padEnd(9) : c.padStart(8))).join("");
+  say(line(head));
+  const totals: Record<MessagePart, number> = { turn: 0, wake: 0, notices: 0, hud: 0, events: 0, pad: 0 };
+  let all = 0;
+  for (const r of rows) {
+    const sizes = MESSAGE_PARTS.map((k) => r.parts[k].length);
+    const total = sizes.reduce((n, x) => n + x, 0) + 2 * (sizes.filter((x) => x > 0).length - 1);
+    MESSAGE_PARTS.forEach((k, i) => (totals[k] += sizes[i]!));
+    all += total;
+    say(line([clock(r.ts), r.turn === null ? "?" : String(r.turn), fmtChars(total), ...sizes.slice(1).map((x) => fmtChars(x))]));
+  }
+  if (rows.length > 0) {
+    const n = rows.length;
+    say(line(["mean", "", fmtChars(Math.round(all / n)), ...MESSAGE_PARTS.slice(1).map((k) => fmtChars(Math.round(totals[k] / n)))]));
+    say(`share     ${MESSAGE_PARTS.slice(1).map((k) => `${k} ${all > 0 ? Math.round((100 * totals[k]) / all) : 0}%`).join(" · ")}`);
+  } else say("(no request with a readable message in the window)");
+  if (m.unread > 0) say(`${m.unread} request(s) carried no message this view can read`);
+  if (opts.wakes) {
+    // A run that writes the block on its records has them all there; an older run's are in the messages and the yield results.
+    const blocks: WakeText[] =
+      m.wakes.length > 0 ? m.wakes : [...m.rows.filter((r) => r.parts.wake !== "").map((r) => ({ ts: r.ts, text: r.parts.wake })), ...m.yields].sort((x, y) => x.ts - y.ts);
+    say(`wakes     ${blocks.length} block(s)${m.wakes.length > 0 ? ", off the wake records" : ", off the messages and the yield results"}`);
+    for (const b of blocks.slice(-opts.last)) {
+      say(`--- ${clock(b.ts)}`);
+      for (const l of b.text.split("\n")) say(l);
+    }
+  }
+  return 0;
+}
+
 const USAGE = `usage: bun infra/inspect-run.ts live
        bun infra/inspect-run.ts run <run-id> [--since D] [--until D]
        bun infra/inspect-run.ts trajectory <run-id> [--last N | --next N] [--errors] [--grep RE] [--all] [--since D] [--until D]
@@ -4936,6 +5140,7 @@ const USAGE = `usage: bun infra/inspect-run.ts live
        bun infra/inspect-run.ts stuck [<run-id>] [--window D] [--until D] [--move N] [--max-gap D] [--repeat N] [--hints N] [--schema N] [--restarts N] [--asks N]
        bun infra/inspect-run.ts session <run-id> [--stream events|calls] [--character NAME] [--kind K[,K]] [--grep RE] [--last N | --next N] [--since D] [--until D]
        bun infra/inspect-run.ts requests <run-id> [--since D] [--until D] [--at-level N[,N]] [--at-minutes N[,N]] [--stall D] [--price-at DAY] [--catalogue FILE] [--json]
+       bun infra/inspect-run.ts messages <run-id> [--since D] [--until D] [--last N] [--wakes]
 common: [--runs-dir DIR] (else WRATHBENCH_RUNS_DIR, else data/runs) [--width N] [--files]; D is 90s, 30m, 2h, 1d, epoch ms or ISO
 <run-id> may be a fan-out character's session id, <run-id>~<Name>: session reads that character alone (--character), the rest the run
 --next N: the first N items from --since (or the file's start) instead of the last N
@@ -4943,7 +5148,8 @@ common: [--runs-dir DIR] (else WRATHBENCH_RUNS_DIR, else data/runs) [--width N] 
 stuck: with no run id, every run with a live owner; --window and --max-gap are durations (2h, 15m), the rest whole numbers
 session: a v1 run's record, events by default; a fan-out run's characters together unless --character; --kind key shows the restating rows
 requests: per request, wake and hour over the run (or --since/--until) and up to each cut from its start: --at-level (the first character to reach it),
-  --at-minutes (active minutes, pauses left out); --stall is the shortest stall (default 5m); --price-at re-prices at that day's rates; --json for a script`;
+  --at-minutes (active minutes, pauses left out); --stall is the shortest stall (default 5m); --price-at re-prices at that day's rates; --json for a script
+messages: each request's context message by part (turn, wake, notices, hud, events, pad) in characters, the last N and their mean; --wakes prints the wake blocks`;
 
 /** `inspect stuck`'s threshold flags, each with the threshold it sets and whether it is a duration. */
 const STUCK_FLAGS: readonly (readonly [string, keyof StuckThresholds, "duration" | "count"])[] = [
@@ -4974,6 +5180,7 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   stuck: ["--until", ...STUCK_FLAGS.map(([f]) => f)],
   session: ["--stream", "--character", "--kind", "--grep", "--last", "--next", "--since", "--until"],
   requests: ["--since", "--until", "--at-level", "--at-minutes", "--stall", "--price-at", "--catalogue", "--json"],
+  messages: ["--since", "--until", "--last", "--wakes"],
 };
 const COMMON_FLAGS = new Set(["--runs-dir", "--width", "--files"]);
 const VALUED = new Set([
@@ -5171,6 +5378,7 @@ export async function main(
       );
     }
     if (command === "tools") return await inspectTools(runId, { ...base, ...window }, out);
+    if (command === "messages") return await inspectMessages(runId, { ...base, ...window, last: last ?? DEFAULT_LAST, wakes: flags.has("--wakes") }, out);
     if (command === "pad") {
       const at = times["--at"];
       if (at === undefined) return await inspectPad(runId, { ...base, ...window, last: last ?? DEFAULT_LAST }, out);

@@ -1368,6 +1368,13 @@ export interface ContextInputs {
    * which is every turn of the snippet loop.
    */
   wake?: string | undefined;
+  /**
+   * The scratchpad is not repeated: the conversation already holds it as it
+   * stands (`PadSeen`, a scaffold's program loop). A line with its size says
+   * so in its place. Absent or false renders the pad whole, as every other
+   * run always has.
+   */
+  scratchpadUnchanged?: boolean | undefined;
 }
 
 /**
@@ -1662,10 +1669,69 @@ export function assembleContext(inputs: ContextInputs): string {
   parts.push(
     inputs.scratchpad.trim().length === 0
       ? "[scratchpad]\n(empty — write your plan and durable facts with write_scratchpad)"
-      : `[scratchpad ${scratchpadSizeLabel(inputs.scratchpad.length)}]\n${inputs.scratchpad}`,
+      : inputs.scratchpadUnchanged === true
+        ? scratchpadUnchangedLine(inputs.scratchpad.length)
+        : `[scratchpad ${scratchpadSizeLabel(inputs.scratchpad.length)}]\n${inputs.scratchpad}`,
   );
 
   return parts.join("\n\n");
+}
+
+/**
+ * The line that stands for a pad the conversation already holds as it is
+ * (`ContextInputs.scratchpadUnchanged`): its size against the cap, as the
+ * whole pad's header gives it, and that it is not repeated. Not a pad header
+ * (`[scratchpad <size>]` and a newline), so a reader of the record that
+ * looks for the pad finds none here.
+ */
+export function scratchpadUnchangedLine(chars: number): string {
+  return `[scratchpad ${scratchpadSizeLabel(chars)}: unchanged since you last saw it in this conversation, so not repeated]`;
+}
+
+/**
+ * What a scaffold's conversation holds of the scratchpad, on the program
+ * loop (D8 of the program spike, operator 2026-11-12): the pad is sent whole
+ * only when the conversation does not already hold it as it stands. That is
+ * the first message of a thread (a new episode, a resumed run, a thread the
+ * CLI could not continue), the first after the CLI compacted the thread, and
+ * any message after the pad changed outside the conversation: a snippet's or
+ * a routine's `scratchpad.write`, or anything else the model's own pad tools
+ * did not do. A `write_scratchpad` or an `edit_scratchpad` the model made is
+ * in the conversation, so the pad it leaves is known, as long as what it
+ * edited was. The fixed loop never uses this: its window is not a thread.
+ */
+export class PadSeen {
+  /** The pad as the conversation holds it, or undefined when it holds none it can be trusted to. */
+  private known: string | undefined;
+
+  /** Whether a message sends `pad` whole; when it does, the conversation holds it from then on. */
+  sendWhole(pad: string): boolean {
+    if (pad.trim().length > 0 && pad === this.known) return false;
+    this.known = pad;
+    return true;
+  }
+
+  /** The conversation lost what it held: a new thread, or a compaction. */
+  reset(): void {
+    this.known = undefined;
+  }
+
+  /** The model's `write_scratchpad` of `content` succeeded, leaving the pad `now`. */
+  wrote(content: string, now: string): void {
+    this.known = content === now ? now : undefined;
+  }
+
+  /** The model's `edit_scratchpad` succeeded, leaving the pad `now`: known only when the same edit of what was known gives it. */
+  edited(old: string, replacement: string, replaceAll: boolean, now: string): void {
+    const k = this.known;
+    if (k === undefined || old.length === 0) {
+      this.known = undefined;
+      return;
+    }
+    const at = k.indexOf(old);
+    const next = at < 0 ? undefined : replaceAll ? k.split(old).join(replacement) : k.slice(0, at) + replacement + k.slice(at + old.length);
+    this.known = next === now ? now : undefined;
+  }
 }
 
 // --------------------------------------------------------- message window

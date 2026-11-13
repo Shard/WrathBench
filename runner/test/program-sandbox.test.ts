@@ -230,6 +230,35 @@ describe("the program loop on the codex driver, through the fake CLI", () => {
     ]);
   }, 60_000);
 
+  test("the pad goes whole only when the thread does not hold it as it is: the first turn, and after a snippet changed it (D8)", async () => {
+    const r = await codexProgramRun(
+      [
+        [
+          { name: "write_file", arguments: { path: "main.ts", content: MAIN } },
+          { name: "write_scratchpad", arguments: { content: "# plan\nGoldshire" } },
+          { name: "start_routine", arguments: { name: "trip", args: { to: "Goldshire" } } },
+        ],
+        [{ name: "start_routine", arguments: { name: "trip", args: { to: "Elwynn" } } }],
+        [
+          { name: "run_snippet", arguments: { code: 'await scratchpad.write("# plan\\nfrom a snippet"); return 1' } },
+          { name: "start_routine", arguments: { name: "trip", args: { to: "Westfall" } } },
+        ],
+        [],
+      ],
+      { maxTurns: 4 },
+    );
+    const messages = r.rec["userMessages"] as string[];
+    expect(messages.length).toBe(4);
+    // Turn 1: the pad as it then was (empty).
+    expect(messages[0]).toContain("[scratchpad]\n(empty");
+    // Turn 2: the model wrote it itself, so the thread holds it.
+    expect(messages[1]).toEndWith("[scratchpad 0.0k/32k: unchanged since you last saw it in this conversation, so not repeated]");
+    expect(messages[1]).not.toContain("# plan");
+    // Turn 3 is the same; turn 4 follows a snippet's write, which the thread never saw.
+    expect(messages[2]).toContain("so not repeated]");
+    expect(messages[3]).toEndWith("[scratchpad 0.0k/32k]\n# plan\nfrom a snippet");
+  }, 60_000);
+
   test("a stop request ends the sleep at once, and time asleep is not idle", async () => {
     const ac = new AbortController();
     // Nothing runs, so the turn-end sleep would last five minutes; idle is far shorter than the sleep.

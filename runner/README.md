@@ -1270,7 +1270,7 @@ a continuation and on claude-code and pi, whose one turn runs for hours
 the same way). The sandbox then hosts the model's program (the stack's
 `SandboxHostOptions.program`, wrath-mcp `docs/ARCHITECTURE.md`, "A program"):
 a file workspace in the run directory's `program/`, rooted at `main.ts`, whose
-exported functions are routines the stack runs and tracks. The model is served
+exported async functions are routines the stack runs and tracks. The model is served
 the stack's `programTools` (the one-off `run_snippet`, four file tools, two
 routine tools) in place of the core `run_snippet`, and a second prompt body
 built from the snippet one by exact replacements (`prompt.ts`), so everything
@@ -1289,19 +1289,28 @@ every routine as it stands, new errors with the model's own file lines,
 refusals with their hints, moves that replaced one another, `wake` calls, what
 changed for the character, and the routines' last console lines. After a
 turn-end sleep it opens every request of that wake, right after `[turn N]`;
-after a `yield` it is the tool's result and is not repeated. A refusal that a
-tool result has already carried (every result carries the action hints pending
-when it was drained, a routine's among them) wakes no later sleep, whenever
-its fact arrives; its signature is still in the next wake. `read_file` and
-`yield` results are exempt from the window's 4,000-character message cap
-(`WINDOW_UNCAPPED_TOOLS`): a file is bounded by the 32,000-character file cap
-and has no range to read it in parts, and a wake by its own caps.
+after a `yield` it is the tool's result and is not repeated. What the model
+has already been told wakes no later sleep, and still shows in the next wake:
+a refusal whose hint a tool result carried (the stack hands the runner each
+result's hints as it is built, `onHintsDelivered`; matched by signature, so a
+refusal that lands after the drain still wakes, and one whose fact lands late
+does not, until the next load), a death a `dead` hint reported, a routine end
+the routine tools' lines showed, and a `wake(reason)` from a run those lines
+showed as over or replaced. `read_file` and `yield` results are exempt from
+the window's 4,000-character message cap (`WINDOW_UNCAPPED_TOOLS`): a file is
+bounded by the 32,000-character file cap, and a wake by its own caps.
 
 On codex the CLI ends its turn every few calls, so the pause after each turn
 is the sleep, and the wake opens the next turn's message; `yield` is held on
 the MCP call, under a tool timeout of 600 s rather than 300 s
 (`PROGRAM_TOOL_TIMEOUT_SEC`). Either sleep also ends on a stop request or a
-watchdog verdict.
+watchdog verdict. A turn's message carries the scratchpad whole only when the
+thread does not already hold it as it stands (`PadSeen`, the spike's D8): the
+first message of a thread, the first after a compaction, and any after the pad
+changed outside the conversation (a snippet's or a routine's write); after
+the model's own `write_scratchpad` or `edit_scratchpad` the thread holds it,
+and a line with its size stands in its place. The fixed loop sends it every
+turn, as the snippet loop does.
 
 Time asleep is not `idle`, and a restart the program is blamed for (a blocked
 event loop with no snippet in flight) counts toward `snippet-runaway` as a
@@ -1310,10 +1319,12 @@ the program and starts the routines that were running from the top before the
 first request.
 
 Records: `wake` per sleep (`via` `turn-end` or `yield`, `turn`, `fired`,
-`sleptMs`, `maxMs`, the `reasons`), `deploy` per load, `routine` per routine
+`sleptMs`, `maxMs`, the `reasons`, the rendered `block`), `deploy` per load, `routine` per routine
 end, restart, `wake` call and pre-emption, and `program_error` per fresh error
 or refusal and per repeat count at each wake. `bun wb inspect requests` reads
-wakes per hour, requests per wake and the share asleep off the `wake` records.
+wakes per hour, requests per wake (on codex, responses per wake too) and the
+share asleep off the `wake` records; `bun wb inspect messages` sizes each
+turn's message by part and prints the wake blocks.
 `loop` and `yield` are config and comparability keys, absent on the snippet
 loop.
 

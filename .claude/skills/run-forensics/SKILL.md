@@ -31,6 +31,7 @@ bun wb inspect session <run-id> --character Alfa --since 30m           # one fan
 bun wb inspect session '<run-id>~Alfa' --since 30m                     # the same, by the session id the viewer shows
 bun wb inspect requests <run-id> [--since 1h] [--until 30m]            # per request: uncached/cached input, output, reasoning; per wake or turn; per hour; cost; stall minutes
 bun wb inspect requests <run-id> --at-level 5 --at-minutes 60,90 --json   # up to each cut from the start, as one JSON object for a script
+bun wb inspect messages <run-id> [--last 50] [--wakes]                 # each turn's context message by part (wake, HUD, events, pad), and the wake blocks
 bun wb inspect audit <run-id>                         # module audit log: counts per kind, op/opcode and status
 bun wb inspect audit <run-id> --op WB_MOVE_RESULT --status target_off_mesh --last 20
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op

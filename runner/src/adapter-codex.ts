@@ -158,6 +158,7 @@ import { MessageQueue, cliBaseEnv, readLines, signalGroup } from "./adapter-shar
 import { DEFAULT_CODEX_HOME_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { entryOf } from "./drivers";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
+import { PadSeen } from "./context";
 import { MCP_BRIDGE_PATH } from "@wrathbench/mcp/paths";
 import { McpServer } from "./mcp";
 import { CodexLastCallReader, CodexRolloutFollower, deleteCodexThread, removeThreadRollouts, writeCodexThread, type CodexCompaction } from "./codex-rollout";
@@ -658,6 +659,13 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   }
   /** The last turn-end wake's block, for the next turn's message only. */
   let currentWake: string | undefined;
+  /**
+   * What the thread holds of the scratchpad, on the program loop (D8): a
+   * turn's message sends the pad whole only when the thread does not hold
+   * it as it stands. Undefined on the snippet loop, whose every message
+   * carries the whole pad as it always has.
+   */
+  const padSeen = programPrompt !== undefined ? new PadSeen() : undefined;
   const sleepFor = (via: "turn-end" | "yield", capMs: number) =>
     programWake!.sleep(program!, {
       via,
@@ -690,8 +698,9 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     ...(program !== undefined && programWake !== undefined
       ? {
           program,
-          onRoutinesShown: () => programWake.routinesShown(),
-          onResultShown: () => programWake.resultShown(),
+          onRoutinesShown: () => programWake.routinesShown(program.routines()),
+          // What a result carries of the routines' refusals, and of a death, is delivered (`ProgramWake.hintsDelivered`).
+          onHintsDelivered: (hints) => programWake.hintsDelivered(hints),
           ...(programPrompt?.yield === true
             ? {
                 // The block is this call's result, in the thread: the next turn's message does not repeat it.
@@ -735,6 +744,12 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       // defensively so both drivers' records read alike. Appended after the
       // call ran, so `dispatchTs` carries when it started.
       const short = name.replace(`mcp__${MCP_SERVER_NAME}__`, "").replace(`mcp__${MCP_SERVER_NAME}.`, "");
+      // The model's own pad tools leave a pad the thread holds (`PadSeen`).
+      if (padSeen !== undefined && result.isError !== true) {
+        const a = args as { content?: unknown; old?: unknown; new?: unknown; replaceAll?: unknown };
+        if (short === "write_scratchpad" && typeof a.content === "string") padSeen.wrote(a.content, o.scratchpad.read());
+        else if (short === "edit_scratchpad" && typeof a.old === "string" && typeof a.new === "string") padSeen.edited(a.old, a.new, a.replaceAll === true, o.scratchpad.read());
+      }
       trajectory.append({ t: "tool_call", turn, call: toolCalls, name: short, args, dispatchTs });
       if (short === "run_snippet") {
         trajectory.append({ t: "snippet", turn, call: toolCalls, code: (args as { code?: string }).code ?? "" });
@@ -1137,7 +1152,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       if (programWake !== undefined) for (let k = programWake.takeBlamedRestarts(); k > 0; k--) watchdogs.noteSandboxRestart();
 
       turn++;
-      const contextText = await builder.build(turn, pendingNotices, currentWake);
+      const contextText = await builder.build(turn, pendingNotices, currentWake, padSeen);
       currentWake = undefined;
       // What this context shows (the HUD, the notices) is no longer a reason to wake.
       programWake?.shown();
@@ -1219,6 +1234,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
             const id = msg["thread_id"];
             if (typeof id === "string" && id.length > 0) {
               if (threadId !== id) {
+                // A thread other than the one the last message went to holds no pad (D8), and nothing else of ours.
+                if (threadId !== undefined) padSeen?.reset();
                 trajectory.append({ t: "codex_thread", turn, threadId: id });
                 // The supervisor's sweep keeps the rollout of the thread this names.
                 writeCodexThread(o.runDir, id);
@@ -1363,6 +1380,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       // The process has exited, so the rollout holds every line of this turn.
       const followed = rollout.read(threadId);
       for (const c of followed.compactions) trajectory.append(codexCompactionRecord(turn, c));
+      // A compacted thread no longer holds the pad as it was sent (D8): the next message sends it whole.
+      if (followed.compactions.length > 0) padSeen?.reset();
       if (!resolvedModel && followed.model !== undefined) {
         resolvedModel = true;
         trajectory.recordResolved(runId, { model: followed.model, cliVersion: version });

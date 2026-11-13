@@ -250,6 +250,8 @@ Every async function main.ts exports is a routine, named by its export:
 
 export async function grind(args) { while (!signal.aborted) { … } }
 
+A function in another file is a routine only once main.ts exports it (export { patrol } from "./lib/patrol"), and every file, main.ts included, holds at most 32,000 characters.
+
 start_routine({ name: "grind", args: { … } }) runs it, and the harness keeps it running, whether you are awake or not, until it returns, throws or you stop it with stop_routine({ name: "grind" }). A routine has no time limit; a loop is a while you write. Stopping a routine aborts its signal, so its pending sdk waits reject with EventAbortedError and a move it has in flight is stopped. A name that is already running is not started twice: the refusal says since when.
 
 A save loads at once: a write_file, edit_file or delete_file that changes main.ts or a file it imports loads your program afresh, and the tool's result says so. A program that fails to load (a syntax error, an import of a file not written yet) changes nothing: the result carries the error and the code already running keeps running. When a load succeeds, every running routine is stopped and started again from the top with the same arguments. Variables in your files start over at every load; memory does not.
