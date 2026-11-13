@@ -1,0 +1,51 @@
+{
+  "id": "program-probe",
+  "version": 4,
+  "question": "On codex, how much of the program loop's saving is the context and how much the program: does the snippet loop under a scaffold's thread context (the scratchpad only when the thread does not hold it, and only the events newer than its last message) cost less per level than the snippet loop as released, and does the program loop under the same context still cost less than that?",
+  "note": "The program spike's fourth round, on the spike branch only: nothing of it merges before the spike is adopted. One new image built from the spike branch at f32a8e70 (stack 41f8e9c), which adds to round 3 the event delta (operator, 2026-11-13): on codex, a turn's message carries only the events after the last one the thread was sent, under \"[events: N new since your last message; earlier ones are above in this conversation]\", and after a compaction or a move to another thread the whole window with \", sent in full again: this conversation no longer holds the earlier ones\" in its header; a turn whose rollout could not be read sends the window and the pad whole. With D8's pad rule it is the scaffold's thread context, which the program arm now has on codex and a new arm, snippet-delta, applies to the snippet loop, so the comparison separates the context saving from the program design's. The snippet arm's prompt, tools and window are the release's. snippet-delta's prompt is the snippet prompt with the program arms' two pad sentences (each turn carries the scratchpad or a line saying it is unchanged; the pad as last written is in this turn's context or earlier in this conversation), and its edit_scratchpad not-found hint is the program arms'; its tool definitions are the snippet loop's. snippet passes no loop flag; snippet-delta passes --loop snippet-delta; program passes --loop program. All three arms pin, by tag and digest, the probe image probe-program-f32a8e70df36. snippet-delta runs on codex only (claude-code and pi send a fresh message once in a turn that runs for hours, and the fixed loop rebuilds its window each turn), so an assignment off codex is refused that arm: this round is GPT-6.1 Sol on codex on chatgpt-1 across all three arms. One cell, human-paladin. A 90-minute clock with idle at 20 minutes, no no-XP watchdog and no stopping level; resume is false. Runs of a round start together.",
+  "cells": [
+    {
+      "id": "human-paladin",
+      "race": 1,
+      "class": 2,
+      "note": "The start the earlier entrypoint spike ran from."
+    }
+  ],
+  "arms": [
+    {
+      "id": "snippet",
+      "note": "The control: the spike image with no loop flag, the snippet loop as released.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:probe-program-f32a8e70df36@sha256:c78b206b9053556e5be072aa86dab25fa4ac0925dd2186bb426d0f7d59c45494"
+    },
+    {
+      "id": "snippet-delta",
+      "note": "The snippet loop under a scaffold's thread context: the scratchpad only when the thread does not hold it, and only the events newer than the thread's last message.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:probe-program-f32a8e70df36@sha256:c78b206b9053556e5be072aa86dab25fa4ac0925dd2186bb426d0f7d59c45494",
+      "args": [
+        "--loop",
+        "snippet-delta"
+      ]
+    },
+    {
+      "id": "program",
+      "note": "Routines in a file workspace, run by the harness; a reply with no tool call sleeps until a wake. On codex under the same thread context.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:probe-program-f32a8e70df36@sha256:c78b206b9053556e5be072aa86dab25fa4ac0925dd2186bb426d0f7d59c45494",
+      "args": [
+        "--loop",
+        "program"
+      ]
+    }
+  ],
+  "objective": null,
+  "stopAtLevel": null,
+  "budget": {
+    "episodeMs": 5400000,
+    "idleMs": 1200000,
+    "noXpMs": null,
+    "maxToolCalls": 3000
+  },
+  "wiki": true,
+  "wikiCoords": false,
+  "resume": false,
+  "maxAttemptsPerCell": 3
+}
