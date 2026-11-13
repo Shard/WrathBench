@@ -138,7 +138,7 @@ import { ConfigStore, readFleetConfig, type FleetRead } from "../runner/src/conf
 import { parseCampaigns } from "../runner/src/campaigns";
 import { campaignFileOf, runCampaignFile, writeCampaignFile, type CampaignFile } from "../runner/src/campaign-file";
 import { checkedIn, defsBlock, definition, joined, seedPublished } from "../runner/test/fixtures/campaigns";
-import { backoffMs, drainMarkerPath, drainRequested, episodeArgv, resolve, writeLaunchFailure } from "./run-roster";
+import { backoffMs, drainMarkerPath, drainRequested, episodeArgv, planFreshLaunch, recordUnlaunched, resolve, writeLaunchFailure } from "./run-roster";
 import { holdsOnlyLaunchFiles } from "../runner/src/launch-files";
 import { refusedEpisode } from "./episode-launcher";
 import { runPodsOf, SlotBook } from "./run-fleet-credentials";
@@ -2320,12 +2320,14 @@ describe("a quota refusal at pod creation is no capacity, not an attempt", () =>
       const spec = pick();
       ids.add(spec.runId);
       // What the roster does around the launch: the campaign file first, then
-      // the launcher's answer, and a stub only for an exit that spent an attempt.
-      writeCampaignFile(join(runs, spec.runId), spec.campaignFile!);
+      // the launcher's answer, then what that answer leaves on disk.
+      const dir = join(runs, spec.runId);
+      // A respawned roster (`--resume-roster`) launches fresh onto launch files.
+      expect(planFreshLaunch({ runId: spec.runId, dirExists: !holdsOnlyLaunchFiles(dir), resumeRoster: tick > 0 }).kind).toBe("launch");
+      writeCampaignFile(dir, spec.campaignFile!);
       const exit = await refusedEpisode(QUOTA, { noCapacity: true }).exited;
-      expect(exit.noCapacity).toBe(true);
-      if (exit.noCapacity !== true) writeLaunchFailure(join(runs, spec.runId), spec, exit.failure!, { harnessVersion: "harness-0.5-1986-g720bee8d", now: NOW + tick });
-      expect(holdsOnlyLaunchFiles(join(runs, spec.runId))).toBe(true);
+      expect(recordUnlaunched(dir, spec, exit, exit.failure!, { resume: false, harnessVersion: "harness-0.5-1986-g720bee8d", now: NOW + tick })).toEqual({ kind: "no-capacity" });
+      expect(holdsOnlyLaunchFiles(dir)).toBe(true);
     }
     expect([...ids]).toEqual(["fleet-glm-solo-coldridge-base-glm-5-2-20261112"]);
     const facts = readRunFacts(runs, NOW, { includeArchived: true });
@@ -2339,7 +2341,8 @@ describe("a quota refusal at pod creation is no capacity, not an attempt", () =>
     expect(forbidden.noCapacity).toBeUndefined();
     for (let tick = 0; tick < 3; tick++) {
       const spec = pick();
-      writeLaunchFailure(join(runs, spec.runId), spec, forbidden.failure!, { harnessVersion: "harness-0.5-1986-g720bee8d", now: NOW + tick });
+      writeCampaignFile(join(runs, spec.runId), spec.campaignFile!);
+      expect(recordUnlaunched(join(runs, spec.runId), spec, forbidden, forbidden.failure!, { resume: false, harnessVersion: "harness-0.5-1986-g720bee8d", now: NOW + tick })).toEqual({ kind: "stub" });
     }
     const after = readRunFacts(runs, NOW, { includeArchived: true });
     expect(campaignSquares(j.campaigns[0]!, catalog, probeRunsOf(after))[0]).toMatchObject({ attempts: 3, settled: "capped" });
