@@ -46,7 +46,7 @@ import { stampedCompactWindow, type TerminationReason } from "../runner/src/conf
 import { driverEntry, isProbeOnlyDriver } from "../runner/src/drivers";
 import { isScoredEpisode } from "../runner/src/episodes";
 import { classifyLapse, OFFLINE_PAUSE, PARTY_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
-import { credentialKey, driverOfEntry, placeRef, SlotBook, type CredentialGate, type PlacedCredential, type ResumeHold } from "./run-fleet-credentials";
+import { credentialKey, driverOfEntry, placeRef, RUN_POD_KEY, SlotBook, type CredentialGate, type PlacedCredential, type ResumeHold } from "./run-fleet-credentials";
 import type { ResumeHoldCode } from "../runner/src/credential-health";
 import type { Credential } from "../runner/src/credential-slots";
 import {
@@ -603,7 +603,7 @@ export function countOutsideRuns(book: SlotBook, runs: readonly OutsideRun[]): v
  */
 export function countJob(
   book: SlotBook,
-  job: { refs: readonly string[]; placed?: FleetJob["placed"]; accounts?: readonly string[] | undefined; fanout?: true | undefined },
+  job: { refs: readonly string[]; placed?: FleetJob["placed"]; accounts?: readonly string[] | undefined; fanout?: true | undefined; episode?: string | null | undefined },
   roster: Readonly<Record<string, FleetRosterEntry>>,
   runCredentials: ReadonlyMap<string, string>,
 ): void {
@@ -611,8 +611,40 @@ export function countJob(
   for (const ref of job.refs) {
     const placed = job.placed?.[ref];
     const id = placed !== undefined ? (placed?.id ?? null) : (runCredentials.get(ref) ?? null);
-    book.add(book.keysOf(driverOfEntry(roster[ref]), id), sessions);
+    book.add(book.keysOf(driverOfEntry(roster[ref]), id, job.episode), sessions);
   }
+}
+
+/**
+ * Put the live fleet runs no job of this supervisor owns (`unownedLiveRuns`)
+ * on the book: each on the credential it recorded, and a probe on the run-pod
+ * cap. Not on a driver's host cap: such a run is a run pod still playing
+ * after its roster died with the supervisor's container, or a runner
+ * unwinding for the seconds its heartbeat stays warm, and neither is one of
+ * the host's children for long. A run pod outlives a container restart (its
+ * owner is the pod, which stayed), so it can hold its credential for hours.
+ */
+export function countUnownedRuns(book: SlotBook, runs: readonly { credential: string | null; episode: string | null }[]): void {
+  for (const u of runs) {
+    const keys = [...(u.credential !== null ? [credentialKey(u.credential)] : []), ...book.keysOf(undefined, null, u.episode).filter((k) => k === RUN_POD_KEY)];
+    book.add(keys);
+  }
+}
+
+/**
+ * The published definition `<campaign>@<version>`: from the campaign's row
+ * (`Campaign.versions` holds every published version of its id, the active one
+ * included), else from every published definition, for a row that is gone.
+ */
+export function publishedVersion(
+  probe: { campaign: string; version: number },
+  campaigns: readonly Campaign[],
+  defs: readonly PublishedCampaign[] = [],
+): PublishedCampaign | undefined {
+  const c = campaigns.find((x) => x.name === probe.campaign);
+  if (c !== undefined && c.version === probe.version) return c.published;
+  const same = (d: PublishedCampaign): boolean => d.def.id === probe.campaign && d.def.version === probe.version;
+  return c?.versions.find(same) ?? defs.find(same);
 }
 
 /**
@@ -629,6 +661,8 @@ export function jobSpawn(
   stamp: string,
   eligible?: Eligible,
   campaigns: readonly Campaign[] = [],
+  /** Every published definition (`FleetConfig.campaignDefs`), for a live job whose campaign row is gone. */
+  defs: readonly PublishedCampaign[] = [],
 ): JobSpawn {
   const dims = episodeDimensions(job.episode);
   /*
@@ -643,10 +677,17 @@ export function jobSpawn(
    * flag that would set part of it; the numbers are carried on the spec only
    * so the fleet plans with what the run will be given (its ceiling, for ETAs
    * and drains) and a resume restates the same leash.
+   *
+   * The definition is the job's own `<id>@<version>`, never the row's active
+   * one: a published version is immutable, so a live job launched on @1 is
+   * still @1's after the row moves to @2 (or is deleted), and runs to its end
+   * as that. Every tick projects the live jobs through here, so matching only
+   * the active version threw on the next tick after the move and took the
+   * supervisor down with it (program-probe, 2026-11-12).
    */
-  const campaign = job.probe === undefined ? undefined : campaigns.find((c) => c.name === job.probe!.campaign && c.version === job.probe!.version);
+  const published = job.probe === undefined ? undefined : publishedVersion(job.probe, campaigns, defs);
   const probeFile: CampaignFile | undefined =
-    job.probe === undefined ? undefined : job.campaignFile ?? (campaign === undefined ? undefined : campaignFileOf(campaign.published, job.probe.cell, job.probe.arm));
+    job.probe === undefined ? undefined : job.campaignFile ?? (published === undefined ? undefined : campaignFileOf(published, job.probe.cell, job.probe.arm));
   if (job.probe !== undefined && probeFile === undefined) {
     fail(`job ${job.name}: ${job.probe.campaign}@${job.probe.version} is not a published campaign this config names`);
   }
@@ -1191,6 +1232,8 @@ export interface UnownedRun {
   refs: string[];
   model: string;
   episode: EpisodeId;
+  /** The credential it recorded, which it holds a slot on while it plays (`countUnownedRuns`). */
+  credential: string | null;
   /** Its lane resumes a pause in place (freeplay, a campaign that asked) rather than ending it. */
   resumesInPlace: boolean;
 }
@@ -1248,6 +1291,7 @@ export function unownedLiveRuns(opts: {
       refs: ref !== undefined ? [ref] : [],
       model: f.model,
       episode: f.episode,
+      credential: f.credential,
       resumesInPlace: resumesOnPause(f.episode, campaignResumeOf(opts.campaigns, f.campaign, f.campaignVersion ?? null)),
     });
   }
@@ -2681,6 +2725,8 @@ export interface InFlight {
   /** A party's accounts: it holds a session per member. A fan-out job's (`fanout`): it holds them all on one session. */
   accounts?: readonly string[];
   fanout?: true;
+  /** Its episode: a probing one is on the run-pod cap while run pods are on. */
+  episode?: EpisodeId | null;
 }
 
 /**
@@ -2691,10 +2737,11 @@ export interface InFlight {
  * and the dry-run planned it a second character on another account
  * (2026-10-14, codex-sol-61's a3 beside its live a2). `unownedRefs` are the
  * refs of live runs no job owns (`unownedLiveRuns`), held for their model as
- * the live tick holds them: never planned again, but not counted against a
- * credential or a driver cap, which the tick does not count them against
- * either. `outside` are the live runs the fleet did not launch, each on its
- * credential's slot as the tick counts them (`countOutsideRuns`).
+ * the live tick holds them: never planned again; `unowned` are the same runs,
+ * on their credential and the run-pod cap as the tick counts them
+ * (`countUnownedRuns`), never on a driver cap. `outside` are the live runs the
+ * fleet did not launch, each on its credential's slot as the tick counts them
+ * (`countOutsideRuns`). `runPods` is the book's run-pod setting (`runPodsOf`).
  */
 export function planTick(
   config: FleetConfig,
@@ -2716,6 +2763,8 @@ export function planTick(
   evals = true,
   /** Live runs this fleet did not launch, each on its credential's slot (`outsideRuns`). */
   outside: readonly OutsideRun[] = [],
+  unowned: readonly { credential: string | null; episode: string | null }[] = [],
+  runPods?: { max: number | undefined },
 ): {
   pinned: { job: FleetJob; spawn: JobSpawn }[];
   queue: QueuePlan;
@@ -2744,10 +2793,11 @@ export function planTick(
     .map((job) => ({ job, spawn: jobSpawn(job, config.roster, job.account!, stamp, eligible, config.campaigns) }));
   // Everything already holding a session is on the book first: what is in
   // flight, and the resumes, each on the credential it records.
-  const book = new SlotBook(config.credentials, config.policy.maxSessions);
+  const book = new SlotBook(config.credentials, config.policy.maxSessions, runPods);
   for (const j of inFlight) countJob(book, j, config.roster, runCredentials);
   for (const r of resumes) countJob(book, r.job, config.roster, runCredentials);
   countOutsideRuns(book, outside);
+  countUnownedRuns(book, unowned);
   const placing = { credentials: config.credentials, book, gate };
   // A pinned job that no credential has room for does not spawn: it is
   // reported with the picks the policy held, which is where `--dry-run` says
@@ -2769,7 +2819,7 @@ export function planTick(
   // ahead of everything fresh.
   const occupied = new Map([...inFlight.map((j) => [j.name, j.account] as const), ...resumes.map((r) => [r.job.name, r.account] as const)]);
   const runningRefs = new Set([...pinned.flatMap((p) => p.job.refs), ...resumes.flatMap((r) => r.job.refs), ...inFlight.flatMap((j) => j.refs)]);
-  // Plus the models of live runs no job owns: held, not counted (see above).
+  // Plus the models of live runs no job owns: held (and counted above).
   const heldRefs = new Set([...runningRefs, ...unownedRefs]);
   const queue = planQueue({
     queue: poolJobs(config),

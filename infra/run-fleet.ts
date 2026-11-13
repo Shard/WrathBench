@@ -109,6 +109,7 @@ import {
   affinityFrom,
   countJob,
   countOutsideRuns,
+  countUnownedRuns,
   placeJob,
   affinityOf,
   applyPause,
@@ -204,7 +205,7 @@ import {
 import { formatEndedRun, printDryRun, printLiveRuns, printStatus } from "./run-fleet-status";
 import { accountHeldBy, drainMarkerPath, releaseRunSession } from "./run-roster";
 import { K8sClient } from "./k8s-client";
-import { DRAIN_POD_QUERY_TIMEOUT_MS, rosterHasRunPod } from "./run-pod";
+import { DRAIN_POD_QUERY_TIMEOUT_MS, readLauncherSettings, rosterHasRunPod } from "./run-pod";
 import { runCampaignFile, writeCampaignFile } from "../runner/src/campaign-file";
 import { deleteCodexThread, pruneRollouts, type RolloutPrune } from "../runner/src/codex-rollout";
 import { cliBaseEnv } from "../runner/src/adapter-shared";
@@ -217,6 +218,7 @@ import {
   gateSpawns,
   placeRef,
   resumeHoldOf,
+  runPodsOf,
   SlotBook,
   writeCredentialUsageSidecar,
   type CredentialGate,
@@ -952,6 +954,19 @@ async function main(): Promise<void> {
   // or a command is refused as a pair off the cluster (`campaignPairRefusals`).
   // The same test the roster's launcher choice makes.
   const parseOpts = { onCluster: CONTAINER && K8sClient.inCluster() !== null };
+  // The chart's cap on run pods in flight (`runPods.maxPods`), read each tick
+  // from the mounted settings as the roster's launcher reads them at each
+  // spawn: a values change reaches the mount without rolling this pod.
+  // Unreadable is said once and is no cap; the launcher refuses without it.
+  let launcherSettingsError: string | undefined;
+  const maxRunPods = (): number | undefined => {
+    if (!parseOpts.onCluster) return undefined;
+    const settings = readLauncherSettings();
+    const error = "error" in settings ? settings.error : undefined;
+    if (error !== undefined && error !== launcherSettingsError) console.error(`run-fleet: ${error} — no cap on run pods in flight`);
+    launcherSettingsError = error;
+    return "error" in settings ? undefined : settings.maxPods;
+  };
   const boot = rereadFleet(parseFleet({}, parseOpts), readFleetConfig, parseOpts);
   let config = boot.config;
   let wasEmpty = boot.empty === true;
@@ -1119,7 +1134,7 @@ async function main(): Promise<void> {
       Date.now(),
       goUsage.readHolds(cfg.credentials),
     );
-    const book = new SlotBook(cfg.credentials, cfg.policy.maxSessions);
+    const book = new SlotBook(cfg.credentials, cfg.policy.maxSessions, runPodsOf(cfg.policy.runPods, parseOpts.onCluster, cfg.policy.runPods === "probes" ? maxRunPods() : undefined));
     lastCredentials = { gate: credGate, book, credentials: cfg.credentials, runs: billed };
     const byName = new Map(cfg.jobs.map((j) => [j.name, j]));
     const runningRefs = new Set<string>();
@@ -1166,6 +1181,12 @@ async function main(): Promise<void> {
     // And every live run this fleet did not launch, on the credential it
     // bills: a hand launch takes a slot as surely as a job does.
     countOutsideRuns(book, outsideRuns(billed, { running: ownRunIds, busyAccounts: ownAccounts }));
+    // And every live fleet run no job of this supervisor owns — a run pod
+    // still playing after its roster died with this container — on its
+    // credential and the run-pod cap (`countUnownedRuns`). It holds its
+    // account and its model below, too.
+    const unowned = unownedLiveRuns({ runs, roster: cfg.roster, campaigns: cfg.campaigns, running: ownRunIds, busyAccounts: ownAccounts });
+    countUnownedRuns(book, unowned);
     const held = (a: string): string | undefined => accountHeldBy(a, "");
     // Resumes before anything fresh: a paused run goes back onto
     // its own account ahead of the queue and the policy, so nothing can wipe
@@ -1206,14 +1227,14 @@ async function main(): Promise<void> {
       const owing = owed === undefined ? job : { ...job, owed: { copies: owed, taken: takenRunIds } };
       if (sets.running.has(job.name) || !job.enabled) {
         // Live (counted above), or disabled and so a drain or a park.
-        out.push(jobSpawn(withPlaced(owing), cfg.roster, job.account!, stampToday, eligible, cfg.campaigns));
+        out.push(jobSpawn(withPlaced(owing), cfg.roster, job.account!, stampToday, eligible, cfg.campaigns, cfg.campaignDefs));
         if (sets.running.has(job.name)) for (const r of job.refs) runningRefs.add(r);
         continue;
       }
       // A pinned job about to resume a paused run is placed with the resume,
       // on the credential that run is on.
       if (resumingNames.has(job.name)) {
-        out.push({ ...jobSpawn(owing, cfg.roster, job.account!, stampToday, eligible, cfg.campaigns), enabled: false });
+        out.push({ ...jobSpawn(owing, cfg.roster, job.account!, stampToday, eligible, cfg.campaigns, cfg.campaignDefs), enabled: false });
         for (const r of job.refs) runningRefs.add(r);
         continue;
       }
@@ -1223,10 +1244,10 @@ async function main(): Promise<void> {
       const placed = placeFresh(owing);
       if (!placed.ok) {
         pinnedSkips.push({ job, reason: placed.why });
-        out.push({ ...jobSpawn(owing, cfg.roster, job.account!, stampToday, eligible, cfg.campaigns), enabled: false });
+        out.push({ ...jobSpawn(owing, cfg.roster, job.account!, stampToday, eligible, cfg.campaigns, cfg.campaignDefs), enabled: false });
         continue;
       }
-      out.push(jobSpawn(placed.job, cfg.roster, job.account!, stampToday, eligible, cfg.campaigns));
+      out.push(jobSpawn(placed.job, cfg.roster, job.account!, stampToday, eligible, cfg.campaigns, cfg.campaignDefs));
       for (const r of job.refs) runningRefs.add(r);
     }
     // Pool jobs with a live process: keep running whatever the file now says,
@@ -1249,7 +1270,7 @@ async function main(): Promise<void> {
           out.push({ name, enabled: false, account, loop: false, entries: [{ model: "gone" }] });
           runningRefs.add(running.ref);
         } else {
-          out.push(jobSpawn(withPlaced(running), cfg.roster, account, stampToday, undefined, cfg.campaigns));
+          out.push(jobSpawn(withPlaced(running), cfg.roster, account, stampToday, undefined, cfg.campaigns, cfg.campaignDefs));
           runningRefs.add(running.ref);
         }
         continue;
@@ -1260,7 +1281,7 @@ async function main(): Promise<void> {
         out.push({ name, enabled: false, account, loop: false, entries: [{ model: "gone" }] });
         continue;
       }
-      out.push(jobSpawn(withPlaced(running ?? fromFile), cfg.roster, account, stampToday, eligible, cfg.campaigns));
+      out.push(jobSpawn(withPlaced(running ?? fromFile), cfg.roster, account, stampToday, eligible, cfg.campaigns, cfg.campaignDefs));
       for (const r of fromFile.refs) runningRefs.add(r);
     }
     // Live processes the file no longer YIELDS — a completed campaign cell
@@ -1279,14 +1300,15 @@ async function main(): Promise<void> {
       }
     }
     // A live fleet run none of this supervisor's jobs is playing — the two
-    // minutes a killed runner's heartbeat stays warm after a pod recreate, or
-    // a runner still unwinding under an exited roster — holds its model as well
-    // as its account (`held`), or the policy plans that model a second session
-    // on another free account while its character is mid-run on the first.
-    // Its model only: it is not counted against a driver or paid cap. Once it
-    // reads cold it lets go, and `implicitPauses` has made it an `offline`
-    // pause on a lane that resumes.
-    for (const u of unownedLiveRuns({ runs, roster: cfg.roster, campaigns: cfg.campaigns, running: ownRunIds, busyAccounts: ownAccounts })) {
+    // minutes a killed runner's heartbeat stays warm after a pod recreate, a
+    // runner still unwinding under an exited roster, or a run pod playing on
+    // after this container restarted — holds its model as well as its account
+    // (`held`), or the policy plans that model a second session on another
+    // free account while its character is mid-run on the first. It is on its
+    // credential and the run-pod cap (counted above), never on a driver's
+    // host cap. Once it reads cold it lets go, and `implicitPauses` has made
+    // it an `offline` pause on a lane that resumes.
+    for (const u of unowned) {
       const refs = u.refs.filter((r) => !runningRefs.has(r));
       if (refs.length === 0) continue;
       for (const r of refs) runningRefs.add(r);
@@ -1377,7 +1399,7 @@ async function main(): Promise<void> {
         continue;
       }
       const resumed = placedResume.job;
-      const spawn = jobSpawn(resumed, cfg.roster, r.account, stampToday, undefined, cfg.campaigns);
+      const spawn = jobSpawn(resumed, cfg.roster, r.account, stampToday, undefined, cfg.campaigns, cfg.campaignDefs);
       if (r.job.account !== undefined) {
         pending.set(name, resumed);
         const idx = out.findIndex((l) => l.name === name);
@@ -1448,7 +1470,7 @@ async function main(): Promise<void> {
       if (keep.length > 0) a.job = { ...a.job, keepCharacters: keep };
       pending.set(a.job.name, a.job);
       for (const r of a.job.refs) freshAssign.push({ ref: r, account });
-      out.push(jobSpawn(a.job, cfg.roster, account, stampToday, eligible, cfg.campaigns));
+      out.push(jobSpawn(a.job, cfg.roster, account, stampToday, eligible, cfg.campaigns, cfg.campaignDefs));
     }
     // The policy fills what the queue left free. A gated spawn is not a
     // problem: the pick is re-made next tick from the same projection.
@@ -1526,7 +1548,7 @@ async function main(): Promise<void> {
           record({ job: job.name, event: "policy-pick", detail: `${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account}: ${why}` });
         }
         for (const r of job.refs) freshAssign.push({ ref: r, account });
-        out.push(jobSpawn(job, cfg.roster, account, stampToday, undefined, cfg.campaigns));
+        out.push(jobSpawn(job, cfg.roster, account, stampToday, undefined, cfg.campaigns, cfg.campaignDefs));
       }
       const taken = new Set([...runningAndReserved.values(), ...lastPlan.assign.map((a) => a.account), ...picks.map((p) => p.account)].map((a) => a.toUpperCase()));
       const free = scheduledAccounts(cfg).filter((a) => !taken.has(a.toUpperCase()) && held(a) === undefined);
