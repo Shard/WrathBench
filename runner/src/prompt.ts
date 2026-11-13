@@ -292,7 +292,7 @@ function programReplacements(program: ProgramPrompt): readonly [string, string][
     ],
     [
       "## Each turn\n\nEvery turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad.",
-      "## Each turn\n\nEvery turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad. After you have slept, the turn begins with a [wake] block: why you were woken and what your routines did meanwhile — each routine's state and how long ago it last acted, new errors with the lines of your files they came from, refusals with their hints, moves that replaced one another, what changed for your character, and the last lines your routines printed.",
+      "## Each turn\n\nEvery turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad, or a line saying it is unchanged since you last saw it in this conversation. After you have slept, the turn begins with a [wake] block: why you were woken and what your routines did meanwhile — each routine's state and how long ago it last acted, new errors with the lines of your files they came from, refusals with their hints, moves that replaced one another, what changed for your character, and the last lines your routines printed.",
     ],
   ];
 }

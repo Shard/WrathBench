@@ -17,6 +17,7 @@ import type { Database } from "bun:sqlite";
 import {
   appendPendingActionHints as appendPending,
   coreTools,
+  programEditScratchpad,
   programTools,
   toolCallCount,
   ToolSet,
@@ -536,7 +537,8 @@ function programToolList(withYield: boolean): ToolSpec<ProgramContext>[] {
     CORE.state_summary as ToolSpec<ProgramContext>,
     searchReferenceTool as ToolSpec<ProgramContext>,
     CORE.write_scratchpad as ToolSpec<ProgramContext>,
-    CORE.edit_scratchpad as ToolSpec<ProgramContext>,
+    // Its not-found refusal says the pad may be in an earlier message (the scaffold rule, D8).
+    programEditScratchpad(CORE.edit_scratchpad as ToolSpec<ProgramContext>),
     reflectTool as ToolSpec<ProgramContext>,
     logStatusTool as ToolSpec<ProgramContext>,
     readLogTool as ToolSpec<ProgramContext>,

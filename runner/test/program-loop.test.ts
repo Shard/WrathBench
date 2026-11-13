@@ -9,7 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import type { ActionHintNote, ProgramFact, ProgramFacts, RoutineRow } from "@wrathbench/mcp";
-import { Scratchpad } from "@wrathbench/mcp";
+import { PROGRAM_EDIT_SCRATCHPAD_NOT_FOUND, Scratchpad } from "@wrathbench/mcp";
 import { StubAdapter, type ChatRequest } from "../src/adapter";
 import { campaignPairRefusals, type PairRosterEntry } from "../src/campaigns";
 import { comparabilityOf, promptHash } from "../src/comparability";
@@ -30,7 +30,7 @@ import {
 import { configFromArgs } from "../src/run";
 import { parseRunArgs } from "../src/run-flags";
 import type { SandboxHost } from "../src/sandbox/host";
-import { coerceToolArgs, isKnownTool, toolsFor, TOOLS } from "../src/tools";
+import { callTool, coerceToolArgs, isKnownTool, toolsFor, TOOLS } from "../src/tools";
 import { readTrajectory, Trajectory } from "../src/trajectory";
 import { mergeFacts, ProgramWake, renderWake, sleepUntilWake, WAKE_CAP_MS, Waker, type WakeReason, type WakeView } from "../src/wake";
 import { Watchdogs } from "../src/watchdogs";
@@ -142,6 +142,25 @@ describe("the program prompt", () => {
     expect(program).toContain("- start_routine / stop_routine: start_routine({ name, args? })");
     expect(program).toContain("After you have slept, the turn begins with a [wake] block:");
     expect(program.endsWith(PROGRAM_BODY_TAIL)).toBe(true);
+  });
+
+  test("each turn's pad is the pad or a line saying it is unchanged, and a pad edit's miss says where the pad may be (D8); the snippet loop's are as they were", async () => {
+    expect(program).toContain("Every turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad, or a line saying it is unchanged since you last saw it in this conversation. After you have slept,");
+    expect(SYSTEM_PROMPT).toContain("Every turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad. Older conversation is trimmed");
+    const dir = tempDir("wrathbench-program-pad-");
+    const ctx = (program: boolean) =>
+      ({
+        sandbox: {},
+        scratchpad: new Scratchpad(join(dir, "pad.md")),
+        sessionLive: () => true,
+        turn: () => 1,
+        secrets: { scrub: (t: string) => t },
+        ...(program ? { program: { readFile: () => ({ ok: true, text: "" }) } } : {}),
+      }) as never;
+    const miss = { old: "absent", new: "x" };
+    expect((await callTool(ctx(true), "edit_scratchpad", miss)).text).toBe(PROGRAM_EDIT_SCRATCHPAD_NOT_FOUND);
+    expect(PROGRAM_EDIT_SCRATCHPAD_NOT_FOUND).toEndWith("The scratchpad as last written is in this turn's context or earlier in this conversation.");
+    expect((await callTool(ctx(false), "edit_scratchpad", miss)).text).toBe("edit_scratchpad: old was not found in the scratchpad; copy the text exactly, whitespace included. The scratchpad as last written is in this turn's context.");
   });
 
   test("a successful load restarts every running routine, as the stack does", () => {
