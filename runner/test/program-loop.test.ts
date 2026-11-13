@@ -147,6 +147,9 @@ describe("the program prompt", () => {
   test("each turn's pad is the pad or a line saying it is unchanged, and a pad edit's miss says where the pad may be (D8); the snippet loop's are as they were", async () => {
     expect(program).toContain("Every turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad, or a line saying it is unchanged since you last saw it in this conversation. After you have slept,");
     expect(SYSTEM_PROMPT).toContain("Every turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad. Older conversation is trimmed");
+    expect(program).toContain("There is no read tool: the scratchpad as last written is in this turn's context or earlier in this conversation, and inside a snippet await scratchpad.read() returns it.");
+    expect(program).not.toContain("every turn's context already carries the scratchpad");
+    expect(SYSTEM_PROMPT).toContain("There is no read tool: every turn's context already carries the scratchpad as last written,");
     const dir = tempDir("wrathbench-program-pad-");
     const ctx = (program: boolean) =>
       ({

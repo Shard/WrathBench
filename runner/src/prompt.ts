@@ -291,6 +291,10 @@ function programReplacements(program: ProgramPrompt): readonly [string, string][
       program.yield ? `${PROGRAM_TOOL_BULLETS}${PROGRAM_YIELD_BULLET}` : PROGRAM_TOOL_BULLETS,
     ],
     [
+      "There is no read tool: every turn's context already carries the scratchpad as last written, and inside a snippet await scratchpad.read() returns it.",
+      "There is no read tool: the scratchpad as last written is in this turn's context or earlier in this conversation, and inside a snippet await scratchpad.read() returns it.",
+    ],
+    [
       "## Each turn\n\nEvery turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad.",
       "## Each turn\n\nEvery turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad, or a line saying it is unchanged since you last saw it in this conversation. After you have slept, the turn begins with a [wake] block: why you were woken and what your routines did meanwhile — each routine's state and how long ago it last acted, new errors with the lines of your files they came from, refusals with their hints, moves that replaced one another, what changed for your character, and the last lines your routines printed.",
     ],
