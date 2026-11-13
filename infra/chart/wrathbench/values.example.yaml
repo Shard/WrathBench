@@ -179,6 +179,9 @@ runPods:
   # chart-wide list on run pods only.
   imagePullSecrets:
     - ghcr-pull
+  # Run pods in flight at once: what the namespace's ResourceQuota fits beside
+  # the release's own pods (null: no cap).
+  maxPods: 3
   resources:
     requests:
       cpu: 250m

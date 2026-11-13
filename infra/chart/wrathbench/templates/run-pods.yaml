@@ -112,7 +112,8 @@ docs/RUNBOOK.md "Run pods"). Three objects:
     release runner's repository by default; a deploying cluster adds the
     registry its PR builds are pushed to. An image outside the list, untagged,
     or `:latest` is refused before a pod exists, so a store write cannot run an
-    arbitrary image with the fleet's tokens.
+    arbitrary image with the fleet's tokens. And `maxPods`, when set: how many
+    run pods the supervisor keeps in flight at once.
 
 The launcher ships dark: nothing here creates a pod until the fleet setting
 `policy.runPods` is "probes".
@@ -167,6 +168,8 @@ metadata:
 data:
   pod.json: |
     {{- include "wrathbench.runPodTemplate" . | fromYaml | toPrettyJson | nindent 4 }}
+  {{- $launcher := dict "allowedImages" (default (list (printf "%s/%s" (include "wrathbench.registry" .) .Values.image.names.runner)) .Values.runPods.allowedImages) "imagePullSecrets" (default (list) .Values.runPods.imagePullSecrets) }}
+  {{- with .Values.runPods.maxPods }}{{ $_ := set $launcher "maxPods" (int .) }}{{ end }}
   launcher.json: |
-    {{- dict "allowedImages" (default (list (printf "%s/%s" (include "wrathbench.registry" .) .Values.image.names.runner)) .Values.runPods.allowedImages) "imagePullSecrets" (default (list) .Values.runPods.imagePullSecrets) | toPrettyJson | nindent 4 }}
+    {{- $launcher | toPrettyJson | nindent 4 }}
 {{- end }}

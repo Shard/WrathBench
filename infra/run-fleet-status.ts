@@ -101,7 +101,7 @@ import {
 import { readMeta } from "../runner/src/trajectory";
 import { maskCredentialShapes } from "../runner/src/secret-scan";
 import { accountHeldBy } from "./run-roster";
-import { readImageRecord } from "./run-pod";
+import { readImageRecord, runPodsHere } from "./run-pod";
 import { type CampaignFile, runCampaignFile } from "../runner/src/campaign-file";
 import { isConcluded, type Campaign, type CampaignRefusal } from "../runner/src/campaigns";
 import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
@@ -1234,9 +1234,9 @@ export interface InFlightRun extends InFlight {
  * heartbeat outlives it. Both hold their account and their model, as on the
  * live tick; the dry-run used to plan as if nothing were running, so it
  * predicted codex-sol-61 a second character (`-a3`, on another account)
- * beside its live `-a2`. A run no job owns is not counted against a driver or
- * paid cap, which the tick does not count it against either, and its row says
- * what follows (`planDryRun`).
+ * beside its live `-a2`. A run no job owns is on its credential and the
+ * run-pod cap but no driver cap, as on the tick, and its row says what follows
+ * (`planDryRun`).
  */
 export function inFlightRuns(opts: {
   jobs: ReadonlyMap<string, StateJob>;
@@ -1277,6 +1277,7 @@ export function inFlightRuns(opts: {
       models: [u.model],
       episode: u.episode,
       runId: u.runId,
+      ...(u.credential !== null ? { credentials: [u.credential] } : {}),
       resumesInPlace: u.resumesInPlace,
     });
   }
@@ -1319,6 +1320,8 @@ export function planDryRun(opts: {
   offByGroup?: ReadonlySet<string>;
   /** Live runs the fleet did not launch, each on its credential's slot (`outsideRuns`), as the tick counts them. */
   outside?: readonly OutsideRun[];
+  /** The book's run-pod setting (`runPodsOf`), as the tick plans under it. */
+  runPods?: { max: number | undefined };
 }): DryRunPlan {
   const { config, runs, states, held, stamp, gate } = opts;
   const inFlight = opts.inFlight ?? [];
@@ -1335,7 +1338,7 @@ export function planDryRun(opts: {
   // Affinity, so the printed plan places accounts the way the live
   // supervisor would: a report that disagrees with the tick is worse than none.
   // For the same reason a live run no job owns keeps its account (via `held`)
-  // and its model, and counts against no cap, as on the tick.
+  // and its model, and is on its credential and the run-pod cap, as on the tick.
   const plan = planTick(
     config,
     states,
@@ -1351,6 +1354,8 @@ export function planDryRun(opts: {
     gate,
     opts.evals ?? true,
     opts.outside ?? [],
+    inFlight.filter((r) => !r.owned).map((r) => ({ credential: r.credentials?.[0] ?? null, episode: r.episode })),
+    opts.runPods,
   );
   const counted = countedFrom(states);
   const rows: AccountRow[] = [];
@@ -1534,6 +1539,7 @@ export function printDryRun(
     evals: groups.evals,
     offByGroup,
     outside: outsideRuns([...runs, ...unstamped], { running: ownRunIds, busyAccounts }),
+    runPods: runPodsHere(config.policy.runPods),
   });
   console.log("");
   for (const line of formatCredentialStatus(localCredentialStatuses(config, credGate, runs, unstamped), config.policy.maxSessions, now)) console.log(line);

@@ -279,6 +279,7 @@ export interface Resolved {
 
 type Outcome =
   | "launch-failed"
+  | "no-capacity"
   | "done"
   | "done-failed"
   | "retry"
@@ -1922,6 +1923,30 @@ export function writeLaunchFailure(runDir: string, spec: Resolved, detail: strin
   writeMetaFile(runDir, meta);
 }
 
+/**
+ * What a launch that never became a run leaves on disk. A fresh probe spent
+ * an attempt on its square, and the stub is that attempt (`writeLaunchFailure`)
+ * — never on a resume, never over a run that wrote its own meta.json, never
+ * for another lane. Nothing either when the launcher found no room for it
+ * (`EpisodeExit.noCapacity`, a quota refusal): that is no attempt.
+ */
+export function recordUnlaunched(
+  dir: string,
+  spec: Resolved,
+  exit: EpisodeExit,
+  detail: string,
+  opts: { resume: boolean; harnessVersion: string; now?: number },
+): { kind: "no-capacity" | "stub" | "none" } | { kind: "error"; error: string } {
+  if (exit.noCapacity === true) return { kind: "no-capacity" };
+  if (opts.resume || spec.campaignFile === undefined || existsSync(join(dir, "meta.json"))) return { kind: "none" };
+  try {
+    writeLaunchFailure(dir, spec, detail, { harnessVersion: opts.harnessVersion, ...(opts.now !== undefined ? { now: opts.now } : {}) });
+    return { kind: "stub" };
+  } catch (e) {
+    return { kind: "error", error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /** The build a launch-failed stub names: the arm's pinned image's stamp, or this roster's own. */
 function launchStamp(spec: Resolved): string {
   const image = spec.launch?.image ?? null;
@@ -2026,6 +2051,17 @@ async function attemptSpec(
     // A resume keeps the file the run launched with.
     if (!resume && campaignFile !== undefined && !opts.dryRun) writeCampaignFile(join(REPO_ROOT, RUNS_DIR, spec.runId), campaignFile);
     const exit = await runEpisode(spec, resume);
+    // The namespace had no room for the pod (`isQuotaRefusal`): nothing ran, so
+    // this is no attempt — no stub, no ladder, the run left as it was. The
+    // supervisor plans under the chart's run-pod cap, so this is the race
+    // that cap cannot see (another pod taking the room), and the square is
+    // picked again once there is room.
+    if (exit.noCapacity === true) {
+      const detail = exit.failure ?? "no capacity";
+      say(`no capacity for ${spec.runId}: ${detail} — not an attempt, nothing recorded`);
+      record({ runId: spec.runId, model: spec.model, outcome: "no-capacity", detail });
+      return "done";
+    }
     const verdict = classify(spec, exit);
     const level = readLevel(spec.runId);
     // Resolved again: a run archived as it exited has moved, bytes and all.
@@ -2036,18 +2072,10 @@ async function attemptSpec(
     if (verdict.kind === "launch-failed") {
       say(`launch-failed ${spec.runId}: ${verdict.detail}`);
       record({ runId: spec.runId, model: spec.model, outcome: "launch-failed", detail: verdict.detail });
-      // A fresh probe that never became a run still spent an attempt on its
-      // square: the stub is that attempt on disk (`writeLaunchFailure`). Never
-      // on a resume, never over a run that wrote its own meta.json, never for
-      // another lane.
-      const dir = join(REPO_ROOT, RUNS_DIR, spec.runId);
-      if (!resume && spec.campaignFile !== undefined && !opts.dryRun && !existsSync(join(dir, "meta.json"))) {
-        try {
-          writeLaunchFailure(dir, spec, verdict.detail, { harnessVersion: launchStamp(spec) });
-          say(`launch-failed ${spec.runId}: recorded as a launch-failed attempt on ${spec.campaignFile.campaign}@${spec.campaignFile.version} ${spec.campaignFile.cell.id}/${spec.campaignFile.arm.id}`);
-        } catch (e) {
-          say(`launch-failed ${spec.runId}: could not record the attempt — ${e instanceof Error ? e.message : String(e)}`);
-        }
+      if (!opts.dryRun) {
+        const left = recordUnlaunched(join(REPO_ROOT, RUNS_DIR, spec.runId), spec, exit, verdict.detail, { resume, harnessVersion: launchStamp(spec) });
+        if (left.kind === "stub") say(`launch-failed ${spec.runId}: recorded as a launch-failed attempt on ${spec.campaignFile!.campaign}@${spec.campaignFile!.version} ${spec.campaignFile!.cell.id}/${spec.campaignFile!.arm.id}`);
+        if (left.kind === "error") say(`launch-failed ${spec.runId}: could not record the attempt — ${left.error}`);
       }
       return "done";
     }

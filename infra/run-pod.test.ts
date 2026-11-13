@@ -19,9 +19,12 @@ import {
   harnessStampOf,
   IMAGE_ANNOTATION,
   imageRefusal,
+  isQuotaRefusal,
   loadPodLauncher,
   parseImageRef,
+  parseLauncherSettings,
   PodLauncher,
+  readLauncherSettings,
   readImageRecord,
   ROSTER_PID_LABEL,
   rosterHasRunPod,
@@ -31,7 +34,9 @@ import {
   RUN_POD_TEMPLATE_ENV,
   runHashLabel,
   runPodEnv,
+  runPodsHere,
 } from "./run-pod";
+import { runPodsOf } from "./run-fleet-credentials";
 import { tempDirs } from "./temp-dirs";
 import { episodeSecretEnv, processEpisodeEnv } from "./episode-launcher";
 import { parseStoreKey, sealSecret, SEALED_SECRET_ENV, STORE_KEY_ENV, unsealLaunchSecret } from "../runner/src/store-secrets";
@@ -630,9 +635,34 @@ describe("PodLauncher against a fake API", () => {
       const exit2 = await h2.exited;
       expect(exit2.code).toBe(2);
       expect(exit2.failure).toContain("cannot create resource");
+      // A refusal that would refuse this pod every time is a counted launch failure, not a wait for room.
+      expect(exit2.noCapacity).toBeUndefined();
     } finally {
       api.stop();
     }
+  });
+
+  test("a create the namespace's quota refuses is no capacity, not a refusal: no pod, and the roster records no attempt", async () => {
+    // What the v1 namespace answered the eighth probe launch on 2026-11-12.
+    const api = new FakeApi();
+    try {
+      const dir = join(tempDir("wb-run-pod-"), "run");
+      api.rejectCreate =
+        'pods "wrathbench-v1-run-2wgbv" is forbidden: exceeded quota: wrathbench-v1-quota, requested: limits.memory=3Gi, used: limits.memory=28160Mi, limited: limits.memory=28Gi';
+      const h = await launcher(api).start(launch(dir));
+      expect(h.describe()).toStartWith("no capacity: run pod create refused");
+      const exit = await h.exited;
+      expect(exit).toMatchObject({ code: 2, noCapacity: true });
+      expect(exit.failure).toContain("exceeded quota: wrathbench-v1-quota");
+      expect(api.pods.size).toBe(0);
+    } finally {
+      api.stop();
+    }
+    expect(isQuotaRefusal(new K8sError(403, "Forbidden", "POST …: 403 Forbidden — pods is forbidden: exceeded quota: q, requested: pods=1"))).toBe(true);
+    // Only the quota: an admission webhook's or RBAC's 403, and any other status, refuse this pod for good.
+    expect(isQuotaRefusal(new K8sError(403, "Forbidden", "POST …: 403 Forbidden — admission webhook denied the request"))).toBe(false);
+    expect(isQuotaRefusal(new K8sError(422, "Invalid", "POST …: 422 Invalid — exceeded quota"))).toBe(false);
+    expect(isQuotaRefusal(new Error("exceeded quota"))).toBe(false);
   });
 
   test("rosterHasRunPod sees its own roster's live pods and not another's or a finished one", async () => {
@@ -726,6 +756,23 @@ describe("PodLauncher against a fake API", () => {
       api.stop();
     }
   });
+
+  test("the settings' maxPods is a positive integer or no cap; the supervisor's book takes it only for run pods on the cluster", () => {
+    expect(parseLauncherSettings({ allowedImages: ALLOWED }).maxPods).toBeUndefined();
+    expect(parseLauncherSettings({ maxPods: null }).maxPods).toBeUndefined();
+    expect(parseLauncherSettings({ maxPods: 3 }).maxPods).toBe(3);
+    for (const bad of [0, -1, 2.5, "3"]) expect(() => parseLauncherSettings({ maxPods: bad })).toThrow(/maxPods must be a positive integer/);
+    const dir = tempDir("wb-run-pod-");
+    writeFileSync(join(dir, "launcher.json"), JSON.stringify({ allowedImages: ALLOWED, maxPods: 3 }));
+    expect(readLauncherSettings({ [RUN_POD_LAUNCHER_ENV]: join(dir, "launcher.json") })).toMatchObject({ maxPods: 3 });
+    expect(readLauncherSettings({ [RUN_POD_LAUNCHER_ENV]: join(dir, "nope.json") })).toMatchObject({ error: expect.stringContaining("could not be read") });
+    expect(runPodsOf("probes", true, 3)).toEqual({ max: 3 });
+    expect(runPodsOf("probes", true, undefined)).toEqual({ max: undefined });
+    expect(runPodsOf("off", true, 3)).toBeUndefined();
+    expect(runPodsOf("probes", false, 3)).toBeUndefined();
+    // A report off the cluster plans no pods.
+    expect(runPodsHere("probes", {})).toBeUndefined();
+  });
 });
 
 // -------------------------------------------------------------------- chart
@@ -806,6 +853,12 @@ describe("the chart's run-pod template", () => {
     const tpl = JSON.parse(podJson.split("\n").map((l) => l.replace(/^ {4}/, "")).join("\n")) as Pod;
     const launcherJson = JSON.parse(cm!.slice(cm!.indexOf("launcher.json: |") + "launcher.json: |".length).split("\n").map((l) => l.replace(/^ {4}/, "")).join("\n")) as { allowedImages: string[]; imagePullSecrets: string[] };
     expect(launcherJson).toEqual({ allowedImages: ["harbor.example/library/wrathbench-runner", "ghcr.io/shard/wrathbench-runner"], imagePullSecrets: ["ghcr-pull"] });
+    // No cap unless the values set one; set, it reaches the settings as an integer the launcher's parser takes.
+    const capped = Bun.spawnSync([helm!, "template", "wrathbench", chart, "--namespace", "wrathbench", "--set", "image.registry=harbor.example/library", "--set", "image.tag=harness-0.5-934-ge0ca125f", "--set", "runPods.maxPods=3"], { stdout: "pipe", stderr: "pipe" });
+    expect(capped.exitCode).toBe(0);
+    const cappedCm = capped.stdout.toString().split(/^---$/m).find((d) => d.includes("name: wrathbench-run-pod-template"))!;
+    const cappedJson = JSON.parse(cappedCm.slice(cappedCm.indexOf("launcher.json: |") + "launcher.json: |".length).split("\n").map((l) => l.replace(/^ {4}/, "")).join("\n")) as unknown;
+    expect(parseLauncherSettings(cappedJson)).toEqual({ allowedImages: ["harbor.example/library/wrathbench-runner"], imagePullSecrets: [], maxPods: 3 });
 
     expect(tpl.spec["restartPolicy"]).toBe("Never");
     expect(tpl.spec["automountServiceAccountToken"]).toBe(false);

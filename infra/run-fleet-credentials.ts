@@ -191,6 +191,19 @@ export function credentialGate(
 export const credentialKey = (id: string): string => `credential:${id}`;
 /** A driver's host-session key in a `SlotBook`. */
 export const driverKey = (driver: string): string => `driver:${driver}`;
+/** The run-pod key in a `SlotBook`: every probing episode while it runs as its own pod. */
+export const RUN_POD_KEY = "run-pods";
+
+/**
+ * The book's run-pod setting: undefined while probing episodes are child
+ * processes (`policy.runPods` off, or off the cluster: `chooseLauncher`'s
+ * test), else the chart's cap on pods in flight (`runPods.maxPods`, absent
+ * for none). The cap is the namespace's room said up front: its
+ * ResourceQuota refuses a pod past it at creation (`isQuotaRefusal`).
+ */
+export function runPodsOf(mode: string, onCluster: boolean, maxPods: number | undefined): { max: number | undefined } | undefined {
+  return mode === "probes" && onCluster ? { max: maxPods } : undefined;
+}
 
 /**
  * Every run in flight, counted on its credential's slots and its driver's
@@ -204,18 +217,28 @@ export class SlotBook {
   constructor(
     credentials: readonly Credential[],
     private readonly maxSessions: Readonly<Record<string, number>>,
+    /**
+     * How the probing episodes run (`runPodsOf`): undefined while they are
+     * child processes, else as pods under `max` at once (none: no cap).
+     */
+    private readonly runPods?: { max: number | undefined },
   ) {
     this.slots = new Map(credentials.map((c) => [credentialKey(c.id), c.slots]));
   }
 
-  /** The keys one session of `driver` on credential `id` (none for a scripted run) counts against. */
-  keysOf(driver: string | undefined, id: string | null | undefined): string[] {
+  /**
+   * The keys one session of `driver` on credential `id` (none for a scripted
+   * run) counts against, and the run-pod key for a probing episode while those
+   * run as pods.
+   */
+  keysOf(driver: string | undefined, id: string | null | undefined, episode?: string | null): string[] {
     const d = driver ?? DEFAULT_DRIVER;
-    return [...(id != null ? [credentialKey(id)] : []), driverKey(d)];
+    return [...(id != null ? [credentialKey(id)] : []), driverKey(d), ...(episode === "probing" && this.runPods !== undefined ? [RUN_POD_KEY] : [])];
   }
 
   capOf(key: string): number | undefined {
     if (key.startsWith("credential:")) return this.slots.get(key) ?? 0;
+    if (key === RUN_POD_KEY) return this.runPods?.max;
     return this.maxSessions[key.slice("driver:".length)];
   }
 
@@ -243,12 +266,13 @@ export class SlotBook {
   describe(key: string): string {
     const cap = this.capOf(key);
     if (key.startsWith("credential:")) return `credential ${key.slice("credential:".length)} ${this.inUse(key)}/${cap} in flight`;
+    if (key === RUN_POD_KEY) return `run pods ${this.inUse(key)}/${cap} in flight (the chart's runPods.maxPods)`;
     return `${key.slice("driver:".length)} ${this.inUse(key)}/${cap} sessions on this host`;
   }
 
   clone(): SlotBook {
     const b = Object.create(SlotBook.prototype) as SlotBook;
-    Object.assign(b, { count: new Map(this.count), slots: this.slots, maxSessions: this.maxSessions });
+    Object.assign(b, { count: new Map(this.count), slots: this.slots, maxSessions: this.maxSessions, runPods: this.runPods });
     return b;
   }
 }
@@ -302,7 +326,7 @@ export function placeRef(
   const sessions = o.sessions ?? 1;
   const fit = credentialCandidates(o.credentials, entry, { pin: o.pin, ...(o.env !== undefined ? { env: o.env } : {}) });
   if (fit.provider === null) {
-    const keys = o.book.keysOf(entry.driver, null);
+    const keys = o.book.keysOf(entry.driver, null, episode);
     const full = o.book.fullKey(keys, sessions);
     return full === undefined ? { ok: true, placement: { credential: null, keys } } : { ok: false, why: `cap: ${o.book.describe(full)}` };
   }
@@ -314,7 +338,7 @@ export function placeRef(
       whys.push(held);
       continue;
     }
-    const keys = o.book.keysOf(entry.driver, c.id);
+    const keys = o.book.keysOf(entry.driver, c.id, episode);
     const full = o.book.fullKey(keys, sessions);
     if (full !== undefined) {
       whys.push(`cap: ${o.book.describe(full)}`);
