@@ -44,7 +44,9 @@ describe("messageParts", () => {
       expect(parts.wake).toBe(o.wake ?? "");
       expect(parts.hud).toStartWith("== state");
       expect(parts.events).toStartWith("[events");
-      expect(parts.pad).toStartWith("[scratchpad");
+      expect(parts.pad).toBe(o.pad === "" ? "[scratchpad]\n(empty — write your plan and durable facts with write_scratchpad)" : `[scratchpad 0.0k/32k]\n${o.pad}`);
+      expect(parts.events).toBe(`[events: last 2, newest last]\n${parts.events.split("\n").slice(1).join("\n")}`);
+      expect(parts.events.split("\n").length).toBe(3);
       expect(parts.notices === "").toBe(o.notices !== true);
     }
   });

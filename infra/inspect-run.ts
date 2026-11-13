@@ -4976,9 +4976,11 @@ export function messageParts(text: string): Record<MessagePart, string> {
     return out;
   }
   out.turn = text.slice(0, turnEnd);
-  // The pad and the events are the last two parts, each under its own header.
-  const padAt = text.lastIndexOf("\n\n[scratchpad");
-  const eventsAt = text.lastIndexOf("\n\n[events", padAt < 0 ? text.length : padAt);
+  // The events and the pad are the last two parts, each under its own header,
+  // found forward from the HUD: the pad's text, last, may quote either header.
+  const hudAt = text.indexOf("\n\n== ", turnEnd);
+  const eventsAt = text.indexOf("\n\n[events", hudAt >= 0 ? hudAt : turnEnd);
+  const padAt = text.indexOf("\n\n[scratchpad", eventsAt >= 0 ? eventsAt : hudAt >= 0 ? hudAt : turnEnd);
   const bodyEnd = eventsAt >= 0 ? eventsAt : padAt >= 0 ? padAt : text.length;
   if (padAt >= 0) out.pad = text.slice(padAt + 2);
   if (eventsAt >= 0) out.events = text.slice(eventsAt + 2, padAt >= 0 ? padAt : text.length);
