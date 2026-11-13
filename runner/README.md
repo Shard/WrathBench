@@ -1295,7 +1295,8 @@ keeps that ledger for its own tool results and the wake alike; a wake marks
 what it showed only when its block stays in the conversation (a `yield`
 result, a codex turn's message, not the fixed loop's turn-end message), and
 the ledger is cleared when the conversation lost it (a codex compaction or
-thread change, a fixed-loop trim) and in a new process. After a
+thread change, a fixed-loop trim, a routine result the fixed loop's window
+cut) and in a new process. After a
 turn-end sleep it opens every request of that wake, right after `[turn N]`;
 after a `yield` it is the tool's result and is not repeated. What the model
 has already been told wakes no later sleep, and still shows in the next wake:
