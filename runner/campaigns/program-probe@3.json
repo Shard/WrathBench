@@ -2,7 +2,7 @@
   "id": "program-probe",
   "version": 3,
   "question": "With round 2's stale wakes and save races fixed, a ranged read_file, and the codex thread sent the scratchpad only when it does not already hold it, does the program loop cost less per level than the snippet loop without slowing progress: the plain program arm against the snippet loop on codex, and program-yield against it on the fixed loop?",
-  "note": "The program spike's third round (operator, 2026-11-13), on the spike branch only: nothing of it merges before the spike is adopted. One new image built from the spike branch at 0f7e704b (stack abb925a), which adds to round 2: on the codex program arms a turn's message carries the scratchpad whole only on a thread's first message, after a compaction, or after the pad changed outside the conversation (D8; the fixed loop is unchanged); a refusal is no reason to wake once a tool result has carried its hint, matched by signature, a death once a dead hint reported it, and a wake() call once the routine lines showed its run over or replaced; saves sent together restart a running routine once, and a start of a routine its save just restarted is answered as that run; read_file takes an optional line range; only async exports are routines; the program prompt says a routine in another file must be exported from main.ts and that every file holds at most 32,000 characters; a snippet's read of a workspace file off the sandbox's disk names read_file; the walk-budget note drops its background-routine advice; each wake record carries its block. The snippet arm's prompt, tools and window are the release's. snippet passes no loop flag; program passes --loop program; program-yield adds --yield true. All three arms pin, by tag and digest, the probe image probe-program-0f7e704bb74e. The arms each assignment sweeps are the store row's: GPT-6.1 Sol on codex on chatgpt-1 runs snippet and program (program-yield is dropped there: Sol never called yield in round 2, so the two codex program arms were one); DeepSeek V4.1 Flash on openrouter-v1 runs snippet and program-yield (the plain program arm is dropped there: DeepSeek never replies without a tool call, so it never sleeps). One cell, human-paladin. A 90-minute clock with idle at 20 minutes, no no-XP watchdog and no stopping level; resume is false. Runs of a round start together.",
+  "note": "The program spike's third round (operator, 2026-11-13), on the spike branch only: nothing of it merges before the spike is adopted. One new image built from the spike branch at 06460198 (stack 3c6717a), which adds to round 2: on the codex program arms a turn's message carries the scratchpad whole only on a thread's first message, after a compaction, or after the pad changed outside the conversation (D8; the fixed loop is unchanged); a refusal is no reason to wake once a tool result has carried its hint, matched by signature, a death once a dead hint reported it, and a wake() call once the routine lines showed its run over or replaced; saves sent together restart a running routine once, and a start of a routine its save just restarted is answered as that run; read_file takes an optional line range; only async exports are routines; the program prompt says a routine in another file must be exported from main.ts and that every file holds at most 32,000 characters; a snippet's read of a workspace file off the sandbox's disk names read_file; the walk-budget note drops its background-routine advice; each wake record carries its block. The snippet arm's prompt, tools and window are the release's. snippet passes no loop flag; program passes --loop program; program-yield adds --yield true. All three arms pin, by tag and digest, the probe image probe-program-06460198711a. The arms each assignment sweeps are the store row's: GPT-6.1 Sol on codex on chatgpt-1 runs snippet and program (program-yield is dropped there: Sol never called yield in round 2, so the two codex program arms were one); DeepSeek V4.1 Flash on openrouter-v1 runs snippet and program-yield (the plain program arm is dropped there: DeepSeek never replies without a tool call, so it never sleeps). One cell, human-paladin. A 90-minute clock with idle at 20 minutes, no no-XP watchdog and no stopping level; resume is false. Runs of a round start together.",
   "cells": [
     {
       "id": "human-paladin",
@@ -15,12 +15,12 @@
     {
       "id": "snippet",
       "note": "The control: the spike image with no loop flag, the snippet loop as released.",
-      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:probe-program-0f7e704bb74e@sha256:a91d7b3884756dae09f1ada361217d1b7093e4d179a20797f73a5f664e96d6fa"
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:probe-program-06460198711a@sha256:1f0e514e5d28eb089c8372e669d91eb5cf3ce7fda97441ef3e97b5444f78349d"
     },
     {
       "id": "program",
       "note": "Routines in a file workspace, run by the harness; a reply with no tool call sleeps until a wake.",
-      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:probe-program-0f7e704bb74e@sha256:a91d7b3884756dae09f1ada361217d1b7093e4d179a20797f73a5f664e96d6fa",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:probe-program-06460198711a@sha256:1f0e514e5d28eb089c8372e669d91eb5cf3ce7fda97441ef3e97b5444f78349d",
       "args": [
         "--loop",
         "program"
@@ -29,7 +29,7 @@
     {
       "id": "program-yield",
       "note": "The program arm, plus a yield tool whose call is held open until a wake and returns it.",
-      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:probe-program-0f7e704bb74e@sha256:a91d7b3884756dae09f1ada361217d1b7093e4d179a20797f73a5f664e96d6fa",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:probe-program-06460198711a@sha256:1f0e514e5d28eb089c8372e669d91eb5cf3ce7fda97441ef3e97b5444f78349d",
       "args": [
         "--loop",
         "program",
