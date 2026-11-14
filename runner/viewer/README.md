@@ -788,7 +788,8 @@ Drafts are `proposed/<model id>` rows of the same store that no config reader
 sees (`config-store.ts`, "The draft key space"). Only a promotion is a config
 write: it alone is validated, version-moving and recorded in the history. A
 fetch or an ignore is bookkeeping on rows nothing schedules, so it leaves the
-history alone; an ignore records when on the draft. Model ids travel in
+history alone; an ignore records when, and the actor (`viewer` from the page),
+on the draft. Model ids travel in
 bodies, never in the path.
 
 Every write renders the whole candidate config and runs it through
