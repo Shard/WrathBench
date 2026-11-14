@@ -811,7 +811,8 @@ export function episodeFlags(spec: Resolved, resume: boolean): string[] {
   // the supervisor's, opaque here, and checked against the reserved flags when
   // the definition was published.
   if (spec.campaignFile !== undefined) {
-    argv.push("--episode", "probing", "--campaign-file", campaignFilePath(spec.runId));
+    // A task episode's file is its id's (`task-episodes.ts`); every other is a probe's.
+    argv.push("--episode", spec.campaignFile.episode ?? "probing", "--campaign-file", campaignFilePath(spec.runId));
     if (spec.ref !== undefined) argv.push("--ref", spec.ref);
     // A party member runs on the character the stager made for it, named in
     // its campaign file; every other probe's argv is what it was.
@@ -1933,12 +1934,10 @@ export function writeLaunchFailure(runDir: string, spec: Resolved, detail: strin
     // As the run would have recorded it: a stated `auto` is the absent field.
     ...(stampedCompactWindow(spec.compactWindow) !== undefined ? { compactWindow: stampedCompactWindow(spec.compactWindow) } : {}),
     ...(spec.account !== undefined ? { account: spec.account } : {}),
-    episode: "probing",
-    campaign: file.campaign,
-    campaignVersion: file.version,
-    campaignHash: file.hash,
-    cell: file.cell.id,
-    arm: file.arm.id,
+    // A task episode's stub is that episode's, and no campaign's square.
+    ...(file.episode !== undefined
+      ? { episode: file.episode }
+      : { episode: "probing", campaign: file.campaign, campaignVersion: file.version, campaignHash: file.hash, cell: file.cell.id, arm: file.arm.id }),
     ...(spec.ref !== undefined ? { ref: spec.ref } : {}),
     race: member?.race ?? file.cell.race,
     class: member?.class ?? file.cell.class,
@@ -1957,7 +1956,7 @@ export function writeLaunchFailure(runDir: string, spec: Resolved, detail: strin
     config,
     comparability: {
       harnessVersion: opts.harnessVersion,
-      episode: "probing",
+      episode: file.episode ?? "probing",
       effort: spec.effort ?? null,
       ...(stampedCompactWindow(spec.compactWindow) !== undefined ? { compactWindow: stampedCompactWindow(spec.compactWindow) } : {}),
     },
@@ -2227,7 +2226,7 @@ async function attemptSpecOn(
       record({ runId: spec.runId, model: spec.model, outcome: "launch-failed", detail: verdict.detail });
       if (!opts.dryRun) {
         const left = recordUnlaunched(join(REPO_ROOT, RUNS_DIR, spec.runId), spec, exit, verdict.detail, { resume, harnessVersion: launchStamp(spec) });
-        if (left.kind === "stub") say(`launch-failed ${spec.runId}: recorded as a launch-failed attempt on ${spec.campaignFile!.campaign}@${spec.campaignFile!.version} ${spec.campaignFile!.cell.id}/${spec.campaignFile!.arm.id}`);
+        if (left.kind === "stub") say(`launch-failed ${spec.runId}: recorded as a launch-failed attempt on ${spec.campaignFile!.episode !== undefined ? `--episode ${spec.campaignFile!.episode}` : `${spec.campaignFile!.campaign}@${spec.campaignFile!.version} ${spec.campaignFile!.cell.id}/${spec.campaignFile!.arm.id}`}`);
         if (left.kind === "error") say(`launch-failed ${spec.runId}: could not record the attempt — ${left.error}`);
       }
       return "done";

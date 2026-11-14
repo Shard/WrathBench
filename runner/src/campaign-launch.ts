@@ -31,6 +31,7 @@
 import { readCampaignFile, CampaignFileError, type CampaignFile } from "./campaign-file";
 import { campaignRef, cellDimensions, isOneAgentArm } from "./campaign-def";
 import { fanoutConfigOf, partyConfigOf, type PartyMember } from "./party";
+import { isTaskEpisode } from "./episodes";
 import { PROBE_SHAPE_FLAGS } from "./run-flags";
 
 export { PROBE_SHAPE_FLAGS } from "./run-flags";
@@ -58,6 +59,11 @@ export function campaignLaunch(
   const path = args["campaign-file"];
   const episode = args["episode"];
   if (path === undefined) {
+    if (typeof episode === "string" && isTaskEpisode(episode)) {
+      throw new CampaignLaunchError(
+        `--episode ${episode} starts on a staged party the fleet's roster puts in place, and launches with the file it writes (--campaign-file); it is never launched by hand`,
+      );
+    }
     if (episode === "probing") {
       throw new CampaignLaunchError(
         "--episode probing needs --campaign-file <path>: a probe is a cell of a published campaign definition " +
@@ -73,9 +79,6 @@ export function campaignLaunch(
     return null;
   }
   if (typeof path !== "string") throw new CampaignLaunchError("--campaign-file takes the path of a campaign.json");
-  if (episode !== undefined && episode !== "probing") {
-    throw new CampaignLaunchError(`--campaign-file is a probe: it runs --episode probing, not --episode ${String(episode)}`);
-  }
   let file: CampaignFile;
   try {
     file = readCampaignFile(path);
@@ -83,7 +86,20 @@ export function campaignLaunch(
     if (err instanceof CampaignFileError) throw new CampaignLaunchError(`--campaign-file ${err.message}`);
     throw err;
   }
-  const ref = `${file.campaign}@${file.version}`;
+  // A task episode's file is that episode's and nothing else's; every other
+  // file is a probe's. Either way the launch says which, and the two agree.
+  const fileEpisode = file.episode ?? "probing";
+  if (episode !== undefined && episode !== fileEpisode) {
+    throw new CampaignLaunchError(
+      file.episode !== undefined
+        ? `--campaign-file holds the pinned definition of --episode ${file.episode}, not --episode ${String(episode)}`
+        : `--campaign-file is a probe: it runs --episode probing, not --episode ${String(episode)}`,
+    );
+  }
+  if (file.episode !== undefined && episode === undefined) {
+    throw new CampaignLaunchError(`--campaign-file holds the pinned definition of --episode ${file.episode}; name it with --episode ${file.episode}`);
+  }
+  const ref = file.episode ?? `${file.campaign}@${file.version}`;
   const shape = PROBE_SHAPE_FLAGS.filter((f) => args[f] !== undefined);
   if (shape.length > 0) {
     throw new CampaignLaunchError(
@@ -123,7 +139,7 @@ export function campaignLaunch(
       maxToolCallsPerEpisode: dims.maxToolCalls,
       wikiCoords: dims.wikiCoords,
       wiki: dims.wiki,
-      ...(dims.objective !== undefined ? { objective: dims.objective } : {}),
+      ...steering(file, dims.objective),
       ...(dims.stopAtLevel !== undefined ? { stopAtLevel: dims.stopAtLevel } : {}),
       ...(dims.end !== undefined ? { end: dims.end } : {}),
       // The grant, and every staged character with where it lives.
@@ -157,7 +173,7 @@ export function campaignLaunch(
     maxToolCallsPerEpisode: dims.maxToolCalls,
     wikiCoords: dims.wikiCoords,
     wiki: dims.wiki,
-    ...(dims.objective !== undefined ? { objective: dims.objective } : {}),
+    ...steering(file, dims.objective),
     ...(dims.stopAtLevel !== undefined ? { stopAtLevel: dims.stopAtLevel } : {}),
     ...(dims.end !== undefined ? { end: dims.end } : {}),
     // Only on a staged start, so every fresh probe's config is what it was.
@@ -166,8 +182,31 @@ export function campaignLaunch(
   };
 }
 
-/** What every probe launch stamps: the campaign, its version and hash, the cell, the arm, and the roster name it was launched as. */
+/**
+ * Where the definition's text goes: a probe's is an operator objective, which
+ * is what makes it unscored; a task episode's is the directive its id pins
+ * (`RunConfig.directive`), rendered through the same block and bytes but
+ * never an objective, so the run stays scored.
+ */
+function steering(file: CampaignFile, text: string | undefined): Record<string, unknown> {
+  if (text === undefined) return {};
+  return file.episode !== undefined ? { directive: text } : { objective: text };
+}
+
+/**
+ * What every probe launch stamps: the campaign, its version and hash, the
+ * cell, the arm, and the roster name it was launched as. A task episode's
+ * launch stamps its episode id and the roster name only: it is no campaign's
+ * square, and its definition is the id's.
+ */
 function probeStamp(file: CampaignFile, rosterRef: string | boolean | undefined): Record<string, unknown> {
+  if (file.episode !== undefined) {
+    return {
+      episode: file.episode,
+      task: { definition: file.hash, ...(file.staging !== undefined ? { staging: file.staging } : {}) },
+      ...(typeof rosterRef === "string" ? { ref: rosterRef } : {}),
+    };
+  }
   return {
     episode: "probing",
     campaign: file.campaign,

@@ -289,7 +289,7 @@ export function configFromArgs(
     ...launchCompactWindow({
       stated: typeof args["compact-window"] === "string" ? args["compact-window"] : undefined,
       driver: typeof args["driver"] === "string" ? args["driver"] : DEFAULT_DRIVER,
-      episode: probe !== null ? "probing" : typeof args["episode"] === "string" ? args["episode"] : undefined,
+      episode: probe !== null ? (typeof probe["episode"] === "string" ? probe["episode"] : "probing") : typeof args["episode"] === "string" ? args["episode"] : undefined,
       // The series this launch will be stamped with (`main` stamps the same version).
       series: harnessSeries(harnessVersion(env)),
     }),

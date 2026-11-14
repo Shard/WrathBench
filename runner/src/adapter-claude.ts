@@ -117,7 +117,7 @@ import { entryOf } from "./drivers";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { MCP_BRIDGE_PATH } from "@wrathbench/mcp/paths";
 import { McpServer } from "./mcp";
-import { CLAUDE_CODE_SYSTEM_PROMPT, buildSystemPrompt, programPromptOf } from "./prompt";
+import { CLAUDE_CODE_SYSTEM_PROMPT, buildSystemPrompt, programPromptOf, steeringOf } from "./prompt";
 import { toolsFor, type ProgramTools, type ToolContext } from "./tools";
 import { MessageQueue, cliBaseEnv, readLines, signalGroup } from "./adapter-shared";
 import {
@@ -1051,7 +1051,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   // The claude-code render: same prompt, except the sentence about older
   // conversation, which on this harness must describe the CLI's regime and not
   // the fixed loop's trim (`contextSentence`).
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("claude-code"), config.wiki, config.watchdogs.episodeMs, programPrompt);
+  const systemPrompt = buildSystemPrompt(steeringOf(config), config.episode, harnessOf("claude-code"), config.wiki, config.watchdogs.episodeMs, programPrompt);
   const args = claudeArgs({
     mcpConfigPath,
     systemPrompt,
