@@ -28,10 +28,11 @@ the `worlds` block's resources and startup budget.
     # A world's own identity is not here: its characters schema
     # (AC_CHARACTER_DATABASE_INFO), its realm id (AC_REALM_ID) and its
     # attempt's accounts (AC_WRATH_BENCH_ACCOUNTS) are the launcher's to
-    # stamp, and a pod without all three is refused before it exists
-    # (infra/world.ts). Left out rather than defaulted, so a launcher that
-    # forgot one could never boot a world over the shared world's schema,
-    # realm or allowlist.
+    # stamp, and the launcher must refuse a pod without all three. The
+    # chart cannot: an absent variable falls back to the shared conf.
+    # Only the schema fails closed (the stock 127.0.0.1 never connects);
+    # the stock realm is 1, the shared realm, and the module's stock
+    # allowlist is RUNNER, a shared-world account.
     {{- else }}
     {{- include "wrathbench.acDbEnv" $ctx | nindent 4 }}
     {{- end }}

@@ -3,10 +3,11 @@
  * on PATH. Off by default, it renders nothing of its own. On, it renders the
  * `world.json` pod template beside the run-pod template, the headless `worlds`
  * Service its pods are named under, the world pods' ingress policy and the
- * `worlds` subPath for the fleet and log retention. What is pinned is what a
- * launcher bug could otherwise turn into a world over the shared world's
- * state: the template carries no characters schema, realm id or allowlist of
- * its own; its worldserver container is the shared one's apart from those;
+ * `worlds` subPath for the fleet and log retention. What is pinned: the
+ * template carries no characters schema, realm id or allowlist of the shared
+ * world's (the launcher stamps a world's own, and must refuse a pod without
+ * them, since an absent one falls back to the shared conf's realm 1 and
+ * RUNNER); its worldserver container is the shared one's apart from those;
  * its confs are read-only and its Errors.log its own; and every container
  * states what the namespace quota counts.
  */
