@@ -154,6 +154,10 @@ export type TerminationReason = (typeof TERMINATION_REASONS)[number];
  * the same CODEX_HOME; any provider's 401 on an API key, `adapter.ts`).
  * Nothing about the model; the run resumes once the operator has logged the
  * credential back in or replaced the key.
+ * `no-access` is a key the provider accepts but will not serve here (an API
+ * key's 403 that is not a moderation refusal, `adapter.ts`: a workspace with
+ * no plan, a restricted key). The credential's too, resumed alike once the
+ * key has access.
  * `infrastructure-failed` is a CLI scaffold failing on the host under it —
  * the codex CLI unable to write its thread under `$CODEX_HOME` (a full disk;
  * `detectCodexFailure`). Nothing about the model or the provider either: it
@@ -173,6 +177,7 @@ export const PAUSE_REASONS = [
   "rate-limited",
   "operator-pause",
   "auth-failed",
+  "no-access",
   "infrastructure-failed",
   STALL_PAUSE,
   SUBSCRIPTION_PAUSE,

@@ -166,6 +166,7 @@ export function credentialHealth(input: HealthInput): { health: CredentialHealth
   if (read?.classification === "no-access") {
     return out("no-access", `usage not readable: ${http(read)}`, read.since ?? null, { kind: "replace-secret", secretEnv: env, text: `a key that may read usage in ${env}` });
   }
+  if (i.lastError?.reason === "no-access") return out("no-access", "a run paused: no access", i.lastError.at, { kind: "replace-secret", secretEnv: env, text: `a key with access in ${env}` });
   const holds = [i.holdsOf.scored, i.holdsOf.freeplay].filter((h): h is CredentialHold => h !== undefined);
   const latest = (hs: readonly CredentialHold[]): number | undefined => {
     const t = hs.map((h) => h.until).filter((u): u is number => u !== null);

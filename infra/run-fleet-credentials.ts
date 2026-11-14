@@ -412,8 +412,71 @@ export function placeResume(
 // ---------------------------------------------------------------- OpenCode Go
 
 /**
- * The supervisor's reader for the OpenCode Go credentials with a usage
- * budget (`opencode-go.ts`): one poller per credential, each calling its
+ * Whether the supervisor reads this credential's OpenCode Go usage: every Go
+ * credential on the allowance — its paid side, whatever its budget's kind —
+ * and any Go credential the operator gave a `usage` budget. A `runs` budget
+ * on the paid side still draws the allowance, so a refused key or a spent
+ * window holds it too; only the budget's own limit differs. The free side is
+ * not read: a `$0` model keeps working past a spent allowance, and a reading
+ * on it would hold it at 100% like any credential with readings. A refused
+ * key still reaches it, because it names the same key (`readHoldsOf`).
+ * Enabled-ness is the caller's: a reader polls only enabled credentials.
+ */
+export function readsGoUsage(c: Pick<Credential, "provider" | "billing" | "budget">): boolean {
+  return c.provider === "opencode-go" && (c.billing === "paid" || c.budget?.kind === "usage");
+}
+
+/**
+ * Why each credential's launches are held by its key's last read, by id, off
+ * the reads by credential id: a refused key holds every enabled credential of
+ * its provider naming the same variable (the free side shares the paid side's
+ * key); no access to the usage and a balance charge hold the credential read.
+ * The sentences name the credential and the class only, like every hold's.
+ * Pure: the supervisor passes its pollers' reads (`FleetGoUsage.readHolds`),
+ * and `--status` and the dry run the reads the supervisor published
+ * (`publishedReads`), so all three hold alike.
+ */
+export function readHoldsOf(credentials: readonly Credential[], reads: ReadonlyMap<string, CredentialRead>): Map<string, ReadHold> {
+  const out = new Map<string, ReadHold>();
+  const byId = new Map(credentials.map((c) => [c.id, c]));
+  for (const [id, r] of reads) {
+    const of = byId.get(id);
+    if (of === undefined) continue;
+    if (r.classification === "auth-failed") {
+      for (const c of credentials) {
+        if (c.enabled && c.provider === of.provider && c.secretEnv === of.secretEnv && !out.has(c.id)) {
+          out.set(c.id, { code: "auth-failed", text: `credential ${c.id}: its key was refused (auth-failed) — held until a usage read succeeds` });
+        }
+      }
+    } else if (r.classification === "no-access" && !out.has(id)) {
+      out.set(id, { code: "no-access", text: `credential ${id}: its key may not read its usage (no-access) — held until a usage read succeeds` });
+    } else if (r.classification === "overage" && !out.has(id)) {
+      out.set(id, { code: "overage", text: `credential ${id}: billed past its allowance (overage) — held until its usage shows room` });
+    }
+  }
+  return out;
+}
+
+/**
+ * The reads a supervisor published with its credential statuses
+ * (fleet-state.json's `credentials[].lastRead`), by id, for a reader that is
+ * not the supervisor: only the credentials it reads itself (`readsGoUsage`).
+ * A status carries a sibling's refusal on a credential with no read of its
+ * own (`credentialStatuses`), and that borrowed read is not one the
+ * supervisor holds it by. A disabled credential's read counts as the tick
+ * counts it: its refusal still holds the enabled credentials naming its key.
+ * A state file with no reads gives none.
+ */
+export function publishedReads(credentials: readonly Credential[], statuses: readonly Pick<CredentialStatus, "id" | "lastRead">[] | undefined): Map<string, CredentialRead> {
+  const read = new Set(credentials.filter((c) => readsGoUsage(c)).map((c) => c.id));
+  const out = new Map<string, CredentialRead>();
+  for (const s of statuses ?? []) if (s.lastRead !== undefined && read.has(s.id)) out.set(s.id, s.lastRead);
+  return out;
+}
+
+/**
+ * The supervisor's reader for the OpenCode Go credentials it reads
+ * (`readsGoUsage`, `opencode-go.ts`): one poller per credential, each calling its
  * endpoint at most once a minute, refreshed before a tick decides anything.
  * The endpoint is the Go base's origin, which the roster's Go entries name.
  * A key missing from the environment is no observation, said once per boot.
@@ -427,8 +490,6 @@ export function placeResume(
 export class FleetGoUsage {
   private readonly pollers = new Map<string, GoUsagePoller>();
   private readonly missingKey = new Set<string>();
-  /** The variable each polled credential's key is in: a refused key holds every credential naming it. */
-  private readonly envOf = new Map<string, { provider: string; secretEnv: string }>();
   /** The key each poller was built with, compared by value and never logged. */
   private readonly keyOf = new Map<string, string>();
 
@@ -456,7 +517,7 @@ export class FleetGoUsage {
     if (url === undefined) return;
     const due: Promise<void>[] = [];
     for (const c of credentials) {
-      if (!c.enabled || c.provider !== "opencode-go" || c.budget?.kind !== "usage") continue;
+      if (!c.enabled || !readsGoUsage(c)) continue;
       const key = env[c.secretEnv];
       if (key === undefined || key.length === 0) {
         if (!this.missingKey.has(c.id)) {
@@ -479,7 +540,6 @@ export class FleetGoUsage {
         this.pollers.set(c.id, poller);
         this.keyOf.set(c.id, key);
       }
-      this.envOf.set(c.id, { provider: c.provider, secretEnv: c.secretEnv });
       due.push(poller.refresh());
     }
     await Promise.all(due);
@@ -497,32 +557,9 @@ export class FleetGoUsage {
     }
   }
 
-  /**
-   * Why each credential's launches are held by its key's last read, by id: a
-   * refused key holds every enabled credential of its provider naming the
-   * same variable (the free side shares the paid side's key); no access to
-   * the usage and a balance charge hold the credential read. The sentences
-   * name the credential and the class only, like every hold's.
-   */
+  /** Why each credential's launches are held by its key's last read, by id (`readHoldsOf` over `lastReads`). */
   readHolds(credentials: readonly Credential[]): Map<string, ReadHold> {
-    const out = new Map<string, ReadHold>();
-    for (const [id, p] of this.pollers) {
-      const r = p.lastRead;
-      const of = this.envOf.get(id);
-      if (r === undefined || of === undefined) continue;
-      if (r.classification === "auth-failed") {
-        for (const c of credentials) {
-          if (c.enabled && c.provider === of.provider && c.secretEnv === of.secretEnv && !out.has(c.id)) {
-            out.set(c.id, { code: "auth-failed", text: `credential ${c.id}: its key was refused (auth-failed) — held until a usage read succeeds` });
-          }
-        }
-      } else if (r.classification === "no-access" && !out.has(id)) {
-        out.set(id, { code: "no-access", text: `credential ${id}: its key may not read its usage (no-access) — held until a usage read succeeds` });
-      } else if (r.classification === "overage" && !out.has(id)) {
-        out.set(id, { code: "overage", text: `credential ${id}: billed past its allowance (overage) — held until its usage shows room` });
-      }
-    }
-    return out;
+    return readHoldsOf(credentials, this.lastReads());
   }
 
   /** The newest reading of every credential read so far. */
@@ -585,7 +622,7 @@ export interface CredentialStatus {
    * interface then reads a held class as held by its budget, code unknown.
    */
   holds?: { scored?: CredentialHold; freeplay?: CredentialHold };
-  /** The newest failure a run on it recorded that says the credential itself is the problem (`auth-failed`, `quota-exhausted`), with when. */
+  /** The newest failure a run on it recorded that says the credential itself is the problem (`auth-failed`, `no-access`, `quota-exhausted`), with when. */
   lastError: { reason: string; at: number } | null;
   /** The provider's newest read of it, where a reader reads it (OpenCode Go's usage endpoint): its health's input. */
   lastRead?: CredentialRead;
@@ -598,7 +635,7 @@ export interface CredentialStatus {
 }
 
 /** The pauses that indict the credential rather than the model. */
-const CREDENTIAL_PAUSES: ReadonlySet<string> = new Set(["auth-failed", "quota-exhausted"]);
+const CREDENTIAL_PAUSES: ReadonlySet<string> = new Set(["auth-failed", "no-access", "quota-exhausted"]);
 
 /** Every credential's state this tick. */
 export function credentialStatuses(o: {
