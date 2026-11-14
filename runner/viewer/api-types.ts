@@ -54,7 +54,7 @@ export interface EpisodeBudgetView {
  * The episode tiers (`runner/src/episodes.ts`). Spelled out as a literal union
  * rather than imported, because this module is import-free by construction.
  */
-export type EpisodeIdView = "e90" | "e360" | "probing" | "freeplay";
+export type EpisodeIdView = "e90" | "e360" | "probing" | "freeplay" | "deadmines" | "deadmines-solo";
 
 /** One episode tier as `/api/episodes` serves it. Mirrors `EpisodeTier`. */
 export interface EpisodeTierView {
@@ -67,6 +67,8 @@ export interface EpisodeTierView {
   objectiveAllowed: boolean;
   scored: boolean;
   summary: string;
+  /** A task episode's agents and characters per agent; absent on every other id. */
+  task?: { agents: number; characters: number };
 }
 
 /**
@@ -353,6 +355,10 @@ export interface ComparabilityView {
    * equality. Absent on runs stamped before the field existed.
    */
   resolvedModel?: string | null;
+  /** A task episode's agents, characters per agent and pins (`comparability.ts`). Absent on every other run. */
+  agents?: number;
+  characters?: number;
+  task?: { definition: string; staging?: string };
 }
 
 /** One run, as the listing and the detail endpoint report it. */

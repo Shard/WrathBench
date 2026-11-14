@@ -73,7 +73,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import { createApi, withoutRuns, type ApiHandle } from "./api";
 import { lineageIndex } from "./lineage";
-import { EPISODE_IDS } from "../src/episodes";
+import { EPISODE_IDS, isTaskEpisode } from "../src/episodes";
 import type {
   ApiInfoResponse,
   CampaignsResponse,
@@ -561,7 +561,7 @@ export function createRenderer(
     // `LADDER_EPISODES` in api.ts), so no `ladder-probing.json` is published.
     // None at all with the evals group off, nor its other two aggregates.
     if (groups.evals) {
-      for (const ep of EPISODE_IDS.filter((id) => id !== "probing")) {
+      for (const ep of EPISODE_IDS.filter((id) => id !== "probing" && !isTaskEpisode(id))) {
         ladders.push([ep, projectResults(keepResults(await get<ResultsResponse>(`/api/ladder?episode=${ep}`)))]);
       }
     }

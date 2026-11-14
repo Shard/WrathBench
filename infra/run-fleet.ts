@@ -144,7 +144,9 @@ import {
   planResumes,
   planStaleRuns,
   planTick,
+  episodeSessions,
   evalPoolDraw,
+  taskDraw,
   evalPoolTaken,
   policyJobDropped,
   type QueuePlan,
@@ -1562,11 +1564,12 @@ async function main(): Promise<void> {
         queuePlan: lastPlan,
         runningRefs,
         place: (n, ep) => {
-          const r = placeRef(cfg.roster[n], ep, { ...placing, pin: cfg.roster[n]?.credential });
+          const r = placeRef(cfg.roster[n], ep, { ...placing, pin: cfg.roster[n]?.credential, sessions: episodeSessions(ep) });
           return r.ok ? { ok: true, credential: r.placement.credential, keys: r.placement.keys } : r;
         },
         take: (keys) => book.add(keys),
         policy: cfg.policy,
+        drawTask: taskDraw(draw)!,
         campaigns: unpinnedCampaigns(cfg),
         probeRuns: probes,
         affinity,

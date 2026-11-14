@@ -439,6 +439,10 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               scored or freeplay episode is gated. For a harness variant that is an arm rather than
               a driver, so a probe of it needs no scored run first. Its probe runs map back to it
               by name, so copies of one model never pool.
+            `deadmines` — `true` or absent: opts the entry into the five-agent Deadmines
+              episode, which its tier then buys as it buys the one-agent one (`t2`: three
+              attempts each; docs/EPISODES.md). Refused with `campaignOnly`. Still held until
+              `policy.rehearsed` names `deadmines`, and behind the scored-episode hold.
             A t0 model that reaches level 5 KEEPS the witness (`t0*` in --status) without spending
             it: move it to t1 and it promotes at once on evidence it already has. Moving a model
             by hand is always allowed and never records a promotion — "promoted" is said only of
@@ -457,8 +461,14 @@ policy      Only where runs execute. `maxSessions { <driver>: n }` — how many 
             `runPods` — `"off"` (default) or `"probes"`: every probing episode runs as its own
             pod on the arm's image ("Run pods"). While it is not `probes`, or off the cluster, an
             arm that pins an image or a command is a refused pair, never run on master.
-            `worlds` — `"off"` (default) or `"evals"`: every fresh e90, e360 or probing attempt
-            plays on a world of its own ("Worlds"), and never on the shared one while it is on.
+            `worlds` — `"off"` (default) or `"evals"`: every fresh e90, e360, Deadmines or probing
+            attempt plays on a world of its own ("Worlds"), and never on the shared one while it
+            is on. A Deadmines attempt also draws its party from the eval pool, so with `off` it
+            is held with the reason.
+            `rehearsed` — what a program-loop rehearsal has cleared to score, the operator's word
+            after reading it: a list of `"deadmines"` (the five-agent episode) and `"codex"`
+            (codex rows on either Deadmines id). Absent or empty clears neither, and the policy
+            holds those picks, saying why. Anything else is refused.
             `maxConcurrent`, `paid` and `subscriptions` are refused by name: their work is the
             credentials' ("Credentials").
 campaign-defs  published campaign definitions, `<id>@<version>` → { definition, hash, source,
@@ -498,7 +508,8 @@ campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only
             Completion is DERIVED per (id, version, assignment, arm, cell) against the counted
             probe runs on disk; set `enabled: false` when a sweep is done and its results stay
             visible. Progress is on the /campaigns page.
-queue       jobs, in priority order (never `probing`): { ref | [refs], episode e90|e360|freeplay,
+queue       jobs, in priority order (never `probing`, never a Deadmines id, which only a tier
+            buys): { ref | [refs], episode e90|e360|freeplay,
             repeat n|"loop", enabled, account?, credential? } and nothing else ("Strict keys").
             With `account` the job is PINNED to it and never the policy's; without, it is a
             manual pool job that outranks the policy. The name is always `<first ref>-<episode>`

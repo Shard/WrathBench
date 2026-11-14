@@ -46,7 +46,7 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { ResultRun, ResultsResponse } from "../runner/viewer/api-types";
-import { EPISODES, EPISODE_IDS, type EpisodeId } from "../runner/src/episodes";
+import { EPISODES, EPISODE_IDS, isTaskEpisode, type EpisodeId } from "../runner/src/episodes";
 import { isContributorSlug, isFreeSlug } from "../runner/src/model-cost";
 import { describeFindings, envSecrets, SecretScanner } from "../runner/src/secret-scan";
 import { ladderRows, RUNGS, scored, type LadderRow } from "../dashboard/src/lib/ladder";
@@ -67,8 +67,8 @@ const TOP_RUNG = Math.max(...RUNGS.map((r) => r.n));
 /** The game's level cap in 3.3.5a; `best_level` lies in [1, this]. */
 const LEVEL_CAP = 80;
 
-/** The episodes with a scored ladder, read off the tier table. */
-export const SCORED_EPISODES: readonly EpisodeId[] = EPISODE_IDS.filter((id) => EPISODES[id].scored);
+/** The episodes with a scored ladder, read off the tier table: the task episodes have a board instead. */
+export const SCORED_EPISODES: readonly EpisodeId[] = EPISODE_IDS.filter((id) => EPISODES[id].scored && !isTaskEpisode(id));
 
 /** How the ladder orders rows, stated on every record because EEE has no field for a non-scalar order. */
 export const LADDER_ORDER =

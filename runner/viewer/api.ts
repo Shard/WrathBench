@@ -25,7 +25,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { harnessSeries } from "../src/comparability";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
-import { EPISODES, EPISODE_IDS, EPISODE_LIST } from "../src/episodes";
+import { EPISODES, EPISODE_IDS, EPISODE_LIST, isTaskEpisode } from "../src/episodes";
 import { HARNESSES, isNotAModelRun } from "../src/config";
 import { badEvidenceReason } from "../src/lapse";
 import type {
@@ -1347,7 +1347,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * the ladder that loses the id: `/api/results?episode=probing` still answers,
    * and `EPISODE_IDS` is untouched.
    */
-  const LADDER_EPISODES: readonly string[] = EPISODE_IDS.filter((id) => id !== "probing");
+  // Nor are the task episodes (operator, 2026-11-14): a staged level-20
+  // dungeon run would claim the level rungs, and their runs are read on the
+  // dungeon board instead.
+  const LADDER_EPISODES: readonly string[] = EPISODE_IDS.filter((id) => id !== "probing" && !isTaskEpisode(id));
 
   async function resultsResponse(url: URL, ladder = false): Promise<Response> {
     const episode = episodeFilter(url);

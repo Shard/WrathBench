@@ -61,7 +61,7 @@ import { bestLevelOf, fanoutLead, fanoutReadings, readRunRow } from "./run-reade
 import { harnessSeries } from "./comparability";
 import { DEFAULT_DRIVER, defaultCompactWindowOf, driverEntry, eitherHas, entryOf, harnessDriver, isProbeOnlyDriver, probeOnlyRefusal } from "./drivers";
 import { AUTO_COMPACT_WINDOW, DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, defaultLoopOf, harnessOf, isDriver, isTokenEnvName, isUnscoredDriverName, type Driver, type Harness } from "./config";
-import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
+import { EPISODE_IDS, EPISODES, isEpisodeId, isLevelEpisode, isScoredEpisode, isTaskEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
 import { badEvidenceReason, neverStale, OFFLINE_PAUSE, PARTY_PAUSE, SUBSCRIPTION_PAUSE, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
 import { parseSubscriptionUsage, type SubscriptionUsage } from "./subscription-usage";
@@ -81,7 +81,7 @@ import { goneReason, modelGoneOf, readModelListsSidecar, type ModelGone, type Mo
  * never scheduled as evidence — but an `idle: "unlimited"` model's extras are
  * freeplay runs, so the projection still keeps stats for it.
  */
-export const POLICY_EPISODES: readonly ScoredEpisodeId[] = ["e90", "e360"];
+export const POLICY_EPISODES: readonly ScoredEpisodeId[] = ["e90", "e360", "deadmines-solo", "deadmines"];
 
 /**
  * Every episode the projection keeps stats for, in presentation order. Wider
@@ -133,11 +133,52 @@ export interface TierSpec {
   label: string;
 }
 
+/*
+ * `t2` also buys three attempts on each Deadmines id (operator, 2026-11-14):
+ * the same threshold for every model, so no new word. The five-agent id
+ * (`deadmines`) is bought only where the roster entry opts in as well
+ * (`RosterModel.deadmines`), because it needs five sessions on one
+ * credential at once; `targetFor` applies that.
+ */
 export const TIER_TABLE: Record<Tier, TierSpec> = {
-  t0: { runsPerEpisode: { e90: 1, e360: 0 }, promotesTo: null, label: "trial" },
-  t1: { runsPerEpisode: { e90: 3, e360: 0 }, promotesTo: "t2", label: "standard" },
-  t2: { runsPerEpisode: { e90: 3, e360: 1 }, promotesTo: null, label: "long" },
+  t0: { runsPerEpisode: { e90: 1, e360: 0, deadmines: 0, "deadmines-solo": 0 }, promotesTo: null, label: "trial" },
+  t1: { runsPerEpisode: { e90: 3, e360: 0, deadmines: 0, "deadmines-solo": 0 }, promotesTo: "t2", label: "standard" },
+  t2: { runsPerEpisode: { e90: 3, e360: 1, deadmines: 3, "deadmines-solo": 3 }, promotesTo: null, label: "long" },
 };
+
+/**
+ * What a rehearsal has cleared to score (`SchedulingPolicy.rehearsed`): the
+ * five-agent Deadmines id, and codex rows on either Deadmines id. Each waits
+ * on a program-loop rehearsal the operator reads, and is held until the
+ * policy names it.
+ */
+export const REHEARSALS = ["deadmines", "codex"] as const;
+export type Rehearsal = (typeof REHEARSALS)[number];
+
+export function parseRehearsed(raw: unknown, where: string): Rehearsal[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || !raw.every((x): x is Rehearsal => typeof x === "string" && (REHEARSALS as readonly string[]).includes(x))) {
+    throw new Error(`${where} must be a list of ${REHEARSALS.map((r) => JSON.stringify(r)).join(", ")} — what a rehearsal has cleared to score; absent clears nothing`);
+  }
+  if (new Set(raw).size !== raw.length) throw new Error(`${where} names an entry twice`);
+  return [...raw];
+}
+
+/**
+ * Why the policy holds a model's pick on a task episode until a rehearsal
+ * clears it, or null: the five-agent id until `rehearsed` names
+ * `deadmines`, and a codex row on either id until it names `codex`.
+ */
+export function rehearsalHold(ep: EpisodeId, harness: string, policy: Pick<SchedulingPolicy, "rehearsed">): string | null {
+  if (!isTaskEpisode(ep)) return null;
+  if (ep === "deadmines" && !policy.rehearsed.includes("deadmines")) {
+    return "the five-agent Deadmines episode waits on a program-loop rehearsal (policy.rehearsed does not name \"deadmines\")";
+  }
+  if (harness === "codex" && !policy.rehearsed.includes("codex")) {
+    return `a codex row on ${ep} waits on a rehearsal attempt (policy.rehearsed does not name "codex")`;
+  }
+  return null;
+}
 
 /**
  * The tier a model is actually scheduled under: its declared tier, advanced
@@ -209,6 +250,14 @@ export interface SchedulingPolicy {
    */
   runPods: RunPodsMode;
   /**
+   * What a program-loop rehearsal has cleared to score (`REHEARSALS`): the
+   * five-agent Deadmines id, and codex rows on either Deadmines id. The
+   * operator's word after reading the rehearsal; until it names one, the
+   * policy holds those picks and says why (`rehearsalHold`). Absent, or
+   * empty, clears nothing.
+   */
+  rehearsed: Rehearsal[];
+  /**
    * Where a scored or probing attempt plays: `off`, the deployment's one
    * shared world, as freeplay always does; `evals`, a short-lived world of its
    * own per attempt on the cluster, a worldserver over its own characters
@@ -248,6 +297,7 @@ export const DEFAULT_POLICY: SchedulingPolicy = {
   maxSessions: {},
   runPods: "off",
   worlds: "off",
+  rehearsed: [],
 };
 
 /**
@@ -267,13 +317,14 @@ export const DEFAULT_POLICY: SchedulingPolicy = {
  * never the file's.
  */
 export function parsePolicyBlock(raw: unknown, series: string | null = null): SchedulingPolicy {
-  const base: SchedulingPolicy = { ...DEFAULT_POLICY, series, maxSessions: {} };
+  const base: SchedulingPolicy = { ...DEFAULT_POLICY, series, maxSessions: {}, rehearsed: [] };
   if (raw === undefined) return base;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("fleet config: policy must be an object");
-  const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown; maxSessions?: unknown; paid?: unknown; extras?: unknown; resume?: unknown; subscriptions?: unknown; routing?: unknown; runPods?: unknown; worlds?: unknown };
+  const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown; maxSessions?: unknown; paid?: unknown; extras?: unknown; resume?: unknown; subscriptions?: unknown; routing?: unknown; runPods?: unknown; worlds?: unknown; rehearsed?: unknown };
   const out = { ...base };
   out.runPods = parseRunPodsMode(o.runPods, "policy.runPods");
   out.worlds = parseWorldsMode(o.worlds, "policy.worlds");
+  out.rehearsed = parseRehearsed(o.rehearsed, "policy.rehearsed");
   if (o.runsPerEpisode !== undefined) {
     throw new Error(`policy.runsPerEpisode is not a 0.5 key — run counts are a model's tier (${TIERS.join(", ")}); set roster.<name>.tier`);
   }
@@ -416,6 +467,8 @@ export interface RosterModel {
   billing?: Billing;
   /** Runs only as a probe campaign's assignment (`FleetRosterEntry.campaignOnly`): projected like a probe-only driver's entry. */
   campaignOnly?: true;
+  /** Opts into the five-agent Deadmines episode (`FleetRosterEntry.deadmines`), which its tier then buys like the one-agent one. */
+  deadmines?: true;
 }
 
 /**
@@ -2131,7 +2184,7 @@ export function liveCredentials(
  * so it is always zero: `freeplay` is reached only as an idle session and
  * `probing` only through a campaign.
  */
-function targetFor(tier: Tier, ep: EpisodeId): number {
+function targetFor(tier: Tier, ep: EpisodeId, entry?: Pick<RosterModel, "deadmines">): number {
   // Derived from the episode table, never from a list of names. A name check
   // here is a landmine: when a new id lands, TypeScript forces *a* decision and
   // the cheapest one that compiles is to widen `runsPerEpisode`, which silently
@@ -2139,6 +2192,8 @@ function targetFor(tier: Tier, ep: EpisodeId): number {
   // episode that cannot be scored cannot be evidence, so it has no target, and
   // `models.test.ts` asserts that for every id in the table.
   if (!isScoredEpisode(ep)) return 0;
+  // The five-agent id is bought only where the entry opts in (operator, 2026-11-14).
+  if (ep === "deadmines" && entry?.deadmines !== true) return 0;
   return TIER_TABLE[tier].runsPerEpisode[ep];
 }
 
@@ -2225,12 +2280,12 @@ export function projectModel(
   // until the operator promotes the driver (`DriverEntry.probeOnly`). A
   // campaignOnly entry is the same on any driver.
   const probeOnly = isProbeOnlyDriver(r.driver) || r.campaignOnly === true;
-  for (const ep of STATS_EPISODES) perEpisode[ep]!.target = probeOnly ? 0 : targetFor(tier, ep);
+  for (const ep of STATS_EPISODES) perEpisode[ep]!.target = probeOnly ? 0 : targetFor(tier, ep, r);
 
   // Eligibility falls out of the budget: an episode the tier buys no runs of is
   // not one this model may be scheduled on. One statement, so a target of zero
   // and "not eligible" can no longer disagree the way `promoted, 0/0` did.
-  const eligible: EpisodeId[] = probeOnly ? [] : POLICY_EPISODES.filter((ep) => targetFor(tier, ep) > 0);
+  const eligible: EpisodeId[] = probeOnly ? [] : POLICY_EPISODES.filter((ep) => targetFor(tier, ep, r) > 0);
   if (!probeOnly && !eligible.includes("e90")) eligible.unshift("e90");
 
   // The ladder: trailing consecutive no-progress attempts, newest last, after the clear.
@@ -2560,18 +2615,26 @@ export function planNextJobs(
   const verdicts = new Map<string, Verdict>();
   const byName = new Map(states.map((s) => [s.name, s]));
   const gated: HeldPick[] = [];
+  const rehearsalHeld: HeldPick[] = [];
   states.forEach((s, order) => {
     const sched = schedulability(s, running, policy);
     const open = verdictForGroups(sched, evals);
+    // Owed episodes a rehearsal has not cleared (`rehearsalHold`) are said
+    // and passed over; a model that owes nothing else does what a model
+    // owing nothing does, as under a closed gate.
+    const owedEps = s.eligible.filter((ep) => {
+      const st = s.perEpisode[ep];
+      return st !== undefined && st.counted < st.target;
+    });
+    const unheld = owedEps.filter((ep) => rehearsalHold(ep, s.harness, policy) === null);
+    const onlyHeld = open.verdict === "eval" && owedEps.length > 0 && unheld.length === 0;
     // A closed gate holds a model that owes a counted run, with the reason,
     // and lets it do what a model owing nothing does.
-    const v = opts.scoredGate !== undefined && open.verdict === "eval" ? verdictForGroups(sched, false) : open;
-    if (v !== open) {
-      const owed = s.eligible.find((ep) => {
-        const st = s.perEpisode[ep];
-        return st !== undefined && st.counted < st.target;
-      });
-      if (owed !== undefined) gated.push({ name: s.name, episode: owed, why: opts.scoredGate! });
+    const v = (opts.scoredGate !== undefined || onlyHeld) && open.verdict === "eval" ? verdictForGroups(sched, false) : open;
+    if (v !== open && opts.scoredGate === undefined) {
+      for (const ep of owedEps) rehearsalHeld.push({ name: s.name, episode: ep, why: rehearsalHold(ep, s.harness, policy)! });
+    } else if (v !== open && owedEps[0] !== undefined) {
+      gated.push({ name: s.name, episode: owedEps[0], why: opts.scoredGate! });
     }
     verdicts.set(s.name, v);
     if (wantsIdle(v, s)) {
@@ -2587,6 +2650,13 @@ export function planNextJobs(
     for (const ep of s.eligible) {
       const st = s.perEpisode[ep];
       if (st === undefined || st.counted >= st.target) continue;
+      // Owed, and not yet cleared to score: said, and passed over, so the
+      // model's other owed episodes still go.
+      const hold = rehearsalHold(ep, s.harness, policy);
+      if (hold !== null) {
+        rehearsalHeld.push({ name: s.name, episode: ep, why: hold });
+        continue;
+      }
       cands.push({ s, ep, epOrder: episodeOrder(ep), fresh, counted: st.counted, order });
     }
   });
@@ -2595,7 +2665,7 @@ export function planNextJobs(
   extraCands.sort(byPriority);
 
   const jobs: NextJob[] = [];
-  const held: HeldPick[] = [...gated];
+  const held: HeldPick[] = [...gated, ...rehearsalHeld];
   const taken = new Set<string>();
   const accounts = [...freeAccounts];
   for (const c of cands) {
@@ -2801,10 +2871,14 @@ export function outstandingWork(input: OutstandingInput): Outstanding {
     // held — so its upper and lower agree, which is the honest reading of a
     // trial: one run, and no more without an operator deciding.
     const climbed = TIER_TABLE[effectiveTier(s.declaredTier, true)].runsPerEpisode;
+    // The level episodes only: a task episode's attempts wait on the
+    // scored gate and on rehearsals the operator reads, so they are not yet
+    // work this figure can put a clock on.
     for (const ep of POLICY_EPISODES) {
+      if (!isLevelEpisode(ep)) continue;
       const st = s.perEpisode[ep];
       if (st === undefined) continue;
-      const owed = Math.max(0, climbed[ep as "e90" | "e360"] - st.counted);
+      const owed = Math.max(0, climbed[ep] - st.counted);
       if (owed === 0) continue;
       // e360 is owed now only if the model may already be scheduled on it;
       // otherwise it is the upper bound's bet that the model promotes.

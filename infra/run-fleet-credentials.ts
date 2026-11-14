@@ -232,7 +232,7 @@ export interface WorldsSetting {
 }
 
 /** The tiers that play on a world of their own while worlds are on (`infra/world.ts` `worldUsedBy`). */
-const WORLD_EPISODES = new Set(["e90", "e360", "probing"]);
+const WORLD_EPISODES = new Set(["e90", "e360", "probing", "deadmines", "deadmines-solo"]);
 
 /**
  * Every run in flight, counted on its credential's slots and its driver's

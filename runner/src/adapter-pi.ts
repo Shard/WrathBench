@@ -86,7 +86,7 @@ import type { EpisodicLog } from "./episodic";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { MCP_BRIDGE_PATH } from "@wrathbench/mcp/paths";
 import { McpServer } from "./mcp";
-import { buildSystemPrompt } from "./prompt";
+import { buildSystemPrompt, steeringOf } from "./prompt";
 import { PI_PROMPT_MISSING } from "./pi-extension";
 import { piProviderOf } from "./providers";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
@@ -787,7 +787,7 @@ export async function runPiEpisode(o: PiEpisodeOptions): Promise<LoopOutcome> {
   const apiBase = config.apiBase ?? "";
   const provider = piProviderOf(config.apiKeyEnv);
   const bridgePath = MCP_BRIDGE_PATH;
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("pi"), config.wiki, config.watchdogs.episodeMs);
+  const systemPrompt = buildSystemPrompt(steeringOf(config), config.episode, harnessOf("pi"), config.wiki, config.watchdogs.episodeMs);
   const cwd = mkdtempSync(join(tmpdir(), "wrathbench-pi-"));
   const thinking = piThinkingLevel(config.effort);
   let pi: PiProcess | null = null;

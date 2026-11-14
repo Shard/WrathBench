@@ -29,7 +29,7 @@ import { credentialCandidates, rosterProviderRefusal, type Credential } from "./
 export const ROSTER_ENTRY_KEYS = [
   "model", "tier", "idle", "driver", "effort", "apiBase",
   "billing", "credential", "race", "class", "watchdogs", "maxToolCalls",
-  "routing", "wiki", "compactWindow", "campaignOnly",
+  "routing", "wiki", "compactWindow", "campaignOnly", "deadmines",
 ] as const;
 
 export const QUEUE_JOB_KEYS = ["ref", "episode", "repeat", "enabled", "account", "credential"] as const;

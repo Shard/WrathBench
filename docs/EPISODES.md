@@ -14,10 +14,12 @@ and an episode is the ruleset a run happens under. This page is about episodes.
 
 An id fixes the shape of the run — how long, what start state, which watchdogs,
 whether the operator may steer. It fixes nothing about the model: the prompt,
-the tools and the loop are identical across all four ids, and no model is ever
-told which one it is in.
+the tools and the loop are identical across every id, and no model is ever
+told which one it is in. The two Deadmines ids fix one thing more, a directive
+and a staged party, and say so (below).
 
-Two of the four ids are **scored** (`e90`, `e360`) and two are **steered**
+Four of the six ids are **scored** (`e90`, `e360`, and the Deadmines task
+episodes `deadmines-solo` and `deadmines`) and two are **steered**
 (`probing`, `freeplay`). That split is the one that matters: a scored id fixes
 its own leash and forbids an objective, so its runs form a comparability group;
 a steered id lets an operator point the agent somewhere, which is exactly why it
@@ -89,6 +91,62 @@ because that would silently re-scope every score already carrying this label.
   no-XP disabled (which is not the same as zero), `objective: none`,
   `wikiCoords: false`, the reference wiki included (`wiki` is absent unless a run
   withheld it), and the tool-call ceiling.
+
+## `deadmines-solo` and `deadmines` — the fixed Deadmines episode
+
+A task episode (operator, 2026-11-14): a scored id whose start, characters and
+directive are pinned by the id, the bounded exception METHODOLOGY records to
+"Reset is a fresh character" and to the broad goal. Two ids, never pooled: one
+agent driving all five characters (`deadmines-solo`) and five agents of one
+model with one character each (`deadmines`). Neither is ranked against the
+other.
+
+- **The definition.** `runner/episodes/<id>.json`, a campaign definition in
+  shape so the party machinery stages and launches it, but part of the build
+  and never published to the store (`runner/src/task-episodes.ts`). A launch
+  file holding any other definition under the id is refused. A change to any
+  of it is a new id.
+- **Start state.** deadmines@4's party, staged on `moonbrook-mine` at level 20
+  in the mine a few yards from the portal, pre-formed with the warrior
+  leading: Tankpartyb (Human Warrior, tank), Healpartyc (Dwarf Priest,
+  healer), Magepartyd (Human Mage), Roguepartye (Human Rogue) and Palapartyf
+  (Dwarf Paladin), each in its loadout (`infra/fixtures/loadouts.ts`). The
+  party draws its five accounts from the eval pool and plays on a world of its
+  own; with `policy.worlds` off the attempt is held, never moved to the shared
+  world.
+- **Directive.** `deadmines-solo`: deadmines@5's one-agent objective.
+  `deadmines`: each member's deadmines@4 objective. Rendered by the same
+  block and bytes as a probe's objective, so the prompt is the one its
+  rehearsal ran, with one sentence stating the clock. It is a directive
+  (`RunConfig.directive`), never an objective, so the run is scored.
+- **Duration.** Four hours of wall clock from launch, sleeping included. This
+  is pending: the final clock waits on the operator's read of deadmines@5, and
+  a shorter one is a new id.
+- **Watchdogs.** Idle 20 minutes, which on the program loop counts only while
+  the agent is awake; no-XP off. Tool-call guard 8000, deadmines@5's: one
+  counter for the one agent, one per member for five.
+- **Ends.** `kill-target` on Edwin VanCleef (entry 639), credited to any of
+  the party's characters: cleared, counted. `episode-limit`: counted, not
+  cleared. A member's `idle` or `tool-call-limit`: counted, not cleared, and
+  on `deadmines` the other four end `party-ended`, naming it. Staging that fails,
+  `manual`, a fleet stop or offline gap, `harness-error`, `adapter-error` and
+  any pause: not counted, retried fresh with fresh staging on a fresh world.
+- **Strikes.** A provider's refusal is one strike per attempt, however many
+  members met it, counted per model, id and series: a strike on one Deadmines
+  id does not count toward the other.
+- **Who runs it.** `t2` buys three `deadmines-solo` attempts per series, and
+  three `deadmines` attempts where the roster entry also says `deadmines:
+  true`. The policy holds the five-agent id until `policy.rehearsed` names
+  `deadmines`, and a codex row on either id until it names `codex`: neither
+  has run on the program loop yet. Both wait behind the scored-episode hold
+  like every scored id. Run on the program loop, any harness that has one.
+- **Scoring.** Scored, each id its own group, on the dungeon board rather than
+  a ladder; rung 6 of the solo ladder reads it (METHODOLOGY, "The dungeon
+  board, and rung 6").
+- **Pins in the tuple.** The episode, its budget, `objective: false`,
+  `agents` and `characters` (1 and 5, or 5 and 1) as keys, and `task`: the
+  pinned definition's content hash and the hash of the staging fixtures, the
+  scenario and the five loadouts, so an edit to either splits the group.
 
 ## `probing` — the probe-campaign episode
 
@@ -495,7 +553,7 @@ evidence"):
 
 | lane | a pause | a stale run |
 |---|---|---|
-| `e90`, `e360` | failed attempt, retried fresh | ended, retried fresh |
+| `e90`, `e360`, `deadmines-solo`, `deadmines` | failed attempt, retried fresh | ended, retried fresh |
 | `probing` | failed attempt unless the campaign definition says `resume` | ended |
 | `freeplay` | resumed | ended; the next tick launches the next attempt on the same character |
 
