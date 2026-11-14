@@ -89,7 +89,7 @@ import { partyConfigOf, withFanoutGuids, withMemberGuids, type PartyStamp } from
 import { PARTY_END_GRACE_MS, writeEndRequest } from "../runner/src/end-request";
 import { runParty, type MemberVerdict, type PartyMemberRun } from "./party-fate";
 import { commandStager, STAGER_SCRIPT, type PartyStager, type StagedGuid, type StageRequest } from "./party-stager";
-import { parseWorldsMode, type WorldsMode } from "../runner/src/models";
+import { LADDER_MS, parseWorldsMode, type WorldsMode } from "../runner/src/models";
 import { DEFAULT_SOAP_PORT, loadWorldLauncher, moduleUrlOfRun, readWorldPointer, removeWorldPointer, stagingEnvOf, worldAuthHeaders, worldFateOf, worldUsedBy, type WorldLauncher } from "./world";
 
 // ------------------------------------------------------------------ types
@@ -303,19 +303,11 @@ const DEFAULT_EPISODE_MS = 5_400_000; // 90 minutes
 //    is saturated. It used to be the same three steps, which clamped at 10m
 //    forever: a fully saturated free model (z-ai/glm-5.2:free, 2026-08-22) was
 //    relaunched 17 times in one day, each a 0-turn rate-limited stub. It now
-//    escalates to 6h and then taints the spec out of the rotation.
+//    escalates to 6h and then taints the spec out of the rotation. Its rungs
+//    are the scheduler's cooling ladder (`LADDER_MS`), one set of timings for
+//    both, so an operator reading either log sees the same rungs.
 const RESUME_BACKOFF_MS = [2 * 60_000, 5 * 60_000, 10 * 60_000];
-const DEFER_BACKOFF_MS = [
-  1 * 60_000,
-  3 * 60_000,
-  5 * 60_000,
-  10 * 60_000,
-  15 * 60_000,
-  30 * 60_000,
-  60 * 60_000,
-  3 * 60 * 60_000,
-  6 * 60 * 60_000,
-];
+const DEFER_BACKOFF_MS: readonly number[] = LADDER_MS;
 const MAX_RETRY_CYCLES = 2;
 const CYCLE_GAP_MS = 10 * 60_000;
 const EARLY_TURN_THRESHOLD = 2;
@@ -926,7 +918,7 @@ export function isTainted(defers: number): boolean {
 }
 
 /** Human-readable rungs for --help and the dry-run plan ("1m/3m/.../6h"). */
-export function ladder(rungs: number[]): string {
+export function ladder(rungs: readonly number[]): string {
   return rungs
     .map((m) => (m >= 60 * 60_000 ? `${m / (60 * 60_000)}h` : `${m / 60_000}m`))
     .join("/");
