@@ -119,7 +119,7 @@ dashboard in `src/lib/ladder.ts`: three separate numbers, no aggregate score.
 
 The freeplay ladder is an overview of the top characters on freeplay at the
 current time, not a leaderboard (operator, 2026-08-29). It shows the whole
-active field — every freeplay run not deleted and not tainted, including
+active field — every freeplay run not deleted and not stillborn, including
 paused and disabled characters and runs in progress — so the scored surfaces'
 "is this evidence" predicate is deliberately not what filters it; a launch
 that produced nothing is dropped and a run's state is a column rather than an
