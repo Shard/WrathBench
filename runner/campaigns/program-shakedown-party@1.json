@@ -1,0 +1,73 @@
+{
+  "id": "program-shakedown-party",
+  "version": 1,
+  "question": "Does one agent on the program loop drive a staged party of three for forty-five minutes without a harness fault?",
+  "note": "A shakedown, not a measurement (operator, 2026-11-14): before the one-agent Deadmines eval (deadmines@5), one cheap run of the program loop at fan-out, so that a fault there is told apart from one in the claude-code program loop, which program-shakedown@1 shakes down solo. It is a definition of its own because a party block makes every cell the leader's staged start and a one-agent arm needs a party, so the solo cell cannot sit beside it. The start is the cheapest a party has: staging takes only level 20 in the five fixed loadouts, and a party starts staged, so a level-1 party is not launchable from a campaign. The party is deadmines@5's first three members, the tank, the healer and the mage, on moonbrook-mine with the same names; a row pinned to PARTY1, PARTY2 and PARTY3 in that order stages each name on the account the staging smokes use for it. One arm, agents 1, on the release image with no args: the loop is the driver's default, which at fan-out on the fixed loop is the program loop. The objective is the top-level one, deadmines@5's wording for three and a nearer target: Rhahk'Zor, the first boss (creature entry 644), whose kill ends the run as kill-target, so a party that works ends early and cheaply. The members' objectives are written for a per-member arm this version does not have, and are not shown on the one-agent arm. The leash: forty-five minutes, idle 20 minutes for the one agent, the no-XP watchdog off, and the call guard at the usual rate of 1000 per 30 minutes, 1500. resume is false: a paused party is a spent attempt and the next is staged fresh. Assignments are the store row's; the first is DeepSeek V4.1 Flash on OpenRouter.",
+  "cells": [
+    {
+      "id": "party",
+      "race": 1,
+      "class": 1,
+      "note": "The party; its start is the leader's, the Human Warrior tank."
+    }
+  ],
+  "arms": [
+    {
+      "id": "one-agent",
+      "note": "One agent driving all three characters, on the release image.",
+      "agents": 1
+    }
+  ],
+  "objective": "You play every member of a party of three: Tankpartyb (warrior, the party leader), Healpartyc (priest) and Magepartyd (mage). Tankpartyb is the party's tank, Healpartyc its healer and Magepartyd its damage. The party stands in the mine under Moonbrook, Westfall, a few yards from the portal into the Deadmines at (-11208, 1685, 26). The objective for this run is for the party to enter the Deadmines and defeat Rhahk'Zor.",
+  "stopAtLevel": null,
+  "end": [
+    {
+      "kill": {
+        "entry": 644
+      }
+    }
+  ],
+  "budget": {
+    "episodeMs": 2700000,
+    "idleMs": 1200000,
+    "noXpMs": null,
+    "maxToolCalls": 1500
+  },
+  "wiki": true,
+  "wikiCoords": false,
+  "resume": false,
+  "maxAttemptsPerCell": 3,
+  "start": {
+    "staged": "moonbrook-mine",
+    "level": 20
+  },
+  "party": {
+    "size": 3,
+    "members": [
+      {
+        "id": "tank",
+        "role": "tank",
+        "race": 1,
+        "class": 1,
+        "character": "Tankpartyb",
+        "objective": "You are one of a party of three, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest) and Magepartyd (mage). You are Tankpartyb, the party's tank. The party stands in the mine under Moonbrook, Westfall, a few yards from the portal into the Deadmines at (-11208, 1685, 26). The objective for this run is for the party to enter the Deadmines and defeat Rhahk'Zor. You share party chat with the others and can whisper either of them."
+      },
+      {
+        "id": "healer",
+        "role": "healer",
+        "race": 3,
+        "class": 5,
+        "character": "Healpartyc",
+        "objective": "You are one of a party of three, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest) and Magepartyd (mage). You are Healpartyc, the party's healer. The party stands in the mine under Moonbrook, Westfall, a few yards from the portal into the Deadmines at (-11208, 1685, 26). The objective for this run is for the party to enter the Deadmines and defeat Rhahk'Zor. You share party chat with the others and can whisper either of them."
+      },
+      {
+        "id": "mage",
+        "role": "damage",
+        "race": 1,
+        "class": 8,
+        "character": "Magepartyd",
+        "objective": "You are one of a party of three, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest) and Magepartyd (mage). You are Magepartyd, the party's damage. The party stands in the mine under Moonbrook, Westfall, a few yards from the portal into the Deadmines at (-11208, 1685, 26). The objective for this run is for the party to enter the Deadmines and defeat Rhahk'Zor. You share party chat with the others and can whisper either of them."
+      }
+    ]
+  }
+}
