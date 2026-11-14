@@ -16,8 +16,8 @@
  * one long-lived `claude` process and feeds it the harness's context message
  * once per driver turn, while every other piece of the harness — sandbox,
  * watchdogs, trajectory, scratchpad, named termination/pause reasons, the
- * fixed system prompt, the nine tools, the fixed context assembly — is the
- * same machinery the fixed loop uses.
+ * fixed system prompt, the run's tool list (`toolsFor`), the fixed context
+ * assembly — is the same machinery the fixed loop uses.
  *
  * ## How it is wired
  *

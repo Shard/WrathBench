@@ -193,6 +193,39 @@ await writeRun(
 );
 
 /**
+ * claude-code as the CLI reports it now: the result's `num_turns` (5) is more
+ * than the turn's messages (2), and it lands after the run's end, in the
+ * wind-down's grace, with one more message before it. A second process (a
+ * resume) is killed before its turn's result.
+ */
+const CLAUDE_TURNS = "run-claude-turns";
+await writeRun(
+  CLAUDE_TURNS,
+  { driver: "claude-code", model: "sonnet" },
+  [
+    [T0, { t: "driver", driver: "claude-code" }],
+    [T0 + 1, { t: "request", turn: 1, adapter: "claude-code", messages: "m".repeat(400) }],
+    [T0 + 1 * MIN, { t: "response", turn: 1, message: { role: "assistant", content: "a" } }],
+    [T0 + 1 * MIN + 1, { t: "response", turn: 1, message: { role: "assistant", content: "b" }, usage: claudeUsage(3000, 2000, 2, 500) }],
+    [T0 + 2 * MIN, { t: "response", turn: 1, message: { role: "assistant", content: "c" }, usage: claudeUsage(4000, 3500, 1) }],
+    [T0 + 4 * MIN, { t: "driver", driver: "claude-code" }],
+    [T0 + 4 * MIN + 1, { t: "request", turn: 1, adapter: "claude-code", messages: "m".repeat(400) }],
+    [T0 + 5 * MIN, { t: "response", turn: 1, message: { role: "assistant", content: "d" }, usage: claudeUsage(5000, 4500, 4) }],
+    [T0 + 6 * MIN, { t: "driver", driver: "claude-code" }],
+    [T0 + 6 * MIN + 1, { t: "request", turn: 1, adapter: "claude-code", messages: "m".repeat(400) }],
+    [T0 + 7 * MIN, { t: "response", turn: 1, message: { role: "assistant", content: "e" }, usage: claudeUsage(3000, 2500, 2) }],
+    [T0 + 8 * MIN, { t: "response", turn: 1, message: { role: "assistant", content: "f" }, usage: claudeUsage(3100, 2900, 1) }],
+    // The run ends at T0 + 9 min; the wind-down's last message and the result land after it.
+    [T0 + 9 * MIN + 10_000, { t: "response", turn: 1, message: { role: "assistant", content: "g" }, usage: claudeUsage(3200, 3000, 1) }],
+    [
+      T0 + 9 * MIN + 20_000,
+      { t: "claude_result", turn: 1, sessionId: "s3", numTurns: 6, costUsd: 0.5, usageRaw: { input_tokens: 400, output_tokens: 1200, cache_read_input_tokens: 8400, cache_creation_input_tokens: 500 }, usage: { prompt_tokens: 9300, completion_tokens: 1200, cached_tokens: 8400, cache_write_tokens: 500 } },
+    ],
+  ],
+  T0 + 9 * MIN,
+);
+
+/**
  * codex from before per-turn deltas: each turn's usage is its thread's running
  * total, on the last of its response records; thread b starts again from zero.
  */
@@ -385,7 +418,7 @@ describe("a v1 run", () => {
   test("the store reads what the files read", async () => {
     const store = await memoryStore(RUNS);
     const flags = ["--at-level", "2", "--at-minutes", "20"];
-    for (const id of [V1, OLD, FAN, CLAUDE, CODEX, WAKE]) expect([id, (await readout(id, flags, store)).windows]).toEqual([id, (await readout(id, flags)).windows]);
+    for (const id of [V1, OLD, FAN, CLAUDE, CLAUDE_TURNS, CODEX, WAKE]) expect([id, (await readout(id, flags, store)).windows]).toEqual([id, (await readout(id, flags)).windows]);
   });
 
   test("the text form: a column per window, labels, and the notes", async () => {
@@ -430,7 +463,7 @@ describe("a fan-out run", () => {
 });
 
 describe("claude-code", () => {
-  test("a request is a usage-bearing response; output is each turn's result over its requests, and a turn with none is unreported", async () => {
+  test("with no num_turns on its result, a request is a usage-bearing response; output is each turn's result over its messages, and a turn with none is unreported", async () => {
     const r = await readout(CLAUDE);
     const w = r.windows[0]!;
     expect(r.usage).toBe("turn-snapshot");
@@ -439,7 +472,7 @@ describe("claude-code", () => {
     expect(w.outputPerRequest).toBe(200);
     expect(w.reportedUsd).toBeCloseTo(0.3, 10);
     expect(r.notes.find((n) => n.startsWith("claude-code:"))).toContain("1 earlier envelope(s)");
-    expect(r.notes.find((n) => n.startsWith("claude-code:"))).toContain("1 of 2 turn(s) have no result");
+    expect(r.notes.find((n) => n.startsWith("claude-code:"))).toContain("1 message(s) in 1 driver turn(s) have no result");
     // The viewer's totals: the same prompt, and the same output, the results' and never the snapshots.
     const scanned = await scanRunTotals(join(RUNS, CLAUDE, "trajectory.jsonl"));
     expect([totals(w).prompt, totals(w).output]).toEqual([scanned.tokens.promptTokens, scanned.tokens.completionTokens]);
@@ -454,13 +487,38 @@ describe("claude-code", () => {
     const r = await readout(SNAPSHOTS);
     const w = r.windows[0]!;
     expect([w.requests, w.reported.output, w.outputPerRequest, w.reportedUsd]).toEqual([2, 0, null, null]);
-    expect(r.notes.find((n) => n.startsWith("claude-code:"))).toContain("1 of 1 turn(s) have no result");
+    expect(r.notes.find((n) => n.startsWith("claude-code:"))).toContain("2 message(s) in 1 driver turn(s) have no result");
     // Where the viewer can only sum the snapshots, and labels its figure so, this reads unreported.
     const viewer = (await scanRunTotals(join(RUNS, SNAPSHOTS, "trajectory.jsonl"))).tokens;
     expect([viewer.source, viewer.completionTokens]).toEqual(["snapshot", 3]);
     expect(totals(w).prompt).toBe(viewer.promptTokens);
     const text = (await inspect(["requests", SNAPSHOTS, "--runs-dir", RUNS])).out.join("\n");
     expect(text).toMatch(/^output\/request +—$/m);
+  });
+
+  test("requests are the CLI's num_turns, a turn cut short counts its messages, and the wind-down's records are the run's", async () => {
+    for (const store of [undefined, await memoryStore(RUNS)]) {
+      const r = await readout(CLAUDE_TURNS, [], store);
+      const w = r.windows[0]!;
+      // The first process's 2 messages and the second's 1 got no result; the third's 3 stand for its 6 model turns.
+      expect(w.requests).toBe(3 + 6);
+      expect(w.reported).toMatchObject({ input: 9, output: 6 });
+      expect(w.outputPerRequest).toBe(200);
+      // The result after the run's end still counts, and its charge with it.
+      expect(w.reportedUsd).toBeCloseTo(0.5, 10);
+      // No wake records: wakes are the distinct turn numbers, here one, so a turn is weighted requests too.
+      expect(w.wakes.requestsPer).toBe(9);
+      const note = r.notes.find((n) => n.startsWith("claude-code: requests"));
+      expect(note).toContain("6 in all");
+      expect(note).toContain("3 message(s) in 2 driver turn(s) have no result");
+      expect(r.notes).toContain("claude-code: 1 message(s) and 1 result(s) landed after the run's end, in the wind-down's grace, and count in the run column");
+      // A cut inside the last turn holds its share of the turn's count, never a record's one.
+      const cut = (await readout(CLAUDE_TURNS, ["--until", String(T0 + 7 * MIN + 30_000)], store)).windows[0]!;
+      expect(cut.requests).toBe(3 + 2);
+      expect(cut.reportedUsd).toBeNull();
+      const text = (await inspect(["requests", CLAUDE_TURNS, "--runs-dir", RUNS], store)).out.join("\n");
+      expect(text).toMatch(/^model turns \(requests\) +9$/m);
+    }
   });
 });
 
