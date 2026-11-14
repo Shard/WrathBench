@@ -713,7 +713,7 @@ let configLoadedAt: number | undefined;
 /** The pause switch as of the last tick; every writeState carries it. */
 let pauseSwitch: FleetPause | undefined;
 /**
- * The OpenCode Go credentials with a usage budget, read off Go's usage
+ * The OpenCode Go credentials on the allowance (`readsGoUsage`), read off Go's usage
  * endpoint at most once a minute per credential, before each tick decides
  * anything (`FleetGoUsage`). The CLI credentials' readings come off the runs
  * instead.

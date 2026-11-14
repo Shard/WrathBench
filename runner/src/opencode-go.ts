@@ -33,11 +33,13 @@
  * allowance spent; the supervisor reads it off the run and classifies the
  * credential `overage`, held until a later usage read shows room again.
  *
- * One reading per `opencode-go` credential with a `usage` budget: the paid
- * credential the allowance-drawing entries take. A `$0` Go model does not
- * draw the allowance down, keeps working past the limit, and runs on a free
- * credential with no usage budget, so no reading holds it — only a refused
- * key, which is the same key.
+ * One reading per paid `opencode-go` credential, whatever its budget's kind
+ * (`readsGoUsage`, infra/run-fleet-credentials.ts): the credential the
+ * allowance-drawing entries take. A `usage` budget holds it at its thresholds;
+ * any other budget still holds it on a refused key, a key with no access or a
+ * spent window. A `$0` Go model does not draw the allowance down, keeps
+ * working past the limit, and runs on a free credential, which is not read,
+ * so no reading holds it — only a refused key, which is the same key.
  *
  * Two readers share `GoUsagePoller`, which calls the endpoint at most once a
  * minute and keeps the newest answer: the fleet supervisor, before it decides

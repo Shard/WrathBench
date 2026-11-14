@@ -897,8 +897,42 @@ describe("OpenAiChatAdapter budget pauses", () => {
     expect(out).toMatchObject({ kind: "pause", reason: "auth-failed" });
   });
 
-  test("a 403 is not a 401: still fatal", async () => {
-    await expect(adapterPlaying([status(403, "forbidden")]).complete(req)).rejects.toThrow(/HTTP 403/);
+  test("a 403 is the key's too: one request, then a pause as no-access, on any provider", async () => {
+    for (const baseUrl of ["http://model.invalid/v1", "https://opencode.ai/inference/go/openai/v1"]) {
+      let calls = 0;
+      const adapter = new OpenAiChatAdapter({
+        baseUrl,
+        apiKey: "k",
+        model: "m",
+        fetchImpl: Object.assign(
+          (): Promise<Response> => {
+            calls++;
+            return Promise.resolve(status(403, JSON.stringify({ type: "error", message: "workspace not subscribed to Go" })));
+          },
+          { preconnect: () => {} },
+        ) as unknown as typeof fetch,
+        sleep: () => Promise.resolve(),
+      });
+      const out = await adapter.complete(req);
+      expect(out).toMatchObject({ kind: "pause", reason: "no-access" });
+      expect(out.kind === "pause" && out.detail).toContain("HTTP 403");
+      expect(calls).toBe(1);
+    }
+  });
+
+  test("a 403 after a 429 is still the key's: no-access, not a rate limit", async () => {
+    const out = await adapterPlaying([status(429, "slow down"), status(403, "forbidden")]).complete(req);
+    expect(out).toMatchObject({ kind: "pause", reason: "no-access" });
+  });
+
+  test("a 2xx body whose error names code 403 pauses as no-access too", async () => {
+    const out = await adapterPlaying([new Response(JSON.stringify({ error: { code: 403, message: "Forbidden" } }), { status: 200 })]).complete(req);
+    expect(out).toMatchObject({ kind: "pause", reason: "no-access" });
+  });
+
+  test("a moderation 403 is about the input, not the key: still fatal", async () => {
+    const flagged = JSON.stringify({ error: { code: 403, message: "Your chosen model requires moderation and your input was flagged", metadata: { reasons: ["x"] } } });
+    await expect(adapterPlaying([status(403, flagged)]).complete(req)).rejects.toThrow(/HTTP 403/);
   });
 });
 
