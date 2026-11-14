@@ -749,7 +749,12 @@ and differs only where the CLI does:
   per-model surface cannot be configured out, so it is part of what the
   `codex` label means (docs/METHODOLOGY.md, principle 3), and the driver runs
   those models with it rather than refusing them. Every game action still goes through our MCP tools, under the
-  tool-call ceiling and the watchdogs.
+  tool-call ceiling and the watchdogs. The CLI's own tools leave a trace on
+  the trajectory, for the operator only: what exec prints of them as a
+  `codex_item`, and every call the thread's rollout holds — `exec`, `wait`,
+  `view_image` and the rest, which exec never prints — as a
+  `codex_tool_call` with its output, each body cut to 4,000 characters and an
+  image reduced to its size.
 - **MCP approval.** With `approval_policy="never"` an MCP call that needs
   approval *fails* ("MCP tool call requires approval, but approval policy is
   never" — observed); `default_tools_approval_mode="approve"` on the server is

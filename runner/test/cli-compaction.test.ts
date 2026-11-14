@@ -345,7 +345,7 @@ describe("codex rollout compactions", () => {
     // A tiny chunk: every line, and the multi-byte characters in it, is cut.
     const follower = new CodexRolloutFollower(home, (r) => failures.push(r), 37);
     appendFileSync(path, `${tokenCount(120_000)}\n${tokenCount(134_000)}\n`);
-    expect(follower.read(THREAD)).toEqual({ compactions: [], context: { total: 134_000, window: 475_000 }, rateLimits: undefined, model: undefined });
+    expect(follower.read(THREAD)).toEqual({ compactions: [], context: { total: 134_000, window: 475_000 }, rateLimits: undefined, model: undefined, toolCalls: [] });
     appendFileSync(path, `${tokenCount(446_911)}\n${compacted({ encrypted: "abc" })}\n${postCount(77_759)}\n${compactionItem(7, 107)}\n${tokenCount(99_000)}\n`);
     const second = follower.read(THREAD);
     expect(second.compactions).toHaveLength(1);
@@ -359,8 +359,8 @@ describe("codex rollout compactions", () => {
   test("the follower fails quietly, once, and starts over on a new thread", () => {
     const failures: string[] = [];
     const none = new CodexRolloutFollower(undefined, (r) => failures.push(r));
-    expect(none.read(THREAD)).toEqual({ compactions: [], context: undefined, rateLimits: undefined, model: undefined, failed: true });
-    expect(none.read(THREAD)).toEqual({ compactions: [], context: undefined, rateLimits: undefined, model: undefined, failed: true });
+    expect(none.read(THREAD)).toEqual({ compactions: [], context: undefined, rateLimits: undefined, model: undefined, toolCalls: [], failed: true });
+    expect(none.read(THREAD)).toEqual({ compactions: [], context: undefined, rateLimits: undefined, model: undefined, toolCalls: [], failed: true });
     expect(failures).toEqual(["no CODEX_HOME"]);
     const { home, path } = rolloutHome();
     const missing = new CodexRolloutFollower(home, (r) => failures.push(r));
