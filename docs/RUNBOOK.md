@@ -1206,10 +1206,14 @@ duration and exits 1 on any failure. A smoke retries only a named transient
 condition, once or within a stated bound, and prints a `RETRY:` line when it
 does (`infra/smoke/lib/transient.ts`); a PASS that needed one shows the retry
 on its line. It refuses any member that would log in on the pool, PROBE,
-PARTY* or SMOKE, so it never holds the fleet. Run it after any release that
-touches the game surface. A smoke that fails after the resume has found a
-defect in a live build: revert the pin, which is another window, or fix
-forward.
+PARTY* or SMOKE, so it never holds the fleet. Before any member runs it
+reclaims each of its accounts from a session a killed suite left there
+(`infra/smoke/lib/reclaim.ts`), silently when nothing did. Run it after any
+release that touches the game surface, and start it only once
+`kubectl -n wrathbench rollout status deploy/wrathbench-runner` has
+completed: a suite started on the runner pod being replaced dies with it. A
+smoke that fails after the resume has found a defect in a live build: revert
+the pin, which is another window, or fix forward.
 
 The accounts for hand runs:
 
