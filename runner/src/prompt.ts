@@ -386,12 +386,13 @@ export function objectiveSection(objective: string): string {
  * when it carries an objective (`probingClockSentence`), and freeplay states
  * none.
  *
- * The e90 bar is followed by the fact that it is not the end of the episode.
- * Stated without it, all three Sonnet 5.5 e90 runs read the bar as a finish
- * line ("Level 5 is done and the promotion bar is met. I'm stopping here") and
- * idled until the no-XP watchdog ended them. The added sentence is a fact, not
- * advice: it names nothing to do and no number to chase, and it does not say
- * the episode runs its full clock, which the watchdogs can make false.
+ * Each eval states its clock and nothing else (operator, 2026-11-14). The e90
+ * sentence used to name the promotion bar, level 5 for six-hour episodes, and
+ * then that the bar did not end the episode, because three Sonnet 5.5 runs read
+ * the bar as a finish line and idled into the no-XP watchdog. Promotion is a
+ * stopping rule of the scheduler's, and a stopping rule the model is told about
+ * becomes part of what is measured, so both sentences went: the tiers and the
+ * bar can now change without moving a prompt hash.
  */
 export function episodeSection(episode: EpisodeId | undefined): string | undefined {
   if (episode === undefined) return undefined;
@@ -400,7 +401,7 @@ export function episodeSection(episode: EpisodeId | undefined): string | undefin
   // the model is told and must never happen by omission.
   switch (episode) {
     case "e90":
-      return "This episode lasts 90 minutes. Reaching level 5 within it is the bar for promotion to six-hour episodes. Reaching the bar does not end the episode: everything after it is recorded and counts exactly as what came before.";
+      return "This episode lasts 90 minutes.";
     case "e360":
       return "This episode lasts six hours.";
     case "probing":
