@@ -170,19 +170,20 @@ function everyLane(): { name: string; spec: Resolved; resume: boolean }[] {
 }
 
 /**
- * The fresh launches run.ts refuses after the parse, and why: every scored
- * lane, because scored episodes wait until a long-clock program-loop run has
- * been read (operator, 2026-11-14). Every freeplay and hand lane launches.
- * The planner never spawns a scored lane while they wait (`scoredHold`); this
- * is the launch's own refusal behind it, for a hand launch.
+ * The fresh launches run.ts refuses after the parse, and why, while scored
+ * episodes are held (`SCORED_EPISODES_WAIT`, runner/src/config.ts): every
+ * scored lane. Every freeplay and hand lane launches. None is held today, so
+ * this is under an explicit reason. The planner never spawns a scored lane
+ * while they are held (`scoredHold`); this is the launch's own refusal behind
+ * it, for a hand launch.
  */
-const SCORED_WAIT = "scored episodes do not run yet: they wait until a long-clock program-loop run has been read";
-const EXPECTED_REFUSED_AT_LAUNCH: string[] = [
-  `e90 openai, routed and billed: --episode e90 is a scored episode, and ${SCORED_WAIT}`,
-  `e360 claude-code with a window and a credential: --episode e360 is a scored episode, and ${SCORED_WAIT}`,
-  `e90 codex: --episode e90 is a scored episode, and ${SCORED_WAIT}`,
-  `queue job, pinned: --episode e90 is a scored episode, and ${SCORED_WAIT}`,
-  `queue job, pinned: --episode e90 is a scored episode, and ${SCORED_WAIT}`,
+const HOLD = "scored episodes are held for this test";
+const EXPECTED_REFUSED_WHILE_HELD: string[] = [
+  `e90 openai, routed and billed: --episode e90 is a scored episode, and ${HOLD}`,
+  `e360 claude-code with a window and a credential: --episode e360 is a scored episode, and ${HOLD}`,
+  `e90 codex: --episode e90 is a scored episode, and ${HOLD}`,
+  `queue job, pinned: --episode e90 is a scored episode, and ${HOLD}`,
+  `queue job, pinned: --episode e90 is a scored episode, and ${HOLD}`,
 ];
 
 describe("the roster's argv, every lane, through run.ts's parser", () => {
@@ -196,16 +197,21 @@ describe("the roster's argv, every lane, through run.ts's parser", () => {
     });
   }
 
-  test("a fresh launch of every non-probe lane is accepted by the whole fresh-launch seam, and run.ts refuses exactly the scored ones", () => {
+  test("a fresh launch of every non-probe lane is accepted by the whole fresh-launch seam; run.ts refuses none today, and exactly the scored ones while they are held", () => {
     const refusedAtLaunch: string[] = [];
+    const refusedWhileHeld: string[] = [];
     for (const { name, spec, resume } of everyLane()) {
       if (resume || spec.campaignFile !== undefined || spec.objective !== undefined) continue;
       expect(() => configFromArgs(episodeFlags(spec, false), {})).not.toThrow();
-      // run.ts's own refusal, after the parse (`loopLaunchRefusal`): scored episodes wait, and the snippet loop is a probe's.
-      const why = loopLaunchRefusal(configFromArgs(episodeFlags(spec, false), {}));
+      // run.ts's own refusal, after the parse (`loopLaunchRefusal`): a scored hold, and the snippet loop is a probe's.
+      const config = configFromArgs(episodeFlags(spec, false), {});
+      const why = loopLaunchRefusal(config);
       if (why !== null) refusedAtLaunch.push(`${name}: ${why}`);
+      const held = loopLaunchRefusal(config, HOLD);
+      if (held !== null) refusedWhileHeld.push(`${name}: ${held}`);
     }
-    expect(refusedAtLaunch).toEqual(EXPECTED_REFUSED_AT_LAUNCH);
+    expect(refusedAtLaunch).toEqual([]);
+    expect(refusedWhileHeld).toEqual(EXPECTED_REFUSED_WHILE_HELD);
   });
 
   test("a probe's argv carries its campaign file, its roster name and then the arm's own args, last", () => {

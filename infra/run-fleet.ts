@@ -1290,8 +1290,8 @@ async function main(): Promise<void> {
         out.push({ name: job.name, enabled: false, account: job.account!, loop: false, entries: [{ model: "gated" }] });
         continue;
       }
-      // Held by the scored wait, as the policy's own picks are: never spawned
-      // for the launch to refuse (`scoredHold`).
+      // While scored episodes are held (`SCORED_EPISODES_WAIT`), held as the
+      // policy's own picks are: never spawned for the launch to refuse (`scoredHold`).
       const hold = job.enabled && !sets.running.has(job.name) ? scoredHold(job, SCORED_EPISODES_WAIT ?? undefined) : undefined;
       if (hold !== undefined) {
         pinnedSkips.push({ job, reason: hold });
@@ -1578,7 +1578,7 @@ async function main(): Promise<void> {
         probeRuns: probes,
         affinity,
         evals: GROUPS.evals,
-        // Scored episodes wait: held with the reason rather than picked for a launch run.ts refuses.
+        // While scored episodes are held: held with the reason rather than picked for a launch run.ts refuses.
         ...(SCORED_EPISODES_WAIT !== null ? { scoredGate: SCORED_EPISODES_WAIT } : {}),
         }),
         characters,
