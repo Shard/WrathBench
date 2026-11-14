@@ -447,6 +447,8 @@ describe("claude-code at fan-out, through run.ts", () => {
       stateIntervalMs: 1,
       maxTurns: 1,
       fanout: { characters: 2, accounts: ["POOL01", "POOL02"] },
+      // A probe's: claude-code runs the snippet loop, which only a probe may.
+      episode: "probing",
     });
     const traj = new Trajectory(runDir);
     traj.writeMeta({ runId, harnessVersion: "t", startedAt: 1, config });

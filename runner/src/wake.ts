@@ -1,6 +1,6 @@
 /**
- * Sleeping and waking on the program loop (`loop: "program"`, a probe arm;
- * operator, 2026-11-12).
+ * Sleeping and waking on the program loop (`loop: "program"`; operator,
+ * 2026-11-12, adopted 2026-11-14).
  *
  * On the program loop the model's routines run in the sandbox whether it is
  * awake or not (the stack's `ProgramHost`), so a reply with no tool call puts

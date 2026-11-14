@@ -215,7 +215,8 @@ describe("the objective replaces the broad goal, and the probe states its clock 
     // race-probe@1 has a twelve-hour budget and no objective: no clock, no
     // change, through the same config path a launch takes.
     const path = fileOn(campaignFileOf(pub("race-probe@1"), "orc-warrior"));
-    const c = configFromArgs(["--driver", "openai", "--model", "m", "--episode", "probing", "--campaign-file", path], {});
+    // The snippet loop's arm: its prompt is the one it always was.
+    const c = configFromArgs(["--driver", "openai", "--model", "m", "--episode", "probing", "--campaign-file", path, "--loop", "snippet"], {});
     expect(c.objective).toBeUndefined();
     expect(c.watchdogs.episodeMs).toBe(43_200_000);
     expect(buildSystemPrompt(c.objective, c.episode, "wrathbench", c.wiki, c.watchdogs.episodeMs)).toBe(SYSTEM_PROMPT);

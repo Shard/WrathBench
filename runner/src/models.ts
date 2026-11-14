@@ -60,7 +60,7 @@ import { openRunDb, RUN_DB_JOURNAL_FILE, RUN_DB_WAL_FILE } from "./rundb";
 import { bestLevelOf, fanoutLead, fanoutReadings, readRunRow } from "./run-reader";
 import { harnessSeries } from "./comparability";
 import { DEFAULT_DRIVER, defaultCompactWindowOf, driverEntry, eitherHas, entryOf, harnessDriver, isProbeOnlyDriver, probeOnlyRefusal } from "./drivers";
-import { AUTO_COMPACT_WINDOW, DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isDriver, isTokenEnvName, isUnscoredDriverName, type Driver, type Harness } from "./config";
+import { AUTO_COMPACT_WINDOW, DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, defaultLoopOf, harnessOf, isDriver, isTokenEnvName, isUnscoredDriverName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
 import { badEvidenceReason, neverStale, OFFLINE_PAUSE, PARTY_PAUSE, SUBSCRIPTION_PAUSE, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
@@ -511,6 +511,14 @@ export interface RunFact {
   harnessVersion: string | null;
   /** `harnessSeries(harnessVersion)`; what the schedule keys on. */
   harnessSeries: string | null;
+  /**
+   * The agent loop and its `yield`, as the comparability tuple stamped them:
+   * absent is the snippet loop with no `yield`, which every run stamped
+   * before the keys existed is. A target counts only the runs on the loop
+   * its entry now launches (`countsTowardTarget`).
+   */
+  loop?: "program";
+  yield?: true;
   /** An extra run: an attempt the policy made past the target, never counted. */
   extra: boolean;
   startedAt: number;
@@ -709,6 +717,8 @@ export interface ModelState {
   provider?: string | null;
   /** The harness this entry's runs go through, from its driver; a tag, not a partition. */
   harness: Harness;
+  /** The entry's driver, which decides the loop its targets count (`countsTowardTarget`). Optional so a state built by hand need not spell it. */
+  driver?: Driver;
   status: ModelStatus;
   /** Free or paid, decided by `model-cost.ts` (or the roster's override). */
   billing: Billing;
@@ -1355,7 +1365,7 @@ function readRunReading(
       driver?: unknown;
       watchdogs?: { episodeMs?: unknown; idleMs?: unknown };
     };
-    comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown; compactWindow?: unknown };
+    comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown; compactWindow?: unknown; loop?: unknown; yield?: unknown };
     pause?: { reason?: unknown; at?: unknown; episodeElapsedMs?: unknown; notBefore?: unknown };
     subscriptionUsage?: unknown;
     credentialOverage?: { at?: unknown };
@@ -1384,6 +1394,9 @@ function readRunReading(
     episodeOverride: meta.comparability?.episodeOverride === true,
     harnessVersion: str(meta.harnessVersion),
     harnessSeries: harnessSeries(str(meta.harnessVersion)),
+    // Only when stamped: absent is the snippet loop, and every older fact reads the same.
+    ...(meta.comparability?.loop === "program" ? { loop: "program" as const } : {}),
+    ...(meta.comparability?.yield === true ? { yield: true as const } : {}),
     extra: meta.config?.extra === true,
     startedAt: num(meta.startedAt) ?? 0,
     endedAt: null,
@@ -1905,6 +1918,19 @@ export function isFailedAttempt(f: RunFact): boolean {
   return f.terminationReason === "attempt-failed" && f.runId.startsWith("fleet-");
 }
 
+/**
+ * Whether a counted run counts toward its roster entry's target: it ran the
+ * loop, and the `yield`, the entry now launches (`defaultLoopOf`), as its
+ * tuple stamped them (operator, 2026-11-14). A run of the other loop is
+ * another condition, not a copy of this one, so it neither fills a target
+ * nor is owed a rerun; the series is unchanged by it. Pure.
+ */
+export function countsTowardTarget(f: Pick<RunFact, "loop" | "yield">, driver: string | undefined): boolean {
+  const d = defaultLoopOf({ driver: driver !== undefined && isDriver(driver) ? driver : DEFAULT_DRIVER });
+  const program = d.loop === "program";
+  return (f.loop === "program") === program && (f.yield === true) === (program && d.yield);
+}
+
 export function isCounted(f: RunFact): boolean {
   if (f.extra || f.episodeOverride) return false;
   // A driver that is not a model (the scripted stub, the scripted reference)
@@ -2142,7 +2168,7 @@ export function projectModel(
       // A clear forgives the ladder and the strikes alike: `--clear-model` is
       // the operator saying the endpoint is worth trying again.
       if (isFailedAttempt(f) && (opts.clearedAt === undefined || (f.endedAt ?? 0) > opts.clearedAt)) stats.failed++;
-      if (isCounted(f)) {
+      if (isCounted(f) && countsTowardTarget(f, r.driver)) {
         stats.counted++;
         if (f.bestLevel !== null && f.bestLevel >= policy.promoteAtLevel) stats.reachedL5 = true;
       }
@@ -2208,6 +2234,7 @@ export function projectModel(
     platform: platformOf(r.apiBase, r.driver),
     provider: providerOfModel(r),
     harness: harnessOf(driverOf(r)),
+    driver: driverOf(r),
     status: "active",
     billing,
     declaredTier: r.tier,

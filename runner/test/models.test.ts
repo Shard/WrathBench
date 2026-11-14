@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  countsTowardTarget,
   DEFAULT_POLICY,
   LADDER_MS,
   countModelResponses,
@@ -51,6 +52,8 @@ const HOUR = 3_600_000;
 interface SynthRun {
   id: string;
   model: string;
+  /** A claude-code entry's run: the snippet loop, stamped with no loop key. */
+  snippet?: boolean;
   effort?: string;
   episode?: string;
   override?: boolean;
@@ -81,6 +84,10 @@ function writeRun(runsDir: string, r: SynthRun): void {
           effort: r.effort ?? null,
           ...(r.episode !== undefined ? { episode: r.episode } : {}),
           ...(r.override ? { episodeOverride: true } : {}),
+          // The loop the entry launches now, so its runs count toward its
+          // targets: the program loop with yield on openai, the snippet loop
+          // on claude-code.
+          ...(r.snippet === true ? {} : { loop: "program", yield: true }),
         },
       }),
     );
@@ -124,10 +131,10 @@ beforeAll(() => {
   writeRun(runsDir, { id: "glm-2", model: "z-ai/glm:free", episode: "e90", responses: 0, reason: null, startedAt: NOW - 40 * 60_000, endedAt: null, mtime: NOW - 30 * 60_000 });
   writeRun(runsDir, { id: "glm-3", model: "z-ai/glm:free", episode: "e90", responses: 0, reason: "adapter-error", startedAt: NOW - 5 * 60_000, endedAt: NOW - 60_000 });
   // sonnet: one counted run, no level 5; a pre-tier run (no episode stamp) that must be invisible.
-  writeRun(runsDir, { id: "sonnet-1", model: "sonnet", episode: "e90", responses: 50, level: 4, reason: "episode-limit", startedAt: t0, endedAt: t0 + HOUR });
-  writeRun(runsDir, { id: "sonnet-old", model: "sonnet", responses: 50, level: 9, reason: "episode-limit", startedAt: t0 - HOUR, endedAt: t0 });
+  writeRun(runsDir, { id: "sonnet-1", model: "sonnet", snippet: true, episode: "e90", responses: 50, level: 4, reason: "episode-limit", startedAt: t0, endedAt: t0 + HOUR });
+  writeRun(runsDir, { id: "sonnet-old", model: "sonnet", snippet: true, responses: 50, level: 9, reason: "episode-limit", startedAt: t0 - HOUR, endedAt: t0 });
   // sonnet-low: an answered run that is LIVE (mtime just now, no termination) -> counted, not stillborn.
-  writeRun(runsDir, { id: "sonnet-low-1", model: "sonnet", effort: "low", episode: "e90", responses: 3, level: 1, reason: null, startedAt: NOW - 60_000, endedAt: null, mtime: NOW - 10_000 });
+  writeRun(runsDir, { id: "sonnet-low-1", model: "sonnet", snippet: true, effort: "low", episode: "e90", responses: 3, level: 1, reason: null, startedAt: NOW - 60_000, endedAt: null, mtime: NOW - 10_000 });
   // local: one run from the previous series and one extra run this series — both visible, neither counted.
   writeRun(runsDir, { id: "local-old", model: "qwen/q", episode: "e90", responses: 20, level: 7, reason: "episode-limit", startedAt: t0, endedAt: t0 + HOUR, harnessVersion: "harness-0.2-33-gabc" });
   writeRun(runsDir, { id: "local-x", model: "qwen/q", episode: "e90", responses: 20, level: 2, reason: "episode-limit", startedAt: t0 + 6 * HOUR, endedAt: t0 + 7 * HOUR, extra: true });
@@ -241,6 +248,8 @@ describe("the ladder", () => {
     episodeOverride: false,
     harnessVersion: null,
     harnessSeries: null,
+    loop: "program",
+    yield: true,
     extra: false,
     startedAt: endedAt - 60_000,
     endedAt,
@@ -440,6 +449,8 @@ describe("nextJobs", () => {
     episodeOverride: false,
     harnessVersion: null,
     harnessSeries: null,
+    loop: "program",
+    yield: true,
     extra: false,
     startedAt: NOW - (100 - i) * HOUR,
     endedAt: NOW - (99 - i) * HOUR,
@@ -510,6 +521,8 @@ describe("paid and free", () => {
     episodeOverride: false,
     harnessVersion: "harness-0.3-1-gx",
     harnessSeries: "0.3",
+    loop: "program",
+    yield: true,
     extra,
     startedAt: NOW - (100 - i) * HOUR,
     endedAt: NOW - (99 - i) * HOUR,
@@ -666,6 +679,8 @@ describe("outstandingWork", () => {
     episodeOverride: false,
     harnessVersion: null,
     harnessSeries: null,
+    loop: "program",
+    yield: true,
     extra: false,
     startedAt: NOW - (100 - i) * HOUR,
     endedAt: NOW - (99 - i) * HOUR,
@@ -785,6 +800,8 @@ describe("a run's credential", () => {
       episodeOverride: false,
       harnessVersion: null,
       harnessSeries: null,
+      loop: "program",
+      yield: true,
       extra: false,
       startedAt: 0,
       endedAt: null,
@@ -837,6 +854,8 @@ describe("probe campaigns in the schedule", () => {
     episodeOverride: false,
     harnessVersion: null,
     harnessSeries: null,
+    loop: "program",
+    yield: true,
     extra: false,
     startedAt: NOW2 - (100 - i) * H,
     endedAt: NOW2 - (99 - i) * H,
@@ -1090,6 +1109,8 @@ describe("the claude-code compaction window is part of an entry's identity", () 
     episodeOverride: false,
     harnessVersion: null,
     harnessSeries: null,
+    loop: "program",
+    yield: true,
     extra: false,
     startedAt: NOW3 - (100 - i) * H,
     endedAt: NOW3 - (99 - i) * H,
@@ -1278,5 +1299,55 @@ describe("claude-code defaults its compaction window to 300k (operator, 2026-11-
     expect(row.windows).toEqual(["auto", "300k"]);
     expect("compactWindow" in row).toBe(false);
     expect(rowOf(projectModel(optOut, runs, DEFAULT_POLICY, { now: NOW4 }), runs, "/nowhere")).toMatchObject({ compactWindow: "auto", windows: ["auto"] });
+  });
+});
+
+describe("a target counts the runs of the loop its entry launches (operator, 2026-11-14)", () => {
+  const NOW5 = 1_800_000_000_000;
+  const done = (i: number, over: Partial<RunFact> = {}): RunFact => ({
+    runId: `loop-${i}`,
+    model: "m",
+    effort: null,
+    episode: "e90",
+    episodeOverride: false,
+    harnessVersion: "harness-0.5-1-gabc",
+    harnessSeries: "0.5",
+    extra: false,
+    startedAt: NOW5 - (10 - i) * 3_600_000,
+    endedAt: NOW5 - (9 - i) * 3_600_000,
+    terminationReason: "episode-limit",
+    modelResponses: 40,
+    bestLevel: 4,
+    live: false,
+    pause: null,
+    account: null,
+    character: null,
+    episodeMs: null,
+    campaign: null,
+    cell: null,
+    credential: null,
+    ...over,
+  });
+  const policy = { ...DEFAULT_POLICY, series: "0.5" };
+
+  test("the rule: the loop and the yield each driver launches", () => {
+    expect(countsTowardTarget({ loop: "program", yield: true }, "openai")).toBe(true);
+    expect(countsTowardTarget({ loop: "program" }, "openai")).toBe(false);
+    expect(countsTowardTarget({}, "openai")).toBe(false);
+    expect(countsTowardTarget({ loop: "program" }, "codex")).toBe(true);
+    expect(countsTowardTarget({ loop: "program", yield: true }, "codex")).toBe(false);
+    expect(countsTowardTarget({}, "claude-code")).toBe(true);
+    expect(countsTowardTarget({ loop: "program" }, "claude-code")).toBe(false);
+    // An entry with no driver is on the default one.
+    expect(countsTowardTarget({ loop: "program", yield: true }, undefined)).toBe(true);
+  });
+
+  test("snippet-loop runs in the same series are attempts and history, never a copy of a program-loop run", () => {
+    const entry: RosterModel = { name: "m", model: "m", tier: "t1" };
+    const snippet = [done(1), done(2), done(3)];
+    const st = projectModel(entry, snippet, policy, { now: NOW5 });
+    expect(st.perEpisode.e90).toMatchObject({ attempts: 3, counted: 0, target: 3, bestLevel: 4 });
+    const program = [...snippet, done(4, { loop: "program", yield: true })];
+    expect(projectModel(entry, program, policy, { now: NOW5 }).perEpisode.e90).toMatchObject({ attempts: 4, counted: 1 });
   });
 });

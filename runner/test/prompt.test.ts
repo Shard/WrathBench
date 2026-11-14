@@ -7,6 +7,8 @@ import {
   freshCharacterNote,
   resumeSessionNote,
   continuedSessionNote,
+  PROGRAM_CONTINUE_EMPTY,
+  PROGRAM_CONTINUE_KEPT,
 } from "../src/prompt";
 
 /**
@@ -434,5 +436,15 @@ describe("continuedSessionNote", () => {
     expect(note).toContain("Do not create a different one");
     expect(note).toContain('createSession({ character: "Bromdir", race: 3, class: 2 })');
     expect(note).toContain("your scratchpad was");
+  });
+
+  test("on the program loop it says what came along: the files and memory and no routine running, or files that start empty", () => {
+    const o = { character: "Bromdir", race: 3, class: 2, from: "r0", seen: "" };
+    const snippet = continuedSessionNote(o);
+    const kept = continuedSessionNote({ ...o, programFiles: true });
+    const empty = continuedSessionNote({ ...o, programFiles: false });
+    expect(kept).toBe(snippet.replace("Conversation history was not preserved; your scratchpad was.", PROGRAM_CONTINUE_KEPT));
+    expect(empty).toBe(snippet.replace("Conversation history was not preserved; your scratchpad was.", PROGRAM_CONTINUE_EMPTY));
+    expect(kept).toContain("no routine is running");
   });
 });
