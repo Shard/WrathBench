@@ -83,7 +83,7 @@ bun wb inspect trajectory <run-id> --since <iso> --next 20   # the first 20 afte
 bun wb inspect tools <run-id> [--since 2h] [--until 1h]       # calls per tool, ok/error, reflect granted/refused, pad writers
 bun wb inspect pad <run-id> [--since 2h]                       # pad size over time, writes, cap refusals, drops flagged
 bun wb inspect pad <run-id> --at <iso>                         # the pad's text at a moment, rebuilt from the record
-bun wb inspect stuck [<run-id>] [--window 2h] [--until 1h]     # no game progress over a window, and the failure signals in it
+bun wb inspect stuck [<run-id>] [--window 2h] [--until 1h]     # no game progress over a window (a death loop included), and the failure signals in it
 bun wb inspect session <run-id> [--stream calls] [--character Name] [--kind death,level] [--grep RE] [--last 20]   # a v1 run's record, a line per row
 bun wb inspect session '<run-id>~Name'                         # one fan-out character, by the session id the viewer shows
 bun wb inspect requests <run-id> [--at-level 5] [--at-minutes 60,90] [--json]   # per request, per wake or turn and per hour, cost, stall minutes
@@ -169,6 +169,16 @@ flagged. What covers it depends on the run:
 - a fan-out run's characters are each judged so off their own records, and
   the run is `STUCK` only when every one is: one agent moving any of its
   characters is making progress.
+
+A v1 window that is covered is also `STUCK` on a death loop: five or more
+deaths (`--deaths`, the record's `death` rows) after the window's last rise in
+level or xp or turn-in (or in the whole window, with none), whatever moved. A
+corpse run and a graveyard walk move the character, a repair spends money and
+a loot changes the bags, so a character dying at the same camp for an hour
+used to read as progressing; counting from the last gain keeps a level reached
+early in the window from hiding the loop after it. Fewer deaths are only said
+beside the evidence. The `requests` view's stall minutes do not take this
+rule.
 
 Only that verdict flags a run. Beside it, each marked tripped or not with its
 count: the same error repeated (digits folded), the harness-delivered hint

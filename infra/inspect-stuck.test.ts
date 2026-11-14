@@ -16,7 +16,7 @@ import { memoryStore } from "./inspect-memory-store";
 import { formatAccounts, formatHolder, STUCK_MARK } from "./run-fleet-status";
 import { liveRunStuck, runProgress } from "./run-fleet-state";
 import { tempDirs } from "./temp-dirs";
-import { emptyTraceSheet, emptyTraceState, SessionWriter, type TraceRow } from "@wrathbench/mcp/record";
+import { emptyTraceSheet, emptyTraceState, type EventRow, SessionWriter, type TraceRow } from "@wrathbench/mcp/record";
 import { writeLegacy05Run, type Legacy05State } from "../runner/test/fixtures/legacy05-writer";
 import { readRunRow } from "../runner/src/run-reader";
 
@@ -189,9 +189,15 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE_V1]
  * model calls a tool every 30 seconds (each a `calls` row) and the writer
  * beats `live.json` every tick. `levelled` levels once ten minutes into the
  * window and stands still after; `lapsed` stops writing anything for forty
- * minutes in the middle of the window (a runner that was down).
+ * minutes in the middle of the window (a runner that was down). `deathloop`
+ * dies every twelve minutes at the same camp and runs back from the
+ * graveyard 200 yards each time, paying a repair and looting between, with
+ * no xp: the freeplay run whose corpse runs read as progress. `deathgrind`
+ * dies as often but gains xp each time. `lateloop` levels fifty minutes
+ * before the end and then dies every eight minutes with no xp, as that run
+ * did after its level-up.
  */
-type IdleShape = "idle" | "levelled" | "lapsed";
+type IdleShape = "idle" | "levelled" | "lapsed" | "deathloop" | "deathgrind" | "lateloop";
 async function makeIdleV1Run(runsDir: string, runId: string, shape: IdleShape): Promise<void> {
   const dir = join(runsDir, runId);
   const minutes = 180;
@@ -204,15 +210,25 @@ async function makeIdleV1Run(runsDir: string, runId: string, shape: IdleShape): 
   const writer = new SessionWriter({ dir: join(dir, "session"), id: "5e5510aa0c0ffee2", stack: { version: "test" }, now: () => clock, log: () => {} });
   writer.open();
   const character = { guid: "7", name: "Testwick", race: 1, class: 1 };
-  const drain = (rows: TraceRow[]) => ({ trace: { rows, dropped: 0 }, events: { rows: [], dropped: 0 }, nearby: { rows: [], dropped: 0, through: 0 }, moves: [], character, stream: { connected: true, events: 1, seq: 1 } });
+  const drain = (rows: TraceRow[], events: EventRow[] = []) => ({ trace: { rows, dropped: 0 }, events: { rows: events, dropped: 0 }, nearby: { rows: [], dropped: 0, through: 0 }, moves: [], character, stream: { connected: true, events: 1, seq: 1 } });
   writer.ingest(drain([keyOf({ ts: t0, level: 12, xp: 1350, money: 4_210, map: 0, x: -9000, y: 400, z: 52, zone: 12, items: bags(20) })]));
   const levelAt = NOW - 110 * MIN;
   let call = 0;
+  let deaths = 0;
   for (let at = t0 + 30_000; at <= NOW - 5_000; at += 30_000) {
     if (shape === "lapsed" && at > NOW - 80 * MIN && at < NOW - 40 * MIN) continue;
     clock = at;
     if (shape === "levelled" && at === levelAt) writer.ingest(drain([{ ts: at, kind: "state", data: { level: 13, xp: 20 } }]));
-    else writer.ingest(drain([]));
+    else if ((shape === "deathloop" || shape === "deathgrind") && (at - t0) % (12 * MIN) === 6 * MIN) {
+      // Dead at the camp; then, in the reading after, back from the graveyard poorer, with other loot.
+      deaths++;
+      const xp = shape === "deathgrind" ? 1350 + deaths * 30 : 1350;
+      writer.ingest(drain([keyOf({ ts: at, level: 12, xp, money: 4_210 - deaths * 15, map: 0, x: -9000 - (deaths % 2) * 200, y: 400, z: 52, zone: 12, items: bags(20 - deaths) })], [{ ts: at, kind: "death", zone: 12 }]));
+    } else if (shape === "lateloop" && at === NOW - 50 * MIN) writer.ingest(drain([{ ts: at, kind: "state", data: { level: 13, xp: 99 } }]));
+    else if (shape === "lateloop" && at > NOW - 50 * MIN && (at - (NOW - 50 * MIN)) % (8 * MIN) === 4 * MIN) {
+      deaths++;
+      writer.ingest(drain([keyOf({ ts: at, level: 13, xp: 99, money: 4_210 - deaths * 15, map: 0, x: -9000 - (deaths % 2) * 200, y: 400, z: 52, zone: 12, items: bags(20 - deaths) })], [{ ts: at, kind: "death", zone: 12 }]));
+    } else writer.ingest(drain([]));
     call++;
     traj.append({ t: "tool_call", turn: call, call, name: "state_summary", args: {} });
     const id = writer.call("state_summary", {}, at);
@@ -231,7 +247,7 @@ async function makeIdleV1Run(runsDir: string, runId: string, shape: IdleShape): 
 }
 
 const RUNS_IDLE = tmp("inspect-stuck-idle-");
-for (const s of ["idle", "levelled", "lapsed"] as const) await makeIdleV1Run(RUNS_IDLE, `run-${s}`, s);
+for (const s of ["idle", "levelled", "lapsed", "deathloop", "deathgrind", "lateloop"] as const) await makeIdleV1Run(RUNS_IDLE, `run-${s}`, s);
 const STORE_IDLE = await memoryStore(RUNS_IDLE);
 
 for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE_IDLE]] as const) {
@@ -258,9 +274,33 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE_IDL
       expect(line(r.out, "progress")).toMatch(/record writes, but a 40m gap from 2030-01-02T10:40:00Z/);
     });
 
+    test("a death loop is stuck whatever the corpse runs moved, the repairs spent and the loot changed; deaths with xp are progress", async () => {
+      const r = await inspect(["stuck", "run-deathloop", "--runs-dir", RUNS_IDLE], store);
+      expect(line(r.out, "verdict")).toContain("STUCK: a death loop, no xp or turn-in across its deaths");
+      const progress = line(r.out, "progress");
+      expect(progress).toContain("death loop: 10 deaths in the window (threshold 5) with L12 1350xp throughout and quests +0");
+      expect(progress).toContain("which discounts money 41s 35c → 39s 85c, items changed, moved 200 yd");
+      expect(line(r.out, "limits")).toContain("--deaths 5");
+      // Over a shorter window, fewer deaths than the threshold: what moved is progress again, and the deaths are said.
+      const short = await inspect(["stuck", "run-deathloop", "--runs-dir", RUNS_IDLE, "--window", "40m"], store);
+      expect(line(short.out, "verdict")).toContain("not stuck");
+      expect(line(short.out, "progress")).toContain("3 death(s)");
+      expect(line((await inspect(["stuck", "run-deathloop", "--runs-dir", RUNS_IDLE, "--window", "40m", "--deaths", "3"], store)).out, "verdict")).toContain("STUCK");
+      const grind = await inspect(["stuck", "run-deathgrind", "--runs-dir", RUNS_IDLE], store);
+      expect(line(grind.out, "verdict")).toContain("not stuck");
+      expect(line(grind.out, "progress")).toContain("10 death(s)");
+    });
+
+    test("a death loop after a level-up in the window is counted from the level-up, at the default window", async () => {
+      const r = await inspect(["stuck", "run-lateloop", "--runs-dir", RUNS_IDLE], store);
+      expect(line(r.out, "verdict")).toContain("STUCK: a death loop");
+      expect(line(r.out, "progress")).toContain("death loop: 6 deaths since the last xp or turn-in at 01-02 11:10:00 (threshold 5), at L13 99xp, which discounts money");
+    });
+
     test("with no run id: the same verdicts, one line each", async () => {
       const r = await inspect(["stuck", "--runs-dir", RUNS_IDLE], store);
       expect(r.out.find((l) => l.includes("run-idle"))).toContain("STUCK");
+      expect(r.out.find((l) => l.includes("run-deathloop"))).toContain("STUCK");
       expect(r.out.find((l) => l.includes("run-levelled"))).toMatch(/ progressing$/);
       expect(r.out.find((l) => l.includes("run-lapsed"))).toContain("unjudged");
     });
@@ -359,6 +399,9 @@ describe("fleet status's flag on a still v1 character", () => {
     expect(liveRunStuck("run-idle", NOW, RUNS_IDLE)).toMatch(/^no progress in 2h00m: L12 1350xp throughout/);
     expect(liveRunStuck("run-levelled", NOW, RUNS_IDLE)).toBeUndefined();
     expect(liveRunStuck("run-lapsed", NOW, RUNS_IDLE)).toBeUndefined();
+    expect(liveRunStuck("run-deathloop", NOW, RUNS_IDLE)).toMatch(/^death loop: 10 deaths in the window/);
+    expect(liveRunStuck("run-lateloop", NOW, RUNS_IDLE)).toMatch(/^death loop: 6 deaths since the last xp or turn-in/);
+    expect(liveRunStuck("run-deathgrind", NOW, RUNS_IDLE)).toBeUndefined();
   });
 });
 
@@ -513,6 +556,26 @@ describe("progressVerdict", () => {
     expect(progressVerdict([before], w, STUCK_DEFAULTS, []).state).toBe("unjudged");
     // Covered, but no reading in or before the window: nothing to compare.
     expect(progressVerdict([], w, STUCK_DEFAULTS, writes)).toMatchObject({ state: "unjudged", evidence: expect.stringContaining("no trace reading") });
+  });
+
+  test("a death loop is stuck whatever moved; fewer deaths, any xp or a turn-in, or a window not covered is judged as before", () => {
+    // Corpse runs 200 yd out and back, a repair after each death.
+    const walking = series((i) => ({ x: (i % 24 < 12 ? 0 : 200), money: 100 - Math.floor(i / 12) }));
+    const deaths = (n: number): number[] => Array.from({ length: n }, (_, i) => (i * 12 + 6) * MIN);
+    expect(progressVerdict(walking, w, STUCK_DEFAULTS, undefined, deaths(10))).toMatchObject({ state: "stuck", evidence: expect.stringMatching(/^death loop: 10 deaths .* which discounts money/) });
+    expect(progressVerdict(walking, w, STUCK_DEFAULTS, undefined, deaths(4))).toMatchObject({ state: "progressing", evidence: expect.stringContaining("4 death(s)") });
+    expect(progressVerdict(walking, w, { ...STUCK_DEFAULTS, deaths: 4 }, undefined, deaths(4)).state).toBe("stuck");
+    expect(progressVerdict(series((i) => ({ xp: 500 + i })), w, STUCK_DEFAULTS, undefined, deaths(10)).state).toBe("progressing");
+    // A gain partway counts the loop from it: five deaths after it trip, four do not.
+    const late = (at: number) => series((i) => ({ xp: i >= at ? 600 : 500, x: i % 24 < 12 ? 0 : 200 }));
+    expect(progressVerdict(late(60), w, STUCK_DEFAULTS, undefined, deaths(10))).toMatchObject({ state: "stuck", deathLoop: { deaths: 5, since: 60 * MIN } });
+    expect(progressVerdict(late(72), w, STUCK_DEFAULTS, undefined, deaths(10)).state).toBe("progressing");
+    // A turn-in late in the window, two deaths after it.
+    expect(progressVerdict(series((i) => ({ quests: i > 100 ? 4 : 3 })), w, STUCK_DEFAULTS, undefined, deaths(10)).state).toBe("progressing");
+    // Deaths outside the window are not counted.
+    expect(progressVerdict(walking, w, STUCK_DEFAULTS, undefined, deaths(10).map((t) => t - 3 * 3_600_000)).state).toBe("progressing");
+    // Nothing recorded is still not no progress, however many deaths.
+    expect(progressVerdict(walking.filter((x) => x.ts < 40 * MIN || x.ts > 60 * MIN), w, STUCK_DEFAULTS, undefined, deaths(10)).state).toBe("unjudged");
   });
 });
 
