@@ -22,6 +22,7 @@
  * second* and the store's state series is a five-second poll behind.
  */
 
+import { isTaskEpisode } from "../src/episodes";
 import type { Database } from "bun:sqlite";
 import { openRunDb } from "../src/rundb";
 import { holdsOnlyLaunchFiles } from "../src/launch-files";
@@ -129,8 +130,10 @@ export function campaignFieldsOf(
   const campaign = s(config?.["campaign"]);
   const version = config?.["campaignVersion"];
   const p = config?.["party"] as { id?: unknown; member?: unknown; size?: unknown; role?: unknown; members?: unknown } | null | undefined;
+  // A party is a campaign's square, or a scored Deadmines attempt (`isTaskEpisode`).
+  const partied = campaign !== null || (typeof config?.["episode"] === "string" && isTaskEpisode(config["episode"]));
   const party =
-    campaign !== null && p !== null && typeof p === "object" && s(p.id) !== null && s(p.member) !== null && typeof p.size === "number"
+    partied && p !== null && typeof p === "object" && s(p.id) !== null && s(p.member) !== null && typeof p.size === "number"
       ? { id: s(p.id)!, member: s(p.member)!, size: p.size, ...partyPlaceOf(p.role, p.members, s(p.member)!) }
       : null;
   return {

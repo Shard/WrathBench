@@ -21,6 +21,7 @@ export const NAV: readonly NavItem[] = [
   { href: "/map", label: "map" },
   { href: "/ladder", label: "ladder" },
   { href: "/runs", label: "runs" },
+  { href: "/dungeons", label: "dungeons" },
   { href: "/models", label: "models" },
   { href: "/campaigns", label: "campaigns" },
   { href: "/about", label: "about" },

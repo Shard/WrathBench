@@ -77,8 +77,8 @@ export function adminFromEnv(env: Record<string, string | undefined>): boolean {
  *
  * - runner: the supervisor's state (`/api/fleet`) and its scheduling verdict
  *   per roster entry (`/api/models`).
- * - evals: the ladder, the campaigns, and the episodes and tiers the about
- *   page reads (`/api/episodes`).
+ * - evals: the ladder, the dungeon board, the campaigns, and the episodes and
+ *   tiers the about page reads (`/api/episodes`).
  *
  * `/api/results` stays the viewer's: it is the runs index and the character
  * and party pages' listing, not the ladder (which is `/api/ladder`).
@@ -91,6 +91,7 @@ export function groupOfApiPath(path: string): Group | null {
     case "/api/ladder":
     case "/api/campaigns":
     case "/api/episodes":
+    case "/api/dungeons":
       return "evals";
     default:
       return null;
@@ -109,6 +110,7 @@ export function groupOfPage(pathname: string): Group | null {
     case "/models":
       return "runner";
     case "/ladder":
+    case "/dungeons":
     case "/campaigns":
     case "/about":
     case "/episodes":

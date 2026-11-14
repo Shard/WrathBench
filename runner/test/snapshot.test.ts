@@ -273,6 +273,7 @@ const SNAP_NAMES = [
   "episodes.json",
   "models.json",
   "campaigns.json",
+  "dungeons.json",
   "tools.json",
 ];
 

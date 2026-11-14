@@ -74,6 +74,7 @@ import type {
   EntriesResponse,
   EntrySummary,
   EpisodeIdView,
+  DungeonsResponse,
   EpisodesResponse,
   FleetAccountView,
   FleetEndedView,
@@ -844,6 +845,46 @@ export function projectResults(r: ResultsResponse): ResultsResponse {
             xp: l.xp,
           })),
         }),
+  });
+}
+
+/**
+ * The dungeon board as published: every field is a number, a model id, an
+ * effort, a harness tag or a series, and each attempt's run ids, all of which
+ * the public runs listing already carries; nothing of a run a public handle
+ * withholds reaches a row (the route builds off the handle's own listing).
+ */
+export function projectDungeons(d: DungeonsResponse): DungeonsResponse {
+  return scrubPathsValue<DungeonsResponse>({
+    version: d.version,
+    boards: d.boards.map((b) => ({
+      episode: b.episode,
+      rows: b.rows.map((r) => ({
+        model: r.model,
+        effort: r.effort,
+        harness: r.harness,
+        ...(r.compactWindow != null ? { compactWindow: r.compactWindow } : {}),
+        series: r.series,
+        n: r.n,
+        cleared: r.cleared,
+        best: {
+          runIds: [...r.best.runIds],
+          party: r.best.party,
+          launchedAt: r.best.launchedAt,
+          counted: r.best.counted,
+          live: r.best.live,
+          cleared: r.best.cleared,
+          reason: r.best.reason,
+          timeToClearMs: r.best.timeToClearMs,
+          bosses: [...r.best.bosses],
+          lastBossMs: r.best.lastBossMs,
+          enteredMs: r.best.enteredMs,
+          deaths: r.best.deaths,
+          wipes: r.best.wipes,
+        },
+      })),
+    })),
+    now: d.now,
   });
 }
 

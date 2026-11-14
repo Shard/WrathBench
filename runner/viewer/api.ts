@@ -31,6 +31,7 @@ import { badEvidenceReason } from "../src/lapse";
 import type {
   ApiInfoResponse,
   CampaignsResponse,
+  DungeonsResponse,
   CostFigure,
   E90TokenProfileView,
   EntrySummary,
@@ -68,8 +69,11 @@ import { toolsResponse } from "./tools";
 import { runCost } from "./pricing";
 import { characterViewOf } from "./character";
 import { partyDetailOf } from "./party-marks";
+import { boardsOf, DUNGEON_BOARD_VERSION } from "./dungeons";
+import { dungeonMarksOf } from "./dungeon-marks";
 import {
   projectCampaigns,
+  projectDungeons,
   projectCharacterResponse,
   projectEntries,
   projectEpisodes,
@@ -1456,6 +1460,20 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * `isCounted` over a result row — never `unscored`, which is non-null for
    * every probe.
    */
+  /**
+   * The dungeon board (`dungeons.ts`): the two Deadmines episodes' runs, read
+   * with each character's milestones, as one table per id. Off the handle's
+   * own listing, so a run a public handle withholds is in no row.
+   */
+  async function dungeonsResponse(): Promise<Response> {
+    const all = (await resultRuns()).filter((r) => isTaskEpisode(r.episode) && r.episodeSource === "stamped");
+    const runs = await Promise.all(
+      all.map(async (run) => ({ run, characters: await dungeonMarksOf(runsDir, run.runId, { ended: run.terminationReason !== null, character: run.character }) })),
+    );
+    const body: DungeonsResponse = { version: DUNGEON_BOARD_VERSION, boards: boardsOf(runs), now: Date.now() };
+    return pub(body, projectDungeons);
+  }
+
   async function campaignsResponse(): Promise<Response> {
     const all = await resultRuns();
     const roster = fleetRoster();
@@ -1678,6 +1696,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
     /* The model-facing tool list, off `TOOLS` at request time (`tools.ts`); harness text only. */
     if (path === "/api/tools") return pub(toolsResponse(), projectTools);
     if (path === "/api/campaigns") return await campaignsResponse();
+    if (path === "/api/dungeons") return await dungeonsResponse();
     /*
      * `/api/ladder` serves the same projection as `/api/results`. The ladder's own
      * derivation stays client-side (`dashboard/src/lib/ladder.ts`, where its rung

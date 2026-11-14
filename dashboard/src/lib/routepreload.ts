@@ -36,10 +36,10 @@ export interface PreloadArgs {
 
 export type Preload = (args: PreloadArgs) => void;
 
-type Api = Pick<Client, "tools" | "positions" | "ladder" | "results" | "models" | "episodes" | "campaigns" | "runs" | "character">;
+type Api = Pick<Client, "tools" | "positions" | "ladder" | "results" | "models" | "episodes" | "campaigns" | "dungeons" | "runs" | "character">;
 
 /** The preloads, by route, over a client. */
-export function routePreloads(api: Api): Record<"home" | "ladder" | "map" | "runs" | "models" | "about" | "campaigns" | "fleet" | "character", Preload> {
+export function routePreloads(api: Api): Record<"home" | "ladder" | "dungeons" | "map" | "runs" | "models" | "about" | "campaigns" | "fleet" | "character", Preload> {
   const on =
     (start: (args: PreloadArgs) => Promise<unknown>[]): Preload =>
     (args) => {
@@ -58,6 +58,7 @@ export function routePreloads(api: Api): Record<"home" | "ladder" | "map" | "run
     models: on(() => [api.models(), api.ladder("freeplay")]),
     about: on(() => [api.episodes()]),
     campaigns: on(() => [api.campaigns()]),
+    dungeons: on(() => [api.dungeons()]),
     // The fleet table reads `/api/fleet`, which the shell's shared feed already
     // polls on every page; there is nothing route-specific to start.
     fleet: on(() => []),
