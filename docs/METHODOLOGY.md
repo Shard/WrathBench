@@ -89,10 +89,11 @@ whole reason a scaffold is tagged apart from `wrathbench`, and disjoint ids
 keep its rows from pooling with another harness's. What a scaffold does per
 model that cannot be configured out is stated with its label (principle 3):
 `codex` gives GPT-6 models its code mode and collaboration tools. The fixed
-loop sleeps through a `yield` tool, and codex runs without it, as measured,
-its end of turn being the sleep; claude-code and pi run the program loop only
-once their adapters wait on a wake, and until then run only as probe-campaign
-squares (operator, 2026-11-14). A harness
+loop and claude-code sleep through a `yield` tool, claude-code because its one
+turn can run for hours; codex runs without it, as measured, its end of turn
+being the sleep; pi runs the program loop only once its adapter waits on a
+wake, and until then runs only as probe-campaign squares (operator,
+2026-11-14). A harness
 setting has the harness's default and may be overridden per roster entry, as a
 recorded run dimension like effort rather than per-model tuning (operator,
 2026-10-16); the compaction window is one (claude-code, 2026-10-09), and a
