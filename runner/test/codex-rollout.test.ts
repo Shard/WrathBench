@@ -14,6 +14,7 @@ import {
   CodexRolloutScan,
   rateLimitsOfLine,
   turnModelOfLine,
+  toolOutputOf,
   findRollout,
   lastCallOfLine,
   lastCallOfRollout,
@@ -243,6 +244,75 @@ describe("CodexRolloutScan usage windows", () => {
     expect(read.rateLimits).toEqual([{ usedPercent: 61, windowMinutes: 10_080, resetsAt: 1_900_000_000_000 }]);
     // Nothing new appended: the newest readings stand.
     expect(follower.read(THREAD).rateLimits?.[0]?.usedPercent).toBe(61);
+  });
+});
+
+describe("CodexRolloutScan tool calls", () => {
+  const item = (payload: Record<string, unknown>): string => JSON.stringify({ timestamp: "2026-11-14T00:00:00.000Z", type: "response_item", payload });
+  const exec = (id: string, input = "text(1)"): string => item({ type: "custom_tool_call", call_id: id, name: "exec", input, status: "completed" });
+  const out = (type: string, id: string, output: unknown): string => item({ type, call_id: id, output });
+
+  test("pairs each call with its output; ours, by namespace or by name, are passed over with their outputs", () => {
+    const scan = new CodexRolloutScan();
+    scan.line(exec("c1"));
+    scan.line(item({ type: "function_call", call_id: "m1", name: "run_snippet", namespace: "mcp__wrathbench", arguments: "{}" }));
+    scan.line(item({ type: "function_call", call_id: "m2", name: "mcp__wrathbench__ping", arguments: "{}" }));
+    scan.line(item({ type: "function_call", call_id: "w1", name: "wait", arguments: '{"cell_id":"1"}' }));
+    scan.line(out("function_call_output", "m1", "ok"));
+    scan.line(out("function_call_output", "m2", "ok"));
+    scan.line(out("function_call_output", "w1", "waited"));
+    scan.line(out("custom_tool_call_output", "c1", [{ type: "input_text", text: "Script completed" }]));
+    expect(scan.drainCalls(true)).toEqual([
+      { kind: "function", callId: "w1", name: "wait", input: '{"cell_id":"1"}', status: null, output: "waited", at: "2026-11-14T00:00:00.000Z" },
+      { kind: "custom", callId: "c1", name: "exec", input: "text(1)", status: "completed", output: [{ type: "input_text", text: "Script completed" }], at: "2026-11-14T00:00:00.000Z" },
+    ]);
+    expect(scan.drainCalls(true)).toEqual([]);
+  });
+
+  test("an open call waits for a later read unless final; an output with no call is still recorded", () => {
+    const scan = new CodexRolloutScan();
+    scan.line(exec("c1"));
+    expect(scan.drainCalls(false)).toEqual([]);
+    scan.line(out("custom_tool_call_output", "c1", "done"));
+    expect(scan.drainCalls(false).map((c) => c.output)).toEqual(["done"]);
+    scan.line(exec("c2"));
+    expect(scan.drainCalls(true)).toEqual([expect.objectContaining({ callId: "c2", output: null })]);
+    scan.line(out("function_call_output", "lost", "late"));
+    expect(scan.drainCalls(true)).toEqual([{ kind: "function", callId: "lost", name: null, input: null, status: null, output: "late", at: "2026-11-14T00:00:00.000Z" }]);
+  });
+
+  test("a compaction whose histories hold tool items is one compaction and no call; a call's text naming other markers stays a call", () => {
+    const scan = new CodexRolloutScan();
+    const nested = { type: "custom_tool_call", call_id: "old", name: "exec", input: "x" };
+    scan.line(
+      JSON.stringify({
+        type: "compacted",
+        payload: { message: "", replacement_history: [nested, { type: "compaction", encrypted_content: "abc" }], guardian_history: [nested], window_number: 1 },
+      }),
+    );
+    scan.line(exec("c1", 'text("token_count" + "turn_context" + "ContextCompaction")'));
+    scan.line(tokenCount({ in: 10, cached: 0, out: 1 }));
+    expect(scan.drain(true)).toEqual([expect.objectContaining({ encryptedChars: 3, postTokens: 11 })]);
+    expect(scan.drainCalls(true).map((c) => c.callId)).toEqual(["c1"]);
+    expect(scan.model).toBeUndefined();
+  });
+
+  test("an image part is its size; anything else as written", () => {
+    expect(toolOutputOf([{ type: "input_image", image_url: "data:image/png;base64,AAAA" }, { type: "input_text", text: "t" }])).toEqual([
+      { type: "input_image", chars: 26 },
+      { type: "input_text", text: "t" },
+    ]);
+    expect(toolOutputOf("plain")).toBe("plain");
+    expect(toolOutputOf(undefined)).toBeNull();
+  });
+
+  test("the follower answers them once each, and none on a thread with none", () => {
+    const { home: h, file } = home([exec("c1"), out("custom_tool_call_output", "c1", "done")]);
+    const follower = new CodexRolloutFollower(h, () => {});
+    expect(follower.read(THREAD).toolCalls.map((c) => c.callId)).toEqual(["c1"]);
+    expect(follower.read(THREAD).toolCalls).toEqual([]);
+    writeFileSync(file, `${exec("c2")}\n`, { flag: "a" });
+    expect(follower.read(THREAD).toolCalls).toEqual([expect.objectContaining({ callId: "c2", output: null })]);
   });
 });
 
