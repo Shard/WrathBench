@@ -6,7 +6,8 @@ check in docs/RUNBOOK.md ("Network policy").
 
 The fleet pod and the run pods are why this exists. The snippet sandbox's
 Landlock ruleset confines a snippet's TCP connects to the module port, but not
-which host that port is on, nor UDP or non-IP sockets, and nothing at the pod
+which host that port is on, and its seccomp filter still allows UDP where the
+module URL names a host to resolve, and nothing at the pod
 level limited what the rest of the pod could reach. Each of the two gets an
 egress allow-list and no ingress at all (nothing listens on either: the
 claude-code MCP bridge is loopback, and `kubectl exec`/`logs` do not cross the

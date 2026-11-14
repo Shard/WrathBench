@@ -49,7 +49,9 @@ A report that shows otherwise is the most valuable kind this project can get.
   Bun's `.env` autoload is off for it, and a Linux Landlock ruleset the kernel
   enforces limits it to reading the interpreter and the runner's own code, its
   own `/proc` entry and a handful of device nodes, to TCP on the module's port,
-  and to executing nothing but the interpreter. Another process's environment
+  and to executing nothing but the interpreter; a seccomp filter beside it
+  allows no socket but TCP, unix stream pairs and, to resolve the module's
+  host name, UDP. Another process's environment
   or command line, the home directory where the CLI logins live, the run
   directories and `.env` all answer `EACCES` (`runner/test/sandbox-secrets.test.ts`
   plants sentinels in each and asserts none comes back).
