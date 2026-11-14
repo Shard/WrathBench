@@ -193,13 +193,13 @@ export const TOOLS_NOT_AMBIENT = {
  * and context sentences in it, and — with `wiki: false` — without the
  * reference tool.
  */
-function bodyFor(harness: Harness, wiki = true, program?: ProgramPrompt, snippetSlim = false): string {
+function bodyFor(harness: Harness, wiki = true, program?: ProgramPrompt): string {
   // The wiki-on rendering is `BODY_HEAD` untouched, by construction rather
   // than by test: `wiki: false` is two exact deletions from it and nothing
   // else, so every run that has the reference surface hashes as it always did.
   // The program loop's body is built from it by exact replacements
   // (`programBodyHead`), so the same two deletions apply to it.
-  const base = program !== undefined ? programBodyHead(program) : snippetSlim ? SNIPPET_SLIM_BODY_HEAD : BODY_HEAD;
+  const base = program === undefined ? BODY_HEAD : programBodyHead(program);
   const head = wiki
     ? base
     : base.replace(WIKI_TOOL_BULLET, "").replace(TOOLS_NOT_AMBIENT.withWiki, TOOLS_NOT_AMBIENT.withoutWiki);
@@ -304,35 +304,6 @@ function programReplacements(program: ProgramPrompt): readonly [string, string][
 function programBodyHead(program: ProgramPrompt): string {
   return programReplacements(program).reduce((text, [from, to]) => replaceExactly(text, from, to), BODY_HEAD);
 }
-
-// ------------------------------------------------------- snippet-slim arm
-
-/**
- * Whether a run renders the `snippet-slim` arm's body (`loop:
- * "snippet-slim"`, operator 2026-11-13): the snippet loop under a scaffold's
- * thread context, where a turn's message may carry a line in place of the
- * pad (D8). Its two sentences that say every turn carries the pad say what
- * the program arms' say instead, and nothing else changes. "The most recent
- * events" stays: under the rule a turn still carries the newest events, and
- * its header says how many are new.
- */
-export function snippetSlimPromptOf(config: Pick<RunConfig, "loop">): boolean {
-  return config.loop === "snippet-slim";
-}
-
-/** The snippet body with the program arms' two pad sentences (`programReplacements`) in place of its own. */
-const SNIPPET_SLIM_BODY_HEAD = (
-  [
-    [
-      "There is no read tool: every turn's context already carries the scratchpad as last written, and inside a snippet await scratchpad.read() returns it.",
-      "There is no read tool: the scratchpad as last written is in this turn's context or earlier in this conversation, and inside a snippet await scratchpad.read() returns it.",
-    ],
-    [
-      "## Each turn\n\nEvery turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad.",
-      "## Each turn\n\nEvery turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad, or a line saying it is unchanged since you last saw it in this conversation.",
-    ],
-  ] as const
-).reduce((text, [from, to]) => replaceExactly(text, from, to), BODY_HEAD);
 
 /** The last sentences of the program prompt: what a reply with no tool call does, and what wakes the model. */
 export const PROGRAM_BODY_TAIL =
@@ -498,15 +469,13 @@ export function buildSystemPrompt(
   episodeMs: number | null = null,
   /** The program loop's prompt (`programPromptOf`); undefined is the snippet loop, this prompt as it always was. */
   program?: ProgramPrompt,
-  /** The `snippet-slim` arm's two pad sentences (`snippetSlimPromptOf`), on the snippet loop only; false is this prompt as it always was. */
-  snippetSlim = false,
 ): string {
   const steered = objective !== undefined && objective.trim().length > 0;
   const parts = program === undefined ? [steered ? WORLD_SECTION : GOAL_SECTION] : [steered ? PROGRAM_WORLD_SECTION : PROGRAM_GOAL_SECTION];
   const tier = steered && episode === "probing" ? probingClockSentence(episodeMs) : episodeSection(episode);
   if (tier !== undefined) parts.push(tier);
   if (steered) parts.push(objectiveSection(objective.trim()));
-  parts.push(bodyFor(harness, wiki, program, snippetSlim));
+  parts.push(bodyFor(harness, wiki, program));
   return parts.join("\n\n");
 }
 

@@ -7,9 +7,9 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { loadRunConfig } from "../runner/src/config";
-import { assembleContext, eventsPart, ThreadContext } from "../runner/src/context";
+import { assembleContext } from "../runner/src/context";
 import { Trajectory } from "../runner/src/trajectory";
-import { eventsForm, type InspectStore, main, MESSAGE_PARTS, messageParts } from "./inspect-run";
+import { type InspectStore, main, MESSAGE_PARTS, messageParts } from "./inspect-run";
 import { memoryStore } from "./inspect-memory-store";
 import { tempDirs } from "./temp-dirs";
 
@@ -120,35 +120,6 @@ describe("inspect messages", () => {
     expect(text).toContain("wakes     4 block(s), off the wake records");
     expect(text).not.toContain("[wake 2 ·");
     expect(text).toContain("[wake 4 · slept 0s · woke for: five minutes passed]");
-  });
-});
-
-describe("inspect messages under a scaffold's thread context", () => {
-  test("each turn's events are the new ones alone, sized as such, and a line counts the window's forms and their mean size", async () => {
-    const id = "run-messages-delta";
-    const dir = join(RUNS, id);
-    let clock = T0;
-    const traj = new Trajectory(dir, { now: () => clock });
-    traj.writeMeta({ runId: id, harnessVersion: "t", startedAt: T0, config: { ...loadRunConfig({ driver: "stub" }), runId: id, token: TOKEN, driver: "codex" } });
-    const seen = new ThreadContext();
-    const all = Array.from({ length: 6 }, (_, i) => ({ ...EVENT, seq: i + 1, ts: T0 + i }) as never);
-    const texts: string[] = [];
-    for (const [turn, n, reset] of [[1, 3, false], [2, 5, false], [3, 5, true], [4, 6, false]] as const) {
-      if (reset) seen.reset();
-      const held = seen.events.held();
-      const events = all.slice(0, n);
-      seen.events.carried(eventsPart(events, 0, held).shown);
-      const text = assembleContext({ stateSummary: "== state ==\nx", events, scratchpad: "z", notices: [], turn, ...(held !== undefined ? { eventsHeld: held } : {}) });
-      texts.push(text);
-      clock = T0 + turn * MIN;
-      traj.append({ t: "request", turn, adapter: "codex:sol", messages: [{ role: "user", content: text }] });
-    }
-    traj.close();
-    expect(texts.map((t) => eventsForm(messageParts(t).events))).toEqual(["window", "new", "resent", "new"]);
-    const out = (await inspect(["messages", id, "--runs-dir", RUNS, "--width", "400"])).out.join("\n");
-    const sizes = texts.map((t) => messageParts(t).events.length);
-    expect(out).toMatch(new RegExp(`^\\S+ \\S+ +2 +\\d+ +0 +0 +\\d+ +${sizes[1]} +\\d+$`, "m"));
-    expect(out).toContain(`events    new 2 (mean ${Math.round((sizes[1]! + sizes[3]!) / 2)}) · window 1 (mean ${sizes[0]}) · resent 1 (mean ${sizes[2]})`);
   });
 });
 

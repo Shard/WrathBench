@@ -5002,21 +5002,6 @@ export function messageParts(text: string): Record<MessagePart, string> {
   return out;
 }
 
-/**
- * Which form a message's event window took (runner/src/context.ts
- * `eventsPart`): `new`, the events since the thread's last message under a
- * scaffold's thread context; `resent`, the whole window after the thread lost
- * it; `window`, the last EVENT_WINDOW as every other run sends it; or "" for
- * a message with no window. Read off the header.
- */
-export function eventsForm(events: string): "new" | "resent" | "window" | "" {
-  if (events === "") return "";
-  const header = events.slice(0, events.indexOf("\n") < 0 ? events.length : events.indexOf("\n"));
-  if (/^\[events: (?:none|\d+) new since your last message;/.test(header)) return "new";
-  if (header.includes(", sent in full again:")) return "resent";
-  return "window";
-}
-
 /** Where the state summary starts after `from`: its `== ` header line, else the last "\n\n" before `end`; the index of that "\n\n". */
 function hudStart(text: string, from: number, end: number): number {
   const header = text.indexOf("\n\n== ", from);
@@ -5134,15 +5119,6 @@ export async function inspectMessages(runId: string, opts: MessagesOptions, out:
     const n = rows.length;
     say(line(["mean", "", fmtChars(Math.round(all / n)), ...MESSAGE_PARTS.slice(1).map((k) => fmtChars(Math.round(totals[k] / n)))]));
     say(`share     ${MESSAGE_PARTS.slice(1).map((k) => `${k} ${all > 0 ? Math.round((100 * totals[k]) / all) : 0}%`).join(" · ")}`);
-    // Under a scaffold's thread context the window is the new events alone on most turns: its forms, and each one's mean size.
-    const forms = new Map<string, number[]>();
-    for (const r of rows) {
-      const f = eventsForm(r.parts.events);
-      if (f !== "") forms.set(f, [...(forms.get(f) ?? []), r.parts.events.length]);
-    }
-    if (forms.has("new") || forms.has("resent")) {
-      say(`events    ${(["new", "window", "resent"] as const).filter((f) => forms.has(f)).map((f) => `${f} ${forms.get(f)!.length} (mean ${fmtChars(Math.round(forms.get(f)!.reduce((n, x) => n + x, 0) / forms.get(f)!.length))})`).join(" · ")}`);
-    }
   } else say("(no request with a readable message in the window)");
   if (m.unread > 0) say(`${m.unread} request(s) carried no message this view can read`);
   if (opts.wakes) {
@@ -5175,7 +5151,7 @@ stuck: with no run id, every run with a live owner; --window and --max-gap are d
 session: a v1 run's record, events by default; a fan-out run's characters together unless --character; --kind key shows the restating rows
 requests: per request, wake and hour over the run (or --since/--until) and up to each cut from its start: --at-level (the first character to reach it),
   --at-minutes (active minutes, pauses left out); --stall is the shortest stall (default 5m); --price-at re-prices at that day's rates; --json for a script
-messages: each request's context message by part (turn, wake, notices, hud, events, pad) in characters, the last N and their mean, and under a scaffold's thread context how many windows carried only new events; --wakes prints the wake blocks`;
+messages: each request's context message by part (turn, wake, notices, hud, events, pad) in characters, the last N and their mean; --wakes prints the wake blocks`;
 
 /** `inspect stuck`'s threshold flags, each with the threshold it sets and whether it is a duration. */
 const STUCK_FLAGS: readonly (readonly [string, keyof StuckThresholds, "duration" | "count"])[] = [

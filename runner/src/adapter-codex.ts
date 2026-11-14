@@ -166,7 +166,7 @@ import { CompactionAsk, codexAutoCompactLimit, codexWindowCapRefusal, compaction
 import { codexUsageDelta, codexUsageRegressed, normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 import { SUBSCRIPTION_PAUSE } from "./lapse";
 import { SubscriptionUsageTracker, describeWindows, newestCredentialUsage, thresholdsOf, usageKeyOf } from "./subscription-usage";
-import { CODEX_SYSTEM_PROMPT, buildSystemPrompt, programPromptOf, snippetSlimPromptOf } from "./prompt";
+import { CODEX_SYSTEM_PROMPT, buildSystemPrompt, programPromptOf } from "./prompt";
 import type { ToolContext } from "./tools";
 import type { EpisodicLog } from "./episodic";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
@@ -660,12 +660,10 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   /** The last turn-end wake's block, for the next turn's message only. */
   let currentWake: string | undefined;
   /**
-   * What the thread holds of the scratchpad and the event window, on the
-   * program loop and the `snippet-slim` arm (`threadContextOf`): a turn's
-   * message sends the pad whole only when the thread does not hold it as it
-   * stands (D8), and only the events newer than the last one it was sent.
-   * Undefined on the snippet loop, whose every message carries the whole pad
-   * and the whole window as it always has.
+   * What the thread holds of the scratchpad, on the program loop
+   * (`threadContextOf`): a turn's message sends the pad whole only when the
+   * thread does not hold it as it stands. Undefined on the snippet loop,
+   * whose every message carries the whole pad as it always has.
    */
   const thread = threadContextOf(config) ? new ThreadContext() : undefined;
   const sleepFor = (via: "turn-end" | "yield", capMs: number) =>
@@ -698,8 +696,6 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     // The registry's switch (`DriverEntry.snippetDelta`): what changed since
     // the previous snippet rides each snippet result on a driver that has it.
     snippetDelta: entryOf(config.driver).snippetDelta,
-    // The snippet-slim arm's edit_scratchpad miss says the pad may be in an earlier message (D8).
-    ...(thread !== undefined && programPrompt === undefined ? { threadContext: true } : {}),
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
     ...(program !== undefined && programWake !== undefined
       ? {
@@ -840,7 +836,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   // ---- files the CLI needs, all inside the run directory (absolute paths:
   // the CLI runs from a scratch temp cwd)
   const instructionsPath = resolve(o.runDir, "codex-instructions.md");
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("codex"), config.wiki, config.watchdogs.episodeMs, programPrompt, snippetSlimPromptOf(config));
+  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("codex"), config.wiki, config.watchdogs.episodeMs, programPrompt);
   writeFileSync(instructionsPath, systemPrompt, "utf8");
   // The bridge by its REPOSITORY path: the CLI's sandbox gives MCP servers a
   // private /tmp, so a temp copy would not be found ("Module not found").
@@ -1240,7 +1236,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
             const id = msg["thread_id"];
             if (typeof id === "string" && id.length > 0) {
               if (threadId !== id) {
-                // A thread other than the one the last message went to holds no pad (D8), no events, and nothing else of ours.
+                // A thread other than the one the last message went to holds no pad, and nothing else of ours.
                 if (threadId !== undefined) {
                   thread?.reset();
                   program?.forgetShown();
@@ -1389,14 +1385,14 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       // The process has exited, so the rollout holds every line of this turn.
       const followed = rollout.read(threadId);
       for (const c of followed.compactions) trajectory.append(codexCompactionRecord(turn, c));
-      // A compacted thread no longer holds the pad or the events as they were
-      // sent: the next message sends them whole, and says so. A turn whose
-      // rollout could not be read may have hidden a compaction: the next
-      // message sends them whole too, claiming nothing.
-      // The routine errors and values results showed go with them.
-      if (followed.compactions.length > 0 || followed.failed === true) program?.forgetShown();
-      if (followed.compactions.length > 0) thread?.reset();
-      else if (followed.failed === true) thread?.forget();
+      // A compacted thread no longer holds the pad as it was sent: the next
+      // message sends it whole. A turn whose rollout could not be read may
+      // have hidden a compaction: the next message sends it whole too. The
+      // routine errors and values results showed go with it.
+      if (followed.compactions.length > 0 || followed.failed === true) {
+        program?.forgetShown();
+        thread?.reset();
+      }
       if (!resolvedModel && followed.model !== undefined) {
         resolvedModel = true;
         trajectory.recordResolved(runId, { model: followed.model, cliVersion: version });

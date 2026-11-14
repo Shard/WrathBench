@@ -1261,9 +1261,9 @@ of every request whose prompt held it: the record has `[redacted]` where the
 request had the secret. That was already true of a full record, which could
 not reproduce those bytes either.
 
-## The program loop (a probe arm, not adopted)
+## The program loop (a probe arm)
 
-`--loop program` (config `loop: "program"`) is a spike's probe arm, on the
+`--loop program` (config `loop: "program"`) is a probe arm, on the
 fixed loop and the codex driver, and refused on a scored tier, at fan-out, on
 a continuation and on claude-code and pi, whose one turn runs for hours
 (`programLoopRefusal`, `DriverEntry.programLoop`; a campaign pair is refused
@@ -1315,31 +1315,18 @@ the MCP call, under a tool timeout of 600 s rather than 300 s
 (`PROGRAM_TOOL_TIMEOUT_SEC`). Either sleep also ends on a stop request or a
 watchdog verdict.
 
-A codex thread keeps what it was sent, so its turn messages follow a thread
-context (`ThreadContext`, `threadContextOf`): on the program loop and on the
-`--loop snippet-slim` arm, never the released snippet loop or the fixed loop.
-The scratchpad goes whole only when the thread does not already hold it as it
-stands (`PadSeen`, the spike's D8): the first message of a thread, the first
-after a compaction, and any after the pad changed outside the conversation (a
+A codex thread keeps what it was sent, so on the program loop its turn
+messages follow a thread context (`ThreadContext`, `threadContextOf`); the
+snippet loop and the fixed loop never do. The scratchpad goes whole only when
+the thread does not already hold it as it stands (`PadSeen`): the first
+message of a thread, the first after a compaction or a turn whose rollout
+could not be read, and any after the pad changed outside the conversation (a
 snippet's or a routine's write); after the model's own `write_scratchpad` or
 `edit_scratchpad` the thread holds it, and a line with its size stands in its
-place. The event window carries only the events after the last one the thread
-was sent, found by identity (`EventsSeen`), under
-`[events: N new since your last message; earlier ones are above in this
-conversation]`; when that event is no longer in the window (more arrived than
-it holds, or a sandbox restart) the window goes plainly. After a compaction or
-a move to another thread both go whole again, the window's header adding
-`sent in full again: this conversation no longer holds the earlier ones`; a
-turn whose rollout could not be read sends both whole and claims nothing. A
-resumed run's thread is new, so its first message is plain. The message that
-reaches a thread the CLI moved to unannounced is the one meant for the old
-thread: the CLI names its thread only once the turn has started.
-
-`--loop snippet-slim` is the snippet loop under that context, codex only and
-refused on a scored tier and at fan-out (claude-code and pi send a fresh
-message once in a turn that runs for hours, so the rule would save nothing). Its
-prompt and its `edit_scratchpad` miss say what the program arms' say about the
-pad, and nothing else differs from the snippet loop's.
+place. The event window goes whole on every message. A resumed run's thread
+is new, so its first message is plain. The message that reaches a thread the
+CLI moved to unannounced is the one meant for the old thread: the CLI names
+its thread only once the turn has started.
 
 Time asleep is not `idle`, and a restart the program is blamed for (a blocked
 event loop with no snippet in flight) counts toward `snippet-runaway` as a
@@ -1353,13 +1340,8 @@ end, restart, `wake` call and pre-emption, and `program_error` per fresh error
 or refusal and per repeat count at each wake. `bun wb inspect requests` reads
 wakes per hour, requests per wake (on codex, responses per wake too) and the
 share asleep off the `wake` records; `bun wb inspect messages` sizes each
-turn's message by part and prints the wake blocks.
-`events_served` under the rule logs the events the message showed, with
-`mode` `new` or `resent`, and `inspect messages` counts each form of the window
-and its mean size. `loop` (`program` or `snippet-slim`) and `yield` are
-config and comparability keys, absent on the snippet loop, and `context:
-"slim"` is a comparability key on every run under the thread context, absent
-on every run sent the full context.
+turn's message by part and prints the wake blocks. `loop` (`program`) and
+`yield` are config and comparability keys, absent on the snippet loop.
 
 ## The sandbox
 
