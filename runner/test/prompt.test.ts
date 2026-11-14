@@ -199,16 +199,10 @@ describe("episode sentence", () => {
     expect(buildSystemPrompt()).toBe(SYSTEM_PROMPT);
     expect(buildSystemPrompt(undefined, "freeplay")).toBe(SYSTEM_PROMPT);
   });
-  test("e90 states the clock, the promotion bar, and that the bar is not the end; e360 only the clock", () => {
-    // All three Sonnet 5.5 e90 runs read the bar alone as a finish line ("Level
-    // 5 is done and the promotion bar is met. I'm stopping here") and idled
-    // into the no-XP watchdog. Operator decision 2026-10-01: say, as a fact,
-    // that reaching it ends nothing — no advice, no number to chase, the bar
-    // itself unchanged.
-    expect(episodeSection("e90")).toBe(
-      "This episode lasts 90 minutes. Reaching level 5 within it is the bar for promotion to six-hour episodes. " +
-        "Reaching the bar does not end the episode: everything after it is recorded and counts exactly as what came before.",
-    );
+  test("each eval states its clock and nothing else: no promotion bar in the e90 prompt", () => {
+    // Operator, 2026-11-14: promotion is the scheduler's stopping rule, and
+    // the model is not told about it, so e90 reads like e360.
+    expect(episodeSection("e90")).toBe("This episode lasts 90 minutes.");
     expect(episodeSection("e360")).toBe("This episode lasts six hours.");
     expect(episodeSection("freeplay")).toBeUndefined();
     expect(episodeSection("probing")).toBeUndefined();
@@ -230,7 +224,9 @@ describe("episode sentence", () => {
     // shapes, the state field list and the units filter-key list left to the
     // SDK reference. The scratchpad calls said to return Promises, with the
     // await written into each mention (operator, 2026-11-12), moved all of
-    // them: the sentences are in the shared body.
+    // them: the sentences are in the shared body. The e90 clock sentence
+    // losing the promotion bar (operator, 2026-11-14) moved the e90 six and
+    // no other.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
@@ -239,9 +235,9 @@ describe("episode sentence", () => {
         cli: { on: "sha256:3cdda953d23ddc43", off: "sha256:5b4986fd4111cf58" },
       },
       e90: {
-        wrathbench: { on: "sha256:779c27b260fde425", off: "sha256:2c59877661dffd51" },
-        "claude-code": { on: "sha256:2fc051a81840d53a", off: "sha256:cb7b8b49d5e7a351" },
-        cli: { on: "sha256:aea493d2e7955f1a", off: "sha256:c4ec88b31361f875" },
+        wrathbench: { on: "sha256:78353592ba70487e", off: "sha256:78600f78cfbbdbe2" },
+        "claude-code": { on: "sha256:5494a5b7891297f5", off: "sha256:409bb04d4931edb7" },
+        cli: { on: "sha256:0aab66c2a7014684", off: "sha256:597c84c2b9a4e275" },
       },
       e360: {
         wrathbench: { on: "sha256:29cb655c92a94cd4", off: "sha256:17f6957e8fb8b541" },
@@ -349,7 +345,7 @@ describe("an objective replaces the broad goal (operator, 2026-10-21)", () => {
     expect(got).toEqual({
       probing4h: "sha256:4baaf5f4455bd843",
       probing4hCli: "sha256:a34c1f76e82b1bc6",
-      e90: "sha256:e68bd064aace2478",
+      e90: "sha256:496accf4272ca0e7",
       freeplay: "sha256:fbd44e210007b21e",
     });
   });
