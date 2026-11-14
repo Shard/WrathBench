@@ -370,6 +370,28 @@ describe("resultRunOf", () => {
     expect(e.levels).toHaveLength(2);
   });
 
+  test("the condition is read off the tuple: routing, loop and yield key it, the prompt hash does not", () => {
+    const tuple = (promptHash: string, extra: Partial<NonNullable<RunRow["comparability"]>> = {}): RunRow["comparability"] => ({
+      harnessVersion: "harness-0.5-1-gabc",
+      promptHash,
+      promptChars: 10,
+      harness: "wrathbench",
+      effort: null,
+      budget: { maxTurns: null, maxToolCalls: 500, idleMs: 1, noXpMs: null, episodeMs: 2, maxSandboxRestarts: 3 },
+      objective: false,
+      episode: "e90",
+      serverBuild: null,
+      ...extra,
+    });
+    const of = (c: RunRow["comparability"]) => resultRunOf(run({ harnessVersion: "harness-0.5-1-gabc", comparability: c }), [], []).condition!;
+    const snippet = of(tuple("sha256:a"));
+    expect(snippet).toMatchObject({ loop: "snippet", yield: false, pinned: true, wiki: true });
+    expect(of(tuple("sha256:b")).id).toBe(snippet.id);
+    const program = of(tuple("sha256:a", { loop: "program", yield: true, routing: { allowFallbacks: true, via: "OpenCode Go" } }));
+    expect(program).toMatchObject({ loop: "program", yield: true, pinned: false });
+    expect(program.id).not.toBe(snippet.id);
+  });
+
   test("the billing verdict reads the run's recorded billing, so a declared-free stealth id is free", () => {
     const bunny = { model: "stealth/space-bunny-alpha", driver: "openai", platform: "openrouter" };
     expect(resultRunOf(run(bunny), [], []).billing).toBe("paid");

@@ -10,15 +10,20 @@
  * (`runner/src/billing.ts`: a `:free` endpoint, local hardware or an openai run
  * whose roster entry declared `billing: "free"` is free, a claude-code or codex
  * subscription counts as paid). No model slug is inspected here.
+ *
+ * Then the ladder page's opening view (`defaultLadderRuns`): each model under
+ * its newest condition, on the chart holding the most entries, so the
+ * homepage never draws two conditions on one chart either.
  */
 
 import type { ResultRun } from "../api/client";
 import { filterBySeries, latestSeries, seriesPresent } from "./harness";
 import { filterRuns } from "./ladder";
+import { defaultLadderRuns } from "./ladderfilter";
 
 export const HOME_EPISODE = "e90" as const;
 
 export function homeLadderRuns(runs: readonly ResultRun[], excludeFree: boolean): ResultRun[] {
   const latest = latestSeries(seriesPresent(runs));
-  return filterRuns(filterBySeries(runs, latest), { excludeFree });
+  return defaultLadderRuns(filterRuns(filterBySeries(runs, latest), { excludeFree }));
 }
