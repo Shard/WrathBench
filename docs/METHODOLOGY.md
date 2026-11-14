@@ -373,7 +373,8 @@ with the number of agents and of characters per agent as keys, and neither is
 ranked against the other: one measures coordination, the other orchestration.
 An attempt ends cleared only on the kill. A member that goes idle or reaches
 its call ceiling makes the attempt not cleared, since the model stopped; a
-provider's refusal is one strike per attempt, however many members met it.
+provider's refusal is one rung of the cooling ladder per attempt, however
+many members met it.
 
 **Every scored attempt plays on a world of its own; freeplay shares one**
 (operator, 2026-11-14). An `e90` or `e360` attempt, a probe and a party each

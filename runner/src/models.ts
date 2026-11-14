@@ -62,7 +62,7 @@ import { harnessSeries } from "./comparability";
 import { DEFAULT_DRIVER, defaultCompactWindowOf, driverEntry, eitherHas, entryOf, harnessDriver, isProbeOnlyDriver, probeOnlyRefusal } from "./drivers";
 import { AUTO_COMPACT_WINDOW, DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, defaultLoopOf, harnessOf, isDriver, isTokenEnvName, isUnscoredDriverName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isLevelEpisode, isScoredEpisode, isTaskEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
-import { campaignWork, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
+import { campaignWork, partyAttempt, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
 import { badEvidenceReason, neverStale, OFFLINE_PAUSE, PARTY_PAUSE, SUBSCRIPTION_PAUSE, resumesOnPause, staleAfterMs } from "./lapse";
 import { parseSubscriptionUsage, type SubscriptionUsage } from "./subscription-usage";
 import { billingOf, type Billing } from "./model-cost";
@@ -2267,6 +2267,68 @@ function targetFor(tier: Tier, ep: EpisodeId, entry?: Pick<RosterModel, "deadmin
   return TIER_TABLE[tier].runsPerEpisode[ep];
 }
 
+/** Whether an episode's attempt is a party of member runs (`deadmines`), counted as one. */
+export function isPartyEpisode(ep: EpisodeId): boolean {
+  return isTaskEpisode(ep) && EPISODES[ep].task.agents > 1;
+}
+
+/**
+ * A party episode's runs, grouped into attempts by party id; a member run
+ * with no party id is an attempt of its own (a stub written before its
+ * stamp). In first-launched order.
+ */
+export function partyAttempts(facts: readonly RunFact[]): RunFact[][] {
+  const by = new Map<string, RunFact[]>();
+  for (const f of facts) {
+    const key = f.party?.id ?? `run:${f.runId}`;
+    const list = by.get(key);
+    if (list === undefined) by.set(key, [f]);
+    else list.push(f);
+  }
+  return [...by.values()];
+}
+
+/**
+ * Fill one party episode's stats from its attempts (`partyAttempts`). An
+ * attempt counts as `partyAttempt` says — whole on disk, nothing in flight,
+ * no member `launch-failed`, every member that ended on its own verdict
+ * counting. A provider's refusal on it is one rung of the model's cooling
+ * ladder, however many members met it: the walk takes one member per party.
+ * A `launch-failed` stub (staging that failed) is an attempt that numbers the
+ * next, and neither counts nor cools. Levels and last verdicts read the
+ * member runs as they are.
+ */
+function tallyParties(stats: EpisodeStats, all: readonly RunFact[], mine: readonly RunFact[], driver: string | undefined, policy: SchedulingPolicy): void {
+  stats.attempts = partyAttempts(all).length;
+  for (const members of partyAttempts(mine)) {
+    const verdict = partyAttempt(
+      members.map((f) => ({
+        campaign: null,
+        version: null,
+        cell: null,
+        ref: null,
+        arm: null,
+        counted: isCounted(f) && countsTowardTarget(f, driver),
+        live: f.live || f.pause !== null,
+        party: f.party == null ? null : { id: f.party.id, size: f.party.size },
+        terminationReason: f.terminationReason,
+      })),
+    );
+    if (verdict.counted) {
+      stats.counted++;
+      if (members.some((f) => f.bestLevel !== null && f.bestLevel >= policy.promoteAtLevel)) stats.reachedL5 = true;
+    }
+    if (members.every((f) => stillbornOf(f) === true)) stats.stillborn++;
+    for (const f of members) {
+      if (f.bestLevel !== null && (stats.bestLevel === null || f.bestLevel > stats.bestLevel)) stats.bestLevel = f.bestLevel;
+      if (f.endedAt !== null && (stats.lastEnded === null || f.endedAt >= stats.lastEnded)) {
+        stats.lastEnded = f.endedAt;
+        stats.lastReason = stillbornOf(f) === true ? "stillborn" : f.terminationReason;
+      }
+    }
+  }
+}
+
 /** The billing verdict for a roster entry, as the projection stamps it. */
 export function rosterBilling(r: RosterModel): Billing {
   return billingOf({ model: r.model, apiBase: r.apiBase, driver: r.driver, billing: r.billing });
@@ -2315,6 +2377,14 @@ export function projectModel(
       lastEnded: null,
       lastReason: null,
     };
+    // A party episode's attempt is its party, not its member runs (operator,
+    // 2026-11-14): five members are one attempt and one count, and the
+    // cooling walk takes one rung for it, however many met a refusal.
+    if (isPartyEpisode(ep)) {
+      tallyParties(stats, all.filter((f) => f.episode === ep), mine.filter((f) => f.episode === ep), r.driver, policy);
+      perEpisode[ep] = stats;
+      continue;
+    }
     for (const f of all) if (f.episode === ep) stats.attempts++;
     for (const f of mine) {
       if (f.episode !== ep) continue;
@@ -2360,6 +2430,16 @@ export function projectModel(
   // is a party member another member's verdict ended (`party-ended`): the
   // party's evidence is that member's own run, which is on the walk, and four
   // more rungs for one early party death would cool the model's evals too.
+  // And a party is one attempt on the walk as in the tally: a refusal or a
+  // transport failure that ended all five members on their own verdict is one
+  // rung, not five (operator, 2026-11-14), so only its last-ended member is
+  // walked.
+  const lastOfParty = new Map<string, RunFact>();
+  for (const f of mine) {
+    if (f.party == null || f.endedAt === null) continue;
+    const prev = lastOfParty.get(f.party.id);
+    if (prev === undefined || (prev.endedAt ?? 0) <= f.endedAt) lastOfParty.set(f.party.id, f);
+  }
   const finished = mine.filter(
     (f) =>
       !f.live &&
@@ -2367,6 +2447,7 @@ export function projectModel(
       f.endedAt !== null &&
       f.terminationReason !== "launch-failed" &&
       f.terminationReason !== "party-ended" &&
+      (f.party == null || lastOfParty.get(f.party.id) === f) &&
       (opts.clearedAt === undefined || f.endedAt > opts.clearedAt),
   );
   for (let i = finished.length - 1; i >= 0; i--) {
