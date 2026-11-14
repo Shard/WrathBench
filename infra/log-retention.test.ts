@@ -8,8 +8,9 @@
  * file are deleted only when quiet for the window and older than the server
  * process, emptied in place and never unlinked when younger; a file the
  * server holds open is never touched; with no server start known only past
- * days are deleted; a disabled window changes nothing; and no output ever
- * carries a file name, because the names are session tokens.
+ * days are deleted; a disabled window changes nothing; a world's server log,
+ * saved at its teardown, goes by age alone; and no output ever carries a file
+ * name, because the names are session tokens.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
@@ -232,6 +233,46 @@ describe.skipIf(perl === null)("the retention pass", () => {
     expect(count(r.out, "deleted")).toBe(3);
     expect(count(r.out, "truncated")).toBe(3);
     expectNoNames(f, r);
+  });
+
+  test("a world's saved server log is deleted once quiet for the window; its record, a fresh log and a linked directory are kept", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const f = fixture(now);
+    const worlds = tempDir("wb-log-retention-worlds-");
+    const world = (id: string, ageDays: number): { log: string; record: string } => {
+      mkdirSync(join(worlds, id));
+      const log = join(worlds, id, "server.log");
+      const record = join(worlds, id, "world.json");
+      for (const [p, bytes] of [[log, 900], [record, 50]] as const) {
+        writeFileSync(p, "x".repeat(bytes));
+        utimesSync(p, now - ageDays * DAY, now - ageDays * DAY);
+      }
+      return { log, record };
+    };
+    const ended = world("w0abcdefghj", 5);
+    const recent = world("w1klmnopqrs", 1);
+    symlinkSync(join(worlds, "w0abcdefghj"), join(worlds, "w2linkedtoit"));
+    writeFileSync(join(worlds, "stray-file"), "x");
+
+    const dry = await run(f.dir, { WRATHBENCH_WORLDS_DIR: worlds, DRY_RUN: "1" });
+    expect(dry.code, dry.err).toBe(0);
+    expect(line(dry.out, "worlds")).toContain("1 server logs deleted");
+    expect(existsSync(ended.log)).toBe(true);
+
+    const r = await run(f.dir, { WRATHBENCH_WORLDS_DIR: worlds });
+    expect(r.code, r.err).toBe(0);
+    expect(existsSync(ended.log)).toBe(false);
+    expect(existsSync(ended.record)).toBe(true);
+    expect(existsSync(recent.log)).toBe(true);
+    expect(existsSync(recent.record)).toBe(true);
+    expect(line(r.out, "worlds")).toContain("1 server logs deleted");
+    expect(line(r.out, "worlds")).toContain("1 kept");
+    // The audit pass is the same with or without it.
+    expect(count(r.out, "deleted")).toBe(3);
+    expect(r.out + r.err).not.toContain("w0abcdefghj");
+    // Without the variable there is no worlds pass, and an unreadable worlds dir is a failure.
+    expect(line((await run(fixture(now).dir, {})).out, "worlds")).toBe("");
+    expect((await run(fixture(now).dir, { WRATHBENCH_WORLDS_DIR: join(worlds, "absent") })).code).toBe(1);
   });
 
   test("an unreadable directory is a failure, not a silent pass", async () => {

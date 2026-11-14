@@ -46,6 +46,18 @@ that selects a pod drops every port it does not list, so the same policy
 admits the world port and the module port from every source, exactly as they
 are reached with no policy at all. With the switch above on, the fleet's
 egress gains the matching rule; the run pods' never does.
+
+With `worlds` on, each world per eval (templates/worlds.yaml) gets the same
+kind of policy whatever either switch says, ingress only so that a world
+still reaches MySQL: its module port from the fleet (which boots it and asks
+its /health), the run pods and the runner pod, and nothing else; its world
+port from every source, as the long-lived world's (the kubelet's readiness
+probe, a spectator); and with staging on, SOAP from the fleet and runner pods
+only. With the switch above on, the fleet's and the run pods' egress gain the
+worlds' module port, and the fleet's their SOAP port. A sandbox's Landlock
+rule admits the module port on any host, so which world a snippet could
+reach is this policy's question, and the answer is any: the lease it holds is
+its own world's, and another world's port gives it nothing.
 */}}
 
 {{- define "wrathbench.np.matchLabels" -}}
@@ -72,6 +84,15 @@ matchLabels:
 {{- define "wrathbench.np.module" -}}
 - to:
     - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "worldserver") | nindent 8 }}
+  ports:
+    - protocol: TCP
+      port: 8086
+{{- end -}}
+
+{{/* The worlds' module port (values.yaml `worlds`), beside the long-lived world's. */}}
+{{- define "wrathbench.np.worlds" -}}
+- to:
+    - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "world") | nindent 8 }}
   ports:
     - protocol: TCP
       port: 8086
@@ -136,6 +157,9 @@ spec:
   egress:
     {{- include "wrathbench.np.dns" . | nindent 4 }}
     {{- include "wrathbench.np.module" . | nindent 4 }}
+    {{- if include "wrathbench.on.worlds" $ }}
+    {{- include "wrathbench.np.worlds" . | nindent 4 }}
+    {{- end }}
     {{- include "wrathbench.np.internet" . | nindent 4 }}
     {{- with include "wrathbench.np.localModels" . | trim }}{{ . | nindent 4 }}{{ end }}
     # The run-pod launcher (infra/run-pod.ts), the one client of this pod's
@@ -158,6 +182,9 @@ spec:
     # The party stager's SOAP console (see the header): the fleet only.
     - to:
         - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "worldserver") | nindent 12 }}
+        {{- if include "wrathbench.on.worlds" $ }}
+        - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "world") | nindent 12 }}
+        {{- end }}
       ports:
         - protocol: TCP
           port: {{ .Values.staging.soapPort }}
@@ -178,6 +205,9 @@ spec:
   egress:
     {{- include "wrathbench.np.dns" . | nindent 4 }}
     {{- include "wrathbench.np.module" . | nindent 4 }}
+    {{- if include "wrathbench.on.worlds" $ }}
+    {{- include "wrathbench.np.worlds" . | nindent 4 }}
+    {{- end }}
     {{- include "wrathbench.np.internet" . | nindent 4 }}
     {{- with include "wrathbench.np.localModels" . | trim }}{{ . | nindent 4 }}{{ end }}
 {{- end }}
@@ -270,4 +300,39 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.staging.soapPort }}
+{{- end }}
+{{- if include "wrathbench.on.worlds" $ }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-world
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: world
+spec:
+  podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "world") | nindent 4 }}
+  policyTypes: [Ingress]
+  ingress:
+    # The world port from every source, as the long-lived world's.
+    - ports:
+        - protocol: TCP
+          port: 8085
+    # The module port from what drives an attempt (see the header).
+    - from:
+        - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "fleet") | nindent 12 }}
+        - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "run") | nindent 12 }}
+        - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "runner") | nindent 12 }}
+      ports:
+        - protocol: TCP
+          port: 8086
+    {{- if .Values.staging.enabled }}
+    # SOAP from the fleet and runner pods only.
+    - from:
+        - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "fleet") | nindent 12 }}
+        - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "runner") | nindent 12 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.staging.soapPort }}
+    {{- end }}
 {{- end }}

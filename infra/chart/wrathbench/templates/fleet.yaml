@@ -122,6 +122,15 @@ spec:
             - name: data
               mountPath: /wrathbench/data/config
               subPath: config
+            {{- if include "wrathbench.on.worlds" $ }}
+            # A world per eval's own record, `<id>/world.json`, and the
+            # console log saved at its teardown (values.yaml `worlds`).
+            # Operational and outside the evidence, so its own subPath: under
+            # runs/, every entry is read as a run.
+            - name: data
+              mountPath: /wrathbench/data/worlds
+              subPath: worlds
+            {{- end }}
             {{- if include "wrathbench.on.codex" $ }}
             # NOT a subPath: the CLI rewrites auth.json in place and expects a
             # real directory it owns (uid 1000, via the pod's fsGroup).

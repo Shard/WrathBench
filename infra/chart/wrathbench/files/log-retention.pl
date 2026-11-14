@@ -51,8 +51,14 @@
 # tokens. Nothing here prints one or passes one to another program: counts
 # and bytes only.
 #
+# A world per eval's console log is the one other thing pruned here: saved
+# whole at the world's teardown as `<id>/server.log` under WRATHBENCH_WORLDS_DIR
+# and never written again, so age is its whole rule, and one quiet for the
+# window is deleted. The world's record beside it (`world.json`) is kept.
+#
 # Environment: WRATHBENCH_AUDIT_DIR, WRATHBENCH_LOG_RETENTION_DAYS (0 or empty
-# disables), WRATHBENCH_MODULE_HOST (host:port), WRATHBENCH_MODULE_SECRET (or
+# disables), WRATHBENCH_WORLDS_DIR (unset: no worlds pass),
+# WRATHBENCH_MODULE_HOST (host:port), WRATHBENCH_MODULE_SECRET (or
 # AC_WRATH_BENCH_SECRET, the worldserver's own), DRY_RUN (non-empty: report
 # only), WRATHBENCH_RETENTION_HOLDER_PID (the process whose descriptors are
 # checked; default 1 when that is a worldserver).
@@ -164,6 +170,26 @@ for my $name (readdir $dh) {
 }
 closedir $dh;
 
+# --- the worlds' saved console logs ----------------------------------------
+my $worlds = $ENV{WRATHBENCH_WORLDS_DIR} // '';
+my %w  = map { $_ => 0 } qw(deleted kept failed);
+my %wb = map { $_ => 0 } qw(deleted kept);
+if ($worlds ne '') {
+    opendir my $wd, $worlds or do { print STDERR "log retention: cannot read the worlds dir: $!\n"; exit 1 };
+    for my $id (readdir $wd) {
+        next if $id eq '.' || $id eq '..';
+        lstat "$worlds/$id" or next;
+        next unless -d _;    # a world's directory, never a link to one
+        my $path = "$worlds/$id/server.log";
+        my @st = lstat $path or next;
+        next unless -f _;
+        my ($size, $mtime) = @st[7, 9];
+        if ($mtime > $cutoff) { $w{kept}++; $wb{kept} += $size; next }
+        if ($dry || unlink $path) { $w{deleted}++; $wb{deleted} += $size } else { $w{failed}++ }
+    }
+    closedir $wd;
+}
+
 # --- the report: counts and bytes, never a name -----------------------------
 my $gb = sub { sprintf '%.2f GB', $_[0] / 1e9 };
 my $server = defined $started
@@ -176,5 +202,7 @@ printf "  kept:      %5d files, %s  (written within the window)\n", $n{kept}, $g
 printf "  empty:     %5d files              (already emptied, awaiting a server restart)\n", $n{empty};
 printf "  held:      %5d files, %s  (open in the server process beside this run; never touched)\n", $n{held}, $gb->($b{held}) if $held_checked;
 printf "  failed:    %5d files              (the operation was refused; see the job's exit status)\n", $n{failed} if $n{failed};
+printf "  worlds:    %5d server logs deleted, %s; %d kept, %s  (a world's console log saved at its teardown, quiet for the window)\n", $w{deleted}, $gb->($wb{deleted}), $w{kept}, $gb->($wb{kept}) if $worlds ne '';
+printf "  failed:    %5d server logs        (the unlink was refused; see the job's exit status)\n", $w{failed} if $w{failed};
 print "  dry run: nothing was changed\n" if $dry;
-exit($n{failed} ? 1 : 0);
+exit($n{failed} || $w{failed} ? 1 : 0);

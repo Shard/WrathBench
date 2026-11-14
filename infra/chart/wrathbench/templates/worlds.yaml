@@ -1,0 +1,104 @@
+{{- /* A world's pod, as YAML so it reads like the worldserver Deployment it
+       shares its container with; rendered to JSON into the run-pod template
+       ConfigMap (templates/run-pods.yaml), which the fleet reads. */}}
+{{- define "wrathbench.worldPodTemplate" -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  # The launcher names the pod after the world and sets `hostname` to the
+  # world's id, which with `subdomain` below makes it `<id>.worlds`.
+  generateName: {{ include "wrathbench.fullname" . }}-world-
+  labels:
+    app.kubernetes.io/name: {{ include "wrathbench.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: world
+    {{- with .Values.podLabels }}{{ toYaml . | nindent 4 }}{{ end }}
+  {{- with .Values.podAnnotations }}
+  annotations: {{ toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  # A world that ends is never restarted by the kubelet: the fleet decides,
+  # booting it again over its kept schema or dropping it at the verdict.
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  subdomain: worlds
+  {{- with .Values.priorityClassName }}
+  priorityClassName: {{ . }}
+  {{- end }}
+  nodeSelector: {{ toYaml .Values.nodeSelector | nindent 4 }}
+  securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 4 }}
+  {{- include "wrathbench.imagePullSecrets" . | nindent 2 }}
+  terminationGracePeriodSeconds: 120
+  initContainers:
+    {{- include "wrathbench.worldserver.waitForDb" . | nindent 4 }}
+    # The world's characters schema: created and populated on a first boot,
+    # brought up to date over a kept one (dbimport is idempotent). Characters
+    # only (bit 2): auth and the game data are the shared ones, which only
+    # the release's db-import hook writes. The launcher stamps the schema,
+    # AC_CHARACTER_DATABASE_INFO, as it does the worldserver's.
+    - name: db-import
+      image: {{ include "wrathbench.image.dbImport" . }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 8 }}
+      env:
+        {{- include "wrathbench.acSharedDbEnv" . | nindent 8 }}
+        - name: AC_LOGS_DIR
+          value: /azerothcore/env/dist/logs
+        - name: AC_UPDATES_ENABLE_DATABASES
+          value: "2"
+        # Create a missing schema without asking on stdin.
+        - name: AC_DISABLE_INTERACTIVE
+          value: "1"
+      resources: {{ toYaml .Values.worlds.dbImport.resources | nindent 8 }}
+      volumeMounts:
+        - name: data
+          mountPath: /azerothcore/env/dist/etc
+          subPath: etc
+          readOnly: true
+        - name: logs
+          mountPath: /azerothcore/env/dist/logs
+  containers:
+    {{- include "wrathbench.worldserver.container" (dict "ctx" . "world" true) | nindent 4 }}
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: {{ include "wrathbench.fullname" . }}-data
+    - name: logs
+      emptyDir:
+        sizeLimit: {{ .Values.worlds.logsSizeLimit }}
+    - name: temp
+      emptyDir:
+        sizeLimit: {{ .Values.worlds.tempSizeLimit }}
+{{- end -}}
+{{- if include "wrathbench.on.worlds" $ }}
+{{/*
+The worlds' headless Service: no address of its own, only the DNS name of
+each world pod, `<id>.worlds`, from the pod's `hostname` and `subdomain`. A
+resumed run reuses the module URL it stored at its fresh launch, so the name
+is what survives a world booted again onto a new pod address. Not-ready
+addresses are published: the fleet asks a booting world's /health itself.
+Un-prefixed, as `worldserver` (templates/_helpers.tpl, "Naming").
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: worlds
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: world
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: world
+  ports:
+    - name: module
+      port: 8086
+      targetPort: 8086
+    {{- if .Values.staging.enabled }}
+    - name: soap
+      port: {{ .Values.staging.soapPort }}
+      targetPort: {{ .Values.staging.soapPort }}
+    {{- end }}
+{{- end }}
