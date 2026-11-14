@@ -858,7 +858,23 @@ and differs only where the CLI does:
   An unclassified failed turn is a session note and the thread resumes; three
   in a row end the run as `adapter-error`. The model's note says only that the
   turn ended with an error from the CLI; the CLI's own words go to a `harness`
-  record for the operator. A policy stop the server words without the CLI's
+  record for the operator. One unclassified failure is waited out first, on
+  the unscored episodes only (freeplay and probing, `retriesAtCapacity`): a
+  turn the provider refused with "Selected model is at capacity" is retried
+  after a backoff instead of counting, because a model at capacity for a
+  minute once ended runs three turns and a few seconds later. The waits are
+  30 s, 1, 2, 4 and 5 minutes (`CAPACITY_BACKOFF_MS`, twelve and a half
+  minutes in all), the ladder starts again after any turn that completes, and
+  each retry is a `harness` record of kind `capacity_retry` with its `retry`,
+  `of` and `waitMs`. The model gets the ordinary failed-turn note and nothing
+  of the wait. On the program loop the backoff is the turn-end sleep's floor,
+  which no wake cuts short; on the snippet loop it is slept in steps of a
+  second with the idle clock held, so a stop request or a watchdog verdict
+  still ends it. Once the ladder is spent, a capacity failure counts toward
+  the three in a row like any other, so a model that stays at capacity still
+  ends the run as `adapter-error`. A scored run keeps the three-in-a-row rule
+  as it was: its `adapter-error` is a failed attempt retried fresh with a full
+  clock, where a backoff would spend the attempt's own clock. A policy stop the server words without the CLI's
   own "misalignment policy violation" sentence is such an unclassified turn —
   the known limit of reading exec's words. A retry notice is not a failure:
   `{"type":"error","message":"Reconnecting... 2/5 (…)"}` is the CLI retrying
