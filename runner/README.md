@@ -1265,7 +1265,7 @@ not reproduce those bytes either.
 
 `--loop program` (config `loop: "program"`) is a probe arm, on the
 fixed loop and the claude-code and codex drivers, and refused on a scored
-tier, at fan-out, on a continuation and on pi, whose adapter has no sleep yet
+tier, on a continuation and on pi, whose adapter has no sleep yet
 (`programLoopRefusal`, `DriverEntry.programLoop`; a campaign pair is refused
 the same way). The sandbox then hosts the model's program (the stack's
 `SandboxHostOptions.program`, wrath-mcp `docs/ARCHITECTURE.md`, "A program"):
@@ -1308,6 +1308,20 @@ the routine tools' lines showed, and a `wake(reason)` from a run those lines
 showed as over or replaced. `read_file` and `yield` results are exempt from
 the window's 4,000-character message cap (`WINDOW_UNCAPPED_TOOLS`): a file is
 bounded by the 32,000-character file cap, and a wake by its own caps.
+
+At fan-out (one agent driving several characters, `fanout-run.ts`) the run has
+one workspace and one program, and routines are per character: the list is
+the program loop's in its order, with the stack's fan-out `run_snippet` (the
+one-off, taking a `character`), `start_routine` and `stop_routine` taking the
+character a routine runs for, the fan-out `recent_events` and
+`state_summary`, and the three roster tools after (`programFanoutToolList`).
+Every routine line, error, refusal and pre-emption names its character. Any
+character's death wakes (each record's signals name whose it is), as does any
+one's stream closing, and the wake names the character; what changed over a
+sleep names only the characters whose level moved. Logging a character out
+stops the routines started for it. The prompt body is the program loop's,
+unchanged; the session note names the routine tools among those that take a
+character.
 
 On the CLI drivers the pause after each turn is the sleep, and the wake
 opens the next turn's message; `yield` is held on the MCP call, under a tool
