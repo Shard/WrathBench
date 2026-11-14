@@ -17,6 +17,7 @@ import {
   childEnv,
   codexArgs,
   codexItemRecord,
+  codexToolCallRecord,
   codexStatedReset,
   codexEffortRefusal,
   detectCodexFailure,
@@ -1401,6 +1402,70 @@ describe("codex driver: items the driver acts on nowhere", () => {
       body: '{"id":"i","type":"web_search","query":"q"}',
     });
     expect(codexItemRecord(1, { id: "i" })["type"]).toBeNull();
+  });
+});
+
+// ------------------------------------------------- the CLI's own tools, off the rollout
+
+describe("codex driver: calls to the CLI's own tools", () => {
+  const thread = "01a119da-ef89-7a63-ac51-314ac6a70a52";
+
+  test("each goes on the record as codex_tool_call with its output; ours and other items do not; the model is told nothing", async () => {
+    const rollout = [{ total: 100_000, codeMode: true }, { total: 110_000 }];
+    const { runDir, recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 2 }, { WB_FAKE_THREAD_ID: thread, WB_FAKE_ROLLOUT: JSON.stringify(rollout) });
+    expect(await runCodexEpisode(options)).toEqual({ kind: "terminated", reason: "turn-limit", detail: "2 turns" });
+    const records = readTrajectory(runDir);
+    const calls = records.filter((r) => r.t === "codex_tool_call");
+    expect(calls.map((r) => [r["turn"], r["kind"], r["name"]])).toEqual([
+      [1, "custom", "exec"],
+      [1, "function", "wait"],
+      [1, "function", "view_image"],
+      [1, "custom", "exec"],
+    ]);
+    expect(calls[0]).toMatchObject({ callId: "call_exec_1", status: "completed", input: "text(ALL_TOOLS.map(t => t.name));\n", at: "2026-10-14T00:00:01.000Z" });
+    expect(JSON.parse(String(calls[0]!["output"]))).toEqual([
+      { type: "input_text", text: "Script completed\nWall time 0.0 seconds\nOutput:\n" },
+      { type: "input_text", text: '["mcp__wrathbench__run_snippet"]' },
+    ]);
+    expect(calls[1]).toMatchObject({ input: '{"cell_id":"12","yield_time_ms":100000}' });
+    // An image is its size, never the image.
+    expect(JSON.parse(String(calls[2]!["output"]))).toEqual([{ type: "input_image", chars: 5_022 }]);
+    expect(calls[2]!["input"]).toBe('{"path":"/etc/hostname"}');
+    // A call whose output never came is recorded at the turn's end with none; a long input is cut and says how long.
+    expect(calls[3]).toMatchObject({ callId: "call_long_1", output: null, inputChars: 6_000 });
+    expect(String(calls[3]!["input"])).toHaveLength(CODEX_ITEM_BODY_CHARS);
+    // The CLI's metadata is not kept.
+    for (const c of calls) expect(JSON.stringify(c)).not.toContain("internal_chat_message_metadata_passthrough");
+    // The turn's other lines still read as they did.
+    expect(records.some((r) => r.t === "harness" && String(r["text"]).startsWith("codex compaction reader unavailable"))).toBe(false);
+    // The next turn's message carries nothing of them.
+    const second = (readRecord(recordPath)["userMessages"] as string[])[1]!;
+    for (const marker of ["ALL_TOOLS", "Script completed", "view_image", "cell_id", "/etc/hostname"]) expect(second).not.toContain(marker);
+    trajectory.close();
+  }, 30_000);
+
+  test("the model's next message is the same with and without them on the rollout", async () => {
+    const message = async (codeMode: boolean): Promise<string> => {
+      const rollout = [{ total: 100_000, ...(codeMode ? { codeMode: true } : {}) }, { total: 110_000 }];
+      const { recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 2 }, { WB_FAKE_THREAD_ID: thread, WB_FAKE_ROLLOUT: JSON.stringify(rollout) });
+      await runCodexEpisode(options);
+      trajectory.close();
+      return (readRecord(recordPath)["userMessages"] as string[])[1]!;
+    };
+    expect(await message(true)).toBe(await message(false));
+  }, 60_000);
+
+  test("codexToolCallRecord: short bodies whole, a missing status left out", () => {
+    expect(codexToolCallRecord(2, { kind: "function", callId: "c", name: "wait", input: "{}", status: null, output: "done", at: null })).toEqual({
+      t: "codex_tool_call",
+      turn: 2,
+      kind: "function",
+      name: "wait",
+      callId: "c",
+      at: null,
+      input: "{}",
+      output: "done",
+    });
   });
 });
 

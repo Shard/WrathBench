@@ -70,7 +70,9 @@
  * CLI's code mode (`functions.exec`, `functions.wait`) and collaboration tools
  * as well, which no flag here removes (runner/README.md, "The codex driver").
  * Whatever of theirs exec reports as an item goes on the record as a
- * `codex_item` (`codexItemRecord`), for the operator only.
+ * `codex_item` (`codexItemRecord`), and every call to them the rollout holds,
+ * code mode's included, as a `codex_tool_call` (`codexToolCallRecord`): both
+ * for the operator only.
  * Our tools — whatever `toolsFor` (tools.ts) serves the run: on the program
  * loop fifteen, sixteen with `yield` (off on codex unless a launch asks), and
  * three roster tools more at fan-out; on the snippet loop the nine, or twelve
@@ -173,7 +175,7 @@ import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type
 import { ThreadContext } from "./context";
 import { MCP_BRIDGE_PATH } from "@wrathbench/mcp/paths";
 import { McpServer } from "./mcp";
-import { CodexLastCallReader, CodexRolloutFollower, deleteCodexThread, removeThreadRollouts, writeCodexThread, type CodexCompaction } from "./codex-rollout";
+import { CodexLastCallReader, CodexRolloutFollower, deleteCodexThread, removeThreadRollouts, writeCodexThread, type CodexCompaction, type CodexToolCall } from "./codex-rollout";
 import { CompactionAsk, codexAutoCompactLimit, codexWindowCapRefusal, compactionNotice, compactWindowTokens, summaryFields, type CompactionRecord } from "./cli-compaction";
 import { codexUsageDelta, codexUsageRegressed, normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 import { SUBSCRIPTION_PAUSE } from "./lapse";
@@ -404,6 +406,35 @@ export function codexItemRecord(turn: number, item: Record<string, unknown>): { 
     type: typeof type === "string" ? type : null,
     body: json.slice(0, CODEX_ITEM_BODY_CHARS),
     ...(json.length > CODEX_ITEM_BODY_CHARS ? { truncated: true, chars: json.length } : {}),
+  };
+}
+
+/** A string cut to `CODEX_ITEM_BODY_CHARS`, with how long it was when cut. */
+function cut(key: string, text: string | null): Record<string, unknown> {
+  if (text === null) return { [key]: null };
+  if (text.length <= CODEX_ITEM_BODY_CHARS) return { [key]: text };
+  return { [key]: text.slice(0, CODEX_ITEM_BODY_CHARS), [`${key}Chars`]: text.length };
+}
+
+/**
+ * A call to one of the CLI's own tools, read off the rollout with its output
+ * (`CodexToolCall`): GPT-6's code mode above all, whose `exec` and `wait`
+ * exec never prints, so neither reaches `codex_item`. The call's input and its
+ * output's JSON are each cut to `CODEX_ITEM_BODY_CHARS`, an image part already
+ * reduced to its size. Trajectory only, like `codex_item`: nothing of it
+ * reaches the model, and the public projection names no field of it.
+ */
+export function codexToolCallRecord(turn: number, c: CodexToolCall): { t: "codex_tool_call"; [key: string]: unknown } {
+  return {
+    t: "codex_tool_call",
+    turn,
+    kind: c.kind,
+    name: c.name,
+    callId: c.callId,
+    at: c.at,
+    ...(c.status !== null ? { status: c.status } : {}),
+    ...cut("input", c.input),
+    ...cut("output", c.output === null ? null : typeof c.output === "string" ? c.output : JSON.stringify(c.output)),
   };
 }
 
@@ -1075,6 +1106,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     // and the rollout goes next.
     try {
       const last = rollout.read(threadId);
+      for (const c of last.toolCalls) trajectory.append(codexToolCallRecord(turn, c));
       for (const c of last.compactions) trajectory.append(codexCompactionRecord(turn, c));
       if (!resolvedModel && last.model !== undefined) {
         resolvedModel = true;
@@ -1502,6 +1534,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       const exitCode = await proc.exited.catch(() => null);
       // The process has exited, so the rollout holds every line of this turn.
       const followed = rollout.read(threadId);
+      for (const c of followed.toolCalls) trajectory.append(codexToolCallRecord(turn, c));
       for (const c of followed.compactions) trajectory.append(codexCompactionRecord(turn, c));
       // A compacted thread no longer holds the pad as it was sent: the next
       // message sends it whole. A turn whose rollout could not be read may
