@@ -36,7 +36,7 @@
 
 import { isEndReason } from "./end-conditions";
 import { z } from "zod";
-import { DEFAULT_DRIVER, driverHasCompactWindow, launchLoopOf, runsProgramLoop } from "./config";
+import { DEFAULT_DRIVER, driverHasCompactWindow, launchLoopOf, refuseTenantAccount, runsProgramLoop } from "./config";
 import { entryOf, isDriver } from "./drivers";
 import type { RunPodsMode } from "./models";
 import {
@@ -82,7 +82,7 @@ export const campaignRowSchema = z
      * account pool like anything else. A pinned campaign follows
      * the pinned-job account rules.
      */
-    account: z.string().min(1).nullable().optional(),
+    account: z.string().min(1).superRefine(refuseTenantAccount).nullable().optional(),
     /**
      * A party campaign's accounts (docs/proposals/GROUP-PLAY.md §2): the pin
      * generalised to a list, one account per member in member order, so the
@@ -90,7 +90,7 @@ export const campaignRowSchema = z
      * must take it, with exactly the party's size; `account` is then absent.
      * Each account follows the pinned-job account rules.
      */
-    accounts: z.array(z.string().min(2).max(16)).min(1).optional(),
+    accounts: z.array(z.string().min(2).max(16).superRefine(refuseTenantAccount)).min(1).optional(),
     /**
      * The credential this campaign's launches take a slot on, by id
      * (`credentials/<id>`), for a pinned campaign: it overrides the

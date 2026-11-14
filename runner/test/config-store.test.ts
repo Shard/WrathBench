@@ -166,6 +166,27 @@ describe("writes", () => {
     store.close();
   });
 
+  test("a hosted tenant's account (TENANTnn) is refused at write, wherever the row names an account, and nothing is written", () => {
+    const { store } = tempStore();
+    store.seed(fixtureConfig());
+    const writes: [string, unknown][] = [
+      ["accounts", { pool: ["RUNNER", "TENANT05"] }],
+      ["queue", [{ ref: "glm", episode: "freeplay", account: "tenant05" }]],
+      ["preflight", { enabled: false, account: "TENANT05", smokes: [] }],
+      ["campaigns/one", { version: 1, account: "TENANT05" }],
+      ["campaigns", { one: { version: 1, accounts: ["SHAKEOUT1", "TENANT05"] } }],
+    ];
+    for (const [key, value] of writes) {
+      expect(() => store.put(key, value)).toThrow(ConfigRejected);
+      expect(() => store.put(key, value)).toThrow(/TENANT05 is a hosted tenant account/i);
+    }
+    expect(store.get("accounts")).toEqual({ pool: ["RUNNER", "RUNNER2"] });
+    expect(store.get("queue/0")).toBeUndefined();
+    expect(store.get("preflight")).toBeUndefined();
+    expect(store.get("campaigns/one")).toBeUndefined();
+    store.close();
+  });
+
   test("a refusal that depends on the WHOLE config is caught at write time", () => {
     const { store } = tempStore();
     store.seed(fixtureConfig());

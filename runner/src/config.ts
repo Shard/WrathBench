@@ -23,6 +23,7 @@ import { routingSchema } from "./routing";
 import { CHARACTER_NAME_RULE, isValidCharacterName } from "./character-name";
 import { partyConfigSchema } from "./party";
 import { endConditionSchema } from "./end-conditions";
+import { tenantAccountRefusal } from "../../infra/tenant-accounts";
 import {
   DEFAULT_DRIVER,
   DRIVER_LIST,
@@ -403,7 +404,29 @@ const compactWindowSchema = z.string().transform((v, ctx) => {
   }
 });
 
-const accountSchema = z.string().min(2).max(16);
+/**
+ * A zod refinement refusing a hosted tenant's account (infra/tenant-accounts.ts),
+ * which the operator's runs never lease. On every account a run's config or a
+ * campaign row names, so a lease (`leaseRunSecret`, a fan-out's logins) can
+ * never be for one: both read the account from a parsed `RunConfig`.
+ */
+export function refuseTenantAccount(name: string, ctx: z.RefinementCtx): void {
+  const why = tenantAccountRefusal(name);
+  if (why !== null) ctx.addIssue({ code: "custom", message: why });
+}
+
+const accountSchema = z.string().min(2).max(16).superRefine(refuseTenantAccount);
+
+/**
+ * The same refusal where a run leases, the last line behind the schema: a path
+ * that changes an account after `loadRunConfig` would otherwise lease it.
+ */
+export function assertNoTenantAccount(config: Pick<RunConfig, "account" | "fanout">): void {
+  for (const a of [config.account, ...(config.fanout?.accounts ?? [])]) {
+    const why = tenantAccountRefusal(a);
+    if (why !== null) throw new Error(why);
+  }
+}
 
 /** `RunConfig.fanout`: the grant, and the characters staged for it. */
 export const fanoutConfigSchema = z
@@ -485,7 +508,7 @@ export const runConfigSchema = z.object({
   continuedFrom: z.string().min(1).optional(),
   /** Game account for this run's sessions. Parallel runs need distinct accounts
    * (the core allows one live session per account). Created via bootstrap. */
-  account: z.string().min(2).max(16).default("RUNNER"),
+  account: accountSchema.default("RUNNER"),
   race: z.number().int().min(1).max(11).default(1),
   class: z.number().int().min(1).max(11).default(2),
 

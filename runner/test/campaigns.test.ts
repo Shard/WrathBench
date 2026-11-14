@@ -74,6 +74,15 @@ describe("the store row", () => {
     expect(parseCampaignBlocks("x", { one: { version: 1 } }).refused.map((r) => r.key)).toEqual(["campaign-defs", "campaigns/one"]);
   });
 
+  test("a row pinned to a hosted tenant's account (TENANTnn) is refused by key, alone, whether account or a party's accounts", () => {
+    const r = parseCampaignBlocks(defsBlock(one, two), { one: { version: 1, account: "tenant05" }, two: { version: 1, account: "TENANT" } });
+    expect(r.campaigns.map((c) => [c.name, c.account])).toEqual([["two", "TENANT"]]);
+    expect(r.refused).toEqual([{ key: "campaigns/one", campaign: "one", reason: expect.stringContaining("tenant05 is a hosted tenant account") }]);
+    const party = ["SHAKEOUT1", "SHAKEOUT2", "TENANT07", "SHAKEOUT4", "SHAKEOUT5"];
+    expect(campaignRowProblem("party", { version: 1, accounts: party })).toContain("TENANT07 is a hosted tenant account (TENANTnn): the fleet never leases one");
+    expect(campaignRowProblem("one", { version: 1, account: "TENANT100" })).toBeNull();
+  });
+
   test("a row naming an unpublished version is refused by key, and the rest still load", () => {
     const r = parseCampaignBlocks(defsBlock(one), { one: { version: 1 }, ghost: { version: 4 } });
     expect(r.campaigns.map((c) => c.name)).toEqual(["one"]);

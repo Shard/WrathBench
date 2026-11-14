@@ -14,7 +14,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { SessionReader, validateSession, type CallRow } from "@wrathbench/mcp/record";
 import { Scratchpad } from "@wrathbench/mcp/scratchpad";
-import { fanoutConfigSchema, loadRunConfig } from "../src/config";
+import { assertNoTenantAccount, fanoutConfigSchema, loadRunConfig } from "../src/config";
 import { fanoutSessionNote, knownCharacters, openFanout, readRoster, ROSTER_FILE } from "../src/fanout-run";
 import { ContextBuilder } from "../src/loop";
 import { EpisodicLog } from "../src/episodic";
@@ -54,6 +54,23 @@ describe("the grant as run configuration", () => {
     expect(issues({ characters: 2, accounts: ["POOL01", "pool01"] })).toContain("listed twice");
     expect(issues({ characters: 2, accounts: ["POOL01", "POOL02"], staged: [{ character: "Alfa", account: "POOL09" }] })).toContain("not one of this run's accounts");
     expect(issues({ characters: 41, accounts: Array.from({ length: 41 }, (_, i) => `ACC${i}`) })).not.toBe("");
+  });
+
+  test("a run never leases a hosted tenant's account (TENANTnn): its account, its grant's, a staged character's, a flag's", () => {
+    const tenant = "is a hosted tenant account (TENANTnn): the fleet never leases one";
+    expect(() => loadRunConfig({ driver: "stub", account: "TENANT05" })).toThrow(tenant);
+    expect(() => loadRunConfig({ driver: "stub", account: "tenant05", episode: "freeplay" })).toThrow(tenant);
+    expect(() => configFromArgs(["--driver", "stub", "--stub", "x.json", "--account", "TENANT12"])).toThrow(tenant);
+    const issues = (v: unknown): string => fanoutConfigSchema.safeParse(v).error?.issues.map((i) => i.message).join("; ") ?? "";
+    expect(issues({ characters: 2, accounts: ["POOL01", "TENANT02"] })).toContain(`TENANT02 ${tenant}`);
+    expect(issues({ characters: 2, accounts: ["POOL01", "POOL02"], staged: [{ character: "Alfa", account: "tenant02" }] })).toContain(tenant);
+    // A near name is an ordinary account.
+    expect(loadRunConfig({ driver: "stub", account: "TENANT" }).account).toBe("TENANT");
+    expect(loadRunConfig({ driver: "stub", account: "TENANT100" }).account).toBe("TENANT100");
+    // The lease sites' own check, for a config changed after the schema read it.
+    expect(() => assertNoTenantAccount({ account: "TENANT05" })).toThrow(tenant);
+    expect(() => assertNoTenantAccount({ account: "POOL01", fanout: { characters: 2, accounts: ["POOL01", "tenant06"] } })).toThrow(tenant);
+    expect(() => assertNoTenantAccount({ account: "POOL01", fanout: { characters: 2, accounts: ["POOL01", "POOL02"] } })).not.toThrow();
   });
 
   test("never a scored episode, a party member or a continuation", () => {

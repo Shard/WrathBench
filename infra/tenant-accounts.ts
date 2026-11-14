@@ -39,6 +39,17 @@ export function isTenantAccountName(name: string): boolean {
 }
 
 /**
+ * Why the operator's fleet may not lease `name`, or null when it may. A
+ * session created on an account reclaims it from whatever session holds it,
+ * so a fleet run on a tenant account would take a person's character. Every
+ * place the runner takes an account from config refuses with this: the fleet
+ * config (`parseFleet`), a campaign row, and a run's own config.
+ */
+export function tenantAccountRefusal(name: string): string | null {
+  return isTenantAccountName(name) ? `${name} is a hosted tenant account (TENANTnn): the fleet never leases one, since a session on it would take a person's character` : null;
+}
+
+/**
  * The tenant pool's size as the deployment states it: 0 when the variable is
  * unset or empty, an error naming the variable when it is not a whole number
  * from 0 to MAX_TENANT_POOL_SIZE.

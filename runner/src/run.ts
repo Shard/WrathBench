@@ -72,6 +72,7 @@ import {
   DRIVERS,
   episodeOverrideOf,
   launchCompactWindow,
+  assertNoTenantAccount,
   launchLoopOf,
   loadRunConfig,
   loopOf,
@@ -915,6 +916,7 @@ async function main(): Promise<void> {
    */
   // A fan-out run leases nothing here: each character's token is leased as it
   // is logged in (`fanout-run.ts`), and `config.token` names no session.
+  assertNoTenantAccount(config);
   const lease = config.fanout !== undefined ? { secret: undefined } : await leaseRunSecret({ moduleUrl: config.moduleUrl, token: config.token, account: config.account }, trajectory);
   if (config.fanout === undefined && lease.secret === undefined) console.error(`[wrathbench] ${(lease as { note: string }).note}`);
 
