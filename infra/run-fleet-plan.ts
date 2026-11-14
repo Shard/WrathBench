@@ -1139,9 +1139,8 @@ export function pausedProbeFile(
  *    paused: such a run is a **failed attempt**, not a resume;
  *  - nothing came back for it at all and it went stale.
  *
- * `counts` is the three-strike question and it is exactly
- * `reason === "attempt-failed"`, carried here so the log line and the
- * projection cannot disagree about it.
+ * An `attempt-failed` one is a rung of the model's cooling ladder
+ * (`NO_PROGRESS_REASONS`); `manual` and `stale` are the harness's and are not.
  */
 export interface EndedRun {
   runId: string;
@@ -1157,7 +1156,6 @@ export interface EndedRun {
   episode: EpisodeId;
   reason: TerminationReason;
   detail: string;
-  counts: boolean;
   /** The account to release, when the run recorded one. */
   account: string | null;
 }
@@ -1485,7 +1483,6 @@ export function planStaleRuns(opts: {
       episode: f.episode,
       reason: lapse.reason!,
       detail: lapse.detail!,
-      counts: lapse.counts,
       account: f.account,
     });
   }
@@ -1626,7 +1623,6 @@ export function planResumes(opts: {
         episode: f.episode,
         reason: "manual",
         detail: `ended by the supervisor: model ${f.model} no longer under ref ${launchedUnder}`,
-        counts: false,
         account: f.account,
       });
       continue;
@@ -1660,8 +1656,7 @@ export function planResumes(opts: {
         episode: f.episode,
         reason: lapse.reason!,
         detail: lapse.detail!,
-        counts: lapse.counts,
-        account: f.account,
+          account: f.account,
       });
       continue;
     }
@@ -2080,8 +2075,8 @@ function planPartyResume(
  * The run facts as they read once this tick's terminations are on disk. Pure.
  *
  * The projection is built at the top of a tick and the sweep writes its
- * terminations halfway down it, so without this the scheduler reads a strike
- * count that predates the strike it just wrote. That is not a cosmetic lag: on
+ * terminations halfway down it, so without this the scheduler reads a ladder
+ * that predates the failed attempt it just wrote. That is not a cosmetic lag: on
  * 2026-08-25 the first tick after the lane-resume rule shipped logged
  * `retry 3/3 — tainted` for nemotron-ultra and spawned its ninth attempt one
  * second later, because the projection behind the pick still said zero.
@@ -2475,36 +2470,6 @@ export function planNameSweeps(opts: {
     out.push({ ref: a.ref, account: prev.account, character: prev.character });
   }
   return out;
-}
-
-/**
- * How many failed attempts this model already has on the episode a lapsed run
- * belongs to — what "retry 2/3" counts from. The projection is the only place
- * that number is derived, so the log line and the Models page agree.
- */
-export function failedAttemptsFor(states: readonly ModelState[], e: Pick<EndedRun, "model" | "effort" | "compactWindow" | "driver" | "episode">): number | undefined {
-  const st = states.find((s) => entryOwnsRun(s, e))?.perEpisode[e.episode];
-  return st?.failed;
-}
-
-/**
- * The retry number each of a batch of lapsed runs will carry, in order.
- *
- * The projection is read once a tick, so it does not know about the runs this
- * same tick is about to end. A sweep after an outage ends several failures for
- * one model at once, and without this every line would read "retry 1/3" while
- * they summed to three. Counting within the batch is what makes `--status`
- * honest about a model that is being tainted right now.
- */
-export function retryNumbers(ended: readonly EndedRun[], base: (e: EndedRun) => number): number[] {
-  const seen = new Map<string, number>();
-  return ended.map((e) => {
-    // One count per entry: its `auto` runs and its driver-default runs are one model's failures.
-    const key = `${e.model}@${e.effort ?? ""}@${rosterWindowKey(e)}@${e.episode}`;
-    const n = base(e) + (seen.get(key) ?? 0);
-    if (e.counts) seen.set(key, (seen.get(key) ?? 0) + 1);
-    return n + 1;
-  });
 }
 
 /** A live rejection of the config file. Written into fleet-state.json. */

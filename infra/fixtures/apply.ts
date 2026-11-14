@@ -23,6 +23,9 @@
  * something the agent could ever reach, so it lives here, in infra/, is never
  * imported by runner/ or sdk/, and only touches accounts matching
  * the SMOKE / PROBE / PARTY pattern. Runner accounts are never fixtured.
+ * The party stager (stage-party.ts) uses the statement builders and the DB
+ * helpers below, not this CLI, and holds its own account guard (the party
+ * accounts and the eval pool's).
  *
  * The write happens while the character is offline. The core reads the
  * `characters` row on login and writes it back on logout, so a fixture applied
@@ -420,11 +423,6 @@ export function buildEquipStatements(
 
 // ----------------------------------------------------------------- plumbing
 
-function env(name: string, fallback?: string): string {
-  const v = process.env[name] ?? fallback;
-  if (v === undefined) throw new Error(`missing required environment variable ${name}`);
-  return v;
-}
 
 const log = (msg: string) => console.log(`[fixtures] ${msg}`);
 
@@ -435,24 +433,40 @@ const log = (msg: string) => console.log(`[fixtures] ${msg}`);
  * the literal. Without the last step every invocation from a container that
  * predates the env block would throw instead of connecting.
  */
-function dbPassword(): string {
-  return process.env["WRATHBENCH_DB_PASSWORD"] ?? process.env["WRATHBENCH_DB_ROOT_PASSWORD"] ?? "wrathbench";
+function dbPassword(env: Record<string, string | undefined>): string {
+  return env["WRATHBENCH_DB_PASSWORD"] ?? env["WRATHBENCH_DB_ROOT_PASSWORD"] ?? "wrathbench";
 }
 
-export async function connect(): Promise<SQL> {
-  const sql = new SQL({
-    adapter: "mysql",
-    hostname: env("WRATHBENCH_DB_HOST", "db"),
-    port: Number(env("WRATHBENCH_DB_PORT", "3306")),
-    username: env("WRATHBENCH_DB_USER", "root"),
-    password: dbPassword(),
-    database: env("WRATHBENCH_CHARACTERS_DB", "acore_characters"),
+/**
+ * The connection's options from the environment. Pure. The characters
+ * schema is the connection's default database, and every characters-table
+ * statement here and in the party stager names its table unqualified, so the
+ * schema `WRATHBENCH_CHARACTERS_DB` names is the one written: the shared
+ * world's `acore_characters` by default, a world's own when the roster lays
+ * `stagingEnvOf` (infra/world.ts) over the stager's env. Only `acore_auth`
+ * (shared by every world) and the world DB (`WRATHBENCH_WORLD_DB`, read only)
+ * are ever named.
+ */
+export function connectOptions(env: Record<string, string | undefined> = process.env) {
+  const database = env["WRATHBENCH_CHARACTERS_DB"] ?? "acore_characters";
+  if (!/^\w+$/.test(database)) throw new Error(`WRATHBENCH_CHARACTERS_DB '${database}' is not a schema name`);
+  return {
+    adapter: "mysql" as const,
+    hostname: env["WRATHBENCH_DB_HOST"] ?? "db",
+    port: Number(env["WRATHBENCH_DB_PORT"] ?? "3306"),
+    username: env["WRATHBENCH_DB_USER"] ?? "root",
+    password: dbPassword(env),
+    database,
     // Same reason as bootstrap.ts: MySQL 8.4's caching_sha2_password wants the
     // server's RSA key on first handshake, and the connection never leaves the
     // private compose network.
     allowPublicKeyRetrieval: true,
     max: 1,
-  });
+  };
+}
+
+export async function connect(env: Record<string, string | undefined> = process.env): Promise<SQL> {
+  const sql = new SQL(connectOptions(env));
   await sql`SELECT 1`;
   return sql;
 }

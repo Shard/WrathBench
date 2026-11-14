@@ -60,6 +60,8 @@ import { DEFAULT_DRIVER, entryOf, isRosterDriver, ROSTER_DRIVERS, type RosterDri
 import { compactWindowDriverRefusal, driverHasCompactWindow, isTokenEnvName, parseEntryCompactWindow, stampedCompactWindow, watchdogOverrideSchema, type TerminationReason, type WatchdogOverride } from "../runner/src/config";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
 import { isOpenRouterBase, parseRouting, resolveRouting, routingLabel, type RoutingSpec } from "../runner/src/routing";
+import { parseServing, parseServingLabels, type ServingLabels, type ServingSpec } from "../runner/src/serving";
+import { servingRefusal } from "../runner/src/roster-refusal";
 import { DEFAULT_API_BASE, DEFAULT_API_KEY_ENV } from "../runner/src/providers";
 import { classifyLapse, PARTY_PAUSE, resumesOnPause, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
 import { readCredentialUsage, type PlacedCredential } from "./run-fleet-credentials";
@@ -89,7 +91,7 @@ import { partyConfigOf, withFanoutGuids, withMemberGuids, type PartyStamp } from
 import { PARTY_END_GRACE_MS, writeEndRequest } from "../runner/src/end-request";
 import { runParty, type MemberVerdict, type PartyMemberRun } from "./party-fate";
 import { commandStager, STAGER_SCRIPT, type PartyStager, type StagedGuid, type StageRequest } from "./party-stager";
-import { parseWorldsMode, type WorldsMode } from "../runner/src/models";
+import { LADDER_MS, parseWorldsMode, type WorldsMode } from "../runner/src/models";
 import { DEFAULT_SOAP_PORT, loadWorldLauncher, moduleUrlOfRun, readWorldPointer, removeWorldPointer, stagingEnvOf, worldAuthHeaders, worldFateOf, worldUsedBy, type WorldLauncher } from "./world";
 
 // ------------------------------------------------------------------ types
@@ -126,6 +128,13 @@ export interface RosterSpec {
    * own provider with fallbacks off (operator decision 2026-09-16).
    */
   routing?: RoutingSpec;
+  /**
+   * A local build's weights, quantisation and runtime (`serving.ts`); required
+   * of a local entry, refused on a hosted one (operator, 2026-11-14).
+   */
+  serving?: ServingSpec;
+  /** The machine and the runtime's version: labels, never a key. */
+  servingLabels?: ServingLabels;
   /**
    * The credential the fleet placed this entry's run on (`placeRef`,
    * infra/run-fleet-credentials.ts): its id, the NAME of the env var holding
@@ -249,6 +258,9 @@ export interface Resolved {
   apiKeyEnv: string;
   /** The declared routing block, or undefined for "the entry said nothing". */
   routing: RoutingSpec | undefined;
+  /** A local build's serving block and labels; undefined on a hosted entry. */
+  serving: ServingSpec | undefined;
+  servingLabels: ServingLabels | undefined;
   /** The entry's own billing (openai only), recorded on the run; undefined is derived. */
   billing: "free" | "paid" | undefined;
   /** The credential the run takes (`RosterSpec.placedOn`); undefined on a hand-written roster. */
@@ -303,19 +315,11 @@ const DEFAULT_EPISODE_MS = 5_400_000; // 90 minutes
 //    is saturated. It used to be the same three steps, which clamped at 10m
 //    forever: a fully saturated free model (z-ai/glm-5.2:free, 2026-08-22) was
 //    relaunched 17 times in one day, each a 0-turn rate-limited stub. It now
-//    escalates to 6h and then taints the spec out of the rotation.
+//    escalates to 6h and then taints the spec out of the rotation. Its rungs
+//    are the scheduler's cooling ladder (`LADDER_MS`), one set of timings for
+//    both, so an operator reading either log sees the same rungs.
 const RESUME_BACKOFF_MS = [2 * 60_000, 5 * 60_000, 10 * 60_000];
-const DEFER_BACKOFF_MS = [
-  1 * 60_000,
-  3 * 60_000,
-  5 * 60_000,
-  10 * 60_000,
-  15 * 60_000,
-  30 * 60_000,
-  60 * 60_000,
-  3 * 60 * 60_000,
-  6 * 60 * 60_000,
-];
+const DEFER_BACKOFF_MS: readonly number[] = LADDER_MS;
 const MAX_RETRY_CYCLES = 2;
 const CYCLE_GAP_MS = 10 * 60_000;
 const EARLY_TURN_THRESHOLD = 2;
@@ -599,6 +603,9 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
         );
       }
     }
+    // A hand-written roster never went through `parseFleet`: the same refusal.
+    const servingWhy = servingRefusal({ ...s, apiBase });
+    if (servingWhy !== null) throw new Error(`roster entry ${s.model}: ${servingWhy}`);
     out.push({
       model: s.model,
       driver,
@@ -612,6 +619,8 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       // `run-roster.ts` never went through `parseFleet`, and the shorthands
       // must mean the same thing on both paths.
       routing: s.routing === undefined ? undefined : parseRouting(s.routing, `roster entry ${s.model}`),
+      serving: s.serving === undefined ? undefined : parseServing(s.serving, `roster entry ${s.model}`),
+      servingLabels: s.servingLabels === undefined ? undefined : parseServingLabels(s.servingLabels, `roster entry ${s.model}`),
       // A subscription driver's bill is the subscription, so only openai records one.
       billing: entry.endpoint ? s.billing : undefined,
       placedOn: s.placedOn,
@@ -763,6 +772,8 @@ export function episodeFlags(spec: Resolved, resume: boolean): string[] {
     if (spec.routing !== undefined && entryOf(spec.driver).routing) argv.push("--routing-json", JSON.stringify(spec.routing));
     // Only when the entry stated one, so every other argv is unchanged.
     if (spec.billing !== undefined) argv.push("--billing", spec.billing);
+    if (spec.serving !== undefined) argv.push("--serving-json", JSON.stringify(spec.serving));
+    if (spec.servingLabels !== undefined) argv.push("--serving-labels-json", JSON.stringify(spec.servingLabels));
   }
   // The credential the fleet placed the run on: its id, which the run
   // records; for a CLI driver the variable its CLI reads (an endpoint's is
@@ -927,7 +938,7 @@ export function isTainted(defers: number): boolean {
 }
 
 /** Human-readable rungs for --help and the dry-run plan ("1m/3m/.../6h"). */
-export function ladder(rungs: number[]): string {
+export function ladder(rungs: readonly number[]): string {
   return rungs
     .map((m) => (m >= 60 * 60_000 ? `${m / (60 * 60_000)}h` : `${m / 60_000}m`))
     .join("/");

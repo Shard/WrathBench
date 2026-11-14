@@ -360,6 +360,10 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               not a number edited into one entry. On EVERY entry.
             `objective` and `wikiCoords` — REFUSED. Steering is a campaign, which names this entry
               in an assignment and supplies its own task shape.
+            `serving` — REQUIRED of a local entry (an openai base on the LAN, loopback or a host
+              `localModelHosts` lists) and REFUSED on any other: `{ weights, quant, runtime }`,
+              a key of the run's tuple (infra/README.md, "Local (self-hosted) models").
+              `servingLabels` `{ machine, runtimeVersion }` ride beside it, labels only.
             `idle` — what it does with an account once its tier is spent. `none` (default, and
               what a paid model wants) or `unlimited` (one continuous freeplay session at a time,
               with no episode wall clock — the idle watchdog is what ends it). Flipping
@@ -758,7 +762,7 @@ the **pause** path ("Stop it") rather than being killed. What it costs:
 - A scored run (`e90`/`e360`) is ended `manual` on the next boot: **the
   attempt is spent**, with whatever money or quota it had burned, and the
   scheduler gives the model a fresh attempt with a full clock. `manual` is in
-  `NOT_THE_MODELS_FAULT`, so it is not a strike and never reaches a scored
+  `NOT_THE_MODELS_FAULT`, so it is no cooling rung and never reaches a scored
   surface (docs/METHODOLOGY.md, "Episodes, lanes, and evidence").
 - Freeplay, and a probe campaign with `resume: true`, come back where they
   left off on the same run id, account and character. An automatic resume
@@ -805,13 +809,17 @@ A **scored** run (`e90`, `e360`), and a probe campaign that did not set
 failed attempt and lists it among the lapsed runs the supervisor ends on its
 next tick: it writes the termination through the runner's own writer,
 releases the session so the account and character go back, and the policy
-schedules a fresh attempt on the tick after. Three counted failures on one
-(model, episode, series) and the model is **tainted** for that episode:
-`--status` says so and the model is blocked, taking no idle work either,
-until `bun wb fleet clear-model <name>`. A fleet stop (`manual`) and an
-offline gap (`stale`) do not count toward those three. This taint is not the
-roster's own `tainted` in a job's defer sidecar, which is one process backing
-off a model whose launches keep failing.
+schedules a fresh attempt on the tick after. A provider's refusal
+(`attempt-failed`) is a rung of the model's cooling ladder, the same ladder a
+launch with no response or an `adapter-error` climbs: consecutive ones cool
+the model from 1m up to 6h and then retire it until `bun wb fleet clear-model
+<name>`, and any run that is not one breaks the streak (operator,
+2026-11-14). A fleet stop (`manual`) and an offline gap (`stale`) are no
+rung. There used to be a second stop, three refusals on one (model, episode,
+series) ever; it is folded into the ladder, and a provider that refuses
+between good runs is bounded by its credential's budget instead. The roster's
+own `tainted` in a job's defer sidecar is something else: one process giving
+up on a spec whose launches keep failing, on the same rungs.
 
 **Stale** runs are swept on boot and on every tick: any run with no
 termination whose last activity (its pause mark, else its trajectory) is older
@@ -1597,8 +1605,8 @@ plan is what launches once it is cleared.
 
 The status words: `new` has no counted run yet; `active` is working toward
 its `e90` target; `promoted` may also be scheduled on `e360`; `cooling` is on
-the defer ladder (`1m … 6h`) after consecutive zero-response or
-`adapter-error` attempts; `retired` failed once more at the 6h ceiling and
+the defer ladder (`1m … 6h`) after consecutive zero-response,
+`adapter-error` or provider-refused (`attempt-failed`) attempts; `retired` failed once more at the 6h ceiling and
 will not be scheduled until cleared; `pinned` is outside the policy (a pinned
 ref or a probe). A launch that produced no model response never counts toward
 a target but does climb the ladder, so a dead provider costs at most ten
@@ -1955,7 +1963,10 @@ order:
 - it creates the pod and waits for its module's `/health`.
 
 The world's allowlist is the attempt's accounts. The stager works on the
-world's own SOAP console and schema. Allocation and boot sit under one lock,
+world's own module, SOAP console and schema: the roster lays them over the
+stager's env (`stagingEnvOf` in `infra/world.ts`, `MODULE_HOST` included,
+since the stager's module lookup prefers it), and the stager logs all three
+before it touches anything. Allocation and boot sit under one lock,
 so one world boots at a time.
 
 **Hosted mode's secret.** With `hosted` on, an eval world opens with its own
@@ -2294,7 +2305,7 @@ resets. So the fleet reads each credential's usage and stops short of the top:
 - a freeplay run does not start or resume on a credential at or over
   `freeplayMaxPct`, and a live one pauses at its next turn boundary as
   `subscription-budget`, resumable, waiting for the window's reset. That pause
-  is the harness's doing: no strike, no rung on the defer ladder, no streak;
+  is the harness's doing: no rung on either ladder, no streak;
 - a window at 100% — or a `quota-exhausted` pause — holds every launch on the
   credential, scored, freeplay or probe, until it resets, capped at seven
   days, with or without a usage budget. A probe is held only by that.
@@ -2307,8 +2318,10 @@ window's length and its reset, nothing else. For OpenCode Go the supervisor
 reads Go's usage endpoint for each enabled paid `opencode-go` credential,
 whatever its budget (a `runs` budget still draws the allowance), and any Go
 credential given a `usage` budget, at most once a minute, and leaves the reading in
-`data/runs/fleet-credential-usage.json`; Go's windows are the five hours, the
-week and the month, and one Go reports `rate-limited` is spent whatever its
+`data/runs/fleet-credential-usage.json`, and a live run on that credential
+reads and records the same at its turn boundaries. A credential switched off
+or left without its key is no longer read, and its last read holds nothing.
+Go's windows are the five hours, the week and the month, and one Go reports `rate-limited` is spent whatever its
 percent. No reading counts for longer than seven days, and a credential with
 no reading is open — unless its last read failed in a way that says so. Each
 Go read is classified, and a change of class is logged:
@@ -2319,7 +2332,7 @@ Go read is classified, and a change of class is logged:
   workspace with no Go plan): that credential is held until a read succeeds.
   A 403 on a chat request pauses the run as `no-access` the way a 401 pauses
   it as `auth-failed`, on any provider the openai driver serves; neither is a
-  strike. A moderation refusal (OpenRouter's 403 for flagged input) is not
+  cooling rung. A moderation refusal (OpenRouter's 403 for flagged input) is not
   the key's and still ends the run;
 - no answer (a timeout, a 5xx, a shape the reader does not know, `unread`):
   nothing is held, and the class is kept with when it began;
@@ -2755,7 +2768,9 @@ roster runs `bun infra/fixtures/stage-party.ts --request -` with one request
 on stdin (`infra/party-stager.ts` holds the contract): the party id,
 campaign, version, scenario and level, and per member the member id, role
 word, race, class, character name, account and run id. The first member
-leads. The definition names the characters and the stager creates them under
+leads. A member's account is PARTY1–PARTY5, or one the attempt drew from the
+eval pool (`EVAL01`…); the stager refuses any other before touching anything,
+so a pool, tenant, runner or smoke account is never staged. The definition names the characters and the stager creates them under
 those names. Each member wears the loadout of its race and class
 (`infra/fixtures/loadouts.ts`): a Human Warrior tank, a Dwarf Priest healer,
 and as damage a Human Mage, a Human Rogue and a Dwarf Paladin, so no pet is

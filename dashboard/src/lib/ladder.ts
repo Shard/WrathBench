@@ -11,7 +11,8 @@
  * went with it.
  */
 
-import type { LevelMark, ResultRun } from "@viewer/api-types";
+import type { LevelMark, ResultRun, RunCondition } from "@viewer/api-types";
+import { conditionOf } from "@viewer/condition";
 import {
   type AxisSpec,
   type Better,
@@ -32,6 +33,35 @@ import { OPAQUE_PAUSE_REASON, type RunStatus, statusOf as runStatusOf } from "./
 
 export function scored(runs: readonly ResultRun[]): ResultRun[] {
   return runs.filter((r) => r.unscored === null);
+}
+
+/* -------------------------------------------------------------- conditions */
+
+/**
+ * The condition a run was played under (`runner/viewer/condition.ts`): the
+ * served one, or, from a viewer that predates the field, the same derivation
+ * over what the row itself carries. Such a row recorded no loop or routing,
+ * and reads as the snippet loop with nothing to state, which is what every
+ * run before those fields was.
+ */
+export function conditionOfRun(r: ResultRun): RunCondition {
+  if (r.condition !== undefined) return r.condition;
+  return conditionOf({
+    series: r.harnessSeries,
+    episode: r.episode,
+    harness: r.harness,
+    tuple: { effort: r.effort, compactWindow: r.compactWindow ?? null, ...(r.wiki === false ? { wiki: false } : {}) },
+    platform: r.platform,
+  });
+}
+
+/**
+ * The identity of a ladder entry: one model under one condition. A row, a
+ * point, a mean line and the page's shared highlight are all keyed on it, so
+ * none of them ever pools two conditions (operator, 2026-11-14).
+ */
+export function entryKeyOf(r: ResultRun): string {
+  return `${r.model ?? "(unnamed)"}\n${conditionOfRun(r).id}`;
 }
 
 /* ----------------------------------------------------------------- filters */
@@ -230,7 +260,13 @@ export interface LadderCell {
 }
 
 export interface LadderRow {
+  /** The entry (`entryKeyOf`): one model under one condition. */
+  key: string;
   model: string;
+  /** The condition's effort and window, which the row is labelled with. */
+  effort: string | null;
+  compactWindow: string | null;
+  condition: RunCondition;
   /** The highest *derivable* rung reached; 0 when none was. */
   highest: number;
   cells: LadderCell[];
@@ -307,7 +343,8 @@ export function levelRangeOf(runs: readonly ResultRun[]): LevelRange | null {
 }
 
 /**
- * Highest rung reached per model, over scored runs only.
+ * Highest rung reached per entry (one model under one condition, `entryKeyOf`),
+ * over scored runs only.
  *
  * "Highest derivable": rung 6 can never be reached here, so a model sitting at
  * rung 7 is not claimed to have passed it — the page shows the whole row and
@@ -340,15 +377,17 @@ export function levelRangeOf(runs: readonly ResultRun[]): LevelRange | null {
  * re-runs, and nothing here enters the ordering.
  */
 export function ladderRows(runs: readonly ResultRun[]): LadderRow[] {
-  const byModel = new Map<string, ResultRun[]>();
+  const byEntry = new Map<string, ResultRun[]>();
   for (const r of scored(runs)) {
-    const model = r.model ?? "(unnamed)";
-    const list = byModel.get(model);
-    if (list === undefined) byModel.set(model, [r]);
+    const key = entryKeyOf(r);
+    const list = byEntry.get(key);
+    if (list === undefined) byEntry.set(key, [r]);
     else list.push(r);
   }
   const rows: LadderRow[] = [];
-  for (const [model, list] of byModel) {
+  for (const [key, list] of byEntry) {
+    const first = list[0]!;
+    const model = first.model ?? "(unnamed)";
     const cells = RUNGS.map((rung): LadderCell => {
       if (rung.test === null)
         return { n: rung.n, status: "not-instrumented", runId: null, reached: 0, askable: 0 };
@@ -365,7 +404,11 @@ export function ladderRows(runs: readonly ResultRun[]): LadderRow[] {
     const furthest = furthestOf(list);
     const richest = richestOf(list);
     rows.push({
+      key,
       model,
+      effort: first.effort,
+      compactWindow: first.compactWindow ?? null,
+      condition: conditionOfRun(first),
       highest: reached.length > 0 ? Math.max(...reached) : 0,
       cells,
       runs: list.length,
@@ -393,7 +436,8 @@ export function ladderRows(runs: readonly ResultRun[]): LadderRow[] {
       desc(b.bestXp, a.bestXp) ||
       desc(b.bestMoney, a.bestMoney) ||
       b.runs - a.runs ||
-      a.model.localeCompare(b.model),
+      a.model.localeCompare(b.model) ||
+      a.key.localeCompare(b.key),
   );
   return rows;
 }
@@ -450,9 +494,9 @@ function richestOf(runs: readonly ResultRun[]): { runId: string; money: number }
  */
 export { runCostReading, xpEarnedOf, type RunCostReading } from "./axes";
 
-/** One entry of the roster on the chart: a model, at one effort if it has one. */
+/** One entry on the chart: a model under one condition. */
 export interface LadderPoint {
-  /** The label: `sonnet`, or `sonnet (low)` when effort is a roster dimension. */
+  /** The entry (`entryKeyOf`). The drawn name is `label`. */
   key: string;
   /** What the chart draws: the key with the sample size the means rest on. */
   label: string;
@@ -518,27 +562,11 @@ export interface LadderOmission {
 }
 
 /**
- * The entry's identity: the model string as recorded, never shortened. It is a
- * lookup key (`pareto.ts` matches a Set of these), so a display form of it is
- * built separately — see `LadderPoint.label`.
+ * An entry's drawn name: the model, and its effort and window where it has
+ * them. A label, never a key — two conditions that differ only in what the
+ * label does not say (a routing, a loop on another chart) are still two
+ * entries (`entryKeyOf`).
  */
-/**
- * What a hovered pin and a hovered table row have in common.
- *
- * The scatter draws one point per (model, effort) and the table draws one row
- * per model — deliberately, on both sides: a model's row is its best run
- * whatever effort it was played at, and a point is a mean that only means
- * something within one effort. So the thing the two can agree on is the model,
- * and hovering either end lights the row and every one of its pins.
- *
- * The fallback matters: both derivations key an unrecorded model as
- * `(unnamed)`, and a hover that used the raw null on one side and the string
- * on the other would light nothing on exactly the rows nobody can name.
- */
-export function hoverKeyOf(model: string | null | undefined): string {
-  return model ?? "(unnamed)";
-}
-
 export function pointKey(model: string, effort: string | null, compactWindow?: string | null): string {
   const tag = effortLabel(effort, compactWindow);
   return tag === null ? model : `${model} (${tag})`;
@@ -550,8 +578,8 @@ export function pointLabel(key: string, _runs: number): string {
 }
 
 /**
- * One point per (model, effort) over the scored runs given — the same rows
- * the ladder table draws, so the chart never shows an entry the table lacks.
+ * One point per entry (`entryKeyOf`) over the scored runs given — the same
+ * rows the ladder table draws, so the chart never shows an entry the table lacks.
  *
  * Both coordinates are means over the SAME runs: the entry's counted runs
  * that carry a reading for both axes. A run with only one of the two is left
@@ -572,7 +600,7 @@ export function ladderPoints(
   const groups = new Map<string, { model: string; effort: string | null; compactWindow: string | null; runs: ResultRun[] }>();
   for (const r of scored(runs)) {
     const model = r.model ?? "(unnamed)";
-    const key = pointKey(model, r.effort, r.compactWindow);
+    const key = entryKeyOf(r);
     const g = groups.get(key);
     if (g === undefined) groups.set(key, { model, effort: r.effort, compactWindow: r.compactWindow ?? null, runs: [r] });
     else g.runs.push(r);

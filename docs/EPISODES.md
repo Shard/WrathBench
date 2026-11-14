@@ -14,9 +14,10 @@ and an episode is the ruleset a run happens under. This page is about episodes.
 
 An id fixes the shape of the run — how long, what start state, which watchdogs,
 whether the operator may steer. It fixes nothing about the model: the prompt,
-the tools and the loop are identical across every id, and no model is ever
-told which one it is in. The two Deadmines ids fix one thing more, a directive
-and a staged party, and say so (below).
+apart from the one sentence that states an eval's clock, the tools and the loop
+are identical across every id, and no model is ever told which one it is in.
+The two Deadmines ids fix one thing more, a directive and a staged party, and
+say so (below).
 
 Four of the six ids are **scored** (`e90`, `e360`, and the Deadmines task
 episodes `deadmines-solo` and `deadmines`) and two are **steered**
@@ -33,7 +34,7 @@ everything else is derived from it — no list of names decides what counts.
   episode. Nothing carries over between episodes.
 - **Objective.** None. The standing goal only — an operator objective is what
   makes a run unscored.
-- **Prompt.** The standing goal plus the facts the model is owed: the clock; that reaching level 5 within it is the bar for promotion to six-hour episodes; and that reaching the bar does not end the episode, everything after it being recorded and counting exactly as what came before (`runner/src/prompt.ts` holds the wording). The last is there because models read the bar alone as a finish line and stopped at it. Not an objective — the goal, the bar and the scoring are unchanged — and identical for every model.
+- **Prompt.** The standing goal plus one sentence stating the clock, "This episode lasts 90 minutes.", as `e360` states its own (`runner/src/prompt.ts` holds the wording). Promotion is the scheduler's stopping rule and the model is not told about it (operator, 2026-11-14): a stopping rule the model knows of becomes part of what is measured, and the tiers and the bar can now change without moving a prompt hash. Until then the sentence named the level-5 bar, then that reaching it did not end the episode, because three Sonnet 5.5 runs read the bar as a finish line and idled into the no-XP watchdog.
 - **Watchdogs.** Idle 20m, no-XP 20m, plus the standing sandbox-restart guard.
   Tool-call ceiling 3000 (1000 per 30 minutes): a runaway guard sized so no legitimately fast model can reach it; tool calls per episode are reported, not scored.
 - **Ends.** Normally on `episode-limit`. Also on `idle` or `no-xp` (the model
@@ -43,8 +44,9 @@ everything else is derived from it — no list of names decides what counts.
   It is a **failed attempt** (`attempt-failed`, or `manual` when the
   harness stopped it, or `stale` when nothing came back for it), its account and
   character go back, and the model gets a fresh attempt with a new run id and a
-  full clock. Three counted failures on an episode and the model is tainted for
-  it until an operator clears the model.
+  full clock. A refused attempt is a rung of the model's cooling ladder, as
+  any attempt that made no progress is, and consecutive rungs cool and then
+  retire the model until an operator clears it.
 - **Scoring.** Scored.
 - **Promotion.** A model on `t1` that reaches rung 1 in one counted episode
   climbs to `t2`, which is what buys an `e360`; a model on `t0` keeps the
@@ -131,9 +133,8 @@ other.
   on `deadmines` the other four end `party-ended`, naming it. Staging that fails,
   `manual`, a fleet stop or offline gap, `harness-error`, `adapter-error` and
   any pause: not counted, retried fresh with fresh staging on a fresh world.
-- **Strikes.** A provider's refusal is one strike per attempt, however many
-  members met it, counted per model, id and series: a strike on one Deadmines
-  id does not count toward the other.
+- **Cooling.** A provider's refusal is one rung of the model's cooling ladder
+  per attempt, however many members met it.
 - **Who runs it.** `t2` buys three `deadmines-solo` attempts per series, and
   three `deadmines` attempts where the roster entry also says `deadmines:
   true`. The policy holds the five-agent id until `policy.rehearsed` names
@@ -560,8 +561,8 @@ evidence"):
 A failed attempt is an **attempt spent**: it numbers a run id, it shows on the
 runs page with its reason, and it is never a recorded episode — the ladder, the
 episodes grain and every chart drop it, the same way they drop a freeplay run.
-Only a provider's refusal (`quota-exhausted`, `rate-limited`) counts toward the
-three strikes; a fleet stop and an offline gap are the harness's doing.
+Only a provider's refusal (`quota-exhausted`, `rate-limited`) is a rung of the
+model's cooling ladder; a fleet stop and an offline gap are the harness's doing.
 
 ## Runs launched without an episode
 

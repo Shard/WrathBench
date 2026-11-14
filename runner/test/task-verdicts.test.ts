@@ -1,10 +1,9 @@
 /**
  * How a Deadmines attempt counts (operator, 2026-11-14): on the five-agent id
  * the attempt is the party, so five member runs are one attempt, one count and
- * at most one strike; a member that went idle or reached its call ceiling
- * makes a counted attempt that is not cleared; staging that failed numbers an
- * attempt and neither counts nor strikes; and a strike on one Deadmines id is
- * not one on the other.
+ * at most one rung of the model's cooling ladder; a member that went idle or
+ * reached its call ceiling makes a counted attempt that is not cleared; and
+ * staging that failed numbers an attempt and neither counts nor cools.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -57,6 +56,7 @@ function party(id: string, first: string, each?: (member: string) => Partial<Run
 }
 
 const stats = (runs: RunFact[], episode: "deadmines" | "deadmines-solo" = "deadmines") => projectModel(ENTRY, runs, DEFAULT_POLICY, { now: NOW }).perEpisode[episode]!;
+const ladder = (runs: RunFact[]): number => projectModel(ENTRY, runs, DEFAULT_POLICY, { now: NOW }).ladder;
 
 describe("a five-agent attempt", () => {
   test("is its party: five member runs are one attempt and one count", () => {
@@ -64,24 +64,28 @@ describe("a five-agent attempt", () => {
     expect(isPartyEpisode("deadmines-solo")).toBe(false);
     const runs = [...party("p1", "kill-target"), ...party("p2", "episode-limit")];
     expect(partyAttempts(runs)).toHaveLength(2);
-    expect(stats(runs)).toMatchObject({ attempts: 2, counted: 2, failed: 0, target: 3 });
+    expect(stats(runs)).toMatchObject({ attempts: 2, counted: 2, target: 3 });
   });
 
-  test("a member that went idle or reached its call ceiling: counted, not a strike", () => {
-    expect(stats(party("p1", "idle"))).toMatchObject({ attempts: 1, counted: 1, failed: 0 });
-    expect(stats(party("p1", "tool-call-limit"))).toMatchObject({ attempts: 1, counted: 1, failed: 0 });
+  test("a member that went idle or reached its call ceiling: counted, and no rung", () => {
+    for (const reason of ["idle", "tool-call-limit"]) {
+      expect(stats(party("p1", reason))).toMatchObject({ attempts: 1, counted: 1 });
+      expect(ladder(party("p1", reason))).toBe(0);
+    }
   });
 
-  test("a provider's refusal is one strike, however many members met it", () => {
-    const refused = party("p1", "attempt-failed", () => ({ terminationReason: "attempt-failed", terminationDetail: "quota-exhausted" } as Partial<RunFact>));
-    expect(stats(refused)).toMatchObject({ attempts: 1, counted: 0, failed: 1 });
-    const two = [...refused, ...party("p2", "attempt-failed", () => ({ terminationReason: "attempt-failed" }))];
-    expect(stats(two)).toMatchObject({ attempts: 2, counted: 0, failed: 2, tainted: false });
+  test("a provider's refusal is one rung of the cooling ladder, however many members met it", () => {
+    const at = (p: number) => (m: string) => ({ terminationReason: "attempt-failed", terminationDetail: "quota-exhausted", endedAt: NOW - p * 3_600_000 + MEMBERS.indexOf(m) }) as Partial<RunFact>;
+    const refused = party("p1", "attempt-failed", at(2));
+    expect(stats(refused)).toMatchObject({ attempts: 1, counted: 0 });
+    expect(ladder(refused)).toBe(1);
+    expect(ladder([...refused, ...party("p2", "attempt-failed", at(1))])).toBe(2);
   });
 
-  test("staging that failed numbers an attempt, and neither counts nor strikes", () => {
+  test("staging that failed numbers an attempt, and neither counts nor cools", () => {
     const stub = party("p1", "launch-failed", () => ({ terminationReason: "launch-failed", modelResponses: null }));
-    expect(stats(stub)).toMatchObject({ attempts: 1, counted: 0, failed: 0 });
+    expect(stats(stub)).toMatchObject({ attempts: 1, counted: 0 });
+    expect(ladder(stub)).toBe(0);
   });
 
   test("an attempt still in flight, or missing a member, does not count yet", () => {
@@ -101,10 +105,10 @@ describe("the cooling walk", () => {
 });
 
 describe("the one-agent id", () => {
-  test("is one run per attempt, and its strikes are its own", () => {
+  test("is one run per attempt", () => {
     const solo = (n: number, terminationReason: string): RunFact => fact({ episode: "deadmines-solo", runId: `fleet-son-deadmines-solo-sonnet-20261114-a${n}`, terminationReason });
     const runs = [solo(1, "kill-target"), solo(2, "attempt-failed"), ...party("p1", "attempt-failed", () => ({ terminationReason: "attempt-failed" }))];
-    expect(stats(runs, "deadmines-solo")).toMatchObject({ attempts: 2, counted: 1, failed: 1 });
-    expect(stats(runs, "deadmines")).toMatchObject({ attempts: 1, failed: 1 });
+    expect(stats(runs, "deadmines-solo")).toMatchObject({ attempts: 2, counted: 1 });
+    expect(stats(runs, "deadmines")).toMatchObject({ attempts: 1, counted: 0 });
   });
 });

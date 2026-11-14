@@ -63,7 +63,7 @@ import { DEFAULT_DRIVER, defaultCompactWindowOf, driverEntry, eitherHas, entryOf
 import { AUTO_COMPACT_WINDOW, DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, defaultLoopOf, harnessOf, isDriver, isTokenEnvName, isUnscoredDriverName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isLevelEpisode, isScoredEpisode, isTaskEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, partyAttempt, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
-import { badEvidenceReason, neverStale, OFFLINE_PAUSE, PARTY_PAUSE, SUBSCRIPTION_PAUSE, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
+import { badEvidenceReason, neverStale, OFFLINE_PAUSE, PARTY_PAUSE, SUBSCRIPTION_PAUSE, resumesOnPause, staleAfterMs } from "./lapse";
 import { parseSubscriptionUsage, type SubscriptionUsage } from "./subscription-usage";
 import { billingOf, type Billing } from "./model-cost";
 import { credentialCarries, providerById, providerOfModel, type Credential } from "./credential-slots";
@@ -72,6 +72,7 @@ import { parseRouting, type RoutingSpec } from "./routing";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { HEARTBEAT_DEAD_MS, HEARTBEAT_FILE, heartbeatAt, heartbeatOwner } from "./trajectory";
 import { RunFactCache } from "./run-fact-cache";
+import { servingSchema, type ServingSpec } from "./serving";
 import { goneReason, modelGoneOf, readModelListsSidecar, type ModelGone, type ModelListsSidecar } from "./model-lists";
 
 // ----------------------------------------------------------------- policy
@@ -378,8 +379,9 @@ export function parseIdle(raw: unknown, where: string): IdleMode {
 /**
  * The supervisor's defer ladder, in milliseconds per consecutive no-progress
  * attempt. The ceiling is six hours; an attempt made at the ceiling that still
- * makes no progress retires the model. It mirrors run-roster's per-spec ladder
- * so an operator reading either log sees the same rungs.
+ * makes no progress retires the model. The roster's per-spec defer ladder is
+ * this array (`infra/run-roster.ts`), so an operator reading either log sees
+ * the same rungs.
  */
 export const LADDER_MS: readonly number[] = [
   1 * 60_000,
@@ -434,8 +436,19 @@ export function pauseCountsOnLadder(rec: { reason?: unknown; notBefore?: unknown
   return onPauseLadder(rec.reason) && typeof rec.notBefore !== "number";
 }
 
-/** Termination reasons that mean "the model never got to play" for the ladder. */
-export const NO_PROGRESS_REASONS: ReadonlySet<string> = new Set(["adapter-error"]);
+/**
+ * Termination reasons that mean "the model never got to play" for the ladder.
+ *
+ * `attempt-failed` is a scored run its provider refused (a quota or rate
+ * limit) and the scheduler ended rather than resumed. It used to be a strike
+ * of its own, three on one model, episode and series stopping the model on
+ * that episode; strikes are folded into this ladder (operator, 2026-11-14), so
+ * a refused attempt is a rung like any other no-progress attempt, one stop
+ * mechanism per model with one clear. A refusal between good runs no longer
+ * adds up: a responding run breaks the streak, and a credential's budget is
+ * what bounds an intermittent provider's cost.
+ */
+export const NO_PROGRESS_REASONS: ReadonlySet<string> = new Set(["adapter-error", "attempt-failed"]);
 
 // ----------------------------------------------------------------- inputs
 
@@ -454,6 +467,8 @@ export interface RosterModel {
    */
   compactWindow?: string;
   driver?: string;
+  /** A local build's serving block (`serving.ts`); absent on a hosted entry. Identity, like effort. */
+  serving?: ServingSpec;
   apiBase?: string;
   /**
    * How much evidence this model gets (`TIER_TABLE`). Required: with a default,
@@ -595,6 +610,12 @@ export interface RunFact {
    */
   loop?: "program";
   yield?: true;
+  /**
+   * The local build the run stated (`comparability.serving`), or null when it
+   * stated none. Always set by `readRunFact`, so a roster entry's own build
+   * (or its lack of one) decides whether the run is its (`entryOwnsRun`).
+   */
+  serving?: ServingSpec | null;
   /** An extra run: an attempt the policy made past the target, never counted. */
   extra: boolean;
   startedAt: number;
@@ -753,18 +774,6 @@ export interface EpisodeStats {
   extras: number;
   /** Runs from another harness series: shown and numbered as attempts, never counted. */
   otherSeries: number;
-  /**
-   * Attempts spent on a run that lapsed and was not resumed:
-   * `attempt-failed` terminations in this series. An operator-pause (`manual`)
-   * and an offline gap (`stale`) are the harness's doing and are not here.
-   */
-  failed: number;
-  /**
-   * `failed` reached `TAINT_AFTER`: the model gets no further
-   * attempts on this episode in this series. Distinct from the roster's own
-   * `isTainted`, which is a per-process defer ladder over launch failures.
-   */
-  tainted: boolean;
   target: number;
   bestLevel: number | null;
   /** A counted, un-overridden run reached `promoteAtLevel` — the promotion witness on e90. */
@@ -791,6 +800,8 @@ export interface ModelState {
   effort: string | null;
   /** The entry's declared CLI compaction window (`RosterModel.compactWindow`); absent is its driver's default. */
   compactWindow?: string;
+  /** The entry's local build (`RosterModel.serving`); absent on a hosted entry. */
+  serving?: ServingSpec;
   platform: string | null;
   /**
    * The credential provider its runs are served through (`providerOfModel`,
@@ -1449,7 +1460,7 @@ function readRunReading(
       world?: unknown;
       watchdogs?: { episodeMs?: unknown; idleMs?: unknown };
     };
-    comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown; compactWindow?: unknown; loop?: unknown; yield?: unknown };
+    comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown; compactWindow?: unknown; loop?: unknown; yield?: unknown; serving?: unknown };
     pause?: { reason?: unknown; at?: unknown; episodeElapsedMs?: unknown; notBefore?: unknown };
     subscriptionUsage?: unknown;
     credentialOverage?: { at?: unknown };
@@ -1481,6 +1492,7 @@ function readRunReading(
     // Only when stamped: absent is the snippet loop, and every older fact reads the same.
     ...(meta.comparability?.loop === "program" ? { loop: "program" as const } : {}),
     ...(meta.comparability?.yield === true ? { yield: true as const } : {}),
+    serving: servingOfMeta(meta.comparability?.serving),
     extra: meta.config?.extra === true,
     startedAt: num(meta.startedAt) ?? 0,
     endedAt: null,
@@ -1993,17 +2005,6 @@ export function staleForMs(f: Parameters<typeof isStaleRun>[0], now: number): nu
 }
 
 /**
- * A failed attempt that counts toward the model's three strikes on an
- * episode. One predicate, and it reads the termination reason and nothing
- * else: `manual` (an operator-pause or a cut) and `stale` (an offline gap) are
- * the harness's doing and are deliberately not here. Only a run the fleet
- * launched spends a policy attempt.
- */
-export function isFailedAttempt(f: RunFact): boolean {
-  return f.terminationReason === "attempt-failed" && f.runId.startsWith("fleet-");
-}
-
-/**
  * Whether a counted run counts toward its roster entry's target: it ran the
  * loop, and the `yield`, the entry now launches (`defaultLoopOf`), as its
  * tuple stamped them (operator, 2026-11-14). A run of the other loop is
@@ -2050,6 +2051,25 @@ export interface RosterIdentity {
   driver?: string | null | undefined;
   /** The harness tag, where a projection keeps that and not the driver; read for the same two facts. */
   harness?: string | null | undefined;
+  /**
+   * A local build (`serving.ts`). On an entry, absent is a hosted model. On a
+   * run, null is "stated none" and absent is "this caller does not know",
+   * which matches either way: a run fact always knows (`RunFact.serving`).
+   */
+  serving?: ServingSpec | null | undefined;
+}
+
+/** A stamped serving block, or null when there is none to read. */
+function servingOfMeta(raw: unknown): ServingSpec | null {
+  const parsed = servingSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
+/** Whether an entry's build and a run's are one: equal blocks, or a run whose caller cannot say. */
+function servingMatches(entry: RosterIdentity, run: RosterIdentity): boolean {
+  if (run.serving === undefined) return true;
+  const key = (s: ServingSpec | null | undefined): string => (s == null ? "" : `${s.weights}\n${s.quant}\n${s.runtime}`);
+  return key(entry.serving) === key(run.serving);
 }
 
 /**
@@ -2130,7 +2150,9 @@ export function entryOwnsRun(entry: RosterIdentity, run: RosterIdentity): boolea
     entry.model === run.model &&
     (entry.effort ?? null) === (run.effort ?? null) &&
     entryOwnsWindow(entry, run.compactWindow) &&
-    probeOnlyIdentity(entry) === probeOnlyIdentity(run)
+    probeOnlyIdentity(entry) === probeOnlyIdentity(run) &&
+    // A local build and the hosted model of one id are two entries (operator, 2026-11-14).
+    servingMatches(entry, run)
   );
 }
 
@@ -2147,11 +2169,11 @@ export function entryOwnsRun(entry: RosterIdentity, run: RosterIdentity): boolea
  * Arms that differ only by window still never pool: the square is keyed on
  * the arm, and the results on the tuple.
  */
-export function matchesRoster(f: RunFact, r: Pick<RosterModel, "name" | "model" | "effort" | "compactWindow" | "driver">): boolean {
+export function matchesRoster(f: RunFact, r: Pick<RosterModel, "name" | "model" | "effort" | "compactWindow" | "driver" | "serving">): boolean {
   if (f.campaign !== null && f.arm != null && f.ref != null) {
     return (
       f.ref === r.name &&
-      entryOwnsRun({ model: r.model, effort: r.effort, driver: r.driver }, { model: f.model, effort: f.effort, driver: f.driver }) &&
+      entryOwnsRun({ model: r.model, effort: r.effort, driver: r.driver, serving: r.serving }, { model: f.model, effort: f.effort, driver: f.driver, serving: f.serving }) &&
       (r.compactWindow === undefined || entryOwnsWindow(r, f.compactWindow))
     );
   }
@@ -2222,12 +2244,13 @@ export function partyAttempts(facts: readonly RunFact[]): RunFact[][] {
  * Fill one party episode's stats from its attempts (`partyAttempts`). An
  * attempt counts as `partyAttempt` says — whole on disk, nothing in flight,
  * no member `launch-failed`, every member that ended on its own verdict
- * counting — and is one strike when any member's run is a failed attempt.
+ * counting. A provider's refusal on it is one rung of the model's cooling
+ * ladder, however many members met it: the walk takes one member per party.
  * A `launch-failed` stub (staging that failed) is an attempt that numbers the
- * next, and neither counts nor strikes. Levels and last verdicts read the
+ * next, and neither counts nor cools. Levels and last verdicts read the
  * member runs as they are.
  */
-function tallyParties(stats: EpisodeStats, all: readonly RunFact[], mine: readonly RunFact[], driver: string | undefined, clearedAt: number | undefined, policy: SchedulingPolicy): void {
+function tallyParties(stats: EpisodeStats, all: readonly RunFact[], mine: readonly RunFact[], driver: string | undefined, policy: SchedulingPolicy): void {
   stats.attempts = partyAttempts(all).length;
   for (const members of partyAttempts(mine)) {
     const verdict = partyAttempt(
@@ -2248,7 +2271,6 @@ function tallyParties(stats: EpisodeStats, all: readonly RunFact[], mine: readon
       if (members.some((f) => f.bestLevel !== null && f.bestLevel >= policy.promoteAtLevel)) stats.reachedL5 = true;
     }
     if (members.every((f) => stillbornOf(f) === true)) stats.stillborn++;
-    if (members.some((f) => isFailedAttempt(f) && (clearedAt === undefined || (f.endedAt ?? 0) > clearedAt))) stats.failed++;
     for (const f of members) {
       if (f.bestLevel !== null && (stats.bestLevel === null || f.bestLevel > stats.bestLevel)) stats.bestLevel = f.bestLevel;
       if (f.endedAt !== null && (stats.lastEnded === null || f.endedAt >= stats.lastEnded)) {
@@ -2282,8 +2304,8 @@ export function projectModel(
 ): ModelState {
   const billing = rosterBilling(r);
   // A run whose driver is not a model is no roster entry's, even under a
-  // colliding model id: it is neither an attempt, a best level, a strike nor
-  // a ladder rung of the model it names.
+  // colliding model id: it is neither an attempt, a best level nor a ladder
+  // rung of the model it names.
   const all = runs.filter((f) => matchesRoster(f, r) && !isUnscoredDriverName(f.driver));
   // Another series' runs are shown, never counted: not witnesses, not ladder.
   // The ladder is about the provider, but a run that old says nothing about
@@ -2299,8 +2321,6 @@ export function projectModel(
       attempts: 0,
       extras: 0,
       otherSeries: all.filter((f) => f.episode === ep && !inSeries(f, policy)).length,
-      failed: 0,
-      tainted: false,
       // Filled below: a target depends on the effective tier, which depends on
       // whether the e90 walk found a rung-1 witness. Two passes, not a guess.
       target: 0,
@@ -2310,10 +2330,10 @@ export function projectModel(
       lastReason: null,
     };
     // A party episode's attempt is its party, not its member runs (operator,
-    // 2026-11-14): five members are one attempt, one count, and at most one
-    // strike, however many of them met the provider's refusal.
+    // 2026-11-14): five members are one attempt and one count, and the
+    // cooling walk takes one rung for it, however many met a refusal.
     if (isPartyEpisode(ep)) {
-      tallyParties(stats, all.filter((f) => f.episode === ep), mine.filter((f) => f.episode === ep), r.driver, opts.clearedAt, policy);
+      tallyParties(stats, all.filter((f) => f.episode === ep), mine.filter((f) => f.episode === ep), r.driver, policy);
       perEpisode[ep] = stats;
       continue;
     }
@@ -2322,9 +2342,6 @@ export function projectModel(
       if (f.episode !== ep) continue;
       if (f.extra) stats.extras++;
       if (stillbornOf(f) === true) stats.stillborn++;
-      // A clear forgives the ladder and the strikes alike: `--clear-model` is
-      // the operator saying the endpoint is worth trying again.
-      if (isFailedAttempt(f) && (opts.clearedAt === undefined || (f.endedAt ?? 0) > opts.clearedAt)) stats.failed++;
       if (isCounted(f) && countsTowardTarget(f, r.driver)) {
         stats.counted++;
         if (f.bestLevel !== null && f.bestLevel >= policy.promoteAtLevel) stats.reachedL5 = true;
@@ -2342,8 +2359,6 @@ export function projectModel(
   // to, advanced once if it earned rung 1 and its tier promotes. `t0` holds the
   // ladder, so a trial model keeps its witness and gains nothing from it until
   // an operator moves it up — which is what makes that move cost no re-runs.
-  for (const ep of STATS_EPISODES) perEpisode[ep]!.tainted = perEpisode[ep]!.failed >= TAINT_AFTER;
-
   const earnedRung1 = perEpisode.e90!.reachedL5;
   const tier = effectiveTier(r.tier, earnedRung1);
   // A probe-only driver's entry is no scored lane's: its tier buys nothing
@@ -2399,6 +2414,7 @@ export function projectModel(
     model: r.model,
     effort: r.effort ?? null,
     ...(r.compactWindow !== undefined ? { compactWindow: r.compactWindow } : {}),
+    ...(r.serving !== undefined ? { serving: r.serving } : {}),
     platform: platformOf(r.apiBase, r.driver),
     provider: providerOfModel(r),
     harness: harnessOf(driverOf(r)),
@@ -2566,20 +2582,12 @@ export function schedulability(
   // Free, so a probe campaign may take it, and owing nothing, so nothing else does.
   if (s.campaignOnly === true) return { verdict: "free", why: "campaignOnly: it runs only as a probe campaign's assignment" };
   if (s.probeOnly === true) return { verdict: "free", why: probeOnlyRefusal(harnessDriver(s.harness)?.id ?? s.harness) };
-  // Three failed attempts on an episode stop the spending. The
-  // model is blocked rather than "free": idle work is not the reward for
-  // burning three evals, and the taint is a stop signal, not a target met.
-  const tainted = s.eligible.filter((ep) => s.perEpisode[ep]?.tainted === true);
+  // A provider refusing a scored attempt is a cooling rung (above), not a stop of
+  // its own: one ladder per model, cleared one way.
   const open = s.eligible.filter((ep) => {
     const st = s.perEpisode[ep];
-    return st !== undefined && !st.tainted && st.counted < st.target;
+    return st !== undefined && st.counted < st.target;
   });
-  if (open.length === 0 && tainted.length > 0) {
-    return blocked(
-      `tainted on ${tainted.map((ep) => `${ep} (${s.perEpisode[ep]!.failed} failed attempts)`).join(", ")} — ` +
-        `clear with bun wb fleet clear-model ${s.name} once the endpoint is back`,
-    );
-  }
   if (open.length === 0) {
     // Idle work is the model's own axis now, not a consequence of its billing
     // or where its account comes from: what it does with a spare account is what its entry

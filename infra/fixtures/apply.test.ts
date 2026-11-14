@@ -9,6 +9,7 @@ import {
   assertFixturableAccount,
   buildEquipStatements,
   buildStatements,
+  connectOptions,
   parseArgs,
   renderStatement,
   savedOut,
@@ -17,6 +18,7 @@ import {
   type InventoryRow,
 } from "./apply";
 import { SCENARIOS, facing, isScenarioName, taxiMask, validateScenario, type Scenario } from "./scenarios";
+import { stagingEnvOf } from "../world";
 
 describe("account guard", () => {
   test("accepts the smoke, probe and party accounts", () => {
@@ -29,6 +31,30 @@ describe("account guard", () => {
   test("refuses runner and shakeout accounts, the stager's, and anything shaped like a party account that is not one", () => {
     for (const account of ["RUNNER", "RUNNER2", "SHAKEOUT", "SHAKEOUT2", "SMOKEY", "XSMOKE", "smoke3", "STAGER", "SPECTATOR", "PARTY", "PARTY10", "PARTYX", "XPARTY1"]) {
       expect(() => assertFixturableAccount(account)).toThrow(/refusing to fixture/);
+    }
+  });
+});
+
+describe("the characters schema", () => {
+  test("is the connection's default database, from WRATHBENCH_CHARACTERS_DB: a world's own under the stager's world env", () => {
+    expect(connectOptions({}).database).toBe("acore_characters");
+    expect(connectOptions({ WRATHBENCH_CHARACTERS_DB: "acore_characters", ...stagingEnvOf("wabcdefghij", 7878, {}) }).database).toBe("acore_characters_wabcdefghij");
+    expect(() => connectOptions({ WRATHBENCH_CHARACTERS_DB: "acore_characters; DROP" })).toThrow(/not a schema name/);
+  });
+
+  test("no statement names a schema, so every write lands in the connection's", () => {
+    const rows: InventoryRow[] = [
+      { bag: 0, slot: 4, item: 10, entry: 45 },
+      { bag: 0, slot: 23, item: 11, entry: 2488 },
+    ];
+    const statements = [
+      ...Object.values(SCENARIOS).flatMap((s) => buildStatements(42, s)),
+      ...buildEquipStatements(42, rows, [{ entry: 2488, slot: 4 }], []),
+    ];
+    expect(statements.length).toBeGreaterThan(10);
+    for (const s of statements) {
+      expect(s.sql).not.toMatch(/acore_/);
+      expect(s.sql).not.toMatch(/\b\w+\.\w+\s*(\(|SET|WHERE|$)/m);
     }
   });
 });

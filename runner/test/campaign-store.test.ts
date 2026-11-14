@@ -126,7 +126,7 @@ describe("the generic write paths", () => {
     // stopped listing it (WRATHBENCH_LOCAL_MODEL_HOSTS, the chart's
     // localModelHosts). Each reader states the deployment it means.
     const LAN = { WRATHBENCH_LOCAL_MODEL_HOSTS: "192.168.100.20:1234" };
-    const lan = { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1" };
+    const lan = { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1", serving: { weights: "Qwen/Qwen3-GGUF", quant: "Q4_K_M", runtime: "LM Studio" } };
     const path = join(tempDir("wb-campaign-provider-"), "config.sqlite");
     const then = new ConfigStore(path, { env: LAN });
     then.seed({ ...CONFIG, roster: { ...CONFIG.roster, lan } }, { actor: "fixture" });
@@ -172,7 +172,7 @@ describe("the generic write paths", () => {
       ...CONFIG.roster,
       extra: { tier: "t1", model: "z-ai/glm-5.2:free", pagerAlias: "ops-desk-7" },
       lane9: { tier: "t1", model: "claude-sonnet-5-5", driver: "claude-code", credential: "claude-9" },
-      lan: { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1" },
+      lan: { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1", serving: { weights: "Qwen/Qwen3-GGUF", quant: "Q4_K_M", runtime: "LM Studio" } },
     };
     const path = join(tempDir("wb-campaign-refused-"), "config.sqlite");
     const s = new ConfigStore(path, { env: LAN });

@@ -661,7 +661,18 @@ function projectResultExpected(c: CostFigure): CostFigure {
   return lean<CostFigure>({ usd: c.usd, basis: c.basis, asIfMetered: c.asIfMetered });
 }
 
-function projectResultRun(r: ResultRun): ResultRun {
+/**
+ * Public condition ids, one per distinct condition in a response, numbered in
+ * the order the private ids sort. The private id spells the requested
+ * routing, which names providers; the public row keeps only whether it was
+ * pinned, and the number still keeps two routings of one model two rows.
+ */
+function publicConditionIds(runs: readonly ResultRun[]): Map<string, string> {
+  const ids = [...new Set(runs.flatMap((r) => (r.condition === undefined ? [] : [r.condition.id])))].sort();
+  return new Map(ids.map((id, i) => [id, `c${i + 1}`]));
+}
+
+function projectResultRun(r: ResultRun, conditionIds: ReadonlyMap<string, string>): ResultRun {
   return lean<ResultRun>({
     runId: r.runId,
     model: r.model,
@@ -682,6 +693,24 @@ function projectResultRun(r: ResultRun): ResultRun {
     effort: r.effort,
     ...(r.compactWindow != null ? { compactWindow: r.compactWindow } : {}),
     harness: r.harness,
+    ...(r.condition !== undefined
+      ? {
+          condition: {
+            id: conditionIds.get(r.condition.id) ?? "c0",
+            loop: r.condition.loop,
+            yield: r.condition.yield,
+            pinned: r.condition.pinned,
+            wiki: r.condition.wiki,
+            // What is being tested, and a local build's weights, quantisation
+            // and runtime: published (operator, 2026-11-14). Its labels, the
+            // machine and the runtime's version, never reach a result row.
+            subject: r.condition.subject,
+            ...(r.condition.serving !== undefined
+              ? { serving: { weights: r.condition.serving.weights, quant: r.condition.serving.quant, runtime: r.condition.serving.runtime } }
+              : {}),
+          },
+        }
+      : {}),
     // Not emitted: `platform`, `cliVersion`, `promptHash`, `serverBuild`,
     // `wikiCoords`, `wiki` and `raceName`/`className`. The run page reads the
     // first six off the run's own row and tuple, and `characterLabel` is the
@@ -824,8 +853,9 @@ export function projectPositions(p: PositionsResponse): PositionsResponse {
 }
 
 export function projectResults(r: ResultsResponse): ResultsResponse {
+  const conditionIds = publicConditionIds(r.runs);
   return scrubPathsValue<ResultsResponse>({
-    runs: r.runs.map(projectResultRun),
+    runs: r.runs.map((run) => projectResultRun(run, conditionIds)),
     episode: r.episode,
     harness: r.harness,
     includeOverrides: r.includeOverrides,

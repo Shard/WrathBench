@@ -88,6 +88,8 @@ const POISON = {
   smuggled: "poison-smuggled-value",
   // A world per eval's id, its hold and its boot failure: the operator's.
   world: "wpoisonwrld",
+  // A requested routing names providers: the public row says only whether it was pinned.
+  routingProvider: "poison-routing-provider-Fixturely",
   worldsHold: "poison-worlds-held: 3 boots failed",
   worldFailed: "poison-world-boot-failed: pod wrathbench-world-x",
   // Game prose, as the entry window can carry it (docs/DATA-AND-LEGAL.md,
@@ -338,6 +340,15 @@ function resultsFixture(): ResultsResponse {
         effort: "high",
         compactWindow: "100k",
         harness: "wrathbench",
+        condition: {
+          id: `{"routing":{"allowFallbacks":false,"order":["${POISON.routingProvider}"]}}`,
+          loop: "program",
+          yield: true,
+          pinned: true,
+          wiki: true,
+          subject: "local",
+          serving: { weights: "Qwen/Qwen3-GGUF", quant: "Q4_K_M", runtime: "LM Studio" },
+        },
         promptHash: "sha256:0123456789abcdef",
         serverBuild: "harness-0.5-1-gdef",
         wikiCoords: true,
@@ -518,6 +529,10 @@ const RESULT_RUN_KEYS = [
   "effort",
   "compactWindow",
   "harness",
+  // The condition, renumbered: never the private id, which spells the routing.
+  "condition",
+  ...under("condition", ["id", "loop", "yield", "pinned", "wiki", "subject", "serving"]),
+  ...under("condition.serving", ["weights", "quant", "runtime"]),
   // no `platform`, `cliVersion`, `promptHash`, `serverBuild`, `wikiCoords`,
   // `wiki`, `raceName`, `className`: the run page reads the first six off the
   // run's own row and tuple, and none is read off a result row.
@@ -840,6 +855,22 @@ describe("projectResults", () => {
     assertClean(JSON.stringify(out));
     expect(out.runs[0]!.character).toBe(CHARACTER_NAME);
     expect(out.runs[0]!.pauseReason).toBe("paused");
+    expect(out.runs[0]!.condition).toEqual({
+      id: "c1",
+      loop: "program",
+      yield: true,
+      pinned: true,
+      wiki: true,
+      subject: "local",
+      serving: { weights: "Qwen/Qwen3-GGUF", quant: "Q4_K_M", runtime: "LM Studio" },
+    });
+  });
+
+  test("condition ids are renumbered per response: equal stays equal, distinct stays distinct", () => {
+    const base = resultsFixture().runs[0]!;
+    const withId = (runId: string, id: string): ResultRun => ({ ...base, runId, condition: { ...base.condition!, id } });
+    const out = projectResults({ ...resultsFixture(), runs: [withId("a", "z"), withId("b", "a"), withId("c", "z")] });
+    expect(out.runs.map((r) => r.condition!.id)).toEqual(["c2", "c1", "c2"]);
   });
 });
 

@@ -12,6 +12,7 @@ import { harnessSeries } from "../runner/src/comparability";
 import { compactWindowDriverRefusal, driverHasCompactWindow, harnessClash, parseEntryCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
 import type { Billing } from "../runner/src/model-cost";
 import { isOpenRouterBase, parseRouting } from "../runner/src/routing";
+import { parseServing } from "../runner/src/serving";
 import { QUEUE_JOB_KEYS, rosterEntryRefusal, strictKeyWhy, unknownKeysOf } from "../runner/src/roster-refusal";
 import {
   applyPairRefusals,
@@ -1110,7 +1111,11 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
   // under it is spared.
   for (const [name, e] of Object.entries(roster)) {
     const r = rosterEntryRefusal(e, credentials, env);
-    if (r === null) continue;
+    if (r === null) {
+      // Canonical, as routing is: one spelling of a build on every path.
+      if (e.serving !== undefined) roster[name] = { ...e, serving: parseServing(e.serving, `roster ${name}`) };
+      continue;
+    }
     roster[name] = { ...e, refused: r.why };
     refusals.push({
       pin: `roster ${name}`,
@@ -1329,6 +1334,7 @@ export function rosterModels(roster: Record<string, FleetRosterEntry>): RosterMo
             ...(e.compactWindow !== undefined ? { compactWindow: e.compactWindow } : {}),
             ...(e.driver !== undefined ? { driver: e.driver } : {}),
             ...(e.apiBase !== undefined ? { apiBase: e.apiBase } : {}),
+            ...(e.serving !== undefined ? { serving: e.serving } : {}),
             tier: e.tier,
             idle: e.idle,
             ...(e.billing !== undefined ? { billing: e.billing } : {}),
