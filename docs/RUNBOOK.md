@@ -852,7 +852,8 @@ not resumed` block with why:
 
 - **not in config** — the model or episode is gone from the fleet config (or
   the pinned job is disabled, or on another account). Resume it by hand
-  (`bun wb run episode --resume <run id>`, on its account) or archive it.
+  (`bun wb run episode --resume <run id>`, on its account; a codex run only
+  through the fleet, on the cluster) or archive it.
 - **cooling** — a pause on the roster's defer ladder (every reason but
   `operator-pause`, `offline`, `party-paused` and `subscription-budget`),
   indexed by the run's pause streak: its
@@ -1250,10 +1251,12 @@ as a CLI version bump or a sandbox policy change:
 ```
 bun wb release run --pin-hook <your pin hook> --keep-paused
 bun wb run episode --account PROBE --driver claude-code --model <id> --max-tool-calls 20
-bun wb run episode --account PROBE --driver codex --model <id> --max-tool-calls 20
 bun wb run episode --account PROBE --driver openai --model <id> --max-turns 5
 bun wb fleet resume
 ```
+
+Codex has no hand launch on the cluster ("Run pods", "Codex episodes"), so
+the hold cannot check it: watch its first run pod after the resume.
 
 `--keep-paused` reaches `k8s-deploy.sh`, which sets the pause switch before
 its drain if nothing has, scales the fleet back to 1 on every exit path as
@@ -1881,8 +1884,11 @@ credential, no config store and no store key: codex bills no stored secret.
   re-login. The usage gate reads the windows the run records on the runs
   volume.
 - Off the cluster (the compose quickstart, a host fleet) there is no pod, and
-  codex runs as a child process. So does a hand launch from the runner pod,
-  which has no API token: launch codex probes through the fleet.
+  codex runs as a child process. On the cluster run.ts refuses a codex
+  episode in any process its launcher did not stamp as a run pod
+  (`WRATHBENCH_RUN_POD`): a hand launch from the runner pod, which has no API
+  token to make one, is refused with the reason. Launch codex through a
+  roster or campaign entry, which the fleet runs in a run pod.
 
 **Lifecycle.** Each pod carries an ownerReference to the fleet pod, so a fleet
 stop or a recreated fleet pod deletes its run pods with the pod's 90s grace —
@@ -2061,6 +2067,10 @@ quickstart's runner container):
 ```
 bun wb run episode --model <id> [--driver openai|claude-code|codex|pi] [--credential <id>]
 ```
+
+On the cluster a codex launch or resume is refused here: a codex episode runs
+only in a run pod, so it goes through a roster or campaign entry ("Run pods",
+"Codex episodes"). In the quickstart it runs as any other.
 
 `--credential <id>` names the credential the run is counted against. It
 records the id and chooses no key, so name the one whose key the run uses (a

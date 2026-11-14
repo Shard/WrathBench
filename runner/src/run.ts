@@ -65,7 +65,7 @@ import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
 import { openWikiBundle, wikiBundleMeta } from "./wiki";
 import type { ChatAdapter } from "./adapter";
 import { DRIVER_ADAPTERS, type LaunchInputs } from "./driver-adapters";
-import { DEFAULT_DRIVER, DRIVER_TABLE, entryOf, isDriver, type Driver } from "./drivers";
+import { DEFAULT_DRIVER, DRIVER_TABLE, entryOf, inProcessRunPodRefusal, isDriver, type Driver } from "./drivers";
 import { referenceProgramPath, resolveReferenceLaunch } from "./reference-program";
 import { parseRouting, type RoutingSpec } from "./routing";
 import { providerOfModel } from "./credential-slots";
@@ -669,6 +669,14 @@ async function main(): Promise<void> {
   const loopRefused = loopLaunchRefusal(config);
   if (loopRefused !== null) {
     console.error(`[wrathbench] ${resumed ? `--resume ${config.runId}` : "launch"} refused: ${loopRefused}`);
+    process.exit(2);
+  }
+  // A codex episode on the cluster runs in a run pod or not at all
+  // (`inProcessRunPodRefusal`): a launch and a resume alike, before anything
+  // is written.
+  const podRefused = inProcessRunPodRefusal(config.driver, process.env);
+  if (podRefused !== null) {
+    console.error(`[wrathbench] ${resumed ? `--resume ${config.runId}` : "launch"} refused: ${podRefused}`);
     process.exit(2);
   }
   // A local build states what it serves (operator, 2026-11-14): the roster
