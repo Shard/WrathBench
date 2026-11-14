@@ -1570,9 +1570,13 @@ rename.
 The `queue` normally holds only the pinned jobs: the supervisor fills free
 pool accounts from the roster by policy — each model's tier budget
 (`t0`/`t1`/`t2`, "Config reference"), `e90` for everyone, `e360` once earned,
-newest-to-the-roster first, shorter episode first, fewest runs first, one
-character per model, each pick on the first credential with room
-("Credentials"). Only runs from the running build's harness **series** (`0.5`
+models with no counted run yet first, then shorter episode first, fewest
+counted runs first and roster order, one character per model, each pick on
+the first credential with room ("Credentials"). While scored episodes wait
+for a long-clock program-loop run to be read (`SCORED_EPISODES_WAIT`,
+docs/METHODOLOGY.md), no scored episode is picked, and a scored queue or
+pinned job is held with the same reason rather than spawned for `run.ts` to
+refuse. Only runs from the running build's harness **series** (`0.5`
 of `harness-0.5-1437-g…`) count; a minor bump starts every model's evidence
 over, a fix commit does not. How many paid runs are in flight at once is the
 paid credentials' slots — never a budget: how much a paid model runs is its
@@ -1792,8 +1796,9 @@ harness that is not this repository — and an image cannot be a child process
 of the fleet pod. So on the cluster a probing episode can run as **its own
 pod**, created by the roster from the chart's template and watched until it
 ends (`infra/run-pod.ts`; the contract both sides honour is
-`docs/ARCHITECTURE.md`, "Launching a run: the run contract"). Scored lanes
-stay child processes.
+`docs/ARCHITECTURE.md`, "Launching a run: the run contract"). Every codex
+episode is a run pod too, whatever its lane ("Codex episodes" below). Every
+other scored or freeplay episode stays a child process.
 
 **The switch.** `policy.runPods` in the config store, `"off"` by default:
 
@@ -1848,11 +1853,41 @@ and wiki volumes, and no config store, no database variables and no
 master's; a digest-only pin stamps `<repository basename>@sha256:<12 hex>`.
 The launcher writes `runs/<id>/image.json` (`ref`, `digest`, `pod`, `node`,
 `startedAt`) when the container starts, and a resume in a pod relaunches that
-digest whatever the arm says now. That holds only while `runPods` is
-`probes`: switched off, a paused probe on an image-less arm resumes as a child
-process on the release, one on a pinned arm waits, listed, until the switch is
-back on, and the supervisor exempts a probe from the harness-series gate only
-when it has an `image.json` and the switch is on.
+digest whatever the arm says now. That holds only for a probe, and only
+while `runPods` is `probes` (a codex probe, always): switched off, a paused
+probe on an image-less arm resumes as a child process on the release, one on
+a pinned arm waits, listed, until the switch is back on, and the supervisor
+exempts a probe from the harness-series gate only when it has an
+`image.json` and resumes as a pod.
+
+**Codex episodes.** On the cluster every codex episode runs as a run pod —
+freeplay, probing and scored alike — whatever `runPods` says, and no store
+write can put one back in the fleet pod (`runPod` on the driver's entry,
+`episodeRunsInPod`). The CLI gives GPT-6 models tools no flag removes and no
+sandbox confines: code mode's `view_image` opens any file its user can read.
+In the fleet pod that is the env Secret, the config store and its key; in a
+run pod it is the run's own module secret, the runs and wiki volumes, and the
+Codex home it bills. The pod is the release image (an arm's image still
+needs `probes`) with the module secret, `CODEX_HOME`, and the `codex-home`
+volume mounted whole and read-write. It has to be whole: the CLI refreshes
+`auth.json` in place and keeps its thread stores beside the sessions, and a
+second copy of the login would invalidate the first (runner/README.md,
+"Billing: the credential's CODEX_HOME or nothing"). It has no other
+credential, no config store and no store key: codex bills no stored secret.
+
+- It counts under `runPods.maxPods` beside the probes, so a codex stream past
+  the cap waits with `cap: run pods n/max in flight`. Size the cap for both.
+- A paused codex run resumes in a new pod on the release image. Its
+  `image.json` only records where it ran; only a probe's pins the digest. A
+  pod that cannot be created, pulled or scheduled on a resume leaves the run
+  paused for the next tick. A quota refusal is no attempt.
+- The supervisor's own work on the home is unchanged, because the fleet pod
+  still mounts it: the rollout sweep, thread deletion and the operator's
+  re-login. The usage gate reads the windows the run records on the runs
+  volume.
+- Off the cluster (the compose quickstart, a host fleet) there is no pod, and
+  codex runs as a child process. So does a hand launch from the runner pod,
+  which has no API token: launch codex probes through the fleet.
 
 **Lifecycle.** Each pod carries an ownerReference to the fleet pod, so a fleet
 stop or a recreated fleet pod deletes its run pods with the pod's 90s grace —

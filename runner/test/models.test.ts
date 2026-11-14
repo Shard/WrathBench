@@ -668,7 +668,7 @@ describe("paid and free", () => {
     expect(wantsIdle(v, met)).toBe(true);
     expect(v.why).toContain("unlimited sessions");
     const plan = planNextJobs([met], ["R1"], new Set(), { policy });
-    expect(plan.jobs.map((j) => [j.name, j.episode, j.account, j.extra])).toEqual([["l1", "freeplay", "R1", undefined]]);
+    expect(plan.jobs.map((j) => [j.name, j.episode, j.account])).toEqual([["l1", "freeplay", "R1"]]);
     expect(plan.jobs[0]!.why).toContain("unlimited session");
     // One at a time: a running model is not picked again.
     expect(planNextJobs([met], ["R1"], new Set(["l1"]), { policy }).jobs).toEqual([]);

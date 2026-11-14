@@ -139,10 +139,10 @@ import {
   planNameSweeps,
   planPolicy,
   planQueue,
+  scoredHold,
   implicitPauses,
   planResumes,
   planStaleRuns,
-  planTick,
   episodeSessions,
   evalPoolDraw,
   taskDraw,
@@ -178,6 +178,7 @@ import {
   type FleetState,
   hasLiveChild,
   liveCodexThreads,
+  rosterCanHoldPod,
   rosterEpisodeInFlight,
   runHasImageRecord,
   jobArgv,
@@ -689,9 +690,10 @@ interface JobProc {
   /** The run ids this process's roster was materialized with (`fillEntries`). */
   runIds: string[];
   /**
-   * Whether its roster was spawned with `--run-pods`, read off the argv it was
-   * given: only such a roster can have an episode running as a pod, whatever
-   * the setting says now.
+   * Whether its roster can have an episode running as a pod, whatever the
+   * setting says now: one spawned with `--run-pods`, read off the argv it was
+   * given, or on the cluster one with an entry whose driver always runs as a
+   * pod (`episodeRunsInPod`).
    */
   runPods: boolean;
   proc: ReturnType<typeof Bun.spawn>;
@@ -1038,8 +1040,6 @@ async function main(): Promise<void> {
   if (args.dryRun) {
     // One read of every run for the whole report (`readReportRuns`).
     const read = readReportRuns();
-    // Fail fast on anything that would fail at spawn time.
-    planTick(config, modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs: read.facts }), () => undefined, stampToday);
     printDryRun(config, args.until, stampToday, read, GROUPS);
     return;
   }
@@ -1196,7 +1196,7 @@ async function main(): Promise<void> {
     const book = new SlotBook(
       cfg.credentials,
       cfg.policy.maxSessions,
-      runPodsOf(cfg.policy.runPods, parseOpts.onCluster, cfg.policy.runPods === "probes" ? maxRunPods() : undefined),
+      runPodsOf(cfg.policy.runPods, parseOpts.onCluster, maxRunPods()),
       worldsSetting(cfg.policy.worlds),
     );
     lastCredentials = { gate: credGate, book, credentials: cfg.credentials, runs: billed };
@@ -1287,6 +1287,14 @@ async function main(): Promise<void> {
         // A pinned job whose ref is not promoted into its tier: it waits,
         // with the reason said once, exactly like a gated queue job.
         pinnedSkips.push({ job, reason: `${job.ref} is not eligible for ${job.episode} (its tier buys no ${job.episode} runs — earn it with a level-5 e90, or set a tier that includes it)` });
+        out.push({ name: job.name, enabled: false, account: job.account!, loop: false, entries: [{ model: "gated" }] });
+        continue;
+      }
+      // Held by the scored wait, as the policy's own picks are: never spawned
+      // for the launch to refuse (`scoredHold`).
+      const hold = job.enabled && !sets.running.has(job.name) ? scoredHold(job, SCORED_EPISODES_WAIT ?? undefined) : undefined;
+      if (hold !== undefined) {
+        pinnedSkips.push({ job, reason: hold });
         out.push({ name: job.name, enabled: false, account: job.account!, loop: false, entries: [{ model: "gated" }] });
         continue;
       }
@@ -1531,6 +1539,7 @@ async function main(): Promise<void> {
       affinity,
       counted: countedFrom(states),
       takenRunIds,
+      ...(SCORED_EPISODES_WAIT !== null ? { scoredGate: SCORED_EPISODES_WAIT } : {}),
     });
     lastPlan.skipped.unshift(...pinnedSkips);
     // Every fresh launch this tick, for the cross-account name sweep below.
@@ -1790,7 +1799,7 @@ async function main(): Promise<void> {
       spawn,
       ...(pj !== undefined ? { job: pj } : {}),
       runIds: entries.map((e) => e.runId).filter((id): id is string => id !== undefined),
-      runPods: argv.includes("--run-pods"),
+      runPods: rosterCanHoldPod(argv, entries, parseOpts.onCluster),
       proc,
       pid: proc.pid,
       spawnedAt: Date.now(),
@@ -1825,8 +1834,8 @@ async function main(): Promise<void> {
 
   /**
    * A roster whose episode is a run pod has no child process, so the /proc scan
-   * alone would SIGTERM it mid-episode. Asked only for a roster spawned with
-   * `--run-pods` (`rosterEpisodeInFlight`) and only on the cluster, with a short
+   * alone would SIGTERM it mid-episode. Asked only for a roster that can have
+   * one (`JobProc.runPods`, `rosterEpisodeInFlight`) and only on the cluster, with a short
    * timeout. A 403 or 404 is a definite "no pod" (`rosterHasRunPod`); a timeout
    * or a 5xx reads as "in flight", complained about once, because the cost of
    * a wrong SIGTERM (a paused run) outweighs a drain that waits a tick.
@@ -1994,20 +2003,6 @@ async function main(): Promise<void> {
   // counts every trajectory of a run that has not ended (all of them, on a
   // boot with no fact cache: about 35s on the live runs directory).
   let mayStart = await checkGate(config.preflight);
-  // Fail fast on anything that would fail at spawn time, still before any
-  // spawn. The read goes through the loop's own caches, so the first tick
-  // reuses it instead of counting every trajectory a second time.
-  planTick(
-    config,
-    modelStates({
-      runsDir: RUNS_DIR,
-      roster: rosterModels(config.roster),
-      policy: config.policy,
-      runs: readFacts().facts,
-    }),
-    () => undefined,
-    stampToday,
-  );
   await refreshGoUsage(config);
   refreshModelLists(config);
   if (mayStart) for (const spawn of diffJobs(applyPause(effectiveJobs(config), pauseSwitch !== undefined), sets).start) spawnJob(spawn);

@@ -439,7 +439,42 @@ interface FakeWindow {
  * it after the process exits. `rateLimits` (`{ primary, secondary }`, or
  * null as the CLI sometimes writes) rides on every `token_count`, with the
  * fields the driver must never keep (`credits`, `plan_type`) beside it.
+ * `codeMode` writes a code-mode turn's tool calls first (`codeModeLines`).
  */
+/**
+ * A code-mode turn's response items as 0.163.0 writes them (read off a live
+ * GPT-6 thread, metadata trimmed): an `exec` and its output; a `wait`, a
+ * function tool; a `view_image` whose output is an image; one of our MCP tools
+ * as the CLI writes it, in its `mcp__wrathbench` namespace; an `exec` whose
+ * input is longer than a record keeps and whose output never came; and a
+ * reasoning item that mentions every marker without being a call.
+ */
+function codeModeLines(): string[] {
+  const ts = "2026-10-14T00:00:01.000Z";
+  const item = (payload: Record<string, unknown>): string =>
+    JSON.stringify({ timestamp: ts, type: "response_item", payload: { ...payload, internal_chat_message_metadata_passthrough: { turn } } });
+  return [
+    item({ type: "reasoning", summary: [{ type: "summary_text", text: 'about "custom_tool_call" and "function_call" and "token_count"' }] }),
+    item({ type: "custom_tool_call", id: "ctc_1", status: "completed", call_id: `call_exec_${turn}`, name: "exec", input: "text(ALL_TOOLS.map(t => t.name));\n" }),
+    item({
+      type: "custom_tool_call_output",
+      id: "ctco_1",
+      call_id: `call_exec_${turn}`,
+      output: [
+        { type: "input_text", text: "Script completed\nWall time 0.0 seconds\nOutput:\n" },
+        { type: "input_text", text: '["mcp__wrathbench__run_snippet"]' },
+      ],
+    }),
+    item({ type: "function_call", id: "fc_1", name: "wait", arguments: '{"cell_id":"12","yield_time_ms":100000}', call_id: `call_wait_${turn}` }),
+    item({ type: "function_call_output", id: "fco_1", call_id: `call_wait_${turn}`, output: [{ type: "input_text", text: "Script completed" }] }),
+    item({ type: "function_call", id: "fc_2", name: "view_image", arguments: '{"path":"/etc/hostname"}', call_id: `call_img_${turn}` }),
+    item({ type: "function_call_output", id: "fco_2", call_id: `call_img_${turn}`, output: [{ type: "input_image", image_url: `data:image/png;base64,${"A".repeat(5_000)}` }] }),
+    item({ type: "function_call", id: "fc_3", name: "run_snippet", namespace: "mcp__wrathbench", arguments: '{"code":"1"}', call_id: `call_mcp_${turn}` }),
+    item({ type: "function_call_output", id: "fco_3", call_id: `call_mcp_${turn}`, output: "ok" }),
+    item({ type: "custom_tool_call", id: "ctc_2", status: "completed", call_id: `call_long_${turn}`, name: "exec", input: "x".repeat(6_000) }),
+  ];
+}
+
 function writeRollout(): void {
   const spec = Bun.env["WB_FAKE_ROLLOUT"];
   const home = Bun.env["CODEX_HOME"];
@@ -450,6 +485,7 @@ function writeRollout(): void {
       compact?: { pre: number; post: number; message?: string };
       model?: string;
       rateLimits?: { primary?: FakeWindow | null; secondary?: FakeWindow | null } | null;
+      codeMode?: true;
     }[]
   )[turn - 1];
   if (entry === undefined) return;
@@ -487,6 +523,7 @@ function writeRollout(): void {
   if (entry.model !== undefined) {
     lines.push(JSON.stringify({ type: "turn_context", payload: { turn_id: `turn-${turn}`, cwd: "/tmp/fake", approval_policy: "never", model: entry.model, summary: "auto" } }));
   }
+  if (entry.codeMode === true) lines.push(...codeModeLines());
   if (entry.compact !== undefined) {
     lines.push(
       count(entry.compact.pre),

@@ -280,6 +280,15 @@ export interface DriverEntry {
   rollouts: boolean;
   /** Run-pod template volumes only this driver mounts; every other driver's pod has them removed. */
   podVolumes: readonly string[];
+  /**
+   * Every episode of it runs as a run pod of its own on the cluster, whatever
+   * `policy.runPods` says (`infra/episode-launcher.ts`, `episodeRunsInPod`):
+   * its CLI gives the model tools no flag removes and no sandbox confines
+   * (codex's GPT-6 code mode and `view_image`), so its process is kept out of
+   * the fleet pod, its env Secret and its config store. Off the cluster there
+   * is no pod to run in and it stays a child process. Absent everywhere else.
+   */
+  runPod?: true;
 }
 
 const FIXED_LOOP_COST: DriverCost = { reported: "provider", table: "synced" };
@@ -369,6 +378,7 @@ export const DRIVER_TABLE = {
     usage: "exec-tally",
     rollouts: true,
     podVolumes: ["codex-home"],
+    runPod: true,
   },
   // The pi coding-agent CLI on a metered endpoint (`adapter-pi.ts`): a base and
   // a key like the fixed loop, priced from its tokens by the hand-held provider
@@ -464,6 +474,26 @@ export const DRIVER_TABLE = {
 } as const satisfies Record<Driver, DriverEntry>;
 
 export const DRIVER_LIST: readonly DriverEntry[] = DRIVERS.map((d) => entryOf(d));
+
+// ------------------------------------------------------- not a model
+
+/**
+ * Whether a stored run was driven by something that is not a model (the
+ * scripted stub, the scripted reference), by its driver or by the stamp that
+ * driver leaves: either one is enough, so a row that lost one of the two
+ * still reads as what it was. The one definition: the scheduler, the viewer,
+ * the publisher and the dashboard all ask it here.
+ */
+export function isNotAModelRun(r: { driver?: string | null | undefined; unscored?: string | null | undefined }): boolean {
+  if (driverEntry(r.driver)?.stamp !== undefined) return true;
+  const stamp = r.unscored;
+  return typeof stamp === "string" && DRIVER_LIST.some((d) => d.stamp !== undefined && stamp.startsWith(d.stamp));
+}
+
+/** Whether a stored run is the scripted reference, by its driver's entry (`route`) or by its stamp; one of the two is enough. */
+export function isReferenceRun(r: { driver?: string | null | undefined; unscored?: string | null | undefined }): boolean {
+  return driverEntry(r.driver)?.route === true || (r.unscored ?? "").startsWith(REFERENCE_STAMP);
+}
 
 // ------------------------------------------------------------------ lookups
 

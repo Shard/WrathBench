@@ -43,6 +43,7 @@ import { type DeferEntry, deferSidecarPath, parseDefers } from "./run-roster";
 import { type Campaign } from "../runner/src/campaigns";
 import type { FleetServerView, FleetWorldView } from "../runner/viewer/api-types";
 import { IMAGE_RECORD_FILE } from "./run-pod";
+import { episodeRunsInPod } from "./episode-launcher";
 import {
   type ModelsSidecar,
   type ModelState,
@@ -52,7 +53,6 @@ import {
   runFactCache,
   type RunPodsMode,
   type WorldsMode,
-  type StartingCharacter,
   type UnstampedRun,
 } from "../runner/src/models";
 
@@ -357,10 +357,20 @@ export function hasLiveChild(pid: number): boolean {
 }
 
 /**
+ * Whether a roster the fleet spawns can have an episode running as a pod
+ * (`JobProc.runPods`): one handed `--run-pods`, or on the cluster one with an
+ * entry whose driver always runs as a pod (`episodeRunsInPod`).
+ */
+export function rosterCanHoldPod(argv: readonly string[], entries: readonly { driver?: string | undefined }[], onCluster: boolean): boolean {
+  return argv.includes("--run-pods") || entries.some((e) => episodeRunsInPod({ driver: e.driver, probing: false, runPods: "off", onCluster }));
+}
+
+/**
  * Whether a draining roster still has an episode in flight, so its SIGTERM
  * waits for the episode boundary. A child process answers for itself (the
  * /proc scan). A run pod is asked of the API only for a roster the fleet
- * spawned with `--run-pods` (`jobArgv`): any other roster can have no pod,
+ * spawned with `--run-pods` (`jobArgv`) or with an entry whose driver always
+ * runs as a pod (`episodeRunsInPod`): any other roster can have no pod,
  * and asking for it would cost every drain tick an API round trip per roster
  * — and, while the API did not answer, read a roster sitting between episodes
  * as mid-episode, so it was never stopped.
@@ -471,7 +481,6 @@ export interface StateJob {
   account: string;
   source: JobSource;
   attempt?: number;
-  extra?: StartingCharacter;
   /** The paused run this spawn is resuming. */
   resuming?: string;
   /**
@@ -559,14 +568,13 @@ export interface PoolView {
 export function stateJobFacts(
   name: string,
   job: FleetJob | undefined,
-): { ref: string; episode: EpisodeId | null; source: JobSource; attempt?: number; extra?: StartingCharacter; credentials?: string[] } {
+): { ref: string; episode: EpisodeId | null; source: JobSource; attempt?: number; credentials?: string[] } {
   if (job === undefined) return { ref: name, episode: null, source: "pinned" };
   return {
     ref: job.ref,
     episode: job.episode,
     source: job.source,
     ...(job.attempt !== undefined ? { attempt: job.attempt } : {}),
-    ...(job.extra !== undefined ? { extra: job.extra } : {}),
     ...(credentialIdsOf(job).length > 0 ? { credentials: credentialIdsOf(job) } : {}),
   };
 }

@@ -86,6 +86,7 @@ import {
   eligibleFrom,
   formatModels,
   isExtraJob,
+  scoredHold,
   runnableRefs,
   type FleetJob,
   type FleetRosterEntry,
@@ -1774,6 +1775,22 @@ describe("jobs, pinned and pool: one unit of work over the account pool", () => 
     expect(plan2.waiting.map((j) => j.name)).toEqual(["ox-e90", "mimo-e90"]);
   });
 
+  test("a scored queue job waits on the scored hold with the policy's reason, never spawned to be refused at launch", () => {
+    const gate = "scored episodes do not run yet: they wait until a long-clock program-loop run has been read";
+    const queue = [job({ ref: "glm" }), job({ ref: "ox", episode: "freeplay" })];
+    const plan = planQueue({ ...base, queue, running: new Map(), scoredGate: gate });
+    expect(plan.assign.map((a) => a.job.name)).toEqual(["ox-freeplay"]);
+    expect(plan.skipped).toEqual([{ job: queue[0]!, reason: `e90: ${gate}` }]);
+    expect(scoredHold({ episode: "e360" }, gate)).toBe(`e360: ${gate}`);
+    expect(scoredHold({ episode: "probing" }, gate)).toBeUndefined();
+    expect(scoredHold({ episode: "e90" }, undefined)).toBeUndefined();
+    // A pinned scored job is held the same way, beside the policy's held picks.
+    const config = parseFleet(fleetJson([{ ref: "glm", episode: "e90", account: "SHAKEOUT", repeat: 1 }]));
+    const tick = planTick(config, modelStatesOf(rosterModels(config.roster)), () => undefined, "20261114", [], [], undefined, new Map(), new Set(), [], [], undefined, true, [], [], undefined, gate);
+    expect(tick.pinned).toEqual([]);
+    expect(tick.heldPicks.find((h) => h.name === "glm-e90")?.why).toBe(`e90: ${gate}`);
+  });
+
   test("queue drains in order: as accounts come free the next jobs take them; finished jobs are not restarted", () => {
     const queue = [job({ ref: "glm", repeat: 1 }), job({ ref: "ox", repeat: 1 }), job({ ref: "mimo", repeat: 1 })];
     const running = new Map<string, string>();
@@ -2208,7 +2225,6 @@ describe("scheduling policy: defer ladder and retirement", () => {
     const plan = planTick(config, states, () => undefined, "20260101");
     const pick = plan.policy.find((p) => p.account === "LOCALBOX")!;
     expect(pick.job).toMatchObject({ name: "local-freeplay", episode: "freeplay", attempt: 1, source: "policy" });
-    expect(pick.job.extra).toBeUndefined();
     expect(isExtraJob(pick.job)).toBe(true);
     expect(pick.why).toContain("unlimited session");
     // The spawn: stamped an extra and the entry's own start. Freeplay has no
@@ -2233,7 +2249,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
     expect(spawn.loop).toBe(false);
     expect(jobArgv(spawn, { stamp: "20260101", until: undefined }).join(" ")).toContain("local-freeplay");
     // A manual freeplay job (the nav probe) is not an extra.
-    expect(isExtraJob({ episode: "freeplay", attempt: undefined, extra: undefined })).toBe(false);
+    expect(isExtraJob({ episode: "freeplay", attempt: undefined })).toBe(false);
     // --status shows it as an extra, on the freeplay row and in the extras column.
     expect(formatAccounts([{ account: "LOCALBOX", kind: "pool", job: { name: "local-freeplay", models: ["qwen/q"], episode: "freeplay", attempt: 1 } }])[1]).toMatch(
       /LOCALBOX +pool +local-freeplay: qwen\/q freeplay extra/,
@@ -2461,6 +2477,17 @@ describe("run pods in flight under the chart's cap", () => {
     expect(orphan.map((u) => [u.credential, u.episode])).toEqual([["or-free", "probing"]]);
     countUnownedRuns(book, orphan);
     expect(book.fullKey(book.keysOf("openai", "or-free", "probing"))).toBe("credential:or-free");
+    expect(book.inUse("run-pods")).toBe(1);
+  });
+
+  test("an orphaned codex run is on the run-pod cap whatever its lane and the switch; any other freeplay run is not", () => {
+    const book = new SlotBook(parseCredentials({ "or-free": { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 2, billing: "free", enabled: true } }), {}, runPodsOf("off", true, 3));
+    const freeplay = (driver: string): RunFact => ({ ...liveProbe(NOW), runId: `fleet-a-freeplay-${driver}-20261114`, episode: "freeplay", campaign: null, driver, credential: "or-free" });
+    const orphans = unownedLiveRuns({ runs: [freeplay("codex")], roster: {}, campaigns: [], running: new Set(), busyAccounts: new Set() });
+    expect(orphans.map((u) => u.driver)).toEqual(["codex"]);
+    countUnownedRuns(book, orphans);
+    expect(book.inUse("run-pods")).toBe(1);
+    countUnownedRuns(book, [{ credential: "or-free", episode: "freeplay", driver: "openai" }]);
     expect(book.inUse("run-pods")).toBe(1);
   });
 });

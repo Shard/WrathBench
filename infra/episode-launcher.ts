@@ -12,17 +12,19 @@
  * (session hygiene, classification, retries, the defer ladder) reads the run's
  * own files and never the handle, so it is the same for both.
  *
- * The choice is `chooseLauncher`, and it is deliberately narrow: pods only for
- * a spec that carries `launch` (the planner sets it on probing jobs), only on
- * the cluster, and only while the fleet setting `policy.runPods` is `probes`.
- * Scored lanes stay child processes until a probe campaign has proven the
- * launcher. The one thing that is never done quietly is running master's code
- * for an arm that pinned an image: off the cluster, or with the switch off,
- * that launch is refused with the reason, not downgraded.
+ * The choice is `chooseLauncher`, and it is deliberately narrow, on the
+ * cluster only (`episodeRunsInPod`): a spec that carries `launch` (the planner
+ * sets it on probing jobs) while the fleet setting `policy.runPods` is
+ * `probes`, and every episode of a driver whose entry says `runPod` (codex:
+ * its CLI hands the model tools no flag removes, so its process is kept out of
+ * the fleet pod and its secrets), whatever the setting. Every other episode
+ * stays a child process. The one thing that is never done quietly is running
+ * master's code for an arm that pinned an image: off the cluster, or with the
+ * switch off, that launch is refused with the reason, not downgraded.
  */
 
 import type { PlacedCredential } from "./run-fleet-credentials";
-import { entryOf, type RosterDriver } from "../runner/src/drivers";
+import { DEFAULT_DRIVER, driverEntry, entryOf, type RosterDriver } from "../runner/src/drivers";
 import { parseRunPodsMode, RUN_PODS_MODES, type RunPodsMode } from "../runner/src/models";
 import { launchSecret, STORE_KEY_ENV } from "../runner/src/store-secrets";
 
@@ -125,15 +127,30 @@ export interface EpisodeLauncher {
 export type LauncherChoice = { kind: "process" } | { kind: "pod" } | { kind: "refused"; reason: string };
 
 /**
- * Pod iff the setting is on, we are on the cluster and the spec asked; a
- * child process otherwise — except that an arm with a pinned image or command
- * is refused rather than run on the code the fleet happens to be made of: a
- * child process runs this repository's run.ts and would ignore both. The
- * planner refuses such a pair before it is ever scheduled
- * (`campaignPairRefusals`); this is the launcher's own check of the same rule.
+ * Whether an episode runs as a pod of its own: on the cluster only, for a
+ * probing episode while `policy.runPods` is `probes`, and for every episode
+ * of a `runPod` driver whatever the setting. The one test the launcher
+ * (`chooseLauncher`), the planner's run-pod cap (`SlotBook`) and the drain
+ * (`rosterEpisodeInFlight`) share. `driver` undefined is the default driver.
  */
-export function chooseLauncher(opts: { runPods: RunPodsMode; onCluster: boolean; launch: LaunchSpec | undefined }): LauncherChoice {
-  if (opts.launch === undefined) return { kind: "process" };
+export function episodeRunsInPod(o: { driver: string | undefined; probing: boolean; runPods: RunPodsMode; onCluster: boolean }): boolean {
+  if (!o.onCluster) return false;
+  return driverEntry(o.driver ?? DEFAULT_DRIVER)?.runPod === true || (o.probing && o.runPods === "probes");
+}
+
+/**
+ * Pod iff `episodeRunsInPod` says so, a probing episode being one whose spec
+ * asked (`launch`); a child process otherwise — except that an arm with a
+ * pinned image or command is refused rather than run on the code the fleet
+ * happens to be made of: a child process runs this repository's run.ts and
+ * would ignore both. The planner refuses such a pair before it is ever
+ * scheduled (`campaignPairRefusals`); this is the launcher's own check of the
+ * same rule, which a `runPod` driver's pod does not lift: an arm's image
+ * still needs the switch.
+ */
+export function chooseLauncher(opts: { runPods: RunPodsMode; onCluster: boolean; launch: LaunchSpec | undefined; driver?: string | undefined }): LauncherChoice {
+  const pod = episodeRunsInPod({ driver: opts.driver, probing: opts.launch !== undefined, runPods: opts.runPods, onCluster: opts.onCluster });
+  if (opts.launch === undefined) return { kind: pod ? "pod" : "process" };
   if (opts.runPods === "probes" && opts.onCluster) return { kind: "pod" };
   if (opts.launch.image !== null || opts.launch.command !== null) {
     const pinned = opts.launch.image !== null ? `arm image ${opts.launch.image}` : `arm command ${opts.launch.command!.join(" ")}`;
@@ -142,7 +159,7 @@ export function chooseLauncher(opts: { runPods: RunPodsMode; onCluster: boolean;
       : `the fleet setting policy.runPods is ${JSON.stringify(opts.runPods)}; set it to "probes" to launch run pods`;
     return { kind: "refused", reason: `${pinned} refused: ${why} — a pinned arm is never run on master's code instead` };
   }
-  return { kind: "process" };
+  return { kind: pod ? "pod" : "process" };
 }
 
 /** The seam field as a spec carries it; a hand-written roster goes through here too. */
