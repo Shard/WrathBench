@@ -37,7 +37,7 @@ import type { SandboxHost } from "../src/sandbox/host";
 import { RecordSignals } from "../src/session-record";
 import { callTool, coerceToolArgs, isKnownTool, toolsFor, TOOLS } from "../src/tools";
 import { readTrajectory, Trajectory } from "../src/trajectory";
-import { mergeFacts, ProgramWake, renderWake, sleepUntilWake, WAKE_CAP_MS, WAKE_CONSOLE_CHARS, Waker, type WakeReason, type WakeView } from "../src/wake";
+import { mergeFacts, ProgramWake, renderWake, signatureLineOf, sleepUntilWake, WAKE_CAP_MS, WAKE_CONSOLE_CHARS, Waker, type WakeReason, type WakeView } from "../src/wake";
 import { Watchdogs } from "../src/watchdogs";
 import { LEAKED_SECRET } from "./fixtures/leaky-snippet";
 import { program1Tools } from "./fixtures/program1-tools";
@@ -486,6 +486,36 @@ describe("renderWake", () => {
         "program console: 1,204 lines, last 1 shown, repeats folded",
         "  [grind] pulling boar ×3",
       ].join("\n"),
+    );
+  });
+
+  /** Refusal facts as the stack sends them, the wake's signature lines built from them as `ProgramWake.onFact` does. */
+  const refusalView = (facts: ProgramFact[], repeats: ProgramFacts["repeats"]): WakeView => ({
+    n: 3,
+    sleptMs: 61_000,
+    fired: "refusal",
+    capMs: WAKE_CAP_MS,
+    reasons: [{ key: "refusal", ts: NOW - 40_000, text: "new refusal (grind: castSpell not_ready)", inContext: false }],
+    facts: emptyFacts({ deploy: 3, routines: [{ name: "grind", deploy: 3, startedAt: NOW - 300_000, state: "running" }], facts, repeats }),
+    signatures: new Map(
+      facts.map((f) => {
+        const s = signatureLineOf(f)!;
+        return [s.signature, s.line] as const;
+      }),
+    ),
+    progress: { quests: 0, deaths: 0 },
+    now: NOW,
+  });
+
+  test("a single-character run's refusal lines are byte-identical to before characters were named in them", () => {
+    // Captured from the renderer before fan-out refusal lines named their characters.
+    const facts: ProgramFact[] = [
+      { kind: "refusal", ts: NOW - 40_000, routine: "grind", deploy: 3, action: "castSpell", status: "not_ready", hint: "the spell is on cooldown", signature: "grind||castSpell|not_ready", fresh: true },
+      { kind: "refusal", ts: NOW - 30_000, routine: "grind", deploy: 3, action: "moveTo", status: "superseded", hint: "a newer moveTo replaced this one and is the move walking now.", signature: "grind||moveTo|superseded", fresh: true },
+      { kind: "refusal", ts: NOW - 20_000, routine: "pull", character: "Alfa", deploy: 3, action: "castSpell", status: "out_of_range", hint: "move closer", signature: "pull|Alfa|castSpell|out_of_range", fresh: true },
+    ];
+    expect(renderWake(refusalView(facts, [{ signature: "grind||castSpell|not_ready", count: 26, ts: NOW - 1_000 }]))).toBe(
+      "[wake 3 · slept 1m01s · woke for: new refusal (grind: castSpell not_ready)]\nroutines:\ngrind running 5m, deploy 3, no action yet\nrefusals:\n  grind castSpell not_ready — the spell is on cooldown ×27\n  pull (Alfa) castSpell out_of_range — move closer\n  grind moveTo superseded — a newer moveTo replaced this one and is the move walking now.\nsince you slept: quests completed 0 · deaths 0",
     );
   });
 
