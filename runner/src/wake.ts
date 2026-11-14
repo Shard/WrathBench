@@ -44,6 +44,7 @@
  */
 
 import { renderRoutines, type ActionHintNote, type MoveOwner, type ProgramFact, type ProgramFacts, type ProgramLogLine, type RoutineRow } from "@wrathbench/mcp";
+import { renderNotices } from "./context";
 import type { HarnessNotice } from "./sandbox/host";
 
 /** The program loop's workspace, in the run directory: files, versions, registry and memory. */
@@ -665,6 +666,25 @@ export class ProgramWake {
       if (h.routine !== undefined) this.waker.deliver(`${h.routine}|${h.character ?? ""}|${h.action}|${h.status}`);
       if (h.status === "dead") this.waker.forget("died", h.ts, h.character);
     }
+  }
+
+  /**
+   * A `yield`'s answer: its wake block, then every harness notice queued for
+   * the next turn message, the driver's (`queued`, emptied here) and the
+   * sandbox's (`drain`), in that message's `[harness notices]` form. A turn
+   * message is the only other place a notice reaches the model, and on a
+   * scaffold whose turn runs for hours between `yield`s that is hours late.
+   * What it carries is taken from the queues, so the next message does not
+   * repeat it, and a notice's reason no longer wakes a later sleep. Scrubbed
+   * of the run's secrets, as the turn message is.
+   */
+  yieldAnswer(block: string, queued: HarnessNotice[], drain: () => HarnessNotice[]): string {
+    const notices = [...queued.splice(0, queued.length), ...drain()];
+    if (notices.length === 0) return block;
+    const now = this.now();
+    // The reasons a notice raised (`onNotice`, a queued notice in `sleepUntilWake`), never a program fact's.
+    this.waker.forgetWhere((r) => r.inContext && (r.key === "notice" || r.key === "sandbox_restart") && r.ts <= now);
+    return `${block}\n\n${this.o.trajectory.scrub(renderNotices(notices))}`;
   }
 
   /** Restarts the program was blamed for since the last call. */

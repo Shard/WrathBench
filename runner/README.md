@@ -1328,7 +1328,12 @@ the ledger is cleared when the conversation lost it (a CLI compaction, a
 codex thread change or a new claude-code session, a fixed-loop trim, a
 routine result the fixed loop's window cut) and in a new process. After a
 turn-end sleep it opens every request of that wake, right after `[turn N]`;
-after a `yield` it is the tool's result and is not repeated. What the model
+after a `yield` it is the tool's result and is not repeated. A `yield`'s
+result also carries the harness notices queued for the next turn message,
+the driver's and the sandbox's, after the block in that message's `[harness
+notices]` form (`ProgramWake.yieldAnswer`): on claude-code the next message
+can be hours away. They leave the queue with it, so the next message does
+not repeat them, and their reasons no longer wake. What the model
 has already been told wakes no later sleep, and still shows in the next wake:
 a refusal whose hint a tool result carried (the stack hands the runner each
 result's hints as it is built, `onHintsDelivered`; matched by signature, so a

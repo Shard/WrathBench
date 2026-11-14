@@ -1642,11 +1642,7 @@ export function assembleContext(inputs: ContextInputs): string {
   // the turn begins with it. Never on the snippet loop.
   if (inputs.wake !== undefined && inputs.wake.length > 0) parts.push(inputs.wake);
 
-  if (inputs.notices.length > 0) {
-    parts.push(
-      `[harness notices]\n${inputs.notices.map((n) => `- ${n.kind}: ${n.text}`).join("\n")}`,
-    );
-  }
+  if (inputs.notices.length > 0) parts.push(renderNotices(inputs.notices));
 
   parts.push(inputs.stateSummary);
 
@@ -1675,6 +1671,14 @@ export function assembleContext(inputs: ContextInputs): string {
   );
 
   return parts.join("\n\n");
+}
+
+/**
+ * The `[harness notices]` section, one line per notice: a turn message's,
+ * and a `yield` result's after its wake block (`ProgramWake.yieldAnswer`).
+ */
+export function renderNotices(notices: readonly Pick<HarnessNotice, "kind" | "text">[]): string {
+  return `[harness notices]\n${notices.map((n) => `- ${n.kind}: ${n.text}`).join("\n")}`;
 }
 
 /**
