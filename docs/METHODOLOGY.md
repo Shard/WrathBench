@@ -501,7 +501,10 @@ initiative. An edit here records a decision the operator made; work that
 would require changing or contradicting one stops and puts the question to
 the operator first. Surface, prompt, context policy, contract, or bundle-text
 changes move the harness version (minor at least; contract widenings are
-major); scheduling and derivation changes do not, but are still dated edits
-here or in the owning doc. Keep this document a north star — a rule and its
+major), except a change of loop: that is a change of the comparability tuple
+(`loop`, `yield` and the prompt hash), and it moves no series. A series bump
+is the operator's word alone (operator, 2026-11-14). Scheduling and
+derivation changes do not move the version, but are still dated edits here
+or in the owning doc. Keep this document a north star — a rule and its
 why, mechanics in the owning doc: fold a new decision into the section it
 belongs to, prune what it obsoletes, and let git history hold the past.
