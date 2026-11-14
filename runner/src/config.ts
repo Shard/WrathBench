@@ -1118,6 +1118,17 @@ export function programLoopRefusal(c: Pick<RunConfig, "loop" | "yield" | "driver
 export const SCORED_EPISODES_WAIT: string | null = "scored episodes do not run yet: they wait until a long-clock program-loop run has been read";
 
 /**
+ * Whether an episode waits (`SCORED_EPISODES_WAIT`), and why, or null: the one
+ * decision the launch's refusal (`loopLaunchRefusal`) and the planner's hold
+ * (`scoredHold`, infra/run-fleet-plan.ts) both read, so a job is never held
+ * that the launch would take, nor spawned for the launch to refuse.
+ */
+export function scoredWaitFor(episode: string | null | undefined, wait: string | null = SCORED_EPISODES_WAIT): string | null {
+  if (wait === null || episode === null || episode === undefined || !isEpisodeIdValue(episode) || !isScoredEpisode(episode)) return null;
+  return wait;
+}
+
+/**
  * Why a model driver's run may not launch on its loop and episode, or null
  * (operator, 2026-11-14). The snippet loop is kept as a legacy arm of probe
  * campaigns, so it runs only on `--episode probing`: never a scored episode,
@@ -1132,7 +1143,8 @@ export const SCORED_EPISODES_WAIT: string | null = "scored episodes do not run y
 export function loopLaunchRefusal(c: Pick<RunConfig, "loop" | "driver" | "episode">): string | null {
   if (isUnscoredDriver(c.driver)) return null;
   if (c.loop === "program") {
-    return c.episode !== undefined && isScoredEpisode(c.episode) && SCORED_EPISODES_WAIT !== null ? `--episode ${c.episode} is a scored episode, and ${SCORED_EPISODES_WAIT}` : null;
+    const wait = scoredWaitFor(c.episode);
+    return wait !== null ? `--episode ${c.episode} is a scored episode, and ${wait}` : null;
   }
   if (c.episode === "probing") return null;
   const what = c.episode === undefined ? "a launch with no --episode" : `--episode ${c.episode}`;

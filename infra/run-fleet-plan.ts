@@ -43,7 +43,7 @@ import { cellDimensions, isOneAgentArm } from "../runner/src/campaign-def";
 import { campaignFileOf, type CampaignFile } from "../runner/src/campaign-file";
 import { fanoutLaunchOf, memberRunId } from "../runner/src/party";
 import { isEvalPoolAccountName } from "../runner/src/account-pool";
-import { stampedCompactWindow, type TerminationReason } from "../runner/src/config";
+import { scoredWaitFor, stampedCompactWindow, type TerminationReason } from "../runner/src/config";
 import { driverEntry, isProbeOnlyDriver } from "../runner/src/drivers";
 import { isScoredEpisode } from "../runner/src/episodes";
 import { classifyLapse, OFFLINE_PAUSE, PARTY_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
@@ -241,8 +241,8 @@ export interface QueuePlan {
  * once, rather than spawned for `run.ts` to refuse at launch.
  */
 export function scoredHold(job: Pick<FleetJob, "episode">, scoredGate: string | undefined): string | undefined {
-  if (scoredGate === undefined || job.episode === null || !isScoredEpisode(job.episode)) return undefined;
-  return `${job.episode}: ${scoredGate}`;
+  const wait = scoredWaitFor(job.episode, scoredGate ?? null);
+  return wait === null ? undefined : `${job.episode}: ${wait}`;
 }
 
 export function planQueue(opts: {
