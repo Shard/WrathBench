@@ -22,7 +22,7 @@ spec:
   {{- with .Values.priorityClassName }}
   priorityClassName: {{ . }}
   {{- end }}
-  nodeSelector: {{ toYaml .Values.nodeSelector | nindent 4 }}
+  nodeSelector: {{ toYaml (default .Values.nodeSelector $g.nodeSelector) | nindent 4 }}
   securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 4 }}
   terminationGracePeriodSeconds: 15
   {{- include "wrathbench.imagePullSecrets" . | nindent 2 }}
@@ -179,7 +179,7 @@ spec:
       {{- with .Values.priorityClassName }}
       priorityClassName: {{ . }}
       {{- end }}
-      nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
+      nodeSelector: {{ toYaml (default .Values.nodeSelector $g.nodeSelector) | nindent 8 }}
       securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
       # Long enough to log every credential's characters out and delete its worker.
       terminationGracePeriodSeconds: 45

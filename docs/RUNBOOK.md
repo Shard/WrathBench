@@ -2853,8 +2853,13 @@ Three things that follow from the design:
   the gateway has none, and it decides a worker is up by connecting to its
   port itself, which its own egress admits.
 - **One node.** The hosted volume is RWO like `data`, so the gateway and every
-  worker must land on one node: set `nodeSelector`, as `data` already
-  requires. Without it a worker scheduled elsewhere fails to attach.
+  worker must land on one node: `hosted.gateway.nodeSelector`, which is the
+  chart's `nodeSelector` (the node `data` is on) unless set. With both empty a
+  worker scheduled elsewhere fails to attach.
+- **The module audit of a hosted session is kept 30 days**
+  (`worldserver.logRetention.hostedDays`), as long as the person audit whose
+  lease lines point at it: every token the gateway leases has a fingerprint
+  starting `0000`, and the retention pass keeps those files that long.
 - **The worker channel is plain TCP** on the pod network, carrying lease
   secrets. Only the gateway can open it, and only with the worker's own
   secret, and the policies keep everything else off the worker's port.

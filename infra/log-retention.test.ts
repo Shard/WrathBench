@@ -211,6 +211,30 @@ describe.skipIf(perl === null)("the retention pass", () => {
     }
   });
 
+  test("a hosted session's file is kept for the hosted window; every other file keeps the operator's", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const f = fixture(now);
+    const old = utcDate(now - 10 * DAY);
+    const hosted = join(f.dir, `0000${"a".repeat(12)}.${old}.jsonl`);
+    const expired = join(f.dir, `0000${"b".repeat(12)}.${utcDate(now - 40 * DAY)}.jsonl`);
+    for (const [path, age] of [[hosted, 10], [expired, 40]] as const) {
+      writeFileSync(path, "x".repeat(400));
+      utimesSync(path, now - age * DAY, now - age * DAY);
+    }
+    const r = await run(f.dir, { WRATHBENCH_LOG_RETENTION_HOSTED_DAYS: "30" });
+    expect(r.code, r.err).toBe(0);
+    expect(count(r.out, "hosted")).toBe(1);
+    expect(size(hosted)).toBe(400);
+    expect(existsSync(expired)).toBe(false);
+    // The operator's own past-day file goes at its usual window.
+    expect(existsSync(f.files.pastDay!)).toBe(false);
+    // Without the hosted window, the hosted file goes like any other.
+    const plain = await run(f.dir, {});
+    expect(plain.code, plain.err).toBe(0);
+    expect(line(plain.out, "hosted")).toBe("");
+    expect(existsSync(hosted)).toBe(false);
+  });
+
   test("the window is the operator's: seven days keeps what three would prune", async () => {
     const now = Math.floor(Date.now() / 1000);
     const f = fixture(now);

@@ -118,6 +118,22 @@ describe.skipIf(helm === null)("the hosted gateway in the chart", () => {
     expect(g.command![g.command!.indexOf("--grants") + 1]!.startsWith(`${root}/`)).toBe(true);
   }, HELM_TEST_MS);
 
+  test("the gateway and its workers run on the chart's node unless told otherwise", () => {
+    const sel = (docs: NonNullable<Doc>[]) => ({
+      gateway: (find(docs, "Deployment", "wrathbench-gateway").spec!.template!.spec as unknown as { nodeSelector?: unknown }).nodeSelector,
+      worker: workerTemplate(docs).spec["nodeSelector"],
+    });
+    expect(sel(rendered([...ON, "--set", "nodeSelector.disk=nvme"]))).toEqual({ gateway: { disk: "nvme" }, worker: { disk: "nvme" } });
+    expect(sel(rendered([...ON, "--set", "nodeSelector.disk=nvme", "--set", "hosted.gateway.nodeSelector.zone=b"]))).toEqual({ gateway: { zone: "b" }, worker: { zone: "b" } });
+  }, HELM_TEST_MS);
+
+  test("the module audit's retention keeps a hosted session's files as long as the person audit, with hosted mode on only", () => {
+    type CronJob = { spec: { jobTemplate: { spec: { template: { spec: { containers: { env: Env[] }[] } } } } } };
+    const env = (docs: NonNullable<Doc>[]) => (find(docs, "CronJob", "wrathbench-log-retention") as unknown as CronJob).spec.jobTemplate.spec.template.spec.containers[0]!.env;
+    expect(env(rendered(HOSTED)).find((e) => e.name === "WRATHBENCH_LOG_RETENTION_HOSTED_DAYS")?.value).toBe("30");
+    expect(env(rendered([])).some((e) => e.name === "WRATHBENCH_LOG_RETENTION_HOSTED_DAYS")).toBe(false);
+  }, HELM_TEST_MS);
+
   test("the gateway's Role is pods in its own namespace", () => {
     const docs = rendered(ON);
     const role = find(docs, "Role", "wrathbench-gateway");

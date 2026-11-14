@@ -80,6 +80,11 @@ spec:
                   value: /azerothcore/env/dist/logs/wrathbench
                 - name: WRATHBENCH_LOG_RETENTION_DAYS
                   value: {{ $r.days | quote }}
+                {{- if and (include "wrathbench.on.hosted" .) $r.hostedDays }}
+                # A hosted session's audit, kept as long as the gateway's person audit that points at it.
+                - name: WRATHBENCH_LOG_RETENTION_HOSTED_DAYS
+                  value: {{ $r.hostedDays | quote }}
+                {{- end }}
                 {{- if include "wrathbench.on.worlds" $ }}
                 # The worlds' console logs, saved at each world's teardown.
                 - name: WRATHBENCH_WORLDS_DIR

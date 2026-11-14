@@ -562,7 +562,8 @@ describe("chart eviction guards", () => {
     let guards = 0;
     for (const rel of templates) {
       const src = read(rel);
-      specs += [...src.matchAll(/^\s*nodeSelector: \{\{ toYaml \.Values\.nodeSelector/gm)].length;
+      // A workload with a selector of its own falls back to the chart's: `toYaml (default .Values.nodeSelector …)`.
+      specs += [...src.matchAll(/^\s*nodeSelector: \{\{ toYaml (?:\(default )?\.Values\.nodeSelector/gm)].length;
       guards += [...src.matchAll(/^\s*priorityClassName: \{\{ \. \}\}$/gm)].length;
     }
     expect(specs).toBeGreaterThan(5);

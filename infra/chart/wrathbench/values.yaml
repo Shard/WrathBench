@@ -344,6 +344,11 @@ worldserver:
   # audit at any time, never its whole log.
   logRetention:
     days: 3
+    # With `hosted` on, a hosted session's audit files (fingerprints starting
+    # 0000, which the hosted gateway's tokens all have) are kept this long
+    # instead: as long as the gateway's person audit, whose lease lines point
+    # at them. 0 keeps them `days` like the rest.
+    hostedDays: 30
     schedule: "30 2 * * *"
     resources:
       requests:
@@ -597,6 +602,10 @@ hosted:
     # admits.
     podSecurity: restricted
     secretName: wrathbench-hosted
+    # Where the gateway and its workers run. Empty is the chart's
+    # `nodeSelector`, the node `data` is on; the hosted volume is RWO like
+    # `data`, so the gateway and every worker must share one node.
+    nodeSelector: {}
     port: 8095
     # Serve the program's tools beside the core ones.
     program: true

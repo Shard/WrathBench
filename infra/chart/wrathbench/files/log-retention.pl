@@ -56,8 +56,15 @@
 # and never written again, so age is its whole rule, and one quiet for the
 # window is deleted. The world's record beside it (`world.json`) is kept.
 #
+# A hosted session's files are kept longer when WRATHBENCH_LOG_RETENTION_HOSTED_DAYS
+# is set above the window: every token a hosted gateway leases has a
+# fingerprint starting `0000` (wrath-mcp mcp/src/hosted/tokens.ts), so a file
+# named so is judged against that window instead, as long as the gateway's
+# person audit whose lease lines point at it. The operator's own sessions
+# share the prefix about once in 65,536 and are then kept longer too.
+#
 # Environment: WRATHBENCH_AUDIT_DIR, WRATHBENCH_LOG_RETENTION_DAYS (0 or empty
-# disables), WRATHBENCH_WORLDS_DIR (unset: no worlds pass),
+# disables), WRATHBENCH_LOG_RETENTION_HOSTED_DAYS (optional), WRATHBENCH_WORLDS_DIR (unset: no worlds pass),
 # WRATHBENCH_MODULE_HOST (host:port), WRATHBENCH_MODULE_SECRET (or
 # AC_WRATH_BENCH_SECRET, the worldserver's own), DRY_RUN (non-empty: report
 # only), WRATHBENCH_RETENTION_HOLDER_PID (the process whose descriptors are
@@ -81,6 +88,8 @@ if ($days eq '' || $days !~ /^\d+(?:\.\d+)?$/ || $days == 0) {
 my $window = $days * 86400;
 my $now    = time;
 my $cutoff = $now - $window;
+my $hosted_days   = $ENV{WRATHBENCH_LOG_RETENTION_HOSTED_DAYS} // '';
+my $hosted_cutoff = ($hosted_days =~ /^\d+(?:\.\d+)?$/ && $hosted_days > $days) ? $now - $hosted_days * 86400 : undef;
 my $today  = strftime('%Y-%m-%d', gmtime $now);    # the day file the writer opens now; any earlier date is closed to it
 
 # --- the server's start, from the module -----------------------------------
@@ -147,8 +156,8 @@ if (defined $holder && opendir my $fdd, "/proc/$holder/fd") {
 
 # --- the pass ---------------------------------------------------------------
 opendir my $dh, $dir or do { print STDERR "log retention: cannot read the audit dir: $!\n"; exit 1 };
-my %n = map { $_ => 0 } qw(deleted pastday truncated kept empty held failed);
-my %b = map { $_ => 0 } qw(deleted pastday truncated kept held);
+my %n = map { $_ => 0 } qw(deleted pastday truncated kept hosted empty held failed);
+my %b = map { $_ => 0 } qw(deleted pastday truncated kept hosted held);
 for my $name (readdir $dh) {
     next if $name eq '.' || $name eq '..';
     my $path = "$dir/$name";
@@ -156,6 +165,8 @@ for my $name (readdir $dh) {
     next unless -f _;    # plain files only; never follow a link, never recurse
     my ($dev, $ino, $size, $mtime) = @st[0, 1, 7, 9];
     if ($mtime > $cutoff) { $n{kept}++; $b{kept} += $size; next }
+    # A hosted session's file, within the longer window: kept, and counted apart.
+    if (defined $hosted_cutoff && $name =~ /\A0000/ && $mtime > $hosted_cutoff) { $n{hosted}++; $b{hosted} += $size; next }
     if ($held{"$dev:$ino"}) { $n{held}++; $b{held} += $size; next }
     # The date is the name's last dotted part before .jsonl: a token may carry
     # dots of its own, so nothing earlier in the name is read.
@@ -199,6 +210,7 @@ print "log retention: window ${days}d, $server\n";
 printf "  deleted:   %5d files, %s  (quiet for the window: %d past day file(s), %s; the rest closed before the server started)\n", $n{deleted}, $gb->($b{deleted}), $n{pastday}, $gb->($b{pastday});
 printf "  truncated: %5d files, %s  (quiet for the window, written since the server started: emptied in place, deleted after the next restart)\n", $n{truncated}, $gb->($b{truncated});
 printf "  kept:      %5d files, %s  (written within the window)\n", $n{kept}, $gb->($b{kept});
+printf "  hosted:    %5d files, %s  (a hosted session's, kept for %sd)\n", $n{hosted}, $gb->($b{hosted}), $hosted_days if defined $hosted_cutoff;
 printf "  empty:     %5d files              (already emptied, awaiting a server restart)\n", $n{empty};
 printf "  held:      %5d files, %s  (open in the server process beside this run; never touched)\n", $n{held}, $gb->($b{held}) if $held_checked;
 printf "  failed:    %5d files              (the operation was refused; see the job's exit status)\n", $n{failed} if $n{failed};
