@@ -576,7 +576,7 @@ const RATE_LIMIT_HINTS = /rate.?limit|too many requests/i;
  * model requires moderation and your input was flagged"), not the key's
  * access: it stays fatal rather than pausing as `no-access`.
  */
-const MODERATION_HINTS = /moderation|flagged/i;
+export const MODERATION_HINTS = /moderation|flagged/i;
 // Transient upstream-provider failures that aggregators wrap in 4xx bodies:
 // OpenRouter's 404 "Provider returned error" (with provider_name metadata)
 // mid-episode, OpenCode Zen's 400 type:"server_error" "Upstream request
