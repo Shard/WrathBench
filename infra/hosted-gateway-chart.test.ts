@@ -18,7 +18,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import type { Pod } from "./k8s-client";
-import { workerPod } from "./hosted/pod-workers";
+import { volumeSubPath, workerPod } from "./hosted/pod-workers";
 
 const chart = join(import.meta.dir, "chart", "wrathbench");
 const helm = Bun.which("helm");
@@ -100,8 +100,22 @@ describe.skipIf(helm === null)("the hosted gateway in the chart", () => {
     expect((c.volumeMounts ?? []).map((m) => m.name).sort()).toEqual(["tenant", "tmp"]);
     expect(w.spec.volumes?.map((v) => v.name).sort()).toEqual(["tenant", "tmp"]);
     // And it is a template the provider accepts: the secret and the directory are what it adds.
-    const pod = workerPod(w, "pat-1", "s".repeat(64));
-    expect(pod.spec.containers[0]!.volumeMounts?.find((m) => m.name === "tenant")?.subPath).toBe("tenants/pat-1");
+    const pod = workerPod(w, "pat-1", "s".repeat(64), "state/tenants/pat-1");
+    expect(pod.spec.containers[0]!.volumeMounts?.find((m) => m.name === "tenant")?.subPath).toBe("state/tenants/pat-1");
+    // No kubelet probe: the namespace's default-deny would drop it; the gateway tries the worker's port itself.
+    expect(JSON.stringify(w)).not.toContain("Probe");
+    expect(JSON.stringify(find(docs, "Deployment", "wrathbench-gateway"))).not.toContain("Probe");
+  }, HELM_TEST_MS);
+
+  test("the provider's volume root is where the gateway mounts the volume, and the gateway's state is under it", () => {
+    const docs = rendered(ON);
+    const g = gateway(docs);
+    const root = g.env?.find((e) => e.name === "WRATHBENCH_HOSTED_ROOT")?.value;
+    expect(g.volumeMounts?.find((m) => m.name === "hosted")?.mountPath).toBe(root!);
+    const state = g.command![g.command!.indexOf("--state") + 1]!;
+    // A credential's directory as the gateway prepares it maps to a subPath of the same volume.
+    expect(volumeSubPath(root!, `${state}/tenants/pat-1`)).toBe("state/tenants/pat-1");
+    expect(g.command![g.command!.indexOf("--grants") + 1]!.startsWith(`${root}/`)).toBe(true);
   }, HELM_TEST_MS);
 
   test("the gateway's Role is pods in its own namespace", () => {

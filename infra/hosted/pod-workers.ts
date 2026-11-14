@@ -14,14 +14,18 @@
  * The provider sets three things on the template and nothing else: the pod's
  * credential label, the worker's secret (an env value: only the gateway's
  * ServiceAccount can read pods in this namespace, and the worker's port
- * admits only the gateway), and the subPath of the `tenant` mount. It waits
- * for the pod to be Ready (its readiness probe is the worker's port) and
- * hands the gateway the pod's address. A gateway that restarts cannot reach
+ * admits only the gateway), and the subPath of the `tenant` mount: the
+ * credential's directory as the gateway prepared it, relative to where the
+ * gateway mounts the same volume. It waits for the pod to run and its worker
+ * to accept on its port, tried from the gateway itself, and hands the
+ * gateway the pod's address. A gateway that restarts cannot reach
  * its old workers (only it knew their secrets), so `reapStale` deletes every
  * worker pod of the release at start rather than waiting for them to exit.
  */
 
 import { readFileSync } from "node:fs";
+import { connect } from "node:net";
+import { isAbsolute, relative } from "node:path";
 import type { WorkerHandle, WorkerProvider } from "@wrathbench/mcp/hosted/workers";
 import type { K8sClient, Pod, PodEnvVar } from "../k8s-client";
 
@@ -34,6 +38,9 @@ export const WORKER_CONTAINER = "worker";
 export const TENANT_MOUNT = "tenant";
 /** The label naming a worker pod's credential. */
 export const CREDENTIAL_LABEL = "wrathbench.io/credential";
+/** Where the chart mounts the hosted volume into the gateway's pod; a credential's directory is a path under it. */
+export const HOSTED_ROOT_ENV = "WRATHBENCH_HOSTED_ROOT";
+export const DEFAULT_HOSTED_ROOT = "/data/hosted";
 /** The env var the worker reads its secret from (wrath-mcp `hosted/worker.ts`). */
 export const WORKER_SECRET_ENV = "WRATH_MCP_WORKER_SECRET";
 
@@ -41,6 +48,12 @@ export interface PodWorkersOptions {
   client: K8sClient;
   /** The rendered pod template. */
   template: Pod;
+  /**
+   * Where the hosted volume is mounted in the gateway's own pod. A
+   * credential's directory, as the gateway names it, is a path under this,
+   * and the same path within the volume is the worker's subPath.
+   */
+  mountRoot: string;
   /** How long a pod may take to be Ready. Default 180 s: a fresh node may pull the image. */
   startTimeoutMs?: number;
   /** How often a starting or running pod is read back. */
@@ -76,8 +89,18 @@ export function workerSelector(template: Pod): string {
   return keys.map((k) => `${k}=${labels[k]}`).join(",");
 }
 
+/**
+ * The subPath, within the hosted volume, of a credential's directory as the
+ * gateway names it under `mountRoot`. Refused outside it.
+ */
+export function volumeSubPath(mountRoot: string, dir: string): string {
+  const rel = relative(mountRoot, dir);
+  if (rel.length === 0 || rel.startsWith("..") || isAbsolute(rel)) throw new Error(`${dir} is not a directory under the hosted volume (${mountRoot})`);
+  return rel;
+}
+
 /** The pod for one credential's worker: the template with its label, its secret and its directory. */
-export function workerPod(template: Pod, credential: string, secret: string): Pod {
+export function workerPod(template: Pod, credential: string, secret: string, subPath: string): Pod {
   if (!/^[a-z0-9][a-z0-9_-]{0,62}$/.test(credential)) throw new Error(`not a credential id: ${credential}`);
   const pod = structuredClone(template);
   pod.metadata.labels = { ...(pod.metadata.labels ?? {}), [CREDENTIAL_LABEL]: credential };
@@ -86,11 +109,25 @@ export function workerPod(template: Pod, credential: string, secret: string): Po
     throw new Error(`the worker template must carry neither ${WORKER_SECRET_ENV} nor WRATHBENCH_MODULE_SECRET`);
   }
   c.env = [...(c.env ?? []), { name: WORKER_SECRET_ENV, value: secret } satisfies PodEnvVar];
-  tenantMount(pod).subPath = `tenants/${credential}`;
+  tenantMount(pod).subPath = subPath;
   return pod;
 }
 
-const ready = (p: Pod): boolean => p.status?.podIP !== undefined && (p.status.conditions ?? []).some((c) => c.type === "Ready" && c.status === "True");
+const running = (p: Pod): boolean => p.status?.phase === "Running" && p.status.podIP !== undefined;
+
+/** Whether something accepts a TCP connection at host:port; closed at once. */
+function accepts(host: string, port: number, timeoutMs = 1_000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const s = connect({ host, port });
+    const done = (ok: boolean) => {
+      s.destroy();
+      resolve(ok);
+    };
+    s.setTimeout(timeoutMs, () => done(false));
+    s.once("connect", () => done(true));
+    s.once("error", () => done(false));
+  });
+}
 const ended = (p: Pod | null): boolean => p === null || p.status?.phase === "Succeeded" || p.status?.phase === "Failed" || p.metadata.deletionTimestamp !== undefined;
 
 export class PodWorkers implements WorkerProvider {
@@ -120,18 +157,21 @@ export class PodWorkers implements WorkerProvider {
 
   async start(o: { credential: string; secret: string; dir: string }): Promise<WorkerHandle> {
     const port = this.port;
-    const created = await this.o.client.createPod(workerPod(this.o.template, o.credential, o.secret));
+    const created = await this.o.client.createPod(workerPod(this.o.template, o.credential, o.secret, volumeSubPath(this.o.mountRoot, o.dir)));
     const name = created.metadata.name;
     if (name === undefined) throw new Error("the API created a worker pod with no name");
     const poll = this.o.pollMs ?? 500;
     const until = Date.now() + (this.o.startTimeoutMs ?? 180_000);
     let pod: Pod | null = created;
+    // Ready is the worker accepting on its port, tried from here: the gateway's
+    // own egress admits it, where a kubelet probe would need a hole in the
+    // namespace's default-deny ingress.
     for (;;) {
       pod = await this.o.client.getPod(name);
-      if (pod !== null && ready(pod)) break;
+      if (pod !== null && running(pod) && (await accepts(pod.status!.podIP!, port))) break;
       if (ended(pod) || Date.now() > until) {
         await this.o.client.deletePod(name, 0).catch(() => {});
-        const why = pod === null ? "it was deleted" : ended(pod) ? `it ended (${pod.status?.phase ?? "deleting"})` : "it was not Ready in time";
+        const why = pod === null ? "it was deleted" : ended(pod) ? `it ended (${pod.status?.phase ?? "deleting"})` : "it did not accept on its port in time";
         throw new Error(`the worker pod ${name} for ${o.credential} did not start: ${why}`);
       }
       await Bun.sleep(poll);

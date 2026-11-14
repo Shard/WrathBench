@@ -2846,6 +2846,19 @@ worker pods are the boundary between tenants and the port secret only where
 the cluster's CNI enforces NetworkPolicy and the namespace's Pod Security
 level (`restricted`) admits the pods, so check both before inviting anyone.
 
+Three things that follow from the design:
+
+- **No readiness probes.** The namespace admits nothing but MCP from the
+  ingress controller, and a CNI may hold the kubelet's probes to that. So
+  the gateway has none, and it decides a worker is up by connecting to its
+  port itself, which its own egress admits.
+- **One node.** The hosted volume is RWO like `data`, so the gateway and every
+  worker must land on one node: set `nodeSelector`, as `data` already
+  requires. Without it a worker scheduled elsewhere fails to attach.
+- **The worker channel is plain TCP** on the pod network, carrying lease
+  secrets. Only the gateway can open it, and only with the worker's own
+  secret, and the policies keep everything else off the worker's port.
+
 **Turning it on**, after "Turning it on" above and with a pin that carries
 the gateway (wrath-mcp#59–#62):
 

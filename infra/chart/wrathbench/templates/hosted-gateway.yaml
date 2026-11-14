@@ -34,16 +34,14 @@ spec:
       workingDir: /wrathbench
       # No .env is read: the worker's only secret is its own, which the gateway sets (infra/hosted/pod-workers.ts).
       command: ["/usr/bin/tini", "--", "bun", "--no-env-file", "infra/hosted/worker.ts", "--host", "0.0.0.0", "--port", "{{ $g.worker.port }}", "--hello-wait-ms", "{{ $g.worker.helloWaitMs }}"]
+      # No readiness probe: the gateway tries the port itself (infra/hosted/pod-workers.ts), which the
+      # namespace's policies admit, where the kubelet's probe would need a hole in its default-deny ingress.
       ports:
         - name: worker
           containerPort: {{ $g.worker.port }}
-      readinessProbe:
-        tcpSocket:
-          port: {{ $g.worker.port }}
-        periodSeconds: 1
       resources: {{ toYaml $g.worker.resources | nindent 8 }}
       volumeMounts:
-        # The credential's own directory: the gateway sets the subPath, tenants/<credential>.
+        # The credential's own directory: the gateway sets the subPath, state/tenants/<credential>.
         - name: tenant
           mountPath: /tenant
         - name: tmp
@@ -229,14 +227,14 @@ spec:
               value: {{ join "," (fromJsonArray (include "wrathbench.operatorAccounts" .)) | quote }}
             - name: WRATHBENCH_HOSTED_WORKER_TEMPLATE
               value: /etc/wrathbench/hosted/worker.json
+            # Where the hosted volume is mounted here: a credential's directory under it is the worker's subPath.
+            - name: WRATHBENCH_HOSTED_ROOT
+              value: /data/hosted
+          # No readiness probe, for the same reason as the worker's: the namespace's default-deny admits
+          # MCP from the ingress controller only.
           ports:
             - name: mcp
               containerPort: {{ $g.port }}
-          readinessProbe:
-            httpGet:
-              path: /healthz
-              port: {{ $g.port }}
-            periodSeconds: 5
           resources: {{ toYaml $g.resources | nindent 12 }}
           volumeMounts:
             - name: hosted

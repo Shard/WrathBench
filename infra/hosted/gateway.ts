@@ -19,7 +19,7 @@ import { existsSync } from "node:fs";
 import { gatewayMain, parseGatewayArgs } from "@wrathbench/mcp/hosted/gateway";
 import { emptyGrantsFile, readGrantsFile, writeGrantsFile } from "@wrathbench/mcp/hosted/grants";
 import { K8sClient } from "../k8s-client";
-import { PodWorkers, readWorkerTemplate } from "./pod-workers";
+import { DEFAULT_HOSTED_ROOT, HOSTED_ROOT_ENV, PodWorkers, readWorkerTemplate } from "./pod-workers";
 
 /** The accounts the chart reserves, comma-separated. */
 export const RESERVED_ENV = "WRATHBENCH_HOSTED_RESERVED";
@@ -56,7 +56,7 @@ if (import.meta.main) {
     console.error("the hosted gateway starts its workers as pods and needs the in-cluster API (a ServiceAccount token); off the cluster, run wrath-mcp's own gateway, whose workers are local processes");
     process.exit(2);
   }
-  const workers = new PodWorkers({ client, template: readWorkerTemplate(), log });
+  const workers = new PodWorkers({ client, template: readWorkerTemplate(), mountRoot: process.env[HOSTED_ROOT_ENV] ?? DEFAULT_HOSTED_ROOT, log });
   await workers.reapStale();
   await gatewayMain(argv, { workers });
 }
