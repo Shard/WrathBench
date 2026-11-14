@@ -28,7 +28,7 @@ import {
   resumeSessionNote,
   SYSTEM_PROMPT,
 } from "../src/prompt";
-import { carryProgramFiles, configFromArgs } from "../src/run";
+import { carryProgramFiles, configFromArgs, dropCarriedProgramFiles } from "../src/run";
 import { parseRunArgs } from "../src/run-flags";
 import type { SandboxHost } from "../src/sandbox/host";
 import { callTool, coerceToolArgs, isKnownTool, toolsFor, TOOLS } from "../src/tools";
@@ -155,6 +155,17 @@ describe("config, flags and the tuple", () => {
     expect(readdirSync(join(to, "program")).sort()).toEqual(["files"]);
     // A snippet-loop predecessor has no files: the workspace starts empty.
     expect(carryProgramFiles(tempDir("wrathbench-carry-none-"), tempDir("wrathbench-carry-to2-"))).toBe(false);
+  });
+
+  test("a continuation whose character is gone drops the files it carried, before the sandbox loads them", () => {
+    const from = tempDir("wrathbench-drop-from-");
+    const to = tempDir("wrathbench-drop-to-");
+    mkdirSync(join(from, "program", "files"), { recursive: true });
+    writeFileSync(join(from, "program", "files", "main.ts"), "export async function grind() {}\n");
+    writeFileSync(join(from, "program", "files", "memory.json"), '{"phase":"grind"}');
+    expect(carryProgramFiles(from, to)).toBe(true);
+    dropCarriedProgramFiles(to);
+    expect(readdirSync(join(to, "program", "files"))).toEqual([]);
   });
 
   test("both flags parse, and an arm may carry them", () => {

@@ -198,7 +198,8 @@ describe("the objective replaces the broad goal, and the probe states its clock 
   });
 
   test("the Deadmines tank is told its objective in place of the goal, and that the run lasts four hours", () => {
-    const c = configFromArgs([...MODEL, "--episode", "probing", "--campaign-file", fileOn(tankFile()), "--character", "Tankpartyb"], {});
+    // The snippet loop's arm, whose prompt this checks; the objective takes the goal's place on either loop.
+    const c = configFromArgs([...MODEL, "--episode", "probing", "--campaign-file", fileOn(tankFile()), "--character", "Tankpartyb", "--loop", "snippet"], {});
     expect(c.watchdogs.episodeMs).toBe(14_400_000);
     const objective = dm.party!.members.find((m) => m.id === "tank")!.objective!;
     for (const harness of ["wrathbench", "claude-code"] as const) {

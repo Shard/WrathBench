@@ -52,7 +52,7 @@ const HOUR = 3_600_000;
 interface SynthRun {
   id: string;
   model: string;
-  /** A claude-code entry's run: the snippet loop, stamped with no loop key. */
+  /** A run on the snippet loop, stamped with no loop key. */
   snippet?: boolean;
   effort?: string;
   episode?: string;
@@ -85,8 +85,7 @@ function writeRun(runsDir: string, r: SynthRun): void {
           ...(r.episode !== undefined ? { episode: r.episode } : {}),
           ...(r.override ? { episodeOverride: true } : {}),
           // The loop the entry launches now, so its runs count toward its
-          // targets: the program loop with yield on openai, the snippet loop
-          // on claude-code.
+          // targets: the program loop with yield on openai and claude-code.
           ...(r.snippet === true ? {} : { loop: "program", yield: true }),
         },
       }),
@@ -131,10 +130,10 @@ beforeAll(() => {
   writeRun(runsDir, { id: "glm-2", model: "z-ai/glm:free", episode: "e90", responses: 0, reason: null, startedAt: NOW - 40 * 60_000, endedAt: null, mtime: NOW - 30 * 60_000 });
   writeRun(runsDir, { id: "glm-3", model: "z-ai/glm:free", episode: "e90", responses: 0, reason: "adapter-error", startedAt: NOW - 5 * 60_000, endedAt: NOW - 60_000 });
   // sonnet: one counted run, no level 5; a pre-tier run (no episode stamp) that must be invisible.
-  writeRun(runsDir, { id: "sonnet-1", model: "sonnet", snippet: true, episode: "e90", responses: 50, level: 4, reason: "episode-limit", startedAt: t0, endedAt: t0 + HOUR });
-  writeRun(runsDir, { id: "sonnet-old", model: "sonnet", snippet: true, responses: 50, level: 9, reason: "episode-limit", startedAt: t0 - HOUR, endedAt: t0 });
+  writeRun(runsDir, { id: "sonnet-1", model: "sonnet", episode: "e90", responses: 50, level: 4, reason: "episode-limit", startedAt: t0, endedAt: t0 + HOUR });
+  writeRun(runsDir, { id: "sonnet-old", model: "sonnet", responses: 50, level: 9, reason: "episode-limit", startedAt: t0 - HOUR, endedAt: t0 });
   // sonnet-low: an answered run that is LIVE (mtime just now, no termination) -> counted, not stillborn.
-  writeRun(runsDir, { id: "sonnet-low-1", model: "sonnet", snippet: true, effort: "low", episode: "e90", responses: 3, level: 1, reason: null, startedAt: NOW - 60_000, endedAt: null, mtime: NOW - 10_000 });
+  writeRun(runsDir, { id: "sonnet-low-1", model: "sonnet", effort: "low", episode: "e90", responses: 3, level: 1, reason: null, startedAt: NOW - 60_000, endedAt: null, mtime: NOW - 10_000 });
   // local: one run from the previous series and one extra run this series — both visible, neither counted.
   writeRun(runsDir, { id: "local-old", model: "qwen/q", episode: "e90", responses: 20, level: 7, reason: "episode-limit", startedAt: t0, endedAt: t0 + HOUR, harnessVersion: "harness-0.2-33-gabc" });
   writeRun(runsDir, { id: "local-x", model: "qwen/q", episode: "e90", responses: 20, level: 2, reason: "episode-limit", startedAt: t0 + 6 * HOUR, endedAt: t0 + 7 * HOUR, extra: true });
@@ -1217,6 +1216,8 @@ describe("claude-code defaults its compaction window to 300k (operator, 2026-11-
     episodeOverride: false,
     harnessVersion: null,
     harnessSeries: null,
+    loop: "program",
+    yield: true,
     extra: false,
     startedAt: NOW4 - (100 - i) * H,
     endedAt: NOW4 - (99 - i) * H,
@@ -1336,8 +1337,10 @@ describe("a target counts the runs of the loop its entry launches (operator, 202
     expect(countsTowardTarget({}, "openai")).toBe(false);
     expect(countsTowardTarget({ loop: "program" }, "codex")).toBe(true);
     expect(countsTowardTarget({ loop: "program", yield: true }, "codex")).toBe(false);
-    expect(countsTowardTarget({}, "claude-code")).toBe(true);
-    expect(countsTowardTarget({ loop: "program" }, "claude-code")).toBe(false);
+    expect(countsTowardTarget({ loop: "program", yield: true }, "claude-code")).toBe(true);
+    expect(countsTowardTarget({}, "claude-code")).toBe(false);
+    expect(countsTowardTarget({}, "pi")).toBe(true);
+    expect(countsTowardTarget({ loop: "program" }, "pi")).toBe(false);
     // An entry with no driver is on the default one.
     expect(countsTowardTarget({ loop: "program", yield: true }, undefined)).toBe(true);
   });

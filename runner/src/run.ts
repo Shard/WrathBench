@@ -297,7 +297,8 @@ export function configFromArgs(
     // `--yield` when given, else the driver's default (`launchLoopOf`).
     // Identity like the rest, so a resume keeps the loop it launched on.
     ...launchLoopOf(
-      { driver: isDriver(driverArg) ? driverArg : DEFAULT_DRIVER, fanout },
+      // A probe's fan-out grant is its campaign file's, so it is read there too.
+      { driver: isDriver(driverArg) ? driverArg : DEFAULT_DRIVER, fanout: fanout ?? (probe as { fanout?: unknown } | undefined)?.fanout },
       { loop: loopOf(args["loop"]), yield: flag(args["yield"]) },
     ),
     // The roster entry's own billing, when it stated one; identity like the

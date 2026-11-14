@@ -1034,7 +1034,7 @@ export function defaultLoopOf(c: { driver: Driver; fanout?: unknown }): { loop: 
  * calls and was measured without it. Never on a driver that is not a model.
  */
 export function yieldDefaultOf(driver: Driver): boolean {
-  return runsProgramLoop(driver) && !isUnscoredDriver(driver) && driver !== "codex";
+  return runsProgramLoop(driver) && !isUnscoredDriver(driver) && entryOf(driver).programYieldOff !== true;
 }
 
 /**
