@@ -37,7 +37,7 @@ import { driverEntry } from "./drivers";
 import { episodeIdSchema } from "./episodes";
 import { buildSystemPrompt, programPromptOf } from "./prompt";
 import { routingForRun, routingSchema } from "./routing";
-import { servingSchema, SUBJECT_KINDS, type SubjectKind } from "./serving";
+import { agentSchema, servingSchema, SUBJECT_KINDS, type SubjectKind } from "./serving";
 import type { WikiBundleMeta } from "./wiki";
 
 /**
@@ -230,6 +230,11 @@ export const comparabilitySchema = z.object({
    */
   subject: z.enum(SUBJECT_KINDS).optional(),
   /**
+   * The agent an `external` run declared (`RunConfig.agent`): a KEY of that
+   * harness's own group. ABSENT on every run of ours.
+   */
+  agent: agentSchema.optional(),
+  /**
    * The model id the provider said it actually served — `claude-sonnet-5` for a
    * run launched as `sonnet`.
    *
@@ -373,7 +378,8 @@ export function comparabilityOf(
  * the build is what makes a run local; a run resumed from before the key
  * existed stamps as it did, and a reader derives its kind from its platform.
  */
-export function subjectOfConfig(config: Pick<RunConfig, "serving">): SubjectKind {
+export function subjectOfConfig(config: Pick<RunConfig, "serving" | "driver">): SubjectKind {
+  if (harnessOf(config.driver) === "external") return "external";
   return config.serving !== undefined ? "local" : "hosted";
 }
 
