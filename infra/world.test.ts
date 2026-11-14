@@ -43,6 +43,7 @@ import {
   worldUsedBy,
   writeWorldPointer,
   BOOT_FAILURES_TO_HOLD,
+  fleetWorldViews,
   type WorldDb,
   type WorldK8s,
   type WorldRecord,
@@ -738,5 +739,27 @@ describe("hosted mode: an eval world opens with its own port secret", () => {
     expect(worldAuthHeaders({ WRATHBENCH_MODULE_SECRET: MODULE, WRATHBENCH_WORLDS_MODULE_SECRET: "" })).toEqual({ authorization: `Bearer ${MODULE}` });
     expect(stagingEnvOf(ID, 7878, { WRATHBENCH_WORLDS_MODULE_SECRET: WORLDS })["WRATHBENCH_MODULE_SECRET"]).toBe(WORLDS);
     expect(stagingEnvOf(ID, 7878, {})).not.toHaveProperty("WRATHBENCH_MODULE_SECRET");
+  });
+});
+
+describe("the fleet page's worlds", () => {
+  test("every open world and those ended in the last day, newest first, with the last boot's time and failure", () => {
+    const now = 1_800_000_000_000;
+    const rec = (id: string, createdAt: number, state: WorldRecord["state"], endedAt?: number, boots: WorldRecord["boots"] = []): WorldRecord => ({
+      id, realmId: 2, schema: `acore_characters_${id}`, accounts: ["A"], runIds: [`run-${id}`], owner: { rosterPid: 1, fleetPod: null }, createdAt, images: {}, boots, state, ...(endedAt !== undefined ? { endedAt } : {}),
+    });
+    const views = fleetWorldViews(
+      [
+        rec("waaaaaaaaaa", now - 5_000, "up", undefined, [{ pod: "p", at: 0, readyAt: 31_000, bootMs: 31_000 }]),
+        rec("wbbbbbbbbbb", now - 1_000, "parked", undefined, [{ pod: "p", at: 0, bootMs: 28_000 }, { pod: "q", at: 1, failed: "not ready after 360s" }]),
+        rec("wccccccccc2", now - 2 * 86_400_000, "ended", now - 2 * 86_400_000 + 1),
+        rec("wddddddddd2", now - 3_600_000, "ended", now - 60_000),
+      ],
+      now,
+    );
+    expect(views.map((v) => v.id)).toEqual(["wbbbbbbbbbb", "waaaaaaaaaa", "wddddddddd2"]);
+    expect(views[0]).toMatchObject({ state: "parked", boots: 2, bootMs: 28_000, failed: "not ready after 360s", endedAt: null });
+    expect(views[1]).toMatchObject({ bootMs: 31_000, failed: null });
+    expect(views[2]).toMatchObject({ state: "ended", bootMs: null, endedAt: now - 60_000 });
   });
 });

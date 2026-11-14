@@ -46,6 +46,7 @@ import { digestOf, K8sClient, type Pod, type PodEnvVar } from "./k8s-client";
 import { isQuotaRefusal, readLauncherSettings, ROSTER_PID_LABEL } from "./run-pod";
 import { WORLDS_SECRET_ENV } from "./episode-launcher";
 import { worldsOf, type WorldsSetting } from "./run-fleet-credentials";
+import type { FleetWorldView } from "../runner/viewer/api-types";
 
 // ------------------------------------------------------------------ names
 
@@ -1015,6 +1016,35 @@ export async function reconcileWorlds(o: {
     await db.close();
   }
   return report;
+}
+
+// ------------------------------------------------------- the fleet page
+
+/** How long an ended world stays on the fleet page, and how many are listed at most. */
+export const WORLDS_LISTED_MS = 24 * 3_600_000;
+export const WORLDS_LISTED_MAX = 20;
+
+/** The worlds the fleet page lists: every open one, and those that ended lately, newest first. */
+export function fleetWorldViews(records: readonly WorldRecord[], now: number): FleetWorldView[] {
+  return records
+    .filter((r) => r.state !== "ended" || (r.endedAt !== undefined && now - r.endedAt < WORLDS_LISTED_MS))
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, WORLDS_LISTED_MAX)
+    .map((r) => {
+      const ready = [...r.boots].reverse().find((b) => b.bootMs !== undefined);
+      const last = r.boots.at(-1);
+      return {
+        id: r.id,
+        state: r.state,
+        realmId: r.realmId,
+        runIds: [...r.runIds],
+        createdAt: r.createdAt,
+        endedAt: r.endedAt ?? null,
+        boots: r.boots.length,
+        bootMs: ready?.bootMs ?? null,
+        failed: last?.failed ?? null,
+      };
+    });
 }
 
 // ------------------------------------------------------------- loading

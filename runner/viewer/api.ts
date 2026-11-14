@@ -660,6 +660,8 @@ export function readFleet(runsDir: string, now = Date.now(), cold: ReadonlySet<s
       jobs?: Record<string, Omit<FleetJobView, "name" | "accountClass" | "runId" | "model">>;
       accounts?: { pinned?: Record<string, string>; pool?: Record<string, string | null> };
       credentials?: FleetResponse["credentials"];
+      worlds?: FleetResponse["worlds"];
+      worldsHold?: string;
       paused?: FleetPausedView[];
       ended?: FleetResponse["ended"];
       session?: FleetSessionView;
@@ -729,6 +731,8 @@ export function readFleet(runsDir: string, now = Date.now(), cold: ReadonlySet<s
       ended: Array.isArray(raw.ended) ? raw.ended : [],
       ...(raw.session !== undefined ? { session: raw.session } : {}),
       ...(Array.isArray(raw.credentials) ? { credentials: raw.credentials } : {}),
+      ...(Array.isArray(raw.worlds) ? { worlds: raw.worlds } : {}),
+      ...(typeof raw.worldsHold === "string" ? { worldsHold: raw.worldsHold } : {}),
       now,
     };
   } catch {

@@ -831,6 +831,10 @@ export default function RunDetail() {
                       </div>
                       <div class="sub">
                         {run().platform ?? "—"} · {shortHarness(run().harnessVersion)}
+                        {/* The world it played on, a world per eval's id; nothing for the shared one. */}
+                        <Show when={run().world !== undefined && run().world !== "shared" ? run().world : undefined}>
+                          {(w) => <span class="mono" title="world"> · {w()}</span>}
+                        </Show>
                       </div>
                       {/* The id the provider actually served, plus the CLI that
                           drove it: `sonnet` is a roster alias the Claude Code CLI

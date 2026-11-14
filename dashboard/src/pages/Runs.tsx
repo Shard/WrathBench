@@ -416,6 +416,14 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
                 {kindOf(r())}
               </a>
             </Show>
+            {/* The world per eval it played on; nothing for the shared one. */}
+            <Show when={r().world !== undefined && r().world !== "shared" ? r().world : undefined}>
+              {(w) => (
+                <div class="mono" title="world">
+                  {w()}
+                </div>
+              )}
+            </Show>
           </td>
         );
       case "episode":

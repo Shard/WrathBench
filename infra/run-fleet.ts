@@ -208,7 +208,8 @@ import { formatEndedRun, printDryRun, printLiveRuns, printStatus } from "./run-f
 import { accountHeldBy, drainMarkerPath, releaseRunSession } from "./run-roster";
 import { K8sClient } from "./k8s-client";
 import { DRAIN_POD_QUERY_TIMEOUT_MS, readLauncherSettings, rosterHasRunPod } from "./run-pod";
-import { mysqlWorldDb, reconcileWorlds, worldPodPrefix, worldPodRelease, worldsHold, worldTemplateRefusal, worldUsedBy, WorldStore, WORLDS_DIR } from "./world";
+import type { FleetWorldView } from "../runner/viewer/api-types";
+import { fleetWorldViews, mysqlWorldDb, reconcileWorlds, worldPodPrefix, worldPodRelease, worldsHold, worldTemplateRefusal, worldUsedBy, WorldStore, WORLDS_DIR } from "./world";
 import { runCampaignFile, writeCampaignFile } from "../runner/src/campaign-file";
 import { deleteCodexThread, pruneRollouts, type RolloutPrune } from "../runner/src/codex-rollout";
 import { cliBaseEnv } from "../runner/src/adapter-shared";
@@ -373,6 +374,18 @@ export async function sweepNames(
 
 /** How often the supervisor settles the worlds no roster holds (`reconcileWorlds`); the first is at its start. */
 export const WORLDS_RECONCILE_EVERY_MS = 60 * 60_000;
+
+/** The worlds the fleet page lists, and their boot hold, off the records under data/worlds; nothing when there are none. */
+function worldsState(now: number = Date.now()): { worlds?: FleetWorldView[]; worldsHold?: string } {
+  const dir = join(REPO_ROOT, WORLDS_DIR);
+  try {
+    const views = fleetWorldViews(new WorldStore(dir).list(), now);
+    const hold = worldsHold(dir, now);
+    return { ...(views.length > 0 ? { worlds: views } : {}), ...(hold !== undefined ? { worldsHold: hold } : {}) };
+  } catch {
+    return {};
+  }
+}
 
 /** One reconcile of the worlds, said only when it did or found something. */
 async function runWorldsReconcile(store: WorldStore, say: (s: string) => void): Promise<void> {
@@ -776,6 +789,7 @@ function writeState(
     ...(preflight !== undefined ? { preflight } : {}),
     ...(preflightInFlight !== undefined ? { preflightInFlight } : {}),
     ...(pauseSwitch !== undefined ? { pausedSwitch: pauseSwitch } : {}),
+    ...worldsState(),
     ...(lastCredentials !== undefined ? { credentials: credentialStatuses({ ...lastCredentials, reads: goUsage.lastReads(), secrets: resolveStoreSecrets(process.env) }) } : {}),
     ...(pool !== undefined
       ? {

@@ -603,6 +603,7 @@ export class Ingester {
       resolved_model: str(r["resolved_model"]) || str(resolved["model"]),
       resolved_cli_version: str(r["resolved_cli_version"]) || str(resolved["cliVersion"]),
       continued_from: str(r["continued_from"]) || str(config["continuedFrom"]),
+      world_id: str(config["world"]),
       termination_reason: str(r["termination_reason"]),
       termination_detail: str(r["termination_detail"]),
       pause_reason: str(r["pause_reason"]),

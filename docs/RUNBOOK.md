@@ -1976,6 +1976,13 @@ record is deleted. A world schema or realm row no record holds is only
 listed, in the fleet log and by `bun wb inspect worlds`, and dropping one is
 the operator's call.
 
+**Where to see them.** The private fleet page lists the open worlds and those
+ended in the last day: state, realm, boot time and runs, with a banner while
+failed boots hold them. A run's page and its row on the runs list name its
+world. The public site carries no world id. The collector writes the world to
+`runs.world_id`; a store made before the column gets it on its next start, and
+its older rows fill on a `--replay`.
+
 **Measuring the first world.** Beside the boot itself, note how long the
 fleet pod takes to resolve a new world's `<id>.worlds` name: the boot waits
 on its module's `/health` at that name.

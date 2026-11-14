@@ -86,6 +86,10 @@ const POISON = {
   preflightTail: "poison-smoke-tail: Fixturely says hello",
   wikiSource: "poison-wowdump-20100901.xml.bz2",
   smuggled: "poison-smuggled-value",
+  // A world per eval's id, its hold and its boot failure: the operator's.
+  world: "wpoisonwrld",
+  worldsHold: "poison-worlds-held: 3 boots failed",
+  worldFailed: "poison-world-boot-failed: pod wrathbench-world-x",
   // Game prose, as the entry window can carry it (docs/DATA-AND-LEGAL.md,
   // "Trajectory logs"): every field the redactor enumerates gets one.
   questDetails: "prose-quest-details: the kobolds have grown bold",
@@ -221,6 +225,7 @@ function runRowFixture(): RunRow {
     // A roster name and a requested image (with its registry host) never reach a public row.
     ref: "fixture-roster-name",
     image: "registry.lab.internal/wb/runner:t1",
+    world: POISON.world,
     continuedFrom: "fixture-run-0",
     extra: false,
     character: CHARACTER_NAME,
@@ -327,6 +332,7 @@ function resultsFixture(): ResultsResponse {
         cell: "cell-a",
         campaignVersion: 2,
         arm: "base",
+        world: POISON.world,
         ref: "fixture-roster-name",
         image: "registry.lab.internal/wb/runner:t1",
         effort: "high",
@@ -1921,6 +1927,8 @@ describe("projectFleet", () => {
         }),
       ],
       accounts: [smuggle<FleetAccountView>({ account: "RUNNER", class: "pool", job: "job-a" })],
+      worlds: [{ id: POISON.world, state: "up", realmId: 7, runIds: ["fixture-run-1"], createdAt: 1, endedAt: null, boots: 2, bootMs: 31_000, failed: POISON.worldFailed }],
+      worldsHold: POISON.worldsHold,
       paused: [
         smuggle({
           runId: "p-1",

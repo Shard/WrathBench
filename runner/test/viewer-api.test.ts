@@ -852,6 +852,17 @@ describe("fleet state", () => {
     ]);
   });
 
+  test("the worlds and their hold are forwarded as the supervisor wrote them", () => {
+    const runs = fixture();
+    const worlds = [{ id: "wabcdefghij", state: "up", realmId: 2, runIds: [RUN_ID], createdAt: 1, endedAt: null, boots: 1, bootMs: 31_000, failed: null }];
+    jobState(runs, "RUNNER", { worlds, worldsHold: "worlds held: 3 boots failed in a row" });
+    const f = readFleet(runs);
+    expect(f.worlds).toEqual(worlds as never);
+    expect(f.worldsHold).toBe("worlds held: 3 boots failed in a row");
+    jobState(runs, "RUNNER");
+    expect(readFleet(runs)).not.toHaveProperty("worlds");
+  });
+
   test("each job names the run holding its account, and its models", () => {
     const runs = fixture();
     jobState(runs, "RUNNER");

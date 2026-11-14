@@ -433,6 +433,12 @@ export interface RunRow {
    */
   credential?: string;
   lane?: string;
+  /**
+   * The world the run played on (`config.world`): a world per eval's id, or
+   * `shared`. Absent on a run written before worlds. A label, never a key.
+   * Operator-only: a public row carries none.
+   */
+  world?: string;
   harnessVersion: string | null;
   /**
    * The stamped comparability tuple, or null for a run whose metadata predates
@@ -1551,6 +1557,22 @@ export interface FleetServerView {
   updatedAt: number;
 }
 
+/** One world per eval, as the fleet page lists it. */
+export interface FleetWorldView {
+  id: string;
+  state: "booting" | "up" | "parked" | "ended";
+  realmId: number;
+  runIds: string[];
+  createdAt: number;
+  endedAt: number | null;
+  /** Boots so far, the failed ones included. */
+  boots: number;
+  /** The last successful boot's time to ready; null before one. */
+  bootMs: number | null;
+  /** The last boot's failure, when it failed; else null. */
+  failed: string | null;
+}
+
 /**
  * The supervisor's published state. `present: false` is the normal answer on a
  * machine where the fleet has never run — it is not an error.
@@ -1578,6 +1600,14 @@ export interface FleetResponse extends SnapshotEnvelope {
    * its value), what it holds, the newest failure that indicts it.
    * Operator-only: the public build ships none (`projectFleet`).
    */
+  /**
+   * The worlds per eval the supervisor holds or held lately, newest first
+   * (`fleetWorldViews`, infra/world.ts). Operator-only: the public build
+   * ships none (`projectFleet`).
+   */
+  worlds?: FleetWorldView[];
+  /** Why no world may be booted now (`worldsHold`); absent when none holds them. */
+  worldsHold?: string;
   credentials?: {
     id: string;
     provider: string;
@@ -1959,6 +1989,8 @@ export interface ResultRun {
    * — and already public on `RunRow.driver`, which this mirrors.
    */
   driver?: string | null;
+  /** The world the run played on (`RunRow.world`). Operator-only: the public build ships none. */
+  world?: string;
   platform: string | null;
   harnessVersion: string | null;
   /**

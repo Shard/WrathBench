@@ -41,7 +41,7 @@ import {
 } from "./run-fleet-plan";
 import { type DeferEntry, deferSidecarPath, parseDefers } from "./run-roster";
 import { type Campaign } from "../runner/src/campaigns";
-import type { FleetServerView } from "../runner/viewer/api-types";
+import type { FleetServerView, FleetWorldView } from "../runner/viewer/api-types";
 import { IMAGE_RECORD_FILE } from "./run-pod";
 import {
   type ModelsSidecar,
@@ -427,6 +427,10 @@ export interface FleetState {
    * rest of this file; never a secret's value.
    */
   credentials?: CredentialStatus[];
+  /** The worlds per eval, as the fleet page lists them (`fleetWorldViews`); absent with none to list. */
+  worlds?: FleetWorldView[];
+  /** Why no world may be booted now (`worldsHold`). */
+  worldsHold?: string;
   /** Who holds which account: pinned -> job name; pool -> job name or null when free. */
   accounts?: {
     pinned: Record<string, string>;
