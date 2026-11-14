@@ -10,7 +10,8 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { K8sError, type Pod } from "./k8s-client";
-import { parseLauncherSettings } from "./run-pod";
+import { parseLauncherSettings, runPodEnv } from "./run-pod";
+import { processEpisodeEnv } from "./episode-launcher";
 import { SlotBook, worldsOf, WORLD_KEY } from "./run-fleet-credentials";
 import { jobArgv } from "./run-fleet-state";
 import { openWorld } from "./run-roster";
@@ -36,6 +37,7 @@ import {
   worldPodRefusal,
   worldsHold,
   WorldStore,
+  worldAuthHeaders,
   worldTemplateRefusal,
   WORLD_POD_TEMPLATE_ENV,
   worldUsedBy,
@@ -692,4 +694,49 @@ test("the store lists only world ids and survives a torn file", () => {
   writeFileSync(join(dir, ID, "world.json"), "{ torn");
   expect(store.list()).toEqual([]);
   expect(existsSync(join(dir, "not-a-world"))).toBe(true);
+});
+
+describe("hosted mode: an eval world opens with its own port secret", () => {
+  const MODULE = "freeplay-world-secret-0123456789abcdef";
+  const WORLDS = "eval-worlds-secret-fedcba9876543210";
+  const launchOf = (onWorld: boolean) => ({ spec: { runId: "r", driver: "openai" as const, placedOn: undefined, apiKeyEnv: "OPENROUTER_KEY", launch: undefined }, env: {}, onWorld });
+  const noSecrets = () => ({ source: "env" as const });
+
+  test("a child episode on a world gets the worlds' secret as its module secret; no episode ever gets the worlds' variable", () => {
+    const parent = { WRATHBENCH_MODULE_SECRET: MODULE, WRATHBENCH_WORLDS_MODULE_SECRET: WORLDS, PATH: "/bin" };
+    const on = processEpisodeEnv(parent, launchOf(true), noSecrets);
+    const off = processEpisodeEnv(parent, launchOf(false), noSecrets);
+    if ("refused" in on || "refused" in off) throw new Error("refused");
+    expect(on.env["WRATHBENCH_MODULE_SECRET"]).toBe(WORLDS);
+    expect(off.env["WRATHBENCH_MODULE_SECRET"]).toBe(MODULE);
+    expect(on.env["WRATHBENCH_WORLDS_MODULE_SECRET"]).toBeUndefined();
+    expect(off.env["WRATHBENCH_WORLDS_MODULE_SECRET"]).toBeUndefined();
+    // Not hosted: the worlds share the module secret.
+    const shared = processEpisodeEnv({ WRATHBENCH_MODULE_SECRET: MODULE }, launchOf(true), noSecrets);
+    if ("refused" in shared) throw new Error("refused");
+    expect(shared.env["WRATHBENCH_MODULE_SECRET"]).toBe(MODULE);
+  });
+
+  test("a run pod on a world reads its module secret from the worlds' key, by reference; the variable itself never reaches a pod", () => {
+    const tpl = [
+      { name: "WRATHBENCH_MODULE_SECRET", valueFrom: { secretKeyRef: { name: "wrathbench-env", key: "WRATHBENCH_MODULE_SECRET" } } },
+      { name: "WRATHBENCH_MODULE_URL", value: "http://worldserver:8086" },
+    ];
+    const env = runPodEnv(tpl, { driver: "openai", credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: { WRATHBENCH_MODULE_URL: worldModuleUrl(ID) }, moduleSecretKey: "WRATHBENCH_WORLDS_MODULE_SECRET" });
+    expect(env.find((e) => e.name === "WRATHBENCH_MODULE_SECRET")).toEqual({ name: "WRATHBENCH_MODULE_SECRET", valueFrom: { secretKeyRef: { name: "wrathbench-env", key: "WRATHBENCH_WORLDS_MODULE_SECRET", optional: false } } });
+    expect(JSON.stringify(env)).not.toContain(WORLDS);
+    expect(runPodEnv(tpl, { driver: "openai", credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} }).find((e) => e.name === "WRATHBENCH_MODULE_SECRET")?.valueFrom?.secretKeyRef?.key).toBe("WRATHBENCH_MODULE_SECRET");
+    expect(() => runPodEnv(tpl, { driver: "openai", credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: { WRATHBENCH_WORLDS_MODULE_SECRET: WORLDS } })).toThrow(/fleet's/);
+    expect(() => runPodEnv(tpl, { driver: "openai", credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {}, moduleSecretKey: "WRATHBENCH_MODULE_SECRET" })).toThrow();
+    expect(parseLauncherSettings({ worldsSecretKey: "WRATHBENCH_WORLDS_MODULE_SECRET" }).worldsSecretKey).toBe("WRATHBENCH_WORLDS_MODULE_SECRET");
+    expect(() => parseLauncherSettings({ worldsSecretKey: "WRATHBENCH_MODULE_SECRET" })).toThrow();
+  });
+
+  test("the fleet's own calls to a world, and its stager, present the worlds' secret", () => {
+    expect(worldAuthHeaders({ WRATHBENCH_MODULE_SECRET: MODULE, WRATHBENCH_WORLDS_MODULE_SECRET: WORLDS })).toEqual({ authorization: `Bearer ${WORLDS}` });
+    expect(worldAuthHeaders({ WRATHBENCH_MODULE_SECRET: MODULE })).toEqual({ authorization: `Bearer ${MODULE}` });
+    expect(worldAuthHeaders({ WRATHBENCH_MODULE_SECRET: MODULE, WRATHBENCH_WORLDS_MODULE_SECRET: "" })).toEqual({ authorization: `Bearer ${MODULE}` });
+    expect(stagingEnvOf(ID, 7878, { WRATHBENCH_WORLDS_MODULE_SECRET: WORLDS })["WRATHBENCH_MODULE_SECRET"]).toBe(WORLDS);
+    expect(stagingEnvOf(ID, 7878, {})).not.toHaveProperty("WRATHBENCH_MODULE_SECRET");
+  });
 });

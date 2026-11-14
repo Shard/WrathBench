@@ -90,7 +90,7 @@ import { PARTY_END_GRACE_MS, writeEndRequest } from "../runner/src/end-request";
 import { runParty, type MemberVerdict, type PartyMemberRun } from "./party-fate";
 import { commandStager, STAGER_SCRIPT, type PartyStager, type StagedGuid, type StageRequest } from "./party-stager";
 import { parseWorldsMode, type WorldsMode } from "../runner/src/models";
-import { DEFAULT_SOAP_PORT, loadWorldLauncher, moduleUrlOfRun, readWorldPointer, removeWorldPointer, stagingEnvOf, worldFateOf, worldUsedBy, type WorldLauncher } from "./world";
+import { DEFAULT_SOAP_PORT, loadWorldLauncher, moduleUrlOfRun, readWorldPointer, removeWorldPointer, stagingEnvOf, worldAuthHeaders, worldFateOf, worldUsedBy, type WorldLauncher } from "./world";
 
 // ------------------------------------------------------------------ types
 
@@ -1719,6 +1719,7 @@ async function runEpisode(spec: Resolved, resume: boolean, world: ActiveWorld | 
     argv: episodeArgv(spec, resume, { container: CONTAINER }),
     args: episodeFlags(spec, resume),
     env: episodeEnv(world),
+    onWorld: world !== undefined,
     log: say,
   });
   if (launcher.kind === "pod") say(`episode ${spec.runId} runs as ${episode.describe()}`);
@@ -1743,6 +1744,7 @@ async function startPartyEpisode(spec: Resolved, resume: boolean, world: ActiveW
     argv: episodeArgv(spec, resume, { container: CONTAINER }),
     args: episodeFlags(spec, resume),
     env: episodeEnv(world),
+    onWorld: world !== undefined,
     log: say,
   });
   if (launcher.kind === "pod") say(`episode ${spec.runId} runs as ${handle.describe()}`);
@@ -1789,16 +1791,18 @@ export async function releaseRunSession(runId: string): Promise<string> {
   if (tokens.length === 0) return "no session: a fan-out run with no character on its roster";
   // The run's sessions are on its own world when it has one (its pointer), else the shared one.
   const moduleUrl = moduleUrlOfRun(runDir(runId), process.env.WRATHBENCH_MODULE_URL ?? "http://worldserver:8086");
-  if (tokens.length === 1) return releaseToken(tokens[0]!, moduleUrl);
+  // An eval world opens with its own port secret under hosted mode (`worldAuthHeaders`).
+  const auth = readWorldPointer(runDir(runId)) !== undefined ? worldAuthHeaders() : moduleAuthHeaders();
+  if (tokens.length === 1) return releaseToken(tokens[0]!, moduleUrl, auth);
   // A fan-out run's every character, one DELETE each; a failure of one is said, not thrown.
   const out: string[] = [];
-  for (const [i, t] of tokens.entries()) out.push(`seat ${i + 1}: ${await releaseToken(t, moduleUrl)}`);
+  for (const [i, t] of tokens.entries()) out.push(`seat ${i + 1}: ${await releaseToken(t, moduleUrl, auth)}`);
   const text = out.join("; ");
   return out.some((o) => o.includes(": failed:")) ? `failed: ${text}` : text;
 }
 
 /** DELETE the module session one token names, on the module at `moduleUrl`. */
-async function releaseToken(token: string, moduleUrl: string): Promise<string> {
+async function releaseToken(token: string, moduleUrl: string, auth: Record<string, string>): Promise<string> {
   // Inside the container the module is one fetch away; on the host it is only
   // reachable from the compose network, hence the exec hop.
   if (CONTAINER) {
@@ -1807,7 +1811,7 @@ async function releaseToken(token: string, moduleUrl: string): Promise<string> {
       const r = await fetch(url, {
         method: "DELETE",
         // Operator class: the roster holds the port secret, not the run's lease.
-        headers: { "content-type": "application/json", ...moduleAuthHeaders() },
+        headers: { "content-type": "application/json", ...auth },
         body: JSON.stringify({ token }),
       });
       return `delete-session ${r.status} ${(await r.text()).trim()}`;
