@@ -106,6 +106,13 @@ describe("what happens to a lapsed run", () => {
       pause: { reason: STALL_PAUSE },
       want: { kind: "fail", reason: "manual", counts: false },
     },
+    ...(["auth-failed", "no-access"] as const).map((reason) => ({
+      what: `an e90 its credential paused (${reason}): a failed attempt, and not a strike`,
+      episode: "e90",
+      pause: { reason },
+      want: { kind: "fail" as const, reason: "manual" as const, counts: false },
+    })),
+    { what: "a freeplay run its key paused (no-access): resumed", episode: "freeplay", pause: { reason: "no-access" }, want: { kind: "resume", counts: false } },
     {
       what: "a stale e90 that had stalled: ended `stale`, never counted",
       episode: "e90",

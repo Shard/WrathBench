@@ -463,10 +463,12 @@ export function readHoldsOf(credentials: readonly Credential[], reads: ReadonlyM
  * not the supervisor: only the credentials it reads itself (`readsGoUsage`).
  * A status carries a sibling's refusal on a credential with no read of its
  * own (`credentialStatuses`), and that borrowed read is not one the
- * supervisor holds it by. A state file with no reads gives none.
+ * supervisor holds it by. A disabled credential's read counts as the tick
+ * counts it: its refusal still holds the enabled credentials naming its key.
+ * A state file with no reads gives none.
  */
 export function publishedReads(credentials: readonly Credential[], statuses: readonly Pick<CredentialStatus, "id" | "lastRead">[] | undefined): Map<string, CredentialRead> {
-  const read = new Set(credentials.filter((c) => c.enabled && readsGoUsage(c)).map((c) => c.id));
+  const read = new Set(credentials.filter((c) => readsGoUsage(c)).map((c) => c.id));
   const out = new Map<string, CredentialRead>();
   for (const s of statuses ?? []) if (s.lastRead !== undefined && read.has(s.id)) out.set(s.id, s.lastRead);
   return out;

@@ -846,6 +846,11 @@ describe("OpenCode Go", () => {
     // Without the published reads (no state file, or one from before them) nothing is held by a read.
     expect(readerCredentialGate(config.credentials, [], NOW, undefined, runsDir).gate.holdOf("go-paid", "e90")).toBeUndefined();
     expect(readerCredentialGate(config.credentials, [], NOW, [{ id: "go-paid" }], runsDir).gate.holdOf("go-paid", "e90")).toBeUndefined();
+    // A paid side switched off after its key was refused: the tick still holds the free side by that read, and so does the reader.
+    const off = config.credentials.map((c) => (c.id === "go-paid" ? { ...c, enabled: false } : c));
+    const refused = [{ id: "go-paid", lastRead: { at: NOW, http: 401, classification: "auth-failed" as const, since: NOW } }];
+    expect(readHoldsOf(off, new Map([["go-paid", refused[0]!.lastRead]])).get("go-free")?.code).toBe("auth-failed");
+    expect(readerCredentialGate(off, [], NOW, refused, runsDir).gate.holdReasonOf("go-free", "freeplay")?.code).toBe("auth-failed");
   });
 });
 
