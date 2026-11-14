@@ -2739,6 +2739,53 @@ from the account (`Tankpartyb` on PARTY1). The smokes use the same request.
 one while a party run holds those accounts.** Each party smoke takes about
 three minutes end to end, which is why they never run in a hold.
 
+### Hosted mode's freeplay world
+
+Hosted mode (wrath-mcp's `docs/ARCHITECTURE.md`, "Hosted") lets invited people
+drive characters through a hosted gateway, on the long-lived `worldserver`
+(the freeplay world) and never on a world per eval. The chart's `hosted`
+block, off by default, prepares that world; the gateway and its workers are
+not in the chart yet. On, it:
+
+- sets the freeplay world's module io threads to 8 and its per-lease caps,
+  20 requests a second with a burst of 40 (wrath-mcp `module/PROTOCOL.md`,
+  "Limits"). World pods keep `worldserver.threads` and no cap. The caps are
+  read only by a module that has them; an older one ignores the keys;
+- gives the world pods a port secret of their own, the env Secret's
+  `WRATHBENCH_WORLDS_MODULE_SECRET` (`hosted.worldsSecretKey`), so the
+  freeplay world's `WRATHBENCH_MODULE_SECRET`, which the gateway will hold,
+  opens no eval's world. Generate it as the other (`openssl rand -hex 32`),
+  never as a copy of it. Only the fleet pod carries both, as
+  `WRATHBENCH_WORLDS_MODULE_SECRET` beside the old name;
+- creates the tenant pool, `TENANT01` … `TENANTnn` (`hosted.tenants.size`,
+  default 20, `infra/tenant-accounts.ts`), in the bootstrap Job, each with a
+  random password nobody is shown and no account access, and appends it to
+  the freeplay world's allowlist. No pod that reads the fleet config is told
+  of it, and `bun wb accounts ensure` refuses a tenant's name;
+- renders the `wrathbench-hosted` ConfigMap: `reserved-accounts`, every other
+  name on the freeplay world's allowlist, which is every account the
+  operator's own sessions can lease there, in the form `grants reserve`
+  takes; and `tenant-accounts`.
+
+**The caps apply to the operator's sessions too.** The port secret is exempt,
+but a run's sandbox and the smokes hold lease secrets, so freeplay streams and
+smokes on the freeplay world are held to the same rate.
+
+**Evals must not play on it.** The chart refuses `hosted` with the evals
+group on and `worlds` off, and the fleet setting `policy.worlds` must be
+`evals` before a gateway is live: a scored or probing episode on the freeplay
+world would play under the caps, beside the tenants, and behind the
+gateway's secret.
+
+**Turning it on** takes one deploy window, since the threads, the caps and
+the allowlist are read when the worldserver starts:
+
+1. Put `WRATHBENCH_WORLDS_MODULE_SECRET` into the env Secret
+   (`openssl rand -hex 32`, never a copy of `WRATHBENCH_MODULE_SECRET`).
+2. The values commit: `hosted: { enabled: true }`, with `worlds` on. Then run
+   the window as usual (`bun wb release run`).
+3. Set `policy.worlds` to `evals` before any gateway is live.
+
 ### Harness version stamping
 
 Every episode is stamped with a harness version. On the cluster it is the
