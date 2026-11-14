@@ -95,6 +95,24 @@ const V1 = "run-v1";
   ]);
 }
 
+/** The same run with the adapter's retries on the record between each request and its response (`adapter_retry`). */
+const V1_RETRIED = "run-v1-retried";
+{
+  const records = [0, 6, 12, 18, 24, 30].flatMap((m, i) => {
+    const [request, response] = openrouter(T0 + m * MIN + 10_000, i + 1);
+    const retry: At = [request![0] + 500, { t: "harness", kind: "adapter_retry", attempt: 2, of: 10, waitMs: 400, cause: "http", status: 429, detail: "HTTP 429: slow down" }];
+    return [request!, retry, response!];
+  });
+  const dir = await writeRun(V1_RETRIED, { driver: "openai", model: "deepseek/deepseek-v4.1-flash", apiBase: "https://openrouter.ai/api/v1" }, records, T0 + 60 * MIN);
+  writeReadings(dir, [
+    reading(0, { level: 1, xp: 0 }),
+    reading(5, { level: 1, xp: 100 }),
+    ...[10, 15, 20, 25].map((m) => reading(m, { level: 1, xp: 100 })),
+    reading(30, { level: 2, xp: 0, quests: 1 }),
+    reading(40, { level: 3, xp: 0 }),
+  ]);
+}
+
 /** A 0.5 run: run.sqlite's minute samples, its character idle from 3m to 13m, and the stub's responses. */
 const OLD = "run-05";
 {
@@ -325,6 +343,10 @@ describe("a v1 run", () => {
     // 3,600 uncached, 2,400 read and 300 out at the row in force on T0 (2030: the newest window).
     expect(r.price).toMatchObject({ id: "deepseek/deepseek-v4.1-flash", input: 0.14, output: 0.42, cacheRead: 0.0042 });
     expect(w.pricedUsd).toBeCloseTo((2400 * 0.14 + 3600 * 0.0042 + 300 * 0.42) / 1e6, 12);
+  });
+
+  test("a retry record between a request and its response changes none of its figures", async () => {
+    expect(JSON.stringify(await readout(V1_RETRIED)).replace(V1_RETRIED, V1)).toBe(JSON.stringify(await readout(V1)));
   });
 
   test("levels and turn-ins off the record, and its stalls by stuck's rule; what nothing covers is never a stall", async () => {
