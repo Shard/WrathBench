@@ -23,6 +23,8 @@ export const IN_CLUSTER_API = "https://kubernetes.default.svc";
 /** The subset of a Pod object the launcher and the drain read. */
 export interface PodStatus {
   phase?: string;
+  /** The pod's own address, once it has one: where the hosted gateway reaches a worker. */
+  podIP?: string;
   reason?: string;
   message?: string;
   conditions?: { type?: string; status?: string; reason?: string; message?: string }[];

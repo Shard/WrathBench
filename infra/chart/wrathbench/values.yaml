@@ -548,9 +548,10 @@ hosted:
     actionRate: 20
     actionBurst: 40
     # Connections from one peer address (WrathBench.MaxConnectionsPerPeer).
-    # Off (0) for now: until the worker split, a tenant's calls reach the port
-    # from the gateway's one address, beside the fleet's. It is set once tenant
-    # workers reach the port from pod addresses of their own.
+    # Off (0) by default. With `gateway.enabled` each tenant's worker reaches
+    # the port from a pod address of its own, so a cap here bounds what one
+    # worker can hold open; the fleet's own pods share addresses with nothing
+    # hosted. Set it with the gateway (e.g. 64).
     maxConnectionsPerPeer: 0
   # The key in `envSecretName` holding the world pods' port secret. The
   # deploying cluster adds it (`openssl rand -hex 32`, never the
@@ -560,6 +561,82 @@ hosted:
     # TENANT01 … TENANTnn, 0 to 99. Growing it is this value plus a
     # worldserver restart, as the fleet's pool; shrinking deletes no account.
     size: 20
+  # The gateway itself (templates/hosted-gateway.yaml): wrath-mcp's hosted
+  # gateway in a namespace of its own, serving MCP to the people a grants file
+  # names, each credential's host in a worker pod of its own. OFF by default,
+  # and needs `hosted.enabled` (the accounts) and `networkPolicy.kubeApi` (the
+  # gateway starts pods through the API, and the hosted namespace is under its
+  # own policies whatever `networkPolicy.enabled` says). On, it renders, all in
+  # `namespace`:
+  #
+  #   - the Namespace (with `createNamespace`), at Pod Security `podSecurity`;
+  #   - a volume of its own, `<release>-hosted-data`: the grants file, the
+  #     gateway's ledger and person audit, and `tenants/<credential>/`, which
+  #     each worker mounts by subPath, its own and nothing else;
+  #   - the gateway Deployment (one replica: the ledger has one writer) and its
+  #     Service, and an Ingress with `ingress.enabled`;
+  #   - a ServiceAccount whose Role creates, reads and deletes pods in this
+  #     namespace and nowhere else;
+  #   - the worker pod template (ConfigMap `<release>-hosted-worker`): no
+  #     ServiceAccount token, no Secret, the credential's directory only;
+  #   - NetworkPolicies: nothing in or out by default; the gateway takes MCP
+  #     from the ingress controller and reaches DNS, the API, the freeplay
+  #     world's module port and its workers' port; a worker takes the gateway
+  #     on its port and reaches DNS and the module port, and nothing else.
+  #
+  # The port secret the gateway holds is the freeplay world's
+  # WRATHBENCH_MODULE_SECRET, from `secretName` in `namespace` (a Secret the
+  # deploying cluster creates there; a Secret cannot be read across
+  # namespaces). No other pod in the namespace carries it.
+  gateway:
+    enabled: false
+    namespace: wrathbench-hosted
+    createNamespace: true
+    # The namespace's Pod Security Standard (enforce). Every pod here runs as
+    # uid 1000 with no privilege and RuntimeDefault seccomp, which `restricted`
+    # admits.
+    podSecurity: restricted
+    secretName: wrathbench-hosted
+    port: 8095
+    # Serve the program's tools beside the core ones.
+    program: true
+    # Browser origins the gateway accepts an MCP request from (a request with
+    # any other Origin is refused); none by default.
+    allowedOrigins: []
+    storage:
+      size: 20Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+        ephemeral-storage: 256Mi
+      limits:
+        memory: 1Gi
+    ingress:
+      enabled: false
+      className: ""
+      host: ""
+      # A TLS Secret in `namespace`. A key must never cross the network in the
+      # clear, so an Ingress without one is refused.
+      tlsSecretName: ""
+      annotations: {}
+      # Where the ingress controller's pods are, for the gateway's ingress
+      # policy: the only source admitted to the gateway's port.
+      controllerNamespace: ingress-nginx
+      controllerPodLabels: {}
+    worker:
+      port: 8097
+      # How long a worker waits for the gateway to greet it after it starts.
+      helloWaitMs: 120000
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+          ephemeral-storage: 256Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+      tmpSizeLimit: 1Gi
 
 # The `codex` driver's ChatGPT-subscription credential (runner/README.md, Drivers).
 # The CLI refreshes the token in place, so the home is MOUNTED, never copied: a

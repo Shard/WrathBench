@@ -1,0 +1,408 @@
+{{/*
+A hosted credential's worker pod, as the gateway's pod provider creates it
+(infra/hosted/pod-workers.ts): it sets the credential's label, the worker's
+secret and the `tenant` mount's subPath, and nothing else.
+*/}}
+{{- define "wrathbench.hostedWorkerPod" -}}
+{{- $g := .Values.hosted.gateway -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  generateName: {{ include "wrathbench.fullname" . }}-worker-
+  namespace: {{ $g.namespace }}
+  labels:
+    app.kubernetes.io/name: {{ include "wrathbench.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: hosted-worker
+spec:
+  # A worker that ends is started again by the gateway at the credential's next call, never by the kubelet.
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  {{- with .Values.priorityClassName }}
+  priorityClassName: {{ . }}
+  {{- end }}
+  nodeSelector: {{ toYaml .Values.nodeSelector | nindent 4 }}
+  securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 4 }}
+  terminationGracePeriodSeconds: 15
+  {{- include "wrathbench.imagePullSecrets" . | nindent 2 }}
+  containers:
+    - name: worker
+      image: {{ include "wrathbench.image.runner" . }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 8 }}
+      workingDir: /wrathbench
+      # No .env is read: the worker's only secret is its own, which the gateway sets (infra/hosted/pod-workers.ts).
+      command: ["/usr/bin/tini", "--", "bun", "--no-env-file", "infra/hosted/worker.ts", "--host", "0.0.0.0", "--port", "{{ $g.worker.port }}", "--hello-wait-ms", "{{ $g.worker.helloWaitMs }}"]
+      ports:
+        - name: worker
+          containerPort: {{ $g.worker.port }}
+      readinessProbe:
+        tcpSocket:
+          port: {{ $g.worker.port }}
+        periodSeconds: 1
+      resources: {{ toYaml $g.worker.resources | nindent 8 }}
+      volumeMounts:
+        # The credential's own directory: the gateway sets the subPath, tenants/<credential>.
+        - name: tenant
+          mountPath: /tenant
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: tenant
+      persistentVolumeClaim:
+        claimName: {{ include "wrathbench.fullname" . }}-hosted-data
+    - name: tmp
+      emptyDir:
+        sizeLimit: {{ $g.worker.tmpSizeLimit }}
+{{- end }}
+{{- if include "wrathbench.on.hostedGateway" . }}
+{{- $ns := .Values.hosted.gateway.namespace }}
+{{- $g := .Values.hosted.gateway }}
+{{- $full := include "wrathbench.fullname" . }}
+{{/*
+The hosted gateway and its workers (values.yaml `hosted.gateway`), in a
+namespace of their own. The gateway holds the freeplay world's port secret
+and starts a worker pod per active credential from the template below; the
+worker holds only the lease secrets the gateway hands it. Nothing here runs
+tenant code with the port secret in reach, and nothing in this namespace
+reaches MySQL, SOAP, ClickHouse, the viewer or the run pods.
+*/}}
+{{- if $g.createNamespace }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hosted
+    pod-security.kubernetes.io/enforce: {{ $g.podSecurity }}
+    pod-security.kubernetes.io/warn: {{ $g.podSecurity }}
+---
+{{- end }}
+{{/* RWO like `data`, with the gateway and every worker on the one node (nodeSelector). */}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $full }}-hosted-data
+  namespace: {{ $ns }}
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hosted-data
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.storage.className }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $g.storage.size }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $full }}-gateway
+  namespace: {{ $ns }}
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+---
+{{/* Pods in this namespace and nothing else: the gateway's only use of the API is its workers. */}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $full }}-gateway
+  namespace: {{ $ns }}
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $full }}-gateway
+  namespace: {{ $ns }}
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $full }}-gateway
+subjects:
+  - kind: ServiceAccount
+    name: {{ $full }}-gateway
+    namespace: {{ $ns }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $full }}-hosted-worker
+  namespace: {{ $ns }}
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+data:
+  worker.json: {{ include "wrathbench.hostedWorkerPod" . | fromYaml | toJson | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $full }}-gateway
+  namespace: {{ $ns }}
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  # One writer of the ledger and the grants file.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels:
+        {{- include "wrathbench.podLabels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+      annotations:
+        checksum/worker-template: {{ include "wrathbench.hostedWorkerPod" . | sha256sum }}
+    spec:
+      serviceAccountName: {{ $full }}-gateway
+      enableServiceLinks: false
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
+      securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
+      # Long enough to log every credential's characters out and delete its worker.
+      terminationGracePeriodSeconds: 45
+      {{- include "wrathbench.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: gateway
+          image: {{ include "wrathbench.image.runner" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 12 }}
+          workingDir: /wrathbench
+          command:
+            - /usr/bin/tini
+            - --
+            - bun
+            - --no-env-file
+            - infra/hosted/gateway.ts
+            - --grants
+            - /data/hosted/grants.json
+            - --state
+            - /data/hosted/state
+            - --host
+            - 0.0.0.0
+            - --port
+            - {{ $g.port | quote }}
+            {{- if not $g.program }}
+            - --no-program
+            {{- end }}
+            {{- range $g.allowedOrigins }}
+            - --allowed-origin
+            - {{ . | quote }}
+            {{- end }}
+            {{- if $g.ingress.enabled }}
+            # Behind the ingress controller, the audit names the client's address as it reports it.
+            - --trust-forwarded-for
+            {{- end }}
+          env:
+            - name: WRATHBENCH_MODULE_URL
+              value: http://worldserver.{{ .Release.Namespace }}.svc:8086
+            - name: WRATHBENCH_MODULE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $g.secretName }}
+                  key: WRATHBENCH_MODULE_SECRET
+            - name: WRATHBENCH_HOSTED_RESERVED
+              value: {{ join "," (fromJsonArray (include "wrathbench.operatorAccounts" .)) | quote }}
+            - name: WRATHBENCH_HOSTED_WORKER_TEMPLATE
+              value: /etc/wrathbench/hosted/worker.json
+          ports:
+            - name: mcp
+              containerPort: {{ $g.port }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ $g.port }}
+            periodSeconds: 5
+          resources: {{ toYaml $g.resources | nindent 12 }}
+          volumeMounts:
+            - name: hosted
+              mountPath: /data/hosted
+            - name: worker-template
+              mountPath: /etc/wrathbench/hosted
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: hosted
+          persistentVolumeClaim:
+            claimName: {{ $full }}-hosted-data
+        - name: worker-template
+          configMap:
+            name: {{ $full }}-hosted-worker
+        - name: tmp
+          emptyDir:
+            sizeLimit: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}-gateway
+  namespace: {{ $ns }}
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: gateway
+  ports:
+    - name: mcp
+      port: {{ $g.port }}
+      targetPort: {{ $g.port }}
+{{- if $g.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $full }}-gateway
+  namespace: {{ $ns }}
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+  {{- with $g.ingress.annotations }}
+  annotations: {{ toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $g.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  tls:
+    - hosts: [{{ $g.ingress.host | quote }}]
+      secretName: {{ $g.ingress.tlsSecretName }}
+  rules:
+    - host: {{ $g.ingress.host | quote }}
+      http:
+        paths:
+          # MCP only; nothing else the gateway answers is published.
+          - path: /mcp
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $full }}-gateway
+                port:
+                  number: {{ $g.port }}
+{{- end }}
+---
+{{/* Nothing in or out of the namespace but what the two policies after this admit. */}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $full }}-hosted-default-deny
+  namespace: {{ $ns }}
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hosted
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $full }}-gateway
+  namespace: {{ $ns }}
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "gateway") | nindent 4 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    {{- if $g.ingress.enabled }}
+    # MCP from the ingress controller, and from nothing else.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $g.ingress.controllerNamespace }}
+          {{- with $g.ingress.controllerPodLabels }}
+          podSelector:
+            matchLabels: {{- toYaml . | nindent 14 }}
+          {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ $g.port }}
+    {{- else }}
+    []
+    {{- end }}
+  egress:
+    {{- include "wrathbench.np.dns" . | nindent 4 }}
+    # The API, for its workers' pods.
+    {{- range .Values.networkPolicy.kubeApi }}
+    - to:
+        - ipBlock:
+            cidr: {{ .cidr }}
+      ports:
+        - protocol: TCP
+          port: {{ .port }}
+    {{- end }}
+    # The freeplay world's module port, in the release's namespace.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "worldserver") | nindent 12 }}
+      ports:
+        - protocol: TCP
+          port: 8086
+    # Its workers' port.
+    - to:
+        - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "hosted-worker") | nindent 12 }}
+      ports:
+        - protocol: TCP
+          port: {{ $g.worker.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $full }}-hosted-worker
+  namespace: {{ $ns }}
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hosted-worker
+spec:
+  podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "hosted-worker") | nindent 4 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # The gateway, on the worker's port, and nothing else.
+    - from:
+        - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "gateway") | nindent 12 }}
+      ports:
+        - protocol: TCP
+          port: {{ $g.worker.port }}
+  egress:
+    {{- include "wrathbench.np.dns" . | nindent 4 }}
+    # The freeplay world's module port, and nothing else: no internet, no API, no other pod.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "worldserver") | nindent 12 }}
+      ports:
+        - protocol: TCP
+          port: 8086
+{{- end }}

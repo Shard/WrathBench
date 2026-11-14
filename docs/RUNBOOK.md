@@ -2766,8 +2766,8 @@ three minutes end to end, which is why they never run in a hold.
 Hosted mode (wrath-mcp's `docs/ARCHITECTURE.md`, "Hosted") lets invited people
 drive characters through a hosted gateway, on the long-lived `worldserver`
 (the freeplay world) and never on a world per eval. The chart's `hosted`
-block, off by default, prepares that world; the gateway and its workers are
-not in the chart yet. On, it:
+block, off by default, prepares that world; `hosted.gateway`, also off,
+runs the gateway and its workers ("The hosted gateway", below). On, it:
 
 - sets the freeplay world's module io threads to 8 and its per-lease caps,
   20 requests a second with a burst of 40 (wrath-mcp `module/PROTOCOL.md`,
@@ -2809,6 +2809,60 @@ the allowlist are read when the worldserver starts:
 2. The values commit: `hosted: { enabled: true }`, with `worlds` on. Then run
    the window as usual (`bun wb release run`).
 3. Set `policy.worlds` to `evals` before any gateway is live.
+
+### The hosted gateway
+
+`hosted.gateway` (off by default, and nothing without `hosted`) runs wrath-mcp's
+hosted gateway in a namespace of its own, `hosted.gateway.namespace`
+(`wrathbench-hosted`), with each credential's host in a worker pod of its
+own (`infra/hosted/`, `templates/hosted-gateway.yaml`):
+
+- the gateway Deployment, one replica: it holds the freeplay world's port
+  secret, serves MCP at `/mcp` on its Service and, with
+  `hosted.gateway.ingress`, an Ingress that must have TLS. Its state is a
+  volume of its own, `<release>-hosted-data`: `grants.json`, the lease
+  ledger, the person audit (`state/audit/<person>/`, kept 30 days) and
+  `state/tenants/<credential>/`. At start it creates the grants file if
+  there is none, reserves every account the operator's sessions lease on
+  the freeplay world (the `wrathbench-hosted` ConfigMap's list), and
+  deletes any worker pod a previous gateway left;
+- a worker pod per active credential, from the template in ConfigMap
+  `<release>-hosted-worker`: no ServiceAccount token, no Secret, no env file,
+  the credential's own `tenants/<credential>` directory and a tmp, and its
+  own CPU and memory limits (`hosted.gateway.worker.resources`). It holds
+  only the lease secrets the gateway hands it and is deleted when its
+  credential goes idle;
+- a Role that lets the gateway's ServiceAccount create, read and delete pods
+  in that namespace and nothing else;
+- NetworkPolicies, whatever `networkPolicy.enabled` says: nothing in or out
+  of the namespace by default; the gateway takes MCP from the ingress
+  controller only and reaches DNS, the API (`networkPolicy.kubeApi`, which
+  is required), the freeplay world's module port and its workers' port; a
+  worker takes the gateway on its port and reaches DNS and the module port,
+  and nothing else.
+
+**Not for people outside the deployment until the policies hold.** The
+worker pods are the boundary between tenants and the port secret only where
+the cluster's CNI enforces NetworkPolicy and the namespace's Pod Security
+level (`restricted`) admits the pods, so check both before inviting anyone.
+
+**Turning it on**, after "Turning it on" above and with a pin that carries
+the gateway (wrath-mcp#59–#62):
+
+1. Create the namespace's Secret, `hosted.gateway.secretName`
+   (`wrathbench-hosted`), in `wrathbench-hosted`, with one key,
+   `WRATHBENCH_MODULE_SECRET`: the freeplay world's, the same value as in the
+   env Secret. A Secret cannot be read across namespaces. With
+   `createNamespace` on, the namespace exists only once the release has
+   rendered it, so create the Secret after the first deploy and let the
+   gateway's pod start then.
+2. The values commit: `hosted.gateway.enabled: true`, with
+   `networkPolicy.kubeApi` set, and the Ingress's host and TLS Secret if the
+   gateway is to be reached from outside the cluster. Set
+   `hosted.freeplayWorld.maxConnectionsPerPeer` with it (each worker now
+   reaches the module from an address of its own).
+3. Read-only after the deploy: the gateway's pod is Ready and its log says
+   it serves MCP for the grants it read.
 
 ### Harness version stamping
 

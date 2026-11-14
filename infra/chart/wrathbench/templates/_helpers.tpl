@@ -490,6 +490,26 @@ true
 {{- end -}}
 {{- end -}}
 
+{{/*
+The hosted gateway (values.yaml `hosted.gateway`): on only with hosted mode's
+accounts, and refused without the API's address, which its egress policy
+admits, or with an Ingress that has no TLS.
+*/}}
+{{- define "wrathbench.on.hostedGateway" -}}
+{{- if and (include "wrathbench.on.hosted" .) .Values.hosted.gateway.enabled -}}
+{{- if not .Values.networkPolicy.kubeApi -}}
+{{- fail "hosted.gateway.enabled needs networkPolicy.kubeApi: the gateway starts its workers through the API, and the hosted namespace's egress admits nothing else" -}}
+{{- end -}}
+{{- if and .Values.hosted.gateway.ingress.enabled (or (not .Values.hosted.gateway.ingress.host) (not .Values.hosted.gateway.ingress.tlsSecretName)) -}}
+{{- fail "hosted.gateway.ingress needs a host and a tlsSecretName: a key must never cross the network in the clear" -}}
+{{- end -}}
+{{- if eq .Values.hosted.gateway.namespace .Release.Namespace -}}
+{{- fail "hosted.gateway.namespace must be a namespace of its own, not the release's" -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end -}}
+
 {{/* The tenant pool's size, `hosted.tenants.size`, checked: 0 to 99, the two digits TENANT01 … TENANT99 have (infra/tenant-accounts.ts). */}}
 {{- define "wrathbench.tenantPoolSize" -}}
 {{- $size := int (.Values.hosted.tenants.size | default 0) -}}
