@@ -2690,6 +2690,15 @@ group on and `worlds` off, and the fleet setting `policy.worlds` must be
 world would play under the caps, beside the tenants, and behind the
 gateway's secret.
 
+**Turning it on** takes one deploy window, since the threads, the caps and
+the allowlist are read when the worldserver starts:
+
+1. Put `WRATHBENCH_WORLDS_MODULE_SECRET` into the env Secret
+   (`openssl rand -hex 32`, never a copy of `WRATHBENCH_MODULE_SECRET`).
+2. The values commit: `hosted: { enabled: true }`, with `worlds` on. Then run
+   the window as usual (`bun wb release run`).
+3. Set `policy.worlds` to `evals` before any gateway is live.
+
 ### Harness version stamping
 
 Every episode is stamped with a harness version. On the cluster it is the

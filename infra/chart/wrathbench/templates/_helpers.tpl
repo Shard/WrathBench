@@ -249,6 +249,9 @@ With `hosted` on and a world per eval, the world pods' own port secret
 presents a secret to an eval's world, and the freeplay world's
 WRATHBENCH_MODULE_SECRET no longer opens one. Under a name of its own, so
 nothing that reads WRATHBENCH_MODULE_SECRET for the long-lived world changes.
+Optional, so a key not yet in the Secret leaves the fleet pod up with the
+freeplay streams on it; a world pod's reference is required, and a world
+without its key never starts.
 */}}
 {{- define "wrathbench.worldsSecretEnv" -}}
 {{- if and (include "wrathbench.on.hosted" .) (include "wrathbench.on.worlds" .) }}
@@ -257,6 +260,7 @@ nothing that reads WRATHBENCH_MODULE_SECRET for the long-lived world changes.
     secretKeyRef:
       name: {{ .Values.envSecretName }}
       key: {{ .Values.hosted.worldsSecretKey }}
+      optional: true
 {{- end }}
 {{- end -}}
 

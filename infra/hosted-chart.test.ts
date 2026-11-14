@@ -25,7 +25,7 @@ const HELM_TEST_MS = 30_000;
 const BASE = ["--namespace", "wrathbench", "--set", "image.registry=harbor.example/wrathbench", "--set", "image.tag=harness-0.5-1-gabcdef0"];
 const ON = ["--set", "hosted.enabled=true", "--set", "worlds.enabled=true"];
 
-type Env = { name: string; value?: string; valueFrom?: { secretKeyRef?: { name: string; key: string } } };
+type Env = { name: string; value?: string; valueFrom?: { secretKeyRef?: { name: string; key: string; optional?: boolean } } };
 type Container = { name: string; env?: Env[] };
 type PodSpec = { initContainers?: Container[]; containers: Container[] };
 type Doc = {
@@ -122,6 +122,9 @@ describe.skipIf(helm === null)("the chart's hosted block", () => {
       const fleet = containerOf(docs, "Deployment", "wrathbench-fleet", "fleet");
       expect(secretKey(fleet, "WRATHBENCH_WORLDS_MODULE_SECRET")).toBe("WRATHBENCH_WORLDS_MODULE_SECRET");
       expect(secretKey(fleet, "WRATHBENCH_MODULE_SECRET")).toBe("WRATHBENCH_MODULE_SECRET");
+      // A key not yet in the Secret must not wedge the fleet; a world pod without it never starts.
+      expect(fleet.env!.find((e) => e.name === "WRATHBENCH_WORLDS_MODULE_SECRET")!.valueFrom!.secretKeyRef!.optional).toBe(true);
+      expect(worldPod(docs).env!.find((e) => e.name === "AC_WRATH_BENCH_SECRET")!.valueFrom!.secretKeyRef!.optional).toBeUndefined();
       const carriers = everyContainer(docs)
         .filter(([, c]) => c.env?.some((e) => e.valueFrom?.secretKeyRef?.key === "WRATHBENCH_WORLDS_MODULE_SECRET"))
         .map(([where]) => where);
