@@ -659,13 +659,62 @@ describe("ProgramWake", () => {
     c.advance(1_000);
     const first = await wake.sleep(p, { via: "turn-end", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: false });
     expect(first).toMatchObject({ fired: "routine_ended", sleptMs: 3_000 });
-    p.push(ended(c.now()), wake);
+    const second = ended(c.now()) as Extract<ProgramFact, { kind: "ended" }>;
+    p.push(second, wake);
     c.advance(1_000);
-    wake.routinesShown();
-    const second = await wake.sleep(p, { via: "turn-end", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: false });
-    expect(second.fired).toBe("cap");
+    // The answer's rows showed that run returned.
+    wake.routinesShown([second.routine]);
+    const next = await wake.sleep(p, { via: "turn-end", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: false });
+    expect(next.fired).toBe("cap");
     // The end is still in the block's own lines: it was drained as the sleep began.
-    expect(second.block).toContain("[wake 2 · slept 5m00s · woke for: five minutes passed]");
+    expect(next.block).toContain("[wake 2 · slept 5m00s · woke for: five minutes passed]");
+  });
+
+  // A routine that threw 2 ms after its start, while the answer that started it showed it running 0s.
+  const threwAt = (startedAt: number, ts: number): ProgramFact => ({
+    kind: "ended",
+    ts,
+    routine: { name: "grind", deploy: 2, startedAt, endedAt: ts, state: "threw", error: { name: "TypeError", text: "TypeError: x is undefined", frames: [], signature: "grind|TypeError" } },
+    fresh: true,
+  });
+  for (const order of ["the end lands before the answer", "the end lands after the answer"] as const) {
+    test(`a routine that ends within milliseconds of start_routine wakes the sleep after it, as a later end would: ${order}`, async () => {
+      const c = fakeClock(10_000_000);
+      const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
+      const p = fakeProgram();
+      const startedAt = c.now();
+      const end = threwAt(startedAt, startedAt + 2);
+      if (order === "the end lands before the answer") p.push(end, wake);
+      c.advance(5);
+      // The rows the answer rendered: the run, still running.
+      wake.routinesShown([row({ name: "grind", deploy: 2, startedAt })]);
+      if (order === "the end lands after the answer") p.push(end, wake);
+      const woke = await wake.sleep(p, { via: "yield", turn: 1, capMs: 120_000, floorMs: 3_000, stopped: () => false, kept: true });
+      expect(woke).toMatchObject({ fired: "routine_ended", sleptMs: 3_000 });
+      expect(woke.block.split("\n")[0]).toBe("[wake 1 · slept 3s · woke for: routine ended (grind, threw)]");
+    });
+  }
+
+  test("an end the routine lines showed, or a newer run of the name replaced, does not wake; one of another run does", async () => {
+    const c = fakeClock(10_000_000);
+    const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
+    const p = fakeProgram();
+    const grind = c.now() - 60_000;
+    const trip = c.now() - 50_000;
+    // grind's end lands before the rows that show it threw; trip's after rows that show a newer trip running.
+    p.push(threwAt(grind, c.now() - 10), wake);
+    c.advance(5);
+    wake.routinesShown([
+      row({ name: "grind", deploy: 2, startedAt: grind, endedAt: c.now() - 15, state: "threw" }),
+      row({ name: "trip", deploy: 2, startedAt: c.now() - 1 }),
+    ]);
+    p.push({ kind: "ended", ts: c.now() - 3, routine: { name: "trip", deploy: 2, startedAt: trip, endedAt: c.now() - 3, state: "returned" } }, wake);
+    const first = await wake.sleep(p, { via: "yield", turn: 1, capMs: 120_000, floorMs: 3_000, stopped: () => false, kept: true });
+    expect(first.fired).toBe("cap");
+    // The same name's next run ending is news.
+    c.schedule(10_000, () => p.push(threwAt(c.now() - 5_000, c.now()), wake));
+    const second = await wake.sleep(p, { via: "yield", turn: 2, capMs: 120_000, floorMs: 3_000, stopped: () => false, kept: true });
+    expect(second.fired).toBe("routine_ended");
   });
 
   test("a refusal a tool result carried does not wake a later sleep, even when its fact lands late; a new one does", async () => {
