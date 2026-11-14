@@ -234,7 +234,13 @@ describe("names", () => {
     expect(schemaOf(ID)).toBe(`acore_characters_${ID}`);
     expect(() => schemaOf("x")).toThrow();
     expect(worldModuleUrl(ID)).toBe(`http://${ID}.worlds:8086`);
-    expect(stagingEnvOf(ID, 7878)).toEqual({ WRATHBENCH_MODULE_URL: `http://${ID}.worlds:8086`, WRATHBENCH_SOAP_URL: `http://${ID}.worlds:7878/`, WRATHBENCH_CHARACTERS_DB: `acore_characters_${ID}` });
+    expect(stagingEnvOf(ID, 7878)).toEqual({
+      WRATHBENCH_MODULE_URL: `http://${ID}.worlds:8086`,
+      MODULE_HOST: `${ID}.worlds`,
+      MODULE_PORT: "8086",
+      WRATHBENCH_SOAP_URL: `http://${ID}.worlds:7878/`,
+      WRATHBENCH_CHARACTERS_DB: `acore_characters_${ID}`,
+    });
   });
 
   test("only scored and probing tiers get a world, and only with the setting on", () => {
