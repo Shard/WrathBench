@@ -27,6 +27,8 @@ import { Watchdogs } from "../src/watchdogs";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { LEAKED_SECRET, LEAKY_PAD, LEAKY_RESULT_AS_READ, leakyCrashNotice, leakySnippetResult } from "./fixtures/leaky-snippet";
 import { tempDirs } from "./fixtures/temp-dirs";
+import { campaignFileOf, writeCampaignFile } from "../src/campaign-file";
+import { checkedIn, joined } from "./fixtures/campaigns";
 
 
 /** Count the state snapshots a sandbox is asked for, from now on. */
@@ -42,6 +44,15 @@ function countSnapshots(sandbox: unknown): () => number {
 }
 
 const tempDir = tempDirs();
+
+/**
+ * A probe square's campaign file: claude-code runs only the snippet loop,
+ * which only a probe campaign may launch, so a hand launch here is one.
+ */
+function probeArgs(): string[] {
+  const race = joined([checkedIn("race-probe@1")], {}).definitions.find((d) => d.ref === "race-probe@1")!;
+  return ["--episode", "probing", "--campaign-file", writeCampaignFile(tempDir("wrathbench-probe-file-"), campaignFileOf(race, "orc-warrior"))];
+}
 
 const FIXTURE = join(import.meta.dir, "fixtures", "fake-claude.ts");
 
@@ -1254,10 +1265,10 @@ describe("driver selection and stamping", () => {
         "claude-code",
         "--model",
         "x",
+        // claude-code runs the snippet loop, which only a probe may
+        ...probeArgs(),
         "--runs-dir",
         dir,
-        "--max-tool-calls",
-        "100000",
         // nothing is listening: the sandbox only dials on connect(), which the
         // fake never asks for
         "--module-url",
@@ -1331,6 +1342,7 @@ describe("driver selection and stamping", () => {
         "claude-code",
         "--model",
         "opus",
+        ...probeArgs(),
         "--runs-dir",
         dir,
       ],
@@ -1361,6 +1373,7 @@ describe("driver selection and stamping", () => {
         "claude-code",
         "--model",
         "opus",
+        ...probeArgs(),
         "--credential-env",
         "CLAUDE_CODE_OAUTH_TOKEN_2",
         "--runs-dir",

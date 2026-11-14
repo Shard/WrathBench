@@ -341,6 +341,8 @@ describe("never counted, never a member, never a row", () => {
     episodeOverride: false,
     harnessVersion: "harness-0.9-1-gabc",
     harnessSeries: "0.9",
+    loop: "program",
+    yield: true,
     extra: false,
     startedAt: 1,
     endedAt: 2,

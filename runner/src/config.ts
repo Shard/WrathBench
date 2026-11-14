@@ -752,21 +752,23 @@ export const runConfigSchema = z.object({
    */
   compactWindowDefaulted: z.literal(true).optional(),
   /**
-   * The agent loop's shape, a probe arm's (`--loop program`, operator
-   * 2026-11-12): the model keeps its code in a file
-   * workspace rooted at `main.ts`, whose exported functions are routines the
-   * harness runs and tracks, and it sleeps between wakes (`wake.ts`). ABSENT
-   * on the snippet loop, which every run is unless an arm says otherwise, so
-   * every config and tuple stamped before the field existed reads the same.
-   * The fixed loop, claude-code and codex only, never a scored tier
-   * (`programLoopRefusal`); at fan-out one program drives every character.
+   * The agent loop (operator, 2026-11-14). `program`: the model keeps its
+   * code in a file workspace rooted at `main.ts`, whose exported functions
+   * are routines the harness runs and tracks, and it sleeps between wakes
+   * (`wake.ts`). `snippet`: the persistent-snippet loop, kept as a probe
+   * campaign's legacy arm (`loopLaunchRefusal`). Written at every launch
+   * (`launchLoopOf`); ABSENT on a config stored before it was, which was the
+   * snippet loop. The program loop runs on the fixed loop, claude-code and
+   * codex (`programLoopRefusal`), never yet a scored tier
+   * (`loopLaunchRefusal`); at fan-out one program drives every character.
    * Identity: a resume keeps it.
    */
-  loop: z.literal("program").optional(),
+  loop: z.enum(["program", "snippet"]).optional(),
   /**
    * The program loop's `yield` tool (`--yield true`): a call held open until
    * a wake, whose result is the wake. Absent when off; only with
-   * `loop: "program"`.
+   * `loop: "program"`. On by default on the fixed loop, off on codex
+   * (`launchLoopOf`).
    */
   yield: z.literal(true).optional(),
   /**
@@ -959,8 +961,8 @@ export function loadRunConfig(raw: unknown): RunConfig {
   if (config.compactWindow !== undefined && !driverHasCompactWindow(config.driver)) {
     throw new Error(compactWindowDriverRefusal(config.driver));
   }
-  // Refused, never ignored: the program loop is a probe arm's, on the fixed
-  // loop and codex only, for now.
+  // Refused, never ignored: the program loop runs on the fixed loop,
+  // claude-code and codex.
   const loopRefusal = programLoopRefusal(config);
   if (loopRefusal !== null) throw new Error(loopRefusal);
   // Refused, never ignored: one agent driving several characters is its own
@@ -1013,21 +1015,92 @@ export function runsProgramLoop(driver: Driver): boolean {
 }
 
 /**
- * Why a config's agent loop cannot run as stated, or null. The program loop
- * (`loop: "program"`) is a probe arm: the fixed loop, claude-code and codex
- * run it (`runsProgramLoop`), pi's own turn loop does not yet, a route
- * driver plays no model, and a scored tier measures the snippet loop. At
- * fan-out one program drives every character. `yield` is a setting of the
- * program loop and means nothing without it.
+ * The loop a fresh launch runs when it does not say (operator, 2026-11-14):
+ * the program loop wherever it is built — the fixed loop and claude-code
+ * with `yield`, codex without (`yieldDefaultOf`) — and the snippet loop on
+ * the drivers that are not a model (the stub and the scripted reference,
+ * `isUnscoredDriver`) and on pi until its program adapter exists. A fan-out
+ * run takes the same default as a solo run on its driver: one program drives
+ * every character.
  */
-export function programLoopRefusal(c: Pick<RunConfig, "loop" | "yield" | "driver" | "episode" | "continuedFrom">): string | null {
-  if (c.loop === undefined) return c.yield === true ? "--yield is a setting of the program loop; it needs --loop program" : null;
+export function defaultLoopOf(c: { driver: Driver; fanout?: unknown }): { loop: "program" | "snippet"; yield: boolean } {
+  if (isUnscoredDriver(c.driver) || !runsProgramLoop(c.driver)) return { loop: "snippet", yield: false };
+  return { loop: "program", yield: yieldDefaultOf(c.driver) };
+}
+
+/**
+ * Whether the program loop has `yield` on a driver when a launch does not
+ * say (operator, 2026-11-14): on the fixed loop, whose turn-end sleep alone
+ * never slept, and on claude-code, whose one turn can run for hours so
+ * `yield` is its sleep within it; off on codex, which ends a turn every few
+ * calls and was measured without it. Never on a driver that is not a model.
+ */
+export function yieldDefaultOf(driver: Driver): boolean {
+  return runsProgramLoop(driver) && !isUnscoredDriver(driver) && entryOf(driver).programYieldOff !== true;
+}
+
+/**
+ * A fresh launch's loop and `yield`, as written into its config: `--loop`
+ * and `--yield` when given, else `defaultLoopOf`. `--loop program` without
+ * `--yield` takes the driver's `yield` default; the snippet loop has none.
+ */
+export function launchLoopOf(
+  c: { driver: Driver; fanout?: unknown },
+  asked: { loop?: "program" | "snippet" | undefined; yield?: boolean | undefined },
+): { loop: "program" | "snippet"; yield?: true } {
+  const d = defaultLoopOf(c);
+  const loop = asked.loop ?? d.loop;
+  const yieldOn = asked.yield ?? (loop === "program" && yieldDefaultOf(c.driver));
+  return { loop, ...(yieldOn ? { yield: true as const } : {}) };
+}
+
+/**
+ * Why a config's program loop cannot run as stated, or null. The fixed loop,
+ * claude-code and codex run it (`runsProgramLoop`), pi's own turn loop does
+ * not yet, and a route driver plays no model. At fan-out one program drives
+ * every character. `yield` is a setting of the program loop and means
+ * nothing without it. Which episodes may launch at all is
+ * `loopLaunchRefusal`'s.
+ */
+export function programLoopRefusal(c: Pick<RunConfig, "loop" | "yield" | "driver" | "episode">): string | null {
+  if (c.loop !== "program") return c.yield === true ? "--yield is a setting of the program loop; it needs --loop program" : null;
   const entry = entryOf(c.driver);
   if (!runsProgramLoop(c.driver)) return `--loop program runs on the fixed loop, claude-code and codex; the ${c.driver} driver runs a CLI's own turn loop`;
   if (entry.route === true) return `--loop program drives a model; the ${c.driver} driver plays a scripted route`;
-  if (c.episode !== undefined && isScoredEpisode(c.episode)) return `--loop program is a probe arm's; --episode ${c.episode} is a scored episode, which runs the snippet loop`;
-  if (c.continuedFrom !== undefined) return "--loop program starts its workspace empty; it does not continue another run (--continue-from)";
   return null;
+}
+
+/**
+ * Why scored episodes do not launch, while they wait (operator, 2026-11-14):
+ * until a long-clock program-loop run has been read. The launch refuses them
+ * (`loopLaunchRefusal`) and the scheduler holds them, saying this, rather
+ * than picking a launch that would be refused (`NextJobsOptions.scoredGate`).
+ * Null once they open.
+ */
+export const SCORED_EPISODES_WAIT: string | null = "scored episodes do not run yet: they wait until a long-clock program-loop run has been read";
+
+/**
+ * Why a model driver's run may not launch on its loop and episode, or null
+ * (operator, 2026-11-14). The snippet loop is kept as a legacy arm of probe
+ * campaigns, so it runs only on `--episode probing`: never a scored episode,
+ * freeplay or an unnamed episode. Scored episodes wait on the program loop
+ * too, until a long-clock program-loop run has been read. The stub and the
+ * scripted reference are not a model and are exempt (`isUnscoredDriver`).
+ * Checked at a fresh launch and again at a resume (`run.ts`), so a run
+ * stored before the loop was written down, which was the snippet loop, is
+ * refused on resume too. Not part of `loadRunConfig`, which also reads
+ * stored configs.
+ */
+export function loopLaunchRefusal(c: Pick<RunConfig, "loop" | "driver" | "episode">): string | null {
+  if (isUnscoredDriver(c.driver)) return null;
+  if (c.loop === "program") {
+    return c.episode !== undefined && isScoredEpisode(c.episode) && SCORED_EPISODES_WAIT !== null ? `--episode ${c.episode} is a scored episode, and ${SCORED_EPISODES_WAIT}` : null;
+  }
+  if (c.episode === "probing") return null;
+  const what = c.episode === undefined ? "a launch with no --episode" : `--episode ${c.episode}`;
+  return runsProgramLoop(c.driver)
+    ? `the snippet loop is a probe campaign's legacy arm (--episode probing); ${what} runs the program loop (--loop program)`
+    : `the ${c.driver} driver runs only the snippet loop for now, which is a probe campaign's legacy arm (--episode probing); ${what} cannot run on it`;
 }
 
 /**
@@ -1053,10 +1126,10 @@ export function threadContextOf(c: Pick<RunConfig, "loop" | "driver">): boolean 
   return c.loop === "program" && keepsThreadContext(c.driver);
 }
 
-/** `--loop`: `program`, or `snippet`, which is the default and stated as absent. */
-export function loopOf(v: string | boolean | undefined): "program" | undefined {
-  if (v === undefined || v === "snippet") return undefined;
-  if (v === "program") return "program";
+/** `--loop`: `program` or `snippet`, or undefined when not given (`launchLoopOf` then picks). */
+export function loopOf(v: string | boolean | undefined): "program" | "snippet" | undefined {
+  if (v === undefined) return undefined;
+  if (v === "program" || v === "snippet") return v;
   throw new Error(`--loop takes program or snippet, got ${JSON.stringify(v)}`);
 }
 

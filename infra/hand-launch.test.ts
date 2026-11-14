@@ -64,7 +64,7 @@ function writeRun(root: string, now: number, s: RunSpec): void {
       harnessVersion: "harness-0.5-1-gabc",
       startedAt: s.startedAt,
       config,
-      comparability: { episode: s.episode ?? null },
+      comparability: { episode: s.episode ?? null, loop: "program", yield: true },
       ...(s.ended === true ? { termination: { reason: "episode-limit", detail: "episode wall clock" }, endedAt: s.startedAt + 2_000 } : {}),
     }),
   );

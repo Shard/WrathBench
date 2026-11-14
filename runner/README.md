@@ -1261,13 +1261,43 @@ of every request whose prompt held it: the record has `[redacted]` where the
 request had the secret. That was already true of a full record, which could
 not reproduce those bytes either.
 
-## The program loop (a probe arm)
+## The program loop
 
-`--loop program` (config `loop: "program"`) is a probe arm, on the
-fixed loop and the claude-code and codex drivers, and refused on a scored
-tier, on a continuation and on pi, whose adapter has no sleep yet
+The program loop is the harness's loop (`docs/METHODOLOGY.md`). Every launch
+writes its loop into the config (`loop`, `launchLoopOf`): `--loop` and
+`--yield` when given, else the driver's default (`defaultLoopOf`):
+
+| Driver | Default | Why |
+|---|---|---|
+| `openai` (the fixed loop) | `program`, `yield` on | the one form that sleeps on the fixed loop |
+| `claude-code` | `program`, `yield` on | its one turn can run for hours, so `yield` is its sleep within it |
+| `codex` | `program`, `yield` off | as measured; its turn-end pause is the sleep |
+| `pi` | `snippet` | its adapter has no sleep yet |
+| `stub`, `reference` | `snippet` | not a model; the reference's route needs bindings that persist |
+
+A fan-out run takes its driver's default like a solo run: one program drives
+every character (the paragraph that opens "At fan-out", below).
+
+The snippet loop is kept as the legacy arm of probe campaigns: a model
+driver runs it only on `--episode probing`, and a scored, freeplay or
+unnamed episode on it is refused at launch and again on resume
+(`loopLaunchRefusal`, in `run.ts`), the stub and the reference excepted. A
+config stored before the loop was written down has none, and was the snippet
+loop. Scored episodes are refused on the program loop too, until a
+long-clock program-loop run has been read. The program loop itself is
+refused on pi and on a route driver
 (`programLoopRefusal`, `DriverEntry.programLoop`; a campaign pair is refused
-the same way). The sandbox then hosts the model's program (the stack's
+the same way). Together these mean pi runs only as probe campaign squares
+for now.
+
+A `--continue-from` on the program loop carries the predecessor's
+`program/files/`, `memory.json` among them, and not its versions or registry
+(`carryProgramFiles`): the stack loads the carried files at the sandbox's
+first start and starts no routine, and the continued session's note says so
+(`PROGRAM_CONTINUE_KEPT`). A snippet-loop predecessor has no files, and the
+note says the files start empty (`PROGRAM_CONTINUE_EMPTY`).
+
+The sandbox then hosts the model's program (the stack's
 `SandboxHostOptions.program`, wrath-mcp `docs/ARCHITECTURE.md`, "A program"):
 a file workspace in the run directory's `program/`, rooted at `main.ts`, whose
 exported async functions are routines the stack runs and tracks. The model is served
@@ -1363,8 +1393,12 @@ end, restart, `wake` call and pre-emption, and `program_error` per fresh error
 or refusal and per repeat count at each wake. `bun wb inspect requests` reads
 wakes per hour, requests per wake (on codex, responses per wake too) and the
 share asleep off the `wake` records; `bun wb inspect messages` sizes each
-turn's message by part and prints the wake blocks. `loop` (`program`) and
-`yield` are config and comparability keys, absent on the snippet loop.
+turn's message by part and prints the wake blocks. `loop` and `yield` are
+config keys written at every launch, and comparability keys on the program
+loop only: a snippet-loop tuple stamps neither, as every tuple before them
+did. The scheduler counts a run toward its entry's target only when its tuple
+names the loop and `yield` the entry now launches (`countsTowardTarget`), so
+the snippet-loop runs of the same series are history, never copies.
 
 ## The sandbox
 

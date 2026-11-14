@@ -1,6 +1,6 @@
 /**
- * Sleeping and waking on the program loop (`loop: "program"`, a probe arm;
- * operator, 2026-11-12).
+ * Sleeping and waking on the program loop (`loop: "program"`; operator,
+ * 2026-11-12, adopted 2026-11-14).
  *
  * On the program loop the model's routines run in the sandbox whether it is
  * awake or not (the stack's `ProgramHost`), so a reply with no tool call puts
@@ -357,6 +357,9 @@ export function renderWake(v: WakeView): string {
       lines.push(`${parts.join(" · ")}`);
     } else if (f.kind === "load_failed" && f.by === "restart") {
       lines.push(`load after the restart failed: ${f.error}`);
+    } else if (f.kind === "load_failed" && f.by === "carried") {
+      // A continuation's files, loaded at the first start: nothing restarted.
+      lines.push(`the carried files did not load: ${f.error}`);
     }
   }
 

@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  countsTowardTarget,
   DEFAULT_POLICY,
   LADDER_MS,
   countModelResponses,
@@ -38,6 +39,7 @@ import {
   rosterWindowKey,
 } from "../src/models";
 import { billingOf } from "../src/model-cost";
+import { SCORED_EPISODES_WAIT } from "../src/config";
 import { parseCredentials } from "../src/credential-slots";
 import { rowOf } from "../viewer/models";
 import type { EpisodeId } from "../src/episodes";
@@ -51,6 +53,8 @@ const HOUR = 3_600_000;
 interface SynthRun {
   id: string;
   model: string;
+  /** A run on the snippet loop, stamped with no loop key. */
+  snippet?: boolean;
   effort?: string;
   episode?: string;
   override?: boolean;
@@ -81,6 +85,9 @@ function writeRun(runsDir: string, r: SynthRun): void {
           effort: r.effort ?? null,
           ...(r.episode !== undefined ? { episode: r.episode } : {}),
           ...(r.override ? { episodeOverride: true } : {}),
+          // The loop the entry launches now, so its runs count toward its
+          // targets: the program loop with yield on openai and claude-code.
+          ...(r.snippet === true ? {} : { loop: "program", yield: true }),
         },
       }),
     );
@@ -241,6 +248,8 @@ describe("the ladder", () => {
     episodeOverride: false,
     harnessVersion: null,
     harnessSeries: null,
+    loop: "program",
+    yield: true,
     extra: false,
     startedAt: endedAt - 60_000,
     endedAt,
@@ -440,6 +449,8 @@ describe("nextJobs", () => {
     episodeOverride: false,
     harnessVersion: null,
     harnessSeries: null,
+    loop: "program",
+    yield: true,
     extra: false,
     startedAt: NOW - (100 - i) * HOUR,
     endedAt: NOW - (99 - i) * HOUR,
@@ -510,6 +521,8 @@ describe("paid and free", () => {
     episodeOverride: false,
     harnessVersion: "harness-0.3-1-gx",
     harnessSeries: "0.3",
+    loop: "program",
+    yield: true,
     extra,
     startedAt: NOW - (100 - i) * HOUR,
     endedAt: NOW - (99 - i) * HOUR,
@@ -578,6 +591,23 @@ describe("paid and free", () => {
     expect(effectiveTier("t2", true)).toBe("t2");
     // A climb is one rung, never two: t2 is where the ladder ends today.
     expect(TIER_TABLE[effectiveTier("t1", true)].promotesTo).toBeNull();
+  });
+
+  test("a refused scored launch leaves the projection as it was, so an open gate re-picks it every tick; a closed one holds it and says why", () => {
+    const owing = st({ name: "o", model: "v/owing", tier: "t1", idle: "unlimited" }, []);
+    // run.ts refuses the launch before a run directory exists: no fact, so the
+    // next tick's projection is this one, and the pick is the same pick.
+    const first = planNextJobs([owing], ["R1"], new Set(), { policy });
+    expect(first.jobs.map((j) => [j.name, j.episode])).toEqual([["o", "e90"]]);
+    expect(planNextJobs([owing], ["R1"], new Set(), { policy }).jobs).toEqual(first.jobs);
+    // Closed: held with the reason, and the model does what one owing nothing does.
+    const gate = SCORED_EPISODES_WAIT!;
+    const closed = planNextJobs([owing], ["R1"], new Set(), { policy, scoredGate: gate });
+    expect(closed.held).toEqual([{ name: "o", episode: "e90", why: gate }]);
+    expect(closed.jobs.map((j) => [j.name, j.episode])).toEqual([["o", "freeplay"]]);
+    // A model that owes nothing is not held by it.
+    const quiet = st({ name: "q", model: "v/quiet", tier: "t0" }, [good("v/quiet", "e90", 1)]);
+    expect(planNextJobs([quiet], ["R1"], new Set(), { policy, scoredGate: gate })).toEqual({ jobs: [], held: [] });
   });
 
   test("one pool: paid, free and local picks all draw from it, in priority order; a reserved pool says why", () => {
@@ -666,6 +696,8 @@ describe("outstandingWork", () => {
     episodeOverride: false,
     harnessVersion: null,
     harnessSeries: null,
+    loop: "program",
+    yield: true,
     extra: false,
     startedAt: NOW - (100 - i) * HOUR,
     endedAt: NOW - (99 - i) * HOUR,
@@ -785,6 +817,8 @@ describe("a run's credential", () => {
       episodeOverride: false,
       harnessVersion: null,
       harnessSeries: null,
+      loop: "program",
+      yield: true,
       extra: false,
       startedAt: 0,
       endedAt: null,
@@ -837,6 +871,8 @@ describe("probe campaigns in the schedule", () => {
     episodeOverride: false,
     harnessVersion: null,
     harnessSeries: null,
+    loop: "program",
+    yield: true,
     extra: false,
     startedAt: NOW2 - (100 - i) * H,
     endedAt: NOW2 - (99 - i) * H,
@@ -1090,6 +1126,8 @@ describe("the claude-code compaction window is part of an entry's identity", () 
     episodeOverride: false,
     harnessVersion: null,
     harnessSeries: null,
+    loop: "program",
+    yield: true,
     extra: false,
     startedAt: NOW3 - (100 - i) * H,
     endedAt: NOW3 - (99 - i) * H,
@@ -1196,6 +1234,8 @@ describe("claude-code defaults its compaction window to 300k (operator, 2026-11-
     episodeOverride: false,
     harnessVersion: null,
     harnessSeries: null,
+    loop: "program",
+    yield: true,
     extra: false,
     startedAt: NOW4 - (100 - i) * H,
     endedAt: NOW4 - (99 - i) * H,
@@ -1278,5 +1318,57 @@ describe("claude-code defaults its compaction window to 300k (operator, 2026-11-
     expect(row.windows).toEqual(["auto", "300k"]);
     expect("compactWindow" in row).toBe(false);
     expect(rowOf(projectModel(optOut, runs, DEFAULT_POLICY, { now: NOW4 }), runs, "/nowhere")).toMatchObject({ compactWindow: "auto", windows: ["auto"] });
+  });
+});
+
+describe("a target counts the runs of the loop its entry launches (operator, 2026-11-14)", () => {
+  const NOW5 = 1_800_000_000_000;
+  const done = (i: number, over: Partial<RunFact> = {}): RunFact => ({
+    runId: `loop-${i}`,
+    model: "m",
+    effort: null,
+    episode: "e90",
+    episodeOverride: false,
+    harnessVersion: "harness-0.5-1-gabc",
+    harnessSeries: "0.5",
+    extra: false,
+    startedAt: NOW5 - (10 - i) * 3_600_000,
+    endedAt: NOW5 - (9 - i) * 3_600_000,
+    terminationReason: "episode-limit",
+    modelResponses: 40,
+    bestLevel: 4,
+    live: false,
+    pause: null,
+    account: null,
+    character: null,
+    episodeMs: null,
+    campaign: null,
+    cell: null,
+    credential: null,
+    ...over,
+  });
+  const policy = { ...DEFAULT_POLICY, series: "0.5" };
+
+  test("the rule: the loop and the yield each driver launches", () => {
+    expect(countsTowardTarget({ loop: "program", yield: true }, "openai")).toBe(true);
+    expect(countsTowardTarget({ loop: "program" }, "openai")).toBe(false);
+    expect(countsTowardTarget({}, "openai")).toBe(false);
+    expect(countsTowardTarget({ loop: "program" }, "codex")).toBe(true);
+    expect(countsTowardTarget({ loop: "program", yield: true }, "codex")).toBe(false);
+    expect(countsTowardTarget({ loop: "program", yield: true }, "claude-code")).toBe(true);
+    expect(countsTowardTarget({}, "claude-code")).toBe(false);
+    expect(countsTowardTarget({}, "pi")).toBe(true);
+    expect(countsTowardTarget({ loop: "program" }, "pi")).toBe(false);
+    // An entry with no driver is on the default one.
+    expect(countsTowardTarget({ loop: "program", yield: true }, undefined)).toBe(true);
+  });
+
+  test("snippet-loop runs in the same series are attempts and history, never a copy of a program-loop run", () => {
+    const entry: RosterModel = { name: "m", model: "m", tier: "t1" };
+    const snippet = [done(1), done(2), done(3)];
+    const st = projectModel(entry, snippet, policy, { now: NOW5 });
+    expect(st.perEpisode.e90).toMatchObject({ attempts: 3, counted: 0, target: 3, bestLevel: 4 });
+    const program = [...snippet, done(4, { loop: "program", yield: true })];
+    expect(projectModel(entry, program, policy, { now: NOW5 }).perEpisode.e90).toMatchObject({ attempts: 4, counted: 1 });
   });
 });

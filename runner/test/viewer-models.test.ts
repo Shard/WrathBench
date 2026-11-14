@@ -56,7 +56,7 @@ function writeRun(runsDir: string, r: Synth): void {
       harnessVersion: r.harnessVersion ?? `harness-${currentSeries() ?? "0.0"}-test`,
       startedAt: r.startedAt,
       config,
-      comparability: { effort: r.effort ?? null, episode: r.episode ?? "e90", ...window },
+      comparability: { effort: r.effort ?? null, episode: r.episode ?? "e90", ...window, loop: "program", yield: true },
     }),
   );
   const lines: string[] = [`{"t":"meta","ts":${r.startedAt}}`];

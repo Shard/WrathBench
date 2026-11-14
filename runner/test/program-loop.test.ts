@@ -7,8 +7,8 @@
  * this change leaves passing untouched.
  */
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { ActionHintNote, ProgramFact, ProgramFacts, RoutineRow } from "@wrathbench/mcp";
 import { PROGRAM_EDIT_SCRATCHPAD_NOT_FOUND, routineDetailKey, Scratchpad } from "@wrathbench/mcp";
 import { PROGRAM_FANOUT_RUN_SNIPPET_SENTENCE } from "@wrathbench/mcp/fanout";
@@ -17,7 +17,7 @@ import { campaignPairRefusals, type PairRosterEntry } from "../src/campaigns";
 import { comparabilityOf, promptHash } from "../src/comparability";
 import { assembleContext, capWindowMessage, CONTEXT_POLICY, PadSeen, renderWindow, scratchpadUnchangedLine, type HistoryMessage } from "../src/context";
 import { PAD_HEADER_PATTERN } from "../../infra/inspect-run";
-import { loadRunConfig, programLoopRefusal } from "../src/config";
+import { defaultLoopOf, launchLoopOf, loadRunConfig, loopLaunchRefusal, programLoopRefusal } from "../src/config";
 import { EpisodicLog } from "../src/episodic";
 import { fanoutSessionNote } from "../src/fanout-run";
 import { runLoop } from "../src/loop";
@@ -31,7 +31,7 @@ import {
   resumeSessionNote,
   SYSTEM_PROMPT,
 } from "../src/prompt";
-import { configFromArgs } from "../src/run";
+import { carryProgramFiles, configFromArgs, dropCarriedProgramFiles } from "../src/run";
 import { parseRunArgs } from "../src/run-flags";
 import type { SandboxHost } from "../src/sandbox/host";
 import { RecordSignals } from "../src/session-record";
@@ -48,15 +48,19 @@ const tempDir = tempDirs();
 const BASE = ["--driver", "stub", "--run-id", "r1", "--token", "tok-aaaaaaaaaaaaaaaaaaaaaa", "--module-url", "http://x"];
 
 describe("config, flags and the tuple", () => {
-  test("--loop program and --yield true are config and tuple keys, last in the tuple, and absent on the snippet loop", () => {
+  test("--loop and --yield are written at every launch; the tuple carries them on the program loop only", () => {
+    // The stub is not a model: it keeps the snippet loop unless asked.
     const snippet = configFromArgs(BASE, {});
-    expect("loop" in snippet).toBe(false);
+    expect(snippet.loop).toBe("snippet");
     expect("yield" in snippet).toBe(false);
     const said = configFromArgs([...BASE, "--loop", "snippet"], {});
-    expect("loop" in said).toBe(false);
+    expect(said.loop).toBe("snippet");
     const tSnippet = comparabilityOf(snippet, "harness-1.0-1-gabc");
     expect("loop" in tSnippet).toBe(false);
     expect(comparabilityOf(said, "harness-1.0-1-gabc")).toEqual(tSnippet);
+    // A config stored before the loop was written down reads as it did, and stamps the same tuple.
+    const { loop: _loop, ...legacy } = snippet;
+    expect(comparabilityOf(legacy as typeof snippet, "harness-1.0-1-gabc")).toEqual(tSnippet);
 
     const program = configFromArgs([...BASE, "--loop", "program"], {});
     expect(program.loop).toBe("program");
@@ -71,6 +75,47 @@ describe("config, flags and the tuple", () => {
     expect(tSnippet.promptHash).toBe(promptHash(SYSTEM_PROMPT));
   });
 
+  test("the default loop: the program loop with yield on the fixed loop and claude-code, without it on codex, the snippet loop elsewhere", () => {
+    const MODEL = ["--run-id", "r1", "--token", "tok-aaaaaaaaaaaaaaaaaaaaaa", "--module-url", "http://x", "--model", "m"];
+    const openai = configFromArgs([...MODEL, "--driver", "openai", "--episode", "freeplay"], {});
+    expect([openai.loop, openai.yield]).toEqual(["program", true]);
+    const off = configFromArgs([...MODEL, "--driver", "openai", "--episode", "freeplay", "--yield", "false"], {});
+    expect([off.loop, off.yield]).toEqual(["program", undefined]);
+    const codex = configFromArgs([...MODEL, "--driver", "codex", "--credential", "chatgpt-1", "--episode", "freeplay"], {});
+    expect([codex.loop, codex.yield]).toEqual(["program", undefined]);
+    expect(comparabilityOf(codex, "harness-1.0-1-gabc").loop).toBe("program");
+    const cc = configFromArgs([...MODEL, "--driver", "claude-code", "--episode", "freeplay"], {});
+    expect([cc.loop, cc.yield]).toEqual(["program", true]);
+    expect(defaultLoopOf({ driver: "pi" })).toEqual({ loop: "snippet", yield: false });
+    expect(defaultLoopOf({ driver: "reference" })).toEqual({ loop: "snippet", yield: false });
+    // A fan-out run takes its driver's default: one program drives every character.
+    expect(defaultLoopOf({ driver: "openai", fanout: { characters: 2 } })).toEqual({ loop: "program", yield: true });
+    expect(defaultLoopOf({ driver: "codex", fanout: { characters: 2 } })).toEqual({ loop: "program", yield: false });
+    expect(defaultLoopOf({ driver: "pi", fanout: { characters: 2 } })).toEqual({ loop: "snippet", yield: false });
+    expect(launchLoopOf({ driver: "openai" }, { loop: "program" })).toEqual({ loop: "program", yield: true });
+    expect(launchLoopOf({ driver: "codex" }, { yield: true })).toEqual({ loop: "program", yield: true });
+    expect(launchLoopOf({ driver: "openai" }, { loop: "snippet" })).toEqual({ loop: "snippet" });
+  });
+
+  test("a model's snippet loop launches only as a probe, and scored episodes wait; the stub and the reference are exempt", () => {
+    for (const driver of ["openai", "codex", "claude-code", "pi"] as const) {
+      for (const episode of ["e90", "e360", "freeplay", undefined] as const) {
+        expect(loopLaunchRefusal({ loop: "snippet", driver, episode })).toContain("legacy arm (--episode probing)");
+        // A config stored before the loop was written down was the snippet loop.
+        expect(loopLaunchRefusal({ driver, episode })).toContain("legacy arm (--episode probing)");
+      }
+      expect(loopLaunchRefusal({ loop: "snippet", driver, episode: "probing" })).toBeNull();
+    }
+    expect(loopLaunchRefusal({ loop: "snippet", driver: "pi", episode: "freeplay" })).toContain("runs only the snippet loop for now");
+    expect(loopLaunchRefusal({ loop: "snippet", driver: "claude-code", episode: "freeplay" })).toContain("runs the program loop (--loop program)");
+    expect(loopLaunchRefusal({ loop: "program", driver: "openai", episode: "freeplay" })).toBeNull();
+    expect(loopLaunchRefusal({ loop: "program", driver: "codex", episode: undefined })).toBeNull();
+    for (const episode of ["e90", "e360"] as const) expect(loopLaunchRefusal({ loop: "program", driver: "openai", episode })).toContain("scored episodes do not run yet");
+    for (const driver of ["stub", "reference"] as const) {
+      for (const episode of ["e90", "freeplay", undefined] as const) expect(loopLaunchRefusal({ loop: "snippet", driver, episode })).toBeNull();
+    }
+  });
+
   test("the loop is identity: a stored config reloads it, as a resume does", () => {
     const c = configFromArgs([...BASE, "--loop", "program", "--yield", "true"], {});
     const again = loadRunConfig(JSON.parse(JSON.stringify(c)));
@@ -78,7 +123,7 @@ describe("config, flags and the tuple", () => {
     expect(again.yield).toBe(true);
   });
 
-  test("refused off the fixed loop, on a scored tier, on a continuation, and --yield without it; run at fan-out", () => {
+  test("refused off the fixed loop, claude-code and codex, on a route driver, and --yield without it; run at fan-out", () => {
     const refused = (extra: string[]): string => {
       try {
         configFromArgs([...BASE.filter((a, i, all) => !(a === "stub" && all[i - 1] === "--driver") && a !== "--driver"), ...extra], {});
@@ -89,25 +134,53 @@ describe("config, flags and the tuple", () => {
     };
     expect(refused(["--driver", "stub", "--yield", "true"])).toContain("needs --loop program");
     expect(refused(["--driver", "pi", "--loop", "program"])).toContain("runs a CLI's own turn loop");
-    expect(refused(["--driver", "stub", "--loop", "program", "--episode", "e90"])).toContain("is a scored episode");
     // One program drives every character of a fan-out run.
     expect(refused(["--driver", "stub", "--loop", "program", "--max-characters", "2", "--accounts", "ALPHA,BRAVO", "--episode", "freeplay"])).toBe("");
     expect(refused(["--driver", "stub", "--loop", "nope"])).toContain("--loop takes program or snippet");
-    expect(programLoopRefusal({ loop: "program", driver: "stub", episode: "freeplay", continuedFrom: "r0" })).toContain("--continue-from");
+    // A continuation runs it: its files and memory come along (`carryProgramFiles`).
+    expect(programLoopRefusal({ loop: "program", driver: "openai", episode: "freeplay" })).toBeNull();
     expect(programLoopRefusal({ loop: "program", driver: "openai", episode: "probing" })).toBeNull();
     // codex and claude-code run it (the turn-end pause is the sleep, and yield inside a turn); pi does not yet.
     expect(programLoopRefusal({ loop: "program", yield: true, driver: "codex", episode: "probing" })).toBeNull();
     expect(programLoopRefusal({ loop: "program", yield: true, driver: "claude-code", episode: "probing" })).toBeNull();
     expect(programLoopRefusal({ loop: "program", driver: "claude-code", episode: "probing" })).toBeNull();
     expect(programLoopRefusal({ loop: "program", driver: "pi", episode: "probing" })).toContain("runs a CLI's own turn loop");
-    expect(programLoopRefusal({ driver: "openai", episode: "e90" })).toBeNull();
+    expect(programLoopRefusal({ loop: "snippet", driver: "openai", episode: "e90" })).toBeNull();
+  });
+
+  test("a continuation on the program loop carries the files and memory.json, not the versions or the registry", () => {
+    const from = tempDir("wrathbench-carry-from-");
+    const to = tempDir("wrathbench-carry-to-");
+    mkdirSync(join(from, "program", "files", "lib"), { recursive: true });
+    mkdirSync(join(from, "program", "deploys", "3"), { recursive: true });
+    writeFileSync(join(from, "program", "files", "main.ts"), "export async function grind() {}\n");
+    writeFileSync(join(from, "program", "files", "lib", "pull.ts"), "export const x = 1;\n");
+    writeFileSync(join(from, "program", "files", "memory.json"), '{"phase":"grind"}');
+    writeFileSync(join(from, "program", "registry.json"), '{"deploy":3,"attempted":3,"routines":[{"name":"grind","state":"running"}]}');
+    expect(carryProgramFiles(from, to)).toBe(true);
+    expect(readFileSync(join(to, "program", "files", "memory.json"), "utf8")).toBe('{"phase":"grind"}');
+    expect(readFileSync(join(to, "program", "files", "lib", "pull.ts"), "utf8")).toBe("export const x = 1;\n");
+    expect(readdirSync(join(to, "program")).sort()).toEqual(["files"]);
+    // A snippet-loop predecessor has no files: the workspace starts empty.
+    expect(carryProgramFiles(tempDir("wrathbench-carry-none-"), tempDir("wrathbench-carry-to2-"))).toBe(false);
+  });
+
+  test("a continuation whose character is gone drops the files it carried, before the sandbox loads them", () => {
+    const from = tempDir("wrathbench-drop-from-");
+    const to = tempDir("wrathbench-drop-to-");
+    mkdirSync(join(from, "program", "files"), { recursive: true });
+    writeFileSync(join(from, "program", "files", "main.ts"), "export async function grind() {}\n");
+    writeFileSync(join(from, "program", "files", "memory.json"), '{"phase":"grind"}');
+    expect(carryProgramFiles(from, to)).toBe(true);
+    dropCarriedProgramFiles(to);
+    expect(readdirSync(join(to, "program", "files"))).toEqual([]);
   });
 
   test("both flags parse, and an arm may carry them", () => {
     expect(parseRunArgs(["--loop", "program", "--yield", "true"])).toEqual({ loop: "program", yield: "true" });
   });
 
-  test("a campaign pair refuses the program loop on pi and --yield without it", () => {
+  test("a campaign pair refuses the program loop on pi, and --yield where the arm runs the snippet loop", () => {
     const roster: Record<string, PairRosterEntry> = { ds: { driver: "openai" }, cc: { driver: "claude-code" }, cx: { driver: "codex" }, pi: { driver: "pi" } };
     const arms = [
       { id: "snippet" },
@@ -122,7 +195,8 @@ describe("config, flags and the tuple", () => {
       assignments: [{ model: "ds", runsPerCell: 1 }, { model: "cc", runsPerCell: 1 }, { model: "cx", runsPerCell: 1 }, { model: "pi", runsPerCell: 1 }],
     };
     const out = campaignPairRefusals(c, roster).map((r) => `${r.ref}:${r.arm}`);
-    expect(out.sort()).toEqual(["cc:stray", "cx:stray", "ds:stray", "pi:program", "pi:program-yield", "pi:stray"]);
+    // `--yield` alone is the program loop's on the drivers that run it by default; pi runs the snippet loop.
+    expect(out.sort()).toEqual(["pi:program", "pi:program-yield", "pi:stray"]);
     // One agent driving the whole party runs the program loop too.
     const oneAgent = { ...c, arms: [{ id: "one-agent", agents: 1 as const, args: ["--loop", "program"] }] };
     expect(campaignPairRefusals(oneAgent, roster).map((r) => `${r.ref}:${r.arm}`)).toEqual(["pi:one-agent"]);
@@ -413,6 +487,13 @@ describe("renderWake", () => {
         "  [grind] pulling boar ×3",
       ].join("\n"),
     );
+  });
+
+  test("a failed load says what it followed: a restart, or a continuation's carried files", () => {
+    const failed = (by: "restart" | "carried") => renderWake(view({ facts: emptyFacts({ facts: [{ kind: "load_failed", ts: NOW - 1_000, error: "main.ts:1 parse error", running: null, by }] }) }));
+    expect(failed("restart")).toContain("load after the restart failed: main.ts:1 parse error");
+    expect(failed("carried")).toContain("the carried files did not load: main.ts:1 parse error");
+    expect(failed("carried")).not.toContain("restart");
   });
 
   test("the same view is the same bytes; nothing running and the cap say so as facts", () => {

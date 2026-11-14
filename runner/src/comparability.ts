@@ -343,7 +343,7 @@ export function comparabilityOf(
     // After `wiki`, for the same reason again; absent is the CLI's `auto`.
     ...(config.compactWindow !== undefined ? { compactWindow: config.compactWindow } : {}),
     // After `compactWindow`, for the same reason; absent is the snippet loop.
-    ...(config.loop !== undefined ? { loop: config.loop } : {}),
+    ...(config.loop === "program" ? { loop: "program" as const } : {}),
     ...(config.yield === true ? { yield: true as const } : {}),
   };
 }
