@@ -144,6 +144,8 @@ import {
   planResumes,
   planStaleRuns,
   planTick,
+  evalPoolDraw,
+  evalPoolTaken,
   policyJobDropped,
   type QueuePlan,
   type QueueSkip,
@@ -1216,7 +1218,18 @@ async function main(): Promise<void> {
     // Every run id on disk, archive included: a job's remainder never reuses
     // one, and a campaign square's fresh attempt numbers past them.
     const takenRunIds = new Set(runs.map((f) => f.runId));
-    campaignJobs = withTakenRunIds(pinnedCampaignJobs(cfg, probes, healthyFrom(states)), takenRunIds);
+    // A party that draws its accounts takes this attempt's from the eval pool:
+    // none a run without a verdict or a running job holds (`evalPoolDraw`).
+    const drawHeld: { job: FleetJob; why: string }[] = [];
+    const draw = evalPoolDraw({
+      mode: cfg.policy.worlds,
+      pool: cfg.accounts.evalPool ?? [],
+      taken: evalPoolTaken(runs, [...assigned.values(), ...[...liveJobs.values()].flatMap((j) => j.accounts ?? (j.account !== undefined ? [j.account] : []))]),
+      held: (a) => accountHeldBy(a, ""),
+      running: (name) => (sets.running.has(name) ? liveJobs.get(name)?.accounts : undefined),
+    });
+    campaignJobs = withTakenRunIds(pinnedCampaignJobs(cfg, probes, healthyFrom(states), draw, drawHeld), takenRunIds);
+    for (const h of drawHeld) pinnedSkips.push({ job: h.job, reason: h.why });
     // Every session already held goes on the book first — a live job of this
     // supervisor's, pinned, pooled, drained or no longer in the file — so a
     // fresh placement below never takes a slot a live run is on (the

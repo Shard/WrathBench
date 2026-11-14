@@ -489,6 +489,14 @@ worlds:
         ephemeral-storage: 256Mi
       limits:
         memory: 1Gi
+  # The eval pool, EVAL01 … EVALnn (at most 99): the accounts a party
+  # campaign that draws its own (`accounts: "evals"`) takes per attempt, one
+  # per member. Created by the bootstrap Job, handed to every pod that reads
+  # the fleet config, and on no allowlist of the long-lived world's — a
+  # world's allowlist is its attempt's accounts — so growing it is a values
+  # change with no worldserver restart. Two parties of five need 10.
+  pool:
+    size: 10
   # AC_TEMP_DIR, as the long-lived world's.
   tempSizeLimit: 2Gi
   # The world's own logs dir (Errors.log, and dbimport's log of what it

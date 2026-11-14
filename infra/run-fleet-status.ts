@@ -54,6 +54,8 @@ import {
   implicitPauses,
   planResumes,
   planStaleRuns,
+  evalPoolDraw,
+  evalPoolTaken,
   planTick,
   progressLabel,
   providerResetOf,
@@ -1365,6 +1367,14 @@ export function planDryRun(opts: {
     opts.runPods,
     opts.scoredGate,
     opts.worlds,
+    // A party that draws its accounts, drawn as the live tick draws them.
+    evalPoolDraw({
+      mode: config.policy.worlds,
+      pool: config.accounts.evalPool ?? [],
+      taken: evalPoolTaken(runs, inFlight.flatMap((r) => r.accounts ?? [r.account])),
+      held,
+      running: (name) => inFlight.find((r) => r.name === name)?.accounts,
+    }),
   );
   const counted = countedFrom(states);
   const rows: AccountRow[] = [];

@@ -373,6 +373,12 @@ here: run.ts never opens it, and a run pod mounts no config. */}}
        that parses it must read the same pool, as with the store itself. */}}
 - name: WRATHBENCH_POOL_SIZE
   value: {{ include "wrathbench.poolSize" . | quote }}
+{{- if include "wrathbench.on.worlds" . }}
+{{- /* The eval pool's size (worlds.pool.size): EVAL01 … EVALnn, which a
+       party campaign that draws its accounts takes per attempt. */}}
+- name: WRATHBENCH_EVAL_POOL_SIZE
+  value: {{ include "wrathbench.evalPoolSize" . | quote }}
+{{- end }}
 {{- include "wrathbench.groupsEnv" . }}
 {{- end -}}
 
@@ -404,6 +410,18 @@ from 0 to 99, the two digits POOL01 … POOL99 have (runner/src/account-pool.ts)
 {{- $size := int (.Values.worldserver.pool.size | default 0) -}}
 {{- if or (lt $size 0) (gt $size 99) -}}
 {{- fail "worldserver.pool.size must be from 0 to 99: the pool's names are POOL01 … POOL99" -}}
+{{- end -}}
+{{- $size -}}
+{{- end -}}
+
+{{/*
+The eval pool's size, `worlds.pool.size`, checked as the generated pool's:
+EVAL01 … EVAL99. On no allowlist of the long-lived world's.
+*/}}
+{{- define "wrathbench.evalPoolSize" -}}
+{{- $size := int (.Values.worlds.pool.size | default 0) -}}
+{{- if or (lt $size 0) (gt $size 99) -}}
+{{- fail "worlds.pool.size must be from 0 to 99: the eval pool's names are EVAL01 … EVAL99" -}}
 {{- end -}}
 {{- $size -}}
 {{- end -}}

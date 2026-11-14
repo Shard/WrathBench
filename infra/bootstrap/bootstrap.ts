@@ -79,7 +79,7 @@
 
 import { SQL } from "bun";
 import { createHash, randomBytes } from "node:crypto";
-import { poolAccountNames, poolSizeOf } from "../../runner/src/account-pool";
+import { evalPoolAccountNames, evalPoolSizeOf, poolAccountNames, poolSizeOf } from "../../runner/src/account-pool";
 import { isTenantAccountName, tenantAccountNames, tenantPoolSizeOf } from "../tenant-accounts";
 
 // --------------------------------------------------------------------- SRP6
@@ -399,7 +399,8 @@ export const ACCOUNTS_ONLY = "--accounts-only";
 const ACCOUNT_NAME = /^[A-Z][A-Z0-9]{0,15}$/;
 
 const USAGE = `usage: bun infra/bootstrap/bootstrap.ts                    the realm row, the configured runner account and the
-                                                             generated pool (POOL01… to WRATHBENCH_POOL_SIZE), and
+                                                             generated pool (POOL01… to WRATHBENCH_POOL_SIZE), the eval
+                                                             pool (EVAL01… to WRATHBENCH_EVAL_POOL_SIZE), and
                                                              hosted mode's tenants (TENANT01… to WRATHBENCH_TENANT_POOL_SIZE)
        bun infra/bootstrap/bootstrap.ts ${ACCOUNTS_ONLY} NAME…   create each named account that is missing, password = its name;
                                                              nothing else is written`;
@@ -450,6 +451,11 @@ export async function main(
     console.error(`bootstrap: ${pool.error}`);
     return 2;
   }
+  const evals = mode.kind === "bootstrap" ? evalPoolSizeOf(env) : { size: 0 };
+  if ("error" in evals) {
+    console.error(`bootstrap: ${evals.error}`);
+    return 2;
+  }
   const tenants = mode.kind === "bootstrap" ? tenantPoolSizeOf(env) : { size: 0 };
   if ("error" in tenants) {
     console.error(`bootstrap: ${tenants.error}`);
@@ -465,6 +471,11 @@ export async function main(
       if (pool.size > 0) {
         log(`the generated pool: POOL01 to ${poolAccountNames(pool.size).at(-1)}`);
         await ensureNamedAccounts(sql, poolAccountNames(pool.size));
+      }
+      if (evals.size > 0) {
+        // On no allowlist of the long-lived world's: an eval world's allowlist is its attempt's accounts.
+        log(`the eval pool: EVAL01 to ${evalPoolAccountNames(evals.size).at(-1)}`);
+        await ensureNamedAccounts(sql, evalPoolAccountNames(evals.size));
       }
       if (tenants.size > 0) await ensureTenantAccounts(sql, tenantAccountNames(tenants.size));
     }
