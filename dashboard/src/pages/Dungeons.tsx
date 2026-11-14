@@ -20,7 +20,7 @@ import { partyHref } from "../lib/party";
 import { poll } from "../lib/poll";
 
 const BOARD_NOTE =
-  "The fixed Deadmines episode from a staged level-20 party, as two evals never pooled: one agent driving all five characters, and five agents of one model. A row is a model condition's best attempt, with how many of its counted attempts cleared. Cleared rows first, by time to clear from launch; the rest by bosses killed of the eight, then time to the last. Deaths and wipes are shown and never order a row.";
+  "The fixed Deadmines episode from a staged level-20 party, a table per arm, never pooled or ranked against each other. A row is a model condition's best attempt, with how many of its counted attempts cleared. Cleared rows first, by time to clear from launch; the rest by bosses killed of the eight, then time to the last. Deaths and wipes are shown and never order a row.";
 
 /** Attempts end in hours; the board moves when one does. */
 const POLL_MS = 60_000;
