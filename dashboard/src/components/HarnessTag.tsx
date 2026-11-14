@@ -10,7 +10,7 @@ export function HarnessTag(props: { harness: string | null | undefined }) {
   return (
     <span
       class={`badge harness-${props.harness ?? "unknown"}`}
-      title="which loop owned the run: wrathbench is the fixed loop, claude-code the Claude Code CLI scaffold, codex the OpenAI Codex CLI scaffold, pi the pi CLI scaffold (probe-only). A tag, not a partition."
+      title="which loop owned the run: wrathbench is the fixed loop, claude-code the Claude Code CLI scaffold, codex the OpenAI Codex CLI scaffold, pi the pi CLI scaffold (probe-only), external an agent loop that is not ours (its own group, never ranked with ours). A tag, not a partition."
     >
       {props.harness ?? "—"}
     </span>

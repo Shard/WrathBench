@@ -4087,6 +4087,7 @@ export const DRIVER_USAGE: Readonly<Record<string, UsageShape>> = {
   pi: "response",
   stub: "response",
   reference: "response",
+  external: "response",
 };
 
 /**

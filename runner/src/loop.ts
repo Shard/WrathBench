@@ -26,7 +26,8 @@ import type { EpisodicLog } from "./episodic";
 import { buildSystemPrompt, programPromptOf, steeringOf } from "./prompt";
 import { fixedLoopRequestRecord } from "./request-record";
 import { appendPendingActionHints, callTool, coerceToolArgs, normalizeToolArgs, toolsFor, type ToolContext } from "./tools";
-import { digestCharacter, PLAIN_FANOUT_RENDER, type CharacterDigest, type FanoutSurface } from "@wrathbench/mcp/fanout";
+import { digestCharacter, type CharacterDigest, type FanoutSurface } from "@wrathbench/mcp/fanout";
+import { WRATHBENCH_FANOUT_RENDER } from "./fanout-wording";
 import { harnessOf } from "./config";
 import { SUBSCRIPTION_PAUSE } from "./lapse";
 import { describeWindows, thresholdsOf, type SubscriptionUsage, type UsageHold } from "./subscription-usage";
@@ -532,10 +533,11 @@ export class ContextBuilder {
     // results the same way, `ToolContext.secrets`).
     const contextText = this.o.trajectory.scrub(
       assembleContext({
-        // A fan-out run's state is the stack's roll-up, in its plain default wording.
+        // A fan-out run's state is the roll-up, in the runner's own copy of the
+        // stack's wording (`fanout-wording.ts`), so a stack bump cannot move it.
         stateSummary:
           roster !== undefined
-            ? PLAIN_FANOUT_RENDER.rollup(this.fanoutDigests, { maxCharacters: roster.maxCharacters, views: roster.views() })
+            ? WRATHBENCH_FANOUT_RENDER.rollup(this.fanoutDigests, { maxCharacters: roster.maxCharacters, views: roster.views() })
             : formatStateSummary(snap, { sessionLive: this.live }),
         events,
         folded,
