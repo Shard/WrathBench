@@ -14,6 +14,13 @@
  * verifier does not match the configured password, and a pool account that
  * exists is left as it is. A pool that shrinks deletes nothing.
  *
+ * With WRATHBENCH_TENANT_POOL_SIZE set (the chart's `hosted.tenants.size`,
+ * only with `hosted` on) the plain run also converges hosted mode's tenant
+ * pool, `TENANT01`… (infra/tenant-accounts.ts): each missing one is created
+ * with a random password that is never printed or kept, and every one is left
+ * with no `account_access` row, so it is a plain player (security level 0) on
+ * every realm. An existing tenant account keeps its password.
+ *
  * `--accounts-only NAME…` (`bun wb accounts ensure NAME…`) does neither. It
  * creates each named account that does not exist yet, with its own name as its
  * password, and changes nothing else: not the realm rows, not an account that
@@ -73,6 +80,7 @@
 import { SQL } from "bun";
 import { createHash, randomBytes } from "node:crypto";
 import { poolAccountNames, poolSizeOf } from "../../runner/src/account-pool";
+import { isTenantAccountName, tenantAccountNames, tenantPoolSizeOf } from "../tenant-accounts";
 
 // --------------------------------------------------------------------- SRP6
 
@@ -349,6 +357,39 @@ async function ensureNamedAccounts(sql: SQL, names: readonly string[]): Promise<
   );
 }
 
+// ------------------------------------------------------- the tenant pool
+
+/**
+ * Hosted mode's tenant accounts: each missing one created with a random
+ * password that only this function ever holds, and never logged; then every
+ * one stripped of any `account_access` row, so none is above a plain player
+ * whatever wrote it. A gateway hands these to people who are not the
+ * operator, so a password anyone knows (a harness account's is its name)
+ * would let them log a client in on it; nothing needs to, since the module
+ * opens their sessions in-process.
+ */
+async function ensureTenantAccounts(sql: SQL, names: readonly string[]): Promise<void> {
+  let created = 0;
+  for (const name of names) {
+    let row = await readAccount(sql, name);
+    if (row === undefined) {
+      const password = randomBytes(32).toString("hex");
+      const salt = randomBytes(32);
+      const verifier = calculateVerifier(name, password, salt);
+      await sql`
+        INSERT INTO account (username, salt, verifier, expansion, email, reg_mail, joindate)
+        VALUES (${name}, UNHEX(${salt.toString("hex")}), UNHEX(${verifier.toString("hex")}), ${EXPANSION}, '', '', NOW())
+      `;
+      row = await verifyRoundTrip(sql, name, password);
+      await ensureRealmCharactersOf(sql, row.id);
+      created++;
+    }
+    // Security level 0 on every realm: the absence of a row is the plain player.
+    await sql`DELETE FROM account_access WHERE id = ${row.id}`;
+  }
+  log(`the tenant pool: ${names[0]} to ${names.at(-1)}, ${created} created with a random password nobody is shown, none with account access`);
+}
+
 // ---------------------------------------------------------------- the CLI
 
 /** The flag of the account-only mode. wb checks the runner pod's copy of this file carries it before it runs one. */
@@ -358,7 +399,8 @@ export const ACCOUNTS_ONLY = "--accounts-only";
 const ACCOUNT_NAME = /^[A-Z][A-Z0-9]{0,15}$/;
 
 const USAGE = `usage: bun infra/bootstrap/bootstrap.ts                    the realm row, the configured runner account and the
-                                                             generated pool (POOL01… to WRATHBENCH_POOL_SIZE)
+                                                             generated pool (POOL01… to WRATHBENCH_POOL_SIZE), and
+                                                             hosted mode's tenants (TENANT01… to WRATHBENCH_TENANT_POOL_SIZE)
        bun infra/bootstrap/bootstrap.ts ${ACCOUNTS_ONLY} NAME…   create each named account that is missing, password = its name;
                                                              nothing else is written`;
 
@@ -376,6 +418,7 @@ export function parseArgs(argv: readonly string[]): Mode {
     const name = raw.toUpperCase();
     if (!ACCOUNT_NAME.test(name)) return { kind: "error", message: `${JSON.stringify(raw)} is not an account name: a letter, then letters and digits, 16 at most` };
     if (name === "SPECTATOR") return { kind: "error", message: "SPECTATOR is the operator's GM account; infra/spectator-account.ts (bun wb accounts spectator) owns it" };
+    if (isTenantAccountName(name)) return { kind: "error", message: `${name} is a hosted tenant account; only the bootstrap Job creates one, with a password nobody knows, never its name` };
     if (!names.includes(name)) names.push(name);
   }
   if (names.length === 0) return { kind: "error", message: `${ACCOUNTS_ONLY} needs the accounts to create, by name; it has no default` };
@@ -407,6 +450,11 @@ export async function main(
     console.error(`bootstrap: ${pool.error}`);
     return 2;
   }
+  const tenants = mode.kind === "bootstrap" ? tenantPoolSizeOf(env) : { size: 0 };
+  if ("error" in tenants) {
+    console.error(`bootstrap: ${tenants.error}`);
+    return 2;
+  }
   const sql = await open();
   try {
     if (mode.kind === "accounts") {
@@ -418,6 +466,7 @@ export async function main(
         log(`the generated pool: POOL01 to ${poolAccountNames(pool.size).at(-1)}`);
         await ensureNamedAccounts(sql, poolAccountNames(pool.size));
       }
+      if (tenants.size > 0) await ensureTenantAccounts(sql, tenantAccountNames(tenants.size));
     }
     log("done");
   } finally {

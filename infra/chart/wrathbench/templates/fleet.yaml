@@ -96,6 +96,7 @@ spec:
             # list of variables, and none of these is on it.
             {{- include "wrathbench.dbEnv" . | nindent 12 }}
             {{- include "wrathbench.harnessSecretEnv" . | nindent 12 }}
+            {{- with include "wrathbench.worldsSecretEnv" . | trim }}{{ . | nindent 12 }}{{ end }}
             {{- /* The party stager, which the roster runs before a fresh party
                    launch: staging on only (values.yaml `staging`). */}}
             {{- with include "wrathbench.stagerEnv" . | trim }}{{ . | nindent 12 }}{{ end }}
