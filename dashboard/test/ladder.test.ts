@@ -872,6 +872,15 @@ describe("ladderPoints over another pair of axes", () => {
     expect(m.xp).toBe(100);
   });
 
+  test("a claude-code run's turns are its CLI's model turns, every other harness's its response records", () => {
+    // 148 response records, 124 model turns by the CLI: a record is one envelope of a message there.
+    const cli: ResultRun["tokens"] = { ...tokens(9000)!, turns: 124 };
+    expect(runMetrics(priced({ harness: "claude-code", tokens: cli, modelResponses: 148 })).turns).toBe(124);
+    expect(runMetrics(priced({ harness: "claude-code", tokens: null, modelResponses: 148 })).turns).toBe(148);
+    expect(runMetrics(priced({ harness: "codex", tokens: cli, modelResponses: 148 })).turns).toBe(148);
+    expect(runMetrics(priced({ harness: "wrathbench", tokens: cli, modelResponses: 148 })).turns).toBe(148);
+  });
+
   test("basis is null only when no counted run carries a price, which a cost axis never plots", () => {
     const runs = [priced({ runId: "a", model: "m", actualCost: null, expectedCost: null, modelResponses: 10, xpEarned: 50 })];
     expect(ladderPoints(runs, TURNS, XP).points[0]!.basis).toBeNull();

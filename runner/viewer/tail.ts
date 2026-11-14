@@ -703,8 +703,52 @@ function collapseClaudeTurns(
 }
 
 /**
+ * A claude-code run's model turns, as its CLI counted them: each
+ * `claude_result` that reports output closes one driver turn, and its
+ * `num_turns` (its message count where it carried none) is that turn's model
+ * turns, not a running total. The messages before it are the usage-bearing
+ * `response` records since the last such result in the same CLI process (a
+ * `driver` record opens a new one); a message no result covers — a turn cut
+ * short, or still running — counts one, as the one API call it was. A result
+ * with no message of its own to cover is left out.
+ *
+ * The same count as `bun wb inspect requests` reads for its run column
+ * (infra/inspect-run.ts `requestReducer`, which copies it because that file
+ * imports nothing, and is pinned to it by infra/inspect-requests.test.ts).
+ * Every other driver's turns are its requests; see `tokenTotals`.
+ */
+export function claudeModelTurns(entries: readonly EntrySummary[]): number {
+  let turns = 0;
+  /** Usage-bearing messages since the last result that covered any, in this CLI process. */
+  let pending = 0;
+  for (const e of entries) {
+    if (e.t === "driver") {
+      turns += pending;
+      pending = 0;
+    } else if (e.t === "response") {
+      if (e["usage"] !== undefined) pending++;
+    } else if (e.t === "claude_result") {
+      const usage = (e["claudeTurn"] as ClaudeTurnUsage | undefined) ?? claudeTurnUsage(e);
+      // A result that reports no output speaks for nothing (`claudeTurns`): its messages stay a turn each.
+      if (usage === null || !(usage.completion > 0)) {
+        turns += pending;
+      } else if (pending > 0) {
+        const n = e["numTurns"];
+        turns += typeof n === "number" && Number.isFinite(n) && n >= 0 ? Math.trunc(n) : pending;
+      }
+      pending = 0;
+    }
+  }
+  return turns + pending;
+}
+
+/**
  * Token accounting for a whole run. Prompt tokens are summed per turn, so the
  * total is what a provider would bill, not the size of the final context.
+ *
+ * `turns` is the run's model turns: its requests, except on claude-code,
+ * where a request is a context handed to the CLI (often one a session) and
+ * the model's turns are the CLI's own count (`claudeModelTurns`).
  *
  * `source` is `snapshot` where the whole completion figure rests on claude-code
  * opening snapshots — 21 of the 29 claude-code runs on disk on 2026-08-25,
@@ -809,7 +853,7 @@ export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
     totalTokens: prompt + completion,
     cacheReadTokens: cacheRead,
     cacheWriteTokens: cacheWrite,
-    turns,
+    turns: isClaudeCode(entries) ? claudeModelTurns(entries) : turns,
   };
 }
 
@@ -2029,9 +2073,13 @@ export class RunTotalsScanner {
       // The mark is the record kind that was seen, which `isClaudeCode` reads
       // either way: the `driver` line, or the `claude_system` envelope.
       const reports = t === "driver" ? driverEntry(rec["driver"])?.usage : undefined;
-      if (!this.sawClaudeMark && (t === "claude_system" || reports === "turn-snapshot")) {
+      // Every claude-code `driver` line, though: each opens a CLI process, which `claudeModelTurns` reads as a boundary.
+      if (reports === "turn-snapshot") {
         this.sawClaudeMark = true;
-        this.spanMarks.push(t === "driver" ? { i: 0, t, ts, start: 0, end: 0, driver: rec["driver"] } : { i: 0, t, ts, start: 0, end: 0 });
+        this.spanMarks.push({ i: 0, t, ts, start: 0, end: 0, driver: rec["driver"] });
+      } else if (!this.sawClaudeMark && t === "claude_system") {
+        this.sawClaudeMark = true;
+        this.spanMarks.push({ i: 0, t, ts, start: 0, end: 0 });
       }
       // The codex driver's line, for `tokenTotals`' reading of "context".
       if (!this.sawCodexMark && reports === "exec-tally") {
@@ -2064,6 +2112,7 @@ export class RunTotalsScanner {
         if (t === "claude_result") {
           const ct = claudeTurnUsage(rec);
           if (ct !== null) mark["claudeTurn"] = ct;
+          if (typeof rec["numTurns"] === "number") mark["numTurns"] = rec["numTurns"];
         }
         this.spanMarks.push(mark);
         return;

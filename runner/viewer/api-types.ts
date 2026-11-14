@@ -594,6 +594,11 @@ export interface TokenTotals {
   /** Null, never 0, when the provider never said. */
   cacheReadTokens: number | null;
   cacheWriteTokens: number | null;
+  /**
+   * The run's model turns: its requests, except on claude-code, whose request
+   * is a context handed to the CLI and whose model turns are the CLI's own
+   * count, `num_turns` on its results (`claudeModelTurns` in `tail.ts`).
+   */
   turns: number;
 }
 

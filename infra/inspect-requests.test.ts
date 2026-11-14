@@ -522,6 +522,15 @@ describe("claude-code", () => {
   });
 });
 
+describe("claude-code's model turns, here and in the viewer", () => {
+  test("a run's requests are the viewer's turns (runner/viewer/tail.ts `claudeModelTurns`), which this file copies", async () => {
+    for (const id of [CLAUDE, SNAPSHOTS, CLAUDE_TURNS]) {
+      const viewer = (await scanRunTotals(join(RUNS, id, "trajectory.jsonl"))).tokens.turns;
+      expect([id, (await readout(id)).windows[0]!.requests]).toEqual([id, viewer]);
+    }
+  });
+});
+
 describe("codex", () => {
   test("a request is a CLI turn, and a thread's running totals become what each turn added", async () => {
     const r = await readout(CODEX);

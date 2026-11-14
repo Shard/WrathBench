@@ -4404,7 +4404,12 @@ function usageFigures(u: Record<string, unknown>, shape: UsageShape): Omit<Model
   return { prompt, cached, write, output, reasoning, usd };
 }
 
-/** The record-by-record read behind `requests`; `done` settles claude-code's output once every result is in. */
+/**
+ * The record-by-record read behind `requests`. On claude-code its run-column
+ * request count is the viewer's model turns (runner/viewer/tail.ts
+ * `claudeModelTurns`), copied here because this file imports nothing and
+ * pinned to it by infra/inspect-requests.test.ts.
+ */
 function requestReducer(shape: UsageShape): { fn: RecFn; done: () => RequestScan } {
   const a: RequestScan = {
     shape,

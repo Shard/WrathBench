@@ -101,7 +101,9 @@ export type Metrics = Readonly<Record<MetricKey, number | null>>;
  * averaged a guess with a count would put a point nowhere any run was — the
  * same rule `runCostReading` applies by refusing a price over estimated
  * tokens. Turns are `modelResponses`, the count of response records in the
- * trajectory, which survives a resume where the turn counter does not.
+ * trajectory, which survives a resume where the turn counter does not; on a
+ * claude-code run, where a response record is one envelope of a message, they
+ * are the CLI's own model turns (`TokenTotals.turns`).
  */
 export function runMetrics(r: ResultRun): Metrics {
   const counted = r.tokens !== null && r.tokens.source === "reported" ? r.tokens : null;
@@ -110,7 +112,7 @@ export function runMetrics(r: ResultRun): Metrics {
     xp: xpEarnedOf(r),
     tokens: counted?.totalTokens ?? null,
     tokensOut: counted?.completionTokens ?? null,
-    turns: r.modelResponses,
+    turns: r.harness === "claude-code" ? (r.tokens?.turns ?? r.modelResponses) : r.modelResponses,
     toolCalls: r.toolCalls,
     playtimeMs: r.playtimeMs,
     level: r.maxLevel,
