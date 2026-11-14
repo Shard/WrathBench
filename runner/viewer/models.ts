@@ -486,7 +486,7 @@ export function rowOf(
     // `--status`); it is not part of the API, because a zero-response run is
     // archived at exit and the viewer never has one to show.
     const { stillborn: _archived, ...rest } = stats;
-    perEpisode[ep] = { ...rest, runIds: tier.filter((f) => isCounted(f) && countsTowardTarget(f, state.driver)).map((f) => f.runId) };
+    perEpisode[ep] = { ...rest, runIds: tier.filter((f) => isCounted(f) && countsTowardTarget(f, state)).map((f) => f.runId) };
   }
   // The newest run that actually failed, not the newest run: a model whose last
   // episode was fine still owes the operator the text of the three before it.

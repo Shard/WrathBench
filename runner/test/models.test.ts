@@ -1350,17 +1350,17 @@ describe("a target counts the runs of the loop its entry launches (operator, 202
   const policy = { ...DEFAULT_POLICY, series: "0.5" };
 
   test("the rule: the loop and the yield each driver launches", () => {
-    expect(countsTowardTarget({ loop: "program", yield: true }, "openai")).toBe(true);
-    expect(countsTowardTarget({ loop: "program" }, "openai")).toBe(false);
-    expect(countsTowardTarget({}, "openai")).toBe(false);
-    expect(countsTowardTarget({ loop: "program" }, "codex")).toBe(true);
-    expect(countsTowardTarget({ loop: "program", yield: true }, "codex")).toBe(false);
-    expect(countsTowardTarget({ loop: "program", yield: true }, "claude-code")).toBe(true);
-    expect(countsTowardTarget({}, "claude-code")).toBe(false);
-    expect(countsTowardTarget({}, "pi")).toBe(true);
-    expect(countsTowardTarget({ loop: "program" }, "pi")).toBe(false);
+    expect(countsTowardTarget({ loop: "program", yield: true }, { driver: "openai" })).toBe(true);
+    expect(countsTowardTarget({ loop: "program" }, { driver: "openai" })).toBe(false);
+    expect(countsTowardTarget({}, { driver: "openai" })).toBe(false);
+    expect(countsTowardTarget({ loop: "program" }, { driver: "codex" })).toBe(true);
+    expect(countsTowardTarget({ loop: "program", yield: true }, { driver: "codex" })).toBe(false);
+    expect(countsTowardTarget({ loop: "program", yield: true }, { driver: "claude-code" })).toBe(true);
+    expect(countsTowardTarget({}, { driver: "claude-code" })).toBe(false);
+    expect(countsTowardTarget({}, { driver: "pi" })).toBe(true);
+    expect(countsTowardTarget({ loop: "program" }, { driver: "pi" })).toBe(false);
     // An entry with no driver is on the default one.
-    expect(countsTowardTarget({ loop: "program", yield: true }, undefined)).toBe(true);
+    expect(countsTowardTarget({ loop: "program", yield: true }, {})).toBe(true);
   });
 
   test("snippet-loop runs in the same series are attempts and history, never a copy of a program-loop run", () => {
