@@ -44,8 +44,9 @@ everything else is derived from it — no list of names decides what counts.
   It is a **failed attempt** (`attempt-failed`, or `manual` when the
   harness stopped it, or `stale` when nothing came back for it), its account and
   character go back, and the model gets a fresh attempt with a new run id and a
-  full clock. Three counted failures on an episode and the model is tainted for
-  it until an operator clears the model.
+  full clock. A refused attempt is a rung of the model's cooling ladder, as
+  any attempt that made no progress is, and consecutive rungs cool and then
+  retire the model until an operator clears it.
 - **Scoring.** Scored.
 - **Promotion.** A model on `t1` that reaches rung 1 in one counted episode
   climbs to `t2`, which is what buys an `e360`; a model on `t0` keeps the
@@ -132,9 +133,8 @@ other.
   on `deadmines` the other four end `party-ended`, naming it. Staging that fails,
   `manual`, a fleet stop or offline gap, `harness-error`, `adapter-error` and
   any pause: not counted, retried fresh with fresh staging on a fresh world.
-- **Strikes.** A provider's refusal is one strike per attempt, however many
-  members met it, counted per model, id and series: a strike on one Deadmines
-  id does not count toward the other.
+- **Cooling.** A provider's refusal is one rung of the model's cooling ladder
+  per attempt, however many members met it.
 - **Who runs it.** `t2` buys three `deadmines-solo` attempts per series, and
   three `deadmines` attempts where the roster entry also says `deadmines:
   true`. The policy holds the five-agent id until `policy.rehearsed` names
@@ -561,8 +561,8 @@ evidence"):
 A failed attempt is an **attempt spent**: it numbers a run id, it shows on the
 runs page with its reason, and it is never a recorded episode — the ladder, the
 episodes grain and every chart drop it, the same way they drop a freeplay run.
-Only a provider's refusal (`quota-exhausted`, `rate-limited`) counts toward the
-three strikes; a fleet stop and an offline gap are the harness's doing.
+Only a provider's refusal (`quota-exhausted`, `rate-limited`) is a rung of the
+model's cooling ladder; a fleet stop and an offline gap are the harness's doing.
 
 ## Runs launched without an episode
 

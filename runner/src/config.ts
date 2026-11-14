@@ -20,6 +20,7 @@ import { z } from "zod";
 import { EPISODE_IDS, EPISODES, TASK_EPISODE_IDS, episodeIdSchema, isScoredEpisode, isTaskEpisode, matchesTier, watchdogsFor, type EpisodeId } from "./episodes";
 import { PARTY_PAUSE, STALL_PAUSE, SUBSCRIPTION_PAUSE } from "./lapse";
 import { routingSchema } from "./routing";
+import { agentSchema, servingLabelsSchema, servingSchema } from "./serving";
 import { CHARACTER_NAME_RULE, isValidCharacterName } from "./character-name";
 import { partyConfigSchema } from "./party";
 import { endConditionSchema } from "./end-conditions";
@@ -834,6 +835,20 @@ export const runConfigSchema = z.object({
    * launched with, and the resolved answer is stamped in the tuple.
    */
   routing: routingSchema.optional(),
+  /**
+   * A local build's weights, quantisation and runtime, as its roster entry
+   * declared them (`serving.ts`; operator, 2026-11-14). A key in the tuple,
+   * with routing's standing; absent on a hosted run. Identity: a resume keeps it.
+   */
+  serving: servingSchema.optional(),
+  /** The machine and the runtime's version: labels, never a key and never published. */
+  servingLabels: servingLabelsSchema.optional(),
+  /**
+   * The agent an `external` run declared (operator, 2026-11-14): its name and
+   * version, a key of its own comparability group. Declared, never observed,
+   * and null where the operator stated none rather than a guess.
+   */
+  agent: agentSchema.optional(),
   /** Path to a JSON file of scripted stub turns (driver: "stub"). */
   stubScript: z.string().optional(),
 
@@ -1044,7 +1059,8 @@ export function loadRunConfig(raw: unknown): RunConfig {
   // is a campaign's square and nothing else, so a hand launch on a scored,
   // freeplay or unnamed episode — which would carry a scored stamp and could
   // map onto another harness's row by model id — never starts.
-  if (entryOf(config.driver).probeOnly && (config.episode !== "probing" || config.campaign === undefined)) {
+  const handRun = entryOf(config.driver).handRun === true && config.episode === undefined;
+  if (entryOf(config.driver).probeOnly && !handRun && (config.episode !== "probing" || config.campaign === undefined)) {
     throw new Error(`${probeOnlyRefusal(config.driver)} — launch it as a campaign's square (--campaign <id>@<v> --cell <id>), not as episode ${config.episode ?? "(none)"}`);
   }
   // Refused, never ignored: the reference program reads no prompt, so an

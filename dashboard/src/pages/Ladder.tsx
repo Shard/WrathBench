@@ -562,6 +562,14 @@ export default function Ladder() {
                       <Show when={effortLabel(row.effort, row.compactWindow)}>
                         {(tag) => <span class="dim"> · {tag()}</span>}
                       </Show>
+                      {/* A local build names itself beside the model: the quantisation and runtime it was served at. */}
+                      <Show when={row.condition.serving}>
+                        {(s) => (
+                          <span class="dim" title={`a local build: ${s().weights}, ${s().quant}, served by ${s().runtime}`}>
+                            {" "}· local {s().quant} · {s().runtime}
+                          </span>
+                        )}
+                      </Show>
                       {/* The ids the row's runs actually resolved to. Two of
                           them is one alias that resolved two ways across the
                           row — drift the ladder must show, not average. */}

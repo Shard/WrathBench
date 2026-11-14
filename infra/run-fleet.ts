@@ -120,7 +120,6 @@ import {
   describeStanding,
   diffJobs,
   type EndedRun,
-  failedAttemptsFor,
   fillEntries,
   finishesOnExit,
   fleetComplete,
@@ -152,7 +151,6 @@ import {
   type QueuePlan,
   type QueueSkip,
   resumesInPlace,
-  retryNumbers,
   runnableRefs,
   serverIdentity,
   healthReady,
@@ -1176,8 +1174,8 @@ async function main(): Promise<void> {
       busyAccounts: ownAccounts,
       now: Date.now(),
     });
-    // Both are re-derived below if this tick's sweep ends anything: a strike
-    // written halfway down a tick has to be in the projection the queue and
+    // Both are re-derived below if this tick's sweep ends anything: a failed
+    // attempt written halfway down a tick has to be in the projection the queue and
     // the policy read at the bottom of it.
     let states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(cfg.roster), policy: cfg.policy, runs });
     let eligible = eligibleFrom(states);
@@ -1417,11 +1415,9 @@ async function main(): Promise<void> {
     // A lapsed run is ended through the runner's own writer, once, and leaves
     // the paused set. Its session goes back with it, so the fresh attempt this
     // record promises does not land on an account that is still held.
-    const lapsedRetries = retryNumbers(lapsed, (e) => failedAttemptsFor(states, e) ?? 0);
     const applied: EndedRun[] = [];
     for (const r of endRuns(RUNS_DIR, lapsed)) {
-      const i = lapsed.findIndex((x) => x.runId === r.runId);
-      const e = lapsed[i]!;
+      const e = lapsed.find((x) => x.runId === r.runId)!;
       if (r.error !== undefined) {
         say(`end ${e.runId}: could not write the termination — ${r.error}`);
         record({ job: `${e.ref ?? e.model}-${e.episode}`, event: "end-failed", detail: `${e.detail}; ${r.error}` });
@@ -1429,16 +1425,15 @@ async function main(): Promise<void> {
       }
       endedRuns.push(e);
       applied.push(e);
-      const line = formatEndedRun(e, lapsedRetries[i]);
+      const line = formatEndedRun(e);
       say(`end ${e.runId}: ${line}`);
       record({ job: `${e.ref ?? e.model}-${e.episode}`, event: "ended", detail: line });
     }
     if (lapsed.length > 0) void releaseEndedSessions(lapsed, say);
     if (applied.length > 0) {
       // The queue's gate, the policy's picks and the state file all read the
-      // post-sweep projection from here down. Nothing above this line reads a
-      // strike: the pinned jobs and the live pool jobs are the operator's, and
-      // the manual queue outranks a taint by decision anyway (docs/RUNBOOK.md).
+      // post-sweep projection from here down, so a run this sweep ended is
+      // already a cooling rung when the policy picks.
       states = statesAfterSweep(cfg, runs, applied, Date.now());
       eligible = eligibleFrom(states);
     }

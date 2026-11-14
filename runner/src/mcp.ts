@@ -6,6 +6,12 @@
  *
  * Usage (stdio client, e.g. an MCP-capable agent):
  *   bun runner/src/mcp.ts [--token <session-token>] [--run-id <id>]
+ *                         [--agent-name <agent>] [--agent-version <v>] [--model <id>]
+ *
+ * A run made this way is the `external` harness's (operator, 2026-11-14): an
+ * agent loop that is not ours, recorded under the agent and model its
+ * operator declares here. Its own comparability group, never ranked with
+ * ours, and on no scored ladder (its episode is none).
  *
  * Tool calls are logged to the run's trajectory. Everything except the
  * trajectory, the wiki and the episodic log is the stack's: the transport
@@ -89,10 +95,20 @@ async function main(): Promise<void> {
   // Random by default, never the run id: the token is the only thing
   // authenticating `POST /action` and `DELETE /session`.
   const token = flag("token") ?? newSessionToken();
+  // Whatever drives this server is not our loop: the run is the `external`
+  // harness's, named by the agent and the model its operator declares
+  // (operator, 2026-11-14). Declared, never observed — the stack ignores the
+  // MCP client's self-report — and null where nothing was stated, never a
+  // guess. Before this it defaulted to the openai driver and so read as a
+  // `wrathbench` run, which our loop never drove.
+  const model = flag("model");
   const config = loadRunConfig({
     runId,
     token,
     moduleUrl: process.env["WRATHBENCH_MODULE_URL"] ?? undefined,
+    driver: "external",
+    ...(model !== undefined ? { model } : {}),
+    agent: { name: flag("agent-name") ?? null, version: flag("agent-version") ?? null },
   });
   const runDir = join(config.runsDir, runId);
   const trajectory = new Trajectory(runDir);

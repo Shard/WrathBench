@@ -51,6 +51,7 @@ export function conditionOfRun(r: ResultRun): RunCondition {
     episode: r.episode,
     harness: r.harness,
     tuple: { effort: r.effort, compactWindow: r.compactWindow ?? null, ...(r.wiki === false ? { wiki: false } : {}) },
+    platform: r.platform,
   });
 }
 

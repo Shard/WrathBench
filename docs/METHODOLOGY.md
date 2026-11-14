@@ -116,7 +116,10 @@ were indistinguishable, and 300k would be refused as a cap on a 272k-window
 model. `pi`, the pi coding-agent CLI, is
 a labelled harness of the same kind, its own comparability group and
 probe-only until the operator promotes it, and its campaign compacts at a
-fixed 300k-token window (operator, 2026-10-20).
+fixed 300k-token window (operator, 2026-10-20). An agent loop that is not
+ours is the `external` harness, named by its declared agent and version: its
+own comparability group with a declared, partial set of conditions, never
+ranked with ours, and probe-only in v1 (operator, 2026-11-14).
 
 ## Client fidelity
 
@@ -316,7 +319,14 @@ observation, never revised, and excluded from the tuple's equality test; old
 runs are back-filled at *read* time, never written back — read differently,
 not relabelled. The wiki bundle's identity has the same standing: it says
 which file a run read, and so which side of a text-changing rebuild a run sits
-on; the rebuild itself ships as a patch within the series.
+on; the rebuild itself ships as a patch within the series. A locally served
+build is a serving condition like a routed backend: its weights, quantisation
+and runtime are declared on its roster entry and stamped as a key with its
+subject kind (`hosted`, `local` or `external`), so a local build and the hosted
+model of one id never share a row, and a local entry that does not state them
+is refused. The machine and the runtime's version are labels, never published;
+what the server reports serving and the observed generation rate annotate the
+run (operator, 2026-11-14).
 
 **Routing is pinned, and it is config** (2026-09-16). One slug served by six
 backends is six machines and six caches, not one measurement. The default is
@@ -363,7 +373,8 @@ with the number of agents and of characters per agent as keys, and neither is
 ranked against the other: one measures coordination, the other orchestration.
 An attempt ends cleared only on the kill. A member that goes idle or reaches
 its call ceiling makes the attempt not cleared, since the model stopped; a
-provider's refusal is one strike per attempt, however many members met it.
+provider's refusal is one rung of the cooling ladder per attempt, however
+many members met it.
 
 **Every scored attempt plays on a world of its own; freeplay shares one**
 (operator, 2026-11-14). An `e90` or `e360` attempt, a probe and a party each
@@ -382,9 +393,10 @@ and a run that paused at minute 41 and came back two hours later is not that.
 Freeplay resumes because it never counts; a probe resumes only if its campaign
 says so. A failed attempt is visible with its reason but is never a recorded
 episode, and only the termination reason decides what it counts as: a
-provider's refusal is a strike (three on one model, episode and series stop
-the scheduler — evidence about an endpoint, not a model), a fleet stop or an
-offline gap is harness weather, and a transport failure mid-episode
+provider's refusal is a rung of that model's cooling ladder, the one stop
+mechanism the scheduler has per model, which consecutive failures climb and
+the operator's clear resets — evidence about an endpoint, not a model
+(operator, 2026-11-14) — a fleet stop or an offline gap is harness weather, and a transport failure mid-episode
 (`adapter-error`) ended the run on the endpoint's clock, so it is never scored
 (2026-08-30).
 

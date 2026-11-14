@@ -369,6 +369,16 @@ instead of a cloud pool, for example an LM Studio box on the LAN
   inside the runner container), never through argv. The adapter still sends its
   attribution headers unconditionally; a local server just ignores them.
 
+- **It states what it serves** (operator, 2026-11-14). A local entry carries
+  `serving: { weights, quant, runtime }`: the repository or model name the
+  weights were published under (never a file path), the quantisation and the
+  runtime, for example `{ "weights": "Qwen/Qwen3.8-27B-GGUF", "quant":
+  "Q4_K_M", "runtime": "LM Studio" }`. It is a key of the run's tuple, so a
+  local build never shares a ladder row with the hosted model of the same id,
+  and the fleet refuses a local entry without it (a hand launch too). The
+  machine and the runtime's version may ride as `servingLabels: { machine,
+  runtimeVersion }`: kept in the run's config, never a key, never published.
+
 Before adding a local model, prove the endpoint can drive the tool loop:
 
     bun wb smoke local-model

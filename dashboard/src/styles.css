@@ -337,6 +337,8 @@ tbody tr.hovered { outline: 1px solid var(--accent); outline-offset: -1px; }
 .badge.harness-claude-code { color: var(--claude); border-color: var(--claude); }
 .badge.harness-codex { color: var(--codex); border-color: var(--codex); }
 .badge.harness-pi { color: var(--pi); border-color: var(--pi); }
+/* An agent loop that is not ours: the plain tag, its border broken, so it never reads as one of our harnesses. */
+.badge.harness-external { border-style: dashed; }
 .badge.harness-unknown { opacity: .6; }
 /* Episode progress, beside the state badge: a figure the badge leads, never competes with. */
 .progress { font-size: var(--fs-xs); margin-left: 6px; }

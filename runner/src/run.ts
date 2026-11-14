@@ -68,6 +68,8 @@ import { DRIVER_ADAPTERS, type LaunchInputs } from "./driver-adapters";
 import { DEFAULT_DRIVER, DRIVER_TABLE, entryOf, isDriver, type Driver } from "./drivers";
 import { referenceProgramPath, resolveReferenceLaunch } from "./reference-program";
 import { parseRouting, type RoutingSpec } from "./routing";
+import { providerOfModel } from "./credential-slots";
+import { LOCAL_WITHOUT_SERVING, parseServing, parseServingLabels, type ServingLabels, type ServingSpec } from "./serving";
 import {
   DRIVERS,
   episodeOverrideOf,
@@ -141,6 +143,18 @@ function routingOverride(v: string | boolean | undefined): RoutingSpec | undefin
     throw new Error(`--routing-json is not valid JSON: ${v.slice(0, 200)}`);
   }
   return parseRouting(raw, "--routing-json");
+}
+
+/** `--serving-json` and `--serving-labels-json`: the entry's build and its labels, parsed as the roster parses them. */
+function jsonFlag<T>(v: string | boolean | undefined, name: string, parse: (raw: unknown, where: string) => T): T | undefined {
+  if (typeof v !== "string" || v.trim().length === 0) return undefined;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(v);
+  } catch {
+    throw new Error(`--${name} is not valid JSON: ${v.slice(0, 200)}`);
+  }
+  return parse(raw, `--${name}`);
 }
 
 function num(v: string | boolean | undefined): number | undefined {
@@ -283,6 +297,10 @@ export function configFromArgs(
     // because it is a small object and argv is not a place to spell one out
     // flag at a time; identity like the rest, so a resume keeps it.
     routing: routingOverride(args["routing-json"]),
+    // A local build's weights, quantisation and runtime, and its labels;
+    // identity like routing, so a resume keeps them.
+    serving: jsonFlag<ServingSpec>(args["serving-json"], "serving-json", parseServing),
+    servingLabels: jsonFlag<ServingLabels>(args["serving-labels-json"], "serving-labels-json", parseServingLabels),
     // Identity, like model and effort: an objective steers what the whole
     // run was for, so a resumed run keeps the one it was launched with.
     objective: typeof args["objective"] === "string" ? args["objective"] : undefined,
@@ -651,6 +669,14 @@ async function main(): Promise<void> {
   const loopRefused = loopLaunchRefusal(config);
   if (loopRefused !== null) {
     console.error(`[wrathbench] ${resumed ? `--resume ${config.runId}` : "launch"} refused: ${loopRefused}`);
+    process.exit(2);
+  }
+  // A local build states what it serves (operator, 2026-11-14): the roster
+  // refuses an entry without it, and this is the door a hand launch comes
+  // through. A fresh launch only: a run stored before the key existed resumes
+  // as what it was.
+  if (!resumed && config.serving === undefined && providerOfModel(config) === "local") {
+    console.error(`[wrathbench] launch refused: ${LOCAL_WITHOUT_SERVING} (--serving-json '{"weights":…,"quant":…,"runtime":…}')`);
     process.exit(2);
   }
   // The scripted reference program is a private build input, at a fixed path

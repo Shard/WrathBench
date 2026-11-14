@@ -702,6 +702,15 @@ function projectResultRun(r: ResultRun, conditionIds: ReadonlyMap<string, string
             yield: r.condition.yield,
             pinned: r.condition.pinned,
             wiki: r.condition.wiki,
+            // What is being tested, and a local build's weights, quantisation
+            // and runtime: published (operator, 2026-11-14). Its labels, the
+            // machine and the runtime's version, never reach a result row.
+            subject: r.condition.subject,
+            ...(r.condition.serving !== undefined
+              ? { serving: { weights: r.condition.serving.weights, quant: r.condition.serving.quant, runtime: r.condition.serving.runtime } }
+              : {}),
+            // An external agent's declared name and version; never its operator.
+            ...(r.condition.agent !== undefined ? { agent: { name: r.condition.agent.name, version: r.condition.agent.version } } : {}),
           },
         }
       : {}),

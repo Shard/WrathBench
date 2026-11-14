@@ -80,8 +80,9 @@ bun runner/src/run.ts --driver codex --model gpt-6-astra --effort high
 # resume a killed or paused run (same token, same scratchpad, same trajectory)
 bun runner/src/run.ts --resume <run-id>
 
-# MCP over stdio for an external MCP-capable agent
-bun runner/src/mcp.ts [--run-id <id>] [--token <token>]
+# MCP over stdio for an external MCP-capable agent: the run is the `external`
+# harness's, under the agent and model you declare
+bun runner/src/mcp.ts [--run-id <id>] [--token <token>] [--agent-name <a>] [--agent-version <v>] [--model <id>]
 
 # read a run in minutes
 bun runner/src/timeline.ts <run-id>

@@ -36,7 +36,6 @@ import {
   countedFrom,
   type CountedRuns,
   type EndedRun,
-  failedAttemptsFor,
   fillEntries,
   type FleetPause,
   fmtElapsed,
@@ -60,7 +59,6 @@ import {
   progressLabel,
   providerResetOf,
   type ResumePlan,
-  retryNumbers,
   type Character,
   charactersFrom,
   liveCharactersFrom,
@@ -109,7 +107,7 @@ import { type CampaignFile, runCampaignFile } from "../runner/src/campaign-file"
 import { isConcluded, type Campaign, type CampaignRefusal } from "../runner/src/campaigns";
 import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
 import { resolveStoreSecrets } from "../runner/src/store-secrets";
-import { resumesOnPause, TAINT_AFTER } from "../runner/src/lapse";
+import { resumesOnPause } from "../runner/src/lapse";
 import {
   credentialGate,
   credentialStatuses,
@@ -241,27 +239,25 @@ export function formatPausedAccountNote(o: {
 }
 
 /** One line per run the supervisor would end rather than resume, for --status and --dry-run. */
-export function formatEnded(ended: readonly EndedRun[], fleetUp: boolean, failedSoFar?: (e: EndedRun) => number): string[] {
+export function formatEnded(ended: readonly EndedRun[], fleetUp: boolean): string[] {
   if (ended.length === 0) return [];
-  const retries = failedSoFar === undefined ? undefined : retryNumbers(ended, failedSoFar);
   return [
     `lapsed runs the supervisor ${fleetUp ? "ends on its next tick" : "will end when it starts"} (${ended.length}):`,
-    ...ended.map((e, i) => `  ${e.runId} — ${formatEndedRun(e, retries?.[i])}`),
+    ...ended.map((e) => `  ${e.runId} — ${formatEndedRun(e)}`),
   ];
 }
 
 /**
- * "failed attempt (quota-exhausted), retry 2/3" — how a lapsed eval run reads
- * on `--status` and in the strip. It is never called "paused" there: the run
- * is over, and what the operator needs to know is how many attempts are left
- * before the model is tainted for that episode.
+ * "failed attempt: quota-exhausted …" — how a lapsed eval run reads on
+ * `--status` and in the strip. It is never called "paused" there: the run is
+ * over. What it costs the model is a rung of its cooling ladder, which the
+ * model's own line shows.
  */
-export function formatEndedRun(e: EndedRun, retry?: number): string {
+export function formatEndedRun(e: EndedRun): string {
   // `manual` is the supervisor ending a run for a reason its detail already
   // states in full ("ended by the supervisor: …"), so it gets no head of its own.
   const head = e.reason === "attempt-failed" ? "failed attempt: " : e.reason === "stale" ? "stale: " : "";
-  const of = e.counts && retry !== undefined ? `, retry ${Math.min(retry, TAINT_AFTER)}/${TAINT_AFTER}${retry >= TAINT_AFTER ? " — tainted" : ""}` : "";
-  return `${head}${e.detail}${of}`;
+  return `${head}${e.detail}`;
 }
 
 /**
@@ -1199,15 +1195,14 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
   }
 
   // (d) paused runs the supervisor is not resuming, and why; and the ones it
-  // ends — a lapsed eval reads as a failed attempt with its retry number, not
-  // as something waiting to come back.
+  // ends — a lapsed eval reads as a failed attempt, not as something waiting
+  // to come back.
   const lapsed = [
     ...resumePlan.end,
     ...planStaleRuns({ runs: runFacts, ...(config !== undefined ? { campaigns: config.campaigns, refs: Object.keys(config.roster) } : {}), now: Date.now() }),
   ];
-  const statusStates = config !== undefined ? modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs: runFacts }) : [];
   for (const line of formatPaused(resumePlan.listed, pauseDetailOf())) console.log(`  ${line}`);
-  for (const line of formatEnded(lapsed, fleetUp, (e) => failedAttemptsFor(statusStates, e) ?? 0)) console.log(`  ${line}`);
+  for (const line of formatEnded(lapsed, fleetUp)) console.log(`  ${line}`);
   if (state?.ended !== undefined && state.ended.length > 0) {
     console.log(`  ended this session (${state.ended.length}): ${state.ended.map((e) => `${e.runId} (${e.detail})`).join("; ")}`);
   }
@@ -1607,11 +1602,7 @@ export function printDryRun(
   for (const line of formatModels(states, new Set(inFlight.flatMap((r) => r.refs)), now, excluded, config.policy, groups.evals)) console.log(line);
   for (const line of formatHeld(plan.heldPicks)) console.log(line);
   for (const line of formatPaused(resumes.listed, pauseDetailOf())) console.log(line);
-  for (const line of formatEnded(
-    [...resumes.end, ...planStaleRuns({ runs, campaigns: config.campaigns, refs: Object.keys(config.roster), now })],
-    false,
-    (e) => failedAttemptsFor(states, e) ?? 0,
-  )) {
+  for (const line of formatEnded([...resumes.end, ...planStaleRuns({ runs, campaigns: config.campaigns, refs: Object.keys(config.roster), now })], false)) {
     console.log(line);
   }
   console.log("finished this session: 0 (ok 0, retried 0) — dry run");

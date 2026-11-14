@@ -338,7 +338,7 @@ export function episodeOf(run: RunRow): EpisodeOf {
  * `claude-code` run is a tagged row.
  *
  * The live results projection passes the response count explicitly. A direct
- * metadata-only caller may omit it, in which case response-based taint cannot
+ * metadata-only caller may omit it, in which case response-based bad evidence cannot
  * be inferred, but active/paused and recorded non-model terminations still can.
  */
 export function unscoredReason(run: RunRow, modelResponses?: number | null): string | null {
@@ -360,13 +360,13 @@ export function unscoredReason(run: RunRow, modelResponses?: number | null): str
   if (ep.episode !== null && !EPISODES[ep.episode].scored) {
     return `unscored (episode ${ep.episode})`;
   }
-  const taint = badEvidenceReason({
+  const bad = badEvidenceReason({
     live: run.live,
     paused: run.pauseReason !== null,
     modelResponses,
     terminationReason: run.terminationReason,
   });
-  if (taint !== null) return `unscored (${taint})`;
+  if (bad !== null) return `unscored (${bad})`;
   return null;
 }
 
@@ -472,6 +472,7 @@ export function resultRunOf(
       episode: ep.episode,
       harness: run.harness,
       tuple: run.comparability,
+      platform: run.platform,
     }),
     promptHash: run.comparability?.promptHash ?? null,
     serverBuild: run.comparability?.serverBuild?.build ?? null,

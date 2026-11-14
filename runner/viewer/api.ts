@@ -283,8 +283,8 @@ export function json(body: unknown, status = 200): Response {
   });
 }
 
-/** The one shared scoreability verdict, applied to a projected result row. */
-function taintOf(r: Pick<ResultRun, "live" | "pauseReason" | "modelResponses" | "terminationReason">): string | null {
+/** The one shared scoreability verdict (`badEvidenceReason`), applied to a projected result row. */
+function badEvidenceOf(r: Pick<ResultRun, "live" | "pauseReason" | "modelResponses" | "terminationReason">): string | null {
   return badEvidenceReason({
     live: r.live === true,
     paused: r.pauseReason !== null,
@@ -1434,11 +1434,11 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // An attempt that never became an episode is not a member of the tier's
         // group — the same predicate the ladder filters on, so this
         // count and that chart hold the same runs.
-        const tainted = (r: (typeof stamped)[number]): boolean => taintOf(r) !== null;
-        const lapsed = (r: (typeof stamped)[number]): boolean => r.terminationReason !== null && tainted(r);
+        const notEvidence = (r: (typeof stamped)[number]): boolean => badEvidenceOf(r) !== null;
+        const lapsed = (r: (typeof stamped)[number]): boolean => r.terminationReason !== null && notEvidence(r);
         return {
           ...tier,
-          members: stamped.filter((r) => !r.episodeOverride && !tainted(r)).length,
+          members: stamped.filter((r) => !r.episodeOverride && !notEvidence(r)).length,
           lapsed: stamped.filter((r) => !r.episodeOverride && lapsed(r)).length,
           overrides: stamped.filter((r) => r.episodeOverride).length,
           derived: tagged.length - stamped.length,
@@ -1477,7 +1477,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
   async function campaignsResponse(): Promise<Response> {
     const all = await resultRuns();
     const roster = fleetRoster();
-    const view = campaignsView(all, roster, (r) => !r.extra && !r.episodeOverride && taintOf(r) === null);
+    const view = campaignsView(all, roster, (r) => !r.extra && !r.episodeOverride && badEvidenceOf(r) === null);
     const body: CampaignsResponse = { now: Date.now(), campaigns: view.campaigns, refused: view.refused };
     return pub(body, projectCampaigns);
   }
