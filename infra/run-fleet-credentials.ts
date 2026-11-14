@@ -428,7 +428,7 @@ export function readsGoUsage(c: Pick<Credential, "provider" | "billing" | "budge
 
 /**
  * Why each credential's launches are held by its key's last read, by id, off
- * the reads by credential id: a refused key holds every enabled credential of
+ * the reads of the enabled credentials by id: a refused key holds every enabled credential of
  * its provider naming the same variable (the free side shares the paid side's
  * key); no access to the usage and a balance charge hold the credential read.
  * The sentences name the credential and the class only, like every hold's.
@@ -441,7 +441,9 @@ export function readHoldsOf(credentials: readonly Credential[], reads: ReadonlyM
   const byId = new Map(credentials.map((c) => [c.id, c]));
   for (const [id, r] of reads) {
     const of = byId.get(id);
-    if (of === undefined) continue;
+    // A switched-off credential's read holds nothing, its siblings included:
+    // the supervisor stops reading it, so its last answer would stand forever.
+    if (of === undefined || !of.enabled) continue;
     if (r.classification === "auth-failed") {
       for (const c of credentials) {
         if (c.enabled && c.provider === of.provider && c.secretEnv === of.secretEnv && !out.has(c.id)) {
@@ -463,12 +465,11 @@ export function readHoldsOf(credentials: readonly Credential[], reads: ReadonlyM
  * not the supervisor: only the credentials it reads itself (`readsGoUsage`).
  * A status carries a sibling's refusal on a credential with no read of its
  * own (`credentialStatuses`), and that borrowed read is not one the
- * supervisor holds it by. A disabled credential's read counts as the tick
- * counts it: its refusal still holds the enabled credentials naming its key.
- * A state file with no reads gives none.
+ * supervisor holds it by. A disabled credential's read is dropped, as the
+ * tick drops it (`readHoldsOf`). A state file with no reads gives none.
  */
 export function publishedReads(credentials: readonly Credential[], statuses: readonly Pick<CredentialStatus, "id" | "lastRead">[] | undefined): Map<string, CredentialRead> {
-  const read = new Set(credentials.filter((c) => readsGoUsage(c)).map((c) => c.id));
+  const read = new Set(credentials.filter((c) => c.enabled && readsGoUsage(c)).map((c) => c.id));
   const out = new Map<string, CredentialRead>();
   for (const s of statuses ?? []) if (s.lastRead !== undefined && read.has(s.id)) out.set(s.id, s.lastRead);
   return out;
@@ -514,6 +515,16 @@ export class FleetGoUsage {
   ): Promise<void> {
     const base = Object.values(roster).map((e) => e.apiBase).find((b) => isOpenCodeGoBase(b));
     const url = goUsageUrl(base);
+    const polled = url === undefined ? [] : credentials.filter((c) => c.enabled && readsGoUsage(c) && (env[c.secretEnv] ?? "").length > 0);
+    // A credential no longer read (switched off, removed, its key unset, no
+    // Go entry left) keeps no poller: its last read is no longer news, and a
+    // stale refusal on it must not go on holding the credentials naming its key.
+    const keep = new Set(polled.map((c) => c.id));
+    for (const id of [...this.pollers.keys()]) {
+      if (keep.has(id)) continue;
+      this.pollers.delete(id);
+      this.keyOf.delete(id);
+    }
     if (url === undefined) return;
     const due: Promise<void>[] = [];
     for (const c of credentials) {

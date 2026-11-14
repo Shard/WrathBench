@@ -1955,7 +1955,10 @@ order:
 - it creates the pod and waits for its module's `/health`.
 
 The world's allowlist is the attempt's accounts. The stager works on the
-world's own SOAP console and schema. Allocation and boot sit under one lock,
+world's own module, SOAP console and schema: the roster lays them over the
+stager's env (`stagingEnvOf` in `infra/world.ts`, `MODULE_HOST` included,
+since the stager's module lookup prefers it), and the stager logs all three
+before it touches anything. Allocation and boot sit under one lock,
 so one world boots at a time.
 
 **Hosted mode's secret.** With `hosted` on, an eval world opens with its own
@@ -2307,8 +2310,10 @@ window's length and its reset, nothing else. For OpenCode Go the supervisor
 reads Go's usage endpoint for each enabled paid `opencode-go` credential,
 whatever its budget (a `runs` budget still draws the allowance), and any Go
 credential given a `usage` budget, at most once a minute, and leaves the reading in
-`data/runs/fleet-credential-usage.json`; Go's windows are the five hours, the
-week and the month, and one Go reports `rate-limited` is spent whatever its
+`data/runs/fleet-credential-usage.json`, and a live run on that credential
+reads and records the same at its turn boundaries. A credential switched off
+or left without its key is no longer read, and its last read holds nothing.
+Go's windows are the five hours, the week and the month, and one Go reports `rate-limited` is spent whatever its
 percent. No reading counts for longer than seven days, and a credential with
 no reading is open — unless its last read failed in a way that says so. Each
 Go read is classified, and a change of class is logged:
@@ -2755,7 +2760,9 @@ roster runs `bun infra/fixtures/stage-party.ts --request -` with one request
 on stdin (`infra/party-stager.ts` holds the contract): the party id,
 campaign, version, scenario and level, and per member the member id, role
 word, race, class, character name, account and run id. The first member
-leads. The definition names the characters and the stager creates them under
+leads. A member's account is PARTY1–PARTY5, or one the attempt drew from the
+eval pool (`EVAL01`…); the stager refuses any other before touching anything,
+so a pool, tenant, runner or smoke account is never staged. The definition names the characters and the stager creates them under
 those names. Each member wears the loadout of its race and class
 (`infra/fixtures/loadouts.ts`): a Human Warrior tank, a Dwarf Priest healer,
 and as damage a Human Mage, a Human Rogue and a Dwarf Paladin, so no pet is

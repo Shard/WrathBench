@@ -846,11 +846,41 @@ describe("OpenCode Go", () => {
     // Without the published reads (no state file, or one from before them) nothing is held by a read.
     expect(readerCredentialGate(config.credentials, [], NOW, undefined, runsDir).gate.holdOf("go-paid", "e90")).toBeUndefined();
     expect(readerCredentialGate(config.credentials, [], NOW, [{ id: "go-paid" }], runsDir).gate.holdOf("go-paid", "e90")).toBeUndefined();
-    // A paid side switched off after its key was refused: the tick still holds the free side by that read, and so does the reader.
+    // A paid side switched off after its key was refused: its stale refusal holds nothing, on the tick or the reader.
     const off = config.credentials.map((c) => (c.id === "go-paid" ? { ...c, enabled: false } : c));
     const refused = [{ id: "go-paid", lastRead: { at: NOW, http: 401, classification: "auth-failed" as const, since: NOW } }];
-    expect(readHoldsOf(off, new Map([["go-paid", refused[0]!.lastRead]])).get("go-free")?.code).toBe("auth-failed");
-    expect(readerCredentialGate(off, [], NOW, refused, runsDir).gate.holdReasonOf("go-free", "freeplay")?.code).toBe("auth-failed");
+    expect(readHoldsOf(off, new Map([["go-paid", refused[0]!.lastRead]])).size).toBe(0);
+    expect(readerCredentialGate(off, [], NOW, refused, runsDir).gate.holdOf("go-free", "freeplay")).toBeUndefined();
+  });
+
+  test("a credential no longer read keeps no poller: switched off, its stale refusal stops holding its siblings; switched on, it is read afresh", async () => {
+    let calls = 0;
+    let status = 401;
+    const fetch = (async () => {
+      calls++;
+      return status === 200 ? { ok: true, status, json: () => Promise.resolve(okBody(10)) } : { ok: false, status, json: () => Promise.resolve({ error: { code: "api_key_expired" } }) };
+    }) as unknown as GoFetch;
+    const go = new FleetGoUsage({ env: { OPENCODE_KEY: "fake-go-key" }, fetch, now: () => NOW });
+    await go.refresh(config.credentials, config.roster);
+    expect([...go.readHolds(config.credentials).keys()].sort()).toEqual(["go-free", "go-paid"]);
+    const off = config.credentials.map((c) => (c.id === "go-paid" ? { ...c, enabled: false } : c));
+    await go.refresh(off, config.roster);
+    expect(go.readHolds(off).size).toBe(0);
+    expect(go.lastReads().size).toBe(0);
+    expect(go.observations()).toEqual([]);
+    expect(calls).toBe(1);
+    // Back on: a fresh poller reads at once rather than waiting out the old one's minute.
+    status = 200;
+    await go.refresh(config.credentials, config.roster);
+    expect(calls).toBe(2);
+    expect(go.readHolds(config.credentials).size).toBe(0);
+    // Its key unset: no poller either, so a refusal read before holds nothing.
+    status = 401;
+    const fresh = new FleetGoUsage({ env: { OPENCODE_KEY: "fake-go-key" }, fetch, now: () => NOW });
+    await fresh.refresh(config.credentials, config.roster);
+    expect(fresh.readHolds(config.credentials).size).toBe(2);
+    await fresh.refresh(config.credentials, config.roster, {});
+    expect(fresh.readHolds(config.credentials).size).toBe(0);
   });
 });
 
