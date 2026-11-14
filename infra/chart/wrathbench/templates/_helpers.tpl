@@ -244,6 +244,27 @@ other key in the Secret, which nothing on these pods reads.
 {{- end -}}
 
 {{/*
+With `hosted` on and a world per eval, the world pods' own port secret
+(values.yaml `hosted.worldsSecretKey`), for the fleet pod only: it is what
+presents a secret to an eval's world, and the freeplay world's
+WRATHBENCH_MODULE_SECRET no longer opens one. Under a name of its own, so
+nothing that reads WRATHBENCH_MODULE_SECRET for the long-lived world changes.
+Optional, so a key not yet in the Secret leaves the fleet pod up with the
+freeplay streams on it; a world pod's reference is required, and a world
+without its key never starts.
+*/}}
+{{- define "wrathbench.worldsSecretEnv" -}}
+{{- if and (include "wrathbench.on.hosted" .) (include "wrathbench.on.worlds" .) }}
+- name: WRATHBENCH_WORLDS_MODULE_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.envSecretName }}
+      key: {{ .Values.hosted.worldsSecretKey }}
+      optional: true
+{{- end }}
+{{- end -}}
+
+{{/*
 The config store's key (runner/src/store-secrets.ts): it seals the secrets set
 on the admin page, and opens them where a model's process needs one. From the
 env Secret, optional: without the key nothing can be set from the browser and
@@ -352,6 +373,12 @@ here: run.ts never opens it, and a run pod mounts no config. */}}
        that parses it must read the same pool, as with the store itself. */}}
 - name: WRATHBENCH_POOL_SIZE
   value: {{ include "wrathbench.poolSize" . | quote }}
+{{- if include "wrathbench.on.worlds" . }}
+{{- /* The eval pool's size (worlds.pool.size): EVAL01 … EVALnn, which a
+       party campaign that draws its accounts takes per attempt. */}}
+- name: WRATHBENCH_EVAL_POOL_SIZE
+  value: {{ include "wrathbench.evalPoolSize" . | quote }}
+{{- end }}
 {{- include "wrathbench.groupsEnv" . }}
 {{- end -}}
 
@@ -387,6 +414,18 @@ from 0 to 99, the two digits POOL01 … POOL99 have (runner/src/account-pool.ts)
 {{- $size -}}
 {{- end -}}
 
+{{/*
+The eval pool's size, `worlds.pool.size`, checked as the generated pool's:
+EVAL01 … EVAL99. On no allowlist of the long-lived world's.
+*/}}
+{{- define "wrathbench.evalPoolSize" -}}
+{{- $size := int (.Values.worlds.pool.size | default 0) -}}
+{{- if or (lt $size 0) (gt $size 99) -}}
+{{- fail "worlds.pool.size must be from 0 to 99: the eval pool's names are EVAL01 … EVAL99" -}}
+{{- end -}}
+{{- $size -}}
+{{- end -}}
+
 {{/* The generated pool's accounts, POOL01 … POOLnn, as a list (fromJson of a JSON array). */}}
 {{- define "wrathbench.poolAccounts" -}}
 {{- $names := list -}}
@@ -397,13 +436,16 @@ from 0 to 99, the two digits POOL01 … POOL99 have (runner/src/account-pool.ts)
 {{- end -}}
 
 {{/*
-The module's account allowlist (AC_WRATH_BENCH_ACCOUNTS): `worldserver.accounts`,
-then the generated pool (`worldserver.pool.size`), plus the party's accounts
-when staging is on. STAGER is the account SOAP trusts as an administrator, and
-a bench session on it would put that account on the agent's control surface,
-so the render refuses it in either list (docs/proposals/GROUP-PLAY.md §2-3).
+The operator's accounts on the long-lived world: `worldserver.accounts`, then
+the generated pool (`worldserver.pool.size`), plus the party's accounts when
+staging is on, as a JSON array. STAGER is the account SOAP trusts as an
+administrator, and a bench session on it would put that account on the
+agent's control surface, so the render refuses it in either list
+(docs/proposals/GROUP-PLAY.md §2-3). A tenant's name (TENANTnn) is refused
+too: those are hosted mode's, and an operator's session on one would reclaim
+a person's character.
 */}}
-{{- define "wrathbench.moduleAccounts" -}}
+{{- define "wrathbench.operatorAccounts" -}}
 {{- $accounts := uniq (concat .Values.worldserver.accounts (fromJsonArray (include "wrathbench.poolAccounts" .))) -}}
 {{- if .Values.staging.enabled -}}
 {{- $accounts = uniq (concat $accounts .Values.staging.accounts) -}}
@@ -412,8 +454,58 @@ so the render refuses it in either list (docs/proposals/GROUP-PLAY.md §2-3).
 {{- if eq (upper (toString .)) "STAGER" -}}
 {{- fail "STAGER may never be on the module's account allowlist (worldserver.accounts / staging.accounts): it is SOAP's administrator, and no bench session may be opened on it" -}}
 {{- end -}}
+{{- if regexMatch "(?i)^TENANT[0-9]{2}$" (toString .) -}}
+{{- fail (printf "%s is a hosted tenant account (hosted.tenants): it may not be in worldserver.accounts or staging.accounts" .) -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $accounts -}}
+{{- end -}}
+
+{{/*
+The module's account allowlist on the long-lived world (AC_WRATH_BENCH_ACCOUNTS):
+the operator's accounts, then, with `hosted` on, the tenant pool.
+*/}}
+{{- define "wrathbench.moduleAccounts" -}}
+{{- $accounts := fromJsonArray (include "wrathbench.operatorAccounts" .) -}}
+{{- if include "wrathbench.on.hosted" . -}}
+{{- $accounts = concat $accounts (fromJsonArray (include "wrathbench.tenantAccounts" .)) -}}
 {{- end -}}
 {{- join "," $accounts -}}
+{{- end -}}
+
+{{/*
+Hosted mode (values.yaml `hosted`). "true" or empty, so `if include …` reads
+it; on, it refuses a deployment whose scored and probing episodes would play
+on the freeplay world: the evals group on with no world per eval.
+*/}}
+{{- define "wrathbench.on.hosted" -}}
+{{- if .Values.hosted.enabled -}}
+{{- if and .Values.groups.evals.enabled (not (include "wrathbench.on.worlds" .)) -}}
+{{- fail "hosted.enabled needs a world per eval (worlds.enabled, with the fleet on): without one, scored and probing episodes play on the freeplay world, under its caps and beside the tenants" -}}
+{{- end -}}
+{{- if has (toString .Values.hosted.worldsSecretKey) (list "" "WRATHBENCH_MODULE_SECRET") -}}
+{{- fail "hosted.worldsSecretKey must name a key of its own in envSecretName: WRATHBENCH_MODULE_SECRET is the freeplay world's, which the gateway holds" -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/* The tenant pool's size, `hosted.tenants.size`, checked: 0 to 99, the two digits TENANT01 … TENANT99 have (infra/tenant-accounts.ts). */}}
+{{- define "wrathbench.tenantPoolSize" -}}
+{{- $size := int (.Values.hosted.tenants.size | default 0) -}}
+{{- if or (lt $size 0) (gt $size 99) -}}
+{{- fail "hosted.tenants.size must be from 0 to 99: the tenants' names are TENANT01 … TENANT99" -}}
+{{- end -}}
+{{- $size -}}
+{{- end -}}
+
+{{/* The tenant pool, TENANT01 … TENANTnn, as a JSON array. */}}
+{{- define "wrathbench.tenantAccounts" -}}
+{{- $names := list -}}
+{{- range $i := until (int (include "wrathbench.tenantPoolSize" .)) -}}
+{{- $names = append $names (printf "TENANT%02d" (add1 $i)) -}}
+{{- end -}}
+{{- toJson $names -}}
 {{- end -}}
 
 {{/*

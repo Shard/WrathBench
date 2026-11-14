@@ -193,6 +193,13 @@ export const credentialKey = (id: string): string => `credential:${id}`;
 export const driverKey = (driver: string): string => `driver:${driver}`;
 /** The run-pod key in a `SlotBook`: every probing episode while it runs as its own pod. */
 export const RUN_POD_KEY = "run-pods";
+/**
+ * The world key in a `SlotBook`: every scored or probing attempt while each
+ * plays on a world of its own. One per attempt however many sessions it
+ * holds — a party's members share their world — so it is counted once per
+ * add whatever the count asked for.
+ */
+export const WORLD_KEY = "worlds";
 
 /**
  * The book's run-pod setting: undefined while probing episodes are child
@@ -204,6 +211,28 @@ export const RUN_POD_KEY = "run-pods";
 export function runPodsOf(mode: string, onCluster: boolean, maxPods: number | undefined): { max: number | undefined } | undefined {
   return mode === "probes" && onCluster ? { max: maxPods } : undefined;
 }
+
+/**
+ * The book's world setting, as `runPodsOf`: undefined while every run shares
+ * the long-lived world (`policy.worlds` off), else the chart's `worlds.max`.
+ * With worlds on, a scored or probing attempt never falls back to the shared
+ * world, so where none can be made — off the cluster, or while failed boots
+ * hold them (`worldsHold`) — the key is full and says why.
+ */
+export function worldsOf(mode: string, onCluster: boolean, maxWorlds: number | undefined, hold?: string): WorldsSetting | undefined {
+  if (mode !== "evals") return undefined;
+  if (!onCluster) return { max: 0, hold: "policy.worlds is \"evals\" and this supervisor is not on the cluster: a scored or probing attempt plays on a world of its own or not at all" };
+  return hold !== undefined ? { max: 0, hold } : { max: maxWorlds };
+}
+
+export interface WorldsSetting {
+  max: number | undefined;
+  /** Why no world may be made now; the key is full while it is set. */
+  hold?: string;
+}
+
+/** The tiers that play on a world of their own while worlds are on (`infra/world.ts` `worldUsedBy`). */
+const WORLD_EPISODES = new Set(["e90", "e360", "probing"]);
 
 /**
  * Every run in flight, counted on its credential's slots and its driver's
@@ -222,6 +251,8 @@ export class SlotBook {
      * child processes, else as pods under `max` at once (none: no cap).
      */
     private readonly runPods?: { max: number | undefined },
+    /** The worlds (`worldsOf`): undefined while every attempt shares the long-lived world, else at most `max` at once. */
+    private readonly worlds?: WorldsSetting,
   ) {
     this.slots = new Map(credentials.map((c) => [credentialKey(c.id), c.slots]));
   }
@@ -233,12 +264,18 @@ export class SlotBook {
    */
   keysOf(driver: string | undefined, id: string | null | undefined, episode?: string | null): string[] {
     const d = driver ?? DEFAULT_DRIVER;
-    return [...(id != null ? [credentialKey(id)] : []), driverKey(d), ...(episode === "probing" && this.runPods !== undefined ? [RUN_POD_KEY] : [])];
+    return [
+      ...(id != null ? [credentialKey(id)] : []),
+      driverKey(d),
+      ...(episode === "probing" && this.runPods !== undefined ? [RUN_POD_KEY] : []),
+      ...(episode != null && WORLD_EPISODES.has(episode) && this.worlds !== undefined ? [WORLD_KEY] : []),
+    ];
   }
 
   capOf(key: string): number | undefined {
     if (key.startsWith("credential:")) return this.slots.get(key) ?? 0;
     if (key === RUN_POD_KEY) return this.runPods?.max;
+    if (key === WORLD_KEY) return this.worlds?.max;
     return this.maxSessions[key.slice("driver:".length)];
   }
 
@@ -247,18 +284,18 @@ export class SlotBook {
   }
 
   add(keys: readonly string[], n = 1): void {
-    for (const k of keys) this.count.set(k, this.inUse(k) + n);
+    for (const k of keys) this.count.set(k, this.inUse(k) + perKey(k, n));
   }
 
   remove(keys: readonly string[], n = 1): void {
-    for (const k of keys) this.count.set(k, Math.max(0, this.inUse(k) - n));
+    for (const k of keys) this.count.set(k, Math.max(0, this.inUse(k) - perKey(k, n)));
   }
 
   /** The first key with no room for `n` more sessions, or undefined when they fit. */
   fullKey(keys: readonly string[], n = 1): string | undefined {
     return keys.find((k) => {
       const cap = this.capOf(k);
-      return cap !== undefined && this.inUse(k) + n > cap;
+      return cap !== undefined && this.inUse(k) + perKey(k, n) > cap;
     });
   }
 
@@ -267,14 +304,20 @@ export class SlotBook {
     const cap = this.capOf(key);
     if (key.startsWith("credential:")) return `credential ${key.slice("credential:".length)} ${this.inUse(key)}/${cap} in flight`;
     if (key === RUN_POD_KEY) return `run pods ${this.inUse(key)}/${cap} in flight (the chart's runPods.maxPods)`;
+    if (key === WORLD_KEY) return this.worlds?.hold ?? `worlds ${this.inUse(key)}/${cap} (the chart's worlds.max)`;
     return `${key.slice("driver:".length)} ${this.inUse(key)}/${cap} sessions on this host`;
   }
 
   clone(): SlotBook {
     const b = Object.create(SlotBook.prototype) as SlotBook;
-    Object.assign(b, { count: new Map(this.count), slots: this.slots, maxSessions: this.maxSessions, runPods: this.runPods });
+    Object.assign(b, { count: new Map(this.count), slots: this.slots, maxSessions: this.maxSessions, runPods: this.runPods, worlds: this.worlds });
     return b;
   }
+}
+
+/** A world is one per attempt, whatever its sessions; every other key counts each. */
+function perKey(key: string, n: number): number {
+  return key === WORLD_KEY ? Math.min(n, 1) : n;
 }
 
 // ------------------------------------------------------------------ the choice

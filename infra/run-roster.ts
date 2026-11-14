@@ -89,6 +89,8 @@ import { partyConfigOf, withFanoutGuids, withMemberGuids, type PartyStamp } from
 import { PARTY_END_GRACE_MS, writeEndRequest } from "../runner/src/end-request";
 import { runParty, type MemberVerdict, type PartyMemberRun } from "./party-fate";
 import { commandStager, STAGER_SCRIPT, type PartyStager, type StagedGuid, type StageRequest } from "./party-stager";
+import { parseWorldsMode, type WorldsMode } from "../runner/src/models";
+import { DEFAULT_SOAP_PORT, loadWorldLauncher, moduleUrlOfRun, readWorldPointer, removeWorldPointer, stagingEnvOf, worldAuthHeaders, worldFateOf, worldUsedBy, type WorldLauncher } from "./world";
 
 // ------------------------------------------------------------------ types
 
@@ -406,6 +408,7 @@ function parseArgs(argv: string[]): {
   date: string | undefined;
   log: string | undefined;
   runPods: RunPodsMode;
+  worlds: WorldsMode;
 } {
   let roster: string | undefined;
   let dryRun = false;
@@ -416,6 +419,7 @@ function parseArgs(argv: string[]): {
   let log: string | undefined;
   let date: string | undefined;
   let runPods: RunPodsMode = "off";
+  let worlds: WorldsMode = "off";
   const skip: string[] = [];
   const freeTokens: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -426,6 +430,9 @@ function parseArgs(argv: string[]): {
         break;
       case "--run-pods":
         runPods = parseRunPodsMode(argv[++i], "--run-pods");
+        break;
+      case "--worlds":
+        worlds = parseWorldsMode(argv[++i], "--worlds");
         break;
       case "--loop":
         loop = true;
@@ -471,7 +478,7 @@ function parseArgs(argv: string[]): {
         roster = a;
     }
   }
-  return { roster, dryRun, loop, resumeRoster, until, maxHours, skip, freeTokens, date, log, runPods };
+  return { roster, dryRun, loop, resumeRoster, until, maxHours, skip, freeTokens, date, log, runPods, worlds };
 }
 
 function usage(): void {
@@ -497,6 +504,9 @@ function usage(): void {
       "  --run-pods off|probes  the fleet setting policy.runPods as the supervisor read it: with",
       "                       `probes`, on the cluster, an entry carrying `launch` runs as its own pod",
       "                       (docs/RUNBOOK.md, \"Run pods\"). Default off: every episode is a child process",
+      "  --worlds off|evals   the fleet setting policy.worlds as the supervisor read it: with `evals`,",
+      "                       on the cluster, a fresh e90, e360 or probing attempt plays on a world of",
+      "                       its own (docs/RUNBOOK.md, \"Worlds\"). A resume goes back to its run's world",
       "",
       `  backoff: a spec that defers (pool saturated) cools for ${DEFER_LADDER} on`,
       `           consecutive defers, then is TAINTED — dropped from the rotation for the rest of`,
@@ -1595,6 +1605,10 @@ let runPodsMode: RunPodsMode = "off";
 const processLauncher = new ProcessLauncher({ cwd: REPO_ROOT });
 /** Built once per roster process when a pod is first wanted; a string says why there is none. */
 let podLauncher: EpisodeLauncher | { error: string } | undefined;
+/** `--worlds`, as the supervisor read the fleet setting; off for a hand-run roster. */
+let worldsMode: WorldsMode = "off";
+/** Built once per roster process when a world is first wanted; a string says why there is none. */
+let worldLauncher: WorldLauncher | { error: string } | undefined;
 
 /**
  * Signal the runner *inside* the container.
@@ -1685,7 +1699,12 @@ function launcherFor(spec: Resolved): EpisodeLauncher | { refused: string } {
   return podLauncher;
 }
 
-async function runEpisode(spec: Resolved, resume: boolean): Promise<EpisodeExit> {
+/** The stamps every episode's environment gets: the harness version in the container, and its world's module when it has one. */
+function episodeEnv(world: ActiveWorld | undefined): Record<string, string> {
+  return { ...(CONTAINER ? { WRATHBENCH_HARNESS_VERSION: harnessVersion() } : {}), ...(world !== undefined ? { WRATHBENCH_MODULE_URL: world.url } : {}) };
+}
+
+async function runEpisode(spec: Resolved, resume: boolean, world: ActiveWorld | undefined): Promise<EpisodeExit> {
   const launcher = launcherFor(spec);
   if ("refused" in launcher) return refusedEpisode(launcher.refused).exited;
   childRunId = spec.runId;
@@ -1699,7 +1718,8 @@ async function runEpisode(spec: Resolved, resume: boolean): Promise<EpisodeExit>
     runDir: join(REPO_ROOT, RUNS_DIR, spec.runId),
     argv: episodeArgv(spec, resume, { container: CONTAINER }),
     args: episodeFlags(spec, resume),
-    env: CONTAINER ? { WRATHBENCH_HARNESS_VERSION: harnessVersion() } : {},
+    env: episodeEnv(world),
+    onWorld: world !== undefined,
     log: say,
   });
   if (launcher.kind === "pod") say(`episode ${spec.runId} runs as ${episode.describe()}`);
@@ -1714,7 +1734,7 @@ async function runEpisode(spec: Resolved, resume: boolean): Promise<EpisodeExit>
  * a party's members run at once, so each is tracked for the shared stop
  * (`partyEpisodes`) until it exits, and nothing global is held for it.
  */
-async function startPartyEpisode(spec: Resolved, resume: boolean): Promise<EpisodeHandle> {
+async function startPartyEpisode(spec: Resolved, resume: boolean, world: ActiveWorld | undefined): Promise<EpisodeHandle> {
   const launcher = launcherFor(spec);
   if ("refused" in launcher) return refusedEpisode(launcher.refused);
   const handle = await launcher.start({
@@ -1723,7 +1743,8 @@ async function startPartyEpisode(spec: Resolved, resume: boolean): Promise<Episo
     runDir: join(REPO_ROOT, RUNS_DIR, spec.runId),
     argv: episodeArgv(spec, resume, { container: CONTAINER }),
     args: episodeFlags(spec, resume),
-    env: CONTAINER ? { WRATHBENCH_HARNESS_VERSION: harnessVersion() } : {},
+    env: episodeEnv(world),
+    onWorld: world !== undefined,
     log: say,
   });
   if (launcher.kind === "pod") say(`episode ${spec.runId} runs as ${handle.describe()}`);
@@ -1768,25 +1789,29 @@ export async function releaseRunSession(runId: string): Promise<string> {
   const tokens = tokensOfRun(runId);
   // A fan-out run with no seat on record yet holds no session.
   if (tokens.length === 0) return "no session: a fan-out run with no character on its roster";
-  if (tokens.length === 1) return releaseToken(tokens[0]!);
+  // The run's sessions are on its own world when it has one (its pointer), else the shared one.
+  const moduleUrl = moduleUrlOfRun(runDir(runId), process.env.WRATHBENCH_MODULE_URL ?? "http://worldserver:8086");
+  // An eval world opens with its own port secret under hosted mode (`worldAuthHeaders`).
+  const auth = readWorldPointer(runDir(runId)) !== undefined ? worldAuthHeaders() : moduleAuthHeaders();
+  if (tokens.length === 1) return releaseToken(tokens[0]!, moduleUrl, auth);
   // A fan-out run's every character, one DELETE each; a failure of one is said, not thrown.
   const out: string[] = [];
-  for (const [i, t] of tokens.entries()) out.push(`seat ${i + 1}: ${await releaseToken(t)}`);
+  for (const [i, t] of tokens.entries()) out.push(`seat ${i + 1}: ${await releaseToken(t, moduleUrl, auth)}`);
   const text = out.join("; ");
   return out.some((o) => o.includes(": failed:")) ? `failed: ${text}` : text;
 }
 
-/** DELETE the module session one token names. */
-async function releaseToken(token: string): Promise<string> {
+/** DELETE the module session one token names, on the module at `moduleUrl`. */
+async function releaseToken(token: string, moduleUrl: string, auth: Record<string, string>): Promise<string> {
   // Inside the container the module is one fetch away; on the host it is only
   // reachable from the compose network, hence the exec hop.
   if (CONTAINER) {
-    const url = (process.env.WRATHBENCH_MODULE_URL ?? "http://worldserver:8086") + "/session";
+    const url = moduleUrl + "/session";
     try {
       const r = await fetch(url, {
         method: "DELETE",
         // Operator class: the roster holds the port secret, not the run's lease.
-        headers: { "content-type": "application/json", ...moduleAuthHeaders() },
+        headers: { "content-type": "application/json", ...auth },
         body: JSON.stringify({ token }),
       });
       return `delete-session ${r.status} ${(await r.text()).trim()}`;
@@ -1972,14 +1997,108 @@ export interface Attempt {
   doneCycle1?: boolean;
 }
 
+// ------------------------------------------------------------------ worlds
+
+/** The world an attempt plays on, once it is up. */
+interface ActiveWorld {
+  id: string;
+  url: string;
+}
+
+/** The port of the SOAP console the fleet's env names (the chart's `staging.soapPort`). */
+function soapPort(): number {
+  try {
+    const p = Number(new URL(process.env["WRATHBENCH_SOAP_URL"] ?? "").port);
+    return Number.isInteger(p) && p > 0 ? p : DEFAULT_SOAP_PORT;
+  } catch {
+    return DEFAULT_SOAP_PORT;
+  }
+}
+
+function worldLauncherHere(): WorldLauncher | { error: string } {
+  if (!CONTAINER) return { error: "worlds run on the cluster only, and this roster is a host process" };
+  worldLauncher ??= loadWorldLauncher({ rosterPid: process.pid, repoRoot: REPO_ROOT, log: say });
+  return worldLauncher;
+}
+
+/**
+ * The world an attempt needs, up, or why it has none. A resumed run goes back
+ * to the world its pointer names, whatever the setting says now: a run's
+ * world is its identity. A fresh scored or probing launch gets a new one
+ * while `--worlds` is on, and never falls back to the shared world; every
+ * other launch (freeplay, worlds off) is on the shared world (`undefined`).
+ */
+export async function openWorld(
+  specs: readonly Pick<Resolved, "runId" | "episode" | "account" | "campaignFile">[],
+  resume: boolean,
+  deps: { mode: WorldsMode; launcher: () => WorldLauncher | { error: string }; runDir: (runId: string) => string },
+): Promise<{ world: ActiveWorld | undefined } | { refused: string }> {
+  const dirs = specs.map((s) => deps.runDir(s.runId));
+  const pointers = dirs.map((d) => readWorldPointer(d));
+  if (resume) {
+    const ids = [...new Set(pointers.filter((p) => p !== undefined))];
+    if (ids.length === 0) return { world: undefined };
+    if (ids.length > 1 || pointers.some((p) => p === undefined)) return { refused: `its runs name different worlds (${pointers.map((p) => p ?? "shared").join(", ")})` };
+    const launcher = deps.launcher();
+    if ("error" in launcher) return { refused: `its world ${ids[0]} cannot be booted: ${launcher.error}` };
+    const r = await launcher.resume(ids[0]!);
+    return r.ok ? { world: { id: r.id, url: r.url } } : { refused: r.reason };
+  }
+  if (!specs.some((s) => worldUsedBy(deps.mode, s.episode))) {
+    // On the shared world: a pointer a launch that never came up left behind would route this run's session release elsewhere.
+    for (const d of dirs) removeWorldPointer(d);
+    return { world: undefined };
+  }
+  const launcher = deps.launcher();
+  if ("error" in launcher) return { refused: `no world for a ${specs[0]!.episode} attempt: ${launcher.error}` };
+  const accounts = specs.flatMap((s) => specAccounts(s).map((a) => (a ?? "RUNNER").toUpperCase()));
+  const r = await launcher.create({ runDirs: dirs, runIds: specs.map((s) => s.runId), accounts });
+  return r.ok ? { world: { id: r.id, url: r.url } } : { refused: r.reason };
+}
+
+/** Settle an attempt's world from its runs' own files (`worldFateOf`): ended at the verdict, parked while it may resume. */
+async function settleWorld(world: ActiveWorld | undefined, runIds: readonly string[], why: string): Promise<void> {
+  if (world === undefined) return;
+  const launcher = worldLauncherHere();
+  if ("error" in launcher) return;
+  const fate = worldFateOf(runIds.map((id) => runDir(id)));
+  try {
+    if (fate === "end") await launcher.end(world.id, why);
+    // Stopping: the fleet pod's grace is the limit, and the GC and the next reconcile see the pod go.
+    else await launcher.park(world.id, why, { noWait: stopping });
+  } catch (e) {
+    say(`world ${world.id}: could not be ${fate === "end" ? "ended" : "parked"} — ${e instanceof Error ? e.message : String(e)}; the reconcile settles it`);
+  }
+}
+
+/** A world that could not be had: no attempt, as a run pod the namespace refused. */
+function noWorld(spec: Pick<Resolved, "runId" | "model">, detail: string): void {
+  say(`no world for ${spec.runId}: ${detail} — not an attempt, nothing recorded`);
+  record({ runId: spec.runId, model: spec.model, outcome: "no-capacity", detail: `no world: ${detail}` });
+}
+
 /**
  * `done` when the spec is finished with (done or given up on), `defer` when it
  * goes on the defer ladder, and the provider's stated reset when it waits for
- * that instead.
+ * that instead. Around the attempt, its world (`openWorld`), settled from the
+ * run's own files once the attempt is over.
  */
 async function attemptSpec(
   spec: Resolved,
   opts: { resume: boolean; deadline: number | undefined; dryRun: boolean },
+): Promise<"done" | "defer" | { resetAt: number; reason: string }> {
+  const held: { world?: ActiveWorld } = {};
+  try {
+    return await attemptSpecOn(spec, opts, held);
+  } finally {
+    await settleWorld(held.world, [spec.runId], `${spec.runId}'s attempt is over`);
+  }
+}
+
+async function attemptSpecOn(
+  spec: Resolved,
+  opts: { resume: boolean; deadline: number | undefined; dryRun: boolean },
+  held: { world?: ActiveWorld },
 ): Promise<"done" | "defer" | { resetAt: number; reason: string }> {
   let resume = opts.resume;
   // run-episode.sh's driver preflight does not run on the in-container path, and
@@ -2017,13 +2136,28 @@ async function attemptSpec(
         return "done";
       }
     }
+    // The attempt's world, before anything touches a session or stages a
+    // character: a fresh one for a fresh scored or probing launch, its own
+    // again on a resume. Kept up across an in-place retry.
+    if (held.world === undefined && !opts.dryRun) {
+      const w = await openWorld([spec], resume, { mode: worldsMode, launcher: worldLauncherHere, runDir });
+      if ("refused" in w) {
+        noWorld(spec, w.refused);
+        return "done";
+      }
+      held.world = w.world;
+      if (stopping && held.world !== undefined && !resume) {
+        noWorld(spec, "the roster is stopping");
+        return "done";
+      }
+    }
     // A one-agent arm's party is staged before its fresh launch, as a party's
     // is: every character on its own account, in its loadout and its spot,
     // grouped. Never on a resume or a retry (the characters are the run's own).
     let campaignFile = spec.campaignFile;
     if (!resume && campaignFile?.fanout !== undefined && !opts.dryRun) {
       say(`stage ${spec.runId}: ${campaignFile.fanout.members.map((m) => `${m.character} on ${m.account}`).join(", ")}`);
-      const staged = await partyStager.stage(fanoutStageRequestOf(spec), stagingAbort.signal);
+      const staged = await partyStager.stage(fanoutStageRequestOf(spec), stagingAbort.signal, held.world !== undefined ? stagingEnvOf(held.world.id, soapPort()) : undefined);
       if (!staged.ok) {
         const detail = `staging: ${staged.reason}`;
         say(`launch-failed ${spec.runId}: ${detail}`);
@@ -2050,7 +2184,7 @@ async function attemptSpec(
     // the runner reads its whole shape from it, and a run pod needs no store.
     // A resume keeps the file the run launched with.
     if (!resume && campaignFile !== undefined && !opts.dryRun) writeCampaignFile(join(REPO_ROOT, RUNS_DIR, spec.runId), campaignFile);
-    const exit = await runEpisode(spec, resume);
+    const exit = await runEpisode(spec, resume, held.world);
     // The namespace had no room for the pod (`isQuotaRefusal`): nothing ran, so
     // this is no attempt — no stub, no ladder, the run left as it was. The
     // supervisor plans under the chart's run-pod cap, so this is the race
@@ -2438,6 +2572,25 @@ async function attemptParty(party: readonly Attempt[], opts: { deadline: number 
       }
     }
   }
+  // The party's world: one for the whole attempt, its own again on a resume.
+  const w = await openWorld(
+    party.map((a) => a.spec),
+    resume,
+    { mode: worldsMode, launcher: worldLauncherHere, runDir },
+  );
+  if ("refused" in w) {
+    for (const a of party) noWorld(a.spec, w.refused);
+    return;
+  }
+  const world = w.world;
+  try {
+    await runPartyOn(party, id, resume, world);
+  } finally {
+    await settleWorld(world, party.map((a) => a.spec.runId), `party ${id}'s attempt is over`);
+  }
+}
+
+async function runPartyOn(party: readonly Attempt[], id: string, resume: boolean, world: ActiveWorld | undefined): Promise<void> {
   const bySpec = new Map(party.map((a) => [a.spec.runId, a]));
   const specOf = (m: PartyMemberRun): Resolved => bySpec.get(m.runId)!.spec;
   const members: PartyMemberRun[] = party.map((a) => ({ member: a.spec.party!.member, runId: a.spec.runId, resume: a.resume }));
@@ -2450,7 +2603,7 @@ async function attemptParty(party: readonly Attempt[], opts: { deadline: number 
       ? {}
       : {
           stage: async () => {
-            const r = await partyStager.stage(stageRequestOf(party.map((a) => a.spec)), stagingAbort.signal);
+            const r = await partyStager.stage(stageRequestOf(party.map((a) => a.spec)), stagingAbort.signal, world !== undefined ? stagingEnvOf(world.id, soapPort()) : undefined);
             if (r.ok) staged = r.members;
             return r;
           },
@@ -2460,7 +2613,7 @@ async function attemptParty(party: readonly Attempt[], opts: { deadline: number 
       await freeSession(spec, m.resume ? "pre-resume hygiene" : "pre-launch hygiene", false);
       if (!m.resume && spec.campaignFile !== undefined) writeCampaignFile(join(REPO_ROOT, RUNS_DIR, spec.runId), stagedCampaignFile(spec.campaignFile, staged));
       say(`launch ${spec.model} as ${spec.runId} (party ${id}, ${m.member})${m.resume ? " (--resume)" : ""}`);
-      return startPartyEpisode(spec, m.resume);
+      return startPartyEpisode(spec, m.resume, world);
     },
     verdict: (m, exit) => classify(specOf(m), exit) as MemberVerdict,
     end: (m, reason, detail) => endMember(m.runId, reason as TerminationReason, detail),
@@ -2574,6 +2727,7 @@ async function main(): Promise<void> {
   }
   logPath = args.log ?? join(REPO_ROOT, RUNS_DIR, `roster-${stampToday}.jsonl`);
   runPodsMode = args.runPods;
+  worldsMode = args.worlds;
   const party = partyOfRoster(specs);
   if (party !== null && args.loop) {
     console.error(`run-roster: party ${party.id} is one attempt — a party roster does not --loop`);

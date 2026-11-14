@@ -41,7 +41,7 @@ import {
 } from "./run-fleet-plan";
 import { type DeferEntry, deferSidecarPath, parseDefers } from "./run-roster";
 import { type Campaign } from "../runner/src/campaigns";
-import type { FleetServerView } from "../runner/viewer/api-types";
+import type { FleetServerView, FleetWorldView } from "../runner/viewer/api-types";
 import { IMAGE_RECORD_FILE } from "./run-pod";
 import {
   type ModelsSidecar,
@@ -51,6 +51,7 @@ import {
   type RunFact,
   runFactCache,
   type RunPodsMode,
+  type WorldsMode,
   type StartingCharacter,
   type UnstampedRun,
 } from "../runner/src/models";
@@ -207,7 +208,7 @@ export function rosterResumes(spawn: Pick<JobSpawn, "resumeRunId" | "accounts">,
  */
 export function jobArgv(
   spawn: JobSpawn,
-  opts: { stamp: string; until: string | undefined; resumeRoster?: boolean; runPods?: RunPodsMode },
+  opts: { stamp: string; until: string | undefined; resumeRoster?: boolean; runPods?: RunPodsMode; worlds?: WorldsMode },
 ): string[] {
   const argv = [
     ROSTER_SH,
@@ -224,6 +225,8 @@ export function jobArgv(
   // a roster started under `probes` keeps it for its life, as it keeps its
   // stamp — the switch reaches a running job at its next spawn.
   if (opts.runPods !== undefined && opts.runPods !== "off") argv.push("--run-pods", opts.runPods);
+  // `policy.worlds` likewise: only when on, so an argv from before worlds is unchanged.
+  if (opts.worlds !== undefined && opts.worlds !== "off") argv.push("--worlds", opts.worlds);
   // A resume spawn always reattaches: the roster must find the paused run's
   // row and --resume it rather than launch the id fresh.
   if (opts.resumeRoster === true || spawn.resumeRunId !== undefined) argv.push("--resume-roster");
@@ -424,6 +427,10 @@ export interface FleetState {
    * rest of this file; never a secret's value.
    */
   credentials?: CredentialStatus[];
+  /** The worlds per eval, as the fleet page lists them (`fleetWorldViews`); absent with none to list. */
+  worlds?: FleetWorldView[];
+  /** Why no world may be booted now (`worldsHold`). */
+  worldsHold?: string;
   /** Who holds which account: pinned -> job name; pool -> job name or null when free. */
   accounts?: {
     pinned: Record<string, string>;

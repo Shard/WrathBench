@@ -39,6 +39,9 @@ import { runPodsOf } from "./run-fleet-credentials";
 
 // ------------------------------------------------------------------ names
 
+/** The port secret's variable, which every run reads (`@wrathbench/mcp/module-auth`). */
+const MODULE_SECRET_ENV = "WRATHBENCH_MODULE_SECRET";
+
 /** The pods a drain and the deploy scripts select on: `app.kubernetes.io/component=run`. */
 export const RUN_POD_COMPONENT = "run";
 const LABEL_PREFIX = "wrathbench.shard.page/";
@@ -173,6 +176,12 @@ export interface RunPodEnvOptions {
   /** Plain values set last, over the template's. */
   stamps: Record<string, string>;
   /**
+   * The env Secret key the module secret is read from, when not the
+   * template's: an eval world's own (`LauncherSettings.worldsSecretKey`). The
+   * reference is rewritten, so the pod spec still never holds the value.
+   */
+  moduleSecretKey?: string;
+  /**
    * The episode's secret as the config store holds it, sealed: it replaces
    * the template's reference to that variable, and the pod opens it with the
    * store key (`unsealLaunchSecret`). Absent: the template's reference stands.
@@ -198,7 +207,7 @@ export function runPodEnv(template: readonly PodEnvVar[], opts: RunPodEnvOptions
   const driver = entryOf(opts.driver);
   const token = driver.credential?.holds === "token" ? opts.credentialEnv ?? driver.credential.defaultEnv : undefined;
   const home = driver.credential?.holds === "home" ? opts.credentialEnv ?? driver.credential.defaultEnv : undefined;
-  const keep = new Set<string>(["WRATHBENCH_MODULE_SECRET"]);
+  const keep = new Set<string>([MODULE_SECRET_ENV]);
   if (token !== undefined) keep.add(token);
   if (driver.endpoint) keep.add(opts.apiKeyEnv);
   if (opts.sealed !== undefined) {
@@ -213,14 +222,23 @@ export function runPodEnv(template: readonly PodEnvVar[], opts: RunPodEnvOptions
     if (name === SEALED_SECRET_ENV) throw new Error(`run pod env: ${name} is the launcher's to set, never a template's or a stamp`);
     // The party stager's SOAP console and its admin credential are the
     // fleet's and the runner's, never an episode's (docs/proposals/GROUP-PLAY.md §3).
+    if (name === "WRATHBENCH_WORLDS_MODULE_SECRET") throw new Error(`run pod env: ${name} is the fleet's; an episode on a world gets it as WRATHBENCH_MODULE_SECRET, by reference`);
     if (/SOAP|STAGER/.test(name)) throw new Error(`run pod env: ${name} may never reach a run pod (SOAP and the STAGER credential are the stager's alone)`);
   }
   if (STORE_KEY_ENV in opts.stamps || template.some((e) => e.name === STORE_KEY_ENV && e.valueFrom?.secretKeyRef === undefined)) {
     throw new Error(`run pod env: ${STORE_KEY_ENV} comes only from the Secret, by reference`);
   }
+  if (opts.moduleSecretKey !== undefined) {
+    if (opts.moduleSecretKey === MODULE_SECRET_ENV || !/^[A-Za-z0-9_.-]+$/.test(opts.moduleSecretKey)) throw new Error(`run pod env: ${opts.moduleSecretKey} is not an eval world's own secret key`);
+    if (!template.some((e) => e.name === MODULE_SECRET_ENV && e.valueFrom?.secretKeyRef !== undefined)) throw new Error(`run pod env: the template carries no ${MODULE_SECRET_ENV} reference to point at ${opts.moduleSecretKey}`);
+  }
   const out: PodEnvVar[] = [];
   for (const e of template) {
     if (e.valueFrom?.secretKeyRef !== undefined && !keep.has(e.name)) continue;
+    if (e.name === MODULE_SECRET_ENV && opts.moduleSecretKey !== undefined && e.valueFrom?.secretKeyRef !== undefined) {
+      out.push({ name: e.name, valueFrom: { secretKeyRef: { ...e.valueFrom.secretKeyRef, key: opts.moduleSecretKey, optional: false } } });
+      continue;
+    }
     // The codex home's directory is a plain value; it is still a credential's
     // address and goes only to the driver that reads it.
     if (HOME_CREDENTIAL_ENVS.includes(e.name) && home === undefined) continue;
@@ -306,6 +324,8 @@ export interface PodLauncherOptions {
   rosterPid: number;
   /** Pull Secrets the chart adds for run pods on top of the template's. */
   imagePullSecrets?: readonly string[];
+  /** The eval worlds' own secret key (`LauncherSettings.worldsSecretKey`), for an episode on one. */
+  worldsSecretKey?: string;
   /** Reads the episode's stored secret at launch (`launchSecret`); a test injects its own. */
   secrets?: LaunchSecretReader;
   pollMs?: number;
@@ -379,6 +399,7 @@ export class PodLauncher implements EpisodeLauncher {
         credentialEnv: launch.spec.placedOn?.env,
         apiKeyEnv: launch.spec.apiKeyEnv,
         stamps: { ...launch.env, WRATHBENCH_HARNESS_VERSION: resolved.stamp, WRATHBENCH_RUN_IMAGE: resolved.requested.ref },
+        ...(launch.onWorld === true && this.opts.worldsSecretKey !== undefined ? { moduleSecretKey: this.opts.worldsSecretKey } : {}),
         ...(stored?.source === "store" && secretName !== undefined ? { sealed: { name: secretName, sealed: stored.sealed } } : {}),
       },
       owner: this.opts.owner,
@@ -586,11 +607,19 @@ export interface LauncherSettings {
    * run-pod key), so it never launches a pod the namespace has no room for.
    */
   maxPods?: number;
+  /** How many worlds may exist at once (the chart's `worlds.max`), or undefined for no cap. */
+  maxWorlds?: number;
+  /**
+   * With hosted mode on, the env Secret key holding the eval worlds' own port
+   * secret (`hosted.worldsSecretKey`): a run pod on a world gets a reference
+   * to it as its WRATHBENCH_MODULE_SECRET. Undefined: worlds share the module secret.
+   */
+  worldsSecretKey?: string;
 }
 
 export function parseLauncherSettings(raw: unknown): LauncherSettings {
   if (typeof raw !== "object" || raw === null) throw new Error("launcher settings must be an object");
-  const o = raw as { allowedImages?: unknown; imagePullSecrets?: unknown; maxPods?: unknown };
+  const o = raw as { allowedImages?: unknown; imagePullSecrets?: unknown; maxPods?: unknown; maxWorlds?: unknown; worldsSecretKey?: unknown };
   const list = (v: unknown, what: string): string[] => {
     if (v === undefined) return [];
     if (!Array.isArray(v) || !v.every((x) => typeof x === "string" && x.length > 0)) throw new Error(`${what} must be an array of non-empty strings`);
@@ -599,10 +628,18 @@ export function parseLauncherSettings(raw: unknown): LauncherSettings {
   if (o.maxPods !== undefined && o.maxPods !== null && !(typeof o.maxPods === "number" && Number.isInteger(o.maxPods) && o.maxPods > 0)) {
     throw new Error("maxPods must be a positive integer, or null for no cap");
   }
+  if (o.maxWorlds !== undefined && o.maxWorlds !== null && !(typeof o.maxWorlds === "number" && Number.isInteger(o.maxWorlds) && o.maxWorlds > 0)) {
+    throw new Error("maxWorlds must be a positive integer, or null for no cap");
+  }
+  if (o.worldsSecretKey !== undefined && !(typeof o.worldsSecretKey === "string" && /^[A-Za-z0-9_.-]+$/.test(o.worldsSecretKey) && o.worldsSecretKey !== MODULE_SECRET_ENV)) {
+    throw new Error("worldsSecretKey must name a key of its own in the env Secret, not WRATHBENCH_MODULE_SECRET");
+  }
   return {
     allowedImages: list(o.allowedImages, "allowedImages"),
     imagePullSecrets: list(o.imagePullSecrets, "imagePullSecrets"),
     ...(typeof o.maxPods === "number" ? { maxPods: o.maxPods } : {}),
+    ...(typeof o.maxWorlds === "number" ? { maxWorlds: o.maxWorlds } : {}),
+    ...(typeof o.worldsSecretKey === "string" ? { worldsSecretKey: o.worldsSecretKey } : {}),
   };
 }
 
@@ -638,7 +675,15 @@ export function loadPodLauncher(opts: { rosterPid: number; env?: Record<string, 
   const name = env["POD_NAME"];
   const uid = env["POD_UID"];
   const owner = name !== undefined && name.length > 0 && uid !== undefined && uid.length > 0 ? { name, uid } : undefined;
-  return new PodLauncher({ client, template, allowedImages: settings.allowedImages, imagePullSecrets: settings.imagePullSecrets, owner, rosterPid: opts.rosterPid });
+  return new PodLauncher({
+    client,
+    template,
+    allowedImages: settings.allowedImages,
+    imagePullSecrets: settings.imagePullSecrets,
+    ...(settings.worldsSecretKey !== undefined ? { worldsSecretKey: settings.worldsSecretKey } : {}),
+    owner,
+    rosterPid: opts.rosterPid,
+  });
 }
 
 /**

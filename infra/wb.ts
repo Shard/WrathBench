@@ -346,6 +346,13 @@ export const ENTRIES: readonly Entry[] = [
   },
   {
     group: "inspect",
+    command: "worlds",
+    takes: "[--all]",
+    summary: "the worlds per eval: state, runs, realm, boots and teardown, the boot hold, and schemas or realm rows no record holds",
+    ...inRunner("bun", "infra/inspect-worlds.ts"),
+  },
+  {
+    group: "inspect",
     command: "publisher",
     takes: "[<run-id>]",
     summary: "the publisher's state: last flip, versions per run, the secret scan, the last passes",

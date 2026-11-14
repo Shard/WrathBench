@@ -147,6 +147,83 @@ describe("the generated pool", () => {
   });
 });
 
+describe("hosted mode's tenant pool", () => {
+  /** The plain run with every line it printed. */
+  async function runLogged(db: ReturnType<typeof fakeDb>, env: Record<string, string | undefined>): Promise<{ code: number; out: string }> {
+    const lines: string[] = [];
+    const log = console.log;
+    const error = console.error;
+    console.log = (...a: unknown[]) => void lines.push(a.join(" "));
+    console.error = (...a: unknown[]) => void lines.push(a.join(" "));
+    try {
+      return { code: await main([], async () => db.sql, env), out: lines.join("\n") };
+    } finally {
+      console.log = log;
+      console.error = error;
+    }
+  }
+
+  test("the plain run creates TENANT01 to the size with a random password it never prints, and no account access", async () => {
+    const db = fakeDb();
+    const { code, out } = await runLogged(db, { WRATHBENCH_TENANT_POOL_SIZE: "2" });
+    expect(code).toBe(0);
+    expect([...db.accounts.keys()].sort()).toEqual(["RUNNER", "TENANT01", "TENANT02"]);
+    for (const name of ["TENANT01", "TENANT02"]) {
+      const row = db.accounts.get(name)!;
+      // Not a harness account's password: the name is not it.
+      expect(calculateVerifier(name, name, Buffer.from(row.salt, "hex")).toString("hex").toUpperCase()).not.toBe(row.verifier);
+      const access = db.statements.filter((s) => s.text.startsWith("DELETE FROM account_access"));
+      expect(access.some((s) => s.values[0] === row.id), name).toBe(true);
+    }
+    // The password is 32 random bytes in hex; nothing that long is printed.
+    expect(out).not.toMatch(/[0-9a-f]{32}/i);
+    expect(out).toContain("TENANT01 to TENANT02");
+  });
+
+  test("two tenants, or two runs, never share a password", async () => {
+    const a = fakeDb();
+    const b = fakeDb();
+    await runLogged(a, { WRATHBENCH_TENANT_POOL_SIZE: "2" });
+    await runLogged(b, { WRATHBENCH_TENANT_POOL_SIZE: "1" });
+    const one = a.accounts.get("TENANT01")!;
+    const two = a.accounts.get("TENANT02")!;
+    const other = b.accounts.get("TENANT01")!;
+    expect(new Set([one.verifier, two.verifier, other.verifier]).size).toBe(3);
+  });
+
+  test("an existing tenant keeps its password but loses any account access; unset or 0 creates none", async () => {
+    const seeded = fakeDb({ TENANT01: { id: 7, salt: "AA", verifier: "BB" } });
+    await runLogged(seeded, { WRATHBENCH_TENANT_POOL_SIZE: "1" });
+    expect(seeded.accounts.get("TENANT01")).toEqual({ id: 7, salt: "AA", verifier: "BB" });
+    expect(seeded.statements.filter((s) => s.text.startsWith("DELETE FROM account_access")).map((s) => s.values)).toEqual([[7]]);
+    for (const env of [{}, { WRATHBENCH_TENANT_POOL_SIZE: "0" }, { WRATHBENCH_TENANT_POOL_SIZE: "" }]) {
+      const db = fakeDb();
+      await runLogged(db, env);
+      expect([...db.accounts.keys()]).toEqual(["RUNNER"]);
+      expect(db.statements.some((s) => s.text.includes("account_access"))).toBe(false);
+    }
+  });
+
+  test("the account-only mode never creates one and refuses to be named one; a bad size exits 2 before anything connects", async () => {
+    const db = fakeDb();
+    await run(["--accounts-only", "SMOKE6"], db, { WRATHBENCH_TENANT_POOL_SIZE: "4" });
+    expect([...db.accounts.keys()]).toEqual(["SMOKE6"]);
+    expect(parseArgs(["--accounts-only", "tenant05"])).toMatchObject({ kind: "error" });
+    expect(parseArgs(["--accounts-only", "TENANT"])).toEqual({ kind: "accounts", names: ["TENANT"] });
+    for (const size of ["100", "-1", "twenty"]) {
+      let opened = false;
+      const error = console.error;
+      console.error = () => {};
+      try {
+        expect(await main([], async () => ((opened = true), fakeDb().sql), { WRATHBENCH_TENANT_POOL_SIZE: size })).toBe(2);
+      } finally {
+        console.error = error;
+      }
+      expect(opened).toBe(false);
+    }
+  });
+});
+
 describe("arguments", () => {
   test("the account-only mode always names its accounts", () => {
     expect(parseArgs(["--accounts-only"])).toMatchObject({ kind: "error" });

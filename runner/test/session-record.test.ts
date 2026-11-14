@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { join } from "node:path";
 import { tokenFingerprint } from "@wrathbench/mcp/module-auth";
 import { SessionReader, type CallRow, type EventRow, type NearbyRow, type SessionFile, type TraceRow } from "@wrathbench/mcp/record";
-import { RecordSignals, SESSION_DIR, SHARED_WORLD, openSessionRecord, removeSessionRing, runWorldOf, sameWorldSessionDirs, sessionDirOf } from "../src/session-record";
+import { RecordSignals, SESSION_DIR, SHARED_WORLD, openSessionRecord, removeSessionRing, runWorldOf, sameWorldSessionDirs, sessionDirOf, worldPointerOf } from "../src/session-record";
 import { partyConfigSchema, partyOwnGuids, type PartyConfig } from "../src/party";
 import { openTestSession, recordDrain, recordedMove } from "./fixtures/v1-session";
 import { tempDirs } from "./fixtures/temp-dirs";
@@ -254,6 +254,24 @@ describe("openSessionRecord: own characters are the ones on this run's world", (
     // A rewritten meta.json changes nothing: a run's world never changes, so it is not read again.
     writeFileSync(join(runDir("run-a"), "meta.json"), JSON.stringify({ config: {} }));
     expect(sameWorldSessionDirs(runsDir, "w0abcdefghj", known).sort()).toEqual([join(runDir("run-a"), SESSION_DIR), join(runDir("run-b"), SESSION_DIR)]);
+  });
+
+  test("a launcher's world.json pointer names the run's world before its config can, its own and a sibling's", async () => {
+    const runsDir = tempDir("wrathbench-session-record-world-pointer-");
+    const pointer = (run: string, id: string) => {
+      mkdirSync(join(runsDir, run), { recursive: true });
+      writeFileSync(join(runsDir, run, "world.json"), JSON.stringify({ id }));
+    };
+    await sibling(runsDir, "run-freeplay", "41", null);
+    await sibling(runsDir, "run-eval-sibling", "42", null);
+    pointer("run-eval-sibling", "wabcdefghij");
+    pointer("run-self", "wabcdefghij");
+    // No `world` option: the writer's own pointer says it.
+    const row = groupRow(runsDir, undefined, ["41", "42"]);
+    expect(row).toMatchObject({ members: ["42"], foreign: 1 });
+    expect(worldPointerOf(join(runsDir, "run-self"))).toBe("wabcdefghij");
+    pointer("run-bad", "shared");
+    expect(worldPointerOf(join(runsDir, "run-bad"))).toBeUndefined();
   });
 
   test("a fan-out run's characters go with their run's world", () => {

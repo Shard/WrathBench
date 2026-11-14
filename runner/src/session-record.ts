@@ -150,14 +150,31 @@ export class RecordSignals {
 /** The world a run that names none plays on: the deployment's one long-lived world. */
 export const SHARED_WORLD = "shared";
 
+/** The pointer a fleet launcher leaves in a run directory before the run exists (`infra/world.ts`). */
+const WORLD_POINTER_FILE = "world.json";
+const WORLD_ID_RE = /^w[a-z2-7]{10}$/;
+
+/** The world a run directory's pointer names, or undefined when it has none. */
+export function worldPointerOf(runDir: string): string | undefined {
+  try {
+    const id = (JSON.parse(readFileSync(join(runDir, WORLD_POINTER_FILE), "utf8")) as { id?: unknown } | null)?.id;
+    return typeof id === "string" && WORLD_ID_RE.test(id) ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * The world a run directory's run played on, as its meta.json names it
- * (`config.world`), or undefined while that cannot be said yet: no meta.json,
- * or one that does not parse (a launch still writing it). A meta that names no
- * world is a shared-world run. Read as plain JSON, not through the run
- * config's schema, so a sibling written by any version reads the same.
+ * The world a run directory's run played on: the pointer its launcher left
+ * (`world.json`), else its meta.json's `config.world`, or undefined while
+ * that cannot be said yet: no meta.json, or one that does not parse (a launch
+ * still writing it). A meta that names no world is a shared-world run. Read
+ * as plain JSON, not through the run config's schema, so a sibling written by
+ * any version reads the same.
  */
 export function runWorldOf(runDir: string): string | undefined {
+  const pointer = worldPointerOf(runDir);
+  if (pointer !== undefined) return pointer;
   let meta: unknown;
   try {
     meta = JSON.parse(readFileSync(join(runDir, "meta.json"), "utf8"));
@@ -215,8 +232,9 @@ export interface OpenSessionRecordOptions {
   /** The directory every run of this deployment lives in: its sessions on this run's world are the own ones. */
   runsDir: string;
   /**
-   * The world this run plays on (`config.world`), `"shared"` when absent: only
-   * the runs in `runsDir` on the same world can make a character own.
+   * The world this run plays on (`config.world`); absent, the pointer its
+   * launcher left in the run directory, else `"shared"`. Only the runs in
+   * `runsDir` on the same world can make a character own.
    */
   world?: string;
   /**
@@ -249,13 +267,16 @@ export interface OpenSessionRecordOptions {
 export function openSessionRecord(o: OpenSessionRecordOptions): SessionRecord {
   const signals = o.signals ?? new RecordSignals();
   const commit = stackCommit();
-  const world = o.world ?? SHARED_WORLD;
+  // A launcher's pointer says it before the run's config can: the run's own world either way.
+  const world = o.world ?? worldPointerOf(o.runDir) ?? SHARED_WORLD;
   const worlds = new Map<string, string>();
   const writer = new SessionWriter({
     dir: o.character !== undefined ? characterSessionDir(o.runDir, o.character) : sessionDirOf(o.runDir),
     id: tokenFingerprint(o.token),
     stack: { version: SDK_VERSION, ...(commit !== undefined ? { commit } : {}) },
     ...(o.module !== undefined ? { module: o.module } : {}),
+    // The session's world on its session.json, for a reader matching characters across sessions; absent on the shared one.
+    ...(world !== SHARED_WORLD ? { world } : {}),
     own: seededOwn(
       o.ownGuids ?? [],
       ownGuidIndex(() => sameWorldSessionDirs(o.runsDir, world, worlds)),

@@ -14,6 +14,9 @@ the `worlds` block's resources and startup budget.
 {{- $ctx := .ctx -}}
 {{- $world := .world -}}
 {{- $startup := ternary $ctx.Values.worlds.startupProbe $ctx.Values.worldserver.startupProbe $world -}}
+{{- $hosted := include "wrathbench.on.hosted" $ctx -}}
+{{- /* The freeplay world in hosted mode: the long-lived world, never a world pod. */ -}}
+{{- $freeplay := and $hosted (not $world) -}}
 - name: worldserver
   image: {{ include "wrathbench.image.worldserver" $ctx }}
   imagePullPolicy: {{ $ctx.Values.image.pullPolicy }}
@@ -135,15 +138,32 @@ the `worlds` block's resources and startup budget.
       value: "8086"
     - name: AC_WRATH_BENCH_AUDIT_DIR
       value: /azerothcore/env/dist/logs/wrathbench
+    {{- if $freeplay }}
+    # Hosted mode's freeplay world (values.yaml `hosted.freeplayWorld`): more
+    # io threads, and the per-lease caps (wrath-mcp module/PROTOCOL.md,
+    # "Limits"), which a module without them ignores. Never on a world pod.
+    - name: AC_WRATH_BENCH_THREADS
+      value: {{ $ctx.Values.hosted.freeplayWorld.threads | quote }}
+    - name: AC_WRATH_BENCH_ACTION_RATE
+      value: {{ $ctx.Values.hosted.freeplayWorld.actionRate | quote }}
+    - name: AC_WRATH_BENCH_ACTION_BURST
+      value: {{ $ctx.Values.hosted.freeplayWorld.actionBurst | quote }}
+    - name: AC_WRATH_BENCH_MAX_CONNECTIONS_PER_PEER
+      value: {{ $ctx.Values.hosted.freeplayWorld.maxConnectionsPerPeer | quote }}
+    {{- else }}
     - name: AC_WRATH_BENCH_THREADS
       value: {{ $ctx.Values.worldserver.threads | quote }}
+    {{- end }}
     # The port secret (wrath-mcp/module/PROTOCOL.md "Authentication"). Every
     # route needs it; without it the module refuses to listen, loudly.
+    {{- /* With `hosted` on, a world pod's is a key of its own
+           (`hosted.worldsSecretKey`), so the freeplay world's, which the
+           gateway holds, opens no eval's world. */}}
     - name: AC_WRATH_BENCH_SECRET
       valueFrom:
         secretKeyRef:
           name: {{ $ctx.Values.envSecretName }}
-          key: WRATHBENCH_MODULE_SECRET
+          key: {{ if and $hosted $world }}{{ $ctx.Values.hosted.worldsSecretKey }}{{ else }}WRATHBENCH_MODULE_SECRET{{ end }}
     - name: AC_WRATH_BENCH_ACCOUNT
       valueFrom:
         secretKeyRef:

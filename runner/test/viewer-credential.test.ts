@@ -77,3 +77,15 @@ describe("a run's credential in the viewer", () => {
     expect(runCredentialOf(undefined)).toEqual({});
   });
 });
+
+describe("a run's world in the viewer", () => {
+  test("a run on a world reads its id, a shared one reads shared, and a run from before worlds reads none", () => {
+    const runsDir = tempDir("wb-viewer-world-");
+    writeRun(runsDir, "on-world", { world: "wabcdefghij" });
+    writeRun(runsDir, "shared", { world: "shared" });
+    writeRun(runsDir, "before", {});
+    expect(readRun(runsDir, "on-world").world).toBe("wabcdefghij");
+    expect(readRun(runsDir, "shared").world).toBe("shared");
+    expect("world" in readRun(runsDir, "before")).toBe(false);
+  });
+});

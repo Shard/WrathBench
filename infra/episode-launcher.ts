@@ -29,6 +29,15 @@ import { launchSecret, STORE_KEY_ENV } from "../runner/src/store-secrets";
 /** The fleet setting's vocabulary lives with the policy block it is part of; re-exported for the launchers' callers. */
 export { parseRunPodsMode, RUN_PODS_MODES, type RunPodsMode };
 
+/** The port secret's variable, which every run reads. */
+export const MODULE_SECRET_ENV = "WRATHBENCH_MODULE_SECRET";
+/**
+ * With hosted mode on, the eval worlds' own port secret on the fleet pod
+ * (the chart's `worldsSecretEnv`): the freeplay world's WRATHBENCH_MODULE_SECRET
+ * does not open an eval's world. Unset, the worlds share the module secret.
+ */
+export const WORLDS_SECRET_ENV = "WRATHBENCH_WORLDS_MODULE_SECRET";
+
 /**
  * SIGTERM → SIGKILL grace for an episode, whichever launcher runs it. The
  * runner pauses on SIGTERM (pause, not terminate): it abandons the request in
@@ -74,6 +83,12 @@ export interface EpisodeLaunch {
   args: string[];
   /** Stamps the roster sets on the episode's environment (`WRATHBENCH_HARNESS_VERSION`). */
   env: Record<string, string>;
+  /**
+   * The episode plays on an eval world of its own (`infra/world.ts`). With
+   * hosted mode on, such a world opens with its own port secret, which the
+   * episode then gets as its WRATHBENCH_MODULE_SECRET (`WORLDS_SECRET_ENV`).
+   */
+  onWorld?: boolean;
   log: (line: string) => void;
 }
 
@@ -184,11 +199,16 @@ export type LaunchSecretReader = (name: string) => ReturnType<typeof launchSecre
  */
 export function processEpisodeEnv(
   parent: Record<string, string | undefined>,
-  launch: Pick<EpisodeLaunch, "spec" | "env">,
+  launch: Pick<EpisodeLaunch, "spec" | "env" | "onWorld">,
   secrets: LaunchSecretReader,
 ): { env: Record<string, string | undefined> } | { refused: string } {
   const env: Record<string, string | undefined> = { ...parent, ...launch.env };
   delete env[STORE_KEY_ENV];
+  // The eval worlds' own port secret is the fleet's to hold. An episode on
+  // one gets it as the only module secret it reads; no other episode gets it.
+  const worlds = parent[WORLDS_SECRET_ENV];
+  delete env[WORLDS_SECRET_ENV];
+  if (launch.onWorld === true && worlds !== undefined && worlds.length > 0) env[MODULE_SECRET_ENV] = worlds;
   const name = episodeSecretEnv(launch.spec);
   if (name === undefined) return { env };
   const s = secrets(name);

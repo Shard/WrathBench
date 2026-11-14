@@ -99,6 +99,7 @@ interface MetaShape {
     cell?: string;
     campaignVersion?: number;
     continuedFrom?: string;
+    world?: string;
   };
 }
 
@@ -327,6 +328,9 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     if (declared === "free" || declared === "paid") row.declaredBilling = declared;
     // What paid: a v1 run's credential, or a 0.5 run's lane. Launch config only.
     Object.assign(row, runCredentialOf(meta.config));
+    // The world it played on, a label like the credential; absent before worlds.
+    const world = str(meta.config?.world);
+    if (world !== null) row.world = world;
     /*
      * What the provider actually served, promoted onto the run mid-episode
      * (`Trajectory.recordResolved`). Read here and from the columns below;

@@ -47,7 +47,8 @@ import {
 } from "../runner/src/models";
 import { isScoredEpisode } from "../runner/src/episodes";
 import { credentialCandidates, isCredentialId, parseCredentials, type Credential } from "../runner/src/credential-slots";
-import { isPoolAccountName, POOL_SIZE_ENV, poolAccountNames, poolSizeOf } from "../runner/src/account-pool";
+import { evalPoolAccountNames, evalPoolSizeOf, isEvalPoolAccountName, isPoolAccountName, POOL_SIZE_ENV, poolAccountNames, poolSizeOf } from "../runner/src/account-pool";
+import { tenantAccountRefusal } from "./tenant-accounts";
 import type { PlacedCredential } from "./run-fleet-credentials";
 import { harnessVersion } from "../runner/src/version";
 import { DEFAULT_DRIVER, driverEntry, ROSTER_DRIVERS } from "../runner/src/drivers";
@@ -348,6 +349,13 @@ export interface FleetAccounts {
   pool: string[];
   /** At most this many pool accounts live at once; the pool's size when the file says none. */
   max: number;
+  /**
+   * The eval pool, `EVAL01`…, sized by the deployment (`WRATHBENCH_EVAL_POOL_SIZE`,
+   * the chart's `worlds.pool.size`): what a party campaign that draws its
+   * accounts (`accounts: "evals"`) takes per attempt. Never authored, never
+   * pinned, never in `pool`. Absent is none.
+   */
+  evalPool?: string[];
 }
 
 export interface FleetConfig {
@@ -491,6 +499,9 @@ function pinClash(pin: Pin, accounts: FleetAccounts, byAccount: ReadonlyMap<stri
     if (accounts.pool.some((a) => a.toUpperCase() === key) || isPoolAccountName(account)) {
       return `account ${account} is ${isPoolAccountName(account) ? "a generated pool account" : "in accounts.pool"} — a pinned account is reserved; only a disabled job may park on a pool account`;
     }
+    if (isEvalPoolAccountName(account)) {
+      return `account ${account} is an eval pool account — a party draws those per attempt (accounts: "evals"); nothing pins one`;
+    }
   }
   return undefined;
 }
@@ -508,14 +519,14 @@ export function scheduledAccounts(config: Pick<FleetConfig, "accounts">): string
  * disabled credential is no refusal; the campaign waits for it.
  */
 export function campaignCredentialProblem(
-  c: Pick<Campaign, "name" | "credential" | "account" | "assignments">,
+  c: Pick<Campaign, "name" | "credential" | "account" | "assignments" | "drawsAccounts">,
   roster: Readonly<Record<string, Pick<FleetRosterEntry, "model" | "driver" | "apiBase" | "billing">>>,
   credentials: readonly Credential[],
 ): string | undefined {
   const pin = c.credential;
   if (pin === undefined) return undefined;
   if (!isCredentialId(pin)) return `campaign ${c.name}: credential must be a credential's id (credentials/<id>), never a secret`;
-  if (c.account === undefined) return `campaign ${c.name}: a credential pin is a pinned campaign's (give account or accounts); the policy places an unpinned campaign's runs`;
+  if (c.account === undefined && c.drawsAccounts !== true) return `campaign ${c.name}: a credential pin is a pinned campaign's (give account or accounts); the policy places an unpinned campaign's runs`;
   for (const a of c.assignments) {
     const e = roster[a.model];
     if (e === undefined) continue;
@@ -554,24 +565,43 @@ export function pinnedCampaignJobs(
   config: Pick<FleetConfig, "campaigns" | "roster">,
   probeRuns: readonly ProbeRun[],
   healthy?: (name: string) => boolean,
+  /**
+   * For a party that draws its accounts (`Campaign.drawsAccounts`): this
+   * attempt's accounts from the eval pool, or why it has none now
+   * (`evalPoolDraw`). Without it such a party yields no job.
+   */
+  draw?: (c: Campaign, jobName: string, size: number) => { accounts: string[] } | { held: string },
+  /** Where a party that could draw no accounts is said, with its job. */
+  held?: { job: FleetJob; why: string }[],
 ): FleetJob[] {
   const catalog = Object.keys(config.roster);
   const out: FleetJob[] = [];
   for (const c of config.campaigns) {
-    if (c.account === undefined || !c.enabled) continue;
+    if ((c.account === undefined && c.drawsAccounts !== true) || !c.enabled) continue;
     // A party's accounts carry its members' characters: while any attempt of
     // it is live or paused, a fresh one would restage over them. The paused
     // party comes back through `planResumes`, whole, or waits listed.
-    if (c.accounts !== undefined && campaignSquares(c, catalog, probeRuns).some((s) => s.live > 0)) continue;
+    if ((c.accounts !== undefined || c.drawsAccounts === true) && campaignSquares(c, catalog, probeRuns).some((s) => s.live > 0)) continue;
     const next = campaignWork([c], catalog, probeRuns, healthy)[0];
     if (next === undefined) continue;
+    const name = pinnedCampaignJobName(c.name, next.cell.id, next.arm.id);
+    let accounts = c.accounts;
+    if (c.drawsAccounts === true) {
+      const base: FleetJob = { refs: [next.model], ref: next.model, episode: "probing", repeat: 1, name, enabled: true, source: "pinned", probe: { campaign: c.name, version: c.version, cell: next.cell.id, arm: next.arm.id } };
+      const drawn = draw?.(c, name, c.def.party?.size ?? 0) ?? { held: "no eval pool to draw a party's accounts from here" };
+      if ("held" in drawn) {
+        held?.push({ job: base, why: drawn.held });
+        continue;
+      }
+      accounts = drawn.accounts;
+    }
     out.push({
       refs: [next.model],
       ref: next.model,
       episode: "probing",
       repeat: 1,
-      name: pinnedCampaignJobName(c.name, next.cell.id, next.arm.id),
-      account: c.account,
+      name,
+      account: accounts?.[0] ?? c.account!,
       enabled: true,
       source: "pinned",
       probe: { campaign: c.name, version: c.version, cell: next.cell.id, arm: next.arm.id },
@@ -579,9 +609,9 @@ export function pinnedCampaignJobs(
       // run-id stem (`-a<n>` from the second). This version's count is only
       // the floor: the spawn numbers past every id on disk (`takenRunIds`), so
       // a restaged party never lands on the ids of one before it.
-      ...(c.accounts !== undefined ? { accounts: [...c.accounts], attempt: next.attempts + 1 } : {}),
+      ...(accounts !== undefined ? { accounts: [...accounts], attempt: next.attempts + 1 } : {}),
       // A one-agent arm holds the same accounts for one run on all of them.
-      ...(c.accounts !== undefined && isOneAgentArm(c.def, next.arm) ? { fanout: true as const } : {}),
+      ...(accounts !== undefined && isOneAgentArm(c.def, next.arm) ? { fanout: true as const } : {}),
       // The campaign's own credential, for its launches only (`campaigns.<id>.credential`).
       ...(c.credential !== undefined ? { credential: c.credential } : {}),
     });
@@ -627,7 +657,8 @@ export function withoutEvals(config: FleetConfig): FleetConfig {
  * job elsewhere and never reaches this list.
  */
 export function unpinnedCampaigns(config: Pick<FleetConfig, "campaigns">): Campaign[] {
-  return config.campaigns.filter((c) => c.enabled && c.account === undefined);
+  // A party that draws its accounts from the eval pool is pinned like any party.
+  return config.campaigns.filter((c) => c.enabled && c.account === undefined && c.drawsAccounts !== true);
 }
 
 /**
@@ -866,7 +897,9 @@ export function parsePreflight(raw: unknown): FleetPreflight {
   const timeoutMs = parseBudget(o.timeoutMs, "timeoutMs", DEFAULT_PREFLIGHT.timeoutMs);
   const deployTimeoutMs = parseBudget(o.deployTimeoutMs, "deployTimeoutMs", DEFAULT_PREFLIGHT.deployTimeoutMs);
   if (o.enabled && smokes.length === 0) fail("preflight: enabled with no smokes to run");
-  return { enabled: o.enabled, account: o.account, smokes, timeoutMs, deploySmokes, deployTimeoutMs };
+  const preflight = { enabled: o.enabled, account: o.account, smokes, timeoutMs, deploySmokes, deployTimeoutMs };
+  for (const a of preflightAccounts(preflight)) refuseTenantAccount("preflight", a);
+  return preflight;
 }
 
 /**
@@ -1033,6 +1066,7 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
       if (accounts.pool.some((a) => a.toUpperCase() === account.toUpperCase()) || isPoolAccountName(account)) {
         fail(`preflight account ${account} is also ${isPoolAccountName(account) ? "a generated pool account" : "in accounts.pool"} — the gate's account is reserved`);
       }
+      if (isEvalPoolAccountName(account)) fail(`preflight account ${account} is an eval pool account — the gate's account is reserved, and an eval account is on no shared allowlist`);
     }
   }
   if (jobs.some((j) => j.enabled && j.account === undefined) && accounts.pool.length === 0) {
@@ -1086,6 +1120,12 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
   return { notes, preflight, accounts, credentials, roster, jobs, campaigns, campaignDefs, campaignRefusals, policy, refusals };
 }
 
+/** Refuse the config when `account` is a hosted tenant's (infra/tenant-accounts.ts), enabled or not. */
+function refuseTenantAccount(where: string, account: string): void {
+  const why = tenantAccountRefusal(account);
+  if (why !== null) fail(`${where}: ${why}`);
+}
+
 /** An account that is reserved by name and never in the pool: the smokes' and the ad-hoc debugging one. */
 export function isReservedAccountName(a: string): boolean {
   return /^SMOKE/i.test(a) || a.toUpperCase() === "PROBE";
@@ -1104,9 +1144,12 @@ function parseAccounts(raw: unknown, env: Record<string, string | undefined>): F
     if ("error" in size) fail(`accounts: ${size.error}`);
     return poolAccountNames(size.size);
   };
+  const evalSize = evalPoolSizeOf(env);
+  if ("error" in evalSize) fail(`accounts: ${evalSize.error}`);
+  const evalPool = evalPoolAccountNames(evalSize.size);
   if (raw === undefined) {
     const pool = generated();
-    return { pinned: {}, pool, max: pool.length };
+    return { pinned: {}, pool, max: pool.length, ...(evalPool.length > 0 ? { evalPool } : {}) };
   }
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail("fleet config: accounts must be a JSON object");
   const o = raw as { pinned?: unknown; pool?: unknown; max?: unknown; paid?: unknown; local?: unknown };
@@ -1132,6 +1175,8 @@ function parseAccounts(raw: unknown, env: Record<string, string | undefined>): F
       if (pool.some((p) => p.toUpperCase() === a.toUpperCase())) fail(`accounts.pool: ${a} listed twice`);
       if (isReservedAccountName(a)) fail(`accounts.pool: ${a} is reserved (SMOKE* and PROBE are never drawn from the pool)`);
       if (isPoolAccountName(a)) fail(`accounts.pool: ${a} is a generated pool account's name — leave accounts.pool out to draw from the generated pool`);
+      if (isEvalPoolAccountName(a)) fail(`accounts.pool: ${a} is an eval pool account's — a party campaign draws those (accounts: "evals"), never the pool`);
+      refuseTenantAccount("accounts.pool", a);
       pool.push(a);
     }
   }
@@ -1140,7 +1185,7 @@ function parseAccounts(raw: unknown, env: Record<string, string | undefined>): F
     if (typeof o.max !== "number" || !Number.isInteger(o.max) || o.max < 0) fail("accounts.max must be a non-negative integer: at most that many pool accounts live at once");
     max = Math.min(o.max, pool.length);
   }
-  return { pinned, pool, max };
+  return { pinned, pool, max, ...(evalPool.length > 0 ? { evalPool } : {}) };
 }
 
 function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
@@ -1353,6 +1398,7 @@ function parseQueue(
     let account: string | undefined;
     if (j.account !== undefined) {
       if (typeof j.account !== "string" || j.account.length === 0) fail(`queue ${ref}: account must be a non-empty account name`);
+      refuseTenantAccount(`queue ${ref}`, j.account);
       account = j.account;
     }
     // Optional: pin the job to one credential instead of letting the

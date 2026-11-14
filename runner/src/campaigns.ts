@@ -36,7 +36,7 @@
 
 import { isEndReason } from "./end-conditions";
 import { z } from "zod";
-import { DEFAULT_DRIVER, driverHasCompactWindow, launchLoopOf, runsProgramLoop } from "./config";
+import { DEFAULT_DRIVER, driverHasCompactWindow, launchLoopOf, refuseTenantAccount, runsProgramLoop } from "./config";
 import { entryOf, isDriver } from "./drivers";
 import type { RunPodsMode } from "./models";
 import {
@@ -70,6 +70,9 @@ export const campaignAssignmentSchema = z
 export type CampaignAssignment = z.infer<typeof campaignAssignmentSchema>;
 
 /** A `campaigns/<id>` row. */
+/** A party campaign's `accounts` when it draws them from the eval pool per attempt. */
+export const DRAWN_ACCOUNTS = "evals";
+
 export const campaignRowSchema = z
   .object({
     /** Which published version is active. Explicit, never "latest": a new publish must not re-target a sweep. */
@@ -82,15 +85,18 @@ export const campaignRowSchema = z
      * account pool like anything else. A pinned campaign follows
      * the pinned-job account rules.
      */
-    account: z.string().min(1).nullable().optional(),
+    account: z.string().min(1).superRefine(refuseTenantAccount).nullable().optional(),
     /**
      * A party campaign's accounts (docs/proposals/GROUP-PLAY.md §2): the pin
      * generalised to a list, one account per member in member order, so the
      * whole party is pinned. Only a definition with a `party` takes it, and it
      * must take it, with exactly the party's size; `account` is then absent.
-     * Each account follows the pinned-job account rules.
+     * Each account follows the pinned-job account rules. Or `"evals"`: the
+     * party draws its members' accounts from the eval pool (`EVAL01`…) per
+     * attempt, which plays on a world of its own (`policy.worlds`), so two
+     * party campaigns run side by side.
      */
-    accounts: z.array(z.string().min(2).max(16)).min(1).optional(),
+    accounts: z.union([z.literal(DRAWN_ACCOUNTS), z.array(z.string().min(2).max(16).superRefine(refuseTenantAccount)).min(1)]).optional(),
     /**
      * The credential this campaign's launches take a slot on, by id
      * (`credentials/<id>`), for a pinned campaign: it overrides the
@@ -145,6 +151,11 @@ export interface Campaign {
   account?: string;
   /** A party campaign's pinned accounts, one per member in member order. */
   accounts?: string[];
+  /**
+   * A party campaign whose accounts are drawn from the eval pool per attempt
+   * (`accounts: "evals"`): pinned like a party, with no `account` of its own.
+   */
+  drawsAccounts?: true;
   /** The credential this campaign's launches take (`campaigns.<id>.credential`); absent: the assignment's own placement. */
   credential?: string;
   excludeUnhealthy: boolean;
@@ -406,7 +417,8 @@ export function parseCampaigns(
       refused.push({ key: `campaigns/${name}`, campaign: name, reason: `campaign ${name}: ${partyProblem}` });
       continue;
     }
-    const accounts = def.party !== undefined ? row.accounts : undefined;
+    const accounts = def.party !== undefined && Array.isArray(row.accounts) ? row.accounts : undefined;
+    const draws = def.party !== undefined && row.accounts === DRAWN_ACCOUNTS;
     campaigns.push({
       name,
       version: def.version,
@@ -419,6 +431,7 @@ export function parseCampaigns(
       // A party is pinned whole: the leader's account stands for the pin
       // wherever one account is read, and the list carries the rest.
       ...(accounts !== undefined ? { account: accounts[0]!, accounts: [...accounts] } : {}),
+      ...(draws ? { drawsAccounts: true as const } : {}),
       ...(row.credential !== undefined ? { credential: row.credential } : {}),
       excludeUnhealthy: row.excludeUnhealthy,
       concluded: [...(row.concluded ?? [])],
@@ -442,7 +455,8 @@ function partyRowProblem(def: CampaignDefinition, row: z.infer<typeof campaignRo
   if (def.party === undefined) return row.accounts !== undefined ? "accounts is a party's pin, and this definition is no party — pin it with account" : null;
   const size = def.party.size;
   if (row.account !== undefined && row.account !== null) return `a party of ${size} is pinned with accounts (one per member), not account`;
-  if (row.accounts === undefined) return `a party of ${size} is pinned to its members' accounts: give accounts with ${size} names`;
+  if (row.accounts === undefined) return `a party of ${size} is pinned to its members' accounts: give accounts with ${size} names, or "${DRAWN_ACCOUNTS}" to draw them from the eval pool per attempt`;
+  if (row.accounts === DRAWN_ACCOUNTS) return null;
   if (row.accounts.length !== size) return `a party of ${size} needs ${size} accounts, and accounts names ${row.accounts.length}`;
   const upper = row.accounts.map((a) => a.toUpperCase());
   if (new Set(upper).size !== upper.length) return "two members share an account — the module holds one session per account";

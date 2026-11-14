@@ -1,0 +1,27 @@
+{{- if include "wrathbench.on.hosted" . }}
+{{/*
+Hosted mode's accounts on the freeplay world (values.yaml `hosted`), for the
+gateway, which a later chart change mounts.
+
+  reserved-accounts  every account on the freeplay world's module allowlist
+                     that is not a tenant's: the closed set the operator's own
+                     sessions can lease there, since the module serves no
+                     other. The grants file refuses a grant that names one (a
+                     create on an account reclaims it from whatever session
+                     holds it), and this is the form `grants reserve <a,b,…>`
+                     takes. Rendered from the same values as the allowlist,
+                     so the two cannot drift.
+  tenant-accounts    the tenant pool, TENANT01 … TENANTnn, the accounts
+                     grants may hand out.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-hosted
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hosted
+data:
+  reserved-accounts: {{ join "," (fromJsonArray (include "wrathbench.operatorAccounts" .)) | quote }}
+  tenant-accounts: {{ join "," (fromJsonArray (include "wrathbench.tenantAccounts" .)) | quote }}
+{{- end }}

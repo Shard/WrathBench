@@ -489,11 +489,77 @@ worlds:
         ephemeral-storage: 256Mi
       limits:
         memory: 1Gi
+  # The eval pool, EVAL01 … EVALnn (at most 99): the accounts a party
+  # campaign that draws its own (`accounts: "evals"`) takes per attempt, one
+  # per member. Created by the bootstrap Job, handed to every pod that reads
+  # the fleet config, and on no allowlist of the long-lived world's — a
+  # world's allowlist is its attempt's accounts — so growing it is a values
+  # change with no worldserver restart. Two parties of five need 10.
+  pool:
+    size: 10
   # AC_TEMP_DIR, as the long-lived world's.
   tempSizeLimit: 2Gi
   # The world's own logs dir (Errors.log, and dbimport's log of what it
   # applied); the module's audit dir under it is the shared one on the PVC.
   logsSizeLimit: 1Gi
+
+# Hosted mode's share of the cluster (wrath-mcp's docs/ARCHITECTURE.md,
+# "Hosted"): invited people drive characters through a hosted wrath-mcp
+# gateway, on the long-lived `worldserver` above (the freeplay world) and never
+# on a world per eval. OFF by default, and off renders exactly what the chart
+# rendered before it existed. On, it renders:
+#
+#   - `freeplayWorld`, on the long-lived worldserver only, never a world pod:
+#     the module's io threads and its per-lease caps (wrath-mcp
+#     module/PROTOCOL.md, "Limits");
+#   - the world pods' own port secret, `worldsSecretKey` in `envSecretName`,
+#     in place of WRATHBENCH_MODULE_SECRET, which the gateway will hold for
+#     the freeplay world: so a gateway that leaks its secret reaches the
+#     freeplay world and never an eval's. The fleet pod carries both;
+#   - the tenant pool, TENANT01 … TENANTnn (infra/tenant-accounts.ts): on the
+#     freeplay world's allowlist after every other, created by the bootstrap
+#     Job with a random password nobody is shown and no account access, and
+#     told to no pod that parses the fleet config, so the fleet never draws
+#     one;
+#   - the `<release>-hosted` ConfigMap: `reserved-accounts`, every other
+#     account on the freeplay world's allowlist (the accounts the operator's
+#     own sessions can lease there, which the module serves and nothing else),
+#     in the form `grants reserve` takes, and `tenant-accounts`, the pool.
+#
+# The chart refuses it with the evals group on and `worlds` off: scored and
+# probing episodes would then play on the freeplay world, under the caps and
+# beside the tenants. The fleet setting `policy.worlds` must be "evals" too,
+# which the chart cannot see.
+hosted:
+  enabled: false
+  # The freeplay world's module settings. All are read at start, so a change
+  # is a worldserver restart. `actionRate`, `actionBurst` and
+  # `maxConnectionsPerPeer` are wrath-mcp#57's and a module without it ignores
+  # them; `threads` is the io pool every module has.
+  freeplayWorld:
+    # The module's io threads (WrathBench.Threads). A handler holds one while
+    # it waits on the world thread, so a world with many callers needs more
+    # than `worldserver.threads`' 2.
+    threads: 8
+    # Per lease, the requests a lease secret may make a second and at once
+    # (WrathBench.ActionRate / ActionBurst). The port secret is exempt, but
+    # the fleet's own sessions hold lease secrets: on, this caps the
+    # operator's freeplay streams and the smokes on this world as well.
+    actionRate: 20
+    actionBurst: 40
+    # Connections from one peer address (WrathBench.MaxConnectionsPerPeer).
+    # Off (0) for now: until the worker split, a tenant's calls reach the port
+    # from the gateway's one address, beside the fleet's. It is set once tenant
+    # workers reach the port from pod addresses of their own.
+    maxConnectionsPerPeer: 0
+  # The key in `envSecretName` holding the world pods' port secret. The
+  # deploying cluster adds it (`openssl rand -hex 32`, never the
+  # WRATHBENCH_MODULE_SECRET value); the chart only references it.
+  worldsSecretKey: WRATHBENCH_WORLDS_MODULE_SECRET
+  tenants:
+    # TENANT01 … TENANTnn, 0 to 99. Growing it is this value plus a
+    # worldserver restart, as the fleet's pool; shrinking deletes no account.
+    size: 20
 
 # The `codex` driver's ChatGPT-subscription credential (runner/README.md, Drivers).
 # The CLI refreshes the token in place, so the home is MOUNTED, never copied: a

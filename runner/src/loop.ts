@@ -715,7 +715,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
                   });
                   // The block is this call's result, in the history: the next request does not repeat it.
                   currentWake = undefined;
-                  return woke.block;
+                  // The notices queued for the next message go with it, and that message does not repeat them.
+                  return programWake.yieldAnswer(woke.block, pendingNotices, () => o.sandbox.drainNotices());
                 },
               }
             : {}),

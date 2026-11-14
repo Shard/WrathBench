@@ -28,6 +28,7 @@ stack instead, where a command has a compose form.
 | deal with a run that stopped without a verdict | "Lapsed runs: paused, and stale" |
 | see why a model is or is not scheduled | "The scheduling policy" |
 | run a probe campaign | "Probe campaigns", "Run pods" |
+| give each scored attempt a world of its own | "Worlds" |
 | launch one episode by hand | "Ad-hoc launches", "The scripted reference run" |
 | manage provider credentials, their slots and their budgets | "Credentials" |
 | switch the runner, evals or viewer group off | "Groups" |
@@ -456,6 +457,8 @@ policy      Only where runs execute. `maxSessions { <driver>: n }` — how many 
             `runPods` — `"off"` (default) or `"probes"`: every probing episode runs as its own
             pod on the arm's image ("Run pods"). While it is not `probes`, or off the cluster, an
             arm that pins an image or a command is a refused pair, never run on master.
+            `worlds` — `"off"` (default) or `"evals"`: every fresh e90, e360 or probing attempt
+            plays on a world of its own ("Worlds"), and never on the shared one while it is on.
             `maxConcurrent`, `paid` and `subscriptions` are refused by name: their work is the
             credentials' ("Credentials").
 campaign-defs  published campaign definitions, `<id>@<version>` → { definition, hash, source,
@@ -478,7 +481,11 @@ campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only
               the leader first; any other count, a shared account or a clash refuses the whole
               pin. Its square launches one roster of all members together, after the stager,
               takes a slot per member on one credential, starts only when all fit, and
-              resumes whole (docs/proposals/GROUP-PLAY.md; `infra/party-fate.ts`).
+              resumes whole (docs/proposals/GROUP-PLAY.md; `infra/party-fate.ts`). Or
+              `"evals"`: each attempt draws its members' accounts from the eval pool (`EVAL01`…,
+              "The account pool") and plays on a world of its own, so party campaigns run side
+              by side. Held, with the reason, while `policy.worlds` is off or the pool is short;
+              a paused one resumes on the accounts it drew.
             `credential` — a PINNED campaign's credential, by id: every launch of the campaign
               takes it, overriding the assignments' own placement for those runs only. One that
               cannot carry every assignment refuses the campaign.
@@ -1887,6 +1894,104 @@ campaign there, assign a model, set `runPods` to `probes`, and watch
 sha256:…`, and the roster's verdict. Expect the first pull of a new image to
 take minutes; the account is held through it by `image.json` and the heartbeat.
 
+### Worlds
+
+Every scored or probing attempt can play on a **world of its own**: a
+worldserver pod over its own characters schema and realm row, made for the
+attempt and dropped at its verdict, while freeplay shares the long-lived
+world (`infra/world.ts`; `docs/ARCHITECTURE.md`, "Worlds"). It ships dark
+behind two switches.
+
+**The chart:** `worlds.enabled` renders the world pod template, the headless
+`worlds` Service and the world pods' policy (values.yaml `worlds`). Set
+`worlds.max` to what the namespace's ResourceQuota fits beside the release's
+own pods and the run pods. The supervisor plans under it, and an attempt past
+it waits with `cap: worlds n/max`.
+
+**The fleet setting:** `policy.worlds`, `"off"` by default:
+
+```
+bun wb config patch policy '{"worlds":"evals"}'
+bun wb config patch policy '{"worlds":"off"}'
+```
+
+It reaches a job at its next roster spawn (`--worlds`). With it on, a fresh
+`e90`, `e360` or `probing` attempt never plays on the shared world. Off the
+cluster, or while worlds are held (below), every such launch is held, listed
+with the reason. A resumed run goes back to the world its launch file names
+(`runs/<id>/world.json`), whatever the setting says now. A run that started on
+the shared world resumes there.
+
+**Turning it on.** A run's session record counts only the characters of runs
+on its own world as the deployment's own. It reads the world from the run's
+`world.json` pointer, or from `config.world` once the runner stamps it. In
+order:
+1. Release with `worlds.enabled`.
+2. Set `policy.worlds` to `evals`.
+3. Run one solo probe. Its world is the measurement: boot time (`bun wb
+   inspect worlds`), memory at boot and at the end (`kubectl top`), and CPU.
+4. Set `worlds.max` and `worlds.resources` from those numbers.
+5. Run a party.
+
+**What the roster does.** Before staging, for a fresh attempt:
+- it allocates an id (`w` and ten base32 characters) and a realm slot (2–254);
+- it writes the world's record under `data/worlds/<id>/`, the realm row and
+  each run's pointer;
+- it creates the pod and waits for its module's `/health`.
+
+The world's allowlist is the attempt's accounts. The stager works on the
+world's own SOAP console and schema. Allocation and boot sit under one lock,
+so one world boots at a time.
+
+**Hosted mode's secret.** With `hosted` on, an eval world opens with its own
+port secret (`hosted.worldsSecretKey`), not the freeplay world's. The fleet
+presents it on its own calls to a world (`/health`, session releases, the
+stager). An episode on a world gets it as its `WRATHBENCH_MODULE_SECRET`: a
+child process by value, a run pod by a reference to that key. No episode
+ever gets the fleet's `WRATHBENCH_WORLDS_MODULE_SECRET` variable itself.
+
+**After the attempt** the roster reads the runs' own files:
+- every run has its verdict, or never started: the world is ended. Its
+  console log is saved to `data/worlds/<id>/server.log`, its pod deleted, its
+  schema dropped and its realm row deleted.
+- a run may resume: the world is parked. The pod is deleted with its full
+  grace and the schema kept, for a resume that boots it again on the digests
+  its first boot ran.
+
+**When a world does not come up.** A boot that is not ready inside its budget
+is no attempt: nothing is recorded, and the world is ended on the spot. The
+same holds for a pod the quota refuses. Three failed boots in a row hold
+every launch that needs a world for 30 minutes, or until a boot succeeds,
+and the hold is listed with the last failure.
+
+**Every world boot logs the entrypoint's warning about write permissions on
+the configuration dir.** It is harmless: the confs are mounted read-only on
+purpose and exist already. Read the console log for the real cause of a
+failed boot.
+
+**The reconcile.** At the fleet's start and hourly, the supervisor settles the
+worlds no roster holds: those of another fleet pod, or of a roster that is
+gone. Each is ended or parked by the same rule. A world pod with no open
+record is deleted. A world schema or realm row no record holds is only
+listed, in the fleet log and by `bun wb inspect worlds`, and dropping one is
+the operator's call.
+
+**Where to see them.** The private fleet page lists the open worlds and those
+ended in the last day: state, realm, boot time and runs, with a banner while
+failed boots hold them. A run's page and its row on the runs list name its
+world. The public site carries no world id. The collector writes the world to
+`runs.world_id`; a store made before the column gets it on its next start, and
+its older rows fill on a `--replay`.
+
+**Measuring the first world.** Beside the boot itself, note how long the
+fleet pod takes to resolve a new world's `<id>.worlds` name: the boot waits
+on its module's `/health` at that name.
+
+**Releases.** The deploy window waits for every world pod to go after the run
+pods. World pods are owned by the fleet pod, so the drain ends them, and the
+attempts on them end by their lanes' rules. The audit log is the shared one,
+named by token fingerprint as before.
+
 ### Ad-hoc launches
 
 One episode, launched in the runner pod (`bun wb --local run episode`: in the
@@ -2331,6 +2436,17 @@ The reserved accounts are as they were: `SMOKE*`, `PROBE` and the preflight
 gate's are never in the pool, and a `POOLnn` name is never listed, pinned by
 an enabled job, or a gate account.
 
+**The eval pool.** With worlds on, the chart also makes `EVAL01` … `EVALnn`
+(`worlds.pool.size`, default 10, at most 99): the bootstrap Job creates them
+the same way, and the config-reading pods get `WRATHBENCH_EVAL_POOL_SIZE`.
+They are on no allowlist of the long-lived world's: an eval world's allowlist
+is its attempt's accounts. So growing the pool is a values change and an
+upgrade, with no worldserver restart. A party campaign with `accounts:
+"evals"` takes five per attempt: none a run without a verdict holds, and none
+another party drew this tick. An eval account is never pinned, listed in
+`accounts.pool`, or a gate's. Solo scored and probing attempts still draw from
+the generated pool above, on a world of their own while worlds are on.
+
 On the quickstart, compose cannot loop: `x-pool-size` in `infra/compose.yml`
 (4) sizes bootstrap and the services, and the worldserver's allowlist lists
 `POOL01` … `POOL04` by hand. Change the two together and recreate the
@@ -2651,6 +2767,55 @@ from the account (`Tankpartyb` on PARTY1). The smokes use the same request.
 **Every staging deletes every character on the party accounts, so never run
 one while a party run holds those accounts.** Each party smoke takes about
 three minutes end to end, which is why they never run in a hold.
+
+### Hosted mode's freeplay world
+
+Hosted mode (wrath-mcp's `docs/ARCHITECTURE.md`, "Hosted") lets invited people
+drive characters through a hosted gateway, on the long-lived `worldserver`
+(the freeplay world) and never on a world per eval. The chart's `hosted`
+block, off by default, prepares that world; the gateway and its workers are
+not in the chart yet. On, it:
+
+- sets the freeplay world's module io threads to 8 and its per-lease caps,
+  20 requests a second with a burst of 40 (wrath-mcp `module/PROTOCOL.md`,
+  "Limits"). World pods keep `worldserver.threads` and no cap. The caps are
+  read only by a module that has them; an older one ignores the keys;
+- gives the world pods a port secret of their own, the env Secret's
+  `WRATHBENCH_WORLDS_MODULE_SECRET` (`hosted.worldsSecretKey`), so the
+  freeplay world's `WRATHBENCH_MODULE_SECRET`, which the gateway will hold,
+  opens no eval's world. Generate it as the other (`openssl rand -hex 32`),
+  never as a copy of it. Only the fleet pod carries both, as
+  `WRATHBENCH_WORLDS_MODULE_SECRET` beside the old name;
+- creates the tenant pool, `TENANT01` … `TENANTnn` (`hosted.tenants.size`,
+  default 20, `infra/tenant-accounts.ts`), in the bootstrap Job, each with a
+  random password nobody is shown and no account access, and appends it to
+  the freeplay world's allowlist. No pod that reads the fleet config is told
+  of it, and a tenant's name is refused by `bun wb accounts ensure`, by the
+  fleet config (`accounts.pool`, a job's `account`, the preflight gate's,
+  and so every store write), by a campaign row, and by a run's own config;
+- renders the `wrathbench-hosted` ConfigMap: `reserved-accounts`, every other
+  name on the freeplay world's allowlist, which is every account the
+  operator's own sessions can lease there, in the form `grants reserve`
+  takes; and `tenant-accounts`.
+
+**The caps apply to the operator's sessions too.** The port secret is exempt,
+but a run's sandbox and the smokes hold lease secrets, so freeplay streams and
+smokes on the freeplay world are held to the same rate.
+
+**Evals must not play on it.** The chart refuses `hosted` with the evals
+group on and `worlds` off, and the fleet setting `policy.worlds` must be
+`evals` before a gateway is live: a scored or probing episode on the freeplay
+world would play under the caps, beside the tenants, and behind the
+gateway's secret.
+
+**Turning it on** takes one deploy window, since the threads, the caps and
+the allowlist are read when the worldserver starts:
+
+1. Put `WRATHBENCH_WORLDS_MODULE_SECRET` into the env Secret
+   (`openssl rand -hex 32`, never a copy of `WRATHBENCH_MODULE_SECRET`).
+2. The values commit: `hosted: { enabled: true }`, with `worlds` on. Then run
+   the window as usual (`bun wb release run`).
+3. Set `policy.worlds` to `evals` before any gateway is live.
 
 ### Harness version stamping
 

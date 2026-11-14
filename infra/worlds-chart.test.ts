@@ -92,6 +92,12 @@ describe.skipIf(helm === null)("the chart's worlds block", () => {
     expect(JSON.parse(templateMap(render(["--set", "worlds.max=2"]))["launcher.json"]!)).not.toHaveProperty("maxWorlds");
   }, HELM_TEST_MS);
 
+  test("hosted on, the launcher's settings name the eval worlds' own secret key for a run pod on one; off, they do not", () => {
+    expect(JSON.parse(templateMap(render(ON))["launcher.json"]!)).not.toHaveProperty("worldsSecretKey");
+    const hosted = render([...ON, "--set", "hosted.enabled=true", "--set", "hosted.worldsSecretKey=EVAL_WORLDS_SECRET"]);
+    expect(JSON.parse(templateMap(hosted)["launcher.json"]!).worldsSecretKey).toBe("EVAL_WORLDS_SECRET");
+  }, HELM_TEST_MS);
+
   test("on: a bare, never-restarted pod named under the headless worlds Service, which publishes it before it is ready", () => {
     const docs = render([...ON, "--set", "worlds.max=3", "--set", "imagePullSecrets={harbor-pull}"]);
     const pod = worldPod(docs);
@@ -176,9 +182,12 @@ describe.skipIf(helm === null)("the chart's worlds block", () => {
     expect(container(pod.spec, "db-import").resources!.requests!["cpu"]).toBe("100m");
   }, HELM_TEST_MS);
 
-  test("the fleet keeps worlds' records, and log retention prunes their server logs, on the worlds subPath", () => {
+  test("the fleet keeps worlds' records, the runner pod reads them, and log retention prunes their server logs, on the worlds subPath", () => {
     const docs = render(ON);
     expect(fleet(docs).volumeMounts).toContainEqual({ name: "data", mountPath: "/wrathbench/data/worlds", subPath: "worlds" });
+    const runner = find(docs, "Deployment", "wrathbench-runner")!.spec!.template!.spec!.containers[0]!;
+    expect(runner.volumeMounts).toContainEqual({ name: "data", mountPath: "/wrathbench/data/worlds", subPath: "worlds", readOnly: true });
+    expect(find(render([]), "Deployment", "wrathbench-runner")!.spec!.template!.spec!.containers[0]!.volumeMounts!.some((m) => m.subPath === "worlds")).toBe(false);
     const job = retention(docs);
     const dir = envOf(job)["WRATHBENCH_WORLDS_DIR"]!.value!;
     expect(mountAt(job, dir)).toEqual({ name: "data", mountPath: dir, subPath: "worlds" });

@@ -71,6 +71,8 @@ export interface OpenFanoutOptions {
   moduleUrl: string;
   runDir: string;
   runsDir: string;
+  /** The run's world (`config.world`); absent, the session record reads the run's pointer. */
+  world?: string;
   sandbox: SandboxHost;
   /** The run's secret registry and scrub: the trajectory. */
   secrets: { redact(secret: string | undefined): void; scrub(text: string): string };
@@ -110,6 +112,7 @@ export function openFanout(o: OpenFanoutOptions): CharacterRoster {
       const { writer } = openSessionRecord({
         runDir: o.runDir,
         runsDir: o.runsDir,
+        ...(o.world !== undefined ? { world: o.world } : {}),
         ownGuids,
         token: seat.token,
         scrub: (text) => roster.scrubTokens(o.secrets.scrub(text)),

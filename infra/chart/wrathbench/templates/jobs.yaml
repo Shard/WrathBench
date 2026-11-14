@@ -173,4 +173,19 @@ spec:
             # the allowlist carries the same names from the same value.
             - name: WRATHBENCH_POOL_SIZE
               value: {{ include "wrathbench.poolSize" . | quote }}
+            {{- if include "wrathbench.on.worlds" . }}
+            # The eval pool, EVAL01 … EVALnn, created the same way and put on
+            # no allowlist of the long-lived world's: a world's allowlist is
+            # its attempt's accounts, so the pool grows with no restart.
+            - name: WRATHBENCH_EVAL_POOL_SIZE
+              value: {{ include "wrathbench.evalPoolSize" . | quote }}
+            {{- end }}
+            {{- if include "wrathbench.on.hosted" . }}
+            # Hosted mode's tenant pool, TENANT01 … TENANTnn: each missing one
+            # is created with a random password nobody is shown, and none has
+            # account access. The freeplay world's allowlist carries the same
+            # names from the same value; no config-reading pod is told it.
+            - name: WRATHBENCH_TENANT_POOL_SIZE
+              value: {{ include "wrathbench.tenantPoolSize" . | quote }}
+            {{- end }}
           resources: {{ toYaml .Values.jobs.bootstrap.resources | nindent 12 }}

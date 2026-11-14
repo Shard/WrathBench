@@ -89,6 +89,8 @@
     "  assignment, arm, cell) from the counted probe runs on disk. A finished campaign gets enabled:false and",
     "  KEEPS its results — see the /campaigns page. concluded: [versions] is the operator's verdict that those",
     "  versions are finished, whatever their squares hold: they launch and resume nothing.",
+    "  A PARTY definition is pinned with accounts: [one per member], or accounts: \"evals\" to draw them from the eval",
+    "  pool (EVAL01…, the chart's worlds.pool.size) per attempt, on a world of its own; policy.worlds must be evals.",
     "",
     "queue: jobs { ref | [refs], episode e90|e360|freeplay, repeat n|\"loop\", enabled, account?, credential? }. Never probing: a probe is a campaign's cell.",
     "  account set = PINNED to it (never policy-scheduled); absent = manual pool job, outranks the policy for a pool account.",

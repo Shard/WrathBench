@@ -80,6 +80,12 @@ CREATE TABLE IF NOT EXISTS wrathbench.runs
 ENGINE = ReplacingMergeTree(ingested_at)
 ORDER BY run_id;
 
+-- The world the run played on (`config.world`): a world per eval's id, or
+-- `shared`; "" before worlds. A label, never a key. Added after the table, so
+-- a store made before it gains the column here; the rows it already holds
+-- read "" until `--replay` (the viewer falls back to `config_json`).
+ALTER TABLE wrathbench.runs ADD COLUMN IF NOT EXISTS world_id String DEFAULT '';
+
 -- The periodic state samples: `state` in run.sqlite, one row per sample.
 -- `seq` is the sqlite rowid, which is stable across re-reads and breaks the
 -- tie when two samples land in the same millisecond.

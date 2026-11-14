@@ -349,6 +349,15 @@ version never changes, so any change is a new version, for the same reason
 (2026-10-09; arms 2026-10-11).
 Definitions: `docs/EPISODES.md`.
 
+**Every scored attempt plays on a world of its own; freeplay shares one**
+(operator, 2026-11-14). An `e90` or `e360` attempt, a probe and a party each
+play on a short-lived world made for the attempt, a worldserver over a
+characters database of its own, and dropped at its verdict. No other agent,
+corpse or respawn timer is in it. Freeplay plays on the one long-lived world.
+The world is a label on the run (`config.world`), never a key in the tuple.
+Each attempt's world is its own, and while worlds are on the fleet refuses a
+scored or probing launch on the shared world.
+
 **A lapsed run is evidence only if its lane says so; everywhere else it is a
 failed attempt.** A run that pauses or goes quiet stops without a verdict, and
 what happens next is the lane's property. Scored lanes end it and the model

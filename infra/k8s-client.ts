@@ -26,15 +26,19 @@ export interface PodStatus {
   reason?: string;
   message?: string;
   conditions?: { type?: string; status?: string; reason?: string; message?: string }[];
-  containerStatuses?: {
-    name?: string;
-    imageID?: string;
-    state?: {
-      waiting?: { reason?: string; message?: string };
-      running?: { startedAt?: string };
-      terminated?: { exitCode?: number; reason?: string; message?: string; finishedAt?: string };
-    };
-  }[];
+  containerStatuses?: ContainerStatus[];
+  /** A world pod's db-import init, whose digest a re-boot pins. */
+  initContainerStatuses?: ContainerStatus[];
+}
+
+export interface ContainerStatus {
+  name?: string;
+  imageID?: string;
+  state?: {
+    waiting?: { reason?: string; message?: string };
+    running?: { startedAt?: string };
+    terminated?: { exitCode?: number; reason?: string; message?: string; finishedAt?: string };
+  };
 }
 
 export interface Pod {
