@@ -472,6 +472,7 @@ export function resultRunOf(
       episode: ep.episode,
       harness: run.harness,
       tuple: run.comparability,
+      platform: run.platform,
     }),
     promptHash: run.comparability?.promptHash ?? null,
     serverBuild: run.comparability?.serverBuild?.build ?? null,

@@ -20,6 +20,7 @@ import { z } from "zod";
 import { EPISODE_IDS, EPISODES, episodeIdSchema, isScoredEpisode, matchesTier, watchdogsFor, type EpisodeId } from "./episodes";
 import { PARTY_PAUSE, STALL_PAUSE, SUBSCRIPTION_PAUSE } from "./lapse";
 import { routingSchema } from "./routing";
+import { servingLabelsSchema, servingSchema } from "./serving";
 import { CHARACTER_NAME_RULE, isValidCharacterName } from "./character-name";
 import { partyConfigSchema } from "./party";
 import { endConditionSchema } from "./end-conditions";
@@ -819,6 +820,14 @@ export const runConfigSchema = z.object({
    * launched with, and the resolved answer is stamped in the tuple.
    */
   routing: routingSchema.optional(),
+  /**
+   * A local build's weights, quantisation and runtime, as its roster entry
+   * declared them (`serving.ts`; operator, 2026-11-14). A key in the tuple,
+   * with routing's standing; absent on a hosted run. Identity: a resume keeps it.
+   */
+  serving: servingSchema.optional(),
+  /** The machine and the runtime's version: labels, never a key and never published. */
+  servingLabels: servingLabelsSchema.optional(),
   /** Path to a JSON file of scripted stub turns (driver: "stub"). */
   stubScript: z.string().optional(),
 

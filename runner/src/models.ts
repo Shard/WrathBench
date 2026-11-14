@@ -72,6 +72,7 @@ import { parseRouting, type RoutingSpec } from "./routing";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { HEARTBEAT_DEAD_MS, HEARTBEAT_FILE, heartbeatAt, heartbeatOwner } from "./trajectory";
 import { RunFactCache } from "./run-fact-cache";
+import { servingSchema, type ServingSpec } from "./serving";
 import { goneReason, modelGoneOf, readModelListsSidecar, type ModelGone, type ModelListsSidecar } from "./model-lists";
 
 // ----------------------------------------------------------------- policy
@@ -403,6 +404,8 @@ export interface RosterModel {
    */
   compactWindow?: string;
   driver?: string;
+  /** A local build's serving block (`serving.ts`); absent on a hosted entry. Identity, like effort. */
+  serving?: ServingSpec;
   apiBase?: string;
   /**
    * How much evidence this model gets (`TIER_TABLE`). Required: with a default,
@@ -542,6 +545,12 @@ export interface RunFact {
    */
   loop?: "program";
   yield?: true;
+  /**
+   * The local build the run stated (`comparability.serving`), or null when it
+   * stated none. Always set by `readRunFact`, so a roster entry's own build
+   * (or its lack of one) decides whether the run is its (`entryOwnsRun`).
+   */
+  serving?: ServingSpec | null;
   /** An extra run: an attempt the policy made past the target, never counted. */
   extra: boolean;
   startedAt: number;
@@ -738,6 +747,8 @@ export interface ModelState {
   effort: string | null;
   /** The entry's declared CLI compaction window (`RosterModel.compactWindow`); absent is its driver's default. */
   compactWindow?: string;
+  /** The entry's local build (`RosterModel.serving`); absent on a hosted entry. */
+  serving?: ServingSpec;
   platform: string | null;
   /**
    * The credential provider its runs are served through (`providerOfModel`,
@@ -1396,7 +1407,7 @@ function readRunReading(
       world?: unknown;
       watchdogs?: { episodeMs?: unknown; idleMs?: unknown };
     };
-    comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown; compactWindow?: unknown; loop?: unknown; yield?: unknown };
+    comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown; compactWindow?: unknown; loop?: unknown; yield?: unknown; serving?: unknown };
     pause?: { reason?: unknown; at?: unknown; episodeElapsedMs?: unknown; notBefore?: unknown };
     subscriptionUsage?: unknown;
     credentialOverage?: { at?: unknown };
@@ -1428,6 +1439,7 @@ function readRunReading(
     // Only when stamped: absent is the snippet loop, and every older fact reads the same.
     ...(meta.comparability?.loop === "program" ? { loop: "program" as const } : {}),
     ...(meta.comparability?.yield === true ? { yield: true as const } : {}),
+    serving: servingOfMeta(meta.comparability?.serving),
     extra: meta.config?.extra === true,
     startedAt: num(meta.startedAt) ?? 0,
     endedAt: null,
@@ -1997,6 +2009,25 @@ export interface RosterIdentity {
   driver?: string | null | undefined;
   /** The harness tag, where a projection keeps that and not the driver; read for the same two facts. */
   harness?: string | null | undefined;
+  /**
+   * A local build (`serving.ts`). On an entry, absent is a hosted model. On a
+   * run, null is "stated none" and absent is "this caller does not know",
+   * which matches either way: a run fact always knows (`RunFact.serving`).
+   */
+  serving?: ServingSpec | null | undefined;
+}
+
+/** A stamped serving block, or null when there is none to read. */
+function servingOfMeta(raw: unknown): ServingSpec | null {
+  const parsed = servingSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
+/** Whether an entry's build and a run's are one: equal blocks, or a run whose caller cannot say. */
+function servingMatches(entry: RosterIdentity, run: RosterIdentity): boolean {
+  if (run.serving === undefined) return true;
+  const key = (s: ServingSpec | null | undefined): string => (s == null ? "" : `${s.weights}\n${s.quant}\n${s.runtime}`);
+  return key(entry.serving) === key(run.serving);
 }
 
 /**
@@ -2077,7 +2108,9 @@ export function entryOwnsRun(entry: RosterIdentity, run: RosterIdentity): boolea
     entry.model === run.model &&
     (entry.effort ?? null) === (run.effort ?? null) &&
     entryOwnsWindow(entry, run.compactWindow) &&
-    probeOnlyIdentity(entry) === probeOnlyIdentity(run)
+    probeOnlyIdentity(entry) === probeOnlyIdentity(run) &&
+    // A local build and the hosted model of one id are two entries (operator, 2026-11-14).
+    servingMatches(entry, run)
   );
 }
 
@@ -2094,11 +2127,11 @@ export function entryOwnsRun(entry: RosterIdentity, run: RosterIdentity): boolea
  * Arms that differ only by window still never pool: the square is keyed on
  * the arm, and the results on the tuple.
  */
-export function matchesRoster(f: RunFact, r: Pick<RosterModel, "name" | "model" | "effort" | "compactWindow" | "driver">): boolean {
+export function matchesRoster(f: RunFact, r: Pick<RosterModel, "name" | "model" | "effort" | "compactWindow" | "driver" | "serving">): boolean {
   if (f.campaign !== null && f.arm != null && f.ref != null) {
     return (
       f.ref === r.name &&
-      entryOwnsRun({ model: r.model, effort: r.effort, driver: r.driver }, { model: f.model, effort: f.effort, driver: f.driver }) &&
+      entryOwnsRun({ model: r.model, effort: r.effort, driver: r.driver, serving: r.serving }, { model: f.model, effort: f.effort, driver: f.driver, serving: f.serving }) &&
       (r.compactWindow === undefined || entryOwnsWindow(r, f.compactWindow))
     );
   }
@@ -2263,6 +2296,7 @@ export function projectModel(
     model: r.model,
     effort: r.effort ?? null,
     ...(r.compactWindow !== undefined ? { compactWindow: r.compactWindow } : {}),
+    ...(r.serving !== undefined ? { serving: r.serving } : {}),
     platform: platformOf(r.apiBase, r.driver),
     provider: providerOfModel(r),
     harness: harnessOf(driverOf(r)),

@@ -37,6 +37,7 @@ import { driverEntry } from "./drivers";
 import { episodeIdSchema } from "./episodes";
 import { buildSystemPrompt, programPromptOf } from "./prompt";
 import { routingForRun, routingSchema } from "./routing";
+import { servingSchema, SUBJECT_KINDS, type SubjectKind } from "./serving";
 import type { WikiBundleMeta } from "./wiki";
 
 /**
@@ -215,6 +216,20 @@ export const comparabilitySchema = z.object({
   /** The program loop's `yield` tool (`RunConfig.yield`). A KEY; absent when off. */
   yield: z.literal(true).optional(),
   /**
+   * A local build's weights, quantisation and runtime (`serving.ts`;
+   * operator, 2026-11-14). A KEY with `routing`'s standing: a quantised local
+   * build and the hosted model of one id are two conditions. ABSENT on a
+   * hosted run, so every tuple stamped before it stays what it was.
+   */
+  serving: servingSchema.optional(),
+  /**
+   * What is being tested: `local` (a build the operator serves) or `external`
+   * (an agent loop that is not ours). ABSENT is `hosted`, which is every run
+   * stamped before the field existed but a local one: a reader derives those
+   * from the platform at read time and never writes it back.
+   */
+  subject: z.enum(SUBJECT_KINDS).optional(),
+  /**
    * The model id the provider said it actually served — `claude-sonnet-5` for a
    * run launched as `sonnet`.
    *
@@ -313,6 +328,7 @@ export function comparabilityOf(
   // between them, so the hash below is per-harness by design.
   const prompt = buildSystemPrompt(config.objective, config.episode, harness, config.wiki, config.watchdogs.episodeMs, programPromptOf(config));
   const routing = routingForRun(config);
+  const subject = subjectOfConfig(config);
   return {
     harnessVersion,
     promptHash: promptHash(prompt),
@@ -345,7 +361,20 @@ export function comparabilityOf(
     // After `compactWindow`, for the same reason; absent is the snippet loop.
     ...(config.loop === "program" ? { loop: "program" as const } : {}),
     ...(config.yield === true ? { yield: true as const } : {}),
+    // After `yield`, for the same reason; absent on a hosted run.
+    ...(config.serving !== undefined ? { serving: config.serving } : {}),
+    ...(subject !== "hosted" ? { subject } : {}),
   };
+}
+
+/**
+ * The subject kind of a run about to start: `local` when it states a build,
+ * else `hosted`. A local base without one is refused at launch, so stating
+ * the build is what makes a run local; a run resumed from before the key
+ * existed stamps as it did, and a reader derives its kind from its platform.
+ */
+export function subjectOfConfig(config: Pick<RunConfig, "serving">): SubjectKind {
+  return config.serving !== undefined ? "local" : "hosted";
 }
 
 /**

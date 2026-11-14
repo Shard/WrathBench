@@ -313,7 +313,14 @@ observation, never revised, and excluded from the tuple's equality test; old
 runs are back-filled at *read* time, never written back — read differently,
 not relabelled. The wiki bundle's identity has the same standing: it says
 which file a run read, and so which side of a text-changing rebuild a run sits
-on; the rebuild itself ships as a patch within the series.
+on; the rebuild itself ships as a patch within the series. A locally served
+build is a serving condition like a routed backend: its weights, quantisation
+and runtime are declared on its roster entry and stamped as a key with its
+subject kind (`hosted`, `local` or `external`), so a local build and the hosted
+model of one id never share a row, and a local entry that does not state them
+is refused. The machine and the runtime's version are labels, never published;
+what the server reports serving and the observed generation rate annotate the
+run (operator, 2026-11-14).
 
 **Routing is pinned, and it is config** (2026-09-16). One slug served by six
 backends is six machines and six caches, not one measurement. The default is
