@@ -111,13 +111,14 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
-import { DEFAULT_CLAUDE_TOKEN_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
+import { DEFAULT_CLAUDE_TOKEN_ENV, harnessOf, threadContextOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
+import { ThreadContext } from "./context";
 import { entryOf } from "./drivers";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { MCP_BRIDGE_PATH } from "@wrathbench/mcp/paths";
 import { McpServer } from "./mcp";
-import { CLAUDE_CODE_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
-import { toolsFor, type ToolContext } from "./tools";
+import { CLAUDE_CODE_SYSTEM_PROMPT, buildSystemPrompt, programPromptOf } from "./prompt";
+import { toolsFor, type ProgramTools, type ToolContext } from "./tools";
 import { MessageQueue, cliBaseEnv, readLines, signalGroup } from "./adapter-shared";
 import {
   CompactionAsk,
@@ -145,6 +146,7 @@ import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "@wrathbench/mcp";
 import type { Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
+import { PROGRAM_TOOL_TIMEOUT_MS, WAKE_CAP_MS, type ProgramWake } from "./wake";
 
 /** MCP server name in the generated config; also the tool-name prefix. */
 export const MCP_SERVER_NAME = "wrathbench";
@@ -153,9 +155,14 @@ export const MCP_SERVER_NAME = "wrathbench";
  * The tools as `claude` names them once they arrive over MCP — the grant on
  * `--allowed-tools`, so it must be the same list the MCP server serves. A run
  * without the reference wiki (`wiki: false`) is not granted `search_reference`;
- * absent reads as "the run has it", which is every run by default.
+ * absent reads as "the run has it", which is every run by default. A
+ * program-loop run (`programTools`) is granted the program's list, `yield`
+ * with it when the run serves it: under `-p` a tool served and not granted
+ * is denied.
  */
-export function mcpToolNames(opts: { wikiSearch?: boolean | undefined; fanout?: boolean | undefined } = {}): string[] {
+export function mcpToolNames(
+  opts: { wikiSearch?: boolean | undefined; fanout?: boolean | undefined; programTools?: ProgramTools | undefined } = {},
+): string[] {
   return toolsFor(opts).map((t) => `mcp__${MCP_SERVER_NAME}__${t.name}`);
 }
 
@@ -178,6 +185,13 @@ const THINKING_ENV = "MAX_THINKING_TOKENS";
  * and the env wins over one anyway.
  */
 export const COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
+
+/**
+ * The CLI's MCP tool-call timeout, in milliseconds. Set on the program loop
+ * only (`programToolEnv`), where a `yield` is held open up to five minutes;
+ * every other run sends nothing and keeps the CLI's own default.
+ */
+export const MCP_TOOL_TIMEOUT_ENV = "MCP_TOOL_TIMEOUT";
 
 /**
  * The child environment: an allowlist, never the runner's own.
@@ -213,6 +227,16 @@ export function childEnv(
   if (token !== undefined && token.length > 0) out[DEFAULT_CLAUDE_TOKEN_ENV] = token;
   out["CLAUDE_CONFIG_DIR"] = o.configDir;
   return { ...out, ...(o.extra ?? {}) };
+}
+
+/**
+ * Env the CLI needs on the program loop: an MCP tool timeout above the
+ * longest `yield` hold (`PROGRAM_TOOL_TIMEOUT_MS`, the same 600 s codex is
+ * given). The run's loop is the only thing that sets it, for the reason
+ * `THINKING_ENV` is the run's; nothing on the snippet loop.
+ */
+export function programToolEnv(program: boolean): Record<string, string> {
+  return program ? { [MCP_TOOL_TIMEOUT_ENV]: String(PROGRAM_TOOL_TIMEOUT_MS) } : {};
 }
 
 // ------------------------------------------------------------- limit detect
@@ -435,6 +459,14 @@ export interface ClaudeArgsOptions {
   wikiSearch?: boolean | undefined;
   /** A fan-out run (`config.fanout`): grant the fan-out tool list. */
   fanout?: boolean | undefined;
+  /** A program-loop run (`programPromptOf`): grant the program's tool list. */
+  programTools?: ProgramTools | undefined;
+  /**
+   * The names to grant, as the run's MCP server lists them (`toolsFor` over
+   * its tool context). Given, it is the grant and the three options above
+   * are not read: the grant cannot drift from what the server serves.
+   */
+  grant?: readonly string[] | undefined;
 }
 
 /**
@@ -542,7 +574,13 @@ export function claudeArgs(o: ClaudeArgsOptions): string[] {
     ...(o.effort !== undefined && o.effort !== NO_THINKING ? ["--effort", o.effort] : []),
     // variadic, therefore last
     "--allowed-tools",
-    ...mcpToolNames({ wikiSearch: o.wikiSearch, ...(o.fanout === true ? { fanout: true } : {}) }),
+    ...(o.grant !== undefined
+      ? o.grant.map((name) => `mcp__${MCP_SERVER_NAME}__${name}`)
+      : mcpToolNames({
+          wikiSearch: o.wikiSearch,
+          ...(o.fanout === true ? { fanout: true } : {}),
+          ...(o.programTools !== undefined ? { programTools: o.programTools } : {}),
+        })),
   ];
 }
 
@@ -587,6 +625,12 @@ export interface ClaudeEpisodeOptions {
   signal?: AbortSignal;
   /** See `ContextBuilderOptions.onObservationStalled` (loop.ts). */
   onObservationStalled?: ObservationStallHook | undefined;
+  /**
+   * The program loop's waking (`wake.ts`), on a `loop: "program"` run: the
+   * pause after each turn becomes a sleep until a wake, and `yield` sleeps
+   * inside the turn.
+   */
+  programWake?: ProgramWake | undefined;
 }
 
 /**
@@ -733,7 +777,61 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     ...(o.turnOffset !== undefined ? { turnOffset: o.turnOffset } : {}),
     ...(o.now !== undefined ? { now: o.now } : {}),
     onObservationStalled: o.onObservationStalled,
+    ...(o.programWake !== undefined ? { onSample: (snap) => o.programWake!.onSample(snap) } : {}),
   });
+
+  /*
+   * The program loop (`loop: "program"`), mapped onto the CLI as codex maps
+   * it (adapter-codex.ts). The CLI keeps one session and closes a turn only
+   * when the model replies with no tool call, which on this driver may be
+   * hours apart: so `yield`, held open on the MCP call under a raised tool
+   * timeout (`programToolEnv`), is the usual sleep, its result the wake
+   * block; and a turn that does close sleeps until a wake, whose block opens
+   * the next turn's message. Either sleep ends on a stop request or a
+   * watchdog verdict too, and time asleep is not idle.
+   */
+  const programPrompt = programPromptOf(config);
+  const program = programPrompt !== undefined ? o.sandbox.program : undefined;
+  const programWake = o.programWake;
+  if (programPrompt !== undefined && (program === undefined || programWake === undefined)) {
+    throw new Error('loop: "program" needs a sandbox that hosts a program and the run\'s wake (run.ts)');
+  }
+  /** The last turn-end wake's block, for the next turn's message only. */
+  let currentWake: string | undefined;
+  /**
+   * What the session holds of the scratchpad, on the program loop
+   * (`threadContextOf`): a turn's message sends the pad whole only when the
+   * session does not hold it as it stands. A compaction, or a session the
+   * CLI names that is not the one before, resets it. Undefined on the
+   * snippet loop, whose every message carries the whole pad as it always has.
+   */
+  const thread = threadContextOf(config) ? new ThreadContext() : undefined;
+  /** The CLI's session, as its envelopes name it: a new one holds nothing of ours. */
+  let sessionId: string | undefined;
+  const noteSession = (id: unknown): void => {
+    if (typeof id !== "string" || id.length === 0) return;
+    if (sessionId !== undefined && sessionId !== id) {
+      thread?.reset();
+      program?.forgetShown();
+    }
+    sessionId = id;
+  };
+  const sleepFor = (via: "turn-end" | "yield", capMs: number) =>
+    programWake!.sleep(program!, {
+      via,
+      turn,
+      capMs,
+      floorMs: config.stepIntervalMs,
+      stopped: () => done() || watchdogs.check() !== null,
+      queuedNotices: () => pendingNotices.length,
+      idle: watchdogs,
+      // A yield result and a turn's message alike stay in the session.
+      kept: true,
+    });
+  /** Restarts the program was blamed for count toward snippet-runaway as a snippet's do; read on every sample, since one turn can run for hours. */
+  const noteBlamedRestarts = (): void => {
+    if (programWake !== undefined) for (let k = programWake.takeBlamedRestarts(); k > 0; k--) watchdogs.noteSandboxRestart();
+  };
 
   // ---- MCP over loopback TCP, dispatching into the one live sandbox
   const toolCtx: ToolContext = {
@@ -753,6 +851,24 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     // the previous snippet rides each snippet result on a driver that has it.
     snippetDelta: entryOf(config.driver).snippetDelta,
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
+    ...(program !== undefined && programWake !== undefined
+      ? {
+          program,
+          onRoutinesShown: () => programWake.routinesShown(program.routines()),
+          // What a result carries of the routines' refusals, and of a death, is delivered (`ProgramWake.hintsDelivered`).
+          onHintsDelivered: (hints) => programWake.hintsDelivered(hints),
+          ...(programPrompt?.yield === true
+            ? {
+                // The block is this call's result, in the session: the next turn's message does not repeat it.
+                yieldWake: async (seconds: number): Promise<string> => {
+                  const woke = await sleepFor("yield", Math.min(WAKE_CAP_MS, Math.round(seconds * 1000)));
+                  currentWake = undefined;
+                  return woke.block;
+                },
+              }
+            : {}),
+        }
+      : {}),
   };
   let turn = 0;
   let restartsBefore = 0;
@@ -789,6 +905,12 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   const server = new McpServer(toolCtx, {
     onToolCall: (name, args, result, dispatchTs) => {
       const short = name.replace(`mcp__${MCP_SERVER_NAME}__`, "");
+      // The model's own pad tools leave a pad the session holds (`PadSeen`).
+      if (thread !== undefined && result.isError !== true) {
+        const a = args as { content?: unknown; old?: unknown; new?: unknown; replaceAll?: unknown };
+        if (short === "write_scratchpad" && typeof a.content === "string") thread.pad.wrote(a.content, o.scratchpad.read());
+        else if (short === "edit_scratchpad" && typeof a.old === "string" && typeof a.new === "string") thread.pad.edited(a.old, a.new, a.replaceAll === true, o.scratchpad.read());
+      }
       // `turn` is the driver turn and this driver legitimately runs one long
       // turn (the CLI owns the inner loop), so it is nearly always 1 here —
       // `call` is the monotonic tool-call index that turn-style analysis of
@@ -928,18 +1050,21 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   // The claude-code render: same prompt, except the sentence about older
   // conversation, which on this harness must describe the CLI's regime and not
   // the fixed loop's trim (`contextSentence`).
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("claude-code"), config.wiki, config.watchdogs.episodeMs);
+  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("claude-code"), config.wiki, config.watchdogs.episodeMs, programPrompt);
   const args = claudeArgs({
     mcpConfigPath,
     systemPrompt,
     model: config.model,
     wikiSearch: config.wiki,
-    // A fan-out run is granted the fan-out list, the one its MCP server serves.
-    ...(config.fanout !== undefined ? { fanout: true } : {}),
+    // Granted exactly what the run's MCP server lists (`McpServer` lists
+    // `toolsFor(toolCtx)`): the fan-out list on a fan-out run, the program's
+    // on a program-loop run, and whatever the two make together.
+    grant: toolsFor({ ...toolCtx, ...(config.fanout !== undefined ? { fanout: true } : {}) }).map((t) => t.name),
     ...(config.effort !== undefined ? { effort: config.effort } : {}),
   });
   const thinking = thinkingEnv(config.effort);
-  const extra = { ...thinking, ...compactEnv(config.compactWindow), ...(o.extraEnv ?? {}) };
+  const toolTimeout = programToolEnv(programPrompt !== undefined);
+  const extra = { ...thinking, ...compactEnv(config.compactWindow), ...toolTimeout, ...(o.extraEnv ?? {}) };
   const env = childEnv(o.env ?? process.env, {
     configDir,
     // The run's credential (`RunConfig.credentialEnv`): the CLI only ever sees
@@ -980,6 +1105,8 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     ...(config.objective !== undefined ? { objective: config.objective } : {}),
     // The one dimension that travels in env rather than `args`.
     ...(config.compactWindow !== undefined ? { compactWindow: config.compactWindow } : {}),
+    // The program loop's raised MCP tool timeout, also env only.
+    ...(toolTimeout[MCP_TOOL_TIMEOUT_ENV] !== undefined ? { mcpToolTimeoutMs: Number(toolTimeout[MCP_TOOL_TIMEOUT_ENV]) } : {}),
   });
 
   /**
@@ -1080,6 +1207,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     tickMs: o.watchdogTickMs,
     stopped: done,
     onSample: () => {
+      noteBlamedRestarts();
       const verdict = watchdogs.check();
       if (verdict !== null)
         endEpisode(verdict.reason, verdict.detail, { t: "watchdog", ...verdict }, { windDown: true });
@@ -1263,9 +1391,13 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
         endEpisode(verdict.reason, verdict.detail, { t: "watchdog", ...verdict });
         return finish();
       }
+      noteBlamedRestarts();
 
       turn++;
-      const contextText = await builder.build(turn, pendingNotices);
+      const contextText = await builder.build(turn, pendingNotices, currentWake, thread);
+      currentWake = undefined;
+      // What this context shows (the HUD, the notices) is no longer a reason to wake.
+      programWake?.shown();
       trajectory.append({
         t: "request",
         turn,
@@ -1315,8 +1447,15 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
           case "system": {
             trajectory.append({ t: "claude_system", turn, ...msg });
             if (msg["subtype"] === "init" && typeof msg["model"] === "string") cliModel = msg["model"];
+            noteSession(msg["session_id"]);
             const compaction = compactionRecord(turn, msg);
             if (compaction !== null) {
+              // A compacted session no longer holds the pad as it was sent,
+              // nor the routine errors and values results showed: the next
+              // message sends the pad whole. Here, at the boundary, because
+              // on this driver one turn can hold several compactions.
+              thread?.reset();
+              program?.forgetShown();
               // The boundary arrives once the compaction is done, so it began
               // its duration earlier.
               const at = Date.now() - (compaction.durationMs ?? 0);
@@ -1437,6 +1576,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
           }
           case "result": {
             turnEnded = true;
+            noteSession(msg["session_id"]);
             // the message is over: nothing more can arrive for its id
             flushPendingResponse();
             modelWindow = claudeModelWindow(msg["modelUsage"], cliModel) ?? modelWindow;
@@ -1574,7 +1714,9 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
         pendingNotices.push(compactionNotice(ask.ask, Date.now()));
         trajectory.append({ t: "harness", kind: "compaction_ask", turn, ...ask });
       }
-      await sleep(config.stepIntervalMs);
+      // The program loop sleeps until a wake where the snippet loop pauses for the step interval.
+      if (programWake !== undefined) currentWake = (await sleepFor("turn-end", WAKE_CAP_MS)).block;
+      else await sleep(config.stepIntervalMs);
     }
   } catch (err) {
     return terminate("harness-error", err instanceof Error ? `${err.name}: ${err.message}` : String(err));

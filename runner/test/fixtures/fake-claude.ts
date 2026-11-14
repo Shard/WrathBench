@@ -33,6 +33,9 @@
  * turn n, in any mode; $WB_FAKE_COMPACT_SUMMARY also writes its summary into
  * the session transcript, as the real CLI does.
  *
+ * $WB_FAKE_SESSION_TURN=<n> names another session on the default turn's
+ * `result` from turn n on, as a CLI that started a new session would.
+ *
  * $WB_FAKE_CONTEXT_STEP=<tokens> makes the default turn's API call read that
  * many tokens per turn so far from the cache, and $WB_FAKE_CONTEXT_WINDOW
  * puts the model's window on the `result` envelope's `modelUsage`.
@@ -88,6 +91,8 @@ const record: Record<string, unknown> = {
     maxThinkingTokens: Bun.env["MAX_THINKING_TOKENS"] ?? null,
     // How `compactWindow` reaches the CLI: env only, no flag.
     compactWindow: Bun.env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] ?? null,
+    // The program loop's MCP tool timeout: env only, in milliseconds.
+    mcpToolTimeout: Bun.env["MCP_TOOL_TIMEOUT"] ?? null,
   },
   // Every variable name the CLI was given — and so what the MCP bridge it
   // launches inherits. Names only, never values.
@@ -488,7 +493,7 @@ for await (const chunk of Bun.stdin.stream()) {
             },
           }
         : {}),
-      session_id: "fake-session",
+      session_id: Bun.env["WB_FAKE_SESSION_TURN"] !== undefined && turn >= Number(Bun.env["WB_FAKE_SESSION_TURN"]) ? "fake-session-2" : "fake-session",
     });
   }
 }
