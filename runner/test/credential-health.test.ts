@@ -83,6 +83,13 @@ describe("credentialHealth", () => {
     expect(state({ lastError: { reason: "rate-limited", at: NOW } })).toBe("ok");
   });
 
+  test("no access: a run paused no-access (a chat 403) reads as no-access, since the pause; the fix is a key with access", () => {
+    const paused = credentialHealth(input({ lastError: { reason: "no-access", at: NOW - H } }));
+    expect(paused.health).toMatchObject({ state: "no-access", reason: "a run paused: no access", since: NOW - H });
+    expect(paused.fix).toEqual({ kind: "replace-secret", secretEnv: "OPENCODE_KEY", text: "a key with access in OPENCODE_KEY" });
+    expect(state({ lastError: { reason: "no-access", at: NOW - H }, replacedAt: NOW - 1 })).toBe("ok");
+  });
+
   test("spent: a window at 100%, the provider's word, or a run paused quota-exhausted; the fix is to wait for the reset", () => {
     expect(credentialHealth(input({ holdsOf: { scored: { code: "usage-spent", until: NOW + 2 * H }, freeplay: { code: "usage-spent", until: NOW + 3 * H } } }))).toMatchObject({
       health: { state: "quota-spent", reason: "a usage window is spent" },
