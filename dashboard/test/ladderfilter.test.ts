@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import type { ResultRun, RunCondition } from "../src/api/client";
 import {
+  chartGroups,
   companyOf,
   currentModels,
+  defaultLadderRuns,
+  inChartGroup,
+  newestConditions,
   filterOptions,
   lineOf,
   matchesSelection,
@@ -314,5 +319,58 @@ describe("currentModels", () => {
     const rows = [m("b", "fixture/b-2", 1, 1), m("a", "fixture/a-1", 1, 1)];
     expect(keys(rows)).toEqual(["b", "a"]);
     expect(currentModels([])).toEqual([]);
+  });
+});
+
+describe("the condition rules", () => {
+  const cond = (id: string, over: Partial<RunCondition> = {}): RunCondition => ({ id, loop: "snippet", yield: false, pinned: true, wiki: true, ...over });
+  const r = (runId: string, model: string, startedAt: number, condition: RunCondition, unscored: string | null = null): ResultRun =>
+    ({ runId, model, startedAt, condition, unscored, harnessSeries: "0.5", episode: "e90", effort: null, harness: "wrathbench" }) as unknown as ResultRun;
+  const snippetLow = cond("s-low");
+  const snippetHigh = cond("s-high");
+  const program = cond("p", { loop: "program", yield: true });
+  const runs = [
+    r("a1", "a", 100, snippetLow),
+    r("a2", "a", 300, snippetHigh),
+    r("a3", "a", 200, snippetLow),
+    r("b1", "b", 100, snippetLow),
+    r("b2", "b", 500, program),
+    r("b3", "b", 900, snippetLow, "unscored (operator objective)"),
+    r("c1", "c", 50, snippetLow),
+  ];
+
+  test("each model keeps the condition whose latest counted run started last, and every run of it", () => {
+    expect(newestConditions(runs).map((x) => x.runId)).toEqual(["a2", "b2", "c1"]);
+  });
+
+  test("the choice is per model and effort: every effort keeps a row", () => {
+    const efforts = [
+      { ...r("lo", "m", 100, cond("s-lo")), effort: "low" },
+      { ...r("hi", "m", 200, cond("s-hi")), effort: "high" },
+      { ...r("hi-p", "m", 300, cond("p-hi", { loop: "program" })), effort: "high" },
+    ] as ResultRun[];
+    expect(newestConditions(efforts).map((x) => x.runId)).toEqual(["lo", "hi-p"]);
+  });
+
+  test("an unscored run never chooses, and a model with no counted run keeps what it has", () => {
+    const onlyUnscored = [r("u1", "u", 10, snippetLow, "unscored (x)"), r("u2", "u", 20, program, "unscored (x)")];
+    expect(newestConditions(onlyUnscored).map((x) => x.runId)).toEqual(["u1", "u2"]);
+  });
+
+  test("ties go to the id that sorts first, so the choice is a function of the set", () => {
+    const tied = [r("x", "m", 1, cond("z")), r("y", "m", 1, cond("a"))];
+    expect(newestConditions(tied).map((x) => x.runId)).toEqual(["y"]);
+    expect(newestConditions([...tied].reverse()).map((x) => x.runId)).toEqual(["y"]);
+  });
+
+  test("chart groups count entries, most first; the program loop is never charted with the snippet loop", () => {
+    expect(chartGroups(runs).map((g) => [g.id, g.entries])).toEqual([["snippet", 4], ["program", 1]]);
+    expect(inChartGroup(runs, "program").map((x) => x.runId)).toEqual(["b2"]);
+  });
+
+  test("the default view: newest conditions, on the chart holding the most entries", () => {
+    // b's newest is the program loop, so it leaves the snippet chart rather than showing an older row there.
+    expect(defaultLadderRuns(runs).map((x) => x.runId)).toEqual(["a2", "c1"]);
+    expect(defaultLadderRuns([])).toEqual([]);
   });
 });

@@ -795,6 +795,18 @@ The bubbles read the trace's `chat` events (above) and nothing else.
 
 ## What the ladder shows
 
+A row is one model under one condition (operator, 2026-11-14): the series,
+episode, harness, effort, requested routing, wiki, compaction window, loop and
+`yield`, and never the prompt hash, which every in-series prompt patch moves.
+The key is `conditionKey` in `runner/viewer/condition.ts`, read off the stamped
+tuple, with an absent field read as its default, so a run stamped before a
+field existed is the snippet loop with nothing to state. A table row, a
+scatter point, a mean line and the shared highlight are all keyed on that
+entry, so no two conditions ever pool. The public row carries the condition's
+loop, `yield`, whether its routing was pinned, and its wiki, with the id
+renumbered per artifact (`c1`, `c2`, …): the private id spells the routing,
+which names providers.
+
 Each row's headline numbers are still maxima over a model's counted runs, and
 the page is plain about that. Beside them it shows the spread those runs
 already paid for: per rung, how many of the runs whose records can answer that
@@ -802,6 +814,27 @@ rung reached it, and for the best level the median and range across the counted
 runs that recorded one.
 
 ### The controls
+
+- **condition** chips, shown only when the tier holds more than one chart
+  group. Conditions that differ in the loop, in pinned against unpinned
+  routing, or in the wiki never share a chart: METHODOLOGY keeps pinned and
+  unpinned runs apart, makes the wiki and the loop keys of the tuple, and
+  calls effort and the window comparable rows, so those, the harness tag and
+  `yield` (which follows the harness) share one. The default is the group
+  with the most entries, and `?group=` picks another (`chartGroups` in
+  `dashboard/src/lib/ladderfilter.ts`). An OpenCode Go row, routed with
+  fallbacks allowed, is on the unpinned chart.
+- **newest condition**, **on by default** (operator, 2026-11-14). Each model
+  at each effort shows only its newest condition: the one whose latest counted
+  run started last, over the whole tier before the chart group is chosen, so a
+  row whose newest runs are on the program loop leaves the snippet chart
+  rather than showing an older one there. Efforts are comparable rows, so each
+  keeps its own. Ties go to the condition id that sorts first.
+  `?conditions=all` shows every condition as its own row. The rule is
+  `newestConditions`; the homepage and the social card read the ladder
+  through the same default (`defaultLadderRuns`). On the 0.5 e90 data at the
+  time it kept every one of the 84 rows: no 0.5 model has two conditions at
+  one effort yet.
 
 Three of the four dropdowns are off the page. Race and class
 asked a question an eval episode cannot answer differently — every scored run
@@ -838,8 +871,8 @@ front are unchanged. What else is above the chart:
   page so the chart and the table cannot disagree; the axes are fixed at cost
   and XP rather than following the axes chips, or the set on screen would mean
   something different on every view. On the data measured it hides
-  five of twenty-eight entries at e90 and one of eight at e360; it removes no table row, because the table is keyed on
-  the model and the chart on the (model, effort) pair.
+  five of twenty-eight entries at e90 and one of eight at e360. It judges
+  only what the condition rules leave, on one chart.
 - **current models**, **on by default** (operator, 2026-10-24). Within each model
   line (the family filter's `lineOf`, read off the id the provider served, so
   the CLI alias `sonnet` counts as the Sonnet it ran) only the newest model is

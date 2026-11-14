@@ -17,7 +17,7 @@ import { useNavigate } from "@solidjs/router";
 import { For, Show, createMemo } from "solid-js";
 import type { ResultRun } from "@viewer/api-types";
 import { AXES, type AxisSpec, DEFAULT_VIEW, type LadderView, METRIC_KEYS, levelOfXp } from "../lib/axes";
-import { LABEL_FONT, TICK_FONT, type LadderPoint, type PlacedPoint, hoverKeyOf, ladderChartLayout, ladderPoints } from "../lib/ladder";
+import { LABEL_FONT, TICK_FONT, type LadderPoint, type PlacedPoint, ladderChartLayout, ladderPoints } from "../lib/ladder";
 import { paretoSteps } from "../lib/pareto";
 import { AxisFrame, Cue, Puck, VB_H, VB_W, XAxis, YAxis } from "./ChartParts";
 import { EntryCard, createCardHover } from "./EntryCard";
@@ -131,7 +131,7 @@ export function LadderChart(props: {
   pareto?: boolean;
   /**
    * The entry the reader is pointing at, shared with the table below so the
-   * two light up together (`hoverKeyOf`). Undefined on the pages that draw the
+   * two light up together (`entryKeyOf`). Undefined on the pages that draw the
    * chart alone — the homepage — where there is no row to agree with.
    */
   hovered?: string | null;
@@ -163,7 +163,7 @@ export function LadderChart(props: {
   );
   const hover = createCardHover(() => props.onHover);
   const lit = (p: LadderPoint): boolean =>
-    hover.shown() === p.key || (props.hovered != null && props.hovered === hoverKeyOf(p.model));
+    hover.shown() === p.key || (props.hovered != null && props.hovered === p.key);
   const carded = createMemo(() => layout().placed.find((d) => d.point.key === hover.shown()) ?? null);
   /** Whether a point's label is drawn: standing, or lit — except under its own card, which names it already. */
   const named = (d: PlacedPoint): boolean => d.labelled || (lit(d.point) && hover.shown() !== d.point.key);
@@ -324,7 +324,7 @@ export function LadderChart(props: {
                 }}
                 data-entry={d.point.key}
                 onPointerDown={hover.down}
-                onPointerEnter={(e) => hover.enter(e, d.point.key, hoverKeyOf(d.point.model))}
+                onPointerEnter={(e) => hover.enter(e, d.point.key, d.point.key)}
                 onPointerLeave={hover.leave}
               >
               <a
@@ -333,7 +333,7 @@ export function LadderChart(props: {
                 onClick={(e) => {
                   if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
                   e.preventDefault();
-                  if (hover.follow(d.point.key, hoverKeyOf(d.point.model))) navigate(e.currentTarget.getAttribute("href") ?? "/runs");
+                  if (hover.follow(d.point.key, d.point.key)) navigate(e.currentTarget.getAttribute("href") ?? "/runs");
                 }}
               >
                 {/*

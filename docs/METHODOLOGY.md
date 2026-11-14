@@ -425,7 +425,12 @@ rules, and the operator's runner image carries the program.
 
 **A ladder belongs to a comparability group.** `probing` has none
 (2026-08-29): a campaign varies its cells on purpose, so ranking its runs ranks
-the sweep, not the models. The freeplay ladder is an overview, not a
+the sweep, not the models. A scored ladder row is one condition — series,
+episode, harness, effort, routing, wiki, compaction window, loop and `yield`,
+never the prompt hash, which a patch moves within a series — and by default
+each model at each effort shows its newest condition with counted runs, so a row
+moves with its evidence and two conditions never pool; no chart holds
+conditions this document keeps apart (operator, 2026-11-14). The freeplay ladder is an overview, not a
 leaderboard (2026-08-29): the whole active field, paused and in-progress
 characters included, one row per character across attempts, with the reader's
 filters applied — except the series, because a character is durable across

@@ -47,6 +47,7 @@ import type {
   TrackResponse,
   TradeFacts,
 } from "./api-types";
+import { conditionOf } from "./condition";
 import { itemSamplesOf } from "./runs";
 import { encodeInventory } from "@wrathbench/inspector/codec/inventory";
 import { activeMsUntil, type ActiveSegment } from "./sessions";
@@ -466,6 +467,12 @@ export function resultRunOf(
     // Only when set: absent is the CLI's own `auto`, which every older row is.
     ...(run.comparability?.compactWindow != null ? { compactWindow: run.comparability.compactWindow } : {}),
     harness: run.harness,
+    condition: conditionOf({
+      series: harnessSeries(run.harnessVersion),
+      episode: ep.episode,
+      harness: run.harness,
+      tuple: run.comparability,
+    }),
     promptHash: run.comparability?.promptHash ?? null,
     serverBuild: run.comparability?.serverBuild?.build ?? null,
     wikiCoords: run.comparability?.wikiCoords ?? null,
