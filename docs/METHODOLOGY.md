@@ -389,9 +389,10 @@ and a run that paused at minute 41 and came back two hours later is not that.
 Freeplay resumes because it never counts; a probe resumes only if its campaign
 says so. A failed attempt is visible with its reason but is never a recorded
 episode, and only the termination reason decides what it counts as: a
-provider's refusal is a strike (three on one model, episode and series stop
-the scheduler — evidence about an endpoint, not a model), a fleet stop or an
-offline gap is harness weather, and a transport failure mid-episode
+provider's refusal is a rung of that model's cooling ladder, the one stop
+mechanism the scheduler has per model, which consecutive failures climb and
+the operator's clear resets — evidence about an endpoint, not a model
+(operator, 2026-11-14) — a fleet stop or an offline gap is harness weather, and a transport failure mid-episode
 (`adapter-error`) ended the run on the endpoint's clock, so it is never scored
 (2026-08-30).
 

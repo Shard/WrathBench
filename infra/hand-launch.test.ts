@@ -133,8 +133,9 @@ describe("a hand launch with no episode", () => {
     const { facts, unstamped } = readFleetRuns(root, NOW, { includeArchived: true });
     const states = project(facts);
     // The model it shares a name with: one attempt, the fleet's; no hold, no
-    // pause, no strike, no rung from the hand runs.
-    expect(states[0]!.perEpisode.e90).toMatchObject({ attempts: 1, counted: 1, failed: 0 });
+    // pause, no rung from the hand runs.
+    expect(states[0]!.perEpisode.e90).toMatchObject({ attempts: 1, counted: 1 });
+    expect(states[0]!.ladder).toBe(0);
     expect(states[0]!.paused).toBeUndefined();
     expect(states[0]!.ladder).toBe(0);
     // The same projection as a tree that never held the hand runs.

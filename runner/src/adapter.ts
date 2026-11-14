@@ -106,7 +106,7 @@
  * - A 403 PAUSES at once too (`no-access`), unretried: the key is valid but
  *   may not use this endpoint or model — no plan on the workspace (OpenCode
  *   Go's answer without a Go subscription), a restricted key, a region — again
- *   the credential's, not the model's, so it is no strike either; the run
+ *   the credential's, not the model's, so it is no cooling rung either; the run
  *   resumes once the operator has given the key access. The one exception is
  *   a moderation refusal (OpenRouter answers 403 when a model's moderation
  *   flags the input, `MODERATION_HINTS`): that is about the content the run
