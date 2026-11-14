@@ -1,6 +1,7 @@
 /**
  * Stage a party for the Deadmines eval (docs/proposals/GROUP-PLAY.md §3):
- * each member a fresh character on its PARTY account under the name the
+ * each member a fresh character on its party account (PARTY1..PARTY5, or
+ * five the attempt drew from the eval pool, EVAL01..EVALnn) under the name the
  * campaign definition gives it, put into the loadout of its race and class
  * (level 20, trainer spells, preset talents, skills, quest-level greens worn,
  * bags, supplies), standing where the request's scenario puts it, grouped
@@ -74,6 +75,7 @@
 
 import type { SQL } from "bun";
 import { connect as connectModule, guidKey, type WrathClient } from "@wrathbench/sdk";
+import { isEvalPoolAccountName } from "../../runner/src/account-pool";
 import { isValidCharacterName } from "../../runner/src/config";
 import { MODULE_SECRET } from "../smoke/lib/auth";
 import { characterNames, type FixtureContext } from "../smoke/lib/fixture";
@@ -84,6 +86,7 @@ import {
   buildEquipStatements,
   buildStatements,
   connect as connectDb,
+  connectOptions,
   readCharacter,
   readInventory,
   snapshot,
@@ -108,8 +111,20 @@ import {
 import { SCENARIOS, isScenarioName } from "./scenarios";
 import { soapFromEnv, type SoapClient } from "./soap";
 
-/** The accounts a party may be staged on, and nothing else. */
+/** The pinned party accounts. */
 export const PARTY_ACCOUNT_PATTERN = /^PARTY\d$/;
+
+/**
+ * The accounts a party may be staged on, and nothing else: the pinned party
+ * accounts, and the eval pool's (`EVAL01`…), which a party campaign with
+ * `accounts: "evals"` draws per attempt for a world of its own. Every other
+ * account is refused: the generated pool's and the named runner accounts (a
+ * benchmark run starts from a character the agent created), hosted mode's
+ * tenants (a person's character), the smoke and probe accounts, and STAGER.
+ */
+export function isStageableAccount(account: string): boolean {
+  return PARTY_ACCOUNT_PATTERN.test(account) || isEvalPoolAccountName(account);
+}
 export const DEFAULT_PARTY_ACCOUNTS = ["PARTY1", "PARTY2", "PARTY3", "PARTY4", "PARTY5"] as const;
 /** The scenario a Deadmines party stands in. */
 export const DEFAULT_PARTY_SCENARIO = "moonbrook-mine";
@@ -221,7 +236,7 @@ export function checkStageRequest(req: StageRequest): string[] {
   for (const n of dupes(ms.map((m) => m.character.toLowerCase()))) errors.push(`character ${n} is named twice`);
   for (const id of dupes(ms.map((m) => m.member))) errors.push(`member ${id} is named twice`);
   for (const m of ms) {
-    if (!PARTY_ACCOUNT_PATTERN.test(m.account)) errors.push(`refusing to stage on '${m.account}': only the party accounts (PARTY1..PARTY5) are staged`);
+    if (!isStageableAccount(m.account)) errors.push(`refusing to stage on '${m.account}': only the party accounts (PARTY1..PARTY5) and the eval pool's (EVAL01..) are staged`);
     if (!isValidCharacterName(m.character)) errors.push(`'${m.character}' is not a character name the game accepts`);
     if (!/^[a-z][a-z0-9]{0,15}$/.test(m.member)) errors.push(`member id '${m.member}' is not a member id`);
     const l = loadoutFor(m);
@@ -324,6 +339,8 @@ export async function stageParty(req: StageRequest, opts: StageOptions = {}): Pr
     const secret = opts.moduleSecret ?? MODULE_SECRET;
     if (!secret) throw new StageFailure("preflight", "no module port secret (WRATHBENCH_MODULE_SECRET); the stager opens utility sessions with it");
     const soap = opts.soap ?? soapFromEnv();
+    // Where it stages, before anything is asked or touched: a world's module, SOAP and schema, or the shared world's.
+    log(`staging on module ${base}, SOAP ${soap.url}${ownSql ? `, characters schema ${connectOptions().database}` : ""}`);
     await soap.check().catch((e) => {
       throw new StageFailure("preflight", `SOAP refused STAGER before anything was touched: ${e instanceof Error ? e.message : String(e)}`);
     });

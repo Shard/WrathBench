@@ -163,11 +163,17 @@ export const DEFAULT_SOAP_PORT = 7878;
  * Where an attempt's stager works when the attempt has a world of its own:
  * its module, its SOAP console and its characters schema. The game data
  * (`WRATHBENCH_WORLD_DB`) stays the shared one, which every world reads.
+ * `MODULE_HOST`/`MODULE_PORT` name the world's module too: the stager finds
+ * its module through `moduleBase()` (infra/smoke/lib/module.ts), where those
+ * two win over `WRATHBENCH_MODULE_URL`, so one inherited from the roster's
+ * env would otherwise send the module calls to the shared world.
  */
 export function stagingEnvOf(id: string, soapPort: number = DEFAULT_SOAP_PORT, env: Record<string, string | undefined> = process.env): Record<string, string> {
   const worlds = env[WORLDS_SECRET_ENV];
   return {
     WRATHBENCH_MODULE_URL: worldModuleUrl(id),
+    MODULE_HOST: new URL(worldModuleUrl(id)).hostname,
+    MODULE_PORT: String(MODULE_PORT),
     WRATHBENCH_SOAP_URL: worldSoapUrl(id, soapPort),
     WRATHBENCH_CHARACTERS_DB: schemaOf(id),
     // Under hosted mode the world opens with its own port secret.
