@@ -1,0 +1,15 @@
+{
+  "id": "program-shakedown",
+  "version": 1,
+  "question": "Does a solo run on the program loop play forty-five minutes on the claude-code driver without a harness fault?",
+  "note": "A shakedown, not a measurement (operator, 2026-11-14): before the one-agent Deadmines eval (deadmines@5), one solo claude-code run on the program loop, so that a fault there is told apart from one in the fan-out program loop, which program-shakedown-party@1 shakes down separately. The two cannot share a definition: a party block makes every cell the leader's staged start, and a one-agent arm needs a party. One arm on the release image, with no args: the loop is the driver's default, which on claude-code is the program loop, so the release decides it and nothing here pins it. One cell, human-paladin, the start of most solo probes. The standing goal, no objective and no level end, so the clock is the end. The leash is the probes' at forty-five minutes: idle 20 minutes, the no-XP watchdog off, and the call guard at the usual rate of 1000 per 30 minutes, 1500. resume is false: a paused run is a spent attempt. Assignments are the store row's; the first is Claude Haiku 5.5 on claude-code.",
+  "cells": [{ "id": "human-paladin", "race": 1, "class": 2 }],
+  "arms": [{ "id": "base", "note": "The release image; the driver's default loop." }],
+  "objective": null,
+  "stopAtLevel": null,
+  "budget": { "episodeMs": 2700000, "idleMs": 1200000, "noXpMs": null, "maxToolCalls": 1500 },
+  "wiki": true,
+  "wikiCoords": false,
+  "resume": false,
+  "maxAttemptsPerCell": 3
+}

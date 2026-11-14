@@ -14,6 +14,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { campaignDefinitionSchema, campaignHash, campaignRef, imageRefProblem, issuesOf, type CampaignDefinition } from "../src/campaign-def";
 import { campaignPairRefusals, type PairRosterEntry } from "../src/campaigns";
+import { launchLoopOf } from "../src/config";
+import { DEFAULT_DRIVER, isDriver } from "../src/drivers";
 import { rosterEntryRefusal } from "../src/roster-refusal";
 import { CAMPAIGNS_DIR, checkedIn, checkedInFiles, definition } from "./fixtures/campaigns";
 
@@ -88,6 +90,51 @@ describe("the checked-in definitions", () => {
     expect(v2.budget.maxToolCalls).toBe(12000);
     const rest = (d: CampaignDefinition) => ({ ...d, version: 0, question: "", note: "", budget: { ...d.budget, episodeMs: 0, maxToolCalls: 0 } });
     expect(rest(v2)).toEqual(rest(v1));
+  });
+
+  test("deadmines@5 is @4 for one agent: only the version, the question, the note, the objective, the arm and the attempt cap move", () => {
+    const v4 = checkedIn("deadmines@4");
+    const v5 = checkedIn("deadmines@5");
+    expect(v5.arms).toEqual([{ id: "one-agent", note: v5.arms[0]!.note!, agents: 1 }]);
+    expect(v5.objective).not.toBeNull();
+    for (const m of v4.party!.members) expect(v5.objective).toContain(m.character);
+    const rest = (d: CampaignDefinition) => ({ ...d, version: 0, question: "", note: "", objective: null, arms: [], maxAttemptsPerCell: 0 });
+    expect(rest(v5)).toEqual(rest(v4));
+  });
+
+  test("program-shakedown-party@1 is deadmines@5's first three members, one agent, ending on Rhahk'Zor", () => {
+    const party = checkedIn("program-shakedown-party@1");
+    const v5 = checkedIn("deadmines@5");
+    expect(party.party!.members.map(({ objective: _o, ...m }) => m)).toEqual(v5.party!.members.slice(0, 3).map(({ objective: _o, ...m }) => m));
+    expect(party.start).toEqual(v5.start);
+    expect(party.cells).toEqual(v5.cells);
+    expect(party.arms.map((a) => a.agents)).toEqual([1]);
+    expect(party.end).toEqual([{ kill: { entry: 644 } }]);
+  });
+
+  test("the program shakedowns and deadmines@5 float on the release image, set no loop, and run the program loop for the entries they are written for", () => {
+    const roster: Record<string, PairRosterEntry & { model: string; apiBase?: string }> = {
+      haiku: { model: "claude-haiku-5-5", driver: "claude-code" },
+      flash: { model: "deepseek/deepseek-v4.1-flash", apiBase: "https://openrouter.ai/api/v1" },
+      opus: { model: "claude-opus-5-5", driver: "claude-code" },
+    };
+    const cases = [
+      { ref: "program-shakedown@1", entry: "haiku" },
+      { ref: "program-shakedown-party@1", entry: "flash" },
+      { ref: "deadmines@5", entry: "opus" },
+    ];
+    for (const { ref, entry } of cases) {
+      const def = checkedIn(ref);
+      expect(def.arms).toHaveLength(1);
+      const arm = def.arms[0]!;
+      expect(arm.image).toBeUndefined();
+      expect(arm.args).toBeUndefined();
+      const c = { name: def.id, version: def.version, arms: def.arms, assignments: [{ model: entry, runsPerCell: 1 }] };
+      expect(campaignPairRefusals(c, roster, { runPods: "off", onCluster: true })).toEqual([]);
+      const driver = roster[entry]!.driver ?? DEFAULT_DRIVER;
+      if (!isDriver(driver)) throw new Error(`${driver} is not a driver`);
+      expect(launchLoopOf({ driver, ...(arm.agents === 1 ? { fanout: true } : {}) }, {}).loop).toBe("program");
+    }
   });
 
   for (const file of files) {
