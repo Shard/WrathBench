@@ -208,6 +208,27 @@ export interface SchedulingPolicy {
    * it changes nothing but turns an arm with a pinned image into a refusal.
    */
   runPods: RunPodsMode;
+  /**
+   * Where a scored or probing attempt plays: `off`, the deployment's one
+   * shared world, as freeplay always does; `evals`, a short-lived world of its
+   * own per attempt on the cluster, a worldserver over its own characters
+   * schema (infra/world.ts, docs/RUNBOOK.md "Worlds"). The dark switch the
+   * world launcher ships behind, of the same species as `runPods`: off by
+   * default, and with it on the planner holds every scored or probing launch
+   * that would land on the shared world instead.
+   */
+  worlds: WorldsMode;
+}
+
+export const WORLDS_MODES = ["off", "evals"] as const;
+export type WorldsMode = (typeof WORLDS_MODES)[number];
+
+export function parseWorldsMode(raw: unknown, where: string): WorldsMode {
+  if (raw === undefined) return "off";
+  if (typeof raw !== "string" || !(WORLDS_MODES as readonly string[]).includes(raw)) {
+    throw new Error(`${where} must be one of ${WORLDS_MODES.map((m) => JSON.stringify(m)).join(", ")} — "evals" plays every scored and probing attempt on a world of its own on the cluster`);
+  }
+  return raw as WorldsMode;
 }
 
 export const RUN_PODS_MODES = ["off", "probes"] as const;
@@ -226,6 +247,7 @@ export const DEFAULT_POLICY: SchedulingPolicy = {
   series: null,
   maxSessions: {},
   runPods: "off",
+  worlds: "off",
 };
 
 /**
@@ -248,9 +270,10 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
   const base: SchedulingPolicy = { ...DEFAULT_POLICY, series, maxSessions: {} };
   if (raw === undefined) return base;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("fleet config: policy must be an object");
-  const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown; maxSessions?: unknown; paid?: unknown; extras?: unknown; resume?: unknown; subscriptions?: unknown; routing?: unknown; runPods?: unknown };
+  const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown; maxSessions?: unknown; paid?: unknown; extras?: unknown; resume?: unknown; subscriptions?: unknown; routing?: unknown; runPods?: unknown; worlds?: unknown };
   const out = { ...base };
   out.runPods = parseRunPodsMode(o.runPods, "policy.runPods");
+  out.worlds = parseWorldsMode(o.worlds, "policy.worlds");
   if (o.runsPerEpisode !== undefined) {
     throw new Error(`policy.runsPerEpisode is not a 0.5 key — run counts are a model's tier (${TIERS.join(", ")}); set roster.<name>.tier`);
   }

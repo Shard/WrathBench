@@ -176,9 +176,12 @@ describe.skipIf(helm === null)("the chart's worlds block", () => {
     expect(container(pod.spec, "db-import").resources!.requests!["cpu"]).toBe("100m");
   }, HELM_TEST_MS);
 
-  test("the fleet keeps worlds' records, and log retention prunes their server logs, on the worlds subPath", () => {
+  test("the fleet keeps worlds' records, the runner pod reads them, and log retention prunes their server logs, on the worlds subPath", () => {
     const docs = render(ON);
     expect(fleet(docs).volumeMounts).toContainEqual({ name: "data", mountPath: "/wrathbench/data/worlds", subPath: "worlds" });
+    const runner = find(docs, "Deployment", "wrathbench-runner")!.spec!.template!.spec!.containers[0]!;
+    expect(runner.volumeMounts).toContainEqual({ name: "data", mountPath: "/wrathbench/data/worlds", subPath: "worlds", readOnly: true });
+    expect(find(render([]), "Deployment", "wrathbench-runner")!.spec!.template!.spec!.containers[0]!.volumeMounts!.some((m) => m.subPath === "worlds")).toBe(false);
     const job = retention(docs);
     const dir = envOf(job)["WRATHBENCH_WORLDS_DIR"]!.value!;
     expect(mountAt(job, dir)).toEqual({ name: "data", mountPath: dir, subPath: "worlds" });

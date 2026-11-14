@@ -92,7 +92,12 @@ export function stagedGuidsOf(v: unknown): StagedGuid[] | undefined {
  * replaced.
  */
 export interface PartyStager {
-  stage(req: StageRequest, signal?: AbortSignal): Promise<StageResult>;
+  /**
+   * `env` is laid over the stager's environment: an attempt on a world of its
+   * own stages there (`stagingEnvOf` in infra/world.ts — its module, SOAP
+   * console and characters schema), never on the shared world.
+   */
+  stage(req: StageRequest, signal?: AbortSignal, env?: Readonly<Record<string, string>>): Promise<StageResult>;
 }
 
 /** Where the stager lives, relative to the repository root. */
@@ -116,7 +121,7 @@ function lastLine(text: string): string {
 export function commandStager(opts: { cwd: string; script?: string; timeoutMs?: number; command?: readonly string[] }): PartyStager {
   const script = opts.script ?? STAGER_SCRIPT;
   return {
-    async stage(req: StageRequest, signal?: AbortSignal): Promise<StageResult> {
+    async stage(req: StageRequest, signal?: AbortSignal, env?: Readonly<Record<string, string>>): Promise<StageResult> {
       if (signal?.aborted === true) return { ok: false, reason: "staging stopped before it began" };
       if (opts.command === undefined && !existsSync(join(opts.cwd, script))) {
         return { ok: false, reason: `the party stager ${script} is not installed in this image` };
@@ -124,7 +129,7 @@ export function commandStager(opts: { cwd: string; script?: string; timeoutMs?: 
       const argv = [...(opts.command ?? ["bun", script]), "--request", "-"];
       let proc: ReturnType<typeof Bun.spawn>;
       try {
-        proc = Bun.spawn(argv, { cwd: opts.cwd, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+        proc = Bun.spawn(argv, { cwd: opts.cwd, stdin: "pipe", stdout: "pipe", stderr: "pipe", ...(env !== undefined ? { env: { ...process.env, ...env } } : {}) });
       } catch (e) {
         return { ok: false, reason: `the party stager did not start: ${e instanceof Error ? e.message : String(e)}` };
       }

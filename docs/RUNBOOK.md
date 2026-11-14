@@ -28,6 +28,7 @@ stack instead, where a command has a compose form.
 | deal with a run that stopped without a verdict | "Lapsed runs: paused, and stale" |
 | see why a model is or is not scheduled | "The scheduling policy" |
 | run a probe campaign | "Probe campaigns", "Run pods" |
+| give each scored attempt a world of its own | "Worlds" |
 | launch one episode by hand | "Ad-hoc launches", "The scripted reference run" |
 | manage provider credentials, their slots and their budgets | "Credentials" |
 | switch the runner, evals or viewer group off | "Groups" |
@@ -456,6 +457,8 @@ policy      Only where runs execute. `maxSessions { <driver>: n }` — how many 
             `runPods` — `"off"` (default) or `"probes"`: every probing episode runs as its own
             pod on the arm's image ("Run pods"). While it is not `probes`, or off the cluster, an
             arm that pins an image or a command is a refused pair, never run on master.
+            `worlds` — `"off"` (default) or `"evals"`: every fresh e90, e360 or probing attempt
+            plays on a world of its own ("Worlds"), and never on the shared one while it is on.
             `maxConcurrent`, `paid` and `subscriptions` are refused by name: their work is the
             credentials' ("Credentials").
 campaign-defs  published campaign definitions, `<id>@<version>` → { definition, hash, source,
@@ -1886,6 +1889,90 @@ campaign there, assign a model, set `runPods` to `probes`, and watch
 `bun wb fleet state` and the job log for `run pod … created`, `… running on <node>: <image> is
 sha256:…`, and the roster's verdict. Expect the first pull of a new image to
 take minutes; the account is held through it by `image.json` and the heartbeat.
+
+### Worlds
+
+Every scored or probing attempt can play on a **world of its own**: a
+worldserver pod over its own characters schema and realm row, made for the
+attempt and dropped at its verdict, while freeplay shares the long-lived
+world (`infra/world.ts`; `docs/ARCHITECTURE.md`, "Worlds"). It ships dark
+behind two switches.
+
+**The chart:** `worlds.enabled` renders the world pod template, the headless
+`worlds` Service and the world pods' policy (values.yaml `worlds`). Set
+`worlds.max` to what the namespace's ResourceQuota fits beside the release's
+own pods and the run pods. The supervisor plans under it, and an attempt past
+it waits with `cap: worlds n/max`.
+
+**The fleet setting:** `policy.worlds`, `"off"` by default:
+
+```
+bun wb config patch policy '{"worlds":"evals"}'
+bun wb config patch policy '{"worlds":"off"}'
+```
+
+It reaches a job at its next roster spawn (`--worlds`). With it on, a fresh
+`e90`, `e360` or `probing` attempt never plays on the shared world. Off the
+cluster, or while worlds are held (below), every such launch is held, listed
+with the reason. A resumed run goes back to the world its launch file names
+(`runs/<id>/world.json`), whatever the setting says now. A run that started on
+the shared world resumes there.
+
+**Turning it on.** A run's session record counts only the characters of runs
+on its own world as the deployment's own. It reads the world from the run's
+`world.json` pointer, or from `config.world` once the runner stamps it. In
+order:
+1. Release with `worlds.enabled`.
+2. Set `policy.worlds` to `evals`.
+3. Run one solo probe. Its world is the measurement: boot time (`bun wb
+   inspect worlds`), memory at boot and at the end (`kubectl top`), and CPU.
+4. Set `worlds.max` and `worlds.resources` from those numbers.
+5. Run a party.
+
+**What the roster does.** Before staging, for a fresh attempt:
+- it allocates an id (`w` and ten base32 characters) and a realm slot (2–254);
+- it writes the world's record under `data/worlds/<id>/`, the realm row and
+  each run's pointer;
+- it creates the pod and waits for its module's `/health`.
+
+The world's allowlist is the attempt's accounts. The stager works on the
+world's own SOAP console and schema. Allocation and boot sit under one lock,
+so one world boots at a time.
+
+**After the attempt** the roster reads the runs' own files:
+- every run has its verdict, or never started: the world is ended. Its
+  console log is saved to `data/worlds/<id>/server.log`, its pod deleted, its
+  schema dropped and its realm row deleted.
+- a run may resume: the world is parked. The pod is deleted with its full
+  grace and the schema kept, for a resume that boots it again on the digests
+  its first boot ran.
+
+**When a world does not come up.** A boot that is not ready inside its budget
+is no attempt: nothing is recorded, and the world is ended on the spot. The
+same holds for a pod the quota refuses. Three failed boots in a row hold
+every launch that needs a world for 30 minutes, or until a boot succeeds,
+and the hold is listed with the last failure.
+
+**Every world boot logs the entrypoint's warning about write permissions on
+the configuration dir.** It is harmless: the confs are mounted read-only on
+purpose and exist already. Read the console log for the real cause of a
+failed boot.
+
+**The reconcile.** At the fleet's start and hourly, the supervisor settles the
+worlds no roster holds: those of another fleet pod, or of a roster that is
+gone. Each is ended or parked by the same rule. A world pod with no open
+record is deleted. A world schema or realm row no record holds is only
+listed, in the fleet log and by `bun wb inspect worlds`, and dropping one is
+the operator's call.
+
+**Measuring the first world.** Beside the boot itself, note how long the
+fleet pod takes to resolve a new world's `<id>.worlds` name: the boot waits
+on its module's `/health` at that name.
+
+**Releases.** The deploy window waits for every world pod to go after the run
+pods. World pods are owned by the fleet pod, so the drain ends them, and the
+attempts on them end by their lanes' rules. The audit log is the shared one,
+named by token fingerprint as before.
 
 ### Ad-hoc launches
 

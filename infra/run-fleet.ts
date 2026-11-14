@@ -206,6 +206,7 @@ import { formatEndedRun, printDryRun, printLiveRuns, printStatus } from "./run-f
 import { accountHeldBy, drainMarkerPath, releaseRunSession } from "./run-roster";
 import { K8sClient } from "./k8s-client";
 import { DRAIN_POD_QUERY_TIMEOUT_MS, readLauncherSettings, rosterHasRunPod } from "./run-pod";
+import { mysqlWorldDb, reconcileWorlds, worldPodPrefix, worldPodRelease, worldsHold, worldTemplateRefusal, worldUsedBy, WorldStore, WORLDS_DIR } from "./world";
 import { runCampaignFile, writeCampaignFile } from "../runner/src/campaign-file";
 import { deleteCodexThread, pruneRollouts, type RolloutPrune } from "../runner/src/codex-rollout";
 import { cliBaseEnv } from "../runner/src/adapter-shared";
@@ -221,6 +222,7 @@ import {
   resumeHoldOf,
   runPodsOf,
   SlotBook,
+  worldsOf,
   writeCredentialUsageSidecar,
   type CredentialGate,
 } from "./run-fleet-credentials";
@@ -366,6 +368,37 @@ export async function sweepNames(
   }
 }
 
+
+/** How often the supervisor settles the worlds no roster holds (`reconcileWorlds`); the first is at its start. */
+export const WORLDS_RECONCILE_EVERY_MS = 60 * 60_000;
+
+/** One reconcile of the worlds, said only when it did or found something. */
+async function runWorldsReconcile(store: WorldStore, say: (s: string) => void): Promise<void> {
+  const client = K8sClient.inCluster();
+  if (client === null) return;
+  try {
+    const r = await reconcileWorlds({
+      client,
+      db: () => mysqlWorldDb(),
+      store,
+      runsDir: RUNS_DIR,
+      fleetPod: process.env["POD_NAME"] ?? null,
+      podName: (id) => `${worldPodPrefix()}${id}`,
+      log: say,
+      ...(worldPodRelease() !== undefined ? { release: worldPodRelease()! } : {}),
+    });
+    const parts = [
+      r.ended.length > 0 ? `ended ${r.ended.join(", ")}` : "",
+      r.parked.length > 0 ? `parked ${r.parked.join(", ")}` : "",
+      r.podsDeleted.length > 0 ? `deleted orphan pods ${r.podsDeleted.join(", ")}` : "",
+      r.orphanSchemas.length > 0 ? `schemas no record holds: ${r.orphanSchemas.join(", ")}` : "",
+      r.orphanRealms.length > 0 ? `realm rows no record holds: ${r.orphanRealms.join(", ")}` : "",
+    ].filter((p) => p.length > 0);
+    if (parts.length > 0) say(`worlds reconcile: ${parts.join("; ")}`);
+  } catch (e) {
+    say(`worlds reconcile failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
 
 /** How often the supervisor sweeps the Codex homes it can reach (`pruneCodexHomes`). */
 export const CODEX_PRUNE_EVERY_MS = 60 * 60_000;
@@ -968,6 +1001,13 @@ async function main(): Promise<void> {
     launcherSettingsError = error;
     return "error" in settings ? undefined : settings.maxPods;
   };
+  /** The book's world setting this tick: the chart's `worlds.max`, and the hold failed boots put on them (`worldsHold`). */
+  const worldsSetting = (mode: string) => {
+    if (mode !== "evals") return undefined;
+    const settings = parseOpts.onCluster ? readLauncherSettings() : undefined;
+    const max = settings === undefined || "error" in settings ? undefined : settings.maxWorlds;
+    return worldsOf(mode, parseOpts.onCluster, max, worldTemplateRefusal() ?? worldsHold(join(REPO_ROOT, WORLDS_DIR), Date.now()));
+  };
   const boot = rereadFleet(parseFleet({}, parseOpts), readFleetConfig, parseOpts);
   let config = boot.config;
   let wasEmpty = boot.empty === true;
@@ -996,6 +1036,8 @@ async function main(): Promise<void> {
   let wasIdle = false;
   /** When the Codex homes were last swept; the first tick after boot sweeps. */
   let codexPrunedAt = 0;
+  let worldsReconciledAt = 0;
+  let worldsReconciling = false;
   // Job bookkeeping: which job holds which account, the job itself
   // for every live process, and the last plan's waiting/skipped rows for
   // --status. A skip reason is logged once per (job, reason), not once a tick.
@@ -1135,7 +1177,12 @@ async function main(): Promise<void> {
       Date.now(),
       goUsage.readHolds(cfg.credentials),
     );
-    const book = new SlotBook(cfg.credentials, cfg.policy.maxSessions, runPodsOf(cfg.policy.runPods, parseOpts.onCluster, cfg.policy.runPods === "probes" ? maxRunPods() : undefined));
+    const book = new SlotBook(
+      cfg.credentials,
+      cfg.policy.maxSessions,
+      runPodsOf(cfg.policy.runPods, parseOpts.onCluster, cfg.policy.runPods === "probes" ? maxRunPods() : undefined),
+      worldsSetting(cfg.policy.worlds),
+    );
     lastCredentials = { gate: credGate, book, credentials: cfg.credentials, runs: billed };
     const byName = new Map(cfg.jobs.map((j) => [j.name, j]));
     const runningRefs = new Set<string>();
@@ -1470,7 +1517,8 @@ async function main(): Promise<void> {
       const keep = keepFor(account, characters);
       if (keep.length > 0) a.job = { ...a.job, keepCharacters: keep };
       pending.set(a.job.name, a.job);
-      for (const r of a.job.refs) freshAssign.push({ ref: r, account });
+      // A launch onto a world of its own meets no name of the shared world's.
+      if (!worldUsedBy(cfg.policy.worlds, a.job.episode)) for (const r of a.job.refs) freshAssign.push({ ref: r, account });
       out.push(jobSpawn(a.job, cfg.roster, account, stampToday, eligible, cfg.campaigns, cfg.campaignDefs));
     }
     // The policy fills what the queue left free. A gated spawn is not a
@@ -1550,7 +1598,7 @@ async function main(): Promise<void> {
           say(`policy ${job.name}: ${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account} — ${why}`);
           record({ job: job.name, event: "policy-pick", detail: `${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account}: ${why}` });
         }
-        for (const r of job.refs) freshAssign.push({ ref: r, account });
+        if (!worldUsedBy(cfg.policy.worlds, job.episode)) for (const r of job.refs) freshAssign.push({ ref: r, account });
         out.push(jobSpawn(job, cfg.roster, account, stampToday, undefined, cfg.campaigns, cfg.campaignDefs));
       }
       const taken = new Set([...runningAndReserved.values(), ...lastPlan.assign.map((a) => a.account), ...picks.map((p) => p.account)].map((a) => a.toUpperCase()));
@@ -1690,7 +1738,7 @@ async function main(): Promise<void> {
     // (`owedCopies`) — but a paused run in the same roster still does.
     // A fresh party attempt is staged fresh and never does (`rosterResumes`).
     const resumeRoster = rosterResumes(spawn, existsSync(jobJsonlPath(spawn.name, stampToday)));
-    const argv = jobArgv(spawn, { stamp: stampToday, until: args.until, resumeRoster, runPods: config.policy.runPods });
+    const argv = jobArgv(spawn, { stamp: stampToday, until: args.until, resumeRoster, runPods: config.policy.runPods, worlds: config.policy.worlds });
     const stdoutLog = jobLogPath(spawn.name, stampToday);
     // O_APPEND, not Bun.file(): a BunFile sink starts at offset 0, so a
     // respawned job used to overwrite the head of its own log and leave the
@@ -2127,6 +2175,19 @@ async function main(): Promise<void> {
         } catch (e) {
           say(`codex rollouts: sweep failed — ${e instanceof Error ? e.message : String(e)}`);
         }
+      }
+    }
+    // At the fleet's start and hourly after: settle the worlds no roster holds
+    // (`reconcileWorlds`). In the background — ending a world waits for its
+    // pod to go — and never two at once.
+    if (!stopping && !worldsReconciling && parseOpts.onCluster && Date.now() - worldsReconciledAt >= WORLDS_RECONCILE_EVERY_MS) {
+      worldsReconciledAt = Date.now();
+      const store = new WorldStore(join(REPO_ROOT, WORLDS_DIR));
+      if (config.policy.worlds !== "off" || store.list().some((r) => r.state !== "ended")) {
+        worldsReconciling = true;
+        void runWorldsReconcile(store, say).finally(() => {
+          worldsReconciling = false;
+        });
       }
     }
     const toStart =

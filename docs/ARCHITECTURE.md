@@ -554,7 +554,9 @@ and drops both before anything reads its environment
 store, and no `ANTHROPIC_*` variable ever (claude-code is subscription-only;
 the pod env builder refuses to build a pod that would carry one). The run
 directory is on a shared volume. Before the run starts it holds at most launch
-files — a probe's `campaign.json`, a pod's `image.json` — and a directory
+files — a probe's `campaign.json`, a pod's `image.json`, the pointer to its
+own world `world.json` (`{ "id" }`, with the world's module URL in
+`WRATHBENCH_MODULE_URL`) — and a directory
 holding only those is not a run: a fresh launch onto it proceeds and
 overwrites them, where anything else there refuses the launch.
 
@@ -652,8 +654,12 @@ a worldserver pod as a stateless process over it. The long-lived world (the
 the fleet creates from the chart's `world.json` template, beside the run-pod
 template, and owns like a run pod. The pod shares the game data, auth, the
 client data and the confs (read-only) with the long-lived world, and keeps
-its own characters schema, realm id and account allowlist, which the
-launcher stamps, so the template carries none of the shared world's. Its
+its own characters schema, realm id and account allowlist. The template
+carries none of the three, and the launcher refuses a pod that does not
+carry all three of its own (`infra/world.ts`, `buildWorldPod`): an absent
+one would fall back to the shared conf's. The roster makes a world for a
+fresh scored or probing attempt while `policy.worlds` is `evals`, and ends it
+at the attempt's verdict or parks it while a run may resume. Its
 address is `http://<id>.worlds:8086` under the headless `worlds` Service,
 stable across a boot onto a new pod, because a resume reuses the module URL
 its fresh launch stored. Its db-import init creates the schema, or brings a
