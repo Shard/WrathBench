@@ -101,7 +101,7 @@ import { GoUsageGauge, goUsageUrl } from "./opencode-go";
 import { Trajectory, readMeta, startHeartbeat, type PauseMark, type RunMeta } from "./trajectory";
 import { partyOwnGuids } from "./party";
 import { fanoutSessionNote, openFanout, writeRoster } from "./fanout-run";
-import { openSessionRecord, RecordSignals, removeSessionRing } from "./session-record";
+import { openSessionRecord, RecordSignals, removeSessionRing, SHARED_WORLD, worldPointerOf } from "./session-record";
 import type { CharacterRoster } from "@wrathbench/mcp/fanout";
 import { harnessVersion, stackCommit } from "./version";
 import { SDK_VERSION } from "@wrathbench/sdk";
@@ -328,7 +328,9 @@ export function configFromArgs(
     // wiki, objective and stopping rule.
     ...(probe ?? {}),
   });
-  return { ...c, runId: c.runId ?? runId, token: c.token ?? newSessionToken() };
+  const id = c.runId ?? runId;
+  // The world its launcher made for it, else the shared one: identity from here on.
+  return { ...c, runId: id, token: c.token ?? newSessionToken(), world: worldPointerOf(join(c.runsDir, id)) ?? SHARED_WORLD };
 }
 
 /**
@@ -930,7 +932,10 @@ async function main(): Promise<void> {
    */
   // A fan-out run has no one record: each character's is opened in
   // `sessions/<Character>/` as it logs in, and all of them feed one drain.
-  const session = config.fanout !== undefined ? undefined : openSessionRecord({ runDir, runsDir: config.runsDir, ownGuids: partyOwnGuids(config.party), token: config.token, scrub: (text) => trajectory.scrub(text) });
+  const session =
+    config.fanout !== undefined
+      ? undefined
+      : openSessionRecord({ runDir, runsDir: config.runsDir, ...(config.world !== undefined ? { world: config.world } : {}), ownGuids: partyOwnGuids(config.party), token: config.token, scrub: (text) => trajectory.scrub(text) });
   const fanoutSignals = config.fanout !== undefined ? new RecordSignals() : undefined;
   process.on("exit", () => removeSessionRing(runDir));
   if (session !== undefined) void moduleIdentity(config.moduleUrl, moduleAuthHeaders()).then((m) => session.writer.setModule(m));
@@ -970,7 +975,7 @@ async function main(): Promise<void> {
   /** A fan-out run's roster, on that sandbox: its seats, their leases and their records (`fanout-run.ts`). */
   const roster: CharacterRoster | undefined =
     config.fanout !== undefined && fanoutSignals !== undefined
-      ? openFanout({ fanout: config.fanout, moduleUrl: config.moduleUrl, runDir, runsDir: config.runsDir, sandbox, secrets: trajectory, signals: fanoutSignals })
+      ? openFanout({ fanout: config.fanout, moduleUrl: config.moduleUrl, runDir, runsDir: config.runsDir, ...(config.world !== undefined ? { world: config.world } : {}), sandbox, secrets: trajectory, signals: fanoutSignals })
       : undefined;
   /** Stop the sandbox, then close the record it was draining into: bounded, and never the reason an exit fails. */
   const stopSandbox = async (): Promise<void> => {

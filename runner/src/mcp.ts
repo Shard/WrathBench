@@ -110,7 +110,7 @@ async function main(): Promise<void> {
   if (lease.secret === undefined) console.error(`[wrathbench-mcp] ${lease.note}`);
 
   // The session record, written by the stack into the run directory (`session-record.ts`).
-  const session = openSessionRecord({ runDir, runsDir: config.runsDir, ownGuids: partyOwnGuids(config.party), token: config.token ?? token, scrub: (text) => trajectory.scrub(text) });
+  const session = openSessionRecord({ runDir, runsDir: config.runsDir, ...(config.world !== undefined ? { world: config.world } : {}), ownGuids: partyOwnGuids(config.party), token: config.token ?? token, scrub: (text) => trajectory.scrub(text) });
 
   const sandbox = new SandboxHost({
     moduleUrl: config.moduleUrl,

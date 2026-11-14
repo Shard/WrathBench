@@ -664,6 +664,16 @@ export const runConfigSchema = z.object({
    */
   image: z.string().min(1).max(512).optional(),
   /**
+   * The world the run plays on: a world per eval's id (`infra/world.ts`), or
+   * `shared` for the deployment's long-lived world. Read at a fresh launch
+   * from the pointer its launcher left beside it (`world.json`) and identity
+   * from then on, so a resume never changes it; absent on a run written
+   * before worlds, which played on the shared world. A label on the run,
+   * never a key in the comparability tuple: every attempt's world is its own
+   * (docs/METHODOLOGY.md, "Every scored attempt plays on a world of its own").
+   */
+  world: z.string().regex(/^(shared|w[a-z2-7]{10})$/).optional(),
+  /**
    * End the run on the first server-observed level at or above this
    * (`level-target`). Set only from a campaign file's `stopAtLevel`.
    */
