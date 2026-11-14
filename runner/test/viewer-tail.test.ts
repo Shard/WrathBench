@@ -7,6 +7,7 @@ import { platformOf, readRun } from "../viewer/runs";
 import { playtimeMs, segmentsFrom } from "../viewer/sessions";
 import {
   TrajectoryTail,
+  claudeModelTurns,
   areaFactsFrom,
   achievementFactsFrom,
   deathFactsFrom,
@@ -911,6 +912,53 @@ describe("tokensPerSecond", () => {
     expect(tokensPerSecond(scanned)).toEqual(totals.tps);
     expect(tokenTotals(scanned)).toEqual(totals.tokens);
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a claude-code run's turns are its CLI's num_turns, a message no result covers one each, in the single pass and the tail alike", async () => {
+    // Three CLI processes: the first and second cut short before a result, the
+    // third's result reporting 6 model turns over 3 messages (one an earlier
+    // envelope with no usage, which is no message of its own).
+    const dir = tempDir("wrathbench-claude-turns-");
+    const path = join(dir, "trajectory.jsonl");
+    const res = (ts: number, usage: boolean): string =>
+      JSON.stringify({ t: "response", ts, turn: 1, message: { role: "assistant", content: "x" }, ...(usage ? { usage: { prompt_tokens: 500, completion_tokens: 2 } } : {}) });
+    const lines = [
+      JSON.stringify({ t: "meta", ts: 1000 }),
+      JSON.stringify({ t: "driver", ts: 1100, driver: "claude-code" }),
+      JSON.stringify({ t: "request", ts: 1200, turn: 1, messages: [{ role: "user", content: "hello" }] }),
+      res(1300, true),
+      res(1400, true),
+      JSON.stringify({ t: "driver", ts: 2000, driver: "claude-code" }),
+      JSON.stringify({ t: "request", ts: 2100, turn: 1, messages: [{ role: "user", content: "hello" }] }),
+      res(2200, true),
+      JSON.stringify({ t: "driver", ts: 3000, driver: "claude-code" }),
+      JSON.stringify({ t: "request", ts: 3100, turn: 1, messages: [{ role: "user", content: "hello" }] }),
+      res(3200, false),
+      res(3300, true),
+      res(3400, true),
+      res(3500, true),
+      JSON.stringify({
+        t: "claude_result", ts: 3600, turn: 1, subtype: "success", isError: false, numTurns: 6, sessionId: "s3", costUsd: 0.5,
+        usageRaw: { input_tokens: 10, output_tokens: 1200 }, usage: { prompt_tokens: 1500, completion_tokens: 1200 },
+      }),
+    ];
+    writeFileSync(path, [...lines, ""].join("\n"));
+    const totals = await scanRunTotals(path);
+    expect(totals.tokens.turns).toBe(2 + 1 + 6);
+    const tail = new TrajectoryTail(path);
+    const scanned = await tail.scan();
+    expect(claudeModelTurns(scanned)).toBe(9);
+    expect(tokenTotals(scanned)).toEqual(totals.tokens);
+    // The live tail's memo reads its span entries, every driver line among them.
+    expect(tail.tokens).toEqual(totals.tokens);
+    // A result that reports no output covers nothing: its messages stay a turn each.
+    writeFileSync(path, [...lines.slice(0, -1), lines.at(-1)!.replace('"output_tokens":1200', '"output_tokens":0'), ""].join("\n"));
+    expect((await scanRunTotals(path)).tokens.turns).toBe(2 + 1 + 3);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a fixed-loop run's turns are its requests, as before", () => {
+    expect(tokenTotals([req(1000, 1), res(3000, 1, 7), res(3500, 1, 2), req(4000, 2), res(6000, 2, 11)]).turns).toBe(2);
   });
 
   test("a claude-code run known only by its claude_system envelope reads as snapshots, in the single pass and the tail alike", async () => {
