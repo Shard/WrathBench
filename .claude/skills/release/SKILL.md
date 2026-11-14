@@ -72,6 +72,9 @@ bun wb release run --from <phase>            # restart where it stopped
    sandbox.
 3. A module change: `bun wb smoke <name>`, or `bun wb smoke suite` after
    anything on the game surface, with the fleet live, never while it is held.
+   Start it only once
+   `kubectl -n wrathbench rollout status deploy/wrathbench-runner` has
+   completed, or it dies with the old pod.
    Re-run one failed suite member as `bun wb smoke suite <member>`, which
    keeps it on its own account; the bare `bun wb smoke <name>` logs in on
    PROBE and fails at character creation on the name.

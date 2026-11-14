@@ -32,11 +32,12 @@
  */
 
 import { authHeaders } from "./lib/auth";
-import { moduleBase, moduleWsBase } from "./lib/module";
+import { moduleWsBase } from "./lib/module";
+import { createWithReclaim as createReclaiming, deleteCharacterRetrying, moduleRequest } from "./lib/reclaim";
 import { smokeToken } from "./lib/session";
 
-const BASE = moduleBase();
 const WS = moduleWsBase();
+const req = moduleRequest();
 
 // Own account so the probe never fights the runner track for the default
 // RUNNER account (one live session per account).
@@ -65,21 +66,6 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
-async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let json: any = undefined;
-  try {
-    json = await res.json();
-  } catch {
-    /* ignore non-JSON */
-  }
-  return { status: res.status, json };
-}
-
 function openEvents(token: string, buf: any[]): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(token)}`, { headers: authHeaders() });
@@ -105,47 +91,22 @@ async function waitFor(buf: any[], pred: (e: any) => boolean, timeoutMs: number,
   }
 }
 
-// Create a session, retrying through the core's account-release window: while a
-// stale session on the account drains, the reclaiming create returns
-// `504 timeout` (retryable). `account_in_use` must NEVER appear on POST /session
-// after the fix — if it does, that is the regression, so fail fast on it rather
-// than retrying it into a long confusing timeout.
-async function createWithReclaim(
-  token: string,
-  character: string,
-): Promise<{ status: number; json: any }> {
-  for (let attempt = 0; attempt < 25; attempt++) {
-    const r = await req("POST", "/session", {
-      token,
-      account: ACCOUNT,
-      character,
-      race: 1,
-      class: 1,
-    });
-    if (r.status === 200) return r;
-    if (r.json?.error !== "timeout") return r;   // only `timeout` is the retryable release-in-progress
-    log(`create for ${character} still draining the account (${r.status} ${r.json?.error}); retrying`);
-    await Bun.sleep(2_000);
-  }
-  return { status: 0, json: { error: "reclaim_never_converged" } };
+// Create a session, retrying through the core's account-release window
+// (lib/reclaim.ts). `account_in_use` must NEVER appear on POST /session after
+// the fix; it is returned at once, so it fails here rather than timing out.
+function createWithReclaim(token: string, character: string) {
+  return createReclaiming({ request: req, body: { token, account: ACCOUNT, character, race: 1, class: 1 }, log });
 }
 
-// Delete a character, retrying through the release window (account_in_use /
-// timeout are transient), mirroring the runner's deleteCharacter.
-async function deleteCharacter(character: string, tag: string): Promise<boolean> {
-  for (let attempt = 0; attempt < 25; attempt++) {
-    const del = await req("POST", "/character-delete", {
-      token: smokeToken("module-reclaim", { role: `del-${tag}` }),
-      account: ACCOUNT,
-      character,
-    });
-    if (del.status === 200 && del.json?.deleted) return true;
-    if (del.json?.error !== "account_in_use" && del.json?.error !== "timeout") {
-      log(`character delete (${character}) got unexpected ${del.status} ${JSON.stringify(del.json)}`);
-    }
-    await Bun.sleep(3_000);
-  }
-  return false;
+// Delete a character, retrying through the release window (lib/reclaim.ts).
+function deleteCharacter(character: string, tag: string): Promise<boolean> {
+  return deleteCharacterRetrying({
+    request: req,
+    account: ACCOUNT,
+    character,
+    token: () => smokeToken("module-reclaim", { role: `del-${tag}` }),
+    log,
+  });
 }
 
 async function cleanup() {

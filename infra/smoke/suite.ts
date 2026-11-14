@@ -11,8 +11,11 @@
  *
  * Every smoke runs as a child (`bun infra/smoke/<name>.ts`, MODULE_ACCOUNT set
  * to its account), its output streamed with `[<name>]` in front of each line,
- * and killed after MEMBER_TIMEOUT_MS. A killed smoke can leave its session
- * behind; the next login on that account reclaims it.
+ * and killed after MEMBER_TIMEOUT_MS. A killed smoke, or a whole suite killed
+ * with its pod, leaves its sessions behind, and an account a dead process
+ * holds refuses the character listing and deletes the members begin with. So
+ * before any member runs, the suite reclaims each account it is about to use
+ * (lib/reclaim.ts), saying nothing when nothing held it.
  *
  * Run:
  *   bun wb smoke suite                        # every member
@@ -21,6 +24,8 @@
  */
 
 import { join } from "node:path";
+import { moduleRequest, reclaimAccount } from "./lib/reclaim";
+import { smokeToken } from "./lib/session";
 import { accountsOf, formatSummary, refusals, runSuite, select, spawnMember, SUITE_MEMBERS } from "./lib/suite";
 
 const SMOKE_DIR = import.meta.dir;
@@ -50,6 +55,21 @@ async function main(argv: string[]): Promise<number> {
   }
   console.log(`suite: ${picked.members.map((m) => `${m.name} (${accountsOf(m).join("+")})`).join(", ")}`);
   const t0 = Date.now();
+  // Only after the refusals: a reclaim on an account the fleet holds would end a live run.
+  const request = moduleRequest();
+  const accounts = [...new Set(picked.members.flatMap(accountsOf))];
+  await Promise.all(
+    accounts.map(async (account) => {
+      const token = smokeToken("suite", { role: `reclaim-${account.toLowerCase()}` });
+      const r = await reclaimAccount({ request, account, token, log: (msg) => console.log(`suite: ${msg}`) }).catch((e: unknown) => ({
+        leaked: true as const,
+        ok: false as const,
+        held: "unknown",
+        why: String(e instanceof Error ? e.message : e),
+      }));
+      if (r.leaked && !r.ok) console.error(`suite: could not reclaim ${account}: ${r.why}; its members run anyway`);
+    }),
+  );
   const results = await runSuite(picked.members, (m) => spawnMember(m, { dir: SMOKE_DIR, cwd: REPO_ROOT, timeoutMs: MEMBER_TIMEOUT_MS, out }));
   for (const line of formatSummary(results, Date.now() - t0)) console.log(line);
   return results.every((r) => r.ok) ? 0 : 1;

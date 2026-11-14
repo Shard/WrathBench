@@ -1206,10 +1206,14 @@ duration and exits 1 on any failure. A smoke retries only a named transient
 condition, once or within a stated bound, and prints a `RETRY:` line when it
 does (`infra/smoke/lib/transient.ts`); a PASS that needed one shows the retry
 on its line. It refuses any member that would log in on the pool, PROBE,
-PARTY* or SMOKE, so it never holds the fleet. Run it after any release that
-touches the game surface. A smoke that fails after the resume has found a
-defect in a live build: revert the pin, which is another window, or fix
-forward.
+PARTY* or SMOKE, so it never holds the fleet. Before any member runs it
+reclaims each of its accounts from a session a killed suite left there
+(`infra/smoke/lib/reclaim.ts`), silently when nothing did. Run it after any
+release that touches the game surface, and start it only once
+`kubectl -n wrathbench rollout status deploy/wrathbench-runner` has
+completed: a suite started on the runner pod being replaced dies with it. A
+smoke that fails after the resume has found a defect in a live build: revert
+the pin, which is another window, or fix forward.
 
 The accounts for hand runs:
 
@@ -1219,7 +1223,8 @@ The accounts for hand runs:
   run, holds it. `bun wb fleet status` lists each account with what is on it.
 - `SMOKE2`–`SMOKE4`, which the suite uses and some smokes use beside PROBE
   (swim's observer is SMOKE3, death-recovery's priest SMOKE4), so a hand smoke
-  on one of them waits for a suite run to finish.
+  on one of them waits for a suite run to finish, and a suite waits for the
+  hand smoke: its reclaim would take the account from it.
 - A suite member run alone goes through the suite, `bun wb smoke suite
   <member>`, which keeps it on its own account. The bare `bun wb smoke <name>`
   passes no environment into the pod, so it logs in on PROBE and fails at
