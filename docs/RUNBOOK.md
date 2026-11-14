@@ -1164,8 +1164,8 @@ bun wb smoke suite [member …] | --list
 
 It runs the game-surface smokes in `infra/smoke/lib/suite.ts` (kill-credit,
 quest-accept-status, module-quest, module-navigation, achievements-taxi,
-deadmines-entry, chest-loot) on SMOKE2–SMOKE4, each on the account its
-character lives on. Smokes that share an account run one after another, and
+deadmines-entry, chest-loot, module-limits) on SMOKE2–SMOKE4, each on the
+account its character lives on. Smokes that share an account run one after another, and
 the accounts run in parallel. It prints one PASS/FAIL line per smoke with its
 duration and exits 1 on any failure. A smoke retries only a named transient
 condition, once or within a stated bound, and prints a `RETRY:` line when it
