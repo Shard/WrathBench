@@ -275,6 +275,8 @@ export function openSessionRecord(o: OpenSessionRecordOptions): SessionRecord {
     id: tokenFingerprint(o.token),
     stack: { version: SDK_VERSION, ...(commit !== undefined ? { commit } : {}) },
     ...(o.module !== undefined ? { module: o.module } : {}),
+    // The session's world on its session.json, for a reader matching characters across sessions; absent on the shared one.
+    ...(world !== SHARED_WORLD ? { world } : {}),
     own: seededOwn(
       o.ownGuids ?? [],
       ownGuidIndex(() => sameWorldSessionDirs(o.runsDir, world, worlds)),

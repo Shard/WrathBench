@@ -556,14 +556,15 @@ the pod env builder refuses to build a pod that would carry one). The run
 directory is on a shared volume. Before the run starts it holds at most launch
 files — a probe's `campaign.json`, a pod's `image.json`, the pointer to its
 own world `world.json` (`{ "id" }`, with the world's module URL in
-`WRATHBENCH_MODULE_URL`) — and a directory
+`WRATHBENCH_MODULE_URL`), which run.ts stamps as `config.world` at a fresh
+launch (`shared` without one) — and a directory
 holding only those is not a run: a fresh launch onto it proceeds and
 overwrites them, where anything else there refuses the launch.
 
 **What it reads back** (`readRunFact`, `runner/src/models.ts`, is the
 reference reader). `meta.json`: `harnessVersion`, `startedAt`,
 `config.{model, effort, compactWindow, account, character, token, campaign,
-campaignVersion, cell, arm, ref, credential, extra, watchdogs}`,
+campaignVersion, cell, arm, ref, credential, extra, watchdogs, world}`,
 `comparability.{episode, episodeOverride, effort, compactWindow}` and, while
 paused, `pause.{reason, at, episodeElapsedMs, notBefore}`. Beside those,
 meta.json holds the run row: `termination.{reason, detail}`, `endedAt` and

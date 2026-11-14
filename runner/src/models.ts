@@ -640,6 +640,13 @@ export interface RunFact {
    */
   fanoutAccounts?: string[] | null;
   /**
+   * The world the run played on (`config.world`): a world per eval's id, or
+   * `shared`. Null on a run written before worlds, which played on the shared
+   * world; optional so a fact built by hand need not spell it. A label, never
+   * a key: nothing groups or counts by it.
+   */
+  world?: string | null;
+  /**
    * The credential this run took a slot on (`RunConfig.credential`), or null
    * on a run that recorded none (a 0.5 run, one launched by hand without
    * `--credential`). Read off the
@@ -1386,6 +1393,7 @@ function readRunReading(
       fanout?: { accounts?: unknown };
       credential?: unknown;
       driver?: unknown;
+      world?: unknown;
       watchdogs?: { episodeMs?: unknown; idleMs?: unknown };
     };
     comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown; compactWindow?: unknown; loop?: unknown; yield?: unknown };
@@ -1442,6 +1450,7 @@ function readRunReading(
     fanoutAccounts: fanoutAccountsOfConfig(meta.config?.fanout),
     credential: str(meta.config?.credential),
     driver: str(meta.config?.driver),
+    world: str(meta.config?.world),
     credentialUsage: parseSubscriptionUsage(meta.subscriptionUsage) ?? null,
     credentialOverageAt: num(meta.credentialOverage?.at),
   };
