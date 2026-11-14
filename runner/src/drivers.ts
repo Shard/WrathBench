@@ -291,6 +291,30 @@ export interface DriverEntry {
   runPod?: true;
 }
 
+/**
+ * Set to `1` on every run pod by its launcher (`infra/run-pod.ts`
+ * `buildRunPod`), and nowhere else: how run.ts knows it is in one.
+ */
+export const RUN_POD_STAMP_ENV = "WRATHBENCH_RUN_POD";
+
+/**
+ * Why a `runPod` driver's episode may not start in this process, or null.
+ * On the cluster (Kubernetes sets `KUBERNETES_SERVICE_HOST` in every pod)
+ * such an episode runs in a run pod or not at all: a hand launch in the runner
+ * pod, or anything in the fleet pod, would put its CLI beside those pods'
+ * secrets, which is what the run pod exists to prevent. Off the cluster there
+ * is no pod to run in, and nothing is refused.
+ */
+export function inProcessRunPodRefusal(driver: string, env: Record<string, string | undefined>): string | null {
+  if (driverEntry(driver)?.runPod !== true) return null;
+  if (env["KUBERNETES_SERVICE_HOST"] === undefined || env["KUBERNETES_SERVICE_HOST"] === "") return null;
+  if (env[RUN_POD_STAMP_ENV] === "1") return null;
+  return (
+    `on the cluster a ${driver} episode runs only in a run pod of its own, away from this pod's secrets, and this process is not one ` +
+    `— launch it through a roster or campaign entry, which the fleet runs in a run pod`
+  );
+}
+
 const FIXED_LOOP_COST: DriverCost = { reported: "provider", table: "synced" };
 
 /**

@@ -31,7 +31,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DRIVER_POD_VOLUMES, entryOf, HOME_CREDENTIAL_ENVS, type RosterDriver } from "../runner/src/drivers";
+import { DRIVER_POD_VOLUMES, entryOf, HOME_CREDENTIAL_ENVS, RUN_POD_STAMP_ENV, type RosterDriver } from "../runner/src/drivers";
 import type { EpisodeExit, EpisodeHandle, EpisodeLaunch, EpisodeLauncher, LaunchSecretReader } from "./episode-launcher";
 import { EPISODE_TERM_GRACE_MS, episodeSecretEnv, refusedEpisode } from "./episode-launcher";
 import { launchSecret, SEALED_SECRET_ENV, STORE_KEY_ENV } from "../runner/src/store-secrets";
@@ -298,7 +298,8 @@ export function buildRunPod(template: Pod, opts: BuildRunPodOptions): Pod {
   container.image = opts.image;
   container.command = opts.command ?? [...(container.command ?? []), ...DEFAULT_RUN_COMMAND];
   container.args = [...opts.args];
-  container.env = runPodEnv(container.env ?? [], opts.env);
+  // The stamp run.ts reads to know it is in a run pod (`inProcessRunPodRefusal`), set last so nothing overrides it.
+  container.env = [...runPodEnv(container.env ?? [], opts.env).filter((e) => e.name !== RUN_POD_STAMP_ENV), { name: RUN_POD_STAMP_ENV, value: "1" }];
   // A lane volume (the Codex home) is mounted only on its own driver's pod.
   const unused = DRIVER_POD_VOLUMES.filter((v) => !entryOf(opts.env.driver).podVolumes.includes(v));
   if (unused.length > 0) {

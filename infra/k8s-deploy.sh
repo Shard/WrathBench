@@ -366,8 +366,8 @@ print_keep_paused_next() {
   say "  scheduled and no paused run resumes. Next, one short real run per driver on PROBE"
   say "  (or SHAKEOUT), with no --episode so it is unscored:"
   say "    ./infra/run-episode.sh --k8s --account PROBE --driver claude-code --model <id> --max-tool-calls 20"
-  say "    ./infra/run-episode.sh --k8s --account PROBE --driver codex --model <id> --max-tool-calls 20"
   say "    ./infra/run-episode.sh --k8s --account PROBE --driver openai --model <id> --max-turns 5"
+  say "  (codex has no hand launch on the cluster: watch its first run pod after the resume)"
   say "  then put the fleet back to work:"
   say "    ./infra/fleet-update.sh resume${k8s_flags}"
 }

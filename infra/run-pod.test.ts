@@ -39,6 +39,7 @@ import {
 import { RUN_POD_KEY, runPodsOf, SlotBook } from "./run-fleet-credentials";
 import { tempDirs } from "./temp-dirs";
 import { episodeSecretEnv, processEpisodeEnv } from "./episode-launcher";
+import { RUN_POD_STAMP_ENV } from "../runner/src/drivers";
 import { parseStoreKey, sealSecret, SEALED_SECRET_ENV, STORE_KEY_ENV, unsealLaunchSecret } from "../runner/src/store-secrets";
 import { KEY_HEX, SENTINEL } from "../runner/test/fixtures/store-secrets";
 
@@ -359,6 +360,13 @@ describe("buildRunPod", () => {
     expect(buildRunPod(template(), base).spec.containers[0]!.command).toEqual(["/usr/bin/tini", "--", "bun", "runner/src/run.ts"]);
     expect(buildRunPod(template(), base).spec.containers[0]!.args).toEqual(["--resume", "x"]);
     expect(buildRunPod(template(), { ...base, command: ["/app/harness"] }).spec.containers[0]!.command).toEqual(["/app/harness"]);
+  });
+
+  test("every run pod carries the run-pod stamp, which no template value or stamp can unset", () => {
+    for (const driver of ["claude-code", "openai", "codex", "pi"] as const) {
+      const pod = buildRunPod(template(), { runId: "r", image: RELEASE, requestedRef: RELEASE, command: null, args: [], env: { driver, credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: { [RUN_POD_STAMP_ENV]: "0" } }, owner: undefined, rosterPid: 1, graceMs: EPISODE_TERM_GRACE_MS });
+      expect([driver, pod.spec.containers[0]!.env!.filter((e) => e.name === RUN_POD_STAMP_ENV)]).toEqual([driver, [{ name: RUN_POD_STAMP_ENV, value: "1" }]]);
+    }
   });
 
   test("the codex home volume is mounted for the codex driver only", () => {

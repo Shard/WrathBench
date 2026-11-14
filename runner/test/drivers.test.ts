@@ -21,6 +21,8 @@ import {
   HARNESS_OF_DRIVER,
   HARNESSES,
   HOME_CREDENTIAL_ENVS,
+  inProcessRunPodRefusal,
+  RUN_POD_STAMP_ENV,
   ROSTER_DRIVERS,
   harnessDriver,
   isProbeOnlyDriver,
@@ -28,6 +30,9 @@ import {
   type RosterDriver,
 } from "../src/drivers";
 import { providerOfModel } from "../src/credential-slots";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+import { tempDirs } from "./fixtures/temp-dirs";
 
 /** Compile-time: the roster's driver union is exactly these four. */
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -130,4 +135,31 @@ describe("the driver registry", () => {
       "CODEX_HOME is not visible to the fleet container — put it in /wrathbench/.env as the path of a logged-in Codex home (`codex login`); it is loaded by Bun there and never passed via argv",
     );
   });
+});
+
+describe("a runPod driver on the cluster runs in a run pod or not at all", () => {
+  const CLUSTER = { KUBERNETES_SERVICE_HOST: "10.43.0.1" };
+
+  test("codex is refused in any other process on the cluster, naming the supported path; off the cluster, or in a run pod, it is not", () => {
+    expect(inProcessRunPodRefusal("codex", CLUSTER)).toContain("launch it through a roster or campaign entry, which the fleet runs in a run pod");
+    expect(inProcessRunPodRefusal("codex", { ...CLUSTER, [RUN_POD_STAMP_ENV]: "1" })).toBeNull();
+    expect(inProcessRunPodRefusal("codex", { [RUN_POD_STAMP_ENV]: "0" })).toBeNull();
+    expect(inProcessRunPodRefusal("codex", {})).toBeNull();
+    expect(inProcessRunPodRefusal("codex", { ...CLUSTER, [RUN_POD_STAMP_ENV]: "0" })).not.toBeNull();
+    for (const d of DRIVER_LIST.filter((e) => e.runPod !== true)) expect([d.id, inProcessRunPodRefusal(d.id, CLUSTER)]).toEqual([d.id, null]);
+  });
+
+  test("run.ts refuses a hand launch of codex on the cluster before it writes anything", () => {
+    const runs = tempDirs()("wrathbench-codex-in-process-");
+    const root = join(import.meta.dir, "..", "..");
+    const p = Bun.spawnSync(["bun", join(root, "runner", "src", "run.ts"), "--driver", "codex", "--model", "gpt-6.1-sol", "--episode", "freeplay", "--account", "PROBE", "--runs-dir", runs], {
+      cwd: root,
+      env: { PATH: process.env["PATH"] ?? "/usr/bin:/bin", HOME: process.env["HOME"] ?? "/tmp", ...CLUSTER },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(p.exitCode).toBe(2);
+    expect(p.stderr.toString()).toContain("[wrathbench] launch refused: on the cluster a codex episode runs only in a run pod of its own");
+    expect(readdirSync(runs)).toEqual([]);
+  }, 30_000);
 });
