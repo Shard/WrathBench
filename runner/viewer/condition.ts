@@ -57,6 +57,8 @@ export interface RunCondition {
   subject: "hosted" | "local" | "external";
   /** A local build's weights, quantisation and runtime, as stamped; absent on any other run. */
   serving?: { weights: string; quant: string; runtime: string };
+  /** The agent an external run declared, as stamped; absent on every run of ours. */
+  agent?: { name: string | null; version: string | null };
 }
 
 /** The stamped tuple, as far as the key reads it. Every field as it is stored. */
@@ -69,6 +71,7 @@ export interface ConditionTuple {
   yield?: boolean;
   serving?: { weights: string; quant: string; runtime: string };
   subject?: string;
+  agent?: { name: string | null; version: string | null };
 }
 
 /** A run's facts the key is made of: its tuple, and the four the reader already holds apart from it. */
@@ -116,6 +119,7 @@ export function conditionKey(f: ConditionFacts): string {
     yield: t.yield === true,
     subject: subjectOf(f),
     serving: t.serving ?? null,
+    agent: t.agent ?? null,
   });
 }
 
@@ -130,6 +134,7 @@ export function conditionOf(f: ConditionFacts): RunCondition {
     wiki: t.wiki !== false,
     subject: subjectOf(f),
     ...(t.serving !== undefined ? { serving: { weights: t.serving.weights, quant: t.serving.quant, runtime: t.serving.runtime } } : {}),
+    ...(t.agent !== undefined ? { agent: { name: t.agent.name, version: t.agent.version } } : {}),
   };
 }
 
@@ -141,8 +146,13 @@ export interface ChartGroup {
   label: string;
 }
 
-/** The chart a condition belongs on. */
-export function chartGroupOf(c: Pick<RunCondition, "loop" | "pinned" | "wiki">): ChartGroup {
+/**
+ * The chart a condition belongs on. An external agent's runs are a group of
+ * their own whatever their other dimensions: their conditions are declared and
+ * partial, and they are never ranked with ours (operator, 2026-11-14).
+ */
+export function chartGroupOf(c: Pick<RunCondition, "loop" | "pinned" | "wiki"> & Partial<Pick<RunCondition, "subject">>): ChartGroup {
+  if (c.subject === "external") return { id: "external", label: "external agents" };
   const id = [c.loop, ...(c.pinned ? [] : ["unpinned"]), ...(c.wiki ? [] : ["nowiki"])].join("-");
   const label = [`${c.loop} loop`, ...(c.pinned ? [] : ["unpinned"]), ...(c.wiki ? [] : ["no wiki"])].join(" · ");
   return { id, label };

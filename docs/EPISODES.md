@@ -133,9 +133,8 @@ other.
   on `deadmines` the other four end `party-ended`, naming it. Staging that fails,
   `manual`, a fleet stop or offline gap, `harness-error`, `adapter-error` and
   any pause: not counted, retried fresh with fresh staging on a fresh world.
-- **Strikes.** A provider's refusal is one strike per attempt, however many
-  members met it, counted per model, id and series: a strike on one Deadmines
-  id does not count toward the other.
+- **Cooling.** A provider's refusal is one rung of the model's cooling ladder
+  per attempt, however many members met it.
 - **Who runs it.** `t2` buys three `deadmines-solo` attempts per series, and
   three `deadmines` attempts where the roster entry also says `deadmines:
   true`. The policy holds the five-agent id until `policy.rehearsed` names
