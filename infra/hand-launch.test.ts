@@ -6,6 +6,7 @@
  * its grant; it is never a fact the projection reads, so never a scored,
  * owed or counted run, an attempt or a strike. Fixture run directories only.
  */
+import { launchRouting } from "../runner/test/fixtures/launch-routing";
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -64,7 +65,7 @@ function writeRun(root: string, now: number, s: RunSpec): void {
       harnessVersion: "harness-0.5-1-gabc",
       startedAt: s.startedAt,
       config,
-      comparability: { episode: s.episode ?? null, loop: "program", yield: true },
+      comparability: { episode: s.episode ?? null, ...launchRouting(MODEL), loop: "program", yield: true },
       ...(s.ended === true ? { termination: { reason: "episode-limit", detail: "episode wall clock" }, endedAt: s.startedAt + 2_000 } : {}),
     }),
   );

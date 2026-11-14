@@ -10,6 +10,7 @@
  * a secret into prose, where a field-name rule cannot see it.
  */
 
+import { launchRouting } from "./fixtures/launch-routing";
 import { afterAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
@@ -24,6 +25,9 @@ const SENTINEL = "sentinel-bearer-9d31ff";
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
 const roots: string[] = [];
+
+/** The fixture's CLI models (claude-code), whose runs stamp no routing; every other one launches on the default base. */
+const onCli = (model: string): boolean => /^(claude|sonnet|opus|haiku)/.test(model);
 
 interface Synth {
   harnessVersion?: string;
@@ -56,7 +60,7 @@ function writeRun(runsDir: string, r: Synth): void {
       harnessVersion: r.harnessVersion ?? `harness-${currentSeries() ?? "0.0"}-test`,
       startedAt: r.startedAt,
       config,
-      comparability: { effort: r.effort ?? null, episode: r.episode ?? "e90", ...window, loop: "program", yield: true },
+      comparability: { effort: r.effort ?? null, episode: r.episode ?? "e90", ...window, ...(onCli(r.model) ? {} : launchRouting(r.model, r.effort)), loop: "program", yield: true },
     }),
   );
   const lines: string[] = [`{"t":"meta","ts":${r.startedAt}}`];

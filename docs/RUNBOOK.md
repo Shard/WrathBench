@@ -1627,7 +1627,12 @@ the defer ladder (`1m … 6h`) after consecutive zero-response,
 will not be scheduled until cleared; `pinned` is outside the policy (a pinned
 ref or a probe). A launch that produced no model response never counts toward
 a target but does climb the ladder, so a dead provider costs at most ten
-launches over about 11 hours before it is retired.
+launches over about 11 hours before it is retired. Nor does a run of another condition than the one its entry
+launches now count: another loop or `yield`, another routing (the entry's own
+block, or the fleet's default folded into it) or another wiki
+(`countsTowardTarget`). So editing an entry's routing, or the fleet's routing
+default, starts the target over for the runs under it, and the older runs stay
+on the ladder as their own condition.
 
 `retired` has a second cause that needs no launch at all: the model's
 provider no longer lists it. The supervisor reads the model list of every

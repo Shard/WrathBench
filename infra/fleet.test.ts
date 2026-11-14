@@ -1,3 +1,4 @@
+import { launchRouting } from "../runner/test/fixtures/launch-routing";
 import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_PREFLIGHT,
@@ -2051,6 +2052,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
   const run = (model: string, episode: EpisodeId, i: number, over: Partial<RunFact> = {}): RunFact => ({
     runId: `${model}-${episode}-${i}`,
     model,
+    ...launchRouting(model, over.effort),
     effort: null,
     episode,
     episodeOverride: false,
@@ -2207,12 +2209,17 @@ describe("scheduling policy: defer ladder and retirement", () => {
     expect(() => parseFleet({ ...raw, roster: { ...raw.roster, local: { ...raw.roster.local, idle: "e90" } } })).toThrow(/idle must be one of/);
 
     // 1/3 counted on e90: the scheduled runs come first, freeplay is not reached.
-    const one = [run("qwen/q", "e90", 1)].map((r) => ({ ...r, harnessSeries: config.policy.series }));
+    // A local box's runs stamp its build and no routing, as a launch of the entry would.
+    const onBox = (r: RunFact): RunFact => {
+      const { routing: _none, ...rest } = r;
+      return { ...rest, serving: LOCAL_SERVING, harnessSeries: config.policy.series };
+    };
+    const one = [run("qwen/q", "e90", 1)].map(onBox);
     const partial = planTick(config, modelStatesOf(rosterModels(config.roster), one, NOW, config.policy), () => undefined, "20260101");
     expect(partial.policy.find((p) => p.account === "LOCALBOX")!.job).toMatchObject({ name: "local-e90", episode: "e90" });
 
     // 3/3 and unpromoted (no counted run reached L5): the extra is freeplay.
-    const met = [1, 2, 3].map((i) => run("qwen/q", "e90", i, { bestLevel: 3 })).map((r) => ({ ...r, harnessSeries: config.policy.series }));
+    const met = [1, 2, 3].map((i) => run("qwen/q", "e90", i, { bestLevel: 3 })).map(onBox);
     const states = modelStatesOf(rosterModels(config.roster), met, NOW, config.policy);
     expect(states.find((st) => st.name === "local")!.eligible).toEqual(["e90"]);
     const plan = planTick(config, states, () => undefined, "20260101");
@@ -3421,6 +3428,7 @@ describe("account affinity and cross-account name hygiene", () => {
   const fact = (model: string, over: Partial<RunFact> = {}): RunFact => ({
     runId: `${model}-${over.startedAt ?? 0}`,
     model,
+    ...launchRouting(model, over.effort),
     effort: null,
     episode: "e90",
     episodeOverride: false,
@@ -4195,6 +4203,7 @@ describe("a queue job's repeat is met by counted runs on disk, not by the superv
   const run = (runId: string, over: Partial<RunFact> = {}): RunFact => ({
     runId,
     model: "stealth/ox-alpha:free",
+    ...launchRouting(over.model ?? "stealth/ox-alpha:free", over.effort),
     effort: null,
     episode: "e360",
     episodeOverride: false,

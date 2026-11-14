@@ -67,7 +67,8 @@ import { parseSubscriptionUsage, type SubscriptionUsage } from "./subscription-u
 import { billingOf, type Billing } from "./model-cost";
 import { credentialCarries, providerById, providerOfModel, type Credential } from "./credential-slots";
 import { hostOfBase, isOpenCodeGoBase, platformOfBase } from "./platform";
-import { parseRouting, type RoutingSpec } from "./routing";
+import { parseRouting, routingForRun, routingSchema, type RoutingSpec } from "./routing";
+import { DEFAULT_API_BASE } from "./providers";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { HEARTBEAT_DEAD_MS, HEARTBEAT_FILE, heartbeatAt, heartbeatOwner } from "./trajectory";
 import { RunFactCache } from "./run-fact-cache";
@@ -464,6 +465,10 @@ export interface RosterModel {
   /** A local build's serving block (`serving.ts`); absent on a hosted entry. Identity, like effort. */
   serving?: ServingSpec;
   apiBase?: string;
+  /** The routing block the entry declares, the fleet's default folded in (`routing.ts`); a target counts only runs routed as it now would be. */
+  routing?: RoutingSpec;
+  /** False when the entry runs without the reference wiki; a target counts only runs with its wiki. */
+  wiki?: boolean;
   /**
    * How much evidence this model gets (`TIER_TABLE`). Required: with a default,
    * adding a model and forgetting the field quietly buys a full budget, and for
@@ -604,6 +609,10 @@ export interface RunFact {
    */
   loop?: "program";
   yield?: true;
+  /** The routing the run stamped (`comparability.routing`); absent when it stated none. */
+  routing?: RoutingSpec;
+  /** False when the run had no reference wiki (`comparability.wiki`); absent when it had it. */
+  wiki?: false;
   /**
    * The local build the run stated (`comparability.serving`), or null when it
    * stated none. Always set by `readRunFact`, so a roster entry's own build
@@ -796,6 +805,10 @@ export interface ModelState {
   compactWindow?: string;
   /** The entry's local build (`RosterModel.serving`); absent on a hosted entry. */
   serving?: ServingSpec;
+  /** What the entry launches with, for `countsTowardTarget`: its base, routing and wiki (`RosterModel`). */
+  apiBase?: string;
+  routing?: RoutingSpec;
+  wiki?: boolean;
   platform: string | null;
   /**
    * The credential provider its runs are served through (`providerOfModel`,
@@ -1452,7 +1465,7 @@ function readRunReading(
       world?: unknown;
       watchdogs?: { episodeMs?: unknown; idleMs?: unknown };
     };
-    comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown; compactWindow?: unknown; loop?: unknown; yield?: unknown; serving?: unknown };
+    comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown; compactWindow?: unknown; loop?: unknown; yield?: unknown; serving?: unknown; routing?: unknown; wiki?: unknown };
     pause?: { reason?: unknown; at?: unknown; episodeElapsedMs?: unknown; notBefore?: unknown };
     subscriptionUsage?: unknown;
     credentialOverage?: { at?: unknown };
@@ -1485,6 +1498,9 @@ function readRunReading(
     ...(meta.comparability?.loop === "program" ? { loop: "program" as const } : {}),
     ...(meta.comparability?.yield === true ? { yield: true as const } : {}),
     serving: servingOfMeta(meta.comparability?.serving),
+    // The rest of the condition a target compares (`countsTowardTarget`): only when stamped.
+    ...(routingOfMeta(meta.comparability?.routing) !== null ? { routing: routingOfMeta(meta.comparability?.routing)! } : {}),
+    ...(meta.comparability?.wiki === false ? { wiki: false as const } : {}),
     extra: meta.config?.extra === true,
     startedAt: num(meta.startedAt) ?? 0,
     endedAt: null,
@@ -1996,17 +2012,53 @@ export function staleForMs(f: Parameters<typeof isStaleRun>[0], now: number): nu
   return isStaleRun(f, now) ? now - lastActivityOf(f) : null;
 }
 
+/** A stamped routing block, or null when there is none to read. */
+function routingOfMeta(raw: unknown): RoutingSpec | null {
+  const parsed = routingSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
+/** Keys sorted, so two equal routing blocks compare equal however they were spelled. */
+function routingKey(r: RoutingSpec | null | undefined): string {
+  if (r == null) return "";
+  return JSON.stringify(Object.fromEntries(Object.entries(r).filter(([, v]) => v !== undefined).sort(([a], [b]) => (a < b ? -1 : 1))));
+}
+
+/** What an entry launches a run as, for `countsTowardTarget`. Absent fields are the defaults. */
+export interface TargetEntry {
+  driver?: string | undefined;
+  model?: string | undefined;
+  effort?: string | null | undefined;
+  apiBase?: string | undefined;
+  routing?: RoutingSpec | undefined;
+  wiki?: boolean | undefined;
+}
+
 /**
- * Whether a counted run counts toward its roster entry's target: it ran the
- * loop, and the `yield`, the entry now launches (`defaultLoopOf`), as its
- * tuple stamped them (operator, 2026-11-14). A run of the other loop is
- * another condition, not a copy of this one, so it neither fills a target
- * nor is owed a rerun; the series is unchanged by it. Pure.
+ * Whether a counted run counts toward its roster entry's target: it is the
+ * condition the entry launches now (operator, 2026-11-14) — the loop and
+ * `yield` its driver defaults to (`defaultLoopOf`), the routing a launch of it
+ * would stamp (`routingForRun`, the fleet's default already folded into the
+ * entry), and its wiki — as its tuple stamped them. Effort, window and a local
+ * build are the entry's identity already (`entryOwnsRun`), and the series is
+ * `inSeries`'s. A run of another condition is not a copy of this one, so it
+ * neither fills a target nor is owed a rerun; the prompt hash is not compared,
+ * since a patch within the series moves it. Pure.
  */
-export function countsTowardTarget(f: Pick<RunFact, "loop" | "yield">, driver: string | undefined): boolean {
-  const d = defaultLoopOf({ driver: driver !== undefined && isDriver(driver) ? driver : DEFAULT_DRIVER });
+export function countsTowardTarget(f: Pick<RunFact, "loop" | "yield" | "routing" | "wiki">, entry: TargetEntry): boolean {
+  const driver = entry.driver !== undefined && isDriver(entry.driver) ? entry.driver : DEFAULT_DRIVER;
+  const d = defaultLoopOf({ driver });
   const program = d.loop === "program";
-  return (f.loop === "program") === program && (f.yield === true) === (program && d.yield);
+  if ((f.loop === "program") !== program || (f.yield === true) !== (program && d.yield)) return false;
+  if ((f.wiki !== false) !== (entry.wiki !== false)) return false;
+  const apiBase = entry.apiBase ?? (driverEntry(driver)?.endpoint === true ? DEFAULT_API_BASE : undefined);
+  const expected = routingForRun({
+    apiBase,
+    ...(entry.model !== undefined ? { model: entry.model } : {}),
+    ...(entry.effort != null ? { effort: entry.effort } : {}),
+    ...(entry.routing !== undefined ? { routing: entry.routing } : {}),
+  });
+  return routingKey(f.routing) === routingKey(expected);
 }
 
 export function isCounted(f: RunFact): boolean {
@@ -2241,7 +2293,7 @@ export function partyAttempts(facts: readonly RunFact[]): RunFact[][] {
  * next, and neither counts nor cools. Levels and last verdicts read the
  * member runs as they are.
  */
-function tallyParties(stats: EpisodeStats, all: readonly RunFact[], mine: readonly RunFact[], driver: string | undefined, policy: SchedulingPolicy): void {
+function tallyParties(stats: EpisodeStats, all: readonly RunFact[], mine: readonly RunFact[], entry: TargetEntry, policy: SchedulingPolicy): void {
   stats.attempts = partyAttempts(all).length;
   for (const members of partyAttempts(mine)) {
     const verdict = partyAttempt(
@@ -2251,7 +2303,7 @@ function tallyParties(stats: EpisodeStats, all: readonly RunFact[], mine: readon
         cell: null,
         ref: null,
         arm: null,
-        counted: isCounted(f) && countsTowardTarget(f, driver),
+        counted: isCounted(f) && countsTowardTarget(f, entry),
         live: f.live || f.pause !== null,
         party: f.party == null ? null : { id: f.party.id, size: f.party.size },
         terminationReason: f.terminationReason,
@@ -2324,7 +2376,7 @@ export function projectModel(
     // 2026-11-14): five members are one attempt and one count, and the
     // cooling walk takes one rung for it, however many met a refusal.
     if (isPartyEpisode(ep)) {
-      tallyParties(stats, all.filter((f) => f.episode === ep), mine.filter((f) => f.episode === ep), r.driver, policy);
+      tallyParties(stats, all.filter((f) => f.episode === ep), mine.filter((f) => f.episode === ep), r, policy);
       perEpisode[ep] = stats;
       continue;
     }
@@ -2333,7 +2385,7 @@ export function projectModel(
       if (f.episode !== ep) continue;
       if (f.extra) stats.extras++;
       if (stillbornOf(f) === true) stats.stillborn++;
-      if (isCounted(f) && countsTowardTarget(f, r.driver)) {
+      if (isCounted(f) && countsTowardTarget(f, r)) {
         stats.counted++;
         if (f.bestLevel !== null && f.bestLevel >= policy.promoteAtLevel) stats.reachedL5 = true;
       }
@@ -2406,6 +2458,9 @@ export function projectModel(
     effort: r.effort ?? null,
     ...(r.compactWindow !== undefined ? { compactWindow: r.compactWindow } : {}),
     ...(r.serving !== undefined ? { serving: r.serving } : {}),
+    ...(r.apiBase !== undefined ? { apiBase: r.apiBase } : {}),
+    ...(r.routing !== undefined ? { routing: r.routing } : {}),
+    ...(r.wiki !== undefined ? { wiki: r.wiki } : {}),
     platform: platformOf(r.apiBase, r.driver),
     provider: providerOfModel(r),
     harness: harnessOf(driverOf(r)),
