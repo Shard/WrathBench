@@ -208,3 +208,15 @@ test("a refused task launch is a CampaignLaunchError", () => {
     expect(err).toBeInstanceOf(CampaignLaunchError);
   }
 });
+
+describe("the public projection, until the board is published", () => {
+  test("leaves the task episodes out of the scheduler's words, keeping a list of nothing else whole", async () => {
+    const { withoutTaskEpisodes } = await import("../viewer/public-projection");
+    expect(withoutTaskEpisodes("schedulable on e90, e360, deadmines-solo")).toBe("schedulable on e90, e360");
+    expect(withoutTaskEpisodes("targets met on e90, e360, deadmines-solo, deadmines — unlimited sessions while its account is idle")).toBe(
+      "targets met on e90, e360 — unlimited sessions while its account is idle",
+    );
+    expect(withoutTaskEpisodes("schedulable on deadmines-solo")).toBe("schedulable on deadmines-solo");
+    expect(withoutTaskEpisodes("cooling until 12:00")).toBe("cooling until 12:00");
+  });
+});
