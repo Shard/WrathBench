@@ -268,9 +268,9 @@ export function campaignPairRefusals(
           reasons.push(`arm ${arm.id} sets --compact-window ${window}, and roster entry ${a.model} already sets compactWindow ${entry.compactWindow} — assign an entry with no window`);
         }
       }
-      // The program loop (`--loop program`) runs on the fixed loop and codex
-      // (`runsProgramLoop`), which the other scaffolds and a route driver are
-      // not; `--yield` is a setting of it. Refused here as `programLoopRefusal`
+      // The program loop (`--loop program`) runs on the fixed loop,
+      // claude-code and codex (`runsProgramLoop`), which pi and a route
+      // driver are not; `--yield` is a setting of it. Refused here as `programLoopRefusal`
       // refuses at launch.
       const loop = armArg(arm, "loop");
       const yieldOn = armArg(arm, "yield");

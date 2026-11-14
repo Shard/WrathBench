@@ -172,7 +172,7 @@ import type { EpisodicLog } from "./episodic";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "@wrathbench/mcp";
 import type { Trajectory } from "./trajectory";
-import { WAKE_CAP_MS, type ProgramWake } from "./wake";
+import { PROGRAM_TOOL_TIMEOUT_MS, WAKE_CAP_MS, type ProgramWake } from "./wake";
 import type { Watchdogs } from "./watchdogs";
 
 // ------------------------------------------------------------------ effort
@@ -528,8 +528,8 @@ export interface CodexEpisodeOptions {
   programWake?: ProgramWake | undefined;
 }
 
-/** The program loop's MCP tool timeout: above the longest `yield` hold. */
-export const PROGRAM_TOOL_TIMEOUT_SEC = 600;
+/** The program loop's MCP tool timeout, in the seconds the CLI takes: above the longest `yield` hold (`PROGRAM_TOOL_TIMEOUT_MS`). */
+export const PROGRAM_TOOL_TIMEOUT_SEC = PROGRAM_TOOL_TIMEOUT_MS / 1000;
 
 export const DEFAULT_WIND_DOWN_GRACE_MS = 90_000;
 

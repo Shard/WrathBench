@@ -51,6 +51,12 @@ export const PROGRAM_DIR = "program";
 
 /** The longest one sleep lasts, turn-end or `yield`: five minutes. A constant, not a knob. */
 export const WAKE_CAP_MS = 300_000;
+/**
+ * A CLI scaffold's MCP tool timeout on the program loop: twice the longest
+ * `yield` hold, so a held call, and a call queued behind it on the one
+ * serialised connection, both answer before the CLI gives up on them.
+ */
+export const PROGRAM_TOOL_TIMEOUT_MS = 2 * WAKE_CAP_MS;
 /** The window the first wake reason opens, so a cascade (a restart and the ends it caused) is one wake. */
 export const WAKE_COALESCE_MS = 2_000;
 /** How often a sleep looks at its reasons: a wake is never later than this. */
