@@ -1270,8 +1270,9 @@ writes its loop into the config (`loop`, `launchLoopOf`): `--loop` and
 | Driver | Default | Why |
 |---|---|---|
 | `openai` (the fixed loop) | `program`, `yield` on | the one form that sleeps on the fixed loop |
+| `claude-code` | `program`, `yield` on | its one turn can run for hours, so `yield` is its sleep within it |
 | `codex` | `program`, `yield` off | as measured; its turn-end pause is the sleep |
-| `claude-code`, `pi` | `snippet` | their one turn runs for hours; their program adapters are not built |
+| `pi` | `snippet` | its adapter has no sleep yet |
 | `stub`, `reference` | `snippet` | not a model; the reference's route needs bindings that persist |
 | any driver at fan-out | `snippet` | the program loop is not built for several characters yet |
 
@@ -1282,10 +1283,10 @@ unnamed episode on it is refused at launch and again on resume
 config stored before the loop was written down has none, and was the snippet
 loop. Scored episodes are refused on the program loop too, until a
 long-clock program-loop run has been read. The program loop itself is
-refused off the fixed loop and codex, on a route driver and at fan-out
+refused on pi, on a route driver and at fan-out
 (`programLoopRefusal`, `DriverEntry.programLoop`; a campaign pair is refused
-the same way). Together these mean claude-code and pi run only as probe
-campaign squares for now.
+the same way). Together these mean pi runs only as probe campaign squares
+for now.
 
 A `--continue-from` on the program loop carries the predecessor's
 `program/files/`, `memory.json` among them, and not its versions or registry
@@ -1320,10 +1321,10 @@ many lines). A routine's error or returned value is shown whole once; a later
 routine line refers to it (`(value shown before)`). The stack's program host
 keeps that ledger for its own tool results and the wake alike; a wake marks
 what it showed only when its block stays in the conversation (a `yield`
-result, a codex turn's message, not the fixed loop's turn-end message), and
-the ledger is cleared when the conversation lost it (a codex compaction or
-thread change, a fixed-loop trim, a routine result the fixed loop's window
-cut) and in a new process. After a
+result, a CLI turn's message, not the fixed loop's turn-end message), and
+the ledger is cleared when the conversation lost it (a CLI compaction, a
+codex thread change or a new claude-code session, a fixed-loop trim, a
+routine result the fixed loop's window cut) and in a new process. After a
 turn-end sleep it opens every request of that wake, right after `[turn N]`;
 after a `yield` it is the tool's result and is not repeated. What the model
 has already been told wakes no later sleep, and still shows in the next wake:
@@ -1336,22 +1337,31 @@ showed as over or replaced. `read_file` and `yield` results are exempt from
 the window's 4,000-character message cap (`WINDOW_UNCAPPED_TOOLS`): a file is
 bounded by the 32,000-character file cap, and a wake by its own caps.
 
-On codex the CLI ends its turn every few calls, so the pause after each turn
-is the sleep, and the wake opens the next turn's message; `yield` is held on
-the MCP call, under a tool timeout of 600 s rather than 300 s
-(`PROGRAM_TOOL_TIMEOUT_SEC`). Either sleep also ends on a stop request or a
-watchdog verdict.
+On the CLI drivers the pause after each turn is the sleep, and the wake
+opens the next turn's message; `yield` is held on the MCP call, under a tool
+timeout of 600 s (`PROGRAM_TOOL_TIMEOUT_MS`: codex's `tool_timeout_sec`
+rather than its 300 s default, claude-code's `MCP_TOOL_TIMEOUT` in the
+child's environment, on the program loop only, recorded on the `driver`
+record as `mcpToolTimeoutMs`). codex ends its turn every few calls, so its
+turn-end sleep fires often. claude-code's CLI closes a turn only when the
+model replies with no tool call, and one turn can run for hours, so there
+`yield` is the usual sleep. Either sleep also ends on a stop request or a
+watchdog verdict, and on claude-code the state ticker counts a restart the
+program was blamed for at its next sample rather than at the next turn.
 
-A codex thread keeps what it was sent, so on the program loop its turn
-messages follow a thread context (`ThreadContext`, `threadContextOf`); the
-snippet loop and the fixed loop never do. The scratchpad goes whole only when
-the thread does not already hold it as it stands (`PadSeen`): the first
+A CLI session keeps what it was sent, so on the program loop the CLI
+drivers' turn messages follow a thread context (`ThreadContext`,
+`threadContextOf`); the snippet loop and the fixed loop never do. The
+scratchpad goes whole only when the thread does not already hold it as it
+stands (`PadSeen`): the first
 message of a thread, the first after a compaction or a turn whose rollout
 could not be read, and any after the pad changed outside the conversation (a
 snippet's or a routine's write); after the model's own `write_scratchpad` or
 `edit_scratchpad` the thread holds it, and a line with its size stands in its
-place. The event window goes whole on every message. A resumed run's thread
-is new, so its first message is plain. The message that reaches a thread the
+place. The event window goes whole on every message. On claude-code the
+reset comes at the `compact_boundary` envelope itself, since one turn may
+hold several compactions, and at a `session_id` other than the one before. A
+resumed run's thread is new, so its first message is plain. The message that reaches a thread the
 CLI moved to unannounced is the one meant for the old thread: the CLI names
 its thread only once the turn has started.
 

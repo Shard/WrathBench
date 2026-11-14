@@ -70,7 +70,7 @@ describe("config, flags and the tuple", () => {
     expect(tSnippet.promptHash).toBe(promptHash(SYSTEM_PROMPT));
   });
 
-  test("the default loop: the program loop with yield on the fixed loop, without it on codex, the snippet loop elsewhere", () => {
+  test("the default loop: the program loop with yield on the fixed loop and claude-code, without it on codex, the snippet loop elsewhere", () => {
     const MODEL = ["--run-id", "r1", "--token", "tok-aaaaaaaaaaaaaaaaaaaaaa", "--module-url", "http://x", "--model", "m"];
     const openai = configFromArgs([...MODEL, "--driver", "openai", "--episode", "freeplay"], {});
     expect([openai.loop, openai.yield]).toEqual(["program", true]);
@@ -80,7 +80,7 @@ describe("config, flags and the tuple", () => {
     expect([codex.loop, codex.yield]).toEqual(["program", undefined]);
     expect(comparabilityOf(codex, "harness-1.0-1-gabc").loop).toBe("program");
     const cc = configFromArgs([...MODEL, "--driver", "claude-code", "--episode", "freeplay"], {});
-    expect([cc.loop, cc.yield]).toEqual(["snippet", undefined]);
+    expect([cc.loop, cc.yield]).toEqual(["program", true]);
     expect(defaultLoopOf({ driver: "pi" })).toEqual({ loop: "snippet", yield: false });
     expect(defaultLoopOf({ driver: "reference" })).toEqual({ loop: "snippet", yield: false });
     // Fan-out runs the snippet loop until the program loop is built for it.
@@ -99,7 +99,8 @@ describe("config, flags and the tuple", () => {
       }
       expect(loopLaunchRefusal({ loop: "snippet", driver, episode: "probing" })).toBeNull();
     }
-    expect(loopLaunchRefusal({ loop: "snippet", driver: "claude-code", episode: "freeplay" })).toContain("runs only the snippet loop for now");
+    expect(loopLaunchRefusal({ loop: "snippet", driver: "pi", episode: "freeplay" })).toContain("runs only the snippet loop for now");
+    expect(loopLaunchRefusal({ loop: "snippet", driver: "claude-code", episode: "freeplay" })).toContain("runs the program loop (--loop program)");
     expect(loopLaunchRefusal({ loop: "program", driver: "openai", episode: "freeplay" })).toBeNull();
     expect(loopLaunchRefusal({ loop: "program", driver: "codex", episode: undefined })).toBeNull();
     for (const episode of ["e90", "e360"] as const) expect(loopLaunchRefusal({ loop: "program", driver: "openai", episode })).toContain("scored episodes do not run yet");
@@ -125,14 +126,16 @@ describe("config, flags and the tuple", () => {
       }
     };
     expect(refused(["--driver", "stub", "--yield", "true"])).toContain("needs --loop program");
-    expect(refused(["--driver", "claude-code", "--loop", "program"])).toContain("runs a CLI's own turn loop");
+    expect(refused(["--driver", "pi", "--loop", "program"])).toContain("runs a CLI's own turn loop");
     expect(refused(["--driver", "stub", "--loop", "program", "--max-characters", "2", "--accounts", "ALPHA,BRAVO", "--episode", "freeplay"])).toMatch(/drives one character|fan-out/);
     expect(refused(["--driver", "stub", "--loop", "nope"])).toContain("--loop takes program or snippet");
     // A continuation runs it: its files and memory come along (`carryProgramFiles`).
     expect(programLoopRefusal({ loop: "program", driver: "openai", episode: "freeplay", fanout: undefined })).toBeNull();
     expect(programLoopRefusal({ loop: "program", driver: "openai", episode: "probing" })).toBeNull();
-    // codex runs it (its turn-end pause is the sleep); pi and claude-code, whose one turn runs for hours, do not yet.
+    // codex and claude-code run it (the turn-end pause is the sleep, and yield inside a turn); pi does not yet.
     expect(programLoopRefusal({ loop: "program", yield: true, driver: "codex", episode: "probing" })).toBeNull();
+    expect(programLoopRefusal({ loop: "program", yield: true, driver: "claude-code", episode: "probing" })).toBeNull();
+    expect(programLoopRefusal({ loop: "program", driver: "claude-code", episode: "probing" })).toBeNull();
     expect(programLoopRefusal({ loop: "program", driver: "pi", episode: "probing" })).toContain("runs a CLI's own turn loop");
     expect(programLoopRefusal({ loop: "snippet", driver: "openai", episode: "e90" })).toBeNull();
   });
@@ -158,18 +161,23 @@ describe("config, flags and the tuple", () => {
     expect(parseRunArgs(["--loop", "program", "--yield", "true"])).toEqual({ loop: "program", yield: "true" });
   });
 
-  test("a campaign pair refuses the program loop on a scaffold, and --yield where the arm runs the snippet loop", () => {
-    const roster: Record<string, PairRosterEntry> = { ds: { driver: "openai" }, cc: { driver: "claude-code" }, cx: { driver: "codex" } };
+  test("a campaign pair refuses the program loop on pi, and --yield where the arm runs the snippet loop", () => {
+    const roster: Record<string, PairRosterEntry> = { ds: { driver: "openai" }, cc: { driver: "claude-code" }, cx: { driver: "codex" }, pi: { driver: "pi" } };
     const arms = [
       { id: "snippet" },
       { id: "program", args: ["--loop", "program"] },
       { id: "program-yield", args: ["--loop", "program", "--yield", "true"] },
       { id: "stray", args: ["--yield", "true"] },
     ];
-    const c = { name: "program-probe", version: 1, arms, assignments: [{ model: "ds", runsPerCell: 1 }, { model: "cc", runsPerCell: 1 }, { model: "cx", runsPerCell: 1 }] };
+    const c = {
+      name: "program-probe",
+      version: 1,
+      arms,
+      assignments: [{ model: "ds", runsPerCell: 1 }, { model: "cc", runsPerCell: 1 }, { model: "cx", runsPerCell: 1 }, { model: "pi", runsPerCell: 1 }],
+    };
     const out = campaignPairRefusals(c, roster).map((r) => `${r.ref}:${r.arm}`);
-    // `--yield` alone is the program loop's on the drivers that run it by default; claude-code runs the snippet loop.
-    expect(out.sort()).toEqual(["cc:program", "cc:program-yield", "cc:stray"]);
+    // `--yield` alone is the program loop's on the drivers that run it by default; pi runs the snippet loop.
+    expect(out.sort()).toEqual(["pi:program", "pi:program-yield", "pi:stray"]);
   });
 });
 

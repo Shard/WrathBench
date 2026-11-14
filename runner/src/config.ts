@@ -756,11 +756,11 @@ export const runConfigSchema = z.object({
    * code in a file workspace rooted at `main.ts`, whose exported functions
    * are routines the harness runs and tracks, and it sleeps between wakes
    * (`wake.ts`). `snippet`: the persistent-snippet loop, kept as a probe
-   * campaign's legacy arm (`snippetLoopRefusal`). Written at every launch
+   * campaign's legacy arm (`loopLaunchRefusal`). Written at every launch
    * (`launchLoopOf`); ABSENT on a config stored before it was, which was the
-   * snippet loop. The program loop runs on the fixed loop and codex only,
-   * never yet a scored tier or fan-out (`programLoopRefusal`). Identity: a
-   * resume keeps it.
+   * snippet loop. The program loop runs on the fixed loop, claude-code and
+   * codex, never yet a scored tier or fan-out (`programLoopRefusal`).
+   * Identity: a resume keeps it.
    */
   loop: z.enum(["program", "snippet"]).optional(),
   /**
@@ -1006,9 +1006,8 @@ export function loadRunConfig(raw: unknown): RunConfig {
 
 /**
  * Whether a driver's loop runs the program loop: the fixed loop, and a
- * scaffold the registry says does (`DriverEntry.programLoop`: codex, whose
- * end-of-turn pause becomes the sleep). claude-code and pi, whose one turn
- * runs for hours, do not yet.
+ * scaffold the registry says does (`DriverEntry.programLoop`: claude-code and
+ * codex, whose end-of-turn pause becomes the sleep). pi does not yet.
  */
 export function runsProgramLoop(driver: Driver): boolean {
   return entryOf(driver).kind === "loop" || entryOf(driver).programLoop === true;
@@ -1016,15 +1015,26 @@ export function runsProgramLoop(driver: Driver): boolean {
 
 /**
  * The loop a fresh launch runs when it does not say (operator, 2026-11-14):
- * the program loop wherever it is built — the fixed loop with `yield`, codex
- * without — and the snippet loop on the drivers that are not a model (the
- * stub and the scripted reference, `isUnscoredDriver`), on claude-code and
- * pi until their program adapters exist, and at fan-out until the program
- * loop is built for it.
+ * the program loop wherever it is built — the fixed loop and claude-code
+ * with `yield`, codex without (`yieldDefaultOf`) — and the snippet loop on
+ * the drivers that are not a model (the stub and the scripted reference,
+ * `isUnscoredDriver`), on pi until its program adapter exists, and at
+ * fan-out until the program loop is built for it.
  */
 export function defaultLoopOf(c: { driver: Driver; fanout?: unknown }): { loop: "program" | "snippet"; yield: boolean } {
   if (isUnscoredDriver(c.driver) || c.fanout !== undefined || !runsProgramLoop(c.driver)) return { loop: "snippet", yield: false };
-  return { loop: "program", yield: entryOf(c.driver).kind === "loop" };
+  return { loop: "program", yield: yieldDefaultOf(c.driver) };
+}
+
+/**
+ * Whether the program loop has `yield` on a driver when a launch does not
+ * say (operator, 2026-11-14): on the fixed loop, whose turn-end sleep alone
+ * never slept, and on claude-code, whose one turn can run for hours so
+ * `yield` is its sleep within it; off on codex, which ends a turn every few
+ * calls and was measured without it. Never on a driver that is not a model.
+ */
+export function yieldDefaultOf(driver: Driver): boolean {
+  return runsProgramLoop(driver) && !isUnscoredDriver(driver) && driver !== "codex";
 }
 
 /**
@@ -1038,14 +1048,14 @@ export function launchLoopOf(
 ): { loop: "program" | "snippet"; yield?: true } {
   const d = defaultLoopOf(c);
   const loop = asked.loop ?? d.loop;
-  const yieldOn = asked.yield ?? (loop === "program" && entryOf(c.driver).kind === "loop" && !isUnscoredDriver(c.driver));
+  const yieldOn = asked.yield ?? (loop === "program" && yieldDefaultOf(c.driver));
   return { loop, ...(yieldOn ? { yield: true as const } : {}) };
 }
 
 /**
- * Why a config's program loop cannot run as stated, or null. The fixed loop
- * and codex run it (`runsProgramLoop`), the other scaffolds' own turn loops
- * do not yet, a route driver plays no model, and one agent driving several
+ * Why a config's program loop cannot run as stated, or null. The fixed loop,
+ * claude-code and codex run it (`runsProgramLoop`), pi's own turn loop does
+ * not yet, a route driver plays no model, and one agent driving several
  * characters is a later step. `yield` is a setting of the program loop and
  * means nothing without it. Which episodes may launch at all is
  * `loopLaunchRefusal`'s.
@@ -1053,7 +1063,7 @@ export function launchLoopOf(
 export function programLoopRefusal(c: Pick<RunConfig, "loop" | "yield" | "driver" | "episode" | "fanout">): string | null {
   if (c.loop !== "program") return c.yield === true ? "--yield is a setting of the program loop; it needs --loop program" : null;
   const entry = entryOf(c.driver);
-  if (!runsProgramLoop(c.driver)) return `--loop program runs on the fixed loop and codex; the ${c.driver} driver runs a CLI's own turn loop`;
+  if (!runsProgramLoop(c.driver)) return `--loop program runs on the fixed loop, claude-code and codex; the ${c.driver} driver runs a CLI's own turn loop`;
   if (entry.route === true) return `--loop program drives a model; the ${c.driver} driver plays a scripted route`;
   if (c.fanout !== undefined) return "--loop program drives one character; fan-out is not built for it";
   return null;
@@ -1087,12 +1097,12 @@ export function loopLaunchRefusal(c: Pick<RunConfig, "loop" | "driver" | "episod
 
 /**
  * Whether a driver keeps a scaffold's thread context (`ThreadContext`,
- * context.ts): a scaffold whose CLI ends a turn every few calls, so a fresh
- * message with the HUD, the events and the pad goes to the same thread many
- * times a run. That is codex (`DriverEntry.programLoop`). claude-code and pi
- * run one turn for hours, so a fresh message comes once or twice a run and
- * the rule would save nothing; the fixed loop rebuilds its window each turn
- * and holds no thread.
+ * context.ts): a scaffold that runs the program loop (`DriverEntry.programLoop`:
+ * claude-code and codex), where a fresh message with the HUD, the events and
+ * the pad goes to the same conversation after every turn-end sleep. codex
+ * ends a turn every few calls; claude-code's turn can run for hours between
+ * `yield`s, and the rule holds there the same way. The fixed loop rebuilds
+ * its window each turn and holds no thread.
  */
 export function keepsThreadContext(driver: Driver): boolean {
   const entry = entryOf(driver);

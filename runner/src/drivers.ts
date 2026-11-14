@@ -165,10 +165,12 @@ export interface DriverEntry {
    */
   route?: boolean;
   /**
-   * A scaffold that runs the program loop (`loop: "program"`):
-   * its CLI ends a turn every few calls, so the pause after each turn
-   * becomes the sleep (`adapter-codex.ts`). Absent on the scaffolds whose one
-   * turn runs for hours; the fixed loop runs it whatever this says.
+   * A scaffold that runs the program loop (`loop: "program"`): the pause
+   * after each turn becomes the sleep, and `yield` sleeps inside a turn
+   * (`adapter-codex.ts`, `adapter-claude.ts`). codex ends a turn every few
+   * calls; claude-code's one turn can run for hours, so `yield` is its usual
+   * sleep. Absent on pi, whose adapter has no sleep yet; the fixed loop runs
+   * it whatever this says.
    */
   programLoop?: true;
   /** Whether a roster entry may name it. */
@@ -293,6 +295,7 @@ export const DRIVER_TABLE = {
     id: "claude-code",
     harness: "claude-code",
     kind: "scaffold",
+    programLoop: true,
     roster: true,
     sessionCap: true,
     endpoint: false,

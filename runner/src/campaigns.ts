@@ -270,7 +270,7 @@ export function campaignPairRefusals(
       }
       // The arm's loop as its launch resolves it (`launchLoopOf`): `--loop`
       // and `--yield` when it sets them, else the driver's default. The
-      // program loop runs on the fixed loop and codex (`runsProgramLoop`),
+      // program loop runs on the fixed loop, claude-code and codex (`runsProgramLoop`),
       // drives one character, and plays no route; `--yield` is a setting of
       // it. Refused here as `programLoopRefusal` refuses at launch.
       const d = entry.driver ?? DEFAULT_DRIVER;
