@@ -1270,7 +1270,7 @@ describe("entryKeyOf — the key a row, a pin and a line agree on", () => {
 
   test("the loop, the routing and the wiki each split a row; the prompt hash does not", () => {
     const base = { model: "m", maxLevel: 3, harnessSeries: "0.5", episode: "e90" as const };
-    const cond = (id: string, over: Partial<RunCondition> = {}): RunCondition => ({ id, loop: "snippet", yield: false, pinned: true, wiki: true, ...over });
+    const cond = (id: string, over: Partial<RunCondition> = {}): RunCondition => ({ id, loop: "snippet", yield: false, pinned: true, wiki: true, subject: "hosted", ...over });
     const runs = [
       run({ ...base, runId: "a", promptHash: "sha256:a", condition: cond("x") }),
       run({ ...base, runId: "b", promptHash: "sha256:b", condition: cond("x") }),

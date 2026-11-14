@@ -323,7 +323,7 @@ describe("currentModels", () => {
 });
 
 describe("the condition rules", () => {
-  const cond = (id: string, over: Partial<RunCondition> = {}): RunCondition => ({ id, loop: "snippet", yield: false, pinned: true, wiki: true, ...over });
+  const cond = (id: string, over: Partial<RunCondition> = {}): RunCondition => ({ id, loop: "snippet", yield: false, pinned: true, wiki: true, subject: "hosted", ...over });
   const r = (runId: string, model: string, startedAt: number, condition: RunCondition, unscored: string | null = null): ResultRun =>
     ({ runId, model, startedAt, condition, unscored, harnessSeries: "0.5", episode: "e90", effort: null, harness: "wrathbench" }) as unknown as ResultRun;
   const snippetLow = cond("s-low");
