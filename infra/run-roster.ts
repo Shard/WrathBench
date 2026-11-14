@@ -90,7 +90,7 @@ import { PARTY_END_GRACE_MS, writeEndRequest } from "../runner/src/end-request";
 import { runParty, type MemberVerdict, type PartyMemberRun } from "./party-fate";
 import { commandStager, STAGER_SCRIPT, type PartyStager, type StagedGuid, type StageRequest } from "./party-stager";
 import { parseWorldsMode, type WorldsMode } from "../runner/src/models";
-import { DEFAULT_SOAP_PORT, loadWorldLauncher, moduleUrlOfRun, readWorldPointer, stagingEnvOf, worldFateOf, worldUsedBy, type WorldLauncher } from "./world";
+import { DEFAULT_SOAP_PORT, loadWorldLauncher, moduleUrlOfRun, readWorldPointer, removeWorldPointer, stagingEnvOf, worldFateOf, worldUsedBy, type WorldLauncher } from "./world";
 
 // ------------------------------------------------------------------ types
 
@@ -2040,7 +2040,11 @@ export async function openWorld(
     const r = await launcher.resume(ids[0]!);
     return r.ok ? { world: { id: r.id, url: r.url } } : { refused: r.reason };
   }
-  if (!specs.some((s) => worldUsedBy(deps.mode, s.episode))) return { world: undefined };
+  if (!specs.some((s) => worldUsedBy(deps.mode, s.episode))) {
+    // On the shared world: a pointer a launch that never came up left behind would route this run's session release elsewhere.
+    for (const d of dirs) removeWorldPointer(d);
+    return { world: undefined };
+  }
   const launcher = deps.launcher();
   if ("error" in launcher) return { refused: `no world for a ${specs[0]!.episode} attempt: ${launcher.error}` };
   const accounts = specs.flatMap((s) => specAccounts(s).map((a) => (a ?? "RUNNER").toUpperCase()));
@@ -2056,7 +2060,8 @@ async function settleWorld(world: ActiveWorld | undefined, runIds: readonly stri
   const fate = worldFateOf(runIds.map((id) => runDir(id)));
   try {
     if (fate === "end") await launcher.end(world.id, why);
-    else await launcher.park(world.id, why);
+    // Stopping: the fleet pod's grace is the limit, and the GC and the next reconcile see the pod go.
+    else await launcher.park(world.id, why, { noWait: stopping });
   } catch (e) {
     say(`world ${world.id}: could not be ${fate === "end" ? "ended" : "parked"} — ${e instanceof Error ? e.message : String(e)}; the reconcile settles it`);
   }

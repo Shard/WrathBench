@@ -206,7 +206,7 @@ import { formatEndedRun, printDryRun, printLiveRuns, printStatus } from "./run-f
 import { accountHeldBy, drainMarkerPath, releaseRunSession } from "./run-roster";
 import { K8sClient } from "./k8s-client";
 import { DRAIN_POD_QUERY_TIMEOUT_MS, readLauncherSettings, rosterHasRunPod } from "./run-pod";
-import { mysqlWorldDb, reconcileWorlds, worldPodPrefix, worldsHold, worldUsedBy, WorldStore, WORLDS_DIR } from "./world";
+import { mysqlWorldDb, reconcileWorlds, worldPodPrefix, worldPodRelease, worldsHold, worldTemplateRefusal, worldUsedBy, WorldStore, WORLDS_DIR } from "./world";
 import { runCampaignFile, writeCampaignFile } from "../runner/src/campaign-file";
 import { deleteCodexThread, pruneRollouts, type RolloutPrune } from "../runner/src/codex-rollout";
 import { cliBaseEnv } from "../runner/src/adapter-shared";
@@ -385,6 +385,7 @@ async function runWorldsReconcile(store: WorldStore, say: (s: string) => void): 
       fleetPod: process.env["POD_NAME"] ?? null,
       podName: (id) => `${worldPodPrefix()}${id}`,
       log: say,
+      ...(worldPodRelease() !== undefined ? { release: worldPodRelease()! } : {}),
     });
     const parts = [
       r.ended.length > 0 ? `ended ${r.ended.join(", ")}` : "",
@@ -1005,7 +1006,7 @@ async function main(): Promise<void> {
     if (mode !== "evals") return undefined;
     const settings = parseOpts.onCluster ? readLauncherSettings() : undefined;
     const max = settings === undefined || "error" in settings ? undefined : settings.maxWorlds;
-    return worldsOf(mode, parseOpts.onCluster, max, worldsHold(join(REPO_ROOT, WORLDS_DIR), Date.now()));
+    return worldsOf(mode, parseOpts.onCluster, max, worldTemplateRefusal() ?? worldsHold(join(REPO_ROOT, WORLDS_DIR), Date.now()));
   };
   const boot = rereadFleet(parseFleet({}, parseOpts), readFleetConfig, parseOpts);
   let config = boot.config;

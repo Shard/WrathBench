@@ -457,6 +457,8 @@ policy      Only where runs execute. `maxSessions { <driver>: n }` — how many 
             `runPods` — `"off"` (default) or `"probes"`: every probing episode runs as its own
             pod on the arm's image ("Run pods"). While it is not `probes`, or off the cluster, an
             arm that pins an image or a command is a refused pair, never run on master.
+            `worlds` — `"off"` (default) or `"evals"`: every fresh e90, e360 or probing attempt
+            plays on a world of its own ("Worlds"), and never on the shared one while it is on.
             `maxConcurrent`, `paid` and `subscriptions` are refused by name: their work is the
             credentials' ("Credentials").
 campaign-defs  published campaign definitions, `<id>@<version>` → { definition, hash, source,
@@ -1916,10 +1918,10 @@ with the reason. A resumed run goes back to the world its launch file names
 (`runs/<id>/world.json`), whatever the setting says now. A run that started on
 the shared world resumes there.
 
-**Turning it on.** Keep worlds off until the runner stamps `config.world`.
-Each run's session record keeps players from other worlds out of its own set
-by that stamp, and the run's `world.json` pointer covers that only until then.
-Then, in order:
+**Turning it on.** A run's session record counts only the characters of runs
+on its own world as the deployment's own. It reads the world from the run's
+`world.json` pointer, or from `config.world` once the runner stamps it. In
+order:
 1. Release with `worlds.enabled`.
 2. Set `policy.worlds` to `evals`.
 3. Run one solo probe. Its world is the measurement: boot time (`bun wb
@@ -1962,6 +1964,10 @@ gone. Each is ended or parked by the same rule. A world pod with no open
 record is deleted. A world schema or realm row no record holds is only
 listed, in the fleet log and by `bun wb inspect worlds`, and dropping one is
 the operator's call.
+
+**Measuring the first world.** Beside the boot itself, note how long the
+fleet pod takes to resolve a new world's `<id>.worlds` name: the boot waits
+on its module's `/health` at that name.
 
 **Releases.** The deploy window waits for every world pod to go after the run
 pods. World pods are owned by the fleet pod, so the drain ends them, and the

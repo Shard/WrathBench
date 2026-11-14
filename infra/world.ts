@@ -41,7 +41,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renam
 import { dirname, join } from "node:path";
 import { SQL } from "bun";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
-import { terminationOfTrajectory, type WorldsMode } from "../runner/src/models";
+import { liveOwnerOf, terminationOfTrajectory, type WorldsMode } from "../runner/src/models";
 import { digestOf, K8sClient, type Pod, type PodEnvVar } from "./k8s-client";
 import { isQuotaRefusal, readLauncherSettings, ROSTER_PID_LABEL } from "./run-pod";
 import { worldsOf, type WorldsSetting } from "./run-fleet-credentials";
@@ -125,6 +125,17 @@ export function writeWorldPointer(runDir: string, id: string): void {
   const path = join(runDir, WORLD_POINTER_FILE);
   writeFileSync(`${path}.tmp`, `${JSON.stringify({ id })}\n`);
   renameSync(`${path}.tmp`, path);
+}
+
+/** Remove a run's pointer, only while it still names `id` (or any world, when `id` is undefined). */
+export function removeWorldPointer(runDir: string, id?: string): void {
+  const now = readWorldPointer(runDir);
+  if (now === undefined || (id !== undefined && now !== id)) return;
+  try {
+    rmSync(join(runDir, WORLD_POINTER_FILE), { force: true });
+  } catch {
+    // a read-only or vanished directory has nothing to keep
+  }
 }
 
 /** The world a run's pointer names, or undefined for a run on the shared world. */
@@ -279,25 +290,30 @@ export function worldsHold(dir: string, now: number): string | undefined {
 export async function withWorldLock<T>(
   dir: string,
   fn: () => Promise<T>,
-  o: { staleMs: number; waitMs: number; pollMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void>; pid?: number; alive?: (pid: number) => boolean },
+  o: { staleMs: number; waitMs: number; pollMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void>; pid?: number; alive?: (pid: number) => boolean; pod?: string },
 ): Promise<{ ok: true; value: T } | { ok: false; reason: string }> {
   const now = o.now ?? Date.now;
   const sleep = o.sleep ?? ((ms: number) => Bun.sleep(ms));
   const pid = o.pid ?? process.pid;
   const alive = o.alive ?? pidAlive;
+  // Pids are per pod: a holder from another fleet pod is gone, whatever its pid.
+  const pod = o.pod ?? process.env["POD_NAME"] ?? "";
   const lock = join(dir, ".boot.lock");
   mkdirSync(dir, { recursive: true });
   const deadline = now() + o.waitMs;
   for (;;) {
     try {
       mkdirSync(lock);
-      writeFileSync(join(lock, "owner"), `${pid}\n`);
+      writeFileSync(join(lock, "owner"), `${pid} ${pod}\n`);
       break;
     } catch {
       let holder: number | undefined;
+      let holderPod = pod;
       let age = 0;
       try {
-        holder = Number(readFileSync(join(lock, "owner"), "utf8").trim());
+        const [p, hp] = readFileSync(join(lock, "owner"), "utf8").trim().split(" ");
+        holder = Number(p);
+        holderPod = hp ?? "";
         age = now() - statSync(lock).mtimeMs;
       } catch {
         // half-made by a holder that died between mkdir and write; aged below
@@ -307,7 +323,7 @@ export async function withWorldLock<T>(
           continue;
         }
       }
-      const gone = holder !== undefined && Number.isInteger(holder) && holder > 0 && !alive(holder);
+      const gone = holder !== undefined && Number.isInteger(holder) && holder > 0 && (holderPod !== pod || !alive(holder));
       if (gone || age > o.staleMs) {
         releaseLock(lock);
         continue;
@@ -625,6 +641,8 @@ export class WorldLauncher {
       this.opts.log(`world ${rec.id}: realm ${rec.realmId}, schema ${rec.schema}, accounts ${accounts.join(",")}, for ${o.runIds.join(", ")}`);
       const booted = await this.boot(rec);
       if (!booted.ok) {
+        // No attempt was made on it: the runs keep no pointer to a world that never came up.
+        for (const dir of o.runDirs) removeWorldPointer(dir, rec.id);
         await this.end(rec.id, `boot failed: ${booted.reason}`);
         return booted;
       }
@@ -752,12 +770,24 @@ export class WorldLauncher {
     return { ok: false, reason: `world ${rec.id} did not boot: ${reason}` };
   }
 
-  /** Keep the world's state, give back its pod: a paused, resumable attempt between its sessions. */
-  async park(id: string, why: string): Promise<void> {
+  /**
+   * Keep the world's state, give back its pod: a paused, resumable attempt
+   * between its sessions. `noWait` is the roster's stop: the pod is deleted
+   * with its grace and not waited for, inside the fleet pod's own grace.
+   */
+  async park(id: string, why: string, o: { noWait?: boolean } = {}): Promise<void> {
     const rec = this.opts.store.read(id);
     if (rec === undefined || rec.state === "ended") return;
     await this.saveLog(id, this.podName(id), `parked: ${why}`);
-    await this.removePod(id, WORLD_PARK_GRACE_S);
+    if (o.noWait === true) {
+      try {
+        await this.opts.client.deletePod(this.podName(id), WORLD_PARK_GRACE_S);
+      } catch (e) {
+        this.opts.log(`world pod ${this.podName(id)}: delete failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    } else {
+      await this.removePod(id, WORLD_PARK_GRACE_S);
+    }
     rec.state = "parked";
     const boot = rec.boots[rec.boots.length - 1];
     if (boot !== undefined && boot.endedAt === undefined) boot.endedAt = this.now();
@@ -917,15 +947,22 @@ export async function reconcileWorlds(o: {
   runsDir: string;
   fleetPod: string | null;
   alive?: (pid: number) => boolean;
+  /** Whether a run has a live owner (`liveOwnerOf`); a test passes its own. */
+  liveRun?: (runId: string) => boolean;
   podName: (id: string) => string;
   log: (line: string) => void;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** The release the fleet's pods are, so another release's worlds in the namespace are never touched. */
+  release?: string;
 }): Promise<ReconcileReport> {
   const alive = o.alive ?? pidAlive;
+  const liveRun = o.liveRun ?? ((runId: string) => liveOwnerOf(o.runsDir, runId) !== null);
   const report: ReconcileReport = { ended: [], parked: [], podsDeleted: [], orphanSchemas: [], orphanRealms: [] };
   const open = o.store.list().filter((r) => r.state !== "ended");
-  const held = (r: WorldRecord): boolean => r.owner.fleetPod === o.fleetPod && alive(r.owner.rosterPid);
+  // Held by its roster, or by a run still playing on it: a supervisor container
+  // that restarted left its run pods playing with no roster behind them.
+  const held = (r: WorldRecord): boolean => (r.owner.fleetPod === o.fleetPod && alive(r.owner.rosterPid)) || r.runIds.some(liveRun);
   for (const rec of open) {
     if (held(rec)) continue;
     const fate = worldFateOf(rec.runIds.map((id) => join(o.runsDir, id)));
@@ -941,7 +978,8 @@ export async function reconcileWorlds(o: {
     }
   }
   const stillOpen = new Map(o.store.list().filter((r) => r.state !== "ended").map((r) => [r.id, r]));
-  for (const pod of await o.client.listPods(`app.kubernetes.io/component=${WORLD_COMPONENT}`)) {
+  const selector = `${o.release !== undefined ? `app.kubernetes.io/instance=${o.release},` : ""}app.kubernetes.io/component=${WORLD_COMPONENT}`;
+  for (const pod of await o.client.listPods(selector)) {
     const id = pod.metadata.labels?.[WORLD_ID_LABEL];
     const rec = id === undefined ? undefined : stillOpen.get(id);
     if (rec !== undefined && (held(rec) || rec.state === "up" || rec.state === "booting")) continue;
@@ -1001,6 +1039,27 @@ export function loadWorldLauncher(opts: {
   });
 }
 
+/** Why no world can be made here for want of the chart's template, or undefined when it is mounted: the chart's `worlds.enabled`. */
+export function worldTemplateRefusal(env: Record<string, string | undefined> = process.env): string | undefined {
+  const path = env[WORLD_POD_TEMPLATE_ENV] ?? DEFAULT_WORLD_POD_TEMPLATE;
+  try {
+    const t = JSON.parse(readFileSync(path, "utf8")) as Pod;
+    return t.spec?.containers?.some((c) => c.name === "worldserver") === true ? undefined : `${path} is not a world pod template`;
+  } catch {
+    return `policy.worlds is "evals" but the chart renders no world template (${path}); set worlds.enabled, or the setting back to off`;
+  }
+}
+
+/** The release the chart's template labels a world's pod with (`app.kubernetes.io/instance`), or undefined without a template. */
+export function worldPodRelease(env: Record<string, string | undefined> = process.env): string | undefined {
+  try {
+    const t = JSON.parse(readFileSync(env[WORLD_POD_TEMPLATE_ENV] ?? DEFAULT_WORLD_POD_TEMPLATE, "utf8")) as Pod;
+    return t.metadata.labels?.["app.kubernetes.io/instance"];
+  } catch {
+    return undefined;
+  }
+}
+
 /** The prefix the chart's template names a world's pod with (`<prefix><id>`), read from the mounted template. */
 export function worldPodPrefix(env: Record<string, string | undefined> = process.env): string {
   try {
@@ -1018,5 +1077,5 @@ export function worldPodPrefix(env: Record<string, string | undefined> = process
 export function worldsHere(mode: string, env: Record<string, string | undefined> = process.env, dir: string = join(dirname(import.meta.dir), WORLDS_DIR)): WorldsSetting | undefined {
   const onCluster = env["WRATHBENCH_IN_CONTAINER"] === "1" && K8sClient.inCluster(undefined, env) !== null;
   const settings = onCluster ? readLauncherSettings(env) : undefined;
-  return worldsOf(mode, onCluster, settings === undefined || "error" in settings ? undefined : settings.maxWorlds, worldsHold(dir, Date.now()));
+  return worldsOf(mode, onCluster, settings === undefined || "error" in settings ? undefined : settings.maxWorlds, (onCluster && mode === "evals" ? worldTemplateRefusal(env) : undefined) ?? worldsHold(dir, Date.now()));
 }

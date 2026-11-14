@@ -15,6 +15,7 @@ import { SlotBook, worldsOf, WORLD_KEY } from "./run-fleet-credentials";
 import { jobArgv } from "./run-fleet-state";
 import { openWorld } from "./run-roster";
 import { parsePolicyBlock } from "../runner/src/models";
+import { parseFleet } from "./run-fleet-config";
 import { holdsOnlyLaunchFiles } from "../runner/src/launch-files";
 import {
   buildWorldPod,
@@ -35,6 +36,8 @@ import {
   worldPodRefusal,
   worldsHold,
   WorldStore,
+  worldTemplateRefusal,
+  WORLD_POD_TEMPLATE_ENV,
   worldUsedBy,
   writeWorldPointer,
   BOOT_FAILURES_TO_HOLD,
@@ -391,6 +394,25 @@ describe("WorldLauncher", () => {
     expect(worldsHold(r.dir, r.clock.now)).toBeUndefined();
   });
 
+  test("a world that never came up leaves no pointer behind", async () => {
+    const r = rig({ behaviour: "quota" });
+    const runDir = join(r.runs, "fleet-x-e90");
+    await r.launcher.create({ runDirs: [runDir], runIds: ["fleet-x-e90"], accounts: ["A"] });
+    expect(readWorldPointer(runDir)).toBeUndefined();
+    expect(holdsOnlyLaunchFiles(runDir)).toBe(true);
+  });
+
+  test("parking on the roster's stop deletes the pod with its grace and does not wait for it", async () => {
+    const r = rig();
+    await r.launcher.create({ runDirs: [], runIds: ["x"], accounts: ["A"] });
+    r.k8s.linger = 1_000;
+    const before = r.clock.now;
+    await r.launcher.park(ID, "stopping", { noWait: true });
+    expect(r.calls).toContain(`delete wrathbench-world-${ID} grace 120`);
+    expect(r.clock.now).toBe(before);
+    expect(r.store.read(ID)!.state).toBe("parked");
+  });
+
   test("a pod that ends while it boots is a failed boot", async () => {
     const r = rig({ behaviour: "crash" });
     const got = await r.launcher.create({ runDirs: [], runIds: ["x"], accounts: ["A"] });
@@ -465,6 +487,9 @@ describe("withWorldLock", () => {
     writeFileSync(join(dir, ".boot.lock", "owner"), "555\n");
     const busy = await withWorldLock(dir, async () => "never", { staleMs: 60_000, waitMs: 0, pid: 666, alive: () => true });
     expect(busy).toMatchObject({ ok: false });
+    // A holder in another fleet pod is gone, whatever its pid says here.
+    writeFileSync(join(dir, ".boot.lock", "owner"), "555 wrathbench-fleet-old\n");
+    expect(await withWorldLock(dir, async () => "after a fleet restart", { staleMs: 60_000, waitMs: 0, pid: 666, pod: "wrathbench-fleet-new", alive: () => true })).toEqual({ ok: true, value: "after a fleet restart" });
   });
 });
 
@@ -535,6 +560,29 @@ describe("reconcileWorlds", () => {
     expect(r.k8s.pods.has(`wrathbench-world-${ID}`)).toBe(true);
     expect(r.store.read("wuuuuuuuuuu")!.state).toBe("parked");
   });
+
+  test("a world whose roster died but whose run still plays is held by the run: a supervisor container restart keeps the fleet pod and its run pods", async () => {
+    const r = rig();
+    await r.launcher.create({ runDirs: [join(r.runs, "playing")], runIds: ["playing"], accounts: ["A"] });
+    mkdirSync(join(r.runs, "playing"), { recursive: true });
+    writeFileSync(join(r.runs, "playing", "meta.json"), JSON.stringify({ config: {} }));
+    writeFileSync(join(r.runs, "playing", "heartbeat"), JSON.stringify({ at: Date.now(), host: "run-pod", pid: 7 }));
+    const report = await reconcileWorlds({
+      client: r.k8s,
+      db: async () => r.db,
+      store: r.store,
+      runsDir: r.runs,
+      // The same fleet pod, but the roster that held the world is gone.
+      fleetPod: "wrathbench-fleet-abc",
+      alive: () => false,
+      podName: (id) => `wrathbench-world-${id}`,
+      log: () => {},
+      sleep: async () => {},
+    });
+    expect(report).toMatchObject({ ended: [], parked: [], podsDeleted: [] });
+    expect(r.store.read(ID)!.state).toBe("up");
+    expect(r.k8s.pods.has(`wrathbench-world-${ID}`)).toBe(true);
+  });
 });
 
 describe("the roster's world for an attempt (openWorld)", () => {
@@ -564,6 +612,13 @@ describe("the roster's world for an attempt (openWorld)", () => {
     // A party's members share one world, every account on it.
     await openWorld([spec("p-tank", "probing", "PARTY1"), spec("p-heal", "probing", "PARTY2")], false, deps("evals"));
     expect(calls.at(-1)).toEqual({ kind: "create", accounts: ["PARTY1", "PARTY2"], runIds: ["p-tank", "p-heal"] });
+  });
+
+  test("a fresh launch on the shared world drops a pointer an earlier launch of the same id left", async () => {
+    const runs = tempDir("wb-openworld-stale-");
+    writeWorldPointer(join(runs, "a"), ID);
+    expect(await openWorld([spec("a", "e90")], false, { mode: "off", launcher: () => ({ error: "unused" }), runDir: (id) => join(runs, id) })).toEqual({ world: undefined });
+    expect(readWorldPointer(join(runs, "a"))).toBeUndefined();
   });
 
   test("fresh with no launcher is refused, never sent to the shared world", async () => {
@@ -614,6 +669,10 @@ describe("the planner's world key", () => {
 
   test("the policy, the launcher's settings and the roster argv carry the setting", () => {
     expect(parsePolicyBlock({}).worlds).toBe("off");
+    // The store's own validator, which every config write goes through.
+    expect(parseFleet({ policy: { worlds: "evals" } }).policy.worlds).toBe("evals");
+    expect(() => parseFleet({ policy: { worlds: "all" } })).toThrow(/policy.worlds/);
+    expect(worldTemplateRefusal({ [WORLD_POD_TEMPLATE_ENV]: join(tempDir("wb-no-template-"), "world.json") })).toContain("worlds.enabled");
     expect(parsePolicyBlock({ worlds: "evals" }).worlds).toBe("evals");
     expect(() => parsePolicyBlock({ worlds: "all" })).toThrow(/policy.worlds/);
     expect(parseLauncherSettings({ maxWorlds: 3 }).maxWorlds).toBe(3);
