@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { launchRouting } from "./fixtures/launch-routing";
 import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -68,6 +69,8 @@ interface SynthRun {
   noMeta?: boolean;
   harnessVersion?: string;
   extra?: boolean;
+  /** A run with no routing to state (a CLI, a local box): its stamp carries none. Else the default base's. */
+  unrouted?: boolean;
 }
 
 function writeRun(runsDir: string, r: SynthRun): void {
@@ -85,6 +88,8 @@ function writeRun(runsDir: string, r: SynthRun): void {
           effort: r.effort ?? null,
           ...(r.episode !== undefined ? { episode: r.episode } : {}),
           ...(r.override ? { episodeOverride: true } : {}),
+          // The routing a launch of its entry stamps (`countsTowardTarget`).
+          ...(r.unrouted === true ? {} : launchRouting(r.model, r.effort)),
           // The loop the entry launches now, so its runs count toward its
           // targets: the program loop with yield on openai and claude-code.
           ...(r.snippet === true ? {} : { loop: "program", yield: true }),
@@ -131,13 +136,13 @@ beforeAll(() => {
   writeRun(runsDir, { id: "glm-2", model: "z-ai/glm:free", episode: "e90", responses: 0, reason: null, startedAt: NOW - 40 * 60_000, endedAt: null, mtime: NOW - 30 * 60_000 });
   writeRun(runsDir, { id: "glm-3", model: "z-ai/glm:free", episode: "e90", responses: 0, reason: "adapter-error", startedAt: NOW - 5 * 60_000, endedAt: NOW - 60_000 });
   // sonnet: one counted run, no level 5; a pre-tier run (no episode stamp) that must be invisible.
-  writeRun(runsDir, { id: "sonnet-1", model: "sonnet", episode: "e90", responses: 50, level: 4, reason: "episode-limit", startedAt: t0, endedAt: t0 + HOUR });
-  writeRun(runsDir, { id: "sonnet-old", model: "sonnet", responses: 50, level: 9, reason: "episode-limit", startedAt: t0 - HOUR, endedAt: t0 });
+  writeRun(runsDir, { id: "sonnet-1", model: "sonnet", unrouted: true, episode: "e90", responses: 50, level: 4, reason: "episode-limit", startedAt: t0, endedAt: t0 + HOUR });
+  writeRun(runsDir, { id: "sonnet-old", model: "sonnet", unrouted: true, responses: 50, level: 9, reason: "episode-limit", startedAt: t0 - HOUR, endedAt: t0 });
   // sonnet-low: an answered run that is LIVE (mtime just now, no termination) -> counted, not stillborn.
-  writeRun(runsDir, { id: "sonnet-low-1", model: "sonnet", effort: "low", episode: "e90", responses: 3, level: 1, reason: null, startedAt: NOW - 60_000, endedAt: null, mtime: NOW - 10_000 });
+  writeRun(runsDir, { id: "sonnet-low-1", model: "sonnet", unrouted: true, effort: "low", episode: "e90", responses: 3, level: 1, reason: null, startedAt: NOW - 60_000, endedAt: null, mtime: NOW - 10_000 });
   // local: one run from the previous series and one extra run this series — both visible, neither counted.
-  writeRun(runsDir, { id: "local-old", model: "qwen/q", episode: "e90", responses: 20, level: 7, reason: "episode-limit", startedAt: t0, endedAt: t0 + HOUR, harnessVersion: "harness-0.2-33-gabc" });
-  writeRun(runsDir, { id: "local-x", model: "qwen/q", episode: "e90", responses: 20, level: 2, reason: "episode-limit", startedAt: t0 + 6 * HOUR, endedAt: t0 + 7 * HOUR, extra: true });
+  writeRun(runsDir, { id: "local-old", model: "qwen/q", unrouted: true, episode: "e90", responses: 20, level: 7, reason: "episode-limit", startedAt: t0, endedAt: t0 + HOUR, harnessVersion: "harness-0.2-33-gabc" });
+  writeRun(runsDir, { id: "local-x", model: "qwen/q", unrouted: true, episode: "e90", responses: 20, level: 2, reason: "episode-limit", startedAt: t0 + 6 * HOUR, endedAt: t0 + 7 * HOUR, extra: true });
   // a non-run directory and a directory without meta.json
   mkdirSync(join(runsDir, "night-report"), { recursive: true });
   writeRun(runsDir, { id: "nometa", model: "x", responses: 2, startedAt: t0, noMeta: true });
@@ -244,6 +249,7 @@ describe("the ladder", () => {
     runId: `f-${i}`,
     model: "m",
     effort: null,
+    ...launchRouting("m"),
     episode: "e90",
     episodeOverride: false,
     harnessVersion: null,
@@ -445,6 +451,7 @@ describe("nextJobs", () => {
     runId: `${model}-${ep}-${i}`,
     model,
     effort: null,
+    ...launchRouting(model),
     episode: ep,
     episodeOverride: false,
     harnessVersion: null,
@@ -517,6 +524,7 @@ describe("paid and free", () => {
     runId: `${model}-${ep}-${i}`,
     model,
     effort: null,
+    ...launchRouting(model),
     episode: ep,
     episodeOverride: false,
     harnessVersion: "harness-0.3-1-gx",
@@ -648,7 +656,12 @@ describe("paid and free", () => {
   test("idle: unlimited — one freeplay session at a time, on a pool account, never counted", () => {
     const local = { name: "l1", model: "qwen/q", apiBase: "http://10.0.0.5:1234/v1", idle: "unlimited" as const };
     // Targets met on e90 only: unpromoted (no counted run reached L5), so e360 is not open.
-    const met = st(local, [good("qwen/q", "e90", 1, 3), good("qwen/q", "e90", 2, 4), good("qwen/q", "e90", 3, 2)]);
+    // A local box's runs stamp no routing: nothing to state on one machine.
+    const onBox = (f: RunFact): RunFact => {
+      const { routing: _none, ...rest } = f;
+      return rest;
+    };
+    const met = st(local, [good("qwen/q", "e90", 1, 3), good("qwen/q", "e90", 2, 4), good("qwen/q", "e90", 3, 2)].map(onBox));
     expect(met.eligible).toEqual(["e90"]);
     const v = schedulability(met, new Set(), policy);
     expect(v.verdict).toBe("free");
@@ -665,7 +678,7 @@ describe("paid and free", () => {
       good("qwen/q", "e90", 2, 4),
       good("qwen/q", "e90", 3, 2),
       good("qwen/q", "freeplay", 4, 5, true),
-    ]);
+    ].map(onBox));
     expect(after.perEpisode.freeplay).toMatchObject({ counted: 0, attempts: 1, extras: 1, target: 0 });
     expect(after.perEpisode.e90!.counted).toBe(3);
     expect(after.eligible).toEqual(["e90"]);
@@ -692,6 +705,7 @@ describe("outstandingWork", () => {
     runId: `${model}-${ep}-${i}`,
     model,
     effort: null,
+    ...launchRouting(model),
     episode: ep,
     episodeOverride: false,
     harnessVersion: null,
@@ -867,6 +881,7 @@ describe("probe campaigns in the schedule", () => {
     runId: `${model}-${ep}-${i}`,
     model,
     effort: null,
+    ...launchRouting(model, over.effort),
     episode: ep,
     episodeOverride: false,
     harnessVersion: null,
@@ -1327,6 +1342,7 @@ describe("a target counts the runs of the loop its entry launches (operator, 202
     runId: `loop-${i}`,
     model: "m",
     effort: null,
+    ...launchRouting("m", over.effort),
     episode: "e90",
     episodeOverride: false,
     harnessVersion: "harness-0.5-1-gabc",
@@ -1361,6 +1377,32 @@ describe("a target counts the runs of the loop its entry launches (operator, 202
     expect(countsTowardTarget({ loop: "program" }, { driver: "pi" })).toBe(false);
     // An entry with no driver is on the default one.
     expect(countsTowardTarget({ loop: "program", yield: true }, {})).toBe(true);
+  });
+
+  test("routing and wiki are the entry's condition too: a run routed or wikied otherwise is history, never a copy (operator, 2026-11-14)", () => {
+    const program = { loop: "program" as const, yield: true as const };
+    const glm = { driver: "openai", model: "z-ai/glm-5.3" };
+    const pinned = launchRouting("z-ai/glm-5.3").routing!;
+    // Routing: the run must carry what a launch of the entry stamps now.
+    expect(countsTowardTarget({ ...program, routing: pinned }, glm)).toBe(true);
+    expect(countsTowardTarget({ ...program, routing: { ...pinned } }, glm)).toBe(true);
+    expect(countsTowardTarget(program, glm)).toBe(false); // stamped before routing was a key
+    expect(countsTowardTarget({ ...program, routing: { allowFallbacks: true } }, glm)).toBe(false);
+    // The entry's own routing block, or a fleet default folded into it, is what is expected.
+    const elsewhere = { order: ["Together"], allowFallbacks: false };
+    expect(countsTowardTarget({ ...program, routing: elsewhere }, { ...glm, routing: elsewhere })).toBe(true);
+    expect(countsTowardTarget({ ...program, routing: pinned }, { ...glm, routing: elsewhere })).toBe(false);
+    // Effort can change what a launch sends (requireParameters), and the target follows it.
+    const high = launchRouting("z-ai/glm-5.3", "high").routing!;
+    expect(countsTowardTarget({ ...program, routing: high }, { ...glm, effort: "high" })).toBe(true);
+    // A base with no routing to state expects none: a CLI, a single-backend endpoint.
+    expect(countsTowardTarget(program, { driver: "claude-code", model: "sonnet" })).toBe(true);
+    expect(countsTowardTarget({ ...program, routing: pinned }, { driver: "claude-code", model: "sonnet" })).toBe(false);
+    expect(countsTowardTarget(program, { ...glm, apiBase: "https://api.cerebras.ai/v1" })).toBe(true);
+    // Wiki: a run without the reference wiki fills only an entry without it, and the reverse.
+    expect(countsTowardTarget({ ...program, routing: pinned, wiki: false }, glm)).toBe(false);
+    expect(countsTowardTarget({ ...program, routing: pinned, wiki: false }, { ...glm, wiki: false })).toBe(true);
+    expect(countsTowardTarget({ ...program, routing: pinned }, { ...glm, wiki: false })).toBe(false);
   });
 
   test("snippet-loop runs in the same series are attempts and history, never a copy of a program-loop run", () => {

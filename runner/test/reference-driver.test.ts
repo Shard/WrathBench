@@ -12,6 +12,7 @@
  * scored — no member of any comparability group, no target counts it, no row
  * order holds it, and the scheduler can neither count nor launch one.
  */
+import { launchRouting } from "./fixtures/launch-routing";
 import { describe, expect, test } from "bun:test";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -337,6 +338,7 @@ describe("never counted, never a member, never a row", () => {
     runId: "r",
     model: "m",
     effort: null,
+    ...launchRouting("m"),
     episode: "e90",
     episodeOverride: false,
     harnessVersion: "harness-0.9-1-gabc",

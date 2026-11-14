@@ -67,7 +67,9 @@ campaigns, and a scored or freeplay launch on it is refused (operator,
 2026-11-14). The adoption did not move the series: a target counts only the
 runs whose tuple names the loop and `yield` its entry now launches, so a
 snippet-loop run in the same series is history, never a copy (operator,
-2026-11-14). Scored episodes on the program loop wait until a long-clock
+2026-11-14); the same holds for the rest of the ladder's condition, a routing
+or wiki other than the entry's, since the scheduler and the ladder read one
+key (operator, 2026-11-14). Scored episodes on the program loop wait until a long-clock
 program-loop run has been read (operator, 2026-11-14). The SDK is versioned separately from the harness (operator,
 2026-10-28). Its model-facing surface is still part of the surface frozen per
 harness version, so changing it moves the harness version as before

@@ -811,6 +811,10 @@ export interface ModelState {
   compactWindow?: string;
   /** The entry's local build (`RosterModel.serving`); absent on a hosted entry. */
   serving?: ServingSpec;
+  /** What the entry launches with, for `countsTowardTarget`: its base, routing and wiki (`RosterModel`). */
+  apiBase?: string;
+  routing?: RoutingSpec;
+  wiki?: boolean;
   platform: string | null;
   /**
    * The credential provider its runs are served through (`providerOfModel`,
@@ -2298,7 +2302,7 @@ export function partyAttempts(facts: readonly RunFact[]): RunFact[][] {
  * next, and neither counts nor cools. Levels and last verdicts read the
  * member runs as they are.
  */
-function tallyParties(stats: EpisodeStats, all: readonly RunFact[], mine: readonly RunFact[], driver: string | undefined, policy: SchedulingPolicy): void {
+function tallyParties(stats: EpisodeStats, all: readonly RunFact[], mine: readonly RunFact[], entry: TargetEntry, policy: SchedulingPolicy): void {
   stats.attempts = partyAttempts(all).length;
   for (const members of partyAttempts(mine)) {
     const verdict = partyAttempt(
@@ -2308,7 +2312,7 @@ function tallyParties(stats: EpisodeStats, all: readonly RunFact[], mine: readon
         cell: null,
         ref: null,
         arm: null,
-        counted: isCounted(f) && countsTowardTarget(f, driver),
+        counted: isCounted(f) && countsTowardTarget(f, entry),
         live: f.live || f.pause !== null,
         party: f.party == null ? null : { id: f.party.id, size: f.party.size },
         terminationReason: f.terminationReason,
@@ -2381,7 +2385,7 @@ export function projectModel(
     // 2026-11-14): five members are one attempt and one count, and the
     // cooling walk takes one rung for it, however many met a refusal.
     if (isPartyEpisode(ep)) {
-      tallyParties(stats, all.filter((f) => f.episode === ep), mine.filter((f) => f.episode === ep), r.driver, policy);
+      tallyParties(stats, all.filter((f) => f.episode === ep), mine.filter((f) => f.episode === ep), r, policy);
       perEpisode[ep] = stats;
       continue;
     }
@@ -2463,6 +2467,9 @@ export function projectModel(
     effort: r.effort ?? null,
     ...(r.compactWindow !== undefined ? { compactWindow: r.compactWindow } : {}),
     ...(r.serving !== undefined ? { serving: r.serving } : {}),
+    ...(r.apiBase !== undefined ? { apiBase: r.apiBase } : {}),
+    ...(r.routing !== undefined ? { routing: r.routing } : {}),
+    ...(r.wiki !== undefined ? { wiki: r.wiki } : {}),
     platform: platformOf(r.apiBase, r.driver),
     provider: providerOfModel(r),
     harness: harnessOf(driverOf(r)),
