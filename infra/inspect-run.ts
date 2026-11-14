@@ -1893,10 +1893,12 @@ interface Activity {
   /** claude-code: the CLI's own `num_turns`, summed over the `claude_result` records read, and how many carried one. */
   cliTurns: number;
   cliNumbered: number;
+  /** claude-code, when the run's driver says so: its model turns over the records read (`claudeModelTurns`). */
+  claude: ClaudeTally | null;
 }
 
-function newActivity(): Activity {
-  return { records: 0, kinds: new Map(), last: null, snippetErrors: new Map(), toolErrors: new Map(), harness: new Map(), cliTurns: 0, cliNumbered: 0 };
+function newActivity(claude = false): Activity {
+  return { records: 0, kinds: new Map(), last: null, snippetErrors: new Map(), toolErrors: new Map(), harness: new Map(), cliTurns: 0, cliNumbered: 0, claude: claude ? newClaude() : null };
 }
 
 /**
@@ -1911,12 +1913,16 @@ function numTurnsOf(rec: Record<string, unknown> | null): number | null {
 
 /** What one record adds to the errors by class, the harness notices by kind, and the CLI's turns. */
 function noteActivity(a: Activity, r: Rec, token: string | null): void {
-  if (r.t === "claude_result") {
-    const n = numTurnsOf(r.parse());
+  if (a.claude !== null && (r.t === "driver" || r.t === "response")) {
+    noteClaude(a.claude, r.t, r.t === "driver" ? null : r.parse());
+  } else if (r.t === "claude_result") {
+    const p = r.parse();
+    const n = numTurnsOf(p);
     if (n !== null) {
       a.cliTurns += n;
       a.cliNumbered++;
     }
+    if (a.claude !== null) noteClaude(a.claude, r.t, p);
   } else if (r.t === "snippet_result" || r.t === "tool_result") {
     if (!r.isError()) return;
     // A result is small next to a request; past 256 KB, read its head only.
@@ -1934,9 +1940,9 @@ function noteActivity(a: Activity, r: Rec, token: string | null): void {
  * harness notices by kind; and the run's cost, when `cost` is given, which
  * only a pass over the whole run may take.
  */
-function scanActivity(path: string, window: Window, token: string | null, cost?: CostTally): Activity {
+function scanActivity(path: string, window: Window, token: string | null, cost?: CostTally, claude = false): Activity {
   const { since, until } = window;
-  const a = newActivity();
+  const a = newActivity(claude);
   fileForward(
     path,
     (r) => {
@@ -2000,7 +2006,11 @@ export interface ClaudeTally {
   results: number;
   /** Results whose usage covers the messages before them: the `done` figures and the `turns` are theirs. */
   covering: number;
-  /** Model turns: each covering result's `num_turns`, or its message count where it carried none. */
+  /**
+   * Model turns: each covering result's `num_turns`, or its message count
+   * where it carried none. A result with no message of its own adds none, as
+   * the viewer and `requests` leave it out (`claudeModelTurns`).
+   */
   turns: number;
   /** The covering results' own usage, summed. */
   done: TokenSum;
@@ -2016,11 +2026,25 @@ export interface ClaudeTally {
 
 const noTokens = (): TokenSum => ({ input: 0, output: 0, cacheRead: null, cacheWrite: null });
 
+function newClaude(): ClaudeTally {
+  return { results: 0, covering: 0, turns: 0, done: noTokens(), open: { ...noTokens(), messages: 0, turns: 0, unresulted: 0 }, pending: { ...noTokens(), messages: 0, turns: new Set() } };
+}
+
+/**
+ * The run's model turns: each covering result's, and one for every message no
+ * result covers, in flight or not. runner/viewer/tail.ts `claudeModelTurns`,
+ * copied because this file imports nothing, and pinned to it by
+ * infra/inspect-session.test.ts.
+ */
+export function claudeModelTurns(k: ClaudeTally): number {
+  return k.turns + k.open.messages + k.pending.messages;
+}
+
 export function newCost(): CostTally {
   return {
     usage: { responses: 0, reported: 0, input: 0, output: 0, cacheRead: null, cacheWrite: null, usd: null, costed: 0 },
     cli: new Map(),
-    claude: { results: 0, covering: 0, turns: 0, done: noTokens(), open: { ...noTokens(), messages: 0, turns: 0, unresulted: 0 }, pending: { ...noTokens(), messages: 0, turns: new Set() } },
+    claude: newClaude(),
   };
 }
 
@@ -2117,12 +2141,13 @@ function noteClaude(k: ClaudeTally, t: string, p: Record<string, unknown> | null
   } else if (t === "claude_result") {
     k.results++;
     const f = resultFigures(p);
-    if (f.output === null) {
+    // A result that reports no output speaks for nothing (runner/viewer/tail.ts `claudeTurns`): its turn is closed, unreported.
+    if (f.output === null || f.output <= 0) {
       closeClaudeTurn(k, true);
       return;
     }
     k.covering++;
-    k.turns += numTurnsOf(p) ?? k.pending.messages;
+    if (k.pending.messages > 0) k.turns += numTurnsOf(p) ?? k.pending.messages;
     addTokens(k.done, f);
     k.pending = { ...noTokens(), messages: 0, turns: new Set() };
   }
@@ -2233,14 +2258,16 @@ const ACTIVITY_SPEC: ReadSpec = {
   kinds: { snippet_result: { row: { error: true }, raw: "all" }, tool_result: { row: { error: true }, raw: "all" }, harness: { raw: "all" }, claude_result: { raw: "all" } },
 };
 
-async function storeActivity(store: InspectStore, runId: string, ext: Extent, w: Window, token: string | null): Promise<Activity> {
-  const a = newActivity();
+async function storeActivity(store: InspectStore, runId: string, ext: Extent, w: Window, token: string | null, claude = false): Promise<Activity> {
+  const a = newActivity(claude);
   for (const [k, n] of ext.kinds) {
     a.kinds.set(k, n);
     a.records += n;
   }
   a.last = ext.last;
-  await storeRead(store, runId, ACTIVITY_SPEC, w, ext.window, true, (r) => noteActivity(a, r, token));
+  // claude-code's model turns read its messages and its processes too, in order.
+  const spec: ReadSpec = claude ? { kinds: { ...(ACTIVITY_SPEC.kinds as Record<string, { raw: Rule }>), ...(CLAUDE_COST_SPEC.kinds as Record<string, { raw: Rule }>) } } : ACTIVITY_SPEC;
+  await storeRead(store, runId, spec, w, ext.window, true, (r) => noteActivity(a, r, token));
   return a;
 }
 
@@ -2356,17 +2383,27 @@ export async function inspectRun(runId: string, opts: Ctx & Window, out: Out): P
       // The cost is the whole run's whatever the window: one pass with the activity when it is the whole run too.
       const whole = opts.since === null && opts.until === null;
       const cost = via.store !== null ? null : newCost();
-      const a = via.store !== null ? await storeActivity(via.store, runId, via.ext, opts, token) : scanActivity(traj, opts, token, whole ? cost! : undefined);
+      // claude-code by its driver's usage shape (`DRIVER_USAGE`), or the results only it writes: its model turns are counted over the read
+      // itself. The file's pass counts them on any run, since which it is shows only once its results are read; the store's knows first.
+      const cliDriver = driver !== null && DRIVER_USAGE[driver] === "turn-snapshot";
+      const a =
+        via.store !== null
+          ? await storeActivity(via.store, runId, via.ext, opts, token, cliDriver || (via.ext.kinds.get("claude_result") ?? 0) > 0)
+          : scanActivity(traj, opts, token, whole ? cost! : undefined, true);
       if (cost !== null && !whole) fileForward(traj, (r) => noteCost(cost, r));
       const k = (t: string): number => a.kinds.get(t) ?? 0;
-      // claude-code, by its usage shape (`DRIVER_USAGE`), or by the results only it writes.
-      const claude = (driver !== null && DRIVER_USAGE[driver] === "turn-snapshot") || k("claude_result") > 0;
+      // Or by the results only it writes.
+      const claude = cliDriver || k("claude_result") > 0;
       const window = windowPhrase(opts) === "" ? "" : `${windowPhrase(opts)}: `;
       const last = a.last === null ? "none" : `${a.last.t} ${fmtAge(opts.now - a.last.ts)} ago`;
-      // A claude-code run's model turns are its CLI's count, off its results: a response record is a message's envelope, several to a message.
+      // A claude-code run's model turns are its CLI's count, as the viewer's (`claudeModelTurns`): a response record is a message's envelope, several to a message.
+      const ct = a.claude;
+      const open = ct === null ? 0 : ct.open.messages + ct.pending.messages;
       const turns = !claude
         ? `${k("response")} responses`
-        : `${a.cliNumbered > 0 ? `${a.cliTurns} model turns (num_turns on ${a.cliNumbered} CLI result(s))` : "model turns unknown (no CLI result reported num_turns)"} · ${k("response")} response records`;
+        : ct !== null
+          ? `${claudeModelTurns(ct)} model turns (num_turns on ${a.cliNumbered} CLI result(s)${open > 0 ? `, and ${open} message(s) no result covers, one each` : ""}) · ${k("response")} response records`
+          : `${a.cliNumbered > 0 ? `${a.cliTurns} model turns (num_turns on ${a.cliNumbered} CLI result(s))` : "model turns unknown (no CLI result reported num_turns)"} · ${k("response")} response records`;
       say("activity", `${window}${a.records} records, last ${last} · ${turns} · ${k("snippet")} snippets · ${k("tool_call")} tool calls`);
       const se = [...a.snippetErrors.values()].reduce((x, y) => x + y, 0);
       const te = [...a.toolErrors.values()].reduce((x, y) => x + y, 0);

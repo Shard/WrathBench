@@ -66,8 +66,9 @@ claude-code run's tokens and model turns are its CLI results' (`num_turns`
 and `usage` on each `claude_result`), because its response records are a
 message's envelopes, only the last carrying usage, and that usage's output is
 the stream's opening snapshot; what no result covers is listed apart and
-called a snapshot, and `activity` counts model turns from the results, the
-response records beside them. The token sums are not the bill on a codex run
+called a snapshot, and `activity` counts model turns as the run page does:
+each result's `num_turns`, a message no result covers one each, the response
+records beside them. The token sums are not the bill on a codex run
 from before per-turn deltas (running totals), and the CLI's dollar figure
 leaves out the turns that got no result, which the run page adds at list.
 

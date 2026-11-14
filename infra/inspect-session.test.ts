@@ -16,7 +16,7 @@ import { FANOUT_SEP as RUNNER_FANOUT_SEP, SESSIONS_DIR as RUNNER_SESSIONS_DIR } 
 import { Trajectory } from "../runner/src/trajectory";
 import { readRunRow } from "../runner/src/run-reader";
 import { writeLegacy05Run } from "../runner/test/fixtures/legacy05-writer";
-import { reportedCostUsd } from "../runner/viewer/tail";
+import { reportedCostUsd, scanRunTotals } from "../runner/viewer/tail";
 import { FANOUT_SEP, type InspectStore, main, SESSIONS_DIR, usageSql } from "./inspect-run";
 import { memoryStore } from "./inspect-memory-store";
 import { tempDirs } from "./temp-dirs";
@@ -226,6 +226,14 @@ async function inspect(argv: string[], store?: InspectStore): Promise<{ code: nu
 const line = (out: string[], label: string): string => out.find((l) => l.startsWith(label)) ?? "";
 
 describe("what it shares with the runner and the collector", () => {
+  test("a claude-code run's model turns are the viewer's (runner/viewer/tail.ts `claudeModelTurns`), which this copies", async () => {
+    for (const id of [CLI, FAN]) {
+      const viewer = (await scanRunTotals(join(RUNS, id, "trajectory.jsonl"))).tokens.turns;
+      const activity = line((await inspect(["run", id, "--width", "1000"])).out, "activity");
+      expect([id, / · (\d+) model turns /.exec(activity)?.[1]]).toEqual([id, String(viewer)]);
+    }
+  });
+
   test("a fan-out run's layout and the store's key for a character", () => {
     expect(SESSIONS_DIR).toBe(RUNNER_SESSIONS_DIR);
     expect(FANOUT_SEP).toBe(RUNNER_FANOUT_SEP);
@@ -286,13 +294,16 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE]] a
       const cut = line((await inspect(["run", FAN], store)).out, "cost");
       expect(cut).toContain("snapshot output only");
       expect(cut.indexOf("snapshot")).toBeLessThan(Math.max(cut.indexOf("out 35"), cut.length));
-      expect(line((await inspect(["run", FAN], store)).out, "activity")).toContain("model turns unknown (no CLI result reported num_turns) · 3 response records");
+      expect(line((await inspect(["run", FAN, "--width", "1000"], store)).out, "activity")).toContain(
+        " · 3 model turns (num_turns on 0 CLI result(s), and 3 message(s) no result covers, one each) · 3 response records · ",
+      );
     });
 
     test("claude-code's model turns and tokens are its CLI results', and what no result covers is said to be a snapshot", async () => {
       const r = await inspect(["run", CLI, "--width", "1000"], store);
       expect(r.code).toBe(0);
-      expect(line(r.out, "activity")).toContain(" · 5 model turns (num_turns on 1 CLI result(s)) · 5 response records · ");
+      // The result's 5, and the resumed process's message that got none.
+      expect(line(r.out, "activity")).toContain(" · 6 model turns (num_turns on 1 CLI result(s), and 1 message(s) no result covers, one each) · 5 response records · ");
       expect(line(r.out, "cost")).toBe(
         "cost       over the run: $0.9000 the CLI's total_cost_usd over 1 session(s), which leaves out the 1 driver turn(s) that got no result" +
           " · tokens on 1 CLI result(s): in 11.2k (cache read 9.5k, write 500), out 1.8k over 5 model turns" +

@@ -60,19 +60,26 @@ function copyRun(runs: string, from: string, to: string, driver: string, stamp: 
   db.close();
 }
 
-/** Three closed trace windows to a moment ago, in the recorder's schema. */
+/**
+ * Three closed trace windows to a moment ago, in the recorder's schema. One
+ * transaction for the lot: a row each is a commit, and so a sync, each — on a
+ * disk-backed temp dir (a CI runner's) the thousand-odd rows took seconds a
+ * test and timed it out, where a tmpfs never shows it.
+ */
 function addTrace(runs: string, runId: string): void {
   const db = new Database(join(runs, runId, "run.sqlite"));
   db.exec(`CREATE TABLE IF NOT EXISTS trace (run_id TEXT NOT NULL, ts INTEGER NOT NULL, kind TEXT NOT NULL,
              map INTEGER, x REAL, y REAL, z REAL, o REAL, data TEXT);`);
   const now = Date.now();
   const insert = db.query(`INSERT INTO trace (run_id, ts, kind, map, x, y, z, o, data) VALUES (?,?,?,?,?,?,?,?,?)`);
-  let x = -6240;
-  for (let ts = windowOf(now) - 3 * SEG_MS; ts < now - 1_000; ts += 1000) {
-    if (ts % SEG_MS === 0) insert.run(runId, ts, "key", 0, x, 380, 385, 0, JSON.stringify({ hp: 100, hpMax: 100, level: 3 }));
-    x += 0.7;
-    insert.run(runId, ts + 1, "pos", 0, x, 380, 385, 0, null);
-  }
+  db.transaction(() => {
+    let x = -6240;
+    for (let ts = windowOf(now) - 3 * SEG_MS; ts < now - 1_000; ts += 1000) {
+      if (ts % SEG_MS === 0) insert.run(runId, ts, "key", 0, x, 380, 385, 0, JSON.stringify({ hp: 100, hpMax: 100, level: 3 }));
+      x += 0.7;
+      insert.run(runId, ts + 1, "pos", 0, x, 380, 385, 0, null);
+    }
+  })();
   db.close();
 }
 
