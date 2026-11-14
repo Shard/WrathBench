@@ -10,7 +10,7 @@
  *  - `currentModels` — the default-on rule that hides every model of a line
  *    but its newest, unless the field's front keeps it.
  *  - `newestConditions` — the default-on rule that shows each model at each
- *    effort under its newest condition only, and `chartGroups`, the charts the conditions
+ *    effort and window under its newest condition only, and `chartGroups`, the charts the conditions
  *    left on the page belong to.
  *  - `lineOf` — the model *line* a slug belongs to, which is the "family" a
  *    reader means when they say sonnet, fable or astra.
@@ -316,15 +316,16 @@ export function currentModels<E extends ModelEntry>(rows: readonly E[]): E[] {
 /* --------------------------------------------------------- the condition rules */
 
 /**
- * Each model at each effort under its newest condition, and nothing else of it.
+ * Each model at each effort and window under its newest condition, and nothing else of it.
  *
  * The operator's rule (2026-11-14): a ladder row is one condition — the
  * series, episode, harness, effort, routing, wiki, window, loop and `yield`
  * (`runner/viewer/condition.ts`) — and by default each model at each effort
- * shows the one whose most recent counted run started last. Effort is chosen
- * per row rather than collapsed, because efforts are comparable rows
- * (METHODOLOGY, "A knob is legitimate as a run dimension") and the ladder
- * kept every one of them before the key existed. A row therefore moves to a
+ * and compaction window shows the one whose most recent counted run started
+ * last. Effort and window are chosen per row rather than collapsed, because
+ * they are comparable rows (METHODOLOGY, "A knob is legitimate as a run
+ * dimension", and the window is "a recorded run dimension like effort") and
+ * the ladder kept every one of them before the key existed. A row therefore moves to a
  * new condition, the program loop say, as soon as it has a counted run there,
  * and until then stays where its evidence is. Ties go to the condition id
  * that sorts first, so the choice is a function of the set.
@@ -333,7 +334,7 @@ export function currentModels<E extends ModelEntry>(rows: readonly E[]): E[] {
  * not, and a model with no scored run keeps everything, since it has no row.
  */
 export function newestConditions(runs: readonly ResultRun[]): ResultRun[] {
-  const rowOf = (r: ResultRun): string => `${r.model ?? "(unnamed)"}\n${r.effort ?? ""}`;
+  const rowOf = (r: ResultRun): string => `${r.model ?? "(unnamed)"}\n${r.effort ?? ""}\n${r.compactWindow ?? ""}`;
   const newest = new Map<string, { id: string; at: number }>();
   for (const r of scored(runs)) {
     const row = rowOf(r);
@@ -380,7 +381,7 @@ export function inChartGroup(runs: readonly ResultRun[], groupId: string): Resul
 
 /**
  * What a scored ladder shows before a reader changes anything: each model's
- * newest condition at each effort, on the chart holding the most entries. The homepage and
+ * newest condition at each effort and window, on the chart holding the most entries. The homepage and
  * the social card read the ladder through this, so they show what the
  * ladder page opens on.
  */
