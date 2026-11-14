@@ -227,6 +227,22 @@ export const DRIVER_ADAPTERS: Readonly<Record<Driver, DriverAdapter>> = {
     },
   },
 
+  // Never launched here: an external agent drives the stack itself (`mcp.ts`
+  // by hand, or a campaign arm's own command), and this runner records what
+  // drove it rather than driving it.
+  external: {
+    prepare() {
+      console.error(
+        "driver external is an agent loop that is not ours: this runner does not launch it. Drive the stack with it over `bun runner/src/mcp.ts --agent-name … --agent-version … --model …`, or give a probe-campaign arm its own command.",
+      );
+      process.exit(2);
+    },
+    // A scaffold's episode is its own; this one's is the agent's, never ours.
+    runEpisode() {
+      throw new Error("driver external is never launched by this runner");
+    },
+  },
+
   reference: {
     prepare(config, _trajectory, inputs) {
       // The scripted reference: its route through `run_snippet`, in this run's

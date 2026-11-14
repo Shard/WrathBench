@@ -116,7 +116,10 @@ were indistinguishable, and 300k would be refused as a cap on a 272k-window
 model. `pi`, the pi coding-agent CLI, is
 a labelled harness of the same kind, its own comparability group and
 probe-only until the operator promotes it, and its campaign compacts at a
-fixed 300k-token window (operator, 2026-10-20).
+fixed 300k-token window (operator, 2026-10-20). An agent loop that is not
+ours is the `external` harness, named by its declared agent and version: its
+own comparability group with a declared, partial set of conditions, never
+ranked with ours, and probe-only in v1 (operator, 2026-11-14).
 
 ## Client fidelity
 
@@ -370,7 +373,8 @@ with the number of agents and of characters per agent as keys, and neither is
 ranked against the other: one measures coordination, the other orchestration.
 An attempt ends cleared only on the kill. A member that goes idle or reaches
 its call ceiling makes the attempt not cleared, since the model stopped; a
-provider's refusal is one strike per attempt, however many members met it.
+provider's refusal is one rung of the cooling ladder per attempt, however
+many members met it.
 
 **Every scored attempt plays on a world of its own; freeplay shares one**
 (operator, 2026-11-14). An `e90` or `e360` attempt, a probe and a party each
