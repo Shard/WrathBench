@@ -2367,6 +2367,16 @@ export function projectModel(
   // is a party member another member's verdict ended (`party-ended`): the
   // party's evidence is that member's own run, which is on the walk, and four
   // more rungs for one early party death would cool the model's evals too.
+  // And a party is one attempt on the walk as in the tally: a refusal or a
+  // transport failure that ended all five members on their own verdict is one
+  // rung, not five (operator, 2026-11-14), so only its last-ended member is
+  // walked.
+  const lastOfParty = new Map<string, RunFact>();
+  for (const f of mine) {
+    if (f.party == null || f.endedAt === null) continue;
+    const prev = lastOfParty.get(f.party.id);
+    if (prev === undefined || (prev.endedAt ?? 0) <= f.endedAt) lastOfParty.set(f.party.id, f);
+  }
   const finished = mine.filter(
     (f) =>
       !f.live &&
@@ -2374,6 +2384,7 @@ export function projectModel(
       f.endedAt !== null &&
       f.terminationReason !== "launch-failed" &&
       f.terminationReason !== "party-ended" &&
+      (f.party == null || lastOfParty.get(f.party.id) === f) &&
       (opts.clearedAt === undefined || f.endedAt > opts.clearedAt),
   );
   for (let i = finished.length - 1; i >= 0; i--) {

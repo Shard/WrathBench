@@ -91,6 +91,15 @@ describe("a five-agent attempt", () => {
   });
 });
 
+describe("the cooling walk", () => {
+  test("a party whose five members failed on their own is one rung, not five", () => {
+    const failed = party("p1", "adapter-error", (m) => ({ terminationReason: "adapter-error", endedAt: NOW - 3_600_000 + MEMBERS.indexOf(m) }));
+    expect(projectModel(ENTRY, failed, DEFAULT_POLICY, { now: NOW }).ladder).toBe(1);
+    const two = [...failed, ...party("p2", "adapter-error", () => ({ terminationReason: "adapter-error", endedAt: NOW - 1_000 }))];
+    expect(projectModel(ENTRY, two, DEFAULT_POLICY, { now: NOW }).ladder).toBe(2);
+  });
+});
+
 describe("the one-agent id", () => {
   test("is one run per attempt, and its strikes are its own", () => {
     const solo = (n: number, terminationReason: string): RunFact => fact({ episode: "deadmines-solo", runId: `fleet-son-deadmines-solo-sonnet-20261114-a${n}`, terminationReason });
