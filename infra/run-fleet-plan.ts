@@ -2867,9 +2867,15 @@ export interface InFlight {
 }
 
 /**
- * The plan for one tick: which pinned jobs spawn, which pool accounts the
- * queue and then the policy would take. Pure over the projection; used by
- * --dry-run and by the startup fail-fast. `inFlight` is what is already
+ * The plan for one tick, as the read-only views tell it: which pinned jobs
+ * spawn, which pool accounts the queue and then the policy would take. Pure
+ * over the projection; `--status` and `--dry-run` read it. It is an
+ * approximation of the supervisor's own tick (`effectiveJobs`,
+ * run-fleet.ts), which plans and acts in one pass — it ends lapsed runs,
+ * continues characters, gates spawns on credential budgets and drains what the
+ * file dropped — and is not built from this; making that tick a pure plan
+ * plus an apply step, so this is the one planner, is its own piece of work.
+ * `inFlight` is what is already
  * running (none at boot): without it a model whose run was live read as free
  * and the dry-run planned it a second character on another account
  * (2026-10-14, codex-sol-61's a3 beside its live a2). `unownedRefs` are the

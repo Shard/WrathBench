@@ -143,7 +143,6 @@ import {
   implicitPauses,
   planResumes,
   planStaleRuns,
-  planTick,
   episodeSessions,
   evalPoolDraw,
   taskDraw,
@@ -1039,8 +1038,6 @@ async function main(): Promise<void> {
   if (args.dryRun) {
     // One read of every run for the whole report (`readReportRuns`).
     const read = readReportRuns();
-    // Fail fast on anything that would fail at spawn time.
-    planTick(config, modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs: read.facts }), () => undefined, stampToday);
     printDryRun(config, args.until, stampToday, read, GROUPS);
     return;
   }
@@ -2004,20 +2001,6 @@ async function main(): Promise<void> {
   // counts every trajectory of a run that has not ended (all of them, on a
   // boot with no fact cache: about 35s on the live runs directory).
   let mayStart = await checkGate(config.preflight);
-  // Fail fast on anything that would fail at spawn time, still before any
-  // spawn. The read goes through the loop's own caches, so the first tick
-  // reuses it instead of counting every trajectory a second time.
-  planTick(
-    config,
-    modelStates({
-      runsDir: RUNS_DIR,
-      roster: rosterModels(config.roster),
-      policy: config.policy,
-      runs: readFacts().facts,
-    }),
-    () => undefined,
-    stampToday,
-  );
   await refreshGoUsage(config);
   refreshModelLists(config);
   if (mayStart) for (const spawn of diffJobs(applyPause(effectiveJobs(config), pauseSwitch !== undefined), sets).start) spawnJob(spawn);
