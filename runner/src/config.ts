@@ -758,8 +758,8 @@ export const runConfigSchema = z.object({
    * harness runs and tracks, and it sleeps between wakes (`wake.ts`). ABSENT
    * on the snippet loop, which every run is unless an arm says otherwise, so
    * every config and tuple stamped before the field existed reads the same.
-   * The fixed loop and codex only, never a scored tier, never fan-out
-   * (`programLoopRefusal`). Identity: a resume keeps it.
+   * The fixed loop, claude-code and codex only, never a scored tier, never
+   * fan-out (`programLoopRefusal`). Identity: a resume keeps it.
    */
   loop: z.literal("program").optional(),
   /**
@@ -1004,9 +1004,8 @@ export function loadRunConfig(raw: unknown): RunConfig {
 
 /**
  * Whether a driver's loop runs the program loop: the fixed loop, and a
- * scaffold the registry says does (`DriverEntry.programLoop`: codex, whose
- * end-of-turn pause becomes the sleep). claude-code and pi, whose one turn
- * runs for hours, do not yet.
+ * scaffold the registry says does (`DriverEntry.programLoop`: claude-code and
+ * codex, whose end-of-turn pause becomes the sleep). pi does not yet.
  */
 export function runsProgramLoop(driver: Driver): boolean {
   return entryOf(driver).kind === "loop" || entryOf(driver).programLoop === true;
@@ -1014,8 +1013,8 @@ export function runsProgramLoop(driver: Driver): boolean {
 
 /**
  * Why a config's agent loop cannot run as stated, or null. The program loop
- * (`loop: "program"`) is a probe arm: the fixed loop and codex run it
- * (`runsProgramLoop`), the other scaffolds' own turn loops do not yet, a
+ * (`loop: "program"`) is a probe arm: the fixed loop, claude-code and codex
+ * run it (`runsProgramLoop`), pi's own turn loop does not yet, a
  * route driver plays no model, a scored tier measures the snippet loop, and
  * one agent driving several characters is a later step. `yield` is a setting
  * of the program loop and means nothing without it.
@@ -1023,7 +1022,7 @@ export function runsProgramLoop(driver: Driver): boolean {
 export function programLoopRefusal(c: Pick<RunConfig, "loop" | "yield" | "driver" | "episode" | "fanout" | "continuedFrom">): string | null {
   if (c.loop === undefined) return c.yield === true ? "--yield is a setting of the program loop; it needs --loop program" : null;
   const entry = entryOf(c.driver);
-  if (!runsProgramLoop(c.driver)) return `--loop program runs on the fixed loop and codex; the ${c.driver} driver runs a CLI's own turn loop`;
+  if (!runsProgramLoop(c.driver)) return `--loop program runs on the fixed loop, claude-code and codex; the ${c.driver} driver runs a CLI's own turn loop`;
   if (entry.route === true) return `--loop program drives a model; the ${c.driver} driver plays a scripted route`;
   if (c.episode !== undefined && isScoredEpisode(c.episode)) return `--loop program is a probe arm's; --episode ${c.episode} is a scored episode, which runs the snippet loop`;
   if (c.fanout !== undefined) return "--loop program drives one character; fan-out is not built for it";
@@ -1033,12 +1032,12 @@ export function programLoopRefusal(c: Pick<RunConfig, "loop" | "yield" | "driver
 
 /**
  * Whether a driver keeps a scaffold's thread context (`ThreadContext`,
- * context.ts): a scaffold whose CLI ends a turn every few calls, so a fresh
- * message with the HUD, the events and the pad goes to the same thread many
- * times a run. That is codex (`DriverEntry.programLoop`). claude-code and pi
- * run one turn for hours, so a fresh message comes once or twice a run and
- * the rule would save nothing; the fixed loop rebuilds its window each turn
- * and holds no thread.
+ * context.ts): a scaffold that runs the program loop (`DriverEntry.programLoop`:
+ * claude-code and codex), where a fresh message with the HUD, the events and
+ * the pad goes to the same conversation after every turn-end sleep. codex
+ * ends a turn every few calls; claude-code's turn can run for hours between
+ * `yield`s, and the rule holds there the same way. The fixed loop rebuilds
+ * its window each turn and holds no thread.
  */
 export function keepsThreadContext(driver: Driver): boolean {
   const entry = entryOf(driver);
