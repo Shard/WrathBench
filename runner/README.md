@@ -1351,8 +1351,10 @@ a refusal whose hint a tool result carried (the stack hands the runner each
 result's hints as it is built, `onHintsDelivered`; matched by signature, so a
 refusal that lands after the drain still wakes, and one whose fact lands late
 does not, until the next load), a death a `dead` hint reported, a routine end
-the routine tools' lines showed, and a `wake(reason)` from a run those lines
-showed as over or replaced. `read_file` and `yield` results are exempt from
+the routine tools' lines showed (that run as ended, or a newer run of its
+name, matched by the run's start; a routine that ends a millisecond after the
+`start_routine` that answered "running 0s" still wakes), and a `wake(reason)`
+from a run those lines showed as over or replaced. `read_file` and `yield` results are exempt from
 the window's 4,000-character message cap (`WINDOW_UNCAPPED_TOOLS`): a file is
 bounded by the 32,000-character file cap, and a wake by its own caps.
 

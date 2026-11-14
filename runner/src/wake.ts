@@ -99,11 +99,24 @@ export interface WakeReason {
   inContext: boolean;
   /** A refusal's signature (`routine|character|action|status`): how a delivered hint is matched to it. */
   signature?: string | undefined;
-  /** The routine a `wake(reason)` came from, when a routine called it. */
-  routine?: { name: string; character?: string | undefined } | undefined;
+  /**
+   * The routine a `wake(reason)` came from, when a routine called it; for a
+   * routine's end, the run that ended, by its start (`routinesShown`).
+   */
+  routine?: { name: string; character?: string | undefined; startedAt?: number | undefined } | undefined;
   /** At fan-out, the character a death or a closed stream is one of. */
   character?: string | undefined;
 }
+
+/** A routine's name and character as one key. */
+const runKey = (name: string, character: string | undefined): string => (character === undefined ? name : `${name}\u0000${character}`);
+
+/**
+ * Whether routine lines that showed `shown` told the model a run started at
+ * `startedAt` is over: they showed that run ended, or a newer run of its name.
+ */
+const shownOver = (shown: Pick<RoutineRow, "startedAt" | "state"> | undefined, startedAt: number | undefined): boolean =>
+  shown !== undefined && startedAt !== undefined && (shown.startedAt > startedAt || (shown.startedAt === startedAt && shown.state !== "running"));
 
 /** The key a reason's "shown up to" moment is kept under: its key, and at fan-out its character. */
 const seenKey = (key: WakeKey, character: string | undefined): string => (character === undefined ? key : `${key}\u0000${character}`);
@@ -118,7 +131,13 @@ const label = (o: object): string => {
 export function wakeReasonOf(fact: ProgramFact): WakeReason | null {
   switch (fact.kind) {
     case "ended":
-      return { key: "routine_ended", ts: fact.ts, text: `routine ended (${label(fact.routine)}, ${fact.routine.state})`, inContext: false };
+      return {
+        key: "routine_ended",
+        ts: fact.ts,
+        text: `routine ended (${label(fact.routine)}, ${fact.routine.state})`,
+        inContext: false,
+        routine: { name: fact.routine.name, ...(fact.routine.character !== undefined ? { character: fact.routine.character } : {}), startedAt: fact.routine.startedAt },
+      };
     case "error":
       return { key: "error", ts: fact.ts, text: `new error (${label(fact)}: ${fact.error.name})`, inContext: false };
     case "refusal":
@@ -555,6 +574,8 @@ export class ProgramWake {
   private connected: boolean | undefined;
   /** At fan-out, whether each character's stream was open at the last sample. */
   private readonly connectedOf = new Map<string, boolean>();
+  /** Each routine's row as a routine tool's answer last showed it, by name and character (`routinesShown`). */
+  private readonly rowsShown = new Map<string, RoutineRow>();
   /** Restarts the program was blamed for: each counts toward `snippet-runaway` (`takeBlamedRestarts`). */
   private blamed = 0;
   private readonly now: () => number;
@@ -590,7 +611,10 @@ export class ProgramWake {
       // A record that could not be written must not cost the sandbox its IPC.
     }
     const reason = wakeReasonOf(fact);
-    if (reason !== null) this.waker.note(reason);
+    if (reason === null) return;
+    // An end that lands after the routine lines that showed its run over is not news.
+    if (reason.key === "routine_ended" && reason.routine !== undefined && shownOver(this.rowsShown.get(runKey(reason.routine.name, reason.routine.character)), reason.routine.startedAt)) return;
+    this.waker.note(reason);
   };
 
   /** The sandbox's `onNotice`, beside the trajectory's: a notice wakes. */
@@ -638,17 +662,23 @@ export class ProgramWake {
 
   /**
    * A routine tool just answered with every routine's state (`rows`, as its
-   * lines showed them): a routine that ended before it is news the model
-   * has, so it no longer wakes a sleep that starts after. Nor does a
-   * `wake(reason)` from a run those lines show as over: one that has ended,
-   * or that a newer run of the same name has replaced. A still-running
-   * routine's call stays pending. Both are still in the next wake's lines.
+   * lines showed them). A run's end those lines showed is news the model
+   * has, so it no longer wakes a sleep that starts after, nor does it when
+   * its fact lands after them: the lines showed the run ended, or a newer
+   * run of its name. An end the lines did not show (a routine that threw a
+   * millisecond after the start that answered, its row still "running 0s")
+   * still wakes. Nor does a `wake(reason)` from a run those lines show as
+   * over: one that has ended, or that a newer run of the same name has
+   * replaced. A still-running routine's call stays pending. Both are still
+   * in the next wake's lines.
    */
-  routinesShown(rows: readonly RoutineRow[] = []): void {
-    this.waker.forget("routine_ended", this.now());
+  routinesShown(rows: readonly RoutineRow[]): void {
+    for (const r of rows) this.rowsShown.set(runKey(r.name, r.character), r);
     this.waker.forgetWhere((r) => {
-      if (r.key !== "wake" || r.routine === undefined) return false;
+      if (r.routine === undefined) return false;
       const run = rows.find((x) => x.name === r.routine!.name && x.character === r.routine!.character);
+      if (r.key === "routine_ended") return shownOver(run, r.routine.startedAt);
+      if (r.key !== "wake") return false;
       return run !== undefined && (run.state !== "running" || run.startedAt > r.ts);
     });
   }
