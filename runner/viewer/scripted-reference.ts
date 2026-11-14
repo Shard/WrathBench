@@ -9,12 +9,11 @@
  * stamp that driver leaves, either one alone, as everywhere else.
  */
 
-import { REFERENCE_STAMP, driverEntry } from "../src/drivers";
+import { isReferenceRun } from "../src/drivers";
 import type { EpisodeIdView, ResultRun, ScriptedReferenceLine } from "./api-types";
 
-export function isReferenceResult(r: Pick<ResultRun, "driver" | "unscored">): boolean {
-  return driverEntry(r.driver)?.route === true || (r.unscored ?? "").startsWith(REFERENCE_STAMP);
-}
+/** The registry's one definition (`isReferenceRun`), over a result row. */
+export const isReferenceResult: (r: Pick<ResultRun, "driver" | "unscored">) => boolean = isReferenceRun;
 
 /**
  * One line per tier and series: the newest started reference run that

@@ -118,7 +118,6 @@ function everyLane(): { name: string; spec: Resolved; resume: boolean }[] {
     for (const s of specs) out.push({ name, spec: s, resume });
   };
   add("e90 openai, routed and billed", specsOf(job({ ref: "glm-free", episode: "e90", attempt: 2 })));
-  add("e90 extra", specsOf(job({ ref: "glm-free", episode: "e90", attempt: 4, extra: { race: 3, class: 3 } })));
   add(
     "e360 claude-code with a window and a credential",
     specsOf(job({ ref: "sonnet-100k", episode: "e360", attempt: 1, placed: { "sonnet-100k": { id: "claude-2", env: "CLAUDE_CODE_OAUTH_TOKEN_2", usageMaxPct: { scored: 80, freeplay: 80 } } } })),
@@ -174,11 +173,12 @@ function everyLane(): { name: string; spec: Resolved; resume: boolean }[] {
  * The fresh launches run.ts refuses after the parse, and why: every scored
  * lane, because scored episodes wait until a long-clock program-loop run has
  * been read (operator, 2026-11-14). Every freeplay and hand lane launches.
+ * The planner never spawns a scored lane while they wait (`scoredHold`); this
+ * is the launch's own refusal behind it, for a hand launch.
  */
 const SCORED_WAIT = "scored episodes do not run yet: they wait until a long-clock program-loop run has been read";
 const EXPECTED_REFUSED_AT_LAUNCH: string[] = [
   `e90 openai, routed and billed: --episode e90 is a scored episode, and ${SCORED_WAIT}`,
-  `e90 extra: --episode e90 is a scored episode, and ${SCORED_WAIT}`,
   `e360 claude-code with a window and a credential: --episode e360 is a scored episode, and ${SCORED_WAIT}`,
   `e90 codex: --episode e90 is a scored episode, and ${SCORED_WAIT}`,
   `queue job, pinned: --episode e90 is a scored episode, and ${SCORED_WAIT}`,

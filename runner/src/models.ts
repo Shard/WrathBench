@@ -42,15 +42,14 @@
  *   a ladder failure while it is paused, and it holds its model: the policy
  *   does not start a second run for a model whose run is waiting to be
  *   resumed. It is counted, or climbs the ladder, only when it finally ends.
- * - **Billing is a model property** (`model-cost.ts`). A paid model has its own
- *   targets (hard: never extras) and shares one in-flight cap; a free model
- *   gets extra runs at lowest priority once nothing else is schedulable,
- *   cycling through `extras.characters`. An extra is an attempt, never counted.
- * - **A local model's extras are freeplay** (`policy.extras.local`).
- *   The box is inference-bound, so another 90 minutes of it says little that
- *   the last three said; one unbounded freeplay run at a time, restarted when
- *   it ends, is the long-horizon data it can give. Same rule otherwise: an
- *   attempt, reported apart, never counted toward a target.
+ * - **Billing buys no runs** (`model-cost.ts`): it decides where a run may
+ *   execute, never how many a model gets; the tier does that.
+ * - **The one extra is a freeplay session** (`idle: "unlimited"` on the
+ *   entry): past its targets, a model so marked gets one unbounded freeplay
+ *   run at a time, restarted when it ends, at lowest priority. An extra is an
+ *   attempt, stamped `extra: true` and reported apart, never counted toward a
+ *   target. The scored-tier extras that rolled a race and class are probe
+ *   campaigns now.
  */
 
 import { createHash } from "node:crypto";
@@ -59,11 +58,11 @@ import { join } from "node:path";
 import { openRunDb, RUN_DB_JOURNAL_FILE, RUN_DB_WAL_FILE } from "./rundb";
 import { bestLevelOf, fanoutLead, fanoutReadings, readRunRow } from "./run-reader";
 import { harnessSeries } from "./comparability";
-import { DEFAULT_DRIVER, defaultCompactWindowOf, driverEntry, eitherHas, entryOf, harnessDriver, isProbeOnlyDriver, probeOnlyRefusal } from "./drivers";
+import { DEFAULT_DRIVER, defaultCompactWindowOf, driverEntry, eitherHas, entryOf, harnessDriver, isNotAModelRun, isProbeOnlyDriver, probeOnlyRefusal } from "./drivers";
 import { AUTO_COMPACT_WINDOW, DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, defaultLoopOf, harnessOf, isDriver, isTokenEnvName, isUnscoredDriverName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isLevelEpisode, isScoredEpisode, isTaskEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, partyAttempt, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
-import { badEvidenceReason, neverStale, OFFLINE_PAUSE, PARTY_PAUSE, SUBSCRIPTION_PAUSE, resumesOnPause, staleAfterMs } from "./lapse";
+import { badEvidenceReason, countedRun, neverStale, OFFLINE_PAUSE, PARTY_PAUSE, SUBSCRIPTION_PAUSE, resumesOnPause, staleAfterMs } from "./lapse";
 import { parseSubscriptionUsage, type SubscriptionUsage } from "./subscription-usage";
 import { billingOf, type Billing } from "./model-cost";
 import { credentialCarries, providerById, providerOfModel, type Credential } from "./credential-slots";
@@ -92,12 +91,6 @@ export const POLICY_EPISODES: readonly ScoredEpisodeId[] = ["e90", "e360", "dead
  * attempt numbers) and so a freeplay extra is reported like any other.
  */
 export const STATS_EPISODES: readonly EpisodeId[] = EPISODE_IDS;
-
-/** A starting character for an extra run: race and class ids as the client sends them. */
-export interface StartingCharacter {
-  race: number;
-  class: number;
-}
 
 /**
  * The ladder a model climbs, named once here. A tier is a statement
@@ -870,8 +863,6 @@ export interface NextJob {
   /** 1-based attempt number on this (model, episode): `attempts + 1`. */
   attempt: number;
   why: string;
-  /** An extra run past the target (free models only), with the character it rolls. */
-  extra?: StartingCharacter;
   /**
    * Set on a probe pick: which campaign and version commissioned it, and which
    * cell and arm it is. The shape is the published definition's; only the
@@ -2019,21 +2010,20 @@ export function countsTowardTarget(f: Pick<RunFact, "loop" | "yield">, driver: s
 }
 
 export function isCounted(f: RunFact): boolean {
-  if (f.extra || f.episodeOverride) return false;
   // A driver that is not a model (the scripted stub, the scripted reference)
   // is never evidence about one, whatever episode it was launched under and
   // whatever model id it carries: no target, no promotion witness, no repeat
   // (docs/METHODOLOGY.md, "Scoring"). Read off the run's own config, so it
   // holds for a fact the cache wrote before this line existed.
-  if (isUnscoredDriverName(f.driver)) return false;
-  return (
-    badEvidenceReason({
-      live: f.live,
-      paused: f.pause !== null,
-      modelResponses: f.modelResponses,
-      terminationReason: f.terminationReason,
-    }) === null
-  );
+  return countedRun({
+    extra: f.extra,
+    episodeOverride: f.episodeOverride,
+    notAModel: isNotAModelRun({ driver: f.driver }),
+    live: f.live,
+    paused: f.pause !== null,
+    modelResponses: f.modelResponses,
+    terminationReason: f.terminationReason,
+  });
 }
 
 /** A finished attempt the ladder reads as "no progress". */

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { PAUSE_REASONS } from "../src/config";
-import { NOT_THE_MODELS_FAULT, PROVIDER_PAUSES, STALL_PAUSE, classifyLapse, resumesOnPause, staleAfterMs, STALE_FALLBACK_MS, type Lapse } from "../src/lapse";
+import { NOT_THE_MODELS_FAULT, PROVIDER_PAUSES, STALL_PAUSE, classifyLapse, countedRun, resumesOnPause, staleAfterMs, STALE_FALLBACK_MS, type Lapse } from "../src/lapse";
 
 /**
  * The whole of the lapse rule, as a table. Every row is a case an operator
@@ -168,4 +168,16 @@ test("the stall pause is a pause reason the runner writes, and not a provider's"
 
 test("adapter-error is not the model's fault (operator, 2026-08-30)", () => {
   expect(NOT_THE_MODELS_FAULT.has("adapter-error")).toBe(true);
+});
+
+describe("countedRun — the one definition the scheduler and the campaigns page read", () => {
+  const done = { live: false, paused: false, modelResponses: 12, terminationReason: "episode-limit", extra: false, episodeOverride: false, notAModel: false };
+  test("a completed model result counts; an extra, an override, a scripted driver or bad evidence does not", () => {
+    expect(countedRun(done)).toBe(true);
+    expect(countedRun({ ...done, extra: true })).toBe(false);
+    expect(countedRun({ ...done, episodeOverride: true })).toBe(false);
+    expect(countedRun({ ...done, notAModel: true })).toBe(false);
+    expect(countedRun({ ...done, terminationReason: "attempt-failed" })).toBe(false);
+    expect(countedRun({ ...done, paused: true })).toBe(false);
+  });
 });

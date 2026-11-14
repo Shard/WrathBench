@@ -146,7 +146,6 @@ import {
   type UnstampedRun,
   schedulability,
   type SchedulingPolicy,
-  type StartingCharacter,
   STATS_EPISODES,
   TIER_TABLE,
   TIERS,
@@ -501,8 +500,6 @@ export interface JobRow {
   inFlight?: string;
   /** The policy's attempt number, for a policy job. */
   attempt?: number;
-  /** A scored-tier extra run, with the character it rolls; a freeplay extra rolls none. */
-  extra?: StartingCharacter;
   /** The credentials its runs took slots on, by id. */
   credentials?: string[];
   /**
@@ -563,7 +560,7 @@ export function formatAccounts(rows: readonly AccountRow[], max?: number): strin
     const j = r.job;
     const what =
       `${j.name}: ${j.models.join("+")} ${j.episode ?? "episode unknown"}${j.attempt !== undefined && j.attempt > 1 ? ` attempt ${j.attempt}` : ""}` +
-      `${isExtraJob(j) ? (j.extra !== undefined ? ` extra (race ${j.extra.race} class ${j.extra.class})` : " extra") : ""}` +
+      `${isExtraJob(j) ? " extra" : ""}` +
       // The credential(s) its runs took slots on.
       `${j.credentials !== undefined && j.credentials.length > 0 ? ` [${j.credentials.join(", ")}]` : ""}`;
     if (j.planned === true) {
@@ -1026,7 +1023,6 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
       models: j.models.length > 0 ? j.models : [j.ref],
       episode: j.episode ?? null,
       ...(j.attempt !== undefined ? { attempt: j.attempt } : {}),
-      ...(j.extra !== undefined ? { extra: j.extra } : {}),
       ...(j.credentials !== undefined ? { credentials: j.credentials } : {}),
     };
     // A job record without its process half was written by another build of
@@ -1244,7 +1240,6 @@ export interface InFlightRun extends InFlight {
   episode: EpisodeId | null;
   runId?: string;
   attempt?: number;
-  extra?: StartingCharacter;
   /** The credentials its runs took slots on, by id. */
   credentials?: string[];
   /** Its run comes back where it left off after a restart — same run id, account and character — instead of spending its attempt. */
@@ -1287,7 +1282,6 @@ export function inFlightRuns(opts: {
       episode: j.episode,
       ...(runId !== undefined ? { runId } : {}),
       ...(j.attempt !== undefined ? { attempt: j.attempt } : {}),
-      ...(j.extra !== undefined ? { extra: j.extra } : {}),
       ...(j.credentials !== undefined ? { credentials: j.credentials } : {}),
       // The supervisor's own word for a campaign that asked to resume; the lane's rule for the rest.
       resumesInPlace: j.resumesInPlace === true || (j.episode !== null && resumesOnPause(j.episode, false)),
@@ -1411,7 +1405,6 @@ export function planDryRun(opts: {
       planned: true,
       ...(spawn.resumeRunId !== undefined ? { resumes: spawn.resumeRunId } : {}),
       ...(job.attempt !== undefined ? { attempt: job.attempt } : {}),
-      ...(job.extra !== undefined ? { extra: job.extra } : {}),
       ...(credentialIdsOf(job).length > 0 ? { credentials: credentialIdsOf(job) } : {}),
     };
   };
@@ -1432,7 +1425,6 @@ export function planDryRun(opts: {
             episode: r.episode,
             ...(r.runId !== undefined ? { runId: r.runId } : {}),
             ...(r.attempt !== undefined ? { attempt: r.attempt } : {}),
-            ...(r.extra !== undefined ? { extra: r.extra } : {}),
             ...(r.credentials !== undefined ? { credentials: r.credentials } : {}),
             inFlight: r.resumesInPlace ? "a restart pauses it and it resumes in place here" : "a restart spends its attempt (ended manual, not a strike)",
           },
