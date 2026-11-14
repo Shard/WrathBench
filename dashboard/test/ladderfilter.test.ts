@@ -343,13 +343,19 @@ describe("the condition rules", () => {
     expect(newestConditions(runs).map((x) => x.runId)).toEqual(["a2", "b2", "c1"]);
   });
 
-  test("the choice is per model and effort: every effort keeps a row", () => {
+  test("the choice is per model, effort and window: each keeps a row", () => {
     const efforts = [
       { ...r("lo", "m", 100, cond("s-lo")), effort: "low" },
       { ...r("hi", "m", 200, cond("s-hi")), effort: "high" },
       { ...r("hi-p", "m", 300, cond("p-hi", { loop: "program" })), effort: "high" },
     ] as ResultRun[];
     expect(newestConditions(efforts).map((x) => x.runId)).toEqual(["lo", "hi-p"]);
+    // The compaction window is a row of its own the same way.
+    const windows = [
+      { ...r("w100", "m", 100, cond("s-100")), compactWindow: "100k" },
+      { ...r("w300", "m", 200, cond("s-300")), compactWindow: "300k" },
+    ] as ResultRun[];
+    expect(newestConditions(windows).map((x) => x.runId)).toEqual(["w100", "w300"]);
   });
 
   test("an unscored run never chooses, and a model with no counted run keeps what it has", () => {

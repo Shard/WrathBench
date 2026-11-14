@@ -825,11 +825,11 @@ runs that recorded one.
   `dashboard/src/lib/ladderfilter.ts`). An OpenCode Go row, routed with
   fallbacks allowed, is on the unpinned chart.
 - **newest condition**, **on by default** (operator, 2026-11-14). Each model
-  at each effort shows only its newest condition: the one whose latest counted
+  at each effort and compaction window shows only its newest condition: the one whose latest counted
   run started last, over the whole tier before the chart group is chosen, so a
   row whose newest runs are on the program loop leaves the snippet chart
-  rather than showing an older one there. Efforts are comparable rows, so each
-  keeps its own. Ties go to the condition id that sorts first.
+  rather than showing an older one there. Efforts and windows are comparable
+  rows, so each keeps its own. Ties go to the condition id that sorts first.
   `?conditions=all` shows every condition as its own row. The rule is
   `newestConditions`; the homepage and the social card read the ladder
   through the same default (`defaultLadderRuns`). On the 0.5 e90 data at the
