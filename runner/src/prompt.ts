@@ -210,8 +210,8 @@ function bodyFor(harness: Harness, wiki = true, program?: ProgramPrompt): string
 // ------------------------------------------------------------ program loop
 
 /**
- * The program loop's prompt (`loop: "program"`, a probe arm; wording
- * approved by the operator, 2026-11-12). It is a second
+ * The program loop's prompt (`loop: "program"`; wording approved by the
+ * operator, 2026-11-12). It is a second
  * body beside the snippet loop's, never an edit of it: each passage that
  * describes the snippet loop's persistent REPL is replaced exactly
  * (`replaceExactly`, which throws at load when a target is missing or
@@ -568,12 +568,20 @@ export function continuedSessionNote(o: {
   seen: string;
   raceName?: string | null;
   className?: string | null;
+  /**
+   * The run is on the program loop: what it carried is said in that loop's
+   * words, `true` when the predecessor's files came along
+   * (`PROGRAM_CONTINUE_KEPT`), `false` when there were none to carry
+   * (`PROGRAM_CONTINUE_EMPTY`).
+   */
+  programFiles?: boolean | undefined;
 }): string {
   const race = o.raceName ?? null;
   const klass = o.className ?? null;
+  const kept = o.programFiles === undefined ? "Conversation history was not preserved; your scratchpad was." : o.programFiles ? PROGRAM_CONTINUE_KEPT : PROGRAM_CONTINUE_EMPTY;
   return (
     `this session continues your earlier freeplay session ${o.from} on the same character. ` +
-    `Conversation history was not preserved; your scratchpad was. ` +
+    `${kept} ` +
     `Your character is unchanged and was NOT deleted: name "${o.character}", ` +
     `race ${o.race}${race !== null ? ` (${race})` : ""}, class ${o.class}` +
     `${klass !== null ? ` (${klass})` : ""}.${o.seen} Do not create a different one. ` +
@@ -582,6 +590,18 @@ export function continuedSessionNote(o: {
     `— it reuses the existing character of that name.`
   );
 }
+
+/**
+ * What a continued program-loop run carried from its predecessor (operator,
+ * 2026-11-14), in place of the snippet loop's "Conversation history was not
+ * preserved; your scratchpad was.": its files and memory, and none of its
+ * routines running. A draft for the operator's review.
+ */
+export const PROGRAM_CONTINUE_KEPT =
+  "Conversation history was not preserved; your scratchpad, your files and memory were, and no routine is running: start the ones you want.";
+
+/** The same, when the predecessor left no files (it ran the snippet loop, or wrote none). A draft for the operator's review. */
+export const PROGRAM_CONTINUE_EMPTY = "Conversation history was not preserved; your scratchpad was, and your files start empty.";
 
 /**
  * What a resumed program-loop run kept, in place of the snippet loop's

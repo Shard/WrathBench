@@ -70,6 +70,7 @@ import {
   type OutsideRun,
 } from "./run-fleet-plan";
 import { fmtAge } from "./inspect-run";
+import { SCORED_EPISODES_WAIT } from "../runner/src/config";
 import {
   CONTAINER,
   type FleetState,
@@ -1322,6 +1323,8 @@ export function planDryRun(opts: {
   outside?: readonly OutsideRun[];
   /** The book's run-pod setting (`runPodsOf`), as the tick plans under it. */
   runPods?: { max: number | undefined };
+  /** Scored episodes closed, and why (`SCORED_EPISODES_WAIT`), as the tick plans under it. Absent is open. */
+  scoredGate?: string;
 }): DryRunPlan {
   const { config, runs, states, held, stamp, gate } = opts;
   const inFlight = opts.inFlight ?? [];
@@ -1356,6 +1359,7 @@ export function planDryRun(opts: {
     opts.outside ?? [],
     inFlight.filter((r) => !r.owned).map((r) => ({ credential: r.credentials?.[0] ?? null, episode: r.episode })),
     opts.runPods,
+    opts.scoredGate,
   );
   const counted = countedFrom(states);
   const rows: AccountRow[] = [];
@@ -1540,6 +1544,8 @@ export function printDryRun(
     offByGroup,
     outside: outsideRuns([...runs, ...unstamped], { running: ownRunIds, busyAccounts }),
     runPods: runPodsHere(config.policy.runPods),
+    // Scored episodes wait: held with the reason, as the tick holds them.
+    ...(SCORED_EPISODES_WAIT !== null ? { scoredGate: SCORED_EPISODES_WAIT } : {}),
   });
   console.log("");
   for (const line of formatCredentialStatus(localCredentialStatuses(config, credGate, runs, unstamped), config.policy.maxSessions, now)) console.log(line);

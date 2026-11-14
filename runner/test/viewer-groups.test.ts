@@ -23,7 +23,8 @@ import {
   type Groups,
 } from "../viewer/groups";
 import { parseFleet, rosterModels, withoutEvals } from "../../infra/run-fleet-config";
-import { forGroups, formatGroupsBanner, formatModels, formatOutstandingFor, formatQueue, planDryRun } from "../../infra/run-fleet-status";
+import { forGroups, formatGroupsBanner, formatHeld, formatModels, formatOutstandingFor, formatQueue, planDryRun } from "../../infra/run-fleet-status";
+import { SCORED_EPISODES_WAIT } from "../src/config";
 import { modelStates } from "../src/models";
 import { rowOf } from "../viewer/models";
 
@@ -214,5 +215,15 @@ describe("bun wb fleet status with evals off", () => {
     };
     expect(plan(ALL_GROUPS).map((p) => p.job.episode)).toContain("e90");
     expect(plan(evalsOff).map((p) => p.job.episode)).toEqual(["freeplay"]);
+  });
+
+  test("while scored episodes wait, the dry-run holds the scored pick and says why, as the tick does", () => {
+    const { config } = forGroups({ ...cfg, jobs: [] }, ALL_GROUPS);
+    const dry = planDryRun({ config, runs: [], states, held: () => undefined, stamp: "20261112", now: NOW, evals: true, scoredGate: SCORED_EPISODES_WAIT! });
+    expect(dry.plan.policy.map((p) => [p.job.refs[0], p.job.episode])).toEqual([["b", "freeplay"]]);
+    expect(formatHeld(dry.plan.heldPicks)).toEqual([
+      `  a: HELD — e90 wanted, ${SCORED_EPISODES_WAIT}`,
+      `  b: HELD — e90 wanted, ${SCORED_EPISODES_WAIT}`,
+    ]);
   });
 });

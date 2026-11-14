@@ -147,14 +147,14 @@ describe("--loop: config, tuple and the thread context", () => {
 
   test("program or snippet, and nothing else", () => {
     expect(loopOf(undefined)).toBeUndefined();
-    expect(loopOf("snippet")).toBeUndefined();
+    expect(loopOf("snippet")).toBe("snippet");
     expect(loopOf("program")).toBe("program");
     expect(() => loopOf("snippet-slim")).toThrow("--loop takes program or snippet");
   });
 
   test("the thread context is the program loop's on codex, and the tuple carries no key for it", () => {
-    const snippet = configFromArgs(CODEX, {});
-    const program = configFromArgs([...CODEX, "--loop", "program"], {});
+    const snippet = configFromArgs([...CODEX, "--loop", "snippet"], {});
+    const program = configFromArgs(CODEX, {});
     expect(threadContextOf(snippet)).toBe(false);
     expect(threadContextOf(program)).toBe(true);
     expect(threadContextOf({ loop: "program", driver: "openai" })).toBe(false);

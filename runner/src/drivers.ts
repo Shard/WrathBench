@@ -173,6 +173,13 @@ export interface DriverEntry {
    * it whatever this says.
    */
   programLoop?: true;
+  /**
+   * The program loop runs without `yield` unless a launch asks for it
+   * (`yieldDefaultOf`, config.ts; operator, 2026-11-14): codex, which ends a
+   * turn every few calls and was measured without it. Absent: `yield` is on
+   * by default wherever the program loop runs.
+   */
+  programYieldOff?: true;
   /** Whether a roster entry may name it. */
   roster: boolean;
   /** Why a roster entry may never name it, said by name rather than as an unknown driver. */
@@ -326,6 +333,7 @@ export const DRIVER_TABLE = {
     harness: "codex",
     kind: "scaffold",
     programLoop: true,
+    programYieldOff: true,
     roster: true,
     sessionCap: true,
     endpoint: false,

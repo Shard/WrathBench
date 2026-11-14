@@ -49,7 +49,7 @@
  */
 
 import { unsealLaunchSecret } from "./store-secrets";
-import { copyFileSync, existsSync, rmSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { hostname } from "node:os";
 import { latestReading } from "./run-reader";
@@ -65,15 +65,17 @@ import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
 import { openWikiBundle, wikiBundleMeta } from "./wiki";
 import type { ChatAdapter } from "./adapter";
 import { DRIVER_ADAPTERS, type LaunchInputs } from "./driver-adapters";
-import { DEFAULT_DRIVER, DRIVER_TABLE, entryOf } from "./drivers";
+import { DEFAULT_DRIVER, DRIVER_TABLE, entryOf, isDriver, type Driver } from "./drivers";
 import { referenceProgramPath, resolveReferenceLaunch } from "./reference-program";
 import { parseRouting, type RoutingSpec } from "./routing";
 import {
   DRIVERS,
   episodeOverrideOf,
   launchCompactWindow,
+  launchLoopOf,
   loadRunConfig,
   loopOf,
+  loopLaunchRefusal,
   MIN_TOKEN_LENGTH,
   newRunId,
   newSessionToken,
@@ -230,6 +232,7 @@ export function configFromArgs(
   const runImage = env[RUN_IMAGE_ENV];
   const runId = typeof args["run-id"] === "string" ? args["run-id"] : newRunId();
   const fanout = fanoutFromArgs(args);
+  const driverArg = typeof args["driver"] === "string" ? args["driver"] : DEFAULT_DRIVER;
   const c = loadRunConfig({
     runId,
     // The grant, when the launch carries one. The run's `account` is then the
@@ -290,11 +293,14 @@ export function configFromArgs(
     wiki: flag(args["wiki"]),
     // Identity as well: a resumed extra is still an extra.
     extra: flag(args["extra"]),
-    // The agent loop, a probe arm's (`--loop program`, `--yield true`):
-    // absent on the snippet loop, and identity like the rest, so a resume
-    // keeps the loop it launched on (`programLoopRefusal`).
-    ...(loopOf(args["loop"]) !== undefined ? { loop: loopOf(args["loop"]) } : {}),
-    ...(flag(args["yield"]) === true ? { yield: true } : {}),
+    // The agent loop and its `yield`, written at every launch: `--loop` and
+    // `--yield` when given, else the driver's default (`launchLoopOf`).
+    // Identity like the rest, so a resume keeps the loop it launched on.
+    ...launchLoopOf(
+      // A probe's fan-out grant is its campaign file's, so it is read there too.
+      { driver: isDriver(driverArg) ? driverArg : DEFAULT_DRIVER, fanout: fanout ?? (probe as { fanout?: unknown } | undefined)?.fanout },
+      { loop: loopOf(args["loop"]), yield: flag(args["yield"]) },
+    ),
     // The roster entry's own billing, when it stated one; identity like the
     // rest, so a resume keeps the side it launched on.
     billing: typeof args["billing"] === "string" ? args["billing"] : undefined,
@@ -322,6 +328,32 @@ export function configFromArgs(
     ...(probe ?? {}),
   });
   return { ...c, runId: c.runId ?? runId, token: c.token ?? newSessionToken() };
+}
+
+/**
+ * Copy a predecessor's program files (`<run>/program/files/`, `memory.json`
+ * among them) into a new run's workspace, leaving its versions and registry
+ * behind. True when there were files to carry. A directory already there is
+ * left alone: a fresh launch onto a populated run directory is refused before
+ * this, so it is belt and braces.
+ */
+export function carryProgramFiles(fromRunDir: string, toRunDir: string): boolean {
+  const from = join(fromRunDir, PROGRAM_DIR, "files");
+  const to = join(toRunDir, PROGRAM_DIR, "files");
+  if (!existsSync(from) || existsSync(to) || readdirSync(from).length === 0) return false;
+  cpSync(from, to, { recursive: true });
+  return true;
+}
+
+/**
+ * Empty a new run's workspace files again, after a continuation whose
+ * character turned out to be gone: the run starts fresh, and the files it
+ * carried were that character's. Before the sandbox's first start only.
+ */
+export function dropCarriedProgramFiles(runDir: string): void {
+  const files = join(runDir, PROGRAM_DIR, "files");
+  rmSync(files, { recursive: true, force: true });
+  mkdirSync(files, { recursive: true });
 }
 
 /** What a continuation takes from its predecessor: the character's identity. */
@@ -608,6 +640,15 @@ async function main(): Promise<void> {
       process.exit(2);
     }
   }
+  // The snippet loop is a probe campaign's legacy arm, and scored episodes
+  // wait: refused at a fresh launch and on a resume alike, before anything
+  // is written. A run stored before the loop was written down was the
+  // snippet loop, so it is refused here too.
+  const loopRefused = loopLaunchRefusal(config);
+  if (loopRefused !== null) {
+    console.error(`[wrathbench] ${resumed ? `--resume ${config.runId}` : "launch"} refused: ${loopRefused}`);
+    process.exit(2);
+  }
   // The scripted reference program is a private build input, at a fixed path
   // in the operator's image (`reference-program.ts`). Loaded here, on a fresh
   // launch and a resume alike, before anything is written: a build without it
@@ -722,6 +763,12 @@ async function main(): Promise<void> {
   if (continuation !== undefined && !existsSync(scratchpad.path) && existsSync(join(continuation.dir, "scratchpad.md"))) {
     copyFileSync(join(continuation.dir, "scratchpad.md"), scratchpad.path);
   }
+  // On the program loop its files come along too, `memory.json` among them,
+  // and not its registry: nothing it was running starts by itself (operator,
+  // 2026-11-14). The stack loads them at the sandbox's first start
+  // (`ProgramHost`, a workspace filled before it). A snippet-loop predecessor
+  // has none, and the workspace starts empty.
+  const carriedFiles = continuation !== undefined && config.loop === "program" ? carryProgramFiles(continuation.dir, runDir) : false;
 
   // driver: its launch preflight (`driver-adapters.ts`) checks the key or the
   // lane, redacts the credential, names a CLI lane in the config the run
@@ -887,7 +934,7 @@ async function main(): Promise<void> {
   if (session !== undefined) void moduleIdentity(config.moduleUrl, moduleAuthHeaders()).then((m) => session.writer.setModule(m));
 
   /*
-   * The program loop (`loop: "program"`, a probe arm): the sandbox also hosts
+   * The program loop (`loop: "program"`): the sandbox also hosts
    * the model's program, a file workspace in the run directory whose routines
    * the stack runs and tracks, and the run sleeps between wakes
    * (`wake.ts`). The wake is made first: the program's facts are its from the
@@ -896,9 +943,11 @@ async function main(): Promise<void> {
    */
   const programWake =
     config.loop === "program"
-      ? new ProgramWake({ trajectory, ...(session !== undefined ? { counts: () => session.signals.counts() } : {}) })
+      ? new ProgramWake({ trajectory, counts: () => (session?.signals ?? fanoutSignals)?.counts() ?? { deaths: 0, quests: 0 } })
       : undefined;
   if (programWake !== undefined && session !== undefined) session.signals.onDeath = (ts) => programWake.onDeath(ts);
+  // A fan-out run's characters share one drain, and any one's death wakes, by name.
+  if (programWake !== undefined && fanoutSignals !== undefined) fanoutSignals.onDeath = (ts, character) => programWake.onDeath(ts, character);
   const sandbox = new SandboxHost({
     moduleUrl: config.moduleUrl,
     token: config.token,
@@ -1236,6 +1285,9 @@ async function main(): Promise<void> {
         await trajectory.dropContinuation(config.runId, detail);
         config = { ...config, character: undefined, continuedFrom: undefined };
         if (existsSync(scratchpad.path)) rmSync(scratchpad.path);
+        // The program files it carried describe that character too: the
+        // workspace starts empty, before the sandbox's first start loads them.
+        if (carriedFiles) dropCarriedProgramFiles(runDir);
         continuation = undefined;
       }
       // The freshness tripwire is one character's first sight; a fan-out
@@ -1296,6 +1348,7 @@ async function main(): Promise<void> {
       seen,
       raceName: raceName(c.race),
       className: className(c.class),
+      ...(config.loop === "program" ? { programFiles: carriedFiles } : {}),
     });
   };
 
@@ -1310,6 +1363,7 @@ async function main(): Promise<void> {
               resumed,
               back: roster.views().filter((v) => v.state === "in").map((v) => v.character),
               lost: fanoutLost,
+              ...(config.loop === "program" ? { program: true } : {}),
             }),
           } as const,
         ]

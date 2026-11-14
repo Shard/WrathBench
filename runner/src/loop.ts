@@ -298,7 +298,9 @@ export class ContextBuilder {
         eventCount += s.eventCount ?? 0;
         lastSeq += (s.lastSeq ?? -1) + 1;
       }
-      return { eventCount, lastSeq, observation: { connected: this.fanoutDigests.every((d) => d.connected) } } as SnapshotLike;
+      // Each character's level and stream, for a program-loop wake (`WakeSample.seats`).
+      const seats = this.fanoutDigests.map((d) => ({ character: d.character, level: d.level, connected: d.connected }));
+      return { eventCount, lastSeq, observation: { connected: this.fanoutDigests.every((d) => d.connected) }, seats } as SnapshotLike;
     } catch {
       return null;
     }
@@ -661,7 +663,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
    * it always has.
    */
   const programPrompt = programPromptOf(config);
-  const programTools = programPrompt !== undefined ? { yield: programPrompt.yield } : undefined;
+  const programTools = programPrompt !== undefined ? { yield: programPrompt.yield, characters: o.sandbox.roster !== undefined } : undefined;
   const program = programPrompt !== undefined ? o.sandbox.program : undefined;
   const programWake = o.programWake;
   if (programPrompt !== undefined && (program === undefined || programWake === undefined)) {

@@ -36,7 +36,7 @@
 
 import { isEndReason } from "./end-conditions";
 import { z } from "zod";
-import { DEFAULT_DRIVER, driverHasCompactWindow, runsProgramLoop } from "./config";
+import { DEFAULT_DRIVER, driverHasCompactWindow, launchLoopOf, runsProgramLoop } from "./config";
 import { entryOf, isDriver } from "./drivers";
 import type { RunPodsMode } from "./models";
 import {
@@ -268,19 +268,27 @@ export function campaignPairRefusals(
           reasons.push(`arm ${arm.id} sets --compact-window ${window}, and roster entry ${a.model} already sets compactWindow ${entry.compactWindow} — assign an entry with no window`);
         }
       }
-      // The program loop (`--loop program`) runs on the fixed loop,
-      // claude-code and codex (`runsProgramLoop`), which pi and a route
-      // driver are not; `--yield` is a setting of it. Refused here as `programLoopRefusal`
-      // refuses at launch.
-      const loop = armArg(arm, "loop");
-      const yieldOn = armArg(arm, "yield");
-      if (loop === "program") {
-        const d = entry.driver ?? DEFAULT_DRIVER;
-        if (!isDriver(d) || !runsProgramLoop(d)) reasons.push(`arm ${arm.id} sets --loop program, and ${a.model} runs on the ${d} driver, which runs a CLI's own turn loop`);
-        else if (entryOf(d).route === true) reasons.push(`arm ${arm.id} sets --loop program, and ${a.model} runs on the ${d} driver, which plays a scripted route`);
-        else if (arm.agents === 1) reasons.push(`arm ${arm.id} sets --loop program, which drives one character, and is one agent driving the whole party`);
-      } else if (yieldOn !== undefined && yieldOn !== "false") {
-        reasons.push(`arm ${arm.id} sets --yield, which is a setting of the program loop, without --loop program`);
+      // The arm's loop as its launch resolves it (`launchLoopOf`): `--loop`
+      // and `--yield` when it sets them, else the driver's default. The
+      // program loop runs on the fixed loop, claude-code and codex (`runsProgramLoop`),
+      // at fan-out too, and plays no route; `--yield` is a setting of
+      // it. Refused here as `programLoopRefusal` refuses at launch.
+      const d = entry.driver ?? DEFAULT_DRIVER;
+      const askedLoop = armArg(arm, "loop");
+      const yieldArg = armArg(arm, "yield");
+      if (isDriver(d) && (askedLoop === undefined || askedLoop === "program" || askedLoop === "snippet")) {
+        const resolved = launchLoopOf(
+          { driver: d, ...(arm.agents === 1 ? { fanout: true } : {}) },
+          { loop: askedLoop, ...(yieldArg !== undefined ? { yield: yieldArg !== "false" } : {}) },
+        );
+        if (resolved.loop === "program" && askedLoop === "program") {
+          if (!runsProgramLoop(d)) reasons.push(`arm ${arm.id} sets --loop program, and ${a.model} runs on the ${d} driver, which runs a CLI's own turn loop`);
+          else if (entryOf(d).route === true) reasons.push(`arm ${arm.id} sets --loop program, and ${a.model} runs on the ${d} driver, which plays a scripted route`);
+        } else if (resolved.loop !== "program" && resolved.yield === true) {
+          reasons.push(`arm ${arm.id} sets --yield, which is a setting of the program loop, and runs the snippet loop on the ${d} driver`);
+        }
+      } else if (!isDriver(d) && askedLoop === "program") {
+        reasons.push(`arm ${arm.id} sets --loop program, and ${a.model} runs on the ${d} driver, which runs a CLI's own turn loop`);
       }
       // A one-agent arm is a fan-out run, which a route driver refuses at launch.
       const driver = entry.driver ?? DEFAULT_DRIVER;

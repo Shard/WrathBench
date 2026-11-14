@@ -30,7 +30,7 @@ import {
 import { configFromArgs } from "../runner/src/run";
 import { compactEnv } from "../runner/src/adapter-claude";
 import { comparabilityOf } from "../runner/src/comparability";
-import { loadRunConfig, seriesAfter } from "../runner/src/config";
+import { loadRunConfig, loopLaunchRefusal, seriesAfter } from "../runner/src/config";
 import { DRIVER_TABLE } from "../runner/src/drivers";
 import { checkedIn, definition, joined, partyDefinition } from "../runner/test/fixtures/campaigns";
 import type { FleetJob, FleetRosterEntry } from "./run-fleet-config";
@@ -156,6 +156,21 @@ function everyLane(): { name: string; spec: Resolved; resume: boolean }[] {
   return out;
 }
 
+/**
+ * The fresh launches run.ts refuses after the parse, and why: every scored
+ * lane, because scored episodes wait until a long-clock program-loop run has
+ * been read (operator, 2026-11-14). Every freeplay and hand lane launches.
+ */
+const SCORED_WAIT = "scored episodes do not run yet: they wait until a long-clock program-loop run has been read";
+const EXPECTED_REFUSED_AT_LAUNCH: string[] = [
+  `e90 openai, routed and billed: --episode e90 is a scored episode, and ${SCORED_WAIT}`,
+  `e90 extra: --episode e90 is a scored episode, and ${SCORED_WAIT}`,
+  `e360 claude-code with a window and a credential: --episode e360 is a scored episode, and ${SCORED_WAIT}`,
+  `e90 codex: --episode e90 is a scored episode, and ${SCORED_WAIT}`,
+  `queue job, pinned: --episode e90 is a scored episode, and ${SCORED_WAIT}`,
+  `queue job, pinned: --episode e90 is a scored episode, and ${SCORED_WAIT}`,
+];
+
 describe("the roster's argv, every lane, through run.ts's parser", () => {
   for (const { name, spec, resume } of everyLane()) {
     test(name, () => {
@@ -167,11 +182,16 @@ describe("the roster's argv, every lane, through run.ts's parser", () => {
     });
   }
 
-  test("a fresh launch of every non-probe lane is accepted by the whole fresh-launch seam", () => {
-    for (const { spec, resume } of everyLane()) {
+  test("a fresh launch of every non-probe lane is accepted by the whole fresh-launch seam, and run.ts refuses exactly the scored ones", () => {
+    const refusedAtLaunch: string[] = [];
+    for (const { name, spec, resume } of everyLane()) {
       if (resume || spec.campaignFile !== undefined || spec.objective !== undefined) continue;
       expect(() => configFromArgs(episodeFlags(spec, false), {})).not.toThrow();
+      // run.ts's own refusal, after the parse (`loopLaunchRefusal`): scored episodes wait, and the snippet loop is a probe's.
+      const why = loopLaunchRefusal(configFromArgs(episodeFlags(spec, false), {}));
+      if (why !== null) refusedAtLaunch.push(`${name}: ${why}`);
     }
+    expect(refusedAtLaunch).toEqual(EXPECTED_REFUSED_AT_LAUNCH);
   });
 
   test("a probe's argv carries its campaign file, its roster name and then the arm's own args, last", () => {
@@ -249,6 +269,8 @@ describe("claude-code's default compaction window, from the roster entry to the 
   const launch = (j: FleetJob, cs: Parameters<typeof jobSpawn>[5] = []): Resolved =>
     resolve(jobSpawn(j, WINDOW_ROSTER, "RUNNER1", STAMP, () => true, cs).entries, STAMP)[0]!;
   const tupleOf = (c: ReturnType<typeof configFromArgs>): Record<string, unknown> => ({ ...comparabilityOf(c, "harness-0.5-1") });
+  /** A tuple's keys other than the loop's: the window is what these cases are about, and a launch today is on the program loop. */
+  const windowKeys = (t: Record<string, unknown>): string[] => Object.keys(t).filter((k) => k !== "loop" && k !== "yield");
   /** What a run launched before the default stored: no window anywhere. */
   const stored = loadRunConfig({ runId: "fleet-sonnet-e90-sonnet-low-20261001", driver: "claude-code", model: "sonnet", effort: "low", account: "RUNNER1", episode: "e90" });
 
@@ -264,7 +286,7 @@ describe("claude-code's default compaction window, from the roster entry to the 
       expect(config.compactWindow).toBeUndefined();
       expect("compactWindowDefaulted" in config).toBe(false);
       expect(compactEnv(config.compactWindow)).toEqual({});
-      expect(Object.keys(tupleOf(config))).toEqual(Object.keys(comparabilityOf(stored, "harness-0.5-1")));
+      expect(windowKeys(tupleOf(config))).toEqual(Object.keys(comparabilityOf(stored, "harness-0.5-1")));
     }
     // An earlier series holds as well, and so does a build that names none.
     const flags = episodeFlags(launch(job({ ref: "sonnet", episode: "e90", attempt: 1 })), false);
@@ -318,7 +340,7 @@ describe("claude-code's default compaction window, from the roster entry to the 
     expect(launch(job({ ref: "sonnet-auto", episode: "e90", attempt: 2 })).runId).toBe(`fleet-sonnet-auto-e90-sonnet-low-${STAMP}-a2`);
     const config = configFromArgs(flags, LATER);
     expect(config.compactWindow).toBeUndefined();
-    expect(Object.keys(tupleOf(config))).toEqual(Object.keys(comparabilityOf(stored, "harness-0.5-1")));
+    expect(windowKeys(tupleOf(config))).toEqual(Object.keys(comparabilityOf(stored, "harness-0.5-1")));
     expect(configFromArgs(["--driver", "claude-code", "--model", "sonnet", "--compact-window", "AUTO"], LATER).compactWindow).toBeUndefined();
   });
 

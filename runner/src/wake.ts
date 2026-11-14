@@ -1,6 +1,6 @@
 /**
- * Sleeping and waking on the program loop (`loop: "program"`, a probe arm;
- * operator, 2026-11-12).
+ * Sleeping and waking on the program loop (`loop: "program"`; operator,
+ * 2026-11-12, adopted 2026-11-14).
  *
  * On the program loop the model's routines run in the sandbox whether it is
  * awake or not (the stack's `ProgramHost`), so a reply with no tool call puts
@@ -17,6 +17,12 @@
  *    `wake(reason)` call, and a sandbox restart the program came back from;
  *  - from the runner: a death (the session record's `death` row), the event
  *    stream closing (the state sample), and a harness notice.
+ *
+ * At fan-out (one agent driving several characters) the program is one and
+ * its routines are per character: every line names the character, any
+ * character's death wakes, and so does any one's stream closing. What
+ * changed over a sleep names only the characters whose level moved, the
+ * stack's roll-up rule of one line per exception rather than per character.
  *
  * A pre-emption, a load and a save's own result never wake: the first is
  * reported in the next wake, the others are the model's own tool results.
@@ -95,7 +101,12 @@ export interface WakeReason {
   signature?: string | undefined;
   /** The routine a `wake(reason)` came from, when a routine called it. */
   routine?: { name: string; character?: string | undefined } | undefined;
+  /** At fan-out, the character a death or a closed stream is one of. */
+  character?: string | undefined;
 }
+
+/** The key a reason's "shown up to" moment is kept under: its key, and at fan-out its character. */
+const seenKey = (key: WakeKey, character: string | undefined): string => (character === undefined ? key : `${key}\u0000${character}`);
 
 const label = (o: object): string => {
   const r = o as { name?: string | undefined; routine?: string | undefined; character?: string | undefined };
@@ -133,14 +144,15 @@ export function wakeReasonOf(fact: ProgramFact): WakeReason | null {
 /** The reasons pending since the model was last shown a wake, in arrival order. */
 export class Waker {
   private pending: WakeReason[] = [];
-  /** Per key, the newest moment the model has been shown its reasons up to (`forget`). */
-  private readonly seenUntil = new Map<WakeKey, number>();
+  /** Per key (and character, `seenKey`), the newest moment the model has been shown its reasons up to (`forget`). */
+  private readonly seenUntil = new Map<string, number>();
   /** Refusal signatures a tool result has carried the hint of since the last load (`deliver`). */
   private readonly delivered = new Set<string>();
 
   note(reason: WakeReason): void {
     // A reason from before the model was shown its key's news is not news, however late its fact arrives.
     if (reason.ts <= (this.seenUntil.get(reason.key) ?? -Infinity)) return;
+    if (reason.character !== undefined && reason.ts <= (this.seenUntil.get(seenKey(reason.key, reason.character)) ?? -Infinity)) return;
     // Nor a refusal whose hint a result has already carried, however late its fact arrives.
     if (reason.signature !== undefined && this.delivered.has(reason.signature)) return;
     this.pending.push(reason);
@@ -163,10 +175,11 @@ export class Waker {
     this.pending = this.pending.filter((r) => !r.inContext);
   }
 
-  /** Drop the reasons of `key` from at or before `ts`, pending or still to arrive. */
-  forget(key: WakeKey, ts: number): void {
-    this.seenUntil.set(key, Math.max(ts, this.seenUntil.get(key) ?? -Infinity));
-    this.pending = this.pending.filter((r) => r.key !== key || r.ts > ts);
+  /** Drop the reasons of `key` from at or before `ts`, pending or still to arrive; with `character`, only that character's. */
+  forget(key: WakeKey, ts: number, character?: string): void {
+    const k = seenKey(key, character);
+    this.seenUntil.set(k, Math.max(ts, this.seenUntil.get(k) ?? -Infinity));
+    this.pending = this.pending.filter((r) => r.key !== key || r.ts > ts || (character !== undefined && r.character !== character));
   }
 
   /** Drop the pending reasons `drop` picks. */
@@ -251,6 +264,8 @@ export async function sleepUntilWake(o: SleepOptions): Promise<SleepResult> {
 /** What changed for the character over the sleep. */
 export interface WakeProgress {
   level?: { from: number; to: number };
+  /** At fan-out: the characters whose level moved, by name. */
+  levels?: readonly { character: string; from: number; to: number }[];
   /** XP gained at an unchanged level; absent across a level change or when unobserved. */
   xp?: number;
   quests: number;
@@ -343,6 +358,9 @@ export function renderWake(v: WakeView): string {
       lines.push(`${parts.join(" · ")}`);
     } else if (f.kind === "load_failed" && f.by === "restart") {
       lines.push(`load after the restart failed: ${f.error}`);
+    } else if (f.kind === "load_failed" && f.by === "carried") {
+      // A continuation's files, loaded at the first start: nothing restarted.
+      lines.push(`the carried files did not load: ${f.error}`);
     }
   }
 
@@ -397,6 +415,7 @@ export function renderWake(v: WakeView): string {
     const parts: string[] = [];
     if (p.level !== undefined && p.level.from !== p.level.to) parts.push(`level ${p.level.from} → ${p.level.to}`);
     else if (p.xp !== undefined) parts.push(`xp +${p.xp}`);
+    for (const l of p.levels ?? []) if (l.from !== l.to) parts.push(`${l.character} level ${l.from} → ${l.to}`);
     parts.push(`quests completed ${p.quests}`, `deaths ${p.deaths}`);
     lines.push(`since you slept: ${parts.join(" · ")}`);
   }
@@ -484,6 +503,8 @@ export interface WakeSample {
   self?: { level?: { value?: unknown } } | null | undefined;
   xp?: { value?: unknown } | null | undefined;
   observation?: { connected?: boolean } | undefined;
+  /** A fan-out run's sample: each character's level and whether its stream is open (the loop's digests). */
+  seats?: readonly { character: string; level: number | null; connected: boolean }[] | undefined;
 }
 
 /** The run's trajectory, as far as the wake writes to it. */
@@ -532,6 +553,8 @@ export class ProgramWake {
   private readonly signatures = new Map<string, SignatureLine>();
   private lastSample: WakeSample | null = null;
   private connected: boolean | undefined;
+  /** At fan-out, whether each character's stream was open at the last sample. */
+  private readonly connectedOf = new Map<string, boolean>();
   /** Restarts the program was blamed for: each counts toward `snippet-runaway` (`takeBlamedRestarts`). */
   private blamed = 0;
   private readonly now: () => number;
@@ -579,14 +602,28 @@ export class ProgramWake {
     );
   }
 
-  /** A `death` row of the session record. */
-  onDeath(ts: number): void {
-    this.waker.note({ key: "died", ts, text: "your character died", inContext: true });
+  /** A `death` row of the session record: at fan-out, of `character`'s. */
+  onDeath(ts: number, character?: string): void {
+    this.waker.note(
+      character === undefined
+        ? { key: "died", ts, text: "your character died", inContext: true }
+        : { key: "died", ts, text: `${character} died`, inContext: true, character },
+    );
   }
 
   /** Every state sample: the stream closing wakes, and the last reading is what progress is measured from. */
   onSample(snap: WakeSample): void {
     this.lastSample = snap;
+    if (snap.seats !== undefined) {
+      // At fan-out each character's stream is its own: any one closing wakes, by name.
+      for (const c of snap.seats) {
+        if (!c.connected && this.connectedOf.get(c.character) === true) {
+          this.waker.note({ key: "stream_closed", ts: this.now(), text: `${c.character}'s event stream closed`, inContext: true, character: c.character });
+        }
+        this.connectedOf.set(c.character, c.connected);
+      }
+      return;
+    }
     const connected = snap.observation?.connected;
     if (connected === false && this.connected === true) {
       this.waker.note({ key: "stream_closed", ts: this.now(), text: "the event stream closed", inContext: true });
@@ -627,7 +664,7 @@ export class ProgramWake {
   hintsDelivered(hints: readonly ActionHintNote[]): void {
     for (const h of hints) {
       if (h.routine !== undefined) this.waker.deliver(`${h.routine}|${h.character ?? ""}|${h.action}|${h.status}`);
-      if (h.status === "dead") this.waker.forget("died", h.ts);
+      if (h.status === "dead") this.waker.forget("died", h.ts, h.character);
     }
   }
 
@@ -657,12 +694,14 @@ export class ProgramWake {
     return n;
   }
 
-  private reading(): { level?: number; xp?: number; counts: WakeCounts } {
+  private reading(): { level?: number; xp?: number; levels?: ReadonlyMap<string, number>; counts: WakeCounts } {
     const level = this.lastSample?.self?.level?.value;
     const xp = this.lastSample?.xp?.value;
+    const chars = this.lastSample?.seats;
     return {
       ...(typeof level === "number" ? { level } : {}),
       ...(typeof xp === "number" ? { xp } : {}),
+      ...(chars !== undefined ? { levels: new Map(chars.flatMap((c) => (c.level !== null ? [[c.character, c.level] as const] : []))) } : {}),
       counts: this.o.counts?.() ?? { deaths: 0, quests: 0 },
     };
   }
@@ -705,8 +744,13 @@ export class ProgramWake {
     this.n++;
     const after = this.reading();
     const now = this.now();
+    const levels = [...(after.levels ?? [])].flatMap(([character, to]) => {
+      const from = before.levels?.get(character);
+      return from !== undefined && from !== to ? [{ character, from, to }] : [];
+    });
     const progress: WakeProgress = {
       ...(before.level !== undefined && after.level !== undefined ? { level: { from: before.level, to: after.level } } : {}),
+      ...(levels.length > 0 ? { levels } : {}),
       ...(before.level !== undefined && before.level === after.level && before.xp !== undefined && after.xp !== undefined ? { xp: Math.max(0, after.xp - before.xp) } : {}),
       quests: Math.max(0, after.counts.quests - before.counts.quests),
       deaths: Math.max(0, after.counts.deaths - before.counts.deaths),
@@ -785,12 +829,23 @@ export function factRecord(fact: ProgramFact): { t: string; [key: string]: unkno
         kind: "error",
         signature: fact.error.signature,
         ...("routine" in fact && fact.routine !== undefined ? { name: fact.routine } : {}),
+        ...("character" in fact && fact.character !== undefined ? { character: fact.character } : {}),
         error: fact.error.text,
         frames: fact.error.frames,
         deploy: fact.deploy,
         at: fact.ts,
       };
     case "refusal":
-      return { t: "program_error", kind: "refusal", signature: fact.signature, name: fact.routine, action: fact.action, status: fact.status, deploy: fact.deploy, at: fact.ts };
+      return {
+        t: "program_error",
+        kind: "refusal",
+        signature: fact.signature,
+        name: fact.routine,
+        ...(fact.character !== undefined ? { character: fact.character } : {}),
+        action: fact.action,
+        status: fact.status,
+        deploy: fact.deploy,
+        at: fact.ts,
+      };
   }
 }

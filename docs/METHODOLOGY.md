@@ -46,8 +46,9 @@ question comes up, these are what it is judged against.
 **World of Warcraft 3.3.5a on AzerothCore, script-and-supervise.** The game
 offers the richest decision space with an open engine and no established
 harness; it is real-time and cannot pause, so per-action model decisions would
-measure latency. The model instead writes TypeScript against the SDK in a
-persistent runtime, leaves routines running and intervenes. The benchmark
+measure latency. The model instead writes a program of named routines in
+TypeScript against the SDK, which the harness runs and tracks, sleeps until
+it is woken, and intervenes (operator, 2026-11-14). The benchmark
 therefore measures how well a model drives a fixed toolkit toward long-horizon
 goals in a live world, and says so (`docs/VISION.md`); SDK fluency is a
 confound and the fixed harness is the mitigation. Episode cost is linear in
@@ -60,7 +61,14 @@ movement across versions is itself signal. The grain that groups evidence is
 the **series**, `major.minor` of the harness stamp: a minor bump changes what
 a run measures and restarts evidence; a fix commit does not, nor does a change
 to what gets *scheduled*, because targets are stopping rules, not
-measurements. The SDK is versioned separately from the harness (operator,
+measurements. The loop is the program loop for scored episodes and freeplay;
+the persistent-snippet loop it replaced stays only as a legacy arm of probe
+campaigns, and a scored or freeplay launch on it is refused (operator,
+2026-11-14). The adoption did not move the series: a target counts only the
+runs whose tuple names the loop and `yield` its entry now launches, so a
+snippet-loop run in the same series is history, never a copy (operator,
+2026-11-14). Scored episodes on the program loop wait until a long-clock
+program-loop run has been read (operator, 2026-11-14). The SDK is versioned separately from the harness (operator,
 2026-10-28). Its model-facing surface is still part of the surface frozen per
 harness version, so changing it moves the harness version as before
 ("Changing this document"). The SDK version a run drove is a label only: it is
@@ -80,7 +88,12 @@ is not a model. **Each CLI scaffold is its own comparability group**
 whole reason a scaffold is tagged apart from `wrathbench`, and disjoint ids
 keep its rows from pooling with another harness's. What a scaffold does per
 model that cannot be configured out is stated with its label (principle 3):
-`codex` gives GPT-6 models its code mode and collaboration tools. A harness
+`codex` gives GPT-6 models its code mode and collaboration tools. The fixed
+loop and claude-code sleep through a `yield` tool, claude-code because its one
+turn can run for hours; codex runs without it, as measured, its end of turn
+being the sleep; pi runs the program loop only once its adapter waits on a
+wake, and until then runs only as probe-campaign squares (operator,
+2026-11-14). A harness
 setting has the harness's default and may be overridden per roster entry, as a
 recorded run dimension like effort rather than per-model tuning (operator,
 2026-10-16); the compaction window is one (claude-code, 2026-10-09), and a
@@ -150,6 +163,19 @@ is no convenience middle tier: a composition every model writes graduates to
 the primary tier; until then it lives in snippets. The raw tier is an allowlist
 of ordinary client opcodes (`wrath-mcp/docs/CONTRACTS.md`); widening it is additive,
 narrowing it is a harness change.
+
+**The routine registry is the runtime's, not an SDK helper** (operator,
+2026-11-14). The model's routines are the exported async functions of its own
+`main.ts`, started and stopped by name through two tools, and the harness
+holds which is running, on which version of the code, and restarts them from
+the top after a save or a sandbox restart. It was earned by the freeplay runs
+(`fleet-sub-opus-55-freeplay-claude-opus-5-5-20261020`,
+`fleet-codex-sol-61-freeplay-gpt-6-1-sol-20261018-a3`), whose models launched
+async loops they could neither name nor stop, collided on the move slot, and
+spent most of their snippets polling them. The code stays the model's: the
+harness never holds, backs off or stops it for repeating itself, and a
+snippet is a one-off that leaves nothing running. A continued freeplay
+session carries the program's files and memory, never a running routine.
 
 **Softening: repair the deterministic, explain the rest.** Most early
 model-facing failures were feedback failures, and weak models burned episodes
@@ -230,6 +256,20 @@ never truncated, and every turn shows its size against the cap (operator,
 2026-10-14). Model-driven summarization was rejected because the summarizer
 becomes an unversioned, model-dependent part of the harness. Any constant in the policy is a harness
 version change.
+
+**The model sleeps until woken, on facts only** (operator, 2026-11-14). A
+reply with no tool call, or a `yield` call, sleeps while the routines run. It
+is woken by a routine ending, the first occurrence of each new error or
+refusal signature since a load, the program's own `wake(reason)`, a death, a
+sandbox restart, the event stream closing or a harness notice, and after five
+minutes at the latest; gaining a level or completing a quest does not wake it,
+and a program that wants either calls `wake()`. What it was already shown in
+a tool result wakes no later sleep. The wake block is facts in fixed wording:
+every routine as it stands, new errors and refusals with their hints, what
+changed for the character, and the routines' last console lines, capped. On
+codex, whose conversation holds what it was sent, the turn's message carries
+the scratchpad only when the thread does not already hold it as it stands; the
+event window goes every time.
 
 **Reflection is the model's to take, and only at rest or in flight** (2026-08-30). A
 `reflect` tool spends a turn thinking instead of acting, only while the
@@ -436,7 +476,8 @@ hard".
 **Provenance is stamped, and partial.** Every run carries the harness build
 and the comparability tuple — series, prompt hash of the rendered bytes,
 harness tag, effort, episode id and budget, objective presence, `wikiCoords`,
-`wiki`, routing, bundle identity, module build. Beside the tuple, as labels
+`wiki`, routing, bundle identity, module build, and the loop and its `yield`
+on the program loop. Beside the tuple, as labels
 outside it, `meta.json` names the stack's version and the wrath-mcp commit the
 run's stack came from, `-dirty` when its checkout differed from that commit
 (2026-10-29), and a v1 run's session record names the stack's version and
@@ -460,7 +501,10 @@ initiative. An edit here records a decision the operator made; work that
 would require changing or contradicting one stops and puts the question to
 the operator first. Surface, prompt, context policy, contract, or bundle-text
 changes move the harness version (minor at least; contract widenings are
-major); scheduling and derivation changes do not, but are still dated edits
-here or in the owning doc. Keep this document a north star — a rule and its
+major), except a change of loop: that is a change of the comparability tuple
+(`loop`, `yield` and the prompt hash), and it moves no series. A series bump
+is the operator's word alone (operator, 2026-11-14). Scheduling and
+derivation changes do not move the version, but are still dated edits here
+or in the owning doc. Keep this document a north star — a rule and its
 why, mechanics in the owning doc: fold a new decision into the section it
 belongs to, prune what it obsoletes, and let git history hold the past.

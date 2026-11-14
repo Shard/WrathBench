@@ -1,0 +1,1263 @@
+{
+  "program": [
+    {
+      "name": "run_snippet",
+      "description": "Run a TypeScript snippet once in the game sandbox. `sdk`, `state`, `events`, `connect()`, `sleep(ms)`, `scratchpad` (its read(), write() and append() each return a Promise: `await scratchpad.read()`), `memory` and `signal` (aborted when this snippet returns or is abandoned) are ambient, and your workspace files import by relative path. A single expression returns its value. Nothing a snippet declares or starts outlives it; what must keep running is a routine (start_routine).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "TypeScript source to evaluate."
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "read_file",
+      "description": "Return one file from your workspace, its text exactly as stored. The path is relative to the workspace, e.g. main.ts or lib/combat.ts. offset and limit, both optional, return part of it instead: limit lines from line offset (counted from 1), under one line saying which lines of how many they are.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative path, e.g. main.ts or lib/combat.ts."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The first line to return, counted from 1. Omit to start at the first line."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "How many lines to return. Omit to read to the last line."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "write_file",
+      "description": "Create a file in your workspace, or replace a file's whole content. Paths are relative to the workspace (main.ts, lib/combat.ts); parent directories are created as needed, and .. or an absolute path is refused. Each file holds at most 32000 characters and the workspace at most 1048576 bytes: a write past a limit is refused and nothing is written. A write that changes main.ts or a file it imports loads your program at once; the result says whether it loaded and which running routines were restarted.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative path, e.g. main.ts or lib/combat.ts."
+          },
+          "content": {
+            "type": "string",
+            "description": "The file's whole new content. May be empty."
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "edit_file",
+      "description": "Replace exact text in a workspace file: `old` with `new`. `old` must match the file exactly, whitespace included, and appear exactly once unless replaceAll is set; a miss or a second match is refused and nothing changes. An empty `new` deletes the text. Held to write_file's limits, and it loads your program as write_file does.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative path of the file to edit."
+          },
+          "old": {
+            "type": "string",
+            "description": "The exact existing text to replace, copied from the file."
+          },
+          "new": {
+            "type": "string",
+            "description": "What to put in its place. Empty string deletes the text."
+          },
+          "replaceAll": {
+            "type": "boolean",
+            "description": "Replace every occurrence instead of requiring a unique one. Default false."
+          }
+        },
+        "required": [
+          "path",
+          "old",
+          "new"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "delete_file",
+      "description": "Delete one file from your workspace. Refused when the file does not exist. Deleting main.ts or a file it imports is a load that fails: the code already running keeps running.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative path of the file to delete."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "start_routine",
+      "description": "Run one exported async function of main.ts as a routine. It runs in the sandbox until it returns, throws or is stopped, with no time limit, whether or not you are awake. `args` is passed as its one argument. A name that is already running is refused and says since when. The result lists the state of every routine.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The export of main.ts to run, e.g. grind."
+          },
+          "args": {
+            "description": "Passed to the function as its one argument. Any JSON value; omit for none."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "stop_routine",
+      "description": "Stop a running routine: its signal is aborted, so its pending sdk waits reject and a move it has in flight is stopped. The result lists the state of every routine.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The routine to stop, by the name it was started under."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "recent_events",
+      "description": "Return the most recent game events (server packets as JSON), oldest first. Use after acting to see what the server said. Ambient movement packets (SMSG_MONSTER_MOVE, MSG_MOVE_*) are folded out by default — they fold into cached state instead, and a trailing note says how many were dropped. Pass includeMovement: true for the raw stream.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "description": "How many events to return, counted AFTER the movement fold. Default 50."
+          },
+          "includeMovement": {
+            "type": "boolean",
+            "description": "Include ambient movement packets (SMSG_MONSTER_MOVE, MSG_MOVE_*). Default false."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "state_summary",
+      "description": "A formatted summary of the cached game state: character, level, position, recent chat and notifications, whether any events were missed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "search_reference",
+      "description": "Full-text search over the game reference wiki (quests, NPCs, zones, items, mechanics). Query with a page title or a few keywords, not a sentence. A quest page's result leads with what its infobox states — which NPC starts the quest and which NPC it is turned in to; these are often different NPCs, and when the page does not state an ender the line says so rather than implying the giver. The reference bundle is a snapshot of the wiki from the Wrath of the Lich King era (patch 3.3.5a) and describes this world, so prefer what you can observe in game. This run serves no coordinates: results name places, zones and NPCs but carry no map x/y, so do not search for numbers — find things by name, by asking NPCs, and by looking.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Title or keywords, e.g. 'Northshire quests'."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "description": "Max results. Default 8."
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "write_scratchpad",
+      "description": "Replace the entire scratchpad with new markdown. Keep it current: plan, progress, durable facts. It survives restarts; conversation history does not.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "The full new scratchpad content (markdown)."
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "edit_scratchpad",
+      "description": "Change part of the scratchpad in place: replace the exact text `old` with `new`. Use this for ordinary upkeep — striking a done item, correcting a coordinate, adding a line under a heading — and write_scratchpad only to start the pad or rewrite it wholesale. `old` must match the pad byte for byte, whitespace included, and must appear exactly once unless replaceAll is set.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "old": {
+            "type": "string",
+            "description": "The exact existing text to replace, copied from the scratchpad."
+          },
+          "new": {
+            "type": "string",
+            "description": "What to put in its place. Empty string deletes the text."
+          },
+          "replaceAll": {
+            "type": "boolean",
+            "description": "Replace every occurrence instead of requiring a unique one. Default false."
+          }
+        },
+        "required": [
+          "old",
+          "new"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "reflect",
+      "description": "Spend this turn thinking instead of acting. Returns a fixed set of questions to review your own record against; nothing is summarised for you and nothing is remembered unless you write it to the scratchpad. Available only while your character is resting — the state summary shows `resting` when it applies — or in flight, and once per rest visit and once per flight.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "log_status",
+      "description": "Append one short status entry — what you are doing and how it is going — to your episodic log. The log is append-only: each entry is stamped with the turn, your level and your zone, and nothing can edit or remove it afterwards. It is not the scratchpad. Entries are read back with read_log while reflecting.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The entry text."
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "read_log",
+      "description": "Read your episodic log, newest first. Usable only while reflecting — see the reflect tool. Filter by level range or zone; page with offset, or set order to \"oldest\" to start from the first entry. Returns \"showing a-b of N\" and one line per entry.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "order": {
+            "type": "string",
+            "enum": [
+              "newest",
+              "oldest"
+            ],
+            "description": "Which end to start from. Default newest."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Entries to skip from that end. Default 0."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "description": "How many entries to return. Default 20."
+          },
+          "minLevel": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Only entries written at this level or above."
+          },
+          "maxLevel": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Only entries written at this level or below."
+          },
+          "zone": {
+            "type": "string",
+            "description": "Only entries whose zone name contains this text, ignoring case."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ],
+  "yield": [
+    {
+      "name": "run_snippet",
+      "description": "Run a TypeScript snippet once in the game sandbox. `sdk`, `state`, `events`, `connect()`, `sleep(ms)`, `scratchpad` (its read(), write() and append() each return a Promise: `await scratchpad.read()`), `memory` and `signal` (aborted when this snippet returns or is abandoned) are ambient, and your workspace files import by relative path. A single expression returns its value. Nothing a snippet declares or starts outlives it; what must keep running is a routine (start_routine).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "TypeScript source to evaluate."
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "read_file",
+      "description": "Return one file from your workspace, its text exactly as stored. The path is relative to the workspace, e.g. main.ts or lib/combat.ts. offset and limit, both optional, return part of it instead: limit lines from line offset (counted from 1), under one line saying which lines of how many they are.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative path, e.g. main.ts or lib/combat.ts."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The first line to return, counted from 1. Omit to start at the first line."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "How many lines to return. Omit to read to the last line."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "write_file",
+      "description": "Create a file in your workspace, or replace a file's whole content. Paths are relative to the workspace (main.ts, lib/combat.ts); parent directories are created as needed, and .. or an absolute path is refused. Each file holds at most 32000 characters and the workspace at most 1048576 bytes: a write past a limit is refused and nothing is written. A write that changes main.ts or a file it imports loads your program at once; the result says whether it loaded and which running routines were restarted.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative path, e.g. main.ts or lib/combat.ts."
+          },
+          "content": {
+            "type": "string",
+            "description": "The file's whole new content. May be empty."
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "edit_file",
+      "description": "Replace exact text in a workspace file: `old` with `new`. `old` must match the file exactly, whitespace included, and appear exactly once unless replaceAll is set; a miss or a second match is refused and nothing changes. An empty `new` deletes the text. Held to write_file's limits, and it loads your program as write_file does.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative path of the file to edit."
+          },
+          "old": {
+            "type": "string",
+            "description": "The exact existing text to replace, copied from the file."
+          },
+          "new": {
+            "type": "string",
+            "description": "What to put in its place. Empty string deletes the text."
+          },
+          "replaceAll": {
+            "type": "boolean",
+            "description": "Replace every occurrence instead of requiring a unique one. Default false."
+          }
+        },
+        "required": [
+          "path",
+          "old",
+          "new"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "delete_file",
+      "description": "Delete one file from your workspace. Refused when the file does not exist. Deleting main.ts or a file it imports is a load that fails: the code already running keeps running.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative path of the file to delete."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "start_routine",
+      "description": "Run one exported async function of main.ts as a routine. It runs in the sandbox until it returns, throws or is stopped, with no time limit, whether or not you are awake. `args` is passed as its one argument. A name that is already running is refused and says since when. The result lists the state of every routine.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The export of main.ts to run, e.g. grind."
+          },
+          "args": {
+            "description": "Passed to the function as its one argument. Any JSON value; omit for none."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "stop_routine",
+      "description": "Stop a running routine: its signal is aborted, so its pending sdk waits reject and a move it has in flight is stopped. The result lists the state of every routine.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The routine to stop, by the name it was started under."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "yield",
+      "description": "Sleep until something wakes you: a routine ending, the first occurrence of a new error or refusal in your routines, a wake(reason) call, a death, a sandbox restart, a harness notice, or `seconds` passing (at most 300, the default). Your routines keep running while you sleep. Returns the [wake] block: why you woke and what your routines did meanwhile.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "seconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 300,
+            "description": "The longest to sleep, in seconds. At most 300, the default."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "recent_events",
+      "description": "Return the most recent game events (server packets as JSON), oldest first. Use after acting to see what the server said. Ambient movement packets (SMSG_MONSTER_MOVE, MSG_MOVE_*) are folded out by default — they fold into cached state instead, and a trailing note says how many were dropped. Pass includeMovement: true for the raw stream.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "description": "How many events to return, counted AFTER the movement fold. Default 50."
+          },
+          "includeMovement": {
+            "type": "boolean",
+            "description": "Include ambient movement packets (SMSG_MONSTER_MOVE, MSG_MOVE_*). Default false."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "state_summary",
+      "description": "A formatted summary of the cached game state: character, level, position, recent chat and notifications, whether any events were missed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "search_reference",
+      "description": "Full-text search over the game reference wiki (quests, NPCs, zones, items, mechanics). Query with a page title or a few keywords, not a sentence. A quest page's result leads with what its infobox states — which NPC starts the quest and which NPC it is turned in to; these are often different NPCs, and when the page does not state an ender the line says so rather than implying the giver. The reference bundle is a snapshot of the wiki from the Wrath of the Lich King era (patch 3.3.5a) and describes this world, so prefer what you can observe in game. This run serves no coordinates: results name places, zones and NPCs but carry no map x/y, so do not search for numbers — find things by name, by asking NPCs, and by looking.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Title or keywords, e.g. 'Northshire quests'."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "description": "Max results. Default 8."
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "write_scratchpad",
+      "description": "Replace the entire scratchpad with new markdown. Keep it current: plan, progress, durable facts. It survives restarts; conversation history does not.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "The full new scratchpad content (markdown)."
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "edit_scratchpad",
+      "description": "Change part of the scratchpad in place: replace the exact text `old` with `new`. Use this for ordinary upkeep — striking a done item, correcting a coordinate, adding a line under a heading — and write_scratchpad only to start the pad or rewrite it wholesale. `old` must match the pad byte for byte, whitespace included, and must appear exactly once unless replaceAll is set.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "old": {
+            "type": "string",
+            "description": "The exact existing text to replace, copied from the scratchpad."
+          },
+          "new": {
+            "type": "string",
+            "description": "What to put in its place. Empty string deletes the text."
+          },
+          "replaceAll": {
+            "type": "boolean",
+            "description": "Replace every occurrence instead of requiring a unique one. Default false."
+          }
+        },
+        "required": [
+          "old",
+          "new"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "reflect",
+      "description": "Spend this turn thinking instead of acting. Returns a fixed set of questions to review your own record against; nothing is summarised for you and nothing is remembered unless you write it to the scratchpad. Available only while your character is resting — the state summary shows `resting` when it applies — or in flight, and once per rest visit and once per flight.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "log_status",
+      "description": "Append one short status entry — what you are doing and how it is going — to your episodic log. The log is append-only: each entry is stamped with the turn, your level and your zone, and nothing can edit or remove it afterwards. It is not the scratchpad. Entries are read back with read_log while reflecting.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The entry text."
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "read_log",
+      "description": "Read your episodic log, newest first. Usable only while reflecting — see the reflect tool. Filter by level range or zone; page with offset, or set order to \"oldest\" to start from the first entry. Returns \"showing a-b of N\" and one line per entry.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "order": {
+            "type": "string",
+            "enum": [
+              "newest",
+              "oldest"
+            ],
+            "description": "Which end to start from. Default newest."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Entries to skip from that end. Default 0."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "description": "How many entries to return. Default 20."
+          },
+          "minLevel": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Only entries written at this level or above."
+          },
+          "maxLevel": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Only entries written at this level or below."
+          },
+          "zone": {
+            "type": "string",
+            "description": "Only entries whose zone name contains this text, ignoring case."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ],
+  "noWiki": [
+    {
+      "name": "run_snippet",
+      "description": "Run a TypeScript snippet once in the game sandbox. `sdk`, `state`, `events`, `connect()`, `sleep(ms)`, `scratchpad` (its read(), write() and append() each return a Promise: `await scratchpad.read()`), `memory` and `signal` (aborted when this snippet returns or is abandoned) are ambient, and your workspace files import by relative path. A single expression returns its value. Nothing a snippet declares or starts outlives it; what must keep running is a routine (start_routine).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "TypeScript source to evaluate."
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "read_file",
+      "description": "Return one file from your workspace, its text exactly as stored. The path is relative to the workspace, e.g. main.ts or lib/combat.ts. offset and limit, both optional, return part of it instead: limit lines from line offset (counted from 1), under one line saying which lines of how many they are.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative path, e.g. main.ts or lib/combat.ts."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The first line to return, counted from 1. Omit to start at the first line."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "How many lines to return. Omit to read to the last line."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "write_file",
+      "description": "Create a file in your workspace, or replace a file's whole content. Paths are relative to the workspace (main.ts, lib/combat.ts); parent directories are created as needed, and .. or an absolute path is refused. Each file holds at most 32000 characters and the workspace at most 1048576 bytes: a write past a limit is refused and nothing is written. A write that changes main.ts or a file it imports loads your program at once; the result says whether it loaded and which running routines were restarted.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative path, e.g. main.ts or lib/combat.ts."
+          },
+          "content": {
+            "type": "string",
+            "description": "The file's whole new content. May be empty."
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "edit_file",
+      "description": "Replace exact text in a workspace file: `old` with `new`. `old` must match the file exactly, whitespace included, and appear exactly once unless replaceAll is set; a miss or a second match is refused and nothing changes. An empty `new` deletes the text. Held to write_file's limits, and it loads your program as write_file does.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative path of the file to edit."
+          },
+          "old": {
+            "type": "string",
+            "description": "The exact existing text to replace, copied from the file."
+          },
+          "new": {
+            "type": "string",
+            "description": "What to put in its place. Empty string deletes the text."
+          },
+          "replaceAll": {
+            "type": "boolean",
+            "description": "Replace every occurrence instead of requiring a unique one. Default false."
+          }
+        },
+        "required": [
+          "path",
+          "old",
+          "new"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "delete_file",
+      "description": "Delete one file from your workspace. Refused when the file does not exist. Deleting main.ts or a file it imports is a load that fails: the code already running keeps running.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative path of the file to delete."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "start_routine",
+      "description": "Run one exported async function of main.ts as a routine. It runs in the sandbox until it returns, throws or is stopped, with no time limit, whether or not you are awake. `args` is passed as its one argument. A name that is already running is refused and says since when. The result lists the state of every routine.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The export of main.ts to run, e.g. grind."
+          },
+          "args": {
+            "description": "Passed to the function as its one argument. Any JSON value; omit for none."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "stop_routine",
+      "description": "Stop a running routine: its signal is aborted, so its pending sdk waits reject and a move it has in flight is stopped. The result lists the state of every routine.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The routine to stop, by the name it was started under."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "recent_events",
+      "description": "Return the most recent game events (server packets as JSON), oldest first. Use after acting to see what the server said. Ambient movement packets (SMSG_MONSTER_MOVE, MSG_MOVE_*) are folded out by default — they fold into cached state instead, and a trailing note says how many were dropped. Pass includeMovement: true for the raw stream.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "description": "How many events to return, counted AFTER the movement fold. Default 50."
+          },
+          "includeMovement": {
+            "type": "boolean",
+            "description": "Include ambient movement packets (SMSG_MONSTER_MOVE, MSG_MOVE_*). Default false."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "state_summary",
+      "description": "A formatted summary of the cached game state: character, level, position, recent chat and notifications, whether any events were missed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "write_scratchpad",
+      "description": "Replace the entire scratchpad with new markdown. Keep it current: plan, progress, durable facts. It survives restarts; conversation history does not.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "The full new scratchpad content (markdown)."
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "edit_scratchpad",
+      "description": "Change part of the scratchpad in place: replace the exact text `old` with `new`. Use this for ordinary upkeep — striking a done item, correcting a coordinate, adding a line under a heading — and write_scratchpad only to start the pad or rewrite it wholesale. `old` must match the pad byte for byte, whitespace included, and must appear exactly once unless replaceAll is set.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "old": {
+            "type": "string",
+            "description": "The exact existing text to replace, copied from the scratchpad."
+          },
+          "new": {
+            "type": "string",
+            "description": "What to put in its place. Empty string deletes the text."
+          },
+          "replaceAll": {
+            "type": "boolean",
+            "description": "Replace every occurrence instead of requiring a unique one. Default false."
+          }
+        },
+        "required": [
+          "old",
+          "new"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "reflect",
+      "description": "Spend this turn thinking instead of acting. Returns a fixed set of questions to review your own record against; nothing is summarised for you and nothing is remembered unless you write it to the scratchpad. Available only while your character is resting — the state summary shows `resting` when it applies — or in flight, and once per rest visit and once per flight.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "log_status",
+      "description": "Append one short status entry — what you are doing and how it is going — to your episodic log. The log is append-only: each entry is stamped with the turn, your level and your zone, and nothing can edit or remove it afterwards. It is not the scratchpad. Entries are read back with read_log while reflecting.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The entry text."
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "read_log",
+      "description": "Read your episodic log, newest first. Usable only while reflecting — see the reflect tool. Filter by level range or zone; page with offset, or set order to \"oldest\" to start from the first entry. Returns \"showing a-b of N\" and one line per entry.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "order": {
+            "type": "string",
+            "enum": [
+              "newest",
+              "oldest"
+            ],
+            "description": "Which end to start from. Default newest."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Entries to skip from that end. Default 0."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "description": "How many entries to return. Default 20."
+          },
+          "minLevel": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Only entries written at this level or above."
+          },
+          "maxLevel": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Only entries written at this level or below."
+          },
+          "zone": {
+            "type": "string",
+            "description": "Only entries whose zone name contains this text, ignoring case."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ],
+  "coords": [
+    {
+      "name": "run_snippet",
+      "description": "Run a TypeScript snippet once in the game sandbox. `sdk`, `state`, `events`, `connect()`, `sleep(ms)`, `scratchpad` (its read(), write() and append() each return a Promise: `await scratchpad.read()`), `memory` and `signal` (aborted when this snippet returns or is abandoned) are ambient, and your workspace files import by relative path. A single expression returns its value. Nothing a snippet declares or starts outlives it; what must keep running is a routine (start_routine).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "TypeScript source to evaluate."
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "read_file",
+      "description": "Return one file from your workspace, its text exactly as stored. The path is relative to the workspace, e.g. main.ts or lib/combat.ts. offset and limit, both optional, return part of it instead: limit lines from line offset (counted from 1), under one line saying which lines of how many they are.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative path, e.g. main.ts or lib/combat.ts."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The first line to return, counted from 1. Omit to start at the first line."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "How many lines to return. Omit to read to the last line."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "write_file",
+      "description": "Create a file in your workspace, or replace a file's whole content. Paths are relative to the workspace (main.ts, lib/combat.ts); parent directories are created as needed, and .. or an absolute path is refused. Each file holds at most 32000 characters and the workspace at most 1048576 bytes: a write past a limit is refused and nothing is written. A write that changes main.ts or a file it imports loads your program at once; the result says whether it loaded and which running routines were restarted.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative path, e.g. main.ts or lib/combat.ts."
+          },
+          "content": {
+            "type": "string",
+            "description": "The file's whole new content. May be empty."
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "edit_file",
+      "description": "Replace exact text in a workspace file: `old` with `new`. `old` must match the file exactly, whitespace included, and appear exactly once unless replaceAll is set; a miss or a second match is refused and nothing changes. An empty `new` deletes the text. Held to write_file's limits, and it loads your program as write_file does.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative path of the file to edit."
+          },
+          "old": {
+            "type": "string",
+            "description": "The exact existing text to replace, copied from the file."
+          },
+          "new": {
+            "type": "string",
+            "description": "What to put in its place. Empty string deletes the text."
+          },
+          "replaceAll": {
+            "type": "boolean",
+            "description": "Replace every occurrence instead of requiring a unique one. Default false."
+          }
+        },
+        "required": [
+          "path",
+          "old",
+          "new"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "delete_file",
+      "description": "Delete one file from your workspace. Refused when the file does not exist. Deleting main.ts or a file it imports is a load that fails: the code already running keeps running.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative path of the file to delete."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "start_routine",
+      "description": "Run one exported async function of main.ts as a routine. It runs in the sandbox until it returns, throws or is stopped, with no time limit, whether or not you are awake. `args` is passed as its one argument. A name that is already running is refused and says since when. The result lists the state of every routine.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The export of main.ts to run, e.g. grind."
+          },
+          "args": {
+            "description": "Passed to the function as its one argument. Any JSON value; omit for none."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "stop_routine",
+      "description": "Stop a running routine: its signal is aborted, so its pending sdk waits reject and a move it has in flight is stopped. The result lists the state of every routine.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The routine to stop, by the name it was started under."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "recent_events",
+      "description": "Return the most recent game events (server packets as JSON), oldest first. Use after acting to see what the server said. Ambient movement packets (SMSG_MONSTER_MOVE, MSG_MOVE_*) are folded out by default — they fold into cached state instead, and a trailing note says how many were dropped. Pass includeMovement: true for the raw stream.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "description": "How many events to return, counted AFTER the movement fold. Default 50."
+          },
+          "includeMovement": {
+            "type": "boolean",
+            "description": "Include ambient movement packets (SMSG_MONSTER_MOVE, MSG_MOVE_*). Default false."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "state_summary",
+      "description": "A formatted summary of the cached game state: character, level, position, recent chat and notifications, whether any events were missed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "search_reference",
+      "description": "Full-text search over the game reference wiki (quests, NPCs, zones, items, mechanics). Query with a page title or a few keywords, not a sentence. A quest page's result leads with what its infobox states — which NPC starts the quest and which NPC it is turned in to; these are often different NPCs, and when the page does not state an ender the line says so rather than implying the giver. The reference bundle is a snapshot of the wiki from the Wrath of the Lich King era (patch 3.3.5a) and describes this world, so prefer what you can observe in game. Some hits carry wiki-recorded coordinates (zone plus map x/y); these are reference notes from the wiki page, not a live observation and not proof anything is at that spot now.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Title or keywords, e.g. 'Northshire quests'."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "description": "Max results. Default 8."
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "write_scratchpad",
+      "description": "Replace the entire scratchpad with new markdown. Keep it current: plan, progress, durable facts. It survives restarts; conversation history does not.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "The full new scratchpad content (markdown)."
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "edit_scratchpad",
+      "description": "Change part of the scratchpad in place: replace the exact text `old` with `new`. Use this for ordinary upkeep — striking a done item, correcting a coordinate, adding a line under a heading — and write_scratchpad only to start the pad or rewrite it wholesale. `old` must match the pad byte for byte, whitespace included, and must appear exactly once unless replaceAll is set.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "old": {
+            "type": "string",
+            "description": "The exact existing text to replace, copied from the scratchpad."
+          },
+          "new": {
+            "type": "string",
+            "description": "What to put in its place. Empty string deletes the text."
+          },
+          "replaceAll": {
+            "type": "boolean",
+            "description": "Replace every occurrence instead of requiring a unique one. Default false."
+          }
+        },
+        "required": [
+          "old",
+          "new"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "reflect",
+      "description": "Spend this turn thinking instead of acting. Returns a fixed set of questions to review your own record against; nothing is summarised for you and nothing is remembered unless you write it to the scratchpad. Available only while your character is resting — the state summary shows `resting` when it applies — or in flight, and once per rest visit and once per flight.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "log_status",
+      "description": "Append one short status entry — what you are doing and how it is going — to your episodic log. The log is append-only: each entry is stamped with the turn, your level and your zone, and nothing can edit or remove it afterwards. It is not the scratchpad. Entries are read back with read_log while reflecting.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The entry text."
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "read_log",
+      "description": "Read your episodic log, newest first. Usable only while reflecting — see the reflect tool. Filter by level range or zone; page with offset, or set order to \"oldest\" to start from the first entry. Returns \"showing a-b of N\" and one line per entry.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "order": {
+            "type": "string",
+            "enum": [
+              "newest",
+              "oldest"
+            ],
+            "description": "Which end to start from. Default newest."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Entries to skip from that end. Default 0."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "description": "How many entries to return. Default 20."
+          },
+          "minLevel": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Only entries written at this level or above."
+          },
+          "maxLevel": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Only entries written at this level or below."
+          },
+          "zone": {
+            "type": "string",
+            "description": "Only entries whose zone name contains this text, ignoring case."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ]
+}
