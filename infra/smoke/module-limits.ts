@@ -30,8 +30,8 @@
  * /health` view does not carry `limits` (loopback only), so the configured
  * values cannot be read from here.
  *
- * It FAILS against a module that predates wrath-mcp#57, saying so. Standalone
- * until the pointer bump that carries #57; then in the suite.
+ * It FAILS against a module that predates wrath-mcp#57, saying so. A member of
+ * the on-demand suite (lib/suite.ts), not of the preflight gate.
  *
  *   bun wb smoke module-limits
  *   bun wb --local smoke module-limits   # the quickstart
