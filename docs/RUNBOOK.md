@@ -360,6 +360,10 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               not a number edited into one entry. On EVERY entry.
             `objective` and `wikiCoords` — REFUSED. Steering is a campaign, which names this entry
               in an assignment and supplies its own task shape.
+            `serving` — REQUIRED of a local entry (an openai base on the LAN, loopback or a host
+              `localModelHosts` lists) and REFUSED on any other: `{ weights, quant, runtime }`,
+              a key of the run's tuple (infra/README.md, "Local (self-hosted) models").
+              `servingLabels` `{ machine, runtimeVersion }` ride beside it, labels only.
             `idle` — what it does with an account once its tier is spent. `none` (default, and
               what a paid model wants) or `unlimited` (one continuous freeplay session at a time,
               with no episode wall clock — the idle watchdog is what ends it). Flipping

@@ -335,6 +335,10 @@ export interface ComparabilityView {
   loop?: "program";
   /** The program loop's `yield` tool, a key; absent when off. */
   yield?: true;
+  /** A local build's weights, quantisation and runtime, a key; absent on a hosted run. */
+  serving?: { weights: string; quant: string; runtime: string };
+  /** What is being tested; stamped only when not `hosted` (`subjectOfConfig`). */
+  subject?: "hosted" | "local" | "external";
   /**
    * Which reference bundle the run read, off the bundle's own `meta` table
    * An annotation: a text-changing rebuild ships as a patch within the

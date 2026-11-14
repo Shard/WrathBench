@@ -10,7 +10,8 @@
  * the deploy-time env the provider table reads its self-hosted hosts from.
  */
 
-import { credentialCandidates, rosterProviderRefusal, type Credential } from "./credential-slots";
+import { credentialCandidates, providerOfModel, rosterProviderRefusal, type Credential } from "./credential-slots";
+import { LOCAL_WITHOUT_SERVING, parseServing, parseServingLabels, SERVING_OFF_LOCAL } from "./serving";
 
 /**
  * The keys a ROSTER ENTRY may carry, and the keys a QUEUE JOB may carry.
@@ -29,7 +30,7 @@ import { credentialCandidates, rosterProviderRefusal, type Credential } from "./
 export const ROSTER_ENTRY_KEYS = [
   "model", "tier", "idle", "driver", "effort", "apiBase",
   "billing", "credential", "race", "class", "watchdogs", "maxToolCalls",
-  "routing", "wiki", "compactWindow", "campaignOnly", "deadmines",
+  "routing", "wiki", "compactWindow", "campaignOnly", "serving", "servingLabels", "deadmines",
 ] as const;
 
 export const QUEUE_JOB_KEYS = ["ref", "episode", "repeat", "enabled", "account", "credential"] as const;
@@ -64,7 +65,7 @@ export function strictKeyWhy(kind: "roster entry" | "queue job", keys: readonly 
 }
 
 /** Which rule refused an entry. The parser acts on one of them (`credential`). */
-export type RosterRefusalKind = "unknown-key" | "provider" | "credential";
+export type RosterRefusalKind = "unknown-key" | "provider" | "credential" | "serving";
 
 export interface RosterEntryRefusal {
   kind: RosterRefusalKind;
@@ -87,13 +88,16 @@ export interface RosterEntryRefusal {
  *   not go to (`rosterProviderRefusal`, runner/src/credential-slots.ts);
  * - **a pinned credential that cannot carry it** — not configured, another
  *   provider's, the other billing side (`credentialCandidates`). A pinned
- *   credential that is merely disabled is no refusal: the entry waits for it.
+ *   credential that is merely disabled is no refusal: the entry waits for it;
+ * - **a local model that does not say what it serves** (`serving`,
+ *   runner/src/serving.ts; operator, 2026-11-14), a malformed `serving` or
+ *   `servingLabels`, or a `serving` block on a hosted entry.
  *
  * Each is a refusal of the ENTRY, not the file: the rest of the roster stays in
  * effect, and a rejected re-read would make every other flag in the file inert.
  */
 export function rosterEntryRefusal(
-  e: { model?: unknown; driver?: unknown; apiBase?: unknown; billing?: unknown; credential?: unknown },
+  e: { model?: unknown; driver?: unknown; apiBase?: unknown; billing?: unknown; credential?: unknown; serving?: unknown; servingLabels?: unknown },
   credentials: readonly Credential[],
   env: Record<string, string | undefined> = process.env,
 ): RosterEntryRefusal | null {
@@ -113,6 +117,36 @@ export function rosterEntryRefusal(
       { pin: String(e.credential), env },
     );
     if (fit.why !== undefined) return { kind: "credential", why: fit.why };
+  }
+  const serving = servingRefusal(e, env);
+  if (serving !== null) return { kind: "serving", why: serving };
+  return null;
+}
+
+/**
+ * Why an entry's `serving` is refused, or null: a local model must state its
+ * build, a hosted one must not, and a stated block must parse
+ * (`parseServing`). Local is the credential table's own reading of the base
+ * (`providerOfModel`): the LAN, loopback or a host the deployment lists.
+ */
+export function servingRefusal(
+  e: { model?: unknown; driver?: unknown; apiBase?: unknown; serving?: unknown; servingLabels?: unknown },
+  env: Record<string, string | undefined> = process.env,
+): string | null {
+  const where = `entry ${typeof e.model === "string" ? e.model : "?"}`;
+  const local =
+    providerOfModel({ driver: typeof e.driver === "string" ? e.driver : undefined, apiBase: typeof e.apiBase === "string" ? e.apiBase : undefined }, env) === "local";
+  if (e.serving === undefined) {
+    if (local) return LOCAL_WITHOUT_SERVING;
+    if (e.servingLabels !== undefined) return "servingLabels describe a local build's machine; this entry states no serving";
+    return null;
+  }
+  if (!local) return SERVING_OFF_LOCAL;
+  try {
+    parseServing(e.serving, where);
+    if (e.servingLabels !== undefined) parseServingLabels(e.servingLabels, where);
+  } catch (err) {
+    return (err as Error).message;
   }
   return null;
 }
