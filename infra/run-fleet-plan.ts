@@ -45,7 +45,9 @@ import { fanoutLaunchOf, memberRunId } from "../runner/src/party";
 import { isEvalPoolAccountName } from "../runner/src/account-pool";
 import { stampedCompactWindow, type TerminationReason } from "../runner/src/config";
 import { driverEntry, isProbeOnlyDriver } from "../runner/src/drivers";
-import { isScoredEpisode } from "../runner/src/episodes";
+import { EPISODES, isScoredEpisode, isTaskEpisode } from "../runner/src/episodes";
+import { taskDefinition } from "../runner/src/task-episodes";
+import { taskLaunchFile } from "./task-launch";
 import { classifyLapse, OFFLINE_PAUSE, PARTY_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
 import { credentialKey, driverOfEntry, placeRef, RUN_POD_KEY, SlotBook, WORLD_KEY, type CredentialGate, type PlacedCredential, type ResumeHold, type WorldsSetting } from "./run-fleet-credentials";
 import type { ResumeHoldCode } from "../runner/src/credential-health";
@@ -440,6 +442,12 @@ export function planPolicy(opts: {
   evals?: boolean;
   /** Scored episodes closed, and why (`NextJobsOptions.scoredGate`). Absent is open. */
   scoredGate?: string;
+  /**
+   * A task episode pick's party accounts, from the eval pool (`evalPoolDraw`,
+   * as `taskDraw` wraps it), or why there are none this tick. Absent, every
+   * task pick is held: it has nowhere to stage.
+   */
+  drawTask?: (pick: NextJob) => { accounts: string[] } | { held: string };
 }): PolicyPick[] {
   return planPolicyHeld(opts).picks;
 }
@@ -479,10 +487,19 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
   // The credential each pick was placed on, decided by the loop below and
   // carried onto the job it spawns.
   const chosen = new Map<string, PlacedCredential | null>();
+  // A task pick's party accounts, drawn once per pick (`drawTask`).
+  const drawn = new Map<string, string[]>();
+  const draw = (pick: NextJob): { ok: true } | { ok: false; why: string } => {
+    if (!isTaskEpisode(pick.episode) || drawn.has(pick.name)) return { ok: true };
+    const d = opts.drawTask?.(pick) ?? { held: `--episode ${pick.episode} stages a party on the eval pool, and this plan draws none` };
+    if ("held" in d) return { ok: false, why: d.held };
+    drawn.set(pick.name, d.accounts);
+    return { ok: true };
+  };
   const wrap = (pick: NextJob): PolicyPick => {
-    const job = policyJob(pick);
+    const job = withTaskAccounts(policyJob(pick), drawn.get(pick.name));
     const c = chosen.get(pick.name);
-    return { job: c !== undefined ? { ...job, placed: { [pick.name]: c } } : job, account: pick.account, why: pick.why };
+    return { job: c !== undefined ? { ...job, placed: { [pick.name]: c } } : job, account: job.account ?? pick.account, why: pick.why };
   };
   const next = (states: readonly ModelState[], accounts: readonly string[], also: readonly NextJob[]): ReturnType<typeof planNextJobs> =>
     planNextJobs(states, accounts, new Set([...running, ...also.map((p) => p.name)]), {
@@ -499,10 +516,17 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
    * free account takes that one instead of the first.
    */
   const pool = [...free];
-  const place = (pick: NextJob): PolicyPick => wrap({ ...pick, account: takeAccount(pool, opts.affinity?.(pick.name)) ?? pick.account });
+  // A task pick plays on the eval pool's accounts, never a pool account.
+  const place = (pick: NextJob): PolicyPick => wrap(isTaskEpisode(pick.episode) ? pick : { ...pick, account: takeAccount(pool, opts.affinity?.(pick.name)) ?? pick.account });
   if (opts.place === undefined) {
     const plan = next(opts.states, free, []);
-    return { picks: plan.jobs.map(place), held: plan.held };
+    const held = [...plan.held];
+    const picks = plan.jobs.filter((pick) => {
+      const d = draw(pick);
+      if (!d.ok) held.push({ name: pick.name, episode: pick.episode, why: d.why });
+      return d.ok;
+    });
+    return { picks: picks.map(place), held };
   }
   const out: NextJob[] = [];
   const held: HeldPick[] = [];
@@ -514,6 +538,13 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
     for (const h of plan.held) if (!held.some((x) => x.name === h.name)) held.push(h);
     let rejected = false;
     for (const pick of plan.jobs) {
+      const d = draw(pick);
+      if (!d.ok) {
+        passed.add(pick.name);
+        held.push({ name: pick.name, episode: pick.episode, why: d.why });
+        rejected = true;
+        continue;
+      }
       const r = opts.place(pick.name, pick.episode);
       if (!r.ok) {
         passed.add(pick.name);
@@ -530,6 +561,39 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
     accounts = free.filter((a) => !out.some((p) => p.account === a));
   }
   return { picks: out.map(place), held };
+}
+
+/**
+ * A policy pick's job, made a task episode's attempt: its party's accounts
+ * (`accounts`, member order, the first the job's own), and on the one-agent
+ * id the fan-out flag that makes its spawn one run over all of them
+ * (`fanoutSpawn`); on the five-agent id, one run per member (`partySpawn`).
+ * Any other job, or a task pick with no draw, is returned as it was.
+ */
+export function withTaskAccounts(job: FleetJob, accounts: readonly string[] | undefined): FleetJob {
+  if (!isTaskEpisode(job.episode) || accounts === undefined) return job;
+  const oneAgent = EPISODES[job.episode].task.agents === 1;
+  return { ...job, account: accounts[0]!, accounts: [...accounts], ...(oneAgent ? { fanout: true as const } : {}) };
+}
+
+/** How many sessions one attempt of an episode holds on its credential: a five-agent party's five, else one. */
+export function episodeSessions(episode: EpisodeId): number {
+  return isTaskEpisode(episode) ? EPISODES[episode].task.agents : 1;
+}
+
+/**
+ * A task pick's draw from the eval pool, over this tick's `evalPoolDraw`:
+ * the party's size in accounts, under the pick's own job name.
+ */
+export function taskDraw(
+  draw: ((c: Pick<Campaign, "name">, jobName: string, size: number) => { accounts: string[] } | { held: string }) | undefined,
+): ((pick: NextJob) => { accounts: string[] } | { held: string }) | undefined {
+  if (draw === undefined) return undefined;
+  return (pick) => {
+    if (!isTaskEpisode(pick.episode)) return { held: `${pick.episode} draws no party` };
+    const size = taskDefinition(pick.episode).party!.size;
+    return draw({ name: pick.episode }, policyJob(pick).name, size);
+  };
 }
 
 /**
@@ -672,7 +736,7 @@ export function evalPoolDraw(o: {
     const own = o.running?.(jobName);
     if (own !== undefined && own.length === size) return { accounts: [...own] };
     if (o.mode !== "evals") {
-      return { held: `campaign ${c.name} draws its party's accounts from the eval pool, and such a party plays on a world of its own: policy.worlds is ${JSON.stringify(o.mode)}` };
+      return { held: `${isTaskEpisode(c.name) ? `--episode ${c.name}` : `campaign ${c.name}`} draws its party's accounts from the eval pool, and such a party plays on a world of its own: policy.worlds is ${JSON.stringify(o.mode)}` };
     }
     const free = o.pool.filter((a) => !o.taken.has(a.toUpperCase()) && o.held(a) === undefined);
     if (free.length < size) {
@@ -747,8 +811,13 @@ export function jobSpawn(
    * supervisor down with it (program-probe, 2026-11-12).
    */
   const published = job.probe === undefined ? undefined : publishedVersion(job.probe, campaigns, defs);
-  const probeFile: CampaignFile | undefined =
-    job.probe === undefined ? undefined : job.campaignFile ?? (published === undefined ? undefined : campaignFileOf(published, job.probe.cell, job.probe.arm));
+  // A task episode's shape is its pinned definition's (`task-episodes.ts`),
+  // through the same launch file a probe's comes in; it is never a campaign's.
+  const probeFile: CampaignFile | undefined = isTaskEpisode(job.episode)
+    ? (job.campaignFile ?? taskLaunchFile(job.episode))
+    : job.probe === undefined
+      ? undefined
+      : job.campaignFile ?? (published === undefined ? undefined : campaignFileOf(published, job.probe.cell, job.probe.arm));
   if (job.probe !== undefined && probeFile === undefined) {
     fail(`job ${job.name}: ${job.probe.campaign}@${job.probe.version} is not a published campaign this config names`);
   }
@@ -773,10 +842,10 @@ export function jobSpawn(
   for (const r of job.resume !== undefined ? job.refs.filter((x) => roster[x] !== undefined) : runnableRefs(job, roster, eligible)) {
     const copies = copiesOf(r);
     if (copies <= 0) continue;
-    const { tier: _tier, idle: _idle, campaignOnly: _campaignOnly, ...entry } = roster[r]!;
+    const { tier: _tier, idle: _idle, campaignOnly: _campaignOnly, deadmines: _deadmines, ...entry } = roster[r]!;
     // A probe keeps only what identifies the model; the campaign owns the rest.
     const { objective: _obj, watchdogs: _wd, maxToolCalls: _mtc, wikiCoords: _wc, wiki: _wk, ...credentials } = entry;
-    const isProbe = job.probe !== undefined;
+    const isProbe = probeFile !== undefined;
     const spec: RosterSpec = isProbe ? credentials : entry;
     // The entry's own leash, kept only when the entry is the authority on it.
     const own = isProbe ? {} : { watchdogs: entry.watchdogs, maxToolCalls: entry.maxToolCalls };
@@ -815,7 +884,8 @@ export function jobSpawn(
         ? {
             campaignFile: probeFile,
             ref: r,
-            launch: { pod: true as const, image: probeFile.arm.image ?? null, command: probeFile.arm.command ?? null },
+            // A task episode runs where an eval runs; only a probe takes a run pod.
+            ...(job.probe !== undefined ? { launch: { pod: true as const, image: probeFile.arm.image ?? null, command: probeFile.arm.command ?? null } } : {}),
           }
         : {}),
       // Whether a pause is resumed at all, decided by the lane and travelling
@@ -1069,9 +1139,8 @@ export function pausedProbeFile(
  *    paused: such a run is a **failed attempt**, not a resume;
  *  - nothing came back for it at all and it went stale.
  *
- * `counts` is the three-strike question and it is exactly
- * `reason === "attempt-failed"`, carried here so the log line and the
- * projection cannot disagree about it.
+ * An `attempt-failed` one is a rung of the model's cooling ladder
+ * (`NO_PROGRESS_REASONS`); `manual` and `stale` are the harness's and are not.
  */
 export interface EndedRun {
   runId: string;
@@ -1087,7 +1156,6 @@ export interface EndedRun {
   episode: EpisodeId;
   reason: TerminationReason;
   detail: string;
-  counts: boolean;
   /** The account to release, when the run recorded one. */
   account: string | null;
 }
@@ -1415,7 +1483,6 @@ export function planStaleRuns(opts: {
       episode: f.episode,
       reason: lapse.reason!,
       detail: lapse.detail!,
-      counts: lapse.counts,
       account: f.account,
     });
   }
@@ -1556,7 +1623,6 @@ export function planResumes(opts: {
         episode: f.episode,
         reason: "manual",
         detail: `ended by the supervisor: model ${f.model} no longer under ref ${launchedUnder}`,
-        counts: false,
         account: f.account,
       });
       continue;
@@ -1590,8 +1656,7 @@ export function planResumes(opts: {
         episode: f.episode,
         reason: lapse.reason!,
         detail: lapse.detail!,
-        counts: lapse.counts,
-        account: f.account,
+          account: f.account,
       });
       continue;
     }
@@ -2010,8 +2075,8 @@ function planPartyResume(
  * The run facts as they read once this tick's terminations are on disk. Pure.
  *
  * The projection is built at the top of a tick and the sweep writes its
- * terminations halfway down it, so without this the scheduler reads a strike
- * count that predates the strike it just wrote. That is not a cosmetic lag: on
+ * terminations halfway down it, so without this the scheduler reads a ladder
+ * that predates the failed attempt it just wrote. That is not a cosmetic lag: on
  * 2026-08-25 the first tick after the lane-resume rule shipped logged
  * `retry 3/3 — tainted` for nemotron-ultra and spawned its ninth attempt one
  * second later, because the projection behind the pick still said zero.
@@ -2405,36 +2470,6 @@ export function planNameSweeps(opts: {
     out.push({ ref: a.ref, account: prev.account, character: prev.character });
   }
   return out;
-}
-
-/**
- * How many failed attempts this model already has on the episode a lapsed run
- * belongs to — what "retry 2/3" counts from. The projection is the only place
- * that number is derived, so the log line and the Models page agree.
- */
-export function failedAttemptsFor(states: readonly ModelState[], e: Pick<EndedRun, "model" | "effort" | "compactWindow" | "driver" | "episode">): number | undefined {
-  const st = states.find((s) => entryOwnsRun(s, e))?.perEpisode[e.episode];
-  return st?.failed;
-}
-
-/**
- * The retry number each of a batch of lapsed runs will carry, in order.
- *
- * The projection is read once a tick, so it does not know about the runs this
- * same tick is about to end. A sweep after an outage ends several failures for
- * one model at once, and without this every line would read "retry 1/3" while
- * they summed to three. Counting within the batch is what makes `--status`
- * honest about a model that is being tainted right now.
- */
-export function retryNumbers(ended: readonly EndedRun[], base: (e: EndedRun) => number): number[] {
-  const seen = new Map<string, number>();
-  return ended.map((e) => {
-    // One count per entry: its `auto` runs and its driver-default runs are one model's failures.
-    const key = `${e.model}@${e.effort ?? ""}@${rosterWindowKey(e)}@${e.episode}`;
-    const n = base(e) + (seen.get(key) ?? 0);
-    if (e.counts) seen.set(key, (seen.get(key) ?? 0) + 1);
-    return n + 1;
-  });
 }
 
 /** A live rejection of the config file. Written into fleet-state.json. */
@@ -2858,7 +2893,7 @@ export function planTick(
   /** The book's world setting (`worldsOf`). */
   worlds?: WorldsSetting,
   /** A party that draws its accounts: this tick's eval-pool draw (`evalPoolDraw`). */
-  draw?: (c: Campaign, jobName: string, size: number) => { accounts: string[] } | { held: string },
+  draw?: (c: Pick<Campaign, "name">, jobName: string, size: number) => { accounts: string[] } | { held: string },
 ): {
   pinned: { job: FleetJob; spawn: JobSpawn }[];
   queue: QueuePlan;
@@ -2946,11 +2981,12 @@ export function planTick(
     queuePlan: queue,
     runningRefs: heldRefs,
     place: (n, ep) => {
-      const r = placeRef(config.roster[n], ep, { ...placing, pin: config.roster[n]?.credential });
+      const r = placeRef(config.roster[n], ep, { ...placing, pin: config.roster[n]?.credential, sessions: episodeSessions(ep) });
       return r.ok ? { ok: true, credential: r.placement.credential, keys: r.placement.keys } : r;
     },
     take: (keys) => book.add(keys),
     policy: config.policy,
+    ...(taskDraw(draw) !== undefined ? { drawTask: taskDraw(draw)! } : {}),
     campaigns: unpinnedCampaigns(config),
     probeRuns,
     ...(affinity !== undefined ? { affinity } : {}),

@@ -182,7 +182,7 @@ describe("modelStates", () => {
 
     // ox is t1 and earned rung 1, so it climbed to t2 — which is what unlocks
     // e360 at all. The declared tier is unchanged: the config is not rewritten.
-    expect(by["ox"]).toMatchObject({ status: "promoted", declaredTier: "t1", tier: "t2", earnedRung1: true, eligible: ["e90", "e360"], platform: "openrouter", ladder: 0 });
+    expect(by["ox"]).toMatchObject({ status: "promoted", declaredTier: "t1", tier: "t2", earnedRung1: true, eligible: ["e90", "e360", "deadmines-solo"], platform: "openrouter", ladder: 0 });
     // attempts 4: the archived ox run is an attempt — it numbers the next run id.
     expect(by["ox"]!.perEpisode.e90).toMatchObject({ counted: 2, stillborn: 0, attempts: 4, target: 3, bestLevel: 6, reachedL5: true, lastReason: "episode-limit" });
     expect(by["ox"]!.perEpisode.e360).toMatchObject({ counted: 0, target: 1, bestLevel: null, reachedL5: false, lastEnded: null, lastReason: null });
@@ -228,7 +228,7 @@ describe("modelStates", () => {
 
   test("a hand-set tier is eligible without a witness, and never reads as earned", () => {
     const [s] = modelStates({ runsDir, roster: [{ name: "sonnet", model: "sonnet", driver: "claude-code", tier: "t2" }], now: NOW, sidecar: { version: 1, cleared: {} } });
-    expect(s!.eligible).toEqual(["e90", "e360"]);
+    expect(s!.eligible).toEqual(["e90", "e360", "deadmines-solo"]);
     // Hand-placed on t2: eligible, but it did not climb, so "promoted" — the
     // earned word — is not said of it, and the witness stays false.
     expect(s!.status).toBe("active");
@@ -367,40 +367,40 @@ describe("the ladder", () => {
     expect(s.perEpisode.e90).toMatchObject({ attempts: 1, counted: 0 });
   });
 
-  test("three failed attempts taint the model for that episode; an operator-pause is not one of them", () => {
+  test("a provider-refused attempt is a rung of the cooling ladder, not a strike; an operator-pause or an offline gap is none", () => {
+    // Strikes are folded into the cooling ladder (operator, 2026-11-14): one
+    // stop mechanism per model, cleared one way.
     const failed = (i: number, reason: string): RunFact => ({
-      ...fail(i, NOW - (10 - i) * HOUR, reason, 12),
+      ...fail(i, NOW - (4 - i) * 60_000, reason, 12),
       runId: `fleet-m-e90-m-2026082${i}`,
       bestLevel: 3,
     });
-    // Two provider failures and a deploy: two strikes, still schedulable.
-    const two = projectModel(m, [failed(1, "attempt-failed"), failed(2, "manual"), failed(3, "attempt-failed")], DEFAULT_POLICY, { now: NOW });
-    expect(two.perEpisode.e90).toMatchObject({ failed: 2, tainted: false, counted: 0, attempts: 3 });
-    expect(schedulability(two).verdict).toBe("eval");
-    // The third counted failure stops the spending.
     const three = projectModel(m, [failed(1, "attempt-failed"), failed(2, "attempt-failed"), failed(3, "attempt-failed")], DEFAULT_POLICY, { now: NOW });
-    expect(three.perEpisode.e90).toMatchObject({ failed: 3, tainted: true });
+    expect(three.ladder).toBe(3);
+    expect(three.status).toBe("cooling");
     const v = schedulability(three);
     expect(v.verdict).toBe("blocked");
-    expect(v.why).toContain("tainted on e90 (3 failed attempts)");
-    // Blocked, not free: three burnt evals do not buy idle work.
+    expect(v.why).toContain("cooling rung 3/9");
     expect(nextJobs([three], ["A"])).toEqual([]);
-    // An offline gap is not a strike either.
+    // A deploy between two refusals breaks the streak, as any run that is not
+    // the provider's refusal does: one rung, served by now.
+    const deploy = projectModel(m, [failed(1, "attempt-failed"), failed(2, "manual"), failed(3, "attempt-failed")], DEFAULT_POLICY, { now: NOW });
+    expect(deploy.ladder).toBe(1);
+    expect(schedulability(deploy).verdict).toBe("eval");
+    // An offline gap is no rung either.
     const offline = projectModel(m, [failed(1, "attempt-failed"), failed(2, "stale"), failed(3, "attempt-failed")], DEFAULT_POLICY, { now: NOW });
-    expect(offline.perEpisode.e90!.failed).toBe(2);
+    expect(offline.ladder).toBe(1);
     // Neither reason is ever counted or scored, and both still number attempts.
     expect(isCounted(failed(1, "attempt-failed"))).toBe(false);
     expect(isCounted(failed(2, "stale"))).toBe(false);
-    // A hand-launched run spends no policy attempt.
-    const hand = { ...failed(1, "attempt-failed"), runId: "roster-m-20260821" };
-    expect(projectModel(m, [hand, failed(2, "attempt-failed"), failed(3, "attempt-failed")], DEFAULT_POLICY, { now: NOW }).perEpisode.e90!.failed).toBe(2);
-    // A clear forgives the strikes the way it forgives the ladder.
-    expect(
-      projectModel(m, [failed(1, "attempt-failed"), failed(2, "attempt-failed"), failed(3, "attempt-failed")], DEFAULT_POLICY, {
-        now: NOW,
-        clearedAt: NOW - 8.5 * HOUR,
-      }).perEpisode.e90,
-    ).toMatchObject({ failed: 2, tainted: false });
+    expect(three.perEpisode.e90).toMatchObject({ counted: 0, attempts: 3 });
+    expect("failed" in three.perEpisode.e90!).toBe(false);
+    // A clear forgives the rungs before it.
+    const cleared = projectModel(m, [failed(1, "attempt-failed"), failed(2, "attempt-failed"), failed(3, "attempt-failed")], DEFAULT_POLICY, {
+      now: NOW,
+      clearedAt: NOW - 2.5 * 60_000,
+    });
+    expect(cleared.ladder).toBe(2);
   });
 
   test("at the ceiling one more no-progress attempt retires the model; a clear forgives it", () => {

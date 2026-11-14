@@ -48,9 +48,13 @@ describe("an unscored episode is never evidence", () => {
   test("every scored episode a tier can buy does have a target", () => {
     const scored = EPISODE_IDS.filter((id) => EPISODES[id].scored);
     expect(scored).toEqual(POLICY_EPISODES as EpisodeId[]);
-    const m: RosterModel = { name: "m", model: "m", tier: "t2" };
+    // The five-agent Deadmines id is bought only where the entry opts in.
+    const m: RosterModel = { name: "m", model: "m", tier: "t2", deadmines: true };
     const s = projectModel(m, [], DEFAULT_POLICY, { now: NOW });
     for (const id of scored) expect(s.perEpisode[id]?.target).toBeGreaterThan(0);
+    const plain = projectModel({ name: "m", model: "m", tier: "t2" }, [], DEFAULT_POLICY, { now: NOW });
+    expect(plain.perEpisode.deadmines?.target).toBe(0);
+    expect(plain.perEpisode["deadmines-solo"]?.target).toBe(3);
   });
 
   test("an unscored tier states no budget, so no run of one reads as overridden", () => {

@@ -178,7 +178,7 @@ import { CompactionAsk, codexAutoCompactLimit, codexWindowCapRefusal, compaction
 import { codexUsageDelta, codexUsageRegressed, normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 import { SUBSCRIPTION_PAUSE } from "./lapse";
 import { SubscriptionUsageTracker, describeWindows, newestCredentialUsage, thresholdsOf, usageKeyOf } from "./subscription-usage";
-import { CODEX_SYSTEM_PROMPT, buildSystemPrompt, programPromptOf } from "./prompt";
+import { CODEX_SYSTEM_PROMPT, buildSystemPrompt, programPromptOf, steeringOf } from "./prompt";
 import type { ToolContext } from "./tools";
 import type { EpisodicLog } from "./episodic";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
@@ -434,7 +434,7 @@ export const CAPACITY_BACKOFF_MS = [30_000, 60_000, 120_000, 240_000, 300_000] a
  * unscored tiers only (freeplay and probing), read off the episode table as
  * the lapse rule reads it (`resumesOnPause`). A scored episode keeps the
  * three-in-a-row rule as it was: its `adapter-error` is a failed attempt that
- * is retried fresh with a full clock and no strike (METHODOLOGY, "A lapsed run
+ * is retried fresh with a full clock (METHODOLOGY, "A lapsed run
  * is evidence only if its lane says so"), where a backoff would spend the
  * attempt's own clock. A launch with no episode keeps it too.
  */
@@ -929,7 +929,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   // ---- files the CLI needs, all inside the run directory (absolute paths:
   // the CLI runs from a scratch temp cwd)
   const instructionsPath = resolve(o.runDir, "codex-instructions.md");
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("codex"), config.wiki, config.watchdogs.episodeMs, programPrompt);
+  const systemPrompt = buildSystemPrompt(steeringOf(config), config.episode, harnessOf("codex"), config.wiki, config.watchdogs.episodeMs, programPrompt);
   writeFileSync(instructionsPath, systemPrompt, "utf8");
   // The bridge by its REPOSITORY path: the CLI's sandbox gives MCP servers a
   // private /tmp, so a temp copy would not be found ("Module not found").

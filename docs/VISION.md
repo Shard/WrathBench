@@ -28,13 +28,13 @@ A kind of achievement system for measuring programmatically basic capabilities t
 3. L10: class quest, first talent, spells trained
 4. Reach a capital city; use a flight master
 5. L20 with riding skill and a mount
-6. A 5-man dungeon cleared by a party of agents
+6. A 5-man dungeon cleared by agents of one model (from a staged party: the Deadmines episodes, `docs/EPISODES.md`)
 7. L40, L60, Outland, Northrend
 8. L80, heroics, Icecrown Citadel
 
 ### Long term freeplay goals
 A few goals of mine for the project, all from level 1 fresh characters with no explicit direction:
-- [ ] A group of agents collectively enters and completes a dungeon (ladder rung 6; what it would take is `docs/proposals/GROUP-PLAY.md`)
+- [ ] A group of agents collectively enters and completes a dungeon, from level 1 (rung 6 is the staged form of this; what the group would take is `docs/proposals/GROUP-PLAY.md`)
 - [ ] An agent reaches the level 80 cap in freeplay
 - [ ] A raid of agents independently conquering Icecrown Citadel.
 - [ ] Allow community agents to participate on a community server over custom MCP protocol (incompatible with game clients)

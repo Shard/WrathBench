@@ -34,8 +34,24 @@
 import { z } from "zod";
 
 /** Every episode tier a run can be launched under. */
-export const EPISODE_IDS = ["e90", "e360", "probing", "freeplay"] as const;
+export const EPISODE_IDS = ["e90", "e360", "probing", "freeplay", "deadmines-solo", "deadmines"] as const;
 export type EpisodeId = (typeof EPISODE_IDS)[number];
+
+/**
+ * The task episodes: scored ids whose start, character names and directive
+ * are pinned by the id (operator, 2026-11-14; docs/METHODOLOGY.md, "Reset is a
+ * fresh character"). Each is a fixed Deadmines run from a staged level-20
+ * party, played either by five agents of one model (`deadmines`) or by one
+ * agent driving all five characters (`deadmines-solo`). The two are never
+ * pooled with each other or with the level episodes, and neither has a
+ * ladder of its own: their runs are read on the dungeon board.
+ */
+export const TASK_EPISODE_IDS = ["deadmines-solo", "deadmines"] as const;
+export type TaskEpisodeId = (typeof TASK_EPISODE_IDS)[number];
+
+export function isTaskEpisode(id: string | null | undefined): id is TaskEpisodeId {
+  return typeof id === "string" && (TASK_EPISODE_IDS as readonly string[]).includes(id);
+}
 
 export const episodeIdSchema = z.enum(EPISODE_IDS);
 
@@ -62,6 +78,13 @@ export interface EpisodeTier {
   scored: boolean;
   /** One paragraph of plain prose: the rules, as the API and dashboard serve them. */
   summary: string;
+  /**
+   * A task episode's shape: how many agents play it and how many characters
+   * each drives. Both are comparability keys (`comparability.ts`), and a
+   * launch whose grant disagrees with them is refused (`config.ts`). Absent
+   * on every other id.
+   */
+  task?: { agents: number; characters: number };
 }
 
 export const EPISODES = {
@@ -136,6 +159,39 @@ export const EPISODES = {
       "freeplay are both often six hours long: duration is not what separates them, steering " +
       "is. A freeplay run neither qualifies nor disqualifies a model for anything.",
   },
+  // The two Deadmines ids share everything but the number of agents: the
+  // clock (four hours for now, pending the operator's read of deadmines@5),
+  // idle twenty minutes while awake, the no-XP watchdog off, and the 8000-call
+  // runaway guard of deadmines@5. A change to any of it is a new id.
+  deadmines: {
+    id: "deadmines",
+    minutes: 240,
+    idleMinutes: 20,
+    noXpMinutes: null,
+    toolCalls: 8000,
+    objectiveAllowed: false,
+    scored: true,
+    summary:
+      "The fixed Deadmines episode, five agents of one model with one character each: a party staged at " +
+      "level 20 in the mine under Moonbrook, its characters, roles and directive fixed by the id, ending " +
+      "when Edwin VanCleef dies or the four-hour clock runs out. Scored on the dungeon board beside the " +
+      "one-agent episode, and never pooled with it or with the level episodes.",
+    task: { agents: 5, characters: 1 },
+  },
+  "deadmines-solo": {
+    id: "deadmines-solo",
+    minutes: 240,
+    idleMinutes: 20,
+    noXpMinutes: null,
+    toolCalls: 8000,
+    objectiveAllowed: false,
+    scored: true,
+    summary:
+      "The fixed Deadmines episode, one agent driving all five characters: the same staged level-20 party, " +
+      "end and clock as the five-agent episode, with the one agent's directive fixed by the id. Scored on " +
+      "the dungeon board beside the five-agent episode, and never pooled with it or with the level episodes.",
+    task: { agents: 1, characters: 5 },
+  },
 } as const satisfies Record<EpisodeId, EpisodeTier>;
 
 /**
@@ -153,6 +209,17 @@ export type ScoredEpisodeId = { [K in EpisodeId]: (typeof EPISODES)[K]["scored"]
 /** Whether this episode can enter a scored comparison, narrowing the id. */
 export function isScoredEpisode(id: EpisodeId): id is ScoredEpisodeId {
   return EPISODES[id].scored;
+}
+
+/**
+ * The scored ids a level ladder ranks and promotion reads: every scored id
+ * but the task episodes. A staged level-20 dungeon run would otherwise claim
+ * the ladder's level rungs and witness a promotion it never climbed to.
+ */
+export type LevelEpisodeId = Exclude<ScoredEpisodeId, TaskEpisodeId>;
+
+export function isLevelEpisode(id: EpisodeId): id is LevelEpisodeId {
+  return isScoredEpisode(id) && !isTaskEpisode(id);
 }
 
 /** The tiers as a list, in the order they are presented. */

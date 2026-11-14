@@ -22,7 +22,7 @@
 
 import type { Harness, RunConfig } from "./config";
 import { harnessDriver } from "./drivers";
-import type { EpisodeId } from "./episodes";
+import { EPISODES, type EpisodeId } from "./episodes";
 
 /**
  * The opening of every prompt is two kinds of sentence, and they are kept
@@ -415,7 +415,22 @@ export function episodeSection(episode: EpisodeId | undefined): string | undefin
       // names none: a sentence naming a default the run may not be under would
       // be a false fact rather than a missing one.
       return undefined;
+    case "deadmines":
+    case "deadmines-solo":
+      // A task episode states its clock in the words a probe with an objective
+      // does, so its prompt is byte for byte the one its rehearsal ran on
+      // (deadmines@5's one-agent arm, @4's members).
+      return probingClockSentence(EPISODES[episode].minutes * 60_000);
   }
+}
+
+/**
+ * The text a run's prompt renders in the objective's block: an operator
+ * objective, or a task episode's directive (`RunConfig.directive`), which
+ * reads the same and is not one. A config carries at most one of the two.
+ */
+export function steeringOf(config: { objective?: string | undefined; directive?: string | undefined }): string | undefined {
+  return config.objective ?? config.directive;
 }
 
 const HOUR_WORDS = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];

@@ -25,7 +25,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { harnessSeries } from "../src/comparability";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
-import { EPISODES, EPISODE_IDS, EPISODE_LIST } from "../src/episodes";
+import { EPISODES, EPISODE_IDS, EPISODE_LIST, isTaskEpisode } from "../src/episodes";
 import { HARNESSES, isNotAModelRun } from "../src/config";
 import { badEvidenceReason } from "../src/lapse";
 import type {
@@ -279,8 +279,8 @@ export function json(body: unknown, status = 200): Response {
   });
 }
 
-/** The one shared scoreability verdict, applied to a projected result row. */
-function taintOf(r: Pick<ResultRun, "live" | "pauseReason" | "modelResponses" | "terminationReason">): string | null {
+/** The one shared scoreability verdict (`badEvidenceReason`), applied to a projected result row. */
+function badEvidenceOf(r: Pick<ResultRun, "live" | "pauseReason" | "modelResponses" | "terminationReason">): string | null {
   return badEvidenceReason({
     live: r.live === true,
     paused: r.pauseReason !== null,
@@ -1347,7 +1347,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * the ladder that loses the id: `/api/results?episode=probing` still answers,
    * and `EPISODE_IDS` is untouched.
    */
-  const LADDER_EPISODES: readonly string[] = EPISODE_IDS.filter((id) => id !== "probing");
+  // Nor are the task episodes (operator, 2026-11-14): a staged level-20
+  // dungeon run would claim the level rungs, and their runs are read on the
+  // dungeon board instead.
+  const LADDER_EPISODES: readonly string[] = EPISODE_IDS.filter((id) => id !== "probing" && !isTaskEpisode(id));
 
   async function resultsResponse(url: URL, ladder = false): Promise<Response> {
     const episode = episodeFilter(url);
@@ -1427,11 +1430,11 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // An attempt that never became an episode is not a member of the tier's
         // group — the same predicate the ladder filters on, so this
         // count and that chart hold the same runs.
-        const tainted = (r: (typeof stamped)[number]): boolean => taintOf(r) !== null;
-        const lapsed = (r: (typeof stamped)[number]): boolean => r.terminationReason !== null && tainted(r);
+        const notEvidence = (r: (typeof stamped)[number]): boolean => badEvidenceOf(r) !== null;
+        const lapsed = (r: (typeof stamped)[number]): boolean => r.terminationReason !== null && notEvidence(r);
         return {
           ...tier,
-          members: stamped.filter((r) => !r.episodeOverride && !tainted(r)).length,
+          members: stamped.filter((r) => !r.episodeOverride && !notEvidence(r)).length,
           lapsed: stamped.filter((r) => !r.episodeOverride && lapsed(r)).length,
           overrides: stamped.filter((r) => r.episodeOverride).length,
           derived: tagged.length - stamped.length,
@@ -1456,7 +1459,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
   async function campaignsResponse(): Promise<Response> {
     const all = await resultRuns();
     const roster = fleetRoster();
-    const view = campaignsView(all, roster, (r) => !r.extra && !r.episodeOverride && taintOf(r) === null);
+    const view = campaignsView(all, roster, (r) => !r.extra && !r.episodeOverride && badEvidenceOf(r) === null);
     const body: CampaignsResponse = { now: Date.now(), campaigns: view.campaigns, refused: view.refused };
     return pub(body, projectCampaigns);
   }

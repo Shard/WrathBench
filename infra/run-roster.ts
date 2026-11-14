@@ -91,7 +91,7 @@ import { partyConfigOf, withFanoutGuids, withMemberGuids, type PartyStamp } from
 import { PARTY_END_GRACE_MS, writeEndRequest } from "../runner/src/end-request";
 import { runParty, type MemberVerdict, type PartyMemberRun } from "./party-fate";
 import { commandStager, STAGER_SCRIPT, type PartyStager, type StagedGuid, type StageRequest } from "./party-stager";
-import { parseWorldsMode, type WorldsMode } from "../runner/src/models";
+import { LADDER_MS, parseWorldsMode, type WorldsMode } from "../runner/src/models";
 import { DEFAULT_SOAP_PORT, loadWorldLauncher, moduleUrlOfRun, readWorldPointer, removeWorldPointer, stagingEnvOf, worldAuthHeaders, worldFateOf, worldUsedBy, type WorldLauncher } from "./world";
 
 // ------------------------------------------------------------------ types
@@ -315,19 +315,11 @@ const DEFAULT_EPISODE_MS = 5_400_000; // 90 minutes
 //    is saturated. It used to be the same three steps, which clamped at 10m
 //    forever: a fully saturated free model (z-ai/glm-5.2:free, 2026-08-22) was
 //    relaunched 17 times in one day, each a 0-turn rate-limited stub. It now
-//    escalates to 6h and then taints the spec out of the rotation.
+//    escalates to 6h and then taints the spec out of the rotation. Its rungs
+//    are the scheduler's cooling ladder (`LADDER_MS`), one set of timings for
+//    both, so an operator reading either log sees the same rungs.
 const RESUME_BACKOFF_MS = [2 * 60_000, 5 * 60_000, 10 * 60_000];
-const DEFER_BACKOFF_MS = [
-  1 * 60_000,
-  3 * 60_000,
-  5 * 60_000,
-  10 * 60_000,
-  15 * 60_000,
-  30 * 60_000,
-  60 * 60_000,
-  3 * 60 * 60_000,
-  6 * 60 * 60_000,
-];
+const DEFER_BACKOFF_MS: readonly number[] = LADDER_MS;
 const MAX_RETRY_CYCLES = 2;
 const CYCLE_GAP_MS = 10 * 60_000;
 const EARLY_TURN_THRESHOLD = 2;
@@ -811,7 +803,8 @@ export function episodeFlags(spec: Resolved, resume: boolean): string[] {
   // the supervisor's, opaque here, and checked against the reserved flags when
   // the definition was published.
   if (spec.campaignFile !== undefined) {
-    argv.push("--episode", "probing", "--campaign-file", campaignFilePath(spec.runId));
+    // A task episode's file is its id's (`task-episodes.ts`); every other is a probe's.
+    argv.push("--episode", spec.campaignFile.episode ?? "probing", "--campaign-file", campaignFilePath(spec.runId));
     if (spec.ref !== undefined) argv.push("--ref", spec.ref);
     // A party member runs on the character the stager made for it, named in
     // its campaign file; every other probe's argv is what it was.
@@ -945,7 +938,7 @@ export function isTainted(defers: number): boolean {
 }
 
 /** Human-readable rungs for --help and the dry-run plan ("1m/3m/.../6h"). */
-export function ladder(rungs: number[]): string {
+export function ladder(rungs: readonly number[]): string {
   return rungs
     .map((m) => (m >= 60 * 60_000 ? `${m / (60 * 60_000)}h` : `${m / 60_000}m`))
     .join("/");
@@ -1933,12 +1926,10 @@ export function writeLaunchFailure(runDir: string, spec: Resolved, detail: strin
     // As the run would have recorded it: a stated `auto` is the absent field.
     ...(stampedCompactWindow(spec.compactWindow) !== undefined ? { compactWindow: stampedCompactWindow(spec.compactWindow) } : {}),
     ...(spec.account !== undefined ? { account: spec.account } : {}),
-    episode: "probing",
-    campaign: file.campaign,
-    campaignVersion: file.version,
-    campaignHash: file.hash,
-    cell: file.cell.id,
-    arm: file.arm.id,
+    // A task episode's stub is that episode's, and no campaign's square.
+    ...(file.episode !== undefined
+      ? { episode: file.episode }
+      : { episode: "probing", campaign: file.campaign, campaignVersion: file.version, campaignHash: file.hash, cell: file.cell.id, arm: file.arm.id }),
     ...(spec.ref !== undefined ? { ref: spec.ref } : {}),
     race: member?.race ?? file.cell.race,
     class: member?.class ?? file.cell.class,
@@ -1957,7 +1948,7 @@ export function writeLaunchFailure(runDir: string, spec: Resolved, detail: strin
     config,
     comparability: {
       harnessVersion: opts.harnessVersion,
-      episode: "probing",
+      episode: file.episode ?? "probing",
       effort: spec.effort ?? null,
       ...(stampedCompactWindow(spec.compactWindow) !== undefined ? { compactWindow: stampedCompactWindow(spec.compactWindow) } : {}),
     },
@@ -2227,7 +2218,7 @@ async function attemptSpecOn(
       record({ runId: spec.runId, model: spec.model, outcome: "launch-failed", detail: verdict.detail });
       if (!opts.dryRun) {
         const left = recordUnlaunched(join(REPO_ROOT, RUNS_DIR, spec.runId), spec, exit, verdict.detail, { resume, harnessVersion: launchStamp(spec) });
-        if (left.kind === "stub") say(`launch-failed ${spec.runId}: recorded as a launch-failed attempt on ${spec.campaignFile!.campaign}@${spec.campaignFile!.version} ${spec.campaignFile!.cell.id}/${spec.campaignFile!.arm.id}`);
+        if (left.kind === "stub") say(`launch-failed ${spec.runId}: recorded as a launch-failed attempt on ${spec.campaignFile!.episode !== undefined ? `--episode ${spec.campaignFile!.episode}` : `${spec.campaignFile!.campaign}@${spec.campaignFile!.version} ${spec.campaignFile!.cell.id}/${spec.campaignFile!.arm.id}`}`);
         if (left.kind === "error") say(`launch-failed ${spec.runId}: could not record the attempt — ${left.error}`);
       }
       return "done";
