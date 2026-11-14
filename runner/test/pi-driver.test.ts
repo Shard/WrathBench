@@ -391,6 +391,9 @@ describe("pi driver pieces", () => {
     expect(detectPiFailure('429: {"message":"Rate limit reached"}')).toMatchObject({ kind: "pause", reason: "rate-limited" });
     expect(detectPiFailure('429: {"message":"quota exceeded"}')).toMatchObject({ kind: "pause", reason: "quota-exhausted" });
     expect(detectPiFailure('401: {"message":"Authentication Fails"}')).toMatchObject({ kind: "pause", reason: "auth-failed" });
+    expect(detectPiFailure('403: {"message":"workspace not subscribed"}')).toMatchObject({ kind: "pause", reason: "no-access" });
+    // A moderation refusal is about the input, not the key: no pause, as on the openai driver.
+    expect(detectPiFailure('403: {"error":{"message":"Your chosen model requires moderation and your input was flagged"}}')).toBeNull();
     expect(detectPiFailure("400: This model's maximum context length is 1000000 tokens")).toMatchObject({ kind: "terminate", reason: "context-limit" });
     expect(detectPiFailure('500: {"message":"internal"}')).toBeNull();
     expect(detectPiFailure("")).toBeNull();

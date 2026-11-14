@@ -2296,8 +2296,10 @@ window's length and its reset, nothing else. For OpenCode Go the supervisor
 reads Go's usage endpoint for each enabled paid `opencode-go` credential,
 whatever its budget (a `runs` budget still draws the allowance), and any Go
 credential given a `usage` budget, at most once a minute, and leaves the reading in
-`data/runs/fleet-credential-usage.json`; Go's windows are the five hours, the
-week and the month, and one Go reports `rate-limited` is spent whatever its
+`data/runs/fleet-credential-usage.json`, and a live run on that credential
+reads and records the same at its turn boundaries. A credential switched off
+or left without its key is no longer read, and its last read holds nothing.
+Go's windows are the five hours, the week and the month, and one Go reports `rate-limited` is spent whatever its
 percent. No reading counts for longer than seven days, and a credential with
 no reading is open — unless its last read failed in a way that says so. Each
 Go read is classified, and a change of class is logged:

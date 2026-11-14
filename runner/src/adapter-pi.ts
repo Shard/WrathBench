@@ -66,8 +66,10 @@
  * pi's `errorMessage` (`402: {…}`), after pi's own retries (`auto_retry_*`,
  * recorded as `pi_retry`). `detectPiFailure` classifies the final one by its
  * status: 402 is `quota-exhausted`, 429 `rate-limited` (or `quota-exhausted`
- * with quota wording), 401 and 403 `auth-failed`, all pauses; an overflow pi
- * could not compact its way out of ends the run as `context-limit`. Anything
+ * with quota wording), 401 `auth-failed` and 403 `no-access`, all pauses, as
+ * on the openai driver; a 403 that is a moderation refusal of the input
+ * (`MODERATION_HINTS`) is about the content, not the key, and is no pause. An
+ * overflow pi could not compact its way out of ends the run as `context-limit`. Anything
  * else is a session note, and three such turns in a row end the run as
  * `adapter-error`, as on codex.
  */
@@ -77,7 +79,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { MCP_SERVER_NAME, toolCallLimitReached } from "./adapter-claude";
-import { EXHAUSTION_HINTS } from "./adapter";
+import { EXHAUSTION_HINTS, MODERATION_HINTS } from "./adapter";
 import { MessageQueue, cliBaseEnv, readLines, signalGroup } from "./adapter-shared";
 import { CompactionAsk, compactionNotice, piAutoCompactLimit, piReserveTokens, piWindowCapRefusal, summaryFields, type CompactionRecord } from "./cli-compaction";
 import { harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
@@ -222,7 +224,8 @@ export function detectPiFailure(errorMessage: string | undefined | null): PiFail
   const status = /^(\d{3})\b/.exec(text)?.[1];
   if (status === "402") return { kind: "pause", reason: "quota-exhausted", detail };
   if (status === "429") return { kind: "pause", reason: EXHAUSTION_HINTS.test(text) ? "quota-exhausted" : "rate-limited", detail };
-  if (status === "401" || status === "403") return { kind: "pause", reason: "auth-failed", detail };
+  if (status === "401") return { kind: "pause", reason: "auth-failed", detail };
+  if (status === "403" && !MODERATION_HINTS.test(text)) return { kind: "pause", reason: "no-access", detail };
   if (CONTEXT_PATTERNS.some((p) => p.test(text))) return { kind: "terminate", reason: "context-limit", detail };
   return null;
 }

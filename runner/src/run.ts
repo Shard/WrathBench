@@ -97,6 +97,7 @@ import { EpisodicLog } from "./episodic";
 import { Scratchpad } from "@wrathbench/mcp/scratchpad";
 import { liveOwnerOf, RESUME_REFUSED_EXIT } from "./models";
 import { isOpenCodeGoBase } from "./platform";
+import { billingOf } from "./model-cost";
 import { GoUsageGauge, goUsageUrl } from "./opencode-go";
 import { Trajectory, readMeta, startHeartbeat, type PauseMark, type RunMeta } from "./trajectory";
 import { partyOwnGuids } from "./party";
@@ -1581,12 +1582,19 @@ export function usageMaxPctOf(raw: string): { scored: number; freeplay: number }
 /**
  * The OpenCode Go allowance a fixed-loop run draws on, as the loop's usage
  * gauge (`opencode-go.ts`), or undefined for any run that draws on none: not
- * on a Go base, no credential with a usage budget (a `$0` Go model's free
- * credential has none), no key in the environment, or a base with no usage
- * endpoint. The key is handed to the reader and nothing else.
+ * on a Go base, on no credential, on the free side (a `$0` Go model, which
+ * runs on the free credential and does not draw the allowance) unless its
+ * credential has a usage budget, no key in the environment, or a base with
+ * no usage endpoint. A paid model runs on the paid credential whatever its
+ * budget's kind — the side the supervisor reads too (`readsGoUsage`) — so a
+ * run on a `runs` budget records its readings and its overage marks like one
+ * on a `usage` budget; with no thresholds of its own only a spent window
+ * stops it (`thresholdsOf`). The key is handed to the reader and nothing else.
  */
 export function goUsageGaugeFor(config: RunConfig, trajectory: Trajectory): GoUsageGauge | undefined {
-  if (!isOpenCodeGoBase(config.apiBase) || config.credential === undefined || config.usageMaxPct === undefined) return undefined;
+  if (!isOpenCodeGoBase(config.apiBase) || config.credential === undefined) return undefined;
+  const paid = billingOf({ model: config.model ?? "", apiBase: config.apiBase, driver: config.driver, ...(config.billing !== undefined ? { billing: config.billing } : {}) }) === "paid";
+  if (!paid && config.usageMaxPct === undefined) return undefined;
   const url = goUsageUrl(config.apiBase);
   const key = process.env[config.apiKeyEnv];
   if (url === undefined || key === undefined || key.length === 0) return undefined;

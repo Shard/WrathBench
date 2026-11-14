@@ -10,6 +10,7 @@ import { OpenAiChatAdapter, StubAdapter, type AdapterOutcome, type ChatAdapter }
 import { loadRunConfig } from "../src/config";
 import { EpisodicLog } from "../src/episodic";
 import { runLoop } from "../src/loop";
+import { goUsageGaugeFor } from "../src/run";
 import { GO_USAGE_PATH, GoUsageGauge, GoUsagePoller, goOverageOf, goUsageUrl, goUsageWindows, readGoUsage, type GoFetch } from "../src/opencode-go";
 import { Scratchpad } from "@wrathbench/mcp";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
@@ -372,5 +373,39 @@ describe("the fixed loop on an OpenCode Go allowance", () => {
     const gauge = new GoUsageGauge(CRED, "u", KEY, () => {}, { fetch: fakeFetch([{ odd: true }]) });
     expect(await runLoop({ ...options, usage: gauge })).toEqual({ kind: "terminated", reason: "stub-complete" });
     trajectory.close();
+  });
+});
+
+describe("which runs carry a Go gauge (goUsageGaugeFor)", () => {
+  const ENV = "WRATHBENCH_TEST_GO_GAUGE_KEY";
+  const gaugeOf = (over: Record<string, unknown>) => {
+    const config = loadRunConfig({ driver: "openai", model: "deepseek-v4.1-flash", episode: "freeplay", apiBase: GO_BASE, apiKeyEnv: ENV, credential: CRED, ...over });
+    const trajectory = new Trajectory(join(tempDir("wrathbench-go-gauge-"), "run"));
+    try {
+      return goUsageGaugeFor(config, trajectory);
+    } finally {
+      trajectory.close();
+    }
+  };
+
+  test("every paid Go run, whatever its credential's budget; the free side only with a usage budget; never without a key or a credential", () => {
+    const saved = process.env[ENV];
+    process.env[ENV] = "fake-go-key";
+    try {
+      // A paid model on a runs-budget credential (no thresholds passed) is gauged too.
+      expect(gaugeOf({})).toBeInstanceOf(GoUsageGauge);
+      expect(gaugeOf({ usageMaxPct: { scored: 80, freeplay: 80 } })).toBeInstanceOf(GoUsageGauge);
+      // A $0 model on the free credential draws no allowance.
+      expect(gaugeOf({ model: "beam-free" })).toBeUndefined();
+      expect(gaugeOf({ billing: "free" })).toBeUndefined();
+      expect(gaugeOf({ billing: "free", usageMaxPct: { scored: 80, freeplay: 80 } })).toBeInstanceOf(GoUsageGauge);
+      expect(gaugeOf({ credential: undefined })).toBeUndefined();
+      expect(gaugeOf({ apiBase: "https://openrouter.ai/api/v1" })).toBeUndefined();
+      delete process.env[ENV];
+      expect(gaugeOf({})).toBeUndefined();
+    } finally {
+      if (saved === undefined) delete process.env[ENV];
+      else process.env[ENV] = saved;
+    }
   });
 });
