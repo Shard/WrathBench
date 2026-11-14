@@ -464,8 +464,7 @@ policy      Only where runs execute. `maxSessions { <driver>: n }` — how many 
             the built-in default (the model author's own provider, fallbacks off).
             `runPods` — `"off"` (default) or `"probes"`: every probing episode runs as its own
             pod on the arm's image ("Run pods"). While it is not `probes`, or off the cluster, an
-            arm that pins an image or a command is a refused pair, never run on master. Codex
-            episodes are run pods on the cluster either way.
+            arm that pins an image or a command is a refused pair, never run on master.
             `worlds` — `"off"` (default) or `"evals"`: every fresh e90, e360, Deadmines or probing
             attempt plays on a world of its own ("Worlds"), and never on the shared one while it
             is on. A Deadmines attempt also draws its party from the eval pool, so with `off` it
