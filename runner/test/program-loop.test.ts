@@ -478,6 +478,13 @@ describe("renderWake", () => {
     );
   });
 
+  test("a failed load says what it followed: a restart, or a continuation's carried files", () => {
+    const failed = (by: "restart" | "carried") => renderWake(view({ facts: emptyFacts({ facts: [{ kind: "load_failed", ts: NOW - 1_000, error: "main.ts:1 parse error", running: null, by }] }) }));
+    expect(failed("restart")).toContain("load after the restart failed: main.ts:1 parse error");
+    expect(failed("carried")).toContain("the carried files did not load: main.ts:1 parse error");
+    expect(failed("carried")).not.toContain("restart");
+  });
+
   test("the same view is the same bytes; nothing running and the cap say so as facts", () => {
     expect(renderWake(view())).toBe(renderWake(view()));
     const idle = renderWake(view({ fired: "cap", reasons: [], facts: emptyFacts({ routines: [row({ name: "trip", state: "returned", endedAt: NOW - 1_000, value: '"done"' })] }), progress: { xp: 830, quests: 0, deaths: 0 } }));

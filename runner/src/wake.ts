@@ -342,6 +342,9 @@ export function renderWake(v: WakeView): string {
       lines.push(`${parts.join(" · ")}`);
     } else if (f.kind === "load_failed" && f.by === "restart") {
       lines.push(`load after the restart failed: ${f.error}`);
+    } else if (f.kind === "load_failed" && f.by === "carried") {
+      // A continuation's files, loaded at the first start: nothing restarted.
+      lines.push(`the carried files did not load: ${f.error}`);
     }
   }
 
