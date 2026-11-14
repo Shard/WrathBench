@@ -135,7 +135,8 @@ export function feedRecordOf(row: EventRow | CallRow, turn: number | null, strea
         ts: c.ts,
         ...turnOf,
         ...(c.origin.call !== undefined ? { callTs: c.origin.call } : {}),
-        ...(c.origin.type === "routine" ? { routine: true } : {}),
+        // A routine of the model's program (`program`) is a routine as the feed shows one.
+        ...(c.origin.type === "routine" || c.origin.type === "program" ? { routine: true } : {}),
         actions: c.actions,
         ...(c.dropped !== undefined ? { dropped: c.dropped } : {}),
       };

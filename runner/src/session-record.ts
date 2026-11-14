@@ -95,8 +95,8 @@ export class RecordSignals {
   /** Deaths and quests completed, counted as written: what a program-loop wake says changed while the model slept. */
   private deaths = 0;
   private quests = 0;
-  /** Told of each death as it is written: a death wakes a sleeping model on the program loop (`wake.ts`). */
-  onDeath: ((ts: number) => void) | undefined;
+  /** Told of each death as it is written, with a fan-out run's character: a death wakes a sleeping model on the program loop (`wake.ts`). */
+  onDeath: ((ts: number, character?: string) => void) | undefined;
 
   /** Deaths and quests completed written so far (`ProgramWake`). */
   counts(): { deaths: number; quests: number } {
@@ -104,12 +104,20 @@ export class RecordSignals {
   }
 
   /** `SessionWriter.onRows`. */
-  readonly onRows = <S extends StreamName>(stream: S, rows: StreamRows[S][]): void => {
+  readonly onRows = <S extends StreamName>(stream: S, rows: StreamRows[S][]): void => this.take(stream, rows, undefined);
+
+  /** `SessionWriter.onRows` for one of several records sharing this drain: a fan-out run's `character`. */
+  onRowsOf(character: string): <S extends StreamName>(stream: S, rows: StreamRows[S][]) => void {
+    return (stream, rows) => this.take(stream, rows, character);
+  }
+
+  private take<S extends StreamName>(stream: S, rows: StreamRows[S][], character: string | undefined): void {
     if (stream !== "events") return;
     for (const row of rows as EventRow[]) {
       if (row.kind === "death") {
         this.deaths++;
-        this.onDeath?.(row.ts);
+        if (character === undefined) this.onDeath?.(row.ts);
+        else this.onDeath?.(row.ts, character);
         continue;
       }
       if (row.kind === "quest") {
@@ -132,7 +140,7 @@ export class RecordSignals {
       // A loop that stops draining loses the oldest.
       if (this.kills.length > SIGNAL_CAP) this.kills.splice(0, this.kills.length - SIGNAL_CAP);
     }
-  };
+  }
 
   drainKills(): PartySignal[] {
     return this.kills.splice(0, this.kills.length);
@@ -205,7 +213,7 @@ export function openSessionRecord(o: OpenSessionRecordOptions): SessionRecord {
     scrub: o.scrub,
     // Struck by the writer itself: a snippet can print `sdk.token`, and the record must not hold it.
     token: o.token,
-    onRows: signals.onRows,
+    onRows: o.character !== undefined ? signals.onRowsOf(o.character) : signals.onRows,
   });
   writer.open();
   return { writer, signals };

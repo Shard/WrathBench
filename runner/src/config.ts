@@ -758,8 +758,9 @@ export const runConfigSchema = z.object({
    * harness runs and tracks, and it sleeps between wakes (`wake.ts`). ABSENT
    * on the snippet loop, which every run is unless an arm says otherwise, so
    * every config and tuple stamped before the field existed reads the same.
-   * The fixed loop and codex only, never a scored tier, never fan-out
-   * (`programLoopRefusal`). Identity: a resume keeps it.
+   * The fixed loop and codex only, never a scored tier
+   * (`programLoopRefusal`); at fan-out one program drives every character.
+   * Identity: a resume keeps it.
    */
   loop: z.literal("program").optional(),
   /**
@@ -959,7 +960,7 @@ export function loadRunConfig(raw: unknown): RunConfig {
     throw new Error(compactWindowDriverRefusal(config.driver));
   }
   // Refused, never ignored: the program loop is a probe arm's, on the fixed
-  // loop and one character only, for now.
+  // loop and codex only, for now.
   const loopRefusal = programLoopRefusal(config);
   if (loopRefusal !== null) throw new Error(loopRefusal);
   // Refused, never ignored: one agent driving several characters is its own
@@ -1016,17 +1017,16 @@ export function runsProgramLoop(driver: Driver): boolean {
  * Why a config's agent loop cannot run as stated, or null. The program loop
  * (`loop: "program"`) is a probe arm: the fixed loop and codex run it
  * (`runsProgramLoop`), the other scaffolds' own turn loops do not yet, a
- * route driver plays no model, a scored tier measures the snippet loop, and
- * one agent driving several characters is a later step. `yield` is a setting
- * of the program loop and means nothing without it.
+ * route driver plays no model, and a scored tier measures the snippet loop.
+ * At fan-out one program drives every character. `yield` is a setting of the
+ * program loop and means nothing without it.
  */
-export function programLoopRefusal(c: Pick<RunConfig, "loop" | "yield" | "driver" | "episode" | "fanout" | "continuedFrom">): string | null {
+export function programLoopRefusal(c: Pick<RunConfig, "loop" | "yield" | "driver" | "episode" | "continuedFrom">): string | null {
   if (c.loop === undefined) return c.yield === true ? "--yield is a setting of the program loop; it needs --loop program" : null;
   const entry = entryOf(c.driver);
   if (!runsProgramLoop(c.driver)) return `--loop program runs on the fixed loop and codex; the ${c.driver} driver runs a CLI's own turn loop`;
   if (entry.route === true) return `--loop program drives a model; the ${c.driver} driver plays a scripted route`;
   if (c.episode !== undefined && isScoredEpisode(c.episode)) return `--loop program is a probe arm's; --episode ${c.episode} is a scored episode, which runs the snippet loop`;
-  if (c.fanout !== undefined) return "--loop program drives one character; fan-out is not built for it";
   if (c.continuedFrom !== undefined) return "--loop program starts its workspace empty; it does not continue another run (--continue-from)";
   return null;
 }

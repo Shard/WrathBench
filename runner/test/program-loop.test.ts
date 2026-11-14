@@ -7,9 +7,11 @@
  * this change leaves passing untouched.
  */
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ActionHintNote, ProgramFact, ProgramFacts, RoutineRow } from "@wrathbench/mcp";
 import { PROGRAM_EDIT_SCRATCHPAD_NOT_FOUND, routineDetailKey, Scratchpad } from "@wrathbench/mcp";
+import { PROGRAM_FANOUT_RUN_SNIPPET_SENTENCE } from "@wrathbench/mcp/fanout";
 import { StubAdapter, type ChatRequest } from "../src/adapter";
 import { campaignPairRefusals, type PairRosterEntry } from "../src/campaigns";
 import { comparabilityOf, promptHash } from "../src/comparability";
@@ -17,10 +19,12 @@ import { assembleContext, capWindowMessage, CONTEXT_POLICY, PadSeen, renderWindo
 import { PAD_HEADER_PATTERN } from "../../infra/inspect-run";
 import { loadRunConfig, programLoopRefusal } from "../src/config";
 import { EpisodicLog } from "../src/episodic";
+import { fanoutSessionNote } from "../src/fanout-run";
 import { runLoop } from "../src/loop";
 import {
   buildSystemPrompt,
   PROGRAM_BODY_TAIL,
+  PROGRAM_RESUME_KEPT,
   PROGRAM_RUNTIME_LEAD,
   PROGRAM_YIELD_TAIL,
   programPromptOf,
@@ -30,11 +34,13 @@ import {
 import { configFromArgs } from "../src/run";
 import { parseRunArgs } from "../src/run-flags";
 import type { SandboxHost } from "../src/sandbox/host";
+import { RecordSignals } from "../src/session-record";
 import { callTool, coerceToolArgs, isKnownTool, toolsFor, TOOLS } from "../src/tools";
 import { readTrajectory, Trajectory } from "../src/trajectory";
 import { mergeFacts, ProgramWake, renderWake, sleepUntilWake, WAKE_CAP_MS, WAKE_CONSOLE_CHARS, Waker, type WakeReason, type WakeView } from "../src/wake";
 import { Watchdogs } from "../src/watchdogs";
 import { LEAKED_SECRET } from "./fixtures/leaky-snippet";
+import { program1Tools } from "./fixtures/program1-tools";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -72,7 +78,7 @@ describe("config, flags and the tuple", () => {
     expect(again.yield).toBe(true);
   });
 
-  test("refused off the fixed loop, on a scored tier, at fan-out, on a continuation, and --yield without it", () => {
+  test("refused off the fixed loop, on a scored tier, on a continuation, and --yield without it; run at fan-out", () => {
     const refused = (extra: string[]): string => {
       try {
         configFromArgs([...BASE.filter((a, i, all) => !(a === "stub" && all[i - 1] === "--driver") && a !== "--driver"), ...extra], {});
@@ -84,7 +90,8 @@ describe("config, flags and the tuple", () => {
     expect(refused(["--driver", "stub", "--yield", "true"])).toContain("needs --loop program");
     expect(refused(["--driver", "claude-code", "--loop", "program"])).toContain("runs a CLI's own turn loop");
     expect(refused(["--driver", "stub", "--loop", "program", "--episode", "e90"])).toContain("is a scored episode");
-    expect(refused(["--driver", "stub", "--loop", "program", "--max-characters", "2", "--accounts", "ALPHA,BRAVO", "--episode", "freeplay"])).toMatch(/drives one character|fan-out/);
+    // One program drives every character of a fan-out run.
+    expect(refused(["--driver", "stub", "--loop", "program", "--max-characters", "2", "--accounts", "ALPHA,BRAVO", "--episode", "freeplay"])).toBe("");
     expect(refused(["--driver", "stub", "--loop", "nope"])).toContain("--loop takes program or snippet");
     expect(programLoopRefusal({ loop: "program", driver: "stub", episode: "freeplay", continuedFrom: "r0" })).toContain("--continue-from");
     expect(programLoopRefusal({ loop: "program", driver: "openai", episode: "probing" })).toBeNull();
@@ -109,6 +116,9 @@ describe("config, flags and the tuple", () => {
     const c = { name: "program-probe", version: 1, arms, assignments: [{ model: "ds", runsPerCell: 1 }, { model: "cc", runsPerCell: 1 }, { model: "cx", runsPerCell: 1 }] };
     const out = campaignPairRefusals(c, roster).map((r) => `${r.ref}:${r.arm}`);
     expect(out.sort()).toEqual(["cc:program", "cc:program-yield", "cc:stray", "cx:stray", "ds:stray"]);
+    // One agent driving the whole party runs the program loop too.
+    const oneAgent = { ...c, arms: [{ id: "one-agent", agents: 1 as const, args: ["--loop", "program"] }] };
+    expect(campaignPairRefusals(oneAgent, roster).map((r) => `${r.ref}:${r.arm}`)).toEqual(["cc:one-agent"]);
   });
 });
 
@@ -898,5 +908,124 @@ describe("PadSeen: a scaffold's program loop sends the pad only when its thread 
     expect(new RegExp(PAD_HEADER_PATTERN).test(JSON.stringify(assembleContext(inputs(pad))))).toBe(true);
     expect(assembleContext(inputs(pad))).toBe(assembleContext(inputs(pad, false)));
     expect(assembleContext(inputs(pad))).toEndWith(`[scratchpad 3.5k/32k]\n${pad}`);
+  });
+});
+
+describe("the program loop at fan-out", () => {
+  const names = (defs: { name: string }[]): string[] => defs.map((d) => d.name);
+  const props = (defs: { name: string; inputSchema: Record<string, unknown> }[], name: string): string[] =>
+    Object.keys(defs.find((d) => d.name === name)!.inputSchema["properties"] as object);
+
+  test("one character is served, byte for byte, what the program loop served before fan-out ran it", () => {
+    const golden = readFileSync(join(import.meta.dir, "fixtures", "program1-tools.json"), "utf8");
+    expect(`${JSON.stringify(program1Tools(), null, 2)}\n`).toBe(golden);
+  });
+
+  test("the list is the program loop's, in its order, with a character where one acts, and the roster's three after", () => {
+    const fan = toolsFor({ programTools: { yield: true }, fanout: true });
+    expect(names(fan)).toEqual([
+      "run_snippet",
+      "read_file",
+      "write_file",
+      "edit_file",
+      "delete_file",
+      "start_routine",
+      "stop_routine",
+      "yield",
+      "recent_events",
+      "state_summary",
+      "search_reference",
+      "write_scratchpad",
+      "edit_scratchpad",
+      "reflect",
+      "log_status",
+      "read_log",
+      "login_character",
+      "logout_character",
+      "list_characters",
+    ]);
+    for (const n of ["run_snippet", "start_routine", "stop_routine", "recent_events", "state_summary"]) expect(props(fan, n)).toContain("character");
+    expect(fan.find((d) => d.name === "run_snippet")!.description).toEndWith(PROGRAM_FANOUT_RUN_SNIPPET_SENTENCE);
+    // The same tools however a caller asks: a context's sandbox holding the roster, or `fanout` said outright.
+    expect(toolsFor({ programTools: { yield: true, characters: true } })).toEqual(fan);
+    expect(toolsFor({ programTools: { yield: false }, fanout: true }).map((d) => d.name)).not.toContain("yield");
+  });
+
+  test("the session note names the routine tools among those that take a character, and a resume says what the program kept", () => {
+    const fresh = fanoutSessionNote({ characters: 5, staged: ["Alfa"], resumed: false, back: [], lost: [], program: true });
+    expect(fresh).toContain("the `character` argument of run_snippet, start_routine, stop_routine, recent_events and state_summary takes.");
+    expect(fanoutSessionNote({ characters: 5, staged: ["Alfa"], resumed: false, back: [], lost: [] })).toContain("the `character` argument of run_snippet, recent_events and state_summary takes.");
+    const resumed = fanoutSessionNote({ characters: 5, staged: [], resumed: true, back: ["Alfa"], lost: [], program: true });
+    expect(resumed).toStartWith(`the runner process was restarted and this run resumed after a pause. ${PROGRAM_RESUME_KEPT} This run may have`);
+  });
+
+  test("each record's death names its character; one character's dead hint forgets only its own death", () => {
+    const signals = new RecordSignals();
+    const died: [number, string | undefined][] = [];
+    signals.onDeath = (ts, character) => died.push([ts, character]);
+    signals.onRowsOf("Alfa")("events", [{ ts: 5, kind: "death" } as never]);
+    signals.onRows("events", [{ ts: 6, kind: "death" } as never]);
+    expect(died).toEqual([
+      [5, "Alfa"],
+      [6, undefined],
+    ]);
+    expect(signals.counts().deaths).toBe(2);
+
+    const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t } });
+    wake.onDeath(10, "Alfa");
+    wake.onDeath(11, "Bravo");
+    expect(wake.waker.peek().map((r) => r.text)).toEqual(["Alfa died", "Bravo died"]);
+    wake.hintsDelivered([{ action: "cast_spell", status: "dead", hint: "h", count: 1, ts: 20, character: "Alfa" } as ActionHintNote]);
+    expect(wake.waker.peek().map((r) => r.text)).toEqual(["Bravo died"]);
+    // Alfa's death from before the hint, landing late, is not news; Bravo's is.
+    wake.onDeath(12, "Alfa");
+    wake.onDeath(13, "Bravo");
+    expect(wake.waker.peek().map((r) => r.text)).toEqual(["Bravo died", "Bravo died"]);
+  });
+
+  test("any character's death or closed stream wakes, by name, and a wake names whose level moved", async () => {
+    const c = fakeClock();
+    const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep, counts: () => ({ deaths: 0, quests: 0 }) });
+    const p = fakeProgram();
+    const seats = (alfa: number, bravoConnected = true) => [
+      { character: "Alfa", level: alfa, connected: true },
+      { character: "Bravo", level: 20, connected: bravoConnected },
+    ];
+    wake.onSample({ seats: seats(20) });
+    c.schedule(30_000, () => wake.onSample({ seats: seats(21) }));
+    c.schedule(40_000, () => wake.onDeath(c.now(), "Bravo"));
+    const first = await wake.sleep(p, { via: "turn-end", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: false });
+    expect(first.fired).toBe("died");
+    expect(first.block.split("\n")[0]).toBe("[wake 1 · slept 42s · woke for: Bravo died]");
+    expect(first.block).toContain("since you slept: Alfa level 20 → 21 · quests completed 0 · deaths 0");
+    c.schedule(10_000, () => wake.onSample({ seats: seats(21, false) }));
+    const second = await wake.sleep(p, { via: "turn-end", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: false });
+    expect(second.fired).toBe("stream_closed");
+    expect(second.block.split("\n")[0]).toBe("[wake 2 · slept 12s · woke for: Bravo's event stream closed]");
+    expect(second.block).toContain("since you slept: quests completed 0 · deaths 0");
+  });
+
+  test("the fixed loop serves the fan-out program list and passes a routine's character through", async () => {
+    const starts: unknown[] = [];
+    const s = programSetup([
+      { content: null, toolCalls: [{ name: "start_routine", arguments: { name: "grind", character: "Alfa" } }] },
+      { content: "waiting", toolCalls: [] },
+    ]);
+    (s.program as { startRoutine: (o: unknown) => Promise<{ ok: boolean; text: string }> }).startRoutine = async (o) => (starts.push(o), { ok: true, text: "started grind (Alfa) on deploy 2\nroutines:\ngrind (Alfa) running 0s, deploy 2, no action yet" });
+    const brief = (level: number) => ({ self: { guid: "1", level: { value: level } }, observation: { connected: true } });
+    (s.options.sandbox as unknown as { roster: unknown }).roster = {
+      maxCharacters: 2,
+      sandbox: { stateBriefs: async () => ({ Alfa: brief(20), Bravo: brief(20) }) },
+      views: () => [
+        { character: "Alfa", state: "in" },
+        { character: "Bravo", state: "in" },
+      ],
+    };
+    await runLoop(s.options);
+    expect(names(s.requests[0]!.tools)).toContain("login_character");
+    expect(props(s.requests[0]!.tools as never, "start_routine")).toContain("character");
+    expect(starts).toEqual([{ name: "grind", character: "Alfa" }]);
+    // The turn's state is the roll-up.
+    expect(userOf(s.requests[0]!)).toContain("2 of 2 characters logged in");
   });
 });

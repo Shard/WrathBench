@@ -278,7 +278,6 @@ export function campaignPairRefusals(
         const d = entry.driver ?? DEFAULT_DRIVER;
         if (!isDriver(d) || !runsProgramLoop(d)) reasons.push(`arm ${arm.id} sets --loop program, and ${a.model} runs on the ${d} driver, which runs a CLI's own turn loop`);
         else if (entryOf(d).route === true) reasons.push(`arm ${arm.id} sets --loop program, and ${a.model} runs on the ${d} driver, which plays a scripted route`);
-        else if (arm.agents === 1) reasons.push(`arm ${arm.id} sets --loop program, which drives one character, and is one agent driving the whole party`);
       } else if (yieldOn !== undefined && yieldOn !== "false") {
         reasons.push(`arm ${arm.id} sets --yield, which is a setting of the program loop, without --loop program`);
       }

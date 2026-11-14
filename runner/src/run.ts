@@ -896,9 +896,11 @@ async function main(): Promise<void> {
    */
   const programWake =
     config.loop === "program"
-      ? new ProgramWake({ trajectory, ...(session !== undefined ? { counts: () => session.signals.counts() } : {}) })
+      ? new ProgramWake({ trajectory, counts: () => (session?.signals ?? fanoutSignals)?.counts() ?? { deaths: 0, quests: 0 } })
       : undefined;
   if (programWake !== undefined && session !== undefined) session.signals.onDeath = (ts) => programWake.onDeath(ts);
+  // A fan-out run's characters share one drain, and any one's death wakes, by name.
+  if (programWake !== undefined && fanoutSignals !== undefined) fanoutSignals.onDeath = (ts, character) => programWake.onDeath(ts, character);
   const sandbox = new SandboxHost({
     moduleUrl: config.moduleUrl,
     token: config.token,
@@ -1310,6 +1312,7 @@ async function main(): Promise<void> {
               resumed,
               back: roster.views().filter((v) => v.state === "in").map((v) => v.character),
               lost: fanoutLost,
+              ...(config.loop === "program" ? { program: true } : {}),
             }),
           } as const,
         ]
