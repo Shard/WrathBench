@@ -2761,7 +2761,9 @@ not in the chart yet. On, it:
   default 20, `infra/tenant-accounts.ts`), in the bootstrap Job, each with a
   random password nobody is shown and no account access, and appends it to
   the freeplay world's allowlist. No pod that reads the fleet config is told
-  of it, and `bun wb accounts ensure` refuses a tenant's name;
+  of it, and a tenant's name is refused by `bun wb accounts ensure`, by the
+  fleet config (`accounts.pool`, a job's `account`, the preflight gate's,
+  and so every store write), by a campaign row, and by a run's own config;
 - renders the `wrathbench-hosted` ConfigMap: `reserved-accounts`, every other
   name on the freeplay world's allowlist, which is every account the
   operator's own sessions can lease there, in the form `grants reserve`

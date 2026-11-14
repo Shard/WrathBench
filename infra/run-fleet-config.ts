@@ -48,6 +48,7 @@ import {
 import { isScoredEpisode } from "../runner/src/episodes";
 import { credentialCandidates, isCredentialId, parseCredentials, type Credential } from "../runner/src/credential-slots";
 import { isPoolAccountName, POOL_SIZE_ENV, poolAccountNames, poolSizeOf } from "../runner/src/account-pool";
+import { tenantAccountRefusal } from "./tenant-accounts";
 import type { PlacedCredential } from "./run-fleet-credentials";
 import { harnessVersion } from "../runner/src/version";
 import { DEFAULT_DRIVER, driverEntry, ROSTER_DRIVERS } from "../runner/src/drivers";
@@ -866,7 +867,9 @@ export function parsePreflight(raw: unknown): FleetPreflight {
   const timeoutMs = parseBudget(o.timeoutMs, "timeoutMs", DEFAULT_PREFLIGHT.timeoutMs);
   const deployTimeoutMs = parseBudget(o.deployTimeoutMs, "deployTimeoutMs", DEFAULT_PREFLIGHT.deployTimeoutMs);
   if (o.enabled && smokes.length === 0) fail("preflight: enabled with no smokes to run");
-  return { enabled: o.enabled, account: o.account, smokes, timeoutMs, deploySmokes, deployTimeoutMs };
+  const preflight = { enabled: o.enabled, account: o.account, smokes, timeoutMs, deploySmokes, deployTimeoutMs };
+  for (const a of preflightAccounts(preflight)) refuseTenantAccount("preflight", a);
+  return preflight;
 }
 
 /**
@@ -1086,6 +1089,12 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
   return { notes, preflight, accounts, credentials, roster, jobs, campaigns, campaignDefs, campaignRefusals, policy, refusals };
 }
 
+/** Refuse the config when `account` is a hosted tenant's (infra/tenant-accounts.ts), enabled or not. */
+function refuseTenantAccount(where: string, account: string): void {
+  const why = tenantAccountRefusal(account);
+  if (why !== null) fail(`${where}: ${why}`);
+}
+
 /** An account that is reserved by name and never in the pool: the smokes' and the ad-hoc debugging one. */
 export function isReservedAccountName(a: string): boolean {
   return /^SMOKE/i.test(a) || a.toUpperCase() === "PROBE";
@@ -1132,6 +1141,7 @@ function parseAccounts(raw: unknown, env: Record<string, string | undefined>): F
       if (pool.some((p) => p.toUpperCase() === a.toUpperCase())) fail(`accounts.pool: ${a} listed twice`);
       if (isReservedAccountName(a)) fail(`accounts.pool: ${a} is reserved (SMOKE* and PROBE are never drawn from the pool)`);
       if (isPoolAccountName(a)) fail(`accounts.pool: ${a} is a generated pool account's name — leave accounts.pool out to draw from the generated pool`);
+      refuseTenantAccount("accounts.pool", a);
       pool.push(a);
     }
   }
@@ -1353,6 +1363,7 @@ function parseQueue(
     let account: string | undefined;
     if (j.account !== undefined) {
       if (typeof j.account !== "string" || j.account.length === 0) fail(`queue ${ref}: account must be a non-empty account name`);
+      refuseTenantAccount(`queue ${ref}`, j.account);
       account = j.account;
     }
     // Optional: pin the job to one credential instead of letting the

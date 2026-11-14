@@ -293,6 +293,24 @@ describe("parseFleet", () => {
     );
   });
 
+  test("a hosted tenant's account (TENANTnn) is refused wherever the file names an account, enabled or not", () => {
+    const tenant = /is a hosted tenant account \(TENANTnn\): the fleet never leases one/;
+    expect(() => parseFleet(fleetJson([], { accounts: { pool: ["RUNNER", "TENANT05"] } }))).toThrow(/accounts.pool: TENANT05 is a hosted tenant account/);
+    expect(() => parseFleet(fleetJson([], { accounts: { pool: ["tenant05"] } }))).toThrow(tenant);
+    expect(() => parseFleet(fleetJson([{ ref: "glm", episode: "freeplay", account: "TENANT01" }]))).toThrow(/queue glm: TENANT01 is a hosted tenant account/);
+    expect(() => parseFleet(fleetJson([{ ref: "glm", episode: "e90", account: "tenant99", enabled: false }]))).toThrow(tenant);
+    expect(() => parseFleet(fleetJson([], { preflight: { enabled: false, account: "TENANT02", smokes: [] } }))).toThrow(/preflight: TENANT02 is a hosted tenant account/);
+    expect(() => parseFleet(fleetJson([], { preflight: { enabled: true, account: "SMOKE", smokes: [{ script: "x.ts", account: "tenant03" }] } }))).toThrow(tenant);
+    expect(() =>
+      parseFleet(fleetJson([], { preflight: { enabled: true, account: "SMOKE", smokes: ["x.ts"], deploySmokes: [{ script: "y.ts", account: "TENANT04" }] } })),
+    ).toThrow(tenant);
+    // The pattern is the tenant pool's exactly, so a near name is an ordinary account.
+    expect(parseFleet(fleetJson([{ ref: "glm", episode: "e90", account: "TENANT" }], { accounts: { pool: ["RUNNER", "TENANT100"] } })).accounts.pool).toEqual([
+      "RUNNER",
+      "TENANT100",
+    ]);
+  });
+
   test("a refused pin names the jobs it suppresses, so a live run is not drained for it", () => {
     // The regression that mattered. A refused pin is `enabled: false`, and
     // `diffJobs` drains a running job whose spawn is gone or disabled — so
