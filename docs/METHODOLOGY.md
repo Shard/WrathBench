@@ -299,7 +299,10 @@ loss, and can land after it.
 created level-1 character, because a mid-level start would skip the state a
 real character has. The model names it, since nothing about the name is
 measured; race and class are the episode's, because every run is read against
-them.
+them. The one exception is the fixed Deadmines episode (below): a dungeon
+task's state is the staged party itself, so its start, its characters' names
+and its directive are fixed by the episode id, identical for every model, and
+a change to any of them is a new id (operator, 2026-11-14).
 
 **A knob is legitimate as a run dimension**: set per run, recorded, identical
 in shape for every model. Effort, objective, `wikiCoords`, routing and the
@@ -331,7 +334,10 @@ unpinned runs do not share a chart.
 
 **Steering is what makes a run unscored.** An objective is operator-authored
 world knowledge rendered into the prompt at one fixed place, so any run with
-one is stamped unscored and cannot drift into a chart. An objective replaces
+one is stamped unscored and cannot drift into a chart. A directive pinned by a
+scored episode id is that episode's task, not steering: nobody authors it at
+launch, every model gets the same bytes, and the prompt hash covers it
+(operator, 2026-11-14). An objective replaces
 the broad goal for that run rather than adding to it, and since such a run is
 already unscored, no eval prompt changes (operator, 2026-10-21). `wikiCoords` defaults
 to false: exact yards from the wiki are an answer key for the "find things"
@@ -355,6 +361,16 @@ and an arm of a versioned campaign definition committed to git; a published
 version never changes, so any change is a new version, for the same reason
 (2026-10-09; arms 2026-10-11).
 Definitions: `docs/EPISODES.md`.
+
+**The fixed Deadmines episode is two evals, never pooled** (operator,
+2026-11-14). The same staged level-20 party, kill end and clock, played by five
+agents of one model with one character each (`deadmines`) or by one agent
+driving all five (`deadmines-solo`). Each id is its own comparability group,
+with the number of agents and of characters per agent as keys, and neither is
+ranked against the other: one measures coordination, the other orchestration.
+An attempt ends cleared only on the kill. A member that goes idle or reaches
+its call ceiling makes the attempt not cleared, since the model stopped; a
+provider's refusal is one strike per attempt, however many members met it.
 
 **Every scored attempt plays on a world of its own; freeplay shares one**
 (operator, 2026-11-14). An `e90` or `e360` attempt, a probe and a party each
@@ -382,7 +398,10 @@ offline gap is harness weather, and a transport failure mid-episode
 **The tier is the evidence budget.** How much a model runs is one word on its
 roster entry, denominated in runs, and the only thing that sets a run count:
 `t0` trial (one `e90`, held), `t1` standard (three), `t2` long (three plus one
-`e360`). Promotion is a threshold applied to every model alike — one counted
+`e360`, and three `deadmines-solo` attempts). The five-agent `deadmines` runs
+only where the roster entry opts in as well, because it needs five sessions on
+one credential at once, which is a fact about the lane and not the model
+(operator, 2026-11-14). Promotion is a threshold applied to every model alike — one counted
 `e90` reaching level 5 climbs `t1` to `t2` — never a judgement. Billing buys no
 runs and costs none; it decides only where a run may execute.
 
@@ -392,7 +411,8 @@ runs and costs none; it decides only where a run may execute.
 gear, quests, wealth, capability — and never names a statistic a model could
 Goodhart. WoW cooperates: there is nowhere to reach max level standing still,
 so the broad goal has a real gradient. Its wording changes only at a harness
-boundary.
+boundary. The Deadmines episodes are the bounded exception: their directive
+names the target, and they are scored on it (operator, 2026-11-14).
 
 **The harness records a signal vector, not a score** — level curve, XP,
 quests, money, deaths, position, spells, playtime, achievements, flights, event
@@ -442,6 +462,17 @@ leaderboard (2026-08-29): the whole active field, paused and in-progress
 characters included, one row per character across attempts, with the reader's
 filters applied — except the series, because a character is durable across
 series and cutting its older attempts would misreport its age.
+
+**The dungeon board, and rung 6** (operator, 2026-11-14). The Deadmines
+episodes are read on a board of their own, one table per id side by side, a
+row per model condition on its best attempt with "k of n cleared" printed and
+a row shown from n = 1. Cleared rows come first, by time to clear from launch;
+the rest by distinct bosses killed, all eight counted alike, Cookie included.
+Deaths and wipes are shown and never order a row. On the solo ladder, rung 6
+("a 5-man dungeon cleared by agents of one model") is a labelled cell filled
+from the board for the same condition, passed by a clear on either id. It
+never counts toward the row's highest rung or its order: a staged dungeon is a
+different measurement from the climb.
 
 **The character is the universal unit, and a scored run is a character of one
 attempt** (2026-09-16). Every run belongs to a character, so the scored case is

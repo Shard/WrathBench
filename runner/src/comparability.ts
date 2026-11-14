@@ -34,8 +34,8 @@ import { checkModuleProtocol } from "@wrathbench/sdk";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
 import { HARNESSES, episodeOverrideOf, harnessOf, type Harness, type RunConfig } from "./config";
 import { driverEntry } from "./drivers";
-import { episodeIdSchema } from "./episodes";
-import { buildSystemPrompt, programPromptOf } from "./prompt";
+import { episodeIdSchema, isTaskEpisode } from "./episodes";
+import { buildSystemPrompt, programPromptOf, steeringOf } from "./prompt";
 import { routingForRun, routingSchema } from "./routing";
 import { servingSchema, SUBJECT_KINDS, type SubjectKind } from "./serving";
 import type { WikiBundleMeta } from "./wiki";
@@ -230,6 +230,24 @@ export const comparabilitySchema = z.object({
    */
   subject: z.enum(SUBJECT_KINDS).optional(),
   /**
+   * A task episode's shape (operator, 2026-11-14): how many agents played it
+   * and how many characters each drove — five of one on `deadmines`, one of
+   * five on `deadmines-solo`. KEYS, so the two arms never pool even if an id
+   * were misread, and stamped from the run's own grant (`config.fanout`,
+   * `config.party`), which `loadRunConfig` has checked against the id.
+   * ABSENT on every other run, so no tuple stamped before them changes.
+   */
+  agents: z.number().int().positive().optional(),
+  characters: z.number().int().positive().optional(),
+  /**
+   * A task episode's pins, as KEYS: the content hash of the definition its id
+   * pins (composition, staging scenario and level, directive, end), and the
+   * hash of the stager's fixtures it was staged from (the scenario and the
+   * members' loadouts), so an edit to either splits the group instead of
+   * pooling across it. `staging` is absent when the launch named none.
+   */
+  task: z.object({ definition: z.string(), staging: z.string().optional() }).strict().optional(),
+  /**
    * The model id the provider said it actually served — `claude-sonnet-5` for a
    * run launched as `sonnet`.
    *
@@ -326,7 +344,7 @@ export function comparabilityOf(
   const harness = harnessOf(config.driver);
   // Rendered for THIS run's harness: the prompt's context sentence differs
   // between them, so the hash below is per-harness by design.
-  const prompt = buildSystemPrompt(config.objective, config.episode, harness, config.wiki, config.watchdogs.episodeMs, programPromptOf(config));
+  const prompt = buildSystemPrompt(steeringOf(config), config.episode, harness, config.wiki, config.watchdogs.episodeMs, programPromptOf(config));
   const routing = routingForRun(config);
   const subject = subjectOfConfig(config);
   return {
@@ -364,7 +382,17 @@ export function comparabilityOf(
     // After `yield`, for the same reason; absent on a hosted run.
     ...(config.serving !== undefined ? { serving: config.serving } : {}),
     ...(subject !== "hosted" ? { subject } : {}),
+    // Last of all, and only on a task episode: after `subject`, for the same reason.
+    ...taskKeysOf(config),
   };
+}
+
+/** A task episode's keys (`agents`, `characters`, `task`), off the run's own grant; nothing on any other run. */
+function taskKeysOf(config: RunConfig): Pick<Comparability, "agents" | "characters" | "task"> {
+  if (!isTaskEpisode(config.episode)) return {};
+  const agents = config.party !== undefined ? config.party.size : 1;
+  const characters = config.fanout !== undefined ? config.fanout.characters : 1;
+  return { agents, characters, ...(config.task !== undefined ? { task: { ...config.task } } : {}) };
 }
 
 /**
