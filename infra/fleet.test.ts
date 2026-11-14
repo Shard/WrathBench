@@ -2458,6 +2458,17 @@ describe("run pods in flight under the chart's cap", () => {
     expect(book.fullKey(book.keysOf("openai", "or-free", "probing"))).toBe("credential:or-free");
     expect(book.inUse("run-pods")).toBe(1);
   });
+
+  test("an orphaned codex run is on the run-pod cap whatever its lane and the switch; any other freeplay run is not", () => {
+    const book = new SlotBook(parseCredentials({ "or-free": { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 2, billing: "free", enabled: true } }), {}, runPodsOf("off", true, 3));
+    const freeplay = (driver: string): RunFact => ({ ...liveProbe(NOW), runId: `fleet-a-freeplay-${driver}-20261114`, episode: "freeplay", campaign: null, driver, credential: "or-free" });
+    const orphans = unownedLiveRuns({ runs: [freeplay("codex")], roster: {}, campaigns: [], running: new Set(), busyAccounts: new Set() });
+    expect(orphans.map((u) => u.driver)).toEqual(["codex"]);
+    countUnownedRuns(book, orphans);
+    expect(book.inUse("run-pods")).toBe(1);
+    countUnownedRuns(book, [{ credential: "or-free", episode: "freeplay", driver: "openai" }]);
+    expect(book.inUse("run-pods")).toBe(1);
+  });
 });
 
 describe("a live probe job outlives its campaign row's version (program-probe, 2026-11-12)", () => {

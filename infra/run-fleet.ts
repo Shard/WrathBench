@@ -180,6 +180,7 @@ import {
   type FleetState,
   hasLiveChild,
   liveCodexThreads,
+  rosterCanHoldPod,
   rosterEpisodeInFlight,
   runHasImageRecord,
   jobArgv,
@@ -691,9 +692,10 @@ interface JobProc {
   /** The run ids this process's roster was materialized with (`fillEntries`). */
   runIds: string[];
   /**
-   * Whether its roster was spawned with `--run-pods`, read off the argv it was
-   * given: only such a roster can have an episode running as a pod, whatever
-   * the setting says now.
+   * Whether its roster can have an episode running as a pod, whatever the
+   * setting says now: one spawned with `--run-pods`, read off the argv it was
+   * given, or on the cluster one with an entry whose driver always runs as a
+   * pod (`episodeRunsInPod`).
    */
   runPods: boolean;
   proc: ReturnType<typeof Bun.spawn>;
@@ -1198,7 +1200,7 @@ async function main(): Promise<void> {
     const book = new SlotBook(
       cfg.credentials,
       cfg.policy.maxSessions,
-      runPodsOf(cfg.policy.runPods, parseOpts.onCluster, cfg.policy.runPods === "probes" ? maxRunPods() : undefined),
+      runPodsOf(cfg.policy.runPods, parseOpts.onCluster, maxRunPods()),
       worldsSetting(cfg.policy.worlds),
     );
     lastCredentials = { gate: credGate, book, credentials: cfg.credentials, runs: billed };
@@ -1795,7 +1797,7 @@ async function main(): Promise<void> {
       spawn,
       ...(pj !== undefined ? { job: pj } : {}),
       runIds: entries.map((e) => e.runId).filter((id): id is string => id !== undefined),
-      runPods: argv.includes("--run-pods"),
+      runPods: rosterCanHoldPod(argv, entries, parseOpts.onCluster),
       proc,
       pid: proc.pid,
       spawnedAt: Date.now(),
@@ -1830,8 +1832,8 @@ async function main(): Promise<void> {
 
   /**
    * A roster whose episode is a run pod has no child process, so the /proc scan
-   * alone would SIGTERM it mid-episode. Asked only for a roster spawned with
-   * `--run-pods` (`rosterEpisodeInFlight`) and only on the cluster, with a short
+   * alone would SIGTERM it mid-episode. Asked only for a roster that can have
+   * one (`JobProc.runPods`, `rosterEpisodeInFlight`) and only on the cluster, with a short
    * timeout. A 403 or 404 is a definite "no pod" (`rosterHasRunPod`); a timeout
    * or a 5xx reads as "in flight", complained about once, because the cost of
    * a wrong SIGTERM (a paused run) outweighs a drain that waits a tick.

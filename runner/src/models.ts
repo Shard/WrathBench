@@ -248,6 +248,7 @@ export interface SchedulingPolicy {
    * as the rest of this block — where a run may physically execute — and the
    * dark switch the launcher ships behind: off by default, and off the cluster
    * it changes nothing but turns an arm with a pinned image into a refusal.
+   * A codex episode is a pod on the cluster whatever it says (`DriverEntry.runPod`).
    */
   runPods: RunPodsMode;
   /**

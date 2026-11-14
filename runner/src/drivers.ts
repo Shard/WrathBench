@@ -268,6 +268,15 @@ export interface DriverEntry {
   rollouts: boolean;
   /** Run-pod template volumes only this driver mounts; every other driver's pod has them removed. */
   podVolumes: readonly string[];
+  /**
+   * Every episode of it runs as a run pod of its own on the cluster, whatever
+   * `policy.runPods` says (`infra/episode-launcher.ts`, `episodeRunsInPod`):
+   * its CLI gives the model tools no flag removes and no sandbox confines
+   * (codex's GPT-6 code mode and `view_image`), so its process is kept out of
+   * the fleet pod, its env Secret and its config store. Off the cluster there
+   * is no pod to run in and it stays a child process. Absent everywhere else.
+   */
+  runPod?: true;
 }
 
 const FIXED_LOOP_COST: DriverCost = { reported: "provider", table: "synced" };
@@ -357,6 +366,7 @@ export const DRIVER_TABLE = {
     usage: "exec-tally",
     rollouts: true,
     podVolumes: ["codex-home"],
+    runPod: true,
   },
   // The pi coding-agent CLI on a metered endpoint (`adapter-pi.ts`): a base and
   // a key like the fixed loop, priced from its tokens by the hand-held provider

@@ -43,6 +43,7 @@ import {
   type ResumeHoldCode,
 } from "../runner/src/credential-health";
 import { DEFAULT_DRIVER, driverEntry } from "../runner/src/drivers";
+import { episodeRunsInPod } from "./episode-launcher";
 import { utcDay, type RunFact } from "../runner/src/models";
 import { isOpenCodeGoBase } from "../runner/src/platform";
 import { GoUsagePoller, goUsageUrl, type GoFetch } from "../runner/src/opencode-go";
@@ -191,7 +192,7 @@ export function credentialGate(
 export const credentialKey = (id: string): string => `credential:${id}`;
 /** A driver's host-session key in a `SlotBook`. */
 export const driverKey = (driver: string): string => `driver:${driver}`;
-/** The run-pod key in a `SlotBook`: every probing episode while it runs as its own pod. */
+/** The run-pod key in a `SlotBook`: every episode while it runs as its own pod (`episodeRunsInPod`). */
 export const RUN_POD_KEY = "run-pods";
 /**
  * The world key in a `SlotBook`: every scored or probing attempt while each
@@ -202,14 +203,21 @@ export const RUN_POD_KEY = "run-pods";
 export const WORLD_KEY = "worlds";
 
 /**
- * The book's run-pod setting: undefined while probing episodes are child
- * processes (`policy.runPods` off, or off the cluster: `chooseLauncher`'s
- * test), else the chart's cap on pods in flight (`runPods.maxPods`, absent
- * for none). The cap is the namespace's room said up front: its
+ * The book's run-pod setting: undefined off the cluster, where every episode
+ * is a child process; on it, the chart's cap on pods in flight
+ * (`runPods.maxPods`, absent for none) and whether probing episodes are pods
+ * too (`policy.runPods` is `probes`) — a `runPod` driver's always are
+ * (`episodeRunsInPod`). The cap is the namespace's room said up front: its
  * ResourceQuota refuses a pod past it at creation (`isQuotaRefusal`).
  */
-export function runPodsOf(mode: string, onCluster: boolean, maxPods: number | undefined): { max: number | undefined } | undefined {
-  return mode === "probes" && onCluster ? { max: maxPods } : undefined;
+export function runPodsOf(mode: string, onCluster: boolean, maxPods: number | undefined): RunPodsSetting | undefined {
+  return onCluster ? { max: maxPods, probes: mode === "probes" } : undefined;
+}
+
+export interface RunPodsSetting {
+  max: number | undefined;
+  /** Whether a probing episode is a pod; absent is yes, as every setting before `runPod` drivers meant. */
+  probes?: boolean;
 }
 
 /**
@@ -247,10 +255,10 @@ export class SlotBook {
     credentials: readonly Credential[],
     private readonly maxSessions: Readonly<Record<string, number>>,
     /**
-     * How the probing episodes run (`runPodsOf`): undefined while they are
-     * child processes, else as pods under `max` at once (none: no cap).
+     * Where the run pods are (`runPodsOf`): undefined off the cluster, else
+     * at most `max` at once (none: no cap).
      */
-    private readonly runPods?: { max: number | undefined },
+    private readonly runPods?: RunPodsSetting,
     /** The worlds (`worldsOf`): undefined while every attempt shares the long-lived world, else at most `max` at once. */
     private readonly worlds?: WorldsSetting,
   ) {
@@ -259,15 +267,18 @@ export class SlotBook {
 
   /**
    * The keys one session of `driver` on credential `id` (none for a scripted
-   * run) counts against, and the run-pod key for a probing episode while those
-   * run as pods.
+   * run) counts against, and the run-pod key for an episode that runs as a pod
+   * (`episodeRunsInPod`).
    */
   keysOf(driver: string | undefined, id: string | null | undefined, episode?: string | null): string[] {
     const d = driver ?? DEFAULT_DRIVER;
+    const pod =
+      this.runPods !== undefined &&
+      episodeRunsInPod({ driver: d, probing: episode === "probing", runPods: this.runPods.probes === false ? "off" : "probes", onCluster: true });
     return [
       ...(id != null ? [credentialKey(id)] : []),
       driverKey(d),
-      ...(episode === "probing" && this.runPods !== undefined ? [RUN_POD_KEY] : []),
+      ...(pod ? [RUN_POD_KEY] : []),
       ...(episode != null && WORLD_EPISODES.has(episode) && this.worlds !== undefined ? [WORLD_KEY] : []),
     ];
   }

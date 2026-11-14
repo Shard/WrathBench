@@ -540,7 +540,7 @@ hash, source, cell, arm and the definition itself (`runner/src/campaign-file.ts`
 `WRATHBENCH_HARNESS_VERSION` (the image's tag — an arm's own, never master's
 when the arm pinned one; a digest-only pin stamps
 `<repository basename>@sha256:<12 hex>`, which names no series),
-`WRATHBENCH_RUN_IMAGE` (the image as requested, when the episode is a pod),
+`WRATHBENCH_RUN_IMAGE` (the image as requested, when the episode is a probe's pod),
 `WRATHBENCH_MODULE_URL`, `WRATHBENCH_RUNS_DIR`, `WRATHBENCH_IN_CONTAINER=1`,
 `WRATHBENCH_LOCAL_MODEL_HOSTS` (the self-hosted hosts the provider table pairs
 with `LMSTUDIO_KEY`, which run.ts checks the key and base against before it
@@ -587,10 +587,11 @@ owner: a resume onto a run with a fresh one is refused, and an account is held
 by a run whose heartbeat is fresh however quiet its trajectory. The
 trajectory's `response` records count the attempt's turns. A pod also leaves
 `image.json` (`ref`, `digest`, `pod`, `node`, `startedAt`), written by the
-launcher when the container starts, and a resume in a pod relaunches that
-digest whatever the arm says now; a resume while run pods are off is a child
-process on the release, so only a probe with `image.json` and run pods on is
-exempt from the harness-series gate. The supervisor keeps the facts it reads
+launcher when the container starts, and a probe's resume in a pod relaunches
+that digest whatever the arm says now; a resume while run pods are off is a
+child process on the release, so only a probe with `image.json` that resumes
+as a pod (run pods on, or a codex probe) is exempt from the harness-series
+gate. Any other pod's `image.json` only records where it ran. The supervisor keeps the facts it reads
 for terminated runs in `data/runs/run-facts.cache.json`, keyed by the size,
 mtime and inode of every file above (not ctime, which the fleet pod's fsGroup
 chown moves at every start) and by the reader's own source, so a boot reads in full only
@@ -635,11 +636,16 @@ runner image older than `--campaign-file` and the strict flag parser cannot
 be an arm: it would ignore the file it is given. The viewer and the collector read the same files, so a run that
 honours the contract appears everywhere a run appears.
 
-**Run pods.** An episode is a pod only when the fleet setting `policy.runPods`
-is `probes`, the supervisor is on the cluster, and the planner put `launch` on
-the spec — which it does for every probing job, image-less arms included, so
-arms compare on one execution path; scored lanes stay child processes until a
-campaign has proven the launcher. An arm that pins an image or a command off
+**Run pods.** On the cluster an episode is a pod in two cases
+(`episodeRunsInPod`). The first: the fleet setting `policy.runPods` is
+`probes` and the planner put `launch` on the spec, which it does for every
+probing job, image-less arms included, so arms compare on one execution
+path. The second: the episode's driver always runs as one (`runPod`, codex
+today), whatever its lane. Its CLI hands the model tools no flag removes and
+no sandbox confines, so its process is kept out of the fleet pod and away
+from the fleet's secrets; a codex pod resumes on the release image, not a
+recorded digest. Every other scored or freeplay episode stays a child
+process. An arm that pins an image or a command off
 the cluster or with the switch off is a refused pair, never scheduled and
 never run on master's code instead. The pod carries an
 ownerReference to the fleet pod, so a fleet stop or crash deletes its run pods

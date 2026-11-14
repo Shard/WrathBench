@@ -11,9 +11,9 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { harnessSeries } from "../runner/src/comparability";
-import { chooseLauncher, EPISODE_TERM_GRACE_MS, parseLaunchSpec, type EpisodeLaunch } from "./episode-launcher";
+import { chooseLauncher, EPISODE_TERM_GRACE_MS, episodeRunsInPod, parseLaunchSpec, type EpisodeLaunch } from "./episode-launcher";
 import { K8sClient, K8sError, type Pod, type PodEnvVar, type PodStatus } from "./k8s-client";
-import { rosterEpisodeInFlight } from "./run-fleet-state";
+import { rosterCanHoldPod, rosterEpisodeInFlight } from "./run-fleet-state";
 import {
   buildRunPod,
   harnessStampOf,
@@ -36,7 +36,7 @@ import {
   runPodEnv,
   runPodsHere,
 } from "./run-pod";
-import { runPodsOf } from "./run-fleet-credentials";
+import { RUN_POD_KEY, runPodsOf, SlotBook } from "./run-fleet-credentials";
 import { tempDirs } from "./temp-dirs";
 import { episodeSecretEnv, processEpisodeEnv } from "./episode-launcher";
 import { parseStoreKey, sealSecret, SEALED_SECRET_ENV, STORE_KEY_ENV, unsealLaunchSecret } from "../runner/src/store-secrets";
@@ -45,6 +45,7 @@ import { KEY_HEX, SENTINEL } from "../runner/test/fixtures/store-secrets";
 const tempDir = tempDirs();
 const REPO_ROOT = join(import.meta.dir, "..");
 const RELEASE = "harbor.example/library/wrathbench-runner:harness-0.5-934-ge0ca125f";
+const NEXT_RELEASE = "harbor.example/library/wrathbench-runner:harness-0.5-999-gfffffff";
 const ALLOWED = ["harbor.example/library/wrathbench-runner", "ghcr.io/shard/wrathbench-runner"];
 const DIGEST = "sha256:" + "ab".repeat(32);
 
@@ -412,6 +413,34 @@ describe("chooseLauncher", () => {
     expect(host.kind).toBe("refused");
   });
 
+  test("a codex episode is a pod on the cluster whatever the setting, and a child process off it", () => {
+    for (const runPods of ["off", "probes"] as const) {
+      expect(chooseLauncher({ runPods, onCluster: true, launch: undefined, driver: "codex" })).toEqual({ kind: "pod" });
+      expect(chooseLauncher({ runPods, onCluster: true, launch: floating, driver: "codex" })).toEqual({ kind: "pod" });
+      expect(chooseLauncher({ runPods, onCluster: false, launch: undefined, driver: "codex" })).toEqual({ kind: "process" });
+    }
+    // Every other driver is as it was: a pod only as a probe with the switch on.
+    for (const driver of ["openai", "claude-code", "pi", undefined]) {
+      expect(chooseLauncher({ runPods: "probes", onCluster: true, launch: undefined, driver })).toEqual({ kind: "process" });
+      expect(chooseLauncher({ runPods: "off", onCluster: true, launch: floating, driver })).toEqual({ kind: "process" });
+    }
+    // A codex pod does not lift the switch an arm's own image needs.
+    const off = chooseLauncher({ runPods: "off", onCluster: true, launch: pinned, driver: "codex" });
+    expect(off.kind === "refused" ? off.reason : "").toContain('policy.runPods is "off"');
+  });
+
+  test("episodeRunsInPod: the one test the launcher, the book and the drain share", () => {
+    const at = (driver: string | undefined, probing: boolean, runPods: "off" | "probes", onCluster: boolean): boolean => episodeRunsInPod({ driver, probing, runPods, onCluster });
+    expect(at("codex", false, "off", true)).toBe(true);
+    expect(at("codex", true, "off", true)).toBe(true);
+    expect(at("codex", false, "probes", false)).toBe(false);
+    expect(at("openai", true, "probes", true)).toBe(true);
+    expect(at("openai", true, "off", true)).toBe(false);
+    expect(at("openai", false, "probes", true)).toBe(false);
+    expect(at(undefined, true, "probes", false)).toBe(false);
+    expect(at("not-a-driver", false, "probes", true)).toBe(false);
+  });
+
   test("parseLaunchSpec admits the seam's shape and nothing more", () => {
     expect(parseLaunchSpec({ pod: true, image: null, command: null }, "x")).toEqual(floating);
     expect(parseLaunchSpec({ pod: true, image: pinned.image, command: ["/app/h"] }, "x")).toEqual({ ...pinned, command: ["/app/h"] });
@@ -607,6 +636,39 @@ describe("PodLauncher against a fake API", () => {
     }
   });
 
+  test("a codex episode with no launch runs the release image, stamped as the roster's, and its resume never pins a digest", async () => {
+    const api = new FakeApi();
+    try {
+      const dir = join(tempDir("wb-run-pod-"), "run");
+      mkdirSync(dir, { recursive: true });
+      const codex = (resume: boolean): EpisodeLaunch => ({
+        ...launch(dir, { resume }),
+        spec: { runId: "fleet-freeplay-codex-sol-20261114", driver: "codex", placedOn: { id: "chatgpt-1", env: "CODEX_HOME" }, apiKeyEnv: "OPENROUTER_KEY", launch: undefined },
+      });
+      const h = await launcher(api).start(codex(false));
+      const pod = api.only();
+      expect(pod.spec.containers[0]!.image).toBe(RELEASE);
+      expect(envOf(pod)["WRATHBENCH_HARNESS_VERSION"]!.value).toBe("harness-0.5-934-ge0ca125f");
+      // Run as a child process would be: the run names no image of its own.
+      expect(envOf(pod)["WRATHBENCH_RUN_IMAGE"]).toBeUndefined();
+      expect(envOf(pod)["CODEX_HOME"]).toBeDefined();
+      api.setStatus(pod.metadata.name!, running(`harbor.example/library/wrathbench-runner@${DIGEST}`));
+      // Where it ran is still on record, for --status.
+      while (readImageRecord(dir) === undefined) await Bun.sleep(5);
+      api.setStatus(pod.metadata.name!, terminated(0, `harbor.example/library/wrathbench-runner@${DIGEST}`));
+      await h.exited;
+      expect(readImageRecord(dir)!.digest).toBe(DIGEST);
+      // A resume after a release runs the release it is resumed on, never the recorded digest.
+      const resumed = await launcher(api, { template: { ...template(), spec: { ...template().spec, containers: [{ ...template().spec.containers[0]!, image: NEXT_RELEASE }] } } }).start(codex(true));
+      const again = api.only();
+      expect(again.spec.containers[0]!.image).toBe(NEXT_RELEASE);
+      api.pods.clear();
+      await resumed.exited;
+    } finally {
+      api.stop();
+    }
+  });
+
   test("a resume with no image.json launches the arm's image like a fresh run", async () => {
     const api = new FakeApi();
     try {
@@ -707,6 +769,31 @@ describe("PodLauncher against a fake API", () => {
     }
   });
 
+  test("the book puts every pod on the cap: a codex episode in any lane, a probe only while the switch is on", () => {
+    const off = new SlotBook([], {}, runPodsOf("off", true, 2));
+    expect(off.keysOf("codex", null, "freeplay")).toContain(RUN_POD_KEY);
+    expect(off.keysOf("codex", null, "e90")).toContain(RUN_POD_KEY);
+    expect(off.keysOf("openai", null, "probing")).not.toContain(RUN_POD_KEY);
+    expect(off.keysOf("claude-code", null, "freeplay")).not.toContain(RUN_POD_KEY);
+    const on = new SlotBook([], {}, runPodsOf("probes", true, 2));
+    expect(on.keysOf("openai", null, "probing")).toContain(RUN_POD_KEY);
+    expect(on.keysOf("openai", null, "freeplay")).not.toContain(RUN_POD_KEY);
+    // A setting from before the flag (no `probes`) still puts probes on it.
+    expect(new SlotBook([], {}, { max: 2 }).keysOf("openai", null, "probing")).toContain(RUN_POD_KEY);
+    // Off the cluster nothing is a pod.
+    expect(new SlotBook([], {}, runPodsOf("probes", false, 2)).keysOf("codex", null, "freeplay")).not.toContain(RUN_POD_KEY);
+    off.add(off.keysOf("codex", null, "freeplay"), 2);
+    expect(off.fullKey(off.keysOf("codex", null, "freeplay"))).toBe(RUN_POD_KEY);
+    expect(off.describe(RUN_POD_KEY)).toBe("run pods 2/2 in flight (the chart's runPods.maxPods)");
+  });
+
+  test("a roster can hold a pod when handed --run-pods, or on the cluster when an entry is codex's", () => {
+    expect(rosterCanHoldPod(["run-roster.sh", "r.json", "--run-pods", "probes"], [{ driver: "openai" }], true)).toBe(true);
+    expect(rosterCanHoldPod(["run-roster.sh", "r.json"], [{ driver: "openai" }, {}], true)).toBe(false);
+    expect(rosterCanHoldPod(["run-roster.sh", "r.json"], [{ driver: "openai" }, { driver: "codex" }], true)).toBe(true);
+    expect(rosterCanHoldPod(["run-roster.sh", "r.json"], [{ driver: "codex" }], false)).toBe(false);
+  });
+
   test("the drain asks the API only of a roster spawned with --run-pods", async () => {
     const asked: number[] = [];
     const hasRunPod = async (pid: number): Promise<boolean> => {
@@ -766,9 +853,10 @@ describe("PodLauncher against a fake API", () => {
     writeFileSync(join(dir, "launcher.json"), JSON.stringify({ allowedImages: ALLOWED, maxPods: 3 }));
     expect(readLauncherSettings({ [RUN_POD_LAUNCHER_ENV]: join(dir, "launcher.json") })).toMatchObject({ maxPods: 3 });
     expect(readLauncherSettings({ [RUN_POD_LAUNCHER_ENV]: join(dir, "nope.json") })).toMatchObject({ error: expect.stringContaining("could not be read") });
-    expect(runPodsOf("probes", true, 3)).toEqual({ max: 3 });
-    expect(runPodsOf("probes", true, undefined)).toEqual({ max: undefined });
-    expect(runPodsOf("off", true, 3)).toBeUndefined();
+    expect(runPodsOf("probes", true, 3)).toEqual({ max: 3, probes: true });
+    expect(runPodsOf("probes", true, undefined)).toEqual({ max: undefined, probes: true });
+    // On the cluster the cap stands with the switch off: codex episodes are pods whatever it says.
+    expect(runPodsOf("off", true, 3)).toEqual({ max: 3, probes: false });
     expect(runPodsOf("probes", false, 3)).toBeUndefined();
     // A report off the cluster plans no pods.
     expect(runPodsHere("probes", {})).toBeUndefined();
@@ -882,6 +970,34 @@ describe("the chart's run-pod template", () => {
     const sealedEnv = envOf(sealedPod);
     expect(Object.keys(sealedEnv).filter((n) => sealedEnv[n]!.valueFrom !== undefined).sort()).toEqual(["WRATHBENCH_MODULE_SECRET", STORE_KEY_ENV]);
     expect(sealedEnv[SEALED_SECRET_ENV]).toEqual({ name: SEALED_SECRET_ENV, value: "CLAUDE_CODE_OAUTH_TOKEN:v1.x.y.z.w" });
+  }, HELM_TEST_MS);
+
+  test.skipIf(helm === null)("rendered, a codex episode's pod: the module secret its only Secret reference, no store key, the whole Codex home read-write", () => {
+    const r = Bun.spawnSync([helm!, "template", "wrathbench", chart, "--namespace", "wrathbench", "--set", "image.registry=harbor.example/library", "--set", "image.tag=harness-0.5-934-ge0ca125f"], { stdout: "pipe", stderr: "pipe" });
+    expect(r.exitCode).toBe(0);
+    const docs = r.stdout.toString().split(/^---$/m).map((d) => Bun.YAML.parse(d) as { kind?: string; metadata?: { name?: string }; data?: Record<string, string> } | null);
+    const cm = docs.find((x) => x?.kind === "ConfigMap" && x.metadata?.name === "wrathbench-run-pod-template");
+    const tpl = JSON.parse(cm!.data!["pod.json"]!) as Pod;
+    const pod = buildRunPod(tpl, {
+      runId: "fleet-freeplay-codex-sol-20261114",
+      image: RELEASE,
+      requestedRef: RELEASE,
+      command: null,
+      args: [],
+      env: { driver: "codex", credentialEnv: "CODEX_HOME", apiKeyEnv: "OPENROUTER_KEY", stamps: { WRATHBENCH_HARNESS_VERSION: "harness-0.5-934-ge0ca125f" } },
+      owner: undefined,
+      rosterPid: 1,
+      graceMs: EPISODE_TERM_GRACE_MS,
+    });
+    const env = envOf(pod);
+    expect(Object.keys(env).filter((n) => env[n]!.valueFrom !== undefined)).toEqual(["WRATHBENCH_MODULE_SECRET"]);
+    expect(env[STORE_KEY_ENV]).toBeUndefined();
+    expect(env["CODEX_HOME"]).toEqual({ name: "CODEX_HOME", value: "/home/bun/.codex" });
+    expect(Object.keys(env).some((n) => n.startsWith("ANTHROPIC_") || n.startsWith("WRATHBENCH_DB_") || n === "WRATHBENCH_CONFIG_DB")).toBe(false);
+    const mount = pod.spec.containers[0]!.volumeMounts!.find((m) => m.name === "codex-home");
+    expect(mount).toEqual({ name: "codex-home", mountPath: "/home/bun/.codex" });
+    expect(pod.spec.volumes!.find((v) => v.name === "codex-home")).toEqual({ name: "codex-home", persistentVolumeClaim: { claimName: "wrathbench-codex-home" } });
+    expect(pod.spec.containers[0]!.volumeMounts!.some((m) => m.subPath === "config")).toBe(false);
   }, HELM_TEST_MS);
 
   test.skipIf(helm === null)("rendered with party staging on, the SOAP URL and STAGER's password reach the fleet and runner pods and never a run pod, for any driver", () => {

@@ -700,16 +700,16 @@ function oneWorld(keys: readonly string[]): string[] {
 
 /**
  * Put the live fleet runs no job of this supervisor owns (`unownedLiveRuns`)
- * on the book: each on the credential it recorded, a probe on the run-pod
- * cap, and an eval on the worlds' while worlds are on. Not on a driver's host cap: such a run is a run pod still playing
+ * on the book: each on the credential it recorded, a pod (a probe, a codex
+ * run) on the run-pod cap, and an eval on the worlds' while worlds are on. Not on a driver's host cap: such a run is a run pod still playing
  * after its roster died with the supervisor's container, or a runner
  * unwinding for the seconds its heartbeat stays warm, and neither is one of
  * the host's children for long. A run pod outlives a container restart (its
  * owner is the pod, which stayed), so it can hold its credential for hours.
  */
-export function countUnownedRuns(book: SlotBook, runs: readonly { credential: string | null; episode: string | null }[]): void {
+export function countUnownedRuns(book: SlotBook, runs: readonly { credential: string | null; episode: string | null; driver?: string | null }[]): void {
   for (const u of runs) {
-    const keys = [...(u.credential !== null ? [credentialKey(u.credential)] : []), ...book.keysOf(undefined, null, u.episode).filter((k) => k === RUN_POD_KEY || k === WORLD_KEY)];
+    const keys = [...(u.credential !== null ? [credentialKey(u.credential)] : []), ...book.keysOf(u.driver ?? undefined, null, u.episode).filter((k) => k === RUN_POD_KEY || k === WORLD_KEY)];
     book.add(keys);
   }
 }
@@ -1365,6 +1365,8 @@ export interface UnownedRun {
   episode: EpisodeId;
   /** The credential it recorded, which it holds a slot on while it plays (`countUnownedRuns`). */
   credential: string | null;
+  /** The driver it recorded: a `runPod` driver's run is a pod, on the run-pod cap (`countUnownedRuns`). */
+  driver?: string | null;
   /** Its lane resumes a pause in place (freeplay, a campaign that asked) rather than ending it. */
   resumesInPlace: boolean;
 }
@@ -1423,6 +1425,7 @@ export function unownedLiveRuns(opts: {
       model: f.model,
       episode: f.episode,
       credential: f.credential,
+      driver: f.driver,
       resumesInPlace: resumesOnPause(f.episode, campaignResumeOf(opts.campaigns, f.campaign, f.campaignVersion ?? null)),
     });
   }
@@ -1586,13 +1589,14 @@ export function planResumes(opts: {
     // wall clock, not by `isStaleRun`: a freeplay run is never stale, and this
     // is a listing of another supervisor's runs, not a decision about one.
     //
-    // A probe a run pod ran is exempt, while run pods are on: the launcher
+    // A probe a run pod ran is exempt, while it resumes as one (run pods on,
+    // or a codex probe, which always is: `episodeRunsInPod`): the launcher
     // relaunches the digest it recorded in image.json, not this supervisor's
     // build, so the harness running now is beside the point. A campaign.json
     // alone pins nothing — with run pods off, or for a probe that ran as a
     // child process, the resume would run on this build — so such a probe
     // keeps the gate like any other run.
-    const pinnedBuild = f.episode === "probing" && config.policy.runPods === "probes" && hasImageRecord(f.runId);
+    const pinnedBuild = f.episode === "probing" && (config.policy.runPods === "probes" || driverEntry(f.driver)?.runPod === true) && hasImageRecord(f.runId);
     if (!pinnedBuild && !inSeries(f, config.policy)) {
       if (now - lastActivityOf(f) <= staleAfterMs(f.episodeMs)) {
         list(

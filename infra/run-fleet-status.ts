@@ -1623,6 +1623,6 @@ export function printDryRun(
       `\nsupervision: re-read the config store every ${TICK_MS / 1000}s; enabled:false drains at the next episode` +
       `\nboundary; enabled:true/new jobs spawn; a malformed edit keeps the last good config.` +
       `\nstamp ${stampToday} is fixed for the life of the supervisor, not rolled at midnight.` +
-      `\nrunning as: ${CONTAINER ? "the fleet container (episodes are its child processes, or run pods where policy.runPods says)" : "a host process (episodes go through docker compose exec)"}.`,
+      `\nrunning as: ${CONTAINER ? "the fleet container (episodes are its child processes, or run pods: every codex episode, and probes where policy.runPods says)" : "a host process (episodes go through docker compose exec)"}.`,
   );
 }

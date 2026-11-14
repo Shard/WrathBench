@@ -1711,7 +1711,7 @@ async function nap(ms: number, deadline: number | undefined, why: string): Promi
  * reason rather than run as a process it was not planned for.
  */
 function launcherFor(spec: Resolved): EpisodeLauncher | { refused: string } {
-  const choice = chooseLauncher({ runPods: runPodsMode, onCluster: CONTAINER && K8sClient.inCluster() !== null, launch: spec.launch });
+  const choice = chooseLauncher({ runPods: runPodsMode, onCluster: CONTAINER && K8sClient.inCluster() !== null, launch: spec.launch, driver: spec.driver });
   if (choice.kind === "refused") return { refused: choice.reason };
   if (choice.kind === "process") return processLauncher;
   podLauncher ??= loadPodLauncher({ rosterPid: process.pid });
@@ -2848,14 +2848,12 @@ async function main(): Promise<void> {
           (s.wiki ? "" : `\n   NO reference wiki: no search_reference tool, and the prompt does not name it`) +
           (watchdogsJson(s) !== undefined ? `\n   watchdogs ${watchdogsJson(s)}` : "") +
           (s.maxToolCalls !== undefined ? `\n   maxTools  ${s.maxToolCalls}` : "");
-      const launch =
-        s.launch === undefined
-          ? ""
-          : (() => {
-              const choice = chooseLauncher({ runPods: runPodsMode, onCluster: CONTAINER && K8sClient.inCluster() !== null, launch: s.launch });
-              const how = choice.kind === "refused" ? `REFUSED — ${choice.reason}` : choice.kind === "pod" ? `run pod, image ${s.launch.image ?? "(release)"}, command ${s.launch.command?.join(" ") ?? "(this runner)"}` : `child process (image-less arm; policy.runPods ${runPodsMode})`;
-              return `\n   launch    ${how}`;
-            })();
+      const launch = (() => {
+        const choice = chooseLauncher({ runPods: runPodsMode, onCluster: CONTAINER && K8sClient.inCluster() !== null, launch: s.launch, driver: s.driver });
+        if (s.launch === undefined) return choice.kind === "pod" ? `\n   launch    run pod, image (release) — every ${s.driver} episode is one on the cluster` : "";
+        const how = choice.kind === "refused" ? `REFUSED — ${choice.reason}` : choice.kind === "pod" ? `run pod, image ${s.launch.image ?? "(release)"}, command ${s.launch.command?.join(" ") ?? "(this runner)"}` : `child process (image-less arm; policy.runPods ${runPodsMode})`;
+        return `\n   launch    ${how}`;
+      })();
       console.log(
         `\n${i + 1}. ${s.model}${cycle1}\n   runId     ${s.runId}\n${identity}${launch}\n   pre-launch: DELETE /session with ${s.runId}'s stored token ${CONTAINER ? "(direct fetch to the module)" : "via docker compose exec -T runner"}\n   argv      ${episodeArgv(s, a.resume, { container: CONTAINER }).join(" ")}`,
       );
