@@ -586,11 +586,13 @@ export interface LauncherSettings {
    * run-pod key), so it never launches a pod the namespace has no room for.
    */
   maxPods?: number;
+  /** How many worlds may exist at once (the chart's `worlds.max`), or undefined for no cap. */
+  maxWorlds?: number;
 }
 
 export function parseLauncherSettings(raw: unknown): LauncherSettings {
   if (typeof raw !== "object" || raw === null) throw new Error("launcher settings must be an object");
-  const o = raw as { allowedImages?: unknown; imagePullSecrets?: unknown; maxPods?: unknown };
+  const o = raw as { allowedImages?: unknown; imagePullSecrets?: unknown; maxPods?: unknown; maxWorlds?: unknown };
   const list = (v: unknown, what: string): string[] => {
     if (v === undefined) return [];
     if (!Array.isArray(v) || !v.every((x) => typeof x === "string" && x.length > 0)) throw new Error(`${what} must be an array of non-empty strings`);
@@ -599,10 +601,14 @@ export function parseLauncherSettings(raw: unknown): LauncherSettings {
   if (o.maxPods !== undefined && o.maxPods !== null && !(typeof o.maxPods === "number" && Number.isInteger(o.maxPods) && o.maxPods > 0)) {
     throw new Error("maxPods must be a positive integer, or null for no cap");
   }
+  if (o.maxWorlds !== undefined && o.maxWorlds !== null && !(typeof o.maxWorlds === "number" && Number.isInteger(o.maxWorlds) && o.maxWorlds > 0)) {
+    throw new Error("maxWorlds must be a positive integer, or null for no cap");
+  }
   return {
     allowedImages: list(o.allowedImages, "allowedImages"),
     imagePullSecrets: list(o.imagePullSecrets, "imagePullSecrets"),
     ...(typeof o.maxPods === "number" ? { maxPods: o.maxPods } : {}),
+    ...(typeof o.maxWorlds === "number" ? { maxWorlds: o.maxWorlds } : {}),
   };
 }
 

@@ -46,7 +46,7 @@ import { stampedCompactWindow, type TerminationReason } from "../runner/src/conf
 import { driverEntry, isProbeOnlyDriver } from "../runner/src/drivers";
 import { isScoredEpisode } from "../runner/src/episodes";
 import { classifyLapse, OFFLINE_PAUSE, PARTY_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
-import { credentialKey, driverOfEntry, placeRef, RUN_POD_KEY, SlotBook, type CredentialGate, type PlacedCredential, type ResumeHold } from "./run-fleet-credentials";
+import { credentialKey, driverOfEntry, placeRef, RUN_POD_KEY, SlotBook, WORLD_KEY, type CredentialGate, type PlacedCredential, type ResumeHold, type WorldsSetting } from "./run-fleet-credentials";
 import type { ResumeHoldCode } from "../runner/src/credential-health";
 import type { Credential } from "../runner/src/credential-slots";
 import {
@@ -620,8 +620,8 @@ export function countJob(
 
 /**
  * Put the live fleet runs no job of this supervisor owns (`unownedLiveRuns`)
- * on the book: each on the credential it recorded, and a probe on the run-pod
- * cap. Not on a driver's host cap: such a run is a run pod still playing
+ * on the book: each on the credential it recorded, a probe on the run-pod
+ * cap, and an eval on the worlds' while worlds are on. Not on a driver's host cap: such a run is a run pod still playing
  * after its roster died with the supervisor's container, or a runner
  * unwinding for the seconds its heartbeat stays warm, and neither is one of
  * the host's children for long. A run pod outlives a container restart (its
@@ -629,7 +629,7 @@ export function countJob(
  */
 export function countUnownedRuns(book: SlotBook, runs: readonly { credential: string | null; episode: string | null }[]): void {
   for (const u of runs) {
-    const keys = [...(u.credential !== null ? [credentialKey(u.credential)] : []), ...book.keysOf(undefined, null, u.episode).filter((k) => k === RUN_POD_KEY)];
+    const keys = [...(u.credential !== null ? [credentialKey(u.credential)] : []), ...book.keysOf(undefined, null, u.episode).filter((k) => k === RUN_POD_KEY || k === WORLD_KEY)];
     book.add(keys);
   }
 }
@@ -2770,6 +2770,8 @@ export function planTick(
   runPods?: { max: number | undefined },
   /** Scored episodes closed, and why (`SCORED_EPISODES_WAIT`): the policy holds them with this reason. Absent is open. */
   scoredGate?: string,
+  /** The book's world setting (`worldsOf`). */
+  worlds?: WorldsSetting,
 ): {
   pinned: { job: FleetJob; spawn: JobSpawn }[];
   queue: QueuePlan;
@@ -2798,7 +2800,7 @@ export function planTick(
     .map((job) => ({ job, spawn: jobSpawn(job, config.roster, job.account!, stamp, eligible, config.campaigns) }));
   // Everything already holding a session is on the book first: what is in
   // flight, and the resumes, each on the credential it records.
-  const book = new SlotBook(config.credentials, config.policy.maxSessions, runPods);
+  const book = new SlotBook(config.credentials, config.policy.maxSessions, runPods, worlds);
   for (const j of inFlight) countJob(book, j, config.roster, runCredentials);
   for (const r of resumes) countJob(book, r.job, config.roster, runCredentials);
   countOutsideRuns(book, outside);

@@ -117,7 +117,9 @@ import {
   SlotBook,
   type CredentialGate,
   type CredentialStatus,
+  type WorldsSetting,
 } from "./run-fleet-credentials";
+import { worldsHere } from "./world";
 import { formatModelLists } from "./run-fleet-model-lists";
 import { readModelListsSidecar } from "../runner/src/model-lists";
 import { providerById } from "../runner/src/credential-slots";
@@ -1323,6 +1325,8 @@ export function planDryRun(opts: {
   outside?: readonly OutsideRun[];
   /** The book's run-pod setting (`runPodsOf`), as the tick plans under it. */
   runPods?: { max: number | undefined };
+  /** The book's world setting (`worldsOf`), as the tick plans under it. */
+  worlds?: WorldsSetting;
   /** Scored episodes closed, and why (`SCORED_EPISODES_WAIT`), as the tick plans under it. Absent is open. */
   scoredGate?: string;
 }): DryRunPlan {
@@ -1360,6 +1364,7 @@ export function planDryRun(opts: {
     inFlight.filter((r) => !r.owned).map((r) => ({ credential: r.credentials?.[0] ?? null, episode: r.episode })),
     opts.runPods,
     opts.scoredGate,
+    opts.worlds,
   );
   const counted = countedFrom(states);
   const rows: AccountRow[] = [];
@@ -1544,6 +1549,7 @@ export function printDryRun(
     offByGroup,
     outside: outsideRuns([...runs, ...unstamped], { running: ownRunIds, busyAccounts }),
     runPods: runPodsHere(config.policy.runPods),
+    worlds: worldsHere(config.policy.worlds),
     // Scored episodes wait: held with the reason, as the tick holds them.
     ...(SCORED_EPISODES_WAIT !== null ? { scoredGate: SCORED_EPISODES_WAIT } : {}),
   });

@@ -1,7 +1,8 @@
 /**
  * Files a launcher writes into a run directory before the run itself exists:
- * a probe's `campaign.json` (`campaign-file.ts`) and a run pod's `image.json`
- * (`infra/run-pod.ts`). A directory holding nothing else is not a run — a
+ * a probe's `campaign.json` (`campaign-file.ts`), a run pod's `image.json`
+ * (`infra/run-pod.ts`) and the pointer to the run's own world, `world.json`
+ * (`infra/world.ts`). A directory holding nothing else is not a run — a
  * launch that failed before run.ts started leaves one behind — so the runner
  * and the roster treat it as free for a fresh launch, and the run listings
  * and the collector leave it out.
@@ -12,7 +13,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-export const LAUNCH_FILES: readonly string[] = ["campaign.json", "image.json"];
+export const LAUNCH_FILES: readonly string[] = ["campaign.json", "image.json", "world.json"];
 
 /** Whether a directory is absent or holds nothing but launch files. */
 export function holdsOnlyLaunchFiles(dir: string): boolean {

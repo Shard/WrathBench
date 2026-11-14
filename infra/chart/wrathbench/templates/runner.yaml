@@ -92,6 +92,13 @@ spec:
             - name: data
               mountPath: /wrathbench/data/config
               subPath: config
+            {{- if include "wrathbench.on.worlds" $ }}
+            # The worlds' records, read by `bun wb inspect worlds`; the fleet writes them.
+            - name: data
+              mountPath: /wrathbench/data/worlds
+              subPath: worlds
+              readOnly: true
+            {{- end }}
             # Character archives (`bun wb accounts export-character`), and,
             # with staging on, the pdump exchange the worldserver mounts too.
             - name: data

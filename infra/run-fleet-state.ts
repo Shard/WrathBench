@@ -51,6 +51,7 @@ import {
   type RunFact,
   runFactCache,
   type RunPodsMode,
+  type WorldsMode,
   type StartingCharacter,
   type UnstampedRun,
 } from "../runner/src/models";
@@ -207,7 +208,7 @@ export function rosterResumes(spawn: Pick<JobSpawn, "resumeRunId" | "accounts">,
  */
 export function jobArgv(
   spawn: JobSpawn,
-  opts: { stamp: string; until: string | undefined; resumeRoster?: boolean; runPods?: RunPodsMode },
+  opts: { stamp: string; until: string | undefined; resumeRoster?: boolean; runPods?: RunPodsMode; worlds?: WorldsMode },
 ): string[] {
   const argv = [
     ROSTER_SH,
@@ -224,6 +225,8 @@ export function jobArgv(
   // a roster started under `probes` keeps it for its life, as it keeps its
   // stamp — the switch reaches a running job at its next spawn.
   if (opts.runPods !== undefined && opts.runPods !== "off") argv.push("--run-pods", opts.runPods);
+  // `policy.worlds` likewise: only when on, so an argv from before worlds is unchanged.
+  if (opts.worlds !== undefined && opts.worlds !== "off") argv.push("--worlds", opts.worlds);
   // A resume spawn always reattaches: the roster must find the paused run's
   // row and --resume it rather than launch the id fresh.
   if (opts.resumeRoster === true || spawn.resumeRunId !== undefined) argv.push("--resume-roster");
