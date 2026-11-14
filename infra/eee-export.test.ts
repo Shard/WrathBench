@@ -218,7 +218,7 @@ describe("identity and paths", () => {
   });
 
   test("the path is the id's prefix and its flattened rest, under a UUID4 that the record identity fixes", () => {
-    const id = evaluationIdOf({ series: "0.5", episode: "e90", harness: "wrathbench", model: "x/y", effort: null, compactWindow: null });
+    const id = evaluationIdOf({ series: "0.5", episode: "e90", harness: "wrathbench", model: "x/y", effort: null, compactWindow: null, loop: "snippet", yield: false, pinned: true, wiki: true });
     const uuid = uuidOf(id);
     expect(uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(uuidOf(id)).toBe(uuid);

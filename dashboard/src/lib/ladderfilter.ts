@@ -9,6 +9,9 @@
  *    variants a model's own better efforts already dominate.
  *  - `currentModels` — the default-on rule that hides every model of a line
  *    but its newest, unless the field's front keeps it.
+ *  - `newestConditions` — the default-on rule that shows each model under
+ *    its newest condition only, and `chartGroups`, the charts the conditions
+ *    left on the page belong to.
  *  - `lineOf` — the model *line* a slug belongs to, which is the "family" a
  *    reader means when they say sonnet, fable or astra.
  *  - `companyOf` — who makes it, which the model catalogue records.
@@ -35,9 +38,10 @@
 import { catalogueKeyOf, familyOf, weightsOf } from "../../../infra/model-catalogue";
 
 export { weightsOf };
-import type { ResultRun } from "@viewer/api-types";
+import type { ChartGroup, ResultRun } from "@viewer/api-types";
+import { chartGroupOf } from "@viewer/condition";
 import { COST, XP } from "./axes";
-import { ladderPoints, pointKey, scored } from "./ladder";
+import { conditionOfRun, entryKeyOf, ladderPoints, scored } from "./ladder";
 import { paretoFront } from "./pareto";
 
 /* ------------------------------------------------------------ the two keys */
@@ -309,8 +313,81 @@ export function currentModels<E extends ModelEntry>(rows: readonly E[]): E[] {
   return rows.filter((row) => keep.has(row));
 }
 
+/* --------------------------------------------------------- the condition rules */
+
 /**
- * The rule's rows for a set of runs: one per entry (`pointKey`) of the scored
+ * Each model under its newest condition, and nothing else of it.
+ *
+ * The operator's rule (2026-11-14): a ladder row is one condition — the
+ * series, episode, harness, effort, routing, wiki, window, loop and `yield`
+ * (`runner/viewer/condition.ts`) — and by default each model shows the one
+ * whose most recent counted run started last. A model's row therefore moves
+ * to a new condition, the program loop say, as soon as it has a counted run
+ * there, and until then stays where its evidence is. Ties go to the condition
+ * id that sorts first, so the choice is a function of the set.
+ *
+ * Only scored runs choose; every run of the chosen condition is kept, scored or
+ * not, and a model with no scored run keeps everything, since it has no row.
+ */
+export function newestConditions(runs: readonly ResultRun[]): ResultRun[] {
+  const newest = new Map<string, { id: string; at: number }>();
+  for (const r of scored(runs)) {
+    const model = r.model ?? "(unnamed)";
+    const id = conditionOfRun(r).id;
+    const at = r.startedAt ?? -Infinity;
+    const have = newest.get(model);
+    if (have === undefined || at > have.at || (at === have.at && id < have.id)) newest.set(model, { id, at });
+  }
+  return runs.filter((r) => {
+    const chosen = newest.get(r.model ?? "(unnamed)");
+    return chosen === undefined || conditionOfRun(r).id === chosen.id;
+  });
+}
+
+/** One chart's worth of conditions on the page, and how many entries it holds. */
+export interface ChartGroupCount extends ChartGroup {
+  /** Distinct entries (`entryKeyOf`) among the scored runs in it. */
+  entries: number;
+}
+
+/**
+ * The charts the scored runs given belong on (`chartGroupOf`): the dimensions
+ * on which runs never share a chart, the loop, pinned against unpinned
+ * routing, and the wiki. Most entries first, so the first is the page's
+ * default; ties by id.
+ */
+export function chartGroups(runs: readonly ResultRun[]): ChartGroupCount[] {
+  const groups = new Map<string, { group: ChartGroup; entries: Set<string> }>();
+  for (const r of scored(runs)) {
+    const group = chartGroupOf(conditionOfRun(r));
+    const have = groups.get(group.id);
+    if (have === undefined) groups.set(group.id, { group, entries: new Set([entryKeyOf(r)]) });
+    else have.entries.add(entryKeyOf(r));
+  }
+  return [...groups.values()]
+    .map((g) => ({ ...g.group, entries: g.entries.size }))
+    .sort((a, b) => b.entries - a.entries || a.id.localeCompare(b.id));
+}
+
+/** The runs of one chart group. */
+export function inChartGroup(runs: readonly ResultRun[], groupId: string): ResultRun[] {
+  return runs.filter((r) => chartGroupOf(conditionOfRun(r)).id === groupId);
+}
+
+/**
+ * What a scored ladder shows before a reader changes anything: each model's
+ * newest condition, on the chart holding the most entries. The homepage and
+ * the social card read the ladder through this, so they show what the
+ * ladder page opens on.
+ */
+export function defaultLadderRuns(runs: readonly ResultRun[]): ResultRun[] {
+  const shown = newestConditions(runs);
+  const first = chartGroups(shown)[0];
+  return first === undefined ? shown : inChartGroup(shown, first.id);
+}
+
+/**
+ * The rule's rows for a set of runs: one per entry (`entryKeyOf`) of the scored
  * runs, served as its most recent run was, first run at its earliest, and cost
  * and XP as the scatter's default view means them (`ladderPoints`) where the
  * entry has both readings.
@@ -319,7 +396,7 @@ export function modelEntries(runs: readonly ResultRun[]): (ModelEntry & { key: s
   const means = new Map(ladderPoints(runs, COST, XP).points.map((p) => [p.key, p]));
   const entries = new Map<string, { latest: ResultRun; firstRun: number | null }>();
   for (const r of scored(runs)) {
-    const key = pointKey(r.model ?? "(unnamed)", r.effort, r.compactWindow);
+    const key = entryKeyOf(r);
     const have = entries.get(key);
     if (have === undefined) {
       entries.set(key, { latest: r, firstRun: r.startedAt });
