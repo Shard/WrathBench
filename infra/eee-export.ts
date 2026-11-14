@@ -54,7 +54,7 @@ import type { ResultRun, ResultsResponse } from "../runner/viewer/api-types";
 import { EPISODES, EPISODE_IDS, isTaskEpisode, type EpisodeId } from "../runner/src/episodes";
 import { isContributorSlug, isFreeSlug } from "../runner/src/model-cost";
 import { describeFindings, envSecrets, SecretScanner } from "../runner/src/secret-scan";
-import { conditionOfRun, ladderRows, RUNGS, scored, type LadderRow } from "../dashboard/src/lib/ladder";
+import { BOARD_RUNG, conditionOfRun, ladderRows, RUNGS, scored, type LadderRow } from "../dashboard/src/lib/ladder";
 import { seriesOf } from "../dashboard/src/lib/harness";
 import { familyOf, weightsOf, type Weights } from "./model-catalogue";
 import { httpSource, scanBody, type AcceptSource } from "./publish-accept";
@@ -354,8 +354,8 @@ function cellRecord(k: CellKey, runs: readonly ResultRun[], row: LadderRow, mode
       "highest_rung",
       {
         evaluation_description:
-          `Highest milestone rung (0-${TOP_RUNG}) any counted run reached; 0 is none. Rung ${RUNGS.find((r) => r.test === null)?.n ?? "6"} ` +
-          "is not instrumented, so a rung above it does not claim it. A maximum over the cell's runs. Ladder order: " +
+          `Highest milestone rung (0-${TOP_RUNG}) any counted run reached; 0 is none. Rung ${BOARD_RUNG} ` +
+          "is read from the dungeon board and never counts here, so a rung above it does not claim it. A maximum over the cell's runs. Ladder order: " +
           LADDER_ORDER,
         metric_name: "Highest rung reached",
         metric_kind: "ordinal",

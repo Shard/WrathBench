@@ -11,7 +11,7 @@
  * went with it.
  */
 
-import type { LevelMark, ResultRun, RunCondition } from "@viewer/api-types";
+import type { DungeonBoardView, LevelMark, ResultRun, RunCondition } from "@viewer/api-types";
 import { conditionOf } from "@viewer/condition";
 import {
   type AxisSpec,
@@ -166,13 +166,12 @@ export const EXPANSION_MAPS = [530, 571];
  * (`run.deaths`, `run.leveling`), but neither bears on a rung: no rung asks how
  * often a character died, and the level rungs already read `maxLevel`.
  *
- * Rung 6 stays not instrumented, though the records it would read exist: every
- * run records the `group`, `instance` and `kill` milestones. But only probe
- * campaigns run parties, five loops of one model (docs/proposals/GROUP-PLAY.md),
- * and probe campaigns have no comparability group and so no ladder, so the
- * rung needs a scored party episode. That episode and the derivation the rung
- * would use are the operator's decisions: issue #9, and the proposal in issue
- * #416.
+ * Rung 6 is no test over the row's own runs: it is a cell filled from the
+ * dungeon board (`/api/dungeons`, `rungSixCell`) for the same model and
+ * condition, passed by a cleared attempt on either Deadmines episode, and it
+ * never counts toward the row's highest rung or its order (operator,
+ * 2026-11-14; docs/METHODOLOGY.md, "The dungeon board, and rung 6"). A staged
+ * level-20 dungeon is a different measurement from the climb.
  */
 export const RUNGS: Rung[] = [
   {
@@ -214,10 +213,10 @@ export const RUNGS: Rung[] = [
   },
   {
     n: 6,
-    title: "A 5-man dungeon cleared by a party of agents",
+    title: "A 5-man dungeon cleared by agents of one model",
     rule:
-      "only probe campaigns run parties; needs a scored party episode " +
-      "(docs/proposals/GROUP-PLAY.md)",
+      "a cleared Deadmines attempt on the dungeon board, one agent driving five or five agents, " +
+      "for the same model and condition; not counted in the row's highest rung or its order",
     test: null,
     askable: () => false,
   },
@@ -249,6 +248,11 @@ export interface LadderCell {
   runId: string | null;
   /** How many of the row's runs passed the rung's test. */
   reached: number;
+  /**
+   * Rung 6 only: which Deadmines arm filled the cell (`1 agent × 5`, `5 agents`),
+   * and the board's own counts behind it, cleared attempts of counted ones.
+   */
+  arm?: string;
   /**
    * How many of the row's runs could be asked (`Rung.askable`) — the
    * denominator. Below `LadderRow.runs` when some of the row's runs predate
@@ -375,7 +379,44 @@ export function levelRangeOf(runs: readonly ResultRun[]): LevelRange | null {
  * three times. It is pure derivation over the same list: no new recording, no
  * re-runs, and nothing here enters the ordering.
  */
-export function ladderRows(runs: readonly ResultRun[]): LadderRow[] {
+/** The rung filled from the dungeon board, not from the row's own runs. */
+export const BOARD_RUNG = 6;
+
+/** The fields rung 6 joins a ladder row and a board row on: the model and the condition's public dimensions. */
+export function rungSixKey(r: {
+  model: string | null;
+  effort: string | null;
+  compactWindow?: string | null;
+  harness: string | null;
+  series: string | null;
+  condition: Pick<RunCondition, "loop" | "yield" | "pinned" | "wiki">;
+}): string {
+  const c = r.condition;
+  return JSON.stringify([r.model ?? "", r.effort ?? "", r.compactWindow ?? "", r.harness ?? "", r.series ?? "", c.loop, c.yield, c.pinned, c.wiki]);
+}
+
+/**
+ * Rung 6 for a row, from the dungeon board: reached when a board row of the
+ * same model and condition has a cleared attempt on either id (the one-agent
+ * id first), its count the board's; not reached when the board has counted
+ * attempts for it and none cleared; not instrumented when it has none.
+ */
+export function rungSixCell(key: string, boards: readonly DungeonBoardView[]): LadderCell {
+  const hits = boards.flatMap((b) => b.rows.filter((r) => rungSixKey(r) === key).map((r) => ({ board: b, row: r })));
+  const cleared = hits.find((h) => h.row.cleared > 0);
+  const shown = cleared ?? hits[0];
+  if (shown === undefined) return { n: BOARD_RUNG, status: "not-instrumented", runId: null, reached: 0, askable: 0 };
+  return {
+    n: BOARD_RUNG,
+    status: cleared !== undefined ? "reached" : "not-reached",
+    runId: shown.row.best.runIds[0] ?? null,
+    reached: shown.row.cleared,
+    askable: shown.row.n,
+    arm: shown.board.episode === "deadmines-solo" ? "1 agent × 5" : "5 agents",
+  };
+}
+
+export function ladderRows(runs: readonly ResultRun[], boards: readonly DungeonBoardView[] = []): LadderRow[] {
   const byEntry = new Map<string, ResultRun[]>();
   for (const r of scored(runs)) {
     const key = entryKeyOf(r);
@@ -387,7 +428,9 @@ export function ladderRows(runs: readonly ResultRun[]): LadderRow[] {
   for (const [key, list] of byEntry) {
     const first = list[0]!;
     const model = first.model ?? "(unnamed)";
+    const sixKey = rungSixKey({ model: first.model, effort: first.effort, compactWindow: first.compactWindow ?? null, harness: first.harness, series: first.harnessSeries, condition: conditionOfRun(first) });
     const cells = RUNGS.map((rung): LadderCell => {
+      if (rung.n === BOARD_RUNG) return rungSixCell(sixKey, boards);
       if (rung.test === null)
         return { n: rung.n, status: "not-instrumented", runId: null, reached: 0, askable: 0 };
       const hit = list.find((r) => rung.test!(r));
@@ -399,7 +442,8 @@ export function ladderRows(runs: readonly ResultRun[]): LadderRow[] {
         askable: list.filter((r) => rung.askable(r)).length,
       };
     });
-    const reached = cells.filter((c) => c.status === "reached").map((c) => c.n);
+    // Rung 6 is the board's, and never counts toward the row's highest rung or its order.
+    const reached = cells.filter((c) => c.status === "reached" && c.n !== BOARD_RUNG).map((c) => c.n);
     const furthest = furthestOf(list);
     const richest = richestOf(list);
     rows.push({

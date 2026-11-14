@@ -888,6 +888,7 @@ export function projectDungeons(d: DungeonsResponse): DungeonsResponse {
         harness: r.harness,
         ...(r.compactWindow != null ? { compactWindow: r.compactWindow } : {}),
         series: r.series,
+        condition: { loop: r.condition.loop, yield: r.condition.yield, pinned: r.condition.pinned, wiki: r.condition.wiki },
         n: r.n,
         cleared: r.cleared,
         best: {

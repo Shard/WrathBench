@@ -30,6 +30,7 @@
  */
 
 import { partyAttempt } from "../src/campaigns";
+import { conditionKey } from "./condition";
 import { TASK_EPISODE_IDS, type TaskEpisodeId } from "../src/episodes";
 import type { DungeonAttemptView, DungeonBoardView, DungeonRowView, ResultRun } from "./api-types";
 
@@ -67,12 +68,21 @@ export function countedRow(r: ResultRun): boolean {
 }
 
 /**
- * The condition a row is keyed on: the model and its effort, harness,
- * compaction window and series. A placeholder for the ladder's own key,
- * which the board and rung 6 take once it lands.
+ * What a row is keyed on: the model, and the ladder's condition
+ * (`condition.ts`: series, harness, effort, routing, wiki, window, loop and
+ * `yield`) with the episode left out, so a row of either id names the same
+ * condition as the solo ladder's row it fills rung 6 of.
  */
-export function conditionKey(r: Pick<ResultRun, "model" | "effort" | "harness" | "compactWindow" | "harnessSeries">): string {
-  return JSON.stringify([r.model ?? "", r.effort ?? "", r.harness ?? "", r.compactWindow ?? "", r.harnessSeries ?? ""]);
+export function boardKey(r: Pick<ResultRun, "model" | "harnessSeries" | "harness" | "effort" | "compactWindow" | "wiki" | "condition">): string {
+  const id = r.condition?.id;
+  let condition: string;
+  if (id !== undefined && id.startsWith("{")) {
+    const { episode: _episode, ...rest } = JSON.parse(id) as Record<string, unknown>;
+    condition = JSON.stringify(rest);
+  } else {
+    condition = conditionKey({ series: r.harnessSeries, episode: null, harness: r.harness, tuple: { effort: r.effort, compactWindow: r.compactWindow ?? null, ...(r.wiki === false ? { wiki: false } : {}) } });
+  }
+  return `${r.model ?? ""}\n${condition}`;
 }
 
 /** A run's attempts on its id: runs grouped by party id, a run with none its own attempt. */
@@ -176,7 +186,7 @@ export function boardOf(episode: TaskEpisodeId, runs: readonly DungeonRun[]): Du
   const mine = runs.filter((r) => r.run.episode === episode && r.run.episodeSource === "stamped");
   const byCondition = new Map<string, DungeonRun[]>();
   for (const r of mine) {
-    const k = conditionKey(r.run);
+    const k = boardKey(r.run);
     const list = byCondition.get(k);
     if (list === undefined) byCondition.set(k, [r]);
     else list.push(r);
@@ -193,6 +203,12 @@ export function boardOf(episode: TaskEpisodeId, runs: readonly DungeonRun[]): Du
       harness: r.harness,
       ...(r.compactWindow != null ? { compactWindow: r.compactWindow } : {}),
       series: r.harnessSeries,
+      condition: {
+        loop: r.condition?.loop ?? "snippet",
+        yield: r.condition?.yield ?? false,
+        pinned: r.condition?.pinned ?? true,
+        wiki: r.condition?.wiki ?? r.wiki !== false,
+      },
       n: attempts.length,
       cleared: attempts.filter((a) => a.cleared).length,
       best: ranked[0]!,

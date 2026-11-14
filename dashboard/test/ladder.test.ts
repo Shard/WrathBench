@@ -37,6 +37,8 @@ import {
   LABEL_ROW,
   MARK_RING_R,
   RUNGS,
+  BOARD_RUNG,
+  rungSixKey,
   chartCue,
   puckRect,
   rectsOverlap,
@@ -198,6 +200,36 @@ describe("ladderRows", () => {
     // No milestone records on this run: answered, and answered "no".
     for (const n of [2, 4]) expect(row.cells.find((c) => c.n === n)!.status).toBe("not-reached");
     expect(row.highest).toBe(8);
+  });
+
+  test("rung 6 is the dungeon board's: filled for the same model and condition, never in the highest rung or the order", () => {
+    const climber = run({ runId: "c", model: "climber", levels: [mark(10, 1, 1)], maxLevel: 10 });
+    const dungeoneer = run({ runId: "d", model: "dungeoneer", levels: [mark(5, 1, 1)], maxLevel: 5 });
+    const key = (r: ResultRun): string => {
+      const row = ladderRows([r])[0]!;
+      return rungSixKey({ model: row.model, effort: row.effort, compactWindow: row.compactWindow, harness: r.harness, series: r.harnessSeries, condition: row.condition });
+    };
+    const best = { runIds: ["solo-1"], party: null, launchedAt: 0, counted: true, live: false, cleared: true, reason: "kill-target", timeToClearMs: 1, bosses: [639], lastBossMs: 1, enteredMs: 0, deaths: 0, wipes: 0 };
+    const boardRow = (r: ResultRun, cleared: number, n: number) => ({
+      model: r.model, effort: r.effort, harness: r.harness, series: r.harnessSeries, condition: ladderRows([r])[0]!.condition, n, cleared, best: { ...best, cleared: cleared > 0 },
+    });
+    const boards = [
+      { episode: "deadmines-solo" as const, rows: [boardRow(dungeoneer, 1, 2)] },
+      { episode: "deadmines" as const, rows: [boardRow(climber, 0, 1)] },
+    ];
+    expect(rungSixKey(boards[0]!.rows[0]!)).toBe(key(dungeoneer));
+    const rows = ladderRows([climber, dungeoneer], boards);
+    const d = rows.find((r) => r.model === "dungeoneer")!;
+    const c = rows.find((r) => r.model === "climber")!;
+    expect(d.cells.find((x) => x.n === BOARD_RUNG)).toMatchObject({ status: "reached", reached: 1, askable: 2, arm: "1 agent × 5", runId: "solo-1" });
+    expect(c.cells.find((x) => x.n === BOARD_RUNG)).toMatchObject({ status: "not-reached", reached: 0, askable: 1, arm: "5 agents" });
+    // A cleared dungeon claims no rung and moves no row: the climber still leads.
+    expect(d.highest).toBe(1);
+    expect(rows.map((r) => r.model)).toEqual(["climber", "dungeoneer"]);
+    // Another condition of the same model is another row, which the board does not fill.
+    const other = ladderRows([run({ runId: "o", model: "dungeoneer", effort: "high" })], boards)[0]!;
+    expect(other.cells.find((x) => x.n === BOARD_RUNG)!.status).toBe("not-instrumented");
+    expect(RUNGS.find((r) => r.n === BOARD_RUNG)!.title).toBe("A 5-man dungeon cleared by agents of one model");
   });
 
   test("a run that predates the milestone producer never claims rung 2 or 4", () => {
