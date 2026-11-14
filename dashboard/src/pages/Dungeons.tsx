@@ -104,9 +104,11 @@ function Row(props: { row: DungeonRowView }) {
       <td>
         <HarnessTag harness={r().harness} />
       </td>
-      <td class="right mono">{clearedText(r())}</td>
+      <td class="right mono" title="the row's best attempt">
+        <A href={attemptHref(r())}>{clearedText(r())}</A>
+      </td>
       <td class="right mono" title={attemptTitle(r().best)}>
-        <A href={attemptHref(r())}>{clearTimeText(r().best)}</A>
+        {clearTimeText(r().best)}
       </td>
       <td class="right mono" title={bossesTitle(r().best)}>
         {bossesText(r().best)}

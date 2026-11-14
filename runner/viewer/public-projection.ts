@@ -890,8 +890,9 @@ export function projectDungeons(d: DungeonsResponse): DungeonsResponse {
 
 export function projectEpisodes(e: EpisodesResponse): EpisodesResponse {
   return scrubPathsValue<EpisodesResponse>({
-    // The Deadmines task episodes are published with their board, not
-    // before it: until then a public page has no reading of them to show.
+    // The Deadmines task episodes stay off the public episode list, pending
+    // the operator's call on publishing them; the dungeon board is where
+    // their runs are read.
     episodes: e.episodes.filter((t) => !isTaskEpisode(t.id)).map((t) => ({
       id: t.id,
       minutes: t.minutes,
@@ -1096,8 +1097,8 @@ function projectModelRun(r: ModelRunView): ModelRunView {
 
 /**
  * A scheduler's "schedulable on …" or "targets met on …" with the task
- * episodes left out of its list, as the rest of the row leaves them out until
- * their board is published (`projectEpisodes`). A list of nothing else is
+ * episodes left out of its list, as the rest of the row leaves them out
+ * (`projectEpisodes`). A list of nothing else is
  * kept whole: dropping every item would say something false.
  */
 export function withoutTaskEpisodes(why: string): string {
@@ -1112,7 +1113,7 @@ function projectModelRow(row: ModelRowView): ModelRowView {
   // Keyed off the known tier ids, not the object's own keys: an input parsed
   // from JSON could carry any key, and only the four tiers are speakable.
   for (const id of EPISODE_IDS) {
-    // Not the task episodes, until their board is published (`projectEpisodes`).
+    // Not the task episodes, as on the public episode list (`projectEpisodes`).
     if (isTaskEpisode(id)) continue;
     const e = row.perEpisode[id];
     if (e === undefined) continue;

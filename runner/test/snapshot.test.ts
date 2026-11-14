@@ -675,7 +675,7 @@ describe("renderSnapshot", () => {
     expect(moved.length).toBeLessThan(SNAP_NAMES.length);
     // The set-shaped aggregates say nothing about a run's level, so they must
     // still be sitting on the key the last manifest named.
-    for (const name of ["info.json", "episodes.json", "tools.json", "campaigns.json"]) {
+    for (const name of ["info.json", "episodes.json", "tools.json", "campaigns.json", "dungeons.json"]) {
       expect(`${name}: ${after.snap[name]}`).toBe(`${name}: ${before.snap[name]}`);
     }
     // The manifest itself is what changed, so `gen` moves either way.
