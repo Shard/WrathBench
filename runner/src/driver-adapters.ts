@@ -109,6 +109,9 @@ export const DRIVER_ADAPTERS: Readonly<Record<Driver, DriverAdapter>> = {
         // The run is the conversation: one id for its whole life, resumes
         // included. Sent to OpenCode only (`openCodeSessionHeaders`).
         sessionId: config.runId,
+        // Every retry on the record, out of the model's context: a lane's 429s
+        // and cut streams are read from the run, not inferred from its latency.
+        onRetry: (r) => trajectory.append({ t: "harness", kind: "adapter_retry", ...r }),
       });
       return { config: { ...config, apiBase }, adapter };
     },

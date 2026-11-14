@@ -92,6 +92,9 @@ function makeRun(runsDir: string, runId: string, shape: Shape, opts: { token?: s
   traj.append({ t: "tool_call", turn: 5, call: 6, name: "reflect", args: {} });
   traj.append({ t: "tool_result", turn: 5, call: 6, name: "reflect", isError: true, text: "Reflection needs rest or a flight" });
   traj.append({ t: "harness", kind: "sandbox_restarted", detail: "x".repeat(5_000) });
+  // The OpenAI-compatible adapter's retries, as `driver-adapters.ts` records them.
+  traj.append({ t: "harness", kind: "adapter_retry", attempt: 2, of: 10, waitMs: 5_100, cause: "http", status: 429, detail: "HTTP 429: slow down" });
+  traj.append({ t: "harness", kind: "adapter_retry", attempt: 3, of: 10, waitMs: 1_900, cause: "stream_cut", detail: "body read failed: the stream ended before the model finished" });
   // A huge record: never printed whole.
   clock = t0 + 8 * 60_000;
   traj.append({ t: "snippet", turn: 6, call: 7, code: `const big = "${"y".repeat(300_000)}";` });
@@ -320,6 +323,7 @@ describe("inspect run", () => {
     expect(at("errors")).toContain("timeout 1");
     expect(at("errors")).toContain("tools 1/1: reflect 1");
     expect(at("harness")).toContain("sandbox_restarted 1");
+    expect(at("harness")).toContain("adapter_retry 2");
     expect(at("files")).toContain("trajectory.jsonl");
     expect(at("trace")).toContain("none (no session record");
     expect(at("nearby")).toContain("none");
@@ -327,6 +331,7 @@ describe("inspect run", () => {
     const ended = await inspect(["run", "run-ended", "--runs-dir", RUNS]);
     expect(ended.out.find((l) => l.startsWith("level"))).toContain("L4 300xp");
     expect(ended.out.find((l) => l.startsWith("quests"))).toBe("quests     3 over the run");
+    expect(ended.out.find((l) => l.startsWith("harness"))).toContain("adapter_retry 2");
   });
 
   test("the quest count is the run's across a resume, each process's stretch beside it", async () => {
