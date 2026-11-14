@@ -858,7 +858,7 @@ Some pauses wait for a known instant instead of climbing the ladder:
   (`subscription-budget`) is on no ladder: it resumes once its window is back
   under the threshold ("Credentials", "The usage window").
 
-Three pauses cool on the ladder but always come back, because the runner
+Four pauses cool on the ladder but always come back, because the runner
 releases the session and the roster advances, so the supervisor resumes the
 run with a fresh sandbox and session:
 
@@ -868,6 +868,10 @@ run with a fresh sandbox and session:
   refresh, or any provider's 401 on an API key. It says nothing about the
   model. The run comes back once the operator has logged the credential in
   again or replaced the key; until then it climbs the ladder and is listed.
+- `no-access`: a key the provider accepts but will not serve here — a 403 on
+  an API key that is not a moderation refusal, such as an OpenCode Go
+  workspace with no plan. The credential's too, and it comes back the same
+  way once the key has access.
 - `infrastructure-failed`: a CLI scaffold failing on its host, such as the
   codex CLI unable to write its thread under `CODEX_HOME` on a full volume. A
   volume the operator has freed is picked back up; one still full climbs the
@@ -2289,8 +2293,9 @@ claude-code driver the CLI's `rate_limit_event` frames, and each records the
 newest reading on change in the run's meta.json and as a `harness` record of
 kind `rate_limits`, keyed by the run's credential: the used percent, the
 window's length and its reset, nothing else. For OpenCode Go the supervisor
-reads Go's usage endpoint for each `opencode-go` credential with a usage
-budget, at most once a minute, and leaves the reading in
+reads Go's usage endpoint for each enabled paid `opencode-go` credential,
+whatever its budget (a `runs` budget still draws the allowance), and any Go
+credential given a `usage` budget, at most once a minute, and leaves the reading in
 `data/runs/fleet-credential-usage.json`; Go's windows are the five hours, the
 week and the month, and one Go reports `rate-limited` is spent whatever its
 percent. No reading counts for longer than seven days, and a credential with
@@ -2300,7 +2305,11 @@ Go read is classified, and a change of class is logged:
 - the key refused (401, `auth-failed`): every Go credential naming that key
   is held, free side included, until a read succeeds;
 - no access to usage (403, `no-access`: a key without usage permission, or a
-  workspace with no Go plan): that credential is held until a read succeeds;
+  workspace with no Go plan): that credential is held until a read succeeds.
+  A 403 on a chat request pauses the run as `no-access` the way a 401 pauses
+  it as `auth-failed`, on any provider the openai driver serves; neither is a
+  strike. A moderation refusal (OpenRouter's 403 for flagged input) is not
+  the key's and still ends the run;
 - no answer (a timeout, a 5xx, a shape the reader does not know, `unread`):
   nothing is held, and the class is kept with when it began;
 - a response a run on it saw billed to the balance (`overage`): that
@@ -2313,7 +2322,7 @@ only that family's launches.
 `--status` prints one line per credential: slots in use, the budget and what
 it has used (the windows with their percent and reset, today's spend or
 runs), whether a scored and a freeplay launch are held, whether its variable
-is set, the newest `auth-failed` or `quota-exhausted` on it, and a Codex
+is set, the newest `auth-failed`, `no-access` or `quota-exhausted` on it, and a Codex
 home's volume. The supervisor publishes the same in `fleet-state.json`, and the
 private viewer's `/api/fleet` serves it. None of the figures reach a public
 page: a paused run a credential holds shows there only as the kind of hold (a

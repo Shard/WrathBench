@@ -25,13 +25,17 @@ import {
   formatCredentialStatus,
   gateSpawns,
   placeRef,
+  publishedReads,
   readCredentialUsage,
+  readHoldsOf,
+  readsGoUsage,
   resumeHoldOf,
   SlotBook,
   writeCredentialUsageSidecar,
 } from "./run-fleet-credentials";
 import type { GoFetch } from "../runner/src/opencode-go";
 import { awaitUsageBudget } from "./run-roster";
+import { localCredentialStatuses, readerCredentialGate } from "./run-fleet-status";
 import { tempDirs } from "./temp-dirs";
 
 const tempDir = tempDirs();
@@ -751,6 +755,97 @@ describe("OpenCode Go", () => {
     writeCredentialUsageSidecar(runs, [reading("go-paid", 70)]);
     expect(readCredentialUsage(runs).map((u) => u.credential).sort()).toEqual(["chatgpt-1", "go-paid"]);
     expect(CREDENTIAL_USAGE_SIDECAR).toBe("fleet-credential-usage.json");
+  });
+
+  /** The same two Go credentials, the paid side on a runs budget. */
+  const onRuns = parseFleet(
+    {
+      accounts: { pool: ["RUNNER", "RUNNER2"] },
+      credentials: {
+        "go-paid": { provider: "opencode-go", secretEnv: "OPENCODE_KEY", slots: 1, budget: { kind: "runs", perDay: 5 }, billing: "paid", enabled: true },
+        "go-free": { provider: "opencode-go", secretEnv: "OPENCODE_KEY", slots: 1, billing: "free", enabled: true },
+      },
+      roster: {
+        gopaid: { tier: "t1", model: "vendor/go-paid", apiBase: "https://opencode.ai/zen/go/v1", billing: "paid" },
+        gofree: { tier: "t1", model: "vendor/go-free", apiBase: "https://opencode.ai/zen/go/v1", billing: "free" },
+      },
+    },
+    { env: {} },
+  );
+  const gateOn = async (go: FleetGoUsage) => {
+    await go.refresh(onRuns.credentials, onRuns.roster);
+    return credentialGate(onRuns.credentials, go.observations(), [], NOW, go.readHolds(onRuns.credentials));
+  };
+
+  test("the paid side is read whatever its budget's kind; the free side never is", () => {
+    const [paid, free] = [onRuns.credentials.find((c) => c.id === "go-paid")!, onRuns.credentials.find((c) => c.id === "go-free")!];
+    expect(readsGoUsage(paid)).toBe(true);
+    expect(readsGoUsage(free)).toBe(false);
+    expect(readsGoUsage({ ...free, budget: { kind: "usage", scoredMaxPct: 80, freeplayMaxPct: 80 } })).toBe(true);
+    expect(readsGoUsage({ ...paid, provider: "opencode" })).toBe(false);
+  });
+
+  test("a runs-budget Go credential is read too: a spent window holds it, a high one does not, and the free side stays open", async () => {
+    const f = fetchOf([okBody(88), { ...okBody(40), rolling: { status: "rate-limited", percent: 97, resetsAt: new Date(NOW + 2 * H).toISOString() } }]);
+    let now = NOW;
+    const go = new FleetGoUsage({ env: { OPENCODE_KEY: "fake-go-key" }, fetch: f, now: () => now });
+    await go.refresh(onRuns.credentials, onRuns.roster);
+    expect(f.urls).toEqual(["https://opencode.ai/inference/go/v1/usage"]);
+    // 88% is under a runs budget's only usage line, a spent window.
+    expect(picks(onRuns, [], credentialGate(onRuns.credentials, go.observations(), [], now, go.readHolds(onRuns.credentials))).on).toEqual({ gopaid: "go-paid", gofree: "go-free" });
+    now += 60_000;
+    await go.refresh(onRuns.credentials, onRuns.roster);
+    const gate = credentialGate(onRuns.credentials, go.observations(), [], now, go.readHolds(onRuns.credentials));
+    expect(gate.holdReasonOf("go-paid", "e90")?.code).toBe("usage-spent");
+    expect(gate.holdReasonOf("go-paid", "freeplay")?.code).toBe("usage-spent");
+    expect(picks(onRuns, [], gate).on).toEqual({ gofree: "go-free" });
+  });
+
+  test("a runs-budget Go credential's refused key holds both sides; no access holds the paid side only", async () => {
+    const refused = await gateOn(new FleetGoUsage({ env: { OPENCODE_KEY: "fake-go-key" }, fetch: refusing(401, "api_key_expired"), now: () => NOW }));
+    expect(refused.holdReasonOf("go-paid", "e90")?.code).toBe("auth-failed");
+    expect(refused.holdReasonOf("go-free", "freeplay")?.code).toBe("auth-failed");
+    const forbidden = await gateOn(new FleetGoUsage({ env: { OPENCODE_KEY: "fake-go-key" }, fetch: refusing(403), now: () => NOW }));
+    expect(forbidden.holdReasonOf("go-paid", "e90")?.code).toBe("no-access");
+    expect(forbidden.holdOf("go-free", "freeplay")).toBeUndefined();
+  });
+
+  test("the holds off the reads: a refusal fans out to the same key, no access and an overage stay on the credential read", () => {
+    const at = { at: NOW, http: 401, since: NOW };
+    const refused = readHoldsOf(config.credentials, new Map([["go-paid", { ...at, classification: "auth-failed" as const }]]));
+    expect([...refused.keys()].sort()).toEqual(["go-free", "go-paid"]);
+    for (const classification of ["no-access", "overage"] as const) {
+      const one = readHoldsOf(config.credentials, new Map([["go-paid", { ...at, http: 403, classification }]]));
+      expect([...one.entries()].map(([id, h]) => [id, h.code])).toEqual([["go-paid", classification]]);
+    }
+    for (const classification of ["ok", "spent", "unread"] as const) {
+      expect(readHoldsOf(config.credentials, new Map([["go-paid", { ...at, http: 200, classification }]])).size).toBe(0);
+    }
+    // A read of a credential the config no longer has holds nothing.
+    expect(readHoldsOf(config.credentials, new Map([["gone", { ...at, classification: "auth-failed" as const }]])).size).toBe(0);
+  });
+
+  test("--status and the dry run hold by the reads the supervisor published, as its tick does, never by a borrowed one", async () => {
+    const said: string[] = [];
+    const go = new FleetGoUsage({ env: { OPENCODE_KEY: "fake-go-key" }, fetch: refusing(403), now: () => NOW, say: (l) => said.push(l) });
+    const live = await gateAfter(go);
+    // What the supervisor publishes: the free side's status carries the paid side's no-access, borrowed.
+    const published = credentialStatuses({ credentials: config.credentials, book: new SlotBook(config.credentials, {}), gate: live, runs: [], env: { OPENCODE_KEY: "fake-go-key" }, reads: go.lastReads() });
+    expect(published.find((s) => s.id === "go-free")!.lastRead?.classification).toBe("no-access");
+    expect([...publishedReads(config.credentials, published).keys()]).toEqual(["go-paid"]);
+    const runsDir = tempDir("wrathbench-reader-gate-");
+    const { gate, reads } = readerCredentialGate(config.credentials, [], NOW, published, runsDir);
+    for (const id of ["go-paid", "go-free"]) {
+      for (const ep of ["e90", "freeplay"]) expect(gate.holdReasonOf(id, ep)).toEqual(live.holdReasonOf(id, ep));
+    }
+    expect(gate.holdReasonOf("go-paid", "e90")?.code).toBe("no-access");
+    expect(gate.holdOf("go-free", "freeplay")).toBeUndefined();
+    const local = localCredentialStatuses(config, gate, [], [], reads);
+    expect(local.find((s) => s.id === "go-paid")!.lastRead?.classification).toBe("no-access");
+    expect(local.find((s) => s.id === "go-paid")!.holds?.scored?.code).toBe("no-access");
+    // Without the published reads (no state file, or one from before them) nothing is held by a read.
+    expect(readerCredentialGate(config.credentials, [], NOW, undefined, runsDir).gate.holdOf("go-paid", "e90")).toBeUndefined();
+    expect(readerCredentialGate(config.credentials, [], NOW, [{ id: "go-paid" }], runsDir).gate.holdOf("go-paid", "e90")).toBeUndefined();
   });
 });
 

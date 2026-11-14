@@ -103,6 +103,14 @@
  *   operator has replaced the key, as a CLI driver's dead login does. The same
  *   for every provider on this driver; a 2xx body whose error names code 401
  *   is read alike.
+ * - A 403 PAUSES at once too (`no-access`), unretried: the key is valid but
+ *   may not use this endpoint or model — no plan on the workspace (OpenCode
+ *   Go's answer without a Go subscription), a restricted key, a region — again
+ *   the credential's, not the model's, so it is no strike either; the run
+ *   resumes once the operator has given the key access. The one exception is
+ *   a moderation refusal (OpenRouter answers 403 when a model's moderation
+ *   flags the input, `MODERATION_HINTS`): that is about the content the run
+ *   sent, stays fatal as below, and is not a credential's pause.
  * - Any other 4xx is fatal immediately (`adapter-error`): the request is
  *   malformed and retrying would burn budget on a harness bug.
  *
@@ -213,7 +221,7 @@ export type AdapterOutcome =
   | { kind: "ok"; turn: AssistantTurn }
   | {
       kind: "pause";
-      reason: "quota-exhausted" | "rate-limited" | "auth-failed";
+      reason: "quota-exhausted" | "rate-limited" | "auth-failed" | "no-access";
       detail: string;
       /** The provider's own stated reset (`statedResetOf`), already inside the carried window. */
       notBefore?: number;
@@ -563,6 +571,12 @@ export const EXHAUSTION_HINTS = /quota|credit|billing|insufficient|exceeded.*lim
 // separate from EXHAUSTION_HINTS so it reads as rate-limited, not quota-spent,
 // and so the HTTP-429 path's quota-vs-rate decision is unaffected.
 const RATE_LIMIT_HINTS = /rate.?limit|too many requests/i;
+/**
+ * A 403 that is a moderation refusal of the input (OpenRouter: "Your chosen
+ * model requires moderation and your input was flagged"), not the key's
+ * access: it stays fatal rather than pausing as `no-access`.
+ */
+const MODERATION_HINTS = /moderation|flagged/i;
 // Transient upstream-provider failures that aggregators wrap in 4xx bodies:
 // OpenRouter's 404 "Provider returned error" (with provider_name metadata)
 // mid-episode, OpenCode Zen's 400 type:"server_error" "Upstream request
@@ -1189,6 +1203,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
                   : undefined;
             lastStatus = numCode;
             if (numCode === 401) return { kind: "pause", reason: "auth-failed", detail: lastError };
+            if (numCode === 403 && !MODERATION_HINTS.test(lastError)) return { kind: "pause", reason: "no-access", detail: lastError };
             if (
               numCode === 429 ||
               numCode === 402 ||
@@ -1240,6 +1255,9 @@ export class OpenAiChatAdapter implements ChatAdapter {
       lastError = `HTTP ${res.status}${requestId !== undefined ? ` [req ${requestId}]` : ""}: ${text.slice(0, 500)}`;
       // The key refused: the credential's, never retried (see the policy above).
       if (res.status === 401) return { kind: "pause", reason: "auth-failed", detail: lastError };
+      // The key may not use this (no plan, a restricted key): the credential's
+      // too, unless it is a moderation refusal of the input, which stays fatal.
+      if (res.status === 403 && !MODERATION_HINTS.test(text)) return { kind: "pause", reason: "no-access", detail: lastError };
       retryAfterMs = parseRetryAfter(res.headers.get("retry-after"), Date.now());
       // A 429 is a pause whatever the body says; the hints only decide whether
       // it reads as a spent budget or as ordinary rate limiting. Body wording
