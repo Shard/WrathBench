@@ -219,7 +219,7 @@ export default function Ladder() {
     ),
   );
   /*
-   * The condition rule, then the chart. Each model under its newest condition
+   * The condition rule, then the chart. Each model at each effort under its newest condition
    * (`newestConditions`) unless `?conditions=all`, over the whole narrowed tier
    * so a model whose newest condition is on another chart is not shown here
    * under an older one; then one chart group (`chartGroups`), because the
@@ -474,7 +474,7 @@ export default function Ladder() {
           </label>
           <label
             class="filter check"
-            title="Shows each model under its newest condition only: the one whose latest counted run started last. A condition is the series, episode, harness, effort, routing, wiki, compaction window, loop and yield; a row never mixes two."
+            title="Shows each model at each effort under its newest condition only: the one whose latest counted run started last. A condition is the series, episode, harness, effort, routing, wiki, compaction window, loop and yield; a row never mixes two."
           >
             <input
               type="checkbox"

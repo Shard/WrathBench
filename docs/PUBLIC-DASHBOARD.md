@@ -825,15 +825,16 @@ runs that recorded one.
   `dashboard/src/lib/ladderfilter.ts`). An OpenCode Go row, routed with
   fallbacks allowed, is on the unpinned chart.
 - **newest condition**, **on by default** (operator, 2026-11-14). Each model
-  shows only its newest condition: the one whose latest counted run started
-  last, over the whole tier before the chart group is chosen, so a model whose
-  newest runs are on the program loop leaves the snippet chart rather than
-  showing an older row there. Ties go to the condition id that sorts first.
+  at each effort shows only its newest condition: the one whose latest counted
+  run started last, over the whole tier before the chart group is chosen, so a
+  row whose newest runs are on the program loop leaves the snippet chart
+  rather than showing an older one there. Efforts are comparable rows, so each
+  keeps its own. Ties go to the condition id that sorts first.
   `?conditions=all` shows every condition as its own row. The rule is
   `newestConditions`; the homepage and the social card read the ladder
   through the same default (`defaultLadderRuns`). On the 0.5 e90 data at the
-  time it kept all 66 models and 66 of 84 condition rows: a model measured at
-  several efforts shows its newest one.
+  time it kept every one of the 84 rows: no 0.5 model has two conditions at
+  one effort yet.
 
 Three of the four dropdowns are off the page. Race and class
 asked a question an eval episode cannot answer differently — every scored run
@@ -871,9 +872,7 @@ front are unchanged. What else is above the chart:
   and XP rather than following the axes chips, or the set on screen would mean
   something different on every view. On the data measured it hides
   five of twenty-eight entries at e90 and one of eight at e360. It judges
-  only what the condition rules leave, so under the default it has one
-  condition per model to judge and hides nothing; it matters with
-  `?conditions=all`.
+  only what the condition rules leave, on one chart.
 - **current models**, **on by default** (operator, 2026-10-24). Within each model
   line (the family filter's `lineOf`, read off the id the provider served, so
   the CLI alias `sonnet` counts as the Sonnet it ran) only the newest model is

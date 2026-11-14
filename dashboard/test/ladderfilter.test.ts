@@ -343,6 +343,15 @@ describe("the condition rules", () => {
     expect(newestConditions(runs).map((x) => x.runId)).toEqual(["a2", "b2", "c1"]);
   });
 
+  test("the choice is per model and effort: every effort keeps a row", () => {
+    const efforts = [
+      { ...r("lo", "m", 100, cond("s-lo")), effort: "low" },
+      { ...r("hi", "m", 200, cond("s-hi")), effort: "high" },
+      { ...r("hi-p", "m", 300, cond("p-hi", { loop: "program" })), effort: "high" },
+    ] as ResultRun[];
+    expect(newestConditions(efforts).map((x) => x.runId)).toEqual(["lo", "hi-p"]);
+  });
+
   test("an unscored run never chooses, and a model with no counted run keeps what it has", () => {
     const onlyUnscored = [r("u1", "u", 10, snippetLow, "unscored (x)"), r("u2", "u", 20, program, "unscored (x)")];
     expect(newestConditions(onlyUnscored).map((x) => x.runId)).toEqual(["u1", "u2"]);
