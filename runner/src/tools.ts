@@ -537,7 +537,7 @@ function programToolList(withYield: boolean): ToolSpec<ProgramContext>[] {
     CORE.state_summary as ToolSpec<ProgramContext>,
     searchReferenceTool as ToolSpec<ProgramContext>,
     CORE.write_scratchpad as ToolSpec<ProgramContext>,
-    // Its not-found refusal says the pad may be in an earlier message (the scaffold rule, D8).
+    // Its not-found refusal says the pad may be in an earlier message (the thread context, `PadSeen`).
     programEditScratchpad(CORE.edit_scratchpad as ToolSpec<ProgramContext>),
     reflectTool as ToolSpec<ProgramContext>,
     logStatusTool as ToolSpec<ProgramContext>,

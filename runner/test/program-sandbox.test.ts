@@ -237,7 +237,7 @@ describe("the program loop on the codex driver, through the fake CLI", () => {
     ]);
   }, 60_000);
 
-  test("the pad goes whole only when the thread does not hold it as it is: the first turn, and after a snippet changed it (D8)", async () => {
+  test("the pad goes whole only when the thread does not hold it as it is: the first turn, and after a snippet changed it", async () => {
     const r = await codexProgramRun(
       [
         [

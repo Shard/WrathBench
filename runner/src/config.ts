@@ -753,7 +753,7 @@ export const runConfigSchema = z.object({
   compactWindowDefaulted: z.literal(true).optional(),
   /**
    * The agent loop's shape, a probe arm's (`--loop program`, operator
-   * 2026-11-12, a spike not yet adopted): the model keeps its code in a file
+   * 2026-11-12): the model keeps its code in a file
    * workspace rooted at `main.ts`, whose exported functions are routines the
    * harness runs and tracks, and it sleeps between wakes (`wake.ts`). ABSENT
    * on the snippet loop, which every run is unless an arm says otherwise, so
@@ -1014,7 +1014,7 @@ export function runsProgramLoop(driver: Driver): boolean {
 
 /**
  * Why a config's agent loop cannot run as stated, or null. The program loop
- * (`loop: "program"`) is a spike's probe arm: the fixed loop and codex run it
+ * (`loop: "program"`) is a probe arm: the fixed loop and codex run it
  * (`runsProgramLoop`), the other scaffolds' own turn loops do not yet, a
  * route driver plays no model, a scored tier measures the snippet loop, and
  * one agent driving several characters is a later step. `yield` is a setting

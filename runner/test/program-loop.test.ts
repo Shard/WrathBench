@@ -144,7 +144,7 @@ describe("the program prompt", () => {
     expect(program.endsWith(PROGRAM_BODY_TAIL)).toBe(true);
   });
 
-  test("each turn's pad is the pad or a line saying it is unchanged, and a pad edit's miss says where the pad may be (D8); the snippet loop's are as they were", async () => {
+  test("each turn's pad is the pad or a line saying it is unchanged, and a pad edit's miss says where the pad may be; the snippet loop's are as they were", async () => {
     expect(program).toContain("Every turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad, or a line saying it is unchanged since you last saw it in this conversation. After you have slept,");
     expect(SYSTEM_PROMPT).toContain("Every turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad. Older conversation is trimmed");
     expect(program).toContain("There is no read tool: the scratchpad as last written is in this turn's context or earlier in this conversation, and inside a snippet await scratchpad.read() returns it.");
@@ -427,7 +427,7 @@ describe("renderWake", () => {
   });
 
   test("the console is capped in characters too: one log call printed over many lines cannot carry the block", () => {
-    // Sol program round 3, wake 18: seven entries, about 5.7k characters, each a pretty-printed move result.
+    // Seven entries, about 5.7k characters, each a pretty-printed move result.
     const big = (k: number) => ({ ts: NOW - 10 + k, level: "log" as const, routine: "grind", text: `move ${k} {\n${"  field: value,\n".repeat(40)}}`, count: 1 });
     const text = renderWake(view({ facts: emptyFacts({ console: { lines: [0, 1, 2, 3, 4, 5, 6].map(big), total: 7 } }) }));
     const con = text.slice(text.indexOf("program console:"));
@@ -571,7 +571,7 @@ describe("ProgramWake", () => {
   });
 
   test("a refusal a tool result carried does not wake a later sleep, even when its fact lands late; a new one does", async () => {
-    // Round 1's wake 9: a refusal of deploy 6, shown in a result, then a save, then a yield that woke at its floor for it.
+    // A refusal of one deploy, shown in a result, then a save, then a yield that woke at its floor for it.
     const c = fakeClock(10_000_000);
     const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
     const p = fakeProgram();
@@ -599,7 +599,7 @@ describe("ProgramWake", () => {
   });
 
   test("a refusal that lands after the hint drain, before the result returns, still wakes: only what a result carried is delivered", async () => {
-    // The millisecond window round 2 left: delivery was "everything up to the moment the result returned".
+    // The millisecond window when delivery was "everything up to the moment the result returned".
     const c = fakeClock(10_000_000);
     const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
     const p = fakeProgram();
@@ -615,7 +615,7 @@ describe("ProgramWake", () => {
   });
 
   test("a wake(reason) from a routine the routine lines showed as over does not wake; a running routine's still does", async () => {
-    // Round 2's wake 6: explore called wake("explore done") and returned while the model was awake; a stop_routine result showed it returned.
+    // explore called wake("explore done") and returned while the model was awake; a stop_routine result showed it returned.
     const c = fakeClock(10_000_000);
     const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
     const p = fakeProgram();
@@ -638,7 +638,7 @@ describe("ProgramWake", () => {
   });
 
   test("a death a result told the model of, by a dead hint, does not wake the sleep after it", async () => {
-    // Sol P n=14: the turn's own result showed `moveTo dead ×8`; the turn-end sleep woke 3 s later for the death.
+    // The turn's own result showed `moveTo dead ×8`; the turn-end sleep woke 3 s later for the death.
     const c = fakeClock(10_000_000);
     const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
     const p = fakeProgram();
@@ -855,7 +855,7 @@ describe("the window cap and the program's tools", () => {
   });
 });
 
-describe("PadSeen: a scaffold's program loop sends the pad only when its thread does not hold it (D8)", () => {
+describe("PadSeen: a scaffold's program loop sends the pad only when its thread does not hold it", () => {
   const inputs = (pad: string, unchanged?: boolean) => ({ stateSummary: "== state ==", events: [], scratchpad: pad, notices: [], turn: 3, ...(unchanged !== undefined ? { scratchpadUnchanged: unchanged } : {}) });
 
   test("the first message sends it, an unchanged pad is a line with its size, a change outside the conversation sends it again", () => {

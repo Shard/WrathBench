@@ -165,8 +165,8 @@ export interface DriverEntry {
    */
   route?: boolean;
   /**
-   * A scaffold that runs the program loop (`loop: "program"`, a spike's probe
-   * arm): its CLI ends a turn every few calls, so the pause after each turn
+   * A scaffold that runs the program loop (`loop: "program"`, a probe arm):
+   * its CLI ends a turn every few calls, so the pause after each turn
    * becomes the sleep (`adapter-codex.ts`). Absent on the scaffolds whose one
    * turn runs for hours; the fixed loop runs it whatever this says.
    */

@@ -210,8 +210,8 @@ function bodyFor(harness: Harness, wiki = true, program?: ProgramPrompt): string
 // ------------------------------------------------------------ program loop
 
 /**
- * The program loop's prompt (`loop: "program"`, a probe arm of a spike not
- * yet adopted; wording approved by the operator, 2026-11-12). It is a second
+ * The program loop's prompt (`loop: "program"`, a probe arm; wording
+ * approved by the operator, 2026-11-12). It is a second
  * body beside the snippet loop's, never an edit of it: each passage that
  * describes the snippet loop's persistent REPL is replaced exactly
  * (`replaceExactly`, which throws at load when a target is missing or
