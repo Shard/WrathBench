@@ -281,7 +281,11 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE]] a
       expect(cost).toContain("$2.00 the CLI's total_cost_usd over 2 session(s) · ");
       expect(reportedCostUsd(CLAUDE_TURNS as { t: string }[])).toBe(2);
       // Results with no usage of their own: the responses' figures, their output named for what it is.
-      expect(cost).toContain("no CLI result reported usage: 3 message(s) in 3 driver turn(s), in 4.5k (cache read 1.5k, write 400), out 35 as opening snapshots, not output");
+      expect(cost).toContain("no CLI result reported usage, snapshot output only: 3 message(s) in 3 driver turn(s), in 4.5k (cache read 1.5k, write 400), out 35 (opening snapshots)");
+      // At the terminal's width too, the figure is never shown without its label ahead of it.
+      const cut = line((await inspect(["run", FAN], store)).out, "cost");
+      expect(cut).toContain("snapshot output only");
+      expect(cut.indexOf("snapshot")).toBeLessThan(Math.max(cut.indexOf("out 35"), cut.length));
       expect(line((await inspect(["run", FAN], store)).out, "activity")).toContain("model turns unknown (no CLI result reported num_turns) · 3 response records");
     });
 
@@ -292,7 +296,7 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE]] a
       expect(line(r.out, "cost")).toBe(
         "cost       over the run: $0.9000 the CLI's total_cost_usd over 1 session(s), which leaves out the 1 driver turn(s) that got no result" +
           " · tokens on 1 CLI result(s): in 11.2k (cache read 9.5k, write 500), out 1.8k over 5 model turns" +
-          " · with no result: 1 message(s) in 1 driver turn(s), in 5.0k (cache read 4.5k), out 4 as opening snapshots, not output" +
+          " · with no result, snapshot output only: 1 message(s) in 1 driver turn(s), in 5.0k (cache read 4.5k), out 4 (opening snapshots)" +
           " · 5 response records, 4 with usage (one per message; the rest are its earlier envelopes)",
       );
       // Another driver's run keeps the plain reading: a response record is a request.

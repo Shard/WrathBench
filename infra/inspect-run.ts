@@ -2190,11 +2190,12 @@ export function costLine(c: CostTally, o: { claude?: boolean; live?: boolean } =
     if (k.covering > 0) {
       parts.push(`tokens on ${k.covering} CLI result(s): ${inputText(k.done.input, k.done.cacheRead, k.done.cacheWrite)}, out ${fmtTokens(k.done.output)} over ${k.turns} model turns`);
     }
-    const snapshot = (s: TokenSum): string => `${inputText(s.input, s.cacheRead, s.cacheWrite)}, out ${fmtTokens(s.output)} as opening snapshots, not output`;
+    // Named before its figures, so a line cut at the terminal's width never shows a snapshot bare.
+    const snapshot = (s: TokenSum): string => `${inputText(s.input, s.cacheRead, s.cacheWrite)}, out ${fmtTokens(s.output)} (opening snapshots)`;
     if (open.messages > 0) {
-      parts.push(`${k.covering > 0 ? "with no result" : "no CLI result reported usage"}: ${open.messages} message(s) in ${open.turns} driver turn(s), ${snapshot(open)}`);
+      parts.push(`${k.covering > 0 ? "with no result" : "no CLI result reported usage"}, snapshot output only: ${open.messages} message(s) in ${open.turns} driver turn(s), ${snapshot(open)}`);
     }
-    if (flight !== null && flight.messages > 0) parts.push(`in flight, no result yet: ${flight.messages} message(s), ${snapshot(flight)}`);
+    if (flight !== null && flight.messages > 0) parts.push(`in flight, no result yet, snapshot output only: ${flight.messages} message(s), ${snapshot(flight)}`);
     if (parts.length === 0) parts.push("no tokens reported");
     if (u.responses > u.reported) parts.push(`${u.responses} response records, ${u.reported} with usage (one per message; the rest are its earlier envelopes)`);
     return `over the run: ${usd} · ${parts.join(" · ")}`;
