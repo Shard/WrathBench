@@ -19,7 +19,7 @@
  * anything of its own.
  */
 
-import { readdirSync, rmSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { SDK_VERSION } from "@wrathbench/sdk";
 import { tokenFingerprint } from "@wrathbench/mcp/module-auth";
@@ -147,6 +147,56 @@ export class RecordSignals {
   }
 }
 
+/** The world a run that names none plays on: the deployment's one long-lived world. */
+export const SHARED_WORLD = "shared";
+
+/**
+ * The world a run directory's run played on, as its meta.json names it
+ * (`config.world`), or undefined while that cannot be said yet: no meta.json,
+ * or one that does not parse (a launch still writing it). A meta that names no
+ * world is a shared-world run. Read as plain JSON, not through the run
+ * config's schema, so a sibling written by any version reads the same.
+ */
+export function runWorldOf(runDir: string): string | undefined {
+  let meta: unknown;
+  try {
+    meta = JSON.parse(readFileSync(join(runDir, "meta.json"), "utf8"));
+  } catch {
+    return undefined;
+  }
+  const world = (meta as { config?: { world?: unknown } } | null)?.config?.world;
+  return typeof world === "string" && world.length > 0 ? world : SHARED_WORLD;
+}
+
+/**
+ * The session directories of the runs in `runsDir` that play on `world`: the
+ * ones whose characters can share it with this run's. Guids are per characters
+ * database, so with a world of its own per attempt the same guid names a
+ * different player on another world, and only a sibling on the same world may
+ * make one own. A run's world never changes, so a definite answer is kept per
+ * run directory for the life of the index; a run whose meta.json cannot be
+ * read yet counts as shared for this pass and is asked again on the next.
+ */
+export function sameWorldSessionDirs(runsDir: string, world: string, known: Map<string, string>): string[] {
+  let runs: string[];
+  try {
+    runs = readdirSync(runsDir);
+  } catch {
+    return [];
+  }
+  return runs.flatMap((run) => {
+    const runDir = join(runsDir, run);
+    let runWorld = known.get(runDir);
+    if (runWorld === undefined) {
+      const read = runWorldOf(runDir);
+      if (read !== undefined) known.set(runDir, read);
+      runWorld = read ?? SHARED_WORLD;
+    }
+    // Every run's one record, and every character's of a fan-out run.
+    return runWorld === world ? [join(runDir, SESSION_DIR), ...characterSessionDirs(runDir)] : [];
+  });
+}
+
 /** The gate's own set: the seeded guids first, then whatever the index finds. */
 function seededOwn(seed: readonly string[], index: OwnGuid): OwnGuid {
   if (seed.length === 0) return index;
@@ -162,8 +212,13 @@ export interface SessionRecord {
 
 export interface OpenSessionRecordOptions {
   runDir: string;
-  /** The directory every run of this deployment lives in: its sessions are the own ones. */
+  /** The directory every run of this deployment lives in: its sessions on this run's world are the own ones. */
   runsDir: string;
+  /**
+   * The world this run plays on (`config.world`), `"shared"` when absent: only
+   * the runs in `runsDir` on the same world can make a character own.
+   */
+  world?: string;
   /**
    * Character guids that are the deployment's own before any record names
    * them: a party's members, which the stager created and the launch carries
@@ -188,12 +243,14 @@ export interface OpenSessionRecordOptions {
  * Open the run's session record in `<runDir>/session/`. The session id is the
  * token's fingerprint, the name the module's audit files use; the token
  * itself is never written. The deployment's own characters are the ones the
- * other runs' records name, which is what lets a party's members be written
- * in each other's group rows.
+ * other runs' records on the same world name, which is what lets a party's
+ * members be written in each other's group rows.
  */
 export function openSessionRecord(o: OpenSessionRecordOptions): SessionRecord {
   const signals = o.signals ?? new RecordSignals();
   const commit = stackCommit();
+  const world = o.world ?? SHARED_WORLD;
+  const worlds = new Map<string, string>();
   const writer = new SessionWriter({
     dir: o.character !== undefined ? characterSessionDir(o.runDir, o.character) : sessionDirOf(o.runDir),
     id: tokenFingerprint(o.token),
@@ -201,14 +258,7 @@ export function openSessionRecord(o: OpenSessionRecordOptions): SessionRecord {
     ...(o.module !== undefined ? { module: o.module } : {}),
     own: seededOwn(
       o.ownGuids ?? [],
-      ownGuidIndex(() => {
-        try {
-          // Every run's one record, and every character's of a fan-out run.
-          return readdirSync(o.runsDir).flatMap((run) => [join(o.runsDir, run, SESSION_DIR), ...characterSessionDirs(join(o.runsDir, run))]);
-        } catch {
-          return [];
-        }
-      }),
+      ownGuidIndex(() => sameWorldSessionDirs(o.runsDir, world, worlds)),
     ),
     scrub: o.scrub,
     // Struck by the writer itself: a snippet can print `sdk.token`, and the record must not hold it.

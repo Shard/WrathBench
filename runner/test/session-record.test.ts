@@ -4,7 +4,7 @@
  * watchdogs' kill end; and `openSessionRecord`, which
  * puts the record inside the run, names it by the token's fingerprint, never
  * writes the token, and knows the deployment's own characters from the
- * sibling runs' records.
+ * records of the sibling runs on the same world.
  *
  * Rows are hand-written in the record's shapes (`@wrathbench/mcp/record`);
  * guids and names are invented.
@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { join } from "node:path";
 import { tokenFingerprint } from "@wrathbench/mcp/module-auth";
 import { SessionReader, type CallRow, type EventRow, type NearbyRow, type SessionFile, type TraceRow } from "@wrathbench/mcp/record";
-import { RecordSignals, SESSION_DIR, openSessionRecord, removeSessionRing, sessionDirOf } from "../src/session-record";
+import { RecordSignals, SESSION_DIR, SHARED_WORLD, openSessionRecord, removeSessionRing, runWorldOf, sameWorldSessionDirs, sessionDirOf } from "../src/session-record";
 import { partyConfigSchema, partyOwnGuids, type PartyConfig } from "../src/party";
 import { openTestSession, recordDrain, recordedMove } from "./fixtures/v1-session";
 import { tempDirs } from "./fixtures/temp-dirs";
@@ -193,6 +193,77 @@ describe("openSessionRecord: a party's members are own from the first row", () =
     const runsDir = tempDir("wrathbench-session-record-party-unseeded-");
     const rows = memberWrites(runsDir, 0, [], Date.now());
     expect(rows[0]).toMatchObject({ members: [], foreign: 5 });
+  });
+});
+
+describe("openSessionRecord: own characters are the ones on this run's world", () => {
+  /** A sibling run whose record names character `guid`, its meta.json naming `world` (none: no meta.json; null: a meta with no world). */
+  async function sibling(runsDir: string, run: string, guid: string, world: string | null | undefined): Promise<void> {
+    const runDir = join(runsDir, run);
+    const s = openTestSession(runDir, Date.now());
+    s.writer.ingest(recordDrain({ character: { guid, name: `Char${guid}`, race: 1, class: 1 } }));
+    await s.writer.close();
+    if (world !== undefined) writeFileSync(join(runDir, "meta.json"), JSON.stringify({ runId: run, config: world === null ? { model: "m" } : { model: "m", world } }));
+  }
+
+  /** A group row naming every sibling's guid, as the writer on `world` keeps it. */
+  function groupRow(runsDir: string, world: string | undefined, guids: string[]): Extract<EventRow, { kind: "group" }> {
+    const { writer } = openSessionRecord({ runDir: join(runsDir, "run-self"), runsDir, ...(world !== undefined ? { world } : {}), token: `tok-world-${world ?? "none"}-invented`, scrub: (t) => t });
+    writer.ingest(recordDrain({ events: [{ ts: Date.now(), kind: "group", seq: 1, event: "joined", groupGuid: "9001", members: guids, foreign: 0, count: guids.length }] }));
+    return new SessionReader(writer.dir).rows("events").find((r) => r.kind === "group") as Extract<EventRow, { kind: "group" }>;
+  }
+
+  test("a shared-world writer takes siblings with no world, or no meta yet, as own, and never a world's own character with the same kind of guid", async () => {
+    const runsDir = tempDir("wrathbench-session-record-world-shared-");
+    await sibling(runsDir, "run-old", "21", null);
+    await sibling(runsDir, "run-new", "22", SHARED_WORLD);
+    await sibling(runsDir, "run-launching", "23", undefined);
+    await sibling(runsDir, "run-eval", "24", "w0abcdefghj");
+    const row = groupRow(runsDir, undefined, ["21", "22", "23", "24"]);
+    expect(row).toMatchObject({ members: ["21", "22", "23"], foreign: 1 });
+  });
+
+  test("a world's writer takes only that world's siblings as own", async () => {
+    const runsDir = tempDir("wrathbench-session-record-world-eval-");
+    await sibling(runsDir, "run-freeplay", "31", null);
+    await sibling(runsDir, "party-a-tank", "32", "w0abcdefghj");
+    await sibling(runsDir, "party-a-healer", "33", "w0abcdefghj");
+    await sibling(runsDir, "party-b-tank", "34", "w1klmnopqrs");
+    const row = groupRow(runsDir, "w0abcdefghj", ["31", "32", "33", "34"]);
+    expect(row).toMatchObject({ members: ["32", "33"], foreign: 2 });
+  });
+
+  test("a run's world is read once: a definite answer is kept, a missing or half-written meta.json is asked again", () => {
+    const runsDir = tempDir("wrathbench-session-record-world-cache-");
+    const runDir = (run: string) => join(runsDir, run);
+    mkdirSync(runDir("run-a"), { recursive: true });
+    mkdirSync(runDir("run-b"), { recursive: true });
+    writeFileSync(join(runDir("run-a"), "meta.json"), JSON.stringify({ config: { world: "w0abcdefghj" } }));
+    writeFileSync(join(runDir("run-b"), "meta.json"), "{\"config\": {\"wor");
+    expect(runWorldOf(runDir("run-a"))).toBe("w0abcdefghj");
+    expect(runWorldOf(runDir("run-b"))).toBeUndefined();
+    expect(runWorldOf(runDir("run-none"))).toBeUndefined();
+
+    const known = new Map<string, string>();
+    // run-b cannot be read yet: shared for this pass, not remembered.
+    expect(sameWorldSessionDirs(runsDir, SHARED_WORLD, known)).toEqual([join(runDir("run-b"), SESSION_DIR)]);
+    expect([...known]).toEqual([[runDir("run-a"), "w0abcdefghj"]]);
+    // Its launch finishes writing meta.json: the next pass reads it.
+    writeFileSync(join(runDir("run-b"), "meta.json"), JSON.stringify({ config: { world: "w0abcdefghj" } }));
+    expect(sameWorldSessionDirs(runsDir, SHARED_WORLD, known)).toEqual([]);
+    // A rewritten meta.json changes nothing: a run's world never changes, so it is not read again.
+    writeFileSync(join(runDir("run-a"), "meta.json"), JSON.stringify({ config: {} }));
+    expect(sameWorldSessionDirs(runsDir, "w0abcdefghj", known).sort()).toEqual([join(runDir("run-a"), SESSION_DIR), join(runDir("run-b"), SESSION_DIR)]);
+  });
+
+  test("a fan-out run's characters go with their run's world", () => {
+    const runsDir = tempDir("wrathbench-session-record-world-fanout-");
+    const fan = join(runsDir, "run-fan");
+    mkdirSync(join(fan, "sessions", "Alpha"), { recursive: true });
+    mkdirSync(join(fan, "sessions", "Beta"), { recursive: true });
+    writeFileSync(join(fan, "meta.json"), JSON.stringify({ config: { world: "w0abcdefghj" } }));
+    expect(sameWorldSessionDirs(runsDir, "w0abcdefghj", new Map()).sort()).toEqual([join(fan, SESSION_DIR), join(fan, "sessions", "Alpha"), join(fan, "sessions", "Beta")].sort());
+    expect(sameWorldSessionDirs(runsDir, SHARED_WORLD, new Map())).toEqual([]);
   });
 });
 

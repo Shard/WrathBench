@@ -170,12 +170,14 @@ takes from the stack and how.
   write, `session/` inside the run directory (`runner/src/session-record.ts`),
   so the evidence is written in place as it happens. The deployment's own
   characters, which the stack's write gate may name in a party row, are the
-  ones the other runs' records name, and a party's members from the first
-  row: the stager reports each member's character guid, the roster writes
-  them into every member's `campaign.json` before any launches, and the
-  run's config carries them to the gate (`partyOwnGuids`), so a group row
-  written before a sibling's record names its character still keeps it. Any
-  other player is never written.
+  ones named by the records of the other runs on the same world (a guid is
+  per characters database, so it names a different player on another
+  world; a run with no `config.world` is on the shared one), and a party's
+  members from the first row: the stager reports each member's character
+  guid, the roster writes them into every member's `campaign.json` before
+  any launches, and the run's config carries them to the gate
+  (`partyOwnGuids`), so a group row written before a sibling's record names
+  its character still keeps it. Any other player is never written.
 - **Reading it back** (`@wrathbench/inspector`): the viewer reads every
   session through the inspector's source interface. `runner/viewer/runs-source.ts`
   implements it over the runs directory: a v1 run is a session under its run
