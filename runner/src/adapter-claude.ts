@@ -461,6 +461,12 @@ export interface ClaudeArgsOptions {
   fanout?: boolean | undefined;
   /** A program-loop run (`programPromptOf`): grant the program's tool list. */
   programTools?: ProgramTools | undefined;
+  /**
+   * The names to grant, as the run's MCP server lists them (`toolsFor` over
+   * its tool context). Given, it is the grant and the three options above
+   * are not read: the grant cannot drift from what the server serves.
+   */
+  grant?: readonly string[] | undefined;
 }
 
 /**
@@ -568,11 +574,13 @@ export function claudeArgs(o: ClaudeArgsOptions): string[] {
     ...(o.effort !== undefined && o.effort !== NO_THINKING ? ["--effort", o.effort] : []),
     // variadic, therefore last
     "--allowed-tools",
-    ...mcpToolNames({
-      wikiSearch: o.wikiSearch,
-      ...(o.fanout === true ? { fanout: true } : {}),
-      ...(o.programTools !== undefined ? { programTools: o.programTools } : {}),
-    }),
+    ...(o.grant !== undefined
+      ? o.grant.map((name) => `mcp__${MCP_SERVER_NAME}__${name}`)
+      : mcpToolNames({
+          wikiSearch: o.wikiSearch,
+          ...(o.fanout === true ? { fanout: true } : {}),
+          ...(o.programTools !== undefined ? { programTools: o.programTools } : {}),
+        })),
   ];
 }
 
@@ -1048,10 +1056,10 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     systemPrompt,
     model: config.model,
     wikiSearch: config.wiki,
-    // A fan-out run is granted the fan-out list, the one its MCP server serves.
-    ...(config.fanout !== undefined ? { fanout: true } : {}),
-    // A program-loop run is granted the program's list, the one its MCP server serves.
-    ...(programPrompt !== undefined ? { programTools: { yield: programPrompt.yield } } : {}),
+    // Granted exactly what the run's MCP server lists (`McpServer` lists
+    // `toolsFor(toolCtx)`): the fan-out list on a fan-out run, the program's
+    // on a program-loop run, and whatever the two make together.
+    grant: toolsFor({ ...toolCtx, ...(config.fanout !== undefined ? { fanout: true } : {}) }).map((t) => t.name),
     ...(config.effort !== undefined ? { effort: config.effort } : {}),
   });
   const thinking = thinkingEnv(config.effort);
