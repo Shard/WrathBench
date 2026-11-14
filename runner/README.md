@@ -1457,8 +1457,10 @@ marked `auto`. Record-only; why and the size are in `docs/ARCHITECTURE.md`,
 Confinement is the stack's: the child is exec'd under a Linux Landlock ruleset
 the kernel enforces whatever API a snippet uses (reads of what it needs to run
 and nothing else, TCP only to the module URL's port, no executable but the
-interpreter), and it fails closed on a kernel without Landlock's TCP rules
-(Linux 6.7+). The rules live in one place, `confinementPlan` in
+interpreter), with a seccomp filter beside it (no socket but TCP, unix stream
+pairs and, to resolve a module host name, UDP) and resource limits (a 1 GiB
+file size, no core dumps), and it fails closed on a kernel without Landlock's
+TCP rules (Linux 6.7+) or a container that refuses `PR_SET_SECCOMP`. The rules live in one place, `confinementPlan` in
 `wrath-mcp/mcp/src/sandbox/confine.ts`, whose header says why each is there;
 wrath-mcp's
 [`docs/ARCHITECTURE.md`](https://github.com/Shard/wrath-mcp/blob/master/docs/ARCHITECTURE.md#the-sandbox),
