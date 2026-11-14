@@ -14,7 +14,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { SessionReader, validateSession, type CallRow } from "@wrathbench/mcp/record";
 import { Scratchpad } from "@wrathbench/mcp/scratchpad";
-import { fanoutConfigSchema, loadRunConfig } from "../src/config";
+import { assertNoTenantAccount, fanoutConfigSchema, loadRunConfig } from "../src/config";
 import { fanoutSessionNote, knownCharacters, openFanout, readRoster, ROSTER_FILE } from "../src/fanout-run";
 import { ContextBuilder } from "../src/loop";
 import { EpisodicLog } from "../src/episodic";
@@ -67,6 +67,10 @@ describe("the grant as run configuration", () => {
     // A near name is an ordinary account.
     expect(loadRunConfig({ driver: "stub", account: "TENANT" }).account).toBe("TENANT");
     expect(loadRunConfig({ driver: "stub", account: "TENANT100" }).account).toBe("TENANT100");
+    // The lease sites' own check, for a config changed after the schema read it.
+    expect(() => assertNoTenantAccount({ account: "TENANT05" })).toThrow(tenant);
+    expect(() => assertNoTenantAccount({ account: "POOL01", fanout: { characters: 2, accounts: ["POOL01", "tenant06"] } })).toThrow(tenant);
+    expect(() => assertNoTenantAccount({ account: "POOL01", fanout: { characters: 2, accounts: ["POOL01", "POOL02"] } })).not.toThrow();
   });
 
   test("never a scored episode, a party member or a continuation", () => {

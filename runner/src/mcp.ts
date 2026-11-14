@@ -31,7 +31,7 @@ import { ClosedWindowReflectGate } from "./reflect";
 import { appendPendingActionHints, callTool, coerceToolArgs, servesFanout, toolsFor, type ToolContext } from "./tools";
 import { SandboxHost } from "./sandbox/host";
 import { Trajectory } from "./trajectory";
-import { newRunId, newSessionToken, loadRunConfig } from "./config";
+import { assertNoTenantAccount, newRunId, newSessionToken, loadRunConfig } from "./config";
 import { partyOwnGuids } from "./party";
 import { openSessionRecord } from "./session-record";
 import { harnessVersion, stackCommit } from "./version";
@@ -102,6 +102,7 @@ async function main(): Promise<void> {
   process.on("exit", () => clientCache.flush());
   trajectory.writeMeta({ runId, harnessVersion: harnessVersion(), sdkVersion: SDK_VERSION, stackCommit: stackCommit(), startedAt: Date.now(), config });
 
+  assertNoTenantAccount(config);
   // The session secret for this token (wrath-mcp/module/PROTOCOL.md, "Authentication");
   // the operator's port secret stays in this process. Registered for
   // redaction as it is leased: the child holds it, and a snippet can print it.

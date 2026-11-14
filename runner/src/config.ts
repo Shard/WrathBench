@@ -417,6 +417,17 @@ export function refuseTenantAccount(name: string, ctx: z.RefinementCtx): void {
 
 const accountSchema = z.string().min(2).max(16).superRefine(refuseTenantAccount);
 
+/**
+ * The same refusal where a run leases, the last line behind the schema: a path
+ * that changes an account after `loadRunConfig` would otherwise lease it.
+ */
+export function assertNoTenantAccount(config: Pick<RunConfig, "account" | "fanout">): void {
+  for (const a of [config.account, ...(config.fanout?.accounts ?? [])]) {
+    const why = tenantAccountRefusal(a);
+    if (why !== null) throw new Error(why);
+  }
+}
+
 /** `RunConfig.fanout`: the grant, and the characters staged for it. */
 export const fanoutConfigSchema = z
   .object({
