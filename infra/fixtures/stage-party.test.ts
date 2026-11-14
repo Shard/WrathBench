@@ -173,6 +173,8 @@ describe("the accounts a party is staged on", () => {
     const later = evalRequest();
     later.members[4]!.account = "EVAL99";
     expect(checkStageRequest(later)).toEqual([]);
+    later.members[3]!.account = "eval99";
+    expect(checkStageRequest(later).join("; ")).toMatch(/account EVAL99 is named twice/);
   });
 
   test("every other account is refused: the generated pool, tenants, runners, smokes, STAGER, and names only shaped like a party's", () => {

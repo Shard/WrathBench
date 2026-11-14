@@ -232,7 +232,8 @@ export function checkStageRequest(req: StageRequest): string[] {
   // The loadouts' talents are eleven points: the level they are built for.
   if (req.level !== PARTY_LEVEL) errors.push(`level ${req.level}: the loadouts are built for level ${PARTY_LEVEL}`);
   const dupes = (xs: string[]) => [...new Set(xs.filter((x, i) => xs.indexOf(x) !== i))];
-  for (const a of dupes(ms.map((m) => m.account))) errors.push(`account ${a} is named twice`);
+  // Account names are case-blind in auth, and the eval pool's check is too.
+  for (const a of dupes(ms.map((m) => m.account.toUpperCase()))) errors.push(`account ${a} is named twice`);
   for (const n of dupes(ms.map((m) => m.character.toLowerCase()))) errors.push(`character ${n} is named twice`);
   for (const id of dupes(ms.map((m) => m.member))) errors.push(`member ${id} is named twice`);
   for (const m of ms) {
