@@ -465,7 +465,7 @@ export const CAPACITY_BACKOFF_MS = [30_000, 60_000, 120_000, 240_000, 300_000] a
  * unscored tiers only (freeplay and probing), read off the episode table as
  * the lapse rule reads it (`resumesOnPause`). A scored episode keeps the
  * three-in-a-row rule as it was: its `adapter-error` is a failed attempt that
- * is retried fresh with a full clock and no strike (METHODOLOGY, "A lapsed run
+ * is retried fresh with a full clock (METHODOLOGY, "A lapsed run
  * is evidence only if its lane says so"), where a backoff would spend the
  * attempt's own clock. A launch with no episode keeps it too.
  */

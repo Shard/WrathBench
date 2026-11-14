@@ -47,10 +47,8 @@ import {
   OFFLINE_QUIET_MARGIN_MS,
   planResumes,
   planStaleRuns,
-  retryNumbers,
   applyEnded,
   statesAfterSweep,
-  failedAttemptsFor,
   formatEndedRun,
   formatPaused,
   formatEnded,
@@ -2534,21 +2532,15 @@ describe("pause and resume across a fleet stop", () => {
     expect(plan.resume).toEqual([]);
     expect(plan.listed).toEqual([]);
     expect(plan.end).toHaveLength(1);
-    expect(plan.end[0]).toMatchObject({ runId: run.runId, episode: "e90", reason: "attempt-failed", counts: true, account: "RUNNER4" });
-    expect(formatEndedRun(plan.end[0]!, 2)).toBe(
-      "failed attempt: quota-exhausted: not resumed — a scored run that pauses is a failed attempt, retry 2/3",
+    expect(plan.end[0]).toMatchObject({ runId: run.runId, episode: "e90", reason: "attempt-failed", account: "RUNNER4" });
+    // No retry count: a failed attempt is a rung of the model's cooling ladder,
+    // which the model's own line shows.
+    expect(formatEndedRun(plan.end[0]!)).toBe(
+      "failed attempt: quota-exhausted: not resumed — a scored run that pauses is a failed attempt",
     );
-    // A sweep after an outage numbers the batch it is about to write, not the
-    // projection it read before writing any of it: three failures of one model
-    // in one tick read 1/3, 2/3, 3/3 — tainted — and not "retry 1/3" thrice.
-    const batch = [plan.end[0]!, { ...plan.end[0]!, runId: "b" }, { ...plan.end[0]!, runId: "c" }];
-    expect(retryNumbers(batch, () => 0)).toEqual([1, 2, 3]);
-    expect(formatEndedRun(batch[2]!, 3)).toContain("retry 3/3 — tainted");
-    // An operator-pause in the middle spends an attempt without advancing the count.
-    expect(retryNumbers([batch[0]!, { ...batch[1]!, reason: "manual", counts: false }, batch[2]!], () => 0)).toEqual([1, 2, 2]);
     // An operator-pause is the harness's own doing: the attempt is spent, the model is not blamed.
     const stopped = planResumes({ runs: [{ ...run, pause: { reason: "operator-pause", at: NOW - 5 * 60_000, count: 1, episodeElapsedMs: 41 * 60_000 } }], config: config(), running: new Map(), held, now: NOW });
-    expect(stopped.end[0]).toMatchObject({ reason: "manual", counts: false });
+    expect(stopped.end[0]).toMatchObject({ reason: "manual" });
     // The tick still holds the model this pass — the pause fact is only gone
     // once the termination is written — and gives it a fresh attempt after.
     const states = modelStatesOf(rosterModels(roster), [run], NOW);
@@ -2811,7 +2803,7 @@ describe("pause and resume across a fleet stop", () => {
     const legacy = { ...preRelease, campaignVersion: 7 };
     const legacyPlan = planResumes({ runs: [legacy], config: cfg, running: new Map(), held, now: NOW });
     expect(legacyPlan.resume).toEqual([]);
-    expect(legacyPlan.end).toMatchObject([{ runId: legacy.runId, reason: "manual", counts: false }]);
+    expect(legacyPlan.end).toMatchObject([{ runId: legacy.runId, reason: "manual" }]);
     const byHand = { ...legacy, runId: "run-20261009-120000" };
     const byHandPlan = planResumes({ runs: [byHand], config: cfg, running: new Map(), held, now: NOW });
     expect(byHandPlan.resume).toEqual([]);
@@ -3150,18 +3142,18 @@ describe("pause and resume across a fleet stop", () => {
     expect(plan.resume).toEqual([]);
     expect(plan.listed).toEqual([]);
     // An offline gap is the harness's weather: ended `stale`, never counted.
-    expect(plan.end[0]).toMatchObject({ reason: "stale", counts: false });
+    expect(plan.end[0]).toMatchObject({ reason: "stale" });
     expect(plan.end[0]!.detail).toContain("no activity for 4h00m");
     // Waiting on its provider when the lights went out: the model's problem after all.
     const onQuota = planResumes({ runs: [{ ...run, pause: { reason: "quota-exhausted", at: NOW - 4 * H, count: 1, episodeElapsedMs: 10 * 60_000 } }], config: config(), running: new Map(), held, now: NOW });
-    expect(onQuota.end[0]).toMatchObject({ reason: "attempt-failed", counts: true });
+    expect(onQuota.end[0]).toMatchObject({ reason: "attempt-failed" });
     const states = modelStatesOf(rosterModels(roster), [run], NOW);
     expect(states.find((s) => s.name === "glm")?.paused).toBeUndefined();
     // A run with no pause record at all — the machine died under it — is the same case.
     const dead = { ...run, runId: "fleet-ox-e90-stealth-ox-alpha-20260822", model: "stealth/ox-alpha:free", pause: null, endedAt: NOW - 4 * H };
     const staleRuns = planStaleRuns({ runs: [dead], refs: Object.keys(roster), now: NOW });
     expect(staleRuns).toHaveLength(1);
-    expect(staleRuns[0]).toMatchObject({ reason: "stale", counts: false, ref: "ox" });
+    expect(staleRuns[0]).toMatchObject({ reason: "stale", ref: "ox" });
     // Not while a live job holds its account.
     expect(planStaleRuns({ runs: [dead], busyAccounts: new Set(["RUNNER3"]), now: NOW })).toEqual([]);
   });
@@ -3186,7 +3178,7 @@ describe("pause and resume across a fleet stop", () => {
     expect(resumeNotBefore({ reason: "operator-pause", at, count: 10, episodeElapsedMs: 0 })).toBeNull();
     // A scored run never reaches the ladder at all: it is a failed attempt on the first pause.
     const eval90 = paused({ runId: "fleet-ox-e90-stealth-ox-alpha-20260823", model: "stealth/ox-alpha:free", account: "RUNNER3", pause: { reason: "rate-limited", at, count: 1, episodeElapsedMs: 0 } });
-    expect(planResumes({ runs: [eval90], config: config(), running: new Map(), held, now: NOW }).end[0]).toMatchObject({ reason: "attempt-failed", counts: true });
+    expect(planResumes({ runs: [eval90], config: config(), running: new Map(), held, now: NOW }).end[0]).toMatchObject({ reason: "attempt-failed" });
   });
 
   test("a pause whose provider stated its reset resumes at that instant, once, off the ladder", () => {
@@ -3217,7 +3209,7 @@ describe("pause and resume across a fleet stop", () => {
     expect(providerResetOf(pause)).toBe(reset);
     // A scored run is still a failed attempt on its first pause, stated reset or not.
     const eval90 = paused({ runId: "fleet-ox-e90-stealth-ox-alpha-20260921", model: "stealth/ox-alpha:free", account: "RUNNER3", pause });
-    expect(planResumes({ runs: [eval90], config: config(), running: new Map(), held, now: NOW }).end[0]).toMatchObject({ reason: "attempt-failed", counts: true });
+    expect(planResumes({ runs: [eval90], config: config(), running: new Map(), held, now: NOW }).end[0]).toMatchObject({ reason: "attempt-failed" });
   });
 
   test("a run paused for a stalled observation is resumed on the provider ladder, not at once (operator, 2026-09-25)", () => {
@@ -3239,7 +3231,7 @@ describe("pause and resume across a fleet stop", () => {
     expect(plan.resume[0]!.why).toContain(STALL_PAUSE);
     // A scored run is ended under the existing rule instead: the attempt is spent, and it is no strike.
     const eval90 = paused({ runId: "fleet-ox-e90-stealth-ox-alpha-20260925", model: "stealth/ox-alpha:free", account: "RUNNER3", pause: { reason: STALL_PAUSE, at, count: 1, episodeElapsedMs: 0 } });
-    expect(planResumes({ runs: [eval90], config: config(), running: new Map(), held, now: NOW }).end[0]).toMatchObject({ reason: "manual", counts: false });
+    expect(planResumes({ runs: [eval90], config: config(), running: new Map(), held, now: NOW }).end[0]).toMatchObject({ reason: "manual" });
   });
 
   test("a resume waits for its own account — never a different one — and a running job handles its own pause", () => {
@@ -3255,11 +3247,12 @@ describe("pause and resume across a fleet stop", () => {
     expect(plan).toEqual({ resume: [], listed: [], end: [] });
   });
 
-  test("the strike a tick writes is in the projection that tick schedules from", () => {
-    // The 2026-08-25 bug: the sweep logged `retry 3/3 — tainted` for
+  test("the failed attempt a tick writes is in the projection that tick schedules from", () => {
+    // The 2026-08-25 bug: the sweep logged a third failed attempt for
     // nemotron-ultra and the policy spawned its ninth attempt one second
     // later, because the projection behind the pick was built before the
-    // terminations were written and still counted zero.
+    // terminations were written and still counted zero. Strikes are folded
+    // into the cooling ladder now, and the same race would launch into a rung.
     const ended = (i: number): RunFact =>
       paused({
         runId: `fleet-ox-e90-stealth-ox-alpha-2026082${i}`,
@@ -3279,20 +3272,22 @@ describe("pause and resume across a fleet stop", () => {
     const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, credentials: parseCredentials(OPEN_CREDENTIALS), campaigns: [], campaignDefs: [], campaignRefusals: [], refusals: [] };
     const plan = planResumes({ runs, config: cfg, running: new Map(), held, now: NOW });
     expect(plan.end).toHaveLength(1);
-    expect(retryNumbers(plan.end, (e) => failedAttemptsFor(modelStatesOf(rosterModels(roster), runs, NOW), e) ?? 0)).toEqual([3]);
 
-    // Before the fix: the same tick's pre-sweep projection would schedule it.
-    const before = modelStatesOf(rosterModels(roster), runs, NOW);
-    expect(before.find((st) => st.name === "ox")!.perEpisode.e90).toMatchObject({ failed: 2, tainted: false });
+    // Before the fix: the same tick's pre-sweep projection would schedule it,
+    // two rungs up and its three minutes long since served.
+    const before = modelStatesOf(rosterModels(roster), runs, NOW).find((st) => st.name === "ox")!;
+    expect(before.ladder).toBe(2);
+    expect(before.cooling).toBeUndefined();
 
-    // After: the ends are applied, the third strike lands, and nothing spawns
-    // for that model in this tick.
+    // After: the ends are applied, the third rung lands from now, and nothing
+    // spawns for that model in this tick.
     const after = statesAfterSweep(cfg, runs, plan.end, NOW, { version: 1, cleared: {} });
     const ox = after.find((st) => st.name === "ox")!;
-    expect(ox.perEpisode.e90).toMatchObject({ failed: 3, tainted: true });
+    expect(ox.ladder).toBe(3);
+    expect(ox.cooling).toMatchObject({ rung: 3, until: NOW + 5 * 60_000 });
     const v = schedulability(ox);
     expect(v.verdict).toBe("blocked");
-    expect(v.why).toContain("tainted on e90 (3 failed attempts)");
+    expect(v.why).toContain("cooling rung 3/9");
     const tick = planTick(cfg, after, held, "20260825");
     expect(tick.policy.map((p) => p.job.ref)).not.toContain("ox");
     // The reverse race: the run the sweep ended holds neither its model nor
@@ -3322,7 +3317,6 @@ describe("pause and resume across a fleet stop", () => {
         episode: "e90",
         reason: "manual",
         detail: "ended by the supervisor: model stealth/ox-alpha:free no longer under ref ox",
-        counts: false,
         account: "RUNNER3",
       },
     ]);
@@ -3334,7 +3328,7 @@ describe("pause and resume across a fleet stop", () => {
     // The same model under the same ref is still ended — as a failed attempt
     // now, with a different reason: the re-pointed rule is about which run has
     // no job to come back to, not about whether a scored run resumes.
-    expect(planResumes({ runs: [run], config: config(), running: new Map(), held, now: NOW }).end[0]).toMatchObject({ reason: "manual", counts: false });
+    expect(planResumes({ runs: [run], config: config(), running: new Map(), held, now: NOW }).end[0]).toMatchObject({ reason: "manual" });
     // A run launched outside the fleet is not this rule's, and not the supervisor's to end.
     const hand = paused({ runId: "hand-ox-1", model: "stealth/ox-alpha:free", account: "RUNNER3" });
     expect(planResumes({ runs: [hand], config: { ...config(), roster: repointed }, running: new Map(), held, now: NOW }).end).toEqual([]);
@@ -3352,7 +3346,7 @@ describe("pause and resume across a fleet stop", () => {
     t.setPause(runId, "rate-limited", "429", 41 * 60_000);
     t.close();
     const detail = "ended by the supervisor: model stealth/ox-alpha:free no longer under ref ox";
-    expect(endRuns(runsDir, [{ runId, model: "stealth/ox-alpha:free", effort: null, ref: "ox", episode: "e90", reason: "manual", detail, counts: false, account: "RUNNER3" }])).toEqual([{ runId }]);
+    expect(endRuns(runsDir, [{ runId, model: "stealth/ox-alpha:free", effort: null, ref: "ox", episode: "e90", reason: "manual", detail, account: "RUNNER3" }])).toEqual([{ runId }]);
     const after = new Trajectory(join(runsDir, runId));
     const row = after.runRow(runId)!;
     after.close();
@@ -3366,7 +3360,7 @@ describe("pause and resume across a fleet stop", () => {
     writeFileSync(blocked, "");
     expect(
       endRuns(join(blocked, "runs"), [
-        { runId: "x", model: "m", effort: null, ref: "r", episode: "e90", reason: "manual", detail, counts: false, account: null },
+        { runId: "x", model: "m", effort: null, ref: "r", episode: "e90", reason: "manual", detail, account: null },
       ])[0]!.error,
     ).toBeDefined();
   });
@@ -4386,7 +4380,7 @@ describe("the read-only views read what is running, not every job the supervisor
     jobs,
   });
 
-  test("an exited roster's job is not running: its tainted model reads tainted, and its account reads free", () => {
+  test("an exited roster's job is not running: its model reads its own state, and its account reads free", () => {
     // harness-0.5-1030: three tainted models read "running (one character per
     // model)" for thirty-odd hours, because fleet-state.json keeps an exited
     // roster's row (`alive: false`) and --status read every row as running.
@@ -4429,7 +4423,9 @@ describe("the read-only views read what is running, not every job the supervisor
     expect([...runningRefsOf(running)]).toEqual(["codex-sol-61"]);
     // The models table gives the real reason, and the fix it needs.
     const line = formatModels(states, runningRefsOf(running), NOW).find((l) => l.includes("gemma-4-31b"))!;
-    expect(line).toContain("no: tainted on e90 (3 failed attempts) — clear with bun wb fleet clear-model gemma-4-31b");
+    // Three refusals a day and a half ago are three served rungs now (strikes
+    // are folded into the cooling ladder): the model is schedulable again.
+    expect(line).toContain("yes: schedulable on e90");
     // Reading every row as running is what hid it.
     expect(formatModels(states, runningRefsOf(live), NOW).find((l) => l.includes("gemma-4-31b"))).toContain("no: running (one character per model)");
     // The account row: the exited job is not shown, so RUNNER reads free; the live one is.
@@ -4912,17 +4908,13 @@ describe("claude-code's default window leaves an entry's runs its own (operator,
     expect(charactersFrom([ended, next], { opus55: { ...entry, compactWindow: "auto" } }).get("opus55")?.runId).toBe(onAuto.runId);
   });
 
-  test("a resume finds the spawn entry of a run at either window, and a batch of failures counts as one model's", () => {
+  test("a resume finds the spawn entry of a run at either window", () => {
     const spawned = spawn({ entries: [{ model: "z-ai/glm-5.2:free" }, { model: "claude-opus-5-5", driver: "claude-code" }] });
     for (const window of [undefined, "300k"]) {
       const resumed = withResume(spawned, { runId: "r", model: "claude-opus-5-5", driver: "claude-code", ...(window !== undefined ? { compactWindow: window } : {}) });
       expect(resumed.entries).toHaveLength(2);
       expect(resumed.entries[0]).toEqual({ model: "claude-opus-5-5", driver: "claude-code", runId: "r" });
     }
-    const failed = { runId: "a", model: "claude-opus-5-5", effort: null, driver: "claude-code", ref: "opus55", episode: "e90" as const, reason: "attempt-failed" as const, detail: "d", counts: true, account: "RUNNER2" };
-    expect(retryNumbers([failed, { ...failed, runId: "b", compactWindow: "300k" }], () => 0)).toEqual([1, 2]);
-    // Another window is another entry's count, as it was.
-    expect(retryNumbers([failed, { ...failed, runId: "c", compactWindow: "100k" }], () => 0)).toEqual([1, 1]);
   });
 });
 
