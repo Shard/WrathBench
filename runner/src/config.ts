@@ -17,7 +17,7 @@
 
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { EPISODE_IDS, EPISODES, episodeIdSchema, matchesTier, watchdogsFor, type EpisodeId } from "./episodes";
+import { EPISODE_IDS, EPISODES, episodeIdSchema, isScoredEpisode, matchesTier, watchdogsFor, type EpisodeId } from "./episodes";
 import { PARTY_PAUSE, STALL_PAUSE, SUBSCRIPTION_PAUSE } from "./lapse";
 import { routingSchema } from "./routing";
 import { CHARACTER_NAME_RULE, isValidCharacterName } from "./character-name";
@@ -752,6 +752,30 @@ export const runConfigSchema = z.object({
    */
   compactWindowDefaulted: z.literal(true).optional(),
   /**
+   * The agent loop's shape, a probe arm's (`--loop program`, operator
+   * 2026-11-12, a spike not yet adopted): the model keeps its code in a file
+   * workspace rooted at `main.ts`, whose exported functions are routines the
+   * harness runs and tracks, and it sleeps between wakes (`wake.ts`). ABSENT
+   * on the snippet loop, which every run is unless an arm says otherwise, so
+   * every config and tuple stamped before the field existed reads the same.
+   * The fixed loop and codex only, never a scored tier, never fan-out
+   * (`programLoopRefusal`). Identity: a resume keeps it.
+   *
+   * `snippet-slim` is the snippet loop under a scaffold's thread context
+   * (`threadContextOf`, operator 2026-11-13, a probe arm of the same spike):
+   * a turn's message carries the scratchpad only when the thread does not
+   * hold it as it stands (D8) and only the events newer than the last one
+   * the thread was sent, with the prompt's two pad sentences saying so. It
+   * separates that context saving from the program loop's. Codex only.
+   */
+  loop: z.enum(["program", "snippet-slim"]).optional(),
+  /**
+   * The program loop's `yield` tool (`--yield true`): a call held open until
+   * a wake, whose result is the wake. Absent when off; only with
+   * `loop: "program"`.
+   */
+  yield: z.literal(true).optional(),
+  /**
    * Which backend the aggregator may route this run to, as the fleet config
    * declared it (`routing.ts`) — the DECLARED block, not the resolved one, so
    * a resumed run re-derives against the same rules rather than freezing a
@@ -941,6 +965,10 @@ export function loadRunConfig(raw: unknown): RunConfig {
   if (config.compactWindow !== undefined && !driverHasCompactWindow(config.driver)) {
     throw new Error(compactWindowDriverRefusal(config.driver));
   }
+  // Refused, never ignored: the program loop is a probe arm's, on the fixed
+  // loop and one character only, for now.
+  const loopRefusal = programLoopRefusal(config);
+  if (loopRefusal !== null) throw new Error(loopRefusal);
   // Refused, never ignored: one agent driving several characters is its own
   // measurement (operator, 2026-11-11), which runs first as a probe campaign
   // and has no scored episode yet, so a scored tier never starts as one; a
@@ -979,6 +1007,81 @@ export function loadRunConfig(raw: unknown): RunConfig {
     // see it.
   }
   return config;
+}
+
+/**
+ * Whether a driver's loop runs the program loop: the fixed loop, and a
+ * scaffold the registry says does (`DriverEntry.programLoop`: codex, whose
+ * end-of-turn pause becomes the sleep). claude-code and pi, whose one turn
+ * runs for hours, do not yet.
+ */
+export function runsProgramLoop(driver: Driver): boolean {
+  return entryOf(driver).kind === "loop" || entryOf(driver).programLoop === true;
+}
+
+/**
+ * Why a config's agent loop cannot run as stated, or null. The program loop
+ * (`loop: "program"`) is a spike's probe arm: the fixed loop and codex run it
+ * (`runsProgramLoop`), the other scaffolds' own turn loops do not yet, a
+ * route driver plays no model, a scored tier measures the snippet loop, and
+ * one agent driving several characters is a later step. `yield` is a setting
+ * of the program loop and means nothing without it.
+ */
+export function programLoopRefusal(c: Pick<RunConfig, "loop" | "yield" | "driver" | "episode" | "fanout" | "continuedFrom">): string | null {
+  if (c.loop !== "program") {
+    if (c.yield === true) return "--yield is a setting of the program loop; it needs --loop program";
+    return c.loop === "snippet-slim" ? snippetSlimRefusal({ ...c, loop: c.loop }) : null;
+  }
+  const entry = entryOf(c.driver);
+  if (!runsProgramLoop(c.driver)) return `--loop program runs on the fixed loop and codex; the ${c.driver} driver runs a CLI's own turn loop`;
+  if (entry.route === true) return `--loop program drives a model; the ${c.driver} driver plays a scripted route`;
+  if (c.episode !== undefined && isScoredEpisode(c.episode)) return `--loop program is a probe arm's; --episode ${c.episode} is a scored episode, which runs the snippet loop`;
+  if (c.fanout !== undefined) return "--loop program drives one character; fan-out is not built for it";
+  if (c.continuedFrom !== undefined) return "--loop program starts its workspace empty; it does not continue another run (--continue-from)";
+  return null;
+}
+
+/**
+ * Whether a driver keeps a scaffold's thread context (`ThreadContext`,
+ * context.ts): a scaffold whose CLI ends a turn every few calls, so a fresh
+ * message with the HUD, the events and the pad goes to the same thread many
+ * times a run. That is codex (`DriverEntry.programLoop`). claude-code and pi
+ * run one turn for hours, so a fresh message comes once or twice a run and
+ * the rule would save nothing; the fixed loop rebuilds its window each turn
+ * and holds no thread.
+ */
+export function keepsThreadContext(driver: Driver): boolean {
+  const entry = entryOf(driver);
+  return entry.kind === "scaffold" && entry.programLoop === true;
+}
+
+/**
+ * Whether a run's turn messages follow a scaffold's thread context: the
+ * program loop and the `snippet-slim` arm, on a driver that keeps one
+ * (`keepsThreadContext`). Never the fixed loop, never the released snippet
+ * loop.
+ */
+export function threadContextOf(c: Pick<RunConfig, "loop" | "driver">): boolean {
+  return c.loop !== undefined && keepsThreadContext(c.driver);
+}
+
+/** Why `--loop snippet-slim` cannot run as stated, or null: codex only, never a scored tier, never fan-out. */
+function snippetSlimRefusal(c: Pick<RunConfig, "driver" | "episode" | "fanout"> & { loop: "snippet-slim" }): string | null {
+  if (!keepsThreadContext(c.driver)) {
+    return entryOf(c.driver).kind === "loop"
+      ? `--loop snippet-slim is a scaffold thread's context rule, which runs on codex; the ${c.driver} driver rebuilds its window every turn`
+      : `--loop snippet-slim is a scaffold thread's context rule, which runs on codex; the ${c.driver} driver sends a fresh message once in a turn that runs for hours`;
+  }
+  if (c.episode !== undefined && isScoredEpisode(c.episode)) return `--loop snippet-slim is a probe arm's; --episode ${c.episode} is a scored episode, which runs the snippet loop as released`;
+  if (c.fanout !== undefined) return "--loop snippet-slim drives one character; a fan-out run's turn carries no event window";
+  return null;
+}
+
+/** `--loop`: `program`, `snippet-slim`, or `snippet`, which is the default and stated as absent. */
+export function loopOf(v: string | boolean | undefined): "program" | "snippet-slim" | undefined {
+  if (v === undefined || v === "snippet") return undefined;
+  if (v === "program" || v === "snippet-slim") return v;
+  throw new Error(`--loop takes program, snippet-slim or snippet, got ${JSON.stringify(v)}`);
 }
 
 /**

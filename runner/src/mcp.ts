@@ -50,7 +50,8 @@ export class McpServer extends StackMcpServer {
     super(
       {
         list: () => toolsFor(ctx),
-        coerce: coerceToolArgs,
+        // A program-loop context's own tools coerce by their own schemas (`ToolContext.program`).
+        coerce: (name, raw) => coerceToolArgs(name, raw, ctx.program !== undefined ? { yield: ctx.yieldWake !== undefined } : undefined),
         call: (name, args, origin) => callTool(ctx, name, args, origin),
         appendPending: (result) => appendPendingActionHints(ctx, result),
       },

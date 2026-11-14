@@ -1,0 +1,53 @@
+{
+  "id": "program-probe",
+  "version": 2,
+  "question": "Does letting the model keep its code as named routines the harness runs, and sleep until something wakes it, cost less per level than the snippet loop, without slowing progress, now that the model can read its own files back and a refusal it has seen no longer wakes it, on the fixed loop and on codex?",
+  "note": "The program spike's second round (operator, 2026-11-13), on the spike branch only: nothing of it merges before the spike is adopted. The three arms of program-probe@1 on one new image built from the spike branch at 655cfc60 (stack 82ce0d8), which carries round 1's fixes: read_file and yield results are exempt from the window's 4,000-char message cap; a refusal a tool result has already carried no longer wakes a later sleep; a program host drops the SDK's background-routine advice from an abandoned walk's note. The same image runs the program loop on the codex driver: the pause after each codex turn is the sleep, whose wake opens the next turn's message, yield is held on the MCP call under a 600 s tool timeout, and either sleep ends on a stop request. The snippet arm's prompt, tools and window are the release's. snippet passes no loop flag; program passes --loop program; program-yield adds --yield true. All three arms pin, by tag and digest, the probe image probe-program-655cfc60e916. One cell, human-paladin. A 90-minute clock with idle at 20 minutes, no no-XP watchdog and no stopping level; resume is false. Assignments are the store row's: DeepSeek V4.1 Flash on openrouter-v1 (snippet x1 and program-yield x2: DeepSeek never replied without a tool call in round 1, so the plain program arm could never sleep), and GPT-6.1 Sol on codex on chatgpt-1 (one run per arm), all started together.",
+  "cells": [
+    {
+      "id": "human-paladin",
+      "race": 1,
+      "class": 2,
+      "note": "The start the earlier entrypoint spike ran from."
+    }
+  ],
+  "arms": [
+    {
+      "id": "snippet",
+      "note": "The control: the spike image with no loop flag, the snippet loop as released.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:probe-program-655cfc60e916@sha256:778ab5971dfc9a47a8d420ed65f45268ad0f0108d721957d5b046a5166a49cc7"
+    },
+    {
+      "id": "program",
+      "note": "Routines in a file workspace, run by the harness; a reply with no tool call sleeps until a wake.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:probe-program-655cfc60e916@sha256:778ab5971dfc9a47a8d420ed65f45268ad0f0108d721957d5b046a5166a49cc7",
+      "args": [
+        "--loop",
+        "program"
+      ]
+    },
+    {
+      "id": "program-yield",
+      "note": "The program arm, plus a yield tool whose call is held open until a wake and returns it.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:probe-program-655cfc60e916@sha256:778ab5971dfc9a47a8d420ed65f45268ad0f0108d721957d5b046a5166a49cc7",
+      "args": [
+        "--loop",
+        "program",
+        "--yield",
+        "true"
+      ]
+    }
+  ],
+  "objective": null,
+  "stopAtLevel": null,
+  "budget": {
+    "episodeMs": 5400000,
+    "idleMs": 1200000,
+    "noXpMs": null,
+    "maxToolCalls": 3000
+  },
+  "wiki": true,
+  "wikiCoords": false,
+  "resume": false,
+  "maxAttemptsPerCell": 3
+}

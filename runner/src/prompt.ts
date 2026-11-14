@@ -20,7 +20,7 @@
  * describes is the same.
  */
 
-import type { Harness } from "./config";
+import type { Harness, RunConfig } from "./config";
 import { harnessDriver } from "./drivers";
 import type { EpisodeId } from "./episodes";
 
@@ -193,15 +193,157 @@ export const TOOLS_NOT_AMBIENT = {
  * and context sentences in it, and — with `wiki: false` — without the
  * reference tool.
  */
-function bodyFor(harness: Harness, wiki = true): string {
+function bodyFor(harness: Harness, wiki = true, program?: ProgramPrompt, snippetSlim = false): string {
   // The wiki-on rendering is `BODY_HEAD` untouched, by construction rather
   // than by test: `wiki: false` is two exact deletions from it and nothing
   // else, so every run that has the reference surface hashes as it always did.
+  // The program loop's body is built from it by exact replacements
+  // (`programBodyHead`), so the same two deletions apply to it.
+  const base = program !== undefined ? programBodyHead(program) : snippetSlim ? SNIPPET_SLIM_BODY_HEAD : BODY_HEAD;
   const head = wiki
-    ? BODY_HEAD
-    : BODY_HEAD.replace(WIKI_TOOL_BULLET, "").replace(TOOLS_NOT_AMBIENT.withWiki, TOOLS_NOT_AMBIENT.withoutWiki);
-  return `${head}${snippetDeltaClause(harness)} ${contextSentence(harness)} ${BODY_TAIL}`;
+    ? base
+    : base.replace(WIKI_TOOL_BULLET, "").replace(TOOLS_NOT_AMBIENT.withWiki, TOOLS_NOT_AMBIENT.withoutWiki);
+  const tail = program === undefined ? BODY_TAIL : program.yield ? `${PROGRAM_BODY_TAIL} ${PROGRAM_YIELD_TAIL}` : PROGRAM_BODY_TAIL;
+  return `${head}${snippetDeltaClause(harness)} ${contextSentence(harness)} ${tail}`;
 }
+
+// ------------------------------------------------------------ program loop
+
+/**
+ * The program loop's prompt (`loop: "program"`, a probe arm of a spike not
+ * yet adopted; wording approved by the operator, 2026-11-12). It is a second
+ * body beside the snippet loop's, never an edit of it: each passage that
+ * describes the snippet loop's persistent REPL is replaced exactly
+ * (`replaceExactly`, which throws at load when a target is missing or
+ * repeated), so every other byte — the SDK, the state shapes, the other tools
+ * — is the same on both loops, and the snippet loop's prompt is untouched.
+ * `yield` adds one tool bullet and one closing sentence.
+ */
+export interface ProgramPrompt {
+  /** The `yield` tool is served (`RunConfig.yield`). */
+  yield: boolean;
+}
+
+/** The program prompt a run renders, or undefined on the snippet loop. */
+export function programPromptOf(config: Pick<RunConfig, "loop" | "yield">): ProgramPrompt | undefined {
+  return config.loop === "program" ? { yield: config.yield === true } : undefined;
+}
+
+/** `text` with `from` replaced by `to`; throws unless `from` occurs exactly once. */
+function replaceExactly(text: string, from: string, to: string): string {
+  const at = text.indexOf(from);
+  if (at === -1 || text.indexOf(from, at + from.length) !== -1) {
+    throw new Error(`prompt.ts: a program-loop replacement target is not in the snippet body exactly once: ${from.slice(0, 80)}…`);
+  }
+  return text.slice(0, at) + to + text.slice(at + from.length);
+}
+
+/** The opening's runtime paragraph on the program loop. */
+export const PROGRAM_RUNTIME_LEAD =
+  "You do not play directly. You write TypeScript that runs in a sandbox holding one SDK client for your game session — snippets, which run once, and routines, functions in your own files that the harness keeps running — and you supervise the results.";
+
+const PROGRAM_SECTIONS = `## Your program
+
+Your workspace is a small directory of files that outlives the sandbox; read_file, write_file, edit_file and delete_file are how you change it. main.ts at its root is your program, and it imports your other files by relative path (import { pickTarget } from "./lib/combat").
+
+Every async function main.ts exports is a routine, named by its export:
+
+export async function grind(args) { while (!signal.aborted) { … } }
+
+An async function in another file is a routine only once main.ts exports it (export { patrol } from "./lib/patrol"), and every file, main.ts included, holds at most 32,000 characters.
+
+start_routine({ name: "grind", args: { … } }) runs it, and the harness keeps it running, whether you are awake or not, until it returns, throws or you stop it with stop_routine({ name: "grind" }). A routine has no time limit; a loop is a while you write. Stopping a routine aborts its signal, so its pending sdk waits reject with EventAbortedError and a move it has in flight is stopped. A name that is already running is not started twice: the refusal says since when.
+
+A save loads at once: a write_file, edit_file or delete_file that changes main.ts or a file it imports loads your program afresh, and the tool's result says so. A program that fails to load (a syntax error, an import of a file not written yet) changes nothing: the result carries the error and the code already running keeps running. When a load succeeds, every running routine is stopped and started again from the top with the same arguments. Variables in your files start over at every load; memory does not.
+
+## Snippets
+
+run_snippet runs TypeScript once, now: to act once, to look at the world, or to try a function from your files, which a snippet imports as main.ts does (import { pickTarget } from "./lib/combat"). await works at the top level. A single-expression snippet returns its value, REPL-style; otherwise use return or console.log to see results. Nothing a snippet declares or starts outlives it: its bindings, timers and event listeners end when it returns, so what must keep running is a routine, and what must be remembered goes in memory or the scratchpad. Routines and snippets see the same ambient names:`;
+
+const PROGRAM_TOOL_BULLETS = `- run_snippet: run TypeScript once, now, in the sandbox. Nothing it starts outlives it.
+- read_file / write_file / edit_file / delete_file: your workspace files. write_file creates a file or replaces its whole content; edit_file({ path, old, new }) changes one part in place under edit_scratchpad's rules (old matches exactly and once, or pass replaceAll); delete_file removes one. Each file holds at most 32,000 characters and the workspace 1 MiB; a change past a limit is refused and saves nothing. No file is shown to you unless you read it; the scratchpad is unchanged.
+- start_routine / stop_routine: start_routine({ name, args? }) runs an exported function of main.ts as a routine, passing args as its one argument; stop_routine({ name }) stops it. Each answers with the state of every routine.`;
+
+/** The `yield` tool's bullet, after the routine tools' (`yield` only). */
+const PROGRAM_YIELD_BULLET =
+  "\n- yield: sleep until something wakes you. yield({ seconds? }) returns when a wake arrives, or after seconds (at most 300, the default), and its result is the [wake] block.";
+
+/** Each passage of the snippet body the program body replaces, and with what. */
+function programReplacements(program: ProgramPrompt): readonly [string, string][] {
+  return [
+    [
+      "## The snippet runtime\n\nSnippets run in one long-lived process. Top-level const/let/var/function/class declarations persist across snippets (destructured declarations may not persist; prefer simple names or assign to globalThis). Background routines persist too: a setInterval, or an async function you call without awaiting, keeps running between snippets and after the snippet that started it returns — so work longer than one snippet's time limit belongs in one, and you stop it from a later snippet. await works at the top level. A single-expression snippet returns its value, REPL-style; otherwise use return or console.log to see results. import is not available — everything you need is ambient:",
+      PROGRAM_SECTIONS,
+    ],
+    ["safe to compose, including from a background routine.", "safe to compose, including from a routine."],
+    [
+      "- signal: this snippet's AbortSignal. Aborted when the snippet is abandoned; check signal.aborted in long loops, or pass it to your own timers.",
+      "- signal: this snippet's or this routine's AbortSignal. A snippet's is aborted when it returns or is abandoned, a routine's when it is stopped or restarted; check signal.aborted in long loops, or pass it to your own timers.\n" +
+        '- memory: one plain JSON object the harness keeps for you, saved as memory.json in your workspace. Assign to it (memory.phase = "grind"): it is saved as your code runs and loaded again when the sandbox restarts. It holds at most 32,000 characters of JSON and only plain values — no Map, no BigInt, no cycles. read_file shows it; only your code changes it.\n' +
+        '- wake(reason): ask for your own attention from a routine, e.g. wake("bags full"). It wakes you if you are asleep, and the next wake lists it either way.',
+    ],
+    [
+      'bindings and routines started by earlier snippets are untouched. A long walk is the usual way to hit that limit (on foot roughly 200y; less swimming, more mounted), so dispatch those with await sdk.moveToAsync(target), or from a background routine, and poll state.self.position or the WB_MOVE_RESULT event instead of awaiting sdk.moveTo inline. A single-expression snippet that evaluates to a promise waits for that promise, so launch a background routine as a statement followed by a value (globalThis.trip = (async () => { … })().catch(String); "started"). A snippet that blocks the event loop gets the whole sandbox killed and restarted, losing all bindings and routines — you will be told when that happens.',
+      "your routines are untouched. A long walk is the usual way to hit that limit (on foot roughly 200y; less swimming, more mounted), so a long walk belongs in a routine, where await sdk.moveTo(target) has no limit to hit. Each character has one move at a time and the newest wins: a move from a snippet replaces the move a routine has in flight, the routine's call answers superseded, and both are told which replaced which. Code that blocks the event loop — a synchronous loop that never awaits — gets the whole sandbox killed and restarted. Your files, memory and scratchpad survive it and your routines are started again from the top; when a routine was what blocked, none is restarted and you are told which were running.",
+    ],
+    [
+      "- run_snippet: execute TypeScript in the sandbox. Your only way to act.",
+      program.yield ? `${PROGRAM_TOOL_BULLETS}${PROGRAM_YIELD_BULLET}` : PROGRAM_TOOL_BULLETS,
+    ],
+    [
+      "There is no read tool: every turn's context already carries the scratchpad as last written, and inside a snippet await scratchpad.read() returns it.",
+      "There is no read tool: the scratchpad as last written is in this turn's context or earlier in this conversation, and inside a snippet await scratchpad.read() returns it.",
+    ],
+    [
+      "## Each turn\n\nEvery turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad.",
+      "## Each turn\n\nEvery turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad, or a line saying it is unchanged since you last saw it in this conversation. After you have slept, the turn begins with a [wake] block: why you were woken and what your routines did meanwhile — each routine's state and how long ago it last acted, new errors with the lines of your files they came from, refusals with their hints, moves that replaced one another, what changed for your character, and the last lines your routines printed.",
+    ],
+  ];
+}
+
+function programBodyHead(program: ProgramPrompt): string {
+  return programReplacements(program).reduce((text, [from, to]) => replaceExactly(text, from, to), BODY_HEAD);
+}
+
+// ------------------------------------------------------- snippet-slim arm
+
+/**
+ * Whether a run renders the `snippet-slim` arm's body (`loop:
+ * "snippet-slim"`, operator 2026-11-13): the snippet loop under a scaffold's
+ * thread context, where a turn's message may carry a line in place of the
+ * pad (D8). Its two sentences that say every turn carries the pad say what
+ * the program arms' say instead, and nothing else changes. "The most recent
+ * events" stays: under the rule a turn still carries the newest events, and
+ * its header says how many are new.
+ */
+export function snippetSlimPromptOf(config: Pick<RunConfig, "loop">): boolean {
+  return config.loop === "snippet-slim";
+}
+
+/** The snippet body with the program arms' two pad sentences (`programReplacements`) in place of its own. */
+const SNIPPET_SLIM_BODY_HEAD = (
+  [
+    [
+      "There is no read tool: every turn's context already carries the scratchpad as last written, and inside a snippet await scratchpad.read() returns it.",
+      "There is no read tool: the scratchpad as last written is in this turn's context or earlier in this conversation, and inside a snippet await scratchpad.read() returns it.",
+    ],
+    [
+      "## Each turn\n\nEvery turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad.",
+      "## Each turn\n\nEvery turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad, or a line saying it is unchanged since you last saw it in this conversation.",
+    ],
+  ] as const
+).reduce((text, [from, to]) => replaceExactly(text, from, to), BODY_HEAD);
+
+/** The last sentences of the program prompt: what a reply with no tool call does, and what wakes the model. */
+export const PROGRAM_BODY_TAIL =
+  "Text without a tool call does nothing in the world. A reply with no tool call puts you to sleep while your routines keep running. You are woken when a routine ends, by the first occurrence of each new error or refusal in your routines, by a wake(reason) call, a death, a sandbox restart or a harness notice, and after five minutes at the latest. Gaining a level or completing a quest does not wake you; the next wake reports it.";
+
+/** The sentence `yield` adds after `PROGRAM_BODY_TAIL`. */
+export const PROGRAM_YIELD_TAIL = "yield sleeps the same way and returns the wake as its result.";
+
+/** The opening sections on the program loop: the runtime paragraph replaced, everything else as it reads. */
+const PROGRAM_GOAL_SECTION = replaceExactly(GOAL_SECTION, RUNTIME_LEAD, PROGRAM_RUNTIME_LEAD);
+const PROGRAM_WORLD_SECTION = replaceExactly(WORLD_SECTION, RUNTIME_LEAD, PROGRAM_RUNTIME_LEAD);
 
 /**
  * The one sentence a harness whose driver takes the snippet delta adds
@@ -354,13 +496,17 @@ export function buildSystemPrompt(
   harness: Harness = "wrathbench",
   wiki = true,
   episodeMs: number | null = null,
+  /** The program loop's prompt (`programPromptOf`); undefined is the snippet loop, this prompt as it always was. */
+  program?: ProgramPrompt,
+  /** The `snippet-slim` arm's two pad sentences (`snippetSlimPromptOf`), on the snippet loop only; false is this prompt as it always was. */
+  snippetSlim = false,
 ): string {
   const steered = objective !== undefined && objective.trim().length > 0;
-  const parts = [steered ? WORLD_SECTION : GOAL_SECTION];
+  const parts = program === undefined ? [steered ? WORLD_SECTION : GOAL_SECTION] : [steered ? PROGRAM_WORLD_SECTION : PROGRAM_GOAL_SECTION];
   const tier = steered && episode === "probing" ? probingClockSentence(episodeMs) : episodeSection(episode);
   if (tier !== undefined) parts.push(tier);
   if (steered) parts.push(objectiveSection(objective.trim()));
-  parts.push(bodyFor(harness, wiki));
+  parts.push(bodyFor(harness, wiki, program, snippetSlim));
   return parts.join("\n\n");
 }
 
@@ -468,6 +614,14 @@ export function continuedSessionNote(o: {
   );
 }
 
+/**
+ * What a resumed program-loop run kept, in place of the snippet loop's
+ * "Conversation history was not preserved; your scratchpad was." A draft
+ * for the operator's review (the approved prompt left it to the runner).
+ */
+export const PROGRAM_RESUME_KEPT =
+  "Conversation history was not preserved; your scratchpad, your files and memory were, and the routines that were running are started again from the top.";
+
 export function resumeSessionNote(o: {
   character: string | undefined;
   race: number;
@@ -478,10 +632,12 @@ export function resumeSessionNote(o: {
   seen: string;
   raceName?: string | null;
   className?: string | null;
+  /** The run is on the program loop: what it kept is said in that loop's words (`PROGRAM_RESUME_KEPT`). */
+  program?: boolean | undefined;
 }): string {
   const head =
     `the runner process was restarted and this run resumed after a pause, ${o.clock}. ` +
-    `Conversation history was not preserved; your scratchpad was. `;
+    (o.program === true ? `${PROGRAM_RESUME_KEPT} ` : `Conversation history was not preserved; your scratchpad was. `);
   if (o.character === undefined) {
     return head + freshCharacterNote({ race: o.race, class: o.class });
   }

@@ -1,0 +1,62 @@
+{
+  "id": "program-probe",
+  "version": 6,
+  "question": "On GPT-6 Astra on codex, does the program loop reach the snippet loop's progress at a fraction of its input, as it does on GPT-6.1 Sol? (snippet-slim stands in for the snippet loop: round 4 showed its event delta does not fire on codex.)",
+  "note": "The program spike's sixth round (operator, 2026-11-13: Astra on program vs snippet-slim), on the spike branch only: nothing of it merges before the spike is adopted. One new image built from the spike branch at 3e34dcd5 (stack 2542401), which adds to round 5 one launch fix and nothing the model sees: a run whose /lease cannot reach the module retries for about a minute and then fails its launch, where it used to start without its session secret and play its episode unauthenticated (two runs of round 5's second assignment did). Arms, prompts and flags are round 5's: snippet passes no loop flag; snippet-slim passes --loop snippet-slim (codex only); program passes --loop program; program-yield adds --yield true. All four arms pin, by tag and digest, the probe image probe-program-3e34dcd53cbe. One cell, human-paladin. A 90-minute clock with idle at 20 minutes, no no-XP watchdog and no stopping level; resume is false. Runs of a round start together.",
+  "cells": [
+    {
+      "id": "human-paladin",
+      "race": 1,
+      "class": 2,
+      "note": "The start the earlier entrypoint spike ran from."
+    }
+  ],
+  "arms": [
+    {
+      "id": "snippet",
+      "note": "The control: the spike image with no loop flag, the snippet loop as released.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:probe-program-3e34dcd53cbe@sha256:8832f476de16a5639d0f2503b1972ee5172db890e474dd40f69b0896ded33d45"
+    },
+    {
+      "id": "snippet-slim",
+      "note": "The snippet loop under a scaffold's thread context: the scratchpad only when the thread does not hold it, and only the events newer than the thread's last message.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:probe-program-3e34dcd53cbe@sha256:8832f476de16a5639d0f2503b1972ee5172db890e474dd40f69b0896ded33d45",
+      "args": [
+        "--loop",
+        "snippet-slim"
+      ]
+    },
+    {
+      "id": "program",
+      "note": "Routines in a file workspace, run by the harness; a reply with no tool call sleeps until a wake. On codex under the same thread context.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:probe-program-3e34dcd53cbe@sha256:8832f476de16a5639d0f2503b1972ee5172db890e474dd40f69b0896ded33d45",
+      "args": [
+        "--loop",
+        "program"
+      ]
+    },
+    {
+      "id": "program-yield",
+      "note": "The program arm, plus a yield tool whose call is held open until a wake and returns it.",
+      "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:probe-program-3e34dcd53cbe@sha256:8832f476de16a5639d0f2503b1972ee5172db890e474dd40f69b0896ded33d45",
+      "args": [
+        "--loop",
+        "program",
+        "--yield",
+        "true"
+      ]
+    }
+  ],
+  "objective": null,
+  "stopAtLevel": null,
+  "budget": {
+    "episodeMs": 5400000,
+    "idleMs": 1200000,
+    "noXpMs": null,
+    "maxToolCalls": 3000
+  },
+  "wiki": true,
+  "wikiCoords": false,
+  "resume": false,
+  "maxAttemptsPerCell": 3
+}

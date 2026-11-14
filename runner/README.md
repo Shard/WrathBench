@@ -1261,6 +1261,106 @@ of every request whose prompt held it: the record has `[redacted]` where the
 request had the secret. That was already true of a full record, which could
 not reproduce those bytes either.
 
+## The program loop (a probe arm, not adopted)
+
+`--loop program` (config `loop: "program"`) is a spike's probe arm, on the
+fixed loop and the codex driver, and refused on a scored tier, at fan-out, on
+a continuation and on claude-code and pi, whose one turn runs for hours
+(`programLoopRefusal`, `DriverEntry.programLoop`; a campaign pair is refused
+the same way). The sandbox then hosts the model's program (the stack's
+`SandboxHostOptions.program`, wrath-mcp `docs/ARCHITECTURE.md`, "A program"):
+a file workspace in the run directory's `program/`, rooted at `main.ts`, whose
+exported async functions are routines the stack runs and tracks. The model is served
+the stack's `programTools` (the one-off `run_snippet`, four file tools, two
+routine tools) in place of the core `run_snippet`, and a second prompt body
+built from the snippet one by exact replacements (`prompt.ts`), so everything
+else it is told is the snippet loop's bytes.
+
+A reply with no tool call sleeps instead of being re-prompted after the step
+interval (`src/wake.ts`). A wake is a routine ending, the first error or
+refusal of a signature since a load, a `wake(reason)` call, a death, the event
+stream closing, a sandbox restart or a harness notice; the first reason opens
+a two-second window so a cascade is one wake, the step interval is the floor
+and five minutes the cap. Level-ups and quest completions do not wake; the
+next wake reports them. `--yield true` adds a `yield` tool held open the same
+way inside a turn, whose result is the wake. What a wake shows is facts only,
+rendered by a pure function (`renderWake`) and scrubbed of the run's secrets:
+every routine as it stands, new errors with the model's own file lines,
+refusals with their hints, moves that replaced one another, `wake` calls, what
+changed for the character, and the routines' last console entries (at most
+20, in at most 2,000 characters, since one log call can print an object over
+many lines). A routine's error or returned value is shown whole once; a later
+routine line refers to it (`(value shown before)`). The stack's program host
+keeps that ledger for its own tool results and the wake alike; a wake marks
+what it showed only when its block stays in the conversation (a `yield`
+result, a codex turn's message, not the fixed loop's turn-end message), and
+the ledger is cleared when the conversation lost it (a codex compaction or
+thread change, a fixed-loop trim, a routine result the fixed loop's window
+cut) and in a new process. After a
+turn-end sleep it opens every request of that wake, right after `[turn N]`;
+after a `yield` it is the tool's result and is not repeated. What the model
+has already been told wakes no later sleep, and still shows in the next wake:
+a refusal whose hint a tool result carried (the stack hands the runner each
+result's hints as it is built, `onHintsDelivered`; matched by signature, so a
+refusal that lands after the drain still wakes, and one whose fact lands late
+does not, until the next load), a death a `dead` hint reported, a routine end
+the routine tools' lines showed, and a `wake(reason)` from a run those lines
+showed as over or replaced. `read_file` and `yield` results are exempt from
+the window's 4,000-character message cap (`WINDOW_UNCAPPED_TOOLS`): a file is
+bounded by the 32,000-character file cap, and a wake by its own caps.
+
+On codex the CLI ends its turn every few calls, so the pause after each turn
+is the sleep, and the wake opens the next turn's message; `yield` is held on
+the MCP call, under a tool timeout of 600 s rather than 300 s
+(`PROGRAM_TOOL_TIMEOUT_SEC`). Either sleep also ends on a stop request or a
+watchdog verdict.
+
+A codex thread keeps what it was sent, so its turn messages follow a thread
+context (`ThreadContext`, `threadContextOf`): on the program loop and on the
+`--loop snippet-slim` arm, never the released snippet loop or the fixed loop.
+The scratchpad goes whole only when the thread does not already hold it as it
+stands (`PadSeen`, the spike's D8): the first message of a thread, the first
+after a compaction, and any after the pad changed outside the conversation (a
+snippet's or a routine's write); after the model's own `write_scratchpad` or
+`edit_scratchpad` the thread holds it, and a line with its size stands in its
+place. The event window carries only the events after the last one the thread
+was sent, found by identity (`EventsSeen`), under
+`[events: N new since your last message; earlier ones are above in this
+conversation]`; when that event is no longer in the window (more arrived than
+it holds, or a sandbox restart) the window goes plainly. After a compaction or
+a move to another thread both go whole again, the window's header adding
+`sent in full again: this conversation no longer holds the earlier ones`; a
+turn whose rollout could not be read sends both whole and claims nothing. A
+resumed run's thread is new, so its first message is plain. The message that
+reaches a thread the CLI moved to unannounced is the one meant for the old
+thread: the CLI names its thread only once the turn has started.
+
+`--loop snippet-slim` is the snippet loop under that context, codex only and
+refused on a scored tier and at fan-out (claude-code and pi send a fresh
+message once in a turn that runs for hours, so the rule would save nothing). Its
+prompt and its `edit_scratchpad` miss say what the program arms' say about the
+pad, and nothing else differs from the snippet loop's.
+
+Time asleep is not `idle`, and a restart the program is blamed for (a blocked
+event loop with no snippet in flight) counts toward `snippet-runaway` as a
+snippet's does. A resume finds the workspace where it was, and the stack loads
+the program and starts the routines that were running from the top before the
+first request.
+
+Records: `wake` per sleep (`via` `turn-end` or `yield`, `turn`, `fired`,
+`sleptMs`, `maxMs`, the `reasons`, the rendered `block`), `deploy` per load, `routine` per routine
+end, restart, `wake` call and pre-emption, and `program_error` per fresh error
+or refusal and per repeat count at each wake. `bun wb inspect requests` reads
+wakes per hour, requests per wake (on codex, responses per wake too) and the
+share asleep off the `wake` records; `bun wb inspect messages` sizes each
+turn's message by part and prints the wake blocks.
+`events_served` under the rule logs the events the message showed, with
+`mode` `new` or `resent`, and `inspect messages` counts each form of the window
+and its mean size. `loop` (`program` or `snippet-slim`) and `yield` are
+config and comparability keys, absent on the snippet loop, and `context:
+"slim"` is a comparability key on every run under the thread context, absent
+on every run sent the full context.
+
 ## The sandbox
 
 One long-lived Bun child process per session, holding one SDK client: the

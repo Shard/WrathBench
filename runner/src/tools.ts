@@ -17,12 +17,15 @@ import type { Database } from "bun:sqlite";
 import {
   appendPendingActionHints as appendPending,
   coreTools,
+  programEditScratchpad,
+  programTools,
   toolCallCount,
   ToolSet,
   type CallOrigin,
   type CoreToolContext,
   type CoreToolRender,
   type ToolDef,
+  type ToolProgram,
   type ToolResult,
   type ToolSpec,
 } from "@wrathbench/mcp/tools";
@@ -116,6 +119,27 @@ export interface ToolContext extends CoreToolContext {
    * false, which is the fixed loop's case: it rebuilds the HUD every turn.
    */
   snippetDelta?: boolean | undefined;
+  /**
+   * The model's program, on the program loop (`loop: "program"`): the
+   * sandbox host's `program`, which the file and routine tools answer
+   * through. Its presence is what serves the program loop's tools.
+   */
+  program?: ToolProgram | undefined;
+  /**
+   * The `yield` tool's sleep, on a program-loop run with `yield`: held open
+   * until a wake or `seconds`, answering the wake block (`wake.ts`). Its
+   * presence is what serves the tool.
+   */
+  yieldWake?: ((seconds: number) => Promise<string>) | undefined;
+  /** Called after a routine tool answered, with its text: its routine lines are the model's news of every routine's state. */
+  onRoutinesShown?: ((text: string) => void) | undefined;
+  /**
+   * The run's turn messages follow a scaffold's thread context
+   * (`threadContextOf`, config.ts), so the pad as last written may be in an
+   * earlier message: `edit_scratchpad`'s not-found refusal says so. The
+   * program loop's tools always do; this is the `snippet-slim` arm's.
+   */
+  threadContext?: boolean | undefined;
 }
 
 /**
@@ -441,6 +465,106 @@ const readLogTool: ToolSpec<ToolContext> = {
   },
 };
 
+// ------------------------------------------------------------ program loop
+
+/** The longest a `yield` sleeps, and its default: five minutes (`WAKE_CAP_MS`). */
+const YIELD_MAX_SECONDS = 300;
+
+/**
+ * `yield`: the program loop's sleep inside a turn (a `yield` arm only). The
+ * call is held open until a wake or its `seconds`, and its result is the
+ * wake block; the wake is the runner's, so the tool is too.
+ */
+const yieldTool: ToolSpec<ToolContext> = {
+  def: {
+    name: "yield",
+    description:
+      "Sleep until something wakes you: a routine ending, the first occurrence of a new error or refusal in your routines, a wake(reason) call, a death, a sandbox restart, a harness notice, or `seconds` passing (at most 300, the default). Your routines keep running while you sleep. Returns the [wake] block: why you woke and what your routines did meanwhile.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        seconds: { type: "number", minimum: 1, maximum: YIELD_MAX_SECONDS, description: `The longest to sleep, in seconds. At most ${YIELD_MAX_SECONDS}, the default.` },
+      },
+      additionalProperties: false,
+    },
+  },
+  // Lenient like `recent_events`: a number out of range is clamped, not refused.
+  schema: z
+    .strictObject({
+      seconds: z.coerce
+        .number()
+        .transform((n) => (Number.isFinite(n) ? Math.min(YIELD_MAX_SECONDS, Math.max(1, n)) : YIELD_MAX_SECONDS))
+        .default(YIELD_MAX_SECONDS),
+    })
+    .prefault({}),
+  help: `yield expects { seconds?: number } — the longest to sleep, 1-${YIELD_MAX_SECONDS} seconds (default ${YIELD_MAX_SECONDS}).`,
+  aliases: { secs: "seconds", timeout: "seconds", maxSeconds: "seconds" },
+  enabled: (ctx) => ctx.yieldWake !== undefined,
+  run: async (ctx, args) => {
+    if (ctx.yieldWake === undefined) return { text: "yield is not served on this run", isError: true };
+    return { text: await ctx.yieldWake((args as { seconds: number }).seconds) };
+  },
+};
+
+/** The program loop's context: the runner's, with the program the tools answer through. */
+type ProgramContext = ToolContext & { program: ToolProgram };
+
+/** The program loop's own tools (the stack's `programTools`), rendered the benchmark's way. */
+const PROGRAM = programTools<ProgramContext>(RENDER as CoreToolRender<ProgramContext>);
+
+/** A routine tool, telling the loop its answer showed every routine. */
+function routineTool(spec: ToolSpec<ProgramContext>): ToolSpec<ProgramContext> {
+  return {
+    ...spec,
+    run: async (ctx, args, origin) => {
+      const res = await spec.run(ctx, args, origin);
+      ctx.onRoutinesShown?.(res.text);
+      return res;
+    },
+  };
+}
+
+/**
+ * The program loop's tools, in the order the program prompt lists them: the
+ * one-off `run_snippet`, the four file tools, the two routine tools, `yield`
+ * on a `yield` arm, then the benchmark's others as the snippet loop serves
+ * them.
+ */
+function programToolList(withYield: boolean): ToolSpec<ProgramContext>[] {
+  return [
+    PROGRAM.run_snippet,
+    PROGRAM.read_file,
+    PROGRAM.write_file,
+    PROGRAM.edit_file,
+    PROGRAM.delete_file,
+    routineTool(PROGRAM.start_routine),
+    routineTool(PROGRAM.stop_routine),
+    ...(withYield ? [yieldTool as ToolSpec<ProgramContext>] : []),
+    CORE.recent_events as ToolSpec<ProgramContext>,
+    CORE.state_summary as ToolSpec<ProgramContext>,
+    searchReferenceTool as ToolSpec<ProgramContext>,
+    CORE.write_scratchpad as ToolSpec<ProgramContext>,
+    // Its not-found refusal says the pad may be in an earlier message (the scaffold rule, D8).
+    programEditScratchpad(CORE.edit_scratchpad as ToolSpec<ProgramContext>),
+    reflectTool as ToolSpec<ProgramContext>,
+    logStatusTool as ToolSpec<ProgramContext>,
+    readLogTool as ToolSpec<ProgramContext>,
+  ];
+}
+const RUNNER_PROGRAM_TOOLS = new ToolSet<ProgramContext>(programToolList(false));
+const RUNNER_PROGRAM_YIELD_TOOLS = new ToolSet<ProgramContext>(programToolList(true));
+
+/** Which program-loop tools a run serves; undefined on the snippet loop. */
+export interface ProgramTools {
+  yield: boolean;
+}
+
+/** The program loop's set for `program`, or null on the snippet loop. */
+function programSet(program: ProgramTools | undefined): ToolSet<ToolContext> | null {
+  if (program === undefined) return null;
+  return (program.yield ? RUNNER_PROGRAM_YIELD_TOOLS : RUNNER_PROGRAM_TOOLS) as unknown as ToolSet<ToolContext>;
+}
+
 /** The benchmark's nine, in the order they are served. */
 const RUNNER_TOOLS = new ToolSet<ToolContext>([
   CORE.run_snippet,
@@ -455,6 +579,23 @@ const RUNNER_TOOLS = new ToolSet<ToolContext>([
 ]);
 
 export const TOOLS: ToolDef[] = RUNNER_TOOLS.defs;
+
+/**
+ * The nine as the `snippet-slim` arm serves them: the same list and
+ * definitions, with `edit_scratchpad`'s not-found refusal saying the pad may
+ * be in an earlier message, as the program loop's does (D8).
+ */
+const RUNNER_THREAD_TOOLS = new ToolSet<ToolContext>([
+  CORE.run_snippet,
+  CORE.recent_events,
+  CORE.state_summary,
+  searchReferenceTool,
+  CORE.write_scratchpad,
+  programEditScratchpad(CORE.edit_scratchpad),
+  reflectTool,
+  logStatusTool,
+  readLogTool,
+]);
 
 /**
  * A tool context of a fan-out run (`fanout-run.ts`): the same context, with
@@ -504,8 +645,12 @@ function fanoutContext(ctx: ToolContext): FanoutContext | null {
 
 /** The dispatcher a context is served by: the fan-out set for a fan-out run, else the nine. */
 function toolSetOf(ctx: ToolContext): { set: ToolSet<ToolContext>; ctx: ToolContext } {
+  // A program-loop run's context carries its program (`ToolContext.program`).
+  const program = ctx.program !== undefined ? programSet({ yield: ctx.yieldWake !== undefined }) : null;
+  if (program !== null) return { set: program, ctx };
   const fan = fanoutContext(ctx);
-  return fan !== null ? { set: RUNNER_FANOUT_TOOLS as unknown as ToolSet<ToolContext>, ctx: fan } : { set: RUNNER_TOOLS, ctx };
+  if (fan !== null) return { set: RUNNER_FANOUT_TOOLS as unknown as ToolSet<ToolContext>, ctx: fan };
+  return { set: ctx.threadContext === true ? RUNNER_THREAD_TOOLS : RUNNER_TOOLS, ctx };
 }
 
 /**
@@ -514,12 +659,24 @@ function toolSetOf(ctx: ToolContext): { set: ToolSet<ToolContext>; ctx: ToolCont
  * reference wiki, without `search_reference` at all. `TOOLS` itself is the
  * names-first, wiki-on (default) rendering.
  */
-export function toolsFor(opts: { wikiCoords?: boolean | undefined; wikiSearch?: boolean | undefined; sandbox?: unknown; fanout?: unknown }): ToolDef[] {
+export function toolsFor(opts: {
+  wikiCoords?: boolean | undefined;
+  wikiSearch?: boolean | undefined;
+  sandbox?: unknown;
+  fanout?: unknown;
+  /** A program-loop run's tools, said outright by a caller with no tool context. */
+  programTools?: ProgramTools | undefined;
+  /** A tool context's program and `yield` sleep (`ToolContext`): the same, read off the context. */
+  program?: unknown;
+  yieldWake?: unknown;
+}): ToolDef[] {
   // A fan-out run is served the fan-out list: the same options, over the
   // other set. Asked either with a tool context (its sandbox holds the
   // roster) or with `fanout` said outright by a caller that has no context.
+  // A program-loop run is served its own list (`program`), which is never fan-out.
   const fanout = opts.fanout !== undefined && opts.fanout !== false ? true : (opts.sandbox as { roster?: unknown } | undefined)?.roster !== undefined;
-  const all = fanout ? RUNNER_FANOUT_TOOLS.defs : TOOLS;
+  const program = opts.programTools ?? (opts.program !== undefined ? { yield: opts.yieldWake !== undefined } : undefined);
+  const all = programSet(program)?.defs ?? (fanout ? RUNNER_FANOUT_TOOLS.defs : TOOLS);
   // A run configured without the reference wiki (`wiki: false`, issue #61) is
   // not handed the tool at all. Absent reads as true: the reference surface is
   // a capability every run has unless the run said otherwise.
@@ -536,13 +693,18 @@ export function isKnownTool(name: string): boolean {
   return RUNNER_TOOLS.isKnown(name) || RUNNER_FANOUT_TOOLS.isKnown(name);
 }
 
-/** Rename known alias keys to their canonical names. Deterministic, model-agnostic. */
-export function normalizeToolArgs(name: string, args: unknown): unknown {
-  return byName(name).normalize(name, args);
+/**
+ * Rename known alias keys to their canonical names. Deterministic, model-agnostic.
+ * `program` is a program-loop run's tools; absent is the snippet loop's lookup, unchanged.
+ */
+export function normalizeToolArgs(name: string, args: unknown, program?: ProgramTools): unknown {
+  return byName(name, program).normalize(name, args);
 }
 
-/** The set that knows a tool by name alone: the nine, else the fan-out run's three more. */
-function byName(name: string): ToolSet<ToolContext> {
+/** The set that knows a tool by name alone: a program-loop run's, else the nine, else the fan-out run's three more. */
+function byName(name: string, program?: ProgramTools): ToolSet<ToolContext> {
+  const own = programSet(program);
+  if (own !== null) return own;
   return RUNNER_TOOLS.isKnown(name) || !RUNNER_FANOUT_TOOLS.isKnown(name) ? RUNNER_TOOLS : (RUNNER_FANOUT_TOOLS as unknown as ToolSet<ToolContext>);
 }
 
@@ -551,8 +713,8 @@ function byName(name: string): ToolSet<ToolContext> {
  * A string is parsed leniently; the final failure message restates the tool's
  * expected parameters in prose.
  */
-export function coerceToolArgs(name: string, raw: unknown): { ok: true; args: unknown } | { ok: false; error: string } {
-  return byName(name).coerce(name, raw);
+export function coerceToolArgs(name: string, raw: unknown, program?: ProgramTools): { ok: true; args: unknown } | { ok: false; error: string } {
+  return byName(name, program).coerce(name, raw);
 }
 
 /** Nearest valid tool for a misspelled/mangled name, or undefined. */

@@ -155,9 +155,10 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 import { MCP_SERVER_NAME, toolCallLimitReached } from "./adapter-claude";
 import { MessageQueue, cliBaseEnv, readLines, signalGroup } from "./adapter-shared";
-import { DEFAULT_CODEX_HOME_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
+import { DEFAULT_CODEX_HOME_ENV, harnessOf, threadContextOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { entryOf } from "./drivers";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
+import { ThreadContext } from "./context";
 import { MCP_BRIDGE_PATH } from "@wrathbench/mcp/paths";
 import { McpServer } from "./mcp";
 import { CodexLastCallReader, CodexRolloutFollower, deleteCodexThread, removeThreadRollouts, writeCodexThread, type CodexCompaction } from "./codex-rollout";
@@ -165,12 +166,13 @@ import { CompactionAsk, codexAutoCompactLimit, codexWindowCapRefusal, compaction
 import { codexUsageDelta, codexUsageRegressed, normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 import { SUBSCRIPTION_PAUSE } from "./lapse";
 import { SubscriptionUsageTracker, describeWindows, newestCredentialUsage, thresholdsOf, usageKeyOf } from "./subscription-usage";
-import { CODEX_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
+import { CODEX_SYSTEM_PROMPT, buildSystemPrompt, programPromptOf, snippetSlimPromptOf } from "./prompt";
 import type { ToolContext } from "./tools";
 import type { EpisodicLog } from "./episodic";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "@wrathbench/mcp";
 import type { Trajectory } from "./trajectory";
+import { WAKE_CAP_MS, type ProgramWake } from "./wake";
 import type { Watchdogs } from "./watchdogs";
 
 // ------------------------------------------------------------------ effort
@@ -438,6 +440,11 @@ export interface CodexArgsOptions {
   bunBin: string;
   bridgePath: string;
   mcpPort: number;
+  /**
+   * The MCP tool timeout. Absent is 300 s; the program loop passes 600, above
+   * the five minutes a `yield` may be held open (`WAKE_CAP_MS`).
+   */
+  toolTimeoutSec?: number | undefined;
 }
 
 /**
@@ -470,7 +477,7 @@ export function codexArgs(o: CodexArgsOptions): string[] {
     `mcp_servers.${MCP_SERVER_NAME}.default_tools_approval_mode="approve"`,
     // A snippet may legitimately run to its 30 s limit and a sandbox restart
     // on top; the CLI's own default tool timeout must not cut a call short.
-    `mcp_servers.${MCP_SERVER_NAME}.tool_timeout_sec=300`,
+    `mcp_servers.${MCP_SERVER_NAME}.tool_timeout_sec=${o.toolTimeoutSec ?? 300}`,
     `mcp_servers.${MCP_SERVER_NAME}.startup_timeout_sec=30`,
   ];
   return [
@@ -517,7 +524,12 @@ export interface CodexEpisodeOptions {
   signal?: AbortSignal;
   /** See `ContextBuilderOptions.onObservationStalled` (loop.ts). */
   onObservationStalled?: ObservationStallHook | undefined;
+  /** The program loop's waking (`wake.ts`), on a `loop: "program"` run: the pause after each turn becomes a sleep until a wake. */
+  programWake?: ProgramWake | undefined;
 }
+
+/** The program loop's MCP tool timeout: above the longest `yield` hold. */
+export const PROGRAM_TOOL_TIMEOUT_SEC = 600;
 
 export const DEFAULT_WIND_DOWN_GRACE_MS = 90_000;
 
@@ -629,7 +641,45 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     ...(o.turnOffset !== undefined ? { turnOffset: o.turnOffset } : {}),
     ...(o.now !== undefined ? { now: o.now } : {}),
     onObservationStalled: o.onObservationStalled,
+    ...(o.programWake !== undefined ? { onSample: (snap) => o.programWake!.onSample(snap) } : {}),
   });
+
+  /*
+   * The program loop (`loop: "program"`), as the fixed loop runs it
+   * (loop.ts): the CLI ends its turn every few calls, so the pause after each
+   * turn becomes a sleep until a wake, whose block opens the next turn's
+   * message; `yield` sleeps inside a turn. Either sleep ends on a stop request
+   * or a watchdog verdict too, and time asleep is not idle.
+   */
+  const programPrompt = programPromptOf(config);
+  const program = programPrompt !== undefined ? o.sandbox.program : undefined;
+  const programWake = o.programWake;
+  if (programPrompt !== undefined && (program === undefined || programWake === undefined)) {
+    throw new Error('loop: "program" needs a sandbox that hosts a program and the run\'s wake (run.ts)');
+  }
+  /** The last turn-end wake's block, for the next turn's message only. */
+  let currentWake: string | undefined;
+  /**
+   * What the thread holds of the scratchpad and the event window, on the
+   * program loop and the `snippet-slim` arm (`threadContextOf`): a turn's
+   * message sends the pad whole only when the thread does not hold it as it
+   * stands (D8), and only the events newer than the last one it was sent.
+   * Undefined on the snippet loop, whose every message carries the whole pad
+   * and the whole window as it always has.
+   */
+  const thread = threadContextOf(config) ? new ThreadContext() : undefined;
+  const sleepFor = (via: "turn-end" | "yield", capMs: number) =>
+    programWake!.sleep(program!, {
+      via,
+      turn,
+      capMs,
+      floorMs: config.stepIntervalMs,
+      stopped: () => done() || watchdogs.check() !== null,
+      queuedNotices: () => pendingNotices.length,
+      idle: watchdogs,
+      // A yield result and a turn's message alike stay in the thread.
+      kept: true,
+    });
 
   // ---- MCP over loopback TCP, dispatching into the one live sandbox
   const toolCtx: ToolContext = {
@@ -648,7 +698,27 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     // The registry's switch (`DriverEntry.snippetDelta`): what changed since
     // the previous snippet rides each snippet result on a driver that has it.
     snippetDelta: entryOf(config.driver).snippetDelta,
+    // The snippet-slim arm's edit_scratchpad miss says the pad may be in an earlier message (D8).
+    ...(thread !== undefined && programPrompt === undefined ? { threadContext: true } : {}),
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
+    ...(program !== undefined && programWake !== undefined
+      ? {
+          program,
+          onRoutinesShown: () => programWake.routinesShown(program.routines()),
+          // What a result carries of the routines' refusals, and of a death, is delivered (`ProgramWake.hintsDelivered`).
+          onHintsDelivered: (hints) => programWake.hintsDelivered(hints),
+          ...(programPrompt?.yield === true
+            ? {
+                // The block is this call's result, in the thread: the next turn's message does not repeat it.
+                yieldWake: async (seconds: number): Promise<string> => {
+                  const woke = await sleepFor("yield", Math.min(WAKE_CAP_MS, Math.round(seconds * 1000)));
+                  currentWake = undefined;
+                  return woke.block;
+                },
+              }
+            : {}),
+        }
+      : {}),
   };
   let turn = 0;
   let restartsBefore = 0;
@@ -680,6 +750,12 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       // defensively so both drivers' records read alike. Appended after the
       // call ran, so `dispatchTs` carries when it started.
       const short = name.replace(`mcp__${MCP_SERVER_NAME}__`, "").replace(`mcp__${MCP_SERVER_NAME}.`, "");
+      // The model's own pad tools leave a pad the thread holds (`PadSeen`).
+      if (thread !== undefined && result.isError !== true) {
+        const a = args as { content?: unknown; old?: unknown; new?: unknown; replaceAll?: unknown };
+        if (short === "write_scratchpad" && typeof a.content === "string") thread.pad.wrote(a.content, o.scratchpad.read());
+        else if (short === "edit_scratchpad" && typeof a.old === "string" && typeof a.new === "string") thread.pad.edited(a.old, a.new, a.replaceAll === true, o.scratchpad.read());
+      }
       trajectory.append({ t: "tool_call", turn, call: toolCalls, name: short, args, dispatchTs });
       if (short === "run_snippet") {
         trajectory.append({ t: "snippet", turn, call: toolCalls, code: (args as { code?: string }).code ?? "" });
@@ -764,7 +840,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   // ---- files the CLI needs, all inside the run directory (absolute paths:
   // the CLI runs from a scratch temp cwd)
   const instructionsPath = resolve(o.runDir, "codex-instructions.md");
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("codex"), config.wiki, config.watchdogs.episodeMs);
+  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("codex"), config.wiki, config.watchdogs.episodeMs, programPrompt, snippetSlimPromptOf(config));
   writeFileSync(instructionsPath, systemPrompt, "utf8");
   // The bridge by its REPOSITORY path: the CLI's sandbox gives MCP servers a
   // private /tmp, so a temp copy would not be found ("Module not found").
@@ -787,6 +863,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       bunBin: process.execPath,
       bridgePath,
       mcpPort: listener.port,
+      ...(programPrompt !== undefined ? { toolTimeoutSec: PROGRAM_TOOL_TIMEOUT_SEC } : {}),
     });
   const firstArgs = argsFor(undefined);
 
@@ -1077,9 +1154,14 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
         endEpisode(verdict.reason, verdict.detail, { t: "watchdog", ...verdict });
         return finish();
       }
+      // A restart the program was blamed for counts toward snippet-runaway as a snippet's does.
+      if (programWake !== undefined) for (let k = programWake.takeBlamedRestarts(); k > 0; k--) watchdogs.noteSandboxRestart();
 
       turn++;
-      const contextText = await builder.build(turn, pendingNotices);
+      const contextText = await builder.build(turn, pendingNotices, currentWake, thread);
+      currentWake = undefined;
+      // What this context shows (the HUD, the notices) is no longer a reason to wake.
+      programWake?.shown();
       trajectory.append({
         t: "request",
         turn,
@@ -1158,6 +1240,11 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
             const id = msg["thread_id"];
             if (typeof id === "string" && id.length > 0) {
               if (threadId !== id) {
+                // A thread other than the one the last message went to holds no pad (D8), no events, and nothing else of ours.
+                if (threadId !== undefined) {
+                  thread?.reset();
+                  program?.forgetShown();
+                }
                 trajectory.append({ t: "codex_thread", turn, threadId: id });
                 // The supervisor's sweep keeps the rollout of the thread this names.
                 writeCodexThread(o.runDir, id);
@@ -1302,6 +1389,14 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       // The process has exited, so the rollout holds every line of this turn.
       const followed = rollout.read(threadId);
       for (const c of followed.compactions) trajectory.append(codexCompactionRecord(turn, c));
+      // A compacted thread no longer holds the pad or the events as they were
+      // sent: the next message sends them whole, and says so. A turn whose
+      // rollout could not be read may have hidden a compaction: the next
+      // message sends them whole too, claiming nothing.
+      // The routine errors and values results showed go with them.
+      if (followed.compactions.length > 0 || followed.failed === true) program?.forgetShown();
+      if (followed.compactions.length > 0) thread?.reset();
+      else if (followed.failed === true) thread?.forget();
       if (!resolvedModel && followed.model !== undefined) {
         resolvedModel = true;
         trajectory.recordResolved(runId, { model: followed.model, cliVersion: version });
@@ -1397,7 +1492,9 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
         pendingNotices.push(compactionNotice(ask.ask, Date.now()));
         trajectory.append({ t: "harness", kind: "compaction_ask", turn, ...ask });
       }
-      await sleep(config.stepIntervalMs);
+      // The program loop sleeps until a wake where the snippet loop pauses for the step interval.
+      if (programWake !== undefined) currentWake = (await sleepFor("turn-end", WAKE_CAP_MS)).block;
+      else await sleep(config.stepIntervalMs);
     }
   } catch (err) {
     return terminate("harness-error", err instanceof Error ? `${err.name}: ${err.message}` : String(err));

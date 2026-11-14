@@ -25,6 +25,7 @@ import { routingForRun } from "./routing";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "@wrathbench/mcp";
 import type { Trajectory } from "./trajectory";
+import type { ProgramWake } from "./wake";
 import type { Watchdogs } from "./watchdogs";
 
 /** What a driver's launch preflight hands back. */
@@ -55,6 +56,8 @@ export interface ScaffoldEpisodeOptions {
   turnOffset?: number;
   signal?: AbortSignal;
   onObservationStalled?: ObservationStallHook | undefined;
+  /** The program loop's waking (`wake.ts`), on a `loop: "program"` run of a driver that runs it (`runsProgramLoop`). */
+  programWake?: ProgramWake | undefined;
 }
 
 export interface DriverAdapter {
