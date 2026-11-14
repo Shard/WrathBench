@@ -92,6 +92,12 @@ describe.skipIf(helm === null)("the chart's worlds block", () => {
     expect(JSON.parse(templateMap(render(["--set", "worlds.max=2"]))["launcher.json"]!)).not.toHaveProperty("maxWorlds");
   }, HELM_TEST_MS);
 
+  test("hosted on, the launcher's settings name the eval worlds' own secret key for a run pod on one; off, they do not", () => {
+    expect(JSON.parse(templateMap(render(ON))["launcher.json"]!)).not.toHaveProperty("worldsSecretKey");
+    const hosted = render([...ON, "--set", "hosted.enabled=true", "--set", "hosted.worldsSecretKey=EVAL_WORLDS_SECRET"]);
+    expect(JSON.parse(templateMap(hosted)["launcher.json"]!).worldsSecretKey).toBe("EVAL_WORLDS_SECRET");
+  }, HELM_TEST_MS);
+
   test("on: a bare, never-restarted pod named under the headless worlds Service, which publishes it before it is ready", () => {
     const docs = render([...ON, "--set", "worlds.max=3", "--set", "imagePullSecrets={harbor-pull}"]);
     const pod = worldPod(docs);

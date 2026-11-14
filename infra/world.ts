@@ -44,6 +44,7 @@ import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
 import { liveOwnerOf, terminationOfTrajectory, type WorldsMode } from "../runner/src/models";
 import { digestOf, K8sClient, type Pod, type PodEnvVar } from "./k8s-client";
 import { isQuotaRefusal, readLauncherSettings, ROSTER_PID_LABEL } from "./run-pod";
+import { WORLDS_SECRET_ENV } from "./episode-launcher";
 import { worldsOf, type WorldsSetting } from "./run-fleet-credentials";
 
 // ------------------------------------------------------------------ names
@@ -162,8 +163,15 @@ export const DEFAULT_SOAP_PORT = 7878;
  * its module, its SOAP console and its characters schema. The game data
  * (`WRATHBENCH_WORLD_DB`) stays the shared one, which every world reads.
  */
-export function stagingEnvOf(id: string, soapPort: number = DEFAULT_SOAP_PORT): Record<string, string> {
-  return { WRATHBENCH_MODULE_URL: worldModuleUrl(id), WRATHBENCH_SOAP_URL: worldSoapUrl(id, soapPort), WRATHBENCH_CHARACTERS_DB: schemaOf(id) };
+export function stagingEnvOf(id: string, soapPort: number = DEFAULT_SOAP_PORT, env: Record<string, string | undefined> = process.env): Record<string, string> {
+  const worlds = env[WORLDS_SECRET_ENV];
+  return {
+    WRATHBENCH_MODULE_URL: worldModuleUrl(id),
+    WRATHBENCH_SOAP_URL: worldSoapUrl(id, soapPort),
+    WRATHBENCH_CHARACTERS_DB: schemaOf(id),
+    // Under hosted mode the world opens with its own port secret.
+    ...(worlds !== undefined && worlds.length > 0 ? { WRATHBENCH_MODULE_SECRET: worlds } : {}),
+  };
 }
 
 // ------------------------------------------------------------- the record
@@ -540,9 +548,19 @@ export type WorldK8s = Pick<K8sClient, "createPod" | "getPod" | "listPods" | "de
 /** Whether a world's module answers ready: GET /health 200 with the port secret. */
 export type WorldHealth = (url: string) => Promise<{ ready: boolean; detail: string }>;
 
+/**
+ * The operator credential an eval world opens with: its own port secret under
+ * hosted mode (`WRATHBENCH_WORLDS_MODULE_SECRET` on the fleet pod), else the
+ * module secret every world shares.
+ */
+export function worldAuthHeaders(env: Record<string, string | undefined> = process.env): Record<string, string> {
+  const worlds = env[WORLDS_SECRET_ENV];
+  return moduleAuthHeaders(worlds !== undefined && worlds.length > 0 ? { WRATHBENCH_MODULE_SECRET: worlds } : env);
+}
+
 export const defaultWorldHealth: WorldHealth = async (url) => {
   try {
-    const r = await fetch(`${url}/health`, { headers: moduleAuthHeaders(), signal: AbortSignal.timeout(3_000) });
+    const r = await fetch(`${url}/health`, { headers: worldAuthHeaders(), signal: AbortSignal.timeout(3_000) });
     const body = (await r.text()).trim().slice(0, 200);
     return { ready: r.status === 200, detail: `${r.status} ${body}` };
   } catch (e) {

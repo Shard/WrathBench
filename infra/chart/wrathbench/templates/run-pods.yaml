@@ -180,6 +180,8 @@ data:
   {{- $launcher := dict "allowedImages" (default (list (printf "%s/%s" (include "wrathbench.registry" .) .Values.image.names.runner)) .Values.runPods.allowedImages) "imagePullSecrets" (default (list) .Values.runPods.imagePullSecrets) }}
   {{- with .Values.runPods.maxPods }}{{ $_ := set $launcher "maxPods" (int .) }}{{ end }}
   {{- if include "wrathbench.on.worlds" $ }}{{ with .Values.worlds.max }}{{ $_ := set $launcher "maxWorlds" (int .) }}{{ end }}{{ end }}
+  {{- /* With hosted on, an eval world's port secret is its own key: a run pod on one gets that key's reference as its WRATHBENCH_MODULE_SECRET. */}}
+  {{- if and (include "wrathbench.on.hosted" $) (include "wrathbench.on.worlds" $) }}{{ $_ := set $launcher "worldsSecretKey" (toString .Values.hosted.worldsSecretKey) }}{{ end }}
   launcher.json: |
     {{- $launcher | toPrettyJson | nindent 4 }}
 {{- end }}

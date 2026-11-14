@@ -1939,6 +1939,13 @@ The world's allowlist is the attempt's accounts. The stager works on the
 world's own SOAP console and schema. Allocation and boot sit under one lock,
 so one world boots at a time.
 
+**Hosted mode's secret.** With `hosted` on, an eval world opens with its own
+port secret (`hosted.worldsSecretKey`), not the freeplay world's. The fleet
+presents it on its own calls to a world (`/health`, session releases, the
+stager). An episode on a world gets it as its `WRATHBENCH_MODULE_SECRET`: a
+child process by value, a run pod by a reference to that key. No episode
+ever gets the fleet's `WRATHBENCH_WORLDS_MODULE_SECRET` variable itself.
+
 **After the attempt** the roster reads the runs' own files:
 - every run has its verdict, or never started: the world is ended. Its
   console log is saved to `data/worlds/<id>/server.log`, its pod deleted, its
