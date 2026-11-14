@@ -29,7 +29,8 @@ import {
   type ToolResult,
   type ToolSpec,
 } from "@wrathbench/mcp/tools";
-import { fanoutTools, PLAIN_FANOUT_RENDER, type FanoutSurface } from "@wrathbench/mcp/fanout";
+import { fanoutTools, type FanoutSurface } from "@wrathbench/mcp/fanout";
+import { WRATHBENCH_FANOUT_RENDER } from "./fanout-wording";
 import { parseIdQuery, searchReference } from "@wrathbench/wiki/search";
 import { bundleHasIds } from "@wrathbench/wiki/bundle";
 import { formatEventLine, formatStateSummary, isAmbientEvent, type SnapshotLike } from "./context";
@@ -618,7 +619,7 @@ type ProgramFanoutContext = ProgramContext & { fanout: FanoutSurface };
  * `recent_events` and `state_summary`; the three roster tools follow, as on
  * the snippet loop's fan-out list.
  */
-const PROGRAM_FANOUT = fanoutTools<ProgramFanoutContext>(RENDER as CoreToolRender<ProgramFanoutContext>, PLAIN_FANOUT_RENDER, { program: true });
+const PROGRAM_FANOUT = fanoutTools<ProgramFanoutContext>(RENDER as CoreToolRender<ProgramFanoutContext>, WRATHBENCH_FANOUT_RENDER, { program: true });
 const PROGRAM_CHARACTERS = programTools<ProgramFanoutContext>(RENDER as CoreToolRender<ProgramFanoutContext>, { characters: true });
 function programFanoutToolList(withYield: boolean): ToolSpec<ProgramFanoutContext>[] {
   const own = programToolList(withYield) as unknown as ToolSpec<ProgramFanoutContext>[];
