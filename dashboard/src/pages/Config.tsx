@@ -26,14 +26,13 @@
  *
  * **Sections.** One section at a time, each its own route (`/config/<id>`,
  * `CONFIG_SECTIONS` in lib/admin.ts) so it can be linked to, under one shell
- * that stays mounted across them: the document, the actor and the note
- * survive a switch with no refetch. A section whose group is off is absent,
+ * that stays mounted across them: the document survives a switch with no
+ * refetch. A section whose group is off is absent,
  * and a route naming none this deployment has goes to the first that is.
  *
- * **Attribution.** `x-wrathbench-actor` and `x-wrathbench-note` are optional
- * server-side; the note is required HERE, because the audit table is the only
- * record of why the fleet changed and an unexplained row is worth less than
- * the edit cost.
+ * **Attribution.** None asked for: the audit table records a write from here
+ * as the viewer's, with when and the before and after. Asking who and why on
+ * every edit cost more than the record was worth.
  */
 
 import { A, Navigate, useParams } from "@solidjs/router";
@@ -77,25 +76,6 @@ import {
 import { SNAPSHOT_WITHHELD_TEXT } from "../lib/errors";
 import { fmtWhen, stamp } from "../lib/format";
 
-/** The operator this tab writes as, remembered so it is typed once a session. */
-const ACTOR_KEY = "wrathbench.config.actor";
-
-function readActor(): string {
-  try {
-    return window.localStorage.getItem(ACTOR_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function writeActor(v: string): void {
-  try {
-    window.localStorage.setItem(ACTOR_KEY, v);
-  } catch {
-    /* a browser that refuses storage still gets a usable page */
-  }
-}
-
 /** A thrown value as the sentence to show. A `ConfigError` is already one. */
 function refusal(e: unknown): string {
   return e instanceof ConfigError ? e.message : e instanceof Error ? e.message : String(e);
@@ -110,8 +90,6 @@ export default function Config() {
   const [admin, setAdmin] = createSignal<AdminResponse | undefined>(undefined);
   const [audit, setAudit] = createSignal<AuditRow[]>([]);
   const [loadError, setLoadError] = createSignal<unknown>(undefined);
-  const [actor, setActor] = createSignal(readActor());
-  const [note, setNote] = createSignal("");
   const [banner, setBanner] = createSignal<string | null>(null);
   const [exported, setExported] = createSignal<string | null>(null);
   /*
@@ -174,22 +152,11 @@ export default function Config() {
     if (next !== undefined) setAdmin(next);
   };
 
-  /** Who and why, or the reason it is not usable yet. */
-  const attribution = (): { actor: string; note: string } | string => {
-    const a = actor().trim();
-    const n = note().trim();
-    if (a.length === 0) return "name yourself in the actor field before writing";
-    if (n.length === 0) return "every write takes a note — say why";
-    return { actor: a, note: n };
-  };
-
   /**
-   * Run one write, with the version check around it. `fn` gets the attribution
-   * and returns the API call; anything it throws comes back as a sentence.
+   * Run one write, with the version check around it. `fn` returns the API
+   * call; anything it throws comes back as a sentence.
    */
-  const write = async (fn: (att: { actor: string; note: string }) => Promise<unknown>): Promise<string | null> => {
-    const att = attribution();
-    if (typeof att === "string") return att;
+  const write = async (fn: () => Promise<unknown>): Promise<string | null> => {
     const seen = doc()?.version;
     try {
       const fresh = await configApi.config();
@@ -198,12 +165,10 @@ export default function Config() {
         setAudit((await configApi.audit(50)).audit);
         return `the config changed underneath (version ${String(seen)} → ${String(fresh.version)}) — nothing was written, and the page now shows the current document`;
       }
-      await fn(att);
+      await fn();
     } catch (e) {
       return refusal(e);
     }
-    writeActor(att.actor);
-    setNote("");
     setBanner(null);
     await reload();
     return null;
@@ -225,7 +190,7 @@ export default function Config() {
   // Every group until /api/admin says otherwise: a deep link is not bounced before it has loaded.
   const shown = createMemo(() => sectionsShown(admin()?.groups ?? ALL_GROUPS));
   const section = createMemo(() => sectionOf(params.section, admin()?.groups ?? ALL_GROUPS));
-  // The sections that write show who and why; deployment and history only read.
+  // The sections that write show the version and a reload; deployment and history only read.
   const writes = (): boolean => section() !== "deployment" && section() !== "history";
 
   return (
@@ -279,25 +244,6 @@ export default function Config() {
                 <div>
                   <Show when={writes()}>
                     <div class="configbar">
-                      <label>
-                        actor
-                        <input
-                          type="text"
-                          value={actor()}
-                          placeholder="who you are"
-                          onInput={(e) => setActor(e.currentTarget.value)}
-                        />
-                      </label>
-                      <label class="grow">
-                        note
-                        <input
-                          type="text"
-                          value={note()}
-                          placeholder="why — recorded in the audit table with the before and after"
-                          title="The note travels as an HTTP header, which carries Latin-1 only: an em dash is recorded as a hyphen and anything further out as ?"
-                          onInput={(e) => setNote(e.currentTarget.value)}
-                        />
-                      </label>
                       <span class="dim mono">v{body().version}</span>
                       <button type="button" onClick={() => void reload()}>
                         reload
@@ -314,7 +260,7 @@ export default function Config() {
                       <h3 class="section">roster</h3>
                       <RosterTable rows={roster()} write={write} messages={rowMessages()} setMessage={setRowMessage} />
                       <AddEntry write={write} />
-                      <Drafts body={drafts()} error={draftsError()} write={write} actor={actor} reload={reloadDrafts} />
+                      <Drafts body={drafts()} error={draftsError()} write={write} reload={reloadDrafts} />
                     </Match>
                     <Match when={section() === "freeplay"}>
                       <FreeplaySection config={body().config} write={write} />
@@ -396,7 +342,7 @@ function RawRows(props: { keys: string[]; value: Record<string, unknown>; write:
   );
 }
 
-type Write = (fn: (att: { actor: string; note: string }) => Promise<unknown>) => Promise<string | null>;
+type Write = (fn: () => Promise<unknown>) => Promise<string | null>;
 
 /** The roster, one row per entry, with the four fields an operator changes. */
 function RosterTable(props: {
@@ -480,10 +426,10 @@ function RosterRow(props: {
         props.setMessage("nothing changed");
         return;
       }
-      const err = await props.write((att) =>
+      const err = await props.write(() =>
         plan.method === "PATCH"
-          ? configApi.patch(`roster/${props.name}`, plan.body, att)
-          : configApi.put(`roster/${props.name}`, plan.body, att),
+          ? configApi.patch(`roster/${props.name}`, plan.body)
+          : configApi.put(`roster/${props.name}`, plan.body),
       );
       props.setMessage(err ?? `saved (${plan.method} ${plan.changed.join(", ")})`);
     } finally {
@@ -496,7 +442,7 @@ function RosterRow(props: {
     try {
       // Validated like any other write: removing an entry a campaign names
       // comes back as the same refusal the file would be rejected with.
-      const err = await props.write((att) => configApi.remove(`roster/${props.name}`, att));
+      const err = await props.write(() => configApi.remove(`roster/${props.name}`));
       props.setMessage(err ?? "removed");
       setConfirming(false);
     } finally {
@@ -624,7 +570,7 @@ function AddEntry(props: { write: Write }) {
       setMessage(refusal(e));
       return;
     }
-    const err = await props.write((att) => configApi.put(`roster/${f.name.trim()}`, body, att));
+    const err = await props.write(() => configApi.put(`roster/${f.name.trim()}`, body));
     setMessage(err ?? `added ${f.name.trim()}`);
     if (err === null) setForm(EMPTY_NEW_ENTRY);
   };
@@ -712,7 +658,6 @@ function Drafts(props: {
   body: DraftsResponse | undefined;
   error: unknown;
   write: Write;
-  actor: () => string;
   reload: () => Promise<void>;
 }) {
   const [filter, setFilter] = createSignal<DraftFilter>("all");
@@ -738,7 +683,7 @@ function Drafts(props: {
 
   const unignore = async (model: string): Promise<void> => {
     try {
-      await configApi.unignoreDraft(model, props.actor());
+      await configApi.unignoreDraft(model);
       setNotice({ ok: true, text: `un-ignored ${model}` });
       await props.reload();
     } catch (e) {
@@ -790,7 +735,7 @@ function Drafts(props: {
               </tr>
             </Show>
             <For each={shown()}>
-              {(d) => <DraftRow draft={d} write={props.write} actor={props.actor} reload={props.reload} notify={setNotice} />}
+              {(d) => <DraftRow draft={d} write={props.write} reload={props.reload} notify={setNotice} />}
             </For>
           </tbody>
         </table>
@@ -830,7 +775,6 @@ function Drafts(props: {
 function DraftRow(props: {
   draft: DraftView;
   write: Write;
-  actor: () => string;
   reload: () => Promise<void>;
   notify: (n: Notice) => void;
 }) {
@@ -855,7 +799,7 @@ function DraftRow(props: {
     setBusy(true);
     try {
       // A refusal does not reload, so this row survives with what was typed.
-      const err = await props.write((att) => configApi.promoteDraft(body, att));
+      const err = await props.write(() => configApi.promoteDraft(body));
       if (err !== null) setMessage(err);
       else props.notify({ ok: true, text: `promoted ${props.draft.model} as roster/${body.name}` });
     } finally {
@@ -866,7 +810,7 @@ function DraftRow(props: {
   const ignore = async (): Promise<void> => {
     setBusy(true);
     try {
-      await configApi.ignoreDraft(props.draft.model, props.actor());
+      await configApi.ignoreDraft(props.draft.model);
       props.notify({ ok: true, text: `ignored ${props.draft.model}` });
       await props.reload();
     } catch (e) {
@@ -977,7 +921,7 @@ function JsonEditor(props: { rowKey: string; value: Record<string, unknown>; wri
       setMessage(`not valid JSON: ${refusal(e)}`);
       return;
     }
-    const err = await props.write((att) => configApi.put(props.rowKey, body, att));
+    const err = await props.write(() => configApi.put(props.rowKey, body));
     setMessage(err ?? "saved");
   };
 
@@ -1020,7 +964,7 @@ function JsonEditor(props: { rowKey: string; value: Record<string, unknown>; wri
   );
 }
 
-/** The change history: when, who, why, and the before and after. */
+/** The change history: when, by which path (or, on older rows, whom), any note, and the before and after. */
 function AuditPanel(props: { rows: AuditRow[] }) {
   const [open, setOpen] = createSignal<number | null>(null);
   return (
@@ -1029,7 +973,7 @@ function AuditPanel(props: { rows: AuditRow[] }) {
         <thead>
           <tr>
             <th>when</th>
-            <th>actor</th>
+            <th title="the path a write came by: cli or viewer; older rows name an operator">by</th>
             <th>key</th>
             <th>what</th>
             <th>note</th>

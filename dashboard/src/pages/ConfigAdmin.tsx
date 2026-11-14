@@ -3,7 +3,7 @@
  * providers (credentials with their health), freeplay agents, campaigns, the
  * queue, and the deployment's groups and publishing. Each is one more client of the
  * config store: every write goes through the page's `write` (the version
- * check, the actor and the note) to `/api/config`, where `parseFleet` judges
+ * check) to `/api/config`, where `parseFleet` judges
  * the whole candidate config, so a refusal here is the supervisor's own
  * sentence. The status beside the rows is `/api/admin`'s and is read-only.
  *
@@ -45,7 +45,7 @@ import {
 } from "../lib/admin";
 import { fmtWhen, stamp } from "../lib/format";
 
-type Write = (fn: (att: { actor: string; note: string }) => Promise<unknown>) => Promise<string | null>;
+type Write = (fn: () => Promise<unknown>) => Promise<string | null>;
 
 /** A section's one result line: saved, or the refusal verbatim. */
 function useResult(): { line: () => { ok: boolean; text: string } | null; run: (p: Promise<string | null>, done: string) => Promise<void> } {
@@ -109,8 +109,8 @@ export function ProvidersSection(props: { admin: AdminResponse | undefined; conf
     onCleanup(() => clearInterval(t));
   });
   const toggle = (c: AdminCredentialView): Promise<void> =>
-    r.run(props.write((att) => configApi.patch(`credentials/${c.id}`, { enabled: !c.enabled }, att)), `${c.id} ${c.enabled ? "disabled" : "enabled"}`);
-  const remove = (c: AdminCredentialView): Promise<void> => r.run(props.write((att) => configApi.remove(`credentials/${c.id}`, att)), `${c.id} removed`);
+    r.run(props.write(() => configApi.patch(`credentials/${c.id}`, { enabled: !c.enabled })), `${c.id} ${c.enabled ? "disabled" : "enabled"}`);
+  const remove = (c: AdminCredentialView): Promise<void> => r.run(props.write(() => configApi.remove(`credentials/${c.id}`)), `${c.id} removed`);
   return (
     <>
       <h3 class="section">providers</h3>
@@ -257,7 +257,7 @@ function SecretForm(props: { c: AdminCredentialView; kind: "key" | "token"; writ
       void r.run(Promise.resolve(props.kind === "token" ? "paste the token" : "type the key"), "");
       return;
     }
-    void r.run(props.write((att) => configApi.setSecret(props.c.secretEnv, v, att)), `${props.c.secretEnv} stored`).then(() => {
+    void r.run(props.write(() => configApi.setSecret(props.c.secretEnv, v)), `${props.c.secretEnv} stored`).then(() => {
       if (r.line()?.ok !== true) return;
       setValue("");
       props.close();
@@ -309,12 +309,12 @@ function CredentialRow(props: {
     return [off(), f !== null && (f.kind === "set-secret" || f.kind === "replace-secret") ? f.text : null, how].filter((x): x is string => x !== null).join("; ");
   };
   const onSecret = (): void => {
-    if (kind() === "login") void secret.run(props.write((att) => configApi.codexLogin(props.c.id, att)), "login asked for");
+    if (kind() === "login") void secret.run(props.write(() => configApi.codexLogin(props.c.id)), "login asked for");
     else setEntering(!entering());
   };
   const clear = (): void => {
     setClearing(false);
-    void secret.run(props.write((att) => configApi.clearSecret(props.c.secretEnv, att)), `${props.c.secretEnv} cleared`);
+    void secret.run(props.write(() => configApi.clearSecret(props.c.secretEnv)), `${props.c.secretEnv} cleared`);
   };
   return (
     <>
@@ -458,7 +458,7 @@ function CredentialForm(props: {
       void r.run(Promise.resolve(doc), "");
       return;
     }
-    void r.run(props.write((att) => configApi.put(doc.key, doc.body, att)), editing ? `${form().id} saved` : `${form().id} added, disabled`).then(() => {
+    void r.run(props.write(() => configApi.put(doc.key, doc.body)), editing ? `${form().id} saved` : `${form().id} added, disabled`).then(() => {
       if (r.line()?.ok === true && !editing) setForm({ ...EMPTY_CREDENTIAL });
     });
   };
@@ -542,7 +542,7 @@ export function FreeplaySection(props: { config: Record<string, unknown>; write:
   const r = useResult();
   const rows = createMemo(() => freeplayRows(props.config["roster"]));
   const flip = (name: string, playing: boolean): Promise<void> =>
-    r.run(props.write((att) => configApi.patch(`roster/${name}`, { idle: playing ? "none" : "unlimited" }, att)), `${name} ${playing ? "stopped" : "playing"}`);
+    r.run(props.write(() => configApi.patch(`roster/${name}`, { idle: playing ? "none" : "unlimited" })), `${name} ${playing ? "stopped" : "playing"}`);
   return (
     <>
       <h3 class="section" title="a roster entry with idle: unlimited keeps one durable freeplay character playing once it owes no counted run; stopping it pauses the character, and starting it again brings the same one back">
@@ -595,15 +595,15 @@ export function CampaignsSection(props: { config: Record<string, unknown>; write
   const [models, setModels] = createSignal<string[]>([]);
   const [runs, setRuns] = createSignal("1");
   const toggle = (name: string, enabled: boolean): Promise<void> =>
-    r.run(props.write((att) => configApi.patch(`campaigns/${name}`, { enabled: !enabled }, att)), `${name} ${enabled ? "disabled" : "enabled"}`);
-  const remove = (name: string): Promise<void> => r.run(props.write((att) => configApi.remove(`campaigns/${name}`, att)), `${name} removed`);
+    r.run(props.write(() => configApi.patch(`campaigns/${name}`, { enabled: !enabled })), `${name} ${enabled ? "disabled" : "enabled"}`);
+  const remove = (name: string): Promise<void> => r.run(props.write(() => configApi.remove(`campaigns/${name}`)), `${name} removed`);
   const add = (): void => {
     const doc = campaignDoc({ def: def(), models: models(), runsPerCell: runs() });
     if (typeof doc === "string") {
       void r.run(Promise.resolve(doc), "");
       return;
     }
-    void r.run(props.write((att) => configApi.put(doc.key, doc.body, att)), `${doc.key.slice("campaigns/".length)} added, disabled`);
+    void r.run(props.write(() => configApi.put(doc.key, doc.body)), `${doc.key.slice("campaigns/".length)} added, disabled`);
   };
   return (
     <>
@@ -696,8 +696,8 @@ export function QueueSection(props: { config: Record<string, unknown>; keys: rea
   const roster = createMemo(() => Object.keys((props.config["roster"] as Record<string, unknown> | undefined) ?? {}));
   const [form, setForm] = createSignal<NewJobForm>({ ref: "", episode: "e90", repeat: "1", enabled: false });
   const toggle = (key: string, enabled: boolean): Promise<void> =>
-    r.run(props.write((att) => configApi.patch(key, { enabled: !enabled }, att)), `${key} ${enabled ? "disabled" : "enabled"}`);
-  const remove = (key: string): Promise<void> => r.run(props.write((att) => configApi.remove(key, att)), `${key} removed`);
+    r.run(props.write(() => configApi.patch(key, { enabled: !enabled })), `${key} ${enabled ? "disabled" : "enabled"}`);
+  const remove = (key: string): Promise<void> => r.run(props.write(() => configApi.remove(key)), `${key} removed`);
   const add = (): void => {
     const doc = jobDoc(form());
     if (typeof doc === "string") {
@@ -705,7 +705,7 @@ export function QueueSection(props: { config: Record<string, unknown>; keys: rea
       return;
     }
     const key = nextQueueKey(props.keys);
-    void r.run(props.write((att) => configApi.put(key, doc, att)), `${key} added`);
+    void r.run(props.write(() => configApi.put(key, doc)), `${key} added`);
   };
   return (
     <>

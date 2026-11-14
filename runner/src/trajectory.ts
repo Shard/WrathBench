@@ -208,7 +208,8 @@ export interface CredentialMove {
   /** Epoch ms. */
   at: number;
   actor: string;
-  note: string;
+  /** Null when the move was made without one. */
+  note: string | null;
 }
 
 /** The provider's own answer to "what ran", promoted onto the run. */

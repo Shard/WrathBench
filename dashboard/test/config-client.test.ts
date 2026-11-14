@@ -5,13 +5,13 @@
  * whole point of the API is that a rejected edit carries the sentence
  * `parseFleet` would refuse the file with, and `client.ts`'s `getJson` glues
  * the URL onto it — the status comes with it so the page can tell a refusal
- * from a missing store, the attribution rides as headers, every write says
+ * from a missing store, a write carries no attribution, every write says
  * JSON (the viewer's cross-site write guard), and the export body never names
  * a path (the server writes no file and refuses one).
  */
 
 import { describe, expect, test } from "bun:test";
-import { ACTOR_HEADER, ConfigError, NOTE_HEADER, createConfigClient } from "../src/api/config-client";
+import { ConfigError, createConfigClient } from "../src/api/config-client";
 
 interface Call {
   url: string;
@@ -36,13 +36,11 @@ function stub(body: unknown, status = 200): { fetch: typeof globalThis.fetch; ca
   return { fetch: f, calls };
 }
 
-const ATT = { actor: "mark", note: "promote" };
-
 describe("paths and methods", () => {
   test("a row key's two halves are path segments, each encoded on its own", async () => {
     const s = stub({ key: "roster/a", value: {}, version: 2 });
     const c = createConfigClient({ fetch: s.fetch });
-    await c.patch("roster/qwen3.8:27b", { tier: "t1" }, ATT);
+    await c.patch("roster/qwen3.8:27b", { tier: "t1" });
     expect(s.calls[0]?.url).toBe("/api/config/roster/qwen3.8%3A27b");
     expect(s.calls[0]?.method).toBe("PATCH");
   });
@@ -52,8 +50,8 @@ describe("paths and methods", () => {
     const c = createConfigClient({ fetch: s.fetch });
     await c.config();
     await c.audit(50);
-    await c.put("policy", {}, ATT);
-    await c.remove("roster/a", ATT);
+    await c.put("policy", {});
+    await c.remove("roster/a");
     await c.export();
     expect(s.calls.map((x) => `${x.method} ${x.url}`)).toEqual([
       "GET /api/config",
@@ -74,14 +72,14 @@ describe("paths and methods", () => {
   test("every write says JSON, with a body or without — the viewer refuses an unsafe method that does not", async () => {
     const s = stub({ key: "roster/a", value: null, version: 1 });
     const c = createConfigClient({ fetch: s.fetch });
-    await c.patch("roster/a", { tier: "t1" }, ATT);
-    await c.put("policy", {}, ATT);
-    await c.remove("roster/a", ATT);
+    await c.patch("roster/a", { tier: "t1" });
+    await c.put("policy", {});
+    await c.remove("roster/a");
     await c.export();
     await c.fetchDrafts();
     await c.ignoreDraft("vendor/x");
     await c.unignoreDraft("vendor/x");
-    await c.promoteDraft({ model: "vendor/x", name: "x", tier: "t0" }, ATT);
+    await c.promoteDraft({ model: "vendor/x", name: "x", tier: "t0" });
     expect(s.calls.map((x) => [x.method, x.headers["content-type"]])).toEqual([
       ["PATCH", "application/json"],
       ["PUT", "application/json"],
@@ -99,20 +97,17 @@ describe("paths and methods", () => {
 });
 
 describe("attribution", () => {
-  test("actor and note ride as the headers the API reads them from", async () => {
+  test("a write carries no actor and no note: the server records the path it came by", async () => {
     const s = stub({ key: "policy", value: {}, version: 1 });
     const c = createConfigClient({ fetch: s.fetch });
-    await c.put("policy", { a: 1 }, ATT);
-    expect(s.calls[0]?.headers[ACTOR_HEADER]).toBe("mark");
-    expect(s.calls[0]?.headers[NOTE_HEADER]).toBe("promote");
-    expect(s.calls[0]?.headers["content-type"]).toBe("application/json");
+    await c.put("policy", { a: 1 });
+    expect(Object.keys(s.calls[0]!.headers).sort()).toEqual(["accept", "content-type"]);
   });
 
-  test("a read carries no attribution and no body", async () => {
+  test("a read carries no body", async () => {
     const s = stub({ config: {}, keys: [], version: 0, path: "x", seeded: true });
     const c = createConfigClient({ fetch: s.fetch });
     await c.config();
-    expect(s.calls[0]?.headers[ACTOR_HEADER]).toBeUndefined();
     expect(s.calls[0]?.body).toBeUndefined();
   });
 });
@@ -122,7 +117,7 @@ describe("refusals", () => {
     const sentence = "roster.x: tier must be one of t0, t1, t2";
     const s = stub({ error: sentence, key: "roster/x" }, 400);
     const c = createConfigClient({ fetch: s.fetch });
-    const err = await c.patch("roster/x", { tier: "t9" }, ATT).catch((e: unknown) => e);
+    const err = await c.patch("roster/x", { tier: "t9" }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ConfigError);
     expect((err as ConfigError).message).toBe(sentence);
     expect((err as ConfigError).status).toBe(400);
@@ -154,9 +149,9 @@ describe("drafts", () => {
     const c = createConfigClient({ fetch: s.fetch });
     await c.drafts();
     await c.fetchDrafts();
-    await c.ignoreDraft("z-ai/glm-6:free", "mark");
+    await c.ignoreDraft("z-ai/glm-6:free");
     await c.unignoreDraft("z-ai/glm-6:free");
-    await c.promoteDraft({ model: "z-ai/glm-6", name: "glm-6", tier: "t0" }, ATT);
+    await c.promoteDraft({ model: "z-ai/glm-6", name: "glm-6", tier: "t0" });
     expect(s.calls.map((x) => [x.method, x.url, x.body])).toEqual([
       ["GET", "/api/config/proposed", undefined],
       ["POST", "/api/config/proposed/fetch", undefined],
@@ -166,25 +161,10 @@ describe("drafts", () => {
     ]);
   });
 
-  test("only a promotion is attributed with a note; a fetch carries no one, an ignore only who", async () => {
-    const s = stub({});
-    const c = createConfigClient({ fetch: s.fetch });
-    await c.fetchDrafts();
-    await c.ignoreDraft("a/b", "mark");
-    await c.promoteDraft({ model: "a/b", name: "b", tier: "t1" }, ATT);
-    const [fetched, ignored, promoted] = s.calls;
-    expect(fetched?.headers[ACTOR_HEADER]).toBeUndefined();
-    expect(fetched?.headers[NOTE_HEADER]).toBeUndefined();
-    expect(ignored?.headers[ACTOR_HEADER]).toBe("mark");
-    expect(ignored?.headers[NOTE_HEADER]).toBeUndefined();
-    expect(promoted?.headers[ACTOR_HEADER]).toBe("mark");
-    expect(promoted?.headers[NOTE_HEADER]).toBe("promote");
-  });
-
   test("a promotion the parser refuses comes back as its sentence", async () => {
     const sentence = "roster:claude: entry anthropic/claude-x: roster policy — claude models run only via the claude-code driver";
     const c = createConfigClient({ fetch: stub({ error: sentence, key: "roster/claude" }, 400).fetch });
-    const err = (await c.promoteDraft({ model: "anthropic/claude-x", name: "claude", tier: "t0" }, ATT).catch((e: unknown) => e)) as ConfigError;
+    const err = (await c.promoteDraft({ model: "anthropic/claude-x", name: "claude", tier: "t0" }).catch((e: unknown) => e)) as ConfigError;
     expect(err.status).toBe(400);
     expect(err.message).toBe(sentence);
   });

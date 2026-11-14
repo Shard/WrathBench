@@ -169,10 +169,9 @@ describe("move-credential refuses, writing nothing", () => {
     expectRefused(f, {}, /--pin: no roster entry is run \S+'s \(model opus\)/);
   });
 
-  test("a value that is not a credential id, and a move with no note", () => {
+  test("a value that is not a credential id", () => {
     const f = fixture();
     expectRefused(f, { to: "sk ant/oat01" }, /is not a credential id/);
-    expectRefused(f, { note: "  " }, /needs --note/);
   });
 
   test("an archived run", () => {
@@ -235,6 +234,18 @@ describe("the move", () => {
     expect(f.store.get("roster/son")).toMatchObject({ credential: C1, idle: "unlimited", model: "sonnet" });
     const audit = f.store.audit(1)[0]!;
     expect(audit).toMatchObject({ key: "roster/son", actor: "operator", note: `move-credential ${RUN_ID}: claude-2 is spent` });
+  });
+
+  test("a note is optional: without one the history records null and the pin's audit line names the run alone", () => {
+    const f = fixture();
+    const { note: _note, ...opts } = f.opts();
+    moveCredential({ ...opts, now: () => 1_700_000_000_000 });
+    expect(readMeta(f.dir)!.credentialHistory).toEqual([{ from: C2, to: C1, at: 1_700_000_000_000, actor: "operator", note: null }]);
+    expect(f.store.audit(1)[0]).toMatchObject({ key: "roster/son", note: `move-credential ${RUN_ID}` });
+    // A blank one is the same as none.
+    const g = fixture();
+    moveCredential(g.opts({ note: "  " }));
+    expect(readMeta(g.dir)!.credentialHistory).toMatchObject([{ note: null }]);
   });
 
   test("a pin the store would refuse refuses the whole move before meta.json is touched", () => {
@@ -323,7 +334,7 @@ describe("the CLI", () => {
     after.close();
   });
 
-  test("a refusal exits 1 with the reason, and no --note is a usage error", async () => {
+  test("a refusal exits 1 with the reason, and a missing credential id is a usage error", async () => {
     const f = fixture();
     const db = join(f.runsDir, "config.sqlite");
     f.store.close();
@@ -335,7 +346,7 @@ describe("the CLI", () => {
     const refused = await run(["move-credential", RUN_ID, "chatgpt-2", "--note", "x"]);
     expect(refused).toMatchObject({ code: 1 });
     expect(refused.err).toContain("config-store: pinned credential chatgpt-2 is chatgpt's");
-    expect((await run(["move-credential", RUN_ID, C1])).code).toBe(2);
+    expect((await run(["move-credential", RUN_ID])).code).toBe(2);
     expect(existsSync(join(f.dir, "meta.json"))).toBe(true);
     expect(readMeta(f.dir)!.config.credential).toBe(C2);
   });

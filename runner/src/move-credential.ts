@@ -21,7 +21,7 @@
  *   refuses the move rather than diverge.
  * - **A record.** Each move appends `{ from, to, at, actor, note }` to the
  *   run's `credentialHistory` (top level, never `config`; operator-only like
- *   `subscriptionUsage`).
+ *   `subscriptionUsage`). The note is optional and null without one.
  *
  * Refused, writing nothing: a run with a live owner (`liveOwnerOf`, the check
  * `run.ts --resume` and the roster make) or with no verdict at all (the fleet
@@ -71,7 +71,8 @@ export interface MoveCredentialOptions {
   /** Also pin the run's roster entry to `to`, after meta.json. */
   pin: boolean;
   actor: string;
-  note: string;
+  /** Why, if the operator said; recorded with the move and the pin. */
+  note?: string;
   store: ConfigStore;
   env?: Record<string, string | undefined>;
   now?: () => number;
@@ -96,8 +97,7 @@ type MetaDoc = Record<string, unknown> & { config: Record<string, unknown>; cred
 
 export function moveCredential(o: MoveCredentialOptions): MoveCredentialResult {
   const now = o.now ?? Date.now;
-  const note = o.note.trim();
-  if (note.length === 0) throw new CredentialMoveRefused("a credential move needs --note: credentialHistory records why the run moved");
+  const note = o.note?.trim() || null;
   if (!isCredentialId(o.to)) throw new CredentialMoveRefused(`${JSON.stringify(o.to)} is not a credential id — name the credential (bun wb config credentials), never a secret`);
 
   const dir = join(o.runsDir, o.runId);
@@ -202,7 +202,7 @@ export function moveCredential(o: MoveCredentialOptions): MoveCredentialResult {
   let pinned: string | null = null;
   if (pinOwed) {
     try {
-      o.store.patch(key!, { credential: o.to }, { actor: o.actor, note: `move-credential ${o.runId}: ${note}` });
+      o.store.patch(key!, { credential: o.to }, { actor: o.actor, note: `move-credential ${o.runId}${note === null ? "" : `: ${note}`}` });
       pinned = key;
     } catch (e) {
       throw new CredentialPinFailed(

@@ -124,7 +124,7 @@ const USAGE = `usage: bun runner/src/campaign-publish.ts <runner/campaigns/<id>@
   --namespace <ns>      with --k8s (default $WRATHBENCH_K8S_NAMESPACE, else wrathbench)
   --release <name>      with --k8s (default $WRATHBENCH_K8S_RELEASE, else wrathbench)
   --actor <name>        who to record the publish as (default "cli")
-  --note <text>         why
+  --note <text>         why, if you want it in the history (optional)
 
 Publish rule: ${PUBLISH_RULE}.
 `;
