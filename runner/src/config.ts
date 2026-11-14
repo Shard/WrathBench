@@ -1070,6 +1070,15 @@ export function programLoopRefusal(c: Pick<RunConfig, "loop" | "yield" | "driver
 }
 
 /**
+ * Why scored episodes do not launch, while they wait (operator, 2026-11-14):
+ * until a long-clock program-loop run has been read. The launch refuses them
+ * (`loopLaunchRefusal`) and the scheduler holds them, saying this, rather
+ * than picking a launch that would be refused (`NextJobsOptions.scoredGate`).
+ * Null once they open.
+ */
+export const SCORED_EPISODES_WAIT: string | null = "scored episodes do not run yet: they wait until a long-clock program-loop run has been read";
+
+/**
  * Why a model driver's run may not launch on its loop and episode, or null
  * (operator, 2026-11-14). The snippet loop is kept as a legacy arm of probe
  * campaigns, so it runs only on `--episode probing`: never a scored episode,
@@ -1084,9 +1093,7 @@ export function programLoopRefusal(c: Pick<RunConfig, "loop" | "yield" | "driver
 export function loopLaunchRefusal(c: Pick<RunConfig, "loop" | "driver" | "episode">): string | null {
   if (isUnscoredDriver(c.driver)) return null;
   if (c.loop === "program") {
-    return c.episode !== undefined && isScoredEpisode(c.episode)
-      ? `--episode ${c.episode} is a scored episode, and scored episodes do not run yet: they wait until a long-clock program-loop run has been read`
-      : null;
+    return c.episode !== undefined && isScoredEpisode(c.episode) && SCORED_EPISODES_WAIT !== null ? `--episode ${c.episode} is a scored episode, and ${SCORED_EPISODES_WAIT}` : null;
   }
   if (c.episode === "probing") return null;
   const what = c.episode === undefined ? "a launch with no --episode" : `--episode ${c.episode}`;

@@ -209,6 +209,7 @@ import { DRAIN_POD_QUERY_TIMEOUT_MS, readLauncherSettings, rosterHasRunPod } fro
 import { runCampaignFile, writeCampaignFile } from "../runner/src/campaign-file";
 import { deleteCodexThread, pruneRollouts, type RolloutPrune } from "../runner/src/codex-rollout";
 import { cliBaseEnv } from "../runner/src/adapter-shared";
+import { SCORED_EPISODES_WAIT } from "../runner/src/config";
 import {
   codexHomeEnvsOf,
   credentialGate,
@@ -1495,6 +1496,8 @@ async function main(): Promise<void> {
         probeRuns: probes,
         affinity,
         evals: GROUPS.evals,
+        // Scored episodes wait: held with the reason rather than picked for a launch run.ts refuses.
+        ...(SCORED_EPISODES_WAIT !== null ? { scoredGate: SCORED_EPISODES_WAIT } : {}),
         }),
         characters,
         cfg.roster,

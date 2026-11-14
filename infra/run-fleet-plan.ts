@@ -437,6 +437,8 @@ export function planPolicy(opts: {
   affinity?: AccountAffinity;
   /** The evals group (`NextJobsOptions.evals`): off picks no scored or probing episode. Absent is on. */
   evals?: boolean;
+  /** Scored episodes closed, and why (`NextJobsOptions.scoredGate`). Absent is open. */
+  scoredGate?: string;
 }): PolicyPick[] {
   return planPolicyHeld(opts).picks;
 }
@@ -488,6 +490,7 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
       ...(opts.campaigns !== undefined ? { campaigns: opts.campaigns } : {}),
       ...(opts.probeRuns !== undefined ? { probeRuns: opts.probeRuns } : {}),
       ...(opts.evals !== undefined ? { evals: opts.evals } : {}),
+      ...(opts.scoredGate !== undefined ? { scoredGate: opts.scoredGate } : {}),
     });
   /*
    * Accounts in preference order over the FINAL picks. Affinity is the one
@@ -2765,6 +2768,8 @@ export function planTick(
   outside: readonly OutsideRun[] = [],
   unowned: readonly { credential: string | null; episode: string | null }[] = [],
   runPods?: { max: number | undefined },
+  /** Scored episodes closed, and why (`SCORED_EPISODES_WAIT`): the policy holds them with this reason. Absent is open. */
+  scoredGate?: string,
 ): {
   pinned: { job: FleetJob; spawn: JobSpawn }[];
   queue: QueuePlan;
@@ -2860,6 +2865,7 @@ export function planTick(
     probeRuns,
     ...(affinity !== undefined ? { affinity } : {}),
     evals,
+    ...(scoredGate !== undefined ? { scoredGate } : {}),
   });
   return { pinned, queue, policy, heldPicks: [...gatedPinned, ...heldPicks] };
 }

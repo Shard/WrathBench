@@ -39,6 +39,7 @@ import {
   rosterWindowKey,
 } from "../src/models";
 import { billingOf } from "../src/model-cost";
+import { SCORED_EPISODES_WAIT } from "../src/config";
 import { parseCredentials } from "../src/credential-slots";
 import { rowOf } from "../viewer/models";
 import type { EpisodeId } from "../src/episodes";
@@ -590,6 +591,23 @@ describe("paid and free", () => {
     expect(effectiveTier("t2", true)).toBe("t2");
     // A climb is one rung, never two: t2 is where the ladder ends today.
     expect(TIER_TABLE[effectiveTier("t1", true)].promotesTo).toBeNull();
+  });
+
+  test("a refused scored launch leaves the projection as it was, so an open gate re-picks it every tick; a closed one holds it and says why", () => {
+    const owing = st({ name: "o", model: "v/owing", tier: "t1", idle: "unlimited" }, []);
+    // run.ts refuses the launch before a run directory exists: no fact, so the
+    // next tick's projection is this one, and the pick is the same pick.
+    const first = planNextJobs([owing], ["R1"], new Set(), { policy });
+    expect(first.jobs.map((j) => [j.name, j.episode])).toEqual([["o", "e90"]]);
+    expect(planNextJobs([owing], ["R1"], new Set(), { policy }).jobs).toEqual(first.jobs);
+    // Closed: held with the reason, and the model does what one owing nothing does.
+    const gate = SCORED_EPISODES_WAIT!;
+    const closed = planNextJobs([owing], ["R1"], new Set(), { policy, scoredGate: gate });
+    expect(closed.held).toEqual([{ name: "o", episode: "e90", why: gate }]);
+    expect(closed.jobs.map((j) => [j.name, j.episode])).toEqual([["o", "freeplay"]]);
+    // A model that owes nothing is not held by it.
+    const quiet = st({ name: "q", model: "v/quiet", tier: "t0" }, [good("v/quiet", "e90", 1)]);
+    expect(planNextJobs([quiet], ["R1"], new Set(), { policy, scoredGate: gate })).toEqual({ jobs: [], held: [] });
   });
 
   test("one pool: paid, free and local picks all draw from it, in priority order; a reserved pool says why", () => {

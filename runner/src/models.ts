@@ -2465,6 +2465,13 @@ export interface NextJobsOptions {
    */
   poolHeld?: string;
   /**
+   * Scored episodes are closed, and why (`SCORED_EPISODES_WAIT`, config.ts):
+   * a model that owes a counted run is held with this reason instead of
+   * picked, and is otherwise treated as owing none, as with the evals group
+   * off, so its probes and idle work still go. Absent: open.
+   */
+  scoredGate?: string;
+  /**
    * The enabled, UNPINNED campaigns the policy may schedule, in
    * declaration order. A pinned campaign is a pinned job and never appears
    * here. Absent means no campaign work, which is what an older config gets.
@@ -2520,8 +2527,20 @@ export function planNextJobs(
   /** Every model's verdict, computed once: the probe loop below asks it again. */
   const verdicts = new Map<string, Verdict>();
   const byName = new Map(states.map((s) => [s.name, s]));
+  const gated: HeldPick[] = [];
   states.forEach((s, order) => {
-    const v = verdictForGroups(schedulability(s, running, policy), evals);
+    const sched = schedulability(s, running, policy);
+    const open = verdictForGroups(sched, evals);
+    // A closed gate holds a model that owes a counted run, with the reason,
+    // and lets it do what a model owing nothing does.
+    const v = opts.scoredGate !== undefined && open.verdict === "eval" ? verdictForGroups(sched, false) : open;
+    if (v !== open) {
+      const owed = s.eligible.find((ep) => {
+        const st = s.perEpisode[ep];
+        return st !== undefined && st.counted < st.target;
+      });
+      if (owed !== undefined) gated.push({ name: s.name, episode: owed, why: opts.scoredGate! });
+    }
     verdicts.set(s.name, v);
     if (wantsIdle(v, s)) {
       // One candidate, not one per tier: `unlimited` is the only idle mode left
@@ -2544,7 +2563,7 @@ export function planNextJobs(
   extraCands.sort(byPriority);
 
   const jobs: NextJob[] = [];
-  const held: HeldPick[] = [];
+  const held: HeldPick[] = [...gated];
   const taken = new Set<string>();
   const accounts = [...freeAccounts];
   for (const c of cands) {
