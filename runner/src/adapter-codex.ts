@@ -709,7 +709,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
                 yieldWake: async (seconds: number): Promise<string> => {
                   const woke = await sleepFor("yield", Math.min(WAKE_CAP_MS, Math.round(seconds * 1000)));
                   currentWake = undefined;
-                  return woke.block;
+                  // The notices queued for the next message go with it, and that message does not repeat them.
+                  return programWake.yieldAnswer(woke.block, pendingNotices, () => o.sandbox.drainNotices());
                 },
               }
             : {}),
