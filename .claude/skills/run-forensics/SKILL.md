@@ -61,17 +61,24 @@ record; `session` shows it once, as `Alfa+1`. A character's session id,
 provider's own charge where it reported one (OpenRouter's `usage.cost` per
 response, the Claude Code CLI's `total_cost_usd` per session) and the tokens
 the responses reported. The line prices nothing: the list-price figure is the
-viewer's, and `requests` prices a window's tokens at the catalogue's row. The token sums are not the bill on a claude-code run (its responses
-carry opening snapshots; the line says so) nor on a codex run from before
-per-turn deltas (running totals), and the CLI's dollar figure leaves out the
-turns it never reported, which the run page adds at list.
+viewer's, and `requests` prices a window's tokens at the catalogue's row. A
+claude-code run's tokens and model turns are its CLI results' (`num_turns`
+and `usage` on each `claude_result`), because its response records are a
+message's envelopes, only the last carrying usage, and that usage's output is
+the stream's opening snapshot; what no result covers is listed apart and
+called a snapshot, and `activity` counts model turns from the results, the
+response records beside them. The token sums are not the bill on a codex run
+from before per-turn deltas (running totals), and the CLI's dollar figure
+leaves out the turns that got no result, which the run page adds at list.
 
 **Requests.** `requests` is the probe readout: a column for the run (or the
 window) and one per cut, each from the run's start. Read its `note` lines
-before its numbers: they say what a request is on that driver (claude-code: a
-usage-bearing response, output its turn's result spread over the turn's
-requests, a turn with no result unreported, never its snapshots; codex: a whole
-CLI turn, a running thread total turned into the turn's), whether wakes are
+before its numbers: they say what a request is on that driver (claude-code:
+the CLI's model turns, each result's `num_turns` and output spread evenly over
+its turn's messages, a message with no result one request with its output
+unreported, never its snapshots, and the wind-down's records after the run's
+end counted in the run's column; codex: a whole CLI turn, a running thread
+total turned into the turn's), whether wakes are
 `wake` records or harness turns, and that paused time is left out. A figure
 with `(n/m)` was reported on n of m requests; `cost priced*` priced output only
 where it is known; `(+N?)` after stall minutes is time the record does not

@@ -205,10 +205,11 @@ force at the start (`--price-at` re-prices at another day's), and stall
 minutes: stretches longer than `--stall` (5m) with no progress by `stuck`'s
 rule, never time the record does not cover, and on a fan-out run only while
 every character stalls. Each driver's usage is read in its own shape and said
-so: claude-code counts its usage-bearing responses and takes output from each
-turn's result, spread over the turn's requests (a turn cut short shows none,
-never its snapshots); codex's request is a whole CLI turn, a thread's running
-total turned into what each turn added. `--json` prints the same as one
+so: claude-code's requests are its CLI's model turns (`num_turns` on each
+result), with each result's turns and output spread over the turn's messages
+(a turn cut short counts a request per message and shows no output, never its
+snapshots); codex's request is a whole CLI turn, a thread's running total
+turned into what each turn added. `--json` prints the same as one
 object for a script.
 
 ### Where the config lives

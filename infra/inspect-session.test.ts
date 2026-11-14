@@ -100,6 +100,41 @@ const CLAUDE_TURNS = [
   { t: "claude_result", turn: 3, sessionId: "s-two", costUsd: 0.75 },
 ];
 
+/**
+ * The claude-code driver as it writes now: one usage-bearing response per
+ * message (an earlier envelope carries none), its output the opening snapshot;
+ * the result's `num_turns` and finished usage, after the termination in the
+ * wind-down's grace; then a resumed process killed before its turn's result.
+ */
+const claudeUsage = (prompt: number, cached: number, out: number, write?: number): Record<string, unknown> => ({
+  prompt_tokens: prompt,
+  completion_tokens: out,
+  total_tokens: prompt + out,
+  cached_tokens: cached,
+  ...(write !== undefined ? { cache_write_tokens: write } : {}),
+});
+const CLAUDE_CLI_TURNS = [
+  { t: "driver", driver: "claude-code" },
+  { t: "request", turn: 1, adapter: "claude-code", messages: "m".repeat(200) },
+  { t: "response", turn: 1, message: { role: "assistant", content: "a" } },
+  { t: "response", turn: 1, message: { role: "assistant", content: "b" }, usage: claudeUsage(3000, 2000, 2, 500) },
+  { t: "response", turn: 1, message: { role: "assistant", content: "c" }, usage: claudeUsage(4000, 3500, 1) },
+  { t: "termination", reason: "episode-limit" },
+  { t: "response", turn: 1, message: { role: "assistant", content: "d" }, usage: claudeUsage(4200, 4000, 3) },
+  {
+    t: "claude_result",
+    turn: 1,
+    sessionId: "s-one",
+    numTurns: 5,
+    costUsd: 0.9,
+    usageRaw: { input_tokens: 1200, output_tokens: 1800, cache_read_input_tokens: 9500, cache_creation_input_tokens: 500 },
+    usage: { prompt_tokens: 11200, completion_tokens: 1800, total_tokens: 13000, cached_tokens: 9500, cache_write_tokens: 500 },
+  },
+  { t: "driver", driver: "claude-code" },
+  { t: "response", turn: 1, message: { role: "assistant", content: "e" }, usage: claudeUsage(5000, 4500, 4) },
+  { t: "pause", reason: "operator-pause" },
+];
+
 const RUNS = tmp("inspect-session-");
 
 /** A v1 run: one record in `session/`, its events across several segments, and every kind of `calls` row. */
@@ -161,6 +196,10 @@ const BRAVO: Character = { name: "Bravo", guid: "902", level: 3, xp: 120, events
     }, true);
   }
 }
+
+/** A claude-code run, its turns and tokens the CLI's. */
+const CLI = "run-claude-cli";
+writeRun(join(RUNS, CLI), CLI, { driver: "claude-code", character: "Clawick" }, CLAUDE_CLI_TURNS, false);
 
 /** A 0.5 run: its row and samples in run.sqlite, its turns' usage the same shape. */
 const OLD = "run-05";
@@ -238,10 +277,26 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE]] a
     });
 
     test("claude-code's charge is each session's largest cumulative figure, summed over sessions, as the viewer reads it", async () => {
-      const cost = line((await inspect(["run", FAN], store)).out, "cost");
-      expect(cost).toContain("$2.00 the CLI's total_cost_usd over 2 session(s)");
+      const cost = line((await inspect(["run", FAN, "--width", "1000"], store)).out, "cost");
+      expect(cost).toContain("$2.00 the CLI's total_cost_usd over 2 session(s) · ");
       expect(reportedCostUsd(CLAUDE_TURNS as { t: string }[])).toBe(2);
-      expect(cost).toContain("tokens in 4.5k (cache read 1.5k, write 400), out 35 (claude-code's opening snapshots");
+      // Results with no usage of their own: the responses' figures, their output named for what it is.
+      expect(cost).toContain("no CLI result reported usage: 3 message(s) in 3 driver turn(s), in 4.5k (cache read 1.5k, write 400), out 35 as opening snapshots, not output");
+      expect(line((await inspect(["run", FAN], store)).out, "activity")).toContain("model turns unknown (no CLI result reported num_turns) · 3 response records");
+    });
+
+    test("claude-code's model turns and tokens are its CLI results', and what no result covers is said to be a snapshot", async () => {
+      const r = await inspect(["run", CLI, "--width", "1000"], store);
+      expect(r.code).toBe(0);
+      expect(line(r.out, "activity")).toContain(" · 5 model turns (num_turns on 1 CLI result(s)) · 5 response records · ");
+      expect(line(r.out, "cost")).toBe(
+        "cost       over the run: $0.9000 the CLI's total_cost_usd over 1 session(s), which leaves out the 1 driver turn(s) that got no result" +
+          " · tokens on 1 CLI result(s): in 11.2k (cache read 9.5k, write 500), out 1.8k over 5 model turns" +
+          " · with no result: 1 message(s) in 1 driver turn(s), in 5.0k (cache read 4.5k), out 4 as opening snapshots, not output" +
+          " · 5 response records, 4 with usage (one per message; the rest are its earlier envelopes)",
+      );
+      // Another driver's run keeps the plain reading: a response record is a request.
+      expect(line((await inspect(["run", V1, "--width", "1000"], store)).out, "activity")).toContain(" · 3 responses · ");
     });
 
     test("a fan-out run is its characters, one block each, its lead on the level line", async () => {

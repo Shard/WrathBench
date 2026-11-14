@@ -1890,15 +1890,34 @@ interface Activity {
   snippetErrors: Map<string, number>;
   toolErrors: Map<string, number>;
   harness: Map<string, number>;
+  /** claude-code: the CLI's own `num_turns`, summed over the `claude_result` records read, and how many carried one. */
+  cliTurns: number;
+  cliNumbered: number;
 }
 
 function newActivity(): Activity {
-  return { records: 0, kinds: new Map(), last: null, snippetErrors: new Map(), toolErrors: new Map(), harness: new Map() };
+  return { records: 0, kinds: new Map(), last: null, snippetErrors: new Map(), toolErrors: new Map(), harness: new Map(), cliTurns: 0, cliNumbered: 0 };
 }
 
-/** What one record adds to the errors by class and the harness notices by kind. */
+/**
+ * A `claude_result`'s `num_turns`: the model turns of the one driver turn it
+ * closes, not a running total (`costUsd` is the cumulative one), so a run's
+ * are the sum over its results.
+ */
+function numTurnsOf(rec: Record<string, unknown> | null): number | null {
+  const n = intOf(rec?.["numTurns"]);
+  return n !== null && n >= 0 ? n : null;
+}
+
+/** What one record adds to the errors by class, the harness notices by kind, and the CLI's turns. */
 function noteActivity(a: Activity, r: Rec, token: string | null): void {
-  if (r.t === "snippet_result" || r.t === "tool_result") {
+  if (r.t === "claude_result") {
+    const n = numTurnsOf(r.parse());
+    if (n !== null) {
+      a.cliTurns += n;
+      a.cliNumbered++;
+    }
+  } else if (r.t === "snippet_result" || r.t === "tool_result") {
     if (!r.isError()) return;
     // A result is small next to a request; past 256 KB, read its head only.
     const p = r.bytes < 256 << 10 ? r.parse() : null;
@@ -1950,25 +1969,81 @@ export interface CostTally {
   usage: UsageTotals;
   /** The CLI's figure per session. */
   cli: Map<string, number>;
+  /** claude-code: its model turns and tokens as its CLI reported them, and what no result covers. */
+  claude: ClaudeTally;
 }
 
+/** Tokens summed: input is the whole prompt, the cache inside it. A cache figure nothing reported is null. */
+export interface TokenSum {
+  input: number;
+  output: number;
+  cacheRead: number | null;
+  cacheWrite: number | null;
+}
+
+/**
+ * A claude-code run's model turns and tokens, off its CLI's `claude_result`
+ * records, the only place the finished figures are. The driver writes one
+ * usage-bearing `response` per message (a message's earlier envelopes carry
+ * none), and that usage's input is the finished count but its output the
+ * API's `message_start` snapshot, a token or a few (runner/src/adapter-claude.ts).
+ * A result closes one driver turn: its `num_turns` and `usage` are that turn's
+ * (`costUsd` alone is cumulative), so the run's are the sums. Whatever messages
+ * no result's usage covers — a turn cut short, killed or paused before its
+ * result — keep their own figures, and say which half of them is a snapshot.
+ *
+ * Fed in record order. A `driver` record opens a new CLI process, so a turn
+ * still open there never gets its result; a result that carries no usage
+ * closes its turn as unreported.
+ */
+export interface ClaudeTally {
+  results: number;
+  /** Results whose usage covers the messages before them: the `done` figures and the `turns` are theirs. */
+  covering: number;
+  /** Model turns: each covering result's `num_turns`, or its message count where it carried none. */
+  turns: number;
+  /** The covering results' own usage, summed. */
+  done: TokenSum;
+  /**
+   * Messages of driver turns that are over with no result's usage: input
+   * finished, output an opening snapshot. `unresulted`: those of the turns
+   * that got no result at all, which the CLI's cost leaves out too.
+   */
+  open: TokenSum & { messages: number; turns: number; unresulted: number };
+  /** The same, for the driver turn the record ends inside: in flight on a live run. */
+  pending: TokenSum & { messages: number; turns: Set<number | null> };
+}
+
+const noTokens = (): TokenSum => ({ input: 0, output: 0, cacheRead: null, cacheWrite: null });
+
 export function newCost(): CostTally {
-  return { usage: { responses: 0, reported: 0, input: 0, output: 0, cacheRead: null, cacheWrite: null, usd: null, costed: 0 }, cli: new Map() };
+  return {
+    usage: { responses: 0, reported: 0, input: 0, output: 0, cacheRead: null, cacheWrite: null, usd: null, costed: 0 },
+    cli: new Map(),
+    claude: { results: 0, covering: 0, turns: 0, done: noTokens(), open: { ...noTokens(), messages: 0, turns: 0, unresulted: 0 }, pending: { ...noTokens(), messages: 0, turns: new Set() } },
+  };
 }
 
 function intOf(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : null;
 }
 
-/** One response's usage, in the collector's field order (collector/src/lines.ts `usageOf`), so the store and the file agree. */
+/** A response's usage figures, in the collector's field order (collector/src/lines.ts `usageOf`), so the store and the file agree. */
+function responseFigures(rec: Record<string, unknown> | null): { input: number | null; output: number | null; read: number | null; write: number | null; usd: number | null } {
+  const u = obj(rec?.["usage"]);
+  return {
+    input: intOf(u["input_tokens"]) ?? intOf(u["prompt_tokens"]),
+    output: intOf(u["output_tokens"]) ?? intOf(u["completion_tokens"]),
+    read: intOf(u["cache_read_input_tokens"]) ?? intOf(obj(u["prompt_tokens_details"])["cached_tokens"]) ?? intOf(u["cached_tokens"]),
+    write: intOf(u["cache_write_tokens"]) ?? intOf(u["cache_creation_input_tokens"]),
+    usd: typeof u["cost"] === "number" && Number.isFinite(u["cost"]) ? u["cost"] : null,
+  };
+}
+
+/** One response's usage, summed in. */
 function noteUsage(t: UsageTotals, rec: Record<string, unknown> | null): void {
   t.responses++;
-  const u = obj(rec?.["usage"]);
-  const input = intOf(u["input_tokens"]) ?? intOf(u["prompt_tokens"]);
-  const output = intOf(u["output_tokens"]) ?? intOf(u["completion_tokens"]);
-  const read = intOf(u["cache_read_input_tokens"]) ?? intOf(obj(u["prompt_tokens_details"])["cached_tokens"]) ?? intOf(u["cached_tokens"]);
-  const write = intOf(u["cache_write_tokens"]) ?? intOf(u["cache_creation_input_tokens"]);
-  const usd = typeof u["cost"] === "number" && Number.isFinite(u["cost"]) ? u["cost"] : null;
+  const { input, output, read, write, usd } = responseFigures(rec);
   if (input !== null || output !== null) t.reported++;
   t.input += input ?? 0;
   t.output += output ?? 0;
@@ -1988,9 +2063,82 @@ function noteCli(cli: Map<string, number>, rec: Record<string, unknown> | null):
   cli.set(key, Math.max(cli.get(key) ?? v, v));
 }
 
+function addTokens(into: TokenSum, f: { input: number | null; output: number | null; read: number | null; write: number | null }): void {
+  into.input += f.input ?? 0;
+  into.output += f.output ?? 0;
+  if (f.read !== null) into.cacheRead = (into.cacheRead ?? 0) + f.read;
+  if (f.write !== null) into.cacheWrite = (into.cacheWrite ?? 0) + f.write;
+}
+
+function mergeTokens(into: TokenSum, from: TokenSum): void {
+  addTokens(into, { input: from.input, output: from.output, read: from.cacheRead, write: from.cacheWrite });
+}
+
+/** The driver turn the record was inside is over with no result's usage (`resulted`: a result with none, else no result): its messages are unreported. */
+function closeClaudeTurn(k: ClaudeTally, resulted: boolean): void {
+  const p = k.pending;
+  if (p.messages === 0) return;
+  mergeTokens(k.open, p);
+  k.open.messages += p.messages;
+  k.open.turns += p.turns.size;
+  if (!resulted) k.open.unresulted += p.turns.size;
+  k.pending = { ...noTokens(), messages: 0, turns: new Set() };
+}
+
+/**
+ * A `claude_result`'s own usage: the normalised `usage` the driver writes
+ * (`prompt_tokens` the whole prompt), else the CLI's raw block, whose
+ * `input_tokens` leaves the cache beside it. Null output: it reported none.
+ */
+function resultFigures(rec: Record<string, unknown> | null): { input: number | null; output: number | null; read: number | null; write: number | null } {
+  const u = obj(rec?.["usage"]);
+  const raw = obj(rec?.["usageRaw"]);
+  const read = intOf(u["cached_tokens"]) ?? intOf(raw["cache_read_input_tokens"]);
+  const write = intOf(u["cache_write_tokens"]) ?? intOf(raw["cache_creation_input_tokens"]);
+  const rawInput = intOf(raw["input_tokens"]);
+  return {
+    input: intOf(u["prompt_tokens"]) ?? (rawInput === null ? null : rawInput + (read ?? 0) + (write ?? 0)),
+    output: intOf(u["completion_tokens"]) ?? intOf(raw["output_tokens"]),
+    read,
+    write,
+  };
+}
+
+/** One record's share of a claude-code run's turns and tokens (`ClaudeTally`); `p` is the record parsed, for the kinds that need it. */
+function noteClaude(k: ClaudeTally, t: string, p: Record<string, unknown> | null): void {
+  if (t === "driver") closeClaudeTurn(k, false);
+  else if (t === "response") {
+    const f = responseFigures(p);
+    // A message's earlier envelope: its usage rides on the last one.
+    if (f.input === null && f.output === null) return;
+    addTokens(k.pending, f);
+    k.pending.messages++;
+    k.pending.turns.add(intOf(p?.["turn"]));
+  } else if (t === "claude_result") {
+    k.results++;
+    const f = resultFigures(p);
+    if (f.output === null) {
+      closeClaudeTurn(k, true);
+      return;
+    }
+    k.covering++;
+    k.turns += numTurnsOf(p) ?? k.pending.messages;
+    addTokens(k.done, f);
+    k.pending = { ...noTokens(), messages: 0, turns: new Set() };
+  }
+}
+
 function noteCost(c: CostTally, r: Rec): void {
-  if (r.t === "response") noteUsage(c.usage, r.parse());
-  else if (r.t === "claude_result") noteCli(c.cli, r.parse());
+  if (r.t === "driver") noteClaude(c.claude, r.t, null);
+  else if (r.t === "response") {
+    const p = r.parse();
+    noteUsage(c.usage, p);
+    noteClaude(c.claude, r.t, p);
+  } else if (r.t === "claude_result") {
+    const p = r.parse();
+    noteCli(c.cli, p);
+    noteClaude(c.claude, r.t, p);
+  }
 }
 
 /** A token count, short: 950, 12.3k, 4.56M. */
@@ -2004,41 +2152,84 @@ function fmtUsd(usd: number): string {
   return `$${usd.toFixed(usd < 1 ? 4 : 2)}`;
 }
 
-/** The `cost` line: the provider's charge where it reported one, and the tokens its responses reported. */
-export function costLine(c: CostTally): string {
+/** Input with its cache figures in brackets, where any were reported. */
+function inputText(input: number, cacheRead: number | null, cacheWrite: number | null): string {
+  const cache = [cacheRead !== null ? `cache read ${fmtTokens(cacheRead)}` : null, cacheWrite !== null ? `write ${fmtTokens(cacheWrite)}` : null].filter((b) => b !== null);
+  return `in ${fmtTokens(input)}${cache.length > 0 ? ` (${cache.join(", ")})` : ""}`;
+}
+
+/**
+ * The `cost` line: the provider's charge where it reported one, and the tokens
+ * its responses reported. A claude-code run's (`claude`, or any run with a
+ * `claude_result`) reads its tokens and model turns off the CLI's results
+ * instead, and names what no result covers as what it is: finished input and
+ * an opening-snapshot output. `live`: the record's last driver turn is still
+ * running, so its messages are in flight rather than cut short.
+ */
+export function costLine(c: CostTally, o: { claude?: boolean; live?: boolean } = {}): string {
   const u = c.usage;
-  if (u.responses === 0 && c.cli.size === 0) return "no model response recorded";
+  const k = c.claude;
+  const claude = o.claude === true || c.cli.size > 0 || k.results > 0;
+  if (u.responses === 0 && c.cli.size === 0 && k.results === 0) return "no model response recorded";
   const cli = c.cli.size === 0 ? null : [...c.cli.values()].reduce((a, b) => a + b, 0);
+  if (claude) {
+    const open = { ...k.open };
+    const flight = o.live === true ? k.pending : null;
+    if (flight === null) {
+      mergeTokens(open, k.pending);
+      open.messages += k.pending.messages;
+      open.turns += k.pending.turns.size;
+      open.unresulted += k.pending.turns.size;
+    }
+    // The CLI's figure alone: the viewer adds the turns no result covered, at list (runner/viewer/pricing.ts `backfilled`).
+    const usd =
+      cli === null
+        ? "no charge reported by the CLI (the viewer prices the tokens at list)"
+        : `${fmtUsd(cli)} the CLI's total_cost_usd over ${c.cli.size} session(s)${open.unresulted > 0 ? `, which leaves out the ${open.unresulted} driver turn(s) that got no result` : ""}`;
+    const parts: string[] = [];
+    if (k.covering > 0) {
+      parts.push(`tokens on ${k.covering} CLI result(s): ${inputText(k.done.input, k.done.cacheRead, k.done.cacheWrite)}, out ${fmtTokens(k.done.output)} over ${k.turns} model turns`);
+    }
+    const snapshot = (s: TokenSum): string => `${inputText(s.input, s.cacheRead, s.cacheWrite)}, out ${fmtTokens(s.output)} as opening snapshots, not output`;
+    if (open.messages > 0) {
+      parts.push(`${k.covering > 0 ? "with no result" : "no CLI result reported usage"}: ${open.messages} message(s) in ${open.turns} driver turn(s), ${snapshot(open)}`);
+    }
+    if (flight !== null && flight.messages > 0) parts.push(`in flight, no result yet: ${flight.messages} message(s), ${snapshot(flight)}`);
+    if (parts.length === 0) parts.push("no tokens reported");
+    if (u.responses > u.reported) parts.push(`${u.responses} response records, ${u.reported} with usage (one per message; the rest are its earlier envelopes)`);
+    return `over the run: ${usd} · ${parts.join(" · ")}`;
+  }
   const charged: string[] = [];
   if (u.usd !== null) charged.push(`${fmtUsd(u.usd)} reported by the provider on ${u.costed} of ${u.responses} responses`);
-  // The CLI's figure alone: the viewer adds the turns no result covered, at list (runner/viewer/pricing.ts `backfilled`).
-  if (cli !== null) charged.push(`${fmtUsd(cli)} the CLI's total_cost_usd over ${c.cli.size} session(s), turns it never reported left out`);
-  const total = u.usd !== null && cli !== null ? `${fmtUsd(u.usd + cli)}: ` : "";
-  const usd = charged.length === 0 ? "no charge reported by the provider (the viewer prices the tokens at list)" : `${total}${charged.join(" + ")}`;
-  const cache = [u.cacheRead !== null ? `cache read ${fmtTokens(u.cacheRead)}` : null, u.cacheWrite !== null ? `write ${fmtTokens(u.cacheWrite)}` : null].filter((b) => b !== null);
-  // A claude-code response's output count is the turn's opening snapshot, far below what it produced (runner/viewer/tail.ts `tokenTotals`).
-  const out = cli !== null ? `out ${fmtTokens(u.output)} (claude-code's opening snapshots, not its output: the viewer's figure is)` : `out ${fmtTokens(u.output)}`;
+  const usd = charged.length === 0 ? "no charge reported by the provider (the viewer prices the tokens at list)" : charged.join(" + ");
   const tokens =
     u.reported === 0
       ? `no tokens reported on ${u.responses} responses`
-      : `tokens in ${fmtTokens(u.input)}${cache.length > 0 ? ` (${cache.join(", ")})` : ""}, ${out}, reported on ${u.reported} of ${u.responses} responses`;
+      : `tokens ${inputText(u.input, u.cacheRead, u.cacheWrite)}, out ${fmtTokens(u.output)}, reported on ${u.reported} of ${u.responses} responses`;
   return `over the run: ${usd} · ${tokens}`;
 }
 
-/** The run's cost off the store: its usage aggregate, and its `claude_result` records when it has any. */
-async function storeCost(store: InspectStore, runId: string): Promise<CostTally> {
+/** What a claude-code run's cost reads off the store beside the usage aggregate: its messages, results and processes, in order. */
+const CLAUDE_COST_SPEC: ReadSpec = { kinds: { response: { raw: "all" }, claude_result: { raw: "all" }, driver: { raw: "none" } } };
+
+/** The run's cost off the store: its usage aggregate, and, on a claude-code run, its messages and `claude_result` records. */
+async function storeCost(store: InspectStore, runId: string, claude: boolean): Promise<CostTally> {
   const c = newCost();
   c.usage = await store.usage(runId);
   const all = await store.extent(runId, { since: null, until: null });
-  if ((all.kinds.get("claude_result") ?? 0) > 0) {
-    await storeRead(store, runId, { kinds: { claude_result: { raw: "all" } } }, { since: null, until: null }, all.window, true, (r) => noteCli(c.cli, r.parse()));
+  if (claude || (all.kinds.get("claude_result") ?? 0) > 0) {
+    await storeRead(store, runId, CLAUDE_COST_SPEC, { since: null, until: null }, all.window, true, (r) => {
+      const p = r.t === "driver" ? null : r.parse();
+      if (r.t === "claude_result") noteCli(c.cli, p);
+      noteClaude(c.claude, r.t, p);
+    });
   }
   return c;
 }
 
 /** The errors and harness notices only: the counts come from the extent. */
 const ACTIVITY_SPEC: ReadSpec = {
-  kinds: { snippet_result: { row: { error: true }, raw: "all" }, tool_result: { row: { error: true }, raw: "all" }, harness: { raw: "all" } },
+  kinds: { snippet_result: { row: { error: true }, raw: "all" }, tool_result: { row: { error: true }, raw: "all" }, harness: { raw: "all" }, claude_result: { raw: "all" } },
 };
 
 async function storeActivity(store: InspectStore, runId: string, ext: Extent, w: Window, token: string | null): Promise<Activity> {
@@ -2108,9 +2299,10 @@ export async function inspectRun(runId: string, opts: Ctx & Window, out: Out): P
     const config = obj(meta?.["config"]);
     const comparability = obj(meta?.["comparability"]);
     const model = row?.model ?? str(config["model"]) ?? "?";
+    const driver = row?.driver ?? str(config["driver"]);
     const bits = [
       model,
-      `driver ${row?.driver ?? str(config["driver"]) ?? "?"}`,
+      `driver ${driver ?? "?"}`,
       str(config["effort"]) !== null ? `effort ${config["effort"] as string}` : null,
       str(comparability["episode"]) !== null ? `episode ${comparability["episode"] as string}` : null,
       `harness ${row?.harness_version ?? str(meta?.["harnessVersion"]) ?? "?"}`,
@@ -2166,9 +2358,15 @@ export async function inspectRun(runId: string, opts: Ctx & Window, out: Out): P
       const a = via.store !== null ? await storeActivity(via.store, runId, via.ext, opts, token) : scanActivity(traj, opts, token, whole ? cost! : undefined);
       if (cost !== null && !whole) fileForward(traj, (r) => noteCost(cost, r));
       const k = (t: string): number => a.kinds.get(t) ?? 0;
+      // claude-code, by its usage shape (`DRIVER_USAGE`), or by the results only it writes.
+      const claude = (driver !== null && DRIVER_USAGE[driver] === "turn-snapshot") || k("claude_result") > 0;
       const window = windowPhrase(opts) === "" ? "" : `${windowPhrase(opts)}: `;
       const last = a.last === null ? "none" : `${a.last.t} ${fmtAge(opts.now - a.last.ts)} ago`;
-      say("activity", `${window}${a.records} records, last ${last} · ${k("response")} responses · ${k("snippet")} snippets · ${k("tool_call")} tool calls`);
+      // A claude-code run's model turns are its CLI's count, off its results: a response record is a message's envelope, several to a message.
+      const turns = !claude
+        ? `${k("response")} responses`
+        : `${a.cliNumbered > 0 ? `${a.cliTurns} model turns (num_turns on ${a.cliNumbered} CLI result(s))` : "model turns unknown (no CLI result reported num_turns)"} · ${k("response")} response records`;
+      say("activity", `${window}${a.records} records, last ${last} · ${turns} · ${k("snippet")} snippets · ${k("tool_call")} tool calls`);
       const se = [...a.snippetErrors.values()].reduce((x, y) => x + y, 0);
       const te = [...a.toolErrors.values()].reduce((x, y) => x + y, 0);
       say(
@@ -2179,7 +2377,7 @@ export async function inspectRun(runId: string, opts: Ctx & Window, out: Out): P
       // A v1 run's milestones and turn-ins are its record's `events` rows, not trajectory records; a fan-out run's are each character's, below.
       const marks = [["pause", "resume", "termination", "quest_complete", "milestone"].filter((t) => k(t) > 0).map((t) => `${t} ${k(t)}`).join(", "), v1 ? eventMarks(join(dir, "session"), opts) : ""];
       if (marks.some((m) => m !== "")) say("marks", marks.filter((m) => m !== "").join(" · "));
-      say("cost", costLine(cost ?? (await storeCost(via.store!, runId))));
+      say("cost", costLine(cost ?? (await storeCost(via.store!, runId, claude)), { claude, live: owned && row?.ended_at == null }));
     }
     say("files", fileLine(dir));
     const session = sessionDir(dir);
@@ -4088,8 +4286,9 @@ export async function inspectSession(runId: string, opts: SessionOptions, out: O
  * `DriverEntry.usage`, copied because this file imports nothing, and pinned by
  * the test. `response`: one `response` record per request, its usage the
  * request's. `turn-snapshot` (claude-code): one usage-bearing `response` per
- * API call, its input finished but its output the stream's opening snapshot,
- * the turn's finished output on its `claude_result`. `exec-tally` (codex): one
+ * message, its input finished but its output the stream's opening snapshot,
+ * the turn's finished output and its model-turn count (`num_turns`) on its
+ * `claude_result`. `exec-tally` (codex): one
  * `response` per CLI turn, its figures a tally of every call in it.
  */
 export type UsageShape = "response" | "turn-snapshot" | "exec-tally";
@@ -4108,11 +4307,15 @@ export const DRIVER_USAGE: Readonly<Record<string, UsageShape>> = {
  * A figure not reported is null, never 0. `prompt` is the whole prompt with
  * the cached part inside it, the runner's convention for every driver;
  * `output` is the finished count, which on claude-code is the turn's result
- * spread evenly over the turn's requests, and null where the turn has none.
+ * spread evenly over the turn's messages, and null where the turn has none.
+ * `weight` is how many requests the record stands for: 1, except on
+ * claude-code, where a message its turn's result covers stands for an even
+ * share of the CLI's own `num_turns` for that turn.
  */
 export interface ModelCall {
   ts: number;
   turn: number | null;
+  weight: number;
   prompt: number | null;
   cached: number | null;
   write: number | null;
@@ -4155,10 +4358,13 @@ export interface RequestScan {
   derived: number;
   /** codex: thread totals that went down, each read as a new baseline. */
   regressions: number;
-  /** claude-code: each turn's finished output, off its `claude_result`. */
-  turnOutput: Map<number, number>;
-  /** claude-code: a turn's output with no request of its own to spread it over. */
+  /** claude-code: the CLI's `num_turns`, summed over the results that cover messages. */
+  cliTurns: number;
+  /** claude-code: messages no result covers (a driver turn cut short), and how many driver turns they are in. */
+  open: { calls: number; turns: number };
+  /** claude-code: a result's output and turns with no message of its own to spread them over. */
   orphanOutput: number;
+  orphanTurns: number;
   /** claude-code: the CLI's cumulative charge per session, as each result reported it. */
   cli: { ts: number; session: string; usd: number }[];
   /** `wake` records (the shape `harness/wake` defined): what ended each wait, and how long it slept. */
@@ -4183,7 +4389,7 @@ function finite(v: unknown): number | null {
  * with `input_tokens` instead is a raw shape, and what that counts is the
  * driver's: Codex's includes the cache, Anthropic's leaves it beside.
  */
-function usageFigures(u: Record<string, unknown>, shape: UsageShape): Omit<ModelCall, "ts" | "turn"> | null {
+function usageFigures(u: Record<string, unknown>, shape: UsageShape): Omit<ModelCall, "ts" | "turn" | "weight"> | null {
   const details = obj(u["prompt_tokens_details"]);
   const cached = intOf(u["cached_tokens"]) ?? intOf(details["cached_tokens"]) ?? intOf(u["cache_read_input_tokens"]) ?? intOf(u["cached_input_tokens"]);
   const write = intOf(u["cache_write_tokens"]) ?? intOf(details["cache_write_tokens"]) ?? intOf(u["cache_creation_input_tokens"]) ?? intOf(u["cache_write_input_tokens"]);
@@ -4205,8 +4411,10 @@ function requestReducer(shape: UsageShape): { fn: RecFn; done: () => RequestScan
     envelopes: 0,
     derived: 0,
     regressions: 0,
-    turnOutput: new Map(),
+    cliTurns: 0,
+    open: { calls: 0, turns: 0 },
     orphanOutput: 0,
+    orphanTurns: 0,
     cli: [],
     wakes: [],
     responseTs: [],
@@ -4218,6 +4426,15 @@ function requestReducer(shape: UsageShape): { fn: RecFn; done: () => RequestScan
   // codex: the thread total the next one is measured from (runner/src/codex-usage.ts `CodexUsageCorrector`).
   let prev: CodexTotal | undefined;
   let thread: string | null = null;
+  // claude-code: the messages since the last result in this CLI process, which the next result covers.
+  let segment: ModelCall[] = [];
+  /** The segment's messages get no result: each stays one request, its output unreported. */
+  const closeSegment = (): void => {
+    if (segment.length === 0) return;
+    a.open.calls += segment.length;
+    a.open.turns += new Set(segment.map((c) => c.turn)).size;
+    segment = [];
+  };
   const fn: RecFn = (r) => {
     if (Number.isFinite(r.ts)) {
       a.first ??= r.ts;
@@ -4225,9 +4442,10 @@ function requestReducer(shape: UsageShape): { fn: RecFn; done: () => RequestScan
     }
     switch (r.t) {
       case "driver":
-        // Every episode opens a new thread.
+        // Every episode opens a new thread, and on claude-code a new CLI process: a turn still open is never reported.
         prev = undefined;
         thread = null;
+        closeSegment();
         return;
       case "codex_thread": {
         const id = str(r.parse()?.["threadId"]);
@@ -4257,10 +4475,24 @@ function requestReducer(shape: UsageShape): { fn: RecFn; done: () => RequestScan
       }
       case "claude_result": {
         const p = r.parse();
-        const turn = intOf(p?.["turn"]);
         const out = intOf(obj(p?.["usageRaw"])["output_tokens"]) ?? intOf(obj(p?.["usage"])["completion_tokens"]);
-        // A result that reports no output speaks for nothing (runner/viewer/tail.ts `claudeTurns`).
-        if (turn !== null && out !== null && out > 0) a.turnOutput.set(turn, out);
+        // A result that reports no output speaks for nothing (runner/viewer/tail.ts `claudeTurns`): its turn is closed, unreported.
+        if (out === null || out <= 0) closeSegment();
+        else {
+          // The turn's output and its model turns, spread evenly over its messages: each stands for its share of the CLI's count.
+          const turns = numTurnsOf(p);
+          if (segment.length === 0) {
+            a.orphanOutput += out;
+            a.orphanTurns += turns ?? 0;
+          } else {
+            a.cliTurns += turns ?? segment.length;
+            for (const c of segment) {
+              c.output = out / segment.length;
+              c.weight = (turns ?? segment.length) / segment.length;
+            }
+          }
+          segment = [];
+        }
         const usd = finite(p?.["costUsd"]);
         if (usd !== null) a.cli.push({ ts: r.ts, session: str(p?.["sessionId"]) ?? "", usd });
         return;
@@ -4277,7 +4509,7 @@ function requestReducer(shape: UsageShape): { fn: RecFn; done: () => RequestScan
           return;
         }
         if (shape === "turn-snapshot" && f !== null) {
-          // The input is the finished count; the output an opening snapshot, settled from the turn's result in `done`.
+          // The input is the finished count; the output an opening snapshot, settled from the turn's result when it lands.
           f = { ...f, output: null, reasoning: null };
         } else if (shape === "exec-tally" && f !== null && p?.["usageCumulative"] === undefined) {
           // A thread total, from before the driver wrote per-turn deltas: the turn's is what it added.
@@ -4291,20 +4523,16 @@ function requestReducer(shape: UsageShape): { fn: RecFn; done: () => RequestScan
           a.derived++;
           f = { prompt: d.prompt, cached: d.cached ?? null, write: d.write ?? null, output: d.completion, reasoning: d.reasoning ?? null, usd: f.usd };
         }
-        a.calls.push({ ts: r.ts, turn, prompt: f?.prompt ?? null, cached: f?.cached ?? null, write: f?.write ?? null, output: f?.output ?? null, reasoning: f?.reasoning ?? null, usd: f?.usd ?? null });
+        const call: ModelCall = { ts: r.ts, turn, weight: 1, prompt: f?.prompt ?? null, cached: f?.cached ?? null, write: f?.write ?? null, output: f?.output ?? null, reasoning: f?.reasoning ?? null, usd: f?.usd ?? null };
+        a.calls.push(call);
+        if (shape === "turn-snapshot") segment.push(call);
         return;
       }
     }
   };
   const done = (): RequestScan => {
-    if (shape !== "turn-snapshot") return a;
-    const byTurn = new Map<number, ModelCall[]>();
-    for (const c of a.calls) if (c.turn !== null) byTurn.set(c.turn, [...(byTurn.get(c.turn) ?? []), c]);
-    for (const [turn, out] of a.turnOutput) {
-      const calls = byTurn.get(turn) ?? [];
-      if (calls.length === 0) a.orphanOutput += out;
-      for (const c of calls) c.output = out / calls.length;
-    }
+    // The turn the record ends inside: cut short, or still running on a live run.
+    closeSegment();
     return a;
   };
   return { fn, done };
@@ -4663,27 +4891,40 @@ function characterFigures(track: CharacterTrack, w: { since: number; until: numb
   };
 }
 
-/** Every figure of one window, off the scan and the tracks. Pure. */
+/** A sum of request weights, rid of float dust: a turn's shares add back to its count. */
+function tidy(n: number): number {
+  return Math.round(n * 1e6) / 1e6;
+}
+
+/**
+ * Every figure of one window, off the scan and the tracks. Pure.
+ * `recordsUntil`, past `until`: model calls and the CLI's charges up to it
+ * count too, though the window's time ends at `until` (claude-code's
+ * wind-down, whose last messages and result land after the run's end).
+ */
 export function windowFigures(
   scan: RequestScan,
   tracks: readonly CharacterTrack[],
-  w: { label: string; since: number; until: number },
+  w: { label: string; since: number; until: number; recordsUntil?: number },
   price: RequestPrice | null,
   t: { moveYards: number; maxGapMs: number; stallMs: number },
 ): WindowFigures {
   const inW = (ts: number): boolean => ts >= w.since && ts <= w.until;
-  const calls = scan.calls.filter((c) => inW(c.ts));
+  const inRecords = (ts: number): boolean => ts >= w.since && ts <= Math.max(w.until, w.recordsUntil ?? w.until);
+  const calls = scan.calls.filter((c) => inRecords(c.ts));
   const minutes = activeMs(w.since, w.until, scan.pauses) / 60_000;
+  // Requests are weighted: one per record, except a claude-code message, which stands for its share of its turn's `num_turns`.
+  const requests = tidy(calls.reduce((n, c) => n + c.weight, 0));
   const sum = (pick: (c: ModelCall) => number | null): { n: number; total: number } => {
     let n = 0;
     let total = 0;
     for (const c of calls) {
       const v = pick(c);
       if (v === null) continue;
-      n++;
+      n += c.weight;
       total += v;
     }
-    return { n, total };
+    return { n: tidy(n), total };
   };
   const uncached = sum((c) => (c.prompt === null ? null : c.prompt - (c.cached ?? 0)));
   const cached = sum((c) => (c.prompt === null && c.cached === null ? null : (c.cached ?? 0)));
@@ -4696,11 +4937,12 @@ export function windowFigures(
   let cliUsd: number | null = null;
   if (scan.cli.length > 0) {
     const sessions = new Set(scan.cli.map((c) => c.session));
+    const end = Math.max(w.until, w.recordsUntil ?? w.until);
     for (const s of sessions) {
       const of = scan.cli.filter((c) => c.session === s);
-      const upTo = of.filter((c) => c.ts <= w.until).reduce((m, c) => Math.max(m, c.usd), 0);
+      const upTo = of.filter((c) => c.ts <= end).reduce((m, c) => Math.max(m, c.usd), 0);
       const before = of.filter((c) => c.ts < w.since).reduce((m, c) => Math.max(m, c.usd), 0);
-      if (of.some((c) => inW(c.ts))) cliUsd = (cliUsd ?? 0) + Math.max(0, upTo - before);
+      if (of.some((c) => inRecords(c.ts))) cliUsd = (cliUsd ?? 0) + Math.max(0, upTo - before);
     }
   }
   const reportedUsd = usd.n > 0 || cliUsd !== null ? (usd.n > 0 ? usd.total : 0) + (cliUsd ?? 0) : null;
@@ -4730,8 +4972,8 @@ export function windowFigures(
     until: w.until,
     reached: true,
     activeMinutes: minutes,
-    requests: calls.length,
-    requestsPerHour: perHour(calls.length, minutes),
+    requests,
+    requestsPerHour: perHour(requests, minutes),
     reported: { input: uncached.n, cached: cached.n, write: write.n, output: output.n, reasoning: reasoning.n, cost: usd.n },
     uncachedInPerRequest: per(uncached),
     cachedInPerRequest: per(cached),
@@ -4742,7 +4984,7 @@ export function windowFigures(
       by: byWake ? "wake" : "turn",
       count,
       perHour: perHour(count, minutes),
-      requestsPer: count > 0 ? calls.length / count : null,
+      requestsPer: count > 0 ? requests / count : null,
       responsesPer: count > 0 ? scan.responseTs.filter(inW).length / count : null,
       fired,
       asleepShare: byWake && minutes > 0 ? slept / (minutes * 60_000) : null,
@@ -4799,7 +5041,7 @@ function fmtTok(n: number | null): string {
 
 /** A figure with how many requests reported it, when not all of them did. */
 function covered(text: string, n: number, of: number): string {
-  return text === "—" || n >= of ? text : `${text} (${n}/${of})`;
+  return text === "—" || n >= of ? text : `${text} (${Math.round(n)}/${Math.round(of)})`;
 }
 
 /**
@@ -4874,7 +5116,11 @@ export async function inspectRequests(runId: string, opts: RequestsOptions, out:
   // The windows: the run or --since/--until, then each cut from the run's start.
   const t = { moveYards: STUCK_DEFAULTS.moveYards, maxGapMs: STUCK_DEFAULTS.maxGapMs, stallMs: opts.stallMs };
   const whole = { label: windowPhrase(opts) === "" ? "run" : "window", since: Math.max(start, opts.since ?? start), until: Math.min(end, opts.until ?? end) };
-  const windows: WindowFigures[] = [windowFigures(scan, tracks, whole, priceRow, t)];
+  // claude-code's wind-down: the messages and the result a termination waits for land after the run's end, and are its last turn's.
+  const tail = shape === "turn-snapshot" && opts.until === null && scan.last !== null && scan.last > whole.until ? scan.last : null;
+  const late = tail === null ? { calls: 0, results: 0 } : { calls: scan.calls.filter((c) => c.ts > whole.until).length, results: scan.cli.filter((c) => c.ts > whole.until).length };
+  const wholeWindow = late.calls + late.results > 0 ? { ...whole, recordsUntil: tail! } : whole;
+  const windows: WindowFigures[] = [windowFigures(scan, tracks, wholeWindow, priceRow, t)];
   const unreached = (label: string): WindowFigures => ({ ...windowFigures(scan, [], { label, since: start, until: start }, null, t), reached: false });
   for (const level of opts.atLevels) {
     const at = tracks.map((tr) => ({ name: tr.name, at: levelReached(tr, level) })).filter((x) => x.at !== null) as { name: string | null; at: number }[];
@@ -4894,14 +5140,15 @@ export async function inspectRequests(runId: string, opts: RequestsOptions, out:
 
   // What each shape's figures are, said once.
   if (shape === "turn-snapshot") {
-    const turns = new Set(scan.calls.map((c) => c.turn).filter((n) => n !== null));
-    const open = [...turns].filter((n) => !scan.turnOutput.has(n!)).length;
     notes.push(
-      `claude-code: a request is a response record carrying usage (${scan.envelopes} earlier envelope(s) of a message carry none and are not counted); ` +
-        `its input is the finished count, its output the stream's opening snapshot, so output is each turn's claude_result spread evenly over the turn's requests` +
-        (open > 0 ? `; ${open} of ${turns.size} turn(s) have no result (cut short): their requests carry only snapshots, shown as unreported output, never as a figure` : ""),
+      `claude-code: requests are the CLI's own model turns (num_turns on each claude_result, ${tidy(scan.cliTurns)} in all), each turn's spread evenly over its messages, the response records carrying usage (${scan.envelopes} earlier envelope(s) of a message carry none); ` +
+        `a message's input is the finished count, its output the stream's opening snapshot, so output is each turn's claude_result spread the same way` +
+        (scan.open.calls > 0
+          ? `; ${scan.open.calls} message(s) in ${scan.open.turns} driver turn(s) have no result (cut short, or still running): each counts as one request, its output unreported (the record holds only the snapshot), never a figure`
+          : ""),
     );
-    if (scan.orphanOutput > 0) notes.push(`claude-code: ${fmtTokens(scan.orphanOutput)} output on result(s) whose turn has no request is left out`);
+    if (scan.orphanOutput > 0) notes.push(`claude-code: ${fmtTokens(scan.orphanOutput)} output and ${scan.orphanTurns} model turn(s) on result(s) with no message of their own are left out`);
+    if (late.calls + late.results > 0) notes.push(`claude-code: ${late.calls} message(s) and ${late.results} result(s) landed after the run's end, in the wind-down's grace, and count in the ${whole.label} column`);
     notes.push("claude-code: the CLI's charge arrives only on a turn's result, so a cut that ends inside a long turn shows no reported cost for it, not a cost of nothing");
   } else if (shape === "exec-tally") {
     notes.push(
@@ -4954,7 +5201,7 @@ export async function inspectRequests(runId: string, opts: RequestsOptions, out:
   head("", windows.map((w) => w.label));
   head("span", cell((w) => `${clock(w.since).slice(6, 11)}–${clock(w.until).slice(6, 11)}`));
   head("active minutes", cell((w) => w.activeMinutes.toFixed(1)));
-  head(shape === "exec-tally" ? "CLI turns (requests)" : "requests", cell((w) => String(w.requests)));
+  head(shape === "exec-tally" ? "CLI turns (requests)" : shape === "turn-snapshot" ? "model turns (requests)" : "requests", cell((w) => (Number.isInteger(w.requests) ? String(w.requests) : w.requests.toFixed(1))));
   head("  per hour", cell((w) => fmtPer(w.requestsPerHour)));
   head("uncached in/request", cell((w) => covered(fmtTok(w.uncachedInPerRequest), w.reported.input, w.requests)));
   head("cached in/request", cell((w) => covered(fmtTok(w.cachedInPerRequest), w.reported.cached, w.requests)));
