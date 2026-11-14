@@ -5,7 +5,7 @@
  * and xp in place of level so progress inside a level shows. One line per
  * entry, not per run, because a tier's dozens of runs drawn singly were noise
  * the reader had to average by eye; an entry is the scatter's grouping
- * (`pointKey`), so a line and a point name the same roster entry.
+ * (`entryKeyOf`), so a line and a point name the same entry.
  *
  * Built from what a `ResultRun` already carries — its level marks with their
  * active playtime, its `xpEarned` and its `playtimeMs` — so the chart costs no
@@ -32,8 +32,7 @@ import {
   characterIconCx,
   characterSeriesLabel,
   chartCue,
-  hoverKeyOf,
-  pointKey,
+  entryKeyOf,
   puckRect,
   scored,
   timeTicks,
@@ -50,11 +49,11 @@ export interface RunLine {
   model: string;
   effort: string | null;
   compactWindow: string | null;
-  /** The roster entry the run belongs to, as the scatter keys it (`pointKey`). */
+  /** The entry the run belongs to, as the scatter keys it (`entryKeyOf`). */
   entry: string;
   /** The entry's label, as the freeplay chart writes it (`characterSeriesLabel`). */
   label: string;
-  /** What the page's shared highlight is keyed on (`hoverKeyOf`): the model. */
+  /** What the page's shared highlight is keyed on: the entry, as `entry` is. */
   hoverKey: string;
   harness: string | null;
   points: RunLinePoint[];
@@ -111,9 +110,9 @@ export function runLines(runs: readonly ResultRun[]): RunLinesModel {
       model,
       effort: r.effort,
       compactWindow: r.compactWindow ?? null,
-      entry: pointKey(model, r.effort, r.compactWindow),
+      entry: entryKeyOf(r),
       label: characterSeriesLabel(model, r.effort, r.compactWindow),
-      hoverKey: hoverKeyOf(r.model),
+      hoverKey: entryKeyOf(r),
       harness: r.harness,
       points,
       endX,
@@ -143,14 +142,14 @@ export function runLines(runs: readonly ResultRun[]): RunLinesModel {
  * It stays a lower bound: a mean of lower bounds is one.
  */
 export interface EntryLine {
-  /** The roster entry, as the scatter keys it (`pointKey`). */
+  /** The entry, as the scatter keys it (`entryKeyOf`). */
   entry: string;
   model: string;
   effort: string | null;
   compactWindow: string | null;
   /** As the freeplay chart writes it (`characterSeriesLabel`). */
   label: string;
-  /** What the page's shared highlight is keyed on (`hoverKeyOf`): the model. */
+  /** What the page's shared highlight is keyed on: the entry, as `entry` is. */
   hoverKey: string;
   /** Every harness the runs ran under, sorted — the scatter's `harnesses`, for the colour. */
   harnesses: string[];

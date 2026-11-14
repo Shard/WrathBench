@@ -15,6 +15,8 @@
 import type { CredentialFix, CredentialHealth, CredentialHold, CredentialRead, CredentialWindow, ResumeHoldCode } from "../src/credential-health";
 export type { CredentialFix, CredentialHealth, CredentialWindow, HealthState, ResumeHoldCode } from "../src/credential-health";
 import type { Harness } from "../src/drivers";
+import type { RunCondition } from "./condition";
+export type { ChartGroup, RunCondition } from "./condition";
 import type { ItemSample, NearbyWindow, SessionPosition, SessionTrack, SessionTrackPoint } from "@wrathbench/inspector/wire";
 
 /**
@@ -323,6 +325,16 @@ export interface ComparabilityView {
    * before the field existed.
    */
   compactWindow?: string | null;
+  /**
+   * The requested routing (`runner/src/routing.ts`), a key. Absent on a run
+   * with no routing to state. Never published: it names providers, and the
+   * public row carries only its `RunCondition.pinned` reading.
+   */
+  routing?: { allowFallbacks: boolean } & Record<string, unknown>;
+  /** `program` on the program loop, a key; absent on the snippet loop. */
+  loop?: "program";
+  /** The program loop's `yield` tool, a key; absent when off. */
+  yield?: true;
   /**
    * Which reference bundle the run read, off the bundle's own `meta` table
    * An annotation: a text-changing rebuild ships as a patch within the
@@ -2040,6 +2052,12 @@ export interface ResultRun {
   compactWindow?: string | null;
   /** The harness tag. A tag on the row, not a partition. */
   harness: HarnessView | null;
+  /**
+   * The condition the run was played under (`condition.ts`): a ladder row
+   * never mixes two. Optional: a dashboard built against a viewer that
+   * predates it derives one from the row's own fields (`conditionOfRun`).
+   */
+  condition?: RunCondition;
   promptHash: string | null;
   /** The worldserver build this run was stamped against, or null. */
   serverBuild: string | null;

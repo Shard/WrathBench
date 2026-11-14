@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { AreaFacts, ResultRun, LevelMark } from "../../runner/viewer/api-types";
+import type { AreaFacts, ResultRun, LevelMark, RunCondition } from "../../runner/viewer/api-types";
 import {
   COST,
   DEFAULT_VIEW,
@@ -61,7 +61,9 @@ import {
   characterRows,
   characterSeries,
   characterSeriesLabel,
-  hoverKeyOf,
+  conditionOfRun,
+  entryKeyOf,
+  pointKey,
   timeTicks,
   xpEarnedOf,
 } from "../src/lib/ladder";
@@ -70,6 +72,13 @@ import { familyOf } from "../../infra/model-catalogue";
 import { monogramOf } from "../src/lib/modelmark";
 import { resolvedSummary } from "../src/lib/models";
 import { EPISODE_CHOICES, episodeParam } from "../src/lib/episodes";
+
+/** An entry key (`entryKeyOf`) as a reader names it: the model, with its effort and window. */
+function spelt(key: string): string {
+  const [model, id] = key.split("\n");
+  const c = JSON.parse(id!) as { effort: string | null; compactWindow: string | null };
+  return pointKey(model!, c.effort, c.compactWindow);
+}
 
 /** A metric bag with the named readings and null everywhere else. */
 function bag(p: Partial<Record<keyof Metrics, number | null>>): Metrics {
@@ -365,7 +374,6 @@ describe("the ladder's filters", () => {
       className: "Hunter",
       characterLabel: "Dwarf Hunter",
       levels: [mark(5, 4, 400)],
-      harness: "claude-code",
       billing: "paid",
     }),
     run({ runId: "gratis", model: "qwen/qwen3:free", billing: "free" }),
@@ -708,8 +716,8 @@ describe("ladderPoints", () => {
       priced({ runId: "e", model: "hy3-free", xpEarned: 10 }),
     ]);
     expect(omitted).toEqual([]);
-    expect(points.map((p) => p.key)).toEqual(["hy3-free", "sonnet", "sonnet (low)"]);
-    const low = points.find((p) => p.key === "sonnet (low)")!;
+    expect(points.map((p) => spelt(p.key))).toEqual(["hy3-free", "sonnet (low)", "sonnet"]);
+    const low = points.find((p) => spelt(p.key) === "sonnet (low)")!;
     // Run b has a price and no xp: it feeds neither mean. Pairing its $3 with
     // run a's xp would put the point nowhere a run was.
     expect(low.x).toBe(1);
@@ -721,10 +729,10 @@ describe("ladderPoints", () => {
     // both readings, not the larger of the two counts — and `single` flags it.
     expect(low.label).toBe("sonnet (low)");
     expect(low.single).toBe(true);
-    const solo = points.find((p) => p.key === "sonnet")!;
+    const solo = points.find((p) => spelt(p.key) === "sonnet")!;
     expect(solo.label).toBe("sonnet");
     expect(solo.single).toBe(true);
-    const free = points.find((p) => p.key === "hy3-free")!;
+    const free = points.find((p) => spelt(p.key) === "hy3-free")!;
     expect(free.x).toBe(0);
     expect(free.y).toBe(20);
     expect(free.basis).toBe("list-price");
@@ -738,12 +746,12 @@ describe("ladderPoints", () => {
       priced({ runId: "a", model: "claude-haiku-5-5", effort: "max", actualCost: fig(40, "reported"), xpEarned: 900 }),
       priced({ runId: "b", model: "claude-haiku-5-5", effort: "max", compactWindow: "100k", actualCost: fig(8, "reported"), xpEarned: 700 }),
     ]);
-    expect(points.map((p) => p.key).sort()).toEqual(["claude-haiku-5-5 (max · 100k)", "claude-haiku-5-5 (max)"]);
+    expect(points.map((p) => spelt(p.key)).sort()).toEqual(["claude-haiku-5-5 (max · 100k)", "claude-haiku-5-5 (max)"]);
     const small = points.find((p) => p.compactWindow === "100k")!;
     expect(small.x).toBe(8);
     expect(small.label).toBe("claude-haiku-5-5 (max · 100k)");
     // `auto` prints nothing and carries no field.
-    expect("compactWindow" in points.find((p) => p.key === "claude-haiku-5-5 (max)")!).toBe(false);
+    expect("compactWindow" in points.find((p) => spelt(p.key) === "claude-haiku-5-5 (max)")!).toBe(false);
     expect(characterSeriesLabel("claude-haiku-5-5", "max", "100k")).toBe("claude-haiku-5-5 (max · 100k)");
     expect(characterSeriesLabel("claude-haiku-5-5", "max")).toBe("claude-haiku-5-5 (max)");
   });
@@ -760,9 +768,9 @@ describe("ladderPoints", () => {
       priced({ runId: "g", model: "split", actualCost: null, expectedCost: null, xpEarned: 500 }),
       priced({ runId: "h", model: "split", actualCost: null, expectedCost: null, xpEarned: 700 }),
     ]);
-    expect(points.map((p) => p.key)).toEqual(["m"]);
+    expect(points.map((p) => spelt(p.key))).toEqual(["m"]);
     expect(points[0]!.basis).toBe("mixed");
-    expect(omitted).toEqual([
+    expect(omitted.map((o) => ({ ...o, key: spelt(o.key) }))).toEqual([
       { key: "nocost", label: "nocost", why: "no cost reading" },
       { key: "noxp", label: "noxp", why: "no xp reading" },
       { key: "split", label: "split", why: "no run with both cost and xp" },
@@ -800,7 +808,7 @@ describe("ladderPoints over another pair of axes", () => {
       priced({ runId: "f", model: "noxp", tokens: tokens(700), xpEarned: null }),
     ];
     const byTokens = ladderPoints(runs, TOKENS, XP);
-    expect(byTokens.points.map((p) => p.key)).toEqual(["counted"]);
+    expect(byTokens.points.map((p) => spelt(p.key))).toEqual(["counted"]);
     const counted = byTokens.points[0]!;
     expect(counted.x).toBe(2000);
     expect(counted.y).toBe(300);
@@ -810,15 +818,15 @@ describe("ladderPoints over another pair of axes", () => {
     expect(counted.metrics.cost).toBe(0);
     expect(counted.metrics.turns).toBe(1);
     expect(counted.basis).toBe("list-price");
-    expect(byTokens.omitted).toEqual([
+    expect(byTokens.omitted.map((o) => ({ ...o, key: spelt(o.key) }))).toEqual([
       { key: "guessed", label: "guessed", why: "no tokens reading" },
       { key: "noxp", label: "noxp", why: "no xp reading" },
       { key: "split", label: "split", why: "no run with both tokens and xp" },
     ]);
     // The default view still plots the estimated-token entry, priced as reported.
     const byCost = ladderPoints(runs);
-    expect(byCost.points.map((p) => p.key)).toEqual(["counted", "guessed", "split"]);
-    expect(byCost.points.find((p) => p.key === "guessed")!.basis).toBe("reported");
+    expect(byCost.points.map((p) => spelt(p.key))).toEqual(["counted", "guessed", "split"]);
+    expect(byCost.points.find((p) => spelt(p.key) === "guessed")!.basis).toBe("reported");
     expect(byCost.omitted.map((o) => o.why)).toEqual(["no xp reading"]);
   });
 
@@ -1246,25 +1254,35 @@ describe("stitchCharacter", () => {
   });
 });
 
-describe("hoverKeyOf — the key a pin and a row agree on", () => {
-  test("the model string, which is the table's row key", () => {
-    expect(hoverKeyOf("sonnet")).toBe("sonnet");
-  });
-
-  test("an unrecorded model is `(unnamed)` on both sides, never null on one", () => {
-    expect(hoverKeyOf(null)).toBe("(unnamed)");
-    expect(hoverKeyOf(undefined)).toBe("(unnamed)");
-  });
-
-  test("every point of a model answers its row's key, whatever the effort", () => {
+describe("entryKeyOf — the key a row, a pin and a line agree on", () => {
+  test("one model under one condition: two efforts are two entries, never one row", () => {
     const runs = [
       run({ runId: "a", model: "sonnet", effort: "low", xpEarned: 100 }),
       run({ runId: "b", model: "sonnet", effort: "high", xpEarned: 200 }),
       run({ runId: "c", model: null, xpEarned: 50 }),
     ];
-    const rowKeys = new Set(ladderRows(runs).map((r) => hoverKeyOf(r.model)));
-    for (const p of ladderPoints(runs).points) expect(rowKeys.has(hoverKeyOf(p.model))).toBe(true);
-    expect(rowKeys.has("(unnamed)")).toBe(true);
+    const rows = ladderRows(runs);
+    expect(rows.map((r) => r.model).sort()).toEqual(["(unnamed)", "sonnet", "sonnet"]);
+    const rowKeys = new Set(rows.map((r) => r.key));
+    for (const p of ladderPoints(runs).points) expect(rowKeys.has(p.key)).toBe(true);
+    for (const r of runs) expect(rowKeys.has(entryKeyOf(r))).toBe(true);
+  });
+
+  test("the loop, the routing and the wiki each split a row; the prompt hash does not", () => {
+    const base = { model: "m", maxLevel: 3, harnessSeries: "0.5", episode: "e90" as const };
+    const cond = (id: string, over: Partial<RunCondition> = {}): RunCondition => ({ id, loop: "snippet", yield: false, pinned: true, wiki: true, ...over });
+    const runs = [
+      run({ ...base, runId: "a", promptHash: "sha256:a", condition: cond("x") }),
+      run({ ...base, runId: "b", promptHash: "sha256:b", condition: cond("x") }),
+      run({ ...base, runId: "c", condition: cond("y", { loop: "program", yield: true }) }),
+    ];
+    expect(ladderRows(runs).map((r) => [r.runs, r.condition.loop])).toEqual([[2, "snippet"], [1, "program"]]);
+  });
+
+  test("a row from a viewer that predates the field reads as the snippet loop, pinned, with its wiki", () => {
+    const c = conditionOfRun(run({ runId: "a", model: "m", harnessSeries: "0.5", episode: "e90", effort: "low", wiki: false }));
+    expect(c).toMatchObject({ loop: "snippet", yield: false, pinned: true, wiki: false });
+    expect(conditionOfRun(run({ runId: "b", model: "m", harnessSeries: "0.5", episode: "e90", effort: "high" })).id).not.toBe(c.id);
   });
 });
 
@@ -1737,8 +1755,8 @@ describe("runLines — a tier's runs as xp against active playtime", () => {
       { x: 90 * MIN, y: 3000 },
     ]);
     expect(l.endLevel).toBe(4);
-    expect(l.entry).toBe("fixture/m (high)");
-    expect(l.hoverKey).toBe("fixture/m");
+    expect(spelt(l.entry)).toBe("fixture/m (high)");
+    expect(l.hoverKey).toBe(l.entry);
     expect(l.harness).toBe("wrathbench");
   });
 
@@ -1793,7 +1811,7 @@ describe("runLines — a tier's runs as xp against active playtime", () => {
       run({ runId: "c", model: "m", effort: "low", xpEarned: 200, playtimeMs: 90 * MIN, harness: "pi", levels: [mark(1, 0, 0)] }),
     ]);
     const entries = entryLines(lines);
-    expect(entries.map((e) => [e.entry, e.n])).toEqual([
+    expect(entries.map((e) => [spelt(e.entry), e.n])).toEqual([
       ["m (high)", 2],
       ["m (low)", 1],
     ]);
@@ -1805,7 +1823,7 @@ describe("runLines — a tier's runs as xp against active playtime", () => {
       { x: 75 * MIN, y: 2000 },
     ]);
     expect([m.endX, m.endY, m.endLevel]).toEqual([75 * MIN, 2000, 3]);
-    expect(m.hoverKey).toBe("m");
+    expect(m.hoverKey).toBe(m.entry);
     expect(m.harnesses).toEqual(["wrathbench"]);
     // One run's mean is that run's line.
     const single = entries[1]!;
@@ -1941,7 +1959,7 @@ describe("runLines — a tier's runs as xp against active playtime", () => {
       run({ runId: "c", model: "sonnet", effort: "high", startedAt: 200, xpEarned: 50 }),
       run({ runId: "u", model: "sonnet", startedAt: 1, unscored: "unscored (scripted stub)" }),
     ]);
-    expect(rows).toEqual([
+    expect(rows.map((r) => ({ ...r, key: spelt(r.key) }))).toEqual([
       { key: "sonnet", served: "claude-sonnet-5-5", firstRun: 100, cost: 3, xp: 200 },
       { key: "sonnet (high)", served: "sonnet", firstRun: 200, cost: null, xp: null },
     ]);

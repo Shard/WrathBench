@@ -14,9 +14,10 @@ and an episode is the ruleset a run happens under. This page is about episodes.
 
 An id fixes the shape of the run — how long, what start state, which watchdogs,
 whether the operator may steer. It fixes nothing about the model: the prompt,
-the tools and the loop are identical across every id, and no model is ever
-told which one it is in. The two Deadmines ids fix one thing more, a directive
-and a staged party, and say so (below).
+apart from the one sentence that states an eval's clock, the tools and the loop
+are identical across every id, and no model is ever told which one it is in.
+The two Deadmines ids fix one thing more, a directive and a staged party, and
+say so (below).
 
 Four of the six ids are **scored** (`e90`, `e360`, and the Deadmines task
 episodes `deadmines-solo` and `deadmines`) and two are **steered**
@@ -33,7 +34,7 @@ everything else is derived from it — no list of names decides what counts.
   episode. Nothing carries over between episodes.
 - **Objective.** None. The standing goal only — an operator objective is what
   makes a run unscored.
-- **Prompt.** The standing goal plus the facts the model is owed: the clock; that reaching level 5 within it is the bar for promotion to six-hour episodes; and that reaching the bar does not end the episode, everything after it being recorded and counting exactly as what came before (`runner/src/prompt.ts` holds the wording). The last is there because models read the bar alone as a finish line and stopped at it. Not an objective — the goal, the bar and the scoring are unchanged — and identical for every model.
+- **Prompt.** The standing goal plus one sentence stating the clock, "This episode lasts 90 minutes.", as `e360` states its own (`runner/src/prompt.ts` holds the wording). Promotion is the scheduler's stopping rule and the model is not told about it (operator, 2026-11-14): a stopping rule the model knows of becomes part of what is measured, and the tiers and the bar can now change without moving a prompt hash. Until then the sentence named the level-5 bar, then that reaching it did not end the episode, because three Sonnet 5.5 runs read the bar as a finish line and idled into the no-XP watchdog.
 - **Watchdogs.** Idle 20m, no-XP 20m, plus the standing sandbox-restart guard.
   Tool-call ceiling 3000 (1000 per 30 minutes): a runaway guard sized so no legitimately fast model can reach it; tool calls per episode are reported, not scored.
 - **Ends.** Normally on `episode-limit`. Also on `idle` or `no-xp` (the model
