@@ -24,7 +24,7 @@ bun wb inspect trajectory <run-id> --since <iso> --next 20   # the first 20 item
 bun wb inspect tools <run-id> [--since 2h] [--until 1h]      # calls per tool, ok/error, reflect granted/refused, pad writers
 bun wb inspect pad <run-id> [--since 6h] [--last 30]         # pad size over time, its writes (drops over 30% flagged), cap refusals
 bun wb inspect pad <run-id> --at <iso>                       # the pad's text at a moment, rebuilt from the record
-bun wb inspect stuck [<run-id>] [--window 2h] [--until 1h]   # no game progress over a window, and the failure signals in it; no id: every live run
+bun wb inspect stuck [<run-id>] [--window 2h] [--until 1h]   # no game progress over a window (a death loop included), and the failure signals in it; no id: every live run
 bun wb inspect session <run-id> [--kind death,level] [--last 20]       # a v1 run's events stream: deaths, levels, zones, turn-ins
 bun wb inspect session <run-id> --stream calls --grep 'moveTo|too_far' # its calls stream: each call, result, actions, moves, served batches
 bun wb inspect session <run-id> --character Alfa --since 30m           # one fan-out character; without it, all of them, a column each
@@ -80,7 +80,12 @@ run's start (`--price-at DAY` for another day's), and a run it cannot price
 says why: the viewer's figure is then the one.
 
 `stuck`'s verdict is the progress line alone; the other lines are evidence,
-and `asks` is a phrase heuristic. `unjudged` means what was recorded does not
+and `asks` is a phrase heuristic. On a v1 run the progress line counts the
+record's deaths: `death loop: N deaths …` is `STUCK` (at least `--deaths`, 5,
+with no xp and no turn-in), however far the corpse runs moved or what the
+repairs and loot changed; fewer deaths print as `N death(s)` beside what
+moved. A run that dies and still gains xp is progressing; for a loop that
+began after a level-up, shorten `--window` to start after it. `unjudged` means what was recorded does not
 cover the window (a young or resumed run, a pause, a runner that was down),
 not that the run is fine. A 0.5 run is covered by its minute state samples;
 a v1 run's trace writes only changes, so a character standing still has no

@@ -311,8 +311,8 @@ export const ENTRIES: readonly Entry[] = [
   {
     group: "inspect",
     command: "stuck",
-    takes: "[<run-id>] [--window D] [--until D] [--move N] [--max-gap D] [--repeat N] [--hints N] [--schema N] [--restarts N] [--asks N] [--files]",
-    summary: "no game progress over a window (level, xp, quests, money, items, position), and the failure signals in it; no run id: every live run",
+    takes: "[<run-id>] [--window D] [--until D] [--move N] [--max-gap D] [--deaths N] [--repeat N] [--hints N] [--schema N] [--restarts N] [--asks N] [--files]",
+    summary: "no game progress over a window (level, xp, quests, money, items, position; a death loop, whatever moved), and the failure signals in it; no run id: every live run",
     ...inRunner("bun", INSPECT_RUN, "stuck"),
   },
   {

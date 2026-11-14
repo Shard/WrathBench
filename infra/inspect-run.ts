@@ -12,7 +12,7 @@
  *                                                      calls per tool, reflect, the pad's writers
  *   bun infra/inspect-run.ts pad <run-id> [--since D] [--until D] [--last N] | --at D
  *                                                      the pad's size over time and its writes, or its text
- *   bun infra/inspect-run.ts stuck [<run-id>] [--window D] [--until D] [--move N] [--max-gap D]
+ *   bun infra/inspect-run.ts stuck [<run-id>] [--window D] [--until D] [--move N] [--max-gap D] [--deaths N]
  *                                 [--repeat N] [--hints N] [--schema N] [--restarts N] [--asks N]
  *                                                      no game progress over a window, and the failure signals in it
  *   bun infra/inspect-run.ts session <run-id> [--stream events|calls] [--character NAME] [--kind K[,K]]
@@ -1583,6 +1583,8 @@ export interface RecordWrites {
   writes: number[];
   /** Served batches (`calls` `events` rows) that carry a `schemaError`: what `events_served` records were. */
   schemaBatches: number;
+  /** The character's deaths in the window: its `events` stream's `death` rows (`progressVerdict`'s death loop). */
+  deaths: number[];
 }
 
 /**
@@ -1593,7 +1595,7 @@ export interface RecordWrites {
  * the segments that can hold the window are read.
  */
 export function recordWrites(session: string, w: { since: number; until: number }): RecordWrites {
-  const out: RecordWrites = { writes: [], schemaBatches: 0 };
+  const out: RecordWrites = { writes: [], schemaBatches: 0, deaths: [] };
   const inWindow = (ts: unknown): ts is number => typeof ts === "number" && ts >= w.since && ts <= w.until;
   for (const stream of ["calls", "events"] as const) {
     for (const f of segmentFiles(session, stream)) {
@@ -1620,6 +1622,7 @@ export function recordWrites(session: string, w: { since: number; until: number 
         if (!inWindow(ts)) continue;
         out.writes.push(ts);
         if (stream === "calls" && line.includes('"kind":"events"') && line.includes(SCHEMA_ERROR_KEY)) out.schemaBatches++;
+        if (stream === "events" && line.includes('"kind":"death"')) out.deaths.push(ts);
       }
     }
   }
@@ -3298,6 +3301,15 @@ export const STUCK_DEFAULTS = {
   moveYards: 50,
   /** A gap between state samples (or at either end of the window) longer than this leaves the window unjudged. */
   maxGapMs: 15 * 60_000,
+  /**
+   * Deaths in the window that, with no xp and no turn-in, are a death loop:
+   * stuck whatever moved. A corpse run and a graveyard walk move the
+   * character, a repair spends money and a loot changes the bags, so a
+   * character dying at the same camp over and over read as progressing (a
+   * freeplay run, 18 deaths at two camps and no xp for over an hour). Five
+   * because a healthy levelling hour dies once or twice, and any xp clears it.
+   */
+  deaths: 5,
   /** One identical error, digits aside, this many times in the window. */
   repeatErrors: 20,
   /**
@@ -3452,12 +3464,19 @@ export interface ProgressVerdict {
  * window is covered when those and the samples are that close, the newest
  * sample before the window is the reading it starts from, and a stretch with
  * no sample is a stretch in which nothing changed.
+ *
+ * Given `deaths` (a v1 run's `death` rows), a covered window with at least
+ * `t.deaths` of them, no (level, xp) rise and no turn-in is a death loop and
+ * stuck, whatever moved or changed: the walk from the graveyard to the corpse
+ * is movement, a repair is money and a loot is items, and none of it is the
+ * character getting anywhere.
  */
 export function progressVerdict(
   all: readonly ProgressSample[],
   w: { since: number; until: number },
-  t: Pick<StuckThresholds, "moveYards" | "maxGapMs">,
+  t: Pick<StuckThresholds, "moveYards" | "maxGapMs" | "deaths">,
   writes?: readonly number[],
+  deaths?: readonly number[],
 ): ProgressVerdict {
   const inside = all.filter((x) => x.ts >= w.since && x.ts <= w.until).sort((a, b) => a.ts - b.ts);
   // When the window's coverage was seen: the samples alone, or with the record's other writes.
@@ -3526,10 +3545,21 @@ export function progressVerdict(
     writes === undefined
       ? `${n} samples over ${fmtAge(s[n - 1]!.ts - s[0]!.ts)}, largest gap ${fmtAge(gap.ms)}`
       : `${inside.length} trace sample(s) and ${k - inside.length} other record write(s) in the window, largest gap ${fmtAge(gap.ms)}`;
-  if (changes.length > 0) return { state: "progressing", evidence: `${changes.join(" · ")} · ${span}`, samples: n };
+  const died = deaths?.filter((ts) => ts >= w.since && ts <= w.until).length ?? 0;
+  if (died >= t.deaths && !rose && quests === 0) {
+    const discounted = changes.length > 0 ? `, which discounts ${changes.join(", ")}` : "";
+    return {
+      state: "stuck",
+      evidence: `death loop: ${died} deaths in the window (threshold ${t.deaths}) with ${lvl} throughout and quests +0${discounted} · ${span}`,
+      samples: n,
+    };
+  }
+  // Fewer deaths, or any xp or turn-in beside them, is said and judged as before.
+  const deathNote = died > 0 ? ` · ${died} death(s)` : "";
+  if (changes.length > 0) return { state: "progressing", evidence: `${changes.join(" · ")}${deathNote} · ${span}`, samples: n };
   const where = origin === null ? "position unknown" : `map ${origin.map}, within ${stray.toFixed(1)} yd of (${origin.x!.toFixed(0)}, ${origin.y!.toFixed(0)})`;
   const held = [`${lvl} throughout`, "quests +0", `money ${first("money") === null ? "unknown" : "unchanged"}`, `items ${first("items") === null ? "unknown" : "unchanged"}`, where];
-  return { state: "stuck", evidence: `${held.join(" · ")} · ${span}`, samples: n };
+  return { state: "stuck", evidence: `${held.join(" · ")}${deathNote} · ${span}`, samples: n };
 }
 
 function money2(copper: number | null): string {
@@ -3673,9 +3703,9 @@ export interface StuckReport {
 }
 
 /** Every signal over a scan, the progress verdict first: the only one that flags a run. Pure. */
-export function stuckReport(a: StuckScan, w: { since: number; until: number }, t: StuckThresholds, writes?: readonly number[]): StuckReport {
+export function stuckReport(a: StuckScan, w: { since: number; until: number }, t: StuckThresholds, writes?: readonly number[], deaths?: readonly number[]): StuckReport {
   const top = (m: Map<string, number>): [string, number] | null => [...m].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))[0] ?? null;
-  const progress = progressVerdict(a.samples, w, t, writes);
+  const progress = progressVerdict(a.samples, w, t, writes, deaths);
   const err = top(a.errors);
   const errTotal = [...a.errors.values()].reduce((x, y) => x + y, 0);
   const hint = top(a.hints);
@@ -3745,7 +3775,7 @@ async function sessionProgress(
   session: string,
   w: { since: number; until: number },
   t: StuckThresholds,
-): Promise<{ samples: ProgressSample[]; writes: number[]; schemaBatches: number; progress: ProgressVerdict }> {
+): Promise<{ samples: ProgressSample[]; writes: number[]; deaths: number[]; schemaBatches: number; progress: ProgressVerdict }> {
   let rows: Record<string, unknown>[];
   if (via.store !== null) {
     const before = await via.store.sampleBefore(key, w.since);
@@ -3753,7 +3783,7 @@ async function sessionProgress(
   } else rows = traceSamples(session, w);
   const samples = rows.map((r) => progressSampleOf(r, r["ts"] as number));
   const rec = recordWrites(session, w);
-  return { samples, writes: rec.writes, schemaBatches: rec.schemaBatches, progress: progressVerdict(samples, w, t, rec.writes) };
+  return { samples, writes: rec.writes, deaths: rec.deaths, schemaBatches: rec.schemaBatches, progress: progressVerdict(samples, w, t, rec.writes, rec.deaths) };
 }
 
 /** The detector over one run: where it reads, the window, the scan, and a fan-out run's characters one by one. */
@@ -3795,7 +3825,7 @@ async function stuckOf(
     scan.samples = s.samples;
     // Its tools' served batches are its record's `calls` rows, not trajectory records.
     scan.schemaRecords += s.schemaBatches;
-    return { via, report: stuckReport(scan, w, t, s.writes), anchor, characters: null };
+    return { via, report: stuckReport(scan, w, t, s.writes, s.deaths), anchor, characters: null };
   }
   // A fan-out run: each character judged off its own record, the store's
   // rows under its key; the trajectory's signals are the one agent's.
@@ -3839,7 +3869,7 @@ export async function inspectStuck(runId: string, opts: Ctx & { until: number | 
   for (const s of report.signals) say(`${s.name.padEnd(9)} ${s.tripped ? "TRIPPED" : "ok     "}  ${s.text}`);
   for (const ask of a.asks.slice(-2)) say(`          ${clock(ask.ts)}  ${cap(ask.text, opts.width - 40)}`);
   say(
-    `limits    --window ${fmtAge(t.windowMs)} --move ${t.moveYards} --max-gap ${fmtAge(t.maxGapMs)} --repeat ${t.repeatErrors} --hints ${t.hintTally} --schema ${t.schemaErrors} --restarts ${t.restarts} --asks ${t.asks}`,
+    `limits    --window ${fmtAge(t.windowMs)} --move ${t.moveYards} --max-gap ${fmtAge(t.maxGapMs)} --deaths ${t.deaths} --repeat ${t.repeatErrors} --hints ${t.hintTally} --schema ${t.schemaErrors} --restarts ${t.restarts} --asks ${t.asks}`,
   );
   return 0;
 }
@@ -5139,7 +5169,7 @@ const USAGE = `usage: bun infra/inspect-run.ts live
        bun infra/inspect-run.ts trajectory <run-id> [--last N | --next N] [--errors] [--grep RE] [--all] [--since D] [--until D]
        bun infra/inspect-run.ts tools <run-id> [--since D] [--until D]
        bun infra/inspect-run.ts pad <run-id> [--since D] [--until D] [--last N] | --at D
-       bun infra/inspect-run.ts stuck [<run-id>] [--window D] [--until D] [--move N] [--max-gap D] [--repeat N] [--hints N] [--schema N] [--restarts N] [--asks N]
+       bun infra/inspect-run.ts stuck [<run-id>] [--window D] [--until D] [--move N] [--max-gap D] [--deaths N] [--repeat N] [--hints N] [--schema N] [--restarts N] [--asks N]
        bun infra/inspect-run.ts session <run-id> [--stream events|calls] [--character NAME] [--kind K[,K]] [--grep RE] [--last N | --next N] [--since D] [--until D]
        bun infra/inspect-run.ts requests <run-id> [--since D] [--until D] [--at-level N[,N]] [--at-minutes N[,N]] [--stall D] [--price-at DAY] [--catalogue FILE] [--json]
        bun infra/inspect-run.ts messages <run-id> [--since D] [--until D] [--last N] [--wakes]
@@ -5158,6 +5188,7 @@ const STUCK_FLAGS: readonly (readonly [string, keyof StuckThresholds, "duration"
   ["--window", "windowMs", "duration"],
   ["--move", "moveYards", "count"],
   ["--max-gap", "maxGapMs", "duration"],
+  ["--deaths", "deaths", "count"],
   ["--repeat", "repeatErrors", "count"],
   ["--hints", "hintTally", "count"],
   ["--schema", "schemaErrors", "count"],

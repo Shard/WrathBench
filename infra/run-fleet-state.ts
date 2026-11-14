@@ -641,7 +641,8 @@ export function liveRunStuck(runId: string, now = Date.now(), runsDir = RUNS_DIR
     let from = all.findIndex((r) => (r["ts"] as number) >= w.since);
     from = from < 0 ? all.length - 1 : Math.max(0, from - 1);
     const samples = all.slice(from).map((r) => progressSampleOf(r, Number(r["ts"])));
-    return progressVerdict(samples, w, STUCK_DEFAULTS, recordWrites(sessionDir, w).writes);
+    const rec = recordWrites(sessionDir, w);
+    return progressVerdict(samples, w, STUCK_DEFAULTS, rec.writes, rec.deaths);
   };
   if (isV1RunDir(dir)) {
     const verdict = verdictOf(readStateSamples(dir, runId), sessionDirOfRun(dir));
