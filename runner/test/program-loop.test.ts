@@ -274,7 +274,7 @@ describe("the program prompt", () => {
     expect(program).not.toContain("- yield:");
     expect(programYield).toContain("\n- yield: sleep until something wakes you.");
     expect(programYield.endsWith(`${PROGRAM_BODY_TAIL} ${PROGRAM_YIELD_TAIL}`)).toBe(true);
-    const bullet = "\n- yield: sleep until something wakes you. yield({ seconds? }) returns when a wake arrives, or after seconds (at most 300, the default), and its result is the [wake] block.";
+    const bullet = "\n- yield: sleep until something wakes you. yield({ seconds? }) returns when a wake arrives, or after seconds (at most 300, the default), and its result is the [wake] block and any harness notices since your last turn message.";
     expect(programYield.replace(bullet, "").replace(` ${PROGRAM_YIELD_TAIL}`, "")).toBe(program);
   });
 
