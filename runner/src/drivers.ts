@@ -19,7 +19,7 @@
  * Every driver a run can be started with. `stub` and `reference` never score:
  * neither is a model (`stamp`).
  */
-export const DRIVERS = ["openai", "claude-code", "codex", "pi", "stub", "reference"] as const;
+export const DRIVERS = ["openai", "claude-code", "codex", "pi", "stub", "reference", "external"] as const;
 export type Driver = (typeof DRIVERS)[number];
 
 /** The driver of a run, roster entry or record that names none. */
@@ -45,6 +45,12 @@ export function isDriver(raw: string): raw is Driver {
  *  - `pi`: the pi coding-agent CLI (operator, 2026-10-20), its own history
  *    and its own compaction, on a metered OpenAI-compatible endpoint.
  *    Probe-only until the operator promotes it (`DriverEntry.probeOnly`).
+ *  - `external`: an agent loop that is not ours (operator, 2026-11-14),
+ *    named by its declared agent and version (`RunConfig.agent`). Its own
+ *    comparability group with a declared, partial set of conditions, never
+ *    ranked with ours, and probe-only: this runner never launches it — it
+ *    drives the stack's tools itself, through the hand-driven stdio server
+ *    (`mcp.ts`) or a campaign arm's own `command`.
  *
  * A tag on every run, not a partition and not a scoring penalty (operator,
  * 2026-10-16): rows of every harness share the charts, and no row mixes two
@@ -55,7 +61,7 @@ export function isDriver(raw: string): raw is Driver {
  * comparability schema (`z.enum`) needs the literal tuple; `drivers.test.ts`
  * holds it to the entries.
  */
-export const HARNESSES = ["wrathbench", "claude-code", "codex", "pi"] as const;
+export const HARNESSES = ["wrathbench", "claude-code", "codex", "pi", "external"] as const;
 export type Harness = (typeof HARNESSES)[number];
 
 // ------------------------------------------------------- credentials, stamps
@@ -182,6 +188,12 @@ export interface DriverEntry {
   programYieldOff?: true;
   /** Whether a roster entry may name it. */
   roster: boolean;
+  /**
+   * A probe-only driver that may also run with no episode at all: the
+   * hand-driven stdio server's runs (`mcp.ts`), which are no tier's and so
+   * can stamp onto no scored row. Absent everywhere else.
+   */
+  handRun?: true;
   /** Why a roster entry may never name it, said by name rather than as an unknown driver. */
   rosterRefusal?: string;
   /** Whether `policy.maxSessions` may cap how many of its sessions one host carries. */
@@ -420,6 +432,29 @@ export const DRIVER_TABLE = {
     probeOnly: false,
     bill: "none",
     cost: FIXED_LOOP_COST,
+    compactWindow: false,
+    snippetDelta: false,
+    usage: "response",
+    rollouts: false,
+    podVolumes: [],
+  },
+  // An agent loop that is not ours: the run records what drove it, and this
+  // runner never launches one (its adapter refuses). Probe-only, never a
+  // roster entry, never billed or priced: its model is the agent's to state.
+  external: {
+    id: "external",
+    harness: "external",
+    kind: "scaffold",
+    roster: false,
+    handRun: true,
+    rosterRefusal:
+      "driver external is an agent loop that is not ours — it drives the stack itself, by hand over the stdio MCP server or as a probe-campaign arm's command, never as a roster entry",
+    sessionCap: false,
+    endpoint: false,
+    routing: false,
+    probeOnly: true,
+    bill: "none",
+    cost: { reported: "none", table: "synced" },
     compactWindow: false,
     snippetDelta: false,
     usage: "response",

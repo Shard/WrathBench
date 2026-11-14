@@ -630,7 +630,13 @@ a heartbeat, write `meta.json` and the `run` row, pause on SIGTERM within the
 grace, and record its own turns as `response` records if it wants them
 counted. To land in its campaign square it stamps `config.{campaign,
 campaignVersion, cell, arm}` from its `campaign.json` and `config.ref` from
-`--ref`; a campaign's work is counted by those stamps and nothing else. A
+`--ref`; a campaign's work is counted by those stamps and nothing else. It
+names itself as the `external` harness (`config.driver: "external"`, and a
+tuple, if it writes one, with `harness: "external"` and the `agent` it is,
+`{ name, version }`), which keeps it in a comparability group of its own,
+never ranked with ours (operator, 2026-11-14); a field it cannot state is
+null, never a guess. The hand-driven stdio server (`runner/src/mcp.ts`) stamps
+its runs the same way from `--agent-name`, `--agent-version` and `--model`. A
 runner image older than `--campaign-file` and the strict flag parser cannot
 be an arm: it would ignore the file it is given. The viewer and the collector read the same files, so a run that
 honours the contract appears everywhere a run appears.

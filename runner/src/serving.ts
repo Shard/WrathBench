@@ -58,6 +58,14 @@ export const SERVING_LABEL_KEYS = ["machine", "runtimeVersion"] as const;
 export const servingSchema = z.object({ weights: z.string(), quant: z.string(), runtime: z.string() });
 export const servingLabelsSchema = z.object({ machine: z.string().optional(), runtimeVersion: z.string().optional() });
 
+/**
+ * An external agent as its operator declares it: name and version, each null
+ * when not stated. A key of the `external` harness's group, which is never
+ * ranked with ours (operator, 2026-11-14).
+ */
+export const agentSchema = z.object({ name: z.string().nullable(), version: z.string().nullable() });
+export type AgentSpec = z.infer<typeof agentSchema>;
+
 const MAX_FIELD = 120;
 
 /** Whether a weights name reads as a filesystem path rather than a repository or model name. */

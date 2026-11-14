@@ -163,6 +163,11 @@ export function contextSentence(harness: Harness): string {
     case "codex":
     case "pi":
       return CLI_SCAFFOLD_CONTEXT_SENTENCE;
+    case "external":
+      // An agent loop that is not ours sees its own prompt, never this one:
+      // nothing of ours renders for it, and stamping a hash of a prompt it
+      // never read would assert a comparability that was never established.
+      throw new Error("the external harness renders no prompt of ours: its agent brings its own");
   }
 }
 

@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { parseServing, parseServingLabels } from "../src/serving";
 import { servingRefusal } from "../src/roster-refusal";
-import { comparabilityOf, subjectOfConfig } from "../src/comparability";
+import { comparabilityOf, harnessOfRun, subjectOfConfig } from "../src/comparability";
+import { isProbeOnlyDriver, isRosterDriver } from "../src/drivers";
+import { contextSentence } from "../src/prompt";
 import { entryOwnsRun } from "../src/models";
-import { conditionKey, conditionOf } from "../viewer/condition";
+import { chartGroupOf, conditionKey, conditionOf } from "../viewer/condition";
 import { loadRunConfig } from "../src/config";
 
 const BUILD = { weights: "Qwen/Qwen3.8-27B-GGUF", quant: "Q4_K_M", runtime: "LM Studio" };
@@ -59,7 +61,8 @@ describe("the tuple and the key", () => {
     const hosted = comparabilityOf(config({ apiBase: undefined }), "harness-0.5-1-gabc");
     expect("serving" in hosted).toBe(false);
     expect("subject" in hosted).toBe(false);
-    expect(subjectOfConfig({ serving: undefined })).toBe("hosted");
+    expect(subjectOfConfig({ serving: undefined, driver: "openai" })).toBe("hosted");
+    expect(subjectOfConfig({ serving: undefined, driver: "external" })).toBe("external");
   });
 
   test("a local build and the hosted model of one id are two conditions, and two roster entries", () => {
@@ -81,5 +84,25 @@ describe("the tuple and the key", () => {
     expect(entryOwnsRun(hostedEntry, hostedRun)).toBe(true);
     // A caller that does not know the run's build (no field) matches as before.
     expect(entryOwnsRun(localEntry, { model: "qwen/qwen3.8-27b" })).toBe(true);
+  });
+});
+
+describe("the external harness — an agent loop that is not ours", () => {
+  test("a hand-driven stdio run reads as external, with the agent its operator declared", () => {
+    const config = loadRunConfig({ driver: "external", model: "some/model", agent: { name: "an-agent", version: "1.2" } });
+    expect(harnessOfRun({ comparability: null, driver: config.driver })).toBe("external");
+    expect(config.agent).toEqual({ name: "an-agent", version: "1.2" });
+    // Undeclared fields are null, never a guess.
+    expect(loadRunConfig({ driver: "external", agent: { name: null, version: null } }).agent).toEqual({ name: null, version: null });
+  });
+
+  test("its own chart group, probe-only, never a roster entry, and never launched here", () => {
+    expect(chartGroupOf({ loop: "snippet", pinned: true, wiki: true, subject: "external" }).id).toBe("external");
+    const facts = (agent: { name: string | null; version: string | null }) => ({ series: "0.5", episode: "probing", harness: "external", tuple: { agent, subject: "external" } });
+    expect(conditionKey(facts({ name: "a", version: "1" }))).not.toBe(conditionKey(facts({ name: "a", version: "2" })));
+    expect(conditionOf(facts({ name: "a", version: "1" })).subject).toBe("external");
+    expect(isProbeOnlyDriver("external")).toBe(true);
+    expect(isRosterDriver("external")).toBe(false);
+    expect(() => contextSentence("external")).toThrow(/no prompt of ours/);
   });
 });

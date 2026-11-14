@@ -339,6 +339,8 @@ export interface ComparabilityView {
   serving?: { weights: string; quant: string; runtime: string };
   /** What is being tested; stamped only when not `hosted` (`subjectOfConfig`). */
   subject?: "hosted" | "local" | "external";
+  /** An external run's declared agent, a key; absent on every run of ours. */
+  agent?: { name: string | null; version: string | null };
   /**
    * Which reference bundle the run read, off the bundle's own `meta` table
    * An annotation: a text-changing rebuild ships as a patch within the

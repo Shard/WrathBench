@@ -708,6 +708,8 @@ function projectResultRun(r: ResultRun, conditionIds: ReadonlyMap<string, string
             ...(r.condition.serving !== undefined
               ? { serving: { weights: r.condition.serving.weights, quant: r.condition.serving.quant, runtime: r.condition.serving.runtime } }
               : {}),
+            // An external agent's declared name and version; never its operator.
+            ...(r.condition.agent !== undefined ? { agent: { name: r.condition.agent.name, version: r.condition.agent.version } } : {}),
           },
         }
       : {}),

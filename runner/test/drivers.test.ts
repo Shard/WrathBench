@@ -48,6 +48,7 @@ describe("the driver registry", () => {
       codex: "codex",
       pi: "pi",
       stub: "wrathbench",
+      external: "external",
       reference: "wrathbench",
     });
     expect(harnessDriver("pi")?.id).toBe("pi");
@@ -106,8 +107,9 @@ describe("the driver registry", () => {
       rollouts: false,
       podVolumes: [],
     });
-    // The operator's decision (2026-10-20): probe-only until promoted, and nothing else is.
-    expect(DRIVER_LIST.filter((d) => d.probeOnly).map((d) => d.id)).toEqual(["pi"]);
+    // The operator's decisions: pi probe-only until promoted (2026-10-20), and
+    // an external agent probe-only in v1 (2026-11-14); nothing else is.
+    expect(DRIVER_LIST.filter((d) => d.probeOnly).map((d) => d.id)).toEqual(["pi", "external"]);
     expect(isProbeOnlyDriver("pi")).toBe(true);
     expect(isProbeOnlyDriver(undefined)).toBe(false);
     expect(probeOnlyRefusal("pi")).toContain("probe-only");
