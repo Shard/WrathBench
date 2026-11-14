@@ -1223,7 +1223,8 @@ The accounts for hand runs:
   run, holds it. `bun wb fleet status` lists each account with what is on it.
 - `SMOKE2`–`SMOKE4`, which the suite uses and some smokes use beside PROBE
   (swim's observer is SMOKE3, death-recovery's priest SMOKE4), so a hand smoke
-  on one of them waits for a suite run to finish.
+  on one of them waits for a suite run to finish, and a suite waits for the
+  hand smoke: its reclaim would take the account from it.
 - A suite member run alone goes through the suite, `bun wb smoke suite
   <member>`, which keeps it on its own account. The bare `bun wb smoke <name>`
   passes no environment into the pod, so it logs in on PROBE and fails at
