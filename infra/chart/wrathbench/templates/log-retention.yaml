@@ -17,6 +17,9 @@ rules that keep it off a file the server will still write to are in
 files/log-retention.pl. The secret is for GET /health only (the server's
 start time is one of the two rules) and never reaches a manifest or argv.
 
+With `worlds` on, the same pass prunes each world's console log, saved at
+its teardown under the `worlds` subPath, by the same window.
+
 `worldserver.logRetention.days: 0` (or empty) renders nothing.
 */ -}}
 {{- $r := .Values.worldserver.logRetention | default dict -}}
@@ -77,6 +80,11 @@ spec:
                   value: /azerothcore/env/dist/logs/wrathbench
                 - name: WRATHBENCH_LOG_RETENTION_DAYS
                   value: {{ $r.days | quote }}
+                {{- if include "wrathbench.on.worlds" $ }}
+                # The worlds' console logs, saved at each world's teardown.
+                - name: WRATHBENCH_WORLDS_DIR
+                  value: /azerothcore/env/dist/worlds
+                {{- end }}
                 - name: WRATHBENCH_MODULE_HOST
                   value: "worldserver:8086"
                 - name: WRATHBENCH_MODULE_SECRET
@@ -89,6 +97,11 @@ spec:
                 - name: data
                   mountPath: /azerothcore/env/dist/logs
                   subPath: logs
+                {{- if include "wrathbench.on.worlds" $ }}
+                - name: data
+                  mountPath: /azerothcore/env/dist/worlds
+                  subPath: worlds
+                {{- end }}
                 - name: script
                   mountPath: /opt/wrathbench
                   readOnly: true

@@ -646,6 +646,22 @@ worldserver is touched. Images are admitted by repository
 (`runPods.allowedImages` in the chart), tagged or digest-pinned, never
 `latest`. Operations: `docs/RUNBOOK.md`, "Run pods".
 
+**Worlds.** A world is its state, a characters schema and a realm row, with
+a worldserver pod as a stateless process over it. The long-lived world (the
+`worldserver` Deployment) is shared by freeplay. A world per eval is a pod
+the fleet creates from the chart's `world.json` template, beside the run-pod
+template, and owns like a run pod. The pod shares the game data, auth, the
+client data and the confs (read-only) with the long-lived world, and keeps
+its own characters schema, realm id and account allowlist, which the
+launcher stamps, so the template carries none of the shared world's. Its
+address is `http://<id>.worlds:8086` under the headless `worlds` Service,
+stable across a boot onto a new pod, because a resume reuses the module URL
+its fresh launch stored. Its db-import init creates the schema, or brings a
+kept one up to date. A world's own record and its saved console log live
+under `data/worlds/<id>/`, outside `runs/`. The chart block is `worlds`, off
+by default, and `infra/k8s-deploy.sh` waits for zero world pods after the
+run pods.
+
 ## Reset
 
 Every episode starts with a freshly created character at level 1 in its starting zone. Character creation is a client action the module supports. Character snapshots (DB save and restore for mid-level starts) are deferred.

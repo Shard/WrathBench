@@ -1,0 +1,266 @@
+{{/*
+The worldserver's container, shared by the long-lived world
+(templates/worldserver.yaml) and the world-per-eval pod template
+(templates/run-pods.yaml, `world.json`), so the two cannot drift. Called with
+(dict "ctx" . "world" <bool>); with `world` false it renders exactly the
+shared world's container.
+
+What a world's container does not share with the shared world's: its
+identity (characters schema, realm id, allowlist), which the launcher
+stamps; read-only confs; its own Errors.log; no character-archive mount; and
+the `worlds` block's resources and startup budget.
+*/}}
+{{- define "wrathbench.worldserver.container" -}}
+{{- $ctx := .ctx -}}
+{{- $world := .world -}}
+{{- $startup := ternary $ctx.Values.worlds.startupProbe $ctx.Values.worldserver.startupProbe $world -}}
+- name: worldserver
+  image: {{ include "wrathbench.image.worldserver" $ctx }}
+  imagePullPolicy: {{ $ctx.Values.image.pullPolicy }}
+  securityContext: {{- include "wrathbench.containerSecurityContext" $ctx | nindent 4 }}
+  # As compose: the core's console reads stdin, and without a tty it
+  # spins on EOF.
+  stdin: true
+  tty: true
+  env:
+    {{- if $world }}
+    {{- include "wrathbench.acSharedDbEnv" $ctx | nindent 4 }}
+    # A world's own identity is not here: its characters schema
+    # (AC_CHARACTER_DATABASE_INFO), its realm id (AC_REALM_ID) and its
+    # attempt's accounts (AC_WRATH_BENCH_ACCOUNTS) are the launcher's to
+    # stamp, and the launcher must refuse a pod without all three. The
+    # chart cannot: an absent variable falls back to the shared conf.
+    # Only the schema fails closed (the stock 127.0.0.1 never connects);
+    # the stock realm is 1, the shared realm, and the module's stock
+    # allowlist is RUNNER, a shared-world account.
+    {{- else }}
+    {{- include "wrathbench.acDbEnv" $ctx | nindent 4 }}
+    {{- end }}
+    - name: AC_DATA_DIR
+      value: /azerothcore/env/dist/data
+    - name: AC_LOGS_DIR
+      value: /azerothcore/env/dist/logs
+    - name: AC_TEMP_DIR
+      value: /azerothcore/env/dist/temp
+    - name: AC_BIND_IP
+      value: "0.0.0.0"
+    - name: AC_WORLD_SERVER_PORT
+      value: "8085"
+    {{- if not $world }}
+    - name: AC_REALM_ID
+      value: {{ $ctx.Values.realm.id | quote }}
+    {{- end }}
+    - name: AC_RATE_XP_KILL
+      value: {{ $ctx.Values.worldserver.rateXp.kill | quote }}
+    - name: AC_RATE_XP_QUEST
+      value: {{ $ctx.Values.worldserver.rateXp.quest | quote }}
+    # Warden off (operator decision, 2026-10-28). The fleet never meets
+    # it: the module's sessions are made in-process and the core starts
+    # Warden only on a socket login. The one socket login is the
+    # operator's spectator over a port-forward, and an open client that
+    # implements no Warden is dropped by it.
+    - name: AC_WARDEN_ENABLED
+      value: "0"
+    # SOAP is off until the party staging turns it on (`staging` in
+    # values.yaml), in-cluster only, for the operator's admin STAGER
+    # account; the worldserver's ingress rule, the run pods' egress
+    # policy and the sandbox's port rule keep it out of the agent's
+    # reach (docs/proposals/GROUP-PLAY.md §3). The agent itself has no
+    # privileged control path into the world (wrath-mcp/docs/CONTRACTS.md binds
+    # what it sees and does); actions go through the module, over the
+    # same opcode handlers a client would hit.
+    {{- if $ctx.Values.staging.enabled }}
+    - name: AC_SOAP_ENABLED
+      value: "1"
+    # The pod's own address, so SOAP listens no wider than the
+    # Service and the policy can see it; never 0.0.0.0. A bind that
+    # fails stops the world (`World::StopNow` in ACSoap.cpp), and the
+    # downward API always has the address before the container starts.
+    - name: AC_SOAP_IP
+      valueFrom:
+        fieldRef:
+          fieldPath: status.podIP
+    - name: AC_SOAP_PORT
+      value: {{ $ctx.Values.staging.soapPort | quote }}
+    {{- if not $world }}
+    # The character archive's `.pdump write|load` (infra/character-archive.ts)
+    # names a file under the `characters` mount below; the core's default
+    # refuses any player-dump file name with a path in it.
+    - name: AC_PLAYER_DUMP_DISALLOW_PATHS
+      value: "0"
+    {{- end }}
+    {{- else }}
+    - name: AC_SOAP_ENABLED
+      value: "0"
+    {{- end }}
+    # The core's log reaches the console once per line: `kubectl logs`
+    # is the history and the runtime rotates it. Compose keeps Server
+    # as a File appender (flag 16, per-boot backups); here that tree
+    # reached 22 GB, so Server is a plain Console appender instead
+    # (type 1, level 5, no colour). The stock conf also has a Console
+    # appender, and most loggers write to both (`Logger.root=2,Console
+    # Server`), so with both on every such line came out twice. The
+    # stock Console is therefore off (level 0: Appender::write drops
+    # everything), and the two loggers that wrote to Console but not
+    # Server are re-pointed at Server; `Logger.mmaps=4,Server` already
+    # is. Server carries no ANSI colour codes, which the core prints
+    # whether or not stdout is a terminal. An AC_LOGGER_* variable can
+    # only re-point a logger the conf on the PVC already has: the core
+    # reads loggers from the parsed conf and env overrides existing
+    # keys, never adds one. All four keys move together, so they are
+    # fixed here, not values.
+    # Errors.log and the module's audit dir are still files, on the
+    # data PVC (CLAUDE.md: log at the module boundary); the audit dir
+    # is pruned by age by templates/log-retention.yaml, a separate
+    # CronJob so that its window never rolls this pod. Errors.log is
+    # held open by the core for the life of the process and rewritten
+    # on every boot (appender mode `w`), so nothing prunes it.
+    - name: AC_APPENDER_SERVER
+      value: "1,5,0"
+    - name: AC_APPENDER_CONSOLE
+      value: "1,0,0"
+    - name: AC_LOGGER_SQL_SQL
+      value: "2,Server Errors"
+    - name: AC_LOGGER_SPELLS_SCRIPTS
+      value: "2,Server Errors"
+    # mod-wrathbench (module/). Pinned here rather than in the module
+    # .conf: the stock entrypoint only materialises the main component
+    # .conf from its .dist, never module confs, so a fresh boot would
+    # otherwise leave the module disabled.
+    - name: AC_WRATH_BENCH_ENABLE
+      value: "1"
+    - name: AC_WRATH_BENCH_BIND_ADDRESS
+      value: "0.0.0.0"
+    - name: AC_WRATH_BENCH_PORT
+      value: "8086"
+    - name: AC_WRATH_BENCH_AUDIT_DIR
+      value: /azerothcore/env/dist/logs/wrathbench
+    - name: AC_WRATH_BENCH_THREADS
+      value: {{ $ctx.Values.worldserver.threads | quote }}
+    # The port secret (wrath-mcp/module/PROTOCOL.md "Authentication"). Every
+    # route needs it; without it the module refuses to listen, loudly.
+    - name: AC_WRATH_BENCH_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: {{ $ctx.Values.envSecretName }}
+          key: WRATHBENCH_MODULE_SECRET
+    - name: AC_WRATH_BENCH_ACCOUNT
+      valueFrom:
+        secretKeyRef:
+          name: {{ $ctx.Values.envSecretName }}
+          key: WRATHBENCH_ACCOUNT_USER
+    # Account allowlist: every surface taking an "account" param serves
+    # only these (403 account_not_permitted otherwise). Changing it
+    # takes effect on the next pod, i.e. the next deploy window, and
+    # each name must exist in auth first. With staging on, the party's
+    # accounts are appended; STAGER, SOAP's admin, is never on it.
+    {{- if not $world }}
+    - name: AC_WRATH_BENCH_ACCOUNTS
+      value: {{ include "wrathbench.moduleAccounts" $ctx | quote }}
+    {{- end }}
+  ports:
+    - name: world
+      containerPort: 8085
+    - name: module
+      containerPort: 8086
+    {{- if $ctx.Values.staging.enabled }}
+    - name: soap
+      containerPort: {{ $ctx.Values.staging.soapPort }}
+    {{- end }}
+  # Started means the module's /health answers 200, which it does only
+  # once the world has loaded whole (wrath-mcp/module/PROTOCOL.md, GET /health):
+  # a load that lost rows to a database restart answers 503
+  # world_not_loaded for good, this probe never passes, and the kubelet
+  # restarts the container at the end of the budget, behind the
+  # wait-for-db above. An exec, not httpGet: the module refuses a
+  # request without the bearer, and only the container's own env holds
+  # it. Perl, as infra/module-health.sh, because the image has no curl;
+  # the secret is read from the environment, never from argv.
+  startupProbe:
+    exec:
+      command:
+        - perl
+        - -MIO::Socket::INET
+        - -e
+        - |
+          $SIG{ALRM} = sub { exit 1 }; alarm 4;
+          my $s = IO::Socket::INET->new(PeerAddr => "127.0.0.1:8086", Timeout => 3) or exit 1;
+          print $s "GET /health HTTP/1.0\r\nAuthorization: Bearer $ENV{AC_WRATH_BENCH_SECRET}\r\n\r\n";
+          exit((<$s> // "") =~ m{^HTTP/\S+ 200 } ? 0 : 1);
+    timeoutSeconds: 5
+    periodSeconds: {{ $startup.periodSeconds }}
+    failureThreshold: {{ $startup.failureThreshold }}
+  # tcpSocket, not httpGet: the module refuses every request without
+  # the bearer, so an HTTP probe would report a healthy server as sick.
+  # The deploy's /health call, which presents the secret, is the check
+  # a release waits on (infra/k8s-deploy.sh).
+  readinessProbe:
+    tcpSocket:
+      port: 8085
+    periodSeconds: 10
+    failureThreshold: 6
+  resources: {{ toYaml (ternary $ctx.Values.worlds.resources $ctx.Values.worldserver.resources $world) | nindent 4 }}
+  volumeMounts:
+    # The AzerothCore server data directory (dbc/ maps/ vmaps/ mmaps/).
+    # Operator-supplied, read-only, never in git.
+    - name: data
+      mountPath: /azerothcore/env/dist/data
+      subPath: client
+      readOnly: true
+    {{- if $world }}
+    # The shared confs, read-only: every setting a world differs in is
+    # env. The entrypoint's no-clobber copy of the reference confs
+    # writes nothing once they exist, and the shared worldserver, which
+    # boots on every release image first, is what makes them exist.
+    - name: data
+      mountPath: /azerothcore/env/dist/etc
+      subPath: etc
+      readOnly: true
+    # Errors.log is rewritten at every boot (appender mode `w`), so a
+    # world keeps its own on the pod; only the module's audit dir, whose
+    # files are named by token fingerprint, is the shared one.
+    - name: logs
+      mountPath: /azerothcore/env/dist/logs
+    - name: data
+      mountPath: /azerothcore/env/dist/logs/wrathbench
+      subPath: logs/wrathbench
+    {{- else }}
+    - name: data
+      mountPath: /azerothcore/env/dist/etc
+      subPath: etc
+    - name: data
+      mountPath: /azerothcore/env/dist/logs
+      subPath: logs
+    {{- end }}
+    {{- if and $ctx.Values.staging.enabled (not $world) }}
+    # Where `.pdump write|load` over SOAP meets the runner pod, which
+    # mounts the same subPath at data/characters (infra/character-archive.ts).
+    - name: data
+      mountPath: /azerothcore/env/dist/characters
+      subPath: characters
+    {{- end }}
+    - name: temp
+      mountPath: /azerothcore/env/dist/temp
+{{- end -}}
+
+{{/*
+The worldserver's wait for MySQL to answer a real query, shared by the
+long-lived world and a world pod (templates/worldserver.yaml says why).
+*/}}
+{{- define "wrathbench.worldserver.waitForDb" -}}
+{{- $ctx := . -}}
+- name: wait-for-db
+  image: {{ include "wrathbench.image.worldserver" $ctx }}
+  imagePullPolicy: {{ $ctx.Values.image.pullPolicy }}
+  securityContext: {{- include "wrathbench.containerSecurityContext" $ctx | nindent 4 }}
+  command:
+    - sh
+    - -c
+    - 'for i in $(seq 1 120); do mysql -h "$WRATHBENCH_DB_HOST" -u root --connect-timeout=5 --execute "SELECT 1" >/dev/null && exit 0; sleep 5; done; echo "db never answered a query"; exit 1'
+  env:
+    {{- include "wrathbench.dbEnv" $ctx | nindent 4 }}
+    {{- include "wrathbench.mysqlPwdEnv" $ctx | nindent 4 }}
+  resources:
+    requests: { cpu: 10m, memory: 64Mi, ephemeral-storage: 256Mi }
+    limits: { memory: 256Mi }
+{{- end -}}

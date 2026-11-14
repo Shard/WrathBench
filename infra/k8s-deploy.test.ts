@@ -58,7 +58,8 @@ const TAG = "wb-test-0.9-1-gdeadbee";
  *                    (-1 = forever, which is the pod that outlives the budget)
  *   FAKE_POD_FAILS   how many fleet-pod reads fail first, kubectl exiting 1
  *                    with a complaint on stderr (-1 = every one); the same
- *                    for the run pods is FAKE_RUN_POD_FAILS
+ *                    for the run pods is FAKE_RUN_POD_FAILS, and for the
+ *                    world pods FAKE_WORLD_POD_POLLS / FAKE_WORLD_POD_FAILS
  *   FAKE_REPLICAS    what the fleet Deployment reports for .spec.replicas
  *   FAKE_SMOKE_RC    the exit code every smoke returns
  *   FAKE_PREFLIGHT   the file `config-store.ts get preflight` answers with —
@@ -102,6 +103,28 @@ case "\${cmd}" in
     esac
     ;;
   get)
+    if [[ "\${raw}" == *"component=world"* ]]; then
+      f=0
+      [[ -f "\${FAKE_LOG}.worldpodfail" ]] && f="$(cat "\${FAKE_LOG}.worldpodfail")"
+      fails="\${FAKE_WORLD_POD_FAILS:-0}"
+      if [[ "\${fails}" == "-1" || "\${f}" -lt "\${fails}" ]]; then
+        printf '%s' "$(( f + 1 ))" > "\${FAKE_LOG}.worldpodfail"
+        log "get world-pods failed"
+        echo "Unable to connect to the server: net/http: TLS handshake timeout" >&2
+        exit 1
+      fi
+      # The WORLD pods (a world per eval): FAKE_WORLD_POD_POLLS reads still list one.
+      n=0
+      [[ -f "\${FAKE_LOG}.worldpodcount" ]] && n="$(cat "\${FAKE_LOG}.worldpodcount")"
+      n=$(( n + 1 ))
+      printf '%s' "\${n}" > "\${FAKE_LOG}.worldpodcount"
+      log "get world-pods"
+      polls="\${FAKE_WORLD_POD_POLLS:-0}"
+      if [[ "\${polls}" == "-1" || "\${n}" -le "\${polls}" ]]; then
+        printf 'wrathbench-world-w0abcdefghj Running w0abcdefghj\\n'
+      fi
+      exit 0
+    fi
     if [[ "\${raw}" == *"component=run"* ]]; then
       f=0
       [[ -f "\${FAKE_LOG}.runpodfail" ]] && f="$(cat "\${FAKE_LOG}.runpodfail")"
@@ -183,6 +206,9 @@ interface Case {
   podFails?: number;
   /** The same for the run pods. */
   runPodFails?: number;
+  /** The same two for the WORLD pods (`component=world`). */
+  worldPodPolls?: number;
+  worldPodFails?: number;
   replicas?: number;
   drainWaitS?: number;
   smokeRc?: number;
@@ -237,6 +263,8 @@ function run(c: Case): Result {
         FAKE_RUN_POD_POLLS: String(c.runPodPolls ?? 0),
         FAKE_POD_FAILS: String(c.podFails ?? 0),
         FAKE_RUN_POD_FAILS: String(c.runPodFails ?? 0),
+        FAKE_WORLD_POD_POLLS: String(c.worldPodPolls ?? 0),
+        FAKE_WORLD_POD_FAILS: String(c.worldPodFails ?? 0),
         FAKE_REPLICAS: String(c.replicas ?? 1),
         ...(c.smokeRc !== undefined ? { FAKE_SMOKE_RC: String(c.smokeRc) } : {}),
         FAKE_PREFLIGHT: preflightJson,
@@ -371,6 +399,40 @@ describe("k8s-deploy.sh draining", () => {
     expect(r.exitCode).toBe(0);
     expect(r.out).toContain("run pods");
     expect(r.out).toContain("wrathbench-run-xyz12 Running");
+  });
+
+  // A world pod (a world per eval) is owned by the fleet pod like a run pod;
+  // it is waited out after the run pods that play on it.
+  test("world pods are waited out after the run pods and before the worldserver is touched", () => {
+    const r = run({ podPolls: 1, runPodPolls: 1, worldPodPolls: 1 });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("waiting for every WORLD pod to go away");
+    expect(r.out).toContain("drained: no world pod remains");
+    expect(r.calls.filter((l) => l === "get world-pods").length).toBeGreaterThanOrEqual(2);
+    const lastWorldPoll = lastIndex(r, "get world-pods");
+    expect(lastWorldPoll).toBeGreaterThan(lastIndex(r, "get run-pods"));
+    expect(lastWorldPoll).toBeLessThan(r.calls.findIndex((l) => l.startsWith("rollout status") && l.includes("worldserver")));
+    expect(lastWorldPoll).toBeLessThan(firstIndex(r, "smoke "));
+  }, 20_000);
+
+  test("a world pod that never goes away, or a read of them that keeps failing, fails the window closed", () => {
+    const stuck = run({ podPolls: 0, worldPodPolls: -1, drainWaitS: 1 });
+    expect(stuck.exitCode).toBe(1);
+    expect(stuck.out).toContain("wrathbench-world-w0abcdefghj Running w0abcdefghj");
+    expect(stuck.out).toContain("must not land under a live world");
+    expect(firstIndex(stuck, "smoke ")).toBe(-1);
+    expect(stuck.calls.some((l) => l.includes("--replicas=1"))).toBe(true);
+    const unread = run({ podPolls: 0, worldPodFails: -1, drainWaitS: 3 });
+    expect(unread.exitCode).toBe(1);
+    expect(unread.out).toContain("could not list the world pods within 3s");
+    expect(unread.out).not.toContain("drained: no world pod remains");
+    expect(firstIndex(unread, "smoke ")).toBe(-1);
+  }, 20_000);
+
+  test("--dry-run lists the world pods", () => {
+    const r = run({ args: ["--dry-run"], worldPodPolls: 1 });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("world pods         wrathbench-world-w0abcdefghj Running w0abcdefghj");
   });
 
   // A kubectl that fails is not a cluster with no pods. The readers used to

@@ -12,6 +12,9 @@ infra/run-roster.ts and every smoke's MODULE_HOST all say `worldserver:8086` —
 and inside the namespace they resolve through the pod's DNS search path.
 Renaming them to match the house prefix breaks every one of those defaults at
 once, silently, at the first episode rather than at deploy. Do not tidy them.
+The worlds' headless Service, `worlds` (templates/worlds.yaml), is un-prefixed
+for the same reason: a world's module URL, `http://<id>.worlds:8086`, is
+stored in each run's config and reused by every resume.
 
 The database Service IS prefixed (`wrathbench-db`), because nothing compiles
 that name in: bootstrap.ts's `db` is only a default, and the AC_*_DATABASE_INFO
@@ -191,12 +194,17 @@ from the Secret, not by Helm: the manifest carries $(WRATHBENCH_DB_PASSWORD),
 which the kubelet expands from the container's own environment. No secret value
 appears in the rendered chart, in `helm get manifest`, or in Flux's diff.
 */}}
-{{- define "wrathbench.acDbEnv" -}}
+{{- /* The two schemas every world reads, the shared one and each world of its own: auth and the game data. */}}
+{{- define "wrathbench.acSharedDbEnv" -}}
 {{ include "wrathbench.dbEnv" . }}
 - name: AC_LOGIN_DATABASE_INFO
   value: "$(WRATHBENCH_DB_HOST);3306;root;$(WRATHBENCH_DB_PASSWORD);acore_auth"
 - name: AC_WORLD_DATABASE_INFO
   value: "$(WRATHBENCH_DB_HOST);3306;root;$(WRATHBENCH_DB_PASSWORD);acore_world"
+{{- end -}}
+
+{{- define "wrathbench.acDbEnv" -}}
+{{ include "wrathbench.acSharedDbEnv" . }}
 - name: AC_CHARACTER_DATABASE_INFO
   value: "$(WRATHBENCH_DB_HOST);3306;root;$(WRATHBENCH_DB_PASSWORD);acore_characters"
 {{- end -}}
@@ -448,6 +456,8 @@ reads it.
 {{- define "wrathbench.on.viewer" -}}{{ if and .Values.groups.viewer.enabled .Values.viewer.enabled }}true{{ end }}{{- end -}}
 {{- define "wrathbench.on.publisher" -}}{{ if and .Values.groups.viewer.enabled .Values.publisher.enabled }}true{{ end }}{{- end -}}
 {{- define "wrathbench.on.clickhouse" -}}{{ if and .Values.groups.viewer.enabled .Values.clickhouse.enabled }}true{{ end }}{{- end -}}
+{{- /* A world per eval (values.yaml `worlds`): the fleet creates them, and only for scored and probing attempts. */}}
+{{- define "wrathbench.on.worlds" -}}{{ if and .Values.worlds.enabled (include "wrathbench.on.fleet" .) .Values.groups.evals.enabled }}true{{ end }}{{- end -}}
 {{- define "wrathbench.on.collector" -}}{{ if and (include "wrathbench.on.clickhouse" .) .Values.collector.enabled }}true{{ end }}{{- end -}}
 
 {{/*

@@ -9,7 +9,8 @@
 #               job has exited — never a pid probe, never a guess — AND for the
 #               fleet POD to be gone, because the supervisor's own preflight
 #               smoke is not a job and holds a smoke account that the gate
-#               smokes need.
+#               smokes need. Then for every run pod and every world pod
+#               (a world per eval) the fleet pod owned to be gone too.
 #   waiting     wait for the worldserver rollout and for the module to answer
 #               /health ready WITH the bearer.
 #   verifying   run the gate smokes (preflight.smokes) and then the deploy-only
@@ -87,7 +88,7 @@ while [[ $# -gt 0 ]]; do
     --expect-tag) EXPECT_TAG="$2"; shift 2 ;;
     --allow-tag-mismatch) ALLOW_TAG_MISMATCH=1; shift ;;
     --keep-paused) KEEP_PAUSED=1; shift ;;
-    -h|--help) sed -n '2,58p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "k8s-deploy: unknown flag $1" >&2; exit 2 ;;
   esac
 done
@@ -239,6 +240,16 @@ fleet_pods() {
 run_pods() {
   read_pods "app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=run" \
     'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.phase}{" "}{.metadata.annotations.wrathbench\.shard\.page/run-id}{"\n"}{end}'
+}
+# The WORLD pods: a world per eval (values.yaml `worlds`; `component=world`,
+# with the world id in an annotation), each a worldserver over its own
+# characters schema. Owned by the fleet pod like a run pod, and deleted with a
+# 120s grace once it is gone. Its sessions end with the run pods that play on
+# it, but a world left up across the window would keep the old build, with the
+# release's schema migrations run under it on the auth and game data it reads.
+world_pods() {
+  read_pods "app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=world" \
+    'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.phase}{" "}{.metadata.annotations.wrathbench\.shard\.page/world-id}{"\n"}{end}'
 }
 # "a, b" out of a reader's lines, for a refusal.
 joined_lines() {
@@ -400,6 +411,7 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   say "  fleet replicas     $(fleet_replicas)"
   say "  fleet pods         $(if p="$(fleet_pods)"; then if [[ -n "${p//[[:space:]]/}" ]]; then echo "${p//$'\n'/; }" | sed 's/; $//'; else echo "none — the drain would not have to wait for one"; fi; else echo "COULD NOT READ (${p}) — the drain would retry, then fail closed"; fi)"
   say "  run pods           $(if p="$(run_pods)"; then if [[ -n "${p//[[:space:]]/}" ]]; then echo "${p//$'\n'/; }" | sed 's/; $//'; else echo "none — no episode is running as its own pod"; fi; else echo "COULD NOT READ (${p}) — the drain would retry, then fail closed"; fi)"
+  say "  world pods         $(if p="$(world_pods)"; then if [[ -n "${p//[[:space:]]/}" ]]; then echo "${p//$'\n'/; }" | sed 's/; $//'; else echo "none — no eval is playing on a world of its own"; fi; else echo "COULD NOT READ (${p}) — the drain would retry, then fail closed"; fi)"
   resolve_tag_check
   case "${TAG_CHECK}" in
     ok) say "  pin check          OK — ${TAG_CHECK_WHY}" ;;
@@ -644,6 +656,33 @@ while :; do
   sleep 2
 done
 say "drained: no run pod remains"
+
+# And the world pods, after the run pods that play on them and with the same
+# budget, for the reasons at world_pods.
+say "waiting for every WORLD pod to go away (each is a world per eval; up to ${DRAIN_WAIT_S}s)"
+world_deadline=$(( $(date +%s) + DRAIN_WAIT_S ))
+world_polls=0
+world_read_fails=0
+while :; do
+  if world_pod_lines="$(world_pods)"; then
+    world_polls=$(( world_polls + 1 ))
+    if [[ -z "${world_pod_lines//[[:space:]]/}" ]]; then
+      [[ "${world_polls}" -eq 1 ]] && say "  (no world pod on the first look — nothing to wait for)"
+      break
+    fi
+    if [[ "$(date +%s)" -ge "${world_deadline}" ]]; then
+      fail_closed "a world pod is still there ${DRAIN_WAIT_S}s after the run pods went away: $(joined_lines "${world_pod_lines}") — the release migrates the schemas it reads, and must not land under a live world. Read: ${KUBECTL[*]} get pods -l app.kubernetes.io/component=world"
+    fi
+  else
+    world_read_fails=$(( world_read_fails + 1 ))
+    [[ "${world_read_fails}" -eq 1 ]] && say "  could not list the world pods (${world_pod_lines}) — retrying until the drain budget runs out"
+    if [[ "$(date +%s)" -ge "${world_deadline}" ]]; then
+      fail_closed "could not list the world pods within ${DRAIN_WAIT_S}s (${world_read_fails} failed read(s), last: ${world_pod_lines}) — a failed read is not an empty one, and the release must not run under a world nobody could see. Read: ${KUBECTL[*]} get pods -l app.kubernetes.io/component=world"
+    fi
+  fi
+  sleep 2
+done
+say "drained: no world pod remains"
 
 # ------------------------------------------------------------------ 2. wait
 CURRENT_PHASE=waiting

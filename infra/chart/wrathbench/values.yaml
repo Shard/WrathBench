@@ -445,6 +445,56 @@ runPods:
   # As the fleet's /tmp, for one episode.
   tmpSizeLimit: 2Gi
 
+# A world per eval: every scored attempt plays on a short-lived world of its
+# own, a worldserver over its own characters schema and realm row, while
+# freeplay shares the long-lived `worldserver` above (docs/ARCHITECTURE.md,
+# "Worlds"). The fleet creates each as a bare pod from the `world.json`
+# template beside the run-pod template (templates/run-pods.yaml), owned by the
+# fleet pod, and drops it at the attempt's verdict. Off renders nothing; on
+# renders the template, the headless `worlds` Service whose `<id>.worlds`
+# names keep a world's address stable across a re-boot, the world pods'
+# NetworkPolicy and the `worlds` subPath the fleet keeps each world's record
+# in. Nothing is created until the fleet setting `policy.worlds` is "evals".
+worlds:
+  enabled: false
+  # How many worlds may exist at once; null for no cap. As `runPods.maxPods`:
+  # set it to what the namespace's ResourceQuota fits beside the release's own
+  # pods and the run pods, and an attempt waits ("cap: worlds n/max") rather
+  # than be refused.
+  max: null
+  # One world: the static game data with few grids loaded. A first estimate,
+  # to be set from the first measured world (the long-lived world holds
+  # 2.6 GiB after a day with one live run).
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1536Mi
+      ephemeral-storage: 256Mi
+    limits:
+      memory: 4Gi
+  # A world boots in about 30 s from scheduled to ready on a warm page cache.
+  # The budget is failureThreshold * periodSeconds; a world not ready in it
+  # ends (the pod never restarts), and the fleet counts no attempt.
+  startupProbe:
+    periodSeconds: 10
+    failureThreshold: 30
+  # The characters-only `dbimport` that creates the world's schema, or brings
+  # a kept one up to date, before the worldserver starts. Its request is the
+  # pod's while it runs, so it stays below the worldserver's.
+  dbImport:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+        ephemeral-storage: 256Mi
+      limits:
+        memory: 1Gi
+  # AC_TEMP_DIR, as the long-lived world's.
+  tempSizeLimit: 2Gi
+  # The world's own logs dir (Errors.log, and dbimport's log of what it
+  # applied); the module's audit dir under it is the shared one on the PVC.
+  logsSizeLimit: 1Gi
+
 # The `codex` driver's ChatGPT-subscription credential (runner/README.md, Drivers).
 # The CLI refreshes the token in place, so the home is MOUNTED, never copied: a
 # second live copy invalidates the first ("refresh token was already used").
