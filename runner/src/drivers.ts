@@ -164,6 +164,13 @@ export interface DriverEntry {
    * continuation, campaign — can steer it (`loadRunConfig`).
    */
   route?: boolean;
+  /**
+   * A scaffold that runs the program loop (`loop: "program"`, a probe arm):
+   * its CLI ends a turn every few calls, so the pause after each turn
+   * becomes the sleep (`adapter-codex.ts`). Absent on the scaffolds whose one
+   * turn runs for hours; the fixed loop runs it whatever this says.
+   */
+  programLoop?: true;
   /** Whether a roster entry may name it. */
   roster: boolean;
   /** Why a roster entry may never name it, said by name rather than as an unknown driver. */
@@ -315,6 +322,7 @@ export const DRIVER_TABLE = {
     id: "codex",
     harness: "codex",
     kind: "scaffold",
+    programLoop: true,
     roster: true,
     sessionCap: true,
     endpoint: false,

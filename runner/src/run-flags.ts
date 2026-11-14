@@ -48,6 +48,7 @@ export const RUN_FLAGS = [
   "extra",
   "idle-ms",
   "keep-characters",
+  "loop",
   "max-characters",
   "max-tool-calls",
   "max-turns",
@@ -71,6 +72,7 @@ export const RUN_FLAGS = [
   "wiki",
   "wiki-bundle",
   "wiki-coords",
+  "yield",
 ] as const;
 export type RunFlag = (typeof RUN_FLAGS)[number];
 

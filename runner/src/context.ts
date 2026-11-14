@@ -74,6 +74,15 @@ export const CONTEXT_POLICY = {
    */
   WINDOW_MESSAGE_CHARS: 4_000,
   /**
+   * Tool results the per-message cap does not cut: the program loop's
+   * `read_file`, whose answer is a workspace file exactly as stored and is
+   * already bounded by the 32,000-char file cap (a cut file cannot be read
+   * back at all: it has no range), and its `yield`, whose answer is the
+   * [wake] block, bounded by its own caps. The snippet loop serves neither,
+   * so its window is cut as it always was. Older results still fold.
+   */
+  WINDOW_UNCAPPED_TOOLS: ["read_file", "yield"] as readonly string[],
+  /**
    * Max chars of a call's arguments on a folded tool result's line
    * (`foldToolResult`). Short on purpose: the call itself stays in the window
    * as the model sent it, so the line only has to say which call it answers.
@@ -1353,6 +1362,19 @@ export interface ContextInputs {
   notices: HarnessNotice[];
   /** Model turn number, for the model's own orientation. */
   turn: number;
+  /**
+   * The program loop's [wake] block (`wake.ts`, `renderWake`), on every
+   * request of a wake that ended a turn-end sleep. Absent renders nothing,
+   * which is every turn of the snippet loop.
+   */
+  wake?: string | undefined;
+  /**
+   * The scratchpad is not repeated: the conversation already holds it as it
+   * stands (`PadSeen`, a scaffold's program loop). A line with its size says
+   * so in its place. Absent or false renders the pad whole, as every other
+   * run always has.
+   */
+  scratchpadUnchanged?: boolean | undefined;
 }
 
 /**
@@ -1616,6 +1638,10 @@ export function assembleContext(inputs: ContextInputs): string {
   // 2026-10-23). The `[turn N]` prefix is parsed back (`codex-rollout.ts`).
   parts.push(`[turn ${inputs.turn}]`);
 
+  // The program loop's wake, first after the turn's number: the prompt says
+  // the turn begins with it. Never on the snippet loop.
+  if (inputs.wake !== undefined && inputs.wake.length > 0) parts.push(inputs.wake);
+
   if (inputs.notices.length > 0) {
     parts.push(
       `[harness notices]\n${inputs.notices.map((n) => `- ${n.kind}: ${n.text}`).join("\n")}`,
@@ -1643,10 +1669,83 @@ export function assembleContext(inputs: ContextInputs): string {
   parts.push(
     inputs.scratchpad.trim().length === 0
       ? "[scratchpad]\n(empty — write your plan and durable facts with write_scratchpad)"
-      : `[scratchpad ${scratchpadSizeLabel(inputs.scratchpad.length)}]\n${inputs.scratchpad}`,
+      : inputs.scratchpadUnchanged === true
+        ? scratchpadUnchangedLine(inputs.scratchpad.length)
+        : `[scratchpad ${scratchpadSizeLabel(inputs.scratchpad.length)}]\n${inputs.scratchpad}`,
   );
 
   return parts.join("\n\n");
+}
+
+/**
+ * The line that stands for a pad the conversation already holds as it is
+ * (`ContextInputs.scratchpadUnchanged`): its size against the cap, as the
+ * whole pad's header gives it, and that it is not repeated. Not a pad header
+ * (`[scratchpad <size>]` and a newline), so a reader of the record that
+ * looks for the pad finds none here.
+ */
+export function scratchpadUnchangedLine(chars: number): string {
+  return `[scratchpad ${scratchpadSizeLabel(chars)}: unchanged since you last saw it in this conversation, so not repeated]`;
+}
+
+/**
+ * What a scaffold's conversation holds of the scratchpad, on the program
+ * loop: the pad is sent whole only when the conversation does not already
+ * hold it as it stands. That is
+ * the first message of a thread (a new episode, a resumed run, a thread the
+ * CLI could not continue), the first after the CLI compacted the thread, and
+ * any message after the pad changed outside the conversation: a snippet's or
+ * a routine's `scratchpad.write`, or anything else the model's own pad tools
+ * did not do. A `write_scratchpad` or an `edit_scratchpad` the model made is
+ * in the conversation, so the pad it leaves is known, as long as what it
+ * edited was. The fixed loop never uses this: its window is not a thread.
+ */
+export class PadSeen {
+  /** The pad as the conversation holds it, or undefined when it holds none it can be trusted to. */
+  private known: string | undefined;
+
+  /** Whether a message sends `pad` whole; when it does, the conversation holds it from then on. */
+  sendWhole(pad: string): boolean {
+    if (pad.trim().length > 0 && pad === this.known) return false;
+    this.known = pad;
+    return true;
+  }
+
+  /** The conversation lost what it held: a new thread, or a compaction. */
+  reset(): void {
+    this.known = undefined;
+  }
+
+  /** The model's `write_scratchpad` of `content` succeeded, leaving the pad `now`. */
+  wrote(content: string, now: string): void {
+    this.known = content === now ? now : undefined;
+  }
+
+  /** The model's `edit_scratchpad` succeeded, leaving the pad `now`: known only when the same edit of what was known gives it. */
+  edited(old: string, replacement: string, replaceAll: boolean, now: string): void {
+    const k = this.known;
+    if (k === undefined || old.length === 0) {
+      this.known = undefined;
+      return;
+    }
+    const at = k.indexOf(old);
+    const next = at < 0 ? undefined : replaceAll ? k.split(old).join(replacement) : k.slice(0, at) + replacement + k.slice(at + old.length);
+    this.known = next === now ? now : undefined;
+  }
+}
+
+/**
+ * A scaffold's thread context: what its conversation already holds of the
+ * scratchpad (`PadSeen`), so a turn's message does not repeat it. Used on
+ * codex, on the program loop (`threadContextOf`, config.ts).
+ */
+export class ThreadContext {
+  readonly pad = new PadSeen();
+
+  /** The thread lost what it held, or may have (a compaction, another thread, a rollout that could not be read): the next message sends the pad whole. */
+  reset(): void {
+    this.pad.reset();
+  }
 }
 
 // --------------------------------------------------------- message window
@@ -1840,7 +1939,8 @@ function windowMessage(m: HistoryMessage): ChatMessage {
 
 /**
  * A window as it is sent: the tool results among its first `fold` messages
- * folded, every other message capped, and nothing but `ChatMessage` fields.
+ * folded, every other message capped (but the results of
+ * `WINDOW_UNCAPPED_TOOLS`), and nothing but `ChatMessage` fields.
  * The one rendering the loop, the writer's self-check and the replay share.
  *
  * A tool result is matched to its call by position after the assistant
@@ -1862,6 +1962,7 @@ export function renderWindow(
     } else if (m.role === "tool") {
       const call = calls[answered++]?.function;
       if (i < fold) return foldToolResult(call, m);
+      if (call !== undefined && CONTEXT_POLICY.WINDOW_UNCAPPED_TOOLS.includes(call.name)) return windowMessage(m);
     }
     return capWindowMessage(windowMessage(m), cap);
   });

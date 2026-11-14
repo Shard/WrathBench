@@ -86,6 +86,7 @@ bun wb inspect stuck [<run-id>] [--window 2h] [--until 1h]     # no game progres
 bun wb inspect session <run-id> [--stream calls] [--character Name] [--kind death,level] [--grep RE] [--last 20]   # a v1 run's record, a line per row
 bun wb inspect session '<run-id>~Name'                         # one fan-out character, by the session id the viewer shows
 bun wb inspect requests <run-id> [--at-level 5] [--at-minutes 60,90] [--json]   # per request, per wake or turn and per hour, cost, stall minutes
+bun wb inspect messages <run-id> [--last 50] [--wakes]   # each turn's context message by part, in characters; --wakes prints the wake blocks
 bun wb inspect audit <run-id> [--op WB_MOVE_RESULT [--status S]] [--since 1h]
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
 bun wb inspect audit --smoke edge-drop --op move_edge_drop --since 1h   # a smoke's sessions (from the smoke-session ledger)

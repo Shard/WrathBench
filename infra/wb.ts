@@ -331,6 +331,13 @@ export const ENTRIES: readonly Entry[] = [
   },
   {
     group: "inspect",
+    command: "messages",
+    takes: "<run-id> [--since D] [--until D] [--last N] [--wakes] [--files]",
+    summary: "each request's context message by part (turn, wake block, notices, HUD, event window, scratchpad) in characters, the last N and their mean; --wakes prints the wake blocks",
+    ...inRunner("bun", INSPECT_RUN, "messages"),
+  },
+  {
+    group: "inspect",
     command: "audit",
     takes: "<run-id> | --smoke <name> [--op X[,Y] [--status S] [--last N | --summary]] [--since D] [--until D]",
     summary: "the module audit log of a run or of a smoke's sessions (one session name at a time: group-a, mail-r), counts per op and status or the last records, reduced where it lives",

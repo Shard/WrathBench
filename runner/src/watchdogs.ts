@@ -94,6 +94,24 @@ export class Watchdogs {
     this.lastModelOutputAt = this.now();
   }
 
+  /** When the model went to sleep on the program loop (`wake.ts`), or null while it is awake. */
+  private asleepSince: number | null = null;
+
+  /**
+   * The model is asleep by the harness's design (the program loop's sleep or
+   * `yield`): time asleep is not `idle`. The idle clock stops here and
+   * resumes at `noteAwake`, so only time awake without a response counts.
+   */
+  noteAsleep(): void {
+    this.asleepSince ??= this.now();
+  }
+
+  noteAwake(): void {
+    if (this.asleepSince === null) return;
+    this.lastModelOutputAt += this.now() - this.asleepSince;
+    this.asleepSince = null;
+  }
+
   /** A state observation arrived. Progress = lexicographic (level, xp). */
   noteProgress(level: number | undefined, xp: number | undefined): void {
     if (level === undefined && xp === undefined) return;
@@ -194,8 +212,10 @@ export class Watchdogs {
     if (this.cfg.episodeMs !== null && t - this.startedAt >= this.cfg.episodeMs) {
       return { reason: "episode-limit", detail: `episode wall clock ${t - this.startedAt}ms` };
     }
-    if (this.cfg.idleMs !== null && t - this.lastModelOutputAt >= this.cfg.idleMs) {
-      return { reason: "idle", detail: `no model output for ${t - this.lastModelOutputAt}ms` };
+    // Idle time stops at the moment the model went to sleep (`noteAsleep`); on the snippet loop it never sleeps.
+    const awakeUntil = this.asleepSince ?? t;
+    if (this.cfg.idleMs !== null && awakeUntil - this.lastModelOutputAt >= this.cfg.idleMs) {
+      return { reason: "idle", detail: `no model output for ${awakeUntil - this.lastModelOutputAt}ms` };
     }
     if (
       this.cfg.noXpMs !== null &&

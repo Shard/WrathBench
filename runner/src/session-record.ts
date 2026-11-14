@@ -92,11 +92,30 @@ const SIGNAL_CAP = 256;
  */
 export class RecordSignals {
   private readonly kills: PartySignal[] = [];
+  /** Deaths and quests completed, counted as written: what a program-loop wake says changed while the model slept. */
+  private deaths = 0;
+  private quests = 0;
+  /** Told of each death as it is written: a death wakes a sleeping model on the program loop (`wake.ts`). */
+  onDeath: ((ts: number) => void) | undefined;
+
+  /** Deaths and quests completed written so far (`ProgramWake`). */
+  counts(): { deaths: number; quests: number } {
+    return { deaths: this.deaths, quests: this.quests };
+  }
 
   /** `SessionWriter.onRows`. */
   readonly onRows = <S extends StreamName>(stream: S, rows: StreamRows[S][]): void => {
     if (stream !== "events") return;
     for (const row of rows as EventRow[]) {
+      if (row.kind === "death") {
+        this.deaths++;
+        this.onDeath?.(row.ts);
+        continue;
+      }
+      if (row.kind === "quest") {
+        this.quests++;
+        continue;
+      }
       if (row.kind !== "kill") continue;
       this.kills.push({
         kind: "kill",

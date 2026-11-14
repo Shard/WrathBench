@@ -456,6 +456,10 @@ describe("codex", () => {
     expect([totals(w).prompt, totals(w).output]).toEqual([viewer.promptTokens, viewer.completionTokens]);
     const text = (await inspect(["requests", CODEX, "--runs-dir", RUNS])).out.join("\n");
     expect(text).toMatch(/^CLI turns \(requests\) +4$/m);
+    // A CLI turn is one request: what varies is the items the model answered with, five over four turns.
+    expect(w.wakes.responsesPer).toBe(1.25);
+    expect(text).toMatch(/^ {2}responses per turn +1\.3$/m);
+    expect(r.notes.some((n) => n.startsWith("codex: responses per wake counts the response records"))).toBe(true);
   });
 });
 
@@ -463,7 +467,7 @@ describe("wake records", () => {
   test("requests per wake, wakes by what fired them, and the asleep share", async () => {
     const r = await readout(WAKE);
     const w = r.windows[0]!;
-    expect(w.wakes).toEqual({ by: "wake", count: 3, perHour: 9, requestsPer: 2, fired: { cap: 2, died: 1 }, asleepShare: 0.5 });
+    expect(w.wakes).toEqual({ by: "wake", count: 3, perHour: 9, requestsPer: 2, responsesPer: 2, fired: { cap: 2, died: 1 }, asleepShare: 0.5 });
     expect(r.notes).toContain("wakes are the run's wake records; asleep is their slept time over the active time");
     const text = (await inspect(["requests", WAKE, "--runs-dir", RUNS])).out.join("\n");
     expect(text).toMatch(/^wakes +3$/m);

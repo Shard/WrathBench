@@ -73,6 +73,7 @@ import {
   episodeOverrideOf,
   launchCompactWindow,
   loadRunConfig,
+  loopOf,
   MIN_TOKEN_LENGTH,
   newRunId,
   newSessionToken,
@@ -87,6 +88,8 @@ import { runLoop, type StopRequest } from "./loop";
 import { continuedSessionNote, freshCharacterNote, resumeSessionNote, stagedCharacterNote } from "./prompt";
 import { CLIENT_CACHE_FILE, ClientCacheStore } from "@wrathbench/mcp/client-cache";
 import { SandboxHost } from "./sandbox/host";
+import { Workspace } from "@wrathbench/mcp/workspace";
+import { PROGRAM_DIR, ProgramWake } from "./wake";
 import { EpisodicLog } from "./episodic";
 import { Scratchpad } from "@wrathbench/mcp/scratchpad";
 import { liveOwnerOf, RESUME_REFUSED_EXIT } from "./models";
@@ -287,6 +290,11 @@ export function configFromArgs(
     wiki: flag(args["wiki"]),
     // Identity as well: a resumed extra is still an extra.
     extra: flag(args["extra"]),
+    // The agent loop, a probe arm's (`--loop program`, `--yield true`):
+    // absent on the snippet loop, and identity like the rest, so a resume
+    // keeps the loop it launched on (`programLoopRefusal`).
+    ...(loopOf(args["loop"]) !== undefined ? { loop: loopOf(args["loop"]) } : {}),
+    ...(flag(args["yield"]) === true ? { yield: true } : {}),
     // The roster entry's own billing, when it stated one; identity like the
     // rest, so a resume keeps the side it launched on.
     billing: typeof args["billing"] === "string" ? args["billing"] : undefined,
@@ -878,6 +886,19 @@ async function main(): Promise<void> {
   process.on("exit", () => removeSessionRing(runDir));
   if (session !== undefined) void moduleIdentity(config.moduleUrl, moduleAuthHeaders()).then((m) => session.writer.setModule(m));
 
+  /*
+   * The program loop (`loop: "program"`, a probe arm): the sandbox also hosts
+   * the model's program, a file workspace in the run directory whose routines
+   * the stack runs and tracks, and the run sleeps between wakes
+   * (`wake.ts`). The wake is made first: the program's facts are its from the
+   * first one. The workspace is the run's, so a resume finds its files,
+   * memory and registry where it left them.
+   */
+  const programWake =
+    config.loop === "program"
+      ? new ProgramWake({ trajectory, ...(session !== undefined ? { counts: () => session.signals.counts() } : {}) })
+      : undefined;
+  if (programWake !== undefined && session !== undefined) session.signals.onDeath = (ts) => programWake.onDeath(ts);
   const sandbox = new SandboxHost({
     moduleUrl: config.moduleUrl,
     token: config.token,
@@ -886,7 +907,11 @@ async function main(): Promise<void> {
     scratchpad,
     snippetTimeoutMs: config.snippetTimeoutMs,
     pingGraceMs: config.sandboxPingGraceMs,
-    onNotice: (n) => trajectory.append({ t: "harness", ...n }),
+    onNotice: (n) => {
+      trajectory.append({ t: "harness", ...n });
+      programWake?.onNotice(n);
+    },
+    ...(programWake !== undefined ? { program: { workspace: new Workspace(join(runDir, PROGRAM_DIR)), onFact: programWake.onFact } } : {}),
     clientCache,
     ...(session !== undefined ? { session } : {}),
     ...(config.fanout !== undefined ? { fanout: { maxCharacters: config.fanout.characters }, signals: fanoutSignals } : {}),
@@ -1250,6 +1275,7 @@ async function main(): Promise<void> {
       seen,
       raceName: raceName(config.race),
       className: className(config.class),
+      ...(config.loop === "program" ? { program: true } : {}),
     });
   };
 
@@ -1331,6 +1357,16 @@ async function main(): Promise<void> {
   // A party's end, reached by another member first: the roster asks this run
   // to follow it, and the watchdogs end it the way its own end would — the
   // driver winds down and its closing result is recorded (`end-request.ts`).
+  // A resumed program-loop run brings its program back before the first
+  // request, as the resume note says: the stack's host loads the last loaded
+  // version and starts the routines that were running from the top.
+  if (resumed && programWake !== undefined) {
+    try {
+      await sandbox.start();
+    } catch (err) {
+      console.error(`[wrathbench] the program's sandbox did not start on resume: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   const stopEndWatch = watchEndRequest({
     runDir,
     since: segmentStartedAt,
@@ -1354,6 +1390,7 @@ async function main(): Promise<void> {
           turnOffset,
           signal: abort.signal,
           onObservationStalled,
+          ...(programWake !== undefined ? { programWake } : {}),
         })
       : runLoop({
           config,
@@ -1369,6 +1406,7 @@ async function main(): Promise<void> {
           signal: abort.signal,
           onObservationStalled,
           usage: goUsageGaugeFor(config, trajectory),
+          ...(programWake !== undefined ? { programWake } : {}),
         })
   ).finally(stopEndWatch);
   let outcome: Awaited<typeof episode>;
