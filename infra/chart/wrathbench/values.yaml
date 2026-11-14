@@ -426,8 +426,9 @@ runPods:
   # GHCR token for a private package, say. The deploying cluster creates the
   # Secret; the chart only references it.
   imagePullSecrets: []
-  # How many run pods may be in flight at once; null for no cap. The supervisor
-  # plans under it, so a probe waits for room ("cap: run pods 3/3 in flight")
+  # How many run pods may be in flight at once, probes and codex episodes
+  # together (every codex episode is a run pod); null for no cap. The supervisor
+  # plans under it, so an episode waits for room ("cap: run pods 3/3 in flight")
   # rather than being launched into a namespace whose ResourceQuota refuses the
   # pod. Set it to what the quota fits beside the release's own pods: a quota
   # refusal that still happens (another pod took the room) is no attempt, but

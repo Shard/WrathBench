@@ -878,7 +878,9 @@ is never copied per run and `auth.json` is never read or logged: a copied
 refresh token is spent by whichever process refreshes first and the other side
 then fails with "refresh token was already used" (seen on this host). One
 directory per subscription, shared by its runs; how many at once is its
-credential's slots.
+credential's slots. On the cluster each codex episode is a run pod of its own
+with the home's volume mounted whole, so the CLI shares a pod with no secret
+but the one it bills (docs/RUNBOOK.md, "Run pods").
 
 ### Setup, once
 
