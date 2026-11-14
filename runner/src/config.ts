@@ -679,9 +679,9 @@ export const runConfigSchema = z.object({
   ref: z.string().min(1).max(64).optional(),
   /**
    * The image reference the launcher asked for (`WRATHBENCH_RUN_IMAGE`), when
-   * the run was started in a pod of its own. The digest it resolved to is the
+   * the run was started as a probe's pod. The digest it resolved to is the
    * launcher's record (`image.json` beside the run). Absent on a child-process
-   * launch, which runs the fleet's own image.
+   * launch, and on a codex run's pod, which both run the fleet's own image.
    */
   image: z.string().min(1).max(512).optional(),
   /**

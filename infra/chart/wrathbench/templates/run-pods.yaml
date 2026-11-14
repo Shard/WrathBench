@@ -83,7 +83,7 @@ spec:
 {{- end -}}
 {{- if include "wrathbench.on.fleet" $ }}
 {{/*
-Run pods: one probe-campaign episode as its own pod (infra/run-pod.ts,
+Run pods: one probe-campaign or codex episode as its own pod (infra/run-pod.ts,
 docs/RUNBOOK.md "Run pods"). Three objects:
 
   - the ServiceAccount the fleet pod runs as, with a Role over pods in THIS
@@ -115,8 +115,10 @@ docs/RUNBOOK.md "Run pods"). Three objects:
     arbitrary image with the fleet's tokens. And `maxPods`, when set: how many
     run pods the supervisor keeps in flight at once.
 
-The launcher ships dark: nothing here creates a pod until the fleet setting
-`policy.runPods` is "probes".
+For probes the launcher ships dark: nothing here creates a probe's pod until
+the fleet setting `policy.runPods` is "probes". A codex episode is a run pod
+whatever the setting (the codex-home volume is kept for it alone), so it
+never runs beside the fleet pod's Secret and config store.
 
 With `worlds` on, the same ConfigMap carries `world.json`, the pod template a
 world per eval is created from (templates/worlds.yaml), and the launcher's
