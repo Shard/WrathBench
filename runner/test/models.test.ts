@@ -40,7 +40,6 @@ import {
   rosterWindowKey,
 } from "../src/models";
 import { billingOf } from "../src/model-cost";
-import { SCORED_EPISODES_WAIT } from "../src/config";
 import { parseCredentials } from "../src/credential-slots";
 import { rowOf } from "../viewer/models";
 import type { EpisodeId } from "../src/episodes";
@@ -609,7 +608,7 @@ describe("paid and free", () => {
     expect(first.jobs.map((j) => [j.name, j.episode])).toEqual([["o", "e90"]]);
     expect(planNextJobs([owing], ["R1"], new Set(), { policy }).jobs).toEqual(first.jobs);
     // Closed: held with the reason, and the model does what one owing nothing does.
-    const gate = SCORED_EPISODES_WAIT!;
+    const gate = "scored episodes are held for this test";
     const closed = planNextJobs([owing], ["R1"], new Set(), { policy, scoredGate: gate });
     expect(closed.held).toEqual([{ name: "o", episode: "e90", why: gate }]);
     expect(closed.jobs.map((j) => [j.name, j.episode])).toEqual([["o", "freeplay"]]);

@@ -1181,16 +1181,17 @@ export function programLoopRefusal(c: Pick<RunConfig, "loop" | "yield" | "driver
 }
 
 /**
- * Why scored episodes do not launch, while they wait (operator, 2026-11-14):
- * until a long-clock program-loop run has been read. The launch refuses them
- * (`loopLaunchRefusal`) and the scheduler holds them, saying this, rather
- * than picking a launch that would be refused (`NextJobsOptions.scoredGate`).
- * Null once they open.
+ * Why scored episodes do not launch, while they are held; null while they are
+ * open, as they are now. Held, the launch refuses them (`loopLaunchRefusal`)
+ * and the scheduler holds them, saying this, rather than picking a launch
+ * that would be refused (`NextJobsOptions.scoredGate`). They waited for a
+ * long-clock program-loop run to be read (operator, 2026-11-14), and opened
+ * once it was (2026-11-15); a future hold is this line set to its reason.
  */
-export const SCORED_EPISODES_WAIT: string | null = "scored episodes do not run yet: they wait until a long-clock program-loop run has been read";
+export const SCORED_EPISODES_WAIT: string | null = null;
 
 /**
- * Whether an episode waits (`SCORED_EPISODES_WAIT`), and why, or null: the one
+ * Whether an episode is held (`SCORED_EPISODES_WAIT`), and why, or null: the one
  * decision the launch's refusal (`loopLaunchRefusal`) and the planner's hold
  * (`scoredHold`, infra/run-fleet-plan.ts) both read, so a job is never held
  * that the launch would take, nor spawned for the launch to refuse.
@@ -1204,18 +1205,18 @@ export function scoredWaitFor(episode: string | null | undefined, wait: string |
  * Why a model driver's run may not launch on its loop and episode, or null
  * (operator, 2026-11-14). The snippet loop is kept as a legacy arm of probe
  * campaigns, so it runs only on `--episode probing`: never a scored episode,
- * freeplay or an unnamed episode. Scored episodes wait on the program loop
- * too, until a long-clock program-loop run has been read. The stub and the
+ * freeplay or an unnamed episode. A scored episode on the program loop is
+ * refused too while `SCORED_EPISODES_WAIT` (`held`) holds them. The stub and the
  * scripted reference are not a model and are exempt (`isUnscoredDriver`).
  * Checked at a fresh launch and again at a resume (`run.ts`), so a run
  * stored before the loop was written down, which was the snippet loop, is
  * refused on resume too. Not part of `loadRunConfig`, which also reads
  * stored configs.
  */
-export function loopLaunchRefusal(c: Pick<RunConfig, "loop" | "driver" | "episode">): string | null {
+export function loopLaunchRefusal(c: Pick<RunConfig, "loop" | "driver" | "episode">, held: string | null = SCORED_EPISODES_WAIT): string | null {
   if (isUnscoredDriver(c.driver)) return null;
   if (c.loop === "program") {
-    const wait = scoredWaitFor(c.episode);
+    const wait = scoredWaitFor(c.episode, held);
     return wait !== null ? `--episode ${c.episode} is a scored episode, and ${wait}` : null;
   }
   if (c.episode === "probing") return null;

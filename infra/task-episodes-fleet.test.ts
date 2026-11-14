@@ -9,7 +9,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_POLICY, parsePolicyBlock, projectModel, rehearsalHold, type ModelState, type RosterModel, type SchedulingPolicy } from "../runner/src/models";
-import { SCORED_EPISODES_WAIT, loadRunConfig } from "../runner/src/config";
+import { loadRunConfig } from "../runner/src/config";
 import { taskHash } from "../runner/src/task-episodes";
 import { taskDefinition } from "../runner/src/task-episodes";
 import { parseFleet, type FleetConfig } from "./run-fleet-config";
@@ -98,17 +98,18 @@ describe("the holds", () => {
     expect(rehearsalHold("e90", "codex", { rehearsed: [] })).toBeNull();
   });
 
-  test("the scored-episode hold holds both ids", () => {
+  test("a scored-episode hold holds both ids", () => {
+    // None is set today (SCORED_EPISODES_WAIT is null); the mechanism under an explicit reason.
+    const HOLD = "scored episodes are held for this test";
     const cfg = fleet({ son: { ...SON, deadmines: true } }, { worlds: "evals", rehearsed: ["deadmines"] });
     const s = owing({ name: "son", model: "sonnet", driver: "claude-code", tier: "t2", deadmines: true }, cfg.policy);
-    const p = plan(cfg, [s], SCORED_EPISODES_WAIT!);
+    const p = plan(cfg, [s], HOLD);
     expect(p.policy).toEqual([]);
-    expect(p.heldPicks).toEqual([{ name: "son", episode: "deadmines-solo", why: SCORED_EPISODES_WAIT! }]);
+    expect(p.heldPicks).toEqual([{ name: "son", episode: "deadmines-solo", why: HOLD }]);
     s.perEpisode["deadmines-solo"]!.counted = 3;
-    const five = plan(cfg, [s], SCORED_EPISODES_WAIT!);
+    const five = plan(cfg, [s], HOLD);
     expect(five.policy).toEqual([]);
-    expect(five.heldPicks).toEqual([{ name: "son", episode: "deadmines", why: SCORED_EPISODES_WAIT! }]);
-    expect(SCORED_EPISODES_WAIT).not.toBeNull();
+    expect(five.heldPicks).toEqual([{ name: "son", episode: "deadmines", why: HOLD }]);
   });
 
   test("an unrehearsed five-agent attempt is said and passed over; the one-agent id still goes", () => {

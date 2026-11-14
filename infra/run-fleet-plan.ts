@@ -237,10 +237,10 @@ export interface QueuePlan {
  * so its spawn launches only the remainder, under ids nothing has used.
  */
 /**
- * Why a queue or pinned job is held by the scored-episode wait
- * (`SCORED_EPISODES_WAIT`, runner/src/config.ts), or undefined when it is
- * not: the reason the policy holds its own scored picks with. Held here, said
- * once, rather than spawned for `run.ts` to refuse at launch.
+ * Why a queue or pinned job is held by a scored-episode hold
+ * (`SCORED_EPISODES_WAIT`, runner/src/config.ts; none today), or undefined
+ * when it is not: the reason the policy holds its own scored picks with. Held
+ * here, said once, rather than spawned for `run.ts` to refuse at launch.
  */
 export function scoredHold(job: Pick<FleetJob, "episode">, scoredGate: string | undefined): string | undefined {
   const wait = scoredWaitFor(job.episode, scoredGate ?? null);
@@ -2940,7 +2940,7 @@ export function planTick(
   const pinned = [...pinnedJobs(config), ...withTakenRunIds(pinnedCampaignJobs(config, probeRuns, healthyFrom(states), draw, drawHeld), takenRunIds)]
     .filter((j) => j.enabled && !resumed.has(j.name) && !running.has(j.name) && runnableRefs(j, config.roster, eligible).length > 0)
     .filter((j) => {
-      // Held by the scored wait, with the policy's own reason, never spawned to be refused.
+      // Held by a scored hold, with the policy's own reason, never spawned to be refused.
       const hold = scoredHold(j, scoredGate);
       if (hold !== undefined) drawHeld.push({ job: j, why: hold });
       return hold === undefined;

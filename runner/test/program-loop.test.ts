@@ -17,7 +17,7 @@ import { campaignPairRefusals, type PairRosterEntry } from "../src/campaigns";
 import { comparabilityOf, promptHash } from "../src/comparability";
 import { assembleContext, capWindowMessage, CONTEXT_POLICY, PadSeen, renderWindow, scratchpadUnchangedLine, type HistoryMessage } from "../src/context";
 import { PAD_HEADER_PATTERN } from "../../infra/inspect-run";
-import { defaultLoopOf, launchLoopOf, loadRunConfig, loopLaunchRefusal, programLoopRefusal } from "../src/config";
+import { defaultLoopOf, launchLoopOf, loadRunConfig, loopLaunchRefusal, programLoopRefusal, scoredWaitFor } from "../src/config";
 import { EpisodicLog } from "../src/episodic";
 import { fanoutSessionNote } from "../src/fanout-run";
 import { runLoop } from "../src/loop";
@@ -97,7 +97,7 @@ describe("config, flags and the tuple", () => {
     expect(launchLoopOf({ driver: "openai" }, { loop: "snippet" })).toEqual({ loop: "snippet" });
   });
 
-  test("a model's snippet loop launches only as a probe, and scored episodes wait; the stub and the reference are exempt", () => {
+  test("a model's snippet loop launches only as a probe, and scored episodes are refused only while held; the stub and the reference are exempt", () => {
     for (const driver of ["openai", "codex", "claude-code", "pi"] as const) {
       for (const episode of ["e90", "e360", "freeplay", undefined] as const) {
         expect(loopLaunchRefusal({ loop: "snippet", driver, episode })).toContain("legacy arm (--episode probing)");
@@ -110,7 +110,19 @@ describe("config, flags and the tuple", () => {
     expect(loopLaunchRefusal({ loop: "snippet", driver: "claude-code", episode: "freeplay" })).toContain("runs the program loop (--loop program)");
     expect(loopLaunchRefusal({ loop: "program", driver: "openai", episode: "freeplay" })).toBeNull();
     expect(loopLaunchRefusal({ loop: "program", driver: "codex", episode: undefined })).toBeNull();
-    for (const episode of ["e90", "e360"] as const) expect(loopLaunchRefusal({ loop: "program", driver: "openai", episode })).toContain("scored episodes do not run yet");
+    // Open (SCORED_EPISODES_WAIT null, as today) and held under an explicit reason, whatever the constant says.
+    const hold = "scored episodes are held for this test";
+    for (const episode of ["e90", "e360"] as const) {
+      expect(loopLaunchRefusal({ loop: "program", driver: "openai", episode }, null)).toBeNull();
+      expect(scoredWaitFor(episode, null)).toBeNull();
+      expect(scoredWaitFor(episode, hold)).toBe(hold);
+      expect(loopLaunchRefusal({ loop: "program", driver: "openai", episode }, hold)).toBe(`--episode ${episode} is a scored episode, and ${hold}`);
+    }
+    for (const episode of ["freeplay", "probing", undefined] as const) {
+      expect(scoredWaitFor(episode, hold)).toBeNull();
+      expect(loopLaunchRefusal({ loop: "program", driver: "openai", episode }, hold)).toBeNull();
+    }
+    expect(loopLaunchRefusal({ loop: "program", driver: "stub", episode: "e90" }, hold)).toBeNull();
     for (const driver of ["stub", "reference"] as const) {
       for (const episode of ["e90", "freeplay", undefined] as const) expect(loopLaunchRefusal({ loop: "snippet", driver, episode })).toBeNull();
     }

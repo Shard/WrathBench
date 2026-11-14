@@ -1311,8 +1311,8 @@ driver runs it only on `--episode probing`, and a scored, freeplay or
 unnamed episode on it is refused at launch and again on resume
 (`loopLaunchRefusal`, in `run.ts`), the stub and the reference excepted. A
 config stored before the loop was written down has none, and was the snippet
-loop. Scored episodes are refused on the program loop too, until a
-long-clock program-loop run has been read. The program loop itself is
+loop. Scored episodes run on the program loop, refused there only while
+`SCORED_EPISODES_WAIT` holds them (none today). The program loop itself is
 refused on pi and on a route driver
 (`programLoopRefusal`, `DriverEntry.programLoop`; a campaign pair is refused
 the same way). Together these mean pi runs only as probe campaign squares

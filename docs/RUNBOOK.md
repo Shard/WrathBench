@@ -1591,11 +1591,12 @@ pool accounts from the roster by policy — each model's tier budget
 (`t0`/`t1`/`t2`, "Config reference"), `e90` for everyone, `e360` once earned,
 models with no counted run yet first, then shorter episode first, fewest
 counted runs first and roster order, one character per model, each pick on
-the first credential with room ("Credentials"). While scored episodes wait
-for a long-clock program-loop run to be read (`SCORED_EPISODES_WAIT`,
-docs/METHODOLOGY.md), no scored episode is picked, and a scored queue or
-pinned job is held with the same reason rather than spawned for `run.ts` to
-refuse. Only runs from the running build's harness **series** (`0.5`
+the first credential with room ("Credentials"). Scored episodes can be held
+by one line, `SCORED_EPISODES_WAIT` in `runner/src/config.ts`, set to the
+reason (none today: the wait for a long-clock program-loop run to be read
+ended once it was, docs/METHODOLOGY.md). While they are held, no scored
+episode is picked, and a scored queue or pinned job is held with the same
+reason rather than spawned for `run.ts` to refuse. Only runs from the running build's harness **series** (`0.5`
 of `harness-0.5-1437-g…`) count; a minor bump starts every model's evidence
 over, a fix commit does not. How many paid runs are in flight at once is the
 paid credentials' slots — never a budget: how much a paid model runs is its

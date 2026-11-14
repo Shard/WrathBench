@@ -2687,10 +2687,10 @@ export interface NextJobsOptions {
    */
   poolHeld?: string;
   /**
-   * Scored episodes are closed, and why (`SCORED_EPISODES_WAIT`, config.ts):
+   * Scored episodes are held, and why (`SCORED_EPISODES_WAIT`, config.ts):
    * a model that owes a counted run is held with this reason instead of
    * picked, and is otherwise treated as owing none, as with the evals group
-   * off, so its probes and idle work still go. Absent: open.
+   * off, so its probes and idle work still go. Absent: open, as today.
    */
   scoredGate?: string;
   /**

@@ -1775,8 +1775,9 @@ describe("jobs, pinned and pool: one unit of work over the account pool", () => 
     expect(plan2.waiting.map((j) => j.name)).toEqual(["ox-e90", "mimo-e90"]);
   });
 
-  test("a scored queue job waits on the scored hold with the policy's reason, never spawned to be refused at launch", () => {
-    const gate = "scored episodes do not run yet: they wait until a long-clock program-loop run has been read";
+  test("while scored episodes are held, a scored queue job waits with the policy's reason, never spawned to be refused at launch", () => {
+    // None is held today (SCORED_EPISODES_WAIT is null); the mechanism under an explicit reason.
+    const gate = "scored episodes are held for this test";
     const queue = [job({ ref: "glm" }), job({ ref: "ox", episode: "freeplay" })];
     const plan = planQueue({ ...base, queue, running: new Map(), scoredGate: gate });
     expect(plan.assign.map((a) => a.job.name)).toEqual(["ox-freeplay"]);

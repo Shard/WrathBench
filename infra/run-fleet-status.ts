@@ -1573,7 +1573,7 @@ export function printDryRun(
     outside: outsideRuns([...runs, ...unstamped], { running: ownRunIds, busyAccounts }),
     runPods: runPodsHere(config.policy.runPods),
     worlds: worldsHere(config.policy.worlds),
-    // Scored episodes wait: held with the reason, as the tick holds them.
+    // While scored episodes are held: held with the reason, as the tick holds them.
     ...(SCORED_EPISODES_WAIT !== null ? { scoredGate: SCORED_EPISODES_WAIT } : {}),
   });
   console.log("");
