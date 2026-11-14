@@ -1,6 +1,7 @@
 /**
  * The pod launcher: one episode as one Kubernetes pod, created from the
- * chart's template and watched until it ends.
+ * chart's template and watched until it ends: a probe's while `policy.runPods`
+ * is `probes`, and every codex episode's (`episodeRunsInPod`).
  *
  * The chart renders the template (ConfigMap `<release>-run-pod-template`,
  * mounted into the fleet pod): volumes, nodeSelector, security context,
@@ -35,7 +36,7 @@ import type { EpisodeExit, EpisodeHandle, EpisodeLaunch, EpisodeLauncher, Launch
 import { EPISODE_TERM_GRACE_MS, episodeSecretEnv, refusedEpisode } from "./episode-launcher";
 import { launchSecret, SEALED_SECRET_ENV, STORE_KEY_ENV } from "../runner/src/store-secrets";
 import { digestOf, K8sClient, K8sError, type Pod, type PodEnvVar } from "./k8s-client";
-import { runPodsOf } from "./run-fleet-credentials";
+import { runPodsOf, type RunPodsSetting } from "./run-fleet-credentials";
 
 // ------------------------------------------------------------------ names
 
@@ -346,8 +347,11 @@ export class PodLauncher implements EpisodeLauncher {
 
   /**
    * The image this launch runs, or why it may not. The release image is the
-   * template's. A resume with an `image.json` relaunches that digest, whatever
-   * the arm says now; the allow-list applies to it the same way.
+   * template's. A probe's resume with an `image.json` relaunches that digest,
+   * whatever the arm says now; the allow-list applies to it the same way. Any
+   * other episode in a pod (a `runPod` driver's, with no `launch`) resumes on
+   * the release image, as a child process would: its `image.json` is a record
+   * of where it ran, never a pin.
    */
   resolveImage(launch: EpisodeLaunch): { image: string; requested: ImageRef; stamp: string } | { refused: string } {
     const templateImage = this.opts.template.spec.containers[0]?.image;
@@ -356,7 +360,7 @@ export class PodLauncher implements EpisodeLauncher {
     const requested = parseImageRef(requestedRef);
     if ("error" in requested) return { refused: requested.error };
     let image = requestedRef;
-    if (launch.resume) {
+    if (launch.resume && launch.spec.launch !== undefined) {
       const record = readImageRecord(launch.runDir);
       if (record !== undefined) {
         const recorded = parseImageRef(record.ref);
@@ -398,7 +402,10 @@ export class PodLauncher implements EpisodeLauncher {
         driver: launch.spec.driver,
         credentialEnv: launch.spec.placedOn?.env,
         apiKeyEnv: launch.spec.apiKeyEnv,
-        stamps: { ...launch.env, WRATHBENCH_HARNESS_VERSION: resolved.stamp, WRATHBENCH_RUN_IMAGE: resolved.requested.ref },
+        // The run names the image only when a probe's arm chose it: any other
+        // pod runs the release image, as a child process would, and is stamped
+        // as one.
+        stamps: { ...launch.env, WRATHBENCH_HARNESS_VERSION: resolved.stamp, ...(launch.spec.launch !== undefined ? { WRATHBENCH_RUN_IMAGE: resolved.requested.ref } : {}) },
         ...(launch.onWorld === true && this.opts.worldsSecretKey !== undefined ? { moduleSecretKey: this.opts.worldsSecretKey } : {}),
         ...(stored?.source === "store" && secretName !== undefined ? { sealed: { name: secretName, sealed: stored.sealed } } : {}),
       },
@@ -691,7 +698,7 @@ export function loadPodLauncher(opts: { rosterPid: number; env?: Record<string, 
  * on the cluster, under the chart's cap when the mounted settings name one.
  * For a report; the supervisor reads the same settings on its tick.
  */
-export function runPodsHere(mode: string, env: Record<string, string | undefined> = process.env): { max: number | undefined } | undefined {
+export function runPodsHere(mode: string, env: Record<string, string | undefined> = process.env): RunPodsSetting | undefined {
   const onCluster = env["WRATHBENCH_IN_CONTAINER"] === "1" && K8sClient.inCluster(undefined, env) !== null;
   if (!onCluster) return runPodsOf(mode, false, undefined);
   const settings = readLauncherSettings(env);

@@ -24,7 +24,9 @@
  *
  * The same lines carry the subscription's usage windows (`rate_limits`, read by
  * `rateLimitsOfLine`), and the thread's `turn_context` lines name the model each
- * turn ran on (`turnModelOfLine`); `CodexRolloutFollower` reads both.
+ * turn ran on (`turnModelOfLine`); `CodexRolloutFollower` reads both. It also
+ * reads the calls the model made to the CLI's own tools, which exec never
+ * prints (`CodexToolCall`).
  *
  * The end of this file deletes rollouts (`removeThreadRollouts`,
  * `pruneRollouts`) and the threads they belong to (`deleteCodexThread`): the
@@ -310,6 +312,80 @@ export function tokenCountOfLine(line: string): CodexContextReading | undefined 
 /** The `[turn N]` prefix of a retained harness context message (`assembleContext`). */
 const TURN_PREFIX = /^\[turn (\d+)\]/;
 
+// ------------------------------------------------------------- tool calls
+
+/**
+ * One call the model made to a tool of the CLI's own, with its output, read
+ * off the rollout. `codex exec --json` prints none of them: GPT-6's code mode
+ * (`exec`, a freeform tool, and `wait`, a function tool) and whatever else the
+ * CLI gives a model and no flag removes (`view_image`, `request_user_input`;
+ * runner/README.md, "The codex driver") are on the thread's rollout only, as
+ * `response_item` lines (0.163.0, read off a live GPT-6 thread):
+ *
+ *   {"type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_…","name":"exec","input":"text(…)","status":"completed",…}}
+ *   {"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_…","output":[{"type":"input_text","text":"Script completed…"},…]}}
+ *   {"type":"response_item","payload":{"type":"function_call","call_id":"call_…","name":"wait","arguments":"{\"cell_id\":\"12\",…}"}}
+ *   {"type":"response_item","payload":{"type":"function_call_output","call_id":"call_…","output":[…]}}
+ *
+ * Both shapes are read, because which of them a tool takes is the CLI's
+ * choice: `exec` is freeform, `wait` is not, and a later CLI may move one.
+ * A function call in an `mcp__…` namespace is one of our tools, which exec
+ * prints and the driver records already; it and its output are passed over.
+ * A tool a code-mode script calls from inside `exec` is not an item of its
+ * own: it is in that call's input and output.
+ */
+export interface CodexToolCall {
+  /** `custom` for a freeform tool (`exec`), `function` for a JSON one (`wait`, `view_image`). */
+  kind: "custom" | "function";
+  callId: string;
+  /** Null for an output whose call this follower never saw. */
+  name: string | null;
+  /** The call as the model wrote it: a freeform tool's `input`, a function's `arguments`. */
+  input: string | null;
+  status: string | null;
+  /** The output as the CLI wrote it, an image part reduced to its type and size (`toolOutputOf`); null when it wrote none. */
+  output: unknown;
+  /** The call's line's timestamp, else its output's. */
+  at: string | null;
+}
+
+const TOOL_ITEM_TYPES = new Set(["custom_tool_call", "custom_tool_call_output", "function_call", "function_call_output"]);
+
+/**
+ * An output as recorded: text parts and anything else as written, but an
+ * `input_image` part (what `view_image` returns) as its type and the length
+ * of its URL, never the image itself.
+ */
+export function toolOutputOf(raw: unknown): unknown {
+  if (!Array.isArray(raw)) return raw ?? null;
+  return raw.map((part: unknown) => {
+    if (part === null || typeof part !== "object") return part;
+    const p = part as Record<string, unknown>;
+    if (p["type"] !== "input_image") return p;
+    const url = p["image_url"];
+    return { type: "input_image", chars: typeof url === "string" ? url.length : null };
+  });
+}
+
+/** One rollout line as a tool item of the CLI's own, or undefined for any other line. */
+function toolItemOfLine(line: string): { type: string; payload: Record<string, unknown>; at: string | null } | undefined {
+  if (!line.includes('"response_item"') || !(line.includes('"custom_tool_call') || line.includes('"function_call'))) return undefined;
+  let rec: unknown;
+  try {
+    rec = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  const r = rec as { type?: unknown; timestamp?: unknown; payload?: unknown } | null;
+  if (r === null || r.type !== "response_item" || r.payload === null || typeof r.payload !== "object") return undefined;
+  const payload = r.payload as Record<string, unknown>;
+  const type = payload["type"];
+  if (typeof type !== "string" || !TOOL_ITEM_TYPES.has(type) || typeof payload["call_id"] !== "string") return undefined;
+  return { type, payload, at: typeof r.timestamp === "string" ? r.timestamp : null };
+}
+
+const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
+
 type PendingCompaction = Partial<CodexCompaction> & { seenCompacted: boolean; awaitingPost: boolean };
 
 /**
@@ -327,8 +403,20 @@ export class CodexRolloutScan {
   model: string | undefined;
   private pending: PendingCompaction | null = null;
   private readonly done: CodexCompaction[] = [];
+  /** Tool calls still waiting for their output, by call id, in the order made. */
+  private readonly openCalls = new Map<string, CodexToolCall>();
+  /** Call ids of our own MCP tools, whose outputs are passed over too. */
+  private readonly ourCalls = new Set<string>();
+  private readonly calls: CodexToolCall[] = [];
 
   line(line: string): void {
+    // First, and settled here: a response item is no other kind of line, and
+    // the text it carries may hold any other kind's marker.
+    const item = toolItemOfLine(line);
+    if (item !== undefined) {
+      this.toolItem(item);
+      return;
+    }
     if (line.includes('"turn_context"')) {
       const model = turnModelOfLine(line);
       if (model !== undefined) {
@@ -412,6 +500,50 @@ export class CodexRolloutScan {
     else Object.assign(this.pending, timing);
   }
 
+  private toolItem(item: { type: string; payload: Record<string, unknown>; at: string | null }): void {
+    const p = item.payload;
+    const callId = p["call_id"] as string;
+    if (item.type === "custom_tool_call" || item.type === "function_call") {
+      const name = str(p["name"]);
+      const namespace = str(p["namespace"]);
+      if (item.type === "function_call" && (namespace?.startsWith("mcp__") === true || name?.startsWith("mcp__") === true)) {
+        this.ourCalls.add(callId);
+        return;
+      }
+      this.openCalls.set(callId, {
+        kind: item.type === "custom_tool_call" ? "custom" : "function",
+        callId,
+        name,
+        input: str(item.type === "custom_tool_call" ? p["input"] : p["arguments"]),
+        status: str(p["status"]),
+        output: null,
+        at: item.at,
+      });
+      return;
+    }
+    if (this.ourCalls.delete(callId)) return;
+    const open = this.openCalls.get(callId);
+    this.openCalls.delete(callId);
+    this.calls.push({
+      ...(open ?? { kind: item.type === "custom_tool_call_output" ? "custom" : "function", callId, name: null, input: null, status: null, at: item.at }),
+      output: toolOutputOf(p["output"]),
+    });
+  }
+
+  /**
+   * The tool calls settled so far, each with its output, in the order their
+   * outputs were written. With `final` a call still waiting is settled with
+   * none: at the end of a turn the CLI has exited, so an output it never
+   * wrote will not come.
+   */
+  drainCalls(final: boolean): CodexToolCall[] {
+    if (final) {
+      for (const c of this.openCalls.values()) this.calls.push(c);
+      this.openCalls.clear();
+    }
+    return this.calls.splice(0, this.calls.length);
+  }
+
   private settle(): void {
     const p = this.pending;
     this.pending = null;
@@ -448,6 +580,8 @@ export interface CodexRolloutRead {
   rateLimits: UsageWindow[] | undefined;
   /** The model the thread's newest `turn_context` names. */
   model: string | undefined;
+  /** The calls to the CLI's own tools since the last read (`CodexToolCall`). */
+  toolCalls: CodexToolCall[];
   /**
    * The rollout could not be read this time, so a compaction may have gone
    * unseen: a thread context (`ThreadContext`) no longer trusts what it
@@ -482,8 +616,9 @@ export class CodexRolloutFollower {
   ) {}
 
   /**
-   * What the CLI appended since the last read: its compactions, and the newest
-   * context reading, usage windows and turn model so far on this thread.
+   * What the CLI appended since the last read: its compactions and tool
+   * calls, and the newest context reading, usage windows and turn model so
+   * far on this thread.
    */
   read(threadId: string | undefined): CodexRolloutRead {
     try {
@@ -514,7 +649,13 @@ export class CodexRolloutFollower {
       } finally {
         closeSync(fd);
       }
-      return { compactions: this.scan.drain(true), context: this.scan.context, rateLimits: this.scan.rateLimits, model: this.scan.model };
+      return {
+        compactions: this.scan.drain(true),
+        context: this.scan.context,
+        rateLimits: this.scan.rateLimits,
+        model: this.scan.model,
+        toolCalls: this.scan.drainCalls(true),
+      };
     } catch (err) {
       return this.fail(err instanceof Error ? err.message : String(err));
     }
@@ -535,7 +676,7 @@ export class CodexRolloutFollower {
         // a log line never costs a turn
       }
     }
-    return { compactions: [], context: undefined, rateLimits: undefined, model: undefined, failed: true };
+    return { compactions: [], context: undefined, rateLimits: undefined, model: undefined, toolCalls: [], failed: true };
   }
 }
 
