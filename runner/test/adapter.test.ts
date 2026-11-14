@@ -15,7 +15,9 @@ import {
   openCodeServedOf,
   openCodeSessionHeaders,
   parseRetryAfter,
+  RETRY_DETAIL_CHARS,
   statedResetOf,
+  type AdapterRetry,
   type AssistantTurn,
 } from "../src/adapter";
 
@@ -1083,5 +1085,87 @@ describe("redirects", () => {
     });
     await adapter.complete({ messages: [], tools: [] });
     expect(mode).toBe("manual");
+  });
+});
+
+describe("OpenAiChatAdapter retry records", () => {
+  /** Plays a script, recording every retry the adapter announces and every wait it then takes. */
+  function adapterRecording(script: (Response | Error)[]): { adapter: OpenAiChatAdapter; retries: AdapterRetry[]; slept: number[] } {
+    const retries: AdapterRetry[] = [];
+    const slept: number[] = [];
+    let i = 0;
+    const adapter = new OpenAiChatAdapter({
+      baseUrl: "http://model.invalid/v1",
+      apiKey: "k",
+      model: "m",
+      maxAttempts: 4,
+      fetchImpl: Object.assign(
+        (): Promise<Response> => {
+          const next = script[i++]!;
+          return next instanceof Error ? Promise.reject(next) : Promise.resolve(next);
+        },
+        { preconnect: () => {} },
+      ) as unknown as typeof fetch,
+      sleep: (ms: number) => {
+        slept.push(ms);
+        return Promise.resolve();
+      },
+      onRetry: (r) => retries.push(r),
+    });
+    return { adapter, retries, slept };
+  }
+
+  test("each retry says what failed, the attempt it starts and the wait before it, which is the wait taken", async () => {
+    const cut = new Response('data: {"choices":[{"delta":{"content":"hal"}}]}\n\n', { status: 200, headers: { "content-type": "text/event-stream" } });
+    const { adapter, retries, slept } = adapterRecording([
+      new Response("slow down", { status: 429, headers: { "retry-after": "5" } }),
+      status(503, "upstream overloaded"),
+      new TypeError("fetch failed: ECONNRESET"),
+      cut,
+    ]);
+    const out = await adapter.complete({ messages: [], tools: [] });
+    expect(out.kind).toBe("pause"); // the 429 seen on the way still pauses
+    // The cut stream is the last attempt: no retry follows it, so it has no record.
+    expect(retries.map(({ attempt, of, cause, status }) => ({ attempt, of, cause, status }))).toEqual([
+      { attempt: 2, of: 4, cause: "http", status: 429 },
+      { attempt: 3, of: 4, cause: "http", status: 503 },
+      { attempt: 4, of: 4, cause: "network", status: undefined },
+    ]);
+    expect(retries.map((r) => r.waitMs)).toEqual(slept);
+    expect(retries[0]!.waitMs).toBeGreaterThanOrEqual(5_000);
+    expect(retries[1]!.detail).toBe("HTTP 503: upstream overloaded");
+    expect(retries[2]!.detail).toContain("ECONNRESET");
+  });
+
+  test("a cut stream and a provider error in a 2xx body are named; a success after them records nothing more", async () => {
+    const cut = new Response('data: {"choices":[{"delta":{"content":"hal"}}]}\n\n', { status: 200, headers: { "content-type": "text/event-stream" } });
+    const { adapter, retries } = adapterRecording([cut, new Response(JSON.stringify({ error: { code: 502, message: "upstream" } }), { status: 200 }), new Response(JSON.stringify({ choices }))]);
+    const out = await adapter.complete({ messages: [], tools: [] });
+    expect(out.kind).toBe("ok");
+    expect(retries.map(({ attempt, cause, status }) => ({ attempt, cause, status }))).toEqual([
+      { attempt: 2, cause: "stream_cut", status: undefined },
+      { attempt: 3, cause: "provider_error", status: 502 },
+    ]);
+  });
+
+  test("no retry, no record; a long failure is cut; a callback that throws costs the request nothing", async () => {
+    const quiet = adapterRecording([new Response(JSON.stringify({ choices }))]);
+    expect((await quiet.adapter.complete({ messages: [], tools: [] })).kind).toBe("ok");
+    expect(quiet.retries).toEqual([]);
+    const long = adapterRecording([status(500, "x".repeat(5_000)), new Response(JSON.stringify({ choices }))]);
+    await long.adapter.complete({ messages: [], tools: [] });
+    expect(long.retries[0]!.detail.length).toBe(RETRY_DETAIL_CHARS);
+    let i = 0;
+    const throwing = new OpenAiChatAdapter({
+      baseUrl: "http://model.invalid/v1",
+      apiKey: "k",
+      model: "m",
+      fetchImpl: Object.assign(() => Promise.resolve(i++ === 0 ? status(500, "boom") : new Response(JSON.stringify({ choices }))), { preconnect: () => {} }) as unknown as typeof fetch,
+      sleep: () => Promise.resolve(),
+      onRetry: () => {
+        throw new Error("disk full");
+      },
+    });
+    expect((await throwing.complete({ messages: [], tools: [] })).kind).toBe("ok");
   });
 });

@@ -113,6 +113,11 @@
  *   sent, stays fatal as below, and is not a credential's pause.
  * - Any other 4xx is fatal immediately (`adapter-error`): the request is
  *   malformed and retrying would burn budget on a harness bug.
+ * - Every retry is said as it is taken (`onRetry`, an `adapter_retry`
+ *   harness record): what failed, the attempt about to start and the wait
+ *   before it. Only the outcome above reached the record before, so a lane
+ *   whose 429s and cut streams were all ridden out read as one that never had
+ *   any. The model is told nothing of it.
  *
  * The stub adapter plays a scripted response list. It exists to exercise the
  * whole runner without a model and is never used for results.
@@ -349,6 +354,35 @@ function toUsageRaw(u: z.infer<typeof completionSchema>["usage"]): RawUsage | un
   return top.length === 0 ? undefined : Object.fromEntries(top);
 }
 
+/** What failed the attempt a retry follows. */
+export type AdapterRetryCause =
+  /** An HTTP status the policy retries (408, 429, 5xx, a provider blip); `status` names it. */
+  | "http"
+  /** A 2xx whose body was the provider's error object; `status` is its code when numeric. */
+  | "provider_error"
+  /** The request failed before any response: DNS, a refused or reset connection. */
+  | "network"
+  /** The attempt's own clock fired: no data for the silence timeout, or the ceiling. */
+  | "timeout"
+  /** The body failed to read after the headers. */
+  | "body_read"
+  /** A 2xx stream that ended before the model finished. */
+  | "stream_cut";
+
+/** One retry, as `onRetry` hears it: the attempt about to start (from 2), of how many, the wait before it, and why. */
+export interface AdapterRetry {
+  attempt: number;
+  of: number;
+  waitMs: number;
+  cause: AdapterRetryCause;
+  status?: number;
+  /** The failure in the adapter's words, cut to `RETRY_DETAIL_CHARS`. */
+  detail: string;
+}
+
+/** How much of a failure an `adapter_retry` record keeps: enough to tell a reset from a timeout, not a provider's whole body. */
+export const RETRY_DETAIL_CHARS = 200;
+
 export interface OpenAiAdapterOptions {
   baseUrl: string;
   apiKey: string;
@@ -395,6 +429,8 @@ export interface OpenAiAdapterOptions {
   finishedGraceMs?: number;
   /** Wall-clock ceiling for one complete()'s retries (see the retry policy). */
   retryBudgetMs?: number;
+  /** A retry is about to wait and start another attempt (`AdapterRetry`); the driver records it. Never throws into a request. */
+  onRetry?: (retry: AdapterRetry) => void;
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
   /** Injectable clock for the retry budget, the way Trajectory does it. */
@@ -1068,6 +1104,8 @@ export class OpenAiChatAdapter implements ChatAdapter {
 
     let lastError = "";
     let lastStatus: number | undefined;
+    /** What failed the last attempt, for the retry that follows it (`onRetry`). */
+    let lastCause: AdapterRetryCause = "network";
     /** Newest provider request id seen; threaded into every failure message. */
     let lastRequestId: string | undefined;
     // Sticky across attempts, deliberately: a 429 followed by a retry that dies
@@ -1105,6 +1143,18 @@ export class OpenAiChatAdapter implements ChatAdapter {
             ? Math.min(retryAfterMs, 30_000) + Math.floor(Math.random() * 250)
             : base + Math.floor(base * (Math.random() * 0.5 - 0.25));
         retryAfterMs = null;
+        try {
+          this.opts.onRetry?.({
+            attempt: attempt + 1,
+            of: this.maxAttempts,
+            waitMs: wait,
+            cause: lastCause,
+            ...(lastStatus !== undefined ? { status: lastStatus } : {}),
+            detail: lastError.slice(0, RETRY_DETAIL_CHARS),
+          });
+        } catch {
+          // A record that could not be written must not cost the request its retry.
+        }
         await this.sleep(wait);
       }
       // Both timers start before the request is sent: the silence one covers
@@ -1129,6 +1179,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
           if (req.signal !== undefined && req.signal.aborted) throw new AdapterError("request abandoned: the runner is stopping");
           lastError = `network error: ${clock.why(err)}`;
           lastStatus = undefined;
+          lastCause = clock.timedOut ? "timeout" : "network";
           continue;
         }
         if ((res.status >= 300 && res.status < 400) || res.type === "opaqueredirect") {
@@ -1149,6 +1200,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
           if (req.signal !== undefined && req.signal.aborted) throw new AdapterError("request abandoned: the runner is stopping");
           lastError = `body read failed: ${clock.why(err)}${headerId !== undefined ? ` [req ${headerId}]` : ""}`;
           lastStatus = undefined;
+          lastCause = clock.timedOut ? "timeout" : "body_read";
           continue;
         }
       } finally {
@@ -1166,6 +1218,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
           requestId !== undefined ? ` [req ${requestId}]` : ""
         }`;
         lastStatus = undefined;
+        lastCause = "stream_cut";
         continue;
       }
       const text = read.kind === "text" ? read.text : "";
@@ -1202,6 +1255,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
                   ? Number(code)
                   : undefined;
             lastStatus = numCode;
+            lastCause = "provider_error";
             if (numCode === 401) return { kind: "pause", reason: "auth-failed", detail: lastError };
             if (numCode === 403 && !MODERATION_HINTS.test(lastError)) return { kind: "pause", reason: "no-access", detail: lastError };
             if (
@@ -1252,6 +1306,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
         };
       }
       lastStatus = res.status;
+      lastCause = "http";
       lastError = `HTTP ${res.status}${requestId !== undefined ? ` [req ${requestId}]` : ""}: ${text.slice(0, 500)}`;
       // The key refused: the credential's, never retried (see the policy above).
       if (res.status === 401) return { kind: "pause", reason: "auth-failed", detail: lastError };

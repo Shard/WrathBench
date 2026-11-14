@@ -172,8 +172,12 @@ producing is never cut for being slow. A failed attempt, a cut stream
 included, is retried whole, and attempts start only inside a 5-minute budget.
 When they run out on network errors before any response the run pauses
 `rate-limited`; when they run out on a failed read after the headers (a stall
-or a cut stream) it ends as `adapter-error`. The policy and its reasons are in
-the header of `src/adapter.ts`.
+or a cut stream) it ends as `adapter-error`. Every retry is on the record as
+a `harness` record of kind `adapter_retry` (the attempt it starts, of how
+many, the wait before it, the cause and any status, and the failure's first
+200 characters), never in the model's context, and `bun wb inspect run`
+counts them on its `harness` line. The policy and its reasons are in the
+header of `src/adapter.ts`.
 
 ### The driver contract
 
